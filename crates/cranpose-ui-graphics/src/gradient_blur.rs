@@ -58,14 +58,9 @@ pub fn gradient_blur_effect(
     let wide_radius_px = start_radius_px.max(end_radius_px);
     shader.set_input_padding(wide_radius_px.ceil());
     shader.set_batched_source(true);
-    shader.set_substrates(
-        GRADIENT_BLUR_LEVELS
-            .iter()
-            .map(|level| SubstrateSpec::Blur {
-                radius_px: wide_radius_px * level,
-            })
-            .collect(),
-    );
+    shader.set_substrates(&GRADIENT_BLUR_LEVELS.map(|level| SubstrateSpec::Blur {
+        radius_px: wide_radius_px * level,
+    }));
     RenderEffect::runtime_shader(shader)
 }
 

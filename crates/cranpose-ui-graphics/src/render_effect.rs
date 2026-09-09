@@ -5,6 +5,8 @@
 
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
+use arrayvec::ArrayVec;
+
 use crate::{LayerShape, Rect};
 
 const RUNTIME_SHADER_INLINE_UNIFORMS: usize = 16;
@@ -134,14 +136,14 @@ pub struct RuntimeShader {
 struct ShaderSpecialization {
     overrides: Vec<(&'static str, f64)>,
     overrides_hash: OnceLock<u64>,
-    substrates: Vec<SubstrateSpec>,
+    substrates: ArrayVec<SubstrateSpec, MAX_SUBSTRATES>,
     draw_split: Option<&'static str>,
 }
 
 static DEFAULT_SHADER_SPECIALIZATION: ShaderSpecialization = ShaderSpecialization {
     overrides: Vec::new(),
     overrides_hash: OnceLock::new(),
-    substrates: Vec::new(),
+    substrates: ArrayVec::new_const(),
     draw_split: None,
 };
 
@@ -569,7 +571,7 @@ impl RuntimeShader {
     /// # Panics
     ///
     /// When more than [`MAX_SUBSTRATES`] are declared.
-    pub fn set_substrates(&mut self, substrates: Vec<SubstrateSpec>) {
+    pub fn set_substrates(&mut self, substrates: &[SubstrateSpec]) {
         assert!(
             substrates.len() <= MAX_SUBSTRATES,
             "a runtime shader declares at most {MAX_SUBSTRATES} substrates"
@@ -578,12 +580,12 @@ impl RuntimeShader {
             && self
                 .substrates()
                 .iter()
-                .zip(&substrates)
+                .zip(substrates)
                 .all(|(existing, incoming)| existing.same_bits(incoming))
         {
             return;
         }
-        self.specialization_mut().substrates = substrates;
+        self.specialization_mut().substrates = substrates.iter().copied().collect();
     }
 
     /// The substrates the shader declared, in slot order.
@@ -1024,7 +1026,7 @@ mod tests {
     fn shader_clones_share_declarations_and_isolate_mutation() {
         let mut shader = RuntimeShader::new("fn effect_fs() {}");
         shader.set_override("FLAG", 1.0);
-        shader.set_substrates(vec![SubstrateSpec::Average { block: 4 }]);
+        shader.set_substrates(&[SubstrateSpec::Average { block: 4 }]);
         shader.set_draw_split(Some("SPLIT"));
         let support = Rect {
             x: 1.0,
@@ -1042,7 +1044,7 @@ mod tests {
         cloned.set_override("FLAG", 2.0);
         assert_eq!(cloned.substrates(), shader.substrates());
         assert_eq!(cloned.draw_split(), shader.draw_split());
-        cloned.set_substrates(vec![SubstrateSpec::Average { block: 8 }]);
+        cloned.set_substrates(&[SubstrateSpec::Average { block: 8 }]);
         cloned.set_draw_split(None);
         cloned.set_output_support(None);
         assert_eq!(shader.overrides(), &[("FLAG", 1.0)]);
@@ -1404,27 +1406,60 @@ mod tests {
     #[test]
     fn unchanged_shader_declarations_keep_their_storage() {
         let mut shader = RuntimeShader::new("fn effect_fs() {}");
-        shader.set_substrates(Vec::new());
+        shader.set_substrates(&[]);
         shader.set_draw_split(None);
         assert!(!shader.clear_override("MISSING"));
         assert!(shader.specialization.is_none());
         shader.set_override("FLAG", 1.0);
         let mut cloned = shader.clone();
         cloned.set_override("FLAG", 1.0);
-        cloned.set_substrates(Vec::new());
+        cloned.set_substrates(&[]);
         cloned.set_draw_split(None);
         assert!(!cloned.clear_override("MISSING"));
         assert_eq!(cloned.overrides().as_ptr(), shader.overrides().as_ptr());
     }
 
     #[test]
+    fn shader_substrates_preserve_order_and_ownership_across_size_changes() {
+        let declared = [
+            SubstrateSpec::Blur { radius_px: 12.0 },
+            SubstrateSpec::Average { block: 4 },
+            SubstrateSpec::Blur { radius_px: -0.0 },
+        ];
+        let mut source = declared;
+        let mut original = RuntimeShader::new("fn effect_fs() {}");
+        original.set_substrates(&source);
+        source[0] = SubstrateSpec::Average { block: 16 };
+        let mut changed = original.clone();
+        for replacement in [&source[..1], &source[..2], &source[..0], &source[..]] {
+            changed.set_substrates(replacement);
+            assert_eq!(changed.substrates().len(), replacement.len());
+            assert!(
+                changed
+                    .substrates()
+                    .iter()
+                    .zip(replacement)
+                    .all(|(actual, expected)| actual.same_bits(expected))
+            );
+            assert_eq!(original.substrates().len(), declared.len());
+            assert!(
+                original
+                    .substrates()
+                    .iter()
+                    .zip(&declared)
+                    .all(|(actual, expected)| actual.same_bits(expected))
+            );
+        }
+    }
+
+    #[test]
     fn shader_substrate_setters_preserve_float_bits_when_detaching() {
         let mut original = RuntimeShader::new("fn effect_fs() {}");
-        original.set_substrates(vec![SubstrateSpec::Blur { radius_px: 0.0 }]);
+        original.set_substrates(&[SubstrateSpec::Blur { radius_px: 0.0 }]);
         let mut cloned = original.clone();
-        cloned.set_substrates(vec![SubstrateSpec::Blur { radius_px: 0.0 }]);
+        cloned.set_substrates(&[SubstrateSpec::Blur { radius_px: 0.0 }]);
         assert_eq!(cloned.substrates().as_ptr(), original.substrates().as_ptr());
-        cloned.set_substrates(vec![SubstrateSpec::Blur { radius_px: -0.0 }]);
+        cloned.set_substrates(&[SubstrateSpec::Blur { radius_px: -0.0 }]);
         let [SubstrateSpec::Blur { radius_px }] = cloned.substrates() else {
             panic!("one blur substrate");
         };

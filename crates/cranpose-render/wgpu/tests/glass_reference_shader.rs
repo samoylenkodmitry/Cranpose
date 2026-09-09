@@ -40,7 +40,7 @@ fn resourced_shader(shader: &RuntimeShader, source: &str) -> RuntimeShader {
     copy.set_output_padding(shader.output_padding());
     copy.set_output_support(shader.output_support());
     copy.set_sample_domain(shader.sample_domain());
-    copy.set_substrates(shader.substrates().to_vec());
+    copy.set_substrates(shader.substrates());
     copy.set_draw_split(
         (source != REFERENCE_WGSL)
             .then(|| shader.draw_split())
@@ -246,7 +246,7 @@ fn without_adaptive_block(source: &str) -> String {
 fn with_substrates(effect: RenderEffect, substrates: Vec<SubstrateSpec>) -> RenderEffect {
     match effect {
         RenderEffect::Shader { mut shader } => {
-            shader.set_substrates(substrates);
+            shader.set_substrates(&substrates);
             RenderEffect::Shader { shader }
         }
         other => other,

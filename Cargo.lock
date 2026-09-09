@@ -1219,6 +1219,7 @@ dependencies = [
 name = "cranpose-ui-graphics"
 version = "0.1.116"
 dependencies = [
+ "arrayvec",
  "bytemuck",
  "thiserror 2.0.18",
 ]
