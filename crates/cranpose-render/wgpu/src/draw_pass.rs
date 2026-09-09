@@ -491,14 +491,15 @@ pub(crate) fn segment_draws_anything(
     root_scale: f32,
 ) -> bool {
     let viewport_rect = segment_viewport_rect(target, segment, root_scale);
-    !merge_items(
+    merge_items(
         segment,
         viewport_rect,
         root_scale,
         (target.width, target.height),
         false,
     )
-    .is_empty()
+    .next()
+    .is_some()
 }
 
 /// Re-bases an inverse (target pixel -> source pixel) matrix onto a target
@@ -517,53 +518,57 @@ fn merge_items<'a>(
     root_scale: f32,
     target_size: (u32, u32),
     skip_text: bool,
-) -> Vec<Item<'a>> {
-    let mut items = Vec::with_capacity(segment.ops.len() + segment.composites.len());
+) -> impl Iterator<Item = Item<'a>> + use<'a> {
+    let scene = segment.scene;
+    let mut ops = segment.ops.iter().enumerate().peekable();
     let mut composites = segment.composites.iter().peekable();
-    let mut push_composites_below = |items: &mut Vec<Item<'a>>, z: usize| {
-        while let Some(composite) = composites.peek() {
-            if composite.z_index > z {
-                break;
+    let mut shadow_texts: std::slice::Iter<'a, TextDraw> = [].iter();
+    let offset = segment.offset;
+    let scissor = segment.scissor;
+    let first_run_window = segment.first_run_window.clone();
+    std::iter::from_fn(move || {
+        loop {
+            if let Some(text) = shadow_texts
+                .find(|text| text_draw_is_visible_in_rect(text, viewport_rect, root_scale))
+            {
+                return Some(Item::Text(text));
             }
-            let composite = composites.next().expect("peeked composite");
-            if composite_visible(composite, target_size, segment.offset, segment.scissor) {
-                items.push(Item::Composite(composite));
-            }
-        }
-    };
-    for (op_index, op) in segment.ops.iter().enumerate() {
-        push_composites_below(&mut items, op.z_index);
-        if !op_is_visible_in_rect(segment.scene, op, viewport_rect, root_scale) {
-            continue;
-        }
-        match op.kind {
-            DrawOpKind::Run(index) => {
-                let run = &segment.scene.runs[index];
-                if run_has_shapes(run) {
-                    let window = (op_index == 0)
-                        .then(|| segment.first_run_window.clone())
-                        .flatten();
-                    items.push(Item::Run(run, window));
+            let next_z = ops.peek().map(|(_, op)| op.z_index);
+            if composites
+                .peek()
+                .is_some_and(|composite| next_z.is_none_or(|z| composite.z_index <= z))
+            {
+                let composite = composites.next().expect("peeked composite");
+                if composite_visible(composite, target_size, offset, scissor) {
+                    return Some(Item::Composite(composite));
                 }
+                continue;
             }
-            DrawOpKind::Image(index) => items.push(Item::Image(index)),
-            DrawOpKind::Text(_) if skip_text => {}
-            DrawOpKind::Text(index) => items.push(Item::Text(&segment.scene.texts[index])),
-            DrawOpKind::Shadow(index) => {
-                let shadow = &segment.scene.shadow_draws[index];
-                if let Some(run) = unblurred_shadow_run(shadow, viewport_rect, root_scale) {
-                    items.push(Item::Run(run, None));
+            let (op_index, op) = ops.next()?;
+            if !op_is_visible_in_rect(scene, op, viewport_rect, root_scale) {
+                continue;
+            }
+            match op.kind {
+                DrawOpKind::Run(index) => {
+                    let run = &scene.runs[index];
+                    if run_has_shapes(run) {
+                        let window = (op_index == 0).then(|| first_run_window.clone()).flatten();
+                        return Some(Item::Run(run, window));
+                    }
                 }
-                for text in &shadow.texts {
-                    if text_draw_is_visible_in_rect(text, viewport_rect, root_scale) {
-                        items.push(Item::Text(text));
+                DrawOpKind::Image(index) => return Some(Item::Image(index)),
+                DrawOpKind::Text(_) if skip_text => {}
+                DrawOpKind::Text(index) => return Some(Item::Text(&scene.texts[index])),
+                DrawOpKind::Shadow(index) => {
+                    let shadow = &scene.shadow_draws[index];
+                    shadow_texts = shadow.texts.iter();
+                    if let Some(run) = unblurred_shadow_run(shadow, viewport_rect, root_scale) {
+                        return Some(Item::Run(run, None));
                     }
                 }
             }
         }
-    }
-    push_composites_below(&mut items, usize::MAX);
-    items
+    })
 }
 
 /// An unblurred shadow's casters as a run, when any of them reaches the
@@ -614,13 +619,14 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
         };
         let viewport_rect = segment_viewport_rect(self.target, segment, self.root_scale);
         let uniform_slot = renderer.claim_uniform_slot(viewport);
-        let items = merge_items(
+        let mut items = Vec::with_capacity(segment.ops.len() + segment.composites.len());
+        items.extend(merge_items(
             segment,
             viewport_rect,
             self.root_scale,
             self.target_size(),
             renderer.ablation.text,
-        );
+        ));
         let run = SegmentRun {
             segment,
             viewport,
@@ -991,7 +997,8 @@ mod tests {
             1.0,
             (64, 64),
             false,
-        );
+        )
+        .collect::<Vec<_>>();
         assert_eq!(items.len(), 2);
         let Item::Run(ordinary, window) = &items[0] else {
             panic!("expected the ordinary run")
@@ -1007,5 +1014,28 @@ mod tests {
         ));
         assert_eq!(*window, None);
         assert_eq!(shadow.record_count(), 2);
+        for (x, expected) in [(16.0, Some(0)), (128.0, Some(1)), (256.0, None)] {
+            let mut visible = merge_items(
+                &segment,
+                Rect {
+                    x,
+                    y: 0.0,
+                    width: 8.0,
+                    height: 16.0,
+                },
+                1.0,
+                (64, 64),
+                false,
+            );
+            match (visible.next(), expected) {
+                (Some(Item::Run(run, None)), Some(index)) => assert!(std::ptr::eq(
+                    run,
+                    scene.shadow_draws[index].shapes.as_ref().unwrap()
+                )),
+                (None, None) => {}
+                _ => panic!("incorrect first visible shadow at x={x}"),
+            }
+            assert!(visible.next().is_none());
+        }
     }
 }
