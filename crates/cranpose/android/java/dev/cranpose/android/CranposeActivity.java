@@ -768,8 +768,8 @@ public class CranposeActivity extends NativeActivity {
     private static List<CranposeAccessibilityElement> parseAccessibilityElements(String payload) {
         if (payload == null || payload.isEmpty()) return Collections.emptyList();
         ArrayList<CranposeAccessibilityElement> result = new ArrayList<>();
-        for (String record : payload.split("\\n", -1)) {
-            String[] fields = record.split("\\t", -1);
+        for (String record : payload.split("\n", -1)) {
+            String[] fields = record.split("\t", -1);
             if (fields.length != ACCESSIBILITY_FIELDS) continue;
             try {
                 result.add(new CranposeAccessibilityElement(
