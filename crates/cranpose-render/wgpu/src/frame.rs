@@ -146,8 +146,8 @@ impl DeviceRect {
     }
 
     /// The rect minus every hole, as rects that partition what is left.
-    fn subtract_all(self, holes: &[Self]) -> Vec<Self> {
-        holes.iter().fold(vec![self], |parts, hole| {
+    fn subtract_all(self, holes: &[Self]) -> SmallVec<[Self; 4]> {
+        holes.iter().fold(smallvec![self], |parts, hole| {
             parts
                 .into_iter()
                 .flat_map(|part| part.subtract(*hole))
@@ -3906,6 +3906,61 @@ mod tests {
                 .collect::<Vec<_>>(),
             [3, 3]
         );
+    }
+
+    #[test]
+    fn many_overlapping_holes_preserve_every_uncovered_pixel_once() {
+        let rect = DeviceRect {
+            x: 0.0,
+            y: 0.0,
+            width: 20.0,
+            height: 20.0,
+        };
+        let mut holes: Vec<_> = (1..=4)
+            .map(|index| DeviceRect {
+                x: (index * 4 - 2) as f32,
+                y: 2.0,
+                width: 1.0,
+                height: 16.0,
+            })
+            .collect();
+        holes.extend([
+            DeviceRect {
+                x: -2.0,
+                y: 8.0,
+                width: 14.0,
+                height: 2.0,
+            },
+            DeviceRect {
+                x: 6.0,
+                y: 8.0,
+                width: 20.0,
+                height: 2.0,
+            },
+        ]);
+        let parts = rect.subtract_all(&holes);
+        assert!(parts.len() > 4);
+        for part in &parts {
+            assert_eq!(part.intersect(rect), Some(*part));
+        }
+        for y in 0..20 {
+            for x in 0..20 {
+                let pixel = DeviceRect {
+                    x: x as f32,
+                    y: y as f32,
+                    width: 1.0,
+                    height: 1.0,
+                };
+                let covered = holes.iter().any(|hole| hole.intersect(pixel).is_some());
+                let count = parts
+                    .iter()
+                    .filter(|part| part.intersect(pixel).is_some())
+                    .count();
+                assert_eq!(count, usize::from(!covered), "pixel=({x}, {y})");
+            }
+        }
+        holes.push(rect);
+        assert!(rect.subtract_all(&holes).is_empty());
     }
 
     #[test]
