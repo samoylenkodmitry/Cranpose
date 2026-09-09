@@ -394,7 +394,7 @@ mod tests {
         ) -> crate::text::PreparedTextLayout {
             self.recorded.borrow_mut().push(node_id);
             crate::text::PreparedTextLayout {
-                text: text.clone(),
+                text: Rc::new(text.clone()),
                 visual_style: TextStyle::default(),
                 metrics: crate::text::TextMetrics {
                     width: 12.0,
@@ -469,7 +469,7 @@ mod tests {
             let size = style.resolve_font_size(14.0);
             self.recorded.borrow_mut().push(size);
             crate::text::PreparedTextLayout {
-                text: text.clone(),
+                text: Rc::new(text.clone()),
                 visual_style: style.clone(),
                 metrics: crate::text::TextMetrics {
                     width: size,
@@ -532,7 +532,7 @@ mod tests {
             _max_width: Option<f32>,
         ) -> crate::text::PreparedTextLayout {
             crate::text::PreparedTextLayout {
-                text: text.clone(),
+                text: Rc::new(text.clone()),
                 visual_style: TextStyle::default(),
                 metrics: crate::text::TextMetrics {
                     width: 24.0,
