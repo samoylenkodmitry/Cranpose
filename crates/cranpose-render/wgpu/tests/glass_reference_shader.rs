@@ -626,3 +626,35 @@ fn a_forced_dispersion_fold_renders_the_dispersive_card_as_its_dispersion_zero_t
         "clearing the switch must return the dispersive pipeline"
     );
 }
+
+#[test]
+fn coincident_dispersion_rays_preserve_the_optical_transition() {
+    let mut renderer = support::headless_renderer().expect("headless renderer");
+    let colors = LiquidColors::dark(Color::from_rgb_u8(120, 140, 255));
+    for dispersion in [0.2, 1.0, 2.0] {
+        for depth in [0.04, 0.58, 1.2] {
+            for scale in [1.0, 1.5] {
+                assert_matches_reference(
+                    &mut renderer,
+                    &format!("dispersion {dispersion}, depth {depth}, scale {scale}"),
+                    |source| {
+                        let mut children = backdrop();
+                        let effect =
+                            card_glass_with_dispersion(LiquidShape::RoundedRect(18.0), dispersion)
+                                .refraction_depth(depth)
+                                .backdrop_effect(&colors, scale, GlassDynamics::default());
+                        children.push(glass_layer(
+                            rect(24.25, 20.5, 300.0, 200.0),
+                            effect,
+                            1.0,
+                            Vec::new(),
+                            source,
+                        ));
+                        support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children)
+                    },
+                    scale,
+                );
+            }
+        }
+    }
+}
