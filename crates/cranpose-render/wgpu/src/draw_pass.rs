@@ -865,14 +865,13 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
                     source_viewport: *source_viewport,
                     sample_mode: *sample_mode,
                 };
-                let prepared = renderer.effect_renderer.prepare_composite_batch_draws(
+                let prepared = renderer.effect_renderer.prepare_composite_draw(
                     self.recorder,
                     self.device,
                     self.load_op,
-                    std::slice::from_ref(&item),
+                    &item,
                 );
-                self.batches
-                    .extend(prepared.into_iter().map(Batch::Composite));
+                self.batches.push(Batch::Composite(prepared));
             }
             ResolvedCompositeKind::Shader {
                 shader,
@@ -897,13 +896,9 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
                 };
                 let prepared = renderer
                     .effect_renderer
-                    .prepare_shader_batch_draws(
-                        self.recorder,
-                        self.device,
-                        std::slice::from_ref(&item),
-                    )
+                    .prepare_shader_draw(self.recorder, self.device, &item)
                     .ok_or_else(|| "shader composite preparation failed".to_string())?;
-                self.batches.extend(prepared.into_iter().map(Batch::Shader));
+                self.batches.push(Batch::Shader(prepared));
             }
             ResolvedCompositeKind::Projective {
                 dest_quad,

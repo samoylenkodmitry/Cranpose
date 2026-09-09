@@ -1655,70 +1655,66 @@ impl EffectRenderer {
         )
     }
 
-    pub(crate) fn prepare_shader_batch_draws<'a, C: FrameCommandRecorder>(
+    pub(crate) fn prepare_shader_draw<'a, C: FrameCommandRecorder>(
         &mut self,
         recorder: &mut C,
         device: &wgpu::Device,
-        items: &[ShaderCompositeBatchItem<'a>],
-    ) -> Option<Vec<PreparedShaderDraw<'a>>> {
-        let mut prepared = Vec::with_capacity(items.len());
-        for item in items {
-            let variants = shader_draw_variants(item.shader);
-            for variant in variants {
-                self.shader_cache.get_or_create(
-                    device,
-                    item.shader,
-                    self.surface_format,
-                    &self.effect_texture_bind_group_layout,
-                    &self.effect_uniform_bind_group_layout,
-                    RuntimeShaderPipelineMode::PremultipliedSrcOver,
-                    *variant,
-                )?;
-            }
-            let mut padded = item.shader.uniforms_padded();
-            let (dest_x, dest_y, _, _) = item.dest_viewport;
-            let mask = item.rounded_mask.map(|mask| RoundedCompositeMask {
-                rect: [
-                    mask.rect[0] - dest_x,
-                    mask.rect[1] - dest_y,
-                    mask.rect[2],
-                    mask.rect[3],
-                ],
-                radii: mask.radii,
-            });
-            ReservedShaderUniforms {
-                layer_pixel_rect: item.layer_pixel_rect,
-                source_region: item.source_region,
-                substrate_regions: item.substrate_regions,
-                mask,
-                logical_size: item.source_logical_size,
-                alpha: item.alpha,
-            }
-            .write(&mut padded);
-            let uniform = recorder.upload_uniform(
-                UploadAllocatorId::EffectUniform,
-                effect_uniform_spec(),
+        item: &ShaderCompositeBatchItem<'a>,
+    ) -> Option<PreparedShaderDraw<'a>> {
+        let variants = shader_draw_variants(item.shader);
+        for variant in variants {
+            self.shader_cache.get_or_create(
                 device,
-                &self.effect_uniform_bind_group_layout,
-                bytemuck::cast_slice(&padded),
-            );
-
-            let texture_bind_group = item.source.get_or_create_bind_group(
-                device,
+                item.shader,
+                self.surface_format,
                 &self.effect_texture_bind_group_layout,
-                &self.effect_linear_sampler,
-            );
-            prepared.push(PreparedShaderDraw {
-                shader: item.shader,
-                texture_bind_group,
-                uniform,
-                scissor: item.scissor,
-                dest_viewport: item.dest_viewport,
-                layer_pixel_rect: item.layer_pixel_rect,
-                variants,
-            });
+                &self.effect_uniform_bind_group_layout,
+                RuntimeShaderPipelineMode::PremultipliedSrcOver,
+                *variant,
+            )?;
         }
-        Some(prepared)
+        let mut padded = item.shader.uniforms_padded();
+        let (dest_x, dest_y, _, _) = item.dest_viewport;
+        let mask = item.rounded_mask.map(|mask| RoundedCompositeMask {
+            rect: [
+                mask.rect[0] - dest_x,
+                mask.rect[1] - dest_y,
+                mask.rect[2],
+                mask.rect[3],
+            ],
+            radii: mask.radii,
+        });
+        ReservedShaderUniforms {
+            layer_pixel_rect: item.layer_pixel_rect,
+            source_region: item.source_region,
+            substrate_regions: item.substrate_regions,
+            mask,
+            logical_size: item.source_logical_size,
+            alpha: item.alpha,
+        }
+        .write(&mut padded);
+        let uniform = recorder.upload_uniform(
+            UploadAllocatorId::EffectUniform,
+            effect_uniform_spec(),
+            device,
+            &self.effect_uniform_bind_group_layout,
+            bytemuck::cast_slice(&padded),
+        );
+
+        let texture_bind_group = item.source.get_or_create_bind_group(
+            device,
+            &self.effect_texture_bind_group_layout,
+            &self.effect_linear_sampler,
+        );
+        Some(PreparedShaderDraw {
+            shader: item.shader,
+            texture_bind_group,
+            uniform,
+            scissor: item.scissor,
+            dest_viewport: item.dest_viewport,
+            layer_pixel_rect: item.layer_pixel_rect,
+            variants,
+        })
     }
 
     pub(crate) fn draw_prepared_shader_src_over(
@@ -2097,48 +2093,44 @@ impl EffectRenderer {
         pass.draw(0..4, 0..1);
     }
 
-    pub(crate) fn prepare_composite_batch_draws<'a, C: FrameCommandRecorder>(
+    pub(crate) fn prepare_composite_draw<'a, C: FrameCommandRecorder>(
         &mut self,
         recorder: &mut C,
         device: &wgpu::Device,
         load_op: wgpu::LoadOp<wgpu::Color>,
-        items: &[CompositeBatchItem<'a>],
-    ) -> Vec<PreparedCompositeDraw<'a>> {
-        let mut prepared = Vec::with_capacity(items.len());
-        for item in items {
-            self.blit_pipeline(device, item.blend_mode);
-            let options = CompositePassOptions {
-                alpha: item.alpha,
-                load_op,
-                scissor: item.scissor,
-                rounded_mask: item.rounded_mask,
-                blend_mode: item.blend_mode,
-                dest_viewport: item.dest_viewport,
-                source_viewport: item.source_viewport,
-                sample_mode: item.sample_mode,
-            };
-            let uniforms = Self::composite_pass_uniforms(options);
-            let sampler = &self.effect_linear_sampler;
-            let texture_bind_group = item.source.get_or_create_bind_group(
-                device,
-                &self.effect_texture_bind_group_layout,
-                sampler,
-            );
-            let uniform = recorder.upload_uniform(
-                UploadAllocatorId::Blit,
-                blit_uniform_spec(),
-                device,
-                &self.blit_uniform_bind_group_layout,
-                bytemuck::bytes_of(&uniforms),
-            );
-            prepared.push(PreparedCompositeDraw {
-                texture_bind_group,
-                uniform,
-                scissor: item.scissor,
-                blend_mode: item.blend_mode,
-            });
+        item: &CompositeBatchItem<'a>,
+    ) -> PreparedCompositeDraw<'a> {
+        self.blit_pipeline(device, item.blend_mode);
+        let options = CompositePassOptions {
+            alpha: item.alpha,
+            load_op,
+            scissor: item.scissor,
+            rounded_mask: item.rounded_mask,
+            blend_mode: item.blend_mode,
+            dest_viewport: item.dest_viewport,
+            source_viewport: item.source_viewport,
+            sample_mode: item.sample_mode,
+        };
+        let uniforms = Self::composite_pass_uniforms(options);
+        let sampler = &self.effect_linear_sampler;
+        let texture_bind_group = item.source.get_or_create_bind_group(
+            device,
+            &self.effect_texture_bind_group_layout,
+            sampler,
+        );
+        let uniform = recorder.upload_uniform(
+            UploadAllocatorId::Blit,
+            blit_uniform_spec(),
+            device,
+            &self.blit_uniform_bind_group_layout,
+            bytemuck::bytes_of(&uniforms),
+        );
+        PreparedCompositeDraw {
+            texture_bind_group,
+            uniform,
+            scissor: item.scissor,
+            blend_mode: item.blend_mode,
         }
-        prepared
     }
 
     pub(crate) fn draw_prepared_composite(
