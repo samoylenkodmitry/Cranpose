@@ -26,8 +26,8 @@ impl Modifier {
         let draw = Rc::new(move |scope: &mut DrawScopeDefault| {
             let mut shadow = ShadowScope::default();
             block(&mut shadow);
-            let primitives = build_drop_shadow_primitives(scope.size(), shape, &shadow);
-            scope.push_recorded(primitives);
+            let primitive = build_drop_shadow_primitive(scope.size(), shape, &shadow);
+            scope.push_recorded(primitive);
         });
         let modifier = Self::with_element(DrawCommandElement::new(DrawCommand::Behind(draw)))
             .with_inspector_metadata(inspector_metadata("dropShadow", move |info| {
@@ -43,8 +43,8 @@ impl Modifier {
         let draw = Rc::new(move |scope: &mut DrawScopeDefault| {
             let shadow =
                 shadow_value.to_scope(Density::from_scale(crate::render_state::current_density()));
-            let primitives = build_drop_shadow_primitives(scope.size(), shape, &shadow);
-            scope.push_recorded(primitives);
+            let primitive = build_drop_shadow_primitive(scope.size(), shape, &shadow);
+            scope.push_recorded(primitive);
         });
         let modifier = Self::with_element(DrawCommandElement::new(DrawCommand::Behind(draw)))
             .with_inspector_metadata(inspector_metadata("dropShadow", move |info| {
@@ -69,8 +69,8 @@ impl Modifier {
         let draw = Rc::new(move |scope: &mut DrawScopeDefault| {
             let mut shadow = ShadowScope::default();
             block(&mut shadow);
-            let primitives = build_inner_shadow_primitives(scope.size(), shape, &shadow);
-            scope.push_recorded(primitives);
+            let primitive = build_inner_shadow_primitive(scope.size(), shape, &shadow);
+            scope.push_recorded(primitive);
         });
         let modifier = Self::with_element(DrawCommandElement::new(DrawCommand::Overlay(draw)))
             .with_inspector_metadata(inspector_metadata("innerShadow", move |info| {
@@ -86,8 +86,8 @@ impl Modifier {
         let draw = Rc::new(move |scope: &mut DrawScopeDefault| {
             let shadow =
                 shadow_value.to_scope(Density::from_scale(crate::render_state::current_density()));
-            let primitives = build_inner_shadow_primitives(scope.size(), shape, &shadow);
-            scope.push_recorded(primitives);
+            let primitive = build_inner_shadow_primitive(scope.size(), shape, &shadow);
+            scope.push_recorded(primitive);
         });
         let modifier = Self::with_element(DrawCommandElement::new(DrawCommand::Overlay(draw)))
             .with_inspector_metadata(inspector_metadata("innerShadow", move |info| {
@@ -136,16 +136,14 @@ fn normalized_scope(scope: &ShadowScope) -> Option<ShadowScope> {
     })
 }
 
-fn build_drop_shadow_primitives(
+fn build_drop_shadow_primitive(
     size: Size,
     shape: LayerShape,
     scope: &ShadowScope,
-) -> Vec<DrawPrimitive> {
-    let Some(scope) = normalized_scope(scope) else {
-        return Vec::new();
-    };
+) -> Option<DrawPrimitive> {
+    let scope = normalized_scope(scope)?;
     if size.width <= 0.0 || size.height <= 0.0 {
-        return Vec::new();
+        return None;
     }
 
     let brush = alpha_modulated_brush(
@@ -161,12 +159,10 @@ fn build_drop_shadow_primitives(
         height: size.height + spread * 2.0,
     };
     if rect.width <= 0.0 || rect.height <= 0.0 {
-        return Vec::new();
+        return None;
     }
 
-    let Some(shape_prim) = primitive_for_shape(shape, rect, brush) else {
-        return Vec::new();
-    };
+    let shape_prim = primitive_for_shape(shape, rect, brush)?;
 
     let cutout = if scope.cutout {
         let element_rect = Rect {
@@ -180,31 +176,29 @@ fn build_drop_shadow_primitives(
         None
     };
 
-    vec![DrawPrimitive::Shadow(ShadowPrimitive::Drop {
+    Some(DrawPrimitive::Shadow(ShadowPrimitive::Drop {
         shape: Box::new(shape_prim),
         cutout,
         blur_radius: scope.radius,
         blend_mode: scope.blend_mode,
-    })]
+    }))
 }
 
-fn build_inner_shadow_primitives(
+fn build_inner_shadow_primitive(
     size: Size,
     shape: LayerShape,
     scope: &ShadowScope,
-) -> Vec<DrawPrimitive> {
-    let Some(scope) = normalized_scope(scope) else {
-        return Vec::new();
-    };
+) -> Option<DrawPrimitive> {
+    let scope = normalized_scope(scope)?;
     if size.width <= 0.0 || size.height <= 0.0 {
-        return Vec::new();
+        return None;
     }
     if scope.radius <= f32::EPSILON
         && scope.spread.abs() <= f32::EPSILON
         && scope.offset.x.abs() <= f32::EPSILON
         && scope.offset.y.abs() <= f32::EPSILON
     {
-        return Vec::new();
+        return None;
     }
 
     let brush = alpha_modulated_brush(
@@ -229,23 +223,19 @@ fn build_inner_shadow_primitives(
         height: bottom - top,
     };
     if inner.width <= 0.0 || inner.height <= 0.0 {
-        return Vec::new();
+        return None;
     }
 
-    let Some(fill) = primitive_for_shape(shape, outer, brush) else {
-        return Vec::new();
-    };
-    let Some(cutout) = primitive_for_shape(shape, inner, Brush::solid(Color::WHITE)) else {
-        return Vec::new();
-    };
+    let fill = primitive_for_shape(shape, outer, brush)?;
+    let cutout = primitive_for_shape(shape, inner, Brush::solid(Color::WHITE))?;
 
-    vec![DrawPrimitive::Shadow(ShadowPrimitive::Inner {
+    Some(DrawPrimitive::Shadow(ShadowPrimitive::Inner {
         fill: Box::new(fill),
         cutout: Box::new(cutout),
         blur_radius: scope.radius,
         blend_mode: scope.blend_mode,
         clip_rect: outer,
-    })]
+    }))
 }
 
 fn primitive_for_shape(shape: LayerShape, rect: Rect, brush: Brush) -> Option<DrawPrimitive> {

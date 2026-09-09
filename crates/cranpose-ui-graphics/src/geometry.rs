@@ -1037,7 +1037,7 @@ impl DrawScopeDefault {
     }
 
     /// Records primitives already built, as if each had been drawn here.
-    pub fn push_recorded(&mut self, primitives: Vec<DrawPrimitive>) {
+    pub fn push_recorded(&mut self, primitives: impl IntoIterator<Item = DrawPrimitive>) {
         for primitive in primitives {
             self.recording.push_primitive(primitive);
         }
@@ -1621,6 +1621,32 @@ fn solid_fill_color(brush: &Brush) -> Option<Color> {
 mod tests {
     use super::*;
     use crate::{Color, FontStyle, FontWeight, ImageBitmap, RenderEffect};
+
+    #[test]
+    fn recorded_iterators_preserve_shapes_content_and_shadows() {
+        let shape = DrawPrimitive::Rect {
+            rect: Rect::from_size(Size::new(12.0, 8.0)),
+            brush: Brush::solid(Color::RED),
+            stroke: None,
+        };
+        let shadow = DrawPrimitive::Shadow(ShadowPrimitive::Drop {
+            shape: Box::new(shape.clone()),
+            cutout: None,
+            blur_radius: 4.0,
+            blend_mode: BlendMode::SrcOver,
+        });
+        let mut scope = DrawScopeDefault::new(Size::new(24.0, 24.0));
+        scope.push_recorded(None);
+        scope.push_recorded(Some(shadow.clone()));
+        scope.push_recorded([DrawPrimitive::Content, shape.clone()]);
+        scope.push_recorded(std::iter::empty());
+        let recording = scope.finish();
+        assert_eq!(recording.content_markers(), 1);
+        assert_eq!(
+            recording.into_primitives_with_markers(),
+            vec![shadow, DrawPrimitive::Content, shape]
+        );
+    }
 
     #[test]
     fn compact_recording_materializes_in_recorded_order() {
