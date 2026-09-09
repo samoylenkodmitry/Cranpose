@@ -171,14 +171,14 @@ pub fn specialize_liquid_glass(shader: &mut RuntimeShader) {
     shader.set_draw_split(Some(GLASS_RIM_DRAW_OVERRIDE));
     let uniforms = shader.uniforms();
     let substrates = if slot(uniforms, GLASS_ADAPTIVE_FROST_UNIFORM) > 0.0 {
-        vec![SubstrateSpec::Blur {
+        Some(SubstrateSpec::Blur {
             radius_px: GLASS_ADAPTIVE_NEIGHBOURHOOD_DP
                 * slot(uniforms, GLASS_EFFECT_DENSITY_UNIFORM).max(1.0),
-        }]
+        })
     } else {
-        Vec::new()
+        None
     };
-    shader.set_substrates(substrates);
+    shader.set_substrates(substrates.as_slice());
 }
 
 /// The `override NAME: i32` of `liquid_glass.wgsl` the renderer sets to

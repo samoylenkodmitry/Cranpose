@@ -603,7 +603,7 @@ pub fn substrate_probe(spec: SubstrateSpec, read: SubstrateProbeRead) -> RenderE
         RUNTIME_SHADER_PRELUDE_WGSL,
     ));
     shader.set_batched_source(true);
-    shader.set_substrates(vec![spec]);
+    shader.set_substrates(&[spec]);
     RenderEffect::Shader { shader }
 }
 
