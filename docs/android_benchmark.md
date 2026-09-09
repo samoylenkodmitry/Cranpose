@@ -13,3 +13,4 @@
 - Reports preserve command output, failed legs and cleanup errors; diagnostic properties are restored before any performance result becomes eligible.
 - `just gc` and `just gc-apply` include disposable benchmark snapshots under `${XDG_CACHE_HOME:-$HOME/.cache}/cranpose/benchmarks`; nested caches count once and recent descendants protect their parent.
 - `just test-shell-helpers` covers archive integrity, provenance, sequence locking, route validation, cleanup, reporting and cache collection.
+- The helper gate provisions pinned Pillow in `target/python-benchmark`; a global Pillow installation is unnecessary for CI.

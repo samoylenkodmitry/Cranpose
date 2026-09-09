@@ -3,6 +3,8 @@
 **Target unmet: 16.67 ms/frame.** Cranpose internals may change; Jetpack Compose
 API, application sources and picture correctness stay fixed.
 
+- Track the remaining device frame budgets in [#626](https://github.com/samoylenkodmitry/Cranpose/issues/626); renderer correctness fixes do not close this target.
+
 **Required workloads on Huawei and Pixel Watch:** Cranorbit Megaboss,
 Showcase full scroll, and **Cranscan Settings scroll**.
 

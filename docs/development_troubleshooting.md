@@ -29,6 +29,8 @@
 - `just dep-budget` covers all shipped triples; inspect `WORKSPACE_DUPLICATE_DEBT` before proposing an unavailable dependency upgrade.
 - `just fmt` includes the isolated consumer workspace; `just doc` excludes colliding demo library names.
 - Include source-hygiene tests with focused source changes; per-crate tests alone do not cover repository-wide checks.
+- Declare Python gate dependencies in pinned requirements and provision them in the owning `just` recipe; runner-global packages are not reproducible.
+- For a completed job in a running workflow, retrieve `gh api repos/OWNER/REPO/actions/jobs/JOB_ID/logs`; `gh run view --log-failed` waits for the workflow.
 - Cargo output parsers need `--color never` and ANSI-resistant parsing; test with `CARGO_TERM_COLOR=always`.
 - Attribute large Mach-O unwind sections with a linker map and demangled symbols before changing profiles or features.
 - Macro-emitted generic initializers multiply code per expansion; pass values to a shared nongeneric helper where suitable.

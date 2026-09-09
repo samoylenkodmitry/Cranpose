@@ -915,7 +915,10 @@ impl Robot {
     /// ```no_run
     /// # fn inspect(robot: &cranpose::Robot) -> Result<(), String> {
     /// let presentation = robot.presentation_info()?;
-    /// println!("{:?} at {} Hz", presentation.present_mode, presentation.refresh_rate_hz);
+    /// println!(
+    ///     "{:?} at {} Hz",
+    ///     presentation.present_mode, presentation.refresh_rate_hz
+    /// );
     /// # Ok(())
     /// # }
     /// ```
