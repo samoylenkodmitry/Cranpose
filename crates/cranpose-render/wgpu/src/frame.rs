@@ -1300,10 +1300,12 @@ struct PlannedSubstrate {
     atlas_slot: Option<TexelRect>,
 }
 
+type PlannedSubstrates = SmallVec<[PlannedSubstrate; MAX_SUBSTRATES]>;
+
 #[derive(Clone, Default)]
 struct SideSlots {
     blur: Option<TexelRect>,
-    substrates: Vec<TexelRect>,
+    substrates: SmallVec<[TexelRect; MAX_SUBSTRATES]>,
 }
 
 struct AtlasView<'a> {
@@ -1333,7 +1335,7 @@ impl AtlasView<'_> {
 struct StageLayout {
     atlas_sizes: Vec<(u32, u32)>,
     placements: Vec<Option<AtlasPlacement>>,
-    substrates: Vec<Vec<PlannedSubstrate>>,
+    substrates: Vec<PlannedSubstrates>,
     side_sizes: Vec<(u32, u32)>,
     side: Vec<SideSlots>,
 }
@@ -2423,7 +2425,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
     ) -> (
         AtlasPacker,
         Vec<Option<AtlasPlacement>>,
-        Vec<Vec<PlannedSubstrate>>,
+        Vec<PlannedSubstrates>,
     ) {
         let limit = self.renderer.max_texture_dim().min(MAX_ATLAS_DIM);
         let mut packer = AtlasPacker::new(limit);
@@ -2435,7 +2437,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             let (width, height) = item.capture_rect.pixel_size();
             placements[index] = packer.place(width, height);
         }
-        let mut substrates: Vec<Vec<PlannedSubstrate>> = vec![Vec::new(); items.len()];
+        let mut substrates = vec![PlannedSubstrates::new(); items.len()];
         for (index, item) in items.iter().enumerate() {
             let Some(placement) = placements[index] else {
                 continue;
@@ -3639,6 +3641,71 @@ pub(crate) fn scene_bounds(layer: &LayerScene, scale: f32) -> Option<Rect> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn restricting_stage_layout_preserves_substrate_order_and_independent_storage() {
+        let specs = [
+            SubstrateSpec::Average { block: 4 },
+            SubstrateSpec::Blur { radius_px: 7.0 },
+            SubstrateSpec::Average { block: 8 },
+        ];
+        let mut layout = StageLayout {
+            atlas_sizes: vec![(256, 256)],
+            placements: vec![
+                Some(AtlasPlacement {
+                    atlas: 0,
+                    x: 0,
+                    y: 0
+                });
+                3
+            ],
+            substrates: (0..=specs.len() - 1)
+                .map(|member| {
+                    specs[..=member]
+                        .iter()
+                        .enumerate()
+                        .map(|(slot, spec)| PlannedSubstrate {
+                            spec: *spec,
+                            size: (16, 8),
+                            atlas_slot: Some((slot as u32 * 16, member as u32 * 8, 16, 8)),
+                        })
+                        .collect()
+                })
+                .collect(),
+            side_sizes: vec![(128, 128)],
+            side: (0..specs.len())
+                .map(|member| SideSlots {
+                    blur: Some((0, member as u32 * 8, 16, 8)),
+                    substrates: (0..=member)
+                        .map(|slot| (slot as u32 * 16, member as u32 * 8, 16, 8))
+                        .collect(),
+                })
+                .collect(),
+        };
+        let selected = [2, 0, 1];
+        let restricted = layout.restrict(&selected);
+        for (index, original) in selected.into_iter().enumerate() {
+            assert_eq!(restricted.signature(index), layout.signature(original));
+            assert_eq!(restricted.substrates[index].len(), original + 1);
+            for (slot, planned) in restricted.substrates[index].iter().enumerate() {
+                assert_eq!(planned.spec, specs[slot]);
+                assert_eq!(planned.size, (16, 8));
+                assert_eq!(
+                    planned.atlas_slot,
+                    Some((slot as u32 * 16, original as u32 * 8, 16, 8))
+                );
+            }
+            assert_eq!(restricted.side[index].blur, layout.side[original].blur);
+            assert_eq!(
+                restricted.side[index].substrates,
+                layout.side[original].substrates
+            );
+            layout.substrates[original].clear();
+            layout.side[original].substrates.clear();
+            assert_eq!(restricted.substrates[index].len(), original + 1);
+            assert_eq!(restricted.side[index].substrates.len(), original + 1);
+        }
+    }
+
     #[test]
     fn a_backdrop_keeps_its_capture_and_records_the_part_of_it_inside_the_effects_output_support() {
         let mut shader = RuntimeShader::new("fn glass_fs() {}");
