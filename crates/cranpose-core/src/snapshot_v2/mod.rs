@@ -459,6 +459,14 @@ pub fn take_transparent_observer_mutable_snapshot(
     read_observer: Option<ReadObserver>,
     write_observer: Option<WriteObserver>,
 ) -> Arc<TransparentObserverMutableSnapshot> {
+    take_transparent_observer_mutable_snapshot_reusing(read_observer, write_observer, None)
+}
+
+pub(crate) fn take_transparent_observer_mutable_snapshot_reusing(
+    read_observer: Option<ReadObserver>,
+    write_observer: Option<WriteObserver>,
+    recycled: Option<Arc<TransparentObserverMutableSnapshot>>,
+) -> Arc<TransparentObserverMutableSnapshot> {
     let parent = current_snapshot();
     match parent {
         Some(AnySnapshot::TransparentMutable(transparent)) if transparent.can_reuse() => {
@@ -469,7 +477,8 @@ pub fn take_transparent_observer_mutable_snapshot(
                 .unwrap_or_else(|| AnySnapshot::Global(GlobalSnapshot::get_or_create()));
             let id = current.snapshot_id();
             let invalid = current.invalid();
-            TransparentObserverMutableSnapshot::new(
+            TransparentObserverMutableSnapshot::new_reusing(
+                recycled,
                 id,
                 invalid,
                 read_observer,

@@ -14,7 +14,9 @@ use crate::{
     RecomposeScope, RecomposeScopeInner, ScopeId,
     collections::map::{HashMap, HashSet},
     hash::default as default_hash,
-    snapshot_v2::{ReadObserver, StateObjectId, register_apply_observer},
+    snapshot_v2::{
+        ReadObserver, StateObjectId, TransparentObserverMutableSnapshot, register_apply_observer,
+    },
     state::StateObject,
 };
 
@@ -137,6 +139,7 @@ struct SnapshotStateObserverInner {
     pause_count: Rc<Cell<usize>>,
     active_read_targets: Rc<RefCell<ReadObservationStack>>,
     read_dispatcher: ReadObserver,
+    read_snapshot: RefCell<Option<Arc<TransparentObserverMutableSnapshot>>>,
     apply_handle: RefCell<Option<crate::snapshot_v2::ObserverHandle>>,
     weak_self: RefCell<Weak<SnapshotStateObserverInner>>,
     frame_version: Cell<u64>,
@@ -190,6 +193,7 @@ impl SnapshotStateObserverInner {
             pause_count,
             active_read_targets,
             read_dispatcher,
+            read_snapshot: RefCell::new(None),
             apply_handle: RefCell::new(None),
             weak_self: RefCell::new(Weak::new()),
             frame_version: Cell::new(0),
@@ -517,12 +521,18 @@ impl SnapshotStateObserverInner {
     }
 
     fn run_with_read_observer<R>(&self, block: impl FnOnce() -> R) -> R {
-        use crate::snapshot_v2::take_transparent_observer_mutable_snapshot;
+        use crate::snapshot_v2::take_transparent_observer_mutable_snapshot_reusing;
 
-        let snapshot =
-            take_transparent_observer_mutable_snapshot(Some(self.read_dispatcher.clone()), None);
+        let mut snapshot = take_transparent_observer_mutable_snapshot_reusing(
+            Some(self.read_dispatcher.clone()),
+            None,
+            self.read_snapshot.take(),
+        );
         let result = snapshot.enter(block);
         snapshot.dispose();
+        if Arc::get_mut(&mut snapshot).is_some() && !snapshot.has_pending_changes() {
+            self.read_snapshot.replace(Some(snapshot));
+        }
         result
     }
 
@@ -1122,6 +1132,80 @@ mod tests {
 
         assert_eq!(triggered.get(), 0);
         observer.stop();
+    }
+
+    #[test]
+    fn recycled_observation_refreshes_snapshot_state() {
+        let _guard = reset_runtime();
+        let state = SnapshotMutableState::new_in_arc(0, Arc::new(NeverEqual));
+        let observer = SnapshotStateObserver::new(|callback| callback());
+        let mut allocation = None;
+        for value in 1..=3 {
+            let parent = take_mutable_snapshot(None, None);
+            parent.enter(|| {
+                state.set(value);
+                let expected = crate::snapshot_v2::current_snapshot().unwrap();
+                observer.inner.run_with_read_observer(|| {
+                    let crate::snapshot_v2::AnySnapshot::TransparentMutable(current) =
+                        crate::snapshot_v2::current_snapshot().unwrap()
+                    else {
+                        panic!("expected an observation snapshot");
+                    };
+                    assert_eq!(current.snapshot_id(), expected.snapshot_id());
+                    assert_eq!(current.invalid(), expected.invalid());
+                    assert!(!current.is_disposed());
+                    assert!(!current.has_pending_changes());
+                    assert_eq!(state.get(), value);
+                    let address = Arc::as_ptr(&current) as usize;
+                    assert_eq!(*allocation.get_or_insert(address), address);
+                });
+            });
+            parent.apply().check();
+        }
+    }
+
+    #[test]
+    fn recycled_observation_preserves_escaped_snapshots() {
+        let _guard = reset_runtime();
+        let observer = SnapshotStateObserver::new(|callback| callback());
+        let escaped = observer
+            .inner
+            .run_with_read_observer(|| crate::snapshot_v2::current_snapshot().unwrap());
+        let id = escaped.snapshot_id();
+        observer.inner.run_with_read_observer(|| {
+            let current = crate::snapshot_v2::current_snapshot().unwrap();
+            let crate::snapshot_v2::AnySnapshot::TransparentMutable(escaped) = &escaped else {
+                panic!("expected an observation snapshot");
+            };
+            assert!(!current.is_same_transparent(escaped));
+            assert_eq!(escaped.snapshot_id(), id);
+            assert!(escaped.is_disposed());
+        });
+        let weak = observer.inner.run_with_read_observer(|| {
+            let crate::snapshot_v2::AnySnapshot::TransparentMutable(current) =
+                crate::snapshot_v2::current_snapshot().unwrap()
+            else {
+                panic!("expected an observation snapshot");
+            };
+            Arc::downgrade(&current)
+        });
+        assert!(weak.upgrade().is_none());
+        observer.inner.run_with_read_observer(|| {
+            assert!(weak.upgrade().is_none());
+        });
+    }
+
+    #[test]
+    fn recycled_observation_does_not_retain_written_state() {
+        let _guard = reset_runtime();
+        let observer = SnapshotStateObserver::new(|callback| callback());
+        let state = SnapshotMutableState::new_in_arc(0, Arc::new(NeverEqual));
+        let owners = Arc::strong_count(&state);
+        observer.inner.run_with_read_observer(|| {
+            let current = crate::snapshot_v2::current_snapshot().unwrap();
+            current.record_write(state.clone());
+        });
+        assert_eq!(Arc::strong_count(&state), owners);
     }
 
     #[test]
