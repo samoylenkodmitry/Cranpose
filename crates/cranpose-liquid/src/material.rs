@@ -15,6 +15,7 @@ use cranpose_ui_graphics::{
     GLASS_REFRACTION_CURVE_UNIFORM, GLASS_RESTING_TINT_UNIFORM,
     GLASS_TRANSMISSION_REFRACTION_UNIFORM, GraphicsLayer, LIQUID_GLASS_WGSL, LayerShape, Rect,
     RenderEffect, RoundedCornerShape, RuntimeShader, TileMode, liquid_glass_runtime_effect,
+    specialize_liquid_glass,
 };
 
 use crate::theme::LiquidColors;
@@ -719,7 +720,11 @@ impl ResolvedGlass {
             .clamp(0.0, 1.0);
         static SHADER: OnceLock<RuntimeShader> = OnceLock::new();
         let mut shader = SHADER
-            .get_or_init(|| RuntimeShader::new(LIQUID_GLASS_WGSL))
+            .get_or_init(|| {
+                let mut shader = RuntimeShader::new(LIQUID_GLASS_WGSL);
+                specialize_liquid_glass(&mut shader);
+                shader
+            })
             .clone();
         if let Some(morph) = dynamics.morph.as_ref() {
             let (node_w, node_h) = morph.node_size;
@@ -1206,6 +1211,24 @@ mod tests {
         assert!(raised.g() > resting.g());
         assert!(raised.b() > resting.b());
         assert_eq!(raised.a(), resting.a());
+    }
+
+    #[test]
+    fn template_specialization_follows_each_materials_dispersion() {
+        for dispersion in [0.6, 0.0, 0.3, 0.0] {
+            let resolved = Glass::regular()
+                .dispersion(dispersion)
+                .resolve(&light_colors());
+            let shader = terminal_shader(resolved.backdrop_effect(1.0, GlassDynamics::default()));
+            assert_eq!(shader.uniforms()[GLASS_DISPERSION_UNIFORM], dispersion);
+            assert_eq!(
+                shader
+                    .overrides()
+                    .iter()
+                    .any(|(name, _)| { *name == cranpose_ui_graphics::GLASS_DISPERSION_OFF_FLAG }),
+                dispersion == 0.0
+            );
+        }
     }
 
     #[test]
