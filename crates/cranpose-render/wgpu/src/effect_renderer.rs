@@ -95,9 +95,9 @@ pub(crate) struct EffectRenderer {
 
     blit_shader: wgpu::ShaderModule,
     blit_pipeline_layout: wgpu::PipelineLayout,
-    blit_pipeline: LazyGpuResource<wgpu::RenderPipeline>,
-    blit_pipeline_src: LazyGpuResource<wgpu::RenderPipeline>,
-    blit_pipeline_dst_out: LazyGpuResource<wgpu::RenderPipeline>,
+    blit_pipeline: [LazyGpuResource<wgpu::RenderPipeline>; 2],
+    blit_pipeline_src: [LazyGpuResource<wgpu::RenderPipeline>; 2],
+    blit_pipeline_dst_out: [LazyGpuResource<wgpu::RenderPipeline>; 2],
     blit_uniform_bind_group_layout: wgpu::BindGroupLayout,
     projective_blit_shader: wgpu::ShaderModule,
     projective_blit_pipeline_layout: wgpu::PipelineLayout,
@@ -403,6 +403,14 @@ struct CompositePassOptions {
     sample_mode: CompositeSampleMode,
 }
 
+impl CompositePassOptions {
+    fn unmasked_nearest(self) -> bool {
+        matches!(self.sample_mode, CompositeSampleMode::Nearest)
+            && self.rounded_mask.is_none()
+            && shader_specialization_enabled()
+    }
+}
+
 #[derive(Clone, Copy)]
 struct ShaderPassOptions {
     load_op: wgpu::LoadOp<wgpu::Color>,
@@ -649,6 +657,7 @@ pub(crate) struct PreparedCompositeDraw<'a> {
     uniform: UniformUpload,
     scissor: Option<(u32, u32, u32, u32)>,
     blend_mode: BlendMode,
+    unmasked_nearest: bool,
 }
 
 pub(crate) struct PreparedShaderDraw<'a> {
@@ -903,9 +912,18 @@ impl EffectRenderer {
             immediate_size: 0,
         });
 
-        let blit_pipeline = LazyGpuResource::new("effect/blit-src-over");
-        let blit_pipeline_src = LazyGpuResource::new("effect/blit-src");
-        let blit_pipeline_dst_out = LazyGpuResource::new("effect/blit-dst-out");
+        let blit_pipeline = [
+            LazyGpuResource::new("effect/blit-src-over"),
+            LazyGpuResource::new("effect/blit-src-over-nearest-unmasked"),
+        ];
+        let blit_pipeline_src = [
+            LazyGpuResource::new("effect/blit-src"),
+            LazyGpuResource::new("effect/blit-src-nearest-unmasked"),
+        ];
+        let blit_pipeline_dst_out = [
+            LazyGpuResource::new("effect/blit-dst-out"),
+            LazyGpuResource::new("effect/blit-dst-out-nearest-unmasked"),
+        ];
 
         let projective_blit_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Projective Blit Shader"),
@@ -1033,20 +1051,25 @@ impl EffectRenderer {
         })
     }
 
-    fn blit_pipeline(&self, device: &wgpu::Device, blend_mode: BlendMode) -> &wgpu::RenderPipeline {
+    fn blit_pipeline(
+        &self,
+        device: &wgpu::Device,
+        blend_mode: BlendMode,
+        unmasked_nearest: bool,
+    ) -> &wgpu::RenderPipeline {
         let (resource, label, blend) = match blend_mode {
             BlendMode::Src => (
-                &self.blit_pipeline_src,
+                &self.blit_pipeline_src[usize::from(unmasked_nearest)],
                 "Blit Pipeline Src",
                 wgpu::BlendState::REPLACE,
             ),
             BlendMode::DstOut => (
-                &self.blit_pipeline_dst_out,
+                &self.blit_pipeline_dst_out[usize::from(unmasked_nearest)],
                 "Blit Pipeline DstOut",
                 dst_out_blend_state(),
             ),
             _ => (
-                &self.blit_pipeline,
+                &self.blit_pipeline[usize::from(unmasked_nearest)],
                 "Blit Pipeline",
                 wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
             ),
@@ -1059,18 +1082,25 @@ impl EffectRenderer {
                 &self.blit_pipeline_layout,
                 &self.blit_shader,
                 "blit_fs",
-                &[],
+                &[(
+                    "BLIT_UNMASKED_NEAREST",
+                    if unmasked_nearest { 1.0 } else { 0.0 },
+                )],
                 self.surface_format,
                 blend,
             )
         })
     }
 
-    fn initialized_blit_pipeline(&self, blend_mode: BlendMode) -> &wgpu::RenderPipeline {
+    fn initialized_blit_pipeline(
+        &self,
+        blend_mode: BlendMode,
+        unmasked_nearest: bool,
+    ) -> &wgpu::RenderPipeline {
         let resource = match blend_mode {
-            BlendMode::Src => &self.blit_pipeline_src,
-            BlendMode::DstOut => &self.blit_pipeline_dst_out,
-            _ => &self.blit_pipeline,
+            BlendMode::Src => &self.blit_pipeline_src[usize::from(unmasked_nearest)],
+            BlendMode::DstOut => &self.blit_pipeline_dst_out[usize::from(unmasked_nearest)],
+            _ => &self.blit_pipeline[usize::from(unmasked_nearest)],
         };
         resource
             .get()
@@ -2084,7 +2114,11 @@ impl EffectRenderer {
 
         let mut pass = recorder.begin_color_pass("Blit Composite Pass", dest_view, options.load_op);
 
-        pass.set_pipeline(self.blit_pipeline(device, options.blend_mode));
+        pass.set_pipeline(self.blit_pipeline(
+            device,
+            options.blend_mode,
+            options.unmasked_nearest(),
+        ));
         pass.set_bind_group(0, texture_bind_group, &[]);
         pass.set_bind_group(1, &uniform.bind_group, &[uniform.offset]);
         if let Some((x, y, w, h)) = options.scissor {
@@ -2100,7 +2134,6 @@ impl EffectRenderer {
         load_op: wgpu::LoadOp<wgpu::Color>,
         item: &CompositeBatchItem<'a>,
     ) -> PreparedCompositeDraw<'a> {
-        self.blit_pipeline(device, item.blend_mode);
         let options = CompositePassOptions {
             alpha: item.alpha,
             load_op,
@@ -2111,6 +2144,8 @@ impl EffectRenderer {
             source_viewport: item.source_viewport,
             sample_mode: item.sample_mode,
         };
+        let unmasked_nearest = options.unmasked_nearest();
+        self.blit_pipeline(device, item.blend_mode, unmasked_nearest);
         let uniforms = Self::composite_pass_uniforms(options);
         let sampler = &self.effect_linear_sampler;
         let texture_bind_group = item.source.get_or_create_bind_group(
@@ -2130,6 +2165,7 @@ impl EffectRenderer {
             uniform,
             scissor: item.scissor,
             blend_mode: item.blend_mode,
+            unmasked_nearest,
         }
     }
 
@@ -2139,7 +2175,7 @@ impl EffectRenderer {
         viewport: (u32, u32),
         draw: &PreparedCompositeDraw<'_>,
     ) {
-        pass.set_pipeline(self.initialized_blit_pipeline(draw.blend_mode));
+        pass.set_pipeline(self.initialized_blit_pipeline(draw.blend_mode, draw.unmasked_nearest));
         pass.set_bind_group(0, draw.texture_bind_group, &[]);
         pass.set_bind_group(1, &draw.uniform.bind_group, &[draw.uniform.offset]);
         if let Some((x, y, w, h)) = draw.scissor {

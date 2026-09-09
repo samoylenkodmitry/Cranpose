@@ -37,8 +37,8 @@ fn blit_fs(input: VertexOutput) -> @location(0) vec4<f32> {
         );
     }
     let sampled =
-        composite_sample(source_pos, tex_size, blit.sampling.x) * blit.alpha.x;
-    if (blit.mask_enabled.x <= 0.5) {
+        composite_sample(source_pos, tex_size, select(blit.sampling.x, 1.0, BLIT_UNMASKED_NEAREST)) * blit.alpha.x;
+    if (BLIT_UNMASKED_NEAREST || blit.mask_enabled.x <= 0.5) {
         return sampled;
     }
 

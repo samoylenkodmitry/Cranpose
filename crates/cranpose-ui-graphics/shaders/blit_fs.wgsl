@@ -1,3 +1,4 @@
+override BLIT_UNMASKED_NEAREST: bool = false;
 
 @group(0) @binding(0) var input_texture: texture_2d<f32>;
 @group(0) @binding(1) var input_sampler: sampler;
