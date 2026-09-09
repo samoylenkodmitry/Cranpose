@@ -113,12 +113,17 @@ fn reach(shader: &RuntimeShader, origin: (f32, f32), layer_pixel_rect: [f32; 4])
     } else {
         1.5 * gradient + (0.25 * lens).max(MIN_BAND_WIDTH_PX) + 1.0
     };
-    let rim_high = 1.5 * gradient
-        + (0.25 * lens_high).max(MIN_BAND_WIDTH_PX)
-        + gradient.max(MIN_BAND_WIDTH_PX)
-        + edge.max(MIN_LINE_WIDTH_PX)
-        + (lens_high / 8.0).max(MIN_LINE_WIDTH_PX)
-        + fold
+    let surface = raised(shader, "GLASS_RIM_STYLE_OFF");
+    let meniscus_high = if surface {
+        0.0
+    } else {
+        1.5 * gradient + (0.25 * lens_high).max(MIN_BAND_WIDTH_PX)
+    };
+    let border_divisor = if surface { 16.0 } else { 8.0 };
+    let rim_high = meniscus_high
+        .max(gradient.max(MIN_BAND_WIDTH_PX))
+        .max(edge.max(MIN_LINE_WIDTH_PX) + (lens_high / border_divisor).max(MIN_LINE_WIDTH_PX))
+        .max(fold)
         + 1.0
         + PIXEL_MARGIN;
     Reach {
@@ -298,7 +303,7 @@ mod tests {
         shader.set_float2(CONTAINER_UNIFORM, 200.0, 70.0);
         shader.set_float2(CENTER_UNIFORM, 100.0, 35.0);
         shader.set_float2(SIZE_UNIFORM, 200.0, 70.0);
-        shader.set_float(CORNER_RADIUS_UNIFORM, 20.0);
+        shader.set_float(CORNER_RADIUS_UNIFORM, 25.0);
         let rect = [0.0, 0.0, 445.0, 156.0];
         let reach = reach(&shader, (0.0, 0.0), rect);
         let whole_corner_hole = reach.height - 2.0 * (reach.rim_high + reach.corner);
