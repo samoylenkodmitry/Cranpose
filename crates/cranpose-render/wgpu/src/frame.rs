@@ -2071,7 +2071,10 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 if diagnose {
                     log_stage(stage, &items);
                 }
-                let mut outputs = self.run_stage(pass, &items, &layout.restrict(&indices))?;
+                let restricted =
+                    (indices.len() != layout.placements.len()).then(|| layout.restrict(&indices));
+                let mut outputs =
+                    self.run_stage(pass, &items, restricted.as_ref().unwrap_or(&layout))?;
                 self.admit_backdrops(&items, &mut outputs);
                 pass.pending.extend(outputs);
             }
