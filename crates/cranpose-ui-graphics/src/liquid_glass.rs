@@ -156,19 +156,19 @@ pub const LIQUID_GLASS_SPECIALIZATIONS: &[LiquidGlassSpecialization] = &[
 /// member's capture geometry, so a resting material keeps it although its
 /// shader returns before the read.
 pub fn specialize_liquid_glass(shader: &mut RuntimeShader) {
-    let uniforms: Vec<f32> = shader.uniforms().to_vec();
     for specialization in LIQUID_GLASS_SPECIALIZATIONS {
-        if (specialization.inactive)(&uniforms) {
+        if (specialization.inactive)(shader.uniforms()) {
             shader.set_override(specialization.flag, 1.0);
         } else {
             shader.clear_override(specialization.flag);
         }
     }
     shader.set_draw_split(Some(GLASS_RIM_DRAW_OVERRIDE));
-    let substrates = if slot(&uniforms, GLASS_ADAPTIVE_FROST_UNIFORM) > 0.0 {
+    let uniforms = shader.uniforms();
+    let substrates = if slot(uniforms, GLASS_ADAPTIVE_FROST_UNIFORM) > 0.0 {
         vec![SubstrateSpec::Blur {
             radius_px: GLASS_ADAPTIVE_NEIGHBOURHOOD_DP
-                * slot(&uniforms, GLASS_EFFECT_DENSITY_UNIFORM).max(1.0),
+                * slot(uniforms, GLASS_EFFECT_DENSITY_UNIFORM).max(1.0),
         }]
     } else {
         Vec::new()
