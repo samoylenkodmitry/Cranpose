@@ -135,7 +135,7 @@ struct SnapshotStateObserverInner {
     indexed_scopes: RefCell<HashMap<usize, Rc<RefCell<ScopeEntry>>>>,
     observed_to_scopes: RefCell<HashMap<StateObjectId, HashSet<usize>>>,
     pause_count: Rc<Cell<usize>>,
-    active_read_targets: Rc<RefCell<Vec<Rc<RefCell<ObservedIds>>>>>,
+    active_read_targets: Rc<RefCell<ReadObservationStack>>,
     read_dispatcher: ReadObserver,
     apply_handle: RefCell<Option<crate::snapshot_v2::ObserverHandle>>,
     weak_self: RefCell<Weak<SnapshotStateObserverInner>>,
@@ -168,7 +168,7 @@ impl SnapshotStateObserverInner {
 
     fn new(on_changed_executor: impl Fn(Box<dyn FnOnce() + 'static>) + 'static) -> Self {
         let pause_count = Rc::new(Cell::new(0));
-        let active_read_targets = Rc::new(RefCell::new(Vec::<Rc<RefCell<ObservedIds>>>::new()));
+        let active_read_targets = Rc::new(RefCell::new(ReadObservationStack::default()));
         let dispatcher_pause_count = Rc::clone(&pause_count);
         let dispatcher_targets = Rc::clone(&active_read_targets);
         let read_dispatcher: ReadObserver = Arc::new(move |state| {
@@ -237,16 +237,15 @@ impl SnapshotStateObserverInner {
             }
         }
 
-        let observed = Rc::new(RefCell::new(ObservedIds::new()));
-        self.active_read_targets
-            .borrow_mut()
-            .push(Rc::clone(&observed));
+        let observed = self.active_read_targets.borrow_mut().push();
         struct ActiveObservationGuard {
-            stack: Rc<RefCell<Vec<Rc<RefCell<ObservedIds>>>>>,
+            stack: Rc<RefCell<ReadObservationStack>>,
         }
         impl Drop for ActiveObservationGuard {
             fn drop(&mut self) {
-                self.stack.borrow_mut().pop();
+                let target = self.stack.borrow_mut().pop();
+                let discarded = target.replace(ObservedIds::new());
+                drop(discarded);
             }
         }
         let _guard = ActiveObservationGuard {
@@ -625,6 +624,32 @@ where
     rebuilt.reserve(retained);
     rebuilt.extend(map.drain());
     *map = rebuilt;
+}
+
+#[derive(Default)]
+struct ReadObservationStack {
+    targets: Vec<Rc<RefCell<ObservedIds>>>,
+    depth: usize,
+}
+
+impl ReadObservationStack {
+    fn push(&mut self) -> Rc<RefCell<ObservedIds>> {
+        if self.depth == self.targets.len() {
+            self.targets.push(Rc::new(RefCell::new(ObservedIds::new())));
+        }
+        let target = Rc::clone(&self.targets[self.depth]);
+        self.depth += 1;
+        target
+    }
+
+    fn last(&self) -> Option<&Rc<RefCell<ObservedIds>>> {
+        self.depth.checked_sub(1).map(|index| &self.targets[index])
+    }
+
+    fn pop(&mut self) -> Rc<RefCell<ObservedIds>> {
+        self.depth -= 1;
+        Rc::clone(&self.targets[self.depth])
+    }
 }
 
 enum ObservedIds {
@@ -1069,6 +1094,7 @@ mod tests {
         let _guard = reset_runtime();
 
         let state = SnapshotMutableState::new_in_arc(0, Arc::new(NeverEqual));
+        let outer_state = SnapshotMutableState::new_in_arc(0, Arc::new(NeverEqual));
         let outer_triggered = Rc::new(Cell::new(0));
         let inner_triggered = Rc::new(Cell::new(0));
 
@@ -1084,6 +1110,7 @@ mod tests {
                 move |_| outer_triggered.set(outer_triggered.get() + 1)
             },
             || {
+                let _ = outer_state.get();
                 observer.observe_reads(
                     inner_scope.clone(),
                     {
@@ -1105,6 +1132,53 @@ mod tests {
 
         assert_eq!(outer_triggered.get(), 0);
         assert_eq!(inner_triggered.get(), 1);
+        let snapshot = take_mutable_snapshot(None, None);
+        snapshot.enter(|| outer_state.set(1));
+        snapshot.apply().check();
+        assert_eq!(outer_triggered.get(), 1);
+        assert_eq!(inner_triggered.get(), 1);
+        observer.stop();
+    }
+
+    #[test]
+    fn unwound_observation_does_not_leak_reads_into_reused_storage() {
+        let _guard = reset_runtime();
+        let abandoned = SnapshotMutableState::new_in_arc(0, Arc::new(NeverEqual));
+        let live = SnapshotMutableState::new_in_arc(0, Arc::new(NeverEqual));
+        let triggered = Rc::new(Cell::new(0));
+        let observer = SnapshotStateObserver::new(|callback| callback());
+        observer.start();
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            observer.observe_reads(
+                TestScope("abandoned"),
+                |_| {},
+                || {
+                    let _ = abandoned.get();
+                    panic!("abandon observation");
+                },
+            );
+        }));
+        assert!(result.is_err());
+        observer.observe_reads(
+            TestScope("live"),
+            {
+                let triggered = Rc::clone(&triggered);
+                move |_| triggered.set(triggered.get() + 1)
+            },
+            || {
+                let _ = live.get();
+            },
+        );
+
+        let snapshot = take_mutable_snapshot(None, None);
+        snapshot.enter(|| abandoned.set(1));
+        snapshot.apply().check();
+        assert_eq!(triggered.get(), 0);
+        let snapshot = take_mutable_snapshot(None, None);
+        snapshot.enter(|| live.set(1));
+        snapshot.apply().check();
+        assert_eq!(triggered.get(), 1);
         observer.stop();
     }
 
