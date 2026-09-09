@@ -22,6 +22,10 @@ use crate::{
 
 type Executor = dyn Fn(Box<dyn FnOnce() + 'static>) + 'static;
 
+trait ScopeChangedCallback: Fn(&dyn Any) + Any {}
+
+impl<F: Fn(&dyn Any) + Any> ScopeChangedCallback for F {}
+
 /// Observer that records state object reads performed inside a given scope and
 /// notifies the caller when any of the observed objects change.
 ///
@@ -223,22 +227,27 @@ impl SnapshotStateObserverInner {
         let frame_version = self.frame_version.get();
         let has_frame_version = frame_version != 0;
 
+        let existing_entry = self.find_scope_entry(&scope);
         let on_changed = std::cell::LazyCell::new(|| {
-            let callback: Rc<dyn Fn(&dyn Any)> = Rc::new(move |scope_any: &dyn Any| {
+            let callback = move |scope_any: &dyn Any| {
                 if let Some(typed) = scope_any.downcast_ref::<T>() {
                     on_value_changed_for_scope(typed);
                 }
-            });
-            callback
+            };
+            match existing_entry.as_ref() {
+                Some(entry) => entry.borrow_mut().callback_reusing(callback),
+                None => Rc::new(callback),
+            }
         });
 
-        let existing_entry = self.find_scope_entry(&scope);
         if let Some(entry) = existing_entry.as_ref() {
             let already_observed = {
                 let mut entry_mut = entry.borrow_mut();
-                entry_mut.update(scope.clone(), on_changed.clone());
+                entry_mut.update_scope(scope.clone());
                 has_frame_version && entry_mut.last_seen_version == frame_version
             };
+            let callback = on_changed.clone();
+            entry.borrow_mut().on_changed = callback;
             if already_observed {
                 return block();
             }
@@ -273,6 +282,7 @@ impl SnapshotStateObserverInner {
             std::mem::replace(&mut *observed, ObservedIds::new())
         };
         let entry = existing_entry
+            .clone()
             .unwrap_or_else(|| self.insert_scope_entry(scope.clone(), on_changed.clone()));
         {
             let mut entry_mut = entry.borrow_mut();
@@ -374,7 +384,7 @@ impl SnapshotStateObserverInner {
     fn insert_scope_entry(
         &self,
         scope: impl Any + Clone + Eq + Hash + 'static,
-        on_changed: Rc<dyn Fn(&dyn Any)>,
+        on_changed: Rc<dyn ScopeChangedCallback>,
     ) -> Rc<RefCell<ScopeEntry>> {
         let entry_id = self.next_entry_id.get();
         self.next_entry_id.set(entry_id.wrapping_add(1));
@@ -755,13 +765,13 @@ enum ScopeStorage {
 struct ScopeEntry {
     id: usize,
     scope: ScopeStorage,
-    on_changed: Rc<dyn Fn(&dyn Any)>,
+    on_changed: Rc<dyn ScopeChangedCallback>,
     observed: ObservedIds,
     last_seen_version: u64,
 }
 
 impl ScopeEntry {
-    fn new<T>(id: usize, scope: T, on_changed: Rc<dyn Fn(&dyn Any)>) -> Self
+    fn new<T>(id: usize, scope: T, on_changed: Rc<dyn ScopeChangedCallback>) -> Self
     where
         T: Any + 'static,
     {
@@ -774,7 +784,29 @@ impl ScopeEntry {
         }
     }
 
-    fn update<T>(&mut self, new_scope: T, on_changed: Rc<dyn Fn(&dyn Any)>)
+    fn callback_reusing<F: Fn(&dyn Any) + 'static>(
+        &mut self,
+        callback: F,
+    ) -> Rc<dyn ScopeChangedCallback> {
+        if let Some(stored) = Rc::get_mut(&mut self.on_changed)
+            .and_then(|stored| (stored as &mut dyn Any).downcast_mut::<F>())
+        {
+            *stored = callback;
+            Rc::clone(&self.on_changed)
+        } else {
+            Rc::new(callback)
+        }
+    }
+
+    fn update<T>(&mut self, new_scope: T, on_changed: Rc<dyn ScopeChangedCallback>)
+    where
+        T: Any + 'static,
+    {
+        self.update_scope(new_scope);
+        self.on_changed = on_changed;
+    }
+
+    fn update_scope<T>(&mut self, new_scope: T)
     where
         T: Any + 'static,
     {
@@ -785,7 +817,6 @@ impl ScopeEntry {
         } else {
             self.scope = ScopeStorage::from_value(new_scope);
         }
-        self.on_changed = on_changed;
     }
 
     fn matches_scope<T>(&self, scope: &T) -> bool
@@ -907,6 +938,54 @@ mod tests {
         );
         drop(entry);
         assert_eq!(Rc::strong_count(&second), 1);
+    }
+
+    #[test]
+    fn reobservation_refreshes_captures_and_preserves_shared_callbacks() {
+        let _guard = reset_runtime();
+        let state = SnapshotMutableState::new_in_arc(0, Arc::new(NeverEqual));
+        let delivered = Rc::new(RefCell::new(Vec::new()));
+        let callback = |generation| {
+            let delivered = delivered.clone();
+            move |scope: &TestScope| delivered.borrow_mut().push((generation, scope.0))
+        };
+        let scope = TestScope("callback");
+        let observer = SnapshotStateObserver::new(|callback| callback());
+        let read = || {
+            let _ = state.get();
+        };
+        observer.observe_reads(scope.clone(), callback(1), read);
+        let entry = observer.inner.find_scope_entry(&scope).unwrap();
+        let held = entry.borrow().on_changed.clone();
+        observer.observe_reads(scope.clone(), callback(2), read);
+        held(&scope);
+        entry.borrow().notify();
+        drop(held);
+
+        let allocation = Rc::as_ptr(&entry.borrow().on_changed);
+        observer.observe_reads(scope.clone(), callback(3), read);
+        assert!(std::ptr::addr_eq(
+            allocation,
+            Rc::as_ptr(&entry.borrow().on_changed)
+        ));
+        entry.borrow().notify();
+
+        let received = delivered.clone();
+        observer.observe_reads(
+            scope,
+            move |scope| received.borrow_mut().push((4, scope.0)),
+            read,
+        );
+        entry.borrow().notify();
+        assert_eq!(
+            *delivered.borrow(),
+            [
+                (1, "callback"),
+                (2, "callback"),
+                (3, "callback"),
+                (4, "callback")
+            ]
+        );
     }
 
     #[test]
