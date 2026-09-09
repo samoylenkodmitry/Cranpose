@@ -393,13 +393,9 @@ impl RuntimeShader {
         *specialization.overrides_hash.get_or_init(|| {
             #[cfg(test)]
             OVERRIDE_HASH_COMPUTATIONS.with(|count| count.set(count.get() + 1));
-            let mut bytes = Vec::new();
-            for (name, value) in &specialization.overrides {
-                bytes.extend_from_slice(name.as_bytes());
-                bytes.push(0);
-                bytes.extend_from_slice(&value.to_bits().to_le_bytes());
-            }
-            hash_shader_bytes(&bytes)
+            hash_shader_bytes(specialization.overrides.iter().flat_map(|(name, value)| {
+                name.bytes().chain([0]).chain(value.to_bits().to_le_bytes())
+            }))
         })
     }
 
@@ -699,15 +695,15 @@ impl PartialEq for RuntimeShader {
 }
 
 fn hash_shader_source(source: &str) -> u64 {
-    hash_shader_bytes(source.as_bytes())
+    hash_shader_bytes(source.bytes())
 }
 
-fn hash_shader_bytes(bytes: &[u8]) -> u64 {
+fn hash_shader_bytes(bytes: impl IntoIterator<Item = u8>) -> u64 {
     const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
     const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 
-    bytes.iter().fold(FNV_OFFSET_BASIS, |hash, byte| {
-        (hash ^ u64::from(*byte)).wrapping_mul(FNV_PRIME)
+    bytes.into_iter().fold(FNV_OFFSET_BASIS, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(FNV_PRIME)
     })
 }
 
@@ -996,7 +992,7 @@ mod tests {
             if bytes.is_empty() {
                 0
             } else {
-                hash_shader_bytes(&bytes)
+                hash_shader_bytes(bytes)
             }
         }
 
