@@ -15,7 +15,7 @@ from android_benchmark_support import checked_command, device_lock, digest, erro
 from android_benchmark_video import AndroidRecording, ScrcpyRecording
 
 
-def validate_pair(proofs):
+def validate_pair(proofs, variant_source='framework'):
     first, second = proofs
     for key in ['payload']:
         if first[key] != second[key]:
@@ -23,8 +23,9 @@ def validate_pair(proofs):
     for key in ['abi', 'features', 'toolchain', 'cargo', 'ndk', 'settings', 'lock_sha256']:
         if first['build'][key] != second['build'][key]:
             raise ValueError('Compared builds differ in ' + key)
-    if first['build']['sources']['app']['inventory'] != second['build']['sources']['app']['inventory']:
-        raise ValueError('Compared builds differ in application sources')
+    fixed_source = {'framework': 'app', 'app': 'framework'}[variant_source]
+    if first['build']['sources'][fixed_source]['inventory'] != second['build']['sources'][fixed_source]['inventory']:
+        raise ValueError('Compared builds differ in ' + fixed_source + ' sources')
 
 
 def validate_route(route):
@@ -257,7 +258,8 @@ def sequence(args, report):
             raise ValueError('APK provenance did not complete')
         verify_build(proof['build'], Path(proof['build_directory']))
         verify_apk(path.parent / proof['apk'], proof, proof['native_member'])
-    validate_pair(proofs)
+    validate_pair(proofs, args.variant_source)
+    report['variant_source'] = args.variant_source
     report.update(serial=args.serial, route_sha256=digest(args.route), helper=helper, legs=[])
     if args.ocr:
         proof = json.loads(args.ocr.with_suffix('.json').read_text())
@@ -351,6 +353,7 @@ def main():
     measure.add_argument('--video-bit-rate', type=int, default=2_000_000)
     measure.add_argument('--a', type=Path, required=True)
     measure.add_argument('--b', type=Path, required=True)
+    measure.add_argument('--variant-source', choices=['framework', 'app'], default='framework')
     measure.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     signal.signal(signal.SIGTERM, interrupted)
