@@ -384,6 +384,19 @@ class BenchmarkContracts(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'payload'):
             validate_pair([first, first | {'payload': {}}])
 
+    def test_app_comparison_requires_identical_framework_sources(self):
+        build = dict.fromkeys(['abi', 'features', 'toolchain', 'cargo', 'ndk', 'settings', 'lock_sha256'], 'same')
+        build['sources'] = {name: {'inventory': {'source': 'same'}} for name in ['app', 'framework']}
+        first = {'build': build, 'payload': {'assets': 'same'}}
+        second = json.loads(json.dumps(first))
+        second['build']['sources']['app']['inventory']['source'] = 'changed app'
+        validate_pair([first, second], variant_source='app')
+        with self.assertRaises(ValueError):
+            validate_pair([first, second])
+        second['build']['sources']['framework']['inventory']['source'] = 'changed framework'
+        with self.assertRaisesRegex(ValueError, 'framework sources'):
+            validate_pair([first, second], variant_source='app')
+
     def test_roundtrip_uses_independent_start_checks_and_accumulates_only_motion_windows(self):
         route = {'kind': 'scroll', 'package': 'com.scene', 'activity': 'Activity', 'size': [100, 100],
                  'density': 160, 'motion_region': [10, 10, 80, 80], 'x': 20, 'y_start': 70, 'y_end': 20,
@@ -513,7 +526,7 @@ class BenchmarkContracts(unittest.TestCase):
                 output = self.root / str(fail)
                 output.mkdir()
                 args = SimpleNamespace(serial='fixture-' + str(self.root), adb='adb', route=route,
-                                       dex=dex, ocr=None, record=False, video_bit_rate=2_000_000, a=proofs[0], b=proofs[1], output=output, transfer_timeout_seconds=600)
+                                       dex=dex, ocr=None, record=False, video_bit_rate=2_000_000, a=proofs[0], b=proofs[1], output=output, transfer_timeout_seconds=600, variant_source='framework')
                 device = Mock(spec=AndroidDevice)
                 device.saved_properties = {}
                 device.installed_apk.return_value = None
