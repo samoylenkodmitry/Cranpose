@@ -432,31 +432,30 @@ fn wcksrd_optics(
     edge_extent: f32,
     edge_sharpness: f32,
     rim_style: f32,
+    in_rim: bool,
 ) -> OpticalSample {
     let lens_refraction = max(requested_lens_refraction, 0.001);
     let interior = clamp(-distance / lens_refraction, 0.0, 1.0);
-    // The border line's ramp spans lens_refraction/edge_sharpness px. The
-    // drawn line must stay resolvable by the pixel grid: a sub-pixel band
-    // point-sampled at pixel centers renders as disconnected sparkles along
-    // a curved rim. Widening the band below the floor conserves its energy
-    // exactly — the profile's integral along the normal equals its extent,
-    // so the gain ratio keeps the line's total light unchanged.
-    let border_extent = max(edge_extent, MIN_LINE_WIDTH_PX);
-    let border_gain = edge_extent / border_extent;
-    let border_ramp = max(lens_refraction / max(edge_sharpness, 1.0), MIN_LINE_WIDTH_PX);
-    let border = (clamp(-(distance - edge_extent) / border_ramp, 0.0, 1.0)
-        - clamp(-(distance + border_extent - edge_extent) / border_ramp, 0.0, 1.0))
-        * border_gain;
-    let optical_gradient_band = wcksrd_meniscus(
-        distance,
-        lens_refraction,
-        gradient_extent,
-    );
-    let lighting_band = mix(
-        wcksrd_surface_rim(distance, gradient_extent),
-        optical_gradient_band,
-        clamp(rim_style, 0.0, 1.0),
-    );
+    var border = 0.0;
+    var lighting_band = 0.0;
+    if in_rim {
+        let border_extent = max(edge_extent, MIN_LINE_WIDTH_PX);
+        let border_gain = edge_extent / border_extent;
+        let border_ramp = max(lens_refraction / max(edge_sharpness, 1.0), MIN_LINE_WIDTH_PX);
+        border = (clamp(-(distance - edge_extent) / border_ramp, 0.0, 1.0)
+            - clamp(-(distance + border_extent - edge_extent) / border_ramp, 0.0, 1.0))
+            * border_gain;
+        let optical_gradient_band = wcksrd_meniscus(
+            distance,
+            lens_refraction,
+            gradient_extent,
+        );
+        lighting_band = mix(
+            wcksrd_surface_rim(distance, gradient_extent),
+            optical_gradient_band,
+            clamp(rim_style, 0.0, 1.0),
+        );
+    }
     let source_y = -local_position.y / max(half_size.y, 1.0) * 0.29;
     let face_light = 0.5 * clamp(clamp(source_y, 0.0, 0.2) + 0.1, 0.0, 1.0)
         + 0.5 * clamp(clamp(-source_y, -1.0, 0.2) * lighting_band + 0.1, 0.0, 1.0);
@@ -944,6 +943,7 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
         edge_extent,
         edge_sharpness,
         rim_style,
+        in_rim,
     );
     let interior = optical_sample.interior;
 
