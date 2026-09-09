@@ -1448,26 +1448,18 @@ impl CommandRecording {
 
     /// The coverage rect of every entry inside `segments`.
     pub fn coverage_rects(&self, segments: Range<u32>) -> impl Iterator<Item = Rect> + '_ {
-        self.segments_in(&segments)
-            .flat_map(|segment| -> Box<dyn Iterator<Item = Rect> + '_> {
-                match segment.lane {
-                    RecordLane::Shapes => Box::new(
-                        self.shapes
-                            .tables
-                            .shapes
-                            .iter()
-                            .skip(segment.start as usize)
-                            .take(segment.count as usize)
-                            .map(|record| record.coverage_rect()),
-                    ),
-                    RecordLane::Others => Box::new(
-                        self.content.others[segment.range()]
-                            .iter()
-                            .filter_map(primitive_coverage_rect),
-                    ),
-                    RecordLane::Content => Box::new(std::iter::empty()),
-                }
+        self.segments_in(&segments).flat_map(move |segment| {
+            segment.range().filter_map(move |index| match segment.lane {
+                RecordLane::Shapes => self
+                    .shapes
+                    .tables
+                    .shapes
+                    .get(index)
+                    .map(|record| record.coverage_rect()),
+                RecordLane::Others => primitive_coverage_rect(&self.content.others[index]),
+                RecordLane::Content => None,
             })
+        })
     }
 
     /// The primitives inside `segments`, materialised in recorded order,
@@ -1490,24 +1482,17 @@ impl CommandRecording {
         self.primitives_with_markers().collect()
     }
 
-    fn segment_primitives(
-        &self,
+    fn segment_primitives<'a>(
+        &'a self,
         segment: &RecordSegment,
         markers: bool,
-    ) -> Box<dyn Iterator<Item = DrawPrimitive> + '_> {
-        match segment.lane {
-            RecordLane::Shapes => Box::new(
-                segment
-                    .range()
-                    .map(move |index| self.materialize_shape(index)),
-            ),
-            RecordLane::Others => Box::new(self.content.others[segment.range()].iter().cloned()),
-            RecordLane::Content if markers => Box::new(std::iter::repeat_n(
-                DrawPrimitive::Content,
-                segment.count as usize,
-            )),
-            RecordLane::Content => Box::new(std::iter::empty()),
-        }
+    ) -> impl Iterator<Item = DrawPrimitive> + use<'a> {
+        let lane = segment.lane;
+        segment.range().filter_map(move |index| match lane {
+            RecordLane::Shapes => Some(self.materialize_shape(index)),
+            RecordLane::Others => Some(self.content.others[index].clone()),
+            RecordLane::Content => markers.then_some(DrawPrimitive::Content),
+        })
     }
 
     /// The exact [`DrawPrimitive`] the record was made from.
@@ -2353,6 +2338,43 @@ mod tests {
         assert!(unsplit.is_empty_in(&unsplit.content_split(true)));
         assert_eq!(unsplit.content_split(false), unsplit.all_segments());
         assert_eq!(unsplit.len_in(&unsplit.all_segments()), 1);
+    }
+
+    #[test]
+    fn segment_iteration_preserves_order_bounds_and_marker_filtering() {
+        let primitives = every_primitive();
+        let recording = CommandRecording::from_primitives(primitives.clone());
+        let offsets: Vec<_> = std::iter::once(0)
+            .chain(recording.segments().iter().scan(0, |offset, segment| {
+                *offset += segment.count as usize;
+                Some(*offset)
+            }))
+            .collect();
+        assert_eq!(offsets.last(), Some(&primitives.len()));
+        for start in 0..offsets.len() {
+            for end in start..offsets.len() {
+                let selected = &primitives[offsets[start]..offsets[end]];
+                let segments = start as u32..end as u32;
+                let expected: Vec<_> = selected
+                    .iter()
+                    .filter(|primitive| !matches!(primitive, DrawPrimitive::Content))
+                    .cloned()
+                    .collect();
+                assert_eq!(
+                    recording.primitives(segments.clone()).collect::<Vec<_>>(),
+                    expected
+                );
+                let expected: Vec<_> = selected
+                    .iter()
+                    .filter_map(primitive_coverage_rect)
+                    .collect();
+                assert_eq!(
+                    recording.coverage_rects(segments).collect::<Vec<_>>(),
+                    expected
+                );
+            }
+        }
+        assert_eq!(recording.into_primitives_with_markers(), primitives);
     }
 
     #[test]
