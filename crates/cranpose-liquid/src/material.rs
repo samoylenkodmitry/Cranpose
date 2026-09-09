@@ -3,7 +3,7 @@
 //! [`LiquidModifierExt::glass_effect`] — the analogue of SwiftUI's
 //! `.glassEffect(_:in:)`.
 
-use std::{cell::Cell, rc::Rc};
+use std::{cell::Cell, rc::Rc, sync::OnceLock};
 
 use cranpose_ui::{Modifier, current_density};
 use cranpose_ui_graphics::{
@@ -717,7 +717,10 @@ impl ResolvedGlass {
             .filter(|value| value.is_finite())
             .unwrap_or(1.0)
             .clamp(0.0, 1.0);
-        let mut shader = RuntimeShader::new(LIQUID_GLASS_WGSL);
+        static SHADER: OnceLock<RuntimeShader> = OnceLock::new();
+        let mut shader = SHADER
+            .get_or_init(|| RuntimeShader::new(LIQUID_GLASS_WGSL))
+            .clone();
         if let Some(morph) = dynamics.morph.as_ref() {
             let (node_w, node_h) = morph.node_size;
             let (cx, cy, w, h, radius) = morph.primary;
@@ -1203,6 +1206,33 @@ mod tests {
         assert!(raised.g() > resting.g());
         assert!(raised.b() > resting.b());
         assert_eq!(raised.a(), resting.a());
+    }
+
+    #[test]
+    fn material_instances_share_source_without_sharing_uniforms_or_overrides() {
+        let resolved = Glass::regular().resolve(&light_colors());
+        let mut first = terminal_shader(resolved.backdrop_effect(2.0, GlassDynamics::default()));
+        let untouched = terminal_shader(resolved.backdrop_effect(1.0, GlassDynamics::default()));
+        let unused_slot = RuntimeShader::MAX_USER_UNIFORMS - 1;
+        first.set_float(unused_slot, 17.0);
+        first.set_override("INSTANCE_ONLY", 1.0);
+        let second = terminal_shader(resolved.backdrop_effect(1.0, GlassDynamics::default()));
+        assert_eq!(second.uniforms(), untouched.uniforms());
+        assert_eq!(second.overrides(), untouched.overrides());
+        assert_eq!(
+            second.uniforms().get(unused_slot).copied().unwrap_or(0.0),
+            0.0
+        );
+        assert!(
+            !second
+                .overrides()
+                .iter()
+                .any(|(name, _)| *name == "INSTANCE_ONLY")
+        );
+        assert_eq!(first.uniforms()[unused_slot], 17.0);
+        assert_eq!(first.uniforms()[GLASS_EFFECT_DENSITY_UNIFORM], 2.0);
+        assert_eq!(second.uniforms()[GLASS_EFFECT_DENSITY_UNIFORM], 1.0);
+        assert_eq!(first.source().as_ptr(), second.source().as_ptr());
     }
 
     #[test]
