@@ -545,17 +545,13 @@ fn try_translate_scrolled_layer(
     }
 
     let content_offset = layout_state.content_offset;
-    let (translation_x, translation_y) = modifier_slices
-        .graphics_layer()
-        .map(|layer| (layer.translation_x, layer.translation_y))
-        .unwrap_or((0.0, 0.0));
     let top_left = Point {
         x: parent_abs.content_origin.x + layout_state.position().x,
         y: parent_abs.content_origin.y + layout_state.position().y,
     };
     let layer_translation = Point {
-        x: parent_abs.layer_translation.x + translation_x,
-        y: parent_abs.layer_translation.y + translation_y,
+        x: parent_abs.layer_translation.x + graphics_layer.translation_x,
+        y: parent_abs.layer_translation.y + graphics_layer.translation_y,
     };
     let window_origin = Point {
         x: top_left.x + layer_translation.x,
@@ -1061,17 +1057,13 @@ fn build_layer_node_from_data(
         inherited_translated_content_context || local_translated_content_context;
 
     let this_abs = parent_abs.map(|parent| {
-        let (tx, ty) = modifier_slices
-            .graphics_layer()
-            .map(|layer| (layer.translation_x, layer.translation_y))
-            .unwrap_or((0.0, 0.0));
         let top_left = Point {
             x: parent.content_origin.x + layout_state.position().x,
             y: parent.content_origin.y + layout_state.position().y,
         };
         let layer_translation = Point {
-            x: parent.layer_translation.x + tx,
-            y: parent.layer_translation.y + ty,
+            x: parent.layer_translation.x + graphics_layer.translation_x,
+            y: parent.layer_translation.y + graphics_layer.translation_y,
         };
         (top_left, layer_translation)
     });
@@ -2707,7 +2699,7 @@ mod tests {
     }
 
     #[test]
-    fn scene_build_publishes_live_window_rect_without_layout_tree() {
+    fn scene_build_publishes_live_translated_window_rect_without_layout_tree() {
         use std::cell::Cell;
 
         use cranpose_ui::{Box, BoxSpec, MeasureLayoutOptions, measure_layout_with_options};
@@ -2720,10 +2712,19 @@ mod tests {
             height: 0.0,
         }));
         let sink_for_comp = sink.clone();
+        let translation = Rc::new(Cell::new(Point { x: 7.0, y: 11.0 }));
+        let translation_for_comp = translation.clone();
         let mut composition = cranpose_ui::run_test_composition(move || {
             let sink = sink_for_comp.clone();
+            let translation = translation_for_comp.clone();
             Column(
-                Modifier::empty().size_points(200.0, 400.0),
+                Modifier::empty()
+                    .size_points(200.0, 400.0)
+                    .graphics_layer(move || GraphicsLayer {
+                        translation_x: translation.get().x,
+                        translation_y: translation.get().y,
+                        ..Default::default()
+                    }),
                 ColumnSpec::default(),
                 move || {
                     Spacer(Size {
@@ -2733,6 +2734,11 @@ mod tests {
                     Box(
                         Modifier::empty()
                             .size_points(200.0, 50.0)
+                            .graphics_layer(|| GraphicsLayer {
+                                translation_x: 5.0,
+                                translation_y: -9.0,
+                                ..Default::default()
+                            })
                             .report_window_rect(sink.clone()),
                         BoxSpec::default(),
                         || {},
@@ -2765,20 +2771,21 @@ mod tests {
             "sink must start empty (place disabled)"
         );
 
-        let _graph = build_graph_from_applier(&mut applier, root, 1.0).expect("scene graph");
+        for offset in [Point { x: 7.0, y: 11.0 }, Point { x: -3.0, y: 5.0 }] {
+            translation.set(offset);
+            let _graph = build_graph_from_applier(&mut applier, root, 1.0).expect("scene graph");
+            assert_eq!(
+                sink.get(),
+                Rect {
+                    x: offset.x + 5.0,
+                    y: spacer_before + offset.y - 9.0,
+                    width: 200.0,
+                    height: 50.0,
+                },
+                "window rect must follow both live layer translations without relayout"
+            );
+        }
         applier.clear_runtime_handle();
-
-        let rect = sink.get();
-        assert!(
-            (rect.y - spacer_before).abs() < 0.5,
-            "scene build must publish the box's live window-y (below the {spacer_before}px \
-             spacer), got {}",
-            rect.y
-        );
-        assert!(
-            rect.width > 0.0 && rect.height > 0.0,
-            "scene build must publish a non-empty window rect, got {rect:?}"
-        );
     }
 
     #[test]
@@ -3407,7 +3414,13 @@ mod tests {
                 let list_state = rememberLazyListState();
                 *state_holder_for_comp.borrow_mut() = Some(list_state);
                 LazyColumn(
-                    Modifier::empty().size_points(240.0, 320.0),
+                    Modifier::empty()
+                        .size_points(240.0, 320.0)
+                        .graphics_layer(|| GraphicsLayer {
+                            translation_x: 7.0,
+                            translation_y: 11.0,
+                            ..Default::default()
+                        }),
                     list_state,
                     LazyColumnSpec::default(),
                     |scope| {
@@ -3467,6 +3480,13 @@ mod tests {
             let report =
                 update_graph_from_applier_report(&mut applier, &mut graph, &dirty_nodes, 1.0);
             assert!(report.applied(), "delta {delta}: boundary frame must apply");
+            assert_eq!(
+                find_layer_by_node_id(&graph.root, root)
+                    .expect("list layer")
+                    .scene_children_layer_translation,
+                Point { x: 7.0, y: 11.0 },
+                "patched child origins must retain the container's layer translation"
+            );
             if delta == -30.0 {
                 assert_eq!(
                     lowered_layer_count(),
