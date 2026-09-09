@@ -15,6 +15,7 @@ use cranpose_ui_graphics::{
     BlendMode, MAX_SUBSTRATES, Point, Rect, RenderEffect, RenderHash, RuntimeShader, SubstrateSpec,
     TileMode,
 };
+use smallvec::{SmallVec, smallvec};
 
 use crate::{
     ablation::Ablation,
@@ -118,15 +119,15 @@ impl DeviceRect {
 
     /// What is left of the rect outside `hole`: up to four rects that
     /// partition it exactly, none overlapping the hole.
-    fn subtract(self, hole: Self) -> Vec<Self> {
+    fn subtract(self, hole: Self) -> SmallVec<[Self; 4]> {
         let Some(hole) = hole.intersect(self) else {
-            return vec![self];
+            return smallvec![self];
         };
         let right = self.x + self.width;
         let bottom = self.y + self.height;
         let hole_right = hole.x + hole.width;
         let hole_bottom = hole.y + hole.height;
-        let mut parts = Vec::with_capacity(4);
+        let mut parts = SmallVec::new();
         let mut push = |x: f32, y: f32, width: f32, height: f32| {
             if width > 0.0 && height > 0.0 {
                 parts.push(Self {
@@ -3930,6 +3931,12 @@ mod tests {
             },
         ];
         let parts = rect.subtract_all(&holes);
+        assert!(rect.subtract(rect).is_empty());
+        assert_eq!(
+            rect.subtract(rect.translated(Point { x: 10.0, y: 0.0 }))
+                .as_slice(),
+            &[rect]
+        );
         let area: f32 = parts.iter().map(|part| part.width * part.height).sum();
         assert_eq!(area, 100.0 - 9.0 - 16.0);
         for (index, a) in parts.iter().enumerate() {
