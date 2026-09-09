@@ -51,6 +51,8 @@ append_perf_summary_block() {
 
     {
         echo "=== ${scenario} ==="
+        extract_perf_summary_line "PERF_PRESENTATION_SUMMARY" "$log_file"
+        extract_perf_summary_line "PERF_PRESENTATION_CALIBRATION" "$log_file"
         local render_line
         render_line=$(extract_perf_summary_line "PERF_RENDER_SUMMARY" "$log_file")
         local memory_line

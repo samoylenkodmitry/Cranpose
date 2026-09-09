@@ -592,7 +592,8 @@ pub use cranpose_app_shell::{DevOptions, FpsStats, FramePacingMode};
     feature = "renderer-wgpu"
 ))]
 pub use robot::{
-    Robot, RobotScreenshot, RobotTimelineAction, RobotTimelineStep, SemanticElement, SemanticRect,
+    Robot, RobotPresentationInfo, RobotScreenshot, RobotTimelineAction, RobotTimelineStep,
+    SemanticElement, SemanticRect,
 };
 
 #[cfg(all(test, feature = "desktop-shell", feature = "renderer-wgpu"))]

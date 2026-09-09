@@ -1,30 +1,22 @@
 import argparse
-import fcntl
-import hashlib
 import json
 from pathlib import Path
 import re
 import subprocess
-import tempfile
 import time
 
 from PIL import Image
 
 from android_surface_frames import inspect_video
+from android_robot_device import locked_device
 
 
-def run_device(args):
+def run_device(args, device):
     output = args.output
     output.mkdir(parents=True, exist_ok=False)
-    adb = ['adb', '-s', args.serial]
-
-    def command(*parts):
-        return subprocess.check_output(adb + list(parts), text=True, stderr=subprocess.STDOUT, timeout=60)
-
-    def wake():
-        command('shell', 'input', 'keyevent', 'KEYCODE_WAKEUP')
-        if 'mWakefulness=Awake' not in command('shell', 'dumpsys', 'power'):
-            raise RuntimeError('Device screen is not awake')
+    adb = device.adb
+    command = device.command
+    wake = device.wake
 
     density = command('shell', 'wm', 'density')
     scale = int(re.findall(r'density: (\d+)', density)[-1]) / 160
@@ -84,11 +76,8 @@ def main():
     else:
         if not args.serial:
             parser.error('device robot requires --serial')
-        device_key = hashlib.sha256(args.serial.encode()).hexdigest()[:16]
-        lock_path = Path(tempfile.gettempdir()) / ('cranpose-device-' + device_key + '.lock')
-        with lock_path.open('a+') as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX)
-            run_device(args)
+        with locked_device(args.serial) as device:
+            run_device(args, device)
 
 
 if __name__ == '__main__':

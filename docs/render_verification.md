@@ -43,3 +43,4 @@
 - Make invalidation bypasses impossible through ownership and private fields; test moved solid siblings without full-rebuild fallback.
 - Proc-macro-generated syntax uses the macro crate's edition; mixed-site hygiene does not isolate bindings from call-site constants.
 - Test composable doctests with their required crate-root imports and explicit main; downstream examples have a different expansion context.
+- Run `just robot-one robot_glass_feed_wheel` to check receipt positions and pixels after large, one-pixel and repeated wheel input.

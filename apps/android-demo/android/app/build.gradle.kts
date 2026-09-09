@@ -33,6 +33,7 @@ cranpose {
 android {
     namespace = "com.compose_rs.demo"
     compileSdk = 36
+    testBuildType = "release"
 
     defaultConfig {
         applicationId = "com.compose_rs.demo"
@@ -45,6 +46,9 @@ android {
 
     buildTypes {
         release {
+            if (providers.gradleProperty("cranposeRobot").orNull == "true") {
+                applicationIdSuffix = ".robot"
+            }
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),

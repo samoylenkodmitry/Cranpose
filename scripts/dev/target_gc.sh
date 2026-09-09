@@ -145,7 +145,11 @@ target_last_build() {
     newest="$(mtime_of "$dir")"
     for entry in "$dir"/*; do
         [ -d "$entry" ] || continue
-        candidate="$(mtime_of "$entry")"
+        if [ ! -L "$entry" ] && is_cargo_target_dir "$entry"; then
+            candidate="$(target_last_build "$entry")"
+        else
+            candidate="$(mtime_of "$entry")"
+        fi
         [ "$candidate" -gt "$newest" ] 2>/dev/null && newest="$candidate"
         if [ -d "$entry/.fingerprint" ]; then
             candidate="$(mtime_of "$entry/.fingerprint")"
@@ -333,7 +337,6 @@ emit_candidate() {
     worktree_has_live_process "$wt" && live=1
     size_mb="$(dir_size_mb "$target")"
     [ -n "$size_mb" ] || size_mb=0
-    [ "$size_mb" -ge "$min_size_mb" ] || return 0
 
     last="$(target_last_build "$target")"
     now="$(date +%s)"
@@ -360,12 +363,36 @@ emit_candidate() {
     # $target empty, which the display loop then skips -- every genuine eviction
     # candidate disappears and only protected ones survive, which reads exactly
     # like "nothing is reclaimable".
-    printf '%s\t%s\t%s\t%s\n' "$last" "$size_mb" "${protect:--}" "$target"
+    printf '%s\t%s\t%s\t%s\n' "$last" "$size_mb" "${protect:--}" "$target_real"
+}
+
+collapse_candidates() {
+    awk -F '\t' -v minimum="$min_size_mb" '
+        { last[NR] = $1; size[NR] = $2; protect[NR] = $3; path[NR] = $4 }
+        END {
+            for (i = 1; i <= NR; i++) {
+                owner[i] = i
+                for (j = 1; j <= NR; j++) {
+                    if (index(path[i], path[j] "/") == 1 &&
+                        length(path[j]) < length(path[owner[i]])) owner[i] = j
+                }
+            }
+            for (i = 1; i <= NR; i++) {
+                root = owner[i]
+                if (last[i] > last[root]) last[root] = last[i]
+                if (protect[i] != "-" && protect[root] == "-") protect[root] = protect[i]
+            }
+            for (i = 1; i <= NR; i++) {
+                if (owner[i] == i && size[i] >= minimum)
+                    printf "%s\t%s\t%s\t%s\n", last[i], size[i], protect[i], path[i]
+            }
+        }
+    '
 }
 
 [ "$apply" -eq 1 ] && reap_orphans
 
-candidates="$(collect_candidates | sort -n)"
+candidates="$(collect_candidates | collapse_candidates | sort -n)"
 if [ -z "$candidates" ]; then
     echo "No cargo target directories above ${min_size_mb}MB found."
     exit 0

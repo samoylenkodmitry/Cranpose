@@ -1,0 +1,60 @@
+{
+  "kind": "scroll",
+  "package": "com.cranscan.app.codex",
+  "activity": "dev.cranpose.android.CranposeActivity",
+  "size": [
+    408,
+    408
+  ],
+  "density": 320,
+  "x": 100,
+  "y_start": 260,
+  "y_end": 60,
+  "count": 50,
+  "duration_ms": 170,
+  "period_ms": 200,
+  "window_ms": 10000,
+  "timing_tolerance_ms": 100,
+  "start_text": "Settings",
+  "end_text": "CranScan 1.0.22",
+  "motion_region": [
+    60,
+    60,
+    300,
+    280
+  ],
+  "setup": [
+    {
+      "visible_text": "CranScan",
+      "region": [
+        0,
+        0,
+        350,
+        135
+      ],
+      "text_source": "image",
+      "tap": [
+        348,
+        312
+      ]
+    }
+  ],
+  "start_region": [
+    0,
+    100,
+    408,
+    260
+  ],
+  "end_region": [
+    0,
+    0,
+    408,
+    275
+  ],
+  "return": {
+    "y_start": 60,
+    "y_end": 260
+  },
+  "text_source": "image",
+  "endpoint_timeout_s": 4
+}

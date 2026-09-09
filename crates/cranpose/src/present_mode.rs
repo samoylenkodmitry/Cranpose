@@ -86,6 +86,26 @@ fn is_auto_present_mode(mode: wgpu::PresentMode) -> bool {
     )
 }
 
+#[cfg(any(test, feature = "robot"))]
+pub(crate) fn resolved_present_mode(
+    mode: wgpu::PresentMode,
+    caps: &wgpu::SurfaceCapabilities,
+) -> wgpu::PresentMode {
+    let fallbacks: &[wgpu::PresentMode] = match mode {
+        wgpu::PresentMode::AutoNoVsync => &[
+            wgpu::PresentMode::Immediate,
+            wgpu::PresentMode::Mailbox,
+            wgpu::PresentMode::Fifo,
+        ],
+        wgpu::PresentMode::AutoVsync => &[
+            wgpu::PresentMode::FifoRelaxed,
+            wgpu::PresentMode::Fifo,
+        ],
+        _ => return mode,
+    };
+    fallbacks.iter().copied().find(|mode| caps.present_modes.contains(mode)).unwrap_or(mode)
+}
+
 fn parse_present_mode(value: &str) -> Option<wgpu::PresentMode> {
     match value.trim().to_ascii_lowercase().as_str() {
         "auto_no_vsync" | "autonovsync" | "no_vsync" | "novsync" => {
@@ -108,6 +128,19 @@ mod tests {
         parse_present_mode, select_android_present_mode_for_request,
         select_present_mode_for_frame_pacing, select_present_mode_for_request,
     };
+
+    #[test]
+    fn automatic_presentation_reports_the_backend_fallback() {
+        for (requested, supported, resolved) in [
+            (PresentMode::AutoNoVsync, vec![PresentMode::Fifo], PresentMode::Fifo),
+            (PresentMode::AutoNoVsync, vec![PresentMode::Fifo, PresentMode::Mailbox], PresentMode::Mailbox),
+            (PresentMode::AutoNoVsync, vec![PresentMode::Mailbox, PresentMode::Immediate], PresentMode::Immediate),
+            (PresentMode::AutoVsync, vec![PresentMode::Fifo, PresentMode::FifoRelaxed], PresentMode::FifoRelaxed),
+            (PresentMode::Immediate, vec![PresentMode::Fifo, PresentMode::Immediate], PresentMode::Immediate),
+        ] {
+            assert_eq!(super::resolved_present_mode(requested, &caps(&supported)), resolved);
+        }
+    }
 
     fn caps(present_modes: &[PresentMode]) -> SurfaceCapabilities {
         SurfaceCapabilities {

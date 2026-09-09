@@ -138,5 +138,31 @@ check "--repo rejects a non-repository" \
     "$("$GC" --repo "$root" >/dev/null 2>&1; echo $?)" "2"
 
 echo
+nested="$root/nested/target"
+cross="$nested/aarch64-unknown-linux-gnu"
+make_target "$nested" 202608010000
+make_target "$cross" 202608010000
+make_target "$cross/nested-cache" 202608010000
+touch -t 202608010000 "$cross" "$nested"
+listing="$(gc --root "$cross" --root "$nested" --min-free-gb 999999 --busy-minutes 0 2>&1)"
+check "nested target caches are reported once regardless of root order" \
+    "$(printf '%s\n' "$listing" | grep -c 'would reclaim')" "3"
+check "nested target capacity is counted once" \
+    "$(printf '%s\n' "$listing" | grep -c 'Would reclaim 0.6G')" "1"
+
+touch "$cross/nested-cache/ci/.fingerprint"
+listing="$(gc --root "$nested" --min-free-gb 999999 --busy-minutes 15 2>&1)"
+check "recent nested writes protect their entire parent cache" \
+    "$(printf '%s\n' "$listing" | grep '^nested ' | grep -c 'protected: live build')" "1"
+listing="$(gc --root "$root/nested" --min-free-gb 999999 --busy-minutes 15 2>&1)"
+check "activity below candidate discovery depth protects the parent cache" \
+    "$(printf '%s\n' "$listing" | grep '^nested ' | grep -c 'protected: live build')" "1"
+
+listing="$(gc --root "$nested" --apply --min-free-gb 999999 --busy-minutes 0 2>&1)"
+check "reclaiming a parent never retries its removed descendants" \
+    "$(printf '%s\n' "$listing" | grep -c 'FAILED to reclaim' || true)" "0"
+check "nested target root is reclaimed" \
+    "$([ -d "$nested" ] && echo present || echo gone)" "gone"
+
 echo "$passed passed, $failed failed"
 [ "$failed" -eq 0 ]

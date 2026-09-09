@@ -2367,18 +2367,14 @@ pub fn run(
                 }
             } else {
                 frame_telemetry.note_idle_iteration();
-                if accessibility_policy
-                    .wake_deadline()
-                    .is_some_and(|deadline| deadline <= std::time::Instant::now())
-                    && let Err(error) = crate::android_accessibility::sync(
-                        &app,
-                        shell,
-                        android_platform.scale_factor(),
-                        &mut accessibility_elements,
-                        &mut accessibility_revision,
-                        &mut accessibility_policy,
-                    )
-                {
+                if let Err(error) = crate::android_accessibility::sync(
+                    &app,
+                    shell,
+                    android_platform.scale_factor(),
+                    &mut accessibility_elements,
+                    &mut accessibility_revision,
+                    &mut accessibility_policy,
+                ) {
                     log::warn!("{error}");
                 }
             }

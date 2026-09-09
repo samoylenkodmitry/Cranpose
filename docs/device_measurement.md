@@ -1,8 +1,10 @@
 # Device measurement
 
+- Use the [versioned Android benchmark tooling](android_benchmark.md) for reproducible device sequences.
 - Follow the [mobile acceptance protocol](mobile_60fps_architecture.md) and retain results in [mobile performance evidence](mobile_watch_performance.md).
 - Hold the shared sequence lock for all eight ABAB BABA runs; per-command locks and reservation messages cannot protect a whole comparison.
 - Install both revisions over one isolated benchmark package; keep its data, assets, signer, ABI, app revision and feature set identical.
+- If `adb install` times out, compare the installed APK hash before retrying; installation can finish before the client returns.
 - Record the consuming workspace's effective release profile, full toolchain, resolved framework paths and packaged native hashes.
 - Refresh extracted source timestamps and verify the complete inventory; matching source hashes alone do not prove Cargo rebuilt the library.
 - Compare the actual packaged native payloads; Gradle stripping can legitimately change a build-output hash.
@@ -40,5 +42,8 @@
 - Capture temperatures and SurfaceFlinger results before profiler finalization; label profiled timings as diagnostics.
 - Android worker tests must call the API directly on a worker; `ActivityScenario.onActivity` always dispatches onto the UI thread.
 - Use the AndroidX instrumentation runner on the watch and test both enable and disable paths.
+- Build the Android robot with `just android-robot-build`; run `just robot-android-accessibility SERIAL OUTPUT` to verify page changes with accessibility connected and after reconnecting.
 - iOS system-dialog tests require USB and enabled UI Automation; network-paired runner timeouts can occur before any test starts.
 - Prefer in-process iOS telemetry for repeated profiles; use unique Instruments trace paths when a trace is needed.
+- Desktop FPS reports include resolved presentation mode; throughput gates require an animated single-quad probe to pass the requested budget, while `--report-only` permits display cadence.
+- Verify the rendered Library heading before the Watch Settings tap; its persistent navigation label does not establish which page is ready.

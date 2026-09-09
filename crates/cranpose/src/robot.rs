@@ -10,6 +10,36 @@ use cranpose_render_common::Renderer;
 use cranpose_render_wgpu::{DebugCpuAllocationStats, RenderStatsSnapshot};
 use cranpose_ui::{SemanticsAction, SemanticsNode, SemanticsRole};
 
+/// Presentation constraints of the window controlled by a robot.
+#[cfg(feature = "renderer-wgpu")]
+#[derive(Debug, Clone)]
+pub struct RobotPresentationInfo {
+    /// Explicit environment request, if one was provided.
+    pub requested_mode: Option<String>,
+    /// Concrete surface mode after resolving automatic fallback choices.
+    pub present_mode: wgpu::PresentMode,
+    /// Concrete modes advertised by this surface.
+    pub supported_modes: Vec<wgpu::PresentMode>,
+    /// Application scheduling policy.
+    pub frame_pacing_mode: cranpose_app_shell::FramePacingMode,
+    /// Display refresh estimate used by the window scheduler.
+    pub refresh_rate_hz: f64,
+}
+
+#[cfg(feature = "renderer-wgpu")]
+impl RobotPresentationInfo {
+    /// Whether the configured scheduling and presentation modes request unpaced rendering.
+    ///
+    /// This does not establish measured throughput; surface acquisition can still block.
+    pub fn uses_unpaced_configuration(&self) -> bool {
+        self.frame_pacing_mode == cranpose_app_shell::FramePacingMode::NoVsync
+            && matches!(
+                self.present_mode,
+                wgpu::PresentMode::Immediate | wgpu::PresentMode::Mailbox
+            )
+    }
+}
+
 /// Serializable semantic element combining semantics + geometry
 ///
 /// This structure combines semantic information (role, text, actions) with
@@ -194,6 +224,8 @@ pub(crate) enum RobotCommand {
     #[cfg(feature = "renderer-wgpu")]
     GetRenderStats,
     GetFpsStats,
+    #[cfg(feature = "renderer-wgpu")]
+    GetPresentationInfo,
     GetPacingControlCenter(cranpose_app_shell::FramePacingMode),
     ResetFpsStats,
     GetLastFlingVelocity,
@@ -226,6 +258,8 @@ pub(crate) enum RobotResponse {
     #[cfg(feature = "renderer-wgpu")]
     RenderStats(Box<Option<RenderStatsSnapshot>>),
     FpsStats(cranpose_app_shell::FpsStats),
+    #[cfg(feature = "renderer-wgpu")]
+    PresentationInfo(RobotPresentationInfo),
     PacingControlCenter(Option<(f32, f32)>),
     F32(f32),
     #[cfg(feature = "renderer-wgpu")]
@@ -872,6 +906,26 @@ impl Robot {
             .map_err(|e| format!("Failed to send FPS stats command: {}", e))?;
         self.recv_response(|response| match response {
             RobotResponse::FpsStats(stats) => Some(stats),
+            _ => None,
+        })
+    }
+
+    /// Read the active window's resolved presentation and scheduling constraints.
+    ///
+    /// ```no_run
+    /// # fn inspect(robot: &cranpose::Robot) -> Result<(), String> {
+    /// let presentation = robot.presentation_info()?;
+    /// println!("{:?} at {} Hz", presentation.present_mode, presentation.refresh_rate_hz);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[cfg(feature = "renderer-wgpu")]
+    pub fn presentation_info(&self) -> Result<RobotPresentationInfo, String> {
+        self.tx
+            .send(RobotCommand::GetPresentationInfo)
+            .map_err(|err| format!("Failed to send presentation info command: {err}"))?;
+        self.recv_response(|response| match response {
+            RobotResponse::PresentationInfo(info) => Some(info),
             _ => None,
         })
     }
@@ -1619,6 +1673,64 @@ mod tests {
         semantics_node_clickable, semantics_node_text, semantics_text_matches,
         subtree_contains_matching_text,
     };
+
+    #[cfg(feature = "renderer-wgpu")]
+    #[test]
+    fn presentation_info_reports_constraints_and_channel_errors() {
+        use cranpose_app_shell::FramePacingMode;
+
+        use super::{RobotChannel, RobotCommand, RobotPresentationInfo, RobotResponse};
+        for mode in [
+            wgpu::PresentMode::Immediate,
+            wgpu::PresentMode::Mailbox,
+            wgpu::PresentMode::Fifo,
+            wgpu::PresentMode::FifoRelaxed,
+            wgpu::PresentMode::AutoNoVsync,
+        ] {
+            for pacing in [
+                FramePacingMode::NoVsync,
+                FramePacingMode::Vsync,
+                FramePacingMode::Hard60,
+                FramePacingMode::Hard120,
+            ] {
+                let info = RobotPresentationInfo {
+                    requested_mode: Some("immediate".into()),
+                    present_mode: mode,
+                    supported_modes: vec![mode],
+                    frame_pacing_mode: pacing,
+                    refresh_rate_hz: 60.0,
+                };
+                let expected = pacing == FramePacingMode::NoVsync
+                    && matches!(
+                        mode,
+                        wgpu::PresentMode::Immediate | wgpu::PresentMode::Mailbox
+                    );
+                assert_eq!(info.uses_unpaced_configuration(), expected);
+                let (channel, robot) = RobotChannel::new(|| {});
+                channel
+                    .tx
+                    .send(RobotResponse::PresentationInfo(info))
+                    .unwrap();
+                let response = robot.presentation_info().unwrap();
+                assert!(matches!(
+                    channel.rx.recv().unwrap(),
+                    RobotCommand::GetPresentationInfo
+                ));
+                assert_eq!(response.present_mode, mode);
+                assert_eq!(response.uses_unpaced_configuration(), expected);
+                channel
+                    .tx
+                    .send(RobotResponse::Error("surface unavailable".into()))
+                    .unwrap();
+                assert_eq!(
+                    robot.presentation_info().unwrap_err(),
+                    "surface unavailable"
+                );
+                drop(channel);
+                assert!(robot.presentation_info().is_err());
+            }
+        }
+    }
 
     fn find_text_in_trees(
         sem_node: &SemanticsNode,
