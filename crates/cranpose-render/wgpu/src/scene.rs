@@ -294,6 +294,7 @@ pub(crate) struct CompositorScene {
     pub images: Vec<ImageDraw>,
     pub texts: Vec<TextDraw>,
     pub shadow_draws: Vec<ShadowDraw>,
+    shadow_recorders: Vec<ShapeRecorder>,
     pub draw_ops: Vec<DrawOp>,
     pub effect_layers: Vec<EffectLayer>,
     pub backdrop_layers: Vec<BackdropLayer>,
@@ -324,6 +325,7 @@ struct SceneBuffers {
     images: Vec<ImageDraw>,
     texts: Vec<TextDraw>,
     shadow_draws: Vec<ShadowDraw>,
+    shadow_recorders: Vec<ShapeRecorder>,
     draw_ops: Vec<DrawOp>,
     effect_layers: Vec<EffectLayer>,
     backdrop_layers: Vec<BackdropLayer>,
@@ -336,7 +338,7 @@ impl Drop for CompositorScene {
                 return;
             };
             if pool.len() >= SCENE_BUFFER_POOL_LIMIT {
-                return;
+                pool.remove(0);
             }
             self.clear();
             pool.push(SceneBuffers {
@@ -345,6 +347,7 @@ impl Drop for CompositorScene {
                 images: std::mem::take(&mut self.images),
                 texts: std::mem::take(&mut self.texts),
                 shadow_draws: std::mem::take(&mut self.shadow_draws),
+                shadow_recorders: std::mem::take(&mut self.shadow_recorders),
                 draw_ops: std::mem::take(&mut self.draw_ops),
                 effect_layers: std::mem::take(&mut self.effect_layers),
                 backdrop_layers: std::mem::take(&mut self.backdrop_layers),
@@ -369,6 +372,7 @@ impl CompositorScene {
                 images: buffers.images,
                 texts: buffers.texts,
                 shadow_draws: buffers.shadow_draws,
+                shadow_recorders: buffers.shadow_recorders,
                 draw_ops: buffers.draw_ops,
                 effect_layers: buffers.effect_layers,
                 backdrop_layers: buffers.backdrop_layers,
@@ -384,6 +388,7 @@ impl CompositorScene {
             images: Vec::with_capacity(hint.images),
             texts: Vec::with_capacity(hint.texts),
             shadow_draws: Vec::with_capacity(hint.shadow_draws),
+            shadow_recorders: Vec::new(),
             draw_ops: Vec::with_capacity(hint.draw_ops),
             effect_layers: Vec::with_capacity(hint.effect_layers),
             backdrop_layers: Vec::with_capacity(hint.backdrop_layers),
@@ -407,7 +412,20 @@ impl CompositorScene {
         self.runs.clear();
         self.images.clear();
         self.texts.clear();
-        self.shadow_draws.clear();
+        let recorder_limit = self.shadow_draws.capacity().saturating_mul(2);
+        for shadow in self.shadow_draws.drain(..) {
+            for run in [shadow.shapes, shadow.post_blur_cutouts]
+                .into_iter()
+                .flatten()
+            {
+                if self.shadow_recorders.len() < recorder_limit
+                    && let Ok(mut recorder) = Arc::try_unwrap(run.recorder)
+                {
+                    recorder.clear();
+                    self.shadow_recorders.push(recorder);
+                }
+            }
+        }
         self.draw_ops.clear();
         self.effect_layers.clear();
         self.backdrop_layers.clear();
@@ -537,6 +555,10 @@ impl CompositorScene {
         });
     }
 
+    pub(crate) fn take_shadow_recorder(&mut self) -> ShapeRecorder {
+        self.shadow_recorders.pop().unwrap_or_default()
+    }
+
     pub fn push_shadow_draw(&mut self, mut draw: ShadowDraw) {
         self.flush_loose();
         let z_index = self.next_z;
@@ -609,6 +631,98 @@ mod tests {
             brush: Brush::solid(Color::WHITE),
             stroke: None,
         }
+    }
+
+    fn shadow_draw(shapes: Option<RunDraw>, post_blur_cutouts: Option<RunDraw>) -> ShadowDraw {
+        ShadowDraw {
+            shapes,
+            post_blur_cutouts,
+            texts: Vec::new(),
+            blur_radius: 4.0,
+            clip: None,
+            rounded_clip: None,
+            occluder: None,
+            z_index: 0,
+        }
+    }
+
+    #[test]
+    fn recycled_shadow_recorders_clear_geometry_and_preserve_retained_runs() {
+        let mut scene = CompositorScene::new();
+        let placement = Placement::at(Point::default(), None, None);
+        let mut caster = scene.take_shadow_recorder();
+        caster.push_primitive(loose_rect(0.0));
+        let caster = RunDraw::whole(caster, placement).unwrap();
+        let retained = caster.clone();
+        let fingerprint = retained.recorder.fingerprint();
+        let mut cutout = scene.take_shadow_recorder();
+        cutout.push_primitive(loose_rect(20.0));
+        let storage = cutout.tables().shapes.bodies().as_ptr();
+        scene.push_shadow_draw(shadow_draw(Some(caster), RunDraw::whole(cutout, placement)));
+        scene.clear();
+
+        let mut recycled = scene.take_shadow_recorder();
+        assert_eq!(recycled.tables().shapes.bodies().as_ptr(), storage);
+        assert!(recycled.is_empty());
+        assert_eq!(recycled.bounds(), None);
+        assert!(recycled.tables().segments.is_empty());
+        recycled.push_primitive(loose_rect(80.0));
+        let replacement = RunDraw::whole(recycled, placement).unwrap();
+        assert_eq!(replacement.record_count(), 1);
+        assert_eq!(replacement.bounds, rect(80.0, 0.0, 10.0, 10.0));
+        assert_eq!(retained.record_count(), 1);
+        assert_eq!(retained.bounds, rect(0.0, 0.0, 10.0, 10.0));
+        assert_eq!(retained.recorder.fingerprint(), fingerprint);
+        scene.push_shadow_draw(shadow_draw(Some(replacement), None));
+        drop(scene);
+
+        let mut next_scene = CompositorScene::new();
+        let recycled = next_scene.take_shadow_recorder();
+        assert_eq!(recycled.tables().shapes.bodies().as_ptr(), storage);
+        assert!(recycled.is_empty());
+    }
+
+    #[test]
+    fn externally_recorded_shadows_do_not_grow_the_recorder_pool() {
+        let mut scene = CompositorScene::new();
+        let placement = Placement::at(Point::default(), None, None);
+        let append = |scene: &mut CompositorScene| {
+            let mut recorder = ShapeRecorder::default();
+            recorder.push_primitive(loose_rect(0.0));
+            scene.push_shadow_draw(shadow_draw(RunDraw::whole(recorder, placement), None));
+        };
+        append(&mut scene);
+        let limit = scene.shadow_draws.capacity() * 2;
+        scene.clear();
+        for _ in 0..=limit {
+            append(&mut scene);
+            scene.clear();
+        }
+        assert!(scene.shadow_recorders.len() <= limit);
+    }
+
+    #[test]
+    fn full_scene_pool_recycles_the_latest_shadow_storage() {
+        let mut scene = CompositorScene::new();
+        let mut recorder = scene.take_shadow_recorder();
+        recorder.push_primitive(loose_rect(10.0));
+        let storage = recorder.tables().shapes.bodies().as_ptr();
+        scene.push_shadow_draw(shadow_draw(
+            RunDraw::whole(recorder, Placement::at(Point::default(), None, None)),
+            None,
+        ));
+        let earlier: Vec<_> = (0..SCENE_BUFFER_POOL_LIMIT)
+            .map(|_| CompositorScene::new())
+            .collect();
+        drop(earlier);
+        SCENE_BUFFER_POOL.with(|pool| assert_eq!(pool.borrow().len(), SCENE_BUFFER_POOL_LIMIT));
+        drop(scene);
+        SCENE_BUFFER_POOL.with(|pool| assert_eq!(pool.borrow().len(), SCENE_BUFFER_POOL_LIMIT));
+
+        let mut next = CompositorScene::new();
+        let recycled = next.take_shadow_recorder();
+        assert!(recycled.is_empty());
+        assert_eq!(recycled.tables().shapes.bodies().as_ptr(), storage);
     }
 
     #[test]
