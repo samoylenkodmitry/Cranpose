@@ -438,6 +438,12 @@ impl Candidate {
     }
 }
 
+fn ensure_sorted_by_key<T, K: Ord>(values: &mut [T], key: impl Fn(&T) -> K) {
+    if !values.is_sorted_by_key(&key) {
+        values.sort_by_key(key);
+    }
+}
+
 impl LayerPass<'_> {
     fn target_rect(&self) -> DeviceRect {
         self.page.rect()
@@ -542,7 +548,7 @@ impl LayerPass<'_> {
 
     /// The pending composites below `z`, in z order.
     fn pending_below(&mut self, z: usize) -> &[ResolvedComposite] {
-        self.pending.sort_by_key(|composite| composite.z_index);
+        ensure_sorted_by_key(&mut self.pending, |composite| composite.z_index);
         let end = self
             .pending
             .partition_point(|composite| composite.z_index < z);
@@ -1893,7 +1899,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         let ops = pass.ops_below(z);
         let deferred_end = pass.deferred.partition_point(|op| op.z_index < z);
         pass.deferred.drain(..deferred_end);
-        pass.pending.sort_by_key(|composite| composite.z_index);
+        ensure_sorted_by_key(&mut pass.pending, |composite| composite.z_index);
         let end = pass
             .pending
             .partition_point(|composite| composite.z_index < z);
@@ -1929,7 +1935,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             label,
         )?;
         pass.drawn.extend(composites);
-        pass.drawn.sort_by_key(|composite| composite.z_index);
+        ensure_sorted_by_key(&mut pass.drawn, |composite| composite.z_index);
         pass.drawn_z = pass.drawn_z.max(z);
         Ok(())
     }
@@ -1975,7 +1981,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 gate.hit(prefix.key);
             }
             composites.push(prefix_blit(&prefix, retained.texture));
-            composites.sort_by_key(|composite| composite.z_index);
+            ensure_sorted_by_key(composites, |composite| composite.z_index);
             return Ok(Some(1..u32::MAX));
         }
         self.renderer
@@ -2787,7 +2793,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             .iter()
             .map(|region| pass.ops_below(region.z))
             .collect();
-        pass.pending.sort_by_key(|composite| composite.z_index);
+        ensure_sorted_by_key(&mut pass.pending, |composite| composite.z_index);
         let target = PassTarget {
             view: &texture.view,
             width: texture.width,
@@ -3333,7 +3339,7 @@ fn beneath_for_child<'a>(
         placement,
     });
     let shift = shift.unwrap_or_default();
-    pass.pending.sort_by_key(|composite| composite.z_index);
+    ensure_sorted_by_key(&mut pass.pending, |composite| composite.z_index);
     let scene = &pass.layer.scene;
     let drawn = &pass.drawn[..pass
         .drawn
@@ -3641,6 +3647,26 @@ pub(crate) fn scene_bounds(layer: &LayerScene, scale: f32) -> Option<Rect> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn ensuring_z_order_sorts_changed_keys_and_preserves_ties() {
+        let mut values: Vec<_> = (0..96).map(|index| (index % 3, index)).collect();
+        let expected: Vec<_> = (0..3)
+            .flat_map(|z| (z..96).step_by(3).map(move |index| (z, index)))
+            .collect();
+        ensure_sorted_by_key(&mut values, |value| value.0);
+        assert_eq!(values, expected);
+        ensure_sorted_by_key(&mut values, |value| value.0);
+        assert_eq!(values, expected);
+        values[95].0 = 0;
+        ensure_sorted_by_key(&mut values, |value| value.0);
+        assert_eq!(values[32], (0, 95));
+        assert_eq!(&values[..32], &expected[..32]);
+        assert_eq!(&values[33..], &expected[32..95]);
+        values.clear();
+        ensure_sorted_by_key(&mut values, |value| value.0);
+        assert!(values.is_empty());
+    }
+
     #[test]
     fn restricting_stage_layout_preserves_substrate_order_and_independent_storage() {
         let specs = [
