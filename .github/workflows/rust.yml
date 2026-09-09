@@ -93,6 +93,10 @@ jobs:
         # before the heavy job ever spends a build on it.
         run: just test-robot-discovery
 
+      - name: Test Android robot result validation
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
+        run: just test-android-accessibility-contract
+
       - name: Test the shell helpers
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
         run: just test-shell-helpers

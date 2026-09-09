@@ -9,7 +9,7 @@ use cranpose::AppLauncher;
     all(feature = "web", target_arch = "wasm32", feature = "renderer-wgpu")
 ))]
 fn create_app() -> AppLauncher {
-    let dev_controls = cranpose::launch_args().string("test_screen") != Some("surface_prefix");
+    let dev_controls = cranpose::launch_args().string("test_screen").is_none();
     AppLauncher::new()
         .with_title("Cranpose Demo")
         .with_size(800, 600)
@@ -26,10 +26,14 @@ cranpose::android_main! {
 
 #[cfg(all(feature = "android", target_os = "android", feature = "renderer-wgpu"))]
 fn android_content() {
-    if cranpose::launch_args().string("test_screen") == Some("surface_prefix") {
-        desktop_demo::test_screens::surface_prefix_repro::SurfacePrefixReproScreen();
-    } else {
-        desktop_demo::app::combined_app();
+    match cranpose::launch_args().string("test_screen") {
+        Some("surface_prefix") => {
+            desktop_demo::test_screens::surface_prefix_repro::SurfacePrefixReproScreen();
+        }
+        Some("accessibility_navigation") => {
+            desktop_demo::test_screens::accessibility_navigation::AccessibilityNavigationScreen();
+        }
+        _ => desktop_demo::app::combined_app(),
     }
 }
 

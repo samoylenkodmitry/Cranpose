@@ -405,6 +405,16 @@ robot-one example:
 robot-android-surface serial output:
     python3 scripts/android_surface_robot.py --serial {{quote(serial)}} --output {{quote(output)}}
 
+android-robot-build: _disk-guard
+    cd apps/android-demo/android && ../../../scripts/ci/with_host_lock.sh --shared \
+      ./gradlew --no-daemon -PcranposeRobot=true :app:assembleRelease :app:assembleReleaseAndroidTest
+
+robot-android-accessibility serial output:
+    python3 scripts/android_accessibility_robot.py --serial {{quote(serial)}} --output {{quote(output)}}
+
+test-android-accessibility-contract:
+    python3 scripts/android_accessibility_robot_test.py
+
 test-android-surface-contract:
     python3 scripts/android_surface_frames_test.py
 
@@ -512,7 +522,7 @@ _disk-guard:
 # all seven on every pull request.
 
 # What a pull request is gated on. Run this before pushing.
-ci: fmt-check typos versions test clippy clippy-optional-backends clippy-svg clippy-hyphenation clippy-robot clippy-wasm doc budgets test-quality-gates complexity-gate duplication-gate test-robot-discovery test-shell-helpers test-host-lock test-ci-filters test-features test-property bench-smoke test-ci-gate-reachability test-robot-suite-partition
+ci: fmt-check typos versions test clippy clippy-optional-backends clippy-svg clippy-hyphenation clippy-robot clippy-wasm doc budgets test-quality-gates complexity-gate duplication-gate test-robot-discovery test-shell-helpers test-host-lock test-ci-filters test-features test-property bench-smoke test-ci-gate-reachability test-robot-suite-partition test-android-accessibility-contract
 
 # Needs a Linux box with the X11 stack, an Android SDK and (on macOS) Xcode.
 
