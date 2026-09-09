@@ -723,6 +723,7 @@ impl ResolvedGlass {
             .get_or_init(|| {
                 let mut shader = RuntimeShader::new(LIQUID_GLASS_WGSL);
                 shader.set_float(GLASS_ACTIVITY_UNIFORM, 1.0);
+                shader.set_float2(GLASS_OPTICAL_ZOOM_ANCHOR_UNIFORM, 0.0, 0.0);
                 specialize_liquid_glass(&mut shader);
                 shader
             })
@@ -1242,6 +1243,30 @@ mod tests {
                     .iter()
                     .any(|(name, _)| { *name == cranpose_ui_graphics::GLASS_DISPERSION_OFF_FLAG }),
                 dispersion * activity == 0.0
+            );
+        }
+    }
+
+    #[test]
+    fn material_template_preserves_each_instances_optical_zoom_anchor() {
+        let resolved = Glass::lens().resolve(&light_colors());
+        for anchor in [(3.5, -2.25), (0.0, 0.0), (-7.0, 11.0)] {
+            let shader = terminal_shader(resolved.backdrop_effect(
+                1.5,
+                GlassDynamics {
+                    morph: Some(GlassMorph {
+                        node_size: (120.0, 72.0),
+                        primary: (60.0, 36.0, 96.0, 52.0, -1.0),
+                        zoom_anchor: anchor,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            ));
+            assert_eq!(
+                &shader.uniforms()
+                    [GLASS_OPTICAL_ZOOM_ANCHOR_UNIFORM..GLASS_OPTICAL_ZOOM_ANCHOR_UNIFORM + 2],
+                &[anchor.0, anchor.1]
             );
         }
     }
