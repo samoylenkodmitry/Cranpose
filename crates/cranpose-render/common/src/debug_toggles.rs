@@ -10,12 +10,12 @@ use std::{
 
 static GENERATION: AtomicU64 = AtomicU64::new(0);
 
-/// A debug toggle read on a hot path: the environment is consulted once
-/// and the value kept until an override changes, so a per-frame check
-/// costs a lock, not a `getenv` walk of the whole environment.
+/// A debug toggle cached until an override changes. Unset values can be
+/// read without acquiring the cache lock.
 pub struct DebugToggle {
     name: &'static str,
     cached: Mutex<Option<(u64, Option<String>)>>,
+    absent_generation: AtomicU64,
 }
 
 impl DebugToggle {
@@ -23,17 +23,25 @@ impl DebugToggle {
         Self {
             name,
             cached: Mutex::new(None),
+            absent_generation: AtomicU64::new(u64::MAX),
         }
     }
 
     /// Reads the toggle's value through `read`.
     pub fn with<R>(&self, read: impl FnOnce(Option<&str>) -> R) -> R {
         let generation = GENERATION.load(Ordering::Acquire);
+        if self.absent_generation.load(Ordering::Acquire) == generation {
+            return read(None);
+        }
         let mut cached = self.cached.lock().unwrap_or_else(PoisonError::into_inner);
         if cached.as_ref().is_none_or(|(seen, _)| *seen != generation) {
             *cached = Some((generation, debug_toggle(self.name)));
         }
-        read(cached.as_ref().and_then(|(_, value)| value.as_deref()))
+        let value = cached.as_ref().and_then(|(_, value)| value.as_deref());
+        if value.is_none() {
+            self.absent_generation.store(generation, Ordering::Release);
+        }
+        read(value)
     }
 
     /// Whether the toggle holds any value.
@@ -114,6 +122,24 @@ mod tests {
         assert_eq!(debug_toggle("CRANPOSE_TOGGLE_OS_TEST"), None);
         set_debug_toggle_os("CRANPOSE_TOGGLE_OS_TEST", None);
         assert_eq!(debug_toggle_os("CRANPOSE_TOGGLE_OS_TEST"), None);
+    }
+
+    #[test]
+    fn an_unset_toggle_observes_overrides_from_another_thread() {
+        let toggle = std::sync::Arc::new(DebugToggle::new("CRANPOSE_TOGGLE_THREAD_TEST"));
+        assert!(!toggle.is_set());
+        let reader = std::sync::Arc::clone(&toggle);
+        std::thread::spawn(move || {
+            set_debug_toggle("CRANPOSE_TOGGLE_THREAD_TEST", Some("1"));
+            assert!(reader.flag());
+            assert_eq!(reader.parse::<u32>(), Some(1));
+        })
+        .join()
+        .expect("override thread");
+        assert!(toggle.equals("1"));
+        set_debug_toggle("CRANPOSE_TOGGLE_THREAD_TEST", None);
+        assert!(!toggle.is_set());
+        assert_eq!(toggle.parse::<u32>(), None);
     }
 
     #[test]
