@@ -512,3 +512,97 @@ fn drain_with_timeout(renderer: &mut WgpuRenderer, count: usize) -> Vec<(u64, Pr
     }
     outcomes
 }
+
+#[test]
+fn queued_packets_keep_complete_pixels_while_the_producer_changes_the_scene() {
+    let (_lock, mut producer, device, queue, backend, downlevel) =
+        threaded_parts().expect("queued packet guard requires a GPU adapter");
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    producer.init_gpu(device.clone(), queue.clone(), format, backend, downlevel);
+    let (packets, incoming) =
+        std::sync::mpsc::sync_channel::<(cranpose_render_wgpu::HeldFramePacket, Vec<u8>)>(2);
+    let (start, ready) = std::sync::mpsc::sync_channel(0);
+    std::thread::scope(|scope| {
+        let worker = scope.spawn(move || {
+            let mut consumer = WgpuRenderer::new(&[support::TEST_FONT]);
+            consumer.init_gpu(device.clone(), queue.clone(), format, backend, downlevel);
+            let (texture, view) = support::render_target(
+                &device,
+                WIDTH,
+                HEIGHT,
+                format,
+                wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            );
+            ready.recv().expect("producer queued two frames");
+            let mut rendered = 0;
+            for (packet, expected) in incoming {
+                assert_eq!(
+                    consumer
+                        .render_held_packet_for_tests(&texture, &view, WIDTH, HEIGHT, packet)
+                        .expect("consumer render"),
+                    PresentOutcome::Presented,
+                );
+                let pixels = support::read_texture(&device, &queue, &texture);
+                support::assert_same_bytes(
+                    &format!("concurrent packet {rendered}"),
+                    WIDTH,
+                    &pixels,
+                    &expected,
+                );
+                rendered += 1;
+            }
+            assert_eq!(rendered, 12);
+            assert_eq!(consumer.device_error_count_for_tests(), 0);
+        });
+        for index in 0..12 {
+            let color = if index % 2 == 0 {
+                Color::RED
+            } else {
+                Color::BLUE
+            };
+            producer.scene_mut().graph = Some(RenderGraph::new(test_layer(
+                Some(7_703),
+                vec![
+                    support::rect_primitive(
+                        Rect {
+                            x: 0.0,
+                            y: 0.0,
+                            width: WIDTH as f32,
+                            height: HEIGHT as f32,
+                        },
+                        Color::BLACK,
+                    ),
+                    support::rect_primitive(
+                        Rect {
+                            x: 8.0 + index as f32 * 5.0,
+                            y: 12.0,
+                            width: 40.0,
+                            height: 60.0,
+                        },
+                        color,
+                    ),
+                ],
+            )));
+            let expected = producer.capture_frame(WIDTH, HEIGHT).expect("serial frame");
+            assert!(expected.pixels.as_chunks::<4>().0.iter().any(|pixel| {
+                if index % 2 == 0 {
+                    pixel[0] > 240 && pixel[2] < 10
+                } else {
+                    pixel[2] > 240 && pixel[0] < 10
+                }
+            }));
+            let packet = producer
+                .build_frame_packet_for_tests(WIDTH, HEIGHT)
+                .expect("producer packet");
+            packets
+                .send((packet, expected.pixels))
+                .expect("packet send");
+            if index == 1 {
+                start.send(()).expect("consumer ready");
+            }
+        }
+        drop(packets);
+        drop(start);
+        worker.join().expect("consumer thread");
+    });
+}
