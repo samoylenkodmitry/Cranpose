@@ -1,5 +1,7 @@
 # Render verification
 
+- Keep measured wheel routes inside scroll bounds; elastic overscroll consumes reverse input, so verify the actual start and return positions.
+
 ## Harness and capture
 
 - Start from [robot testing](ROBOT_TESTING.md); run placement-sensitive runners through `run_robot_test.sh`.
