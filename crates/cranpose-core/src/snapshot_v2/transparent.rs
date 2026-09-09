@@ -26,7 +26,18 @@ impl TransparentObserverMutableSnapshot {
         write_observer: Option<WriteObserver>,
         parent: Option<Weak<TransparentObserverMutableSnapshot>>,
     ) -> Arc<Self> {
-        Arc::new(Self {
+        Self::new_reusing(None, id, invalid, read_observer, write_observer, parent)
+    }
+
+    pub(crate) fn new_reusing(
+        recycled: Option<Arc<Self>>,
+        id: SnapshotId,
+        invalid: SnapshotIdSet,
+        read_observer: Option<ReadObserver>,
+        write_observer: Option<WriteObserver>,
+        parent: Option<Weak<Self>>,
+    ) -> Arc<Self> {
+        let fresh = Self {
             state: SnapshotState::new_with_pinning(
                 id,
                 invalid,
@@ -39,7 +50,15 @@ impl TransparentObserverMutableSnapshot {
             nested_count: Cell::new(0),
             applied: Cell::new(false),
             reusable: Cell::new(true),
-        })
+        };
+        if let Some(mut recycled) = recycled
+            && let Some(target) = Arc::get_mut(&mut recycled)
+        {
+            *target = fresh;
+            recycled
+        } else {
+            Arc::new(fresh)
+        }
     }
 
     /// Check if this snapshot can be reused for observer changes.
