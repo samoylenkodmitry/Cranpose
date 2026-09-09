@@ -415,15 +415,20 @@ fn a_blurred_neighbour_preserves_averaged_substrates() {
 #[test]
 fn blur_substrates_preserve_captures_and_match_mixed_atlases_across_frames() {
     let mut renderer = support::headless_renderer().expect("GPU renderer");
-    for (color, y_offset) in [(Color::RED, 0.0), (Color::BLUE, -48.0), (Color::GREEN, 0.0)] {
+    for (color, y_offset, count, radius_px) in [
+        (Color::RED, 0.0, 3, 12.0),
+        (Color::BLUE, -48.0, 4, 3.0),
+        (Color::GREEN, 0.0, 2, 20.0),
+        (Color::WHITE, -12.0, 3, 7.0),
+    ] {
         let scene = |mixed| {
             let mut children = striped_page();
             children.push(solid_rect(rect(0.0, 42.0, FRAME_WIDTH as f32, 9.0), color));
-            for index in 0..3 {
+            for index in 0..count {
                 let spec = if mixed && index == 2 {
                     SubstrateSpec::Average { block: 4 }
                 } else {
-                    SubstrateSpec::Blur { radius_px: 12.0 }
+                    SubstrateSpec::Blur { radius_px }
                 };
                 let mut node = glass_layer(
                     index,
@@ -444,6 +449,15 @@ fn blur_substrates_preserve_captures_and_match_mixed_atlases_across_frames() {
             support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children)
         };
         let direct = capture(&mut renderer, scene(false));
+        let reference = capture(
+            &mut support::LockedRenderer::beside_locked().expect("reference renderer"),
+            scene(false),
+        );
+        assert_eq!(
+            support::max_channel_delta(&direct.pixels, &reference.pixels),
+            0,
+            "reused blur uploads must match a fresh frame"
+        );
         let mixed = capture(&mut renderer, scene(true));
         let top = (GLASS_TOP + y_offset).max(0.0);
         let visible_glass = rect(
