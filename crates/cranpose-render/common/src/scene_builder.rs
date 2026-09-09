@@ -820,7 +820,13 @@ fn build_layer_node_internal(
     let child_translated_content_context =
         inherited_translated_content_context || translated_content_context;
 
-    let mut children = draw_nodes(
+    let mut children = Vec::with_capacity(layer_node_capacity(
+        layer_draw_commands,
+        child_snapshots.len(),
+        annotated_text.is_some(),
+    ));
+    append_draw_nodes(
+        &mut children,
         node_id,
         layer_draw_commands,
         outer_draw_command_count,
@@ -862,14 +868,15 @@ fn build_layer_node_internal(
         }
         children.push(RenderNode::Layer(Box::new(child_layer)));
     }
-    children.extend(draw_nodes(
+    append_draw_nodes(
+        &mut children,
         node_id,
         layer_draw_commands,
         outer_draw_command_count,
         DrawPlacement::Overlay,
         size,
         PrimitivePhase::AfterChildren,
-    ));
+    );
     let has_hit_targets = hit_test.is_some()
         || children.iter().any(|child| match child {
             RenderNode::Layer(child_layer) => child_layer.has_hit_targets,
@@ -1103,7 +1110,13 @@ fn build_layer_node_from_data(
         layout_state.size(),
     );
     let layer_draw_commands = &modifier_slices.draw_commands()[outer_draw_command_count..];
-    let mut render_children = draw_nodes(
+    let mut render_children = Vec::with_capacity(layer_node_capacity(
+        layer_draw_commands,
+        children.len(),
+        modifier_slices.annotated_text().is_some(),
+    ));
+    append_draw_nodes(
+        &mut render_children,
         node_id,
         layer_draw_commands,
         outer_draw_command_count,
@@ -1153,14 +1166,15 @@ fn build_layer_node_from_data(
         }
         render_children.push(RenderNode::Layer(Box::new(child_layer)));
     }
-    render_children.extend(draw_nodes(
+    append_draw_nodes(
+        &mut render_children,
         node_id,
         layer_draw_commands,
         outer_draw_command_count,
         DrawPlacement::Overlay,
         layout_state.size(),
         PrimitivePhase::AfterChildren,
-    ));
+    );
     let has_hit_targets = hit_test.is_some()
         || render_children.iter().any(|child| match child {
             RenderNode::Layer(child_layer) => child_layer.has_hit_targets,
@@ -1273,6 +1287,16 @@ fn publish_recording(id: DrawCommandId, recording: CommandRecording) -> Rc<Comma
     shared
 }
 
+fn layer_node_capacity(commands: &[DrawCommand], children: usize, has_text: bool) -> usize {
+    children
+        + usize::from(has_text)
+        + commands.len()
+        + commands
+            .iter()
+            .filter(|command| matches!(command, DrawCommand::WithContent(_)))
+            .count()
+}
+
 fn draw_nodes(
     node_id: NodeId,
     commands: &[DrawCommand],
@@ -1282,6 +1306,27 @@ fn draw_nodes(
     phase: PrimitivePhase,
 ) -> Vec<RenderNode> {
     let mut nodes = Vec::new();
+    append_draw_nodes(
+        &mut nodes,
+        node_id,
+        commands,
+        first_command_index,
+        placement,
+        size,
+        phase,
+    );
+    nodes
+}
+
+fn append_draw_nodes(
+    nodes: &mut Vec<RenderNode>,
+    node_id: NodeId,
+    commands: &[DrawCommand],
+    first_command_index: usize,
+    placement: DrawPlacement,
+    size: Size,
+    phase: PrimitivePhase,
+) {
     for (command_index, command) in commands.iter().enumerate() {
         let id = DrawCommandId {
             node_id,
@@ -1291,12 +1336,12 @@ fn draw_nodes(
         let Some((recording, segments)) =
             recording_for_placement_reusing(command, placement, size, || acquire_storage(id))
         else {
-            retain_empty_draw_command(&mut nodes, phase, id, placement, command);
+            retain_empty_draw_command(nodes, phase, id, placement, command);
             continue;
         };
         let shared = publish_recording(id, recording);
         if shared.is_empty_in(&segments) {
-            retain_empty_draw_command(&mut nodes, phase, id, placement, command);
+            retain_empty_draw_command(nodes, phase, id, placement, command);
             continue;
         }
         nodes.push(RenderNode::DrawRun(DrawRunNode::for_command_shared(
@@ -1306,7 +1351,6 @@ fn draw_nodes(
             segments,
         )));
     }
-    nodes
 }
 
 fn retain_empty_draw_command(
@@ -3958,6 +4002,70 @@ mod tests {
         assert!(
             report.hit_graph_dirty,
             "moved clickable layers must refresh hit geometry"
+        );
+    }
+
+    #[test]
+    fn appending_empty_draw_commands_preserves_existing_nodes_and_command_identity() {
+        let empty = Rc::new(|_: &mut DrawScopeDefault| {});
+        let commands = [
+            DrawCommand::Behind(empty.clone()),
+            DrawCommand::WithContent(empty.clone()),
+            DrawCommand::Overlay(empty),
+        ];
+        let mut nodes = vec![RenderNode::DrawRun(DrawRunNode::new(
+            PrimitivePhase::BeforeChildren,
+            Vec::new(),
+        ))];
+        for (placement, phase) in [
+            (DrawPlacement::Behind, PrimitivePhase::BeforeChildren),
+            (DrawPlacement::Overlay, PrimitivePhase::AfterChildren),
+        ] {
+            append_draw_nodes(
+                &mut nodes,
+                42,
+                &commands,
+                3,
+                placement,
+                Size::default(),
+                phase,
+            );
+        }
+        let actual: Vec<_> = nodes
+            .iter()
+            .map(|node| {
+                let RenderNode::DrawRun(run) = node else {
+                    panic!("expected a draw run");
+                };
+                assert!(run.is_empty());
+                (
+                    run.phase,
+                    run.command
+                        .map(|id| (id.node_id, id.command_index, id.placement)),
+                )
+            })
+            .collect();
+        assert_eq!(
+            actual,
+            vec![
+                (PrimitivePhase::BeforeChildren, None),
+                (
+                    PrimitivePhase::BeforeChildren,
+                    Some((42, 3, DrawPlacement::Behind))
+                ),
+                (
+                    PrimitivePhase::BeforeChildren,
+                    Some((42, 4, DrawPlacement::Behind))
+                ),
+                (
+                    PrimitivePhase::AfterChildren,
+                    Some((42, 4, DrawPlacement::Overlay))
+                ),
+                (
+                    PrimitivePhase::AfterChildren,
+                    Some((42, 5, DrawPlacement::Overlay))
+                ),
+            ]
         );
     }
 
