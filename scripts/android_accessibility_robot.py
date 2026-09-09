@@ -37,7 +37,8 @@ def main():
             device.wake()
             output = device.command(
                 'shell', 'am', 'instrument', '-w', '-r', '-e', 'class',
-                'com.compose_rs.demo.CranposeAccessibilityNavigationTest',
+                'com.compose_rs.demo.CranposeAccessibilityNavigationTest,'
+                'com.compose_rs.demo.CranposeAccessibilityParserTest',
                 'com.compose_rs.demo.robot.test/androidx.test.runner.AndroidJUnitRunner', timeout=120)
             (args.output / 'instrumentation.log').write_text(output)
             report['tests_passed'] = completed_tests(output)
