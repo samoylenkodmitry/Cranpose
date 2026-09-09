@@ -1052,7 +1052,10 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
         loupe_mode > 0.5,
     );
     var rgb = transmitted_path.rgb;
-    if dispersion_strength > 0.0 {
+    let index_spread = dispersion_strength * 0.22;
+    let coincident_rays = GLASS_RIM_DRAW == 1
+        && -d / max(lens_refraction * (1.0 + index_spread), 0.001) >= 1.0;
+    if dispersion_strength > 0.0 && !coincident_rays {
         // Chromatic transmission as ONE continuous ray model: each channel
         // walks the SAME lens field at its own refractive index (blue bends
         // more than red, as in real glass). The index scales the ramp
@@ -1064,7 +1067,6 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
         // already-sampled transmitted ray; everything downstream (fold
         // absorption, meniscus, ink recolor, tone) operates on the merged
         // chromatic transmission.
-        let index_spread = dispersion_strength * 0.22;
         let red_path = sample_wcksrd_path(
             map,
             uv,
