@@ -310,7 +310,7 @@ pub fn primitives_for_placement(
     placement: DrawPlacement,
     size: Size,
 ) -> Vec<DrawPrimitive> {
-    recording_for_placement_reusing(command, placement, size, CommandRecording::default())
+    recording_for_placement_reusing(command, placement, size, CommandRecording::default)
         .map(|(recording, segments)| recording.primitives(segments).collect())
         .unwrap_or_default()
 }
@@ -320,15 +320,15 @@ pub fn primitives_for_placement(
 /// the segments `placement` draws: everything for a behind or overlay
 /// command, the part before or after the last content marker for a
 /// with-content command. `None` when the command has no `placement` half,
-/// in which case nothing was recorded.
+/// in which case storage is not acquired and nothing is recorded.
 pub fn recording_for_placement_reusing(
     command: &DrawCommand,
     placement: DrawPlacement,
     size: Size,
-    storage: CommandRecording,
+    storage: impl FnOnce() -> CommandRecording,
 ) -> Option<(CommandRecording, Range<u32>)> {
     let record = move |func: &DrawCommandFn| {
-        let mut scope = cranpose_ui::command_draw_scope_reusing(size, storage);
+        let mut scope = cranpose_ui::command_draw_scope_reusing(size, storage());
         func(&mut scope);
         scope.finish()
     };
@@ -388,6 +388,31 @@ mod tests {
     }
 
     #[test]
+    fn unmatched_placement_leaves_recording_storage_untouched() {
+        let callback = recorded_command(|_| panic!("unmatched callback"));
+        for (command, placement) in [
+            (
+                DrawCommand::Behind(callback.clone()),
+                DrawPlacement::Overlay,
+            ),
+            (DrawCommand::Overlay(callback), DrawPlacement::Behind),
+        ] {
+            let mut storage = Some(CommandRecording::from_primitives([DrawPrimitive::Content]));
+            let result =
+                recording_for_placement_reusing(&command, placement, Size::new(10.0, 10.0), || {
+                    storage.take().expect("recording storage")
+                });
+            assert!(result.is_none());
+            assert_eq!(
+                storage
+                    .expect("unmatched placement keeps storage")
+                    .content_markers(),
+                1
+            );
+        }
+    }
+
+    #[test]
     fn recorded_markers_still_split_content_placements() {
         let with_content = recorded_command(|scope| {
             scope.draw_rect_at(rect_at(1.0), Brush::solid(Color::WHITE));
@@ -414,7 +439,7 @@ mod tests {
             let fresh = primitives_for_placement(&command, placement, size);
             let dirty = CommandRecording::from_primitives(vec![DrawPrimitive::Content; 8]);
             let (recording, segments) =
-                recording_for_placement_reusing(&command, placement, size, dirty)
+                recording_for_placement_reusing(&command, placement, size, || dirty)
                     .expect("a with-content command records for both placements");
             let reused: Vec<DrawPrimitive> = recording.primitives(segments).collect();
             assert_eq!(fresh, reused);
