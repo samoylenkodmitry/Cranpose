@@ -121,7 +121,6 @@ pub(crate) struct PassSegment<'a> {
 
 enum Item<'a> {
     Run(&'a RunDraw, Option<std::ops::Range<u32>>),
-    ShadowRun(RunDraw),
     Image(usize),
     Text(&'a TextDraw),
     Composite(&'a ResolvedComposite),
@@ -553,7 +552,7 @@ fn merge_items<'a>(
             DrawOpKind::Shadow(index) => {
                 let shadow = &segment.scene.shadow_draws[index];
                 if let Some(run) = unblurred_shadow_run(shadow, viewport_rect, root_scale) {
-                    items.push(Item::ShadowRun(run));
+                    items.push(Item::Run(run, None));
                 }
                 for text in &shadow.texts {
                     if text_draw_is_visible_in_rect(text, viewport_rect, root_scale) {
@@ -573,9 +572,9 @@ fn unblurred_shadow_run(
     shadow: &crate::scene::ShadowDraw,
     viewport_rect: Rect,
     root_scale: f32,
-) -> Option<RunDraw> {
+) -> Option<&RunDraw> {
     let run = shadow.shapes.as_ref()?;
-    run_draw_is_visible_in_rect(run, viewport_rect, root_scale).then(|| run.clone())
+    run_draw_is_visible_in_rect(run, viewport_rect, root_scale).then_some(run)
 }
 
 /// The per-frame vectors a pass fills: image and glyph geometry and draw
@@ -630,7 +629,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
         let mut index = 0;
         while index < items.len() {
             index = match &items[index] {
-                Item::Run(..) | Item::ShadowRun(_) => self.run_items(renderer, &items, index, &run),
+                Item::Run(..) => self.run_items(renderer, &items, index, &run),
                 Item::Image(_) => self.image_run(renderer, &items, index, &run, scratch)?,
                 Item::Text(text) => {
                     self.text_item(renderer, text, &run, scratch)?;
@@ -676,7 +675,6 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
         while end < items.len() {
             let (draw, window) = match &items[end] {
                 Item::Run(draw, window) => (*draw, window.clone().unwrap_or(0..u32::MAX)),
-                Item::ShadowRun(draw) => (draw, 0..u32::MAX),
                 _ => break,
             };
             if renderer.run_is_stored(draw) {
@@ -933,4 +931,81 @@ struct SegmentRun<'s, 'a> {
     segment: &'a PassSegment<'s>,
     viewport: ViewportUniformParams,
     uniform_slot: usize,
+}
+
+#[cfg(test)]
+mod tests {
+    use cranpose_ui_graphics::{Brush, Color, DrawPrimitive, Point, ShapeRecorder};
+
+    use super::*;
+    use crate::scene::{Placement, ShadowDraw};
+
+    #[test]
+    fn shadow_run_items_preserve_geometry_culling_and_first_run_window() {
+        let run = |x| {
+            let mut recorder = ShapeRecorder::default();
+            for y in [0.0, 8.0] {
+                recorder.push_primitive(DrawPrimitive::Rect {
+                    rect: Rect {
+                        x,
+                        y,
+                        width: 8.0,
+                        height: 8.0,
+                    },
+                    brush: Brush::solid(Color::WHITE),
+                    stroke: None,
+                });
+            }
+            RunDraw::whole(recorder, Placement::at(Point::default(), None, None)).unwrap()
+        };
+        let mut scene = CompositorScene::new();
+        scene.push_run(run(0.0));
+        for x in [16.0, 128.0] {
+            scene.push_shadow_draw(ShadowDraw {
+                shapes: Some(run(x)),
+                post_blur_cutouts: None,
+                texts: Vec::new(),
+                blur_radius: 0.0,
+                clip: None,
+                rounded_clip: None,
+                occluder: None,
+                z_index: 0,
+            });
+        }
+        let segment = PassSegment {
+            scene: &scene,
+            ops: &scene.draw_ops,
+            composites: &[],
+            offset: [0.0, 0.0],
+            scissor: None,
+            first_run_window: Some(1..2),
+        };
+        let items = merge_items(
+            &segment,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 64.0,
+                height: 64.0,
+            },
+            1.0,
+            (64, 64),
+            false,
+        );
+        assert_eq!(items.len(), 2);
+        let Item::Run(ordinary, window) = &items[0] else {
+            panic!("expected the ordinary run")
+        };
+        assert!(std::ptr::eq(*ordinary, &scene.runs[0]));
+        assert_eq!(*window, Some(1..2));
+        let Item::Run(shadow, window) = &items[1] else {
+            panic!("expected the visible shadow run")
+        };
+        assert!(std::ptr::eq(
+            *shadow,
+            scene.shadow_draws[0].shapes.as_ref().unwrap()
+        ));
+        assert_eq!(*window, None);
+        assert_eq!(shadow.record_count(), 2);
+    }
 }
