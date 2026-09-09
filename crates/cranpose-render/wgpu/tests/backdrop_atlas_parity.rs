@@ -412,6 +412,64 @@ fn a_blurred_neighbour_preserves_averaged_substrates() {
     assert_first_glass_averages(&page, &frame);
 }
 
+#[test]
+fn blur_substrates_preserve_captures_and_match_mixed_atlases_across_frames() {
+    let mut renderer = support::headless_renderer().expect("GPU renderer");
+    for (color, y_offset) in [(Color::RED, 0.0), (Color::BLUE, -48.0), (Color::GREEN, 0.0)] {
+        let scene = |mixed| {
+            let mut children = striped_page();
+            children.push(solid_rect(rect(0.0, 42.0, FRAME_WIDTH as f32, 9.0), color));
+            for index in 0..3 {
+                let spec = if mixed && index == 2 {
+                    SubstrateSpec::Average { block: 4 }
+                } else {
+                    SubstrateSpec::Blur { radius_px: 12.0 }
+                };
+                let mut node = glass_layer(
+                    index,
+                    if index == 0 {
+                        glass_shader()
+                    } else {
+                        support::substrate_probe(spec, SubstrateProbeRead::Held)
+                    },
+                );
+                if let RenderNode::Layer(layer) = &mut node {
+                    layer.transform_to_parent = ProjectiveTransform::translation(
+                        GLASS_LEFT + index as f32 * GLASS_PITCH,
+                        GLASS_TOP + y_offset,
+                    );
+                }
+                children.push(node);
+            }
+            support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children)
+        };
+        let direct = capture(&mut renderer, scene(false));
+        let mixed = capture(&mut renderer, scene(true));
+        let top = (GLASS_TOP + y_offset).max(0.0);
+        let visible_glass = rect(
+            GLASS_LEFT,
+            top,
+            GLASS_WIDTH,
+            GLASS_TOP + y_offset + GLASS_HEIGHT - top,
+        );
+        assert!(support::distinct_colors(&region_pixels(&direct, visible_glass)) > 8);
+        let region = rect(
+            0.0,
+            0.0,
+            GLASS_LEFT + 2.0 * GLASS_PITCH,
+            FRAME_HEIGHT as f32,
+        );
+        let delta = support::max_channel_delta(
+            &region_pixels(&direct, region),
+            &region_pixels(&mixed, region),
+        );
+        assert!(
+            delta <= 1,
+            "blur substrate changed by {delta} beside an average"
+        );
+    }
+}
+
 /// A blurred glass reads its blur downscaled, and its rounded mask is
 /// measured in the pixels that read stands for: the corner outside the
 /// rounding shows the page, as it does for a plain blurred layer.

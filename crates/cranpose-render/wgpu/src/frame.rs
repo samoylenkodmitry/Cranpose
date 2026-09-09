@@ -2555,6 +2555,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             regions.push(BlurRegion {
                 source: (placement.x, placement.y, width, height),
                 scratch,
+                dest: scratch,
                 radius_x,
                 radius_y,
                 tile_mode: blur.tile_mode,
@@ -2587,6 +2588,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                     SubstrateSpec::Blur { radius_px } => regions.push(BlurRegion {
                         source,
                         scratch,
+                        dest: scratch,
                         radius_x: radius_px,
                         radius_y: radius_px,
                         tile_mode: TileMode::Clamp,
@@ -2610,6 +2612,12 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             }));
         }
         let (width, height) = view.side_size();
+        let direct_blurs = averaged.is_empty() && copies.len() == regions.len();
+        if direct_blurs {
+            for (region, (_, [x, y])) in regions.iter_mut().zip(copies.drain(..)) {
+                region.dest = (x, y, region.scratch.2, region.scratch.3);
+            }
+        }
         let scratch = self.acquire_transient("Backdrop Blur Scratch", width, height);
         let result = self.acquire_transient("Backdrop Blur Result", width, height);
         let device = self.renderer.device.clone();
@@ -2628,6 +2636,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             AtlasSideWork {
                 blurs: &regions,
                 averages: &averaged,
+                blur_output: direct_blurs.then_some(atlas),
             },
         );
         for ((x, y, width, height), dest_origin) in copies {

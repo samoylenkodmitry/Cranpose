@@ -510,13 +510,11 @@ fn region_uniform(region: (u32, u32, u32, u32)) -> [f32; 4] {
     ]
 }
 
-/// One region of a blur atlas pass: the capture texels to blur, the
-/// downscaled slot the horizontal pass writes in the scratch texture and
-/// the vertical pass writes in the result texture, and the blur to run.
 #[derive(Clone, Copy)]
 pub(crate) struct BlurRegion {
     pub(crate) source: (u32, u32, u32, u32),
     pub(crate) scratch: (u32, u32, u32, u32),
+    pub(crate) dest: (u32, u32, u32, u32),
     pub(crate) radius_x: f32,
     pub(crate) radius_y: f32,
     pub(crate) tile_mode: TileMode,
@@ -607,11 +605,10 @@ fn kernel_margin((radius_x, radius_y): (f32, f32)) -> (u32, u32) {
     (radius_x.ceil() as u32 + 1, radius_y.ceil() as u32 + 1)
 }
 
-/// What one capture atlas renders beside itself: the regions to blur and
-/// the regions to average.
 pub(crate) struct AtlasSideWork<'a> {
     pub(crate) blurs: &'a [BlurRegion],
     pub(crate) averages: &'a [SubstrateRegion],
+    pub(crate) blur_output: Option<&'a OffscreenTarget>,
 }
 
 impl BlurRegion {
@@ -1474,13 +1471,6 @@ impl EffectRenderer {
         }
     }
 
-    /// Blurs every region of the capture atlas: a wide region's downsample
-    /// averages its blocks of texels into its scratch slot of the result
-    /// texture, the horizontal pass writes each region's scratch slot from
-    /// that downsample or, unscaled, from the atlas, and the vertical pass
-    /// reads the slot and writes the same slot of the result texture. Both
-    /// targets hold only the blurred regions, so no pass loads or stores
-    /// the atlas.
     pub(crate) fn encode_blur_atlas_passes<C: FrameCommandRecorder>(
         &mut self,
         recorder: &mut C,
@@ -1493,6 +1483,7 @@ impl EffectRenderer {
         let AtlasSideWork {
             blurs: regions,
             averages: substrates,
+            blur_output,
         } = work;
         let blocks: Vec<u32> = regions
             .iter()
@@ -1592,22 +1583,31 @@ impl EffectRenderer {
                     false,
                     (scratch.width, scratch.height),
                     region.scratch,
-                    region.scratch,
+                    region.dest,
                     region.scratch_radius(),
                     region.tile_mode,
                 ),
                 downsample: None,
-                scissor: Some(region.pass_scissor((0, 0))),
+                scissor: Some({
+                    let (x, y, width, height) = region.pass_scissor((0, 0));
+                    (
+                        region.dest.0 + (x - region.scratch.0),
+                        region.dest.1 + (y - region.scratch.1),
+                        width,
+                        height,
+                    )
+                }),
             })
             .collect();
+        let output = blur_output.unwrap_or(result);
         self.encode_blur_pass(
             recorder,
             device,
             "Blur Vertical Pass",
             UploadAllocatorId::BlurVertical,
-            &result.view,
-            (result.width, result.height),
-            if substrates.is_empty() {
+            &output.view,
+            (output.width, output.height),
+            if blur_output.is_none() && substrates.is_empty() {
                 wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
             } else {
                 wgpu::LoadOp::Load
