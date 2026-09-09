@@ -32,6 +32,7 @@
 - Declare Python gate dependencies in pinned requirements and provision them in the owning `just` recipe; runner-global packages are not reproducible.
 - For a completed job in a running workflow, retrieve `gh api repos/OWNER/REPO/actions/jobs/JOB_ID/logs`; `gh run view --log-failed` waits for the workflow.
 - Cargo output parsers need `--color never` and ANSI-resistant parsing; test with `CARGO_TERM_COLOR=always`.
+- After restoring a mutant or syncing older source timestamps into a diagnostic checkout, touch the changed files before rebuilding; `rsync -a` can otherwise leave Cargo reusing the mutant binary. Verify that the affected crate actually recompiles.
 - Attribute large Mach-O unwind sections with a linker map and demangled symbols before changing profiles or features.
 - Macro-emitted generic initializers multiply code per expansion; pass values to a shared nongeneric helper where suitable.
 - Check sccache non-cacheable reasons; `enable_local_sccache` disables incremental compilation and starts the shared daemon outside runner cleanup tracking.

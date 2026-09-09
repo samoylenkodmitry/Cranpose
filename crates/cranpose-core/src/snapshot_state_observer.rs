@@ -219,14 +219,11 @@ impl SnapshotStateObserverInner {
         let frame_version = self.frame_version.get();
         let has_frame_version = frame_version != 0;
 
-        let on_changed: Rc<dyn Fn(&dyn Any)> = {
-            let callback = Rc::new(on_value_changed_for_scope);
-            Rc::new(move |scope_any: &dyn Any| {
-                if let Some(typed) = scope_any.downcast_ref::<T>() {
-                    callback(typed);
-                }
-            })
-        };
+        let on_changed: Rc<dyn Fn(&dyn Any)> = Rc::new(move |scope_any: &dyn Any| {
+            if let Some(typed) = scope_any.downcast_ref::<T>() {
+                on_value_changed_for_scope(typed);
+            }
+        });
 
         let existing_entry = self.find_scope_entry(&scope);
         if let Some(entry) = existing_entry.as_ref() {
@@ -694,11 +691,16 @@ impl ObservedIds {
         }
     }
 
-    fn iter(&self) -> Box<dyn Iterator<Item = StateObjectId> + '_> {
-        match self {
-            ObservedIds::Small(small) => Box::new(small.iter().map(|observed| observed.id)),
-            ObservedIds::Large(large) => Box::new(large.keys().copied()),
-        }
+    fn iter(&self) -> impl Iterator<Item = StateObjectId> + '_ {
+        let (small, large) = match self {
+            ObservedIds::Small(small) => (Some(small.as_slice()), None),
+            ObservedIds::Large(large) => (None, Some(large)),
+        };
+        small
+            .into_iter()
+            .flatten()
+            .map(|observed| observed.id)
+            .chain(large.into_iter().flat_map(|states| states.keys().copied()))
     }
 }
 
@@ -824,6 +826,71 @@ mod tests {
 
     #[derive(Clone, Eq, Hash, PartialEq)]
     struct TestScope(&'static str);
+
+    #[test]
+    fn reobservation_across_storage_thresholds_replaces_dependencies_and_callbacks() {
+        let _guard = reset_runtime();
+        let states: Vec<_> = (0..MAX_OBSERVED_STATES + 2)
+            .map(|_| SnapshotMutableState::new_in_arc(0, Arc::new(NeverEqual)))
+            .collect();
+        let notifications = Rc::new(RefCell::new(Vec::new()));
+        let observer = SnapshotStateObserver::new(|callback| callback());
+        observer.start();
+        for (generation, count) in [MAX_OBSERVED_STATES, MAX_OBSERVED_STATES + 1, 2, 0]
+            .into_iter()
+            .enumerate()
+        {
+            observer.begin_frame();
+            let recorded = notifications.clone();
+            observer.observe_reads(
+                TestScope("changing"),
+                move |scope| {
+                    assert_eq!(scope.0, "changing");
+                    recorded.borrow_mut().push(generation);
+                },
+                || {
+                    for state in states.iter().take(count) {
+                        let _ = state.get();
+                        let _ = state.get();
+                    }
+                },
+            );
+            notifications.borrow_mut().clear();
+            for (index, state) in states.iter().enumerate() {
+                let snapshot = take_mutable_snapshot(None, None);
+                snapshot.enter(|| state.set(generation as i32));
+                snapshot.apply().check();
+                let expected = (index + 1).min(count);
+                assert_eq!(
+                    *notifications.borrow(),
+                    vec![generation; expected],
+                    "count={count}, changed state={index}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn callback_captures_are_released_on_replacement_and_clear() {
+        let _guard = reset_runtime();
+        let state = SnapshotMutableState::new_in_arc(0, Arc::new(NeverEqual));
+        let observer = SnapshotStateObserver::new(|callback| callback());
+        let owners = [Rc::new(Cell::new(0)), Rc::new(Cell::new(0))];
+        for owner in &owners {
+            let captured = owner.clone();
+            observer.observe_reads(
+                TestScope("owner"),
+                move |_| captured.set(captured.get() + 1),
+                || {
+                    let _ = state.get();
+                },
+            );
+            assert_eq!(Rc::strong_count(owner), 2);
+        }
+        assert_eq!(Rc::strong_count(&owners[0]), 1);
+        observer.clear(&TestScope("owner"));
+        assert_eq!(Rc::strong_count(&owners[1]), 1);
+    }
 
     #[test]
     fn notifies_scope_when_state_changes() {
