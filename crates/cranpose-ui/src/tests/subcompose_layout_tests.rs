@@ -498,14 +498,20 @@ fn active_children_follow_last_rendered_placements() {
     {
         let mut inner = node.inner.borrow_mut();
         inner.children = vec![11, 22];
-        inner.last_placements = vec![33, 44];
+        inner.last_placements = (33..45).collect();
     }
 
-    assert_eq!(node.active_children(), vec![33, 44]);
-    assert_eq!(cranpose_core::Node::children(&node), vec![33, 44]);
+    let expected: Vec<_> = (33..45).collect();
+    assert_eq!(node.active_children(), expected);
+    assert_eq!(cranpose_core::Node::children(&node), expected);
+    let mut active = SmallVec::<[NodeId; 8]>::from_slice(&[99]);
+    cranpose_core::Node::collect_children_into(&node, &mut active);
+    assert_eq!(active.as_slice(), expected.as_slice());
 
     node.handle().set_active_children(Vec::<NodeId>::new());
     assert!(node.active_children().is_empty());
+    cranpose_core::Node::collect_children_into(&node, &mut active);
+    assert!(active.is_empty());
 
     let mut owned = SmallVec::<[NodeId; 8]>::new();
     cranpose_core::Node::collect_owned_children_into(&node, &mut owned);

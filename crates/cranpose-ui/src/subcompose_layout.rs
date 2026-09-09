@@ -1243,6 +1243,11 @@ impl cranpose_core::Node for SubcomposeLayoutNode {
         current_subcompose_children(&self.inner.borrow())
     }
 
+    fn collect_children_into(&self, out: &mut SmallVec<[NodeId; 8]>) {
+        out.clear();
+        out.extend(self.inner.borrow().last_placements.iter().copied());
+    }
+
     fn collect_owned_children_into(&self, out: &mut SmallVec<[NodeId; 8]>) {
         out.clear();
         out.extend(self.inner.borrow().children.iter().copied());
