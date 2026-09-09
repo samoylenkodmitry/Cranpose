@@ -1288,9 +1288,8 @@ fn draw_nodes(
             command_index: (first_command_index + command_index) as u32,
             placement,
         };
-        let storage = acquire_storage(id);
         let Some((recording, segments)) =
-            recording_for_placement_reusing(command, placement, size, storage)
+            recording_for_placement_reusing(command, placement, size, || acquire_storage(id))
         else {
             retain_empty_draw_command(&mut nodes, phase, id, placement, command);
             continue;
