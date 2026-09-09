@@ -1,4 +1,5 @@
 mod markdown_fixture_client;
+mod perf_presentation_probe;
 mod perf_robot_stats;
 
 use std::{
@@ -993,6 +994,74 @@ impl FpsPacingAccumulator {
     }
 }
 
+fn verify_presentation_budget(
+    robot: &cranpose::Robot,
+    scenario: PerfScenario,
+    min_fps: f32,
+    max_p95_frame_ms: f32,
+    max_50ms_stalls: u32,
+) {
+    let presentation = robot
+        .presentation_info()
+        .unwrap_or_else(|err| fatal(robot, err));
+    println!(
+        "PERF_PRESENTATION_SUMMARY scenario={} requested={:?} resolved={:?} supported={:?} pacing={} display_hz={:.3} configuration_unpaced={} work_includes_surface_acquire=true",
+        scenario.name(), presentation.requested_mode, presentation.present_mode,
+        presentation.supported_modes, presentation.frame_pacing_mode.label(),
+        presentation.refresh_rate_hz, presentation.uses_unpaced_configuration(),
+    );
+    if perf_presentation_probe::requested(min_fps, max_p95_frame_ms, max_50ms_stalls)
+        && !presentation.uses_unpaced_configuration()
+    {
+        fatal(robot, "cannot measure throughput: presentation or scheduling is VSync-limited; use --report-only to measure cadence");
+    }
+}
+
+#[composable]
+#[allow(non_snake_case)]
+fn PresentedPerfHarness(scenario: PerfScenario, calibrate: bool) {
+    if perf_presentation_probe::active(calibrate) {
+        perf_presentation_probe::content();
+    } else {
+        PerfHarnessApp(scenario);
+    }
+}
+
+fn perf_app_hook(name: String, _argument: String) -> Result<Option<String>, String> {
+    match name.as_str() {
+        LAZY_STATS_HOOK => Ok(lazy_summary_from_app_thread()),
+        perf_presentation_probe::FINISH_HOOK => perf_presentation_probe::finish(),
+        _ => Err(format!("unknown robot app hook: {name}")),
+    }
+}
+
+fn initialize_perf_scenario(
+    robot: &cranpose::Robot,
+    scenario: PerfScenario,
+    min_fps: f32,
+    max_p95_frame_ms: f32,
+    max_50ms_stalls: u32,
+) {
+    let calibrate = perf_presentation_probe::requested(min_fps, max_p95_frame_ms, max_50ms_stalls);
+    std::thread::sleep(Duration::from_millis(500));
+    if !calibrate {
+        wait_for_perf_idle(robot);
+    }
+    verify_presentation_budget(robot, scenario, min_fps, max_p95_frame_ms, max_50ms_stalls);
+    if calibrate {
+        if env_bool("CRANPOSE_HEADLESS", true) {
+            fatal(
+                robot,
+                "cannot measure GPU throughput through a hidden update-only host",
+            );
+        }
+        perf_presentation_probe::verify(robot, min_fps, max_p95_frame_ms, max_50ms_stalls)
+            .unwrap_or_else(|err| fatal(robot, err));
+        wait_for_perf_idle(robot);
+    }
+    prepare_perf_scenario(robot, scenario);
+}
+
 fn main() {
     env_logger::init();
     let scenario = PerfScenario::from_env();
@@ -1043,14 +1112,12 @@ fn main() {
         println!("50ms stall budget: <= {max_50ms_stalls}");
     }
 
+    let calibrate = perf_presentation_probe::requested(min_fps, max_p95_frame_ms, max_50ms_stalls);
     AppLauncher::new()
         .with_title(format!("Robot Perf Harness - {}", scenario.title()))
         .with_size(900, 700)
         .with_headless(env_bool("CRANPOSE_HEADLESS", true))
-        .with_robot_app_hook(|name, _argument| match name.as_str() {
-            LAZY_STATS_HOOK => Ok(lazy_summary_from_app_thread()),
-            _ => Err(format!("unknown robot app hook: {name}")),
-        })
+        .with_robot_app_hook(perf_app_hook)
         .with_test_driver(move |robot| {
             let timeout_secs = timeout_budget_secs(duration_secs, warmup_secs, timeout_slack_secs);
             std::thread::spawn(move || {
@@ -1059,9 +1126,7 @@ fn main() {
                 std::process::exit(1);
             });
 
-            std::thread::sleep(Duration::from_millis(500));
-            wait_for_perf_idle(&robot);
-            prepare_perf_scenario(&robot, scenario);
+            initialize_perf_scenario(&robot, scenario, min_fps, max_p95_frame_ms, max_50ms_stalls);
 
             let total_duration = Duration::from_secs(duration_secs + warmup_secs);
             let warmup_duration = Duration::from_secs(warmup_secs);
@@ -1125,6 +1190,7 @@ fn main() {
                         .unwrap_or_else(|err| fatal(&robot, err));
                     pacing_stats = FpsPacingAccumulator::default();
                     measurement_started = true;
+                    continue;
                 }
 
                 if baseline_rss_kb.is_none() && measurement_started {
@@ -1341,9 +1407,7 @@ fn main() {
 
             robot.exit().ok();
         })
-        .run(move || {
-            PerfHarnessApp(scenario);
-        });
+        .run(move || PresentedPerfHarness(scenario, calibrate));
 }
 
 #[cfg(test)]

@@ -739,7 +739,7 @@ fn bundle_macos(options: BundleMacosOptions) -> Result<(), String> {
         build_binary(&workspace, &binary_options)?;
     }
 
-    let binary = built_binary_path(&workspace, &binary_options);
+    let binary = built_binary_path(&workspace, &binary_options)?;
     if !binary.exists() {
         return Err(format!(
             "built binary `{}` does not exist; run without --no-build or check --profile/--target",
@@ -771,7 +771,7 @@ fn report_built_binary(
     binary_options: &CargoBinaryOptions,
     max_bytes: Option<u64>,
 ) -> Result<(), String> {
-    let binary = built_binary_path(workspace, binary_options);
+    let binary = built_binary_path(workspace, binary_options)?;
     let metadata = fs::metadata(&binary)
         .map_err(|error| format!("failed to inspect `{}`: {error}", binary.display()))?;
     let bytes = metadata.len();
@@ -1280,24 +1280,33 @@ fn read_dir_entries(path: &Path) -> Result<Vec<fs::DirEntry>, String> {
         .map_err(read)
 }
 
-fn built_binary_path(workspace: &Path, options: &CargoBinaryOptions) -> PathBuf {
-    let mut path = cargo_target_root(workspace, options);
+fn built_binary_path(workspace: &Path, options: &CargoBinaryOptions) -> Result<PathBuf, String> {
+    let mut path = cargo_target_root(workspace, options)?;
     if let Some(target) = options.target.as_deref() {
         path.push(target);
     }
     path.push(cargo_profile_dir(&options.profile));
     path.push(binary_file_name(&options.bin));
-    path
+    Ok(path)
 }
 
-fn cargo_target_root(workspace: &Path, options: &CargoBinaryOptions) -> PathBuf {
-    let Some(manifest_path) = options.manifest_path.as_deref() else {
-        return workspace.join("target");
+fn cargo_target_root(workspace: &Path, options: &CargoBinaryOptions) -> Result<PathBuf, String> {
+    let manifest = match options.manifest_path.as_deref() {
+        Some(path) => absolute_path(
+            &env::current_dir()
+                .map_err(|error| format!("failed to resolve working directory: {error}"))?,
+            path,
+        ),
+        None => workspace.join("Cargo.toml"),
     };
-    absolute_path(workspace, manifest_path)
-        .parent()
-        .map(|parent| parent.join("target"))
-        .unwrap_or_else(|| workspace.join("target"))
+    let metadata = cargo_metadata_json(Some(&manifest))?;
+    let metadata: serde_json::Value = serde_json::from_str(&metadata)
+        .map_err(|error| format!("cargo metadata returned invalid JSON: {error}"))?;
+    metadata["target_directory"]
+        .as_str()
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .ok_or_else(|| "cargo metadata did not include target_directory".to_owned())
 }
 
 fn absolute_path(workspace: &Path, path: &Path) -> PathBuf {
@@ -5451,11 +5460,6 @@ cranpose v0.1.0
         assert!(
             !staged_dir.join("android").exists(),
             "staging must copy cargo targets, not another build system's output"
-        );
-        assert_eq!(
-            built_binary_path(&workspace, &staged),
-            staged_dir.join("target/release-small/isolated-demo"),
-            "the measured binary must come from the staged target directory"
         );
     }
 

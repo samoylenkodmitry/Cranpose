@@ -2735,6 +2735,38 @@ fn robot_scroll_present_target(
     ))
 }
 
+#[cfg(feature = "robot")]
+fn robot_frame_diagnostics(
+    command: &RobotCommand,
+    app: &mut AppShell<WgpuRenderer>,
+    config: Option<&wgpu::SurfaceConfiguration>,
+    caps: Option<&wgpu::SurfaceCapabilities>,
+    interval: Duration,
+) -> RobotResponse {
+    match command {
+        RobotCommand::GetRenderStats => {
+            RobotResponse::RenderStats(Box::new(app.renderer().last_frame_stats()))
+        }
+        RobotCommand::GetFpsStats => RobotResponse::FpsStats(app.fps_stats()),
+        RobotCommand::GetPresentationInfo => match (config, caps) {
+            (Some(config), Some(caps)) => {
+                RobotResponse::PresentationInfo(crate::RobotPresentationInfo {
+                    requested_mode: std::env::var("CRANPOSE_PRESENT_MODE").ok(),
+                    present_mode: crate::present_mode::resolved_present_mode(
+                        config.present_mode,
+                        caps,
+                    ),
+                    supported_modes: caps.present_modes.clone(),
+                    frame_pacing_mode: app.frame_pacing_mode(),
+                    refresh_rate_hz: 1.0 / interval.as_secs_f64(),
+                })
+            }
+            _ => RobotResponse::Error("Window presentation is not configured".into()),
+        },
+        _ => RobotResponse::Error("Command is not a frame diagnostics query".into()),
+    }
+}
+
 fn apply_frame_pacing_mode(
     app: &mut AppShell<WgpuRenderer>,
     surface: &wgpu::Surface<'static>,
@@ -5115,13 +5147,17 @@ impl ApplicationHandler for App {
                             None => RobotResponse::Screenshots(shots),
                         });
                     }
-                    RobotCommand::GetRenderStats => {
-                        let _ = controller.tx.send(RobotResponse::RenderStats(Box::new(
-                            app.renderer().last_frame_stats(),
-                        )));
-                    }
-                    RobotCommand::GetFpsStats => {
-                        let _ = controller.tx.send(RobotResponse::FpsStats(app.fps_stats()));
+                    RobotCommand::GetRenderStats
+                    | RobotCommand::GetFpsStats
+                    | RobotCommand::GetPresentationInfo => {
+                        let response = robot_frame_diagnostics(
+                            &cmd,
+                            app,
+                            self.surface_config.as_ref(),
+                            self.surface_caps.as_ref(),
+                            self.vsync_interval,
+                        );
+                        let _ = controller.tx.send(response);
                     }
                     RobotCommand::GetPacingControlCenter(mode) => {
                         let center = app.dev_overlay_control_center(mode);

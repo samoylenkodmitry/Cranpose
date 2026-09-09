@@ -1,5 +1,6 @@
 # Device measurement
 
+- Use the [versioned Android benchmark tooling](android_benchmark.md) for reproducible device sequences.
 - Follow the [mobile acceptance protocol](mobile_60fps_architecture.md) and retain results in [mobile performance evidence](mobile_watch_performance.md).
 - Hold the shared sequence lock for all eight ABAB BABA runs; per-command locks and reservation messages cannot protect a whole comparison.
 - Install both revisions over one isolated benchmark package; keep its data, assets, signer, ABI, app revision and feature set identical.
@@ -44,3 +45,5 @@
 - Build the Android robot with `just android-robot-build`; run `just robot-android-accessibility SERIAL OUTPUT` to verify page changes with accessibility connected and after reconnecting.
 - iOS system-dialog tests require USB and enabled UI Automation; network-paired runner timeouts can occur before any test starts.
 - Prefer in-process iOS telemetry for repeated profiles; use unique Instruments trace paths when a trace is needed.
+- Desktop FPS reports include resolved presentation mode; throughput gates require an animated single-quad probe to pass the requested budget, while `--report-only` permits display cadence.
+- Verify the rendered Library heading before the Watch Settings tap; its persistent navigation label does not establish which page is ready.

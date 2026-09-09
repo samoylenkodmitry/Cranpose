@@ -21,9 +21,15 @@ class AndroidRobotDevice:
 
 
 @contextmanager
-def locked_device(serial):
+def device_lock(serial):
     key = hashlib.sha256(serial.encode()).hexdigest()[:16]
     path = Path(tempfile.gettempdir()) / ('cranpose-device-' + key + '.lock')
     with path.open('a+') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+
+
+@contextmanager
+def locked_device(serial):
+    with device_lock(serial):
         yield AndroidRobotDevice(serial)

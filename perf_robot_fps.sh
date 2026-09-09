@@ -37,8 +37,9 @@ usage() {
 Usage: $0 [--dev|--release|--profile NAME] [--example NAME] [--duration SECS] [--warmup SECS] [--min-fps FPS] [--max-p95-ms MS] [--max-50ms-stalls COUNT] [--output PATH] [--scenario NAME] [--report-only]
 
 Runs the robot performance harness and fails when any selected scenario is not above the FPS budget.
-Default budget: >120 FPS. Presents with vsync off (present_mode=immediate), so the
-numbers are what the renderer can reach rather than what the display accepts.
+Default budget: >120 FPS of frame work, including surface acquisition waits.
+Requests immediate presentation, reports the resolved mode, and rejects throughput
+gates unless an animated single-quad probe demonstrates headroom for the requested budget.
 
 --report-only drops the budgets and just measures. Use it to read a ceiling,
 not to gate: an unbudgeted number cannot fail, so it cannot protect anything.
@@ -124,7 +125,8 @@ fi
 
 "${CARGO_RUNNER[@]}" build "${BUILD_ARGS[@]}"
 
-BIN="target/${PROFILE_DIR}/examples/${EXAMPLE}"
+TARGET_DIR="$("${CARGO_RUNNER[@]}" metadata --no-deps --format-version 1 | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')"
+BIN="${TARGET_DIR}/${PROFILE_DIR}/examples/${EXAMPLE}"
 if [[ ! -x "$BIN" ]]; then
     echo "Binary not found: $BIN"
     exit 1
@@ -133,10 +135,9 @@ fi
 OUTPUT_DIR="$(dirname "$OUTPUT")"
 mkdir -p "$OUTPUT_DIR"
 if [[ "$REPORT_ONLY" == "1" ]]; then
-    # No floor, no p95 ceiling, no stall ceiling: measure and print.
     MIN_FPS="0"
-    MAX_P95_FRAME_MS="100000"
-    MAX_50MS_STALLS="1000000"
+    MAX_P95_FRAME_MS="0"
+    MAX_50MS_STALLS="4294967295"
 fi
 
 OUTPUT_BASE="${OUTPUT%.*}"
@@ -155,7 +156,7 @@ fi
     echo "max_p95_frame_ms=$MAX_P95_FRAME_MS"
     echo "max_50ms_stalls=$MAX_50MS_STALLS"
     echo "headless=$HEADLESS"
-    echo "present_mode=$PRESENT_MODE"
+    echo "requested_present_mode=$PRESENT_MODE"
     echo "wait_idle_after_drag=$WAIT_IDLE_AFTER_DRAG"
     echo "host=$(host_state_summary)"
     echo "scenarios=${PERF_SCENARIOS[*]}"
@@ -167,6 +168,7 @@ for scenario in "${PERF_SCENARIOS[@]}"; do
 
     wait_for_host_capacity "fps perf scenario $scenario"
     echo "Running FPS perf scenario: $scenario"
+    scenario_status=0
     CRANPOSE_PERF_SCENARIO="$scenario" \
     CRANPOSE_PERF_DURATION_SECS="$DURATION_SECS" \
     CRANPOSE_PERF_WARMUP_SECS="$WARMUP_SECS" \
@@ -178,13 +180,16 @@ for scenario in "${PERF_SCENARIOS[@]}"; do
     CRANPOSE_PRESENT_MODE="$PRESENT_MODE" \
     CRANPOSE_HEADLESS="$HEADLESS" \
     CRANPOSE_PERF_WAIT_IDLE_AFTER_DRAG="$WAIT_IDLE_AFTER_DRAG" \
-    "$BIN" 2>&1 | tee "$LOG_FILE"
+    "$BIN" 2>&1 | tee "$LOG_FILE" || scenario_status=$?
 
     append_perf_summary_block "$OUTPUT" "$scenario" "$LOG_FILE"
     {
         echo "app_log=$LOG_FILE"
         echo
     } >> "$OUTPUT"
+    if [[ "$scenario_status" != 0 ]]; then
+        exit "$scenario_status"
+    fi
 done
 
 echo "report: $OUTPUT"

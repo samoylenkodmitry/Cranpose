@@ -216,6 +216,8 @@ test-shell-helpers:
     bash scripts/ci/sccache_lifetime_test.sh
     scripts/wait_until_quiet_test.sh
     scripts/dev/target_gc_test.sh
+    python3 scripts/android_benchmark_test.py
+    python3 scripts/perf_report_test.py
 
 # Covers the shared/exclusive lock that keeps builds off the machine while a
 # measurement runs, and the turnstile that keeps a stream of builds from
@@ -415,6 +417,9 @@ robot-android-accessibility serial output:
 test-android-accessibility-contract:
     python3 scripts/android_accessibility_robot_test.py
 
+test-presentation-policy binary output:
+    scripts/ci/with_host_lock.sh --exclusive python3 scripts/perf_presentation_test.py --binary {{quote(binary)}} --output {{quote(output)}}
+
 test-android-surface-contract:
     python3 scripts/android_surface_frames_test.py
 
@@ -491,15 +496,15 @@ perf-heap *args:
 
 # Report what the sweep would reclaim. Removes nothing.
 gc:
-    scripts/dev/target_gc.sh
+    scripts/dev/target_gc.sh --root "${XDG_CACHE_HOME:-$HOME/.cache}/cranpose/benchmarks"
 
 # Reclaim least-recently-built worktree target dirs to the free-space target.
 gc-apply:
-    scripts/dev/target_gc.sh --apply
+    scripts/dev/target_gc.sh --apply --root "${XDG_CACHE_HOME:-$HOME/.cache}/cranpose/benchmarks"
 
 # Current free space and the per-worktree target dirs behind it.
 disk:
-    @scripts/dev/target_gc.sh --min-free-gb 0
+    @scripts/dev/target_gc.sh --min-free-gb 0 --root "${XDG_CACHE_HOME:-$HOME/.cache}/cranpose/benchmarks"
 
 # Refuse to start a heavy recipe the disk cannot finish. Sweeps first.
 _disk-guard:
