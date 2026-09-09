@@ -219,10 +219,13 @@ impl SnapshotStateObserverInner {
         let frame_version = self.frame_version.get();
         let has_frame_version = frame_version != 0;
 
-        let on_changed: Rc<dyn Fn(&dyn Any)> = Rc::new(move |scope_any: &dyn Any| {
-            if let Some(typed) = scope_any.downcast_ref::<T>() {
-                on_value_changed_for_scope(typed);
-            }
+        let on_changed = std::cell::LazyCell::new(|| {
+            let callback: Rc<dyn Fn(&dyn Any)> = Rc::new(move |scope_any: &dyn Any| {
+                if let Some(typed) = scope_any.downcast_ref::<T>() {
+                    on_value_changed_for_scope(typed);
+                }
+            });
+            callback
         });
 
         let existing_entry = self.find_scope_entry(&scope);
@@ -269,7 +272,7 @@ impl SnapshotStateObserverInner {
             .unwrap_or_else(|| self.insert_scope_entry(scope.clone(), on_changed.clone()));
         {
             let mut entry_mut = entry.borrow_mut();
-            entry_mut.update(scope, on_changed);
+            entry_mut.update(scope, Rc::clone(&on_changed));
             entry_mut.last_seen_version = if has_frame_version {
                 frame_version
             } else {
@@ -937,6 +940,38 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn stateless_scope_can_start_observing_and_replace_its_callback_before_the_block() {
+        let _guard = reset_runtime();
+        let observer = SnapshotStateObserver::new(|callback| callback());
+        let state = SnapshotMutableState::new_in_arc(0, Arc::new(NeverEqual));
+        let notifications = Rc::new(RefCell::new(Vec::new()));
+        let discarded = notifications.clone();
+        observer.observe_reads(
+            TestScope("changing"),
+            move |_| discarded.borrow_mut().push(0),
+            || {},
+        );
+        assert_eq!(Rc::strong_count(&notifications), 1);
+        assert_eq!(observer.debug_stats().scopes_len, 0);
+        for generation in 1..=2 {
+            observer.begin_frame();
+            let delivered = notifications.clone();
+            observer.observe_reads(
+                TestScope("changing"),
+                move |_| delivered.borrow_mut().push(generation),
+                || {
+                    observer.notify_changes(&[state.clone()]);
+                    let _ = state.get();
+                },
+            );
+            observer.notify_changes(&[state.clone()]);
+        }
+        assert_eq!(*notifications.borrow(), vec![1, 2, 2]);
+        observer.clear(&TestScope("changing"));
+        assert_eq!(Rc::strong_count(&notifications), 1);
     }
 
     #[test]
