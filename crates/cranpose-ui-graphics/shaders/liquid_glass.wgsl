@@ -809,7 +809,7 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
     let guard_border_ramp = max(lens_refraction / max(mix(16.0, 8.0, clamp(fixed_or(get_float(28u), 0.0, GLASS_RIM_STYLE_OFF), 0.0, 1.0)), 1.0), MIN_LINE_WIDTH_PX);
     let guard_fold = fixed_or(get_float(88u), 0.0, GLASS_FOLD_OFF) * optical_scale;
     let rim_reach = max(
-        max(1.5 * gradient_extent + guard_ramp, floored_band_width(gradient_extent)),
+        max(select(1.5 * gradient_extent + guard_ramp, 0.0, GLASS_RIM_STYLE_OFF), floored_band_width(gradient_extent)),
         max(max(edge_extent, MIN_LINE_WIDTH_PX) + guard_border_ramp, guard_fold),
     ) + 1.0;
     if (GLASS_RIM_DRAW == 1 && d >= -rim_reach) {

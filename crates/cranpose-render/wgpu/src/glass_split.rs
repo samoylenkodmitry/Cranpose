@@ -108,7 +108,11 @@ fn reach(shader: &RuntimeShader, origin: (f32, f32), layer_pixel_rect: [f32; 4])
     let gradient = GRADIENT_EXTENT_DP * scale;
     let edge = EDGE_EXTENT_DP * scale;
     let fold = uniform(shader, GLASS_FOLD_DEPTH_UNIFORM).max(0.0) * scale;
-    let rim_low = 1.5 * gradient + (0.25 * lens).max(MIN_BAND_WIDTH_PX) + 1.0;
+    let rim_low = if raised(shader, "GLASS_RIM_STYLE_OFF") {
+        gradient.max(MIN_BAND_WIDTH_PX) + 1.0
+    } else {
+        1.5 * gradient + (0.25 * lens).max(MIN_BAND_WIDTH_PX) + 1.0
+    };
     let rim_high = 1.5 * gradient
         + (0.25 * lens_high).max(MIN_BAND_WIDTH_PX)
         + gradient.max(MIN_BAND_WIDTH_PX)
