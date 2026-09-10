@@ -103,7 +103,7 @@ pub(crate) fn apply_draw_commands(
                     blend_mode: shadow_blend_mode,
                 } => {
                     emit_primitive(
-                        std::rc::Rc::unwrap_or_clone(shape),
+                        *shape,
                         layer_bounds,
                         layer,
                         clip,
@@ -112,7 +112,7 @@ pub(crate) fn apply_draw_commands(
                     );
                     if let Some(cutout) = cutout {
                         emit_primitive(
-                            std::rc::Rc::unwrap_or_clone(cutout),
+                            *cutout,
                             layer_bounds,
                             layer,
                             clip,
@@ -139,7 +139,7 @@ pub(crate) fn apply_draw_commands(
                         parent_clip.intersect(transformed_clip)
                     });
                     emit_primitive(
-                        std::rc::Rc::unwrap_or_clone(fill),
+                        *fill,
                         layer_bounds,
                         layer,
                         shadow_clip,
@@ -147,7 +147,7 @@ pub(crate) fn apply_draw_commands(
                         blend_mode.or(Some(shadow_blend_mode)),
                     );
                     emit_primitive(
-                        std::rc::Rc::unwrap_or_clone(cutout),
+                        *cutout,
                         layer_bounds,
                         layer,
                         shadow_clip,
