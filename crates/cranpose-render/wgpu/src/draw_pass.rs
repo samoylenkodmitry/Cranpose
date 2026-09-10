@@ -962,7 +962,11 @@ mod tests {
                     stroke: None,
                 });
             }
-            RunDraw::whole(recorder, Placement::at(Point::default(), None, None)).unwrap()
+            RunDraw::whole(
+                std::sync::Arc::new(recorder),
+                Placement::at(Point::default(), None, None),
+            )
+            .unwrap()
         };
         let mut scene = CompositorScene::new();
         scene.push_run(run(0.0));
