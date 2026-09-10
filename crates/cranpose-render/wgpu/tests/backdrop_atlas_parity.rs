@@ -436,6 +436,21 @@ fn assert_resized_atlas_substrates(effect: impl Fn(usize) -> RenderEffect, subst
 }
 
 #[test]
+fn mixed_blur_resolutions_rebind_each_atlas_source() {
+    assert_resized_atlas_substrates(
+        |index| {
+            support::substrate_probe(
+                SubstrateSpec::Blur {
+                    radius_px: [1.0, 12.0, 3.0][index],
+                },
+                SubstrateProbeRead::Held,
+            )
+        },
+        1,
+    );
+}
+
+#[test]
 fn resized_and_clipped_atlas_members_keep_their_own_substrates() {
     assert_resized_atlas_substrates(
         |_| {
