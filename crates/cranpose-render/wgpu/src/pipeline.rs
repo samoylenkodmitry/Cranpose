@@ -2009,10 +2009,13 @@ fn record_shadow_caster(
     let Some(shape) = loose_shape(&primitive, layer) else {
         return false;
     };
-    matches!(
-        Arc::make_mut(recorder).push_primitive(blended(shape, Some(blend_mode))),
-        Recorded::Shape(_)
-    )
+    let recorder = Arc::make_mut(recorder);
+    let recorded = if blend_mode == BlendMode::SrcOver {
+        recorder.push_primitive(shape)
+    } else {
+        recorder.push_shape_primitive(shape, blend_mode)
+    };
+    matches!(recorded, Recorded::Shape(_))
 }
 
 fn push_shadow_primitive(
@@ -2105,6 +2108,33 @@ mod tests {
 
     use super::*;
     use crate::scene::CompositorScene as Scene;
+
+    #[test]
+    fn shadow_casters_preserve_the_requested_cutout_blend() {
+        let mut recorder = Arc::new(ShapeRecorder::default());
+        let primitive = DrawPrimitive::Rect {
+            rect: Rect {
+                x: 2.0,
+                y: 3.0,
+                width: 8.0,
+                height: 9.0,
+            },
+            brush: Brush::solid(Color::WHITE),
+            stroke: None,
+        };
+        assert!(record_shadow_caster(
+            &mut recorder,
+            primitive,
+            &GraphicsLayer::default(),
+            BlendMode::DstOut,
+        ));
+        assert_eq!(recorder.tables().segments.len(), 1);
+        assert_eq!(recorder.tables().segments[0].blend, BlendMode::DstOut);
+        assert_eq!(
+            recorder.tables().shapes.get(0).unwrap().blend_mode(),
+            BlendMode::DstOut
+        );
+    }
 
     fn synthetic_text_layout(
         text: &str,
