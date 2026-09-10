@@ -581,7 +581,7 @@ fn translate_layer_from_data(
     if graphics_layer != container.graphics_layer {
         return translate_bail("container graphics layer changed");
     }
-    let mut placed_fresh = Vec::with_capacity(fresh_children.len());
+    let mut placed_fresh = SmallVec::<[_; 8]>::with_capacity(fresh_children.len());
     for child_id in &fresh_children {
         let state = applier
             .with_node::<LayoutNode, _>(*child_id, |node| node.layout_state())
@@ -3366,7 +3366,11 @@ mod tests {
             .expect("initial scroll layout");
         let mut graph = build_graph_from_applier(&mut applier, root, 1.0).expect("initial graph");
         graph.root.recompute_raster_cache_hashes();
-        let initial_row_top = find_text_top(&graph.root, "row 3").expect("initial row text");
+        let initial_row_tops: Vec<_> = (0..12)
+            .map(|index| {
+                find_text_top(&graph.root, &format!("row {index}")).expect("initial row text")
+            })
+            .collect();
         applier.clear_runtime_handle();
         drop(applier);
 
@@ -3404,11 +3408,14 @@ mod tests {
             "a pure scroll of clean children must translate the retained \
              subtrees, not re-lower them; {lowered} layers were rebuilt"
         );
-        let updated_row_top = find_text_top(&graph.root, "row 3").expect("updated row text");
-        assert!(
-            updated_row_top < initial_row_top - consumed_scroll * 0.75,
-            "the translation must actually land: initial_y={initial_row_top} updated_y={updated_row_top}"
-        );
+        for (index, initial_row_top) in initial_row_tops.into_iter().enumerate() {
+            let updated_row_top = find_text_top(&graph.root, &format!("row {index}"))
+                .expect("every retained row survives scrolling");
+            assert!(
+                (updated_row_top - (initial_row_top - consumed_scroll)).abs() < 0.01,
+                "row {index} did not follow the scroll: initial_y={initial_row_top} updated_y={updated_row_top}"
+            );
+        }
         assert_dirty_hash_road_matches_full_walk(&graph);
     }
 
