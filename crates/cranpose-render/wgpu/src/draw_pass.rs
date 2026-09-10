@@ -389,12 +389,8 @@ impl GpuRenderer {
                         .draw_prepared_composite(pass, target_size, prepared);
                 }
                 Batch::Shader(prepared) => {
-                    self.effect_renderer.draw_prepared_shader_src_over(
-                        &self.device,
-                        pass,
-                        target_size,
-                        prepared,
-                    );
+                    self.effect_renderer
+                        .draw_prepared_shader_src_over(pass, target_size, prepared);
                 }
                 Batch::Projective(prepared) => {
                     self.effect_renderer.draw_prepared_projective_composite(

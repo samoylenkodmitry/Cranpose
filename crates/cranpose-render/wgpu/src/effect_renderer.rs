@@ -676,7 +676,7 @@ pub(crate) struct PreparedShaderDraw<'a> {
     scissor: Option<(u32, u32, u32, u32)>,
     dest_viewport: (f32, f32, f32, f32),
     layer_pixel_rect: [f32; 4],
-    variants: &'static [ShaderDrawVariant],
+    pipelines: SmallVec<[(ShaderDrawVariant, wgpu::RenderPipeline); 2]>,
 }
 
 const WHOLE_DRAW: &[ShaderDrawVariant] = &[ShaderDrawVariant::Whole];
@@ -1718,17 +1718,18 @@ impl EffectRenderer {
         device: &wgpu::Device,
         item: &ShaderCompositeBatchItem<'a>,
     ) -> Option<PreparedShaderDraw<'a>> {
-        let variants = shader_draw_variants(item.shader);
-        for variant in variants {
-            self.shader_cache.get_or_create(
+        let mut pipelines = SmallVec::new();
+        for &variant in shader_draw_variants(item.shader) {
+            let pipeline = self.shader_cache.get_or_create(
                 device,
                 item.shader,
                 self.surface_format,
                 &self.effect_texture_bind_group_layout,
                 &self.effect_uniform_bind_group_layout,
                 RuntimeShaderPipelineMode::PremultipliedSrcOver,
-                *variant,
+                variant,
             )?;
+            pipelines.push((variant, pipeline.clone()));
         }
         let mut padded = item.shader.uniforms_padded();
         let (dest_x, dest_y, _, _) = item.dest_viewport;
@@ -1770,13 +1771,12 @@ impl EffectRenderer {
             scissor: item.scissor,
             dest_viewport: item.dest_viewport,
             layer_pixel_rect: item.layer_pixel_rect,
-            variants,
+            pipelines,
         })
     }
 
     pub(crate) fn draw_prepared_shader_src_over(
         &mut self,
-        device: &wgpu::Device,
         pass: &mut wgpu::RenderPass<'_>,
         viewport: (u32, u32),
         draw: &PreparedShaderDraw<'_>,
@@ -1788,7 +1788,7 @@ impl EffectRenderer {
         let scissor = draw.scissor.unwrap_or((0, 0, viewport.0, viewport.1));
         self.debug_shader_pixels
             .set(self.debug_shader_pixels.get() + shaded_pixels((x, y, width, height), scissor));
-        let split = (draw.variants.len() > 1)
+        let split = (draw.pipelines.len() > 1)
             .then(|| {
                 let quad = (
                     x.floor().max(0.0) as u32,
@@ -1811,19 +1811,7 @@ impl EffectRenderer {
             })
             .flatten()
             .flatten();
-        for variant in draw.variants {
-            let pipeline = self
-                .shader_cache
-                .get_or_create(
-                    device,
-                    draw.shader,
-                    self.surface_format,
-                    &self.effect_texture_bind_group_layout,
-                    &self.effect_uniform_bind_group_layout,
-                    RuntimeShaderPipelineMode::PremultipliedSrcOver,
-                    *variant,
-                )
-                .expect("shader batch pipeline was prevalidated");
+        for (variant, pipeline) in &draw.pipelines {
             pass.set_pipeline(pipeline);
             let regions: SmallVec<[(u32, u32, u32, u32); 4]> = match (variant, &split) {
                 (ShaderDrawVariant::Interior, Some(split)) => split.interior.into_iter().collect(),
