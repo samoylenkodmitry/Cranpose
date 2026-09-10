@@ -1615,40 +1615,10 @@ fn collect_graph_hits(
     scene: &mut cranpose_render_common::graph_scene::Scene,
     parent_hit_clip: Option<Rect>,
 ) {
-    struct SceneHitSink<'a> {
-        scene: &'a mut cranpose_render_common::graph_scene::Scene,
-    }
-
-    impl cranpose_render_common::hit_graph::HitGraphSink for SceneHitSink<'_> {
-        fn push_hit(
-            &mut self,
-            node_id: cranpose_core::NodeId,
-            capture_path: &[cranpose_core::NodeId],
-            geometry: cranpose_render_common::graph_scene::HitGeometry,
-            shape: Option<cranpose_ui_graphics::RoundedCornerShape>,
-            click_actions: &[Rc<dyn Fn(Point)>],
-            pointer_inputs: &[Rc<dyn Fn(PointerEvent)>],
-        ) {
-            self.scene.push_hit(
-                node_id,
-                capture_path.to_vec(),
-                geometry,
-                shape,
-                click_actions
-                    .iter()
-                    .cloned()
-                    .map(cranpose_render_common::graph_scene::ClickAction::WithPoint)
-                    .collect(),
-                pointer_inputs.to_vec(),
-            );
-        }
-    }
-
-    let mut sink = SceneHitSink { scene };
     cranpose_render_common::hit_graph::collect_hits_from_graph(
         layer,
         parent_transform,
-        &mut sink,
+        scene,
         parent_hit_clip,
     );
 }

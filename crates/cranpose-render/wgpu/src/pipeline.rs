@@ -1817,9 +1817,7 @@ pub(crate) fn update_from_applier(
         return SceneUpdateOutcome::Patched;
     }
 
-    scene.hits.clear();
-    scene.node_index.clear();
-    scene.next_hit_z = 0;
+    scene.clear_hits();
     let Some(graph) = scene.graph.take() else {
         render_from_applier(applier, root, scene, scale);
         return SceneUpdateOutcome::Rebuilt;

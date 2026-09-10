@@ -314,9 +314,17 @@ impl HitTestTarget for HitRegion {
     }
 }
 
+#[derive(Default)]
+struct HitBuffers {
+    capture_path: Vec<NodeId>,
+    click_actions: Vec<ClickAction>,
+    pointer_inputs: Vec<Rc<dyn Fn(PointerEvent)>>,
+}
+
 pub struct Scene {
     pub graph: Option<RenderGraph>,
     pub hits: Vec<HitRegion>,
+    hit_buffers: Vec<HitBuffers>,
     pub next_hit_z: usize,
     pub node_index: HashMap<NodeId, usize>,
     diagnostics: Rc<RenderDiagnostics>,
@@ -327,6 +335,7 @@ impl Scene {
         Self {
             graph: None,
             hits: Vec::new(),
+            hit_buffers: Vec::new(),
             next_hit_z: 0,
             node_index: HashMap::new(),
             diagnostics: Rc::new(RenderDiagnostics::new()),
@@ -337,33 +346,57 @@ impl Scene {
         self.diagnostics.as_ref()
     }
 
+    /// Adds an interactive target in draw order, ignoring targets without handlers.
     pub fn push_hit(
         &mut self,
         node_id: NodeId,
-        capture_path: Vec<NodeId>,
+        capture_path: &[NodeId],
         geometry: HitGeometry,
         shape: Option<RoundedCornerShape>,
-        click_actions: Vec<ClickAction>,
-        pointer_inputs: Vec<Rc<dyn Fn(PointerEvent)>>,
+        click_actions: impl IntoIterator<Item = ClickAction>,
+        pointer_inputs: &[Rc<dyn Fn(PointerEvent)>],
     ) {
-        if click_actions.is_empty() && pointer_inputs.is_empty() {
+        let mut click_actions = click_actions.into_iter().peekable();
+        if click_actions.peek().is_none() && pointer_inputs.is_empty() {
             return;
         }
+        let mut buffers = self.hit_buffers.pop().unwrap_or_default();
+        buffers.capture_path.extend_from_slice(capture_path);
+        buffers.click_actions.extend(click_actions);
+        buffers.pointer_inputs.extend_from_slice(pointer_inputs);
 
         let z_index = self.next_hit_z;
         self.next_hit_z += 1;
         let hit_index = self.hits.len();
         self.hits.push(HitRegion::with_diagnostics(HitRegionInit {
             node_id,
-            capture_path,
+            capture_path: buffers.capture_path,
             geometry,
             shape,
-            click_actions,
-            pointer_inputs,
+            click_actions: buffers.click_actions,
+            pointer_inputs: buffers.pointer_inputs,
             z_index,
             diagnostics: Rc::clone(&self.diagnostics),
         }));
         self.node_index.insert(node_id, hit_index);
+    }
+
+    /// Removes all hit targets and releases their handlers while retaining vector capacity.
+    pub fn clear_hits(&mut self) {
+        self.hit_buffers.clear();
+        for hit in self.hits.drain(..) {
+            let mut buffers = HitBuffers {
+                capture_path: hit.capture_path,
+                click_actions: hit.click_actions,
+                pointer_inputs: hit.pointer_inputs,
+            };
+            buffers.capture_path.clear();
+            buffers.click_actions.clear();
+            buffers.pointer_inputs.clear();
+            self.hit_buffers.push(buffers);
+        }
+        self.node_index.clear();
+        self.next_hit_z = 0;
     }
 
     pub fn replace_graph(&mut self, graph: RenderGraph) {
@@ -382,9 +415,7 @@ impl RenderScene for Scene {
 
     fn clear(&mut self) {
         self.graph = None;
-        self.hits.clear();
-        self.node_index.clear();
-        self.next_hit_z = 0;
+        self.clear_hits();
     }
 
     fn hit_test(&self, x: f32, y: f32) -> Vec<Self::HitTarget> {
@@ -529,6 +560,73 @@ mod tests {
     }
 
     #[test]
+    fn rebuilding_hits_reuses_buffers_releases_handlers_and_preserves_captured_targets() {
+        let mut scene = Scene::new();
+        let first_count = Rc::new(Cell::new(0));
+        let second_count = Rc::new(Cell::new(0));
+        let first = make_handler(Rc::clone(&first_count), false);
+        let second = make_handler(Rc::clone(&second_count), false);
+        let first_click: Rc<dyn Fn(Point)> = Rc::new(|_| {});
+        let second_click: Rc<dyn Fn(Point)> = Rc::new(|_| {});
+        let rect = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 30.0,
+            height: 30.0,
+        };
+        scene.push_hit(
+            1,
+            &[1, 9],
+            hit_geometry_for_rect(rect),
+            None,
+            [ClickAction::WithPoint(Rc::clone(&first_click))],
+            &[Rc::clone(&first)],
+        );
+        let captured = scene.find_target(1).unwrap();
+        let path_storage = scene.hits[0].capture_path.as_ptr();
+        let input_storage = scene.hits[0].pointer_inputs.as_ptr();
+        scene.clear_hits();
+        assert!(scene.hits.is_empty());
+        assert!(scene.find_target(1).is_none());
+        assert_eq!(scene.next_hit_z, 0);
+        assert_eq!(Rc::strong_count(&first), 2);
+        assert_eq!(Rc::strong_count(&first_click), 2);
+        scene.push_hit(
+            2,
+            &[2],
+            hit_geometry_for_rect(rect),
+            None,
+            [ClickAction::WithPoint(Rc::clone(&second_click))],
+            &[Rc::clone(&second)],
+        );
+        assert_eq!(scene.hits[0].capture_path.as_ptr(), path_storage);
+        assert_eq!(scene.hits[0].pointer_inputs.as_ptr(), input_storage);
+        assert_eq!(scene.hits[0].capture_path, [2]);
+        assert_eq!(scene.hits[0].z_index, 0);
+        assert_eq!(scene.hits[0].click_actions.len(), 1);
+        assert!(
+            matches!(&scene.hits[0].click_actions[0], ClickAction::WithPoint(handler) if Rc::ptr_eq(handler, &second_click))
+        );
+        let event = PointerEvent::new(
+            PointerEventKind::Down,
+            Point::new(5.0, 5.0),
+            Point::new(5.0, 5.0),
+        );
+        scene.find_target(2).unwrap().dispatch(event.clone());
+        assert_eq!(first_count.get(), 0);
+        assert_eq!(second_count.get(), 1);
+        captured.dispatch(event);
+        assert_eq!(captured.capture_path, [1, 9]);
+        assert_eq!(first_count.get(), 1);
+        scene.clear_hits();
+        assert_eq!(Rc::strong_count(&second), 1);
+        assert_eq!(Rc::strong_count(&second_click), 1);
+        scene.push_hit(3, &[3], hit_geometry_for_rect(rect), None, [], &[]);
+        assert!(scene.hits.is_empty());
+        assert_eq!(scene.next_hit_z, 0);
+    }
+
+    #[test]
     fn hit_test_respects_hit_clip() {
         let mut scene = Scene::new();
         let rect = Rect {
@@ -545,7 +643,7 @@ mod tests {
         };
         scene.push_hit(
             1,
-            vec![1],
+            &[1],
             HitGeometry {
                 hit_clip_bounds: Some(clip),
                 hit_clips: vec![HitClip {
@@ -556,7 +654,7 @@ mod tests {
             },
             None,
             Vec::new(),
-            vec![Rc::new(|_event: PointerEvent| {})],
+            &[Rc::new(|_event: PointerEvent| {})],
         );
 
         assert!(scene.hit_test(60.0, 20.0).is_empty());
@@ -575,19 +673,19 @@ mod tests {
 
         scene.push_hit(
             1,
-            vec![1],
+            &[1],
             hit_geometry_for_rect(rect),
             None,
             Vec::new(),
-            vec![Rc::new(|_event: PointerEvent| {})],
+            &[Rc::new(|_event: PointerEvent| {})],
         );
         scene.push_hit(
             2,
-            vec![2],
+            &[2],
             hit_geometry_for_rect(rect),
             None,
             Vec::new(),
-            vec![Rc::new(|_event: PointerEvent| {})],
+            &[Rc::new(|_event: PointerEvent| {})],
         );
 
         assert_eq!(scene.node_index.get(&1), Some(&0));
@@ -613,11 +711,11 @@ mod tests {
         };
         scene.push_hit(
             1,
-            vec![1],
+            &[1],
             hit_geometry_for_rect(rect),
             Some(RoundedCornerShape::uniform(20.0)),
             Vec::new(),
-            vec![Rc::new(|_event: PointerEvent| {})],
+            &[Rc::new(|_event: PointerEvent| {})],
         );
 
         assert!(scene.hit_test(1.0, 1.0).is_empty());
@@ -850,7 +948,7 @@ mod tests {
             .expect("transformed hit region should be invertible");
         scene.push_hit(
             1,
-            vec![1],
+            &[1],
             HitGeometry {
                 rect: Rect {
                     x: 10.0,
@@ -866,7 +964,7 @@ mod tests {
             },
             None,
             Vec::new(),
-            vec![Rc::new(|_event: PointerEvent| {})],
+            &[Rc::new(|_event: PointerEvent| {})],
         );
 
         assert!(

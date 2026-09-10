@@ -37,15 +37,11 @@ impl HitGraphSink for Scene {
         Scene::push_hit(
             self,
             node_id,
-            capture_path.to_vec(),
+            capture_path,
             geometry,
             shape,
-            click_actions
-                .iter()
-                .cloned()
-                .map(ClickAction::WithPoint)
-                .collect(),
-            pointer_inputs.to_vec(),
+            click_actions.iter().cloned().map(ClickAction::WithPoint),
+            pointer_inputs,
         );
     }
 }
