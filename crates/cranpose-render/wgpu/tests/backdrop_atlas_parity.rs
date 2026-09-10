@@ -385,6 +385,58 @@ fn a_shader_reads_its_capture_averaged_into_blocks_of_four_through_the_substrate
 }
 
 #[test]
+fn resized_and_clipped_atlas_members_keep_their_own_substrates() {
+    let mut renderer = support::headless_renderer().expect("headless WGPU init failed");
+    let (width, height) = (1448, 320);
+    for heights in [[32.0, 64.0, 96.0], [96.0, 32.0, 64.0], [64.0, 96.0, 32.0]] {
+        let bounds =
+            |index: usize| rect(24.0, [-16.0, 104.0, 216.0][index], 1400.0, heights[index]);
+        let scene = |present: &[usize]| {
+            let mut children = support::striped_page(width, height);
+            for &index in present {
+                let bounds = bounds(index);
+                children.push(RenderNode::Layer(Box::new(
+                    shared_test_support::layer_node(
+                        rect(0.0, 0.0, bounds.width, bounds.height),
+                        ProjectiveTransform::translation(bounds.x, bounds.y),
+                        GraphicsLayer {
+                            backdrop_effect: Some(support::substrate_probe(
+                                SubstrateSpec::Average { block: 4 },
+                                SubstrateProbeRead::Held,
+                            )),
+                            ..GraphicsLayer::default()
+                        },
+                        Vec::new(),
+                    ),
+                )));
+            }
+            support::page_graph(width, height, children)
+        };
+        let packed = support::capture_graph(&mut renderer, scene(&[0, 1, 2]), width, height);
+        assert_eq!(renderer.device_error_count_for_tests(), 0);
+        assert_eq!(renderer.last_frame_stats().unwrap().substrates, 3);
+        for index in 0..3 {
+            let alone = support::capture_graph(&mut renderer, scene(&[index]), width, height);
+            let bounds = bounds(index);
+            let visible = rect(
+                bounds.x + 2.0,
+                bounds.y.max(0.0) + 2.0,
+                bounds.width - 4.0,
+                bounds.height + bounds.y.min(0.0) - 4.0,
+            );
+            let expected = region_pixels(&alone, visible);
+            assert!(support::distinct_colors(&expected) > 8);
+            let actual = region_pixels(&packed, visible);
+            assert!(
+                u32::from(support::max_channel_delta(&expected, &actual))
+                    <= REGION_MAPPING_TOLERANCE,
+                "member {index} with heights {heights:?} must read its own capture after packing"
+            );
+        }
+    }
+}
+
+#[test]
 fn a_blurred_neighbour_preserves_averaged_substrates() {
     let mut renderer = match support::headless_renderer() {
         Ok(renderer) => renderer,

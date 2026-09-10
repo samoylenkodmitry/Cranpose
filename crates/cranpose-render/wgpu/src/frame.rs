@@ -2460,11 +2460,15 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         let limit = self.renderer.max_texture_dim().min(MAX_ATLAS_DIM);
         let mut packer = AtlasPacker::new(limit);
         let mut placements: Vec<Option<AtlasPlacement>> = vec![None; items.len()];
-        for (index, item) in items.iter().enumerate() {
-            if item.batched.is_none() {
-                continue;
-            }
-            let (width, height) = item.capture_rect.pixel_size();
+        let mut order: Vec<usize> = (0..items.len())
+            .filter(|&index| items[index].batched.is_some())
+            .collect();
+        order.sort_unstable_by_key(|&index| {
+            let (width, height) = items[index].capture_rect.pixel_size();
+            (std::cmp::Reverse(height), std::cmp::Reverse(width), index)
+        });
+        for index in order {
+            let (width, height) = items[index].capture_rect.pixel_size();
             placements[index] = packer.place(width, height);
         }
         let mut substrates = vec![PlannedSubstrates::new(); items.len()];
