@@ -29,6 +29,7 @@
 - Install hooks once per clone with `just hooks`; stage new files before `just precommit` so diff checks include them.
 - Follow the user's validation plan; otherwise run affected checks and batch full suites after related fixes, with zero warnings.
 - Use the exact CI recipes and shipped features; change checks in `justfile`, never inline in workflows.
+- Release: push a bare `v*` tag at green main; never hand-bump or commit `release:`.
 - `just web` always uses release mode; `just android` assembles the Android demo release; root `perf*.sh` scripts run performance checks.
 - Prefer SSH builds on `samarch-1` or `macm3`; see [host details](docs/development_troubleshooting.md).
 - Both SSH hosts use zsh: upload a script and run it with Bash, or quote `bash -lc` without premature variable expansion.
