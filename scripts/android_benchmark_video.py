@@ -8,9 +8,10 @@ import time
 import uuid
 
 from android_benchmark_support import checked_command, digest
+from android_visual_contract import inspect_visual_frames
 
 
-def inspect_recording(video, size, report):
+def inspect_recording(video, size, report, visual_regions=None):
     probe = json.loads(checked_command([
         'ffprobe', '-v', 'error', '-count_frames', '-select_streams', 'v:0',
         '-show_entries', 'stream=width,height,nb_read_frames', '-of', 'json', str(video)]))
@@ -19,15 +20,21 @@ def inspect_recording(video, size, report):
             or [streams[0]['width'], streams[0]['height']] != size):
         raise ValueError('Recording did not contain full-size route frames')
     report.setdefault('video', {}).update(path=str(video), sha256=digest(video), probe=probe)
+    if visual_regions is not None:
+        result = inspect_visual_frames(video, size, visual_regions, video.parent / 'visual-frames')
+        report['video']['visual_contract'] = result
+        if result['failing_frames']:
+            raise ValueError(f"Rendering continuity failed in {result['failing_frames']} recorded frames")
 
 
 class AndroidRecording:
-    def __init__(self, device, directory, size, report, bit_rate):
+    def __init__(self, device, directory, size, report, bit_rate, visual_regions=None):
         self.device = device
         self.directory = directory
         self.size = size
         self.report = report
         self.bit_rate = bit_rate
+        self.visual_regions = visual_regions
         self.remote = '/data/local/tmp/cranpose-recording-' + uuid.uuid4().hex + '.mp4'
         self.pid_file = self.remote + '.pid'
         self.process = None
@@ -72,7 +79,7 @@ class AndroidRecording:
                 errors.append(RuntimeError('Device recorder failed: ' + output.decode(errors='replace')))
             video = self.directory / 'scroll.mp4'
             self.device.run('pull', self.remote, str(video), timeout=120)
-            inspect_recording(video, self.size, self.report)
+            inspect_recording(video, self.size, self.report, self.visual_regions)
         except BaseException as error:
             errors.append(error)
         finally:
@@ -92,12 +99,14 @@ class AndroidRecording:
 
 
 class ScrcpyRecording:
-    def __init__(self, device, directory, size, report, bit_rate, duration_seconds=60):
+    def __init__(self, device, directory, size, report, bit_rate, duration_seconds=60,
+                 visual_regions=None):
         self.device = device
         self.directory = directory
         self.size = size
         self.report = report
         self.bit_rate = bit_rate
+        self.visual_regions = visual_regions
         self.duration_seconds = duration_seconds
         self.process = None
         self.log = None
@@ -142,7 +151,7 @@ class ScrcpyRecording:
                     self.process.wait(timeout=5)
                 if self.process.returncode != 0:
                     errors.append(RuntimeError('scrcpy recording failed; see recorder.log'))
-                inspect_recording(self.directory / 'scroll.mp4', self.size, self.report)
+                inspect_recording(self.directory / 'scroll.mp4', self.size, self.report, self.visual_regions)
         except BaseException as error:
             errors.append(error)
         finally:

@@ -22,5 +22,47 @@
     380,
     900,
     1800
+  ],
+  "visual_regions": [
+    {
+      "name": "Explore icon and label",
+      "bounds": [
+        345,
+        2025,
+        530,
+        2200
+      ],
+      "rgb_min": [
+        85,
+        50,
+        180
+      ],
+      "rgb_max": [
+        200,
+        180,
+        255
+      ],
+      "minimum_coverage": 0.06
+    },
+    {
+      "name": "Saved icon and label",
+      "bounds": [
+        610,
+        2025,
+        780,
+        2200
+      ],
+      "rgb_min": [
+        210,
+        210,
+        210
+      ],
+      "rgb_max": [
+        255,
+        255,
+        255
+      ],
+      "minimum_coverage": 0.1
+    }
   ]
 }

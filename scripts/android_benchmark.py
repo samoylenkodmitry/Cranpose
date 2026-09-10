@@ -289,6 +289,7 @@ def sequence(args, report):
                 if args.record:
                     recording_type = ScrcpyRecording if args.record_backend == 'scrcpy' else AndroidRecording
                     options = {'duration_seconds': args.video_seconds} if args.record_backend == 'scrcpy' else {}
+                    options['visual_regions'] = route.get('visual_regions')
                     recorder = recording_type(device, destination, route['size'], leg, args.video_bit_rate, **options)
                 run_reported(destination / 'report.json', leg,
                              lambda: run_leg(device, route, inputs[source].parent / proofs[source]['apk'],
