@@ -6,8 +6,8 @@ use cranpose_foundation::lazy::LazyItems;
 use cranpose_render_common::{
     HitTestTarget, RenderScene,
     graph::{LayerNode, PrimitiveNode, ProjectiveTransform, RenderNode},
-    graph_scene::{HitGeometry, Scene},
-    hit_graph::{HitGraphSink, collect_hits_from_graph},
+    graph_scene::Scene,
+    hit_graph::collect_hits_from_graph,
     scene_builder::build_graph_from_applier,
 };
 use cranpose_ui::{
@@ -187,39 +187,11 @@ fn tappable_list_scene(count: usize) -> (Scene, Vec<usize>, Rc<RefCell<Vec<usize
     let graph = build_graph_from_applier(&mut applier, root, 1.0).expect("render graph");
     applier.clear_runtime_handle();
 
-    struct SceneSink<'a> {
-        scene: &'a mut Scene,
-    }
-    impl HitGraphSink for SceneSink<'_> {
-        fn push_hit(
-            &mut self,
-            node_id: cranpose_core::NodeId,
-            capture_path: &[cranpose_core::NodeId],
-            geometry: HitGeometry,
-            shape: Option<cranpose_ui_graphics::RoundedCornerShape>,
-            click_actions: &[Rc<dyn Fn(cranpose_ui_graphics::Point)>],
-            pointer_inputs: &[Rc<dyn Fn(cranpose_foundation::PointerEvent)>],
-        ) {
-            self.scene.push_hit(
-                node_id,
-                capture_path.to_vec(),
-                geometry,
-                shape,
-                click_actions
-                    .iter()
-                    .cloned()
-                    .map(cranpose_render_common::graph_scene::ClickAction::WithPoint)
-                    .collect(),
-                pointer_inputs.to_vec(),
-            );
-        }
-    }
-
     let mut scene = Scene::default();
     collect_hits_from_graph(
         &graph.root,
         ProjectiveTransform::identity(),
-        &mut SceneSink { scene: &mut scene },
+        &mut scene,
         None,
     );
     let ids = scene
