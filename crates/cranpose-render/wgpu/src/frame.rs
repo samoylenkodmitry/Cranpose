@@ -467,13 +467,14 @@ impl LayerPass<'_> {
 
     /// The ops between the page's drawn z and `z` outside the excluded
     /// ranges, with the deferred ops below `z`, in z order.
-    fn ops_below(&self, z: usize) -> Vec<DrawOp> {
-        let deferred_end = self.deferred.partition_point(|op| op.z_index < z);
-        let mut ops =
-            filtered_ops_in_range(&self.layer.scene.draw_ops, self.drawn_z, z, &self.excluded);
-        ops.extend_from_slice(&self.deferred[..deferred_end]);
-        ops.sort_by_key(|op| op.z_index);
-        ops
+    fn ops_below(&self, z: usize) -> Cow<'_, [DrawOp]> {
+        pending_draw_ops(
+            &self.layer.scene.draw_ops,
+            self.drawn_z,
+            z,
+            &self.excluded,
+            &self.deferred,
+        )
     }
 
     /// Splits what a flush would draw into what draws now and what waits.
@@ -1919,7 +1920,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
     /// the excluded ranges, the deferred ops below `z`, and every pending
     /// composite below `z`, except what still waits behind a blocker.
     fn flush_page(&mut self, pass: &mut LayerPass<'_>, z: usize) -> Result<(), String> {
-        let ops = pass.ops_below(z);
+        let ops = pass.ops_below(z).into_owned();
         let deferred_end = pass.deferred.partition_point(|op| op.z_index < z);
         pass.deferred.drain(..deferred_end);
         ensure_sorted_by_key(&mut pass.pending, |composite| composite.z_index);
@@ -2812,11 +2813,11 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                     .collect()
             })
             .collect();
-        let fixups: Vec<Vec<DrawOp>> = regions
+        ensure_sorted_by_key(&mut pass.pending, |composite| composite.z_index);
+        let fixups: Vec<Cow<'_, [DrawOp]>> = regions
             .iter()
             .map(|region| pass.ops_below(region.z))
             .collect();
-        ensure_sorted_by_key(&mut pass.pending, |composite| composite.z_index);
         let target = PassTarget {
             view: &texture.view,
             width: texture.width,
@@ -3508,52 +3509,69 @@ fn surface_to_parent_device(
         .then(ProjectiveTransform::uniform_scale(scale))
 }
 
-/// The ops below `z_end` outside the excluded ranges. Ops are pushed in z
-/// order, so without exclusions this is a prefix of the list and borrows it.
 fn filtered_ops<'a>(
     ops: &'a [DrawOp],
     z_end: usize,
     excluded: &[(usize, usize)],
 ) -> Cow<'a, [DrawOp]> {
+    filtered_ops_in_range(ops, 0, z_end, excluded)
+}
+
+fn filtered_ops_in_range<'a>(
+    ops: &'a [DrawOp],
+    z_start: usize,
+    z_end: usize,
+    excluded: &[(usize, usize)],
+) -> Cow<'a, [DrawOp]> {
+    if z_end <= z_start {
+        return Cow::Borrowed(&[]);
+    }
+    let start = ops.partition_point(|op| op.z_index < z_start);
     let end = ops.partition_point(|op| op.z_index < z_end);
-    let prefix = &ops[..end];
+    let range = &ops[start..end];
     if excluded.is_empty() {
-        return Cow::Borrowed(prefix);
+        return Cow::Borrowed(range);
     }
     Cow::Owned(
-        prefix
+        range
             .iter()
             .filter(|op| {
                 !excluded
                     .iter()
-                    .any(|(start, end)| op.z_index >= *start && op.z_index < *end)
+                    .any(|(from, to)| op.z_index >= *from && op.z_index < *to)
             })
             .copied()
             .collect(),
     )
 }
 
-/// The ops with z in `z_start..z_end` outside the excluded ranges.
-fn filtered_ops_in_range(
-    ops: &[DrawOp],
-    z_start: usize,
-    z_end: usize,
+fn pending_draw_ops<'a>(
+    scene_ops: &'a [DrawOp],
+    drawn_z: usize,
+    z: usize,
     excluded: &[(usize, usize)],
-) -> Vec<DrawOp> {
-    if z_end <= z_start {
-        return Vec::new();
+    deferred: &'a [DrawOp],
+) -> Cow<'a, [DrawOp]> {
+    let ops = filtered_ops_in_range(scene_ops, drawn_z, z, excluded);
+    let deferred_end = deferred.partition_point(|op| op.z_index < z);
+    if deferred_end == 0 {
+        return ops;
     }
-    let start = ops.partition_point(|op| op.z_index < z_start);
-    let end = ops.partition_point(|op| op.z_index < z_end);
-    ops[start..end]
-        .iter()
-        .filter(|op| {
-            !excluded
-                .iter()
-                .any(|(from, to)| op.z_index >= *from && op.z_index < *to)
-        })
-        .copied()
-        .collect()
+    let deferred = &deferred[..deferred_end];
+    if ops.is_empty() {
+        return Cow::Borrowed(deferred);
+    }
+    let mut merged = match ops {
+        Cow::Owned(ops) => ops,
+        Cow::Borrowed(ops) => {
+            let mut merged = Vec::with_capacity(ops.len() + deferred.len());
+            merged.extend_from_slice(ops);
+            merged
+        }
+    };
+    merged.extend_from_slice(deferred);
+    merged.sort_by_key(|op| op.z_index);
+    Cow::Owned(merged)
 }
 
 /// The logical rect a child's surface covers: everything its content draws,
@@ -4012,6 +4030,26 @@ mod tests {
             z_index,
             kind: DrawOpKind::Run(0),
         }
+    }
+
+    #[test]
+    fn pending_draw_ops_keep_deferred_content_and_respect_capture_depth() {
+        let scene = [op(1), op(3), op(5), op(7)];
+        let deferred = [op(0), op(2), op(4), op(6)];
+        let depths = |ops: &[DrawOp]| ops.iter().map(|op| op.z_index).collect::<Vec<_>>();
+        let only_deferred = pending_draw_ops(&scene, 7, 6, &[], &deferred);
+        assert_eq!(depths(&only_deferred), [0, 2, 4]);
+        assert!(matches!(only_deferred, Cow::Borrowed(_)));
+        let only_scene = pending_draw_ops(&scene, 3, 6, &[], &[]);
+        assert_eq!(depths(&only_scene), [3, 5]);
+        assert!(matches!(only_scene, Cow::Borrowed(_)));
+        let mixed = pending_draw_ops(&scene, 3, 6, &[(5, 6)], &deferred);
+        assert_eq!(depths(&mixed), [0, 2, 3, 4]);
+        let excluded_scene = pending_draw_ops(&scene, 3, 6, &[(3, 6)], &deferred);
+        assert_eq!(depths(&excluded_scene), [0, 2, 4]);
+        assert!(matches!(excluded_scene, Cow::Borrowed(_)));
+        assert!(pending_draw_ops(&scene, 0, 0, &[], &deferred).is_empty());
+        assert_eq!(depths(&pending_draw_ops(&scene, 0, 3, &[(0, 3)], &[])), []);
     }
 
     #[test]
