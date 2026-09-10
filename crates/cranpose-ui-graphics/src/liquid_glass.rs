@@ -6,6 +6,9 @@
 //! The wcKSRD optical program samples both sharp and blurred rays from one
 //! captured backdrop so displacement never reveals a second scene layer.
 
+use std::cell::RefCell;
+
+use crate::render_effect::ShaderSpecializationCache;
 use crate::{Color, RenderEffect, RuntimeShader, SubstrateSpec};
 
 /// One pipeline-overridable flag of `liquid_glass.wgsl` and the uniform
@@ -161,24 +164,44 @@ pub const LIQUID_GLASS_SPECIALIZATIONS: &[LiquidGlassSpecialization] = &[
 /// member's capture geometry, so a resting material keeps it although its
 /// shader returns before the read.
 pub fn specialize_liquid_glass(shader: &mut RuntimeShader) {
-    for specialization in LIQUID_GLASS_SPECIALIZATIONS {
-        if (specialization.inactive)(shader.uniforms()) {
-            shader.set_override(specialization.flag, 1.0);
-        } else {
-            shader.clear_override(specialization.flag);
-        }
+    const _: () = assert!(LIQUID_GLASS_SPECIALIZATIONS.len() <= u32::BITS as usize);
+    const CACHE_CAPACITY: usize = 32;
+    type SpecializationKey = (u32, Option<u32>);
+    thread_local! {
+        static CACHE: RefCell<ShaderSpecializationCache<SpecializationKey, CACHE_CAPACITY>> =
+            const { RefCell::new(ShaderSpecializationCache::new()) };
     }
-    shader.set_draw_split(Some(GLASS_RIM_DRAW_OVERRIDE));
     let uniforms = shader.uniforms();
-    let substrates = if slot(uniforms, GLASS_ADAPTIVE_FROST_UNIFORM) > 0.0 {
-        Some(SubstrateSpec::Blur {
-            radius_px: GLASS_ADAPTIVE_NEIGHBOURHOOD_DP
-                * slot(uniforms, GLASS_EFFECT_DENSITY_UNIFORM).max(1.0),
-        })
-    } else {
-        None
-    };
-    shader.set_substrates(substrates.as_slice());
+    let flags = LIQUID_GLASS_SPECIALIZATIONS.iter().enumerate().fold(
+        0,
+        |flags, (index, specialization)| {
+            flags | (u32::from((specialization.inactive)(uniforms)) << index)
+        },
+    );
+    let substrate_radius = (slot(uniforms, GLASS_ADAPTIVE_FROST_UNIFORM) > 0.0).then(|| {
+        (GLASS_ADAPTIVE_NEIGHBOURHOOD_DP * slot(uniforms, GLASS_EFFECT_DENSITY_UNIFORM).max(1.0))
+            .to_bits()
+    });
+    CACHE.with_borrow_mut(|cache| {
+        cache.apply(
+            shader,
+            (flags, substrate_radius),
+            |shader, &(flags, radius)| {
+                for (index, specialization) in LIQUID_GLASS_SPECIALIZATIONS.iter().enumerate() {
+                    if flags & (1 << index) != 0 {
+                        shader.set_override(specialization.flag, 1.0);
+                    } else {
+                        shader.clear_override(specialization.flag);
+                    }
+                }
+                shader.set_draw_split(Some(GLASS_RIM_DRAW_OVERRIDE));
+                let substrate = radius.map(|radius| SubstrateSpec::Blur {
+                    radius_px: f32::from_bits(radius),
+                });
+                shader.set_substrates(substrate.as_slice());
+            },
+        );
+    });
 }
 
 /// The `override NAME: i32` of `liquid_glass.wgsl` the renderer sets to
@@ -646,6 +669,49 @@ mod tests {
             shader.substrates().len(),
             1,
             "the declaration sets the capture geometry, which must not follow activity"
+        );
+    }
+
+    #[test]
+    fn cached_glass_specialization_tracks_flags_and_substrate_radius() {
+        let mut template = RuntimeShader::new(LIQUID_GLASS_WGSL);
+        template.set_override("CALLER", 7.0);
+        specialize_liquid_glass(&mut template);
+        for (activity, frost, density, rim) in [
+            (1.0, 0.5, 1.0, 0.0),
+            (1.0, 0.5, 2.0, 0.0),
+            (0.0, 0.5, 2.0, 1.0),
+            (0.5, 0.0, 3.0, 0.0),
+            (1.0, 0.5, 1.0, 0.0),
+        ] {
+            for _ in 0..2 {
+                let mut shader = template.clone();
+                shader.set_float(GLASS_ACTIVITY_UNIFORM, activity);
+                shader.set_float(GLASS_ADAPTIVE_FROST_UNIFORM, frost);
+                shader.set_float(GLASS_EFFECT_DENSITY_UNIFORM, density);
+                shader.set_float(GLASS_RIM_STYLE_UNIFORM, rim);
+                specialize_liquid_glass(&mut shader);
+                for (flag, raised) in [
+                    ("GLASS_FULL_ACTIVITY", activity >= 1.0),
+                    ("GLASS_ADAPTIVE_FROST_OFF", frost <= 0.0),
+                    ("GLASS_RIM_STYLE_OFF", rim <= 0.0),
+                ] {
+                    assert_eq!(shader.overrides().contains(&(flag, 1.0)), raised, "{flag}");
+                }
+                let substrate = (frost > 0.0).then_some(SubstrateSpec::Blur {
+                    radius_px: GLASS_ADAPTIVE_NEIGHBOURHOOD_DP * density,
+                });
+                assert_eq!(shader.substrates(), substrate.as_slice());
+                assert_eq!(shader.draw_split(), Some(GLASS_RIM_DRAW_OVERRIDE));
+                assert!(shader.overrides().contains(&("CALLER", 7.0)));
+                assert_eq!(shader.uniforms()[GLASS_EFFECT_DENSITY_UNIFORM], density);
+            }
+        }
+        assert!(template.substrates().is_empty());
+        assert!(
+            template
+                .overrides()
+                .contains(&("GLASS_ADAPTIVE_FROST_OFF", 1.0))
         );
     }
 
