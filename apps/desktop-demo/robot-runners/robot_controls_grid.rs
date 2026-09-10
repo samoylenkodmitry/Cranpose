@@ -1,49 +1,20 @@
+mod named_semantics;
 mod robot_exit;
 
 use std::time::Duration;
 
-use cranpose::{AppLauncher, Robot, SemanticElement};
+use cranpose::{AppLauncher, Robot};
 use cranpose_testing::changed_pixel_count_in_region;
 use desktop_app::app;
+use named_semantics::{expect_reading, named_control};
 
 const WINDOW_WIDTH: u32 = 760;
 const WINDOW_HEIGHT: u32 = 900;
 /// How much of the stage a press has to move for the dip to count as drawn.
 const MIN_PRESSED_PIXELS: usize = 400;
 
-/// The card whose accessibility name is `title`, as `(reading, bounds)`. The
-/// footer prints the same name, so the stage is the one that also publishes a
-/// state description.
-fn find_card(element: &SemanticElement, title: &str) -> Option<(String, (f32, f32, f32, f32))> {
-    if element.text.as_deref() == Some(title) {
-        if let Some(reading) = &element.state_description {
-            let bounds = element.bounds;
-            return Some((
-                reading.clone(),
-                (bounds.x, bounds.y, bounds.width, bounds.height),
-            ));
-        }
-    }
-    element
-        .children
-        .iter()
-        .find_map(|child| find_card(child, title))
-}
-
-fn card(robot: &Robot, title: &str) -> (String, (f32, f32, f32, f32)) {
-    let semantics = robot.get_semantics().expect("semantics");
-    semantics
-        .iter()
-        .find_map(|element| find_card(element, title))
-        .unwrap_or_else(|| {
-            robot_exit::fail_without_shutdown(&format!(
-                "no card named '{title}' publishes a reading"
-            ));
-        })
-}
-
-fn reading(robot: &Robot, title: &str) -> String {
-    card(robot, title).0
+fn card(robot: &Robot, title: &str) -> (String, named_semantics::Bounds) {
+    named_control(robot, title)
 }
 
 fn click_stage(robot: &Robot, title: &str) {
@@ -53,15 +24,6 @@ fn click_stage(robot: &Robot, title: &str) {
         .expect("click the control stage");
     std::thread::sleep(Duration::from_millis(220));
     let _ = robot.wait_for_idle();
-}
-
-fn expect_reading(robot: &Robot, title: &str, want: &str, why: &str) {
-    let got = reading(robot, title);
-    if got != want {
-        robot_exit::fail_without_shutdown(&format!(
-            "{title} reads '{got}', expected '{want}': {why}"
-        ));
-    }
 }
 
 fn main() {

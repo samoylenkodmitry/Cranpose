@@ -549,6 +549,11 @@ path = "robot-runners/robot_controls_grid.rs"
 required-features = ["robot-app"]
 
 [[example]]
+name = "robot_page_fold"
+path = "robot-runners/robot_page_fold.rs"
+required-features = ["robot-app"]
+
+[[example]]
 name = "robot_regression_tabbar_contract"
 path = "robot-runners/robot_regression_tabbar_contract.rs"
 required-features = ["robot-app"]

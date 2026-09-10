@@ -32,6 +32,7 @@ mod lazy_scrollbar;
 mod liquid_ui;
 mod markdown;
 mod mineswapper2;
+mod page_fold;
 mod recomposition_lab;
 pub mod rotary;
 pub(crate) mod shader_rect;
@@ -62,6 +63,7 @@ use markdown::{
     markdown_viewer_tab, MarkdownScrollStabilityFixtureTab, MarkdownScrollStressFixtureTab,
     MarkdownScrollStressFixtureTabWithState,
 };
+use page_fold::PageFoldTab;
 use recomposition_lab::RecompositionLabTab;
 use rotary::rotary_tab;
 use shader_rect::ShaderRectTab;
@@ -112,6 +114,7 @@ pub enum DemoTab {
     Shaders,
     ShaderRect,
     Controls,
+    PageFold,
     Liquid,
     GlassFeed,
     MarkdownViewer,
@@ -133,7 +136,7 @@ pub struct DemoTabInfo {
     pub startup_aliases: &'static [&'static str],
 }
 
-pub const DEMO_TAB_INFO: [DemoTabInfo; 26] = [
+pub const DEMO_TAB_INFO: [DemoTabInfo; 27] = [
     DemoTabInfo {
         tab: DemoTab::Counter,
         label: "Counter App",
@@ -279,6 +282,13 @@ pub const DEMO_TAB_INFO: [DemoTabInfo; 26] = [
         startup_aliases: &["controls", "controlsui"],
     },
     DemoTabInfo {
+        tab: DemoTab::PageFold,
+        label: "Page Fold",
+        slug: "page-fold",
+        source_path: "apps/desktop-demo/src/app/page_fold.rs",
+        startup_aliases: &["pagefold", "fold"],
+    },
+    DemoTabInfo {
         tab: DemoTab::Liquid,
         label: "Liquid UI",
         slug: "liquid-ui",
@@ -359,7 +369,7 @@ impl DemoTab {
     }
 }
 
-pub const DEMO_TABS: [DemoTab; 26] = [
+pub const DEMO_TABS: [DemoTab; 27] = [
     DemoTab::Counter,
     DemoTab::Liquid,
     DemoTab::CompositionLocal,
@@ -380,6 +390,7 @@ pub const DEMO_TABS: [DemoTab; 26] = [
     DemoTab::Shaders,
     DemoTab::ShaderRect,
     DemoTab::Controls,
+    DemoTab::PageFold,
     DemoTab::MarkdownViewer,
     DemoTab::InteractiveAnim,
     DemoTab::FilePicker,
@@ -826,6 +837,14 @@ pub fn ControlsUiRobotApp() {
     ControlsUiTab();
 }
 
+/// The page-fold tab on its own, for tests that drag its spread without the
+/// demo shell's tab bar around them.
+#[allow(non_snake_case)]
+#[composable]
+pub fn PageFoldRobotApp() {
+    PageFoldTab();
+}
+
 #[allow(non_snake_case)]
 #[composable]
 pub fn MarkdownViewerRobotApp() {
@@ -894,6 +913,7 @@ fn render_active_tab(active: DemoTab, startup: StartupSelection, winamp_tab_stat
         | DemoTab::Shaders
         | DemoTab::ShaderRect
         | DemoTab::Controls
+        | DemoTab::PageFold
         | DemoTab::MarkdownViewer
         | DemoTab::Liquid
         | DemoTab::GlassFeed => render_showcase_tab(active, startup, winamp_tab_state),
@@ -915,6 +935,7 @@ fn render_showcase_tab(
         DemoTab::Shaders => ShadersTab(startup.initial_shader_section),
         DemoTab::ShaderRect => ShaderRectTab(),
         DemoTab::Controls => ControlsUiTab(),
+        DemoTab::PageFold => PageFoldTab(),
         DemoTab::MarkdownViewer => markdown_viewer_tab(),
         DemoTab::Liquid => LiquidUiTab(),
         DemoTab::GlassFeed => GlassFeedTab(),
