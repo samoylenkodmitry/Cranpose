@@ -1953,7 +1953,7 @@ pub(crate) fn push_draw_primitive(
 
         fn push_shadow(
             &mut self,
-            shadow_primitive: cranpose_ui_graphics::ShadowPrimitive,
+            shadow_primitive: &cranpose_ui_graphics::ShadowPrimitive,
             layer_bounds: Rect,
             layer: &GraphicsLayer,
             clip: Option<Rect>,
@@ -2000,11 +2000,11 @@ pub(crate) fn push_draw_primitive(
 /// when the primitive is not a shape.
 fn record_shadow_caster(
     recorder: &mut Arc<ShapeRecorder>,
-    primitive: DrawPrimitive,
+    primitive: &DrawPrimitive,
     layer: &GraphicsLayer,
     blend_mode: BlendMode,
 ) -> bool {
-    let Some(shape) = loose_shape(&primitive, layer) else {
+    let Some(shape) = loose_shape(primitive, layer) else {
         return false;
     };
     let recorder = Arc::make_mut(recorder);
@@ -2017,7 +2017,7 @@ fn record_shadow_caster(
 }
 
 fn push_shadow_primitive(
-    shadow_prim: cranpose_ui_graphics::ShadowPrimitive,
+    shadow_prim: &cranpose_ui_graphics::ShadowPrimitive,
     layer_bounds: Rect,
     layer: &GraphicsLayer,
     clip: Option<Rect>,
@@ -2037,12 +2037,12 @@ fn push_shadow_primitive(
             blend_mode,
         } => {
             let mut shapes = scene.take_shadow_recorder();
-            if !record_shadow_caster(&mut shapes, *shape, layer, blend_mode) {
+            if !record_shadow_caster(&mut shapes, shape, layer, *blend_mode) {
                 return;
             }
             let cutouts = if let Some(cutout) = cutout {
                 let mut recorder = scene.take_shadow_recorder();
-                if !record_shadow_caster(&mut recorder, *cutout, layer, BlendMode::DstOut) {
+                if !record_shadow_caster(&mut recorder, cutout, layer, BlendMode::DstOut) {
                     return;
                 }
                 RunDraw::whole(recorder, placement)
@@ -2053,7 +2053,7 @@ fn push_shadow_primitive(
                 shapes: RunDraw::whole(shapes, placement),
                 post_blur_cutouts: cutouts,
                 texts: vec![],
-                blur_radius,
+                blur_radius: *blur_radius,
                 clip,
                 rounded_clip: None,
                 occluder: None,
@@ -2068,8 +2068,8 @@ fn push_shadow_primitive(
             clip_rect,
         } => {
             let mut shapes = scene.take_shadow_recorder();
-            if !record_shadow_caster(&mut shapes, *fill, layer, blend_mode)
-                || !record_shadow_caster(&mut shapes, *cutout, layer, BlendMode::DstOut)
+            if !record_shadow_caster(&mut shapes, fill, layer, *blend_mode)
+                || !record_shadow_caster(&mut shapes, cutout, layer, BlendMode::DstOut)
             {
                 return;
             }
@@ -2084,7 +2084,7 @@ fn push_shadow_primitive(
                 shapes: RunDraw::whole(shapes, placement),
                 post_blur_cutouts: None,
                 texts: vec![],
-                blur_radius,
+                blur_radius: *blur_radius,
                 clip: clip.map_or(Some(transformed_clip), |parent_clip| {
                     parent_clip.intersect(transformed_clip)
                 }),
@@ -2122,7 +2122,7 @@ mod tests {
         };
         assert!(record_shadow_caster(
             &mut recorder,
-            primitive,
+            &primitive,
             &GraphicsLayer::default(),
             BlendMode::DstOut,
         ));

@@ -108,9 +108,10 @@ pub trait DrawPrimitiveSink {
 
     fn push_image(&mut self, params: ImageDrawParams);
 
+    /// Emits a shadow without transferring ownership of its caster and cutout.
     fn push_shadow(
         &mut self,
-        shadow_primitive: ShadowPrimitive,
+        shadow_primitive: &ShadowPrimitive,
         layer_bounds: Rect,
         layer: &GraphicsLayer,
         clip: Option<Rect>,
@@ -124,8 +125,9 @@ pub trait DrawPrimitiveSink {
     }
 }
 
+/// Resolves a borrowed shape with the layer transform, paint, and clipping applied.
 pub fn draw_shape_params_for_primitive(
-    primitive: DrawPrimitive,
+    primitive: &DrawPrimitive,
     layer_bounds: Rect,
     layer: &GraphicsLayer,
     clip: Option<Rect>,
@@ -146,7 +148,7 @@ pub fn draw_shape_params_for_primitive(
 
         fn push_shadow(
             &mut self,
-            _shadow_primitive: ShadowPrimitive,
+            _shadow_primitive: &ShadowPrimitive,
             _layer_bounds: Rect,
             _layer: &GraphicsLayer,
             _clip: Option<Rect>,
@@ -156,7 +158,7 @@ pub fn draw_shape_params_for_primitive(
 
     let mut sink = SingleShapeSink { shape: None };
     emit_draw_primitive(
-        &primitive,
+        primitive,
         layer_bounds,
         layer,
         clip,
@@ -437,7 +439,7 @@ pub fn emit_draw_primitive<S: DrawPrimitiveSink>(
             }
         }
         DrawPrimitive::Shadow(shadow_primitive) => {
-            sink.push_shadow(shadow_primitive.clone(), layer_bounds, layer, clip);
+            sink.push_shadow(shadow_primitive, layer_bounds, layer, clip);
         }
     }
 }
@@ -490,7 +492,7 @@ mod tests {
     #[test]
     fn draw_shape_params_for_primitive_returns_transformed_rect_shape() {
         let shape = draw_shape_params_for_primitive(
-            DrawPrimitive::Rect {
+            &DrawPrimitive::Rect {
                 rect: Rect {
                     x: 2.0,
                     y: 3.0,
@@ -527,7 +529,7 @@ mod tests {
     #[test]
     fn draw_shape_params_for_primitive_resolves_blended_round_rect() {
         let shape = draw_shape_params_for_primitive(
-            DrawPrimitive::Blend {
+            &DrawPrimitive::Blend {
                 primitive: Box::new(DrawPrimitive::RoundRect {
                     rect: Rect {
                         x: 1.0,
@@ -559,7 +561,7 @@ mod tests {
     fn draw_shape_params_for_primitive_rejects_non_shape_primitives() {
         assert!(
             draw_shape_params_for_primitive(
-                DrawPrimitive::Image {
+                &DrawPrimitive::Image {
                     rect: Rect::from_size(cranpose_ui_graphics::Size {
                         width: 4.0,
                         height: 4.0,
@@ -607,7 +609,7 @@ mod tests {
     #[test]
     fn stroked_rect_inflates_the_quad_by_half_the_width() {
         let params = draw_shape_params_for_primitive(
-            DrawPrimitive::Rect {
+            &DrawPrimitive::Rect {
                 rect: Rect {
                     x: 5.0,
                     y: 5.0,
@@ -648,7 +650,7 @@ mod tests {
             ..Default::default()
         };
         let params = draw_shape_params_for_primitive(
-            DrawPrimitive::Rect {
+            &DrawPrimitive::Rect {
                 rect: Rect {
                     x: 0.0,
                     y: 0.0,
@@ -687,7 +689,7 @@ mod tests {
         for width in [0.0, -2.0, f32::NAN] {
             assert!(
                 draw_shape_params_for_primitive(
-                    DrawPrimitive::Rect {
+                    &DrawPrimitive::Rect {
                         rect: Rect::from_size(cranpose_ui_graphics::Size {
                             width: 10.0,
                             height: 10.0,
@@ -715,7 +717,7 @@ mod tests {
             height: 12.0,
         };
         let params = draw_shape_params_for_primitive(
-            DrawPrimitive::Arc {
+            &DrawPrimitive::Arc {
                 rect: arc_rect,
                 brush: Brush::solid(Color::WHITE),
                 center: Point::new(50.0, 50.0),
@@ -746,7 +748,7 @@ mod tests {
     #[test]
     fn stroked_arc_lowers_to_the_band_around_the_radius() {
         let params = draw_shape_params_for_primitive(
-            DrawPrimitive::Arc {
+            &DrawPrimitive::Arc {
                 rect: Rect {
                     x: 0.0,
                     y: 0.0,
@@ -789,7 +791,7 @@ mod tests {
             ..Default::default()
         };
         let params = draw_shape_params_for_primitive(
-            DrawPrimitive::Arc {
+            &DrawPrimitive::Arc {
                 rect: Rect {
                     x: 0.0,
                     y: 0.0,
@@ -846,7 +848,7 @@ mod tests {
         for (radius, inner_radius, sweep_angle, stroke) in cases {
             assert!(
                 draw_shape_params_for_primitive(
-                    DrawPrimitive::Arc {
+                    &DrawPrimitive::Arc {
                         rect: base_rect,
                         brush: Brush::solid(Color::WHITE),
                         center: Point::new(10.0, 10.0),
@@ -871,7 +873,7 @@ mod tests {
     #[test]
     fn fills_still_lower_without_stroke_or_arc() {
         let params = draw_shape_params_for_primitive(
-            DrawPrimitive::RoundRect {
+            &DrawPrimitive::RoundRect {
                 rect: Rect::from_size(cranpose_ui_graphics::Size {
                     width: 10.0,
                     height: 10.0,
@@ -905,7 +907,7 @@ mod tests {
         fn push_image(&mut self, _params: ImageDrawParams) {}
         fn push_shadow(
             &mut self,
-            _shadow_primitive: ShadowPrimitive,
+            _shadow_primitive: &ShadowPrimitive,
             _layer_bounds: Rect,
             _layer: &GraphicsLayer,
             _clip: Option<Rect>,
