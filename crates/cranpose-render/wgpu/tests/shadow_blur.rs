@@ -50,8 +50,8 @@ fn page(radius: Option<f32>, cutout: bool) -> RenderGraph {
             phase: PrimitivePhase::BeforeChildren,
             node: PrimitiveNode::Draw(DrawPrimitiveNode {
                 primitive: DrawPrimitive::Shadow(ShadowPrimitive::Drop {
-                    shape: std::rc::Rc::new(caster()),
-                    cutout: cutout.then(|| std::rc::Rc::new(caster())),
+                    shape: Box::new(caster()),
+                    cutout: cutout.then(|| Box::new(caster())),
                     blur_radius,
                     blend_mode: BlendMode::SrcOver,
                 }),

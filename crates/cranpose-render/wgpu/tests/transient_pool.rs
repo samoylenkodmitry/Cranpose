@@ -56,7 +56,7 @@ fn drop_shadow(caster: Rect, blur_radius: f32) -> RenderNode {
         phase: PrimitivePhase::BeforeChildren,
         node: PrimitiveNode::Draw(DrawPrimitiveNode {
             primitive: DrawPrimitive::Shadow(ShadowPrimitive::Drop {
-                shape: std::rc::Rc::new(DrawPrimitive::Rect {
+                shape: Box::new(DrawPrimitive::Rect {
                     rect: caster,
                     brush: Brush::solid(Color::BLACK),
                     stroke: None,
