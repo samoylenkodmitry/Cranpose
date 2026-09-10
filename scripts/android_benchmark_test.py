@@ -669,17 +669,23 @@ class BenchmarkContracts(unittest.TestCase):
                 process.communicate.return_value = (b'recorder output', None)
                 process.returncode = 0
                 report = {}
-                recording = AndroidRecording(device, self.root, [100, 100], report, 2_000_000)
+                regions = [{'name': 'navigation'}]
+                recording = AndroidRecording(device, self.root, [100, 100], report, 2_000_000,
+                                             visual_regions=regions)
                 recording.process = process
                 device.shell.return_value = '123'
                 device.run.side_effect = lambda *parts, **_options: Path(parts[-1]).write_bytes(b'video')
                 probe = {'streams': [{'width': 100, 'height': 100, 'nb_read_frames': '30'}]}
-                with patch('android_benchmark_video.checked_command', return_value=json.dumps(probe).encode()):
+                with patch('android_benchmark_video.checked_command', return_value=json.dumps(probe).encode()), \
+                        patch('android_benchmark_video.inspect_visual_frames',
+                              return_value={'failing_frames': 0}) as inspect:
                     if early:
                         with self.assertRaisesRegex(BaseExceptionGroup, 'Recording failed'):
                             recording.finish()
                     else:
                         recording.finish()
+                inspect.assert_called_once_with(self.root / 'scroll.mp4', [100, 100], regions,
+                                                self.root / 'visual-frames')
                 device.stop_owned_process.assert_called_once_with('123', recording.remote, first_signal='INT')
                 removed = {call.args[-1] for call in device.shell.call_args_list if call.args[0] == 'rm'}
                 self.assertEqual(removed, {recording.remote, recording.pid_file})
@@ -710,13 +716,19 @@ time.sleep(0.3)
 ''')
         executable.chmod(0o755)
         report = {}
-        recording = ScrcpyRecording(SimpleNamespace(serial='fixture'), self.root, [100, 100], report, 2_000_000)
+        regions = [{'name': 'navigation'}]
+        recording = ScrcpyRecording(SimpleNamespace(serial='fixture'), self.root, [100, 100], report,
+                                    2_000_000, visual_regions=regions)
         with patch.dict(os.environ, {'PATH': str(self.root) + os.pathsep + os.environ['PATH']}):
             recording.start()
         self.assertIsNone(recording.process.poll())
         probe = {'streams': [{'width': 100, 'height': 100, 'nb_read_frames': '30'}]}
-        with patch('android_benchmark_video.checked_command', return_value=json.dumps(probe).encode()):
+        with patch('android_benchmark_video.checked_command', return_value=json.dumps(probe).encode()), \
+                patch('android_benchmark_video.inspect_visual_frames',
+                      return_value={'failing_frames': 0}) as inspect:
             recording.finish()
+        inspect.assert_called_once_with(self.root / 'scroll.mp4', [100, 100], regions,
+                                        self.root / 'visual-frames')
         self.assertEqual(recording.process.returncode, 0)
         self.assertTrue(recording.log.closed)
         self.assertEqual(report['video']['sha256'], support.digest(self.root / 'scroll.mp4'))
@@ -738,6 +750,25 @@ time.sleep(0.3)
                 with patch('android_benchmark_video.checked_command', return_value=json.dumps({'streams': streams}).encode()):
                     with self.assertRaisesRegex(ValueError, 'full-size route frames'):
                         inspect_recording(video, [100, 100], {})
+
+    def test_recording_rejects_visual_failure_and_preserves_evidence(self):
+        video = self.root / 'scroll.mp4'
+        video.write_bytes(b'video')
+        probe = {'streams': [{'width': 100, 'height': 100, 'nb_read_frames': '30'}]}
+        regions = [{'name': 'navigation'}]
+        for failures in [0, 1]:
+            report = {}
+            result = {'frames_checked': 30, 'failing_frames': failures}
+            with patch('android_benchmark_video.checked_command', return_value=json.dumps(probe).encode()), \
+                    patch('android_benchmark_video.inspect_visual_frames', return_value=result) as inspect:
+                if failures:
+                    with self.assertRaisesRegex(ValueError, 'Rendering continuity failed'):
+                        inspect_recording(video, [100, 100], report, regions)
+                else:
+                    inspect_recording(video, [100, 100], report, regions)
+                inspect.assert_called_once_with(video, [100, 100], regions, self.root / 'visual-frames')
+            self.assertEqual(report['video']['visual_contract'], result)
+            self.assertEqual(report['video']['sha256'], support.digest(video))
 
     def test_apk_provenance_rejects_modified_code_assets_and_unmeasured_abis(self):
         apk = self.root / 'app.apk'

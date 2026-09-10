@@ -432,7 +432,6 @@ impl ResourceGraph {
 
 pub(crate) struct PassContext<'pass> {
     device: &'pass wgpu::Device,
-    queue_handle: &'pass wgpu::Queue,
     pub(crate) encoder: &'pass mut wgpu::CommandEncoder,
     uploads: &'pass mut FrameUploadAllocators,
     transient_textures: &'pass mut TransientTexturePool,
@@ -593,6 +592,7 @@ impl WgpuFrameGraphExecutor {
         if graph.node_count() == 0 {
             return Err(FrameGraphError::EmptyGraph);
         }
+        let _profile_frame = fence_profile::enabled().then(|| fence_profile::FrameRecording);
         let mut pass_count = 0u32;
         let mut transient_texture_bytes = 0u64;
         let mut copies = TextureCopyStats::default();
@@ -607,7 +607,6 @@ impl WgpuFrameGraphExecutor {
                 .expect("single-pass graph should contain one pass");
             match self.encode_pass_node(
                 device,
-                queue,
                 &mut encoder,
                 &mut pending_transient_releases,
                 &mut transient_texture_bytes,
@@ -635,7 +634,6 @@ impl WgpuFrameGraphExecutor {
                 };
                 match self.encode_pass_node(
                     device,
-                    queue,
                     &mut encoder,
                     &mut pending_transient_releases,
                     &mut transient_texture_bytes,
@@ -661,10 +659,10 @@ impl WgpuFrameGraphExecutor {
             return Err(FrameGraphError::NoDeclaredPasses);
         }
         self.upload_allocators.buffers.finish();
+        let uploads = self.upload_allocators.flush(queue);
         if fence_profile::enabled() {
             fence_profile::end_frame(device, queue, &mut encoder);
         }
-        let uploads = self.upload_allocators.flush(queue);
         let (submission, upload_writes) = Self::submit_with_timing(queue, encoder);
         self.upload_allocators.buffers.recall();
         release_pending_transients(&mut self.transient_textures, pending_transient_releases);
@@ -693,7 +691,6 @@ impl WgpuFrameGraphExecutor {
     fn encode_pass_node(
         &mut self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         pending_transient_releases: &mut Vec<(FrameTextureDescriptor, OffscreenTarget)>,
         transient_texture_bytes: &mut u64,
@@ -705,7 +702,6 @@ impl WgpuFrameGraphExecutor {
         let pass_start = Instant::now();
         let mut context = PassContext {
             device,
-            queue_handle: queue,
             encoder,
             uploads: &mut self.upload_allocators,
             transient_textures: &mut self.transient_textures,
@@ -977,7 +973,7 @@ impl FrameCommandRecorder for PassContext<'_> {
         if fence_profile::enabled() {
             self.uploads.buffers.finish();
             let bucket = fence_profile::bucket_label(descriptor);
-            fence_profile::split(self.device, self.queue_handle, self.encoder, Some(&bucket));
+            fence_profile::split(self.device, self.encoder, Some(&bucket));
         }
         crate::pass_timing::begin_timed_render_pass(self.pass_timer, self.encoder, descriptor)
     }
@@ -1922,17 +1918,6 @@ pub(crate) mod fence_profile {
         })
     }
 
-    /// Every render pass a frame records, bucketed by label, target size and
-    /// load op, with the wall time of each measured through submission fences
-    /// for adapters without timestamp queries (`CRANPOSE_GPU_FENCE_PROFILE`,
-    /// mirrored as `debug.cranpose.gpu_fence_profile` on Android; a numeric
-    /// value is the report period in frames, 60 by default). Every pass
-    /// boundary submits the commands recorded so far and waits for the queue
-    /// to drain, minus the round trip of an empty submission, so a bucket's
-    /// time is the isolated latency of its passes plus the copies encoded
-    /// after them. Isolated latency overstates large targets, whose store and
-    /// reload a tiler otherwise overlaps with the next pass, so the buckets
-    /// are a per-frame pass inventory, not a cost ranking.
     pub(crate) fn enabled() -> bool {
         static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         *ENABLED.get_or_init(|| {
@@ -1956,19 +1941,32 @@ pub(crate) mod fence_profile {
         current_label: Option<String>,
         totals: Vec<(String, f64, u32)>,
         frames: u32,
+        pending: Vec<(Option<String>, wgpu::CommandBuffer)>,
     }
 
     thread_local! {
         static PROFILE: RefCell<Profile> = RefCell::new(Profile::default());
     }
 
+    pub(super) struct FrameRecording;
+
+    impl Drop for FrameRecording {
+        fn drop(&mut self) {
+            PROFILE.with(|profile| {
+                let mut profile = profile.borrow_mut();
+                profile.pending.clear();
+                profile.current_label = None;
+            });
+        }
+    }
+
     fn submit_and_wait(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        encoder: wgpu::CommandEncoder,
+        commands: wgpu::CommandBuffer,
     ) -> f64 {
         let start = Instant::now();
-        let submission = queue.submit(std::iter::once(encoder.finish()));
+        let submission = queue.submit(std::iter::once(commands));
         let _ = device.poll(wgpu::PollType::Wait {
             submission_index: Some(submission),
             timeout: None,
@@ -1980,19 +1978,6 @@ pub(crate) mod fence_profile {
         device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("fence profile split"),
         })
-    }
-
-    /// Wall time of the recorded commands minus the round trip of an empty
-    /// submission, so the fixed cost of the fence itself does not count.
-    fn drain(
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
-    ) -> f64 {
-        let finished = std::mem::replace(encoder, new_encoder(device));
-        let recorded = submit_and_wait(device, queue, finished);
-        let empty = submit_and_wait(device, queue, new_encoder(device));
-        (recorded - empty).max(0.0)
     }
 
     /// The pass label extended with its first color target's size, so passes on
@@ -2017,39 +2002,22 @@ pub(crate) mod fence_profile {
         }
     }
 
-    /// Closes the pass that was running, charges its GPU time, and opens the
-    /// accounting for `next_label`.
     pub(crate) fn split(
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         next_label: Option<&str>,
     ) {
-        if whole_frame() && next_label.is_some() {
-            PROFILE.with(|profile| {
-                profile
-                    .borrow_mut()
-                    .current_label
-                    .get_or_insert_with(|| "frame".to_owned());
-            });
-            return;
-        }
-        let elapsed = drain(device, queue, encoder);
         PROFILE.with(|profile| {
             let mut profile = profile.borrow_mut();
-            if let Some(label) = profile.current_label.take() {
-                match profile
-                    .totals
-                    .iter_mut()
-                    .find(|(name, _, _)| *name == label)
-                {
-                    Some(entry) => {
-                        entry.1 += elapsed;
-                        entry.2 += 1;
-                    }
-                    None => profile.totals.push((label, elapsed, 1)),
-                }
+            if whole_frame() && next_label.is_some() {
+                profile
+                    .current_label
+                    .get_or_insert_with(|| "frame".to_owned());
+                return;
             }
+            let finished = std::mem::replace(encoder, new_encoder(device));
+            let label = profile.current_label.take();
+            profile.pending.push((label, finished.finish()));
             profile.current_label = next_label.map(str::to_owned);
         });
     }
@@ -2061,9 +2029,29 @@ pub(crate) mod fence_profile {
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
     ) {
-        split(device, queue, encoder, None);
+        split(device, encoder, None);
         PROFILE.with(|profile| {
             let mut profile = profile.borrow_mut();
+            let mut pending = std::mem::take(&mut profile.pending);
+            for (label, commands) in pending.drain(..) {
+                let recorded = submit_and_wait(device, queue, commands);
+                let empty = submit_and_wait(device, queue, new_encoder(device).finish());
+                let elapsed = (recorded - empty).max(0.0);
+                if let Some(label) = label {
+                    match profile
+                        .totals
+                        .iter_mut()
+                        .find(|(name, _, _)| *name == label)
+                    {
+                        Some(entry) => {
+                            entry.1 += elapsed;
+                            entry.2 += 1;
+                        }
+                        None => profile.totals.push((label, elapsed, 1)),
+                    }
+                }
+            }
+            profile.pending = pending;
             profile.frames += 1;
             if profile.frames < report_every_frames() {
                 return;
@@ -2088,5 +2076,27 @@ pub(crate) mod fence_profile {
             eprintln!("{line}");
             profile.frames = 0;
         });
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn unfinished_frame_discards_its_commands_and_label() {
+            let (_lock, device, _queue) = super::super::upload_test_device();
+            let recording = FrameRecording;
+            PROFILE.with(|profile| {
+                let mut profile = profile.borrow_mut();
+                profile.current_label = Some("abandoned".to_owned());
+                profile.pending.push((None, new_encoder(&device).finish()));
+            });
+            drop(recording);
+            PROFILE.with(|profile| {
+                let profile = profile.borrow();
+                assert!(profile.pending.is_empty());
+                assert!(profile.current_label.is_none());
+            });
+        }
     }
 }
