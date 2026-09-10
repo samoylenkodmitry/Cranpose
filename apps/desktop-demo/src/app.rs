@@ -818,6 +818,14 @@ pub fn combined_app_with_startup(startup: StartupSelection) {
     );
 }
 
+/// The controls tab on its own, for tests that drive its cards without the
+/// demo shell's tab bar around them.
+#[allow(non_snake_case)]
+#[composable]
+pub fn ControlsUiRobotApp() {
+    ControlsUiTab();
+}
+
 #[allow(non_snake_case)]
 #[composable]
 pub fn MarkdownViewerRobotApp() {

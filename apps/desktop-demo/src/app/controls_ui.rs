@@ -1,21 +1,21 @@
 #![allow(non_snake_case)]
 
 use std::{
-    cell::Cell,
     f32::consts::{PI, TAU},
     sync::{Arc, OnceLock},
 };
 
 use cranpose_animation::{animateFloatAsState, spring, Animatable, AnimationType, Spring};
 use cranpose_core::{
-    remember, rememberMutableStateOf, with_current_composer, MutableState, Owned, State,
+    key, rememberMutableStateOf, with_current_composer, MutableState, Owned, State,
 };
+use cranpose_foundation::SemanticsWidgetRole;
 use cranpose_ui::{
     composable,
     text::{FontWeight, SpanStyle, TextUnit},
     Box, BoxSpec, Brush, Color, Column, ColumnSpec, CornerRadii, GraphicsLayer, LinearArrangement,
-    Modifier, Point, PointerEvent, PointerEventKind, PointerInputScope, Row, RowSpec, Size, Text,
-    TextStyle, VerticalAlignment,
+    Modifier, Point, PointerEventKind, PointerInputScope, Row, RowSpec, SemanticsConfiguration,
+    Size, Text, TextStyle, VerticalAlignment,
 };
 use cranpose_ui_graphics::{
     CompositingStrategy, RenderEffect, RuntimeShader, RUNTIME_SHADER_PRELUDE_WGSL,
@@ -53,7 +53,7 @@ static CONTROL_KINDS: [ControlKind; 6] = [
     ControlKind::LeverSwitch,
 ];
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 enum ControlKind {
     Checkmark,
     Slider,
@@ -91,6 +91,22 @@ impl ControlKind {
             self,
             ControlKind::Checkmark | ControlKind::Toggle | ControlKind::LeverSwitch
         )
+    }
+
+    /// What a screen reader announces this control as, mirroring Compose's
+    /// `Role`.
+    fn role(self) -> Option<SemanticsWidgetRole> {
+        match self {
+            ControlKind::Checkmark => Some(SemanticsWidgetRole::Checkbox),
+            ControlKind::Toggle | ControlKind::LeverSwitch => Some(SemanticsWidgetRole::Switch),
+            ControlKind::PushButton => Some(SemanticsWidgetRole::Button),
+            ControlKind::Slider | ControlKind::VolumeDial => None,
+        }
+    }
+
+    /// Whether a drag on the stage moves this control's value.
+    fn is_continuous(self) -> bool {
+        matches!(self, ControlKind::Slider | ControlKind::VolumeDial)
     }
 
     fn value_animation(self) -> AnimationType {
@@ -144,6 +160,24 @@ impl ControlState {
             }
         } else {
             self.value
+        }
+    }
+
+    fn toggled(self, on: bool) -> Self {
+        Self { on, ..self }
+    }
+
+    fn pressed_once(self) -> Self {
+        Self {
+            presses: self.presses.saturating_add(1),
+            ..self
+        }
+    }
+
+    fn with_value(self, value: f32) -> Self {
+        Self {
+            value: value.clamp(0.0, 1.0),
+            ..self
         }
     }
 
@@ -279,26 +313,17 @@ fn pointer_tilt(position: Point, size: Size) -> (f32, f32) {
     (-x * TILT_YAW, -y * TILT_PITCH)
 }
 
-fn press_state(
+/// The value a press at `position` starts a drag from, for the controls a
+/// drag moves. Compose's `Slider` jumps to the tapped position the same way.
+fn drag_start_value(
     kind: ControlKind,
     state: ControlState,
     position: Point,
     size: Size,
 ) -> ControlState {
     match kind {
-        ControlKind::Checkmark | ControlKind::Toggle | ControlKind::LeverSwitch => ControlState {
-            on: !state.on,
-            ..state
-        },
-        ControlKind::Slider => ControlState {
-            value: slider_value_at(position, size),
-            ..state
-        },
-        ControlKind::PushButton => ControlState {
-            presses: state.presses.saturating_add(1),
-            ..state
-        },
-        ControlKind::VolumeDial => state,
+        ControlKind::Slider => state.with_value(slider_value_at(position, size)),
+        _ => state,
     }
 }
 
@@ -310,19 +335,10 @@ fn drag_state(
     size: Size,
 ) -> (ControlState, DragTracking) {
     match kind {
-        ControlKind::Slider => (
-            ControlState {
-                value: slider_value_at(position, size),
-                ..state
-            },
-            tracking,
-        ),
+        ControlKind::Slider => (state.with_value(slider_value_at(position, size)), tracking),
         ControlKind::VolumeDial => match pointer_angle(position, size) {
             Some(angle) => (
-                ControlState {
-                    value: dial_value_after(state.value, tracking.angle, angle),
-                    ..state
-                },
+                state.with_value(dial_value_after(state.value, tracking.angle, angle)),
                 DragTracking {
                     active: tracking.active,
                     angle,
@@ -425,7 +441,6 @@ struct StageUniforms {
     kind: f32,
     value: f32,
     press: f32,
-    hover: f32,
     dark: f32,
     tilt_yaw: f32,
     tilt_pitch: f32,
@@ -437,7 +452,6 @@ fn stage_effect(uniforms: &StageUniforms) -> RenderEffect {
     shader.set_float(0, uniforms.kind);
     shader.set_float(1, uniforms.value);
     shader.set_float(2, uniforms.press);
-    shader.set_float(3, uniforms.hover);
     shader.set_float(4, uniforms.dark);
     shader.set_float(5, uniforms.tilt_yaw);
     shader.set_float(6, uniforms.tilt_pitch);
@@ -483,7 +497,7 @@ pub(crate) fn ControlsUiTab() {
             );
 
             for row in CONTROL_KINDS.chunks(grid_columns(page_size.get().width)) {
-                ControlGridRow(row, is_dark);
+                key(row[0], || ControlGridRow(row, is_dark));
             }
         },
     );
@@ -504,7 +518,15 @@ fn ThemeSwitch(dark: MutableState<bool>, is_dark: bool) {
             .draw_behind(move |scope| {
                 scope.draw_round_rect(Brush::solid(background), CornerRadii::uniform(16.0));
             })
-            .clickable(move |_| dark.set(!dark.get()))
+            .toggleable(
+                is_dark,
+                Some(format!(
+                    "Dark theme, {}",
+                    if is_dark { "on" } else { "off" }
+                )),
+                Some(SemanticsWidgetRole::Switch),
+                move |next| dark.set(next),
+            )
             .padding_symmetric(16.0, 9.0),
         BoxSpec::default(),
         move || {
@@ -513,6 +535,12 @@ fn ThemeSwitch(dark: MutableState<bool>, is_dark: bool) {
     );
 }
 
+/// One row of the grid.
+///
+/// The rows and the cards inside them are emitted from a single call site, so
+/// each is wrapped in Compose's `key`: identity comes from the control a card
+/// draws rather than from where the loop happened to reach it, and a reflow
+/// between column counts moves a card's state with it.
 #[composable]
 fn ControlGridRow(kinds: &'static [ControlKind], dark: bool) {
     Row(
@@ -520,37 +548,12 @@ fn ControlGridRow(kinds: &'static [ControlKind], dark: bool) {
         RowSpec::new().horizontal_arrangement(LinearArrangement::SpacedBy(GRID_SPACING)),
         move || {
             for kind in kinds {
-                ControlCard(*kind, dark, Modifier::empty().weight(1.0));
+                key(*kind, || {
+                    ControlCard(*kind, dark, Modifier::empty().weight(1.0))
+                });
             }
         },
     );
-}
-
-#[derive(Clone, Copy, PartialEq, Debug)]
-struct CardMemory {
-    kind: ControlKind,
-    control: ControlState,
-    hovered: bool,
-    tilt: (f32, f32),
-}
-
-impl CardMemory {
-    fn initial(kind: ControlKind) -> Self {
-        Self {
-            kind,
-            control: ControlState::initial(kind),
-            hovered: false,
-            tilt: (0.0, 0.0),
-        }
-    }
-
-    fn for_kind(self, kind: ControlKind) -> Self {
-        if self.kind == kind {
-            self
-        } else {
-            Self::initial(kind)
-        }
-    }
 }
 
 /// What a pointer event does to the press depth.
@@ -587,86 +590,41 @@ fn remember_press_depth() -> Owned<Animatable<f32>> {
     })
 }
 
-#[derive(Clone, Copy)]
-struct CardInput {
-    kind: ControlKind,
-    memory: MutableState<CardMemory>,
+fn apply_press(depth: &Owned<Animatable<f32>>, kind: PointerEventKind) {
+    match press_response(kind) {
+        PressResponse::Snap => depth.update(|animatable| animatable.snapTo(1.0)),
+        PressResponse::Release => {
+            depth.update(|animatable| animatable.animateTo(0.0, press_release_animation()))
+        }
+        PressResponse::Hold => {}
+    }
 }
 
-impl CardInput {
-    /// The remembered state of this card, replaced with a fresh one when a
-    /// grid reflow hands this slot a different control.
-    fn read(&self) -> CardMemory {
-        self.memory.get().for_kind(self.kind)
-    }
-
-    fn handle(
-        &self,
-        event: &PointerEvent,
-        size: Size,
-        tracking: &Cell<DragTracking>,
-        depth: &Owned<Animatable<f32>>,
-    ) {
-        match press_response(event.kind) {
-            PressResponse::Snap => depth.update(|animatable| animatable.snapTo(1.0)),
-            PressResponse::Release => {
-                depth.update(|animatable| animatable.animateTo(0.0, press_release_animation()))
-            }
-            PressResponse::Hold => {}
+/// The click behaviour and accessibility of one control: the switches are
+/// `Modifier.toggleable`, the button is `Modifier.clickable`, and every card
+/// names itself and publishes its reading the way Compose's
+/// `contentDescription` / `stateDescription` pair does.
+fn control_action(kind: ControlKind, state: MutableState<ControlState>) -> Modifier {
+    let current = state.get();
+    let action = match kind {
+        ControlKind::Checkmark | ControlKind::Toggle | ControlKind::LeverSwitch => {
+            Modifier::empty().toggleable(current.on, None, kind.role(), move |next| {
+                state.set(state.get().toggled(next))
+            })
         }
-
-        let memory = self.read();
-        match event.kind {
-            PointerEventKind::Enter => self.memory.set(CardMemory {
-                hovered: true,
-                ..memory
-            }),
-            PointerEventKind::Exit => {
-                self.memory.set(CardMemory {
-                    hovered: false,
-                    ..memory
-                });
-                tracking.set(DragTracking::default());
-            }
-            PointerEventKind::Down => {
-                self.memory.set(CardMemory {
-                    control: press_state(self.kind, memory.control, event.position, size),
-                    hovered: true,
-                    ..memory
-                });
-                tracking.set(DragTracking {
-                    active: true,
-                    angle: pointer_angle(event.position, size).unwrap_or_default(),
-                });
-                event.consume();
-            }
-            PointerEventKind::Move => {
-                let tilt = pointer_tilt(event.position, size);
-                if tracking.get().active {
-                    let (control, tracked) = drag_state(
-                        self.kind,
-                        memory.control,
-                        tracking.get(),
-                        event.position,
-                        size,
-                    );
-                    self.memory.set(CardMemory {
-                        control,
-                        tilt,
-                        ..memory
-                    });
-                    tracking.set(tracked);
-                    event.consume();
-                } else {
-                    self.memory.set(CardMemory { tilt, ..memory });
-                }
-            }
-            PointerEventKind::Up | PointerEventKind::Cancel => {
-                tracking.set(DragTracking::default());
-            }
-            _ => {}
+        ControlKind::PushButton => {
+            Modifier::empty().clickable(move |_position| state.set(state.get().pressed_once()))
         }
-    }
+        ControlKind::Slider | ControlKind::VolumeDial => Modifier::empty(),
+    };
+    let reading = current.label(kind);
+    action.semantics(move |config: &mut SemanticsConfiguration| {
+        config.content_description = Some(kind.title().to_string());
+        config.state_description = Some(reading.clone());
+        if let Some(role) = kind.role() {
+            config.role = Some(role);
+        }
+    })
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -676,25 +634,10 @@ struct StageTargets {
     tilt: (f32, f32),
 }
 
-impl StageTargets {
-    fn of(kind: ControlKind, memory: CardMemory) -> Self {
-        Self {
-            value: memory.control.scene_value(kind),
-            hovered: memory.hovered,
-            tilt: if memory.hovered {
-                memory.tilt
-            } else {
-                (0.0, 0.0)
-            },
-        }
-    }
-}
-
 #[derive(Clone, Copy)]
 struct StageAnimation {
     value: State<f32>,
     press: State<f32>,
-    hover: State<f32>,
     yaw: State<f32>,
     pitch: State<f32>,
 }
@@ -705,7 +648,6 @@ impl StageAnimation {
             kind: kind.scene_index(),
             value: self.value.value(),
             press: self.press.value().clamp(0.0, 1.0),
-            hover: self.hover.value(),
             dark: if dark { 1.0 } else { 0.0 },
             tilt_yaw: self.yaw.value(),
             tilt_pitch: self.pitch.value(),
@@ -714,34 +656,42 @@ impl StageAnimation {
     }
 }
 
+#[allow(non_snake_case)]
 #[composable]
-fn stageAnimation(kind: ControlKind, targets: StageTargets, press: State<f32>) -> StageAnimation {
+fn animateStageAsState(
+    kind: ControlKind,
+    targets: StageTargets,
+    press: State<f32>,
+) -> StageAnimation {
     let settle = spring(Spring::DampingRatioNoBouncy, Spring::StiffnessLow);
+    let (yaw, pitch) = if targets.hovered {
+        targets.tilt
+    } else {
+        (0.0, 0.0)
+    };
     StageAnimation {
         value: animateFloatAsState(targets.value, kind.value_animation(), "controls_value"),
         press,
-        hover: animateFloatAsState(
-            if targets.hovered { 1.0 } else { 0.0 },
-            spring(Spring::DampingRatioNoBouncy, Spring::StiffnessMediumLow),
-            "controls_hover",
-        ),
-        yaw: animateFloatAsState(targets.tilt.0, settle, "controls_yaw"),
-        pitch: animateFloatAsState(targets.tilt.1, settle, "controls_pitch"),
+        yaw: animateFloatAsState(yaw, settle, "controls_yaw"),
+        pitch: animateFloatAsState(pitch, settle, "controls_pitch"),
     }
 }
 
 #[composable]
 fn ControlCard(kind: ControlKind, dark: bool, modifier: Modifier) {
-    let input = CardInput {
-        kind,
-        memory: rememberMutableStateOf(move || CardMemory::initial(kind)),
-    };
-    let tracking = remember(|| Cell::new(DragTracking::default()));
+    let state = rememberMutableStateOf(move || ControlState::initial(kind));
+    let hovered = rememberMutableStateOf(|| false);
+    let tilt = rememberMutableStateOf(|| (0.0f32, 0.0f32));
     let depth = remember_press_depth();
-    let memory = input.read();
-    let animation = stageAnimation(
+
+    let current = state.get();
+    let animation = animateStageAsState(
         kind,
-        StageTargets::of(kind, memory),
+        StageTargets {
+            value: current.scene_value(kind),
+            hovered: hovered.get(),
+            tilt: tilt.get(),
+        },
         depth.with(|animatable| animatable.state()),
     );
     let background = card_color(dark);
@@ -754,12 +704,12 @@ fn ControlCard(kind: ControlKind, dark: bool, modifier: Modifier) {
             }),
         ColumnSpec::default(),
         move || {
-            let tracking = tracking.clone();
             let depth = depth.clone();
             Box(
                 Modifier::empty()
                     .fill_max_width()
                     .height(STAGE_HEIGHT)
+                    .then(control_action(kind, state))
                     .graphics_layer(move || GraphicsLayer {
                         render_effect: Some(stage_effect(
                             &animation.uniforms(kind, dark, background),
@@ -768,16 +718,58 @@ fn ControlCard(kind: ControlKind, dark: bool, modifier: Modifier) {
                         ..Default::default()
                     })
                     .pointer_input((), move |scope: PointerInputScope| {
-                        let tracking = tracking.clone();
                         let depth = depth.clone();
                         async move {
                             scope
-                                .await_pointer_event_scope(|await_scope| async move {
+                                .await_pointer_event_scope(|events| async move {
+                                    let mut drag = DragTracking::default();
                                     loop {
-                                        let event = await_scope.await_pointer_event().await;
-                                        let size = await_scope.size();
-                                        tracking
-                                            .with(|cell| input.handle(&event, size, cell, &depth));
+                                        let event = events.await_pointer_event().await;
+                                        let size = events.size();
+                                        apply_press(&depth, event.kind);
+                                        match event.kind {
+                                            PointerEventKind::Enter => hovered.set(true),
+                                            PointerEventKind::Exit => {
+                                                hovered.set(false);
+                                                drag = DragTracking::default();
+                                            }
+                                            PointerEventKind::Down => {
+                                                hovered.set(true);
+                                                drag = DragTracking {
+                                                    active: kind.is_continuous(),
+                                                    angle: pointer_angle(event.position, size)
+                                                        .unwrap_or_default(),
+                                                };
+                                                if kind.is_continuous() {
+                                                    state.set(drag_start_value(
+                                                        kind,
+                                                        state.get(),
+                                                        event.position,
+                                                        size,
+                                                    ));
+                                                    event.consume();
+                                                }
+                                            }
+                                            PointerEventKind::Move => {
+                                                tilt.set(pointer_tilt(event.position, size));
+                                                if drag.active {
+                                                    let (next, tracked) = drag_state(
+                                                        kind,
+                                                        state.get(),
+                                                        drag,
+                                                        event.position,
+                                                        size,
+                                                    );
+                                                    state.set(next);
+                                                    drag = tracked;
+                                                    event.consume();
+                                                }
+                                            }
+                                            PointerEventKind::Up | PointerEventKind::Cancel => {
+                                                drag = DragTracking::default();
+                                            }
+                                            _ => {}
+                                        }
                                     }
                                 })
                                 .await;
@@ -786,7 +778,8 @@ fn ControlCard(kind: ControlKind, dark: bool, modifier: Modifier) {
                 BoxSpec::default(),
                 || {},
             );
-            ControlFooter(kind, memory.control, dark);
+
+            ControlFooter(kind, current, dark);
         },
     );
 }
@@ -932,29 +925,6 @@ mod tests {
     }
 
     #[test]
-    fn a_reflowed_slot_does_not_hand_a_control_another_kinds_state() {
-        let slider = CardMemory {
-            kind: ControlKind::Slider,
-            control: ControlState {
-                value: 0.9,
-                on: true,
-                presses: 4,
-            },
-            hovered: true,
-            tilt: (0.2, 0.1),
-        };
-        assert_eq!(slider.for_kind(ControlKind::Slider), slider);
-        assert_eq!(
-            slider.for_kind(ControlKind::Toggle),
-            CardMemory::initial(ControlKind::Toggle)
-        );
-        assert_eq!(
-            slider.for_kind(ControlKind::VolumeDial).control.value,
-            ControlState::initial(ControlKind::VolumeDial).value
-        );
-    }
-
-    #[test]
     fn wrap_angle_folds_full_turns() {
         assert!((wrap_angle(0.4) - 0.4).abs() < 1e-5);
         assert!((wrap_angle(0.4 + TAU) - 0.4).abs() < 1e-4);
@@ -995,37 +965,66 @@ mod tests {
     }
 
     #[test]
-    fn press_toggles_switches_and_counts_button_presses() {
-        let toggle = ControlState::initial(ControlKind::Toggle);
-        let flipped = press_state(ControlKind::Toggle, toggle, Point::default(), STAGE);
-        assert!(flipped.on);
-        assert!(!press_state(ControlKind::Toggle, flipped, Point::default(), STAGE).on);
+    fn a_switch_takes_the_value_its_toggleable_hands_over() {
+        let off = ControlState::initial(ControlKind::Toggle);
+        assert!(!off.on);
+        assert!(off.toggled(true).on);
+        assert!(!off.toggled(true).toggled(false).on);
+    }
 
+    #[test]
+    fn a_click_counts_one_press() {
         let button = ControlState::initial(ControlKind::PushButton);
-        let pressed = press_state(ControlKind::PushButton, button, Point::default(), STAGE);
-        assert_eq!(pressed.presses, 1);
+        assert_eq!(button.presses, 0);
+        assert_eq!(button.pressed_once().presses, 1);
+        assert_eq!(button.pressed_once().pressed_once().presses, 2);
         assert_eq!(
-            press_state(ControlKind::PushButton, pressed, Point::default(), STAGE).presses,
-            2
+            ControlState {
+                presses: u32::MAX,
+                ..button
+            }
+            .pressed_once()
+            .presses,
+            u32::MAX
         );
     }
 
     #[test]
-    fn press_moves_the_slider_but_leaves_the_dial_alone() {
+    fn a_drag_starts_the_slider_at_the_pressed_position_and_leaves_the_dial() {
         let right = project([SLIDER_TRAVEL, SLIDER_LIFT, 0.0], STAGE);
-        let slider = press_state(
-            ControlKind::Slider,
-            ControlState::initial(ControlKind::Slider),
-            right,
-            STAGE,
+        let slider = ControlState::initial(ControlKind::Slider);
+        assert_eq!(
+            drag_start_value(ControlKind::Slider, slider, right, STAGE).value,
+            1.0
         );
-        assert_eq!(slider.value, 1.0);
-
         let dial = ControlState::initial(ControlKind::VolumeDial);
         assert_eq!(
-            press_state(ControlKind::VolumeDial, dial, right, STAGE),
+            drag_start_value(ControlKind::VolumeDial, dial, right, STAGE),
             dial
         );
+    }
+
+    #[test]
+    fn only_the_dragged_controls_are_continuous() {
+        assert!(ControlKind::Slider.is_continuous());
+        assert!(ControlKind::VolumeDial.is_continuous());
+        for kind in [
+            ControlKind::Checkmark,
+            ControlKind::Toggle,
+            ControlKind::LeverSwitch,
+            ControlKind::PushButton,
+        ] {
+            assert!(!kind.is_continuous(), "{kind:?} is clicked, not dragged");
+            assert!(kind.role().is_some(), "{kind:?} needs a semantics role");
+        }
+    }
+
+    #[test]
+    fn a_value_is_clamped_to_its_track() {
+        let slider = ControlState::initial(ControlKind::Slider);
+        assert_eq!(slider.with_value(1.4).value, 1.0);
+        assert_eq!(slider.with_value(-0.3).value, 0.0);
+        assert_eq!(slider.with_value(0.42).value, 0.42);
     }
 
     #[test]
