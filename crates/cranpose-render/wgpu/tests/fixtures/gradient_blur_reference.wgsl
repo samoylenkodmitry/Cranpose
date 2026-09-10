@@ -25,9 +25,6 @@ fn get_vec4(index: u32) -> vec4<f32> {
     return u[index / 4u];
 }
 
-// Renderer-reserved slots 236..240: the region of the input texture this
-// effect reads (x, y, width, height in texels), zero when the input is the
-// whole texture.
 fn region_extent() -> vec4<f32> {
     let region = get_vec4(236u);
     let dims = vec2<f32>(textureDimensions(input_texture));
@@ -37,9 +34,6 @@ fn region_extent() -> vec4<f32> {
     return vec4<f32>(0.0, 0.0, dims.x, dims.y);
 }
 
-// Renderer-reserved slots 252/253: the pixel extent the input region stands
-// for when it was rasterized smaller than that (a blur's downscaled
-// result); zero when the region is at its logical size.
 fn logical_extent() -> vec2<f32> {
     let logical = get_vec4(252u).xy;
     if logical.x > 0.5 && logical.y > 0.5 {
@@ -48,8 +42,6 @@ fn logical_extent() -> vec2<f32> {
     return region_extent().zw;
 }
 
-// The region as a map from region-local uv to texture uv, computed once
-// per fragment so no tap pays for a texture query or a uniform fetch.
 struct RegionMap {
     offset: vec2<f32>,
     scale: vec2<f32>,
@@ -65,11 +57,6 @@ fn map_uv(map: RegionMap, local_uv: vec2<f32>) -> vec2<f32> {
     return map.offset + clamp(local_uv, vec2<f32>(0.0), vec2<f32>(1.0)) * map.scale;
 }
 
-// Renderer-reserved slots 224..236: the substrate regions, the source
-// blurred by the wide radius (slot 232), by half of it (228) and by a
-// quarter (224), packed in the same texture at their scratch sizes; zero
-// when the renderer packed none. A substrate is read through its own map,
-// held to its texel centers.
 fn substrate_region(slot: u32) -> vec4<f32> {
     return get_vec4(slot);
 }
@@ -81,6 +68,10 @@ fn has_substrate(slot: u32) -> bool {
 
 fn has_substrates() -> bool {
     return has_substrate(232u) && has_substrate(228u) && has_substrate(224u);
+}
+
+fn substrate_tap(slot: u32, local_uv: vec2<f32>) -> vec4<f32> {
+    return textureSampleLevel(input_texture, input_sampler, substrate_uv(slot, local_uv), 0.0);
 }
 
 fn substrate_uv(slot: u32, local_uv: vec2<f32>) -> vec2<f32> {
@@ -96,9 +87,6 @@ fn sd_round_rect(p: vec2<f32>, half_size: vec2<f32>, radius: f32) -> f32 {
     return length(max(q, vec2<f32>(0.0))) + min(max(q.x, q.y), 0.0) - radius;
 }
 
-// Renderer-reserved slots 240..248: the composite's rounded clip in region
-// pixels (rect, then the four corner radii), zero when unclipped; slot 254:
-// the composite alpha.
 fn composite_coverage(local_uv: vec2<f32>) -> f32 {
     let mask_rect = get_vec4(240u);
     if mask_rect.z <= 0.5 || mask_rect.w <= 0.5 {
@@ -183,49 +171,28 @@ fn blur_fs(input: VertexOutput) -> vec4<f32> {
         axis = 1.0 - local.y;
     }
 
-    // Smoothstep avoids a derivative discontinuity where the frosted region
-    // meets the sharp scene. The radius itself—not output alpha—varies.
     let progress = smoothstep(0.0, 1.0, axis);
     let radius_px = mix(get_float(0u), get_float(1u), progress);
     if radius_px < 0.25 {
         return textureSample(input_texture, input_sampler, map_uv(map, input.uv));
     }
 
-    // With the renderer's substrates the radius at this fragment is
-    // realised by the two levels of the ladder around it, the sharp source
-    // and the three blurs halving from the wide radius, blended by where
-    // the radius falls between them.
     if (has_substrates()) {
         let wide_radius = max(get_float(0u), get_float(1u));
         let half_radius = wide_radius * 0.5;
         let quarter_radius = wide_radius * 0.25;
-        var low_uv: vec2<f32>;
-        var high_uv: vec2<f32>;
-        var fraction: f32;
         if (radius_px <= quarter_radius) {
-            low_uv = map_uv(map, input.uv);
-            high_uv = substrate_uv(224u, input.uv);
-            fraction = radius_px / max(quarter_radius, 0.001);
-        } else if (radius_px <= half_radius) {
-            let span = max(half_radius - quarter_radius, 0.001);
-            low_uv = substrate_uv(224u, input.uv);
-            high_uv = substrate_uv(228u, input.uv);
-            fraction = (radius_px - quarter_radius) / span;
-        } else {
-            let span = max(wide_radius - half_radius, 0.001);
-            low_uv = substrate_uv(228u, input.uv);
-            high_uv = substrate_uv(232u, input.uv);
-            fraction = clamp((radius_px - half_radius) / span, 0.0, 1.0);
+            let sharp = textureSampleLevel(input_texture, input_sampler, map_uv(map, input.uv), 0.0);
+            return mix(sharp, substrate_tap(224u, input.uv), radius_px / max(quarter_radius, 0.001));
         }
-        let low = textureSampleLevel(input_texture, input_sampler, low_uv, 0.0);
-        let high = textureSampleLevel(input_texture, input_sampler, high_uv, 0.0);
-        return mix(low, high, fraction);
+        if (radius_px <= half_radius) {
+            let span = max(half_radius - quarter_radius, 0.001);
+            return mix(substrate_tap(224u, input.uv), substrate_tap(228u, input.uv), (radius_px - quarter_radius) / span);
+        }
+        let span = max(wide_radius - half_radius, 0.001);
+        return mix(substrate_tap(228u, input.uv), substrate_tap(232u, input.uv), clamp((radius_px - half_radius) / span, 0.0, 1.0));
     }
 
-    // Without substrates, a stable Vogel-disk kernel avoids the separated
-    // echo copies produced by a sparse Cartesian grid at large radii. Radial
-    // weights approximate a Gaussian while 37 taps keep the full-screen-bar
-    // pass mobile-friendly.
     let texel = vec2<f32>(radius_px) / max(texture_size, vec2<f32>(1.0));
     var color = textureSample(input_texture, input_sampler, map_uv(map, input.uv)) * 1.5;
     var total_weight = 1.5;
