@@ -77,14 +77,15 @@ fn closer(a: vec2<f32>, b: vec2<f32>) -> vec2<f32> {
     return b;
 }
 
-fn map_check(p: vec3<f32>, value: f32) -> vec2<f32> {
+fn map_check(p: vec3<f32>, value: f32, press: f32) -> vec2<f32> {
     let r = 0.085 * smoothstep(0.0, 0.16, value);
     if (r < 0.004) {
         return vec2<f32>(MAX_DIST, 0.0);
     }
-    let a = vec3<f32>(-0.48, 0.105, -0.10);
-    let b = vec3<f32>(-0.14, 0.105, 0.50);
-    let c = vec3<f32>(0.52, 0.105, -0.62);
+    let y = 0.105 - press * 0.020;
+    let a = vec3<f32>(-0.48, y, -0.10);
+    let b = vec3<f32>(-0.14, y, 0.50);
+    let c = vec3<f32>(0.52, y, -0.62);
     let t1 = clamp(value / 0.40, 0.0, 1.0);
     let t2 = clamp((value - 0.36) / 0.64, 0.0, 1.0);
     var d = sd_capsule(p, a, mix(a, b, t1), r);
@@ -142,8 +143,8 @@ fn map_button(p: vec3<f32>, press: f32) -> vec2<f32> {
     return vec2<f32>(body, 0.0);
 }
 
-fn map_dial(p: vec3<f32>, value: f32) -> vec2<f32> {
-    let centre = p - vec3<f32>(0.0, 0.168, 0.0);
+fn map_dial(p: vec3<f32>, value: f32, press: f32) -> vec2<f32> {
+    let centre = p - vec3<f32>(0.0, 0.168 - press * 0.022, 0.0);
     let knob = crowned(
         sd_round_cylinder(centre, 0.42, 0.168, 0.072),
         centre,
@@ -151,7 +152,7 @@ fn map_dial(p: vec3<f32>, value: f32) -> vec2<f32> {
         1.9,
     );
     let angle = mix(-2.36, 2.36, value);
-    let q = rot_y(centre, -angle);
+    let q = rot_y(centre, angle);
     let slot = sd_round_box(
         q - vec3<f32>(0.0, 0.13, -0.285),
         vec3<f32>(0.032, 0.09, 0.135),
@@ -160,7 +161,8 @@ fn map_dial(p: vec3<f32>, value: f32) -> vec2<f32> {
     return vec2<f32>(max(knob, -slot), 0.0);
 }
 
-fn map_lever(p: vec3<f32>, value: f32) -> vec2<f32> {
+fn map_lever(p_in: vec3<f32>, value: f32, press: f32) -> vec2<f32> {
+    let p = p_in + vec3<f32>(0.0, press * 0.018, 0.0);
     let collar = sd_round_cylinder(p - vec3<f32>(0.0, 0.048, 0.0), 0.27, 0.048, 0.044);
     let dome = sd_sphere(p - vec3<f32>(0.0, -0.02, 0.0), 0.19);
     let angle = mix(-0.52, 0.52, value);
@@ -177,7 +179,7 @@ fn map(p: vec3<f32>) -> vec2<f32> {
     let value = get_float(1u);
     let press = get_float(2u);
     if (kind == 0) {
-        return map_check(p, value);
+        return map_check(p, value, press);
     }
     if (kind == 1) {
         return map_slider(p, value, press);
@@ -189,9 +191,9 @@ fn map(p: vec3<f32>) -> vec2<f32> {
         return map_button(p, press);
     }
     if (kind == 4) {
-        return map_dial(p, value);
+        return map_dial(p, value, press);
     }
-    return map_lever(p, value);
+    return map_lever(p, value, press);
 }
 
 fn scene_normal(p: vec3<f32>) -> vec3<f32> {

@@ -6,8 +6,10 @@ use std::{
     sync::{Arc, OnceLock},
 };
 
-use cranpose_animation::{animateFloatAsState, spring, AnimationType, Spring};
-use cranpose_core::{remember, rememberMutableStateOf, MutableState, State};
+use cranpose_animation::{animateFloatAsState, spring, Animatable, AnimationType, Spring};
+use cranpose_core::{
+    remember, rememberMutableStateOf, with_current_composer, MutableState, Owned, State,
+};
 use cranpose_ui::{
     composable,
     text::{FontWeight, SpanStyle, TextUnit},
@@ -529,7 +531,6 @@ struct CardMemory {
     kind: ControlKind,
     control: ControlState,
     hovered: bool,
-    pressed: bool,
     tilt: (f32, f32),
 }
 
@@ -539,7 +540,6 @@ impl CardMemory {
             kind,
             control: ControlState::initial(kind),
             hovered: false,
-            pressed: false,
             tilt: (0.0, 0.0),
         }
     }
@@ -551,6 +551,40 @@ impl CardMemory {
             Self::initial(kind)
         }
     }
+}
+
+/// What a pointer event does to the press depth.
+///
+/// `Down` snaps the depth to fully pressed instead of animating toward it:
+/// a click whose press and release land in the same input batch would
+/// otherwise leave a target that composition never observes as pressed, and
+/// the control would never visibly move.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PressResponse {
+    Snap,
+    Release,
+    Hold,
+}
+
+fn press_response(kind: PointerEventKind) -> PressResponse {
+    match kind {
+        PointerEventKind::Down => PressResponse::Snap,
+        PointerEventKind::Up | PointerEventKind::Cancel | PointerEventKind::Exit => {
+            PressResponse::Release
+        }
+        _ => PressResponse::Hold,
+    }
+}
+
+fn press_release_animation() -> AnimationType {
+    spring(Spring::DampingRatioNoBouncy, Spring::StiffnessMedium)
+}
+
+fn remember_press_depth() -> Owned<Animatable<f32>> {
+    with_current_composer(|composer| {
+        let runtime = composer.runtime_handle();
+        composer.remember(|| Animatable::new(0.0, runtime))
+    })
 }
 
 #[derive(Clone, Copy)]
@@ -566,7 +600,21 @@ impl CardInput {
         self.memory.get().for_kind(self.kind)
     }
 
-    fn handle(&self, event: &PointerEvent, size: Size, tracking: &Cell<DragTracking>) {
+    fn handle(
+        &self,
+        event: &PointerEvent,
+        size: Size,
+        tracking: &Cell<DragTracking>,
+        depth: &Owned<Animatable<f32>>,
+    ) {
+        match press_response(event.kind) {
+            PressResponse::Snap => depth.update(|animatable| animatable.snapTo(1.0)),
+            PressResponse::Release => {
+                depth.update(|animatable| animatable.animateTo(0.0, press_release_animation()))
+            }
+            PressResponse::Hold => {}
+        }
+
         let memory = self.read();
         match event.kind {
             PointerEventKind::Enter => self.memory.set(CardMemory {
@@ -576,7 +624,6 @@ impl CardInput {
             PointerEventKind::Exit => {
                 self.memory.set(CardMemory {
                     hovered: false,
-                    pressed: false,
                     ..memory
                 });
                 tracking.set(DragTracking::default());
@@ -585,7 +632,6 @@ impl CardInput {
                 self.memory.set(CardMemory {
                     control: press_state(self.kind, memory.control, event.position, size),
                     hovered: true,
-                    pressed: true,
                     ..memory
                 });
                 tracking.set(DragTracking {
@@ -616,10 +662,6 @@ impl CardInput {
                 }
             }
             PointerEventKind::Up | PointerEventKind::Cancel => {
-                self.memory.set(CardMemory {
-                    pressed: false,
-                    ..memory
-                });
                 tracking.set(DragTracking::default());
             }
             _ => {}
@@ -630,7 +672,6 @@ impl CardInput {
 #[derive(Clone, Copy, PartialEq, Debug)]
 struct StageTargets {
     value: f32,
-    pressed: bool,
     hovered: bool,
     tilt: (f32, f32),
 }
@@ -639,7 +680,6 @@ impl StageTargets {
     fn of(kind: ControlKind, memory: CardMemory) -> Self {
         Self {
             value: memory.control.scene_value(kind),
-            pressed: memory.pressed,
             hovered: memory.hovered,
             tilt: if memory.hovered {
                 memory.tilt
@@ -664,7 +704,7 @@ impl StageAnimation {
         StageUniforms {
             kind: kind.scene_index(),
             value: self.value.value(),
-            press: self.press.value(),
+            press: self.press.value().clamp(0.0, 1.0),
             hover: self.hover.value(),
             dark: if dark { 1.0 } else { 0.0 },
             tilt_yaw: self.yaw.value(),
@@ -675,15 +715,11 @@ impl StageAnimation {
 }
 
 #[composable]
-fn stageAnimation(kind: ControlKind, targets: StageTargets) -> StageAnimation {
+fn stageAnimation(kind: ControlKind, targets: StageTargets, press: State<f32>) -> StageAnimation {
     let settle = spring(Spring::DampingRatioNoBouncy, Spring::StiffnessLow);
     StageAnimation {
         value: animateFloatAsState(targets.value, kind.value_animation(), "controls_value"),
-        press: animateFloatAsState(
-            if targets.pressed { 1.0 } else { 0.0 },
-            spring(Spring::DampingRatioNoBouncy, Spring::StiffnessHigh),
-            "controls_press",
-        ),
+        press,
         hover: animateFloatAsState(
             if targets.hovered { 1.0 } else { 0.0 },
             spring(Spring::DampingRatioNoBouncy, Spring::StiffnessMediumLow),
@@ -701,8 +737,13 @@ fn ControlCard(kind: ControlKind, dark: bool, modifier: Modifier) {
         memory: rememberMutableStateOf(move || CardMemory::initial(kind)),
     };
     let tracking = remember(|| Cell::new(DragTracking::default()));
+    let depth = remember_press_depth();
     let memory = input.read();
-    let animation = stageAnimation(kind, StageTargets::of(kind, memory));
+    let animation = stageAnimation(
+        kind,
+        StageTargets::of(kind, memory),
+        depth.with(|animatable| animatable.state()),
+    );
     let background = card_color(dark);
 
     Column(
@@ -714,6 +755,7 @@ fn ControlCard(kind: ControlKind, dark: bool, modifier: Modifier) {
         ColumnSpec::default(),
         move || {
             let tracking = tracking.clone();
+            let depth = depth.clone();
             Box(
                 Modifier::empty()
                     .fill_max_width()
@@ -727,13 +769,15 @@ fn ControlCard(kind: ControlKind, dark: bool, modifier: Modifier) {
                     })
                     .pointer_input((), move |scope: PointerInputScope| {
                         let tracking = tracking.clone();
+                        let depth = depth.clone();
                         async move {
                             scope
                                 .await_pointer_event_scope(|await_scope| async move {
                                     loop {
                                         let event = await_scope.await_pointer_event().await;
                                         let size = await_scope.size();
-                                        tracking.with(|cell| input.handle(&event, size, cell));
+                                        tracking
+                                            .with(|cell| input.handle(&event, size, cell, &depth));
                                     }
                                 })
                                 .await;
@@ -824,6 +868,26 @@ mod tests {
     }
 
     #[test]
+    fn a_press_snaps_down_so_a_click_inside_one_batch_still_shows() {
+        assert_eq!(press_response(PointerEventKind::Down), PressResponse::Snap);
+        assert_eq!(press_response(PointerEventKind::Up), PressResponse::Release);
+        assert_eq!(
+            press_response(PointerEventKind::Cancel),
+            PressResponse::Release
+        );
+        assert_eq!(
+            press_response(PointerEventKind::Exit),
+            PressResponse::Release
+        );
+        assert_eq!(press_response(PointerEventKind::Move), PressResponse::Hold);
+        assert_eq!(press_response(PointerEventKind::Enter), PressResponse::Hold);
+        assert_eq!(
+            press_response(PointerEventKind::Scroll),
+            PressResponse::Hold
+        );
+    }
+
+    #[test]
     fn grid_columns_narrow_to_one_and_assume_wide_before_the_first_layout() {
         assert_eq!(grid_columns(0.0), 3);
         assert_eq!(grid_columns(1200.0), 3);
@@ -877,7 +941,6 @@ mod tests {
                 presses: 4,
             },
             hovered: true,
-            pressed: true,
             tilt: (0.2, 0.1),
         };
         assert_eq!(slider.for_kind(ControlKind::Slider), slider);
