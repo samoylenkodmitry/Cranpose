@@ -291,6 +291,57 @@ fn staged_page(with_glasses: bool) -> RenderGraph {
 }
 
 #[test]
+fn batched_shader_fragment_positions_match_the_parent_target() {
+    let mut renderer = support::headless_renderer().expect("headless WGPU init failed");
+    let mut shader = RuntimeShader::new(&format!(
+        "{RUNTIME_SHADER_PRELUDE_WGSL}\n\
+         @fragment fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {{\n\
+             return vec4<f32>(input.position.x / {FRAME_WIDTH}.0, input.position.y / {FRAME_HEIGHT}.0, 0.0, 1.0);\n\
+         }}",
+    ));
+    shader.set_batched_source(true);
+    let layer = shared_test_support::layer_node(
+        rect(0.0, 0.0, GLASS.width, GLASS.height),
+        ProjectiveTransform::translation(GLASS.x, GLASS.y),
+        GraphicsLayer {
+            backdrop_effect: Some(RenderEffect::runtime_shader(shader)),
+            ..GraphicsLayer::default()
+        },
+        Vec::new(),
+    );
+    let frame = capture(
+        &mut renderer,
+        support::page_graph(
+            FRAME_WIDTH,
+            FRAME_HEIGHT,
+            vec![
+                solid_rect(
+                    rect(0.0, 0.0, FRAME_WIDTH as f32, FRAME_HEIGHT as f32),
+                    Color::BLACK,
+                ),
+                RenderNode::Layer(Box::new(layer)),
+            ],
+        ),
+    );
+    for (x, y) in [(90, 40), (120, 60), (160, 80)] {
+        let expected = [
+            (((x as f32 + 0.5) / FRAME_WIDTH as f32) * 255.0).round() as u8,
+            (((y as f32 + 0.5) / FRAME_HEIGHT as f32) * 255.0).round() as u8,
+            0,
+            255,
+        ];
+        let actual = region_pixels(&frame, rect(x as f32, y as f32, 1.0, 1.0));
+        assert!(
+            actual
+                .iter()
+                .zip(expected)
+                .all(|(actual, expected)| actual.abs_diff(expected) <= 1),
+            "fragment position at ({x}, {y}) must remain relative to the parent target: expected {expected:?}, actual {actual:?}",
+        );
+    }
+}
+
+#[test]
 fn overlapping_capture_stages_preserve_translucent_draw_order() {
     let mut renderer = support::headless_renderer().expect("headless WGPU init failed");
     let bounds = [GLASS, SECOND_GLASS, rect(40.0, 35.0, 150.0, 65.0)];
