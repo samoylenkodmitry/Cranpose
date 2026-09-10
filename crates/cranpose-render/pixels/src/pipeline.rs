@@ -1061,7 +1061,7 @@ pub(crate) fn push_draw_primitive(
 
         fn push_shadow(
             &mut self,
-            shadow_primitive: cranpose_ui_graphics::ShadowPrimitive,
+            shadow_primitive: &cranpose_ui_graphics::ShadowPrimitive,
             layer_bounds: Rect,
             layer: &GraphicsLayer,
             clip: Option<Rect>,
@@ -1097,14 +1097,14 @@ pub(crate) fn push_draw_primitive(
 }
 
 fn push_shadow_primitive(
-    shadow_prim: cranpose_ui_graphics::ShadowPrimitive,
+    shadow_prim: &cranpose_ui_graphics::ShadowPrimitive,
     layer_bounds: Rect,
     layer: &GraphicsLayer,
     clip: Option<Rect>,
     scene: &mut RasterScene,
 ) {
     fn shape_pair_for_primitive(
-        prim: DrawPrimitive,
+        prim: &DrawPrimitive,
         layer_bounds: Rect,
         layer: &GraphicsLayer,
         blend_mode: BlendMode,
@@ -1135,14 +1135,14 @@ fn push_shadow_primitive(
             blend_mode,
         } => {
             let Some(shape_pair) =
-                shape_pair_for_primitive(*shape, layer_bounds, layer, blend_mode)
+                shape_pair_for_primitive(shape, layer_bounds, layer, *blend_mode)
             else {
                 return;
             };
             let cutout_pair = match cutout {
                 Some(cutout) => {
                     let Some(pair) =
-                        shape_pair_for_primitive(*cutout, layer_bounds, layer, BlendMode::DstOut)
+                        shape_pair_for_primitive(cutout, layer_bounds, layer, BlendMode::DstOut)
                     else {
                         return;
                     };
@@ -1151,7 +1151,7 @@ fn push_shadow_primitive(
                 None => None,
             };
             let Some(cutout_pair) = cutout_pair else {
-                push_blurred_shape_samples(scene, &shape_pair.0, shape_pair.1, clip, blur_radius);
+                push_blurred_shape_samples(scene, &shape_pair.0, shape_pair.1, clip, *blur_radius);
                 return;
             };
             let samples = blur_samples(blur_radius.max(1.0));
@@ -1196,12 +1196,12 @@ fn push_shadow_primitive(
             blend_mode,
             clip_rect,
         } => {
-            let Some(fill_pair) = shape_pair_for_primitive(*fill, layer_bounds, layer, blend_mode)
+            let Some(fill_pair) = shape_pair_for_primitive(fill, layer_bounds, layer, *blend_mode)
             else {
                 return;
             };
             let Some(cutout_pair) =
-                shape_pair_for_primitive(*cutout, layer_bounds, layer, BlendMode::DstOut)
+                shape_pair_for_primitive(cutout, layer_bounds, layer, BlendMode::DstOut)
             else {
                 return;
             };
@@ -2136,7 +2136,7 @@ mod tests {
         };
 
         push_shadow_primitive(
-            cranpose_ui_graphics::ShadowPrimitive::Drop {
+            &cranpose_ui_graphics::ShadowPrimitive::Drop {
                 shape: Box::new(DrawPrimitive::Rect {
                     rect: Rect {
                         x: 2.0,
@@ -2174,7 +2174,7 @@ mod tests {
         };
 
         push_shadow_primitive(
-            cranpose_ui_graphics::ShadowPrimitive::Inner {
+            &cranpose_ui_graphics::ShadowPrimitive::Inner {
                 fill: Box::new(DrawPrimitive::Rect {
                     rect: Rect {
                         x: 0.0,

@@ -97,7 +97,7 @@ pub(crate) fn apply_draw_commands(
                 );
             }
             DrawPrimitive::Shadow(shadow_prim) => {
-                super::push_shadow_primitive(shadow_prim, layer_bounds, layer, clip, None, scene);
+                super::push_shadow_primitive(&shadow_prim, layer_bounds, layer, clip, None, scene);
             }
         }
     }
