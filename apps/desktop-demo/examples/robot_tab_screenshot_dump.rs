@@ -84,33 +84,7 @@ fn dump_tab(robot: &cranpose::Robot, tab: DemoTab, shot_dir: &Path) {
 }
 
 fn tab_slug(tab: DemoTab) -> &'static str {
-    match tab {
-        DemoTab::Counter => "counter",
-        DemoTab::CompositionLocal => "composition-local",
-        DemoTab::Async => "async",
-        DemoTab::Animations => "animations",
-        DemoTab::InteractiveAnim => "interactive-anim",
-        DemoTab::WebFetch => "web-fetch",
-        DemoTab::TextInput => "text-input",
-        DemoTab::Layout => "layout",
-        DemoTab::ModifierShowcase => "modifier-showcase",
-        DemoTab::LazyList => "lazy-list",
-        DemoTab::Mineswapper2 => "mineswapper2",
-        DemoTab::HackerNews => "hacker-news",
-        DemoTab::Images => "images",
-        DemoTab::Text => "text",
-        DemoTab::Winamp => "winamp",
-        DemoTab::Xkcd => "xkcd",
-        DemoTab::Shaders => "shaders",
-        DemoTab::ShaderRect => "shader-rect",
-        DemoTab::MarkdownViewer => "markdown-viewer",
-        DemoTab::Liquid => "liquid-ui",
-        DemoTab::GlassFeed => "glass-feed",
-        DemoTab::FilePicker => "file-picker",
-        DemoTab::Rotary => "rotary",
-        DemoTab::RecompositionLab => "recomposition-lab",
-        DemoTab::Wear => "wear-watch",
-    }
+    tab.slug()
 }
 
 fn set_tab_hook(name: String, argument: String) -> Result<Option<String>, String> {

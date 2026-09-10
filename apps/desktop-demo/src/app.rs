@@ -22,6 +22,7 @@ use cranpose_ui::{
 };
 
 mod animations;
+mod controls_ui;
 mod glass_feed;
 mod hacker_news;
 mod images;
@@ -43,6 +44,7 @@ mod winamp;
 mod xkcd;
 
 use animations::AnimationsTab;
+use controls_ui::ControlsUiTab;
 use glass_feed::GlassFeedTab;
 pub use glass_feed::GLASS_FEED_LIST_TAG;
 pub use hacker_news::HACKER_NEWS_SCROLL_STABILITY_TARGET_TITLE;
@@ -109,6 +111,7 @@ pub enum DemoTab {
     Xkcd,
     Shaders,
     ShaderRect,
+    Controls,
     Liquid,
     GlassFeed,
     MarkdownViewer,
@@ -119,35 +122,227 @@ pub enum DemoTab {
 
 pub const DESKTOP_INITIAL_TAB: DemoTab = DemoTab::HackerNews;
 
+/// Everything the demo shell needs to know about one tab besides how to draw
+/// it: the tab bar's label, the robot runners' slug, the source file the "view
+/// source" pane fetches, and the names a startup request may use.
+pub struct DemoTabInfo {
+    pub tab: DemoTab,
+    pub label: &'static str,
+    pub slug: &'static str,
+    pub source_path: &'static str,
+    pub startup_aliases: &'static [&'static str],
+}
+
+pub const DEMO_TAB_INFO: [DemoTabInfo; 26] = [
+    DemoTabInfo {
+        tab: DemoTab::Counter,
+        label: "Counter App",
+        slug: "counter",
+        source_path: "apps/desktop-demo/src/app.rs",
+        startup_aliases: &["counter", "counterapp"],
+    },
+    DemoTabInfo {
+        tab: DemoTab::CompositionLocal,
+        label: "CompositionLocal Test",
+        slug: "composition-local",
+        source_path: "apps/desktop-demo/src/app.rs",
+        startup_aliases: &["compositionlocal", "compositionlocaltest"],
+    },
+    DemoTabInfo {
+        tab: DemoTab::Async,
+        label: "Async Runtime",
+        slug: "async",
+        source_path: "apps/desktop-demo/src/app.rs",
+        startup_aliases: &["async", "asyncruntime"],
+    },
+    DemoTabInfo {
+        tab: DemoTab::Animations,
+        label: "Animations",
+        slug: "animations",
+        source_path: "apps/desktop-demo/src/app/animations.rs",
+        startup_aliases: &["animations"],
+    },
+    DemoTabInfo {
+        tab: DemoTab::InteractiveAnim,
+        label: "Interactive Anim",
+        slug: "interactive-anim",
+        source_path: "apps/desktop-demo/src/app/interactive_anim.rs",
+        startup_aliases: &[
+            "interactiveanim",
+            "interactiveanimation",
+            "interactiveanimations",
+        ],
+    },
+    DemoTabInfo {
+        tab: DemoTab::WebFetch,
+        label: "Web Fetch",
+        slug: "web-fetch",
+        source_path: "apps/desktop-demo/src/app/web_fetch.rs",
+        startup_aliases: &["webfetch"],
+    },
+    DemoTabInfo {
+        tab: DemoTab::TextInput,
+        label: "Text Input",
+        slug: "text-input",
+        source_path: "apps/desktop-demo/src/app.rs",
+        startup_aliases: &["textinput"],
+    },
+    DemoTabInfo {
+        tab: DemoTab::Layout,
+        label: "Recursive Layout",
+        slug: "layout",
+        source_path: "apps/desktop-demo/src/app.rs",
+        startup_aliases: &["layout", "recursivelayout"],
+    },
+    DemoTabInfo {
+        tab: DemoTab::ModifierShowcase,
+        label: "Modifiers Showcase",
+        slug: "modifier-showcase",
+        source_path: "apps/desktop-demo/src/app.rs",
+        startup_aliases: &["modifiers", "modifiersshowcase", "modifiershowcase"],
+    },
+    DemoTabInfo {
+        tab: DemoTab::LazyList,
+        label: "Lazy List",
+        slug: "lazy-list",
+        source_path: "apps/desktop-demo/src/app/lazy_list.rs",
+        startup_aliases: &["lazylist"],
+    },
+    DemoTabInfo {
+        tab: DemoTab::Mineswapper2,
+        label: "Mineswapper2",
+        slug: "mineswapper2",
+        source_path: "apps/desktop-demo/src/app/mineswapper2.rs",
+        startup_aliases: &["mineswapper2"],
+    },
+    DemoTabInfo {
+        tab: DemoTab::RecompositionLab,
+        label: "Recomposition Lab",
+        slug: "recomposition-lab",
+        source_path: "apps/desktop-demo/src/app/recomposition_lab.rs",
+        startup_aliases: &["recompositionlab"],
+    },
+    DemoTabInfo {
+        tab: DemoTab::HackerNews,
+        label: "Hacker News",
+        slug: "hacker-news",
+        source_path: "apps/desktop-demo/src/app/hacker_news.rs",
+        startup_aliases: &["hackernews"],
+    },
+    DemoTabInfo {
+        tab: DemoTab::Images,
+        label: "Images",
+        slug: "images",
+        source_path: "apps/desktop-demo/src/app/images.rs",
+        startup_aliases: &["images"],
+    },
+    DemoTabInfo {
+        tab: DemoTab::Text,
+        label: "Text",
+        slug: "text",
+        source_path: "apps/desktop-demo/src/app/text_showcase.rs",
+        startup_aliases: &["text"],
+    },
+    DemoTabInfo {
+        tab: DemoTab::Winamp,
+        label: "Winamp",
+        slug: "winamp",
+        source_path: "apps/desktop-demo/src/app/winamp/mod.rs",
+        startup_aliases: &["winamp"],
+    },
+    DemoTabInfo {
+        tab: DemoTab::Xkcd,
+        label: "XKCD",
+        slug: "xkcd",
+        source_path: "apps/desktop-demo/src/app/xkcd.rs",
+        startup_aliases: &["xkcd"],
+    },
+    DemoTabInfo {
+        tab: DemoTab::Shaders,
+        label: "Shaders",
+        slug: "shaders",
+        source_path: "apps/desktop-demo/src/app/shaders.rs",
+        startup_aliases: &["shaders"],
+    },
+    DemoTabInfo {
+        tab: DemoTab::ShaderRect,
+        label: "Shader Rect",
+        slug: "shader-rect",
+        source_path: "apps/desktop-demo/src/app/shader_rect.rs",
+        startup_aliases: &["shaderrect"],
+    },
+    DemoTabInfo {
+        tab: DemoTab::Controls,
+        label: "Controls UI",
+        slug: "controls-ui",
+        source_path: "apps/desktop-demo/src/app/controls_ui.rs",
+        startup_aliases: &["controls", "controlsui"],
+    },
+    DemoTabInfo {
+        tab: DemoTab::Liquid,
+        label: "Liquid UI",
+        slug: "liquid-ui",
+        source_path: "apps/desktop-demo/src/app/liquid_ui.rs",
+        startup_aliases: &["liquid", "liquidui"],
+    },
+    DemoTabInfo {
+        tab: DemoTab::GlassFeed,
+        label: "Receipts",
+        slug: "glass-feed",
+        source_path: "apps/desktop-demo/src/app/glass_feed.rs",
+        startup_aliases: &["glassfeed", "receipts"],
+    },
+    DemoTabInfo {
+        tab: DemoTab::MarkdownViewer,
+        label: "Markdown",
+        slug: "markdown-viewer",
+        source_path: "apps/desktop-demo/src/app/markdown.rs",
+        startup_aliases: &["markdown", "markdownviewer"],
+    },
+    DemoTabInfo {
+        tab: DemoTab::FilePicker,
+        label: "File Picker",
+        slug: "file-picker",
+        source_path: "apps/desktop-demo/src/app.rs",
+        startup_aliases: &[],
+    },
+    DemoTabInfo {
+        tab: DemoTab::Rotary,
+        label: "Rotary Input",
+        slug: "rotary",
+        source_path: "apps/desktop-demo/src/app/rotary.rs",
+        startup_aliases: &[],
+    },
+    DemoTabInfo {
+        tab: DemoTab::Wear,
+        label: "Wear (watch)",
+        slug: "wear-watch",
+        source_path: "apps/desktop-demo/src/app/wear.rs",
+        startup_aliases: &[],
+    },
+];
+
 impl DemoTab {
+    fn info(self) -> &'static DemoTabInfo {
+        DEMO_TAB_INFO
+            .iter()
+            .find(|info| info.tab == self)
+            .expect("every DemoTab needs a DEMO_TAB_INFO row")
+    }
+
     pub fn label(self) -> &'static str {
-        match self {
-            DemoTab::Counter => "Counter App",
-            DemoTab::CompositionLocal => "CompositionLocal Test",
-            DemoTab::Async => "Async Runtime",
-            DemoTab::Animations => "Animations",
-            DemoTab::InteractiveAnim => "Interactive Anim",
-            DemoTab::WebFetch => "Web Fetch",
-            DemoTab::TextInput => "Text Input",
-            DemoTab::Layout => "Recursive Layout",
-            DemoTab::ModifierShowcase => "Modifiers Showcase",
-            DemoTab::LazyList => "Lazy List",
-            DemoTab::Mineswapper2 => "Mineswapper2",
-            DemoTab::RecompositionLab => "Recomposition Lab",
-            DemoTab::HackerNews => "Hacker News",
-            DemoTab::Images => "Images",
-            DemoTab::Text => "Text",
-            DemoTab::Winamp => "Winamp",
-            DemoTab::Xkcd => "XKCD",
-            DemoTab::Shaders => "Shaders",
-            DemoTab::ShaderRect => "Shader Rect",
-            DemoTab::Liquid => "Liquid UI",
-            DemoTab::GlassFeed => "Receipts",
-            DemoTab::MarkdownViewer => "Markdown",
-            DemoTab::FilePicker => "File Picker",
-            DemoTab::Rotary => "Rotary Input",
-            DemoTab::Wear => "Wear (watch)",
-        }
+        self.info().label
+    }
+
+    /// The stable identifier robot runners and screenshot dumps address this
+    /// tab by.
+    pub fn slug(self) -> &'static str {
+        self.info().slug
+    }
+
+    /// The repository path of the file that implements this tab.
+    pub fn source_path(self) -> &'static str {
+        self.info().source_path
     }
 
     #[cfg(any(test, target_arch = "wasm32"))]
@@ -157,37 +352,14 @@ impl DemoTab {
             .filter(|ch| ch.is_ascii_alphanumeric())
             .map(|ch| ch.to_ascii_lowercase())
             .collect::<String>();
-        match normalized.as_str() {
-            "counter" | "counterapp" => Some(Self::Counter),
-            "compositionlocal" | "compositionlocaltest" => Some(Self::CompositionLocal),
-            "async" | "asyncruntime" => Some(Self::Async),
-            "animations" => Some(Self::Animations),
-            "interactiveanim" | "interactiveanimation" | "interactiveanimations" => {
-                Some(Self::InteractiveAnim)
-            }
-            "webfetch" => Some(Self::WebFetch),
-            "textinput" => Some(Self::TextInput),
-            "layout" | "recursivelayout" => Some(Self::Layout),
-            "modifiers" | "modifiersshowcase" | "modifiershowcase" => Some(Self::ModifierShowcase),
-            "lazylist" => Some(Self::LazyList),
-            "mineswapper2" => Some(Self::Mineswapper2),
-            "recompositionlab" => Some(Self::RecompositionLab),
-            "hackernews" => Some(Self::HackerNews),
-            "images" => Some(Self::Images),
-            "text" => Some(Self::Text),
-            "winamp" => Some(Self::Winamp),
-            "xkcd" => Some(Self::Xkcd),
-            "shaders" => Some(Self::Shaders),
-            "shaderrect" => Some(Self::ShaderRect),
-            "markdown" | "markdownviewer" => Some(Self::MarkdownViewer),
-            "liquid" | "liquidui" => Some(Self::Liquid),
-            "glassfeed" | "receipts" => Some(Self::GlassFeed),
-            _ => None,
-        }
+        DEMO_TAB_INFO
+            .iter()
+            .find(|info| info.startup_aliases.contains(&normalized.as_str()))
+            .map(|info| info.tab)
     }
 }
 
-pub const DEMO_TABS: [DemoTab; 25] = [
+pub const DEMO_TABS: [DemoTab; 26] = [
     DemoTab::Counter,
     DemoTab::Liquid,
     DemoTab::CompositionLocal,
@@ -207,6 +379,7 @@ pub const DEMO_TABS: [DemoTab; 25] = [
     DemoTab::Xkcd,
     DemoTab::Shaders,
     DemoTab::ShaderRect,
+    DemoTab::Controls,
     DemoTab::MarkdownViewer,
     DemoTab::InteractiveAnim,
     DemoTab::FilePicker,
@@ -645,6 +818,14 @@ pub fn combined_app_with_startup(startup: StartupSelection) {
     );
 }
 
+/// The controls tab on its own, for tests that drive its cards without the
+/// demo shell's tab bar around them.
+#[allow(non_snake_case)]
+#[composable]
+pub fn ControlsUiRobotApp() {
+    ControlsUiTab();
+}
+
 #[allow(non_snake_case)]
 #[composable]
 pub fn MarkdownViewerRobotApp() {
@@ -702,6 +883,30 @@ fn render_active_tab(active: DemoTab, startup: StartupSelection, winamp_tab_stat
         DemoTab::LazyList => lazy_list_example(),
         DemoTab::Mineswapper2 => mineswapper2::mineswapper2_tab(),
         DemoTab::RecompositionLab => RecompositionLabTab(),
+        DemoTab::FilePicker => file_picker_tab(),
+        DemoTab::Rotary => rotary_tab(),
+        DemoTab::Wear => wear::wear_tab(),
+        DemoTab::HackerNews
+        | DemoTab::Images
+        | DemoTab::Text
+        | DemoTab::Winamp
+        | DemoTab::Xkcd
+        | DemoTab::Shaders
+        | DemoTab::ShaderRect
+        | DemoTab::Controls
+        | DemoTab::MarkdownViewer
+        | DemoTab::Liquid
+        | DemoTab::GlassFeed => render_showcase_tab(active, startup, winamp_tab_state),
+    }
+}
+
+#[composable]
+fn render_showcase_tab(
+    active: DemoTab,
+    startup: StartupSelection,
+    winamp_tab_state: WinampTabState,
+) {
+    match active {
         DemoTab::HackerNews => HackerNewsTab(),
         DemoTab::Images => images_tab(),
         DemoTab::Text => TextShowcaseTab(),
@@ -709,12 +914,25 @@ fn render_active_tab(active: DemoTab, startup: StartupSelection, winamp_tab_stat
         DemoTab::Xkcd => xkcd_tab(),
         DemoTab::Shaders => ShadersTab(startup.initial_shader_section),
         DemoTab::ShaderRect => ShaderRectTab(),
+        DemoTab::Controls => ControlsUiTab(),
         DemoTab::MarkdownViewer => markdown_viewer_tab(),
-        DemoTab::FilePicker => file_picker_tab(),
-        DemoTab::Rotary => rotary_tab(),
-        DemoTab::Wear => wear::wear_tab(),
         DemoTab::Liquid => LiquidUiTab(),
         DemoTab::GlassFeed => GlassFeedTab(),
+        DemoTab::Counter
+        | DemoTab::CompositionLocal
+        | DemoTab::Async
+        | DemoTab::Animations
+        | DemoTab::InteractiveAnim
+        | DemoTab::WebFetch
+        | DemoTab::TextInput
+        | DemoTab::Layout
+        | DemoTab::ModifierShowcase
+        | DemoTab::LazyList
+        | DemoTab::Mineswapper2
+        | DemoTab::RecompositionLab
+        | DemoTab::FilePicker
+        | DemoTab::Rotary
+        | DemoTab::Wear => {}
     }
 }
 
