@@ -194,7 +194,7 @@ impl HitGraphSink for TouchBoundsSink<'_> {
         &mut self,
         node_id: NodeId,
         _capture_path: &[NodeId],
-        geometry: HitGeometry,
+        geometry: HitGeometry<'_>,
         _shape: Option<RoundedCornerShape>,
         _click_actions: &[Rc<dyn Fn(Point)>],
         _pointer_inputs: &[Rc<dyn Fn(PointerEvent)>],

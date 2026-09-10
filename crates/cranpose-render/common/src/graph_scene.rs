@@ -72,14 +72,15 @@ pub struct HitClip {
     pub bounds: Rect,
 }
 
-#[derive(Clone)]
-pub struct HitGeometry {
+/// Geometry for a hit target, borrowing the clip chain until the sink records it.
+#[derive(Clone, Copy)]
+pub struct HitGeometry<'a> {
     pub rect: Rect,
     pub quad: [[f32; 2]; 4],
     pub local_bounds: Rect,
     pub world_to_local: ProjectiveTransform,
     pub hit_clip_bounds: Option<Rect>,
-    pub hit_clips: Vec<HitClip>,
+    pub hit_clips: &'a [HitClip],
 }
 
 #[derive(Clone)]
@@ -99,10 +100,11 @@ pub struct HitRegion {
     diagnostics: Rc<RenderDiagnostics>,
 }
 
-struct HitRegionInit {
+struct HitRegionInit<'a> {
     node_id: NodeId,
     capture_path: Vec<NodeId>,
-    geometry: HitGeometry,
+    geometry: HitGeometry<'a>,
+    clip_buffer: Vec<HitClip>,
     shape: Option<RoundedCornerShape>,
     click_actions: Vec<ClickAction>,
     pointer_inputs: Vec<Rc<dyn Fn(PointerEvent)>>,
@@ -110,7 +112,7 @@ struct HitRegionInit {
     diagnostics: Rc<RenderDiagnostics>,
 }
 
-impl Default for HitRegionInit {
+impl Default for HitRegionInit<'_> {
     fn default() -> Self {
         Self {
             node_id: 0,
@@ -131,8 +133,9 @@ impl Default for HitRegionInit {
                 },
                 world_to_local: ProjectiveTransform::identity(),
                 hit_clip_bounds: None,
-                hit_clips: Vec::new(),
+                hit_clips: &[],
             },
+            clip_buffer: Vec::new(),
             shape: None,
             click_actions: Vec::new(),
             pointer_inputs: Vec::new(),
@@ -143,11 +146,12 @@ impl Default for HitRegionInit {
 }
 
 impl HitRegion {
-    fn with_diagnostics(init: HitRegionInit) -> Self {
+    fn with_diagnostics(init: HitRegionInit<'_>) -> Self {
         let HitRegionInit {
             node_id,
             capture_path,
             geometry,
+            clip_buffer: mut hit_clips,
             shape,
             click_actions,
             pointer_inputs,
@@ -160,8 +164,9 @@ impl HitRegion {
             local_bounds,
             world_to_local,
             hit_clip_bounds,
-            hit_clips,
+            hit_clips: clips,
         } = geometry;
+        hit_clips.extend_from_slice(clips);
         Self {
             node_id,
             capture_path,
@@ -316,6 +321,7 @@ impl HitTestTarget for HitRegion {
 
 #[derive(Default)]
 struct HitBuffers {
+    hit_clips: Vec<HitClip>,
     capture_path: Vec<NodeId>,
     click_actions: Vec<ClickAction>,
     pointer_inputs: Vec<Rc<dyn Fn(PointerEvent)>>,
@@ -351,7 +357,7 @@ impl Scene {
         &mut self,
         node_id: NodeId,
         capture_path: &[NodeId],
-        geometry: HitGeometry,
+        geometry: HitGeometry<'_>,
         shape: Option<RoundedCornerShape>,
         click_actions: impl IntoIterator<Item = ClickAction>,
         pointer_inputs: &[Rc<dyn Fn(PointerEvent)>],
@@ -372,6 +378,7 @@ impl Scene {
             node_id,
             capture_path: buffers.capture_path,
             geometry,
+            clip_buffer: buffers.hit_clips,
             shape,
             click_actions: buffers.click_actions,
             pointer_inputs: buffers.pointer_inputs,
@@ -386,10 +393,12 @@ impl Scene {
         self.hit_buffers.clear();
         for hit in self.hits.drain(..) {
             let mut buffers = HitBuffers {
+                hit_clips: hit.hit_clips,
                 capture_path: hit.capture_path,
                 click_actions: hit.click_actions,
                 pointer_inputs: hit.pointer_inputs,
             };
+            buffers.hit_clips.clear();
             buffers.capture_path.clear();
             buffers.click_actions.clear();
             buffers.pointer_inputs.clear();
@@ -535,14 +544,14 @@ mod tests {
         }
     }
 
-    fn hit_geometry_for_rect(rect: Rect) -> HitGeometry {
+    fn hit_geometry_for_rect(rect: Rect) -> HitGeometry<'static> {
         HitGeometry {
             rect,
             quad: rect_to_quad(rect),
             local_bounds: local_bounds_for_rect(rect),
             world_to_local: translated_world_to_local(rect),
             hit_clip_bounds: None,
-            hit_clips: Vec::new(),
+            hit_clips: &[],
         }
     }
 
@@ -627,6 +636,60 @@ mod tests {
     }
 
     #[test]
+    fn rebuilding_clip_buffers_replaces_clips_without_changing_captured_targets() {
+        let mut scene = Scene::new();
+        let rect = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 100.0,
+            height: 100.0,
+        };
+        let left = Rect {
+            width: 50.0,
+            ..rect
+        };
+        let right = Rect {
+            x: 50.0,
+            width: 50.0,
+            ..rect
+        };
+        let clip = |bounds| HitClip {
+            quad: rect_to_quad(bounds),
+            bounds,
+        };
+        let handler = make_handler(Rc::new(Cell::new(0)), false);
+        let push = |scene: &mut Scene, clips: &[HitClip]| {
+            scene.push_hit(
+                1,
+                &[1],
+                HitGeometry {
+                    hit_clips: clips,
+                    ..hit_geometry_for_rect(rect)
+                },
+                None,
+                [],
+                &[Rc::clone(&handler)],
+            );
+        };
+        push(&mut scene, &[clip(left)]);
+        let captured = scene.find_target(1).unwrap();
+        let storage = scene.hits[0].hit_clips.as_ptr();
+        assert!(captured.contains(25.0, 25.0));
+        assert!(!captured.contains(75.0, 25.0));
+        scene.clear_hits();
+        push(&mut scene, &[clip(right)]);
+        assert_eq!(scene.hits[0].hit_clips.as_ptr(), storage);
+        assert!(scene.hit_test(25.0, 25.0).is_empty());
+        assert_eq!(scene.hit_test(75.0, 25.0).len(), 1);
+        assert!(captured.contains(25.0, 25.0));
+        assert!(!captured.contains(75.0, 25.0));
+        scene.clear_hits();
+        push(&mut scene, &[]);
+        assert_eq!(scene.hit_test(25.0, 25.0).len(), 1);
+        assert_eq!(scene.hit_test(75.0, 25.0).len(), 1);
+    }
+
+    #[test]
     fn hit_test_respects_hit_clip() {
         let mut scene = Scene::new();
         let rect = Rect {
@@ -646,7 +709,7 @@ mod tests {
             &[1],
             HitGeometry {
                 hit_clip_bounds: Some(clip),
-                hit_clips: vec![HitClip {
+                hit_clips: &[HitClip {
                     quad: rect_to_quad(clip),
                     bounds: clip,
                 }],
@@ -960,7 +1023,7 @@ mod tests {
                 local_bounds: rect,
                 world_to_local,
                 hit_clip_bounds: None,
-                hit_clips: Vec::new(),
+                hit_clips: &[],
             },
             None,
             Vec::new(),
@@ -1005,7 +1068,7 @@ mod tests {
                 local_bounds,
                 world_to_local,
                 hit_clip_bounds: None,
-                hit_clips: Vec::new(),
+                hit_clips: &[],
             },
             click_actions: vec![click_action],
             ..Default::default()

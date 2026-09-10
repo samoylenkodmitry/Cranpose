@@ -1,23 +1,22 @@
 pub mod tab_switch_regression_support;
 
-use std::{rc::Rc, time::Duration};
+use std::time::Duration;
 
 use cranpose_animation::{animateFloatAsState, tween, Easing};
 use cranpose_app_shell::AppShell;
 use cranpose_core::{location_key, MutableState};
-use cranpose_foundation::PointerEvent;
 use cranpose_macros::composable;
 use cranpose_render_common::{
     graph::{LayerNode, ProjectiveTransform, RenderNode},
-    graph_scene::{ClickAction, HitGeometry, Scene},
-    hit_graph::{collect_hits_from_graph, HitGraphSink},
+    graph_scene::Scene,
+    hit_graph::collect_hits_from_graph,
     RenderScene, Renderer,
 };
 use cranpose_ui::{
     Button, ButtonSpec, LayoutTree, Modifier, SemanticsAction, SemanticsNode, SemanticsRole, Size,
     Text, TextStyle,
 };
-use cranpose_ui_graphics::{Point, Rect, RoundedCornerShape};
+use cranpose_ui_graphics::Rect;
 use desktop_app::app::{
     combined_app, DemoTab, TEST_ACTIVE_TAB_STATE, TEST_COUNTER_APP_COUNTER_STATE,
     TEST_LAZY_LIST_STATE, TEST_RECURSIVE_LAYOUT_DEPTH_STATE,
@@ -29,45 +28,15 @@ struct HitGraphRenderer {
     scene: Scene,
 }
 
-struct SceneHitSink<'a> {
-    scene: &'a mut Scene,
-}
-
-impl HitGraphSink for SceneHitSink<'_> {
-    fn push_hit(
-        &mut self,
-        node_id: cranpose_core::NodeId,
-        capture_path: &[cranpose_core::NodeId],
-        geometry: HitGeometry,
-        shape: Option<RoundedCornerShape>,
-        click_actions: &[Rc<dyn Fn(Point)>],
-        pointer_inputs: &[Rc<dyn Fn(PointerEvent)>],
-    ) {
-        self.scene.push_hit(
-            node_id,
-            capture_path.to_vec(),
-            geometry,
-            shape,
-            click_actions
-                .iter()
-                .cloned()
-                .map(ClickAction::WithPoint)
-                .collect(),
-            pointer_inputs.to_vec(),
-        );
-    }
-}
-
 fn collect_graph_hits(
     layer: &cranpose_render_common::graph::LayerNode,
     scene: &mut Scene,
     parent_hit_clip: Option<Rect>,
 ) {
-    let mut sink = SceneHitSink { scene };
     collect_hits_from_graph(
         layer,
         ProjectiveTransform::identity(),
-        &mut sink,
+        scene,
         parent_hit_clip,
     );
 }
