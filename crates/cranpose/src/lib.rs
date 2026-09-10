@@ -554,6 +554,12 @@ pub mod web;
     all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"),
     test
 ))]
+mod web_canvas_layout;
+
+#[cfg(any(
+    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"),
+    test
+))]
 mod web_surface_scale;
 
 #[cfg(any(
