@@ -1,4 +1,6 @@
-const TAPS: i32 = 4;
+const TAPS: i32 = 12;
+/// How wide the smear is allowed to grow, in pixels of the panel's own width.
+const MAX_RADIUS: f32 = 130.0;
 const WALLPAPER: f32 = 0.5;
 
 fn get_float(index: u32) -> f32 {
@@ -78,69 +80,43 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
         return vec4<f32>(wallpaper(vec2<f32>(origin + local.x * span, local.y)), 1.0);
     }
 
-    let bend = clamp(get_float(1u), 0.0, 1.0);
+    let squeeze = clamp(get_float(1u), 0.0, 1.0);
     let blur_px = get_float(2u);
     let dim = clamp(get_float(3u), 0.0, 1.0);
     let sheen = get_float(4u);
     let hinge_at_left = get_float(5u);
-    let cos_glass = get_float(6u);
-    let sin_glass = get_float(7u);
-    let camera_px = max(get_float(8u), 1.0);
-    let stay = clamp(get_float(9u), 0.0, 1.0);
-    let cos_flat = get_float(10u);
-    let sin_flat = get_float(11u);
+    let spread = max(get_float(6u), 1.0);
 
     // Distance from the hinge, where the panel is still square to the reader.
-    // The far edge has travelled the whole arc, so it carries the blur.
+    // The far edge has travelled the whole arc, so it carries the smear.
     var from_hinge = 1.0 - local.x;
     if (hinge_at_left >= 0.5) {
         from_hinge = local.x;
     }
 
-    // What the glass shows is not the screen turning with it. The picture goes
-    // on lying in the plane the device is held in, and the glass slides across
-    // it. So take where this fragment lands once the panel is turned and
-    // projected, and read the picture that belongs at that place on the plane
-    // the other half is still in. Undoing the fold this way is what makes the
-    // picture look like it is behind the glass instead of painted on it.
-    let along = from_hinge * size_px.x;
-    let nearer_glass = camera_px / max(camera_px - along * sin_glass, 1.0);
-    let lands = along * cos_glass * nearer_glass;
-    let along_flat = lands * camera_px / max(camera_px * cos_flat + lands * sin_flat, 1.0);
-    let nearer_flat = camera_px / max(camera_px - along_flat * sin_flat, 1.0);
-
-    var flat_local = vec2<f32>(
-        1.0 - along_flat / size_px.x,
-        0.5 + (local.y - 0.5) * nearer_glass / nearer_flat,
-    );
-    if (hinge_at_left >= 0.5) {
-        flat_local.x = along_flat / size_px.x;
-    }
-    let read_local = clamp(mix(local, flat_local, stay), vec2<f32>(0.0), vec2<f32>(1.0));
-    let read_uv = (effect_rect.xy + read_local * size_px) / tex_size;
-
-    let radius = blur_px * bend * pow(from_hinge, 1.3);
+    // The panel is folding away, so what it holds is being pressed into an
+    // ever narrower band. Widen the blur by as much as the panel is being
+    // pressed, so the smear stays the same width to the reader while the
+    // picture under it is squeezed out of legibility.
+    let radius = min(blur_px * squeeze * pow(from_hinge, 1.1) * spread, MAX_RADIUS);
     let step = vec2<f32>(radius / (f32(TAPS) * max(tex_size.x, 1.0)), 0.0);
     let low = (effect_rect.xy + vec2<f32>(0.5)) / tex_size;
     let high = (effect_rect.xy + effect_rect.zw - vec2<f32>(0.5)) / tex_size;
 
-    let centre = textureSample(input_texture, input_sampler, read_uv);
-    var sum = centre;
+    var sum = textureSample(input_texture, input_sampler, input.uv);
     for (var i = 1; i <= TAPS; i = i + 1) {
         let offset = step * f32(i);
         let falloff = exp(-2.2 * f32(i * i) / f32(TAPS * TAPS));
         sum = sum
-            + textureSample(input_texture, input_sampler, clamp(read_uv + offset, low, high))
+            + textureSample(input_texture, input_sampler, clamp(input.uv + offset, low, high))
                 * falloff
-            + textureSample(input_texture, input_sampler, clamp(read_uv - offset, low, high))
+            + textureSample(input_texture, input_sampler, clamp(input.uv - offset, low, high))
                 * falloff;
     }
-    // The panel's own shape decides what is covered; only the picture inside it
-    // is read from somewhere else. Taking the cover from this fragment and the
-    // colour from the taps keeps the rounded corners and the room around the
-    // panel out of it. Dividing the colour by the alpha the taps carry, rather
-    // than by their number, keeps the panel's edge crisp instead of dragging
-    // the room in over it.
+
+    // Average the colour the taps carry, not their number: dividing by the
+    // alpha they bring keeps the panel's own edge crisp instead of dragging
+    // the room in over it, and the panel's own cover decides what is covered.
     let here = textureSample(input_texture, input_sampler, input.uv);
     var colour = vec4<f32>(sum.rgb / max(sum.a, 1.0e-4) * here.a, here.a);
 
@@ -149,9 +125,17 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let shaded = 1.0 - dim * (0.18 + 0.82 * from_hinge);
     colour = vec4<f32>(colour.rgb * shaded, colour.a);
 
+    // Glass this near edge on scatters what comes through it, so the picture
+    // goes milky as it is pressed into the crease rather than simply dark.
+    let veil = clamp(get_float(7u) * squeeze * from_hinge, 0.0, 1.0);
+    colour = vec4<f32>(
+        mix(colour.rgb, vec3<f32>(0.60, 0.61, 0.65) * colour.a, veil),
+        colour.a,
+    );
+
     // The glass catches the light in a band that sits along the crease.
     let band = exp(-pow((from_hinge - 0.08) / 0.16, 2.0));
-    colour = vec4<f32>(colour.rgb + vec3<f32>(sheen * band * bend * colour.a), colour.a);
+    colour = vec4<f32>(colour.rgb + vec3<f32>(sheen * band * squeeze * colour.a), colour.a);
 
     return colour;
 }

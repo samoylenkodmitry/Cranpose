@@ -20,31 +20,34 @@ const HALF_WIDTH: f32 = 232.0;
 const SCREEN_WIDTH: f32 = HALF_WIDTH * 2.0;
 const SCREEN_HEIGHT: f32 = 322.0;
 const BEZEL: f32 = 7.0;
+/// The bezel either half keeps against the crease, which is far thinner than
+/// the one around the outside.
+const INNER_BEZEL: f32 = 2.0;
 const CORNER: f32 = 22.0;
 const HINGE_WIDTH: f32 = 5.0;
 /// How far the folding half throws its shadow across the half that stays.
 const CREASE_SHADOW: f32 = 30.0;
-/// How far the folding half swings. Past a right angle it presents its back,
-/// which is the shell of the closed device.
-const SHUT_ANGLE: f32 = 158.0;
-const RIGHT_ANGLE: f32 = 90.0;
-const STRAIGHT_ANGLE: f32 = 180.0;
+/// The folding half swings away from the reader until it is edge on, which is
+/// the device shut: its picture is pressed into the crease on the way, never
+/// lifted off the plane the device lies in.
+const SHUT_ANGLE: f32 = 90.0;
+/// How near edge on the panel is allowed to count for the smear. At exactly
+/// edge on the panel has no width and the widening would divide by nothing.
+const MIN_FORESHORTENING: f32 = 0.11;
+const MAX_SPREAD: f32 = 9.0;
 const CAMERA_DISTANCE: f32 = 15.0;
-/// The device turns a little further from the reader as it closes, the way a
-/// hand turns it while folding.
-const OPEN_TILT: f32 = -15.0;
-const SHUT_TILT: f32 = -32.0;
+/// The device squares up to the reader as it closes, the way a hand turns it
+/// while folding.
+const OPEN_TILT: f32 = 11.0;
+const SHUT_TILT: f32 = 4.0;
 const STAGE_WIDTH: f32 = 760.0;
 const STAGE_HEIGHT: f32 = 470.0;
-const MAX_BLUR_PX: f32 = 16.0;
-const PANEL_DIM: f32 = 0.95;
-const GLASS_SHEEN: f32 = 0.34;
-/// How much the picture behind the glass stays lying in the plane the device
-/// was flat in, rather than turning with the panel that covers it.
-const PICTURE_STAYS: f32 = 1.0;
-/// What a unit of `camera_distance` is worth in pixels, which the glass needs
-/// to undo the same projection the layer applies.
-const CAMERA_DISTANCE_SCALE: f32 = 72.0;
+const MAX_BLUR_PX: f32 = 26.0;
+const PANEL_DIM: f32 = 0.34;
+const GLASS_SHEEN: f32 = 0.22;
+/// How milky glass turned this far from the reader gets.
+const GLASS_VEIL: f32 = 0.34;
+
 /// A flick of this much of the fold per second carries the panel the rest of
 /// the way on its own.
 const FLICK_FOLD: f32 = 1.6;
@@ -62,28 +65,28 @@ impl Fold {
         }
     }
 
+    /// How far the folding half has swung away from the reader, in degrees.
+    /// At a right angle it is edge on and the device is shut.
     fn angle(self) -> f32 {
         self.shut * SHUT_ANGLE
     }
 
-    /// Before a right angle the folding half still faces the reader; past it,
-    /// the back of the device does.
-    fn shows_screen(self) -> bool {
-        self.angle() < RIGHT_ANGLE
+    /// How hard the picture on the folding half is being pressed into the
+    /// crease. A half turned by `a` shows its picture at `cos a` of its width,
+    /// so this runs from nothing when flat to everything when edge on.
+    fn squeeze(self) -> f32 {
+        (1.0 - self.angle().to_radians().cos()).clamp(0.0, 1.0)
     }
 
-    /// How far the panel stands off the flat plane, which is what the blur and
-    /// the crease light follow.
-    fn bend(self) -> f32 {
-        self.angle().to_radians().sin().abs()
+    /// How much wider the smear has to be drawn on the panel to stay the same
+    /// width to the reader once the panel is pressed into the crease.
+    fn spread(self) -> f32 {
+        (1.0 / self.angle().to_radians().cos().max(MIN_FORESHORTENING)).min(MAX_SPREAD)
     }
 
-    /// How much light the folding half has turned away from. It loses most of
-    /// it early: a panel only a little off square already faces away from the
-    /// window the light comes through.
+    /// How much light the folding half has turned away from.
     fn dim(self) -> f32 {
-        let turned = (self.angle() * 0.5).to_radians().sin().abs();
-        (turned.powf(0.65) * PANEL_DIM).clamp(0.0, 1.0)
+        (self.squeeze().powf(0.65) * PANEL_DIM).clamp(0.0, 1.0)
     }
 
     fn tilt(self) -> f32 {
@@ -139,10 +142,6 @@ fn outer_corners(hinge_at_right: bool) -> CornerRadii {
 
 fn stage_color() -> Color {
     Color(0.784, 0.780, 0.792, 1.0)
-}
-
-fn shell_color() -> Color {
-    Color(0.118, 0.118, 0.126, 1.0)
 }
 
 fn bezel_color() -> Color {
@@ -222,32 +221,22 @@ fn wallpaper_effect(origin: f32, span: f32) -> RenderEffect {
 }
 
 struct GlassUniforms {
-    bend: f32,
+    squeeze: f32,
+    spread: f32,
     dim: f32,
     hinge_at_left: bool,
-    /// How far the glass has turned out of the screen, in degrees.
-    glass_turn: f32,
-    /// How far the plane the picture stays in has, which is how the device is
-    /// being held.
-    flat_turn: f32,
 }
 
 fn glass_effect(uniforms: &GlassUniforms) -> RenderEffect {
-    let glass = uniforms.glass_turn.to_radians();
-    let flat = uniforms.flat_turn.to_radians();
     let mut shader = RuntimeShader::from_shared_source(foldable_wgsl());
     shader.set_float(0, 1.0);
-    shader.set_float(1, uniforms.bend);
+    shader.set_float(1, uniforms.squeeze);
     shader.set_float(2, MAX_BLUR_PX);
     shader.set_float(3, uniforms.dim);
     shader.set_float(4, GLASS_SHEEN);
     shader.set_float(5, if uniforms.hinge_at_left { 1.0 } else { 0.0 });
-    shader.set_float(6, glass.cos());
-    shader.set_float(7, glass.sin());
-    shader.set_float(8, CAMERA_DISTANCE * CAMERA_DISTANCE_SCALE);
-    shader.set_float(9, PICTURE_STAYS);
-    shader.set_float(10, flat.cos());
-    shader.set_float(11, flat.sin());
+    shader.set_float(6, uniforms.spread);
+    shader.set_float(7, GLASS_VEIL);
     RenderEffect::runtime_shader(shader)
 }
 
@@ -414,55 +403,40 @@ fn StillHalf(tilt: f32) {
     );
 }
 
-/// The half that swings on the hinge. Past a right angle it has turned its
-/// screen away and the reader sees the shell of the device instead.
+/// The half that swings on the hinge, away from the reader. It never leaves
+/// the plane the device lies in as far as the reader can tell: it is pressed
+/// into the crease, and the picture on it goes with it.
 #[composable]
 fn FoldingHalf(fold: Fold, tilt: f32) {
-    let screen = fold.shows_screen();
-    let angle = if screen {
-        tilt + fold.angle()
-    } else {
-        tilt + fold.angle() - STRAIGHT_ANGLE
-    };
-    let origin = if screen {
-        TransformOrigin::new(1.0, 0.5)
-    } else {
-        TransformOrigin::new(0.0, 0.5)
-    };
-    let x = if screen { 0.0 } else { HALF_WIDTH };
-    let bend = fold.bend();
+    let angle = tilt - fold.angle();
+    let squeeze = fold.squeeze();
+    let spread = fold.spread();
     let dim = fold.dim();
 
     Box(
         Modifier::empty()
-            .absolute_offset(x, 0.0)
             .size_points(HALF_WIDTH, SCREEN_HEIGHT)
-            .graphics_layer(move || hinge_layer(angle, origin)),
+            .graphics_layer(move || hinge_layer(angle, TransformOrigin::new(1.0, 0.5))),
         BoxSpec::default(),
         move || {
-            if screen {
-                Box(
-                    Modifier::empty()
-                        .size_points(HALF_WIDTH, SCREEN_HEIGHT)
-                        .graphics_layer(move || GraphicsLayer {
-                            render_effect: Some(glass_effect(&GlassUniforms {
-                                bend,
-                                dim,
-                                hinge_at_left: false,
-                                glass_turn: angle,
-                                flat_turn: tilt,
-                            })),
-                            compositing_strategy: CompositingStrategy::Offscreen,
-                            ..Default::default()
-                        }),
-                    BoxSpec::default(),
-                    move || {
-                        HalfFace(0.0, true);
-                    },
-                );
-            } else {
-                ShellFace(dim);
-            }
+            Box(
+                Modifier::empty()
+                    .size_points(HALF_WIDTH, SCREEN_HEIGHT)
+                    .graphics_layer(move || GraphicsLayer {
+                        render_effect: Some(glass_effect(&GlassUniforms {
+                            squeeze,
+                            spread,
+                            dim,
+                            hinge_at_left: false,
+                        })),
+                        compositing_strategy: CompositingStrategy::Offscreen,
+                        ..Default::default()
+                    }),
+                BoxSpec::default(),
+                move || {
+                    HalfFace(0.0, true);
+                },
+            );
         },
     );
 }
@@ -474,7 +448,11 @@ fn FoldingHalf(fold: Fold, tilt: f32) {
 #[composable]
 fn HalfFace(offset: f32, hinge_at_right: bool) {
     let radii = outer_corners(hinge_at_right);
-    let glass = Size::new(HALF_WIDTH - BEZEL * 2.0, SCREEN_HEIGHT - BEZEL * 2.0);
+    let glass = Size::new(
+        HALF_WIDTH - BEZEL - INNER_BEZEL,
+        SCREEN_HEIGHT - BEZEL * 2.0,
+    );
+    let glass_x = if hinge_at_right { BEZEL } else { INNER_BEZEL };
     let origin = offset / SCREEN_WIDTH;
 
     Box(
@@ -487,7 +465,7 @@ fn HalfFace(offset: f32, hinge_at_right: bool) {
         move || {
             Box(
                 Modifier::empty()
-                    .absolute_offset(BEZEL, BEZEL)
+                    .absolute_offset(glass_x, BEZEL)
                     .size_points(glass.width, glass.height)
                     .clip_to_bounds(),
                 BoxSpec::new().content_alignment(Alignment::TOP_START),
@@ -518,91 +496,13 @@ fn HalfFace(offset: f32, hinge_at_right: bool) {
     );
 }
 
-/// The back of the folding half once it has turned past the reader: graphite,
-/// with the light running down the edge the hinge holds and a sweep of it
-/// across the shell.
-#[composable]
-fn ShellFace(dim: f32) {
-    let lit = (1.0 - dim * 0.45).clamp(0.0, 1.0);
-    let base = shell_color();
-    let near = Color(
-        base.0 * lit * 2.1,
-        base.1 * lit * 2.1,
-        base.2 * lit * 2.2,
-        1.0,
-    );
-    let far = Color(base.0 * lit, base.1 * lit, base.2 * lit, 1.0);
-
-    Box(
-        Modifier::empty()
-            .size_points(HALF_WIDTH, SCREEN_HEIGHT)
-            .draw_behind(move |scope| {
-                let size = scope.size();
-                scope.draw_round_rect(
-                    Brush::linear_gradient_range(
-                        vec![near, far],
-                        Point { x: 0.0, y: 0.0 },
-                        Point {
-                            x: size.width,
-                            y: 0.0,
-                        },
-                    ),
-                    outer_corners(false),
-                );
-                scope.draw_round_rect(
-                    Brush::linear_gradient_range(
-                        vec![
-                            Color(1.0, 1.0, 1.0, 0.0),
-                            Color(1.0, 1.0, 1.0, 0.07 * lit),
-                            Color(1.0, 1.0, 1.0, 0.0),
-                        ],
-                        Point { x: 0.0, y: 0.0 },
-                        Point {
-                            x: size.width * 0.9,
-                            y: size.height,
-                        },
-                    ),
-                    outer_corners(false),
-                );
-            }),
-        BoxSpec::new().content_alignment(Alignment::TOP_START),
-        move || {
-            Box(
-                Modifier::empty()
-                    .size_points(HINGE_WIDTH * 0.6, SCREEN_HEIGHT)
-                    .draw_behind(move |scope| {
-                        let size = scope.size();
-                        scope.draw_rect(Brush::linear_gradient_range(
-                            vec![
-                                Color(
-                                    edge_color().0 * lit,
-                                    edge_color().1 * lit,
-                                    edge_color().2 * lit,
-                                    1.0,
-                                ),
-                                Color(0.0, 0.0, 0.0, 0.0),
-                            ],
-                            Point { x: 0.0, y: 0.0 },
-                            Point {
-                                x: size.width,
-                                y: 0.0,
-                            },
-                        ));
-                    }),
-                BoxSpec::default(),
-                || {},
-            );
-        },
-    );
-}
-
 /// The seam down the middle: the shadow the folding half drops across the
 /// half that stays, and the metal the two of them turn on.
 #[composable]
 fn Hinge(fold: Fold, tilt: f32) {
-    let bend = fold.bend();
-    let cast = HINGE_WIDTH + CREASE_SHADOW * bend;
-    let depth = 0.5 * bend;
+    let squeeze = fold.squeeze();
+    let cast = HINGE_WIDTH + CREASE_SHADOW * squeeze;
+    let depth = 0.5 * squeeze;
 
     HingeStrip(
         HALF_WIDTH,
@@ -652,7 +552,7 @@ fn HingeStrip(x: f32, width: f32, tilt: f32, origin: TransformOrigin, colours: V
 /// so the crease cuts through it.
 #[composable]
 fn ScreenWriting() {
-    let width = SCREEN_WIDTH - BEZEL * 2.0;
+    let width = SCREEN_WIDTH - BEZEL - INNER_BEZEL;
     let height = SCREEN_HEIGHT - BEZEL * 2.0;
 
     Box(
@@ -697,14 +597,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_fold_runs_from_flat_open_to_shut() {
+    fn a_fold_runs_from_flat_open_to_edge_on() {
         assert_eq!(Fold::at(0.0).angle(), 0.0);
-        assert!(Fold::at(0.0).shows_screen());
-        assert_eq!(Fold::at(0.0).bend(), 0.0);
+        assert_eq!(Fold::at(0.0).squeeze(), 0.0);
         assert!((Fold::at(1.0).angle() - SHUT_ANGLE).abs() < 1e-4);
         assert!(
-            !Fold::at(1.0).shows_screen(),
-            "a shut device has turned its screen away"
+            (Fold::at(1.0).squeeze() - 1.0).abs() < 1e-3,
+            "an edge on half has all of its picture pressed into the crease"
         );
     }
 
@@ -715,11 +614,20 @@ mod tests {
     }
 
     #[test]
-    fn a_folding_panel_bends_most_at_a_right_angle() {
-        let square = Fold::at(RIGHT_ANGLE / SHUT_ANGLE);
-        assert!((square.bend() - 1.0).abs() < 1e-3);
-        assert!(square.bend() > Fold::at(0.2).bend());
-        assert!(square.bend() > Fold::at(1.0).bend());
+    fn the_picture_is_pressed_harder_the_further_the_half_turns() {
+        assert!(Fold::at(0.5).squeeze() > Fold::at(0.2).squeeze());
+        assert!(Fold::at(1.0).squeeze() > Fold::at(0.5).squeeze());
+    }
+
+    #[test]
+    fn the_smear_widens_with_the_press_and_stops_widening() {
+        assert!((Fold::at(0.0).spread() - 1.0).abs() < 1e-4);
+        assert!(Fold::at(0.6).spread() > Fold::at(0.3).spread());
+        assert_eq!(
+            Fold::at(1.0).spread(),
+            MAX_SPREAD,
+            "an edge on half would divide by nothing without the cap"
+        );
     }
 
     #[test]
@@ -731,7 +639,7 @@ mod tests {
     }
 
     #[test]
-    fn the_device_turns_further_from_the_reader_as_it_shuts() {
+    fn the_device_squares_up_to_the_reader_as_it_shuts() {
         assert!((Fold::at(0.0).tilt() - OPEN_TILT).abs() < 1e-4);
         assert!((Fold::at(1.0).tilt() - SHUT_TILT).abs() < 1e-4);
         assert!(Fold::at(1.0).tilt() < Fold::at(0.4).tilt());
