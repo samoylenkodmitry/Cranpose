@@ -345,7 +345,17 @@ fn batched_shader_fragment_positions_match_the_parent_target() {
 fn overlapping_capture_stages_preserve_translucent_draw_order() {
     let mut renderer = support::headless_renderer().expect("headless WGPU init failed");
     let bounds = [GLASS, SECOND_GLASS, rect(40.0, 35.0, 150.0, 65.0)];
-    for order in [[0, 1, 2], [2, 0, 1], [1, 0, 2]] {
+    for (order, isolated) in [
+        [0, 1, 2],
+        [0, 2, 1],
+        [1, 0, 2],
+        [1, 2, 0],
+        [2, 0, 1],
+        [2, 1, 0],
+    ]
+    .into_iter()
+    .flat_map(|order| [false, true].map(|isolated| (order, isolated)))
+    {
         let scene = |with_glasses| {
             let mut children = straddling_page();
             for (position, index) in order.into_iter().enumerate() {
@@ -354,14 +364,28 @@ fn overlapping_capture_stages_preserve_translucent_draw_order() {
                 } else {
                     children.push(solid_rect(bounds[index], Color(1.0, 0.0, 0.0, 0.5)));
                 }
-                children.push(solid_rect(
-                    rect(35.0 + position as f32 * 20.0, 15.0, 135.0, 90.0),
-                    [
-                        Color(1.0, 0.0, 0.0, 0.4),
-                        Color(0.0, 1.0, 0.0, 0.5),
-                        Color(0.0, 0.0, 1.0, 0.6),
-                    ][index],
-                ));
+                let bounds = rect(35.0 + position as f32 * 20.0, 15.0, 135.0, 90.0);
+                let color = [
+                    Color(1.0, 0.0, 0.0, 0.4),
+                    Color(0.0, 1.0, 0.0, 0.5),
+                    Color(0.0, 0.0, 1.0, 0.6),
+                ][index];
+                children.push(if isolated {
+                    RenderNode::Layer(Box::new(shared_test_support::layer_node(
+                        rect(0.0, 0.0, bounds.width, bounds.height),
+                        ProjectiveTransform::translation(bounds.x, bounds.y),
+                        GraphicsLayer {
+                            compositing_strategy: CompositingStrategy::Offscreen,
+                            ..GraphicsLayer::default()
+                        },
+                        vec![solid_rect(
+                            rect(0.0, 0.0, bounds.width, bounds.height),
+                            color,
+                        )],
+                    )))
+                } else {
+                    solid_rect(bounds, color)
+                });
             }
             support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children)
         };
@@ -378,7 +402,7 @@ fn overlapping_capture_stages_preserve_translucent_draw_order() {
         );
         assert_eq!(
             differences.differing_pixels, 0,
-            "tinted captures must match direct alpha blending for every translucent draw in order {order:?}: {differences:?}",
+            "tinted captures must match direct alpha blending for every translucent draw in order {order:?}, isolated={isolated}: {differences:?}",
         );
     }
 }

@@ -496,6 +496,8 @@ impl LayerPass<'_> {
         }
         let scene = &self.layer.scene;
         let scale = self.scale;
+        let op_count = ops.len();
+        let composite_count = composites.len();
         let mut candidates: Vec<Candidate> = composites
             .iter()
             .enumerate()
@@ -510,8 +512,8 @@ impl LayerPass<'_> {
             composites.into_iter().map(Some).collect();
         let mut holes = self.blockers.clone();
         let mut covered = Vec::new();
-        let mut now_ops = Vec::new();
-        let mut now = Vec::new();
+        let mut now_ops = Vec::with_capacity(op_count);
+        let mut now = Vec::with_capacity(composite_count);
         for candidate in candidates {
             match candidate {
                 Candidate::Op(op) => {
