@@ -1087,6 +1087,7 @@ mod tests {
         let _guard = reset_runtime();
         let observer = SnapshotStateObserver::new(|callback| callback());
         let state = SnapshotMutableState::new_in_arc(0, Arc::new(NeverEqual));
+        let observed: Arc<dyn StateObject> = state.clone();
         let notifications = Rc::new(RefCell::new(Vec::new()));
         let discarded = notifications.clone();
         observer.observe_reads(
@@ -1103,11 +1104,11 @@ mod tests {
                 TestScope("changing"),
                 move |_| delivered.borrow_mut().push(generation),
                 || {
-                    observer.notify_changes(&[state.clone()]);
+                    observer.notify_changes(std::slice::from_ref(&observed));
                     let _ = state.get();
                 },
             );
-            observer.notify_changes(&[state.clone()]);
+            observer.notify_changes(std::slice::from_ref(&observed));
         }
         assert_eq!(*notifications.borrow(), vec![1, 2, 2]);
         observer.clear(&TestScope("changing"));

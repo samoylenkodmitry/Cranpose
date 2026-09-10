@@ -517,6 +517,368 @@ fn try_translate_scrolled_layer(
     true
 }
 
+/// The container-level facts a scroll translate needs, once every check that
+/// would force a full rebuild has passed.
+struct TranslatedContainer {
+    node_id: NodeId,
+    clip_to_bounds: bool,
+    graphics_layer: GraphicsLayer,
+}
+
+fn translated_container(
+    container: &LayerNode,
+    layout_state: &cranpose_ui::widgets::LayoutState,
+    modifier_slices: &ModifierNodeSlices,
+    inherited_motion_context_animated: bool,
+    wrapped: bool,
+) -> Result<TranslatedContainer, &'static str> {
+    if cranpose_core::env_flag!("CRANPOSE_DISABLE_SCROLL_TRANSLATE") {
+        return Err("fast path disabled by ablation switch");
+    }
+    let Some(node_id) = container.node_id else {
+        return Err("no node id");
+    };
+    if container
+        .children
+        .iter()
+        .any(|child| !matches!(child, RenderNode::Layer(_)))
+    {
+        return Err("container has own primitive children");
+    }
+    if !layout_state.is_placed()
+        || layout_state.size().width != container.local_bounds.width
+        || layout_state.size().height != container.local_bounds.height
+    {
+        return Err("container unplaced or resized");
+    }
+    let outer_count = modifier_slices.outer_draw_command_count();
+    if (outer_count > 0 && !wrapped)
+        || !modifier_slices.draw_commands()[outer_count..].is_empty()
+        || (inherited_motion_context_animated || modifier_slices.motion_context_animated())
+            != container.motion_context_animated
+        || modifier_slices.annotated_text().is_some()
+        || modifier_slices.translated_content_context() != container.translated_content_context
+    {
+        return Err("container draw/text/translated-context changed");
+    }
+    let clip_to_bounds = modifier_slices.clip_to_bounds();
+    if clip_to_bounds != container.clip_to_bounds {
+        return Err("container clip changed");
+    }
+    let graphics_layer = graphics_layer_with_shaped_clip(
+        modifier_slices.graphics_layer().unwrap_or_default(),
+        clip_to_bounds,
+        modifier_slices.corner_shape(),
+        container.local_bounds,
+    );
+    if graphics_layer != container.graphics_layer {
+        return Err("container graphics layer changed");
+    }
+    Ok(TranslatedContainer {
+        node_id,
+        clip_to_bounds,
+        graphics_layer,
+    })
+}
+
+/// The fresh children a translate will place, paired with how they line up
+/// against the children the container already holds.
+struct TranslatedChildren {
+    placed_fresh: SmallVec<[(NodeId, cranpose_ui::widgets::LayoutState); 8]>,
+    children_unchanged: bool,
+    old_index_by_id: std::collections::HashMap<NodeId, usize>,
+}
+
+fn translated_children(
+    applier: &mut MemoryApplier,
+    container: &LayerNode,
+    dirty_nodes: &HashSet<NodeId>,
+    fresh_children: &[NodeId],
+) -> Result<TranslatedChildren, &'static str> {
+    let mut placed_fresh = SmallVec::<[_; 8]>::with_capacity(fresh_children.len());
+    for child_id in fresh_children {
+        let state = applier
+            .with_node::<LayoutNode, _>(*child_id, |node| node.layout_state())
+            .or_else(|_| {
+                applier.with_node::<SubcomposeLayoutNode, _>(*child_id, |node| node.layout_state())
+            });
+        let Ok(state) = state else {
+            continue;
+        };
+        if !state.is_placed() {
+            continue;
+        }
+        placed_fresh.push((*child_id, state));
+    }
+    let children_unchanged = container.children.len() == placed_fresh.len()
+        && container
+            .children
+            .iter()
+            .zip(&placed_fresh)
+            .all(|(child, (id, _))| {
+                matches!(child, RenderNode::Layer(layer) if layer_identity(layer) == Some(*id))
+            });
+    let old_index_by_id = if children_unchanged {
+        std::collections::HashMap::new()
+    } else {
+        let Some(index): Option<std::collections::HashMap<NodeId, usize>> = container
+            .children
+            .iter()
+            .enumerate()
+            .map(|(index, child)| match child {
+                RenderNode::Layer(layer) => layer_identity(layer).map(|id| (id, index)),
+                _ => None,
+            })
+            .collect()
+        else {
+            return Err("child without node id");
+        };
+        index
+    };
+    check_retained_children(
+        container,
+        dirty_nodes,
+        &placed_fresh,
+        children_unchanged,
+        &old_index_by_id,
+    )?;
+    Ok(TranslatedChildren {
+        placed_fresh,
+        children_unchanged,
+        old_index_by_id,
+    })
+}
+
+fn check_retained_children(
+    container: &LayerNode,
+    dirty_nodes: &HashSet<NodeId>,
+    placed_fresh: &[(NodeId, cranpose_ui::widgets::LayoutState)],
+    children_unchanged: bool,
+    old_index_by_id: &std::collections::HashMap<NodeId, usize>,
+) -> Result<(), &'static str> {
+    for (fresh_index, (child_id, state)) in placed_fresh.iter().enumerate() {
+        let old_index = if children_unchanged {
+            fresh_index
+        } else if let Some(index) = old_index_by_id.get(child_id) {
+            *index
+        } else {
+            continue;
+        };
+        let RenderNode::Layer(layer) = &container.children[old_index] else {
+            return Err("retained child slot is not a layer");
+        };
+        if dirty_nodes.contains(child_id) {
+            continue;
+        }
+        if layer.has_origin_sinks {
+            return Err("child subtree publishes window origins");
+        }
+        if state.size().width != layer.local_bounds.width
+            || state.size().height != layer.local_bounds.height
+        {
+            return Err("child resized");
+        }
+    }
+    Ok(())
+}
+
+/// Where a translated container and its children land after the scroll.
+#[derive(Clone, Copy)]
+struct TranslateGeometry {
+    content_offset: Point,
+    layer_translation: Point,
+    window_origin: Point,
+    child_origin: Point,
+    translation_delta: Point,
+}
+
+impl TranslateGeometry {
+    fn new(
+        container: &LayerNode,
+        layout_state: &cranpose_ui::widgets::LayoutState,
+        graphics_layer: &GraphicsLayer,
+        parent_abs: AbsOrigin,
+    ) -> Self {
+        let content_offset = layout_state.content_offset;
+        let top_left = Point {
+            x: parent_abs.content_origin.x + layout_state.position().x,
+            y: parent_abs.content_origin.y + layout_state.position().y,
+        };
+        let layer_translation = Point {
+            x: parent_abs.layer_translation.x + graphics_layer.translation_x,
+            y: parent_abs.layer_translation.y + graphics_layer.translation_y,
+        };
+        Self {
+            content_offset,
+            layer_translation,
+            window_origin: Point {
+                x: top_left.x + layer_translation.x,
+                y: top_left.y + layer_translation.y,
+            },
+            child_origin: Point {
+                x: top_left.x + content_offset.x,
+                y: top_left.y + content_offset.y,
+            },
+            translation_delta: Point {
+                x: layer_translation.x - container.scene_children_layer_translation.x,
+                y: layer_translation.y - container.scene_children_layer_translation.y,
+            },
+        }
+    }
+}
+
+fn build_entering_children(
+    applier: &mut MemoryApplier,
+    container: &LayerNode,
+    placed_fresh: &[(NodeId, cranpose_ui::widgets::LayoutState)],
+    retained: (bool, &std::collections::HashMap<NodeId, usize>),
+    geometry: TranslateGeometry,
+    inherited: (bool, bool),
+) -> std::collections::HashMap<NodeId, LayerNode> {
+    let (children_unchanged, old_index_by_id) = retained;
+    let (child_inherited_translated_content_context, children_ancestor_hashed) = inherited;
+    let mut entering: std::collections::HashMap<NodeId, LayerNode> =
+        std::collections::HashMap::new();
+    for (child_id, _) in placed_fresh {
+        if children_unchanged || old_index_by_id.contains_key(child_id) {
+            continue;
+        }
+        let Some(mut lowered) = build_layer_node_from_applier_internal(
+            applier,
+            *child_id,
+            container.motion_context_animated,
+            child_inherited_translated_content_context,
+            Some(AbsOrigin {
+                content_origin: geometry.child_origin,
+                layer_translation: geometry.layer_translation,
+            }),
+        ) else {
+            continue;
+        };
+        if geometry.content_offset != Point::default() {
+            lowered.transform_to_parent =
+                lowered
+                    .transform_to_parent
+                    .then(ProjectiveTransform::translation(
+                        geometry.content_offset.x,
+                        geometry.content_offset.y,
+                    ));
+        }
+        crate::graph_hash::recompute_layer_raster_cache_hashes_under(
+            &mut lowered,
+            children_ancestor_hashed,
+        );
+        entering.insert(*child_id, lowered);
+    }
+    entering
+}
+
+fn apply_translated_container_state(
+    container: &mut LayerNode,
+    modifier_slices: &ModifierNodeSlices,
+    layout_state: &cranpose_ui::widgets::LayoutState,
+    graphics_layer: &GraphicsLayer,
+    parent_content_offset: Point,
+    geometry: TranslateGeometry,
+) {
+    let mut transform = layer_transform_to_parent(
+        container.local_bounds,
+        layout_state.position(),
+        graphics_layer,
+    );
+    if parent_content_offset != Point::default() {
+        transform = transform.then(ProjectiveTransform::translation(
+            parent_content_offset.x,
+            parent_content_offset.y,
+        ));
+    }
+    container.transform_to_parent = transform;
+    container.content_offset = geometry.content_offset;
+    if container.translated_content_context {
+        container.translated_content_offset = modifier_slices
+            .translated_content_offset()
+            .unwrap_or(geometry.content_offset);
+    }
+    if let Some(sink) = modifier_slices.text_field_window_origin() {
+        sink.set(geometry.window_origin);
+    }
+    if let Some(sink) = modifier_slices.viewport_window_rect() {
+        sink.set(Rect {
+            x: geometry.window_origin.x,
+            y: geometry.window_origin.y,
+            width: layout_state.size().width,
+            height: layout_state.size().height,
+        });
+    }
+    container.scene_children_origin = geometry.child_origin;
+    container.scene_children_layer_translation = geometry.layer_translation;
+}
+
+fn reconcile_translated_children(
+    container: &mut LayerNode,
+    dirty_nodes: &mut HashSet<NodeId>,
+    changed_nodes: &mut Vec<NodeId>,
+    placed_fresh: &[(NodeId, cranpose_ui::widgets::LayoutState)],
+    children_unchanged: bool,
+    entering: &mut std::collections::HashMap<NodeId, LayerNode>,
+    geometry: TranslateGeometry,
+) {
+    if children_unchanged {
+        for (child, (child_id, state)) in container.children.iter_mut().zip(placed_fresh) {
+            let RenderNode::Layer(layer) = child else {
+                unreachable!("retained child identities were checked");
+            };
+            if !dirty_nodes.contains(child_id) {
+                translate_retained_child(
+                    layer,
+                    state,
+                    geometry.content_offset,
+                    geometry.child_origin,
+                    geometry.translation_delta,
+                );
+                changed_nodes.push(*child_id);
+            }
+        }
+        return;
+    }
+    let fresh_id_set: HashSet<NodeId> = placed_fresh.iter().map(|(id, _)| *id).collect();
+    let mut old_by_id: std::collections::HashMap<NodeId, Box<LayerNode>> =
+        std::collections::HashMap::new();
+    for child in container.children.drain(..) {
+        let RenderNode::Layer(layer) = child else {
+            continue;
+        };
+        let child_id = layer_identity(&layer).expect("checked above");
+        if fresh_id_set.contains(&child_id) {
+            old_by_id.insert(child_id, layer);
+        } else {
+            collect_layer_node_ids(&layer, changed_nodes);
+        }
+    }
+    let mut new_children = Vec::with_capacity(placed_fresh.len());
+    for (child_id, state) in placed_fresh {
+        if let Some(mut layer) = old_by_id.remove(child_id) {
+            if !dirty_nodes.contains(child_id) {
+                translate_retained_child(
+                    &mut layer,
+                    state,
+                    geometry.content_offset,
+                    geometry.child_origin,
+                    geometry.translation_delta,
+                );
+                changed_nodes.push(*child_id);
+            }
+            new_children.push(RenderNode::Layer(layer));
+        } else if let Some(lowered) = entering.remove(child_id) {
+            dirty_nodes.remove(child_id);
+            remove_dirty_descendants(&lowered, dirty_nodes);
+            collect_layer_node_ids(&lowered, changed_nodes);
+            new_children.push(RenderNode::Layer(Box::new(lowered)));
+        }
+    }
+    container.children = new_children;
+}
+
 fn translate_layer_from_data(
     applier: &mut MemoryApplier,
     container: &mut LayerNode,
@@ -533,261 +895,72 @@ fn translate_layer_from_data(
         parent_content_offset,
         parent_abs,
     } = ancestors;
-    if cranpose_core::env_flag!("CRANPOSE_DISABLE_SCROLL_TRANSLATE") {
-        return translate_bail("fast path disabled by ablation switch");
-    }
-    let Some(node_id) = container.node_id else {
-        return translate_bail("no node id");
-    };
-    if container
-        .children
-        .iter()
-        .any(|child| !matches!(child, RenderNode::Layer(_)))
-    {
-        return translate_bail("container has own primitive children");
-    }
     let SnapshotNodeData {
         layout_state,
         modifier_slices,
         resolved_modifiers: _,
         children: fresh_children,
     } = data;
-    if !layout_state.is_placed()
-        || layout_state.size().width != container.local_bounds.width
-        || layout_state.size().height != container.local_bounds.height
-    {
-        return translate_bail("container unplaced or resized");
-    }
-    let outer_count = modifier_slices.outer_draw_command_count();
-    if (outer_count > 0 && !wrapped)
-        || !modifier_slices.draw_commands()[outer_count..].is_empty()
-        || (inherited_motion_context_animated || modifier_slices.motion_context_animated())
-            != container.motion_context_animated
-        || modifier_slices.annotated_text().is_some()
-        || modifier_slices.translated_content_context() != container.translated_content_context
-    {
-        return translate_bail("container draw/text/translated-context changed");
-    }
-    let clip_to_bounds = modifier_slices.clip_to_bounds();
-    if clip_to_bounds != container.clip_to_bounds {
-        return translate_bail("container clip changed");
-    }
-    let graphics_layer = graphics_layer_with_shaped_clip(
-        modifier_slices.graphics_layer().unwrap_or_default(),
+    let container_plan = match translated_container(
+        container,
+        &layout_state,
+        &modifier_slices,
+        inherited_motion_context_animated,
+        wrapped,
+    ) {
+        Ok(plan) => plan,
+        Err(reason) => return translate_bail(reason),
+    };
+    let TranslatedContainer {
+        node_id,
         clip_to_bounds,
-        modifier_slices.corner_shape(),
-        container.local_bounds,
-    );
-    if graphics_layer != container.graphics_layer {
-        return translate_bail("container graphics layer changed");
-    }
-    let mut placed_fresh = SmallVec::<[_; 8]>::with_capacity(fresh_children.len());
-    for child_id in &fresh_children {
-        let state = applier
-            .with_node::<LayoutNode, _>(*child_id, |node| node.layout_state())
-            .or_else(|_| {
-                applier.with_node::<SubcomposeLayoutNode, _>(*child_id, |node| node.layout_state())
-            });
-        let Ok(state) = state else {
-            continue;
-        };
-        if !state.is_placed() {
-            continue;
-        }
-        placed_fresh.push((*child_id, state));
-    }
-    let children_unchanged = container.children.len() == placed_fresh.len()
-        && container.children.iter().zip(&placed_fresh).all(|(child, (id, _))| {
-            matches!(child, RenderNode::Layer(layer) if layer_identity(layer) == Some(*id))
-        });
-    let old_index_by_id = if children_unchanged {
-        std::collections::HashMap::new()
-    } else {
-        let Some(index): Option<std::collections::HashMap<NodeId, usize>> = container
-            .children
-            .iter()
-            .enumerate()
-            .map(|(index, child)| match child {
-                RenderNode::Layer(layer) => layer_identity(layer).map(|id| (id, index)),
-                _ => None,
-            })
-            .collect()
-        else {
-            return translate_bail("child without node id");
-        };
-        index
+        graphics_layer,
+    } = container_plan;
+    let child_plan = match translated_children(applier, container, dirty_nodes, &fresh_children) {
+        Ok(plan) => plan,
+        Err(reason) => return translate_bail(reason),
     };
-    for (fresh_index, (child_id, state)) in placed_fresh.iter().enumerate() {
-        let old_index = if children_unchanged {
-            fresh_index
-        } else if let Some(index) = old_index_by_id.get(child_id) {
-            *index
-        } else {
-            continue;
-        };
-        let RenderNode::Layer(layer) = &container.children[old_index] else {
-            return false;
-        };
-        if dirty_nodes.contains(child_id) {
-            continue;
-        }
-        if layer.has_origin_sinks {
-            return translate_bail("child subtree publishes window origins");
-        }
-        if state.size().width != layer.local_bounds.width
-            || state.size().height != layer.local_bounds.height
-        {
-            return translate_bail("child resized");
-        }
-    }
+    let TranslatedChildren {
+        placed_fresh,
+        children_unchanged,
+        old_index_by_id,
+    } = child_plan;
 
-    let content_offset = layout_state.content_offset;
-    let top_left = Point {
-        x: parent_abs.content_origin.x + layout_state.position().x,
-        y: parent_abs.content_origin.y + layout_state.position().y,
-    };
-    let layer_translation = Point {
-        x: parent_abs.layer_translation.x + graphics_layer.translation_x,
-        y: parent_abs.layer_translation.y + graphics_layer.translation_y,
-    };
-    let window_origin = Point {
-        x: top_left.x + layer_translation.x,
-        y: top_left.y + layer_translation.y,
-    };
-    let child_origin = Point {
-        x: top_left.x + content_offset.x,
-        y: top_left.y + content_offset.y,
-    };
-    let translation_delta = Point {
-        x: layer_translation.x - container.scene_children_layer_translation.x,
-        y: layer_translation.y - container.scene_children_layer_translation.y,
-    };
-
+    let geometry = TranslateGeometry::new(container, &layout_state, &graphics_layer, parent_abs);
     let child_inherited_translated_content_context =
         inherited_translated_content_context || container.translated_content_context;
     let children_ancestor_hashed =
         crate::graph_hash::layer_children_ancestor_hashed(container, container_ancestor_hashed);
-    let mut entering: std::collections::HashMap<NodeId, LayerNode> =
-        std::collections::HashMap::new();
-    for (child_id, _) in &placed_fresh {
-        if children_unchanged || old_index_by_id.contains_key(child_id) {
-            continue;
-        }
-        let Some(mut lowered) = build_layer_node_from_applier_internal(
-            applier,
-            *child_id,
-            container.motion_context_animated,
+    let mut entering = build_entering_children(
+        applier,
+        container,
+        &placed_fresh,
+        (children_unchanged, &old_index_by_id),
+        geometry,
+        (
             child_inherited_translated_content_context,
-            Some(AbsOrigin {
-                content_origin: child_origin,
-                layer_translation,
-            }),
-        ) else {
-            continue;
-        };
-        if content_offset != Point::default() {
-            lowered.transform_to_parent =
-                lowered
-                    .transform_to_parent
-                    .then(ProjectiveTransform::translation(
-                        content_offset.x,
-                        content_offset.y,
-                    ));
-        }
-        crate::graph_hash::recompute_layer_raster_cache_hashes_under(
-            &mut lowered,
             children_ancestor_hashed,
-        );
-        entering.insert(*child_id, lowered);
-    }
-
-    let mut transform = layer_transform_to_parent(
-        container.local_bounds,
-        layout_state.position(),
-        &graphics_layer,
+        ),
     );
-    if parent_content_offset != Point::default() {
-        transform = transform.then(ProjectiveTransform::translation(
-            parent_content_offset.x,
-            parent_content_offset.y,
-        ));
-    }
-    container.transform_to_parent = transform;
-    container.content_offset = content_offset;
-    if container.translated_content_context {
-        container.translated_content_offset = modifier_slices
-            .translated_content_offset()
-            .unwrap_or(content_offset);
-    }
 
-    if let Some(sink) = modifier_slices.text_field_window_origin() {
-        sink.set(window_origin);
-    }
-    if let Some(sink) = modifier_slices.viewport_window_rect() {
-        sink.set(Rect {
-            x: window_origin.x,
-            y: window_origin.y,
-            width: layout_state.size().width,
-            height: layout_state.size().height,
-        });
-    }
-    container.scene_children_origin = child_origin;
-    container.scene_children_layer_translation = layer_translation;
+    apply_translated_container_state(
+        container,
+        &modifier_slices,
+        &layout_state,
+        &graphics_layer,
+        parent_content_offset,
+        geometry,
+    );
 
-    if children_unchanged {
-        for (child, (child_id, state)) in container.children.iter_mut().zip(&placed_fresh) {
-            let RenderNode::Layer(layer) = child else {
-                unreachable!("retained child identities were checked");
-            };
-            if !dirty_nodes.contains(child_id) {
-                translate_retained_child(
-                    layer,
-                    state,
-                    content_offset,
-                    child_origin,
-                    translation_delta,
-                );
-                changed_nodes.push(*child_id);
-            }
-        }
-    } else {
-        let fresh_id_set: HashSet<NodeId> = placed_fresh.iter().map(|(id, _)| *id).collect();
-        let mut old_by_id: std::collections::HashMap<NodeId, Box<LayerNode>> =
-            std::collections::HashMap::new();
-        for child in container.children.drain(..) {
-            let RenderNode::Layer(layer) = child else {
-                continue;
-            };
-            let child_id = layer_identity(&layer).expect("checked above");
-            if fresh_id_set.contains(&child_id) {
-                old_by_id.insert(child_id, layer);
-            } else {
-                collect_layer_node_ids(&layer, changed_nodes);
-            }
-        }
-        let mut new_children = Vec::with_capacity(placed_fresh.len());
-        for (child_id, state) in &placed_fresh {
-            if let Some(mut layer) = old_by_id.remove(child_id) {
-                if !dirty_nodes.contains(child_id) {
-                    translate_retained_child(
-                        &mut layer,
-                        state,
-                        content_offset,
-                        child_origin,
-                        translation_delta,
-                    );
-                    changed_nodes.push(*child_id);
-                }
-                new_children.push(RenderNode::Layer(layer));
-            } else if let Some(lowered) = entering.remove(child_id) {
-                dirty_nodes.remove(child_id);
-                remove_dirty_descendants(&lowered, dirty_nodes);
-                collect_layer_node_ids(&lowered, changed_nodes);
-                new_children.push(RenderNode::Layer(Box::new(lowered)));
-            }
-        }
-        container.children = new_children;
-    }
+    reconcile_translated_children(
+        container,
+        dirty_nodes,
+        changed_nodes,
+        &placed_fresh,
+        children_unchanged,
+        &mut entering,
+        geometry,
+    );
     modifier_slices.publish_pointer_input_size(layout_state.size());
     container.hit_test = hit_test_from_slices(
         &modifier_slices,
@@ -3426,6 +3599,44 @@ mod tests {
         }
     }
 
+    fn shadowed_scroll_rows(
+        generation: usize,
+        shadow_radius: &Rc<std::cell::Cell<f32>>,
+        first_text: &Rc<std::cell::Cell<Option<NodeId>>>,
+        clicks: &Rc<RefCell<Vec<(usize, usize)>>>,
+    ) {
+        for index in 0..12usize {
+            let shape =
+                cranpose_ui::LayerShape::Rounded(cranpose_ui::RoundedCornerShape::uniform(12.0));
+            let radius = shadow_radius.clone();
+            let recorded_clicks = clicks.clone();
+            let first_text = first_text.clone();
+            cranpose_ui::Box(
+                Modifier::empty()
+                    .size_points(240.0, 60.0)
+                    .clickable(move |_| recorded_clicks.borrow_mut().push((index, generation)))
+                    .drop_shadow(shape, move |scope| scope.radius = radius.get())
+                    .graphics_layer(move || GraphicsLayer {
+                        shape,
+                        clip: true,
+                        ..Default::default()
+                    }),
+                cranpose_ui::BoxSpec::default(),
+                move || {
+                    let label = if index == 0 && generation > 0 {
+                        "changed row".to_owned()
+                    } else {
+                        format!("row {index}")
+                    };
+                    let id = Text(label, Modifier::empty(), TextStyle::default());
+                    if index == 0 {
+                        first_text.set(Some(id));
+                    }
+                },
+            );
+        }
+    }
+
     fn assert_shadowed_scroll_reuses_children(wrapped_root: bool) {
         let scroll_holder: Rc<RefCell<Option<ScrollState>>> = Rc::new(RefCell::new(None));
         let scroll_holder_for_comp = scroll_holder.clone();
@@ -3459,40 +3670,12 @@ mod tests {
                     let first_text = first_text_for_comp.clone();
                     let clicks = clicks_for_comp.clone();
                     move || {
-                        let generation = generation.value();
-                        for index in 0..12usize {
-                            let shape = cranpose_ui::LayerShape::Rounded(
-                                cranpose_ui::RoundedCornerShape::uniform(12.0),
-                            );
-                            let radius = shadow_radius.clone();
-                            let recorded_clicks = clicks.clone();
-                            let first_text = first_text.clone();
-                            cranpose_ui::Box(
-                                Modifier::empty()
-                                    .size_points(240.0, 60.0)
-                                    .clickable(move |_| {
-                                        recorded_clicks.borrow_mut().push((index, generation))
-                                    })
-                                    .drop_shadow(shape, move |scope| scope.radius = radius.get())
-                                    .graphics_layer(move || GraphicsLayer {
-                                        shape,
-                                        clip: true,
-                                        ..Default::default()
-                                    }),
-                                cranpose_ui::BoxSpec::default(),
-                                move || {
-                                    let label = if index == 0 && generation > 0 {
-                                        "changed row".to_owned()
-                                    } else {
-                                        format!("row {index}")
-                                    };
-                                    let id = Text(label, Modifier::empty(), TextStyle::default());
-                                    if index == 0 {
-                                        first_text.set(Some(id));
-                                    }
-                                },
-                            );
-                        }
+                        shadowed_scroll_rows(
+                            generation.value(),
+                            &shadow_radius,
+                            &first_text,
+                            &clicks,
+                        );
                     }
                 },
             );
