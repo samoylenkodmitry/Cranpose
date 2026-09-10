@@ -515,17 +515,24 @@ impl LayerPass<'_> {
                 Candidate::Op(op) => {
                     let bounds = op_draw_bounds(scene, &op, scale)
                         .map(|bounds| DeviceRect::from_logical(bounds, scale));
-                    let blocked = bounds.filter(|bounds| {
-                        holes.iter().any(|hole| {
-                            hole.z < op.z_index && hole.rect.intersect(*bounds).is_some()
-                        })
+                    let blocked = bounds.and_then(|bounds| {
+                        holes
+                            .iter()
+                            .filter(|hole| hole.z < op.z_index)
+                            .find_map(|hole| {
+                                hole.rect
+                                    .intersect(bounds)
+                                    .map(|part| (bounds, part == bounds))
+                            })
                     });
                     match blocked {
-                        Some(rect) => {
-                            holes.push(Blocker {
-                                z: op.z_index,
-                                rect,
-                            });
+                        Some((rect, fully_covered)) => {
+                            if !fully_covered {
+                                holes.push(Blocker {
+                                    z: op.z_index,
+                                    rect,
+                                });
+                            }
                             self.deferred.push(op);
                         }
                         None => now_ops.push(op),
