@@ -404,6 +404,17 @@ fn DeferredContentUnderGlass(overlap: bool, span_both: bool, strategy: Compositi
                 BoxSpec::new(),
                 || {},
             );
+            if span_both {
+                Box(
+                    Modifier::empty()
+                        .offset(100.0, 140.0)
+                        .width(80.0)
+                        .height(20.0)
+                        .background(Color::GREEN),
+                    BoxSpec::new(),
+                    || {},
+                );
+            }
             let y = if overlap { 210.0 } else { 400.0 };
             Box(
                 Modifier::empty()
@@ -480,6 +491,11 @@ fn a_draw_spanning_two_glasses_stays_above_the_first_and_below_the_second() {
             pixel(140, 94),
             [255, 0, 0, 255],
             "the rectangle must cover the first glass without being captured beneath it"
+        );
+        assert_eq!(
+            pixel(140, 150),
+            [0, 255, 0, 255],
+            "the later draw outside both glasses must stay above the spanning rectangle"
         );
         let under_glass = pixel(140, 230);
         assert!(
