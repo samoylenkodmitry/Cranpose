@@ -421,6 +421,21 @@ struct Blocker {
     rect: DeviceRect,
 }
 
+fn collect_covered_rects(
+    holes: &[Blocker],
+    z: usize,
+    coverage: DeviceRect,
+    covered: &mut Vec<DeviceRect>,
+) {
+    covered.clear();
+    covered.extend(
+        holes
+            .iter()
+            .filter(|hole| hole.z < z)
+            .filter_map(|hole| hole.rect.intersect(coverage)),
+    );
+}
+
 /// One thing a flush may draw, in the order the pass draws them: at one z
 /// a composite before an op. A composite is named by its index in the
 /// flush's list, so the candidates stay small enough to sort in place.
@@ -492,6 +507,7 @@ impl LayerPass<'_> {
         let mut composites: Vec<Option<ResolvedComposite>> =
             composites.into_iter().map(Some).collect();
         let mut holes = self.blockers.clone();
+        let mut covered = Vec::new();
         let mut now_ops = Vec::new();
         let mut now = Vec::new();
         for candidate in candidates {
@@ -522,11 +538,7 @@ impl LayerPass<'_> {
                     let Some(coverage) = composite_coverage(&composite) else {
                         continue;
                     };
-                    let covered: Vec<DeviceRect> = holes
-                        .iter()
-                        .filter(|hole| hole.z < composite.z_index)
-                        .filter_map(|hole| hole.rect.intersect(coverage))
-                        .collect();
+                    collect_covered_rects(&holes, composite.z_index, coverage, &mut covered);
                     if covered.is_empty() {
                         now.push(composite);
                         continue;
@@ -4010,6 +4022,32 @@ mod tests {
                 .collect::<Vec<_>>(),
             [3, 3]
         );
+    }
+
+    #[test]
+    fn reused_coverage_scratch_replaces_prior_clips_and_respects_draw_order() {
+        let rect = |x, width| DeviceRect {
+            x,
+            y: 0.0,
+            width,
+            height: 10.0,
+        };
+        let holes: Vec<_> = (0..8)
+            .map(|index| Blocker {
+                z: index,
+                rect: rect(index as f32 * 3.0, 2.0),
+            })
+            .collect();
+        let mut covered = Vec::new();
+        collect_covered_rects(&holes, 7, rect(0.0, 24.0), &mut covered);
+        assert_eq!(covered.len(), 7);
+        assert_eq!(covered.last(), Some(&rect(18.0, 2.0)));
+        collect_covered_rects(&holes, 3, rect(4.0, 4.0), &mut covered);
+        assert_eq!(covered, [rect(4.0, 1.0), rect(6.0, 2.0)]);
+        collect_covered_rects(&holes, 3, rect(12.0, 6.0), &mut covered);
+        assert!(covered.is_empty());
+        collect_covered_rects(&[], usize::MAX, rect(0.0, 24.0), &mut covered);
+        assert!(covered.is_empty());
     }
 
     #[test]
