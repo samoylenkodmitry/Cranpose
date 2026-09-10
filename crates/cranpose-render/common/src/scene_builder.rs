@@ -1,6 +1,6 @@
-use std::{collections::HashSet, rc::Rc};
+use std::rc::Rc;
 
-use cranpose_core::{MemoryApplier, Node, NodeId};
+use cranpose_core::{MemoryApplier, Node, NodeId, collections::map::HashSet};
 use cranpose_ui::{
     DrawCommand, LayoutBox, LayoutNode, ModifierNodeSlices, Point, Rect, ResolvedModifiers, Size,
     SubcomposeLayoutNode, TextLayoutOptions, TextOverflow, TextPanResolver, prepare_text_layout,
