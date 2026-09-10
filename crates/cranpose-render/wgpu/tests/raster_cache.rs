@@ -445,3 +445,54 @@ fn an_animated_shader_keeps_animating_inside_a_cacheable_container() {
          the container cannot cache a subtree whose output changes every frame"
     );
 }
+
+fn clipped_text_graph(y: f32) -> RenderGraph {
+    let mut layer = text_layer(77, 16.25, y, "Cached short label");
+    let RenderNode::Primitive(PrimitiveEntry {
+        node: PrimitiveNode::Text(text),
+        ..
+    }) = &mut layer.children[0]
+    else {
+        panic!("text primitive")
+    };
+    text.clip = Some(Rect {
+        x: 7.25,
+        y: 2.0,
+        width: 91.5,
+        height: 19.0,
+    });
+    support::page_graph(320, 140, vec![RenderNode::Layer(Box::new(layer))])
+}
+
+#[test]
+fn retained_short_text_matches_fresh_clipped_pixels_after_translation() {
+    let mut renderer = support::headless_renderer().expect("headless renderer");
+    for scale in [1.0, 1.5, 3.0] {
+        let width = (320.0 * scale) as u32;
+        let height = (140.0 * scale) as u32;
+        for y in [20.25, -4.5, 72.75, 20.25] {
+            let mut fresh = support::headless_renderer_beside_locked().expect("reference renderer");
+            let context = cranpose_ui::AppContext::new();
+            fresh.attach_app_context_services(&context);
+            fresh.scene_mut().graph = Some(clipped_text_graph(y));
+            let expected = context
+                .enter(|| fresh.capture_frame_with_scale(width, height, scale))
+                .expect("reference pixels");
+            assert!(expected.pixels.chunks_exact(4).any(|pixel| pixel[0] > 128));
+            renderer.scene_mut().graph = Some(clipped_text_graph(y));
+            for _ in 0..2 {
+                let actual = renderer
+                    .capture_frame_with_scale(width, height, scale)
+                    .expect("retained pixels");
+                let diff = cranpose_render_common::image_compare::image_difference_stats(
+                    &expected.pixels,
+                    &actual.pixels,
+                    width,
+                    height,
+                    0,
+                );
+                assert_eq!(diff.differing_pixels, 0, "scale={scale} y={y}: {diff:?}");
+            }
+        }
+    }
+}

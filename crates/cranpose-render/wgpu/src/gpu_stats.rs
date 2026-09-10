@@ -682,9 +682,9 @@ impl FrameStats {
         );
     }
 
-    pub fn record_text_glyph_atlas_hit(&self) {
+    pub fn record_text_glyph_atlas_hits(&self, count: u32) {
         self.text_glyph_atlas_hits
-            .set(self.text_glyph_atlas_hits.get().saturating_add(1));
+            .set(self.text_glyph_atlas_hits.get().saturating_add(count));
     }
 
     pub fn record_text_glyph_atlas_miss(&self, width: u32, height: u32) {

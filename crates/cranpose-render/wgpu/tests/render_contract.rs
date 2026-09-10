@@ -353,8 +353,8 @@ fn cached_visible_text_glyph_runs_promote_large_runs_to_retained_buffers() {
         "cached visible text rendering should promote large paragraph/code runs through a single retained-buffer helper"
     );
     assert!(
-        render_source.contains("!self.retained_text_glyph_run_ready(cache_key)")
-            && render_source.contains("!self.ensure_retained_text_glyph_run(cache_key, quads)"),
+        render_source.contains("self.retained_text_glyph_run(cache_key)")
+            && render_source.contains("self.ensure_retained_text_glyph_run(cache_key, quads)"),
         "retained text promotion must reuse ready GPU runs and create missing runs through the retained helper"
     );
     assert!(
