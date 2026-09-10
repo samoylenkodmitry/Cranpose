@@ -1,0 +1,60 @@
+{
+  "kind": "scroll",
+  "package": "com.cranscan.app.codex",
+  "activity": "dev.cranpose.android.CranposeActivity",
+  "size": [
+    1080,
+    2244
+  ],
+  "density": 480,
+  "x": 150,
+  "y_start": 1850,
+  "y_end": 450,
+  "count": 4,
+  "duration_ms": 2100,
+  "period_ms": 2450,
+  "window_ms": 9800,
+  "timing_tolerance_ms": 100,
+  "start_text": "On-device intelligence",
+  "end_text": "Version, licenses, credits, library stats.",
+  "motion_region": [
+    80,
+    400,
+    1000,
+    1900
+  ],
+  "setup": [
+    {
+      "visible_text": "Start scanning",
+      "region": [
+        0,
+        1450,
+        1080,
+        1650
+      ],
+      "text_source": "image",
+      "tap": [
+        943,
+        2094
+      ]
+    }
+  ],
+  "start_region": [
+    0,
+    850,
+    1080,
+    1120
+  ],
+  "end_region": [
+    0,
+    1750,
+    1080,
+    2050
+  ],
+  "return": {
+    "y_start": 450,
+    "y_end": 1850
+  },
+  "text_source": "image",
+  "endpoint_timeout_s": 6
+}

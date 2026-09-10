@@ -15,16 +15,23 @@ from android_benchmark_support import checked_command, device_lock, digest, erro
 from android_benchmark_video import AndroidRecording, ScrcpyRecording
 
 
-def validate_pair(proofs, variant_source='framework'):
+def validate_pair(proofs, variant_source='framework', allow_lock_drift=False):
     first, second = proofs
     for key in ['payload']:
         if first[key] != second[key]:
             raise ValueError('Compared APKs differ in ' + key)
-    for key in ['abi', 'features', 'toolchain', 'cargo', 'ndk', 'settings', 'lock_sha256']:
+    keys = ['abi', 'features', 'toolchain', 'cargo', 'ndk', 'settings', 'lock_sha256']
+    if allow_lock_drift:
+        keys.remove('lock_sha256')
+    for key in keys:
         if first['build'][key] != second['build'][key]:
             raise ValueError('Compared builds differ in ' + key)
     fixed_source = {'framework': 'app', 'app': 'framework'}[variant_source]
-    if first['build']['sources'][fixed_source]['inventory'] != second['build']['sources'][fixed_source]['inventory']:
+    inventories = [proof['build']['sources'][fixed_source]['inventory'] for proof in proofs]
+    if allow_lock_drift:
+        inventories = [{name: value for name, value in inventory.items() if name != 'Cargo.lock'}
+                       for inventory in inventories]
+    if inventories[0] != inventories[1]:
         raise ValueError('Compared builds differ in ' + fixed_source + ' sources')
 
 
@@ -258,8 +265,12 @@ def sequence(args, report):
             raise ValueError('APK provenance did not complete')
         verify_build(proof['build'], Path(proof['build_directory']))
         verify_apk(path.parent / proof['apk'], proof, proof['native_member'])
-    validate_pair(proofs, args.variant_source)
+    allow_lock_drift = getattr(args, 'allow_lock_drift', False)
+    validate_pair(proofs, args.variant_source, allow_lock_drift)
     report['variant_source'] = args.variant_source
+    report['allow_lock_drift'] = allow_lock_drift
+    if allow_lock_drift:
+        report['lock_sha256'] = [proof['build']['lock_sha256'] for proof in proofs]
     report.update(serial=args.serial, route_sha256=digest(args.route), helper=helper, legs=[])
     if args.ocr:
         proof = json.loads(args.ocr.with_suffix('.json').read_text())
@@ -355,6 +366,7 @@ def main():
     measure.add_argument('--a', type=Path, required=True)
     measure.add_argument('--b', type=Path, required=True)
     measure.add_argument('--variant-source', choices=['framework', 'app'], default='framework')
+    measure.add_argument('--allow-lock-drift', action='store_true')
     measure.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     signal.signal(signal.SIGTERM, interrupted)
