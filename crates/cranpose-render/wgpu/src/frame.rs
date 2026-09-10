@@ -467,9 +467,16 @@ impl LayerPass<'_> {
     /// nothing above it that overlaps it is drawn before it.
     fn release(
         &mut self,
-        ops: Vec<DrawOp>,
-        composites: Vec<ResolvedComposite>,
+        mut ops: Vec<DrawOp>,
+        mut composites: Vec<ResolvedComposite>,
     ) -> (Vec<DrawOp>, Vec<ResolvedComposite>) {
+        if self.blockers.is_empty() {
+            ensure_sorted_by_key(&mut ops, |op| op.z_index);
+            composites.retain(|composite| composite_coverage(composite).is_some());
+            ensure_sorted_by_key(&mut composites, |composite| composite.z_index);
+            ensure_sorted_by_key(&mut self.deferred, |op| op.z_index);
+            return (ops, composites);
+        }
         let scene = &self.layer.scene;
         let scale = self.scale;
         let mut candidates: Vec<Candidate> = composites
