@@ -478,7 +478,14 @@ fn retained_short_text_matches_fresh_clipped_pixels_after_translation() {
             let expected = context
                 .enter(|| fresh.capture_frame_with_scale(width, height, scale))
                 .expect("reference pixels");
-            assert!(expected.pixels.chunks_exact(4).any(|pixel| pixel[0] > 128));
+            assert!(
+                expected
+                    .pixels
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .any(|pixel| pixel[0] > 128)
+            );
             renderer.scene_mut().graph = Some(clipped_text_graph(y));
             for _ in 0..2 {
                 let actual = renderer

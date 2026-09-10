@@ -8,8 +8,9 @@
 
 use std::cell::RefCell;
 
-use crate::render_effect::ShaderSpecializationCache;
-use crate::{Color, RenderEffect, RuntimeShader, SubstrateSpec};
+use crate::{
+    Color, RenderEffect, RuntimeShader, SubstrateSpec, render_effect::ShaderSpecializationCache,
+};
 
 /// One pipeline-overridable flag of `liquid_glass.wgsl` and the uniform
 /// slots it folds away.

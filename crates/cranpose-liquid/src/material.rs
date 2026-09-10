@@ -728,38 +728,7 @@ impl ResolvedGlass {
             })
             .clone();
         if let Some(morph) = dynamics.morph.as_ref() {
-            let (node_w, node_h) = morph.node_size;
-            let (cx, cy, w, h, radius) = morph.primary;
-            shader.set_float2(0, node_w.max(1.0), node_h.max(1.0));
-            shader.set_float2(2, cx, cy);
-            shader.set_float2(4, w, h);
-            shader.set_float(6, radius);
-            let count = morph.shapes.len().min(GlassMorph::MAX_SHAPES);
-            shader.set_float(30, count as f32);
-            for (index, (sx, sy, sw, sh, sr)) in morph.shapes.iter().take(count).enumerate() {
-                let base = 36 + index * 5;
-                shader.set_float(base, *sx);
-                shader.set_float(base + 1, *sy);
-                shader.set_float(base + 2, *sw);
-                shader.set_float(base + 3, *sh);
-                shader.set_float(base + 4, *sr);
-            }
-            shader.set_float(31, morph.glue);
-            shader.set_float(32, morph.wobble_amplitude * activity);
-            shader.set_float(33, morph.wobble_phase);
-            shader.set_float(26, morph.bulge_amplitude * activity);
-            shader.set_float(27, morph.bulge_direction);
-            shader.set_float(110, morph.ellipse_blend.clamp(0.0, 1.0) * activity);
-            if let Some(deformation) = morph.deformation {
-                let axis = deformation.axis();
-                let along = 1.0 + (deformation.along() - 1.0) * activity;
-                shader.set_float2(106, axis.0, axis.1);
-                shader.set_float(108, along);
-                shader.set_float(109, 1.0 / along);
-            } else {
-                shader.set_float2(106, 1.0, 0.0);
-                shader.set_float2(108, 1.0, 1.0);
-            }
+            set_morph_uniforms(&mut shader, morph, activity);
         } else {
             shader.set_float2(0, 0.0, 0.0);
             shader.set_float(6, self.shape.shader_radius_px(density));
@@ -1167,6 +1136,41 @@ fn morph_output_support(
         y: top - shadow_offset,
         width: right - left,
         height: bottom - top + 2.0 * shadow_offset,
+    }
+}
+
+fn set_morph_uniforms(shader: &mut RuntimeShader, morph: &GlassMorph, activity: f32) {
+    let (node_w, node_h) = morph.node_size;
+    let (cx, cy, w, h, radius) = morph.primary;
+    shader.set_float2(0, node_w.max(1.0), node_h.max(1.0));
+    shader.set_float2(2, cx, cy);
+    shader.set_float2(4, w, h);
+    shader.set_float(6, radius);
+    let count = morph.shapes.len().min(GlassMorph::MAX_SHAPES);
+    shader.set_float(30, count as f32);
+    for (index, (sx, sy, sw, sh, sr)) in morph.shapes.iter().take(count).enumerate() {
+        let base = 36 + index * 5;
+        shader.set_float(base, *sx);
+        shader.set_float(base + 1, *sy);
+        shader.set_float(base + 2, *sw);
+        shader.set_float(base + 3, *sh);
+        shader.set_float(base + 4, *sr);
+    }
+    shader.set_float(31, morph.glue);
+    shader.set_float(32, morph.wobble_amplitude * activity);
+    shader.set_float(33, morph.wobble_phase);
+    shader.set_float(26, morph.bulge_amplitude * activity);
+    shader.set_float(27, morph.bulge_direction);
+    shader.set_float(110, morph.ellipse_blend.clamp(0.0, 1.0) * activity);
+    if let Some(deformation) = morph.deformation {
+        let axis = deformation.axis();
+        let along = 1.0 + (deformation.along() - 1.0) * activity;
+        shader.set_float2(106, axis.0, axis.1);
+        shader.set_float(108, along);
+        shader.set_float(109, 1.0 / along);
+    } else {
+        shader.set_float2(106, 1.0, 0.0);
+        shader.set_float2(108, 1.0, 1.0);
     }
 }
 

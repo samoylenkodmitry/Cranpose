@@ -508,6 +508,28 @@ fn translate_inverse(inverse: [[f32; 3]; 3], offset: [f32; 2]) -> [[f32; 3]; 3] 
     shifted
 }
 
+fn unshadowed_item<'a>(
+    scene: &'a CompositorScene,
+    kind: DrawOpKind,
+    op_index: usize,
+    first_run_window: &Option<std::ops::Range<u32>>,
+    skip_text: bool,
+) -> Option<Item<'a>> {
+    match kind {
+        DrawOpKind::Run(index) => {
+            let run = &scene.runs[index];
+            run_has_shapes(run).then(|| {
+                let window = (op_index == 0).then(|| first_run_window.clone()).flatten();
+                Item::Run(run, window)
+            })
+        }
+        DrawOpKind::Image(index) => Some(Item::Image(index)),
+        DrawOpKind::Text(_) if skip_text => None,
+        DrawOpKind::Text(index) => Some(Item::Text(&scene.texts[index])),
+        DrawOpKind::Shadow(_) => None,
+    }
+}
+
 fn merge_items<'a>(
     segment: &PassSegment<'a>,
     viewport_rect: Rect,
@@ -544,24 +566,18 @@ fn merge_items<'a>(
             if !op_is_visible_in_rect(scene, op, viewport_rect, root_scale) {
                 continue;
             }
-            match op.kind {
-                DrawOpKind::Run(index) => {
-                    let run = &scene.runs[index];
-                    if run_has_shapes(run) {
-                        let window = (op_index == 0).then(|| first_run_window.clone()).flatten();
-                        return Some(Item::Run(run, window));
-                    }
+            if let DrawOpKind::Shadow(index) = op.kind {
+                let shadow = &scene.shadow_draws[index];
+                shadow_texts = shadow.texts.iter();
+                if let Some(run) = unblurred_shadow_run(shadow, viewport_rect, root_scale) {
+                    return Some(Item::Run(run, None));
                 }
-                DrawOpKind::Image(index) => return Some(Item::Image(index)),
-                DrawOpKind::Text(_) if skip_text => {}
-                DrawOpKind::Text(index) => return Some(Item::Text(&scene.texts[index])),
-                DrawOpKind::Shadow(index) => {
-                    let shadow = &scene.shadow_draws[index];
-                    shadow_texts = shadow.texts.iter();
-                    if let Some(run) = unblurred_shadow_run(shadow, viewport_rect, root_scale) {
-                        return Some(Item::Run(run, None));
-                    }
-                }
+                continue;
+            }
+            if let Some(item) =
+                unshadowed_item(scene, op.kind, op_index, &first_run_window, skip_text)
+            {
+                return Some(item);
             }
         }
     })

@@ -422,6 +422,68 @@ struct Blocker {
     rect: DeviceRect,
 }
 
+fn release_op(
+    op: DrawOp,
+    scene: &CompositorScene,
+    scale: f32,
+    holes: &mut Vec<Blocker>,
+    deferred: &mut Vec<DrawOp>,
+    now_ops: &mut Vec<DrawOp>,
+) {
+    let bounds =
+        op_draw_bounds(scene, &op, scale).map(|bounds| DeviceRect::from_logical(bounds, scale));
+    let blocked = bounds.and_then(|bounds| {
+        holes
+            .iter()
+            .filter(|hole| hole.z < op.z_index)
+            .find_map(|hole| {
+                hole.rect
+                    .intersect(bounds)
+                    .map(|part| (bounds, part == bounds))
+            })
+    });
+    match blocked {
+        Some((rect, fully_covered)) => {
+            if !fully_covered {
+                holes.push(Blocker {
+                    z: op.z_index,
+                    rect,
+                });
+            }
+            deferred.push(op);
+        }
+        None => now_ops.push(op),
+    }
+}
+
+fn release_composite(
+    composite: ResolvedComposite,
+    holes: &[Blocker],
+    covered: &mut Vec<DeviceRect>,
+    now: &mut Vec<ResolvedComposite>,
+    pending: &mut Vec<ResolvedComposite>,
+) {
+    let Some(coverage) = composite_coverage(&composite) else {
+        return;
+    };
+    collect_covered_rects(holes, composite.z_index, coverage, covered);
+    if covered.is_empty() {
+        now.push(composite);
+        return;
+    }
+    now.extend(
+        coverage
+            .subtract_all(covered)
+            .into_iter()
+            .map(|part| with_scissor(&composite, part)),
+    );
+    for (index, hole) in covered.iter().enumerate() {
+        for part in hole.subtract_all(&covered[..index]) {
+            pending.push(with_scissor(&composite, part));
+        }
+    }
+}
+
 fn collect_covered_rects(
     holes: &[Blocker],
     z: usize,
@@ -516,55 +578,19 @@ impl LayerPass<'_> {
         let mut now = Vec::with_capacity(composite_count);
         for candidate in candidates {
             match candidate {
-                Candidate::Op(op) => {
-                    let bounds = op_draw_bounds(scene, &op, scale)
-                        .map(|bounds| DeviceRect::from_logical(bounds, scale));
-                    let blocked = bounds.and_then(|bounds| {
-                        holes
-                            .iter()
-                            .filter(|hole| hole.z < op.z_index)
-                            .find_map(|hole| {
-                                hole.rect
-                                    .intersect(bounds)
-                                    .map(|part| (bounds, part == bounds))
-                            })
-                    });
-                    match blocked {
-                        Some((rect, fully_covered)) => {
-                            if !fully_covered {
-                                holes.push(Blocker {
-                                    z: op.z_index,
-                                    rect,
-                                });
-                            }
-                            self.deferred.push(op);
-                        }
-                        None => now_ops.push(op),
-                    }
-                }
+                Candidate::Op(op) => release_op(
+                    op,
+                    scene,
+                    scale,
+                    &mut holes,
+                    &mut self.deferred,
+                    &mut now_ops,
+                ),
                 Candidate::Composite { index, .. } => {
                     let composite = composites[index]
                         .take()
                         .expect("a flush releases each composite once");
-                    let Some(coverage) = composite_coverage(&composite) else {
-                        continue;
-                    };
-                    collect_covered_rects(&holes, composite.z_index, coverage, &mut covered);
-                    if covered.is_empty() {
-                        now.push(composite);
-                        continue;
-                    }
-                    now.extend(
-                        coverage
-                            .subtract_all(&covered)
-                            .into_iter()
-                            .map(|part| with_scissor(&composite, part)),
-                    );
-                    for (index, hole) in covered.iter().enumerate() {
-                        for part in hole.subtract_all(&covered[..index]) {
-                            self.pending.push(with_scissor(&composite, part));
-                        }
-                    }
+                    release_composite(composite, &holes, &mut covered, &mut now, &mut self.pending);
                 }
             }
         }
@@ -1305,6 +1331,99 @@ fn stage_composites(
 
 /// A rectangle of texels: x, y, width, height.
 type TexelRect = (u32, u32, u32, u32);
+
+/// The three region lists `stage_substrate_regions` appends to while it walks
+/// a stage's members.
+struct SideRegionSinks<'a> {
+    regions: &'a mut Vec<BlurRegion>,
+    averaged: &'a mut Vec<SubstrateRegion>,
+    copies: &'a mut Vec<(TexelRect, [u32; 2])>,
+}
+
+fn stage_blur_regions(
+    blurred: &[(usize, BlurSpec)],
+    members: &[(usize, AtlasPlacement)],
+    items: &[&PendingBackdrop<'_>],
+    view: &AtlasView<'_>,
+    scale: f32,
+    regions: &mut Vec<BlurRegion>,
+) -> Result<Vec<Option<TexelRect>>, String> {
+    let mut slots = vec![None; members.len()];
+    for (member, blur) in blurred {
+        let (index, placement) = members[*member];
+        let (width, height) = items[index].capture_rect.pixel_size();
+        let Some(scratch) = view.side(index).blur else {
+            return Err("a blurred region outgrew the atlas that held it".into());
+        };
+        slots[*member] = Some(scratch);
+        regions.push(BlurRegion {
+            source: (placement.x, placement.y, width, height),
+            scratch,
+            dest: scratch,
+            radius_x: blur.radius_x * scale,
+            radius_y: blur.radius_y * scale,
+            tile_mode: blur.tile_mode,
+            read: member_read_texels(items[index], placement, scale),
+        });
+    }
+    Ok(slots)
+}
+
+fn stage_substrate_regions(
+    members: &[(usize, AtlasPlacement)],
+    items: &[&PendingBackdrop<'_>],
+    view: &AtlasView<'_>,
+    scale: f32,
+    ablate: bool,
+    sinks: SideRegionSinks<'_>,
+) -> Result<Vec<[Option<(f32, f32, f32, f32)>; MAX_SUBSTRATES]>, String> {
+    let SideRegionSinks {
+        regions,
+        averaged,
+        copies,
+    } = sinks;
+    let mut member_regions = vec![[None; MAX_SUBSTRATES]; members.len()];
+    for (member, (index, placement)) in members.iter().enumerate() {
+        let (source_width, source_height) = items[*index].capture_rect.pixel_size();
+        let source = (placement.x, placement.y, source_width, source_height);
+        for (order, planned) in view.substrates(*index).iter().enumerate() {
+            if ablate {
+                member_regions[member][order] = Some(region_tuple(source));
+                continue;
+            }
+            let (width, height) = planned.size;
+            let Some(scratch) = view.side(*index).substrates.get(order).copied().flatten() else {
+                return Err("a substrate outgrew the atlas that held it".into());
+            };
+            let read = member_read_texels(items[*index], *placement, scale);
+            match planned.spec {
+                SubstrateSpec::Average { block } => averaged.push(SubstrateRegion {
+                    source,
+                    scratch,
+                    block,
+                    read,
+                }),
+                SubstrateSpec::Blur { radius_px } => regions.push(BlurRegion {
+                    source,
+                    scratch,
+                    dest: scratch,
+                    radius_x: radius_px,
+                    radius_y: radius_px,
+                    tile_mode: TileMode::Clamp,
+                    read,
+                }),
+            }
+            member_regions[member][order] = Some(region_tuple(match planned.atlas_slot {
+                Some((x, y, _, _)) => {
+                    copies.push((scratch, [x, y]));
+                    (x, y, width, height)
+                }
+                None => scratch,
+            }));
+        }
+    }
+    Ok(member_regions)
+}
 
 fn region_tuple((x, y, width, height): TexelRect) -> (f32, f32, f32, f32) {
     (x as f32, y as f32, width as f32, height as f32)
@@ -2583,70 +2702,22 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         {
             return Ok(None);
         }
-        let mut slots = vec![None; members.len()];
         let mut regions = Vec::with_capacity(blurred.len());
-        for (member, blur) in blurred {
-            let (index, placement) = members[member];
-            let (width, height) = items[index].capture_rect.pixel_size();
-            let radius_x = blur.radius_x * scale;
-            let radius_y = blur.radius_y * scale;
-            let Some(scratch) = view.side(index).blur else {
-                return Err("a blurred region outgrew the atlas that held it".into());
-            };
-            slots[member] = Some(scratch);
-            regions.push(BlurRegion {
-                source: (placement.x, placement.y, width, height),
-                scratch,
-                dest: scratch,
-                radius_x,
-                radius_y,
-                tile_mode: blur.tile_mode,
-                read: member_read_texels(items[index], placement, scale),
-            });
-        }
+        let slots = stage_blur_regions(&blurred, members, items, view, scale, &mut regions)?;
         let mut averaged = Vec::new();
         let mut copies: Vec<(TexelRect, [u32; 2])> = Vec::new();
-        let mut member_regions = vec![[None; MAX_SUBSTRATES]; members.len()];
-        for (member, (index, placement)) in members.iter().enumerate() {
-            let (source_width, source_height) = items[*index].capture_rect.pixel_size();
-            let source = (placement.x, placement.y, source_width, source_height);
-            for (order, planned) in view.substrates(*index).iter().enumerate() {
-                if self.renderer.ablation.substrates {
-                    member_regions[member][order] = Some(region_tuple(source));
-                    continue;
-                }
-                let (width, height) = planned.size;
-                let Some(scratch) = view.side(*index).substrates.get(order).copied().flatten()
-                else {
-                    return Err("a substrate outgrew the atlas that held it".into());
-                };
-                let read = member_read_texels(items[*index], *placement, scale);
-                match planned.spec {
-                    SubstrateSpec::Average { block } => averaged.push(SubstrateRegion {
-                        source,
-                        scratch,
-                        block,
-                        read,
-                    }),
-                    SubstrateSpec::Blur { radius_px } => regions.push(BlurRegion {
-                        source,
-                        scratch,
-                        dest: scratch,
-                        radius_x: radius_px,
-                        radius_y: radius_px,
-                        tile_mode: TileMode::Clamp,
-                        read,
-                    }),
-                }
-                member_regions[member][order] = Some(region_tuple(match planned.atlas_slot {
-                    Some((x, y, _, _)) => {
-                        copies.push((scratch, [x, y]));
-                        (x, y, width, height)
-                    }
-                    None => scratch,
-                }));
-            }
-        }
+        let member_regions = stage_substrate_regions(
+            members,
+            items,
+            view,
+            scale,
+            self.renderer.ablation.substrates,
+            SideRegionSinks {
+                regions: &mut regions,
+                averaged: &mut averaged,
+                copies: &mut copies,
+            },
+        )?;
         if regions.is_empty() && averaged.is_empty() {
             return Ok(Some(StageSideRegions {
                 result: Rc::clone(atlas),
