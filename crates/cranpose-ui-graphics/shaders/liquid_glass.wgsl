@@ -791,6 +791,9 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
     // wcKSRD's `smoothstep(0, 1, rb1)` is the material's coverage transition.
     // Premultiplied compositing against the untouched backdrop is equivalent
     // to the reference shader's final `mix(backdrop, lighting, transition)`.
+    if GLASS_RIM_DRAW != 1 && GLASS_SHADOW_OFF && d >= max(gradient_extent, 0.0) {
+        return vec4<f32>(0.0);
+    }
     let inradius = max(min(half_size.x, half_size.y), 1.0);
     let physical_refraction_depth = max(get_float(98u), 0.0) * optical_scale;
     let lens_refraction = max(
