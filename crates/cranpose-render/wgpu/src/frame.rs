@@ -2570,6 +2570,14 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         })
     }
 
+    /// Places every batched member of a stage into the atlas, in item order.
+    ///
+    /// The order is load-bearing, not incidental: `StageLayout::signature`
+    /// hashes a member's atlas `(x, y)` into its backdrop cache key, so a
+    /// member that shifts inside the atlas re-renders. Placing a member whose
+    /// capture resizes every frame -- an animating one -- ahead of a still
+    /// member walks the still member's slot and costs it its cache entry every
+    /// frame. Sorting by height packs tighter and loses exactly that.
     fn pack_stage(
         &self,
         items: &[&PendingBackdrop<'_>],
@@ -2581,15 +2589,11 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         let limit = self.renderer.max_texture_dim().min(MAX_ATLAS_DIM);
         let mut packer = AtlasPacker::new(limit);
         let mut placements: Vec<Option<AtlasPlacement>> = vec![None; items.len()];
-        let mut order: Vec<usize> = (0..items.len())
-            .filter(|&index| items[index].batched.is_some())
-            .collect();
-        order.sort_unstable_by_key(|&index| {
-            let (width, height) = items[index].capture_rect.pixel_size();
-            (std::cmp::Reverse(height), std::cmp::Reverse(width), index)
-        });
-        for index in order {
-            let (width, height) = items[index].capture_rect.pixel_size();
+        for (index, item) in items.iter().enumerate() {
+            if item.batched.is_none() {
+                continue;
+            }
+            let (width, height) = item.capture_rect.pixel_size();
             placements[index] = packer.place(width, height);
         }
         let mut substrates = vec![PlannedSubstrates::new(); items.len()];
