@@ -291,6 +291,48 @@ fn staged_page(with_glasses: bool) -> RenderGraph {
 }
 
 #[test]
+fn overlapping_capture_stages_preserve_translucent_draw_order() {
+    let mut renderer = support::headless_renderer().expect("headless WGPU init failed");
+    let bounds = [GLASS, SECOND_GLASS, rect(40.0, 35.0, 150.0, 65.0)];
+    for order in [[0, 1, 2], [2, 0, 1], [1, 0, 2]] {
+        let scene = |with_glasses| {
+            let mut children = straddling_page();
+            for (position, index) in order.into_iter().enumerate() {
+                if with_glasses {
+                    children.push(tint_glass_at(bounds[index]));
+                } else {
+                    children.push(solid_rect(bounds[index], Color(1.0, 0.0, 0.0, 0.5)));
+                }
+                children.push(solid_rect(
+                    rect(35.0 + position as f32 * 20.0, 15.0, 135.0, 90.0),
+                    [
+                        Color(1.0, 0.0, 0.0, 0.4),
+                        Color(0.0, 1.0, 0.0, 0.5),
+                        Color(0.0, 0.0, 1.0, 0.6),
+                    ][index],
+                ));
+            }
+            support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children)
+        };
+        let expected = capture(&mut renderer, scene(false));
+        let actual = capture(&mut renderer, scene(true));
+        assert!(renderer.last_frame_stats().unwrap().stages >= 2);
+        assert_eq!(renderer.device_error_count_for_tests(), 0);
+        let differences = image_difference_stats(
+            &expected.pixels,
+            &actual.pixels,
+            FRAME_WIDTH,
+            FRAME_HEIGHT,
+            1,
+        );
+        assert_eq!(
+            differences.differing_pixels, 0,
+            "tinted captures must match direct alpha blending for every translucent draw in order {order:?}: {differences:?}",
+        );
+    }
+}
+
+#[test]
 fn a_later_glass_of_a_stage_shows_what_was_drawn_after_the_earlier_glass() {
     let Ok(mut renderer) = support::headless_renderer() else {
         eprintln!("skipping (headless WGPU init failed)");
