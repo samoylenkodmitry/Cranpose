@@ -649,8 +649,12 @@ where
         } else {
             self.renderer.scene_mut().clear();
         }
-        if let Some(retained_nodes) = self.renderer.scene().retained_visual_observation_nodes() {
-            cranpose_ui::prune_draw_observations_to_nodes(&retained_nodes);
+        if self
+            .renderer
+            .scene()
+            .collect_retained_visual_observation_nodes(&mut self.retained_visual_nodes)
+        {
+            cranpose_ui::prune_draw_observations_to_nodes(&self.retained_visual_nodes);
         }
 
         if self.dev_options.fps_counter {

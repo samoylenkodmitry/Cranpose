@@ -97,8 +97,14 @@ pub trait RenderScene {
     /// Returns None if the node no longer exists in the scene (e.g., removed during gesture).
     fn find_target(&self, node_id: cranpose_core::NodeId) -> Option<Self::HitTarget>;
 
-    fn retained_visual_observation_nodes(&self) -> Option<HashSet<cranpose_core::NodeId>> {
-        None
+    /// Replaces the set with retained visual observation owners, preserving its capacity.
+    /// Returns whether the scene provides this information.
+    fn collect_retained_visual_observation_nodes(
+        &self,
+        nodes: &mut HashSet<cranpose_core::NodeId>,
+    ) -> bool {
+        nodes.clear();
+        false
     }
 }
 

@@ -449,12 +449,13 @@ impl RenderScene for Scene {
             .cloned()
     }
 
-    fn retained_visual_observation_nodes(&self) -> Option<HashSet<NodeId>> {
-        Some(
-            self.graph
-                .as_ref()
-                .map_or_else(HashSet::new, RenderGraph::retained_visual_observation_nodes),
-        )
+    fn collect_retained_visual_observation_nodes(&self, nodes: &mut HashSet<NodeId>) -> bool {
+        if let Some(graph) = &self.graph {
+            graph.collect_retained_visual_observation_nodes(nodes);
+        } else {
+            nodes.clear();
+        }
+        true
     }
 }
 
@@ -633,6 +634,16 @@ mod tests {
         scene.push_hit(3, &[3], hit_geometry_for_rect(rect), None, [], &[]);
         assert!(scene.hits.is_empty());
         assert_eq!(scene.next_hit_z, 0);
+    }
+
+    #[test]
+    fn collecting_observation_owners_clears_an_empty_scene() {
+        let scene = Scene::new();
+        let mut nodes = HashSet::from([13, 17]);
+        let capacity = nodes.capacity();
+        assert!(scene.collect_retained_visual_observation_nodes(&mut nodes));
+        assert!(nodes.is_empty());
+        assert_eq!(nodes.capacity(), capacity);
     }
 
     #[test]

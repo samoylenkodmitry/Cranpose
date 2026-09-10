@@ -530,7 +530,8 @@ impl RenderGraph {
         layer_heap_bytes(&self.root)
     }
 
-    pub fn retained_visual_observation_nodes(&self) -> HashSet<NodeId> {
+    /// Replaces the set with the graph's visual observation owners, retaining its capacity.
+    pub fn collect_retained_visual_observation_nodes(&self, nodes: &mut HashSet<NodeId>) {
         fn collect(layer: &LayerNode, nodes: &mut HashSet<NodeId>) {
             if let Some(node_id) = layer.node_id {
                 nodes.insert(node_id);
@@ -548,9 +549,8 @@ impl RenderGraph {
             }
         }
 
-        let mut nodes = HashSet::new();
-        collect(&self.root, &mut nodes);
-        nodes
+        nodes.clear();
+        collect(&self.root, nodes);
     }
 }
 
@@ -870,10 +870,16 @@ mod tests {
 
         root.node_id = Some(5);
 
-        assert_eq!(
-            RenderGraph::new(root).retained_visual_observation_nodes(),
-            HashSet::from([5, 9, 13, 17])
-        );
+        let mut graph = RenderGraph::new(root);
+        let mut nodes = HashSet::from([999]);
+        graph.collect_retained_visual_observation_nodes(&mut nodes);
+        assert_eq!(nodes, HashSet::from([5, 9, 13, 17]));
+        let capacity = nodes.capacity();
+        graph.root.children.clear();
+        graph.root.node_id = Some(23);
+        graph.collect_retained_visual_observation_nodes(&mut nodes);
+        assert_eq!(nodes, HashSet::from([23]));
+        assert_eq!(nodes.capacity(), capacity);
     }
 
     #[test]

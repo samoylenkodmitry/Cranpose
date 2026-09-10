@@ -3863,9 +3863,13 @@ fn draw_only_repass_uses_scoped_renderer_update() {
         .as_ref()
         .cloned()
         .expect("width state should be captured");
+    assert!(!shell.retained_visual_nodes.is_empty());
+    shell.retained_visual_nodes.insert(usize::MAX);
     width_state.set(120.0);
 
     shell.update();
+    assert!(!shell.retained_visual_nodes.contains(&usize::MAX));
+    assert!(!shell.retained_visual_nodes.is_empty());
 
     assert_eq!(
         updates.get(),
