@@ -26,15 +26,11 @@ const INNER_BEZEL: f32 = 2.0;
 const CORNER: f32 = 22.0;
 const HINGE_WIDTH: f32 = 5.0;
 /// How far the folding half throws its shadow across the half that stays.
-const CREASE_SHADOW: f32 = 30.0;
+const CREASE_SHADOW: f32 = 22.0;
 /// The folding half swings away from the reader until it is edge on, which is
 /// the device shut: its picture is pressed into the crease on the way, never
 /// lifted off the plane the device lies in.
 const SHUT_ANGLE: f32 = 90.0;
-/// How near edge on the panel is allowed to count for the smear. At exactly
-/// edge on the panel has no width and the widening would divide by nothing.
-const MIN_FORESHORTENING: f32 = 0.11;
-const MAX_SPREAD: f32 = 9.0;
 const CAMERA_DISTANCE: f32 = 15.0;
 /// The device squares up to the reader as it closes, the way a hand turns it
 /// while folding.
@@ -42,11 +38,10 @@ const OPEN_TILT: f32 = 11.0;
 const SHUT_TILT: f32 = 4.0;
 const STAGE_WIDTH: f32 = 760.0;
 const STAGE_HEIGHT: f32 = 470.0;
-const MAX_BLUR_PX: f32 = 22.0;
-const PANEL_DIM: f32 = 0.34;
+const MAX_BLUR_PX: f32 = 30.0;
 const GLASS_SHEEN: f32 = 0.22;
-/// How milky glass turned this far from the reader gets.
-const GLASS_VEIL: f32 = 0.34;
+/// How far into shadow the crease goes once the device is shut.
+const CREASE_DARK: f32 = 0.92;
 
 /// A flick of this much of the fold per second carries the panel the rest of
 /// the way on its own.
@@ -71,22 +66,11 @@ impl Fold {
         self.shut * SHUT_ANGLE
     }
 
-    /// How hard the picture on the folding half is being pressed into the
-    /// crease. A half turned by `a` shows its picture at `cos a` of its width,
-    /// so this runs from nothing when flat to everything when edge on.
+    /// How much of its picture the folding half has given up. A half turned by
+    /// `a` reaches `cos a` of the width it reached when flat, so this runs
+    /// from nothing when flat to everything when edge on.
     fn squeeze(self) -> f32 {
         (1.0 - self.angle().to_radians().cos()).clamp(0.0, 1.0)
-    }
-
-    /// How much wider the smear has to be drawn on the panel to stay the same
-    /// width to the reader once the panel is pressed into the crease.
-    fn spread(self) -> f32 {
-        (1.0 / self.angle().to_radians().cos().max(MIN_FORESHORTENING)).min(MAX_SPREAD)
-    }
-
-    /// How much light the folding half has turned away from.
-    fn dim(self) -> f32 {
-        (self.squeeze().powf(0.65) * PANEL_DIM).clamp(0.0, 1.0)
     }
 
     fn tilt(self) -> f32 {
@@ -102,6 +86,13 @@ impl Fold {
             format!("{} % folded", (self.shut * 100.0).round() as i32)
         }
     }
+}
+
+/// The turn the folding panel takes in the screen: how the device is being
+/// held, with the fold on top of it. Both are turns about the line the hinge
+/// runs down, so they add.
+fn panel_turn(fold: Fold, tilt: f32) -> f32 {
+    tilt - fold.angle()
 }
 
 /// A drag of one half's width folds the device all the way; dragging left
@@ -221,22 +212,19 @@ fn wallpaper_effect(origin: f32, span: f32) -> RenderEffect {
 }
 
 struct GlassUniforms {
-    squeeze: f32,
-    spread: f32,
-    dim: f32,
+    /// How far the device is shut, from flat open to edge on.
+    fold: f32,
     hinge_at_left: bool,
 }
 
 fn glass_effect(uniforms: &GlassUniforms) -> RenderEffect {
     let mut shader = RuntimeShader::from_shared_source(foldable_wgsl());
     shader.set_float(0, 1.0);
-    shader.set_float(1, uniforms.squeeze);
+    shader.set_float(1, uniforms.fold);
     shader.set_float(2, MAX_BLUR_PX);
-    shader.set_float(3, uniforms.dim);
+    shader.set_float(3, CREASE_DARK);
     shader.set_float(4, GLASS_SHEEN);
     shader.set_float(5, if uniforms.hinge_at_left { 1.0 } else { 0.0 });
-    shader.set_float(6, uniforms.spread);
-    shader.set_float(7, GLASS_VEIL);
     RenderEffect::runtime_shader(shader)
 }
 
@@ -403,15 +391,13 @@ fn StillHalf(tilt: f32) {
     );
 }
 
-/// The half that swings on the hinge, away from the reader. It never leaves
-/// the plane the device lies in as far as the reader can tell: it is pressed
-/// into the crease, and the picture on it goes with it.
+/// The half that swings on the hinge, away from the reader. Its picture goes
+/// with it and is foreshortened by it; what the fold takes away is the
+/// reader's ability to focus on it, not the layout, which never reflows.
 #[composable]
 fn FoldingHalf(fold: Fold, tilt: f32) {
-    let angle = tilt - fold.angle();
-    let squeeze = fold.squeeze();
-    let spread = fold.spread();
-    let dim = fold.dim();
+    let angle = panel_turn(fold, tilt);
+    let shut = fold.shut;
 
     Box(
         Modifier::empty()
@@ -422,18 +408,16 @@ fn FoldingHalf(fold: Fold, tilt: f32) {
             Box(
                 Modifier::empty()
                     .size_points(HALF_WIDTH, SCREEN_HEIGHT)
-                    // A half lying flat has nothing pressing on its picture,
-                    // so it goes straight to the screen: no layer of its own,
-                    // and none of the smear's reads per pixel.
+                    // A half lying flat reaches all of its picture and has no
+                    // gradient over it, so it goes straight to the screen: no
+                    // layer of its own, and none of the blur's reads per pixel.
                     .graphics_layer(move || {
-                        if squeeze <= 0.0 {
+                        if shut <= 0.0 {
                             return GraphicsLayer::default();
                         }
                         GraphicsLayer {
                             render_effect: Some(glass_effect(&GlassUniforms {
-                                squeeze,
-                                spread,
-                                dim,
+                                fold: shut,
                                 hinge_at_left: false,
                             })),
                             compositing_strategy: CompositingStrategy::Offscreen,
@@ -510,7 +494,7 @@ fn HalfFace(offset: f32, hinge_at_right: bool) {
 fn Hinge(fold: Fold, tilt: f32) {
     let squeeze = fold.squeeze();
     let cast = HINGE_WIDTH + CREASE_SHADOW * squeeze;
-    let depth = 0.5 * squeeze;
+    let depth = 0.38 * squeeze;
 
     HingeStrip(
         HALF_WIDTH,
@@ -628,22 +612,14 @@ mod tests {
     }
 
     #[test]
-    fn the_smear_widens_with_the_press_and_stops_widening() {
-        assert!((Fold::at(0.0).spread() - 1.0).abs() < 1e-4);
-        assert!(Fold::at(0.6).spread() > Fold::at(0.3).spread());
-        assert_eq!(
-            Fold::at(1.0).spread(),
-            MAX_SPREAD,
-            "an edge on half would divide by nothing without the cap"
+    fn the_panel_carries_the_hold_and_the_fold_in_one_turn() {
+        let tilt = 11.0;
+        assert!((panel_turn(Fold::at(0.0), tilt) - tilt).abs() < 1e-4);
+        assert!(panel_turn(Fold::at(0.5), tilt) < panel_turn(Fold::at(0.2), tilt));
+        assert!(
+            (panel_turn(Fold::at(1.0), tilt) - (tilt - SHUT_ANGLE)).abs() < 1e-4,
+            "a shut device has folded its half a right angle away from the hold"
         );
-    }
-
-    #[test]
-    fn a_folding_panel_keeps_taking_less_light_all_the_way_shut() {
-        assert_eq!(Fold::at(0.0).dim(), 0.0);
-        assert!(Fold::at(0.5).dim() > Fold::at(0.2).dim());
-        assert!(Fold::at(1.0).dim() > Fold::at(0.5).dim());
-        assert!(Fold::at(1.0).dim() <= 1.0);
     }
 
     #[test]
