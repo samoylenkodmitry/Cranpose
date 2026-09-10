@@ -55,10 +55,9 @@ fn resourced(effect: &RenderEffect, source: &str) -> RenderEffect {
         RenderEffect::Shader { shader } => {
             RenderEffect::runtime_shader(resourced_shader(shader, source))
         }
-        RenderEffect::Chain { first, second } => RenderEffect::Chain {
-            first: Box::new(resourced(first, source)),
-            second: Box::new(resourced(second, source)),
-        },
+        RenderEffect::Chain { first, second } => {
+            resourced(first, source).then(resourced(second, source))
+        }
         other => other.clone(),
     }
 }
