@@ -49,7 +49,7 @@ fn compare_ladder(substrates: bool) {
                 panic!("gradient blur uses a runtime shader");
             };
             if !substrates {
-                shader.set_substrates(&[]);
+                std::sync::Arc::make_mut(&mut shader).set_substrates(&[]);
             }
             let mut reference = RuntimeShader::new(REFERENCE);
             for (index, value) in shader.uniforms().iter().enumerate() {
@@ -66,7 +66,7 @@ fn compare_ladder(substrates: bool) {
             );
             let actual = support::capture_graph(
                 &mut renderer,
-                page(RenderEffect::runtime_shader(shader)),
+                page(RenderEffect::Shader { shader }),
                 FRAME,
                 FRAME,
             );

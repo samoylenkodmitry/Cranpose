@@ -1083,7 +1083,7 @@ mod tests {
 
     fn terminal_shader(effect: RenderEffect) -> RuntimeShader {
         match effect {
-            RenderEffect::Shader { shader } => shader,
+            RenderEffect::Shader { shader } => std::sync::Arc::unwrap_or_clone(shader),
             RenderEffect::Chain { second, .. } => terminal_shader(*second),
             effect => panic!("expected runtime shader, got {effect:?}"),
         }

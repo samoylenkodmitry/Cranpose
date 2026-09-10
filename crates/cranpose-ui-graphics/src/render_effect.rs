@@ -869,7 +869,10 @@ pub enum RenderEffect {
     /// Offset the rendered content by a fixed amount.
     Offset { offset_x: f32, offset_y: f32 },
     /// Apply a custom WGSL shader effect.
-    Shader { shader: RuntimeShader },
+    Shader {
+        /// Shared shader configuration; use [`Arc::make_mut`] to edit a cloned effect independently.
+        shader: Arc<RuntimeShader>,
+    },
     /// Chain two effects: apply `first`, then apply `second` to the result.
     Chain {
         first: Box<RenderEffect>,
@@ -909,7 +912,9 @@ impl RenderEffect {
 
     /// Create a custom shader effect from a RuntimeShader.
     pub fn runtime_shader(shader: RuntimeShader) -> Self {
-        Self::Shader { shader }
+        Self::Shader {
+            shader: Arc::new(shader),
+        }
     }
 
     /// Chain this effect with another: `self` is applied first, then `other`.
@@ -1115,6 +1120,44 @@ mod tests {
 
     use super::*;
     use crate::RoundedCornerShape;
+
+    #[test]
+    fn cloned_shader_effects_preserve_configuration_and_isolate_edits() {
+        let mut shader = RuntimeShader::new("fn effect_fs() {}");
+        shader.set_float(20, 3.0);
+        shader.set_override("FEATURE", -0.0);
+        shader.set_input_padding(7.0);
+        shader.set_substrates(&[SubstrateSpec::Blur { radius_px: 12.0 }]);
+        shader.set_draw_split(Some("SPLIT"));
+        let original = RenderEffect::runtime_shader(shader.clone());
+        let mut edited = original.clone();
+        assert_eq!(edited, original);
+        let RenderEffect::Shader {
+            shader: original_shader,
+        } = &original
+        else {
+            panic!("shader effect")
+        };
+        assert_eq!(original_shader.as_ref(), &shader);
+        let RenderEffect::Shader {
+            shader: edited_shader,
+        } = &mut edited
+        else {
+            panic!("shader effect")
+        };
+        assert!(Arc::ptr_eq(original_shader, edited_shader));
+        let changed = Arc::make_mut(edited_shader);
+        changed.set_float(20, 9.0);
+        changed.set_override("FEATURE", 1.0);
+        changed.set_substrates(&[]);
+        changed.set_draw_split(None);
+        assert_eq!(original_shader.as_ref(), &shader);
+        assert_eq!(edited_shader.uniforms()[20], 9.0);
+        assert_eq!(edited_shader.overrides(), &[("FEATURE", 1.0)]);
+        assert!(edited_shader.substrates().is_empty());
+        assert_eq!(edited_shader.draw_split(), None);
+        assert_ne!(original, edited);
+    }
 
     #[test]
     fn runtime_shader_set_uniforms() {
@@ -1404,14 +1447,9 @@ mod tests {
         };
         shader.set_output_support(Some(support));
         assert_eq!(shader.output_support(), Some(support));
-        let effect = RenderEffect::blur(3.0).then(RenderEffect::Shader {
-            shader: shader.clone(),
-        });
+        let effect = RenderEffect::blur(3.0).then(RenderEffect::runtime_shader(shader.clone()));
         assert_eq!(effect.output_support(), Some(support));
-        let effect = RenderEffect::Shader {
-            shader: shader.clone(),
-        }
-        .then(RenderEffect::blur(3.0));
+        let effect = RenderEffect::runtime_shader(shader.clone()).then(RenderEffect::blur(3.0));
         assert_eq!(effect.output_support(), None);
         assert_eq!(RenderEffect::blur(3.0).output_support(), None);
     }
@@ -1429,9 +1467,7 @@ mod tests {
         shader.set_sample_domain(Some(domain));
         assert_ne!(shader, plain);
         assert_eq!(shader.sample_domain(), Some(domain));
-        let effect = RenderEffect::blur(3.0).then(RenderEffect::Shader {
-            shader: shader.clone(),
-        });
+        let effect = RenderEffect::blur(3.0).then(RenderEffect::runtime_shader(shader.clone()));
         assert_eq!(effect.sample_domain(), Some(domain));
         assert_eq!(RenderEffect::blur(3.0).output_support(), None);
         assert_eq!(RenderEffect::blur(3.0).sample_domain(), None);

@@ -1,4 +1,4 @@
-use std::rc::Rc;
+use std::{rc::Rc, sync::Arc};
 
 use cranpose_ui_graphics::{BlendMode, Rect, RuntimeShader};
 
@@ -89,7 +89,7 @@ pub(crate) enum ResolvedCompositeKind {
         source_viewport: Option<(f32, f32, f32, f32)>,
     },
     Shader {
-        shader: Rc<RuntimeShader>,
+        shader: Arc<RuntimeShader>,
         layer_pixel_rect: [f32; 4],
         source_region: Option<(f32, f32, f32, f32)>,
         source_logical_size: Option<(f32, f32)>,
