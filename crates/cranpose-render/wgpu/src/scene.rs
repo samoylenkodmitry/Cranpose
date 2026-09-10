@@ -257,6 +257,18 @@ pub(crate) struct ShadowDraw {
     pub z_index: usize,
 }
 
+impl ShadowDraw {
+    pub(crate) fn requires_surface(&self) -> bool {
+        self.blur_radius > 0.0
+            || self.post_blur_cutouts.is_some()
+            || self.shapes.as_ref().is_some_and(|shapes| {
+                shapes
+                    .segment_records()
+                    .any(|segment| segment.blend == BlendMode::DstOut)
+            })
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct EffectLayer {
     pub rect: Rect,

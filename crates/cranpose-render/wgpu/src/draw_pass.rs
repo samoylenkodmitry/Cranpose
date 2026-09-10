@@ -420,7 +420,7 @@ pub(crate) fn op_draw_bounds(
         DrawOpKind::Text(index) => text_draw_bounds(&scene.texts[index], root_scale),
         DrawOpKind::Shadow(index) => {
             let shadow = &scene.shadow_draws[index];
-            if shadow.blur_radius > 0.0 {
+            if shadow.requires_surface() {
                 return None;
             }
             shadow_caster_bounds(shadow, root_scale)
