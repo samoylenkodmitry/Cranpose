@@ -1376,7 +1376,7 @@ fn stage_substrate_regions(
     scale: f32,
     ablate: bool,
     sinks: SideRegionSinks<'_>,
-) -> Result<Vec<[Option<(f32, f32, f32, f32)>; MAX_SUBSTRATES]>, String> {
+) -> Result<Vec<SubstrateRegions>, String> {
     let SideRegionSinks {
         regions,
         averaged,
