@@ -581,21 +581,6 @@ fn translate_layer_from_data(
     if graphics_layer != container.graphics_layer {
         return translate_bail("container graphics layer changed");
     }
-    let mut old_ids = Vec::with_capacity(container.children.len());
-    for child in &container.children {
-        let RenderNode::Layer(layer) = child else {
-            return translate_bail("non-layer child");
-        };
-        let Some(child_id) = layer_identity(layer) else {
-            return translate_bail("child without node id");
-        };
-        old_ids.push(child_id);
-    }
-    let old_index_by_id: std::collections::HashMap<NodeId, usize> = old_ids
-        .iter()
-        .enumerate()
-        .map(|(index, id)| (*id, index))
-        .collect();
     let mut placed_fresh = Vec::with_capacity(fresh_children.len());
     for child_id in &fresh_children {
         let state = applier
@@ -611,9 +596,33 @@ fn translate_layer_from_data(
         }
         placed_fresh.push((*child_id, state));
     }
-    let fresh_id_set: HashSet<NodeId> = placed_fresh.iter().map(|(id, _)| *id).collect();
-    for (child_id, state) in &placed_fresh {
-        let Some(&old_index) = old_index_by_id.get(child_id) else {
+    let children_unchanged = container.children.len() == placed_fresh.len()
+        && container.children.iter().zip(&placed_fresh).all(|(child, (id, _))| {
+            matches!(child, RenderNode::Layer(layer) if layer_identity(layer) == Some(*id))
+        });
+    let old_index_by_id = if children_unchanged {
+        std::collections::HashMap::new()
+    } else {
+        let Some(index): Option<std::collections::HashMap<NodeId, usize>> = container
+            .children
+            .iter()
+            .enumerate()
+            .map(|(index, child)| match child {
+                RenderNode::Layer(layer) => layer_identity(layer).map(|id| (id, index)),
+                _ => None,
+            })
+            .collect()
+        else {
+            return translate_bail("child without node id");
+        };
+        index
+    };
+    for (fresh_index, (child_id, state)) in placed_fresh.iter().enumerate() {
+        let old_index = if children_unchanged {
+            fresh_index
+        } else if let Some(index) = old_index_by_id.get(child_id) {
+            *index
+        } else {
             continue;
         };
         let RenderNode::Layer(layer) = &container.children[old_index] else {
@@ -661,7 +670,7 @@ fn translate_layer_from_data(
     let mut entering: std::collections::HashMap<NodeId, LayerNode> =
         std::collections::HashMap::new();
     for (child_id, _) in &placed_fresh {
-        if old_index_by_id.contains_key(child_id) {
+        if children_unchanged || old_index_by_id.contains_key(child_id) {
             continue;
         }
         let Some(mut lowered) = build_layer_node_from_applier_internal(
@@ -725,57 +734,60 @@ fn translate_layer_from_data(
     container.scene_children_origin = child_origin;
     container.scene_children_layer_translation = layer_translation;
 
-    let mut old_by_id: std::collections::HashMap<NodeId, Box<LayerNode>> =
-        std::collections::HashMap::new();
-    for child in container.children.drain(..) {
-        let RenderNode::Layer(layer) = child else {
-            continue;
-        };
-        let child_id = layer_identity(&layer).expect("checked above");
-        if fresh_id_set.contains(&child_id) {
-            old_by_id.insert(child_id, layer);
-        } else {
-            collect_layer_node_ids(&layer, changed_nodes);
-        }
-    }
-    let mut new_children = Vec::with_capacity(placed_fresh.len());
-    for (child_id, state) in &placed_fresh {
-        if let Some(mut layer) = old_by_id.remove(child_id) {
+    if children_unchanged {
+        for (child, (child_id, state)) in container.children.iter_mut().zip(&placed_fresh) {
+            let RenderNode::Layer(layer) = child else {
+                unreachable!("retained child identities were checked");
+            };
             if !dirty_nodes.contains(child_id) {
-                let mut child_transform = layer_transform_to_parent(
-                    layer.local_bounds,
-                    state.position(),
-                    &layer.graphics_layer,
+                translate_retained_child(
+                    layer,
+                    state,
+                    content_offset,
+                    child_origin,
+                    translation_delta,
                 );
-                if content_offset != Point::default() {
-                    child_transform = child_transform.then(ProjectiveTransform::translation(
-                        content_offset.x,
-                        content_offset.y,
-                    ));
-                }
-                layer.transform_to_parent = child_transform;
-                let new_children_origin = Point {
-                    x: child_origin.x + state.position().x + layer.content_offset.x,
-                    y: child_origin.y + state.position().y + layer.content_offset.y,
-                };
-                let origin_delta = Point {
-                    x: new_children_origin.x - layer.scene_children_origin.x,
-                    y: new_children_origin.y - layer.scene_children_origin.y,
-                };
-                offset_scene_origins(&mut layer, origin_delta, translation_delta);
-                if let Some(moved_id) = layer_identity(&layer) {
-                    changed_nodes.push(moved_id);
-                }
+                changed_nodes.push(*child_id);
             }
-            new_children.push(RenderNode::Layer(layer));
-        } else if let Some(lowered) = entering.remove(child_id) {
-            dirty_nodes.remove(child_id);
-            remove_dirty_descendants(&lowered, dirty_nodes);
-            collect_layer_node_ids(&lowered, changed_nodes);
-            new_children.push(RenderNode::Layer(Box::new(lowered)));
         }
+    } else {
+        let fresh_id_set: HashSet<NodeId> = placed_fresh.iter().map(|(id, _)| *id).collect();
+        let mut old_by_id: std::collections::HashMap<NodeId, Box<LayerNode>> =
+            std::collections::HashMap::new();
+        for child in container.children.drain(..) {
+            let RenderNode::Layer(layer) = child else {
+                continue;
+            };
+            let child_id = layer_identity(&layer).expect("checked above");
+            if fresh_id_set.contains(&child_id) {
+                old_by_id.insert(child_id, layer);
+            } else {
+                collect_layer_node_ids(&layer, changed_nodes);
+            }
+        }
+        let mut new_children = Vec::with_capacity(placed_fresh.len());
+        for (child_id, state) in &placed_fresh {
+            if let Some(mut layer) = old_by_id.remove(child_id) {
+                if !dirty_nodes.contains(child_id) {
+                    translate_retained_child(
+                        &mut layer,
+                        state,
+                        content_offset,
+                        child_origin,
+                        translation_delta,
+                    );
+                    changed_nodes.push(*child_id);
+                }
+                new_children.push(RenderNode::Layer(layer));
+            } else if let Some(lowered) = entering.remove(child_id) {
+                dirty_nodes.remove(child_id);
+                remove_dirty_descendants(&lowered, dirty_nodes);
+                collect_layer_node_ids(&lowered, changed_nodes);
+                new_children.push(RenderNode::Layer(Box::new(lowered)));
+            }
+        }
+        container.children = new_children;
     }
-    container.children = new_children;
     modifier_slices.publish_pointer_input_size(layout_state.size());
     container.hit_test = hit_test_from_slices(
         &modifier_slices,
@@ -797,6 +809,33 @@ fn translate_layer_from_data(
     crate::graph_hash::refresh_layer_own_raster_cache_hashes(container, container_ancestor_hashed);
     changed_nodes.push(node_id);
     true
+}
+
+fn translate_retained_child(
+    layer: &mut LayerNode,
+    state: &cranpose_ui::widgets::LayoutState,
+    content_offset: Point,
+    child_origin: Point,
+    translation_delta: Point,
+) {
+    let mut child_transform =
+        layer_transform_to_parent(layer.local_bounds, state.position(), &layer.graphics_layer);
+    if content_offset != Point::default() {
+        child_transform = child_transform.then(ProjectiveTransform::translation(
+            content_offset.x,
+            content_offset.y,
+        ));
+    }
+    layer.transform_to_parent = child_transform;
+    let new_children_origin = Point {
+        x: child_origin.x + state.position().x + layer.content_offset.x,
+        y: child_origin.y + state.position().y + layer.content_offset.y,
+    };
+    let origin_delta = Point {
+        x: new_children_origin.x - layer.scene_children_origin.x,
+        y: new_children_origin.y - layer.scene_children_origin.y,
+    };
+    offset_scene_origins(layer, origin_delta, translation_delta);
 }
 
 fn offset_scene_origins(layer: &mut LayerNode, origin_delta: Point, translation_delta: Point) {
