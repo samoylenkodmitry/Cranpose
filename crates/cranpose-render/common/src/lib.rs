@@ -31,9 +31,7 @@ pub mod style_shared;
 pub mod text_hyphenation;
 pub mod text_measure;
 
-use std::collections::HashSet;
-
-use cranpose_core::MemoryApplier;
+use cranpose_core::{MemoryApplier, collections::map::HashSet};
 use cranpose_foundation::nodes::input::PointerEvent;
 use cranpose_ui::LayoutTree;
 pub use cranpose_ui_graphics::Brush;
