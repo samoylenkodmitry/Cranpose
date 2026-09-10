@@ -42,10 +42,8 @@ fn unbatched(effect: RenderEffect) -> RenderEffect {
             std::sync::Arc::make_mut(&mut shader).set_batched_source(false);
             RenderEffect::Shader { shader }
         }
-        RenderEffect::Chain { first, second } => RenderEffect::Chain {
-            first: Box::new(unbatched(*first)),
-            second: Box::new(unbatched(*second)),
-        },
+        RenderEffect::Chain { first, second } => unbatched(std::sync::Arc::unwrap_or_clone(first))
+            .then(unbatched(std::sync::Arc::unwrap_or_clone(second))),
         other => other,
     }
 }

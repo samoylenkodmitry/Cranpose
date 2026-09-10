@@ -906,7 +906,7 @@ mod tests {
             panic!("the chain's first stage is the Gaussian remainder");
         };
         assert!(radius_x > 0.0);
-        let RenderEffect::Shader { shader: menu } = *second else {
+        let RenderEffect::Shader { shader: menu } = second.as_ref() else {
             panic!("the chain's second stage is the wcKSRD program");
         };
         assert_eq!(menu.uniforms()[9], 0.10);

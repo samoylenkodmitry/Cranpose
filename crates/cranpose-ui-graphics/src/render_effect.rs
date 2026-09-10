@@ -874,9 +874,11 @@ pub enum RenderEffect {
         shader: Arc<RuntimeShader>,
     },
     /// Chain two effects: apply `first`, then apply `second` to the result.
+    ///
+    /// Child effects are shared; use [`Arc::make_mut`] to edit a cloned chain independently.
     Chain {
-        first: Box<RenderEffect>,
-        second: Box<RenderEffect>,
+        first: Arc<RenderEffect>,
+        second: Arc<RenderEffect>,
     },
 }
 
@@ -920,8 +922,8 @@ impl RenderEffect {
     /// Chain this effect with another: `self` is applied first, then `other`.
     pub fn then(self, other: RenderEffect) -> Self {
         Self::Chain {
-            first: Box::new(self),
-            second: Box::new(other),
+            first: Arc::new(self),
+            second: Arc::new(other),
         }
     }
 
@@ -1120,6 +1122,51 @@ mod tests {
 
     use super::*;
     use crate::RoundedCornerShape;
+
+    #[test]
+    fn cloned_effect_chains_keep_order_and_isolate_nested_edits() {
+        let original = RenderEffect::offset(2.0, 7.0)
+            .then(RenderEffect::blur(3.0))
+            .then(RenderEffect::offset(-4.0, 1.0));
+        let mut edited = original.clone();
+        assert_eq!(edited, original);
+        let RenderEffect::Chain {
+            first: original_first,
+            second: original_second,
+        } = &original
+        else {
+            panic!("chain effect")
+        };
+        let RenderEffect::Chain {
+            first: edited_first,
+            second: edited_second,
+        } = &mut edited
+        else {
+            panic!("chain effect")
+        };
+        assert!(Arc::ptr_eq(original_first, edited_first));
+        assert!(Arc::ptr_eq(original_second, edited_second));
+        assert_eq!(original_second.as_ref(), &RenderEffect::offset(-4.0, 1.0));
+        let RenderEffect::Chain { first, second } = Arc::make_mut(edited_first) else {
+            panic!("nested chain")
+        };
+        assert_eq!(first.as_ref(), &RenderEffect::offset(2.0, 7.0));
+        assert_eq!(second.as_ref(), &RenderEffect::blur(3.0));
+        *Arc::make_mut(first) = RenderEffect::offset(12.0, 17.0);
+        *Arc::make_mut(edited_second) = RenderEffect::blur(11.0);
+        assert_eq!(
+            original,
+            RenderEffect::offset(2.0, 7.0)
+                .then(RenderEffect::blur(3.0))
+                .then(RenderEffect::offset(-4.0, 1.0))
+        );
+        assert_eq!(
+            edited,
+            RenderEffect::offset(12.0, 17.0)
+                .then(RenderEffect::blur(3.0))
+                .then(RenderEffect::blur(11.0))
+        );
+    }
 
     #[test]
     fn cloned_shader_effects_preserve_configuration_and_isolate_edits() {
