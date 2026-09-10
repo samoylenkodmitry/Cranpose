@@ -9,7 +9,10 @@ use cranpose_ui::{
     Color, LinearArrangement, Modifier, RenderEffect, composable,
     widgets::{Box, BoxSpec, LazyColumn, LazyColumnSpec},
 };
-use cranpose_ui_graphics::{LiquidGlassRect, LiquidGlassSpec, TileMode, liquid_glass_effect};
+use cranpose_ui_graphics::{
+    CompositingStrategy, GraphicsLayer, LiquidGlassRect, LiquidGlassSpec, TileMode,
+    liquid_glass_effect,
+};
 
 const FRAME_WIDTH: u32 = 640;
 const FRAME_HEIGHT: u32 = 640;
@@ -371,7 +374,7 @@ fn an_overlapping_capture_still_sees_the_glass_below_it() {
 
 #[composable]
 #[allow(non_snake_case)]
-fn DeferredContentUnderGlass(overlap: bool, span_both: bool) {
+fn DeferredContentUnderGlass(overlap: bool, span_both: bool, strategy: CompositingStrategy) {
     Box(
         Modifier::empty()
             .size_points(FRAME_WIDTH as f32, FRAME_HEIGHT as f32)
@@ -393,6 +396,10 @@ fn DeferredContentUnderGlass(overlap: bool, span_both: bool) {
                     .offset(40.0, if span_both { 80.0 } else { 200.0 })
                     .width(200.0)
                     .height(if span_both { 180.0 } else { 60.0 })
+                    .graphics_layer_value(GraphicsLayer {
+                        compositing_strategy: strategy,
+                        ..GraphicsLayer::default()
+                    })
                     .background(Color(1.0, 0.0, 0.0, 1.0)),
                 BoxSpec::new(),
                 || {},
@@ -412,11 +419,15 @@ fn DeferredContentUnderGlass(overlap: bool, span_both: bool) {
     );
 }
 
-fn deferred_frame(overlap: bool, span_both: bool) -> (cranpose_render_wgpu::CapturedFrame, u32) {
+fn deferred_frame(
+    overlap: bool,
+    span_both: bool,
+    strategy: CompositingStrategy,
+) -> (cranpose_render_wgpu::CapturedFrame, u32) {
     let (_lock, renderer) = support::headless_renderer_parts().expect("headless renderer");
     let root_key = location_key(file!(), line!(), column!());
     let mut shell = AppShell::new(renderer, root_key, move || {
-        DeferredContentUnderGlass(overlap, span_both)
+        DeferredContentUnderGlass(overlap, span_both, strategy)
     });
     shell.set_viewport(FRAME_WIDTH as f32, FRAME_HEIGHT as f32);
     shell.set_buffer_size(FRAME_WIDTH, FRAME_HEIGHT);
@@ -435,7 +446,7 @@ fn deferred_frame(overlap: bool, span_both: bool) -> (cranpose_render_wgpu::Capt
 
 #[test]
 fn a_direct_draw_between_two_glasses_is_captured_by_the_glass_that_covers_it() {
-    let (frame, _) = deferred_frame(true, false);
+    let (frame, _) = deferred_frame(true, false, CompositingStrategy::Auto);
     let pixel = |x: usize, y: usize| {
         let index = (y * FRAME_WIDTH as usize + x) * 4;
         [
@@ -459,27 +470,29 @@ fn a_direct_draw_between_two_glasses_is_captured_by_the_glass_that_covers_it() {
 
 #[test]
 fn a_draw_spanning_two_glasses_stays_above_the_first_and_below_the_second() {
-    let (frame, _) = deferred_frame(true, true);
-    let pixel = |x: usize, y: usize| {
-        let index = (y * FRAME_WIDTH as usize + x) * 4;
-        &frame.pixels[index..index + 4]
-    };
-    assert_eq!(
-        pixel(140, 94),
-        [255, 0, 0, 255],
-        "the rectangle must cover the first glass without being captured beneath it"
-    );
-    let under_glass = pixel(140, 230);
-    assert!(
-        under_glass[0] > 120 && under_glass[0] > under_glass[1] + 60,
-        "the second glass must capture the rectangle beneath it: {under_glass:?}"
-    );
+    for strategy in [CompositingStrategy::Auto, CompositingStrategy::Offscreen] {
+        let (frame, _) = deferred_frame(true, true, strategy);
+        let pixel = |x: usize, y: usize| {
+            let index = (y * FRAME_WIDTH as usize + x) * 4;
+            &frame.pixels[index..index + 4]
+        };
+        assert_eq!(
+            pixel(140, 94),
+            [255, 0, 0, 255],
+            "the rectangle must cover the first glass without being captured beneath it"
+        );
+        let under_glass = pixel(140, 230);
+        assert!(
+            under_glass[0] > 120 && under_glass[0] > under_glass[1] + 60,
+            "the second glass must capture the rectangle beneath it: {under_glass:?}"
+        );
+    }
 }
 
 #[test]
 fn a_capture_never_splits_the_frames_final_pass() {
-    let (_, overlapping_passes) = deferred_frame(true, false);
-    let (_, disjoint_passes) = deferred_frame(false, false);
+    let (_, overlapping_passes) = deferred_frame(true, false, CompositingStrategy::Auto);
+    let (_, disjoint_passes) = deferred_frame(false, false, CompositingStrategy::Auto);
     assert_eq!(
         overlapping_passes, disjoint_passes,
         "a draw under a later glass is on the page before that glass copies it, so whether a \

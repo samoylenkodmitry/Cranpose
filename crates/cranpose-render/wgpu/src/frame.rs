@@ -551,10 +551,6 @@ impl LayerPass<'_> {
                     );
                     for (index, hole) in covered.iter().enumerate() {
                         for part in hole.subtract_all(&covered[..index]) {
-                            holes.push(Blocker {
-                                z: composite.z_index,
-                                rect: part,
-                            });
                             self.pending.push(with_scissor(&composite, part));
                         }
                     }
