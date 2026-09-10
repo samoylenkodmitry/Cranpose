@@ -65,14 +65,14 @@ pub struct AppSettings {
     pub initial_height: u32,
     /// Whether the initial size was explicitly supplied by the app.
     pub initial_size_explicit: bool,
-    /// Web only: size the canvas to the full browser viewport instead of
-    /// capping it at `initial_width`/`initial_height`.
+    /// Web only: give the canvas the full browser viewport instead of the box
+    /// the host page lays it out in.
     ///
-    /// The default keeps the historical behavior — a canvas that shrinks to
-    /// fit a narrow viewport but never grows past the requested size,
-    /// centered on the page. An app that wants the canvas to fill and track
-    /// the browser window (resizing live as the window does) opts in here;
-    /// other platforms ignore this field.
+    /// The default leaves the canvas box to the page's own stylesheet, so a
+    /// canvas nested in a phone frame, a card or any clipping container keeps
+    /// the size that container gives it. An app that owns the whole page opts
+    /// in here and the canvas fills the dynamic viewport, tracking the browser
+    /// window as it resizes; other platforms ignore this field.
     pub web_fill_viewport: bool,
     /// Fonts loaded for text rendering (ordered: primary first, fallbacks last).
     pub fonts: Option<&'static [&'static [u8]]>,
@@ -427,8 +427,9 @@ impl AppLauncher {
     /// in a multi-window mode (freeform / desktop windowing such as DeX);
     /// fullscreen activities ignore it and keep the display-sized,
     /// edge-to-edge surface, because shrinking the fullscreen window would
-    /// leave uncovered (black) strips of display around the surface.
-    /// Maximized Web canvases still keep platform-controlled bounds.
+    /// leave uncovered (black) strips of display around the surface. Web
+    /// ignores it: the canvas takes the box the host page lays it out in, or
+    /// the viewport under [`Self::with_web_fill_viewport`].
     ///
     /// # Arguments
     ///
@@ -442,9 +443,9 @@ impl AppLauncher {
     }
 
     /// Web only: size the canvas to the full browser viewport and keep it
-    /// tracking that viewport's size as the window resizes, instead of
-    /// capping it at the size passed to [`Self::with_size`]. Other platforms
-    /// ignore this.
+    /// tracking that viewport's size as the window resizes, instead of taking
+    /// the box the host page's stylesheet lays the canvas out in. Other
+    /// platforms ignore this.
     pub fn with_web_fill_viewport(mut self, fill: bool) -> Self {
         self.settings.web_fill_viewport = fill;
         self
