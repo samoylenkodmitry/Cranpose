@@ -54,4 +54,5 @@ pub(crate) fn register() {
         log::warn!("cranpose: the iOS bundle identifier is not a usable application id: {error}");
     }
     set_host_controller(Arc::new(IosHost));
+    crate::pipeline_cache_file::publish();
 }

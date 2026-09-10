@@ -5824,7 +5824,9 @@ fn register_application_id(configured: Option<&str>) {
     };
     if let Err(error) = cranpose_services::set_application_id(application_id) {
         log::warn!("cranpose: `{application_id}` is not a usable application id: {error}");
+        return;
     }
+    crate::pipeline_cache_file::publish();
 }
 
 /// Runs a desktop application and exits the process on success.
