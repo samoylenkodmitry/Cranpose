@@ -1,4 +1,4 @@
-use std::{ops::Range, rc::Rc};
+use std::{ops::Range, rc::Rc, sync::Arc};
 
 use cranpose_core::{MemoryApplier, NodeId};
 #[cfg(test)]
@@ -90,7 +90,7 @@ fn layer_shadow_run(rect: Rect, color: Color, shape: Option<RoundedCornerShape>)
     };
     let mut recorder = ShapeRecorder::default();
     recorder.push_primitive(primitive);
-    RunDraw::whole(recorder, Placement::at(origin, None, None)).expect("a shadow rect")
+    RunDraw::whole(Arc::new(recorder), Placement::at(origin, None, None)).expect("a shadow rect")
 }
 
 fn shadow_occluder(
@@ -2001,7 +2001,7 @@ pub(crate) fn push_draw_primitive(
 /// layer's record space, painted by the layer, under `blend_mode`; false
 /// when the primitive is not a shape.
 fn record_shadow_caster(
-    recorder: &mut ShapeRecorder,
+    recorder: &mut Arc<ShapeRecorder>,
     primitive: DrawPrimitive,
     layer: &GraphicsLayer,
     blend_mode: BlendMode,
@@ -2010,7 +2010,7 @@ fn record_shadow_caster(
         return false;
     };
     matches!(
-        recorder.push_primitive(blended(shape, Some(blend_mode))),
+        Arc::make_mut(recorder).push_primitive(blended(shape, Some(blend_mode))),
         Recorded::Shape(_)
     )
 }

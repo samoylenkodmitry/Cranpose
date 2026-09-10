@@ -121,10 +121,10 @@ impl RunDraw {
     }
 
     /// The whole recorder as one run, when it recorded anything.
-    pub(crate) fn whole(recorder: ShapeRecorder, placement: Placement) -> Option<Self> {
+    pub(crate) fn whole(recorder: Arc<ShapeRecorder>, placement: Placement) -> Option<Self> {
         (!recorder.is_empty()).then(|| {
             let segments = recorder.all_segments();
-            Self::of_recorder(&Arc::new(recorder), None, segments, placement)
+            Self::of_recorder(&recorder, None, segments, placement)
         })
     }
 
@@ -294,7 +294,7 @@ pub(crate) struct CompositorScene {
     pub images: Vec<ImageDraw>,
     pub texts: Vec<TextDraw>,
     pub shadow_draws: Vec<ShadowDraw>,
-    shadow_recorders: Vec<ShapeRecorder>,
+    shadow_recorders: Vec<Arc<ShapeRecorder>>,
     pub draw_ops: Vec<DrawOp>,
     pub effect_layers: Vec<EffectLayer>,
     pub backdrop_layers: Vec<BackdropLayer>,
@@ -325,7 +325,7 @@ struct SceneBuffers {
     images: Vec<ImageDraw>,
     texts: Vec<TextDraw>,
     shadow_draws: Vec<ShadowDraw>,
-    shadow_recorders: Vec<ShapeRecorder>,
+    shadow_recorders: Vec<Arc<ShapeRecorder>>,
     draw_ops: Vec<DrawOp>,
     effect_layers: Vec<EffectLayer>,
     backdrop_layers: Vec<BackdropLayer>,
@@ -414,15 +414,15 @@ impl CompositorScene {
         self.texts.clear();
         let recorder_limit = self.shadow_draws.capacity().saturating_mul(2);
         for shadow in self.shadow_draws.drain(..) {
-            for run in [shadow.shapes, shadow.post_blur_cutouts]
+            for mut run in [shadow.shapes, shadow.post_blur_cutouts]
                 .into_iter()
                 .flatten()
             {
                 if self.shadow_recorders.len() < recorder_limit
-                    && let Ok(mut recorder) = Arc::try_unwrap(run.recorder)
+                    && let Some(recorder) = Arc::get_mut(&mut run.recorder)
                 {
                     recorder.clear();
-                    self.shadow_recorders.push(recorder);
+                    self.shadow_recorders.push(run.recorder);
                 }
             }
         }
@@ -455,8 +455,11 @@ impl CompositorScene {
 
     /// Closes the open loose run into a run draw at the next z.
     pub fn flush_loose(&mut self) {
+        if self.loose.recorder.is_empty() {
+            return;
+        }
         let Some(run) = RunDraw::whole(
-            std::mem::take(&mut self.loose.recorder),
+            Arc::new(std::mem::take(&mut self.loose.recorder)),
             self.loose.placement,
         ) else {
             return;
@@ -555,7 +558,7 @@ impl CompositorScene {
         });
     }
 
-    pub(crate) fn take_shadow_recorder(&mut self) -> ShapeRecorder {
+    pub(crate) fn take_shadow_recorder(&mut self) -> Arc<ShapeRecorder> {
         self.shadow_recorders.pop().unwrap_or_default()
     }
 
@@ -651,22 +654,24 @@ mod tests {
         let mut scene = CompositorScene::new();
         let placement = Placement::at(Point::default(), None, None);
         let mut caster = scene.take_shadow_recorder();
-        caster.push_primitive(loose_rect(0.0));
+        Arc::make_mut(&mut caster).push_primitive(loose_rect(0.0));
         let caster = RunDraw::whole(caster, placement).unwrap();
         let retained = caster.clone();
         let fingerprint = retained.recorder.fingerprint();
         let mut cutout = scene.take_shadow_recorder();
-        cutout.push_primitive(loose_rect(20.0));
+        Arc::make_mut(&mut cutout).push_primitive(loose_rect(20.0));
         let storage = cutout.tables().shapes.bodies().as_ptr();
+        let allocation = Arc::as_ptr(&cutout);
         scene.push_shadow_draw(shadow_draw(Some(caster), RunDraw::whole(cutout, placement)));
         scene.clear();
 
         let mut recycled = scene.take_shadow_recorder();
+        assert_eq!(Arc::as_ptr(&recycled), allocation);
         assert_eq!(recycled.tables().shapes.bodies().as_ptr(), storage);
         assert!(recycled.is_empty());
         assert_eq!(recycled.bounds(), None);
         assert!(recycled.tables().segments.is_empty());
-        recycled.push_primitive(loose_rect(80.0));
+        Arc::make_mut(&mut recycled).push_primitive(loose_rect(80.0));
         let replacement = RunDraw::whole(recycled, placement).unwrap();
         assert_eq!(replacement.record_count(), 1);
         assert_eq!(replacement.bounds, rect(80.0, 0.0, 10.0, 10.0));
@@ -689,7 +694,10 @@ mod tests {
         let append = |scene: &mut CompositorScene| {
             let mut recorder = ShapeRecorder::default();
             recorder.push_primitive(loose_rect(0.0));
-            scene.push_shadow_draw(shadow_draw(RunDraw::whole(recorder, placement), None));
+            scene.push_shadow_draw(shadow_draw(
+                RunDraw::whole(Arc::new(recorder), placement),
+                None,
+            ));
         };
         append(&mut scene);
         let limit = scene.shadow_draws.capacity() * 2;
@@ -705,7 +713,7 @@ mod tests {
     fn full_scene_pool_recycles_the_latest_shadow_storage() {
         let mut scene = CompositorScene::new();
         let mut recorder = scene.take_shadow_recorder();
-        recorder.push_primitive(loose_rect(10.0));
+        Arc::make_mut(&mut recorder).push_primitive(loose_rect(10.0));
         let storage = recorder.tables().shapes.bodies().as_ptr();
         scene.push_shadow_draw(shadow_draw(
             RunDraw::whole(recorder, Placement::at(Point::default(), None, None)),
