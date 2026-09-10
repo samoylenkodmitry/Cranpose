@@ -39,6 +39,12 @@ const STAGE_HEIGHT: f32 = 470.0;
 const MAX_BLUR_PX: f32 = 16.0;
 const PANEL_DIM: f32 = 0.95;
 const GLASS_SHEEN: f32 = 0.34;
+/// How much the picture behind the glass stays lying in the plane the device
+/// was flat in, rather than turning with the panel that covers it.
+const PICTURE_STAYS: f32 = 1.0;
+/// What a unit of `camera_distance` is worth in pixels, which the glass needs
+/// to undo the same projection the layer applies.
+const CAMERA_DISTANCE_SCALE: f32 = 72.0;
 /// A flick of this much of the fold per second carries the panel the rest of
 /// the way on its own.
 const FLICK_FOLD: f32 = 1.6;
@@ -219,9 +225,16 @@ struct GlassUniforms {
     bend: f32,
     dim: f32,
     hinge_at_left: bool,
+    /// How far the glass has turned out of the screen, in degrees.
+    glass_turn: f32,
+    /// How far the plane the picture stays in has, which is how the device is
+    /// being held.
+    flat_turn: f32,
 }
 
 fn glass_effect(uniforms: &GlassUniforms) -> RenderEffect {
+    let glass = uniforms.glass_turn.to_radians();
+    let flat = uniforms.flat_turn.to_radians();
     let mut shader = RuntimeShader::from_shared_source(foldable_wgsl());
     shader.set_float(0, 1.0);
     shader.set_float(1, uniforms.bend);
@@ -229,6 +242,12 @@ fn glass_effect(uniforms: &GlassUniforms) -> RenderEffect {
     shader.set_float(3, uniforms.dim);
     shader.set_float(4, GLASS_SHEEN);
     shader.set_float(5, if uniforms.hinge_at_left { 1.0 } else { 0.0 });
+    shader.set_float(6, glass.cos());
+    shader.set_float(7, glass.sin());
+    shader.set_float(8, CAMERA_DISTANCE * CAMERA_DISTANCE_SCALE);
+    shader.set_float(9, PICTURE_STAYS);
+    shader.set_float(10, flat.cos());
+    shader.set_float(11, flat.sin());
     RenderEffect::runtime_shader(shader)
 }
 
@@ -430,6 +449,8 @@ fn FoldingHalf(fold: Fold, tilt: f32) {
                                 bend,
                                 dim,
                                 hinge_at_left: false,
+                                glass_turn: angle,
+                                flat_turn: tilt,
                             })),
                             compositing_strategy: CompositingStrategy::Offscreen,
                             ..Default::default()
