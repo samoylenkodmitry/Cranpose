@@ -1,6 +1,6 @@
-use std::{collections::HashSet, mem::size_of, ops::Range, rc::Rc};
+use std::{mem::size_of, ops::Range, rc::Rc};
 
-use cranpose_core::NodeId;
+use cranpose_core::{NodeId, collections::map::HashSet};
 use cranpose_foundation::PointerEvent;
 use cranpose_ui::{
     GraphicsLayer, Point, Rect, RenderEffect, RoundedCornerShape, TextLayoutOptions, TextStyle,

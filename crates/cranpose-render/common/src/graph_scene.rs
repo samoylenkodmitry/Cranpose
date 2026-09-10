@@ -1,11 +1,11 @@
 use std::{
     cell::{Cell, RefCell},
     cmp::Reverse,
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     rc::Rc,
 };
 
-use cranpose_core::{MemoryApplier, NodeId};
+use cranpose_core::{MemoryApplier, NodeId, collections::map::HashSet};
 use cranpose_foundation::{PointerEvent, PointerEventKind};
 use cranpose_ui::{LayoutNode, ModifierNodeSlices, SubcomposeLayoutNode};
 use cranpose_ui_graphics::{Point, Rect, RoundedCornerShape};

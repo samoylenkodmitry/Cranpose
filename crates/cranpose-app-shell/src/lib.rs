@@ -7,7 +7,6 @@ mod shell_frame;
 mod shell_input;
 mod wheel;
 use std::{
-    collections::HashSet,
     fmt::{Debug, Write},
     rc::Rc,
     sync::{
@@ -17,8 +16,8 @@ use std::{
 };
 
 use cranpose_core::{
-    Applier, Composition, Key, MemoryApplier, NodeError, NodeId, enter_event_handler_scope,
-    location_key, run_in_mutable_snapshot,
+    Applier, Composition, Key, MemoryApplier, NodeError, NodeId, collections::map::HashSet,
+    enter_event_handler_scope, location_key, run_in_mutable_snapshot,
 };
 pub use cranpose_foundation::{
     DEFAULT_ROTARY_SCROLL_FACTOR_DP, Modifiers, PointerSource, RotaryScrollEvent,

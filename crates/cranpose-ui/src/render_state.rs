@@ -2,7 +2,7 @@
 use std::sync::OnceLock;
 use std::{
     cell::{Cell, RefCell},
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     rc::{Rc, Weak},
     sync::{
         Arc, Mutex, MutexGuard,
@@ -10,7 +10,9 @@ use std::{
     },
 };
 
-use cranpose_core::{NodeId, SnapshotStateObserver, current_runtime_handle};
+use cranpose_core::{
+    NodeId, SnapshotStateObserver, collections::map::HashSet, current_runtime_handle,
+};
 
 pub(crate) type ModifierChainTraceCallback =
     dyn Fn(&[crate::modifier::ModifierChainInspectorNode]) + Send + Sync + 'static;
@@ -134,6 +136,7 @@ pub(crate) fn clear_draw_observations_for_node(node_id: NodeId) {
     });
 }
 
+/// Removes draw observations whose owners are absent from the retained scene.
 pub fn prune_draw_observations_to_nodes(retained: &HashSet<NodeId>) {
     with_draw_observer(|observer| {
         observer.clear_if(|scope| {
