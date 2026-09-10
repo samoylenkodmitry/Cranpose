@@ -56,6 +56,7 @@ mkdir -p "$repo"
 git -C "$repo" init -q -b main
 git -C "$repo" config user.email ci@example.invalid
 git -C "$repo" config user.name ci
+git -C "$repo" config commit.gpgsign false
 mkdir -p "$repo/docs/render-reference" "$repo/crates/foo/src" \
          "$repo/crates/foo/shaders" "$repo/tools/api-surface/src" \
          "$repo/.github/workflows"
