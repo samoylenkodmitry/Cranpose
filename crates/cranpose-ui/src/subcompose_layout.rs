@@ -448,9 +448,8 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
         slot_id: SlotId,
         known_children: &[u64],
     ) -> Option<(Vec<SubcomposeChild>, bool)> {
-        let mut expected_children = Vec::with_capacity(known_children.len());
         for &node_id in known_children {
-            expected_children.push(NodeId::try_from(node_id).ok()?);
+            NodeId::try_from(node_id).ok()?;
         }
 
         let virtual_node_ids = match self.activate_current_active_slot_roots(slot_id) {
@@ -467,23 +466,21 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
             return None;
         }
 
-        let mut activated_children = Vec::with_capacity(expected_children.len());
+        let mut activated_children = Vec::with_capacity(known_children.len());
         for virtual_node_id in virtual_node_ids {
             activated_children.extend(
                 self.composer
                     .get_node_children(virtual_node_id)
                     .iter()
-                    .copied(),
+                    .copied()
+                    .map(SubcomposeChild::new),
             );
         }
-        let children_match = activated_children == expected_children;
-        Some((
-            activated_children
-                .into_iter()
-                .map(SubcomposeChild::new)
-                .collect(),
-            children_match,
-        ))
+        let children_match = activated_children
+            .iter()
+            .map(|child| child.node_id() as u64)
+            .eq(known_children.iter().copied());
+        Some((activated_children, children_match))
     }
 
     fn activate_current_active_slot_roots(&mut self, slot_id: SlotId) -> Option<Vec<NodeId>> {

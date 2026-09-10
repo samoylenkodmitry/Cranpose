@@ -420,6 +420,82 @@ fn subcompose_reuses_nodes_across_measures() {
 }
 
 #[test]
+fn retained_slot_activation_checks_child_identity_order_and_length() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let (handle, _composition) = runtime_handle();
+    let mut slots = SlotTable::default();
+    let mut applier = cranpose_core::MemoryApplier::new();
+    let expected = Rc::new(RefCell::new(None::<Vec<u64>>));
+    let observed = Rc::new(RefCell::new(Vec::new()));
+    let expected_for_policy = Rc::clone(&expected);
+    let observed_for_policy = Rc::clone(&observed);
+    let policy: Rc<MeasurePolicy> = Rc::new(move |scope, _constraints| {
+        let (children, matches) = match expected_for_policy.borrow().as_ref() {
+            Some(expected) => scope
+                .activate_exact_retained_slot_with_known_children(SlotId::new(99), expected)
+                .expect("retained slot activates"),
+            None => (
+                scope.subcompose(SlotId::new(99), (), || {
+                    cranpose_core::with_current_composer(|composer| {
+                        composer.emit_node(|| DummyNode);
+                        composer.emit_node(|| DummyNode);
+                    });
+                }),
+                true,
+            ),
+        };
+        assert!(children.iter().all(|child| child.size() == Size::default()));
+        observed_for_policy.borrow_mut().push((
+            children
+                .iter()
+                .map(|child| child.node_id() as u64)
+                .collect::<Vec<_>>(),
+            matches,
+        ));
+        scope.layout(0.0, 0.0, Vec::new())
+    });
+    let node_id = applier.create(Box::new(SubcomposeLayoutNode::new(
+        crate::modifier::Modifier::empty(),
+        policy,
+    )));
+    measure_once(
+        &mut slots,
+        &mut applier,
+        &handle,
+        node_id,
+        Constraints::loose(100.0, 100.0),
+    );
+    let original = observed.borrow()[0].0.clone();
+    assert_eq!(original.len(), 2);
+    assert_ne!(original[0], original[1]);
+    let cases = [
+        original.clone(),
+        vec![original[1], original[0]],
+        vec![original[0]],
+        vec![original[0], original[1], original[0]],
+        Vec::new(),
+        vec![original[0], original[0]],
+        original.clone(),
+    ];
+    for (index, known) in cases.into_iter().enumerate() {
+        let should_match = known == original;
+        *expected.borrow_mut() = Some(known);
+        measure_once(
+            &mut slots,
+            &mut applier,
+            &handle,
+            node_id,
+            Constraints::loose(101.0 + index as f32, 100.0),
+        );
+        assert_eq!(observed.borrow().len(), index + 2);
+        assert_eq!(
+            observed.borrow().last(),
+            Some(&(original.clone(), should_match))
+        );
+    }
+}
+
+#[test]
 fn handle_reports_modifier_capabilities() {
     let _app_context = crate::render_state::app_context_test_scope();
     let policy: Rc<MeasurePolicy> =
