@@ -1335,7 +1335,7 @@ type PlannedSubstrates = SmallVec<[PlannedSubstrate; MAX_SUBSTRATES]>;
 #[derive(Clone, Default)]
 struct SideSlots {
     blur: Option<TexelRect>,
-    substrates: SmallVec<[TexelRect; MAX_SUBSTRATES]>,
+    substrates: SmallVec<[Option<TexelRect>; MAX_SUBSTRATES]>,
 }
 
 struct AtlasView<'a> {
@@ -2512,31 +2512,35 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         let mut side_sizes = vec![(0, 0); atlas_sizes.len()];
         let mut side: Vec<SideSlots> = vec![SideSlots::default(); items.len()];
         for (atlas_index, side_size) in side_sizes.iter_mut().enumerate() {
-            let members = (0..items.len()).filter(|index| {
-                placements[*index].is_some_and(|placement| placement.atlas == atlas_index)
+            let mut requests = Vec::new();
+            for (index, slots) in side.iter_mut().enumerate() {
+                if !placements[index].is_some_and(|placement| placement.atlas == atlas_index) {
+                    continue;
+                }
+                if let Some(blur) = items[index].batched.and_then(|batched| batched.blur()) {
+                    let (width, height) = items[index].capture_rect.pixel_size();
+                    let size = blur_scratch_size(
+                        blur.radius_x * scale,
+                        blur.radius_y * scale,
+                        width,
+                        height,
+                    );
+                    requests.push((size, &mut slots.blur));
+                }
+                slots.substrates.resize(substrates[index].len(), None);
+                for (planned, slot) in substrates[index].iter().zip(&mut slots.substrates) {
+                    requests.push((planned.size, slot));
+                }
+            }
+            requests.sort_unstable_by_key(|((width, height), _)| {
+                (std::cmp::Reverse(*height), std::cmp::Reverse(*width))
             });
-            let blurred = members
-                .clone()
-                .filter_map(|index| Some((index, items[index].batched?.blur()?)));
             let mut side_packer = AtlasPacker::new(limit);
-            let mut first_atlas = |width: u32, height: u32| {
-                side_packer
+            for ((width, height), slot) in requests {
+                *slot = side_packer
                     .place(width, height)
                     .filter(|slot| slot.atlas == 0)
-                    .map(|slot| (slot.x, slot.y, width, height))
-            };
-            for (index, blur) in blurred {
-                let (width, height) = items[index].capture_rect.pixel_size();
-                let (scaled_width, scaled_height) =
-                    blur_scratch_size(blur.radius_x * scale, blur.radius_y * scale, width, height);
-                side[index].blur = first_atlas(scaled_width, scaled_height);
-            }
-            for index in members {
-                for planned in &substrates[index] {
-                    if let Some(slot) = first_atlas(planned.size.0, planned.size.1) {
-                        side[index].substrates.push(slot);
-                    }
-                }
+                    .map(|slot| (slot.x, slot.y, width, height));
             }
             *side_size = side_packer
                 .atlases
@@ -2610,7 +2614,8 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                     continue;
                 }
                 let (width, height) = planned.size;
-                let Some(scratch) = view.side(*index).substrates.get(order).copied() else {
+                let Some(scratch) = view.side(*index).substrates.get(order).copied().flatten()
+                else {
                     return Err("a substrate outgrew the atlas that held it".into());
                 };
                 let read = member_read_texels(items[*index], *placement, scale);
@@ -3747,7 +3752,7 @@ mod tests {
                 .map(|member| SideSlots {
                     blur: Some((0, member as u32 * 8, 16, 8)),
                     substrates: (0..=member)
-                        .map(|slot| (slot as u32 * 16, member as u32 * 8, 16, 8))
+                        .map(|slot| Some((slot as u32 * 16, member as u32 * 8, 16, 8)))
                         .collect(),
                 })
                 .collect(),

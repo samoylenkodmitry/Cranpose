@@ -384,8 +384,7 @@ fn a_shader_reads_its_capture_averaged_into_blocks_of_four_through_the_substrate
     assert_first_glass_averages(&page, &frame);
 }
 
-#[test]
-fn resized_and_clipped_atlas_members_keep_their_own_substrates() {
+fn assert_resized_atlas_substrates(effect: impl Fn(usize) -> RenderEffect, substrates: u32) {
     let mut renderer = support::headless_renderer().expect("headless WGPU init failed");
     let (width, height) = (1448, 320);
     for heights in [[32.0, 64.0, 96.0], [96.0, 32.0, 64.0], [64.0, 96.0, 32.0]] {
@@ -400,10 +399,7 @@ fn resized_and_clipped_atlas_members_keep_their_own_substrates() {
                         rect(0.0, 0.0, bounds.width, bounds.height),
                         ProjectiveTransform::translation(bounds.x, bounds.y),
                         GraphicsLayer {
-                            backdrop_effect: Some(support::substrate_probe(
-                                SubstrateSpec::Average { block: 4 },
-                                SubstrateProbeRead::Held,
-                            )),
+                            backdrop_effect: Some(effect(index)),
                             ..GraphicsLayer::default()
                         },
                         Vec::new(),
@@ -414,7 +410,10 @@ fn resized_and_clipped_atlas_members_keep_their_own_substrates() {
         };
         let packed = support::capture_graph(&mut renderer, scene(&[0, 1, 2]), width, height);
         assert_eq!(renderer.device_error_count_for_tests(), 0);
-        assert_eq!(renderer.last_frame_stats().unwrap().substrates, 3);
+        assert_eq!(
+            renderer.last_frame_stats().unwrap().substrates,
+            substrates * 3
+        );
         for index in 0..3 {
             let alone = support::capture_graph(&mut renderer, scene(&[index]), width, height);
             let bounds = bounds(index);
@@ -433,6 +432,56 @@ fn resized_and_clipped_atlas_members_keep_their_own_substrates() {
                 "member {index} with heights {heights:?} must read its own capture after packing"
             );
         }
+    }
+}
+
+#[test]
+fn resized_and_clipped_atlas_members_keep_their_own_substrates() {
+    assert_resized_atlas_substrates(
+        |_| {
+            support::substrate_probe(
+                SubstrateSpec::Average { block: 4 },
+                SubstrateProbeRead::Held,
+            )
+        },
+        1,
+    );
+}
+
+#[test]
+fn resized_mixed_blur_atlases_preserve_every_substrate_slot() {
+    for blurred_source in [false, true] {
+        assert_resized_atlas_substrates(
+            |index| {
+                let mut specs = [
+                    SubstrateSpec::Average { block: 4 },
+                    SubstrateSpec::Blur { radius_px: 12.0 },
+                    SubstrateSpec::Average { block: 2 },
+                ];
+                specs.rotate_left(index);
+                let mut shader = RuntimeShader::new(&format!(
+                    "{RUNTIME_SHADER_PRELUDE_WGSL}\n{}",
+                    r#"@fragment
+fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
+    let slot = min(u32(input.uv.x * 3.0), 2u);
+    let substrate = u[58u - slot];
+    let dims = vec2<f32>(textureDimensions(input_texture));
+    let held = clamp(input.uv, 0.5 / substrate.zw, vec2<f32>(1.0) - 0.5 / substrate.zw);
+    let uv = (substrate.xy + held * substrate.zw) / dims;
+    return vec4<f32>(textureSampleLevel(input_texture, input_sampler, uv, 0.0).rgb, 1.0);
+}"#,
+                ));
+                shader.set_batched_source(true);
+                shader.set_substrates(&specs);
+                let effect = RenderEffect::runtime_shader(shader);
+                if blurred_source {
+                    RenderEffect::blur(6.0).then(effect)
+                } else {
+                    effect
+                }
+            },
+            3,
+        );
     }
 }
 
