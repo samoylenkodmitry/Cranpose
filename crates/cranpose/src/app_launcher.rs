@@ -18,6 +18,36 @@ use cranpose_ui::text::{FontFamily, FontStyle, FontWeight};
 ))]
 use thiserror::Error;
 
+/// Graphics API used by the Android WGPU renderer.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AndroidGpuBackend {
+    /// Render through Vulkan.
+    #[default]
+    Vulkan,
+    /// Render through OpenGL ES.
+    OpenGlEs,
+}
+
+#[cfg(any(
+    test,
+    all(feature = "android", feature = "renderer-wgpu", target_os = "android")
+))]
+impl AndroidGpuBackend {
+    pub(crate) fn with_override(self, value: Option<&str>) -> Self {
+        match value.map(str::trim) {
+            Some(value) if value.eq_ignore_ascii_case("vulkan") => Self::Vulkan,
+            Some(value)
+                if ["gl", "gles", "opengl"]
+                    .iter()
+                    .any(|name| value.eq_ignore_ascii_case(name)) =>
+            {
+                Self::OpenGlEs
+            }
+            _ => self,
+        }
+    }
+}
+
 /// Configuration for application settings.
 pub struct AppSettings {
     /// Window title (desktop) / app name (mobile)
@@ -55,6 +85,8 @@ pub struct AppSettings {
     pub font_registry: SoftwareTextFontRegistry,
     /// Whether to load system fonts on Android (default: false)
     pub android_use_system_fonts: bool,
+    /// Graphics API selected for the Android WGPU renderer.
+    pub android_gpu_backend: AndroidGpuBackend,
     /// The tag this application's log lines carry.
     ///
     /// Android routes every log line through one tag, and `adb logcat -s
@@ -117,6 +149,7 @@ impl Default for AppSettings {
             fonts: None,
             font_registry: SoftwareTextFontRegistry::new(),
             android_use_system_fonts: false,
+            android_gpu_backend: AndroidGpuBackend::default(),
             log_tag: None,
             android_overlay_window: None,
             headless: false,
@@ -667,6 +700,15 @@ impl AppLauncher {
         self
     }
 
+    /// Selects the Android graphics API. Other platforms ignore this setting.
+    ///
+    /// The default is Vulkan. OpenGL ES uses the same WGPU renderer through
+    /// the device's GLES driver. Profiling overrides can replace this choice.
+    pub fn with_android_gpu_backend(mut self, backend: AndroidGpuBackend) -> Self {
+        self.settings.android_gpu_backend = backend;
+        self
+    }
+
     /// Render the Android root into a floating `TYPE_APPLICATION_OVERLAY` surface.
     ///
     /// This Android-only mode requires the host app to declare
@@ -1021,6 +1063,33 @@ impl Default for AppLauncher {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn android_backend_selection_preserves_the_app_choice_without_a_valid_override() {
+        assert_eq!(
+            AppLauncher::new().settings.android_gpu_backend,
+            AndroidGpuBackend::Vulkan
+        );
+        for backend in [AndroidGpuBackend::Vulkan, AndroidGpuBackend::OpenGlEs] {
+            let selected = AppLauncher::new()
+                .with_android_gpu_backend(backend)
+                .settings
+                .android_gpu_backend;
+            for value in [None, Some(""), Some("vulkan2")] {
+                assert_eq!(selected.with_override(value), backend);
+            }
+            for value in ["gl", "GL", " gles ", "OpenGL"] {
+                assert_eq!(
+                    selected.with_override(Some(value)),
+                    AndroidGpuBackend::OpenGlEs
+                );
+            }
+            assert_eq!(
+                selected.with_override(Some(" VULKAN ")),
+                AndroidGpuBackend::Vulkan
+            );
+        }
+    }
 
     #[test]
     fn a_launcher_records_the_application_id_it_is_given() {

@@ -30,7 +30,7 @@ use crate::{
     android_overlay_window,
     android_surface::{AndroidSurfaceError, create_android_wgpu_surface},
     android_text_input::{self, AndroidImeEvent},
-    app_launcher::{AndroidOverlayWindowOptions, AppSettings},
+    app_launcher::{AndroidGpuBackend, AndroidOverlayWindowOptions, AppSettings},
     wgpu_surface::{
         SurfaceFrame, current_surface_texture, present_initial_placeholder_frame,
         surface_present_required,
@@ -762,68 +762,12 @@ struct AndroidGpuSetup {
     renderer_needs_init: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum AndroidGpuBackend {
-    Vulkan,
-    Gl,
-}
-
 impl AndroidGpuBackend {
     fn wgpu_backends(self) -> wgpu::Backends {
         match self {
             Self::Vulkan => wgpu::Backends::VULKAN,
-            Self::Gl => wgpu::Backends::GL,
+            Self::OpenGlEs => wgpu::Backends::GL,
         }
-    }
-
-    fn preferred() -> Self {
-        Self::preferred_from(
-            std::env::var("CRANPOSE_ANDROID_GPU_BACKEND")
-                .ok()
-                .as_deref(),
-        )
-    }
-
-    fn preferred_from(value: Option<&str>) -> Self {
-        match value
-            .map(|value| value.trim().to_ascii_lowercase())
-            .as_deref()
-        {
-            Some("gl") | Some("gles") | Some("opengl") => Self::Gl,
-            _ => Self::Vulkan,
-        }
-    }
-}
-
-#[cfg(test)]
-mod gpu_backend_tests {
-    use super::AndroidGpuBackend;
-
-    #[test]
-    fn vulkan_is_what_an_app_gets_without_asking() {
-        assert_eq!(
-            AndroidGpuBackend::preferred_from(None),
-            AndroidGpuBackend::Vulkan
-        );
-    }
-
-    #[test]
-    fn the_switch_names_gl_however_it_is_spelled() {
-        for spelling in ["gl", "GL", " gles ", "OpenGL"] {
-            assert_eq!(
-                AndroidGpuBackend::preferred_from(Some(spelling)),
-                AndroidGpuBackend::Gl,
-                "{spelling:?} should select the GL backend"
-            );
-        }
-    }
-
-    #[test]
-    fn a_mistyped_value_still_starts_the_app() {
-        assert_eq!(
-            AndroidGpuBackend::preferred_from(Some("vulkan2")),
-            AndroidGpuBackend::Vulkan
-        );
     }
 }
 
@@ -1043,7 +987,7 @@ fn initialize_android_rendering_with_backend_fallback<F>(
 where
     F: FnMut() + 'static,
 {
-    if existing_resources.is_some() || wgpu_context.backend == AndroidGpuBackend::Gl {
+    if existing_resources.is_some() || wgpu_context.backend == AndroidGpuBackend::OpenGlEs {
         return initialize_android_rendering(
             &wgpu_context.instance,
             existing_resources,
@@ -1078,7 +1022,7 @@ where
     ) {
         Err(AndroidSurfaceError::RequestAdapter(error)) => {
             log::warn!("No compatible Vulkan adapter ({error}); retrying with a fresh GL instance");
-            *wgpu_context = AndroidWgpuContext::new(AndroidGpuBackend::Gl);
+            *wgpu_context = AndroidWgpuContext::new(AndroidGpuBackend::OpenGlEs);
             initialize_android_rendering(
                 &wgpu_context.instance,
                 None,
@@ -1596,7 +1540,13 @@ pub fn run(
 
     let should_exit = Arc::new(AtomicBool::new(false));
 
-    let mut wgpu_context = AndroidWgpuContext::new(AndroidGpuBackend::preferred());
+    let mut wgpu_context = AndroidWgpuContext::new(
+        settings.android_gpu_backend.with_override(
+            std::env::var("CRANPOSE_ANDROID_GPU_BACKEND")
+                .ok()
+                .as_deref(),
+        ),
+    );
 
     let mut android_platform = AndroidPlatform::new();
     let mut current_host_window_size = Size::ZERO;

@@ -123,7 +123,7 @@ pub use android_host_window::{
     any(feature = "desktop-shell", all(feature = "ios", target_os = "ios"))
 ))]
 pub use app_launcher::LaunchError;
-pub use app_launcher::{AndroidOverlayWindowOptions, AppLauncher, AppSettings};
+pub use app_launcher::{AndroidGpuBackend, AndroidOverlayWindowOptions, AppLauncher, AppSettings};
 /// Font registration vocabulary named by [`AppLauncher`]'s font methods:
 /// the platform font directory [`AppLauncher::with_system_font_family`] wants,
 /// the weight set it registers, and the registry and error
