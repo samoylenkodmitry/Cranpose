@@ -42,7 +42,7 @@ const OPEN_TILT: f32 = 11.0;
 const SHUT_TILT: f32 = 4.0;
 const STAGE_WIDTH: f32 = 760.0;
 const STAGE_HEIGHT: f32 = 470.0;
-const MAX_BLUR_PX: f32 = 26.0;
+const MAX_BLUR_PX: f32 = 22.0;
 const PANEL_DIM: f32 = 0.34;
 const GLASS_SHEEN: f32 = 0.22;
 /// How milky glass turned this far from the reader gets.
@@ -422,15 +422,23 @@ fn FoldingHalf(fold: Fold, tilt: f32) {
             Box(
                 Modifier::empty()
                     .size_points(HALF_WIDTH, SCREEN_HEIGHT)
-                    .graphics_layer(move || GraphicsLayer {
-                        render_effect: Some(glass_effect(&GlassUniforms {
-                            squeeze,
-                            spread,
-                            dim,
-                            hinge_at_left: false,
-                        })),
-                        compositing_strategy: CompositingStrategy::Offscreen,
-                        ..Default::default()
+                    // A half lying flat has nothing pressing on its picture,
+                    // so it goes straight to the screen: no layer of its own,
+                    // and none of the smear's reads per pixel.
+                    .graphics_layer(move || {
+                        if squeeze <= 0.0 {
+                            return GraphicsLayer::default();
+                        }
+                        GraphicsLayer {
+                            render_effect: Some(glass_effect(&GlassUniforms {
+                                squeeze,
+                                spread,
+                                dim,
+                                hinge_at_left: false,
+                            })),
+                            compositing_strategy: CompositingStrategy::Offscreen,
+                            ..Default::default()
+                        }
                     }),
                 BoxSpec::default(),
                 move || {

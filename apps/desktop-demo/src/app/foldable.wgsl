@@ -1,6 +1,10 @@
 const TAPS: i32 = 12;
 /// How wide the smear is allowed to grow, in pixels of the panel's own width.
-const MAX_RADIUS: f32 = 130.0;
+const MAX_RADIUS: f32 = 110.0;
+/// How much of the smear runs up and down as well as across.
+const UPRIGHT_SHARE: f32 = 0.42;
+/// How much of the smear the picture carries right at the crease.
+const HINGE_SMEAR: f32 = 0.22;
 const WALLPAPER: f32 = 0.5;
 
 fn get_float(index: u32) -> f32 {
@@ -48,10 +52,6 @@ fn wallpaper(p: vec2<f32>) -> vec3<f32> {
         colour,
     );
 
-    let ripple = 0.014 * sin(p.x * 74.0 + p.y * 26.0)
-        * smoothstep(far_crest, far_crest + 0.06, p.y);
-    colour = colour + vec3<f32>(ripple);
-
     let near_crest = 0.84 + 0.17 * sin(p.x * 1.3 + 3.4);
     colour = dune(
         p,
@@ -98,20 +98,42 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     // ever narrower band. Widen the blur by as much as the panel is being
     // pressed, so the smear stays the same width to the reader while the
     // picture under it is squeezed out of legibility.
-    let radius = min(blur_px * squeeze * pow(from_hinge, 1.1) * spread, MAX_RADIUS);
+    // Some of the smear reaches the crease itself: what the fold does to the
+    // picture is not confined to the edge that moved furthest.
+    let across = HINGE_SMEAR + (1.0 - HINGE_SMEAR) * from_hinge;
+    let radius = min(blur_px * squeeze * across * spread, MAX_RADIUS);
     let step = vec2<f32>(radius / (f32(TAPS) * max(tex_size.x, 1.0)), 0.0);
     let low = (effect_rect.xy + vec2<f32>(0.5)) / tex_size;
     let high = (effect_rect.xy + effect_rect.zw - vec2<f32>(0.5)) / tex_size;
 
-    var sum = textureSample(input_texture, input_sampler, input.uv);
-    for (var i = 1; i <= TAPS; i = i + 1) {
-        let offset = step * f32(i);
-        let falloff = exp(-2.2 * f32(i * i) / f32(TAPS * TAPS));
+    // Smear across and a little up and down. A smear that only runs across
+    // leaves every horizontal stroke of a glyph standing, which reads as
+    // banding rather than as something out of focus.
+    var sum = vec4<f32>(0.0);
+    for (var row = -1; row <= 1; row = row + 1) {
+        let lift = vec2<f32>(
+            0.0,
+            f32(row) * radius * UPRIGHT_SHARE / max(tex_size.y, 1.0),
+        );
+        var row_weight = 1.0;
+        if (row != 0) {
+            row_weight = 0.55;
+        }
         sum = sum
-            + textureSample(input_texture, input_sampler, clamp(input.uv + offset, low, high))
-                * falloff
-            + textureSample(input_texture, input_sampler, clamp(input.uv - offset, low, high))
-                * falloff;
+            + textureSample(input_texture, input_sampler, clamp(input.uv + lift, low, high))
+                * row_weight;
+        for (var i = 1; i <= TAPS; i = i + 1) {
+            let offset = step * f32(i) + lift;
+            let falloff = exp(-2.2 * f32(i * i) / f32(TAPS * TAPS)) * row_weight;
+            sum = sum
+                + textureSample(input_texture, input_sampler, clamp(input.uv + offset, low, high))
+                    * falloff
+                + textureSample(
+                    input_texture,
+                    input_sampler,
+                    clamp(input.uv - offset + lift * 2.0, low, high),
+                ) * falloff;
+        }
     }
 
     // Average the colour the taps carry, not their number: dividing by the
