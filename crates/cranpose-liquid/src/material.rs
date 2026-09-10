@@ -3,7 +3,10 @@
 //! [`LiquidModifierExt::glass_effect`] — the analogue of SwiftUI's
 //! `.glassEffect(_:in:)`.
 
-use std::{cell::Cell, rc::Rc, sync::OnceLock};
+use std::{
+    cell::{Cell, RefCell},
+    sync::OnceLock,
+};
 
 use cranpose_ui::{Modifier, current_density};
 use cranpose_ui_graphics::{
@@ -699,17 +702,13 @@ pub(crate) struct ResolvedGlass {
 
 impl ResolvedGlass {
     pub(crate) fn backdrop_effect(&self, density: f32, dynamics: GlassDynamics) -> RenderEffect {
-        self.runtime_effect(density, dynamics, false)
-    }
-
-    fn content_mask_effect(&self, density: f32, dynamics: GlassDynamics) -> RenderEffect {
-        self.runtime_effect(density, dynamics, true)
+        self.runtime_effect(density, &dynamics, false)
     }
 
     fn runtime_effect(
         &self,
         density: f32,
-        dynamics: GlassDynamics,
+        dynamics: &GlassDynamics,
         content_mask: bool,
     ) -> RenderEffect {
         let density = density.max(f32::EPSILON);
@@ -989,7 +988,7 @@ impl LiquidModifierExt for Modifier {
         dynamics: impl Fn() -> GlassDynamics + 'static,
     ) -> Modifier {
         let colors = crate::theme::liquid_colors();
-        let resolved = Rc::new(glass.resolve(&colors));
+        let resolved = glass.resolve(&colors);
         let shape = resolved.shape;
 
         let mut modifier = self;
@@ -1009,22 +1008,120 @@ impl LiquidModifierExt for Modifier {
             });
         }
 
-        let layer_resolved = Rc::clone(&resolved);
-        let clip = resolved.clip;
-        modifier.graphics_layer(move || {
-            let density = current_density();
-            let frame = dynamics();
-            let render_effect = (!clip && frame.morph.is_some())
-                .then(|| layer_resolved.content_mask_effect(density, frame.clone()));
-            GraphicsLayer {
-                backdrop_effect: Some(layer_resolved.backdrop_effect(density, frame)),
-                render_effect,
-                shape: shape.layer_shape(),
-                clip,
-                ..Default::default()
-            }
-        })
+        let layer = cached_glass_layer(resolved);
+        modifier.graphics_layer(move || layer(current_density(), dynamics()))
     }
+}
+
+struct CachedGlassLayer {
+    density: u32,
+    light: [u32; 2],
+    dynamics: GlassDynamics,
+    layer: GraphicsLayer,
+}
+
+fn cached_glass_layer(resolved: ResolvedGlass) -> impl Fn(f32, GlassDynamics) -> GraphicsLayer {
+    let cached = RefCell::new(None::<CachedGlassLayer>);
+    move |density, dynamics| {
+        let direction = glass_light_direction();
+        let light = [direction.0, direction.1].map(f32::to_bits);
+        let mut cached = cached.borrow_mut();
+        if let Some(previous) = &*cached
+            && previous.density == density.to_bits()
+            && previous.light == light
+            && glass_dynamics_match(&previous.dynamics, &dynamics)
+        {
+            return previous.layer.clone();
+        }
+        let render_effect = (!resolved.clip && dynamics.morph.is_some())
+            .then(|| resolved.runtime_effect(density, &dynamics, true));
+        let layer = GraphicsLayer {
+            backdrop_effect: Some(resolved.runtime_effect(density, &dynamics, false)),
+            render_effect,
+            shape: resolved.shape.layer_shape(),
+            clip: resolved.clip,
+            ..Default::default()
+        };
+        *cached = Some(CachedGlassLayer {
+            density: density.to_bits(),
+            light,
+            dynamics,
+            layer: layer.clone(),
+        });
+        layer
+    }
+}
+
+fn glass_dynamics_match(a: &GlassDynamics, b: &GlassDynamics) -> bool {
+    let bits = |d: &GlassDynamics| {
+        let GlassDynamics {
+            activity,
+            resting_tint,
+            highlight_boost,
+            saturation_boost,
+            tint_alpha_multiplier,
+            morph: _,
+            touch,
+            press_depth,
+        } = d;
+        (
+            activity.map(f32::to_bits),
+            resting_tint.map(|Color(r, g, b, a)| [r, g, b, a].map(f32::to_bits)),
+            [*highlight_boost, *saturation_boost].map(f32::to_bits),
+            tint_alpha_multiplier.map(f32::to_bits),
+            touch.map(|(x, y, strength)| [x, y, strength].map(f32::to_bits)),
+            press_depth.map(f32::to_bits),
+        )
+    };
+    bits(a) == bits(b)
+        && match (&a.morph, &b.morph) {
+            (None, None) => true,
+            (Some(a), Some(b)) => glass_morphs_match(a, b),
+            _ => false,
+        }
+}
+
+fn glass_morphs_match(a: &GlassMorph, b: &GlassMorph) -> bool {
+    let shape_bits =
+        |&(x, y, w, h, r): &(f32, f32, f32, f32, f32)| [x, y, w, h, r].map(f32::to_bits);
+    let bits = |m: &GlassMorph| {
+        let GlassMorph {
+            node_size,
+            primary,
+            shapes: _,
+            glue,
+            wobble_amplitude,
+            wobble_phase,
+            bulge_amplitude,
+            bulge_direction,
+            ellipse_blend,
+            deformation,
+            zoom_anchor,
+        } = m;
+        (
+            [
+                node_size.0,
+                node_size.1,
+                *glue,
+                *wobble_amplitude,
+                *wobble_phase,
+                *bulge_amplitude,
+                *bulge_direction,
+                *ellipse_blend,
+                zoom_anchor.0,
+                zoom_anchor.1,
+            ]
+            .map(f32::to_bits),
+            shape_bits(primary),
+            deformation
+                .map(|GlassDeformation { axis, along }| [axis.0, axis.1, along].map(f32::to_bits)),
+        )
+    };
+    bits(a) == bits(b)
+        && a.shapes
+            .iter()
+            .map(shape_bits)
+            .eq(b.shapes.iter().map(shape_bits))
 }
 
 fn morph_output_support(
@@ -1089,6 +1186,100 @@ mod tests {
             }
             effect => panic!("expected runtime shader, got {effect:?}"),
         }
+    }
+
+    #[test]
+    fn cached_glass_layers_refresh_all_live_inputs_and_keep_clones_independent() {
+        let resolved = Glass::regular().no_clip().resolve(&light_colors());
+        let layer = cached_glass_layer(resolved.clone());
+        let mut dynamics = GlassDynamics::default();
+        let mut density = 2.0;
+        let mut previous = None;
+        for step in 0..13 {
+            match step {
+                1 => density = 3.0,
+                2 => set_glass_light_direction((0.5, -0.5)),
+                3 => dynamics.highlight_boost = 0.25,
+                4 => dynamics.saturation_boost = 0.4,
+                5 => dynamics.activity = Some(0.5),
+                6 => dynamics.resting_tint = Some(Color::RED),
+                7 => dynamics.tint_alpha_multiplier = Some(0.3),
+                8 => dynamics.touch = Some((5.0, 8.0, 0.7)),
+                9 => dynamics.press_depth = Some(0.4),
+                10 => {
+                    dynamics.morph = Some(GlassMorph {
+                        node_size: (60.0, 30.0),
+                        primary: (30.0, 15.0, 50.0, 20.0, 4.0),
+                        shapes: vec![(10.0, 15.0, 8.0, 8.0, -1.0)],
+                        ..Default::default()
+                    })
+                }
+                11 => {
+                    let morph = dynamics.morph.as_mut().unwrap();
+                    morph.primary.0 += 3.0;
+                    morph.shapes[0].0 += 2.0;
+                    morph.deformation = Some(GlassDeformation::incompressible((1.0, 1.0), 1.3));
+                }
+                12 => dynamics.morph = None,
+                _ => {}
+            }
+            let actual = layer(density, dynamics.clone());
+            let expected = GraphicsLayer {
+                backdrop_effect: Some(resolved.backdrop_effect(density, dynamics.clone())),
+                render_effect: dynamics
+                    .morph
+                    .as_ref()
+                    .map(|_| resolved.runtime_effect(density, &dynamics, true)),
+                shape: resolved.shape.layer_shape(),
+                clip: resolved.clip,
+                ..Default::default()
+            };
+            assert_eq!(actual, expected, "live input step {step}");
+            assert_ne!(
+                previous.as_ref(),
+                Some(&actual),
+                "input change must reach the layer at step {step}"
+            );
+            let mut repeated = layer(density, dynamics.clone());
+            assert_eq!(repeated, actual);
+            repeated.backdrop_effect = None;
+            assert_eq!(layer(density, dynamics.clone()), actual);
+            previous = Some(actual);
+        }
+        set_glass_light_direction((0.0, 1.0));
+        let replacement = cached_glass_layer(
+            Glass::clear()
+                .shape(LiquidShape::RoundedRect(9.0))
+                .resolve(&light_colors()),
+        );
+        assert_ne!(
+            replacement(density, dynamics.clone()),
+            layer(density, dynamics)
+        );
+    }
+
+    #[test]
+    fn glass_cache_input_equality_preserves_signed_zero_and_nan_bits() {
+        let mut a = GlassDynamics {
+            touch: Some((0.0, 1.0, 0.5)),
+            ..Default::default()
+        };
+        let mut b = a.clone();
+        b.touch.as_mut().unwrap().0 = -0.0;
+        assert!(!glass_dynamics_match(&a, &b));
+        a.highlight_boost = f32::NAN;
+        assert!(glass_dynamics_match(&a, &a));
+        a.morph = Some(GlassMorph::default());
+        b = a.clone();
+        b.morph.as_mut().unwrap().zoom_anchor.0 = -0.0;
+        assert!(!glass_dynamics_match(&a, &b));
+        b = a.clone();
+        b.morph
+            .as_mut()
+            .unwrap()
+            .shapes
+            .push((0.0, 1.0, 2.0, 3.0, 4.0));
+        assert!(!glass_dynamics_match(&a, &b));
     }
 
     #[test]
