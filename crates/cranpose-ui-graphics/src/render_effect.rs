@@ -140,6 +140,65 @@ struct ShaderSpecialization {
     draw_split: Option<&'static str>,
 }
 
+pub(crate) struct ShaderSpecializationCache<K, const N: usize> {
+    entries: ArrayVec<CachedShaderSpecialization<K>, N>,
+}
+
+struct CachedShaderSpecialization<K> {
+    source: Option<Arc<ShaderSpecialization>>,
+    key: K,
+    result: Option<Arc<ShaderSpecialization>>,
+}
+
+impl<K: PartialEq, const N: usize> ShaderSpecializationCache<K, N> {
+    pub(crate) const fn new() -> Self {
+        assert!(N > 0);
+        Self {
+            entries: ArrayVec::new_const(),
+        }
+    }
+
+    pub(crate) fn apply(
+        &mut self,
+        shader: &mut RuntimeShader,
+        key: K,
+        specialize: impl FnOnce(&mut RuntimeShader, &K),
+    ) {
+        let hit = self.entries.iter().rposition(|entry| {
+            entry.key == key
+                && match (&entry.source, &shader.specialization) {
+                    (Some(source), Some(current)) => Arc::ptr_eq(source, current),
+                    (None, None) => true,
+                    _ => false,
+                }
+        });
+        if let Some(index) = hit {
+            let entry = self.entries.remove(index);
+            shader.specialization.clone_from(&entry.result);
+            self.entries.push(entry);
+            return;
+        }
+        if shader
+            .specialization
+            .as_ref()
+            .is_some_and(|source| Arc::strong_count(source) == 1)
+        {
+            specialize(shader, &key);
+            return;
+        }
+        let source = shader.specialization.clone();
+        specialize(shader, &key);
+        if self.entries.is_full() {
+            self.entries.remove(0);
+        }
+        self.entries.push(CachedShaderSpecialization {
+            source,
+            key,
+            result: shader.specialization.clone(),
+        });
+    }
+}
+
 static DEFAULT_SHADER_SPECIALIZATION: ShaderSpecialization = ShaderSpecialization {
     overrides: Vec::new(),
     overrides_hash: OnceLock::new(),
@@ -1403,6 +1462,70 @@ mod tests {
         assert_eq!(shader.output_support(), None);
         assert_eq!(shader, plain);
     }
+    #[test]
+    fn specialization_cache_preserves_source_identity_and_shader_values() {
+        let mut cache = ShaderSpecializationCache::<u32, 2>::new();
+        let mut first = RuntimeShader::new("fn effect_fs() {}");
+        first.set_override("CALLER", -0.0);
+        let mut second = first.clone();
+        second.set_override("CALLER", f64::from_bits(0x7ff8_0000_0000_0001));
+        let sources = [first, second];
+        for key in [1, 1, 2, 3, 1] {
+            for source in &sources {
+                let mut shader = source.clone();
+                shader.set_float(0, key as f32);
+                shader.set_input_padding(key as f32);
+                cache.apply(&mut shader, key, |shader, &key| {
+                    shader.set_override("FEATURE", f64::from(key));
+                    shader.set_draw_split(Some("SPLIT"));
+                    shader.set_substrates(&[SubstrateSpec::Average { block: key }]);
+                });
+                assert_eq!(
+                    shader.overrides()[0].1.to_bits(),
+                    source.overrides()[0].1.to_bits()
+                );
+                assert_eq!(shader.overrides()[1], ("FEATURE", f64::from(key)));
+                assert_eq!(
+                    shader.substrates(),
+                    &[SubstrateSpec::Average { block: key }]
+                );
+                assert_eq!(shader.draw_split(), Some("SPLIT"));
+                assert_eq!(shader.uniforms(), &[key as f32]);
+                assert_eq!(shader.input_padding(), key as f32);
+                assert_eq!(source.overrides().len(), 1);
+                assert!(source.substrates().is_empty());
+                assert_eq!(source.draw_split(), None);
+                let mut repeated = source.clone();
+                cache.apply(&mut repeated, key, |_, _| {
+                    panic!("shared specialization missed")
+                });
+                assert_eq!(repeated.overrides_hash(), shader.overrides_hash());
+                assert!(Arc::ptr_eq(
+                    repeated.specialization.as_ref().unwrap(),
+                    shader.specialization.as_ref().unwrap(),
+                ));
+                assert!(cache.entries.len() <= 2);
+            }
+        }
+    }
+
+    #[test]
+    fn specialization_cache_mutates_unique_state_without_retaining_it() {
+        let mut cache = ShaderSpecializationCache::<(), 2>::new();
+        let mut shader = RuntimeShader::new("fn effect_fs() {}");
+        shader.set_override("VALUE", 1.0);
+        let allocation = Arc::as_ptr(shader.specialization.as_ref().unwrap());
+        cache.apply(&mut shader, (), |shader, ()| {
+            shader.set_override("VALUE", 2.0)
+        });
+        assert_eq!(shader.overrides(), &[("VALUE", 2.0)]);
+        assert_eq!(
+            Arc::as_ptr(shader.specialization.as_ref().unwrap()),
+            allocation
+        );
+        assert!(cache.entries.is_empty());
+    }
+
     #[test]
     fn unchanged_shader_declarations_keep_their_storage() {
         let mut shader = RuntimeShader::new("fn effect_fs() {}");
