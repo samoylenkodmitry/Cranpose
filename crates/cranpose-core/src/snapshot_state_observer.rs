@@ -593,8 +593,11 @@ impl SnapshotStateObserverInner {
             let previous = std::mem::replace(&mut entry_mut.observed, observed);
             (entry_id, previous)
         };
-        self.unregister_observed_ids(entry_id, &previous);
         let entry_ref = entry.borrow();
+        if previous.iter().eq(entry_ref.observed.iter()) {
+            return;
+        }
+        self.unregister_observed_ids(entry_id, &previous);
         self.register_observed_ids(entry_id, &entry_ref.observed);
     }
 
@@ -1029,6 +1032,54 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn reobservation_preserves_notifications_when_dependencies_repeat_or_change() {
+        let _guard = reset_runtime();
+        let states: Vec<_> = (0..3)
+            .map(|_| SnapshotMutableState::new_in_arc(0, Arc::new(NeverEqual)))
+            .collect();
+        let notifications = Rc::new(RefCell::new(Vec::new()));
+        let observer = SnapshotStateObserver::new(|callback| callback());
+        observer.start();
+        for (generation, indices) in [[0, 1], [0, 1], [1, 0], [1, 2], [1, 2]]
+            .into_iter()
+            .enumerate()
+        {
+            observer.begin_frame();
+            let received = notifications.clone();
+            observer.observe_reads(
+                TestScope("repeated"),
+                move |_| received.borrow_mut().push(generation),
+                || {
+                    for index in indices {
+                        let _ = states[index].get();
+                    }
+                },
+            );
+            for (index, state) in states.iter().enumerate() {
+                notifications.borrow_mut().clear();
+                let snapshot = take_mutable_snapshot(None, None);
+                snapshot.enter(|| state.set(generation as i32));
+                snapshot.apply().check();
+                assert_eq!(
+                    *notifications.borrow(),
+                    if indices.contains(&index) {
+                        vec![generation]
+                    } else {
+                        vec![]
+                    },
+                    "generation={generation}, state={index}"
+                );
+            }
+        }
+        observer.clear(&TestScope("repeated"));
+        notifications.borrow_mut().clear();
+        for state in states {
+            observer.notify_changes(&[state]);
+        }
+        assert!(notifications.borrow().is_empty());
     }
 
     #[test]
