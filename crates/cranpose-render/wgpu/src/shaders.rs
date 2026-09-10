@@ -114,6 +114,20 @@ mod tests {
         entry_point: &str,
         shader_stage: ShaderStage,
     ) -> Result<(), String> {
+        validate_glsl_portability_with_constants(
+            source,
+            entry_point,
+            shader_stage,
+            &naga::back::PipelineConstants::default(),
+        )
+    }
+
+    fn validate_glsl_portability_with_constants(
+        source: &str,
+        entry_point: &str,
+        shader_stage: ShaderStage,
+        constants: &naga::back::PipelineConstants,
+    ) -> Result<(), String> {
         let module = naga::front::wgsl::parse_str(source)
             .map_err(|err| format!("WGSL parse error: {err}"))?;
         let mut validator = naga::valid::Validator::new(
@@ -138,7 +152,7 @@ mod tests {
             &module,
             &module_info,
             Some((shader_stage, entry_point)),
-            &naga::back::PipelineConstants::default(),
+            constants,
         )
         .map_err(|err| format!("override resolution failed: {err}"))?;
         let mut writer = glsl::Writer::new(
@@ -165,10 +179,25 @@ mod tests {
     fn blur_shader_validates_for_webgl() {
         let shader = super::blur_shader();
         assert!(validate_glsl_portability(&shader, "fullscreen_vs", ShaderStage::Vertex).is_ok());
-        assert!(validate_glsl_portability(&shader, "blur_fs", ShaderStage::Fragment).is_ok());
-        assert!(
-            validate_glsl_portability(&shader, "blur_downsample_fs", ShaderStage::Fragment).is_ok()
-        );
+        for tile_mode in 0..4 {
+            for block in [2, 4] {
+                let constants = naga::back::PipelineConstants::from_iter([
+                    ("BLUR_TILE_MODE".into(), tile_mode as f64),
+                    ("BLUR_BLOCK".into(), block as f64),
+                ]);
+                for entry in ["blur_fs", "blur_downsample_fs"] {
+                    validate_glsl_portability_with_constants(
+                        &shader,
+                        entry,
+                        ShaderStage::Fragment,
+                        &constants,
+                    )
+                    .unwrap_or_else(|error| {
+                        panic!("mode={tile_mode}, block={block}, {entry}: {error}")
+                    });
+                }
+            }
+        }
     }
 
     #[test]

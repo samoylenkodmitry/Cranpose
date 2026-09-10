@@ -16,7 +16,7 @@ struct BlurUniforms {
 // each axis. A pipeline constant, so the block's fetch loops unroll.
 override BLUR_BLOCK: i32 = 2;
 
-override BLUR_DECAL: bool = false;
+override BLUR_TILE_MODE: u32 = 0u;
 
 fn inside_unit_bounds(uv: vec2<f32>) -> f32 {
     let inside = uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0;
@@ -48,7 +48,7 @@ fn region_texture_uv(local: vec2<f32>) -> vec2<f32> {
 // The texture value at a region-local coordinate under the tile mode:
 // mirrored or repeated into [0, 1], or held to the region's edge.
 fn tiled_sample(uv: vec2<f32>) -> vec4<f32> {
-    let tile_mode = blur.texture_size_and_tile_mode.z;
+    let tile_mode = f32(BLUR_TILE_MODE);
     if (tile_mode >= 1.5 && tile_mode < 2.5) {
         // Mirror: ... 0->1, 1->0, repeat.
         let wrap_x = uv.x - floor(uv.x / 2.0) * 2.0;
@@ -72,7 +72,7 @@ fn tiled_sample(uv: vec2<f32>) -> vec4<f32> {
 
 // A tap's weight under the tile mode: zero outside the region for decal.
 fn tap_weight(uv: vec2<f32>, weight: f32) -> f32 {
-    return select(weight, weight * inside_unit_bounds(uv), BLUR_DECAL);
+    return select(weight, weight * inside_unit_bounds(uv), BLUR_TILE_MODE == 3u);
 }
 
 // The fragment's place in its destination region, in [0, 1]: the whole
@@ -143,7 +143,7 @@ fn blur_fs(input: VertexOutput) -> @location(0) vec4<f32> {
         for (var side: f32 = -1.0; side <= 1.0; side = side + 2.0) {
             var offset = pair.z;
             var e = pair.w;
-            if (BLUR_DECAL) {
+            if (BLUR_TILE_MODE == 3u) {
                 let e1 = tap_weight(local + step * (fi * side), pair.x);
                 let e2 = tap_weight(local + step * (fj * side), pair.y);
                 e = e1 + e2;

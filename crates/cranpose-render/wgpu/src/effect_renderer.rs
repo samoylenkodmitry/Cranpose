@@ -80,6 +80,12 @@ fn scaled_scissor(
 }
 
 const MAX_BLUR_KERNEL_CACHE_ITEMS: usize = 32;
+const BLUR_TILE_MODES: [TileMode; 4] = [
+    TileMode::Clamp,
+    TileMode::Repeated,
+    TileMode::Mirror,
+    TileMode::Decal,
+];
 
 pub(crate) struct EffectRenderer {
     offscreen_pool: OffscreenPool,
@@ -88,9 +94,9 @@ pub(crate) struct EffectRenderer {
 
     blur_shader: wgpu::ShaderModule,
     blur_pipeline_layout: wgpu::PipelineLayout,
-    blur_pipelines: [LazyGpuResource<wgpu::RenderPipeline>; 2],
-    blur_downsample_pipelines:
-        [LazyGpuResource<wgpu::RenderPipeline>; BLUR_DOWNSAMPLE_BLOCKS.len()],
+    blur_pipelines: [LazyGpuResource<wgpu::RenderPipeline>; BLUR_TILE_MODES.len()],
+    blur_downsample_pipelines: [[LazyGpuResource<wgpu::RenderPipeline>;
+        BLUR_DOWNSAMPLE_BLOCKS.len()]; BLUR_TILE_MODES.len()],
     blur_uniform_bind_group_layout: wgpu::BindGroupLayout,
     blur_uniform_uploads: Vec<UniformUpload>,
     blur_kernels: RefCell<BoundedLruCache<u32, BlurKernel>>,
@@ -338,17 +344,16 @@ struct BlurDraw<'a> {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum BlurPipeline {
-    Downsample(u32),
-    Kernel { decal: bool },
+    Downsample { block: u32, tile_mode: usize },
+    Kernel { tile_mode: usize },
 }
 
 impl BlurDraw<'_> {
     fn pipeline(&self) -> BlurPipeline {
+        let tile_mode = self.uniforms.texture_size_and_tile_mode[2] as usize;
         match self.downsample {
-            Some(block) => BlurPipeline::Downsample(block),
-            None => BlurPipeline::Kernel {
-                decal: self.uniforms.texture_size_and_tile_mode[2] >= 2.5,
-            },
+            Some(block) => BlurPipeline::Downsample { block, tile_mode },
+            None => BlurPipeline::Kernel { tile_mode },
         }
     }
 }
@@ -876,14 +881,10 @@ impl EffectRenderer {
             immediate_size: 0,
         });
 
-        let blur_pipelines = [
-            LazyGpuResource::new("effect/blur"),
-            LazyGpuResource::new("effect/blur-decal"),
-        ];
-        let blur_downsample_pipelines = [
-            LazyGpuResource::new("effect/blur-downsample/2"),
-            LazyGpuResource::new("effect/blur-downsample/4"),
-        ];
+        let blur_pipelines = BLUR_TILE_MODES.map(|_| LazyGpuResource::new("effect/blur"));
+        let blur_downsample_pipelines = BLUR_TILE_MODES.map(|_| {
+            BLUR_DOWNSAMPLE_BLOCKS.map(|_| LazyGpuResource::new("effect/blur-downsample"))
+        });
 
         let offset_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Offset Shader"),
@@ -998,21 +999,16 @@ impl EffectRenderer {
         }
     }
 
-    fn blur_pipeline(&self, device: &wgpu::Device, decal: bool) -> &wgpu::RenderPipeline {
-        let (cell, label) = if decal {
-            (&self.blur_pipelines[1], "Blur Decal Pipeline")
-        } else {
-            (&self.blur_pipelines[0], "Blur Pipeline")
-        };
-        cell.get_or_init(self.adapter_backend, || {
+    fn blur_pipeline(&self, device: &wgpu::Device, tile_mode: usize) -> &wgpu::RenderPipeline {
+        self.blur_pipelines[tile_mode].get_or_init(self.adapter_backend, || {
             create_fullscreen_pipeline(
                 device,
                 self.pipeline_cache.as_ref(),
-                label,
+                "Blur Pipeline",
                 &self.blur_pipeline_layout,
                 &self.blur_shader,
                 "blur_fs",
-                &[("BLUR_DECAL", if decal { 1.0 } else { 0.0 })],
+                &[("BLUR_TILE_MODE", tile_mode as f64)],
                 self.surface_format,
                 wgpu::BlendState::REPLACE,
             )
@@ -1021,14 +1017,19 @@ impl EffectRenderer {
 
     /// The downsample pipeline averaging `block` source texels per axis into
     /// one pixel of a blur's scratch.
-    fn blur_downsample_pipeline(&self, device: &wgpu::Device, block: u32) -> &wgpu::RenderPipeline {
+    fn blur_downsample_pipeline(
+        &self,
+        device: &wgpu::Device,
+        block: u32,
+        tile_mode: usize,
+    ) -> &wgpu::RenderPipeline {
         let index = BLUR_DOWNSAMPLE_BLOCKS
             .iter()
             .position(|candidate| *candidate == block)
             .unwrap_or_else(|| {
                 panic!("a blur downsample block of {block}; the scratch is 2 or 4 to 1")
             });
-        self.blur_downsample_pipelines[index].get_or_init(self.adapter_backend, || {
+        self.blur_downsample_pipelines[tile_mode][index].get_or_init(self.adapter_backend, || {
             create_fullscreen_pipeline(
                 device,
                 self.pipeline_cache.as_ref(),
@@ -1036,7 +1037,10 @@ impl EffectRenderer {
                 &self.blur_pipeline_layout,
                 &self.blur_shader,
                 "blur_downsample_fs",
-                &[("BLUR_BLOCK", f64::from(block))],
+                &[
+                    ("BLUR_BLOCK", f64::from(block)),
+                    ("BLUR_TILE_MODE", tile_mode as f64),
+                ],
                 self.surface_format,
                 wgpu::BlendState::REPLACE,
             )
@@ -1293,8 +1297,10 @@ impl EffectRenderer {
             let pipeline = draw.pipeline();
             if bound != Some(pipeline) {
                 pass.set_pipeline(match pipeline {
-                    BlurPipeline::Downsample(block) => self.blur_downsample_pipeline(device, block),
-                    BlurPipeline::Kernel { decal } => self.blur_pipeline(device, decal),
+                    BlurPipeline::Downsample { block, tile_mode } => {
+                        self.blur_downsample_pipeline(device, block, tile_mode)
+                    }
+                    BlurPipeline::Kernel { tile_mode } => self.blur_pipeline(device, tile_mode),
                 });
                 bound = Some(pipeline);
             }

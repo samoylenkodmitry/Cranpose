@@ -14,7 +14,7 @@ struct BlurUniforms {
 
 override BLUR_BLOCK: i32 = 2;
 
-override BLUR_DECAL: bool = false;
+override BLUR_TILE_MODE: u32 = 0u;
 
 fn inside_unit_bounds(uv: vec2<f32>) -> f32 {
     let inside = uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0;
