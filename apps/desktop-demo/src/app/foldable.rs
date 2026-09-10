@@ -27,21 +27,23 @@ const CORNER: f32 = 18.0;
 const HINGE_WIDTH: f32 = 4.0;
 /// How far the folding half throws its shadow across the half that stays.
 const CREASE_SHADOW: f32 = 22.0;
-/// The two screens fold on to each other, so the folding half swings toward
-/// the reader and, past a right angle, presents the back of the device.
-const SHUT_ANGLE: f32 = 155.0;
-const RIGHT_ANGLE: f32 = 90.0;
-const STRAIGHT_ANGLE: f32 = 180.0;
+/// The two screens fold on to each other, and the reader is looking at the
+/// half that is folding, so both screens stay in view the whole way.
+const SHUT_ANGLE: f32 = 100.0;
+/// How much of the fold the reader takes up by turning the device, keeping the
+/// half that folds toward them. What is left over is the skew on that half;
+/// the half that stays takes the rest and swings away.
+const HOLD_SHARE: f32 = 0.84;
 const CAMERA_DISTANCE: f32 = 15.0;
 /// Room above and below a painted half for the part of the turned half that
 /// comes toward the reader and so stands taller than the flat one.
 const PAINT_PAD: f32 = 52.0;
 const STAGE_WIDTH: f32 = 880.0;
 const STAGE_HEIGHT: f32 = 430.0;
-const MAX_BLUR_PX: f32 = 30.0;
+const MAX_BLUR_PX: f32 = 22.0;
 const GLASS_SHEEN: f32 = 0.22;
 /// How far into shadow the crease goes once the device is shut.
-const CREASE_DARK: f32 = 0.92;
+const CREASE_DARK: f32 = 0.52;
 /// What a unit of `camera_distance` is worth in pixels, which the painted half
 /// needs to put its picture through the same projection the turned one takes.
 const CAMERA_DISTANCE_SCALE: f32 = 72.0;
@@ -69,17 +71,26 @@ impl Fold {
         self.shut * SHUT_ANGLE
     }
 
-    /// Before a right angle the folding half still shows its screen; past it,
-    /// the back of the device does.
-    fn shows_screen(self) -> bool {
-        self.angle() < RIGHT_ANGLE
+    /// How far the reader has turned the device to keep the folding half
+    /// toward them, in degrees. The half that stays swings away by this much.
+    fn hold(self) -> f32 {
+        -HOLD_SHARE * self.angle()
     }
 
-    /// How much of the width it covers when flat the folding half has given
-    /// up. A half turned by `a` covers `cos a` of it, and once it is edge on
-    /// it has given up all of it and covers no less from then on.
-    fn squeeze(self) -> f32 {
-        (1.0 - self.angle().min(RIGHT_ANGLE).to_radians().cos()).clamp(0.0, 1.0)
+    /// The turn each half takes in the reader's view: the hold, with the fold
+    /// on top of it for the half that is folding. Both are turns about the
+    /// line the hinge runs down, so they add.
+    fn turn(self, half: Half) -> f32 {
+        match half {
+            Half::Stays => self.hold(),
+            Half::Folds => self.hold() + self.angle(),
+        }
+    }
+
+    /// How much of the width it covers when flat a half has given up, which is
+    /// what the device has to move by to stay where it is held.
+    fn squeeze(self, half: Half) -> f32 {
+        (1.0 - self.turn(half).to_radians().cos()).clamp(0.0, 1.0)
     }
 
     fn reading(self) -> String {
@@ -98,17 +109,32 @@ impl Fold {
 /// one side only, so without this the whole device would appear to slide
 /// toward the half that stays.
 fn held_still(fold: Fold) -> f32 {
-    -HALF_WIDTH * fold.squeeze() * 0.5
+    HALF_WIDTH * 0.5 * (fold.squeeze(Half::Stays) - fold.squeeze(Half::Folds))
 }
 
-/// The turn the folding half takes, and the turn the painted half's picture
-/// is put through. Past a right angle the back is drawn on the other side of
-/// the hinge, so the turn is measured from there.
-fn panel_turn(fold: Fold) -> f32 {
-    if fold.shows_screen() {
-        fold.angle()
-    } else {
-        fold.angle() - STRAIGHT_ANGLE
+/// Which half of the device this is.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Half {
+    /// The half the hinge holds; it swings away from the reader.
+    Stays,
+    /// The half that folds, which the reader keeps toward them.
+    Folds,
+}
+
+impl Half {
+    /// The edge the hinge runs down, as a share of the half's width.
+    fn hinge(self) -> f32 {
+        match self {
+            Half::Stays => 0.0,
+            Half::Folds => 1.0,
+        }
+    }
+
+    fn offset(self) -> f32 {
+        match self {
+            Half::Stays => HALF_WIDTH,
+            Half::Folds => 0.0,
+        }
     }
 }
 
@@ -150,10 +176,6 @@ fn outer_corners(hinge_at_right: bool) -> CornerRadii {
 
 fn stage_color() -> Color {
     Color(0.784, 0.780, 0.792, 1.0)
-}
-
-fn shell_color() -> Color {
-    Color(0.118, 0.118, 0.126, 1.0)
 }
 
 fn bezel_color() -> Color {
@@ -235,7 +257,6 @@ fn wallpaper_effect(origin: f32, span: f32) -> RenderEffect {
 struct GlassUniforms {
     /// How far the device is shut, from flat open to edge on.
     fold: f32,
-    hinge_at_left: bool,
 }
 
 fn glass_effect(uniforms: &GlassUniforms) -> RenderEffect {
@@ -245,7 +266,6 @@ fn glass_effect(uniforms: &GlassUniforms) -> RenderEffect {
     shader.set_float(2, MAX_BLUR_PX);
     shader.set_float(3, CREASE_DARK);
     shader.set_float(4, GLASS_SHEEN);
-    shader.set_float(5, if uniforms.hinge_at_left { 1.0 } else { 0.0 });
     RenderEffect::runtime_shader(shader)
 }
 
@@ -442,18 +462,17 @@ fn Device(fold: Fold, built: Built) {
             .size_points(SCREEN_WIDTH, SCREEN_HEIGHT),
         BoxSpec::new().content_alignment(Alignment::TOP_START),
         move || {
-            key("still", StillHalf);
+            key("stays", || DeviceHalf(fold, Half::Stays, built));
             Hinge(fold);
-            key("folding", || FoldingHalf(fold, built));
+            key("folds", || DeviceHalf(fold, Half::Folds, built));
         },
     );
 }
 
-/// Every part of the device turns about the one line the hinge runs down, so
-/// each part carries its own turn about that line: how the reader is holding
-/// the device and, for the folding half, the fold on top of it. That is one
-/// layer each, sharing a camera, rather than a turned layer inside a turned
-/// layer, which samples in tiles and leaves steps along the device's edge.
+/// Both halves turn about the one line the hinge runs down, so each carries a
+/// single layer with its own turn about that line, sharing a camera, rather
+/// than a turned layer inside a turned layer, which the renderer samples in
+/// tiles and which leaves steps along the device's edge.
 fn hinge_layer(degrees: f32, origin: TransformOrigin) -> GraphicsLayer {
     GraphicsLayer {
         rotation_y: degrees,
@@ -463,91 +482,87 @@ fn hinge_layer(degrees: f32, origin: TransformOrigin) -> GraphicsLayer {
     }
 }
 
-/// The half the hinge holds still, which keeps its picture square to the
-/// reader for the whole fold.
+/// One half of the device, either really turned or painted as if it were. The
+/// picture never reflows: the clock and the date stay where the open device
+/// puts them for the whole fold. What the fold takes is the reader's focus on
+/// the half that is going away, which goes soft and into shadow.
 #[composable]
-fn StillHalf() {
-    Box(
-        Modifier::empty()
-            .absolute_offset(HALF_WIDTH, 0.0)
-            .size_points(HALF_WIDTH, SCREEN_HEIGHT),
-        BoxSpec::default(),
-        move || {
-            HalfFace(HALF_WIDTH, false);
-        },
-    );
-}
-
-/// The half that swings on the hinge, toward the reader. Its picture goes with
-/// it and is foreshortened by it; what the fold takes away is the reader's
-/// ability to focus on it, not the layout, which never reflows. Past a right
-/// angle its screen faces away and the back of the device faces the reader.
-#[composable]
-fn FoldingHalf(fold: Fold, built: Built) {
-    let screen = fold.shows_screen();
-    let angle = panel_turn(fold);
-    let origin = if screen {
-        TransformOrigin::new(1.0, 0.5)
-    } else {
-        TransformOrigin::new(0.0, 0.5)
-    };
-    let x = if screen { 0.0 } else { HALF_WIDTH };
-    let shut = fold.shut;
+fn DeviceHalf(fold: Fold, half: Half, built: Built) {
+    let turn = fold.turn(half);
+    let shut = if half == Half::Folds { fold.shut } else { 0.0 };
 
     if built == Built::Painted {
-        PaintedHalf(fold, screen, x);
+        PaintedHalf(half, turn, shut);
         return;
     }
 
     Box(
         Modifier::empty()
-            .absolute_offset(x, 0.0)
+            .absolute_offset(half.offset(), 0.0)
             .size_points(HALF_WIDTH, SCREEN_HEIGHT)
-            .graphics_layer(move || hinge_layer(angle, origin)),
+            .graphics_layer(move || hinge_layer(turn, TransformOrigin::new(half.hinge(), 0.5))),
         BoxSpec::default(),
         move || {
-            if screen {
-                FoldingScreen(shut);
-            } else {
-                ShellFace(shut);
-            }
+            TurnedFace(half, shut);
         },
     );
 }
 
-/// The same half, on a surface that never moves. The shader is given the turn
-/// the other device's half really takes and works back, for every fragment,
-/// to the point of the flat half that would land there -- so the picture is
-/// skewed into the same trapezium -- then blurs and shadows it the same way.
+/// The face of a turned half, with the reader's focus taken off it when it is
+/// the one folding away.
 #[composable]
-fn PaintedHalf(fold: Fold, screen: bool, x: f32) {
-    let shut = fold.shut;
-    let turn = panel_turn(fold);
-    let height = SCREEN_HEIGHT + PAINT_PAD * 2.0;
-
+fn TurnedFace(half: Half, shut: f32) {
     Box(
         Modifier::empty()
-            .absolute_offset(x, -PAINT_PAD)
-            .required_size(Size::new(HALF_WIDTH, height))
-            // The picture grows past the flat half where the turned one comes
-            // toward the reader, so the surface being painted has to reach
-            // that far. Nothing is drawn here; this only says how far it goes.
-            .draw_behind(|scope| {
-                scope.draw_rect(Brush::solid(Color(0.0, 0.0, 0.0, 0.0)));
-            })
+            .size_points(HALF_WIDTH, SCREEN_HEIGHT)
+            // A half the fold takes no focus from carries no gradient, so it
+            // goes straight to the screen: no layer of its own, and none of
+            // the blur's reads per pixel.
             .graphics_layer(move || {
                 if shut <= 0.0 {
                     return GraphicsLayer::default();
                 }
                 GraphicsLayer {
-                    render_effect: Some(paint_effect(&PaintUniforms {
-                        fold: shut,
-                        turn,
-                        hinge_at_left: !screen,
-                    })),
+                    render_effect: Some(glass_effect(&GlassUniforms { fold: shut })),
                     compositing_strategy: CompositingStrategy::Offscreen,
                     ..Default::default()
                 }
+            }),
+        BoxSpec::default(),
+        move || {
+            HalfFace(half);
+        },
+    );
+}
+
+/// The same half, on a surface that never moves. The shader is given the turn
+/// the other device's half really takes and works back, for every fragment, to
+/// the point of the flat half that would land there -- so the picture itself
+/// is skewed into the same trapezium -- then blurs and shadows it the same way.
+#[composable]
+fn PaintedHalf(half: Half, turn: f32, shut: f32) {
+    let height = SCREEN_HEIGHT + PAINT_PAD * 2.0;
+    let hinge_at_left = half.hinge() < 0.5;
+
+    Box(
+        Modifier::empty()
+            .absolute_offset(half.offset(), -PAINT_PAD)
+            .required_size(Size::new(HALF_WIDTH, height))
+            // The picture reaches past the flat half wherever the turned one
+            // comes toward the reader and stands taller than it, so the surface
+            // being painted has to reach that far. Nothing is drawn here; this
+            // only says how far it goes.
+            .draw_behind(|scope| {
+                scope.draw_rect(Brush::solid(Color(0.0, 0.0, 0.0, 0.0)));
+            })
+            .graphics_layer(move || GraphicsLayer {
+                render_effect: Some(paint_effect(&PaintUniforms {
+                    fold: shut,
+                    turn,
+                    hinge_at_left,
+                })),
+                compositing_strategy: CompositingStrategy::Offscreen,
+                ..Default::default()
             }),
         BoxSpec::new().content_alignment(Alignment::TOP_START),
         move || {
@@ -557,103 +572,8 @@ fn PaintedHalf(fold: Fold, screen: bool, x: f32) {
                     .size_points(HALF_WIDTH, SCREEN_HEIGHT),
                 BoxSpec::new().content_alignment(Alignment::TOP_START),
                 move || {
-                    if screen {
-                        HalfFace(0.0, true);
-                    } else {
-                        ShellFace(shut);
-                    }
+                    HalfFace(half);
                 },
-            );
-        },
-    );
-}
-
-/// The screen of the folding half, with the reader's focus taken off it.
-#[composable]
-fn FoldingScreen(shut: f32) {
-    Box(
-        Modifier::empty()
-            .size_points(HALF_WIDTH, SCREEN_HEIGHT)
-            // A half lying flat is square to the reader and carries no
-            // gradient, so it goes straight to the screen: no layer of its
-            // own, and none of the blur's reads per pixel.
-            .graphics_layer(move || {
-                if shut <= 0.0 {
-                    return GraphicsLayer::default();
-                }
-                GraphicsLayer {
-                    render_effect: Some(glass_effect(&GlassUniforms {
-                        fold: shut,
-                        hinge_at_left: false,
-                    })),
-                    compositing_strategy: CompositingStrategy::Offscreen,
-                    ..Default::default()
-                }
-            }),
-        BoxSpec::default(),
-        move || {
-            HalfFace(0.0, true);
-        },
-    );
-}
-
-/// The back of the folding half once its screen has turned past the reader:
-/// graphite, with the light running down the edge the hinge holds.
-#[composable]
-fn ShellFace(shut: f32) {
-    let lit = (1.0 - shut * 0.35).clamp(0.0, 1.0);
-    let base = shell_color();
-    let near = Color(
-        base.0 * lit * 2.1,
-        base.1 * lit * 2.1,
-        base.2 * lit * 2.2,
-        1.0,
-    );
-    let far = Color(base.0 * lit, base.1 * lit, base.2 * lit, 1.0);
-
-    Box(
-        Modifier::empty()
-            .size_points(HALF_WIDTH, SCREEN_HEIGHT)
-            .draw_behind(move |scope| {
-                let size = scope.size();
-                scope.draw_round_rect(
-                    Brush::linear_gradient_range(
-                        vec![near, far],
-                        Point { x: 0.0, y: 0.0 },
-                        Point {
-                            x: size.width,
-                            y: 0.0,
-                        },
-                    ),
-                    outer_corners(false),
-                );
-            }),
-        BoxSpec::new().content_alignment(Alignment::TOP_START),
-        move || {
-            Box(
-                Modifier::empty()
-                    .size_points(HINGE_WIDTH * 0.7, SCREEN_HEIGHT)
-                    .draw_behind(move |scope| {
-                        let size = scope.size();
-                        scope.draw_rect(Brush::linear_gradient_range(
-                            vec![
-                                Color(
-                                    edge_color().0 * lit,
-                                    edge_color().1 * lit,
-                                    edge_color().2 * lit,
-                                    1.0,
-                                ),
-                                Color(0.0, 0.0, 0.0, 0.0),
-                            ],
-                            Point { x: 0.0, y: 0.0 },
-                            Point {
-                                x: size.width,
-                                y: 0.0,
-                            },
-                        ));
-                    }),
-                BoxSpec::default(),
-                || {},
             );
         },
     );
@@ -664,7 +584,9 @@ fn ShellFace(shut: f32) {
 /// written on the screen is laid out across all of it and clipped to the
 /// window, so both cross the crease unbroken.
 #[composable]
-fn HalfFace(offset: f32, hinge_at_right: bool) {
+fn HalfFace(half: Half) {
+    let hinge_at_right = half == Half::Folds;
+    let offset = half.offset();
     let radii = outer_corners(hinge_at_right);
     let glass = Size::new(
         HALF_WIDTH - BEZEL - INNER_BEZEL,
@@ -718,7 +640,7 @@ fn HalfFace(offset: f32, hinge_at_right: bool) {
 /// half that stays, and the metal the two of them turn on.
 #[composable]
 fn Hinge(fold: Fold) {
-    let squeeze = fold.squeeze();
+    let squeeze = fold.squeeze(Half::Folds);
     let cast = HINGE_WIDTH + CREASE_SHADOW * squeeze;
     let depth = 0.38 * squeeze;
 
@@ -812,12 +734,41 @@ mod tests {
     #[test]
     fn a_fold_runs_from_flat_open_to_shut() {
         assert_eq!(Fold::at(0.0).angle(), 0.0);
-        assert_eq!(Fold::at(0.0).squeeze(), 0.0);
-        assert!(Fold::at(0.0).shows_screen());
+        assert_eq!(Fold::at(0.0).hold(), 0.0);
         assert!((Fold::at(1.0).angle() - SHUT_ANGLE).abs() < 1e-4);
+    }
+
+    #[test]
+    fn the_reader_keeps_the_folding_half_toward_them() {
+        let shut = Fold::at(1.0);
         assert!(
-            (Fold::at(1.0).squeeze() - 1.0).abs() < 1e-3,
-            "a shut half covers none of the width it covered when flat"
+            shut.turn(Half::Folds).abs() < shut.turn(Half::Stays).abs(),
+            "the half that folds ends nearer square to the reader than the half that stays"
+        );
+        assert!(
+            shut.turn(Half::Folds) > 0.0 && shut.turn(Half::Stays) < 0.0,
+            "they turn away from each other about the hinge"
+        );
+        assert!(
+            shut.turn(Half::Stays).abs() < 90.0,
+            "neither half turns its back on the reader, so both screens stay in view"
+        );
+    }
+
+    #[test]
+    fn the_halves_keep_taking_more_of_the_turn_as_it_shuts() {
+        for half in [Half::Stays, Half::Folds] {
+            assert_eq!(Fold::at(0.0).squeeze(half), 0.0);
+            assert!(Fold::at(0.6).squeeze(half) > Fold::at(0.3).squeeze(half));
+        }
+    }
+
+    #[test]
+    fn the_device_stays_where_the_hand_holds_it() {
+        assert_eq!(held_still(Fold::at(0.0)), 0.0);
+        assert!(
+            held_still(Fold::at(1.0)).abs() > 1.0,
+            "a shut device has to move back by what its halves gave up on either side"
         );
     }
 
@@ -825,43 +776,6 @@ mod tests {
     fn a_fold_never_leaves_the_hinge() {
         assert_eq!(Fold::at(-3.0).shut, 0.0);
         assert_eq!(Fold::at(4.5).shut, 1.0);
-    }
-
-    #[test]
-    fn the_picture_is_pressed_harder_the_further_the_half_turns() {
-        assert!(Fold::at(0.5).squeeze() > Fold::at(0.2).squeeze());
-        assert!(Fold::at(1.0).squeeze() > Fold::at(0.5).squeeze());
-    }
-
-    #[test]
-    fn the_device_stays_where_the_hand_holds_it() {
-        assert_eq!(held_still(Fold::at(0.0)), 0.0);
-        assert!(held_still(Fold::at(0.5)) < 0.0);
-        assert!(
-            (held_still(Fold::at(1.0)) + HALF_WIDTH * 0.5).abs() < 1e-3,
-            "a shut device has given up a whole half, so it moves back by half of that"
-        );
-    }
-
-    #[test]
-    fn the_turn_the_half_takes_is_the_turn_the_painted_one_is_given() {
-        assert_eq!(panel_turn(Fold::at(0.0)), 0.0);
-        assert!(
-            panel_turn(Fold::at(0.4)) > panel_turn(Fold::at(0.2)),
-            "the half swings toward the reader"
-        );
-        let shut = Fold::at(1.0);
-        assert!(!shut.shows_screen());
-        assert!(
-            (panel_turn(shut) - (SHUT_ANGLE - STRAIGHT_ANGLE)).abs() < 1e-4,
-            "past a right angle the back is drawn on the other side of the hinge"
-        );
-    }
-
-    #[test]
-    fn the_back_arrives_at_a_right_angle() {
-        assert!(Fold::at(0.5).shows_screen());
-        assert!(!Fold::at(0.7).shows_screen());
     }
 
     #[test]

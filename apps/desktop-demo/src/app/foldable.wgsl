@@ -153,22 +153,26 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let hinge_at_left = get_float(10u);
 
     // How far this fragment sits from the crease, and how far above the middle
-    // of the half, both in pixels on the flat surface being painted.
+    // of the half, both in pixels on the flat surface being painted. A half
+    // whose hinge is on its left reaches the other way, so the turn that
+    // brings its far edge toward the reader is the opposite one.
     var across = (1.0 - local.x) * half_w;
+    var toward = sin_turn;
     if (hinge_at_left >= 0.5) {
         across = local.x * half_w;
+        toward = -sin_turn;
     }
     let up_screen = (local.y - 0.5) * size_px.y;
 
     // Work back to the point on the turned half that would land here. A point
     // `a` along the half lands `a * cos / (1 - a * sin / camera)` from the
     // crease, so the way back is this.
-    let denom = camera * cos_turn + across * sin_turn;
+    let denom = camera * cos_turn + across * toward;
     if (denom < 1.0e-3) {
         return vec4<f32>(0.0);
     }
     let along = across * camera / denom;
-    let nearer = camera / max(camera - along * sin_turn, 1.0e-3);
+    let nearer = camera / max(camera - along * toward, 1.0e-3);
     let up = up_screen / nearer;
 
     let from_hinge = along / half_w;
