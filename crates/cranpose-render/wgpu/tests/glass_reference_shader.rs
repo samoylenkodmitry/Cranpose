@@ -52,9 +52,9 @@ fn resourced_shader(shader: &RuntimeShader, source: &str) -> RuntimeShader {
 
 fn resourced(effect: &RenderEffect, source: &str) -> RenderEffect {
     match effect {
-        RenderEffect::Shader { shader } => RenderEffect::Shader {
-            shader: resourced_shader(shader, source),
-        },
+        RenderEffect::Shader { shader } => {
+            RenderEffect::runtime_shader(resourced_shader(shader, source))
+        }
         RenderEffect::Chain { first, second } => RenderEffect::Chain {
             first: Box::new(resourced(first, source)),
             second: Box::new(resourced(second, source)),
@@ -246,7 +246,7 @@ fn without_adaptive_block(source: &str) -> String {
 fn with_substrates(effect: RenderEffect, substrates: Vec<SubstrateSpec>) -> RenderEffect {
     match effect {
         RenderEffect::Shader { mut shader } => {
-            shader.set_substrates(&substrates);
+            std::sync::Arc::make_mut(&mut shader).set_substrates(&substrates);
             RenderEffect::Shader { shader }
         }
         other => other,
@@ -256,9 +256,9 @@ fn with_substrates(effect: RenderEffect, substrates: Vec<SubstrateSpec>) -> Rend
 fn frosted_at(effect: RenderEffect, frost: f32, activity: f32) -> RenderEffect {
     match effect {
         RenderEffect::Shader { mut shader } => {
-            shader.set_float(GLASS_ADAPTIVE_FROST_UNIFORM, frost);
-            shader.set_float(GLASS_ACTIVITY_UNIFORM, activity);
-            specialize_liquid_glass(&mut shader);
+            std::sync::Arc::make_mut(&mut shader).set_float(GLASS_ADAPTIVE_FROST_UNIFORM, frost);
+            std::sync::Arc::make_mut(&mut shader).set_float(GLASS_ACTIVITY_UNIFORM, activity);
+            specialize_liquid_glass(std::sync::Arc::make_mut(&mut shader));
             RenderEffect::Shader { shader }
         }
         other => other,

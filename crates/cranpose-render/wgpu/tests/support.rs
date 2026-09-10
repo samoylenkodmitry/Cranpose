@@ -604,7 +604,7 @@ pub fn substrate_probe(spec: SubstrateSpec, read: SubstrateProbeRead) -> RenderE
     ));
     shader.set_batched_source(true);
     shader.set_substrates(&[spec]);
-    RenderEffect::Shader { shader }
+    RenderEffect::runtime_shader(shader)
 }
 
 /// A page of the given size holding `children` in order.

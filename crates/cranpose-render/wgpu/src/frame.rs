@@ -4,6 +4,7 @@ use std::{
     hash::{Hash, Hasher},
     ops::Range,
     rc::Rc,
+    sync::Arc,
 };
 
 use cranpose_core::NodeId;
@@ -608,8 +609,8 @@ struct BlurSpec {
 #[derive(Clone, Copy)]
 enum BatchedEffect<'a> {
     Blur(BlurSpec),
-    Shader(&'a RuntimeShader),
-    BlurThenShader(BlurSpec, &'a RuntimeShader),
+    Shader(&'a Arc<RuntimeShader>),
+    BlurThenShader(BlurSpec, &'a Arc<RuntimeShader>),
 }
 
 impl<'a> BatchedEffect<'a> {
@@ -998,7 +999,7 @@ fn layer_pixel_rect(child: &ChildLayer, surface_rect: DeviceRect, scale: f32) ->
 #[allow(clippy::too_many_arguments)]
 fn shader_tail_composite(
     child: &ChildLayer,
-    shader: &RuntimeShader,
+    shader: &Arc<RuntimeShader>,
     z: usize,
     source: CompositeSource,
     dest: DeviceRect,
@@ -1013,7 +1014,7 @@ fn shader_tail_composite(
         dest: dest.tuple(),
         scissor: Some(visible.tuple()),
         kind: ResolvedCompositeKind::Shader {
-            shader: Rc::new(shader.clone()),
+            shader: Arc::clone(shader),
             layer_pixel_rect,
             source_region: None,
             source_logical_size: None,
@@ -1214,7 +1215,7 @@ fn replayed_kind(
             alpha,
             ..
         } => ResolvedCompositeKind::Shader {
-            shader: Rc::clone(shader),
+            shader: Arc::clone(shader),
             layer_pixel_rect: item.layer_pixel_rect(),
             source_region: *source_region,
             source_logical_size: *source_logical_size,
@@ -1277,7 +1278,7 @@ fn stage_composites(
                 },
                 BatchedEffect::Shader(shader) | BatchedEffect::BlurThenShader(_, shader) => {
                     ResolvedCompositeKind::Shader {
-                        shader: Rc::new(shader.clone()),
+                        shader: Arc::clone(shader),
                         layer_pixel_rect: item.layer_pixel_rect(),
                         source_region: Some(region),
                         source_logical_size: logical_size,
@@ -2407,7 +2408,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 dest: capture_rect.tuple(),
                 scissor: Some(support.tuple()),
                 kind: ResolvedCompositeKind::Shader {
-                    shader: Rc::new(shader.clone()),
+                    shader: Arc::clone(shader),
                     layer_pixel_rect,
                     source_region: None,
                     source_logical_size: None,
@@ -2719,7 +2720,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 dest: item.capture_rect.tuple(),
                 scissor: Some(item.support.unwrap_or(item.visible).tuple()),
                 kind: ResolvedCompositeKind::Shader {
-                    shader: Rc::new(shader.clone()),
+                    shader: Arc::clone(shader),
                     layer_pixel_rect,
                     source_region: None,
                     source_logical_size: None,
@@ -3446,7 +3447,7 @@ fn projected_placement(
 /// it and the shader itself, so the shader can draw straight into the final
 /// pass instead of through one more texture. `None` when the effect does not
 /// end in a shader.
-fn shader_tail(effect: &RenderEffect) -> Option<(Option<&RenderEffect>, &RuntimeShader)> {
+fn shader_tail(effect: &RenderEffect) -> Option<(Option<&RenderEffect>, &Arc<RuntimeShader>)> {
     match effect {
         RenderEffect::Shader { shader } => Some((None, shader)),
         RenderEffect::Chain { first, second } => match second.as_ref() {
@@ -3778,7 +3779,7 @@ mod tests {
                 clip: None,
                 rounded_clip: None,
                 snap_anchor: None,
-                effect: RenderEffect::Shader { shader },
+                effect: RenderEffect::runtime_shader(shader),
                 z_index: 0,
             };
             let planned =

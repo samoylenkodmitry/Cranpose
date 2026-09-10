@@ -39,7 +39,7 @@ fn striped_page() -> Vec<RenderNode> {
 fn unbatched(effect: RenderEffect) -> RenderEffect {
     match effect {
         RenderEffect::Shader { mut shader } => {
-            shader.set_batched_source(false);
+            std::sync::Arc::make_mut(&mut shader).set_batched_source(false);
             RenderEffect::Shader { shader }
         }
         RenderEffect::Chain { first, second } => RenderEffect::Chain {
@@ -195,7 +195,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
 "#
     ));
     shader.set_batched_source(true);
-    RenderEffect::Shader { shader }
+    RenderEffect::runtime_shader(shader)
 }
 
 fn pixel_at(frame: &CapturedFrame, x: f32, y: f32) -> [u8; 4] {
@@ -221,7 +221,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     ));
     shader.set_batched_source(true);
     shader.set_draw_split(Some(name));
-    RenderEffect::Shader { shader }
+    RenderEffect::runtime_shader(shader)
 }
 
 #[test]
@@ -254,7 +254,7 @@ fn active_glass(activity: f32, rim_style: f32, specialized: bool) -> RenderEffec
     if specialized {
         cranpose_ui_graphics::specialize_liquid_glass(&mut shader);
     }
-    RenderEffect::blur(BLUR_RADIUS).then(RenderEffect::Shader { shader })
+    RenderEffect::blur(BLUR_RADIUS).then(RenderEffect::runtime_shader(shader))
 }
 
 #[test]
@@ -926,7 +926,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
 "#
     ));
     shader.set_batched_source(true);
-    RenderEffect::Shader { shader }
+    RenderEffect::runtime_shader(shader)
 }
 
 fn layout_probe_glasses(present: &[usize]) -> RenderGraph {
