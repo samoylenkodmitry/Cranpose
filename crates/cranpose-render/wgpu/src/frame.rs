@@ -782,7 +782,7 @@ fn layer_events(layer: &LayerScene) -> Vec<(usize, Event)> {
         events.push((effect.z_start, Event::Effect(index)));
     }
     for (index, shadow) in scene.shadow_draws.iter().enumerate() {
-        if shadow.blur_radius > 0.0 {
+        if shadow.requires_surface() {
             events.push((shadow.z_index, Event::Shadow(index)));
         }
     }

@@ -38,6 +38,104 @@ fn caster() -> DrawPrimitive {
     }
 }
 
+#[test]
+fn changing_shadow_casters_and_cutouts_preserves_the_painted_region() {
+    let mut renderer = support::headless_renderer().expect("headless WGPU init failed");
+    let background = || solid_rect(rect(0.0, 0.0, FRAME as f32, FRAME as f32), BACKGROUND);
+    for inner in [false, true] {
+        for (outer, hole, color) in [
+            (
+                rect(20.0, 25.0, 100.0, 90.0),
+                rect(35.0, 40.0, 40.0, 50.0),
+                Color(0.8, 0.1, 0.2, 0.5),
+            ),
+            (
+                rect(30.0, 15.0, 95.0, 110.0),
+                rect(60.0, 30.0, 45.0, 65.0),
+                Color(0.1, 0.7, 0.3, 0.75),
+            ),
+        ] {
+            let primitive = |bounds, color| {
+                Box::new(DrawPrimitive::Rect {
+                    rect: bounds,
+                    brush: Brush::solid(color),
+                    stroke: None,
+                })
+            };
+            let shadow = if inner {
+                ShadowPrimitive::Inner {
+                    fill: primitive(outer, color),
+                    cutout: primitive(hole, Color::WHITE),
+                    blur_radius: 0.0,
+                    blend_mode: BlendMode::SrcOver,
+                    clip_rect: outer,
+                }
+            } else {
+                ShadowPrimitive::Drop {
+                    shape: primitive(outer, color),
+                    cutout: Some(primitive(hole, Color::WHITE)),
+                    blur_radius: 0.0,
+                    blend_mode: BlendMode::SrcOver,
+                }
+            };
+            let actual = support::capture_graph(
+                &mut renderer,
+                support::page_graph(
+                    FRAME,
+                    FRAME,
+                    vec![
+                        background(),
+                        RenderNode::Primitive(PrimitiveEntry {
+                            phase: PrimitivePhase::BeforeChildren,
+                            node: PrimitiveNode::Draw(DrawPrimitiveNode {
+                                primitive: DrawPrimitive::Shadow(shadow),
+                                clip: None,
+                            }),
+                        }),
+                    ],
+                ),
+                FRAME,
+                FRAME,
+            );
+            let mut reference = vec![background()];
+            reference.extend(
+                [
+                    rect(outer.x, outer.y, outer.width, hole.y - outer.y),
+                    rect(
+                        outer.x,
+                        hole.y + hole.height,
+                        outer.width,
+                        outer.y + outer.height - hole.y - hole.height,
+                    ),
+                    rect(outer.x, hole.y, hole.x - outer.x, hole.height),
+                    rect(
+                        hole.x + hole.width,
+                        hole.y,
+                        outer.x + outer.width - hole.x - hole.width,
+                        hole.height,
+                    ),
+                ]
+                .map(|bounds| solid_rect(bounds, color)),
+            );
+            let reference = support::capture_graph(
+                &mut renderer,
+                support::page_graph(FRAME, FRAME, reference),
+                FRAME,
+                FRAME,
+            );
+            let region = rect(0.0, 0.0, FRAME as f32, FRAME as f32);
+            let difference = support::max_channel_delta(
+                &region_pixels(&actual, region),
+                &region_pixels(&reference, region),
+            );
+            assert!(
+                difference <= 1,
+                "inner={inner}, outer={outer:?}: {difference:?}"
+            );
+        }
+    }
+}
+
 /// A page with one black drop shadow of `CASTER` and no caster drawn over
 /// it, so the whole blurred shape shows; `cutout` clears the shape itself.
 fn page(radius: Option<f32>, cutout: bool) -> RenderGraph {

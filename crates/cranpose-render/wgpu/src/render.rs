@@ -2771,7 +2771,7 @@ impl GpuRenderer {
         transients: &mut Vec<(FrameTextureDescriptor, Rc<OffscreenTarget>)>,
         resolved: &mut Vec<ResolvedComposite>,
     ) {
-        if shadow.blur_radius <= 0.0
+        if !shadow.requires_surface()
             || skip_shadow_draws()
             || !root_scale.is_finite()
             || root_scale <= 0.0
@@ -2972,45 +2972,48 @@ impl GpuRenderer {
                 return None;
             }
         }
-        let scratch_descriptor = self.transient_offscreen_descriptor(
-            "Shadow Blur Scratch",
-            scratch_width,
-            scratch_height,
-        );
-        let scratch = recorder.acquire_transient_offscreen(&device, scratch_descriptor);
-        let blurred = if full_size_result && (scratch_width, scratch_height) != (width, height) {
-            Some(self.shadow_transient(
-                recorder,
-                transients,
-                "Shadow Blur Result",
+        if pixel_radius > 0.0 {
+            let scratch_descriptor = self.transient_offscreen_descriptor(
+                "Shadow Blur Scratch",
                 scratch_width,
                 scratch_height,
-            ))
-        } else {
-            None
-        };
-        let blur_dest = match &blurred {
-            Some(blurred) => (&blurred.view, (scratch_width, scratch_height)),
-            None => (&result.view, (result_width, result_height)),
-        };
-        let passes = self.effect_renderer.encode_blur_scissored_ping_pong_passes(
-            recorder,
-            &device,
-            &source,
-            &scratch,
-            blur_dest,
-            pixel_radius,
-            pixel_radius,
-            TileMode::Decal,
-            None,
-        );
-        recorder.record_passes(passes);
-        self.effect_renderer.record_blur_pass();
-        recorder.release_transient_offscreen(scratch_descriptor, scratch);
-        if let Some(blurred) = &blurred {
-            self.effect_renderer
-                .encode_upscale_pass(recorder, &device, blurred, &result.view);
-            recorder.record_pass();
+            );
+            let scratch = recorder.acquire_transient_offscreen(&device, scratch_descriptor);
+            let blurred = if full_size_result && (scratch_width, scratch_height) != (width, height)
+            {
+                Some(self.shadow_transient(
+                    recorder,
+                    transients,
+                    "Shadow Blur Result",
+                    scratch_width,
+                    scratch_height,
+                ))
+            } else {
+                None
+            };
+            let blur_dest = match &blurred {
+                Some(blurred) => (&blurred.view, (scratch_width, scratch_height)),
+                None => (&result.view, (result_width, result_height)),
+            };
+            let passes = self.effect_renderer.encode_blur_scissored_ping_pong_passes(
+                recorder,
+                &device,
+                &source,
+                &scratch,
+                blur_dest,
+                pixel_radius,
+                pixel_radius,
+                TileMode::Decal,
+                None,
+            );
+            recorder.record_passes(passes);
+            self.effect_renderer.record_blur_pass();
+            recorder.release_transient_offscreen(scratch_descriptor, scratch);
+            if let Some(blurred) = &blurred {
+                self.effect_renderer
+                    .encode_upscale_pass(recorder, &device, blurred, &result.view);
+                recorder.record_pass();
+            }
         }
         if let Some(cutout_run) = &shadow.post_blur_cutouts {
             let cutouts = shadow_scene(Some(cutout_run), &[]);
@@ -4872,9 +4875,10 @@ fn window_draws(draws: &mut SmallVec<[RunDrawCall; 8]>, window: &std::ops::Range
 
 #[cfg(test)]
 mod text_bounds_tests {
-    use super::*;
     use cranpose_ui::text::{AnnotatedString, TextMotion};
     use cranpose_ui_graphics::Color;
+
+    use super::*;
 
     #[test]
     fn text_bounds_preserve_logical_snapping_clipping_and_invalid_scale_rejection() {
