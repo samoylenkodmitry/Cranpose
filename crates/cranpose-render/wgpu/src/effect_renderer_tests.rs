@@ -24,14 +24,8 @@ fn capture_blur_batch(
         .enumerate()
         .map(|(index, mode)| {
             let dest = (index as u32 * 16, 0, 16, 32);
-            let mut uniforms = EffectRenderer::blur_uniforms(
-                true,
-                (32, 32),
-                (5, 7, 13, 17),
-                dest,
-                (8.0, 8.0),
-                *mode,
-            );
+            let mut uniforms =
+                renderer.blur_uniforms(true, (32, 32), (5, 7, 13, 17), dest, (8.0, 8.0), *mode);
             uniforms.source_region[0] += phase;
             uniforms.dest_region[0] += phase;
             BlurDraw {
@@ -274,6 +268,53 @@ fn blit_specialization_preserves_sampling_masks_and_blending() {
                     }
                 }
             }
+        }
+    }
+}
+
+#[test]
+fn cached_blur_kernels_preserve_fractional_radii_axes_and_eviction() {
+    let (_lock, device, _queue) = crate::frame_graph::upload_test_device();
+    let renderer = EffectRenderer::new(
+        &device,
+        None,
+        wgpu::TextureFormat::Rgba8Unorm,
+        device.adapter_info().backend,
+    );
+    for radius in [(6.25, 6.75), (6.75, 6.25)]
+        .into_iter()
+        .chain((0..80).map(|index| (index as f32 * 0.375, index as f32 * 0.625)))
+        .chain([
+            (6.25, 6.75),
+            (0.0, 0.0),
+            (-1.0, f32::NAN),
+            (f32::INFINITY, 2.0),
+        ])
+    {
+        for horizontal in [true, false] {
+            let uniforms = renderer.blur_uniforms(
+                horizontal,
+                (64, 32),
+                (3, 5, 17, 19),
+                (7, 11, 17, 19),
+                radius,
+                TileMode::Mirror,
+            );
+            let expected = BlurKernel::of_radius(if horizontal { radius.0 } else { radius.1 });
+            assert_eq!(
+                uniforms.pairs,
+                expected
+                    .pairs
+                    .map(|pair| [pair.inner, pair.outer, pair.offset, pair.weight]),
+                "radius={radius:?}, horizontal={horizontal}"
+            );
+            assert_eq!(
+                uniforms.kernel,
+                [expected.pair_count as f32, expected.total_weight, 0.0, 0.0]
+            );
+            assert!(
+                renderer.blur_kernels.borrow().len() <= renderer.blur_kernels.borrow().cap().get()
+            );
         }
     }
 }

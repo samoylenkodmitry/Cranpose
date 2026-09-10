@@ -1,6 +1,9 @@
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 
-use cranpose_render_common::geometry::{BLUR_TAP_PAIRS, BlurKernel, blur_scratch_block};
+use cranpose_render_common::{
+    bounded_lru_cache::BoundedLruCache,
+    geometry::{BLUR_TAP_PAIRS, BlurKernel, blur_scratch_block},
+};
 use cranpose_ui_graphics::{BlendMode, MAX_SUBSTRATES, RenderEffect, RuntimeShader, TileMode};
 use smallvec::SmallVec;
 
@@ -76,6 +79,8 @@ fn scaled_scissor(
     ))
 }
 
+const MAX_BLUR_KERNEL_CACHE_ITEMS: usize = 32;
+
 pub(crate) struct EffectRenderer {
     offscreen_pool: OffscreenPool,
     pub shader_cache: ShaderPipelineCache,
@@ -88,6 +93,7 @@ pub(crate) struct EffectRenderer {
         [LazyGpuResource<wgpu::RenderPipeline>; BLUR_DOWNSAMPLE_BLOCKS.len()],
     blur_uniform_bind_group_layout: wgpu::BindGroupLayout,
     blur_uniform_uploads: Vec<UniformUpload>,
+    blur_kernels: RefCell<BoundedLruCache<u32, BlurKernel>>,
 
     offset_shader: wgpu::ShaderModule,
     offset_pipeline_layout: wgpu::PipelineLayout,
@@ -958,6 +964,9 @@ impl EffectRenderer {
             blur_downsample_pipelines,
             blur_uniform_bind_group_layout,
             blur_uniform_uploads: Vec::new(),
+            blur_kernels: RefCell::new(BoundedLruCache::with_capacity_at_least_one(
+                MAX_BLUR_KERNEL_CACHE_ITEMS,
+            )),
             offset_shader,
             offset_pipeline_layout,
             offset_pipeline,
@@ -1310,6 +1319,7 @@ impl EffectRenderer {
     /// radius counts kernel steps, the coarser of a source texel and a
     /// destination pixel.
     fn blur_uniforms(
+        &self,
         horizontal: bool,
         sampled: (u32, u32),
         source: (u32, u32, u32, u32),
@@ -1318,7 +1328,18 @@ impl EffectRenderer {
         tile_mode: TileMode,
     ) -> BlurUniforms {
         let direction = if horizontal { [1.0, 0.0] } else { [0.0, 1.0] };
-        let kernel = BlurKernel::of_radius(if horizontal { radius.0 } else { radius.1 });
+        let kernel_radius = if horizontal { radius.0 } else { radius.1 };
+        let key = kernel_radius.to_bits();
+        let kernel = {
+            let mut kernels = self.blur_kernels.borrow_mut();
+            if let Some(kernel) = kernels.get(&key) {
+                *kernel
+            } else {
+                let kernel = BlurKernel::of_radius(kernel_radius);
+                kernels.put(key, kernel);
+                kernel
+            }
+        };
         BlurUniforms {
             direction_and_radius: [direction[0], direction[1], radius.0, radius.1],
             texture_size_and_tile_mode: [
@@ -1401,7 +1422,7 @@ impl EffectRenderer {
                 wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                 &[BlurDraw {
                     source,
-                    uniforms: Self::blur_uniforms(
+                    uniforms: self.blur_uniforms(
                         true,
                         (source.width, source.height),
                         whole_source,
@@ -1428,7 +1449,7 @@ impl EffectRenderer {
             wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
             &[BlurDraw {
                 source: horizontal_source,
-                uniforms: Self::blur_uniforms(
+                uniforms: self.blur_uniforms(
                     true,
                     (horizontal_source.width, horizontal_source.height),
                     horizontal_region,
@@ -1450,7 +1471,7 @@ impl EffectRenderer {
             wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
             &[BlurDraw {
                 source: scratch,
-                uniforms: Self::blur_uniforms(
+                uniforms: self.blur_uniforms(
                     false,
                     (scratch.width, scratch.height),
                     whole_scratch,
@@ -1494,7 +1515,7 @@ impl EffectRenderer {
                                block: u32,
                                tile_mode: TileMode| BlurDraw {
             source: atlas,
-            uniforms: Self::blur_uniforms(
+            uniforms: self.blur_uniforms(
                 true,
                 (atlas.width, atlas.height),
                 source,
@@ -1552,7 +1573,7 @@ impl EffectRenderer {
                 };
                 BlurDraw {
                     source,
-                    uniforms: Self::blur_uniforms(
+                    uniforms: self.blur_uniforms(
                         true,
                         (source.width, source.height),
                         source_region,
@@ -1579,7 +1600,7 @@ impl EffectRenderer {
             .iter()
             .map(|region| BlurDraw {
                 source: scratch,
-                uniforms: Self::blur_uniforms(
+                uniforms: self.blur_uniforms(
                     false,
                     (scratch.width, scratch.height),
                     region.scratch,
