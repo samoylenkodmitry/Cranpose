@@ -549,8 +549,8 @@ path = "robot-runners/robot_controls_grid.rs"
 required-features = ["robot-app"]
 
 [[example]]
-name = "robot_page_fold"
-path = "robot-runners/robot_page_fold.rs"
+name = "robot_foldable"
+path = "robot-runners/robot_foldable.rs"
 required-features = ["robot-app"]
 
 [[example]]

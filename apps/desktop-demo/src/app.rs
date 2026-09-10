@@ -23,6 +23,7 @@ use cranpose_ui::{
 
 mod animations;
 mod controls_ui;
+mod foldable;
 mod glass_feed;
 mod hacker_news;
 mod images;
@@ -32,7 +33,6 @@ mod lazy_scrollbar;
 mod liquid_ui;
 mod markdown;
 mod mineswapper2;
-mod page_fold;
 mod recomposition_lab;
 pub mod rotary;
 pub(crate) mod shader_rect;
@@ -46,6 +46,7 @@ mod xkcd;
 
 use animations::AnimationsTab;
 use controls_ui::ControlsUiTab;
+use foldable::FoldableTab;
 use glass_feed::GlassFeedTab;
 pub use glass_feed::GLASS_FEED_LIST_TAG;
 pub use hacker_news::HACKER_NEWS_SCROLL_STABILITY_TARGET_TITLE;
@@ -63,7 +64,6 @@ use markdown::{
     markdown_viewer_tab, MarkdownScrollStabilityFixtureTab, MarkdownScrollStressFixtureTab,
     MarkdownScrollStressFixtureTabWithState,
 };
-use page_fold::PageFoldTab;
 use recomposition_lab::RecompositionLabTab;
 use rotary::rotary_tab;
 use shader_rect::ShaderRectTab;
@@ -114,7 +114,7 @@ pub enum DemoTab {
     Shaders,
     ShaderRect,
     Controls,
-    PageFold,
+    Foldable,
     Liquid,
     GlassFeed,
     MarkdownViewer,
@@ -282,11 +282,11 @@ pub const DEMO_TAB_INFO: [DemoTabInfo; 27] = [
         startup_aliases: &["controls", "controlsui"],
     },
     DemoTabInfo {
-        tab: DemoTab::PageFold,
-        label: "Page Fold",
-        slug: "page-fold",
-        source_path: "apps/desktop-demo/src/app/page_fold.rs",
-        startup_aliases: &["pagefold", "fold"],
+        tab: DemoTab::Foldable,
+        label: "Foldable",
+        slug: "foldable",
+        source_path: "apps/desktop-demo/src/app/foldable.rs",
+        startup_aliases: &["foldable", "fold"],
     },
     DemoTabInfo {
         tab: DemoTab::Liquid,
@@ -390,7 +390,7 @@ pub const DEMO_TABS: [DemoTab; 27] = [
     DemoTab::Shaders,
     DemoTab::ShaderRect,
     DemoTab::Controls,
-    DemoTab::PageFold,
+    DemoTab::Foldable,
     DemoTab::MarkdownViewer,
     DemoTab::InteractiveAnim,
     DemoTab::FilePicker,
@@ -837,12 +837,12 @@ pub fn ControlsUiRobotApp() {
     ControlsUiTab();
 }
 
-/// The page-fold tab on its own, for tests that drag its spread without the
+/// The foldable tab on its own, for tests that fold its screen without the
 /// demo shell's tab bar around them.
 #[allow(non_snake_case)]
 #[composable]
-pub fn PageFoldRobotApp() {
-    PageFoldTab();
+pub fn FoldableRobotApp() {
+    FoldableTab();
 }
 
 #[allow(non_snake_case)]
@@ -913,7 +913,7 @@ fn render_active_tab(active: DemoTab, startup: StartupSelection, winamp_tab_stat
         | DemoTab::Shaders
         | DemoTab::ShaderRect
         | DemoTab::Controls
-        | DemoTab::PageFold
+        | DemoTab::Foldable
         | DemoTab::MarkdownViewer
         | DemoTab::Liquid
         | DemoTab::GlassFeed => render_showcase_tab(active, startup, winamp_tab_state),
@@ -935,7 +935,7 @@ fn render_showcase_tab(
         DemoTab::Shaders => ShadersTab(startup.initial_shader_section),
         DemoTab::ShaderRect => ShaderRectTab(),
         DemoTab::Controls => ControlsUiTab(),
-        DemoTab::PageFold => PageFoldTab(),
+        DemoTab::Foldable => FoldableTab(),
         DemoTab::MarkdownViewer => markdown_viewer_tab(),
         DemoTab::Liquid => LiquidUiTab(),
         DemoTab::GlassFeed => GlassFeedTab(),
