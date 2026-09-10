@@ -332,7 +332,7 @@ fn shadows() -> RenderGraph {
         stroke: None,
     };
     let drop = DrawPrimitive::Shadow(ShadowPrimitive::Drop {
-        shape: Box::new(card(Rect {
+        shape: std::rc::Rc::new(card(Rect {
             x: 30.0,
             y: 30.0,
             width: 90.0,
@@ -343,13 +343,13 @@ fn shadows() -> RenderGraph {
         blend_mode: BlendMode::SrcOver,
     });
     let inner = DrawPrimitive::Shadow(ShadowPrimitive::Inner {
-        fill: Box::new(card(Rect {
+        fill: std::rc::Rc::new(card(Rect {
             x: 140.0,
             y: 40.0,
             width: 90.0,
             height: 60.0,
         })),
-        cutout: Box::new(DrawPrimitive::RoundRect {
+        cutout: std::rc::Rc::new(DrawPrimitive::RoundRect {
             rect: Rect {
                 x: 146.0,
                 y: 46.0,

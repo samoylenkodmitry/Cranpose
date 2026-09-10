@@ -663,21 +663,23 @@ fn shared_text_str(text: &str) -> Rc<str> {
 }
 
 /// Describes a shadow to be rendered. Each renderer chooses how to blur.
+///
+/// Geometry is shared between clones; use [`Rc::make_mut`] to edit a cloned shadow independently.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ShadowPrimitive {
     /// Drop shadow: render shape behind content, blurred. `cutout` knocks
     /// the element's own (unoffset) shape out of the silhouette before the
     /// blur so translucent surfaces never sample their own shadow.
     Drop {
-        shape: Box<DrawPrimitive>,
-        cutout: Option<Box<DrawPrimitive>>,
+        shape: Rc<DrawPrimitive>,
+        cutout: Option<Rc<DrawPrimitive>>,
         blur_radius: f32,
         blend_mode: BlendMode,
     },
     /// Inner shadow: render fill + cutout to offscreen, blur, clip to bounds.
     Inner {
-        fill: Box<DrawPrimitive>,
-        cutout: Box<DrawPrimitive>,
+        fill: Rc<DrawPrimitive>,
+        cutout: Rc<DrawPrimitive>,
         blur_radius: f32,
         blend_mode: BlendMode,
         /// Element bounds — blurred result must be clipped here.
@@ -1623,6 +1625,68 @@ mod tests {
     use crate::{Color, FontStyle, FontWeight, ImageBitmap, RenderEffect};
 
     #[test]
+    fn cloned_shadows_preserve_geometry_and_isolate_caster_and_cutout_edits() {
+        let bounds = Rect {
+            x: 2.0,
+            y: 3.0,
+            width: 12.0,
+            height: 8.0,
+        };
+        let shape = DrawPrimitive::Rect {
+            rect: bounds,
+            brush: Brush::solid(Color::WHITE),
+            stroke: None,
+        };
+        let cutout = DrawPrimitive::Rect {
+            rect: Rect {
+                x: 4.0,
+                y: 5.0,
+                width: 6.0,
+                height: 3.0,
+            },
+            brush: Brush::solid(Color::BLACK),
+            stroke: None,
+        };
+        for original in [
+            ShadowPrimitive::Drop {
+                shape: Rc::new(shape.clone()),
+                cutout: Some(Rc::new(cutout.clone())),
+                blur_radius: 4.0,
+                blend_mode: BlendMode::Multiply,
+            },
+            ShadowPrimitive::Inner {
+                fill: Rc::new(shape.clone()),
+                cutout: Rc::new(cutout.clone()),
+                blur_radius: 7.0,
+                blend_mode: BlendMode::DstOut,
+                clip_rect: bounds,
+            },
+        ] {
+            let expected = original.clone();
+            assert_eq!(expected, original);
+            let mut edited = original.clone();
+            assert_eq!(edited, original);
+            let (caster, hole) = match &mut edited {
+                ShadowPrimitive::Drop {
+                    shape,
+                    cutout: Some(cutout),
+                    ..
+                } => (shape, cutout),
+                ShadowPrimitive::Inner { fill, cutout, .. } => (fill, cutout),
+                _ => panic!("shadow with a cutout"),
+            };
+            assert_eq!(Rc::strong_count(caster), 3);
+            assert_eq!(Rc::strong_count(hole), 3);
+            *Rc::make_mut(caster) = cutout.clone();
+            *Rc::make_mut(hole) = shape.clone();
+            assert_eq!(caster.as_ref(), &cutout);
+            assert_eq!(hole.as_ref(), &shape);
+            assert_eq!(original, expected);
+            assert_ne!(edited, original);
+        }
+    }
+
+    #[test]
     fn recorded_iterators_preserve_shapes_content_and_shadows() {
         let shape = DrawPrimitive::Rect {
             rect: Rect::from_size(Size::new(12.0, 8.0)),
@@ -1630,7 +1694,7 @@ mod tests {
             stroke: None,
         };
         let shadow = DrawPrimitive::Shadow(ShadowPrimitive::Drop {
-            shape: Box::new(shape.clone()),
+            shape: std::rc::Rc::new(shape.clone()),
             cutout: None,
             blur_radius: 4.0,
             blend_mode: BlendMode::SrcOver,

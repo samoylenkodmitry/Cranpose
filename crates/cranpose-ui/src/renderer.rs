@@ -273,8 +273,18 @@ fn translate_primitive(primitive: DrawPrimitive, dx: f32, dy: f32) -> DrawPrimit
                     blur_radius,
                     blend_mode,
                 } => ShadowPrimitive::Drop {
-                    shape: Box::new(translate_primitive(*shape, dx, dy)),
-                    cutout: cutout.map(|cutout| Box::new(translate_primitive(*cutout, dx, dy))),
+                    shape: std::rc::Rc::new(translate_primitive(
+                        std::rc::Rc::unwrap_or_clone(shape),
+                        dx,
+                        dy,
+                    )),
+                    cutout: cutout.map(|cutout| {
+                        std::rc::Rc::new(translate_primitive(
+                            std::rc::Rc::unwrap_or_clone(cutout),
+                            dx,
+                            dy,
+                        ))
+                    }),
                     blur_radius,
                     blend_mode,
                 },
@@ -285,8 +295,16 @@ fn translate_primitive(primitive: DrawPrimitive, dx: f32, dy: f32) -> DrawPrimit
                     blend_mode,
                     clip_rect,
                 } => ShadowPrimitive::Inner {
-                    fill: Box::new(translate_primitive(*fill, dx, dy)),
-                    cutout: Box::new(translate_primitive(*cutout, dx, dy)),
+                    fill: std::rc::Rc::new(translate_primitive(
+                        std::rc::Rc::unwrap_or_clone(fill),
+                        dx,
+                        dy,
+                    )),
+                    cutout: std::rc::Rc::new(translate_primitive(
+                        std::rc::Rc::unwrap_or_clone(cutout),
+                        dx,
+                        dy,
+                    )),
                     blur_radius,
                     blend_mode,
                     clip_rect: clip_rect.translate(dx, dy),

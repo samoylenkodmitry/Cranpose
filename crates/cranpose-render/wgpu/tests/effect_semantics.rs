@@ -2434,13 +2434,13 @@ fn a_cutout_drop_shadow_keeps_its_penumbra_outside_and_none_inside() {
         phase: PrimitivePhase::BeforeChildren,
         node: PrimitiveNode::Draw(DrawPrimitiveNode {
             primitive: DrawPrimitive::Shadow(ShadowPrimitive::Drop {
-                shape: Box::new(DrawPrimitive::RoundRect {
+                shape: std::rc::Rc::new(DrawPrimitive::RoundRect {
                     rect: shadow_shape,
                     brush: Brush::solid(Color(0.0, 0.0, 0.0, 0.6)),
                     radii,
                     stroke: None,
                 }),
-                cutout: Some(Box::new(DrawPrimitive::RoundRect {
+                cutout: Some(std::rc::Rc::new(DrawPrimitive::RoundRect {
                     rect: element,
                     brush: Brush::solid(Color::BLACK),
                     radii,
@@ -2972,7 +2972,7 @@ fn shadowed_card_layer(
                 phase: PrimitivePhase::BeforeChildren,
                 node: PrimitiveNode::Draw(DrawPrimitiveNode {
                     primitive: DrawPrimitive::Shadow(ShadowPrimitive::Drop {
-                        shape: Box::new(DrawPrimitive::Rect {
+                        shape: std::rc::Rc::new(DrawPrimitive::Rect {
                             rect: shadow_rect,
                             brush: Brush::solid(Color(0.0, 0.0, 0.0, 0.50)),
                             stroke: None,

@@ -1134,16 +1134,22 @@ fn push_shadow_primitive(
             blur_radius,
             blend_mode,
         } => {
-            let Some(shape_pair) =
-                shape_pair_for_primitive(*shape, layer_bounds, layer, blend_mode)
-            else {
+            let Some(shape_pair) = shape_pair_for_primitive(
+                std::rc::Rc::unwrap_or_clone(shape),
+                layer_bounds,
+                layer,
+                blend_mode,
+            ) else {
                 return;
             };
             let cutout_pair = match cutout {
                 Some(cutout) => {
-                    let Some(pair) =
-                        shape_pair_for_primitive(*cutout, layer_bounds, layer, BlendMode::DstOut)
-                    else {
+                    let Some(pair) = shape_pair_for_primitive(
+                        std::rc::Rc::unwrap_or_clone(cutout),
+                        layer_bounds,
+                        layer,
+                        BlendMode::DstOut,
+                    ) else {
                         return;
                     };
                     Some(pair)
@@ -1196,13 +1202,20 @@ fn push_shadow_primitive(
             blend_mode,
             clip_rect,
         } => {
-            let Some(fill_pair) = shape_pair_for_primitive(*fill, layer_bounds, layer, blend_mode)
-            else {
+            let Some(fill_pair) = shape_pair_for_primitive(
+                std::rc::Rc::unwrap_or_clone(fill),
+                layer_bounds,
+                layer,
+                blend_mode,
+            ) else {
                 return;
             };
-            let Some(cutout_pair) =
-                shape_pair_for_primitive(*cutout, layer_bounds, layer, BlendMode::DstOut)
-            else {
+            let Some(cutout_pair) = shape_pair_for_primitive(
+                std::rc::Rc::unwrap_or_clone(cutout),
+                layer_bounds,
+                layer,
+                BlendMode::DstOut,
+            ) else {
                 return;
             };
             let abs_clip = Rect {
@@ -2137,7 +2150,7 @@ mod tests {
 
         push_shadow_primitive(
             cranpose_ui_graphics::ShadowPrimitive::Drop {
-                shape: Box::new(DrawPrimitive::Rect {
+                shape: std::rc::Rc::new(DrawPrimitive::Rect {
                     rect: Rect {
                         x: 2.0,
                         y: 3.0,
@@ -2175,7 +2188,7 @@ mod tests {
 
         push_shadow_primitive(
             cranpose_ui_graphics::ShadowPrimitive::Inner {
-                fill: Box::new(DrawPrimitive::Rect {
+                fill: std::rc::Rc::new(DrawPrimitive::Rect {
                     rect: Rect {
                         x: 0.0,
                         y: 0.0,
@@ -2185,7 +2198,7 @@ mod tests {
                     brush: Brush::solid(Color::WHITE),
                     stroke: None,
                 }),
-                cutout: Box::new(DrawPrimitive::Rect {
+                cutout: std::rc::Rc::new(DrawPrimitive::Rect {
                     rect: Rect {
                         x: 3.0,
                         y: 4.0,
