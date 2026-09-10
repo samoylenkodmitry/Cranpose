@@ -16,33 +16,7 @@ use super::DemoTab;
 const REPOSITORY: &str = "https://raw.githubusercontent.com/samoylenkodmitry/cranpose";
 
 pub(crate) fn source_path(tab: DemoTab) -> &'static str {
-    match tab {
-        DemoTab::Counter
-        | DemoTab::CompositionLocal
-        | DemoTab::Async
-        | DemoTab::TextInput
-        | DemoTab::Layout
-        | DemoTab::ModifierShowcase
-        | DemoTab::FilePicker => "apps/desktop-demo/src/app.rs",
-        DemoTab::Animations => "apps/desktop-demo/src/app/animations.rs",
-        DemoTab::InteractiveAnim => "apps/desktop-demo/src/app/interactive_anim.rs",
-        DemoTab::WebFetch => "apps/desktop-demo/src/app/web_fetch.rs",
-        DemoTab::LazyList => "apps/desktop-demo/src/app/lazy_list.rs",
-        DemoTab::Mineswapper2 => "apps/desktop-demo/src/app/mineswapper2.rs",
-        DemoTab::RecompositionLab => "apps/desktop-demo/src/app/recomposition_lab.rs",
-        DemoTab::HackerNews => "apps/desktop-demo/src/app/hacker_news.rs",
-        DemoTab::Images => "apps/desktop-demo/src/app/images.rs",
-        DemoTab::Text => "apps/desktop-demo/src/app/text_showcase.rs",
-        DemoTab::Winamp => "apps/desktop-demo/src/app/winamp/mod.rs",
-        DemoTab::Xkcd => "apps/desktop-demo/src/app/xkcd.rs",
-        DemoTab::Shaders => "apps/desktop-demo/src/app/shaders.rs",
-        DemoTab::ShaderRect => "apps/desktop-demo/src/app/shader_rect.rs",
-        DemoTab::Liquid => "apps/desktop-demo/src/app/liquid_ui.rs",
-        DemoTab::GlassFeed => "apps/desktop-demo/src/app/glass_feed.rs",
-        DemoTab::MarkdownViewer => "apps/desktop-demo/src/app/markdown.rs",
-        DemoTab::Rotary => "apps/desktop-demo/src/app/rotary.rs",
-        DemoTab::Wear => "apps/desktop-demo/src/app/wear.rs",
-    }
+    tab.source_path()
 }
 
 pub(crate) fn source_ref() -> &'static str {

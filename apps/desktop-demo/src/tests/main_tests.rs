@@ -520,3 +520,75 @@ fn the_wear_tab_lays_out_a_watch_screen_of_real_widgets() {
         .iter()
         .all(|rect| rect.width > 0.0 && rect.height > 0.0));
 }
+
+#[test]
+fn every_demo_tab_has_exactly_one_metadata_row() {
+    for tab in DEMO_TABS {
+        let rows = DEMO_TAB_INFO.iter().filter(|info| info.tab == tab).count();
+        assert_eq!(rows, 1, "{tab:?} needs exactly one DEMO_TAB_INFO row");
+    }
+    assert_eq!(
+        DEMO_TAB_INFO.len(),
+        DEMO_TABS.len(),
+        "DEMO_TAB_INFO and DEMO_TABS describe the same tabs"
+    );
+}
+
+#[test]
+fn tab_labels_slugs_and_startup_aliases_are_unique() {
+    let mut labels: Vec<&str> = DEMO_TAB_INFO.iter().map(|info| info.label).collect();
+    labels.sort_unstable();
+    let count = labels.len();
+    labels.dedup();
+    assert_eq!(labels.len(), count, "tab labels collide");
+
+    let mut slugs: Vec<&str> = DEMO_TAB_INFO.iter().map(|info| info.slug).collect();
+    slugs.sort_unstable();
+    slugs.dedup();
+    assert_eq!(slugs.len(), count, "tab slugs collide");
+
+    let mut aliases: Vec<&str> = DEMO_TAB_INFO
+        .iter()
+        .flat_map(|info| info.startup_aliases.iter().copied())
+        .collect();
+    let alias_count = aliases.len();
+    aliases.sort_unstable();
+    aliases.dedup();
+    assert_eq!(aliases.len(), alias_count, "startup aliases collide");
+}
+
+#[test]
+fn startup_names_round_trip_through_their_aliases() {
+    for info in &DEMO_TAB_INFO {
+        for alias in info.startup_aliases {
+            assert_eq!(
+                DemoTab::from_startup_name(alias),
+                Some(info.tab),
+                "'{alias}' should select {:?}",
+                info.tab
+            );
+        }
+    }
+    assert_eq!(
+        DemoTab::from_startup_name("Controls UI"),
+        Some(DemoTab::Controls)
+    );
+    assert_eq!(DemoTab::from_startup_name("no-such-tab"), None);
+}
+
+#[test]
+fn tab_source_paths_point_at_files_that_exist() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(std::path::Path::parent)
+        .expect("workspace root");
+    for info in &DEMO_TAB_INFO {
+        let path = root.join(info.source_path);
+        assert!(
+            path.is_file(),
+            "{:?} points at {}, which is not a file",
+            info.tab,
+            path.display()
+        );
+    }
+}
