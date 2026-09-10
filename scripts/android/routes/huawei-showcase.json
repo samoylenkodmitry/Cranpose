@@ -63,6 +63,46 @@
         255
       ],
       "minimum_coverage": 0.1
+    },
+    {
+      "name": "Planet images",
+      "bounds": [
+        118,
+        350,
+        270,
+        1940
+      ],
+      "rgb_min": [
+        45,
+        45,
+        45
+      ],
+      "rgb_max": [
+        255,
+        255,
+        255
+      ],
+      "minimum_coverage": 0.16
+    },
+    {
+      "name": "Card surfaces",
+      "bounds": [
+        300,
+        450,
+        950,
+        1940
+      ],
+      "rgb_min": [
+        18,
+        17,
+        30
+      ],
+      "rgb_max": [
+        80,
+        80,
+        115
+      ],
+      "minimum_coverage": 0.38
     }
   ]
 }
