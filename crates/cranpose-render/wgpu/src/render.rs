@@ -432,10 +432,7 @@ fn hash_text_raster_geometry_for_cache<H: Hasher>(
     }
 }
 
-fn text_raster_geometry_for_draw(
-    text_draw: &TextDraw,
-    root_scale: f32,
-) -> Option<(Rect, Rect, Option<Rect>, f32, bool)> {
+fn text_logical_geometry_for_draw(text_draw: &TextDraw, root_scale: f32) -> Option<(Rect, f32)> {
     if text_draw.text.is_empty()
         || text_draw.rect.width <= 0.0
         || text_draw.rect.height <= 0.0
@@ -450,17 +447,25 @@ fn text_raster_geometry_for_draw(
         return None;
     }
 
+    let snap_delta = text_draw
+        .snap_anchor
+        .map(|anchor| snap_delta_for_anchor(anchor, root_scale))
+        .unwrap_or_default();
+    let logical_rect = text_draw.rect.translate(snap_delta.x, snap_delta.y);
+    Some((logical_rect, text_scale))
+}
+
+fn text_raster_geometry_for_draw(
+    text_draw: &TextDraw,
+    root_scale: f32,
+) -> Option<(Rect, Rect, Option<Rect>, f32, bool)> {
+    let (logical_rect, text_scale) = text_logical_geometry_for_draw(text_draw, root_scale)?;
     let static_text_motion = text_draw
         .text_style
         .paragraph_style
         .text_motion
         .unwrap_or(cranpose_ui::text::TextMotion::Static)
         == cranpose_ui::text::TextMotion::Static;
-    let snap_delta = text_draw
-        .snap_anchor
-        .map(|anchor| snap_delta_for_anchor(anchor, root_scale))
-        .unwrap_or_default();
-    let logical_rect = text_draw.rect.translate(snap_delta.x, snap_delta.y);
     let clip = text_draw.clip;
     let mut raster_rect = Rect {
         x: logical_rect.x * root_scale,
@@ -548,8 +553,8 @@ fn clipped_bounds(rect: Rect, clip: Option<Rect>) -> Option<Rect> {
 }
 
 pub(crate) fn text_draw_bounds(text: &TextDraw, root_scale: f32) -> Option<Rect> {
-    text_raster_geometry_for_draw(text, root_scale)
-        .and_then(|(logical_rect, _, clip, _, _)| clipped_bounds(logical_rect, clip))
+    text_logical_geometry_for_draw(text, root_scale)
+        .and_then(|(logical_rect, _)| clipped_bounds(logical_rect, text.clip))
 }
 
 pub(crate) fn image_draw_bounds(image: &ImageDraw, root_scale: f32) -> Option<Rect> {
@@ -4871,4 +4876,66 @@ fn window_draws(draws: &mut SmallVec<[RunDrawCall; 8]>, window: &std::ops::Range
             draw.records.start + (keep_start - first)..draw.records.start + (keep_end - first);
         draw.records.start < draw.records.end
     });
+}
+
+#[cfg(test)]
+mod text_bounds_tests {
+    use super::*;
+    use cranpose_ui::text::{AnnotatedString, TextMotion};
+    use cranpose_ui_graphics::Color;
+
+    #[test]
+    fn text_bounds_preserve_logical_snapping_clipping_and_invalid_scale_rejection() {
+        let mut draw = TextDraw {
+            node_id: 1,
+            rect: Rect {
+                x: 10.25,
+                y: 20.75,
+                width: 30.125,
+                height: 18.875,
+            },
+            snap_anchor: Some(SnapAnchor::rigid(Point::new(10.25, 20.75))),
+            text: crate::scene::render_string_for(&Rc::new(AnnotatedString::from("bounds"))),
+            color: Color::WHITE,
+            text_style: Default::default(),
+            font_size: 14.0,
+            scale: 1.0,
+            layout_options: Default::default(),
+            clip: None,
+        };
+        let snapped = Rect {
+            x: 10.5,
+            y: 21.0,
+            ..draw.rect
+        };
+        let clipped = Rect {
+            x: 11.0,
+            y: 21.5,
+            width: 15.0,
+            height: 8.0,
+        };
+        for motion in [TextMotion::Static, TextMotion::Animated] {
+            draw.text_style.paragraph_style.text_motion = Some(motion);
+            draw.clip = None;
+            assert_eq!(text_draw_bounds(&draw, 2.0), Some(snapped));
+            draw.clip = Some(clipped);
+            assert_eq!(text_draw_bounds(&draw, 2.0), Some(clipped));
+            draw.clip = Some(Rect {
+                x: 100.0,
+                ..clipped
+            });
+            assert_eq!(text_draw_bounds(&draw, 2.0), None);
+        }
+        draw.clip = None;
+        draw.snap_anchor = None;
+        assert_eq!(text_draw_bounds(&draw, 2.0), Some(draw.rect));
+        for invalid in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            assert_eq!(text_draw_bounds(&draw, invalid), None);
+            draw.scale = invalid;
+            assert_eq!(text_draw_bounds(&draw, 2.0), None);
+            draw.scale = 1.0;
+        }
+        draw.text = crate::scene::render_string_for(&Rc::new(AnnotatedString::from("")));
+        assert_eq!(text_draw_bounds(&draw, 2.0), None);
+    }
 }
