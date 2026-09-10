@@ -2037,12 +2037,22 @@ fn push_shadow_primitive(
             blend_mode,
         } => {
             let mut shapes = scene.take_shadow_recorder();
-            if !record_shadow_caster(&mut shapes, *shape, layer, blend_mode) {
+            if !record_shadow_caster(
+                &mut shapes,
+                std::rc::Rc::unwrap_or_clone(shape),
+                layer,
+                blend_mode,
+            ) {
                 return;
             }
             let cutouts = if let Some(cutout) = cutout {
                 let mut recorder = scene.take_shadow_recorder();
-                if !record_shadow_caster(&mut recorder, *cutout, layer, BlendMode::DstOut) {
+                if !record_shadow_caster(
+                    &mut recorder,
+                    std::rc::Rc::unwrap_or_clone(cutout),
+                    layer,
+                    BlendMode::DstOut,
+                ) {
                     return;
                 }
                 RunDraw::whole(recorder, placement)
@@ -2068,9 +2078,17 @@ fn push_shadow_primitive(
             clip_rect,
         } => {
             let mut shapes = scene.take_shadow_recorder();
-            if !record_shadow_caster(&mut shapes, *fill, layer, blend_mode)
-                || !record_shadow_caster(&mut shapes, *cutout, layer, BlendMode::DstOut)
-            {
+            if !record_shadow_caster(
+                &mut shapes,
+                std::rc::Rc::unwrap_or_clone(fill),
+                layer,
+                blend_mode,
+            ) || !record_shadow_caster(
+                &mut shapes,
+                std::rc::Rc::unwrap_or_clone(cutout),
+                layer,
+                BlendMode::DstOut,
+            ) {
                 return;
             }
             let abs_clip = Rect {

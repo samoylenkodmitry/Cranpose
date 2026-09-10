@@ -171,13 +171,13 @@ fn build_drop_shadow_primitive(
             width: size.width,
             height: size.height,
         };
-        primitive_for_shape(shape, element_rect, Brush::solid(Color::BLACK)).map(Box::new)
+        primitive_for_shape(shape, element_rect, Brush::solid(Color::BLACK)).map(std::rc::Rc::new)
     } else {
         None
     };
 
     Some(DrawPrimitive::Shadow(ShadowPrimitive::Drop {
-        shape: Box::new(shape_prim),
+        shape: std::rc::Rc::new(shape_prim),
         cutout,
         blur_radius: scope.radius,
         blend_mode: scope.blend_mode,
@@ -230,8 +230,8 @@ fn build_inner_shadow_primitive(
     let cutout = primitive_for_shape(shape, inner, Brush::solid(Color::WHITE))?;
 
     Some(DrawPrimitive::Shadow(ShadowPrimitive::Inner {
-        fill: Box::new(fill),
-        cutout: Box::new(cutout),
+        fill: std::rc::Rc::new(fill),
+        cutout: std::rc::Rc::new(cutout),
         blur_radius: scope.radius,
         blend_mode: scope.blend_mode,
         clip_rect: outer,

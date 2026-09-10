@@ -2076,7 +2076,7 @@ mod tests {
             },
             text(),
             DrawPrimitive::Shadow(crate::ShadowPrimitive::Drop {
-                shape: Box::new(DrawPrimitive::Rect {
+                shape: std::rc::Rc::new(DrawPrimitive::Rect {
                     rect: rect(0.0, 0.0, 1.0, 1.0),
                     brush: solid(),
                     stroke: None,
@@ -2463,7 +2463,7 @@ mod tests {
     fn a_shadow_only_recording_summarises_as_shadow() {
         let recording = CommandRecording::from_primitives(vec![DrawPrimitive::Shadow(
             crate::ShadowPrimitive::Drop {
-                shape: Box::new(DrawPrimitive::Rect {
+                shape: std::rc::Rc::new(DrawPrimitive::Rect {
                     rect: rect(0.0, 0.0, 1.0, 1.0),
                     brush: solid(),
                     stroke: None,

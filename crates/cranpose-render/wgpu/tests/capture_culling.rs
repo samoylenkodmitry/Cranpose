@@ -418,7 +418,7 @@ fn tint_glass_at(bounds: Rect) -> RenderNode {
 
 fn drop_shadow(shape: Rect, alpha: f32, blur_radius: f32) -> RenderNode {
     primitive(DrawPrimitive::Shadow(ShadowPrimitive::Drop {
-        shape: Box::new(DrawPrimitive::Rect {
+        shape: std::rc::Rc::new(DrawPrimitive::Rect {
             rect: shape,
             brush: Brush::solid(Color(0.0, 0.0, 0.0, alpha)),
             stroke: None,
