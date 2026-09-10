@@ -3,8 +3,7 @@ mod robot_exit;
 
 use std::time::Duration;
 
-use cranpose::{AppLauncher, Robot};
-use cranpose_testing::changed_pixel_count_in_region;
+use cranpose::{AppLauncher, Robot, RobotScreenshot};
 use desktop_app::app;
 use named_semantics::{expect_reading, named_control, Bounds};
 
@@ -13,13 +12,66 @@ const SCREEN: &str = "Foldable screen";
 const WINDOW_WIDTH: u32 = 1200;
 const WINDOW_HEIGHT: u32 = 720;
 /// How much of the strip the folding half covers when the device is flat has
-/// to be given up once it is most of the way shut. A half that never folded
-/// goes on covering all of it.
-const MIN_GIVEN_UP_PIXELS: usize = 8000;
+/// to read as the stage behind it once the device is most of the way shut.
+/// A half that dimmed but never folded goes on covering all of it.
+const MIN_VACATED_PERCENT: usize = 75;
+/// How little of that strip may read as the stage while the device is flat.
+/// Any more and the strip was never over the folding half to begin with.
+const MAX_FLAT_STAGE_PERCENT: usize = 8;
 
 /// The drag surface, as `(reading, bounds)`.
 fn screen(robot: &Robot) -> (String, Bounds) {
     named_control(robot, SCREEN)
+}
+
+/// The colour of the stage the device stands on, read from a corner of the
+/// drag surface the device never reaches.
+fn stage_colour(shot: &RobotScreenshot, bounds: Bounds) -> [u8; 3] {
+    let (x, y, _, height) = bounds;
+    pixel_at(shot, x + 10.0, y + height * 0.5).unwrap_or([0, 0, 0])
+}
+
+fn pixel_at(shot: &RobotScreenshot, x: f32, y: f32) -> Option<[u8; 3]> {
+    let scale = shot.width as f32 / shot.logical_width.max(1.0);
+    let px = (x * scale).round() as usize;
+    let py = (y * scale).round() as usize;
+    if px >= shot.width as usize || py >= shot.height as usize {
+        return None;
+    }
+    let at = (py * shot.width as usize + px) * 4;
+    shot.pixels
+        .get(at..at + 3)
+        .map(|rgb| [rgb[0], rgb[1], rgb[2]])
+}
+
+/// How much of `region`, per cent, reads as the stage rather than as the
+/// device standing on it.
+fn stage_percent(shot: &RobotScreenshot, region: Bounds, stage: [u8; 3]) -> usize {
+    let (x, y, width, height) = region;
+    let step = 2.0;
+    let mut seen = 0usize;
+    let mut stage_pixels = 0usize;
+    let mut at_y = y;
+    while at_y < y + height {
+        let mut at_x = x;
+        while at_x < x + width {
+            if let Some(pixel) = pixel_at(shot, at_x, at_y) {
+                seen += 1;
+                let apart = (0..3)
+                    .map(|i| pixel[i].abs_diff(stage[i]) as u32)
+                    .sum::<u32>();
+                if apart <= 24 {
+                    stage_pixels += 1;
+                }
+            }
+            at_x += step;
+        }
+        at_y += step;
+    }
+    if seen == 0 {
+        return 0;
+    }
+    stage_pixels * 100 / seen
 }
 
 fn settle(robot: &Robot) {
@@ -69,8 +121,8 @@ fn main() {
             }
 
             // The strip the folding half covers when the device is flat. As it
-            // folds, its picture is pressed into the crease and it gives that
-            // strip up; nothing else on the stage reaches into it.
+            // folds it turns off square and covers less and less of that
+            // strip, until the stage behind the device shows through it.
             let (x, y, width, height) = bounds;
             let strip = (
                 x + width * 0.20,
@@ -78,12 +130,21 @@ fn main() {
                 width * 0.11,
                 height * 0.40,
             );
-            let given_up = changed_pixel_count_in_region(&flat, &folding, strip, 6);
-            println!("given_up_pixels={given_up}");
-            if given_up < MIN_GIVEN_UP_PIXELS {
+            let stage = stage_colour(&flat, bounds);
+            let flat_stage = stage_percent(&flat, strip, stage);
+            let folded_stage = stage_percent(&folding, strip, stage);
+            println!("flat_stage={flat_stage}% folded_stage={folded_stage}%");
+            if flat_stage > MAX_FLAT_STAGE_PERCENT {
                 robot_exit::fail_without_shutdown(&format!(
-                    "a device most of the way shut gave up {given_up} pixels of the strip its \
-                     folding half covers when flat: that half never folded"
+                    "the strip reads {flat_stage}% stage with the device flat open: it is not \
+                     over the folding half"
+                ));
+            }
+            if folded_stage < MIN_VACATED_PERCENT {
+                robot_exit::fail_without_shutdown(&format!(
+                    "a device most of the way shut left {folded_stage}% of the strip its folding \
+                     half covers when flat reading as stage: that half never turned, whatever \
+                     else happened to its picture"
                 ));
             }
 
@@ -107,8 +168,8 @@ fn main() {
             );
 
             println!(
-                "PASS: the folding half is pressed into the crease, gives up the width it held \
-                 and settles open or shut"
+                "PASS: the folding half turns off square, gives up the width it covered and \
+                 settles open or shut"
             );
             robot.exit().expect("exit");
         })
