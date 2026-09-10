@@ -7,9 +7,9 @@ use cranpose_liquid::{Glass, GlassDynamics, GlassMorph, LiquidColors, LiquidShap
 use cranpose_render_common::graph::{ProjectiveTransform, RenderGraph, RenderNode};
 use cranpose_render_wgpu::CapturedFrame;
 use cranpose_ui_graphics::{
-    Brush, Color, GLASS_ACTIVITY_UNIFORM, GLASS_ADAPTIVE_FROST_UNIFORM, GraphicsLayer,
-    LIQUID_GLASS_WGSL, Point, Rect, RenderEffect, RuntimeShader, SubstrateSpec, TileMode,
-    specialize_liquid_glass,
+    Brush, Color, GLASS_ACTIVITY_UNIFORM, GLASS_ADAPTIVE_FROST_UNIFORM,
+    GLASS_LIGHT_DIRECTION_UNIFORM, GraphicsLayer, LIQUID_GLASS_WGSL, Point, Rect, RenderEffect,
+    RuntimeShader, SubstrateSpec, TileMode, specialize_liquid_glass,
 };
 use support::{brush_rect, solid_rect};
 
@@ -401,6 +401,49 @@ fn glass_interior_coverage_matches_the_reference_through_material_activity() {
                 1.5,
             );
         }
+    }
+}
+
+#[test]
+fn changing_light_direction_preserves_reference_pixels() {
+    let mut renderer = support::headless_renderer().expect("headless WGPU init failed");
+    let colors = LiquidColors::dark(Color::from_rgb_u8(120, 140, 255));
+    let RenderEffect::Shader { shader } = card_glass(LiquidShape::RoundedRect(18.0))
+        .backdrop_effect(&colors, 1.5, GlassDynamics::default())
+    else {
+        panic!("the card must use one runtime shader");
+    };
+    let mut shader = (*shader).clone();
+    let mut previous = None;
+    for (x, y) in [(0.0, 1.0), (1.0, 0.0), (0.0, -1.0), (0.6, 0.8), (0.0, 0.0)] {
+        shader.set_float(GLASS_LIGHT_DIRECTION_UNIFORM, x);
+        shader.set_float(GLASS_LIGHT_DIRECTION_UNIFORM + 1, y);
+        specialize_liquid_glass(&mut shader);
+        let graph = |source: &str| {
+            let mut children = backdrop();
+            children.push(glass_layer(
+                rect(24.0, 20.0, 300.0, 200.0),
+                RenderEffect::runtime_shader(shader.clone()),
+                1.0,
+                Vec::new(),
+                source,
+            ));
+            support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children)
+        };
+        assert_matches_reference(
+            &mut renderer,
+            &format!("light direction ({x}, {y})"),
+            graph,
+            1.5,
+        );
+        let frame = capture(&mut renderer, graph(LIQUID_GLASS_WGSL), 1.5);
+        if let Some(previous) = previous {
+            assert!(
+                frame.pixels != previous,
+                "changing light must move the rim glow"
+            );
+        }
+        previous = Some(frame.pixels);
     }
 }
 

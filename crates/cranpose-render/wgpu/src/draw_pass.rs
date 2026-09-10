@@ -1,4 +1,4 @@
-use std::{rc::Rc, sync::Arc};
+use std::{iter::Peekable, rc::Rc, sync::Arc};
 
 use cranpose_ui_graphics::{BlendMode, Rect, RuntimeShader};
 
@@ -615,49 +615,43 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
         };
         let viewport_rect = segment_viewport_rect(self.target, segment, self.root_scale);
         let uniform_slot = renderer.claim_uniform_slot(viewport);
-        let mut items = Vec::with_capacity(segment.ops.len() + segment.composites.len());
-        items.extend(merge_items(
+        let mut items = merge_items(
             segment,
             viewport_rect,
             self.root_scale,
             self.target_size(),
             renderer.ablation.text,
-        ));
+        )
+        .peekable();
         let run = SegmentRun {
             segment,
             viewport,
             uniform_slot,
         };
-        let mut index = 0;
-        while index < items.len() {
-            index = match &items[index] {
-                Item::Run(..) => self.run_items(renderer, &items, index, &run),
-                Item::Image(_) => self.image_run(renderer, &items, index, &run, scratch)?,
-                Item::Text(text) => {
-                    self.text_item(renderer, text, &run, scratch)?;
-                    index + 1
+        while let Some(item) = items.peek() {
+            match item {
+                Item::Run(..) => {
+                    self.run_items(renderer, &mut items, &run);
+                    continue;
                 }
-                Item::Composite(composite) => {
-                    self.composite_item(renderer, composite, &run)?;
-                    index + 1
+                Item::Image(_) => {
+                    self.image_run(renderer, &mut items, &run, scratch)?;
+                    continue;
                 }
-            };
+                Item::Text(text) => self.text_item(renderer, text, &run, scratch)?,
+                Item::Composite(composite) => self.composite_item(renderer, composite, &run)?,
+            }
+            items.next();
         }
         Ok(())
     }
 
-    /// Draws the runs from `index`: a stored run takes a batch of its own
-    /// under its placement uniform; consecutive arena runs are copied into
-    /// one chunk and share a batch, and a uniform-mode chunk that fills
-    /// closes and the next opens. Returns where the runs end.
     fn run_items(
         &mut self,
         renderer: &mut GpuRenderer,
-        items: &[Item<'s>],
-        index: usize,
+        items: &mut Peekable<impl Iterator<Item = Item<'s>>>,
         run: &SegmentRun<'s, '_>,
-    ) -> usize {
-        let mut end = index;
+    ) {
         let mut chunk: Option<usize> = None;
         let close = |renderer: &mut GpuRenderer,
                      chunk: &mut Option<usize>,
@@ -674,11 +668,10 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
                 }
             }
         };
-        while end < items.len() {
-            let (draw, window) = match &items[end] {
-                Item::Run(draw, window) => (*draw, window.clone().unwrap_or(0..u32::MAX)),
-                _ => break,
-            };
+        while let Some(Item::Run(draw, window)) =
+            items.next_if(|item| matches!(item, Item::Run(..)))
+        {
+            let window = window.unwrap_or(0..u32::MAX);
             if renderer.run_is_stored(draw) {
                 close(renderer, &mut chunk, &mut self.batches);
                 let batch = renderer.prepare_store_run(
@@ -708,34 +701,27 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
                     from += taken;
                 }
             }
-            end += 1;
         }
         close(renderer, &mut chunk, &mut self.batches);
-        end
     }
 
-    /// Batches the images from `index` that share a blend mode; returns
-    /// where the run ends.
     fn image_run(
         &mut self,
         renderer: &mut GpuRenderer,
-        items: &[Item<'s>],
-        index: usize,
+        items: &mut Peekable<impl Iterator<Item = Item<'s>>>,
         run: &SegmentRun<'s, '_>,
         scratch: &mut PassScratch,
-    ) -> Result<usize, String> {
-        let Item::Image(first) = &items[index] else {
+    ) -> Result<(), String> {
+        let Some(Item::Image(first)) = items.peek() else {
             unreachable!("image run starts at an image");
         };
         let images = &run.segment.scene.images;
         let blend_mode = supported_blend_mode(images[*first].blend_mode);
         let cmd_start = scratch.image_cmds.len();
-        let mut end = index;
-        while let Some(Item::Image(other)) = items.get(end) {
-            let image = &images[*other];
-            if supported_blend_mode(image.blend_mode) != blend_mode {
-                break;
-            }
+        while let Some(Item::Image(index)) = items.next_if(|item| {
+            matches!(item, Item::Image(index) if supported_blend_mode(images[*index].blend_mode) == blend_mode)
+        }) {
+            let image = &images[index];
             renderer.append_image_draw_cmd(
                 image,
                 run.viewport,
@@ -744,7 +730,6 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
                 &mut scratch.image_indices,
                 &mut scratch.image_cmds,
             )?;
-            end += 1;
         }
         if cmd_start < scratch.image_cmds.len() {
             self.batches.push(Batch::Images {
@@ -754,7 +739,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
                 scissor: run.segment.scissor,
             });
         }
-        Ok(end)
+        Ok(())
     }
 
     /// Draws one text as glyphs when its glyphs are in the atlas, joining

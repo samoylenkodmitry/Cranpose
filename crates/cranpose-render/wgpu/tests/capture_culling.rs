@@ -16,8 +16,8 @@ use cranpose_ui::{
     text::{AnnotatedString, SpanStyle, TextStyle, TextUnit},
 };
 use cranpose_ui_graphics::{
-    BlendMode, Brush, Color, DrawPrimitive, GraphicsLayer, ImageBitmap, ImageSampling,
-    RUNTIME_SHADER_PRELUDE_WGSL, Rect, RenderEffect, RuntimeShader, ShadowPrimitive,
+    BlendMode, Brush, Color, CompositingStrategy, DrawPrimitive, GraphicsLayer, ImageBitmap,
+    ImageSampling, RUNTIME_SHADER_PRELUDE_WGSL, Rect, RenderEffect, RuntimeShader, ShadowPrimitive,
 };
 use support::{distinct_colors, region_pixels, solid_rect};
 
@@ -148,6 +148,66 @@ fn page(with_glass: bool) -> RenderGraph {
 
 fn capture(renderer: &mut support::LockedRenderer, graph: RenderGraph) -> CapturedFrame {
     support::capture_graph(renderer, graph, FRAME_WIDTH, FRAME_HEIGHT)
+}
+
+#[test]
+fn draw_batches_keep_images_blend_changes_and_composites_in_order() {
+    let mut renderer = support::headless_renderer().expect("headless WGPU init failed");
+    for color in [[0, 255, 0, 255], [255, 0, 255, 255], [0, 255, 0, 255]] {
+        let image = |x, width, rgba: [u8; 4], blend_mode| {
+            primitive(DrawPrimitive::Blend {
+                primitive: Box::new(DrawPrimitive::Image {
+                    rect: rect(x, 0.0, width, FRAME_HEIGHT as f32),
+                    image: ImageBitmap::from_rgba8(1, 1, rgba.to_vec()).unwrap(),
+                    alpha: 1.0,
+                    color_filter: None,
+                    sampling: ImageSampling::Nearest,
+                    src_rect: None,
+                }),
+                blend_mode,
+            })
+        };
+        let children = vec![
+            solid_rect(rect(0.0, 0.0, 240.0, 120.0), Color::RED),
+            image(40.0, 200.0, color, BlendMode::SrcOver),
+            image(80.0, 160.0, [0, 0, 255, 255], BlendMode::SrcOver),
+            image(120.0, 120.0, [255; 4], BlendMode::DstOut),
+            solid_rect(rect(160.0, 0.0, 80.0, 120.0), Color(1.0, 1.0, 0.0, 1.0)),
+            RenderNode::Layer(Box::new(shared_test_support::layer_node(
+                rect(0.0, 0.0, 20.0, 120.0),
+                ProjectiveTransform::identity(),
+                GraphicsLayer {
+                    compositing_strategy: CompositingStrategy::Offscreen,
+                    ..GraphicsLayer::default()
+                },
+                vec![solid_rect(
+                    rect(0.0, 0.0, 20.0, 120.0),
+                    Color(0.0, 1.0, 1.0, 1.0),
+                )],
+            ))),
+            image(0.0, 10.0, [255, 255, 255, 255], BlendMode::SrcOver),
+        ];
+        let frame = capture(
+            &mut renderer,
+            support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children),
+        );
+        for (x, expected) in [
+            (5, [255; 4]),
+            (15, [0, 255, 255, 255]),
+            (30, [255, 0, 0, 255]),
+            (60, color),
+            (100, [0, 0, 255, 255]),
+            (140, [0, 0, 0, 0]),
+            (200, [255, 255, 0, 255]),
+        ] {
+            let offset = ((60 * FRAME_WIDTH + x) * 4) as usize;
+            assert_eq!(
+                &frame.pixels[offset..offset + 4],
+                &expected,
+                "draw order at x={x}"
+            );
+        }
+    }
 }
 
 #[test]
