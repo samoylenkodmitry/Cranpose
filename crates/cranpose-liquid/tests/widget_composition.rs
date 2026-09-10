@@ -496,3 +496,43 @@ fn a_liquid_dropdown_menu_composes_its_anchor_content() {
         "the dropdown menu did not compose its anchor content"
     );
 }
+
+#[test]
+fn glass_modifier_evaluates_live_dynamics_after_reusing_a_layer() {
+    let app_context = cranpose_ui::AppContext::new();
+    let _scope = app_context.enter_scope();
+    use std::cell::RefCell;
+
+    let calls = Rc::new(Cell::new(0));
+    let boost = Rc::new(Cell::new(0.0));
+    let modifier = Rc::new(RefCell::new(Modifier::empty()));
+    in_theme({
+        let calls = Rc::clone(&calls);
+        let boost = Rc::clone(&boost);
+        let modifier = Rc::clone(&modifier);
+        move || {
+            *modifier.borrow_mut() = Modifier::empty().glass_effect_with(Glass::regular(), {
+                let calls = Rc::clone(&calls);
+                let boost = Rc::clone(&boost);
+                move || {
+                    calls.set(calls.get() + 1);
+                    GlassDynamics {
+                        highlight_boost: boost.get(),
+                        ..Default::default()
+                    }
+                }
+            });
+        }
+    });
+    let slices = cranpose_ui::collect_slices_from_modifier(&modifier.borrow());
+    let read_layer = || slices.graphics_layer().expect("glass graphics layer");
+    let first = read_layer();
+    let first_calls = calls.get();
+    assert_eq!(read_layer(), first);
+    assert_eq!(calls.get(), first_calls + 1);
+    boost.set(0.5);
+    assert_ne!(read_layer(), first);
+    assert_eq!(calls.get(), first_calls + 2);
+    boost.set(0.0);
+    assert_eq!(read_layer(), first);
+}
