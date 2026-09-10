@@ -82,8 +82,8 @@ fn settle(robot: &Robot) {
 /// Drag right to left across the spread, in steps, and hold at the end.
 fn drag_across(robot: &Robot, bounds: Bounds, fraction: f32) {
     let (x, y, width, height) = bounds;
-    let start = x + width * 0.72;
-    let stop = start - width * 0.32 * fraction;
+    let start = x + width * 0.38;
+    let stop = start - width * 0.22 * fraction;
     let mid_y = y + height * 0.5;
     robot.mouse_move(start, mid_y).expect("reach the screen");
     robot.mouse_down().expect("take the panel");
@@ -125,9 +125,9 @@ fn main() {
             // strip, until the stage behind the device shows through it.
             let (x, y, width, height) = bounds;
             let strip = (
-                x + width * 0.20,
+                x + width * 0.05,
                 y + height * 0.30,
-                width * 0.11,
+                width * 0.06,
                 height * 0.40,
             );
             let stage = stage_colour(&flat, bounds);

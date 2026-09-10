@@ -16,15 +16,15 @@ use cranpose_ui_graphics::{
     CompositingStrategy, RenderEffect, RuntimeShader, RUNTIME_SHADER_PRELUDE_WGSL,
 };
 
-const HALF_WIDTH: f32 = 232.0;
+const HALF_WIDTH: f32 = 196.0;
 const SCREEN_WIDTH: f32 = HALF_WIDTH * 2.0;
-const SCREEN_HEIGHT: f32 = 322.0;
-const BEZEL: f32 = 7.0;
+const SCREEN_HEIGHT: f32 = 272.0;
+const BEZEL: f32 = 6.0;
 /// The bezel either half keeps against the crease, which is far thinner than
 /// the one around the outside.
 const INNER_BEZEL: f32 = 2.0;
-const CORNER: f32 = 22.0;
-const HINGE_WIDTH: f32 = 5.0;
+const CORNER: f32 = 18.0;
+const HINGE_WIDTH: f32 = 4.0;
 /// How far the folding half throws its shadow across the half that stays.
 const CREASE_SHADOW: f32 = 22.0;
 /// The two screens fold on to each other, so the folding half swings toward
@@ -33,16 +33,18 @@ const SHUT_ANGLE: f32 = 155.0;
 const RIGHT_ANGLE: f32 = 90.0;
 const STRAIGHT_ANGLE: f32 = 180.0;
 const CAMERA_DISTANCE: f32 = 15.0;
-/// The device squares up to the reader as it closes, the way a hand turns it
-/// while folding.
-const OPEN_TILT: f32 = 11.0;
-const SHUT_TILT: f32 = 4.0;
-const STAGE_WIDTH: f32 = 760.0;
-const STAGE_HEIGHT: f32 = 470.0;
+/// Room above and below a painted half for the part of the turned half that
+/// comes toward the reader and so stands taller than the flat one.
+const PAINT_PAD: f32 = 52.0;
+const STAGE_WIDTH: f32 = 880.0;
+const STAGE_HEIGHT: f32 = 430.0;
 const MAX_BLUR_PX: f32 = 30.0;
 const GLASS_SHEEN: f32 = 0.22;
 /// How far into shadow the crease goes once the device is shut.
 const CREASE_DARK: f32 = 0.92;
+/// What a unit of `camera_distance` is worth in pixels, which the painted half
+/// needs to put its picture through the same projection the turned one takes.
+const CAMERA_DISTANCE_SCALE: f32 = 72.0;
 
 /// A flick of this much of the fold per second carries the panel the rest of
 /// the way on its own.
@@ -80,10 +82,6 @@ impl Fold {
         (1.0 - self.angle().min(RIGHT_ANGLE).to_radians().cos()).clamp(0.0, 1.0)
     }
 
-    fn tilt(self) -> f32 {
-        OPEN_TILT + (SHUT_TILT - OPEN_TILT) * self.shut
-    }
-
     fn reading(self) -> String {
         if self.shut <= 0.0 {
             "Open".to_string()
@@ -103,14 +101,14 @@ fn held_still(fold: Fold) -> f32 {
     -HALF_WIDTH * fold.squeeze() * 0.5
 }
 
-/// The turn the folding panel takes in the screen: how the device is being
-/// held, with the fold on top of it. Both are turns about the line the hinge
-/// runs down, so they add.
-fn panel_turn(fold: Fold, tilt: f32) -> f32 {
+/// The turn the folding half takes, and the turn the painted half's picture
+/// is put through. Past a right angle the back is drawn on the other side of
+/// the hinge, so the turn is measured from there.
+fn panel_turn(fold: Fold) -> f32 {
     if fold.shows_screen() {
-        tilt + fold.angle()
+        fold.angle()
     } else {
-        tilt + fold.angle() - STRAIGHT_ANGLE
+        fold.angle() - STRAIGHT_ANGLE
     }
 }
 
@@ -251,6 +249,30 @@ fn glass_effect(uniforms: &GlassUniforms) -> RenderEffect {
     RenderEffect::runtime_shader(shader)
 }
 
+struct PaintUniforms {
+    fold: f32,
+    /// The turn the picture is put through, in degrees.
+    turn: f32,
+    hinge_at_left: bool,
+}
+
+fn paint_effect(uniforms: &PaintUniforms) -> RenderEffect {
+    let turn = uniforms.turn.to_radians();
+    let mut shader = RuntimeShader::from_shared_source(foldable_wgsl());
+    shader.set_float(0, 2.0);
+    shader.set_float(1, uniforms.fold);
+    shader.set_float(2, MAX_BLUR_PX);
+    shader.set_float(3, CREASE_DARK);
+    shader.set_float(4, GLASS_SHEEN);
+    shader.set_float(5, turn.cos());
+    shader.set_float(6, turn.sin());
+    shader.set_float(7, CAMERA_DISTANCE * CAMERA_DISTANCE_SCALE);
+    shader.set_float(8, HALF_WIDTH);
+    shader.set_float(9, SCREEN_HEIGHT);
+    shader.set_float(10, if uniforms.hinge_at_left { 1.0 } else { 0.0 });
+    RenderEffect::runtime_shader(shader)
+}
+
 #[composable]
 pub(crate) fn FoldableTab() {
     let shut = rememberMutableStateOf(|| 0.0f32);
@@ -271,8 +293,10 @@ pub(crate) fn FoldableTab() {
             FoldHeader(fold);
             Stage(fold, shut, dragging);
             Text(
-                "Drag across the screen to fold it. The picture and the clock are one surface: \
-                 the crease runs straight through them.",
+                "Drag across either screen to fold both. On the left a layer transform really \
+                 turns the half. On the right nothing moves at all: the picture itself is put \
+                 through that turn, so it is skewed, blurred along the way and shadowed into \
+                 the crease.",
                 Modifier::empty().padding_symmetric(24.0, 0.0),
                 caption_style(),
             );
@@ -364,24 +388,63 @@ fn Stage(
             }),
         BoxSpec::new().content_alignment(Alignment::CENTER),
         move || {
-            Device(fold);
+            Row(
+                Modifier::empty(),
+                RowSpec::new()
+                    .horizontal_arrangement(LinearArrangement::SpacedBy(28.0))
+                    .vertical_alignment(VerticalAlignment::CenterVertically),
+                move || {
+                    key("turned", || Bench(fold, Built::Turned, "Turned in 3D"));
+                    key("painted", || Bench(fold, Built::Painted, "Painted flat"));
+                },
+            );
         },
     );
 }
 
+/// One of the two devices, with what it is under it.
 #[composable]
-fn Device(fold: Fold) {
-    let tilt = fold.tilt();
+fn Bench(fold: Fold, built: Built, label: &'static str) {
+    Column(
+        Modifier::empty(),
+        ColumnSpec::new()
+            .vertical_arrangement(LinearArrangement::SpacedBy(10.0))
+            .horizontal_alignment(cranpose_ui::HorizontalAlignment::CenterHorizontally),
+        move || {
+            Box(
+                Modifier::empty().size_points(SCREEN_WIDTH, SCREEN_HEIGHT + PAINT_PAD * 2.0),
+                BoxSpec::new().content_alignment(Alignment::CENTER),
+                move || {
+                    Device(fold, built);
+                },
+            );
+            Text(label, Modifier::empty(), caption_style());
+        },
+    );
+}
 
+/// Which of the two devices on the stage this is: the one that really turns
+/// its half, or the one whose surface never moves at all.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Built {
+    /// A layer transform turns the half, and the reader sees the turn.
+    Turned,
+    /// Nothing moves. A shader puts the picture through the same turn, so the
+    /// image itself is skewed, blurred and shadowed into the same shape.
+    Painted,
+}
+
+#[composable]
+fn Device(fold: Fold, built: Built) {
     Box(
         Modifier::empty()
             .offset(held_still(fold), 0.0)
             .size_points(SCREEN_WIDTH, SCREEN_HEIGHT),
         BoxSpec::new().content_alignment(Alignment::TOP_START),
         move || {
-            key("still", || StillHalf(tilt));
-            Hinge(fold, tilt);
-            key("folding", || FoldingHalf(fold, tilt));
+            key("still", StillHalf);
+            Hinge(fold);
+            key("folding", || FoldingHalf(fold, built));
         },
     );
 }
@@ -403,12 +466,11 @@ fn hinge_layer(degrees: f32, origin: TransformOrigin) -> GraphicsLayer {
 /// The half the hinge holds still, which keeps its picture square to the
 /// reader for the whole fold.
 #[composable]
-fn StillHalf(tilt: f32) {
+fn StillHalf() {
     Box(
         Modifier::empty()
             .absolute_offset(HALF_WIDTH, 0.0)
-            .size_points(HALF_WIDTH, SCREEN_HEIGHT)
-            .graphics_layer(move || hinge_layer(tilt, TransformOrigin::new(0.0, 0.5))),
+            .size_points(HALF_WIDTH, SCREEN_HEIGHT),
         BoxSpec::default(),
         move || {
             HalfFace(HALF_WIDTH, false);
@@ -421,9 +483,9 @@ fn StillHalf(tilt: f32) {
 /// ability to focus on it, not the layout, which never reflows. Past a right
 /// angle its screen faces away and the back of the device faces the reader.
 #[composable]
-fn FoldingHalf(fold: Fold, tilt: f32) {
+fn FoldingHalf(fold: Fold, built: Built) {
     let screen = fold.shows_screen();
-    let angle = panel_turn(fold, tilt);
+    let angle = panel_turn(fold);
     let origin = if screen {
         TransformOrigin::new(1.0, 0.5)
     } else {
@@ -431,6 +493,11 @@ fn FoldingHalf(fold: Fold, tilt: f32) {
     };
     let x = if screen { 0.0 } else { HALF_WIDTH };
     let shut = fold.shut;
+
+    if built == Built::Painted {
+        PaintedHalf(fold, screen, x);
+        return;
+    }
 
     Box(
         Modifier::empty()
@@ -444,6 +511,59 @@ fn FoldingHalf(fold: Fold, tilt: f32) {
             } else {
                 ShellFace(shut);
             }
+        },
+    );
+}
+
+/// The same half, on a surface that never moves. The shader is given the turn
+/// the other device's half really takes and works back, for every fragment,
+/// to the point of the flat half that would land there -- so the picture is
+/// skewed into the same trapezium -- then blurs and shadows it the same way.
+#[composable]
+fn PaintedHalf(fold: Fold, screen: bool, x: f32) {
+    let shut = fold.shut;
+    let turn = panel_turn(fold);
+    let height = SCREEN_HEIGHT + PAINT_PAD * 2.0;
+
+    Box(
+        Modifier::empty()
+            .absolute_offset(x, -PAINT_PAD)
+            .required_size(Size::new(HALF_WIDTH, height))
+            // The picture grows past the flat half where the turned one comes
+            // toward the reader, so the surface being painted has to reach
+            // that far. Nothing is drawn here; this only says how far it goes.
+            .draw_behind(|scope| {
+                scope.draw_rect(Brush::solid(Color(0.0, 0.0, 0.0, 0.0)));
+            })
+            .graphics_layer(move || {
+                if shut <= 0.0 {
+                    return GraphicsLayer::default();
+                }
+                GraphicsLayer {
+                    render_effect: Some(paint_effect(&PaintUniforms {
+                        fold: shut,
+                        turn,
+                        hinge_at_left: !screen,
+                    })),
+                    compositing_strategy: CompositingStrategy::Offscreen,
+                    ..Default::default()
+                }
+            }),
+        BoxSpec::new().content_alignment(Alignment::TOP_START),
+        move || {
+            Box(
+                Modifier::empty()
+                    .absolute_offset(0.0, PAINT_PAD)
+                    .size_points(HALF_WIDTH, SCREEN_HEIGHT),
+                BoxSpec::new().content_alignment(Alignment::TOP_START),
+                move || {
+                    if screen {
+                        HalfFace(0.0, true);
+                    } else {
+                        ShellFace(shut);
+                    }
+                },
+            );
         },
     );
 }
@@ -597,7 +717,7 @@ fn HalfFace(offset: f32, hinge_at_right: bool) {
 /// The seam down the middle: the shadow the folding half drops across the
 /// half that stays, and the metal the two of them turn on.
 #[composable]
-fn Hinge(fold: Fold, tilt: f32) {
+fn Hinge(fold: Fold) {
     let squeeze = fold.squeeze();
     let cast = HINGE_WIDTH + CREASE_SHADOW * squeeze;
     let depth = 0.38 * squeeze;
@@ -605,15 +725,11 @@ fn Hinge(fold: Fold, tilt: f32) {
     HingeStrip(
         HALF_WIDTH,
         cast,
-        tilt,
-        TransformOrigin::new(0.0, 0.5),
         vec![Color(0.0, 0.0, 0.0, depth), Color(0.0, 0.0, 0.0, 0.0)],
     );
     HingeStrip(
         HALF_WIDTH - HINGE_WIDTH * 0.5,
         HINGE_WIDTH,
-        tilt,
-        TransformOrigin::new(0.5, 0.5),
         vec![
             Color(0.0, 0.0, 0.0, 0.75),
             edge_color(),
@@ -624,12 +740,11 @@ fn Hinge(fold: Fold, tilt: f32) {
 
 /// A strip standing on the hinge line, painted straight across it.
 #[composable]
-fn HingeStrip(x: f32, width: f32, tilt: f32, origin: TransformOrigin, colours: Vec<Color>) {
+fn HingeStrip(x: f32, width: f32, colours: Vec<Color>) {
     Box(
         Modifier::empty()
             .absolute_offset(x, 0.0)
             .size_points(width, SCREEN_HEIGHT)
-            .graphics_layer(move || hinge_layer(tilt, origin))
             .draw_behind(move |scope| {
                 let size = scope.size();
                 scope.draw_rect(Brush::linear_gradient_range(
@@ -729,17 +844,16 @@ mod tests {
     }
 
     #[test]
-    fn the_panel_carries_the_hold_and_the_fold_in_one_turn() {
-        let tilt = 11.0;
-        assert!((panel_turn(Fold::at(0.0), tilt) - tilt).abs() < 1e-4);
+    fn the_turn_the_half_takes_is_the_turn_the_painted_one_is_given() {
+        assert_eq!(panel_turn(Fold::at(0.0)), 0.0);
         assert!(
-            panel_turn(Fold::at(0.4), tilt) > panel_turn(Fold::at(0.2), tilt),
+            panel_turn(Fold::at(0.4)) > panel_turn(Fold::at(0.2)),
             "the half swings toward the reader"
         );
         let shut = Fold::at(1.0);
         assert!(!shut.shows_screen());
         assert!(
-            (panel_turn(shut, tilt) - (tilt + SHUT_ANGLE - STRAIGHT_ANGLE)).abs() < 1e-4,
+            (panel_turn(shut) - (SHUT_ANGLE - STRAIGHT_ANGLE)).abs() < 1e-4,
             "past a right angle the back is drawn on the other side of the hinge"
         );
     }
@@ -748,13 +862,6 @@ mod tests {
     fn the_back_arrives_at_a_right_angle() {
         assert!(Fold::at(0.5).shows_screen());
         assert!(!Fold::at(0.7).shows_screen());
-    }
-
-    #[test]
-    fn the_device_squares_up_to_the_reader_as_it_shuts() {
-        assert!((Fold::at(0.0).tilt() - OPEN_TILT).abs() < 1e-4);
-        assert!((Fold::at(1.0).tilt() - SHUT_TILT).abs() < 1e-4);
-        assert!(Fold::at(1.0).tilt() < Fold::at(0.4).tilt());
     }
 
     #[test]
