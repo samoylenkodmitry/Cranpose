@@ -792,7 +792,9 @@ impl ShapeRecorder {
         }
     }
 
-    fn push_shape_primitive(
+    /// Records a rect, rounded rect or arc with the supplied blend mode.
+    /// Returns any other primitive untouched, including blend wrappers.
+    pub fn push_shape_primitive(
         &mut self,
         primitive: DrawPrimitive,
         blend_mode: BlendMode,
@@ -1935,6 +1937,45 @@ mod tests {
             style: DrawTextStyle::default(),
             color: Color::WHITE,
         }))
+    }
+
+    #[test]
+    fn explicit_shape_blends_match_wrapped_shapes_and_preserve_other_primitives() {
+        for mode in [BlendMode::SrcOver, BlendMode::DstOut, BlendMode::Plus] {
+            for primitive in every_primitive() {
+                let mut direct = ShapeRecorder::default();
+                let mut wrapped = ShapeRecorder::default();
+                let expected = primitive.clone();
+                match direct.push_shape_primitive(primitive, mode) {
+                    Recorded::Shape(bounds) => {
+                        let result = wrapped.push_primitive(DrawPrimitive::Blend {
+                            primitive: Box::new(expected),
+                            blend_mode: mode,
+                        });
+                        assert!(matches!(result, Recorded::Shape(other) if other == bounds));
+                        assert!(
+                            direct
+                                .tables()
+                                .segments
+                                .iter()
+                                .all(|segment| segment.blend == mode)
+                        );
+                        assert!(
+                            direct
+                                .tables()
+                                .shapes
+                                .iter()
+                                .all(|body| body.blend_mode() == mode)
+                        );
+                        assert_eq!(direct, wrapped);
+                    }
+                    Recorded::Other(other) => {
+                        assert_eq!(other, expected);
+                        assert!(direct.is_empty());
+                    }
+                }
+            }
+        }
     }
 
     fn every_primitive() -> Vec<DrawPrimitive> {
