@@ -3,7 +3,7 @@ use std::{
     hash::{Hash, Hasher},
 };
 
-use cranpose_ui_graphics::RuntimeShader;
+use cranpose_ui_graphics::{FxBuildHasher, RuntimeShader};
 use naga::ShaderStage;
 
 use crate::debug_toggles::DebugToggle;
@@ -62,8 +62,8 @@ pub(crate) struct ShaderPipelineCache {
     #[cfg(test)]
     constants_builds: usize,
     backend: wgpu::Backend,
-    cache: HashMap<PipelineKey, wgpu::RenderPipeline>,
-    disabled: HashSet<u64>,
+    cache: HashMap<PipelineKey, wgpu::RenderPipeline, FxBuildHasher>,
+    disabled: HashSet<u64, FxBuildHasher>,
     pipeline_cache: Option<wgpu::PipelineCache>,
     forced: Vec<&'static str>,
     forced_hash: u64,
@@ -75,8 +75,8 @@ impl ShaderPipelineCache {
             #[cfg(test)]
             constants_builds: 0,
             backend,
-            cache: HashMap::new(),
-            disabled: HashSet::new(),
+            cache: HashMap::default(),
+            disabled: HashSet::default(),
             forced: Vec::new(),
             forced_hash: 0,
             pipeline_cache,
