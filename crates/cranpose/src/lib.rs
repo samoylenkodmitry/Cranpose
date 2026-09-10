@@ -63,7 +63,7 @@ mod android_keyboard;
 mod android_launch_args;
 #[cfg(all(feature = "android", feature = "media", target_os = "android"))]
 mod android_media;
-#[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
+#[cfg(all(feature = "android", target_os = "android"))]
 mod android_overlay_window;
 #[cfg(any(test, all(feature = "android", target_os = "android")))]
 mod android_panic_hook;

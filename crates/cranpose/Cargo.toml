@@ -164,7 +164,7 @@ cranpose-platform-web = { workspace = true, optional = true }
 cranpose-render-pixels = { workspace = true, optional = true }
 cranpose-render-wgpu = { workspace = true, optional = true }
 pollster = { version = "0.4", optional = true }
-winit = { version = "0.31.0-beta.2", optional = true, default-features = false }
+winit = { version = "=0.31.0-beta.2", optional = true, default-features = false }
 wasm-bindgen = { version = "0.2", optional = true }
 web-sys = { version = "0.3", optional = true, features = [
     "Window",

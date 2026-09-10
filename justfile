@@ -135,8 +135,15 @@ clippy-robot:
 # written as `const {}` and on one that cannot be const at all
 # (`HashMap::default()`). It stays enabled everywhere else, so a genuine
 # non-const initializer is still caught by `just clippy`.
+#
+# The second line builds `android` with no renderer at all. Every other
+# android job pairs the feature with renderer-wgpu, which is how #631 stayed
+# hidden: two gates named `android` alone and reached for renderer-wgpu items,
+# so a configuration the manifest offers was one no build ever tried. One
+# crate, one ABI, `check` only.
 clippy-android:
     cargo ndk --platform 24 -t arm64-v8a -t armeabi-v7a -t x86 -t x86_64 clippy -p desktop-app-platform --lib --no-default-features --features android,renderer-wgpu -- -D warnings -A clippy::missing_const_for_thread_local
+    cargo check --target aarch64-linux-android -p cranpose --no-default-features --features android
 
 # --- code quality gates -----------------------------------------------------
 #

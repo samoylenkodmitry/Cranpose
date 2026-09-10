@@ -24,6 +24,6 @@ x11 = ["winit/x11"]
 wayland = ["winit/wayland", "winit/wayland-dlopen", "winit/wayland-csd-adwaita"]
 
 [dependencies]
-winit = { version = "0.31.0-beta.2", default-features = false }
+winit = { version = "=0.31.0-beta.2", default-features = false }
 cranpose-foundation = { workspace = true }
 cranpose-ui-graphics = { workspace = true }
