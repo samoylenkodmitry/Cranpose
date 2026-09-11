@@ -916,6 +916,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
                     alpha: *alpha,
                     blend_mode: supported_blend_mode(*blend_mode),
                     sample_mode: *sample_mode,
+                    scissor,
                 };
                 let prepared = renderer.effect_renderer.prepare_projective_composite_draw(
                     self.recorder,

@@ -700,6 +700,10 @@ pub(crate) struct ProjectiveCompositeItem<'a> {
     pub alpha: f32,
     pub blend_mode: BlendMode,
     pub sample_mode: CompositeSampleMode,
+    /// The clip of the layers above the child, in target pixels. A tilted
+    /// child's quad reaches wherever its transform sends it; this is what
+    /// keeps it inside the layer that clips it.
+    pub scissor: Option<(u32, u32, u32, u32)>,
 }
 
 pub(crate) struct PreparedProjectiveComposite<'a> {
@@ -707,6 +711,7 @@ pub(crate) struct PreparedProjectiveComposite<'a> {
     uniform: UniformUpload,
     vertices: BufferUpload,
     blend_mode: BlendMode,
+    scissor: Option<(u32, u32, u32, u32)>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2274,6 +2279,7 @@ impl EffectRenderer {
             uniform,
             vertices,
             blend_mode: item.blend_mode,
+            scissor: item.scissor,
         }
     }
 
@@ -2287,7 +2293,11 @@ impl EffectRenderer {
         pass.set_bind_group(0, draw.texture_bind_group, &[]);
         pass.set_bind_group(1, &draw.uniform.bind_group, &[draw.uniform.offset]);
         pass.set_vertex_buffer(0, draw.vertices.slice());
-        pass.set_scissor_rect(0, 0, viewport.0, viewport.1);
+        if let Some((x, y, w, h)) = draw.scissor {
+            pass.set_scissor_rect(x, y, w, h);
+        } else {
+            pass.set_scissor_rect(0, 0, viewport.0, viewport.1);
+        }
         pass.draw(0..4, 0..1);
     }
 }
