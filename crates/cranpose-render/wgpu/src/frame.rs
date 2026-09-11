@@ -3321,6 +3321,12 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         };
         let (width, height) = surface_rect.pixel_size();
         if u64::from(width) * u64::from(height) > MAX_SURFACE_PIXELS {
+            log::error!(
+                "[layer] dropping a layer whole: {width}x{height} is past the {MAX_SURFACE_PIXELS} pixel budget, \
+                 and its own {:.0}x{:.0} box does not fit either. Nothing it draws reaches the frame.",
+                child.local_bounds.width,
+                child.local_bounds.height,
+            );
             return Ok(None);
         }
         let cache_key = (!reads_backdrop && child.cache_policy == CachePolicy::Auto).then(|| {
@@ -3674,17 +3680,50 @@ fn child_surface_rect(child: &ChildLayer, scale: f32) -> Option<Rect> {
     let padding = child.effect.as_ref().map_or(0.0, |effect| {
         effect.input_padding() + effect.output_padding()
     });
-    let rect = if padding > 0.0 {
-        Rect {
-            x: bounds.x - padding,
-            y: bounds.y - padding,
-            width: bounds.width + padding * 2.0,
-            height: bounds.height + padding * 2.0,
-        }
-    } else {
-        bounds
-    };
+    let rect = expand_rect(bounds, padding);
+    let rect = surface_within_budget(rect, expand_rect(child.local_bounds, padding), scale);
     (rect.width > 0.0 && rect.height > 0.0).then_some(rect)
+}
+
+fn expand_rect(rect: Rect, padding: f32) -> Rect {
+    if padding <= 0.0 {
+        return rect;
+    }
+    Rect {
+        x: rect.x - padding,
+        y: rect.y - padding,
+        width: rect.width + padding * 2.0,
+        height: rect.height + padding * 2.0,
+    }
+}
+
+fn surface_pixels(rect: Rect, scale: f32) -> u64 {
+    let width = (rect.width * scale).ceil().max(0.0) as u64;
+    let height = (rect.height * scale).ceil().max(0.0) as u64;
+    width * height
+}
+
+/// Keeps a child's surface inside the pixel budget by falling back to the
+/// child's own box.
+///
+/// The rect above covers everything the content draws, and a scroll or a wide
+/// row reaches far past what the parent shows: one LeetCodeDaily draft made a
+/// 1412x1480 layer ask for 5403x3315, which is 17.9M pixels against a 16.7M
+/// budget. Over the budget the caller has no texture to render into and drops
+/// the layer whole, so 555 draw ops of application UI became a blank window
+/// with no error anywhere.
+///
+/// The child's own box is what the parent positions and clips, so anything
+/// outside it was already clipped away or off the frame. Trading the overflow
+/// for the visible pixels is the only answer that draws something.
+fn surface_within_budget(content: Rect, own_box: Rect, scale: f32) -> Rect {
+    if surface_pixels(content, scale) <= MAX_SURFACE_PIXELS {
+        return content;
+    }
+    if surface_pixels(own_box, scale) < surface_pixels(content, scale) {
+        return own_box;
+    }
+    content
 }
 
 fn union_rect(a: Option<Rect>, b: Option<Rect>) -> Option<Rect> {
@@ -3774,6 +3813,52 @@ pub(crate) fn scene_bounds(layer: &LayerScene, scale: f32) -> Option<Rect> {
 
 #[cfg(test)]
 mod tests {
+    use super::{MAX_SURFACE_PIXELS, Rect, surface_pixels, surface_within_budget};
+
+    fn rect(width: f32, height: f32) -> Rect {
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width,
+            height,
+        }
+    }
+
+    #[test]
+    fn a_surface_inside_the_budget_keeps_every_pixel_its_content_draws() {
+        let content = rect(1446.0, 3157.6);
+        let own_box = rect(1412.0, 1480.0);
+        assert!(surface_pixels(content, 1.0) <= MAX_SURFACE_PIXELS);
+        assert_eq!(surface_within_budget(content, own_box, 1.0), content);
+    }
+
+    #[test]
+    fn content_past_the_budget_falls_back_to_the_layer_own_box() {
+        let content = rect(5403.0, 3314.4);
+        let own_box = rect(1412.0, 1480.0);
+        assert!(
+            surface_pixels(content, 1.0) > MAX_SURFACE_PIXELS,
+            "the LeetCodeDaily draft that blanked the window"
+        );
+        assert_eq!(surface_within_budget(content, own_box, 1.0), own_box);
+        assert!(surface_pixels(own_box, 1.0) <= MAX_SURFACE_PIXELS);
+    }
+
+    #[test]
+    fn the_scale_decides_the_budget_not_the_logical_size() {
+        let content = rect(3000.0, 2000.0);
+        let own_box = rect(1000.0, 800.0);
+        assert_eq!(surface_within_budget(content, own_box, 1.0), content);
+        assert_eq!(surface_within_budget(content, own_box, 3.0), own_box);
+    }
+
+    #[test]
+    fn a_box_no_smaller_than_its_content_is_not_worth_swapping_in() {
+        let content = rect(6000.0, 6000.0);
+        let own_box = rect(6000.0, 6000.0);
+        assert_eq!(surface_within_budget(content, own_box, 1.0), content);
+    }
+
     #[test]
     fn ensuring_z_order_sorts_changed_keys_and_preserves_ties() {
         let mut values: Vec<_> = (0..96).map(|index| (index % 3, index)).collect();
