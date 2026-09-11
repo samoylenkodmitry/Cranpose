@@ -293,7 +293,13 @@ pub(crate) struct LayerRoundedClip {
 pub(crate) struct BackdropLayer {
     pub node_id: Option<NodeId>,
     pub rect: Rect,
+    /// What the layer paints within: the clips above it and its own.
     pub clip: Option<Rect>,
+    /// What its effect may read: the clip the layer is drawn in, the way a
+    /// list's edge bounds what lies beneath a control inside it. The layer's
+    /// own clip bounds its paint alone, so a control still reads past its
+    /// own edge.
+    pub reach: Option<Rect>,
     pub rounded_clip: Option<LayerRoundedClip>,
     pub snap_anchor: Option<SnapAnchor>,
     pub effect: RenderEffect,

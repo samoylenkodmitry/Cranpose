@@ -4,6 +4,7 @@
 
 - samarch-1 provides Linux/X11 and Android SDK `/home/s/develop/sdk`; macm3 provides Apple toolchains and SDK `~/Library/Android/sdk`.
 - Add `~/.cargo/bin` to noninteractive SSH PATH; inspect remote checkouts because a copied `.git` may point to another host.
+- Write `scp` targets as `host:relative/path`: a `~` in a local variable expands to the local home, and the copy lands on a path the other host does not have; assert `git status` on the host shows the files you changed before a run.
 - Linux runners are `samarch-1-cranpose` and `samarch-1-cranpose-2`; macm3 runners are `dmitriis-mac-Cranpose` and `macm3-cranpose-2`.
 - `mac-idle-Cranpose` is the user's signing Mac and normally stays offline while in use; do not start it for extra CI capacity.
 - Diagnose queued CI from runner `_diag/Runner_*.log` JobDispatcher entries; the jobs API can lag actual execution.

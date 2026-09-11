@@ -424,6 +424,7 @@ fn push_backdrop_layer(
         node_id: layer.node_id,
         rect,
         clip,
+        reach: context.visual_clip,
         rounded_clip,
         snap_anchor,
         effect: effect.clone(),
