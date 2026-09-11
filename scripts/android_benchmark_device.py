@@ -114,6 +114,8 @@ class AndroidDevice:
         if self.ocr is None or self.evidence is None or region is None:
             raise ValueError('Image endpoints require a verified OCR helper, evidence directory and region')
         self.evidence.mkdir(parents=True, exist_ok=True)
+        if image_path is None:
+            self.wake()
         path = image_path or self.evidence / (uuid.uuid4().hex + '.png')
         pixels = screenshot_pixels(path.read_bytes(), region) if image_path else self.screenshot(path, region)
         if pixels['size'] != size:
