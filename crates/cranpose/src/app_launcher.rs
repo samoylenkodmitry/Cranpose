@@ -1028,7 +1028,7 @@ impl AppLauncher {
     ///
     /// * `app` - The `AndroidApp` handle provided by `android_activity`.
     /// * `content` - The root composable function of your application.
-    #[cfg(all(feature = "android", target_os = "android"))]
+    #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
     pub fn run(self, app: android_activity::AndroidApp, content: impl FnMut() + 'static) {
         crate::android::run(app, self.settings, content);
     }
