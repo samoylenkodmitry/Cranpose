@@ -120,16 +120,6 @@ pub const LIQUID_GLASS_SPECIALIZATIONS: &[LiquidGlassSpecialization] = &[
         inactive: |u| slot(u, GLASS_PHYSICAL_REFRACTION_DEPTH_ENABLED_UNIFORM) <= 0.5,
     },
     LiquidGlassSpecialization {
-        flag: "GLASS_FULL_TRANSMISSION",
-        slots: &[GLASS_TRANSMISSION_REFRACTION_UNIFORM],
-        inactive: |u| slot(u, GLASS_TRANSMISSION_REFRACTION_UNIFORM) >= 1.0,
-    },
-    LiquidGlassSpecialization {
-        flag: "GLASS_FULL_ACTIVITY",
-        slots: &[GLASS_ACTIVITY_UNIFORM],
-        inactive: |u| slot(u, GLASS_ACTIVITY_UNIFORM) >= 1.0,
-    },
-    LiquidGlassSpecialization {
         flag: GLASS_DISPERSION_OFF_FLAG,
         slots: &[GLASS_DISPERSION_UNIFORM],
         inactive: |u| slot(u, GLASS_DISPERSION_UNIFORM) <= 0.0,
@@ -693,7 +683,6 @@ mod tests {
                 shader.set_float(GLASS_RIM_STYLE_UNIFORM, rim);
                 specialize_liquid_glass(&mut shader);
                 for (flag, raised) in [
-                    ("GLASS_FULL_ACTIVITY", activity >= 1.0),
                     ("GLASS_ADAPTIVE_FROST_OFF", frost <= 0.0),
                     ("GLASS_RIM_STYLE_OFF", rim <= 0.0),
                 ] {
@@ -716,18 +705,37 @@ mod tests {
         );
     }
 
+    /// A material that animates must not change which pipeline draws it.
+    ///
+    /// A specialization folding on a value an animation *ends* on gives the
+    /// end of every press its own `override` set, and a set nothing has
+    /// compiled is a backend shader compile inside the frame that reaches
+    /// it. `GLASS_FULL_ACTIVITY` and `GLASS_FULL_TRANSMISSION` were exactly
+    /// that: touching a liquid tab built four pipelines and took half a
+    /// second on a backend with no pipeline cache to fall back on. A fold
+    /// that saves ALU only in the frame a person is waiting in is not worth
+    /// having, so these two values carry no fold at all.
     #[test]
-    fn full_activity_specialization_tracks_the_clamped_activity() {
+    fn animating_a_material_end_to_end_asks_for_one_pipeline() {
         let mut shader = RuntimeShader::new(LIQUID_GLASS_WGSL);
-        for activity in [1.0, 0.999_999, 2.0, 0.5, 1.0, 0.0, -1.0, f32::NAN] {
-            shader.set_float(GLASS_ACTIVITY_UNIFORM, activity);
+        let mut sets: Vec<Vec<(&'static str, f64)>> = Vec::new();
+        for step in 0..=40u16 {
+            let value = f32::from(step) / 40.0;
+            shader.set_float(GLASS_ACTIVITY_UNIFORM, value);
+            shader.set_float(GLASS_TRANSMISSION_REFRACTION_UNIFORM, value);
             specialize_liquid_glass(&mut shader);
-            assert_eq!(
-                shader.overrides().contains(&("GLASS_FULL_ACTIVITY", 1.0)),
-                activity >= 1.0,
-                "activity {activity}"
-            );
+            let set = shader.overrides().to_vec();
+            if !sets.contains(&set) {
+                sets.push(set);
+            }
         }
+        assert_eq!(
+            sets.len(),
+            1,
+            "one press walks through {} override sets, and every one of them is a pipeline \
+             the backend compiles inside the frame that first needs it: {sets:?}",
+            sets.len()
+        );
     }
 
     #[test]

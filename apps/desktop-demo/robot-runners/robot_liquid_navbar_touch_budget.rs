@@ -24,23 +24,22 @@ const FRAMES_PER_TOUCH: u32 = 12;
 /// reported against the demo's liquid navbar is several seconds long.
 const FROZEN_FRAME_MS: f32 = 120.0;
 
-/// What touching this bar costs today, and the number this test exists to
-/// drive down.
+/// What touching this bar may compile.
 ///
-/// A settled bar has compiled every pipeline its own picture needs. Touching
-/// it moves a selection, which is not a new shader, so the right number here
-/// is zero. It is eight because pressing a tab raises a liquid material's
-/// activity, `specialize_liquid_glass` folds that material's now-active
-/// features into its own `override` set, and the renderer compiles a
-/// pipeline per set -- interior and rim apart -- inside the frame that first
-/// draws it. On a backend that keeps compiled pipelines across runs that is
-/// paid once per installation; on Metal, which has no such cache, it is paid
-/// again at every launch, at roughly a hundred milliseconds each.
+/// A settled bar has compiled every pipeline its own picture needs, and
+/// moving a selection is not a new shader, so the number to aim at is zero.
+/// Four is what the flight lens costs: the blob that flies between tabs runs
+/// eight features the resting lens has switched off, so it is a different
+/// shader that nothing can build before a selection first moves -- interior
+/// and rim apart, and once per run.
 ///
-/// Holding the line here catches any change that compiles more on touch. The
-/// fix for the cost itself is to build those pipelines away from the frame
-/// that needs them, which lets this become zero.
-const PIPELINES_ALLOWED_ON_TOUCH: u64 = 8;
+/// It was eight until the two folds keyed on an animation's endpoint --
+/// `GLASS_FULL_ACTIVITY` and `GLASS_FULL_TRANSMISSION` -- were taken out of
+/// the glass shader. Those gave the end of every press an `override` set
+/// nothing had compiled, so each touched material compiled again at the
+/// moment a person was waiting: 514 ms for the first touch here, 408 ms for
+/// the second. See `animating_a_material_end_to_end_asks_for_one_pipeline`.
+const PIPELINES_ALLOWED_ON_TOUCH: u64 = 4;
 
 static FAILED: AtomicBool = AtomicBool::new(false);
 
@@ -126,7 +125,7 @@ fn main() -> ExitCode {
                     &FAILED,
                     &format!(
                         "touching the liquid navbar built {compiled_on_touch} pipelines, past \
-                         the {PIPELINES_ALLOWED_ON_TOUCH} it costs today. The bar was resting \
+                         the {PIPELINES_ALLOWED_ON_TOUCH} a touch may build. The bar was resting \
                          and settled first, so every one of these ran the backend's shader \
                          compiler inside the frame that drew the touch, and a person waits \
                          through all of them. Read the [pipeline-create] lines: a run of them \
@@ -148,7 +147,7 @@ fn main() -> ExitCode {
 
             println!(
                 "PASS: touching the liquid navbar built {compiled_on_touch} pipelines, within \
-                 the {PIPELINES_ALLOWED_ON_TOUCH} it costs today, and its worst frame was \
+                 the {PIPELINES_ALLOWED_ON_TOUCH} it may, and its worst frame was \
                  {worst_ms:.1}ms, inside the {FROZEN_FRAME_MS:.0}ms budget"
             );
             robot.exit().expect("exit");

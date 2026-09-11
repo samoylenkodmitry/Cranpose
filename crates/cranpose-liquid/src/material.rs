@@ -1431,10 +1431,6 @@ mod tests {
             );
             assert_eq!(shader.uniforms()[GLASS_ACTIVITY_UNIFORM], activity);
             assert_eq!(
-                shader.overrides().contains(&("GLASS_FULL_ACTIVITY", 1.0)),
-                activity == 1.0
-            );
-            assert_eq!(
                 shader
                     .overrides()
                     .iter()

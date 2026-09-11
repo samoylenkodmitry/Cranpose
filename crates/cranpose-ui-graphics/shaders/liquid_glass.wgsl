@@ -120,7 +120,6 @@ override GLASS_OPTICAL_BLUR_OFF: bool = false;
 override GLASS_SHADOW_OFF: bool = false;
 override GLASS_ZOOM_OFF: bool = false;
 override GLASS_PHYSICAL_REFRACTION_OFF: bool = false;
-override GLASS_FULL_TRANSMISSION: bool = false;
 override GLASS_DISPERSION_OFF: bool = false;
 override GLASS_ADAPTIVE_FROST_OFF: bool = false;
 override GLASS_INK_OFF: bool = false;
@@ -137,7 +136,6 @@ override GLASS_INTERIOR_GUARD: bool = false;
 // 2 for the rim, each pipeline compiled without the other's work and
 // discarding the other's fragments before any fetch; 0 draws it whole.
 override GLASS_RIM_DRAW: i32 = 0;
-override GLASS_FULL_ACTIVITY: bool = false;
 
 fn fixed_or(value: f32, fixed: f32, is_fixed: bool) -> f32 {
     return select(value, fixed, is_fixed);
@@ -697,7 +695,7 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
     let uv = input.uv;
     let map = region_map();
     let tex_size = logical_extent();
-    let material_activity = clamp(fixed_or(get_float(111u), 1.0, GLASS_FULL_ACTIVITY), 0.0, 1.0);
+    let material_activity = clamp(get_float(111u), 0.0, 1.0);
 
     // Effect layer pixel rect injected by the renderer at uniform slot 62
     // (x_offset, y_offset, width, height) in viewport pixels.
@@ -835,7 +833,7 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
     let coverage = select(
         smoothstep(0.0, 1.0, clamp(-d / coverage_ramp, 0.0, 1.0)),
         1.0,
-        GLASS_RIM_DRAW == 1 && GLASS_FULL_ACTIVITY,
+        GLASS_RIM_DRAW == 1 && material_activity >= 1.0,
     );
     let optical_coverage = smoothstep(
         0.0,
@@ -950,7 +948,7 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
     );
     let interior = optical_sample.interior;
 
-    let transmission_refraction = clamp(fixed_or(get_float(96u), 1.0, GLASS_FULL_TRANSMISSION), 0.0, 1.0);
+    let transmission_refraction = clamp(get_float(96u), 0.0, 1.0);
     // Uniform face magnification (uniform 89, dp-free ratio): the riding
     // lens projects its backdrop enlarged across the whole face. Blended by
     // the channel interior so the rim band keeps the wcKSRD edge mapping,
