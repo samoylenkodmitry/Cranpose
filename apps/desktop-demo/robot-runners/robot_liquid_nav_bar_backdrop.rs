@@ -112,8 +112,8 @@ fn main() -> ExitCode {
             robot.exit().expect("exit");
         })
         .try_run(app::combined_app)
-        .map(|()| ExitCode::SUCCESS)
-        .unwrap_or(ExitCode::FAILURE)
+        .expect("launch nav bar backdrop runner");
+    ExitCode::SUCCESS
 }
 
 fn icon_centre_y(title: Bounds, subtitle: Bounds) -> f32 {
