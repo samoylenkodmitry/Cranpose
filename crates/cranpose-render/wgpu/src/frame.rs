@@ -1009,6 +1009,28 @@ fn child_device_placement(
     (dest, clipped.and_then(|rect| rect.intersect(target_rect)))
 }
 
+/// What bounds a child's rendered surface on the page: the child's clip
+/// within the target, and nothing narrower.
+///
+/// Not the child's own box. A surface holds what the child draws outside
+/// itself as well -- the shadow it casts -- and [`child_surface_rect`] sizes
+/// it to cover that. Scissoring the composite to the box instead drops the
+/// ring of shadow around the child, which is a rectangle of missing shadow
+/// exactly where the child sits.
+fn child_surface_bound(
+    child: &ChildLayer,
+    snap: Point,
+    scale: f32,
+    target_rect: DeviceRect,
+) -> Option<DeviceRect> {
+    match child.clip {
+        Some(clip) => {
+            DeviceRect::from_logical(clip.translate(snap.x, snap.y), scale).intersect(target_rect)
+        }
+        None => Some(target_rect),
+    }
+}
+
 /// Whether a child's runtime shader can draw in the final pass over the
 /// child's content: the shader must apply the child's clip and alpha itself
 /// unless the child has neither.
@@ -3197,11 +3219,15 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             }
             None => surface.source.clone(),
         };
+        let bound = child_surface_bound(child, snap, scale, pass.target_rect()).unwrap_or(visible);
         let composite = match surface.grid_dest {
-            Some(dest) => grid_child_composite(child, z, source, dest, snap, scale, visible),
+            Some(dest) => {
+                let visible = dest.intersect(bound).unwrap_or(visible);
+                grid_child_composite(child, z, source, dest, snap, scale, visible)
+            }
             None => {
                 let Some(composite) =
-                    projected_child_composite(child, z, source, &surface, snap, scale, visible)
+                    projected_child_composite(child, z, source, &surface, snap, scale, bound)
                 else {
                     return Ok(());
                 };
