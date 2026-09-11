@@ -1,3 +1,4 @@
+mod liquid_page;
 mod robot_exit;
 mod robot_shot;
 
@@ -5,16 +6,11 @@ use std::{path::PathBuf, process::ExitCode, time::Duration};
 
 use cranpose::{AppLauncher, Robot, RobotScreenshot};
 use cranpose_testing::{find_in_semantics, find_text_exact};
-use desktop_app::app::{
-    self, DemoTab, LIQUID_SCROLL_VIEWPORT_TAG, TEST_ACTIVE_TAB_STATE, TEST_LIQUID_SCROLL_STATE,
-};
+use desktop_app::app::{self, LIQUID_SCROLL_VIEWPORT_TAG};
 
 const WINDOW_WIDTH: u32 = 784;
 const WINDOW_HEIGHT: u32 = 620;
 const SHOT_SCALE: f32 = 2.0;
-const SETTLE_ROUNDS: usize = 6;
-const SETTLE_FRAMES: u32 = 12;
-const SETTLE_MS: u64 = 250;
 const COLLAPSED_OFFSET: f32 = 200.0;
 const CARD_TITLE: &str = "iPadOS";
 const CARD_SUBTITLE: &str = "Unlock the full potential of iPadOS.";
@@ -42,14 +38,11 @@ fn main() -> ExitCode {
         .with_size(WINDOW_WIDTH, WINDOW_HEIGHT)
         .with_fonts(desktop_app::fonts::DEMO_FONTS)
         .with_headless(std::env::var("CRANPOSE_HEADLESS").as_deref() != Ok("0"))
-        .with_robot_app_hook(app_hook)
+        .with_robot_app_hook(liquid_page::app_hook)
         .with_test_driver(move |robot| {
             robot_exit::arm_timeout(120);
             std::thread::sleep(Duration::from_millis(700));
-            robot
-                .invoke_app_hook("set-tab", "liquid")
-                .expect("select the liquid tab");
-            settle(&robot);
+            liquid_page::open(&robot);
 
             let page = find_in_semantics(&robot, |element| {
                 find_text_exact(element, LIQUID_SCROLL_VIEWPORT_TAG)
@@ -61,11 +54,11 @@ fn main() -> ExitCode {
             let icon_y_at_top = icon_centre_y(title, subtitle);
             let icon_left = title.0 - ICON_GAP - ICON_SIZE;
 
-            scroll_to(&robot, COLLAPSED_OFFSET);
+            liquid_page::scroll_to(&robot, COLLAPSED_OFFSET);
             let bar = text_bounds(&robot, BAR_TITLE);
             let bar_centre_y = bar.1 + bar.3 * 0.5;
 
-            scroll_to(&robot, icon_y_at_top - bar_centre_y);
+            liquid_page::scroll_to(&robot, icon_y_at_top - bar_centre_y);
             let landed = icon_centre_y(text_bounds(&robot, CARD_TITLE), subtitle);
             if (landed - bar_centre_y).abs() > LANDING_TOLERANCE {
                 robot_exit::fail(
@@ -130,22 +123,6 @@ fn text_bounds(robot: &Robot, text: &str) -> Bounds {
     bounds
 }
 
-fn scroll_to(robot: &Robot, offset: f32) {
-    let reached = robot
-        .invoke_app_hook("scroll-liquid-to", &offset.to_string())
-        .expect("scroll the liquid page");
-    println!("[nav-bar] scroll to {offset:.1} -> {reached:?}");
-    settle(robot);
-}
-
-fn settle(robot: &Robot) {
-    for _ in 0..SETTLE_ROUNDS {
-        robot.pump_frames(SETTLE_FRAMES).expect("pump frames");
-    }
-    std::thread::sleep(Duration::from_millis(SETTLE_MS));
-    robot.pump_frames(SETTLE_FRAMES).expect("pump frames");
-}
-
 fn mean_luma(shot: &RobotScreenshot, x: f32, y: f32) -> f32 {
     let sample = robot_shot::logical_sampler(shot);
     let mut total = 0.0;
@@ -156,27 +133,4 @@ fn mean_luma(shot: &RobotScreenshot, x: f32, y: f32) -> f32 {
         }
     }
     total / (SAMPLE_WIDTH * SAMPLE_HEIGHT) as f32
-}
-
-fn app_hook(name: String, argument: String) -> Result<Option<String>, String> {
-    match name.as_str() {
-        "set-tab" => {
-            TEST_ACTIVE_TAB_STATE
-                .with(|cell| cell.borrow().as_ref().copied())
-                .ok_or_else(|| "active tab state was not installed".to_string())?
-                .set(DemoTab::Liquid);
-            Ok(None)
-        }
-        "scroll-liquid-to" => {
-            let offset: f32 = argument
-                .parse()
-                .map_err(|err| format!("invalid liquid scroll offset '{argument}': {err}"))?;
-            let scroll = TEST_LIQUID_SCROLL_STATE
-                .with(|cell| *cell.borrow())
-                .ok_or_else(|| "liquid scroll state was not installed".to_string())?;
-            scroll.scroll_to(offset);
-            Ok(Some(scroll.value_non_reactive().to_string()))
-        }
-        other => Err(format!("unsupported robot app hook {other}({argument})")),
-    }
 }
