@@ -169,9 +169,13 @@ pub fn draw_shape_params_for_primitive(
     sink.shape
 }
 
+/// The clip a node paints within once its own clip meets the clips above
+/// it: `None` only when nothing clips at all. Two clips that do not overlap
+/// resolve to [`Rect::EMPTY`], never to `None` -- a list that has scrolled a
+/// control past its edge has clipped the control away, not set it free.
 pub fn resolve_clip(parent_clip: Option<Rect>, requested_clip: Option<Rect>) -> Option<Rect> {
     match (parent_clip, requested_clip) {
-        (Some(parent), Some(current)) => parent.intersect(current),
+        (Some(parent), Some(current)) => Some(parent.intersect(current).unwrap_or(Rect::EMPTY)),
         (Some(parent), None) => Some(parent),
         (None, Some(current)) => Some(current),
         (None, None) => None,
@@ -488,6 +492,37 @@ mod tests {
     use cranpose_ui_graphics::{Brush, Color, CornerRadii};
 
     use super::*;
+
+    #[test]
+    fn resolve_clip_keeps_a_clip_that_meets_nothing() {
+        let list = Rect {
+            x: 0.0,
+            y: 80.0,
+            width: 200.0,
+            height: 120.0,
+        };
+        let scrolled_out = Rect {
+            x: 40.0,
+            y: -60.0,
+            width: 120.0,
+            height: 120.0,
+        };
+        let shown = Rect {
+            x: 40.0,
+            y: 90.0,
+            width: 120.0,
+            height: 120.0,
+        };
+
+        assert_eq!(
+            resolve_clip(Some(list), Some(scrolled_out)),
+            Some(Rect::EMPTY)
+        );
+        assert_eq!(resolve_clip(Some(list), Some(shown)), list.intersect(shown));
+        assert_eq!(resolve_clip(Some(list), None), Some(list));
+        assert_eq!(resolve_clip(None, Some(shown)), Some(shown));
+        assert_eq!(resolve_clip(None, None), None);
+    }
 
     #[test]
     fn draw_shape_params_for_primitive_returns_transformed_rect_shape() {

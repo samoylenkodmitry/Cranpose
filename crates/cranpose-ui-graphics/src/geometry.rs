@@ -133,6 +133,16 @@ pub struct Rect {
 }
 
 impl Rect {
+    /// The rect that holds nothing: what two clips that do not overlap
+    /// resolve to, so a clip that meets nothing stays a clip instead of
+    /// lifting.
+    pub const EMPTY: Rect = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 0.0,
+        height: 0.0,
+    };
+
     pub fn from_origin_size(origin: Point, size: Size) -> Self {
         Self {
             x: origin.x,
@@ -162,6 +172,11 @@ impl Rect {
 
     pub fn contains(&self, x: f32, y: f32) -> bool {
         x >= self.x && y >= self.y && x <= self.x + self.width && y <= self.y + self.height
+    }
+
+    /// Whether the rect covers no area, so nothing clipped to it can paint.
+    pub fn is_empty(&self) -> bool {
+        self.width <= 0.0 || self.height <= 0.0
     }
 
     /// Returns the intersection of two rectangles, or `None` if they don't overlap.
@@ -1996,6 +2011,38 @@ mod tests {
             }
             other => panic!("expected blended circle primitive, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn rect_is_empty_without_area() {
+        assert!(Rect::EMPTY.is_empty());
+        assert!(
+            Rect {
+                x: 4.0,
+                y: 5.0,
+                width: 0.0,
+                height: 6.0,
+            }
+            .is_empty()
+        );
+        assert!(
+            Rect {
+                x: 4.0,
+                y: 5.0,
+                width: 6.0,
+                height: -1.0,
+            }
+            .is_empty()
+        );
+        assert!(
+            !Rect {
+                x: 4.0,
+                y: 5.0,
+                width: 0.5,
+                height: 0.5,
+            }
+            .is_empty()
+        );
     }
 
     #[test]

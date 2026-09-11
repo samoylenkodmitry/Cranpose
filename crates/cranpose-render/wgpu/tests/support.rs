@@ -612,6 +612,74 @@ pub fn page_graph(width: u32, height: u32, children: Vec<RenderNode>) -> RenderG
     RenderGraph::new(layer_node(None, width as f32, height as f32, children))
 }
 
+/// A clipped band across the lower part of a square frame holding one child
+/// placed the way the graph builder places a `graphics_layer` node: a list
+/// item at the list's top edge, with the frame's top rows standing in for
+/// whatever sits above the list.
+pub mod clip_band {
+    use cranpose_render_common::layer_transform::layer_transform_to_parent;
+    use cranpose_ui_graphics::GraphicsLayer;
+
+    use super::*;
+
+    pub const FRAME: u32 = 200;
+    /// The band covers the frame below this row.
+    pub const CLIP_TOP: usize = 80;
+    pub const CHILD: Rect = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 120.0,
+        height: 120.0,
+    };
+
+    pub fn page(layer: GraphicsLayer, placement: Point, children: Vec<RenderNode>) -> RenderGraph {
+        let child = LayerNode {
+            local_bounds: CHILD,
+            transform_to_parent: layer_transform_to_parent(CHILD, placement, &layer),
+            graphics_layer: layer,
+            children,
+            ..Default::default()
+        };
+        let band = LayerNode {
+            local_bounds: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: FRAME as f32,
+                height: FRAME as f32 - CLIP_TOP as f32,
+            },
+            transform_to_parent: ProjectiveTransform::translation(0.0, CLIP_TOP as f32),
+            graphics_layer: GraphicsLayer {
+                clip: true,
+                ..GraphicsLayer::default()
+            },
+            children: vec![RenderNode::Layer(std::boxed::Box::new(child))],
+            ..Default::default()
+        };
+        page_graph(
+            FRAME,
+            FRAME,
+            vec![RenderNode::Layer(std::boxed::Box::new(band))],
+        )
+    }
+
+    /// Red pixels above and inside the band.
+    pub fn red_pixels(pixels: &[u8]) -> (usize, usize) {
+        pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .enumerate()
+            .filter(|(_, px)| px[0] > 160 && px[1] < 90 && px[2] < 90)
+            .fold((0, 0), |(above, inside), (index, _)| {
+                if (index / FRAME as usize) < CLIP_TOP {
+                    (above + 1, inside)
+                } else {
+                    (above, inside + 1)
+                }
+            })
+    }
+}
+
 /// Renders `graph` through the renderer and captures a frame of the given size.
 pub fn capture_graph(
     renderer: &mut LockedRenderer,
