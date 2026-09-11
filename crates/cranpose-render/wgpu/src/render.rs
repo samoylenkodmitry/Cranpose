@@ -379,6 +379,15 @@ impl DeviceErrorSentry {
     }
 }
 
+/// The blend modes a shape pipeline is built for.
+///
+/// `supported_blend_mode` folds every other mode onto `SrcOver`, so these
+/// three over the two run tiers are the whole general pipeline space, and
+/// `ShapePipelines` builds all six when the renderer starts rather than
+/// inside the first frame that needs one.
+pub(crate) const SUPPORTED_BLEND_MODES: [BlendMode; 3] =
+    [BlendMode::Src, BlendMode::SrcOver, BlendMode::DstOut];
+
 fn is_blend_mode_supported(mode: BlendMode) -> bool {
     matches!(
         mode,
@@ -894,9 +903,43 @@ pub(crate) fn create_render_pipeline_logged<'a>(
         "[pipeline-create] {tag} {:.1}ms",
         instant_ms(started, Instant::now())
     );
-    #[cfg(not(target_arch = "wasm32"))]
-    crate::pipeline_disk_cache::note_pipeline_created();
+    if OFF_FRAME_BUILDS.with(std::cell::Cell::get) {
+        PIPELINES_CREATED_OFF_FRAME.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    } else {
+        PIPELINES_CREATED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
     pipeline
+}
+
+/// Pipelines this process has built on a thread that draws.
+///
+/// A build runs the backend's shader compiler, and whoever asks for one while
+/// drawing waits for it there. A count that grows across an interaction names
+/// work a person waited on, whatever the driver's own caches made a compile
+/// cost on this machine. Builds handed to [`crate::pipeline_compiler`] are
+/// counted apart, by [`pipelines_created_off_frame`]: they cost a frame
+/// nothing.
+static PIPELINES_CREATED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static PIPELINES_CREATED_OFF_FRAME: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+thread_local! {
+    static OFF_FRAME_BUILDS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Declares that pipelines built on this thread are built away from any
+/// frame. The compiler thread says so once, when it starts.
+pub(crate) fn mark_thread_off_frame() {
+    OFF_FRAME_BUILDS.with(|off_frame| off_frame.set(true));
+}
+
+pub fn pipelines_created() -> u64 {
+    PIPELINES_CREATED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Pipelines built away from every frame, on the compiler thread.
+pub fn pipelines_created_off_frame() -> u64 {
+    PIPELINES_CREATED_OFF_FRAME.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Which tier's tables a shape pipeline reads: a stored run under the

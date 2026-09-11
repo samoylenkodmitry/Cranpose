@@ -595,6 +595,18 @@ mod web_drop;
 /// Development frame pacing and FPS statistics types.
 #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
 pub use cranpose_app_shell::{DevOptions, FpsStats, FramePacingMode};
+/// Pipelines the renderer has built since this process started.
+///
+/// Every one of these ran the backend's shader compiler. A robot test that
+/// watches this across an interaction is asserting that the interaction
+/// compiled nothing, which holds whatever the driver's own caches made a
+/// compile cost on the machine running it.
+#[cfg(all(
+    feature = "desktop-shell",
+    feature = "robot",
+    feature = "renderer-wgpu"
+))]
+pub use cranpose_render_wgpu::{pipelines_created, pipelines_created_off_frame};
 #[cfg(all(
     feature = "desktop-shell",
     feature = "robot",

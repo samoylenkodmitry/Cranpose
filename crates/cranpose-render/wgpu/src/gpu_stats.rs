@@ -124,6 +124,10 @@ pub struct FrameStatsSnapshot {
     pub shape_pipeline_fallback_draws: u32,
     /// Shape draws using a completed specialized pipeline.
     pub shape_specialized_draws: u32,
+    /// Pipelines this process has built, counted since it started rather than
+    /// over the frame. A count that grows while a person is interacting names
+    /// a backend shader compile they waited through.
+    pub pipelines_created: u64,
     pub image_passes: u32,
     pub text_passes: u32,
     /// Shape, image, glyph and composite draws recorded this frame. The
@@ -756,6 +760,7 @@ impl FrameStats {
             shape_passes: self.shape_passes.get(),
             shape_pipeline_fallback_draws: self.shape_pipeline_fallback_draws.get(),
             shape_specialized_draws: self.shape_specialized_draws.get(),
+            pipelines_created: crate::render::pipelines_created(),
             image_passes: self.image_passes.get(),
             text_passes: self.text_passes.get(),
             draw_calls: self.draw_calls.get(),

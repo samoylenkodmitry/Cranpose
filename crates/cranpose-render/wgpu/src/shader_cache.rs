@@ -182,7 +182,17 @@ impl ShaderPipelineCache {
             crate::render::create_fullscreen_strip_pipeline(
                 device,
                 self.pipeline_cache.as_ref(),
-                &format!("runtime-shader mode={mode:?} variant={variant:?}"),
+                // The key, not just the shape of it: a run of builds that
+                // differ only in `overrides` is one pipeline per material,
+                // and each one is a backend shader compile inside the frame
+                // that first drew that material.
+                &format!(
+                    "runtime-shader mode={mode:?} variant={variant:?} \
+                     source={source_hash:016x} overrides={overrides_hash:016x} \
+                     forced={:016x} constants={}",
+                    self.forced_hash,
+                    constants.len(),
+                ),
                 "RuntimeShader Effect Pipeline",
                 &pipeline_layout,
                 &shader_module,

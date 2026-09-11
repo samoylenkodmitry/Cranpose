@@ -71,7 +71,7 @@ use present_runtime::{
     PresentControl, PresentHandle, PresentMsg, PresentRuntimeInit, PresentState,
 };
 use render::GpuRenderer;
-pub use render::frames_presented;
+pub use render::{frames_presented, pipelines_created, pipelines_created_off_frame};
 pub use scene::{ClickAction, HitRegion, Scene};
 
 /// The optional device features the renderer exploits when the adapter

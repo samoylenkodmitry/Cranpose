@@ -59,15 +59,36 @@ impl ShapePipelines {
             #[cfg(not(target_arch = "wasm32"))]
             compiler,
         };
-        if pipelines.asynchronous() {
+        pipelines.prewarm_general();
+        pipelines
+    }
+
+    /// Builds every general pipeline before the first frame.
+    ///
+    /// A pipeline built on demand is built inside the frame that first needs
+    /// it, and the driver's compile lands as a stall the user sees while
+    /// scrolling. The general space is small and fully known --
+    /// `SUPPORTED_BLEND_MODES` over both run tiers, six in all -- so there is
+    /// nothing to gain by waiting: a scene that never draws `DstOut` pays for
+    /// two pipelines it does not use, and one that does pays for them at
+    /// startup instead of mid-scroll.
+    ///
+    /// Only the general variants. Specialized ones are unbounded in principle
+    /// and the background compiler already keeps them off the frame where it
+    /// runs; where it does not, `get` falls back to the general pipeline,
+    /// which is why every one of these has to exist before any draw.
+    fn prewarm_general(&mut self) {
+        let started = web_time::Instant::now();
+        for blend_mode in crate::render::SUPPORTED_BLEND_MODES {
             for tier in [crate::render::RunTier::Store, crate::render::RunTier::Arena] {
-                pipelines.ensure_general(ShapePipelineKey::general_for(
-                    cranpose_ui_graphics::BlendMode::SrcOver,
-                    tier,
-                ));
+                self.ensure_general(ShapePipelineKey::general_for(blend_mode, tier));
             }
         }
-        pipelines
+        log::info!(
+            "[gpu-init] {} general shape pipelines ready in {:.1} ms",
+            self.ready.len(),
+            crate::render::instant_ms(started, web_time::Instant::now()),
+        );
     }
 
     fn asynchronous(&self) -> bool {
@@ -153,6 +174,7 @@ mod background {
             std::thread::Builder::new()
                 .name("cranpose-shape-compiler".into())
                 .spawn(move || {
+                    crate::render::mark_thread_off_frame();
                     while let Ok(key) = requested.recv() {
                         if worker_stopped.load(Ordering::Acquire) {
                             break;
@@ -263,5 +285,58 @@ mod background {
             assert_eq!(published, [(expected, BlendMode::DstOut)]);
             assert!(compiler.pending.is_empty());
         }
+    }
+}
+
+#[cfg(test)]
+mod prewarm_tests {
+    use cranpose_ui_graphics::BlendMode;
+
+    use crate::render::{RunTier, SUPPORTED_BLEND_MODES, ShapePipelineKey, supported_blend_mode};
+
+    fn prewarmed() -> Vec<ShapePipelineKey> {
+        let mut keys = Vec::new();
+        for blend_mode in SUPPORTED_BLEND_MODES {
+            for tier in [RunTier::Store, RunTier::Arena] {
+                keys.push(ShapePipelineKey::general_for(blend_mode, tier));
+            }
+        }
+        keys
+    }
+
+    #[test]
+    fn every_blend_mode_a_scene_can_ask_for_is_prewarmed() {
+        let ready = prewarmed();
+        for mode in BlendMode::ALL {
+            for tier in [RunTier::Store, RunTier::Arena] {
+                let key = ShapePipelineKey::general_for(supported_blend_mode(mode), tier);
+                assert!(
+                    ready.contains(&key),
+                    "{mode:?} resolves to a general pipeline no one built at startup, so the \
+                     first draw using it compiles inside its own frame"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_prewarmed_set_is_the_whole_general_space() {
+        let ready = prewarmed();
+        assert_eq!(ready.len(), SUPPORTED_BLEND_MODES.len() * 2);
+        assert!(ready.iter().all(|key| key.is_general()));
+        let mut unique = ready.clone();
+        unique.dedup();
+        assert_eq!(unique.len(), ready.len(), "a pipeline built twice");
+    }
+
+    #[test]
+    fn an_unsupported_mode_folds_onto_one_that_is_built() {
+        assert_eq!(
+            supported_blend_mode(BlendMode::Multiply),
+            BlendMode::SrcOver
+        );
+        assert_eq!(supported_blend_mode(BlendMode::Clear), BlendMode::SrcOver);
+        assert_eq!(supported_blend_mode(BlendMode::Src), BlendMode::Src);
+        assert_eq!(supported_blend_mode(BlendMode::DstOut), BlendMode::DstOut);
     }
 }
