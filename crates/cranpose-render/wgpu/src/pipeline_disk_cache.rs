@@ -1,6 +1,9 @@
 use std::{
     path::{Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        OnceLock,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use web_time::Instant;
@@ -13,13 +16,26 @@ fn disk_cache_enabled() -> bool {
     !DISK_CACHE.equals("0")
 }
 
+static HOST_FILE: OnceLock<PathBuf> = OnceLock::new();
+
+/// Names the file the driver's compiled pipelines are kept in between runs.
+///
+/// This crate renders and does not know where an application may write, so the
+/// platform backend passes the path in once, before the first device is
+/// created. Without it the cache lives and dies with the process, and every
+/// launch pays the driver's compile again. A later call is ignored: the
+/// loaded blob and the watcher that writes it back must name one file.
+pub fn set_file_path(path: PathBuf) {
+    let _ = HOST_FILE.set(path);
+}
+
 pub(crate) fn file_path() -> Option<PathBuf> {
     if !disk_cache_enabled() {
         return None;
     }
     match crate::debug_toggles::debug_toggle_os("CRANPOSE_PIPELINE_CACHE_FILE") {
         Some(path) if !path.is_empty() => Some(PathBuf::from(path)),
-        _ => None,
+        _ => HOST_FILE.get().cloned(),
     }
 }
 

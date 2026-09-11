@@ -102,6 +102,7 @@ pub(crate) fn install(app: android_activity::AndroidApp) {
         log::warn!("cranpose: the Android package name is not a usable application id: {error}");
     }
     set_host_controller(Arc::new(AndroidHost { app }));
+    crate::pipeline_cache_file::publish();
 }
 
 #[unsafe(no_mangle)]

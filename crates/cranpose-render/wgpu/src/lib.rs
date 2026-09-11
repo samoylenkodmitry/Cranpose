@@ -32,7 +32,7 @@ mod output_conversion;
 pub(crate) mod pass_timing;
 mod pipeline;
 #[cfg(not(target_arch = "wasm32"))]
-mod pipeline_disk_cache;
+pub mod pipeline_disk_cache;
 #[cfg(not(target_arch = "wasm32"))]
 mod present_runtime;
 mod record_columns;
