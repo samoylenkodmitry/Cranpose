@@ -37,7 +37,7 @@ mod tests {
             config: PathBuf::from("/config/com.example.app"),
             cache: PathBuf::from("/cache/com.example.app"),
             documents: None,
-            temporary: PathBuf::from("/tmp/com.example.app"),
+            temporary: PathBuf::from("/temporary/com.example.app"),
             shared: None,
         }
     }
