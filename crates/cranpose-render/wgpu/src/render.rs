@@ -929,6 +929,7 @@ thread_local! {
 
 /// Declares that pipelines built on this thread are built away from any
 /// frame. The compiler thread says so once, when it starts.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn mark_thread_off_frame() {
     OFF_FRAME_BUILDS.with(|off_frame| off_frame.set(true));
 }
