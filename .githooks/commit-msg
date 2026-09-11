@@ -1,0 +1,16 @@
+#!/bin/sh
+# `release: vX.Y.Z` is publish.yml's own commit, not a person's. The workflow
+# writes it with `[skip ci]` so no run ever sees the tree where the workspace
+# already carries the new version and `apps/isolated-demo` still pins the
+# previous one; a hand-written one carries no such marker and reddens the
+# version gate, the quality-gate diff test and the workspace tests at once.
+# See docs/release.md. Install once per clone with `just hooks`.
+if grep -qiE '^release:[[:space:]]*v?[0-9]+\.[0-9]+\.[0-9]+' "$1"; then
+    if ! grep -qF '[skip ci]' "$1"; then
+        echo "commit-msg: 'release: vX.Y.Z' is publish.yml's commit, not yours." >&2
+        echo "  A release is a bare v* tag at green main; sync_versions writes" >&2
+        echo "  the bump itself. See docs/release.md." >&2
+        exit 1
+    fi
+fi
+exit 0
