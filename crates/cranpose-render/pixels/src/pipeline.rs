@@ -823,7 +823,7 @@ fn populate_draws_from_graph(
         }
     });
 
-    if content_clip_to_bounds && visual_clip.is_none() {
+    if visual_clip.is_some_and(|clip| clip.is_empty()) {
         return;
     }
 
@@ -951,7 +951,7 @@ fn render_graph_primitive(
                 context.visual_clip,
                 PrimitiveClipSpace::LayerTransformed,
             );
-            if draw.clip.is_some() && effective_clip.is_none() {
+            if effective_clip.is_some_and(|clip| clip.is_empty()) {
                 return;
             }
             push_draw_primitive(
@@ -998,7 +998,7 @@ fn render_graph_text(
         visual_clip,
         PrimitiveClipSpace::LayerTransformed,
     );
-    if text.clip.is_some() && text_clip.is_none() {
+    if text_clip.is_some_and(|clip| clip.is_empty()) {
         return;
     }
 
@@ -1674,6 +1674,63 @@ mod tests {
         assert_eq!(
             scene.texts[0].snap_anchor, expected_anchor,
             "rested scroll text should snap back to device pixels"
+        );
+    }
+
+    fn clipped_layer(placement: Point, children: Vec<RenderNode>) -> LayerNode {
+        LayerNode {
+            local_bounds: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 120.0,
+                height: 120.0,
+            },
+            transform_to_parent: ProjectiveTransform::translation(placement.x, placement.y),
+            clip_to_bounds: true,
+            children,
+            ..Default::default()
+        }
+    }
+
+    fn red_fill() -> RenderNode {
+        RenderNode::Primitive(PrimitiveEntry {
+            phase: PrimitivePhase::BeforeChildren,
+            node: PrimitiveNode::Draw(DrawPrimitiveNode {
+                primitive: DrawPrimitive::Rect {
+                    rect: Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: 120.0,
+                        height: 120.0,
+                    },
+                    brush: Brush::solid(Color(0.86, 0.12, 0.12, 1.0)),
+                    stroke: None,
+                },
+                clip: None,
+            }),
+        })
+    }
+
+    fn shapes_in_list(child: LayerNode) -> usize {
+        let mut list = clipped_layer(Point::new(0.0, 80.0), vec![]);
+        list.local_bounds.width = 200.0;
+        list.children.push(RenderNode::Layer(Box::new(child)));
+        build_raster_scene_for_test(&RenderGraph::new(list))
+            .shapes
+            .len()
+    }
+
+    #[test]
+    fn a_layer_clipped_away_by_its_parent_paints_nothing() {
+        let shown = shapes_in_list(clipped_layer(Point::new(40.0, 10.0), vec![red_fill()]));
+        assert_eq!(shown, 1, "the fill must paint while its layer is on show");
+
+        let scrolled_out =
+            shapes_in_list(clipped_layer(Point::new(40.0, -140.0), vec![red_fill()]));
+        assert_eq!(
+            scrolled_out, 0,
+            "a layer the list has scrolled past its edge lies outside the list's clip and \
+             paints nothing, however far inside the window it sits"
         );
     }
 
