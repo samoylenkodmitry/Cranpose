@@ -2,17 +2,14 @@ use std::{cell::RefCell, rc::Rc};
 
 use cranpose_macros::composable;
 use cranpose_ui::{
-    Modifier, ScrollState,
+    Dp, Modifier, ScrollState,
     text::{SpanStyle, TextStyle},
     widgets::{Box, BoxSpec, Row, RowSpec, Text},
 };
-use cranpose_ui_graphics::GraphicsLayer;
+use cranpose_ui_graphics::{Brush, GradientBlurDirection, GraphicsLayer};
 use cranpose_ui_layout::{Alignment, VerticalAlignment};
 
-use crate::{
-    material::{Glass, GlassDynamics, LiquidModifierExt, LiquidShape},
-    theme::{liquid_colors, liquid_typography},
-};
+use crate::theme::{liquid_colors, liquid_typography};
 
 /// Configuration for [`LiquidNavBar`].
 #[derive(Clone, Debug, PartialEq)]
@@ -33,6 +30,10 @@ impl LiquidNavBarSpec {
 
 const BAR_HEIGHT: f32 = 52.0;
 const LARGE_TITLE_HEIGHT: f32 = 52.0;
+const BAND_BLUR_TOP_DP: f32 = 18.0;
+const BAND_BLUR_BOTTOM_DP: f32 = 0.35;
+const SCRIM_TOP_ALPHA: f32 = 0.82;
+const SCRIM_MIDDLE_ALPHA: f32 = 0.40;
 
 /// A large-title navigation bar driven by the content's [`ScrollState`]
 /// (offset 0 = top). `leading`/`trailing` compose the bar buttons.
@@ -40,11 +41,15 @@ const LARGE_TITLE_HEIGHT: f32 = 52.0;
 /// The bar installs a settle policy on the scroll so it can never rest inside
 /// the large-title collapse band — releasing (or wheel-idling) mid-band snaps
 /// to fully expanded or fully collapsed, exactly like `UINavigationBar`. The
-/// large title composes UNDER the glass band, so mid-collapse it slides
-/// beneath the frost instead of floating readable next to the inline title.
+/// large title composes UNDER the band, so mid-collapse it slides beneath
+/// the blur instead of floating readable next to the inline title.
 ///
-/// Place the bar *after* the scrolling content inside a `Box` so its glass
-/// samples the content sliding underneath.
+/// The band is the crown the showcase and cranscan headers wear: a gradient
+/// blur, frosted at the top edge and sharp where the content emerges, under
+/// a scrim of the background colour, both fading in with the collapse.
+///
+/// Place the bar *after* the scrolling content inside a `Box` so its blur
+/// reads the content sliding underneath.
 #[composable]
 #[allow(non_snake_case)]
 pub fn LiquidNavBar(
@@ -98,24 +103,26 @@ pub fn LiquidNavBar(
             );
         }
 
+        let background = colors.background;
         let band = Modifier::empty()
             .fill_max_width()
             .height(BAR_HEIGHT)
-            .glass_effect_with(
-                Glass::regular()
-                    .shape(LiquidShape::RoundedRect(0.0))
-                    .blur_radius(30.0)
-                    .saturation(1.15)
-                    .refraction_depth(0.0)
-                    .transmission_refraction(0.0)
-                    .highlight(0.18)
-                    .adaptive_frost(colors.label, 0.75)
-                    .shadow(false),
-                move || GlassDynamics {
-                    activity: Some(progress),
-                    ..Default::default()
-                },
-            );
+            .backdrop_gradient_blur(
+                Dp(BAND_BLUR_TOP_DP * progress),
+                Dp(BAND_BLUR_BOTTOM_DP * progress),
+                GradientBlurDirection::TopToBottom,
+            )
+            .draw_behind(move |scope| {
+                scope.draw_rect(Brush::vertical_gradient(
+                    vec![
+                        background.with_alpha(SCRIM_TOP_ALPHA * progress),
+                        background.with_alpha(SCRIM_MIDDLE_ALPHA * progress),
+                        background.with_alpha(0.0),
+                    ],
+                    0.0,
+                    scope.size().height,
+                ));
+            });
         Box(band, BoxSpec::default(), || {});
 
         let inline_alpha = ((progress - 0.5) * 2.0).clamp(0.0, 1.0);

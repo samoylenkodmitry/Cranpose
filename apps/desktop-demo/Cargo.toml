@@ -294,6 +294,11 @@ path = "robot-runners/robot_liquid_bar_alignment.rs"
 required-features = ["robot-app"]
 
 [[example]]
+name = "robot_liquid_nav_bar_backdrop"
+path = "robot-runners/robot_liquid_nav_bar_backdrop.rs"
+required-features = ["robot-app"]
+
+[[example]]
 name = "robot_double_click"
 path = "robot-runners/robot_double_click.rs"
 required-features = ["robot-app"]
