@@ -5,7 +5,7 @@ use std::{cell::RefCell, rc::Rc};
 use cranpose_foundation::lazy::LazyItems;
 use cranpose_render_common::{
     HitTestTarget, RenderScene,
-    graph::{LayerNode, PrimitiveNode, ProjectiveTransform, RenderNode},
+    graph::{LayerNode, ProjectiveTransform, RenderNode},
     graph_scene::Scene,
     hit_graph::collect_hits_from_graph,
     scene_builder::build_graph_from_applier,
@@ -22,6 +22,10 @@ use cranpose_ui::{
     },
 };
 
+mod scene_probe;
+
+use scene_probe::painted_text;
+
 const WATCH: f32 = 454.0;
 
 const ROWS: [&str; 6] = ["Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot"];
@@ -30,20 +34,6 @@ fn colors() -> WearColors {
     WearColors {
         content: Color::WHITE,
         ..WearColors::default()
-    }
-}
-
-fn painted_text(layer: &LayerNode, out: &mut Vec<String>) {
-    for child in &layer.children {
-        match child {
-            RenderNode::Primitive(primitive) => {
-                if let PrimitiveNode::Text(text) = &primitive.node {
-                    out.push(text.text.text.clone());
-                }
-            }
-            RenderNode::Layer(child) => painted_text(child, out),
-            RenderNode::DrawRun(_) => {}
-        }
     }
 }
 
