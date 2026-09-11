@@ -851,9 +851,14 @@ fn plan_backdrop(
         None => None,
     };
     let padding = (backdrop.effect.input_padding() + backdrop.effect.output_padding()) * scale;
+    let reach = match backdrop.reach {
+        Some(reach) => DeviceRect::from_logical(reach.translate(snap.x, snap.y), scale)
+            .intersect(target_rect)?,
+        None => target_rect,
+    };
     let capture_rect = visible
         .expand(padding.ceil())
-        .intersect(target_rect)
+        .intersect(reach)
         .unwrap_or(visible)
         .snap_out();
     Some(PendingBackdrop {
@@ -3945,6 +3950,55 @@ mod tests {
     }
 
     #[test]
+    fn a_backdrop_captures_no_further_than_the_clip_it_is_drawn_in() {
+        let mut shader = RuntimeShader::new("fn glass_fs() {}");
+        shader.set_input_padding(30.0);
+        let rect = Rect {
+            x: 20.0,
+            y: 96.0,
+            width: 160.0,
+            height: 52.0,
+        };
+        let list = Rect {
+            x: 20.0,
+            y: 96.0,
+            width: 160.0,
+            height: 300.0,
+        };
+        let target = DeviceRect {
+            x: 0.0,
+            y: 0.0,
+            width: 400.0,
+            height: 800.0,
+        };
+        let layer = BackdropLayer {
+            node_id: None,
+            rect,
+            clip: Some(rect),
+            reach: Some(list),
+            rounded_clip: None,
+            snap_anchor: None,
+            effect: RenderEffect::runtime_shader(shader),
+            z_index: 0,
+        };
+        let planned = plan_backdrop(&layer, 0, 2.0, target).expect("the backdrop is on the target");
+        assert_eq!(
+            planned.capture_rect,
+            DeviceRect::from_logical(
+                Rect {
+                    x: 20.0,
+                    y: 96.0,
+                    width: 160.0,
+                    height: 82.0,
+                },
+                2.0,
+            ),
+            "the capture stops at the list's top and sides and reads the padding below, \
+             where the list goes on"
+        );
+    }
+
+    #[test]
     fn a_backdrop_keeps_its_capture_and_records_the_part_of_it_inside_the_effects_output_support() {
         let mut shader = RuntimeShader::new("fn glass_fs() {}");
         shader.set_input_padding(2.0);
@@ -3966,6 +4020,7 @@ mod tests {
                 node_id: None,
                 rect,
                 clip: None,
+                reach: None,
                 rounded_clip: None,
                 snap_anchor: None,
                 effect: RenderEffect::runtime_shader(shader),

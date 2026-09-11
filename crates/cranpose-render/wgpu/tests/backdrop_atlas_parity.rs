@@ -255,6 +255,57 @@ fn active_glass(activity: f32, rim_style: f32, specialized: bool) -> RenderEffec
     RenderEffect::blur(BLUR_RADIUS).then(RenderEffect::runtime_shader(shader))
 }
 
+/// The number of glass pipelines does not depend on how many materials are
+/// on screen.
+///
+/// Per-material folds give every distinct feature set its own pipeline, and
+/// each is a backend shader compile inside the frame that first draws it.
+/// With folds off -- the shipped default off Android -- six materials with
+/// six different uniform sets draw from the pipelines the first one built,
+/// like `controls.wgsl` always has. With folds on the same six materials
+/// compile more, which is what the count is watching for.
+#[test]
+fn materials_with_different_uniforms_share_one_pipeline_without_folds() {
+    let mut renderer = support::headless_renderer().expect("headless renderer");
+    let materials = [
+        (0.0, 0.0),
+        (0.25, 1.0),
+        (0.5, 0.0),
+        (0.75, 1.0),
+        (1.0, 0.0),
+        (1.0, 1.0),
+    ];
+    let page = |materials: &[(f32, f32)]| {
+        let mut children = striped_page();
+        for (index, &(activity, rim_style)) in materials.iter().enumerate() {
+            children.push(glass_layer(index, active_glass(activity, rim_style, true)));
+        }
+        support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children)
+    };
+
+    cranpose_ui_graphics::set_glass_material_folds(false);
+    let _ = capture(&mut renderer, page(&materials[..1]));
+    let built = cranpose_render_wgpu::pipelines_created();
+    let _ = capture(&mut renderer, page(&materials));
+    let plain = cranpose_render_wgpu::pipelines_created() - built;
+
+    cranpose_ui_graphics::set_glass_material_folds(true);
+    let built = cranpose_render_wgpu::pipelines_created();
+    let _ = capture(&mut renderer, page(&materials));
+    let folded = cranpose_render_wgpu::pipelines_created() - built;
+
+    assert_eq!(
+        plain, 0,
+        "six materials compiled {plain} pipelines beyond the first one's; a material must \
+         change uniforms, not shaders"
+    );
+    assert!(
+        folded > 0,
+        "with folds on the same six materials compiled nothing new, so this count is not \
+         seeing the pipelines the folds create"
+    );
+}
+
 #[test]
 fn split_glass_preserves_resting_partial_and_full_activity() {
     let mut renderer = support::headless_renderer().expect("headless renderer");

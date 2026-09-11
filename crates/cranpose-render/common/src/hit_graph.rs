@@ -98,10 +98,11 @@ fn collect_hits_from_graph_inner<S: HitGraphSink>(
     if let Some(local_clip) = layer.clip_rect() {
         let clip_quad = transform.map_rect(local_clip);
         let clip_bounds = quad_bounds(clip_quad);
-        let Some(resolved_clip_bounds) = resolve_clip(parent_hit_clip, Some(clip_bounds)) else {
+        let resolved_clip_bounds = resolve_clip(parent_hit_clip, Some(clip_bounds));
+        if resolved_clip_bounds.is_some_and(|clip| clip.is_empty()) {
             return;
-        };
-        hit_clip_bounds = Some(resolved_clip_bounds);
+        }
+        hit_clip_bounds = resolved_clip_bounds;
         hit_clips.push(HitClip {
             quad: clip_quad,
             bounds: clip_bounds,
@@ -250,6 +251,25 @@ mod tests {
         );
         assert_eq!(*clip, Some(*rect));
         assert_eq!(*clip_count, 1);
+    }
+
+    #[test]
+    fn a_child_clipped_away_by_its_parent_takes_no_hits() {
+        let mut list = test_layer(1, ProjectiveTransform::translation(0.0, 80.0));
+        let scrolled_out = test_layer(2, ProjectiveTransform::translation(4.0, -40.0));
+        list.children
+            .push(RenderNode::Layer(Box::new(scrolled_out)));
+        let mut sink = TestSink::default();
+
+        collect_hits_from_graph(&list, ProjectiveTransform::identity(), &mut sink, None);
+
+        let hit_ids: Vec<NodeId> = sink.hits.iter().map(|hit| hit.0).collect();
+        assert_eq!(
+            hit_ids,
+            vec![1],
+            "a child the list has scrolled past its edge lies outside the list's clip and \
+             takes no hits, however far inside the window it sits"
+        );
     }
 
     #[test]

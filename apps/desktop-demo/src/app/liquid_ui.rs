@@ -1948,6 +1948,7 @@ pub fn LiquidUiTab() {
                         config.content_description = Some(LIQUID_SCROLL_VIEWPORT_TAG.to_string());
                     })
                     .fill_max_size()
+                    .clip_to_bounds()
                     .draw_behind(move |scope| {
                         scope.draw_rect(Brush::solid(colors.background));
                     }),

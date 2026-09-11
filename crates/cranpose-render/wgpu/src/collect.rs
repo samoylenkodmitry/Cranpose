@@ -424,6 +424,7 @@ fn push_backdrop_layer(
         node_id: layer.node_id,
         rect,
         clip,
+        reach: context.visual_clip,
         rounded_clip,
         snap_anchor,
         effect: effect.clone(),
@@ -503,7 +504,7 @@ fn collect_into(
         .clip_rect()
         .map(|clip| clip.translate(context.offset.x, context.offset.y));
     let visual_clip = resolve_clip(context.visual_clip, layer_clip);
-    if layer_clip.is_some() && context.visual_clip.is_some() && visual_clip.is_none() {
+    if visual_clip.is_some_and(|clip| clip.is_empty()) {
         return;
     }
     let translated = context.translated || layer.translated_content_context;
@@ -764,7 +765,7 @@ fn push_primitive(
                 visual_clip,
                 PrimitiveClipSpace::Local,
             );
-            if draw.clip.is_some() && clip.is_none() {
+            if clip.is_some_and(|clip| clip.is_empty()) {
                 return;
             }
             push_draw_primitive(
@@ -787,7 +788,7 @@ fn push_primitive(
                 visual_clip,
                 PrimitiveClipSpace::Local,
             );
-            if text.clip.is_some() && text_clip.is_none() {
+            if text_clip.is_some_and(|clip| clip.is_empty()) {
                 return;
             }
             push_text_style_draws(

@@ -1418,22 +1418,19 @@ mod tests {
             let resolved = Glass::regular()
                 .dispersion(dispersion)
                 .resolve(&light_colors());
-            let shader = terminal_shader(resolved.backdrop_effect(
+            let mut shader = terminal_shader(resolved.backdrop_effect(
                 1.0,
                 GlassDynamics {
                     activity: Some(activity),
                     ..GlassDynamics::default()
                 },
             ));
+            cranpose_ui_graphics::specialize_liquid_glass_with_folds(&mut shader, true);
             assert_eq!(
                 shader.uniforms()[GLASS_DISPERSION_UNIFORM],
                 dispersion * activity
             );
             assert_eq!(shader.uniforms()[GLASS_ACTIVITY_UNIFORM], activity);
-            assert_eq!(
-                shader.overrides().contains(&("GLASS_FULL_ACTIVITY", 1.0)),
-                activity == 1.0
-            );
             assert_eq!(
                 shader
                     .overrides()

@@ -6,7 +6,10 @@
 //! The wcKSRD optical program samples both sharp and blurred rays from one
 //! captured backdrop so displacement never reveals a second scene layer.
 
-use std::cell::RefCell;
+use std::{
+    cell::RefCell,
+    sync::atomic::{AtomicBool, Ordering},
+};
 
 use crate::{
     Color, RenderEffect, RuntimeShader, SubstrateSpec, render_effect::ShaderSpecializationCache,
@@ -120,16 +123,6 @@ pub const LIQUID_GLASS_SPECIALIZATIONS: &[LiquidGlassSpecialization] = &[
         inactive: |u| slot(u, GLASS_PHYSICAL_REFRACTION_DEPTH_ENABLED_UNIFORM) <= 0.5,
     },
     LiquidGlassSpecialization {
-        flag: "GLASS_FULL_TRANSMISSION",
-        slots: &[GLASS_TRANSMISSION_REFRACTION_UNIFORM],
-        inactive: |u| slot(u, GLASS_TRANSMISSION_REFRACTION_UNIFORM) >= 1.0,
-    },
-    LiquidGlassSpecialization {
-        flag: "GLASS_FULL_ACTIVITY",
-        slots: &[GLASS_ACTIVITY_UNIFORM],
-        inactive: |u| slot(u, GLASS_ACTIVITY_UNIFORM) >= 1.0,
-    },
-    LiquidGlassSpecialization {
         flag: GLASS_DISPERSION_OFF_FLAG,
         slots: &[GLASS_DISPERSION_UNIFORM],
         inactive: |u| slot(u, GLASS_DISPERSION_UNIFORM) <= 0.0,
@@ -156,29 +149,69 @@ pub const LIQUID_GLASS_SPECIALIZATIONS: &[LiquidGlassSpecialization] = &[
     },
 ];
 
-/// Recomputes the specialization flags from the current uniforms, removing
-/// overrides for features that have become active. The compiled material carries only
-/// the features it uses. Byte-exact: a raised flag substitutes the value the
-/// uniform already holds, and the interior guard skips only terms whose
-/// weight is zero. An adaptive frost declares the blurred substrate its
-/// neighbourhood reads whatever the activity: the declaration also sets the
-/// member's capture geometry, so a resting material keeps it although its
-/// shader returns before the read.
+/// Whether liquid glass compiles a pipeline per material.
+///
+/// [`specialize_liquid_glass`] can fold the features a material's uniforms
+/// leave inactive into `override` constants and split its draw into an
+/// interior and a rim. Every distinct fold set is its own pipeline, and a
+/// pipeline is the backend's shader compiler run inside the frame that first
+/// draws it: around a hundred milliseconds cold on Metal, which keeps no
+/// compiled pipeline across launches. A page of thirty materials was sixty
+/// compiles and seven seconds of stalls, one at every touch.
+///
+/// The folds save tile-based mobile GPUs dead ALU, which is where they were
+/// measured to earn that. Everywhere else one pipeline per blend mode draws
+/// the same picture -- every glass parity suite holds the folded and the
+/// plain shader byte-identical -- so folding is on for Android and off for
+/// the rest. [`set_glass_material_folds`] moves it for a measurement.
+pub fn glass_material_folds_enabled() -> bool {
+    GLASS_MATERIAL_FOLDS.load(Ordering::Relaxed)
+}
+
+/// Turns per-material folding on or off for this process.
+pub fn set_glass_material_folds(enabled: bool) {
+    GLASS_MATERIAL_FOLDS.store(enabled, Ordering::Relaxed);
+}
+
+static GLASS_MATERIAL_FOLDS: AtomicBool = AtomicBool::new(cfg!(target_os = "android"));
+
+/// Specializes a `liquid_glass.wgsl` shader to its uniforms, folding where
+/// [`glass_material_folds_enabled`] says to.
+///
+/// With folds on, every feature the uniforms leave inactive becomes a raised
+/// `override` and the draw is split into interior and rim. Byte-exact: a
+/// raised flag substitutes the value the uniform already holds, and the
+/// interior guard skips only terms whose weight is zero. With folds off the
+/// shader carries no flags and draws whole, from the one pipeline every
+/// material shares. Either way an adaptive frost declares the blurred
+/// substrate its neighbourhood reads whatever the activity: the declaration
+/// also sets the member's capture geometry, so a resting material keeps it
+/// although its shader returns before the read.
 pub fn specialize_liquid_glass(shader: &mut RuntimeShader) {
+    specialize_liquid_glass_with_folds(shader, glass_material_folds_enabled());
+}
+
+/// [`specialize_liquid_glass`] with folding decided by the caller rather
+/// than the process: a test of the folds asks for them whatever the platform.
+pub fn specialize_liquid_glass_with_folds(shader: &mut RuntimeShader, folds: bool) {
     const _: () = assert!(LIQUID_GLASS_SPECIALIZATIONS.len() <= u32::BITS as usize);
     const CACHE_CAPACITY: usize = 32;
-    type SpecializationKey = (u32, Option<u32>);
+    type SpecializationKey = (u32, Option<u32>, bool);
     thread_local! {
         static CACHE: RefCell<ShaderSpecializationCache<SpecializationKey, CACHE_CAPACITY>> =
             const { RefCell::new(ShaderSpecializationCache::new()) };
     }
     let uniforms = shader.uniforms();
-    let flags = LIQUID_GLASS_SPECIALIZATIONS.iter().enumerate().fold(
-        0,
-        |flags, (index, specialization)| {
-            flags | (u32::from((specialization.inactive)(uniforms)) << index)
-        },
-    );
+    let flags = if folds {
+        LIQUID_GLASS_SPECIALIZATIONS
+            .iter()
+            .enumerate()
+            .fold(0, |flags, (index, specialization)| {
+                flags | (u32::from((specialization.inactive)(uniforms)) << index)
+            })
+    } else {
+        0
+    };
     let substrate_radius = (slot(uniforms, GLASS_ADAPTIVE_FROST_UNIFORM) > 0.0).then(|| {
         (GLASS_ADAPTIVE_NEIGHBOURHOOD_DP * slot(uniforms, GLASS_EFFECT_DENSITY_UNIFORM).max(1.0))
             .to_bits()
@@ -186,8 +219,8 @@ pub fn specialize_liquid_glass(shader: &mut RuntimeShader) {
     CACHE.with_borrow_mut(|cache| {
         cache.apply(
             shader,
-            (flags, substrate_radius),
-            |shader, &(flags, radius)| {
+            (flags, substrate_radius, folds),
+            |shader, &(flags, radius, folds)| {
                 for (index, specialization) in LIQUID_GLASS_SPECIALIZATIONS.iter().enumerate() {
                     if flags & (1 << index) != 0 {
                         shader.set_override(specialization.flag, 1.0);
@@ -195,7 +228,7 @@ pub fn specialize_liquid_glass(shader: &mut RuntimeShader) {
                         shader.clear_override(specialization.flag);
                     }
                 }
-                shader.set_draw_split(Some(GLASS_RIM_DRAW_OVERRIDE));
+                shader.set_draw_split(folds.then_some(GLASS_RIM_DRAW_OVERRIDE));
                 let substrate = radius.map(|radius| SubstrateSpec::Blur {
                     radius_px: f32::from_bits(radius),
                 });
@@ -652,10 +685,13 @@ mod tests {
         assert_eq!(declared.len(), LIQUID_GLASS_SPECIALIZATIONS.len());
     }
 
+    /// The flags a material's uniforms fold, whatever the platform folds.
     fn raised_flags(effect: &RenderEffect) -> Vec<&'static str> {
         let RenderEffect::Shader { shader } = effect else {
             panic!("liquid glass must be one runtime shader");
         };
+        let mut shader = (**shader).clone();
+        specialize_liquid_glass_with_folds(&mut shader, true);
         shader.overrides().iter().map(|(flag, _)| *flag).collect()
     }
 
@@ -665,7 +701,7 @@ mod tests {
         shader.set_float(GLASS_ADAPTIVE_FROST_UNIFORM, 0.42);
         shader.set_float(GLASS_EFFECT_DENSITY_UNIFORM, 2.0);
         shader.set_float(GLASS_ACTIVITY_UNIFORM, 0.0);
-        specialize_liquid_glass(&mut shader);
+        specialize_liquid_glass_with_folds(&mut shader, true);
         assert_eq!(
             shader.substrates().len(),
             1,
@@ -677,7 +713,7 @@ mod tests {
     fn cached_glass_specialization_tracks_flags_and_substrate_radius() {
         let mut template = RuntimeShader::new(LIQUID_GLASS_WGSL);
         template.set_override("CALLER", 7.0);
-        specialize_liquid_glass(&mut template);
+        specialize_liquid_glass_with_folds(&mut template, true);
         for (activity, frost, density, rim) in [
             (1.0, 0.5, 1.0, 0.0),
             (1.0, 0.5, 2.0, 0.0),
@@ -691,9 +727,8 @@ mod tests {
                 shader.set_float(GLASS_ADAPTIVE_FROST_UNIFORM, frost);
                 shader.set_float(GLASS_EFFECT_DENSITY_UNIFORM, density);
                 shader.set_float(GLASS_RIM_STYLE_UNIFORM, rim);
-                specialize_liquid_glass(&mut shader);
+                specialize_liquid_glass_with_folds(&mut shader, true);
                 for (flag, raised) in [
-                    ("GLASS_FULL_ACTIVITY", activity >= 1.0),
                     ("GLASS_ADAPTIVE_FROST_OFF", frost <= 0.0),
                     ("GLASS_RIM_STYLE_OFF", rim <= 0.0),
                 ] {
@@ -716,18 +751,37 @@ mod tests {
         );
     }
 
+    /// A material that animates must not change which pipeline draws it.
+    ///
+    /// A specialization folding on a value an animation *ends* on gives the
+    /// end of every press its own `override` set, and a set nothing has
+    /// compiled is a backend shader compile inside the frame that reaches
+    /// it. `GLASS_FULL_ACTIVITY` and `GLASS_FULL_TRANSMISSION` were exactly
+    /// that: touching a liquid tab built four pipelines and took half a
+    /// second on a backend with no pipeline cache to fall back on. A fold
+    /// that saves ALU only in the frame a person is waiting in is not worth
+    /// having, so these two values carry no fold at all.
     #[test]
-    fn full_activity_specialization_tracks_the_clamped_activity() {
+    fn animating_a_material_end_to_end_asks_for_one_pipeline() {
         let mut shader = RuntimeShader::new(LIQUID_GLASS_WGSL);
-        for activity in [1.0, 0.999_999, 2.0, 0.5, 1.0, 0.0, -1.0, f32::NAN] {
-            shader.set_float(GLASS_ACTIVITY_UNIFORM, activity);
-            specialize_liquid_glass(&mut shader);
-            assert_eq!(
-                shader.overrides().contains(&("GLASS_FULL_ACTIVITY", 1.0)),
-                activity >= 1.0,
-                "activity {activity}"
-            );
+        let mut sets: Vec<Vec<(&'static str, f64)>> = Vec::new();
+        for step in 0..=40u16 {
+            let value = f32::from(step) / 40.0;
+            shader.set_float(GLASS_ACTIVITY_UNIFORM, value);
+            shader.set_float(GLASS_TRANSMISSION_REFRACTION_UNIFORM, value);
+            specialize_liquid_glass_with_folds(&mut shader, true);
+            let set = shader.overrides().to_vec();
+            if !sets.contains(&set) {
+                sets.push(set);
+            }
         }
+        assert_eq!(
+            sets.len(),
+            1,
+            "one press walks through {} override sets, and every one of them is a pipeline \
+             the backend compiles inside the frame that first needs it: {sets:?}",
+            sets.len()
+        );
     }
 
     #[test]
@@ -754,23 +808,23 @@ mod tests {
     fn respecializing_mutated_uniforms_matches_fresh_shader_and_preserves_caller_override() {
         let mut shader = RuntimeShader::new(LIQUID_GLASS_WGSL);
         shader.set_override("CALLER_OVERRIDE", 7.0);
-        specialize_liquid_glass(&mut shader);
+        specialize_liquid_glass_with_folds(&mut shader, true);
         shader.set_float(GLASS_RIM_STYLE_UNIFORM, 1.0);
-        specialize_liquid_glass(&mut shader);
+        specialize_liquid_glass_with_folds(&mut shader, true);
 
         let mut fresh = RuntimeShader::new(LIQUID_GLASS_WGSL);
         fresh.set_override("CALLER_OVERRIDE", 7.0);
         fresh.set_float(GLASS_RIM_STYLE_UNIFORM, 1.0);
-        specialize_liquid_glass(&mut fresh);
+        specialize_liquid_glass_with_folds(&mut fresh, true);
         assert_eq!(shader.overrides(), fresh.overrides());
         assert_eq!(shader.overrides_hash(), fresh.overrides_hash());
         assert!(shader.overrides().contains(&("CALLER_OVERRIDE", 7.0)));
 
         shader.set_float(GLASS_RIM_STYLE_UNIFORM, 0.0);
-        specialize_liquid_glass(&mut shader);
+        specialize_liquid_glass_with_folds(&mut shader, true);
         let mut inactive = RuntimeShader::new(LIQUID_GLASS_WGSL);
         inactive.set_override("CALLER_OVERRIDE", 7.0);
-        specialize_liquid_glass(&mut inactive);
+        specialize_liquid_glass_with_folds(&mut inactive, true);
         assert_eq!(shader.overrides(), inactive.overrides());
         assert_eq!(shader.overrides_hash(), inactive.overrides_hash());
         assert!(shader.overrides().contains(&("CALLER_OVERRIDE", 7.0)));

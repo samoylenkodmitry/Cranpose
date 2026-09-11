@@ -1,9 +1,6 @@
 use std::{
     path::{Path, PathBuf},
-    sync::{
-        OnceLock,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::OnceLock,
 };
 
 use web_time::Instant;
@@ -98,14 +95,6 @@ pub(crate) fn persist(cache: &wgpu::PipelineCache, path: &Path) {
     }
 }
 
-/// Pipelines created since the process started, bumped by every pipeline
-/// creation so the persist watcher knows when the cache has grown.
-static PIPELINES_CREATED: AtomicU64 = AtomicU64::new(0);
-
-pub(crate) fn note_pipeline_created() {
-    PIPELINES_CREATED.fetch_add(1, Ordering::Relaxed);
-}
-
 /// Decides, once a tick, whether the cache should be written: after the
 /// pipeline count has grown since the last write and then held still for a
 /// whole tick, so a burst of compiles is written once, after its last one,
@@ -140,7 +129,7 @@ pub(crate) fn spawn_persist_watcher(cache: wgpu::PipelineCache) {
             let mut watch = PersistWatch::default();
             loop {
                 std::thread::sleep(PERSIST_TICK);
-                if watch.observe(PIPELINES_CREATED.load(Ordering::Relaxed)) {
+                if watch.observe(crate::render::pipelines_created()) {
                     persist(&cache, &path);
                 }
             }

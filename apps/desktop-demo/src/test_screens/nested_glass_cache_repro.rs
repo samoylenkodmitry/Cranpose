@@ -77,7 +77,7 @@ pub fn NestedGlassAnimatedReproScreen() {
         1.0,
         cranpose_animation::prelude::infiniteRepeatable(
             cranpose_animation::prelude::AnimationSpec::linear(1_000),
-            cranpose_animation::prelude::RepeatMode::Reverse,
+            cranpose_animation::prelude::RepeatMode::Restart,
             cranpose_animation::prelude::StartOffset::default(),
         ),
         "phase",
