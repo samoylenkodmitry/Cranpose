@@ -1872,6 +1872,22 @@ impl GpuRenderer {
         );
         let viewport_uniforms = ViewportUniforms::default();
 
+        static GLASS_MATERIAL_FOLDS: DebugToggle =
+            DebugToggle::new("CRANPOSE_GLASS_MATERIAL_FOLDS");
+        if GLASS_MATERIAL_FOLDS.equals("1") {
+            cranpose_ui_graphics::set_glass_material_folds(true);
+        } else if GLASS_MATERIAL_FOLDS.equals("0") {
+            cranpose_ui_graphics::set_glass_material_folds(false);
+        }
+        log::info!(
+            "[gpu-init] liquid glass material folds {}",
+            if cranpose_ui_graphics::glass_material_folds_enabled() {
+                "on: a pipeline per material's feature set"
+            } else {
+                "off: one pipeline per blend mode"
+            }
+        );
+
         #[cfg(not(target_arch = "wasm32"))]
         let pipeline_cache = crate::pipeline_disk_cache::load(&device);
         #[cfg(target_arch = "wasm32")]

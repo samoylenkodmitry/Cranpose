@@ -77,13 +77,21 @@ impl log::Log for StderrWarnings {
 
 static STDERR_WARNINGS: StderrWarnings = StderrWarnings;
 
+/// Takes the GPU for one test, with per-material glass folds on.
+///
+/// The folds ship on Android and nowhere else, and the parity suites are
+/// what hold them byte-identical to the plain shader, so every renderer
+/// test runs them whatever the platform. A test of the plain path turns
+/// them off itself, under this lock, and puts them back.
 fn lock_gpu_test() -> MutexGuard<'static, ()> {
     if log::set_logger(&STDERR_WARNINGS).is_ok() {
         log::set_max_level(log::LevelFilter::Warn);
     }
-    GPU_TEST_LOCK
+    let lock = GPU_TEST_LOCK
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    cranpose_ui_graphics::set_glass_material_folds(true);
+    lock
 }
 
 pub struct LockedRenderer {

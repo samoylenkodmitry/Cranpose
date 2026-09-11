@@ -24,22 +24,18 @@ const FRAMES_PER_TOUCH: u32 = 12;
 /// reported against the demo's liquid navbar is several seconds long.
 const FROZEN_FRAME_MS: f32 = 120.0;
 
-/// What touching this bar may compile.
+/// What touching this bar may compile: nothing.
 ///
-/// A settled bar has compiled every pipeline its own picture needs, and
-/// moving a selection is not a new shader, so the number to aim at is zero.
-/// Four is what the flight lens costs: the blob that flies between tabs runs
-/// eight features the resting lens has switched off, so it is a different
-/// shader that nothing can build before a selection first moves -- interior
-/// and rim apart, and once per run.
+/// A settled bar has compiled every pipeline its picture needs, and a touch
+/// changes uniforms, not shaders. On this platform every liquid material
+/// shares one pipeline per blend mode, the way `controls.wgsl` always has,
+/// so there is no material a press could reach that is not already built.
 ///
-/// It was eight until the two folds keyed on an animation's endpoint --
-/// `GLASS_FULL_ACTIVITY` and `GLASS_FULL_TRANSMISSION` -- were taken out of
-/// the glass shader. Those gave the end of every press an `override` set
-/// nothing had compiled, so each touched material compiled again at the
-/// moment a person was waiting: 514 ms for the first touch here, 408 ms for
-/// the second. See `animating_a_material_end_to_end_asks_for_one_pipeline`.
-const PIPELINES_ALLOWED_ON_TOUCH: u64 = 4;
+/// This was eight: per-material folds gave each touched material -- and the
+/// lens that flies between tabs -- its own `override` set, compiled by the
+/// backend inside the frame that first drew it, 514 ms for the first touch
+/// and 408 ms for the next. `glass_material_folds_enabled` is the switch.
+const PIPELINES_ALLOWED_ON_TOUCH: u64 = 0;
 
 static FAILED: AtomicBool = AtomicBool::new(false);
 
