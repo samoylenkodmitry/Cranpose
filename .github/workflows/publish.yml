@@ -78,6 +78,11 @@ jobs:
             git diff --stat -- Cargo.toml Cargo.lock
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
+            # A runner whose git carries commit.gpgsign=true makes this bot
+            # commit reach for a human's key: gpg launches pinentry, nobody is
+            # there to answer it, and the release stops at "gpg: signing
+            # failed: Operation cancelled". The bot has no key and wants none.
+            git config commit.gpgsign false
             git add Cargo.toml Cargo.lock
             git commit -m "release: ${tag} [skip ci]"
             if ! git push origin "HEAD:$DEFAULT_BRANCH"; then
@@ -232,6 +237,7 @@ jobs:
           git diff --stat -- apps/isolated-demo
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config commit.gpgsign false
           git add apps/isolated-demo
           git commit -m "chore: point isolated demo at ${TAG_NAME}"
           # Pushes made with GITHUB_TOKEN do not retrigger workflows, so this
