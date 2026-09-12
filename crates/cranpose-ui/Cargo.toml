@@ -48,6 +48,10 @@ name = "pipeline"
 harness = false
 
 [[bench]]
+name = "skip_recomposition"
+harness = false
+
+[[bench]]
 name = "slot_table_v2"
 harness = false
 
