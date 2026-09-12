@@ -1253,7 +1253,11 @@ impl cranpose_core::Node for SubcomposeLayoutNode {
     fn set_node_id(&mut self, id: NodeId) {
         self.id.set(Some(id));
         self.layout_state.borrow_mut().set_node_id(id);
-        self.inner.borrow_mut().modifier_chain.set_node_id(Some(id));
+        {
+            let mut inner = self.inner.borrow_mut();
+            inner.node_id = Some(id);
+            inner.modifier_chain.set_node_id(Some(id));
+        }
         self.update_modifier_slices_cache();
     }
 
@@ -1488,7 +1492,9 @@ impl SubcomposeLayoutNodeHandle {
             inner.state = state;
             inner.placement_scratch = placement_scratch;
 
-            inner.last_placements = result.placements.iter().map(|p| p.node_id).collect();
+            inner.replace_placed_children(
+                result.placements.iter().map(|placement| placement.node_id),
+            );
         }
 
         Ok(result)
@@ -1506,9 +1512,7 @@ impl SubcomposeLayoutNodeHandle {
     where
         I: IntoIterator<Item = NodeId>,
     {
-        let mut inner = self.inner.borrow_mut();
-        inner.last_placements.clear();
-        inner.last_placements.extend(children);
+        self.inner.borrow_mut().replace_placed_children(children);
     }
 }
 
@@ -1527,6 +1531,7 @@ struct SubcomposeLayoutNodeInner {
     slots: Rc<SlotsHost>,
     debug_modifiers: bool,
     virtual_nodes: HashMap<NodeId, Rc<LayoutNode>>,
+    node_id: Option<NodeId>,
     last_placements: Vec<NodeId>,
     placement_scratch: Vec<Placement>,
     measured_children_scratch: Rc<RefCell<HashMap<NodeId, Rc<MeasuredNode>>>>,
@@ -1535,6 +1540,45 @@ struct SubcomposeLayoutNodeInner {
 }
 
 impl SubcomposeLayoutNodeInner {
+    /// Writes the children this node placed, self-reporting an actual change
+    /// to the scene phase the way [`LayoutState::place`] reports a move.
+    ///
+    /// These children *are* the node's render-graph children, and a
+    /// subcomposition changes them without the applier seeing an insert or a
+    /// remove: a lazy row that leaves the content keeps its nodes parked in
+    /// the reusable pool, still attached and still carrying the position it
+    /// was last placed at. Nothing else in the frame then says the child set
+    /// shrank, so a scoped scene update would keep the departed row's layer
+    /// and paint it under the row that took its place.
+    fn replace_placed_children<I>(&mut self, children: I)
+    where
+        I: IntoIterator<Item = NodeId>,
+    {
+        let mut changed = false;
+        let mut count = 0usize;
+        for child in children {
+            match self.last_placements.get(count) {
+                Some(&placed) if placed == child => {}
+                Some(_) => {
+                    self.last_placements[count] = child;
+                    changed = true;
+                }
+                None => {
+                    self.last_placements.push(child);
+                    changed = true;
+                }
+            }
+            count += 1;
+        }
+        if self.last_placements.len() > count {
+            self.last_placements.truncate(count);
+            changed = true;
+        }
+        if changed && let Some(id) = self.node_id {
+            crate::render_state::record_geometry_scene_node(id);
+        }
+    }
+
     fn new(measure_policy: Rc<MeasurePolicy>) -> Self {
         Self {
             modifier: Modifier::empty(),
@@ -1547,6 +1591,7 @@ impl SubcomposeLayoutNodeInner {
             slots: Rc::new(SlotsHost::new(SlotTable::default())),
             debug_modifiers: false,
             virtual_nodes: HashMap::new(),
+            node_id: None,
             last_placements: Vec::new(),
             placement_scratch: Vec::new(),
             measured_children_scratch: Rc::new(RefCell::new(HashMap::default())),
