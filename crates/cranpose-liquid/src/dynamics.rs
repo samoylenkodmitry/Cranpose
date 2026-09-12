@@ -13,6 +13,12 @@
 //! onto the morph uniforms. Time comes from the runtime's animation clock —
 //! never wall time — so poses stay exact under robot keyframe captures and
 //! on wasm.
+//!
+//! Every channel relaxes exponentially, so none of them ever reaches
+//! neutral on its own. Once travel, strain and swell are all within a
+//! fraction of a device pixel of rest, the integrator snaps them to exactly
+//! [`LiquidPose::default`] and stops producing new poses, so a settled lens
+//! costs nothing per frame.
 
 use std::{cell::Cell, rc::Rc};
 
@@ -35,6 +41,9 @@ const POINTER_VELOCITY_TAU: f32 = 0.045;
 const POINTER_STOP_HORIZON_NANOS: u64 = 40_000_000;
 const POINTER_COAST_TAU: f32 = 0.10;
 const AXIS_MIN_SPEED: f32 = 60.0;
+const REST_SPEED: f32 = 1.0;
+const REST_STRETCH: f32 = 5.0e-4;
+const REST_BULGE: f32 = 1.0e-2;
 const DT_MIN: f32 = 1.0 / 1000.0;
 const DT_MAX: f32 = 1.0 / 15.0;
 const TELEPORT_SPEED: f32 = 30_000.0;
@@ -306,8 +315,17 @@ impl LiquidDynamics {
             current_bulge.0 + (target_bulge.0 - current_bulge.0) * bulge_follow,
             current_bulge.1 + (target_bulge.1 - current_bulge.1) * bulge_follow,
         );
-        let bulge = bulge_vector.0.hypot(bulge_vector.1);
         let speed = follow(self.speed.get(), raw_speed, 0.0);
+        let at_rest = raw_speed <= REST_SPEED
+            && speed <= REST_SPEED
+            && (stretch - 1.0).abs() <= REST_STRETCH
+            && bulge_vector.0.hypot(bulge_vector.1) <= REST_BULGE;
+        let (stretch, bulge_vector, speed) = if at_rest {
+            (1.0, (0.0, 0.0), 0.0)
+        } else {
+            (stretch, bulge_vector, speed)
+        };
+        let bulge = bulge_vector.0.hypot(bulge_vector.1);
         self.stretch.set(stretch);
         self.bulge_vector.set(bulge_vector);
         self.speed.set(speed);
@@ -493,6 +511,90 @@ mod tests {
         );
         assert!(pose.bulge_amplitude < 0.2);
         assert!(pose.speed < 15.0);
+    }
+
+    #[test]
+    fn rest_reaches_an_exact_fixed_point_and_stops_producing_poses() {
+        let d = dynamics();
+        cruise(&d, 1200.0, 40);
+        let resting = d.last_pos.get().unwrap();
+
+        let mut frames_to_rest = None;
+        for frame in 1..=600 {
+            let pose = d.advance(resting, 1.0 / 60.0);
+            if pose == d.advance(resting, 1.0 / 60.0) {
+                frames_to_rest = Some(frame);
+                break;
+            }
+        }
+        let frames_to_rest =
+            frames_to_rest.expect("a stationary lens must stop producing new poses");
+        assert!(
+            frames_to_rest <= 120,
+            "rest took {frames_to_rest} frames of stationary travel"
+        );
+
+        let pose = d.pose();
+        assert_eq!(pose.stretch, 1.0, "resting stretch {pose:?}");
+        assert_eq!(pose.ortho, 1.0, "resting ortho {pose:?}");
+        assert_eq!(pose.bulge_amplitude, 0.0, "resting bulge {pose:?}");
+        assert_eq!(pose.speed, 0.0, "resting speed {pose:?}");
+
+        for _ in 0..600 {
+            assert_eq!(
+                d.advance(resting, 1.0 / 60.0),
+                pose,
+                "a lens at rest must keep returning the identical pose"
+            );
+        }
+    }
+
+    #[test]
+    fn rest_snap_is_invisible_next_to_the_pose_it_replaces() {
+        let d = dynamics();
+        cruise(&d, 1200.0, 40);
+        let resting = d.last_pos.get().unwrap();
+        let dt = 1.0f32 / 60.0;
+        let undecay = 1.0 / (-dt / RELEASE_TAU).exp();
+        let mut previous = d.pose();
+        for _ in 0..600 {
+            let pose = d.advance(resting, dt);
+            if pose.stretch == 1.0 && pose.bulge_amplitude == 0.0 && pose.speed == 0.0 {
+                assert!(
+                    (previous.stretch - 1.0).abs() <= REST_STRETCH * undecay,
+                    "snap jumped stretch from {previous:?}"
+                );
+                assert!(
+                    previous.bulge_amplitude <= REST_BULGE * undecay,
+                    "snap jumped bulge from {previous:?}"
+                );
+                assert!(
+                    previous.speed <= REST_SPEED * undecay,
+                    "snap jumped speed from {previous:?}"
+                );
+                return;
+            }
+            previous = pose;
+        }
+        panic!("a stationary lens never reached rest: {previous:?}");
+    }
+
+    #[test]
+    fn cruising_never_snaps_to_rest() {
+        let d = dynamics();
+        let pose = cruise(&d, 1200.0, 40);
+        assert!(pose.speed > REST_SPEED, "cruise speed {pose:?}");
+        assert!(
+            (pose.stretch - 1.0).abs() > REST_STRETCH,
+            "cruise stretch {pose:?}"
+        );
+
+        let slow = dynamics();
+        let pose = cruise(&slow, 40.0, 40);
+        assert!(
+            pose.speed > REST_SPEED,
+            "a slow but real drag must keep its motion: {pose:?}"
+        );
     }
 
     #[test]
