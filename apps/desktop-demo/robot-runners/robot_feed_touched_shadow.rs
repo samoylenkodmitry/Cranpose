@@ -42,7 +42,7 @@ fn main() -> ExitCode {
         .with_test_driver(move |robot| {
             robot_exit::arm_timeout(180);
             std::thread::sleep(Duration::from_millis(700));
-            liquid_page::open_receipts(&robot);
+            liquid_page::open_tab(&robot, "receipts");
 
             let card = find_in_semantics(&robot, |element| find_text_exact(element, CARD))
                 .unwrap_or_else(|| {

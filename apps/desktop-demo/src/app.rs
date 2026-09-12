@@ -24,6 +24,7 @@ use cranpose_ui::{
 mod animations;
 mod controls_ui;
 mod glass_feed;
+mod glass_tiles;
 mod hacker_news;
 mod images;
 mod interactive_anim;
@@ -47,6 +48,10 @@ use animations::AnimationsTab;
 use controls_ui::ControlsUiTab;
 use glass_feed::GlassFeedTab;
 pub use glass_feed::GLASS_FEED_LIST_TAG;
+use glass_tiles::GlassTilesTab;
+pub use glass_tiles::{
+    tile_description as glass_tile_description, TileSpec as GlassTileSpec, TILES as GLASS_TILES,
+};
 pub use hacker_news::HACKER_NEWS_SCROLL_STABILITY_TARGET_TITLE;
 use hacker_news::{HackerNewsScrollStabilityFixtureTab, HackerNewsTab};
 use images::images_tab;
@@ -114,6 +119,7 @@ pub enum DemoTab {
     Controls,
     Liquid,
     GlassFeed,
+    GlassTiles,
     MarkdownViewer,
     FilePicker,
     Rotary,
@@ -133,7 +139,7 @@ pub struct DemoTabInfo {
     pub startup_aliases: &'static [&'static str],
 }
 
-pub const DEMO_TAB_INFO: [DemoTabInfo; 26] = [
+pub const DEMO_TAB_INFO: [DemoTabInfo; 27] = [
     DemoTabInfo {
         tab: DemoTab::Counter,
         label: "Counter App",
@@ -293,6 +299,13 @@ pub const DEMO_TAB_INFO: [DemoTabInfo; 26] = [
         startup_aliases: &["glassfeed", "receipts"],
     },
     DemoTabInfo {
+        tab: DemoTab::GlassTiles,
+        label: "Glass Tiles",
+        slug: "glass-tiles",
+        source_path: "apps/desktop-demo/src/app/glass_tiles.rs",
+        startup_aliases: &["glasstiles", "tiles"],
+    },
+    DemoTabInfo {
         tab: DemoTab::MarkdownViewer,
         label: "Markdown",
         slug: "markdown-viewer",
@@ -359,7 +372,7 @@ impl DemoTab {
     }
 }
 
-pub const DEMO_TABS: [DemoTab; 26] = [
+pub const DEMO_TABS: [DemoTab; 27] = [
     DemoTab::Counter,
     DemoTab::Liquid,
     DemoTab::CompositionLocal,
@@ -386,6 +399,7 @@ pub const DEMO_TABS: [DemoTab; 26] = [
     DemoTab::Rotary,
     DemoTab::Wear,
     DemoTab::GlassFeed,
+    DemoTab::GlassTiles,
 ];
 
 pub fn demo_tab_labels() -> Vec<&'static str> {
@@ -865,6 +879,7 @@ fn tab_requires_scroll(tab: DemoTab) -> bool {
             | DemoTab::MarkdownViewer
             | DemoTab::Liquid
             | DemoTab::GlassFeed
+            | DemoTab::GlassTiles
     )
 }
 
@@ -896,7 +911,8 @@ fn render_active_tab(active: DemoTab, startup: StartupSelection, winamp_tab_stat
         | DemoTab::Controls
         | DemoTab::MarkdownViewer
         | DemoTab::Liquid
-        | DemoTab::GlassFeed => render_showcase_tab(active, startup, winamp_tab_state),
+        | DemoTab::GlassFeed
+        | DemoTab::GlassTiles => render_showcase_tab(active, startup, winamp_tab_state),
     }
 }
 
@@ -918,6 +934,7 @@ fn render_showcase_tab(
         DemoTab::MarkdownViewer => markdown_viewer_tab(),
         DemoTab::Liquid => LiquidUiTab(),
         DemoTab::GlassFeed => GlassFeedTab(),
+        DemoTab::GlassTiles => GlassTilesTab(),
         DemoTab::Counter
         | DemoTab::CompositionLocal
         | DemoTab::Async

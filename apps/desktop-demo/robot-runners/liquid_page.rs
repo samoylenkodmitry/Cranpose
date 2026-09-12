@@ -23,6 +23,7 @@ pub(crate) fn app_hook(name: String, argument: String) -> Result<Option<String>,
             let tab = match argument.as_str() {
                 "liquid" => DemoTab::Liquid,
                 "receipts" => DemoTab::GlassFeed,
+                "tiles" => DemoTab::GlassTiles,
                 other => return Err(format!("unknown tab {other}")),
             };
             TEST_ACTIVE_TAB_STATE
@@ -53,11 +54,12 @@ pub(crate) fn open(robot: &Robot) {
     settle(robot);
 }
 
-/// Opens the receipts feed and waits for it to come to rest.
-pub(crate) fn open_receipts(robot: &Robot) {
+/// Opens a tab by its hook name (`receipts`, `tiles`) and waits for it to
+/// come to rest.
+pub(crate) fn open_tab(robot: &Robot, tab: &str) {
     robot
-        .invoke_app_hook("set-tab", "receipts")
-        .expect("select the receipts tab");
+        .invoke_app_hook("set-tab", tab)
+        .expect("select the tab");
     settle(robot);
 }
 
