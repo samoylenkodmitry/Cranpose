@@ -382,7 +382,6 @@ fn BringCaretIntoView(
 
     let text = state.text();
     let selection = state.selection();
-    let caret = caret_window_rect(&text, &style, &metrics, selection.start);
 
     let key = (
         selection.start,
@@ -390,10 +389,15 @@ fn BringCaretIntoView(
         (ime_bottom * 4.0).round() as i64,
     );
     SideEffect(move || {
-        if previous.get() != Some(key) {
-            previous.set(Some(key));
-            responder.bring_into_view(caret, ime_bottom);
+        if previous.get() == Some(key) {
+            return;
         }
+        previous.set(Some(key));
+        let Some(metrics) = controller.metrics_now() else {
+            return;
+        };
+        let caret = caret_window_rect(&text, &style, &metrics, selection.start);
+        responder.bring_into_view(caret, ime_bottom);
     });
 }
 
@@ -445,6 +449,11 @@ fn SelectionHandles(
     if !metrics.focused || !metrics.direct_manipulation {
         return;
     }
+    // Past the gate the handles are on screen and have to travel with the
+    // field, so from here the scope follows its position too.
+    let Some(metrics) = controller.live_metrics() else {
+        return;
+    };
 
     let text = state.text();
 

@@ -40,7 +40,8 @@ impl PartialEq for TextFieldHandleController {
 
 struct TextFieldHandleControllerInner {
     metrics: Cell<Option<TextFieldHandleMetrics>>,
-    revision: MutableState<u64>,
+    activation: MutableState<u64>,
+    geometry: MutableState<u64>,
     gesture_claim: RefCell<Option<Rc<Cell<bool>>>>,
     press_track: Cell<Option<MutableState<Option<PointerPressTrack>>>>,
 }
@@ -50,7 +51,8 @@ impl TextFieldHandleController {
         Self {
             inner: Rc::new(TextFieldHandleControllerInner {
                 metrics: Cell::new(None),
-                revision: mutableStateOf(0u64),
+                activation: mutableStateOf(0u64),
+                geometry: mutableStateOf(0u64),
                 gesture_claim: RefCell::new(None),
                 press_track: Cell::new(None),
             }),
@@ -58,16 +60,56 @@ impl TextFieldHandleController {
     }
 
     pub(crate) fn publish(&self, metrics: TextFieldHandleMetrics) {
-        if self.inner.metrics.get() != Some(metrics) {
-            self.inner.metrics.set(Some(metrics));
-            self.inner
-                .revision
-                .update(|value| *value = value.wrapping_add(1));
+        let previous = self.inner.metrics.replace(Some(metrics));
+        if previous == Some(metrics) {
+            return;
         }
+        let was_live = previous.map(|metrics| (metrics.focused, metrics.direct_manipulation));
+        if was_live != Some((metrics.focused, metrics.direct_manipulation)) {
+            self.bump(&self.inner.activation);
+        }
+        self.bump(&self.inner.geometry);
     }
 
+    fn bump(&self, revision: &MutableState<u64>) {
+        revision.update(|value| *value = value.wrapping_add(1));
+    }
+
+    /// The field's current handle metrics, subscribing the caller to whether
+    /// the handles are live -- to [`TextFieldHandleMetrics::focused`] and
+    /// [`TextFieldHandleMetrics::direct_manipulation`], and to nothing else.
+    ///
+    /// The rest of the metrics describe where the field sits, and a field
+    /// moves for reasons that have nothing to do with its handles: a list
+    /// scrolling under it, a bounce settling, a layout shifting by a
+    /// fraction of a pixel. A caller that only wants to know whether to emit
+    /// handles must not be recomposed by any of that, so geometry is not part
+    /// of this subscription. Use [`Self::live_metrics`] once the handles are
+    /// live and their position has to follow the field, and
+    /// [`Self::metrics_now`] outside composition.
     pub fn metrics(&self) -> Option<TextFieldHandleMetrics> {
-        let _ = self.inner.revision.value();
+        let _ = self.inner.activation.value();
+        self.inner.metrics.get()
+    }
+
+    /// The field's current handle metrics, subscribing the caller to the
+    /// field's position as well.
+    ///
+    /// For a caller that places something at the caret and has to keep it
+    /// there while the field moves. Reach for it only past a
+    /// [`TextFieldHandleMetrics::focused`] check, because every caller that
+    /// holds this subscription recomposes whenever the field moves at all.
+    pub fn live_metrics(&self) -> Option<TextFieldHandleMetrics> {
+        let _ = self.inner.geometry.value();
+        self.inner.metrics.get()
+    }
+
+    /// The field's current handle metrics, subscribing the caller to nothing.
+    ///
+    /// For gesture callbacks and effects, which run after composition and want
+    /// the position as it is now rather than as it was when their scope last
+    /// composed.
+    pub fn metrics_now(&self) -> Option<TextFieldHandleMetrics> {
         self.inner.metrics.get()
     }
 
@@ -82,9 +124,7 @@ impl TextFieldHandleController {
     pub(crate) fn adopt_press_track(&self, press_track: MutableState<Option<PointerPressTrack>>) {
         if self.inner.press_track.get() != Some(press_track) {
             self.inner.press_track.set(Some(press_track));
-            self.inner
-                .revision
-                .update(|value| *value = value.wrapping_add(1));
+            self.bump(&self.inner.activation);
         }
     }
 
