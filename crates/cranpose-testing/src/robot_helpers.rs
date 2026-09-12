@@ -157,6 +157,24 @@ pub fn find_text_in_semantics(robot: &cranpose::Robot, text: &str) -> Option<(f3
     }
 }
 
+/// Find element by exact text in semantics tree (Robot wrapper).
+///
+/// Returns bounds (x, y, width, height). Unlike [`find_text_in_semantics`],
+/// a label that merely contains the query does not match, so a query stays
+/// pinned to its element when a longer label sharing its prefix appears.
+pub fn find_text_in_semantics_exact(
+    robot: &cranpose::Robot,
+    text: &str,
+) -> Option<(f32, f32, f32, f32)> {
+    match robot.find_text_bounds_exact(text) {
+        Ok(bounds) => bounds,
+        Err(e) => {
+            eprintln!("  ✗ Failed to query exact text semantics: {}", e);
+            None
+        }
+    }
+}
+
 /// Find an element whose text starts with the given prefix.
 /// Returns bounds (x, y, width, height) and the full text.
 pub fn find_text_by_prefix(

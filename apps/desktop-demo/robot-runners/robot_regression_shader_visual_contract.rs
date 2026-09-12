@@ -8,7 +8,7 @@ use std::{path::Path, time::Duration};
 use cranpose::AppLauncher;
 use cranpose_testing::{
     crop_screenshot_logical, find_button_in_semantics, find_text_in_semantics,
-    scroll_text_into_view, set_slider_fraction, ScrollConfig,
+    find_text_in_semantics_exact, scroll_text_into_view, set_slider_fraction, ScrollConfig,
 };
 use desktop_app::app::{self, DemoTab, ShaderSection, StartupSelection};
 use image::RgbaImage;
@@ -83,7 +83,7 @@ fn run_interactive_overlap() {
 
             let blur = find_text_in_semantics(&robot, "Blur")
                 .unwrap_or_else(|| robot_exit::fail_without_shutdown( "Blur label missing"));
-            let glass = find_text_in_semantics(&robot, "Glass")
+            let glass = find_text_in_semantics_exact(&robot, "Glass")
                 .unwrap_or_else(|| robot_exit::fail_without_shutdown( "Glass label missing"));
             let (blur_cx, blur_cy) = center(blur);
             let (glass_cx, glass_cy) = center(glass);
