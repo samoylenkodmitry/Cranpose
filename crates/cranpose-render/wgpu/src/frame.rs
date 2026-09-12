@@ -1009,14 +1009,14 @@ fn child_device_placement(
     (dest, clipped.and_then(|rect| rect.intersect(target_rect)))
 }
 
-/// What bounds a child's rendered surface on the page: the child's clip
+/// What the page shows of a child's rendered surface: the child's clip
 /// within the target, and nothing narrower.
 ///
 /// Not the child's own box. A surface holds what the child draws outside
 /// itself as well -- the shadow it casts -- and [`child_surface_rect`] sizes
-/// it to cover that. Scissoring the composite to the box instead drops the
-/// ring of shadow around the child, which is a rectangle of missing shadow
-/// exactly where the child sits.
+/// it to cover that. Rendering or compositing only the box's part of it
+/// instead drops the ring of shadow around the child, which is a rectangle
+/// of missing shadow exactly where the child sits.
 fn child_surface_bound(
     child: &ChildLayer,
     snap: Point,
@@ -1029,6 +1029,22 @@ fn child_surface_bound(
         }
         None => Some(target_rect),
     }
+}
+
+/// The part of a backdrop-reading child's surface `whole` worth rendering:
+/// what the page shows of it, `shown`, grown by `reach`, the pixels its
+/// glasses read past what they cover.
+///
+/// `shown` is the child's clip within the target, never its box. The shadow
+/// a child casts lies outside its box and inside its surface, and a press
+/// that promotes the child to a surface must render that shadow whole:
+/// trimmed to the box and the glass reach, it ends in a straight edge a few
+/// pixels out from every side of the control.
+fn rendered_surface(whole: DeviceRect, shown: DeviceRect, reach: f32) -> DeviceRect {
+    shown
+        .expand(reach)
+        .intersect(whole)
+        .map_or(whole, DeviceRect::snap_out)
 }
 
 /// Whether a child's runtime shader can draw in the final pass over the
@@ -3194,7 +3210,8 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             pass.pending.push(composite);
             return Ok(());
         }
-        let Some(surface) = self.render_child_surface(pass, child, z, grid, visible)? else {
+        let shown = child_surface_bound(child, snap, scale, pass.target_rect()).unwrap_or(visible);
+        let Some(surface) = self.render_child_surface(pass, child, z, grid, shown)? else {
             return Ok(());
         };
         if let Some(composite) =
@@ -3219,15 +3236,14 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             }
             None => surface.source.clone(),
         };
-        let bound = child_surface_bound(child, snap, scale, pass.target_rect()).unwrap_or(visible);
         let composite = match surface.grid_dest {
             Some(dest) => {
-                let visible = dest.intersect(bound).unwrap_or(visible);
+                let visible = dest.intersect(shown).unwrap_or(visible);
                 grid_child_composite(child, z, source, dest, snap, scale, visible)
             }
             None => {
                 let Some(composite) =
-                    projected_child_composite(child, z, source, &surface, snap, scale, bound)
+                    projected_child_composite(child, z, source, &surface, snap, scale, shown)
                 else {
                     return Ok(());
                 };
@@ -3302,9 +3318,10 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
     /// its backdrop is never cached and renders every frame, so when it sits
     /// on the parent's pixel grid (a translation, or a uniform scale it
     /// renders at) and carries no effect of its own it renders the part of
-    /// its surface `visible` shows, grown by what its glasses read past it
-    /// (`backdrop_reach`): a card wider than the screen costs the screen,
-    /// and every capture inside it follows.
+    /// its surface the page shows (`shown`, its clip within the target),
+    /// grown by what its glasses read past it (`backdrop_reach`): a card
+    /// wider than the screen costs the screen, and every capture inside it
+    /// follows.
     #[allow(clippy::too_many_arguments)]
     fn render_child_surface(
         &mut self,
@@ -3312,7 +3329,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         child: &ChildLayer,
         z: usize,
         grid: Option<Point>,
-        visible: DeviceRect,
+        shown: DeviceRect,
     ) -> Result<Option<SurfaceRender>, String> {
         let scale = pass.scale;
         let surface_scale = scale * child.surface_scale;
@@ -3335,10 +3352,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 let whole = child_rect.translated(offset).snap_out();
                 let dest = if reads_backdrop && child.effect.is_none() {
                     let reach = (backdrop_reach(&child.content) * surface_scale).ceil() + 1.0;
-                    visible
-                        .expand(reach)
-                        .intersect(whole)
-                        .map_or(whole, DeviceRect::snap_out)
+                    rendered_surface(whole, shown, reach)
                 } else {
                     whole
                 };
@@ -3844,7 +3858,10 @@ pub(crate) fn scene_bounds(layer: &LayerScene, scale: f32) -> Option<Rect> {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_SURFACE_PIXELS, Rect, surface_pixels, surface_within_budget};
+    use super::{
+        DeviceRect, MAX_SURFACE_PIXELS, Rect, rendered_surface, surface_pixels,
+        surface_within_budget,
+    };
 
     fn rect(width: f32, height: f32) -> Rect {
         Rect {
@@ -3853,6 +3870,34 @@ mod tests {
             width,
             height,
         }
+    }
+
+    fn device(x: f32, y: f32, width: f32, height: f32) -> DeviceRect {
+        DeviceRect {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    #[test]
+    fn a_promoted_control_renders_the_shadow_past_its_box() {
+        // The receipts feed's star while held: a 76x52 dp box at 2.36 px per
+        // dp whose shadow reaches 20 dp out, on a page that shows all of it.
+        let page = device(0.0, 0.0, 1800.0, 1400.0);
+        let whole = device(1812.0, 1183.0, 368.0, 312.0);
+        assert_eq!(rendered_surface(whole, page, 9.0), whole);
+    }
+
+    #[test]
+    fn a_card_wider_than_the_page_costs_the_page_and_the_glass_reach() {
+        let page = device(0.0, 0.0, 1800.0, 1400.0);
+        let card = device(-400.0, 100.0, 3000.0, 400.0);
+        assert_eq!(
+            rendered_surface(card, page, 9.0),
+            device(-9.0, 100.0, 1818.0, 400.0)
+        );
     }
 
     #[test]
