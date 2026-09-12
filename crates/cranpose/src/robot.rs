@@ -782,6 +782,22 @@ impl Robot {
         })
     }
 
+    /// Find the first semantic node whose text is exactly the provided string.
+    ///
+    /// Prefer this to [`Robot::find_text_bounds`] whenever the target's label
+    /// is also a prefix of some other label on screen: a substring match
+    /// returns whichever node the tree reaches first, so adding a control
+    /// named "Glass Tiles" silently redirects a search for "Glass".
+    pub fn find_text_bounds_exact(
+        &self,
+        text: &str,
+    ) -> Result<Option<(f32, f32, f32, f32)>, String> {
+        self.semantic_query_bounds(RobotCommand::FindText {
+            text: text.to_string(),
+            match_kind: SemanticTextMatchKind::Exact,
+        })
+    }
+
     /// Find the first semantic node whose text starts with the provided prefix.
     pub fn find_text_by_prefix(&self, prefix: &str) -> Result<Option<TextMatchBounds>, String> {
         Ok(self

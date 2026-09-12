@@ -7,7 +7,8 @@ use cranpose::AppLauncher;
 use cranpose_testing::{
     capture_screenshot, changed_pixel_count, changed_pixel_count_in_region,
     find_button_in_semantics, find_text, find_text_by_prefix, find_text_by_prefix_in_semantics,
-    find_text_in_semantics, parse_slider_value, root_bounds, screenshot_logical_size, y_is_visible,
+    find_text_in_semantics, find_text_in_semantics_exact, parse_slider_value, root_bounds,
+    screenshot_logical_size, y_is_visible,
 };
 use desktop_app::app;
 use image::{ImageBuffer, RgbaImage};
@@ -552,7 +553,7 @@ fn main() {
                 println!("✗ Could not find 'Blur' label");
                 std::process::exit(1);
             };
-            let Some(glass_before) = find_text_in_semantics(&robot, "Glass") else {
+            let Some(glass_before) = find_text_in_semantics_exact(&robot, "Glass") else {
                 println!("✗ Could not find 'Glass' label");
                 std::process::exit(1);
             };
@@ -629,7 +630,7 @@ fn main() {
             std::thread::sleep(Duration::from_millis(200));
             let _ = robot.wait_for_idle();
 
-            let Some(glass_after) = find_text_in_semantics(&robot, "Glass") else {
+            let Some(glass_after) = find_text_in_semantics_exact(&robot, "Glass") else {
                 println!("✗ Lost 'Glass' label after drag");
                 std::process::exit(1);
             };

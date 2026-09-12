@@ -10,7 +10,7 @@ use std::{
 };
 
 use cranpose::{AppLauncher, Robot};
-use cranpose_testing::{find_button_exact_in_semantics, find_text_in_semantics};
+use cranpose_testing::{find_button_exact_in_semantics, find_text_in_semantics_exact};
 use desktop_app::app::{self, DemoTab, ShaderSection, StartupSelection};
 use external_x11_frame_telemetry::{
     clear_records, install_primary_frame_telemetry_logger, summarize_records, FrameTelemetryRecord,
@@ -218,7 +218,7 @@ fn print_render_stats(
 }
 
 fn glass_drag_points(robot: &Robot) -> (f32, f32, f32, f32) {
-    let Some((x, y, w, h)) = find_text_in_semantics(robot, "Glass") else {
+    let Some((x, y, w, h)) = find_text_in_semantics_exact(robot, "Glass") else {
         panic!("Glass overlay text not found");
     };
     let start_x = x + w * 0.5;
