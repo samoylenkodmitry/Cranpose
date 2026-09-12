@@ -21,6 +21,7 @@ use super::{
     highlight_theme::append_highlighted,
     lazy_scrollbar::{LazyListWithScrollbar, LazyScrollbarStyle},
     net_image::{cors_url, decode_bitmap},
+    url_resolve::resolve_url,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -104,6 +105,7 @@ struct BlockBuilder {
     code_text: String,
     code_language: Language,
     pending_image: Option<PendingImage>,
+    base_url: String,
 }
 
 #[derive(Clone, Default)]
@@ -113,7 +115,7 @@ struct PendingImage {
 }
 
 impl BlockBuilder {
-    fn new() -> Self {
+    fn new(base_url: &str) -> Self {
         Self {
             style: InlineStyle::default(),
             builder_raw: None,
@@ -124,6 +126,7 @@ impl BlockBuilder {
             code_text: String::new(),
             code_language: Language::Plain,
             pending_image: None,
+            base_url: base_url.to_string(),
         }
     }
 
@@ -293,7 +296,7 @@ fn start_tag(b: &mut BlockBuilder, tag: Tag) {
             b.push_inline_style();
         }
         Tag::Link { dest_url, .. } => {
-            b.push_link(LinkAnnotation::Url(dest_url.to_string()));
+            b.push_link(LinkAnnotation::Url(resolve_url(&b.base_url, &dest_url)));
             b.push_span_style(SpanStyle {
                 color: Some(Color(0.35, 0.65, 0.95, 1.0)),
                 text_decoration: Some(TextDecoration::UNDERLINE),
@@ -301,7 +304,7 @@ fn start_tag(b: &mut BlockBuilder, tag: Tag) {
             });
         }
         Tag::Image { dest_url, .. } => {
-            b.start_image(dest_url.to_string());
+            b.start_image(resolve_url(&b.base_url, &dest_url));
         }
         _ => {}
     }
@@ -353,11 +356,11 @@ fn end_tag(b: &mut BlockBuilder, tag: TagEnd) {
     }
 }
 
-fn markdown_to_blocks(markdown: &str) -> Vec<MarkdownBlock> {
+fn markdown_to_blocks(markdown: &str, base_url: &str) -> Vec<MarkdownBlock> {
     let options = Options::empty();
     let parser = Parser::new_ext(markdown, options);
 
-    let mut b = BlockBuilder::new();
+    let mut b = BlockBuilder::new(base_url);
 
     for event in parser {
         match event {
@@ -475,6 +478,7 @@ pub fn markdown_viewer_tab() {
 
         let url = url_state.text();
         let url = url.trim().to_string();
+        let document_url = url.clone();
         fetch_state.set(FetchState::Loading);
 
         let client = http_client.clone();
@@ -491,7 +495,8 @@ pub fn markdown_viewer_tab() {
             move |result| match result {
                 Ok(text) => {
                     let blocks: Rc<[MarkdownBlock]> =
-                        split_large_markdown_blocks(markdown_to_blocks(&text)).into();
+                        split_large_markdown_blocks(markdown_to_blocks(&text, &document_url))
+                            .into();
                     fetch_state.set(FetchState::Done(blocks));
                 }
                 Err(err) => fetch_state.set(FetchState::Error(err)),
@@ -632,7 +637,9 @@ pub const MARKDOWN_SCROLL_STABILITY_TARGET_TEXT: &str =
 pub fn MarkdownScrollStabilityFixtureTab() {
     let blocks = cranpose_core::remember(|| {
         let markdown = scroll_stability_fixture_markdown();
-        Rc::<[MarkdownBlock]>::from(split_large_markdown_blocks(markdown_to_blocks(&markdown)))
+        Rc::<[MarkdownBlock]>::from(split_large_markdown_blocks(markdown_to_blocks(
+            &markdown, "",
+        )))
     })
     .with(|blocks| blocks.clone());
 
@@ -664,7 +671,9 @@ pub fn MarkdownScrollStressFixtureTabWithState(
 ) {
     let blocks = cranpose_core::remember(|| {
         let markdown = markdown_scroll_stress_fixture();
-        Rc::<[MarkdownBlock]>::from(split_large_markdown_blocks(markdown_to_blocks(&markdown)))
+        Rc::<[MarkdownBlock]>::from(split_large_markdown_blocks(markdown_to_blocks(
+            &markdown, "",
+        )))
     })
     .with(|blocks| blocks.clone());
 
@@ -1047,7 +1056,7 @@ mod tests {
 
     #[test]
     fn heading_produces_bold_block() {
-        let blocks = markdown_to_blocks("# Hello World");
+        let blocks = markdown_to_blocks("# Hello World", "");
         assert_eq!(blocks.len(), 1);
         let MarkdownBlock::Text(annotated) = &blocks[0] else {
             panic!("expected Text block");
@@ -1062,7 +1071,7 @@ mod tests {
 
     #[test]
     fn bold_inline_produces_bold_span() {
-        let blocks = markdown_to_blocks("Normal **bold** normal");
+        let blocks = markdown_to_blocks("Normal **bold** normal", "");
         assert_eq!(blocks.len(), 1);
         let MarkdownBlock::Text(annotated) = &blocks[0] else {
             panic!("expected Text block");
@@ -1076,7 +1085,7 @@ mod tests {
 
     #[test]
     fn italic_inline_produces_italic_span() {
-        let blocks = markdown_to_blocks("Normal *italic* normal");
+        let blocks = markdown_to_blocks("Normal *italic* normal", "");
         assert_eq!(blocks.len(), 1);
         let MarkdownBlock::Text(annotated) = &blocks[0] else {
             panic!("expected Text block");
@@ -1090,14 +1099,14 @@ mod tests {
 
     #[test]
     fn horizontal_rule_produces_rule_block() {
-        let blocks = markdown_to_blocks("---");
+        let blocks = markdown_to_blocks("---", "");
         let has_rule = blocks.iter().any(|b| matches!(b, MarkdownBlock::Rule));
         assert!(has_rule, "--- should emit a Rule block");
     }
 
     #[test]
     fn empty_input_yields_no_blocks() {
-        let blocks = markdown_to_blocks("");
+        let blocks = markdown_to_blocks("", "");
         assert!(blocks.is_empty());
     }
 
@@ -1115,7 +1124,7 @@ mod tests {
 
     #[test]
     fn multiple_paragraphs_yield_separate_blocks() {
-        let blocks = markdown_to_blocks("First paragraph\n\nSecond paragraph");
+        let blocks = markdown_to_blocks("First paragraph\n\nSecond paragraph", "");
         let text_blocks: Vec<_> = blocks
             .iter()
             .filter(|b| matches!(b, MarkdownBlock::Text(_)))
@@ -1129,7 +1138,7 @@ mod tests {
 
     #[test]
     fn plain_paragraphs_do_not_emit_empty_span_styles() {
-        let blocks = markdown_to_blocks("plain paragraph");
+        let blocks = markdown_to_blocks("plain paragraph", "");
         assert_eq!(blocks.len(), 1);
         let MarkdownBlock::Text(annotated) = &blocks[0] else {
             panic!("expected Text block");
@@ -1142,7 +1151,7 @@ mod tests {
 
     #[test]
     fn list_item_paragraph_keeps_bullet_and_text_in_same_block() {
-        let blocks = markdown_to_blocks("- Time complexity: $$O(n)$$");
+        let blocks = markdown_to_blocks("- Time complexity: $$O(n)$$", "");
         assert_eq!(blocks.len(), 1, "single list item should produce one block");
         let MarkdownBlock::Text(annotated) = &blocks[0] else {
             panic!("expected Text block");
@@ -1155,7 +1164,7 @@ mod tests {
 
     #[test]
     fn list_items_do_not_emit_bullet_only_blocks() {
-        let blocks = markdown_to_blocks("- first\n- second");
+        let blocks = markdown_to_blocks("- first\n- second", "");
         let text_blocks: Vec<_> = blocks
             .iter()
             .filter_map(|block| match block {
@@ -1173,7 +1182,7 @@ mod tests {
 
     #[test]
     fn link_stores_url_link_annotation() {
-        let blocks = markdown_to_blocks("Click [here](https://example.com) please");
+        let blocks = markdown_to_blocks("Click [here](https://example.com) please", "");
         assert_eq!(blocks.len(), 1);
         let MarkdownBlock::Text(annotated) = &blocks[0] else {
             panic!("expected Text block");
@@ -1192,7 +1201,7 @@ mod tests {
 
     #[test]
     fn link_annotation_covers_only_link_text() {
-        let blocks = markdown_to_blocks("Before [link](https://x.com) after");
+        let blocks = markdown_to_blocks("Before [link](https://x.com) after", "");
         let MarkdownBlock::Text(annotated) = &blocks[0] else {
             panic!("expected Text block");
         };
@@ -1336,7 +1345,7 @@ mod tests {
             "x".repeat(MAX_MARKDOWN_BLOCK_BYTES),
             "y".repeat(MAX_MARKDOWN_BLOCK_BYTES)
         );
-        let split = split_large_markdown_blocks(markdown_to_blocks(&repeated));
+        let split = split_large_markdown_blocks(markdown_to_blocks(&repeated, ""));
         let link_count = split
             .iter()
             .filter_map(|block| match block {
@@ -1354,7 +1363,7 @@ mod tests {
     #[test]
     fn markdown_scroll_stress_fixture_exercises_many_rendered_blocks() {
         let markdown = markdown_scroll_stress_fixture();
-        let blocks = split_large_markdown_blocks(markdown_to_blocks(&markdown));
+        let blocks = split_large_markdown_blocks(markdown_to_blocks(&markdown, ""));
         let text_blocks = blocks
             .iter()
             .filter(|block| matches!(block, MarkdownBlock::Text(_)))
@@ -1376,6 +1385,7 @@ mod tests {
     fn markdown_code_blocks_drop_fence_terminator_newlines() {
         let blocks = markdown_to_blocks(
             "```kotlin\nfun a() {\n    println(1)\n}\n```\n```rust\nfn b() {}\n```\n",
+            "",
         );
         let texts = blocks
             .iter()
@@ -1402,7 +1412,7 @@ mod tests {
         let bytes = markdown.len();
 
         let started = Instant::now();
-        let blocks = markdown_to_blocks(&markdown);
+        let blocks = markdown_to_blocks(&markdown, "");
         let elapsed = started.elapsed();
 
         let mut text_block_count = 0usize;
@@ -1429,7 +1439,7 @@ mod tests {
 
     #[test]
     fn an_image_becomes_its_own_block_instead_of_placeholder_text() {
-        let blocks = markdown_to_blocks("![a cat](https://example.com/cat.png)");
+        let blocks = markdown_to_blocks("![a cat](https://example.com/cat.png)", "");
         let images: Vec<_> = blocks
             .iter()
             .filter_map(|block| match block {
@@ -1451,7 +1461,7 @@ mod tests {
 
     #[test]
     fn an_image_without_alt_text_still_produces_a_block() {
-        let blocks = markdown_to_blocks("![](https://example.com/x.png)");
+        let blocks = markdown_to_blocks("![](https://example.com/x.png)", "");
         assert!(blocks
             .iter()
             .any(|block| matches!(block, MarkdownBlock::Image { url, .. }
@@ -1459,15 +1469,51 @@ mod tests {
     }
 
     #[test]
+    fn a_root_relative_image_resolves_against_the_document_url() {
+        let blocks = markdown_to_blocks(
+            "![day](/assets/day.webp)",
+            "https://raw.githubusercontent.com/owner/repo/refs/heads/master/notes/post.md",
+        );
+        let urls: Vec<&str> = blocks
+            .iter()
+            .filter_map(|block| match block {
+                MarkdownBlock::Image { url, .. } => Some(url.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            urls,
+            vec!["https://raw.githubusercontent.com/owner/repo/refs/heads/master/assets/day.webp"],
+            "a root-relative image must become a fetchable absolute URL"
+        );
+    }
+
+    #[test]
+    fn a_root_relative_link_resolves_against_the_document_url() {
+        let blocks = markdown_to_blocks(
+            "see [notes](/leetcode/)",
+            "https://raw.githubusercontent.com/owner/repo/refs/heads/master/notes/post.md",
+        );
+        let has_absolute_link = blocks.iter().any(|block| match block {
+            MarkdownBlock::Text(annotated) => annotated.link_annotations.iter().any(|span| {
+                matches!(&span.item, LinkAnnotation::Url(url)
+                    if url == "https://raw.githubusercontent.com/owner/repo/refs/heads/master/leetcode/")
+            }),
+            _ => false,
+        });
+        assert!(has_absolute_link, "a root-relative link stayed relative");
+    }
+
+    #[test]
     fn an_image_with_an_empty_url_is_dropped() {
-        let blocks = markdown_to_blocks("![alt]()");
+        let blocks = markdown_to_blocks("![alt]()", "");
         assert!(!blocks
             .iter()
             .any(|block| matches!(block, MarkdownBlock::Image { .. })));
     }
 
     fn code_block_text(markdown: &str) -> Rc<AnnotatedString> {
-        markdown_to_blocks(markdown)
+        markdown_to_blocks(markdown, "")
             .into_iter()
             .find_map(|block| match block {
                 MarkdownBlock::Text(annotated) if annotated.text.contains("fn ") => Some(annotated),
@@ -1497,6 +1543,28 @@ fn main() {}
     }
 
     #[test]
+    fn a_kotlin_fence_is_coloured() {
+        let annotated = markdown_to_blocks("```kotlin\nfun main() { val x = \"hi\" }\n```", "")
+            .into_iter()
+            .find_map(|block| match block {
+                MarkdownBlock::Text(annotated) if annotated.text.contains("fun ") => {
+                    Some(annotated)
+                }
+                _ => None,
+            })
+            .expect("a kotlin code block");
+        let coloured = annotated
+            .span_styles
+            .iter()
+            .filter(|span| span.item.color.is_some())
+            .count();
+        assert!(
+            coloured >= 2,
+            "kotlin code reached the screen uncoloured: {coloured} coloured spans"
+        );
+    }
+
+    #[test]
     fn an_unfenced_code_block_keeps_its_text_uncoloured() {
         let annotated = code_block_text(
             "```
@@ -1516,7 +1584,7 @@ fn main() {}
     fn a_fence_preserves_its_code_exactly() {
         let code = "let s = \"héllo\";\nlet n = 0xff;";
         let markdown = format!("```rust\n{code}\n```");
-        let annotated = markdown_to_blocks(&markdown)
+        let annotated = markdown_to_blocks(&markdown, "")
             .into_iter()
             .find_map(|block| match block {
                 MarkdownBlock::Text(annotated) if annotated.text.contains("let") => Some(annotated),

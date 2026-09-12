@@ -22,15 +22,35 @@ pub(crate) enum Language {
     Toml,
     Json,
     Shell,
+    Kotlin,
+    Java,
+    CFamily,
+    Python,
     Plain,
 }
 
+/// Reads the language out of a fence tag.
+///
+/// Only the leading word counts, so an annotated fence such as
+/// `kotlin(heap)` or `rust [-Rust 20ms]` still names its language. `+` and
+/// `#` stay part of the word, because `c++` and `c#` are spelled with them.
 pub(crate) fn language_from_fence(tag: &str) -> Language {
-    match tag.to_lowercase().as_str() {
+    let tag = tag.trim().to_lowercase();
+    let head = tag
+        .split(['(', ')', '[', ']', '{', '}', ',', ':', ' ', '\t'])
+        .next()
+        .unwrap_or_default();
+    match head {
         "rust" | "rs" => Language::Rust,
         "toml" => Language::Toml,
         "json" => Language::Json,
-        "sh" | "bash" | "shell" | "console" => Language::Shell,
+        "sh" | "bash" | "shell" | "console" | "zsh" => Language::Shell,
+        "kotlin" | "kt" | "kts" => Language::Kotlin,
+        "java" | "j" => Language::Java,
+        "c" | "h" | "c++" | "cpp" | "cxx" | "cc" | "hpp" | "c#" | "cs" | "csharp" | "js"
+        | "javascript" | "jsx" | "ts" | "typescript" | "tsx" | "swift" | "go" | "scala"
+        | "dart" | "groovy" => Language::CFamily,
+        "python" | "python3" | "py" => Language::Python,
         _ => Language::Plain,
     }
 }
@@ -45,6 +65,10 @@ pub(crate) fn tokenize(language: Language, code: &str) -> Vec<Token> {
         Language::Toml => tokenize_toml(code),
         Language::Json => tokenize_json(code),
         Language::Shell => tokenize_shell(code),
+        Language::Kotlin => tokenize_c_family(code, KOTLIN_KEYWORDS, NO_WORDS),
+        Language::Java => tokenize_c_family(code, JAVA_KEYWORDS, NO_WORDS),
+        Language::CFamily => tokenize_c_family(code, C_KEYWORDS, NO_WORDS),
+        Language::Python => tokenize_python(code),
         Language::Plain => vec![Token {
             kind: TokenKind::Plain,
             start: 0,
@@ -153,7 +177,7 @@ fn token_from_bounds(kind: TokenKind, start: usize, end: usize) -> (Token, usize
     (Token { kind, start, end }, end)
 }
 
-fn scan_rust_line_comment(code: &str, pos: usize) -> Option<(Token, usize)> {
+fn scan_slash_line_comment(code: &str, pos: usize) -> Option<(Token, usize)> {
     let ch = code[pos..].chars().next()?;
     if ch != '/' || pos + 1 >= code.len() {
         return None;
@@ -166,7 +190,7 @@ fn scan_rust_line_comment(code: &str, pos: usize) -> Option<(Token, usize)> {
     Some(token_from_bounds(TokenKind::Comment, start, end))
 }
 
-fn scan_rust_block_comment(code: &str, mut pos: usize) -> Option<(Token, usize)> {
+fn scan_block_comment(code: &str, mut pos: usize, nests: bool) -> Option<(Token, usize)> {
     let ch = code[pos..].chars().next()?;
     if ch != '/' || pos + 1 >= code.len() {
         return None;
@@ -181,7 +205,7 @@ fn scan_rust_block_comment(code: &str, mut pos: usize) -> Option<(Token, usize)>
     while depth > 0 && pos < code.len() {
         let ch = code[pos..].chars().next().unwrap_or('\0');
         let ch_len = ch.len_utf8();
-        if ch == '/' && pos + 1 < code.len() {
+        if nests && ch == '/' && pos + 1 < code.len() {
             let next = code[pos + 1..].chars().next().unwrap_or('\0');
             if next == '*' {
                 depth += 1;
@@ -211,7 +235,7 @@ fn scan_rust_block_comment(code: &str, mut pos: usize) -> Option<(Token, usize)>
     ))
 }
 
-fn scan_rust_char(code: &str, mut pos: usize) -> Option<(Token, usize)> {
+fn scan_char_literal(code: &str, mut pos: usize) -> Option<(Token, usize)> {
     let ch = code[pos..].chars().next()?;
     if ch != '\'' {
         return None;
@@ -383,7 +407,7 @@ fn scan_exponent_part(code: &str, mut pos: usize) -> usize {
     scan_decimal_int(code, pos)
 }
 
-fn scan_rust_number(code: &str, mut pos: usize) -> Option<(Token, usize)> {
+fn scan_number(code: &str, mut pos: usize) -> Option<(Token, usize)> {
     let ch = code[pos..].chars().next()?;
     let is_hex_start = ch == '0'
         && pos + 1 < code.len()
@@ -449,48 +473,373 @@ where
     normalize_tokens(tokens, code.len())
 }
 
-fn rust_classify_word(word: &str) -> TokenKind {
-    match word {
-        "fn" | "let" | "mut" | "const" | "static" | "struct" | "enum" | "trait" | "impl"
-        | "for" | "while" | "loop" | "if" | "else" | "match" | "return" | "use" | "mod" | "pub"
-        | "crate" | "self" | "super" | "where" | "as" | "in" | "ref" | "move" | "box" | "dyn"
-        | "async" | "await" | "unsafe" | "extern" | "type" | "continue" | "break" | "true"
-        | "false" => TokenKind::Keyword,
-        "u8" | "u16" | "u32" | "u64" | "u128" | "i8" | "i16" | "i32" | "i64" | "i128" | "usize"
-        | "isize" | "f32" | "f64" | "bool" | "char" | "str" | "String" | "Vec" | "Option"
-        | "Result" | "Box" | "Rc" | "Arc" => TokenKind::Type,
-        _ if word
-            .chars()
-            .next()
-            .map(|c| c.is_uppercase())
-            .unwrap_or(false) =>
-        {
-            TokenKind::Type
-        }
-        _ => TokenKind::Plain,
+const RUST_KEYWORDS: &[&str] = &[
+    "fn", "let", "mut", "const", "static", "struct", "enum", "trait", "impl", "for", "while",
+    "loop", "if", "else", "match", "return", "use", "mod", "pub", "crate", "self", "super",
+    "where", "as", "in", "ref", "move", "box", "dyn", "async", "await", "unsafe", "extern", "type",
+    "continue", "break", "true", "false",
+];
+
+const RUST_TYPES: &[&str] = &[
+    "u8", "u16", "u32", "u64", "u128", "i8", "i16", "i32", "i64", "i128", "usize", "isize", "f32",
+    "f64", "bool", "char", "str",
+];
+
+const KOTLIN_KEYWORDS: &[&str] = &[
+    "fun",
+    "val",
+    "var",
+    "class",
+    "object",
+    "interface",
+    "data",
+    "sealed",
+    "enum",
+    "companion",
+    "init",
+    "constructor",
+    "override",
+    "open",
+    "abstract",
+    "final",
+    "private",
+    "protected",
+    "public",
+    "internal",
+    "if",
+    "else",
+    "when",
+    "while",
+    "for",
+    "do",
+    "return",
+    "break",
+    "continue",
+    "try",
+    "catch",
+    "finally",
+    "throw",
+    "is",
+    "as",
+    "in",
+    "out",
+    "by",
+    "lateinit",
+    "suspend",
+    "inline",
+    "reified",
+    "typealias",
+    "package",
+    "import",
+    "null",
+    "true",
+    "false",
+    "this",
+    "super",
+    "where",
+    "vararg",
+    "operator",
+    "infix",
+    "crossinline",
+    "noinline",
+    "annotation",
+    "external",
+    "const",
+    "get",
+    "set",
+    "field",
+    "it",
+    "run",
+    "let",
+    "also",
+    "apply",
+    "with",
+];
+
+const JAVA_KEYWORDS: &[&str] = &[
+    "abstract",
+    "assert",
+    "boolean",
+    "break",
+    "byte",
+    "case",
+    "catch",
+    "char",
+    "class",
+    "const",
+    "continue",
+    "default",
+    "do",
+    "double",
+    "else",
+    "enum",
+    "extends",
+    "final",
+    "finally",
+    "float",
+    "for",
+    "goto",
+    "if",
+    "implements",
+    "import",
+    "instanceof",
+    "int",
+    "interface",
+    "long",
+    "native",
+    "new",
+    "package",
+    "private",
+    "protected",
+    "public",
+    "record",
+    "return",
+    "sealed",
+    "short",
+    "static",
+    "strictfp",
+    "super",
+    "switch",
+    "synchronized",
+    "this",
+    "throw",
+    "throws",
+    "transient",
+    "try",
+    "var",
+    "void",
+    "volatile",
+    "while",
+    "yield",
+    "true",
+    "false",
+    "null",
+];
+
+const C_KEYWORDS: &[&str] = &[
+    "alignas",
+    "alignof",
+    "auto",
+    "bool",
+    "break",
+    "case",
+    "catch",
+    "char",
+    "class",
+    "const",
+    "constexpr",
+    "continue",
+    "decltype",
+    "default",
+    "delete",
+    "do",
+    "double",
+    "dynamic_cast",
+    "else",
+    "enum",
+    "explicit",
+    "export",
+    "extern",
+    "false",
+    "final",
+    "float",
+    "for",
+    "friend",
+    "function",
+    "goto",
+    "if",
+    "implements",
+    "import",
+    "inline",
+    "instanceof",
+    "int",
+    "interface",
+    "let",
+    "long",
+    "mutable",
+    "namespace",
+    "new",
+    "noexcept",
+    "nullptr",
+    "operator",
+    "override",
+    "private",
+    "protected",
+    "public",
+    "readonly",
+    "register",
+    "restrict",
+    "return",
+    "short",
+    "signed",
+    "sizeof",
+    "static",
+    "static_cast",
+    "struct",
+    "switch",
+    "template",
+    "this",
+    "throw",
+    "true",
+    "try",
+    "typedef",
+    "typename",
+    "typeof",
+    "union",
+    "unsigned",
+    "using",
+    "var",
+    "virtual",
+    "void",
+    "volatile",
+    "while",
+    "async",
+    "await",
+    "yield",
+    "from",
+    "of",
+    "null",
+    "undefined",
+    "string",
+    "number",
+    "any",
+];
+
+const PYTHON_KEYWORDS: &[&str] = &[
+    "and", "as", "assert", "async", "await", "break", "class", "continue", "def", "del", "elif",
+    "else", "except", "finally", "for", "from", "global", "if", "import", "in", "is", "lambda",
+    "nonlocal", "not", "or", "pass", "raise", "return", "try", "while", "with", "yield", "True",
+    "False", "None", "self", "match", "case",
+];
+
+const PYTHON_TYPES: &[&str] = &[
+    "int",
+    "float",
+    "str",
+    "bool",
+    "list",
+    "dict",
+    "set",
+    "tuple",
+    "bytes",
+    "complex",
+    "frozenset",
+    "object",
+];
+
+const NO_WORDS: &[&str] = &[];
+
+fn classify_word(word: &str, keywords: &[&str], types: &[&str]) -> TokenKind {
+    if keywords.contains(&word) {
+        return TokenKind::Keyword;
     }
+    if types.contains(&word) {
+        return TokenKind::Type;
+    }
+    if word.chars().next().is_some_and(char::is_uppercase) {
+        return TokenKind::Type;
+    }
+    TokenKind::Plain
+}
+
+fn scan_identifier_in(
+    code: &str,
+    pos: usize,
+    keywords: &[&str],
+    types: &[&str],
+) -> Option<(Token, usize)> {
+    let (start, end) = scan_word(code, pos)?;
+    let kind = classify_word(&code[start..end], keywords, types);
+    Some((Token { kind, start, end }, end))
+}
+
+fn scan_triple_quoted(code: &str, pos: usize, quote: char) -> Option<(Token, usize)> {
+    let fence: String = std::iter::repeat_n(quote, 3).collect();
+    if !code[pos..].starts_with(&fence) {
+        return None;
+    }
+    let body = pos + fence.len();
+    let end = match code[body..].find(&fence) {
+        Some(offset) => body + offset + fence.len(),
+        None => code.len(),
+    };
+    Some(token_from_bounds(TokenKind::Str, pos, end))
+}
+
+fn scan_at_annotation(code: &str, pos: usize) -> Option<(Token, usize)> {
+    if code[pos..].chars().next()? != '@' {
+        return None;
+    }
+    let (_, end) = scan_word(code, pos + 1)?;
+    Some(token_from_bounds(TokenKind::Attribute, pos, end))
+}
+
+fn scan_preprocessor_line(code: &str, pos: usize) -> Option<(Token, usize)> {
+    if code[pos..].chars().next()? != '#' {
+        return None;
+    }
+    let line_start = code[..pos].rfind('\n').map(|index| index + 1).unwrap_or(0);
+    if code[line_start..pos].chars().any(|c| !is_whitespace(c)) {
+        return None;
+    }
+    scan_word(code, pos + 1)?;
+    let (start, end) = scan_line_to_end(code, pos)?;
+    Some(token_from_bounds(TokenKind::Attribute, start, end))
 }
 
 fn scan_rust_identifier(code: &str, pos: usize) -> Option<(Token, usize)> {
-    let (start, end) = scan_word(code, pos)?;
-    let word = &code[start..end];
-    let kind = rust_classify_word(word);
-    Some((Token { kind, start, end }, end))
+    scan_identifier_in(code, pos, RUST_KEYWORDS, RUST_TYPES)
 }
 
 fn tokenize_rust(code: &str) -> Vec<Token> {
     tokenize_impl(code, |code, pos| {
-        scan_rust_line_comment(code, pos)
-            .or_else(|| scan_rust_block_comment(code, pos))
+        scan_slash_line_comment(code, pos)
+            .or_else(|| scan_block_comment(code, pos, true))
             .or_else(|| {
                 let (start, end) = scan_string_escaped(code, pos, '"')?;
                 Some(token_from_bounds(TokenKind::Str, start, end))
             })
-            .or_else(|| scan_rust_char(code, pos))
+            .or_else(|| scan_char_literal(code, pos))
             .or_else(|| scan_rust_raw_string(code, pos))
             .or_else(|| scan_rust_attribute(code, pos))
-            .or_else(|| scan_rust_number(code, pos))
+            .or_else(|| scan_number(code, pos))
             .or_else(|| scan_rust_identifier(code, pos))
+    })
+}
+
+fn tokenize_c_family<'a>(code: &str, keywords: &'a [&'a str], types: &'a [&'a str]) -> Vec<Token> {
+    tokenize_impl(code, move |code, pos| {
+        scan_slash_line_comment(code, pos)
+            .or_else(|| scan_block_comment(code, pos, false))
+            .or_else(|| scan_triple_quoted(code, pos, '"'))
+            .or_else(|| {
+                let (start, end) = scan_string_escaped(code, pos, '"')?;
+                Some(token_from_bounds(TokenKind::Str, start, end))
+            })
+            .or_else(|| scan_char_literal(code, pos))
+            .or_else(|| scan_at_annotation(code, pos))
+            .or_else(|| scan_preprocessor_line(code, pos))
+            .or_else(|| scan_number(code, pos))
+            .or_else(|| scan_identifier_in(code, pos, keywords, types))
+    })
+}
+
+fn tokenize_python(code: &str) -> Vec<Token> {
+    tokenize_impl(code, |code, pos| {
+        scan_hash_comment(code, pos)
+            .or_else(|| scan_triple_quoted(code, pos, '"'))
+            .or_else(|| scan_triple_quoted(code, pos, '\''))
+            .or_else(|| {
+                let (start, end) = scan_string_escaped(code, pos, '"')?;
+                Some(token_from_bounds(TokenKind::Str, start, end))
+            })
+            .or_else(|| {
+                let (start, end) = scan_string_escaped(code, pos, '\'')?;
+                Some(token_from_bounds(TokenKind::Str, start, end))
+            })
+            .or_else(|| scan_at_annotation(code, pos))
+            .or_else(|| scan_number(code, pos))
+            .or_else(|| scan_identifier_in(code, pos, PYTHON_KEYWORDS, PYTHON_TYPES))
     })
 }
 
@@ -702,7 +1051,7 @@ fn tokenize_json(code: &str) -> Vec<Token> {
     })
 }
 
-fn scan_shell_comment(code: &str, pos: usize) -> Option<(Token, usize)> {
+fn scan_hash_comment(code: &str, pos: usize) -> Option<(Token, usize)> {
     let ch = code[pos..].chars().next()?;
     if ch != '#' {
         return None;
@@ -728,7 +1077,7 @@ fn scan_shell_identifier(code: &str, pos: usize) -> Option<(Token, usize)> {
 
 fn tokenize_shell(code: &str) -> Vec<Token> {
     tokenize_impl(code, |code, pos| {
-        scan_shell_comment(code, pos)
+        scan_hash_comment(code, pos)
             .or_else(|| {
                 let (start, end) = scan_string_escaped(code, pos, '"')?;
                 Some(token_from_bounds(TokenKind::Str, start, end))
@@ -872,8 +1221,21 @@ mod tests {
         assert_eq!(language_from_fence("bash"), Language::Shell);
         assert_eq!(language_from_fence("shell"), Language::Shell);
         assert_eq!(language_from_fence("console"), Language::Shell);
-        assert_eq!(language_from_fence("python"), Language::Plain);
+        assert_eq!(language_from_fence("python"), Language::Python);
+        assert_eq!(language_from_fence("python3"), Language::Python);
+        assert_eq!(language_from_fence("kotlin"), Language::Kotlin);
+        assert_eq!(language_from_fence("Kotlin"), Language::Kotlin);
+        assert_eq!(language_from_fence("kt"), Language::Kotlin);
+        assert_eq!(language_from_fence("java"), Language::Java);
+        assert_eq!(language_from_fence("c++"), Language::CFamily);
+        assert_eq!(language_from_fence("cpp"), Language::CFamily);
+        assert_eq!(language_from_fence("c#"), Language::CFamily);
+        assert_eq!(language_from_fence("ts"), Language::CFamily);
         assert_eq!(language_from_fence(""), Language::Plain);
+        assert_eq!(language_from_fence("brainfuck"), Language::Plain);
+        assert_eq!(language_from_fence("kotlin(heap)"), Language::Kotlin);
+        assert_eq!(language_from_fence("rust [-Rust 20ms]"), Language::Rust);
+        assert_eq!(language_from_fence("  rust  "), Language::Rust);
     }
 
     #[test]

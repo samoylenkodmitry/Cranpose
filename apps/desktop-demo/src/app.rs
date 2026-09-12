@@ -42,6 +42,7 @@ pub(crate) mod shader_rect;
 mod shaders;
 mod source_view;
 mod text_showcase;
+mod url_resolve;
 pub mod wear;
 mod web_fetch;
 mod winamp;
