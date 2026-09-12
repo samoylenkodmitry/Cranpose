@@ -22,6 +22,9 @@
 - Lock GPU tests before changing process-global debug toggles and restore them before releasing `support::gpu_test_lock`.
 - Headless GPU tests must request supported adapter limits. On Huawei, eight default color attachments exceed the GLES adapter's four; match the application's enabled backends when building Android library tests. [Device evidence](huawei_showcase_frame_budget.md).
 - Treat GPU-driver failures as hypotheses until the same binary, adapter and host conditions are checked; a clean-main failure alone proves no cause.
+- A measurement window that rendered no frames proves nothing about settling; an armed animation is not sampled until something draws, so require rendered frames before calling a window quiet.
+- Wait for the composition to go quiet before measuring ambient recomposition; a fixed sleep after an interaction charges that transition's recompositions to the animation under test.
+- `CRANPOSE_DEBUG_SCOPE_LABELS` compiles only under `debug_assertions`, where skip verification re-runs skipped groups and inflates every configuration alike; those counts cannot be compared with the release `fps_stats().recompositions` a robot assertion reads.
 
 ## Pixels and renderer contracts
 
