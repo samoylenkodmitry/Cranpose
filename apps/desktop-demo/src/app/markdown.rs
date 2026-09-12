@@ -944,43 +944,71 @@ fn MarkdownImage(url: String, alt: String) {
     } else {
         alt.clone()
     };
-    match state.get() {
-        ImageState::Ready(bitmap) => {
-            Box(
-                Modifier::empty()
-                    .fill_max_width()
-                    .height(MARKDOWN_IMAGE_HEIGHT)
-                    .background(Color(0.10, 0.12, 0.17, 1.0))
-                    .rounded_corners(8.0),
-                BoxSpec::default().content_alignment(Alignment::CENTER),
-                move || {
-                    Image(
-                        bitmap.clone(),
-                        Some(description.clone()),
-                        Modifier::empty().fill_max_size(),
-                        Alignment::CENTER,
-                        ContentScale::Fit,
-                        1.0,
-                        None,
-                    );
-                },
-            );
-        }
-        ImageState::Loading => {
+    Box(
+        Modifier::empty()
+            .fill_max_width()
+            .height(MARKDOWN_IMAGE_HEIGHT)
+            .background(Color(0.10, 0.12, 0.17, 1.0))
+            .rounded_corners(8.0),
+        BoxSpec::default().content_alignment(Alignment::CENTER),
+        move || match state.get() {
+            ImageState::Ready(bitmap) => {
+                Image(
+                    bitmap,
+                    Some(description.clone()),
+                    Modifier::empty().fill_max_size(),
+                    Alignment::CENTER,
+                    ContentScale::Fit,
+                    1.0,
+                    None,
+                );
+            }
+            ImageState::Loading => {
+                ImagePlaceholder(placeholder_label(&alt), Color(0.55, 0.60, 0.72, 1.0));
+            }
+            ImageState::Error(err) => {
+                ImagePlaceholder(err, Color(0.90, 0.55, 0.55, 1.0));
+            }
+        },
+    );
+}
+
+const MARKDOWN_IMAGE_SKELETON_BARS: usize = 5;
+const MARKDOWN_IMAGE_SKELETON_BAR_HEIGHT: f32 = 10.0;
+
+/// Fills the reserved image box with evenly spaced bars behind its label.
+///
+/// The box keeps [`MARKDOWN_IMAGE_HEIGHT`] in every state so the lazy list
+/// never reflows when an image finishes loading, and the bars keep ink on most
+/// of its rows: an empty box that tall reads as a rendering hole to the demo's
+/// visual contracts, which fail a viewport with too long a run of blank rows.
+#[allow(non_snake_case)]
+#[composable]
+fn ImagePlaceholder(label: String, color: Color) {
+    Column(
+        Modifier::empty().fill_max_size().padding(14.0),
+        ColumnSpec::new()
+            .vertical_arrangement(LinearArrangement::SpaceEvenly)
+            .horizontal_alignment(cranpose_ui::HorizontalAlignment::CenterHorizontally),
+        move || {
             Text(
-                placeholder_label(&alt),
-                Modifier::empty().padding(8.0),
-                placeholder_text_style(Color(0.55, 0.60, 0.72, 1.0)),
+                label.clone(),
+                Modifier::empty(),
+                placeholder_text_style(color),
             );
-        }
-        ImageState::Error(err) => {
-            Text(
-                err,
-                Modifier::empty().padding(8.0),
-                placeholder_text_style(Color(0.90, 0.55, 0.55, 1.0)),
-            );
-        }
-    }
+            for _ in 0..MARKDOWN_IMAGE_SKELETON_BARS {
+                cranpose_ui::Box(
+                    Modifier::empty()
+                        .fill_max_width()
+                        .height(MARKDOWN_IMAGE_SKELETON_BAR_HEIGHT)
+                        .background(Color(0.16, 0.19, 0.26, 1.0))
+                        .rounded_corners(4.0),
+                    BoxSpec::default(),
+                    || {},
+                );
+            }
+        },
+    );
 }
 
 fn placeholder_label(alt: &str) -> String {

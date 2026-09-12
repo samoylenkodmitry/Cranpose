@@ -621,18 +621,6 @@ fn TabBarHorizontal(
     let tabs_scroll_state =
         cranpose_core::remember(|| cranpose_ui::ScrollState::new(0.0)).with(|state| *state);
     Row(
-        Modifier::empty().fill_max_width().padding_each(
-            DEMO_PAGE_PADDING + DEMO_TAB_BAR_PADDING,
-            DEMO_TAB_BAR_PADDING,
-            DEMO_PAGE_PADDING + DEMO_TAB_BAR_PADDING,
-            0.0,
-        ),
-        RowSpec::new(),
-        move || {
-            source_view::SourceToggleButton(showing_source, Modifier::empty());
-        },
-    );
-    Row(
         Modifier::empty()
             .fill_max_width()
             .clip_to_bounds()
@@ -642,7 +630,7 @@ fn TabBarHorizontal(
             Row(
                 Modifier::empty().padding_each(
                     DEMO_PAGE_PADDING + DEMO_TAB_BAR_PADDING,
-                    DEMO_TAB_BAR_PADDING,
+                    DEMO_PAGE_PADDING + DEMO_TAB_BAR_PADDING,
                     DEMO_PAGE_PADDING + DEMO_TAB_BAR_PADDING,
                     DEMO_TAB_BAR_PADDING,
                 ),
@@ -651,6 +639,7 @@ fn TabBarHorizontal(
                     for tab in DEMO_TABS {
                         TabButton(tab, active_tab, 10.0);
                     }
+                    source_view::SourceToggleButton(showing_source, Modifier::empty());
                 },
             );
         },
