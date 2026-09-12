@@ -1,4 +1,4 @@
-use std::rc::Rc;
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use cranpose_foundation::{
     lazy::rememberLazyListState, text::TextFieldState, SemanticsConfiguration,
@@ -10,17 +10,23 @@ use cranpose_ui::{
         AnnotatedString, FontFamily, FontStyle, FontWeight, LinkAnnotation, ParagraphStyle,
         PlatformParagraphStyle, SpanStyle, TextDecoration, TextShaping, TextUnit,
     },
-    Brush, Button, ButtonSpec, Color, Column, ColumnSpec, CornerRadii, LazyColumn, LazyColumnSpec,
-    LinearArrangement, LinkedText, Modifier, Row, RowSpec, Size, Spacer, Text, TextStyle,
-    VerticalAlignment,
+    Alignment, Box, BoxSpec, Brush, Button, ButtonSpec, Color, Column, ColumnSpec, ContentScale,
+    CornerRadii, Image, ImageBitmap, LazyColumn, LazyColumnSpec, LinearArrangement, LinkedText,
+    Modifier, Row, RowSpec, Size, Spacer, Text, TextStyle, VerticalAlignment,
 };
-use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
-use super::lazy_scrollbar::{LazyListWithScrollbar, LazyScrollbarStyle};
+use super::{
+    highlight::{language_from_fence, Language},
+    highlight_theme::append_highlighted,
+    lazy_scrollbar::{LazyListWithScrollbar, LazyScrollbarStyle},
+    net_image::{cors_url, decode_bitmap},
+};
 
 #[derive(Clone, Debug, PartialEq)]
 enum MarkdownBlock {
     Text(Rc<AnnotatedString>),
+    Image { url: String, alt: String },
     Rule,
 }
 
@@ -95,6 +101,15 @@ struct BlockBuilder {
     list_item_depth: u32,
     in_code_block: bool,
     pending_code_newlines: String,
+    code_text: String,
+    code_language: Language,
+    pending_image: Option<PendingImage>,
+}
+
+#[derive(Clone, Default)]
+struct PendingImage {
+    url: String,
+    alt: String,
 }
 
 impl BlockBuilder {
@@ -106,6 +121,9 @@ impl BlockBuilder {
             list_item_depth: 0,
             in_code_block: false,
             pending_code_newlines: String::new(),
+            code_text: String::new(),
+            code_language: Language::Plain,
+            pending_image: None,
         }
     }
 
@@ -167,9 +185,9 @@ impl BlockBuilder {
         if !trimmed.is_empty() {
             if !self.pending_code_newlines.is_empty() {
                 let pending = std::mem::take(&mut self.pending_code_newlines);
-                self.append(&pending);
+                self.code_text.push_str(&pending);
             }
-            self.append(trimmed);
+            self.code_text.push_str(trimmed);
         }
         let trailing = &text[trimmed.len()..];
         if !trailing.is_empty() {
@@ -180,6 +198,15 @@ impl BlockBuilder {
     fn finish_code_block(&mut self) {
         self.pending_code_newlines.clear();
         self.in_code_block = false;
+        let code = std::mem::take(&mut self.code_text);
+        if !code.is_empty() {
+            let builder = self
+                .builder_raw
+                .take()
+                .unwrap_or_else(AnnotatedString::builder);
+            self.builder_raw = Some(append_highlighted(builder, self.code_language, &code));
+        }
+        self.code_language = Language::Plain;
     }
 
     fn flush_block(&mut self) {
@@ -195,6 +222,135 @@ impl BlockBuilder {
         self.flush_block();
         self.blocks.push(MarkdownBlock::Rule);
     }
+
+    fn start_image(&mut self, url: String) {
+        self.flush_block();
+        self.pending_image = Some(PendingImage {
+            url,
+            alt: String::new(),
+        });
+    }
+
+    fn finish_image(&mut self) {
+        let Some(pending) = self.pending_image.take() else {
+            return;
+        };
+        if pending.url.is_empty() {
+            return;
+        }
+        self.blocks.push(MarkdownBlock::Image {
+            url: pending.url,
+            alt: pending.alt,
+        });
+    }
+}
+
+fn start_tag(b: &mut BlockBuilder, tag: Tag) {
+    match tag {
+        Tag::Heading { level, .. } => {
+            b.flush_block();
+            b.style.heading = Some(level);
+            b.push_inline_style();
+        }
+        Tag::Paragraph if b.list_item_depth == 0 => {
+            b.flush_block();
+            b.push_inline_style();
+        }
+        Tag::BlockQuote(_) => {
+            b.flush_block();
+            b.style.blockquote_depth += 1;
+            b.push_inline_style();
+        }
+        Tag::CodeBlock(kind) => {
+            b.flush_block();
+            b.style.code = true;
+            b.in_code_block = true;
+            b.pending_code_newlines.clear();
+            b.code_text.clear();
+            b.code_language = match &kind {
+                CodeBlockKind::Fenced(tag) => language_from_fence(tag),
+                CodeBlockKind::Indented => Language::Plain,
+            };
+            b.push_inline_style();
+        }
+        Tag::Item => {
+            b.flush_block();
+            b.list_item_depth += 1;
+            b.push_span_style(SpanStyle {
+                color: Some(Color(0.55, 0.65, 0.85, 1.0)),
+                ..Default::default()
+            });
+            b.append("• ");
+            b.pop_style();
+            b.push_inline_style();
+        }
+        Tag::Emphasis => {
+            b.style.italic = true;
+            b.push_inline_style();
+        }
+        Tag::Strong => {
+            b.style.bold = true;
+            b.push_inline_style();
+        }
+        Tag::Link { dest_url, .. } => {
+            b.push_link(LinkAnnotation::Url(dest_url.to_string()));
+            b.push_span_style(SpanStyle {
+                color: Some(Color(0.35, 0.65, 0.95, 1.0)),
+                text_decoration: Some(TextDecoration::UNDERLINE),
+                ..Default::default()
+            });
+        }
+        Tag::Image { dest_url, .. } => {
+            b.start_image(dest_url.to_string());
+        }
+        _ => {}
+    }
+}
+
+fn end_tag(b: &mut BlockBuilder, tag: TagEnd) {
+    match tag {
+        TagEnd::Heading(_) => {
+            b.pop_style();
+            b.style.heading = None;
+            b.flush_block();
+        }
+        TagEnd::Paragraph if b.list_item_depth == 0 => {
+            b.pop_style();
+            b.flush_block();
+        }
+        TagEnd::BlockQuote(_) => {
+            b.pop_style();
+            b.style.blockquote_depth = b.style.blockquote_depth.saturating_sub(1);
+            b.flush_block();
+        }
+        TagEnd::CodeBlock => {
+            b.finish_code_block();
+            b.pop_style();
+            b.style.code = false;
+            b.flush_block();
+        }
+        TagEnd::Item => {
+            b.pop_style();
+            b.flush_block();
+            b.list_item_depth = b.list_item_depth.saturating_sub(1);
+        }
+        TagEnd::Emphasis => {
+            b.pop_style();
+            b.style.italic = false;
+        }
+        TagEnd::Strong => {
+            b.pop_style();
+            b.style.bold = false;
+        }
+        TagEnd::Link => {
+            b.pop_style();
+            b.pop_style();
+        }
+        TagEnd::Image => {
+            b.finish_image();
+        }
+        _ => {}
+    }
 }
 
 fn markdown_to_blocks(markdown: &str) -> Vec<MarkdownBlock> {
@@ -205,61 +361,8 @@ fn markdown_to_blocks(markdown: &str) -> Vec<MarkdownBlock> {
 
     for event in parser {
         match event {
-            Event::Start(Tag::Heading { level, .. }) => {
-                b.flush_block();
-                b.style.heading = Some(level);
-                b.push_inline_style();
-            }
-            Event::Start(Tag::Paragraph) if b.list_item_depth == 0 => {
-                b.flush_block();
-                b.push_inline_style();
-            }
-            Event::Start(Tag::BlockQuote(_)) => {
-                b.flush_block();
-                b.style.blockquote_depth += 1;
-                b.push_inline_style();
-            }
-            Event::Start(Tag::CodeBlock(_)) => {
-                b.flush_block();
-                b.style.code = true;
-                b.in_code_block = true;
-                b.pending_code_newlines.clear();
-                b.push_inline_style();
-            }
-            Event::Start(Tag::Item) => {
-                b.flush_block();
-                b.list_item_depth += 1;
-                b.push_span_style(SpanStyle {
-                    color: Some(Color(0.55, 0.65, 0.85, 1.0)),
-                    ..Default::default()
-                });
-                b.append("• ");
-                b.pop_style();
-                b.push_inline_style();
-            }
-            Event::Start(Tag::Emphasis) => {
-                b.style.italic = true;
-                b.push_inline_style();
-            }
-            Event::Start(Tag::Strong) => {
-                b.style.bold = true;
-                b.push_inline_style();
-            }
-            Event::Start(Tag::Link { dest_url, .. }) => {
-                b.push_link(LinkAnnotation::Url(dest_url.to_string()));
-                b.push_span_style(SpanStyle {
-                    color: Some(Color(0.35, 0.65, 0.95, 1.0)),
-                    text_decoration: Some(TextDecoration::UNDERLINE),
-                    ..Default::default()
-                });
-            }
-            Event::Start(Tag::Image { .. }) => {
-                b.push_span_style(SpanStyle {
-                    color: Some(Color(0.55, 0.55, 0.55, 1.0)),
-                    ..Default::default()
-                });
-                b.append("[image: ");
-            }
+            Event::Start(tag) => start_tag(&mut b, tag),
+            Event::End(tag) => end_tag(&mut b, tag),
             Event::Code(text) => {
                 b.push_span_style(SpanStyle {
                     font_family: Some(FontFamily::Monospace),
@@ -270,7 +373,9 @@ fn markdown_to_blocks(markdown: &str) -> Vec<MarkdownBlock> {
                 b.pop_style();
             }
             Event::Text(text) => {
-                if b.in_code_block {
+                if let Some(pending) = b.pending_image.as_mut() {
+                    pending.alt.push_str(&text);
+                } else if b.in_code_block {
                     b.append_code_text(&text);
                 } else {
                     b.append(&text);
@@ -280,47 +385,6 @@ fn markdown_to_blocks(markdown: &str) -> Vec<MarkdownBlock> {
             Event::HardBreak => b.append("\n"),
             Event::Rule => b.push_rule(),
 
-            Event::End(TagEnd::Heading(_)) => {
-                b.pop_style();
-                b.style.heading = None;
-                b.flush_block();
-            }
-            Event::End(TagEnd::Paragraph) if b.list_item_depth == 0 => {
-                b.pop_style();
-                b.flush_block();
-            }
-            Event::End(TagEnd::BlockQuote(_)) => {
-                b.pop_style();
-                b.style.blockquote_depth = b.style.blockquote_depth.saturating_sub(1);
-                b.flush_block();
-            }
-            Event::End(TagEnd::CodeBlock) => {
-                b.finish_code_block();
-                b.pop_style();
-                b.style.code = false;
-                b.flush_block();
-            }
-            Event::End(TagEnd::Item) => {
-                b.pop_style();
-                b.flush_block();
-                b.list_item_depth = b.list_item_depth.saturating_sub(1);
-            }
-            Event::End(TagEnd::Emphasis) => {
-                b.pop_style();
-                b.style.italic = false;
-            }
-            Event::End(TagEnd::Strong) => {
-                b.pop_style();
-                b.style.bold = false;
-            }
-            Event::End(TagEnd::Link) => {
-                b.pop_style();
-                b.pop_style();
-            }
-            Event::End(TagEnd::Image) => {
-                b.append("]");
-                b.pop_style();
-            }
             _ => {}
         }
     }
@@ -690,6 +754,9 @@ fn MarkdownBlocksList(
             use cranpose_foundation::lazy::LazyListScopeExt;
             scope.items_indexed_rc(blocks.clone(), |_index, block| match block {
                 MarkdownBlock::Text(annotated) => render_text_block(annotated.clone()),
+                MarkdownBlock::Image { url, alt } => {
+                    MarkdownImage(url.clone(), alt.clone());
+                }
                 MarkdownBlock::Rule => render_rule(),
             });
         },
@@ -767,6 +834,160 @@ fn render_text_block(annotated: Rc<AnnotatedString>) {
             Modifier::empty().fill_max_width().padding(2.0),
             text_style,
         );
+    }
+}
+
+const MARKDOWN_IMAGE_HEIGHT: f32 = 220.0;
+const MARKDOWN_IMAGE_CACHE_CAPACITY: usize = 24;
+
+#[derive(Default)]
+struct ImageCache {
+    entries: HashMap<String, ImageBitmap>,
+    order: Vec<String>,
+}
+
+impl ImageCache {
+    fn get(&self, url: &str) -> Option<ImageBitmap> {
+        self.entries.get(url).cloned()
+    }
+
+    fn insert(&mut self, url: String, bitmap: ImageBitmap) {
+        if self.entries.contains_key(&url) {
+            return;
+        }
+        while self.order.len() >= MARKDOWN_IMAGE_CACHE_CAPACITY {
+            let evicted = self.order.remove(0);
+            self.entries.remove(&evicted);
+        }
+        self.order.push(url.clone());
+        self.entries.insert(url, bitmap);
+    }
+}
+
+thread_local! {
+    static MARKDOWN_IMAGE_CACHE: RefCell<ImageCache> = RefCell::new(ImageCache::default());
+}
+
+fn cached_image(url: &str) -> Option<ImageBitmap> {
+    MARKDOWN_IMAGE_CACHE.with(|cache| cache.borrow().get(url))
+}
+
+fn cache_image(url: String, bitmap: ImageBitmap) {
+    MARKDOWN_IMAGE_CACHE.with(|cache| cache.borrow_mut().insert(url, bitmap));
+}
+
+async fn fetch_image(client: &HttpClientRef, url: &str) -> Result<ImageBitmap, String> {
+    let bytes = client
+        .get_bytes(&cors_url(url))
+        .await
+        .map_err(|err| format!("failed to download image: {err}"))?;
+    decode_bitmap(&bytes).map_err(|err| format!("failed to decode image: {err}"))
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum ImageState {
+    Loading,
+    Ready(ImageBitmap),
+    Error(String),
+}
+
+/// A markdown image, fetched the first time it is composed.
+///
+/// The blocks list is a `LazyColumn` with no beyond-bounds items, so this
+/// composable only runs once its block scrolls into view — that, rather than
+/// any explicit visibility test, is what makes the fetch lazy. The slot keeps
+/// a fixed height whether or not the bitmap has arrived, so a late image
+/// cannot shift the rows the reader is looking at.
+#[allow(non_snake_case)]
+#[composable]
+fn MarkdownImage(url: String, alt: String) {
+    let cached = cached_image(&url);
+    let state = cranpose_core::rememberMutableStateOf(|| match cached.clone() {
+        Some(bitmap) => ImageState::Ready(bitmap),
+        None => ImageState::Loading,
+    });
+    let http_client = local_http_client().current();
+
+    let effect_url = url.clone();
+    cranpose_core::LaunchedEffect(url.clone(), move |scope| {
+        if let Some(bitmap) = cached_image(&effect_url) {
+            state.set(ImageState::Ready(bitmap));
+            return;
+        }
+        state.set(ImageState::Loading);
+        let client = http_client.clone();
+        let fetch_url = effect_url.clone();
+        let store_url = effect_url.clone();
+        scope.launch_background(
+            move |_token| async move { fetch_image(&client, &fetch_url).await },
+            move |result| match result {
+                Ok(bitmap) => {
+                    cache_image(store_url.clone(), bitmap.clone());
+                    state.set(ImageState::Ready(bitmap));
+                }
+                Err(err) => state.set(ImageState::Error(err)),
+            },
+        );
+    });
+
+    let description = if alt.is_empty() {
+        "Markdown image".to_string()
+    } else {
+        alt.clone()
+    };
+    Box(
+        Modifier::empty()
+            .fill_max_width()
+            .height(MARKDOWN_IMAGE_HEIGHT)
+            .background(Color(0.10, 0.12, 0.17, 1.0))
+            .rounded_corners(8.0),
+        BoxSpec::default().content_alignment(Alignment::CENTER),
+        move || match state.get() {
+            ImageState::Ready(bitmap) => {
+                Image(
+                    bitmap,
+                    Some(description.clone()),
+                    Modifier::empty().fill_max_size(),
+                    Alignment::CENTER,
+                    ContentScale::Fit,
+                    1.0,
+                    None,
+                );
+            }
+            ImageState::Loading => {
+                Text(
+                    placeholder_label(&alt),
+                    Modifier::empty(),
+                    placeholder_text_style(Color(0.55, 0.60, 0.72, 1.0)),
+                );
+            }
+            ImageState::Error(err) => {
+                Text(
+                    err,
+                    Modifier::empty().padding(12.0),
+                    placeholder_text_style(Color(0.90, 0.55, 0.55, 1.0)),
+                );
+            }
+        },
+    );
+}
+
+fn placeholder_label(alt: &str) -> String {
+    if alt.is_empty() {
+        "Loading image…".to_string()
+    } else {
+        format!("Loading {alt}…")
+    }
+}
+
+fn placeholder_text_style(color: Color) -> TextStyle {
+    TextStyle {
+        span_style: SpanStyle {
+            color: Some(color),
+            font_size: TextUnit::Sp(13.0),
+            ..Default::default()
+        },
+        ..Default::default()
     }
 }
 
@@ -939,6 +1160,7 @@ mod tests {
             .iter()
             .filter_map(|block| match block {
                 MarkdownBlock::Text(annotated) => Some(annotated),
+                MarkdownBlock::Image { .. } => None,
                 MarkdownBlock::Rule => None,
             })
             .collect();
@@ -1119,6 +1341,7 @@ mod tests {
             .iter()
             .filter_map(|block| match block {
                 MarkdownBlock::Text(annotated) => Some(annotated.link_annotations.len()),
+                MarkdownBlock::Image { .. } => None,
                 MarkdownBlock::Rule => None,
             })
             .sum::<usize>();
@@ -1142,6 +1365,7 @@ mod tests {
         assert!(
             blocks.iter().any(|block| match block {
                 MarkdownBlock::Text(annotated) => !annotated.link_annotations.is_empty(),
+                MarkdownBlock::Image { .. } => false,
                 MarkdownBlock::Rule => false,
             }),
             "stress fixture must include linked text"
@@ -1157,6 +1381,7 @@ mod tests {
             .iter()
             .filter_map(|block| match block {
                 MarkdownBlock::Text(annotated) => Some(annotated.text.as_str()),
+                MarkdownBlock::Image { .. } => None,
                 MarkdownBlock::Rule => None,
             })
             .collect::<Vec<_>>();
@@ -1200,5 +1425,104 @@ mod tests {
         println!("PROFILE_MD: max_block_bytes={max_block_bytes}");
         println!("PROFILE_MD: max_block_preview={max_block_preview:?}");
         println!("PROFILE_MD: parse_ms={:.2}", elapsed.as_secs_f64() * 1000.0);
+    }
+
+    #[test]
+    fn an_image_becomes_its_own_block_instead_of_placeholder_text() {
+        let blocks = markdown_to_blocks("![a cat](https://example.com/cat.png)");
+        let images: Vec<_> = blocks
+            .iter()
+            .filter_map(|block| match block {
+                MarkdownBlock::Image { url, alt } => Some((url.as_str(), alt.as_str())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(images, vec![("https://example.com/cat.png", "a cat")]);
+        for block in &blocks {
+            if let MarkdownBlock::Text(annotated) = block {
+                assert!(
+                    !annotated.text.contains("[image:"),
+                    "the placeholder text survived: {:?}",
+                    annotated.text
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn an_image_without_alt_text_still_produces_a_block() {
+        let blocks = markdown_to_blocks("![](https://example.com/x.png)");
+        assert!(blocks
+            .iter()
+            .any(|block| matches!(block, MarkdownBlock::Image { url, .. }
+                if url == "https://example.com/x.png")));
+    }
+
+    #[test]
+    fn an_image_with_an_empty_url_is_dropped() {
+        let blocks = markdown_to_blocks("![alt]()");
+        assert!(!blocks
+            .iter()
+            .any(|block| matches!(block, MarkdownBlock::Image { .. })));
+    }
+
+    fn code_block_text(markdown: &str) -> Rc<AnnotatedString> {
+        markdown_to_blocks(markdown)
+            .into_iter()
+            .find_map(|block| match block {
+                MarkdownBlock::Text(annotated) if annotated.text.contains("fn ") => Some(annotated),
+                _ => None,
+            })
+            .expect("a code block")
+    }
+
+    #[test]
+    fn a_rust_fence_colours_its_keywords() {
+        let annotated = code_block_text(
+            "```rust
+fn main() {}
+```",
+        );
+        assert_eq!(annotated.text, "fn main() {}");
+        let coloured = annotated
+            .span_styles
+            .iter()
+            .filter(|span| span.item.color.is_some())
+            .count();
+        assert!(
+            coloured > 0,
+            "expected coloured spans in a rust fence: {:?}",
+            annotated.span_styles
+        );
+    }
+
+    #[test]
+    fn an_unfenced_code_block_keeps_its_text_uncoloured() {
+        let annotated = code_block_text(
+            "```
+fn main() {}
+```",
+        );
+        assert_eq!(annotated.text, "fn main() {}");
+        let coloured = annotated
+            .span_styles
+            .iter()
+            .filter(|span| span.item.color.is_some())
+            .count();
+        assert_eq!(coloured, 0, "a fence with no language must not be coloured");
+    }
+
+    #[test]
+    fn a_fence_preserves_its_code_exactly() {
+        let code = "let s = \"héllo\";\nlet n = 0xff;";
+        let markdown = format!("```rust\n{code}\n```");
+        let annotated = markdown_to_blocks(&markdown)
+            .into_iter()
+            .find_map(|block| match block {
+                MarkdownBlock::Text(annotated) if annotated.text.contains("let") => Some(annotated),
+                _ => None,
+            })
+            .expect("a code block");
+        assert_eq!(annotated.text, code);
     }
 }

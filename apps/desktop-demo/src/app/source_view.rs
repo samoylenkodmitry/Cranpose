@@ -6,12 +6,17 @@ use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope};
 use cranpose_services::local_http_client;
 use cranpose_ui::{
     composable,
+    text::{AnnotatedString, SpanStyle},
     widgets::{LazyColumn, LazyColumnSpec},
     Button, ButtonSpec, Color, Column, ColumnSpec, LinearArrangement, Modifier, Row, RowSpec, Text,
     TextStyle,
 };
 
-use super::DemoTab;
+use super::{
+    highlight::{language_from_fence, Language},
+    highlight_theme::highlight_lines,
+    DemoTab,
+};
 
 const REPOSITORY: &str = "https://raw.githubusercontent.com/samoylenkodmitry/cranpose";
 
@@ -41,8 +46,24 @@ fn source_url(tab: DemoTab) -> String {
 #[derive(Clone, PartialEq)]
 enum SourceState {
     Loading,
-    Ready(Rc<Vec<String>>),
+    Ready(Rc<Vec<Rc<AnnotatedString>>>),
     Error(String),
+}
+
+fn language_for(path: &str) -> Language {
+    match path.rsplit_once('.') {
+        Some((_, extension)) => language_from_fence(extension),
+        None => Language::Plain,
+    }
+}
+
+fn highlighted_lines(path: &str, body: &str) -> Rc<Vec<Rc<AnnotatedString>>> {
+    Rc::new(
+        highlight_lines(language_for(path), body)
+            .into_iter()
+            .map(Rc::new)
+            .collect(),
+    )
 }
 
 #[allow(non_snake_case)]
@@ -79,11 +100,13 @@ pub(crate) fn SourcePanel(tab: DemoTab) {
                 client
                     .get_text(&url)
                     .await
-                    .map(|body| body.lines().map(str::to_owned).collect::<Vec<_>>())
                     .map_err(|error| format!("could not fetch the source: {error}"))
             },
             move |result| match result {
-                Ok(lines) => state.set(SourceState::Ready(Rc::new(lines))),
+                Ok(body) => state.set(SourceState::Ready(highlighted_lines(
+                    source_path(tab),
+                    &body,
+                ))),
                 Err(error) => state.set(SourceState::Error(error)),
             },
         );
@@ -135,7 +158,7 @@ pub(crate) fn SourcePanel(tab: DemoTab) {
 
 #[allow(non_snake_case)]
 #[composable]
-fn SourceLine(number: usize, text: String) {
+fn SourceLine(number: usize, line: Rc<AnnotatedString>) {
     Row(
         Modifier::empty().fill_max_width(),
         RowSpec::new().horizontal_arrangement(LinearArrangement::SpacedBy(10.0)),
@@ -143,9 +166,15 @@ fn SourceLine(number: usize, text: String) {
             Text(
                 format!("{number:>4}"),
                 Modifier::empty(),
-                TextStyle::default(),
+                TextStyle {
+                    span_style: SpanStyle {
+                        color: Some(Color(0.38, 0.42, 0.50, 1.0)),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
             );
-            Text(text.clone(), Modifier::empty(), TextStyle::default());
+            Text(line.clone(), Modifier::empty(), TextStyle::default());
         },
     );
 }
