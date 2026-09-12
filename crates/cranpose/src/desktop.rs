@@ -614,6 +614,7 @@ struct App {
     primary_surface_dirty: bool,
     primary_initial_present_pending: bool,
     vsync_interval: Duration,
+    exiting: bool,
     #[cfg(feature = "robot")]
     presented_frame_generation: u64,
     #[cfg(feature = "robot")]
@@ -680,6 +681,7 @@ impl App {
             primary_surface_dirty: false,
             primary_initial_present_pending: false,
             vsync_interval: default_vsync_interval(),
+            exiting: false,
             #[cfg(feature = "robot")]
             presented_frame_generation: 0,
             #[cfg(feature = "robot")]
@@ -4171,6 +4173,9 @@ impl cranpose_app_shell::PlatformTextInputHandler for DesktopTextInput {
 
 impl ApplicationHandler for App {
     fn proxy_wake_up(&mut self, event_loop: &dyn ActiveEventLoop) {
+        if self.exiting {
+            return;
+        }
         #[cfg(feature = "robot")]
         if self
             .robot_controller
@@ -4429,6 +4434,7 @@ impl ApplicationHandler for App {
                 {
                     eprintln!("[Recorder] Error saving recording: {}", e);
                 }
+                self.exiting = true;
                 event_loop.exit();
             }
             WindowEvent::DragDropped { ref paths, .. } => {
@@ -4793,6 +4799,7 @@ impl ApplicationHandler for App {
 
     fn about_to_wait(&mut self, event_loop: &dyn ActiveEventLoop) {
         if cranpose_services::take_exit_request() {
+            self.exiting = true;
             event_loop.exit();
             return;
         }
@@ -5363,6 +5370,7 @@ impl ApplicationHandler for App {
                     }
                     RobotCommand::Exit => {
                         let _ = controller.tx.send(RobotResponse::Ok);
+                        self.exiting = true;
                         event_loop.exit();
                         return;
                     }
