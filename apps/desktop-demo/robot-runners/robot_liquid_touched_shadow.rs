@@ -62,13 +62,8 @@ fn main() -> ExitCode {
                 );
             }
 
-            let (cx, cy) = (first.0 + first.2 * 0.5, first.1 + first.3 * 0.5);
-            robot.touch_down(cx, cy).expect("touch down");
-            for _ in 0..14 {
-                robot.pump_frames(4).expect("pump frames");
-            }
-            std::thread::sleep(Duration::from_millis(350));
-            robot.pump_frames(12).expect("pump frames");
+            let (cx, cy) = liquid_page::centre(first);
+            liquid_page::hold(&robot, cx, cy);
             let held = robot
                 .screenshot_with_scale(SHOT_SCALE)
                 .expect("held screenshot");
