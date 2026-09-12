@@ -4740,3 +4740,175 @@ fn sibling_key_blocks_with_different_keys_do_not_share_state() {
         "the second sibling key(..) block must keep its own state, not the first's"
     );
 }
+
+#[test]
+fn a_rekeyed_subtree_keeps_its_place_when_only_its_scope_recomposes() {
+    thread_local! {
+        static CONTAINER_ID: Cell<Option<NodeId>> = const { Cell::new(None) };
+        static LIST_ID: Cell<Option<NodeId>> = const { Cell::new(None) };
+        static DOCK_ID: Cell<Option<NodeId>> = const { Cell::new(None) };
+    }
+
+    #[composable]
+    fn tabbed_list(tab: MutableState<u8>) {
+        let tab = tab.value();
+        cranpose_core::with_key(&tab, || {
+            let id = with_current_composer(|composer| {
+                composer.emit_node(|| TrackingChild {
+                    label: format!("list {tab}"),
+                    ..TrackingChild::default()
+                })
+            });
+            LIST_ID.with(|slot| slot.set(Some(id)));
+        });
+    }
+
+    #[composable]
+    fn dock() {
+        let id = with_current_composer(|composer| {
+            composer.emit_node(|| TrackingChild {
+                label: "dock".to_string(),
+                ..TrackingChild::default()
+            })
+        });
+        DOCK_ID.with(|slot| slot.set(Some(id)));
+    }
+
+    #[composable]
+    fn pane(tab: MutableState<u8>) {
+        let id = with_current_composer(|composer| composer.emit_node(RecordingNode::default));
+        CONTAINER_ID.with(|slot| slot.set(Some(id)));
+        cranpose_core::push_parent(id);
+        tabbed_list(tab);
+        dock();
+        cranpose_core::pop_parent();
+    }
+
+    fn container_children(composition: &mut Composition<MemoryApplier>) -> Vec<NodeId> {
+        let container = CONTAINER_ID.with(Cell::get).expect("container id");
+        composition
+            .applier_mut()
+            .with_node::<RecordingNode, _>(container, |node| node.children.clone())
+            .expect("container should exist")
+    }
+
+    let mut composition = test_composition();
+    let runtime = composition.runtime_handle();
+    let tab = MutableState::with_runtime(0u8, runtime);
+    let root_key = location_key(file!(), line!(), column!());
+
+    composition
+        .render(root_key, || {
+            pane(tab);
+        })
+        .expect("initial render");
+
+    let first_list = LIST_ID.with(Cell::get).expect("list id");
+    let dock_id = DOCK_ID.with(Cell::get).expect("dock id");
+    assert_eq!(
+        container_children(&mut composition),
+        vec![first_list, dock_id],
+        "the list should start above the dock"
+    );
+
+    tab.set_value(1);
+    while composition
+        .process_invalid_scopes()
+        .expect("recompose the list's scope")
+    {}
+
+    let second_list = LIST_ID.with(Cell::get).expect("list id");
+    assert_ne!(
+        second_list, first_list,
+        "the rekeyed list must compose a fresh node"
+    );
+    assert_eq!(
+        container_children(&mut composition),
+        vec![second_list, dock_id],
+        "a scoped recompose must place the rekeyed list where the old one was, not behind the dock"
+    );
+    assert_composition_valid(&composition);
+}
+
+#[test]
+fn a_scope_that_grows_places_its_new_node_among_its_own_nodes() {
+    thread_local! {
+        static CONTAINER_ID: Cell<Option<NodeId>> = const { Cell::new(None) };
+        static HEAD_ID: Cell<Option<NodeId>> = const { Cell::new(None) };
+        static TAIL_ID: Cell<Option<NodeId>> = const { Cell::new(None) };
+        static DOCK_ID: Cell<Option<NodeId>> = const { Cell::new(None) };
+    }
+
+    fn emit_child(label: &'static str) -> NodeId {
+        with_current_composer(|composer| {
+            composer.emit_node(|| TrackingChild {
+                label: label.to_string(),
+                ..TrackingChild::default()
+            })
+        })
+    }
+
+    #[composable]
+    fn growing_list(grown: MutableState<bool>) {
+        HEAD_ID.with(|slot| slot.set(Some(emit_child("head"))));
+        if grown.value() {
+            TAIL_ID.with(|slot| slot.set(Some(emit_child("tail"))));
+        }
+    }
+
+    #[composable]
+    fn dock() {
+        DOCK_ID.with(|slot| slot.set(Some(emit_child("dock"))));
+    }
+
+    #[composable]
+    fn pane(grown: MutableState<bool>) {
+        let id = with_current_composer(|composer| composer.emit_node(RecordingNode::default));
+        CONTAINER_ID.with(|slot| slot.set(Some(id)));
+        cranpose_core::push_parent(id);
+        growing_list(grown);
+        dock();
+        cranpose_core::pop_parent();
+    }
+
+    fn container_children(composition: &mut Composition<MemoryApplier>) -> Vec<NodeId> {
+        let container = CONTAINER_ID.with(Cell::get).expect("container id");
+        composition
+            .applier_mut()
+            .with_node::<RecordingNode, _>(container, |node| node.children.clone())
+            .expect("container should exist")
+    }
+
+    let mut composition = test_composition();
+    let runtime = composition.runtime_handle();
+    let grown = MutableState::with_runtime(false, runtime);
+    let root_key = location_key(file!(), line!(), column!());
+
+    composition
+        .render(root_key, || {
+            pane(grown);
+        })
+        .expect("initial render");
+
+    let head_id = HEAD_ID.with(Cell::get).expect("head id");
+    let dock_id = DOCK_ID.with(Cell::get).expect("dock id");
+    assert_eq!(
+        container_children(&mut composition),
+        vec![head_id, dock_id],
+        "the list should start with one row above the dock"
+    );
+
+    grown.set_value(true);
+    while composition
+        .process_invalid_scopes()
+        .expect("recompose the list's scope")
+    {}
+
+    let tail_id = TAIL_ID.with(Cell::get).expect("tail id");
+    assert_eq!(
+        container_children(&mut composition),
+        vec![head_id, tail_id, dock_id],
+        "a node a scope gains must follow the scope's own nodes, not the dock"
+    );
+    assert_composition_valid(&composition);
+}

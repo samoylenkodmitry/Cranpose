@@ -5,7 +5,7 @@ use super::{
     },
     SlotWriteSessionState,
 };
-use crate::{AnchorId, ScopeId};
+use crate::{AnchorId, NodeId, ScopeId};
 
 enum ActiveChildResolution {
     ReuseExpected { anchor: AnchorId },
@@ -236,6 +236,16 @@ impl SlotWriteSession<'_> {
                 kind: GroupStartKind::Inserted,
             },
         }
+    }
+
+    pub(crate) fn active_scope_root_node_ids(&mut self, scope_id: ScopeId) -> Vec<NodeId> {
+        let Some(group) = self.table.active_group_for_scope(scope_id) else {
+            return Vec::new();
+        };
+        let Some(anchor) = self.table.try_active_group_anchor(group) else {
+            return Vec::new();
+        };
+        self.table.collect_subtree_root_node_ids(anchor)
     }
 
     pub(crate) fn begin_recompose_at_scope(&mut self, scope_id: ScopeId) -> Option<ActiveGroupId> {

@@ -479,6 +479,7 @@ pub(crate) struct ComposerCore {
     pub(crate) phase: Cell<crate::Phase>,
     pub(crate) last_node_reused: Cell<Option<bool>>,
     pub(crate) recompose_parent_hint: Cell<Option<NodeId>>,
+    pub(crate) recompose_child_cursor: Cell<Option<usize>>,
     pub(crate) root_render_requested: Cell<bool>,
     pub(crate) _not_send: PhantomData<*const ()>,
 }
@@ -570,6 +571,7 @@ impl ComposerCore {
             phase: Cell::new(crate::Phase::Compose),
             last_node_reused: Cell::new(None),
             recompose_parent_hint: Cell::new(None),
+            recompose_child_cursor: Cell::new(None),
             root_render_requested: Cell::new(false),
             _not_send: PhantomData,
         }

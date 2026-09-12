@@ -751,6 +751,7 @@ fn queued_sync_children_preserves_child_reparented_later_in_same_apply() {
     commands.push(Command::AttachChild {
         parent_id: new_parent,
         child_id: child,
+        insert_index: None,
         bubble: DirtyBubble::LAYOUT_AND_MEASURE,
     });
 
@@ -2091,6 +2092,7 @@ fn reattaching_a_dirty_child_still_bubbles_to_ancestors() {
     commands.push(Command::AttachChild {
         parent_id: parent,
         child_id: child,
+        insert_index: None,
         bubble: DirtyBubble::LAYOUT_AND_MEASURE,
     });
     commands
@@ -2118,6 +2120,7 @@ fn reattaching_a_clean_child_bubbles_nothing() {
     commands.push(Command::AttachChild {
         parent_id: parent,
         child_id: child,
+        insert_index: None,
         bubble: DirtyBubble::LAYOUT_AND_MEASURE,
     });
     commands
