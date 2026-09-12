@@ -38,8 +38,16 @@ const SWAY_CYCLES: f32 = 9.0;
 const BREATHE_CYCLES: f32 = 16.0;
 const SWEEP_CYCLES: f32 = 7.0;
 const STAGE_GRID_DP: f32 = 56.0;
-const STAGE_BEAM_HALF_WIDTH: f32 = 70.0;
+const STAGE_BEAM_HALF_WIDTH: f32 = 90.0;
+const SLAB_SWEEP_HALF_WIDTH: f32 = 130.0;
 const TILE_BEAM_HALF_WIDTH: f32 = 22.0;
+const TILE_STREAK_HALF_WIDTH: f32 = 3.5;
+const TILE_BEVEL_INSET: f32 = 8.0;
+const TILE_BLOOM_BANDS: usize = 8;
+const TILE_BLOOM_BAND_DP: f32 = 6.0;
+const TILE_GLINT_RADIUS: f32 = 22.0;
+const TILE_SMOKE_ALPHA: f32 = 0.5;
+const SLAB_BEVEL_INSET: f32 = 6.0;
 const TAU: f32 = std::f32::consts::TAU;
 
 /// One tile: a language pair and the colour of its glass.
@@ -56,23 +64,23 @@ pub struct TileSpec {
 /// The four tiles, top-left to bottom-right.
 pub const TILES: [TileSpec; 4] = [
     TileSpec {
-        from: "EN",
-        to: "UA",
+        from: "AU",
+        to: "FR",
         color: Color::from_rgb_u8(64, 186, 255),
     },
     TileSpec {
-        from: "UA",
-        to: "EN",
+        from: "FR",
+        to: "AU",
         color: Color::from_rgb_u8(92, 255, 118),
     },
     TileSpec {
-        from: "EN",
-        to: "RU",
+        from: "AU",
+        to: "DE",
         color: Color::from_rgb_u8(255, 138, 48),
     },
     TileSpec {
-        from: "RU",
-        to: "EN",
+        from: "DE",
+        to: "AU",
         color: Color::from_rgb_u8(232, 78, 255),
     },
 ];
@@ -84,6 +92,16 @@ const STAGE_BEAMS: [(Color, f32, f32, f32); 6] = [
     (Color::from_rgb_u8(255, 180, 60), 6.0, 0.2, -1.1),
     (Color::from_rgb_u8(190, 90, 255), 2.0, 0.55, 0.5),
     (Color::from_rgb_u8(220, 235, 255), 7.0, 0.85, -0.4),
+];
+
+const STAGE_BOKEH: [(Color, f32, f32, f32, f32); 7] = [
+    (Color::from_rgb_u8(255, 90, 140), 1.0, 0.1, 0.2, 26.0),
+    (Color::from_rgb_u8(80, 150, 255), 1.0, 0.8, 0.5, 34.0),
+    (Color::from_rgb_u8(255, 200, 90), 2.0, 0.35, 0.85, 20.0),
+    (Color::from_rgb_u8(120, 255, 200), 1.0, 0.6, 0.15, 24.0),
+    (Color::from_rgb_u8(255, 120, 60), 2.0, 0.9, 0.7, 30.0),
+    (Color::from_rgb_u8(200, 120, 255), 1.0, 0.25, 0.6, 22.0),
+    (Color::from_rgb_u8(255, 255, 255), 3.0, 0.5, 0.35, 14.0),
 ];
 
 const STAGE_GLOWS: [(Color, f32, f32, f32); 3] = [
@@ -115,15 +133,15 @@ fn slab_glass() -> Glass {
 fn tile_glass(color: Color) -> Glass {
     Glass::lens()
         .shape(LiquidShape::RoundedRect(TILE_RADIUS))
-        .tint(color.with_alpha(0.11))
-        .ink_recolor(color, 0.28)
+        .tint(color.with_alpha(0.05))
+        .ink_recolor(color, 0.12)
         .lift(0.0)
-        .refraction_depth(0.4)
-        .refraction_curve(0.8)
+        .refraction_depth(0.9)
+        .refraction_curve(0.5)
         .dispersion(0.55)
         .transmission_refraction(1.0)
-        .saturation(1.5)
-        .highlight(1.35)
+        .saturation(1.3)
+        .highlight(0.9)
         .contrast(1.1)
         .shadow_style(GlassShadow::new(color.with_alpha(0.85), 34.0, 0.0, 4.0))
 }
@@ -159,16 +177,17 @@ fn draw_beam(
     color: Color,
     alpha: f32,
     x: f32,
-    half_width: f32,
+    half_thickness: f32,
     slope: f32,
-    reach: f32,
 ) {
+    let length = (1.0 + slope * slope).sqrt();
+    let normal = Point::new(-slope / length * half_thickness, half_thickness / length);
     let clear = color.with_alpha(0.0);
     scope.draw_rect_blend(
         Brush::linear_gradient_range(
             vec![clear, color.with_alpha(alpha), clear],
-            Point::new(x - half_width, 0.0),
-            Point::new(x + half_width, reach * slope),
+            Point::new(x - normal.x, -normal.y),
+            Point::new(x + normal.x, normal.y),
         ),
         BlendMode::Plus,
     );
@@ -213,7 +232,7 @@ fn draw_stage(scope: &mut dyn DrawScope, t: f32) {
         );
         scope.draw_circle_blend(
             Brush::radial_gradient(
-                vec![color.with_alpha(0.28), color.with_alpha(0.0)],
+                vec![color.with_alpha(0.16), color.with_alpha(0.0)],
                 center,
                 reach,
             ),
@@ -224,15 +243,24 @@ fn draw_stage(scope: &mut dyn DrawScope, t: f32) {
     }
     for (color, cycles, phase, slope) in STAGE_BEAMS {
         let cycle = (t * cycles + phase).fract();
-        let x = -size.width * 0.6 + size.width * 2.2 * cycle;
-        draw_beam(
-            scope,
-            color,
-            0.3,
-            x,
-            STAGE_BEAM_HALF_WIDTH,
-            slope,
-            size.height * 0.5,
+        let x = -size.width * 0.8 + size.width * 2.6 * cycle;
+        draw_beam(scope, color, 0.2, x, STAGE_BEAM_HALF_WIDTH, slope);
+    }
+    for (color, cycles, phase_x, phase_y, radius) in STAGE_BOKEH {
+        let angle = t * TAU * cycles;
+        let center = Point::new(
+            size.width * (phase_x + 0.06 * angle.sin()),
+            size.height * (phase_y + 0.05 * (angle * 1.3).cos()),
+        );
+        scope.draw_circle_blend(
+            Brush::radial_gradient(
+                vec![color.with_alpha(0.9), color.with_alpha(0.0)],
+                center,
+                radius,
+            ),
+            center,
+            radius,
+            BlendMode::Plus,
         );
     }
 }
@@ -240,8 +268,8 @@ fn draw_stage(scope: &mut dyn DrawScope, t: f32) {
 fn draw_slab_light(scope: &mut dyn DrawScope, t: f32) {
     let size = scope.size();
     let cycle = (t * SWEEP_CYCLES).fract();
-    let x = -size.width * 0.5 + size.width * 2.0 * cycle;
-    draw_beam(scope, Color::WHITE, 0.07, x, 130.0, 0.6, size.height);
+    let x = -size.width * 0.6 + size.width * 2.2 * cycle;
+    draw_beam(scope, Color::WHITE, 0.07, x, SLAB_SWEEP_HALF_WIDTH, 0.6);
     let radii = CornerRadii::uniform(SLAB_RADIUS);
     scope.draw_round_rect_stroked_blend(
         Brush::solid(Color::WHITE.with_alpha(0.05)),
@@ -249,8 +277,20 @@ fn draw_slab_light(scope: &mut dyn DrawScope, t: f32) {
         Stroke::new(16.0),
         BlendMode::Plus,
     );
+    draw_rim(
+        scope,
+        Brush::solid(Color::WHITE.with_alpha(0.12)),
+        1.0,
+        SLAB_BEVEL_INSET,
+        SLAB_RADIUS,
+        BlendMode::SrcOver,
+    );
     scope.draw_round_rect_stroked(
-        Brush::solid(Color::WHITE.with_alpha(0.5)),
+        Brush::vertical_gradient(
+            vec![Color::WHITE.with_alpha(0.85), Color::WHITE.with_alpha(0.25)],
+            0.0,
+            size.height,
+        ),
         radii,
         Stroke::new(1.5),
     );
@@ -265,52 +305,119 @@ fn draw_tile_light(
     index: usize,
 ) {
     let size = scope.size();
+    scope.draw_rect(Brush::solid(
+        Color::BLACK.with_alpha(TILE_SMOKE_ALPHA * (1.0 - 0.6 * flood)),
+    ));
     scope.draw_rect_blend(
         Brush::solid(color.with_alpha(0.32 * flood)),
         BlendMode::Plus,
     );
-    for beam in 0..2 {
-        let cycles = 3.0 + beam as f32;
-        let cycle = (t * cycles + index as f32 * 0.31 + beam as f32 * 0.5).fract();
-        let x = -size.width * 0.4 + size.width * 1.8 * cycle;
+    let phase = index as f32 * 0.31;
+    let sweep = |cycle: f32| -size.width * 1.2 + size.width * 2.8 * cycle;
+    draw_beam(
+        scope,
+        color,
+        0.3 * glow,
+        sweep((t * 3.0 + phase).fract()),
+        TILE_BEAM_HALF_WIDTH,
+        -0.6,
+    );
+    let streak_colour = mix(color, Color::WHITE, 0.7);
+    for (streak, slope) in [0.9, 1.15, 0.7].into_iter().enumerate() {
+        let cycle = (t * (2.0 + streak as f32) + phase + streak as f32 * 0.37).fract();
         draw_beam(
             scope,
-            color,
-            0.4 * glow,
-            x,
-            TILE_BEAM_HALF_WIDTH,
-            if beam == 0 { 0.8 } else { -0.6 },
-            size.height,
+            streak_colour,
+            0.9 * glow,
+            sweep(cycle),
+            TILE_STREAK_HALF_WIDTH,
+            slope,
         );
     }
-    for (width, alpha) in [(44.0, 0.14), (16.0, 0.3), (5.0, 0.7)] {
-        draw_inset_rim(
+    for band in 0..TILE_BLOOM_BANDS {
+        let falloff = 1.0 - band as f32 / TILE_BLOOM_BANDS as f32;
+        draw_rim(
             scope,
-            color.with_alpha(alpha * glow),
-            width,
+            Brush::solid(color.with_alpha(0.22 * falloff * falloff * glow)),
+            TILE_BLOOM_BAND_DP,
+            TILE_BLOOM_BAND_DP * (band as f32 + 0.5),
+            TILE_RADIUS,
             BlendMode::Plus,
         );
     }
-    draw_inset_rim(
+    draw_rim(
         scope,
-        mix(color, Color::WHITE, 0.55).with_alpha(0.5 + 0.5 * glow),
+        Brush::solid(color.with_alpha(0.7 * glow)),
+        5.0,
+        2.5,
+        TILE_RADIUS,
+        BlendMode::Plus,
+    );
+    draw_rim(
+        scope,
+        Brush::solid(mix(color, Color::WHITE, 0.3).with_alpha(0.35 * glow)),
+        1.0,
+        TILE_BEVEL_INSET,
+        TILE_RADIUS,
+        BlendMode::Plus,
+    );
+    draw_rim(
+        scope,
+        Brush::solid(mix(color, Color::WHITE, 0.55).with_alpha(0.5 + 0.5 * glow)),
         1.5,
+        0.75,
+        TILE_RADIUS,
         BlendMode::SrcOver,
+    );
+    draw_rim(
+        scope,
+        Brush::linear_gradient_range(
+            vec![
+                Color::WHITE.with_alpha(0.8 * glow),
+                Color::WHITE.with_alpha(0.0),
+            ],
+            Point::new(0.0, 0.0),
+            Point::new(size.width * 0.6, size.height * 0.8),
+        ),
+        2.0,
+        1.0,
+        TILE_RADIUS,
+        BlendMode::Plus,
+    );
+    let glint = Point::new(
+        size.width - TILE_GLINT_RADIUS - 8.0,
+        TILE_GLINT_RADIUS + 8.0,
+    );
+    scope.draw_circle_blend(
+        Brush::radial_gradient(
+            vec![Color::WHITE.with_alpha(glow), Color::WHITE.with_alpha(0.0)],
+            glint,
+            TILE_GLINT_RADIUS,
+        ),
+        glint,
+        TILE_GLINT_RADIUS,
+        BlendMode::Plus,
     );
 }
 
-fn draw_inset_rim(scope: &mut dyn DrawScope, color: Color, width: f32, blend_mode: BlendMode) {
+fn draw_rim(
+    scope: &mut dyn DrawScope,
+    brush: Brush,
+    width: f32,
+    inset: f32,
+    radius: f32,
+    blend_mode: BlendMode,
+) {
     let size = scope.size();
-    let inset = width * 0.5;
     scope.draw_round_rect_at_stroked_blend(
         Rect {
             x: inset,
             y: inset,
-            width: size.width - width,
-            height: size.height - width,
+            width: size.width - inset * 2.0,
+            height: size.height - inset * 2.0,
         },
-        Brush::solid(color),
-        CornerRadii::uniform((TILE_RADIUS - inset).max(1.0)),
+        brush,
+        CornerRadii::uniform((radius - inset).max(1.0)),
         Stroke::new(width),
         blend_mode,
     );
@@ -336,7 +443,7 @@ fn tile_layer(hover: f32, press: f32, rotation_x: f32, rotation_y: f32) -> Graph
 
 fn tile_dynamics(hover: f32, glow: f32, press: f32, finger: (f32, f32)) -> GlassDynamics {
     GlassDynamics {
-        highlight_boost: 0.6 * hover + 0.15 * glow,
+        highlight_boost: 0.3 * hover + 0.15 * glow,
         saturation_boost: 0.5 * hover + 0.1 * glow,
         tint_alpha_multiplier: Some(1.0 + 3.2 * hover + 0.25 * glow),
         ..Default::default()
