@@ -18,7 +18,7 @@ use cranpose_animation::{
 use cranpose_core::State;
 use cranpose_foundation::SemanticsConfiguration;
 use cranpose_ui::{Alignment, HorizontalAlignment, LinearArrangement, PointerEvent};
-use cranpose_ui_graphics::{BlendMode, DrawScope, Rect, Stroke};
+use cranpose_ui_graphics::{BlendMode, DrawScope, Rect, Stroke, TileMode};
 
 const SLAB_WIDTH: f32 = 640.0;
 const SLAB_HEIGHT: f32 = 560.0;
@@ -43,8 +43,19 @@ const SLAB_SWEEP_HALF_WIDTH: f32 = 130.0;
 const TILE_BEAM_HALF_WIDTH: f32 = 22.0;
 const TILE_STREAK_HALF_WIDTH: f32 = 3.5;
 const TILE_BEVEL_INSET: f32 = 8.0;
-const TILE_BLOOM_BANDS: usize = 8;
+const TILE_BLOOM_BANDS: usize = 12;
 const TILE_BLOOM_BAND_DP: f32 = 6.0;
+const STAGE_BOKEH_SCALE: f32 = 1.6;
+const TILE_RAY_HALF_WIDTH: f32 = 16.0;
+const TILE_POOL_RADIUS: f32 = 72.0;
+const TILE_SPILL_REACH: f32 = 0.7;
+
+const TILE_SCATTER: [(f32, f32, f32); 4] = [
+    (-4.0, 3.0, -0.8),
+    (5.0, -3.0, 0.6),
+    (-6.0, 4.0, 0.9),
+    (4.0, 5.0, -0.5),
+];
 const TILE_GLINT_RADIUS: f32 = 22.0;
 const TILE_SMOKE_ALPHA: f32 = 0.5;
 const SLAB_BEVEL_INSET: f32 = 6.0;
@@ -113,7 +124,7 @@ const STAGE_GLOWS: [(Color, f32, f32, f32); 3] = [
 fn slab_glass() -> Glass {
     Glass::clear()
         .shape(LiquidShape::RoundedRect(SLAB_RADIUS))
-        .tint(Color::rgba(0.02, 0.03, 0.06, 0.32))
+        .tint(Color::rgba(0.02, 0.03, 0.06, 0.24))
         .blur_radius(0.0)
         .adaptive_frost(Color::WHITE, 0.0)
         .lift(0.0)
@@ -143,7 +154,7 @@ fn tile_glass(color: Color) -> Glass {
         .saturation(1.3)
         .highlight(0.9)
         .contrast(1.1)
-        .shadow_style(GlassShadow::new(color.with_alpha(0.85), 34.0, 0.0, 4.0))
+        .shadow_style(GlassShadow::new(color.with_alpha(0.6), 34.0, 8.0, 4.0))
 }
 
 /// The semantics description of a tile, which robot runners find it by.
@@ -232,7 +243,7 @@ fn draw_stage(scope: &mut dyn DrawScope, t: f32) {
         );
         scope.draw_circle_blend(
             Brush::radial_gradient(
-                vec![color.with_alpha(0.16), color.with_alpha(0.0)],
+                vec![color.with_alpha(0.22), color.with_alpha(0.0)],
                 center,
                 reach,
             ),
@@ -254,12 +265,12 @@ fn draw_stage(scope: &mut dyn DrawScope, t: f32) {
         );
         scope.draw_circle_blend(
             Brush::radial_gradient(
-                vec![color.with_alpha(0.9), color.with_alpha(0.0)],
+                vec![color.with_alpha(1.0), color.with_alpha(0.0)],
                 center,
-                radius,
+                radius * STAGE_BOKEH_SCALE,
             ),
             center,
-            radius,
+            radius * STAGE_BOKEH_SCALE,
             BlendMode::Plus,
         );
     }
@@ -322,13 +333,25 @@ fn draw_tile_light(
         TILE_BEAM_HALF_WIDTH,
         -0.6,
     );
+    let ray_colour = mix(color, Color::WHITE, 0.25);
+    for (ray, slope) in [0.9, 1.35].into_iter().enumerate() {
+        let cycle = (t * (2.0 + ray as f32) + phase + ray as f32 * 0.45).fract();
+        draw_beam(
+            scope,
+            ray_colour,
+            0.3 * glow,
+            sweep(cycle),
+            TILE_RAY_HALF_WIDTH,
+            slope,
+        );
+    }
     let streak_colour = mix(color, Color::WHITE, 0.7);
-    for (streak, slope) in [0.9, 1.15, 0.7].into_iter().enumerate() {
-        let cycle = (t * (2.0 + streak as f32) + phase + streak as f32 * 0.37).fract();
+    for (streak, slope) in [0.95, 0.75].into_iter().enumerate() {
+        let cycle = (t * (3.0 + streak as f32) + phase + streak as f32 * 0.37).fract();
         draw_beam(
             scope,
             streak_colour,
-            0.9 * glow,
+            0.8 * glow,
             sweep(cycle),
             TILE_STREAK_HALF_WIDTH,
             slope,
@@ -338,7 +361,7 @@ fn draw_tile_light(
         let falloff = 1.0 - band as f32 / TILE_BLOOM_BANDS as f32;
         draw_rim(
             scope,
-            Brush::solid(color.with_alpha(0.22 * falloff * falloff * glow)),
+            Brush::solid(color.with_alpha(0.26 * falloff * falloff * glow)),
             TILE_BLOOM_BAND_DP,
             TILE_BLOOM_BAND_DP * (band as f32 + 0.5),
             TILE_RADIUS,
@@ -384,18 +407,65 @@ fn draw_tile_light(
         TILE_RADIUS,
         BlendMode::Plus,
     );
+    let pool = Point::new(
+        if index.is_multiple_of(2) {
+            0.0
+        } else {
+            size.width
+        },
+        if index < 2 { 0.0 } else { size.height },
+    );
+    scope.draw_circle_blend(
+        Brush::radial_gradient(
+            vec![
+                mix(color, Color::WHITE, 0.35).with_alpha(0.55 * glow),
+                color.with_alpha(0.0),
+            ],
+            pool,
+            TILE_POOL_RADIUS,
+        ),
+        pool,
+        TILE_POOL_RADIUS,
+        BlendMode::Plus,
+    );
     let glint = Point::new(
         size.width - TILE_GLINT_RADIUS - 8.0,
         TILE_GLINT_RADIUS + 8.0,
     );
     scope.draw_circle_blend(
         Brush::radial_gradient(
-            vec![Color::WHITE.with_alpha(glow), Color::WHITE.with_alpha(0.0)],
+            vec![
+                Color::WHITE.with_alpha(0.6 * glow),
+                Color::WHITE.with_alpha(0.0),
+            ],
             glint,
             TILE_GLINT_RADIUS,
         ),
         glint,
         TILE_GLINT_RADIUS,
+        BlendMode::Plus,
+    );
+}
+
+fn draw_tile_spill(scope: &mut dyn DrawScope, color: Color, hover: f32) {
+    let size = scope.size();
+    let centre = Point::new(size.width * 0.5, size.height + 12.0);
+    let reach = size.width * TILE_SPILL_REACH;
+    let alpha = 0.14 + 0.36 * hover;
+    scope.draw_circle_blend(
+        Brush::radial_gradient_stops(
+            vec![
+                (0.0, color.with_alpha(alpha)),
+                (0.3, color.with_alpha(alpha * 0.45)),
+                (0.65, color.with_alpha(alpha * 0.12)),
+                (1.0, color.with_alpha(0.0)),
+            ],
+            centre,
+            reach,
+            TileMode::Clamp,
+        ),
+        centre,
+        reach,
         BlendMode::Plus,
     );
 }
@@ -427,15 +497,23 @@ fn breath(t: f32, index: usize) -> f32 {
     0.5 + 0.5 * (t * TAU * BREATHE_CYCLES + index as f32 * 0.25 * TAU).sin()
 }
 
-fn tile_layer(hover: f32, press: f32, rotation_x: f32, rotation_y: f32) -> GraphicsLayer {
+fn tile_layer(
+    index: usize,
+    hover: f32,
+    press: f32,
+    rotation_x: f32,
+    rotation_y: f32,
+) -> GraphicsLayer {
     let scale = 1.0 + 0.05 * hover - 0.03 * press;
+    let (scatter_x, scatter_y, scatter_degrees) = TILE_SCATTER[index];
     GraphicsLayer {
         scale_x: scale,
         scale_y: scale,
         rotation_x: -rotation_x * TILE_PARALLAX,
         rotation_y: -rotation_y * TILE_PARALLAX,
-        translation_x: rotation_y * TILE_SHIFT_DP_PER_DEGREE,
-        translation_y: -rotation_x * TILE_SHIFT_DP_PER_DEGREE,
+        rotation_z: scatter_degrees,
+        translation_x: scatter_x + rotation_y * TILE_SHIFT_DP_PER_DEGREE,
+        translation_y: scatter_y - rotation_x * TILE_SHIFT_DP_PER_DEGREE,
         camera_distance: CAMERA_DISTANCE,
         ..Default::default()
     }
@@ -551,7 +629,7 @@ fn Slab(
         } else {
             -PRESS_TILT_DEGREES
         };
-        target_y += if index % 2 == 0 {
+        target_y += if index.is_multiple_of(2) {
             -PRESS_TILT_DEGREES
         } else {
             PRESS_TILT_DEGREES
@@ -664,8 +742,15 @@ fn Tile(
             .semantics(move |config: &mut SemanticsConfiguration| {
                 config.content_description = Some(description.clone());
             })
+            .draw_behind(move |scope| draw_tile_spill(scope, color, hover.get()))
             .graphics_layer(move || {
-                tile_layer(hover.get(), press.get(), rotation_x.get(), rotation_y.get())
+                tile_layer(
+                    index,
+                    hover.get(),
+                    press.get(),
+                    rotation_x.get(),
+                    rotation_y.get(),
+                )
             })
             .pointer_input(index, move |scope| {
                 let touch = touch.clone();
@@ -713,10 +798,10 @@ fn TileLabel(spec: &'static TileSpec) {
         Modifier::empty(),
         ColumnSpec::default().horizontal_alignment(HorizontalAlignment::CenterHorizontally),
         move || {
-            Text(spec.from, Modifier::empty(), label_style(26.0, Some(600)));
+            Text(spec.from, Modifier::empty(), label_style(22.0, Some(600)));
             Row(Modifier::empty(), RowSpec::default(), move || {
-                Text("→ ", Modifier::empty(), label_style(26.0, None));
-                Text(spec.to, Modifier::empty(), label_style(26.0, Some(600)));
+                Text("→ ", Modifier::empty(), label_style(22.0, None));
+                Text(spec.to, Modifier::empty(), label_style(22.0, Some(600)));
             });
         },
     );
