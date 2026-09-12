@@ -469,3 +469,87 @@ mod kind_restart {
         );
     }
 }
+
+/// The metrics a field publishes while it sits unfocused on a scrolling page.
+fn resting_metrics(origin_y: f32) -> crate::text_field_modifier_node::TextFieldHandleMetrics {
+    crate::text_field_modifier_node::TextFieldHandleMetrics {
+        focused: false,
+        direct_manipulation: false,
+        node_origin: Point {
+            x: 20.0,
+            y: origin_y,
+        },
+        padding_left: 0.0,
+        padding_top: 0.0,
+        scroll_offset: 0.0,
+        line_height: 18.0,
+        glyph_box: (8.0, 18.0),
+        wrap_width: None,
+    }
+}
+
+thread_local! {
+    static HANDLE_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cranpose_macros::composable]
+#[allow(non_snake_case)]
+fn HandleConsumer(
+    controller: crate::text_field_modifier_node::TextFieldHandleController,
+    follow_position: bool,
+) {
+    HANDLE_READS.with(|reads| reads.set(reads.get() + 1));
+    let _ = if follow_position {
+        controller.live_metrics()
+    } else {
+        controller.metrics()
+    };
+}
+
+fn compositions_while_field_creeps(follow_position: bool) -> usize {
+    let mut composition = Composition::new(MemoryApplier::new());
+    let controller = crate::text_field_modifier_node::TextFieldHandleController::new();
+    controller.publish(resting_metrics(109.256_15));
+
+    HANDLE_READS.with(|reads| reads.set(0));
+    let controller_for_content = controller.clone();
+    composition
+        .render(location_key(file!(), line!(), column!()), move || {
+            HandleConsumer(controller_for_content.clone(), follow_position);
+        })
+        .expect("initial render");
+    let before = HANDLE_READS.with(std::cell::Cell::get);
+
+    // A list settling under the field nudges its origin by a fraction of a
+    // pixel a frame. Nothing about the handles changed.
+    for step in 1..=4 {
+        controller.publish(resting_metrics(109.256_15 - step as f32 * 0.000_2));
+        while composition
+            .process_invalid_scopes()
+            .expect("process the published metrics")
+        {}
+    }
+
+    HANDLE_READS.with(std::cell::Cell::get) - before
+}
+
+#[test]
+fn a_field_that_only_moves_does_not_recompose_its_handle_consumers() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    assert_eq!(
+        compositions_while_field_creeps(false),
+        0,
+        "a scope that only asks whether the handles are live must not recompose when the field \
+         moves under a settling list"
+    );
+}
+
+#[test]
+fn a_live_handle_consumer_still_follows_the_field() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    assert!(
+        compositions_while_field_creeps(true) >= 4,
+        "a scope placing handles at the caret must keep following the field, or this test cannot \
+         tell a fixed subscription from a severed one"
+    );
+}
