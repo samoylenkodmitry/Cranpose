@@ -1,10 +1,13 @@
 use std::{cell::RefCell, rc::Rc};
 
 use cranpose_animation::{Easing, tween};
-use cranpose_core::{DisposableEffectResult, MutableState};
+use cranpose_core::{DisposableEffectResult, MutableState, NodeId};
 use cranpose_macros::composable;
 
-use crate::{Crossfade, TestComposition, run_test_composition};
+use crate::{
+    Crossfade, HeadlessRenderer, LayoutEngine, Modifier, RenderOp, Size, TestComposition, Text,
+    TextStyle, run_test_composition,
+};
 
 const FRAME_NANOS: u64 = 16_666_667;
 const CROSSFADE_MILLIS: u64 = 160;
@@ -159,5 +162,128 @@ fn crossfade_retargeting_mid_transition_restores_previous_content() {
         alive.borrow().as_slice(),
         &[1],
         "interrupted content should be removed once its fade-out completes"
+    );
+}
+
+/// Everything a pane needs, bundled into one `PartialEq` argument — the shape
+/// that lets `#[composable]` skip a call whose arguments did not change.
+#[derive(Clone, Copy, PartialEq)]
+struct Shell {
+    rows: MutableState<usize>,
+    revision: usize,
+}
+
+#[composable]
+#[allow(non_snake_case)]
+fn ShellRows(rows: MutableState<usize>) {
+    let count = rows.get();
+    for index in 0..count {
+        cranpose_core::with_key(&index, || {
+            Text(
+                format!("Row {index}"),
+                Modifier::empty().fill_max_width().height(24.0),
+                TextStyle::default(),
+            );
+        });
+    }
+}
+
+#[composable]
+#[allow(non_snake_case)]
+fn ShellFooter(revision: usize) {
+    Text(
+        format!("Footer {revision}"),
+        Modifier::empty().fill_max_width().height(24.0),
+        TextStyle::default(),
+    );
+}
+
+/// A whole crossfade entry in one skippable composable: one half reads shared
+/// state and one half only ever sees what it was passed.
+#[composable]
+#[allow(non_snake_case)]
+fn ShellPane(shell: Shell) {
+    ShellRows(shell.rows);
+    ShellFooter(shell.revision);
+}
+
+#[composable]
+#[allow(non_snake_case)]
+fn ShellHost(rows: MutableState<usize>) {
+    let shell = Shell {
+        rows,
+        revision: rows.get(),
+    };
+    Crossfade(
+        0u32,
+        tween(CROSSFADE_MILLIS, Easing::LinearEasing),
+        move |_| ShellPane(shell),
+    );
+}
+
+fn rendered_texts(composition: &mut TestComposition, root: NodeId) -> Vec<String> {
+    let handle = composition.runtime_handle();
+    let mut applier = composition.applier_mut();
+    applier.set_runtime_handle(handle);
+    let layout = applier
+        .compute_layout(
+            root,
+            Size {
+                width: 320.0,
+                height: 480.0,
+            },
+        )
+        .expect("layout");
+    applier.clear_runtime_handle();
+    let scene = HeadlessRenderer::new().render(&layout);
+    scene
+        .operations()
+        .iter()
+        .filter_map(|op| match op {
+            RenderOp::Text { value, .. } => Some(value.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A crossfade entry shows what its caller last handed it.
+///
+/// The content closure is captured fresh on every `Crossfade` call and stashed
+/// in the remembered handle, so it never reaches `CrossfadeContents` as an
+/// argument. When the entry's content is a composable that could skip, only
+/// the half that reads shared state stays current: the half that reads its own
+/// arguments keeps painting the values from the composition before.
+#[test]
+fn a_crossfade_entry_shows_what_its_caller_last_supplied() {
+    let rows_slot = Rc::new(RefCell::new(None::<MutableState<usize>>));
+    let mut composition = {
+        let rows_slot = Rc::clone(&rows_slot);
+        run_test_composition(move || {
+            let rows = cranpose_core::rememberMutableStateOf(|| 2usize);
+            rows_slot.borrow_mut().replace(rows);
+            ShellHost(rows);
+        })
+    };
+    let rows = rows_slot.borrow().expect("rows state captured");
+    let root = composition.root().expect("root");
+
+    assert_eq!(
+        rendered_texts(&mut composition, root),
+        vec![
+            "Row 0".to_string(),
+            "Row 1".to_string(),
+            "Footer 2".to_string()
+        ],
+        "the entry should start with both rows and a footer that agrees"
+    );
+
+    rows.set(1);
+    drain(&mut composition);
+
+    assert_eq!(
+        rendered_texts(&mut composition, root),
+        vec!["Row 0".to_string(), "Footer 1".to_string()],
+        "the footer reads the argument the caller recomposed with, so an entry \
+         that kept the old closure leaves it stale while the rows move on"
     );
 }

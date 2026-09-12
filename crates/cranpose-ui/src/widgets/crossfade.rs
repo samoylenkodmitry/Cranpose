@@ -115,7 +115,9 @@ where
 
 /// Reactive part of [`Crossfade`]: reads the per-entry alpha states so each
 /// animation frame recomposes it, and drops entries whose fade-out finished.
-#[composable]
+/// It cannot skip: the content it runs is the closure [`Crossfade`] just put
+/// in the handle, which none of these three parameters describes.
+#[composable(no_skip)]
 fn CrossfadeContents<T>(state: CrossfadeStateHandle<T>, target_state: T, animation: AnimationType)
 where
     T: Clone + PartialEq + 'static,
