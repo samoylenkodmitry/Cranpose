@@ -1,11 +1,31 @@
 use std::rc::Rc;
 
+use smallvec::SmallVec;
+
 use crate::{
     Command, Composer, ComposerCore, DirtyBubble, NodeId, RecomposeScope,
     debug_scope_invalidation_sources, debug_scope_label,
 };
 
 impl Composer {
+    fn scope_child_cursor(
+        &self,
+        scope: &RecomposeScope,
+        parent_hint: Option<NodeId>,
+    ) -> Option<usize> {
+        let parent_hint = parent_hint?;
+        let roots =
+            self.with_slot_session_mut(|slots| slots.active_scope_root_node_ids(scope.id()));
+        let first = roots.first().copied()?;
+        let mut applier = self.borrow_applier();
+        let mut siblings: SmallVec<[NodeId; 8]> = SmallVec::new();
+        applier
+            .get_mut(parent_hint)
+            .ok()?
+            .collect_owned_children_into(&mut siblings);
+        siblings.iter().position(|&sibling| sibling == first)
+    }
+
     pub(crate) fn recompose_group(&self, scope: &RecomposeScope) {
         struct RecomposeGuard {
             composer: Composer,
@@ -50,19 +70,27 @@ impl Composer {
             debug_scope_invalidation_sources(scope.id()),
         );
         if started.is_some() {
-            let previous_hint = self.core.recompose_parent_hint.replace(scope.parent_hint());
+            let parent_hint = scope.parent_hint();
+            let previous_hint = self.core.recompose_parent_hint.replace(parent_hint);
+            let previous_cursor = self
+                .core
+                .recompose_child_cursor
+                .replace(self.scope_child_cursor(scope, parent_hint));
             struct HintGuard {
                 core: Rc<ComposerCore>,
                 previous: Option<NodeId>,
+                previous_cursor: Option<usize>,
             }
             impl Drop for HintGuard {
                 fn drop(&mut self) {
                     self.core.recompose_parent_hint.set(self.previous);
+                    self.core.recompose_child_cursor.set(self.previous_cursor);
                 }
             }
             let _hint_guard = HintGuard {
                 core: self.clone_core(),
                 previous: previous_hint,
+                previous_cursor,
             };
             {
                 let mut stack = self.scope_stack();

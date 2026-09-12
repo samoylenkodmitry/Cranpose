@@ -1779,6 +1779,7 @@ pub(crate) enum Command {
     AttachChild {
         parent_id: NodeId,
         child_id: NodeId,
+        insert_index: Option<usize>,
         bubble: DirtyBubble,
     },
     InsertChild {
@@ -1922,18 +1923,10 @@ impl Command {
             Self::AttachChild {
                 parent_id,
                 child_id,
+                insert_index,
                 bubble,
             } => {
-                if insert_child_with_reparenting(applier, parent_id, child_id) {
-                    bubble.apply(applier, parent_id);
-                } else if let Ok(child) = applier.get_mut(child_id) {
-                    let dirty_bubble = DirtyBubble {
-                        layout: child.needs_layout(),
-                        measure: child.needs_measure(),
-                        semantics: false,
-                    };
-                    dirty_bubble.apply(applier, parent_id);
-                }
+                attach_child_at(applier, parent_id, child_id, insert_index, bubble);
                 Ok(())
             }
             Self::InsertChild {
@@ -2042,6 +2035,7 @@ struct UpdateTypedNodeCommand {
 struct AttachChildCommand {
     parent_id: NodeId,
     child_id: NodeId,
+    insert_index: Option<usize>,
     bubble: DirtyBubble,
 }
 
@@ -2137,11 +2131,13 @@ impl CommandQueue {
             Command::AttachChild {
                 parent_id,
                 child_id,
+                insert_index,
                 bubble,
             } => {
                 self.attach_children.push(AttachChildCommand {
                     parent_id,
                     child_id,
+                    insert_index,
                     bubble,
                 });
                 self.push_tag(CommandTag::AttachChild);
@@ -2391,11 +2387,13 @@ impl CommandQueue {
                         let AttachChildCommand {
                             parent_id,
                             child_id,
+                            insert_index,
                             bubble,
                         } = next_command_payload(&mut attach_children, tag)?;
                         Command::AttachChild {
                             parent_id,
                             child_id,
+                            insert_index,
                             bubble,
                         }
                         .apply_with_cleanup(applier, &mut deferred_cleanup)?;
@@ -2518,6 +2516,41 @@ fn update_typed_node<N: Node + 'static>(node: &mut dyn Node, id: NodeId) -> Resu
         })?;
     typed.update();
     Ok(())
+}
+
+fn attach_child_at(
+    applier: &mut dyn Applier,
+    parent_id: NodeId,
+    child_id: NodeId,
+    insert_index: Option<usize>,
+    bubble: DirtyBubble,
+) {
+    if insert_child_with_reparenting(applier, parent_id, child_id) {
+        if let Some(target) = insert_index {
+            move_appended_child_to(applier, parent_id, target);
+        }
+        bubble.apply(applier, parent_id);
+    } else if let Ok(child) = applier.get_mut(child_id) {
+        let dirty_bubble = DirtyBubble {
+            layout: child.needs_layout(),
+            measure: child.needs_measure(),
+            semantics: false,
+        };
+        dirty_bubble.apply(applier, parent_id);
+    }
+}
+
+fn move_appended_child_to(applier: &mut dyn Applier, parent_id: NodeId, target: usize) {
+    let Ok(parent_node) = applier.get_mut(parent_id) else {
+        return;
+    };
+    let mut owned: SmallVec<[NodeId; 8]> = SmallVec::new();
+    parent_node.collect_owned_children_into(&mut owned);
+    let appended_index = owned.len().saturating_sub(1);
+    if target < appended_index {
+        parent_node.move_child(appended_index, target);
+        note_structural_move(parent_id, appended_index, target);
+    }
 }
 
 fn insert_child_with_reparenting(

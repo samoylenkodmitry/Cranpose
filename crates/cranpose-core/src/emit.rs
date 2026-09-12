@@ -231,6 +231,12 @@ impl Composer {
         self.attach_to_parent_with_mode(id, false);
     }
 
+    fn advance_recompose_child_cursor(&self) -> Option<usize> {
+        let cursor = self.core.recompose_child_cursor.get()?;
+        self.core.recompose_child_cursor.set(Some(cursor + 1));
+        Some(cursor)
+    }
+
     pub(crate) fn attach_to_parent_with_mode(
         &self,
         id: NodeId,
@@ -283,6 +289,7 @@ impl Composer {
                     self.commands_mut().push(Command::AttachChild {
                         parent_id,
                         child_id: id,
+                        insert_index: None,
                         bubble: DirtyBubble::LAYOUT_AND_MEASURE,
                     });
                 }
@@ -326,11 +333,15 @@ impl Composer {
                     .unwrap_or(None)
             };
             match parent_status {
-                Some(existing) if existing == parent_hint => {}
+                Some(existing) if existing == parent_hint => {
+                    self.advance_recompose_child_cursor();
+                }
                 None => {
+                    let insert_index = self.advance_recompose_child_cursor();
                     self.commands_mut().push(Command::AttachChild {
                         parent_id: parent_hint,
                         child_id: id,
+                        insert_index,
                         bubble: DirtyBubble::LAYOUT_AND_MEASURE,
                     });
                 }
