@@ -3,6 +3,7 @@
 - No unsafe code.
 - Use KISS, DRY and SOLID; duplicated code of ten or more lines needs a shared abstraction.
 - Fix root causes completely; do not leave partial changes, deprecated paths or compatibility layers in this pre-alpha repository.
+- A wrong value fixed at one consumer is still wrong at the others; audit every consumer of that value before calling the bug fixed.
 - Review architecture, correctness and maintainability before completion; fix supported problems without inventing new ones.
 - Follow the [performance coding guide](docs/performance_coding_guide.md); reduce measured work and preserve exact pictures on shipped targets.
 - Use `cargo add` for dependencies and `cargo upgrade` for upgrades.
