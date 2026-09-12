@@ -621,39 +621,36 @@ fn TabBarHorizontal(
     let tabs_scroll_state =
         cranpose_core::remember(|| cranpose_ui::ScrollState::new(0.0)).with(|state| *state);
     Row(
-        Modifier::empty().fill_max_width(),
-        RowSpec::new().vertical_alignment(VerticalAlignment::CenterVertically),
+        Modifier::empty().fill_max_width().padding_each(
+            DEMO_PAGE_PADDING + DEMO_TAB_BAR_PADDING,
+            DEMO_TAB_BAR_PADDING,
+            DEMO_PAGE_PADDING + DEMO_TAB_BAR_PADDING,
+            0.0,
+        ),
+        RowSpec::new(),
         move || {
-            source_view::SourceToggleButton(
-                showing_source,
+            source_view::SourceToggleButton(showing_source, Modifier::empty());
+        },
+    );
+    Row(
+        Modifier::empty()
+            .fill_max_width()
+            .clip_to_bounds()
+            .horizontal_scroll(tabs_scroll_state, false),
+        RowSpec::new(),
+        move || {
+            Row(
                 Modifier::empty().padding_each(
                     DEMO_PAGE_PADDING + DEMO_TAB_BAR_PADDING,
+                    DEMO_TAB_BAR_PADDING,
                     DEMO_PAGE_PADDING + DEMO_TAB_BAR_PADDING,
-                    0.0,
                     DEMO_TAB_BAR_PADDING,
                 ),
-            );
-            Row(
-                Modifier::empty()
-                    .weight(1.0)
-                    .clip_to_bounds()
-                    .horizontal_scroll(tabs_scroll_state, false),
-                RowSpec::new(),
+                RowSpec::new().horizontal_arrangement(LinearArrangement::SpacedBy(8.0)),
                 move || {
-                    Row(
-                        Modifier::empty().padding_each(
-                            DEMO_TAB_BAR_PADDING,
-                            DEMO_PAGE_PADDING + DEMO_TAB_BAR_PADDING,
-                            DEMO_PAGE_PADDING + DEMO_TAB_BAR_PADDING,
-                            DEMO_TAB_BAR_PADDING,
-                        ),
-                        RowSpec::new().horizontal_arrangement(LinearArrangement::SpacedBy(8.0)),
-                        move || {
-                            for tab in DEMO_TABS {
-                                TabButton(tab, active_tab, 10.0);
-                            }
-                        },
-                    );
+                    for tab in DEMO_TABS {
+                        TabButton(tab, active_tab, 10.0);
+                    }
                 },
             );
         },

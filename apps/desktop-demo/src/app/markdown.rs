@@ -944,41 +944,43 @@ fn MarkdownImage(url: String, alt: String) {
     } else {
         alt.clone()
     };
-    Box(
-        Modifier::empty()
-            .fill_max_width()
-            .height(MARKDOWN_IMAGE_HEIGHT)
-            .background(Color(0.10, 0.12, 0.17, 1.0))
-            .rounded_corners(8.0),
-        BoxSpec::default().content_alignment(Alignment::CENTER),
-        move || match state.get() {
-            ImageState::Ready(bitmap) => {
-                Image(
-                    bitmap,
-                    Some(description.clone()),
-                    Modifier::empty().fill_max_size(),
-                    Alignment::CENTER,
-                    ContentScale::Fit,
-                    1.0,
-                    None,
-                );
-            }
-            ImageState::Loading => {
-                Text(
-                    placeholder_label(&alt),
-                    Modifier::empty(),
-                    placeholder_text_style(Color(0.55, 0.60, 0.72, 1.0)),
-                );
-            }
-            ImageState::Error(err) => {
-                Text(
-                    err,
-                    Modifier::empty().padding(12.0),
-                    placeholder_text_style(Color(0.90, 0.55, 0.55, 1.0)),
-                );
-            }
-        },
-    );
+    match state.get() {
+        ImageState::Ready(bitmap) => {
+            Box(
+                Modifier::empty()
+                    .fill_max_width()
+                    .height(MARKDOWN_IMAGE_HEIGHT)
+                    .background(Color(0.10, 0.12, 0.17, 1.0))
+                    .rounded_corners(8.0),
+                BoxSpec::default().content_alignment(Alignment::CENTER),
+                move || {
+                    Image(
+                        bitmap.clone(),
+                        Some(description.clone()),
+                        Modifier::empty().fill_max_size(),
+                        Alignment::CENTER,
+                        ContentScale::Fit,
+                        1.0,
+                        None,
+                    );
+                },
+            );
+        }
+        ImageState::Loading => {
+            Text(
+                placeholder_label(&alt),
+                Modifier::empty().padding(8.0),
+                placeholder_text_style(Color(0.55, 0.60, 0.72, 1.0)),
+            );
+        }
+        ImageState::Error(err) => {
+            Text(
+                err,
+                Modifier::empty().padding(8.0),
+                placeholder_text_style(Color(0.90, 0.55, 0.55, 1.0)),
+            );
+        }
+    }
 }
 
 fn placeholder_label(alt: &str) -> String {
