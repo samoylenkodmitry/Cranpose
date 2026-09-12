@@ -427,6 +427,10 @@ fn startup_tab_parser_accepts_variant_and_label_aliases() {
         DemoTab::from_startup_name("markdown-viewer"),
         Some(DemoTab::MarkdownViewer)
     );
+    assert_eq!(
+        DemoTab::from_startup_name("glass-tiles"),
+        Some(DemoTab::GlassTiles)
+    );
 }
 
 #[test]

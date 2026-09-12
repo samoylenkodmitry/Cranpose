@@ -309,6 +309,11 @@ path = "robot-runners/robot_feed_touched_shadow.rs"
 required-features = ["robot-app"]
 
 [[example]]
+name = "robot_glass_tiles"
+path = "robot-runners/robot_glass_tiles.rs"
+required-features = ["robot-app"]
+
+[[example]]
 name = "robot_double_click"
 path = "robot-runners/robot_double_click.rs"
 required-features = ["robot-app"]
