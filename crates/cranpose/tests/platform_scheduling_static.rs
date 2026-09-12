@@ -1915,8 +1915,89 @@ fn source_has_unsafe_boundary_escape(source: &str) -> bool {
         if trimmed.starts_with("//") {
             return false;
         }
-        line_has_unsafe_token(trimmed)
+        line_has_unsafe_token(&strip_quoted_spans(trimmed))
     })
+}
+
+/// Blanks out string and character literals so a keyword spelled inside one is
+/// not read as code. A syntax highlighter's keyword table lists `"unsafe"`
+/// without going anywhere near an FFI boundary.
+fn strip_quoted_spans(line: &str) -> String {
+    let bytes = line.as_bytes();
+    let mut out = String::with_capacity(line.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\'' => match char_literal_len(bytes, index) {
+                Some(len) => index += len,
+                None => {
+                    out.push('\'');
+                    index += 1;
+                }
+            },
+            b'"' => index += string_literal_len(bytes, index),
+            byte => {
+                out.push(byte as char);
+                index += 1;
+            }
+        }
+    }
+    out
+}
+
+fn char_literal_len(bytes: &[u8], start: usize) -> Option<usize> {
+    let mut index = start + 1;
+    if index < bytes.len() && bytes[index] == b'\\' {
+        index += 1;
+    }
+    index += 1;
+    if index < bytes.len() && bytes[index] == b'\'' {
+        return Some(index + 1 - start);
+    }
+    None
+}
+
+fn string_literal_len(bytes: &[u8], start: usize) -> usize {
+    let mut index = start + 1;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\\' => index += 2,
+            b'"' => return index + 1 - start,
+            _ => index += 1,
+        }
+    }
+    index - start
+}
+
+#[test]
+fn the_unsafe_guard_still_catches_real_unsafe_code() {
+    for source in [
+        "unsafe { ffi_call() }",
+        "    unsafe fn raw(&self) {}",
+        "let message = \"ok\"; unsafe { ffi_call() }",
+        "if quote == '\"' { unsafe { ffi_call() } }",
+        "unsafe impl Send for Handle {}",
+    ] {
+        assert!(
+            source_has_unsafe_boundary_escape(source),
+            "guard missed real unsafe code: {source:?}"
+        );
+    }
+}
+
+#[test]
+fn the_unsafe_guard_ignores_the_word_inside_a_literal() {
+    for source in [
+        "const RUST_KEYWORDS: &[&str] = &[\"async\", \"unsafe\", \"extern\"];",
+        "    \"unsafe\" | \"extern\" => TokenKind::Keyword,",
+        "// unsafe in a comment",
+        "let label = \"unsafe\";",
+    ] {
+        assert!(
+            !source_has_unsafe_boundary_escape(source),
+            "guard fired on a literal, not on code: {source:?}"
+        );
+    }
 }
 
 fn line_has_unsafe_token(line: &str) -> bool {

@@ -727,6 +727,7 @@ impl App {
                 surface_config,
                 self.surface_caps.as_ref(),
                 mode,
+                self.vsync_interval,
             );
         }
         self.last_frame_start_time = None;
@@ -741,6 +742,7 @@ impl App {
                 &mut native.surface_config,
                 Some(&native.surface_caps),
                 mode,
+                native.vsync_interval,
             );
             native.last_frame_start_time = None;
             native.window.request_redraw();
@@ -1448,7 +1450,7 @@ impl App {
             size.height.max(1),
             present_mode,
             options.transparent,
-            self.frame_pacing_mode(),
+            desired_frame_latency(self.frame_pacing_mode(), monitor_refresh_interval(&window)),
         )?;
         surface.configure(&context.device, &surface_config);
         present_initial_placeholder_frame(
@@ -2775,6 +2777,7 @@ fn apply_frame_pacing_mode(
     surface_config: &mut wgpu::SurfaceConfiguration,
     surface_caps: Option<&wgpu::SurfaceCapabilities>,
     mode: FramePacingMode,
+    vsync_interval: Duration,
 ) {
     app.set_frame_pacing_mode(mode);
     let Some(caps) = surface_caps else {
@@ -2785,7 +2788,7 @@ fn apply_frame_pacing_mode(
         return;
     };
     let present_mode = desktop_present_mode(caps, mode);
-    let frame_latency = desired_frame_latency(mode);
+    let frame_latency = desired_frame_latency(mode, vsync_interval);
     if surface_config.present_mode == present_mode
         && surface_config.desired_maximum_frame_latency == frame_latency
     {
@@ -2813,10 +2816,15 @@ fn log_desktop_present_mode(
     );
 }
 
-fn desired_frame_latency(mode: FramePacingMode) -> u32 {
+fn desired_frame_latency(mode: FramePacingMode, vsync_interval: Duration) -> u32 {
     match mode {
         FramePacingMode::Vsync | FramePacingMode::NoVsync => 2,
-        FramePacingMode::Hard60 | FramePacingMode::Hard120 => 1,
+        FramePacingMode::Hard60 | FramePacingMode::Hard120 => {
+            match frame_interval_for_mode(mode, vsync_interval) {
+                Some(interval) if interval >= vsync_interval => 1,
+                _ => 2,
+            }
+        }
     }
 }
 
@@ -3078,7 +3086,7 @@ fn surface_config_for_window(
     height: u32,
     present_mode: wgpu::PresentMode,
     transparent: bool,
-    frame_pacing_mode: FramePacingMode,
+    frame_latency: u32,
 ) -> Result<wgpu::SurfaceConfiguration, LaunchError> {
     Ok(wgpu::SurfaceConfiguration {
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -3088,7 +3096,7 @@ fn surface_config_for_window(
         present_mode,
         alpha_mode: select_alpha_mode(surface_caps, transparent)?,
         view_formats: crate::surface_format::display_surface_view_formats(surface_format),
-        desired_maximum_frame_latency: desired_frame_latency(frame_pacing_mode),
+        desired_maximum_frame_latency: frame_latency,
     })
 }
 
@@ -4260,7 +4268,7 @@ impl ApplicationHandler for App {
             size.height.max(1),
             present_mode,
             false,
-            self.frame_pacing_mode(),
+            desired_frame_latency(self.frame_pacing_mode(), self.vsync_interval),
         ) {
             Ok(config) => config,
             Err(error) => {
@@ -5951,8 +5959,8 @@ mod tests {
         NativeWindowGraphPositionSource, NativeWindowOptions, NativeWindowPointerState,
         NativeWindowPollingDragSession, NativeWindowPositionObservation,
         NativeWindowPositionOrigin, PendingNativeWindowPositions, PrimaryPointerGesturePollAction,
-        clamp_rect_to_monitor_delta, frame_interval_for_mode, free_running_frame,
-        initial_present_redraw_needed, native_window_graph_position,
+        clamp_rect_to_monitor_delta, desired_frame_latency, frame_interval_for_mode,
+        free_running_frame, initial_present_redraw_needed, native_window_graph_position,
         native_window_options_change_is_position_only, native_window_position_poll_needed,
         nearest_monitor_to_rect, next_frame_anchor, physical_outer_origin_from_surface,
         physical_surface_local_pointer, physical_surface_origin_from_outer,
@@ -6129,6 +6137,39 @@ mod tests {
             },
             false,
         ));
+    }
+
+    #[test]
+    fn a_mode_that_outruns_the_display_gets_a_deeper_drawable_queue() {
+        let sixty = std::time::Duration::from_nanos(16_666_667);
+        assert_eq!(desired_frame_latency(FramePacingMode::Hard120, sixty), 2);
+        assert_eq!(desired_frame_latency(FramePacingMode::NoVsync, sixty), 2);
+    }
+
+    #[test]
+    fn a_mode_the_display_can_keep_up_with_keeps_the_shallow_queue() {
+        let sixty = std::time::Duration::from_nanos(16_666_667);
+        let one_twenty = std::time::Duration::from_nanos(8_333_333);
+        assert_eq!(desired_frame_latency(FramePacingMode::Hard60, sixty), 1);
+        assert_eq!(
+            desired_frame_latency(FramePacingMode::Hard60, one_twenty),
+            1
+        );
+        assert_eq!(
+            desired_frame_latency(FramePacingMode::Hard120, one_twenty),
+            1,
+            "120fps on a 120Hz display never outruns the display"
+        );
+    }
+
+    #[test]
+    fn vsync_keeps_its_queue_depth_on_every_display() {
+        for interval in [
+            std::time::Duration::from_nanos(16_666_667),
+            std::time::Duration::from_nanos(8_333_333),
+        ] {
+            assert_eq!(desired_frame_latency(FramePacingMode::Vsync, interval), 2);
+        }
     }
 
     #[test]
