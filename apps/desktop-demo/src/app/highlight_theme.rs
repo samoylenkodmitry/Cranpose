@@ -8,12 +8,12 @@ use super::highlight::{tokenize, Language, TokenKind};
 fn token_color(kind: TokenKind) -> Option<Color> {
     match kind {
         TokenKind::Plain => None,
-        TokenKind::Keyword => Some(Color(0.85, 0.60, 0.95, 1.0)),
-        TokenKind::Type => Some(Color(0.50, 0.82, 0.95, 1.0)),
-        TokenKind::Str => Some(Color(0.62, 0.88, 0.62, 1.0)),
-        TokenKind::Number => Some(Color(0.98, 0.82, 0.68, 1.0)),
-        TokenKind::Comment => Some(Color(0.50, 0.55, 0.62, 1.0)),
-        TokenKind::Attribute => Some(Color(0.96, 0.84, 0.70, 1.0)),
+        TokenKind::Keyword => Some(Color(0.86, 0.70, 0.96, 1.0)),
+        TokenKind::Type => Some(Color(0.52, 0.84, 0.96, 1.0)),
+        TokenKind::Str => Some(Color(0.70, 0.92, 0.74, 1.0)),
+        TokenKind::Number => Some(Color(0.98, 0.86, 0.76, 1.0)),
+        TokenKind::Comment => Some(Color(0.72, 0.76, 0.83, 1.0)),
+        TokenKind::Attribute => Some(Color(0.97, 0.88, 0.78, 1.0)),
     }
 }
 
@@ -158,14 +158,23 @@ mod tests {
         assert_eq!(annotated.text, code);
     }
 
-    fn registers_as_ink(color: Color) -> bool {
-        let channel = |value: f32| (value.clamp(0.0, 1.0) * 255.0).round() as u8;
+    /// How far a colour sits inside the nearest ink range the markdown visual
+    /// contracts accept, in 0-255 channel steps.
+    ///
+    /// A colour that only just clears a threshold is not enough: glyph edges
+    /// blend toward the code block's dark ground, so an anti-aliased pixel of
+    /// a barely-qualifying colour falls back outside the range and the row
+    /// stops counting as rendered content.
+    fn ink_margin(color: Color) -> i32 {
+        let channel = |value: f32| i32::from((value.clamp(0.0, 1.0) * 255.0).round() as u8);
         let (r, g, b) = (channel(color.0), channel(color.1), channel(color.2));
-        let bright_text = r > 150 && g > 150 && b > 160;
-        let link_blue = b > 145 && g > 110 && r < 180;
-        let math_yellow = r > 165 && g > 160 && b < 110;
-        bright_text || link_blue || math_yellow
+        let bright_text = (r - 150).min(g - 150).min(b - 160);
+        let link_blue = (b - 145).min(g - 110).min(179 - r);
+        let math_yellow = (r - 165).min(g - 160).min(109 - b);
+        bright_text.max(link_blue).max(math_yellow)
     }
+
+    const MINIMUM_INK_MARGIN: i32 = 20;
 
     #[test]
     fn every_token_colour_counts_as_ink_for_the_visual_contracts() {
@@ -179,9 +188,11 @@ mod tests {
         ];
         for kind in kinds {
             let color = token_color(kind).expect("every highlighted kind has a colour");
+            let margin = ink_margin(color);
             assert!(
-                registers_as_ink(color),
-                "{kind:?} is invisible to the markdown visual contracts' ink test: {color:?}"
+                margin >= MINIMUM_INK_MARGIN,
+                "{kind:?} sits {margin} channel steps inside the markdown visual contracts' ink \
+                 ranges, under the {MINIMUM_INK_MARGIN} an anti-aliased glyph needs: {color:?}"
             );
         }
     }
