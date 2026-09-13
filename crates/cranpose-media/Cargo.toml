@@ -32,7 +32,12 @@ cranpose-audio = { workspace = true, features = ["aaudio"] }
 [target.'cfg(not(any(target_arch = "wasm32", target_os = "android", target_os = "ios")))'.dependencies]
 cranpose-audio = { workspace = true, features = ["cpal-backend"] }
 
+# A remote item is read over HTTP byte ranges rather than downloaded first, so
+# the decoder needs the platform's HTTP transfer and a way to block the decode
+# thread on it. Both are excluded from the targets whose modules compile away.
 [target.'cfg(not(any(target_arch = "wasm32", target_os = "ios")))'.dependencies]
+cranpose-services = { workspace = true, features = ["http-native"] }
+pollster = "0.4"
 symphonia = { version = "0.6.1", default-features = false, features = ["all", "opt-simd"] }
 
 [dev-dependencies]

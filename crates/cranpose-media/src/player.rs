@@ -71,12 +71,12 @@ impl Default for SoftwareMediaPlayer {
 
 impl Shared {
     fn open(self: &Arc<Self>, item: &MediaItem) -> Result<Option<Duration>, MediaError> {
-        let (decoder, spool) = Decoder::open(&item.uri)?;
+        let (decoder, cancel) = Decoder::open(&item.uri)?;
         let duration = decoder.total_duration().or(item.metadata.duration);
         let source: Box<dyn SampleSource> =
             Box::new(self.analysis.wrap(self.equalizer.wrap(decoder)));
 
-        let sink = Sink::open(source, spool, *self.volume.lock(), *self.speed.lock())?;
+        let sink = Sink::open(source, cancel, *self.volume.lock(), *self.speed.lock())?;
 
         *self.active.lock() = Some(Active { sink, duration });
         self.start_progress_thread();
@@ -312,15 +312,9 @@ mod tests {
     }
 
     #[test]
-    fn a_uri_this_backend_cannot_read_is_refused_before_a_device_is_opened() {
+    fn a_uri_no_platform_claims_is_refused_before_a_device_is_opened() {
         let player = SoftwareMediaPlayer::new();
 
-        assert_eq!(
-            player.prepare(&MediaItem::new("https://host/stream.mp3")),
-            Err(MediaError::UnsupportedSource(
-                "https://host/stream.mp3".to_string()
-            ))
-        );
         assert_eq!(
             player.prepare(&MediaItem::new("content://media/audio/1")),
             Err(MediaError::UnsupportedSource(

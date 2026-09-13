@@ -13,8 +13,9 @@ use symphonia::core::{
 };
 
 use crate::{
-    source::{ChannelCount, Sample, SampleRate, SampleSource, SeekError},
-    spool::{Spool, SpoolCancel},
+    http::{self, HttpSource},
+    source::{ChannelCount, Sample, SampleRate, SampleSource, SeekError, SourceCancel},
+    spool::Spool,
 };
 
 const SPOOL_DIRECTORY: &str = "cranpose-media-spool";
@@ -33,7 +34,7 @@ pub(crate) struct Decoder {
 }
 
 impl Decoder {
-    pub(crate) fn open(uri: &str) -> Result<(Decoder, SpoolCancel), MediaError> {
+    pub(crate) fn open(uri: &str) -> Result<(Decoder, SourceCancel), MediaError> {
         let (media, cancel) = open_media(uri)?;
         Ok((Decoder::from_media(media, uri)?, cancel))
     }
@@ -42,12 +43,8 @@ impl Decoder {
         let stream = MediaSourceStream::new(media, Default::default());
 
         let mut hint = Hint::new();
-        if let Some(extension) = cranpose_services::path_from_uri(uri)
-            .as_deref()
-            .and_then(Path::extension)
-            .and_then(|extension| extension.to_str())
-        {
-            hint.with_extension(extension);
+        if let Some(extension) = extension_of(uri) {
+            hint.with_extension(&extension);
         }
 
         let format = symphonia::default::get_probe()
@@ -108,11 +105,12 @@ impl Decoder {
     }
 
     pub(crate) fn probe_duration(uri: &str) -> Option<Duration> {
-        let path = cranpose_services::path_from_uri(uri)?;
-        let file = std::fs::File::open(path).ok()?;
-        Decoder::from_media(Box::new(file), uri)
-            .ok()?
-            .total_duration()
+        let media: Box<dyn MediaSource> = if http::is_http_uri(uri) {
+            Box::new(HttpSource::open(uri).ok()?.0)
+        } else {
+            Box::new(std::fs::File::open(cranpose_services::path_from_uri(uri)?).ok()?)
+        };
+        Decoder::from_media(media, uri).ok()?.total_duration()
     }
 
     fn fill(&mut self) -> bool {
@@ -243,7 +241,26 @@ impl SampleSource for Decoder {
     }
 }
 
-fn open_media(uri: &str) -> Result<(Box<dyn MediaSource>, SpoolCancel), MediaError> {
+fn extension_of(uri: &str) -> Option<String> {
+    if http::is_http_uri(uri) {
+        let (_, rest) = uri.split_once("://")?;
+        let path = rest.split(['?', '#']).next()?;
+        let (_, name) = path.rsplit_once('/')?;
+        let (_, extension) = name.rsplit_once('.')?;
+        return (!extension.is_empty()).then(|| extension.to_ascii_lowercase());
+    }
+    cranpose_services::path_from_uri(uri)
+        .as_deref()
+        .and_then(Path::extension)
+        .and_then(|extension| extension.to_str())
+        .map(str::to_owned)
+}
+
+fn open_media(uri: &str) -> Result<(Box<dyn MediaSource>, SourceCancel), MediaError> {
+    if http::is_http_uri(uri) {
+        let (source, cancel) = HttpSource::open(uri)?;
+        return Ok((Box::new(source), cancel));
+    }
     let handle = cranpose_services::open_media_source(uri).map_err(|error| {
         if error.kind() == std::io::ErrorKind::Unsupported {
             MediaError::UnsupportedSource(uri.to_owned())
@@ -253,7 +270,7 @@ fn open_media(uri: &str) -> Result<(Box<dyn MediaSource>, SpoolCancel), MediaErr
     })?;
     let mut file = handle.stream;
     if seeks(&mut file) {
-        return Ok((Box::new(file), SpoolCancel::default()));
+        return Ok((Box::new(file), SourceCancel::default()));
     }
     log::debug!(
         "cranpose-media: {uri} does not seek; spooling {} bytes",

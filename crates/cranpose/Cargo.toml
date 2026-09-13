@@ -453,11 +453,17 @@ objc2-av-foundation = { version = "0.3", default-features = false, optional = tr
     "AVCapturePhotoOutput",
     "AVMediaFormat",
     "AVVideoSettings",
+    # Media playback (`ios_media`): AVPlayer streams a remote item as well as a
+    # local one, and the asset is what answers a duration probe.
+    "AVAsset",
+    "AVPlayer",
+    "AVPlayerItem",
 ] }
 objc2-core-media = { version = "0.3", default-features = false, optional = true, features = [
     "std",
     "objc2-core-video",
     "CMSampleBuffer",
+    "CMTime",
 ] }
 objc2-core-video = { version = "0.3", default-features = false, optional = true, features = [
     "std",
@@ -479,11 +485,10 @@ objc2-user-notifications = { version = "0.3", default-features = false, optional
     "UNNotificationTrigger",
     "UNError",
 ] }
-# Media playback (`ios_media`): AVAudioPlayer for the item, AVAudioSession for
+# Media playback (`ios_media`): AVAudioSession for the category and the
 # interruptions, and MediaPlayer for the lock screen and the remote commands.
 objc2-avf-audio = { version = "0.3.2", default-features = false, optional = true, features = [
     "std",
-    "AVAudioPlayer",
     "AVAudioSession",
     "AVAudioSessionRoute",
     "AVAudioSessionTypes",

@@ -1,5 +1,6 @@
 use std::{
     num::{NonZeroU16, NonZeroU32},
+    sync::Arc,
     time::Duration,
 };
 
@@ -25,6 +26,25 @@ impl std::fmt::Display for SeekError {
 }
 
 impl std::error::Error for SeekError {}
+
+#[derive(Clone, Default)]
+pub(crate) struct SourceCancel {
+    stop: Option<Arc<dyn Fn() + Send + Sync>>,
+}
+
+impl SourceCancel {
+    pub(crate) fn new(stop: impl Fn() + Send + Sync + 'static) -> SourceCancel {
+        SourceCancel {
+            stop: Some(Arc::new(stop)),
+        }
+    }
+
+    pub(crate) fn cancel(&self) {
+        if let Some(stop) = self.stop.as_ref() {
+            stop();
+        }
+    }
+}
 
 pub(crate) trait SampleSource: Iterator<Item = Sample> + Send {
     fn channels(&self) -> ChannelCount;
@@ -107,6 +127,25 @@ mod tests {
     fn a_buffer_yields_every_sample_once() {
         let buffer = SamplesBuffer::new(1, 8_000, vec![0.25, -0.5, 1.0]);
         assert_eq!(buffer.collect::<Vec<_>>(), vec![0.25, -0.5, 1.0]);
+    }
+
+    #[test]
+    fn cancelling_calls_the_stop_the_source_supplied() {
+        let stopped = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = Arc::clone(&stopped);
+        let cancel = SourceCancel::new(move || {
+            counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        });
+
+        cancel.cancel();
+        cancel.clone().cancel();
+
+        assert_eq!(stopped.load(std::sync::atomic::Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn cancelling_a_source_that_needs_no_stop_does_nothing() {
+        SourceCancel::default().cancel();
     }
 
     #[test]

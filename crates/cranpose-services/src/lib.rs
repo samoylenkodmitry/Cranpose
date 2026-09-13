@@ -127,7 +127,7 @@ pub use host_surface::{
 pub use http::{
     BytesBody, HttpBody, HttpBodyRef, HttpClient, HttpClientRef, HttpControl, HttpError,
     HttpFuture, HttpMethod, HttpProgress, HttpRequest, HttpResponse, ProgressHandler, StubAnswer,
-    StubHttpClient, default_http_client, local_http_client, map_ordered_concurrent,
+    StubHttpClient, default_http_client, http_body_ref, local_http_client, map_ordered_concurrent,
 };
 pub use image_picker::{
     IMAGE_EXTENSIONS, ImagePicker, ImagePickerError, ImagePickerRef, ImageSource,
