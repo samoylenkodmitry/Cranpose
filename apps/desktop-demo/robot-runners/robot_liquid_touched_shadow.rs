@@ -1,25 +1,37 @@
 mod liquid_page;
 mod robot_exit;
 mod robot_shot;
+mod robot_tab_fixture;
 
 use std::{path::PathBuf, process::ExitCode, time::Duration};
 
-use cranpose::{AppLauncher, Robot, RobotScreenshot};
+use cranpose::{
+    liquid::prelude::*,
+    widgets::{Box as CBox, BoxSpec},
+    AppLauncher, Color, Modifier, Robot, RobotScreenshot, Size,
+};
 use cranpose_testing::{find_in_semantics, find_text_exact};
-use desktop_app::app;
 
 const WINDOW_WIDTH: u32 = 900;
-const WINDOW_HEIGHT: u32 = 700;
+const WINDOW_HEIGHT: u32 = 260;
 const SHOT_SCALE: f32 = 2.0;
-/// The bottom bar's first and last destinations, which bound the row a press
-/// lands in.
+const BACKGROUND: u8 = 192;
+const TAB_WIDTH: f32 = 78.0;
+const BAR_WIDTH: f32 = TAB_WIDTH * 4.0 + 8.0;
+const BAR_HEIGHT: f32 = 62.0;
+const BAR_LEFT: f32 = (WINDOW_WIDTH as f32 - BAR_WIDTH) * 0.5;
+const BAR_TOP: f32 = 90.0;
 const FIRST: &str = "Discover";
 const LAST: &str = "Account";
-/// The band under the bar the shadow falls on, in dp below the bar's edge.
-const BAND_TOP: f32 = 4.0;
-const BAND_BOTTOM: f32 = 18.0;
-/// Holding a control must not change the page outside it by more than this.
+const BAND_TOP: f32 = 8.0;
+const BAND_BOTTOM: f32 = 22.0;
 const TOLERANCE: f32 = 3.0;
+const TABS: [(&str, &str); 4] = [
+    (cranpose::liquid::icons::STAR, FIRST),
+    (cranpose::liquid::icons::LIST_OUTLINE, "Library"),
+    (cranpose::liquid::icons::SCHEDULE, "Recent"),
+    (cranpose::liquid::icons::ACCOUNT_CIRCLE, LAST),
+];
 
 type Bounds = (f32, f32, f32, f32);
 
@@ -34,15 +46,14 @@ fn main() -> ExitCode {
         .with_size(WINDOW_WIDTH, WINDOW_HEIGHT)
         .with_fonts(desktop_app::fonts::DEMO_FONTS)
         .with_headless(std::env::var("CRANPOSE_HEADLESS").as_deref() != Ok("0"))
-        .with_robot_app_hook(liquid_page::app_hook)
         .with_test_driver(move |robot| {
             robot_exit::arm_timeout(180);
             std::thread::sleep(Duration::from_millis(700));
-            liquid_page::open(&robot);
+            liquid_page::settle(&robot);
 
             let first = text_bounds(&robot, FIRST);
             let last = text_bounds(&robot, LAST);
-            let bottom = first.1 + first.3;
+            let bottom = BAR_TOP + BAR_HEIGHT;
             println!("[touched] {FIRST} {first:?} {LAST} {last:?} band {bottom:.0} dp");
 
             let rest = robot
@@ -51,13 +62,12 @@ fn main() -> ExitCode {
             robot_shot::save(&rest, &shot_dir, "rest.png");
             let resting = band(&rest, first.0, last.0 + last.2, bottom);
             let darkest = resting.iter().copied().fold(f32::INFINITY, f32::min);
-            let lightest = resting.iter().copied().fold(0.0f32, f32::max);
-            if lightest - darkest < TOLERANCE * 2.0 {
+            if f32::from(BACKGROUND) - darkest < TOLERANCE * 2.0 {
                 robot_exit::fail(
                     &robot,
                     &format!(
                         "the bar must cast a shadow on the band below it for this to test \
-                         anything: it reads {darkest:.1} to {lightest:.1}"
+                         anything: darkest sample {darkest:.1}, background {BACKGROUND}"
                     ),
                 );
             }
@@ -70,6 +80,16 @@ fn main() -> ExitCode {
             robot_shot::save(&held, &shot_dir, "held.png");
             let pressed = band(&held, first.0, last.0 + last.2, bottom);
             robot.touch_up(cx, cy).expect("touch up");
+            if resting
+                .iter()
+                .chain(&pressed)
+                .any(|value| *value > f32::from(BACKGROUND) + TOLERANCE)
+            {
+                robot_exit::fail(
+                    &robot,
+                    "glass illumination entered the exterior shadow band",
+                );
+            }
 
             let mut worst = (0.0f32, 0usize);
             for (index, (before, after)) in resting.iter().zip(pressed.iter()).enumerate() {
@@ -101,13 +121,36 @@ fn main() -> ExitCode {
             println!("✓ PASS: holding a destination leaves the shadow under the bar alone");
             robot.exit().expect("exit");
         })
-        .try_run(app::combined_app)
+        .try_run(|| {
+            LiquidTheme(LiquidThemeSpec::default(), || {
+                CBox(
+                    Modifier::empty()
+                        .size(Size {
+                            width: WINDOW_WIDTH as f32,
+                            height: WINDOW_HEIGHT as f32,
+                        })
+                        .background(Color::from_rgb_u8(BACKGROUND, BACKGROUND, BACKGROUND)),
+                    BoxSpec::default(),
+                    || {
+                        robot_tab_fixture::bar(
+                            Modifier::empty()
+                                .absolute_offset(BAR_LEFT, BAR_TOP)
+                                .size(Size {
+                                    width: BAR_WIDTH,
+                                    height: BAR_HEIGHT,
+                                }),
+                            LiquidTabBarSpec::new(TAB_WIDTH),
+                            0,
+                            &TABS,
+                        );
+                    },
+                );
+            });
+        })
         .expect("launch touched shadow runner");
     ExitCode::SUCCESS
 }
 
-/// The page's luma across the band the bar's shadow falls on, sampled left
-/// to right under the row of destinations.
 fn band(shot: &RobotScreenshot, left: f32, right: f32, bar_bottom: f32) -> Vec<f32> {
     let sample = robot_shot::logical_sampler(shot);
     let luma = |x: f32, y: f32| {

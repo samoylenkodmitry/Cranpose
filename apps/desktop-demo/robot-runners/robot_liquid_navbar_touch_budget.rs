@@ -5,7 +5,7 @@ mod robot_tab_fixture;
 
 use std::{path::PathBuf, process::ExitCode, sync::atomic::AtomicBool, time::Duration};
 
-use cranpose::{liquid::prelude::*, rememberMutableStateOf, AppLauncher, Modifier, Size};
+use cranpose::{liquid::prelude::*, AppLauncher, Modifier, Size};
 use robot_liquid_stage::LiquidStripedStage;
 
 const WINDOW_WIDTH: u32 = 880;
@@ -150,8 +150,7 @@ fn main() -> ExitCode {
         })
         .try_run(move || {
             LiquidStripedStage(WINDOW_WIDTH, WINDOW_HEIGHT, move || {
-                let selected = rememberMutableStateOf(|| 1usize);
-                LiquidTabBar(
+                robot_tab_fixture::bar(
                     Modifier::empty()
                         .absolute_offset(BAR_LEFT, BAR_TOP)
                         .size(Size {
@@ -159,9 +158,8 @@ fn main() -> ExitCode {
                             height: BAR_HEIGHT,
                         }),
                     LiquidTabBarSpec::new(TAB_WIDTH),
-                    selected.get(),
-                    move |index| selected.set(index),
-                    robot_tab_fixture::tabs(&TABS),
+                    1,
+                    &TABS,
                 );
             });
         })
