@@ -6,7 +6,7 @@ use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope};
 use cranpose_services::local_http_client;
 use cranpose_ui::{
     composable,
-    text::{AnnotatedString, SpanStyle},
+    text::{AnnotatedString, SpanStyle, TextUnit},
     widgets::{LazyColumn, LazyColumnSpec},
     Button, ButtonSpec, Color, Column, ColumnSpec, LinearArrangement, Modifier, Row, RowSpec, Text,
     TextStyle,
@@ -17,6 +17,12 @@ use super::{
     highlight_theme::highlight_lines,
     DemoTab,
 };
+
+/// The floating toggle sits in the tab strip's top padding, above the tab
+/// buttons, so it must stay short enough not to reach them: a control that
+/// overlapped a tab would take the click that belongs to it.
+const COMPACT_TOGGLE_PADDING: f32 = 3.0;
+const COMPACT_TOGGLE_FONT_SP: f32 = 11.0;
 
 const REPOSITORY: &str = "https://raw.githubusercontent.com/samoylenkodmitry/cranpose";
 
@@ -68,18 +74,34 @@ fn highlighted_lines(path: &str, body: &str) -> Rc<Vec<Rc<AnnotatedString>>> {
 
 #[allow(non_snake_case)]
 #[composable]
-pub(crate) fn SourceToggleButton(showing: MutableState<bool>, modifier: Modifier) {
+pub(crate) fn SourceToggleButton(showing: MutableState<bool>, modifier: Modifier, compact: bool) {
     let label = if showing.get() {
         "Hide source"
     } else {
         "Show source"
     };
+    let padding = if compact {
+        COMPACT_TOGGLE_PADDING
+    } else {
+        10.0
+    };
+    let style = if compact {
+        TextStyle {
+            span_style: SpanStyle {
+                font_size: TextUnit::Sp(COMPACT_TOGGLE_FONT_SP),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    } else {
+        TextStyle::default()
+    };
     Button(
-        modifier.rounded_corners(12.0).padding(10.0),
+        modifier.rounded_corners(12.0).padding(padding),
         ButtonSpec::default(),
         move || showing.set(!showing.get()),
         move || {
-            Text(label, Modifier::empty(), TextStyle::default());
+            Text(label, Modifier::empty(), style.clone());
         },
     );
 }
