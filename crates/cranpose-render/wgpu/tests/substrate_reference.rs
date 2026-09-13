@@ -200,7 +200,10 @@ fn transformed_child_receives_its_shared_mean_after_blur() {
         ],
     );
     let frame = capture(&mut renderer, graph);
-    for pixel in region_pixels(&frame, rect(65.0, 45.0, 30.0, 25.0)).chunks_exact(4) {
+    for pixel in region_pixels(&frame, rect(65.0, 45.0, 30.0, 25.0))
+        .as_chunks::<4>()
+        .0
+    {
         assert!(
             pixel[..3].iter().all(|c| c.abs_diff(89) <= 1),
             "transformed child must receive its mean: {pixel:?}"
@@ -230,7 +233,10 @@ fn shared_mean_uses_the_layer_extent_without_filter_padding() {
         ],
     );
     let frame = capture(&mut renderer, graph);
-    for pixel in region_pixels(&frame, rect(65.0, 45.0, 30.0, 25.0)).chunks_exact(4) {
+    for pixel in region_pixels(&frame, rect(65.0, 45.0, 30.0, 25.0))
+        .as_chunks::<4>()
+        .0
+    {
         assert!(
             pixel[..3].iter().all(|c| c.abs_diff(128) <= 1),
             "padding must not bias the mean: {pixel:?}"
@@ -257,7 +263,7 @@ fn shared_mean_includes_every_texel_of_each_odd_sized_capture() {
     for region in regions {
         let source = region_pixels(&plain, region);
         let mut mean = [0.0; 4];
-        for pixel in source.chunks_exact(4) {
+        for pixel in source.as_chunks::<4>().0 {
             for channel in 0..4 {
                 mean[channel] += f64::from(pixel[channel]);
             }
@@ -265,7 +271,7 @@ fn shared_mean_includes_every_texel_of_each_odd_sized_capture() {
         for value in &mut mean {
             *value /= (source.len() / 4) as f64;
         }
-        for pixel in region_pixels(&actual, region).chunks_exact(4) {
+        for pixel in region_pixels(&actual, region).as_chunks::<4>().0 {
             for channel in 0..4 {
                 assert!(
                     (f64::from(pixel[channel]) - mean[channel]).abs() <= 1.0,

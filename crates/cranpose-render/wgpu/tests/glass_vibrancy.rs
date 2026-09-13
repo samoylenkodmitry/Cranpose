@@ -100,7 +100,7 @@ fn source_scene(selected: bool, dark: bool, background: Color) -> RenderGraph {
         explicit_offscreen: true,
         ..Default::default()
     };
-    let graph = RenderGraph::new(shared_test_support::layer_node(
+    RenderGraph::new(shared_test_support::layer_node(
         bounds,
         ProjectiveTransform::identity(),
         GraphicsLayer::default(),
@@ -108,8 +108,7 @@ fn source_scene(selected: bool, dark: bool, background: Color) -> RenderGraph {
             support::solid_rect(bounds, background),
             RenderNode::Layer(Box::new(ink)),
         ],
-    ));
-    graph
+    ))
 }
 
 #[test]
