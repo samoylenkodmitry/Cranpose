@@ -15,10 +15,7 @@ use cranpose_audio::{
 };
 use cranpose_services::MediaError;
 
-use crate::{
-    source::{SampleSource, SeekError},
-    spool::SpoolCancel,
-};
+use crate::source::{SampleSource, SeekError, SourceCancel};
 
 const BUFFER_SECONDS: f32 = 0.2;
 
@@ -121,13 +118,13 @@ pub(crate) struct Sink {
     commands: Sender<Command>,
     decoder: Option<std::thread::JoinHandle<()>>,
     seekable: Arc<AtomicBool>,
-    spool: SpoolCancel,
+    cancel: SourceCancel,
 }
 
 impl Sink {
     pub(crate) fn open(
         source: Box<dyn SampleSource>,
-        spool: SpoolCancel,
+        cancel: SourceCancel,
         volume: f32,
         speed: f32,
     ) -> Result<Sink, MediaError> {
@@ -158,7 +155,7 @@ impl Sink {
             commands,
             decoder: Some(decoder),
             seekable,
-            spool,
+            cancel,
         })
     }
 
@@ -203,7 +200,7 @@ impl Sink {
 impl Drop for Sink {
     fn drop(&mut self) {
         let _ = self.commands.send(Command::Stop);
-        self.spool.cancel();
+        self.cancel.cancel();
         if let Some(decoder) = self.decoder.take() {
             let _ = decoder.join();
         }

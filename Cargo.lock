@@ -1059,6 +1059,7 @@ dependencies = [
  "cranpose-services",
  "log",
  "parking_lot",
+ "pollster",
  "symphonia",
 ]
 

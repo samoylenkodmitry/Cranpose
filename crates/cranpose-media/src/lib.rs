@@ -17,6 +17,15 @@
 //!
 //! Local files, addressed as `file:` URIs — see [`uri_for_path`] — in every
 //! container `symphonia` reads: MP3, AAC/MP4, FLAC, Vorbis, WAV, AIFF, ALAC.
+//!
+//! Remote items, addressed as `http:` or `https:` URIs, in those same
+//! containers. The decoder reads them over HTTP byte ranges: playback starts
+//! from the front while the rest is still on the wire, a seek asks the server
+//! for the offset it needs instead of waiting for the bytes in between, and
+//! nothing is written to disk. A server that answers `Accept-Ranges: bytes`
+//! seeks; one that does not plays forward and refuses to seek, which is what
+//! [`SoftwareMediaPlayer`] reports rather than pretending otherwise.
+//!
 //! Anything else is opened by the platform through
 //! [`open_media_source`](cranpose_services::open_media_source): on Android that
 //! is a `content://` document, which a provider backed by a network share hands
@@ -51,6 +60,8 @@ mod analysis;
 mod decode;
 #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
 mod equalizer;
+#[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
+mod http;
 #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
 mod player;
 #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]

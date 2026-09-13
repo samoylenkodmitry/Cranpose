@@ -9,6 +9,8 @@ use std::{
     time::Duration,
 };
 
+use crate::source::SourceCancel;
+
 const CHUNK_BYTES: usize = 64 * 1024;
 
 const STALL_TIMEOUT: Duration = Duration::from_secs(20);
@@ -26,21 +28,6 @@ struct Shared {
     cancel: AtomicBool,
     path: PathBuf,
     stall: Duration,
-}
-
-#[derive(Clone, Default)]
-pub(crate) struct SpoolCancel {
-    shared: Option<Arc<Shared>>,
-}
-
-impl SpoolCancel {
-    pub(crate) fn cancel(&self) {
-        let Some(shared) = self.shared.as_ref() else {
-            return;
-        };
-        shared.cancel.store(true, Ordering::Relaxed);
-        shared.ready.notify_all();
-    }
 }
 
 impl Shared {
@@ -114,7 +101,7 @@ impl Spool {
         source: Box<dyn Read + Send>,
         directory: &Path,
         len: Option<u64>,
-    ) -> io::Result<(Spool, SpoolCancel)> {
+    ) -> io::Result<(Spool, SourceCancel)> {
         Spool::start_with(source, directory, len, STALL_TIMEOUT)
     }
 
@@ -123,7 +110,7 @@ impl Spool {
         directory: &Path,
         len: Option<u64>,
         stall: Duration,
-    ) -> io::Result<(Spool, SpoolCancel)> {
+    ) -> io::Result<(Spool, SourceCancel)> {
         std::fs::create_dir_all(directory)?;
         sweep_stale_spools(directory);
         let path = directory.join(next_spool_name());
@@ -148,9 +135,11 @@ impl Spool {
         std::thread::Builder::new()
             .name("cranpose-media-spool".to_owned())
             .spawn(move || run_download(source, writer, download))?;
-        let cancel = SpoolCancel {
-            shared: Some(Arc::clone(&shared)),
-        };
+        let stopping = Arc::clone(&shared);
+        let cancel = SourceCancel::new(move || {
+            stopping.cancel.store(true, Ordering::Relaxed);
+            stopping.ready.notify_all();
+        });
         Ok((
             Spool {
                 shared,
@@ -327,7 +316,7 @@ mod tests {
         (0..=255u8).cycle().take(len).collect()
     }
 
-    fn spool(bytes: &[u8], tag: &str) -> (Spool, SpoolCancel) {
+    fn spool(bytes: &[u8], tag: &str) -> (Spool, SourceCancel) {
         Spool::start(
             trickle(bytes.to_vec()),
             &directory(tag),

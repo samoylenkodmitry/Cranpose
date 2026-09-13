@@ -14,21 +14,25 @@ use cranpose_services::{
     PlaybackProgress, PlaybackState, publish_audio_focus, publish_media_command,
     publish_playback_progress, publish_playback_state, set_platform_media_player,
 };
+use dispatch2::DispatchQueue;
 use objc2::{
-    AllocAnyThread, define_class, msg_send,
+    AllocAnyThread, MainThreadMarker, MainThreadOnly, define_class, msg_send,
     rc::Retained,
-    runtime::{AnyObject, ProtocolObject},
+    runtime::{AnyObject, NSObject},
     sel,
 };
-use objc2_avf_audio::{
-    AVAudioPlayer, AVAudioPlayerDelegate, AVAudioSession, AVAudioSessionCategoryPlayback,
-    AVAudioSessionInterruptionNotification, AVAudioSessionInterruptionOptionKey,
-    AVAudioSessionInterruptionOptions, AVAudioSessionInterruptionType,
-    AVAudioSessionInterruptionTypeKey,
+use objc2_av_foundation::{
+    AVPlayer, AVPlayerItem, AVPlayerItemDidPlayToEndTimeNotification,
+    AVPlayerItemFailedToPlayToEndTimeNotification, AVPlayerItemStatus, AVURLAsset,
 };
+use objc2_avf_audio::{
+    AVAudioSession, AVAudioSessionCategoryPlayback, AVAudioSessionInterruptionNotification,
+    AVAudioSessionInterruptionOptionKey, AVAudioSessionInterruptionOptions,
+    AVAudioSessionInterruptionType, AVAudioSessionInterruptionTypeKey,
+};
+use objc2_core_media::CMTime;
 use objc2_foundation::{
-    NSDictionary, NSNotification, NSNotificationCenter, NSNumber, NSObject, NSObjectProtocol,
-    NSString, NSURL,
+    NSDictionary, NSNotification, NSNotificationCenter, NSNumber, NSObjectProtocol, NSString, NSURL,
 };
 use objc2_media_player::{
     MPChangePlaybackPositionCommandEvent, MPMediaItemPropertyAlbumTitle, MPMediaItemPropertyArtist,
@@ -39,10 +43,13 @@ use objc2_media_player::{
 
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(250);
 
+const SEEK_TIMESCALE: i32 = 1_000_000;
+
 struct PlayerHolder {
-    player: Retained<AVAudioPlayer>,
-    _delegate: Retained<EndDelegate>,
-    duration: Option<Duration>,
+    player: Retained<AVPlayer>,
+    item: Retained<AVPlayerItem>,
+    observer: Retained<ItemObserver>,
+    stated_duration: Option<Duration>,
 }
 
 unsafe impl Send for PlayerHolder {}
@@ -65,6 +72,26 @@ pub(crate) fn register() {
 }
 
 struct IosMediaPlayer;
+
+fn on_main<R: Send>(action: impl FnOnce(MainThreadMarker) -> R + Send) -> R {
+    if let Some(mtm) = MainThreadMarker::new() {
+        return action(mtm);
+    }
+    let mut landed = None;
+    DispatchQueue::main().exec_sync(|| {
+        let mtm = MainThreadMarker::new().expect("the main queue runs on the main thread");
+        landed = Some(action(mtm));
+    });
+    landed.expect("the main queue ran the action")
+}
+
+fn volume() -> f32 {
+    *VOLUME.lock().unwrap_or_else(|error| error.into_inner())
+}
+
+fn speed() -> f32 {
+    *SPEED.lock().unwrap_or_else(|error| error.into_inner())
+}
 
 fn configure_audio_session() {
     unsafe {
@@ -242,34 +269,36 @@ fn publish_now_playing(metadata: &MediaMetadata, position: Duration, rate: f32) 
 
 define_class!(
     #[unsafe(super(NSObject))]
-    #[name = "CranposeMediaEndDelegate"]
+    #[name = "CranposeMediaItemObserver"]
     #[ivars = ()]
-    struct EndDelegate;
+    struct ItemObserver;
 
-    unsafe impl NSObjectProtocol for EndDelegate {}
+    unsafe impl NSObjectProtocol for ItemObserver {}
 
-    unsafe impl AVAudioPlayerDelegate for EndDelegate {
-        #[unsafe(method(audioPlayerDidFinishPlaying:successfully:))]
-        unsafe fn did_finish(&self, _player: &AVAudioPlayer, successfully: bool) {
-            if successfully {
-                publish_end_of_item();
-            } else {
-                publish_playback_state(PlaybackState::Failed(MediaError::Failed(
-                    "playback stopped part way through the item".to_string(),
-                )));
-            }
+    impl ItemObserver {
+        #[unsafe(method(cranposeItemDidPlayToEnd:))]
+        fn did_play_to_end(&self, _notification: &NSNotification) {
+            end_of_item();
+        }
+
+        #[unsafe(method(cranposeItemFailedToPlayToEnd:))]
+        fn failed_to_play_to_end(&self, _notification: &NSNotification) {
+            fail_open_item("playback stopped part way through the item".to_string());
         }
     }
 );
 
-impl EndDelegate {
+impl ItemObserver {
     fn new() -> Retained<Self> {
         let this = Self::alloc().set_ivars(());
         unsafe { msg_send![super(this), init] }
     }
 }
 
-fn publish_end_of_item() {
+fn end_of_item() {
+    if LOOPING.load(Ordering::Acquire) && restart_open_item() {
+        return;
+    }
     if let Some(duration) = duration_of_open_item() {
         publish_playback_progress(PlaybackProgress::new(duration, duration));
     }
@@ -277,17 +306,67 @@ fn publish_end_of_item() {
     publish_playback_state(PlaybackState::Ended);
 }
 
+fn fail_open_item(reason: String) {
+    GENERATION.fetch_add(1, Ordering::AcqRel);
+    publish_playback_state(PlaybackState::Failed(MediaError::Failed(reason)));
+}
+
+fn restart_open_item() -> bool {
+    with_holder(|holder| unsafe {
+        holder.player.seekToTime(cm_time(Duration::ZERO));
+        start_playing(&holder.player);
+    })
+    .is_some()
+}
+
 fn duration_of_open_item() -> Option<Duration> {
-    player_slot()
-        .lock()
-        .ok()
-        .and_then(|holder| holder.as_ref().and_then(|holder| holder.duration))
+    with_holder(duration_of).flatten()
+}
+
+fn duration_of(holder: &PlayerHolder) -> Option<Duration> {
+    positive_seconds(unsafe { holder.item.duration() })
+        .map(Duration::from_secs_f64)
+        .or(holder.stated_duration)
+}
+
+fn positive_seconds(time: CMTime) -> Option<f64> {
+    let seconds = unsafe { time.seconds() };
+    (seconds.is_finite() && seconds > 0.0).then_some(seconds)
+}
+
+fn cm_time(position: Duration) -> CMTime {
+    unsafe { CMTime::with_seconds(position.as_secs_f64(), SEEK_TIMESCALE) }
+}
+
+fn start_playing(player: &AVPlayer) {
+    let speed = speed();
+    unsafe {
+        if speed == 1.0 {
+            player.play();
+        } else {
+            player.setRate(speed);
+        }
+    }
 }
 
 fn url_for(uri: &str) -> Option<Retained<NSURL>> {
-    let path = cranpose_services::media::path_from_uri(uri)?;
-    let path = path.to_str()?;
-    Some(NSURL::fileURLWithPath(&NSString::from_str(path)))
+    if let Some(path) = cranpose_services::media::path_from_uri(uri) {
+        let path = path.to_str()?;
+        return Some(NSURL::fileURLWithPath(&NSString::from_str(path)));
+    }
+    if !is_streamable_uri(uri) {
+        return None;
+    }
+    NSURL::URLWithString(&NSString::from_str(uri))
+}
+
+fn is_streamable_uri(uri: &str) -> bool {
+    matches!(
+        uri.split_once("://"),
+        Some((scheme, rest))
+            if !rest.is_empty()
+                && (scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https"))
+    )
 }
 
 fn progress_at(position: Duration, duration: Option<Duration>) -> PlaybackProgress {
@@ -308,10 +387,16 @@ fn start_progress_thread() {
                 if GENERATION.load(Ordering::Acquire) != generation {
                     return;
                 }
-                let Some((position, duration)) = observe_position() else {
-                    return;
-                };
-                publish_playback_progress(progress_at(position, duration));
+                match observe() {
+                    Some(Observed::Playing(position, duration)) => {
+                        publish_playback_progress(progress_at(position, duration));
+                    }
+                    Some(Observed::Failed(reason)) => {
+                        fail_open_item(reason);
+                        return;
+                    }
+                    None => return,
+                }
             }
         });
     if let Err(error) = spawned {
@@ -319,19 +404,105 @@ fn start_progress_thread() {
     }
 }
 
-fn observe_position() -> Option<(Duration, Option<Duration>)> {
-    let holder = player_slot().lock().ok()?;
-    let holder = holder.as_ref()?;
-    Some((
-        Duration::from_secs_f64(unsafe { holder.player.currentTime() }.max(0.0)),
-        holder.duration,
-    ))
+enum Observed {
+    Playing(Duration, Option<Duration>),
+    Failed(String),
 }
 
-fn with_player<R>(action: impl FnOnce(&AVAudioPlayer) -> R) -> Option<R> {
-    let holder = player_slot().lock().ok()?;
-    let holder = holder.as_ref()?;
-    Some(action(&holder.player))
+fn observe() -> Option<Observed> {
+    with_holder(|holder| {
+        if let Some(reason) = item_failure(holder) {
+            return Observed::Failed(reason);
+        }
+        Observed::Playing(position_of(holder), duration_of(holder))
+    })
+}
+
+fn item_failure(holder: &PlayerHolder) -> Option<String> {
+    if unsafe { holder.item.status() } != AVPlayerItemStatus::Failed {
+        return None;
+    }
+    Some(
+        unsafe { holder.item.error() }
+            .map(|error| error.localizedDescription().to_string())
+            .unwrap_or_else(|| "the item could not be played".to_string()),
+    )
+}
+
+fn position_of(holder: &PlayerHolder) -> Duration {
+    let seconds = unsafe { holder.player.currentTime().seconds() };
+    if seconds.is_finite() && seconds > 0.0 {
+        Duration::from_secs_f64(seconds)
+    } else {
+        Duration::ZERO
+    }
+}
+
+fn with_holder<R: Send>(action: impl FnOnce(&PlayerHolder) -> R + Send) -> Option<R> {
+    on_main(move |_mtm| {
+        let slot = player_slot()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        slot.as_ref().map(action)
+    })
+}
+
+fn open_item(
+    uri: &str,
+    stated: Option<Duration>,
+    mtm: MainThreadMarker,
+) -> Result<Option<Duration>, MediaError> {
+    let url = url_for(uri).ok_or_else(|| MediaError::UnsupportedSource(uri.to_owned()))?;
+    let observer = ItemObserver::new();
+    let holder = unsafe {
+        let item = AVPlayerItem::initWithURL(AVPlayerItem::alloc(mtm), &url);
+        let player = AVPlayer::initWithPlayerItem(AVPlayer::alloc(mtm), Some(&item));
+        player.setVolume(volume());
+        let center = NSNotificationCenter::defaultCenter();
+        let scope: &AnyObject = item.as_ref();
+        center.addObserver_selector_name_object(
+            &observer,
+            sel!(cranposeItemDidPlayToEnd:),
+            Some(AVPlayerItemDidPlayToEndTimeNotification),
+            Some(scope),
+        );
+        center.addObserver_selector_name_object(
+            &observer,
+            sel!(cranposeItemFailedToPlayToEnd:),
+            Some(AVPlayerItemFailedToPlayToEndTimeNotification),
+            Some(scope),
+        );
+        PlayerHolder {
+            player,
+            item,
+            observer,
+            stated_duration: stated,
+        }
+    };
+    let duration = duration_of(&holder);
+    *player_slot()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) = Some(holder);
+    Ok(duration)
+}
+
+fn close_item() {
+    on_main(|_mtm| {
+        let taken = player_slot()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take();
+        if let Some(holder) = taken {
+            unsafe {
+                holder.player.pause();
+                holder.player.replaceCurrentItemWithPlayerItem(None);
+                NSNotificationCenter::defaultCenter().removeObserver(&holder.observer);
+            }
+        }
+        unsafe {
+            MPNowPlayingInfoCenter::defaultCenter().setNowPlayingInfo(None);
+        }
+    });
 }
 
 const IOS_AUDIO_EXTENSIONS: &[&str] = &[
@@ -353,11 +524,8 @@ impl MediaPlayer for IosMediaPlayer {
 
     fn probe_duration(&self, item: &MediaItem) -> Option<Duration> {
         let url = url_for(&item.uri)?;
-        let player =
-            unsafe { AVAudioPlayer::initWithContentsOfURL_error(AVAudioPlayer::alloc(), &url) }
-                .ok()?;
-        let duration = unsafe { player.duration() };
-        (duration.is_finite() && duration > 0.0).then(|| Duration::from_secs_f64(duration))
+        let asset = unsafe { AVURLAsset::URLAssetWithURL_options(&url, None) };
+        positive_seconds(unsafe { asset.duration() }).map(Duration::from_secs_f64)
     }
 
     fn audio_extensions(&self) -> Vec<&'static str> {
@@ -365,35 +533,9 @@ impl MediaPlayer for IosMediaPlayer {
     }
     fn prepare(&self, item: &MediaItem) -> Result<(), MediaError> {
         self.stop();
-        let url =
-            url_for(&item.uri).ok_or_else(|| MediaError::UnsupportedSource(item.uri.clone()))?;
-        let player =
-            unsafe { AVAudioPlayer::initWithContentsOfURL_error(AVAudioPlayer::alloc(), &url) }
-                .map_err(|error| MediaError::Failed(format!("{error:?}")))?;
-        let delegate = EndDelegate::new();
-        let duration = unsafe { player.duration() };
-        let duration = (duration.is_finite() && duration > 0.0)
-            .then(|| Duration::from_secs_f64(duration))
-            .or(item.metadata.duration);
-        unsafe {
-            player.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
-            player.setEnableRate(true);
-            player.setVolume(*VOLUME.lock().unwrap_or_else(|error| error.into_inner()));
-            player.setRate(*SPEED.lock().unwrap_or_else(|error| error.into_inner()));
-            player.setNumberOfLoops(if LOOPING.load(Ordering::Acquire) {
-                -1
-            } else {
-                0
-            });
-            player.prepareToPlay();
-        }
-        if let Ok(mut slot) = player_slot().lock() {
-            *slot = Some(PlayerHolder {
-                player,
-                _delegate: delegate,
-                duration,
-            });
-        }
+        let uri = item.uri.clone();
+        let stated = item.metadata.duration;
+        let duration = on_main(move |mtm| open_item(&uri, stated, mtm))?;
         publish_playback_progress(progress_at(Duration::ZERO, duration));
         publish_playback_state(PlaybackState::Paused);
         publish_now_playing(&item.metadata, Duration::ZERO, 0.0);
@@ -401,45 +543,41 @@ impl MediaPlayer for IosMediaPlayer {
     }
 
     fn play(&self) -> Result<(), MediaError> {
-        let started =
-            with_player(|player| unsafe { player.play() }).ok_or(MediaError::NothingLoaded)?;
-        if !started {
-            return Err(MediaError::Failed(
-                "the audio session refused to start the item".to_string(),
-            ));
-        }
         activate_audio_session(true);
+        let failure = with_holder(|holder| {
+            let failure = item_failure(holder);
+            if failure.is_none() {
+                start_playing(&holder.player);
+            }
+            failure
+        })
+        .ok_or(MediaError::NothingLoaded)?;
+        if let Some(reason) = failure {
+            return Err(MediaError::Failed(reason));
+        }
         start_progress_thread();
         publish_playback_state(PlaybackState::Playing);
         Ok(())
     }
 
     fn pause(&self) {
-        with_player(|player| unsafe { player.pause() });
+        with_holder(|holder| unsafe { holder.player.pause() });
         GENERATION.fetch_add(1, Ordering::AcqRel);
         publish_playback_state(PlaybackState::Paused);
     }
 
     fn stop(&self) {
         GENERATION.fetch_add(1, Ordering::AcqRel);
-        if let Ok(mut slot) = player_slot().lock()
-            && let Some(holder) = slot.take()
-        {
-            unsafe {
-                holder.player.stop();
-                holder.player.setDelegate(None);
-            }
-        }
-        unsafe {
-            MPNowPlayingInfoCenter::defaultCenter().setNowPlayingInfo(None);
-        }
+        close_item();
         activate_audio_session(false);
     }
 
     fn seek_to(&self, position: Duration) -> Result<(), MediaError> {
-        let duration = duration_of_open_item();
-        with_player(|player| unsafe { player.setCurrentTime(position.as_secs_f64()) })
-            .ok_or(MediaError::NothingLoaded)?;
+        let duration = with_holder(|holder| {
+            unsafe { holder.player.seekToTime(cm_time(position)) };
+            duration_of(holder)
+        })
+        .ok_or(MediaError::NothingLoaded)?;
         publish_playback_progress(progress_at(position, duration));
         Ok(())
     }
@@ -447,38 +585,33 @@ impl MediaPlayer for IosMediaPlayer {
     fn set_volume(&self, volume: f32) {
         let volume = volume.clamp(0.0, 1.0);
         *VOLUME.lock().unwrap_or_else(|error| error.into_inner()) = volume;
-        with_player(|player| unsafe { player.setVolume(volume) });
+        with_holder(|holder| unsafe { holder.player.setVolume(volume) });
     }
 
     fn set_speed(&self, speed: f32) -> bool {
         let speed = speed.clamp(0.25, 4.0);
         *SPEED.lock().unwrap_or_else(|error| error.into_inner()) = speed;
-        with_player(|player| unsafe { player.setRate(speed) });
+        with_holder(|holder| unsafe {
+            if holder.player.rate() != 0.0 {
+                holder.player.setRate(speed);
+            }
+        });
         true
     }
 
     fn set_looping(&self, looping: bool) {
         LOOPING.store(looping, Ordering::Release);
-        with_player(|player| unsafe {
-            player.setNumberOfLoops(if looping { -1 } else { 0 });
-        });
     }
 
     fn set_session_metadata(&self, metadata: &MediaMetadata) {
-        let position =
-            with_player(|player| Duration::from_secs_f64(unsafe { player.currentTime() }.max(0.0)))
-                .unwrap_or_default();
-        let rate = with_player(|player| {
-            if unsafe { player.isPlaying() } {
-                unsafe { player.rate() }
-            } else {
-                0.0
-            }
-        })
-        .unwrap_or(0.0);
+        let observed = with_holder(|holder| {
+            let rate = unsafe { holder.player.rate() };
+            (position_of(holder), rate, duration_of(holder))
+        });
+        let (position, rate, duration) = observed.unwrap_or((Duration::ZERO, 0.0, None));
         let mut metadata = metadata.clone();
         if metadata.duration.is_none() {
-            metadata.duration = duration_of_open_item();
+            metadata.duration = duration;
         }
         publish_now_playing(&metadata, position, rate);
     }
