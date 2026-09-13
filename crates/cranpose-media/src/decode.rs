@@ -452,6 +452,34 @@ mod tests {
     }
 
     #[test]
+    fn a_remote_uri_hints_the_extension_from_its_path() {
+        assert_eq!(
+            extension_of("https://host/music/track.MP3"),
+            Some("mp3".to_owned())
+        );
+        assert_eq!(
+            extension_of("https://host/track.flac?token=1&x=2"),
+            Some("flac".to_owned())
+        );
+        assert_eq!(
+            extension_of("https://host/track.ogg#start"),
+            Some("ogg".to_owned())
+        );
+        assert_eq!(extension_of("https://host/stream"), None);
+        assert_eq!(extension_of("https://host/v1.2/stream"), None);
+    }
+
+    #[test]
+    fn a_local_uri_still_hints_the_extension_from_its_path() {
+        assert_eq!(
+            extension_of("file:///music/track.wav"),
+            Some("wav".to_owned())
+        );
+        assert_eq!(extension_of("/music/track.wav"), Some("wav".to_owned()));
+        assert_eq!(extension_of("file:///music/track"), None);
+    }
+
+    #[test]
     fn a_document_uri_reports_no_duration_without_being_opened() {
         assert_eq!(Decoder::probe_duration("content://example/track"), None);
     }
