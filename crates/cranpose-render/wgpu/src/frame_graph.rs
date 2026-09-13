@@ -1679,6 +1679,41 @@ pub(crate) fn upload_test_device() -> (
 }
 
 #[cfg(test)]
+pub(crate) fn read_test_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    texture: &wgpu::Texture,
+) -> Vec<u8> {
+    let bytes_per_row = texture.width() * texture.format().block_copy_size(None).unwrap();
+    let padded_row = bytes_per_row.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
+        * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+    let readback = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("Test texture readback"),
+        size: u64::from(padded_row) * u64::from(texture.height()),
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let mut encoder = device.create_command_encoder(&Default::default());
+    encoder.copy_texture_to_buffer(
+        texture.as_image_copy(),
+        wgpu::TexelCopyBufferInfo {
+            buffer: &readback,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(padded_row),
+                rows_per_image: Some(texture.height()),
+            },
+        },
+        texture.size(),
+    );
+    let submission = queue.submit([encoder.finish()]);
+    read_uploaded_bytes(device, &readback, submission)
+        .chunks_exact(padded_row as usize)
+        .flat_map(|row| row[..bytes_per_row as usize].iter().copied())
+        .collect()
+}
+
+#[cfg(test)]
 pub(crate) fn read_uploaded_bytes(
     device: &wgpu::Device,
     readback: &wgpu::Buffer,

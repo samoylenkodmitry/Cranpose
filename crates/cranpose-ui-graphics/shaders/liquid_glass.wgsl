@@ -1730,9 +1730,9 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
     // suppressed under the glass itself and therefore cannot darken its face.
     let shadow_out = shadow_alpha * (1.0 - surface_coverage);
     let face_output = vec4<f32>(rgb, alpha) * coverage;
-    let outer_output = vec4<f32>(outer_rgb, plain_path.a) * outer_coverage;
+    let glass_output = fma(vec4<f32>(outer_rgb, plain_path.a), vec4<f32>(outer_coverage), face_output);
     let illumination = select(0.0, get_float(145u), d <= 0.0);
-    return (select(face_output + outer_output, key_fill_output, key_fill) + vec4<f32>(vec3<f32>(illumination), 0.0)) * material_activity
+    return (select(glass_output, key_fill_output, key_fill) + vec4<f32>(vec3<f32>(illumination), 0.0)) * material_activity
         + resting_output
         + vec4<f32>(0.0, 0.0, 0.0, shadow_out);
 }

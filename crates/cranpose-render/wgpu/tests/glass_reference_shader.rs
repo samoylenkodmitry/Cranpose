@@ -69,6 +69,7 @@ fn card_glass(shape: LiquidShape) -> Glass {
 fn card_glass_with_dispersion(shape: LiquidShape, dispersion: f32) -> Glass {
     Glass::regular()
         .shape(shape)
+        .no_clip()
         .blur_radius(0.0)
         .refraction_depth(0.58)
         .refraction_curve(0.62)
@@ -203,6 +204,7 @@ fn variants_with_dispersion(source: &str, dispersion: f32) -> RenderGraph {
         lens,
         Glass::lens()
             .shape(LiquidShape::RoundedRect(18.0))
+            .no_clip()
             .blur_radius(0.0)
             .dispersion(dispersion)
             .highlight(0.72)
@@ -465,6 +467,7 @@ fn surface_and_lens_rims_match_reference_at_physical_refraction_depths() {
                         let effect = glass
                             .clone()
                             .shape(LiquidShape::RoundedRect(18.0))
+                            .no_clip()
                             .refraction_depth_dp(depth)
                             .blur_radius(0.0)
                             .shadow(false)

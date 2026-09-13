@@ -449,6 +449,9 @@ test-liquid-surface filter="":
 test-render-composition:
     cargo test --profile ci -p cranpose-render-wgpu --test effect_semantics --test backdrop_atlas_parity -- --test-threads=1
 
+test-render-contract:
+    cargo test --profile ci -p cranpose-render-wgpu --lib --test render_contract --test glass_reference_shader --no-fail-fast -- --test-threads=1
+
 test-substrates filter="":
     cargo test --profile ci -p cranpose-render-wgpu --test substrate_reference '{{filter}}' -- --test-threads=1
 

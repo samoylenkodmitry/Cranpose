@@ -42,3 +42,5 @@
 
 - Move Settings sliders beyond touch slop before fine corrections; tiny drags can leave the thumb unchanged.
 - Robot runners must forward the explicit reference-content settings and assert the fixture; a sanitized environment can silently turn a green-icon check into the default blue-icon scene.
+- Shader-only render fixtures must request shader-owned coverage when their graph omits the material's outer clip.
+- Diagnose single-channel pixel drift before rounding with shader bit probes; face/rim compositing can change fused multiply-add order even when both inputs match.

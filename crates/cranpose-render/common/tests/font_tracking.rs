@@ -13,7 +13,7 @@ fn tracked_font() -> SoftwareTextFont {
     let directory_end = 12 + usize::from(tables) * 16;
     let mut bytes = FONT[..directory_end].to_vec();
     bytes[4..6].copy_from_slice(&(tables + 1).to_be_bytes());
-    for record in bytes[12..].chunks_exact_mut(16) {
+    for record in bytes[12..].as_chunks_mut::<16>().0 {
         let offset = u32::from_be_bytes(record[8..12].try_into().unwrap());
         record[8..12].copy_from_slice(&(offset + 16).to_be_bytes());
     }

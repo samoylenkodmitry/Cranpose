@@ -5103,7 +5103,8 @@ mod retained_glyph_tests {
     fn queued_glyph_draw_keeps_its_atlas_after_growth() {
         let (_lock, mut renderer) = test_renderer();
         let size = renderer.text_glyph_atlas.size();
-        renderer.queue.write_texture(
+        WgpuFrameGraphExecutor::new().upload_texture(
+            &renderer.queue,
             renderer.text_glyph_atlas.texture.as_image_copy(),
             &vec![255; (size * size) as usize],
             wgpu::TexelCopyBufferLayout {
@@ -5127,32 +5128,8 @@ mod retained_glyph_tests {
         assert_eq!(renderer.text_glyph_atlas.size(), size * 2);
         queue_glyph(&mut renderer, 2, 4.0, &mut commands);
         let target = draw_queued(&mut renderer, &commands);
-        let readback = renderer.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Glyph pixels"),
-            size: 256 * 8,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-        let mut encoder = renderer.device.create_command_encoder(&Default::default());
-        encoder.copy_texture_to_buffer(
-            target.as_image_copy(),
-            wgpu::TexelCopyBufferInfo {
-                buffer: &readback,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(256),
-                    rows_per_image: Some(8),
-                },
-            },
-            wgpu::Extent3d {
-                width: 8,
-                height: 8,
-                depth_or_array_layers: 1,
-            },
-        );
-        let submission = renderer.queue.submit([encoder.finish()]);
         let pixels =
-            crate::frame_graph::read_uploaded_bytes(&renderer.device, &readback, submission);
+            crate::frame_graph::read_test_texture(&renderer.device, &renderer.queue, &target);
         assert_eq!(renderer.device_error_count(), 0);
         let white: &[u8] = if composition_format() == wgpu::TextureFormat::Rgba8Unorm {
             &[255; 4]
@@ -5161,7 +5138,7 @@ mod retained_glyph_tests {
         };
         for y in 0..2 {
             for x in 0..8 {
-                let offset = y * 256 + x * white.len();
+                let offset = (y * 8 + x) * white.len();
                 let pixel = &pixels[offset..offset + white.len()];
                 if x < 2 {
                     assert_eq!(pixel, white, "queued glyph must retain its original atlas");
