@@ -1,0 +1,28 @@
+{
+  "configurations": [
+    {
+      "id": "9eafb543-7dcc-4959-93db-a8dfc51443bc",
+      "name": "Reference",
+      "options": {}
+    }
+  ],
+  "defaultOptions": {
+    "userAttachmentLifetime": "keepAlways",
+    "preferredScreenCaptureFormat": "video",
+    "testTimeoutsEnabled": true,
+    "defaultTestExecutionTimeAllowance": 90,
+    "maximumTestExecutionTimeAllowance": 120,
+    "uiTestingScreenshotsLifetime": "keepAlways"
+  },
+  "testTargets": [
+    {
+      "target": {
+        "containerPath": "container:LiquidReference.xcodeproj",
+        "identifier": "A00000000000000000000003",
+        "name": "LiquidReferenceTests"
+      },
+      "parallelizable": false
+    }
+  ],
+  "version": 1
+}

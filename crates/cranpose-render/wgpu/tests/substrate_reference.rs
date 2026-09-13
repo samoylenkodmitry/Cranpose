@@ -19,6 +19,72 @@ const GLASS: Rect = Rect {
     height: 72.0,
 };
 const SUBSTRATE_RADIUS: f32 = 12.0;
+
+#[test]
+fn child_shader_tails_receive_their_substrates() {
+    let mut renderer = support::headless_renderer().expect("child substrates require GPU");
+    for spec in [
+        SubstrateSpec::Mean,
+        SubstrateSpec::Average { block: 4 },
+        SubstrateSpec::Blur { radius_px: 2.0 },
+    ] {
+        let probe = support::substrate_probe(spec, SubstrateProbeRead::Held);
+        let graph = |effect| {
+            page(Some(RenderNode::Layer(Box::new(
+                shared_test_support::layer_node(
+                    rect(0.0, 0.0, GLASS.width, GLASS.height),
+                    ProjectiveTransform::translation(GLASS.x, GLASS.y),
+                    GraphicsLayer {
+                        render_effect: Some(effect),
+                        ..Default::default()
+                    },
+                    support::striped_page(GLASS.width as u32, GLASS.height as u32),
+                ),
+            ))))
+        };
+        let expected = capture(
+            &mut renderer,
+            graph(probe.clone().then(RenderEffect::offset(0.0, 0.0))),
+        );
+        let actual = capture(&mut renderer, graph(probe));
+        assert!(
+            region_pixels(&actual, GLASS) == region_pixels(&expected, GLASS),
+            "child {spec:?} substrate differs from its full effect path"
+        );
+    }
+}
+
+#[test]
+fn shader_chains_receive_each_stages_substrates() {
+    let mut renderer = support::headless_renderer().expect("chained substrates require GPU");
+    for spec in [
+        SubstrateSpec::Mean,
+        SubstrateSpec::Average { block: 4 },
+        SubstrateSpec::Blur { radius_px: 2.0 },
+    ] {
+        let probe = support::substrate_probe(spec, SubstrateProbeRead::Held);
+        let expected = capture(
+            &mut renderer,
+            page(Some(effect_layer(GLASS, probe.clone()))),
+        );
+        for terminal in [false, true] {
+            let mut chained = RenderEffect::offset(0.0, 0.0).then(probe.clone());
+            if !terminal {
+                chained = chained.then(RenderEffect::offset(0.0, 0.0));
+            }
+            let actual = capture(&mut renderer, page(Some(effect_layer(GLASS, chained))));
+            for (a, b) in region_pixels(&actual, GLASS)
+                .iter()
+                .zip(region_pixels(&expected, GLASS))
+            {
+                assert!(
+                    a.abs_diff(b) <= 1,
+                    "a chained {spec:?} substrate, terminal={terminal}, must equal the standalone path: {a} != {b}"
+                );
+            }
+        }
+    }
+}
 const BAND_TOP: f32 = 30.0;
 const BAND_HEIGHT: f32 = 60.0;
 const WIDE_RADIUS: f32 = 12.0;
@@ -107,6 +173,108 @@ fn worst_deviation(
 /// block where the kernel weighs the corner texel, 32 away on the stripes.
 const BLURRED_SUBSTRATE_BUDGET: f32 = 14.0;
 const BLURRED_SUBSTRATE_EDGE_BUDGET: f32 = 36.0;
+
+#[test]
+fn transformed_child_receives_its_shared_mean_after_blur() {
+    let mut renderer = support::headless_renderer().expect("mean substrate requires GPU");
+    let mut glass = effect_layer(
+        GLASS,
+        RenderEffect::blur(6.0).then(support::substrate_probe(
+            SubstrateSpec::Mean,
+            SubstrateProbeRead::Held,
+        )),
+    );
+    if let RenderNode::Layer(layer) = &mut glass {
+        layer.transform_to_parent = ProjectiveTransform::uniform_scale(1.05)
+            .then(ProjectiveTransform::translation(GLASS.x, GLASS.y));
+    }
+    let graph = support::page_graph(
+        FRAME_WIDTH,
+        FRAME_HEIGHT,
+        vec![
+            support::solid_rect(
+                rect(0.0, 0.0, FRAME_WIDTH as f32, FRAME_HEIGHT as f32),
+                cranpose_ui_graphics::Color(0.35, 0.35, 0.35, 1.0),
+            ),
+            glass,
+        ],
+    );
+    let frame = capture(&mut renderer, graph);
+    for pixel in region_pixels(&frame, rect(65.0, 45.0, 30.0, 25.0)).chunks_exact(4) {
+        assert!(
+            pixel[..3].iter().all(|c| c.abs_diff(89) <= 1),
+            "transformed child must receive its mean: {pixel:?}"
+        );
+    }
+}
+
+#[test]
+fn shared_mean_uses_the_layer_extent_without_filter_padding() {
+    let mut renderer = support::headless_renderer().expect("mean substrate requires GPU");
+    let graph = support::page_graph(
+        FRAME_WIDTH,
+        FRAME_HEIGHT,
+        vec![
+            support::solid_rect(
+                rect(0.0, 0.0, FRAME_WIDTH as f32, FRAME_HEIGHT as f32),
+                cranpose_ui_graphics::Color::BLACK,
+            ),
+            support::solid_rect(GLASS, cranpose_ui_graphics::Color(0.5, 0.5, 0.5, 1.0)),
+            effect_layer(
+                GLASS,
+                RenderEffect::blur(6.0).then(support::substrate_probe(
+                    SubstrateSpec::Mean,
+                    SubstrateProbeRead::Held,
+                )),
+            ),
+        ],
+    );
+    let frame = capture(&mut renderer, graph);
+    for pixel in region_pixels(&frame, rect(65.0, 45.0, 30.0, 25.0)).chunks_exact(4) {
+        assert!(
+            pixel[..3].iter().all(|c| c.abs_diff(128) <= 1),
+            "padding must not bias the mean: {pixel:?}"
+        );
+    }
+}
+
+#[test]
+fn shared_mean_includes_every_texel_of_each_odd_sized_capture() {
+    let mut renderer = support::headless_renderer().expect("mean substrate requires GPU");
+    let regions = [rect(7.0, 5.0, 73.0, 51.0), rect(137.0, 11.0, 59.0, 83.0)];
+    let plain = capture(&mut renderer, page(None));
+    let mut children = support::striped_page(FRAME_WIDTH, FRAME_HEIGHT);
+    for region in regions {
+        children.push(effect_layer(
+            region,
+            support::substrate_probe(SubstrateSpec::Mean, SubstrateProbeRead::Held),
+        ));
+    }
+    let actual = capture(
+        &mut renderer,
+        support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children),
+    );
+    for region in regions {
+        let source = region_pixels(&plain, region);
+        let mut mean = [0.0; 4];
+        for pixel in source.chunks_exact(4) {
+            for channel in 0..4 {
+                mean[channel] += f64::from(pixel[channel]);
+            }
+        }
+        for value in &mut mean {
+            *value /= (source.len() / 4) as f64;
+        }
+        for pixel in region_pixels(&actual, region).chunks_exact(4) {
+            for channel in 0..4 {
+                assert!(
+                    (f64::from(pixel[channel]) - mean[channel]).abs() <= 1.0,
+                    "shared mean for {region:?}: {pixel:?}, expected {mean:?}"
+                );
+            }
+        }
+    }
+}
 
 #[test]
 fn a_blurred_substrate_is_the_capture_blurred_by_its_radius() {

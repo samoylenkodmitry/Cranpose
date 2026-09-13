@@ -4,7 +4,9 @@ use cranpose_render_common::{
     bounded_lru_cache::BoundedLruCache,
     geometry::{BLUR_TAP_PAIRS, BlurKernel, blur_scratch_block},
 };
-use cranpose_ui_graphics::{BlendMode, MAX_SUBSTRATES, RenderEffect, RuntimeShader, TileMode};
+use cranpose_ui_graphics::{
+    BlendMode, MAX_SUBSTRATES, RenderEffect, RuntimeShader, SubstrateSpec, TileMode,
+};
 use smallvec::SmallVec;
 
 use crate::{
@@ -97,6 +99,7 @@ pub(crate) struct EffectRenderer {
     blur_pipelines: [LazyGpuResource<wgpu::RenderPipeline>; BLUR_TILE_MODES.len()],
     blur_downsample_pipelines: [[LazyGpuResource<wgpu::RenderPipeline>;
         BLUR_DOWNSAMPLE_BLOCKS.len()]; BLUR_TILE_MODES.len()],
+    blur_mean_pipeline: LazyGpuResource<wgpu::RenderPipeline>,
     blur_uniform_bind_group_layout: wgpu::BindGroupLayout,
     blur_uniform_uploads: Vec<UniformUpload>,
     blur_kernels: RefCell<BoundedLruCache<u32, BlurKernel>>,
@@ -232,7 +235,22 @@ fn acquire_recorded_effect_scratch_textures_into<C: FrameCommandRecorder>(
                 targets.push(descriptor, target);
             }
         }
-        RenderEffect::Offset { .. } | RenderEffect::Shader { .. } => {}
+        RenderEffect::Offset { .. } => {}
+        RenderEffect::Shader { shader } => {
+            if !shader.substrates().is_empty() {
+                let layout = ChainedSubstrates::new(shader, width, height);
+                for _ in 0..2 {
+                    let descriptor = FrameTextureDescriptor::render_attachment(
+                        "Chained Shader Substrates",
+                        layout.width,
+                        layout.height,
+                        format,
+                    );
+                    let target = recorder.acquire_transient_offscreen(device, descriptor);
+                    targets.push(descriptor, target);
+                }
+            }
+        }
         RenderEffect::Chain { first, second } => {
             let descriptor = FrameTextureDescriptor::render_attachment(
                 "Render Effect Chain Scratch",
@@ -332,18 +350,23 @@ fn blur_uniform_spec(pass: UploadAllocatorId) -> UploadAllocatorSpec {
     )
 }
 
-/// One draw of a blur pass: the texture it samples, its uniforms, the
-/// downsample block it averages (the kernel when `None`) and the
-/// destination pixels it covers.
 struct BlurDraw<'a> {
     source: &'a OffscreenTarget,
     uniforms: BlurUniforms,
-    downsample: Option<u32>,
+    filter: BlurFilter,
     scissor: Option<(u32, u32, u32, u32)>,
+}
+
+#[derive(Clone, Copy)]
+enum BlurFilter {
+    Kernel,
+    Downsample(u32),
+    Mean,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum BlurPipeline {
+    Mean,
     Downsample { block: u32, tile_mode: usize },
     Kernel { tile_mode: usize },
 }
@@ -351,9 +374,10 @@ enum BlurPipeline {
 impl BlurDraw<'_> {
     fn pipeline(&self) -> BlurPipeline {
         let tile_mode = self.uniforms.texture_size_and_tile_mode[2] as usize;
-        match self.downsample {
-            Some(block) => BlurPipeline::Downsample { block, tile_mode },
-            None => BlurPipeline::Kernel { tile_mode },
+        match self.filter {
+            BlurFilter::Downsample(block) => BlurPipeline::Downsample { block, tile_mode },
+            BlurFilter::Kernel => BlurPipeline::Kernel { tile_mode },
+            BlurFilter::Mean => BlurPipeline::Mean,
         }
     }
 }
@@ -430,6 +454,8 @@ struct ShaderPassOptions {
     dest_viewport: Option<(f32, f32, f32, f32)>,
     pipeline_mode: RuntimeShaderPipelineMode,
     source_logical_size: Option<(f32, f32)>,
+    source_region: Option<(f32, f32, f32, f32)>,
+    substrate_regions: SubstrateRegions,
 }
 
 /// A runtime shader drawn into a pass over `dest_viewport`, reading
@@ -533,15 +559,18 @@ pub(crate) struct BlurRegion {
     pub(crate) read: Option<(u32, u32, u32, u32)>,
 }
 
-/// One averaged substrate of a capture atlas: the capture texels to
-/// average in blocks of `block`, and the slot the downsample writes in the
-/// result texture.
 #[derive(Clone, Copy)]
 pub(crate) struct SubstrateRegion {
     pub(crate) source: (u32, u32, u32, u32),
     pub(crate) scratch: (u32, u32, u32, u32),
-    pub(crate) block: u32,
+    pub(crate) average: SubstrateAverage,
     pub(crate) read: Option<(u32, u32, u32, u32)>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum SubstrateAverage {
+    Block(u32),
+    Mean,
 }
 
 fn axis_span(start: i64, end: i64, margin: u32, len: u32, wraps: bool) -> (u32, u32) {
@@ -581,6 +610,84 @@ fn read_scissor(
         right - left,
         bottom - top,
     )
+}
+
+struct ChainedSubstrates {
+    width: u32,
+    height: u32,
+    regions: SubstrateRegions,
+    blurs: Vec<BlurRegion>,
+    averages: Vec<SubstrateRegion>,
+}
+
+impl ChainedSubstrates {
+    fn new(shader: &RuntimeShader, width: u32, height: u32) -> Self {
+        let mut layout = Self {
+            width,
+            height,
+            regions: [None; MAX_SUBSTRATES],
+            blurs: Vec::new(),
+            averages: Vec::new(),
+        };
+        for (index, spec) in shader.substrates().iter().enumerate() {
+            let (sw, sh) = match *spec {
+                SubstrateSpec::Mean => (1, height),
+                SubstrateSpec::Average { block } => (width.div_ceil(block), height.div_ceil(block)),
+                SubstrateSpec::Blur { radius_px } => {
+                    substrate_scratch_size(radius_px, width, height)
+                }
+            };
+            let region = (0, layout.height, sw, sh);
+            let source = (0, 0, width, height);
+            layout.regions[index] = Some(if matches!(spec, SubstrateSpec::Mean) {
+                (0.0, layout.height as f32, 1.0, 1.0)
+            } else {
+                (0.0, layout.height as f32, sw as f32, sh as f32)
+            });
+            layout.height += sh;
+            match *spec {
+                SubstrateSpec::Blur { radius_px } => layout.blurs.push(BlurRegion {
+                    source,
+                    scratch: region,
+                    dest: region,
+                    radius_x: radius_px,
+                    radius_y: radius_px,
+                    tile_mode: TileMode::Clamp,
+                    read: None,
+                }),
+                SubstrateSpec::Mean | SubstrateSpec::Average { .. } => {
+                    layout.averages.push(SubstrateRegion {
+                        source,
+                        scratch: region,
+                        read: None,
+                        average: match *spec {
+                            SubstrateSpec::Average { block } => SubstrateAverage::Block(block),
+                            _ => SubstrateAverage::Mean,
+                        },
+                    })
+                }
+            }
+        }
+        layout
+    }
+
+    fn passes(&self) -> u32 {
+        2 * u32::from(!self.blurs.is_empty())
+            + 2 * u32::from(
+                self.averages
+                    .iter()
+                    .any(|s| matches!(s.average, SubstrateAverage::Mean)),
+            )
+            + u32::from(
+                self.averages
+                    .iter()
+                    .any(|s| matches!(s.average, SubstrateAverage::Block(_)))
+                    || self
+                        .blurs
+                        .iter()
+                        .any(|b| blur_block(b.source, b.scratch) > 1),
+            )
+    }
 }
 
 #[derive(Clone, Copy, Default)]
@@ -968,6 +1075,7 @@ impl EffectRenderer {
             blur_pipeline_layout,
             blur_pipelines,
             blur_downsample_pipelines,
+            blur_mean_pipeline: LazyGpuResource::new("effect/mean"),
             blur_uniform_bind_group_layout,
             blur_uniform_uploads: Vec::new(),
             blur_kernels: RefCell::new(BoundedLruCache::with_capacity_at_least_one(
@@ -1050,6 +1158,23 @@ impl EffectRenderer {
                 wgpu::BlendState::REPLACE,
             )
         })
+    }
+
+    fn mean_pipeline(&self, device: &wgpu::Device) -> &wgpu::RenderPipeline {
+        self.blur_mean_pipeline
+            .get_or_init(self.adapter_backend, || {
+                create_fullscreen_pipeline(
+                    device,
+                    self.pipeline_cache.as_ref(),
+                    "Mean Pipeline",
+                    &self.blur_pipeline_layout,
+                    &self.blur_shader,
+                    "blur_mean_fs",
+                    &[],
+                    self.surface_format,
+                    wgpu::BlendState::REPLACE,
+                )
+            })
     }
 
     fn offset_pipeline(&self, device: &wgpu::Device) -> &wgpu::RenderPipeline {
@@ -1302,6 +1427,7 @@ impl EffectRenderer {
             let pipeline = draw.pipeline();
             if bound != Some(pipeline) {
                 pass.set_pipeline(match pipeline {
+                    BlurPipeline::Mean => self.mean_pipeline(device),
                     BlurPipeline::Downsample { block, tile_mode } => {
                         self.blur_downsample_pipeline(device, block, tile_mode)
                     }
@@ -1441,7 +1567,7 @@ impl EffectRenderer {
                         (0.0, 0.0),
                         tile_mode,
                     ),
-                    downsample: Some(block),
+                    filter: BlurFilter::Downsample(block),
                     scissor: downsample_scissor,
                 }],
             );
@@ -1468,7 +1594,7 @@ impl EffectRenderer {
                     radius,
                     tile_mode,
                 ),
-                downsample: None,
+                filter: BlurFilter::Kernel,
                 scissor: horizontal_scissor,
             }],
         );
@@ -1490,7 +1616,7 @@ impl EffectRenderer {
                     radius,
                     tile_mode,
                 ),
-                downsample: None,
+                filter: BlurFilter::Kernel,
                 scissor: dest_scissor,
             }],
         );
@@ -1501,6 +1627,67 @@ impl EffectRenderer {
             }
             None => 2,
         }
+    }
+
+    fn encode_mean_substrates<C: FrameCommandRecorder>(
+        &mut self,
+        recorder: &mut C,
+        device: &wgpu::Device,
+        atlas: &OffscreenTarget,
+        scratch: &OffscreenTarget,
+        result: &OffscreenTarget,
+        substrates: &[SubstrateRegion],
+    ) -> bool {
+        if !substrates
+            .iter()
+            .any(|s| matches!(s.average, SubstrateAverage::Mean))
+        {
+            return false;
+        }
+        for horizontal in [true, false] {
+            let source = if horizontal { atlas } else { scratch };
+            let target = if horizontal { scratch } else { result };
+            let draws = substrates
+                .iter()
+                .filter(|s| matches!(s.average, SubstrateAverage::Mean))
+                .map(|region| {
+                    let source_region = if horizontal {
+                        region.source
+                    } else {
+                        region.scratch
+                    };
+                    let dest = if horizontal {
+                        region.scratch
+                    } else {
+                        (region.scratch.0, region.scratch.1, 1, 1)
+                    };
+                    BlurDraw {
+                        source,
+                        uniforms: self.blur_uniforms(
+                            horizontal,
+                            (source.width, source.height),
+                            source_region,
+                            dest,
+                            (0.0, 0.0),
+                            TileMode::Clamp,
+                        ),
+                        filter: BlurFilter::Mean,
+                        scissor: Some(dest),
+                    }
+                })
+                .collect::<Vec<_>>();
+            self.encode_blur_pass(
+                recorder,
+                device,
+                "Substrate Mean Pass",
+                UploadAllocatorId::BlurDownsample,
+                &target.view,
+                (target.width, target.height),
+                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                &draws,
+            );
+        }
+        true
     }
 
     pub(crate) fn encode_blur_atlas_passes<C: FrameCommandRecorder>(
@@ -1517,6 +1704,8 @@ impl EffectRenderer {
             averages: substrates,
             blur_output,
         } = work;
+        let has_means =
+            self.encode_mean_substrates(recorder, device, atlas, scratch, result, substrates);
         let blocks: Vec<u32> = regions
             .iter()
             .map(|region| blur_block(region.source, region.scratch))
@@ -1534,7 +1723,7 @@ impl EffectRenderer {
                 (0.0, 0.0),
                 tile_mode,
             ),
-            downsample: Some(block),
+            filter: BlurFilter::Downsample(block),
             scissor: Some(scratch),
         };
         let downsample: Vec<BlurDraw<'_>> = regions
@@ -1547,15 +1736,14 @@ impl EffectRenderer {
                 draw.scissor = Some(region.pass_scissor((1, 1)));
                 draw
             })
-            .chain(substrates.iter().map(|substrate| {
-                let mut draw = downsample_draw(
-                    substrate.source,
-                    substrate.scratch,
-                    substrate.block,
-                    TileMode::Clamp,
-                );
+            .chain(substrates.iter().filter_map(|substrate| {
+                let SubstrateAverage::Block(block) = substrate.average else {
+                    return None;
+                };
+                let mut draw =
+                    downsample_draw(substrate.source, substrate.scratch, block, TileMode::Clamp);
                 draw.scissor = Some(substrate.pass_scissor());
-                draw
+                Some(draw)
             }))
             .collect();
         if !downsample.is_empty() {
@@ -1566,7 +1754,11 @@ impl EffectRenderer {
                 UploadAllocatorId::BlurDownsample,
                 &result.view,
                 (result.width, result.height),
-                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                if has_means {
+                    wgpu::LoadOp::Load
+                } else {
+                    wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
+                },
                 &downsample,
             );
         }
@@ -1592,7 +1784,7 @@ impl EffectRenderer {
                         region.scratch_radius(),
                         region.tile_mode,
                     ),
-                    downsample: None,
+                    filter: BlurFilter::Kernel,
                     scissor: Some(region.pass_scissor((0, 1))),
                 }
             })
@@ -1619,7 +1811,7 @@ impl EffectRenderer {
                     region.scratch_radius(),
                     region.tile_mode,
                 ),
-                downsample: None,
+                filter: BlurFilter::Kernel,
                 scissor: Some({
                     let (x, y, width, height) = region.pass_scissor((0, 0));
                     (
@@ -1713,6 +1905,8 @@ impl EffectRenderer {
                 dest_viewport: None,
                 pipeline_mode: RuntimeShaderPipelineMode::Replace,
                 source_logical_size: None,
+                source_region: None,
+                substrate_regions: [None; MAX_SUBSTRATES],
             },
         )
     }
@@ -1852,8 +2046,8 @@ impl EffectRenderer {
         let mut padded = shader.uniforms_padded();
         ReservedShaderUniforms {
             layer_pixel_rect,
-            substrate_regions: [None; MAX_SUBSTRATES],
-            source_region: None,
+            substrate_regions: options.substrate_regions,
+            source_region: options.source_region,
             mask: None,
             logical_size: options.source_logical_size,
             alpha: 1.0,
@@ -1916,6 +2110,74 @@ impl EffectRenderer {
     }
 
     #[allow(clippy::too_many_arguments)]
+    fn encode_chained_substrates<'scratch, C: FrameCommandRecorder>(
+        &mut self,
+        recorder: &mut C,
+        device: &wgpu::Device,
+        source: &OffscreenTarget,
+        dest_view: &wgpu::TextureView,
+        shader: &RuntimeShader,
+        layer_pixel_rect: [f32; 4],
+        reads: EffectReads,
+        scratch_targets: &mut impl EffectScratchTargetProvider<'scratch>,
+    ) -> Result<u32, String> {
+        let layout = ChainedSubstrates::new(shader, source.width, source.height);
+        let scratch = scratch_targets.next()?;
+        let packed = scratch_targets.next()?;
+        self.encode_blur_atlas_passes(
+            recorder,
+            device,
+            source,
+            scratch,
+            packed,
+            AtlasSideWork {
+                blurs: &layout.blurs,
+                averages: &layout.averages,
+                blur_output: None,
+            },
+        );
+        self.encode_composite_to_view_pass(
+            recorder,
+            device,
+            source,
+            &packed.view,
+            CompositePassOptions {
+                alpha: 1.0,
+                load_op: wgpu::LoadOp::Load,
+                scissor: None,
+                rounded_mask: None,
+                blend_mode: BlendMode::Src,
+                dest_viewport: Some((0.0, 0.0, source.width as f32, source.height as f32)),
+                source_viewport: None,
+                sample_mode: CompositeSampleMode::Linear,
+            },
+        );
+        self.record_composite_pass();
+        if !self.encode_shader_pass(
+            recorder,
+            device,
+            packed,
+            dest_view,
+            shader,
+            layer_pixel_rect,
+            ShaderPassOptions {
+                load_op: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                scissor: reads.output,
+                dest_viewport: None,
+                pipeline_mode: RuntimeShaderPipelineMode::Replace,
+                source_logical_size: Some((source.width as f32, source.height as f32)),
+                source_region: Some((0.0, 0.0, source.width as f32, source.height as f32)),
+                substrate_regions: layout.regions,
+            },
+        ) {
+            return Err("chained substrate shader failed to compile".into());
+        }
+        self.record_substrates(shader.substrates().len() as u32);
+        self.debug_effects.set(self.debug_effects.get() + 1);
+        Ok(layout.passes() + 2)
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn encode_effect<'scratch, C: FrameCommandRecorder>(
         &mut self,
         recorder: &mut C,
@@ -1975,6 +2237,18 @@ impl EffectRenderer {
                 Ok(1)
             }
             RenderEffect::Shader { shader } => {
+                if !shader.substrates().is_empty() {
+                    return self.encode_chained_substrates(
+                        recorder,
+                        device,
+                        source,
+                        dest_view,
+                        shader,
+                        layer_pixel_rect,
+                        reads,
+                        scratch_targets,
+                    );
+                }
                 if self.encode_shader(
                     recorder,
                     device,

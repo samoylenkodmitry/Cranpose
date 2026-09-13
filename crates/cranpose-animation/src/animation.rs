@@ -856,6 +856,7 @@ struct AnimatableInner<T: SpringScalar + 'static> {
     animation_type: AnimationType,
     start_time_nanos: Option<u64>,
     last_frame_nanos: Option<u64>,
+    sampled_time_nanos: Option<u64>,
     registration: Option<FrameCallbackRegistration>,
 }
 
@@ -892,6 +893,7 @@ impl<T: SpringScalar + 'static> Animatable<T> {
             animation_type: animation,
             start_time_nanos: None,
             last_frame_nanos: None,
+            sampled_time_nanos: None,
             registration: None,
         };
         Self {
@@ -905,6 +907,22 @@ impl<T: SpringScalar + 'static> Animatable<T> {
     /// their physical motion toward the new target).
     pub fn animateTo(&mut self, target: T, animation: AnimationType) {
         self.start_animation(target, animation, None);
+    }
+
+    /// Retarget at an input timestamp on the shared animation clock.
+    /// Advances the previous animation to that boundary before preserving its velocity
+    /// and starting the new target. Older timestamps use the latest sampled time.
+    pub fn animate_to_at(&mut self, target: T, animation: AnimationType, time_nanos: u64) {
+        let time = {
+            let mut inner = self.inner.borrow_mut();
+            let time = time_nanos.max(inner.sampled_time_nanos.unwrap_or(0));
+            if inner.registration.is_some() {
+                Self::advance_inner(&mut inner, time);
+            }
+            inner.sampled_time_nanos = Some(time);
+            time
+        };
+        self.start_animation(target, animation, Some(time));
     }
 
     fn start_animation(
@@ -1046,104 +1064,107 @@ impl<T: SpringScalar + 'static> Animatable<T> {
     }
 
     fn on_frame(this: &Rc<RefCell<AnimatableInner<T>>>, frame_time_nanos: u64) {
-        let mut schedule_next = false;
-        {
+        let schedule_next = {
             let mut inner = this.borrow_mut();
             inner.registration = None;
+            Self::advance_inner(&mut inner, frame_time_nanos)
+        };
+        if schedule_next {
+            Self::schedule_frame(this);
+        }
+    }
 
-            match inner.animation_type {
-                AnimationType::Tween(spec) => {
-                    let start_time = inner.start_time_nanos.get_or_insert(frame_time_nanos);
-                    let elapsed_nanos = frame_time_nanos.saturating_sub(*start_time);
-                    let delay_nanos = spec.delay_millis.saturating_mul(1_000_000);
+    fn advance_inner(inner: &mut AnimatableInner<T>, frame_time_nanos: u64) -> bool {
+        let frame_time_nanos = frame_time_nanos.max(inner.sampled_time_nanos.unwrap_or(0));
+        inner.sampled_time_nanos = Some(frame_time_nanos);
+        let mut schedule_next = false;
+        match inner.animation_type {
+            AnimationType::Tween(spec) => {
+                let start_time = inner.start_time_nanos.get_or_insert(frame_time_nanos);
+                let elapsed_nanos = frame_time_nanos.saturating_sub(*start_time);
+                let delay_nanos = spec.delay_millis.saturating_mul(1_000_000);
 
-                    if elapsed_nanos < delay_nanos {
+                if elapsed_nanos < delay_nanos {
+                    schedule_next = true;
+                } else {
+                    let animation_elapsed = elapsed_nanos - delay_nanos;
+                    let duration_nanos = spec.duration_millis * 1_000_000;
+                    let duration_nanos = duration_nanos.max(1);
+                    let linear_progress =
+                        (animation_elapsed as f32 / duration_nanos as f32).clamp(0.0, 1.0);
+                    let progress = spec.easing.transform(linear_progress);
+
+                    let new_value = inner.start.lerp(&inner.target, progress);
+                    inner.current = new_value.clone();
+                    inner.state.set_value(new_value);
+
+                    if linear_progress >= 1.0 {
+                        inner.current = inner.target.clone();
+                        inner.start = inner.target.clone();
+                        inner.start_time_nanos = None;
+                        inner.state.set_value(inner.target.clone());
+                    } else {
+                        schedule_next = true;
+                    }
+                }
+            }
+            AnimationType::Spring(spec) => {
+                let start_time = inner.start_time_nanos.get_or_insert(frame_time_nanos);
+                let elapsed_nanos = frame_time_nanos.saturating_sub(*start_time);
+                let delay_nanos = spec.delay_millis.saturating_mul(1_000_000);
+                if elapsed_nanos < delay_nanos {
+                    inner.last_frame_nanos = Some(start_time.saturating_add(delay_nanos));
+                    schedule_next = true;
+                } else {
+                    let last = inner.last_frame_nanos.replace(frame_time_nanos);
+                    let dt = last
+                        .map(|last| frame_time_nanos.saturating_sub(last) as f32 / 1_000_000_000.0)
+                        .unwrap_or(0.0);
+
+                    if dt <= 0.0 {
                         schedule_next = true;
                     } else {
-                        let animation_elapsed = elapsed_nanos - delay_nanos;
-                        let duration_nanos = spec.duration_millis * 1_000_000;
-                        let duration_nanos = duration_nanos.max(1);
-                        let linear_progress =
-                            (animation_elapsed as f32 / duration_nanos as f32).clamp(0.0, 1.0);
-                        let progress = spec.easing.transform(linear_progress);
+                        let dimensions = T::DIMENSIONS.min(SPRING_MAX_DIMENSIONS);
+                        let mut position = [0.0f32; SPRING_MAX_DIMENSIONS];
+                        for (index, slot) in position.iter_mut().enumerate().take(dimensions) {
+                            let value = inner.current.dimension(index);
+                            let target = inner.target.dimension(index);
+                            let (next_value, next_velocity) = advance_spring(
+                                value,
+                                inner.velocity[index],
+                                target,
+                                spec.damping_ratio,
+                                spec.stiffness,
+                                dt,
+                            );
+                            *slot = next_value;
+                            inner.velocity[index] = next_velocity;
+                        }
 
-                        let new_value = inner.start.lerp(&inner.target, progress);
-                        inner.current = new_value.clone();
-                        inner.state.set_value(new_value);
+                        inner.current = T::from_dimensions(position);
+                        inner.state.set_value(inner.current.clone());
 
-                        if linear_progress >= 1.0 {
+                        let settled = (0..dimensions).all(|index| {
+                            inner.velocity[index].abs() < spec.velocity_threshold
+                                && (position[index] - inner.target.dimension(index)).abs()
+                                    < spec.position_threshold
+                        });
+
+                        if settled {
                             inner.current = inner.target.clone();
                             inner.start = inner.target.clone();
                             inner.start_time_nanos = None;
+                            inner.last_frame_nanos = None;
+                            inner.velocity = [0.0; SPRING_MAX_DIMENSIONS];
                             inner.state.set_value(inner.target.clone());
                         } else {
                             schedule_next = true;
                         }
                     }
                 }
-                AnimationType::Spring(spec) => {
-                    let start_time = inner.start_time_nanos.get_or_insert(frame_time_nanos);
-                    let elapsed_nanos = frame_time_nanos.saturating_sub(*start_time);
-                    let delay_nanos = spec.delay_millis.saturating_mul(1_000_000);
-                    if elapsed_nanos < delay_nanos {
-                        inner.last_frame_nanos = Some(start_time.saturating_add(delay_nanos));
-                        schedule_next = true;
-                    } else {
-                        let last = inner.last_frame_nanos.replace(frame_time_nanos);
-                        let dt = last
-                            .map(|last| {
-                                frame_time_nanos.saturating_sub(last) as f32 / 1_000_000_000.0
-                            })
-                            .unwrap_or(0.0);
-
-                        if dt <= 0.0 {
-                            schedule_next = true;
-                        } else {
-                            let dimensions = T::DIMENSIONS.min(SPRING_MAX_DIMENSIONS);
-                            let mut position = [0.0f32; SPRING_MAX_DIMENSIONS];
-                            for (index, slot) in position.iter_mut().enumerate().take(dimensions) {
-                                let value = inner.current.dimension(index);
-                                let target = inner.target.dimension(index);
-                                let (next_value, next_velocity) = advance_spring(
-                                    value,
-                                    inner.velocity[index],
-                                    target,
-                                    spec.damping_ratio,
-                                    spec.stiffness,
-                                    dt,
-                                );
-                                *slot = next_value;
-                                inner.velocity[index] = next_velocity;
-                            }
-
-                            inner.current = T::from_dimensions(position);
-                            inner.state.set_value(inner.current.clone());
-
-                            let settled = (0..dimensions).all(|index| {
-                                inner.velocity[index].abs() < spec.velocity_threshold
-                                    && (position[index] - inner.target.dimension(index)).abs()
-                                        < spec.position_threshold
-                            });
-
-                            if settled {
-                                inner.current = inner.target.clone();
-                                inner.start = inner.target.clone();
-                                inner.start_time_nanos = None;
-                                inner.last_frame_nanos = None;
-                                inner.velocity = [0.0; SPRING_MAX_DIMENSIONS];
-                                inner.state.set_value(inner.target.clone());
-                            } else {
-                                schedule_next = true;
-                            }
-                        }
-                    }
-                }
             }
         }
-
-        if schedule_next {
-            Self::schedule_frame(this);
-        }
+        schedule_next
     }
 }
 

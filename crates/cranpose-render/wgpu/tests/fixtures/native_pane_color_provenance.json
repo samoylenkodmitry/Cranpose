@@ -1,0 +1,193 @@
+{
+  "captures": [
+    {
+      "source": "target/liquid-native-channel-probes-2/probe-00.png",
+      "png_sha256": "c58b79ba0279ca7c9ed36040d14d8940d5c48c6dda488cdbed2c99c518dbd748",
+      "metadata_sha256": "0afedfd0eb33a03d8367e64479c9ff841556ce7a26a6e56b124fdc0b1ec2cb50",
+      "pattern": {
+        "axis": "x",
+        "channel": "red",
+        "isolatedLayer": "all",
+        "kind": "wave",
+        "level": 0.5,
+        "period": 32,
+        "phase": 0,
+        "sourceLayer": "none"
+      }
+    },
+    {
+      "source": "target/liquid-native-channel-probes-2/probe-01.png",
+      "png_sha256": "ab09b5b19498a0a04534a9d90dc88db2bbd659c9d6203c6c9dc0dbd080e721ca",
+      "metadata_sha256": "cab37be236c830d708bb7af65355dbbb0c6f2e73b9c931894fe6ec3aa2b99ca7",
+      "pattern": {
+        "axis": "x",
+        "channel": "red",
+        "isolatedLayer": "all",
+        "kind": "wave",
+        "level": 0.5,
+        "period": 32,
+        "phase": 1,
+        "sourceLayer": "none"
+      }
+    },
+    {
+      "source": "target/liquid-native-channel-probes-2/probe-02.png",
+      "png_sha256": "d8b32518a073f2f79419aabfdd36371cbce1e5e4caf72bf88c2c6d45c200a48f",
+      "metadata_sha256": "fccd87c49d0a8f69083de7d31105faab4cfecc1f13a70fcf67ae16b1e197be1c",
+      "pattern": {
+        "axis": "x",
+        "channel": "red",
+        "isolatedLayer": "all",
+        "kind": "wave",
+        "level": 0.5,
+        "period": 32,
+        "phase": 2,
+        "sourceLayer": "none"
+      }
+    },
+    {
+      "source": "target/liquid-native-channel-probes-2/probe-03.png",
+      "png_sha256": "974167bb3769327300d7f28e168e352d3376588fdcdebe9f9f0dfaa7e45615a9",
+      "metadata_sha256": "c142a3654d9a2891ee0db52a311934b3b87760c7a9add135d4d225dff495bda8",
+      "pattern": {
+        "axis": "x",
+        "channel": "red",
+        "isolatedLayer": "all",
+        "kind": "wave",
+        "level": 0.5,
+        "period": 32,
+        "phase": 3,
+        "sourceLayer": "none"
+      }
+    },
+    {
+      "source": "target/liquid-native-channel-probes-2/probe-08.png",
+      "png_sha256": "d79940e493a90b9abedf5bf18f39079b090cd48e4277a186f7538ce53cd11a11",
+      "metadata_sha256": "738ea421745ddd40d0ea644e1cc776c259dd4fd07e43216d7f0413753682c4de",
+      "pattern": {
+        "axis": "x",
+        "channel": "green",
+        "isolatedLayer": "all",
+        "kind": "wave",
+        "level": 0.5,
+        "period": 32,
+        "phase": 0,
+        "sourceLayer": "none"
+      }
+    },
+    {
+      "source": "target/liquid-native-channel-probes-2/probe-09.png",
+      "png_sha256": "c7c733272a001be45294e1f0d89cb95a20694310bab434f56d8ece8c70337243",
+      "metadata_sha256": "4eab95f5d540b1a421f78e339ea4d165817d93013d9a5eec258e93bd04add6f0",
+      "pattern": {
+        "axis": "x",
+        "channel": "green",
+        "isolatedLayer": "all",
+        "kind": "wave",
+        "level": 0.5,
+        "period": 32,
+        "phase": 1,
+        "sourceLayer": "none"
+      }
+    },
+    {
+      "source": "target/liquid-native-channel-probes-2/probe-10.png",
+      "png_sha256": "dcf96fc6f32f9b01a3e7dd5431b008326033812384daa0b38b9e2ec3cdb54c4f",
+      "metadata_sha256": "4f0ba731b744e6ab1400c12f2c22440f503662fe43f8d28efff235f5e5efe795",
+      "pattern": {
+        "axis": "x",
+        "channel": "green",
+        "isolatedLayer": "all",
+        "kind": "wave",
+        "level": 0.5,
+        "period": 32,
+        "phase": 2,
+        "sourceLayer": "none"
+      }
+    },
+    {
+      "source": "target/liquid-native-channel-probes-2/probe-11.png",
+      "png_sha256": "662e2b36efdd1156b17317e8632ba7e0120fd122032c67c436446df7bf94577a",
+      "metadata_sha256": "112ec66bb0788fb746be2f39e09a897de7c8d74768167b484de000392e00be35",
+      "pattern": {
+        "axis": "x",
+        "channel": "green",
+        "isolatedLayer": "all",
+        "kind": "wave",
+        "level": 0.5,
+        "period": 32,
+        "phase": 3,
+        "sourceLayer": "none"
+      }
+    },
+    {
+      "source": "target/liquid-native-channel-probes-2/probe-16.png",
+      "png_sha256": "594e9cdb96905050c9462b3ef3a76594926bcce7889e8cd311e49e322d42d773",
+      "metadata_sha256": "d219d09530ac9bb575b9d44641b9bc57d6149f0b426f13e374f98f99335d9773",
+      "pattern": {
+        "axis": "x",
+        "channel": "blue",
+        "isolatedLayer": "all",
+        "kind": "wave",
+        "level": 0.5,
+        "period": 32,
+        "phase": 0,
+        "sourceLayer": "none"
+      }
+    },
+    {
+      "source": "target/liquid-native-channel-probes-2/probe-17.png",
+      "png_sha256": "3e7a25b801bcdb833588eb624520bcccee91cb34bdeea4240fa209e788dfa3b6",
+      "metadata_sha256": "0a3bbcfe032a15e3cbeba473de0176b0c3988de94386257aba213752250261f3",
+      "pattern": {
+        "axis": "x",
+        "channel": "blue",
+        "isolatedLayer": "all",
+        "kind": "wave",
+        "level": 0.5,
+        "period": 32,
+        "phase": 1,
+        "sourceLayer": "none"
+      }
+    },
+    {
+      "source": "target/liquid-native-channel-probes-2/probe-18.png",
+      "png_sha256": "1f461c11a723932ee54b184cd67c9649481f2967bd1cb31055d7001c1c979330",
+      "metadata_sha256": "6e0eb454d24df03a3df3a58df617cc651087556bae15c88996618d2dbcfcb870",
+      "pattern": {
+        "axis": "x",
+        "channel": "blue",
+        "isolatedLayer": "all",
+        "kind": "wave",
+        "level": 0.5,
+        "period": 32,
+        "phase": 2,
+        "sourceLayer": "none"
+      }
+    },
+    {
+      "source": "target/liquid-native-channel-probes-2/probe-19.png",
+      "png_sha256": "7660fd54999b87096e0a25c9d5f2a35aa06333b62c52b43a6c66b8baef59c65a",
+      "metadata_sha256": "cc889c983df590aaec641f8d4065e0f07494d12a8e12f14c90eb97b2f24443c4",
+      "pattern": {
+        "axis": "x",
+        "channel": "blue",
+        "isolatedLayer": "all",
+        "kind": "wave",
+        "level": 0.5,
+        "period": 32,
+        "phase": 3,
+        "sourceLayer": "none"
+      }
+    }
+  ],
+  "native_binary_sha256": "688734f8cfffbf44cde7e363325827eb0cdf13d4fca996ce57a4b873d566528a",
+  "swift_sha256": {
+    "apps/liquid-reference/LiquidReferenceTests/KeyframeInspectorTests.swift": "3738f1e08e8d20ac336da932111ab05ffd950ecdafdfc1cbe136187aa01f6781",
+    "apps/liquid-reference/LiquidReferenceTests/TabBarTests.swift": "b16b176d888e0dcc927daee84579f99bdde7c5b0c8340495c0a45f90b9a55e9b",
+    "apps/liquid-reference/LiquidReference/LiquidReferenceApp.swift": "de3efa7941cf67dc73e0a512b6c8b6488bbfffcde6955e7043340bc99420955d",
+    "apps/liquid-reference/LiquidReference/OpticalProbes.swift": "13127b64682c9f1794c96402ecf9a7d5fbc0d43ee356d754efb8181c92dca90c",
+    "apps/liquid-reference/LiquidReference/NativeTrace.swift": "c025a5c376b5df3d4f3f8af90fececc7b5c887695ac6337bd99662f4052743cf",
+    "apps/liquid-reference/LiquidReference/KeyframeInspector.swift": "87554ee0fc8cdc311856fc358fc814384827a0dbbc47913d59cf12c372599c55"
+  }
+}

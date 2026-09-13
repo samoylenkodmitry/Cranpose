@@ -5,16 +5,16 @@ use cranpose_ui::{
     Brush, Color, CornerRadii, Modifier, PointerInputScope, Rect, SemanticsWidgetRole, Size,
     text::{FontWeight, SpanStyle, TextStyle},
     widgets::{
-        Box, BoxSpec, BoxWithConstraints, BoxWithConstraintsScope, Column, ColumnSpec, Row,
-        RowSpec, Text,
+        Box, BoxSpec, BoxWithConstraints, BoxWithConstraintsScope, ContentScale, Image, Painter,
+        Row, RowSpec, Text,
     },
 };
-use cranpose_ui_layout::{Alignment, HorizontalAlignment, VerticalAlignment};
+use cranpose_ui_layout::{Alignment, VerticalAlignment};
 
 use crate::{
     material::{
-        Glass, GlassDynamics, GlassMorph, GlassShadow, LiquidModifierExt, neutral_surface_lift,
-        neutral_surface_tint,
+        Glass, GlassDynamics, GlassFaceResponse, GlassKeyFill, GlassMorph, GlassShadow,
+        LiquidModifierExt, neutral_surface_tint,
     },
     motion::LiquidMotion,
     theme::{LiquidTypography, liquid_colors, liquid_typography},
@@ -29,38 +29,77 @@ pub enum LiquidTabIconStyle {
     AppBadge,
 }
 
-/// One tab: icon path data (24×24 viewBox), label, and icon treatment.
+/// Artwork displayed in a tab's shared icon frame.
+#[derive(Clone, Debug, PartialEq)]
+pub enum LiquidTabIcon {
+    /// Vector path data in a 24×24 view box.
+    Vector(&'static str),
+    /// Template artwork drawn at its supplied logical size and tinted with the tab's color.
+    Painter {
+        /// Image or custom painter supplying the template's alpha mask.
+        painter: Painter,
+        /// Artwork dimensions in logical points before the tab's optical correction.
+        size: Size,
+    },
+}
+
+/// One tab's artwork, label, and icon treatment.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LiquidTab {
-    pub icon: &'static str,
+    /// Vector or template artwork shown above the label.
+    pub icon: LiquidTabIcon,
     pub label: &'static str,
     pub icon_style: LiquidTabIconStyle,
     /// Optical correction for symbols whose path bounds do not fill the
     /// shared icon frame uniformly.
     pub icon_scale: f32,
+    /// Optical displacement of the artwork inside the shared icon frame, in points.
+    pub icon_offset: (f32, f32),
 }
 
 impl LiquidTab {
     pub fn new(icon: &'static str, label: &'static str) -> Self {
         Self {
-            icon,
+            icon: LiquidTabIcon::Vector(icon),
             label,
             icon_style: LiquidTabIconStyle::Plain,
             icon_scale: 1.0,
+            icon_offset: (0.0, 0.0),
+        }
+    }
+
+    /// A tab using template artwork and its logical size.
+    pub fn from_painter(painter: Painter, size: Size, label: &'static str) -> Self {
+        Self {
+            icon: LiquidTabIcon::Painter { painter, size },
+            label,
+            icon_style: LiquidTabIconStyle::Plain,
+            icon_scale: 1.0,
+            icon_offset: (0.0, 0.0),
         }
     }
 
     pub fn app_badge(icon: &'static str, label: &'static str) -> Self {
         Self {
-            icon,
+            icon: LiquidTabIcon::Vector(icon),
             label,
             icon_style: LiquidTabIconStyle::AppBadge,
             icon_scale: 1.0,
+            icon_offset: (0.0, 0.0),
         }
     }
 
     pub fn with_icon_scale(mut self, scale: f32) -> Self {
         self.icon_scale = normalize_icon_scale(scale);
+        self
+    }
+
+    /// Moves the artwork without changing its cell or hit bounds; nonfinite offsets become zero.
+    pub fn with_icon_offset(mut self, x: f32, y: f32) -> Self {
+        self.icon_offset = (
+            if x.is_finite() { x } else { 0.0 },
+            if y.is_finite() { y } else { 0.0 },
+        );
         self
     }
 }
@@ -81,16 +120,14 @@ fn tab_selection_content_color(colors: crate::theme::LiquidColors) -> Color {
     colors.accent
 }
 
-const BAR_HEIGHT: f32 = 64.0;
-const BLOB_HEIGHT: f32 = 56.0;
+const BAR_HEIGHT: f32 = 62.0;
+const BLOB_HEIGHT: f32 = 54.0;
 const BLOB_MARGIN: f32 = 4.0;
-const FLIGHT_LENS_HEIGHT_PROJECTION: f32 = 68.0 / BLOB_HEIGHT;
-const FLIGHT_ELLIPSE_BLEND: f32 = 0.25;
-const TAB_LENS_REST_WIDTH_FACTOR: f32 = 1.10;
-const TAB_STRAIN_RESPONSE: f32 = 0.30;
+const FLIGHT_LENS_INFLATION: f32 = 16.0;
+const TAB_LENS_OVERLAP: f32 = 7.0;
 const TAB_WIDTH: f32 = 78.0;
 const TAB_ICON_SIZE: f32 = 32.0;
-const TAB_LABEL_SIZE: f32 = 11.0;
+const TAB_LABEL_SIZE: f32 = 10.0;
 const TAP_SLOP: f32 = 6.0;
 const ACCESSORY_GAP: f32 = 10.0;
 
@@ -101,6 +138,7 @@ pub struct LiquidTabBarSpec {
 }
 
 impl LiquidTabBarSpec {
+    /// Sets the maximum cell allocation; nonfinite values use the default and finite values are at least one point.
     pub fn new(max_tab_width: f32) -> Self {
         Self {
             max_tab_width: if max_tab_width.is_finite() {
@@ -118,83 +156,169 @@ impl Default for LiquidTabBarSpec {
     }
 }
 
-fn tab_flight_lens_material(foreground: cranpose_ui_graphics::Color, accent: Color) -> Glass {
+fn tab_flight_lens_material(foreground: cranpose_ui_graphics::Color, activity: f32) -> Glass {
+    let activity = activity.clamp(0.0, 1.0);
     Glass::lens()
+        .face_lighting(false)
+        .key_fill(GlassKeyFill {
+            height_dp: 1.0,
+            curvature: 0.7 + 0.1 * activity,
+            angle_radians: std::f32::consts::FRAC_PI_4,
+            saturation: 1.5,
+            luma_gain: 0.4367,
+            offset: 1.125,
+            scale_with_surface: true,
+        })
         .no_clip()
-        .tint(neutral_surface_tint(foreground, 0.06, 0.05))
-        .ink_recolor(accent, 0.85)
+        .face_response(GlassFaceResponse {
+            gain: 1.0 - 0.03 * activity,
+            start_dp: 1.0 / 3.0,
+            end_dp: 2.0 / 3.0,
+            illumination: 0.0,
+        })
+        .tint(neutral_surface_tint(
+            foreground,
+            0.07333333 * (1.0 - activity),
+            0.1440678 * (1.0 - activity),
+        ))
         .blur_radius(0.0)
-        .refraction_depth(1.0)
+        .backdrop_blur(4.0, 1.0 - activity)
+        .edge_refraction(9.0 * activity)
+        .refraction_depth_dp(36.0)
         .refraction_curve(0.25)
-        .optical_zoom(1.22)
-        .fold_depth(2.5)
-        .dispersion(0.9)
-        .lift(0.05)
-        .highlight(0.18)
+        .optical_zoom(1.0)
+        .meniscus_absorption(0.0)
+        .inner_shadow(GlassShadow::new(
+            Color::BLACK.with_alpha(0.12 * activity),
+            3.0,
+            7.0,
+            0.0,
+        ))
+        .fold_depth(0.0)
+        .edge_spectrum(crate::material::GlassSpectrum {
+            angle_radians: std::f32::consts::FRAC_PI_2
+                - std::f32::consts::PI * 7.0 / 12.0 * activity,
+            step_dp: (4.068 / (112.24138 / 36.0)) / (std::f32::consts::PI / 12.0).cos()
+                * (-5.0 + 8.684211 * activity)
+                / 3.6842105,
+            vertical_scale: 0.8265,
+            opacity_near: activity,
+            opacity_far: 1.0 - activity,
+            fade_depth_dp: 14.0 * activity,
+            extent_dp: 38.88889 * activity,
+        })
+        .dispersion(0.0)
+        .lift(0.0)
+        .highlight(activity)
+        .rim_reflection(activity)
         .shadow_style(GlassShadow::new(
-            cranpose_ui_graphics::Color::BLACK.with_alpha(0.14),
-            12.0,
-            4.0,
-            -2.0,
+            cranpose_ui_graphics::Color::BLACK.with_alpha(0.1 * activity),
+            8.0,
+            7.0,
+            0.0,
         ))
 }
 
 fn tab_bar_surface_material(foreground: cranpose_ui_graphics::Color) -> Glass {
     Glass::regular()
-        .tint(neutral_surface_tint(foreground, 0.0, 0.04))
-        .blur_radius(9.0)
-        .saturation(1.15)
-        .lift(neutral_surface_lift(foreground, 0.60, -0.24))
-        .highlight(0.20)
-        .fold_depth(8.0)
-        .adaptive_frost(foreground, 0.28)
+        .face_lighting(false)
+        .key_fill(GlassKeyFill {
+            height_dp: 1.0,
+            curvature: 0.7,
+            angle_radians: std::f32::consts::FRAC_PI_4,
+            saturation: 1.5,
+            luma_gain: 0.1,
+            offset: 0.9,
+            scale_with_surface: false,
+        })
+        .face_response(GlassFaceResponse {
+            gain: 0.97,
+            start_dp: 1.0 / 3.0,
+            end_dp: 2.0 / 3.0,
+            illumination: 0.0,
+        })
+        .tint(Color::TRANSPARENT)
+        .blur_radius(6.0)
+        .surface_refraction(31.0)
+        .refraction_depth_dp(15.5)
+        .transmission_refraction(1.0)
+        .saturation(1.0)
+        .lift(0.0)
+        .contrast(1.0)
+        .highlight(1.0)
+        .adaptive_frost(foreground, 0.0)
+        .adaptive_tone(foreground)
+        .shadow_style(GlassShadow::new(
+            Color::BLACK.with_alpha(0.162),
+            32.0,
+            8.0,
+            1.5,
+        ))
 }
 
 fn tab_flight_tint_multiplier(activity: f32) -> f32 {
     1.0 - 0.25 * activity.clamp(0.0, 1.0)
 }
 
-fn tab_lens_activity_motion(raised: bool) -> cranpose_animation::AnimationType {
-    if raised {
-        cranpose_animation::spring(0.9, 1400.0)
-    } else {
-        cranpose_animation::spring(1.0, 900.0)
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct TabGeometry {
+    width: f32,
+    cell_width: f32,
+    pitch: f32,
+}
+
+impl TabGeometry {
+    fn new(allocation: f32, count: usize) -> Self {
+        let width = allocation * count.max(1) as f32;
+        let cell_width = tab_lens_rest_width(allocation).min(width);
+        let pitch = if count > 1 {
+            (width - cell_width) / (count - 1) as f32
+        } else {
+            cell_width
+        };
+        Self {
+            width,
+            cell_width,
+            pitch,
+        }
+    }
+
+    fn drag_left(self, pointer_x: f32, count: usize, has_accessory: bool) -> f32 {
+        let last_tab = self.pitch * count.saturating_sub(1) as f32;
+        let min = if has_accessory {
+            -self.pitch * 0.2
+        } else {
+            0.0
+        };
+        let max = if has_accessory {
+            last_tab + self.pitch * 0.55
+        } else {
+            last_tab
+        };
+        (pointer_x - self.cell_width * 0.5).clamp(min, max)
+    }
+
+    fn optical_pointer_x(self, pointer_x: f32, press: f32, travel: f32) -> f32 {
+        let transform = tab_bar_transform(self.width + 2.0 * BLOB_MARGIN, press, travel);
+        let center = self.width * 0.5;
+        pointer_x + (pointer_x - center) * (transform.scale_x - 1.0) + transform.translation_x
+    }
+
+    fn lens_surface_position(self, position: f32, press: f32, travel: f32) -> f32 {
+        let transform = tab_bar_transform(self.width + 2.0 * BLOB_MARGIN, press, travel);
+        (position + self.cell_width * 0.5 - self.width * 0.5) * transform.scale_x
     }
 }
 
-fn tab_lens_left(pointer_x: f32, tab_width: f32, count: usize, has_accessory: bool) -> f32 {
-    let last_tab = tab_width * count.saturating_sub(1) as f32;
-    let min = if has_accessory { -tab_width * 0.2 } else { 0.0 };
-    let max = if has_accessory {
-        tab_width * (count as f32 - 0.45)
-    } else {
-        last_tab
-    };
-    (pointer_x - tab_width * 0.5).clamp(min, max)
+/// The settled cell origin for a selected index and the distance between cell centers.
+pub fn tab_lens_resting_left(selected: usize, tab_pitch: f32, count: usize) -> f32 {
+    tab_pitch * selected.min(count.saturating_sub(1)) as f32
 }
 
-/// The settled lens position for a selected cell: CELL-CENTERED at every
-/// index, exactly like the reference (bottom-bar-click f_0000 measures the
-/// end bubble's center on its cell center, its edge flush with the pill's
-/// rounded end). The rest width (`TAB_LENS_REST_WIDTH_FACTOR`) is what
-/// keeps the end cells legal — its overhang stays within `BLOB_MARGIN`.
-/// Public so alignment tests assert the same rule the widget settles to.
-pub fn tab_lens_resting_left(selected: usize, tab_width: f32, count: usize) -> f32 {
-    tab_width * selected.min(count.saturating_sub(1)) as f32
-}
-
-/// The resting bubble's width for a cell pitch — the second half of the
-/// public resting contract ([`tab_lens_resting_left`] gives the position).
-///
-/// A cell-centered bubble on an end cell overhangs the cell strip by half its
-/// excess, and the pill only extends `BLOB_MARGIN` past that strip, so the
-/// overhang is what decides whether the end bubble lands flush inside the
-/// pill's rounded end or crosses it. `TAB_LENS_REST_WIDTH_FACTOR` sets the
-/// reference proportion; the margin caps it, so a bar built with wide cells
-/// keeps its ends legal instead of poking the bubble outside the pill.
-pub fn tab_lens_rest_width(tab_width: f32) -> f32 {
-    let overhang = (tab_width * (TAB_LENS_REST_WIDTH_FACTOR - 1.0) * 0.5).min(BLOB_MARGIN);
-    tab_width + 2.0 * overhang
+/// The resting selection width for one destination's allocation in the content strip.
+/// Cells overlap; their pitch is the remaining strip width divided by the number of gaps.
+pub fn tab_lens_rest_width(tab_allocation: f32) -> f32 {
+    tab_allocation + TAB_LENS_OVERLAP
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -227,16 +351,17 @@ fn app_badge_geometry(optical_scale: f32) -> AppBadgeGeometry {
 
 #[composable]
 #[allow(non_snake_case)]
-fn TabIcon(icon: &'static str, style: LiquidTabIconStyle, color: Color, optical_scale: f32) {
+fn TabIcon(icon: LiquidTabIcon, style: LiquidTabIconStyle, color: Color, optical_scale: f32) {
     const FRAME_HEIGHT: f32 = 32.0;
     Box(
         Modifier::empty().size(Size::new(TAB_ICON_SIZE, FRAME_HEIGHT)),
         BoxSpec::default().content_alignment(Alignment::CENTER),
         move || match style {
             LiquidTabIconStyle::Plain => {
-                crate::icons::Icon(icon, TAB_ICON_SIZE * optical_scale, color)
+                TabGlyph(icon.clone(), TAB_ICON_SIZE * optical_scale, color)
             }
             LiquidTabIconStyle::AppBadge => {
+                let icon = icon.clone();
                 let geometry = app_badge_geometry(optical_scale);
                 Box(
                     Modifier::empty()
@@ -250,12 +375,13 @@ fn TabIcon(icon: &'static str, style: LiquidTabIconStyle, color: Color, optical_
                         }),
                     BoxSpec::default(),
                     move || {
+                        let icon = icon.clone();
                         Box(
                             Modifier::empty()
                                 .offset(geometry.glyph.x, geometry.glyph.y)
                                 .size(Size::new(geometry.glyph.width, geometry.glyph.height)),
                             BoxSpec::default(),
-                            move || crate::icons::Icon(icon, geometry.glyph.width, Color::WHITE),
+                            move || TabGlyph(icon.clone(), geometry.glyph.width, Color::WHITE),
                         );
                     },
                 );
@@ -264,17 +390,62 @@ fn TabIcon(icon: &'static str, style: LiquidTabIconStyle, color: Color, optical_
     );
 }
 
+#[composable]
+fn TabGlyph(icon: LiquidTabIcon, size: f32, color: Color) {
+    match icon {
+        LiquidTabIcon::Vector(path) => crate::icons::Icon(path, size, color),
+        LiquidTabIcon::Painter {
+            painter,
+            size: intrinsic,
+        } => {
+            let scale = size / TAB_ICON_SIZE;
+            Image(
+                painter,
+                None,
+                Modifier::empty()
+                    .size(Size::new(intrinsic.width * scale, intrinsic.height * scale)),
+                Alignment::CENTER,
+                ContentScale::FillBounds,
+                1.0,
+                Some(cranpose_ui_graphics::ColorFilter::tint(color)),
+            );
+        }
+    }
+}
+
+fn tab_ink_selection(
+    geometry: TabGeometry,
+    position: f32,
+    activity: f32,
+    strain: Size,
+    color: Color,
+) -> super::vibrancy::InkSelection {
+    let (width, height) = tab_lens_base_size(geometry.cell_width, activity);
+    let base = Size::new(width, height);
+    let deformed = tab_lens_deformed_size(base, strain);
+    let width = deformed.width;
+    let height = deformed.height;
+    super::vibrancy::InkSelection {
+        bounds: Rect {
+            x: position + geometry.cell_width * 0.5 - width * 0.5,
+            y: BLOB_HEIGHT * 0.5 - height * 0.5,
+            width,
+            height,
+        },
+        color,
+        content_zoom: 1.0 + 0.16 * activity.clamp(0.0, 1.0),
+        activity: activity.clamp(0.0, 1.0),
+        optical_scale: 1.0,
+        projection: Size::new(deformed.width / base.width, deformed.height / base.height),
+    }
+}
+
 #[derive(Clone, Copy, PartialEq)]
 struct TabCellsSpec {
     base_color: Color,
-    selected: Option<usize>,
-    selected_color: Color,
-    interactive: bool,
-    selection_only: bool,
-}
-
-fn tab_cell_is_visible(index: usize, selected: Option<usize>, selection_only: bool) -> bool {
-    !selection_only || selected == Some(index)
+    selection: super::vibrancy::InkSelection,
+    selected: usize,
+    committed_selection: usize,
 }
 
 #[composable]
@@ -283,64 +454,162 @@ fn TabCells(
     modifier: Modifier,
     tabs: Rc<Vec<LiquidTab>>,
     typography: LiquidTypography,
-    tab_width: f32,
+    geometry: TabGeometry,
     spec: TabCellsSpec,
+    transform: cranpose_ui_graphics::GraphicsLayer,
 ) {
-    Row(modifier, RowSpec::default(), move || {
-        for (index, tab) in tabs.iter().enumerate() {
-            let visible = tab_cell_is_visible(index, spec.selected, spec.selection_only);
-            let color = if spec.selected == Some(index) {
-                spec.selected_color
-            } else {
-                spec.base_color
-            };
-            let label_for_semantics = tab.label;
-            let mut cell = Modifier::empty().size(Size::new(tab_width, BLOB_HEIGHT));
-            if spec.interactive {
-                cell = cell.semantics(move |config| {
-                    config.role = Some(SemanticsWidgetRole::Button);
-                    config.is_clickable = true;
-                    config.content_description = Some(label_for_semantics.to_string());
-                });
-            }
-            let icon = tab.icon;
-            let icon_style = tab.icon_style;
-            let icon_scale = tab.icon_scale;
-            let label = tab.label;
-            let label_style = TextStyle {
-                span_style: SpanStyle {
-                    color: Some(color),
-                    font_size: cranpose_ui::text::TextUnit::Sp(TAB_LABEL_SIZE),
-                    font_weight: Some(FontWeight::MEDIUM),
-                    ..typography.caption1.span_style.clone()
-                },
-                ..typography.caption1.clone()
-            };
+    let size = Size::new(geometry.width + BLOB_MARGIN * 2.0, BAR_HEIGHT);
+    let mut selection = spec.selection;
+    let center = selection.bounds.x + selection.bounds.width * 0.5 + BLOB_MARGIN;
+    selection.bounds.width *= transform.scale_x;
+    selection.bounds.height *= transform.scale_y;
+    selection.optical_scale = transform.scale_x.min(transform.scale_y);
+    selection.bounds.x = (center - size.width * 0.5) * transform.scale_x
+        + size.width * 0.5
+        + transform.translation_x
+        - selection.bounds.width * 0.5;
+    selection.bounds.y = (BAR_HEIGHT - selection.bounds.height) * 0.5;
+    let grid = super::vibrancy::InkGrid {
+        first_center: (
+            (BLOB_MARGIN + geometry.cell_width * 0.5 - size.width * 0.5) * transform.scale_x
+                + size.width * 0.5
+                + transform.translation_x,
+            BAR_HEIGHT * 0.5,
+        ),
+        pitch: geometry.pitch * transform.scale_x,
+        count: tabs.len(),
+    };
+    super::vibrancy::VibrantContent(
+        modifier,
+        size,
+        spec.base_color,
+        selection,
+        grid,
+        move || {
+            let tabs = Rc::clone(&tabs);
+            let typography = typography.clone();
             Box(
-                cell,
-                BoxSpec::default().content_alignment(Alignment::CENTER),
+                Modifier::empty()
+                    .size(size)
+                    .graphics_layer_value(transform.clone()),
+                BoxSpec::default(),
                 move || {
-                    if !visible {
-                        return;
+                    for (index, tab) in tabs.iter().enumerate() {
+                        let color = spec.base_color;
+                        let label_for_semantics = tab.label;
+                        let icon_offset = tab.icon_offset;
+                        let cell = Modifier::empty()
+                            .offset(BLOB_MARGIN + index as f32 * geometry.pitch, BLOB_MARGIN)
+                            .size(Size::new(geometry.cell_width, BLOB_HEIGHT))
+                            .semantics(move |config| {
+                                config.role = Some(SemanticsWidgetRole::Tab);
+                                config.is_clickable = true;
+                                config.selected = Some(index == spec.committed_selection);
+                                config.content_description = Some(label_for_semantics.to_string());
+                            });
+                        let icon = tab.icon.clone();
+                        let icon_style = tab.icon_style;
+                        let icon_scale = tab.icon_scale;
+                        let label = tab.label;
+                        let label_style = TextStyle {
+                            span_style: SpanStyle {
+                                color: Some(color),
+                                font_size: cranpose_ui::text::TextUnit::Sp(TAB_LABEL_SIZE),
+                                font_weight: Some(if spec.selected == index {
+                                    FontWeight::SEMI_BOLD
+                                } else {
+                                    FontWeight::MEDIUM
+                                }),
+                                ..typography.caption1.span_style.clone()
+                            },
+                            paragraph_style: cranpose_ui::text::ParagraphStyle {
+                                line_height: cranpose_ui::text::TextUnit::Sp(12.0),
+                                ..typography.caption1.paragraph_style.clone()
+                            },
+                        };
+                        Box(cell, BoxSpec::default(), move || {
+                            let label_style = label_style.clone();
+                            let icon = icon.clone();
+                            Box(
+                                Modifier::empty()
+                                    .offset(
+                                        (geometry.cell_width - TAB_ICON_SIZE) * 0.5 + icon_offset.0,
+                                        3.0 + icon_offset.1,
+                                    )
+                                    .size(Size::new(TAB_ICON_SIZE, TAB_ICON_SIZE)),
+                                BoxSpec::default(),
+                                move || TabIcon(icon.clone(), icon_style, color, icon_scale),
+                            );
+                            Box(
+                                Modifier::empty()
+                                    .offset(0.0, 35.0)
+                                    .size(Size::new(geometry.cell_width, 12.0)),
+                                BoxSpec::default().content_alignment(Alignment::CENTER),
+                                move || {
+                                    Text(label, Modifier::empty(), label_style.clone());
+                                },
+                            );
+                        });
                     }
-                    let label_style = label_style.clone();
-                    Column(
-                        Modifier::empty(),
-                        ColumnSpec::default()
-                            .horizontal_alignment(HorizontalAlignment::CenterHorizontally),
-                        move || {
-                            TabIcon(icon, icon_style, color, icon_scale);
-                            Text(label, Modifier::empty(), label_style.clone());
-                        },
-                    );
                 },
             );
-        }
-    });
+        },
+    );
 }
 
 fn tab_lens_node_top(node_height: f32) -> f32 {
     (BAR_HEIGHT - node_height) * 0.5
+}
+
+#[derive(Clone, Copy)]
+struct TabBarTouch {
+    position: cranpose_core::MutableState<(f32, f32)>,
+    origin: cranpose_core::MutableState<Option<f32>>,
+    travel: cranpose_core::MutableState<f32>,
+}
+
+impl TabBarTouch {
+    fn pressed(self, down: bool) {
+        if down {
+            self.origin.set(None);
+            self.travel.set(0.0);
+        }
+    }
+
+    fn update(self, x: f32, y: f32, span: f32) {
+        self.position.set((x + BLOB_MARGIN, y + BLOB_MARGIN));
+        if let Some(origin) = self.origin.get() {
+            self.travel
+                .set(((x - origin) / span.max(1.0)).clamp(-1.0, 1.0));
+        } else {
+            self.origin.set(Some(x));
+        }
+    }
+}
+
+#[composable]
+fn remember_tab_bar_touch() -> TabBarTouch {
+    TabBarTouch {
+        position: cranpose_core::remember(|| cranpose_core::mutableStateOf((0.0f32, 0.0f32)))
+            .with(|state| *state),
+        origin: cranpose_core::remember(|| cranpose_core::mutableStateOf(None::<f32>))
+            .with(|state| *state),
+        travel: cranpose_core::remember(|| cranpose_core::mutableStateOf(0.0f32))
+            .with(|state| *state),
+    }
+}
+
+fn tab_bar_transform(width: f32, press: f32, travel: f32) -> cranpose_ui_graphics::GraphicsLayer {
+    let press = press.max(0.0);
+    let travel = travel.clamp(-1.0, 1.0);
+    let rise = 14.14 / width.max(1.0) * press;
+    let strain = 2.63 / width.max(1.0) * travel.abs() * press;
+    cranpose_ui_graphics::GraphicsLayer {
+        scale_x: 1.0 + rise + strain,
+        scale_y: 1.0 + rise - strain,
+        translation_x: 2.756 * travel * press,
+        ..Default::default()
+    }
 }
 
 fn tab_bar_accessory_gap(has_accessory: bool) -> f32 {
@@ -351,19 +620,16 @@ fn accessory_surfaces_touch(edge_gap: f32) -> bool {
     edge_gap <= 0.0
 }
 
-fn tab_lens_base_size(tab_width: f32, activity: f32) -> (f32, f32) {
-    let activity = activity.clamp(0.0, 1.0);
-    let ease = activity * activity * (3.0 - 2.0 * activity);
-    let rest_width = tab_lens_rest_width(tab_width);
-    let projection = 1.0 + (FLIGHT_LENS_HEIGHT_PROJECTION - 1.0) * ease;
-    (rest_width, BLOB_HEIGHT * projection)
+fn tab_lens_base_size(cell_width: f32, activity: f32) -> (f32, f32) {
+    let inflation = FLIGHT_LENS_INFLATION * activity.clamp(0.0, 1.0);
+    (cell_width + inflation, BLOB_HEIGHT + inflation)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct TabFlightGeometry {
     center: (f32, f32),
     base_size: Size,
-    pose: crate::dynamics::LiquidPose,
+    strain: Size,
     lens_position: f32,
     lens_activity: f32,
     resting_tint: Color,
@@ -376,19 +642,23 @@ struct TabFlightNode {
     size: Size,
 }
 
+fn tab_lens_deformed_size(base: Size, strain: Size) -> Size {
+    Size::new(
+        base.width * (1.0 + strain.width.clamp(-0.35, 0.35)),
+        base.height * (1.0 + strain.height.clamp(-0.35, 0.35)),
+    )
+}
+
 fn tab_flight_dynamics(geometry: TabFlightGeometry, node: TabFlightNode) -> GlassDynamics {
     let activity = geometry.lens_activity.clamp(0.0, 1.0);
-    let energy = geometry.pose.energy() * activity;
-    let radius = geometry.base_size.height * (0.48 + 0.02 * energy);
+    let size = geometry.base_size;
+    let deformed = tab_lens_deformed_size(size, geometry.strain);
+    let radius = size.width.min(size.height) * 0.5;
     let glue = 20.0;
     let shapes = geometry
         .accessory_center
         .filter(|(x, _)| {
-            let effective_stretch =
-                1.0 + (geometry.pose.stretch.max(geometry.pose.ortho) - 1.0) * TAB_STRAIN_RESPONSE;
-            let edge_gap = (*x - geometry.center.0).abs()
-                - geometry.base_size.width * effective_stretch * 0.5
-                - BAR_HEIGHT * 0.5;
+            let edge_gap = (*x - geometry.center.0).abs() - size.width * 0.5 - BAR_HEIGHT * 0.5;
             accessory_surfaces_touch(edge_gap)
         })
         .map(|(x, y)| {
@@ -402,30 +672,30 @@ fn tab_flight_dynamics(geometry: TabFlightGeometry, node: TabFlightNode) -> Glas
         })
         .unwrap_or_default();
     GlassDynamics {
+        edge_return_depth_dp: Some(7.0 * activity),
+        optical_projection: Some((deformed.width / size.width, deformed.height / size.height)),
         morph: Some(GlassMorph {
             node_size: (node.size.width, node.size.height),
             primary: (
                 geometry.center.0 - node.origin.0,
                 geometry.center.1 - node.origin.1,
-                geometry.base_size.width,
-                geometry.base_size.height,
+                size.width,
+                size.height,
                 radius,
             ),
             shapes,
             glue,
-            wobble_amplitude: 0.5 * energy,
+            wobble_amplitude: 0.0,
             wobble_phase: geometry.lens_position * 0.045,
-            bulge_amplitude: geometry.pose.bulge_amplitude.min(8.0) * activity,
-            bulge_direction: geometry.pose.bulge_direction,
-            ellipse_blend: FLIGHT_ELLIPSE_BLEND,
-            deformation: Some(crate::material::GlassDeformation::incompressible(
-                geometry.pose.axis,
-                1.0 + (geometry.pose.stretch - 1.0) * activity * TAB_STRAIN_RESPONSE,
-            )),
+            bulge_amplitude: 0.0,
+            bulge_direction: 0.0,
+            ellipse_blend: 0.0,
+            capsule_smoothing_dp: ((size.width - size.height).abs() * 0.5).min(radius * 0.6)
+                * activity,
+            deformation: None,
             zoom_anchor: (0.0, 0.0),
         }),
-        activity: Some(activity),
-        press_depth: Some(0.3 + 0.7 * activity),
+        activity: Some(1.0),
         resting_tint: Some(geometry.resting_tint),
         tint_alpha_multiplier: Some(tab_flight_tint_multiplier(geometry.lens_activity)),
         ..Default::default()
@@ -525,6 +795,7 @@ fn LiquidTabBarLayout(
 ) {
     let colors = liquid_colors();
     let typography = liquid_typography();
+    let tint_amount = crate::theme::liquid_glass_tint_amount();
     let count = tabs.len().max(1);
     let selected = selected.min(count - 1);
     let on_select: Rc<dyn Fn(usize)> = Rc::new(on_select);
@@ -540,152 +811,157 @@ fn LiquidTabBarLayout(
             let on_select = Rc::clone(&on_select);
             let accessory = Rc::clone(&accessory);
 
-            let lens_x_outer = cranpose_core::remember(|| {
+            let lens_x_outer = cranpose_core::remember(move || {
                 cranpose_core::mutableStateOf((
                     0.0f32,
                     0.0f32,
                     0.0f32,
-                    crate::dynamics::LiquidPose::default(),
+                    Size::new(0.0, 0.0),
+                    selected,
                 ))
             })
             .with(|state| *state);
-            let bar_touch =
-                cranpose_core::remember(|| cranpose_core::mutableStateOf((0.0f32, 0.0f32)))
-                    .with(|state| *state);
-            let bar_held = cranpose_core::remember(|| cranpose_core::mutableStateOf(false))
-                .with(|state| *state);
-            let bar_press = cranpose_animation::animateFloatAsState(
-                if bar_held.get() { 1.0 } else { 0.0 },
-                cranpose_animation::spring(1.0, 600.0),
-                "tabbar-hold-press",
+            let bar_touch = remember_tab_bar_touch();
+            let contact_motion = super::tab_motion::remember_tab_contact_motion();
+            let bar_press = contact_motion.bar_state();
+            let glow = contact_motion.glow_state();
+            let local_glow_factor = contact_motion.local_glow_factor_state();
+            let travel = cranpose_animation::animateFloatAsState(
+                bar_touch.travel.get(),
+                cranpose_animation::spring(0.85, 650.0),
+                "tabbar-travel",
             );
             let bar_lift = Modifier::empty().graphics_layer(move || {
-                let press = bar_press.get().clamp(0.0, 1.0);
-                let rise = 1.0 + 0.03 * press;
-                cranpose_ui_graphics::GraphicsLayer {
-                    scale_x: rise,
-                    scale_y: rise,
-                    translation_y: -2.5 * press,
-                    ..Default::default()
-                }
+                let width = lens_x_outer.get().2 * count as f32 + 2.0 * BLOB_MARGIN;
+                tab_bar_transform(width, bar_press.get(), travel.get())
             });
             Box(
-                bar_lift.then(Modifier::empty().height(BAR_HEIGHT)),
+                Modifier::empty().height(BAR_HEIGHT),
                 BoxSpec::default(),
                 move || {
                     let tabs = Rc::clone(&tabs);
                     let typography = typography.clone();
                     let on_select = Rc::clone(&on_select);
-                    let pill = Modifier::empty()
-                        .glass_effect_with(tab_bar_surface_material(colors.label), move || {
-                            let press = bar_press.get().clamp(0.0, 1.0);
-                            let (touch_x, touch_y) = bar_touch.get();
-                            GlassDynamics {
-                                highlight_boost: 0.45 * press,
-                                saturation_boost: 0.12 * press,
-                                touch: (press > 0.01).then_some((touch_x, touch_y, press)),
-                                press_depth: Some(press),
-                                ..Default::default()
-                            }
-                        })
-                        .height(BAR_HEIGHT);
+                    let contact_motion = Rc::clone(&contact_motion);
+                    let pill = bar_lift.clone().height(BAR_HEIGHT);
                     Box(pill, BoxSpec::default(), move || {
-                        let tabs = Rc::clone(&tabs);
-                        let typography = typography.clone();
                         let on_select = Rc::clone(&on_select);
-                        BoxWithConstraints(Modifier::empty().padding(BLOB_MARGIN), move |scope| {
-                            let tabs = Rc::clone(&tabs);
-                            let typography = typography.clone();
+                        let contact_motion = Rc::clone(&contact_motion);
+                        BoxWithConstraints(Modifier::empty(), move |scope| {
                             let on_select = Rc::clone(&on_select);
-                            let constrained = scope.constraints().max_width;
+                            let constrained = scope.constraints().max_width - BLOB_MARGIN * 2.0;
                             let tab_width = if constrained.is_finite() && constrained > 1.0 {
                                 (constrained / count as f32).min(spec.max_tab_width)
                             } else {
                                 spec.max_tab_width
                             };
 
+                            let geometry = TabGeometry::new(tab_width, count);
+                            Box(
+                                Modifier::empty()
+                                    .glass_effect(
+                                        tab_bar_surface_material(colors.label)
+                                            .tint_amount(tint_amount),
+                                    )
+                                    .size(Size::new(
+                                        geometry.width + BLOB_MARGIN * 2.0,
+                                        BAR_HEIGHT,
+                                    )),
+                                BoxSpec::default(),
+                                || {},
+                            );
                             let lens_pressed =
                                 cranpose_core::remember(|| cranpose_core::mutableStateOf(false))
                                     .with(|state| *state);
-                            let resting_lens_x = tab_lens_resting_left(selected, tab_width, count);
-                            let lens_axis =
-                                crate::motion::remember_liquid_drag_axis(resting_lens_x);
+                            let resting_lens_x =
+                                tab_lens_resting_left(selected, geometry.pitch, count);
+                            let lens_axis = crate::motion::remember_liquid_follow_axis(
+                                resting_lens_x,
+                                cranpose_animation::spring(0.85, 650.0),
+                            );
                             if !lens_pressed.get() {
                                 lens_axis.settle_to(resting_lens_x, LiquidMotion::glide());
                             }
                             let lens_x = lens_axis.value();
-                            let lens_pose = lens_axis.liquid_pose();
-                            let lens_in_flight = !lens_axis.is_dragging()
-                                && (lens_x - resting_lens_x).abs() > tab_width * 0.15;
-                            let lens_raised = lens_pressed.get() || lens_in_flight;
-                            let lens_activity_target = if lens_raised { 1.0 } else { 0.0 };
-                            let lens_activity_anim = cranpose_animation::animateFloatAsState(
-                                lens_activity_target,
-                                tab_lens_activity_motion(lens_raised),
-                                "tabbar-lens-activity",
-                            );
-                            let lens_activity = lens_activity_anim.get();
+                            let lens_shape = super::tab_motion::remember_tab_lens_shape();
+                            let strain = lens_shape.sample(geometry.lens_surface_position(
+                                lens_x,
+                                bar_press.get(),
+                                travel.get(),
+                            ));
+                            let lens_activity_anim = contact_motion.lens_state();
+                            let lens_activity = lens_activity_anim.get().clamp(0.0, 1.0);
                             let visual_index = crate::motion::liquid_visual_index(
                                 selected,
                                 lens_x,
-                                tab_width,
+                                geometry.pitch,
                                 count,
                                 crate::motion::liquid_axis_owns_visual_selection(
                                     lens_pressed.get(),
                                     lens_x,
                                     resting_lens_x,
-                                    tab_width,
+                                    geometry.pitch,
                                 ),
                             );
-                            TabCells(
-                                Modifier::empty(),
-                                Rc::clone(&tabs),
-                                typography.clone(),
-                                tab_width,
-                                TabCellsSpec {
-                                    base_color: tab_base_content_color(colors),
-                                    selected: Some(visual_index),
-                                    selected_color: tab_selection_content_color(colors),
-                                    interactive: true,
-                                    selection_only: false,
-                                },
-                            );
-
-                            let row_width = tab_width * count as f32;
+                            if bar_touch.travel.get().abs() > 0.001 && visual_index != selected {
+                                contact_motion.crossed_tab();
+                            }
+                            let row_width = geometry.width;
                             let gesture = Modifier::empty()
+                                .offset(BLOB_MARGIN, BLOB_MARGIN)
                                 .size(Size::new(row_width, BLOB_HEIGHT))
                                 .pointer_input(selected, {
                                     let on_select = Rc::clone(&on_select);
                                     let lens_axis = Rc::clone(&lens_axis);
+                                    let contact_motion = Rc::clone(&contact_motion);
                                     move |scope: PointerInputScope| {
                                         let on_select = Rc::clone(&on_select);
                                         let lens_axis = Rc::clone(&lens_axis);
+                                        let contact_motion = Rc::clone(&contact_motion);
                                         crate::motion::liquid_lens_gesture(
                                             scope,
                                             crate::motion::LiquidLensGesture {
                                                 axis: lens_axis,
-                                                cell_width: tab_width,
+                                                cell_width: geometry.pitch,
+                                                cell_offset: (geometry.cell_width - geometry.pitch)
+                                                    * 0.5,
                                                 count,
                                                 tap_slop: TAP_SLOP,
                                                 drag_left: Rc::new(move |x| {
-                                                    tab_lens_left(
-                                                        x,
-                                                        tab_width,
+                                                    geometry.drag_left(
+                                                        geometry.optical_pointer_x(
+                                                            x,
+                                                            bar_press.get(),
+                                                            travel.get(),
+                                                        ),
                                                         count,
                                                         has_accessory,
                                                     )
                                                 }),
                                                 rest_left: Rc::new(move |index| {
-                                                    tab_lens_resting_left(index, tab_width, count)
+                                                    tab_lens_resting_left(
+                                                        index,
+                                                        geometry.pitch,
+                                                        count,
+                                                    )
                                                 }),
                                                 selected,
-                                                on_pressed: Rc::new(move |down| {
+                                                on_pressed: Rc::new(move |down, time| {
                                                     lens_pressed.set(down);
-                                                    bar_held.set(down);
+                                                    contact_motion.pressed(down, time);
+                                                    bar_touch.pressed(down);
                                                 }),
                                                 on_touch: Rc::new(move |x, y| {
-                                                    bar_touch
-                                                        .set((x + BLOB_MARGIN, y + BLOB_MARGIN));
+                                                    bar_touch.update(
+                                                        geometry.optical_pointer_x(
+                                                            x,
+                                                            bar_press.get(),
+                                                            travel.get(),
+                                                        ),
+                                                        y,
+                                                        geometry.pitch
+                                                            * count.saturating_sub(1) as f32,
+                                                    );
                                                 }),
                                                 on_select,
                                             },
@@ -694,29 +970,33 @@ fn LiquidTabBarLayout(
                                 });
                             Box(gesture, BoxSpec::default(), || {});
 
-                            let published = (lens_x, lens_activity, tab_width, lens_pose);
+                            let published =
+                                (lens_x, lens_activity, tab_width, strain, visual_index);
                             if lens_x_outer.get() != published {
                                 lens_x_outer.set(published);
                             }
                         });
                     });
 
-                    let (lens_px, lens_activity, lens_tab_w, pose) = lens_x_outer.get();
-                    let lens_w = tab_lens_rest_width(lens_tab_w);
-                    let lens_h = BLOB_HEIGHT * FLIGHT_LENS_HEIGHT_PROJECTION;
+                    let (lens_px, lens_activity, lens_tab_w, strain, visual_index) =
+                        lens_x_outer.get();
+                    let cells = TabGeometry::new(lens_tab_w, count);
+                    let (lens_w, lens_h) = tab_lens_base_size(cells.cell_width, 1.0);
                     let deformation_headroom =
                         crate::dynamics::STRETCH_MAX.max(1.0 / crate::dynamics::STRETCH_MIN);
                     let node_w = lens_w * deformation_headroom + crate::dynamics::BULGE_MAX + 20.0;
                     let node_h = lens_h * deformation_headroom + crate::dynamics::BULGE_MAX + 16.0;
-                    let lens_center_x = BLOB_MARGIN + lens_px + lens_tab_w * 0.5;
+                    let pill_w = cells.width + 2.0 * BLOB_MARGIN;
+                    let transform = tab_bar_transform(pill_w, bar_press.get(), travel.get());
+                    let local_center_x = BLOB_MARGIN + lens_px + cells.cell_width * 0.5;
+                    let lens_center_x = local_center_x;
                     let node_x = lens_center_x - node_w * 0.5;
                     let node_top = tab_lens_node_top(node_h);
-                    let pill_w = lens_tab_w * count as f32 + 2.0 * BLOB_MARGIN;
-                    let (base_w, base_h) = tab_lens_base_size(lens_tab_w, lens_activity);
+                    let (base_w, base_h) = tab_lens_base_size(cells.cell_width, lens_activity);
                     let geometry = TabFlightGeometry {
                         center: (lens_center_x, BAR_HEIGHT * 0.5),
                         base_size: Size::new(base_w, base_h),
-                        pose,
+                        strain,
                         lens_position: lens_px,
                         lens_activity,
                         resting_tint: colors.fill,
@@ -731,17 +1011,62 @@ fn LiquidTabBarLayout(
                     };
 
                     let lens_geometry = geometry;
-                    let lens = Modifier::empty()
+                    let mut lens_transform = transform.clone();
+                    lens_transform.translation_x +=
+                        (local_center_x - pill_w * 0.5) * (transform.scale_x - 1.0);
+                    let layers = Rc::new(crate::material::cached_glass_content_layers(
+                        tab_flight_lens_material(colors.label, lens_activity).resolve(&colors),
+                    ));
+                    let lens_node_modifier = Modifier::empty()
                         .required_size(lens_node.size)
                         .offset(node_x, node_top)
-                        .glass_effect_with(
-                            tab_flight_lens_material(
-                                colors.label,
+                        .graphics_layer_value(lens_transform);
+                    let background_layers = Rc::clone(&layers);
+                    let lens = lens_node_modifier.clone().graphics_layer(move || {
+                        background_layers(
+                            cranpose_ui::current_density(),
+                            tab_flight_dynamics(lens_geometry, lens_node),
+                        )[0]
+                        .clone()
+                    });
+                    super::tab_lighting::TabLighting(
+                        Size::new(pill_w, BAR_HEIGHT),
+                        transform.clone(),
+                        bar_touch.position,
+                        glow,
+                        local_glow_factor,
+                    );
+                    Box(lens, BoxSpec::default(), || {});
+                    TabCells(
+                        Modifier::empty(),
+                        Rc::clone(&tabs),
+                        typography.clone(),
+                        cells,
+                        TabCellsSpec {
+                            base_color: tab_base_content_color(colors),
+                            selection: tab_ink_selection(
+                                cells,
+                                lens_px,
+                                lens_activity,
+                                strain,
                                 tab_selection_content_color(colors),
                             ),
-                            move || tab_flight_dynamics(lens_geometry, lens_node),
-                        );
-                    Box(lens, BoxSpec::default(), || {});
+                            selected: visual_index,
+                            committed_selection: selected,
+                        },
+                        transform,
+                    );
+                    Box(
+                        lens_node_modifier.graphics_layer(move || {
+                            layers(
+                                cranpose_ui::current_density(),
+                                tab_flight_dynamics(lens_geometry, lens_node),
+                            )[1]
+                            .clone()
+                        }),
+                        BoxSpec::default(),
+                        || {},
+                    );
                 },
             );
 
@@ -773,6 +1098,7 @@ pub fn LiquidTabBarSearchAccessory(on_click: impl Fn() + 'static) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::widgets::tab_motion::tab_lens_activity_motion;
 
     #[test]
     fn tab_bar_spec_normalizes_the_maximum_cell_width() {
@@ -784,14 +1110,18 @@ mod tests {
 
     #[test]
     fn drag_pointer_centers_the_lens_and_preserves_end_overdrag() {
-        let width = 100.0;
-        assert_eq!(tab_lens_left(50.0, width, 4, true), 0.0);
-        assert_eq!(tab_lens_left(250.0, width, 4, true), 200.0);
-        assert_eq!(tab_lens_left(-100.0, width, 4, true), -20.0);
-        assert_eq!(tab_lens_left(500.0, width, 4, true), 355.0);
+        let geometry = TabGeometry {
+            width: 400.0,
+            cell_width: 100.0,
+            pitch: 100.0,
+        };
+        assert_eq!(geometry.drag_left(50.0, 4, true), 0.0);
+        assert_eq!(geometry.drag_left(250.0, 4, true), 200.0);
+        assert_eq!(geometry.drag_left(-100.0, 4, true), -20.0);
+        assert_eq!(geometry.drag_left(500.0, 4, true), 355.0);
 
-        assert_eq!(tab_lens_left(-100.0, width, 4, false), 0.0);
-        assert_eq!(tab_lens_left(500.0, width, 4, false), 300.0);
+        assert_eq!(geometry.drag_left(-100.0, 4, false), 0.0);
+        assert_eq!(geometry.drag_left(500.0, 4, false), 300.0);
     }
 
     #[test]
@@ -802,8 +1132,37 @@ mod tests {
         assert_eq!(tab_lens_resting_left(3, tab, 5), 3.0 * tab);
         assert_eq!(tab_lens_resting_left(4, tab, 5), 4.0 * tab);
         assert_eq!(tab_lens_resting_left(9, tab, 5), 4.0 * tab);
-        let overhang = (tab_lens_rest_width(tab) - tab) * 0.5;
-        assert!(overhang <= BLOB_MARGIN + 1.0e-4);
+    }
+
+    #[test]
+    fn flight_deformation_keeps_native_optics_in_the_unscaled_capsule() {
+        let geometry = TabFlightGeometry {
+            center: (80.0, 54.0),
+            base_size: Size::new(111.0, 70.0),
+            strain: Size::new(14.0 / 111.0, -14.0 / 70.0),
+            lens_position: 0.0,
+            lens_activity: 1.0,
+            resting_tint: Color::TRANSPARENT,
+            accessory_center: None,
+        };
+        let dynamics = tab_flight_dynamics(
+            geometry,
+            TabFlightNode {
+                origin: (0.0, 0.0),
+                size: Size::new(160.0, 108.0),
+            },
+        );
+        let shape = dynamics.morph.unwrap().primary;
+        assert_eq!((shape.2, shape.3, shape.4), (111.0, 70.0, 35.0));
+    }
+
+    #[test]
+    fn released_bubble_keeps_its_elastic_rebound() {
+        let base = Size::new(104.5, 54.0);
+        let strain = Size::new(0.017416525, -0.024551005);
+        let actual = tab_lens_deformed_size(base, strain);
+        assert!((actual.width - 106.32003).abs() < 0.0001);
+        assert!((actual.height - 52.67425).abs() < 0.0001);
     }
 
     #[test]
@@ -818,7 +1177,7 @@ mod tests {
     fn liquid_tab_builds_reference_content() {
         assert_eq!(TAB_ICON_SIZE, 32.0);
         let tab = LiquidTab::new(crate::icons::STAR, "Discover");
-        assert_eq!(tab.icon, crate::icons::STAR);
+        assert_eq!(tab.icon, LiquidTabIcon::Vector(crate::icons::STAR));
         assert_eq!(tab.label, "Discover");
         assert_eq!(tab.icon_style, LiquidTabIconStyle::Plain);
 
@@ -829,6 +1188,35 @@ mod tests {
         assert!((compact.icon_scale - 0.72).abs() < f32::EPSILON);
         assert_eq!(tab.clone().with_icon_scale(f32::NAN).icon_scale, 1.0);
         assert_eq!(tab.with_icon_scale(2.0).icon_scale, 1.5);
+    }
+
+    #[test]
+    fn artwork_offsets_preserve_the_tab_and_reject_nonfinite_coordinates() {
+        let tab = LiquidTab::new(crate::icons::STAR, "Discover");
+        let shifted = tab.clone().with_icon_offset(-1.0 / 3.0, 1.0);
+        assert_eq!(shifted.icon_offset, (-1.0 / 3.0, 1.0));
+        assert_eq!(shifted.icon, tab.icon);
+        assert_eq!(shifted.label, tab.label);
+        assert_eq!(
+            tab.clone().with_icon_offset(f32::NAN, 1.0).icon_offset,
+            (0.0, 1.0)
+        );
+        assert_eq!(
+            tab.with_icon_offset(2.0, f32::INFINITY).icon_offset,
+            (2.0, 0.0)
+        );
+    }
+
+    #[test]
+    fn template_tab_keeps_artwork_size_and_label() {
+        let bitmap = cranpose_ui_graphics::ImageBitmap::from_rgba8(1, 1, vec![0, 0, 0, 255])
+            .expect("template pixel");
+        let painter = Painter::from_bitmap(bitmap);
+        let size = Size::new(24.0, 28.0);
+        let tab = LiquidTab::from_painter(painter.clone(), size, "Saved");
+        assert_eq!(tab.icon, LiquidTabIcon::Painter { painter, size });
+        assert_eq!(tab.label, "Saved");
+        assert_eq!(tab.icon_style, LiquidTabIconStyle::Plain);
     }
 
     #[test]
@@ -853,11 +1241,21 @@ mod tests {
     }
 
     #[test]
+    fn tab_deformation_preserves_independent_native_axis_motion() {
+        let base = Size::new(120.5, 70.0);
+        let strain = Size::new(0.1820888, -0.2760726);
+        let deformed = tab_lens_deformed_size(base, strain);
+        assert!((deformed.width - 142.4417).abs() < 0.001);
+        assert!((deformed.height - 50.67492).abs() < 0.001);
+        assert_eq!(tab_lens_deformed_size(base, Size::new(0.0, 0.0)), base);
+    }
+
+    #[test]
     fn selection_mask_and_lens_resolve_the_same_global_sdf() {
         let geometry = TabFlightGeometry {
             center: (212.0, 32.0),
             base_size: Size::new(106.0, 64.0),
-            pose: crate::dynamics::LiquidPose::default(),
+            strain: Size::new(0.0, 0.0),
             lens_position: 160.0,
             lens_activity: 1.0,
             resting_tint: Color::BLACK.with_alpha(0.10),
@@ -913,16 +1311,32 @@ mod tests {
     }
 
     #[test]
-    fn lens_contact_swell_is_vertical_only() {
-        let resting = tab_lens_base_size(TAB_WIDTH, 0.0);
-        let raised = tab_lens_base_size(TAB_WIDTH, 1.0);
-        assert_eq!(
-            resting,
-            (TAB_WIDTH * TAB_LENS_REST_WIDTH_FACTOR, BLOB_HEIGHT)
-        );
-        assert_eq!(raised.0, resting.0);
-        assert!((raised.1 / resting.1 - FLIGHT_LENS_HEIGHT_PROJECTION).abs() < 0.001);
-        assert!((raised.1 - 68.0).abs() < 0.5);
+    fn lens_contact_swell_matches_the_raised_reference() {
+        for (cell, raised_width) in [(95.0, 111.0), (104.5, 120.5)] {
+            assert_eq!(tab_lens_base_size(cell, 0.0), (cell, 54.0));
+            let raised = tab_lens_base_size(cell, 1.0);
+            assert!((raised.0 - raised_width).abs() < 0.001);
+            assert!((raised.1 - 70.0).abs() < 0.001);
+        }
+    }
+
+    #[test]
+    fn held_bar_grows_about_its_center_and_strains_with_travel() {
+        let rest = tab_bar_transform(360.0, 0.0, 1.0);
+        assert_eq!(rest.scale_x, 1.0);
+        assert_eq!(rest.scale_y, 1.0);
+        assert_eq!(rest.translation_x, 0.0);
+        for travel in [-1.0, 0.0, 1.0] {
+            let layer = tab_bar_transform(360.0, 1.0, travel);
+            assert_eq!(layer.translation_y, 0.0);
+            assert!((360.0 * layer.scale_x - (374.14 + 2.63 * travel.abs())).abs() < 1e-3);
+            assert!((62.0 * layer.scale_y - (64.4352 - 0.45294 * travel.abs())).abs() < 1e-3);
+            assert!((layer.translation_x - travel * 2.756).abs() < 1e-3);
+        }
+        for width in [360.0, 398.0] {
+            let layer = tab_bar_transform(width, 1.0, 0.0);
+            assert!((width * (layer.scale_x - 1.0) - 14.14).abs() < 0.001);
+        }
     }
 
     #[test]
@@ -937,28 +1351,60 @@ mod tests {
     }
 
     #[test]
-    fn flight_lens_uses_the_clear_wcksrd_contract() {
-        let glass = tab_flight_lens_material(
-            cranpose_ui_graphics::Color::BLACK,
-            cranpose_ui_graphics::Color::from_rgb_u8(0, 122, 255),
-        );
+    fn flight_lens_uses_the_measured_sequential_warps() {
+        let glass = tab_flight_lens_material(cranpose_ui_graphics::Color::BLACK, 1.0);
         let generic_lens = Glass::lens();
         assert!(glass.lift.is_some_and(|lift| (0.0..=0.15).contains(&lift)));
-        assert_eq!(glass.refraction_depth, 1.0);
+        assert_eq!(glass.refraction_depth_dp, Some(36.0));
+        assert_eq!(
+            glass.refraction,
+            crate::material::GlassRefraction::EdgeLens { reach_dp: 9.0 }
+        );
         assert!(glass.refraction_curve < generic_lens.refraction_curve);
         assert!(glass.dispersion * 0.3 < generic_lens.dispersion);
         assert_eq!(glass.blur_radius, Some(0.0));
-        assert!(glass.highlight < generic_lens.highlight);
+        assert_eq!(glass.backdrop_blur, Some((4.0, 0.0)));
+        assert_eq!(glass.highlight, 1.0);
+        assert_eq!(glass.key_fill.map(|light| light.curvature), Some(0.8));
         assert!(
             glass.shadow,
             "the moving lens needs its target-visible SDF contact outline"
         );
-        assert!(
-            glass
-                .tint
-                .is_some_and(|tint| { tint.r() < 0.05 && (0.055..=0.065).contains(&tint.a()) })
-        );
+        assert!(glass.tint.is_some_and(|tint| tint.a() == 0.0));
+        assert_eq!(glass.face_response.unwrap().gain, 0.97);
+        assert_eq!(glass.meniscus_absorption, 0.0);
         assert_eq!(glass.adaptive_frost, 0.0);
+    }
+
+    #[test]
+    fn resting_lens_does_not_blend_two_different_text_projections() {
+        let rest = tab_flight_lens_material(Color::BLACK, 0.0);
+        let held = tab_flight_lens_material(Color::BLACK, 1.0);
+        assert_eq!(rest.optical_zoom, 1.0);
+        assert_eq!(rest.backdrop_blur, Some((4.0, 1.0)));
+        assert_eq!(rest.refraction_depth_dp, Some(36.0));
+        assert_eq!(rest.fold_depth, 0.0);
+        assert_eq!(rest.highlight, 0.0);
+        assert_eq!(rest.meniscus_absorption, 0.0);
+        assert_eq!(rest.shadow_style.unwrap().color.a(), 0.0);
+        assert_eq!(held.optical_zoom, 1.0);
+        assert_eq!(rest.refraction_depth_dp, held.refraction_depth_dp);
+        let dynamics = tab_flight_dynamics(
+            TabFlightGeometry {
+                center: (50.0, 31.0),
+                base_size: Size::new(95.0, 54.0),
+                strain: Size::new(0.0, 0.0),
+                lens_position: 0.0,
+                lens_activity: 0.0,
+                resting_tint: Color::TRANSPARENT,
+                accessory_center: None,
+            },
+            TabFlightNode {
+                origin: (0.0, 0.0),
+                size: Size::new(140.0, 100.0),
+            },
+        );
+        assert_eq!(dynamics.activity, Some(1.0));
     }
 
     #[test]
@@ -970,52 +1416,95 @@ mod tests {
     }
 
     #[test]
-    fn bar_surface_adapts_frost_to_its_foreground() {
+    fn bar_surface_adapts_tone_to_its_foreground() {
         let glass = tab_bar_surface_material(cranpose_ui_graphics::Color::BLACK);
-        assert_eq!(glass.blur_radius, Some(9.0));
-        assert_eq!(glass.saturation, Some(1.15));
-        assert_eq!(glass.lift, Some(0.60));
+        assert_eq!(glass.blur_radius, Some(6.0));
+        assert_eq!(glass.saturation, Some(1.0));
+        assert_eq!(glass.lift, Some(0.0));
         assert_eq!(glass.refraction_depth, 0.0);
-        assert_eq!(glass.transmission_refraction, 0.0);
-        assert_eq!(glass.adaptive_frost, 0.28);
+        assert_eq!(glass.refraction_depth_dp, Some(15.5));
+        assert_eq!(
+            glass.refraction,
+            crate::material::GlassRefraction::Surface { reach_dp: 31.0 }
+        );
+        assert_eq!(glass.transmission_refraction, 1.0);
+        assert_eq!(glass.adaptive_frost, 0.0);
+        assert!(glass.adaptive_tone);
     }
 
     #[test]
-    fn bar_surface_lift_tracks_the_local_foreground_polarity() {
-        let light_surface = tab_bar_surface_material(cranpose_ui_graphics::Color::BLACK);
-        assert_eq!(light_surface.lift, Some(0.60));
-
-        let dark_surface = tab_bar_surface_material(cranpose_ui_graphics::Color::WHITE);
-        assert_eq!(dark_surface.lift, Some(-0.24));
+    fn bar_surface_keeps_its_refraction_after_release() {
+        let glass = tab_bar_surface_material(Color::BLACK);
+        assert_eq!(glass.refraction_depth_dp, Some(15.5));
+        assert_eq!(glass.face_response.unwrap().illumination, 0.0);
     }
 
     #[test]
-    fn bar_surface_tint_separates_from_same_polarity_backdrops() {
-        let light_surface = tab_bar_surface_material(cranpose_ui_graphics::Color::BLACK)
-            .tint
-            .expect("bar tint");
-        assert!(light_surface.r() < 0.05);
-        assert_eq!(light_surface.a(), 0.0);
-
-        let dark_surface = tab_bar_surface_material(cranpose_ui_graphics::Color::WHITE)
-            .tint
-            .expect("bar tint");
-        assert!(dark_surface.r() > 0.95);
-        assert!((0.03..=0.05).contains(&dark_surface.a()));
+    fn bar_surface_tone_tracks_the_local_foreground_polarity() {
+        for foreground in [Color::BLACK, Color::WHITE] {
+            let surface = tab_bar_surface_material(foreground);
+            assert!(surface.adaptive_tone);
+            assert_eq!(surface.foreground, Some(foreground));
+            assert_eq!(surface.lift, Some(0.0));
+        }
     }
 
     #[test]
-    fn contact_rises_continuously_and_returns_on_the_measured_settle() {
-        let cranpose_animation::AnimationType::Spring(rise) = tab_lens_activity_motion(true) else {
-            panic!("contact rise must use a spring");
-        };
-        assert_eq!(rise.stiffness, 1400.0);
-        let cranpose_animation::AnimationType::Spring(settle) = tab_lens_activity_motion(false)
-        else {
-            panic!("arrival contraction must use a spring");
-        };
-        assert_eq!(settle.damping_ratio, 1.0);
-        assert_eq!(settle.stiffness, 900.0);
+    fn bar_surface_tone_keeps_the_face_tint_neutral() {
+        for foreground in [Color::BLACK, Color::WHITE] {
+            assert_eq!(
+                tab_bar_surface_material(foreground).tint,
+                Some(Color::TRANSPARENT)
+            );
+        }
+    }
+
+    #[test]
+    fn contact_growth_follows_the_native_presentation_clock() {
+        let mut samples = 0;
+        for pressed in [false, true] {
+            for route in 0..4 {
+                let runtime = cranpose_core::Runtime::new(std::sync::Arc::new(
+                    cranpose_core::DefaultScheduler,
+                ));
+                let mut activity = cranpose_animation::Animatable::new(
+                    if pressed { 0.0 } else { 1.0 },
+                    runtime.handle(),
+                );
+                activity.animate_to_at(
+                    f32::from(pressed),
+                    tab_lens_activity_motion(pressed),
+                    1_000_000_000,
+                );
+                let mut error = 0.0;
+                let mut count = 0;
+                for line in include_str!("../../tests/fixtures/native_tab_contact.csv")
+                    .lines()
+                    .skip(1)
+                {
+                    let sample = line
+                        .split(',')
+                        .map(|v| v.parse::<f64>().expect("contact sample"))
+                        .collect::<Vec<_>>();
+                    if sample[0] != f64::from(pressed) || sample[1] != f64::from(route) {
+                        continue;
+                    }
+                    runtime
+                        .handle()
+                        .drain_frame_callbacks(1_000_000_000 + (sample[2] * 1e9) as u64);
+                    error += (activity.state().value().clamp(0.0, 1.0) - sample[3] as f32).powi(2);
+                    count += 1;
+                }
+                assert!(count >= 30, "every native route must execute");
+                let rms = (error / count as f32).sqrt();
+                assert!(
+                    rms < 0.025,
+                    "native contact progress pressed={pressed} route={route} RMS: {rms}"
+                );
+                samples += count;
+            }
+        }
+        assert!(samples >= 300);
     }
 
     #[test]
@@ -1040,49 +1529,65 @@ mod tests {
     }
 
     #[test]
-    fn a_resting_lens_overhangs_its_cell_within_the_legal_margin() {
-        for tab_width in [24.0_f32, 44.0, 78.0, 80.0, 120.0, 400.0] {
-            let width = tab_lens_rest_width(tab_width);
-            assert!(
-                width > tab_width,
-                "the bubble reads wider than its cell ({width} vs {tab_width})"
-            );
-            let overhang = (width - tab_width) * 0.5;
-            assert!(
-                overhang <= BLOB_MARGIN + 1.0e-4,
-                "an end cell's overhang ({overhang}) at a {tab_width}dp cell \
-                 has to stay inside the pill inset ({BLOB_MARGIN})"
-            );
+    fn native_cells_overlap_without_crossing_the_strip_ends() {
+        let geometry = TabGeometry::new(88.0, 4);
+        assert_eq!(geometry.width, 352.0);
+        assert!((geometry.cell_width - 95.0).abs() < 1e-4);
+        for (index, center) in [72.5, 158.16667, 243.83333, 329.5].into_iter().enumerate() {
+            let actual =
+                25.0 + tab_lens_resting_left(index, geometry.pitch, 4) + geometry.cell_width * 0.5;
+            assert!((actual - center).abs() < 1e-4);
+        }
+        for count in [0, 1, 2, 4, 8] {
+            for allocation in [1.0, 24.0, 78.0, 120.0, 400.0] {
+                let geometry = TabGeometry::new(allocation, count);
+                let last = tab_lens_resting_left(count, geometry.pitch, count);
+                assert!((last + geometry.cell_width - geometry.width).abs() < 1e-3);
+            }
         }
     }
 
     #[test]
-    fn a_reference_width_cell_keeps_the_measured_rest_proportion() {
-        for tab_width in [24.0_f32, 44.0, 78.0, 80.0] {
+    fn selection_width_uses_the_destination_allocation() {
+        for (allocation, native_width) in [(88.0, 95.0), (97.5, 104.5)] {
+            assert!((tab_lens_rest_width(allocation) - native_width).abs() < 1e-4);
+        }
+    }
+    #[test]
+    fn held_drag_coordinates_follow_the_lifted_cell_in_both_directions() {
+        let geometry = TabGeometry::new(88.0, 4);
+        for (travel, physical_x) in [(1.0, 304.66666), (-1.0, 47.333332)] {
+            let transform = tab_bar_transform(360.0, 1.0, travel);
+            let center = geometry.width * 0.5;
+            let local_x =
+                (physical_x - center - transform.translation_x) / transform.scale_x + center;
+            let optical_x = geometry.optical_pointer_x(local_x, 1.0, travel);
             assert!(
-                (tab_lens_rest_width(tab_width) - tab_width * TAB_LENS_REST_WIDTH_FACTOR).abs()
-                    < 1.0e-4,
-                "a {tab_width}dp cell still rests at the measured 1.10 factor"
+                (optical_x - physical_x).abs() < 0.001,
+                "pointer drift: {}",
+                optical_x - physical_x
+            );
+            assert_eq!(
+                geometry.optical_pointer_x(physical_x, 0.0, travel),
+                physical_x
             );
         }
-        assert!(
-            tab_lens_rest_width(200.0) < 200.0 * TAB_LENS_REST_WIDTH_FACTOR,
-            "past the inset the margin governs, not the factor"
-        );
     }
-
     #[test]
-    fn a_resting_lens_stays_centered_on_the_cell_it_rests_in() {
-        let tab_width = 72.0;
-        let width = tab_lens_rest_width(tab_width);
-        for selected in 0..4 {
-            let left = tab_lens_resting_left(selected, tab_width, 4);
-            let cell_center = left + tab_width * 0.5;
-            let lens_center = left - (width - tab_width) * 0.5 + width * 0.5;
-            assert!(
-                (lens_center - cell_center).abs() < 1e-4,
-                "cell {selected}: lens center {lens_center} vs cell center {cell_center}"
-            );
+    fn ink_selection_uses_the_same_bounded_shape_before_face_magnification() {
+        let geometry = TabGeometry::new(88.0, 4);
+        for activity in [0.0, 0.5, 1.0] {
+            for value in [-1000.0, -0.1, 0.0, 0.1, 1000.0] {
+                let strain = Size::new(value, -value * 1.5);
+                let selected = tab_ink_selection(geometry, 120.0, activity, strain, Color::BLUE);
+                let (width, height) = tab_lens_base_size(geometry.cell_width, activity);
+                let size = tab_lens_deformed_size(Size::new(width, height), strain);
+                assert_eq!(selected.content_zoom, 1.0 + 0.16 * activity);
+                assert!((selected.bounds.width - size.width).abs() < 0.0001);
+                assert!((selected.bounds.height - size.height).abs() < 0.0001);
+                assert!((selected.bounds.x + selected.bounds.width * 0.5 - 167.5).abs() < 0.0001);
+                assert!(selected.bounds.width > 0.0 && selected.bounds.height > 0.0);
+            }
         }
     }
 }

@@ -1,0 +1,114 @@
+[
+  {
+    "dark": false,
+    "selected": false,
+    "source_capture": "target/liquid-native-adaptive-light-1/probe-03.json",
+    "metadata_sha256": "273766348ab29454072b245b6abf611d871c274b47eaff923d6025de306bb9ee",
+    "native_binary_sha256": "4c0b3cf565f82f58c4fe038a954b8f0b18ddeffeee71ccb4d39f969c4ffeac4c",
+    "layer_path": "UITabBar/0/0/2/0/0",
+    "rows": [
+      [
+        0.8086600303649902,
+        -0.6437541246414185,
+        -0.06490584462881088,
+        0.0
+      ],
+      [
+        -0.19132542610168457,
+        0.3563164472579956,
+        -0.06499101966619492,
+        -2.9802322387695312e-08
+      ],
+      [
+        -0.19139176607131958,
+        -0.6436282396316528,
+        0.9350199699401855,
+        0.0
+      ]
+    ]
+  },
+  {
+    "dark": false,
+    "selected": true,
+    "source_capture": "target/liquid-native-adaptive-light-1/probe-03.json",
+    "metadata_sha256": "273766348ab29454072b245b6abf611d871c274b47eaff923d6025de306bb9ee",
+    "native_binary_sha256": "4c0b3cf565f82f58c4fe038a954b8f0b18ddeffeee71ccb4d39f969c4ffeac4c",
+    "layer_path": "UITabBar/0/0/0/0/0",
+    "rows": [
+      [
+        0.5,
+        0.0,
+        0.0,
+        -0.5
+      ],
+      [
+        0.0,
+        0.5,
+        0.0,
+        0.03333336114883423
+      ],
+      [
+        0.0,
+        0.0,
+        0.5,
+        0.5
+      ]
+    ]
+  },
+  {
+    "dark": true,
+    "selected": false,
+    "source_capture": "target/liquid-native-adaptive-dark-1/probe-03.json",
+    "metadata_sha256": "3691254f87614c54a6e77c6d03897dd107b3cb7c82b86722d80d61ef74c6fc18",
+    "native_binary_sha256": "4c0b3cf565f82f58c4fe038a954b8f0b18ddeffeee71ccb4d39f969c4ffeac4c",
+    "layer_path": "UITabBar/0/0/2/0/0",
+    "rows": [
+      [
+        0.7980300188064575,
+        -0.6795141696929932,
+        -0.068515844643116,
+        0.9500000476837158
+      ],
+      [
+        -0.2019554227590561,
+        0.3205564618110657,
+        -0.06860101968050003,
+        0.9499999284744263
+      ],
+      [
+        -0.2020217627286911,
+        -0.6793882250785828,
+        0.931410014629364,
+        0.949999988079071
+      ]
+    ]
+  },
+  {
+    "dark": true,
+    "selected": true,
+    "source_capture": "target/liquid-native-adaptive-dark-1/probe-03.json",
+    "metadata_sha256": "3691254f87614c54a6e77c6d03897dd107b3cb7c82b86722d80d61ef74c6fc18",
+    "native_binary_sha256": "4c0b3cf565f82f58c4fe038a954b8f0b18ddeffeee71ccb4d39f969c4ffeac4c",
+    "layer_path": "UITabBar/0/0/0/0/0",
+    "rows": [
+      [
+        0.5,
+        0.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.5,
+        0.0,
+        0.5686274766921997
+      ],
+      [
+        0.0,
+        0.0,
+        0.5,
+        1.0
+      ]
+    ]
+  }
+]

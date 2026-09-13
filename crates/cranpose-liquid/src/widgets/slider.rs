@@ -222,6 +222,7 @@ pub fn LiquidSlider(modifier: Modifier, value: f32, on_change: impl Fn(f32) + 's
                                             .min(4.0),
                                         bulge_direction: pose.bulge_direction,
                                         ellipse_blend: 0.0,
+                                        capsule_smoothing_dp: 0.0,
                                         deformation: Some(slider_deformation(pose)),
                                         zoom_anchor: (0.0, 0.0),
                                     }),

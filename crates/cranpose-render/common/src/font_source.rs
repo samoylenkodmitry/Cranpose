@@ -132,6 +132,7 @@ impl SoftwareTextFontRegistry {
                 file.weight,
                 file.style,
                 Path::new(&file.path),
+                &[],
             ));
         }
         load.finish()
@@ -144,10 +145,17 @@ impl SoftwareTextFontRegistry {
         weight: FontWeight,
         style: FontStyle,
         path: &Path,
+        variations: &[([u8; 4], f32)],
     ) -> Result<(), FontLoadError> {
         let bytes = reads.read(path)?;
-        let face = SoftwareTextFont::from_registered_bytes(family, weight, style, bytes.to_vec())
-            .map_err(|source| FontLoadError::Parse {
+        let face = SoftwareTextFont::from_registered_bytes_with_variations(
+            family,
+            weight,
+            style,
+            bytes.to_vec(),
+            variations,
+        )
+        .map_err(|source| FontLoadError::Parse {
             path: path.to_path_buf(),
             source,
         })?;
@@ -186,8 +194,23 @@ impl SoftwareTextFontRegistry {
         style: FontStyle,
         bytes: impl Into<Vec<u8>>,
     ) -> Result<(), FontLoadError> {
-        let face = SoftwareTextFont::from_registered_bytes(family, weight, style, bytes)
-            .map_err(|source| FontLoadError::ParseBytes { source })?;
+        self.register_face_bytes_with_variations(family, weight, style, bytes, &[])
+    }
+
+    /// Register bytes with explicit OpenType axes, overriding the declared weight/style
+    /// coordinates. Invalid axes fail without registering a face.
+    pub fn register_face_bytes_with_variations(
+        &mut self,
+        family: &FontFamily,
+        weight: FontWeight,
+        style: FontStyle,
+        bytes: impl Into<Vec<u8>>,
+        variations: &[([u8; 4], f32)],
+    ) -> Result<(), FontLoadError> {
+        let face = SoftwareTextFont::from_registered_bytes_with_variations(
+            family, weight, style, bytes, variations,
+        )
+        .map_err(|source| FontLoadError::ParseBytes { source })?;
         self.faces.push(face);
         Ok(())
     }
@@ -238,6 +261,7 @@ impl SoftwareTextFontRegistry {
                 family,
                 *weight,
                 FontStyle::Normal,
+                &[],
             ));
         }
         load.finish()
@@ -248,9 +272,8 @@ impl SoftwareTextFontRegistry {
     ///
     /// `weight` is resolved through [`system_declared_weight`] before anything
     /// is read, so the registered face is one the platform's font config
-    /// declares. A caller that wants an arbitrary `wght` position must supply
-    /// its own font file and register it as its own family — the system aliases
-    /// are the platform's, and only the platform's entries exist in them.
+    /// declares. Use [`Self::register_system_face_with_variations`] when matching
+    /// explicit coordinates supplied by the platform's text API.
     pub fn register_system_face(
         &mut self,
         directory: impl AsRef<Path>,
@@ -258,12 +281,27 @@ impl SoftwareTextFontRegistry {
         weight: FontWeight,
         style: FontStyle,
     ) -> Result<(), FontLoadError> {
+        self.register_system_face_with_variations(directory, family, weight, style, &[])
+    }
+
+    /// Register a system face at explicit OpenType coordinates, such as the optical
+    /// size and weight returned by a platform text API. The first registration of a
+    /// family/weight/style wins, as with [`Self::register_system_face`].
+    pub fn register_system_face_with_variations(
+        &mut self,
+        directory: impl AsRef<Path>,
+        family: &FontFamily,
+        weight: FontWeight,
+        style: FontStyle,
+        variations: &[([u8; 4], f32)],
+    ) -> Result<(), FontLoadError> {
         self.register_read_system_face(
             &mut FontFileReads::default(),
             directory.as_ref(),
             family,
             weight,
             style,
+            variations,
         )
     }
 
@@ -274,6 +312,7 @@ impl SoftwareTextFontRegistry {
         family: &FontFamily,
         weight: FontWeight,
         style: FontStyle,
+        variations: &[([u8; 4], f32)],
     ) -> Result<(), FontLoadError> {
         let weight = system_declared_weight(family, weight);
         if self.has_system_face(family, weight, style) {
@@ -284,7 +323,7 @@ impl SoftwareTextFontRegistry {
                 directory: directory.to_path_buf(),
             }
         })?;
-        self.register_read_face(reads, family, weight, style, &path)?;
+        self.register_read_face(reads, family, weight, style, &path, variations)?;
         self.system_faces
             .push((FontFamilyKey::of(family), weight, style));
         Ok(())
@@ -447,6 +486,8 @@ fn system_family_files(family: &FontFamily) -> Option<SystemFamilyFiles> {
                 "RobotoStatic-Regular.ttf",
                 "NotoSans-Regular.ttf",
                 "DroidSans.ttf",
+                "Core/SFUI.ttf",
+                "SFNS.ttf",
             ],
             weighted: &[
                 (300, "Roboto-Light.ttf"),
@@ -707,6 +748,25 @@ mod tests {
     }
 
     #[test]
+    fn system_sans_resolves_the_apple_variable_face() {
+        let directory = ScratchDir::new("apple-system-sans");
+        let core = directory.path().join("Core");
+        std::fs::create_dir(&core).expect("Core directory");
+        let path = core.join("SFUI.ttf");
+        std::fs::write(&path, []).expect("system font");
+        for weight in [FontWeight::NORMAL, FontWeight::MEDIUM, FontWeight::BOLD] {
+            assert_eq!(
+                system_font_file(directory.path(), &FontFamily::SansSerif, weight),
+                Some(path.clone())
+            );
+        }
+        assert_eq!(
+            system_font_file(directory.path(), &FontFamily::Serif, FontWeight::NORMAL),
+            None
+        );
+    }
+
+    #[test]
     fn system_font_file_prefers_a_weight_specific_static_face() {
         let dir = ScratchDir::new("system-static");
         dir.write("Roboto-Regular.ttf", REGULAR);
@@ -839,6 +899,64 @@ mod tests {
             system_declared_weight(&FontFamily::named("Roboto"), FontWeight(450)),
             FontWeight(450)
         );
+    }
+
+    #[test]
+    fn explicit_system_axes_reject_invalid_registration_without_poisoning_retry() {
+        let dir = ScratchDir::new("system-explicit-axes");
+        dir.write("Roboto-Regular.ttf", REGULAR);
+        let mut registry = SoftwareTextFontRegistry::new();
+        assert!(matches!(
+            registry.register_system_face_with_variations(
+                dir.path(),
+                &FontFamily::SansSerif,
+                FontWeight::NORMAL,
+                FontStyle::Normal,
+                &[(*b"opsz", 17.0)],
+            ),
+            Err(FontLoadError::Parse {
+                source: SoftwareTextFontError::InvalidVariation { .. },
+                ..
+            })
+        ));
+        assert!(registry.is_empty());
+        registry
+            .register_system_face_with_variations(
+                dir.path(),
+                &FontFamily::SansSerif,
+                FontWeight::NORMAL,
+                FontStyle::Normal,
+                &[],
+            )
+            .unwrap();
+        assert_eq!(registry.faces().len(), 1);
+    }
+
+    #[test]
+    fn explicit_byte_axes_reject_unknown_axis_without_registering() {
+        let mut registry = SoftwareTextFontRegistry::new();
+        assert!(
+            registry
+                .register_face_bytes_with_variations(
+                    &FontFamily::SansSerif,
+                    FontWeight::NORMAL,
+                    FontStyle::Normal,
+                    REGULAR,
+                    &[(*b"opsz", 17.0)],
+                )
+                .is_err()
+        );
+        assert!(registry.is_empty());
+        registry
+            .register_face_bytes_with_variations(
+                &FontFamily::SansSerif,
+                FontWeight::NORMAL,
+                FontStyle::Normal,
+                REGULAR,
+                &[],
+            )
+            .unwrap();
+        assert_eq!(registry.faces().len(), 1);
     }
 
     #[test]

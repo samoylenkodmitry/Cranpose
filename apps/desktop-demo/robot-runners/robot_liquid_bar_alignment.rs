@@ -151,7 +151,12 @@ fn check_bar(
         let expected =
             first.0 + cranpose::liquid::tab_lens_resting_left(target, pitch, labels.len());
 
-        let half_rest = cranpose::liquid::tab_lens_rest_width(pitch) * 0.5;
+        let half_rest = robot
+            .find_button_bounds_exact(label)
+            .expect("tab bounds")
+            .expect("tab cell")
+            .2
+            * 0.5;
         let span = (expected - half_rest, expected + half_rest);
 
         let bands = changed_column_bands(&baseline, &shot, center.1 - 60.0, center.1 + 60.0);

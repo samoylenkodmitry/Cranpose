@@ -45,6 +45,11 @@ fn slot(uniforms: &[f32], index: usize) -> f32 {
 /// contract tests share.
 pub const LIQUID_GLASS_SPECIALIZATIONS: &[LiquidGlassSpecialization] = &[
     LiquidGlassSpecialization {
+        flag: "GLASS_DIRECTIONAL_REFRACTION_OFF",
+        slots: &[GLASS_REFRACTION_MODE_UNIFORM],
+        inactive: |u| slot(u, GLASS_REFRACTION_MODE_UNIFORM) <= 0.5,
+    },
+    LiquidGlassSpecialization {
         flag: "GLASS_LOUPE_OFF",
         slots: &[80],
         inactive: |u| slot(u, 80) == 0.0,
@@ -68,6 +73,15 @@ pub const LIQUID_GLASS_SPECIALIZATIONS: &[LiquidGlassSpecialization] = &[
         flag: "GLASS_ELLIPSE_BLEND_OFF",
         slots: &[110],
         inactive: |u| slot(u, 110) == 0.0,
+    },
+    LiquidGlassSpecialization {
+        flag: "GLASS_PROJECTION_OFF",
+        slots: &[168, 169],
+        inactive: |u| {
+            slot(u, 168) <= 0.0
+                || slot(u, 169) <= 0.0
+                || (slot(u, 168) == 1.0 && slot(u, 169) == 1.0)
+        },
     },
     LiquidGlassSpecialization {
         flag: "GLASS_STRAIN_OFF",
@@ -196,7 +210,16 @@ pub fn specialize_liquid_glass(shader: &mut RuntimeShader) {
 pub fn specialize_liquid_glass_with_folds(shader: &mut RuntimeShader, folds: bool) {
     const _: () = assert!(LIQUID_GLASS_SPECIALIZATIONS.len() <= u32::BITS as usize);
     const CACHE_CAPACITY: usize = 32;
-    type SpecializationKey = (u32, Option<u32>, bool);
+    type SpecializationKey = (
+        u32,
+        Option<u32>,
+        bool,
+        bool,
+        bool,
+        Option<u32>,
+        u8,
+        Option<u32>,
+    );
     thread_local! {
         static CACHE: RefCell<ShaderSpecializationCache<SpecializationKey, CACHE_CAPACITY>> =
             const { RefCell::new(ShaderSpecializationCache::new()) };
@@ -216,11 +239,31 @@ pub fn specialize_liquid_glass_with_folds(shader: &mut RuntimeShader, folds: boo
         (GLASS_ADAPTIVE_NEIGHBOURHOOD_DP * slot(uniforms, GLASS_EFFECT_DENSITY_UNIFORM).max(1.0))
             .to_bits()
     });
+    let mean_tone = slot(uniforms, GLASS_ADAPTIVE_TONE_UNIFORM) > 0.5;
+    let pane_radius = (slot(uniforms, GLASS_PANE_BLEND_UNIFORM) > 0.0)
+        .then(|| slot(uniforms, GLASS_PANE_BLEND_UNIFORM).to_bits());
+    let projection = [
+        slot(uniforms, GLASS_OPTICAL_PROJECTION_UNIFORM),
+        slot(uniforms, GLASS_OPTICAL_PROJECTION_UNIFORM + 1),
+    ];
+    let projected = projection.iter().all(|v| *v > 0.0) && projection != [1.0, 1.0];
+    let stage = slot(uniforms, GLASS_OPTICAL_STAGE_UNIFORM) as u8;
+    let backdrop_radius = (stage == 2 && slot(uniforms, GLASS_BACKDROP_BLUR_UNIFORM) > 0.0)
+        .then(|| slot(uniforms, GLASS_BACKDROP_BLUR_UNIFORM).to_bits());
     CACHE.with_borrow_mut(|cache| {
         cache.apply(
             shader,
-            (flags, substrate_radius, folds),
-            |shader, &(flags, radius, folds)| {
+            (
+                flags,
+                substrate_radius,
+                folds,
+                mean_tone,
+                projected,
+                pane_radius,
+                stage,
+                backdrop_radius,
+            ),
+            |shader, &(flags, radius, folds, mean_tone, projected, pane_radius, stage, backdrop_radius)| {
                 for (index, specialization) in LIQUID_GLASS_SPECIALIZATIONS.iter().enumerate() {
                     if flags & (1 << index) != 0 {
                         shader.set_override(specialization.flag, 1.0);
@@ -228,11 +271,27 @@ pub fn specialize_liquid_glass_with_folds(shader: &mut RuntimeShader, folds: boo
                         shader.clear_override(specialization.flag);
                     }
                 }
-                shader.set_draw_split(folds.then_some(GLASS_RIM_DRAW_OVERRIDE));
+                shader.set_draw_split((folds && !projected).then_some(GLASS_RIM_DRAW_OVERRIDE));
                 let substrate = radius.map(|radius| SubstrateSpec::Blur {
                     radius_px: f32::from_bits(radius),
                 });
-                shader.set_substrates(substrate.as_slice());
+                let mut substrates = arrayvec::ArrayVec::<SubstrateSpec, 3>::new();
+                substrates.extend(substrate);
+                if mean_tone {
+                    substrates.push(SubstrateSpec::Mean);
+                }
+                if let Some(radius) = pane_radius {
+                    substrates.push(SubstrateSpec::Blur {
+                        radius_px: f32::from_bits(radius),
+                    });
+                }
+                if matches!(stage, 1 | 2) {
+                    substrates.clear();
+                    if let Some(radius) = backdrop_radius {
+                        substrates.push(SubstrateSpec::Blur { radius_px: f32::from_bits(radius) });
+                    }
+                }
+                shader.set_substrates(&substrates);
             },
         );
     });
@@ -255,9 +314,37 @@ pub const GLASS_PHYSICAL_REFRACTION_OFF_FLAG: &str = "GLASS_PHYSICAL_REFRACTION_
 pub const GLASS_ADAPTIVE_NEIGHBOURHOOD_DP: f32 = 16.0;
 
 /// Wraps a fully configured `liquid_glass.wgsl` shader as a render effect,
-/// specialized to the features its uniforms enable.
-pub fn liquid_glass_runtime_effect(mut shader: RuntimeShader) -> RenderEffect {
+/// specialized to the features its uniforms enable. Edge lenses render the
+/// outer warp, inner warp, and chromatic lighting in three successive images.
+/// Content masks and other refraction modes use one image.
+pub fn liquid_glass_runtime_effect(shader: RuntimeShader) -> RenderEffect {
+    if slot(shader.uniforms(), GLASS_REFRACTION_MODE_UNIFORM) >= 1.5
+        && slot(shader.uniforms(), 112) <= 0.5
+        && slot(shader.uniforms(), GLASS_OPTICAL_STAGE_UNIFORM) == 0.0
+    {
+        let stage = |index: u8| {
+            let mut pass = shader.clone();
+            pass.set_float(GLASS_OPTICAL_STAGE_UNIFORM, f32::from(index));
+            if index < 3 {
+                pass.set_output_support(None);
+                pass.set_output_padding(0.0);
+            }
+            glass_shader_effect(pass)
+        };
+        stage(1).then(stage(2)).then(stage(3))
+    } else {
+        glass_shader_effect(shader)
+    }
+}
+
+fn glass_shader_effect(mut shader: RuntimeShader) -> RenderEffect {
     specialize_liquid_glass(&mut shader);
+    if matches!(
+        slot(shader.uniforms(), GLASS_OPTICAL_STAGE_UNIFORM),
+        1.0 | 2.0
+    ) {
+        shader.set_draw_split(None);
+    }
     shader.set_batched_source(true);
     RenderEffect::runtime_shader(shader)
 }
@@ -289,12 +376,58 @@ pub const GLASS_PHYSICAL_REFRACTION_DEPTH_ENABLED_UNIFORM: usize = 101;
 /// shader resolves it against the live shape inradius; zero = fold off).
 pub const GLASS_FOLD_DEPTH_UNIFORM: usize = 88;
 /// Uniform slot containing the uniform face magnification ratio of a riding
-/// lens (values <= 1 mean no zoom; the rim band keeps the wcKSRD mapping).
+/// lens (values <= 1 mean no zoom; its projection model controls the rim).
 pub const GLASS_OPTICAL_ZOOM_UNIFORM: usize = 89;
 /// Uniform slot (two floats) containing the optical-zoom axis offset from
 /// the SDF center, in dp — a leaning lens magnifies about the content it
 /// rides, not its shifted silhouette.
 pub const GLASS_OPTICAL_ZOOM_ANCHOR_UNIFORM: usize = 128;
+/// Uniform slot selecting radial (0), edge-normal surface (1), or outward edge lens (2) projection.
+pub const GLASS_REFRACTION_MODE_UNIFORM: usize = 130;
+/// Uniform slot containing ray reach in dp: inward for surface projection,
+/// outward for the edge lens. The refraction mode selects the direction.
+pub const GLASS_EDGE_REFRACTION_REACH_UNIFORM: usize = 131;
+/// Uniform slot disabling diffuse face lighting when set to one; zero preserves it.
+pub const GLASS_FACE_LIGHTING_OFF_UNIFORM: usize = 132;
+/// Uniform slot containing the touch glow radius in dp; nonpositive values use 58 dp.
+pub const GLASS_TOUCH_RADIUS_UNIFORM: usize = 133;
+/// Whether the graphics layer supplies the active material silhouette coverage.
+pub const GLASS_LAYER_CLIPPED_UNIFORM: usize = 134;
+/// Seven consecutive floats for opposing edge lights: height in dp, linear falloff,
+/// direction in radians, reflected chroma gain, luminance gain, additive offset,
+/// and whether height follows the surface transform.
+/// A zero height keeps the material's dome lighting.
+pub const GLASS_KEY_FILL_UNIFORM: usize = 135;
+/// Four consecutive floats for face response: attenuation, starting and ending
+/// screen depths in dp, and illumination added after edge lighting.
+pub const GLASS_FACE_RESPONSE_UNIFORM: usize = 142;
+/// Primary capsule transition smoothing in dp; zero preserves the primary outline.
+pub const GLASS_CAPSULE_SMOOTHING_UNIFORM: usize = 146;
+/// Edge-lens image stage: zero requests the complete chain, one renders the outer warp,
+/// two renders the inner warp, and three filters the resulting image and lights it.
+pub const GLASS_OPTICAL_STAGE_UNIFORM: usize = 147;
+/// Eight consecutive floats for a custom edge spectrum: angle, signed tap spacing
+/// in dp, vertical scale, near and far opacity, fade depth and extent in dp, and enable flag.
+pub const GLASS_EDGE_SPECTRUM_UNIFORM: usize = 148;
+
+/// Eight uniform slots for inset shadow RGBA, radius, vertical offset, spread, and presence.
+pub const GLASS_INNER_SHADOW_UNIFORM: usize = 156;
+
+/// Two uniform slots for an independent inner return depth in dp and its presence.
+pub const GLASS_EDGE_RETURN_DEPTH_UNIFORM: usize = 164;
+
+/// Horizontal and vertical scale of the complete optical field about its primary center.
+pub const GLASS_OPTICAL_PROJECTION_UNIFORM: usize = 168;
+/// Enables the mean-backdrop face transfer curve; zero preserves the material's fixed tone.
+pub const GLASS_ADAPTIVE_TONE_UNIFORM: usize = 166;
+/// Pane blur radius in pixels and normal-blend tint fraction in the following slot.
+pub const GLASS_PANE_BLEND_UNIFORM: usize = 170;
+/// Radius in physical pixels and opacity of the blurred backdrop mixed with the outer edge warp.
+pub const GLASS_BACKDROP_BLUR_UNIFORM: usize = 172;
+/// Enables foreground insertion between the inner warp and chromatic pass. The inner
+/// warp applies the face's tone before content; the final pass disperses and lights it.
+pub const GLASS_FOREGROUND_CONTENT_UNIFORM: usize = 174;
+
 /// Uniform slot selecting the rim style: 0 is the regular surface rim, 1
 /// the lens rim whose meniscus reflects, transmits with loss and carries
 /// the long-edge specular.
@@ -342,7 +475,14 @@ pub const GLASS_RESTING_TINT_UNIFORM: usize = 113;
 ///          unset -> light overhead, return glow at the bottom rim)
 /// 124..126: ink recolor RGB — the lens recolors dark transmitted ink
 /// 127: ink recolor strength (0 = off)
-pub const LIQUID_GLASS_WGSL: &str = include_str!("../shaders/liquid_glass.wgsl");
+pub const LIQUID_GLASS_WGSL: &str = concat!(
+    include_str!("../shaders/glass_geometry.wgsl"),
+    include_str!("../shaders/liquid_glass.wgsl"),
+);
+
+/// WGSL distance and circular displacement functions shared by glass and its content.
+/// Concatenate this source once with the runtime shader prelude and a fragment stage.
+pub const LIQUID_GLASS_GEOMETRY_WGSL: &str = include_str!("../shaders/glass_geometry.wgsl");
 
 /// Uniform slot of the ambient light return direction (x at 122, y at 123).
 pub const GLASS_LIGHT_DIRECTION_UNIFORM: usize = 122;
@@ -642,6 +782,17 @@ mod tests {
     }
 
     #[test]
+    fn projected_optics_disable_rim_scissors_and_restore_them_at_identity() {
+        let mut shader = RuntimeShader::new(LIQUID_GLASS_WGSL);
+        shader.set_float2(GLASS_OPTICAL_PROJECTION_UNIFORM, 1.2, 0.75);
+        specialize_liquid_glass_with_folds(&mut shader, true);
+        assert_eq!(shader.draw_split(), None);
+        shader.set_float2(GLASS_OPTICAL_PROJECTION_UNIFORM, 1.0, 1.0);
+        specialize_liquid_glass_with_folds(&mut shader, true);
+        assert_eq!(shader.draw_split(), Some(GLASS_RIM_DRAW_OVERRIDE));
+    }
+
+    #[test]
     fn every_specialization_flag_is_a_shader_override_and_guards_all_of_its_slot_reads() {
         for specialization in LIQUID_GLASS_SPECIALIZATIONS {
             let declaration = format!("override {}: bool = false;", specialization.flag);
@@ -696,6 +847,36 @@ mod tests {
     }
 
     #[test]
+    fn glass_substrates_refresh_for_frost_tone_and_pane_combinations() {
+        for folds in [false, true] {
+            let mut shader = RuntimeShader::new(LIQUID_GLASS_WGSL);
+            for radius in [0.0, 8.0, 24.0, 0.0] {
+                for frost in [false, true] {
+                    for tone in [false, true] {
+                        shader.set_float(GLASS_PANE_BLEND_UNIFORM, radius);
+                        shader.set_float(GLASS_ADAPTIVE_FROST_UNIFORM, f32::from(frost));
+                        shader.set_float(GLASS_ADAPTIVE_TONE_UNIFORM, f32::from(tone));
+                        specialize_liquid_glass_with_folds(&mut shader, folds);
+                        let mut expected = Vec::new();
+                        if frost {
+                            expected.push(SubstrateSpec::Blur {
+                                radius_px: GLASS_ADAPTIVE_NEIGHBOURHOOD_DP,
+                            });
+                        }
+                        if tone {
+                            expected.push(SubstrateSpec::Mean);
+                        }
+                        if radius > 0.0 {
+                            expected.push(SubstrateSpec::Blur { radius_px: radius });
+                        }
+                        assert_eq!(shader.substrates(), expected);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn a_resting_glass_keeps_its_substrate_declaration() {
         let mut shader = RuntimeShader::new(LIQUID_GLASS_WGSL);
         shader.set_float(GLASS_ADAPTIVE_FROST_UNIFORM, 0.42);
@@ -707,6 +888,72 @@ mod tests {
             1,
             "the declaration sets the capture geometry, which must not follow activity"
         );
+    }
+
+    #[test]
+    fn edge_lens_stages_preserve_intermediate_images_and_final_support() {
+        fn shaders(effect: &RenderEffect) -> Vec<&RuntimeShader> {
+            match effect {
+                RenderEffect::Shader { shader } => vec![shader],
+                RenderEffect::Chain { first, second } => {
+                    let mut passes = shaders(first);
+                    passes.extend(shaders(second));
+                    passes
+                }
+                _ => panic!("glass must contain shader stages"),
+            }
+        }
+        let support = crate::Rect {
+            x: -2.0,
+            y: -3.0,
+            width: 120.0,
+            height: 80.0,
+        };
+        for activity in [0.0, 0.5, 1.0] {
+            let mut shader = RuntimeShader::new(LIQUID_GLASS_WGSL);
+            shader.set_float(GLASS_REFRACTION_MODE_UNIFORM, 2.0);
+            shader.set_float(GLASS_ACTIVITY_UNIFORM, activity);
+            shader.set_input_padding(30.0);
+            shader.set_output_padding(8.0);
+            shader.set_output_support(Some(support));
+            let effect = liquid_glass_runtime_effect(shader.clone());
+            let passes = shaders(&effect);
+            assert_eq!(passes.len(), 3);
+            for (index, pass) in passes.iter().enumerate() {
+                assert_eq!(
+                    pass.uniforms()[GLASS_OPTICAL_STAGE_UNIFORM],
+                    (index + 1) as f32
+                );
+                assert_eq!(pass.uniforms()[GLASS_ACTIVITY_UNIFORM], activity);
+                assert!(pass.batched_source());
+                assert_eq!(pass.input_padding(), 30.0);
+                if index < 2 {
+                    assert_eq!(pass.output_support(), None);
+                    assert_eq!(pass.output_padding(), 0.0);
+                    assert_eq!(pass.draw_split(), None);
+                } else {
+                    assert_eq!(pass.output_support(), Some(support));
+                    assert_eq!(pass.output_padding(), 8.0);
+                }
+            }
+            for (mode, mask, stage) in [
+                (0.0, 0.0, 0.0),
+                (1.0, 0.0, 0.0),
+                (2.0, 1.0, 0.0),
+                (2.0, 0.0, 1.0),
+                (2.0, 0.0, 2.0),
+                (2.0, 0.0, 3.0),
+            ] {
+                let mut single = shader.clone();
+                single.set_float(GLASS_REFRACTION_MODE_UNIFORM, mode);
+                single.set_float(112, mask);
+                single.set_float(GLASS_OPTICAL_STAGE_UNIFORM, stage);
+                let effect = liquid_glass_runtime_effect(single);
+                let passes = shaders(&effect);
+                assert_eq!(passes.len(), 1);
+                assert_eq!(passes[0].uniforms()[GLASS_OPTICAL_STAGE_UNIFORM], stage);
+            }
+        }
     }
 
     #[test]

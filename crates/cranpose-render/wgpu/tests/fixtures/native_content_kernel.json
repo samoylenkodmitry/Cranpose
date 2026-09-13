@@ -1,0 +1,39 @@
+{
+  "source": "target/liquid-native-content-kernel-1",
+  "native": {
+    "native_binary_sha256": "c124d7f8c69fb8850b65c80214788425a1c27cf5385ff40b97b83658da57386d",
+    "swift_sha256": {
+      "apps/liquid-reference/LiquidReferenceTests/KeyframeInspectorTests.swift": "3738f1e08e8d20ac336da932111ab05ffd950ecdafdfc1cbe136187aa01f6781",
+      "apps/liquid-reference/LiquidReferenceTests/TabBarTests.swift": "22fad2c790fbfaaa2a3c4b2f076565d529d0813daed06fcae5f1648b04745ae6",
+      "apps/liquid-reference/LiquidReference/LiquidReferenceApp.swift": "de3efa7941cf67dc73e0a512b6c8b6488bbfffcde6955e7043340bc99420955d",
+      "apps/liquid-reference/LiquidReference/OpticalProbes.swift": "d758d23788bb654d2533188124cbeaf588670ee5fbd72128fbc917c07c346fdd",
+      "apps/liquid-reference/LiquidReference/NativeTrace.swift": "05e6953f8335d67e9dc17e435236eb4230d6c91aa6f2cc66fbd1872291e17c41",
+      "apps/liquid-reference/LiquidReference/KeyframeInspector.swift": "87554ee0fc8cdc311856fc358fc814384827a0dbbc47913d59cf12c372599c55"
+    },
+    "captures": {
+      "probe-07.json": "9821966a3b4fe3139cee7a6c6c1fafeb45c4b4e202628bde66a1fda26704b1ac",
+      "probe-06.json": "491d8a872528cfac0ae57822d4f8cd03094b2d00aa7b21627741be3085a9defd",
+      "probe-01.json": "2e0737ae52d5017361c7b14b6e08bc5f320b64743bdc4145de9a7ea8db720147",
+      "probe-00.json": "9e8b4c9bbdf99522508a133330b59c09523390c56c4607a5c30e6978f2c8ef12",
+      "probe-00.png": "36c0c3ebc921087d67ba71dcc99742db5ed2d86dea2018f131bd3a451f73837d",
+      "probe-03.json": "69d47441f2c535913db33cfc94303fa9a76960d462faceff27e434b036ba9a94",
+      "probe-01.png": "e69213cb982a86a438cb34cd98717926b61a480c06db7972ba81b765865c1292",
+      "probe-03.png": "58081e4101b964d59217606a2a24f9dad6ef342b2bd56dcbda47ee95da9a2a61",
+      "probe-02.png": "a0c948d78e20c7211902d1c850c8a4b0d0584c9320e802a471782e5b5381c7b8",
+      "probe-06.png": "854d30b7e75ddfd14cd810ed1daade1b80b14e0ac912c49c1bb1f463f45f1829",
+      "probe-07.png": "a3c45448158644366af656a1603c40e414b1da39dd8fbe7208f44b3a7e53824b",
+      "probe-05.png": "a063102f9b86dc124e158dec844c8732892a9deabe68d9ae90065196fe7d772f",
+      "probe-02.json": "f0ec70091448331f197bd73e9352d17bac00b4caf2fed1225274bf0c46f7cbb7",
+      "probe-04.png": "24ef158680e37e001498e5a3b66cb07f109ec859771c0b7dd9b9761c6ca311c1",
+      "probe-05.json": "812db2abe4fc22951f2ad86c3b89c7f578784339c7062f7c14de3a079d8af162",
+      "probe-04.json": "c74c6d43bdf97f7a2be50058a39a56db0762a238be9c60fa97fc53ac4e37de43"
+    }
+  },
+  "method": "Four cosine phases per axis, period 32 pt; atan2(I3-I1, I0-I2) yields native displacementMap source coordinates; minimum signal amplitude 35/255. Live content source replaced with controlled image; original SDF portal and displacementMap retained. All shifts are measured in screen points.",
+  "content_portal": {
+    "source": "target/liquid-native-optical-probes-5/probe-00.json",
+    "sha256": "b0ebe99d406198750f8e4e705e5c34650ac0fac904954bfb0072cb55f9504692",
+    "path": "UITabBar/0/0/1/0/2/1/0/0/1/1",
+    "descriptor": "<CAPortalLayer:0x1054daec0; position = CGPoint (47.5 27); bounds = CGRect (0 0; 95 54); delegate = <_UIPortalView: 0x105409a40; frame = (0 0; 95 54); layer = <CAPortalLayer: 0x1054d9000>; ; opaque = YES; allowsGroupOpacity = YES; matchesPosition = YES; matchesTransform = YES; matchesOpacity = YES; hidesSourceLayer = YES; sourceLayer = <CALayer: 0x1055b3750>>"
+  }
+}

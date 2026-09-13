@@ -1,0 +1,27 @@
+{
+  "source": "target/liquid-native-sdf-probes-6",
+  "native": {
+    "native_binary_sha256": "2e2b3a28e48b8a72cbf929c4d27efc7fd850a2dc925db7c13a3fd10152e8a74b",
+    "swift_sha256": {
+      "apps/liquid-reference/LiquidReferenceTests/KeyframeInspectorTests.swift": "3738f1e08e8d20ac336da932111ab05ffd950ecdafdfc1cbe136187aa01f6781",
+      "apps/liquid-reference/LiquidReferenceTests/TabBarTests.swift": "306c1f9cd6224f02f09f0917938fe00b9ce45b16ffce429478b8f8adf11d993d",
+      "apps/liquid-reference/LiquidReference/LiquidReferenceApp.swift": "de3efa7941cf67dc73e0a512b6c8b6488bbfffcde6955e7043340bc99420955d",
+      "apps/liquid-reference/LiquidReference/OpticalProbes.swift": "6918af4fc1e43f34f261062ccbd761d34851fd37741bc99d981ee7489de7c4ee",
+      "apps/liquid-reference/LiquidReference/NativeTrace.swift": "f6ab75631d09b2efd47d2b39c97b2550eb85d03993d31102501055f92ecd620c",
+      "apps/liquid-reference/LiquidReference/KeyframeInspector.swift": "87554ee0fc8cdc311856fc358fc814384827a0dbbc47913d59cf12c372599c55"
+    },
+    "purpose": "Live SDF model moved from consuming filter to expose signed map. Initial/lifted shapes follow overlay position; content geometry follows native portal source."
+  },
+  "images": {
+    "probe-04.png": "8517ba69e47a96305f87176dec94bf69f5d99ec8db385b7fd5aeb273e60eb3d0",
+    "probe-05.png": "c140ac9c0cad3c5bbec0e54292d36c4d2f41e1db3a2f464f5421bae4d75b384f"
+  },
+  "sample_json_sha256": "6bb2f5b7df6cbf5f010734e69ac59201d7d88ec1e10e2fb427361b9e9a600adf",
+  "bounds_points": [
+    276.8668582375479,
+    24.6254789272031,
+    115.3591954022989,
+    72.74904214559388
+  ],
+  "encoding": "RGB = 0.5 + signed displacement field * 0.25; content inputAmount = -17.5; native effect height = 14"
+}

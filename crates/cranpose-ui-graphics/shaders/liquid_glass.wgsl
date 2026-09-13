@@ -63,16 +63,19 @@ struct RegionMap {
     offset: vec2<f32>,
     scale: vec2<f32>,
     half_texel: vec2<f32>,
+    projection: vec2<f32>,
+    anchor: vec2<f32>,
 }
 
 fn region_map() -> RegionMap {
     let region = region_extent();
     let dims = max(vec2<f32>(textureDimensions(input_texture)), vec2<f32>(1.0));
-    return RegionMap(region.xy / dims, region.zw / dims, 0.5 / max(region.zw, vec2<f32>(1.0)));
+    return RegionMap(region.xy / dims, region.zw / dims, 0.5 / max(region.zw, vec2<f32>(1.0)), vec2<f32>(1.0), vec2<f32>(0.0));
 }
 
 fn map_uv(map: RegionMap, local_uv: vec2<f32>) -> vec2<f32> {
-    let held = clamp(local_uv, map.half_texel, vec2<f32>(1.0) - map.half_texel);
+    let projected = map.anchor + (local_uv - map.anchor) * map.projection;
+    let held = clamp(projected, map.half_texel, vec2<f32>(1.0) - map.half_texel);
     return map.offset + held * map.scale;
 }
 
@@ -87,7 +90,7 @@ fn get_vec4(index: u32) -> vec4<f32> {
 fn substrate_map() -> RegionMap {
     let region = get_vec4(232u);
     let dims = max(vec2<f32>(textureDimensions(input_texture)), vec2<f32>(1.0));
-    return RegionMap(region.xy / dims, region.zw / dims, 0.5 / max(region.zw, vec2<f32>(1.0)));
+    return RegionMap(region.xy / dims, region.zw / dims, 0.5 / max(region.zw, vec2<f32>(1.0)), vec2<f32>(1.0), vec2<f32>(0.0));
 }
 
 fn has_substrate() -> bool {
@@ -113,7 +116,9 @@ override GLASS_SCENE_SHAPES_OFF: bool = false;
 override GLASS_WOBBLE_OFF: bool = false;
 override GLASS_ELLIPSE_BLEND_OFF: bool = false;
 override GLASS_STRAIN_OFF: bool = false;
+override GLASS_PROJECTION_OFF: bool = false;
 override GLASS_ZOOM_ANCHOR_OFF: bool = false;
+override GLASS_DIRECTIONAL_REFRACTION_OFF: bool = false;
 override GLASS_TOUCH_OFF: bool = false;
 override GLASS_CONTENT_MASK_OFF: bool = false;
 override GLASS_OPTICAL_BLUR_OFF: bool = false;
@@ -357,7 +362,10 @@ fn sample_adaptive_neighborhood(
         vec2<f32>(1.0),
     );
     if (has_substrate()) {
-        return textureSampleLevel(input_texture, input_sampler, map_uv(substrate_map(), center_uv), 0.0);
+        var substrate = substrate_map();
+        substrate.projection = map.projection;
+        substrate.anchor = map.anchor;
+        return textureSampleLevel(input_texture, input_sampler, map_uv(substrate, center_uv), 0.0);
     }
     var accumulated = vec4<f32>(0.0);
     for (var x = -1; x <= 1; x = x + 1) {
@@ -374,7 +382,7 @@ fn sample_adaptive_neighborhood(
     return accumulated / 9.0;
 }
 
-fn sample_wcksrd_reflection_path(
+fn sample_tangent_path(
     map: RegionMap,
     uv: vec2<f32>,
     tex_size: vec2<f32>,
@@ -421,6 +429,98 @@ fn sample_wcksrd_reflection_path(
     return center * 0.40 + inner * 0.20 + outer * 0.10;
 }
 
+struct EdgeLensRay {
+    scene: GlassScene,
+    sampling_position: vec2<f32>,
+    half_size: vec2<f32>,
+    distance: f32,
+    lens_refraction: f32,
+    transmission_refraction: f32,
+    optical_zoom: f32,
+    zoom_anchor: vec2<f32>,
+    edge_normal: vec2<f32>,
+    edge_reach: f32,
+}
+
+
+fn scene_normal(scene: GlassScene, position: vec2<f32>) -> vec2<f32> {
+    let dx = scene_sdf(scene, position + vec2<f32>(0.5, 0.0))
+        - scene_sdf(scene, position - vec2<f32>(0.5, 0.0));
+    let dy = scene_sdf(scene, position + vec2<f32>(0.0, 0.5))
+        - scene_sdf(scene, position - vec2<f32>(0.0, 0.5));
+    let gradient = vec2<f32>(dx, dy);
+    return gradient / max(length(gradient), 0.001);
+}
+
+fn edge_outer_displacement(field: EdgeLensRay, position: vec2<f32>) -> vec2<f32> {
+    let distance = scene_sdf(field.scene, position);
+    let normal = scene_normal(field.scene, position);
+    let oval = position / max(field.half_size, vec2<f32>(0.001));
+    let oval_direction = oval / max(length(oval), 0.001);
+    let gradient = mix(normal, oval_direction, 0.5);
+    let direction = gradient / max(length(gradient), 0.001);
+    return direction * field.edge_reach * circular_displacement_profile(-distance, field.lens_refraction);
+}
+
+fn edge_face_displacement(field: EdgeLensRay, position: vec2<f32>) -> vec2<f32> {
+    if field.optical_zoom == 1.0 {
+        return vec2<f32>(0.0);
+    }
+    let distance = scene_sdf(field.scene, position);
+    let depth = clamp(-distance / max(field.lens_refraction, 0.001), 0.0, 1.0);
+    return (position - field.zoom_anchor) * (1.0 / field.optical_zoom - 1.0) * smoothstep(0.0, 1.0, depth);
+}
+
+struct EdgeSpectrum {
+    direction: vec2<f32>,
+    step: f32,
+    vertical_scale: f32,
+    opacity_near: f32,
+    opacity_far: f32,
+    fade_depth: f32,
+    extent: f32,
+}
+
+fn edge_spectrum(depth: f32, step: f32, scale: f32) -> EdgeSpectrum {
+    if get_float(155u) > 0.5 {
+        let angle = get_float(148u);
+        return EdgeSpectrum(vec2<f32>(sin(angle), cos(angle)), get_float(149u) * scale,
+            get_float(150u), get_float(151u), get_float(152u), get_float(153u) * scale, get_float(154u) * scale);
+    }
+    return EdgeSpectrum(vec2<f32>(-0.2679492, 1.0), step, 0.8088, 1.0, 0.0, depth * (14.0 / 36.0), depth);
+}
+
+fn spectral_presence(spectrum: EdgeSpectrum, distance: f32) -> f32 {
+    if spectrum.extent <= 0.0 || -distance >= spectrum.extent {
+        return 0.0;
+    }
+    return mix(spectrum.opacity_near, spectrum.opacity_far, clamp(-distance / max(spectrum.fade_depth, 0.001), 0.0, 1.0));
+}
+
+fn sample_chromatic_edge_lens(
+    map: RegionMap,
+    uv: vec2<f32>,
+    tex_size: vec2<f32>,
+    field: EdgeLensRay,
+    spectrum: EdgeSpectrum,
+) -> vec3<f32> {
+    let normal = field.edge_normal;
+    let direction = spectrum.direction;
+    let axis = vec2<f32>(normal.y * direction.y + normal.x * direction.x,
+        (normal.x * direction.y - normal.y * direction.x) * spectrum.vertical_scale);
+    var result = vec3<f32>(0.0);
+    for (var sample = -3; sample <= 3; sample = sample + 1) {
+        let shift = axis * (f32(sample) * spectrum.step);
+        let ray = shift + edge_face_displacement(field, field.sampling_position + shift);
+        let sample_uv = clamp(uv + ray / tex_size, vec2<f32>(0.0), vec2<f32>(1.0));
+        let weights = vec3<f32>(max(f32(sample), 0.0) / 6.0,
+            max(3.0 - abs(f32(sample)), 0.0) / 9.0,
+            max(-f32(sample), 0.0) / 6.0);
+        result += textureSampleLevel(input_texture, input_sampler, map_uv(map, sample_uv), 0.0).rgb * weights;
+    }
+    return result;
+}
+
 fn wcksrd_optics(
     local_position: vec2<f32>,
     half_size: vec2<f32>,
@@ -460,16 +560,9 @@ fn wcksrd_optics(
     return OpticalSample(interior, border, face_light);
 }
 
-// One wavelength's walk through the SAME continuous lens field: the
-// refractive index scales the ramp length (blue reaches closer to the
-// boundary limit — sample-from-center — than red), so the channels'
-// entire descending branches diverge across the rim band, painting the
-// reference's wide fringe pairs over the compressed re-image. On the
-// face every channel clamps to lens_scale 1 and the split self-cancels.
-// The zoom projection rides the same channel interior; the fold
-// re-image translates all wavelengths alike.
 fn channel_lens_displacement(
     sampling_position: vec2<f32>,
+    half_size: vec2<f32>,
     distance: f32,
     lens_refraction: f32,
     index_scale: f32,
@@ -499,6 +592,14 @@ fn channel_lens_displacement(
     let optical_position = sampling_position - zoom_anchor;
     var displacement = optical_position * (lens_scale - 1.0)
         * transmission_refraction;
+    let mode = fixed_or(get_float(130u), 0.0, GLASS_DIRECTIONAL_REFRACTION_OFF);
+    if mode > 0.5 && mode < 1.5 && loupe_mode <= 0.5 {
+        let normal = sampling_position / max(length(sampling_position), 0.001);
+        let reach = max(get_float(131u), 0.0) * max(get_float(99u), 1.0);
+        displacement = -normal * reach
+            * circular_displacement_profile(-distance, lens_refraction * index_scale)
+            * transmission_refraction;
+    }
     if optical_zoom > 1.0 && loupe_mode <= 0.5 {
         // The projection gate follows the 4th power of the interior — the
         // dome is thickest at its apex and sheds the zoom well before the
@@ -583,10 +684,12 @@ fn strain_display_to_local(
         + strain_normal * (dot(display_position, strain_normal) / strain_across);
 }
 
+
 fn primary_scene_distance(
     p_a: vec2<f32>,
     half_a: vec2<f32>,
     r_a: f32,
+    smoothing: f32,
     strain_axis: vec2<f32>,
     strain_along: f32,
     strain_across: f32,
@@ -597,6 +700,10 @@ fn primary_scene_distance(
         strain_along,
         strain_across,
     );
+    if smoothing > 0.0 {
+        return smoothed_capsule_distance(strained_p, half_a, smoothing) * min(strain_along, strain_across);
+    }
+
     let rounded_d = sd_round_rect(strained_p, half_a, r_a);
     let ellipse_d = sd_ellipse_approx(strained_p, half_a);
     return mix(rounded_d, ellipse_d, clamp(fixed_or(get_float(110u), 0.0, GLASS_ELLIPSE_BLEND_OFF), 0.0, 1.0))
@@ -607,9 +714,8 @@ fn primary_scene_distance(
 // scene shape, with a low-frequency angular wobble that makes mid-flight
 // shapes bubble like liquid. Wobble perturbs the distance field itself so
 // coverage, normals and the lens all follow it.
-fn scene_sdf(
-    coord: vec2<f32>,
-    p_a: vec2<f32>,
+struct GlassScene {
+    center: vec2<f32>,
     half_a: vec2<f32>,
     r_a: f32,
     shape_count: u32,
@@ -623,7 +729,24 @@ fn scene_sdf(
     strain_axis: vec2<f32>,
     strain_along: f32,
     strain_across: f32,
-) -> f32 {
+}
+
+fn scene_sdf(scene: GlassScene, p_a: vec2<f32>) -> f32 {
+    let coord = scene.center + p_a;
+    let half_a = scene.half_a;
+    let r_a = scene.r_a;
+    let shape_count = scene.shape_count;
+    let dp_scale = scene.dp_scale;
+    let s = scene.s;
+    let glue = scene.glue;
+    let wobble_amp = scene.wobble_amp;
+    let wobble_phase = scene.wobble_phase;
+    let bulge_amp = scene.bulge_amp;
+    let bulge_dir = scene.bulge_dir;
+    let strain_axis = scene.strain_axis;
+    let strain_along = scene.strain_along;
+    let strain_across = scene.strain_across;
+
     // The inverse affine transform gives the exact deformed zero contour.
     // Scaling the returned distance by its smaller singular value keeps the
     // antialias/refraction bands conservative under strong strain.
@@ -631,6 +754,7 @@ fn scene_sdf(
         p_a,
         half_a,
         r_a,
+        get_float(146u) * s,
         strain_axis,
         strain_along,
         strain_across,
@@ -691,11 +815,84 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     return glass_fs(input) * composite_coverage(input.uv) * get_float(254u);
 }
 
+fn holding_tone(distance: f32) -> f32 {
+    let attenuation = get_float(142u);
+    let extent = get_vec2(143u) * max(get_float(99u), 1.0);
+    var holding = 1.0;
+    if extent.y > extent.x {
+        holding = smoothstep(extent.x, extent.y, -distance);
+    }
+    return 1.0 - attenuation * holding;
+}
+
+fn normal_cdf(value: f32) -> f32 {
+    let x = abs(value);
+    let t = 1.0 / (1.0 + 0.2316419 * x);
+    let tail = 0.39894228 * exp(-0.5 * x * x) * t
+        * (0.31938153 + t * (-0.35656378 + t * (1.7814779 + t * (-1.821256 + t * 1.3302745))));
+    return select(tail, 1.0 - tail, value >= 0.0);
+}
+
+fn inset_shadow(scene: GlassScene, position: vec2<f32>, scale: f32, color: vec3<f32>) -> vec3<f32> {
+    if get_float(163u) <= 0.0 || get_float(159u) <= 0.0 {
+        return color;
+    }
+    let distance = scene_sdf(scene, position - vec2<f32>(0.0, get_float(161u) * scale))
+        + get_float(162u) * scale;
+    let radius = get_float(160u) * scale;
+    let alpha = get_float(159u) * normal_cdf(distance / max(radius, 0.001));
+    return mix(color, get_vec4(156u).rgb, alpha);
+}
+
+fn backdrop_tone_curve(brightness: f32, foreground: f32) -> vec4<f32> {
+    let half_brightness = unpack2x16float(pack2x16float(vec2<f32>(clamp(brightness, 0.0, 1.0), 0.0))).x;
+    let t = min(floor(32.0 * half_brightness + 0.25), 31.0) / 31.0;
+    let dark = (foreground > 0.5 && t < 0.9) || t < 0.25;
+    let black = max(0.1, t - 0.15);
+    let white = min(t + 0.45, select(1.03, 0.9, dark));
+    let fill = select(clamp(0.75 - 0.5 * t, 0.25, 0.6), clamp(0.25 + t / 2.8, 0.25, 0.5), dark);
+    if get_float(170u) > 0.0 {
+        let amount = get_float(171u);
+        let tint = 0.4 * min(amount, 0.5) + 0.6 * max(amount - 0.5, 0.0);
+        return vec4<f32>((white - black) * (1.0 - tint), black * (1.0 - tint) + select(tint, 0.0, dark), 1.2 * (white - black) * (1.0 - tint), select(0.0, 1.0, dark));
+    }
+    return vec4<f32>((white - black) * (1.0 - fill), black * (1.0 - fill) + select(fill, 0.0, dark), 1.0 - fill, select(0.0, 1.0, dark));
+}
+
+fn apply_backdrop_tone(color: vec3<f32>, curve: vec4<f32>) -> vec3<f32> {
+    let luma = dot(color, vec3<f32>(0.2126, 0.7152, 0.0722));
+    return (color - vec3<f32>(luma)) * curve.z + vec3<f32>(luma * curve.x + curve.y);
+}
+
+fn adaptive_key_fill_color(color: vec3<f32>, curve: vec4<f32>) -> vec3<f32> {
+    let luma = dot(color, vec3<f32>(0.2126, 0.7152, 0.0722));
+    let response = select(vec3<f32>(1.5, 0.1, 0.9), vec3<f32>(3.0, 1.35, 0.15), curve.w > 0.5);
+    return clamp((color - vec3<f32>(luma)) * response.x + vec3<f32>(luma * response.y + response.z), vec3<f32>(0.0), vec3<f32>(1.0));
+}
+
+fn adaptive_backdrop_tone_curve() -> vec4<f32> {
+    let has_frost = fixed_or(get_float(91u), 0.0, GLASS_ADAPTIVE_FROST_OFF) > 0.0;
+    let region = u[select(58u, 57u, has_frost)];
+    let mean = textureLoad(input_texture, vec2<i32>(region.xy), 0);
+    let luma = dot(mean.rgb, vec3<f32>(0.2126, 0.7152, 0.0722)) / max(mean.a, 0.001);
+    return backdrop_tone_curve(luma, get_float(97u));
+}
+
+fn transmission_tone(color: vec3<f32>, saturation: f32, contrast: f32, lift: f32, curve: vec4<f32>) -> vec3<f32> {
+    if get_float(166u) > 0.5 {
+        return apply_backdrop_tone(color, curve);
+    }
+    return apply_tone_and_lift(color, saturation, contrast, lift);
+}
+
 fn glass_fs(input: VertexOutput) -> vec4<f32> {
-    let uv = input.uv;
-    let map = region_map();
+    var uv = input.uv;
+    var map = region_map();
     let tex_size = logical_extent();
     let material_activity = clamp(get_float(111u), 0.0, 1.0);
+    let optical_stage = get_float(147u);
+    let intermediate_stage = optical_stage == 1.0 || optical_stage == 2.0;
+    let separate_content = get_float(174u) > 0.5;
 
     // Effect layer pixel rect injected by the renderer at uniform slot 62
     // (x_offset, y_offset, width, height) in viewport pixels.
@@ -728,7 +925,6 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
     let edge_extent = WCKSRD_EDGE_EXTENT_DP * optical_scale;
 
     // Fragment position in effect-local pixel coordinates
-    let coord = uv * tex_size - effect_rect.xy;
 
     var center: vec2<f32>;
     var rect_size: vec2<f32>;
@@ -739,6 +935,13 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
         center = get_vec2(2u) * dp_scale;
         rect_size = get_vec2(4u) * dp_scale;
     }
+    let projection = fixed_or_vec2(get_vec2(168u), vec2<f32>(1.0), GLASS_PROJECTION_OFF);
+    if all(projection > vec2<f32>(0.0)) && any(projection != vec2<f32>(1.0)) {
+        map.anchor = (center + effect_rect.xy) / tex_size;
+        map.projection = projection;
+        uv = map.anchor + (uv - map.anchor) / projection;
+    }
+    let coord = uv * tex_size - effect_rect.xy;
     var corner_radius = get_float(6u) * s;
     if corner_radius < 0.0 {
         // Capsule sentinel: the radius follows the smaller half-extent.
@@ -780,20 +983,24 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
 
     // SDF distance from combined scene (negative = inside)
     let p = coord - center;
-    let d = scene_sdf(
-        coord, p, half_size, corner_radius,
-        shape_count, dp_scale, s, glue, wobble_amp, wobble_phase, bulge_amp, bulge_dir,
-        strain_axis, strain_along, strain_across,
-    );
+    let scene = GlassScene(center, half_size, corner_radius, shape_count, dp_scale, s,
+        glue, wobble_amp, wobble_phase, bulge_amp, bulge_dir, strain_axis, strain_along, strain_across);
+    let d = scene_sdf(scene, p);
+    let key_fill_height = get_float(135u) * select(max(get_float(99u), 1.0), optical_scale, get_float(141u) > 0.5);
+    let key_fill = key_fill_height > 0.0;
+    let dome_light = select(1.0, 0.0, key_fill);
 
     // wcKSRD's `smoothstep(0, 1, rb1)` is the material's coverage transition.
     // Premultiplied compositing against the untouched backdrop is equivalent
     // to the reference shader's final `mix(backdrop, lighting, transition)`.
-    if GLASS_RIM_DRAW != 1 && GLASS_SHADOW_OFF && d >= max(gradient_extent, 0.0) {
+    if !intermediate_stage && GLASS_RIM_DRAW != 1 && GLASS_SHADOW_OFF && d >= max(gradient_extent, 0.0) {
         return vec4<f32>(0.0);
     }
     let inradius = max(min(half_size.x, half_size.y), 1.0);
-    let physical_refraction_depth = max(get_float(98u), 0.0) * optical_scale;
+    let refraction_mode = fixed_or(get_float(130u), 0.0, GLASS_DIRECTIONAL_REFRACTION_OFF);
+    let surface_refraction = refraction_mode > 0.5 && refraction_mode < 1.5;
+    let physical_refraction_scale = select(optical_scale, max(get_float(99u), 1.0), surface_refraction);
+    let physical_refraction_depth = max(get_float(98u), 0.0) * physical_refraction_scale;
     let lens_refraction = max(
         select(
             inradius * refraction_depth,
@@ -830,11 +1037,12 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
     let coverage_ramp = floored_band_width(
         mix(rest_feather, lens_refraction / 32.0, material_activity),
     );
-    let coverage = select(
+    let dome_coverage = select(
         smoothstep(0.0, 1.0, clamp(-d / coverage_ramp, 0.0, 1.0)),
         1.0,
-        GLASS_RIM_DRAW == 1 && material_activity >= 1.0,
+        (GLASS_RIM_DRAW == 1 || get_float(134u) > 0.5) && material_activity >= 1.0,
     );
+    let coverage = select(dome_coverage, clamp(0.5 - d, 0.0, 1.0), key_fill);
     let optical_coverage = smoothstep(
         0.0,
         1.0,
@@ -844,13 +1052,13 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
             1.0,
         ),
     );
-    let outer_coverage = optical_coverage * (1.0 - coverage);
-    let surface_coverage = max(coverage, optical_coverage);
+    let outer_coverage = select(optical_coverage * (1.0 - coverage), 0.0, key_fill);
+    let surface_coverage = select(max(coverage, optical_coverage), coverage, key_fill);
     // A morphing glass node uses this same scene SDF as the alpha mask for
     // its foreground content. Keeping the mask in this shader guarantees
     // that blurred children and the refracted backdrop share one silhouette.
     if fixed_or(get_float(112u), 0.0, GLASS_CONTENT_MASK_OFF) > 0.5 {
-        return textureSample(input_texture, input_sampler, map_uv(map, input.uv))
+        return textureSample(input_texture, input_sampler, map_uv(map, uv))
             * coverage
             * material_activity;
     }
@@ -865,41 +1073,30 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
         + vec4<f32>(resting_tint.rgb * resting_tint.a, resting_tint.a);
     let resting_output = resting_frost * resting_weight;
     if material_activity <= 0.0 {
-        return resting_output;
+        return select(resting_output, plain_path, intermediate_stage);
     }
     let shadow_strength = clamp(fixed_or(get_float(102u), 0.0, GLASS_SHADOW_OFF), 0.0, 1.0);
     var shadow_alpha = 0.0;
     if shadow_strength > 0.0 {
         let shadow_offset = vec2<f32>(0.0, get_float(104u) * s);
-        let shadow_coord = coord - shadow_offset;
         let shadow_p = p - shadow_offset;
-        let shadow_d = scene_sdf(
-            shadow_coord, shadow_p, half_size, corner_radius,
-            shape_count, dp_scale, s, glue, wobble_amp, wobble_phase, bulge_amp, bulge_dir,
-            strain_axis, strain_along, strain_across,
-        ) - get_float(105u) * s;
+        let shadow_d = scene_sdf(scene, shadow_p) - get_float(105u) * s;
         let shadow_blur = max(get_float(103u) * s, 1.0);
         shadow_alpha = (1.0 - smoothstep(-0.75, shadow_blur, shadow_d)) * shadow_strength;
     }
-    if surface_coverage <= 0.0 {
+    if !intermediate_stage && surface_coverage <= 0.0 {
         return vec4<f32>(0.0, 0.0, 0.0, shadow_alpha);
     }
 
     // Outward SDF normal (gradient) — the lens axis at this fragment. Deep in
     // the interior every term it feeds carries a zero band weight.
+    let edge_lens = refraction_mode >= 1.5;
+    let edge_reach = max(get_float(131u), 0.0) * optical_scale;
     var outward_normal = vec2<f32>(0.0);
-    if (in_rim) {
+    if in_rim || (refraction_mode > 0.5 && -d < lens_refraction * 1.44) {
         let eps = 0.5;
-        let d_dx = scene_sdf(
-            coord + vec2<f32>(eps, 0.0), p + vec2<f32>(eps, 0.0), half_size, corner_radius,
-            shape_count, dp_scale, s, glue, wobble_amp, wobble_phase, bulge_amp, bulge_dir,
-            strain_axis, strain_along, strain_across,
-        );
-        let d_dy = scene_sdf(
-            coord + vec2<f32>(0.0, eps), p + vec2<f32>(0.0, eps), half_size, corner_radius,
-            shape_count, dp_scale, s, glue, wobble_amp, wobble_phase, bulge_amp, bulge_dir,
-            strain_axis, strain_along, strain_across,
-        );
+        let d_dx = scene_sdf(scene, p + vec2<f32>(eps, 0.0));
+        let d_dy = scene_sdf(scene, p + vec2<f32>(0.0, eps));
         let grad = vec2<f32>(d_dx - d, d_dy - d) / eps;
         let grad_len = length(grad);
         outward_normal = select(vec2<f32>(0.0), grad / grad_len, grad_len > 0.001);
@@ -926,7 +1123,7 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
     // wcKSRD is authored with both the rounded box and optical origin at the
     // viewport midpoint. Components move that box, so translate the optical
     // origin with its live SDF center instead of refracting toward the screen.
-    let sampling_position = p;
+    let sampling_position = select(p, outward_normal * inradius, surface_refraction);
     // Interactive lenses draw the reference's crisp ~1px rim line; surface
     // glass keeps its finer band. The loupe keeps the tight border — its
     // rim hugs bright content (selection accent, the handle dot) and the
@@ -934,6 +1131,9 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
     var edge_sharpness = mix(16.0, 8.0, rim_style);
     if loupe_mode > 0.5 {
         edge_sharpness = 16.0;
+    }
+    if edge_lens {
+        edge_sharpness = 24.0;
     }
     let optical_sample = wcksrd_optics(
         p,
@@ -1027,8 +1227,9 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
             fold_absorb = smoothstep(0.62, 1.0, fold_tau) * 0.35;
         }
     }
-    let base_displacement = channel_lens_displacement(
+    var base_displacement = channel_lens_displacement(
         sampling_position,
+        half_size,
         d,
         lens_refraction,
         1.0,
@@ -1044,6 +1245,41 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
 
     // wcKSRD owns source mapping and backdrop blur.
     let wcksrd_blur_radius = max(max(fixed_or(get_float(93u), 0.0, GLASS_OPTICAL_BLUR_OFF), 0.0), loupe_rim_softening);
+    let transmission_field = EdgeLensRay(scene, sampling_position, half_size, d, lens_refraction, transmission_refraction, optical_zoom, zoom_anchor, outward_normal, edge_reach);
+    if intermediate_stage {
+        var displacement = edge_outer_displacement(transmission_field, sampling_position);
+        if optical_stage == 2.0 {
+            let return_depth = select(lens_refraction * (7.0 / 36.0), get_float(164u) * optical_scale, get_float(165u) > 0.5);
+            displacement = scene_normal(scene, sampling_position) * (-edge_reach * (17.5 / 9.0))
+                * circular_displacement_profile(-d, return_depth);
+        }
+        let source_uv = clamp(uv + displacement * transmission_refraction / tex_size, vec2<f32>(0.0), vec2<f32>(1.0));
+        var source = textureSampleLevel(input_texture, input_sampler, map_uv(map, source_uv), 0.0);
+        if optical_stage == 2.0 && get_float(172u) > 0.0 {
+            let region = u[58];
+            let dims = vec2<f32>(textureDimensions(input_texture));
+            let blurred_map = RegionMap(region.xy / dims, region.zw / dims, 0.5 / max(region.zw, vec2<f32>(1.0)), map.projection, map.anchor);
+            let blurred = textureSampleLevel(input_texture, input_sampler, map_uv(blurred_map, source_uv), 0.0);
+            source = mix(source, blurred, clamp(get_float(173u), 0.0, 1.0));
+        }
+        let original = textureSampleLevel(input_texture, input_sampler, map_uv(map, uv), 0.0);
+        let gain = select(1.0, holding_tone(d), optical_stage == 2.0);
+        var face = source.rgb * gain;
+        if separate_content && optical_stage == 2.0 {
+            var curve = vec4<f32>(1.0, 0.0, 1.0, 0.0);
+            if get_float(166u) > 0.5 {
+                curve = adaptive_backdrop_tone_curve();
+            }
+            face = transmission_tone(face, saturation, contrast, lift * smoothstep(0.35, 1.0, interior), curve);
+            face = mix(face, tint_color.rgb, tint_color.a);
+        }
+        return mix(original, vec4<f32>(face, source.a), clamp(0.5 - d, 0.0, 1.0));
+    }
+    if edge_lens {
+        base_displacement = edge_face_displacement(transmission_field, sampling_position);
+    }
+    let spectrum = edge_spectrum(lens_refraction, 13.132 * dispersion_strength * optical_scale, optical_scale);
+    let spectral_opacity = spectral_presence(spectrum, d);
     let transmitted_path = sample_wcksrd_path(
         map,
         uv,
@@ -1052,11 +1288,30 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
         wcksrd_blur_radius,
         loupe_mode > 0.5,
     );
-    var rgb = transmitted_path.rgb;
+    var pane_path = transmitted_path.rgb;
+    if get_float(170u) > 0.0 {
+        let has_frost = fixed_or(get_float(91u), 0.0, GLASS_ADAPTIVE_FROST_OFF) > 0.0;
+        let region = u[58u - u32(has_frost) - u32(get_float(166u) > 0.5)];
+        let dims = vec2<f32>(textureDimensions(input_texture));
+        let blurred_map = RegionMap(region.xy / dims, region.zw / dims, 0.5 / max(region.zw, vec2<f32>(1.0)), map.projection, map.anchor);
+        let blurred = sample_wcksrd_path(blurred_map, uv, tex_size,
+            achromatic_displacement + base_displacement, 0.0, false).rgb;
+        let amount = get_float(171u);
+        let normal = mix(pane_path, blurred, amount);
+        let dark = get_float(97u) > 0.5;
+        let fill = select(max(normal, blurred), min(normal, blurred), dark);
+        pane_path = mix(normal, fill, min(0.675 + 0.45 * amount, 0.9));
+    }
+    var rgb = inset_shadow(scene, sampling_position, optical_scale, pane_path);
+    if edge_lens && spectrum.step != 0.0 && spectral_opacity > 0.0 {
+        let dispersed = sample_chromatic_edge_lens(map, uv, tex_size, transmission_field,
+            spectrum);
+        rgb = mix(rgb, dispersed, spectral_opacity);
+    }
     let index_spread = dispersion_strength * 0.22;
     let coincident_rays = GLASS_RIM_DRAW == 1
         && -d / max(lens_refraction * (1.0 + index_spread), 0.001) >= 1.0;
-    if dispersion_strength > 0.0 && !coincident_rays {
+    if !edge_lens && dispersion_strength > 0.0 && !coincident_rays {
         // Chromatic transmission as ONE continuous ray model: each channel
         // walks the SAME lens field at its own refractive index (blue bends
         // more than red, as in real glass). The index scales the ramp
@@ -1074,6 +1329,7 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
             tex_size,
             achromatic_displacement + channel_lens_displacement(
                 sampling_position,
+                half_size,
                 d,
                 lens_refraction,
                 1.0 - index_spread,
@@ -1095,6 +1351,7 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
             tex_size,
             achromatic_displacement + channel_lens_displacement(
                 sampling_position,
+                half_size,
                 d,
                 lens_refraction,
                 1.0 + index_spread,
@@ -1136,7 +1393,8 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
         let foreground_luma = clamp(get_float(97u), 0.0, 1.0);
         let ink_departure = abs(transmitted_luma - foreground_luma);
         let ink_mask = 1.0 - smoothstep(0.18, 0.50, ink_departure);
-        rgb = mix(rgb, ink_color, ink_mask * ink_recolor_strength);
+        let face_ink = select(1.0, smoothstep(0.90, 1.0, interior), edge_lens);
+        rgb = mix(rgb, ink_color, ink_mask * ink_recolor_strength * face_ink);
     }
     var outer_rgb = plain_path.rgb;
     var alpha = transmitted_path.a;
@@ -1188,14 +1446,14 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
         * (1.0 - lens_edge_incidence)
         * meniscus_transmission_axis
         * meniscus_absorption
-        * 0.72;
+        * 0.72 * dome_light;
     rgb = rgb * (1.0 - meniscus_transmission_loss);
 
     // The meniscus returns the ray from the opposite wall of the same glass
     // body. This is the mirrored image visible along the target's long edges;
     // its weight is the wcKSRD gradient band, not a painted bevel mask.
     var reflection_rgb = vec3<f32>(0.0);
-    if (in_rim) {
+    if in_rim && !key_fill {
         let reflection_displacement = opposite_side_reflection_displacement(
             p,
             outward_normal,
@@ -1203,7 +1461,7 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
             corner_radius,
         );
         let reflection_tangent = vec2<f32>(-outward_normal.y, outward_normal.x);
-        let reflection_path = sample_wcksrd_reflection_path(
+        let reflection_path = sample_tangent_path(
             map,
             uv,
             tex_size,
@@ -1229,14 +1487,14 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
             * 0.24,
         0.0,
         0.24,
-    ) * select(1.0, 0.0, loupe_mode > 0.5);
+    ) * select(1.0, 0.0, loupe_mode > 0.5) * dome_light;
     let bevel_reflection = clamp(
         bevel_meniscus
             * long_edge_return
             * mix(0.035, 0.065, rim_style),
         0.0,
         0.08,
-    ) * select(1.0, 0.0, loupe_mode > 0.5);
+    ) * select(1.0, 0.0, loupe_mode > 0.5) * dome_light;
     // Rim reflectivity (uniform 121, 0 = unset -> full): the toggle's
     // reference rim draws this line, the segmented lens body is invisible.
     var rim_reflectivity = get_float(121u);
@@ -1261,7 +1519,7 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
         * lens_edge_incidence
         * highlight
         * rim_style
-        * 0.24;
+        * 0.24 * dome_light;
     rgb = rgb + vec3<f32>(long_edge_specular);
     outer_rgb = outer_rgb + vec3<f32>(long_edge_specular);
     alpha = max(alpha, long_edge_specular);
@@ -1282,7 +1540,7 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
             * mix(1.0, long_edge_caustic, rim_style),
         0.0,
         1.0,
-    );
+    ) * dome_light;
     rgb = rgb + vec3<f32>(wcksrd_edge_light);
     outer_rgb = outer_rgb + vec3<f32>(wcksrd_edge_light);
     alpha = max(alpha, wcksrd_edge_light);
@@ -1291,7 +1549,7 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
     // additive face light read as a milky film there. Every other lighting
     // term is already gated off in loupe mode; this one leaked through.
     let wcksrd_face_light = clamp(optical_sample.face_light * highlight, 0.0, 0.35)
-        * select(1.0, 0.0, loupe_mode > 0.5);
+        * select(1.0, 0.0, loupe_mode > 0.5 || get_float(132u) > 0.5) * dome_light;
     rgb = rgb + vec3<f32>(wcksrd_face_light);
     alpha = max(alpha, wcksrd_face_light);
     // The BEVEL (measured on the on-white reference discs): a directional
@@ -1346,7 +1604,7 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
     // mirrored-text band and fuses with glyph strokes into white blobs
     // over dark backdrops (live report).
     let bevel_light = clamp(bevel_source_arc + bevel_return_glow, 0.0, 0.60)
-        * select(1.0, 0.0, loupe_mode > 0.5);
+        * select(1.0, 0.0, loupe_mode > 0.5) * dome_light;
     alpha = max(alpha, bevel_light);
     // Tone pipeline: vibrancy first, then a gentle contrast pivot, then the
     // scheme lift. The lift is a SCREEN blend toward white (or a multiply
@@ -1361,18 +1619,26 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
     // Interactive lenses frost their face without bleaching the meniscus:
     // the target toggle keeps saturated green/cyan at the outer rise while
     // its recessed chamber approaches white. Surface glass uses uniform lift.
-    let face_lift = mix(
-        lift,
-        lift * mix(0.18, 1.0, interior),
-        rim_style,
+    let face_lift = select(
+        mix(lift, lift * mix(0.18, 1.0, interior), rim_style),
+        lift * smoothstep(0.35, 1.0, interior),
+        edge_lens,
     );
-    rgb = apply_tone_and_lift(rgb, saturation, contrast, face_lift);
-    outer_rgb = apply_tone_and_lift(outer_rgb, saturation, contrast, lift * 0.18);
+    var adaptive_curve = vec4<f32>(1.0, 0.0, 1.0, 0.0);
+    if get_float(166u) > 0.5 {
+        adaptive_curve = adaptive_backdrop_tone_curve();
+    }
+    if !separate_content {
+        rgb = transmission_tone(rgb, saturation, contrast, face_lift, adaptive_curve);
+        outer_rgb = transmission_tone(outer_rgb, saturation, contrast, lift * 0.18, adaptive_curve);
+    }
 
     // The wcKSRD interior ramp keeps an interactive lens clearer at its edge;
     // surface glass retains a uniform tint across its body.
-    let optical_tint_alpha = tint_color.a * mix(1.0, interior, rim_style);
-    rgb = mix(rgb, tint_color.rgb, optical_tint_alpha);
+    let optical_tint_alpha = tint_color.a * select(mix(1.0, interior, rim_style), 1.0, edge_lens);
+    if !separate_content {
+        rgb = mix(rgb, tint_color.rgb, optical_tint_alpha);
+    }
     // The bevel's specular return, on the outermost surface of the glass.
     rgb = rgb + (vec3<f32>(1.0) - rgb) * bevel_light;
 
@@ -1383,8 +1649,10 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
     // backdrops stay safe.
     let touch_strength = clamp(fixed_or(get_float(120u), 0.0, GLASS_TOUCH_OFF), 0.0, 1.0);
     if touch_strength > 0.0 {
-        let touch_px = vec2<f32>(get_float(118u), get_float(119u)) * dp_scale;
-        let touch_reach = 58.0 * optical_scale;
+        let touch_scale = select(dp_scale, vec2<f32>(optical_scale), cover_mode);
+        let touch_px = vec2<f32>(get_float(118u), get_float(119u)) * touch_scale;
+        let requested_touch_radius = get_float(133u);
+        let touch_reach = select(58.0, requested_touch_radius, requested_touch_radius > 0.0) * optical_scale;
         let touch_falloff =
             1.0 - smoothstep(0.0, touch_reach, distance(coord, touch_px));
         let glow = touch_falloff * touch_falloff * touch_strength * coverage;
@@ -1415,6 +1683,9 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
             contrast,
             face_lift,
         );
+        if get_float(166u) > 0.5 {
+            adaptive_rgb = apply_backdrop_tone(adaptive_sample.rgb, adaptive_curve);
+        }
         adaptive_rgb = mix(adaptive_rgb, tint_color.rgb, optical_tint_alpha);
         let adaptive_luma = dot(adaptive_rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
         let separation = abs(adaptive_luma - foreground_luma);
@@ -1425,18 +1696,43 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
         rgb = clamp(rgb + vec3<f32>(correction), vec3<f32>(0.0), vec3<f32>(1.0));
     }
 
+    if optical_stage != 3.0 {
+        rgb *= holding_tone(d);
+    }
+
+    var key_fill_output = vec4<f32>(0.0);
+    if key_fill {
+        let angle = get_float(137u);
+        let light_direction = vec2<f32>(cos(angle), sin(angle));
+        let height = select(0.0, clamp(1.0 + get_float(136u) * d / key_fill_height, 0.0, 1.0), -d < key_fill_height);
+        let light = height * abs(dot(outward_normal, light_direction))
+            * clamp(highlight, 0.0, 1.0);
+        let under = mix(plain_path.rgb, rgb, coverage);
+        let luma = dot(under, vec3<f32>(0.2126, 0.7152, 0.0722));
+        var reflected = clamp((under - vec3<f32>(luma)) * get_float(138u)
+            + vec3<f32>(luma * get_float(139u) + get_float(140u)), vec3<f32>(0.0), vec3<f32>(1.0));
+        if get_float(166u) > 0.5 {
+            reflected = adaptive_key_fill_color(under, adaptive_curve);
+        }
+        let light_alpha = light * coverage;
+        key_fill_output = vec4<f32>(rgb, alpha) * coverage * (1.0 - light_alpha)
+            + vec4<f32>(reflected * light_alpha, light_alpha);
+    }
+
     // Ordered-noise dither hides banding in the blurred gradients behind the
     // glass (±0.5/255 at dither_amount = 1).
     let dither = (hash12(coord) - 0.5) * (dither_amount / 255.0);
     rgb = rgb + vec3<f32>(dither);
     outer_rgb = outer_rgb + vec3<f32>(dither);
+    key_fill_output += vec4<f32>(vec3<f32>(dither) * key_fill_output.a, 0.0);
 
     // Premultiplied glass plus the shape-derived contact shadow. The shadow is
     // suppressed under the glass itself and therefore cannot darken its face.
     let shadow_out = shadow_alpha * (1.0 - surface_coverage);
     let face_output = vec4<f32>(rgb, alpha) * coverage;
     let outer_output = vec4<f32>(outer_rgb, plain_path.a) * outer_coverage;
-    return (face_output + outer_output) * material_activity
+    let illumination = select(0.0, get_float(145u), d <= 0.0);
+    return (select(face_output + outer_output, key_fill_output, key_fill) + vec4<f32>(vec3<f32>(illumination), 0.0)) * material_activity
         + resting_output
         + vec4<f32>(0.0, 0.0, 0.0, shadow_out);
 }

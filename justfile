@@ -68,7 +68,7 @@ clippy-wasm:
 
 # Lint the iOS simulator binary.
 clippy-ios:
-    cargo clippy -p desktop-app --bin cranpose-ios --target aarch64-apple-ios-sim --no-default-features --features ios -- -D warnings
+    cargo clippy -p desktop-app --bin cranpose-ios --bin cranpose-liquid-reference --target aarch64-apple-ios-sim --no-default-features --features ios -- -D warnings
 
 # Lint the desktop-only backends that ship off by default: the macOS camera
 # capture path, the cpal audio output device, the in-process media backend
@@ -403,6 +403,55 @@ ios-device:
 ios-run:
     apps/ios-demo/ios/run-sim.sh
 
+liquid-reference-build destination="generic/platform=iOS Simulator":
+    xcodebuild -project apps/liquid-reference/LiquidReference.xcodeproj -scheme LiquidReference -configuration Release -destination '{{destination}}' -derivedDataPath target/liquid-reference build
+
+liquid-reference-test destination results suite="TabBarTests":
+    xcodebuild -project apps/liquid-reference/LiquidReference.xcodeproj -scheme LiquidReference -configuration Release -destination '{{destination}}' -derivedDataPath target/liquid-reference -resultBundlePath '{{results}}' -parallel-testing-enabled NO -only-testing:LiquidReferenceTests/{{suite}} test
+
+liquid-reference-optical-capture device output:
+    python3 apps/liquid-reference/capture-optical-probes.py '{{device}}' '{{output}}'
+
+liquid-reference-optical-analyze capture output python="python3":
+    '{{python}}' apps/liquid-reference/analyze-optical-probes.py '{{capture}}' '{{output}}'
+
+liquid-cranpose-build target="aarch64-apple-ios-sim":
+    bash apps/liquid-reference/build-cranpose.sh '{{target}}'
+
+liquid-reference-keyframes results output traces suite="TabBarTests":
+    python3 apps/liquid-reference/extract-keyframes.py '{{results}}' '{{output}}' --suite '{{suite}}' --traces '{{traces}}'
+
+liquid-reference-compare native cranpose output:
+    python3 apps/liquid-reference/compare.py '{{native}}' '{{cranpose}}' '{{output}}'
+
+test-liquid-reference-tools:
+    python3 -m unittest discover -s apps/liquid-reference -p 'test_*.py'
+
+liquid-reference-pixel-audit comparison output python="python3":
+    '{{python}}' apps/liquid-reference/pixel-audit.py '{{comparison}}' '{{output}}'
+
+test-liquid filter="":
+    cargo test --profile ci -p cranpose-liquid '{{filter}}'
+
+# Validate Liquid Glass uniforms, specialization and WGSL.
+test-liquid-graphics:
+    cargo test --profile ci -p cranpose-ui-graphics
+
+test-liquid-vibrancy filter="":
+    cargo test --profile ci -p cranpose-render-wgpu --test glass_vibrancy '{{filter}}' -- --test-threads=1
+
+audit-liquid-native-parity:
+    cargo test --profile ci -p cranpose-render-wgpu --test glass_vibrancy -- --ignored --test-threads=1
+
+test-liquid-surface filter="":
+    cargo test --profile ci -p cranpose-render-wgpu --test glass_surface_refraction '{{filter}}' -- --test-threads=1
+
+test-render-composition:
+    cargo test --profile ci -p cranpose-render-wgpu --test effect_semantics --test backdrop_atlas_parity -- --test-threads=1
+
+test-substrates filter="":
+    cargo test --profile ci -p cranpose-render-wgpu --test substrate_reference '{{filter}}' -- --test-threads=1
+
 # --- robot end-to-end ------------------------------------------------------
 
 # The full robot suite, as documented for local runs.
@@ -414,8 +463,8 @@ robot-build: _disk-guard
     ./run_robot_test.sh --build-only
 
 # One robot example by name.
-robot-one example:
-    ./run_robot_test.sh --sequential --example {{example}}
+robot-one example *args:
+    ./run_robot_test.sh --sequential --example {{example}} {{args}}
 
 robot-android-surface serial output:
     python3 scripts/android_surface_robot.py --serial {{quote(serial)}} --output {{quote(output)}}
@@ -546,3 +595,21 @@ ci: fmt-check typos versions test clippy clippy-optional-backends clippy-svg cli
 
 # Every gate, including the platform builds and the robot suite.
 ci-full: ci clippy-ios clippy-android web android robot
+
+liquid-reference-traces output bundle="io.cranpose.liquid-reference" device="booted":
+    python3 apps/liquid-reference/collect-traces.py '{{output}}' --bundle '{{bundle}}' --device '{{device}}'
+
+liquid-reference-bundle native cranpose output:
+    python3 apps/liquid-reference/compare.py '{{native}}' '{{cranpose}}' '{{output}}' --app-resources apps/liquid-reference/LiquidReference/CapturedFrames
+
+liquid-reference-device-traces device output bundle="io.cranpose.liquid-reference":
+    python3 apps/liquid-reference/collect-traces.py '{{output}}' --bundle '{{bundle}}' --device '{{device}}' --physical
+
+liquid-reference-device-build device team:
+    xcodebuild -project apps/liquid-reference/LiquidReference.xcodeproj -scheme LiquidReference -configuration Release -destination 'platform=iOS,id={{device}}' -derivedDataPath target/liquid-reference-device -allowProvisioningUpdates DEVELOPMENT_TEAM='{{team}}' build-for-testing
+
+liquid-reference-device-test device team results suite:
+    xcodebuild -project apps/liquid-reference/LiquidReference.xcodeproj -scheme LiquidReference -configuration Release -destination 'platform=iOS,id={{device}}' -derivedDataPath target/liquid-reference-device -resultBundlePath '{{results}}' -parallel-testing-enabled NO -allowProvisioningUpdates DEVELOPMENT_TEAM='{{team}}' -only-testing:LiquidReferenceTests/{{suite}} test
+
+liquid-reference-device-run device run results suite architecture="arm64":
+    xcodebuild -xctestrun '{{run}}' -destination 'platform=iOS,arch={{architecture}},id={{device}}' -resultBundlePath '{{results}}' -parallel-testing-enabled NO -only-testing:LiquidReferenceTests/{{suite}} test-without-building

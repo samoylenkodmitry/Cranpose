@@ -835,3 +835,60 @@ fn a_surviving_animation_keeps_its_state_when_a_same_statement_neighbor_leaves()
          own settled state, not adopt the vanished neighbor's and re-animate"
     );
 }
+
+#[test]
+fn exact_retarget_matches_a_frame_sampled_at_the_input_boundary() {
+    for motion in [
+        spring(0.85, 650.0),
+        spring(1.0, 300.0).with_delay(20),
+        tween(100, Easing::LinearEasing),
+    ] {
+        let control: Composition<MemoryApplier> = Composition::new(MemoryApplier::new());
+        let subject: Composition<MemoryApplier> = Composition::new(MemoryApplier::new());
+        let mut expected = Animatable::new(0.0f32, control.runtime_handle());
+        let mut actual = Animatable::new(0.0f32, subject.runtime_handle());
+        expected.animate_to_with_velocity_at(100.0, 0.0, motion, 0);
+        actual.animate_to_at(100.0, motion, 0);
+        for (boundary, target) in [(45_000_000, -80.0), (75_000_000, 120.0), (110_000_000, 0.0)] {
+            control.runtime_handle().drain_frame_callbacks(boundary);
+            let value = expected.state().get();
+            let velocity = expected.velocity();
+            expected.animate_to_with_velocity_at(target, velocity, motion, boundary);
+            actual.animate_to_at(target, motion, boundary);
+            assert!((actual.state().get() - value).abs() < 0.0001);
+            assert!((actual.velocity() - velocity).abs() < 0.0001);
+            for offset in [5_000_000, 10_000_000] {
+                control
+                    .runtime_handle()
+                    .drain_frame_callbacks(boundary + offset);
+                subject
+                    .runtime_handle()
+                    .drain_frame_callbacks(boundary + offset);
+                assert!((actual.state().get() - expected.state().get()).abs() < 0.0001);
+            }
+        }
+        control
+            .runtime_handle()
+            .drain_frame_callbacks(2_000_000_000);
+        subject
+            .runtime_handle()
+            .drain_frame_callbacks(2_000_000_000);
+        assert_eq!(actual.state().get(), 0.0);
+        assert_eq!(actual.state().get(), expected.state().get());
+        assert!(!actual.is_running());
+    }
+}
+
+#[test]
+fn exact_retarget_never_rewinds_an_already_sampled_animation() {
+    let composition: Composition<MemoryApplier> = Composition::new(MemoryApplier::new());
+    let runtime = composition.runtime_handle();
+    let mut animatable = Animatable::new(0.0f32, runtime.clone());
+    animatable.animate_to_at(100.0, tween(100, Easing::LinearEasing), 0);
+    runtime.drain_frame_callbacks(50_000_000);
+    assert_eq!(animatable.state().get(), 50.0);
+    animatable.animate_to_at(150.0, tween(100, Easing::LinearEasing), 25_000_000);
+    assert_eq!(animatable.state().get(), 50.0);
+    runtime.drain_frame_callbacks(75_000_000);
+    assert_eq!(animatable.state().get(), 75.0);
+}

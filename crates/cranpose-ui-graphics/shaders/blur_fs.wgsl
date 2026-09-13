@@ -106,6 +106,21 @@ fn blur_downsample_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     return sum / f32(fetches * fetches);
 }
 
+@fragment
+fn blur_mean_fs(input: VertexOutput) -> @location(0) vec4<f32> {
+    let source = source_region();
+    let horizontal = blur.direction_and_radius.x > 0.5;
+    let local = region_local(input);
+    let count = i32(select(source.w, source.z, horizontal));
+    let row = min(i32(local.y * source.w), i32(source.w) - 1);
+    var sum = vec4<f32>(0.0);
+    for (var index = 0; index < count; index += 1) {
+        let offset = select(vec2<i32>(0, index), vec2<i32>(index, row), horizontal);
+        sum += textureLoad(input_texture, vec2<i32>(source.xy) + offset, 0);
+    }
+    return sum / f32(max(count, 1));
+}
+
 // One axis of the separable kernel over a source whose texels are the
 // destination's pixels, or coarser: a step is one source texel, so a pass
 // reading the downscaled scratch back up to full size steps by the scratch

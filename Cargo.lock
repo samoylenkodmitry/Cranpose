@@ -1038,6 +1038,7 @@ dependencies = [
  "cranpose-ui-graphics",
  "cranpose-ui-layout",
  "log",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

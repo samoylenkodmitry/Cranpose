@@ -1,0 +1,28 @@
+{
+ archiveVersion = 1;
+ classes = {};
+ objectVersion = 77;
+ objects = {
+  A00000000000000000000001 = {isa = PBXProject; attributes = {BuildIndependentTargetsInParallel = YES; LastUpgradeCheck = 2660; TargetAttributes = {A00000000000000000000002 = {CreatedOnToolsVersion = 26.6;}; A00000000000000000000003 = {CreatedOnToolsVersion = 26.6; TestTargetID = A00000000000000000000002;};};}; buildConfigurationList = A00000000000000000000010; compatibilityVersion = "Xcode 16.0"; developmentRegion = en; knownRegions = (en, Base); mainGroup = A00000000000000000000004; productRefGroup = A00000000000000000000005; projectDirPath = ""; projectRoot = ""; targets = (A00000000000000000000002, A00000000000000000000003);};
+  A00000000000000000000002 = {isa = PBXNativeTarget; buildConfigurationList = A00000000000000000000011; buildPhases = (A00000000000000000000020, A00000000000000000000024); buildRules = (); dependencies = (); fileSystemSynchronizedGroups = (A00000000000000000000006); name = LiquidReference; productName = LiquidReference; productReference = A00000000000000000000008; productType = "com.apple.product-type.application";};
+  A00000000000000000000003 = {isa = PBXNativeTarget; buildConfigurationList = A00000000000000000000012; buildPhases = (A00000000000000000000021); buildRules = (); dependencies = (A00000000000000000000022); fileSystemSynchronizedGroups = (A00000000000000000000007); name = LiquidReferenceTests; productName = LiquidReferenceTests; productReference = A00000000000000000000009; productType = "com.apple.product-type.bundle.ui-testing";};
+  A00000000000000000000004 = {isa = PBXGroup; children = (A00000000000000000000006, A00000000000000000000007, A00000000000000000000005); sourceTree = "<group>";};
+  A00000000000000000000005 = {isa = PBXGroup; children = (A00000000000000000000008, A00000000000000000000009); name = Products; sourceTree = "<group>";};
+  A00000000000000000000006 = {isa = PBXFileSystemSynchronizedRootGroup; path = LiquidReference; sourceTree = "<group>";};
+  A00000000000000000000007 = {isa = PBXFileSystemSynchronizedRootGroup; path = LiquidReferenceTests; sourceTree = "<group>";};
+  A00000000000000000000008 = {isa = PBXFileReference; explicitFileType = wrapper.application; path = LiquidReference.app; sourceTree = BUILT_PRODUCTS_DIR;};
+  A00000000000000000000009 = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; path = LiquidReferenceTests.xctest; sourceTree = BUILT_PRODUCTS_DIR;};
+  A00000000000000000000010 = {isa = XCConfigurationList; buildConfigurations = (A00000000000000000000030); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release;};
+  A00000000000000000000011 = {isa = XCConfigurationList; buildConfigurations = (A00000000000000000000031); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release;};
+  A00000000000000000000012 = {isa = XCConfigurationList; buildConfigurations = (A00000000000000000000032); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release;};
+  A00000000000000000000020 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0;};
+  A00000000000000000000021 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0;};
+  A00000000000000000000022 = {isa = PBXTargetDependency; target = A00000000000000000000002; targetProxy = A00000000000000000000023;};
+  A00000000000000000000024 = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0;};
+  A00000000000000000000023 = {isa = PBXContainerItemProxy; containerPortal = A00000000000000000000001; proxyType = 1; remoteGlobalIDString = A00000000000000000000002; remoteInfo = LiquidReference;};
+  A00000000000000000000030 = {isa = XCBuildConfiguration; name = Release; buildSettings = {SDKROOT = iphoneos; IPHONEOS_DEPLOYMENT_TARGET = 26.0; SWIFT_VERSION = 6.0; SWIFT_STRICT_CONCURRENCY = complete; SWIFT_TREAT_WARNINGS_AS_ERRORS = YES; SWIFT_OPTIMIZATION_LEVEL = "-O"; DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym"; CLANG_ENABLE_MODULES = YES; COPY_PHASE_STRIP = NO;};};
+  A00000000000000000000031 = {isa = XCBuildConfiguration; name = Release; buildSettings = {PRODUCT_BUNDLE_IDENTIFIER = io.cranpose.liquid-reference; PRODUCT_NAME = "$(TARGET_NAME)"; GENERATE_INFOPLIST_FILE = YES; INFOPLIST_KEY_UILaunchScreen_Generation = YES; INFOPLIST_FILE = Info.plist; INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES; INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait; TARGETED_DEVICE_FAMILY = 1; CODE_SIGN_STYLE = Automatic;};};
+  A00000000000000000000032 = {isa = XCBuildConfiguration; name = Release; buildSettings = {PRODUCT_BUNDLE_IDENTIFIER = io.cranpose.liquid-reference.tests; CLANG_ENABLE_OBJC_ARC = YES; SWIFT_OBJC_BRIDGING_HEADER = "LiquidReferenceTests/ReferenceGesture.h"; PRODUCT_NAME = "$(TARGET_NAME)"; GENERATE_INFOPLIST_FILE = YES; TEST_TARGET_NAME = LiquidReference; TARGETED_DEVICE_FAMILY = 1; CODE_SIGN_STYLE = Automatic;};};
+ };
+ rootObject = A00000000000000000000001;
+}

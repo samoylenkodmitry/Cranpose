@@ -31,7 +31,7 @@ fn capture_blur_batch(
             BlurDraw {
                 source,
                 uniforms,
-                downsample,
+                filter: downsample.map_or(BlurFilter::Kernel, BlurFilter::Downsample),
                 scissor: Some(dest),
             }
         })

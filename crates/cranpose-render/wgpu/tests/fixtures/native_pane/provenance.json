@@ -1,0 +1,107 @@
+{
+  "native_binary_sha256": "f0c5d3a4517851bdd63391012d9672f6362812084254b3bb9a3f4d2a1c99ffb4",
+  "swift_sha256": {
+    "apps/liquid-reference/LiquidReferenceTests/KeyframeInspectorTests.swift": "3738f1e08e8d20ac336da932111ab05ffd950ecdafdfc1cbe136187aa01f6781",
+    "apps/liquid-reference/LiquidReferenceTests/TabBarTests.swift": "9e56cc774b850d0d62da0f21b4ff54b522013f9a77c3fd797e7f83092ecd5056",
+    "apps/liquid-reference/LiquidReference/LiquidReferenceApp.swift": "de3efa7941cf67dc73e0a512b6c8b6488bbfffcde6955e7043340bc99420955d",
+    "apps/liquid-reference/LiquidReference/OpticalProbes.swift": "6b5075a621b8de3571e0c340dc87df19f769c37e4ae6ab4da0bcf416fa8939a2",
+    "apps/liquid-reference/LiquidReference/NativeTrace.swift": "bdeaed110ecbb2f037dbe4a59e4b1d9501e37d84d440b0875cd90ad470874dea",
+    "apps/liquid-reference/LiquidReference/KeyframeInspector.swift": "87554ee0fc8cdc311856fc358fc814384827a0dbbc47913d59cf12c372599c55"
+  },
+  "crop": [
+    0,
+    2283,
+    1206,
+    2622
+  ],
+  "files": {
+    "probe-00.png": {
+      "source_sha256": "f687ebba2f16ac8827566c32a0c7d492d850c01cf120e240c9e75d0723731929",
+      "fixture_sha256": "7c63995ed8a21dd044393781d9d4e8ad54cfe9de6242a75b84e7bb6c48dbbe55"
+    },
+    "probe-01.png": {
+      "source_sha256": "d24a01fabef9a0b6cbad65c6c6ff649b20b19430b9876f7243d1dd56ce56e099",
+      "fixture_sha256": "107bc6a8f960758659484ee5709d5aadc9279a8bd6fc3b4fbe83eebdc4f769c8"
+    },
+    "probe-02.png": {
+      "source_sha256": "1db532e25c9c974668e44efdd05e3e4d9e10aa23a54e1500dc9bc8146cf53c53",
+      "fixture_sha256": "5866b7805c5cff5b59a5094405380c38356a0e569cde19b5221d8ff40267ac47"
+    },
+    "probe-03.png": {
+      "source_sha256": "f7122648ca2ecaf4bf08b3f19ecfaf73b8fe833258be98c75fd341e4feb31de7",
+      "fixture_sha256": "ce178730664828e8b1cbe09d2cd3b970c7f3b0d0b3d8dca4c5c0704f4604ef8e"
+    },
+    "probe-04.png": {
+      "source_sha256": "90ac87653bf3dc0b22311fa54f16de1b201604e93ab0bc3ed9406ec16801d253",
+      "fixture_sha256": "4d4717ba07550c4ba300ee2329ece1a65f4c3d5ced7f18119548bb0618233748"
+    },
+    "probe-05.png": {
+      "source_sha256": "764b70bc930b4e453e8efdf9aa6f83a9c3cedee81656e9cc9b332f3809461f4b",
+      "fixture_sha256": "71653af1c57d295ebc84d192f5aa682a14af3ec00949657e0dac30bf5042bf8e"
+    },
+    "probe-06.png": {
+      "source_sha256": "cd9a410a563faf2691a4a404bf3a02684f2e3f3e873d97aba401bb2ed0846eb3",
+      "fixture_sha256": "292aa2e011aed30f97770611ef0e2991fda113ef2ef4ba22bf3abaaac2954cd4"
+    },
+    "probe-07.png": {
+      "source_sha256": "d4bb5393de30c416bc6934fadc6d1559a81f9788b51881fc1b749f917bba6a55",
+      "fixture_sha256": "5b650d1a0c2909f4f986945d5200fad7e7ccf773cd40b712d1621b76490504a1"
+    },
+    "probe-08.png": {
+      "source_sha256": "a9fe84e76a53351334967deb5ad8ae281ce1525f2c8575de830c722a7b34233a",
+      "fixture_sha256": "a1cded4fc6147d6e31ac1050bd93c6c5ff1f19837d3fb6eb38e551227f9f9d95"
+    },
+    "probe-09.png": {
+      "source_sha256": "219c182ebfa1aee3ea1cb40e69c0ce7d1a075b00774470df86e5ba9113d1540b",
+      "fixture_sha256": "ab61b6805de49ea9c8df357e61a40e347a68c85fa609fc6e0a7b706193a3c3ec"
+    }
+  },
+  "shadow_samples": {
+    "fixture_sha256": "9fd50d6f760a7a0369696608f6fcd02f579e7119ab53ea388cee8c1acc25cc47",
+    "sources": {
+      "native": {
+        "file": "target/liquid-native-optical-probes-5/probe-00.png",
+        "sha256": "0ff4b1a76f64152227de5e72c328e03a1b81cc9183561f3009c45dec3a89d11d",
+        "provenance": {
+          "native_binary_sha256": "4c3b277041649c6e278abab0e81fc4b5fbe047a824e13d41dd22e3e0c0678647",
+          "swift_sha256": {
+            "apps/liquid-reference/LiquidReference/LiquidReferenceApp.swift": "de3efa7941cf67dc73e0a512b6c8b6488bbfffcde6955e7043340bc99420955d",
+            "apps/liquid-reference/LiquidReference/OpticalProbes.swift": "f94d49b18c71a3373518e5e5d7501bb472d8c9eb2c97e40f7e17fae81a2f083c",
+            "apps/liquid-reference/LiquidReference/NativeTrace.swift": "bb9d63174e90887981995d7e471aa6135aa5b7534e06d97c784c454c2dc3f28e",
+            "apps/liquid-reference/LiquidReference/KeyframeInspector.swift": "87554ee0fc8cdc311856fc358fc814384827a0dbbc47913d59cf12c372599c55",
+            "apps/liquid-reference/LiquidReferenceTests/KeyframeInspectorTests.swift": "3738f1e08e8d20ac336da932111ab05ffd950ecdafdfc1cbe136187aa01f6781",
+            "apps/liquid-reference/LiquidReferenceTests/TabBarTests.swift": "081a1793699da78b2c31dc82c8b06d44df13688060e3651bb760a2c6cf52b790"
+          },
+          "device": "2D5F9968-2DC6-4972-8EC6-F4BCFEEB1680",
+          "viewport_pt": [
+            402,
+            874
+          ],
+          "display_scale": 3,
+          "runtime": "iOS 26.5 (23F77)",
+          "source_head": "d6265e3f0746b54d49dd154ff4c54253208b2b74",
+          "purpose": "Native optical frames with encoded filter and SDF layer configuration"
+        }
+      },
+      "shadow_disabled": {
+        "file": "target/liquid-native-layer-probes-7/probe-11.png",
+        "sha256": "1573796d75f77d57ecef18c92769a445a641caedc6a865ce7c06edb22feb3802",
+        "provenance": {
+          "native_binary_sha256": "78dda22d4b15e3069f05fc25fff3b5dbfc94bd1542e4312a8ac7d5d7ebfd8f21",
+          "swift_sha256": {
+            "apps/liquid-reference/LiquidReferenceTests/KeyframeInspectorTests.swift": "3738f1e08e8d20ac336da932111ab05ffd950ecdafdfc1cbe136187aa01f6781",
+            "apps/liquid-reference/LiquidReferenceTests/TabBarTests.swift": "9e56cc774b850d0d62da0f21b4ff54b522013f9a77c3fd797e7f83092ecd5056",
+            "apps/liquid-reference/LiquidReference/LiquidReferenceApp.swift": "de3efa7941cf67dc73e0a512b6c8b6488bbfffcde6955e7043340bc99420955d",
+            "apps/liquid-reference/LiquidReference/OpticalProbes.swift": "6b5075a621b8de3571e0c340dc87df19f769c37e4ae6ab4da0bcf416fa8939a2",
+            "apps/liquid-reference/LiquidReference/NativeTrace.swift": "df45e5a37bf48511070893d6e52892fddc2dac78044a3585ef6a2b32091ce32a",
+            "apps/liquid-reference/LiquidReference/KeyframeInspector.swift": "87554ee0fc8cdc311856fc358fc814384827a0dbbc47913d59cf12c372599c55"
+          },
+          "captures": {
+            "probe-11.json": "f57c53bff4ebe705708f7504e8e5e8445a15f538526b860befa756119d0532a6",
+            "probe-11.png": "1573796d75f77d57ecef18c92769a445a641caedc6a865ce7c06edb22feb3802"
+          }
+        }
+      }
+    }
+  }
+}

@@ -185,7 +185,7 @@ mod tests {
                     ("BLUR_TILE_MODE".into(), tile_mode as f64),
                     ("BLUR_BLOCK".into(), block as f64),
                 ]);
-                for entry in ["blur_fs", "blur_downsample_fs"] {
+                for entry in ["blur_fs", "blur_downsample_fs", "blur_mean_fs"] {
                     validate_glsl_portability_with_constants(
                         &shader,
                         entry,

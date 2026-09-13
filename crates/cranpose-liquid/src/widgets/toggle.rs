@@ -366,6 +366,7 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
                         bulge_amplitude: toggle_motion_bulge(pose),
                         bulge_direction: pose.bulge_direction,
                         ellipse_blend: 0.0,
+                        capsule_smoothing_dp: 0.0,
                         deformation: Some(pose.deformation()),
                         zoom_anchor: (-lean, 0.0),
                     }),

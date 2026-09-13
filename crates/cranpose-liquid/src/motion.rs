@@ -90,6 +90,7 @@ impl LiquidMotion {
 
 pub(crate) struct LiquidDragAxis {
     animation: RefCell<Animatable<f32>>,
+    follow: Option<AnimationType>,
     pointer: Cell<Option<f32>>,
     velocity: RefCell<VelocityTracker1D>,
     runtime: RuntimeHandle,
@@ -99,8 +100,9 @@ pub(crate) struct LiquidDragAxis {
 }
 
 impl LiquidDragAxis {
-    fn new(initial: f32, runtime: RuntimeHandle) -> Self {
+    fn new(initial: f32, runtime: RuntimeHandle, follow: Option<AnimationType>) -> Self {
         Self {
+            follow,
             animation: RefCell::new(Animatable::new(initial, runtime.clone())),
             pointer: Cell::new(None),
             velocity: RefCell::new(VelocityTracker1D::new()),
@@ -145,6 +147,19 @@ impl LiquidDragAxis {
     }
 
     pub(crate) fn move_to(&self, position: f32, event_time_ms: Option<i64>) {
+        self.move_to_at(
+            position,
+            event_time_ms,
+            self.runtime.last_frame_time_nanos(),
+        );
+    }
+
+    fn move_to_at(
+        &self,
+        position: f32,
+        event_time_ms: Option<i64>,
+        animation_time_nanos: Option<u64>,
+    ) {
         if self.pointer.get().is_none() {
             return;
         }
@@ -152,8 +167,17 @@ impl LiquidDragAxis {
         let time_ms = self.sample_time_ms(event_time_ms);
         self.velocity.borrow_mut().add_data_point(time_ms, position);
         self.pointer.set(Some(position));
-        self.animation.borrow_mut().snapTo(position);
-        if let Some(previous_time_ms) = previous_time_ms {
+        if let Some(animation) = self.follow {
+            let mut value = self.animation.borrow_mut();
+            if let Some(time) = animation_time_nanos {
+                value.animate_to_at(position, animation, time);
+            } else {
+                value.animateTo(position, animation);
+            }
+        } else {
+            self.animation.borrow_mut().snapTo(position);
+        }
+        if let Some(previous_time_ms) = previous_time_ms.filter(|_| self.follow.is_none()) {
             let dt = (time_ms - previous_time_ms).max(1) as f32 / 1000.0;
             self.dynamics.advance_pointer((position, 0.0), dt);
         }
@@ -166,17 +190,43 @@ impl LiquidDragAxis {
         event_time_ms: Option<i64>,
         animation: AnimationType,
     ) {
+        self.release_to_at(
+            target,
+            event_time_ms,
+            animation,
+            self.runtime.last_frame_time_nanos(),
+        );
+    }
+
+    fn release_to_at(
+        &self,
+        target: f32,
+        event_time_ms: Option<i64>,
+        animation: AnimationType,
+        animation_time_nanos: Option<u64>,
+    ) {
         let Some(position) = self.pointer.take() else {
-            self.settle_to(target, animation);
+            self.settle_to_at(target, animation, animation_time_nanos);
             return;
         };
         let time_ms = self.sample_time_ms(event_time_ms);
         self.velocity.borrow_mut().add_data_point(time_ms, position);
-        let release_velocity = self.velocity.borrow().calculate_velocity_with_max(8_000.0);
+        let release_velocity = if self.follow.is_some() {
+            self.animation.borrow().velocity()
+        } else {
+            self.velocity.borrow().calculate_velocity_with_max(8_000.0)
+        };
         self.dynamics.release_pointer();
-        self.animation
-            .borrow_mut()
-            .animate_to_with_velocity(target, release_velocity, animation);
+        let mut value = self.animation.borrow_mut();
+        if let Some(time) = animation_time_nanos {
+            if self.follow.is_some() {
+                value.animate_to_at(target, animation, time);
+            } else {
+                value.animate_to_with_velocity_at(target, release_velocity, animation, time);
+            }
+        } else {
+            value.animate_to_with_velocity(target, release_velocity, animation);
+        }
     }
 
     pub(crate) fn finish_at(&self, position: f32, event_time_ms: Option<i64>) {
@@ -198,20 +248,32 @@ impl LiquidDragAxis {
     }
 
     pub(crate) fn settle_to(&self, target: f32, animation: AnimationType) {
+        self.settle_to_at(target, animation, self.runtime.last_frame_time_nanos());
+    }
+
+    fn settle_to_at(&self, target: f32, animation: AnimationType, time: Option<u64>) {
         if self.pointer.get().is_some() {
             return;
         }
         let mut value = self.animation.borrow_mut();
         if (value.target() - target).abs() > f32::EPSILON {
-            value.animateTo(target, animation);
+            if let Some(time) = time {
+                value.animate_to_at(target, animation, time);
+            } else {
+                value.animateTo(target, animation);
+            }
         }
     }
 
     pub(crate) fn value(&self) -> f32 {
         let _ = self.fluid_clock.borrow().state().value();
-        self.pointer
-            .get()
-            .unwrap_or_else(|| self.animation.borrow().state().value())
+        if self.follow.is_some() {
+            self.animation.borrow().state().value()
+        } else {
+            self.pointer
+                .get()
+                .unwrap_or_else(|| self.animation.borrow().state().value())
+        }
     }
 
     pub(crate) fn liquid_pose(&self) -> LiquidPose {
@@ -225,10 +287,23 @@ impl LiquidDragAxis {
 
 #[composable]
 pub(crate) fn remember_liquid_drag_axis(initial: f32) -> Rc<LiquidDragAxis> {
+    remember_liquid_axis(initial, None)
+}
+
+#[composable]
+pub(crate) fn remember_liquid_follow_axis(
+    initial: f32,
+    animation: AnimationType,
+) -> Rc<LiquidDragAxis> {
+    remember_liquid_axis(initial, Some(animation))
+}
+
+#[composable]
+fn remember_liquid_axis(initial: f32, follow: Option<AnimationType>) -> Rc<LiquidDragAxis> {
     with_current_composer(|composer| {
         let runtime = composer.runtime_handle();
         composer
-            .remember(move || Rc::new(LiquidDragAxis::new(initial, runtime)))
+            .remember(move || Rc::new(LiquidDragAxis::new(initial, runtime, follow)))
             .with(Rc::clone)
     })
 }
@@ -236,19 +311,20 @@ pub(crate) fn remember_liquid_drag_axis(initial: f32) -> Rc<LiquidDragAxis> {
 pub(crate) struct LiquidLensGesture {
     pub axis: Rc<LiquidDragAxis>,
     pub cell_width: f32,
+    pub cell_offset: f32,
     pub count: usize,
     pub tap_slop: f32,
     pub drag_left: Rc<dyn Fn(f32) -> f32>,
     pub rest_left: Rc<dyn Fn(usize) -> f32>,
     pub selected: usize,
-    pub on_pressed: Rc<dyn Fn(bool)>,
+    pub on_pressed: Rc<dyn Fn(bool, Option<u64>)>,
     pub on_touch: Rc<dyn Fn(f32, f32)>,
     pub on_select: Rc<dyn Fn(usize)>,
 }
 
 impl LiquidLensGesture {
     fn commit_index(&self, position: f32) -> usize {
-        ((position / self.cell_width.max(1.0)).floor() as isize)
+        (((position - self.cell_offset) / self.cell_width.max(1.0)).floor() as isize)
             .clamp(0, self.count.saturating_sub(1) as isize) as usize
     }
 }
@@ -272,7 +348,12 @@ pub(crate) async fn liquid_lens_gesture(
                         active_pointer = Some(event.id);
                         down_x = event.position.x;
                         moved = false;
-                        (gesture.on_pressed)(true);
+                        gesture.axis.settle_to_at(
+                            (gesture.rest_left)(gesture.commit_index(down_x)),
+                            LiquidMotion::glide(),
+                            event.animation_time_nanos,
+                        );
+                        (gesture.on_pressed)(true, event.animation_time_nanos);
                         (gesture.on_touch)(event.position.x, event.position.y);
                         default_haptics().perform(HapticFeedback::Selection);
                         event.consume();
@@ -282,14 +363,26 @@ pub(crate) async fn liquid_lens_gesture(
                         if moved {
                             let target = (gesture.drag_left)(event.position.x);
                             if gesture.axis.is_dragging() {
-                                gesture.axis.move_to(target, event.time_ms);
+                                gesture.axis.move_to_at(
+                                    target,
+                                    event.time_ms,
+                                    event.animation_time_nanos,
+                                );
                             } else if (gesture.axis.value() - target).abs()
                                 <= gesture.cell_width * 0.6
                             {
                                 gesture.axis.begin(gesture.axis.value(), event.time_ms);
-                                gesture.axis.move_to(target, event.time_ms);
+                                gesture.axis.move_to_at(
+                                    target,
+                                    event.time_ms,
+                                    event.animation_time_nanos,
+                                );
                             } else {
-                                gesture.axis.settle_to(target, LiquidMotion::glide());
+                                gesture.axis.settle_to_at(
+                                    target,
+                                    LiquidMotion::glide(),
+                                    event.animation_time_nanos,
+                                );
                             }
                         }
                         (gesture.on_touch)(event.position.x, event.position.y);
@@ -297,13 +390,14 @@ pub(crate) async fn liquid_lens_gesture(
                     }
                     PointerEventKind::Up if active_pointer == Some(event.id) => {
                         active_pointer = None;
-                        (gesture.on_pressed)(false);
+                        (gesture.on_pressed)(false, event.animation_time_nanos);
                         let commit_x = if moved { event.position.x } else { down_x };
                         let index = gesture.commit_index(commit_x);
-                        gesture.axis.release_to(
+                        gesture.axis.release_to_at(
                             (gesture.rest_left)(index),
                             event.time_ms,
                             LiquidMotion::glide(),
+                            event.animation_time_nanos,
                         );
                         default_haptics().perform(HapticFeedback::ImpactLight);
                         (gesture.on_select)(index);
@@ -311,11 +405,12 @@ pub(crate) async fn liquid_lens_gesture(
                     }
                     PointerEventKind::Cancel if active_pointer == Some(event.id) => {
                         active_pointer = None;
-                        (gesture.on_pressed)(false);
-                        gesture.axis.release_to(
+                        (gesture.on_pressed)(false, event.animation_time_nanos);
+                        gesture.axis.release_to_at(
                             (gesture.rest_left)(gesture.selected),
                             event.time_ms,
                             LiquidMotion::glide(),
+                            event.animation_time_nanos,
                         );
                         event.consume();
                     }
@@ -373,8 +468,64 @@ mod tests {
     fn axis(initial: f32) -> (cranpose_core::Runtime, LiquidDragAxis) {
         let runtime =
             cranpose_core::Runtime::new(std::sync::Arc::new(cranpose_core::DefaultScheduler));
-        let axis = LiquidDragAxis::new(initial, runtime.handle());
+        let axis = LiquidDragAxis::new(initial, runtime.handle(), None);
         (runtime, axis)
+    }
+
+    fn native_trace_error(follow: Option<AnimationType>) -> f32 {
+        let runtime =
+            cranpose_core::Runtime::new(std::sync::Arc::new(cranpose_core::DefaultScheduler));
+        let mut axis = LiquidDragAxis::new(0.0, runtime.handle(), follow);
+        let mut origin = 1_000_000_000u64;
+        let mut squared_error = 0.0;
+        let mut count = 0;
+        for line in include_str!("../tests/fixtures/native_tab_drag.csv").lines() {
+            let fields: Vec<_> = line.split(',').collect();
+            let time: f64 = fields[1].parse().expect("trace time");
+            let position: f32 = fields[2].parse().expect("trace position");
+            if fields[0] == "start" {
+                origin += 10_000_000_000;
+                axis = LiquidDragAxis::new(position, runtime.handle(), follow);
+                runtime.handle().drain_frame_callbacks(origin);
+                axis.begin(position, Some((origin / 1_000_000) as i64));
+                continue;
+            }
+            let nanos = origin + (time * 1e9) as u64;
+            runtime.handle().drain_frame_callbacks(nanos);
+            if fields[0] == "input" {
+                axis.move_to(position, Some((nanos / 1_000_000) as i64));
+            } else {
+                squared_error += (axis.value() - position).powi(2);
+                count += 1;
+            }
+        }
+        assert!(count > 200);
+        (squared_error / count as f32).sqrt()
+    }
+
+    #[test]
+    fn tab_follow_matches_both_native_drag_velocities_and_held_settling() {
+        let following = native_trace_error(Some(spring(0.85, 650.0)));
+        let direct = native_trace_error(None);
+        assert!(following < 3.0, "native trace RMS: {following}");
+        assert!(direct > 15.0, "direct-input counterexample RMS: {direct}");
+    }
+
+    #[test]
+    fn releasing_a_following_lens_preserves_its_rendered_velocity() {
+        let runtime =
+            cranpose_core::Runtime::new(std::sync::Arc::new(cranpose_core::DefaultScheduler));
+        let axis = LiquidDragAxis::new(0.0, runtime.handle(), Some(spring(0.85, 650.0)));
+        runtime.handle().drain_frame_callbacks(1_000_000_000);
+        axis.begin(0.0, Some(1000));
+        axis.move_to(100.0, Some(1016));
+        runtime.handle().drain_frame_callbacks(1_016_000_000);
+        runtime.handle().drain_frame_callbacks(1_032_000_000);
+        let before = axis.animation.borrow().velocity();
+        assert!(before > 0.0);
+        axis.release_to(100.0, Some(1200), LiquidMotion::glide());
+        assert_eq!(axis.animation.borrow().velocity(), before);
+        assert!(!axis.is_dragging());
     }
 
     #[test]

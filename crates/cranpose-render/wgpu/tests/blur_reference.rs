@@ -77,27 +77,29 @@ struct KernelDeviation {
     channels: usize,
 }
 
-fn worst_kernel_deviation(radius: f32) -> Option<KernelDeviation> {
+fn worst_kernel_deviation(radius: f32, density: f32) -> Option<KernelDeviation> {
     let Ok(mut renderer) = support::headless_renderer() else {
         eprintln!("skipping (headless WGPU init failed)");
         return None;
     };
-    let plain = support::capture_graph(&mut renderer, page(None), FRAME, FRAME);
-    let blurred = support::capture_graph(&mut renderer, page(Some(radius)), FRAME, FRAME);
+    let frame = (FRAME as f32 * density) as u32;
+    let plain = support::capture_graph_with_scale(&mut renderer, page(None), frame, frame, density);
+    let blurred =
+        support::capture_graph_with_scale(&mut renderer, page(Some(radius)), frame, frame, density);
     let plain_values: Vec<f32> = plain.pixels.iter().map(|value| f32::from(*value)).collect();
     let expected = support::reference_blur(
         &plain_values,
-        FRAME as usize,
-        FRAME as usize,
+        frame as usize,
+        frame as usize,
         4,
         radius,
         ReferenceEdge::Clamp,
     );
     let inside = rect(
-        GLASS.x + 2.0,
-        GLASS.y + 2.0,
-        GLASS.width - 4.0,
-        GLASS.height - 4.0,
+        (GLASS.x + 2.0) * density,
+        (GLASS.y + 2.0) * density,
+        (GLASS.width - 4.0) * density,
+        (GLASS.height - 4.0) * density,
     );
     let actual = region_pixels(&blurred, inside);
     let mut worst = 0.0f32;
@@ -107,13 +109,13 @@ fn worst_kernel_deviation(radius: f32) -> Option<KernelDeviation> {
         let x = inside.x as usize + index / 4 % inside.width as usize;
         let y = inside.y as usize + index / 4 / inside.width as usize;
         let c = index % 4;
-        let want = expected[(y * FRAME as usize + x) * 4 + c];
+        let want = expected[(y * frame as usize + x) * 4 + c];
         let delta = (*value as f32 - want).abs();
         if delta > worst {
             worst = delta;
             worst_at = (x, y, c);
         }
-        if *value != plain.pixels[(y * FRAME as usize + x) * 4 + c] {
+        if *value != plain.pixels[(y * frame as usize + x) * 4 + c] {
             changed += 1;
         }
     }
@@ -131,7 +133,7 @@ fn assert_blur_follows_its_kernel(radius: f32, budget: f32) {
         worst_at,
         changed,
         channels,
-    }) = worst_kernel_deviation(radius)
+    }) = worst_kernel_deviation(radius, 1.0)
     else {
         return;
     };
@@ -187,4 +189,19 @@ fn a_wide_blur_runs_both_passes_at_the_scratch_size() {
         "the wide blur must run both passes at the scratch size: narrow={narrow} wide={wide} \
          saved={saved} wide capture={wide_capture}"
     );
+}
+
+#[test]
+fn backdrop_blur_radius_is_already_in_pixels_at_high_display_density() {
+    for density in [2.0, 3.0] {
+        let result =
+            worst_kernel_deviation(RADIUS, density).expect("density regression requires a GPU");
+        assert!(result.changed > 0);
+        assert!(
+            result.worst <= 1.0,
+            "density {density} multiplied an already physical radius: deviation {} at {:?}",
+            result.worst,
+            result.worst_at
+        );
+    }
 }

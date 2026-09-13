@@ -228,6 +228,11 @@ pub const MAX_SUBSTRATES: usize = 3;
 /// and hands the shader through a reserved substrate region slot.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum SubstrateSpec {
+    /// The componentwise source mean over the layer's bounds, stored in one texel.
+    /// Filter padding is excluded; bounds are clipped to the capture and rounded
+    /// outward to texels. The renderer averages rows and then columns in its
+    /// render-target format. A capture outside the layer uses its complete source.
+    Mean,
     /// The source averaged in blocks of `block` x `block` texels, one
     /// substrate texel per block.
     Average { block: u32 },
@@ -239,6 +244,7 @@ pub enum SubstrateSpec {
 impl SubstrateSpec {
     fn same_bits(&self, other: &Self) -> bool {
         match (self, other) {
+            (Self::Mean, Self::Mean) => true,
             (Self::Average { block: a }, Self::Average { block: b }) => a == b,
             (Self::Blur { radius_px: a }, Self::Blur { radius_px: b }) => {
                 a.to_bits() == b.to_bits()
@@ -250,6 +256,7 @@ impl SubstrateSpec {
     fn hash_bits<H: std::hash::Hasher>(&self, state: &mut H) {
         use std::hash::Hash;
         match self {
+            Self::Mean => 2u8.hash(state),
             Self::Average { block } => {
                 0u8.hash(state);
                 block.hash(state);
@@ -1623,6 +1630,31 @@ mod tests {
         cloned.set_draw_split(None);
         assert!(!cloned.clear_override("MISSING"));
         assert_eq!(cloned.overrides().as_ptr(), shader.overrides().as_ptr());
+    }
+
+    #[test]
+    fn mean_substrates_have_distinct_stable_identity() {
+        use std::hash::{DefaultHasher, Hasher};
+        let hash = |spec: SubstrateSpec| {
+            let mut h = DefaultHasher::new();
+            spec.hash_bits(&mut h);
+            h.finish()
+        };
+        let mean = SubstrateSpec::Mean;
+        assert!(mean.same_bits(&mean));
+        for other in [
+            SubstrateSpec::Average { block: 4 },
+            SubstrateSpec::Blur { radius_px: 12.0 },
+        ] {
+            assert!(!mean.same_bits(&other));
+            assert_ne!(hash(mean), hash(other));
+        }
+        let mut shader = RuntimeShader::new("fn effect_fs() {}");
+        shader.set_substrates(&[mean]);
+        let mut cloned = shader.clone();
+        cloned.set_substrates(&[SubstrateSpec::Average { block: 4 }]);
+        assert_eq!(shader.substrates(), &[mean]);
+        assert_eq!(cloned.substrates(), &[SubstrateSpec::Average { block: 4 }]);
     }
 
     #[test]

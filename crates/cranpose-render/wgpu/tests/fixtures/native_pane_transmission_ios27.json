@@ -1,0 +1,42 @@
+{
+  "device": "iPhone 17 Pro Max, iPhone18,2",
+  "os": "27.0 (24A435)",
+  "viewport_points": [
+    440,
+    956
+  ],
+  "scale": 3,
+  "tint_percent": 25,
+  "pane_bounds_points": [
+    21,
+    873,
+    398,
+    62
+  ],
+  "capture_pose": "Settled after release; the earlier metadata records held geometry and is not the screenshot pose. Fine capture waits another two seconds after release.",
+  "measurement": "Green channel quadrature phase at 32 point period, unwrapped only by separately measured 128 point quadrature. Four cardinal boundaries; original pixel centers. This is a displacement measurement, not an exact RGBA assertion.",
+  "native_filter": {
+    "inputInnerRefractionAmount": -31,
+    "inputInnerRefractionHeight": 15.5
+  },
+  "probe_overrides": "Blur radius, all blur fill opacities, black face offset and shadows zero; white gain and saturation one; fill clear; SDR holding tone disabled.",
+  "samples": 44,
+  "source_sha256": {
+    "target/liquid56-native-pane-attachments/A073ED61-9994-4BDD-88BE-D7DBEF089C2E.png": "d92d7a9771a6b61d609e00fb98eb89053c5b9263e86cd661efa5670909ea09be",
+    "target/liquid56-native-pane-attachments/E93C0086-C0A6-4DE0-A6CD-45A1B1CF6582.png": "b5aaf3983b513e9cf3181e6f9b4f89d73e3917b42668c140050b9b772e69e115",
+    "target/liquid56-native-pane-attachments/563F1444-C497-46ED-9379-B6F211D8D11D.png": "40e293a6f47874264b616f82115b32a866d4ad485fd896bfa0f145769aa041e2",
+    "target/liquid56-native-pane-attachments/88163AB9-DFEF-4E76-9376-7BC5E55F699D.png": "5ce43776764f33ac6ad4e62b06990c65a2d5d20c157a5c2a2f793f10db11a716",
+    "target/liquid56-native-pane-attachments/F70EB6AD-6B22-4E88-B52D-648169500F42.png": "03d663928461782ff5a5c095bf9c9d68999b4d201f7009d55c6ccbd64edba51d",
+    "target/liquid56-native-pane-attachments/A55B267B-D112-49FF-9869-936CFB002C66.png": "f7563a83325499b57742f9b1b1342974c9763e0cf661c87820912fc666f249f4",
+    "target/liquid56-native-pane-attachments/459E0A29-E53C-42D6-BD11-B159984CF087.png": "4d98825549cfc5dafc523a0c0b8e21da5caee9c3ebf93983fb0a14b31600a358",
+    "target/liquid56-native-pane-attachments/B7A6128F-3883-49FF-8CF8-37928C5202C0.png": "52ae0f66d9d92614e9ebdbd596cf8f46076f5282257a3c676a72077ba69e5a9e",
+    "target/liquid57-native-pane-attachments/8323809F-E698-4799-BD35-1E5FD449F3AF.png": "bdc0844096cb34bf0bee78f024848418ef2c6bd16e506a49a75e384327c64c34",
+    "target/liquid57-native-pane-attachments/E364E415-EB35-45AF-9BF6-7EDD43D301AC.png": "dd6ef50270b578a20cfb74a089f28d02872f64de4d3e4510ebf9077bc90ab3e9",
+    "target/liquid57-native-pane-attachments/9A509113-5BB0-4327-BD83-9F1B88861D96.png": "2f594d59106248e2c5e68f73fe3c1280689fb64db3c45181c41211aa88d4c19c",
+    "target/liquid57-native-pane-attachments/D6CB7CB1-F082-4EA4-BDB8-BA42327AD6B0.png": "03943fe35bfd2de64a1af8df5d491585247ade42ae53ac876553d2ccd6dc6ed7",
+    "target/liquid57-native-pane-attachments/DF9F0AEB-06CE-473D-B78E-44F6170509AF.png": "ebab689ef2641fb8fb2c6b8e4af8d94dffae28fbafda0ed1cea6d1abfcda293a",
+    "target/liquid57-native-pane-attachments/A8989576-32AE-4339-9B3A-42B362CC5771.png": "ff4b1aed9d205e49f32b20846be7bb5346aaf2e03b9421d892109651e1e8a97e",
+    "target/liquid57-native-pane-attachments/6699BD6B-ECA3-4AB8-813C-8644DA194645.png": "68e48ce09cb7b3b5988405db0d69196b8262b0b36d9389bf683715c318d14e64",
+    "target/liquid57-native-pane-attachments/22C84E83-EC53-43A1-8266-0331114503FB.png": "7b860743bc79ec7ea03d606ae54dec90b848377e9af5460f77ab91f94553c5e9"
+  }
+}
