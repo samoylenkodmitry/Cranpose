@@ -522,7 +522,7 @@ fn resized_mixed_blur_atlases_preserve_every_substrate_slot() {
                 let mut specs = [
                     SubstrateSpec::Average { block: 4 },
                     SubstrateSpec::Blur { radius_px: 12.0 },
-                    SubstrateSpec::Average { block: 2 },
+                    SubstrateSpec::Mean,
                 ];
                 specs.rotate_left(index);
                 let mut shader = RuntimeShader::new(&format!(

@@ -250,6 +250,7 @@ pub fn LiquidSegmentedControl(
                             crate::motion::LiquidLensGesture {
                                 axis: lens_axis,
                                 cell_width: segment_width,
+                                cell_offset: 0.0,
                                 count,
                                 tap_slop: TAP_SLOP,
                                 drag_left: Rc::new(move |x| {
@@ -257,7 +258,7 @@ pub fn LiquidSegmentedControl(
                                 }),
                                 rest_left: Rc::new(move |index| segment_width * index as f32),
                                 selected,
-                                on_pressed: Rc::new(move |down| pressed.set(down)),
+                                on_pressed: Rc::new(move |down, _| pressed.set(down)),
                                 on_touch: Rc::new(|_, _| {}),
                                 on_select,
                             },
@@ -336,6 +337,7 @@ pub fn LiquidSegmentedControl(
                                 bulge_amplitude: pose.bulge_amplitude.min(4.0),
                                 bulge_direction: pose.bulge_direction,
                                 ellipse_blend: LENS_ELLIPSE_BLEND,
+                                capsule_smoothing_dp: 0.0,
                                 deformation: Some(
                                     crate::material::GlassDeformation::incompressible(
                                         pose.axis,

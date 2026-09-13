@@ -12,6 +12,8 @@ use cranpose_services::isSystemInDarkTheme;
 use cranpose_ui::text::{FontWeight, SpanStyle, TextStyle, TextUnit};
 use cranpose_ui_graphics::Color;
 
+use crate::appearance::GlassTintAmount;
+
 /// Whether the theme follows the OS appearance or is pinned.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum SchemeMode {
@@ -173,6 +175,8 @@ pub struct LiquidThemeSpec {
     /// Accent color (iOS system blue by default).
     pub accent: Color,
     pub typography: LiquidTypography,
+    /// Tint amount used by the floating navigation surfaces.
+    pub glass_tint_amount: GlassTintAmount,
 }
 
 impl Default for LiquidThemeSpec {
@@ -181,8 +185,18 @@ impl Default for LiquidThemeSpec {
             scheme: SchemeMode::Auto,
             accent: Color::from_rgb_u8(0, 122, 255),
             typography: LiquidTypography::default(),
+            glass_tint_amount: GlassTintAmount::default(),
         }
     }
+}
+
+fn theme_local<T: Clone + PartialEq + 'static>(
+    cell: &RefCell<Option<CompositionLocal<T>>>,
+    default: fn() -> T,
+) -> CompositionLocal<T> {
+    cell.borrow_mut()
+        .get_or_insert_with(|| compositionLocalOf(default))
+        .clone()
 }
 
 fn local_liquid_colors() -> CompositionLocal<LiquidColors> {
@@ -190,11 +204,9 @@ fn local_liquid_colors() -> CompositionLocal<LiquidColors> {
         static LOCAL: RefCell<Option<CompositionLocal<LiquidColors>>> = const { RefCell::new(None) };
     }
     LOCAL.with(|cell| {
-        cell.borrow_mut()
-            .get_or_insert_with(|| {
-                compositionLocalOf(|| LiquidColors::light(LiquidThemeSpec::default().accent))
-            })
-            .clone()
+        theme_local(cell, || {
+            LiquidColors::light(LiquidThemeSpec::default().accent)
+        })
     })
 }
 
@@ -202,11 +214,20 @@ fn local_liquid_typography() -> CompositionLocal<LiquidTypography> {
     thread_local! {
         static LOCAL: RefCell<Option<CompositionLocal<LiquidTypography>>> = const { RefCell::new(None) };
     }
-    LOCAL.with(|cell| {
-        cell.borrow_mut()
-            .get_or_insert_with(|| compositionLocalOf(LiquidTypography::default))
-            .clone()
-    })
+    LOCAL.with(|cell| theme_local(cell, LiquidTypography::default))
+}
+
+fn local_liquid_glass_tint_amount() -> CompositionLocal<GlassTintAmount> {
+    thread_local! {
+        static LOCAL: RefCell<Option<CompositionLocal<GlassTintAmount>>> = const { RefCell::new(None) };
+    }
+    LOCAL.with(|cell| theme_local(cell, GlassTintAmount::default))
+}
+
+/// The active navigation surface tint amount, defaulting to 25 percent.
+#[composable]
+pub fn liquid_glass_tint_amount() -> GlassTintAmount {
+    local_liquid_glass_tint_amount().current()
 }
 
 /// The active semantic palette (light defaults outside a [`LiquidTheme`]).
@@ -240,6 +261,7 @@ pub fn LiquidTheme(spec: LiquidThemeSpec, content: impl FnOnce()) {
         vec![
             local_liquid_colors().provides(colors),
             local_liquid_typography().provides(spec.typography.clone()),
+            local_liquid_glass_tint_amount().provides(spec.glass_tint_amount),
         ],
         move || {
             content();

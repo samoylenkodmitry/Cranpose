@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Liquid tab bar · Every captured frame</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#101215;color:#eef1f5;font:15px system-ui;line-height:1.5}main{max-width:1400px;margin:auto;padding:36px 24px}h1{font-size:36px;letter-spacing:-1px;margin:0}p{color:#b7c0cc;max-width:980px}button,select{font:inherit;color:inherit;border:1px solid #454d58;border-radius:8px;background:#242830;padding:9px 13px;cursor:pointer}button:disabled{opacity:.5}.controls,nav{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:18px 0}.pair{display:grid;grid-template-columns:1fr 1fr;gap:16px}.card{min-width:0;background:#1b1f25;border-radius:12px;overflow:hidden}.label{padding:12px 16px}.card img{width:100%;display:block;image-rendering:auto}.details{padding:10px 16px;color:#b7c0cc;font-variant-numeric:tabular-nums}a{color:#9ac5ff}video{width:100%;max-height:650px;background:#060708}summary{cursor:pointer;margin:24px 0 12px}input[type=range]{width:100%;accent-color:#89baff}footer{margin-top:28px;border-top:1px solid #343b43;padding-top:16px;color:#a8b1bd}#difference{position:relative;background:black}#difference img{width:100%;display:block}#difference img+img{position:absolute;top:0;mix-blend-mode:difference}#stamp{font-variant-numeric:tabular-nums}button:focus-visible,select:focus-visible{outline:3px solid #89baff}@media(max-width:700px){main{padding:24px 12px}.pair{grid-template-columns:1fr}h1{font-size:29px}}
+</style>
+<main>
+<h1>Floating tab bar · frame by frame</h1>
+<p>8 pt checkerboard with the selected content and palette. Every source frame is retained with its original timestamp. Phase labels come from recorded touch samples and an on-screen clock marker; delayed rendering stays visible.</p>
+<div class="controls"><select id="route" aria-label="Gesture"></select><button id="previous">← Previous frame</button><button id="play">Play</button><button id="next">Next frame →</button><select id="rate" aria-label="Playback speed"><option value="0.1" selected>0.1×</option><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1">1×</option></select></div>
+<input id="scrubber" type="range" min="0" value="0" step="1" aria-label="Captured frame">
+<div id="stamp"></div><nav id="phases" aria-label="Jump to input phase"></nav>
+<div class="pair"><div class="card"><div class="label"><strong>Native SwiftUI</strong></div><img id="native" alt="Native recorded tab bar"><div class="details" id="native-detail"></div></div><div class="card"><div class="label"><strong>Cranpose</strong></div><img id="cranpose" alt="Cranpose recorded tab bar"><div class="details" id="cranpose-detail"></div></div></div>
+<details><summary>Pixel difference for the displayed source frames</summary><div id="difference"><img alt="Native pixels"><img alt="Cranpose difference pixels"></div><p>Black pixels match. Bright pixels differ. The comparison includes typography, symbols, surfaces and lighting.</p></details>
+<details><summary>Original continuous recordings</summary><div class="pair"><video controls muted playsinline preload="metadata" src="native/recording.mp4"></video><video controls muted playsinline preload="metadata" src="cranpose/recording.mp4"></video></div></details>
+<footer id="alignment"></footer>
+</main>
+<script>
+const data=__TIMELINES__;
+const $=s=>document.querySelector(s),scrubber=$('#scrubber'),route=$('#route');
+for (const [i] of data.timelines[0].gestures.entries()) { const option=document.createElement('option'); option.value=i; option.textContent=data.frames.find(f=>f.route===i).gestureLabel; route.append(option); }
+let frames=[],index=0,playing=false,started=0,from=0;
+function stop(){playing=false;$('#play').textContent='Play'}
+function render(){
+ const f=frames[index];scrubber.value=index;
+ $('#stamp').textContent=`Input ${f.time.toFixed(3)} s · paired step ${index+1} / ${frames.length} · source time gap ${(Math.abs(f.nativeTime-f.cranposeTime)*1000).toFixed(1)} ms`;
+ for(const name of ['native','cranpose']){
+  $('#'+name).src='frames/'+f[name];
+  $('#'+name).hidden=!f[name+'Available'];
+  $('#'+name+'-detail').textContent=!f[name+'Available']?'Outside this recording’s captured interval':`${name==='native'?f.phase:f.cranposePhase} · source frame ${f[name+'Frame']} · input ${f[name+'Time'].toFixed(3)} s`;
+ }
+ $('#difference').hidden=!f.nativeAvailable||!f.cranposeAvailable;
+ const imgs=$('#difference').querySelectorAll('img');imgs[0].src=$('#native').src;imgs[1].src=$('#cranpose').src;
+ $('#previous').disabled=index===0;$('#next').disabled=index===frames.length-1;
+}
+function selectRoute(){stop();frames=data.frames.filter(f=>f.route===Number(route.value));index=0;scrubber.max=frames.length-1;
+ $('#phases').replaceChildren(...[...new Set(frames.map(f=>f.phase))].map(phase=>{const b=document.createElement('button');b.textContent=phase.replaceAll('-',' ');b.onclick=()=>{stop();index=frames.findIndex(f=>f.phase===phase);render()};return b}));render();}
+function step(delta){stop();index=Math.max(0,Math.min(frames.length-1,index+delta));render()}
+$('#previous').onclick=()=>step(-1);$('#next').onclick=()=>step(1);route.onchange=selectRoute;
+scrubber.oninput=()=>{stop();index=Number(scrubber.value);render()};$('#rate').onchange=stop;
+$('#play').onclick=()=>{if(playing){stop();return}if(index===frames.length-1)index=0;playing=true;started=performance.now();from=frames[index].time;$('#play').textContent='Pause';requestAnimationFrame(tick)};
+function tick(now){if(!playing)return;const t=from+(now-started)/1000*Number($('#rate').value);while(index<frames.length-1&&frames[index+1].time<=t)index++;render();if(index===frames.length-1)stop();else requestAnimationFrame(tick)}
+document.onkeydown=e=>{if(e.target.matches('input,select'))return;if(e.key==='ArrowLeft'){e.preventDefault();step(-1)}if(e.key==='ArrowRight'){e.preventDefault();step(1)}};
+$('#alignment').textContent=data.timelines.map((t,i)=>`${i?'Cranpose':'Native'}: ${t.alignment.clock_samples} clock samples; 95% clock residual ${(t.alignment.clock_residual_p95_seconds*1000).toFixed(1)} ms.`).join(' ')+' Capture cadence limits temporal precision. These recordings do not establish physical-device latency or pixel parity.';
+selectRoute();
+</script>
+</html>

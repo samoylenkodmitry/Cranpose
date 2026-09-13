@@ -49,6 +49,26 @@ fn composed_in_theme_and_popup_host(content: impl Fn() + 'static) {
 }
 
 #[test]
+fn tint_amount_is_scoped_and_restored_by_the_theme() {
+    in_theme(|| {
+        assert_eq!(liquid_glass_tint_amount(), GlassTintAmount::default());
+        for percent in [0.0, 25.0, 50.0, 100.0] {
+            let amount = GlassTintAmount::from_percent(percent).unwrap();
+            LiquidTheme(
+                LiquidThemeSpec {
+                    glass_tint_amount: amount,
+                    ..Default::default()
+                },
+                || {
+                    assert_eq!(liquid_glass_tint_amount(), amount);
+                },
+            );
+            assert_eq!(liquid_glass_tint_amount(), GlassTintAmount::default());
+        }
+    });
+}
+
+#[test]
 fn a_glass_surface_composes_its_content() {
     let drawn = Rc::new(Cell::new(0usize));
     let counter = Rc::clone(&drawn);
@@ -451,6 +471,48 @@ fn a_tab_bar_without_an_accessory_composes_its_tabs() {
             },
         );
     });
+}
+
+#[test]
+fn tab_bar_announces_the_committed_selection() {
+    let mut rule = cranpose_testing::ComposeTestRule::new();
+    rule.set_content(|| {
+        LiquidTheme(LiquidThemeSpec::default(), || {
+            LiquidTabBar(
+                Modifier::empty(),
+                LiquidTabBarSpec::default(),
+                1,
+                |_| {},
+                |tabs| {
+                    tabs.tab(cranpose_liquid::icons::STAR, "Discover");
+                    tabs.tab(cranpose_liquid::icons::BOOKMARK, "Saved");
+                },
+            );
+        });
+    })
+    .expect("compose tabs");
+    rule.placed_semantics(cranpose_ui::Size::new(400.0, 800.0))
+        .expect("place tabs");
+    let root = rule.root_id().expect("root");
+    let tree = cranpose_ui::build_semantics_tree_from_applier(&mut rule.applier_mut(), root)
+        .expect("semantics")
+        .expect("semantics tree");
+    let mut pending = vec![tree.root()];
+    let mut tabs = Vec::new();
+    while let Some(node) = pending.pop() {
+        if node.widget_role == Some(cranpose_ui::SemanticsWidgetRole::Tab) {
+            tabs.push((node.description.clone(), node.selected));
+        }
+        pending.extend(node.children.iter());
+    }
+    tabs.sort();
+    assert_eq!(
+        tabs,
+        vec![
+            (Some("Discover".to_string()), Some(false)),
+            (Some("Saved".to_string()), Some(true)),
+        ]
+    );
 }
 
 #[test]

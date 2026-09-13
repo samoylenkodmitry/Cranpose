@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Liquid Glass · exact pixel audit</title>
+<style>
+body{margin:20px;background:#14171b;color:#eef3fa;font:15px system-ui}button,select{font:inherit;padding:8px;margin:4px;background:#25303b;color:inherit;border:1px solid #627183;border-radius:4px}input{width:100%}#viewport{overflow:auto;border:1px solid #627183;max-height:70vh}canvas{display:block;image-rendering:pixelated}p,output{font-variant-numeric:tabular-nums}#status{min-height:3em}
+</style>
+<h1>Exact pixel audit</h1>
+<p>Every retained frame, original pixel coordinates. No image registration or tolerance. A single channel differing by 1 fails equality. Source times and gaps remain visible.</p>
+<p id="sampling"></p>
+<button id="previous">← Previous</button><button id="next">Next →</button>
+<select id="view" aria-label="Image"><option value="native">Native iOS</option><option value="cranpose">Cranpose</option><option value="difference">Absolute difference</option><option value="blink">Blink native / Cranpose</option></select>
+<select id="zoom" aria-label="Pixel zoom"><option value="1">1× pixels</option><option value="2">2× pixels</option><option value="4">4× pixels</option></select>
+<input id="frame" aria-label="Paired frame" type="range" min="0" value="0" step="1">
+<p id="status"></p><div id="viewport"><canvas id="pixels"></canvas></div><output id="sample">Hover a pixel to read both RGBA values.</output>
+<script>
+const audit=__AUDIT__,$=s=>document.querySelector(s),canvas=$('#pixels'),ctx=canvas.getContext('2d'),slider=$('#frame');
+slider.max=audit.rows.length-1;let decoded={},generation=0,blink=false;
+$('#sampling').textContent=Object.entries(audit.sampling).map(([name,s])=>`${name}: ${s.unique_frames} distinct frames; longest source interval ${(s.maximum_source_gap_seconds*1000).toFixed(3)} ms`).join(' · ')+' · Repeated images do not add temporal resolution. Recordings do not capture every display refresh.';
+function draw(){const mode=$('#view').value,key=mode==='blink'?(blink?'cranpose':'native'):mode;if(!decoded[key])return;canvas.width=decoded[key].width;canvas.height=decoded[key].height;canvas.style.width=canvas.width*Number($('#zoom').value)+'px';canvas.style.height=canvas.height*Number($('#zoom').value)+'px';ctx.putImageData(decoded[key],0,0)}
+async function load(){const current=++generation,f=audit.rows[Number(slider.value)];decoded={};canvas.width=0;
+ $('#previous').disabled=Number(slider.value)===0;$('#next').disabled=Number(slider.value)===audit.rows.length-1;$('#sample').textContent='Hover a pixel to read both RGBA values.';
+ $('#status').textContent=`${f.contentLabel} · Step ${Number(slider.value)+1}/${audit.rows.length} · native ${f.nativeTime.toFixed(6)} s / Cranpose ${f.cranposeTime.toFixed(6)} s · gap ${(Math.abs(f.nativeTime-f.cranposeTime)*1000).toFixed(3)} ms · `+(f.covered?`${f.regions.whole_frame.unequal_pixels} unequal pixels; maximum channel error ${f.regions.whole_frame.maximum_channel_error}/255`:'Outside one recording’s coverage; cannot pass equality');
+ if(!f.covered)return;
+ let images;try{images=await Promise.all(['native','cranpose','difference'].map(async key=>{const image=new Image();image.src=key==='difference'?f.difference:audit.source+'/'+f[key];await image.decode();const c=document.createElement('canvas');c.width=image.naturalWidth;c.height=image.naturalHeight;const g=c.getContext('2d');g.drawImage(image,0,0);return [key,g.getImageData(0,0,c.width,c.height)]}));}catch(error){if(current===generation)$('#status').textContent+=' · Could not decode original pixels: '+error.message;return;}
+ if(current!==generation)return;decoded=Object.fromEntries(images);draw();}
+function step(delta){slider.value=Math.min(audit.rows.length-1,Math.max(0,Number(slider.value)+delta));load()}
+$('#previous').onclick=()=>step(-1);$('#next').onclick=()=>step(1);slider.oninput=load;$('#view').onchange=draw;$('#zoom').onchange=draw;
+setInterval(()=>{if($('#view').value==='blink'){blink=!blink;draw()}},500);
+canvas.onmousemove=event=>{if(!decoded.native)return;const rect=canvas.getBoundingClientRect(),x=Math.floor((event.clientX-rect.left)*canvas.width/rect.width),y=Math.floor((event.clientY-rect.top)*canvas.height/rect.height),index=(y*canvas.width+x)*4;$('#sample').textContent=`Pixel (${x}, ${y}) · native [${decoded.native.data.slice(index,index+4)}] · Cranpose [${decoded.cranpose.data.slice(index,index+4)}]`;};
+document.onkeydown=event=>{if(event.target.matches('input,select'))return;if(event.key==='ArrowLeft')step(-1);if(event.key==='ArrowRight')step(1)};load();
+</script></html>

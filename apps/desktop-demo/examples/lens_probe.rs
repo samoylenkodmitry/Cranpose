@@ -79,6 +79,7 @@ fn ProbeApp() {
                                 bulge_amplitude: 0.0,
                                 bulge_direction: 0.0,
                                 ellipse_blend: 0.0,
+                                capsule_smoothing_dp: 0.0,
                                 deformation: None,
                                 zoom_anchor: (0.0, 0.0),
                             }),

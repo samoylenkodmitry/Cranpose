@@ -1,0 +1,26 @@
+{
+  "native_binary_sha256": "65eb42a140de9a36a7d9005a15a589db13ff2a81a649a77243cf9eb72e29a0d7",
+  "swift_sha256": {
+    "apps/liquid-reference/LiquidReferenceTests/KeyframeInspectorTests.swift": "3738f1e08e8d20ac336da932111ab05ffd950ecdafdfc1cbe136187aa01f6781",
+    "apps/liquid-reference/LiquidReferenceTests/TabBarTests.swift": "173c8f9b6f43d02c446a19829955f223f1bd925a2a559cdbcdd38b012e875f9e",
+    "apps/liquid-reference/LiquidReference/LiquidReferenceApp.swift": "de3efa7941cf67dc73e0a512b6c8b6488bbfffcde6955e7043340bc99420955d",
+    "apps/liquid-reference/LiquidReference/OpticalProbes.swift": "8a900cedba00fd3b40a9f35c6210965e87ce0fa18b179062e112ab36382fd907",
+    "apps/liquid-reference/LiquidReference/NativeTrace.swift": "107026b03243f5d0003c148070f0bb3b41f1eb799faa82cad8d12c7df4bea7f8",
+    "apps/liquid-reference/LiquidReference/KeyframeInspector.swift": "87554ee0fc8cdc311856fc358fc814384827a0dbbc47913d59cf12c372599c55"
+  },
+  "result_bundle": "target/liquid-native-delivery-29.xcresult",
+  "simulator": "2D5F9968-2DC6-4972-8EC6-F4BCFEEB1680",
+  "xcode": "Xcode 26.6\nBuild version 17F113\n",
+  "clock": "CADisplayLink.timestamp relative to application touch delivery",
+  "progress": "(lens width / bar scale + lens height / bar scale - 149) / 32",
+  "inputs": {
+    "target/liquid-native-delivery-29-frames/native-1789249120434-touches.json": "a3608c67a915c5be39393dd91bfbb35f90418a2b6bc11fe779b6959fa7c1d7f8",
+    "target/liquid-native-delivery-29-frames/native-1789249120434-layers.json": "effcc5301fb3916ac195cba1d6b64c35372a4c2644b2cd310842e1b3dea0060b",
+    "target/liquid-native-delivery-29-frames/native-1789249125680-touches.json": "b1666eec1b629b86356e453c7e897af2b52e33ae7511506e91a1140e88749b13",
+    "target/liquid-native-delivery-29-frames/native-1789249125680-layers.json": "a106c6fd681129715c45feb27d64ec43dd78a18e0c5c02d8ca195509cbbe41b5",
+    "target/liquid-native-delivery-29-frames/native-1789249130157-touches.json": "9947cf56689515f97e83324e1cd22bbb872d8546f8c0aa2099eca82141e3feb1",
+    "target/liquid-native-delivery-29-frames/native-1789249130157-layers.json": "78bbae3f13e7a9057cbdd55e9987aae80077d8d794a740abdd2e0c3cc74b3870",
+    "target/liquid-native-delivery-29-frames/native-1789249134638-touches.json": "12b4a752016d820a50a3a02dcd66cef6f5e09457a33a5c79e7aa640617b8693e",
+    "target/liquid-native-delivery-29-frames/native-1789249134638-layers.json": "8d277448c649410021246629cb63ccf4679dc648a05c877d3225c7722b918160"
+  }
+}

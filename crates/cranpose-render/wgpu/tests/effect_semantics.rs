@@ -54,6 +54,76 @@ const TRANSLATED_THIN_SHAPE_LOCAL_SIZE: (u32, u32) = (40, 18);
 const TRANSLATED_GRADIENT_LOCAL_SIZE: (u32, u32) = (40, 20);
 
 #[test]
+fn isolated_backdrop_shader_preserves_fractional_edge_coverage() {
+    use cranpose_ui_graphics::{RUNTIME_SHADER_PRELUDE_WGSL, RuntimeShader};
+
+    let mut renderer = support::headless_renderer().expect("fractional backdrop test requires GPU");
+    let mut captures = Vec::new();
+    for isolated in [false, true] {
+        let bounds = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 32.0,
+            height: 18.0,
+        };
+        let shader = RuntimeShader::new(&format!(
+            "{RUNTIME_SHADER_PRELUDE_WGSL}\n@fragment fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {{ let p = input.uv * vec2<f32>(textureDimensions(input_texture)) - u[62].xy; let h = u[62].w; let a = clamp(min(p.y, h - p.y) + 0.5, 0.0, 1.0); return vec4<f32>(vec3<f32>(a), a); }}"
+        ));
+        let identity = RuntimeShader::new(&format!(
+            "{RUNTIME_SHADER_PRELUDE_WGSL}\n@fragment fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {{ return textureSample(input_texture, input_sampler, input.uv); }}"
+        ));
+        let glass = layer(
+            bounds,
+            ProjectiveTransform::identity(),
+            GraphicsLayer {
+                backdrop_effect: Some(
+                    RenderEffect::blur(1.0).then(RenderEffect::runtime_shader(shader)),
+                ),
+                render_effect: isolated.then(|| RenderEffect::runtime_shader(identity)),
+                ..Default::default()
+            },
+            vec![],
+        );
+        let scaled = layer(
+            bounds,
+            ProjectiveTransform::uniform_scale(1.0392778)
+                .then(ProjectiveTransform::translation(6.1, 5.782567)),
+            GraphicsLayer {
+                scale: 1.0392778,
+                ..Default::default()
+            },
+            vec![RenderNode::Layer(Box::new(glass))],
+        );
+        renderer.scene_mut().graph = Some(RenderGraph::new(layer(
+            frame_rect(),
+            ProjectiveTransform::identity(),
+            GraphicsLayer::default(),
+            vec![
+                solid_rect(frame_rect(), Color::BLACK),
+                RenderNode::Layer(Box::new(scaled)),
+            ],
+        )));
+        captures.push(capture_logical_frame_with_scale(
+            &mut renderer,
+            FRAME_WIDTH,
+            FRAME_HEIGHT,
+            3.0,
+        ));
+    }
+    let difference = image_difference_stats(
+        &captures[0].pixels,
+        &captures[1].pixels,
+        captures[0].width,
+        captures[0].height,
+        1,
+    );
+    assert_eq!(
+        difference.differing_pixels, 0,
+        "isolating the same backdrop changed its fractional coverage: {difference:?}"
+    );
+}
+
+#[test]
 fn subtree_alpha_capture_preserves_group_opacity_and_uses_bounded_surface() {
     let mut renderer = match support::headless_renderer() {
         Ok(renderer) => renderer,

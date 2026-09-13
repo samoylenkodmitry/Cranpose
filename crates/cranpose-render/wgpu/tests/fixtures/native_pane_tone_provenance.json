@@ -1,0 +1,345 @@
+{
+  "sampling_pixel": [
+    600,
+    2240
+  ],
+  "filter_path": "Window/0/0/0/0/0/0/0/0/0/1/1/0/0/0",
+  "captures": [
+    {
+      "capture": "target/liquid-native-optical-probes-5/probe-00.json",
+      "source_level": 0.35,
+      "metadata_sha256": "b0ebe99d406198750f8e4e705e5c34650ac0fac904954bfb0072cb55f9504692",
+      "png_sha256": "0ff4b1a76f64152227de5e72c328e03a1b81cc9183561f3009c45dec3a89d11d",
+      "native_binary_sha256": "4c3b277041649c6e278abab0e81fc4b5fbe047a824e13d41dd22e3e0c0678647"
+    },
+    {
+      "capture": "target/liquid-native-optical-probes-5/probe-01.json",
+      "source_level": 0.65,
+      "metadata_sha256": "2756a2b563b102a0b0b57c2e9684437a19532a12e72b1ab9926d21cd1fdad444",
+      "png_sha256": "2b6bfef46ea82fb61df988ab60c26d8cd5570fad89a31b9ec1ca4b259a043351",
+      "native_binary_sha256": "4c3b277041649c6e278abab0e81fc4b5fbe047a824e13d41dd22e3e0c0678647"
+    },
+    {
+      "capture": "target/liquid-native-adaptive-light-1/probe-00.json",
+      "source_level": 0,
+      "metadata_sha256": "fcf960271878e07e9980d992fdb724f08379b6f59f8acc00d8ec334e8a819911",
+      "png_sha256": "ce0fa54e2c41f7c8a1a43bb137bb574d1d54720d3c7de4cd30e3c7552fec3b05",
+      "native_binary_sha256": "4c0b3cf565f82f58c4fe038a954b8f0b18ddeffeee71ccb4d39f969c4ffeac4c"
+    },
+    {
+      "capture": "target/liquid-native-adaptive-light-1/probe-01.json",
+      "source_level": 0.15,
+      "metadata_sha256": "af214272272226ee663284783a7d2f55c28ed2477cdf10fc78faf1c3fe0d33a0",
+      "png_sha256": "80673d028a25471cc8cf08df0359381985e975f9e88a7d60170d486a43aacbe0",
+      "native_binary_sha256": "4c0b3cf565f82f58c4fe038a954b8f0b18ddeffeee71ccb4d39f969c4ffeac4c"
+    },
+    {
+      "capture": "target/liquid-native-adaptive-light-1/probe-02.json",
+      "source_level": 0.3,
+      "metadata_sha256": "555fecf5ceb4222c92c2f4082bdb0fa44eb2a7b09683938de8ea4b6a0f6b7b2e",
+      "png_sha256": "54a12abafe14e06ea1b6dece7d7eccd6273adf4f380b8ec793143556df12f286",
+      "native_binary_sha256": "4c0b3cf565f82f58c4fe038a954b8f0b18ddeffeee71ccb4d39f969c4ffeac4c"
+    },
+    {
+      "capture": "target/liquid-native-adaptive-light-1/probe-03.json",
+      "source_level": 0.5,
+      "metadata_sha256": "273766348ab29454072b245b6abf611d871c274b47eaff923d6025de306bb9ee",
+      "png_sha256": "62fdb8c6ccdef45feef3e9ba03fe087cc9b7c2bf13ba5a3d7754b521bdddbfe8",
+      "native_binary_sha256": "4c0b3cf565f82f58c4fe038a954b8f0b18ddeffeee71ccb4d39f969c4ffeac4c"
+    },
+    {
+      "capture": "target/liquid-native-adaptive-light-1/probe-04.json",
+      "source_level": 0.7,
+      "metadata_sha256": "b5c1d4baf828bd1fa82c67baadf1e5d81b4798e1134e839edf005a5cee026c92",
+      "png_sha256": "85f6217db177bfd9ce362146b3065aad3b083ea9585a9ab40cc41c94aecfeb2a",
+      "native_binary_sha256": "4c0b3cf565f82f58c4fe038a954b8f0b18ddeffeee71ccb4d39f969c4ffeac4c"
+    },
+    {
+      "capture": "target/liquid-native-adaptive-light-1/probe-05.json",
+      "source_level": 0.85,
+      "metadata_sha256": "6b951fd2ee949473f27e3aa1440f6fefea4ba0755d222f3ba91e5bbc7c2a45d2",
+      "png_sha256": "7e7bd00a98dde75a4c716d5dcc4bae99670d312dcd909ba89b96ca14e86c8cb8",
+      "native_binary_sha256": "4c0b3cf565f82f58c4fe038a954b8f0b18ddeffeee71ccb4d39f969c4ffeac4c"
+    },
+    {
+      "capture": "target/liquid-native-adaptive-light-1/probe-06.json",
+      "source_level": 1,
+      "metadata_sha256": "ec3f8afef8f12348fbaf09d04d4a82c7d7d2720e12092798c815be786dfda05a",
+      "png_sha256": "187032403baf96749cfeeceaad9cf9f000dbccbe0dad259296af7f165bb3e3be",
+      "native_binary_sha256": "4c0b3cf565f82f58c4fe038a954b8f0b18ddeffeee71ccb4d39f969c4ffeac4c"
+    },
+    {
+      "capture": "target/liquid-native-adaptive-dark-1/probe-00.json",
+      "source_level": 0,
+      "metadata_sha256": "279c873f7d3216d7cfb1e56f280e384fb89840cd2909559ddb9c7170c71c2ebf",
+      "png_sha256": "e9fd0cd78779713ae3f0e83c9d2adeb3b3e5703b1c687b9cd424a1e41b4e6890",
+      "native_binary_sha256": "4c0b3cf565f82f58c4fe038a954b8f0b18ddeffeee71ccb4d39f969c4ffeac4c"
+    },
+    {
+      "capture": "target/liquid-native-adaptive-dark-1/probe-01.json",
+      "source_level": 0.15,
+      "metadata_sha256": "4770b6b6759f474448bf097d25efa49b4007a8ee1fca7ea4e0dbd0c94e23891e",
+      "png_sha256": "8470b79161a2c99a2febad8a393cea0b08c55fdb5b3ba56b7f5f1c48158d705d",
+      "native_binary_sha256": "4c0b3cf565f82f58c4fe038a954b8f0b18ddeffeee71ccb4d39f969c4ffeac4c"
+    },
+    {
+      "capture": "target/liquid-native-adaptive-dark-1/probe-02.json",
+      "source_level": 0.3,
+      "metadata_sha256": "4bc69f23b9184da451ed8e5a99810d39ec8d0d4bda4339f0e50fd997137c3294",
+      "png_sha256": "578996432890d09fd20e1a6ecabb5af7865d6c3701fecceaa699ec3526a29ea1",
+      "native_binary_sha256": "4c0b3cf565f82f58c4fe038a954b8f0b18ddeffeee71ccb4d39f969c4ffeac4c"
+    },
+    {
+      "capture": "target/liquid-native-adaptive-dark-1/probe-03.json",
+      "source_level": 0.5,
+      "metadata_sha256": "3691254f87614c54a6e77c6d03897dd107b3cb7c82b86722d80d61ef74c6fc18",
+      "png_sha256": "a91215fb70ac9f8acf558c534a540f7d5499b4fdb13db64cab6473c371baca68",
+      "native_binary_sha256": "4c0b3cf565f82f58c4fe038a954b8f0b18ddeffeee71ccb4d39f969c4ffeac4c"
+    },
+    {
+      "capture": "target/liquid-native-adaptive-dark-1/probe-04.json",
+      "source_level": 0.7,
+      "metadata_sha256": "7e9fed9c5b4f981fa7d9f4238a93a971f95e85f0875c5f82c9a10a99c49b6754",
+      "png_sha256": "65be1e1bb7f15ff6319ca535cc3c6233448127d5de944069ec19c74b568ffa43",
+      "native_binary_sha256": "4c0b3cf565f82f58c4fe038a954b8f0b18ddeffeee71ccb4d39f969c4ffeac4c"
+    },
+    {
+      "capture": "target/liquid-native-adaptive-dark-1/probe-05.json",
+      "source_level": 0.85,
+      "metadata_sha256": "89f172182e6c9165bea242b1e5a267492d28ab8de23602cc2faa40cd85c1efc2",
+      "png_sha256": "fdad630930787b8906eed7e527f419b14a56d6121e643d8c087c429d33e63b3b",
+      "native_binary_sha256": "4c0b3cf565f82f58c4fe038a954b8f0b18ddeffeee71ccb4d39f969c4ffeac4c"
+    },
+    {
+      "capture": "target/liquid-native-adaptive-dark-1/probe-06.json",
+      "source_level": 1,
+      "metadata_sha256": "b0d0529c5ba1655ccbe2e181a945d2ee8e014c2793ca4ad29c1f9b71df2cd354",
+      "png_sha256": "106e466367b685d867fbeb2c6e0c787460327feb118d49ac5572d50c554d1043",
+      "native_binary_sha256": "4c0b3cf565f82f58c4fe038a954b8f0b18ddeffeee71ccb4d39f969c4ffeac4c"
+    },
+    {
+      "capture": "target/liquid-native-adaptive-boundaries-light-1/probe-00.json",
+      "source_level": 0.18,
+      "metadata_sha256": "61f8b0dba3587fc7410d60669ee2984d88004dd20499f6faf8fe65ab88eb14ca",
+      "png_sha256": "1c344b885ff49298ede3c84986ecad0924399c1ab192baa0f743fcc12fc7ca15",
+      "native_binary_sha256": "06ea53a050e422a37fd0c3f39688b3c5d71bc73d5f449a069fcc9bfa16ed68ff"
+    },
+    {
+      "capture": "target/liquid-native-adaptive-boundaries-light-1/probe-01.json",
+      "source_level": 0.2,
+      "metadata_sha256": "0da35e84ef79630cb5b52a71f7bc906c29e81a6939b9f7960c8dd3082b926bb2",
+      "png_sha256": "698541dee49b879ca107cb02a9af590e7b94f6d54a3e9e208590e49d3ff76974",
+      "native_binary_sha256": "06ea53a050e422a37fd0c3f39688b3c5d71bc73d5f449a069fcc9bfa16ed68ff"
+    },
+    {
+      "capture": "target/liquid-native-adaptive-boundaries-light-1/probe-02.json",
+      "source_level": 0.22,
+      "metadata_sha256": "251c44ac00bef9ea05ccdf1efe6b3e9c7b30b3870a00cef3a30088ec6ed0ca2e",
+      "png_sha256": "72ba4dcbf5bfa34478f46fffe9e3fab346b8883ed719e48dd1eb083e873dc795",
+      "native_binary_sha256": "06ea53a050e422a37fd0c3f39688b3c5d71bc73d5f449a069fcc9bfa16ed68ff"
+    },
+    {
+      "capture": "target/liquid-native-adaptive-boundaries-light-1/probe-03.json",
+      "source_level": 0.24,
+      "metadata_sha256": "b4899a888dfa2764d96016d5c905c7e0fa38f6d164de4aba14f669996def1505",
+      "png_sha256": "37c3a33dc5ef2091200350ac93541be5b27aa79a41a34b92cdedf31fa6867d80",
+      "native_binary_sha256": "06ea53a050e422a37fd0c3f39688b3c5d71bc73d5f449a069fcc9bfa16ed68ff"
+    },
+    {
+      "capture": "target/liquid-native-adaptive-boundaries-light-1/probe-04.json",
+      "source_level": 0.9,
+      "metadata_sha256": "67eaa12e300e96c0cd023fc4519eb3ad8ff16827ea3a8899bcb89ad7c1f862e0",
+      "png_sha256": "00f921b1aa1b4bcd6d92068df0d9457b1eb671ab092070065ccc44075b45e8d2",
+      "native_binary_sha256": "06ea53a050e422a37fd0c3f39688b3c5d71bc73d5f449a069fcc9bfa16ed68ff"
+    },
+    {
+      "capture": "target/liquid-native-adaptive-boundaries-light-1/probe-05.json",
+      "source_level": 0.94,
+      "metadata_sha256": "db31b41e86e22045af80b297e223e6f2cce8400551bfdf5101ebb96938c9ed12",
+      "png_sha256": "da7ec5071d2a118bad73c0dc03be1d4ea926ed96a305973a326923a8563da839",
+      "native_binary_sha256": "06ea53a050e422a37fd0c3f39688b3c5d71bc73d5f449a069fcc9bfa16ed68ff"
+    },
+    {
+      "capture": "target/liquid-native-adaptive-boundaries-light-1/probe-06.json",
+      "source_level": 0.96,
+      "metadata_sha256": "c6b0d2f05dd3d25de1a4944e670e4bdb0effe6084690f90fdf977e6349fe447c",
+      "png_sha256": "5ab583d9927d84b1d4f442986927869ffe62df643044d16de2967126bcca6e9b",
+      "native_binary_sha256": "06ea53a050e422a37fd0c3f39688b3c5d71bc73d5f449a069fcc9bfa16ed68ff"
+    },
+    {
+      "capture": "target/liquid-native-adaptive-boundaries-light-1/probe-07.json",
+      "source_level": 0.98,
+      "metadata_sha256": "04e1a570b4fd1de784c047eb47f83a6b679c8971b90c3440e64061f9a61b8361",
+      "png_sha256": "314e8e8c9f03028e83f08d1af9805080979f88f1a4992bb45785024dc7e1308f",
+      "native_binary_sha256": "06ea53a050e422a37fd0c3f39688b3c5d71bc73d5f449a069fcc9bfa16ed68ff"
+    },
+    {
+      "capture": "target/liquid-native-adaptive-boundaries-dark-1/probe-00.json",
+      "source_level": 0.18,
+      "metadata_sha256": "a2a55e440b8fbe464a7a83d9390a580d2db420115c3f7881559d851a5ac21bca",
+      "png_sha256": "7071c0df91d487c46c9f503a9520e6189b93d560fa2750ee67833c8e6228943e",
+      "native_binary_sha256": "06ea53a050e422a37fd0c3f39688b3c5d71bc73d5f449a069fcc9bfa16ed68ff"
+    },
+    {
+      "capture": "target/liquid-native-adaptive-boundaries-dark-1/probe-01.json",
+      "source_level": 0.2,
+      "metadata_sha256": "9b39f197fb5dc8632d7a5fb8c5cf04672da776ffb340f65148e2319a4b0aa22b",
+      "png_sha256": "a6103714c854a94e5dda41c947add93a317be99179223f83afaef18ee09f874e",
+      "native_binary_sha256": "06ea53a050e422a37fd0c3f39688b3c5d71bc73d5f449a069fcc9bfa16ed68ff"
+    },
+    {
+      "capture": "target/liquid-native-adaptive-boundaries-dark-1/probe-02.json",
+      "source_level": 0.22,
+      "metadata_sha256": "e81687a98f5af768fe0b0b9fd3e64cc278c76ca4a35ee05b573f85faedc80ebe",
+      "png_sha256": "0272ce070ab90d982306d6f4f2320aeee3a3ad26c76f750652168ca701a965cc",
+      "native_binary_sha256": "06ea53a050e422a37fd0c3f39688b3c5d71bc73d5f449a069fcc9bfa16ed68ff"
+    },
+    {
+      "capture": "target/liquid-native-adaptive-boundaries-dark-1/probe-03.json",
+      "source_level": 0.24,
+      "metadata_sha256": "d0bb0491a9d9566ebf7d4bf2db0193bccd389f9593ef016536515310d45ea7d8",
+      "png_sha256": "b7639f0ab54415795fba89687229091f07f0be2d320d9d44b7f67cbee339a875",
+      "native_binary_sha256": "06ea53a050e422a37fd0c3f39688b3c5d71bc73d5f449a069fcc9bfa16ed68ff"
+    },
+    {
+      "capture": "target/liquid-native-adaptive-boundaries-dark-1/probe-04.json",
+      "source_level": 0.9,
+      "metadata_sha256": "96487d3acba4afcb925a9265719fdb40e73e8e7fe45b9d2349f46ae3550d83cb",
+      "png_sha256": "ae29041a62c14f680828c5c339d8b483d3c1818027502df727e945b578295ee7",
+      "native_binary_sha256": "06ea53a050e422a37fd0c3f39688b3c5d71bc73d5f449a069fcc9bfa16ed68ff"
+    },
+    {
+      "capture": "target/liquid-native-adaptive-boundaries-dark-1/probe-05.json",
+      "source_level": 0.94,
+      "metadata_sha256": "43d15bdc8c3c3cb0521e6a586550c317d5d4c54409cf5695c6fa7eebfa006cc1",
+      "png_sha256": "81197230fa78dbd4e88ba0e08d1ee889f6a0b543c72a861da5d8f573753207e1",
+      "native_binary_sha256": "06ea53a050e422a37fd0c3f39688b3c5d71bc73d5f449a069fcc9bfa16ed68ff"
+    },
+    {
+      "capture": "target/liquid-native-adaptive-boundaries-dark-1/probe-06.json",
+      "source_level": 0.96,
+      "metadata_sha256": "2c0ab584ee883af869a8237b1d5950d2dcfcd0029c4ad5c88e16ecee92597b92",
+      "png_sha256": "2076012552230f9b29f4f08b8cb7b25e6b4633340572167f4f5c8cf44bb8219a",
+      "native_binary_sha256": "06ea53a050e422a37fd0c3f39688b3c5d71bc73d5f449a069fcc9bfa16ed68ff"
+    },
+    {
+      "capture": "target/liquid-native-adaptive-boundaries-dark-1/probe-07.json",
+      "source_level": 0.98,
+      "metadata_sha256": "6ab5e2cd467410f757967b587487f5baadb970ae1bc4f1e8edd23d286cf050ea",
+      "png_sha256": "9e58260d34970f8064e861be7bc4afae0ab9518df2a1b7c979a803859a275a4f",
+      "native_binary_sha256": "06ea53a050e422a37fd0c3f39688b3c5d71bc73d5f449a069fcc9bfa16ed68ff"
+    },
+    {
+      "capture": "target/liquid-native-adaptive-fine-light-1/probe-00.json",
+      "source_level": 0.25,
+      "metadata_sha256": "81512135ac365cbb925e36964eb4945bdd39a6c226dfd265e10d40dcf8a3de1a",
+      "png_sha256": "fbd3f54c7991cd710e50069373142276b9e2a9346bf8b2a9a9d669fee194dcfa",
+      "native_binary_sha256": "688734f8cfffbf44cde7e363325827eb0cdf13d4fca996ce57a4b873d566528a"
+    },
+    {
+      "capture": "target/liquid-native-adaptive-fine-light-1/probe-01.json",
+      "source_level": 0.26,
+      "metadata_sha256": "f3aad2147631c0a250baef1916d5d1eb9512e6ab2d587542b2bc3e87a9da6f4c",
+      "png_sha256": "f4aa3ba0aeac71c54dbce4e44951553239c434350f0ba265a48761c77fa771ae",
+      "native_binary_sha256": "688734f8cfffbf44cde7e363325827eb0cdf13d4fca996ce57a4b873d566528a"
+    },
+    {
+      "capture": "target/liquid-native-adaptive-fine-light-1/probe-02.json",
+      "source_level": 0.27,
+      "metadata_sha256": "f244accedc25e43ccb043ec9e56bca7d2ae9e3dd032d7c7f8677c2e484de3ffd",
+      "png_sha256": "0747e95ccd30dd76349d0f4c9f2d0b71e84115649e2e2539aace871a6c6765e1",
+      "native_binary_sha256": "688734f8cfffbf44cde7e363325827eb0cdf13d4fca996ce57a4b873d566528a"
+    },
+    {
+      "capture": "target/liquid-native-adaptive-fine-light-1/probe-03.json",
+      "source_level": 0.28,
+      "metadata_sha256": "6dd97f418b38454436c515e7c2b9285bfa58b6bc260dea24ad2ec25fd94cc364",
+      "png_sha256": "a53eba5d7c08307f953f8886ad506120ff75dac46056eb4a53dc4fb66341c929",
+      "native_binary_sha256": "688734f8cfffbf44cde7e363325827eb0cdf13d4fca996ce57a4b873d566528a"
+    },
+    {
+      "capture": "target/liquid-native-adaptive-fine-light-1/probe-04.json",
+      "source_level": 0.86,
+      "metadata_sha256": "dc31dc6b745e8923f968212eccb738aa3ba46d379f1b1d0ffc7e76c432a67d8e",
+      "png_sha256": "9216366fb4dad1fb3bd9e3d3b8b261ecbfc358703f39743dafd4cdbb5a3e3d66",
+      "native_binary_sha256": "688734f8cfffbf44cde7e363325827eb0cdf13d4fca996ce57a4b873d566528a"
+    },
+    {
+      "capture": "target/liquid-native-adaptive-fine-light-1/probe-05.json",
+      "source_level": 0.87,
+      "metadata_sha256": "d4ec25d67a7f6a24a3e072436fa48fa4f076a7b4b7527d82315ca7117cfec8ef",
+      "png_sha256": "9affda3385631f3a6427c68e13b0adb0310b8f438e4c84c4b356b67d1d138cc8",
+      "native_binary_sha256": "688734f8cfffbf44cde7e363325827eb0cdf13d4fca996ce57a4b873d566528a"
+    },
+    {
+      "capture": "target/liquid-native-adaptive-fine-light-1/probe-06.json",
+      "source_level": 0.88,
+      "metadata_sha256": "59e70c41a58dbdaa66ac93ec6fda95075fee602a31d5d72eb907e1288799cdaa",
+      "png_sha256": "c0f6f5c9bd4f8d75db364cc407c1e1dc2027453ed8857028c0576e44a62ce1e1",
+      "native_binary_sha256": "688734f8cfffbf44cde7e363325827eb0cdf13d4fca996ce57a4b873d566528a"
+    },
+    {
+      "capture": "target/liquid-native-adaptive-fine-light-1/probe-07.json",
+      "source_level": 0.89,
+      "metadata_sha256": "23afeec6db21f402b934a95489451c5bc072d20f3bc32eb522e861a81a65ad4d",
+      "png_sha256": "967f7fe117f0a86a4a6c303dc8b16a3654332cf244ae9dee826bb647488d5e42",
+      "native_binary_sha256": "688734f8cfffbf44cde7e363325827eb0cdf13d4fca996ce57a4b873d566528a"
+    },
+    {
+      "capture": "target/liquid-native-adaptive-fine-dark-1/probe-00.json",
+      "source_level": 0.25,
+      "metadata_sha256": "76bfb8283c28253230ca04edd2534dda5c6498de24a93576e6cfb70d9620e818",
+      "png_sha256": "6ab289d9ebf02593ce3cd7e2a02e0f9d65438067e07d1edeb6d1ca966620497e",
+      "native_binary_sha256": "688734f8cfffbf44cde7e363325827eb0cdf13d4fca996ce57a4b873d566528a"
+    },
+    {
+      "capture": "target/liquid-native-adaptive-fine-dark-1/probe-01.json",
+      "source_level": 0.26,
+      "metadata_sha256": "17aed00dd6ea519b514a2d4dbd5955293c62e9078243a012894497183177f8b8",
+      "png_sha256": "799d38b134525f9c69bc085526f128dd6bc9a3e5fdaf4fe293041196bcbd88e6",
+      "native_binary_sha256": "688734f8cfffbf44cde7e363325827eb0cdf13d4fca996ce57a4b873d566528a"
+    },
+    {
+      "capture": "target/liquid-native-adaptive-fine-dark-1/probe-02.json",
+      "source_level": 0.27,
+      "metadata_sha256": "ddf0f4589104ec6060951aa99ce2768cf0706e773f97daab155389c8abfa66b5",
+      "png_sha256": "1410413d90f3d203363f22d1407865b0b7c2cbe4dff594607b22102bed2696a7",
+      "native_binary_sha256": "688734f8cfffbf44cde7e363325827eb0cdf13d4fca996ce57a4b873d566528a"
+    },
+    {
+      "capture": "target/liquid-native-adaptive-fine-dark-1/probe-03.json",
+      "source_level": 0.28,
+      "metadata_sha256": "ac150c2a7fd6b5eb3d18511441b88333168eb134045e3ba2a49fa8c90fdb35c1",
+      "png_sha256": "960594cd16bfd92e907de37778247eb2536a770f967a2b94f13fe8dd4a20bfaf",
+      "native_binary_sha256": "688734f8cfffbf44cde7e363325827eb0cdf13d4fca996ce57a4b873d566528a"
+    },
+    {
+      "capture": "target/liquid-native-adaptive-fine-dark-1/probe-04.json",
+      "source_level": 0.86,
+      "metadata_sha256": "3fed62989b7d1ad723232e0fcbfafec66c163f09928f05c2d5b6905e956ae4e3",
+      "png_sha256": "2aab181ca2d1bfd9aff77f9313168da685844d5f8ed5a811e256e825f6fa47ce",
+      "native_binary_sha256": "688734f8cfffbf44cde7e363325827eb0cdf13d4fca996ce57a4b873d566528a"
+    },
+    {
+      "capture": "target/liquid-native-adaptive-fine-dark-1/probe-05.json",
+      "source_level": 0.87,
+      "metadata_sha256": "93cb7fe6beca19498a00007a43dcaf0557bd7fc97a6117a02b858e52e7dee086",
+      "png_sha256": "73c61cfe843f8184957c98e58a0d9edb0a521175ebabc0fdffd7d7fedb2428c9",
+      "native_binary_sha256": "688734f8cfffbf44cde7e363325827eb0cdf13d4fca996ce57a4b873d566528a"
+    },
+    {
+      "capture": "target/liquid-native-adaptive-fine-dark-1/probe-06.json",
+      "source_level": 0.88,
+      "metadata_sha256": "1a28361fa6097012de9fd07bbaf6f4dba2f97e6499fc1881be79c5d3eb2a7f8c",
+      "png_sha256": "d90cfca1f31c6c3c78bc7bde2e85a8c07748b7a9c937d51b39a57d73c2cf8c69",
+      "native_binary_sha256": "688734f8cfffbf44cde7e363325827eb0cdf13d4fca996ce57a4b873d566528a"
+    },
+    {
+      "capture": "target/liquid-native-adaptive-fine-dark-1/probe-07.json",
+      "source_level": 0.89,
+      "metadata_sha256": "d0be1b954dffef5dd74d99a9a749dba3d136ecba4af8a4a8f12550b2fcb930ff",
+      "png_sha256": "59c65483d3baf18eba67c74aacfe8c0da38cbee55eb4e3da3854b2d09cf1514a",
+      "native_binary_sha256": "688734f8cfffbf44cde7e363325827eb0cdf13d4fca996ce57a4b873d566528a"
+    }
+  ]
+}

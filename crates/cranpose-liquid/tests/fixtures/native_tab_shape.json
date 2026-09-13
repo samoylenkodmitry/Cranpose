@@ -1,0 +1,165 @@
+{
+  "description": "Every available native selection geometry sample; active wrapper and resting hierarchy both followed. Raw recordings retain frames before selection layers appear.",
+  "calibration_route": 0,
+  "validation_routes": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7
+  ],
+  "clock": "UITouch.timestamp / CADisplayLink.timestamp",
+  "position": "Lens center relative to the enclosing bar center; common rigid translation is excluded from internal strain",
+  "sources": [
+    {
+      "root": "target/liquid47-native-25-verified-frames",
+      "touches": "native-1789289739404-touches.json",
+      "layers": "native-1789289739404-layers.json",
+      "sha256": {
+        "native-1789289739404-layers.json": "2859b83aa1d6b7fe0b703f08062b83b069ad11a3298d749fc26b8e99acdd7602",
+        "native-1789289739404-touches.json": "34b77a6faba0f913d11ae26499c6fd76fe285245126cd1d48c4bc79113a707b5"
+      },
+      "recorded_frames": 684,
+      "geometry_frames": 683,
+      "environment": {
+        "architecture": "arm64",
+        "modelName": "iPhone 17 Pro Max",
+        "osBuildNumber": "24A435",
+        "osVersion": "27.0",
+        "platform": "iOS",
+        "glassTintPercent": 25
+      }
+    },
+    {
+      "root": "target/liquid47-native-0-verified-frames",
+      "touches": "native-1789289837915-touches.json",
+      "layers": "native-1789289837915-layers.json",
+      "sha256": {
+        "native-1789289837915-layers.json": "ad8ced5740b95bc23e3ccac34def391059515ea2e454173d2773b62d740d79e7",
+        "native-1789289837915-touches.json": "218d7c626b7289347242881c84988a4d3345246deb1dc1087b58eb44fee2bc23"
+      },
+      "recorded_frames": 685,
+      "geometry_frames": 684,
+      "environment": {
+        "architecture": "arm64",
+        "modelName": "iPhone 17 Pro Max",
+        "osBuildNumber": "24A435",
+        "osVersion": "27.0",
+        "platform": "iOS",
+        "glassTintPercent": 0
+      }
+    },
+    {
+      "root": "target/liquid47-native-50-verified-frames",
+      "touches": "native-1789289968421-touches.json",
+      "layers": "native-1789289968421-layers.json",
+      "sha256": {
+        "native-1789289968421-layers.json": "594eb942d1ab8ec2d7b14c3ed3cf4183436e1454163a9c80b51a0f9428d2ba8f",
+        "native-1789289968421-touches.json": "6040d27f14734d6acdffbdd64b38fe057ec5a709c3217adbae8ad6f737069469"
+      },
+      "recorded_frames": 684,
+      "geometry_frames": 683,
+      "environment": {
+        "architecture": "arm64",
+        "modelName": "iPhone 17 Pro Max",
+        "osBuildNumber": "24A435",
+        "osVersion": "27.0",
+        "platform": "iOS",
+        "glassTintPercent": 50
+      }
+    },
+    {
+      "root": "target/liquid47-native-100-verified-frames",
+      "touches": "native-1789290066304-touches.json",
+      "layers": "native-1789290066304-layers.json",
+      "sha256": {
+        "native-1789290066304-layers.json": "a61bf4337241adbf9831a610fa45ab37a0e67ef4c6304e36fcdcbb93d4775154",
+        "native-1789290066304-touches.json": "e0434117294bf11db47c2d3a958c82fe385d6df65db7f6413a440075ffe68f9f"
+      },
+      "recorded_frames": 682,
+      "geometry_frames": 681,
+      "environment": {
+        "architecture": "arm64",
+        "modelName": "iPhone 17 Pro Max",
+        "osBuildNumber": "24A435",
+        "osVersion": "27.0",
+        "platform": "iOS",
+        "glassTintPercent": 100
+      }
+    },
+    {
+      "root": "target/liquid47-native-holdout-frames",
+      "touches": "native-1789290285058-touches.json",
+      "layers": "native-1789290285058-layers.json",
+      "sha256": {
+        "native-1789290285058-layers.json": "64e376d15ada4d266f61a2887e29515e7c4d8f927c9be6227383bc5166ccd90a",
+        "native-1789290285058-touches.json": "e23c6b3f0a2f283b982bed1de6fdf3439e755609f01e2c3289b45169cb7a4348"
+      },
+      "recorded_frames": 468,
+      "geometry_frames": 467,
+      "environment": {
+        "architecture": "arm64",
+        "modelName": "iPhone 17 Pro Max",
+        "osBuildNumber": "24A435",
+        "osVersion": "27.0",
+        "platform": "iOS"
+      }
+    },
+    {
+      "root": "target/liquid47-native-holdout-frames",
+      "touches": "native-1789290290954-touches.json",
+      "layers": "native-1789290290954-layers.json",
+      "sha256": {
+        "native-1789290290954-layers.json": "27163c6958d2e5929f89654a88189e974fc575eac3b250d58e8c2920d4bc1de8",
+        "native-1789290290954-touches.json": "43541d9e6873d6e4f1dba657c5ae86b3e3432d3da92eb999917dca43c8cc0cc9"
+      },
+      "recorded_frames": 365,
+      "geometry_frames": 364,
+      "environment": {
+        "architecture": "arm64",
+        "modelName": "iPhone 17 Pro Max",
+        "osBuildNumber": "24A435",
+        "osVersion": "27.0",
+        "platform": "iOS"
+      }
+    },
+    {
+      "root": "target/liquid47-native-holdout-frames",
+      "touches": "native-1789290295950-touches.json",
+      "layers": "native-1789290295950-layers.json",
+      "sha256": {
+        "native-1789290295950-layers.json": "2de3ab2114a7413ae88df4cd1b70521d58299d3e1de3c93cb4ea7ee6a71b185b",
+        "native-1789290295950-touches.json": "b25c50ec5040c6dcfdb66895cf7ff095a665608997a98449df34bec53af31a77"
+      },
+      "recorded_frames": 367,
+      "geometry_frames": 366,
+      "environment": {
+        "architecture": "arm64",
+        "modelName": "iPhone 17 Pro Max",
+        "osBuildNumber": "24A435",
+        "osVersion": "27.0",
+        "platform": "iOS"
+      }
+    },
+    {
+      "root": "target/liquid47-native-holdout-frames",
+      "touches": "native-1789290301045-touches.json",
+      "layers": "native-1789290301045-layers.json",
+      "sha256": {
+        "native-1789290301045-layers.json": "b1bf297fac99341e3702127d7c6a44807874bda7fe236cb6408743e602f3bb33",
+        "native-1789290301045-touches.json": "cb6b80da5ef8d391f0e7b265dbf8f5584ddc6d7445282862050d4b688f448466"
+      },
+      "recorded_frames": 470,
+      "geometry_frames": 469,
+      "environment": {
+        "architecture": "arm64",
+        "modelName": "iPhone 17 Pro Max",
+        "osBuildNumber": "24A435",
+        "osVersion": "27.0",
+        "platform": "iOS"
+      }
+    }
+  ]
+}

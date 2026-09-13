@@ -29,8 +29,8 @@ use crate::{
     },
     effect_renderer::{
         AtlasSideWork, BlurRegion, CompositeSampleMode, EffectReads, EffectScratchTargetProvider,
-        RoundedCompositeMask, SubstrateRegion, SubstrateRegions, blur_scratch_size,
-        substrate_scratch_size,
+        RoundedCompositeMask, SubstrateAverage, SubstrateRegion, SubstrateRegions,
+        blur_scratch_size, substrate_scratch_size,
     },
     frame_graph::{
         FrameCommandRecorder, FrameTextureDescriptor, TextureRegionCopy, copy_compatible,
@@ -1052,7 +1052,9 @@ fn rendered_surface(whole: DeviceRect, shown: DeviceRect, reach: f32) -> DeviceR
 /// unless the child has neither.
 fn shader_tail_composites(child: &ChildLayer, shader: &RuntimeShader) -> bool {
     let plain = child.alpha >= 1.0 && child.rounded_clip.is_none();
-    child.blend_mode == BlendMode::SrcOver && (plain || shader.batched_source())
+    shader.substrates().is_empty()
+        && child.blend_mode == BlendMode::SrcOver
+        && (plain || shader.batched_source())
 }
 
 /// The child's layer bounds in the pixels of a surface at `surface_rect`.
@@ -1403,13 +1405,31 @@ fn stage_blur_regions(
             source: (placement.x, placement.y, width, height),
             scratch,
             dest: scratch,
-            radius_x: blur.radius_x * scale,
-            radius_y: blur.radius_y * scale,
+            radius_x: blur.radius_x,
+            radius_y: blur.radius_y,
             tile_mode: blur.tile_mode,
             read: member_read_texels(items[index], placement, scale),
         });
     }
     Ok(slots)
+}
+
+fn mean_capture_rect(item: &PendingBackdrop<'_>) -> DeviceRect {
+    item.layer_rect
+        .intersect(item.capture_rect)
+        .unwrap_or(item.capture_rect)
+        .snap_out()
+}
+
+fn mean_source_region(item: &PendingBackdrop<'_>, placement: AtlasPlacement) -> TexelRect {
+    let rect = mean_capture_rect(item);
+    let (width, height) = rect.pixel_size();
+    (
+        placement.x + (rect.x - item.capture_rect.x).max(0.0) as u32,
+        placement.y + (rect.y - item.capture_rect.y).max(0.0) as u32,
+        width,
+        height,
+    )
 }
 
 fn stage_substrate_regions(
@@ -1440,10 +1460,16 @@ fn stage_substrate_regions(
             };
             let read = member_read_texels(items[*index], *placement, scale);
             match planned.spec {
+                SubstrateSpec::Mean => averaged.push(SubstrateRegion {
+                    source: mean_source_region(items[*index], *placement),
+                    scratch,
+                    average: SubstrateAverage::Mean,
+                    read: None,
+                }),
                 SubstrateSpec::Average { block } => averaged.push(SubstrateRegion {
                     source,
                     scratch,
-                    block,
+                    average: SubstrateAverage::Block(block),
                     read,
                 }),
                 SubstrateSpec::Blur { radius_px } => regions.push(BlurRegion {
@@ -1458,10 +1484,10 @@ fn stage_substrate_regions(
             }
             member_regions[member][order] = Some(region_tuple(match planned.atlas_slot {
                 Some((x, y, _, _)) => {
-                    copies.push((scratch, [x, y]));
+                    copies.push(((scratch.0, scratch.1, width, height), [x, y]));
                     (x, y, width, height)
                 }
-                None => scratch,
+                None => (scratch.0, scratch.1, width, height),
             }));
         }
     }
@@ -1476,6 +1502,7 @@ fn region_tuple((x, y, width, height): TexelRect) -> (f32, f32, f32, f32) {
 /// texel per block, a blur its scratch size.
 fn substrate_size(spec: SubstrateSpec, (width, height): (u32, u32)) -> (u32, u32) {
     match spec {
+        SubstrateSpec::Mean => (1, 1),
         SubstrateSpec::Average { block } => {
             (width.div_ceil(block).max(1), height.div_ceil(block).max(1))
         }
@@ -1491,6 +1518,7 @@ fn substrate_size(spec: SubstrateSpec, (width, height): (u32, u32)) -> (u32, u32
 struct PlannedSubstrate {
     spec: SubstrateSpec,
     size: (u32, u32),
+    work_size: (u32, u32),
     atlas_slot: Option<TexelRect>,
 }
 
@@ -1548,6 +1576,7 @@ impl StageLayout {
         }
         for planned in &self.substrates[index] {
             match planned.spec {
+                SubstrateSpec::Mean => 2u8.hash(&mut hasher),
                 SubstrateSpec::Average { block } => {
                     0u8.hash(&mut hasher);
                     block.hash(&mut hasher);
@@ -2260,7 +2289,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 .collect();
             let layout = {
                 let stage_items: Vec<&PendingBackdrop<'_>> = pending[start..end].iter().collect();
-                self.plan_stage(&stage_items, pass.scale)
+                self.plan_stage(&stage_items)
             };
             let (items, indices) = self.take_uncached(pass, &mut pending[start..end], &layout);
             if !items.is_empty() {
@@ -2555,62 +2584,34 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             .intersect(pass.target_rect())
             .unwrap_or(visible)
             .snap_out();
-        let capture = self.capture(pass, z, capture_rect, "Child Backdrop Capture")?;
-        let layer_pixel_rect = [
-            dest.x - capture_rect.x,
-            dest.y - capture_rect.y,
-            dest.width,
-            dest.height,
-        ];
-        let rounded_mask = translation.and_then(|_| grid_rounded_mask(child, snap, scale));
-        if let RenderEffect::Shader { shader } = backdrop
-            && (rounded_mask.is_none() || shader.batched_source())
-        {
-            return Ok(ResolvedComposite {
-                z_index: z,
-                source: capture,
-                content: SourceContent::Transient,
-                dest: capture_rect.tuple(),
-                scissor: Some(support.tuple()),
-                kind: ResolvedCompositeKind::Shader {
-                    shader: Arc::clone(shader),
-                    layer_pixel_rect,
-                    source_region: None,
-                    source_logical_size: None,
-                    substrate_regions: [None; MAX_SUBSTRATES],
-                    rounded_mask,
-                    alpha: 1.0,
-                },
-            });
-        }
-        let reads = effect_reads(
-            backdrop,
-            blit_read_rect(support, capture_rect, false),
-            dest,
+        let item = PendingBackdrop {
+            z,
+            node_id: child.node_id,
+            key: None,
             capture_rect,
-            scale,
-        );
-        let result = self.apply_effect(
-            &capture,
-            backdrop,
-            layer_pixel_rect,
-            reads,
-            "Child Backdrop Effect",
-        )?;
-        Ok(ResolvedComposite {
-            z_index: z,
-            source: result,
-            content: SourceContent::Transient,
-            dest: capture_rect.tuple(),
-            scissor: Some(support.tuple()),
-            kind: ResolvedCompositeKind::Blit {
-                alpha: 1.0,
-                blend_mode: BlendMode::SrcOver,
-                rounded_mask,
-                sample_mode: CompositeSampleMode::Nearest,
-                source_viewport: None,
-            },
-        })
+            layer_rect: dest,
+            visible,
+            effect: backdrop,
+            rounded_mask: translation.and_then(|_| grid_rounded_mask(child, snap, scale)),
+            batched: batched_effect(backdrop),
+            stage: 0,
+            support: Some(support),
+        };
+        if item
+            .batched
+            .is_some_and(|effect| !effect.substrates().is_empty())
+        {
+            let items = [&item];
+            let layout = self.plan_stage(&items);
+            if layout.placements[0].is_some() {
+                return self
+                    .run_stage(pass, &items, &layout)?
+                    .pop()
+                    .ok_or_else(|| "a child backdrop substrate produced no composite".into());
+            }
+        }
+        let capture = self.capture(pass, z, capture_rect, "Child Backdrop Capture")?;
+        self.resolve_captured_backdrop(&item, capture, scale)
     }
 
     /// Places every batched member of a stage into the atlas, in item order.
@@ -2662,6 +2663,10 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 substrates[index].push(PlannedSubstrate {
                     spec: *spec,
                     size,
+                    work_size: match spec {
+                        SubstrateSpec::Mean => (1, mean_capture_rect(item).pixel_size().1),
+                        _ => size,
+                    },
                     atlas_slot,
                 });
             }
@@ -2669,7 +2674,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         (packer, placements, substrates)
     }
 
-    fn plan_stage(&self, items: &[&PendingBackdrop<'_>], scale: f32) -> StageLayout {
+    fn plan_stage(&self, items: &[&PendingBackdrop<'_>]) -> StageLayout {
         let (packer, placements, substrates) = self.pack_stage(items);
         let limit = self.renderer.max_texture_dim().min(MAX_ATLAS_DIM);
         let atlas_sizes: Vec<(u32, u32)> = packer
@@ -2687,17 +2692,12 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 }
                 if let Some(blur) = items[index].batched.and_then(|batched| batched.blur()) {
                     let (width, height) = items[index].capture_rect.pixel_size();
-                    let size = blur_scratch_size(
-                        blur.radius_x * scale,
-                        blur.radius_y * scale,
-                        width,
-                        height,
-                    );
+                    let size = blur_scratch_size(blur.radius_x, blur.radius_y, width, height);
                     requests.push((size, &mut slots.blur));
                 }
                 slots.substrates.resize(substrates[index].len(), None);
                 for (planned, slot) in substrates[index].iter().zip(&mut slots.substrates) {
-                    requests.push((planned.size, slot));
+                    requests.push((planned.work_size, slot));
                 }
             }
             requests.sort_unstable_by_key(|((width, height), _)| {
@@ -3594,6 +3594,7 @@ fn shader_tail(effect: &RenderEffect) -> Option<(Option<&RenderEffect>, &Arc<Run
         },
         _ => None,
     }
+    .filter(|(_, shader)| shader.substrates().is_empty())
 }
 
 /// The rounded mask of a child composited at `translation`.
@@ -3980,6 +3981,7 @@ mod tests {
                         .map(|(slot, spec)| PlannedSubstrate {
                             spec: *spec,
                             size: (16, 8),
+                            work_size: (16, 8),
                             atlas_slot: Some((slot as u32 * 16, member as u32 * 8, 16, 8)),
                         })
                         .collect()

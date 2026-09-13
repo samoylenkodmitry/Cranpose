@@ -11,6 +11,7 @@ pub const FRAME_CLEAR_COLOR: [f32; 4] = [18.0 / 255.0, 18.0 / 255.0, 24.0 / 255.
 pub mod brush_sampling;
 pub mod font_layout;
 pub mod font_source;
+mod font_tracking;
 pub mod geometry;
 pub mod gpos_kerning;
 pub mod graph;

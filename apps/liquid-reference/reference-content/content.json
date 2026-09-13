@@ -1,0 +1,2154 @@
+[
+  {
+    "alpha" : 1,
+    "compositingLayers" : [
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "Optional([vibrantColorMatrix])",
+        "kind" : "_UIMultiLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIMultiLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "Optional([])",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIMultiLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "UIWindowLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIWindowTransformLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIWindowTransformLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "UIWindowLayer",
+        "opacity" : 1
+      }
+    ],
+    "configuration" : "Optional(<UIImageSymbolConfiguration:0x101c4ad60 pointSize=18, weight=Medium, scale=Large>)",
+    "contentMode" : 0,
+    "image" : "native-symbol-0.png",
+    "imageSize" : [
+      30.333333333333332,
+      28.333333333333332
+    ],
+    "kind" : "UIImageView",
+    "rect" : [
+      57,
+      800,
+      30.333333333333329,
+      28.333333333333371
+    ],
+    "scale" : 3,
+    "tintColor" : "UIExtendedSRGBColorSpace 0 0.533333 1 1"
+  },
+  {
+    "alpha" : 1,
+    "compositingLayers" : [
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UILabelLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "Optional([vibrantColorMatrix])",
+        "kind" : "_UIMultiLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIMultiLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "Optional([])",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIMultiLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "UIWindowLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIWindowTransformLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIWindowTransformLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "UIWindowLayer",
+        "opacity" : 1
+      }
+    ],
+    "font" : ".SFUI-Semibold",
+    "fontAttributes" : "[__C.UIFontDescriptorAttributeName(_rawValue: NSFontSizeAttribute): 10, __C.UIFontDescriptorAttributeName(_rawValue: NSCTFontUIUsageAttribute): CTFontDemiUsage]",
+    "fontSize" : 10,
+    "fontVariations" : "Optional({\n    2003265652 = 590;\n    1869640570 = 17;\n})",
+    "kind" : "Label",
+    "rect" : [
+      51,
+      830,
+      44,
+      12
+    ],
+    "text" : "Discover",
+    "textAttributes" : "[__C.NSAttributedStringKey(_rawValue: NSFont): <UICTFont: 0x105b4d400> font-family: \".SFUI-Semibold\"; font-weight: bold; font-style: normal; font-size: 10.00pt]",
+    "textColor" : "UIExtendedSRGBColorSpace 0 0.533333 1 1",
+    "tintColor" : "UIExtendedSRGBColorSpace 0 0.533333 1 1"
+  },
+  {
+    "alpha" : 1,
+    "compositingLayers" : [
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "Optional([vibrantColorMatrix])",
+        "kind" : "_UIMultiLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIMultiLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "Optional([])",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIMultiLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "UIWindowLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIWindowTransformLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIWindowTransformLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "UIWindowLayer",
+        "opacity" : 1
+      }
+    ],
+    "configuration" : "Optional(<UIImageSymbolConfiguration:0x101c4ad60 pointSize=18, weight=Medium, scale=Large>)",
+    "contentMode" : 0,
+    "image" : "native-symbol-2.png",
+    "imageSize" : [
+      26.333333333333332,
+      27
+    ],
+    "kind" : "UIImageView",
+    "rect" : [
+      144.66666666666669,
+      801.33333333333337,
+      26.333333333333343,
+      27
+    ],
+    "scale" : 3,
+    "tintColor" : "UIExtendedSRGBColorSpace 0 0.533333 1 1"
+  },
+  {
+    "alpha" : 1,
+    "compositingLayers" : [
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UILabelLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "Optional([vibrantColorMatrix])",
+        "kind" : "_UIMultiLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIMultiLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "Optional([])",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIMultiLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "UIWindowLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIWindowTransformLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIWindowTransformLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "UIWindowLayer",
+        "opacity" : 1
+      }
+    ],
+    "font" : ".SFUI-Semibold",
+    "fontAttributes" : "[__C.UIFontDescriptorAttributeName(_rawValue: NSFontSizeAttribute): 10, __C.UIFontDescriptorAttributeName(_rawValue: NSCTFontUIUsageAttribute): CTFontDemiUsage]",
+    "fontSize" : 10,
+    "fontVariations" : "Optional({\n    2003265652 = 590;\n    1869640570 = 17;\n})",
+    "kind" : "Label",
+    "rect" : [
+      139.66666666666669,
+      830,
+      37,
+      12
+    ],
+    "text" : "Browse",
+    "textAttributes" : "[__C.NSAttributedStringKey(_rawValue: NSFont): <UICTFont: 0x105b4d400> font-family: \".SFUI-Semibold\"; font-weight: bold; font-style: normal; font-size: 10.00pt]",
+    "textColor" : "UIExtendedSRGBColorSpace 0 0.533333 1 1",
+    "tintColor" : "UIExtendedSRGBColorSpace 0 0.533333 1 1"
+  },
+  {
+    "alpha" : 1,
+    "compositingLayers" : [
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "Optional([vibrantColorMatrix])",
+        "kind" : "_UIMultiLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIMultiLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "Optional([])",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIMultiLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "UIWindowLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIWindowTransformLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIWindowTransformLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "UIWindowLayer",
+        "opacity" : 1
+      }
+    ],
+    "configuration" : "Optional(<UIImageSymbolConfiguration:0x101c4ad60 pointSize=18, weight=Medium, scale=Large>)",
+    "contentMode" : 0,
+    "image" : "native-symbol-4.png",
+    "imageSize" : [
+      24.333333333333332,
+      28.666666666666668
+    ],
+    "kind" : "UIImageView",
+    "rect" : [
+      231.33333333333334,
+      800.66666666666663,
+      24.333333333333343,
+      28.666666666666629
+    ],
+    "scale" : 3,
+    "tintColor" : "UIExtendedSRGBColorSpace 0 0.533333 1 1"
+  },
+  {
+    "alpha" : 1,
+    "compositingLayers" : [
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UILabelLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "Optional([vibrantColorMatrix])",
+        "kind" : "_UIMultiLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIMultiLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "Optional([])",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIMultiLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "UIWindowLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIWindowTransformLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIWindowTransformLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "UIWindowLayer",
+        "opacity" : 1
+      }
+    ],
+    "font" : ".SFUI-Semibold",
+    "fontAttributes" : "[__C.UIFontDescriptorAttributeName(_rawValue: NSFontSizeAttribute): 10, __C.UIFontDescriptorAttributeName(_rawValue: NSCTFontUIUsageAttribute): CTFontDemiUsage]",
+    "fontSize" : 10,
+    "fontVariations" : "Optional({\n    2003265652 = 590;\n    1869640570 = 17;\n})",
+    "kind" : "Label",
+    "rect" : [
+      228.33333333333334,
+      830,
+      30.666666666666657,
+      12
+    ],
+    "text" : "Saved",
+    "textAttributes" : "[__C.NSAttributedStringKey(_rawValue: NSFont): <UICTFont: 0x105b4d400> font-family: \".SFUI-Semibold\"; font-weight: bold; font-style: normal; font-size: 10.00pt]",
+    "textColor" : "UIExtendedSRGBColorSpace 0 0.533333 1 1",
+    "tintColor" : "UIExtendedSRGBColorSpace 0 0.533333 1 1"
+  },
+  {
+    "alpha" : 1,
+    "compositingLayers" : [
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "Optional([vibrantColorMatrix])",
+        "kind" : "_UIMultiLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIMultiLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "Optional([])",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIMultiLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "UIWindowLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIWindowTransformLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIWindowTransformLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "UIWindowLayer",
+        "opacity" : 1
+      }
+    ],
+    "configuration" : "Optional(<UIImageSymbolConfiguration:0x101c4ad60 pointSize=18, weight=Medium, scale=Large>)",
+    "contentMode" : 0,
+    "image" : "native-symbol-6.png",
+    "imageSize" : [
+      27.333333333333332,
+      27.333333333333332
+    ],
+    "kind" : "UIImageView",
+    "rect" : [
+      316,
+      801.33333333333337,
+      27.333333333333314,
+      27.333333333333371
+    ],
+    "scale" : 3,
+    "tintColor" : "UIExtendedSRGBColorSpace 0 0.533333 1 1"
+  },
+  {
+    "alpha" : 1,
+    "compositingLayers" : [
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UILabelLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "Optional([vibrantColorMatrix])",
+        "kind" : "_UIMultiLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIMultiLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "Optional([])",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIMultiLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "UIWindowLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIWindowTransformLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIWindowTransformLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "UIWindowLayer",
+        "opacity" : 1
+      }
+    ],
+    "font" : ".SFUI-Semibold",
+    "fontAttributes" : "[__C.UIFontDescriptorAttributeName(_rawValue: NSFontSizeAttribute): 10, __C.UIFontDescriptorAttributeName(_rawValue: NSCTFontUIUsageAttribute): CTFontDemiUsage]",
+    "fontSize" : 10,
+    "fontVariations" : "Optional({\n    2003265652 = 590;\n    1869640570 = 17;\n})",
+    "kind" : "Label",
+    "rect" : [
+      309,
+      830,
+      41.666666666666686,
+      12
+    ],
+    "text" : "Account",
+    "textAttributes" : "[__C.NSAttributedStringKey(_rawValue: NSFont): <UICTFont: 0x105b4d400> font-family: \".SFUI-Semibold\"; font-weight: bold; font-style: normal; font-size: 10.00pt]",
+    "textColor" : "UIExtendedSRGBColorSpace 0 0.533333 1 1",
+    "tintColor" : "UIExtendedSRGBColorSpace 0 0.533333 1 1"
+  },
+  {
+    "alpha" : 1,
+    "compositingLayers" : [
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "Optional([vibrantColorMatrix])",
+        "kind" : "_UIMultiLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIMultiLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "Optional([])",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIMultiLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "UIWindowLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIWindowTransformLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIWindowTransformLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "UIWindowLayer",
+        "opacity" : 1
+      }
+    ],
+    "configuration" : "Optional(<UIImageSymbolConfiguration:0x101c4ad60 pointSize=18, weight=Medium, scale=Large>)",
+    "contentMode" : 0,
+    "image" : "native-symbol-8.png",
+    "imageSize" : [
+      30.333333333333332,
+      28.333333333333332
+    ],
+    "kind" : "UIImageView",
+    "rect" : [
+      57,
+      800,
+      30.333333333333329,
+      28.333333333333371
+    ],
+    "scale" : 3,
+    "tintColor" : "kCGColorSpaceModelMonochrome 0 1"
+  },
+  {
+    "alpha" : 1,
+    "compositingLayers" : [
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UILabelLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "Optional([vibrantColorMatrix])",
+        "kind" : "_UIMultiLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIMultiLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "Optional([])",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIMultiLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "UIWindowLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIWindowTransformLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIWindowTransformLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "UIWindowLayer",
+        "opacity" : 1
+      }
+    ],
+    "font" : ".SFUI-Medium",
+    "fontAttributes" : "[__C.UIFontDescriptorAttributeName(_rawValue: NSFontSizeAttribute): 10, __C.UIFontDescriptorAttributeName(_rawValue: NSCTFontUIUsageAttribute): CTFontMediumUsage]",
+    "fontSize" : 10,
+    "fontVariations" : "Optional({\n    2003265652 = 510;\n    1869640570 = 17;\n})",
+    "kind" : "Label",
+    "rect" : [
+      51,
+      830,
+      43,
+      12
+    ],
+    "text" : "Discover",
+    "textAttributes" : "[:]",
+    "textColor" : "kCGColorSpaceModelMonochrome 0 1",
+    "tintColor" : "kCGColorSpaceModelMonochrome 0 1"
+  },
+  {
+    "alpha" : 1,
+    "compositingLayers" : [
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "Optional([vibrantColorMatrix])",
+        "kind" : "_UIMultiLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIMultiLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "Optional([])",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIMultiLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "UIWindowLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIWindowTransformLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIWindowTransformLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "UIWindowLayer",
+        "opacity" : 1
+      }
+    ],
+    "configuration" : "Optional(<UIImageSymbolConfiguration:0x101c4ad60 pointSize=18, weight=Medium, scale=Large>)",
+    "contentMode" : 0,
+    "image" : "native-symbol-10.png",
+    "imageSize" : [
+      26.333333333333332,
+      27
+    ],
+    "kind" : "UIImageView",
+    "rect" : [
+      144.66666666666669,
+      801.33333333333337,
+      26.333333333333343,
+      27
+    ],
+    "scale" : 3,
+    "tintColor" : "kCGColorSpaceModelMonochrome 0 1"
+  },
+  {
+    "alpha" : 1,
+    "compositingLayers" : [
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UILabelLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "Optional([vibrantColorMatrix])",
+        "kind" : "_UIMultiLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIMultiLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "Optional([])",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIMultiLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "UIWindowLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIWindowTransformLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIWindowTransformLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "UIWindowLayer",
+        "opacity" : 1
+      }
+    ],
+    "font" : ".SFUI-Medium",
+    "fontAttributes" : "[__C.UIFontDescriptorAttributeName(_rawValue: NSFontSizeAttribute): 10, __C.UIFontDescriptorAttributeName(_rawValue: NSCTFontUIUsageAttribute): CTFontMediumUsage]",
+    "fontSize" : 10,
+    "fontVariations" : "Optional({\n    2003265652 = 510;\n    1869640570 = 17;\n})",
+    "kind" : "Label",
+    "rect" : [
+      139.66666666666669,
+      830,
+      36.333333333333343,
+      12
+    ],
+    "text" : "Browse",
+    "textAttributes" : "[:]",
+    "textColor" : "kCGColorSpaceModelMonochrome 0 1",
+    "tintColor" : "kCGColorSpaceModelMonochrome 0 1"
+  },
+  {
+    "alpha" : 1,
+    "compositingLayers" : [
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "Optional([vibrantColorMatrix])",
+        "kind" : "_UIMultiLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIMultiLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "Optional([])",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIMultiLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "UIWindowLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIWindowTransformLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIWindowTransformLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "UIWindowLayer",
+        "opacity" : 1
+      }
+    ],
+    "configuration" : "Optional(<UIImageSymbolConfiguration:0x101c4ad60 pointSize=18, weight=Medium, scale=Large>)",
+    "contentMode" : 0,
+    "image" : "native-symbol-12.png",
+    "imageSize" : [
+      24.333333333333332,
+      28.666666666666668
+    ],
+    "kind" : "UIImageView",
+    "rect" : [
+      231.33333333333334,
+      800.66666666666663,
+      24.333333333333343,
+      28.666666666666629
+    ],
+    "scale" : 3,
+    "tintColor" : "kCGColorSpaceModelMonochrome 0 1"
+  },
+  {
+    "alpha" : 1,
+    "compositingLayers" : [
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UILabelLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "Optional([vibrantColorMatrix])",
+        "kind" : "_UIMultiLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIMultiLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "Optional([])",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIMultiLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "UIWindowLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIWindowTransformLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIWindowTransformLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "UIWindowLayer",
+        "opacity" : 1
+      }
+    ],
+    "font" : ".SFUI-Medium",
+    "fontAttributes" : "[__C.UIFontDescriptorAttributeName(_rawValue: NSFontSizeAttribute): 10, __C.UIFontDescriptorAttributeName(_rawValue: NSCTFontUIUsageAttribute): CTFontMediumUsage]",
+    "fontSize" : 10,
+    "fontVariations" : "Optional({\n    2003265652 = 510;\n    1869640570 = 17;\n})",
+    "kind" : "Label",
+    "rect" : [
+      228.33333333333334,
+      830,
+      30.333333333333343,
+      12
+    ],
+    "text" : "Saved",
+    "textAttributes" : "[:]",
+    "textColor" : "kCGColorSpaceModelMonochrome 0 1",
+    "tintColor" : "kCGColorSpaceModelMonochrome 0 1"
+  },
+  {
+    "alpha" : 1,
+    "compositingLayers" : [
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "Optional([vibrantColorMatrix])",
+        "kind" : "_UIMultiLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIMultiLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "Optional([])",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIMultiLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "UIWindowLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIWindowTransformLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIWindowTransformLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "UIWindowLayer",
+        "opacity" : 1
+      }
+    ],
+    "configuration" : "Optional(<UIImageSymbolConfiguration:0x101c4ad60 pointSize=18, weight=Medium, scale=Large>)",
+    "contentMode" : 0,
+    "image" : "native-symbol-14.png",
+    "imageSize" : [
+      27.333333333333332,
+      27.333333333333332
+    ],
+    "kind" : "UIImageView",
+    "rect" : [
+      316,
+      801.33333333333337,
+      27.333333333333314,
+      27.333333333333371
+    ],
+    "scale" : 3,
+    "tintColor" : "kCGColorSpaceModelMonochrome 0 1"
+  },
+  {
+    "alpha" : 1,
+    "compositingLayers" : [
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UILabelLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "Optional([vibrantColorMatrix])",
+        "kind" : "_UIMultiLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIMultiLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "Optional([])",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIMultiLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "CALayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "UIWindowLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIWindowTransformLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "_UIWindowTransformLayer",
+        "opacity" : 1
+      },
+      {
+        "compositingFilter" : "nil",
+        "filters" : "nil",
+        "kind" : "UIWindowLayer",
+        "opacity" : 1
+      }
+    ],
+    "font" : ".SFUI-Medium",
+    "fontAttributes" : "[__C.UIFontDescriptorAttributeName(_rawValue: NSFontSizeAttribute): 10, __C.UIFontDescriptorAttributeName(_rawValue: NSCTFontUIUsageAttribute): CTFontMediumUsage]",
+    "fontSize" : 10,
+    "fontVariations" : "Optional({\n    2003265652 = 510;\n    1869640570 = 17;\n})",
+    "kind" : "Label",
+    "rect" : [
+      309,
+      830,
+      41,
+      12
+    ],
+    "text" : "Account",
+    "textAttributes" : "[:]",
+    "textColor" : "kCGColorSpaceModelMonochrome 0 1",
+    "tintColor" : "kCGColorSpaceModelMonochrome 0 1"
+  }
+]

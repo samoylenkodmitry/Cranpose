@@ -11,7 +11,10 @@ mod search_field;
 mod segmented;
 mod slider;
 mod tab_bar;
+mod tab_lighting;
+mod tab_motion;
 mod toggle;
+mod vibrancy;
 
 pub use button::{
     GlassButton, GlassButtonLabel, GlassButtonSpec, GlassButtonStyle, GlassIconButton,
@@ -32,6 +35,7 @@ pub use segmented::{LiquidSegmentedControl, LiquidSegmentedControlScope};
 pub use slider::LiquidSlider;
 pub use tab_bar::{
     LiquidTab, LiquidTabBar, LiquidTabBarScope, LiquidTabBarSearchAccessory, LiquidTabBarSpec,
-    LiquidTabBarWithAccessory, LiquidTabIconStyle, tab_lens_rest_width, tab_lens_resting_left,
+    LiquidTabBarWithAccessory, LiquidTabIcon, LiquidTabIconStyle, tab_lens_rest_width,
+    tab_lens_resting_left,
 };
 pub use toggle::LiquidToggle;

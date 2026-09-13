@@ -1320,7 +1320,7 @@ fn next_glyph_atlas_size(current: u32, max: u32) -> u32 {
 struct TextGlyphAtlas {
     texture: wgpu::Texture,
     _view: wgpu::TextureView,
-    bind_group: wgpu::BindGroup,
+    bind_group: Rc<wgpu::BindGroup>,
     entries: BoundedLruCache<SoftwareGlyphAtlasKey, GlyphAtlasEntry>,
     generation: u64,
     size: u32,
@@ -1359,7 +1359,7 @@ impl TextGlyphAtlas {
         Self {
             texture,
             _view: view,
-            bind_group,
+            bind_group: Rc::new(bind_group),
             entries: BoundedLruCache::with_capacity_at_least_one(MAX_TEXT_GLYPH_ATLAS_ITEMS),
             generation: 0,
             size,
@@ -1532,13 +1532,20 @@ enum GlyphDrawSource {
 
 #[derive(Clone)]
 pub(crate) struct GlyphDrawCmd {
+    atlas: Rc<wgpu::BindGroup>,
     source: GlyphDrawSource,
     scissor: (u32, u32, u32, u32),
 }
 
 impl GlyphDrawCmd {
-    fn shared(index_start: u32, index_count: u32, scissor: (u32, u32, u32, u32)) -> Self {
+    fn shared(
+        index_start: u32,
+        index_count: u32,
+        scissor: (u32, u32, u32, u32),
+        atlas: Rc<wgpu::BindGroup>,
+    ) -> Self {
         Self {
+            atlas,
             source: GlyphDrawSource::Shared {
                 index_start,
                 index_count,
@@ -1551,8 +1558,10 @@ impl GlyphDrawCmd {
         run: Rc<CachedGpuTextGlyphRun>,
         uniform_slot: usize,
         scissor: (u32, u32, u32, u32),
+        atlas: Rc<wgpu::BindGroup>,
     ) -> Self {
         Self {
+            atlas,
             source: GlyphDrawSource::Retained { run, uniform_slot },
             scissor,
         }
@@ -3395,13 +3404,17 @@ impl GpuRenderer {
         self.frame_stats.bump_text();
         self.frame_stats.add_draw_calls(cmds.len() as u32);
         pass.set_pipeline(self.glyph_atlas_pipeline());
-        pass.set_bind_group(1, &self.text_glyph_atlas.bind_group, &[]);
+        let mut bound_atlas = None;
         let mut shared_bound = false;
         for cmd in cmds {
             let Some((x, y, width, height)) = bounded_scissor(cmd.scissor, bound) else {
                 continue;
             };
             pass.set_scissor_rect(x, y, width, height);
+            if !bound_atlas.is_some_and(|atlas| Rc::ptr_eq(atlas, &cmd.atlas)) {
+                pass.set_bind_group(1, cmd.atlas.as_ref(), &[]);
+                bound_atlas = Some(&cmd.atlas);
+            }
             match &cmd.source {
                 GlyphDrawSource::Shared {
                     index_start,
@@ -3738,7 +3751,12 @@ impl GpuRenderer {
             self.claim_uniform_slot(Self::retained_glyph_viewport(viewport, source_raster_rect));
         self.frame_stats
             .record_text_glyph_atlas_hits(u32::try_from(quads.len()).unwrap_or(u32::MAX));
-        glyph_cmds.push(GlyphDrawCmd::retained(run, uniform_slot, scissor));
+        glyph_cmds.push(GlyphDrawCmd::retained(
+            run,
+            uniform_slot,
+            scissor,
+            Rc::clone(&self.text_glyph_atlas.bind_group),
+        ));
         true
     }
 
@@ -3969,7 +3987,12 @@ impl GpuRenderer {
             ));
             let index_count = image_indices.len() as u32 - index_start;
             if index_count > 0 {
-                glyph_cmds.push(GlyphDrawCmd::shared(index_start, index_count, scissor));
+                glyph_cmds.push(GlyphDrawCmd::shared(
+                    index_start,
+                    index_count,
+                    scissor,
+                    Rc::clone(&self.text_glyph_atlas.bind_group),
+                ));
             }
         }
 
@@ -5000,23 +5023,23 @@ mod text_bounds_tests {
 mod retained_glyph_tests {
     use super::*;
 
-    #[test]
-    fn queued_glyph_draw_keeps_buffers_after_cache_eviction() {
-        let (_lock, device, queue) = crate::frame_graph::upload_test_device();
-        let device = Arc::new(device);
-        let queue = Arc::new(queue);
-        let format = composition_format();
-        let mut renderer = GpuRenderer::new(
-            device.clone(),
-            queue.clone(),
-            format,
-            device.adapter_info().backend,
+    fn test_renderer() -> (std::sync::MutexGuard<'static, ()>, GpuRenderer) {
+        let (lock, device, queue) = crate::frame_graph::upload_test_device();
+        let backend = device.adapter_info().backend;
+        let renderer = GpuRenderer::new(
+            Arc::new(device),
+            Arc::new(queue),
+            composition_format(),
+            backend,
             wgpu::DownlevelFlags::empty(),
             SoftwareTextFontSet::empty(),
             0,
         );
-        renderer.text_glyph_gpu_run_cache = BoundedLruCache::with_capacity_at_least_one(1);
-        let quads = [CachedTextGlyphQuad {
+        (lock, renderer)
+    }
+
+    fn test_quads() -> [CachedTextGlyphQuad; 1] {
+        [CachedTextGlyphQuad {
             x: 0,
             y: 0,
             width: 2,
@@ -5027,45 +5050,121 @@ mod retained_glyph_tests {
                 max: [1.0, 1.0],
                 sample_bounds: [0.0, 0.0, 1.0, 1.0],
             },
-        }];
-        let mut commands = Vec::new();
+        }]
+    }
+
+    fn queue_glyph(renderer: &mut GpuRenderer, key: u64, x: f32, commands: &mut Vec<GlyphDrawCmd>) {
         assert!(renderer.emit_retained_text_glyph_run_if_ready(
-            TextGlyphRunCacheKey(1),
-            &quads,
+            TextGlyphRunCacheKey(key),
+            &test_quads(),
             ViewportUniformParams {
                 width: 8,
                 height: 8,
                 offset: [0.0, 0.0]
             },
             Rect {
-                x: 0.0,
+                x,
                 y: 0.0,
                 width: 8.0,
                 height: 8.0
             },
             (0, 0, 8, 8),
-            &mut commands,
+            commands,
         ));
-        assert!(renderer.ensure_retained_text_glyph_run(TextGlyphRunCacheKey(2), &quads));
+    }
+
+    fn draw_queued(renderer: &mut GpuRenderer, commands: &[GlyphDrawCmd]) -> wgpu::Texture {
+        renderer.viewport_uniforms.flush(&renderer.queue);
+        let target = crate::offscreen::create_2d_texture(
+            &renderer.device,
+            composition_format(),
+            8,
+            8,
+            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            Some("Queued glyph test"),
+        );
+        let view = target.create_view(&Default::default());
+        let mut graph = WgpuFrameGraph::new(None);
+        graph.add_fallible_command_pass(None, &[], &[], |recorder| {
+            let mut pass = recorder.begin_color_pass(
+                "Queued glyph test",
+                &view,
+                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+            );
+            renderer.draw_glyph_cmds(&mut pass, None, 0, commands, None)
+        });
+        WgpuFrameGraphExecutor::new()
+            .execute_recorded_graph(&renderer.device, &renderer.queue, graph)
+            .expect("draw queued glyphs");
+        target
+    }
+
+    #[test]
+    fn queued_glyph_draw_keeps_its_atlas_after_growth() {
+        let (_lock, mut renderer) = test_renderer();
+        let size = renderer.text_glyph_atlas.size();
+        WgpuFrameGraphExecutor::new().upload_texture(
+            &renderer.queue,
+            renderer.text_glyph_atlas.texture.as_image_copy(),
+            &vec![255; (size * size) as usize],
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(size),
+                rows_per_image: Some(size),
+            },
+            wgpu::Extent3d {
+                width: size,
+                height: size,
+                depth_or_array_layers: 1,
+            },
+        );
+        let mut commands = Vec::new();
+        queue_glyph(&mut renderer, 1, 0.0, &mut commands);
+        renderer.text_glyph_atlas.reset(
+            &renderer.device,
+            &renderer.image_bind_group_layout,
+            &renderer.image_nearest_sampler,
+        );
+        assert_eq!(renderer.text_glyph_atlas.size(), size * 2);
+        queue_glyph(&mut renderer, 2, 4.0, &mut commands);
+        let target = draw_queued(&mut renderer, &commands);
+        let pixels =
+            crate::frame_graph::read_test_texture(&renderer.device, &renderer.queue, &target);
+        assert_eq!(renderer.device_error_count(), 0);
+        let white: &[u8] = if composition_format() == wgpu::TextureFormat::Rgba8Unorm {
+            &[255; 4]
+        } else {
+            &[0, 60, 0, 60, 0, 60, 0, 60]
+        };
+        for y in 0..2 {
+            for x in 0..8 {
+                let offset = (y * 8 + x) * white.len();
+                let pixel = &pixels[offset..offset + white.len()];
+                if x < 2 {
+                    assert_eq!(pixel, white, "queued glyph must retain its original atlas");
+                } else {
+                    assert!(
+                        pixel.iter().all(|byte| *byte == 0),
+                        "new draws must use the new atlas"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn queued_glyph_draw_keeps_buffers_after_cache_eviction() {
+        let (_lock, mut renderer) = test_renderer();
+        renderer.text_glyph_gpu_run_cache = BoundedLruCache::with_capacity_at_least_one(1);
+        let mut commands = Vec::new();
+        queue_glyph(&mut renderer, 1, 0.0, &mut commands);
+        assert!(renderer.ensure_retained_text_glyph_run(TextGlyphRunCacheKey(2), &test_quads()));
         assert!(
             renderer
                 .text_glyph_gpu_run_cache
                 .peek(&TextGlyphRunCacheKey(1))
                 .is_none()
         );
-        renderer.viewport_uniforms.flush(&queue);
-        let target = OffscreenTarget::new(&device, format, 8, 8);
-        let mut graph = WgpuFrameGraph::new(None);
-        graph.add_fallible_command_pass(None, &[], &[], |recorder| {
-            let mut pass = recorder.begin_color_pass(
-                "Retained Glyph Test",
-                &target.view,
-                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-            );
-            renderer.draw_glyph_cmds(&mut pass, None, 0, &commands, None)
-        });
-        WgpuFrameGraphExecutor::new()
-            .execute_recorded_graph(&device, &queue, graph)
-            .expect("queued glyph draw must survive cache eviction");
+        draw_queued(&mut renderer, &commands);
     }
 }

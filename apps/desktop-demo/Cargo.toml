@@ -1,5 +1,6 @@
 [package]
 name = "desktop-app"
+default-run = "desktop-app"
 version = "0.1.0"
 edition = "2021"
 description = "Cranpose desktop demo application."
@@ -21,6 +22,11 @@ required-features = ["desktop"]
 [[bin]]
 name = "cranpose-ios"
 path = "src/ios_main.rs"
+required-features = ["ios"]
+
+[[bin]]
+name = "cranpose-liquid-reference"
+path = "src/liquid_reference_main.rs"
 required-features = ["ios"]
 
 [features]
@@ -91,6 +97,26 @@ pollster = "0.4.0"
 wgpu = { version = "29.0", default-features = false }
 
 # Robot test runners
+[[example]]
+name = "robot_liquid_tab_content_anchor"
+path = "robot-runners/robot_liquid_tab_content_anchor.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_liquid_tab_ink_spectrum"
+path = "robot-runners/robot_liquid_tab_ink_spectrum.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_liquid_tab_settled_blur"
+path = "robot-runners/robot_liquid_tab_settled_blur.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_liquid_tab_press_preview"
+path = "robot-runners/robot_liquid_tab_press_preview.rs"
+required-features = ["robot-app"]
+
 [[example]]
 name = "robot_viewport_uniform_growth"
 path = "robot-runners/robot_viewport_uniform_growth.rs"

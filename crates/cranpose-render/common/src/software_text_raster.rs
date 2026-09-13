@@ -31,6 +31,7 @@ use crate::{
         GlyphPixelBounds, align_glyph_to_pixel_grid, line_advance_width,
         pixel_bounds_from_outlined, vertical_metrics,
     },
+    font_tracking::FontTracking,
     gpos_kerning::KernedFont,
     text_hyphenation::HyphenationDictionaryStore,
 };
@@ -50,6 +51,12 @@ pub const DEFAULT_SOFTWARE_TEXT_FONT_BYTES: &[u8] = include_bytes!("../assets/No
 pub enum SoftwareTextFontError {
     #[error("invalid software text font bytes")]
     InvalidFont,
+    /// An explicit axis is unknown, nonfinite, or outside the font’s supported range.
+    #[error("invalid font variation axis {tag:?}")]
+    InvalidVariation {
+        /// OpenType axis tag that could not be applied.
+        tag: [u8; 4],
+    },
     #[error("embedded default font disabled (feature `embedded-default-font` is off)")]
     EmbeddedFontDisabled,
 }
@@ -69,6 +76,7 @@ struct SoftwareTextFontMetadata {
     weight: FontWeight,
     style: FontStyle,
     ab_glyph_scale_factor: f32,
+    tracking: FontTracking,
 }
 
 /// Identity an app-supplied face was registered under.
@@ -98,8 +106,7 @@ impl SoftwareTextFont {
         let metadata = software_text_font_metadata(bytes.as_slice());
         let kerning = KernedFont::read_kerning(bytes.as_slice(), &[]);
         let font = FontArc::try_from_vec(bytes).map_err(|_| SoftwareTextFontError::InvalidFont)?;
-        let score =
-            text_font_score_from_parts(&font, metadata.ab_glyph_scale_factor, metadata.weight);
+        let score = text_font_score_from_parts(&font, &metadata);
         Ok(Self {
             font: KernedFont::new(font, kerning),
             metadata,
@@ -123,6 +130,19 @@ impl SoftwareTextFont {
         style: FontStyle,
         bytes: impl Into<Vec<u8>>,
     ) -> Result<Self, SoftwareTextFontError> {
+        Self::from_registered_bytes_with_variations(family, weight, style, bytes, &[])
+    }
+
+    /// Register a face with explicit OpenType axis coordinates shared by measurement,
+    /// kerning, and rasterization. Coordinates override the declared weight/style axes;
+    /// repeated tags use the last value. Unknown, nonfinite, or out-of-range values fail.
+    pub fn from_registered_bytes_with_variations(
+        family: &FontFamily,
+        weight: FontWeight,
+        style: FontStyle,
+        bytes: impl Into<Vec<u8>>,
+        variations: &[([u8; 4], f32)],
+    ) -> Result<Self, SoftwareTextFontError> {
         let bytes = bytes.into();
         let mut hasher = default_hash::new();
         bytes.hash(&mut hasher);
@@ -133,7 +153,20 @@ impl SoftwareTextFont {
 
         let mut font =
             FontVec::try_from_vec(bytes).map_err(|_| SoftwareTextFontError::InvalidFont)?;
-        let variations = apply_declared_variations(&mut font, weight, style);
+        let mut applied = apply_declared_variations(&mut font, weight, style);
+        for &(tag, value) in variations {
+            let valid = value.is_finite()
+                && font.variations().iter().any(|axis| {
+                    axis.tag == tag && (axis.min_value..=axis.max_value).contains(&value)
+                });
+            if !valid || !font.set_variation(&tag, value) {
+                return Err(SoftwareTextFontError::InvalidVariation { tag });
+            }
+            applied.retain(|(existing, _)| *existing != tag);
+            applied.push((tag, value));
+        }
+        applied.sort_unstable_by_key(|(tag, _)| *tag);
+        let variations = applied;
         for (tag, value) in &variations {
             tag.hash(&mut hasher);
             value.to_bits().hash(&mut hasher);
@@ -143,7 +176,7 @@ impl SoftwareTextFont {
         let kerning = KernedFont::read_kerning(font.font_data(), &variations);
 
         let font = FontArc::from(font);
-        let score = text_font_score_from_parts(&font, metadata.ab_glyph_scale_factor, weight);
+        let score = text_font_score_from_parts(&font, &metadata);
         Ok(Self {
             font: KernedFont::new(font, kerning),
             metadata,
@@ -185,6 +218,7 @@ impl SoftwareTextFont {
             ab_glyph_scale_factor: self.metadata.ab_glyph_scale_factor,
             weight: self.weight(),
             style: self.style(),
+            tracking: &self.metadata.tracking,
         }
     }
 }
@@ -326,11 +360,10 @@ fn text_font_score(font: &SoftwareTextFont) -> TextFontScore {
 
 fn text_font_score_from_parts(
     font: &FontArc,
-    ab_glyph_scale_factor: f32,
-    weight: FontWeight,
+    metadata: &SoftwareTextFontMetadata,
 ) -> TextFontScore {
     const SAMPLE: &str = "UNDER The quick brown fox";
-    let glyph_font_size = 18.0 * ab_glyph_scale_factor;
+    let glyph_font_size = 18.0 * metadata.ab_glyph_scale_factor;
     let scaled_font = font.as_scaled(PxScale::from(glyph_font_size));
     let supported_latin_chars = SAMPLE
         .chars()
@@ -341,10 +374,13 @@ fn text_font_score_from_parts(
         SAMPLE,
         &TextStyle::default(),
         18.0,
-        glyph_font_size,
-        font,
-        FontStyle::Normal,
-        weight,
+        RasterFontRef {
+            font,
+            ab_glyph_scale_factor: metadata.ab_glyph_scale_factor,
+            style: metadata.style,
+            weight: metadata.weight,
+            tracking: &metadata.tracking,
+        },
     )
     .width;
     TextFontScore {
@@ -471,6 +507,7 @@ fn software_text_font_metadata(bytes: &[u8]) -> SoftwareTextFontMetadata {
             weight: FontWeight::NORMAL,
             style: FontStyle::Normal,
             ab_glyph_scale_factor: 1.0,
+            tracking: FontTracking::default(),
         };
     };
 
@@ -508,6 +545,7 @@ fn software_text_font_metadata(bytes: &[u8]) -> SoftwareTextFontMetadata {
         weight,
         style,
         ab_glyph_scale_factor,
+        tracking: FontTracking::from_face(&face),
     }
 }
 
@@ -1237,6 +1275,7 @@ struct RasterFontRef<'a, F> {
     ab_glyph_scale_factor: f32,
     weight: FontWeight,
     style: FontStyle,
+    tracking: &'a FontTracking,
 }
 
 #[derive(Clone, Copy)]
@@ -1466,8 +1505,11 @@ fn annotated_line_alignment_offsets(
                 let segment_font_size = segment_style.resolve_font_size(font_size);
                 let font = fonts.resolve(&segment_style)?;
                 let font_px_size = font.ab_glyph_px_size(segment_font_size) * scale;
-                let letter_spacing =
-                    resolve_letter_spacing(&segment_style, segment_font_size) * scale;
+                let letter_spacing = font
+                    .metadata
+                    .tracking
+                    .resolve(&segment_style, segment_font_size)
+                    * scale;
                 if let Some(last) = advances.last_mut() {
                     *last += segment_advance_px(&font.font, content, font_px_size, letter_spacing);
                 }
@@ -1556,7 +1598,7 @@ fn text_segment_metrics(
     font: &SoftwareTextFont,
 ) -> TextSegmentMetrics {
     let font_px_size = font.ab_glyph_px_size(font_size) * scale;
-    let letter_spacing = resolve_letter_spacing(style, font_size) * scale;
+    let letter_spacing = font.metadata.tracking.resolve(style, font_size) * scale;
     let align_fraction = crate::scene_builder::text_align_fraction(style, text);
     let weight_synthesis = TextWeightSynthesis::for_style(style, font.weight(), font_size, scale);
     let style_synthesis = TextStyleSynthesis::for_style(style, font.style(), font_size, scale);
@@ -1891,15 +1933,7 @@ pub fn measure_text_with_font(
     font_size: f32,
     font: &SoftwareTextFont,
 ) -> TextMetrics {
-    measure_text_impl(
-        text,
-        style,
-        font_size,
-        font.ab_glyph_px_size(font_size),
-        &font.font,
-        font.style(),
-        font.weight(),
-    )
+    measure_text_impl(text, style, font_size, font.raster_ref())
 }
 
 fn measure_text_with_font_cached(
@@ -1979,7 +2013,6 @@ pub fn text_offset_for_position_with_font(
     }
 
     let font_size = resolve_font_size(style);
-    let glyph_font_size = font.ab_glyph_px_size(font_size);
     let line_height = resolve_line_height(style, font_size * 1.4);
 
     let line_index = (y / line_height).floor().max(0.0) as usize;
@@ -2002,29 +2035,12 @@ pub fn text_offset_for_position_with_font(
 
     for c in line_text.chars() {
         let prefix = &line_text[..current_byte_offset];
-        let glyph_x = measure_text_impl(
-            prefix,
-            style,
-            font_size,
-            glyph_font_size,
-            &font.font,
-            font.style(),
-            font.weight(),
-        )
-        .width;
+        let glyph_x = measure_text_impl(prefix, style, font_size, font.raster_ref()).width;
 
         let char_str = &line_text[current_byte_offset..current_byte_offset + c.len_utf8()];
-        let char_width = measure_text_impl(
-            char_str,
-            style,
-            font_size,
-            glyph_font_size,
-            &font.font,
-            font.style(),
-            font.weight(),
-        )
-        .width
-        .max(font_size * 0.5);
+        let char_width = measure_text_impl(char_str, style, font_size, font.raster_ref())
+            .width
+            .max(font_size * 0.5);
 
         let left_dist = (x - glyph_x).abs();
         if left_dist < best_distance {
@@ -2042,16 +2058,7 @@ pub fn text_offset_for_position_with_font(
         current_byte_offset += c.len_utf8();
     }
 
-    let total_width = measure_text_impl(
-        line_text,
-        style,
-        font_size,
-        glyph_font_size,
-        &font.font,
-        font.style(),
-        font.weight(),
-    )
-    .width;
+    let total_width = measure_text_impl(line_text, style, font_size, font.raster_ref()).width;
     let end_dist = (x - total_width).abs();
     if end_dist < best_distance {
         best_offset = line_text.len();
@@ -2072,16 +2079,7 @@ pub fn cursor_x_for_offset_with_font(
     }
 
     let font_size = resolve_font_size(style);
-    measure_text_impl(
-        &text[..clamped_offset],
-        style,
-        font_size,
-        font.ab_glyph_px_size(font_size),
-        &font.font,
-        font.style(),
-        font.weight(),
-    )
-    .width
+    measure_text_impl(&text[..clamped_offset], style, font_size, font.raster_ref()).width
 }
 
 pub fn layout_text_with_font(
@@ -2092,11 +2090,11 @@ pub fn layout_text_with_font(
     let font_size = resolve_font_size(style);
     let glyph_font_size = font.ab_glyph_px_size(font_size);
     let resolved_weight = font.weight();
-    let resolved_style = font.style();
+    let font_ref = font.raster_ref();
+    let letter_spacing = font.metadata.tracking.resolve(style, font_size);
     let weight_synthesis = TextWeightSynthesis::for_style(style, resolved_weight, font_size, 1.0);
     let font = &font.font;
     let line_height = resolve_line_height(style, font_size * 1.4);
-    let letter_spacing = resolve_letter_spacing(style, font_size);
     let scaled_font = font.as_scaled(PxScale::from(glyph_font_size));
 
     let mut glyph_x_positions = Vec::new();
@@ -2157,15 +2155,7 @@ pub fn layout_text_with_font(
         height: line_height,
     });
 
-    let metrics = measure_text_impl(
-        text,
-        style,
-        font_size,
-        glyph_font_size,
-        font,
-        resolved_style,
-        resolved_weight,
-    );
+    let metrics = measure_text_impl(text, style, font_size, font_ref);
     TextLayoutResult::new(
         text,
         TextLayoutData {
@@ -2180,6 +2170,8 @@ pub fn layout_text_with_font(
     )
 }
 
+/// Rasterize a raw font at its ab_glyph pixel scale with explicit style spacing.
+/// Use [`rasterize_text_to_image`] for registered font sizing and automatic tracking.
 pub fn rasterize_text_to_image_with_font(
     text: &str,
     rect: Rect,
@@ -2203,6 +2195,7 @@ pub fn rasterize_text_to_image_with_font(
             ab_glyph_scale_factor: 1.0,
             weight: FontWeight::NORMAL,
             style: FontStyle::Normal,
+            tracking: &FontTracking::default(),
         },
         0,
         None,
@@ -2280,7 +2273,7 @@ fn rasterize_text_to_image_impl(
 
     let font = font_ref.font;
     let font_px_size = font_size * scale * font_ref.ab_glyph_scale_factor;
-    let letter_spacing = resolve_letter_spacing(style, font_size) * scale;
+    let letter_spacing = font_ref.tracking.resolve(style, font_size) * scale;
     let align_fraction = crate::scene_builder::text_align_fraction(style, text);
     let weight_synthesis = TextWeightSynthesis::for_style(style, font_ref.weight, font_size, scale);
     let style_synthesis = TextStyleSynthesis::for_style(style, font_ref.style, font_size, scale);
@@ -2969,7 +2962,7 @@ fn append_font_prefix_width_segment_cached(
 ) {
     let glyph_font_size = font.ab_glyph_px_size(font_size);
     let scaled_font = font.font.as_scaled(PxScale::from(glyph_font_size));
-    let letter_spacing = resolve_letter_spacing(style, font_size);
+    let letter_spacing = font.metadata.tracking.resolve(style, font_size);
     let weight_synthesis = TextWeightSynthesis::for_style(style, font.weight(), font_size, 1.0);
     let style_synthesis = TextStyleSynthesis::for_style(style, font.style(), font_size, 1.0);
     sink.non_empty_overhang = sink
@@ -3030,11 +3023,10 @@ fn measure_text_impl(
     text: &str,
     style: &TextStyle,
     font_size: f32,
-    glyph_font_size: f32,
-    font: &impl Font,
-    resolved_style: FontStyle,
-    resolved_weight: FontWeight,
+    font_ref: RasterFontRef<'_, impl Font>,
 ) -> TextMetrics {
+    let font = font_ref.font;
+    let glyph_font_size = font_size * font_ref.ab_glyph_scale_factor;
     let line_height = line_box_for(
         style,
         vertical_metrics(font, glyph_font_size),
@@ -3042,9 +3034,9 @@ fn measure_text_impl(
         measure_grid(),
     )
     .height;
-    let letter_spacing = resolve_letter_spacing(style, font_size);
-    let weight_synthesis = TextWeightSynthesis::for_style(style, resolved_weight, font_size, 1.0);
-    let style_synthesis = TextStyleSynthesis::for_style(style, resolved_style, font_size, 1.0);
+    let letter_spacing = font_ref.tracking.resolve(style, font_size);
+    let weight_synthesis = TextWeightSynthesis::for_style(style, font_ref.weight, font_size, 1.0);
+    let style_synthesis = TextStyleSynthesis::for_style(style, font_ref.style, font_size, 1.0);
 
     let lines: Vec<&str> = text.split('\n').collect();
     let line_count = lines.len().max(1);
@@ -3077,7 +3069,7 @@ fn measure_text_impl_cached(
     font: &SoftwareTextFont,
     cache: &mut SoftwareTextMetricsCache,
 ) -> TextMetrics {
-    let letter_spacing = resolve_letter_spacing(style, font_size);
+    let letter_spacing = font.metadata.tracking.resolve(style, font_size);
     let weight_synthesis = TextWeightSynthesis::for_style(style, font.weight(), font_size, 1.0);
     let style_synthesis = TextStyleSynthesis::for_style(style, font.style(), font_size, 1.0);
     let glyph_font_size = font.ab_glyph_px_size(font_size);

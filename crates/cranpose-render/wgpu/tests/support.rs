@@ -457,6 +457,7 @@ pub fn morphing_lens_dynamics(node: Rect, primary: (f32, f32, f32, f32, f32)) ->
             bulge_amplitude: 2.0,
             bulge_direction: 0.7,
             ellipse_blend: 0.5,
+            capsule_smoothing_dp: 0.0,
             deformation: Some(GlassDeformation::incompressible((1.0, 0.0), 1.05)),
             zoom_anchor: (0.0, 0.0),
         }),
@@ -618,6 +619,18 @@ pub fn substrate_probe(spec: SubstrateSpec, read: SubstrateProbeRead) -> RenderE
 /// A page of the given size holding `children` in order.
 pub fn page_graph(width: u32, height: u32, children: Vec<RenderNode>) -> RenderGraph {
     RenderGraph::new(layer_node(None, width as f32, height as f32, children))
+}
+
+pub fn shader_probe_graph(bounds: Rect, shader: RuntimeShader) -> RenderGraph {
+    RenderGraph::new(LayerNode {
+        local_bounds: bounds,
+        graphics_layer: cranpose_ui_graphics::GraphicsLayer {
+            render_effect: Some(RenderEffect::runtime_shader(shader)),
+            ..Default::default()
+        },
+        children: vec![solid_rect(bounds, Color::WHITE)],
+        ..Default::default()
+    })
 }
 
 /// A clipped band across the lower part of a square frame holding one child

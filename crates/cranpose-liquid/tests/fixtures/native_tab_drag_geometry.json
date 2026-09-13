@@ -1,0 +1,33 @@
+{
+  "native_binary_sha256": "65eb42a140de9a36a7d9005a15a589db13ff2a81a649a77243cf9eb72e29a0d7",
+  "source": "target/liquid-native-delivery-29-frames",
+  "clock": "UITouch.timestamp and CADisplayLink.timestamp relative to first touch",
+  "lens_layer": "UITabBar/0/0/1",
+  "normalization": "x and width divided by enclosing bar width / 360; height divided by enclosing bar height / 62",
+  "columns": [
+    "kind",
+    "time_seconds (route for start)",
+    "position",
+    "width",
+    "height",
+    "phase"
+  ],
+  "files": {
+    "native-1789249120434-touches.json": "a3608c67a915c5be39393dd91bfbb35f90418a2b6bc11fe779b6959fa7c1d7f8",
+    "native-1789249120434-layers.json": "effcc5301fb3916ac195cba1d6b64c35372a4c2644b2cd310842e1b3dea0060b",
+    "native-1789249125680-touches.json": "b1666eec1b629b86356e453c7e897af2b52e33ae7511506e91a1140e88749b13",
+    "native-1789249125680-layers.json": "a106c6fd681129715c45feb27d64ec43dd78a18e0c5c02d8ca195509cbbe41b5",
+    "native-1789249130157-touches.json": "9947cf56689515f97e83324e1cd22bbb872d8546f8c0aa2099eca82141e3feb1",
+    "native-1789249130157-layers.json": "78bbae3f13e7a9057cbdd55e9987aae80077d8d794a740abdd2e0c3cc74b3870",
+    "native-1789249134638-touches.json": "12b4a752016d820a50a3a02dcd66cef6f5e09457a33a5c79e7aa640617b8693e",
+    "native-1789249134638-layers.json": "8d277448c649410021246629cb63ccf4679dc648a05c877d3225c7722b918160"
+  },
+  "frame_count": 824,
+  "description": "Every available native presentation-layer geometry frame, from first materialization through touch-up and final settling; original touch timestamps and frame timestamps retained. Frames before the raised lens exists are covered by the pixel recordings, not assigned invented layer bounds.",
+  "frame_counts": [
+    229,
+    183,
+    183,
+    229
+  ]
+}
