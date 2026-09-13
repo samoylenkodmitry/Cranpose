@@ -85,6 +85,10 @@ use xkcd::xkcd_tab;
 const DEMO_PAGE_PADDING: f32 = 20.0;
 const DEMO_TAB_BAR_PADDING: f32 = 8.0;
 
+/// Where the floating source toggle sits, inside the tab strip's top padding
+/// and clear of the tab buttons beneath it.
+const FLOATING_TOGGLE_TOP: f32 = 2.0;
+
 const COMPACT_WINDOW_SIZE_CLASS_MAX_WIDTH: f32 = 600.0;
 
 thread_local! {
@@ -614,10 +618,7 @@ fn TabButton(tab: DemoTab, active_tab: cranpose_core::MutableState<DemoTab>, pad
 
 #[allow(non_snake_case)]
 #[composable]
-fn TabBarHorizontal(
-    active_tab: cranpose_core::MutableState<DemoTab>,
-    showing_source: cranpose_core::MutableState<bool>,
-) {
+fn TabBarHorizontal(active_tab: cranpose_core::MutableState<DemoTab>) {
     let tabs_scroll_state =
         cranpose_core::remember(|| cranpose_ui::ScrollState::new(0.0)).with(|state| *state);
     Row(
@@ -639,7 +640,6 @@ fn TabBarHorizontal(
                     for tab in DEMO_TABS {
                         TabButton(tab, active_tab, 10.0);
                     }
-                    source_view::SourceToggleButton(showing_source, Modifier::empty());
                 },
             );
         },
@@ -659,7 +659,6 @@ fn compact_tab_row_background(is_active: bool) -> Color {
 fn CompactAppBar(
     active_tab: cranpose_core::MutableState<DemoTab>,
     picker_open: cranpose_core::MutableState<bool>,
-    showing_source: cranpose_core::MutableState<bool>,
 ) {
     Row(
         Modifier::empty().fill_max_width().padding_each(
@@ -693,7 +692,6 @@ fn CompactAppBar(
                     );
                 },
             );
-            source_view::SourceToggleButton(showing_source, Modifier::empty());
         },
     );
 }
@@ -795,43 +793,58 @@ pub fn combined_app_with_startup(startup: StartupSelection) {
     let showing_source = cranpose_core::rememberMutableStateOf(|| false);
     let picker_open = cranpose_core::rememberMutableStateOf(|| false);
     let window_size = cranpose_core::rememberMutableStateOf(Size::default);
-    let content_modifier = Modifier::empty().fill_max_width().weight(1.0).padding_each(
-        DEMO_PAGE_PADDING,
-        0.0,
-        DEMO_PAGE_PADDING,
-        DEMO_PAGE_PADDING,
-    );
-
-    Column(
-        Modifier::empty()
-            .fill_max_size()
-            .report_size_state(window_size),
-        ColumnSpec::default(),
+    cranpose_ui::Box(
+        Modifier::empty().fill_max_size(),
+        BoxSpec::default(),
         move || {
-            let is_compact = window_size.get().width < COMPACT_WINDOW_SIZE_CLASS_MAX_WIDTH;
+            let content_modifier = Modifier::empty().fill_max_width().weight(1.0).padding_each(
+                DEMO_PAGE_PADDING,
+                0.0,
+                DEMO_PAGE_PADDING,
+                DEMO_PAGE_PADDING,
+            );
+            Column(
+                Modifier::empty()
+                    .fill_max_size()
+                    .report_size_state(window_size),
+                ColumnSpec::default(),
+                move || {
+                    let is_compact = window_size.get().width < COMPACT_WINDOW_SIZE_CLASS_MAX_WIDTH;
 
-            if is_compact {
-                CompactAppBar(active_tab, picker_open, showing_source);
-            } else {
-                TabBarHorizontal(active_tab, showing_source);
+                    if is_compact {
+                        CompactAppBar(active_tab, picker_open);
+                    } else {
+                        TabBarHorizontal(active_tab);
 
-                Spacer(Size {
-                    width: 0.0,
-                    height: 12.0,
-                });
-            }
+                        Spacer(Size {
+                            width: 0.0,
+                            height: 12.0,
+                        });
+                    }
 
-            if is_compact && picker_open.get() {
-                CompactTabPicker(active_tab, picker_open);
-            } else {
-                TabContent(
-                    active_tab,
-                    startup,
-                    winamp_tab_state,
-                    showing_source,
-                    content_modifier.clone(),
-                );
-            }
+                    if is_compact && picker_open.get() {
+                        CompactTabPicker(active_tab, picker_open);
+                    } else {
+                        TabContent(
+                            active_tab,
+                            startup,
+                            winamp_tab_state,
+                            showing_source,
+                            content_modifier.clone(),
+                        );
+                    }
+                },
+            );
+            source_view::SourceToggleButton(
+                showing_source,
+                Modifier::empty()
+                    .align(cranpose_ui::Alignment::TOP_START)
+                    .offset(
+                        DEMO_PAGE_PADDING + DEMO_TAB_BAR_PADDING,
+                        FLOATING_TOGGLE_TOP,
+                    ),
+                true,
+            );
         },
     );
 }
