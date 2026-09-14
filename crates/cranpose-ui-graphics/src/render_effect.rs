@@ -129,6 +129,7 @@ pub struct RuntimeShader {
     input_padding: f32,
     output_padding: f32,
     batched_source: bool,
+    preserves_transparency: bool,
     domains: Option<Box<ShaderDomains>>,
 }
 
@@ -398,6 +399,7 @@ impl RuntimeShader {
             input_padding: 0.0,
             output_padding: 0.0,
             batched_source: false,
+            preserves_transparency: false,
             domains: None,
         }
     }
@@ -636,6 +638,19 @@ impl RuntimeShader {
         self.batched_source
     }
 
+    /// Declares that the shader returns zero wherever every texel it reads
+    /// is zero. A layer that draws nothing under such a shader composites
+    /// nothing, so the renderer leaves the page as it is instead of shading
+    /// the layer's pixels to prove it.
+    pub fn set_preserves_transparency(&mut self, preserves: bool) {
+        self.preserves_transparency = preserves;
+    }
+
+    /// Whether the shader declared it returns zero over a transparent input.
+    pub fn preserves_transparency(&self) -> bool {
+        self.preserves_transparency
+    }
+
     /// Declares the low-frequency copies of its source the shader reads
     /// through the reserved substrate region slots, in slot order. Only a
     /// batched shader packed with its stage is handed them; a shader
@@ -782,6 +797,7 @@ impl PartialEq for RuntimeShader {
             && self.input_padding.to_bits() == other.input_padding.to_bits()
             && self.output_padding.to_bits() == other.output_padding.to_bits()
             && self.batched_source == other.batched_source
+            && self.preserves_transparency == other.preserves_transparency
             && self.substrates() == other.substrates()
             && self.draw_split() == other.draw_split()
             && self.domains == other.domains
@@ -994,6 +1010,19 @@ impl RenderEffect {
         }
     }
 
+    /// Whether the effect returns zero over a transparent input: a blur or
+    /// an offset of nothing is nothing, a shader when it declares so, and a
+    /// chain when every step does.
+    pub fn preserves_transparency(&self) -> bool {
+        match self {
+            RenderEffect::Blur { .. } | RenderEffect::Offset { .. } => true,
+            RenderEffect::Shader { shader } => shader.preserves_transparency(),
+            RenderEffect::Chain { first, second } => {
+                first.preserves_transparency() && second.preserves_transparency()
+            }
+        }
+    }
+
     /// Maximum logical-pixel input padding required by this effect.
     pub fn input_padding(&self) -> f32 {
         match self {
@@ -1045,6 +1074,41 @@ impl RenderEffect {
 
 #[cfg(test)]
 mod tests {
+    use super::{RenderEffect, RuntimeShader};
+
+    #[test]
+    fn a_shader_declares_it_preserves_transparency() {
+        let mut shader = RuntimeShader::new("// preserves");
+        assert!(!shader.preserves_transparency());
+        let plain = shader.clone();
+        shader.set_preserves_transparency(true);
+        assert!(shader.preserves_transparency());
+        assert_ne!(shader, plain);
+        shader.set_preserves_transparency(false);
+        assert_eq!(shader, plain);
+    }
+
+    #[test]
+    fn an_effect_preserves_transparency_when_every_step_does() {
+        let mut declared = RuntimeShader::new("// declared");
+        declared.set_preserves_transparency(true);
+        let undeclared = RuntimeShader::new("// undeclared");
+        assert!(RenderEffect::blur(3.0).preserves_transparency());
+        assert!(RenderEffect::offset(2.0, 1.0).preserves_transparency());
+        assert!(RenderEffect::runtime_shader(declared.clone()).preserves_transparency());
+        assert!(!RenderEffect::runtime_shader(undeclared.clone()).preserves_transparency());
+        assert!(
+            RenderEffect::blur(3.0)
+                .then(RenderEffect::runtime_shader(declared))
+                .preserves_transparency()
+        );
+        assert!(
+            !RenderEffect::blur(3.0)
+                .then(RenderEffect::runtime_shader(undeclared))
+                .preserves_transparency()
+        );
+    }
+
     #[test]
     fn overrides_stay_sorted_and_replace_by_name() {
         let mut shader = super::RuntimeShader::new("// overrides");

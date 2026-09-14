@@ -56,6 +56,14 @@ impl SourceContent {
         Self::Retained(std::hash::Hasher::finish(&hasher))
     }
 
+    /// The hash naming a retained texture's pixels; none for a transient.
+    pub(crate) fn retained_hash(self) -> Option<u64> {
+        match self {
+            Self::Retained(hash) => Some(hash),
+            Self::Transient => None,
+        }
+    }
+
     /// The content of a texture derived from this one by `step`, retained
     /// exactly when this one is.
     pub(crate) fn derived(self, step: &impl std::hash::Hash) -> Self {

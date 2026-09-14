@@ -115,7 +115,21 @@ composites the resolved textures.
   page's first op that is a plain opaque rect is admitted on its second
   frame by a split first pass and a same-format copy back; on later frames
   a page-covering prefix is copied into the page and the pass loads it, a
-  partial one is composited over the clear (`AdmissionCost::Copy`).
+  partial one is composited over the clear (`AdmissionCost::Copy`). A
+  render effect over a retained child surface is a pure function of the
+  surface's content and the effect, so its output is admitted on the
+  second frame the same output is wanted (`effect_over_surface`,
+  `LayerRasterCacheKey::layer_effect`, `AdmissionCost::Copy`) and read back
+  while both hold; an animated effect over still content is drawn afresh.
+  Contract `layer_effect_cache.rs`.
+- **Nothing drawn, nothing composited** (`composites_nothing`): a child
+  that draws nothing whose render effect keeps a transparent source
+  transparent (`RenderEffect::preserves_transparency`: blurs, offsets, and
+  shaders that declare it, such as a glass content mask) resolves its
+  backdrop and no more, since source-over of a transparent source leaves
+  the page as it is. Contract `transparent_child.rs`; the liquid tab bar's
+  empty surface and lens layers and its unlit lighting
+  (`tab_lighting_rest_identity.rs`) cost the frame nothing on that account.
   Reference toggles `CRANPOSE_NO_BACKDROP_CACHE`, `CRANPOSE_NO_FILL_CACHE`.
   Contracts `glass_layer_cache.rs`, `backdrop_atlas_parity.rs`,
   `opaque_prefix_cache.rs` (byte identity at three scales, covering and

@@ -1050,6 +1050,27 @@ fn rendered_surface(whole: DeviceRect, shown: DeviceRect, reach: f32) -> DeviceR
 /// Whether a child's runtime shader can draw in the final pass over the
 /// child's content: the shader must apply the child's clip and alpha itself
 /// unless the child has neither.
+/// Whether the layer's content puts nothing on its surface.
+fn draws_nothing(content: &LayerScene) -> bool {
+    content.scene.draw_ops.is_empty()
+        && content.scene.shadow_draws.is_empty()
+        && content.children.is_empty()
+        && content.scene.backdrop_layers.is_empty()
+        && content.scene.effect_layers.is_empty()
+}
+
+/// Whether the child's composite leaves the page as it is: it draws nothing,
+/// its effect keeps that transparent, and source-over of a transparent
+/// source is the identity. Its backdrop, resolved apart, is not in question.
+fn composites_nothing(child: &ChildLayer) -> bool {
+    draws_nothing(&child.content)
+        && child.blend_mode == BlendMode::SrcOver
+        && child
+            .effect
+            .as_ref()
+            .is_none_or(RenderEffect::preserves_transparency)
+}
+
 fn shader_tail_composites(child: &ChildLayer, shader: &RuntimeShader) -> bool {
     let plain = child.alpha >= 1.0 && child.rounded_clip.is_none();
     shader.substrates().is_empty()
@@ -3134,6 +3155,20 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         label: &'static str,
     ) -> Result<Rc<OffscreenTarget>, String> {
         let dest = self.acquire_transient(label, source.width, source.height);
+        self.apply_effect_into(source, &dest, effect, layer_pixel_rect, reads)?;
+        Ok(dest)
+    }
+
+    /// Runs an effect chain over `source` into `dest`, a texture of the same
+    /// size.
+    fn apply_effect_into(
+        &mut self,
+        source: &Rc<OffscreenTarget>,
+        dest: &OffscreenTarget,
+        effect: &RenderEffect,
+        layer_pixel_rect: [f32; 4],
+        reads: EffectReads,
+    ) -> Result<(), String> {
         let device = self.renderer.device.clone();
         let format = self.renderer.composition_format;
         let scratch = self
@@ -3164,7 +3199,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         scratch.release_into(self.recorder);
         let passes = encoded?;
         self.recorder.record_passes(passes);
-        Ok(dest)
+        Ok(())
     }
 
     fn resolve_child(
@@ -3205,6 +3240,9 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         let Some(visible) = visible_device else {
             return Ok(());
         };
+        if composites_nothing(child) {
+            return Ok(());
+        }
         if let Some(composite) = self.shader_only_child(child, z, scale, visible, translation, snap)
         {
             pass.pending.push(composite);
@@ -3221,19 +3259,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             return Ok(());
         }
         let source = match &child.effect {
-            Some(effect) => {
-                let layer_pixel_rect = layer_pixel_rect(child, surface.rect, surface.scale);
-                CompositeSource {
-                    texture: self.apply_effect(
-                        &surface.source.texture,
-                        effect,
-                        layer_pixel_rect,
-                        EffectReads::default(),
-                        "Layer Effect",
-                    )?,
-                    content: surface.source.content.derived(&effect.render_hash()),
-                }
-            }
+            Some(effect) => self.effect_over_surface(child, &surface, effect)?,
             None => surface.source.clone(),
         };
         let composite = match surface.grid_dest {
@@ -3252,6 +3278,94 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         };
         pass.pending.push(composite);
         Ok(())
+    }
+
+    /// The child's effect applied over its surface. Over a retained surface
+    /// the output is a pure function of the surface's content and the
+    /// effect, so it lives in the layer cache once the same output was
+    /// wanted two frames running: an animated effect over still content is
+    /// drawn afresh, and content that changes carries its effect with it.
+    fn effect_over_surface(
+        &mut self,
+        child: &ChildLayer,
+        surface: &SurfaceRender,
+        effect: &RenderEffect,
+    ) -> Result<CompositeSource, String> {
+        let layer_pixel_rect = layer_pixel_rect(child, surface.rect, surface.scale);
+        let source = &surface.source.texture;
+        let (width, height) = (source.width, source.height);
+        let content = surface.source.content.derived(&effect.render_hash());
+        let retained = surface.source.content.retained_hash().zip(child.node_id);
+        if let Some((input, node_id)) = retained {
+            let [x, y, w, h] = layer_pixel_rect;
+            let key = LayerRasterCacheKey::layer_effect(
+                Some(node_id),
+                input,
+                effect.render_hash(),
+                Rect {
+                    x,
+                    y,
+                    width: w,
+                    height: h,
+                },
+                (width, height),
+                ScaleBucket::from_scale(surface.scale),
+            );
+            if let Some(cached) = self.renderer.layer_cache.get(&key) {
+                self.renderer
+                    .frame_stats
+                    .record_layer_cache_hit(&key, width, height);
+                if let Some(gate) = self.renderer.effect_gates.get_mut(&node_id) {
+                    gate.hit(key);
+                }
+                return Ok(CompositeSource {
+                    texture: cached.texture,
+                    content,
+                });
+            }
+            self.renderer
+                .frame_stats
+                .record_layer_cache_miss(&key, width, height);
+            let admits = match self.renderer.effect_gates.entry(node_id) {
+                Entry::Occupied(mut gate) => {
+                    if let Some(dead) = gate.get_mut().observe(key) {
+                        self.renderer.layer_cache.remove(&dead);
+                    }
+                    gate.get().admits()
+                }
+                Entry::Vacant(slot) => slot.insert(AdmissionGate::copied(key)).admits(),
+            };
+            if admits && self.renderer.layer_cache.fits(width, height) {
+                let dest = Rc::new(self.renderer.acquire_retained_surface(width, height));
+                self.apply_effect_into(
+                    source,
+                    &dest,
+                    effect,
+                    layer_pixel_rect,
+                    EffectReads::default(),
+                )?;
+                if self
+                    .renderer
+                    .layer_cache
+                    .insert(key, Retained::surface(Rc::clone(&dest)), None)
+                    && let Some(gate) = self.renderer.effect_gates.get_mut(&node_id)
+                {
+                    gate.admitted();
+                }
+                return Ok(CompositeSource {
+                    texture: dest,
+                    content,
+                });
+            }
+        }
+        let texture = self.apply_effect(
+            source,
+            effect,
+            layer_pixel_rect,
+            EffectReads::default(),
+            "Layer Effect",
+        )?;
+        Ok(CompositeSource { texture, content })
     }
 
     /// Renders the child's content into its own texture, from the layer
@@ -3276,12 +3390,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         };
         let support =
             child_composite_support(child, shader.output_support(), snap, scale, visible)?;
-        let content = &child.content;
-        let draws_nothing = content.scene.draw_ops.is_empty()
-            && content.children.is_empty()
-            && content.scene.backdrop_layers.is_empty()
-            && content.scene.effect_layers.is_empty();
-        if !draws_nothing || !shader_tail_composites(child, shader) {
+        if !draws_nothing(&child.content) || !shader_tail_composites(child, shader) {
             return None;
         }
         let surface_logical = child_surface_rect(child, scale)?;

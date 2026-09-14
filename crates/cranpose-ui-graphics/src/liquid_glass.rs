@@ -200,7 +200,9 @@ static GLASS_MATERIAL_FOLDS: AtomicBool = AtomicBool::new(cfg!(target_os = "andr
 /// material shares. Either way an adaptive frost declares the blurred
 /// substrate its neighbourhood reads whatever the activity: the declaration
 /// also sets the member's capture geometry, so a resting material keeps it
-/// although its shader returns before the read.
+/// although its shader returns before the read. A content mask (uniform 112)
+/// returns its source under the glass silhouette and so declares that it
+/// leaves a transparent source transparent.
 pub fn specialize_liquid_glass(shader: &mut RuntimeShader) {
     specialize_liquid_glass_with_folds(shader, glass_material_folds_enabled());
 }
@@ -250,6 +252,7 @@ pub fn specialize_liquid_glass_with_folds(shader: &mut RuntimeShader, folds: boo
     let stage = slot(uniforms, GLASS_OPTICAL_STAGE_UNIFORM) as u8;
     let backdrop_radius = (stage == 2 && slot(uniforms, GLASS_BACKDROP_BLUR_UNIFORM) > 0.0)
         .then(|| slot(uniforms, GLASS_BACKDROP_BLUR_UNIFORM).to_bits());
+    shader.set_preserves_transparency(slot(uniforms, 112) > 0.5);
     CACHE.with_borrow_mut(|cache| {
         cache.apply(
             shader,
@@ -763,6 +766,21 @@ pub fn liquid_glass_effect_multi(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_content_mask_declares_it_preserves_transparency() {
+        let mut shader = RuntimeShader::new(LIQUID_GLASS_WGSL);
+        let RenderEffect::Shader { shader: backdrop } = liquid_glass_runtime_effect(shader.clone())
+        else {
+            panic!("a glass without an edge lens is one shader");
+        };
+        assert!(!backdrop.preserves_transparency());
+        shader.set_float(112, 1.0);
+        let RenderEffect::Shader { shader: mask } = liquid_glass_runtime_effect(shader) else {
+            panic!("a content mask is one shader");
+        };
+        assert!(mask.preserves_transparency());
+    }
 
     fn rect() -> LiquidGlassRect {
         LiquidGlassRect {
