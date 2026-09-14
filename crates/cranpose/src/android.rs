@@ -860,6 +860,7 @@ where
     if app_shell.is_none() {
         let fonts = settings.resolve_font_set();
         let mut renderer = WgpuRenderer::with_font_set(fonts);
+        renderer.warm_shaders(cranpose_liquid::shader_warm_ups());
         if present_thread {
             init_gpu_threaded_for_android(&mut renderer, &setup.resources, frame_driver)?;
         } else {

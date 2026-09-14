@@ -1180,8 +1180,8 @@ impl EffectRenderer {
     /// compile under way or builds it itself, as before.
     pub(crate) fn warm_pipelines(&mut self, device: &wgpu::Device) {
         let backend = self.adapter_backend;
-        for unmasked_nearest in [false, true] {
-            for blend_mode in [BlendMode::SrcOver, BlendMode::Src, BlendMode::DstOut] {
+        for blend_mode in [BlendMode::SrcOver, BlendMode::Src, BlendMode::DstOut] {
+            for unmasked_nearest in [false, true] {
                 let (resource, _, _) = self.blit_pipeline_target(blend_mode, unmasked_nearest);
                 resource.warm(
                     &self.compiler,
@@ -1218,6 +1218,15 @@ impl EffectRenderer {
             .warm(&self.compiler, backend, self.mean_pipeline_job(device));
         for (source, mode) in BUILTIN_RUNTIME_SHADERS {
             self.shader_cache.warm(&RuntimeShader::new(source), mode);
+        }
+    }
+
+    pub(crate) fn warm_shaders(&mut self, warm_ups: &[cranpose_ui_graphics::ShaderWarmUp]) {
+        for warm_up in warm_ups {
+            self.shader_cache.warm(
+                &warm_up.shader,
+                RuntimeShaderPipelineMode::for_target(warm_up.target),
+            );
         }
     }
 

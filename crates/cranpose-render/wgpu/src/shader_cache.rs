@@ -4,7 +4,7 @@ use std::{
     sync::Arc,
 };
 
-use cranpose_ui_graphics::{FxBuildHasher, RuntimeShader};
+use cranpose_ui_graphics::{FxBuildHasher, RuntimeShader, ShaderTarget};
 use naga::ShaderStage;
 
 use crate::{
@@ -18,6 +18,16 @@ pub(crate) enum RuntimeShaderPipelineMode {
 }
 
 impl RuntimeShaderPipelineMode {
+    /// The pipeline a shader draws through at `target`: a layer's own
+    /// texture takes the shader's output as is, the page beneath composites
+    /// it.
+    pub(crate) fn for_target(target: ShaderTarget) -> Self {
+        match target {
+            ShaderTarget::Layer => Self::Replace,
+            ShaderTarget::Page => Self::PremultipliedSrcOver,
+        }
+    }
+
     fn blend_state(self) -> wgpu::BlendState {
         match self {
             Self::Replace => wgpu::BlendState::REPLACE,
@@ -331,13 +341,14 @@ impl ShaderPipelineCache {
             .warm(&self.compiler, self.factory.backend, || job.build());
     }
 
-    /// Queues the shader's general pipeline for `mode` on the background
-    /// compiler, so its first draw finds the pipeline ready.
+    /// Queues the pipeline drawing `shader` whole for `mode` on the
+    /// background compiler, overrides included, so its first draw finds the
+    /// pipeline ready; a shader without overrides warms its general one.
     pub fn warm(&mut self, shader: &RuntimeShader, mode: RuntimeShaderPipelineMode) {
         if !self.compiler.is_active() {
             return;
         }
-        let key = self.key(shader, mode, ShaderDrawVariant::Whole).general();
+        let key = self.key(shader, mode, ShaderDrawVariant::Whole);
         self.request(shader, key);
     }
 
@@ -776,5 +787,24 @@ fn fullscreen_vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> 
                 result.err().map(|e| e.to_string()).unwrap_or_default()
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod target_tests {
+    use cranpose_ui_graphics::ShaderTarget;
+
+    use super::RuntimeShaderPipelineMode;
+
+    #[test]
+    fn a_layer_replaces_and_a_page_composites() {
+        assert_eq!(
+            RuntimeShaderPipelineMode::for_target(ShaderTarget::Layer),
+            RuntimeShaderPipelineMode::Replace
+        );
+        assert_eq!(
+            RuntimeShaderPipelineMode::for_target(ShaderTarget::Page),
+            RuntimeShaderPipelineMode::PremultipliedSrcOver
+        );
     }
 }

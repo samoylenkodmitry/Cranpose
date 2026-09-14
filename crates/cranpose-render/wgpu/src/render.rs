@@ -2040,6 +2040,12 @@ impl GpuRenderer {
         self.effect_renderer.warm_pipelines(&self.device);
     }
 
+    /// Queues an app's own runtime shaders behind the framework's, each at
+    /// the target it draws to.
+    pub(crate) fn warm_shaders(&mut self, warm_ups: &[cranpose_ui_graphics::ShaderWarmUp]) {
+        self.effect_renderer.warm_shaders(warm_ups);
+    }
+
     fn image_pipeline_resource(
         &self,
         blend_mode: BlendMode,

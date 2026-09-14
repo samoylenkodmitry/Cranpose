@@ -74,6 +74,13 @@ impl ShapePipelines {
     /// two pipelines it does not use, and one that does pays for them at
     /// startup instead of mid-scroll.
     ///
+    /// Built here, on the thread creating the renderer, rather than queued
+    /// on the background compiler: that thread has nothing else to do until
+    /// the first frame, so these compiles overlap the compiler's glyph,
+    /// image and blit work. Queued behind them on the one compiler thread,
+    /// the first frame waited for the lot (Mate 20 X cold first frame
+    /// 286-755 ms against 245-294 ms).
+    ///
     /// Only the general variants. Specialized ones are unbounded in principle
     /// and the background compiler already keeps them off the frame where it
     /// runs; where it does not, `get` falls back to the general pipeline,

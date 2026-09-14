@@ -144,10 +144,21 @@ composites the resolved textures.
   queues what the first frame draws first (glyph, image, output and the
   fixed effect pipelines) and the general pipelines of the shipped runtime
   shaders last, since one liquid glass compile is a second on Mali and
-  nothing draws it before the first glass screen. Specialized shape
-  pipelines (`shape_pipelines.rs`, Vulkan only) queue on the same thread
+  nothing draws it before the first glass screen. The six general shape
+  pipelines stay synchronous in `ShapePipelines::new`: the creating thread
+  is idle until the first frame, so building them there overlaps the
+  compiler's work, where queuing them ahead on the one compiler thread put
+  the Mate 20 X's cold first frame at 286-755 ms against 245-294 ms.
+  Specialized shape pipelines (Vulkan only) queue on the compiler thread
   behind at most two pending keys, the general shape pipeline drawing until
-  each lands. A runtime shader that
+  each lands. Shaders a widget crate assembles at runtime reach the queue
+  through `WgpuRenderer::warm_shaders`, each `ShaderWarmUp` naming its
+  `ShaderTarget` (`Page` composites with premultiplied source-over, `Layer`
+  renders into the layer with replace) and keeping its overrides, so a mask
+  pass warms the pipeline it draws with; every platform registers
+  `cranpose_liquid::shader_warm_ups()` (tab lighting, the two vibrancy
+  passes) before `init_gpu`, and the list applies again at every later
+  `init_gpu` (`shader_warm_ups.rs`). A runtime shader that
   declares its specialization exact (`set_specialization_exact`; liquid
   glass does) has its specializations (override set, interior and rim)
   compiled in the background while its general pipeline draws in their
