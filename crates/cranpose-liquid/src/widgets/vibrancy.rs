@@ -127,12 +127,15 @@ pub(super) fn VibrantContent(
         BoxSpec::default(),
         move || {
             Box(
+                Modifier::empty().fill_max_size().background(foreground),
+                BoxSpec::default(),
+                || {},
+            );
+            Box(
                 Modifier::empty()
-                    .fill_max_size()
-                    .graphics_layer(move || GraphicsLayer {
-                        backdrop_effect: Some(effect(InkPass::Color, size, selection, grid, dark)),
-                        ..Default::default()
-                    }),
+                    .offset(selection.bounds.x, selection.bounds.y)
+                    .size(Size::new(selection.bounds.width, selection.bounds.height))
+                    .background(selection.color),
                 BoxSpec::default(),
                 || {},
             );
