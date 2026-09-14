@@ -66,7 +66,7 @@ mod warm_up_tests {
                 )
             })
             .collect();
-        assert_eq!(identities.len(), 3);
+        assert_eq!(identities.len(), 2);
         for (index, identity) in identities.iter().enumerate() {
             assert!(
                 !identities[..index].contains(identity),

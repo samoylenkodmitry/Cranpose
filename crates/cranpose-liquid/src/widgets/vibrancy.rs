@@ -7,7 +7,7 @@ use cranpose_ui::{
 };
 use cranpose_ui_graphics::{
     BlendMode, Color, CompositingStrategy, GraphicsLayer, RUNTIME_SHADER_PRELUDE_WGSL, Rect,
-    RenderEffect, RuntimeShader, ShaderTarget, ShaderWarmUp, Size, SubstrateSpec,
+    RenderEffect, RuntimeShader, ShaderTarget, ShaderWarmUp, Size,
 };
 
 #[derive(Clone, Copy, PartialEq)]
@@ -27,14 +27,9 @@ pub(super) struct InkGrid {
     pub count: usize,
 }
 
-enum InkPass {
-    Color,
-    Mask,
-}
-
-fn shader(pass: InkPass) -> RuntimeShader {
+fn mask_shader() -> RuntimeShader {
     static SHADER: OnceLock<RuntimeShader> = OnceLock::new();
-    let mut shader = SHADER
+    SHADER
         .get_or_init(|| {
             let mut shader = RuntimeShader::new(&format!(
                 "{RUNTIME_SHADER_PRELUDE_WGSL}\n{}\n{}",
@@ -42,44 +37,22 @@ fn shader(pass: InkPass) -> RuntimeShader {
                 include_str!("vibrancy.wgsl")
             ));
             shader.set_float(0, 0.9);
+            shader.set_override("VIBRANCY_MASK", 1.0);
             shader
         })
-        .clone();
-    shader.set_override("VIBRANCY_MASK", f64::from(matches!(pass, InkPass::Mask)));
-    let backdrop = matches!(pass, InkPass::Color);
-    shader.set_batched_source(backdrop);
-    shader.set_substrates(if backdrop {
-        &[SubstrateSpec::Mean]
-    } else {
-        &[]
-    });
-    shader
+        .clone()
 }
 
-/// The ink shaders: the colour pass composited over the content's backdrop
-/// and the mask pass rendered into its `DstOut` layer.
-pub(super) fn shader_warm_ups() -> [ShaderWarmUp; 2] {
-    [
-        ShaderWarmUp {
-            shader: shader(InkPass::Color),
-            target: ShaderTarget::Page,
-        },
-        ShaderWarmUp {
-            shader: shader(InkPass::Mask),
-            target: ShaderTarget::Layer,
-        },
-    ]
+/// The ink mask shader rendered into its `DstOut` layer.
+pub(super) fn shader_warm_ups() -> [ShaderWarmUp; 1] {
+    [ShaderWarmUp {
+        shader: mask_shader(),
+        target: ShaderTarget::Layer,
+    }]
 }
 
-fn effect(
-    pass: InkPass,
-    size: Size,
-    selection: InkSelection,
-    grid: InkGrid,
-    dark: bool,
-) -> RenderEffect {
-    let mut shader = shader(pass);
-    shader.set_float(12, f32::from(dark));
+fn mask_effect(size: Size, selection: InkSelection, grid: InkGrid) -> RenderEffect {
+    let mut shader = mask_shader();
     shader.set_float2(13, selection.activity, selection.optical_scale);
     shader.set_float2(16, selection.projection.width, selection.projection.height);
     shader.set_float4(
@@ -117,7 +90,6 @@ pub(super) fn VibrantContent(
     content: impl FnMut() + 'static,
 ) {
     let modifier = modifier.size(size);
-    let dark = foreground.r() + foreground.g() + foreground.b() > 1.5;
     let content = Rc::new(RefCell::new(content));
     Box(
         modifier.graphics_layer(|| GraphicsLayer {
@@ -132,19 +104,28 @@ pub(super) fn VibrantContent(
                 || {},
             );
             Box(
-                Modifier::empty()
-                    .offset(selection.bounds.x, selection.bounds.y)
-                    .size(Size::new(selection.bounds.width, selection.bounds.height))
-                    .background(selection.color),
+                Modifier::empty().fill_max_size().clip_to_bounds(),
                 BoxSpec::default(),
-                || {},
+                move || {
+                    Box(
+                        Modifier::empty()
+                            .offset(selection.bounds.x, selection.bounds.y)
+                            .size(Size::new(selection.bounds.width, selection.bounds.height))
+                            .rounded_corners(
+                                selection.bounds.width.min(selection.bounds.height) * 0.5,
+                            )
+                            .background(selection.color),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                },
             );
             let content = Rc::clone(&content);
             Box(
                 Modifier::empty()
                     .fill_max_size()
                     .graphics_layer(move || GraphicsLayer {
-                        render_effect: Some(effect(InkPass::Mask, size, selection, grid, dark)),
+                        render_effect: Some(mask_effect(size, selection, grid)),
                         blend_mode: BlendMode::DstOut,
                         ..Default::default()
                     }),
@@ -187,28 +168,21 @@ mod tests {
     }
 
     #[test]
-    fn each_warm_up_names_the_pipeline_its_pass_draws() {
-        let warm_ups = shader_warm_ups();
+    fn the_warm_up_names_the_mask_pipeline() {
+        let [warm_up] = shader_warm_ups();
         let size = Size {
             width: 10.0,
             height: 10.0,
         };
-        for (warm_up, pass, target) in [
-            (&warm_ups[0], InkPass::Color, ShaderTarget::Page),
-            (&warm_ups[1], InkPass::Mask, ShaderTarget::Layer),
-        ] {
-            let RenderEffect::Shader { shader } = effect(pass, size, selection(), grid(), false)
-            else {
-                panic!("vibrancy is a runtime shader effect");
-            };
-            assert_eq!(warm_up.shader.source_hash(), shader.source_hash());
-            assert_eq!(warm_up.shader.overrides_hash(), shader.overrides_hash());
-            assert_eq!(warm_up.target, target);
-        }
-        assert_ne!(
-            warm_ups[0].shader.overrides_hash(),
-            warm_ups[1].shader.overrides_hash(),
-            "the mask override is what tells the two pipelines apart"
+        let RenderEffect::Shader { shader } = mask_effect(size, selection(), grid()) else {
+            panic!("the ink mask is a runtime shader effect");
+        };
+        assert_eq!(warm_up.shader.source_hash(), shader.source_hash());
+        assert_eq!(warm_up.shader.overrides_hash(), shader.overrides_hash());
+        assert_eq!(warm_up.target, ShaderTarget::Layer);
+        assert!(
+            !shader.batched_source(),
+            "the mask reads its own layer, never the page"
         );
     }
 }
