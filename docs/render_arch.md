@@ -281,6 +281,7 @@ Exact levers, each against the tree without it:
 | default curve fold 81af46dc | -0.8, -0.9, -4.1, +1.6 | not run | reverted |
 | curve as constant d82d86a8 | +2.7, +2.3, +3.3, +2.0 | not run | attribution only |
 | shared channel walk (a channel whose clamped interior equals the base channel's takes the transmitted path; two `channel_lens_displacement` evaluations and two taps skipped across the face) | +0.02, +1.96, +0.38, -0.54 | +0.46 on the 28 plateau, Layer Pass 1 12.09/11.65 → 11.99 ms; the run crossed 52 → 40 → 28 from a cold start | not adopted: exact on both GPUs, nil |
+| tab bar zero-output work, PR #671 (a child that composites nothing is skipped, a render effect over a retained surface is cached, unlit lighting is omitted); demo Liquid tab, present cycle p50 29 → 20-25 ms | +7.5, +5.1, +5.3, +9.9 | not run | kept: 31 → 21 passes per scroll step, byte-exact |
 
 Legs: `<label>-<device>-<n>-<arm>/` under the shared root, one `report.json`
 and `logcat.txt` each; pass rows by `pass_timing_from_logcat.py`.

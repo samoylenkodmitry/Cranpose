@@ -45,3 +45,4 @@
 - Shader-only render fixtures must request shader-owned coverage when their graph omits the material's outer clip.
 - Diagnose single-channel pixel drift before rounding with shader bit probes; face/rim compositing can change fused multiply-add order even when both inputs match.
 - Fetch `origin main` before building device A/B APKs; a stale local main re-measures bugs upstream already fixed and blames the change under test.
+- Build both arms of a device A/B on one host: debug-signed APKs from different machines refuse `adb install -r` with `INSTALL_FAILED_UPDATE_INCOMPATIBLE`, and every leg of that arm records nothing.
