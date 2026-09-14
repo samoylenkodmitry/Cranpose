@@ -182,7 +182,6 @@ fn tab_flight_lens_material(foreground: cranpose_ui_graphics::Color, activity: f
             0.1440678 * (1.0 - activity),
         ))
         .blur_radius(0.0)
-        .backdrop_blur(4.0, 1.0 - activity)
         .edge_refraction(9.0 * activity)
         .refraction_depth_dp(36.0)
         .refraction_curve(0.25)
