@@ -833,7 +833,10 @@ fn LiquidTabBarLayout(
             );
             let bar_lift = Modifier::empty().graphics_layer(move || {
                 let width = lens_x_outer.get().2 * count as f32 + 2.0 * BLOB_MARGIN;
-                tab_bar_transform(width, bar_press.get(), travel.get())
+                cranpose_ui_graphics::GraphicsLayer {
+                    compositing_strategy: cranpose_ui_graphics::CompositingStrategy::Offscreen,
+                    ..tab_bar_transform(width, bar_press.get(), travel.get())
+                }
             });
             Box(
                 Modifier::empty().height(BAR_HEIGHT),
