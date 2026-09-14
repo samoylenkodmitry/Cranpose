@@ -38,6 +38,11 @@ pub(crate) fn file_path() -> Option<PathBuf> {
 
 pub(crate) fn load(device: &wgpu::Device) -> Option<wgpu::PipelineCache> {
     if !device.features().contains(wgpu::Features::PIPELINE_CACHE) {
+        log::info!(
+            "[pipeline-cache] not offered by {:?}; compiled pipelines persist only as far \
+             as the driver's own cache does",
+            device.adapter_info().backend
+        );
         return None;
     }
     let path = file_path();
@@ -129,7 +134,10 @@ pub(crate) fn spawn_persist_watcher(cache: wgpu::PipelineCache) {
             let mut watch = PersistWatch::default();
             loop {
                 std::thread::sleep(PERSIST_TICK);
-                if watch.observe(crate::render::pipelines_created()) {
+                if watch.observe(
+                    crate::render::pipelines_created()
+                        + crate::render::pipelines_created_off_frame(),
+                ) {
                     persist(&cache, &path);
                 }
             }

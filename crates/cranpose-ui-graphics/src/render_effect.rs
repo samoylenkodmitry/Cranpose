@@ -138,6 +138,7 @@ struct ShaderSpecialization {
     overrides_hash: OnceLock<u64>,
     substrates: ArrayVec<SubstrateSpec, MAX_SUBSTRATES>,
     draw_split: Option<&'static str>,
+    exact: bool,
 }
 
 pub(crate) struct ShaderSpecializationCache<K, const N: usize> {
@@ -204,6 +205,7 @@ static DEFAULT_SHADER_SPECIALIZATION: ShaderSpecialization = ShaderSpecializatio
     overrides_hash: OnceLock::new(),
     substrates: ArrayVec::new_const(),
     draw_split: None,
+    exact: false,
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -416,6 +418,11 @@ impl RuntimeShader {
     /// (a `bool` is `value != 0`). Each distinct override set compiles its
     /// own pipeline; renderers use this to fold a material's inactive
     /// features away without changing the shader text.
+    ///
+    /// The pipeline compiles inside the frame that first draws the shader,
+    /// unless the shader declares its specialization exact with
+    /// [`Self::set_specialization_exact`]: then the renderer compiles it in
+    /// the background and draws with the general pipeline meanwhile.
     pub fn set_override(&mut self, name: &'static str, value: f64) {
         let position = self
             .overrides()
@@ -685,6 +692,25 @@ impl RuntimeShader {
     /// The override selecting the interior or the rim draw, when declared.
     pub fn draw_split(&self) -> Option<&'static str> {
         self.specialization().draw_split
+    }
+
+    /// Declares that every override and the draw split of this shader are
+    /// folds: a specialized pipeline lands on the same bytes as the general
+    /// pipeline, which reads every folded value from its uniform. The
+    /// renderer then compiles specializations in the background and draws
+    /// with the general pipeline until they land. An override that selects
+    /// a different picture, such as a pass switch, must leave this unset;
+    /// its pipeline compiles inside the frame that first draws it.
+    pub fn set_specialization_exact(&mut self, exact: bool) {
+        if self.specialization_exact() == exact {
+            return;
+        }
+        self.specialization_mut().exact = exact;
+    }
+
+    /// Whether the shader declared its specialization exact.
+    pub fn specialization_exact(&self) -> bool {
+        self.specialization().exact
     }
 
     /// Get the WGSL source code.

@@ -272,6 +272,7 @@ pub fn specialize_liquid_glass_with_folds(shader: &mut RuntimeShader, folds: boo
                     }
                 }
                 shader.set_draw_split((folds && !projected).then_some(GLASS_RIM_DRAW_OVERRIDE));
+                shader.set_specialization_exact(true);
                 let substrate = radius.map(|radius| SubstrateSpec::Blur {
                     radius_px: f32::from_bits(radius),
                 });

@@ -740,24 +740,78 @@ pub fn region_pixels(frame: &CapturedFrame, region: Rect) -> Vec<u8> {
     out
 }
 
+/// Waits until the background compiler has built nothing for a second, so
+/// a count of pipelines built from here on is the scene's, not the
+/// renderer's warm-up.
+pub fn wait_for_background_compiler_idle() {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let mut seen = cranpose_render_wgpu::pipelines_created_off_frame();
+    let mut quiet_since = std::time::Instant::now();
+    loop {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let now = cranpose_render_wgpu::pipelines_created_off_frame();
+        if now != seen {
+            seen = now;
+            quiet_since = std::time::Instant::now();
+        } else if quiet_since.elapsed() >= std::time::Duration::from_secs(1) {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the background compiler never went idle"
+        );
+    }
+}
+
+/// Whether every draw of the last frame used the pipeline it asked for,
+/// rather than a general one standing in while a specialization compiled.
+pub fn pipelines_settled(stats: &RenderStatsSnapshot) -> bool {
+    stats.shape_pipeline_fallback_draws == 0 && stats.shader_pipeline_fallback_draws == 0
+}
+
+/// Captures until the frame's pipelines have settled, so what the frame
+/// draws and counts is what the specialized pipelines draw.
+pub fn capture_settled(
+    renderer: &mut LockedRenderer,
+    mut capture: impl FnMut(&mut LockedRenderer) -> CapturedFrame,
+) -> CapturedFrame {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        let captured = capture(renderer);
+        let stats = renderer.last_frame_stats().expect("frame statistics");
+        if pipelines_settled(&stats) {
+            return captured;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "specialization did not finish"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+/// [`capture_graph`] once the graph's pipelines have settled.
+pub fn capture_graph_settled(
+    renderer: &mut LockedRenderer,
+    graph: RenderGraph,
+    width: u32,
+    height: u32,
+) -> CapturedFrame {
+    capture_settled(renderer, |renderer| {
+        capture_graph(renderer, graph.clone(), width, height)
+    })
+}
+
 pub fn settled_capture(renderer: &mut LockedRenderer, graph: &RenderGraph) -> Vec<u8> {
     let mut passes = Vec::new();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     while passes.len() < 3 {
-        renderer.scene_mut().graph = Some(graph.clone());
-        let captured = renderer
-            .capture_frame(SIZE, SIZE)
-            .unwrap_or_else(|err| panic!("capture failed: {err:?}"));
+        let captured = capture_settled(renderer, |renderer| {
+            renderer.scene_mut().graph = Some(graph.clone());
+            renderer
+                .capture_frame(SIZE, SIZE)
+                .unwrap_or_else(|err| panic!("capture failed: {err:?}"))
+        });
         assert_eq!((captured.width, captured.height), (SIZE, SIZE));
-        let stats = renderer.last_frame_stats().expect("frame statistics");
-        if stats.shape_pipeline_fallback_draws > 0 {
-            assert!(
-                std::time::Instant::now() < deadline,
-                "specialization did not finish"
-            );
-            std::thread::sleep(std::time::Duration::from_millis(5));
-            continue;
-        }
         passes.push(captured.pixels);
     }
     assert_eq!(

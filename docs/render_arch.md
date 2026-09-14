@@ -135,9 +135,54 @@ composites the resolved textures.
   (folded vs general, split vs whole, at zero bytes), the liquid crate's
   flag-table unit tests, `glass_split.rs` unit tests (the hole lies where
   the rim draw discards).
+- **Pipeline compilation** (`pipeline_compiler.rs`, `lazy_resource.rs`,
+  `shader_cache.rs`): the driver compiles a glass pipeline in ~100 ms and a
+  fixed effect pipeline in ~70 ms (Metal, no disk cache), so no frame waits
+  for one it can avoid. One background thread compiles in queue order; a
+  `LazyGpuResource` is one shared cell, so a frame arriving mid-compile
+  waits for that compile instead of starting another. `GpuRenderer::new`
+  queues what the first frame draws first (glyph, image, output and the
+  fixed effect pipelines) and the general pipelines of the shipped runtime
+  shaders last, since one liquid glass compile is a second on Mali and
+  nothing draws it before the first glass screen. Specialized shape
+  pipelines (`shape_pipelines.rs`, Vulkan only) queue on the same thread
+  behind at most two pending keys, the general shape pipeline drawing until
+  each lands. A runtime shader that
+  declares its specialization exact (`set_specialization_exact`; liquid
+  glass does) has its specializations (override set, interior and rim)
+  compiled in the background while its general pipeline draws in their
+  place: a fold substitutes the value the uniform holds, so the pictures
+  are the same bytes (`glass_specialization_parity.rs`, which also proves
+  the first frame draws through the fallback and later frames land on the
+  same bytes; Metal's fast-math compile moved one lens-rim pixel by one
+  unit between the two, so reference captures settle first). An override
+  that picks a different picture, such as vibrancy's mask pass, compiles
+  inside the frame that first draws it, once per install. Per-material folds are on for Android only
+  (`glass_material_folds_enabled`), so on Android the compiler keeps one
+  pipeline pair per material off the present thread, while the desktop
+  pays only the fixed set and the general glass pipelines.
+  `shader_pipeline_fallback_draws` counts such draws; captures that
+  assert per-draw statistics settle on zero first (`settled_capture`).
+  `CRANPOSE_BACKGROUND_PIPELINES=0` compiles everything at first use.
+  Across launches a shader compiles once per install and once more when
+  its source changes; every launch still creates the pipeline objects from
+  a cache, off the render thread. Android keeps the driver's compiled
+  pipelines in the `pipeline_disk_cache` blob (Pixel Watch 3: ~20 ms per
+  glass pipeline from the blob, 650-990 ms cold). Mesa on Linux serializes
+  nothing into that blob (Intel ANV 26.2: a 96 B header, the same from
+  unpatched CI runs) and keeps its own `mesa_shader_cache` instead, which
+  brings a relaunch to ~25 ms per glass pipeline. Metal offers wgpu no
+  cache (`PIPELINE_CACHE` is Vulkan-only in wgpu 29 and 30) but macOS
+  caches compiled pipelines itself: relaunching an unchanged binary
+  compiled the liquid page's 44 pipelines in 25 ms against 731 ms on the
+  first launch (2026-09-14). DX12 recompiles HLSL each launch and only the
+  driver caches the DXIL to ISA step; browsers cache for the web. A blob
+  that stays at 96 B is a driver that serializes nothing, not a broken
+  cache.
 - **Diagnostics**: `RenderStatsSnapshot` (passes, pass and copy pixels,
   bytes, cache traffic, `shader_pixels`, `glass_rasterized_pixels`,
-  `blur_pixels`, `shape_fill_pixels_by_class`), `CRANPOSE_GPU_PASS_TIMING`
+  `blur_pixels`, `shape_fill_pixels_by_class`,
+  `shader_pipeline_fallback_draws`), `CRANPOSE_GPU_PASS_TIMING`
   (the watch has timestamps, Mali does not), `CRANPOSE_GPU_STAGE_DIAG`,
   `CRANPOSE_ABLATE` (`stages`, `glass`, `substrates`, `blur`, `text`,
   `shape`, `shape_fill`, `glass_dispersion`, `glass_refraction`: bounds by

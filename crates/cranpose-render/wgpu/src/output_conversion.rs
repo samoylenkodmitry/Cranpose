@@ -1,4 +1,8 @@
-use crate::{frame_graph::FrameCommandRecorder, lazy_resource::LazyGpuResource};
+use crate::{
+    frame_graph::FrameCommandRecorder,
+    lazy_resource::LazyGpuResource,
+    pipeline_compiler::{CompilerSend, PipelineCompiler},
+};
 
 const OUTPUT_CONVERSION_SHADER: &str = r#"
 struct VertexOutput {
@@ -76,22 +80,29 @@ impl OutputConverter {
         }
     }
 
-    fn pipeline(&self, device: &wgpu::Device, backend: wgpu::Backend) -> &wgpu::RenderPipeline {
-        self.pipeline.get_or_init(backend, || {
+    fn pipeline_job(
+        &self,
+        device: &wgpu::Device,
+    ) -> impl FnOnce() -> wgpu::RenderPipeline + CompilerSend + 'static {
+        let device = device.clone();
+        let layout = self.pipeline_layout.clone();
+        let shader = self.shader.clone();
+        let format = self.format;
+        move || {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("Output Conversion Pipeline"),
-                layout: Some(&self.pipeline_layout),
+                layout: Some(&layout),
                 vertex: wgpu::VertexState {
-                    module: &self.shader,
+                    module: &shader,
                     entry_point: Some("vs_main"),
                     buffers: &[],
                     compilation_options: Default::default(),
                 },
                 fragment: Some(wgpu::FragmentState {
-                    module: &self.shader,
+                    module: &shader,
                     entry_point: Some("fs_main"),
                     targets: &[Some(wgpu::ColorTargetState {
-                        format: self.format,
+                        format,
                         blend: None,
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
@@ -103,7 +114,22 @@ impl OutputConverter {
                 multiview_mask: None,
                 cache: None,
             })
-        })
+        }
+    }
+
+    fn pipeline(&self, device: &wgpu::Device, backend: wgpu::Backend) -> &wgpu::RenderPipeline {
+        self.pipeline
+            .get_or_init(backend, || self.pipeline_job(device)())
+    }
+
+    pub(crate) fn warm(
+        &self,
+        device: &wgpu::Device,
+        compiler: &PipelineCompiler,
+        backend: wgpu::Backend,
+    ) {
+        self.pipeline
+            .warm(compiler, backend, self.pipeline_job(device));
     }
 
     pub(crate) fn bind_group(

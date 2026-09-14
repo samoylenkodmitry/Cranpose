@@ -5,7 +5,9 @@ use cranpose_render_common::{
     geometry::{BLUR_TAP_PAIRS, BlurKernel, blur_scratch_block},
 };
 use cranpose_ui_graphics::{
-    BlendMode, MAX_SUBSTRATES, RenderEffect, RuntimeShader, SubstrateSpec, TileMode,
+    BlendMode, GRADIENT_BLUR_WGSL, GRADIENT_CUT_MASK_WGSL, GRADIENT_FADE_DST_OUT_WGSL,
+    LIQUID_GLASS_WGSL, MAX_SUBSTRATES, ROUNDED_ALPHA_MASK_WGSL, RenderEffect, RuntimeShader,
+    SubstrateSpec, TileMode,
 };
 use smallvec::SmallVec;
 
@@ -18,8 +20,10 @@ use crate::{
     gpu_stats::FrameStats,
     lazy_resource::LazyGpuResource,
     offscreen::{OffscreenPool, OffscreenTarget},
+    pipeline::GPU_TEXT_BRUSH_EFFECT_SHADER,
+    pipeline_compiler::PipelineCompiler,
     shader_cache::{
-        RuntimeShaderPipelineMode, ShaderDrawVariant, ShaderPipelineCache,
+        RuntimeShaderPipelineMode, ShaderDrawVariant, ShaderPipelineCache, ShaderPipelineFit,
         shader_specialization_enabled,
     },
     shaders,
@@ -93,6 +97,7 @@ pub(crate) struct EffectRenderer {
     offscreen_pool: OffscreenPool,
     pub shader_cache: ShaderPipelineCache,
     pipeline_cache: Option<wgpu::PipelineCache>,
+    compiler: PipelineCompiler,
 
     blur_shader: wgpu::ShaderModule,
     blur_pipeline_layout: wgpu::PipelineLayout,
@@ -137,6 +142,8 @@ pub(crate) struct EffectRenderer {
     pub(crate) debug_shader_pixels: Cell<u64>,
     pub(crate) debug_glass_rasterized_pixels: Cell<u64>,
     pub(crate) debug_blur_pixels: Cell<u64>,
+    debug_shader_fallback_draws: Cell<u32>,
+    debug_shader_specialized_draws: Cell<u32>,
 }
 
 pub(crate) trait EffectScratchTargetProvider<'target> {
@@ -839,37 +846,50 @@ fn dst_out_blend_state() -> wgpu::BlendState {
     }
 }
 
+/// The creation of one fixed effect pipeline, owning clones of everything
+/// it reads so the background compiler can run it as well as the frame.
+#[cfg(not(target_arch = "wasm32"))]
+type FixedPipelineJob = Box<dyn FnOnce() -> wgpu::RenderPipeline + Send + 'static>;
+#[cfg(target_arch = "wasm32")]
+type FixedPipelineJob = Box<dyn FnOnce() -> wgpu::RenderPipeline + 'static>;
+
 #[allow(clippy::too_many_arguments)]
-fn create_fullscreen_pipeline(
+fn fullscreen_pipeline_job(
     device: &wgpu::Device,
     cache: Option<&wgpu::PipelineCache>,
     label: &'static str,
     layout: &wgpu::PipelineLayout,
     shader: &wgpu::ShaderModule,
     fragment_entry: &'static str,
-    constants: &[(&str, f64)],
+    constants: &[(&'static str, f64)],
     surface_format: wgpu::TextureFormat,
     blend: wgpu::BlendState,
-) -> wgpu::RenderPipeline {
-    crate::render::create_fullscreen_strip_pipeline(
-        device,
-        cache,
-        &format!("effect {label} entry={fragment_entry}"),
-        label,
-        layout,
-        shader,
-        fragment_entry,
-        constants,
-        wgpu::ColorTargetState {
-            format: surface_format,
-            blend: Some(blend),
-            write_mask: wgpu::ColorWrites::ALL,
-        },
-    )
+) -> FixedPipelineJob {
+    let device = device.clone();
+    let cache = cache.cloned();
+    let layout = layout.clone();
+    let shader = shader.clone();
+    let constants = constants.to_vec();
+    Box::new(move || {
+        crate::render::create_fullscreen_strip_pipeline(
+            &device,
+            cache.as_ref(),
+            &format!("effect {label} entry={fragment_entry}"),
+            label,
+            &layout,
+            &shader,
+            fragment_entry,
+            &constants,
+            wgpu::ColorTargetState {
+                format: surface_format,
+                blend: Some(blend),
+                write_mask: wgpu::ColorWrites::ALL,
+            },
+        )
+    })
 }
 
-#[allow(clippy::too_many_arguments)]
-fn create_projective_pipeline(
+fn projective_pipeline_job(
     device: &wgpu::Device,
     cache: Option<&wgpu::PipelineCache>,
     label: &'static str,
@@ -877,56 +897,87 @@ fn create_projective_pipeline(
     shader: &wgpu::ShaderModule,
     surface_format: wgpu::TextureFormat,
     blend: wgpu::BlendState,
-) -> wgpu::RenderPipeline {
-    crate::render::create_render_pipeline_logged(
-        device,
-        cache,
-        &format!("effect {label}"),
-        wgpu::RenderPipelineDescriptor {
-            label: Some(label),
-            layout: Some(layout),
-            vertex: wgpu::VertexState {
-                module: shader,
-                entry_point: Some("projective_blit_vs"),
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<ProjectiveBlitVertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &[wgpu::VertexAttribute {
-                        offset: 0,
-                        shader_location: 0,
-                        format: wgpu::VertexFormat::Float32x2,
+) -> FixedPipelineJob {
+    let device = device.clone();
+    let cache = cache.cloned();
+    let layout = layout.clone();
+    let shader = shader.clone();
+    Box::new(move || {
+        crate::render::create_render_pipeline_logged(
+            &device,
+            cache.as_ref(),
+            &format!("effect {label}"),
+            wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("projective_blit_vs"),
+                    buffers: &[wgpu::VertexBufferLayout {
+                        array_stride: std::mem::size_of::<ProjectiveBlitVertex>() as u64,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &[wgpu::VertexAttribute {
+                            offset: 0,
+                            shader_location: 0,
+                            format: wgpu::VertexFormat::Float32x2,
+                        }],
                     }],
-                }],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("projective_blit_fs"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: surface_format,
+                        blend: Some(blend),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleStrip,
+                    strip_index_format: None,
+                    front_face: wgpu::FrontFace::Ccw,
+                    cull_mode: None,
+                    ..Default::default()
+                },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
             },
-            fragment: Some(wgpu::FragmentState {
-                module: shader,
-                entry_point: Some("projective_blit_fs"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: surface_format,
-                    blend: Some(blend),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleStrip,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        },
-    )
+        )
+    })
 }
+
+/// The runtime shaders the framework ships and the mode each draws in, so
+/// their general pipelines are compiled before a page first uses them.
+const BUILTIN_RUNTIME_SHADERS: [(&str, RuntimeShaderPipelineMode); 7] = [
+    (
+        LIQUID_GLASS_WGSL,
+        RuntimeShaderPipelineMode::PremultipliedSrcOver,
+    ),
+    (LIQUID_GLASS_WGSL, RuntimeShaderPipelineMode::Replace),
+    (
+        GRADIENT_BLUR_WGSL,
+        RuntimeShaderPipelineMode::PremultipliedSrcOver,
+    ),
+    (GRADIENT_CUT_MASK_WGSL, RuntimeShaderPipelineMode::Replace),
+    (ROUNDED_ALPHA_MASK_WGSL, RuntimeShaderPipelineMode::Replace),
+    (
+        GRADIENT_FADE_DST_OUT_WGSL,
+        RuntimeShaderPipelineMode::Replace,
+    ),
+    (
+        GPU_TEXT_BRUSH_EFFECT_SHADER,
+        RuntimeShaderPipelineMode::Replace,
+    ),
+];
 
 impl EffectRenderer {
     pub fn new(
         device: &wgpu::Device,
+        compiler: PipelineCompiler,
         pipeline_cache: Option<wgpu::PipelineCache>,
         surface_format: wgpu::TextureFormat,
         adapter_backend: wgpu::Backend,
@@ -1069,8 +1120,17 @@ impl EffectRenderer {
         });
         Self {
             offscreen_pool: OffscreenPool::new(device, surface_format),
-            shader_cache: ShaderPipelineCache::new(adapter_backend, pipeline_cache.clone()),
+            shader_cache: ShaderPipelineCache::new(
+                device,
+                compiler.clone(),
+                pipeline_cache.clone(),
+                adapter_backend,
+                surface_format,
+                &effect_texture_bind_group_layout,
+                &effect_uniform_bind_group_layout,
+            ),
             pipeline_cache,
+            compiler,
             blur_shader,
             blur_pipeline_layout,
             blur_pipelines,
@@ -1109,22 +1169,75 @@ impl EffectRenderer {
             debug_shader_pixels: Cell::new(0),
             debug_glass_rasterized_pixels: Cell::new(0),
             debug_blur_pixels: Cell::new(0),
+            debug_shader_fallback_draws: Cell::new(0),
+            debug_shader_specialized_draws: Cell::new(0),
         }
+    }
+
+    /// Queues every pipeline a page can reach on the background compiler:
+    /// the general pipelines of the framework's runtime shaders, then the
+    /// fixed effect pipelines. A frame needing one earlier waits for the
+    /// compile under way or builds it itself, as before.
+    pub(crate) fn warm_pipelines(&mut self, device: &wgpu::Device) {
+        let backend = self.adapter_backend;
+        for unmasked_nearest in [false, true] {
+            for blend_mode in [BlendMode::SrcOver, BlendMode::Src, BlendMode::DstOut] {
+                let (resource, _, _) = self.blit_pipeline_target(blend_mode, unmasked_nearest);
+                resource.warm(
+                    &self.compiler,
+                    backend,
+                    self.blit_pipeline_job(device, blend_mode, unmasked_nearest),
+                );
+            }
+        }
+        for tile_mode in 0..BLUR_TILE_MODES.len() {
+            self.blur_pipelines[tile_mode].warm(
+                &self.compiler,
+                backend,
+                self.blur_pipeline_job(device, tile_mode),
+            );
+            for (index, block) in BLUR_DOWNSAMPLE_BLOCKS.into_iter().enumerate() {
+                self.blur_downsample_pipelines[tile_mode][index].warm(
+                    &self.compiler,
+                    backend,
+                    self.blur_downsample_pipeline_job(device, block, tile_mode),
+                );
+            }
+        }
+        for blend_mode in [BlendMode::SrcOver, BlendMode::Src, BlendMode::DstOut] {
+            let (resource, _, _) = self.projective_pipeline_target(blend_mode);
+            resource.warm(
+                &self.compiler,
+                backend,
+                self.projective_pipeline_job(device, blend_mode),
+            );
+        }
+        self.offset_pipeline
+            .warm(&self.compiler, backend, self.offset_pipeline_job(device));
+        self.blur_mean_pipeline
+            .warm(&self.compiler, backend, self.mean_pipeline_job(device));
+        for (source, mode) in BUILTIN_RUNTIME_SHADERS {
+            self.shader_cache.warm(&RuntimeShader::new(source), mode);
+        }
+    }
+
+    fn blur_pipeline_job(&self, device: &wgpu::Device, tile_mode: usize) -> FixedPipelineJob {
+        fullscreen_pipeline_job(
+            device,
+            self.pipeline_cache.as_ref(),
+            "Blur Pipeline",
+            &self.blur_pipeline_layout,
+            &self.blur_shader,
+            "blur_fs",
+            &[("BLUR_TILE_MODE", tile_mode as f64)],
+            self.surface_format,
+            wgpu::BlendState::REPLACE,
+        )
     }
 
     fn blur_pipeline(&self, device: &wgpu::Device, tile_mode: usize) -> &wgpu::RenderPipeline {
         self.blur_pipelines[tile_mode].get_or_init(self.adapter_backend, || {
-            create_fullscreen_pipeline(
-                device,
-                self.pipeline_cache.as_ref(),
-                "Blur Pipeline",
-                &self.blur_pipeline_layout,
-                &self.blur_shader,
-                "blur_fs",
-                &[("BLUR_TILE_MODE", tile_mode as f64)],
-                self.surface_format,
-                wgpu::BlendState::REPLACE,
-            )
+            self.blur_pipeline_job(device, tile_mode)()
         })
     }
 
@@ -1143,63 +1256,80 @@ impl EffectRenderer {
                 panic!("a blur downsample block of {block}; the scratch is 2 or 4 to 1")
             });
         self.blur_downsample_pipelines[tile_mode][index].get_or_init(self.adapter_backend, || {
-            create_fullscreen_pipeline(
-                device,
-                self.pipeline_cache.as_ref(),
-                "Blur Downsample Pipeline",
-                &self.blur_pipeline_layout,
-                &self.blur_shader,
-                "blur_downsample_fs",
-                &[
-                    ("BLUR_BLOCK", f64::from(block)),
-                    ("BLUR_TILE_MODE", tile_mode as f64),
-                ],
-                self.surface_format,
-                wgpu::BlendState::REPLACE,
-            )
+            self.blur_downsample_pipeline_job(device, block, tile_mode)()
         })
+    }
+
+    fn mean_pipeline_job(&self, device: &wgpu::Device) -> FixedPipelineJob {
+        fullscreen_pipeline_job(
+            device,
+            self.pipeline_cache.as_ref(),
+            "Mean Pipeline",
+            &self.blur_pipeline_layout,
+            &self.blur_shader,
+            "blur_mean_fs",
+            &[],
+            self.surface_format,
+            wgpu::BlendState::REPLACE,
+        )
     }
 
     fn mean_pipeline(&self, device: &wgpu::Device) -> &wgpu::RenderPipeline {
         self.blur_mean_pipeline
-            .get_or_init(self.adapter_backend, || {
-                create_fullscreen_pipeline(
-                    device,
-                    self.pipeline_cache.as_ref(),
-                    "Mean Pipeline",
-                    &self.blur_pipeline_layout,
-                    &self.blur_shader,
-                    "blur_mean_fs",
-                    &[],
-                    self.surface_format,
-                    wgpu::BlendState::REPLACE,
-                )
-            })
+            .get_or_init(self.adapter_backend, || self.mean_pipeline_job(device)())
+    }
+
+    fn blur_downsample_pipeline_job(
+        &self,
+        device: &wgpu::Device,
+        block: u32,
+        tile_mode: usize,
+    ) -> FixedPipelineJob {
+        fullscreen_pipeline_job(
+            device,
+            self.pipeline_cache.as_ref(),
+            "Blur Downsample Pipeline",
+            &self.blur_pipeline_layout,
+            &self.blur_shader,
+            "blur_downsample_fs",
+            &[
+                ("BLUR_BLOCK", f64::from(block)),
+                ("BLUR_TILE_MODE", tile_mode as f64),
+            ],
+            self.surface_format,
+            wgpu::BlendState::REPLACE,
+        )
+    }
+
+    fn offset_pipeline_job(&self, device: &wgpu::Device) -> FixedPipelineJob {
+        fullscreen_pipeline_job(
+            device,
+            self.pipeline_cache.as_ref(),
+            "Offset Pipeline",
+            &self.offset_pipeline_layout,
+            &self.offset_shader,
+            "offset_fs",
+            &[],
+            self.surface_format,
+            wgpu::BlendState::REPLACE,
+        )
     }
 
     fn offset_pipeline(&self, device: &wgpu::Device) -> &wgpu::RenderPipeline {
-        self.offset_pipeline.get_or_init(self.adapter_backend, || {
-            create_fullscreen_pipeline(
-                device,
-                self.pipeline_cache.as_ref(),
-                "Offset Pipeline",
-                &self.offset_pipeline_layout,
-                &self.offset_shader,
-                "offset_fs",
-                &[],
-                self.surface_format,
-                wgpu::BlendState::REPLACE,
-            )
-        })
+        self.offset_pipeline
+            .get_or_init(self.adapter_backend, || self.offset_pipeline_job(device)())
     }
 
-    fn blit_pipeline(
+    fn blit_pipeline_target(
         &self,
-        device: &wgpu::Device,
         blend_mode: BlendMode,
         unmasked_nearest: bool,
-    ) -> &wgpu::RenderPipeline {
-        let (resource, label, blend) = match blend_mode {
+    ) -> (
+        &LazyGpuResource<wgpu::RenderPipeline>,
+        &'static str,
+        wgpu::BlendState,
+    ) {
+        match blend_mode {
             BlendMode::Src => (
                 &self.blit_pipeline_src[usize::from(unmasked_nearest)],
                 "Blit Pipeline Src",
@@ -1215,22 +1345,41 @@ impl EffectRenderer {
                 "Blit Pipeline",
                 wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
             ),
-        };
+        }
+    }
+
+    fn blit_pipeline_job(
+        &self,
+        device: &wgpu::Device,
+        blend_mode: BlendMode,
+        unmasked_nearest: bool,
+    ) -> FixedPipelineJob {
+        let (_, label, blend) = self.blit_pipeline_target(blend_mode, unmasked_nearest);
+        fullscreen_pipeline_job(
+            device,
+            self.pipeline_cache.as_ref(),
+            label,
+            &self.blit_pipeline_layout,
+            &self.blit_shader,
+            "blit_fs",
+            &[(
+                "BLIT_UNMASKED_NEAREST",
+                if unmasked_nearest { 1.0 } else { 0.0 },
+            )],
+            self.surface_format,
+            blend,
+        )
+    }
+
+    fn blit_pipeline(
+        &self,
+        device: &wgpu::Device,
+        blend_mode: BlendMode,
+        unmasked_nearest: bool,
+    ) -> &wgpu::RenderPipeline {
+        let (resource, _, _) = self.blit_pipeline_target(blend_mode, unmasked_nearest);
         resource.get_or_init(self.adapter_backend, || {
-            create_fullscreen_pipeline(
-                device,
-                self.pipeline_cache.as_ref(),
-                label,
-                &self.blit_pipeline_layout,
-                &self.blit_shader,
-                "blit_fs",
-                &[(
-                    "BLIT_UNMASKED_NEAREST",
-                    if unmasked_nearest { 1.0 } else { 0.0 },
-                )],
-                self.surface_format,
-                blend,
-            )
+            self.blit_pipeline_job(device, blend_mode, unmasked_nearest)()
         })
     }
 
@@ -1239,22 +1388,21 @@ impl EffectRenderer {
         blend_mode: BlendMode,
         unmasked_nearest: bool,
     ) -> &wgpu::RenderPipeline {
-        let resource = match blend_mode {
-            BlendMode::Src => &self.blit_pipeline_src[usize::from(unmasked_nearest)],
-            BlendMode::DstOut => &self.blit_pipeline_dst_out[usize::from(unmasked_nearest)],
-            _ => &self.blit_pipeline[usize::from(unmasked_nearest)],
-        };
-        resource
+        self.blit_pipeline_target(blend_mode, unmasked_nearest)
+            .0
             .get()
             .expect("prepared composite must initialize its blit pipeline")
     }
 
-    fn projective_blit_pipeline(
+    fn projective_pipeline_target(
         &self,
-        device: &wgpu::Device,
         blend_mode: BlendMode,
-    ) -> &wgpu::RenderPipeline {
-        let (resource, label, blend) = match blend_mode {
+    ) -> (
+        &LazyGpuResource<wgpu::RenderPipeline>,
+        &'static str,
+        wgpu::BlendState,
+    ) {
+        match blend_mode {
             BlendMode::Src => (
                 &self.projective_blit_pipeline_src,
                 "Projective Blit Pipeline Src",
@@ -1270,27 +1418,40 @@ impl EffectRenderer {
                 "Projective Blit Pipeline",
                 wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
             ),
-        };
+        }
+    }
+
+    fn projective_pipeline_job(
+        &self,
+        device: &wgpu::Device,
+        blend_mode: BlendMode,
+    ) -> FixedPipelineJob {
+        let (_, label, blend) = self.projective_pipeline_target(blend_mode);
+        projective_pipeline_job(
+            device,
+            self.pipeline_cache.as_ref(),
+            label,
+            &self.projective_blit_pipeline_layout,
+            &self.projective_blit_shader,
+            self.surface_format,
+            blend,
+        )
+    }
+
+    fn projective_blit_pipeline(
+        &self,
+        device: &wgpu::Device,
+        blend_mode: BlendMode,
+    ) -> &wgpu::RenderPipeline {
+        let (resource, _, _) = self.projective_pipeline_target(blend_mode);
         resource.get_or_init(self.adapter_backend, || {
-            create_projective_pipeline(
-                device,
-                self.pipeline_cache.as_ref(),
-                label,
-                &self.projective_blit_pipeline_layout,
-                &self.projective_blit_shader,
-                self.surface_format,
-                blend,
-            )
+            self.projective_pipeline_job(device, blend_mode)()
         })
     }
 
     fn initialized_projective_blit_pipeline(&self, blend_mode: BlendMode) -> &wgpu::RenderPipeline {
-        let resource = match blend_mode {
-            BlendMode::Src => &self.projective_blit_pipeline_src,
-            BlendMode::DstOut => &self.projective_blit_pipeline_dst_out,
-            _ => &self.projective_blit_pipeline,
-        };
-        resource
+        self.projective_pipeline_target(blend_mode)
+            .0
             .get()
             .expect("prepared projective composite must initialize its pipeline")
     }
@@ -1344,6 +1505,12 @@ impl EffectRenderer {
         stats
             .blur_pixels
             .set(stats.blur_pixels.get() + self.debug_blur_pixels.get());
+        stats.shader_pipeline_fallback_draws.set(
+            stats.shader_pipeline_fallback_draws.get() + self.debug_shader_fallback_draws.get(),
+        );
+        stats
+            .shader_specialized_draws
+            .set(stats.shader_specialized_draws.get() + self.debug_shader_specialized_draws.get());
         self.debug_command_stats.set(FrameCommandStats::default());
         self.debug_blurs.set(0);
         self.debug_substrates.set(0);
@@ -1352,6 +1519,17 @@ impl EffectRenderer {
         self.debug_shader_pixels.set(0);
         self.debug_glass_rasterized_pixels.set(0);
         self.debug_blur_pixels.set(0);
+        self.debug_shader_fallback_draws.set(0);
+        self.debug_shader_specialized_draws.set(0);
+    }
+
+    fn record_shader_pipeline_fit(&self, fit: ShaderPipelineFit) {
+        let counter = match fit {
+            ShaderPipelineFit::Fallback => &self.debug_shader_fallback_draws,
+            ShaderPipelineFit::Specialized => &self.debug_shader_specialized_draws,
+            ShaderPipelineFit::General => return,
+        };
+        counter.set(counter.get() + 1);
     }
 
     pub(crate) fn record_blur_pass(&self) {
@@ -1918,18 +2096,29 @@ impl EffectRenderer {
         item: &ShaderCompositeBatchItem<'a>,
     ) -> Option<PreparedShaderDraw<'a>> {
         let mut pipelines = SmallVec::new();
+        let mut fit = ShaderPipelineFit::General;
+        let mut general = None;
         for &variant in shader_draw_variants(item.shader) {
-            let pipeline = self.shader_cache.get_or_create(
-                device,
+            let (pipeline, variant_fit) = self.shader_cache.get_or_create(
                 item.shader,
-                self.surface_format,
-                &self.effect_texture_bind_group_layout,
-                &self.effect_uniform_bind_group_layout,
                 RuntimeShaderPipelineMode::PremultipliedSrcOver,
                 variant,
             )?;
-            pipelines.push((variant, pipeline.clone()));
+            match variant_fit {
+                ShaderPipelineFit::Fallback => general = Some(pipeline.clone()),
+                ShaderPipelineFit::Specialized => {
+                    fit = ShaderPipelineFit::Specialized;
+                    pipelines.push((variant, pipeline.clone()));
+                }
+                ShaderPipelineFit::General => pipelines.push((variant, pipeline.clone())),
+            }
         }
+        if let Some(general) = general {
+            pipelines.clear();
+            pipelines.push((ShaderDrawVariant::Whole, general));
+            fit = ShaderPipelineFit::Fallback;
+        }
+        self.record_shader_pipeline_fit(fit);
         let mut padded = item.shader.uniforms_padded();
         let (dest_x, dest_y, _, _) = item.dest_viewport;
         let mask = item.rounded_mask.map(|mask| RoundedCompositeMask {
@@ -2061,32 +2250,15 @@ impl EffectRenderer {
             bytemuck::cast_slice(&padded),
         );
 
-        if self
-            .shader_cache
-            .get_or_create(
-                device,
-                shader,
-                self.surface_format,
-                &self.effect_texture_bind_group_layout,
-                &self.effect_uniform_bind_group_layout,
-                options.pipeline_mode,
-                ShaderDrawVariant::Whole,
-            )
-            .is_none()
-        {
-            return false;
-        }
-        let Some(pipeline) = self.shader_cache.get_or_create(
-            device,
+        let Some((pipeline, fit)) = self.shader_cache.get_or_create(
             shader,
-            self.surface_format,
-            &self.effect_texture_bind_group_layout,
-            &self.effect_uniform_bind_group_layout,
             options.pipeline_mode,
             ShaderDrawVariant::Whole,
         ) else {
             return false;
         };
+        let pipeline = pipeline.clone();
+        self.record_shader_pipeline_fit(fit);
 
         let texture_bind_group = source.get_or_create_bind_group(
             device,
@@ -2096,7 +2268,7 @@ impl EffectRenderer {
 
         let mut pass = recorder.begin_color_pass("Shader Effect Pass", dest_view, options.load_op);
 
-        pass.set_pipeline(pipeline);
+        pass.set_pipeline(&pipeline);
         pass.set_bind_group(0, texture_bind_group, &[]);
         pass.set_bind_group(1, &uniform.bind_group, &[uniform.offset]);
         if let Some((x, y, width, height)) = options.dest_viewport {

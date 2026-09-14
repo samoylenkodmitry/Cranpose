@@ -117,9 +117,7 @@ fn capture_card_and_stats_under(
     captured
 }
 
-fn render_card_and_stats(
-    mut renderer: WgpuRenderer,
-) -> Result<(CapturedFrame, RenderStatsSnapshot), String> {
+fn card_shell(mut renderer: WgpuRenderer) -> AppShell<WgpuRenderer> {
     let app_context = cranpose_ui::AppContext::new();
     renderer.attach_app_context_services(&app_context);
     let mut shell = AppShell::new(
@@ -133,6 +131,12 @@ fn render_card_and_stats(
     shell.set_viewport(VIEW_WIDTH, VIEW_HEIGHT);
     shell.update();
     shell.update();
+    shell
+}
+
+fn capture_card_frame(
+    shell: &mut AppShell<WgpuRenderer>,
+) -> Result<(CapturedFrame, RenderStatsSnapshot), String> {
     let frame = shell
         .renderer()
         .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
@@ -150,13 +154,81 @@ fn render_card_and_stats(
     Ok((frame, stats))
 }
 
+const SETTLE: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Captures the card until every glass draw uses the specialization it
+/// asked for, so the statistics describe the settled frame.
+fn render_card_and_stats(
+    renderer: WgpuRenderer,
+) -> Result<(CapturedFrame, RenderStatsSnapshot), String> {
+    let mut shell = card_shell(renderer);
+    let deadline = std::time::Instant::now() + SETTLE;
+    loop {
+        let (frame, stats) = capture_card_frame(&mut shell)?;
+        if stats.shader_pipeline_fallback_draws == 0 {
+            return Ok((frame, stats));
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the glass specializations never finished compiling"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+/// The card's first frame cannot wait for its specializations: it draws
+/// with the glass shader's general pipeline, counted as fallback draws, and
+/// every later frame lands on the same bytes until the specialized
+/// pipelines take over in the background.
+#[test]
+fn a_glass_draws_with_its_general_pipeline_until_the_specialization_lands() {
+    let Ok((_lock, renderer)) = support::headless_renderer_parts() else {
+        eprintln!("skipping glass pipeline readiness: no headless renderer");
+        return;
+    };
+    let mut shell = card_shell(renderer);
+    let (first, first_stats) = capture_card_frame(&mut shell).expect("first capture");
+    assert!(
+        first_stats.shader_pipeline_fallback_draws > 0,
+        "the first frame must not wait for the specializations: {first_stats:?}"
+    );
+    assert_eq!(first_stats.shader_specialized_draws, 0);
+    assert!(
+        support::distinct_colors(&first.pixels) > 600,
+        "the fallback frame must carry the refracted star field"
+    );
+    let deadline = std::time::Instant::now() + SETTLE;
+    loop {
+        let (frame, stats) = capture_card_frame(&mut shell).expect("capture");
+        support::assert_same_bytes(
+            "a specialization landing changed the picture",
+            FRAME_WIDTH,
+            &first.pixels,
+            &frame.pixels,
+        );
+        if stats.shader_pipeline_fallback_draws == 0 {
+            assert!(
+                stats.shader_specialized_draws > 0,
+                "the settled frame must use the specialization: {stats:?}"
+            );
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the glass specializations never finished compiling"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
 /// The card's adaptive frost reads a wide neighbourhood of its capture; the
 /// renderer packs that capture averaged to a quarter of its size beside it
 /// and the material declares it wants that substrate, so the frame carries
-/// exactly one.
+/// exactly one. The backdrop cache is off because a replayed capture builds
+/// no substrate, and the settled frame is a replay.
 #[test]
 fn a_card_glass_with_adaptive_frost_is_handed_one_substrate() {
-    let (_, stats) = match capture_card_and_stats() {
+    let (_, stats) = match capture_card_and_stats_under(Some("CRANPOSE_NO_BACKDROP_CACHE")) {
         Ok(captured) => captured,
         Err(err) => {
             eprintln!("skipping substrate count: {err}");
