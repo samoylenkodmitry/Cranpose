@@ -598,6 +598,15 @@ fn remember_tab_bar_touch() -> TabBarTouch {
     }
 }
 
+fn tab_bar_group() -> Modifier {
+    Modifier::empty()
+        .height(BAR_HEIGHT)
+        .graphics_layer(|| cranpose_ui_graphics::GraphicsLayer {
+            compositing_strategy: cranpose_ui_graphics::CompositingStrategy::Offscreen,
+            ..Default::default()
+        })
+}
+
 fn tab_bar_transform(width: f32, press: f32, travel: f32) -> cranpose_ui_graphics::GraphicsLayer {
     let press = press.max(0.0);
     let travel = travel.clamp(-1.0, 1.0);
@@ -834,240 +843,224 @@ fn LiquidTabBarLayout(
                 let width = lens_x_outer.get().2 * count as f32 + 2.0 * BLOB_MARGIN;
                 tab_bar_transform(width, bar_press.get(), travel.get())
             });
-            Box(
-                Modifier::empty().height(BAR_HEIGHT),
-                BoxSpec::default(),
-                move || {
-                    let tabs = Rc::clone(&tabs);
-                    let typography = typography.clone();
+            Box(tab_bar_group(), BoxSpec::default(), move || {
+                let tabs = Rc::clone(&tabs);
+                let typography = typography.clone();
+                let on_select = Rc::clone(&on_select);
+                let contact_motion = Rc::clone(&contact_motion);
+                let pill = bar_lift.clone().height(BAR_HEIGHT);
+                Box(pill, BoxSpec::default(), move || {
                     let on_select = Rc::clone(&on_select);
                     let contact_motion = Rc::clone(&contact_motion);
-                    let pill = bar_lift.clone().height(BAR_HEIGHT);
-                    Box(pill, BoxSpec::default(), move || {
+                    BoxWithConstraints(Modifier::empty(), move |scope| {
                         let on_select = Rc::clone(&on_select);
-                        let contact_motion = Rc::clone(&contact_motion);
-                        BoxWithConstraints(Modifier::empty(), move |scope| {
-                            let on_select = Rc::clone(&on_select);
-                            let constrained = scope.constraints().max_width - BLOB_MARGIN * 2.0;
-                            let tab_width = if constrained.is_finite() && constrained > 1.0 {
-                                (constrained / count as f32).min(spec.max_tab_width)
-                            } else {
-                                spec.max_tab_width
-                            };
+                        let constrained = scope.constraints().max_width - BLOB_MARGIN * 2.0;
+                        let tab_width = if constrained.is_finite() && constrained > 1.0 {
+                            (constrained / count as f32).min(spec.max_tab_width)
+                        } else {
+                            spec.max_tab_width
+                        };
 
-                            let geometry = TabGeometry::new(tab_width, count);
-                            Box(
-                                Modifier::empty()
-                                    .glass_effect(
-                                        tab_bar_surface_material(colors.label)
-                                            .tint_amount(tint_amount),
-                                    )
-                                    .size(Size::new(
-                                        geometry.width + BLOB_MARGIN * 2.0,
-                                        BAR_HEIGHT,
-                                    )),
-                                BoxSpec::default(),
-                                || {},
-                            );
-                            let lens_pressed =
-                                cranpose_core::remember(|| cranpose_core::mutableStateOf(false))
-                                    .with(|state| *state);
-                            let resting_lens_x =
-                                tab_lens_resting_left(selected, geometry.pitch, count);
-                            let lens_axis = crate::motion::remember_liquid_follow_axis(
+                        let geometry = TabGeometry::new(tab_width, count);
+                        Box(
+                            Modifier::empty()
+                                .glass_effect(
+                                    tab_bar_surface_material(colors.label).tint_amount(tint_amount),
+                                )
+                                .size(Size::new(geometry.width + BLOB_MARGIN * 2.0, BAR_HEIGHT)),
+                            BoxSpec::default(),
+                            || {},
+                        );
+                        let lens_pressed =
+                            cranpose_core::remember(|| cranpose_core::mutableStateOf(false))
+                                .with(|state| *state);
+                        let resting_lens_x = tab_lens_resting_left(selected, geometry.pitch, count);
+                        let lens_axis = crate::motion::remember_liquid_follow_axis(
+                            resting_lens_x,
+                            cranpose_animation::spring(0.85, 650.0),
+                        );
+                        if !lens_pressed.get() {
+                            lens_axis.settle_to(resting_lens_x, LiquidMotion::glide());
+                        }
+                        let lens_x = lens_axis.value();
+                        let lens_shape = super::tab_motion::remember_tab_lens_shape();
+                        let strain = lens_shape.sample(geometry.lens_surface_position(
+                            lens_x,
+                            bar_press.get(),
+                            travel.get(),
+                        ));
+                        let lens_activity_anim = contact_motion.lens_state();
+                        let lens_activity = lens_activity_anim.get().clamp(0.0, 1.0);
+                        let visual_index = crate::motion::liquid_visual_index(
+                            selected,
+                            lens_x,
+                            geometry.pitch,
+                            count,
+                            crate::motion::liquid_axis_owns_visual_selection(
+                                lens_pressed.get(),
+                                lens_x,
                                 resting_lens_x,
-                                cranpose_animation::spring(0.85, 650.0),
-                            );
-                            if !lens_pressed.get() {
-                                lens_axis.settle_to(resting_lens_x, LiquidMotion::glide());
-                            }
-                            let lens_x = lens_axis.value();
-                            let lens_shape = super::tab_motion::remember_tab_lens_shape();
-                            let strain = lens_shape.sample(geometry.lens_surface_position(
-                                lens_x,
-                                bar_press.get(),
-                                travel.get(),
-                            ));
-                            let lens_activity_anim = contact_motion.lens_state();
-                            let lens_activity = lens_activity_anim.get().clamp(0.0, 1.0);
-                            let visual_index = crate::motion::liquid_visual_index(
-                                selected,
-                                lens_x,
                                 geometry.pitch,
-                                count,
-                                crate::motion::liquid_axis_owns_visual_selection(
-                                    lens_pressed.get(),
-                                    lens_x,
-                                    resting_lens_x,
-                                    geometry.pitch,
-                                ),
-                            );
-                            if bar_touch.travel.get().abs() > 0.001 && visual_index != selected {
-                                contact_motion.crossed_tab();
-                            }
-                            let row_width = geometry.width;
-                            let gesture = Modifier::empty()
-                                .offset(BLOB_MARGIN, BLOB_MARGIN)
-                                .size(Size::new(row_width, BLOB_HEIGHT))
-                                .pointer_input(selected, {
+                            ),
+                        );
+                        if bar_touch.travel.get().abs() > 0.001 && visual_index != selected {
+                            contact_motion.crossed_tab();
+                        }
+                        let row_width = geometry.width;
+                        let gesture = Modifier::empty()
+                            .offset(BLOB_MARGIN, BLOB_MARGIN)
+                            .size(Size::new(row_width, BLOB_HEIGHT))
+                            .pointer_input(selected, {
+                                let on_select = Rc::clone(&on_select);
+                                let lens_axis = Rc::clone(&lens_axis);
+                                let contact_motion = Rc::clone(&contact_motion);
+                                move |scope: PointerInputScope| {
                                     let on_select = Rc::clone(&on_select);
                                     let lens_axis = Rc::clone(&lens_axis);
                                     let contact_motion = Rc::clone(&contact_motion);
-                                    move |scope: PointerInputScope| {
-                                        let on_select = Rc::clone(&on_select);
-                                        let lens_axis = Rc::clone(&lens_axis);
-                                        let contact_motion = Rc::clone(&contact_motion);
-                                        crate::motion::liquid_lens_gesture(
-                                            scope,
-                                            crate::motion::LiquidLensGesture {
-                                                axis: lens_axis,
-                                                cell_width: geometry.pitch,
-                                                cell_offset: (geometry.cell_width - geometry.pitch)
-                                                    * 0.5,
-                                                count,
-                                                tap_slop: TAP_SLOP,
-                                                drag_left: Rc::new(move |x| {
-                                                    geometry.drag_left(
-                                                        geometry.optical_pointer_x(
-                                                            x,
-                                                            bar_press.get(),
-                                                            travel.get(),
-                                                        ),
-                                                        count,
-                                                        has_accessory,
-                                                    )
-                                                }),
-                                                rest_left: Rc::new(move |index| {
-                                                    tab_lens_resting_left(
-                                                        index,
-                                                        geometry.pitch,
-                                                        count,
-                                                    )
-                                                }),
-                                                selected,
-                                                on_pressed: Rc::new(move |down, time| {
-                                                    lens_pressed.set(down);
-                                                    contact_motion.pressed(down, time);
-                                                    bar_touch.pressed(down);
-                                                }),
-                                                on_touch: Rc::new(move |x, y| {
-                                                    bar_touch.update(
-                                                        geometry.optical_pointer_x(
-                                                            x,
-                                                            bar_press.get(),
-                                                            travel.get(),
-                                                        ),
-                                                        y,
-                                                        geometry.pitch
-                                                            * count.saturating_sub(1) as f32,
-                                                    );
-                                                }),
-                                                on_select,
-                                            },
-                                        )
-                                    }
-                                });
-                            Box(gesture, BoxSpec::default(), || {});
+                                    crate::motion::liquid_lens_gesture(
+                                        scope,
+                                        crate::motion::LiquidLensGesture {
+                                            axis: lens_axis,
+                                            cell_width: geometry.pitch,
+                                            cell_offset: (geometry.cell_width - geometry.pitch)
+                                                * 0.5,
+                                            count,
+                                            tap_slop: TAP_SLOP,
+                                            drag_left: Rc::new(move |x| {
+                                                geometry.drag_left(
+                                                    geometry.optical_pointer_x(
+                                                        x,
+                                                        bar_press.get(),
+                                                        travel.get(),
+                                                    ),
+                                                    count,
+                                                    has_accessory,
+                                                )
+                                            }),
+                                            rest_left: Rc::new(move |index| {
+                                                tab_lens_resting_left(index, geometry.pitch, count)
+                                            }),
+                                            selected,
+                                            on_pressed: Rc::new(move |down, time| {
+                                                lens_pressed.set(down);
+                                                contact_motion.pressed(down, time);
+                                                bar_touch.pressed(down);
+                                            }),
+                                            on_touch: Rc::new(move |x, y| {
+                                                bar_touch.update(
+                                                    geometry.optical_pointer_x(
+                                                        x,
+                                                        bar_press.get(),
+                                                        travel.get(),
+                                                    ),
+                                                    y,
+                                                    geometry.pitch * count.saturating_sub(1) as f32,
+                                                );
+                                            }),
+                                            on_select,
+                                        },
+                                    )
+                                }
+                            });
+                        Box(gesture, BoxSpec::default(), || {});
 
-                            let published =
-                                (lens_x, lens_activity, tab_width, strain, visual_index);
-                            if lens_x_outer.get() != published {
-                                lens_x_outer.set(published);
-                            }
-                        });
+                        let published = (lens_x, lens_activity, tab_width, strain, visual_index);
+                        if lens_x_outer.get() != published {
+                            lens_x_outer.set(published);
+                        }
                     });
+                });
 
-                    let (lens_px, lens_activity, lens_tab_w, strain, visual_index) =
-                        lens_x_outer.get();
-                    let cells = TabGeometry::new(lens_tab_w, count);
-                    let (lens_w, lens_h) = tab_lens_base_size(cells.cell_width, 1.0);
-                    let deformation_headroom =
-                        crate::dynamics::STRETCH_MAX.max(1.0 / crate::dynamics::STRETCH_MIN);
-                    let node_w = lens_w * deformation_headroom + crate::dynamics::BULGE_MAX + 20.0;
-                    let node_h = lens_h * deformation_headroom + crate::dynamics::BULGE_MAX + 16.0;
-                    let pill_w = cells.width + 2.0 * BLOB_MARGIN;
-                    let transform = tab_bar_transform(pill_w, bar_press.get(), travel.get());
-                    let local_center_x = BLOB_MARGIN + lens_px + cells.cell_width * 0.5;
-                    let lens_center_x = local_center_x;
-                    let node_x = lens_center_x - node_w * 0.5;
-                    let node_top = tab_lens_node_top(node_h);
-                    let (base_w, base_h) = tab_lens_base_size(cells.cell_width, lens_activity);
-                    let geometry = TabFlightGeometry {
-                        center: (lens_center_x, BAR_HEIGHT * 0.5),
-                        base_size: Size::new(base_w, base_h),
-                        strain,
-                        lens_position: lens_px,
-                        lens_activity,
-                        resting_tint: colors.fill,
-                        accessory_center: has_accessory.then_some((
-                            pill_w + tab_bar_accessory_gap(true) + BAR_HEIGHT * 0.5,
-                            BAR_HEIGHT * 0.5,
-                        )),
-                    };
-                    let lens_node = TabFlightNode {
-                        origin: (node_x, node_top),
-                        size: Size::new(node_w, node_h),
-                    };
+                let (lens_px, lens_activity, lens_tab_w, strain, visual_index) = lens_x_outer.get();
+                let cells = TabGeometry::new(lens_tab_w, count);
+                let (lens_w, lens_h) = tab_lens_base_size(cells.cell_width, 1.0);
+                let deformation_headroom =
+                    crate::dynamics::STRETCH_MAX.max(1.0 / crate::dynamics::STRETCH_MIN);
+                let node_w = lens_w * deformation_headroom + crate::dynamics::BULGE_MAX + 20.0;
+                let node_h = lens_h * deformation_headroom + crate::dynamics::BULGE_MAX + 16.0;
+                let pill_w = cells.width + 2.0 * BLOB_MARGIN;
+                let transform = tab_bar_transform(pill_w, bar_press.get(), travel.get());
+                let local_center_x = BLOB_MARGIN + lens_px + cells.cell_width * 0.5;
+                let lens_center_x = local_center_x;
+                let node_x = lens_center_x - node_w * 0.5;
+                let node_top = tab_lens_node_top(node_h);
+                let (base_w, base_h) = tab_lens_base_size(cells.cell_width, lens_activity);
+                let geometry = TabFlightGeometry {
+                    center: (lens_center_x, BAR_HEIGHT * 0.5),
+                    base_size: Size::new(base_w, base_h),
+                    strain,
+                    lens_position: lens_px,
+                    lens_activity,
+                    resting_tint: colors.fill,
+                    accessory_center: has_accessory.then_some((
+                        pill_w + tab_bar_accessory_gap(true) + BAR_HEIGHT * 0.5,
+                        BAR_HEIGHT * 0.5,
+                    )),
+                };
+                let lens_node = TabFlightNode {
+                    origin: (node_x, node_top),
+                    size: Size::new(node_w, node_h),
+                };
 
-                    let lens_geometry = geometry;
-                    let mut lens_transform = transform.clone();
-                    lens_transform.translation_x +=
-                        (local_center_x - pill_w * 0.5) * (transform.scale_x - 1.0);
-                    let layers = Rc::new(crate::material::cached_glass_content_layers(
-                        tab_flight_lens_material(colors.label, lens_activity).resolve(&colors),
-                    ));
-                    let lens_node_modifier = Modifier::empty()
-                        .required_size(lens_node.size)
-                        .offset(node_x, node_top)
-                        .graphics_layer_value(lens_transform);
-                    let background_layers = Rc::clone(&layers);
-                    let lens = lens_node_modifier.clone().graphics_layer(move || {
-                        background_layers(
+                let lens_geometry = geometry;
+                let mut lens_transform = transform.clone();
+                lens_transform.translation_x +=
+                    (local_center_x - pill_w * 0.5) * (transform.scale_x - 1.0);
+                let layers = Rc::new(crate::material::cached_glass_content_layers(
+                    tab_flight_lens_material(colors.label, lens_activity).resolve(&colors),
+                ));
+                let lens_node_modifier = Modifier::empty()
+                    .required_size(lens_node.size)
+                    .offset(node_x, node_top)
+                    .graphics_layer_value(lens_transform);
+                let background_layers = Rc::clone(&layers);
+                let lens = lens_node_modifier.clone().graphics_layer(move || {
+                    background_layers(
+                        cranpose_ui::current_density(),
+                        tab_flight_dynamics(lens_geometry, lens_node),
+                    )[0]
+                    .clone()
+                });
+                super::tab_lighting::TabLighting(
+                    Size::new(pill_w, BAR_HEIGHT),
+                    transform.clone(),
+                    bar_touch.position,
+                    glow,
+                    local_glow_factor,
+                );
+                Box(lens, BoxSpec::default(), || {});
+                TabCells(
+                    Modifier::empty(),
+                    Rc::clone(&tabs),
+                    typography.clone(),
+                    cells,
+                    TabCellsSpec {
+                        base_color: tab_base_content_color(colors),
+                        selection: tab_ink_selection(
+                            cells,
+                            lens_px,
+                            lens_activity,
+                            strain,
+                            tab_selection_content_color(colors),
+                        ),
+                        selected: visual_index,
+                        committed_selection: selected,
+                    },
+                    transform,
+                );
+                Box(
+                    lens_node_modifier.graphics_layer(move || {
+                        layers(
                             cranpose_ui::current_density(),
                             tab_flight_dynamics(lens_geometry, lens_node),
-                        )[0]
+                        )[1]
                         .clone()
-                    });
-                    super::tab_lighting::TabLighting(
-                        Size::new(pill_w, BAR_HEIGHT),
-                        transform.clone(),
-                        bar_touch.position,
-                        glow,
-                        local_glow_factor,
-                    );
-                    Box(lens, BoxSpec::default(), || {});
-                    TabCells(
-                        Modifier::empty(),
-                        Rc::clone(&tabs),
-                        typography.clone(),
-                        cells,
-                        TabCellsSpec {
-                            base_color: tab_base_content_color(colors),
-                            selection: tab_ink_selection(
-                                cells,
-                                lens_px,
-                                lens_activity,
-                                strain,
-                                tab_selection_content_color(colors),
-                            ),
-                            selected: visual_index,
-                            committed_selection: selected,
-                        },
-                        transform,
-                    );
-                    Box(
-                        lens_node_modifier.graphics_layer(move || {
-                            layers(
-                                cranpose_ui::current_density(),
-                                tab_flight_dynamics(lens_geometry, lens_node),
-                            )[1]
-                            .clone()
-                        }),
-                        BoxSpec::default(),
-                        || {},
-                    );
-                },
-            );
+                    }),
+                    BoxSpec::default(),
+                    || {},
+                );
+            });
 
             if has_accessory {
                 Box(
