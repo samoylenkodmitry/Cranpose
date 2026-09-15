@@ -48,3 +48,4 @@
 - Build both arms of a device A/B on one host: debug-signed APKs from different machines refuse `adb install -r` with `INSTALL_FAILED_UPDATE_INCOMPATIBLE`, and every leg of that arm records nothing.
 - The composed-drag replay over `TabBackdrop::Flat` carries no glyph ink (transparent icons, empty labels): a byte-exact replay proves nothing about ink colour; audit ink changes on the phone checkerboard recording.
 - Judge replay byte exactness on the second run after a rebuild: the first run draws up to 13 frames through the compile-time fallback pipelines, one level off, and reads as an inexact change.
+- A three-content matrix recording runs past XCTest's two-minute execution allowance and keeps no movie; the device-run recipe disables test timeouts, and a Cranpose matrix run must replay the native `planned_events` through `TEST_RUNNER_REFERENCE_POINTER_PATHS`, since a content case's native button sits 1.5 pt elsewhere and the comparison rejects unequal paths.

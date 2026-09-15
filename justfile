@@ -615,4 +615,4 @@ liquid-reference-device-test device team results suite:
     xcodebuild -project apps/liquid-reference/LiquidReference.xcodeproj -scheme LiquidReference -configuration Release -destination 'platform=iOS,id={{device}}' -derivedDataPath target/liquid-reference-device -resultBundlePath '{{results}}' -parallel-testing-enabled NO -allowProvisioningUpdates DEVELOPMENT_TEAM='{{team}}' -only-testing:LiquidReferenceTests/{{suite}} test
 
 liquid-reference-device-run device run results suite architecture="arm64":
-    xcodebuild -xctestrun '{{run}}' -destination 'platform=iOS,arch={{architecture}},id={{device}}' -resultBundlePath '{{results}}' -parallel-testing-enabled NO -only-testing:LiquidReferenceTests/{{suite}} test-without-building
+    xcodebuild -xctestrun '{{run}}' -destination 'platform=iOS,arch={{architecture}},id={{device}}' -resultBundlePath '{{results}}' -parallel-testing-enabled NO -test-timeouts-enabled NO -only-testing:LiquidReferenceTests/{{suite}} test-without-building
