@@ -126,10 +126,9 @@ impl PipelineCompiler {
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
-    use std::{
-        sync::mpsc,
-        time::{Duration, Instant},
-    };
+    use std::sync::mpsc;
+
+    use web_time::{Duration, Instant};
 
     use super::PipelineCompiler;
 

@@ -518,15 +518,13 @@ fn validate_glsl_portability(
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        sync::atomic::Ordering,
-        time::{Duration, Instant},
-    };
+    use std::sync::atomic::Ordering;
 
     use cranpose_ui_graphics::{
         GRADIENT_BLUR_WGSL, GRADIENT_CUT_MASK_WGSL, GRADIENT_FADE_DST_OUT_WGSL, LIQUID_GLASS_WGSL,
         ROUNDED_ALPHA_MASK_WGSL, RuntimeShader,
     };
+    use web_time::{Duration, Instant};
 
     use super::{
         RuntimeShaderPipelineMode, ShaderDrawVariant, ShaderPipelineCache, ShaderPipelineFit,
