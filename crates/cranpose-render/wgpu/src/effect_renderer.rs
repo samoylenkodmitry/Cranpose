@@ -14,7 +14,7 @@ use smallvec::SmallVec;
 use crate::{
     frame_graph::{
         BufferUpload, FrameCommandRecorder, FrameCommandStats, FrameTextureDescriptor,
-        UniformUpload, UploadAllocatorId, UploadAllocatorSpec,
+        TextureRegionCopy, UniformUpload, UploadAllocatorId, UploadAllocatorSpec, copy_compatible,
     },
     glass_split::split_scissors,
     gpu_stats::FrameStats,
@@ -570,6 +570,7 @@ pub(crate) struct BlurRegion {
 pub(crate) struct SubstrateRegion {
     pub(crate) source: (u32, u32, u32, u32),
     pub(crate) scratch: (u32, u32, u32, u32),
+    pub(crate) dest: (u32, u32, u32, u32),
     pub(crate) average: SubstrateAverage,
     pub(crate) read: Option<(u32, u32, u32, u32)>,
 }
@@ -666,6 +667,11 @@ impl ChainedSubstrates {
                     layout.averages.push(SubstrateRegion {
                         source,
                         scratch: region,
+                        dest: if matches!(spec, SubstrateSpec::Mean) {
+                            (region.0, region.1, 1, 1)
+                        } else {
+                            region
+                        },
                         read: None,
                         average: match *spec {
                             SubstrateSpec::Average { block } => SubstrateAverage::Block(block),
@@ -679,12 +685,13 @@ impl ChainedSubstrates {
     }
 
     fn passes(&self) -> u32 {
-        2 * u32::from(!self.blurs.is_empty())
-            + 2 * u32::from(
-                self.averages
-                    .iter()
-                    .any(|s| matches!(s.average, SubstrateAverage::Mean)),
-            )
+        let blurs = !self.blurs.is_empty();
+        let means = self
+            .averages
+            .iter()
+            .any(|s| matches!(s.average, SubstrateAverage::Mean));
+        2 * u32::from(blurs)
+            + 2 * u32::from(means && !blurs)
             + u32::from(
                 self.averages
                     .iter()
@@ -1816,87 +1823,93 @@ impl EffectRenderer {
         }
     }
 
+    /// One draw of the mean pipeline over `source_region` of `source`: the
+    /// row means into a column, or the column into one texel, at `dest`.
+    fn mean_draw<'a>(
+        &self,
+        source: &'a OffscreenTarget,
+        source_region: (u32, u32, u32, u32),
+        dest: (u32, u32, u32, u32),
+        horizontal: bool,
+    ) -> BlurDraw<'a> {
+        BlurDraw {
+            source,
+            uniforms: self.blur_uniforms(
+                horizontal,
+                (source.width, source.height),
+                source_region,
+                dest,
+                (0.0, 0.0),
+                TileMode::Clamp,
+            ),
+            filter: BlurFilter::Mean,
+            scissor: Some(dest),
+        }
+    }
+
+    /// The means of a side atlas with no blur passes to ride in: the row
+    /// means into `scratch`, then each column into its texel at `dest` in
+    /// `output`, cleared first unless the output is the atlas.
+    #[allow(clippy::too_many_arguments)]
     fn encode_mean_substrates<C: FrameCommandRecorder>(
         &mut self,
         recorder: &mut C,
         device: &wgpu::Device,
         atlas: &OffscreenTarget,
         scratch: &OffscreenTarget,
-        result: &OffscreenTarget,
-        substrates: &[SubstrateRegion],
+        output: &OffscreenTarget,
+        output_is_atlas: bool,
+        means: &[&SubstrateRegion],
     ) -> bool {
-        if !substrates
-            .iter()
-            .any(|s| matches!(s.average, SubstrateAverage::Mean))
-        {
+        if means.is_empty() {
             return false;
         }
-        for horizontal in [true, false] {
-            let source = if horizontal { atlas } else { scratch };
-            let target = if horizontal { scratch } else { result };
-            let draws = substrates
-                .iter()
-                .filter(|s| matches!(s.average, SubstrateAverage::Mean))
-                .map(|region| {
-                    let source_region = if horizontal {
-                        region.source
-                    } else {
-                        region.scratch
-                    };
-                    let dest = if horizontal {
-                        region.scratch
-                    } else {
-                        (region.scratch.0, region.scratch.1, 1, 1)
-                    };
-                    BlurDraw {
-                        source,
-                        uniforms: self.blur_uniforms(
-                            horizontal,
-                            (source.width, source.height),
-                            source_region,
-                            dest,
-                            (0.0, 0.0),
-                            TileMode::Clamp,
-                        ),
-                        filter: BlurFilter::Mean,
-                        scissor: Some(dest),
-                    }
-                })
-                .collect::<Vec<_>>();
-            self.encode_blur_pass(
-                recorder,
-                device,
-                "Substrate Mean Pass",
-                UploadAllocatorId::BlurDownsample,
-                &target.view,
-                (target.width, target.height),
-                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                &draws,
-            );
-        }
+        let horizontal: Vec<BlurDraw<'_>> = means
+            .iter()
+            .map(|mean| self.mean_draw(atlas, mean.source, mean.scratch, true))
+            .collect();
+        self.encode_blur_pass(
+            recorder,
+            device,
+            "Substrate Mean Pass",
+            UploadAllocatorId::BlurDownsample,
+            &scratch.view,
+            (scratch.width, scratch.height),
+            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+            &horizontal,
+        );
+        let vertical: Vec<BlurDraw<'_>> = means
+            .iter()
+            .map(|mean| self.mean_draw(scratch, mean.scratch, mean.dest, false))
+            .collect();
+        self.encode_blur_pass(
+            recorder,
+            device,
+            "Substrate Mean Pass",
+            UploadAllocatorId::BlurDownsample,
+            &output.view,
+            (output.width, output.height),
+            if output_is_atlas {
+                wgpu::LoadOp::Load
+            } else {
+                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
+            },
+            &vertical,
+        );
         true
     }
 
-    pub(crate) fn encode_blur_atlas_passes<C: FrameCommandRecorder>(
-        &mut self,
-        recorder: &mut C,
-        device: &wgpu::Device,
-        atlas: &OffscreenTarget,
-        scratch: &OffscreenTarget,
-        result: &OffscreenTarget,
-        work: AtlasSideWork<'_>,
-    ) {
-        let AtlasSideWork {
-            blurs: regions,
-            averages: substrates,
-            blur_output,
-        } = work;
-        let has_means =
-            self.encode_mean_substrates(recorder, device, atlas, scratch, result, substrates);
-        let blocks: Vec<u32> = regions
-            .iter()
-            .map(|region| blur_block(region.source, region.scratch))
-            .collect();
+    /// The downsample pass's draws: every blur whose scratch is coarser
+    /// than its source, the block averages, and each riding mean's row
+    /// reduction into its column.
+    fn downsample_draws<'a>(
+        &self,
+        atlas: &'a OffscreenTarget,
+        regions: &[BlurRegion],
+        blocks: &[u32],
+        substrates: &[SubstrateRegion],
+        riding_means: &[&SubstrateRegion],
+    ) -> Vec<BlurDraw<'a>> {
         let downsample_draw = |source: (u32, u32, u32, u32),
                                scratch: (u32, u32, u32, u32),
                                block: u32,
@@ -1913,9 +1926,9 @@ impl EffectRenderer {
             filter: BlurFilter::Downsample(block),
             scissor: Some(scratch),
         };
-        let downsample: Vec<BlurDraw<'_>> = regions
+        regions
             .iter()
-            .zip(&blocks)
+            .zip(blocks)
             .filter(|(_, block)| **block > 1)
             .map(|(region, block)| {
                 let mut draw =
@@ -1932,29 +1945,28 @@ impl EffectRenderer {
                 draw.scissor = Some(substrate.pass_scissor());
                 Some(draw)
             }))
-            .collect();
-        if !downsample.is_empty() {
-            self.encode_blur_pass(
-                recorder,
-                device,
-                "Blur Downsample Pass",
-                UploadAllocatorId::BlurDownsample,
-                &result.view,
-                (result.width, result.height),
-                if has_means {
-                    wgpu::LoadOp::Load
-                } else {
-                    wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
-                },
-                &downsample,
-            );
-        }
-        if regions.is_empty() {
-            return;
-        }
-        let horizontal: Vec<BlurDraw<'_>> = regions
+            .chain(
+                riding_means
+                    .iter()
+                    .map(|mean| self.mean_draw(atlas, mean.source, mean.scratch, true)),
+            )
+            .collect()
+    }
+
+    /// The horizontal pass's draws: each blur's kernel over its downsample
+    /// in `result` or its source in the atlas, and each riding mean's
+    /// column reduction into one texel of the scratch.
+    fn horizontal_draws<'a>(
+        &self,
+        atlas: &'a OffscreenTarget,
+        result: &'a OffscreenTarget,
+        regions: &[BlurRegion],
+        blocks: &[u32],
+        riding_means: &[&SubstrateRegion],
+    ) -> Vec<BlurDraw<'a>> {
+        regions
             .iter()
-            .zip(&blocks)
+            .zip(blocks)
             .map(|(region, block)| {
                 let (source, source_region) = if *block > 1 {
                     (result, region.scratch)
@@ -1975,18 +1987,27 @@ impl EffectRenderer {
                     scissor: Some(region.pass_scissor((0, 1))),
                 }
             })
-            .collect();
-        self.encode_blur_pass(
-            recorder,
-            device,
-            "Blur Horizontal Pass",
-            UploadAllocatorId::BlurHorizontal,
-            &scratch.view,
-            (scratch.width, scratch.height),
-            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-            &horizontal,
-        );
-        let vertical: Vec<BlurDraw<'_>> = regions
+            .chain(riding_means.iter().map(|mean| {
+                self.mean_draw(
+                    result,
+                    mean.scratch,
+                    (mean.scratch.0, mean.scratch.1, 1, 1),
+                    false,
+                )
+            }))
+            .collect()
+    }
+
+    /// The vertical pass's draws: each blur's kernel over the scratch into
+    /// its destination, and each riding mean's texel carried from the
+    /// scratch to its destination.
+    fn vertical_draws<'a>(
+        &self,
+        scratch: &'a OffscreenTarget,
+        regions: &[BlurRegion],
+        riding_means: &[&SubstrateRegion],
+    ) -> Vec<BlurDraw<'a>> {
+        regions
             .iter()
             .map(|region| BlurDraw {
                 source: scratch,
@@ -2009,8 +2030,92 @@ impl EffectRenderer {
                     )
                 }),
             })
-            .collect();
+            .chain(riding_means.iter().map(|mean| {
+                self.mean_draw(
+                    scratch,
+                    (mean.scratch.0, mean.scratch.1, 1, 1),
+                    mean.dest,
+                    false,
+                )
+            }))
+            .collect()
+    }
+
+    /// The side passes of a stage's atlas: every blur's downsample,
+    /// horizontal and vertical pass with the block averages in the
+    /// downsample pass, and the means. A mean's row reduction rides in the
+    /// downsample pass and its column reduction in the horizontal pass when a
+    /// blur runs them, and its texel is carried into the vertical pass;
+    /// without a blur the means take their own two passes. Blurs and means
+    /// land in `result` at their scratch slots, or in `blur_output` at each
+    /// region's `dest`.
+    pub(crate) fn encode_blur_atlas_passes<C: FrameCommandRecorder>(
+        &mut self,
+        recorder: &mut C,
+        device: &wgpu::Device,
+        atlas: &OffscreenTarget,
+        scratch: &OffscreenTarget,
+        result: &OffscreenTarget,
+        work: AtlasSideWork<'_>,
+    ) {
+        let AtlasSideWork {
+            blurs: regions,
+            averages: substrates,
+            blur_output,
+        } = work;
         let output = blur_output.unwrap_or(result);
+        let means: Vec<&SubstrateRegion> = substrates
+            .iter()
+            .filter(|substrate| matches!(substrate.average, SubstrateAverage::Mean))
+            .collect();
+        let folded = !regions.is_empty() && !means.is_empty();
+        let riding_means: &[&SubstrateRegion] = if folded { &means } else { &[] };
+        let has_means = !folded
+            && self.encode_mean_substrates(
+                recorder,
+                device,
+                atlas,
+                scratch,
+                output,
+                blur_output.is_some(),
+                &means,
+            );
+        let blocks: Vec<u32> = regions
+            .iter()
+            .map(|region| blur_block(region.source, region.scratch))
+            .collect();
+        let downsample = self.downsample_draws(atlas, regions, &blocks, substrates, riding_means);
+        if !downsample.is_empty() {
+            self.encode_blur_pass(
+                recorder,
+                device,
+                "Blur Downsample Pass",
+                UploadAllocatorId::BlurDownsample,
+                &result.view,
+                (result.width, result.height),
+                if has_means && blur_output.is_none() {
+                    wgpu::LoadOp::Load
+                } else {
+                    wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
+                },
+                &downsample,
+            );
+        }
+        if regions.is_empty() {
+            return;
+        }
+        let horizontal = self.horizontal_draws(atlas, result, regions, &blocks, riding_means);
+        self.encode_blur_pass(
+            recorder,
+            device,
+            "Blur Horizontal Pass",
+            UploadAllocatorId::BlurHorizontal,
+            &scratch.view,
+            (scratch.width, scratch.height),
+            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+            &horizontal,
+        );
+        let vertical = self.vertical_draws(scratch, regions, riding_means);
         self.encode_blur_pass(
             recorder,
             device,
@@ -2317,23 +2422,34 @@ impl EffectRenderer {
                 blur_output: None,
             },
         );
-        self.encode_composite_to_view_pass(
-            recorder,
-            device,
-            source,
-            &packed.view,
-            CompositePassOptions {
-                alpha: 1.0,
-                load_op: wgpu::LoadOp::Load,
-                scissor: None,
-                rounded_mask: None,
-                blend_mode: BlendMode::Src,
-                dest_viewport: Some((0.0, 0.0, source.width as f32, source.height as f32)),
-                source_viewport: None,
-                sample_mode: CompositeSampleMode::Linear,
-            },
-        );
-        self.record_composite_pass();
+        let copied = copy_compatible(source, packed);
+        if copied {
+            recorder.copy_texture_region(TextureRegionCopy {
+                source,
+                source_origin: [0, 0],
+                dest: packed,
+                dest_origin: [0, 0],
+                size: [source.width, source.height],
+            });
+        } else {
+            self.encode_composite_to_view_pass(
+                recorder,
+                device,
+                source,
+                &packed.view,
+                CompositePassOptions {
+                    alpha: 1.0,
+                    load_op: wgpu::LoadOp::Load,
+                    scissor: None,
+                    rounded_mask: None,
+                    blend_mode: BlendMode::Src,
+                    dest_viewport: Some((0.0, 0.0, source.width as f32, source.height as f32)),
+                    source_viewport: None,
+                    sample_mode: CompositeSampleMode::Linear,
+                },
+            );
+            self.record_composite_pass();
+        }
         if !self.encode_shader_pass(
             recorder,
             device,
@@ -2355,7 +2471,7 @@ impl EffectRenderer {
         }
         self.record_substrates(shader.substrates().len() as u32);
         self.debug_effects.set(self.debug_effects.get() + 1);
-        Ok(layout.passes() + 2)
+        Ok(layout.passes() + 1 + u32::from(!copied))
     }
 
     #[allow(clippy::too_many_arguments)]

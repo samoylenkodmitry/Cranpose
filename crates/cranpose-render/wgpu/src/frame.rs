@@ -529,6 +529,13 @@ impl LayerPass<'_> {
 
     /// The ops between the page's drawn z and `z` outside the excluded
     /// ranges, with the deferred ops below `z`, in z order.
+    /// Whether the page still awaits its transparent clear: nothing has been
+    /// drawn on it, so a blit of it is the identity and it holds nothing to
+    /// copy.
+    fn page_untouched(&self) -> bool {
+        is_transparent_clear(self.load_op)
+    }
+
     fn ops_below(&self, z: usize) -> Cow<'_, [DrawOp]> {
         pending_draw_ops(
             &self.layer.scene.draw_ops,
@@ -876,6 +883,10 @@ fn plan_backdrop(
         stage: 0,
         support,
     })
+}
+
+fn is_transparent_clear(load_op: Option<wgpu::LoadOp<wgpu::Color>>) -> bool {
+    matches!(load_op, Some(wgpu::LoadOp::Clear(color)) if color == wgpu::Color::TRANSPARENT)
 }
 
 fn texel_rect_in(rect: DeviceRect, within: DeviceRect) -> TexelRect {
@@ -1400,10 +1411,13 @@ type TexelRect = (u32, u32, u32, u32);
 
 /// The three region lists `stage_substrate_regions` appends to while it walks
 /// a stage's members.
+/// Where a stage's side work is collected: its blur regions and averaged
+/// regions, each with the atlas slot its result is wanted in, if any.
 struct SideRegionSinks<'a> {
     regions: &'a mut Vec<BlurRegion>,
+    region_slots: &'a mut Vec<Option<[u32; 2]>>,
     averaged: &'a mut Vec<SubstrateRegion>,
-    copies: &'a mut Vec<(TexelRect, [u32; 2])>,
+    average_slots: &'a mut Vec<Option<[u32; 2]>>,
 }
 
 fn stage_blur_regions(
@@ -1412,7 +1426,7 @@ fn stage_blur_regions(
     items: &[&PendingBackdrop<'_>],
     view: &AtlasView<'_>,
     scale: f32,
-    regions: &mut Vec<BlurRegion>,
+    sinks: &mut SideRegionSinks<'_>,
 ) -> Result<Vec<Option<TexelRect>>, String> {
     let mut slots = vec![None; members.len()];
     for (member, blur) in blurred {
@@ -1422,7 +1436,8 @@ fn stage_blur_regions(
             return Err("a blurred region outgrew the atlas that held it".into());
         };
         slots[*member] = Some(scratch);
-        regions.push(BlurRegion {
+        sinks.region_slots.push(None);
+        sinks.regions.push(BlurRegion {
             source: (placement.x, placement.y, width, height),
             scratch,
             dest: scratch,
@@ -1463,8 +1478,9 @@ fn stage_substrate_regions(
 ) -> Result<Vec<SubstrateRegions>, String> {
     let SideRegionSinks {
         regions,
+        region_slots,
         averaged,
-        copies,
+        average_slots,
     } = sinks;
     let mut member_regions = vec![[None; MAX_SUBSTRATES]; members.len()];
     for (member, (index, placement)) in members.iter().enumerate() {
@@ -1480,39 +1496,119 @@ fn stage_substrate_regions(
                 return Err("a substrate outgrew the atlas that held it".into());
             };
             let read = member_read_texels(items[*index], *placement, scale);
+            let slot = planned.atlas_slot.map(|(x, y, _, _)| [x, y]);
             match planned.spec {
-                SubstrateSpec::Mean => averaged.push(SubstrateRegion {
-                    source: mean_source_region(items[*index], *placement),
-                    scratch,
-                    average: SubstrateAverage::Mean,
-                    read: None,
-                }),
-                SubstrateSpec::Average { block } => averaged.push(SubstrateRegion {
-                    source,
-                    scratch,
-                    average: SubstrateAverage::Block(block),
-                    read,
-                }),
-                SubstrateSpec::Blur { radius_px } => regions.push(BlurRegion {
-                    source,
-                    scratch,
-                    dest: scratch,
-                    radius_x: radius_px,
-                    radius_y: radius_px,
-                    tile_mode: TileMode::Clamp,
-                    read,
-                }),
-            }
-            member_regions[member][order] = Some(region_tuple(match planned.atlas_slot {
-                Some((x, y, _, _)) => {
-                    copies.push(((scratch.0, scratch.1, width, height), [x, y]));
-                    (x, y, width, height)
+                SubstrateSpec::Mean => {
+                    averaged.push(SubstrateRegion {
+                        source: mean_source_region(items[*index], *placement),
+                        scratch,
+                        dest: (scratch.0, scratch.1, 1, 1),
+                        average: SubstrateAverage::Mean,
+                        read: None,
+                    });
+                    average_slots.push(slot);
                 }
+                SubstrateSpec::Average { block } => {
+                    averaged.push(SubstrateRegion {
+                        source,
+                        scratch,
+                        dest: scratch,
+                        average: SubstrateAverage::Block(block),
+                        read,
+                    });
+                    average_slots.push(slot);
+                }
+                SubstrateSpec::Blur { radius_px } => {
+                    regions.push(BlurRegion {
+                        source,
+                        scratch,
+                        dest: scratch,
+                        radius_x: radius_px,
+                        radius_y: radius_px,
+                        tile_mode: TileMode::Clamp,
+                        read,
+                    });
+                    region_slots.push(slot);
+                }
+            }
+            member_regions[member][order] = Some(region_tuple(match slot {
+                Some([x, y]) => (x, y, width, height),
                 None => (scratch.0, scratch.1, width, height),
             }));
         }
     }
     Ok(member_regions)
+}
+
+/// Points every blur and mean at its atlas slot when each has one and no
+/// block average is among them, so the side passes draw into the atlas;
+/// reports whether they do.
+fn direct_side_slots(
+    regions: &mut [BlurRegion],
+    region_slots: &[Option<[u32; 2]>],
+    averaged: &mut [SubstrateRegion],
+    average_slots: &[Option<[u32; 2]>],
+) -> bool {
+    let direct = region_slots.iter().all(Option::is_some)
+        && average_slots.iter().all(Option::is_some)
+        && averaged
+            .iter()
+            .all(|substrate| matches!(substrate.average, SubstrateAverage::Mean));
+    if direct {
+        for (region, slot) in regions.iter_mut().zip(region_slots) {
+            let [x, y] = slot.expect("every blur region has its atlas slot");
+            region.dest = (x, y, region.scratch.2, region.scratch.3);
+        }
+        for (mean, slot) in averaged.iter_mut().zip(average_slots) {
+            let [x, y] = slot.expect("every mean has its atlas slot");
+            mean.dest = (x, y, 1, 1);
+        }
+    }
+    direct
+}
+
+/// The copies of side results from `result` into their atlas slots.
+fn side_result_copies<'a>(
+    result: &'a OffscreenTarget,
+    atlas: &'a OffscreenTarget,
+    regions: &[BlurRegion],
+    region_slots: &[Option<[u32; 2]>],
+    averaged: &[SubstrateRegion],
+    average_slots: &[Option<[u32; 2]>],
+) -> Vec<TextureRegionCopy<'a>> {
+    let blur_copies = regions.iter().zip(region_slots).map(|(region, slot)| {
+        (
+            (
+                region.scratch.0,
+                region.scratch.1,
+                region.scratch.2,
+                region.scratch.3,
+            ),
+            *slot,
+        )
+    });
+    let average_copies = averaged.iter().zip(average_slots).map(|(substrate, slot)| {
+        let (width, height) = match substrate.average {
+            SubstrateAverage::Mean => (1, 1),
+            SubstrateAverage::Block(_) => (substrate.scratch.2, substrate.scratch.3),
+        };
+        (
+            (substrate.scratch.0, substrate.scratch.1, width, height),
+            *slot,
+        )
+    });
+    blur_copies
+        .chain(average_copies)
+        .filter_map(|((x, y, width, height), slot)| {
+            Some(TextureRegionCopy {
+                source: result,
+                source_origin: [x, y],
+                dest: atlas,
+                dest_origin: slot?,
+                size: [width, height],
+            })
+        })
+        .collect()
 }
 
 fn region_tuple((x, y, width, height): TexelRect) -> (f32, f32, f32, f32) {
@@ -2130,6 +2226,15 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         self.flush_page(&mut pass, usize::MAX)
     }
 
+    /// Applies the page's pending clear, so a child reading the page through
+    /// its base finds it cleared.
+    fn start_page(&mut self, pass: &mut LayerPass<'_>) {
+        if let Some(load_op) = pass.load_op.take() {
+            self.renderer
+                .clear_target(self.recorder, pass.page.pass_target().view, load_op);
+        }
+    }
+
     /// Draws the next stratum: the ops from the last flush up to `z` outside
     /// the excluded ranges, the deferred ops below `z`, and every pending
     /// composite below `z`, except what still waits behind a blocker.
@@ -2144,9 +2249,16 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         let composites: Vec<ResolvedComposite> = pass.pending.drain(..end).collect();
         let (ops, mut composites) = pass.release(ops, composites);
         let mut load_op = pass.load_op.take();
-        if ops.is_empty() && composites.is_empty() && load_op.is_none() {
-            pass.drawn_z = pass.drawn_z.max(z);
-            return Ok(());
+        if ops.is_empty() && composites.is_empty() {
+            if load_op.is_none() {
+                pass.drawn_z = pass.drawn_z.max(z);
+                return Ok(());
+            }
+            if z < usize::MAX && pass.beneath.page.is_some() && is_transparent_clear(load_op) {
+                pass.load_op = load_op;
+                pass.drawn_z = pass.drawn_z.max(z);
+                return Ok(());
+            }
         }
         let first_run_window = match load_op {
             Some(base) => {
@@ -2771,20 +2883,23 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             return Ok(None);
         }
         let mut regions = Vec::with_capacity(blurred.len());
-        let slots = stage_blur_regions(&blurred, members, items, view, scale, &mut regions)?;
+        let mut region_slots = Vec::with_capacity(blurred.len());
         let mut averaged = Vec::new();
-        let mut copies: Vec<(TexelRect, [u32; 2])> = Vec::new();
+        let mut average_slots = Vec::new();
+        let mut sinks = SideRegionSinks {
+            regions: &mut regions,
+            region_slots: &mut region_slots,
+            averaged: &mut averaged,
+            average_slots: &mut average_slots,
+        };
+        let slots = stage_blur_regions(&blurred, members, items, view, scale, &mut sinks)?;
         let member_regions = stage_substrate_regions(
             members,
             items,
             view,
             scale,
             self.renderer.ablation.substrates,
-            SideRegionSinks {
-                regions: &mut regions,
-                averaged: &mut averaged,
-                copies: &mut copies,
-            },
+            sinks,
         )?;
         if regions.is_empty() && averaged.is_empty() {
             return Ok(Some(StageSideRegions {
@@ -2794,12 +2909,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             }));
         }
         let (width, height) = view.side_size();
-        let direct_blurs = averaged.is_empty() && copies.len() == regions.len();
-        if direct_blurs {
-            for (region, (_, [x, y])) in regions.iter_mut().zip(copies.drain(..)) {
-                region.dest = (x, y, region.scratch.2, region.scratch.3);
-            }
-        }
+        let direct = direct_side_slots(&mut regions, &region_slots, &mut averaged, &average_slots);
         let scratch = self.acquire_transient("Backdrop Blur Scratch", width, height);
         let result = self.acquire_transient("Backdrop Blur Result", width, height);
         let device = self.renderer.device.clone();
@@ -2818,17 +2928,21 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             AtlasSideWork {
                 blurs: &regions,
                 averages: &averaged,
-                blur_output: direct_blurs.then_some(atlas),
+                blur_output: direct.then_some(atlas),
             },
         );
-        for ((x, y, width, height), dest_origin) in copies {
-            self.recorder.copy_texture_region(TextureRegionCopy {
-                source: &result,
-                source_origin: [x, y],
-                dest: atlas,
-                dest_origin,
-                size: [width, height],
-            });
+        if !direct {
+            let copies = side_result_copies(
+                &result,
+                atlas,
+                &regions,
+                &region_slots,
+                &averaged,
+                &average_slots,
+            );
+            for copy in copies {
+                self.recorder.copy_texture_region(copy);
+            }
         }
         Ok(Some(StageSideRegions {
             result,
@@ -2948,6 +3062,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         let scale = pass.scale;
         let copied = self.copy_regions(pass, regions, texture);
         let beneath = pass.beneath;
+        let page_untouched = pass.page_untouched();
         let bases: Vec<Vec<ResolvedComposite>> = regions
             .iter()
             .map(|region| {
@@ -2959,7 +3074,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                     .as_ref()
                     .and_then(|base| base.under(region.rect))
                     .into_iter()
-                    .chain(pass.page.blit(region.rect))
+                    .chain(pass.page.blit(region.rect).filter(|_| !page_untouched))
                     .collect()
             })
             .collect();
@@ -3520,6 +3635,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             offset: [surface_rect.x, surface_rect.y],
         };
         let child_beneath = if reads_backdrop {
+            self.start_page(pass);
             beneath_for_child(pass, child, z, grid_offset.filter(|_| translated))?
         } else {
             Beneath {

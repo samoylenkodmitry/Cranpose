@@ -70,8 +70,17 @@ composites the resolved textures.
   `region_map`); what is not yet on the page is drawn in one scissored
   fix-up pass. Substrates (`SubstrateSpec`, `MAX_SUBSTRATES`) are rendered
   beside the atlas, one downsample + horizontal + vertical per stage at
-  scratch size packed to the blurred regions; a declaration is capture
-  geometry and must not follow a runtime value. Every glass is shaded once.
+  scratch size packed to the blurred regions; a mean's row and column
+  reductions ride in the downsample and horizontal passes of a stage that
+  blurs and its texel is carried in the vertical pass, and every result
+  with a slot in the atlas is drawn there instead of copied
+  (`encode_blur_atlas_passes`, exact: the same draws, other targets). A
+  chained substrate's source is copied beside its substrates, never
+  blitted. A child page's transparent clear waits for its first draw: a
+  capture of an untouched page skips the identity blit and a child
+  reading it through its base clears it first (`start_page`). A
+  declaration is capture geometry and must not follow a runtime value.
+  Every glass is shaded once.
   `plan_stage` lays every stage out before any member is served from the
   cache and each key hashes its own placement. Contracts
   `backdrop_pass_batching.rs` (one full-screen pass, one copy per glass,
@@ -282,6 +291,7 @@ Exact levers, each against the tree without it:
 | curve as constant d82d86a8 | +2.7, +2.3, +3.3, +2.0 | not run | attribution only |
 | shared channel walk (a channel whose clamped interior equals the base channel's takes the transmitted path; two `channel_lens_displacement` evaluations and two taps skipped across the face) | +0.02, +1.96, +0.38, -0.54 | +0.46 on the 28 plateau, Layer Pass 1 12.09/11.65 → 11.99 ms; the run crossed 52 → 40 → 28 from a cold start | not adopted: exact on both GPUs, nil |
 | tab bar zero-output work, PR #671 (a child that composites nothing is skipped, a render effect over a retained surface is cached, unlit lighting is omitted); demo Liquid tab, present cycle p50 29 → 20-25 ms | +7.5, +5.1, +5.3, +9.9 | not run | kept: 31 → 21 passes per scroll step, byte-exact |
+| stage side passes folded, PR #671 (means ride in the blur passes, substrates land in their atlas slots, a chained substrate's source is copied, a child page's clear waits for its first draw); demo Liquid tab, present cycle p50 25 → 20-25 ms | +0.9, +1.9, +1.8, +3.8 | not run | kept: 21 → 19 passes and 13 → 11 copies per scroll step, byte-exact on the second run (the first run after a rebuild draws up to 13 frames through the compile-time fallback pipelines) |
 
 Legs: `<label>-<device>-<n>-<arm>/` under the shared root, one `report.json`
 and `logcat.txt` each; pass rows by `pass_timing_from_logcat.py`.
