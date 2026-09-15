@@ -988,14 +988,13 @@ impl<'a> ResolveStages<'a> {
 }
 
 /// Where a child lands in its parent: its z, the device pixels it may
-/// touch, its device bounds, and its translation when it only translates.
+/// touch, its device bounds and its snap.
 #[derive(Clone, Copy)]
 struct ChildPlacement {
     z: usize,
     visible: DeviceRect,
     support: DeviceRect,
     dest: DeviceRect,
-    translation: Option<Point>,
     snap: Point,
 }
 
@@ -2708,7 +2707,6 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             visible,
             support,
             dest,
-            translation,
             snap,
         } = placement;
         let padding = ((backdrop.input_padding() + backdrop.output_padding()) * scale).ceil();
@@ -2725,7 +2723,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             layer_rect: dest,
             visible,
             effect: backdrop,
-            rounded_mask: translation.and_then(|_| grid_rounded_mask(child, snap, scale)),
+            rounded_mask: grid_rounded_mask(child, snap, scale),
             batched: batched_effect(backdrop),
             stage: 0,
             support: Some(support),
@@ -3345,7 +3343,6 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 visible,
                 support,
                 dest,
-                translation,
                 snap,
             };
             let composite = self.resolve_child_backdrop(pass, child, backdrop, placement)?;
@@ -3822,18 +3819,21 @@ fn shader_tail(effect: &RenderEffect) -> Option<(Option<&RenderEffect>, &Arc<Run
     .filter(|(_, shader)| shader.substrates().is_empty())
 }
 
-/// The rounded mask of a child composited at `translation`.
+/// The rounded mask of a child whose transform keeps its rounded clip
+/// axis-aligned, a uniform scale and a translation, with the radii scaled
+/// as the child is; none under a rotation or a projection, which no
+/// axis-aligned mask matches.
 fn grid_rounded_mask(child: &ChildLayer, snap: Point, scale: f32) -> Option<RoundedCompositeMask> {
-    child.rounded_clip.map(|clip| {
-        rounded_mask(
-            LayerRoundedClip {
-                rect: quad_bounds(child.transform.map_rect(clip.rect)).translate(snap.x, snap.y),
-                radii: clip.radii.map(|radius| radius * child.surface_scale),
-            },
-            Point::default(),
-            scale,
-        )
-    })
+    let clip = child.rounded_clip?;
+    let (uniform, _) = uniform_scale_translation(child.transform)?;
+    Some(rounded_mask(
+        LayerRoundedClip {
+            rect: quad_bounds(child.transform.map_rect(clip.rect)).translate(snap.x, snap.y),
+            radii: clip.radii.map(|radius| radius * uniform),
+        },
+        Point::default(),
+        scale,
+    ))
 }
 
 fn rounded_mask(clip: LayerRoundedClip, snap: Point, scale: f32) -> RoundedCompositeMask {
@@ -4548,6 +4548,74 @@ mod tests {
 
     use super::*;
     use crate::scene::DrawOpKind;
+
+    fn rounded_child(transform: ProjectiveTransform, surface_scale: f32) -> ChildLayer {
+        let local_bounds = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 40.0,
+            height: 40.0,
+        };
+        ChildLayer {
+            z_index: 0,
+            node_id: None,
+            local_bounds,
+            transform,
+            clip: None,
+            rounded_clip: Some(LayerRoundedClip {
+                rect: local_bounds,
+                radii: [20.0; 4],
+            }),
+            alpha: 1.0,
+            blend_mode: BlendMode::SrcOver,
+            effect: None,
+            backdrop: None,
+            snap_anchor: None,
+            surface_scale,
+            content_hash: 0,
+            cache_policy: CachePolicy::None,
+            content: LayerScene {
+                scene: CompositorScene::new(),
+                children: Vec::new(),
+            },
+        }
+    }
+
+    #[test]
+    fn a_scaled_child_masks_its_rounded_clip_scaled_with_it() {
+        let scaled = rounded_child(
+            ProjectiveTransform::uniform_scale(1.5)
+                .then(ProjectiveTransform::translation(100.0, 200.0)),
+            1.5,
+        );
+        let mask = grid_rounded_mask(&scaled, Point::new(0.5, 0.0), 2.0)
+            .expect("a uniform scale keeps the clip axis-aligned");
+        assert_eq!(mask.rect, [201.0, 400.0, 120.0, 120.0]);
+        assert_eq!(mask.radii, [60.0; 4]);
+
+        let translated = rounded_child(ProjectiveTransform::translation(10.0, 20.0), 1.0);
+        let mask = grid_rounded_mask(&translated, Point::default(), 1.0)
+            .expect("a translation keeps the clip axis-aligned");
+        assert_eq!(mask.rect, [10.0, 20.0, 40.0, 40.0]);
+        assert_eq!(mask.radii, [20.0; 4]);
+    }
+
+    #[test]
+    fn a_rotated_child_has_no_axis_aligned_rounded_mask() {
+        let rotated = rounded_child(
+            ProjectiveTransform::from_rect_to_quad(
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 40.0,
+                    height: 40.0,
+                },
+                [[20.0, 0.0], [40.0, 20.0], [20.0, 40.0], [0.0, 20.0]],
+            ),
+            1.0,
+        );
+        assert!(grid_rounded_mask(&rotated, Point::default(), 1.0).is_none());
+    }
 
     fn op(z_index: usize) -> DrawOp {
         DrawOp {
