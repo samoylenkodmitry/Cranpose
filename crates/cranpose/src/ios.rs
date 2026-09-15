@@ -406,6 +406,7 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
         self.shell = Some(shell);
         self.accessibility = accessibility;
         self.window = Some(window.clone());
+        crate::ios_scene::hold_window(window.as_ref());
         window.request_redraw();
     }
 
@@ -603,6 +604,8 @@ pub fn try_run(settings: AppSettings, content: impl FnMut() + 'static) -> Result
     ));
     #[cfg(feature = "storekit")]
     cranpose_storekit::register();
+
+    crate::ios_scene::register_class();
 
     let event_loop = EventLoop::builder()
         .build()

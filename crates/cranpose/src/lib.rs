@@ -542,6 +542,9 @@ mod ios_keyboard;
 mod ios_back_gesture;
 
 #[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
+mod ios_scene;
+
+#[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
 mod ios_background;
 
 #[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]

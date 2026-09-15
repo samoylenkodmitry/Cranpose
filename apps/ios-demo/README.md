@@ -44,6 +44,39 @@ PROFILE=release CODESIGN_IDENTITY="Apple Distribution: Your Team (TEAMID)" \
 ad-hoc signed by default (`-`); pass `CODESIGN_IDENTITY` to sign for device
 installation. `CranposeDemo/Info.plist` is the bundle's property list.
 
+## The scene manifest every app needs
+
+iOS 27 ends an app at launch when the binary links against the iOS 27 SDK and
+the app does not take up the UIScene life cycle. The message reads
+`Application failed to launch: UIScene life cycle is required for apps built
+with this SDK`. Cranpose ships the delegate class, so an app only declares it
+in its own `Info.plist`:
+
+```xml
+<key>UIApplicationSceneManifest</key>
+<dict>
+    <key>UIApplicationSupportsMultipleScenes</key>
+    <false/>
+    <key>UISceneConfigurations</key>
+    <dict>
+        <key>UIWindowSceneSessionRoleApplication</key>
+        <array>
+            <dict>
+                <key>UISceneConfigurationName</key>
+                <string>Default Configuration</string>
+                <key>UISceneDelegateClassName</key>
+                <string>CranposeSceneDelegate</string>
+            </dict>
+        </array>
+    </dict>
+</dict>
+```
+
+`CranposeSceneDelegate` lives in `crates/cranpose/src/ios_scene.rs`. It takes
+the window winit creates and hands it to the scene UIKit connects, in whichever
+order the two arrive. An app without the manifest keeps the older path and
+still runs on iOS 26 and below.
+
 ## Architecture
 
 The backend lives in `crates/cranpose/src/ios.rs` and is selected by the `ios`
