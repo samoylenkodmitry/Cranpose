@@ -56,7 +56,13 @@ composites the resolved textures.
   admits every op (`content_admits_rounded_clip`). Isolated children under
   uniform scale plus translation render on the parent's pixel grid with the
   1/16-pixel phase in the cache key; other transforms composite
-  projectively. Contract `effect_semantics.rs`.
+  projectively. Contract `effect_semantics.rs`. A rounded clip becomes a
+  composite mask (`grid_rounded_mask`) under any uniform scale plus
+  translation, its radii scaled with the child, on the child's surface and
+  on its backdrop alike: a glass shader draws its optical band past its
+  silhouette and relies on the mask to cut it, so a scaled glass button
+  without one shows the band up to its scissor as a square. Contract
+  `scaled_glass_child_mask.rs`.
 - **Rigid motion**: a translated context carries one `SnapAnchor`, one
   device-pixel delta per frame; text re-rasterizes only on a phase change,
   quads translate, a gradient's dither is keyed on the position relative to
