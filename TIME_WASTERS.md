@@ -49,3 +49,5 @@
 - The composed-drag replay over `TabBackdrop::Flat` carries no glyph ink (transparent icons, empty labels): a byte-exact replay proves nothing about ink colour; audit ink changes on the phone checkerboard recording.
 - Judge replay byte exactness on the second run after a rebuild: the first run draws up to 13 frames through the compile-time fallback pipelines, one level off, and reads as an inexact change.
 - A three-content matrix recording runs past XCTest's two-minute execution allowance and keeps no movie; the device-run recipe disables test timeouts, and a Cranpose matrix run must replay the native `planned_events` through `TEST_RUNNER_REFERENCE_POINTER_PATHS`, since a content case's native button sits 1.5 pt elsewhere and the comparison rejects unequal paths.
+- A CI board red on every mac step at once (`linking with cc failed: exit status 69`) is macm3's Xcode licence after an update, not the change; read one step's log before touching code.
+- The browser-safe-time static test scans `cfg(test)` modules of the wasm-delivered crates too: import `web_time::{Duration, Instant}` in wgpu crate tests, never `std::time`.
