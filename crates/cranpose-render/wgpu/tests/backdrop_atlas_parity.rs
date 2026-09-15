@@ -226,7 +226,12 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
 fn split_override_names_select_distinct_compiled_pipelines() {
     let mut renderer = support::headless_renderer().expect("headless renderer");
     for (name, expected) in [("FIRST", [255, 0, 0, 255]), ("SECOND", [0, 0, 255, 255])] {
-        let frame = capture(&mut renderer, glasses_page(1, || split_name_probe(name)));
+        let frame = support::capture_graph_settled(
+            &mut renderer,
+            glasses_page(1, || split_name_probe(name)),
+            FRAME_WIDTH,
+            FRAME_HEIGHT,
+        );
         assert_eq!(
             pixel_at(&frame, GLASS_LEFT + GLASS_WIDTH / 2.0, GLASS_TOP + 4.0),
             expected,
@@ -283,16 +288,24 @@ fn materials_with_different_uniforms_share_one_pipeline_without_folds() {
         support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children)
     };
 
+    let built_total = || {
+        cranpose_render_wgpu::pipelines_created()
+            + cranpose_render_wgpu::pipelines_created_off_frame()
+    };
+    let capture_settled = |renderer: &mut support::LockedRenderer, graph| {
+        support::capture_graph_settled(renderer, graph, FRAME_WIDTH, FRAME_HEIGHT)
+    };
+    support::wait_for_background_compiler_idle();
     cranpose_ui_graphics::set_glass_material_folds(false);
-    let _ = capture(&mut renderer, page(&materials[..1]));
-    let built = cranpose_render_wgpu::pipelines_created();
-    let _ = capture(&mut renderer, page(&materials));
-    let plain = cranpose_render_wgpu::pipelines_created() - built;
+    let _ = capture_settled(&mut renderer, page(&materials[..1]));
+    let built = built_total();
+    let _ = capture_settled(&mut renderer, page(&materials));
+    let plain = built_total() - built;
 
     cranpose_ui_graphics::set_glass_material_folds(true);
-    let built = cranpose_render_wgpu::pipelines_created();
-    let _ = capture(&mut renderer, page(&materials));
-    let folded = cranpose_render_wgpu::pipelines_created() - built;
+    let built = built_total();
+    let _ = capture_settled(&mut renderer, page(&materials));
+    let folded = built_total() - built;
 
     assert_eq!(
         plain, 0,

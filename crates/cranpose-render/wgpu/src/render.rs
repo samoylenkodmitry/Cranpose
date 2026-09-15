@@ -53,6 +53,7 @@ use crate::{
     lazy_resource::LazyGpuResource,
     offscreen::{OffscreenTarget, composition_bytes_per_pixel, composition_format},
     output_conversion::OutputConverter,
+    pipeline_compiler::{CompilerSend, PipelineCompiler},
     record_columns::record_vertex_layouts,
     rect_to_quad,
     run_store::{ArenaBinding, PlacementData, RunBufferMode, RunDrawCall, RunStore},
@@ -900,8 +901,9 @@ pub(crate) fn create_render_pipeline_logged<'a>(
     let started = Instant::now();
     let pipeline = device.create_render_pipeline(&descriptor);
     log::info!(
-        "[pipeline-create] {tag} {:.1}ms",
-        instant_ms(started, Instant::now())
+        "[pipeline-create] {tag} {:.1}ms on {}",
+        instant_ms(started, Instant::now()),
+        std::thread::current().name().unwrap_or("unnamed thread"),
     );
     if OFF_FRAME_BUILDS.with(std::cell::Cell::get) {
         PIPELINES_CREATED_OFF_FRAME.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -1744,6 +1746,7 @@ pub struct GpuRenderer {
     screenshot_converter: OutputConverter,
     adapter_backend: wgpu::Backend,
     pipeline_cache: Option<wgpu::PipelineCache>,
+    pipeline_compiler: PipelineCompiler,
     shape_pipelines: ShapePipelines,
     image_pipeline: LazyGpuResource<wgpu::RenderPipeline>,
     image_pipeline_dst_out: LazyGpuResource<wgpu::RenderPipeline>,
@@ -1778,6 +1781,7 @@ pub struct GpuRenderer {
     pub(crate) ablation_frames: u32,
     pub(crate) backdrop_gates: HashMap<NodeId, AdmissionGate>,
     pub(crate) fill_gates: HashMap<DrawCommandId, AdmissionGate>,
+    pub(crate) effect_gates: HashMap<NodeId, AdmissionGate>,
     transparent_sources: HashMap<(u32, u32), Rc<OffscreenTarget>>,
     shadow_surface_cache: BoundedLruCache<ShadowSurfaceCacheKey, CachedShadowSurface>,
     shadow_surface_cache_bytes: u64,
@@ -1908,8 +1912,10 @@ impl GpuRenderer {
         }
 
         let effects_started = Instant::now();
+        let pipeline_compiler = PipelineCompiler::spawn();
         let effect_renderer = EffectRenderer::new(
             &device,
+            pipeline_compiler.clone(),
             pipeline_cache.clone(),
             composition_format,
             adapter_backend,
@@ -1929,9 +1935,10 @@ impl GpuRenderer {
                 mode: run_store.mode(),
             },
             adapter_backend,
+            &pipeline_compiler,
         );
 
-        let renderer = Self {
+        let mut renderer = Self {
             device,
             queue,
             device_errors,
@@ -1944,6 +1951,7 @@ impl GpuRenderer {
             screenshot_converter,
             adapter_backend,
             pipeline_cache,
+            pipeline_compiler,
             shape_pipelines,
             image_pipeline: LazyGpuResource::new("image/src-over"),
             image_pipeline_dst_out: LazyGpuResource::new("image/dst-out"),
@@ -1988,6 +1996,7 @@ impl GpuRenderer {
             ablation_frames: 0,
             backdrop_gates: HashMap::new(),
             fill_gates: HashMap::new(),
+            effect_gates: HashMap::new(),
             transparent_sources: HashMap::new(),
             shadow_surface_cache: BoundedLruCache::with_capacity_at_least_one(
                 MAX_SHADOW_SURFACE_CACHE_ITEMS,
@@ -1998,6 +2007,7 @@ impl GpuRenderer {
             pending_frame_warmup_frames: 0,
             frame_count: 0,
         };
+        renderer.warm_pipelines();
         log::info!(
             "[gpu-init] {:?} renderer ready in {:.1} ms (effects {:.1} ms)",
             adapter_backend,
@@ -2011,34 +2021,93 @@ impl GpuRenderer {
         self.shape_pipelines.ensure(key);
     }
 
-    fn image_pipeline(&self, blend_mode: BlendMode) -> &wgpu::RenderPipeline {
-        let resource = match blend_mode {
+    /// Queues every pipeline a page can reach on the background compiler,
+    /// so a page's first glass, image or text draw finds it compiled.
+    fn warm_pipelines(&mut self) {
+        let backend = self.adapter_backend;
+        self.glyph_atlas_pipeline.warm(
+            &self.pipeline_compiler,
+            backend,
+            self.glyph_atlas_pipeline_job(),
+        );
+        for blend_mode in [BlendMode::SrcOver, BlendMode::DstOut] {
+            self.image_pipeline_resource(blend_mode).warm(
+                &self.pipeline_compiler,
+                backend,
+                self.image_pipeline_job(blend_mode),
+            );
+        }
+        self.output_converter
+            .warm(&self.device, &self.pipeline_compiler, backend);
+        self.effect_renderer.warm_pipelines(&self.device);
+    }
+
+    /// Queues an app's own runtime shaders behind the framework's, each at
+    /// the target it draws to.
+    pub(crate) fn warm_shaders(&mut self, warm_ups: &[cranpose_ui_graphics::ShaderWarmUp]) {
+        self.effect_renderer.warm_shaders(warm_ups);
+    }
+
+    fn image_pipeline_resource(
+        &self,
+        blend_mode: BlendMode,
+    ) -> &LazyGpuResource<wgpu::RenderPipeline> {
+        match blend_mode {
             BlendMode::DstOut => &self.image_pipeline_dst_out,
             _ => &self.image_pipeline,
-        };
-        resource.get_or_init(self.adapter_backend, || {
+        }
+    }
+
+    fn image_pipeline_job(
+        &self,
+        blend_mode: BlendMode,
+    ) -> impl FnOnce() -> wgpu::RenderPipeline + CompilerSend + 'static {
+        let device = Arc::clone(&self.device);
+        let cache = self.pipeline_cache.clone();
+        let format = self.composition_format;
+        let uniform_layout = self.uniform_bind_group_layout.clone();
+        let image_layout = self.image_bind_group_layout.clone();
+        move || {
             create_image_pipeline(
-                &self.device,
-                self.pipeline_cache.as_ref(),
-                self.composition_format,
-                &self.uniform_bind_group_layout,
-                &self.image_bind_group_layout,
+                &device,
+                cache.as_ref(),
+                format,
+                &uniform_layout,
+                &image_layout,
                 blend_mode,
             )
-        })
+        }
+    }
+
+    fn image_pipeline(&self, blend_mode: BlendMode) -> &wgpu::RenderPipeline {
+        self.image_pipeline_resource(blend_mode)
+            .get_or_init(self.adapter_backend, || {
+                self.image_pipeline_job(blend_mode)()
+            })
+    }
+
+    fn glyph_atlas_pipeline_job(
+        &self,
+    ) -> impl FnOnce() -> wgpu::RenderPipeline + CompilerSend + 'static {
+        let device = Arc::clone(&self.device);
+        let cache = self.pipeline_cache.clone();
+        let format = self.composition_format;
+        let uniform_layout = self.uniform_bind_group_layout.clone();
+        let image_layout = self.image_bind_group_layout.clone();
+        move || {
+            create_glyph_atlas_pipeline(
+                &device,
+                cache.as_ref(),
+                format,
+                &uniform_layout,
+                &image_layout,
+            )
+        }
     }
 
     fn glyph_atlas_pipeline(&self) -> &wgpu::RenderPipeline {
         self.glyph_atlas_pipeline
-            .get_or_init(self.adapter_backend, || {
-                create_glyph_atlas_pipeline(
-                    &self.device,
-                    self.pipeline_cache.as_ref(),
-                    self.composition_format,
-                    &self.uniform_bind_group_layout,
-                    &self.image_bind_group_layout,
-                )
-            })
+            .get_or_init(self.adapter_backend, || self.glyph_atlas_pipeline_job()())
     }
 
     fn ensure_image_cached(&mut self, image: &ImageBitmap) -> Result<(), String> {
@@ -2244,6 +2313,7 @@ impl GpuRenderer {
         };
         self.backdrop_gates.retain(|_, gate| retire(gate));
         self.fill_gates.retain(|_, gate| retire(gate));
+        self.effect_gates.retain(|_, gate| retire(gate));
         for target in self.deferred_offscreen_releases.drain(..) {
             self.effect_renderer.release_offscreen(target);
         }

@@ -122,8 +122,13 @@ fn mixed_blur_tile_modes_preserve_dynamic_shader_pixels() {
         wgpu::TextureFormat::Rgba16Float,
     ] {
         let mut renderers = [false, true].map(|reference| {
-            let mut renderer =
-                EffectRenderer::new(&device, None, format, device.adapter_info().backend);
+            let mut renderer = EffectRenderer::new(
+                &device,
+                PipelineCompiler::inactive(),
+                None,
+                format,
+                device.adapter_info().backend,
+            );
             if reference {
                 renderer.blur_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                     label: Some("Dynamic Blur Tile Reference"),
@@ -168,7 +173,8 @@ fn blit_specialization_preserves_sampling_masks_and_blending() {
         wgpu::TextureFormat::Rgba16Float,
     ] {
         let mut renderers = [false, true].map(|reference| {
-            let renderer = EffectRenderer::new(&device, None, format, backend);
+            let renderer =
+                EffectRenderer::new(&device, PipelineCompiler::inactive(), None, format, backend);
             if reference {
                 for mode in modes {
                     let dynamic = renderer.blit_pipeline(&device, mode, false).clone();
@@ -277,6 +283,7 @@ fn cached_blur_kernels_preserve_fractional_radii_axes_and_eviction() {
     let (_lock, device, _queue) = crate::frame_graph::upload_test_device();
     let renderer = EffectRenderer::new(
         &device,
+        PipelineCompiler::inactive(),
         None,
         wgpu::TextureFormat::Rgba8Unorm,
         device.adapter_info().backend,

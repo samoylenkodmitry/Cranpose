@@ -38,6 +38,7 @@
 - Inspect attachment formats when solids wash out but sampled images match; preserve the byte-exact color contract.
 - `Modifier::size` obeys incoming constraints; intentional overflow uses `required_size`.
 - Validate WGSL through the renderer's shader-cache tests; UI-only tests do not compile the shader.
+- Pipelines compile in the background and a general pipeline draws meanwhile; a capture asserting per-draw statistics settles on zero `shader_pipeline_fallback_draws` and `shape_pipeline_fallback_draws` first (`support::capture_settled`), and a settled frame replays its backdrop, so a substrate count needs `CRANPOSE_NO_BACKDROP_CACHE`.
 - Compare optimizations with frozen independent shader references; two paths sharing changed arithmetic can agree on the same wrong pixels.
 - Keep format-matched references: float-attachment goldens cannot validate forced 8-bit output by widening their tolerance.
 - Half-float bilinear identity captures can round; use `textureLoad` only when the fixture's contract is an exact identity read.

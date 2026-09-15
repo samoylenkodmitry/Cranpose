@@ -324,7 +324,15 @@ fn capture(
     graph: RenderGraph,
     root_scale: f32,
 ) -> CapturedFrame {
-    support::capture_graph_with_scale(renderer, graph, FRAME_WIDTH, FRAME_HEIGHT, root_scale)
+    support::capture_settled(renderer, |renderer| {
+        support::capture_graph_with_scale(
+            renderer,
+            graph.clone(),
+            FRAME_WIDTH,
+            FRAME_HEIGHT,
+            root_scale,
+        )
+    })
 }
 
 fn assert_matches_reference(

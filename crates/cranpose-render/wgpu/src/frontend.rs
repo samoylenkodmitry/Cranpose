@@ -31,6 +31,7 @@ pub(crate) struct RendererFrontend {
     pub(crate) root_scene_capacity: SceneCapacityHint,
     pub(crate) frame_sequence: u64,
     pub(crate) changed_nodes: Vec<cranpose_core::NodeId>,
+    pub(crate) shader_warm_ups: Vec<cranpose_ui_graphics::ShaderWarmUp>,
 }
 
 impl RendererFrontend {
@@ -46,6 +47,7 @@ impl RendererFrontend {
             root_scene_capacity: SceneCapacityHint::default(),
             frame_sequence: 0,
             changed_nodes: Vec::new(),
+            shader_warm_ups: Vec::new(),
         }
     }
 

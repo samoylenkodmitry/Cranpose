@@ -128,6 +128,11 @@ pub struct FrameStatsSnapshot {
     /// over the frame. A count that grows while a person is interacting names
     /// a backend shader compile they waited through.
     pub pipelines_created: u64,
+    /// Runtime shader draws using a shader's general pipeline while the
+    /// specialization they asked for compiles in the background.
+    pub shader_pipeline_fallback_draws: u32,
+    /// Runtime shader draws using a completed specialized pipeline.
+    pub shader_specialized_draws: u32,
     pub image_passes: u32,
     pub text_passes: u32,
     /// Shape, image, glyph and composite draws recorded this frame. The
@@ -376,6 +381,8 @@ pub(crate) struct FrameStats {
     pub shape_passes: Cell<u32>,
     pub shape_pipeline_fallback_draws: Cell<u32>,
     pub shape_specialized_draws: Cell<u32>,
+    pub shader_pipeline_fallback_draws: Cell<u32>,
+    pub shader_specialized_draws: Cell<u32>,
     pub image_passes: Cell<u32>,
     pub text_passes: Cell<u32>,
     pub draw_calls: Cell<u32>,
@@ -761,6 +768,8 @@ impl FrameStats {
             shape_pipeline_fallback_draws: self.shape_pipeline_fallback_draws.get(),
             shape_specialized_draws: self.shape_specialized_draws.get(),
             pipelines_created: crate::render::pipelines_created(),
+            shader_pipeline_fallback_draws: self.shader_pipeline_fallback_draws.get(),
+            shader_specialized_draws: self.shader_specialized_draws.get(),
             image_passes: self.image_passes.get(),
             text_passes: self.text_passes.get(),
             draw_calls: self.draw_calls.get(),
@@ -833,6 +842,8 @@ impl FrameStats {
         self.shape_passes.set(0);
         self.shape_pipeline_fallback_draws.set(0);
         self.shape_specialized_draws.set(0);
+        self.shader_pipeline_fallback_draws.set(0);
+        self.shader_specialized_draws.set(0);
         self.image_passes.set(0);
         self.text_passes.set(0);
         self.draw_calls.set(0);
@@ -983,6 +994,8 @@ mod tests {
         stats.bump_shapes();
         stats.shape_pipeline_fallback_draws.set(3);
         stats.shape_specialized_draws.set(5);
+        stats.shader_pipeline_fallback_draws.set(2);
+        stats.shader_specialized_draws.set(4);
         stats.blur_passes.set(1);
         stats.offscreen_total_bytes.set(1024);
         stats.offscreen_pool_bytes.set(2048);
@@ -1020,6 +1033,8 @@ mod tests {
 
         assert_eq!(snapshot.shape_pipeline_fallback_draws, 3);
         assert_eq!(snapshot.shape_specialized_draws, 5);
+        assert_eq!(snapshot.shader_pipeline_fallback_draws, 2);
+        assert_eq!(snapshot.shader_specialized_draws, 4);
         assert_eq!(snapshot.isolated_layer_renders, 1);
         assert_eq!(snapshot.isolated_layer_pixels, 56);
         assert_eq!(snapshot.upload_bytes, 64);
@@ -1050,6 +1065,8 @@ mod tests {
 
         assert_eq!(stats.snapshot().shape_pipeline_fallback_draws, 0);
         assert_eq!(stats.snapshot().shape_specialized_draws, 0);
+        assert_eq!(stats.snapshot().shader_pipeline_fallback_draws, 0);
+        assert_eq!(stats.snapshot().shader_specialized_draws, 0);
         assert_eq!(stats.layer_cache_hits.get(), 0);
         assert_eq!(stats.layer_cache_misses.get(), 0);
         assert_eq!(stats.layer_cache_hit_pixels.get(), 0);

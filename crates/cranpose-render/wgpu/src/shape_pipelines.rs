@@ -1,6 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use crate::{
+    pipeline_compiler::PipelineCompiler,
     render::{ShapePipelineKey, create_shape_pipeline},
     run_store::RunBufferMode,
 };
@@ -37,7 +38,11 @@ pub(crate) struct ShapePipelines {
 }
 
 impl ShapePipelines {
-    pub(crate) fn new(factory: ShapePipelineFactory, _backend: wgpu::Backend) -> Self {
+    pub(crate) fn new(
+        factory: ShapePipelineFactory,
+        _backend: wgpu::Backend,
+        _compiler: &PipelineCompiler,
+    ) -> Self {
         #[cfg(not(target_arch = "wasm32"))]
         let compiler = {
             static ASYNC_SHAPE_PIPELINES: crate::debug_toggles::DebugToggle =
@@ -45,11 +50,7 @@ impl ShapePipelines {
             (_backend == wgpu::Backend::Vulkan && !ASYNC_SHAPE_PIPELINES.equals("0"))
                 .then(|| {
                     let factory = factory.clone();
-                    background::Compiler::new(move |key| factory.create(key))
-                        .map_err(|error| {
-                            log::error!("could not start the shape pipeline compiler: {error}");
-                        })
-                        .ok()
+                    background::Compiler::new(_compiler, move |key| factory.create(key))
                 })
                 .flatten()
         };
@@ -72,6 +73,13 @@ impl ShapePipelines {
     /// nothing to gain by waiting: a scene that never draws `DstOut` pays for
     /// two pipelines it does not use, and one that does pays for them at
     /// startup instead of mid-scroll.
+    ///
+    /// Built here, on the thread creating the renderer, rather than queued
+    /// on the background compiler: that thread has nothing else to do until
+    /// the first frame, so these compiles overlap the compiler's glyph,
+    /// image and blit work. Queued behind them on the one compiler thread,
+    /// the first frame waited for the lot (Mate 20 X cold first frame
+    /// 286-755 ms against 245-294 ms).
     ///
     /// Only the general variants. Specialized ones are unbounded in principle
     /// and the background compiler already keeps them off the frame where it
@@ -149,15 +157,17 @@ mod background {
     use std::sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
-        mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError},
+        mpsc::{self, Receiver, Sender},
     };
 
     use smallvec::SmallVec;
 
-    use crate::render::ShapePipelineKey;
+    use crate::{pipeline_compiler::PipelineCompiler, render::ShapePipelineKey};
 
     pub(super) struct Compiler<T> {
-        requests: SyncSender<ShapePipelineKey>,
+        compiler: PipelineCompiler,
+        create: Arc<dyn Fn(ShapePipelineKey) -> T + Send + Sync>,
+        finished: Sender<(ShapePipelineKey, T)>,
         completed: Receiver<(ShapePipelineKey, T)>,
         pending: SmallVec<[ShapePipelineKey; 2]>,
         stopped: Arc<AtomicBool>,
@@ -165,31 +175,19 @@ mod background {
 
     impl<T: Send + 'static> Compiler<T> {
         pub(super) fn new(
-            mut create: impl FnMut(ShapePipelineKey) -> T + Send + 'static,
-        ) -> Result<Self, std::io::Error> {
-            let (requests, requested) = mpsc::sync_channel(1);
-            let (finished, completed) = mpsc::sync_channel(1);
-            let stopped = Arc::new(AtomicBool::new(false));
-            let worker_stopped = Arc::clone(&stopped);
-            std::thread::Builder::new()
-                .name("cranpose-shape-compiler".into())
-                .spawn(move || {
-                    crate::render::mark_thread_off_frame();
-                    while let Ok(key) = requested.recv() {
-                        if worker_stopped.load(Ordering::Acquire) {
-                            break;
-                        }
-                        let pipeline = create(key);
-                        if finished.send((key, pipeline)).is_err() {
-                            break;
-                        }
-                    }
-                })?;
-            Ok(Self {
-                requests,
-                completed,
-                pending: SmallVec::new(),
-                stopped,
+            compiler: &PipelineCompiler,
+            create: impl Fn(ShapePipelineKey) -> T + Send + Sync + 'static,
+        ) -> Option<Self> {
+            compiler.is_active().then(|| {
+                let (finished, completed) = mpsc::channel();
+                Self {
+                    compiler: compiler.clone(),
+                    create: Arc::new(create),
+                    finished,
+                    completed,
+                    pending: SmallVec::new(),
+                    stopped: Arc::new(AtomicBool::new(false)),
+                }
             })
         }
 
@@ -197,27 +195,22 @@ mod background {
             if self.pending.len() == self.pending.inline_size() || self.pending.contains(&key) {
                 return;
             }
-            match self.requests.try_send(key) {
-                Ok(()) => self.pending.push(key),
-                Err(TrySendError::Full(_)) => {}
-                Err(TrySendError::Disconnected(_)) => {
-                    panic!("shape pipeline compiler stopped unexpectedly")
+            self.pending.push(key);
+            let create = Arc::clone(&self.create);
+            let finished = self.finished.clone();
+            let stopped = Arc::clone(&self.stopped);
+            self.compiler.enqueue(move || {
+                if stopped.load(Ordering::Acquire) {
+                    return;
                 }
-            }
+                finished.send((key, create(key))).ok();
+            });
         }
 
         pub(super) fn collect(&mut self, mut publish: impl FnMut(ShapePipelineKey, T)) {
-            loop {
-                match self.completed.try_recv() {
-                    Ok((key, pipeline)) => {
-                        self.pending.retain(|pending| *pending != key);
-                        publish(key, pipeline);
-                    }
-                    Err(TryRecvError::Empty) => break,
-                    Err(TryRecvError::Disconnected) => {
-                        panic!("shape pipeline compiler stopped unexpectedly")
-                    }
-                }
+            while let Ok((key, pipeline)) = self.completed.try_recv() {
+                self.pending.retain(|pending| *pending != key);
+                publish(key, pipeline);
             }
         }
     }
@@ -230,6 +223,8 @@ mod background {
 
     #[cfg(test)]
     mod tests {
+        use std::sync::Mutex;
+
         use cranpose_ui_graphics::BlendMode;
         use web_time::{Duration, Instant};
 
@@ -241,12 +236,19 @@ mod background {
         }
 
         #[test]
+        fn an_inactive_pipeline_compiler_leaves_shapes_synchronous() {
+            assert!(Compiler::new(&PipelineCompiler::inactive(), |key| key).is_none());
+        }
+
+        #[test]
         fn duplicate_and_excess_work_is_bounded_and_drop_cancels_queued_work() {
             let (started, observed) = mpsc::channel();
             let (release, blocked) = mpsc::channel();
-            let mut compiler = Compiler::new(move |key| {
+            let blocked = Mutex::new(blocked);
+            let shared = PipelineCompiler::spawn();
+            let mut compiler = Compiler::new(&shared, move |key| {
                 started.send(key).unwrap();
-                blocked.recv().unwrap();
+                blocked.lock().unwrap().recv().unwrap();
                 key
             })
             .expect("test compiler");
@@ -271,7 +273,8 @@ mod background {
 
         #[test]
         fn results_keep_their_keys_and_publish_only_when_collected() {
-            let mut compiler = Compiler::new(|key| key.blend_mode).expect("test compiler");
+            let mut compiler = Compiler::new(&PipelineCompiler::spawn(), |key| key.blend_mode)
+                .expect("test compiler");
             let expected = key(BlendMode::DstOut);
             compiler.request(expected);
             assert_eq!(compiler.pending.as_slice(), &[expected]);

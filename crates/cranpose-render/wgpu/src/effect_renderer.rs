@@ -5,21 +5,25 @@ use cranpose_render_common::{
     geometry::{BLUR_TAP_PAIRS, BlurKernel, blur_scratch_block},
 };
 use cranpose_ui_graphics::{
-    BlendMode, MAX_SUBSTRATES, RenderEffect, RuntimeShader, SubstrateSpec, TileMode,
+    BlendMode, GRADIENT_BLUR_WGSL, GRADIENT_CUT_MASK_WGSL, GRADIENT_FADE_DST_OUT_WGSL,
+    LIQUID_GLASS_WGSL, MAX_SUBSTRATES, ROUNDED_ALPHA_MASK_WGSL, RenderEffect, RuntimeShader,
+    SubstrateSpec, TileMode,
 };
 use smallvec::SmallVec;
 
 use crate::{
     frame_graph::{
         BufferUpload, FrameCommandRecorder, FrameCommandStats, FrameTextureDescriptor,
-        UniformUpload, UploadAllocatorId, UploadAllocatorSpec,
+        TextureRegionCopy, UniformUpload, UploadAllocatorId, UploadAllocatorSpec, copy_compatible,
     },
     glass_split::split_scissors,
     gpu_stats::FrameStats,
     lazy_resource::LazyGpuResource,
     offscreen::{OffscreenPool, OffscreenTarget},
+    pipeline::GPU_TEXT_BRUSH_EFFECT_SHADER,
+    pipeline_compiler::PipelineCompiler,
     shader_cache::{
-        RuntimeShaderPipelineMode, ShaderDrawVariant, ShaderPipelineCache,
+        RuntimeShaderPipelineMode, ShaderDrawVariant, ShaderPipelineCache, ShaderPipelineFit,
         shader_specialization_enabled,
     },
     shaders,
@@ -93,6 +97,7 @@ pub(crate) struct EffectRenderer {
     offscreen_pool: OffscreenPool,
     pub shader_cache: ShaderPipelineCache,
     pipeline_cache: Option<wgpu::PipelineCache>,
+    compiler: PipelineCompiler,
 
     blur_shader: wgpu::ShaderModule,
     blur_pipeline_layout: wgpu::PipelineLayout,
@@ -137,6 +142,8 @@ pub(crate) struct EffectRenderer {
     pub(crate) debug_shader_pixels: Cell<u64>,
     pub(crate) debug_glass_rasterized_pixels: Cell<u64>,
     pub(crate) debug_blur_pixels: Cell<u64>,
+    debug_shader_fallback_draws: Cell<u32>,
+    debug_shader_specialized_draws: Cell<u32>,
 }
 
 pub(crate) trait EffectScratchTargetProvider<'target> {
@@ -563,6 +570,7 @@ pub(crate) struct BlurRegion {
 pub(crate) struct SubstrateRegion {
     pub(crate) source: (u32, u32, u32, u32),
     pub(crate) scratch: (u32, u32, u32, u32),
+    pub(crate) dest: (u32, u32, u32, u32),
     pub(crate) average: SubstrateAverage,
     pub(crate) read: Option<(u32, u32, u32, u32)>,
 }
@@ -659,6 +667,11 @@ impl ChainedSubstrates {
                     layout.averages.push(SubstrateRegion {
                         source,
                         scratch: region,
+                        dest: if matches!(spec, SubstrateSpec::Mean) {
+                            (region.0, region.1, 1, 1)
+                        } else {
+                            region
+                        },
                         read: None,
                         average: match *spec {
                             SubstrateSpec::Average { block } => SubstrateAverage::Block(block),
@@ -672,12 +685,13 @@ impl ChainedSubstrates {
     }
 
     fn passes(&self) -> u32 {
-        2 * u32::from(!self.blurs.is_empty())
-            + 2 * u32::from(
-                self.averages
-                    .iter()
-                    .any(|s| matches!(s.average, SubstrateAverage::Mean)),
-            )
+        let blurs = !self.blurs.is_empty();
+        let means = self
+            .averages
+            .iter()
+            .any(|s| matches!(s.average, SubstrateAverage::Mean));
+        2 * u32::from(blurs)
+            + 2 * u32::from(means && !blurs)
             + u32::from(
                 self.averages
                     .iter()
@@ -839,37 +853,50 @@ fn dst_out_blend_state() -> wgpu::BlendState {
     }
 }
 
+/// The creation of one fixed effect pipeline, owning clones of everything
+/// it reads so the background compiler can run it as well as the frame.
+#[cfg(not(target_arch = "wasm32"))]
+type FixedPipelineJob = Box<dyn FnOnce() -> wgpu::RenderPipeline + Send + 'static>;
+#[cfg(target_arch = "wasm32")]
+type FixedPipelineJob = Box<dyn FnOnce() -> wgpu::RenderPipeline + 'static>;
+
 #[allow(clippy::too_many_arguments)]
-fn create_fullscreen_pipeline(
+fn fullscreen_pipeline_job(
     device: &wgpu::Device,
     cache: Option<&wgpu::PipelineCache>,
     label: &'static str,
     layout: &wgpu::PipelineLayout,
     shader: &wgpu::ShaderModule,
     fragment_entry: &'static str,
-    constants: &[(&str, f64)],
+    constants: &[(&'static str, f64)],
     surface_format: wgpu::TextureFormat,
     blend: wgpu::BlendState,
-) -> wgpu::RenderPipeline {
-    crate::render::create_fullscreen_strip_pipeline(
-        device,
-        cache,
-        &format!("effect {label} entry={fragment_entry}"),
-        label,
-        layout,
-        shader,
-        fragment_entry,
-        constants,
-        wgpu::ColorTargetState {
-            format: surface_format,
-            blend: Some(blend),
-            write_mask: wgpu::ColorWrites::ALL,
-        },
-    )
+) -> FixedPipelineJob {
+    let device = device.clone();
+    let cache = cache.cloned();
+    let layout = layout.clone();
+    let shader = shader.clone();
+    let constants = constants.to_vec();
+    Box::new(move || {
+        crate::render::create_fullscreen_strip_pipeline(
+            &device,
+            cache.as_ref(),
+            &format!("effect {label} entry={fragment_entry}"),
+            label,
+            &layout,
+            &shader,
+            fragment_entry,
+            &constants,
+            wgpu::ColorTargetState {
+                format: surface_format,
+                blend: Some(blend),
+                write_mask: wgpu::ColorWrites::ALL,
+            },
+        )
+    })
 }
 
-#[allow(clippy::too_many_arguments)]
-fn create_projective_pipeline(
+fn projective_pipeline_job(
     device: &wgpu::Device,
     cache: Option<&wgpu::PipelineCache>,
     label: &'static str,
@@ -877,56 +904,87 @@ fn create_projective_pipeline(
     shader: &wgpu::ShaderModule,
     surface_format: wgpu::TextureFormat,
     blend: wgpu::BlendState,
-) -> wgpu::RenderPipeline {
-    crate::render::create_render_pipeline_logged(
-        device,
-        cache,
-        &format!("effect {label}"),
-        wgpu::RenderPipelineDescriptor {
-            label: Some(label),
-            layout: Some(layout),
-            vertex: wgpu::VertexState {
-                module: shader,
-                entry_point: Some("projective_blit_vs"),
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<ProjectiveBlitVertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &[wgpu::VertexAttribute {
-                        offset: 0,
-                        shader_location: 0,
-                        format: wgpu::VertexFormat::Float32x2,
+) -> FixedPipelineJob {
+    let device = device.clone();
+    let cache = cache.cloned();
+    let layout = layout.clone();
+    let shader = shader.clone();
+    Box::new(move || {
+        crate::render::create_render_pipeline_logged(
+            &device,
+            cache.as_ref(),
+            &format!("effect {label}"),
+            wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("projective_blit_vs"),
+                    buffers: &[wgpu::VertexBufferLayout {
+                        array_stride: std::mem::size_of::<ProjectiveBlitVertex>() as u64,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &[wgpu::VertexAttribute {
+                            offset: 0,
+                            shader_location: 0,
+                            format: wgpu::VertexFormat::Float32x2,
+                        }],
                     }],
-                }],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("projective_blit_fs"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: surface_format,
+                        blend: Some(blend),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleStrip,
+                    strip_index_format: None,
+                    front_face: wgpu::FrontFace::Ccw,
+                    cull_mode: None,
+                    ..Default::default()
+                },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
             },
-            fragment: Some(wgpu::FragmentState {
-                module: shader,
-                entry_point: Some("projective_blit_fs"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: surface_format,
-                    blend: Some(blend),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleStrip,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        },
-    )
+        )
+    })
 }
+
+/// The runtime shaders the framework ships and the mode each draws in, so
+/// their general pipelines are compiled before a page first uses them.
+const BUILTIN_RUNTIME_SHADERS: [(&str, RuntimeShaderPipelineMode); 7] = [
+    (
+        LIQUID_GLASS_WGSL,
+        RuntimeShaderPipelineMode::PremultipliedSrcOver,
+    ),
+    (LIQUID_GLASS_WGSL, RuntimeShaderPipelineMode::Replace),
+    (
+        GRADIENT_BLUR_WGSL,
+        RuntimeShaderPipelineMode::PremultipliedSrcOver,
+    ),
+    (GRADIENT_CUT_MASK_WGSL, RuntimeShaderPipelineMode::Replace),
+    (ROUNDED_ALPHA_MASK_WGSL, RuntimeShaderPipelineMode::Replace),
+    (
+        GRADIENT_FADE_DST_OUT_WGSL,
+        RuntimeShaderPipelineMode::Replace,
+    ),
+    (
+        GPU_TEXT_BRUSH_EFFECT_SHADER,
+        RuntimeShaderPipelineMode::Replace,
+    ),
+];
 
 impl EffectRenderer {
     pub fn new(
         device: &wgpu::Device,
+        compiler: PipelineCompiler,
         pipeline_cache: Option<wgpu::PipelineCache>,
         surface_format: wgpu::TextureFormat,
         adapter_backend: wgpu::Backend,
@@ -1069,8 +1127,17 @@ impl EffectRenderer {
         });
         Self {
             offscreen_pool: OffscreenPool::new(device, surface_format),
-            shader_cache: ShaderPipelineCache::new(adapter_backend, pipeline_cache.clone()),
+            shader_cache: ShaderPipelineCache::new(
+                device,
+                compiler.clone(),
+                pipeline_cache.clone(),
+                adapter_backend,
+                surface_format,
+                &effect_texture_bind_group_layout,
+                &effect_uniform_bind_group_layout,
+            ),
             pipeline_cache,
+            compiler,
             blur_shader,
             blur_pipeline_layout,
             blur_pipelines,
@@ -1109,22 +1176,84 @@ impl EffectRenderer {
             debug_shader_pixels: Cell::new(0),
             debug_glass_rasterized_pixels: Cell::new(0),
             debug_blur_pixels: Cell::new(0),
+            debug_shader_fallback_draws: Cell::new(0),
+            debug_shader_specialized_draws: Cell::new(0),
         }
+    }
+
+    /// Queues every pipeline a page can reach on the background compiler:
+    /// the general pipelines of the framework's runtime shaders, then the
+    /// fixed effect pipelines. A frame needing one earlier waits for the
+    /// compile under way or builds it itself, as before.
+    pub(crate) fn warm_pipelines(&mut self, device: &wgpu::Device) {
+        let backend = self.adapter_backend;
+        for blend_mode in [BlendMode::SrcOver, BlendMode::Src, BlendMode::DstOut] {
+            for unmasked_nearest in [false, true] {
+                let (resource, _, _) = self.blit_pipeline_target(blend_mode, unmasked_nearest);
+                resource.warm(
+                    &self.compiler,
+                    backend,
+                    self.blit_pipeline_job(device, blend_mode, unmasked_nearest),
+                );
+            }
+        }
+        for tile_mode in 0..BLUR_TILE_MODES.len() {
+            self.blur_pipelines[tile_mode].warm(
+                &self.compiler,
+                backend,
+                self.blur_pipeline_job(device, tile_mode),
+            );
+            for (index, block) in BLUR_DOWNSAMPLE_BLOCKS.into_iter().enumerate() {
+                self.blur_downsample_pipelines[tile_mode][index].warm(
+                    &self.compiler,
+                    backend,
+                    self.blur_downsample_pipeline_job(device, block, tile_mode),
+                );
+            }
+        }
+        for blend_mode in [BlendMode::SrcOver, BlendMode::Src, BlendMode::DstOut] {
+            let (resource, _, _) = self.projective_pipeline_target(blend_mode);
+            resource.warm(
+                &self.compiler,
+                backend,
+                self.projective_pipeline_job(device, blend_mode),
+            );
+        }
+        self.offset_pipeline
+            .warm(&self.compiler, backend, self.offset_pipeline_job(device));
+        self.blur_mean_pipeline
+            .warm(&self.compiler, backend, self.mean_pipeline_job(device));
+        for (source, mode) in BUILTIN_RUNTIME_SHADERS {
+            self.shader_cache.warm(&RuntimeShader::new(source), mode);
+        }
+    }
+
+    pub(crate) fn warm_shaders(&mut self, warm_ups: &[cranpose_ui_graphics::ShaderWarmUp]) {
+        for warm_up in warm_ups {
+            self.shader_cache.warm(
+                &warm_up.shader,
+                RuntimeShaderPipelineMode::for_target(warm_up.target),
+            );
+        }
+    }
+
+    fn blur_pipeline_job(&self, device: &wgpu::Device, tile_mode: usize) -> FixedPipelineJob {
+        fullscreen_pipeline_job(
+            device,
+            self.pipeline_cache.as_ref(),
+            "Blur Pipeline",
+            &self.blur_pipeline_layout,
+            &self.blur_shader,
+            "blur_fs",
+            &[("BLUR_TILE_MODE", tile_mode as f64)],
+            self.surface_format,
+            wgpu::BlendState::REPLACE,
+        )
     }
 
     fn blur_pipeline(&self, device: &wgpu::Device, tile_mode: usize) -> &wgpu::RenderPipeline {
         self.blur_pipelines[tile_mode].get_or_init(self.adapter_backend, || {
-            create_fullscreen_pipeline(
-                device,
-                self.pipeline_cache.as_ref(),
-                "Blur Pipeline",
-                &self.blur_pipeline_layout,
-                &self.blur_shader,
-                "blur_fs",
-                &[("BLUR_TILE_MODE", tile_mode as f64)],
-                self.surface_format,
-                wgpu::BlendState::REPLACE,
-            )
+            self.blur_pipeline_job(device, tile_mode)()
         })
     }
 
@@ -1143,63 +1272,80 @@ impl EffectRenderer {
                 panic!("a blur downsample block of {block}; the scratch is 2 or 4 to 1")
             });
         self.blur_downsample_pipelines[tile_mode][index].get_or_init(self.adapter_backend, || {
-            create_fullscreen_pipeline(
-                device,
-                self.pipeline_cache.as_ref(),
-                "Blur Downsample Pipeline",
-                &self.blur_pipeline_layout,
-                &self.blur_shader,
-                "blur_downsample_fs",
-                &[
-                    ("BLUR_BLOCK", f64::from(block)),
-                    ("BLUR_TILE_MODE", tile_mode as f64),
-                ],
-                self.surface_format,
-                wgpu::BlendState::REPLACE,
-            )
+            self.blur_downsample_pipeline_job(device, block, tile_mode)()
         })
+    }
+
+    fn mean_pipeline_job(&self, device: &wgpu::Device) -> FixedPipelineJob {
+        fullscreen_pipeline_job(
+            device,
+            self.pipeline_cache.as_ref(),
+            "Mean Pipeline",
+            &self.blur_pipeline_layout,
+            &self.blur_shader,
+            "blur_mean_fs",
+            &[],
+            self.surface_format,
+            wgpu::BlendState::REPLACE,
+        )
     }
 
     fn mean_pipeline(&self, device: &wgpu::Device) -> &wgpu::RenderPipeline {
         self.blur_mean_pipeline
-            .get_or_init(self.adapter_backend, || {
-                create_fullscreen_pipeline(
-                    device,
-                    self.pipeline_cache.as_ref(),
-                    "Mean Pipeline",
-                    &self.blur_pipeline_layout,
-                    &self.blur_shader,
-                    "blur_mean_fs",
-                    &[],
-                    self.surface_format,
-                    wgpu::BlendState::REPLACE,
-                )
-            })
+            .get_or_init(self.adapter_backend, || self.mean_pipeline_job(device)())
+    }
+
+    fn blur_downsample_pipeline_job(
+        &self,
+        device: &wgpu::Device,
+        block: u32,
+        tile_mode: usize,
+    ) -> FixedPipelineJob {
+        fullscreen_pipeline_job(
+            device,
+            self.pipeline_cache.as_ref(),
+            "Blur Downsample Pipeline",
+            &self.blur_pipeline_layout,
+            &self.blur_shader,
+            "blur_downsample_fs",
+            &[
+                ("BLUR_BLOCK", f64::from(block)),
+                ("BLUR_TILE_MODE", tile_mode as f64),
+            ],
+            self.surface_format,
+            wgpu::BlendState::REPLACE,
+        )
+    }
+
+    fn offset_pipeline_job(&self, device: &wgpu::Device) -> FixedPipelineJob {
+        fullscreen_pipeline_job(
+            device,
+            self.pipeline_cache.as_ref(),
+            "Offset Pipeline",
+            &self.offset_pipeline_layout,
+            &self.offset_shader,
+            "offset_fs",
+            &[],
+            self.surface_format,
+            wgpu::BlendState::REPLACE,
+        )
     }
 
     fn offset_pipeline(&self, device: &wgpu::Device) -> &wgpu::RenderPipeline {
-        self.offset_pipeline.get_or_init(self.adapter_backend, || {
-            create_fullscreen_pipeline(
-                device,
-                self.pipeline_cache.as_ref(),
-                "Offset Pipeline",
-                &self.offset_pipeline_layout,
-                &self.offset_shader,
-                "offset_fs",
-                &[],
-                self.surface_format,
-                wgpu::BlendState::REPLACE,
-            )
-        })
+        self.offset_pipeline
+            .get_or_init(self.adapter_backend, || self.offset_pipeline_job(device)())
     }
 
-    fn blit_pipeline(
+    fn blit_pipeline_target(
         &self,
-        device: &wgpu::Device,
         blend_mode: BlendMode,
         unmasked_nearest: bool,
-    ) -> &wgpu::RenderPipeline {
-        let (resource, label, blend) = match blend_mode {
+    ) -> (
+        &LazyGpuResource<wgpu::RenderPipeline>,
+        &'static str,
+        wgpu::BlendState,
+    ) {
+        match blend_mode {
             BlendMode::Src => (
                 &self.blit_pipeline_src[usize::from(unmasked_nearest)],
                 "Blit Pipeline Src",
@@ -1215,22 +1361,41 @@ impl EffectRenderer {
                 "Blit Pipeline",
                 wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
             ),
-        };
+        }
+    }
+
+    fn blit_pipeline_job(
+        &self,
+        device: &wgpu::Device,
+        blend_mode: BlendMode,
+        unmasked_nearest: bool,
+    ) -> FixedPipelineJob {
+        let (_, label, blend) = self.blit_pipeline_target(blend_mode, unmasked_nearest);
+        fullscreen_pipeline_job(
+            device,
+            self.pipeline_cache.as_ref(),
+            label,
+            &self.blit_pipeline_layout,
+            &self.blit_shader,
+            "blit_fs",
+            &[(
+                "BLIT_UNMASKED_NEAREST",
+                if unmasked_nearest { 1.0 } else { 0.0 },
+            )],
+            self.surface_format,
+            blend,
+        )
+    }
+
+    fn blit_pipeline(
+        &self,
+        device: &wgpu::Device,
+        blend_mode: BlendMode,
+        unmasked_nearest: bool,
+    ) -> &wgpu::RenderPipeline {
+        let (resource, _, _) = self.blit_pipeline_target(blend_mode, unmasked_nearest);
         resource.get_or_init(self.adapter_backend, || {
-            create_fullscreen_pipeline(
-                device,
-                self.pipeline_cache.as_ref(),
-                label,
-                &self.blit_pipeline_layout,
-                &self.blit_shader,
-                "blit_fs",
-                &[(
-                    "BLIT_UNMASKED_NEAREST",
-                    if unmasked_nearest { 1.0 } else { 0.0 },
-                )],
-                self.surface_format,
-                blend,
-            )
+            self.blit_pipeline_job(device, blend_mode, unmasked_nearest)()
         })
     }
 
@@ -1239,22 +1404,21 @@ impl EffectRenderer {
         blend_mode: BlendMode,
         unmasked_nearest: bool,
     ) -> &wgpu::RenderPipeline {
-        let resource = match blend_mode {
-            BlendMode::Src => &self.blit_pipeline_src[usize::from(unmasked_nearest)],
-            BlendMode::DstOut => &self.blit_pipeline_dst_out[usize::from(unmasked_nearest)],
-            _ => &self.blit_pipeline[usize::from(unmasked_nearest)],
-        };
-        resource
+        self.blit_pipeline_target(blend_mode, unmasked_nearest)
+            .0
             .get()
             .expect("prepared composite must initialize its blit pipeline")
     }
 
-    fn projective_blit_pipeline(
+    fn projective_pipeline_target(
         &self,
-        device: &wgpu::Device,
         blend_mode: BlendMode,
-    ) -> &wgpu::RenderPipeline {
-        let (resource, label, blend) = match blend_mode {
+    ) -> (
+        &LazyGpuResource<wgpu::RenderPipeline>,
+        &'static str,
+        wgpu::BlendState,
+    ) {
+        match blend_mode {
             BlendMode::Src => (
                 &self.projective_blit_pipeline_src,
                 "Projective Blit Pipeline Src",
@@ -1270,27 +1434,40 @@ impl EffectRenderer {
                 "Projective Blit Pipeline",
                 wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
             ),
-        };
+        }
+    }
+
+    fn projective_pipeline_job(
+        &self,
+        device: &wgpu::Device,
+        blend_mode: BlendMode,
+    ) -> FixedPipelineJob {
+        let (_, label, blend) = self.projective_pipeline_target(blend_mode);
+        projective_pipeline_job(
+            device,
+            self.pipeline_cache.as_ref(),
+            label,
+            &self.projective_blit_pipeline_layout,
+            &self.projective_blit_shader,
+            self.surface_format,
+            blend,
+        )
+    }
+
+    fn projective_blit_pipeline(
+        &self,
+        device: &wgpu::Device,
+        blend_mode: BlendMode,
+    ) -> &wgpu::RenderPipeline {
+        let (resource, _, _) = self.projective_pipeline_target(blend_mode);
         resource.get_or_init(self.adapter_backend, || {
-            create_projective_pipeline(
-                device,
-                self.pipeline_cache.as_ref(),
-                label,
-                &self.projective_blit_pipeline_layout,
-                &self.projective_blit_shader,
-                self.surface_format,
-                blend,
-            )
+            self.projective_pipeline_job(device, blend_mode)()
         })
     }
 
     fn initialized_projective_blit_pipeline(&self, blend_mode: BlendMode) -> &wgpu::RenderPipeline {
-        let resource = match blend_mode {
-            BlendMode::Src => &self.projective_blit_pipeline_src,
-            BlendMode::DstOut => &self.projective_blit_pipeline_dst_out,
-            _ => &self.projective_blit_pipeline,
-        };
-        resource
+        self.projective_pipeline_target(blend_mode)
+            .0
             .get()
             .expect("prepared projective composite must initialize its pipeline")
     }
@@ -1344,6 +1521,12 @@ impl EffectRenderer {
         stats
             .blur_pixels
             .set(stats.blur_pixels.get() + self.debug_blur_pixels.get());
+        stats.shader_pipeline_fallback_draws.set(
+            stats.shader_pipeline_fallback_draws.get() + self.debug_shader_fallback_draws.get(),
+        );
+        stats
+            .shader_specialized_draws
+            .set(stats.shader_specialized_draws.get() + self.debug_shader_specialized_draws.get());
         self.debug_command_stats.set(FrameCommandStats::default());
         self.debug_blurs.set(0);
         self.debug_substrates.set(0);
@@ -1352,6 +1535,17 @@ impl EffectRenderer {
         self.debug_shader_pixels.set(0);
         self.debug_glass_rasterized_pixels.set(0);
         self.debug_blur_pixels.set(0);
+        self.debug_shader_fallback_draws.set(0);
+        self.debug_shader_specialized_draws.set(0);
+    }
+
+    fn record_shader_pipeline_fit(&self, fit: ShaderPipelineFit) {
+        let counter = match fit {
+            ShaderPipelineFit::Fallback => &self.debug_shader_fallback_draws,
+            ShaderPipelineFit::Specialized => &self.debug_shader_specialized_draws,
+            ShaderPipelineFit::General => return,
+        };
+        counter.set(counter.get() + 1);
     }
 
     pub(crate) fn record_blur_pass(&self) {
@@ -1629,87 +1823,93 @@ impl EffectRenderer {
         }
     }
 
+    /// One draw of the mean pipeline over `source_region` of `source`: the
+    /// row means into a column, or the column into one texel, at `dest`.
+    fn mean_draw<'a>(
+        &self,
+        source: &'a OffscreenTarget,
+        source_region: (u32, u32, u32, u32),
+        dest: (u32, u32, u32, u32),
+        horizontal: bool,
+    ) -> BlurDraw<'a> {
+        BlurDraw {
+            source,
+            uniforms: self.blur_uniforms(
+                horizontal,
+                (source.width, source.height),
+                source_region,
+                dest,
+                (0.0, 0.0),
+                TileMode::Clamp,
+            ),
+            filter: BlurFilter::Mean,
+            scissor: Some(dest),
+        }
+    }
+
+    /// The means of a side atlas with no blur passes to ride in: the row
+    /// means into `scratch`, then each column into its texel at `dest` in
+    /// `output`, cleared first unless the output is the atlas.
+    #[allow(clippy::too_many_arguments)]
     fn encode_mean_substrates<C: FrameCommandRecorder>(
         &mut self,
         recorder: &mut C,
         device: &wgpu::Device,
         atlas: &OffscreenTarget,
         scratch: &OffscreenTarget,
-        result: &OffscreenTarget,
-        substrates: &[SubstrateRegion],
+        output: &OffscreenTarget,
+        output_is_atlas: bool,
+        means: &[&SubstrateRegion],
     ) -> bool {
-        if !substrates
-            .iter()
-            .any(|s| matches!(s.average, SubstrateAverage::Mean))
-        {
+        if means.is_empty() {
             return false;
         }
-        for horizontal in [true, false] {
-            let source = if horizontal { atlas } else { scratch };
-            let target = if horizontal { scratch } else { result };
-            let draws = substrates
-                .iter()
-                .filter(|s| matches!(s.average, SubstrateAverage::Mean))
-                .map(|region| {
-                    let source_region = if horizontal {
-                        region.source
-                    } else {
-                        region.scratch
-                    };
-                    let dest = if horizontal {
-                        region.scratch
-                    } else {
-                        (region.scratch.0, region.scratch.1, 1, 1)
-                    };
-                    BlurDraw {
-                        source,
-                        uniforms: self.blur_uniforms(
-                            horizontal,
-                            (source.width, source.height),
-                            source_region,
-                            dest,
-                            (0.0, 0.0),
-                            TileMode::Clamp,
-                        ),
-                        filter: BlurFilter::Mean,
-                        scissor: Some(dest),
-                    }
-                })
-                .collect::<Vec<_>>();
-            self.encode_blur_pass(
-                recorder,
-                device,
-                "Substrate Mean Pass",
-                UploadAllocatorId::BlurDownsample,
-                &target.view,
-                (target.width, target.height),
-                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                &draws,
-            );
-        }
+        let horizontal: Vec<BlurDraw<'_>> = means
+            .iter()
+            .map(|mean| self.mean_draw(atlas, mean.source, mean.scratch, true))
+            .collect();
+        self.encode_blur_pass(
+            recorder,
+            device,
+            "Substrate Mean Pass",
+            UploadAllocatorId::BlurDownsample,
+            &scratch.view,
+            (scratch.width, scratch.height),
+            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+            &horizontal,
+        );
+        let vertical: Vec<BlurDraw<'_>> = means
+            .iter()
+            .map(|mean| self.mean_draw(scratch, mean.scratch, mean.dest, false))
+            .collect();
+        self.encode_blur_pass(
+            recorder,
+            device,
+            "Substrate Mean Pass",
+            UploadAllocatorId::BlurDownsample,
+            &output.view,
+            (output.width, output.height),
+            if output_is_atlas {
+                wgpu::LoadOp::Load
+            } else {
+                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
+            },
+            &vertical,
+        );
         true
     }
 
-    pub(crate) fn encode_blur_atlas_passes<C: FrameCommandRecorder>(
-        &mut self,
-        recorder: &mut C,
-        device: &wgpu::Device,
-        atlas: &OffscreenTarget,
-        scratch: &OffscreenTarget,
-        result: &OffscreenTarget,
-        work: AtlasSideWork<'_>,
-    ) {
-        let AtlasSideWork {
-            blurs: regions,
-            averages: substrates,
-            blur_output,
-        } = work;
-        let has_means =
-            self.encode_mean_substrates(recorder, device, atlas, scratch, result, substrates);
-        let blocks: Vec<u32> = regions
-            .iter()
-            .map(|region| blur_block(region.source, region.scratch))
-            .collect();
+    /// The downsample pass's draws: every blur whose scratch is coarser
+    /// than its source, the block averages, and each riding mean's row
+    /// reduction into its column.
+    fn downsample_draws<'a>(
+        &self,
+        atlas: &'a OffscreenTarget,
+        regions: &[BlurRegion],
+        blocks: &[u32],
+        substrates: &[SubstrateRegion],
+        riding_means: &[&SubstrateRegion],
+    ) -> Vec<BlurDraw<'a>> {
         let downsample_draw = |source: (u32, u32, u32, u32),
                                scratch: (u32, u32, u32, u32),
                                block: u32,
@@ -1726,9 +1926,9 @@ impl EffectRenderer {
             filter: BlurFilter::Downsample(block),
             scissor: Some(scratch),
         };
-        let downsample: Vec<BlurDraw<'_>> = regions
+        regions
             .iter()
-            .zip(&blocks)
+            .zip(blocks)
             .filter(|(_, block)| **block > 1)
             .map(|(region, block)| {
                 let mut draw =
@@ -1745,29 +1945,28 @@ impl EffectRenderer {
                 draw.scissor = Some(substrate.pass_scissor());
                 Some(draw)
             }))
-            .collect();
-        if !downsample.is_empty() {
-            self.encode_blur_pass(
-                recorder,
-                device,
-                "Blur Downsample Pass",
-                UploadAllocatorId::BlurDownsample,
-                &result.view,
-                (result.width, result.height),
-                if has_means {
-                    wgpu::LoadOp::Load
-                } else {
-                    wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
-                },
-                &downsample,
-            );
-        }
-        if regions.is_empty() {
-            return;
-        }
-        let horizontal: Vec<BlurDraw<'_>> = regions
+            .chain(
+                riding_means
+                    .iter()
+                    .map(|mean| self.mean_draw(atlas, mean.source, mean.scratch, true)),
+            )
+            .collect()
+    }
+
+    /// The horizontal pass's draws: each blur's kernel over its downsample
+    /// in `result` or its source in the atlas, and each riding mean's
+    /// column reduction into one texel of the scratch.
+    fn horizontal_draws<'a>(
+        &self,
+        atlas: &'a OffscreenTarget,
+        result: &'a OffscreenTarget,
+        regions: &[BlurRegion],
+        blocks: &[u32],
+        riding_means: &[&SubstrateRegion],
+    ) -> Vec<BlurDraw<'a>> {
+        regions
             .iter()
-            .zip(&blocks)
+            .zip(blocks)
             .map(|(region, block)| {
                 let (source, source_region) = if *block > 1 {
                     (result, region.scratch)
@@ -1788,18 +1987,27 @@ impl EffectRenderer {
                     scissor: Some(region.pass_scissor((0, 1))),
                 }
             })
-            .collect();
-        self.encode_blur_pass(
-            recorder,
-            device,
-            "Blur Horizontal Pass",
-            UploadAllocatorId::BlurHorizontal,
-            &scratch.view,
-            (scratch.width, scratch.height),
-            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-            &horizontal,
-        );
-        let vertical: Vec<BlurDraw<'_>> = regions
+            .chain(riding_means.iter().map(|mean| {
+                self.mean_draw(
+                    result,
+                    mean.scratch,
+                    (mean.scratch.0, mean.scratch.1, 1, 1),
+                    false,
+                )
+            }))
+            .collect()
+    }
+
+    /// The vertical pass's draws: each blur's kernel over the scratch into
+    /// its destination, and each riding mean's texel carried from the
+    /// scratch to its destination.
+    fn vertical_draws<'a>(
+        &self,
+        scratch: &'a OffscreenTarget,
+        regions: &[BlurRegion],
+        riding_means: &[&SubstrateRegion],
+    ) -> Vec<BlurDraw<'a>> {
+        regions
             .iter()
             .map(|region| BlurDraw {
                 source: scratch,
@@ -1822,8 +2030,92 @@ impl EffectRenderer {
                     )
                 }),
             })
-            .collect();
+            .chain(riding_means.iter().map(|mean| {
+                self.mean_draw(
+                    scratch,
+                    (mean.scratch.0, mean.scratch.1, 1, 1),
+                    mean.dest,
+                    false,
+                )
+            }))
+            .collect()
+    }
+
+    /// The side passes of a stage's atlas: every blur's downsample,
+    /// horizontal and vertical pass with the block averages in the
+    /// downsample pass, and the means. A mean's row reduction rides in the
+    /// downsample pass and its column reduction in the horizontal pass when a
+    /// blur runs them, and its texel is carried into the vertical pass;
+    /// without a blur the means take their own two passes. Blurs and means
+    /// land in `result` at their scratch slots, or in `blur_output` at each
+    /// region's `dest`.
+    pub(crate) fn encode_blur_atlas_passes<C: FrameCommandRecorder>(
+        &mut self,
+        recorder: &mut C,
+        device: &wgpu::Device,
+        atlas: &OffscreenTarget,
+        scratch: &OffscreenTarget,
+        result: &OffscreenTarget,
+        work: AtlasSideWork<'_>,
+    ) {
+        let AtlasSideWork {
+            blurs: regions,
+            averages: substrates,
+            blur_output,
+        } = work;
         let output = blur_output.unwrap_or(result);
+        let means: Vec<&SubstrateRegion> = substrates
+            .iter()
+            .filter(|substrate| matches!(substrate.average, SubstrateAverage::Mean))
+            .collect();
+        let folded = !regions.is_empty() && !means.is_empty();
+        let riding_means: &[&SubstrateRegion] = if folded { &means } else { &[] };
+        let has_means = !folded
+            && self.encode_mean_substrates(
+                recorder,
+                device,
+                atlas,
+                scratch,
+                output,
+                blur_output.is_some(),
+                &means,
+            );
+        let blocks: Vec<u32> = regions
+            .iter()
+            .map(|region| blur_block(region.source, region.scratch))
+            .collect();
+        let downsample = self.downsample_draws(atlas, regions, &blocks, substrates, riding_means);
+        if !downsample.is_empty() {
+            self.encode_blur_pass(
+                recorder,
+                device,
+                "Blur Downsample Pass",
+                UploadAllocatorId::BlurDownsample,
+                &result.view,
+                (result.width, result.height),
+                if has_means && blur_output.is_none() {
+                    wgpu::LoadOp::Load
+                } else {
+                    wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
+                },
+                &downsample,
+            );
+        }
+        if regions.is_empty() {
+            return;
+        }
+        let horizontal = self.horizontal_draws(atlas, result, regions, &blocks, riding_means);
+        self.encode_blur_pass(
+            recorder,
+            device,
+            "Blur Horizontal Pass",
+            UploadAllocatorId::BlurHorizontal,
+            &scratch.view,
+            (scratch.width, scratch.height),
+            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+            &horizontal,
+        );
+        let vertical = self.vertical_draws(scratch, regions, riding_means);
         self.encode_blur_pass(
             recorder,
             device,
@@ -1918,18 +2210,29 @@ impl EffectRenderer {
         item: &ShaderCompositeBatchItem<'a>,
     ) -> Option<PreparedShaderDraw<'a>> {
         let mut pipelines = SmallVec::new();
+        let mut fit = ShaderPipelineFit::General;
+        let mut general = None;
         for &variant in shader_draw_variants(item.shader) {
-            let pipeline = self.shader_cache.get_or_create(
-                device,
+            let (pipeline, variant_fit) = self.shader_cache.get_or_create(
                 item.shader,
-                self.surface_format,
-                &self.effect_texture_bind_group_layout,
-                &self.effect_uniform_bind_group_layout,
                 RuntimeShaderPipelineMode::PremultipliedSrcOver,
                 variant,
             )?;
-            pipelines.push((variant, pipeline.clone()));
+            match variant_fit {
+                ShaderPipelineFit::Fallback => general = Some(pipeline.clone()),
+                ShaderPipelineFit::Specialized => {
+                    fit = ShaderPipelineFit::Specialized;
+                    pipelines.push((variant, pipeline.clone()));
+                }
+                ShaderPipelineFit::General => pipelines.push((variant, pipeline.clone())),
+            }
         }
+        if let Some(general) = general {
+            pipelines.clear();
+            pipelines.push((ShaderDrawVariant::Whole, general));
+            fit = ShaderPipelineFit::Fallback;
+        }
+        self.record_shader_pipeline_fit(fit);
         let mut padded = item.shader.uniforms_padded();
         let (dest_x, dest_y, _, _) = item.dest_viewport;
         let mask = item.rounded_mask.map(|mask| RoundedCompositeMask {
@@ -2061,32 +2364,15 @@ impl EffectRenderer {
             bytemuck::cast_slice(&padded),
         );
 
-        if self
-            .shader_cache
-            .get_or_create(
-                device,
-                shader,
-                self.surface_format,
-                &self.effect_texture_bind_group_layout,
-                &self.effect_uniform_bind_group_layout,
-                options.pipeline_mode,
-                ShaderDrawVariant::Whole,
-            )
-            .is_none()
-        {
-            return false;
-        }
-        let Some(pipeline) = self.shader_cache.get_or_create(
-            device,
+        let Some((pipeline, fit)) = self.shader_cache.get_or_create(
             shader,
-            self.surface_format,
-            &self.effect_texture_bind_group_layout,
-            &self.effect_uniform_bind_group_layout,
             options.pipeline_mode,
             ShaderDrawVariant::Whole,
         ) else {
             return false;
         };
+        let pipeline = pipeline.clone();
+        self.record_shader_pipeline_fit(fit);
 
         let texture_bind_group = source.get_or_create_bind_group(
             device,
@@ -2096,7 +2382,7 @@ impl EffectRenderer {
 
         let mut pass = recorder.begin_color_pass("Shader Effect Pass", dest_view, options.load_op);
 
-        pass.set_pipeline(pipeline);
+        pass.set_pipeline(&pipeline);
         pass.set_bind_group(0, texture_bind_group, &[]);
         pass.set_bind_group(1, &uniform.bind_group, &[uniform.offset]);
         if let Some((x, y, width, height)) = options.dest_viewport {
@@ -2136,23 +2422,34 @@ impl EffectRenderer {
                 blur_output: None,
             },
         );
-        self.encode_composite_to_view_pass(
-            recorder,
-            device,
-            source,
-            &packed.view,
-            CompositePassOptions {
-                alpha: 1.0,
-                load_op: wgpu::LoadOp::Load,
-                scissor: None,
-                rounded_mask: None,
-                blend_mode: BlendMode::Src,
-                dest_viewport: Some((0.0, 0.0, source.width as f32, source.height as f32)),
-                source_viewport: None,
-                sample_mode: CompositeSampleMode::Linear,
-            },
-        );
-        self.record_composite_pass();
+        let copied = copy_compatible(source, packed);
+        if copied {
+            recorder.copy_texture_region(TextureRegionCopy {
+                source,
+                source_origin: [0, 0],
+                dest: packed,
+                dest_origin: [0, 0],
+                size: [source.width, source.height],
+            });
+        } else {
+            self.encode_composite_to_view_pass(
+                recorder,
+                device,
+                source,
+                &packed.view,
+                CompositePassOptions {
+                    alpha: 1.0,
+                    load_op: wgpu::LoadOp::Load,
+                    scissor: None,
+                    rounded_mask: None,
+                    blend_mode: BlendMode::Src,
+                    dest_viewport: Some((0.0, 0.0, source.width as f32, source.height as f32)),
+                    source_viewport: None,
+                    sample_mode: CompositeSampleMode::Linear,
+                },
+            );
+            self.record_composite_pass();
+        }
         if !self.encode_shader_pass(
             recorder,
             device,
@@ -2174,7 +2471,7 @@ impl EffectRenderer {
         }
         self.record_substrates(shader.substrates().len() as u32);
         self.debug_effects.set(self.debug_effects.get() + 1);
-        Ok(layout.passes() + 2)
+        Ok(layout.passes() + 1 + u32::from(!copied))
     }
 
     #[allow(clippy::too_many_arguments)]

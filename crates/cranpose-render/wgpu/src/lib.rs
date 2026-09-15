@@ -31,6 +31,7 @@ mod opaque_prefix;
 mod output_conversion;
 pub(crate) mod pass_timing;
 mod pipeline;
+mod pipeline_compiler;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod pipeline_disk_cache;
 #[cfg(not(target_arch = "wasm32"))]
@@ -57,7 +58,7 @@ use cranpose_render_common::{
     },
 };
 use cranpose_ui::{LayoutTree, TextMeasurer};
-use cranpose_ui_graphics::{Rect, Size};
+use cranpose_ui_graphics::{Rect, ShaderWarmUp, Size};
 pub use frame_packet::PresentTimings;
 use frame_packet::RenderReturns;
 #[doc(hidden)]
@@ -345,7 +346,7 @@ impl WgpuRenderer {
     ) {
         self.retire_live_backend();
         self.renderer_epoch = self.renderer_epoch.wrapping_add(1);
-        self.backend = PresentBackend::Sync(Box::new(GpuRenderer::new(
+        let mut gpu_renderer = GpuRenderer::new(
             device,
             queue,
             surface_format,
@@ -353,7 +354,18 @@ impl WgpuRenderer {
             adapter_downlevel,
             self.frontend.text_fonts.clone(),
             self.renderer_epoch,
-        )));
+        );
+        gpu_renderer.warm_shaders(&self.frontend.shader_warm_ups);
+        self.backend = PresentBackend::Sync(Box::new(gpu_renderer));
+    }
+
+    /// Registers runtime shaders to compile on the background compiler at
+    /// every [`init_gpu`][Self::init_gpu], before their first draw, so an
+    /// app's own shaders reach the compiler the way the framework's do.
+    /// Call it before the first `init_gpu`; each warm-up names the target
+    /// its pipeline draws to.
+    pub fn warm_shaders(&mut self, warm_ups: impl IntoIterator<Item = ShaderWarmUp>) {
+        self.frontend.shader_warm_ups.extend(warm_ups);
     }
 
     /// [`init_gpu`][Self::init_gpu] for the threaded present runtime
@@ -392,6 +404,7 @@ impl WgpuRenderer {
             adapter_downlevel,
             text_fonts: self.frontend.text_fonts.clone(),
             renderer_epoch: self.renderer_epoch,
+            shader_warm_ups: self.frontend.shader_warm_ups.clone(),
             clock,
         };
         let handle = PresentHandle::spawn(init, waker).map_err(WgpuRendererError::Wgpu)?;
@@ -419,6 +432,7 @@ impl WgpuRenderer {
             adapter_downlevel,
             text_fonts: self.frontend.text_fonts.clone(),
             renderer_epoch: self.renderer_epoch,
+            shader_warm_ups: self.frontend.shader_warm_ups.clone(),
             clock: None,
         };
         let (handle, state, msg_rx) = PresentHandle::new_inline(init, Arc::new(|| {}));

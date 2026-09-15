@@ -3110,6 +3110,7 @@ fn wgpu_renderer_for_surface(
     scale_factor: f64,
 ) -> WgpuRenderer {
     let mut renderer = WgpuRenderer::with_text_system(text_system);
+    renderer.warm_shaders(cranpose_liquid::shader_warm_ups());
     renderer.set_root_scale(scale_factor as f32);
     renderer.init_gpu(device, queue, surface_format, backend, downlevel);
     renderer

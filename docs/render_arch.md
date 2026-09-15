@@ -70,8 +70,17 @@ composites the resolved textures.
   `region_map`); what is not yet on the page is drawn in one scissored
   fix-up pass. Substrates (`SubstrateSpec`, `MAX_SUBSTRATES`) are rendered
   beside the atlas, one downsample + horizontal + vertical per stage at
-  scratch size packed to the blurred regions; a declaration is capture
-  geometry and must not follow a runtime value. Every glass is shaded once.
+  scratch size packed to the blurred regions; a mean's row and column
+  reductions ride in the downsample and horizontal passes of a stage that
+  blurs and its texel is carried in the vertical pass, and every result
+  with a slot in the atlas is drawn there instead of copied
+  (`encode_blur_atlas_passes`, exact: the same draws, other targets). A
+  chained substrate's source is copied beside its substrates, never
+  blitted. A child page's transparent clear waits for its first draw: a
+  capture of an untouched page skips the identity blit and a child
+  reading it through its base clears it first (`start_page`). A
+  declaration is capture geometry and must not follow a runtime value.
+  Every glass is shaded once.
   `plan_stage` lays every stage out before any member is served from the
   cache and each key hashes its own placement. Contracts
   `backdrop_pass_batching.rs` (one full-screen pass, one copy per glass,
@@ -115,7 +124,21 @@ composites the resolved textures.
   page's first op that is a plain opaque rect is admitted on its second
   frame by a split first pass and a same-format copy back; on later frames
   a page-covering prefix is copied into the page and the pass loads it, a
-  partial one is composited over the clear (`AdmissionCost::Copy`).
+  partial one is composited over the clear (`AdmissionCost::Copy`). A
+  render effect over a retained child surface is a pure function of the
+  surface's content and the effect, so its output is admitted on the
+  second frame the same output is wanted (`effect_over_surface`,
+  `LayerRasterCacheKey::layer_effect`, `AdmissionCost::Copy`) and read back
+  while both hold; an animated effect over still content is drawn afresh.
+  Contract `layer_effect_cache.rs`.
+- **Nothing drawn, nothing composited** (`composites_nothing`): a child
+  that draws nothing whose render effect keeps a transparent source
+  transparent (`RenderEffect::preserves_transparency`: blurs, offsets, and
+  shaders that declare it, such as a glass content mask) resolves its
+  backdrop and no more, since source-over of a transparent source leaves
+  the page as it is. Contract `transparent_child.rs`; the liquid tab bar's
+  empty surface and lens layers and its unlit lighting
+  (`tab_lighting_rest_identity.rs`) cost the frame nothing on that account.
   Reference toggles `CRANPOSE_NO_BACKDROP_CACHE`, `CRANPOSE_NO_FILL_CACHE`.
   Contracts `glass_layer_cache.rs`, `backdrop_atlas_parity.rs`,
   `opaque_prefix_cache.rs` (byte identity at three scales, covering and
@@ -135,9 +158,65 @@ composites the resolved textures.
   (folded vs general, split vs whole, at zero bytes), the liquid crate's
   flag-table unit tests, `glass_split.rs` unit tests (the hole lies where
   the rim draw discards).
+- **Pipeline compilation** (`pipeline_compiler.rs`, `lazy_resource.rs`,
+  `shader_cache.rs`): the driver compiles a glass pipeline in ~100 ms and a
+  fixed effect pipeline in ~70 ms (Metal, no disk cache), so no frame waits
+  for one it can avoid. One background thread compiles in queue order; a
+  `LazyGpuResource` is one shared cell, so a frame arriving mid-compile
+  waits for that compile instead of starting another. `GpuRenderer::new`
+  queues what the first frame draws first (glyph, image, output and the
+  fixed effect pipelines) and the general pipelines of the shipped runtime
+  shaders last, since one liquid glass compile is a second on Mali and
+  nothing draws it before the first glass screen. The six general shape
+  pipelines stay synchronous in `ShapePipelines::new`: the creating thread
+  is idle until the first frame, so building them there overlaps the
+  compiler's work, where queuing them ahead on the one compiler thread put
+  the Mate 20 X's cold first frame at 286-755 ms against 245-294 ms.
+  Specialized shape pipelines (Vulkan only) queue on the compiler thread
+  behind at most two pending keys, the general shape pipeline drawing until
+  each lands. Shaders a widget crate assembles at runtime reach the queue
+  through `WgpuRenderer::warm_shaders`, each `ShaderWarmUp` naming its
+  `ShaderTarget` (`Page` composites with premultiplied source-over, `Layer`
+  renders into the layer with replace) and keeping its overrides, so a mask
+  pass warms the pipeline it draws with; every platform registers
+  `cranpose_liquid::shader_warm_ups()` (tab lighting, the two vibrancy
+  passes) before `init_gpu`, and the list applies again at every later
+  `init_gpu` (`shader_warm_ups.rs`). A runtime shader that
+  declares its specialization exact (`set_specialization_exact`; liquid
+  glass does) has its specializations (override set, interior and rim)
+  compiled in the background while its general pipeline draws in their
+  place: a fold substitutes the value the uniform holds, so the pictures
+  are the same bytes (`glass_specialization_parity.rs`, which also proves
+  the first frame draws through the fallback and later frames land on the
+  same bytes; Metal's fast-math compile moved one lens-rim pixel by one
+  unit between the two, so reference captures settle first). An override
+  that picks a different picture, such as vibrancy's mask pass, compiles
+  inside the frame that first draws it, once per install. Per-material folds are on for Android only
+  (`glass_material_folds_enabled`), so on Android the compiler keeps one
+  pipeline pair per material off the present thread, while the desktop
+  pays only the fixed set and the general glass pipelines.
+  `shader_pipeline_fallback_draws` counts such draws; captures that
+  assert per-draw statistics settle on zero first (`settled_capture`).
+  `CRANPOSE_BACKGROUND_PIPELINES=0` compiles everything at first use.
+  Across launches a shader compiles once per install and once more when
+  its source changes; every launch still creates the pipeline objects from
+  a cache, off the render thread. Android keeps the driver's compiled
+  pipelines in the `pipeline_disk_cache` blob (Pixel Watch 3: ~20 ms per
+  glass pipeline from the blob, 650-990 ms cold). Mesa on Linux serializes
+  nothing into that blob (Intel ANV 26.2: a 96 B header, the same from
+  unpatched CI runs) and keeps its own `mesa_shader_cache` instead, which
+  brings a relaunch to ~25 ms per glass pipeline. Metal offers wgpu no
+  cache (`PIPELINE_CACHE` is Vulkan-only in wgpu 29 and 30) but macOS
+  caches compiled pipelines itself: relaunching an unchanged binary
+  compiled the liquid page's 44 pipelines in 25 ms against 731 ms on the
+  first launch (2026-09-14). DX12 recompiles HLSL each launch and only the
+  driver caches the DXIL to ISA step; browsers cache for the web. A blob
+  that stays at 96 B is a driver that serializes nothing, not a broken
+  cache.
 - **Diagnostics**: `RenderStatsSnapshot` (passes, pass and copy pixels,
   bytes, cache traffic, `shader_pixels`, `glass_rasterized_pixels`,
-  `blur_pixels`, `shape_fill_pixels_by_class`), `CRANPOSE_GPU_PASS_TIMING`
+  `blur_pixels`, `shape_fill_pixels_by_class`,
+  `shader_pipeline_fallback_draws`), `CRANPOSE_GPU_PASS_TIMING`
   (the watch has timestamps, Mali does not), `CRANPOSE_GPU_STAGE_DIAG`,
   `CRANPOSE_ABLATE` (`stages`, `glass`, `substrates`, `blur`, `text`,
   `shape`, `shape_fill`, `glass_dispersion`, `glass_refraction`: bounds by
@@ -211,6 +290,8 @@ Exact levers, each against the tree without it:
 | default curve fold 81af46dc | -0.8, -0.9, -4.1, +1.6 | not run | reverted |
 | curve as constant d82d86a8 | +2.7, +2.3, +3.3, +2.0 | not run | attribution only |
 | shared channel walk (a channel whose clamped interior equals the base channel's takes the transmitted path; two `channel_lens_displacement` evaluations and two taps skipped across the face) | +0.02, +1.96, +0.38, -0.54 | +0.46 on the 28 plateau, Layer Pass 1 12.09/11.65 → 11.99 ms; the run crossed 52 → 40 → 28 from a cold start | not adopted: exact on both GPUs, nil |
+| tab bar zero-output work, PR #671 (a child that composites nothing is skipped, a render effect over a retained surface is cached, unlit lighting is omitted); demo Liquid tab, present cycle p50 29 → 20-25 ms | +7.5, +5.1, +5.3, +9.9 | not run | kept: 31 → 21 passes per scroll step, byte-exact |
+| stage side passes folded, PR #671 (means ride in the blur passes, substrates land in their atlas slots, a chained substrate's source is copied, a child page's clear waits for its first draw); demo Liquid tab, present cycle p50 25 → 20-25 ms | +0.9, +1.9, +1.8, +3.8 | not run | kept: 21 → 19 passes and 13 → 11 copies per scroll step, byte-exact on the second run (the first run after a rebuild draws up to 13 frames through the compile-time fallback pipelines) |
 
 Legs: `<label>-<device>-<n>-<arm>/` under the shared root, one `report.json`
 and `logcat.txt` each; pass rows by `pass_timing_from_logcat.py`.

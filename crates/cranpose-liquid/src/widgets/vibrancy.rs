@@ -7,7 +7,7 @@ use cranpose_ui::{
 };
 use cranpose_ui_graphics::{
     BlendMode, Color, CompositingStrategy, GraphicsLayer, RUNTIME_SHADER_PRELUDE_WGSL, Rect,
-    RenderEffect, RuntimeShader, Size, SubstrateSpec,
+    RenderEffect, RuntimeShader, ShaderTarget, ShaderWarmUp, Size, SubstrateSpec,
 };
 
 #[derive(Clone, Copy, PartialEq)]
@@ -32,13 +32,7 @@ enum InkPass {
     Mask,
 }
 
-fn effect(
-    pass: InkPass,
-    size: Size,
-    selection: InkSelection,
-    grid: InkGrid,
-    dark: bool,
-) -> RenderEffect {
+fn shader(pass: InkPass) -> RuntimeShader {
     static SHADER: OnceLock<RuntimeShader> = OnceLock::new();
     let mut shader = SHADER
         .get_or_init(|| {
@@ -59,6 +53,32 @@ fn effect(
     } else {
         &[]
     });
+    shader
+}
+
+/// The ink shaders: the colour pass composited over the content's backdrop
+/// and the mask pass rendered into its `DstOut` layer.
+pub(super) fn shader_warm_ups() -> [ShaderWarmUp; 2] {
+    [
+        ShaderWarmUp {
+            shader: shader(InkPass::Color),
+            target: ShaderTarget::Page,
+        },
+        ShaderWarmUp {
+            shader: shader(InkPass::Mask),
+            target: ShaderTarget::Layer,
+        },
+    ]
+}
+
+fn effect(
+    pass: InkPass,
+    size: Size,
+    selection: InkSelection,
+    grid: InkGrid,
+    dark: bool,
+) -> RenderEffect {
+    let mut shader = shader(pass);
     shader.set_float(12, f32::from(dark));
     shader.set_float2(13, selection.activity, selection.optical_scale);
     shader.set_float2(16, selection.projection.width, selection.projection.height);
@@ -130,4 +150,62 @@ pub(super) fn VibrantContent(
             );
         },
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn selection() -> InkSelection {
+        InkSelection {
+            bounds: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 10.0,
+                height: 10.0,
+            },
+            color: Color::WHITE,
+            content_zoom: 1.0,
+            activity: 0.0,
+            optical_scale: 1.0,
+            projection: Size {
+                width: 10.0,
+                height: 10.0,
+            },
+        }
+    }
+
+    fn grid() -> InkGrid {
+        InkGrid {
+            first_center: (5.0, 5.0),
+            pitch: 10.0,
+            count: 1,
+        }
+    }
+
+    #[test]
+    fn each_warm_up_names_the_pipeline_its_pass_draws() {
+        let warm_ups = shader_warm_ups();
+        let size = Size {
+            width: 10.0,
+            height: 10.0,
+        };
+        for (warm_up, pass, target) in [
+            (&warm_ups[0], InkPass::Color, ShaderTarget::Page),
+            (&warm_ups[1], InkPass::Mask, ShaderTarget::Layer),
+        ] {
+            let RenderEffect::Shader { shader } = effect(pass, size, selection(), grid(), false)
+            else {
+                panic!("vibrancy is a runtime shader effect");
+            };
+            assert_eq!(warm_up.shader.source_hash(), shader.source_hash());
+            assert_eq!(warm_up.shader.overrides_hash(), shader.overrides_hash());
+            assert_eq!(warm_up.target, target);
+        }
+        assert_ne!(
+            warm_ups[0].shader.overrides_hash(),
+            warm_ups[1].shader.overrides_hash(),
+            "the mask override is what tells the two pipelines apart"
+        );
+    }
 }

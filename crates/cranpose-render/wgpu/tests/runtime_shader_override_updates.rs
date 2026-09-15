@@ -3,10 +3,7 @@ mod support;
 #[path = "../src/test_support.rs"]
 mod shared_test_support;
 
-use cranpose_render_common::{
-    Renderer,
-    graph::{ProjectiveTransform, RenderNode},
-};
+use cranpose_render_common::graph::{ProjectiveTransform, RenderNode};
 use cranpose_ui_graphics::{
     Color, GraphicsLayer, RUNTIME_SHADER_PRELUDE_WGSL, Rect, RenderEffect, RuntimeShader,
 };
@@ -55,12 +52,12 @@ fn changing_cloned_overrides_replaces_the_pipeline_without_changing_the_original
             },
             vec![support::solid_rect(bounds, Color::WHITE)],
         );
-        renderer.scene_mut().graph = Some(support::page_graph(
+        let frame = support::capture_graph_settled(
+            &mut renderer,
+            support::page_graph(32, 24, vec![RenderNode::Layer(Box::new(layer))]),
             32,
             24,
-            vec![RenderNode::Layer(Box::new(layer))],
-        ));
-        let frame = renderer.capture_frame(32, 24).expect("override frame");
+        );
         assert_eq!(frame.pixels.len(), 32 * 24 * 4);
         assert!(
             frame

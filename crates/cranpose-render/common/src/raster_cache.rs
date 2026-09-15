@@ -29,11 +29,11 @@ pub struct LayerRasterCacheHashes {
 
 /// Number of distinct [`LayerRasterCacheKey`] kinds; see
 /// [`LayerRasterCacheKey::kind_slot`] and [`LAYER_RASTER_CACHE_KIND_LABELS`].
-pub const LAYER_RASTER_CACHE_KIND_COUNT: usize = 4;
+pub const LAYER_RASTER_CACHE_KIND_COUNT: usize = 5;
 
 /// Short labels per kind slot, in [`LayerRasterCacheKey::kind_slot`] order.
 pub const LAYER_RASTER_CACHE_KIND_LABELS: [&str; LAYER_RASTER_CACHE_KIND_COUNT] =
-    ["src", "backdrop", "range", "prefix"];
+    ["src", "backdrop", "range", "prefix", "effect"];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum LayerRasterCacheKind {
@@ -41,6 +41,7 @@ enum LayerRasterCacheKind {
     BackdropEffect,
     SceneRange,
     PrefixSnapshot,
+    LayerEffect,
 }
 
 impl LayerRasterCacheKind {
@@ -50,6 +51,7 @@ impl LayerRasterCacheKind {
             Self::BackdropEffect => 1,
             Self::SceneRange => 2,
             Self::PrefixSnapshot => 3,
+            Self::LayerEffect => 4,
         }
     }
 }
@@ -119,8 +121,50 @@ impl LayerRasterCacheKey {
         pixel_size: (u32, u32),
         scale_bucket: ScaleBucket,
     ) -> Self {
+        Self::effect(
+            LayerRasterCacheKind::BackdropEffect,
+            stable_id,
+            input_hash,
+            effect_hash,
+            local_bounds,
+            pixel_size,
+            scale_bucket,
+        )
+    }
+
+    /// A layer's render effect applied over its retained surface: the output
+    /// is a pure function of the surface's content, the effect and the
+    /// layer's pixel rect within the surface.
+    pub fn layer_effect(
+        stable_id: Option<NodeId>,
+        input_hash: u64,
+        effect_hash: u64,
+        local_bounds: Rect,
+        pixel_size: (u32, u32),
+        scale_bucket: ScaleBucket,
+    ) -> Self {
+        Self::effect(
+            LayerRasterCacheKind::LayerEffect,
+            stable_id,
+            input_hash,
+            effect_hash,
+            local_bounds,
+            pixel_size,
+            scale_bucket,
+        )
+    }
+
+    fn effect(
+        kind: LayerRasterCacheKind,
+        stable_id: Option<NodeId>,
+        input_hash: u64,
+        effect_hash: u64,
+        local_bounds: Rect,
+        pixel_size: (u32, u32),
+        scale_bucket: ScaleBucket,
+    ) -> Self {
         Self {
-            kind: LayerRasterCacheKind::BackdropEffect,
+            kind,
             stable_id,
             content_hash: input_hash,
             effect_hash,
@@ -358,6 +402,31 @@ mod tests {
 
         assert_ne!(backdrop, source);
         assert_ne!(backdrop.identity(), source.identity());
+    }
+
+    #[test]
+    fn layer_effect_keys_do_not_collide_with_backdrop_effect_keys() {
+        let rect = Rect {
+            x: 1.0,
+            y: 2.0,
+            width: 30.0,
+            height: 40.0,
+        };
+        let scale = ScaleBucket::from_scale(1.0);
+        let effect = LayerRasterCacheKey::layer_effect(Some(7), 11, 13, rect, (30, 40), scale);
+        let backdrop = LayerRasterCacheKey::backdrop_effect(Some(7), 11, 13, rect, (30, 40), scale);
+        let other_effect =
+            LayerRasterCacheKey::layer_effect(Some(7), 11, 17, rect, (30, 40), scale);
+        let other_input = LayerRasterCacheKey::layer_effect(Some(7), 12, 13, rect, (30, 40), scale);
+
+        assert_ne!(effect, backdrop);
+        assert_ne!(effect.identity(), backdrop.identity());
+        assert_ne!(effect, other_effect);
+        assert_ne!(effect, other_input);
+        assert_eq!(effect.kind_slot(), LAYER_RASTER_CACHE_KIND_COUNT - 1);
+        assert_eq!(LAYER_RASTER_CACHE_KIND_LABELS[effect.kind_slot()], "effect");
+        assert!(!effect.is_source_content());
+        assert!(!effect.is_scene_range());
     }
 
     #[test]

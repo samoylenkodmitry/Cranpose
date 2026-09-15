@@ -44,3 +44,10 @@
 - Robot runners must forward the explicit reference-content settings and assert the fixture; a sanitized environment can silently turn a green-icon check into the default blue-icon scene.
 - Shader-only render fixtures must request shader-owned coverage when their graph omits the material's outer clip.
 - Diagnose single-channel pixel drift before rounding with shader bit probes; face/rim compositing can change fused multiply-add order even when both inputs match.
+- Fetch `origin main` before building device A/B APKs; a stale local main re-measures bugs upstream already fixed and blames the change under test.
+- Build both arms of a device A/B on one host: debug-signed APKs from different machines refuse `adb install -r` with `INSTALL_FAILED_UPDATE_INCOMPATIBLE`, and every leg of that arm records nothing.
+- The composed-drag replay over `TabBackdrop::Flat` carries no glyph ink (transparent icons, empty labels): a byte-exact replay proves nothing about ink colour; audit ink changes on the phone checkerboard recording.
+- Judge replay byte exactness on the second run after a rebuild: the first run draws up to 13 frames through the compile-time fallback pipelines, one level off, and reads as an inexact change.
+- A three-content matrix recording runs past XCTest's two-minute execution allowance and keeps no movie; the device-run recipe disables test timeouts, and a Cranpose matrix run must replay the native `planned_events` through `TEST_RUNNER_REFERENCE_POINTER_PATHS`, since a content case's native button sits 1.5 pt elsewhere and the comparison rejects unequal paths.
+- A CI board red on every mac step at once (`linking with cc failed: exit status 69`) is macm3's Xcode licence after an update, not the change; read one step's log before touching code.
+- The browser-safe-time static test scans `cfg(test)` modules of the wasm-delivered crates too: import `web_time::{Duration, Instant}` in wgpu crate tests, never `std::time`.

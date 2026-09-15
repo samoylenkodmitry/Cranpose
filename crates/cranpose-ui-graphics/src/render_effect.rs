@@ -129,6 +129,7 @@ pub struct RuntimeShader {
     input_padding: f32,
     output_padding: f32,
     batched_source: bool,
+    preserves_transparency: bool,
     domains: Option<Box<ShaderDomains>>,
 }
 
@@ -138,6 +139,7 @@ struct ShaderSpecialization {
     overrides_hash: OnceLock<u64>,
     substrates: ArrayVec<SubstrateSpec, MAX_SUBSTRATES>,
     draw_split: Option<&'static str>,
+    exact: bool,
 }
 
 pub(crate) struct ShaderSpecializationCache<K, const N: usize> {
@@ -204,6 +206,7 @@ static DEFAULT_SHADER_SPECIALIZATION: ShaderSpecialization = ShaderSpecializatio
     overrides_hash: OnceLock::new(),
     substrates: ArrayVec::new_const(),
     draw_split: None,
+    exact: false,
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -396,6 +399,7 @@ impl RuntimeShader {
             input_padding: 0.0,
             output_padding: 0.0,
             batched_source: false,
+            preserves_transparency: false,
             domains: None,
         }
     }
@@ -416,6 +420,11 @@ impl RuntimeShader {
     /// (a `bool` is `value != 0`). Each distinct override set compiles its
     /// own pipeline; renderers use this to fold a material's inactive
     /// features away without changing the shader text.
+    ///
+    /// The pipeline compiles inside the frame that first draws the shader,
+    /// unless the shader declares its specialization exact with
+    /// [`Self::set_specialization_exact`]: then the renderer compiles it in
+    /// the background and draws with the general pipeline meanwhile.
     pub fn set_override(&mut self, name: &'static str, value: f64) {
         let position = self
             .overrides()
@@ -629,6 +638,19 @@ impl RuntimeShader {
         self.batched_source
     }
 
+    /// Declares that the shader returns zero wherever every texel it reads
+    /// is zero. A layer that draws nothing under such a shader composites
+    /// nothing, so the renderer leaves the page as it is instead of shading
+    /// the layer's pixels to prove it.
+    pub fn set_preserves_transparency(&mut self, preserves: bool) {
+        self.preserves_transparency = preserves;
+    }
+
+    /// Whether the shader declared it returns zero over a transparent input.
+    pub fn preserves_transparency(&self) -> bool {
+        self.preserves_transparency
+    }
+
     /// Declares the low-frequency copies of its source the shader reads
     /// through the reserved substrate region slots, in slot order. Only a
     /// batched shader packed with its stage is handed them; a shader
@@ -685,6 +707,25 @@ impl RuntimeShader {
     /// The override selecting the interior or the rim draw, when declared.
     pub fn draw_split(&self) -> Option<&'static str> {
         self.specialization().draw_split
+    }
+
+    /// Declares that every override and the draw split of this shader are
+    /// folds: a specialized pipeline lands on the same bytes as the general
+    /// pipeline, which reads every folded value from its uniform. The
+    /// renderer then compiles specializations in the background and draws
+    /// with the general pipeline until they land. An override that selects
+    /// a different picture, such as a pass switch, must leave this unset;
+    /// its pipeline compiles inside the frame that first draws it.
+    pub fn set_specialization_exact(&mut self, exact: bool) {
+        if self.specialization_exact() == exact {
+            return;
+        }
+        self.specialization_mut().exact = exact;
+    }
+
+    /// Whether the shader declared its specialization exact.
+    pub fn specialization_exact(&self) -> bool {
+        self.specialization().exact
     }
 
     /// Get the WGSL source code.
@@ -756,6 +797,7 @@ impl PartialEq for RuntimeShader {
             && self.input_padding.to_bits() == other.input_padding.to_bits()
             && self.output_padding.to_bits() == other.output_padding.to_bits()
             && self.batched_source == other.batched_source
+            && self.preserves_transparency == other.preserves_transparency
             && self.substrates() == other.substrates()
             && self.draw_split() == other.draw_split()
             && self.domains == other.domains
@@ -861,6 +903,27 @@ fn cached_shader_source(
     (shared, source_hash)
 }
 
+/// Where a runtime shader's pipeline draws, which decides how its output
+/// blends: `Page` composites the shader over what lies beneath (a backdrop
+/// effect, or a render effect the renderer draws straight onto the page),
+/// `Layer` renders into the layer's own texture, whose content the shader
+/// replaces (a render effect under a blend mode or clip the page draw cannot
+/// apply, such as a `DstOut` mask).
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum ShaderTarget {
+    Page,
+    Layer,
+}
+
+/// A runtime shader to compile before its first draw, at the target it will
+/// draw to, so a renderer's background compiler builds the pipeline at
+/// start instead of inside the frame that first needs it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ShaderWarmUp {
+    pub shader: RuntimeShader,
+    pub target: ShaderTarget,
+}
+
 /// A render effect applied to a graphics layer's rendered content.
 ///
 /// Matches Jetpack Compose's `RenderEffect` sealed class hierarchy,
@@ -947,6 +1010,19 @@ impl RenderEffect {
         }
     }
 
+    /// Whether the effect returns zero over a transparent input: a blur or
+    /// an offset of nothing is nothing, a shader when it declares so, and a
+    /// chain when every step does.
+    pub fn preserves_transparency(&self) -> bool {
+        match self {
+            RenderEffect::Blur { .. } | RenderEffect::Offset { .. } => true,
+            RenderEffect::Shader { shader } => shader.preserves_transparency(),
+            RenderEffect::Chain { first, second } => {
+                first.preserves_transparency() && second.preserves_transparency()
+            }
+        }
+    }
+
     /// Maximum logical-pixel input padding required by this effect.
     pub fn input_padding(&self) -> f32 {
         match self {
@@ -998,6 +1074,41 @@ impl RenderEffect {
 
 #[cfg(test)]
 mod tests {
+    use super::{RenderEffect, RuntimeShader};
+
+    #[test]
+    fn a_shader_declares_it_preserves_transparency() {
+        let mut shader = RuntimeShader::new("// preserves");
+        assert!(!shader.preserves_transparency());
+        let plain = shader.clone();
+        shader.set_preserves_transparency(true);
+        assert!(shader.preserves_transparency());
+        assert_ne!(shader, plain);
+        shader.set_preserves_transparency(false);
+        assert_eq!(shader, plain);
+    }
+
+    #[test]
+    fn an_effect_preserves_transparency_when_every_step_does() {
+        let mut declared = RuntimeShader::new("// declared");
+        declared.set_preserves_transparency(true);
+        let undeclared = RuntimeShader::new("// undeclared");
+        assert!(RenderEffect::blur(3.0).preserves_transparency());
+        assert!(RenderEffect::offset(2.0, 1.0).preserves_transparency());
+        assert!(RenderEffect::runtime_shader(declared.clone()).preserves_transparency());
+        assert!(!RenderEffect::runtime_shader(undeclared.clone()).preserves_transparency());
+        assert!(
+            RenderEffect::blur(3.0)
+                .then(RenderEffect::runtime_shader(declared))
+                .preserves_transparency()
+        );
+        assert!(
+            !RenderEffect::blur(3.0)
+                .then(RenderEffect::runtime_shader(undeclared))
+                .preserves_transparency()
+        );
+    }
+
     #[test]
     fn overrides_stay_sorted_and_replace_by_name() {
         let mut shader = super::RuntimeShader::new("// overrides");
