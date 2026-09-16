@@ -194,6 +194,7 @@ An app gets this with no code of its own:
 | `CircularProgressIndicator`, `LinearProgressIndicator` | "Loading" | |
 | `SwipeToDismiss` | the row's content | run "Dismiss" from the actions menu |
 | `verticalScroll`, `horizontalScroll`, `LazyColumn`, `LazyRow` | the rows inside | page on and back |
+| `LinkedText` | the whole text | open each link from the actions menu, as "Open <link text>" |
 | `Dialog` | its content, and nothing outside it | leave it with the reader's escape gesture |
 | `Image`, `Icon` | the description the app gave | |
 

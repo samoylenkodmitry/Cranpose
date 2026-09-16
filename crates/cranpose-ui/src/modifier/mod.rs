@@ -488,6 +488,31 @@ impl Modifier {
         self.semantics(move |config| config.progress = Some(info))
     }
 
+    /// Marks this component as a heading, so a screen reader lists it among
+    /// the headings of the screen and a person can jump between them.
+    ///
+    /// This is Compose's `Modifier.semantics { heading() }`.
+    pub fn heading(self) -> Self {
+        self.role(cranpose_foundation::SemanticsWidgetRole::Header)
+    }
+
+    /// Tells a screen reader what kind of control this is, when the widget
+    /// does not say so on its own.
+    ///
+    /// This is Compose's `Modifier.semantics { role = Role.Button }`.
+    pub fn role(self, role: cranpose_foundation::SemanticsWidgetRole) -> Self {
+        self.semantics(move |config| config.role = Some(role))
+    }
+
+    /// Gives this component the text a screen reader reads for it, for a
+    /// drawing, an icon or a control with no text of its own.
+    ///
+    /// This is Compose's `Modifier.semantics { contentDescription = "..." }`.
+    pub fn content_description(self, description: impl Into<String>) -> Self {
+        let description = description.into();
+        self.semantics(move |config| config.content_description = Some(description.clone()))
+    }
+
     /// Makes this component focusable.
     ///
     /// This adds a focus target node that can receive focus and participate
