@@ -94,7 +94,7 @@ fn attach_page_listener(
         };
         event.prevent_default();
         on_live_tree(&app, |root| {
-            accessibility::scroll_by(root, node_id, sign * dx, sign * dy);
+            accessibility::scroll_by(root, node_id, sign * dx, sign * dy)
         });
     }) as Box<dyn FnMut(_)>);
     root.add_event_listener_with_callback("keydown", key_down.as_ref().unchecked_ref())?;
@@ -127,16 +127,14 @@ fn node_id_attribute(
         .and_then(|element_id| node_ids.borrow().get(&element_id).copied())
 }
 
-/// Runs one change against the live semantics tree, unless the app is busy
-/// with its own frame.
+/// Runs one reader action against the live semantics tree, unless the app is
+/// busy with its own frame.
 fn on_live_tree(
     app: &Rc<RefCell<AppShell<WgpuRenderer>>>,
-    act: impl FnOnce(&cranpose_ui::SemanticsNode),
+    act: impl FnOnce(&cranpose_ui::SemanticsNode) -> bool,
 ) {
-    if let Ok(mut shell) = app.try_borrow_mut()
-        && let Some(tree) = shell.semantics_tree()
-    {
-        act(tree.root());
+    if let Ok(mut shell) = app.try_borrow_mut() {
+        accessibility::run_reader_action(&mut shell, act);
     }
 }
 
@@ -352,7 +350,7 @@ fn attach_key_listener(
         };
         event.prevent_default();
         on_live_tree(&app, |root| {
-            accessibility::set_progress(root, node_id, next.clamp(min, max));
+            accessibility::set_progress(root, node_id, next.clamp(min, max))
         });
     }) as Box<dyn FnMut(_)>);
     root.add_event_listener_with_callback("keydown", key_down.as_ref().unchecked_ref())?;
@@ -368,6 +366,7 @@ fn live_region(document: &Document, politeness: &str) -> Result<HtmlElement, JsV
     let region = document.create_element("div")?.dyn_into::<HtmlElement>()?;
     region.set_attribute("aria-live", politeness)?;
     region.set_attribute("aria-atomic", "true")?;
+    region.set_attribute("data-cranpose-live", politeness)?;
     let style = region.style();
     style.set_property("position", "fixed")?;
     style.set_property("width", "1px")?;
@@ -474,6 +473,8 @@ impl WebAccessibilityBridge {
             return Ok(());
         }
         self.previous.clone_from(&elements);
+        let held = reader_focus(document);
+        let app_focus_before = self.focused_element;
         self.root.set_inner_html("");
         self.node_ids.borrow_mut().clear();
 
@@ -510,9 +511,38 @@ impl WebAccessibilityBridge {
             self.root.append_child(&node)?;
             self.follow_app_focus(&node, &element, id)?;
         }
+        self.settle_focus(held, app_focus_before)
+    }
+
+    /// Forgets an app focus that left, and puts the browser's focus back on
+    /// the mirror node a reader held before the rebuild, so a page or a value
+    /// change does not drop its cursor. An app that moved focus itself wins.
+    fn settle_focus(
+        &mut self,
+        held: Option<i32>,
+        app_focus_before: Option<i32>,
+    ) -> Result<(), JsValue> {
         if !self.previous.iter().any(|element| element.focused) {
             self.focused_element = None;
         }
+        let Some(id) = held.filter(|_| self.focused_element == app_focus_before) else {
+            return Ok(());
+        };
+        let selector = format!("[data-cranpose-node=\"{id}\"]");
+        if let Some(node) = self.root.query_selector(&selector)?
+            && let Ok(node) = node.dyn_into::<HtmlElement>()
+        {
+            node.focus()?;
+        }
         Ok(())
     }
+}
+
+/// The mirror node the browser's focus sits on, by its virtual id.
+fn reader_focus(document: &Document) -> Option<i32> {
+    document
+        .active_element()?
+        .get_attribute("data-cranpose-node")?
+        .parse()
+        .ok()
 }

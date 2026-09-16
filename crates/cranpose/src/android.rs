@@ -169,6 +169,22 @@ fn drain_accessibility_focus(elements: &[crate::accessibility::AccessibilityElem
 /// Moves the value of an adjustable control TalkBack asked to change. The
 /// control is resolved against the live semantics tree, so a stale published
 /// snapshot cannot move the wrong one.
+fn drain_accessibility_custom_actions(
+    shell: &mut AppShell<WgpuRenderer>,
+    elements: &[crate::accessibility::AccessibilityElement],
+) {
+    for (virtual_id, action_index) in crate::android_accessibility::drain_custom_actions() {
+        let Some((node_id, canvas_key)) =
+            crate::accessibility::resolve_element_id(elements, virtual_id)
+        else {
+            continue;
+        };
+        crate::accessibility::run_reader_action(shell, |root| {
+            crate::accessibility::perform_custom_action(root, node_id, canvas_key, action_index)
+        });
+    }
+}
+
 fn drain_accessibility_values(
     shell: &mut AppShell<WgpuRenderer>,
     elements: &[crate::accessibility::AccessibilityElement],
@@ -178,10 +194,9 @@ fn drain_accessibility_values(
         else {
             continue;
         };
-        let Some(tree) = shell.semantics_tree() else {
-            continue;
-        };
-        crate::accessibility::set_progress(tree.root(), node_id, value);
+        crate::accessibility::run_reader_action(shell, |root| {
+            crate::accessibility::set_progress(root, node_id, value)
+        });
     }
 }
 
@@ -198,10 +213,10 @@ fn drain_accessibility_scrolls(
             continue;
         };
         let (dx, dy) = crate::accessibility::page_delta(element, forward);
-        let Some(tree) = shell.semantics_tree() else {
-            continue;
-        };
-        crate::accessibility::scroll_by(tree.root(), element.node_id, dx, dy);
+        let node_id = element.node_id;
+        crate::accessibility::run_reader_action(shell, |root| {
+            crate::accessibility::scroll_by(root, node_id, dx, dy)
+        });
     }
 }
 
@@ -2179,22 +2194,7 @@ pub fn run(
                 shell.pointer_pressed();
                 shell.pointer_released_at_position(x, y);
             }
-            for (virtual_id, action_index) in crate::android_accessibility::drain_custom_actions() {
-                let Some((node_id, canvas_key)) =
-                    crate::accessibility::resolve_element_id(&accessibility_elements, virtual_id)
-                else {
-                    continue;
-                };
-                let Some(tree) = shell.semantics_tree() else {
-                    continue;
-                };
-                crate::accessibility::perform_custom_action(
-                    tree.root(),
-                    node_id,
-                    canvas_key,
-                    action_index,
-                );
-            }
+            drain_accessibility_custom_actions(shell, &accessibility_elements);
             drain_accessibility_focus(&accessibility_elements);
             drain_accessibility_values(shell, &accessibility_elements);
             drain_accessibility_scrolls(shell, &accessibility_elements);

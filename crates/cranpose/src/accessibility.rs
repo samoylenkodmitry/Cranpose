@@ -38,15 +38,6 @@ impl AccessibilityRect {
             && self.width.is_finite()
             && self.height.is_finite()
     }
-
-    #[cfg(any(
-        test,
-        all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"),
-        all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
-    ))]
-    fn contains(self, x: f32, y: f32) -> bool {
-        x >= self.x && y >= self.y && x <= self.x + self.width && y <= self.y + self.height
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -100,6 +91,7 @@ pub(crate) struct AccessibilityElement {
     pub(crate) adjustable: bool,
     pub(crate) vertical_scroll: Option<ScrollAxisRange>,
     pub(crate) horizontal_scroll: Option<ScrollAxisRange>,
+    pub(crate) scroll_parent: Option<NodeId>,
 }
 
 impl Default for AccessibilityElement {
@@ -125,6 +117,7 @@ impl Default for AccessibilityElement {
             adjustable: false,
             vertical_scroll: None,
             horizontal_scroll: None,
+            scroll_parent: None,
         }
     }
 }
@@ -231,7 +224,7 @@ fn project_semantics(
     bounds: &HashMap<NodeId, AccessibilityRect>,
 ) -> Vec<AccessibilityElement> {
     let mut elements = Vec::new();
-    project_node(root, bounds, false, None, &mut elements);
+    project_node(root, bounds, false, None, None, &mut elements);
     elements
 }
 
@@ -240,9 +233,11 @@ fn project_node(
     bounds: &HashMap<NodeId, AccessibilityRect>,
     suppress_static_text: bool,
     inherited_live_region: Option<LiveRegionMode>,
+    inherited_scroll: Option<NodeId>,
     elements: &mut Vec<AccessibilityElement>,
 ) {
     let live_region = node.live_region.or(inherited_live_region);
+    let first_new = elements.len();
     let clickable = node
         .actions
         .iter()
@@ -279,10 +274,25 @@ fn project_node(
     }
 
     project_canvas_children(node, rect, live_region, elements);
+    for element in &mut elements[first_new..] {
+        element.scroll_parent = inherited_scroll;
+    }
 
     let suppress_children = suppress_static_text || actionable;
+    let scroll_for_children = if scrollable {
+        Some(node.node_id)
+    } else {
+        inherited_scroll
+    };
     for child in &node.children {
-        project_node(child, bounds, suppress_children, live_region, elements);
+        project_node(
+            child,
+            bounds,
+            suppress_children,
+            live_region,
+            scroll_for_children,
+            elements,
+        );
     }
 }
 
@@ -330,6 +340,7 @@ fn element_for_node(
         adjustable: node.set_progress.is_some(),
         vertical_scroll: node.vertical_scroll,
         horizontal_scroll: node.horizontal_scroll,
+        scroll_parent: None,
     }
 }
 
@@ -371,6 +382,37 @@ pub(crate) fn page_delta(element: &AccessibilityElement, forward: bool) -> (f32,
     }
 }
 
+/// Runs one reader action against the live semantics tree inside the app
+/// context and a mutable snapshot, the way the shell runs a click or a key,
+/// so the handler may write state and invalidate layout. Marks the shell
+/// dirty when the action reports a change, and answers that report.
+#[cfg(any(
+    all(feature = "desktop-shell", feature = "renderer-wgpu"),
+    all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"),
+    all(feature = "android", feature = "renderer-wgpu", target_os = "android"),
+    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
+))]
+pub(crate) fn run_reader_action<R>(
+    shell: &mut AppShell<R>,
+    act: impl FnOnce(&SemanticsNode) -> bool,
+) -> bool
+where
+    R: Renderer,
+    R::Error: Debug,
+{
+    let context = std::rc::Rc::clone(shell.app_context());
+    let changed = context.enter(|| {
+        cranpose_core::run_in_mutable_snapshot(|| {
+            shell.semantics_tree().is_some_and(|tree| act(tree.root()))
+        })
+        .unwrap_or(false)
+    });
+    if changed {
+        shell.mark_dirty();
+    }
+    changed
+}
+
 /// Whether a reader's escape gesture has somewhere to go: a dialog or popup
 /// on top, or a back handler the app registered.
 #[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
@@ -389,9 +431,9 @@ pub(crate) fn request_back() -> bool {
     true
 }
 
-/// The nearest scroll container around an element: the smallest scrollable
-/// element whose bounds hold the element's center, the element itself when it
-/// scrolls.
+/// The nearest scroll container around an element: the scrollable node
+/// closest above it in the semantics tree, which holds it even after a page
+/// has moved it out of view.
 #[cfg(any(
     test,
     all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"),
@@ -401,18 +443,10 @@ pub(crate) fn scroll_container_for<'a>(
     elements: &'a [AccessibilityElement],
     element: &AccessibilityElement,
 ) -> Option<&'a AccessibilityElement> {
-    let (x, y) = element.bounds.center();
+    let parent = element.scroll_parent?;
     elements
         .iter()
-        .filter(|candidate| {
-            candidate.vertical_scroll.is_some() || candidate.horizontal_scroll.is_some()
-        })
-        .filter(|candidate| candidate.bounds.contains(x, y))
-        .min_by(|a, b| {
-            let area =
-                |element: &AccessibilityElement| element.bounds.width * element.bounds.height;
-            area(a).total_cmp(&area(b))
-        })
+        .find(|candidate| candidate.node_id == parent && candidate.canvas_key.is_none())
 }
 
 fn project_canvas_children(
@@ -461,6 +495,7 @@ fn project_canvas_children(
             adjustable: false,
             vertical_scroll: None,
             horizontal_scroll: None,
+            scroll_parent: None,
         });
     }
 }
@@ -1130,35 +1165,34 @@ mod tests {
 
     fn scroll_box(
         node_id: NodeId,
-        x: f32,
-        y: f32,
-        width: f32,
+        scroll_parent: Option<NodeId>,
         height: f32,
     ) -> AccessibilityElement {
         AccessibilityElement {
             node_id,
-            bounds: AccessibilityRect::new(x, y, width, height),
+            bounds: AccessibilityRect::new(0.0, 0.0, 400.0, height),
             vertical_scroll: Some(cranpose_ui::ScrollAxisRange::new(0.0, 900.0, false)),
+            scroll_parent,
+            ..AccessibilityElement::default()
+        }
+    }
+
+    fn row_in(node_id: NodeId, label: &str, scroll_parent: Option<NodeId>) -> AccessibilityElement {
+        AccessibilityElement {
+            node_id,
+            label: label.into(),
+            bounds: AccessibilityRect::new(0.0, -300.0, 400.0, 40.0),
+            scroll_parent,
             ..AccessibilityElement::default()
         }
     }
 
     #[test]
-    fn a_row_pages_the_nearest_list_around_it() {
-        let outer = scroll_box(1, 0.0, 0.0, 400.0, 800.0);
-        let inner = scroll_box(2, 0.0, 100.0, 400.0, 300.0);
-        let row = AccessibilityElement {
-            node_id: 3,
-            label: "Milk".into(),
-            bounds: AccessibilityRect::new(0.0, 120.0, 400.0, 40.0),
-            ..AccessibilityElement::default()
-        };
-        let footer = AccessibilityElement {
-            node_id: 4,
-            label: "Total".into(),
-            bounds: AccessibilityRect::new(0.0, 700.0, 400.0, 40.0),
-            ..AccessibilityElement::default()
-        };
+    fn a_row_pages_the_list_above_it_even_once_it_left_the_screen() {
+        let outer = scroll_box(1, None, 800.0);
+        let inner = scroll_box(2, Some(1), 300.0);
+        let row = row_in(3, "Milk", Some(2));
+        let footer = row_in(4, "Total", Some(1));
         let elements = vec![outer, inner, row.clone(), footer.clone()];
 
         let around_row = scroll_container_for(&elements, &row).expect("the row sits in a list");
@@ -1166,10 +1200,7 @@ mod tests {
             scroll_container_for(&elements, &footer).expect("the footer sits in the outer list");
         let page = page_delta(around_row, true);
 
-        assert_eq!(
-            around_row.node_id, 2,
-            "the smaller list around the row wins"
-        );
+        assert_eq!(around_row.node_id, 2, "the list right above the row wins");
         assert_eq!(around_footer.node_id, 1);
         assert_eq!(
             page,
@@ -1181,15 +1212,61 @@ mod tests {
 
     #[test]
     fn an_element_outside_every_list_pages_nothing() {
-        let list = scroll_box(1, 0.0, 0.0, 400.0, 300.0);
-        let button = AccessibilityElement {
-            node_id: 2,
-            label: "Pay".into(),
-            bounds: AccessibilityRect::new(0.0, 500.0, 400.0, 40.0),
-            ..AccessibilityElement::default()
-        };
+        let list = scroll_box(1, None, 300.0);
+        let button = row_in(2, "Pay", None);
 
         assert!(scroll_container_for(&[list], &button).is_none());
+    }
+
+    #[test]
+    fn the_projection_names_the_list_above_each_row() {
+        let bounds = HashMap::from_iter([
+            (1, AccessibilityRect::new(0.0, 0.0, 400.0, 600.0)),
+            (2, AccessibilityRect::new(0.0, 0.0, 400.0, 40.0)),
+            (3, AccessibilityRect::new(0.0, 700.0, 400.0, 40.0)),
+        ]);
+        let mut list = node(
+            1,
+            SemanticsRole::Layout,
+            vec![],
+            None,
+            vec![node(2, SemanticsRole::Button, vec![], Some("Milk"), vec![])],
+        );
+        list.vertical_scroll = Some(cranpose_ui::ScrollAxisRange::new(0.0, 900.0, false));
+        let root = node(
+            0,
+            SemanticsRole::Layout,
+            vec![],
+            None,
+            vec![
+                list,
+                node(3, SemanticsRole::Button, vec![], Some("Pay"), vec![]),
+            ],
+        );
+
+        let elements = project_semantics(&root, &bounds);
+        let by_id = |id: NodeId| {
+            elements
+                .iter()
+                .find(|e| e.node_id == id)
+                .expect("projected")
+        };
+
+        assert_eq!(
+            by_id(1).scroll_parent,
+            None,
+            "the list itself sits under no list"
+        );
+        assert_eq!(
+            by_id(2).scroll_parent,
+            Some(1),
+            "the row names the list above it"
+        );
+        assert_eq!(
+            by_id(3).scroll_parent,
+            None,
+            "the button outside names none"
+        );
     }
 
     #[test]

@@ -353,10 +353,9 @@ impl IosAccessibilityBridge {
                 continue;
             };
             let next = accessibility::stepped_value(&progress, up);
-            let Some(tree) = shell.semantics_tree() else {
-                continue;
-            };
-            moved |= accessibility::set_progress(tree.root(), node_id, next);
+            moved |= accessibility::run_reader_action(shell, |root| {
+                accessibility::set_progress(root, node_id, next)
+            });
         }
         moved
     }
@@ -384,10 +383,9 @@ impl IosAccessibilityBridge {
             else {
                 continue;
             };
-            let Some(tree) = shell.semantics_tree() else {
-                continue;
-            };
-            moved |= accessibility::scroll_by(tree.root(), node_id, dx, dy);
+            moved |= accessibility::run_reader_action(shell, |root| {
+                accessibility::scroll_by(root, node_id, dx, dy)
+            });
         }
         moved
     }

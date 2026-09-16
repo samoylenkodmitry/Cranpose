@@ -224,9 +224,6 @@ impl DesktopAccessibilityBridge {
         }
         let pending = std::mem::take(&mut self.pending_custom_actions);
         let ids = accessibility::element_ids(&self.previous);
-        let Some(tree) = shell.semantics_tree() else {
-            return false;
-        };
         let mut ran = false;
         for (target, index) in pending {
             let Some(element) = ids
@@ -236,12 +233,10 @@ impl DesktopAccessibilityBridge {
             else {
                 continue;
             };
-            ran |= accessibility::perform_custom_action(
-                tree.root(),
-                element.node_id,
-                element.canvas_key,
-                index,
-            );
+            let (node_id, canvas_key) = (element.node_id, element.canvas_key);
+            ran |= accessibility::run_reader_action(shell, |root| {
+                accessibility::perform_custom_action(root, node_id, canvas_key, index)
+            });
         }
         ran
     }
@@ -254,9 +249,6 @@ impl DesktopAccessibilityBridge {
         }
         let pending = std::mem::take(&mut self.pending_scrolls);
         let ids = accessibility::element_ids(&self.previous);
-        let Some(tree) = shell.semantics_tree() else {
-            return false;
-        };
         let mut moved = false;
         for (target, forward) in pending {
             let Some(element) = ids
@@ -267,7 +259,10 @@ impl DesktopAccessibilityBridge {
                 continue;
             };
             let (dx, dy) = accessibility::page_delta(element, forward);
-            moved |= accessibility::scroll_by(tree.root(), element.node_id, dx, dy);
+            let node_id = element.node_id;
+            moved |= accessibility::run_reader_action(shell, |root| {
+                accessibility::scroll_by(root, node_id, dx, dy)
+            });
         }
         moved
     }
@@ -280,9 +275,6 @@ impl DesktopAccessibilityBridge {
         }
         let pending = std::mem::take(&mut self.pending_values);
         let ids = accessibility::element_ids(&self.previous);
-        let Some(tree) = shell.semantics_tree() else {
-            return false;
-        };
         let mut moved = false;
         for (target, value) in pending {
             let Some(element) = ids
@@ -292,7 +284,10 @@ impl DesktopAccessibilityBridge {
             else {
                 continue;
             };
-            moved |= accessibility::set_progress(tree.root(), element.node_id, value);
+            let node_id = element.node_id;
+            moved |= accessibility::run_reader_action(shell, |root| {
+                accessibility::set_progress(root, node_id, value)
+            });
         }
         moved
     }

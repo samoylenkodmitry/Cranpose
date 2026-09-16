@@ -151,9 +151,10 @@ because it does not know the height of the rows it has not built.
 
 The container itself has no name, so a reader's cursor does not stop on it.
 One page is nine tenths of what the container shows, so the last row of one
-page is still on the next. The move goes to the container around the element
-under the reader's cursor, found by bounds on the published snapshot, and
-runs through `scroll_by` on the live tree.
+page is still on the next. The move goes to the container above the element
+under the reader's cursor: each element names the scrollable node closest
+above it in the semantics tree, so a row one page has moved off screen still
+pages its own list. The move runs through `scroll_by` on the live tree.
 
 | Platform | Reads | Pages |
 | --- | --- | --- |
@@ -208,13 +209,29 @@ A control an app draws itself declares what it is through
 2. `crates/cranpose/src/accessibility.rs` projects that tree onto flat elements
    with screen bounds: one platform-neutral shape, four bridges.
 3. Each bridge turns an element into the platform's own node, and turns the
-   platform's actions back into a click, a custom action, or a focus move.
+   platform's actions back into a click, a custom action, a value, a page or
+   a focus move.
+4. An action that reaches the live tree runs through
+   `accessibility::run_reader_action`, inside the app context and a mutable
+   snapshot, the way a click or a key runs. Outside that context the first
+   state write trips the render state; the static test
+   `every_reader_action_runs_inside_the_app_context` keeps every bridge on it.
 
 Nothing in that path is platform specific above the bridge, so a control that
 reads correctly on one platform reads correctly on all four. The static test
 `every_platform_bridge_reads_announcements_out` and its focus counterpart in
 `crates/cranpose/tests/platform_scheduling_static.rs` keep the four bridges in
 step.
+
+## Check the web mirror without a hand
+
+`scripts/a11y/web-page-check.mjs <url>` drives a headless Chrome over the
+DevTools protocol against a served web demo (`apps/desktop-demo/build-web.sh
+--release`, then `package-web.sh` and any static server): it focuses a button
+in the tab row, presses Page Down and Page Up, reads the mirror's positions
+and the browser console, and prints one JSON report. A page that works moves
+the row by nine tenths of its width and back, keeps the focus on the same
+button, and leaves no panic in the console.
 
 ## Check it by hand
 

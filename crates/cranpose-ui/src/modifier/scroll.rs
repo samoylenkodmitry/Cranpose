@@ -1585,7 +1585,7 @@ fn lazy_scroll_impl(
 /// half step marks a list scrolled part way into that item, and one more step
 /// stays ahead while the list can still scroll forward. A reader needs only
 /// the two answers: can it page back, can it page on.
-fn lazy_scroll_semantics(
+pub(crate) fn lazy_scroll_semantics(
     state: LazyListState,
     is_vertical: bool,
     reverse_scrolling: bool,
@@ -1609,7 +1609,7 @@ fn lazy_scroll_semantics(
         config.scroll_by = Some(cranpose_foundation::SemanticsScrollBy::new(
             move |dx, dy| {
                 let delta = if is_vertical { dy } else { dx };
-                state.dispatch_scroll_delta(delta).abs() > f32::EPSILON
+                state.dispatch_scroll_delta(-delta).abs() > f32::EPSILON
             },
         ));
     }

@@ -206,9 +206,16 @@ fn HorizontalScrollIndicatorLazyRow(captured_state: Rc<RefCell<Option<LazyListSt
     });
 }
 
-#[test]
-fn lazy_row_gesture_scroll_moves_rendered_items_along_the_horizontal_axis() {
-    let _app_context = crate::render_state::app_context_test_scope();
+const INDICATOR_VIEWPORT: Size = Size {
+    width: 320.0,
+    height: 320.0,
+};
+
+fn measured_indicator_lazy_row() -> (
+    Composition<MemoryApplier>,
+    NodeId,
+    Rc<RefCell<Option<LazyListState>>>,
+) {
     let mut composition = Composition::new(MemoryApplier::new());
     let captured_state = Rc::new(RefCell::new(None));
 
@@ -222,11 +229,15 @@ fn lazy_row_gesture_scroll_moves_rendered_items_along_the_horizontal_axis() {
         .expect("initial render");
 
     let root = composition.root().expect("lazy row root");
-    let viewport = Size {
-        width: 320.0,
-        height: 320.0,
-    };
-    measure_root(&mut composition, root, viewport);
+    measure_root(&mut composition, root, INDICATOR_VIEWPORT);
+    (composition, root, captured_state)
+}
+
+#[test]
+fn lazy_row_gesture_scroll_moves_rendered_items_along_the_horizontal_axis() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let (mut composition, root, captured_state) = measured_indicator_lazy_row();
+    let viewport = INDICATOR_VIEWPORT;
     let initial_texts = render_texts(&mut composition, root);
     assert!(
         initial_texts.iter().any(|text| text == "First visible 0"),
@@ -349,4 +360,35 @@ fn measure_root(composition: &mut Composition<MemoryApplier>, root: NodeId, size
     applier.set_runtime_handle(handle);
     let _ = applier.compute_layout(root, size).expect("layout");
     applier.clear_runtime_handle();
+}
+
+#[test]
+fn a_reader_page_moves_a_lazy_row_forward() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let (mut composition, root, captured_state) = measured_indicator_lazy_row();
+    let viewport = INDICATOR_VIEWPORT;
+    let initial_records = render_text_records(&mut composition, root);
+    let initial_item_0_x = text_x(&initial_records, "Item 0");
+    let list_state = (*captured_state.borrow()).expect("state captured");
+
+    let mut config = cranpose_foundation::SemanticsConfiguration::default();
+    crate::modifier::lazy_scroll_semantics(list_state, false, false)(&mut config);
+    let scroll_by = config
+        .scroll_by
+        .expect("a lazy row takes a page from a reader");
+    assert!(
+        config.horizontal_scroll.is_some(),
+        "a lazy row says it scrolls"
+    );
+    assert!(scroll_by.invoke(40.0, 0.0), "a page forward moves the row");
+
+    measure_root(&mut composition, root, viewport);
+    let scrolled_records = render_text_records(&mut composition, root);
+    let scrolled_item_0_x = text_x(&scrolled_records, "Item 0");
+    assert!(
+        (initial_item_0_x - scrolled_item_0_x - 40.0).abs() < 0.5,
+        "a positive page delta moves the rows the way a forward scroll does: \
+         initial_x={initial_item_0_x}, scrolled_x={scrolled_item_0_x}"
+    );
+    assert!(list_state.can_scroll_backward_non_reactive());
 }

@@ -3265,3 +3265,31 @@ fn every_platform_lets_a_reader_leave_a_dialog() {
         "Escape reaches the shell from the mirror too, because the key listener sits on the document"
     );
 }
+
+#[test]
+fn every_reader_action_runs_inside_the_app_context() {
+    let projection_source = crate_source("src/accessibility.rs");
+    assert!(
+        projection_source.contains("pub(crate) fn run_reader_action<R>(")
+            && projection_source.contains("let context = std::rc::Rc::clone(shell.app_context());")
+            && projection_source.contains("cranpose_core::run_in_mutable_snapshot(|| {"),
+        "a reader action writes state and invalidates layout, which the render state refuses outside the app context"
+    );
+
+    for path in [
+        "src/desktop_accessibility.rs",
+        "src/ios_accessibility.rs",
+        "src/android.rs",
+        "src/web_accessibility.rs",
+    ] {
+        let source = crate_source(path);
+        assert!(
+            source.contains("run_reader_action("),
+            "{path} should run its reader actions through the app context wrapper"
+        );
+        assert!(
+            !source.contains("(tree.root(),") && !source.contains("(tree.root()"),
+            "{path} reaches the live tree outside the app context; route it through run_reader_action"
+        );
+    }
+}
