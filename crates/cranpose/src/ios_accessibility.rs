@@ -13,17 +13,18 @@ use objc2::{
     DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send,
     rc::Retained,
     runtime::{AnyObject, Bool},
+    sel,
 };
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use objc2_foundation::{NSArray, NSObject, NSObjectProtocol, NSString};
 use objc2_ui_kit::{
-    NSObjectUIAccessibility, NSObjectUIAccessibilityContainer,
-    UIAccessibilityAnnouncementNotification, UIAccessibilityElement, UIAccessibilityIdentification,
-    UIAccessibilityLayoutChangedNotification, UIAccessibilityPostNotification,
-    UIAccessibilityScreenChangedNotification, UIAccessibilityTraitAdjustable,
-    UIAccessibilityTraitButton, UIAccessibilityTraitHeader, UIAccessibilityTraitImage,
-    UIAccessibilityTraitNone, UIAccessibilityTraitNotEnabled, UIAccessibilityTraitSelected,
-    UIAccessibilityTraitStaticText, UIView,
+    NSObjectUIAccessibility, NSObjectUIAccessibilityAction, NSObjectUIAccessibilityContainer,
+    UIAccessibilityAnnouncementNotification, UIAccessibilityCustomAction, UIAccessibilityElement,
+    UIAccessibilityIdentification, UIAccessibilityLayoutChangedNotification,
+    UIAccessibilityPostNotification, UIAccessibilityScreenChangedNotification,
+    UIAccessibilityTraitAdjustable, UIAccessibilityTraitButton, UIAccessibilityTraitHeader,
+    UIAccessibilityTraitImage, UIAccessibilityTraitNone, UIAccessibilityTraitNotEnabled,
+    UIAccessibilityTraitSelected, UIAccessibilityTraitStaticText, UIView,
 };
 use winit::event_loop::EventLoopProxy;
 
@@ -46,11 +47,13 @@ struct ReaderRequests {
     steps: Rc<RefCell<Vec<(i32, bool)>>>,
     scrolls: Rc<RefCell<Vec<(i32, bool)>>>,
     escapes: Rc<Cell<usize>>,
+    custom_actions: Rc<RefCell<Vec<(i32, usize)>>>,
 }
 
 struct AccessibilityElementIvars {
     element_id: i32,
     actionable: Cell<bool>,
+    custom_action_labels: RefCell<Vec<String>>,
     requests: ReaderRequests,
     wake_proxy: EventLoopProxy,
 }
@@ -113,6 +116,30 @@ define_class!(
             Bool::YES
         }
 
+        #[unsafe(method(performAccessibilityCustomAction:))]
+        fn perform_accessibility_custom_action(
+            &self,
+            action: &UIAccessibilityCustomAction,
+        ) -> Bool {
+            let name = action.name().to_string();
+            let Some(index) = self
+                .ivars()
+                .custom_action_labels
+                .borrow()
+                .iter()
+                .position(|label| *label == name)
+            else {
+                return Bool::NO;
+            };
+            self.ivars()
+                .requests
+                .custom_actions
+                .borrow_mut()
+                .push((self.ivars().element_id, index));
+            self.ivars().wake_proxy.wake_up();
+            Bool::YES
+        }
+
         #[unsafe(method(accessibilityPerformEscape))]
         fn accessibility_perform_escape(&self) -> Bool {
             if !accessibility::escape_has_a_taker() {
@@ -146,6 +173,7 @@ impl NativeAccessibilityElement {
         let this = Self::alloc(mtm).set_ivars(AccessibilityElementIvars {
             element_id,
             actionable: Cell::new(false),
+            custom_action_labels: RefCell::new(Vec::new()),
             requests,
             wake_proxy,
         });
@@ -156,6 +184,10 @@ impl NativeAccessibilityElement {
 
     fn set_actionable(&self, actionable: bool) {
         self.ivars().actionable.set(actionable);
+    }
+
+    fn set_custom_action_labels(&self, labels: &[String]) {
+        *self.ivars().custom_action_labels.borrow_mut() = labels.to_vec();
     }
 }
 
@@ -390,6 +422,29 @@ impl IosAccessibilityBridge {
         moved
     }
 
+    /// Runs the custom action a VoiceOver user picked from the actions rotor,
+    /// on the live tree. Answers whether a handler took it.
+    pub(crate) fn drain_custom_actions<R>(&mut self, shell: &mut AppShell<R>) -> bool
+    where
+        R: Renderer,
+        R::Error: Debug,
+    {
+        let pending = self.requests.custom_actions.take();
+        let mut ran = false;
+        for (element_id, index) in pending {
+            let Some((node_id, canvas_key)) = self
+                .element_for(element_id)
+                .map(|element| (element.node_id, element.canvas_key))
+            else {
+                continue;
+            };
+            ran |= accessibility::run_reader_action(shell, |root| {
+                accessibility::perform_custom_action(root, node_id, canvas_key, index)
+            });
+        }
+        ran
+    }
+
     /// Closes the dialog on top, or asks the app to go back, after a VoiceOver
     /// two-finger scrub. Answers whether anything took the request.
     pub(crate) fn drain_escapes<R>(&mut self, shell: &mut AppShell<R>) -> bool
@@ -508,6 +563,38 @@ fn update_native_element(
     }
     native.setAccessibilityTraits(traits);
     native.setAccessibilityViewIsModal(element.role == AccessibilityRole::Dialog, mtm);
+    offer_custom_actions(native, element, mtm);
+}
+
+/// Lists the element's custom actions in VoiceOver's actions rotor, each one
+/// aimed back at the element by name.
+fn offer_custom_actions(
+    native: &NativeAccessibilityElement,
+    element: &AccessibilityElement,
+    mtm: MainThreadMarker,
+) {
+    native.set_custom_action_labels(&element.custom_actions);
+    let target: &AnyObject = native.as_ref();
+    let actions: Vec<Retained<UIAccessibilityCustomAction>> = element
+        .custom_actions
+        .iter()
+        .map(|label| {
+            // SAFETY: the target is this element, which answers
+            // performAccessibilityCustomAction: and outlives the action, and
+            // the selector names that method.
+            unsafe {
+                UIAccessibilityCustomAction::initWithName_target_selector(
+                    UIAccessibilityCustomAction::alloc(mtm),
+                    &NSString::from_str(label),
+                    Some(target),
+                    sel!(performAccessibilityCustomAction:),
+                )
+            }
+        })
+        .collect();
+    let native_object: &NSObject = native;
+    let list = (!actions.is_empty()).then(|| NSArray::from_retained_slice(&actions));
+    native_object.setAccessibilityCustomActions(list.as_deref(), mtm);
 }
 
 fn same_structure(current: &[AccessibilityElement], next: &[AccessibilityElement]) -> bool {

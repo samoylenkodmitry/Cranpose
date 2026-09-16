@@ -70,15 +70,66 @@ impl PartialEq for PopupRegistry {
     }
 }
 
+thread_local! {
+    static HOSTED_REGISTRIES: RefCell<Vec<std::rc::Weak<PopupRegistryState>>> =
+        const { RefCell::new(Vec::new()) };
+}
+
+/// Closes the dismissable popup on top of the most recent host, the way an
+/// outside tap would, for a screen reader's escape gesture or an Escape key
+/// with no dialog open. Answers whether a popup was there to close.
+pub fn dismiss_top_popup() -> bool {
+    let on_dismiss = HOSTED_REGISTRIES.with(|hosted| {
+        let mut hosted = hosted.borrow_mut();
+        hosted.retain(|registry| registry.strong_count() > 0);
+        hosted.iter().rev().find_map(|registry| {
+            let registry = registry.upgrade()?;
+            let entries = registry.entries.borrow();
+            entries
+                .iter()
+                .rev()
+                .find_map(|entry| entry.on_dismiss.clone())
+        })
+    });
+    match on_dismiss {
+        Some(on_dismiss) => {
+            on_dismiss();
+            true
+        }
+        None => false,
+    }
+}
+
+/// Whether a dismissable popup is open on any host. Reading this in a
+/// composable subscribes to every host's revision, so the reader recomposes
+/// when a popup opens or closes.
+pub fn dismissable_popup_open() -> bool {
+    HOSTED_REGISTRIES.with(|hosted| {
+        hosted.borrow().iter().any(|registry| {
+            let Some(registry) = registry.upgrade() else {
+                return false;
+            };
+            if let Some(revision) = registry.revision.as_ref() {
+                let _ = revision.value();
+            }
+            registry
+                .entries
+                .borrow()
+                .iter()
+                .any(|entry| entry.on_dismiss.is_some())
+        })
+    })
+}
+
 impl PopupRegistry {
     fn hosted() -> Self {
-        Self {
-            inner: Rc::new(PopupRegistryState {
-                entries: RefCell::new(Vec::new()),
-                next_id: Cell::new(0),
-                revision: Some(mutableStateOf(0u64)),
-            }),
-        }
+        let inner = Rc::new(PopupRegistryState {
+            entries: RefCell::new(Vec::new()),
+            next_id: Cell::new(0),
+            revision: Some(mutableStateOf(0u64)),
+        });
+        HOSTED_REGISTRIES.with(|hosted| hosted.borrow_mut().push(Rc::downgrade(&inner)));
+        Self { inner }
     }
 
     fn detached() -> Self {

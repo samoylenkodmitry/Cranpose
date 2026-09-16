@@ -3239,7 +3239,8 @@ fn every_platform_lets_a_reader_leave_a_dialog() {
     assert!(
         shell_source.contains("fn on_escape_key(")
             && shell_source.contains("pub fn dismiss_top_modal(")
-            && shell_source.contains("run_in_mutable_snapshot(cranpose_ui::dispatch_modal_back)"),
+            && shell_source.contains("cranpose_ui::dispatch_modal_back()")
+            && shell_source.contains("cranpose_ui::dismiss_top_popup()"),
         "Escape on a keyboard closes the modal on top through the same stack the back gesture uses"
     );
 
@@ -3292,4 +3293,39 @@ fn every_reader_action_runs_inside_the_app_context() {
             "{path} reaches the live tree outside the app context; route it through run_reader_action"
         );
     }
+}
+
+#[test]
+fn every_platform_bridge_offers_custom_actions() {
+    let desktop_source = crate_source("src/desktop_accessibility.rs");
+    assert!(
+        desktop_source.contains("CustomAction")
+            && desktop_source.contains("pub(crate) fn run_custom_actions("),
+        "accesskit lists custom actions and takes one back"
+    );
+
+    let ios_source = crate_source("src/ios_accessibility.rs");
+    assert!(
+        ios_source.contains("#[unsafe(method(performAccessibilityCustomAction:))]")
+            && ios_source.contains("setAccessibilityCustomActions(")
+            && ios_source.contains("fn drain_custom_actions<R>("),
+        "VoiceOver lists custom actions in its actions rotor and hands one back by name"
+    );
+
+    let java_source =
+        workspace_source("crates/cranpose/android/java/dev/cranpose/android/CranposeActivity.java");
+    let android_source = crate_source("src/android.rs");
+    assert!(
+        java_source.contains("AccessibilityAction(")
+            && android_source.contains("fn drain_accessibility_custom_actions("),
+        "TalkBack lists custom actions on the node and the shell drains them each frame"
+    );
+
+    let web_source = crate_source("src/web_accessibility.rs");
+    assert!(
+        web_source.contains("data-cranpose-action")
+            && web_source.contains("fn append_action_buttons(")
+            && web_source.contains("attach_action_listener(&root"),
+        "the web mirror puts one button per custom action after the control"
+    );
 }

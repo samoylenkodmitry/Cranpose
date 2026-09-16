@@ -45,8 +45,12 @@ impl PlatformEnvironment {
                 cranpose_services::local_launch_args().provides(launch_args),
             ],
             || {
-                crate::BackHandler(cranpose_ui::modal_depth() > 0, || {
-                    cranpose_ui::dispatch_modal_back();
+                let modal_open = cranpose_ui::modal_depth() > 0;
+                let popup_open = cranpose_ui::dismissable_popup_open();
+                crate::BackHandler(modal_open || popup_open, || {
+                    if !cranpose_ui::dispatch_modal_back() {
+                        cranpose_ui::dismiss_top_popup();
+                    }
                 });
                 content();
             },

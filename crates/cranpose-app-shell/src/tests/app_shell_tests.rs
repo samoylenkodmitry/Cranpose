@@ -2598,6 +2598,49 @@ fn escape_closes_the_modal_on_top_and_nothing_else() {
 }
 
 #[test]
+fn escape_closes_the_menu_on_top_when_no_dialog_is_open() {
+    let _guard = test_guard();
+    let root_key = location_key(file!(), line!(), column!());
+    let captured: Rc<RefCell<Option<MutableState<bool>>>> = Rc::new(RefCell::new(None));
+    let captured_for_content = Rc::clone(&captured);
+    let mut shell = AppShell::new(TestRenderer::default(), root_key, move || {
+        let captured = Rc::clone(&captured_for_content);
+        cranpose_ui::widgets::popup::PopupHost(move || {
+            let open = cranpose_core::rememberMutableStateOf(|| true);
+            *captured.borrow_mut() = Some(open);
+            if open.get() {
+                cranpose_ui::widgets::popup::PopupDismissable(
+                    cranpose_ui_graphics::Rect {
+                        x: 10.0,
+                        y: 10.0,
+                        width: 40.0,
+                        height: 20.0,
+                    },
+                    Point { x: 0.0, y: 24.0 },
+                    move || open.set(false),
+                    || {},
+                );
+            }
+        });
+    });
+    shell.update();
+    cranpose_ui::clear_modals();
+    let open = captured.borrow().expect("the popup state is captured");
+
+    let escape = KeyEvent::key_down(KeyCode::Escape, "");
+    assert!(shell.on_key_event(&escape), "the menu on top takes Escape");
+    assert!(
+        !open.get_non_reactive(),
+        "the menu closed through its own dismiss"
+    );
+    shell.update();
+    assert!(
+        !shell.on_key_event(&escape),
+        "with the menu gone the key belongs to the app"
+    );
+}
+
+#[test]
 fn frame_update_after_field_removal_hides_soft_keyboard() {
     let _guard = test_guard();
     let root_key = location_key(file!(), line!(), column!());

@@ -128,6 +128,22 @@ value moves freely, and a reader's step is then a tenth of the range.
 The value goes back through `set_progress` on the live semantics tree, so a
 stale published snapshot cannot move the wrong control.
 
+## 4b. An action a reader picks by name
+
+A row that dismisses on a swipe, a text with three links: a person who cannot
+see the screen cannot make the swipe or aim at one word. `config.custom_actions`
+is Compose's `customActions`; each entry has a label and a handler, and every
+platform lists it under the control.
+
+| Platform | Where it shows | How it runs |
+| --- | --- | --- |
+| accesskit | the node's custom actions | `Action::CustomAction` with the index |
+| iOS | VoiceOver's actions rotor, as `UIAccessibilityCustomAction` | `performAccessibilityCustomAction:` on the element, matched by name |
+| Android | the node's actions, as TalkBack's actions menu | `nativeOnAccessibilityCustomAction` with the index |
+| Web | one `<button>` per action right after the control, "Dismiss, Milk" | a click on that button |
+
+`SwipeToDismiss` and `LinkedText` fill this on their own.
+
 ## 5. A list a reader can page
 
 A lazy list builds only the rows on screen. A reader that walks the rows one
@@ -171,8 +187,11 @@ has one gesture for this, and Cranpose routes all of them to the same place:
 the innermost open modal, the one the platform back gesture closes.
 
 `Dialog` registers itself on the modal stack while it is open. Nothing else is
-needed: an app that shows a `Dialog` gets all four ways out below. An app that
-handles back on its own does so through `BackHandler`, as on Android.
+needed: an app that shows a `Dialog` gets all four ways out below. With no
+dialog open, the same gesture closes the dismissable popup on top instead, a
+dropdown or a menu shown through `PopupDismissable`, the way an outside tap
+would. An app that handles back on its own does so through `BackHandler`, as
+on Android.
 
 | Platform | Gesture | Where it goes |
 | --- | --- | --- |

@@ -503,7 +503,9 @@ fn project_canvas_children(
 #[cfg(any(
     test,
     all(feature = "desktop-shell", feature = "renderer-wgpu"),
-    all(feature = "android", feature = "renderer-wgpu", target_os = "android")
+    all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"),
+    all(feature = "android", feature = "renderer-wgpu", target_os = "android"),
+    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
 ))]
 pub(crate) fn perform_custom_action(
     root: &SemanticsNode,
