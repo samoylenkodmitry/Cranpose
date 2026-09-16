@@ -200,6 +200,30 @@ fn apply_aria_state(node: &HtmlElement, element: &AccessibilityElement) -> Resul
     Ok(())
 }
 
+/// One mirror node for a control: a button when a click reaches it, a
+/// span otherwise, carrying its label, role, state and paging data.
+fn mirror_node(
+    document: &Document,
+    id: i32,
+    element: &AccessibilityElement,
+    page: Option<(i32, f32, f32)>,
+) -> Result<HtmlElement, JsValue> {
+    let node = document
+        .create_element(if element.clickable { "button" } else { "span" })?
+        .dyn_into::<HtmlElement>()?;
+    node.set_attribute("aria-label", &element.label)?;
+    node.set_attribute("data-cranpose-node", &id.to_string())?;
+    apply_role_and_state(&node, element)?;
+    apply_page(&node, page)?;
+    if element.clickable {
+        let (x, y) = element.bounds.center();
+        node.set_attribute("data-cranpose-x", &x.to_string())?;
+        node.set_attribute("data-cranpose-y", &y.to_string())?;
+    }
+    node.set_attribute("tabindex", tab_index(element))?;
+    Ok(node)
+}
+
 /// Where the mirrored control sits in the Tab order: a focus target or an
 /// adjustable control takes Tab, a plain button keeps the browser's default,
 /// and text stays out of the way.
@@ -523,8 +547,9 @@ impl WebAccessibilityBridge {
         if elements == self.previous {
             return Ok(());
         }
+        let opened_dialog = opened_dialog(&self.previous, &elements);
         self.previous.clone_from(&elements);
-        let held = reader_focus(document);
+        let held = reader_focus(document).filter(|_| opened_dialog.is_none());
         let app_focus_before = self.focused_element;
         self.root.set_inner_html("");
         self.node_ids.borrow_mut().clear();
@@ -543,24 +568,15 @@ impl WebAccessibilityBridge {
         let ids = accessibility::element_ids(&elements);
         let pages = page_targets(&ids, &elements);
         for ((id, element), page) in ids.into_iter().zip(elements).zip(pages) {
-            let node = document
-                .create_element(if element.clickable { "button" } else { "span" })?
-                .dyn_into::<HtmlElement>()?;
-            node.set_attribute("aria-label", &element.label)?;
-            node.set_attribute("data-cranpose-node", &id.to_string())?;
-            apply_role_and_state(&node, &element)?;
-            apply_page(&node, page)?;
-            if element.clickable {
-                let (x, y) = element.bounds.center();
-                node.set_attribute("data-cranpose-x", &x.to_string())?;
-                node.set_attribute("data-cranpose-y", &y.to_string())?;
-            }
-            node.set_attribute("tabindex", tab_index(&element))?;
+            let node = mirror_node(document, id, &element, page)?;
             self.node_ids.borrow_mut().insert(id, element.node_id);
             place_node(&node, &element, &placement)?;
             self.root.append_child(&node)?;
             self.append_action_buttons(document, &element, id, &placement)?;
             self.follow_app_focus(&node, &element, id)?;
+            if opened_dialog == Some(element.node_id) {
+                node.focus()?;
+            }
         }
         self.settle_focus(held, app_focus_before)
     }
@@ -618,6 +634,22 @@ impl WebAccessibilityBridge {
         }
         Ok(())
     }
+}
+
+/// The node id of a dialog that is in the next snapshot and was not in the
+/// current one: the node a reader's cursor should land on.
+fn opened_dialog(
+    current: &[AccessibilityElement],
+    next: &[AccessibilityElement],
+) -> Option<cranpose_core::NodeId> {
+    next.iter()
+        .find(|element| {
+            element.role == AccessibilityRole::Dialog
+                && !current.iter().any(|old| {
+                    old.node_id == element.node_id && old.role == AccessibilityRole::Dialog
+                })
+        })
+        .map(|element| element.node_id)
 }
 
 /// The mirror node the browser's focus sits on, by its virtual id.

@@ -252,7 +252,8 @@ impl IosAccessibilityBridge {
         }
 
         if structure_changed {
-            self.publish_container(&next_ids, mtm);
+            let opened_dialog = opened_dialog(&self.snapshot, &next, &next_ids);
+            self.publish_container(&next_ids, opened_dialog, mtm);
         }
         self.snapshot = next;
         self.snapshot_ids = next_ids;
@@ -480,7 +481,12 @@ impl IosAccessibilityBridge {
         native
     }
 
-    fn publish_container(&mut self, next_ids: &[i32], mtm: MainThreadMarker) {
+    fn publish_container(
+        &mut self,
+        next_ids: &[i32],
+        opened_dialog: Option<i32>,
+        mtm: MainThreadMarker,
+    ) {
         let ordered: Vec<Retained<AnyObject>> = next_ids
             .iter()
             .filter_map(|element_id| self.native_elements.get(element_id))
@@ -495,15 +501,19 @@ impl IosAccessibilityBridge {
             host_object.setAutomationElements(Some(&array), mtm);
         }
 
+        let landing: Option<&AnyObject> = opened_dialog
+            .and_then(|element_id| self.native_elements.get(&element_id))
+            .map(|native| native.as_ref());
         // SAFETY: UIKit owns both immutable notification constants; a null
-        // argument asks the accessibility service to retain its current focus.
+        // argument asks the accessibility service to retain its current focus,
+        // and a dialog that just opened is the element it moves to.
         unsafe {
-            let notification = if self.published_once {
+            let notification = if self.published_once && landing.is_none() {
                 UIAccessibilityLayoutChangedNotification
             } else {
                 UIAccessibilityScreenChangedNotification
             };
-            UIAccessibilityPostNotification(notification, None);
+            UIAccessibilityPostNotification(notification, landing);
         }
         self.published_once = true;
     }
@@ -595,6 +605,24 @@ fn offer_custom_actions(
     let native_object: &NSObject = native;
     let list = (!actions.is_empty()).then(|| NSArray::from_retained_slice(&actions));
     native_object.setAccessibilityCustomActions(list.as_deref(), mtm);
+}
+
+/// The virtual id of a dialog that is in the next snapshot and was not in
+/// the current one: the element a reader's cursor should land on.
+fn opened_dialog(
+    current: &[AccessibilityElement],
+    next: &[AccessibilityElement],
+    next_ids: &[i32],
+) -> Option<i32> {
+    next.iter()
+        .zip(next_ids)
+        .find(|(element, _)| {
+            element.role == AccessibilityRole::Dialog
+                && !current.iter().any(|old| {
+                    old.node_id == element.node_id && old.role == AccessibilityRole::Dialog
+                })
+        })
+        .map(|(_, id)| *id)
 }
 
 fn same_structure(current: &[AccessibilityElement], next: &[AccessibilityElement]) -> bool {

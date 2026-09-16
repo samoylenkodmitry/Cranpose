@@ -3337,3 +3337,28 @@ fn every_platform_bridge_offers_custom_actions() {
         "the web mirror puts one button per custom action after the control"
     );
 }
+
+#[test]
+fn a_dialog_takes_the_reader_along_when_it_opens() {
+    let dialog_source = workspace_source("crates/cranpose-ui/src/widgets/dialog.rs");
+    assert!(
+        dialog_source.contains(".focus_target()")
+            && dialog_source.contains(".focus_requester(&requester)")
+            && dialog_source.contains("requester_for_open.request_focus()"),
+        "a dialog takes app focus as it opens, so every bridge's focus following moves the reader onto it"
+    );
+
+    let ios_source = crate_source("src/ios_accessibility.rs");
+    assert!(
+        ios_source.contains("fn opened_dialog(")
+            && ios_source.contains("UIAccessibilityPostNotification(notification, landing);"),
+        "VoiceOver gets a screen change aimed at the dialog that opened"
+    );
+
+    let web_source = crate_source("src/web_accessibility.rs");
+    assert!(
+        web_source.contains("fn opened_dialog(")
+            && web_source.contains("if opened_dialog == Some(element.node_id) {"),
+        "the web mirror focuses the dialog node that opened"
+    );
+}

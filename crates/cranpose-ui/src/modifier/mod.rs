@@ -507,6 +507,15 @@ impl Modifier {
         self.semantics(move |config| config.role = Some(role))
     }
 
+    /// Makes a screen reader read this component's text out whenever it
+    /// changes, without the reader's cursor on it: a status line, a toast, a
+    /// count that moves.
+    ///
+    /// This is Compose's `Modifier.semantics { liveRegion = LiveRegionMode.Polite }`.
+    pub fn live_region(self, mode: cranpose_foundation::LiveRegionMode) -> Self {
+        self.semantics(move |config| config.live_region = Some(mode))
+    }
+
     /// Gives this component the text a screen reader reads for it, for a
     /// drawing, an icon or a control with no text of its own.
     ///

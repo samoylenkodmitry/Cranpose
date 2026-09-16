@@ -197,6 +197,12 @@ dropdown or a menu shown through `PopupDismissable`, the way an outside tap
 would. An app that handles back on its own does so through `BackHandler`, as
 on Android.
 
+A dialog that opens takes app focus, so the reader's cursor lands on it with
+no app code: VoiceOver gets a screen change aimed at the dialog, TalkBack gets
+the focus event the Android host sends for every app focus move, the web
+mirror focuses the dialog's node, and accesskit follows the app focus it
+already receives.
+
 | Platform | Gesture | Where it goes |
 | --- | --- | --- |
 | accesskit | Escape on the keyboard | `AppShell::dismiss_top_modal` |
@@ -220,7 +226,7 @@ An app gets this with no code of its own:
 | `SwipeToDismiss` | the row's content | run "Dismiss" from the actions menu |
 | `verticalScroll`, `horizontalScroll`, `LazyColumn`, `LazyRow` | the rows inside | page on and back |
 | `LinkedText` | the whole text | open each link from the actions menu, as "Open <link text>" |
-| `Dialog` | its content, and nothing outside it | leave it with the reader's escape gesture |
+| `Dialog` | its content, and nothing outside it; the reader lands on it as it opens | leave it with the reader's escape gesture |
 | `Image`, `Icon` | the description the app gave | |
 
 A control an app draws itself declares what it is through
