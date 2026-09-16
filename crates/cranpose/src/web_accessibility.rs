@@ -181,8 +181,11 @@ fn apply_role_extras(node: &HtmlElement, element: &AccessibilityElement) -> Resu
 /// The state description, the checked or selected flag, and whether the
 /// control is disabled.
 fn apply_aria_state(node: &HtmlElement, element: &AccessibilityElement) -> Result<(), JsValue> {
-    if let Some(state) = &element.state_description {
-        node.set_attribute("aria-description", state)?;
+    if let Some(state) = accessibility::state_with_error(element) {
+        node.set_attribute("aria-description", &state)?;
+    }
+    if element.error.is_some() {
+        node.set_attribute("aria-invalid", "true")?;
     }
     if let Some(item) = element.collection_item {
         node.set_attribute("aria-posinset", &item.position.to_string())?;

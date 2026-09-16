@@ -3374,7 +3374,7 @@ fn every_lazy_list_tells_android_how_many_rows_it_holds() {
     let java_source = crate_source("android/java/dev/cranpose/android/CranposeActivity.java");
     assert!(
         java_source.contains("info.setCollectionInfo(AccessibilityNodeInfo.CollectionInfo.obtain(")
-            && java_source.contains("private static final int ACCESSIBILITY_FIELDS = 33;"),
+            && java_source.contains("private static final int ACCESSIBILITY_FIELDS = 34;"),
         "the Android host hands TalkBack the row count of a list"
     );
 }
@@ -3521,4 +3521,24 @@ fn a_dialog_hands_focus_back_to_its_opener() {
             && dialog_source.contains("crate::request_focus_from_platform(opener);"),
         "a dialog remembers the control that had focus and hands it back as it closes"
     );
+}
+
+#[test]
+fn every_platform_says_why_a_field_is_wrong() {
+    let java_source = crate_source("android/java/dev/cranpose/android/CranposeActivity.java");
+    assert!(
+        java_source.contains("info.setContentInvalid(true);")
+            && java_source.contains("info.setError(element.error);"),
+        "TalkBack gets the node's error"
+    );
+    for source in [
+        crate_source("src/ios_accessibility.rs"),
+        crate_source("src/web_accessibility.rs"),
+        crate_source("src/desktop_accessibility.rs"),
+    ] {
+        assert!(
+            source.contains("accessibility::state_with_error(element)"),
+            "every other bridge reads the reason after the state"
+        );
+    }
 }

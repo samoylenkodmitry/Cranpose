@@ -7,7 +7,8 @@ use std::{
 
 use accesskit::{
     Action, ActionData, ActionHandler, ActionRequest, ActivationHandler, CustomAction,
-    DeactivationHandler, Live, Node, NodeId, Rect, Role, Toggled, Tree, TreeId, TreeUpdate,
+    DeactivationHandler, Invalid, Live, Node, NodeId, Rect, Role, Toggled, Tree, TreeId,
+    TreeUpdate,
 };
 use cranpose_app_shell::AppShell;
 use cranpose_render_wgpu::WgpuRenderer;
@@ -472,8 +473,11 @@ fn apply_state(node: &mut Node, element: &AccessibilityElement) {
     if let Some(value) = &element.value {
         node.set_value(value.as_str());
     }
-    if let Some(state) = &element.state_description {
+    if let Some(state) = accessibility::state_with_error(element) {
         node.set_description(state.as_str());
+    }
+    if element.error.is_some() {
+        node.set_invalid(Invalid::True);
     }
     if let Some(item) = element.collection_item {
         node.set_position_in_set(item.position);

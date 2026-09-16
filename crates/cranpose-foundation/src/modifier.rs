@@ -1110,6 +1110,9 @@ pub struct SemanticsConfiguration {
     /// The title of the screen or pane this node is the root of, read out when
     /// the app moves to it. Compose's `paneTitle`.
     pub pane_title: Option<String>,
+    /// Why the control's content is wrong, read after its state: "invalid,
+    /// the amount needs a number". Compose's `error`.
+    pub error: Option<String>,
     /// Compose's `liveRegion`. When set, a screen reader reads this node again
     /// whenever its text changes, without the user moving to it.
     pub live_region: Option<LiveRegionMode>,
@@ -1156,6 +1159,7 @@ impl Default for SemanticsConfiguration {
             merge_descendants: false,
             selectable_group: false,
             pane_title: None,
+            error: None,
             live_region: None,
             progress: None,
             set_progress: None,
@@ -1207,6 +1211,9 @@ impl SemanticsConfiguration {
         self.selectable_group |= other.selectable_group;
         if let Some(title) = &other.pane_title {
             self.pane_title = Some(title.clone());
+        }
+        if let Some(error) = &other.error {
+            self.error = Some(error.clone());
         }
         if let Some(live_region) = other.live_region {
             self.live_region = Some(live_region);

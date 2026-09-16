@@ -95,6 +95,7 @@ pub(crate) struct AccessibilityElement {
     pub(crate) collection: Option<CollectionInfo>,
     pub(crate) collection_item: Option<CollectionItem>,
     pub(crate) pane_title: Option<String>,
+    pub(crate) error: Option<String>,
 }
 
 impl Default for AccessibilityElement {
@@ -124,6 +125,7 @@ impl Default for AccessibilityElement {
             collection: None,
             collection_item: None,
             pane_title: None,
+            error: None,
         }
     }
 }
@@ -476,6 +478,7 @@ fn element_for_node(
         collection: node.collection,
         collection_item: None,
         pane_title: node.pane_title.clone(),
+        error: node.error.clone(),
     }
 }
 
@@ -641,6 +644,7 @@ fn project_canvas_children(
             collection: None,
             collection_item: None,
             pane_title: None,
+            error: None,
         });
     }
 }
@@ -846,8 +850,44 @@ fn spoken_text(element: &AccessibilityElement) -> String {
     if let Some(state) = &element.state_description {
         parts.push(state.clone());
     }
+    parts.extend(error_text(element));
     parts.retain(|part| !part.trim().is_empty());
     parts.join(", ")
+}
+
+/// What a reader hears about a control whose content is wrong: "invalid" and
+/// the reason the app gave.
+#[cfg(any(
+    test,
+    all(feature = "desktop-shell", feature = "renderer-wgpu"),
+    all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"),
+    all(feature = "android", feature = "renderer-wgpu", target_os = "android"),
+    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
+))]
+pub(crate) fn error_text(element: &AccessibilityElement) -> Option<String> {
+    element
+        .error
+        .as_deref()
+        .filter(|error| !error.trim().is_empty())
+        .map(|error| format!("invalid, {error}"))
+}
+
+/// The state a reader hears for a control, with the reason its content is
+/// wrong after it, for the platforms that carry both in one description.
+#[cfg(any(
+    test,
+    all(feature = "desktop-shell", feature = "renderer-wgpu"),
+    all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"),
+    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
+))]
+pub(crate) fn state_with_error(element: &AccessibilityElement) -> Option<String> {
+    let parts: Vec<String> = element
+        .state_description
+        .clone()
+        .into_iter()
+        .chain(error_text(element))
+        .collect();
+    (!parts.is_empty()).then(|| parts.join(", "))
 }
 
 /// Whether two publications of one control read the same: the words, a
@@ -1609,6 +1649,18 @@ mod tests {
         assert_eq!(
             spoken_changes(&[before], &[after, fresh]),
             vec![false, false]
+        );
+    }
+
+    #[test]
+    fn a_new_error_is_a_spoken_change() {
+        let before = live_text(1, "Amount");
+        let mut after = live_text(1, "Amount");
+        after.error = Some("needs a number".into());
+        assert_eq!(spoken_changes(&[before], &[after.clone()]), vec![true]);
+        assert_eq!(
+            state_with_error(&after).as_deref(),
+            Some("invalid, needs a number")
         );
     }
 

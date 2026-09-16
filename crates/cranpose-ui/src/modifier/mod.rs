@@ -491,6 +491,14 @@ impl Modifier {
         self.semantics(move |config| config.progress = Some(info))
     }
 
+    /// Says why the control's content is wrong, so a screen reader reads
+    /// "invalid, the amount needs a number" after the control's state.
+    /// Compose's `Modifier.semantics { error("...") }`.
+    pub fn error(self, message: impl Into<String>) -> Self {
+        let message = message.into();
+        self.semantics(move |config| config.error = Some(message.clone()))
+    }
+
     /// Names the screen or pane this node is the root of, so a screen reader
     /// hears where it is when the app moves on: "Library" as the library
     /// opens. Compose's `Modifier.semantics { paneTitle = "..." }`.

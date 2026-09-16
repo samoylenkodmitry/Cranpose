@@ -148,6 +148,21 @@ platform lists it under the control.
 
 `SwipeToDismiss` and `LinkedText` fill this on their own.
 
+## 4c. A field whose content is wrong
+
+A form that shows a red line under a field tells a sighted person the
+amount is not a number; a reader hears nothing unless the app says so.
+`Modifier::error("needs a number")` on the field, Compose's `error`, makes a
+reader hear "invalid, needs a number" after the field's state, and the
+change is spoken when the field is under the cursor.
+
+| Platform | What the reader gets |
+| --- | --- |
+| accesskit | the node marked invalid, with the reason in its description |
+| iOS | "invalid" and the reason as the element's value, after its state |
+| Android | `setContentInvalid` and `setError` on the node, which TalkBack reads as "invalid" and the reason |
+| Web | `aria-invalid` on the mirror node, with the reason in `aria-description` |
+
 ## 5. A list a reader can page
 
 A lazy list builds only the rows on screen. A reader that walks the rows one

@@ -41,7 +41,7 @@ pub(crate) fn encode_elements(
             let progress = element.progress;
             let scroll = element.vertical_scroll.or(element.horizontal_scroll);
             format!(
-                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                 id,
                 role,
                 (element.bounds.x * density).round() as i32,
@@ -75,6 +75,7 @@ pub(crate) fn encode_elements(
                 element.collection_item.map_or(-1, item_row),
                 element.collection_item.map_or(-1, item_column),
                 escape(element.pane_title.as_deref().unwrap_or("")),
+                escape(element.error.as_deref().unwrap_or("")),
             )
         })
         .collect::<Vec<_>>()
@@ -173,7 +174,7 @@ mod tests {
         let records: Vec<_> = payload.split('\n').collect();
         assert_eq!(records.len(), 2);
         for record in &records {
-            assert_eq!(record.split('\t').count(), 33, "record: {record}");
+            assert_eq!(record.split('\t').count(), 34, "record: {record}");
         }
 
         let fields: Vec<_> = records[0].split('\t').collect();
@@ -413,6 +414,22 @@ mod tests {
             records[1].split('\t').nth(32),
             Some(""),
             "a button names no pane"
+        );
+    }
+
+    #[test]
+    fn the_record_says_why_a_field_is_wrong() {
+        let mut field = save_button(8);
+        field.error = Some("needs a number".into());
+
+        let payload = encode_elements(&[field, save_button(9)], &[], 1.0);
+        let records: Vec<_> = payload.split('\n').collect();
+
+        assert_eq!(records[0].split('\t').nth(33), Some("needs a number"));
+        assert_eq!(
+            records[1].split('\t').nth(33),
+            Some(""),
+            "a sound control names no error"
         );
     }
 }
