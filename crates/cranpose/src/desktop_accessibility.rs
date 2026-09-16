@@ -104,11 +104,15 @@ impl DesktopAccessibilityBridge {
     }
 
     pub(crate) fn sync(&mut self, shell: &mut AppShell<WgpuRenderer>) {
-        let spoken = join_announcements(accessibility::drain_app_announcements());
+        let mut announcements = accessibility::drain_app_announcements();
         let mut changed = false;
         if let Some(elements) = accessibility::snapshot_if_changed(shell, &mut self.seen_revision)
             && elements != self.previous
         {
+            announcements.extend(accessibility::pane_title_announcements(
+                &self.previous,
+                &elements,
+            ));
             self.previous = elements;
             self.centers = accessibility::element_ids(&self.previous)
                 .into_iter()
@@ -117,7 +121,7 @@ impl DesktopAccessibilityBridge {
                 .collect();
             changed = true;
         }
-        if let Some(spoken) = spoken {
+        if let Some(spoken) = join_announcements(announcements) {
             self.announcement = Some(spoken);
             self.announcement_turn = !self.announcement_turn;
             changed = true;
@@ -345,6 +349,7 @@ fn accesskit_node(element: &AccessibilityElement) -> Node {
     let scrolls = element.vertical_scroll.is_some() || element.horizontal_scroll.is_some();
     let role = match element.progress {
         Some(_) => Role::Slider,
+        None if element.pane_title.is_some() => Role::Region,
         None if scrolls && element.label.is_empty() => scroll_role(element),
         None => accesskit_role(element.role),
     };
@@ -353,6 +358,9 @@ fn accesskit_node(element: &AccessibilityElement) -> Node {
         node.set_value(element.label.as_str());
     } else {
         node.set_label(element.label.as_str());
+    }
+    if let Some(title) = &element.pane_title {
+        node.set_label(title.as_str());
     }
     node.set_bounds(Rect {
         x0: element.bounds.x as f64,

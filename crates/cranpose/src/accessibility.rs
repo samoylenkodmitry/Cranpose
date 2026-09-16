@@ -94,6 +94,7 @@ pub(crate) struct AccessibilityElement {
     pub(crate) scroll_parent: Option<NodeId>,
     pub(crate) collection: Option<CollectionInfo>,
     pub(crate) collection_item: Option<CollectionItem>,
+    pub(crate) pane_title: Option<String>,
 }
 
 impl Default for AccessibilityElement {
@@ -122,6 +123,7 @@ impl Default for AccessibilityElement {
             scroll_parent: None,
             collection: None,
             collection_item: None,
+            pane_title: None,
         }
     }
 }
@@ -266,7 +268,7 @@ fn project_node(
             clickable,
             live_region,
         ));
-    } else if container && rect.is_visible() {
+    } else if publishes_unlabeled(node) && rect.is_visible() {
         elements.push(element_for_node(
             node,
             rect,
@@ -303,6 +305,12 @@ fn project_node(
 /// a group of tabs or radio buttons.
 fn is_container(node: &SemanticsNode) -> bool {
     node.vertical_scroll.is_some() || node.horizontal_scroll.is_some() || node.selectable_group
+}
+
+/// A node published with no label of its own: a container, or the root of a
+/// pane whose title a reader hears.
+fn publishes_unlabeled(node: &SemanticsNode) -> bool {
+    is_container(node) || node.pane_title.is_some()
 }
 
 /// Projects the nodes under a container, then numbers the selectable controls
@@ -467,6 +475,7 @@ fn element_for_node(
         scroll_parent: None,
         collection: node.collection,
         collection_item: None,
+        pane_title: node.pane_title.clone(),
     }
 }
 
@@ -631,6 +640,7 @@ fn project_canvas_children(
             scroll_parent: None,
             collection: None,
             collection_item: None,
+            pane_title: None,
         });
     }
 }
@@ -782,6 +792,42 @@ pub(crate) fn live_region_announcements(
         }
     }
     announcements
+}
+
+/// The title of each pane that opened or changed since the last publish, so a
+/// reader hears where it is when the app moves on. Nothing on the first
+/// publish, which would read the first screen's title over its content.
+#[cfg(any(
+    test,
+    all(feature = "desktop-shell", feature = "renderer-wgpu"),
+    all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"),
+    all(feature = "android", feature = "renderer-wgpu", target_os = "android"),
+    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
+))]
+pub(crate) fn pane_title_announcements(
+    previous: &[AccessibilityElement],
+    current: &[AccessibilityElement],
+) -> Vec<Announcement> {
+    if previous.is_empty() {
+        return Vec::new();
+    }
+    current
+        .iter()
+        .filter_map(|element| {
+            let title = element
+                .pane_title
+                .as_deref()
+                .filter(|title| !title.trim().is_empty())?;
+            let was = previous
+                .iter()
+                .find(|other| other.node_id == element.node_id)
+                .and_then(|other| other.pane_title.as_deref());
+            (was != Some(title)).then(|| Announcement {
+                text: title.to_owned(),
+                mode: LiveRegionMode::Polite,
+            })
+        })
+        .collect()
 }
 
 #[cfg(any(
@@ -1191,6 +1237,38 @@ mod tests {
     }
 
     #[test]
+    fn a_pane_is_published_with_its_title_and_no_label() {
+        let mut screen = node(
+            1,
+            SemanticsRole::Layout,
+            Vec::new(),
+            None,
+            vec![node(
+                2,
+                SemanticsRole::Text {
+                    value: "Milk".into(),
+                },
+                Vec::new(),
+                None,
+                Vec::new(),
+            )],
+        );
+        screen.pane_title = Some("Library".into());
+        let bounds = HashMap::from_iter([
+            (1, AccessibilityRect::new(0.0, 0.0, 300.0, 600.0)),
+            (2, AccessibilityRect::new(0.0, 0.0, 300.0, 40.0)),
+        ]);
+
+        let projected = project_semantics(&screen, &bounds);
+
+        assert_eq!(projected.len(), 2, "the pane and its text: {projected:?}");
+        assert_eq!(projected[0].label, "");
+        assert_eq!(projected[0].pane_title.as_deref(), Some("Library"));
+        assert_eq!(projected[1].label, "Milk");
+        assert_eq!(projected[1].scroll_parent, None, "a pane is no container");
+    }
+
+    #[test]
     fn a_merged_row_is_one_stop() {
         let mut row = node(
             2,
@@ -1485,6 +1563,33 @@ mod tests {
         let before = vec![live_text(1, "3 receipts")];
         let after = vec![live_text(1, "3 receipts")];
         assert!(live_region_announcements(&before, &after).is_empty());
+    }
+
+    fn pane(node_id: NodeId, title: &str) -> AccessibilityElement {
+        AccessibilityElement {
+            node_id,
+            bounds: AccessibilityRect::new(0.0, 0.0, 300.0, 600.0),
+            pane_title: Some(title.into()),
+            ..AccessibilityElement::default()
+        }
+    }
+
+    #[test]
+    fn a_new_pane_title_is_read_out() {
+        let before = vec![pane(1, "Library")];
+        let after = vec![pane(1, "Receipt")];
+        let announcements = pane_title_announcements(&before, &after);
+        assert_eq!(announcements.len(), 1);
+        assert_eq!(announcements[0].text, "Receipt");
+        assert!(
+            pane_title_announcements(&after, &after).is_empty(),
+            "the same title stays quiet"
+        );
+    }
+
+    #[test]
+    fn the_first_publish_keeps_pane_titles_quiet() {
+        assert!(pane_title_announcements(&[], &[pane(1, "Library")]).is_empty());
     }
 
     #[test]

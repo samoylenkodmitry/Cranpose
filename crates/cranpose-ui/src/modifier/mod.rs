@@ -491,6 +491,14 @@ impl Modifier {
         self.semantics(move |config| config.progress = Some(info))
     }
 
+    /// Names the screen or pane this node is the root of, so a screen reader
+    /// hears where it is when the app moves on: "Library" as the library
+    /// opens. Compose's `Modifier.semantics { paneTitle = "..." }`.
+    pub fn pane_title(self, title: impl Into<String>) -> Self {
+        let title = title.into();
+        self.semantics(move |config| config.pane_title = Some(title.clone()))
+    }
+
     /// Makes the selectable controls under this node one group, so a screen
     /// reader says which of how many a tab or a radio button is: "Library,
     /// tab, 2 of 5". `LiquidTabBar` declares it on its own. Compose's

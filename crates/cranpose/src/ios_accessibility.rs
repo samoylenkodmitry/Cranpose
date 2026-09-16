@@ -276,6 +276,10 @@ impl IosAccessibilityBridge {
             &self.snapshot,
             next,
         ));
+        announcements.extend(accessibility::pane_title_announcements(
+            &self.snapshot,
+            next,
+        ));
         for announcement in announcements {
             let text = NSString::from_str(&announcement.text);
             let argument: &AnyObject = text.as_ref();

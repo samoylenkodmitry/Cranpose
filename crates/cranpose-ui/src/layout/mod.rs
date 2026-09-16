@@ -375,6 +375,8 @@ pub struct SemanticsNode {
     pub merge_descendants: bool,
     /// Whether the selectable controls under this node form one group.
     pub selectable_group: bool,
+    /// The title of the screen or pane this node is the root of.
+    pub pane_title: Option<String>,
     /// The text an editable field holds.
     pub text: Option<String>,
     pub text_selection: Option<TextRange>,
@@ -423,6 +425,7 @@ impl Default for SemanticsNode {
             hidden: false,
             merge_descendants: false,
             selectable_group: false,
+            pane_title: None,
             text: None,
             text_selection: None,
             focusable: false,
@@ -3086,6 +3089,7 @@ fn semantics_node_from_parts(
         node.hidden = config.hidden;
         node.merge_descendants = config.merge_descendants;
         node.selectable_group = config.selectable_group;
+        node.pane_title = config.pane_title;
         node.text = config.text;
         node.text_selection = config.text_selection;
         node.live_region = config.live_region;

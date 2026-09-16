@@ -229,6 +229,19 @@ something else is marked as changed.
 | Android | A content-changed event with the text, description and state change types goes out for the control, and TalkBack speaks the one under its cursor. |
 | Web | The mirror node keeps its focus and takes the new label; a reader speaks it on the next move. Text that has to be heard at once is a live region. |
 
+## 8. Where a reader is
+
+A person who cannot see the screen needs to hear where the app took them
+when it moves on by itself: a receipt opens after a scan, a folder replaces
+the list. `Modifier::pane_title("Receipt")` on the root of a screen names it,
+Compose's `paneTitle`. Every publish compares the titles with the last one
+and reads a new or changed title out the way a live region is read: TalkBack
+and VoiceOver speak it, the web mirror's live region carries it, and the
+accesskit tree announces it. The root itself is not a stop; on Android it
+carries the pane title of its node, on the web it is a region landmark with
+the title as its name, and accesskit sees a labeled region. The first
+publish stays quiet, so the first screen is not read twice.
+
 ## What the built-in widgets say on their own
 
 An app gets this with no code of its own:

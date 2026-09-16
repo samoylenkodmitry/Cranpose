@@ -1107,6 +1107,9 @@ pub struct SemanticsConfiguration {
     /// screen reader says which of how many a tab or a radio button is.
     /// Compose's `selectableGroup`.
     pub selectable_group: bool,
+    /// The title of the screen or pane this node is the root of, read out when
+    /// the app moves to it. Compose's `paneTitle`.
+    pub pane_title: Option<String>,
     /// Compose's `liveRegion`. When set, a screen reader reads this node again
     /// whenever its text changes, without the user moving to it.
     pub live_region: Option<LiveRegionMode>,
@@ -1152,6 +1155,7 @@ impl Default for SemanticsConfiguration {
             hidden: false,
             merge_descendants: false,
             selectable_group: false,
+            pane_title: None,
             live_region: None,
             progress: None,
             set_progress: None,
@@ -1201,6 +1205,9 @@ impl SemanticsConfiguration {
         self.hidden |= other.hidden;
         self.merge_descendants |= other.merge_descendants;
         self.selectable_group |= other.selectable_group;
+        if let Some(title) = &other.pane_title {
+            self.pane_title = Some(title.clone());
+        }
         if let Some(live_region) = other.live_region {
             self.live_region = Some(live_region);
         }

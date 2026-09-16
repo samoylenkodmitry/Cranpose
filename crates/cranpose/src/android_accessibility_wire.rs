@@ -41,7 +41,7 @@ pub(crate) fn encode_elements(
             let progress = element.progress;
             let scroll = element.vertical_scroll.or(element.horizontal_scroll);
             format!(
-                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                 id,
                 role,
                 (element.bounds.x * density).round() as i32,
@@ -74,6 +74,7 @@ pub(crate) fn encode_elements(
                 i32::from(changed.get(index).copied().unwrap_or(false)),
                 element.collection_item.map_or(-1, item_row),
                 element.collection_item.map_or(-1, item_column),
+                escape(element.pane_title.as_deref().unwrap_or("")),
             )
         })
         .collect::<Vec<_>>()
@@ -172,7 +173,7 @@ mod tests {
         let records: Vec<_> = payload.split('\n').collect();
         assert_eq!(records.len(), 2);
         for record in &records {
-            assert_eq!(record.split('\t').count(), 32, "record: {record}");
+            assert_eq!(record.split('\t').count(), 33, "record: {record}");
         }
 
         let fields: Vec<_> = records[0].split('\t').collect();
@@ -392,6 +393,26 @@ mod tests {
             (loose[30], loose[31]),
             ("-1", "-1"),
             "a button outside a group has no place"
+        );
+    }
+
+    #[test]
+    fn the_record_carries_the_title_of_a_pane() {
+        let mut screen = AccessibilityElement {
+            node_id: 1,
+            bounds: AccessibilityRect::new(0.0, 0.0, 300.0, 600.0),
+            ..AccessibilityElement::default()
+        };
+        screen.pane_title = Some("Library".into());
+
+        let payload = encode_elements(&[screen, save_button(8)], &[], 1.0);
+        let records: Vec<_> = payload.split('\n').collect();
+
+        assert_eq!(records[0].split('\t').nth(32), Some("Library"));
+        assert_eq!(
+            records[1].split('\t').nth(32),
+            Some(""),
+            "a button names no pane"
         );
     }
 }

@@ -3374,7 +3374,7 @@ fn every_lazy_list_tells_android_how_many_rows_it_holds() {
     let java_source = crate_source("android/java/dev/cranpose/android/CranposeActivity.java");
     assert!(
         java_source.contains("info.setCollectionInfo(AccessibilityNodeInfo.CollectionInfo.obtain(")
-            && java_source.contains("private static final int ACCESSIBILITY_FIELDS = 32;"),
+            && java_source.contains("private static final int ACCESSIBILITY_FIELDS = 33;"),
         "the Android host hands TalkBack the row count of a list"
     );
 }
@@ -3479,5 +3479,26 @@ fn a_reader_can_hand_a_field_its_text_on_android_and_the_desktop() {
         desktop_source.contains("accessibility::set_text(root, node_id, &text)")
             && desktop_source.contains("Some(ActionData::Value(text)) => {"),
         "accesskit's set-value action reaches the field"
+    );
+}
+
+#[test]
+fn every_platform_reads_a_pane_title_when_the_app_moves_on() {
+    for source in [
+        crate_source("src/android_accessibility.rs"),
+        crate_source("src/ios_accessibility.rs"),
+        crate_source("src/web_accessibility.rs"),
+        crate_source("src/desktop_accessibility.rs"),
+    ] {
+        assert!(
+            source.contains("accessibility::pane_title_announcements("),
+            "every bridge reads a changed pane title out"
+        );
+    }
+
+    let java_source = crate_source("android/java/dev/cranpose/android/CranposeActivity.java");
+    assert!(
+        java_source.contains("info.setPaneTitle(element.paneTitle);"),
+        "the Android host carries the pane title on its node"
     );
 }

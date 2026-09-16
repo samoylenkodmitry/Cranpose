@@ -192,6 +192,7 @@ pub(crate) fn sync(
     let elements = elements.filter(|elements| elements != previous);
     if let Some(elements) = &elements {
         announcements.extend(accessibility::live_region_announcements(previous, elements));
+        announcements.extend(accessibility::pane_title_announcements(previous, elements));
     }
     speak(app, announcements)?;
     let Some(elements) = elements else {

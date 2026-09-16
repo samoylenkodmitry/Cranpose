@@ -15,6 +15,10 @@ fn apply_role_and_state(node: &HtmlElement, element: &AccessibilityElement) -> R
         None => aria_role(element.role),
     };
     node.set_attribute("role", role)?;
+    if let Some(title) = &element.pane_title {
+        node.set_attribute("role", "region")?;
+        node.set_attribute("aria-label", title)?;
+    }
     let scrolls = element.vertical_scroll.is_some() || element.horizontal_scroll.is_some();
     if element.label.is_empty() && scrolls {
         node.set_attribute("aria-hidden", "true")?;
@@ -504,6 +508,10 @@ impl WebAccessibilityBridge {
     fn speak(&mut self, next: &[AccessibilityElement]) {
         let mut announcements = accessibility::drain_app_announcements();
         announcements.extend(accessibility::live_region_announcements(
+            &self.previous,
+            next,
+        ));
+        announcements.extend(accessibility::pane_title_announcements(
             &self.previous,
             next,
         ));
