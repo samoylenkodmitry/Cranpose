@@ -9,6 +9,7 @@ use cranpose_core::{ApplierGuard, MemoryApplier, NodeError, NodeId, RuntimeHandl
 pub use cranpose_core::{Composition, Key};
 pub use cranpose_macros::composable;
 
+pub mod announce;
 pub mod bring_into_view;
 pub mod clipboard_session;
 mod cursor_animation;
@@ -54,12 +55,15 @@ pub mod widgets;
 mod word_boundaries;
 pub mod zoom;
 
+#[doc(hidden)]
+pub use announce::{Announcement, Announcer, announce, drain_announcements, local_announcer};
 pub use bring_into_view::{
     BringIntoViewResponder, local_bring_into_view_responder, scroll_delta_to_reveal,
 };
 pub use cranpose_foundation::{
-    CanvasSemanticsNode, DelegatableNode, ModifierNode, ModifierNodeElement, NodeCapabilities,
-    NodeState, SemanticsConfiguration, SemanticsCustomAction, SemanticsWidgetRole,
+    CanvasSemanticsNode, DelegatableNode, LiveRegionMode, ModifierNode, ModifierNodeElement,
+    NodeCapabilities, NodeState, SemanticsConfiguration, SemanticsCustomAction,
+    SemanticsWidgetRole,
     lazy::{
         LazyItems, LazyListItemInfo, LazyListLayoutInfo, LazyListScope, LazyListState,
         rememberLazyListState, rememberLazyListStateWithPosition,
@@ -87,7 +91,6 @@ pub use focus_dispatch::{
     active_focus_target, clear_focus_invalidations, has_pending_focus_invalidations,
     process_focus_invalidations, schedule_focus_invalidation, set_active_focus_target,
 };
-#[doc(hidden)]
 pub use focus_manager::{FocusManager, local_focus_manager, request_focus_from_platform};
 pub use focus_order::{FocusEntry, collect_focus_order, focus_order_len, set_focus_order};
 pub use font_scale::{FontScaleCurve, MAX_FONT_SCALE_KNOTS};

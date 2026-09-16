@@ -14,7 +14,7 @@ use cranpose_core::{
     Phase, RuntimeHandle, SlotTable, SlotsHost, SnapshotStateObserver,
 };
 use cranpose_foundation::{
-    CanvasSemanticsNode, InvalidationKind, ModifierNodeContext, NodeCapabilities,
+    CanvasSemanticsNode, InvalidationKind, LiveRegionMode, ModifierNodeContext, NodeCapabilities,
     SemanticsConfiguration, SemanticsCustomAction, SemanticsWidgetRole, text::TextRange,
 };
 use cranpose_ui_layout::{Constraints, MeasurePolicy, Placement};
@@ -372,6 +372,9 @@ pub struct SemanticsNode {
     pub focusable: bool,
     /// Whether focus sits on this node right now.
     pub focused: bool,
+    /// How urgently a screen reader reads this node when its text changes.
+    /// Compose's `SemanticsProperties.LiveRegion`.
+    pub live_region: Option<LiveRegionMode>,
 }
 
 impl Default for SemanticsNode {
@@ -394,6 +397,7 @@ impl Default for SemanticsNode {
             text_selection: None,
             focusable: false,
             focused: false,
+            live_region: None,
         }
     }
 }
@@ -3043,6 +3047,7 @@ fn semantics_node_from_parts(
         node.canvas_children = config.canvas_children;
         node.editable_text = config.is_editable_text;
         node.text_selection = config.text_selection;
+        node.live_region = config.live_region;
     }
 
     node.focusable = crate::focus_dispatch::has_focus_target(node_id);

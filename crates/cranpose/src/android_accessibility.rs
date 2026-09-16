@@ -93,6 +93,42 @@ pub(crate) fn drain_focus_requests() -> Vec<i32> {
     )
 }
 
+/// Hands TalkBack text to read out at once, with no control to move to.
+/// Android reads a live region set on a virtual view only through its host, so
+/// a live region change reaches the user the same way an app announcement
+/// does: as one spoken line.
+fn speak(
+    app: &android_activity::AndroidApp,
+    announcements: Vec<cranpose_ui::Announcement>,
+) -> Result<(), String> {
+    if announcements.is_empty() {
+        return Ok(());
+    }
+    let text = announcements
+        .into_iter()
+        .map(|announcement| announcement.text)
+        .collect::<Vec<_>>()
+        .join(". ");
+    with_android_activity_env(app, |env, activity| {
+        let text = env.new_string(text).map_err(|error| {
+            clear_pending_android_jni_exception(env);
+            format!("failed to encode an accessibility announcement: {error}")
+        })?;
+        let text = JObject::from(text);
+        env.call_method(
+            &activity,
+            jni_str!("cranposeAnnounceForAccessibility"),
+            jni_sig!("(Ljava/lang/String;)V"),
+            &[JValue::Object(&text)],
+        )
+        .map_err(|error| {
+            clear_pending_android_jni_exception(env);
+            format!("failed to read out an accessibility announcement: {error}")
+        })?;
+        Ok(())
+    })
+}
+
 pub(crate) fn sync(
     app: &android_activity::AndroidApp,
     shell: &mut AppShell<WgpuRenderer>,
@@ -104,16 +140,21 @@ pub(crate) fn sync(
     if policy.update_enabled(accessibility_bridge_enabled()) {
         *seen_revision = None;
     }
+    let mut announcements = accessibility::drain_app_announcements();
     let now = std::time::Instant::now();
-    if !policy.try_begin_publish(now) {
-        return Ok(());
+    let elements = if policy.try_begin_publish(now) {
+        accessibility::snapshot_if_changed(shell, seen_revision)
+    } else {
+        None
+    };
+    let elements = elements.filter(|elements| elements != previous);
+    if let Some(elements) = &elements {
+        announcements.extend(accessibility::live_region_announcements(previous, elements));
     }
-    let Some(elements) = accessibility::snapshot_if_changed(shell, seen_revision) else {
+    speak(app, announcements)?;
+    let Some(elements) = elements else {
         return Ok(());
     };
-    if elements == *previous {
-        return Ok(());
-    }
     *previous = elements;
     let payload = encode_elements(previous, density);
     with_android_activity_env(app, |env, activity| {

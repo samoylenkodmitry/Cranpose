@@ -17,12 +17,13 @@ use objc2::{
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use objc2_foundation::{NSArray, NSObject, NSObjectProtocol, NSString};
 use objc2_ui_kit::{
-    NSObjectUIAccessibility, NSObjectUIAccessibilityContainer, UIAccessibilityElement,
-    UIAccessibilityIdentification, UIAccessibilityLayoutChangedNotification,
-    UIAccessibilityPostNotification, UIAccessibilityScreenChangedNotification,
-    UIAccessibilityTraitButton, UIAccessibilityTraitHeader, UIAccessibilityTraitImage,
-    UIAccessibilityTraitNone, UIAccessibilityTraitNotEnabled, UIAccessibilityTraitSelected,
-    UIAccessibilityTraitStaticText, UIView,
+    NSObjectUIAccessibility, NSObjectUIAccessibilityContainer,
+    UIAccessibilityAnnouncementNotification, UIAccessibilityElement, UIAccessibilityIdentification,
+    UIAccessibilityLayoutChangedNotification, UIAccessibilityPostNotification,
+    UIAccessibilityScreenChangedNotification, UIAccessibilityTraitButton,
+    UIAccessibilityTraitHeader, UIAccessibilityTraitImage, UIAccessibilityTraitNone,
+    UIAccessibilityTraitNotEnabled, UIAccessibilityTraitSelected, UIAccessibilityTraitStaticText,
+    UIView,
 };
 use winit::event_loop::EventLoopProxy;
 
@@ -139,6 +140,7 @@ impl IosAccessibilityBridge {
         R::Error: Debug,
     {
         let next = accessibility::snapshot(shell);
+        self.speak(&next);
         if next == self.snapshot {
             return;
         }
@@ -168,6 +170,31 @@ impl IosAccessibilityBridge {
         self.snapshot = next;
         self.snapshot_ids = next_ids;
         self.follow_app_focus();
+    }
+
+    /// Hands VoiceOver text to read out: what the app asked for through
+    /// [`cranpose_ui::Announcer`], and the text of any live region that
+    /// changed. iOS has no live region of its own, so the change is read as an
+    /// announcement. VoiceOver drops these when it is off, so the call costs
+    /// nothing then.
+    fn speak(&self, next: &[AccessibilityElement]) {
+        let mut announcements = accessibility::drain_app_announcements();
+        announcements.extend(accessibility::live_region_announcements(
+            &self.snapshot,
+            next,
+        ));
+        for announcement in announcements {
+            let text = NSString::from_str(&announcement.text);
+            let argument: &AnyObject = text.as_ref();
+            // SAFETY: the announcement notification takes the string to read,
+            // and `text` lives until the call returns.
+            unsafe {
+                UIAccessibilityPostNotification(
+                    UIAccessibilityAnnouncementNotification,
+                    Some(argument),
+                );
+            }
+        }
     }
 
     /// Moves the VoiceOver cursor onto the control the app focused, so a

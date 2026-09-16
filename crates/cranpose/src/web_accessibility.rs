@@ -2,6 +2,7 @@ use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use cranpose_app_shell::AppShell;
 use cranpose_render_wgpu::WgpuRenderer;
+use cranpose_ui::LiveRegionMode;
 use wasm_bindgen::{JsCast, JsValue, closure::Closure};
 use web_sys::{Document, Element, HtmlCanvasElement, HtmlElement, MouseEvent};
 
@@ -131,12 +132,84 @@ fn attach_focus_listener(
     Ok(())
 }
 
+/// The element that holds one mirrored control per element on screen. It
+/// covers the canvas and takes no pointer of its own.
+fn mirror_root(document: &Document) -> Result<HtmlElement, JsValue> {
+    let root = document.create_element("div")?.dyn_into::<HtmlElement>()?;
+    root.set_attribute("data-cranpose-accessibility", "")?;
+    root.set_attribute("aria-label", "Application controls")?;
+    let style = root.style();
+    style.set_property("position", "fixed")?;
+    style.set_property("inset", "0")?;
+    style.set_property("z-index", "2147483647")?;
+    style.set_property("pointer-events", "none")?;
+    Ok(root)
+}
+
+/// Hands a screen reader's activation of a mirrored control back to the app as
+/// a press at the middle of the control it stands for.
+fn attach_click_listener(
+    root: &HtmlElement,
+    app: Rc<RefCell<AppShell<WgpuRenderer>>>,
+) -> Result<(), JsValue> {
+    let click = Closure::wrap(Box::new(move |event: MouseEvent| {
+        let Some(target) = event
+            .target()
+            .and_then(|target| target.dyn_into::<Element>().ok())
+        else {
+            return;
+        };
+        let Some(x) = target
+            .get_attribute("data-cranpose-x")
+            .and_then(|value| value.parse::<f32>().ok())
+        else {
+            return;
+        };
+        let Some(y) = target
+            .get_attribute("data-cranpose-y")
+            .and_then(|value| value.parse::<f32>().ok())
+        else {
+            return;
+        };
+        if let Ok(mut shell) = app.try_borrow_mut() {
+            shell.set_cursor(x, y);
+            shell.pointer_pressed();
+            shell.pointer_released_at_position(x, y);
+        }
+    }) as Box<dyn FnMut(_)>);
+    root.add_event_listener_with_callback("click", click.as_ref().unchecked_ref())?;
+    click.forget();
+    Ok(())
+}
+
+/// A text holder a screen reader watches and reads out when its text changes.
+/// It sits outside the mirrored controls and stays for the life of the page:
+/// the mirror is rebuilt on every change, and a live region that appears
+/// together with its text is read by no reader.
+fn live_region(document: &Document, politeness: &str) -> Result<HtmlElement, JsValue> {
+    let region = document.create_element("div")?.dyn_into::<HtmlElement>()?;
+    region.set_attribute("aria-live", politeness)?;
+    region.set_attribute("aria-atomic", "true")?;
+    let style = region.style();
+    style.set_property("position", "fixed")?;
+    style.set_property("width", "1px")?;
+    style.set_property("height", "1px")?;
+    style.set_property("overflow", "hidden")?;
+    style.set_property("clip", "rect(0 0 0 0)")?;
+    style.set_property("white-space", "nowrap")?;
+    style.set_property("pointer-events", "none")?;
+    Ok(region)
+}
+
 pub(crate) struct WebAccessibilityBridge {
     root: HtmlElement,
     canvas: HtmlCanvasElement,
     previous: Vec<AccessibilityElement>,
     node_ids: Rc<RefCell<HashMap<i32, cranpose_core::NodeId>>>,
     focused_element: Option<i32>,
+    polite: HtmlElement,
+    assertive: HtmlElement,
+    announcement_turn: bool,
 }
 
 impl WebAccessibilityBridge {
@@ -145,47 +218,15 @@ impl WebAccessibilityBridge {
         canvas: HtmlCanvasElement,
         app: Rc<RefCell<AppShell<WgpuRenderer>>>,
     ) -> Result<Self, JsValue> {
-        let root = document.create_element("div")?.dyn_into::<HtmlElement>()?;
-        root.set_attribute("data-cranpose-accessibility", "")?;
-        root.set_attribute("aria-label", "Application controls")?;
-        let style = root.style();
-        style.set_property("position", "fixed")?;
-        style.set_property("inset", "0")?;
-        style.set_property("z-index", "2147483647")?;
-        style.set_property("pointer-events", "none")?;
+        let root = mirror_root(document)?;
+        attach_click_listener(&root, app)?;
 
-        let click = Closure::wrap(Box::new(move |event: MouseEvent| {
-            let Some(target) = event
-                .target()
-                .and_then(|target| target.dyn_into::<Element>().ok())
-            else {
-                return;
-            };
-            let Some(x) = target
-                .get_attribute("data-cranpose-x")
-                .and_then(|value| value.parse::<f32>().ok())
-            else {
-                return;
-            };
-            let Some(y) = target
-                .get_attribute("data-cranpose-y")
-                .and_then(|value| value.parse::<f32>().ok())
-            else {
-                return;
-            };
-            if let Ok(mut shell) = app.try_borrow_mut() {
-                shell.set_cursor(x, y);
-                shell.pointer_pressed();
-                shell.pointer_released_at_position(x, y);
-            }
-        }) as Box<dyn FnMut(_)>);
-        root.add_event_listener_with_callback("click", click.as_ref().unchecked_ref())?;
-        click.forget();
-
-        document
-            .body()
-            .ok_or("document has no body")?
-            .append_child(&root)?;
+        let body = document.body().ok_or("document has no body")?;
+        body.append_child(&root)?;
+        let polite = live_region(document, "polite")?;
+        let assertive = live_region(document, "assertive")?;
+        body.append_child(&polite)?;
+        body.append_child(&assertive)?;
         let node_ids: Rc<RefCell<HashMap<i32, cranpose_core::NodeId>>> =
             Rc::new(RefCell::new(HashMap::new()));
         attach_focus_listener(&root, Rc::clone(&node_ids))?;
@@ -196,7 +237,35 @@ impl WebAccessibilityBridge {
             previous: Vec::new(),
             node_ids,
             focused_element: None,
+            polite,
+            assertive,
+            announcement_turn: false,
         })
+    }
+
+    /// Puts text a screen reader reads out into the live region that matches
+    /// how urgent it is. The same text twice in a row carries a trailing space
+    /// one time out of two, because a reader reads a live region only when its
+    /// text changes.
+    fn speak(&mut self, next: &[AccessibilityElement]) {
+        let mut announcements = accessibility::drain_app_announcements();
+        announcements.extend(accessibility::live_region_announcements(
+            &self.previous,
+            next,
+        ));
+        for announcement in announcements {
+            self.announcement_turn = !self.announcement_turn;
+            let text = if self.announcement_turn {
+                format!("{} ", announcement.text)
+            } else {
+                announcement.text
+            };
+            let region = match announcement.mode {
+                LiveRegionMode::Assertive => &self.assertive,
+                LiveRegionMode::Polite => &self.polite,
+            };
+            region.set_text_content(Some(&text));
+        }
     }
 
     /// Moves the browser's focus onto the control the app focused, so a
@@ -220,6 +289,7 @@ impl WebAccessibilityBridge {
         shell: &mut AppShell<WgpuRenderer>,
     ) -> Result<(), JsValue> {
         let elements = accessibility::snapshot(shell);
+        self.speak(&elements);
         if elements == self.previous {
             return Ok(());
         }

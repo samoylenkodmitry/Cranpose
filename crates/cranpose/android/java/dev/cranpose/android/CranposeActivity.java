@@ -731,6 +731,19 @@ public class CranposeActivity extends NativeActivity {
         nativeOnAccessibilityStateChanged(manager.isEnabled());
     }
 
+    /**
+     * Reads text out on TalkBack without moving its cursor. The app asks for this
+     * through Cranpose's announcer, and a live region whose text changed arrives
+     * here too: Android reads a live region set on a virtual view only through
+     * its host view.
+     */
+    public void cranposeAnnounceForAccessibility(String text) {
+        if (text == null || text.isEmpty()) {
+            return;
+        }
+        runOnUiThread(() -> getWindow().getDecorView().announceForAccessibility(text));
+    }
+
     /** Publishes Cranpose's semantic tree through Android's native virtual-view API. */
     public void cranposeSetAccessibilityElements(String payload) {
         // Parsed inside the posted task: the caller is the native frame loop,
