@@ -3512,3 +3512,13 @@ fn the_desktop_tree_keeps_rows_under_their_list() {
         "accesskit gets each row under its list and each tab under its group"
     );
 }
+
+#[test]
+fn a_dialog_hands_focus_back_to_its_opener() {
+    let dialog_source = workspace_source("crates/cranpose-ui/src/widgets/dialog.rs");
+    assert!(
+        dialog_source.contains("cranpose_core::remember(crate::active_focus_target)")
+            && dialog_source.contains("crate::request_focus_from_platform(opener);"),
+        "a dialog remembers the control that had focus and hands it back as it closes"
+    );
+}

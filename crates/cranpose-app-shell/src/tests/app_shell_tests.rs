@@ -2692,6 +2692,76 @@ fn a_text_field_named_by_the_app_keeps_that_name() {
     assert_eq!(field.text.as_deref(), Some("Milk"));
 }
 
+#[test]
+fn focus_returns_to_the_opener_when_a_dialog_closes() {
+    let _guard = test_guard();
+    let root_key = location_key(file!(), line!(), column!());
+    let captured: Rc<RefCell<Option<MutableState<bool>>>> = Rc::new(RefCell::new(None));
+    let captured_for_content = Rc::clone(&captured);
+    let mut shell = AppShell::new(TestRenderer::default(), root_key, move || {
+        let captured = Rc::clone(&captured_for_content);
+        cranpose_ui::widgets::popup::PopupHost(move || {
+            let open = cranpose_core::rememberMutableStateOf(|| false);
+            *captured.borrow_mut() = Some(open);
+            Box(
+                Modifier::empty()
+                    .size(Size::new(80.0, 40.0))
+                    .focus_target()
+                    .content_description("Open"),
+                BoxSpec::default(),
+                || {},
+            );
+            if open.get() {
+                cranpose_ui::widgets::dialog::Dialog(
+                    cranpose_ui::widgets::dialog::DialogSpec::default(),
+                    |_reason| {},
+                    || {},
+                );
+            }
+        });
+    });
+    shell.set_semantics_enabled(true);
+    shell.update();
+    let open = captured.borrow().expect("the dialog state is captured");
+    let opener = find_semantics_described(shell.semantics_tree().expect("a tree").root(), "Open")
+        .expect("the opener is in the tree")
+        .node_id;
+    shell.debug_enter_app_context(|| cranpose_ui::request_focus_from_platform(opener));
+    shell.update();
+
+    open.set(true);
+    shell.update();
+    shell.update();
+    let dialog = find_semantics_with_role(
+        shell.semantics_tree().expect("a tree").root(),
+        cranpose_foundation::SemanticsWidgetRole::Dialog,
+    )
+    .expect("the dialog is in the tree");
+    assert!(dialog.focused, "the dialog took focus as it opened");
+
+    open.set(false);
+    shell.update();
+    shell.update();
+    let opener = find_semantics_described(shell.semantics_tree().expect("a tree").root(), "Open")
+        .expect("the opener is still in the tree");
+    assert!(
+        opener.focused,
+        "focus came back to the control that opened the dialog"
+    );
+    cranpose_ui::clear_modals();
+}
+
+fn find_semantics_described<'a>(
+    node: &'a cranpose_ui::SemanticsNode,
+    description: &str,
+) -> Option<&'a cranpose_ui::SemanticsNode> {
+    if node.description.as_deref() == Some(description) {
+        return Some(node);
+    }
+    node.children
+        .iter()
+        .find_map(|child| find_semantics_described(child, description))
+}
 fn find_editable_semantics(
     node: &cranpose_ui::SemanticsNode,
 ) -> Option<&cranpose_ui::SemanticsNode> {

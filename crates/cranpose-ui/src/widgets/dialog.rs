@@ -190,6 +190,14 @@ pub fn DialogWithScrim<C>(
         cranpose_core::LaunchedEffect((), move |_scope| {
             let _ = requester_for_open.request_focus();
         });
+        let opener = cranpose_core::remember(crate::active_focus_target).with(|opener| *opener);
+        cranpose_core::DisposableEffect((), move |scope| {
+            scope.on_dispose(move || {
+                if let Some(opener) = opener {
+                    crate::request_focus_from_platform(opener);
+                }
+            })
+        });
         Box(
             Modifier::empty()
                 .size(Size {

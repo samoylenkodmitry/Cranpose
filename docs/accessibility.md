@@ -207,6 +207,9 @@ no app code: VoiceOver gets a screen change aimed at the dialog, TalkBack gets
 the focus event the Android host sends for every app focus move, the web
 mirror focuses the dialog's node, and accesskit follows the app focus it
 already receives.
+When the dialog closes, app focus returns to the control that had it before
+the dialog opened, so a reader lands back on the button it pressed rather
+than at the top of the screen.
 
 | Platform | Gesture | Where it goes |
 | --- | --- | --- |
@@ -259,7 +262,7 @@ An app gets this with no code of its own:
 | `SwipeToDismiss` | the row's content | run "Dismiss" from the actions menu |
 | `verticalScroll`, `horizontalScroll`, `LazyColumn`, `LazyRow` | the rows inside, and on Android how many rows there are | page on and back |
 | `LinkedText` | the whole text | open each link from the actions menu, as "Open <link text>" |
-| `Dialog` | its content, and nothing outside it; the reader lands on it as it opens | leave it with the reader's escape gesture |
+| `Dialog` | its content, and nothing outside it; the reader lands on it as it opens | leave it with the reader's escape gesture, and land back on the control that opened it |
 | `Image`, `Icon` | the description the app gave | |
 
 A control an app draws itself declares what it is through
