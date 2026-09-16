@@ -4,8 +4,8 @@ use cranpose_app_shell::AppShell;
 use cranpose_core::{NodeId, collections::map::HashMap};
 use cranpose_render_common::Renderer;
 use cranpose_ui::{
-    Announcement, LayoutBox, LiveRegionMode, SemanticsAction, SemanticsNode, SemanticsRole,
-    SemanticsWidgetRole,
+    Announcement, LayoutBox, LiveRegionMode, ProgressBarRangeInfo, SemanticsAction, SemanticsNode,
+    SemanticsRole, SemanticsWidgetRole,
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -87,6 +87,8 @@ pub(crate) struct AccessibilityElement {
     pub(crate) focusable: bool,
     pub(crate) focused: bool,
     pub(crate) live_region: Option<LiveRegionMode>,
+    pub(crate) progress: Option<ProgressBarRangeInfo>,
+    pub(crate) adjustable: bool,
 }
 
 impl Default for AccessibilityElement {
@@ -108,6 +110,8 @@ impl Default for AccessibilityElement {
             focusable: false,
             focused: false,
             live_region: None,
+            progress: None,
+            adjustable: false,
         }
     }
 }
@@ -274,6 +278,8 @@ fn project_node(
             focusable: node.focusable,
             focused: node.focused,
             live_region,
+            progress: node.progress,
+            adjustable: node.set_progress.is_some(),
         });
     }
 
@@ -327,6 +333,8 @@ fn project_canvas_children(
             focusable: false,
             focused: false,
             live_region,
+            progress: None,
+            adjustable: false,
         });
     }
 }
@@ -359,6 +367,46 @@ pub(crate) fn perform_custom_action(
         }
         None => false,
     }
+}
+
+/// Moves the value of an adjustable control, for a screen reader that offers
+/// its own way to change one: a VoiceOver swipe up, TalkBack's set-progress
+/// action, an accesskit value, or an arrow key on the web mirror. `value` is in
+/// the control's own range. Answers whether the control took it.
+#[cfg(any(
+    test,
+    all(feature = "desktop-shell", feature = "renderer-wgpu"),
+    all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"),
+    all(feature = "android", feature = "renderer-wgpu", target_os = "android"),
+    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
+))]
+pub(crate) fn set_progress(root: &SemanticsNode, node_id: NodeId, value: f32) -> bool {
+    let Some(node) = find_semantics_node(root, node_id) else {
+        return false;
+    };
+    match &node.set_progress {
+        Some(action) => action.invoke(value),
+        None => false,
+    }
+}
+
+/// The value one screen reader step away from the one the control holds now,
+/// for the readers that offer a step up and a step down rather than a value.
+#[cfg(any(
+    test,
+    all(feature = "desktop-shell", feature = "renderer-wgpu"),
+    all(feature = "ios", feature = "renderer-wgpu", target_os = "ios")
+))]
+pub(crate) fn stepped_value(progress: &ProgressBarRangeInfo, up: bool) -> f32 {
+    let step = progress.step();
+    let next = if up {
+        progress.current + step
+    } else {
+        progress.current - step
+    };
+    let low = progress.start.min(progress.end);
+    let high = progress.start.max(progress.end);
+    next.clamp(low, high)
 }
 
 /// Moves app focus onto the node a platform's accessibility layer asked for,
@@ -444,7 +492,9 @@ fn spoken_text(element: &AccessibilityElement) -> String {
 #[cfg(any(
     test,
     all(feature = "desktop-shell", feature = "renderer-wgpu"),
-    all(feature = "android", feature = "renderer-wgpu", target_os = "android")
+    all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"),
+    all(feature = "android", feature = "renderer-wgpu", target_os = "android"),
+    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
 ))]
 fn find_semantics_node(node: &SemanticsNode, node_id: NodeId) -> Option<&SemanticsNode> {
     if node.node_id == node_id {
@@ -905,5 +955,65 @@ mod tests {
             elements[0].live_region,
             Some(cranpose_ui::LiveRegionMode::Assertive)
         );
+    }
+
+    #[test]
+    fn an_adjustable_control_publishes_its_range_and_takes_a_new_value() {
+        let taken = Rc::new(RefCell::new(Vec::new()));
+        let seen = Rc::clone(&taken);
+        let bounds = HashMap::from_iter([(7, AccessibilityRect::new(0.0, 0.0, 200.0, 40.0))]);
+        let mut root = node(
+            7,
+            SemanticsRole::Layout,
+            Vec::new(),
+            Some("Volume"),
+            Vec::new(),
+        );
+        root.progress = Some(cranpose_ui::ProgressBarRangeInfo::new(0.4, 0.0, 1.0, 0));
+        root.set_progress = Some(cranpose_ui::SemanticsSetProgress::new(move |value| {
+            seen.borrow_mut().push(value);
+            true
+        }));
+
+        let elements = project_semantics(&root, &bounds);
+        assert_eq!(elements.len(), 1);
+        let published = elements[0]
+            .progress
+            .expect("the range reaches the platform");
+        assert_eq!(published.current, 0.4);
+        assert_eq!(published.end, 1.0);
+        assert!(elements[0].adjustable);
+
+        assert!(set_progress(&root, 7, 0.6));
+        assert_eq!(*taken.borrow(), vec![0.6]);
+        assert!(!set_progress(&root, 99, 0.6), "no such control");
+    }
+
+    #[test]
+    fn a_step_moves_one_stop_and_stops_at_the_ends() {
+        let ten = cranpose_ui::ProgressBarRangeInfo::new(0.5, 0.0, 1.0, 0);
+        assert!((stepped_value(&ten, true) - 0.6).abs() < 1e-6);
+        assert!((stepped_value(&ten, false) - 0.4).abs() < 1e-6);
+
+        let top = cranpose_ui::ProgressBarRangeInfo::new(1.0, 0.0, 1.0, 0);
+        assert_eq!(stepped_value(&top, true), 1.0, "a step up stays at the end");
+
+        let four_stops = cranpose_ui::ProgressBarRangeInfo::new(0.0, 0.0, 1.0, 4);
+        assert!((four_stops.step() - 0.2).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_control_without_a_range_is_never_adjustable() {
+        let bounds = HashMap::from_iter([(7, AccessibilityRect::new(0.0, 0.0, 200.0, 40.0))]);
+        let root = node(
+            7,
+            SemanticsRole::Layout,
+            Vec::new(),
+            Some("Volume"),
+            Vec::new(),
+        );
+        let elements = project_semantics(&root, &bounds);
+        assert!(elements[0].progress.is_none());
+        assert!(!elements[0].adjustable);
     }
 }

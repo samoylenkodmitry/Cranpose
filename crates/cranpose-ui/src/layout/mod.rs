@@ -15,7 +15,8 @@ use cranpose_core::{
 };
 use cranpose_foundation::{
     CanvasSemanticsNode, InvalidationKind, LiveRegionMode, ModifierNodeContext, NodeCapabilities,
-    SemanticsConfiguration, SemanticsCustomAction, SemanticsWidgetRole, text::TextRange,
+    ProgressBarRangeInfo, SemanticsConfiguration, SemanticsCustomAction, SemanticsSetProgress,
+    SemanticsWidgetRole, text::TextRange,
 };
 use cranpose_ui_layout::{Constraints, MeasurePolicy, Placement};
 use web_time::Instant;
@@ -375,6 +376,11 @@ pub struct SemanticsNode {
     /// How urgently a screen reader reads this node when its text changes.
     /// Compose's `SemanticsProperties.LiveRegion`.
     pub live_region: Option<LiveRegionMode>,
+    /// The value this control holds inside a range. Compose's
+    /// `ProgressBarRangeInfo`.
+    pub progress: Option<ProgressBarRangeInfo>,
+    /// What this control does when a screen reader moves its value.
+    pub set_progress: Option<SemanticsSetProgress>,
 }
 
 impl Default for SemanticsNode {
@@ -398,6 +404,8 @@ impl Default for SemanticsNode {
             focusable: false,
             focused: false,
             live_region: None,
+            progress: None,
+            set_progress: None,
         }
     }
 }
@@ -3048,6 +3056,8 @@ fn semantics_node_from_parts(
         node.editable_text = config.is_editable_text;
         node.text_selection = config.text_selection;
         node.live_region = config.live_region;
+        node.progress = config.progress;
+        node.set_progress = config.set_progress;
     }
 
     node.focusable = crate::focus_dispatch::has_focus_target(node_id);

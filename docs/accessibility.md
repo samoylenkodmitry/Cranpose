@@ -94,6 +94,40 @@ screen twice.
 The announcer holds at most 32 lines. An app that announces in a loop loses the
 oldest lines rather than growing without limit.
 
+## 4. A value inside a range
+
+A slider, a dial or a progress bar reads as plain text unless the platform
+knows it holds a value. A person who cannot see the screen then hears "47
+percent" and has no way to change it.
+
+```rust
+Modifier::empty().progress_semantics(value, 0.0, 1.0, 0)
+
+Modifier::empty().semantics(|config| {
+    config.progress = Some(ProgressBarRangeInfo::new(value, 0.0, 1.0, 0));
+    config.set_progress = Some(SemanticsSetProgress::new(move |next| {
+        on_value_change(next);
+        true
+    }));
+})
+```
+
+`progress_semantics` is Compose's `Modifier.progressSemantics(value, range,
+steps)`; `set_progress` is `SemanticsActions.SetProgress`. The built-in
+`Slider` declares both, so an app that uses it gets an adjustable control with
+no further code. `steps` counts the stops between the two ends; zero means the
+value moves freely, and a reader's step is then a tenth of the range.
+
+| Platform | Reads | Moves |
+| --- | --- | --- |
+| accesskit | `Role::Slider` with the value, its ends and its step | `Action::SetValue`, `Increment`, `Decrement` |
+| iOS | `UIAccessibilityTraitAdjustable` with the state text as the value | a VoiceOver swipe up or down, through `accessibilityIncrement` and `accessibilityDecrement` |
+| Android | `RangeInfo` on the node | TalkBack's `ACTION_SET_PROGRESS`, or a volume key swipe |
+| Web | `role="slider"` with `aria-valuenow`, `min`, `max`, `valuetext` | the arrow keys, Home and End on the mirrored control |
+
+The value goes back through `set_progress` on the live semantics tree, so a
+stale published snapshot cannot move the wrong control.
+
 ## What a reader hears, end to end
 
 1. Layout builds the semantics tree, one node per control, with focus flags.

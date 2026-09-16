@@ -20,10 +20,10 @@ use objc2_ui_kit::{
     NSObjectUIAccessibility, NSObjectUIAccessibilityContainer,
     UIAccessibilityAnnouncementNotification, UIAccessibilityElement, UIAccessibilityIdentification,
     UIAccessibilityLayoutChangedNotification, UIAccessibilityPostNotification,
-    UIAccessibilityScreenChangedNotification, UIAccessibilityTraitButton,
-    UIAccessibilityTraitHeader, UIAccessibilityTraitImage, UIAccessibilityTraitNone,
-    UIAccessibilityTraitNotEnabled, UIAccessibilityTraitSelected, UIAccessibilityTraitStaticText,
-    UIView,
+    UIAccessibilityScreenChangedNotification, UIAccessibilityTraitAdjustable,
+    UIAccessibilityTraitButton, UIAccessibilityTraitHeader, UIAccessibilityTraitImage,
+    UIAccessibilityTraitNone, UIAccessibilityTraitNotEnabled, UIAccessibilityTraitSelected,
+    UIAccessibilityTraitStaticText, UIView,
 };
 use winit::event_loop::EventLoopProxy;
 
@@ -37,6 +37,7 @@ struct AccessibilityElementIvars {
     actionable: Cell<bool>,
     pending_activations: Rc<RefCell<Vec<i32>>>,
     pending_focus: Rc<RefCell<Vec<i32>>>,
+    pending_steps: Rc<RefCell<Vec<(i32, bool)>>>,
     wake_proxy: EventLoopProxy,
 }
 
@@ -65,6 +66,24 @@ define_class!(
             Bool::YES
         }
 
+        #[unsafe(method(accessibilityIncrement))]
+        fn accessibility_increment(&self) {
+            self.ivars()
+                .pending_steps
+                .borrow_mut()
+                .push((self.ivars().element_id, true));
+            self.ivars().wake_proxy.wake_up();
+        }
+
+        #[unsafe(method(accessibilityDecrement))]
+        fn accessibility_decrement(&self) {
+            self.ivars()
+                .pending_steps
+                .borrow_mut()
+                .push((self.ivars().element_id, false));
+            self.ivars().wake_proxy.wake_up();
+        }
+
         #[unsafe(method(accessibilityElementDidBecomeFocused))]
         fn accessibility_element_did_become_focused(&self) {
             self.ivars()
@@ -82,6 +101,7 @@ impl NativeAccessibilityElement {
         element_id: i32,
         pending_activations: Rc<RefCell<Vec<i32>>>,
         pending_focus: Rc<RefCell<Vec<i32>>>,
+        pending_steps: Rc<RefCell<Vec<(i32, bool)>>>,
         wake_proxy: EventLoopProxy,
         mtm: MainThreadMarker,
     ) -> Retained<Self> {
@@ -90,6 +110,7 @@ impl NativeAccessibilityElement {
             actionable: Cell::new(false),
             pending_activations,
             pending_focus,
+            pending_steps,
             wake_proxy,
         });
         // SAFETY: `container` is the retained winit root UIView and implements
@@ -109,6 +130,7 @@ pub(crate) struct IosAccessibilityBridge {
     snapshot_ids: Vec<i32>,
     pending_activations: Rc<RefCell<Vec<i32>>>,
     pending_focus: Rc<RefCell<Vec<i32>>>,
+    pending_steps: Rc<RefCell<Vec<(i32, bool)>>>,
     wake_proxy: EventLoopProxy,
     published_once: bool,
     focused_element: Option<i32>,
@@ -128,6 +150,7 @@ impl IosAccessibilityBridge {
             snapshot_ids: Vec::new(),
             pending_activations: Rc::new(RefCell::new(Vec::new())),
             pending_focus: Rc::new(RefCell::new(Vec::new())),
+            pending_steps: Rc::new(RefCell::new(Vec::new())),
             wake_proxy: event_proxy,
             published_once: false,
             focused_element: None,
@@ -275,6 +298,37 @@ impl IosAccessibilityBridge {
         changed
     }
 
+    /// Moves the value of an adjustable control after a VoiceOver swipe up or
+    /// down. Answers whether a control took the new value.
+    pub(crate) fn drain_value_steps<R>(&mut self, shell: &mut AppShell<R>) -> bool
+    where
+        R: Renderer,
+        R::Error: Debug,
+    {
+        let pending = self.pending_steps.take();
+        if pending.is_empty() {
+            return false;
+        }
+        let mut moved = false;
+        for (element_id, up) in pending {
+            let Some((node_id, progress)) = self
+                .element_for(element_id)
+                .map(|element| (element.node_id, element.progress))
+            else {
+                continue;
+            };
+            let Some(progress) = progress else {
+                continue;
+            };
+            let next = accessibility::stepped_value(&progress, up);
+            let Some(tree) = shell.semantics_tree() else {
+                continue;
+            };
+            moved |= accessibility::set_progress(tree.root(), node_id, next);
+        }
+        moved
+    }
+
     fn create_element(
         &self,
         element_id: i32,
@@ -286,6 +340,7 @@ impl IosAccessibilityBridge {
             element_id,
             Rc::clone(&self.pending_activations),
             Rc::clone(&self.pending_focus),
+            Rc::clone(&self.pending_steps),
             self.wake_proxy.clone(),
             mtm,
         );
@@ -371,6 +426,9 @@ fn update_native_element(
         }
         if !element.enabled {
             traits |= UIAccessibilityTraitNotEnabled;
+        }
+        if element.adjustable {
+            traits |= UIAccessibilityTraitAdjustable;
         }
     }
     native.setAccessibilityTraits(traits);

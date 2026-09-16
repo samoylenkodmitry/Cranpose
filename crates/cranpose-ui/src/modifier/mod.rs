@@ -43,7 +43,7 @@ pub use cranpose_foundation::{
     AnyModifierElement, DynModifierElement, FocusState, PointerEvent, PointerEventKind,
     PointerSource, RotaryScrollEvent, SemanticsConfiguration, modifier_element,
 };
-use cranpose_foundation::{ModifierNodeElement, NodeCapabilities};
+use cranpose_foundation::{ModifierNodeElement, NodeCapabilities, ProgressBarRangeInfo};
 #[allow(unused_imports)]
 pub use cranpose_ui_graphics::{
     BlendMode, BlurredEdgeTreatment, Brush, Color, ColorFilter, CompositingStrategy, CornerRadii,
@@ -473,6 +473,19 @@ impl Modifier {
         let modifier =
             Modifier::from_parts(vec![modifier_element(element)]).with_inspector_metadata(metadata);
         self.then(modifier)
+    }
+
+    /// Tells a screen reader the value this control holds inside a range, so
+    /// it reads the value and offers its own way to change it.
+    ///
+    /// This is Compose's `Modifier.progressSemantics(value, valueRange,
+    /// steps)`. Without it a slider reads as text and a person who cannot see
+    /// the screen has no way to move it.
+    ///
+    /// Example: `Modifier::empty().progress_semantics(0.35, 0.0, 1.0, 0)`
+    pub fn progress_semantics(self, current: f32, start: f32, end: f32, steps: u32) -> Self {
+        let info = ProgressBarRangeInfo::new(current, start, end, steps);
+        self.semantics(move |config| config.progress = Some(info))
     }
 
     /// Makes this component focusable.

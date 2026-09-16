@@ -166,6 +166,25 @@ fn drain_accessibility_focus(elements: &[crate::accessibility::AccessibilityElem
     }
 }
 
+/// Moves the value of an adjustable control TalkBack asked to change. The
+/// control is resolved against the live semantics tree, so a stale published
+/// snapshot cannot move the wrong one.
+fn drain_accessibility_values(
+    shell: &mut AppShell<WgpuRenderer>,
+    elements: &[crate::accessibility::AccessibilityElement],
+) {
+    for (virtual_id, value) in crate::android_accessibility::drain_value_requests() {
+        let Some((node_id, _)) = crate::accessibility::resolve_element_id(elements, virtual_id)
+        else {
+            continue;
+        };
+        let Some(tree) = shell.semantics_tree() else {
+            continue;
+        };
+        crate::accessibility::set_progress(tree.root(), node_id, value);
+    }
+}
+
 fn dispatch_android_ime_event(shell: &mut AppShell<WgpuRenderer>, event: AndroidImeEvent) {
     match event {
         AndroidImeEvent::CommitText { text, .. } => {
@@ -2157,6 +2176,7 @@ pub fn run(
                 );
             }
             drain_accessibility_focus(&accessibility_elements);
+            drain_accessibility_values(shell, &accessibility_elements);
             for event in ime_event_queue.drain() {
                 dispatch_android_ime_event(shell, event);
             }

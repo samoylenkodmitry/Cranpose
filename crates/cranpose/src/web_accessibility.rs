@@ -10,9 +10,35 @@ use crate::accessibility::{self, AccessibilityElement, AccessibilityRole};
 
 /// The role, value and state a screen reader reads off the mirrored element.
 fn apply_role_and_state(node: &HtmlElement, element: &AccessibilityElement) -> Result<(), JsValue> {
-    node.set_attribute("role", aria_role(element.role))?;
+    let role = match element.progress {
+        Some(_) => "slider",
+        None => aria_role(element.role),
+    };
+    node.set_attribute("role", role)?;
     apply_role_extras(node, element)?;
+    apply_progress(node, element)?;
     apply_aria_state(node, element)
+}
+
+/// The value an adjustable control holds, and the stops an arrow key moves it
+/// by. A screen reader reads the value and offers its own way to change it.
+fn apply_progress(node: &HtmlElement, element: &AccessibilityElement) -> Result<(), JsValue> {
+    let Some(progress) = element.progress else {
+        return Ok(());
+    };
+    node.set_attribute("aria-valuenow", &progress.current.to_string())?;
+    node.set_attribute("aria-valuemin", &progress.start.to_string())?;
+    node.set_attribute("aria-valuemax", &progress.end.to_string())?;
+    if let Some(text) = &element.state_description {
+        node.set_attribute("aria-valuetext", text)?;
+    }
+    if element.adjustable {
+        node.set_attribute("data-cranpose-value", &progress.current.to_string())?;
+        node.set_attribute("data-cranpose-min", &progress.start.to_string())?;
+        node.set_attribute("data-cranpose-max", &progress.end.to_string())?;
+        node.set_attribute("data-cranpose-step", &progress.step().to_string())?;
+    }
+    Ok(())
 }
 
 /// The ARIA role a screen reader reads the control as.
@@ -71,6 +97,19 @@ fn apply_aria_state(node: &HtmlElement, element: &AccessibilityElement) -> Resul
         node.set_attribute("aria-disabled", "true")?;
     }
     Ok(())
+}
+
+/// Where the mirrored control sits in the Tab order: a focus target or an
+/// adjustable control takes Tab, a plain button keeps the browser's default,
+/// and text stays out of the way.
+fn tab_index(element: &AccessibilityElement) -> &'static str {
+    if element.focusable || element.adjustable {
+        "0"
+    } else if element.clickable {
+        "auto"
+    } else {
+        "-1"
+    }
 }
 
 /// Puts the mirrored element over the control it stands for, so a reader's
@@ -182,6 +221,59 @@ fn attach_click_listener(
     Ok(())
 }
 
+/// Moves the value of an adjustable control with the arrow keys, the way a
+/// screen reader and a keyboard user both expect of a slider.
+fn attach_key_listener(
+    root: &HtmlElement,
+    app: Rc<RefCell<AppShell<WgpuRenderer>>>,
+    node_ids: Rc<RefCell<HashMap<i32, cranpose_core::NodeId>>>,
+) -> Result<(), JsValue> {
+    let key_down = Closure::wrap(Box::new(move |event: web_sys::KeyboardEvent| {
+        let Some(target) = event
+            .target()
+            .and_then(|target| target.dyn_into::<Element>().ok())
+        else {
+            return;
+        };
+        let read = |name: &str| {
+            target
+                .get_attribute(name)
+                .and_then(|value| value.parse::<f32>().ok())
+        };
+        let (Some(current), Some(min), Some(max), Some(step)) = (
+            read("data-cranpose-value"),
+            read("data-cranpose-min"),
+            read("data-cranpose-max"),
+            read("data-cranpose-step"),
+        ) else {
+            return;
+        };
+        let next = match event.key().as_str() {
+            "ArrowRight" | "ArrowUp" => current + step,
+            "ArrowLeft" | "ArrowDown" => current - step,
+            "Home" => min,
+            "End" => max,
+            _ => return,
+        };
+        let Some(node_id) = target
+            .get_attribute("data-cranpose-node")
+            .and_then(|value| value.parse::<i32>().ok())
+            .and_then(|element_id| node_ids.borrow().get(&element_id).copied())
+        else {
+            return;
+        };
+        event.prevent_default();
+        if let Ok(mut shell) = app.try_borrow_mut()
+            && let Some(tree) = shell.semantics_tree()
+        {
+            accessibility::set_progress(tree.root(), node_id, next.clamp(min, max));
+        }
+    }) as Box<dyn FnMut(_)>);
+    root.add_event_listener_with_callback("keydown", key_down.as_ref().unchecked_ref())?;
+    key_down.forget();
+    Ok(())
+}
+
 /// A text holder a screen reader watches and reads out when its text changes.
 /// It sits outside the mirrored controls and stays for the life of the page:
 /// the mirror is rebuilt on every change, and a live region that appears
@@ -219,7 +311,7 @@ impl WebAccessibilityBridge {
         app: Rc<RefCell<AppShell<WgpuRenderer>>>,
     ) -> Result<Self, JsValue> {
         let root = mirror_root(document)?;
-        attach_click_listener(&root, app)?;
+        attach_click_listener(&root, Rc::clone(&app))?;
 
         let body = document.body().ok_or("document has no body")?;
         body.append_child(&root)?;
@@ -230,6 +322,7 @@ impl WebAccessibilityBridge {
         let node_ids: Rc<RefCell<HashMap<i32, cranpose_core::NodeId>>> =
             Rc::new(RefCell::new(HashMap::new()));
         attach_focus_listener(&root, Rc::clone(&node_ids))?;
+        attach_key_listener(&root, app, Rc::clone(&node_ids))?;
 
         Ok(Self {
             root,
@@ -315,16 +408,7 @@ impl WebAccessibilityBridge {
                 node.set_attribute("data-cranpose-x", &x.to_string())?;
                 node.set_attribute("data-cranpose-y", &y.to_string())?;
             }
-            node.set_attribute(
-                "tabindex",
-                if element.focusable {
-                    "0"
-                } else if element.clickable {
-                    "auto"
-                } else {
-                    "-1"
-                },
-            )?;
+            node.set_attribute("tabindex", tab_index(&element))?;
             self.node_ids.borrow_mut().insert(id, element.node_id);
             place_node(
                 &node,

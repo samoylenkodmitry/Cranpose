@@ -842,8 +842,58 @@ fn every_platform_bridge_carries_focus_both_ways() {
         web_source.contains("\"focusin\"")
             && web_source.contains("node.focus()")
             && web_source.contains("\"tabindex\",")
-            && web_source.contains("if element.focusable {"),
+            && web_source.contains("if element.focusable || element.adjustable {"),
         "the web mirror should take Tab focus, follow the app's focus, and report a focus back"
+    );
+}
+
+#[test]
+fn every_platform_bridge_lets_a_reader_move_an_adjustable_control() {
+    let projection_source = crate_source("src/accessibility.rs");
+    assert!(
+        projection_source.contains("pub(crate) progress: Option<ProgressBarRangeInfo>")
+            && projection_source.contains("pub(crate) adjustable: bool")
+            && projection_source.contains("pub(crate) fn set_progress("),
+        "the range a control holds and the way back to move it are platform-neutral"
+    );
+
+    let desktop_source = crate_source("src/desktop_accessibility.rs");
+    assert!(
+        desktop_source.contains("node.set_numeric_value(progress.current as f64)")
+            && desktop_source.contains("node.add_action(Action::SetValue)")
+            && desktop_source.contains("pub(crate) fn run_value_requests("),
+        "accesskit should carry the value and take SetValue, Increment and Decrement back"
+    );
+
+    let ios_source = crate_source("src/ios_accessibility.rs");
+    assert!(
+        ios_source.contains("UIAccessibilityTraitAdjustable")
+            && ios_source.contains("accessibilityIncrement")
+            && ios_source.contains("accessibilityDecrement")
+            && ios_source.contains("fn drain_value_steps<R>("),
+        "VoiceOver moves an adjustable control with a swipe up and down, not with a value"
+    );
+
+    let java_source =
+        workspace_source("crates/cranpose/android/java/dev/cranpose/android/CranposeActivity.java");
+    let android_source = crate_source("src/android_accessibility.rs");
+    let wire_source = crate_source("src/android_accessibility_wire.rs");
+    assert!(
+        java_source.contains("info.setRangeInfo(AccessibilityNodeInfo.RangeInfo.obtain(")
+            && java_source.contains("ACTION_ARGUMENT_PROGRESS_VALUE")
+            && android_source.contains(
+                "Java_dev_cranpose_android_CranposeActivity_nativeOnAccessibilitySetProgress"
+            )
+            && wire_source.contains("i32::from(element.adjustable)"),
+        "TalkBack reads a RangeInfo and hands a new value back through the wire"
+    );
+
+    let web_source = crate_source("src/web_accessibility.rs");
+    assert!(
+        web_source.contains("\"aria-valuenow\"")
+            && web_source.contains("fn attach_key_listener(")
+            && web_source.contains("accessibility::set_progress("),
+        "the web mirror should read as a slider and move on the arrow keys"
     );
 }
 

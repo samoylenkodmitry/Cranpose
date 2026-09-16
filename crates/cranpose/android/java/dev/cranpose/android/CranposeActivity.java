@@ -708,6 +708,7 @@ public class CranposeActivity extends NativeActivity {
 
     /** Reports the virtual view TalkBack focused, so app focus follows it. */
     private static native void nativeOnAccessibilityFocus(int virtualViewId);
+    private static native void nativeOnAccessibilitySetProgress(int virtualViewId, float value);
 
     private static native void nativeOnAccessibilityStateChanged(boolean enabled);
 
@@ -768,7 +769,7 @@ public class CranposeActivity extends NativeActivity {
     }
 
     /** Field count of one accessibility record; see android_accessibility_wire.rs. */
-    private static final int ACCESSIBILITY_FIELDS = 19;
+    private static final int ACCESSIBILITY_FIELDS = 23;
 
     /** Separator packing a node's custom action labels into one field. */
     private static final String ACCESSIBILITY_ACTION_SEPARATOR = String.valueOf((char) 0x1f);
@@ -798,7 +799,9 @@ public class CranposeActivity extends NativeActivity {
                         unescapeAccessibility(fields[12]), Integer.parseInt(fields[13]),
                         Integer.parseInt(fields[14]), "1".equals(fields[15]),
                         parseAccessibilityActions(fields[16]), "1".equals(fields[17]),
-                        "1".equals(fields[18])));
+                        "1".equals(fields[18]), "1".equals(fields[19]),
+                        Float.parseFloat(fields[20]), Float.parseFloat(fields[21]),
+                        Float.parseFloat(fields[22])));
             } catch (RuntimeException ignored) {
                 // A malformed record must not make the host Activity inaccessible.
             }
@@ -842,12 +845,18 @@ public class CranposeActivity extends NativeActivity {
         final String[] customActions;
         final boolean focusable;
         final boolean focused;
+        /** Whether a screen reader may move this control's value. */
+        final boolean adjustable;
+        final float progressCurrent;
+        final float progressMin;
+        final float progressMax;
 
         CranposeAccessibilityElement(int id, int role, Rect bounds, float centerX,
                 float centerY, boolean clickable, String label, String value,
                 String stateDescription, String clickLabel, int selected, int toggled,
                 boolean enabled, String[] customActions, boolean focusable,
-                boolean focused) {
+                boolean focused, boolean adjustable, float progressCurrent,
+                float progressMin, float progressMax) {
             this.id = id;
             this.role = role;
             this.bounds = bounds;
@@ -864,6 +873,10 @@ public class CranposeActivity extends NativeActivity {
             this.customActions = customActions;
             this.focusable = focusable;
             this.focused = focused;
+            this.adjustable = adjustable;
+            this.progressCurrent = progressCurrent;
+            this.progressMin = progressMin;
+            this.progressMax = progressMax;
         }
 
         /**
@@ -945,6 +958,16 @@ public class CranposeActivity extends NativeActivity {
             info.setAccessibilityFocused(focusedId == element.id);
             info.setFocused(element.focused);
             if (element.focusable) info.addAction(AccessibilityNodeInfo.ACTION_FOCUS);
+            // A slider or a dial: TalkBack reads the value and offers its own
+            // way to move it, which is the only way a blind user can set one.
+            if (element.adjustable) {
+                info.setRangeInfo(AccessibilityNodeInfo.RangeInfo.obtain(
+                        AccessibilityNodeInfo.RangeInfo.RANGE_TYPE_FLOAT,
+                        element.progressMin, element.progressMax, element.progressCurrent));
+                if (Build.VERSION.SDK_INT >= 24) {
+                    info.addAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_PROGRESS);
+                }
+            }
             info.setContentDescription(element.label);
             info.setClassName(element.className());
             if (element.role == 3) {
@@ -1018,6 +1041,14 @@ public class CranposeActivity extends NativeActivity {
             }
             if (action == AccessibilityNodeInfo.ACTION_FOCUS && element.focusable) {
                 nativeOnAccessibilityFocus(element.id);
+                return true;
+            }
+            if (Build.VERSION.SDK_INT >= 24 && element.adjustable && arguments != null
+                    && action == AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_PROGRESS.getId()) {
+                float value = arguments.getFloat(
+                        AccessibilityNodeInfo.ACTION_ARGUMENT_PROGRESS_VALUE,
+                        element.progressCurrent);
+                nativeOnAccessibilitySetProgress(element.id, value);
                 return true;
             }
             if (action == AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS) {

@@ -31,8 +31,9 @@ pub(crate) fn encode_elements(elements: &[AccessibilityElement], density: f32) -
                 .map(|label| escape(label))
                 .collect::<Vec<_>>()
                 .join(&ACTION_SEPARATOR.to_string());
+            let progress = element.progress;
             format!(
-                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                 id,
                 role,
                 (element.bounds.x * density).round() as i32,
@@ -52,6 +53,10 @@ pub(crate) fn encode_elements(elements: &[AccessibilityElement], density: f32) -
                 actions,
                 i32::from(element.focusable),
                 i32::from(element.focused),
+                i32::from(element.adjustable),
+                progress.map(|p| p.current).unwrap_or(0.0),
+                progress.map(|p| p.start).unwrap_or(0.0),
+                progress.map(|p| p.end).unwrap_or(0.0),
             )
         })
         .collect::<Vec<_>>()
@@ -91,7 +96,7 @@ mod tests {
     }
 
     #[test]
-    fn every_encoded_record_carries_the_nineteen_fields_java_parses() {
+    fn every_encoded_record_carries_the_fields_java_parses() {
         let elements = vec![
             AccessibilityElement {
                 node_id: 4,
@@ -112,7 +117,7 @@ mod tests {
         let records: Vec<_> = payload.split('\n').collect();
         assert_eq!(records.len(), 2);
         for record in &records {
-            assert_eq!(record.split('\t').count(), 19, "record: {record}");
+            assert_eq!(record.split('\t').count(), 23, "record: {record}");
         }
 
         let fields: Vec<_> = records[0].split('\t').collect();
@@ -161,5 +166,38 @@ mod tests {
         assert_eq!(focused[18], "1", "TalkBack follows the app onto this one");
         assert_eq!(other[17], "1", "the button takes focus too");
         assert_eq!(other[18], "0", "but focus does not sit on it");
+    }
+
+    #[test]
+    fn the_record_carries_the_range_of_an_adjustable_control() {
+        let elements = vec![
+            AccessibilityElement {
+                node_id: 4,
+                label: "Volume".into(),
+                bounds: AccessibilityRect::new(0.0, 0.0, 200.0, 40.0),
+                progress: Some(cranpose_ui::ProgressBarRangeInfo::new(0.25, 0.0, 1.0, 0)),
+                adjustable: true,
+                ..AccessibilityElement::default()
+            },
+            AccessibilityElement {
+                node_id: 5,
+                label: "Save".into(),
+                bounds: AccessibilityRect::new(0.0, 50.0, 30.0, 40.0),
+                role: AccessibilityRole::Button,
+                clickable: true,
+                ..AccessibilityElement::default()
+            },
+        ];
+
+        let payload = encode_elements(&elements, 1.0);
+        let records: Vec<_> = payload.split('\n').collect();
+        let slider: Vec<_> = records[0].split('\t').collect();
+        let button: Vec<_> = records[1].split('\t').collect();
+
+        assert_eq!(slider[19], "1", "TalkBack may move this one");
+        assert_eq!(slider[20], "0.25");
+        assert_eq!(slider[21], "0");
+        assert_eq!(slider[22], "1");
+        assert_eq!(button[19], "0", "a button holds no range");
     }
 }

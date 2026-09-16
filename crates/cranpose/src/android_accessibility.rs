@@ -23,6 +23,7 @@ use crate::{
 static ACTIVATIONS: OnceLock<Mutex<Vec<(f32, f32)>>> = OnceLock::new();
 static CUSTOM_ACTIONS: OnceLock<Mutex<Vec<(i32, usize)>>> = OnceLock::new();
 static FOCUS_REQUESTS: OnceLock<Mutex<Vec<i32>>> = OnceLock::new();
+static VALUE_REQUESTS: OnceLock<Mutex<Vec<(i32, f32)>>> = OnceLock::new();
 static LOOP_WAKER: Mutex<Option<android_activity::AndroidAppWaker>> = Mutex::new(None);
 static PLATFORM_ACCESSIBILITY_ENABLED: AtomicBool = AtomicBool::new(false);
 
@@ -68,6 +69,10 @@ fn focus_requests() -> &'static Mutex<Vec<i32>> {
     FOCUS_REQUESTS.get_or_init(|| Mutex::new(Vec::new()))
 }
 
+fn value_requests() -> &'static Mutex<Vec<(i32, f32)>> {
+    VALUE_REQUESTS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
 pub(crate) fn drain_activations() -> Vec<(f32, f32)> {
     std::mem::take(
         &mut *activations()
@@ -88,6 +93,15 @@ pub(crate) fn drain_custom_actions() -> Vec<(i32, usize)> {
 pub(crate) fn drain_focus_requests() -> Vec<i32> {
     std::mem::take(
         &mut *focus_requests()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()),
+    )
+}
+
+/// Values TalkBack asked adjustable controls to take, as virtual view ids.
+pub(crate) fn drain_value_requests() -> Vec<(i32, f32)> {
+    std::mem::take(
+        &mut *value_requests()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()),
     )
@@ -236,5 +250,23 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccess
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .push((virtual_id, action_index as usize));
+    wake_loop();
+}
+
+/// TalkBack moved the value of an adjustable control. Only the identity and
+/// the value cross back; the frame loop resolves the control against the live
+/// semantics tree, as a custom action does.
+#[doc(hidden)]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccessibilitySetProgress(
+    _env: EnvUnowned<'_>,
+    _class: JClass<'_>,
+    virtual_id: jint,
+    value: jfloat,
+) {
+    value_requests()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .push((virtual_id, value));
     wake_loop();
 }
