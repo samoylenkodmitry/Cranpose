@@ -1,7 +1,7 @@
 use std::{cell::Cell, rc::Rc};
 
 use cranpose_services::{SystemTheme, set_platform_system_theme};
-use cranpose_ui::{EdgeInsets, local_ime_insets, local_safe_area_insets};
+use cranpose_ui::{EdgeInsets, composable, local_ime_insets, local_safe_area_insets};
 
 #[derive(Default)]
 pub(crate) struct PlatformEnvironment {
@@ -45,15 +45,25 @@ impl PlatformEnvironment {
                 cranpose_services::local_launch_args().provides(launch_args),
             ],
             || {
-                let modal_open = cranpose_ui::modal_depth() > 0;
-                let popup_open = cranpose_ui::dismissable_popup_open();
-                crate::BackHandler(modal_open || popup_open, || {
-                    if !cranpose_ui::dispatch_modal_back() {
-                        cranpose_ui::dismiss_top_popup();
-                    }
-                });
+                RootBackHandler();
                 content();
             },
         );
     }
+}
+
+/// The way out of the dialog or the menu on top, in a scope of its own. It
+/// reads the popup registry's revision; read from the root scope, every popup
+/// that opened would recompose the whole app, which registers the popup again
+/// and bumps the revision again, with no end.
+#[allow(non_snake_case)]
+#[composable]
+fn RootBackHandler() {
+    let modal_open = cranpose_ui::modal_depth() > 0;
+    let popup_open = cranpose_ui::dismissable_popup_open();
+    crate::BackHandler(modal_open || popup_open, || {
+        if !cranpose_ui::dispatch_modal_back() {
+            cranpose_ui::dismiss_top_popup();
+        }
+    });
 }
