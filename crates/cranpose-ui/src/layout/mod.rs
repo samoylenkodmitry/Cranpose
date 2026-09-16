@@ -16,8 +16,8 @@ use cranpose_core::{
 use cranpose_foundation::{
     CanvasSemanticsNode, CollectionInfo, InvalidationKind, LiveRegionMode, ModifierNodeContext,
     NodeCapabilities, ProgressBarRangeInfo, ScrollAxisRange, SemanticsConfiguration,
-    SemanticsCustomAction, SemanticsScrollBy, SemanticsSetProgress, SemanticsSetText,
-    SemanticsWidgetRole, text::TextRange,
+    SemanticsCustomAction, SemanticsExpand, SemanticsScrollBy, SemanticsSetProgress,
+    SemanticsSetText, SemanticsWidgetRole, text::TextRange,
 };
 use cranpose_ui_layout::{Constraints, MeasurePolicy, Placement};
 use web_time::Instant;
@@ -377,6 +377,12 @@ pub struct SemanticsNode {
     pub selectable_group: bool,
     /// The title of the screen or pane this node is the root of.
     pub pane_title: Option<String>,
+    /// Why the control's content is wrong, when it is.
+    pub error: Option<String>,
+    /// Whether this field holds a secret, so its text stays unspoken.
+    pub password: bool,
+    /// Where a screen reader visits this node among the ones beside it.
+    pub traversal_index: f32,
     /// The text an editable field holds.
     pub text: Option<String>,
     pub text_selection: Option<TextRange>,
@@ -395,6 +401,10 @@ pub struct SemanticsNode {
     pub set_progress: Option<SemanticsSetProgress>,
     /// What this field does when a screen reader hands it text.
     pub set_text: Option<SemanticsSetText>,
+    /// What this control does when a screen reader asks it to open.
+    pub expand: Option<SemanticsExpand>,
+    /// What this control does when a screen reader asks it to close.
+    pub collapse: Option<SemanticsExpand>,
     /// How far this container scrolled up and down, when it scrolls.
     pub vertical_scroll: Option<ScrollAxisRange>,
     /// How far this container scrolled left and right, when it scrolls.
@@ -426,6 +436,9 @@ impl Default for SemanticsNode {
             merge_descendants: false,
             selectable_group: false,
             pane_title: None,
+            error: None,
+            password: false,
+            traversal_index: 0.0,
             text: None,
             text_selection: None,
             focusable: false,
@@ -434,6 +447,8 @@ impl Default for SemanticsNode {
             progress: None,
             set_progress: None,
             set_text: None,
+            expand: None,
+            collapse: None,
             vertical_scroll: None,
             horizontal_scroll: None,
             scroll_by: None,
@@ -3090,12 +3105,17 @@ fn semantics_node_from_parts(
         node.merge_descendants = config.merge_descendants;
         node.selectable_group = config.selectable_group;
         node.pane_title = config.pane_title;
+        node.error = config.error;
+        node.password = config.password;
+        node.traversal_index = config.traversal_index;
         node.text = config.text;
         node.text_selection = config.text_selection;
         node.live_region = config.live_region;
         node.progress = config.progress;
         node.set_progress = config.set_progress;
         node.set_text = config.set_text;
+        node.expand = config.expand;
+        node.collapse = config.collapse;
         node.vertical_scroll = config.vertical_scroll;
         node.horizontal_scroll = config.horizontal_scroll;
         node.scroll_by = config.scroll_by;

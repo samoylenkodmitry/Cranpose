@@ -860,6 +860,33 @@ impl fmt::Debug for SemanticsSetText {
     }
 }
 
+/// What a control does when a screen reader asks it to open or to close.
+/// Compose's `expand` and `collapse` actions.
+#[derive(Clone)]
+pub struct SemanticsExpand(Rc<dyn Fn() -> bool>);
+
+impl SemanticsExpand {
+    pub fn new(handler: impl Fn() -> bool + 'static) -> Self {
+        Self(Rc::new(handler))
+    }
+
+    pub fn invoke(&self) -> bool {
+        (self.0)()
+    }
+}
+
+impl fmt::Debug for SemanticsExpand {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("SemanticsExpand")
+    }
+}
+
+impl PartialEq for SemanticsExpand {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
 impl PartialEq for SemanticsSetText {
     fn eq(&self, _other: &Self) -> bool {
         true
@@ -1110,6 +1137,16 @@ pub struct SemanticsConfiguration {
     /// The title of the screen or pane this node is the root of, read out when
     /// the app moves to it. Compose's `paneTitle`.
     pub pane_title: Option<String>,
+    /// Why the control's content is wrong, read after its state: "invalid,
+    /// the amount needs a number". Compose's `error`.
+    pub error: Option<String>,
+    /// Whether this field holds a secret, so no screen reader reads its text
+    /// out and no platform mirror carries it. Compose's `password`.
+    pub password: bool,
+    /// Where a screen reader visits this node among the ones beside it: a
+    /// smaller number comes first, and nodes left at zero keep the order the
+    /// app laid them out in. Compose's `traversalIndex`.
+    pub traversal_index: f32,
     /// Compose's `liveRegion`. When set, a screen reader reads this node again
     /// whenever its text changes, without the user moving to it.
     pub live_region: Option<LiveRegionMode>,
@@ -1122,6 +1159,12 @@ pub struct SemanticsConfiguration {
     /// What this field does when a screen reader or a voice tool hands it
     /// text. Compose's `setText`.
     pub set_text: Option<SemanticsSetText>,
+    /// What this control does when a screen reader asks it to open. A control
+    /// that says so reads as closed. Compose's `expand`.
+    pub expand: Option<SemanticsExpand>,
+    /// What this control does when a screen reader asks it to close. A control
+    /// that says so reads as open. Compose's `collapse`.
+    pub collapse: Option<SemanticsExpand>,
     /// How far this container scrolled up and down. Compose's
     /// `verticalScrollAxisRange`.
     pub vertical_scroll: Option<ScrollAxisRange>,
@@ -1156,10 +1199,15 @@ impl Default for SemanticsConfiguration {
             merge_descendants: false,
             selectable_group: false,
             pane_title: None,
+            error: None,
+            password: false,
+            traversal_index: 0.0,
             live_region: None,
             progress: None,
             set_progress: None,
             set_text: None,
+            expand: None,
+            collapse: None,
             vertical_scroll: None,
             horizontal_scroll: None,
             scroll_by: None,
@@ -1194,28 +1242,62 @@ impl SemanticsConfiguration {
         if let Some(text) = &other.text {
             self.text = Some(text.clone());
         }
-        if let Some(selection) = other.text_selection {
-            self.text_selection = Some(selection);
-        }
-        self.custom_actions
-            .extend(other.custom_actions.iter().cloned());
-        self.canvas_children
-            .extend(other.canvas_children.iter().cloned());
         self.is_modal |= other.is_modal;
         self.hidden |= other.hidden;
         self.merge_descendants |= other.merge_descendants;
         self.selectable_group |= other.selectable_group;
-        if let Some(title) = &other.pane_title {
-            self.pane_title = Some(title.clone());
+        self.password |= other.password;
+        if other.traversal_index != 0.0 {
+            self.traversal_index = other.traversal_index;
         }
         if let Some(live_region) = other.live_region {
             self.live_region = Some(live_region);
         }
+        self.merge_words(other);
+        self.merge_actions(other);
+        self.merge_ranges(other);
+    }
+
+    /// The lines a screen reader reads out that stand on their own: the title
+    /// of a pane, and the reason a control's content is wrong.
+    fn merge_words(&mut self, other: &SemanticsConfiguration) {
+        if let Some(title) = &other.pane_title {
+            self.pane_title = Some(title.clone());
+        }
+        if let Some(error) = &other.error {
+            self.error = Some(error.clone());
+        }
+    }
+
+    /// What a screen reader can ask the node to do, and the controls the node
+    /// drew rather than laid out.
+    fn merge_actions(&mut self, other: &SemanticsConfiguration) {
+        self.custom_actions
+            .extend(other.custom_actions.iter().cloned());
+        self.canvas_children
+            .extend(other.canvas_children.iter().cloned());
         if let Some(set_progress) = &other.set_progress {
             self.set_progress = Some(set_progress.clone());
         }
         if let Some(set_text) = &other.set_text {
             self.set_text = Some(set_text.clone());
+        }
+        if let Some(expand) = &other.expand {
+            self.expand = Some(expand.clone());
+        }
+        if let Some(collapse) = &other.collapse {
+            self.collapse = Some(collapse.clone());
+        }
+        if let Some(scroll_by) = &other.scroll_by {
+            self.scroll_by = Some(scroll_by.clone());
+        }
+    }
+
+    /// The numbers behind a control: where a value sits in its range, how far
+    /// a container scrolled, how much a list holds, and what text is picked.
+    fn merge_ranges(&mut self, other: &SemanticsConfiguration) {
+        if let Some(selection) = other.text_selection {
+            self.text_selection = Some(selection);
         }
         if let Some(progress) = other.progress {
             self.progress = Some(progress);
@@ -1225,9 +1307,6 @@ impl SemanticsConfiguration {
         }
         if let Some(range) = other.horizontal_scroll {
             self.horizontal_scroll = Some(range);
-        }
-        if let Some(scroll_by) = &other.scroll_by {
-            self.scroll_by = Some(scroll_by.clone());
         }
         if let Some(collection) = other.collection {
             self.collection = Some(collection);

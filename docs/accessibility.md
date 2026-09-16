@@ -148,6 +148,66 @@ platform lists it under the control.
 
 `SwipeToDismiss` and `LinkedText` fill this on their own.
 
+## 4c. A field whose content is wrong
+
+A form that shows a red line under a field tells a sighted person the
+amount is not a number; a reader hears nothing unless the app says so.
+`Modifier::error("needs a number")` on the field, Compose's `error`, makes a
+reader hear "invalid, needs a number" after the field's state, and the
+change is spoken when the field is under the cursor.
+
+| Platform | What the reader gets |
+| --- | --- |
+| accesskit | the node marked invalid, with the reason in its description |
+| iOS | "invalid" and the reason as the element's value, after its state |
+| Android | `setContentInvalid` and `setError` on the node, which TalkBack reads as "invalid" and the reason |
+| Web | `aria-invalid` on the mirror node, with the reason in `aria-description` |
+
+## 4d. A field that holds a secret
+
+A password field shows dots on the screen, but a screen reader asks the app
+for the text, so without a mark it reads the password out loud in a room
+full of people. `Modifier::password()` on the field, Compose's `password`,
+keeps the text out of the projection, so it reaches no platform at all. The
+field keeps the name the app gave it; with no name a reader hears
+"password".
+
+| Platform | What the reader gets |
+| --- | --- |
+| accesskit | the node as a password input, with no value |
+| iOS | the name and "password" as the value, never the text |
+| Android | `setPassword` on the node, which TalkBack reads as "password", and an empty value |
+| Web | `aria-roledescription="password"` on the mirror node, with no text content |
+
+## 4e. The order a reader walks a screen
+
+A screen reader walks the controls in the order the app laid them out. A
+search field drawn last so it sits above the rest is reached last, after
+everything it filters. `Modifier::traversal_index(-1.0)` on it, Compose's
+`traversalIndex`, moves it to the front of the nodes beside it; a larger
+number moves a node back. Nodes left alone keep the laid-out order, so one
+number on one node is the whole change.
+
+The order is the projection's order, and every platform reads it from
+there: the element list on iOS, the virtual node ids on Android, the mirror
+nodes in the page on the web, and the children of the accesskit tree.
+
+## 4f. A control a reader can open and close
+
+An accordion row or a dropdown opens when it is pressed, but a reader has
+no way to know it opens at all, and no word for whether it is open now.
+`Modifier::expand(..)` says what the control does when a reader asks it to
+open, and marks it closed; `Modifier::collapse(..)` says what closing it
+does, and marks it open. An app swaps the two with its own state, the way
+Compose's `expand` and `collapse` actions work.
+
+| Platform | What the reader gets |
+| --- | --- |
+| accesskit | the node marked expanded or not, with an expand or a collapse action |
+| iOS | "expanded" or "collapsed" as the element's value |
+| Android | `ACTION_EXPAND` or `ACTION_COLLAPSE` on the node, which TalkBack offers in its menu |
+| Web | `aria-expanded` on the mirror node |
+
 ## 5. A list a reader can page
 
 A lazy list builds only the rows on screen. A reader that walks the rows one
@@ -183,7 +243,7 @@ pages its own list. The move runs through `scroll_by` on the live tree.
 
 | Platform | Reads | Pages |
 | --- | --- | --- |
-| accesskit | `Role::ScrollView` with the offset and its range | `Action::ScrollDown`, `ScrollUp`, `ScrollRight`, `ScrollLeft` |
+| accesskit | `Role::ScrollView` with the offset and its range, and the rows as its children | `Action::ScrollDown`, `ScrollUp`, `ScrollRight`, `ScrollLeft` |
 | iOS | nothing; the container stays out of the cursor's way | a VoiceOver three-finger swipe, through `accessibilityScroll:` on the focused element |
 | Android | `isScrollable` with `ACTION_SCROLL_FORWARD` and `BACKWARD` as the offset allows; each row sits under its list in the virtual view tree, and a list with no text is not focusable | TalkBack's page gesture on a row, which reaches the list above it |
 | Web | nothing on the mirror | Page Down and Page Up on the focused mirrored element |
@@ -207,6 +267,9 @@ no app code: VoiceOver gets a screen change aimed at the dialog, TalkBack gets
 the focus event the Android host sends for every app focus move, the web
 mirror focuses the dialog's node, and accesskit follows the app focus it
 already receives.
+When the dialog closes, app focus returns to the control that had it before
+the dialog opened, so a reader lands back on the button it pressed rather
+than at the top of the screen.
 
 | Platform | Gesture | Where it goes |
 | --- | --- | --- |
@@ -259,7 +322,7 @@ An app gets this with no code of its own:
 | `SwipeToDismiss` | the row's content | run "Dismiss" from the actions menu |
 | `verticalScroll`, `horizontalScroll`, `LazyColumn`, `LazyRow` | the rows inside, and on Android how many rows there are | page on and back |
 | `LinkedText` | the whole text | open each link from the actions menu, as "Open <link text>" |
-| `Dialog` | its content, and nothing outside it; the reader lands on it as it opens | leave it with the reader's escape gesture |
+| `Dialog` | its content, and nothing outside it; the reader lands on it as it opens | leave it with the reader's escape gesture, and land back on the control that opened it |
 | `Image`, `Icon` | the description the app gave | |
 
 A control an app draws itself declares what it is through

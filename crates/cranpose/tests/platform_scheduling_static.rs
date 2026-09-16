@@ -3374,7 +3374,7 @@ fn every_lazy_list_tells_android_how_many_rows_it_holds() {
     let java_source = crate_source("android/java/dev/cranpose/android/CranposeActivity.java");
     assert!(
         java_source.contains("info.setCollectionInfo(AccessibilityNodeInfo.CollectionInfo.obtain(")
-            && java_source.contains("private static final int ACCESSIBILITY_FIELDS = 33;"),
+            && java_source.contains("private static final int ACCESSIBILITY_FIELDS = 36;"),
         "the Android host hands TalkBack the row count of a list"
     );
 }
@@ -3500,5 +3500,107 @@ fn every_platform_reads_a_pane_title_when_the_app_moves_on() {
     assert!(
         java_source.contains("info.setPaneTitle(element.paneTitle);"),
         "the Android host carries the pane title on its node"
+    );
+}
+
+#[test]
+fn the_desktop_tree_keeps_rows_under_their_list() {
+    let desktop_source = crate_source("src/desktop_accessibility.rs");
+    assert!(
+        desktop_source.contains("fn nested_children(")
+            && desktop_source.contains("node.set_children(children);"),
+        "accesskit gets each row under its list and each tab under its group"
+    );
+}
+
+#[test]
+fn a_dialog_hands_focus_back_to_its_opener() {
+    let dialog_source = workspace_source("crates/cranpose-ui/src/widgets/dialog.rs");
+    assert!(
+        dialog_source.contains("cranpose_core::remember(crate::active_focus_target)")
+            && dialog_source.contains("crate::request_focus_from_platform(opener);"),
+        "a dialog remembers the control that had focus and hands it back as it closes"
+    );
+}
+
+#[test]
+fn every_platform_says_why_a_field_is_wrong() {
+    let java_source = crate_source("android/java/dev/cranpose/android/CranposeActivity.java");
+    assert!(
+        java_source.contains("info.setContentInvalid(true);")
+            && java_source.contains("info.setError(element.error);"),
+        "TalkBack gets the node's error"
+    );
+    for source in [
+        crate_source("src/ios_accessibility.rs"),
+        crate_source("src/web_accessibility.rs"),
+        crate_source("src/desktop_accessibility.rs"),
+    ] {
+        assert!(
+            source.contains("accessibility::state_with_error(element)"),
+            "every other bridge reads the reason after the state"
+        );
+    }
+}
+
+#[test]
+fn no_platform_reads_a_password_out() {
+    assert!(
+        crate_source("android/java/dev/cranpose/android/CranposeActivity.java")
+            .contains("if (element.password) info.setPassword(true);"),
+        "TalkBack reads the node as a password"
+    );
+    assert!(
+        crate_source("src/desktop_accessibility.rs").contains("Role::PasswordInput"),
+        "accesskit reads the node as a password input"
+    );
+    assert!(
+        crate_source("src/web_accessibility.rs").contains(r#""aria-roledescription", "password""#),
+        "the web mirror says the field is a password"
+    );
+    assert!(
+        crate_source("src/accessibility.rs").contains(".filter(|_| !node.password),"),
+        "the text never leaves the projection"
+    );
+}
+
+#[test]
+fn every_platform_reads_the_traversal_order_from_the_projection() {
+    assert!(
+        crate_source("src/accessibility.rs").contains("for child in reading_order(node) {"),
+        "the projection puts the nodes in the order a reader walks them"
+    );
+    for source in [
+        crate_source("src/ios_accessibility.rs"),
+        crate_source("src/web_accessibility.rs"),
+        crate_source("src/desktop_accessibility.rs"),
+        crate_source("src/android_accessibility_wire.rs"),
+    ] {
+        assert!(
+            !source.contains(".sort_by_key(|element| element.bounds"),
+            "no bridge sorts the elements again on its own"
+        );
+    }
+}
+
+#[test]
+fn every_platform_opens_and_closes_a_control() {
+    let java_source = crate_source("android/java/dev/cranpose/android/CranposeActivity.java");
+    assert!(
+        java_source.contains("AccessibilityNodeInfo.ACTION_EXPAND")
+            && java_source.contains("nativeOnAccessibilityExpand(element.id,"),
+        "TalkBack offers the ask and it crosses back"
+    );
+    assert!(
+        crate_source("src/desktop_accessibility.rs").contains("node.set_expanded(expanded);"),
+        "accesskit says whether the control is open"
+    );
+    assert!(
+        crate_source("src/web_accessibility.rs").contains(r#""aria-expanded""#),
+        "the web mirror says whether the control is open"
+    );
+    assert!(
+        crate_source("src/ios_accessibility.rs").contains("accessibility::expansion_word(element)"),
+        "VoiceOver hears the word"
     );
 }

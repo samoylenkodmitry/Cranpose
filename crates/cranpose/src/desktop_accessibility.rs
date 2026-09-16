@@ -1,13 +1,14 @@
 #![allow(unsafe_code)]
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{Arc, Mutex},
 };
 
 use accesskit::{
     Action, ActionData, ActionHandler, ActionRequest, ActivationHandler, CustomAction,
-    DeactivationHandler, Live, Node, NodeId, Rect, Role, Toggled, Tree, TreeId, TreeUpdate,
+    DeactivationHandler, Invalid, Live, Node, NodeId, Rect, Role, Toggled, Tree, TreeId,
+    TreeUpdate,
 };
 use cranpose_app_shell::AppShell;
 use cranpose_render_wgpu::WgpuRenderer;
@@ -63,6 +64,7 @@ pub(crate) struct DesktopAccessibilityBridge {
     pending_values: Vec<(NodeId, f32)>,
     pending_texts: Vec<(NodeId, String)>,
     pending_scrolls: Vec<(NodeId, bool)>,
+    pending_expansions: Vec<(NodeId, bool)>,
     previous: Vec<AccessibilityElement>,
     seen_revision: Option<u64>,
     announcement: Option<Announcement>,
@@ -92,6 +94,7 @@ impl DesktopAccessibilityBridge {
             pending_values: Vec::new(),
             pending_texts: Vec::new(),
             pending_scrolls: Vec::new(),
+            pending_expansions: Vec::new(),
             previous: Vec::new(),
             seen_revision: None,
             announcement: None,
@@ -176,6 +179,8 @@ impl DesktopAccessibilityBridge {
                     }
                     _ => {}
                 },
+                Action::Expand => self.pending_expansions.push((request.target_node, true)),
+                Action::Collapse => self.pending_expansions.push((request.target_node, false)),
                 Action::Increment => self.step_value(request.target_node, true),
                 Action::Decrement => self.step_value(request.target_node, false),
                 Action::ScrollDown | Action::ScrollRight => {
@@ -290,6 +295,14 @@ impl DesktopAccessibilityBridge {
                 accessibility::set_progress(root, node_id, value)
             });
         }
+        for (target, open) in std::mem::take(&mut self.pending_expansions) {
+            let Some(node_id) = self.node_id_for(target) else {
+                continue;
+            };
+            moved |= accessibility::run_reader_action(shell, |root| {
+                accessibility::set_expanded(root, node_id, open)
+            });
+        }
         for (target, text) in std::mem::take(&mut self.pending_texts) {
             let Some(node_id) = self.node_id_for(target) else {
                 continue;
@@ -315,7 +328,8 @@ fn tree_update(
     announcement_turn: bool,
 ) -> TreeUpdate {
     let ids = accessibility::element_ids(elements);
-    let mut children: Vec<NodeId> = ids.iter().map(|id| NodeId(*id as u64)).collect();
+    let mut nested = nested_children(&ids, elements);
+    let mut children = nested.remove(&None).unwrap_or_default();
     if announcement.is_some() {
         children.push(ANNOUNCEMENT_ID);
     }
@@ -323,11 +337,15 @@ fn tree_update(
     root.set_label("Cranpose application");
     root.set_children(children);
     let mut nodes = vec![(ROOT_ID, root)];
-    nodes.extend(
-        ids.iter()
-            .zip(elements)
-            .map(|(id, element)| (NodeId(*id as u64), accesskit_node(element))),
-    );
+    nodes.extend(ids.iter().zip(elements).map(|(id, element)| {
+        let mut node = accesskit_node(element);
+        if element.canvas_key.is_none()
+            && let Some(children) = nested.remove(&Some(element.node_id))
+        {
+            node.set_children(children);
+        }
+        (NodeId(*id as u64), node)
+    }));
     if let Some(announcement) = announcement {
         nodes.push((
             ANNOUNCEMENT_ID,
@@ -344,6 +362,29 @@ fn tree_update(
     }
 }
 
+/// The accesskit ids under each container, keyed by the container's node, and
+/// under `None` the ones with nothing above them, so a reader hears "list, 12
+/// items" and "tab 2 of 5" from the shape of the tree. A row whose container
+/// was not published sits at the root rather than out of reach.
+fn nested_children(
+    ids: &[i32],
+    elements: &[AccessibilityElement],
+) -> HashMap<Option<cranpose_core::NodeId>, Vec<NodeId>> {
+    let containers: HashSet<cranpose_core::NodeId> = elements
+        .iter()
+        .filter(|element| element.canvas_key.is_none())
+        .map(|element| element.node_id)
+        .collect();
+    let mut nested: HashMap<Option<cranpose_core::NodeId>, Vec<NodeId>> = HashMap::new();
+    for (id, element) in ids.iter().zip(elements) {
+        let parent = element
+            .scroll_parent
+            .filter(|parent| containers.contains(parent));
+        nested.entry(parent).or_default().push(NodeId(*id as u64));
+    }
+    nested
+}
+
 /// One control as accesskit describes it to a screen reader.
 fn accesskit_node(element: &AccessibilityElement) -> Node {
     let scrolls = element.vertical_scroll.is_some() || element.horizontal_scroll.is_some();
@@ -351,6 +392,7 @@ fn accesskit_node(element: &AccessibilityElement) -> Node {
         Some(_) => Role::Slider,
         None if element.pane_title.is_some() => Role::Region,
         None if scrolls && element.label.is_empty() => scroll_role(element),
+        None if element.password => Role::PasswordInput,
         None => accesskit_role(element.role),
     };
     let mut node = Node::new(role);
@@ -444,8 +486,11 @@ fn apply_state(node: &mut Node, element: &AccessibilityElement) {
     if let Some(value) = &element.value {
         node.set_value(value.as_str());
     }
-    if let Some(state) = &element.state_description {
+    if let Some(state) = accessibility::state_with_error(element) {
         node.set_description(state.as_str());
+    }
+    if element.error.is_some() {
+        node.set_invalid(Invalid::True);
     }
     if let Some(item) = element.collection_item {
         node.set_position_in_set(item.position);
@@ -504,6 +549,14 @@ fn apply_actions(node: &mut Node, element: &AccessibilityElement) {
                 })
                 .collect::<Vec<_>>(),
         );
+    }
+    if let Some(expanded) = element.expanded {
+        node.set_expanded(expanded);
+        node.add_action(if expanded {
+            Action::Collapse
+        } else {
+            Action::Expand
+        });
     }
     if element.focusable {
         node.add_action(Action::Focus);
@@ -879,5 +932,36 @@ mod tests {
         assert_eq!(joined.text, "Import done. Two receipts failed");
         assert_eq!(joined.mode, LiveRegionMode::Assertive);
         assert!(join_announcements(Vec::new()).is_none());
+    }
+
+    #[test]
+    fn rows_sit_under_their_list_in_the_desktop_tree() {
+        let list = AccessibilityElement {
+            node_id: 6,
+            bounds: AccessibilityRect::new(0.0, 0.0, 400.0, 600.0),
+            vertical_scroll: Some(cranpose_ui::ScrollAxisRange::new(0.0, 900.0, false)),
+            ..AccessibilityElement::default()
+        };
+        let row = AccessibilityElement {
+            node_id: 9,
+            label: "Milk".into(),
+            bounds: AccessibilityRect::new(0.0, 10.0, 400.0, 40.0),
+            scroll_parent: Some(6),
+            ..AccessibilityElement::default()
+        };
+
+        let update = tree_update(&[list, row], None, false);
+        let ids: Vec<_> = update.nodes.iter().map(|(id, _)| *id).collect();
+
+        assert_eq!(
+            update.nodes[0].1.children(),
+            &ids[1..2],
+            "the root holds the list alone"
+        );
+        assert_eq!(
+            update.nodes[1].1.children(),
+            &ids[2..],
+            "the list holds its row"
+        );
     }
 }

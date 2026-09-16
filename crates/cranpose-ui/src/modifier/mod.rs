@@ -491,6 +491,48 @@ impl Modifier {
         self.semantics(move |config| config.progress = Some(info))
     }
 
+    /// Says what this control does when a screen reader asks it to open, and
+    /// marks it as closed right now: a reader offers "expand" and says the
+    /// control is collapsed. Compose's
+    /// `Modifier.semantics { expand { … } }`.
+    pub fn expand(self, action: impl Fn() -> bool + 'static) -> Self {
+        let action = cranpose_foundation::SemanticsExpand::new(action);
+        self.semantics(move |config| config.expand = Some(action.clone()))
+    }
+
+    /// Says what this control does when a screen reader asks it to close, and
+    /// marks it as open right now. Compose's
+    /// `Modifier.semantics { collapse { … } }`.
+    pub fn collapse(self, action: impl Fn() -> bool + 'static) -> Self {
+        let action = cranpose_foundation::SemanticsExpand::new(action);
+        self.semantics(move |config| config.collapse = Some(action.clone()))
+    }
+
+    /// Moves this node in the order a screen reader visits the nodes beside
+    /// it: a smaller number comes first, and a node left alone keeps the
+    /// order the app laid it out in. A search field drawn last but meant to
+    /// be read first takes a negative number. Compose's
+    /// `Modifier.semantics { traversalIndex = -1f }`.
+    pub fn traversal_index(self, index: f32) -> Self {
+        self.semantics(move |config| config.traversal_index = index)
+    }
+
+    /// Marks a field as one that holds a secret, so no screen reader reads
+    /// its text out: a reader hears the name the app gave the field, and
+    /// "password" in place of the text. Compose's
+    /// `Modifier.semantics { password() }`.
+    pub fn password(self) -> Self {
+        self.semantics(|config| config.password = true)
+    }
+
+    /// Says why the control's content is wrong, so a screen reader reads
+    /// "invalid, the amount needs a number" after the control's state.
+    /// Compose's `Modifier.semantics { error("...") }`.
+    pub fn error(self, message: impl Into<String>) -> Self {
+        let message = message.into();
+        self.semantics(move |config| config.error = Some(message.clone()))
+    }
+
     /// Names the screen or pane this node is the root of, so a screen reader
     /// hears where it is when the app moves on: "Library" as the library
     /// opens. Compose's `Modifier.semantics { paneTitle = "..." }`.

@@ -95,6 +95,9 @@ pub(crate) struct AccessibilityElement {
     pub(crate) collection: Option<CollectionInfo>,
     pub(crate) collection_item: Option<CollectionItem>,
     pub(crate) pane_title: Option<String>,
+    pub(crate) error: Option<String>,
+    pub(crate) password: bool,
+    pub(crate) expanded: Option<bool>,
 }
 
 impl Default for AccessibilityElement {
@@ -124,6 +127,9 @@ impl Default for AccessibilityElement {
             collection: None,
             collection_item: None,
             pane_title: None,
+            error: None,
+            password: false,
+            expanded: None,
         }
     }
 }
@@ -324,7 +330,7 @@ fn project_children(
     elements: &mut Vec<AccessibilityElement>,
 ) {
     let first_child = elements.len();
-    for child in &node.children {
+    for child in reading_order(node) {
         project_node(
             child,
             bounds,
@@ -337,6 +343,18 @@ fn project_children(
     if node.selectable_group {
         number_group(node.node_id, first_child, elements);
     }
+}
+
+/// The order a screen reader visits the nodes under a container: the order
+/// the app laid them out, with any node the app gave a traversal index moved
+/// to where that index puts it. The sort keeps the laid-out order of nodes
+/// that share an index. Compose's `traversalIndex`.
+fn reading_order(node: &SemanticsNode) -> Vec<&SemanticsNode> {
+    let mut order: Vec<&SemanticsNode> = node.children.iter().collect();
+    if order.iter().any(|child| child.traversal_index != 0.0) {
+        order.sort_by(|left, right| left.traversal_index.total_cmp(&right.traversal_index));
+    }
+    order
 }
 
 /// Gives each selectable control under a group its place and the group's
@@ -379,6 +397,9 @@ fn number_group(group: NodeId, first_child: usize, elements: &mut [Accessibility
 /// row the text under it; an editable field with nothing to read still gets
 /// an empty one.
 fn published_label(node: &SemanticsNode, merges: bool) -> Option<Cow<'_, str>> {
+    if node.password {
+        return password_label(node);
+    }
     let own_label = node_label(node).map(Cow::Borrowed);
     let label = if merges {
         own_label.or_else(|| descendant_label(node).map(Cow::Owned))
@@ -388,6 +409,26 @@ fn published_label(node: &SemanticsNode, merges: bool) -> Option<Cow<'_, str>> {
     label
         .filter(|label| !label.trim().is_empty())
         .or_else(|| unnamed_field_label(node))
+}
+
+/// A field that holds a secret never reads its text out: the name the app
+/// gave it stands, and with no name a reader hears "password" rather than
+/// the text the field put in as a stand-in for a name.
+fn password_label(node: &SemanticsNode) -> Option<Cow<'_, str>> {
+    let named = node_label(node)
+        .filter(|name| !name.trim().is_empty())
+        .filter(|name| Some(*name) != node.text.as_deref());
+    Some(named.map_or(Cow::Borrowed("password"), Cow::Borrowed))
+}
+
+/// Whether a control reads as open or as closed: one that says what closing
+/// it does is open now, and one that says what opening it does is closed.
+/// A control that says neither is not a thing a reader opens at all.
+fn expansion(node: &SemanticsNode) -> Option<bool> {
+    node.collapse
+        .is_some()
+        .then_some(true)
+        .or_else(|| node.expand.is_some().then_some(false))
 }
 
 /// An editable field with no name and no text is still a stop for a reader,
@@ -450,7 +491,8 @@ fn element_for_node(
         value: node
             .text
             .clone()
-            .or_else(|| node.editable_text.then(|| label.clone())),
+            .or_else(|| node.editable_text.then(|| label.clone()))
+            .filter(|_| !node.password),
         label,
         state_description: node.state_description.clone(),
         click_label: node.on_click_label.clone(),
@@ -476,6 +518,9 @@ fn element_for_node(
         collection: node.collection,
         collection_item: None,
         pane_title: node.pane_title.clone(),
+        error: node.error.clone(),
+        password: node.password,
+        expanded: expansion(node),
     }
 }
 
@@ -641,6 +686,9 @@ fn project_canvas_children(
             collection: None,
             collection_item: None,
             pane_title: None,
+            error: None,
+            password: false,
+            expanded: None,
         });
     }
 }
@@ -713,6 +761,36 @@ pub(crate) fn set_text(root: &SemanticsNode, node_id: NodeId, text: &str) -> boo
         Some(action) => action.invoke(text),
         None => false,
     }
+}
+
+/// Opens or closes a control a screen reader asked to open or to close.
+/// Answers whether the control took the ask.
+#[cfg(any(
+    test,
+    all(feature = "desktop-shell", feature = "renderer-wgpu"),
+    all(feature = "android", feature = "renderer-wgpu", target_os = "android")
+))]
+pub(crate) fn set_expanded(root: &SemanticsNode, node_id: NodeId, open: bool) -> bool {
+    let Some(node) = find_semantics_node(root, node_id) else {
+        return false;
+    };
+    let action = if open { &node.expand } else { &node.collapse };
+    match action {
+        Some(action) => action.invoke(),
+        None => false,
+    }
+}
+
+/// The word a reader that carries no open-or-closed flag of its own says
+/// about a control it can open.
+#[cfg(any(
+    test,
+    all(feature = "ios", feature = "renderer-wgpu", target_os = "ios")
+))]
+pub(crate) fn expansion_word(element: &AccessibilityElement) -> Option<&'static str> {
+    element
+        .expanded
+        .map(|open| if open { "expanded" } else { "collapsed" })
 }
 
 /// The value one screen reader step away from the one the control holds now,
@@ -846,8 +924,44 @@ fn spoken_text(element: &AccessibilityElement) -> String {
     if let Some(state) = &element.state_description {
         parts.push(state.clone());
     }
+    parts.extend(error_text(element));
     parts.retain(|part| !part.trim().is_empty());
     parts.join(", ")
+}
+
+/// What a reader hears about a control whose content is wrong: "invalid" and
+/// the reason the app gave.
+#[cfg(any(
+    test,
+    all(feature = "desktop-shell", feature = "renderer-wgpu"),
+    all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"),
+    all(feature = "android", feature = "renderer-wgpu", target_os = "android"),
+    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
+))]
+pub(crate) fn error_text(element: &AccessibilityElement) -> Option<String> {
+    element
+        .error
+        .as_deref()
+        .filter(|error| !error.trim().is_empty())
+        .map(|error| format!("invalid, {error}"))
+}
+
+/// The state a reader hears for a control, with the reason its content is
+/// wrong after it, for the platforms that carry both in one description.
+#[cfg(any(
+    test,
+    all(feature = "desktop-shell", feature = "renderer-wgpu"),
+    all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"),
+    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
+))]
+pub(crate) fn state_with_error(element: &AccessibilityElement) -> Option<String> {
+    let parts: Vec<String> = element
+        .state_description
+        .clone()
+        .into_iter()
+        .chain(error_text(element))
+        .collect();
+    (!parts.is_empty()).then(|| parts.join(", "))
 }
 
 /// Whether two publications of one control read the same: the words, a
@@ -1355,9 +1469,14 @@ mod tests {
         );
     }
 
-    fn projected_field(name: Option<&str>, text: &str) -> Vec<AccessibilityElement> {
+    fn projected_field(
+        name: Option<&str>,
+        text: &str,
+        password: bool,
+    ) -> Vec<AccessibilityElement> {
         let mut field = node(2, SemanticsRole::Layout, Vec::new(), name, Vec::new());
         field.editable_text = true;
+        field.password = password;
         field.text = Some(text.to_owned());
         let root = node(1, SemanticsRole::Layout, Vec::new(), None, vec![field]);
         let bounds = HashMap::from_iter([
@@ -1369,7 +1488,7 @@ mod tests {
 
     #[test]
     fn an_empty_text_field_is_still_a_stop() {
-        let projected = projected_field(Some(""), "");
+        let projected = projected_field(Some(""), "", false);
 
         assert_eq!(
             projected.len(),
@@ -1383,7 +1502,7 @@ mod tests {
 
     #[test]
     fn a_named_text_field_keeps_its_name_and_carries_its_text() {
-        let projected = projected_field(Some("Folder name"), "Milk");
+        let projected = projected_field(Some("Folder name"), "Milk", false);
 
         assert_eq!(projected[0].label, "Folder name");
         assert_eq!(projected[0].value.as_deref(), Some("Milk"));
@@ -1610,6 +1729,121 @@ mod tests {
             spoken_changes(&[before], &[after, fresh]),
             vec![false, false]
         );
+    }
+
+    #[test]
+    fn a_new_error_is_a_spoken_change() {
+        let before = live_text(1, "Amount");
+        let mut after = live_text(1, "Amount");
+        after.error = Some("needs a number".into());
+        assert_eq!(spoken_changes(&[before], &[after.clone()]), vec![true]);
+        assert_eq!(
+            state_with_error(&after).as_deref(),
+            Some("invalid, needs a number")
+        );
+    }
+
+    #[test]
+    fn a_password_field_never_reads_its_text_out() {
+        let named = projected_field(Some("Passphrase"), "hunter2", true);
+        assert_eq!(named[0].label, "Passphrase");
+        assert_eq!(named[0].value, None, "the text stays unspoken");
+        assert!(named[0].password);
+
+        let unnamed = projected_field(None, "hunter2", true);
+        assert_eq!(unnamed[0].label, "password", "no name reads no secret");
+        assert_eq!(unnamed[0].value, None);
+    }
+
+    #[test]
+    fn a_traversal_index_moves_a_node_in_the_reading_order() {
+        let mut search = node(
+            2,
+            SemanticsRole::Text {
+                value: "Search".into(),
+            },
+            Vec::new(),
+            None,
+            Vec::new(),
+        );
+        search.traversal_index = -1.0;
+        let title = node(
+            3,
+            SemanticsRole::Text {
+                value: "Receipts".into(),
+            },
+            Vec::new(),
+            None,
+            Vec::new(),
+        );
+        let root = node(
+            1,
+            SemanticsRole::Layout,
+            Vec::new(),
+            None,
+            vec![title, search],
+        );
+        let bounds = HashMap::from_iter([
+            (1, AccessibilityRect::new(0.0, 0.0, 300.0, 200.0)),
+            (2, AccessibilityRect::new(0.0, 60.0, 300.0, 40.0)),
+            (3, AccessibilityRect::new(0.0, 0.0, 300.0, 40.0)),
+        ]);
+
+        let projected = project_semantics(&root, &bounds);
+        let labels: Vec<&str> = projected
+            .iter()
+            .map(|element| element.label.as_str())
+            .collect();
+
+        assert_eq!(
+            labels,
+            vec!["Search", "Receipts"],
+            "the search field is read first"
+        );
+    }
+
+    #[test]
+    fn a_control_that_opens_reads_as_closed_and_back() {
+        let mut row = node(
+            2,
+            SemanticsRole::Text {
+                value: "Details".into(),
+            },
+            Vec::new(),
+            None,
+            Vec::new(),
+        );
+        row.expand = Some(cranpose_ui::SemanticsExpand::new(|| true));
+        let root = node(
+            1,
+            SemanticsRole::Layout,
+            Vec::new(),
+            None,
+            vec![row.clone()],
+        );
+        let bounds = HashMap::from_iter([
+            (1, AccessibilityRect::new(0.0, 0.0, 300.0, 200.0)),
+            (2, AccessibilityRect::new(0.0, 0.0, 300.0, 40.0)),
+        ]);
+
+        let closed = project_semantics(&root, &bounds);
+        assert_eq!(
+            closed[0].expanded,
+            Some(false),
+            "a control that opens is closed"
+        );
+        assert_eq!(expansion_word(&closed[0]), Some("collapsed"));
+        assert!(set_expanded(&root, 2, true), "the control takes the ask");
+        assert!(!set_expanded(&root, 2, false), "it has no way to close yet");
+
+        let mut open = row;
+        open.expand = None;
+        open.collapse = Some(cranpose_ui::SemanticsExpand::new(|| true));
+        let root = node(1, SemanticsRole::Layout, Vec::new(), None, vec![open]);
+        let projected = project_semantics(&root, &bounds);
+        assert_eq!(projected[0].expanded, Some(true));
+        assert_eq!(expansion_word(&projected[0]), Some("expanded"));
+        assert!(set_expanded(&root, 2, false));
     }
 
     #[test]
