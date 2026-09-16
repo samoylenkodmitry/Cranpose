@@ -1,3 +1,5 @@
+use cranpose_ui::FocusDirection;
+
 use super::*;
 
 impl<R> AppShell<R>
@@ -949,6 +951,40 @@ where
     ///
     /// On desktop, Ctrl+C/X/V are handled here when native clipboard support is enabled.
     /// On web, these keys are NOT handled here - they bubble to browser for native copy/paste events.
+    /// Tab moves focus to the next target and Shift+Tab to the previous one,
+    /// as in Compose. A Tab carrying Ctrl, Alt or Meta belongs to the app.
+    fn on_focus_key(&mut self, event: &KeyEvent) -> bool {
+        if event.event_type != KeyEventType::KeyDown || event.key_code != KeyCode::Tab {
+            return false;
+        }
+        if event.modifiers.ctrl || event.modifiers.meta || event.modifiers.alt {
+            return false;
+        }
+        let direction = if event.modifiers.shift {
+            FocusDirection::Previous
+        } else {
+            FocusDirection::Next
+        };
+        self.move_focus_in_context(direction)
+    }
+
+    /// Publishes the focus order layout left behind and moves focus one step.
+    /// Answers whether focus moved.
+    pub fn move_focus_in_context(&mut self, direction: FocusDirection) -> bool {
+        let order = self.with_layout_tree(|layout_tree| {
+            layout_tree
+                .map(cranpose_ui::collect_focus_order)
+                .unwrap_or_default()
+        });
+        cranpose_ui::set_focus_order(order);
+        let moved = run_in_mutable_snapshot(|| cranpose_ui::FocusManager.move_focus(direction))
+            .unwrap_or(false);
+        if moved {
+            self.mark_dirty();
+        }
+        moved
+    }
+
     pub fn on_key_event(&mut self, event: &KeyEvent) -> bool {
         let _event_handler = enter_event_handler_scope();
         let app_context = Rc::clone(&self.app_context);
@@ -991,6 +1027,10 @@ where
                     _ => {}
                 }
             }
+        }
+
+        if self.on_focus_key(event) {
+            return true;
         }
 
         if !cranpose_ui::text_field_focus::has_focused_field() {

@@ -161,6 +161,27 @@ impl FocusInvalidationState {
             .unregister_focus_target(node_id, handle);
     }
 
+    pub(crate) fn has_focus_target(&self, node_id: NodeId) -> bool {
+        self.manager.borrow().has_focus_target(node_id)
+    }
+
+    pub(crate) fn clear_active_focus(&self) -> bool {
+        let previous = {
+            let mut manager = self.manager.borrow_mut();
+            let previous = manager.active_focus_target();
+            manager.set_active_focus_target(None);
+            previous
+        };
+        let Some(previous) = previous else {
+            return false;
+        };
+        let handles = self.manager.borrow().focus_target_handles(previous);
+        for handle in handles {
+            handle.set_focus_state(FocusState::Inactive);
+        }
+        true
+    }
+
     pub(crate) fn request_focus(&self, node_id: NodeId) -> bool {
         let accepted = {
             let mut manager = self.manager.borrow_mut();
@@ -289,6 +310,23 @@ pub(crate) fn unregister_focus_target(node_id: NodeId, handle: &Rc<dyn FocusTarg
 #[cfg(test)]
 pub(crate) fn request_focus(node_id: NodeId) -> bool {
     crate::render_state::with_focus_dispatch(|state| state.request_focus(node_id))
+}
+
+/// Whether `node_id` registered a focus target in this app context.
+pub(crate) fn has_focus_target(node_id: NodeId) -> bool {
+    crate::render_state::with_focus_dispatch(|state| state.has_focus_target(node_id))
+}
+
+pub(crate) fn request_focus_in_context(node_id: NodeId) -> bool {
+    let Some(app_context) = crate::render_state::current_app_context_id_opt() else {
+        return false;
+    };
+    request_focus_for(app_context, node_id).unwrap_or(false)
+}
+
+/// Drops focus from the active target and answers whether one held it.
+pub(crate) fn clear_active_focus() -> bool {
+    crate::render_state::with_focus_dispatch(|state| state.clear_active_focus())
 }
 
 pub(crate) fn request_focus_for(

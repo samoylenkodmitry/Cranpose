@@ -18,6 +18,8 @@ pub mod draggable;
 mod draw;
 pub mod fling_animation;
 mod focus_dispatch;
+pub mod focus_manager;
+pub mod focus_order;
 pub mod font_scale;
 mod interaction;
 mod key_event;
@@ -81,11 +83,13 @@ pub use draw::{
     DrawCacheBuilder, DrawCommand, DrawCommandFn, command_draw_scope, command_draw_scope_reusing,
     execute_draw_commands,
 };
-#[doc(hidden)]
 pub use focus_dispatch::{
     active_focus_target, clear_focus_invalidations, has_pending_focus_invalidations,
     process_focus_invalidations, schedule_focus_invalidation, set_active_focus_target,
 };
+#[doc(hidden)]
+pub use focus_manager::{FocusManager, local_focus_manager};
+pub use focus_order::{FocusEntry, collect_focus_order, focus_order_len, set_focus_order};
 pub use font_scale::{FontScaleCurve, MAX_FONT_SCALE_KNOTS};
 pub use interaction::{
     Interaction, MutableInteractionSource, PressInteraction, PressInteractionCancel,
