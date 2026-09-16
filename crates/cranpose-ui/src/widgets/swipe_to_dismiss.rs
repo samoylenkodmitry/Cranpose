@@ -854,7 +854,8 @@ where
     let background = spec.background.clone();
     let content = Rc::new(RefCell::new(content));
 
-    let gesture_modifier = swipe_gesture_modifier(modifier, Rc::clone(&controller));
+    let gesture_modifier = swipe_gesture_modifier(modifier, Rc::clone(&controller))
+        .semantics(dismiss_semantics(Rc::clone(&controller), spec.direction));
 
     let controller_for_layout = Rc::clone(&controller);
     let node = Layout(
@@ -928,3 +929,32 @@ where
 #[cfg(test)]
 #[path = "../tests/swipe_to_dismiss_tests.rs"]
 mod tests;
+
+/// A screen reader cannot swipe a row away, so the row offers "Dismiss" as a
+/// custom action, the way Compose's `SwipeToDismissBox` reaches TalkBack's
+/// actions menu. The row flings off toward the side the spec allows and fires
+/// `on_dismiss` once, as a finished swipe does.
+fn dismiss_semantics(
+    controller: Rc<SwipeToDismissController>,
+    direction: SwipeDismissDirection,
+) -> impl Fn(&mut cranpose_foundation::SemanticsConfiguration) + 'static {
+    move |config| {
+        if !controller.enabled.get() {
+            return;
+        }
+        let controller = Rc::clone(&controller);
+        config
+            .custom_actions
+            .push(cranpose_foundation::SemanticsCustomAction::new(
+                "Dismiss",
+                move || {
+                    let width = controller.width_px.get();
+                    let target = match direction {
+                        SwipeDismissDirection::EndToStart => -width,
+                        SwipeDismissDirection::StartToEnd | SwipeDismissDirection::Both => width,
+                    };
+                    animate_dismiss(&controller, target);
+                },
+            ));
+    }
+}

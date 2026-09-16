@@ -128,6 +128,25 @@ value moves freely, and a reader's step is then a tenth of the range.
 The value goes back through `set_progress` on the live semantics tree, so a
 stale published snapshot cannot move the wrong control.
 
+## What the built-in widgets say on their own
+
+An app gets this with no code of its own:
+
+| Widget | A reader hears | A reader can |
+| --- | --- | --- |
+| `Text` | the text | |
+| `Button`, `clickable` | the label, "button" | activate it |
+| `toggleable`, a switch or checkbox | the label, its state | flip it |
+| `BasicTextField` | the label, the text it holds | type into it |
+| `Slider` | the value | move it |
+| `CircularProgressIndicator`, `LinearProgressIndicator` | "Loading" | |
+| `SwipeToDismiss` | the row's content | run "Dismiss" from the actions menu |
+| `Dialog` | its content, and nothing outside it | |
+| `Image`, `Icon` | the description the app gave | |
+
+A control an app draws itself declares what it is through
+`Modifier::semantics`; see section 1.
+
 ## What a reader hears, end to end
 
 1. Layout builds the semantics tree, one node per control, with focus flags.
