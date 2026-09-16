@@ -1223,7 +1223,10 @@ impl DrawModifierNode for TextFieldModifierNode {
 impl SemanticsNode for TextFieldModifierNode {
     fn merge_semantics(&self, config: &mut SemanticsConfiguration) {
         let text = self.state.text();
-        config.content_description = Some(text);
+        if config.content_description.is_none() {
+            config.content_description = Some(text.clone());
+        }
+        config.text = Some(text);
         config.is_editable_text = true;
         config.text_selection = Some(self.state.selection());
     }

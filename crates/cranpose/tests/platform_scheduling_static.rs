@@ -3378,3 +3378,20 @@ fn every_lazy_list_tells_android_how_many_rows_it_holds() {
         "the Android host hands TalkBack the row count of a list"
     );
 }
+
+#[test]
+fn every_platform_lets_a_reader_find_an_empty_text_field() {
+    let projection_source = crate_source("src/accessibility.rs");
+    assert!(
+        projection_source
+            .contains("fn unnamed_field_label(node: &SemanticsNode) -> Option<Cow<'_, str>> {"),
+        "the projection publishes an editable field even with nothing to read"
+    );
+
+    let ios_source = crate_source("src/ios_accessibility.rs");
+    assert!(
+        ios_source
+            .contains("!element.label.is_empty() || element.role == AccessibilityRole::TextField"),
+        "VoiceOver stops on an empty text field"
+    );
+}

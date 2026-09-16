@@ -2667,6 +2667,39 @@ fn a_dialog_takes_focus_when_it_opens() {
     cranpose_ui::clear_modals();
 }
 
+#[test]
+fn a_text_field_named_by_the_app_keeps_that_name() {
+    let _guard = test_guard();
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(TestRenderer::default(), root_key, || {
+        let state = cranpose_core::remember(|| cranpose_ui::TextFieldState::new("Milk"))
+            .with(|state| *state);
+        cranpose_ui::BasicTextField(
+            state,
+            Modifier::empty()
+                .content_description("Folder name")
+                .width(200.0)
+                .height(40.0),
+            TextStyle::default(),
+        );
+    });
+    shell.set_semantics_enabled(true);
+    shell.update();
+
+    let tree = shell.semantics_tree().expect("a semantics tree");
+    let field = find_editable_semantics(tree.root()).expect("the field is in the tree");
+    assert_eq!(field.description.as_deref(), Some("Folder name"));
+    assert_eq!(field.text.as_deref(), Some("Milk"));
+}
+
+fn find_editable_semantics(
+    node: &cranpose_ui::SemanticsNode,
+) -> Option<&cranpose_ui::SemanticsNode> {
+    if node.editable_text {
+        return Some(node);
+    }
+    node.children.iter().find_map(find_editable_semantics)
+}
 fn find_semantics_with_role(
     node: &cranpose_ui::SemanticsNode,
     role: cranpose_foundation::SemanticsWidgetRole,

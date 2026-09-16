@@ -525,7 +525,9 @@ fn update_native_element(
     mtm: MainThreadMarker,
 ) {
     native.set_actionable(element.clickable || element.role == AccessibilityRole::TextField);
-    native.setIsAccessibilityElement(!element.label.is_empty());
+    native.setIsAccessibilityElement(
+        !element.label.is_empty() || element.role == AccessibilityRole::TextField,
+    );
     native.setAccessibilityLabel(Some(&NSString::from_str(&element.label)));
     let value = element
         .value

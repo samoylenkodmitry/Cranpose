@@ -251,10 +251,13 @@ fn project_node(
     } else {
         own_label
     };
+    let label = label
+        .filter(|label| !label.trim().is_empty())
+        .or_else(|| unnamed_field_label(node));
     let rect = bounds.get(&node.node_id).copied().unwrap_or_default();
 
     let scrollable = node.vertical_scroll.is_some() || node.horizontal_scroll.is_some();
-    if let Some(label) = label.filter(|label| !label.trim().is_empty())
+    if let Some(label) = label
         && rect.is_visible()
         && (actionable || !suppress_static_text)
     {
@@ -303,6 +306,16 @@ fn project_node(
 /// Names, once per node and only in a debug build, a control that takes a
 /// click or text but reaches no reader: it has no label and no text inside,
 /// so a screen reader has nothing to say for it.
+/// An editable field with no name and no text is still a stop for a reader,
+/// which hears "text field" and nothing else; a debug build says so.
+fn unnamed_field_label(node: &SemanticsNode) -> Option<Cow<'_, str>> {
+    if !node.editable_text {
+        return None;
+    }
+    warn_unlabeled(node.node_id);
+    Some(Cow::Borrowed(""))
+}
+
 #[cfg(debug_assertions)]
 fn warn_unlabeled(node_id: NodeId) {
     thread_local! {
@@ -341,7 +354,10 @@ fn element_for_node(
     AccessibilityElement {
         node_id: node.node_id,
         canvas_key: None,
-        value: node.editable_text.then(|| label.clone()),
+        value: node
+            .text
+            .clone()
+            .or_else(|| node.editable_text.then(|| label.clone())),
         label,
         state_description: node.state_description.clone(),
         click_label: node.on_click_label.clone(),
@@ -915,6 +931,40 @@ mod tests {
 
         assert_eq!(projected[2].click_label.as_deref(), Some("Reset"));
         assert!(!projected[2].enabled);
+    }
+
+    fn projected_field(name: Option<&str>, text: &str) -> Vec<AccessibilityElement> {
+        let mut field = node(2, SemanticsRole::Layout, Vec::new(), name, Vec::new());
+        field.editable_text = true;
+        field.text = Some(text.to_owned());
+        let root = node(1, SemanticsRole::Layout, Vec::new(), None, vec![field]);
+        let bounds = HashMap::from_iter([
+            (1, AccessibilityRect::new(0.0, 0.0, 300.0, 200.0)),
+            (2, AccessibilityRect::new(0.0, 0.0, 300.0, 40.0)),
+        ]);
+        project_semantics(&root, &bounds)
+    }
+
+    #[test]
+    fn an_empty_text_field_is_still_a_stop() {
+        let projected = projected_field(Some(""), "");
+
+        assert_eq!(
+            projected.len(),
+            1,
+            "the field is published with nothing to read"
+        );
+        assert_eq!(projected[0].role, AccessibilityRole::TextField);
+        assert_eq!(projected[0].label, "");
+        assert_eq!(projected[0].value.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn a_named_text_field_keeps_its_name_and_carries_its_text() {
+        let projected = projected_field(Some("Folder name"), "Milk");
+
+        assert_eq!(projected[0].label, "Folder name");
+        assert_eq!(projected[0].value.as_deref(), Some("Milk"));
     }
 
     #[test]

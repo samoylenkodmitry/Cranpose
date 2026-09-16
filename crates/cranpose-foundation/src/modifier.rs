@@ -1056,6 +1056,9 @@ pub struct SemanticsConfiguration {
     pub enabled: bool,
     pub is_clickable: bool,
     pub is_editable_text: bool,
+    /// The text an editable field holds, read as its value. Compose's
+    /// `editableText`.
+    pub text: Option<String>,
     pub text_selection: Option<crate::text::TextRange>,
     pub custom_actions: Vec<SemanticsCustomAction>,
     /// Controls this node drew itself instead of laying out. See
@@ -1098,6 +1101,7 @@ impl Default for SemanticsConfiguration {
             enabled: true,
             is_clickable: false,
             is_editable_text: false,
+            text: None,
             text_selection: None,
             custom_actions: Vec::new(),
             canvas_children: Vec::new(),
@@ -1136,6 +1140,9 @@ impl SemanticsConfiguration {
         self.enabled &= other.enabled;
         self.is_clickable |= other.is_clickable;
         self.is_editable_text |= other.is_editable_text;
+        if let Some(text) = &other.text {
+            self.text = Some(text.clone());
+        }
         if let Some(selection) = other.text_selection {
             self.text_selection = Some(selection);
         }

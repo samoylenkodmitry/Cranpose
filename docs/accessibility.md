@@ -225,7 +225,7 @@ An app gets this with no code of its own:
 | `Button`, `clickable` | the label, "button" | activate it |
 | `toggleable`, a switch or checkbox | the label, its state | flip it |
 | `selectable`, a tab or a radio row | the label, its role, whether it is picked | pick it |
-| `BasicTextField` | the label, the text it holds | type into it |
+| `BasicTextField` | the name the app gave it, or the text it holds; an empty field is still a stop | type into it |
 | `Slider` | the value | move it |
 | `CircularProgressIndicator`, `LinearProgressIndicator` | "Loading" | |
 | `SwipeToDismiss` | the row's content | run "Dismiss" from the actions menu |
@@ -236,6 +236,12 @@ An app gets this with no code of its own:
 
 A control an app draws itself declares what it is through
 `Modifier::semantics`; see section 1.
+
+A text field takes its name from `Modifier::content_description` on the
+field, and the text it holds is its value: a reader hears "Folder name, text
+field, Milk". With no name the text stands in for it, and a field that is
+empty as well is still a stop that says "text field", so a reader can find
+it and type. A debug build logs a warning for such a field.
 
 ## What a reader hears, end to end
 

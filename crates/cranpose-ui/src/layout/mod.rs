@@ -368,6 +368,8 @@ pub struct SemanticsNode {
     /// to this node's own top-left. See [`CanvasSemanticsNode`].
     pub canvas_children: Vec<CanvasSemanticsNode>,
     pub editable_text: bool,
+    /// The text an editable field holds.
+    pub text: Option<String>,
     pub text_selection: Option<TextRange>,
     /// Whether this node registered a focus target, so focus can land on it.
     /// Compose's `SemanticsProperties.Focused` companion.
@@ -409,6 +411,7 @@ impl Default for SemanticsNode {
             custom_actions: Vec::new(),
             canvas_children: Vec::new(),
             editable_text: false,
+            text: None,
             text_selection: None,
             focusable: false,
             focused: false,
@@ -3067,6 +3070,7 @@ fn semantics_node_from_parts(
         node.custom_actions = config.custom_actions;
         node.canvas_children = config.canvas_children;
         node.editable_text = config.is_editable_text;
+        node.text = config.text;
         node.text_selection = config.text_selection;
         node.live_region = config.live_region;
         node.progress = config.progress;
