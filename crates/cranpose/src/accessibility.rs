@@ -93,6 +93,7 @@ pub(crate) struct AccessibilityElement {
     pub(crate) horizontal_scroll: Option<ScrollAxisRange>,
     pub(crate) scroll_parent: Option<NodeId>,
     pub(crate) collection: Option<CollectionInfo>,
+    pub(crate) collection_item: Option<CollectionItem>,
 }
 
 impl Default for AccessibilityElement {
@@ -120,6 +121,7 @@ impl Default for AccessibilityElement {
             horizontal_scroll: None,
             scroll_parent: None,
             collection: None,
+            collection_item: None,
         }
     }
 }
@@ -252,7 +254,7 @@ fn project_node(
     let label = published_label(node, merges);
     let rect = bounds.get(&node.node_id).copied().unwrap_or_default();
 
-    let scrollable = node.vertical_scroll.is_some() || node.horizontal_scroll.is_some();
+    let container = is_container(node);
     if let Some(label) = label
         && rect.is_visible()
         && (merges || !suppress_static_text)
@@ -264,7 +266,7 @@ fn project_node(
             clickable,
             live_region,
         ));
-    } else if scrollable && rect.is_visible() {
+    } else if container && rect.is_visible() {
         elements.push(element_for_node(
             node,
             rect,
@@ -282,20 +284,83 @@ fn project_node(
     }
 
     let suppress_children = suppress_static_text || merges;
-    let scroll_for_children = if scrollable {
+    let scroll_for_children = if container {
         Some(node.node_id)
     } else {
         inherited_scroll
     };
+    project_children(
+        node,
+        bounds,
+        suppress_children,
+        live_region,
+        scroll_for_children,
+        elements,
+    );
+}
+
+/// A node a reader walks into rather than stops on: a list, a scroll view, or
+/// a group of tabs or radio buttons.
+fn is_container(node: &SemanticsNode) -> bool {
+    node.vertical_scroll.is_some() || node.horizontal_scroll.is_some() || node.selectable_group
+}
+
+/// Projects the nodes under a container, then numbers the selectable controls
+/// of a group so a reader hears which of how many each one is.
+fn project_children(
+    node: &SemanticsNode,
+    bounds: &HashMap<NodeId, AccessibilityRect>,
+    suppress_static_text: bool,
+    live_region: Option<LiveRegionMode>,
+    scroll_for_children: Option<NodeId>,
+    elements: &mut Vec<AccessibilityElement>,
+) {
+    let first_child = elements.len();
     for child in &node.children {
         project_node(
             child,
             bounds,
-            suppress_children,
+            suppress_static_text,
             live_region,
             scroll_for_children,
             elements,
         );
+    }
+    if node.selectable_group {
+        number_group(node.node_id, first_child, elements);
+    }
+}
+
+/// Gives each selectable control under a group its place and the group's
+/// size, and tells the group's own element how many it holds and which way
+/// it runs.
+fn number_group(group: NodeId, first_child: usize, elements: &mut [AccessibilityElement]) {
+    let members: Vec<usize> = (first_child..elements.len())
+        .filter(|index| {
+            elements[*index].selected.is_some() && elements[*index].scroll_parent == Some(group)
+        })
+        .collect();
+    let count = members.len();
+    let Some(first) = members.first() else {
+        return;
+    };
+    let horizontal = members.get(1).is_none_or(|second| {
+        let (a, b) = (elements[*first].bounds, elements[*second].bounds);
+        (b.x - a.x).abs() >= (b.y - a.y).abs()
+    });
+    for (index, position) in members.iter().zip(1..) {
+        elements[*index].collection_item = Some(CollectionItem {
+            position,
+            count,
+            horizontal,
+        });
+    }
+    let (rows, columns) = if horizontal { (1, count) } else { (count, 1) };
+    if let Some(element) = elements
+        .iter_mut()
+        .find(|element| element.node_id == group && element.canvas_key.is_none())
+    {
+        element.collection = Some(CollectionInfo { rows, columns });
     }
 }
 
@@ -342,6 +407,15 @@ fn warn_unlabeled(node_id: NodeId) {
 
 #[cfg(not(debug_assertions))]
 fn warn_unlabeled(_node_id: NodeId) {}
+
+/// Where a selectable control sits inside its group: its place counted from
+/// one, how many the group holds, and whether the group runs left to right.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct CollectionItem {
+    pub(crate) position: usize,
+    pub(crate) count: usize,
+    pub(crate) horizontal: bool,
+}
 
 /// One control as the platforms see it. A scroll container with no label of
 /// its own comes through with an empty label: a reader never lands on it, but
@@ -392,6 +466,7 @@ fn element_for_node(
         horizontal_scroll: node.horizontal_scroll,
         scroll_parent: None,
         collection: node.collection,
+        collection_item: None,
     }
 }
 
@@ -494,10 +569,17 @@ pub(crate) fn scroll_container_for<'a>(
     elements: &'a [AccessibilityElement],
     element: &AccessibilityElement,
 ) -> Option<&'a AccessibilityElement> {
-    let parent = element.scroll_parent?;
-    elements
-        .iter()
-        .find(|candidate| candidate.node_id == parent && candidate.canvas_key.is_none())
+    let mut parent = element.scroll_parent;
+    while let Some(id) = parent {
+        let candidate = elements
+            .iter()
+            .find(|candidate| candidate.node_id == id && candidate.canvas_key.is_none())?;
+        if candidate.vertical_scroll.is_some() || candidate.horizontal_scroll.is_some() {
+            return Some(candidate);
+        }
+        parent = candidate.scroll_parent;
+    }
+    None
 }
 
 fn project_canvas_children(
@@ -548,6 +630,7 @@ fn project_canvas_children(
             horizontal_scroll: None,
             scroll_parent: None,
             collection: None,
+            collection_item: None,
         });
     }
 }
@@ -981,6 +1064,113 @@ mod tests {
 
         assert_eq!(projected[2].click_label.as_deref(), Some("Reset"));
         assert!(!projected[2].enabled);
+    }
+
+    fn click(node_id: NodeId) -> SemanticsAction {
+        SemanticsAction::Click {
+            handler: SemanticsCallback::new(node_id),
+        }
+    }
+
+    fn tab(node_id: NodeId, label: &str, picked: bool) -> SemanticsNode {
+        let mut tab = node(
+            node_id,
+            SemanticsRole::Layout,
+            vec![click(node_id)],
+            Some(label),
+            Vec::new(),
+        );
+        tab.selected = Some(picked);
+        tab
+    }
+
+    fn tab_group(node_id: NodeId, tabs: Vec<SemanticsNode>) -> SemanticsNode {
+        let mut group = node(node_id, SemanticsRole::Layout, Vec::new(), None, tabs);
+        group.selectable_group = true;
+        group
+    }
+
+    #[test]
+    fn tabs_in_a_group_know_their_place() {
+        let root = tab_group(
+            1,
+            vec![
+                tab(2, "Home", true),
+                tab(3, "Library", false),
+                tab(4, "Settings", false),
+            ],
+        );
+        let bounds = HashMap::from_iter([
+            (1, AccessibilityRect::new(0.0, 0.0, 300.0, 60.0)),
+            (2, AccessibilityRect::new(0.0, 0.0, 100.0, 60.0)),
+            (3, AccessibilityRect::new(100.0, 0.0, 100.0, 60.0)),
+            (4, AccessibilityRect::new(200.0, 0.0, 100.0, 60.0)),
+        ]);
+
+        let projected = project_semantics(&root, &bounds);
+
+        assert_eq!(
+            projected[0].collection,
+            Some(CollectionInfo {
+                rows: 1,
+                columns: 3
+            })
+        );
+        let places: Vec<_> = projected[1..]
+            .iter()
+            .map(|tab| tab.collection_item.expect("a tab knows its place"))
+            .collect();
+        assert_eq!(
+            places,
+            vec![
+                CollectionItem {
+                    position: 1,
+                    count: 3,
+                    horizontal: true
+                },
+                CollectionItem {
+                    position: 2,
+                    count: 3,
+                    horizontal: true
+                },
+                CollectionItem {
+                    position: 3,
+                    count: 3,
+                    horizontal: true
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_tab_pages_the_list_around_its_group() {
+        let mut list = node(
+            1,
+            SemanticsRole::Layout,
+            Vec::new(),
+            None,
+            vec![tab_group(2, vec![tab(3, "Home", true)])],
+        );
+        list.vertical_scroll = Some(cranpose_ui::ScrollAxisRange::new(0.0, 900.0, false));
+        let bounds = HashMap::from_iter([
+            (1, AccessibilityRect::new(0.0, 0.0, 300.0, 600.0)),
+            (2, AccessibilityRect::new(0.0, 0.0, 300.0, 60.0)),
+            (3, AccessibilityRect::new(0.0, 0.0, 100.0, 60.0)),
+        ]);
+
+        let projected = project_semantics(&root_of(list), &bounds);
+        let tab = projected.last().expect("the tab is published");
+
+        assert_eq!(tab.scroll_parent, Some(2), "the tab sits under its group");
+        assert_eq!(
+            scroll_container_for(&projected, tab).map(|list| list.node_id),
+            Some(1),
+            "a page from the tab reaches the list above the group"
+        );
+    }
+
+    fn root_of(node: SemanticsNode) -> SemanticsNode {
+        node
     }
 
     #[test]

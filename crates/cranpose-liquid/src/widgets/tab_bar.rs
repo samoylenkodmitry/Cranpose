@@ -491,6 +491,7 @@ fn TabCells(
             Box(
                 Modifier::empty()
                     .size(size)
+                    .selectable_group()
                     .graphics_layer_value(transform.clone()),
                 BoxSpec::default(),
                 move || {

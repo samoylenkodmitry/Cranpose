@@ -427,6 +427,10 @@ fn apply_state(node: &mut Node, element: &AccessibilityElement) {
     if let Some(state) = &element.state_description {
         node.set_description(state.as_str());
     }
+    if let Some(item) = element.collection_item {
+        node.set_position_in_set(item.position);
+        node.set_size_of_set(item.count);
+    }
     if let Some(selected) = element.selected {
         node.set_selected(selected);
     }

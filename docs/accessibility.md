@@ -239,6 +239,7 @@ An app gets this with no code of its own:
 | `Button`, `clickable` | the label, "button" | activate it |
 | `toggleable`, a switch or checkbox | the label, its state | flip it |
 | `selectable`, a tab or a radio row | the label, its role, whether it is picked | pick it |
+| `LiquidTabBar` | the tab, whether it is picked, and which of how many | pick it |
 | `BasicTextField` | the name the app gave it, or the text it holds; an empty field is still a stop | type into it |
 | `Slider` | the value | move it |
 | `CircularProgressIndicator`, `LinearProgressIndicator` | "Loading" | |
@@ -266,6 +267,13 @@ A row of texts that belong together, a name with its count and its price,
 reads as three stops unless the app says otherwise. `Modifier::merge_descendants()`
 on the row makes it one stop, "Milk, 2, 3.40", the way a button with text
 inside already reads; the texts under it are not published on their own.
+
+A row of tabs or radio buttons is a group, and a reader says which of how
+many its cursor is on. `Modifier::selectable_group()` on the row declares it;
+`LiquidTabBar` does so on its own. TalkBack says "Library, tab, 2 of 5",
+VoiceOver reads "2 of 5" as the tab's value, the web mirror sets
+`aria-posinset` and `aria-setsize`, and accesskit gets the position and the
+size of the set.
 
 ## What a reader hears, end to end
 

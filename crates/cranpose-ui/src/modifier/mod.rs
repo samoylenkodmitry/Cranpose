@@ -491,6 +491,14 @@ impl Modifier {
         self.semantics(move |config| config.progress = Some(info))
     }
 
+    /// Makes the selectable controls under this node one group, so a screen
+    /// reader says which of how many a tab or a radio button is: "Library,
+    /// tab, 2 of 5". `LiquidTabBar` declares it on its own. Compose's
+    /// `Modifier.selectableGroup()`.
+    pub fn selectable_group(self) -> Self {
+        self.semantics(|config| config.selectable_group = true)
+    }
+
     /// Makes a screen reader take this node and the text under it as one
     /// stop, the way it does for a button: a row whose name, count and price
     /// belong together reads as "Milk, 2, 3.40" and not as three stops.

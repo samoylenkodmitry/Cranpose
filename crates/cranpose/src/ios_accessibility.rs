@@ -555,11 +555,15 @@ fn update_native_element(
         !element.label.is_empty() || element.role == AccessibilityRole::TextField,
     );
     native.setAccessibilityLabel(Some(&NSString::from_str(&element.label)));
+    let place = element
+        .collection_item
+        .map(|item| format!("{} of {}", item.position, item.count));
     let value = element
         .value
-        .as_deref()
-        .or(element.state_description.as_deref());
-    native.setAccessibilityValue(value.map(NSString::from_str).as_deref());
+        .clone()
+        .or_else(|| element.state_description.clone())
+        .or(place);
+    native.setAccessibilityValue(value.as_deref().map(NSString::from_str).as_deref());
     native.setAccessibilityHint(
         element
             .click_label

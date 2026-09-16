@@ -180,6 +180,10 @@ fn apply_aria_state(node: &HtmlElement, element: &AccessibilityElement) -> Resul
     if let Some(state) = &element.state_description {
         node.set_attribute("aria-description", state)?;
     }
+    if let Some(item) = element.collection_item {
+        node.set_attribute("aria-posinset", &item.position.to_string())?;
+        node.set_attribute("aria-setsize", &item.count.to_string())?;
+    }
     if let Some(toggled) = element.toggled {
         node.set_attribute("aria-checked", if toggled { "true" } else { "false" })?;
     }

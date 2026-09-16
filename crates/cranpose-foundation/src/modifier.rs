@@ -1075,6 +1075,10 @@ pub struct SemanticsConfiguration {
     /// stop, the way it does for a button: a row whose name, count and price
     /// belong together. Compose's `mergeDescendants`.
     pub merge_descendants: bool,
+    /// Whether the selectable controls under this node form one group, so a
+    /// screen reader says which of how many a tab or a radio button is.
+    /// Compose's `selectableGroup`.
+    pub selectable_group: bool,
     /// Compose's `liveRegion`. When set, a screen reader reads this node again
     /// whenever its text changes, without the user moving to it.
     pub live_region: Option<LiveRegionMode>,
@@ -1116,6 +1120,7 @@ impl Default for SemanticsConfiguration {
             is_modal: false,
             hidden: false,
             merge_descendants: false,
+            selectable_group: false,
             live_region: None,
             progress: None,
             set_progress: None,
@@ -1163,6 +1168,7 @@ impl SemanticsConfiguration {
         self.is_modal |= other.is_modal;
         self.hidden |= other.hidden;
         self.merge_descendants |= other.merge_descendants;
+        self.selectable_group |= other.selectable_group;
         if let Some(live_region) = other.live_region {
             self.live_region = Some(live_region);
         }

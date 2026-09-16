@@ -770,7 +770,7 @@ public class CranposeActivity extends NativeActivity {
     }
 
     /** Field count of one accessibility record; see android_accessibility_wire.rs. */
-    private static final int ACCESSIBILITY_FIELDS = 30;
+    private static final int ACCESSIBILITY_FIELDS = 32;
 
     /** Separator packing a node's custom action labels into one field. */
     private static final String ACCESSIBILITY_ACTION_SEPARATOR = String.valueOf((char) 0x1f);
@@ -805,7 +805,8 @@ public class CranposeActivity extends NativeActivity {
                         Float.parseFloat(fields[22]), "1".equals(fields[23]),
                         "1".equals(fields[24]), "1".equals(fields[25]),
                         Integer.parseInt(fields[26]), Integer.parseInt(fields[27]),
-                        Integer.parseInt(fields[28]), "1".equals(fields[29])));
+                        Integer.parseInt(fields[28]), "1".equals(fields[29]),
+                        Integer.parseInt(fields[30]), Integer.parseInt(fields[31])));
             } catch (RuntimeException ignored) {
                 // A malformed record must not make the host Activity inaccessible.
             }
@@ -863,6 +864,8 @@ public class CranposeActivity extends NativeActivity {
         final int collectionRows;
         final int collectionColumns;
         final boolean changed;
+        final int itemRow;
+        final int itemColumn;
 
         CranposeAccessibilityElement(int id, int role, Rect bounds, float centerX,
                 float centerY, boolean clickable, String label, String value,
@@ -871,7 +874,8 @@ public class CranposeActivity extends NativeActivity {
                 boolean focused, boolean adjustable, float progressCurrent,
                 float progressMin, float progressMax, boolean scrollable,
                 boolean canScrollForward, boolean canScrollBackward, int scrollParent,
-                int collectionRows, int collectionColumns, boolean changed) {
+                int collectionRows, int collectionColumns, boolean changed, int itemRow,
+                int itemColumn) {
             this.id = id;
             this.role = role;
             this.bounds = bounds;
@@ -899,6 +903,8 @@ public class CranposeActivity extends NativeActivity {
             this.collectionRows = collectionRows;
             this.collectionColumns = collectionColumns;
             this.changed = changed;
+            this.itemRow = itemRow;
+            this.itemColumn = itemColumn;
         }
 
         /**
@@ -997,7 +1003,8 @@ public class CranposeActivity extends NativeActivity {
             } else {
                 info.setParent(host);
             }
-            if (element.scrollable) {
+            boolean container = element.scrollable || element.collectionRows > 0 || element.collectionColumns > 0;
+            if (container) {
                 for (CranposeAccessibilityElement child : elements) {
                     if (child.scrollParent == element.id) info.addChild(host, child.id);
                 }
@@ -1005,7 +1012,7 @@ public class CranposeActivity extends NativeActivity {
             info.setPackageName(host.getContext().getPackageName());
             info.setEnabled(element.enabled);
             info.setVisibleToUser(true);
-            info.setFocusable(!element.scrollable || !element.label.isEmpty());
+            info.setFocusable(!container || !element.label.isEmpty());
             info.setAccessibilityFocused(focusedId == element.id);
             info.setFocused(element.focused);
             if (element.focusable) info.addAction(AccessibilityNodeInfo.ACTION_FOCUS);
@@ -1015,10 +1022,14 @@ public class CranposeActivity extends NativeActivity {
                 info.setScrollable(true);
                 if (element.canScrollForward) info.addAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD);
                 if (element.canScrollBackward) info.addAction(AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD);
-                if (element.collectionRows > 0 || element.collectionColumns > 0) {
-                    info.setCollectionInfo(AccessibilityNodeInfo.CollectionInfo.obtain(
-                            element.collectionRows, element.collectionColumns, false));
-                }
+            }
+            if (element.collectionRows > 0 || element.collectionColumns > 0) {
+                info.setCollectionInfo(AccessibilityNodeInfo.CollectionInfo.obtain(
+                        element.collectionRows, element.collectionColumns, false));
+            }
+            if (element.itemRow >= 0 || element.itemColumn >= 0) {
+                info.setCollectionItemInfo(AccessibilityNodeInfo.CollectionItemInfo.obtain(
+                        element.itemRow, 1, element.itemColumn, 1, false));
             }
             if (element.adjustable) {
                 info.setRangeInfo(AccessibilityNodeInfo.RangeInfo.obtain(

@@ -373,6 +373,8 @@ pub struct SemanticsNode {
     /// Whether a screen reader takes this node and the text under it as one
     /// stop.
     pub merge_descendants: bool,
+    /// Whether the selectable controls under this node form one group.
+    pub selectable_group: bool,
     /// The text an editable field holds.
     pub text: Option<String>,
     pub text_selection: Option<TextRange>,
@@ -418,6 +420,7 @@ impl Default for SemanticsNode {
             editable_text: false,
             hidden: false,
             merge_descendants: false,
+            selectable_group: false,
             text: None,
             text_selection: None,
             focusable: false,
@@ -3079,6 +3082,7 @@ fn semantics_node_from_parts(
         node.editable_text = config.is_editable_text;
         node.hidden = config.hidden;
         node.merge_descendants = config.merge_descendants;
+        node.selectable_group = config.selectable_group;
         node.text = config.text;
         node.text_selection = config.text_selection;
         node.live_region = config.live_region;

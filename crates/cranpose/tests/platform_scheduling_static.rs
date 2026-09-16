@@ -3374,7 +3374,7 @@ fn every_lazy_list_tells_android_how_many_rows_it_holds() {
     let java_source = crate_source("android/java/dev/cranpose/android/CranposeActivity.java");
     assert!(
         java_source.contains("info.setCollectionInfo(AccessibilityNodeInfo.CollectionInfo.obtain(")
-            && java_source.contains("private static final int ACCESSIBILITY_FIELDS = 30;"),
+            && java_source.contains("private static final int ACCESSIBILITY_FIELDS = 32;"),
         "the Android host hands TalkBack the row count of a list"
     );
 }
@@ -3417,5 +3417,40 @@ fn every_platform_speaks_a_control_that_changed_under_the_cursor() {
     assert!(
         bridge_source.contains("let changed = accessibility::spoken_changes(previous, &elements);"),
         "the Android bridge marks the controls that changed"
+    );
+}
+
+#[test]
+fn every_platform_says_which_tab_of_how_many() {
+    let tab_bar = workspace_source("crates/cranpose-liquid/src/widgets/tab_bar.rs");
+    assert!(
+        tab_bar.contains("                    .selectable_group()"),
+        "the liquid tab bar declares its tabs as one group"
+    );
+
+    let java_source = crate_source("android/java/dev/cranpose/android/CranposeActivity.java");
+    assert!(
+        java_source.contains(
+            "info.setCollectionItemInfo(AccessibilityNodeInfo.CollectionItemInfo.obtain("
+        ),
+        "TalkBack gets each tab's place in its group"
+    );
+
+    let ios_source = crate_source("src/ios_accessibility.rs");
+    assert!(
+        ios_source.contains(".map(|item| format!(\"{} of {}\", item.position, item.count));"),
+        "VoiceOver reads the tab's place as its value"
+    );
+
+    let web_source = crate_source("src/web_accessibility.rs");
+    assert!(
+        web_source.contains("node.set_attribute(\"aria-posinset\", &item.position.to_string())?;"),
+        "the web mirror sets the tab's position in its set"
+    );
+
+    let desktop_source = crate_source("src/desktop_accessibility.rs");
+    assert!(
+        desktop_source.contains("node.set_position_in_set(item.position);"),
+        "accesskit gets the tab's position in its set"
     );
 }

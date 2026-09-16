@@ -1,5 +1,5 @@
 use crate::{
-    accessibility::{AccessibilityElement, AccessibilityRole, element_ids},
+    accessibility::{AccessibilityElement, AccessibilityRole, CollectionItem, element_ids},
     android_wire_escape::escape_wire_field,
 };
 
@@ -41,7 +41,7 @@ pub(crate) fn encode_elements(
             let progress = element.progress;
             let scroll = element.vertical_scroll.or(element.horizontal_scroll);
             format!(
-                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                 id,
                 role,
                 (element.bounds.x * density).round() as i32,
@@ -72,6 +72,8 @@ pub(crate) fn encode_elements(
                 element.collection.map_or(0, |collection| collection.rows),
                 element.collection.map_or(0, |collection| collection.columns),
                 i32::from(changed.get(index).copied().unwrap_or(false)),
+                element.collection_item.map_or(-1, item_row),
+                element.collection_item.map_or(-1, item_column),
             )
         })
         .collect::<Vec<_>>()
@@ -95,6 +97,25 @@ fn scroll_parent_ids(elements: &[AccessibilityElement], ids: &[i32]) -> Vec<i32>
                 .unwrap_or(-1)
         })
         .collect()
+}
+
+/// The row a control takes inside its group, counted from zero, for the
+/// host's collection item info: a group that runs left to right is one row.
+fn item_row(item: CollectionItem) -> i32 {
+    if item.horizontal {
+        0
+    } else {
+        item.position as i32 - 1
+    }
+}
+
+/// The column a control takes inside its group, counted from zero.
+fn item_column(item: CollectionItem) -> i32 {
+    if item.horizontal {
+        item.position as i32 - 1
+    } else {
+        0
+    }
 }
 
 fn tristate(value: Option<bool>) -> i32 {
@@ -151,7 +172,7 @@ mod tests {
         let records: Vec<_> = payload.split('\n').collect();
         assert_eq!(records.len(), 2);
         for record in &records {
-            assert_eq!(record.split('\t').count(), 30, "record: {record}");
+            assert_eq!(record.split('\t').count(), 32, "record: {record}");
         }
 
         let fields: Vec<_> = records[0].split('\t').collect();
@@ -344,6 +365,33 @@ mod tests {
             quiet.split('\t').nth(29),
             Some("0"),
             "the button reads as before"
+        );
+    }
+
+    #[test]
+    fn the_record_places_a_tab_in_its_group() {
+        let mut tab = save_button(8);
+        tab.selected = Some(true);
+        tab.collection_item = Some(CollectionItem {
+            position: 2,
+            count: 5,
+            horizontal: true,
+        });
+
+        let payload = encode_elements(&[tab, save_button(9)], &[], 1.0);
+        let records: Vec<_> = payload.split('\n').collect();
+        let placed: Vec<_> = records[0].split('\t').collect();
+        let loose: Vec<_> = records[1].split('\t').collect();
+
+        assert_eq!(
+            (placed[30], placed[31]),
+            ("0", "1"),
+            "the second tab of a row is column one"
+        );
+        assert_eq!(
+            (loose[30], loose[31]),
+            ("-1", "-1"),
+            "a button outside a group has no place"
         );
     }
 }
