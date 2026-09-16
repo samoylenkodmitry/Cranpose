@@ -770,7 +770,7 @@ public class CranposeActivity extends NativeActivity {
     }
 
     /** Field count of one accessibility record; see android_accessibility_wire.rs. */
-    private static final int ACCESSIBILITY_FIELDS = 26;
+    private static final int ACCESSIBILITY_FIELDS = 27;
 
     /** Separator packing a node's custom action labels into one field. */
     private static final String ACCESSIBILITY_ACTION_SEPARATOR = String.valueOf((char) 0x1f);
@@ -803,7 +803,8 @@ public class CranposeActivity extends NativeActivity {
                         "1".equals(fields[18]), "1".equals(fields[19]),
                         Float.parseFloat(fields[20]), Float.parseFloat(fields[21]),
                         Float.parseFloat(fields[22]), "1".equals(fields[23]),
-                        "1".equals(fields[24]), "1".equals(fields[25])));
+                        "1".equals(fields[24]), "1".equals(fields[25]),
+                        Integer.parseInt(fields[26])));
             } catch (RuntimeException ignored) {
                 // A malformed record must not make the host Activity inaccessible.
             }
@@ -856,6 +857,8 @@ public class CranposeActivity extends NativeActivity {
         final boolean scrollable;
         final boolean canScrollForward;
         final boolean canScrollBackward;
+        /** The virtual id of the scroll container above this control, or -1. */
+        final int scrollParent;
 
         CranposeAccessibilityElement(int id, int role, Rect bounds, float centerX,
                 float centerY, boolean clickable, String label, String value,
@@ -863,7 +866,7 @@ public class CranposeActivity extends NativeActivity {
                 boolean enabled, String[] customActions, boolean focusable,
                 boolean focused, boolean adjustable, float progressCurrent,
                 float progressMin, float progressMax, boolean scrollable,
-                boolean canScrollForward, boolean canScrollBackward) {
+                boolean canScrollForward, boolean canScrollBackward, int scrollParent) {
             this.id = id;
             this.role = role;
             this.bounds = bounds;
@@ -887,6 +890,7 @@ public class CranposeActivity extends NativeActivity {
             this.scrollable = scrollable;
             this.canScrollForward = canScrollForward;
             this.canScrollBackward = canScrollBackward;
+            this.scrollParent = scrollParent;
         }
 
         /**
@@ -952,7 +956,7 @@ public class CranposeActivity extends NativeActivity {
                 info.setClassName(CranposeActivity.class.getName());
                 info.setPackageName(host.getContext().getPackageName());
                 for (CranposeAccessibilityElement element : elements) {
-                    info.addChild(host, element.id);
+                    if (element.scrollParent < 0) info.addChild(host, element.id);
                 }
                 return info;
             }
@@ -960,11 +964,23 @@ public class CranposeActivity extends NativeActivity {
             if (element == null) return null;
             AccessibilityNodeInfo info = AccessibilityNodeInfo.obtain();
             info.setSource(host, element.id);
-            info.setParent(host);
+            // A row sits under its list, so TalkBack's page gesture on the row
+            // reaches the list, and the list itself, with no text, is a
+            // container the cursor walks through rather than stops on.
+            if (element.scrollParent >= 0) {
+                info.setParent(host, element.scrollParent);
+            } else {
+                info.setParent(host);
+            }
+            if (element.scrollable) {
+                for (CranposeAccessibilityElement child : elements) {
+                    if (child.scrollParent == element.id) info.addChild(host, child.id);
+                }
+            }
             info.setPackageName(host.getContext().getPackageName());
             info.setEnabled(element.enabled);
             info.setVisibleToUser(true);
-            info.setFocusable(true);
+            info.setFocusable(!element.scrollable || !element.label.isEmpty());
             info.setAccessibilityFocused(focusedId == element.id);
             info.setFocused(element.focused);
             if (element.focusable) info.addAction(AccessibilityNodeInfo.ACTION_FOCUS);

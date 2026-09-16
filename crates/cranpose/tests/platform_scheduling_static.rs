@@ -3223,6 +3223,13 @@ fn every_platform_bridge_pages_a_scroll_container() {
                 .contains("drain_accessibility_scrolls(shell, &accessibility_elements);"),
         "TalkBack pages a scrollable node through the wire and the shell drains it each frame"
     );
+    assert!(
+        java_source.contains("info.setParent(host, element.scrollParent);")
+            && java_source
+                .contains("if (child.scrollParent == element.id) info.addChild(host, child.id);")
+            && wire_source.contains("fn scroll_parent_ids("),
+        "a row sits under its list in the virtual view tree, so TalkBack's page gesture on the row reaches the list"
+    );
 
     let web_source = crate_source("src/web_accessibility.rs");
     assert!(

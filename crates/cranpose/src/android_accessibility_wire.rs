@@ -8,10 +8,12 @@ const ACTION_SEPARATOR: char = '\u{1f}';
 pub(crate) fn encode_elements(elements: &[AccessibilityElement], density: f32) -> String {
     let density = density.max(f32::EPSILON);
     let ids = element_ids(elements);
+    let parents = scroll_parent_ids(elements, &ids);
     elements
         .iter()
         .zip(ids)
-        .map(|(element, id)| {
+        .zip(parents)
+        .map(|((element, id), parent)| {
             let role = match element.role {
                 AccessibilityRole::Button => 1,
                 AccessibilityRole::StaticText => 2,
@@ -34,7 +36,7 @@ pub(crate) fn encode_elements(elements: &[AccessibilityElement], density: f32) -
             let progress = element.progress;
             let scroll = element.vertical_scroll.or(element.horizontal_scroll);
             format!(
-                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                 id,
                 role,
                 (element.bounds.x * density).round() as i32,
@@ -61,10 +63,30 @@ pub(crate) fn encode_elements(elements: &[AccessibilityElement], density: f32) -
                 i32::from(scroll.is_some()),
                 i32::from(scroll.is_some_and(|range| range.can_scroll_forward())),
                 i32::from(scroll.is_some_and(|range| range.can_scroll_backward())),
+                parent,
             )
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// The virtual id of the scroll container above each element, or -1, so the
+/// host can hang a row under its list.
+fn scroll_parent_ids(elements: &[AccessibilityElement], ids: &[i32]) -> Vec<i32> {
+    elements
+        .iter()
+        .map(|element| {
+            element
+                .scroll_parent
+                .and_then(|parent| {
+                    elements.iter().position(|candidate| {
+                        candidate.node_id == parent && candidate.canvas_key.is_none()
+                    })
+                })
+                .and_then(|index| ids.get(index).copied())
+                .unwrap_or(-1)
+        })
+        .collect()
 }
 
 fn tristate(value: Option<bool>) -> i32 {
@@ -121,7 +143,7 @@ mod tests {
         let records: Vec<_> = payload.split('\n').collect();
         assert_eq!(records.len(), 2);
         for record in &records {
-            assert_eq!(record.split('\t').count(), 26, "record: {record}");
+            assert_eq!(record.split('\t').count(), 27, "record: {record}");
         }
 
         let fields: Vec<_> = records[0].split('\t').collect();
@@ -181,6 +203,39 @@ mod tests {
             clickable: true,
             ..AccessibilityElement::default()
         }
+    }
+
+    #[test]
+    fn the_record_names_the_list_above_a_row() {
+        let elements = vec![
+            AccessibilityElement {
+                node_id: 6,
+                bounds: AccessibilityRect::new(0.0, 0.0, 400.0, 600.0),
+                vertical_scroll: Some(cranpose_ui::ScrollAxisRange::new(0.0, 900.0, false)),
+                ..AccessibilityElement::default()
+            },
+            AccessibilityElement {
+                node_id: 9,
+                label: "Milk".into(),
+                bounds: AccessibilityRect::new(0.0, 10.0, 400.0, 40.0),
+                scroll_parent: Some(6),
+                ..AccessibilityElement::default()
+            },
+            save_button(8),
+        ];
+
+        let payload = encode_elements(&elements, 1.0);
+        let records: Vec<_> = payload.split('\n').collect();
+        let list: Vec<_> = records[0].split('\t').collect();
+        let row: Vec<_> = records[1].split('\t').collect();
+        let button: Vec<_> = records[2].split('\t').collect();
+
+        assert_eq!(list[26], "-1", "the list sits under the host");
+        assert_eq!(row[26], list[0], "the row names its list by virtual id");
+        assert_eq!(
+            button[26], "-1",
+            "a button outside any list sits under the host"
+        );
     }
 
     #[test]
