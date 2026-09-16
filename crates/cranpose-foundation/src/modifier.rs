@@ -1067,6 +1067,10 @@ pub struct SemanticsConfiguration {
     /// Whether this node takes over the screen: everything outside it is
     /// inert, and a screen reader keeps its traversal inside.
     pub is_modal: bool,
+    /// Whether a screen reader skips this node and everything under it: a
+    /// decorative image, or a placeholder drawn under a named field. Compose's
+    /// `hideFromAccessibility`.
+    pub hidden: bool,
     /// Compose's `liveRegion`. When set, a screen reader reads this node again
     /// whenever its text changes, without the user moving to it.
     pub live_region: Option<LiveRegionMode>,
@@ -1106,6 +1110,7 @@ impl Default for SemanticsConfiguration {
             custom_actions: Vec::new(),
             canvas_children: Vec::new(),
             is_modal: false,
+            hidden: false,
             live_region: None,
             progress: None,
             set_progress: None,
@@ -1151,6 +1156,7 @@ impl SemanticsConfiguration {
         self.canvas_children
             .extend(other.canvas_children.iter().cloned());
         self.is_modal |= other.is_modal;
+        self.hidden |= other.hidden;
         if let Some(live_region) = other.live_region {
             self.live_region = Some(live_region);
         }

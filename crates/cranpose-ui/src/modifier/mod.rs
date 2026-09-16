@@ -491,6 +491,14 @@ impl Modifier {
         self.semantics(move |config| config.progress = Some(info))
     }
 
+    /// Takes this node and everything under it out of what a screen reader
+    /// sees: a decorative image, or a placeholder drawn under a field that
+    /// carries the same words as its name. Compose's
+    /// `semantics { hideFromAccessibility() }`.
+    pub fn hide_from_accessibility(self) -> Self {
+        self.semantics(|config| config.hidden = true)
+    }
+
     /// Marks this component as a heading, so a screen reader lists it among
     /// the headings of the screen and a person can jump between them.
     ///

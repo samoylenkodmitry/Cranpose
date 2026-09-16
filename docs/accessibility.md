@@ -243,6 +243,11 @@ field, Milk". With no name the text stands in for it, and a field that is
 empty as well is still a stop that says "text field", so a reader can find
 it and type. A debug build logs a warning for such a field.
 
+The other way round, `Modifier::hide_from_accessibility()` takes a node and
+everything under it out of what a reader sees: a decorative image, or a
+placeholder drawn under a field that already carries the same words as its
+name.
+
 ## What a reader hears, end to end
 
 1. Layout builds the semantics tree, one node per control, with focus flags.

@@ -368,6 +368,8 @@ pub struct SemanticsNode {
     /// to this node's own top-left. See [`CanvasSemanticsNode`].
     pub canvas_children: Vec<CanvasSemanticsNode>,
     pub editable_text: bool,
+    /// Whether a screen reader skips this node and everything under it.
+    pub hidden: bool,
     /// The text an editable field holds.
     pub text: Option<String>,
     pub text_selection: Option<TextRange>,
@@ -411,6 +413,7 @@ impl Default for SemanticsNode {
             custom_actions: Vec::new(),
             canvas_children: Vec::new(),
             editable_text: false,
+            hidden: false,
             text: None,
             text_selection: None,
             focusable: false,
@@ -3070,6 +3073,7 @@ fn semantics_node_from_parts(
         node.custom_actions = config.custom_actions;
         node.canvas_children = config.canvas_children;
         node.editable_text = config.is_editable_text;
+        node.hidden = config.hidden;
         node.text = config.text;
         node.text_selection = config.text_selection;
         node.live_region = config.live_region;

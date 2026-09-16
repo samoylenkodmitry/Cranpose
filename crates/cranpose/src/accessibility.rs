@@ -238,6 +238,9 @@ fn project_node(
     inherited_scroll: Option<NodeId>,
     elements: &mut Vec<AccessibilityElement>,
 ) {
+    if node.hidden {
+        return;
+    }
     let live_region = node.live_region.or(inherited_live_region);
     let first_new = elements.len();
     let clickable = node
@@ -245,15 +248,7 @@ fn project_node(
         .iter()
         .any(|action| matches!(action, SemanticsAction::Click { .. }));
     let actionable = clickable || node.editable_text;
-    let own_label = node_label(node).map(Cow::Borrowed);
-    let label = if actionable {
-        own_label.or_else(|| descendant_label(node).map(Cow::Owned))
-    } else {
-        own_label
-    };
-    let label = label
-        .filter(|label| !label.trim().is_empty())
-        .or_else(|| unnamed_field_label(node));
+    let label = published_label(node, actionable);
     let rect = bounds.get(&node.node_id).copied().unwrap_or_default();
 
     let scrollable = node.vertical_scroll.is_some() || node.horizontal_scroll.is_some();
@@ -306,6 +301,20 @@ fn project_node(
 /// Names, once per node and only in a debug build, a control that takes a
 /// click or text but reaches no reader: it has no label and no text inside,
 /// so a screen reader has nothing to say for it.
+/// The label a reader hears for a node: its own, or for a control the text
+/// under it; an editable field with nothing to read still gets an empty one.
+fn published_label(node: &SemanticsNode, actionable: bool) -> Option<Cow<'_, str>> {
+    let own_label = node_label(node).map(Cow::Borrowed);
+    let label = if actionable {
+        own_label.or_else(|| descendant_label(node).map(Cow::Owned))
+    } else {
+        own_label
+    };
+    label
+        .filter(|label| !label.trim().is_empty())
+        .or_else(|| unnamed_field_label(node))
+}
+
 /// An editable field with no name and no text is still a stop for a reader,
 /// which hears "text field" and nothing else; a debug build says so.
 fn unnamed_field_label(node: &SemanticsNode) -> Option<Cow<'_, str>> {
@@ -723,7 +732,7 @@ fn descendant_label(node: &SemanticsNode) -> Option<String> {
 }
 
 fn collect_descendant_labels<'a>(node: &'a SemanticsNode, labels: &mut Vec<&'a str>) {
-    for child in &node.children {
+    for child in node.children.iter().filter(|child| !child.hidden) {
         if let Some(label) = node_label(child) {
             if !label.trim().is_empty() && !labels.contains(&label) {
                 labels.push(label);
@@ -931,6 +940,44 @@ mod tests {
 
         assert_eq!(projected[2].click_label.as_deref(), Some("Reset"));
         assert!(!projected[2].enabled);
+    }
+
+    #[test]
+    fn a_hidden_node_and_everything_under_it_stay_out() {
+        let mut placeholder = node(
+            2,
+            SemanticsRole::Layout,
+            Vec::new(),
+            Some("Item"),
+            Vec::new(),
+        );
+        placeholder.hidden = true;
+        let mut root = node(
+            1,
+            SemanticsRole::Layout,
+            Vec::new(),
+            None,
+            vec![placeholder],
+        );
+        root.children[0].children.push(node(
+            3,
+            SemanticsRole::Layout,
+            Vec::new(),
+            Some("Under it"),
+            Vec::new(),
+        ));
+        let bounds = HashMap::from_iter([
+            (1, AccessibilityRect::new(0.0, 0.0, 300.0, 200.0)),
+            (2, AccessibilityRect::new(0.0, 0.0, 300.0, 40.0)),
+            (3, AccessibilityRect::new(0.0, 0.0, 300.0, 40.0)),
+        ]);
+
+        let projected = project_semantics(&root, &bounds);
+
+        assert!(
+            projected.is_empty(),
+            "a hidden node is not published: {projected:?}"
+        );
     }
 
     fn projected_field(name: Option<&str>, text: &str) -> Vec<AccessibilityElement> {
