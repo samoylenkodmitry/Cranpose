@@ -392,3 +392,17 @@ fn a_reader_page_moves_a_lazy_row_forward() {
     );
     assert!(list_state.can_scroll_backward_non_reactive());
 }
+
+#[test]
+fn a_reader_hears_how_many_items_a_lazy_row_holds() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let (_composition, _root, captured_state) = measured_indicator_lazy_row();
+    let list_state = (*captured_state.borrow()).expect("state captured");
+
+    let mut config = cranpose_foundation::SemanticsConfiguration::default();
+    crate::modifier::lazy_scroll_semantics(list_state, false, false)(&mut config);
+    let collection = config
+        .collection
+        .expect("a lazy row says how many items it holds");
+    assert_eq!((collection.rows, collection.columns), (1, 80));
+}

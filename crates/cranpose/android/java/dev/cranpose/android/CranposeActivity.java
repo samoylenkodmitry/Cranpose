@@ -770,7 +770,7 @@ public class CranposeActivity extends NativeActivity {
     }
 
     /** Field count of one accessibility record; see android_accessibility_wire.rs. */
-    private static final int ACCESSIBILITY_FIELDS = 27;
+    private static final int ACCESSIBILITY_FIELDS = 29;
 
     /** Separator packing a node's custom action labels into one field. */
     private static final String ACCESSIBILITY_ACTION_SEPARATOR = String.valueOf((char) 0x1f);
@@ -804,7 +804,8 @@ public class CranposeActivity extends NativeActivity {
                         Float.parseFloat(fields[20]), Float.parseFloat(fields[21]),
                         Float.parseFloat(fields[22]), "1".equals(fields[23]),
                         "1".equals(fields[24]), "1".equals(fields[25]),
-                        Integer.parseInt(fields[26])));
+                        Integer.parseInt(fields[26]), Integer.parseInt(fields[27]),
+                        Integer.parseInt(fields[28])));
             } catch (RuntimeException ignored) {
                 // A malformed record must not make the host Activity inaccessible.
             }
@@ -859,6 +860,8 @@ public class CranposeActivity extends NativeActivity {
         final boolean canScrollBackward;
         /** The virtual id of the scroll container above this control, or -1. */
         final int scrollParent;
+        final int collectionRows;
+        final int collectionColumns;
 
         CranposeAccessibilityElement(int id, int role, Rect bounds, float centerX,
                 float centerY, boolean clickable, String label, String value,
@@ -866,7 +869,8 @@ public class CranposeActivity extends NativeActivity {
                 boolean enabled, String[] customActions, boolean focusable,
                 boolean focused, boolean adjustable, float progressCurrent,
                 float progressMin, float progressMax, boolean scrollable,
-                boolean canScrollForward, boolean canScrollBackward, int scrollParent) {
+                boolean canScrollForward, boolean canScrollBackward, int scrollParent,
+                int collectionRows, int collectionColumns) {
             this.id = id;
             this.role = role;
             this.bounds = bounds;
@@ -891,6 +895,8 @@ public class CranposeActivity extends NativeActivity {
             this.canScrollForward = canScrollForward;
             this.canScrollBackward = canScrollBackward;
             this.scrollParent = scrollParent;
+            this.collectionRows = collectionRows;
+            this.collectionColumns = collectionColumns;
         }
 
         /**
@@ -990,6 +996,10 @@ public class CranposeActivity extends NativeActivity {
                 info.setScrollable(true);
                 if (element.canScrollForward) info.addAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD);
                 if (element.canScrollBackward) info.addAction(AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD);
+                if (element.collectionRows > 0 || element.collectionColumns > 0) {
+                    info.setCollectionInfo(AccessibilityNodeInfo.CollectionInfo.obtain(
+                            element.collectionRows, element.collectionColumns, false));
+                }
             }
             if (element.adjustable) {
                 info.setRangeInfo(AccessibilityNodeInfo.RangeInfo.obtain(

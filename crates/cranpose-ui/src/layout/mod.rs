@@ -14,9 +14,10 @@ use cranpose_core::{
     Phase, RuntimeHandle, SlotTable, SlotsHost, SnapshotStateObserver,
 };
 use cranpose_foundation::{
-    CanvasSemanticsNode, InvalidationKind, LiveRegionMode, ModifierNodeContext, NodeCapabilities,
-    ProgressBarRangeInfo, ScrollAxisRange, SemanticsConfiguration, SemanticsCustomAction,
-    SemanticsScrollBy, SemanticsSetProgress, SemanticsWidgetRole, text::TextRange,
+    CanvasSemanticsNode, CollectionInfo, InvalidationKind, LiveRegionMode, ModifierNodeContext,
+    NodeCapabilities, ProgressBarRangeInfo, ScrollAxisRange, SemanticsConfiguration,
+    SemanticsCustomAction, SemanticsScrollBy, SemanticsSetProgress, SemanticsWidgetRole,
+    text::TextRange,
 };
 use cranpose_ui_layout::{Constraints, MeasurePolicy, Placement};
 use web_time::Instant;
@@ -387,6 +388,8 @@ pub struct SemanticsNode {
     pub horizontal_scroll: Option<ScrollAxisRange>,
     /// What this container does when a screen reader pages it.
     pub scroll_by: Option<SemanticsScrollBy>,
+    /// How many rows and columns this list holds, when it is a list.
+    pub collection: Option<CollectionInfo>,
 }
 
 impl Default for SemanticsNode {
@@ -415,6 +418,7 @@ impl Default for SemanticsNode {
             vertical_scroll: None,
             horizontal_scroll: None,
             scroll_by: None,
+            collection: None,
         }
     }
 }
@@ -3070,6 +3074,7 @@ fn semantics_node_from_parts(
         node.vertical_scroll = config.vertical_scroll;
         node.horizontal_scroll = config.horizontal_scroll;
         node.scroll_by = config.scroll_by;
+        node.collection = config.collection;
     }
 
     node.focusable = crate::focus_dispatch::has_focus_target(node_id);

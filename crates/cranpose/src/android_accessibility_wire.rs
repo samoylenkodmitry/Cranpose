@@ -36,7 +36,7 @@ pub(crate) fn encode_elements(elements: &[AccessibilityElement], density: f32) -
             let progress = element.progress;
             let scroll = element.vertical_scroll.or(element.horizontal_scroll);
             format!(
-                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                 id,
                 role,
                 (element.bounds.x * density).round() as i32,
@@ -64,6 +64,8 @@ pub(crate) fn encode_elements(elements: &[AccessibilityElement], density: f32) -
                 i32::from(scroll.is_some_and(|range| range.can_scroll_forward())),
                 i32::from(scroll.is_some_and(|range| range.can_scroll_backward())),
                 parent,
+                element.collection.map_or(0, |collection| collection.rows),
+                element.collection.map_or(0, |collection| collection.columns),
             )
         })
         .collect::<Vec<_>>()
@@ -143,7 +145,7 @@ mod tests {
         let records: Vec<_> = payload.split('\n').collect();
         assert_eq!(records.len(), 2);
         for record in &records {
-            assert_eq!(record.split('\t').count(), 27, "record: {record}");
+            assert_eq!(record.split('\t').count(), 29, "record: {record}");
         }
 
         let fields: Vec<_> = records[0].split('\t').collect();
@@ -294,5 +296,31 @@ mod tests {
         assert_eq!(slider[21], "0");
         assert_eq!(slider[22], "1");
         assert_eq!(button[19], "0", "a button holds no range");
+    }
+
+    #[test]
+    fn the_record_says_how_many_rows_a_list_holds() {
+        let mut list = AccessibilityElement {
+            node_id: 6,
+            bounds: AccessibilityRect::new(0.0, 0.0, 400.0, 600.0),
+            vertical_scroll: Some(cranpose_ui::ScrollAxisRange::new(0.0, 900.0, false)),
+            ..AccessibilityElement::default()
+        };
+        list.collection = Some(cranpose_ui::CollectionInfo {
+            rows: 12,
+            columns: 1,
+        });
+
+        let payload = encode_elements(&[list, save_button(8)], 1.0);
+        let records: Vec<_> = payload.split('\n').collect();
+        let list: Vec<_> = records[0].split('\t').collect();
+        let button: Vec<_> = records[1].split('\t').collect();
+
+        assert_eq!(
+            (list[27], list[28]),
+            ("12", "1"),
+            "the list says its rows and columns"
+        );
+        assert_eq!((button[27], button[28]), ("0", "0"), "a button is no list");
     }
 }

@@ -4,7 +4,7 @@ use cranpose_app_shell::AppShell;
 use cranpose_core::{NodeId, collections::map::HashMap};
 use cranpose_render_common::Renderer;
 use cranpose_ui::{
-    Announcement, LayoutBox, LiveRegionMode, ProgressBarRangeInfo, ScrollAxisRange,
+    Announcement, CollectionInfo, LayoutBox, LiveRegionMode, ProgressBarRangeInfo, ScrollAxisRange,
     SemanticsAction, SemanticsNode, SemanticsRole, SemanticsWidgetRole,
 };
 
@@ -92,6 +92,7 @@ pub(crate) struct AccessibilityElement {
     pub(crate) vertical_scroll: Option<ScrollAxisRange>,
     pub(crate) horizontal_scroll: Option<ScrollAxisRange>,
     pub(crate) scroll_parent: Option<NodeId>,
+    pub(crate) collection: Option<CollectionInfo>,
 }
 
 impl Default for AccessibilityElement {
@@ -118,6 +119,7 @@ impl Default for AccessibilityElement {
             vertical_scroll: None,
             horizontal_scroll: None,
             scroll_parent: None,
+            collection: None,
         }
     }
 }
@@ -362,6 +364,7 @@ fn element_for_node(
         vertical_scroll: node.vertical_scroll,
         horizontal_scroll: node.horizontal_scroll,
         scroll_parent: None,
+        collection: node.collection,
     }
 }
 
@@ -517,6 +520,7 @@ fn project_canvas_children(
             vertical_scroll: None,
             horizontal_scroll: None,
             scroll_parent: None,
+            collection: None,
         });
     }
 }

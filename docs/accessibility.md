@@ -162,6 +162,11 @@ Modifier::empty().semantics(|config| {
 })
 ```
 
+A lazy list also says how many rows it holds, through `config.collection`;
+`LazyColumn` and `LazyRow` do this on their own. TalkBack reads "list, 12
+items" as its cursor enters the list, and accesskit gives the container the
+list role. VoiceOver and the web mirror have no place for the count.
+
 `vertical_scroll` and `horizontal_scroll` are Compose's
 `verticalScrollAxisRange` and `horizontalScrollAxisRange`; `scroll_by` is
 `SemanticsActions.ScrollBy`. `verticalScroll`, `horizontalScroll`,
@@ -224,7 +229,7 @@ An app gets this with no code of its own:
 | `Slider` | the value | move it |
 | `CircularProgressIndicator`, `LinearProgressIndicator` | "Loading" | |
 | `SwipeToDismiss` | the row's content | run "Dismiss" from the actions menu |
-| `verticalScroll`, `horizontalScroll`, `LazyColumn`, `LazyRow` | the rows inside | page on and back |
+| `verticalScroll`, `horizontalScroll`, `LazyColumn`, `LazyRow` | the rows inside, and on Android how many rows there are | page on and back |
 | `LinkedText` | the whole text | open each link from the actions menu, as "Open <link text>" |
 | `Dialog` | its content, and nothing outside it; the reader lands on it as it opens | leave it with the reader's escape gesture |
 | `Image`, `Icon` | the description the app gave | |

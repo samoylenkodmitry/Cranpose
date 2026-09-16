@@ -3362,3 +3362,19 @@ fn a_dialog_takes_the_reader_along_when_it_opens() {
         "the web mirror focuses the dialog node that opened"
     );
 }
+
+#[test]
+fn every_lazy_list_tells_android_how_many_rows_it_holds() {
+    let scroll_source = workspace_source("crates/cranpose-ui/src/modifier/scroll.rs");
+    assert!(
+        scroll_source.contains("config.collection = Some(cranpose_foundation::CollectionInfo {"),
+        "a lazy list declares its row count with its scroll range"
+    );
+
+    let java_source = crate_source("android/java/dev/cranpose/android/CranposeActivity.java");
+    assert!(
+        java_source.contains("info.setCollectionInfo(AccessibilityNodeInfo.CollectionInfo.obtain(")
+            && java_source.contains("private static final int ACCESSIBILITY_FIELDS = 29;"),
+        "the Android host hands TalkBack the row count of a list"
+    );
+}

@@ -333,7 +333,7 @@ fn accesskit_node(element: &AccessibilityElement) -> Node {
     let scrolls = element.vertical_scroll.is_some() || element.horizontal_scroll.is_some();
     let role = match element.progress {
         Some(_) => Role::Slider,
-        None if scrolls && element.label.is_empty() => Role::ScrollView,
+        None if scrolls && element.label.is_empty() => scroll_role(element),
         None => accesskit_role(element.role),
     };
     let mut node = Node::new(role);
@@ -390,6 +390,16 @@ fn join_announcements(announcements: Vec<Announcement>) -> Option<Announcement> 
         .collect::<Vec<_>>()
         .join(". ");
     (!text.is_empty()).then_some(Announcement { text, mode })
+}
+
+/// A scroll container with no label of its own: a list when it says how many
+/// rows it holds, a plain scroll view otherwise.
+fn scroll_role(element: &AccessibilityElement) -> Role {
+    if element.collection.is_some() {
+        Role::List
+    } else {
+        Role::ScrollView
+    }
 }
 
 /// The accesskit role a screen reader reads the control as.

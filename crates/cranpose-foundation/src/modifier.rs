@@ -733,6 +733,14 @@ impl ProgressBarRangeInfo {
 
 /// How far a container has scrolled along one axis and how far it can go.
 ///
+/// How many rows and columns a list holds, so a screen reader can say
+/// "list, 12 items" as its cursor enters. Compose's `CollectionInfo`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CollectionInfo {
+    pub rows: usize,
+    pub columns: usize,
+}
+
 /// This is Compose's `ScrollAxisRange` (`verticalScrollAxisRange`,
 /// `horizontalScrollAxisRange`). A lazy list has no whole extent to give, so
 /// it reports the first visible item as the value and one more than that as
@@ -1074,6 +1082,8 @@ pub struct SemanticsConfiguration {
     /// What this container does when a screen reader pages it. Compose's
     /// `scrollBy`.
     pub scroll_by: Option<SemanticsScrollBy>,
+    /// How many rows and columns this list holds. Compose's `collectionInfo`.
+    pub collection: Option<CollectionInfo>,
 }
 
 impl Default for SemanticsConfiguration {
@@ -1098,6 +1108,7 @@ impl Default for SemanticsConfiguration {
             vertical_scroll: None,
             horizontal_scroll: None,
             scroll_by: None,
+            collection: None,
         }
     }
 }
@@ -1150,6 +1161,9 @@ impl SemanticsConfiguration {
         }
         if let Some(scroll_by) = &other.scroll_by {
             self.scroll_by = Some(scroll_by.clone());
+        }
+        if let Some(collection) = other.collection {
+            self.collection = Some(collection);
         }
     }
 
