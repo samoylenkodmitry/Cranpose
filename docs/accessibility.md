@@ -162,6 +162,24 @@ runs through `scroll_by` on the live tree.
 | Android | `isScrollable` with `ACTION_SCROLL_FORWARD` and `BACKWARD` as the offset allows | TalkBack's page gesture on the node |
 | Web | nothing on the mirror | Page Down and Page Up on the focused mirrored element |
 
+## 6. A way out of a dialog
+
+A person who cannot see the screen opens a menu or a dialog and needs a way
+back that does not depend on a "Cancel" button somewhere on it. Every reader
+has one gesture for this, and Cranpose routes all of them to the same place:
+the innermost open modal, the one the platform back gesture closes.
+
+`Dialog` registers itself on the modal stack while it is open. Nothing else is
+needed: an app that shows a `Dialog` gets all four ways out below. An app that
+handles back on its own does so through `BackHandler`, as on Android.
+
+| Platform | Gesture | Where it goes |
+| --- | --- | --- |
+| accesskit | Escape on the keyboard | `AppShell::dismiss_top_modal` |
+| iOS | a VoiceOver two-finger scrub, through `accessibilityPerformEscape` | the dialog on top; with none open, the app's `BackHandler` |
+| Android | TalkBack's back gesture, which is the system back key | the dialog on top, then the app's `BackHandler` |
+| Web | Escape on the keyboard, with focus on the mirror or the canvas | `AppShell::dismiss_top_modal` |
+
 ## What the built-in widgets say on their own
 
 An app gets this with no code of its own:
@@ -176,7 +194,7 @@ An app gets this with no code of its own:
 | `CircularProgressIndicator`, `LinearProgressIndicator` | "Loading" | |
 | `SwipeToDismiss` | the row's content | run "Dismiss" from the actions menu |
 | `verticalScroll`, `horizontalScroll`, `LazyColumn`, `LazyRow` | the rows inside | page on and back |
-| `Dialog` | its content, and nothing outside it | |
+| `Dialog` | its content, and nothing outside it | leave it with the reader's escape gesture |
 | `Image`, `Icon` | the description the app gave | |
 
 A control an app draws itself declares what it is through

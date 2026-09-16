@@ -371,6 +371,24 @@ pub(crate) fn page_delta(element: &AccessibilityElement, forward: bool) -> (f32,
     }
 }
 
+/// Whether a reader's escape gesture has somewhere to go: a dialog or popup
+/// on top, or a back handler the app registered.
+#[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
+pub(crate) fn escape_has_a_taker() -> bool {
+    cranpose_ui::modal_depth() > 0 || cranpose_services::back_interception_enabled()
+}
+
+/// Hands a reader's escape to the app's back handler, the way the platform
+/// back gesture reaches it. Answers whether a handler was there to take it.
+#[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
+pub(crate) fn request_back() -> bool {
+    if !cranpose_services::back_interception_enabled() {
+        return false;
+    }
+    cranpose_services::push_back_request();
+    true
+}
+
 /// The nearest scroll container around an element: the smallest scrollable
 /// element whose bounds hold the element's center, the element itself when it
 /// scrolls.

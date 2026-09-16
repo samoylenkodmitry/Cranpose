@@ -2572,6 +2572,32 @@ fn key_event_after_field_removal_hides_soft_keyboard() {
 }
 
 #[test]
+fn escape_closes_the_modal_on_top_and_nothing_else() {
+    let _guard = test_guard();
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(TestRenderer::default(), root_key, empty_content);
+    shell.update();
+    cranpose_ui::clear_modals();
+
+    let escape = KeyEvent::key_down(KeyCode::Escape, "");
+    assert!(
+        !shell.on_key_event(&escape),
+        "with no modal open the key belongs to the app"
+    );
+
+    let closed = Rc::new(RefCell::new(false));
+    let registration = {
+        let closed = Rc::clone(&closed);
+        cranpose_ui::modal::register_modal(Rc::new(move || *closed.borrow_mut() = true))
+    };
+    assert!(shell.on_key_event(&escape));
+    assert!(*closed.borrow(), "the dialog on top took the request");
+
+    drop(registration);
+    assert!(!shell.on_key_event(&escape));
+}
+
+#[test]
 fn frame_update_after_field_removal_hides_soft_keyboard() {
     let _guard = test_guard();
     let root_key = location_key(file!(), line!(), column!());

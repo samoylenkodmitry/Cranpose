@@ -45,6 +45,7 @@ struct ReaderRequests {
     focus: Rc<RefCell<Vec<i32>>>,
     steps: Rc<RefCell<Vec<(i32, bool)>>>,
     scrolls: Rc<RefCell<Vec<(i32, bool)>>>,
+    escapes: Rc<Cell<usize>>,
 }
 
 struct AccessibilityElementIvars {
@@ -108,6 +109,17 @@ define_class!(
                 .requests.scrolls
                 .borrow_mut()
                 .push((self.ivars().element_id, forward));
+            self.ivars().wake_proxy.wake_up();
+            Bool::YES
+        }
+
+        #[unsafe(method(accessibilityPerformEscape))]
+        fn accessibility_perform_escape(&self) -> Bool {
+            if !accessibility::escape_has_a_taker() {
+                return Bool::NO;
+            }
+            let escapes = &self.ivars().requests.escapes;
+            escapes.set(escapes.get() + 1);
             self.ivars().wake_proxy.wake_up();
             Bool::YES
         }
@@ -378,6 +390,21 @@ impl IosAccessibilityBridge {
             moved |= accessibility::scroll_by(tree.root(), node_id, dx, dy);
         }
         moved
+    }
+
+    /// Closes the dialog on top, or asks the app to go back, after a VoiceOver
+    /// two-finger scrub. Answers whether anything took the request.
+    pub(crate) fn drain_escapes<R>(&mut self, shell: &mut AppShell<R>) -> bool
+    where
+        R: Renderer,
+        R::Error: Debug,
+    {
+        let count = self.requests.escapes.replace(0);
+        let mut taken = false;
+        for _ in 0..count {
+            taken |= shell.dismiss_top_modal() || accessibility::request_back();
+        }
+        taken
     }
 
     fn create_element(

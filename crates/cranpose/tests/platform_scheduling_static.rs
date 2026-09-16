@@ -3232,3 +3232,36 @@ fn every_platform_bridge_pages_a_scroll_container() {
         "a keyboard reader pages the mirror with Page Down and Page Up"
     );
 }
+
+#[test]
+fn every_platform_lets_a_reader_leave_a_dialog() {
+    let shell_source = workspace_source("crates/cranpose-app-shell/src/shell_input.rs");
+    assert!(
+        shell_source.contains("fn on_escape_key(")
+            && shell_source.contains("pub fn dismiss_top_modal(")
+            && shell_source.contains("run_in_mutable_snapshot(cranpose_ui::dispatch_modal_back)"),
+        "Escape on a keyboard closes the modal on top through the same stack the back gesture uses"
+    );
+
+    let ios_source = crate_source("src/ios_accessibility.rs");
+    assert!(
+        ios_source.contains("#[unsafe(method(accessibilityPerformEscape))]")
+            && ios_source.contains("fn drain_escapes<R>(")
+            && ios_source.contains("shell.dismiss_top_modal() || accessibility::request_back()"),
+        "a VoiceOver two-finger scrub closes the dialog on top, or goes back"
+    );
+
+    let android_source = crate_source("src/android.rs");
+    assert!(
+        android_source.contains("android_activity::input::Keycode::Back")
+            && android_source.contains("cranpose_services::push_back_request()"),
+        "TalkBack's back gesture is the system back key, which the shell already takes"
+    );
+
+    let web_source = crate_source("src/web.rs");
+    assert!(
+        web_source.contains("(\"Escape\", KeyCode::Escape)")
+            && web_source.contains("document.add_event_listener_with_callback(\"keydown\""),
+        "Escape reaches the shell from the mirror too, because the key listener sits on the document"
+    );
+}
