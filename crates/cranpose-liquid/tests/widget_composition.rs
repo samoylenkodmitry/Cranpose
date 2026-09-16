@@ -123,7 +123,12 @@ fn a_glass_icon_button_group_composes_each_action() {
 #[test]
 fn an_icon_composes_at_a_size_and_colour() {
     themed(|| {
-        cranpose_liquid::icons::Icon(cranpose_liquid::icons::SEARCH, 24.0, Color::WHITE);
+        cranpose_liquid::icons::Icon(
+            cranpose_liquid::icons::SEARCH,
+            Some("Search".into()),
+            24.0,
+            Color::WHITE,
+        );
     });
 }
 

@@ -1677,6 +1677,7 @@ fn menu_item_row(
         cranpose_ui_graphics::Color::from_rgba_u8(120, 120, 128, 30)
     };
     let row_label = item.label.clone();
+    let checked = item.checked;
     let keeps_open = item.keeps_open;
     let row = Modifier::empty()
         .fill_max_width()
@@ -1685,6 +1686,9 @@ fn menu_item_row(
             config.role = Some(SemanticsWidgetRole::Button);
             config.is_clickable = true;
             config.content_description = Some(row_label.clone());
+            if has_checks {
+                config.toggled = Some(checked);
+            }
         })
         .pointer_input(index, {
             let on_item = Rc::clone(&on_item);
@@ -1749,7 +1753,6 @@ fn menu_item_row(
     let label = item.label.clone();
     let subtitle = item.subtitle.clone();
     let icon = item.icon;
-    let checked = item.checked;
     let accordion_chevron = item.keeps_open && subtitle.is_some();
     let secondary = colors.secondary_label;
     let typography = typography.clone();
@@ -1765,13 +1768,13 @@ fn menu_item_row(
                     BoxSpec::default(),
                     move || {
                         if checked {
-                            crate::icons::Icon(crate::icons::CHECK, 16.0, color);
+                            crate::icons::Icon(crate::icons::CHECK, None, 16.0, color);
                         }
                     },
                 );
             }
             if let Some(icon) = icon {
-                crate::icons::Icon(icon, ICON_SIZE, color);
+                crate::icons::Icon(icon, None, ICON_SIZE, color);
                 Box(Modifier::empty().width(ICON_GAP), BoxSpec::default(), || {});
             }
             let style = TextStyle {
@@ -1803,7 +1806,7 @@ fn menu_item_row(
                 Text(label, Modifier::empty().weight(1.0), style);
             }
             if accordion_chevron {
-                crate::icons::Icon(crate::icons::CHEVRON_DOWN, 18.0, secondary);
+                crate::icons::Icon(crate::icons::CHEVRON_DOWN, None, 18.0, secondary);
             }
         },
     );

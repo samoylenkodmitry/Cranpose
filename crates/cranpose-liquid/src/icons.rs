@@ -61,20 +61,25 @@ const ICON_VIEW_BOX: f32 = 24.0;
 /// in dp.
 #[composable]
 #[allow(non_snake_case)]
-pub fn Icon(path: &'static str, size: f32, color: Color) {
+pub fn Icon(path: &'static str, content_description: Option<String>, size: f32, color: Color) {
     let parsed = rememberKeyed(path, |path| VectorPath::parse(path).ok());
-    Box(
-        Modifier::empty()
-            .size(Size::new(size, size))
-            .draw_behind(move |scope| {
-                if let Some(path) = &parsed {
-                    let scaled = path.scaled(size / ICON_VIEW_BOX);
-                    scope.draw_vector_path(&scaled, Brush::solid(color));
-                }
-            }),
-        BoxSpec::default(),
-        || {},
-    );
+    let modifier = Modifier::empty()
+        .size(Size::new(size, size))
+        .draw_behind(move |scope| {
+            if let Some(path) = &parsed {
+                let scaled = path.scaled(size / ICON_VIEW_BOX);
+                scope.draw_vector_path(&scaled, Brush::solid(color));
+            }
+        });
+    let modifier = match content_description {
+        Some(description) => modifier.semantics_spec(
+            cranpose_ui::SemanticsSpec::new()
+                .content_description(description)
+                .role(cranpose_ui::SemanticsWidgetRole::Image),
+        ),
+        None => modifier,
+    };
+    Box(modifier, BoxSpec::default(), || {});
 }
 
 #[cfg(test)]

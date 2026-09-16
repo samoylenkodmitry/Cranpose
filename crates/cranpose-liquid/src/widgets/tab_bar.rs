@@ -393,7 +393,7 @@ fn TabIcon(icon: LiquidTabIcon, style: LiquidTabIconStyle, color: Color, optical
 #[composable]
 fn TabGlyph(icon: LiquidTabIcon, size: f32, color: Color) {
     match icon {
-        LiquidTabIcon::Vector(path) => crate::icons::Icon(path, size, color),
+        LiquidTabIcon::Vector(path) => crate::icons::Icon(path, None, size, color),
         LiquidTabIcon::Painter {
             painter,
             size: intrinsic,

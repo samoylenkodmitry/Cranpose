@@ -260,6 +260,36 @@ lambda. One shorthand on a chain reads better than a whole spec; four or
 more of them read worse, and each one costs its own chain element, so a
 node with several is the place to reach for the spec.
 
+## 4i. An icon says what it is, or says it is decoration
+
+A picture with no words under it is the one thing a screen reader cannot
+work out on its own. Compose asks for the answer at the call site:
+`Icon(imageVector, contentDescription)` takes the name as its second
+argument, and `null` means the icon is decoration a reader should skip.
+
+Cranpose now asks the same way. `cranpose_ui::widgets::Icon` and
+`cranpose_liquid::icons::Icon` both take
+`content_description: Option<String>` right after the path. A name reaches
+a reader as the node's name with the image role. `None` publishes nothing,
+so a reader walks past it.
+
+`None` is the right answer more often than not, and the call sites in this
+repo show why: the glyph inside a search field, an icon button, a tab or a
+menu row is decoration, because the control around it already carries the
+name. What the argument buys is that the writer says so on purpose rather
+than by forgetting.
+
+Two faults came out of that sweep. A liquid menu row said its label and
+that it was clickable, and never said it was checked; a reader heard no
+difference between the picked row and the rest, because the check mark was
+the only signal. The row now carries `toggled`.
+
+The same rule is not put on `Text` or `Button`. A `Text`'s name is its
+words, and a `Button`'s name is what it holds, so an argument there would
+be the empty answer at every call site, and a writer who types the empty
+answer often enough stops reading it. Compose asks at the same two places
+and no others.
+
 ## 5. A list a reader can page
 
 A lazy list builds only the rows on screen. A reader that walks the rows one

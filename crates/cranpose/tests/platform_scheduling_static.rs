@@ -3625,3 +3625,24 @@ fn every_platform_names_a_dropdown_and_a_picker() {
         "VoiceOver steps a value picker"
     );
 }
+
+#[test]
+fn an_icon_cannot_be_drawn_without_an_answer_about_its_name() {
+    for source in [
+        std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../cranpose-ui/src/widgets/icon.rs"),
+        )
+        .expect("the ui icon source"),
+        std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../cranpose-liquid/src/icons.rs"),
+        )
+        .expect("the liquid icon source"),
+    ] {
+        assert!(
+            source.contains("content_description: Option<String>,"),
+            "the caller says what the icon is, or says it is decoration"
+        );
+    }
+}

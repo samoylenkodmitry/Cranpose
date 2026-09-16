@@ -69,12 +69,17 @@ impl IconSpec {
 /// the control around it names the action. Use [`IconWith`] to give a
 /// standalone icon a description a screen reader reads out.
 #[composable]
-pub fn Icon(path: &'static str, size: f32, color: Color) -> NodeId {
+pub fn Icon(
+    path: &'static str,
+    content_description: Option<String>,
+    size: f32,
+    color: Color,
+) -> NodeId {
     IconWith(
         Modifier::empty(),
         path,
         IconSpec::sized(size).with_tint(color),
-        None,
+        content_description,
     )
 }
 
@@ -103,10 +108,11 @@ pub fn IconWith(
             }
         });
     let modifier = match content_description {
-        Some(description) => modifier.semantics(move |config| {
-            config.content_description = Some(description.clone());
-            config.role = Some(SemanticsWidgetRole::Image);
-        }),
+        Some(description) => modifier.semantics_spec(
+            cranpose_foundation::SemanticsSpec::new()
+                .content_description(description)
+                .role(SemanticsWidgetRole::Image),
+        ),
         None => modifier,
     };
     Box(modifier, BoxSpec::default(), || {})
