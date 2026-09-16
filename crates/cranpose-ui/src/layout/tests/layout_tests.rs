@@ -2763,3 +2763,55 @@ fn the_cached_measure_gate_rejects_a_measurement_from_a_superseded_epoch() {
          require the CURRENT epoch, not merely a nonzero one"
     );
 }
+
+#[test]
+fn focus_order_follows_the_tree_and_skips_nodes_with_no_focus_target() -> Result<(), NodeError> {
+    let _app_context = crate::render_state::app_context_test_scope();
+    use crate::focus_order::collect_focus_order;
+
+    let mut applier = MemoryApplier::new();
+    let first = applier.create(Box::new(LayoutNode::new(
+        Modifier::empty().focusable(),
+        Rc::new(MaxSizePolicy),
+    )));
+    let plain = applier.create(Box::new(LayoutNode::new(
+        Modifier::empty(),
+        Rc::new(MaxSizePolicy),
+    )));
+    let second = applier.create(Box::new(LayoutNode::new(
+        Modifier::empty().focusable(),
+        Rc::new(MaxSizePolicy),
+    )));
+
+    let mut root = LayoutNode::new(Modifier::empty(), Rc::new(VerticalStackPolicy));
+    root.children.push(first);
+    root.children.push(plain);
+    root.children.push(second);
+    let root_id = applier.create(Box::new(root));
+
+    applier.with_node::<LayoutNode, _>(root_id, |node| node.set_node_id(root_id))?;
+    for child in [first, plain, second] {
+        applier.with_node::<LayoutNode, _>(child, |node| {
+            node.set_node_id(child);
+            node.set_parent(root_id);
+        })?;
+    }
+
+    let measurements = measure_layout(&mut applier, root_id, Size::new(200.0, 200.0))?;
+    let layout_tree = measurements.layout_tree().expect("expected a layout tree");
+    let order = collect_focus_order(&layout_tree);
+
+    assert_eq!(
+        order.iter().map(|entry| entry.node_id).collect::<Vec<_>>(),
+        vec![first, second],
+        "the order holds the two focusable nodes, in the order the tree places them"
+    );
+    assert!(
+        order
+            .iter()
+            .all(|entry| entry.rect.width > 0.0 && entry.rect.height > 0.0),
+        "every entry carries the bounds layout gave it, which a direction move reads"
+    );
+
+    Ok(())
+}
