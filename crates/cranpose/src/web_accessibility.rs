@@ -163,11 +163,7 @@ fn aria_role(role: AccessibilityRole) -> &'static str {
 fn apply_role_extras(node: &HtmlElement, element: &AccessibilityElement) -> Result<(), JsValue> {
     match element.role {
         AccessibilityRole::StaticText => node.set_text_content(Some(&element.label)),
-        AccessibilityRole::TextField => {
-            if let Some(value) = &element.value {
-                node.set_attribute("aria-valuetext", value)?;
-            }
-        }
+        AccessibilityRole::TextField => node.set_text_content(element.value.as_deref()),
         AccessibilityRole::Header => {
             node.set_attribute("aria-level", "2")?;
             node.set_text_content(Some(&element.label));
