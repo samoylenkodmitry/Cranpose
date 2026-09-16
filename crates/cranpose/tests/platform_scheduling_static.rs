@@ -3183,3 +3183,52 @@ fn every_service_the_plugin_offers_has_a_manifest() {
         );
     }
 }
+
+#[test]
+fn every_platform_bridge_pages_a_scroll_container() {
+    let projection_source = crate_source("src/accessibility.rs");
+    assert!(
+        projection_source.contains("pub(crate) vertical_scroll: Option<ScrollAxisRange>")
+            && projection_source.contains("pub(crate) fn scroll_by(")
+            && projection_source.contains("pub(crate) fn page_delta("),
+        "a scroll container and the page it moves by are platform-neutral"
+    );
+
+    let desktop_source = crate_source("src/desktop_accessibility.rs");
+    assert!(
+        desktop_source.contains("Role::ScrollView")
+            && desktop_source.contains("Action::ScrollDown")
+            && desktop_source.contains("pub(crate) fn run_scroll_requests("),
+        "accesskit should read a scroll view and take a scroll action back"
+    );
+
+    let ios_source = crate_source("src/ios_accessibility.rs");
+    assert!(
+        ios_source.contains("#[unsafe(method(accessibilityScroll:))]")
+            && ios_source.contains("fn drain_scrolls<R>(")
+            && ios_source.contains("accessibility::scroll_container_for("),
+        "VoiceOver pages with a three-finger swipe on the element under its cursor"
+    );
+
+    let java_source =
+        workspace_source("crates/cranpose/android/java/dev/cranpose/android/CranposeActivity.java");
+    let android_source = crate_source("src/android_accessibility.rs");
+    let rust_shell_source = crate_source("src/android.rs");
+    assert!(
+        java_source.contains("AccessibilityNodeInfo.ACTION_SCROLL_FORWARD")
+            && java_source.contains("nativeOnAccessibilityScroll(")
+            && android_source
+                .contains("Java_dev_cranpose_android_CranposeActivity_nativeOnAccessibilityScroll")
+            && rust_shell_source
+                .contains("drain_accessibility_scrolls(shell, &accessibility_elements);"),
+        "TalkBack pages a scrollable node through the wire and the shell drains it each frame"
+    );
+
+    let web_source = crate_source("src/web_accessibility.rs");
+    assert!(
+        web_source.contains("\"PageDown\"")
+            && web_source.contains("data-cranpose-page")
+            && web_source.contains("attach_page_listener(&root"),
+        "a keyboard reader pages the mirror with Page Down and Page Up"
+    );
+}

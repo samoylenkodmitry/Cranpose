@@ -185,6 +185,26 @@ fn drain_accessibility_values(
     }
 }
 
+fn drain_accessibility_scrolls(
+    shell: &mut AppShell<WgpuRenderer>,
+    elements: &[crate::accessibility::AccessibilityElement],
+) {
+    for (virtual_id, forward) in crate::android_accessibility::drain_scroll_requests() {
+        let Some(element) = crate::accessibility::element_ids(elements)
+            .into_iter()
+            .position(|id| id == virtual_id)
+            .and_then(|index| elements.get(index))
+        else {
+            continue;
+        };
+        let (dx, dy) = crate::accessibility::page_delta(element, forward);
+        let Some(tree) = shell.semantics_tree() else {
+            continue;
+        };
+        crate::accessibility::scroll_by(tree.root(), element.node_id, dx, dy);
+    }
+}
+
 fn dispatch_android_ime_event(shell: &mut AppShell<WgpuRenderer>, event: AndroidImeEvent) {
     match event {
         AndroidImeEvent::CommitText { text, .. } => {
@@ -2177,6 +2197,7 @@ pub fn run(
             }
             drain_accessibility_focus(&accessibility_elements);
             drain_accessibility_values(shell, &accessibility_elements);
+            drain_accessibility_scrolls(shell, &accessibility_elements);
             for event in ime_event_queue.drain() {
                 dispatch_android_ime_event(shell, event);
             }

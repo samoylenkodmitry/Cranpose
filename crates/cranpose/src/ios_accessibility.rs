@@ -32,12 +32,25 @@ use crate::{
     ios_file_picker::root_view_controller,
 };
 
+const SCROLL_RIGHT: isize = 1;
+const SCROLL_LEFT: isize = 2;
+const SCROLL_UP: isize = 3;
+const SCROLL_DOWN: isize = 4;
+const SCROLL_NEXT: isize = 5;
+const SCROLL_PREVIOUS: isize = 6;
+
+#[derive(Clone, Default)]
+struct ReaderRequests {
+    activations: Rc<RefCell<Vec<i32>>>,
+    focus: Rc<RefCell<Vec<i32>>>,
+    steps: Rc<RefCell<Vec<(i32, bool)>>>,
+    scrolls: Rc<RefCell<Vec<(i32, bool)>>>,
+}
+
 struct AccessibilityElementIvars {
     element_id: i32,
     actionable: Cell<bool>,
-    pending_activations: Rc<RefCell<Vec<i32>>>,
-    pending_focus: Rc<RefCell<Vec<i32>>>,
-    pending_steps: Rc<RefCell<Vec<(i32, bool)>>>,
+    requests: ReaderRequests,
     wake_proxy: EventLoopProxy,
 }
 
@@ -59,7 +72,7 @@ define_class!(
                 return Bool::NO;
             }
             self.ivars()
-                .pending_activations
+                .requests.activations
                 .borrow_mut()
                 .push(self.ivars().element_id);
             self.ivars().wake_proxy.wake_up();
@@ -69,7 +82,7 @@ define_class!(
         #[unsafe(method(accessibilityIncrement))]
         fn accessibility_increment(&self) {
             self.ivars()
-                .pending_steps
+                .requests.steps
                 .borrow_mut()
                 .push((self.ivars().element_id, true));
             self.ivars().wake_proxy.wake_up();
@@ -78,16 +91,31 @@ define_class!(
         #[unsafe(method(accessibilityDecrement))]
         fn accessibility_decrement(&self) {
             self.ivars()
-                .pending_steps
+                .requests.steps
                 .borrow_mut()
                 .push((self.ivars().element_id, false));
             self.ivars().wake_proxy.wake_up();
         }
 
+        #[unsafe(method(accessibilityScroll:))]
+        fn accessibility_scroll(&self, direction: isize) -> Bool {
+            let forward = match direction {
+                SCROLL_RIGHT | SCROLL_DOWN | SCROLL_NEXT => true,
+                SCROLL_LEFT | SCROLL_UP | SCROLL_PREVIOUS => false,
+                _ => return Bool::NO,
+            };
+            self.ivars()
+                .requests.scrolls
+                .borrow_mut()
+                .push((self.ivars().element_id, forward));
+            self.ivars().wake_proxy.wake_up();
+            Bool::YES
+        }
+
         #[unsafe(method(accessibilityElementDidBecomeFocused))]
         fn accessibility_element_did_become_focused(&self) {
             self.ivars()
-                .pending_focus
+                .requests.focus
                 .borrow_mut()
                 .push(self.ivars().element_id);
             self.ivars().wake_proxy.wake_up();
@@ -99,18 +127,14 @@ impl NativeAccessibilityElement {
     fn new(
         container: &AnyObject,
         element_id: i32,
-        pending_activations: Rc<RefCell<Vec<i32>>>,
-        pending_focus: Rc<RefCell<Vec<i32>>>,
-        pending_steps: Rc<RefCell<Vec<(i32, bool)>>>,
+        requests: ReaderRequests,
         wake_proxy: EventLoopProxy,
         mtm: MainThreadMarker,
     ) -> Retained<Self> {
         let this = Self::alloc(mtm).set_ivars(AccessibilityElementIvars {
             element_id,
             actionable: Cell::new(false),
-            pending_activations,
-            pending_focus,
-            pending_steps,
+            requests,
             wake_proxy,
         });
         // SAFETY: `container` is the retained winit root UIView and implements
@@ -128,9 +152,7 @@ pub(crate) struct IosAccessibilityBridge {
     native_elements: HashMap<i32, Retained<NativeAccessibilityElement>>,
     snapshot: Vec<AccessibilityElement>,
     snapshot_ids: Vec<i32>,
-    pending_activations: Rc<RefCell<Vec<i32>>>,
-    pending_focus: Rc<RefCell<Vec<i32>>>,
-    pending_steps: Rc<RefCell<Vec<(i32, bool)>>>,
+    requests: ReaderRequests,
     wake_proxy: EventLoopProxy,
     published_once: bool,
     focused_element: Option<i32>,
@@ -148,9 +170,7 @@ impl IosAccessibilityBridge {
             native_elements: HashMap::new(),
             snapshot: Vec::new(),
             snapshot_ids: Vec::new(),
-            pending_activations: Rc::new(RefCell::new(Vec::new())),
-            pending_focus: Rc::new(RefCell::new(Vec::new())),
-            pending_steps: Rc::new(RefCell::new(Vec::new())),
+            requests: ReaderRequests::default(),
             wake_proxy: event_proxy,
             published_once: false,
             focused_element: None,
@@ -260,7 +280,7 @@ impl IosAccessibilityBridge {
 
     /// Hands focus to the app when VoiceOver lands its cursor on an element.
     pub(crate) fn drain_focus(&mut self) -> bool {
-        let pending = self.pending_focus.take();
+        let pending = self.requests.focus.take();
         let mut moved = false;
         for element_id in pending {
             let Some((node_id, focusable)) = self
@@ -283,7 +303,7 @@ impl IosAccessibilityBridge {
         R: Renderer,
         R::Error: Debug,
     {
-        let pending = self.pending_activations.take();
+        let pending = self.requests.activations.take();
         let mut changed = false;
         for element_id in pending {
             let Some(element) = self.element_for(element_id) else {
@@ -305,7 +325,7 @@ impl IosAccessibilityBridge {
         R: Renderer,
         R::Error: Debug,
     {
-        let pending = self.pending_steps.take();
+        let pending = self.requests.steps.take();
         if pending.is_empty() {
             return false;
         }
@@ -329,6 +349,37 @@ impl IosAccessibilityBridge {
         moved
     }
 
+    /// Pages the scroll container around the element VoiceOver holds after a
+    /// three-finger swipe. Answers whether a container moved.
+    pub(crate) fn drain_scrolls<R>(&mut self, shell: &mut AppShell<R>) -> bool
+    where
+        R: Renderer,
+        R::Error: Debug,
+    {
+        let pending = self.requests.scrolls.take();
+        if pending.is_empty() {
+            return false;
+        }
+        let mut moved = false;
+        for (element_id, forward) in pending {
+            let Some((node_id, dx, dy)) = self
+                .element_for(element_id)
+                .and_then(|element| accessibility::scroll_container_for(&self.snapshot, element))
+                .map(|container| {
+                    let (dx, dy) = accessibility::page_delta(container, forward);
+                    (container.node_id, dx, dy)
+                })
+            else {
+                continue;
+            };
+            let Some(tree) = shell.semantics_tree() else {
+                continue;
+            };
+            moved |= accessibility::scroll_by(tree.root(), node_id, dx, dy);
+        }
+        moved
+    }
+
     fn create_element(
         &self,
         element_id: i32,
@@ -338,9 +389,7 @@ impl IosAccessibilityBridge {
         let native = NativeAccessibilityElement::new(
             container,
             element_id,
-            Rc::clone(&self.pending_activations),
-            Rc::clone(&self.pending_focus),
-            Rc::clone(&self.pending_steps),
+            self.requests.clone(),
             self.wake_proxy.clone(),
             mtm,
         );
@@ -386,6 +435,7 @@ fn update_native_element(
     mtm: MainThreadMarker,
 ) {
     native.set_actionable(element.clickable || element.role == AccessibilityRole::TextField);
+    native.setIsAccessibilityElement(!element.label.is_empty());
     native.setAccessibilityLabel(Some(&NSString::from_str(&element.label)));
     let value = element
         .value

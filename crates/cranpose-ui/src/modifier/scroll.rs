@@ -1456,6 +1456,36 @@ fn scroll_impl(
         .then(translated_content_modifier)
         .then(layout_modifier)
         .clip_to_bounds()
+        .semantics(scroll_semantics(state, is_vertical, reverse_scrolling))
+}
+
+/// What a screen reader learns about a scroll container: how far it has
+/// scrolled, whether it can go on, and how to page it. Compose's
+/// `verticalScrollAxisRange` / `horizontalScrollAxisRange` and `scrollBy`.
+/// Without this a reader's cursor stops at the last row it can see.
+fn scroll_semantics(
+    state: ScrollState,
+    is_vertical: bool,
+    reverse_scrolling: bool,
+) -> impl Fn(&mut cranpose_foundation::SemanticsConfiguration) + 'static {
+    move |config| {
+        let range = cranpose_foundation::ScrollAxisRange::new(
+            state.value(),
+            state.max_value(),
+            reverse_scrolling,
+        );
+        if is_vertical {
+            config.vertical_scroll = Some(range);
+        } else {
+            config.horizontal_scroll = Some(range);
+        }
+        config.scroll_by = Some(cranpose_foundation::SemanticsScrollBy::new(
+            move |dx, dy| {
+                let delta = if is_vertical { dy } else { dx };
+                state.dispatch_raw_delta(delta).abs() > f32::EPSILON
+            },
+        ));
+    }
 }
 
 use cranpose_foundation::lazy::LazyListState;
@@ -1543,6 +1573,46 @@ fn lazy_scroll_impl(
                 guard: None,
             },
         ))
+        .semantics(lazy_scroll_semantics(
+            list_state,
+            is_vertical,
+            reverse_scrolling,
+        ))
+}
+
+/// What a screen reader learns about a lazy list. The list has no whole
+/// extent to give, so the first visible item stands in for the position, a
+/// half step marks a list scrolled part way into that item, and one more step
+/// stays ahead while the list can still scroll forward. A reader needs only
+/// the two answers: can it page back, can it page on.
+fn lazy_scroll_semantics(
+    state: LazyListState,
+    is_vertical: bool,
+    reverse_scrolling: bool,
+) -> impl Fn(&mut cranpose_foundation::SemanticsConfiguration) + 'static {
+    move |config| {
+        let mut value = state.first_visible_item_index() as f32;
+        if state.first_visible_item_scroll_offset() > 0.0 {
+            value += 0.5;
+        }
+        let max_value = if state.can_scroll_forward() {
+            value + 1.0
+        } else {
+            value
+        };
+        let range = cranpose_foundation::ScrollAxisRange::new(value, max_value, reverse_scrolling);
+        if is_vertical {
+            config.vertical_scroll = Some(range);
+        } else {
+            config.horizontal_scroll = Some(range);
+        }
+        config.scroll_by = Some(cranpose_foundation::SemanticsScrollBy::new(
+            move |dx, dy| {
+                let delta = if is_vertical { dy } else { dx };
+                state.dispatch_scroll_delta(delta).abs() > f32::EPSILON
+            },
+        ));
+    }
 }
 
 impl Modifier {

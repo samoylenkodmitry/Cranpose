@@ -4,8 +4,8 @@ use cranpose_app_shell::AppShell;
 use cranpose_core::{NodeId, collections::map::HashMap};
 use cranpose_render_common::Renderer;
 use cranpose_ui::{
-    Announcement, LayoutBox, LiveRegionMode, ProgressBarRangeInfo, SemanticsAction, SemanticsNode,
-    SemanticsRole, SemanticsWidgetRole,
+    Announcement, LayoutBox, LiveRegionMode, ProgressBarRangeInfo, ScrollAxisRange,
+    SemanticsAction, SemanticsNode, SemanticsRole, SemanticsWidgetRole,
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -37,6 +37,15 @@ impl AccessibilityRect {
             && self.y.is_finite()
             && self.width.is_finite()
             && self.height.is_finite()
+    }
+
+    #[cfg(any(
+        test,
+        all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"),
+        all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
+    ))]
+    fn contains(self, x: f32, y: f32) -> bool {
+        x >= self.x && y >= self.y && x <= self.x + self.width && y <= self.y + self.height
     }
 }
 
@@ -89,6 +98,8 @@ pub(crate) struct AccessibilityElement {
     pub(crate) live_region: Option<LiveRegionMode>,
     pub(crate) progress: Option<ProgressBarRangeInfo>,
     pub(crate) adjustable: bool,
+    pub(crate) vertical_scroll: Option<ScrollAxisRange>,
+    pub(crate) horizontal_scroll: Option<ScrollAxisRange>,
 }
 
 impl Default for AccessibilityElement {
@@ -112,6 +123,8 @@ impl Default for AccessibilityElement {
             live_region: None,
             progress: None,
             adjustable: false,
+            vertical_scroll: None,
+            horizontal_scroll: None,
         }
     }
 }
@@ -243,44 +256,26 @@ fn project_node(
     };
     let rect = bounds.get(&node.node_id).copied().unwrap_or_default();
 
+    let scrollable = node.vertical_scroll.is_some() || node.horizontal_scroll.is_some();
     if let Some(label) = label.filter(|label| !label.trim().is_empty())
         && rect.is_visible()
         && (actionable || !suppress_static_text)
     {
-        let role = if let Some(role) = node.widget_role {
-            AccessibilityRole::from_widget_role(role)
-        } else if node.editable_text {
-            AccessibilityRole::TextField
-        } else if clickable || matches!(node.role, SemanticsRole::Button) {
-            AccessibilityRole::Button
-        } else {
-            AccessibilityRole::StaticText
-        };
-        let label = label.into_owned();
-        elements.push(AccessibilityElement {
-            node_id: node.node_id,
-            canvas_key: None,
-            value: node.editable_text.then(|| label.clone()),
-            label,
-            state_description: node.state_description.clone(),
-            click_label: node.on_click_label.clone(),
-            bounds: rect,
-            role,
+        elements.push(element_for_node(
+            node,
+            rect,
+            label.into_owned(),
             clickable,
-            selected: node.selected,
-            toggled: node.toggled,
-            enabled: node.enabled,
-            custom_actions: node
-                .custom_actions
-                .iter()
-                .map(|action| action.label.clone())
-                .collect(),
-            focusable: node.focusable,
-            focused: node.focused,
             live_region,
-            progress: node.progress,
-            adjustable: node.set_progress.is_some(),
-        });
+        ));
+    } else if scrollable && rect.is_visible() {
+        elements.push(element_for_node(
+            node,
+            rect,
+            String::new(),
+            clickable,
+            live_region,
+        ));
     }
 
     project_canvas_children(node, rect, live_region, elements);
@@ -289,6 +284,117 @@ fn project_node(
     for child in &node.children {
         project_node(child, bounds, suppress_children, live_region, elements);
     }
+}
+
+/// One control as the platforms see it. A scroll container with no label of
+/// its own comes through with an empty label: a reader never lands on it, but
+/// it is the node the reader pages through.
+fn element_for_node(
+    node: &SemanticsNode,
+    rect: AccessibilityRect,
+    label: String,
+    clickable: bool,
+    live_region: Option<LiveRegionMode>,
+) -> AccessibilityElement {
+    let role = if let Some(role) = node.widget_role {
+        AccessibilityRole::from_widget_role(role)
+    } else if node.editable_text {
+        AccessibilityRole::TextField
+    } else if clickable || matches!(node.role, SemanticsRole::Button) {
+        AccessibilityRole::Button
+    } else {
+        AccessibilityRole::StaticText
+    };
+    AccessibilityElement {
+        node_id: node.node_id,
+        canvas_key: None,
+        value: node.editable_text.then(|| label.clone()),
+        label,
+        state_description: node.state_description.clone(),
+        click_label: node.on_click_label.clone(),
+        bounds: rect,
+        role,
+        clickable,
+        selected: node.selected,
+        toggled: node.toggled,
+        enabled: node.enabled,
+        custom_actions: node
+            .custom_actions
+            .iter()
+            .map(|action| action.label.clone())
+            .collect(),
+        focusable: node.focusable,
+        focused: node.focused,
+        live_region,
+        progress: node.progress,
+        adjustable: node.set_progress.is_some(),
+        vertical_scroll: node.vertical_scroll,
+        horizontal_scroll: node.horizontal_scroll,
+    }
+}
+
+/// Pages a scroll container for a screen reader that asked for the next or
+/// the previous page. The deltas are in layout pixels, positive toward the
+/// end of the content. Answers whether the container moved.
+#[cfg(any(
+    test,
+    all(feature = "desktop-shell", feature = "renderer-wgpu"),
+    all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"),
+    all(feature = "android", feature = "renderer-wgpu", target_os = "android"),
+    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
+))]
+pub(crate) fn scroll_by(root: &SemanticsNode, node_id: NodeId, dx: f32, dy: f32) -> bool {
+    let Some(node) = find_semantics_node(root, node_id) else {
+        return false;
+    };
+    match &node.scroll_by {
+        Some(action) => action.invoke(dx, dy),
+        None => false,
+    }
+}
+
+/// How far one reader page moves a container: most of what it shows, so the
+/// last row of one page is still on the next.
+#[cfg(any(
+    test,
+    all(feature = "desktop-shell", feature = "renderer-wgpu"),
+    all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"),
+    all(feature = "android", feature = "renderer-wgpu", target_os = "android"),
+    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
+))]
+pub(crate) fn page_delta(element: &AccessibilityElement, forward: bool) -> (f32, f32) {
+    let sign = if forward { 1.0 } else { -1.0 };
+    if element.vertical_scroll.is_some() {
+        (0.0, sign * element.bounds.height * 0.9)
+    } else {
+        (sign * element.bounds.width * 0.9, 0.0)
+    }
+}
+
+/// The nearest scroll container around an element: the smallest scrollable
+/// element whose bounds hold the element's center, the element itself when it
+/// scrolls.
+#[cfg(any(
+    test,
+    all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"),
+    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
+))]
+pub(crate) fn scroll_container_for<'a>(
+    elements: &'a [AccessibilityElement],
+    element: &AccessibilityElement,
+) -> Option<&'a AccessibilityElement> {
+    let (x, y) = element.bounds.center();
+    elements
+        .iter()
+        .filter(|candidate| {
+            candidate.vertical_scroll.is_some() || candidate.horizontal_scroll.is_some()
+        })
+        .filter(|candidate| candidate.bounds.contains(x, y))
+        .min_by(|a, b| {
+            let area =
+                |element: &AccessibilityElement| element.bounds.width * element.bounds.height;
+            area(a).total_cmp(&area(b))
+        })
 }
 
 fn project_canvas_children(
@@ -335,6 +441,8 @@ fn project_canvas_children(
             live_region,
             progress: None,
             adjustable: false,
+            vertical_scroll: None,
+            horizontal_scroll: None,
         });
     }
 }
@@ -1000,6 +1108,70 @@ mod tests {
 
         let four_stops = cranpose_ui::ProgressBarRangeInfo::new(0.0, 0.0, 1.0, 4);
         assert!((four_stops.step() - 0.2).abs() < 1e-6);
+    }
+
+    fn scroll_box(
+        node_id: NodeId,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+    ) -> AccessibilityElement {
+        AccessibilityElement {
+            node_id,
+            bounds: AccessibilityRect::new(x, y, width, height),
+            vertical_scroll: Some(cranpose_ui::ScrollAxisRange::new(0.0, 900.0, false)),
+            ..AccessibilityElement::default()
+        }
+    }
+
+    #[test]
+    fn a_row_pages_the_nearest_list_around_it() {
+        let outer = scroll_box(1, 0.0, 0.0, 400.0, 800.0);
+        let inner = scroll_box(2, 0.0, 100.0, 400.0, 300.0);
+        let row = AccessibilityElement {
+            node_id: 3,
+            label: "Milk".into(),
+            bounds: AccessibilityRect::new(0.0, 120.0, 400.0, 40.0),
+            ..AccessibilityElement::default()
+        };
+        let footer = AccessibilityElement {
+            node_id: 4,
+            label: "Total".into(),
+            bounds: AccessibilityRect::new(0.0, 700.0, 400.0, 40.0),
+            ..AccessibilityElement::default()
+        };
+        let elements = vec![outer, inner, row.clone(), footer.clone()];
+
+        let around_row = scroll_container_for(&elements, &row).expect("the row sits in a list");
+        let around_footer =
+            scroll_container_for(&elements, &footer).expect("the footer sits in the outer list");
+        let page = page_delta(around_row, true);
+
+        assert_eq!(
+            around_row.node_id, 2,
+            "the smaller list around the row wins"
+        );
+        assert_eq!(around_footer.node_id, 1);
+        assert_eq!(
+            page,
+            (0.0, 270.0),
+            "one page is nine tenths of the list height"
+        );
+        assert_eq!(page_delta(around_row, false), (0.0, -270.0));
+    }
+
+    #[test]
+    fn an_element_outside_every_list_pages_nothing() {
+        let list = scroll_box(1, 0.0, 0.0, 400.0, 300.0);
+        let button = AccessibilityElement {
+            node_id: 2,
+            label: "Pay".into(),
+            bounds: AccessibilityRect::new(0.0, 500.0, 400.0, 40.0),
+            ..AccessibilityElement::default()
+        };
+
+        assert!(scroll_container_for(&[list], &button).is_none());
     }
 
     #[test]

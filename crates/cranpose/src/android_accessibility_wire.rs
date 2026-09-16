@@ -32,8 +32,9 @@ pub(crate) fn encode_elements(elements: &[AccessibilityElement], density: f32) -
                 .collect::<Vec<_>>()
                 .join(&ACTION_SEPARATOR.to_string());
             let progress = element.progress;
+            let scroll = element.vertical_scroll.or(element.horizontal_scroll);
             format!(
-                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                 id,
                 role,
                 (element.bounds.x * density).round() as i32,
@@ -57,6 +58,9 @@ pub(crate) fn encode_elements(elements: &[AccessibilityElement], density: f32) -
                 progress.map(|p| p.current).unwrap_or(0.0),
                 progress.map(|p| p.start).unwrap_or(0.0),
                 progress.map(|p| p.end).unwrap_or(0.0),
+                i32::from(scroll.is_some()),
+                i32::from(scroll.is_some_and(|range| range.can_scroll_forward())),
+                i32::from(scroll.is_some_and(|range| range.can_scroll_backward())),
             )
         })
         .collect::<Vec<_>>()
@@ -117,7 +121,7 @@ mod tests {
         let records: Vec<_> = payload.split('\n').collect();
         assert_eq!(records.len(), 2);
         for record in &records {
-            assert_eq!(record.split('\t').count(), 23, "record: {record}");
+            assert_eq!(record.split('\t').count(), 26, "record: {record}");
         }
 
         let fields: Vec<_> = records[0].split('\t').collect();
@@ -168,6 +172,49 @@ mod tests {
         assert_eq!(other[18], "0", "but focus does not sit on it");
     }
 
+    fn save_button(node_id: cranpose_core::NodeId) -> AccessibilityElement {
+        AccessibilityElement {
+            node_id,
+            label: "Save".into(),
+            bounds: AccessibilityRect::new(0.0, 50.0, 30.0, 40.0),
+            role: AccessibilityRole::Button,
+            clickable: true,
+            ..AccessibilityElement::default()
+        }
+    }
+
+    #[test]
+    fn the_record_says_which_way_a_list_can_still_page() {
+        let elements = vec![
+            AccessibilityElement {
+                node_id: 6,
+                bounds: AccessibilityRect::new(0.0, 0.0, 400.0, 600.0),
+                vertical_scroll: Some(cranpose_ui::ScrollAxisRange::new(0.0, 900.0, false)),
+                ..AccessibilityElement::default()
+            },
+            AccessibilityElement {
+                node_id: 7,
+                bounds: AccessibilityRect::new(0.0, 0.0, 400.0, 600.0),
+                vertical_scroll: Some(cranpose_ui::ScrollAxisRange::new(900.0, 900.0, false)),
+                ..AccessibilityElement::default()
+            },
+            save_button(8),
+        ];
+
+        let payload = encode_elements(&elements, 1.0);
+        let records: Vec<_> = payload.split('\n').collect();
+        let top: Vec<_> = records[0].split('\t').collect();
+        let bottom: Vec<_> = records[1].split('\t').collect();
+        let button: Vec<_> = records[2].split('\t').collect();
+
+        assert_eq!(top[23], "1", "a list is scrollable");
+        assert_eq!(top[24], "1", "at the top it pages forward");
+        assert_eq!(top[25], "0", "and not back");
+        assert_eq!(bottom[24], "0", "at the end it pages back only");
+        assert_eq!(bottom[25], "1");
+        assert_eq!(button[23], "0", "a button does not scroll");
+    }
+
     #[test]
     fn the_record_carries_the_range_of_an_adjustable_control() {
         let elements = vec![
@@ -179,14 +226,7 @@ mod tests {
                 adjustable: true,
                 ..AccessibilityElement::default()
             },
-            AccessibilityElement {
-                node_id: 5,
-                label: "Save".into(),
-                bounds: AccessibilityRect::new(0.0, 50.0, 30.0, 40.0),
-                role: AccessibilityRole::Button,
-                clickable: true,
-                ..AccessibilityElement::default()
-            },
+            save_button(5),
         ];
 
         let payload = encode_elements(&elements, 1.0);

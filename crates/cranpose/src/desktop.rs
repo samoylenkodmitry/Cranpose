@@ -4427,6 +4427,7 @@ impl ApplicationHandler for App {
             }
             accessibility.run_custom_actions(app);
             accessibility.run_value_requests(app);
+            accessibility.run_scroll_requests(app);
             accessibility.run_focus_requests();
         }
         let Some(platform) = &mut self.platform else {
@@ -4854,6 +4855,7 @@ impl ApplicationHandler for App {
             }
             activated |= accessibility.run_custom_actions(app);
             activated |= accessibility.run_value_requests(app);
+            activated |= accessibility.run_scroll_requests(app);
             activated |= accessibility.run_focus_requests();
             if activated {
                 request_redraw_once(&window, &mut self.primary_redraw_pending);

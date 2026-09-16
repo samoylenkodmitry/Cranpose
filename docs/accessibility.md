@@ -128,6 +128,40 @@ value moves freely, and a reader's step is then a tenth of the range.
 The value goes back through `set_progress` on the live semantics tree, so a
 stale published snapshot cannot move the wrong control.
 
+## 5. A list a reader can page
+
+A lazy list builds only the rows on screen. A reader that walks the rows one
+by one reaches the last built row and stops; the rows below it do not exist
+yet. The list has to tell the platform that it scrolls, and take a page move
+back.
+
+```rust
+Modifier::empty().semantics(|config| {
+    config.vertical_scroll = Some(ScrollAxisRange::new(offset, max_offset, false));
+    config.scroll_by = Some(SemanticsScrollBy::new(move |dx, dy| state.scroll_by(dx, dy)));
+})
+```
+
+`vertical_scroll` and `horizontal_scroll` are Compose's
+`verticalScrollAxisRange` and `horizontalScrollAxisRange`; `scroll_by` is
+`SemanticsActions.ScrollBy`. `verticalScroll`, `horizontalScroll`,
+`LazyColumn` and `LazyRow` declare both on their own. A plain scroll reports
+its offset in pixels; a lazy list reports the index of its first visible row,
+because it does not know the height of the rows it has not built.
+
+The container itself has no name, so a reader's cursor does not stop on it.
+One page is nine tenths of what the container shows, so the last row of one
+page is still on the next. The move goes to the container around the element
+under the reader's cursor, found by bounds on the published snapshot, and
+runs through `scroll_by` on the live tree.
+
+| Platform | Reads | Pages |
+| --- | --- | --- |
+| accesskit | `Role::ScrollView` with the offset and its range | `Action::ScrollDown`, `ScrollUp`, `ScrollRight`, `ScrollLeft` |
+| iOS | nothing; the container stays out of the cursor's way | a VoiceOver three-finger swipe, through `accessibilityScroll:` on the focused element |
+| Android | `isScrollable` with `ACTION_SCROLL_FORWARD` and `BACKWARD` as the offset allows | TalkBack's page gesture on the node |
+| Web | nothing on the mirror | Page Down and Page Up on the focused mirrored element |
+
 ## What the built-in widgets say on their own
 
 An app gets this with no code of its own:
@@ -141,6 +175,7 @@ An app gets this with no code of its own:
 | `Slider` | the value | move it |
 | `CircularProgressIndicator`, `LinearProgressIndicator` | "Loading" | |
 | `SwipeToDismiss` | the row's content | run "Dismiss" from the actions menu |
+| `verticalScroll`, `horizontalScroll`, `LazyColumn`, `LazyRow` | the rows inside | page on and back |
 | `Dialog` | its content, and nothing outside it | |
 | `Image`, `Icon` | the description the app gave | |
 

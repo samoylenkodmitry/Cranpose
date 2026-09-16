@@ -709,6 +709,7 @@ public class CranposeActivity extends NativeActivity {
     /** Reports the virtual view TalkBack focused, so app focus follows it. */
     private static native void nativeOnAccessibilityFocus(int virtualViewId);
     private static native void nativeOnAccessibilitySetProgress(int virtualViewId, float value);
+    private static native void nativeOnAccessibilityScroll(int virtualViewId, boolean forward);
 
     private static native void nativeOnAccessibilityStateChanged(boolean enabled);
 
@@ -769,7 +770,7 @@ public class CranposeActivity extends NativeActivity {
     }
 
     /** Field count of one accessibility record; see android_accessibility_wire.rs. */
-    private static final int ACCESSIBILITY_FIELDS = 23;
+    private static final int ACCESSIBILITY_FIELDS = 26;
 
     /** Separator packing a node's custom action labels into one field. */
     private static final String ACCESSIBILITY_ACTION_SEPARATOR = String.valueOf((char) 0x1f);
@@ -801,7 +802,8 @@ public class CranposeActivity extends NativeActivity {
                         parseAccessibilityActions(fields[16]), "1".equals(fields[17]),
                         "1".equals(fields[18]), "1".equals(fields[19]),
                         Float.parseFloat(fields[20]), Float.parseFloat(fields[21]),
-                        Float.parseFloat(fields[22])));
+                        Float.parseFloat(fields[22]), "1".equals(fields[23]),
+                        "1".equals(fields[24]), "1".equals(fields[25])));
             } catch (RuntimeException ignored) {
                 // A malformed record must not make the host Activity inaccessible.
             }
@@ -850,13 +852,18 @@ public class CranposeActivity extends NativeActivity {
         final float progressCurrent;
         final float progressMin;
         final float progressMax;
+        /** Whether a reader can page this container, and which way. */
+        final boolean scrollable;
+        final boolean canScrollForward;
+        final boolean canScrollBackward;
 
         CranposeAccessibilityElement(int id, int role, Rect bounds, float centerX,
                 float centerY, boolean clickable, String label, String value,
                 String stateDescription, String clickLabel, int selected, int toggled,
                 boolean enabled, String[] customActions, boolean focusable,
                 boolean focused, boolean adjustable, float progressCurrent,
-                float progressMin, float progressMax) {
+                float progressMin, float progressMax, boolean scrollable,
+                boolean canScrollForward, boolean canScrollBackward) {
             this.id = id;
             this.role = role;
             this.bounds = bounds;
@@ -877,6 +884,9 @@ public class CranposeActivity extends NativeActivity {
             this.progressCurrent = progressCurrent;
             this.progressMin = progressMin;
             this.progressMax = progressMax;
+            this.scrollable = scrollable;
+            this.canScrollForward = canScrollForward;
+            this.canScrollBackward = canScrollBackward;
         }
 
         /**
@@ -960,6 +970,11 @@ public class CranposeActivity extends NativeActivity {
             if (element.focusable) info.addAction(AccessibilityNodeInfo.ACTION_FOCUS);
             // A slider or a dial: TalkBack reads the value and offers its own
             // way to move it, which is the only way a blind user can set one.
+            if (element.scrollable) {
+                info.setScrollable(true);
+                if (element.canScrollForward) info.addAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD);
+                if (element.canScrollBackward) info.addAction(AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD);
+            }
             if (element.adjustable) {
                 info.setRangeInfo(AccessibilityNodeInfo.RangeInfo.obtain(
                         AccessibilityNodeInfo.RangeInfo.RANGE_TYPE_FLOAT,
@@ -1041,6 +1056,12 @@ public class CranposeActivity extends NativeActivity {
             }
             if (action == AccessibilityNodeInfo.ACTION_FOCUS && element.focusable) {
                 nativeOnAccessibilityFocus(element.id);
+                return true;
+            }
+            if (element.scrollable && (action == AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
+                    || action == AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD)) {
+                nativeOnAccessibilityScroll(element.id,
+                        action == AccessibilityNodeInfo.ACTION_SCROLL_FORWARD);
                 return true;
             }
             if (Build.VERSION.SDK_INT >= 24 && element.adjustable && arguments != null

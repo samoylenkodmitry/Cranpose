@@ -61,6 +61,7 @@ pub(crate) struct DesktopAccessibilityBridge {
     pending_custom_actions: Vec<(NodeId, usize)>,
     pending_focus: Vec<NodeId>,
     pending_values: Vec<(NodeId, f32)>,
+    pending_scrolls: Vec<(NodeId, bool)>,
     previous: Vec<AccessibilityElement>,
     seen_revision: Option<u64>,
     announcement: Option<Announcement>,
@@ -88,6 +89,7 @@ impl DesktopAccessibilityBridge {
             pending_custom_actions: Vec::new(),
             pending_focus: Vec::new(),
             pending_values: Vec::new(),
+            pending_scrolls: Vec::new(),
             previous: Vec::new(),
             seen_revision: None,
             announcement: None,
@@ -165,6 +167,12 @@ impl DesktopAccessibilityBridge {
                 }
                 Action::Increment => self.step_value(request.target_node, true),
                 Action::Decrement => self.step_value(request.target_node, false),
+                Action::ScrollDown | Action::ScrollRight => {
+                    self.pending_scrolls.push((request.target_node, true));
+                }
+                Action::ScrollUp | Action::ScrollLeft => {
+                    self.pending_scrolls.push((request.target_node, false));
+                }
                 _ => {}
             }
         }
@@ -238,6 +246,32 @@ impl DesktopAccessibilityBridge {
         ran
     }
 
+    /// Pages a scroll container a screen reader asked to move on or back.
+    /// Answers whether one moved.
+    pub(crate) fn run_scroll_requests(&mut self, shell: &mut AppShell<WgpuRenderer>) -> bool {
+        if self.pending_scrolls.is_empty() {
+            return false;
+        }
+        let pending = std::mem::take(&mut self.pending_scrolls);
+        let ids = accessibility::element_ids(&self.previous);
+        let Some(tree) = shell.semantics_tree() else {
+            return false;
+        };
+        let mut moved = false;
+        for (target, forward) in pending {
+            let Some(element) = ids
+                .iter()
+                .position(|id| NodeId(*id as u64) == target)
+                .and_then(|position| self.previous.get(position))
+            else {
+                continue;
+            };
+            let (dx, dy) = accessibility::page_delta(element, forward);
+            moved |= accessibility::scroll_by(tree.root(), element.node_id, dx, dy);
+        }
+        moved
+    }
+
     /// Moves the value of an adjustable control a screen reader asked to
     /// change. Answers whether one took the new value.
     pub(crate) fn run_value_requests(&mut self, shell: &mut AppShell<WgpuRenderer>) -> bool {
@@ -301,8 +335,10 @@ fn tree_update(
 
 /// One control as accesskit describes it to a screen reader.
 fn accesskit_node(element: &AccessibilityElement) -> Node {
+    let scrolls = element.vertical_scroll.is_some() || element.horizontal_scroll.is_some();
     let role = match element.progress {
         Some(_) => Role::Slider,
+        None if scrolls && element.label.is_empty() => Role::ScrollView,
         None => accesskit_role(element.role),
     };
     let mut node = Node::new(role);
@@ -408,6 +444,16 @@ fn apply_state(node: &mut Node, element: &AccessibilityElement) {
         node.set_max_numeric_value(progress.end as f64);
         node.set_numeric_value_step(progress.step() as f64);
     }
+    if let Some(range) = element.vertical_scroll {
+        node.set_scroll_y(range.value as f64);
+        node.set_scroll_y_min(0.0);
+        node.set_scroll_y_max(range.max_value as f64);
+    }
+    if let Some(range) = element.horizontal_scroll {
+        node.set_scroll_x(range.value as f64);
+        node.set_scroll_x_min(0.0);
+        node.set_scroll_x_max(range.max_value as f64);
+    }
 }
 
 /// What a screen reader can do with the control: activate it, run one of its
@@ -437,6 +483,22 @@ fn apply_actions(node: &mut Node, element: &AccessibilityElement) {
         node.add_action(Action::SetValue);
         node.add_action(Action::Increment);
         node.add_action(Action::Decrement);
+    }
+    if let Some(range) = element.vertical_scroll {
+        if range.can_scroll_forward() {
+            node.add_action(Action::ScrollDown);
+        }
+        if range.can_scroll_backward() {
+            node.add_action(Action::ScrollUp);
+        }
+    }
+    if let Some(range) = element.horizontal_scroll {
+        if range.can_scroll_forward() {
+            node.add_action(Action::ScrollRight);
+        }
+        if range.can_scroll_backward() {
+            node.add_action(Action::ScrollLeft);
+        }
     }
 }
 

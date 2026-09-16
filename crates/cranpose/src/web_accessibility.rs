@@ -41,6 +41,105 @@ fn apply_progress(node: &HtmlElement, element: &AccessibilityElement) -> Result<
     Ok(())
 }
 
+/// The scroll container each element sits in, with the move one page on
+/// makes: the container's virtual id and the forward delta.
+fn page_targets(ids: &[i32], elements: &[AccessibilityElement]) -> Vec<Option<(i32, f32, f32)>> {
+    elements
+        .iter()
+        .map(|element| {
+            let container = accessibility::scroll_container_for(elements, element)?;
+            let index = elements
+                .iter()
+                .position(|candidate| std::ptr::eq(candidate, container))?;
+            let (dx, dy) = accessibility::page_delta(container, true);
+            Some((*ids.get(index)?, dx, dy))
+        })
+        .collect()
+}
+
+fn apply_page(node: &HtmlElement, page: Option<(i32, f32, f32)>) -> Result<(), JsValue> {
+    let Some((container, dx, dy)) = page else {
+        return Ok(());
+    };
+    node.set_attribute("data-cranpose-page", &container.to_string())?;
+    node.set_attribute("data-cranpose-page-dx", &dx.to_string())?;
+    node.set_attribute("data-cranpose-page-dy", &dy.to_string())?;
+    Ok(())
+}
+
+/// Pages the scroll container around the focused mirror node on Page Down and
+/// Page Up, so a keyboard reader reaches rows a lazy list has not built yet.
+fn attach_page_listener(
+    root: &HtmlElement,
+    app: Rc<RefCell<AppShell<WgpuRenderer>>>,
+    node_ids: Rc<RefCell<HashMap<i32, cranpose_core::NodeId>>>,
+) -> Result<(), JsValue> {
+    let key_down = Closure::wrap(Box::new(move |event: web_sys::KeyboardEvent| {
+        let sign = match event.key().as_str() {
+            "PageDown" => 1.0,
+            "PageUp" => -1.0,
+            _ => return,
+        };
+        let Some(target) = key_target(&event) else {
+            return;
+        };
+        let (Some(dx), Some(dy)) = (
+            number_attribute(&target, "data-cranpose-page-dx"),
+            number_attribute(&target, "data-cranpose-page-dy"),
+        ) else {
+            return;
+        };
+        let Some(node_id) = node_id_attribute(&target, "data-cranpose-page", &node_ids) else {
+            return;
+        };
+        event.prevent_default();
+        on_live_tree(&app, |root| {
+            accessibility::scroll_by(root, node_id, sign * dx, sign * dy);
+        });
+    }) as Box<dyn FnMut(_)>);
+    root.add_event_listener_with_callback("keydown", key_down.as_ref().unchecked_ref())?;
+    key_down.forget();
+    Ok(())
+}
+
+/// The mirror node a key event landed on.
+fn key_target(event: &web_sys::KeyboardEvent) -> Option<Element> {
+    event
+        .target()
+        .and_then(|target| target.dyn_into::<Element>().ok())
+}
+
+fn number_attribute(target: &Element, name: &str) -> Option<f32> {
+    target
+        .get_attribute(name)
+        .and_then(|value| value.parse::<f32>().ok())
+}
+
+/// The live node behind the virtual id an attribute on the mirror carries.
+fn node_id_attribute(
+    target: &Element,
+    name: &str,
+    node_ids: &RefCell<HashMap<i32, cranpose_core::NodeId>>,
+) -> Option<cranpose_core::NodeId> {
+    target
+        .get_attribute(name)
+        .and_then(|value| value.parse::<i32>().ok())
+        .and_then(|element_id| node_ids.borrow().get(&element_id).copied())
+}
+
+/// Runs one change against the live semantics tree, unless the app is busy
+/// with its own frame.
+fn on_live_tree(
+    app: &Rc<RefCell<AppShell<WgpuRenderer>>>,
+    act: impl FnOnce(&cranpose_ui::SemanticsNode),
+) {
+    if let Ok(mut shell) = app.try_borrow_mut()
+        && let Some(tree) = shell.semantics_tree()
+    {
+        act(tree.root());
+    }
+}
+
 /// The ARIA role a screen reader reads the control as.
 fn aria_role(role: AccessibilityRole) -> &'static str {
     match role {
@@ -229,17 +328,10 @@ fn attach_key_listener(
     node_ids: Rc<RefCell<HashMap<i32, cranpose_core::NodeId>>>,
 ) -> Result<(), JsValue> {
     let key_down = Closure::wrap(Box::new(move |event: web_sys::KeyboardEvent| {
-        let Some(target) = event
-            .target()
-            .and_then(|target| target.dyn_into::<Element>().ok())
-        else {
+        let Some(target) = key_target(&event) else {
             return;
         };
-        let read = |name: &str| {
-            target
-                .get_attribute(name)
-                .and_then(|value| value.parse::<f32>().ok())
-        };
+        let read = |name: &str| number_attribute(&target, name);
         let (Some(current), Some(min), Some(max), Some(step)) = (
             read("data-cranpose-value"),
             read("data-cranpose-min"),
@@ -255,19 +347,13 @@ fn attach_key_listener(
             "End" => max,
             _ => return,
         };
-        let Some(node_id) = target
-            .get_attribute("data-cranpose-node")
-            .and_then(|value| value.parse::<i32>().ok())
-            .and_then(|element_id| node_ids.borrow().get(&element_id).copied())
-        else {
+        let Some(node_id) = node_id_attribute(&target, "data-cranpose-node", &node_ids) else {
             return;
         };
         event.prevent_default();
-        if let Ok(mut shell) = app.try_borrow_mut()
-            && let Some(tree) = shell.semantics_tree()
-        {
-            accessibility::set_progress(tree.root(), node_id, next.clamp(min, max));
-        }
+        on_live_tree(&app, |root| {
+            accessibility::set_progress(root, node_id, next.clamp(min, max));
+        });
     }) as Box<dyn FnMut(_)>);
     root.add_event_listener_with_callback("keydown", key_down.as_ref().unchecked_ref())?;
     key_down.forget();
@@ -322,7 +408,8 @@ impl WebAccessibilityBridge {
         let node_ids: Rc<RefCell<HashMap<i32, cranpose_core::NodeId>>> =
             Rc::new(RefCell::new(HashMap::new()));
         attach_focus_listener(&root, Rc::clone(&node_ids))?;
-        attach_key_listener(&root, app, Rc::clone(&node_ids))?;
+        attach_key_listener(&root, Rc::clone(&app), Rc::clone(&node_ids))?;
+        attach_page_listener(&root, app, Rc::clone(&node_ids))?;
 
         Ok(Self {
             root,
@@ -396,13 +483,15 @@ impl WebAccessibilityBridge {
         let scale_y = canvas_rect.height() / viewport.1.max(1.0) as f64;
 
         let ids = accessibility::element_ids(&elements);
-        for (id, element) in ids.into_iter().zip(elements) {
+        let pages = page_targets(&ids, &elements);
+        for ((id, element), page) in ids.into_iter().zip(elements).zip(pages) {
             let node = document
                 .create_element(if element.clickable { "button" } else { "span" })?
                 .dyn_into::<HtmlElement>()?;
             node.set_attribute("aria-label", &element.label)?;
             node.set_attribute("data-cranpose-node", &id.to_string())?;
             apply_role_and_state(&node, &element)?;
+            apply_page(&node, page)?;
             if element.clickable {
                 let (x, y) = element.bounds.center();
                 node.set_attribute("data-cranpose-x", &x.to_string())?;
