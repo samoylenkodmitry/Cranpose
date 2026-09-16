@@ -41,7 +41,7 @@ pub(crate) fn encode_elements(
             let progress = element.progress;
             let scroll = element.vertical_scroll.or(element.horizontal_scroll);
             format!(
-                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                 id,
                 role,
                 (element.bounds.x * density).round() as i32,
@@ -77,6 +77,7 @@ pub(crate) fn encode_elements(
                 escape(element.pane_title.as_deref().unwrap_or("")),
                 escape(element.error.as_deref().unwrap_or("")),
                 i32::from(element.password),
+                tristate(element.expanded),
             )
         })
         .collect::<Vec<_>>()
@@ -175,7 +176,7 @@ mod tests {
         let records: Vec<_> = payload.split('\n').collect();
         assert_eq!(records.len(), 2);
         for record in &records {
-            assert_eq!(record.split('\t').count(), 35, "record: {record}");
+            assert_eq!(record.split('\t').count(), 36, "record: {record}");
         }
 
         let fields: Vec<_> = records[0].split('\t').collect();
@@ -444,5 +445,24 @@ mod tests {
 
         assert_eq!(records[0].split('\t').nth(34), Some("1"));
         assert_eq!(records[1].split('\t').nth(34), Some("0"));
+    }
+
+    #[test]
+    fn the_record_says_whether_a_control_is_open() {
+        let mut open = save_button(8);
+        open.expanded = Some(true);
+        let mut closed = save_button(9);
+        closed.expanded = Some(false);
+
+        let payload = encode_elements(&[open, closed, save_button(10)], &[], 1.0);
+        let records: Vec<_> = payload.split('\n').collect();
+
+        assert_eq!(records[0].split('\t').nth(35), Some("1"));
+        assert_eq!(records[1].split('\t').nth(35), Some("0"));
+        assert_eq!(
+            records[2].split('\t').nth(35),
+            Some("-1"),
+            "a plain button opens nothing"
+        );
     }
 }

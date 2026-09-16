@@ -64,6 +64,7 @@ pub(crate) struct DesktopAccessibilityBridge {
     pending_values: Vec<(NodeId, f32)>,
     pending_texts: Vec<(NodeId, String)>,
     pending_scrolls: Vec<(NodeId, bool)>,
+    pending_expansions: Vec<(NodeId, bool)>,
     previous: Vec<AccessibilityElement>,
     seen_revision: Option<u64>,
     announcement: Option<Announcement>,
@@ -93,6 +94,7 @@ impl DesktopAccessibilityBridge {
             pending_values: Vec::new(),
             pending_texts: Vec::new(),
             pending_scrolls: Vec::new(),
+            pending_expansions: Vec::new(),
             previous: Vec::new(),
             seen_revision: None,
             announcement: None,
@@ -177,6 +179,8 @@ impl DesktopAccessibilityBridge {
                     }
                     _ => {}
                 },
+                Action::Expand => self.pending_expansions.push((request.target_node, true)),
+                Action::Collapse => self.pending_expansions.push((request.target_node, false)),
                 Action::Increment => self.step_value(request.target_node, true),
                 Action::Decrement => self.step_value(request.target_node, false),
                 Action::ScrollDown | Action::ScrollRight => {
@@ -289,6 +293,14 @@ impl DesktopAccessibilityBridge {
             };
             moved |= accessibility::run_reader_action(shell, |root| {
                 accessibility::set_progress(root, node_id, value)
+            });
+        }
+        for (target, open) in std::mem::take(&mut self.pending_expansions) {
+            let Some(node_id) = self.node_id_for(target) else {
+                continue;
+            };
+            moved |= accessibility::run_reader_action(shell, |root| {
+                accessibility::set_expanded(root, node_id, open)
             });
         }
         for (target, text) in std::mem::take(&mut self.pending_texts) {
@@ -537,6 +549,14 @@ fn apply_actions(node: &mut Node, element: &AccessibilityElement) {
                 })
                 .collect::<Vec<_>>(),
         );
+    }
+    if let Some(expanded) = element.expanded {
+        node.set_expanded(expanded);
+        node.add_action(if expanded {
+            Action::Collapse
+        } else {
+            Action::Expand
+        });
     }
     if element.focusable {
         node.add_action(Action::Focus);

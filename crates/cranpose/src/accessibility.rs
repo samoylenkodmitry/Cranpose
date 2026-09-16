@@ -97,6 +97,7 @@ pub(crate) struct AccessibilityElement {
     pub(crate) pane_title: Option<String>,
     pub(crate) error: Option<String>,
     pub(crate) password: bool,
+    pub(crate) expanded: Option<bool>,
 }
 
 impl Default for AccessibilityElement {
@@ -128,6 +129,7 @@ impl Default for AccessibilityElement {
             pane_title: None,
             error: None,
             password: false,
+            expanded: None,
         }
     }
 }
@@ -419,6 +421,16 @@ fn password_label(node: &SemanticsNode) -> Option<Cow<'_, str>> {
     Some(named.map_or(Cow::Borrowed("password"), Cow::Borrowed))
 }
 
+/// Whether a control reads as open or as closed: one that says what closing
+/// it does is open now, and one that says what opening it does is closed.
+/// A control that says neither is not a thing a reader opens at all.
+fn expansion(node: &SemanticsNode) -> Option<bool> {
+    node.collapse
+        .is_some()
+        .then_some(true)
+        .or_else(|| node.expand.is_some().then_some(false))
+}
+
 /// An editable field with no name and no text is still a stop for a reader,
 /// which hears "text field" and nothing else; a debug build says so.
 fn unnamed_field_label(node: &SemanticsNode) -> Option<Cow<'_, str>> {
@@ -508,6 +520,7 @@ fn element_for_node(
         pane_title: node.pane_title.clone(),
         error: node.error.clone(),
         password: node.password,
+        expanded: expansion(node),
     }
 }
 
@@ -675,6 +688,7 @@ fn project_canvas_children(
             pane_title: None,
             error: None,
             password: false,
+            expanded: None,
         });
     }
 }
@@ -747,6 +761,36 @@ pub(crate) fn set_text(root: &SemanticsNode, node_id: NodeId, text: &str) -> boo
         Some(action) => action.invoke(text),
         None => false,
     }
+}
+
+/// Opens or closes a control a screen reader asked to open or to close.
+/// Answers whether the control took the ask.
+#[cfg(any(
+    test,
+    all(feature = "desktop-shell", feature = "renderer-wgpu"),
+    all(feature = "android", feature = "renderer-wgpu", target_os = "android")
+))]
+pub(crate) fn set_expanded(root: &SemanticsNode, node_id: NodeId, open: bool) -> bool {
+    let Some(node) = find_semantics_node(root, node_id) else {
+        return false;
+    };
+    let action = if open { &node.expand } else { &node.collapse };
+    match action {
+        Some(action) => action.invoke(),
+        None => false,
+    }
+}
+
+/// The word a reader that carries no open-or-closed flag of its own says
+/// about a control it can open.
+#[cfg(any(
+    test,
+    all(feature = "ios", feature = "renderer-wgpu", target_os = "ios")
+))]
+pub(crate) fn expansion_word(element: &AccessibilityElement) -> Option<&'static str> {
+    element
+        .expanded
+        .map(|open| if open { "expanded" } else { "collapsed" })
 }
 
 /// The value one screen reader step away from the one the control holds now,
@@ -1756,6 +1800,50 @@ mod tests {
             vec!["Search", "Receipts"],
             "the search field is read first"
         );
+    }
+
+    #[test]
+    fn a_control_that_opens_reads_as_closed_and_back() {
+        let mut row = node(
+            2,
+            SemanticsRole::Text {
+                value: "Details".into(),
+            },
+            Vec::new(),
+            None,
+            Vec::new(),
+        );
+        row.expand = Some(cranpose_ui::SemanticsExpand::new(|| true));
+        let root = node(
+            1,
+            SemanticsRole::Layout,
+            Vec::new(),
+            None,
+            vec![row.clone()],
+        );
+        let bounds = HashMap::from_iter([
+            (1, AccessibilityRect::new(0.0, 0.0, 300.0, 200.0)),
+            (2, AccessibilityRect::new(0.0, 0.0, 300.0, 40.0)),
+        ]);
+
+        let closed = project_semantics(&root, &bounds);
+        assert_eq!(
+            closed[0].expanded,
+            Some(false),
+            "a control that opens is closed"
+        );
+        assert_eq!(expansion_word(&closed[0]), Some("collapsed"));
+        assert!(set_expanded(&root, 2, true), "the control takes the ask");
+        assert!(!set_expanded(&root, 2, false), "it has no way to close yet");
+
+        let mut open = row;
+        open.expand = None;
+        open.collapse = Some(cranpose_ui::SemanticsExpand::new(|| true));
+        let root = node(1, SemanticsRole::Layout, Vec::new(), None, vec![open]);
+        let projected = project_semantics(&root, &bounds);
+        assert_eq!(projected[0].expanded, Some(true));
+        assert_eq!(expansion_word(&projected[0]), Some("expanded"));
+        assert!(set_expanded(&root, 2, false));
     }
 
     #[test]

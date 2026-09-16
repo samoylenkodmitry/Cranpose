@@ -192,6 +192,22 @@ The order is the projection's order, and every platform reads it from
 there: the element list on iOS, the virtual node ids on Android, the mirror
 nodes in the page on the web, and the children of the accesskit tree.
 
+## 4f. A control a reader can open and close
+
+An accordion row or a dropdown opens when it is pressed, but a reader has
+no way to know it opens at all, and no word for whether it is open now.
+`Modifier::expand(..)` says what the control does when a reader asks it to
+open, and marks it closed; `Modifier::collapse(..)` says what closing it
+does, and marks it open. An app swaps the two with its own state, the way
+Compose's `expand` and `collapse` actions work.
+
+| Platform | What the reader gets |
+| --- | --- |
+| accesskit | the node marked expanded or not, with an expand or a collapse action |
+| iOS | "expanded" or "collapsed" as the element's value |
+| Android | `ACTION_EXPAND` or `ACTION_COLLAPSE` on the node, which TalkBack offers in its menu |
+| Web | `aria-expanded` on the mirror node |
+
 ## 5. A list a reader can page
 
 A lazy list builds only the rows on screen. A reader that walks the rows one

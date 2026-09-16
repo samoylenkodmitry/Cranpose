@@ -215,6 +215,21 @@ fn drain_accessibility_texts(
     }
 }
 
+fn drain_accessibility_expansions(
+    shell: &mut AppShell<WgpuRenderer>,
+    elements: &[crate::accessibility::AccessibilityElement],
+) {
+    for (virtual_id, open) in crate::android_accessibility::drain_expand_requests() {
+        let Some((node_id, _)) = crate::accessibility::resolve_element_id(elements, virtual_id)
+        else {
+            continue;
+        };
+        crate::accessibility::run_reader_action(shell, |root| {
+            crate::accessibility::set_expanded(root, node_id, open)
+        });
+    }
+}
+
 fn drain_accessibility_scrolls(
     shell: &mut AppShell<WgpuRenderer>,
     elements: &[crate::accessibility::AccessibilityElement],
@@ -2214,6 +2229,7 @@ pub fn run(
             drain_accessibility_values(shell, &accessibility_elements);
             drain_accessibility_texts(shell, &accessibility_elements);
             drain_accessibility_scrolls(shell, &accessibility_elements);
+            drain_accessibility_expansions(shell, &accessibility_elements);
             for event in ime_event_queue.drain() {
                 dispatch_android_ime_event(shell, event);
             }

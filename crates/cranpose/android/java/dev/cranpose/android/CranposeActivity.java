@@ -710,6 +710,7 @@ public class CranposeActivity extends NativeActivity {
     private static native void nativeOnAccessibilityFocus(int virtualViewId);
     private static native void nativeOnAccessibilitySetProgress(int virtualViewId, float value);
     private static native void nativeOnAccessibilitySetText(int virtualViewId, String text);
+    private static native void nativeOnAccessibilityExpand(int virtualViewId, boolean open);
     private static native void nativeOnAccessibilityScroll(int virtualViewId, boolean forward);
 
     private static native void nativeOnAccessibilityStateChanged(boolean enabled);
@@ -771,7 +772,7 @@ public class CranposeActivity extends NativeActivity {
     }
 
     /** Field count of one accessibility record; see android_accessibility_wire.rs. */
-    private static final int ACCESSIBILITY_FIELDS = 35;
+    private static final int ACCESSIBILITY_FIELDS = 36;
 
     /** Separator packing a node's custom action labels into one field. */
     private static final String ACCESSIBILITY_ACTION_SEPARATOR = String.valueOf((char) 0x1f);
@@ -809,7 +810,7 @@ public class CranposeActivity extends NativeActivity {
                         Integer.parseInt(fields[28]), "1".equals(fields[29]),
                         Integer.parseInt(fields[30]), Integer.parseInt(fields[31]),
                         unescapeAccessibility(fields[32]), unescapeAccessibility(fields[33]),
-                        "1".equals(fields[34])));
+                        "1".equals(fields[34]), Integer.parseInt(fields[35])));
             } catch (RuntimeException ignored) {
                 // A malformed record must not make the host Activity inaccessible.
             }
@@ -872,6 +873,7 @@ public class CranposeActivity extends NativeActivity {
         final String paneTitle;
         final String error;
         final boolean password;
+        final int expanded;
 
         CranposeAccessibilityElement(int id, int role, Rect bounds, float centerX,
                 float centerY, boolean clickable, String label, String value,
@@ -881,7 +883,8 @@ public class CranposeActivity extends NativeActivity {
                 float progressMin, float progressMax, boolean scrollable,
                 boolean canScrollForward, boolean canScrollBackward, int scrollParent,
                 int collectionRows, int collectionColumns, boolean changed, int itemRow,
-                int itemColumn, String paneTitle, String error, boolean password) {
+                int itemColumn, String paneTitle, String error, boolean password,
+                int expanded) {
             this.id = id;
             this.role = role;
             this.bounds = bounds;
@@ -914,6 +917,7 @@ public class CranposeActivity extends NativeActivity {
             this.paneTitle = paneTitle;
             this.error = error;
             this.password = password;
+            this.expanded = expanded;
         }
 
         /**
@@ -1058,6 +1062,11 @@ public class CranposeActivity extends NativeActivity {
             }
             if (element.role == 9 && Build.VERSION.SDK_INT >= 28) info.setHeading(true);
             if (element.password) info.setPassword(true);
+            if (element.expanded >= 0) {
+                info.addAction(element.expanded == 1
+                        ? AccessibilityNodeInfo.ACTION_COLLAPSE
+                        : AccessibilityNodeInfo.ACTION_EXPAND);
+            }
             if (Build.VERSION.SDK_INT >= 28 && !element.paneTitle.isEmpty()) info.setPaneTitle(element.paneTitle);
             if (!element.error.isEmpty()) {
                 info.setContentInvalid(true);
@@ -1149,6 +1158,12 @@ public class CranposeActivity extends NativeActivity {
                 CharSequence text = arguments == null ? null
                         : arguments.getCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE);
                 nativeOnAccessibilitySetText(element.id, text == null ? "" : text.toString());
+                return true;
+            }
+            if (element.expanded >= 0 && (action == AccessibilityNodeInfo.ACTION_EXPAND
+                    || action == AccessibilityNodeInfo.ACTION_COLLAPSE)) {
+                nativeOnAccessibilityExpand(element.id,
+                        action == AccessibilityNodeInfo.ACTION_EXPAND);
                 return true;
             }
             if (action == AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS) {

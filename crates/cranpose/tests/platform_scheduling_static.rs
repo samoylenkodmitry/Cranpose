@@ -3374,7 +3374,7 @@ fn every_lazy_list_tells_android_how_many_rows_it_holds() {
     let java_source = crate_source("android/java/dev/cranpose/android/CranposeActivity.java");
     assert!(
         java_source.contains("info.setCollectionInfo(AccessibilityNodeInfo.CollectionInfo.obtain(")
-            && java_source.contains("private static final int ACCESSIBILITY_FIELDS = 35;"),
+            && java_source.contains("private static final int ACCESSIBILITY_FIELDS = 36;"),
         "the Android host hands TalkBack the row count of a list"
     );
 }
@@ -3581,4 +3581,26 @@ fn every_platform_reads_the_traversal_order_from_the_projection() {
             "no bridge sorts the elements again on its own"
         );
     }
+}
+
+#[test]
+fn every_platform_opens_and_closes_a_control() {
+    let java_source = crate_source("android/java/dev/cranpose/android/CranposeActivity.java");
+    assert!(
+        java_source.contains("AccessibilityNodeInfo.ACTION_EXPAND")
+            && java_source.contains("nativeOnAccessibilityExpand(element.id,"),
+        "TalkBack offers the ask and it crosses back"
+    );
+    assert!(
+        crate_source("src/desktop_accessibility.rs").contains("node.set_expanded(expanded);"),
+        "accesskit says whether the control is open"
+    );
+    assert!(
+        crate_source("src/web_accessibility.rs").contains(r#""aria-expanded""#),
+        "the web mirror says whether the control is open"
+    );
+    assert!(
+        crate_source("src/ios_accessibility.rs").contains("accessibility::expansion_word(element)"),
+        "VoiceOver hears the word"
+    );
 }

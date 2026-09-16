@@ -26,6 +26,7 @@ static FOCUS_REQUESTS: OnceLock<Mutex<Vec<i32>>> = OnceLock::new();
 static VALUE_REQUESTS: OnceLock<Mutex<Vec<(i32, f32)>>> = OnceLock::new();
 static TEXT_REQUESTS: OnceLock<Mutex<Vec<(i32, String)>>> = OnceLock::new();
 static SCROLL_REQUESTS: OnceLock<Mutex<Vec<(i32, bool)>>> = OnceLock::new();
+static EXPAND_REQUESTS: OnceLock<Mutex<Vec<(i32, bool)>>> = OnceLock::new();
 static LOOP_WAKER: Mutex<Option<android_activity::AndroidAppWaker>> = Mutex::new(None);
 static PLATFORM_ACCESSIBILITY_ENABLED: AtomicBool = AtomicBool::new(false);
 
@@ -83,6 +84,10 @@ fn scroll_requests() -> &'static Mutex<Vec<(i32, bool)>> {
     SCROLL_REQUESTS.get_or_init(|| Mutex::new(Vec::new()))
 }
 
+fn expand_requests() -> &'static Mutex<Vec<(i32, bool)>> {
+    EXPAND_REQUESTS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
 pub(crate) fn drain_activations() -> Vec<(f32, f32)> {
     std::mem::take(
         &mut *activations()
@@ -130,6 +135,15 @@ pub(crate) fn drain_text_requests() -> Vec<(i32, String)> {
 pub(crate) fn drain_scroll_requests() -> Vec<(i32, bool)> {
     std::mem::take(
         &mut *scroll_requests()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()),
+    )
+}
+
+/// Controls TalkBack asked to open or to close, as virtual view ids.
+pub(crate) fn drain_expand_requests() -> Vec<(i32, bool)> {
+    std::mem::take(
+        &mut *expand_requests()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()),
     )
@@ -338,5 +352,22 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccess
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .push((virtual_id, forward));
+    wake_loop();
+}
+
+/// TalkBack asked a control to open or to close. The frame loop resolves the
+/// control against the live semantics tree, as a custom action does.
+#[doc(hidden)]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccessibilityExpand(
+    _env: EnvUnowned<'_>,
+    _class: JClass<'_>,
+    virtual_id: jint,
+    open: jboolean,
+) {
+    expand_requests()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .push((virtual_id, open));
     wake_loop();
 }

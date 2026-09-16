@@ -204,6 +204,9 @@ fn apply_aria_description(
 /// The checked or selected flag, and whether the control is disabled.
 fn apply_aria_state(node: &HtmlElement, element: &AccessibilityElement) -> Result<(), JsValue> {
     apply_aria_description(node, element)?;
+    if let Some(expanded) = element.expanded {
+        node.set_attribute("aria-expanded", if expanded { "true" } else { "false" })?;
+    }
     if let Some(toggled) = element.toggled {
         node.set_attribute("aria-checked", if toggled { "true" } else { "false" })?;
     }
