@@ -702,6 +702,45 @@ fn spoken_text(element: &AccessibilityElement) -> String {
     parts.join(", ")
 }
 
+/// Whether two publications of one control read the same: the words, a
+/// toggle, a pick and a value.
+#[cfg(any(
+    test,
+    all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"),
+    all(feature = "android", feature = "renderer-wgpu", target_os = "android")
+))]
+fn speaks_the_same(was: &AccessibilityElement, now: &AccessibilityElement) -> bool {
+    spoken_text(was) == spoken_text(now)
+        && was.toggled == now.toggled
+        && was.selected == now.selected
+        && was.progress == now.progress
+}
+
+/// For each element of `current`, whether it was published before and now
+/// says something else: a toggle that flipped, a counter that moved on, a
+/// value a reader just set. A reader speaks the one under its cursor again.
+#[cfg(any(
+    test,
+    all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"),
+    all(feature = "android", feature = "renderer-wgpu", target_os = "android")
+))]
+pub(crate) fn spoken_changes(
+    previous: &[AccessibilityElement],
+    current: &[AccessibilityElement],
+) -> Vec<bool> {
+    current
+        .iter()
+        .map(|element| {
+            previous
+                .iter()
+                .find(|other| {
+                    other.node_id == element.node_id && other.canvas_key == element.canvas_key
+                })
+                .is_some_and(|was| !speaks_the_same(was, element))
+        })
+        .collect()
+}
+
 #[cfg(any(
     test,
     all(feature = "desktop-shell", feature = "renderer-wgpu"),
@@ -1188,6 +1227,26 @@ mod tests {
         let before = vec![live_text(1, "3 receipts")];
         let after = vec![live_text(1, "3 receipts")];
         assert!(live_region_announcements(&before, &after).is_empty());
+    }
+
+    #[test]
+    fn a_toggle_that_flipped_is_a_spoken_change() {
+        let mut before = live_text(1, "Dark theme");
+        before.toggled = Some(false);
+        let mut after = before.clone();
+        after.toggled = Some(true);
+        assert_eq!(spoken_changes(&[before], &[after]), vec![true]);
+    }
+
+    #[test]
+    fn an_element_that_kept_its_words_is_not_a_spoken_change() {
+        let before = live_text(1, "Dark theme");
+        let after = live_text(1, "Dark theme");
+        let fresh = live_text(2, "Fresh");
+        assert_eq!(
+            spoken_changes(&[before], &[after, fresh]),
+            vec![false, false]
+        );
     }
 
     #[test]

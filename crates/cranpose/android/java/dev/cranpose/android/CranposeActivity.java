@@ -770,7 +770,7 @@ public class CranposeActivity extends NativeActivity {
     }
 
     /** Field count of one accessibility record; see android_accessibility_wire.rs. */
-    private static final int ACCESSIBILITY_FIELDS = 29;
+    private static final int ACCESSIBILITY_FIELDS = 30;
 
     /** Separator packing a node's custom action labels into one field. */
     private static final String ACCESSIBILITY_ACTION_SEPARATOR = String.valueOf((char) 0x1f);
@@ -805,7 +805,7 @@ public class CranposeActivity extends NativeActivity {
                         Float.parseFloat(fields[22]), "1".equals(fields[23]),
                         "1".equals(fields[24]), "1".equals(fields[25]),
                         Integer.parseInt(fields[26]), Integer.parseInt(fields[27]),
-                        Integer.parseInt(fields[28])));
+                        Integer.parseInt(fields[28]), "1".equals(fields[29])));
             } catch (RuntimeException ignored) {
                 // A malformed record must not make the host Activity inaccessible.
             }
@@ -862,6 +862,7 @@ public class CranposeActivity extends NativeActivity {
         final int scrollParent;
         final int collectionRows;
         final int collectionColumns;
+        final boolean changed;
 
         CranposeAccessibilityElement(int id, int role, Rect bounds, float centerX,
                 float centerY, boolean clickable, String label, String value,
@@ -870,7 +871,7 @@ public class CranposeActivity extends NativeActivity {
                 boolean focused, boolean adjustable, float progressCurrent,
                 float progressMin, float progressMax, boolean scrollable,
                 boolean canScrollForward, boolean canScrollBackward, int scrollParent,
-                int collectionRows, int collectionColumns) {
+                int collectionRows, int collectionColumns, boolean changed) {
             this.id = id;
             this.role = role;
             this.bounds = bounds;
@@ -897,6 +898,7 @@ public class CranposeActivity extends NativeActivity {
             this.scrollParent = scrollParent;
             this.collectionRows = collectionRows;
             this.collectionColumns = collectionColumns;
+            this.changed = changed;
         }
 
         /**
@@ -938,6 +940,7 @@ public class CranposeActivity extends NativeActivity {
             this.elements = elements;
             host.sendAccessibilityEvent(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED);
             followAppFocus();
+            announceChanges();
         }
 
         /**
@@ -952,6 +955,22 @@ public class CranposeActivity extends NativeActivity {
                 focusedId = element.id;
                 sendEvent(element.id, AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUSED);
                 return;
+            }
+        }
+
+        /**
+         * Tells TalkBack which controls now say something else, so the one
+         * under its cursor is spoken again: a toggle that flipped, a counter
+         * that moved on, a value a reader just set.
+         */
+        private void announceChanges() {
+            for (CranposeAccessibilityElement element : elements) {
+                if (!element.changed) continue;
+                AccessibilityEvent event = AccessibilityEvent.obtain(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED);
+                event.setContentChangeTypes(AccessibilityEvent.CONTENT_CHANGE_TYPE_CONTENT_DESCRIPTION
+                        | AccessibilityEvent.CONTENT_CHANGE_TYPE_TEXT
+                        | AccessibilityEvent.CONTENT_CHANGE_TYPE_STATE_DESCRIPTION);
+                send(element.id, event);
             }
         }
 
@@ -1114,8 +1133,11 @@ public class CranposeActivity extends NativeActivity {
         }
 
         private void sendEvent(int id, int type) {
+            send(id, AccessibilityEvent.obtain(type));
+        }
+
+        private void send(int id, AccessibilityEvent event) {
             if (!host.isShown()) return;
-            AccessibilityEvent event = AccessibilityEvent.obtain(type);
             event.setPackageName(host.getContext().getPackageName());
             event.setSource(host, id);
             host.getParent().requestSendAccessibilityEvent(host, event);

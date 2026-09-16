@@ -215,6 +215,20 @@ already receives.
 | Android | TalkBack's back gesture, which is the system back key | the dialog on top, then the app's `BackHandler` |
 | Web | Escape on the keyboard, with focus on the mirror or the canvas | `AppShell::dismiss_top_modal` |
 
+## 7. A control that changes under the cursor
+
+A reader that activates a toggle, or sits on a counter while the app moves
+it on, needs to hear the new state without moving its cursor. Each publish
+compares every control with its last publication; one that now says
+something else is marked as changed.
+
+| Platform | What the change does |
+| --- | --- |
+| accesskit | The tree update carries the new value; the reader speaks it on its own. |
+| iOS | A layout change names the element under the VoiceOver cursor, which reads it again. |
+| Android | A content-changed event with the text, description and state change types goes out for the control, and TalkBack speaks the one under its cursor. |
+| Web | The mirror node keeps its focus and takes the new label; a reader speaks it on the next move. Text that has to be heard at once is a live region. |
+
 ## What the built-in widgets say on their own
 
 An app gets this with no code of its own:

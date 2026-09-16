@@ -3374,7 +3374,7 @@ fn every_lazy_list_tells_android_how_many_rows_it_holds() {
     let java_source = crate_source("android/java/dev/cranpose/android/CranposeActivity.java");
     assert!(
         java_source.contains("info.setCollectionInfo(AccessibilityNodeInfo.CollectionInfo.obtain(")
-            && java_source.contains("private static final int ACCESSIBILITY_FIELDS = 29;"),
+            && java_source.contains("private static final int ACCESSIBILITY_FIELDS = 30;"),
         "the Android host hands TalkBack the row count of a list"
     );
 }
@@ -3393,5 +3393,29 @@ fn every_platform_lets_a_reader_find_an_empty_text_field() {
         ios_source
             .contains("!element.label.is_empty() || element.role == AccessibilityRole::TextField"),
         "VoiceOver stops on an empty text field"
+    );
+}
+
+#[test]
+fn every_platform_speaks_a_control_that_changed_under_the_cursor() {
+    let ios_source = crate_source("src/ios_accessibility.rs");
+    assert!(
+        ios_source.contains("fn respeak_under_cursor(&self, changed: &[bool]) {")
+            && ios_source
+                .contains("let changed = accessibility::spoken_changes(&self.snapshot, &next);"),
+        "VoiceOver reads the element under its cursor again when its words changed"
+    );
+
+    let java_source = crate_source("android/java/dev/cranpose/android/CranposeActivity.java");
+    assert!(
+        java_source.contains("| AccessibilityEvent.CONTENT_CHANGE_TYPE_STATE_DESCRIPTION);")
+            && java_source.contains("private void announceChanges() {"),
+        "TalkBack gets a content-changed event for a control that says something new"
+    );
+
+    let bridge_source = crate_source("src/android_accessibility.rs");
+    assert!(
+        bridge_source.contains("let changed = accessibility::spoken_changes(previous, &elements);"),
+        "the Android bridge marks the controls that changed"
     );
 }

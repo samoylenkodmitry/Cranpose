@@ -200,6 +200,7 @@ pub(crate) struct IosAccessibilityBridge {
     wake_proxy: EventLoopProxy,
     published_once: bool,
     focused_element: Option<i32>,
+    reader_cursor: Option<i32>,
 }
 
 impl IosAccessibilityBridge {
@@ -218,6 +219,7 @@ impl IosAccessibilityBridge {
             wake_proxy: event_proxy,
             published_once: false,
             focused_element: None,
+            reader_cursor: None,
         })
     }
 
@@ -255,9 +257,12 @@ impl IosAccessibilityBridge {
             let opened_dialog = opened_dialog(&self.snapshot, &next, &next_ids);
             self.publish_container(&next_ids, opened_dialog, mtm);
         }
+        let changed = accessibility::spoken_changes(&self.snapshot, &next);
         self.snapshot = next;
         self.snapshot_ids = next_ids;
-        self.follow_app_focus();
+        if !self.follow_app_focus() {
+            self.respeak_under_cursor(&changed);
+        }
     }
 
     /// Hands VoiceOver text to read out: what the app asked for through
@@ -287,7 +292,7 @@ impl IosAccessibilityBridge {
 
     /// Moves the VoiceOver cursor onto the control the app focused, so a
     /// focus move from the keyboard or from the app reaches the reader.
-    fn follow_app_focus(&mut self) {
+    fn follow_app_focus(&mut self) -> bool {
         let focused = self
             .snapshot_ids
             .iter()
@@ -295,14 +300,33 @@ impl IosAccessibilityBridge {
             .find(|(_, element)| element.focused)
             .map(|(id, _)| *id);
         if focused == self.focused_element {
-            return;
+            return false;
         }
         self.focused_element = focused;
         let Some(element_id) = focused else {
+            return false;
+        };
+        self.name_to_reader(element_id)
+    }
+
+    /// Speaks the control under the VoiceOver cursor again when its words
+    /// changed: a toggle that flipped, a counter that moved on. VoiceOver
+    /// reads an element again when a layout change names it.
+    fn respeak_under_cursor(&self, changed: &[bool]) {
+        let Some(element_id) = self.reader_cursor else {
             return;
         };
+        let index = self.snapshot_ids.iter().position(|id| *id == element_id);
+        if index.is_some_and(|index| changed.get(index).copied().unwrap_or(false)) {
+            self.name_to_reader(element_id);
+        }
+    }
+
+    /// Posts a layout change that names one element, which moves the
+    /// VoiceOver cursor onto it and reads it out.
+    fn name_to_reader(&self, element_id: i32) -> bool {
         let Some(native) = self.native_elements.get(&element_id) else {
-            return;
+            return false;
         };
         let argument: &AnyObject = native.as_ref();
         // SAFETY: the notification takes the element to move the cursor to,
@@ -313,6 +337,7 @@ impl IosAccessibilityBridge {
                 Some(argument),
             );
         }
+        true
     }
 
     /// The element a virtual id stands for in the snapshot last published.
@@ -334,6 +359,7 @@ impl IosAccessibilityBridge {
             else {
                 continue;
             };
+            self.reader_cursor = Some(element_id);
             if !focusable {
                 continue;
             }

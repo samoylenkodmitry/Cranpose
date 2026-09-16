@@ -5,7 +5,11 @@ use crate::{
 
 const ACTION_SEPARATOR: char = '\u{1f}';
 
-pub(crate) fn encode_elements(elements: &[AccessibilityElement], density: f32) -> String {
+pub(crate) fn encode_elements(
+    elements: &[AccessibilityElement],
+    changed: &[bool],
+    density: f32,
+) -> String {
     let density = density.max(f32::EPSILON);
     let ids = element_ids(elements);
     let parents = scroll_parent_ids(elements, &ids);
@@ -13,7 +17,8 @@ pub(crate) fn encode_elements(elements: &[AccessibilityElement], density: f32) -
         .iter()
         .zip(ids)
         .zip(parents)
-        .map(|((element, id), parent)| {
+        .enumerate()
+        .map(|(index, ((element, id), parent))| {
             let role = match element.role {
                 AccessibilityRole::Button => 1,
                 AccessibilityRole::StaticText => 2,
@@ -36,7 +41,7 @@ pub(crate) fn encode_elements(elements: &[AccessibilityElement], density: f32) -
             let progress = element.progress;
             let scroll = element.vertical_scroll.or(element.horizontal_scroll);
             format!(
-                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                 id,
                 role,
                 (element.bounds.x * density).round() as i32,
@@ -66,6 +71,7 @@ pub(crate) fn encode_elements(elements: &[AccessibilityElement], density: f32) -
                 parent,
                 element.collection.map_or(0, |collection| collection.rows),
                 element.collection.map_or(0, |collection| collection.columns),
+                i32::from(changed.get(index).copied().unwrap_or(false)),
             )
         })
         .collect::<Vec<_>>()
@@ -141,11 +147,11 @@ mod tests {
             element_with(5, Some(1)),
         ];
 
-        let payload = encode_elements(&elements, 2.0);
+        let payload = encode_elements(&elements, &[], 2.0);
         let records: Vec<_> = payload.split('\n').collect();
         assert_eq!(records.len(), 2);
         for record in &records {
-            assert_eq!(record.split('\t').count(), 29, "record: {record}");
+            assert_eq!(record.split('\t').count(), 30, "record: {record}");
         }
 
         let fields: Vec<_> = records[0].split('\t').collect();
@@ -185,7 +191,7 @@ mod tests {
             },
         ];
 
-        let payload = encode_elements(&elements, 1.0);
+        let payload = encode_elements(&elements, &[], 1.0);
         let records: Vec<_> = payload.split('\n').collect();
         let focused: Vec<_> = records[0].split('\t').collect();
         let other: Vec<_> = records[1].split('\t').collect();
@@ -226,7 +232,7 @@ mod tests {
             save_button(8),
         ];
 
-        let payload = encode_elements(&elements, 1.0);
+        let payload = encode_elements(&elements, &[], 1.0);
         let records: Vec<_> = payload.split('\n').collect();
         let list: Vec<_> = records[0].split('\t').collect();
         let row: Vec<_> = records[1].split('\t').collect();
@@ -258,7 +264,7 @@ mod tests {
             save_button(8),
         ];
 
-        let payload = encode_elements(&elements, 1.0);
+        let payload = encode_elements(&elements, &[], 1.0);
         let records: Vec<_> = payload.split('\n').collect();
         let top: Vec<_> = records[0].split('\t').collect();
         let bottom: Vec<_> = records[1].split('\t').collect();
@@ -286,7 +292,7 @@ mod tests {
             save_button(5),
         ];
 
-        let payload = encode_elements(&elements, 1.0);
+        let payload = encode_elements(&elements, &[], 1.0);
         let records: Vec<_> = payload.split('\n').collect();
         let slider: Vec<_> = records[0].split('\t').collect();
         let button: Vec<_> = records[1].split('\t').collect();
@@ -311,7 +317,7 @@ mod tests {
             columns: 1,
         });
 
-        let payload = encode_elements(&[list, save_button(8)], 1.0);
+        let payload = encode_elements(&[list, save_button(8)], &[], 1.0);
         let records: Vec<_> = payload.split('\n').collect();
         let list: Vec<_> = records[0].split('\t').collect();
         let button: Vec<_> = records[1].split('\t').collect();
@@ -322,5 +328,22 @@ mod tests {
             "the list says its rows and columns"
         );
         assert_eq!((button[27], button[28]), ("0", "0"), "a button is no list");
+    }
+
+    #[test]
+    fn the_record_flags_a_control_that_says_something_new() {
+        let flagged = encode_elements(&[save_button(8)], &[true], 1.0);
+        let quiet = encode_elements(&[save_button(8)], &[], 1.0);
+
+        assert_eq!(
+            flagged.split('\t').nth(29),
+            Some("1"),
+            "the button says something new"
+        );
+        assert_eq!(
+            quiet.split('\t').nth(29),
+            Some("0"),
+            "the button reads as before"
+        );
     }
 }

@@ -183,8 +183,9 @@ pub(crate) fn sync(
     let Some(elements) = elements else {
         return Ok(());
     };
+    let changed = accessibility::spoken_changes(previous, &elements);
     *previous = elements;
-    let payload = encode_elements(previous, density);
+    let payload = encode_elements(previous, &changed, density);
     with_android_activity_env(app, |env, activity| {
         let payload = env.new_string(payload).map_err(|error| {
             clear_pending_android_jni_exception(env);
