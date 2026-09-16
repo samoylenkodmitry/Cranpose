@@ -29,6 +29,10 @@ A control drawn on a canvas has no layout node of its own. `canvas_children`
 gives each drawn control its own bounds, label, role and actions, so a reader
 reaches a ring segment the same way it reaches a button.
 
+A debug build says so when a control takes a click or text and has no name:
+the log carries one `accessibility: control <id> takes a click or text but has
+no label` line per node. A release build stays quiet.
+
 ## 2. Focus
 
 ```rust
@@ -128,6 +132,22 @@ value moves freely, and a reader's step is then a tenth of the range.
 The value goes back through `set_progress` on the live semantics tree, so a
 stale published snapshot cannot move the wrong control.
 
+## 4b. An action a reader picks by name
+
+A row that dismisses on a swipe, a text with three links: a person who cannot
+see the screen cannot make the swipe or aim at one word. `config.custom_actions`
+is Compose's `customActions`; each entry has a label and a handler, and every
+platform lists it under the control.
+
+| Platform | Where it shows | How it runs |
+| --- | --- | --- |
+| accesskit | the node's custom actions | `Action::CustomAction` with the index |
+| iOS | VoiceOver's actions rotor, as `UIAccessibilityCustomAction` | `performAccessibilityCustomAction:` on the element, matched by name |
+| Android | the node's actions, as TalkBack's actions menu | `nativeOnAccessibilityCustomAction` with the index |
+| Web | one `<button>` per action right after the control, "Dismiss, Milk" | a click on that button |
+
+`SwipeToDismiss` and `LinkedText` fill this on their own.
+
 ## 5. A list a reader can page
 
 A lazy list builds only the rows on screen. A reader that walks the rows one
@@ -160,7 +180,7 @@ pages its own list. The move runs through `scroll_by` on the live tree.
 | --- | --- | --- |
 | accesskit | `Role::ScrollView` with the offset and its range | `Action::ScrollDown`, `ScrollUp`, `ScrollRight`, `ScrollLeft` |
 | iOS | nothing; the container stays out of the cursor's way | a VoiceOver three-finger swipe, through `accessibilityScroll:` on the focused element |
-| Android | `isScrollable` with `ACTION_SCROLL_FORWARD` and `BACKWARD` as the offset allows | TalkBack's page gesture on the node |
+| Android | `isScrollable` with `ACTION_SCROLL_FORWARD` and `BACKWARD` as the offset allows; each row sits under its list in the virtual view tree, and a list with no text is not focusable | TalkBack's page gesture on a row, which reaches the list above it |
 | Web | nothing on the mirror | Page Down and Page Up on the focused mirrored element |
 
 ## 6. A way out of a dialog
@@ -171,8 +191,11 @@ has one gesture for this, and Cranpose routes all of them to the same place:
 the innermost open modal, the one the platform back gesture closes.
 
 `Dialog` registers itself on the modal stack while it is open. Nothing else is
-needed: an app that shows a `Dialog` gets all four ways out below. An app that
-handles back on its own does so through `BackHandler`, as on Android.
+needed: an app that shows a `Dialog` gets all four ways out below. With no
+dialog open, the same gesture closes the dismissable popup on top instead, a
+dropdown or a menu shown through `PopupDismissable`, the way an outside tap
+would. An app that handles back on its own does so through `BackHandler`, as
+on Android.
 
 | Platform | Gesture | Where it goes |
 | --- | --- | --- |

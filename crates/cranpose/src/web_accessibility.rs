@@ -15,6 +15,10 @@ fn apply_role_and_state(node: &HtmlElement, element: &AccessibilityElement) -> R
         None => aria_role(element.role),
     };
     node.set_attribute("role", role)?;
+    let scrolls = element.vertical_scroll.is_some() || element.horizontal_scroll.is_some();
+    if element.label.is_empty() && scrolls {
+        node.set_attribute("aria-hidden", "true")?;
+    }
     apply_role_extras(node, element)?;
     apply_progress(node, element)?;
     apply_aria_state(node, element)
@@ -211,14 +215,25 @@ fn tab_index(element: &AccessibilityElement) -> &'static str {
 
 /// Puts the mirrored element over the control it stands for, so a reader's
 /// cursor and a touch exploration land in the same place.
-fn place_node(
-    node: &HtmlElement,
-    element: &AccessibilityElement,
+/// Where the canvas sits on the page and how its logical pixels map onto it.
+struct Placement {
     left: f64,
     top: f64,
     scale_x: f64,
     scale_y: f64,
+}
+
+fn place_node(
+    node: &HtmlElement,
+    element: &AccessibilityElement,
+    placement: &Placement,
 ) -> Result<(), JsValue> {
+    let Placement {
+        left,
+        top,
+        scale_x,
+        scale_y,
+    } = *placement;
     let style = node.style();
     style.set_property("position", "fixed")?;
     style.set_property(
@@ -318,6 +333,41 @@ fn attach_click_listener(
     Ok(())
 }
 
+/// Runs the custom action behind an action button, on the live tree.
+fn attach_action_listener(
+    root: &HtmlElement,
+    app: Rc<RefCell<AppShell<WgpuRenderer>>>,
+    node_ids: Rc<RefCell<HashMap<i32, cranpose_core::NodeId>>>,
+) -> Result<(), JsValue> {
+    let click = Closure::wrap(Box::new(move |event: MouseEvent| {
+        let Some(target) = event
+            .target()
+            .and_then(|target| target.dyn_into::<Element>().ok())
+        else {
+            return;
+        };
+        let Some(index) = target
+            .get_attribute("data-cranpose-action")
+            .and_then(|value| value.parse::<usize>().ok())
+        else {
+            return;
+        };
+        let Some(node_id) = node_id_attribute(&target, "data-cranpose-action-node", &node_ids)
+        else {
+            return;
+        };
+        let canvas_key = target
+            .get_attribute("data-cranpose-canvas")
+            .and_then(|value| value.parse::<u64>().ok());
+        on_live_tree(&app, |root| {
+            accessibility::perform_custom_action(root, node_id, canvas_key, index)
+        });
+    }) as Box<dyn FnMut(_)>);
+    root.add_event_listener_with_callback("click", click.as_ref().unchecked_ref())?;
+    click.forget();
+    Ok(())
+}
+
 /// Moves the value of an adjustable control with the arrow keys, the way a
 /// screen reader and a keyboard user both expect of a slider.
 fn attach_key_listener(
@@ -408,6 +458,7 @@ impl WebAccessibilityBridge {
             Rc::new(RefCell::new(HashMap::new()));
         attach_focus_listener(&root, Rc::clone(&node_ids))?;
         attach_key_listener(&root, Rc::clone(&app), Rc::clone(&node_ids))?;
+        attach_action_listener(&root, Rc::clone(&app), Rc::clone(&node_ids))?;
         attach_page_listener(&root, app, Rc::clone(&node_ids))?;
 
         Ok(Self {
@@ -482,6 +533,12 @@ impl WebAccessibilityBridge {
         let viewport = shell.viewport_size();
         let scale_x = canvas_rect.width() / viewport.0.max(1.0) as f64;
         let scale_y = canvas_rect.height() / viewport.1.max(1.0) as f64;
+        let placement = Placement {
+            left: canvas_rect.left(),
+            top: canvas_rect.top(),
+            scale_x,
+            scale_y,
+        };
 
         let ids = accessibility::element_ids(&elements);
         let pages = page_targets(&ids, &elements);
@@ -500,18 +557,43 @@ impl WebAccessibilityBridge {
             }
             node.set_attribute("tabindex", tab_index(&element))?;
             self.node_ids.borrow_mut().insert(id, element.node_id);
-            place_node(
-                &node,
-                &element,
-                canvas_rect.left(),
-                canvas_rect.top(),
-                scale_x,
-                scale_y,
-            )?;
+            place_node(&node, &element, &placement)?;
             self.root.append_child(&node)?;
+            self.append_action_buttons(document, &element, id, &placement)?;
             self.follow_app_focus(&node, &element, id)?;
         }
         self.settle_focus(held, app_focus_before)
+    }
+
+    /// One button per custom action, over the control it belongs to, so a
+    /// reader lists "Dismiss, Milk" right after "Milk" and a keyboard reaches
+    /// it with Tab. ARIA has no actions menu of its own.
+    fn append_action_buttons(
+        &self,
+        document: &Document,
+        element: &AccessibilityElement,
+        id: i32,
+        placement: &Placement,
+    ) -> Result<(), JsValue> {
+        for (index, action) in element.custom_actions.iter().enumerate() {
+            let button = document
+                .create_element("button")?
+                .dyn_into::<HtmlElement>()?;
+            let label = if element.label.is_empty() {
+                action.clone()
+            } else {
+                format!("{action}, {}", element.label)
+            };
+            button.set_attribute("aria-label", &label)?;
+            button.set_attribute("data-cranpose-action", &index.to_string())?;
+            button.set_attribute("data-cranpose-action-node", &id.to_string())?;
+            if let Some(key) = element.canvas_key {
+                button.set_attribute("data-cranpose-canvas", &key.to_string())?;
+            }
+            place_node(&button, element, placement)?;
+            self.root.append_child(&button)?;
+        }
+        Ok(())
     }
 
     /// Forgets an app focus that left, and puts the browser's focus back on
