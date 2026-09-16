@@ -32,7 +32,7 @@ pub(crate) fn encode_elements(elements: &[AccessibilityElement], density: f32) -
                 .collect::<Vec<_>>()
                 .join(&ACTION_SEPARATOR.to_string());
             format!(
-                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                 id,
                 role,
                 (element.bounds.x * density).round() as i32,
@@ -50,6 +50,8 @@ pub(crate) fn encode_elements(elements: &[AccessibilityElement], density: f32) -
                 tristate(element.toggled),
                 i32::from(element.enabled),
                 actions,
+                i32::from(element.focusable),
+                i32::from(element.focused),
             )
         })
         .collect::<Vec<_>>()
@@ -89,7 +91,7 @@ mod tests {
     }
 
     #[test]
-    fn every_encoded_record_carries_the_seventeen_fields_java_parses() {
+    fn every_encoded_record_carries_the_nineteen_fields_java_parses() {
         let elements = vec![
             AccessibilityElement {
                 node_id: 4,
@@ -110,7 +112,7 @@ mod tests {
         let records: Vec<_> = payload.split('\n').collect();
         assert_eq!(records.len(), 2);
         for record in &records {
-            assert_eq!(record.split('\t').count(), 17, "record: {record}");
+            assert_eq!(record.split('\t').count(), 19, "record: {record}");
         }
 
         let fields: Vec<_> = records[0].split('\t').collect();
@@ -123,5 +125,41 @@ mod tests {
         assert_eq!(fields[14], "1", "toggled on");
         assert_eq!(fields[15], "1", "enabled by default");
         assert_eq!(fields[16], format!("Pause{ACTION_SEPARATOR}Resume"));
+        assert_eq!(fields[17], "0", "this element registered no focus target");
+        assert_eq!(fields[18], "0", "and focus does not sit on it");
+    }
+
+    #[test]
+    fn the_record_carries_whether_focus_can_land_on_a_control_and_whether_it_has() {
+        let elements = vec![
+            AccessibilityElement {
+                node_id: 4,
+                label: "Name".into(),
+                bounds: AccessibilityRect::new(0.0, 0.0, 30.0, 40.0),
+                role: AccessibilityRole::TextField,
+                focusable: true,
+                focused: true,
+                ..AccessibilityElement::default()
+            },
+            AccessibilityElement {
+                node_id: 5,
+                label: "Save".into(),
+                bounds: AccessibilityRect::new(0.0, 50.0, 30.0, 40.0),
+                role: AccessibilityRole::Button,
+                clickable: true,
+                focusable: true,
+                ..AccessibilityElement::default()
+            },
+        ];
+
+        let payload = encode_elements(&elements, 1.0);
+        let records: Vec<_> = payload.split('\n').collect();
+        let focused: Vec<_> = records[0].split('\t').collect();
+        let other: Vec<_> = records[1].split('\t').collect();
+
+        assert_eq!(focused[17], "1");
+        assert_eq!(focused[18], "1", "TalkBack follows the app onto this one");
+        assert_eq!(other[17], "1", "the button takes focus too");
+        assert_eq!(other[18], "0", "but focus does not sit on it");
     }
 }

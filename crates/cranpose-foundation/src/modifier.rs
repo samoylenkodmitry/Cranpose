@@ -683,6 +683,21 @@ pub enum SemanticsWidgetRole {
     Dialog,
 }
 
+/// How urgently a screen reader reads a node whose text changed on its own.
+///
+/// This is Compose's `LiveRegionMode` (`Modifier.semantics { liveRegion =
+/// LiveRegionMode.Polite }`). A node without it stays silent until the reader
+/// lands on it, which is wrong for a timer, a countdown, a status line, or an
+/// error that appears next to a text field: a blind user hears nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum LiveRegionMode {
+    /// Read the new text once the reader finishes what it says now.
+    Polite,
+    /// Cut off what the reader says now and read the new text at once. For
+    /// text a user must hear immediately, such as an error that stops them.
+    Assertive,
+}
+
 /// A screen-reader action that is not a click, e.g. Compose's
 /// `customActions = listOf(CustomAccessibilityAction("Pause") { … })`.
 ///
@@ -882,6 +897,9 @@ pub struct SemanticsConfiguration {
     /// Whether this node takes over the screen: everything outside it is
     /// inert, and a screen reader keeps its traversal inside.
     pub is_modal: bool,
+    /// Compose's `liveRegion`. When set, a screen reader reads this node again
+    /// whenever its text changes, without the user moving to it.
+    pub live_region: Option<LiveRegionMode>,
 }
 
 impl Default for SemanticsConfiguration {
@@ -900,6 +918,7 @@ impl Default for SemanticsConfiguration {
             custom_actions: Vec::new(),
             canvas_children: Vec::new(),
             is_modal: false,
+            live_region: None,
         }
     }
 }
@@ -935,6 +954,9 @@ impl SemanticsConfiguration {
         self.canvas_children
             .extend(other.canvas_children.iter().cloned());
         self.is_modal |= other.is_modal;
+        if let Some(live_region) = other.live_region {
+            self.live_region = Some(live_region);
+        }
     }
 
     /// Whether a screen reader should offer activation. A named click label is

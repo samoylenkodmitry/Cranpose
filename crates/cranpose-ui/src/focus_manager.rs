@@ -55,6 +55,13 @@ pub fn local_focus_manager() -> CompositionLocal<FocusManager> {
     })
 }
 
+/// Moves focus onto `node_id` when it holds a focus target. A platform's
+/// accessibility layer calls this when a screen reader lands on a control, so
+/// the app's focus follows the reader's.
+pub fn request_focus_from_platform(node_id: NodeId) -> bool {
+    focus_dispatch::request_focus_in_context(node_id)
+}
+
 fn next_target(direction: FocusDirection) -> Option<NodeId> {
     with_focus_order(|order| {
         if order.is_empty() {

@@ -612,9 +612,15 @@ fn control_action(kind: ControlKind, state: MutableState<ControlState>) -> Modif
                 state.set(state.get().toggled(next))
             })
         }
-        ControlKind::PushButton => {
-            Modifier::empty().clickable(move |_position| state.set(state.get().pressed_once()))
-        }
+        ControlKind::PushButton => Modifier::empty().clickable(move |_position| {
+            let next = state.get().pressed_once();
+            state.set(next);
+            cranpose_ui::announce(format!(
+                "{}, {}",
+                ControlKind::PushButton.title(),
+                next.label(ControlKind::PushButton)
+            ));
+        }),
         ControlKind::Slider | ControlKind::VolumeDial => Modifier::empty(),
     };
     let reading = current.label(kind);

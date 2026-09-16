@@ -17,12 +17,13 @@ use objc2::{
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use objc2_foundation::{NSArray, NSObject, NSObjectProtocol, NSString};
 use objc2_ui_kit::{
-    NSObjectUIAccessibility, NSObjectUIAccessibilityContainer, UIAccessibilityElement,
-    UIAccessibilityIdentification, UIAccessibilityLayoutChangedNotification,
-    UIAccessibilityPostNotification, UIAccessibilityScreenChangedNotification,
-    UIAccessibilityTraitButton, UIAccessibilityTraitHeader, UIAccessibilityTraitImage,
-    UIAccessibilityTraitNone, UIAccessibilityTraitNotEnabled, UIAccessibilityTraitSelected,
-    UIAccessibilityTraitStaticText, UIView,
+    NSObjectUIAccessibility, NSObjectUIAccessibilityContainer,
+    UIAccessibilityAnnouncementNotification, UIAccessibilityElement, UIAccessibilityIdentification,
+    UIAccessibilityLayoutChangedNotification, UIAccessibilityPostNotification,
+    UIAccessibilityScreenChangedNotification, UIAccessibilityTraitButton,
+    UIAccessibilityTraitHeader, UIAccessibilityTraitImage, UIAccessibilityTraitNone,
+    UIAccessibilityTraitNotEnabled, UIAccessibilityTraitSelected, UIAccessibilityTraitStaticText,
+    UIView,
 };
 use winit::event_loop::EventLoopProxy;
 
@@ -35,6 +36,7 @@ struct AccessibilityElementIvars {
     element_id: i32,
     actionable: Cell<bool>,
     pending_activations: Rc<RefCell<Vec<i32>>>,
+    pending_focus: Rc<RefCell<Vec<i32>>>,
     wake_proxy: EventLoopProxy,
 }
 
@@ -62,6 +64,15 @@ define_class!(
             self.ivars().wake_proxy.wake_up();
             Bool::YES
         }
+
+        #[unsafe(method(accessibilityElementDidBecomeFocused))]
+        fn accessibility_element_did_become_focused(&self) {
+            self.ivars()
+                .pending_focus
+                .borrow_mut()
+                .push(self.ivars().element_id);
+            self.ivars().wake_proxy.wake_up();
+        }
     }
 );
 
@@ -70,6 +81,7 @@ impl NativeAccessibilityElement {
         container: &AnyObject,
         element_id: i32,
         pending_activations: Rc<RefCell<Vec<i32>>>,
+        pending_focus: Rc<RefCell<Vec<i32>>>,
         wake_proxy: EventLoopProxy,
         mtm: MainThreadMarker,
     ) -> Retained<Self> {
@@ -77,6 +89,7 @@ impl NativeAccessibilityElement {
             element_id,
             actionable: Cell::new(false),
             pending_activations,
+            pending_focus,
             wake_proxy,
         });
         // SAFETY: `container` is the retained winit root UIView and implements
@@ -95,8 +108,10 @@ pub(crate) struct IosAccessibilityBridge {
     snapshot: Vec<AccessibilityElement>,
     snapshot_ids: Vec<i32>,
     pending_activations: Rc<RefCell<Vec<i32>>>,
+    pending_focus: Rc<RefCell<Vec<i32>>>,
     wake_proxy: EventLoopProxy,
     published_once: bool,
+    focused_element: Option<i32>,
 }
 
 impl IosAccessibilityBridge {
@@ -112,8 +127,10 @@ impl IosAccessibilityBridge {
             snapshot: Vec::new(),
             snapshot_ids: Vec::new(),
             pending_activations: Rc::new(RefCell::new(Vec::new())),
+            pending_focus: Rc::new(RefCell::new(Vec::new())),
             wake_proxy: event_proxy,
             published_once: false,
+            focused_element: None,
         })
     }
 
@@ -123,6 +140,7 @@ impl IosAccessibilityBridge {
         R::Error: Debug,
     {
         let next = accessibility::snapshot(shell);
+        self.speak(&next);
         if next == self.snapshot {
             return;
         }
@@ -151,6 +169,90 @@ impl IosAccessibilityBridge {
         }
         self.snapshot = next;
         self.snapshot_ids = next_ids;
+        self.follow_app_focus();
+    }
+
+    /// Hands VoiceOver text to read out: what the app asked for through
+    /// [`cranpose_ui::Announcer`], and the text of any live region that
+    /// changed. iOS has no live region of its own, so the change is read as an
+    /// announcement. VoiceOver drops these when it is off, so the call costs
+    /// nothing then.
+    fn speak(&self, next: &[AccessibilityElement]) {
+        let mut announcements = accessibility::drain_app_announcements();
+        announcements.extend(accessibility::live_region_announcements(
+            &self.snapshot,
+            next,
+        ));
+        for announcement in announcements {
+            let text = NSString::from_str(&announcement.text);
+            let argument: &AnyObject = text.as_ref();
+            // SAFETY: the announcement notification takes the string to read,
+            // and `text` lives until the call returns.
+            unsafe {
+                UIAccessibilityPostNotification(
+                    UIAccessibilityAnnouncementNotification,
+                    Some(argument),
+                );
+            }
+        }
+    }
+
+    /// Moves the VoiceOver cursor onto the control the app focused, so a
+    /// focus move from the keyboard or from the app reaches the reader.
+    fn follow_app_focus(&mut self) {
+        let focused = self
+            .snapshot_ids
+            .iter()
+            .zip(&self.snapshot)
+            .find(|(_, element)| element.focused)
+            .map(|(id, _)| *id);
+        if focused == self.focused_element {
+            return;
+        }
+        self.focused_element = focused;
+        let Some(element_id) = focused else {
+            return;
+        };
+        let Some(native) = self.native_elements.get(&element_id) else {
+            return;
+        };
+        let argument: &AnyObject = native.as_ref();
+        // SAFETY: the notification takes the element to move the cursor to,
+        // and `native` is a retained accessibility element of this container.
+        unsafe {
+            UIAccessibilityPostNotification(
+                UIAccessibilityLayoutChangedNotification,
+                Some(argument),
+            );
+        }
+    }
+
+    /// The element a virtual id stands for in the snapshot last published.
+    fn element_for(&self, element_id: i32) -> Option<&AccessibilityElement> {
+        self.snapshot_ids
+            .iter()
+            .position(|id| *id == element_id)
+            .and_then(|index| self.snapshot.get(index))
+    }
+
+    /// Hands focus to the app when VoiceOver lands its cursor on an element.
+    pub(crate) fn drain_focus(&mut self) -> bool {
+        let pending = self.pending_focus.take();
+        let mut moved = false;
+        for element_id in pending {
+            let Some((node_id, focusable)) = self
+                .element_for(element_id)
+                .map(|element| (element.node_id, element.focusable))
+            else {
+                continue;
+            };
+            if !focusable {
+                continue;
+            }
+            self.focused_element = Some(element_id);
+            moved |= accessibility::focus_node(node_id);
+        }
+        moved
     }
 
     pub(crate) fn drain_activations<R>(&mut self, shell: &mut AppShell<R>) -> bool
@@ -161,12 +263,7 @@ impl IosAccessibilityBridge {
         let pending = self.pending_activations.take();
         let mut changed = false;
         for element_id in pending {
-            let Some(element) = self
-                .snapshot_ids
-                .iter()
-                .position(|id| *id == element_id)
-                .and_then(|index| self.snapshot.get(index))
-            else {
+            let Some(element) = self.element_for(element_id) else {
                 continue;
             };
             let (x, y) = element.bounds.center();
@@ -188,6 +285,7 @@ impl IosAccessibilityBridge {
             container,
             element_id,
             Rc::clone(&self.pending_activations),
+            Rc::clone(&self.pending_focus),
             self.wake_proxy.clone(),
             mtm,
         );

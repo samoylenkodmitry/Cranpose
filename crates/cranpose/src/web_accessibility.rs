@@ -1,16 +1,215 @@
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use cranpose_app_shell::AppShell;
 use cranpose_render_wgpu::WgpuRenderer;
+use cranpose_ui::LiveRegionMode;
 use wasm_bindgen::{JsCast, JsValue, closure::Closure};
 use web_sys::{Document, Element, HtmlCanvasElement, HtmlElement, MouseEvent};
 
 use crate::accessibility::{self, AccessibilityElement, AccessibilityRole};
 
+/// The role, value and state a screen reader reads off the mirrored element.
+fn apply_role_and_state(node: &HtmlElement, element: &AccessibilityElement) -> Result<(), JsValue> {
+    node.set_attribute("role", aria_role(element.role))?;
+    apply_role_extras(node, element)?;
+    apply_aria_state(node, element)
+}
+
+/// The ARIA role a screen reader reads the control as.
+fn aria_role(role: AccessibilityRole) -> &'static str {
+    match role {
+        AccessibilityRole::Button => "button",
+        AccessibilityRole::StaticText => "text",
+        AccessibilityRole::TextField => "textbox",
+        AccessibilityRole::Checkbox => "checkbox",
+        AccessibilityRole::Switch => "switch",
+        AccessibilityRole::RadioButton => "radio",
+        AccessibilityRole::Tab => "tab",
+        AccessibilityRole::Image => "img",
+        AccessibilityRole::Header => "heading",
+        AccessibilityRole::Dialog => "dialog",
+    }
+}
+
+/// What a role asks for beyond its name: text to read, a heading level, the
+/// value of a field, or the modal flag on a dialog.
+fn apply_role_extras(node: &HtmlElement, element: &AccessibilityElement) -> Result<(), JsValue> {
+    match element.role {
+        AccessibilityRole::StaticText => node.set_text_content(Some(&element.label)),
+        AccessibilityRole::TextField => {
+            if let Some(value) = &element.value {
+                node.set_attribute("aria-valuetext", value)?;
+            }
+        }
+        AccessibilityRole::Header => {
+            node.set_attribute("aria-level", "2")?;
+            node.set_text_content(Some(&element.label));
+        }
+        AccessibilityRole::Dialog => node.set_attribute("aria-modal", "true")?,
+        _ => {}
+    }
+    Ok(())
+}
+
+/// The state description, the checked or selected flag, and whether the
+/// control is disabled.
+fn apply_aria_state(node: &HtmlElement, element: &AccessibilityElement) -> Result<(), JsValue> {
+    if let Some(state) = &element.state_description {
+        node.set_attribute("aria-description", state)?;
+    }
+    if let Some(toggled) = element.toggled {
+        node.set_attribute("aria-checked", if toggled { "true" } else { "false" })?;
+    }
+    if let Some(selected) = element.selected {
+        let selected = if selected { "true" } else { "false" };
+        match element.role {
+            AccessibilityRole::RadioButton => node.set_attribute("aria-checked", selected)?,
+            _ => node.set_attribute("aria-selected", selected)?,
+        }
+    }
+    if !element.enabled {
+        node.set_attribute("aria-disabled", "true")?;
+    }
+    Ok(())
+}
+
+/// Puts the mirrored element over the control it stands for, so a reader's
+/// cursor and a touch exploration land in the same place.
+fn place_node(
+    node: &HtmlElement,
+    element: &AccessibilityElement,
+    left: f64,
+    top: f64,
+    scale_x: f64,
+    scale_y: f64,
+) -> Result<(), JsValue> {
+    let style = node.style();
+    style.set_property("position", "fixed")?;
+    style.set_property(
+        "left",
+        &format!("{}px", left + element.bounds.x as f64 * scale_x),
+    )?;
+    style.set_property(
+        "top",
+        &format!("{}px", top + element.bounds.y as f64 * scale_y),
+    )?;
+    style.set_property(
+        "width",
+        &format!("{}px", element.bounds.width as f64 * scale_x),
+    )?;
+    style.set_property(
+        "height",
+        &format!("{}px", element.bounds.height as f64 * scale_y),
+    )?;
+    style.set_property("opacity", "0.001")?;
+    style.set_property("pointer-events", "none")?;
+    style.set_property("overflow", "hidden")?;
+    Ok(())
+}
+
+/// Hands a Tab landing or a screen reader focus on the mirror back to the app.
+fn attach_focus_listener(
+    root: &HtmlElement,
+    node_ids: Rc<RefCell<HashMap<i32, cranpose_core::NodeId>>>,
+) -> Result<(), JsValue> {
+    let focus_in = Closure::wrap(Box::new(move |event: web_sys::Event| {
+        let Some(target) = event.target().and_then(|t| t.dyn_into::<Element>().ok()) else {
+            return;
+        };
+        let Some(element_id) = target
+            .get_attribute("data-cranpose-node")
+            .and_then(|value| value.parse::<i32>().ok())
+        else {
+            return;
+        };
+        let Some(node_id) = node_ids.borrow().get(&element_id).copied() else {
+            return;
+        };
+        accessibility::focus_node(node_id);
+    }) as Box<dyn FnMut(_)>);
+    root.add_event_listener_with_callback("focusin", focus_in.as_ref().unchecked_ref())?;
+    focus_in.forget();
+    Ok(())
+}
+
+/// The element that holds one mirrored control per element on screen. It
+/// covers the canvas and takes no pointer of its own.
+fn mirror_root(document: &Document) -> Result<HtmlElement, JsValue> {
+    let root = document.create_element("div")?.dyn_into::<HtmlElement>()?;
+    root.set_attribute("data-cranpose-accessibility", "")?;
+    root.set_attribute("aria-label", "Application controls")?;
+    let style = root.style();
+    style.set_property("position", "fixed")?;
+    style.set_property("inset", "0")?;
+    style.set_property("z-index", "2147483647")?;
+    style.set_property("pointer-events", "none")?;
+    Ok(root)
+}
+
+/// Hands a screen reader's activation of a mirrored control back to the app as
+/// a press at the middle of the control it stands for.
+fn attach_click_listener(
+    root: &HtmlElement,
+    app: Rc<RefCell<AppShell<WgpuRenderer>>>,
+) -> Result<(), JsValue> {
+    let click = Closure::wrap(Box::new(move |event: MouseEvent| {
+        let Some(target) = event
+            .target()
+            .and_then(|target| target.dyn_into::<Element>().ok())
+        else {
+            return;
+        };
+        let Some(x) = target
+            .get_attribute("data-cranpose-x")
+            .and_then(|value| value.parse::<f32>().ok())
+        else {
+            return;
+        };
+        let Some(y) = target
+            .get_attribute("data-cranpose-y")
+            .and_then(|value| value.parse::<f32>().ok())
+        else {
+            return;
+        };
+        if let Ok(mut shell) = app.try_borrow_mut() {
+            shell.set_cursor(x, y);
+            shell.pointer_pressed();
+            shell.pointer_released_at_position(x, y);
+        }
+    }) as Box<dyn FnMut(_)>);
+    root.add_event_listener_with_callback("click", click.as_ref().unchecked_ref())?;
+    click.forget();
+    Ok(())
+}
+
+/// A text holder a screen reader watches and reads out when its text changes.
+/// It sits outside the mirrored controls and stays for the life of the page:
+/// the mirror is rebuilt on every change, and a live region that appears
+/// together with its text is read by no reader.
+fn live_region(document: &Document, politeness: &str) -> Result<HtmlElement, JsValue> {
+    let region = document.create_element("div")?.dyn_into::<HtmlElement>()?;
+    region.set_attribute("aria-live", politeness)?;
+    region.set_attribute("aria-atomic", "true")?;
+    let style = region.style();
+    style.set_property("position", "fixed")?;
+    style.set_property("width", "1px")?;
+    style.set_property("height", "1px")?;
+    style.set_property("overflow", "hidden")?;
+    style.set_property("clip", "rect(0 0 0 0)")?;
+    style.set_property("white-space", "nowrap")?;
+    style.set_property("pointer-events", "none")?;
+    Ok(region)
+}
+
 pub(crate) struct WebAccessibilityBridge {
     root: HtmlElement,
     canvas: HtmlCanvasElement,
     previous: Vec<AccessibilityElement>,
+    node_ids: Rc<RefCell<HashMap<i32, cranpose_core::NodeId>>>,
+    focused_element: Option<i32>,
+    polite: HtmlElement,
+    assertive: HtmlElement,
+    announcement_turn: bool,
 }
 
 impl WebAccessibilityBridge {
@@ -19,52 +218,69 @@ impl WebAccessibilityBridge {
         canvas: HtmlCanvasElement,
         app: Rc<RefCell<AppShell<WgpuRenderer>>>,
     ) -> Result<Self, JsValue> {
-        let root = document.create_element("div")?.dyn_into::<HtmlElement>()?;
-        root.set_attribute("data-cranpose-accessibility", "")?;
-        root.set_attribute("aria-label", "Application controls")?;
-        let style = root.style();
-        style.set_property("position", "fixed")?;
-        style.set_property("inset", "0")?;
-        style.set_property("z-index", "2147483647")?;
-        style.set_property("pointer-events", "none")?;
+        let root = mirror_root(document)?;
+        attach_click_listener(&root, app)?;
 
-        let click = Closure::wrap(Box::new(move |event: MouseEvent| {
-            let Some(target) = event
-                .target()
-                .and_then(|target| target.dyn_into::<Element>().ok())
-            else {
-                return;
-            };
-            let Some(x) = target
-                .get_attribute("data-cranpose-x")
-                .and_then(|value| value.parse::<f32>().ok())
-            else {
-                return;
-            };
-            let Some(y) = target
-                .get_attribute("data-cranpose-y")
-                .and_then(|value| value.parse::<f32>().ok())
-            else {
-                return;
-            };
-            if let Ok(mut shell) = app.try_borrow_mut() {
-                shell.set_cursor(x, y);
-                shell.pointer_pressed();
-                shell.pointer_released_at_position(x, y);
-            }
-        }) as Box<dyn FnMut(_)>);
-        root.add_event_listener_with_callback("click", click.as_ref().unchecked_ref())?;
-        click.forget();
+        let body = document.body().ok_or("document has no body")?;
+        body.append_child(&root)?;
+        let polite = live_region(document, "polite")?;
+        let assertive = live_region(document, "assertive")?;
+        body.append_child(&polite)?;
+        body.append_child(&assertive)?;
+        let node_ids: Rc<RefCell<HashMap<i32, cranpose_core::NodeId>>> =
+            Rc::new(RefCell::new(HashMap::new()));
+        attach_focus_listener(&root, Rc::clone(&node_ids))?;
 
-        document
-            .body()
-            .ok_or("document has no body")?
-            .append_child(&root)?;
         Ok(Self {
             root,
             canvas,
             previous: Vec::new(),
+            node_ids,
+            focused_element: None,
+            polite,
+            assertive,
+            announcement_turn: false,
         })
+    }
+
+    /// Puts text a screen reader reads out into the live region that matches
+    /// how urgent it is. The same text twice in a row carries a trailing space
+    /// one time out of two, because a reader reads a live region only when its
+    /// text changes.
+    fn speak(&mut self, next: &[AccessibilityElement]) {
+        let mut announcements = accessibility::drain_app_announcements();
+        announcements.extend(accessibility::live_region_announcements(
+            &self.previous,
+            next,
+        ));
+        for announcement in announcements {
+            self.announcement_turn = !self.announcement_turn;
+            let text = if self.announcement_turn {
+                format!("{} ", announcement.text)
+            } else {
+                announcement.text
+            };
+            let region = match announcement.mode {
+                LiveRegionMode::Assertive => &self.assertive,
+                LiveRegionMode::Polite => &self.polite,
+            };
+            region.set_text_content(Some(&text));
+        }
+    }
+
+    /// Moves the browser's focus onto the control the app focused, so a
+    /// screen reader on the mirror follows a focus move the app made.
+    fn follow_app_focus(
+        &mut self,
+        node: &HtmlElement,
+        element: &AccessibilityElement,
+        id: i32,
+    ) -> Result<(), JsValue> {
+        if !element.focused || self.focused_element == Some(id) {
+            return Ok(());
+        }
+        self.focused_element = Some(id);
+        node.focus()
     }
 
     pub(crate) fn sync(
@@ -73,11 +289,13 @@ impl WebAccessibilityBridge {
         shell: &mut AppShell<WgpuRenderer>,
     ) -> Result<(), JsValue> {
         let elements = accessibility::snapshot(shell);
+        self.speak(&elements);
         if elements == self.previous {
             return Ok(());
         }
         self.previous.clone_from(&elements);
         self.root.set_inner_html("");
+        self.node_ids.borrow_mut().clear();
 
         let canvas_rect = self.canvas.get_bounding_client_rect();
         let viewport = shell.viewport_size();
@@ -91,86 +309,36 @@ impl WebAccessibilityBridge {
                 .dyn_into::<HtmlElement>()?;
             node.set_attribute("aria-label", &element.label)?;
             node.set_attribute("data-cranpose-node", &id.to_string())?;
-            match element.role {
-                AccessibilityRole::Button => node.set_attribute("role", "button")?,
-                AccessibilityRole::StaticText => {
-                    node.set_attribute("role", "text")?;
-                    node.set_text_content(Some(&element.label));
-                }
-                AccessibilityRole::TextField => {
-                    node.set_attribute("role", "textbox")?;
-                    if let Some(value) = &element.value {
-                        node.set_attribute("aria-valuetext", value)?;
-                    }
-                }
-                AccessibilityRole::Checkbox => node.set_attribute("role", "checkbox")?,
-                AccessibilityRole::Switch => node.set_attribute("role", "switch")?,
-                AccessibilityRole::RadioButton => node.set_attribute("role", "radio")?,
-                AccessibilityRole::Tab => node.set_attribute("role", "tab")?,
-                AccessibilityRole::Image => node.set_attribute("role", "img")?,
-                AccessibilityRole::Header => {
-                    node.set_attribute("role", "heading")?;
-                    node.set_attribute("aria-level", "2")?;
-                    node.set_text_content(Some(&element.label));
-                }
-                AccessibilityRole::Dialog => {
-                    node.set_attribute("role", "dialog")?;
-                    node.set_attribute("aria-modal", "true")?;
-                }
-            }
-            if let Some(state) = &element.state_description {
-                node.set_attribute("aria-description", state)?;
-            }
-            if let Some(toggled) = element.toggled {
-                node.set_attribute("aria-checked", if toggled { "true" } else { "false" })?;
-            }
-            if let Some(selected) = element.selected {
-                let selected = if selected { "true" } else { "false" };
-                match element.role {
-                    AccessibilityRole::RadioButton => {
-                        node.set_attribute("aria-checked", selected)?
-                    }
-                    _ => node.set_attribute("aria-selected", selected)?,
-                }
-            }
-            if !element.enabled {
-                node.set_attribute("aria-disabled", "true")?;
-            }
+            apply_role_and_state(&node, &element)?;
             if element.clickable {
                 let (x, y) = element.bounds.center();
                 node.set_attribute("data-cranpose-x", &x.to_string())?;
                 node.set_attribute("data-cranpose-y", &y.to_string())?;
-            } else {
-                node.set_attribute("tabindex", "-1")?;
             }
-            let style = node.style();
-            style.set_property("position", "fixed")?;
-            style.set_property(
-                "left",
-                &format!(
-                    "{}px",
-                    canvas_rect.left() + element.bounds.x as f64 * scale_x
-                ),
+            node.set_attribute(
+                "tabindex",
+                if element.focusable {
+                    "0"
+                } else if element.clickable {
+                    "auto"
+                } else {
+                    "-1"
+                },
             )?;
-            style.set_property(
-                "top",
-                &format!(
-                    "{}px",
-                    canvas_rect.top() + element.bounds.y as f64 * scale_y
-                ),
+            self.node_ids.borrow_mut().insert(id, element.node_id);
+            place_node(
+                &node,
+                &element,
+                canvas_rect.left(),
+                canvas_rect.top(),
+                scale_x,
+                scale_y,
             )?;
-            style.set_property(
-                "width",
-                &format!("{}px", element.bounds.width as f64 * scale_x),
-            )?;
-            style.set_property(
-                "height",
-                &format!("{}px", element.bounds.height as f64 * scale_y),
-            )?;
-            style.set_property("opacity", "0.001")?;
-            style.set_property("pointer-events", "none")?;
-            style.set_property("overflow", "hidden")?;
             self.root.append_child(&node)?;
+            self.follow_app_focus(&node, &element, id)?;
+        }
+        if !self.previous.iter().any(|element| element.focused) {
+            self.focused_element = None;
         }
         Ok(())
     }

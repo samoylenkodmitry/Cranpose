@@ -22,6 +22,7 @@ use crate::{
 
 static ACTIVATIONS: OnceLock<Mutex<Vec<(f32, f32)>>> = OnceLock::new();
 static CUSTOM_ACTIONS: OnceLock<Mutex<Vec<(i32, usize)>>> = OnceLock::new();
+static FOCUS_REQUESTS: OnceLock<Mutex<Vec<i32>>> = OnceLock::new();
 static LOOP_WAKER: Mutex<Option<android_activity::AndroidAppWaker>> = Mutex::new(None);
 static PLATFORM_ACCESSIBILITY_ENABLED: AtomicBool = AtomicBool::new(false);
 
@@ -63,6 +64,10 @@ fn custom_actions() -> &'static Mutex<Vec<(i32, usize)>> {
     CUSTOM_ACTIONS.get_or_init(|| Mutex::new(Vec::new()))
 }
 
+fn focus_requests() -> &'static Mutex<Vec<i32>> {
+    FOCUS_REQUESTS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
 pub(crate) fn drain_activations() -> Vec<(f32, f32)> {
     std::mem::take(
         &mut *activations()
@@ -79,6 +84,51 @@ pub(crate) fn drain_custom_actions() -> Vec<(i32, usize)> {
     )
 }
 
+/// The virtual view ids TalkBack put its cursor on since the last frame.
+pub(crate) fn drain_focus_requests() -> Vec<i32> {
+    std::mem::take(
+        &mut *focus_requests()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()),
+    )
+}
+
+/// Hands TalkBack text to read out at once, with no control to move to.
+/// Android reads a live region set on a virtual view only through its host, so
+/// a live region change reaches the user the same way an app announcement
+/// does: as one spoken line.
+fn speak(
+    app: &android_activity::AndroidApp,
+    announcements: Vec<cranpose_ui::Announcement>,
+) -> Result<(), String> {
+    if announcements.is_empty() {
+        return Ok(());
+    }
+    let text = announcements
+        .into_iter()
+        .map(|announcement| announcement.text)
+        .collect::<Vec<_>>()
+        .join(". ");
+    with_android_activity_env(app, |env, activity| {
+        let text = env.new_string(text).map_err(|error| {
+            clear_pending_android_jni_exception(env);
+            format!("failed to encode an accessibility announcement: {error}")
+        })?;
+        let text = JObject::from(text);
+        env.call_method(
+            &activity,
+            jni_str!("cranposeAnnounceForAccessibility"),
+            jni_sig!("(Ljava/lang/String;)V"),
+            &[JValue::Object(&text)],
+        )
+        .map_err(|error| {
+            clear_pending_android_jni_exception(env);
+            format!("failed to read out an accessibility announcement: {error}")
+        })?;
+        Ok(())
+    })
+}
+
 pub(crate) fn sync(
     app: &android_activity::AndroidApp,
     shell: &mut AppShell<WgpuRenderer>,
@@ -90,16 +140,21 @@ pub(crate) fn sync(
     if policy.update_enabled(accessibility_bridge_enabled()) {
         *seen_revision = None;
     }
+    let mut announcements = accessibility::drain_app_announcements();
     let now = std::time::Instant::now();
-    if !policy.try_begin_publish(now) {
-        return Ok(());
+    let elements = if policy.try_begin_publish(now) {
+        accessibility::snapshot_if_changed(shell, seen_revision)
+    } else {
+        None
+    };
+    let elements = elements.filter(|elements| elements != previous);
+    if let Some(elements) = &elements {
+        announcements.extend(accessibility::live_region_announcements(previous, elements));
     }
-    let Some(elements) = accessibility::snapshot_if_changed(shell, seen_revision) else {
+    speak(app, announcements)?;
+    let Some(elements) = elements else {
         return Ok(());
     };
-    if elements == *previous {
-        return Ok(());
-    }
     *previous = elements;
     let payload = encode_elements(previous, density);
     with_android_activity_env(app, |env, activity| {
@@ -148,6 +203,22 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccess
     if previous != enabled {
         wake_loop();
     }
+}
+
+/// TalkBack landed its cursor on a virtual view; the frame loop moves app
+/// focus to match, so the reader and the app agree on what holds focus.
+#[doc(hidden)]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccessibilityFocus(
+    _env: EnvUnowned<'_>,
+    _class: JClass<'_>,
+    virtual_id: jint,
+) {
+    focus_requests()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .push(virtual_id);
+    wake_loop();
 }
 
 #[doc(hidden)]

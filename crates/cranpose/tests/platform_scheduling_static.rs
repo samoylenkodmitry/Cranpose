@@ -797,6 +797,99 @@ fn android_accessibility_custom_actions_reach_the_frame_loop() {
 }
 
 #[test]
+fn every_platform_bridge_carries_focus_both_ways() {
+    let projection_source = crate_source("src/accessibility.rs");
+    assert!(
+        projection_source.contains("pub(crate) focusable: bool")
+            && projection_source.contains("pub(crate) focused: bool")
+            && projection_source.contains("pub(crate) fn focus_node("),
+        "a platform bridge reads focus off the element and hands a reader's focus back through one platform-neutral call"
+    );
+
+    let desktop_source = crate_source("src/desktop_accessibility.rs");
+    assert!(
+        desktop_source.contains("Action::Focus => self.pending_focus.push(request.target_node)")
+            && desktop_source.contains("pub(crate) fn run_focus_requests(")
+            && !desktop_source.contains("focus: ROOT_ID,"),
+        "accesskit should report the focused control and take a Focus action back, instead of naming the window every time"
+    );
+
+    let ios_source = crate_source("src/ios_accessibility.rs");
+    assert!(
+        ios_source.contains("accessibilityElementDidBecomeFocused")
+            && ios_source.contains("UIAccessibilityLayoutChangedNotification")
+            && ios_source.contains("pub(crate) fn drain_focus("),
+        "VoiceOver should move the app's focus when its cursor lands, and follow the app when the app moves focus"
+    );
+
+    let java_source =
+        workspace_source("crates/cranpose/android/java/dev/cranpose/android/CranposeActivity.java");
+    let android_source = crate_source("src/android_accessibility.rs");
+    let loop_source = crate_source("src/android.rs");
+    assert!(
+        java_source
+            .contains("private static native void nativeOnAccessibilityFocus(int virtualViewId);")
+            && java_source.contains("private void followAppFocus()")
+            && android_source
+                .contains("Java_dev_cranpose_android_CranposeActivity_nativeOnAccessibilityFocus")
+            && android_source.contains("pub(crate) fn drain_focus_requests()")
+            && loop_source.contains("crate::android_accessibility::drain_focus_requests()"),
+        "TalkBack should report where its cursor landed and follow the app's focus, with the frame loop resolving the id"
+    );
+
+    let web_source = crate_source("src/web_accessibility.rs");
+    assert!(
+        web_source.contains("\"focusin\"")
+            && web_source.contains("node.focus()")
+            && web_source.contains("\"tabindex\",")
+            && web_source.contains("if element.focusable {"),
+        "the web mirror should take Tab focus, follow the app's focus, and report a focus back"
+    );
+}
+
+#[test]
+fn every_platform_bridge_reads_announcements_out() {
+    let projection_source = crate_source("src/accessibility.rs");
+    assert!(
+        projection_source.contains("pub(crate) fn drain_app_announcements(")
+            && projection_source.contains("pub(crate) fn live_region_announcements("),
+        "text to read out and a live region change are platform-neutral and belong outside every platform boundary"
+    );
+
+    let desktop_source = crate_source("src/desktop_accessibility.rs");
+    assert!(
+        desktop_source.contains("node.set_live(accesskit_live(mode))")
+            && desktop_source.contains("fn announcement_node("),
+        "accesskit carries a live region of its own, and an announcement rides along as a live node"
+    );
+
+    let ios_source = crate_source("src/ios_accessibility.rs");
+    assert!(
+        ios_source.contains("UIAccessibilityAnnouncementNotification")
+            && ios_source.contains("accessibility::live_region_announcements("),
+        "iOS has no live region, so both an announcement and a live region change are posted to VoiceOver"
+    );
+
+    let java_source =
+        workspace_source("crates/cranpose/android/java/dev/cranpose/android/CranposeActivity.java");
+    let android_source = crate_source("src/android_accessibility.rs");
+    assert!(
+        java_source.contains("public void cranposeAnnounceForAccessibility(String text)")
+            && java_source.contains("announceForAccessibility(text)")
+            && android_source.contains("jni_str!(\"cranposeAnnounceForAccessibility\")")
+            && android_source.contains("accessibility::live_region_announcements("),
+        "TalkBack reads a virtual view's live region only through the host view, so both paths go out as one spoken line"
+    );
+
+    let web_source = crate_source("src/web_accessibility.rs");
+    assert!(
+        web_source.contains("region.set_attribute(\"aria-live\", politeness)?")
+            && web_source.contains("accessibility::live_region_announcements("),
+        "the web mirror is rebuilt on every change, so its live regions must outlive the mirror"
+    );
+}
+
+#[test]
 fn the_play_billing_bridge_sends_the_order_id_that_granted_each_entitlement() {
     let java_source = workspace_source(
         "crates/cranpose/android/java-billing/dev/cranpose/android/CranposeBilling.java",

@@ -154,6 +154,18 @@ fn system_theme_from_android(
 
 const IME_ACTION_DONE: i32 = 6;
 
+/// Moves app focus onto the control TalkBack put its cursor on, so the reader
+/// and the app agree on what holds focus.
+fn drain_accessibility_focus(elements: &[crate::accessibility::AccessibilityElement]) {
+    for virtual_id in crate::android_accessibility::drain_focus_requests() {
+        let Some((node_id, _)) = crate::accessibility::resolve_element_id(elements, virtual_id)
+        else {
+            continue;
+        };
+        crate::accessibility::focus_node(node_id);
+    }
+}
+
 fn dispatch_android_ime_event(shell: &mut AppShell<WgpuRenderer>, event: AndroidImeEvent) {
     match event {
         AndroidImeEvent::CommitText { text, .. } => {
@@ -2144,6 +2156,7 @@ pub fn run(
                     action_index,
                 );
             }
+            drain_accessibility_focus(&accessibility_elements);
             for event in ime_event_queue.drain() {
                 dispatch_android_ime_event(shell, event);
             }

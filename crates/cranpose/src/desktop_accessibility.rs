@@ -7,15 +7,17 @@ use std::{
 
 use accesskit::{
     Action, ActionData, ActionHandler, ActionRequest, ActivationHandler, CustomAction,
-    DeactivationHandler, Node, NodeId, Rect, Role, Toggled, Tree, TreeId, TreeUpdate,
+    DeactivationHandler, Live, Node, NodeId, Rect, Role, Toggled, Tree, TreeId, TreeUpdate,
 };
 use cranpose_app_shell::AppShell;
 use cranpose_render_wgpu::WgpuRenderer;
+use cranpose_ui::{Announcement, LiveRegionMode};
 use winit::{event::WindowEvent, event_loop::EventLoopProxy, window::Window};
 
 use crate::accessibility::{self, AccessibilityElement, AccessibilityRole};
 
 const ROOT_ID: NodeId = NodeId(u64::MAX);
+const ANNOUNCEMENT_ID: NodeId = NodeId(u64::MAX - 1);
 
 #[derive(Clone)]
 struct InitialTree(Arc<Mutex<Option<TreeUpdate>>>);
@@ -57,8 +59,11 @@ pub(crate) struct DesktopAccessibilityBridge {
     actions: Arc<Mutex<Vec<ActionRequest>>>,
     centers: HashMap<NodeId, (f32, f32)>,
     pending_custom_actions: Vec<(NodeId, usize)>,
+    pending_focus: Vec<NodeId>,
     previous: Vec<AccessibilityElement>,
     seen_revision: Option<u64>,
+    announcement: Option<Announcement>,
+    announcement_turn: bool,
 }
 
 impl DesktopAccessibilityBridge {
@@ -80,8 +85,11 @@ impl DesktopAccessibilityBridge {
             actions,
             centers: HashMap::new(),
             pending_custom_actions: Vec::new(),
+            pending_focus: Vec::new(),
             previous: Vec::new(),
             seen_revision: None,
+            announcement: None,
+            announcement_turn: false,
         }
     }
 
@@ -90,20 +98,32 @@ impl DesktopAccessibilityBridge {
     }
 
     pub(crate) fn sync(&mut self, shell: &mut AppShell<WgpuRenderer>) {
-        let Some(elements) = accessibility::snapshot_if_changed(shell, &mut self.seen_revision)
-        else {
-            return;
-        };
-        if elements == self.previous {
+        let spoken = join_announcements(accessibility::drain_app_announcements());
+        let mut changed = false;
+        if let Some(elements) = accessibility::snapshot_if_changed(shell, &mut self.seen_revision)
+            && elements != self.previous
+        {
+            self.previous = elements;
+            self.centers = accessibility::element_ids(&self.previous)
+                .into_iter()
+                .zip(&self.previous)
+                .map(|(id, element)| (NodeId(id as u64), element.bounds.center()))
+                .collect();
+            changed = true;
+        }
+        if let Some(spoken) = spoken {
+            self.announcement = Some(spoken);
+            self.announcement_turn = !self.announcement_turn;
+            changed = true;
+        }
+        if !changed {
             return;
         }
-        self.previous = elements;
-        let update = tree_update(&self.previous);
-        self.centers = accessibility::element_ids(&self.previous)
-            .into_iter()
-            .zip(&self.previous)
-            .map(|(id, element)| (NodeId(id as u64), element.bounds.center()))
-            .collect();
+        let update = tree_update(
+            &self.previous,
+            self.announcement.as_ref(),
+            self.announcement_turn,
+        );
         *self
             .initial_tree
             .lock()
@@ -134,10 +154,33 @@ impl DesktopAccessibilityBridge {
                             .push((request.target_node, index as usize));
                     }
                 }
+                Action::Focus => self.pending_focus.push(request.target_node),
                 _ => {}
             }
         }
         clicks
+    }
+
+    /// Moves app focus onto the element a screen reader asked for, so the two
+    /// agree on what holds focus. Answers whether focus moved.
+    pub(crate) fn run_focus_requests(&mut self) -> bool {
+        if self.pending_focus.is_empty() {
+            return false;
+        }
+        let pending = std::mem::take(&mut self.pending_focus);
+        let ids = accessibility::element_ids(&self.previous);
+        let mut moved = false;
+        for target in pending {
+            let Some(element) = ids
+                .iter()
+                .position(|id| NodeId(*id as u64) == target)
+                .and_then(|position| self.previous.get(position))
+            else {
+                continue;
+            };
+            moved |= accessibility::focus_node(element.node_id);
+        }
+        moved
     }
 
     pub(crate) fn run_custom_actions(&mut self, shell: &mut AppShell<WgpuRenderer>) -> bool {
@@ -169,84 +212,175 @@ impl DesktopAccessibilityBridge {
     }
 }
 
-fn tree_update(elements: &[AccessibilityElement]) -> TreeUpdate {
+fn tree_update(
+    elements: &[AccessibilityElement],
+    announcement: Option<&Announcement>,
+    announcement_turn: bool,
+) -> TreeUpdate {
     let ids = accessibility::element_ids(elements);
-    let children: Vec<NodeId> = ids.iter().map(|id| NodeId(*id as u64)).collect();
+    let mut children: Vec<NodeId> = ids.iter().map(|id| NodeId(*id as u64)).collect();
+    if announcement.is_some() {
+        children.push(ANNOUNCEMENT_ID);
+    }
     let mut root = Node::new(Role::Window);
     root.set_label("Cranpose application");
     root.set_children(children);
     let mut nodes = vec![(ROOT_ID, root)];
-    nodes.extend(ids.iter().zip(elements).map(|(id, element)| {
-        let role = match element.role {
-            AccessibilityRole::Button => Role::Button,
-            AccessibilityRole::StaticText => Role::Label,
-            AccessibilityRole::TextField => Role::TextInput,
-            AccessibilityRole::Checkbox => Role::CheckBox,
-            AccessibilityRole::Switch => Role::Switch,
-            AccessibilityRole::RadioButton => Role::RadioButton,
-            AccessibilityRole::Tab => Role::Tab,
-            AccessibilityRole::Image => Role::Image,
-            AccessibilityRole::Header => Role::Heading,
-            AccessibilityRole::Dialog => Role::Dialog,
-        };
-        let mut node = Node::new(role);
-        if element.role == AccessibilityRole::StaticText {
-            node.set_value(element.label.as_str());
-        } else {
-            node.set_label(element.label.as_str());
-        }
-        if let Some(value) = &element.value {
-            node.set_value(value.as_str());
-        }
-        if let Some(state) = &element.state_description {
-            node.set_description(state.as_str());
-        }
-        if let Some(selected) = element.selected {
-            node.set_selected(selected);
-        }
-        if let Some(toggled) = element.toggled {
-            node.set_toggled(if toggled {
-                Toggled::True
-            } else {
-                Toggled::False
-            });
-        }
-        if !element.enabled {
-            node.set_disabled();
-        }
-        node.set_bounds(Rect {
-            x0: element.bounds.x as f64,
-            y0: element.bounds.y as f64,
-            x1: (element.bounds.x + element.bounds.width) as f64,
-            y1: (element.bounds.y + element.bounds.height) as f64,
-        });
-        if element.clickable {
-            node.add_action(Action::Click);
-        }
-        if !element.custom_actions.is_empty() {
-            node.add_action(Action::CustomAction);
-            node.set_custom_actions(
-                element
-                    .custom_actions
-                    .iter()
-                    .enumerate()
-                    .map(|(index, label)| CustomAction {
-                        id: index as i32,
-                        description: label.as_str().into(),
-                    })
-                    .collect::<Vec<_>>(),
-            );
-        }
-        (NodeId(*id as u64), node)
-    }));
+    nodes.extend(
+        ids.iter()
+            .zip(elements)
+            .map(|(id, element)| (NodeId(*id as u64), accesskit_node(element))),
+    );
+    if let Some(announcement) = announcement {
+        nodes.push((
+            ANNOUNCEMENT_ID,
+            announcement_node(announcement, announcement_turn),
+        ));
+    }
     let mut tree = Tree::new(ROOT_ID);
     tree.toolkit_name = Some("Cranpose".into());
     TreeUpdate {
         nodes,
         tree: Some(tree),
         tree_id: TreeId::ROOT,
-        focus: ROOT_ID,
+        focus: focused_node(&ids, elements),
     }
+}
+
+/// One control as accesskit describes it to a screen reader.
+fn accesskit_node(element: &AccessibilityElement) -> Node {
+    let mut node = Node::new(accesskit_role(element.role));
+    if element.role == AccessibilityRole::StaticText {
+        node.set_value(element.label.as_str());
+    } else {
+        node.set_label(element.label.as_str());
+    }
+    node.set_bounds(Rect {
+        x0: element.bounds.x as f64,
+        y0: element.bounds.y as f64,
+        x1: (element.bounds.x + element.bounds.width) as f64,
+        y1: (element.bounds.y + element.bounds.height) as f64,
+    });
+    apply_state(&mut node, element);
+    apply_actions(&mut node, element);
+    node
+}
+
+/// A node with no control behind it, whose only job is to hold text a screen
+/// reader reads at once. accesskit reads a live node again when its value
+/// changes, so the same text twice in a row carries a trailing space one time
+/// out of two to stay a change.
+fn announcement_node(announcement: &Announcement, turn: bool) -> Node {
+    let mut node = Node::new(Role::Label);
+    let text = if turn {
+        format!("{} ", announcement.text)
+    } else {
+        announcement.text.clone()
+    };
+    node.set_value(text);
+    node.set_live(accesskit_live(announcement.mode));
+    node
+}
+
+fn accesskit_live(mode: LiveRegionMode) -> Live {
+    match mode {
+        LiveRegionMode::Polite => Live::Polite,
+        LiveRegionMode::Assertive => Live::Assertive,
+    }
+}
+
+fn join_announcements(announcements: Vec<Announcement>) -> Option<Announcement> {
+    let mode = announcements
+        .iter()
+        .map(|announcement| announcement.mode)
+        .fold(LiveRegionMode::Polite, |mode, next| match next {
+            LiveRegionMode::Assertive => LiveRegionMode::Assertive,
+            LiveRegionMode::Polite => mode,
+        });
+    let text = announcements
+        .into_iter()
+        .map(|announcement| announcement.text)
+        .collect::<Vec<_>>()
+        .join(". ");
+    (!text.is_empty()).then_some(Announcement { text, mode })
+}
+
+/// The accesskit role a screen reader reads the control as.
+fn accesskit_role(role: AccessibilityRole) -> Role {
+    match role {
+        AccessibilityRole::Button => Role::Button,
+        AccessibilityRole::StaticText => Role::Label,
+        AccessibilityRole::TextField => Role::TextInput,
+        AccessibilityRole::Checkbox => Role::CheckBox,
+        AccessibilityRole::Switch => Role::Switch,
+        AccessibilityRole::RadioButton => Role::RadioButton,
+        AccessibilityRole::Tab => Role::Tab,
+        AccessibilityRole::Image => Role::Image,
+        AccessibilityRole::Header => Role::Heading,
+        AccessibilityRole::Dialog => Role::Dialog,
+    }
+}
+
+/// What the control says about itself beyond its name: its value, the state
+/// description, and whether it is selected, toggled or disabled.
+fn apply_state(node: &mut Node, element: &AccessibilityElement) {
+    if let Some(value) = &element.value {
+        node.set_value(value.as_str());
+    }
+    if let Some(state) = &element.state_description {
+        node.set_description(state.as_str());
+    }
+    if let Some(selected) = element.selected {
+        node.set_selected(selected);
+    }
+    if let Some(toggled) = element.toggled {
+        node.set_toggled(if toggled {
+            Toggled::True
+        } else {
+            Toggled::False
+        });
+    }
+    if !element.enabled {
+        node.set_disabled();
+    }
+    if let Some(mode) = element.live_region {
+        node.set_live(accesskit_live(mode));
+    }
+}
+
+/// What a screen reader can do with the control: activate it, run one of its
+/// custom actions, or put focus on it.
+fn apply_actions(node: &mut Node, element: &AccessibilityElement) {
+    if element.clickable {
+        node.add_action(Action::Click);
+    }
+    if !element.custom_actions.is_empty() {
+        node.add_action(Action::CustomAction);
+        node.set_custom_actions(
+            element
+                .custom_actions
+                .iter()
+                .enumerate()
+                .map(|(index, label)| CustomAction {
+                    id: index as i32,
+                    description: label.as_str().into(),
+                })
+                .collect::<Vec<_>>(),
+        );
+    }
+    if element.focusable {
+        node.add_action(Action::Focus);
+    }
+}
+
+/// The node a screen reader should sit on: the control the app focused, or the
+/// window when nothing holds focus.
+fn focused_node(ids: &[i32], elements: &[AccessibilityElement]) -> NodeId {
+    ids.iter()
+        .zip(elements)
+        .find(|(_, element)| element.focused)
+        .map(|(id, _)| NodeId(*id as u64))
+        .unwrap_or(ROOT_ID)
 }
 
 #[cfg(target_os = "macos")]
@@ -368,6 +502,65 @@ mod tests {
     use crate::accessibility::AccessibilityRect;
 
     #[test]
+    fn the_tree_points_at_the_focused_control_and_offers_focus_on_the_others() {
+        let elements = vec![
+            AccessibilityElement {
+                node_id: 7,
+                label: "Name".into(),
+                bounds: AccessibilityRect::new(0.0, 0.0, 80.0, 44.0),
+                role: AccessibilityRole::TextField,
+                focusable: true,
+                ..AccessibilityElement::default()
+            },
+            AccessibilityElement {
+                node_id: 8,
+                label: "Save".into(),
+                bounds: AccessibilityRect::new(0.0, 50.0, 80.0, 44.0),
+                role: AccessibilityRole::Button,
+                clickable: true,
+                focusable: true,
+                focused: true,
+                ..AccessibilityElement::default()
+            },
+        ];
+
+        let update = tree_update(&elements, None, false);
+        let ids = accessibility::element_ids(&elements);
+
+        assert_eq!(
+            update.focus,
+            NodeId(ids[1] as u64),
+            "a screen reader reads focus from the tree, and it sits on Save"
+        );
+        for (id, _) in ids.iter().zip(&elements) {
+            let node = update
+                .nodes
+                .iter()
+                .find(|(node_id, _)| *node_id == NodeId(*id as u64))
+                .map(|(_, node)| node)
+                .expect("every element is in the tree");
+            assert!(
+                node.supports_action(Action::Focus),
+                "a control focus can land on offers the Focus action"
+            );
+        }
+    }
+
+    #[test]
+    fn a_tree_with_nothing_focused_leaves_focus_on_the_window() {
+        let elements = vec![AccessibilityElement {
+            node_id: 7,
+            label: "Name".into(),
+            bounds: AccessibilityRect::new(0.0, 0.0, 80.0, 44.0),
+            role: AccessibilityRole::TextField,
+            focusable: true,
+            ..AccessibilityElement::default()
+        }];
+
+        assert_eq!(tree_update(&elements, None, false).focus, ROOT_ID);
+    }
+
+    #[test]
     fn desktop_tree_maps_controls_to_native_roles_and_click_actions() {
         let elements = vec![
             AccessibilityElement {
@@ -387,7 +580,7 @@ mod tests {
             },
         ];
 
-        let update = tree_update(&elements);
+        let update = tree_update(&elements, None, false);
         assert_eq!(update.tree.as_ref().map(|tree| tree.root), Some(ROOT_ID));
         let button = &update.nodes[1].1;
         assert_eq!(button.role(), Role::Button);
@@ -425,7 +618,7 @@ mod tests {
             },
         ];
 
-        let update = tree_update(&elements);
+        let update = tree_update(&elements, None, false);
         let ids: Vec<_> = update.nodes.iter().map(|(id, _)| *id).collect();
         assert_eq!(ids.len(), 3, "root plus one node per drawn control");
         assert_ne!(ids[1], ids[2]);
@@ -440,5 +633,64 @@ mod tests {
         let sound = &update.nodes[2].1;
         assert_eq!(sound.toggled(), Some(Toggled::False));
         assert!(sound.is_disabled());
+    }
+
+    #[test]
+    fn an_announcement_rides_along_as_a_live_node_under_the_window() {
+        let elements = vec![AccessibilityElement {
+            node_id: 1,
+            label: "Import".into(),
+            bounds: AccessibilityRect::new(0.0, 0.0, 100.0, 40.0),
+            role: AccessibilityRole::Button,
+            clickable: true,
+            ..AccessibilityElement::default()
+        }];
+        let announcement = Announcement {
+            text: "Seven receipts imported".into(),
+            mode: LiveRegionMode::Assertive,
+        };
+
+        let update = tree_update(&elements, Some(&announcement), false);
+        assert_eq!(update.nodes.len(), 3, "root, the button, the announcement");
+        let (id, spoken) = &update.nodes[2];
+        assert_eq!(*id, ANNOUNCEMENT_ID);
+        assert_eq!(spoken.value(), Some("Seven receipts imported"));
+        assert_eq!(spoken.live(), Some(Live::Assertive));
+        assert!(update.nodes[0].1.children().contains(&ANNOUNCEMENT_ID));
+
+        let again = tree_update(&elements, Some(&announcement), true);
+        assert_eq!(again.nodes[2].1.value(), Some("Seven receipts imported "));
+    }
+
+    #[test]
+    fn a_live_control_tells_accesskit_how_urgent_it_is() {
+        let elements = vec![AccessibilityElement {
+            node_id: 1,
+            label: "3 receipts left".into(),
+            bounds: AccessibilityRect::new(0.0, 0.0, 100.0, 40.0),
+            live_region: Some(LiveRegionMode::Polite),
+            ..AccessibilityElement::default()
+        }];
+
+        let update = tree_update(&elements, None, false);
+        assert_eq!(update.nodes[1].1.live(), Some(Live::Polite));
+    }
+
+    #[test]
+    fn several_announcements_in_one_frame_become_one_line() {
+        let joined = join_announcements(vec![
+            Announcement {
+                text: "Import done".into(),
+                mode: LiveRegionMode::Polite,
+            },
+            Announcement {
+                text: "Two receipts failed".into(),
+                mode: LiveRegionMode::Assertive,
+            },
+        ])
+        .expect("two announcements make one");
+        assert_eq!(joined.text, "Import done. Two receipts failed");
+        assert_eq!(joined.mode, LiveRegionMode::Assertive);
+        assert!(join_announcements(Vec::new()).is_none());
     }
 }

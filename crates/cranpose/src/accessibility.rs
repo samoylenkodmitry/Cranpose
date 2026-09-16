@@ -3,7 +3,10 @@ use std::{borrow::Cow, fmt::Debug};
 use cranpose_app_shell::AppShell;
 use cranpose_core::{NodeId, collections::map::HashMap};
 use cranpose_render_common::Renderer;
-use cranpose_ui::{LayoutBox, SemanticsAction, SemanticsNode, SemanticsRole, SemanticsWidgetRole};
+use cranpose_ui::{
+    Announcement, LayoutBox, LiveRegionMode, SemanticsAction, SemanticsNode, SemanticsRole,
+    SemanticsWidgetRole,
+};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct AccessibilityRect {
@@ -81,6 +84,9 @@ pub(crate) struct AccessibilityElement {
     pub(crate) toggled: Option<bool>,
     pub(crate) enabled: bool,
     pub(crate) custom_actions: Vec<String>,
+    pub(crate) focusable: bool,
+    pub(crate) focused: bool,
+    pub(crate) live_region: Option<LiveRegionMode>,
 }
 
 impl Default for AccessibilityElement {
@@ -99,6 +105,9 @@ impl Default for AccessibilityElement {
             toggled: None,
             enabled: true,
             custom_actions: Vec::new(),
+            focusable: false,
+            focused: false,
+            live_region: None,
         }
     }
 }
@@ -205,7 +214,7 @@ fn project_semantics(
     bounds: &HashMap<NodeId, AccessibilityRect>,
 ) -> Vec<AccessibilityElement> {
     let mut elements = Vec::new();
-    project_node(root, bounds, false, &mut elements);
+    project_node(root, bounds, false, None, &mut elements);
     elements
 }
 
@@ -213,8 +222,10 @@ fn project_node(
     node: &SemanticsNode,
     bounds: &HashMap<NodeId, AccessibilityRect>,
     suppress_static_text: bool,
+    inherited_live_region: Option<LiveRegionMode>,
     elements: &mut Vec<AccessibilityElement>,
 ) {
+    let live_region = node.live_region.or(inherited_live_region);
     let clickable = node
         .actions
         .iter()
@@ -260,20 +271,24 @@ fn project_node(
                 .iter()
                 .map(|action| action.label.clone())
                 .collect(),
+            focusable: node.focusable,
+            focused: node.focused,
+            live_region,
         });
     }
 
-    project_canvas_children(node, rect, elements);
+    project_canvas_children(node, rect, live_region, elements);
 
     let suppress_children = suppress_static_text || actionable;
     for child in &node.children {
-        project_node(child, bounds, suppress_children, elements);
+        project_node(child, bounds, suppress_children, live_region, elements);
     }
 }
 
 fn project_canvas_children(
     node: &SemanticsNode,
     owner: AccessibilityRect,
+    live_region: Option<LiveRegionMode>,
     elements: &mut Vec<AccessibilityElement>,
 ) {
     for child in &node.canvas_children {
@@ -309,6 +324,9 @@ fn project_canvas_children(
                 .iter()
                 .map(|action| action.label.clone())
                 .collect(),
+            focusable: false,
+            focused: false,
+            live_region,
         });
     }
 }
@@ -341,6 +359,86 @@ pub(crate) fn perform_custom_action(
         }
         None => false,
     }
+}
+
+/// Moves app focus onto the node a platform's accessibility layer asked for,
+/// so a screen reader and the app agree on what holds focus. Answers whether
+/// focus moved.
+pub(crate) fn focus_node(node_id: NodeId) -> bool {
+    cranpose_ui::request_focus_from_platform(node_id)
+}
+
+/// Text the app asked a screen reader to read out, through
+/// [`cranpose_ui::Announcer`]. Every platform bridge takes this queue once a
+/// frame.
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) fn drain_app_announcements() -> Vec<Announcement> {
+    cranpose_ui::drain_announcements()
+}
+
+/// Text that changed inside a live region, for the two platforms with no live
+/// region of their own: iOS has no such notion, and Android ignores a live
+/// region set on a virtual view. On desktop the accesskit `live` field carries
+/// it, and on web `aria-live` does, so those two bridges leave this alone and
+/// let the screen reader do the reading.
+///
+/// An element that was not in `previous` counts as changed, so an error text
+/// that appears next to a field is read out. A first snapshot reads nothing:
+/// every element is new then, and a blind user would hear the whole screen
+/// twice.
+#[cfg(any(
+    test,
+    all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"),
+    all(feature = "android", feature = "renderer-wgpu", target_os = "android"),
+    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
+))]
+pub(crate) fn live_region_announcements(
+    previous: &[AccessibilityElement],
+    current: &[AccessibilityElement],
+) -> Vec<Announcement> {
+    if previous.is_empty() {
+        return Vec::new();
+    }
+    let mut announcements = Vec::new();
+    for element in current {
+        let Some(mode) = element.live_region else {
+            continue;
+        };
+        let text = spoken_text(element);
+        if text.trim().is_empty() {
+            continue;
+        }
+        let was = previous
+            .iter()
+            .find(|other| {
+                other.node_id == element.node_id && other.canvas_key == element.canvas_key
+            })
+            .map(spoken_text);
+        if was.as_deref() != Some(text.as_str()) {
+            announcements.push(Announcement { text, mode });
+        }
+    }
+    announcements
+}
+
+#[cfg(any(
+    test,
+    all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"),
+    all(feature = "android", feature = "renderer-wgpu", target_os = "android"),
+    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
+))]
+fn spoken_text(element: &AccessibilityElement) -> String {
+    let mut parts = vec![element.label.clone()];
+    if let Some(value) = &element.value
+        && value != &element.label
+    {
+        parts.push(value.clone());
+    }
+    if let Some(state) = &element.state_description {
+        parts.push(state.clone());
+    }
+    parts.retain(|part| !part.trim().is_empty());
+    parts.join(", ")
 }
 
 #[cfg(any(
@@ -729,5 +827,83 @@ mod tests {
         };
 
         assert_eq!(project(|| {}), project(|| panic!("must not run")));
+    }
+
+    fn live_text(node_id: NodeId, text: &str) -> AccessibilityElement {
+        AccessibilityElement {
+            node_id,
+            label: text.into(),
+            bounds: AccessibilityRect::new(0.0, 0.0, 10.0, 10.0),
+            live_region: Some(cranpose_ui::LiveRegionMode::Polite),
+            ..AccessibilityElement::default()
+        }
+    }
+
+    #[test]
+    fn a_live_region_with_new_text_is_read_out() {
+        let before = vec![live_text(1, "3 receipts")];
+        let after = vec![live_text(1, "4 receipts")];
+        let announcements = live_region_announcements(&before, &after);
+        assert_eq!(announcements.len(), 1);
+        assert_eq!(announcements[0].text, "4 receipts");
+    }
+
+    #[test]
+    fn a_live_region_that_kept_its_text_stays_quiet() {
+        let before = vec![live_text(1, "3 receipts")];
+        let after = vec![live_text(1, "3 receipts")];
+        assert!(live_region_announcements(&before, &after).is_empty());
+    }
+
+    #[test]
+    fn a_live_region_that_just_appeared_is_read_out() {
+        let before = vec![live_text(1, "3 receipts")];
+        let after = vec![live_text(1, "3 receipts"), live_text(2, "Import failed")];
+        let announcements = live_region_announcements(&before, &after);
+        assert_eq!(announcements.len(), 1);
+        assert_eq!(announcements[0].text, "Import failed");
+    }
+
+    #[test]
+    fn the_first_screen_is_not_read_out_as_a_change() {
+        assert!(live_region_announcements(&[], &[live_text(1, "3 receipts")]).is_empty());
+    }
+
+    #[test]
+    fn a_node_without_a_live_region_is_never_read_out_on_a_change() {
+        let before = vec![element_with(1, None)];
+        let mut after = element_with(1, None);
+        after.label = "Row 2".into();
+        assert!(live_region_announcements(&before, &[after]).is_empty());
+    }
+
+    #[test]
+    fn a_live_region_reaches_every_control_under_it() {
+        let bounds = HashMap::from_iter([
+            (1, AccessibilityRect::new(0.0, 0.0, 200.0, 50.0)),
+            (2, AccessibilityRect::new(0.0, 0.0, 200.0, 50.0)),
+        ]);
+        let mut root = node(
+            1,
+            SemanticsRole::Layout,
+            Vec::new(),
+            None,
+            vec![node(
+                2,
+                SemanticsRole::Text {
+                    value: "2 left".into(),
+                },
+                Vec::new(),
+                None,
+                Vec::new(),
+            )],
+        );
+        root.live_region = Some(cranpose_ui::LiveRegionMode::Assertive);
+        let elements = project_semantics(&root, &bounds);
+        assert_eq!(elements.len(), 1);
+        assert_eq!(
+            elements[0].live_region,
+            Some(cranpose_ui::LiveRegionMode::Assertive)
+        );
     }
 }
