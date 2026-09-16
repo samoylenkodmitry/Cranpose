@@ -61,6 +61,7 @@ pub(crate) struct DesktopAccessibilityBridge {
     pending_custom_actions: Vec<(NodeId, usize)>,
     pending_focus: Vec<NodeId>,
     pending_values: Vec<(NodeId, f32)>,
+    pending_texts: Vec<(NodeId, String)>,
     pending_scrolls: Vec<(NodeId, bool)>,
     previous: Vec<AccessibilityElement>,
     seen_revision: Option<u64>,
@@ -89,6 +90,7 @@ impl DesktopAccessibilityBridge {
             pending_custom_actions: Vec::new(),
             pending_focus: Vec::new(),
             pending_values: Vec::new(),
+            pending_texts: Vec::new(),
             pending_scrolls: Vec::new(),
             previous: Vec::new(),
             seen_revision: None,
@@ -159,12 +161,17 @@ impl DesktopAccessibilityBridge {
                     }
                 }
                 Action::Focus => self.pending_focus.push(request.target_node),
-                Action::SetValue => {
-                    if let Some(ActionData::NumericValue(value)) = request.data {
+                Action::SetValue => match request.data {
+                    Some(ActionData::NumericValue(value)) => {
                         self.pending_values
                             .push((request.target_node, value as f32));
                     }
-                }
+                    Some(ActionData::Value(text)) => {
+                        self.pending_texts
+                            .push((request.target_node, text.to_string()));
+                    }
+                    _ => {}
+                },
                 Action::Increment => self.step_value(request.target_node, true),
                 Action::Decrement => self.step_value(request.target_node, false),
                 Action::ScrollDown | Action::ScrollRight => {
@@ -270,26 +277,31 @@ impl DesktopAccessibilityBridge {
     /// Moves the value of an adjustable control a screen reader asked to
     /// change. Answers whether one took the new value.
     pub(crate) fn run_value_requests(&mut self, shell: &mut AppShell<WgpuRenderer>) -> bool {
-        if self.pending_values.is_empty() {
-            return false;
-        }
-        let pending = std::mem::take(&mut self.pending_values);
-        let ids = accessibility::element_ids(&self.previous);
         let mut moved = false;
-        for (target, value) in pending {
-            let Some(element) = ids
-                .iter()
-                .position(|id| NodeId(*id as u64) == target)
-                .and_then(|position| self.previous.get(position))
-            else {
+        for (target, value) in std::mem::take(&mut self.pending_values) {
+            let Some(node_id) = self.node_id_for(target) else {
                 continue;
             };
-            let node_id = element.node_id;
             moved |= accessibility::run_reader_action(shell, |root| {
                 accessibility::set_progress(root, node_id, value)
             });
         }
+        for (target, text) in std::mem::take(&mut self.pending_texts) {
+            let Some(node_id) = self.node_id_for(target) else {
+                continue;
+            };
+            moved |= accessibility::run_reader_action(shell, |root| {
+                accessibility::set_text(root, node_id, &text)
+            });
+        }
         moved
+    }
+
+    /// The live node behind the accesskit id of a published element.
+    fn node_id_for(&self, target: NodeId) -> Option<cranpose_core::NodeId> {
+        let ids = accessibility::element_ids(&self.previous);
+        let position = ids.iter().position(|id| NodeId(*id as u64) == target)?;
+        self.previous.get(position).map(|element| element.node_id)
     }
 }
 
@@ -487,6 +499,9 @@ fn apply_actions(node: &mut Node, element: &AccessibilityElement) {
     }
     if element.focusable {
         node.add_action(Action::Focus);
+    }
+    if element.role == AccessibilityRole::TextField {
+        node.add_action(Action::SetValue);
     }
     if element.adjustable {
         node.add_action(Action::SetValue);

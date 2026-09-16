@@ -16,8 +16,8 @@ use cranpose_core::{
 use cranpose_foundation::{
     CanvasSemanticsNode, CollectionInfo, InvalidationKind, LiveRegionMode, ModifierNodeContext,
     NodeCapabilities, ProgressBarRangeInfo, ScrollAxisRange, SemanticsConfiguration,
-    SemanticsCustomAction, SemanticsScrollBy, SemanticsSetProgress, SemanticsWidgetRole,
-    text::TextRange,
+    SemanticsCustomAction, SemanticsScrollBy, SemanticsSetProgress, SemanticsSetText,
+    SemanticsWidgetRole, text::TextRange,
 };
 use cranpose_ui_layout::{Constraints, MeasurePolicy, Placement};
 use web_time::Instant;
@@ -391,6 +391,8 @@ pub struct SemanticsNode {
     pub progress: Option<ProgressBarRangeInfo>,
     /// What this control does when a screen reader moves its value.
     pub set_progress: Option<SemanticsSetProgress>,
+    /// What this field does when a screen reader hands it text.
+    pub set_text: Option<SemanticsSetText>,
     /// How far this container scrolled up and down, when it scrolls.
     pub vertical_scroll: Option<ScrollAxisRange>,
     /// How far this container scrolled left and right, when it scrolls.
@@ -428,6 +430,7 @@ impl Default for SemanticsNode {
             live_region: None,
             progress: None,
             set_progress: None,
+            set_text: None,
             vertical_scroll: None,
             horizontal_scroll: None,
             scroll_by: None,
@@ -3088,6 +3091,7 @@ fn semantics_node_from_parts(
         node.live_region = config.live_region;
         node.progress = config.progress;
         node.set_progress = config.set_progress;
+        node.set_text = config.set_text;
         node.vertical_scroll = config.vertical_scroll;
         node.horizontal_scroll = config.horizontal_scroll;
         node.scroll_by = config.scroll_by;

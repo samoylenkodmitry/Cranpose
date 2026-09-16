@@ -709,6 +709,7 @@ public class CranposeActivity extends NativeActivity {
     /** Reports the virtual view TalkBack focused, so app focus follows it. */
     private static native void nativeOnAccessibilityFocus(int virtualViewId);
     private static native void nativeOnAccessibilitySetProgress(int virtualViewId, float value);
+    private static native void nativeOnAccessibilitySetText(int virtualViewId, String text);
     private static native void nativeOnAccessibilityScroll(int virtualViewId, boolean forward);
 
     private static native void nativeOnAccessibilityStateChanged(boolean enabled);
@@ -1044,6 +1045,7 @@ public class CranposeActivity extends NativeActivity {
             if (element.role == 3) {
                 info.setEditable(true);
                 info.setText(element.value);
+                info.addAction(AccessibilityNodeInfo.ACTION_SET_TEXT);
             }
             if (element.role == 9 && Build.VERSION.SDK_INT >= 28) info.setHeading(true);
             // Compose's stateDescription. TalkBack speaks it after the label
@@ -1126,6 +1128,12 @@ public class CranposeActivity extends NativeActivity {
                         AccessibilityNodeInfo.ACTION_ARGUMENT_PROGRESS_VALUE,
                         element.progressCurrent);
                 nativeOnAccessibilitySetProgress(element.id, value);
+                return true;
+            }
+            if (element.role == 3 && action == AccessibilityNodeInfo.ACTION_SET_TEXT) {
+                CharSequence text = arguments == null ? null
+                        : arguments.getCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE);
+                nativeOnAccessibilitySetText(element.id, text == null ? "" : text.toString());
                 return true;
             }
             if (action == AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS) {

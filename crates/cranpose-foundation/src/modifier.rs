@@ -838,6 +838,34 @@ impl fmt::Debug for SemanticsSetProgress {
     }
 }
 
+/// What a text field does when a screen reader or a voice tool hands it new
+/// text. This is Compose's `SemanticsActions.SetText`; the answer says
+/// whether the field took the text.
+#[derive(Clone)]
+pub struct SemanticsSetText(Rc<dyn Fn(&str) -> bool>);
+
+impl SemanticsSetText {
+    pub fn new(handler: impl Fn(&str) -> bool + 'static) -> Self {
+        Self(Rc::new(handler))
+    }
+
+    pub fn invoke(&self, text: &str) -> bool {
+        (self.0)(text)
+    }
+}
+
+impl fmt::Debug for SemanticsSetText {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("SemanticsSetText")
+    }
+}
+
+impl PartialEq for SemanticsSetText {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
 /// Two set-progress actions always read as the same action, for the reason
 /// [`SemanticsCustomAction`]'s own comparison gives: the closure is rebuilt on
 /// every semantics collection, so comparing handler identity would report a
@@ -1088,6 +1116,9 @@ pub struct SemanticsConfiguration {
     /// What the control does when a screen reader moves its value. Compose's
     /// `setProgress`.
     pub set_progress: Option<SemanticsSetProgress>,
+    /// What this field does when a screen reader or a voice tool hands it
+    /// text. Compose's `setText`.
+    pub set_text: Option<SemanticsSetText>,
     /// How far this container scrolled up and down. Compose's
     /// `verticalScrollAxisRange`.
     pub vertical_scroll: Option<ScrollAxisRange>,
@@ -1124,6 +1155,7 @@ impl Default for SemanticsConfiguration {
             live_region: None,
             progress: None,
             set_progress: None,
+            set_text: None,
             vertical_scroll: None,
             horizontal_scroll: None,
             scroll_by: None,
@@ -1174,6 +1206,9 @@ impl SemanticsConfiguration {
         }
         if let Some(set_progress) = &other.set_progress {
             self.set_progress = Some(set_progress.clone());
+        }
+        if let Some(set_text) = &other.set_text {
+            self.set_text = Some(set_text.clone());
         }
         if let Some(progress) = other.progress {
             self.progress = Some(progress);

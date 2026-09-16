@@ -688,6 +688,23 @@ pub(crate) fn set_progress(root: &SemanticsNode, node_id: NodeId, value: f32) ->
     }
 }
 
+/// Hands a text field the text a screen reader or a voice tool dictated, and
+/// answers whether the field took it.
+#[cfg(any(
+    test,
+    all(feature = "desktop-shell", feature = "renderer-wgpu"),
+    all(feature = "android", feature = "renderer-wgpu", target_os = "android")
+))]
+pub(crate) fn set_text(root: &SemanticsNode, node_id: NodeId, text: &str) -> bool {
+    let Some(node) = find_semantics_node(root, node_id) else {
+        return false;
+    };
+    match &node.set_text {
+        Some(action) => action.invoke(text),
+        None => false,
+    }
+}
+
 /// The value one screen reader step away from the one the control holds now,
 /// for the readers that offer a step up and a step down rather than a value.
 #[cfg(any(
@@ -1572,6 +1589,22 @@ mod tests {
         assert!(set_progress(&root, 7, 0.6));
         assert_eq!(*taken.borrow(), vec![0.6]);
         assert!(!set_progress(&root, 99, 0.6), "no such control");
+    }
+
+    #[test]
+    fn a_reader_hands_a_field_its_text() {
+        let taken = Rc::new(RefCell::new(Vec::new()));
+        let seen = Rc::clone(&taken);
+        let mut root = node(7, SemanticsRole::Layout, Vec::new(), Some(""), Vec::new());
+        root.editable_text = true;
+        root.set_text = Some(cranpose_ui::SemanticsSetText::new(move |text| {
+            seen.borrow_mut().push(text.to_owned());
+            true
+        }));
+
+        assert!(set_text(&root, 7, "Milk"));
+        assert_eq!(*taken.borrow(), vec!["Milk".to_owned()]);
+        assert!(!set_text(&root, 99, "Milk"), "no such field");
     }
 
     #[test]

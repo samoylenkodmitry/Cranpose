@@ -1228,6 +1228,10 @@ impl SemanticsNode for TextFieldModifierNode {
         }
         config.text = Some(text);
         config.is_editable_text = true;
+        let state = self.state;
+        config.set_text = Some(cranpose_foundation::SemanticsSetText::new(move |text| {
+            state.set_text(text)
+        }));
         config.text_selection = Some(self.state.selection());
     }
 }

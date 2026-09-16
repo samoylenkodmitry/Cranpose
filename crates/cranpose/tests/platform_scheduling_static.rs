@@ -3454,3 +3454,30 @@ fn every_platform_says_which_tab_of_how_many() {
         "accesskit gets the tab's position in its set"
     );
 }
+
+#[test]
+fn a_reader_can_hand_a_field_its_text_on_android_and_the_desktop() {
+    let java_source = crate_source("android/java/dev/cranpose/android/CranposeActivity.java");
+    assert!(
+        java_source.contains("info.addAction(AccessibilityNodeInfo.ACTION_SET_TEXT);")
+            && java_source.contains(
+                "nativeOnAccessibilitySetText(element.id, text == null ? \"\" : text.toString());"
+            ),
+        "the Android host offers and forwards the set-text action"
+    );
+
+    let bridge_source = crate_source("src/android_accessibility.rs");
+    assert!(
+        bridge_source.contains(
+            "fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccessibilitySetText("
+        ),
+        "the Android bridge takes the text"
+    );
+
+    let desktop_source = crate_source("src/desktop_accessibility.rs");
+    assert!(
+        desktop_source.contains("accessibility::set_text(root, node_id, &text)")
+            && desktop_source.contains("Some(ActionData::Value(text)) => {"),
+        "accesskit's set-value action reaches the field"
+    );
+}

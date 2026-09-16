@@ -240,7 +240,7 @@ An app gets this with no code of its own:
 | `toggleable`, a switch or checkbox | the label, its state | flip it |
 | `selectable`, a tab or a radio row | the label, its role, whether it is picked | pick it |
 | `LiquidTabBar` | the tab, whether it is picked, and which of how many | pick it |
-| `BasicTextField` | the name the app gave it, or the text it holds; an empty field is still a stop | type into it |
+| `BasicTextField` | the name the app gave it, or the text it holds; an empty field is still a stop | type into it, or hand it whole text |
 | `Slider` | the value | move it |
 | `CircularProgressIndicator`, `LinearProgressIndicator` | "Loading" | |
 | `SwipeToDismiss` | the row's content | run "Dismiss" from the actions menu |
@@ -257,6 +257,11 @@ field, and the text it holds is its value: a reader hears "Folder name, text
 field, Milk". With no name the text stands in for it, and a field that is
 empty as well is still a stop that says "text field", so a reader can find
 it and type. A debug build logs a warning for such a field.
+
+A reader or a voice tool can also hand a field whole text at once: the
+set-text action on Android, which TalkBack's braille keyboard and Voice
+Access use, and accesskit's set-value action on the desktop. VoiceOver and
+the web type through the keyboard.
 
 The other way round, `Modifier::hide_from_accessibility()` takes a node and
 everything under it out of what a reader sees: a decorative image, or a
