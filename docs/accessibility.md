@@ -29,6 +29,10 @@ A control drawn on a canvas has no layout node of its own. `canvas_children`
 gives each drawn control its own bounds, label, role and actions, so a reader
 reaches a ring segment the same way it reaches a button.
 
+A debug build says so when a control takes a click or text and has no name:
+the log carries one `accessibility: control <id> takes a click or text but has
+no label` line per node. A release build stays quiet.
+
 ## 2. Focus
 
 ```rust

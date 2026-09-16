@@ -271,6 +271,8 @@ fn project_node(
             clickable,
             live_region,
         ));
+    } else if actionable && rect.is_visible() {
+        warn_unlabeled(node.node_id);
     }
 
     project_canvas_children(node, rect, live_region, elements);
@@ -295,6 +297,25 @@ fn project_node(
         );
     }
 }
+
+/// Names, once per node and only in a debug build, a control that takes a
+/// click or text but reaches no reader: it has no label and no text inside,
+/// so a screen reader has nothing to say for it.
+#[cfg(debug_assertions)]
+fn warn_unlabeled(node_id: NodeId) {
+    thread_local! {
+        static WARNED: std::cell::RefCell<std::collections::HashSet<NodeId>> =
+            std::cell::RefCell::new(std::collections::HashSet::new());
+    }
+    if WARNED.with(|warned| warned.borrow_mut().insert(node_id)) {
+        log::warn!(
+            "accessibility: control {node_id} takes a click or text but has no label, so a screen reader has nothing to read for it; give it Modifier::content_description or text inside"
+        );
+    }
+}
+
+#[cfg(not(debug_assertions))]
+fn warn_unlabeled(_node_id: NodeId) {}
 
 /// One control as the platforms see it. A scroll container with no label of
 /// its own comes through with an empty label: a reader never lands on it, but

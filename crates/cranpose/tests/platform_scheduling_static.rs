@@ -3214,6 +3214,7 @@ fn every_platform_bridge_pages_a_scroll_container() {
         workspace_source("crates/cranpose/android/java/dev/cranpose/android/CranposeActivity.java");
     let android_source = crate_source("src/android_accessibility.rs");
     let rust_shell_source = crate_source("src/android.rs");
+    let wire_source = crate_source("src/android_accessibility_wire.rs");
     assert!(
         java_source.contains("AccessibilityNodeInfo.ACTION_SCROLL_FORWARD")
             && java_source.contains("nativeOnAccessibilityScroll(")
