@@ -226,6 +226,40 @@ and `Modifier::value_picker()`, Compose's `Role.DropdownList` and
 A dropdown that also declares `Modifier::expand(..)` or
 `Modifier::collapse(..)` tells a reader whether the list is open.
 
+## 4h. One spec value, or the closure Compose takes
+
+Compose declares semantics through a receiver lambda:
+`Modifier.semantics { contentDescription = "Save" }`. Kotlin makes that
+read well. Rust has no receiver lambda, so the same call is
+`Modifier::semantics(|config| config.content_description = Some("Save".into()))`.
+Cranpose keeps that form for parity and adds a spec value beside it:
+
+```rust
+Modifier::empty().semantics_spec(
+    SemanticsSpec::new()
+        .content_description("Amount")
+        .error("needs a number"),
+)
+```
+
+`SemanticsSpec` is `SemanticsConfiguration` under a short name, so there is
+one type and one set of field names. Every builder method is named after
+the field it sets. Three things the spec form gives that the closure does
+not: it reads as one value rather than a body of assignments, it is one
+element on the modifier chain rather than one per property, and two specs
+can be compared, because the data half of the config derives `PartialEq`.
+
+The `Modifier::` shorthands (`content_description`, `role`, `heading`,
+`error`, `password`, `pane_title`, `traversal_index`, `merge_descendants`,
+`selectable_group`, `hide_from_accessibility`, `live_region`,
+`dropdown_list`, `value_picker`, `expand`, `collapse`) stay. They are
+Cranpose's own shape, not Compose's: Compose has only `semantics`,
+`clearAndSetSemantics`, `testTag`, `progressSemantics` and
+`selectableGroup` as modifiers, and puts everything else inside the
+lambda. One shorthand on a chain reads better than a whole spec; four or
+more of them read worse, and each one costs its own chain element, so a
+node with several is the place to reach for the spec.
+
 ## 5. A list a reader can page
 
 A lazy list builds only the rows on screen. A reader that walks the rows one
