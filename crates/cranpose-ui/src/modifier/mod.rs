@@ -30,6 +30,7 @@ mod padding;
 pub(crate) mod pointer_input;
 mod rotary_input;
 mod scroll;
+mod selectable;
 mod semantics;
 mod shadow;
 mod size;

@@ -189,6 +189,7 @@ An app gets this with no code of its own:
 | `Text` | the text | |
 | `Button`, `clickable` | the label, "button" | activate it |
 | `toggleable`, a switch or checkbox | the label, its state | flip it |
+| `selectable`, a tab or a radio row | the label, its role, whether it is picked | pick it |
 | `BasicTextField` | the label, the text it holds | type into it |
 | `Slider` | the value | move it |
 | `CircularProgressIndicator`, `LinearProgressIndicator` | "Loading" | |
