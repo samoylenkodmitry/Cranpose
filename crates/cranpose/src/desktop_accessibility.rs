@@ -57,6 +57,7 @@ pub(crate) struct DesktopAccessibilityBridge {
     actions: Arc<Mutex<Vec<ActionRequest>>>,
     centers: HashMap<NodeId, (f32, f32)>,
     pending_custom_actions: Vec<(NodeId, usize)>,
+    pending_focus: Vec<NodeId>,
     previous: Vec<AccessibilityElement>,
     seen_revision: Option<u64>,
 }
@@ -80,6 +81,7 @@ impl DesktopAccessibilityBridge {
             actions,
             centers: HashMap::new(),
             pending_custom_actions: Vec::new(),
+            pending_focus: Vec::new(),
             previous: Vec::new(),
             seen_revision: None,
         }
@@ -134,10 +136,33 @@ impl DesktopAccessibilityBridge {
                             .push((request.target_node, index as usize));
                     }
                 }
+                Action::Focus => self.pending_focus.push(request.target_node),
                 _ => {}
             }
         }
         clicks
+    }
+
+    /// Moves app focus onto the element a screen reader asked for, so the two
+    /// agree on what holds focus. Answers whether focus moved.
+    pub(crate) fn run_focus_requests(&mut self) -> bool {
+        if self.pending_focus.is_empty() {
+            return false;
+        }
+        let pending = std::mem::take(&mut self.pending_focus);
+        let ids = accessibility::element_ids(&self.previous);
+        let mut moved = false;
+        for target in pending {
+            let Some(element) = ids
+                .iter()
+                .position(|id| NodeId(*id as u64) == target)
+                .and_then(|position| self.previous.get(position))
+            else {
+                continue;
+            };
+            moved |= accessibility::focus_node(element.node_id);
+        }
+        moved
     }
 
     pub(crate) fn run_custom_actions(&mut self, shell: &mut AppShell<WgpuRenderer>) -> bool {
@@ -176,77 +201,113 @@ fn tree_update(elements: &[AccessibilityElement]) -> TreeUpdate {
     root.set_label("Cranpose application");
     root.set_children(children);
     let mut nodes = vec![(ROOT_ID, root)];
-    nodes.extend(ids.iter().zip(elements).map(|(id, element)| {
-        let role = match element.role {
-            AccessibilityRole::Button => Role::Button,
-            AccessibilityRole::StaticText => Role::Label,
-            AccessibilityRole::TextField => Role::TextInput,
-            AccessibilityRole::Checkbox => Role::CheckBox,
-            AccessibilityRole::Switch => Role::Switch,
-            AccessibilityRole::RadioButton => Role::RadioButton,
-            AccessibilityRole::Tab => Role::Tab,
-            AccessibilityRole::Image => Role::Image,
-            AccessibilityRole::Header => Role::Heading,
-            AccessibilityRole::Dialog => Role::Dialog,
-        };
-        let mut node = Node::new(role);
-        if element.role == AccessibilityRole::StaticText {
-            node.set_value(element.label.as_str());
-        } else {
-            node.set_label(element.label.as_str());
-        }
-        if let Some(value) = &element.value {
-            node.set_value(value.as_str());
-        }
-        if let Some(state) = &element.state_description {
-            node.set_description(state.as_str());
-        }
-        if let Some(selected) = element.selected {
-            node.set_selected(selected);
-        }
-        if let Some(toggled) = element.toggled {
-            node.set_toggled(if toggled {
-                Toggled::True
-            } else {
-                Toggled::False
-            });
-        }
-        if !element.enabled {
-            node.set_disabled();
-        }
-        node.set_bounds(Rect {
-            x0: element.bounds.x as f64,
-            y0: element.bounds.y as f64,
-            x1: (element.bounds.x + element.bounds.width) as f64,
-            y1: (element.bounds.y + element.bounds.height) as f64,
-        });
-        if element.clickable {
-            node.add_action(Action::Click);
-        }
-        if !element.custom_actions.is_empty() {
-            node.add_action(Action::CustomAction);
-            node.set_custom_actions(
-                element
-                    .custom_actions
-                    .iter()
-                    .enumerate()
-                    .map(|(index, label)| CustomAction {
-                        id: index as i32,
-                        description: label.as_str().into(),
-                    })
-                    .collect::<Vec<_>>(),
-            );
-        }
-        (NodeId(*id as u64), node)
-    }));
+    nodes.extend(
+        ids.iter()
+            .zip(elements)
+            .map(|(id, element)| (NodeId(*id as u64), accesskit_node(element))),
+    );
     let mut tree = Tree::new(ROOT_ID);
     tree.toolkit_name = Some("Cranpose".into());
     TreeUpdate {
         nodes,
         tree: Some(tree),
         tree_id: TreeId::ROOT,
-        focus: ROOT_ID,
+        focus: focused_node(&ids, elements),
     }
+}
+
+/// One control as accesskit describes it to a screen reader.
+fn accesskit_node(element: &AccessibilityElement) -> Node {
+    let mut node = Node::new(accesskit_role(element.role));
+    if element.role == AccessibilityRole::StaticText {
+        node.set_value(element.label.as_str());
+    } else {
+        node.set_label(element.label.as_str());
+    }
+    node.set_bounds(Rect {
+        x0: element.bounds.x as f64,
+        y0: element.bounds.y as f64,
+        x1: (element.bounds.x + element.bounds.width) as f64,
+        y1: (element.bounds.y + element.bounds.height) as f64,
+    });
+    apply_state(&mut node, element);
+    apply_actions(&mut node, element);
+    node
+}
+
+/// The accesskit role a screen reader reads the control as.
+fn accesskit_role(role: AccessibilityRole) -> Role {
+    match role {
+        AccessibilityRole::Button => Role::Button,
+        AccessibilityRole::StaticText => Role::Label,
+        AccessibilityRole::TextField => Role::TextInput,
+        AccessibilityRole::Checkbox => Role::CheckBox,
+        AccessibilityRole::Switch => Role::Switch,
+        AccessibilityRole::RadioButton => Role::RadioButton,
+        AccessibilityRole::Tab => Role::Tab,
+        AccessibilityRole::Image => Role::Image,
+        AccessibilityRole::Header => Role::Heading,
+        AccessibilityRole::Dialog => Role::Dialog,
+    }
+}
+
+/// What the control says about itself beyond its name: its value, the state
+/// description, and whether it is selected, toggled or disabled.
+fn apply_state(node: &mut Node, element: &AccessibilityElement) {
+    if let Some(value) = &element.value {
+        node.set_value(value.as_str());
+    }
+    if let Some(state) = &element.state_description {
+        node.set_description(state.as_str());
+    }
+    if let Some(selected) = element.selected {
+        node.set_selected(selected);
+    }
+    if let Some(toggled) = element.toggled {
+        node.set_toggled(if toggled {
+            Toggled::True
+        } else {
+            Toggled::False
+        });
+    }
+    if !element.enabled {
+        node.set_disabled();
+    }
+}
+
+/// What a screen reader can do with the control: activate it, run one of its
+/// custom actions, or put focus on it.
+fn apply_actions(node: &mut Node, element: &AccessibilityElement) {
+    if element.clickable {
+        node.add_action(Action::Click);
+    }
+    if !element.custom_actions.is_empty() {
+        node.add_action(Action::CustomAction);
+        node.set_custom_actions(
+            element
+                .custom_actions
+                .iter()
+                .enumerate()
+                .map(|(index, label)| CustomAction {
+                    id: index as i32,
+                    description: label.as_str().into(),
+                })
+                .collect::<Vec<_>>(),
+        );
+    }
+    if element.focusable {
+        node.add_action(Action::Focus);
+    }
+}
+
+/// The node a screen reader should sit on: the control the app focused, or the
+/// window when nothing holds focus.
+fn focused_node(ids: &[i32], elements: &[AccessibilityElement]) -> NodeId {
+    ids.iter()
+        .zip(elements)
+        .find(|(_, element)| element.focused)
+        .map(|(id, _)| NodeId(*id as u64))
+        .unwrap_or(ROOT_ID)
 }
 
 #[cfg(target_os = "macos")]
@@ -366,6 +427,65 @@ impl PlatformAdapter {
 mod tests {
     use super::*;
     use crate::accessibility::AccessibilityRect;
+
+    #[test]
+    fn the_tree_points_at_the_focused_control_and_offers_focus_on_the_others() {
+        let elements = vec![
+            AccessibilityElement {
+                node_id: 7,
+                label: "Name".into(),
+                bounds: AccessibilityRect::new(0.0, 0.0, 80.0, 44.0),
+                role: AccessibilityRole::TextField,
+                focusable: true,
+                ..AccessibilityElement::default()
+            },
+            AccessibilityElement {
+                node_id: 8,
+                label: "Save".into(),
+                bounds: AccessibilityRect::new(0.0, 50.0, 80.0, 44.0),
+                role: AccessibilityRole::Button,
+                clickable: true,
+                focusable: true,
+                focused: true,
+                ..AccessibilityElement::default()
+            },
+        ];
+
+        let update = tree_update(&elements);
+        let ids = accessibility::element_ids(&elements);
+
+        assert_eq!(
+            update.focus,
+            NodeId(ids[1] as u64),
+            "a screen reader reads focus from the tree, and it sits on Save"
+        );
+        for (id, _) in ids.iter().zip(&elements) {
+            let node = update
+                .nodes
+                .iter()
+                .find(|(node_id, _)| *node_id == NodeId(*id as u64))
+                .map(|(_, node)| node)
+                .expect("every element is in the tree");
+            assert!(
+                node.supports_action(Action::Focus),
+                "a control focus can land on offers the Focus action"
+            );
+        }
+    }
+
+    #[test]
+    fn a_tree_with_nothing_focused_leaves_focus_on_the_window() {
+        let elements = vec![AccessibilityElement {
+            node_id: 7,
+            label: "Name".into(),
+            bounds: AccessibilityRect::new(0.0, 0.0, 80.0, 44.0),
+            role: AccessibilityRole::TextField,
+            focusable: true,
+            ..AccessibilityElement::default()
+        }];
+
+        assert_eq!(tree_update(&elements).focus, ROOT_ID);
+    }
 
     #[test]
     fn desktop_tree_maps_controls_to_native_roles_and_click_actions() {

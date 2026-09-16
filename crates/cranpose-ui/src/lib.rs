@@ -88,7 +88,7 @@ pub use focus_dispatch::{
     process_focus_invalidations, schedule_focus_invalidation, set_active_focus_target,
 };
 #[doc(hidden)]
-pub use focus_manager::{FocusManager, local_focus_manager};
+pub use focus_manager::{FocusManager, local_focus_manager, request_focus_from_platform};
 pub use focus_order::{FocusEntry, collect_focus_order, focus_order_len, set_focus_order};
 pub use font_scale::{FontScaleCurve, MAX_FONT_SCALE_KNOTS};
 pub use interaction::{

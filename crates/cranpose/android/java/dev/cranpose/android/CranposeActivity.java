@@ -706,6 +706,9 @@ public class CranposeActivity extends NativeActivity {
 
     private static native void nativeOnAccessibilityCustomAction(int virtualViewId, int actionIndex);
 
+    /** Reports the virtual view TalkBack focused, so app focus follows it. */
+    private static native void nativeOnAccessibilityFocus(int virtualViewId);
+
     private static native void nativeOnAccessibilityStateChanged(boolean enabled);
 
     private AccessibilityManager.AccessibilityStateChangeListener
@@ -752,7 +755,7 @@ public class CranposeActivity extends NativeActivity {
     }
 
     /** Field count of one accessibility record; see android_accessibility_wire.rs. */
-    private static final int ACCESSIBILITY_FIELDS = 17;
+    private static final int ACCESSIBILITY_FIELDS = 19;
 
     /** Separator packing a node's custom action labels into one field. */
     private static final String ACCESSIBILITY_ACTION_SEPARATOR = String.valueOf((char) 0x1f);
@@ -781,7 +784,8 @@ public class CranposeActivity extends NativeActivity {
                         unescapeAccessibility(fields[10]), unescapeAccessibility(fields[11]),
                         unescapeAccessibility(fields[12]), Integer.parseInt(fields[13]),
                         Integer.parseInt(fields[14]), "1".equals(fields[15]),
-                        parseAccessibilityActions(fields[16])));
+                        parseAccessibilityActions(fields[16]), "1".equals(fields[17]),
+                        "1".equals(fields[18])));
             } catch (RuntimeException ignored) {
                 // A malformed record must not make the host Activity inaccessible.
             }
@@ -823,11 +827,14 @@ public class CranposeActivity extends NativeActivity {
         final int toggled;
         final boolean enabled;
         final String[] customActions;
+        final boolean focusable;
+        final boolean focused;
 
         CranposeAccessibilityElement(int id, int role, Rect bounds, float centerX,
                 float centerY, boolean clickable, String label, String value,
                 String stateDescription, String clickLabel, int selected, int toggled,
-                boolean enabled, String[] customActions) {
+                boolean enabled, String[] customActions, boolean focusable,
+                boolean focused) {
             this.id = id;
             this.role = role;
             this.bounds = bounds;
@@ -842,6 +849,8 @@ public class CranposeActivity extends NativeActivity {
             this.toggled = toggled;
             this.enabled = enabled;
             this.customActions = customActions;
+            this.focusable = focusable;
+            this.focused = focused;
         }
 
         /**
@@ -882,6 +891,22 @@ public class CranposeActivity extends NativeActivity {
         void setElements(List<CranposeAccessibilityElement> elements) {
             this.elements = elements;
             host.sendAccessibilityEvent(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED);
+            followAppFocus();
+        }
+
+        /**
+         * Moves the TalkBack cursor onto the control the app focused, so a
+         * focus move from a keyboard or from the app itself reaches the
+         * reader. A move the reader made itself is already where it belongs.
+         */
+        private void followAppFocus() {
+            for (CranposeAccessibilityElement element : elements) {
+                if (!element.focused) continue;
+                if (element.id == focusedId) return;
+                focusedId = element.id;
+                sendEvent(element.id, AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUSED);
+                return;
+            }
         }
 
         @Override
@@ -905,6 +930,8 @@ public class CranposeActivity extends NativeActivity {
             info.setVisibleToUser(true);
             info.setFocusable(true);
             info.setAccessibilityFocused(focusedId == element.id);
+            info.setFocused(element.focused);
+            if (element.focusable) info.addAction(AccessibilityNodeInfo.ACTION_FOCUS);
             info.setContentDescription(element.label);
             info.setClassName(element.className());
             if (element.role == 3) {
@@ -971,6 +998,13 @@ public class CranposeActivity extends NativeActivity {
             if (action == AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS) {
                 focusedId = element.id;
                 sendEvent(element.id, AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUSED);
+                // The app moves its own focus to the control the reader landed
+                // on, so a later Tab carries on from there.
+                if (element.focusable) nativeOnAccessibilityFocus(element.id);
+                return true;
+            }
+            if (action == AccessibilityNodeInfo.ACTION_FOCUS && element.focusable) {
+                nativeOnAccessibilityFocus(element.id);
                 return true;
             }
             if (action == AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS) {

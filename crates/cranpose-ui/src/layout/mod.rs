@@ -367,6 +367,11 @@ pub struct SemanticsNode {
     pub canvas_children: Vec<CanvasSemanticsNode>,
     pub editable_text: bool,
     pub text_selection: Option<TextRange>,
+    /// Whether this node registered a focus target, so focus can land on it.
+    /// Compose's `SemanticsProperties.Focused` companion.
+    pub focusable: bool,
+    /// Whether focus sits on this node right now.
+    pub focused: bool,
 }
 
 impl Default for SemanticsNode {
@@ -387,6 +392,8 @@ impl Default for SemanticsNode {
             canvas_children: Vec::new(),
             editable_text: false,
             text_selection: None,
+            focusable: false,
+            focused: false,
         }
     }
 }
@@ -3037,6 +3044,9 @@ fn semantics_node_from_parts(
         node.editable_text = config.is_editable_text;
         node.text_selection = config.text_selection;
     }
+
+    node.focusable = crate::focus_dispatch::has_focus_target(node_id);
+    node.focused = node.focusable && crate::focus_dispatch::active_focus_target() == Some(node_id);
 
     node.role = role;
     node

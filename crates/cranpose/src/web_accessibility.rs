@@ -1,4 +1,4 @@
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use cranpose_app_shell::AppShell;
 use cranpose_render_wgpu::WgpuRenderer;
@@ -7,10 +7,136 @@ use web_sys::{Document, Element, HtmlCanvasElement, HtmlElement, MouseEvent};
 
 use crate::accessibility::{self, AccessibilityElement, AccessibilityRole};
 
+/// The role, value and state a screen reader reads off the mirrored element.
+fn apply_role_and_state(node: &HtmlElement, element: &AccessibilityElement) -> Result<(), JsValue> {
+    node.set_attribute("role", aria_role(element.role))?;
+    apply_role_extras(node, element)?;
+    apply_aria_state(node, element)
+}
+
+/// The ARIA role a screen reader reads the control as.
+fn aria_role(role: AccessibilityRole) -> &'static str {
+    match role {
+        AccessibilityRole::Button => "button",
+        AccessibilityRole::StaticText => "text",
+        AccessibilityRole::TextField => "textbox",
+        AccessibilityRole::Checkbox => "checkbox",
+        AccessibilityRole::Switch => "switch",
+        AccessibilityRole::RadioButton => "radio",
+        AccessibilityRole::Tab => "tab",
+        AccessibilityRole::Image => "img",
+        AccessibilityRole::Header => "heading",
+        AccessibilityRole::Dialog => "dialog",
+    }
+}
+
+/// What a role asks for beyond its name: text to read, a heading level, the
+/// value of a field, or the modal flag on a dialog.
+fn apply_role_extras(node: &HtmlElement, element: &AccessibilityElement) -> Result<(), JsValue> {
+    match element.role {
+        AccessibilityRole::StaticText => node.set_text_content(Some(&element.label)),
+        AccessibilityRole::TextField => {
+            if let Some(value) = &element.value {
+                node.set_attribute("aria-valuetext", value)?;
+            }
+        }
+        AccessibilityRole::Header => {
+            node.set_attribute("aria-level", "2")?;
+            node.set_text_content(Some(&element.label));
+        }
+        AccessibilityRole::Dialog => node.set_attribute("aria-modal", "true")?,
+        _ => {}
+    }
+    Ok(())
+}
+
+/// The state description, the checked or selected flag, and whether the
+/// control is disabled.
+fn apply_aria_state(node: &HtmlElement, element: &AccessibilityElement) -> Result<(), JsValue> {
+    if let Some(state) = &element.state_description {
+        node.set_attribute("aria-description", state)?;
+    }
+    if let Some(toggled) = element.toggled {
+        node.set_attribute("aria-checked", if toggled { "true" } else { "false" })?;
+    }
+    if let Some(selected) = element.selected {
+        let selected = if selected { "true" } else { "false" };
+        match element.role {
+            AccessibilityRole::RadioButton => node.set_attribute("aria-checked", selected)?,
+            _ => node.set_attribute("aria-selected", selected)?,
+        }
+    }
+    if !element.enabled {
+        node.set_attribute("aria-disabled", "true")?;
+    }
+    Ok(())
+}
+
+/// Puts the mirrored element over the control it stands for, so a reader's
+/// cursor and a touch exploration land in the same place.
+fn place_node(
+    node: &HtmlElement,
+    element: &AccessibilityElement,
+    left: f64,
+    top: f64,
+    scale_x: f64,
+    scale_y: f64,
+) -> Result<(), JsValue> {
+    let style = node.style();
+    style.set_property("position", "fixed")?;
+    style.set_property(
+        "left",
+        &format!("{}px", left + element.bounds.x as f64 * scale_x),
+    )?;
+    style.set_property(
+        "top",
+        &format!("{}px", top + element.bounds.y as f64 * scale_y),
+    )?;
+    style.set_property(
+        "width",
+        &format!("{}px", element.bounds.width as f64 * scale_x),
+    )?;
+    style.set_property(
+        "height",
+        &format!("{}px", element.bounds.height as f64 * scale_y),
+    )?;
+    style.set_property("opacity", "0.001")?;
+    style.set_property("pointer-events", "none")?;
+    style.set_property("overflow", "hidden")?;
+    Ok(())
+}
+
+/// Hands a Tab landing or a screen reader focus on the mirror back to the app.
+fn attach_focus_listener(
+    root: &HtmlElement,
+    node_ids: Rc<RefCell<HashMap<i32, cranpose_core::NodeId>>>,
+) -> Result<(), JsValue> {
+    let focus_in = Closure::wrap(Box::new(move |event: web_sys::Event| {
+        let Some(target) = event.target().and_then(|t| t.dyn_into::<Element>().ok()) else {
+            return;
+        };
+        let Some(element_id) = target
+            .get_attribute("data-cranpose-node")
+            .and_then(|value| value.parse::<i32>().ok())
+        else {
+            return;
+        };
+        let Some(node_id) = node_ids.borrow().get(&element_id).copied() else {
+            return;
+        };
+        accessibility::focus_node(node_id);
+    }) as Box<dyn FnMut(_)>);
+    root.add_event_listener_with_callback("focusin", focus_in.as_ref().unchecked_ref())?;
+    focus_in.forget();
+    Ok(())
+}
+
 pub(crate) struct WebAccessibilityBridge {
     root: HtmlElement,
     canvas: HtmlCanvasElement,
     previous: Vec<AccessibilityElement>,
+    node_ids: Rc<RefCell<HashMap<i32, cranpose_core::NodeId>>>,
+    focused_element: Option<i32>,
 }
 
 impl WebAccessibilityBridge {
@@ -60,11 +186,32 @@ impl WebAccessibilityBridge {
             .body()
             .ok_or("document has no body")?
             .append_child(&root)?;
+        let node_ids: Rc<RefCell<HashMap<i32, cranpose_core::NodeId>>> =
+            Rc::new(RefCell::new(HashMap::new()));
+        attach_focus_listener(&root, Rc::clone(&node_ids))?;
+
         Ok(Self {
             root,
             canvas,
             previous: Vec::new(),
+            node_ids,
+            focused_element: None,
         })
+    }
+
+    /// Moves the browser's focus onto the control the app focused, so a
+    /// screen reader on the mirror follows a focus move the app made.
+    fn follow_app_focus(
+        &mut self,
+        node: &HtmlElement,
+        element: &AccessibilityElement,
+        id: i32,
+    ) -> Result<(), JsValue> {
+        if !element.focused || self.focused_element == Some(id) {
+            return Ok(());
+        }
+        self.focused_element = Some(id);
+        node.focus()
     }
 
     pub(crate) fn sync(
@@ -78,6 +225,7 @@ impl WebAccessibilityBridge {
         }
         self.previous.clone_from(&elements);
         self.root.set_inner_html("");
+        self.node_ids.borrow_mut().clear();
 
         let canvas_rect = self.canvas.get_bounding_client_rect();
         let viewport = shell.viewport_size();
@@ -91,86 +239,36 @@ impl WebAccessibilityBridge {
                 .dyn_into::<HtmlElement>()?;
             node.set_attribute("aria-label", &element.label)?;
             node.set_attribute("data-cranpose-node", &id.to_string())?;
-            match element.role {
-                AccessibilityRole::Button => node.set_attribute("role", "button")?,
-                AccessibilityRole::StaticText => {
-                    node.set_attribute("role", "text")?;
-                    node.set_text_content(Some(&element.label));
-                }
-                AccessibilityRole::TextField => {
-                    node.set_attribute("role", "textbox")?;
-                    if let Some(value) = &element.value {
-                        node.set_attribute("aria-valuetext", value)?;
-                    }
-                }
-                AccessibilityRole::Checkbox => node.set_attribute("role", "checkbox")?,
-                AccessibilityRole::Switch => node.set_attribute("role", "switch")?,
-                AccessibilityRole::RadioButton => node.set_attribute("role", "radio")?,
-                AccessibilityRole::Tab => node.set_attribute("role", "tab")?,
-                AccessibilityRole::Image => node.set_attribute("role", "img")?,
-                AccessibilityRole::Header => {
-                    node.set_attribute("role", "heading")?;
-                    node.set_attribute("aria-level", "2")?;
-                    node.set_text_content(Some(&element.label));
-                }
-                AccessibilityRole::Dialog => {
-                    node.set_attribute("role", "dialog")?;
-                    node.set_attribute("aria-modal", "true")?;
-                }
-            }
-            if let Some(state) = &element.state_description {
-                node.set_attribute("aria-description", state)?;
-            }
-            if let Some(toggled) = element.toggled {
-                node.set_attribute("aria-checked", if toggled { "true" } else { "false" })?;
-            }
-            if let Some(selected) = element.selected {
-                let selected = if selected { "true" } else { "false" };
-                match element.role {
-                    AccessibilityRole::RadioButton => {
-                        node.set_attribute("aria-checked", selected)?
-                    }
-                    _ => node.set_attribute("aria-selected", selected)?,
-                }
-            }
-            if !element.enabled {
-                node.set_attribute("aria-disabled", "true")?;
-            }
+            apply_role_and_state(&node, &element)?;
             if element.clickable {
                 let (x, y) = element.bounds.center();
                 node.set_attribute("data-cranpose-x", &x.to_string())?;
                 node.set_attribute("data-cranpose-y", &y.to_string())?;
-            } else {
-                node.set_attribute("tabindex", "-1")?;
             }
-            let style = node.style();
-            style.set_property("position", "fixed")?;
-            style.set_property(
-                "left",
-                &format!(
-                    "{}px",
-                    canvas_rect.left() + element.bounds.x as f64 * scale_x
-                ),
+            node.set_attribute(
+                "tabindex",
+                if element.focusable {
+                    "0"
+                } else if element.clickable {
+                    "auto"
+                } else {
+                    "-1"
+                },
             )?;
-            style.set_property(
-                "top",
-                &format!(
-                    "{}px",
-                    canvas_rect.top() + element.bounds.y as f64 * scale_y
-                ),
+            self.node_ids.borrow_mut().insert(id, element.node_id);
+            place_node(
+                &node,
+                &element,
+                canvas_rect.left(),
+                canvas_rect.top(),
+                scale_x,
+                scale_y,
             )?;
-            style.set_property(
-                "width",
-                &format!("{}px", element.bounds.width as f64 * scale_x),
-            )?;
-            style.set_property(
-                "height",
-                &format!("{}px", element.bounds.height as f64 * scale_y),
-            )?;
-            style.set_property("opacity", "0.001")?;
-            style.set_property("pointer-events", "none")?;
-            style.set_property("overflow", "hidden")?;
             self.root.append_child(&node)?;
+            self.follow_app_focus(&node, &element, id)?;
+        }
+        if !self.previous.iter().any(|element| element.focused) {
+            self.focused_element = None;
         }
         Ok(())
     }

@@ -81,6 +81,8 @@ pub(crate) struct AccessibilityElement {
     pub(crate) toggled: Option<bool>,
     pub(crate) enabled: bool,
     pub(crate) custom_actions: Vec<String>,
+    pub(crate) focusable: bool,
+    pub(crate) focused: bool,
 }
 
 impl Default for AccessibilityElement {
@@ -99,6 +101,8 @@ impl Default for AccessibilityElement {
             toggled: None,
             enabled: true,
             custom_actions: Vec::new(),
+            focusable: false,
+            focused: false,
         }
     }
 }
@@ -260,6 +264,8 @@ fn project_node(
                 .iter()
                 .map(|action| action.label.clone())
                 .collect(),
+            focusable: node.focusable,
+            focused: node.focused,
         });
     }
 
@@ -309,6 +315,8 @@ fn project_canvas_children(
                 .iter()
                 .map(|action| action.label.clone())
                 .collect(),
+            focusable: false,
+            focused: false,
         });
     }
 }
@@ -341,6 +349,13 @@ pub(crate) fn perform_custom_action(
         }
         None => false,
     }
+}
+
+/// Moves app focus onto the node a platform's accessibility layer asked for,
+/// so a screen reader and the app agree on what holds focus. Answers whether
+/// focus moved.
+pub(crate) fn focus_node(node_id: NodeId) -> bool {
+    cranpose_ui::request_focus_from_platform(node_id)
 }
 
 #[cfg(any(

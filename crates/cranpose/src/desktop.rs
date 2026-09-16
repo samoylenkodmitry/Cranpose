@@ -4426,6 +4426,7 @@ impl ApplicationHandler for App {
                 app.pointer_released_at_position(x, y);
             }
             accessibility.run_custom_actions(app);
+            accessibility.run_focus_requests();
         }
         let Some(platform) = &mut self.platform else {
             return;
@@ -4851,6 +4852,7 @@ impl ApplicationHandler for App {
                 activated = true;
             }
             activated |= accessibility.run_custom_actions(app);
+            activated |= accessibility.run_focus_requests();
             if activated {
                 request_redraw_once(&window, &mut self.primary_redraw_pending);
             }

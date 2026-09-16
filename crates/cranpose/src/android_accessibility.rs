@@ -22,6 +22,7 @@ use crate::{
 
 static ACTIVATIONS: OnceLock<Mutex<Vec<(f32, f32)>>> = OnceLock::new();
 static CUSTOM_ACTIONS: OnceLock<Mutex<Vec<(i32, usize)>>> = OnceLock::new();
+static FOCUS_REQUESTS: OnceLock<Mutex<Vec<i32>>> = OnceLock::new();
 static LOOP_WAKER: Mutex<Option<android_activity::AndroidAppWaker>> = Mutex::new(None);
 static PLATFORM_ACCESSIBILITY_ENABLED: AtomicBool = AtomicBool::new(false);
 
@@ -63,6 +64,10 @@ fn custom_actions() -> &'static Mutex<Vec<(i32, usize)>> {
     CUSTOM_ACTIONS.get_or_init(|| Mutex::new(Vec::new()))
 }
 
+fn focus_requests() -> &'static Mutex<Vec<i32>> {
+    FOCUS_REQUESTS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
 pub(crate) fn drain_activations() -> Vec<(f32, f32)> {
     std::mem::take(
         &mut *activations()
@@ -74,6 +79,15 @@ pub(crate) fn drain_activations() -> Vec<(f32, f32)> {
 pub(crate) fn drain_custom_actions() -> Vec<(i32, usize)> {
     std::mem::take(
         &mut *custom_actions()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()),
+    )
+}
+
+/// The virtual view ids TalkBack put its cursor on since the last frame.
+pub(crate) fn drain_focus_requests() -> Vec<i32> {
+    std::mem::take(
+        &mut *focus_requests()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()),
     )
@@ -148,6 +162,22 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccess
     if previous != enabled {
         wake_loop();
     }
+}
+
+/// TalkBack landed its cursor on a virtual view; the frame loop moves app
+/// focus to match, so the reader and the app agree on what holds focus.
+#[doc(hidden)]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccessibilityFocus(
+    _env: EnvUnowned<'_>,
+    _class: JClass<'_>,
+    virtual_id: jint,
+) {
+    focus_requests()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .push(virtual_id);
+    wake_loop();
 }
 
 #[doc(hidden)]
