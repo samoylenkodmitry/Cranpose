@@ -290,7 +290,9 @@ DevTools protocol against a served web demo (`apps/desktop-demo/build-web.sh
 in the tab row, presses Page Down and Page Up, reads the mirror's positions
 and the browser console, and prints one JSON report. A page that works moves
 the row by nine tenths of its width and back, keeps the focus on the same
-button, and leaves no panic in the console.
+button, and leaves no panic in the console. The report also lists the text
+fields of the Text Input page: an empty one is a stop with an empty label,
+and each of the others carries its text as content.
 
 ## Check it by hand
 

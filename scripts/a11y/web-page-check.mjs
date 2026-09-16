@@ -4,7 +4,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const url = process.argv[2] ?? (() => { throw new Error("usage: node scripts/a11y/web-page-check.mjs <url of a served web demo>"); })();
+const url = process.argv[2] ?? "http://192.168.50.114:8080/";
 const chrome = process.env.CHROME ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const port = 9333;
 const profile = mkdtempSync(join(tmpdir(), "a11y-chrome-"));
@@ -96,6 +96,7 @@ try {
       counter: nodes.filter(n => n.getAttribute('aria-label') === 'Counter App').map(n => [n.style.left, n.getAttribute('data-cranpose-page'), n.getAttribute('data-cranpose-page-dx'), n.getAttribute('data-cranpose-page-dy')]),
       hacker: nodes.filter(n => n.getAttribute('aria-label') === 'Hacker News').map(n => n.style.left) };
   })()`);
+  report.textboxes = await evaluate(`[...document.querySelectorAll('[data-cranpose-node][role="textbox"]')].map(n => [n.getAttribute('aria-label'), n.textContent, n.getAttribute('tabindex')])`);
   report.focused = await evaluate(`(() => { const n = document.querySelector('[data-cranpose-node][aria-label="Counter App"]'); if (!n) return null; n.focus(); return document.activeElement === n; })()`);
   await key("PageDown", "PageDown", 34);
   await pause(1200);
@@ -116,7 +117,19 @@ try {
   await pause(1500);
   report.afterClick = await evaluate(`(() => {
     const labels = [...document.querySelectorAll('[data-cranpose-node]')].map(n => n.getAttribute('aria-label')).filter(Boolean);
-    return { count: labels.length, first: labels.slice(0, 12) };
+    const textboxes = [...document.querySelectorAll('[data-cranpose-node][role="textbox"]')].map(n => [n.getAttribute('aria-label'), n.textContent]);
+    return { count: labels.length, first: labels.slice(0, 12), textboxes };
+  })()`);
+  await evaluate(`(() => { const n = document.querySelector('[data-cranpose-node][aria-label="Counter App"]'); if (n) n.click(); return !!n; })()`);
+  await pause(1500);
+  await evaluate(`(() => { const n = document.querySelector('[data-cranpose-node][aria-label="Text Input"]'); if (n) n.click(); return !!n; })()`);
+  await pause(1500);
+  report.textInput = await evaluate(`(() => {
+    const textboxes = [...document.querySelectorAll('[data-cranpose-node][role="textbox"]')].map(n => [n.getAttribute('aria-label'), n.textContent, n.getAttribute('tabindex')]);
+    const labels = [...document.querySelectorAll('[data-cranpose-node]')].map(n => n.getAttribute('aria-label')).filter(Boolean);
+    const tab = document.querySelector('[data-cranpose-node][aria-label="Text Input"]');
+    const roles = [...new Set([...document.querySelectorAll('[data-cranpose-node]')].map(n => n.getAttribute('role')))];
+    return { textboxes, count: labels.length, roles, later: labels.slice(16, 40), tab: tab && [tab.getAttribute('data-cranpose-x'), tab.getAttribute('data-cranpose-y'), tab.style.left], active: document.activeElement && document.activeElement.getAttribute('aria-label') };
   })()`);
 } catch (error) {
   report.error = String(error);
