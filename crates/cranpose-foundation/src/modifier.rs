@@ -733,6 +733,14 @@ impl ProgressBarRangeInfo {
 
 /// How far a container has scrolled along one axis and how far it can go.
 ///
+/// How many rows and columns a list holds, so a screen reader can say
+/// "list, 12 items" as its cursor enters. Compose's `CollectionInfo`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CollectionInfo {
+    pub rows: usize,
+    pub columns: usize,
+}
+
 /// This is Compose's `ScrollAxisRange` (`verticalScrollAxisRange`,
 /// `horizontalScrollAxisRange`). A lazy list has no whole extent to give, so
 /// it reports the first visible item as the value and one more than that as
@@ -827,6 +835,34 @@ impl fmt::Debug for SemanticsSetProgress {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SemanticsSetProgress")
             .finish_non_exhaustive()
+    }
+}
+
+/// What a text field does when a screen reader or a voice tool hands it new
+/// text. This is Compose's `SemanticsActions.SetText`; the answer says
+/// whether the field took the text.
+#[derive(Clone)]
+pub struct SemanticsSetText(Rc<dyn Fn(&str) -> bool>);
+
+impl SemanticsSetText {
+    pub fn new(handler: impl Fn(&str) -> bool + 'static) -> Self {
+        Self(Rc::new(handler))
+    }
+
+    pub fn invoke(&self, text: &str) -> bool {
+        (self.0)(text)
+    }
+}
+
+impl fmt::Debug for SemanticsSetText {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("SemanticsSetText")
+    }
+}
+
+impl PartialEq for SemanticsSetText {
+    fn eq(&self, _other: &Self) -> bool {
+        true
     }
 }
 
@@ -1048,6 +1084,9 @@ pub struct SemanticsConfiguration {
     pub enabled: bool,
     pub is_clickable: bool,
     pub is_editable_text: bool,
+    /// The text an editable field holds, read as its value. Compose's
+    /// `editableText`.
+    pub text: Option<String>,
     pub text_selection: Option<crate::text::TextRange>,
     pub custom_actions: Vec<SemanticsCustomAction>,
     /// Controls this node drew itself instead of laying out. See
@@ -1056,6 +1095,21 @@ pub struct SemanticsConfiguration {
     /// Whether this node takes over the screen: everything outside it is
     /// inert, and a screen reader keeps its traversal inside.
     pub is_modal: bool,
+    /// Whether a screen reader skips this node and everything under it: a
+    /// decorative image, or a placeholder drawn under a named field. Compose's
+    /// `hideFromAccessibility`.
+    pub hidden: bool,
+    /// Whether a screen reader takes this node and the text under it as one
+    /// stop, the way it does for a button: a row whose name, count and price
+    /// belong together. Compose's `mergeDescendants`.
+    pub merge_descendants: bool,
+    /// Whether the selectable controls under this node form one group, so a
+    /// screen reader says which of how many a tab or a radio button is.
+    /// Compose's `selectableGroup`.
+    pub selectable_group: bool,
+    /// The title of the screen or pane this node is the root of, read out when
+    /// the app moves to it. Compose's `paneTitle`.
+    pub pane_title: Option<String>,
     /// Compose's `liveRegion`. When set, a screen reader reads this node again
     /// whenever its text changes, without the user moving to it.
     pub live_region: Option<LiveRegionMode>,
@@ -1065,6 +1119,9 @@ pub struct SemanticsConfiguration {
     /// What the control does when a screen reader moves its value. Compose's
     /// `setProgress`.
     pub set_progress: Option<SemanticsSetProgress>,
+    /// What this field does when a screen reader or a voice tool hands it
+    /// text. Compose's `setText`.
+    pub set_text: Option<SemanticsSetText>,
     /// How far this container scrolled up and down. Compose's
     /// `verticalScrollAxisRange`.
     pub vertical_scroll: Option<ScrollAxisRange>,
@@ -1074,6 +1131,8 @@ pub struct SemanticsConfiguration {
     /// What this container does when a screen reader pages it. Compose's
     /// `scrollBy`.
     pub scroll_by: Option<SemanticsScrollBy>,
+    /// How many rows and columns this list holds. Compose's `collectionInfo`.
+    pub collection: Option<CollectionInfo>,
 }
 
 impl Default for SemanticsConfiguration {
@@ -1088,16 +1147,23 @@ impl Default for SemanticsConfiguration {
             enabled: true,
             is_clickable: false,
             is_editable_text: false,
+            text: None,
             text_selection: None,
             custom_actions: Vec::new(),
             canvas_children: Vec::new(),
             is_modal: false,
+            hidden: false,
+            merge_descendants: false,
+            selectable_group: false,
+            pane_title: None,
             live_region: None,
             progress: None,
             set_progress: None,
+            set_text: None,
             vertical_scroll: None,
             horizontal_scroll: None,
             scroll_by: None,
+            collection: None,
         }
     }
 }
@@ -1125,6 +1191,9 @@ impl SemanticsConfiguration {
         self.enabled &= other.enabled;
         self.is_clickable |= other.is_clickable;
         self.is_editable_text |= other.is_editable_text;
+        if let Some(text) = &other.text {
+            self.text = Some(text.clone());
+        }
         if let Some(selection) = other.text_selection {
             self.text_selection = Some(selection);
         }
@@ -1133,11 +1202,20 @@ impl SemanticsConfiguration {
         self.canvas_children
             .extend(other.canvas_children.iter().cloned());
         self.is_modal |= other.is_modal;
+        self.hidden |= other.hidden;
+        self.merge_descendants |= other.merge_descendants;
+        self.selectable_group |= other.selectable_group;
+        if let Some(title) = &other.pane_title {
+            self.pane_title = Some(title.clone());
+        }
         if let Some(live_region) = other.live_region {
             self.live_region = Some(live_region);
         }
         if let Some(set_progress) = &other.set_progress {
             self.set_progress = Some(set_progress.clone());
+        }
+        if let Some(set_text) = &other.set_text {
+            self.set_text = Some(set_text.clone());
         }
         if let Some(progress) = other.progress {
             self.progress = Some(progress);
@@ -1150,6 +1228,9 @@ impl SemanticsConfiguration {
         }
         if let Some(scroll_by) = &other.scroll_by {
             self.scroll_by = Some(scroll_by.clone());
+        }
+        if let Some(collection) = other.collection {
+            self.collection = Some(collection);
         }
     }
 

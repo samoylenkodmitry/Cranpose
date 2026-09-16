@@ -61,6 +61,7 @@ pub(crate) struct DesktopAccessibilityBridge {
     pending_custom_actions: Vec<(NodeId, usize)>,
     pending_focus: Vec<NodeId>,
     pending_values: Vec<(NodeId, f32)>,
+    pending_texts: Vec<(NodeId, String)>,
     pending_scrolls: Vec<(NodeId, bool)>,
     previous: Vec<AccessibilityElement>,
     seen_revision: Option<u64>,
@@ -89,6 +90,7 @@ impl DesktopAccessibilityBridge {
             pending_custom_actions: Vec::new(),
             pending_focus: Vec::new(),
             pending_values: Vec::new(),
+            pending_texts: Vec::new(),
             pending_scrolls: Vec::new(),
             previous: Vec::new(),
             seen_revision: None,
@@ -102,11 +104,15 @@ impl DesktopAccessibilityBridge {
     }
 
     pub(crate) fn sync(&mut self, shell: &mut AppShell<WgpuRenderer>) {
-        let spoken = join_announcements(accessibility::drain_app_announcements());
+        let mut announcements = accessibility::drain_app_announcements();
         let mut changed = false;
         if let Some(elements) = accessibility::snapshot_if_changed(shell, &mut self.seen_revision)
             && elements != self.previous
         {
+            announcements.extend(accessibility::pane_title_announcements(
+                &self.previous,
+                &elements,
+            ));
             self.previous = elements;
             self.centers = accessibility::element_ids(&self.previous)
                 .into_iter()
@@ -115,7 +121,7 @@ impl DesktopAccessibilityBridge {
                 .collect();
             changed = true;
         }
-        if let Some(spoken) = spoken {
+        if let Some(spoken) = join_announcements(announcements) {
             self.announcement = Some(spoken);
             self.announcement_turn = !self.announcement_turn;
             changed = true;
@@ -159,12 +165,17 @@ impl DesktopAccessibilityBridge {
                     }
                 }
                 Action::Focus => self.pending_focus.push(request.target_node),
-                Action::SetValue => {
-                    if let Some(ActionData::NumericValue(value)) = request.data {
+                Action::SetValue => match request.data {
+                    Some(ActionData::NumericValue(value)) => {
                         self.pending_values
                             .push((request.target_node, value as f32));
                     }
-                }
+                    Some(ActionData::Value(text)) => {
+                        self.pending_texts
+                            .push((request.target_node, text.to_string()));
+                    }
+                    _ => {}
+                },
                 Action::Increment => self.step_value(request.target_node, true),
                 Action::Decrement => self.step_value(request.target_node, false),
                 Action::ScrollDown | Action::ScrollRight => {
@@ -270,26 +281,31 @@ impl DesktopAccessibilityBridge {
     /// Moves the value of an adjustable control a screen reader asked to
     /// change. Answers whether one took the new value.
     pub(crate) fn run_value_requests(&mut self, shell: &mut AppShell<WgpuRenderer>) -> bool {
-        if self.pending_values.is_empty() {
-            return false;
-        }
-        let pending = std::mem::take(&mut self.pending_values);
-        let ids = accessibility::element_ids(&self.previous);
         let mut moved = false;
-        for (target, value) in pending {
-            let Some(element) = ids
-                .iter()
-                .position(|id| NodeId(*id as u64) == target)
-                .and_then(|position| self.previous.get(position))
-            else {
+        for (target, value) in std::mem::take(&mut self.pending_values) {
+            let Some(node_id) = self.node_id_for(target) else {
                 continue;
             };
-            let node_id = element.node_id;
             moved |= accessibility::run_reader_action(shell, |root| {
                 accessibility::set_progress(root, node_id, value)
             });
         }
+        for (target, text) in std::mem::take(&mut self.pending_texts) {
+            let Some(node_id) = self.node_id_for(target) else {
+                continue;
+            };
+            moved |= accessibility::run_reader_action(shell, |root| {
+                accessibility::set_text(root, node_id, &text)
+            });
+        }
         moved
+    }
+
+    /// The live node behind the accesskit id of a published element.
+    fn node_id_for(&self, target: NodeId) -> Option<cranpose_core::NodeId> {
+        let ids = accessibility::element_ids(&self.previous);
+        let position = ids.iter().position(|id| NodeId(*id as u64) == target)?;
+        self.previous.get(position).map(|element| element.node_id)
     }
 }
 
@@ -333,7 +349,8 @@ fn accesskit_node(element: &AccessibilityElement) -> Node {
     let scrolls = element.vertical_scroll.is_some() || element.horizontal_scroll.is_some();
     let role = match element.progress {
         Some(_) => Role::Slider,
-        None if scrolls && element.label.is_empty() => Role::ScrollView,
+        None if element.pane_title.is_some() => Role::Region,
+        None if scrolls && element.label.is_empty() => scroll_role(element),
         None => accesskit_role(element.role),
     };
     let mut node = Node::new(role);
@@ -341,6 +358,9 @@ fn accesskit_node(element: &AccessibilityElement) -> Node {
         node.set_value(element.label.as_str());
     } else {
         node.set_label(element.label.as_str());
+    }
+    if let Some(title) = &element.pane_title {
+        node.set_label(title.as_str());
     }
     node.set_bounds(Rect {
         x0: element.bounds.x as f64,
@@ -392,6 +412,16 @@ fn join_announcements(announcements: Vec<Announcement>) -> Option<Announcement> 
     (!text.is_empty()).then_some(Announcement { text, mode })
 }
 
+/// A scroll container with no label of its own: a list when it says how many
+/// rows it holds, a plain scroll view otherwise.
+fn scroll_role(element: &AccessibilityElement) -> Role {
+    if element.collection.is_some() {
+        Role::List
+    } else {
+        Role::ScrollView
+    }
+}
+
 /// The accesskit role a screen reader reads the control as.
 fn accesskit_role(role: AccessibilityRole) -> Role {
     match role {
@@ -416,6 +446,10 @@ fn apply_state(node: &mut Node, element: &AccessibilityElement) {
     }
     if let Some(state) = &element.state_description {
         node.set_description(state.as_str());
+    }
+    if let Some(item) = element.collection_item {
+        node.set_position_in_set(item.position);
+        node.set_size_of_set(item.count);
     }
     if let Some(selected) = element.selected {
         node.set_selected(selected);
@@ -473,6 +507,9 @@ fn apply_actions(node: &mut Node, element: &AccessibilityElement) {
     }
     if element.focusable {
         node.add_action(Action::Focus);
+    }
+    if element.role == AccessibilityRole::TextField {
+        node.add_action(Action::SetValue);
     }
     if element.adjustable {
         node.add_action(Action::SetValue);

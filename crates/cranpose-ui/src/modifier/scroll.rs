@@ -1601,6 +1601,11 @@ pub(crate) fn lazy_scroll_semantics(
             value
         };
         let range = cranpose_foundation::ScrollAxisRange::new(value, max_value, reverse_scrolling);
+        let count = state.total_items_count();
+        config.collection = Some(cranpose_foundation::CollectionInfo {
+            rows: if is_vertical { count } else { 1 },
+            columns: if is_vertical { 1 } else { count },
+        });
         if is_vertical {
             config.vertical_scroll = Some(range);
         } else {

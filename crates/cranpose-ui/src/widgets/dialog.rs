@@ -184,6 +184,12 @@ pub fn DialogWithScrim<C>(
 
     PopupDismissable(bounds, Point { x: 0.0, y: 0.0 }, scrim_dismiss, move || {
         let content = Rc::clone(&content);
+        let requester = cranpose_core::remember(crate::FocusRequester::default)
+            .with(crate::FocusRequester::clone);
+        let requester_for_open = requester.clone();
+        cranpose_core::LaunchedEffect((), move |_scope| {
+            let _ = requester_for_open.request_focus();
+        });
         Box(
             Modifier::empty()
                 .size(Size {
@@ -191,6 +197,8 @@ pub fn DialogWithScrim<C>(
                     height: bounds.height,
                 })
                 .background(scrim)
+                .focus_target()
+                .focus_requester(&requester)
                 .semantics(move |config| {
                     config.role = Some(SemanticsWidgetRole::Dialog);
                     config.is_modal = true;

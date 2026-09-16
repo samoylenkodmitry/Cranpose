@@ -4,7 +4,7 @@ use cranpose_app_shell::AppShell;
 use cranpose_core::{NodeId, collections::map::HashMap};
 use cranpose_render_common::Renderer;
 use cranpose_ui::{
-    Announcement, LayoutBox, LiveRegionMode, ProgressBarRangeInfo, ScrollAxisRange,
+    Announcement, CollectionInfo, LayoutBox, LiveRegionMode, ProgressBarRangeInfo, ScrollAxisRange,
     SemanticsAction, SemanticsNode, SemanticsRole, SemanticsWidgetRole,
 };
 
@@ -92,6 +92,9 @@ pub(crate) struct AccessibilityElement {
     pub(crate) vertical_scroll: Option<ScrollAxisRange>,
     pub(crate) horizontal_scroll: Option<ScrollAxisRange>,
     pub(crate) scroll_parent: Option<NodeId>,
+    pub(crate) collection: Option<CollectionInfo>,
+    pub(crate) collection_item: Option<CollectionItem>,
+    pub(crate) pane_title: Option<String>,
 }
 
 impl Default for AccessibilityElement {
@@ -118,6 +121,9 @@ impl Default for AccessibilityElement {
             vertical_scroll: None,
             horizontal_scroll: None,
             scroll_parent: None,
+            collection: None,
+            collection_item: None,
+            pane_title: None,
         }
     }
 }
@@ -236,6 +242,9 @@ fn project_node(
     inherited_scroll: Option<NodeId>,
     elements: &mut Vec<AccessibilityElement>,
 ) {
+    if node.hidden {
+        return;
+    }
     let live_region = node.live_region.or(inherited_live_region);
     let first_new = elements.len();
     let clickable = node
@@ -243,18 +252,14 @@ fn project_node(
         .iter()
         .any(|action| matches!(action, SemanticsAction::Click { .. }));
     let actionable = clickable || node.editable_text;
-    let own_label = node_label(node).map(Cow::Borrowed);
-    let label = if actionable {
-        own_label.or_else(|| descendant_label(node).map(Cow::Owned))
-    } else {
-        own_label
-    };
+    let merges = actionable || node.merge_descendants;
+    let label = published_label(node, merges);
     let rect = bounds.get(&node.node_id).copied().unwrap_or_default();
 
-    let scrollable = node.vertical_scroll.is_some() || node.horizontal_scroll.is_some();
-    if let Some(label) = label.filter(|label| !label.trim().is_empty())
+    let container = is_container(node);
+    if let Some(label) = label
         && rect.is_visible()
-        && (actionable || !suppress_static_text)
+        && (merges || !suppress_static_text)
     {
         elements.push(element_for_node(
             node,
@@ -263,7 +268,7 @@ fn project_node(
             clickable,
             live_region,
         ));
-    } else if scrollable && rect.is_visible() {
+    } else if publishes_unlabeled(node) && rect.is_visible() {
         elements.push(element_for_node(
             node,
             rect,
@@ -280,27 +285,121 @@ fn project_node(
         element.scroll_parent = inherited_scroll;
     }
 
-    let suppress_children = suppress_static_text || actionable;
-    let scroll_for_children = if scrollable {
+    let suppress_children = suppress_static_text || merges;
+    let scroll_for_children = if container {
         Some(node.node_id)
     } else {
         inherited_scroll
     };
+    project_children(
+        node,
+        bounds,
+        suppress_children,
+        live_region,
+        scroll_for_children,
+        elements,
+    );
+}
+
+/// A node a reader walks into rather than stops on: a list, a scroll view, or
+/// a group of tabs or radio buttons.
+fn is_container(node: &SemanticsNode) -> bool {
+    node.vertical_scroll.is_some() || node.horizontal_scroll.is_some() || node.selectable_group
+}
+
+/// A node published with no label of its own: a container, or the root of a
+/// pane whose title a reader hears.
+fn publishes_unlabeled(node: &SemanticsNode) -> bool {
+    is_container(node) || node.pane_title.is_some()
+}
+
+/// Projects the nodes under a container, then numbers the selectable controls
+/// of a group so a reader hears which of how many each one is.
+fn project_children(
+    node: &SemanticsNode,
+    bounds: &HashMap<NodeId, AccessibilityRect>,
+    suppress_static_text: bool,
+    live_region: Option<LiveRegionMode>,
+    scroll_for_children: Option<NodeId>,
+    elements: &mut Vec<AccessibilityElement>,
+) {
+    let first_child = elements.len();
     for child in &node.children {
         project_node(
             child,
             bounds,
-            suppress_children,
+            suppress_static_text,
             live_region,
             scroll_for_children,
             elements,
         );
+    }
+    if node.selectable_group {
+        number_group(node.node_id, first_child, elements);
+    }
+}
+
+/// Gives each selectable control under a group its place and the group's
+/// size, and tells the group's own element how many it holds and which way
+/// it runs.
+fn number_group(group: NodeId, first_child: usize, elements: &mut [AccessibilityElement]) {
+    let members: Vec<usize> = (first_child..elements.len())
+        .filter(|index| {
+            elements[*index].selected.is_some() && elements[*index].scroll_parent == Some(group)
+        })
+        .collect();
+    let count = members.len();
+    let Some(first) = members.first() else {
+        return;
+    };
+    let horizontal = members.get(1).is_none_or(|second| {
+        let (a, b) = (elements[*first].bounds, elements[*second].bounds);
+        (b.x - a.x).abs() >= (b.y - a.y).abs()
+    });
+    for (index, position) in members.iter().zip(1..) {
+        elements[*index].collection_item = Some(CollectionItem {
+            position,
+            count,
+            horizontal,
+        });
+    }
+    let (rows, columns) = if horizontal { (1, count) } else { (count, 1) };
+    if let Some(element) = elements
+        .iter_mut()
+        .find(|element| element.node_id == group && element.canvas_key.is_none())
+    {
+        element.collection = Some(CollectionInfo { rows, columns });
     }
 }
 
 /// Names, once per node and only in a debug build, a control that takes a
 /// click or text but reaches no reader: it has no label and no text inside,
 /// so a screen reader has nothing to say for it.
+/// The label a reader hears for a node: its own, or for a control or a merged
+/// row the text under it; an editable field with nothing to read still gets
+/// an empty one.
+fn published_label(node: &SemanticsNode, merges: bool) -> Option<Cow<'_, str>> {
+    let own_label = node_label(node).map(Cow::Borrowed);
+    let label = if merges {
+        own_label.or_else(|| descendant_label(node).map(Cow::Owned))
+    } else {
+        own_label
+    };
+    label
+        .filter(|label| !label.trim().is_empty())
+        .or_else(|| unnamed_field_label(node))
+}
+
+/// An editable field with no name and no text is still a stop for a reader,
+/// which hears "text field" and nothing else; a debug build says so.
+fn unnamed_field_label(node: &SemanticsNode) -> Option<Cow<'_, str>> {
+    if !node.editable_text {
+        return None;
+    }
+    warn_unlabeled(node.node_id);
+    Some(Cow::Borrowed(""))
+}
+
 #[cfg(debug_assertions)]
 fn warn_unlabeled(node_id: NodeId) {
     thread_local! {
@@ -316,6 +415,15 @@ fn warn_unlabeled(node_id: NodeId) {
 
 #[cfg(not(debug_assertions))]
 fn warn_unlabeled(_node_id: NodeId) {}
+
+/// Where a selectable control sits inside its group: its place counted from
+/// one, how many the group holds, and whether the group runs left to right.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct CollectionItem {
+    pub(crate) position: usize,
+    pub(crate) count: usize,
+    pub(crate) horizontal: bool,
+}
 
 /// One control as the platforms see it. A scroll container with no label of
 /// its own comes through with an empty label: a reader never lands on it, but
@@ -339,7 +447,10 @@ fn element_for_node(
     AccessibilityElement {
         node_id: node.node_id,
         canvas_key: None,
-        value: node.editable_text.then(|| label.clone()),
+        value: node
+            .text
+            .clone()
+            .or_else(|| node.editable_text.then(|| label.clone())),
         label,
         state_description: node.state_description.clone(),
         click_label: node.on_click_label.clone(),
@@ -362,6 +473,9 @@ fn element_for_node(
         vertical_scroll: node.vertical_scroll,
         horizontal_scroll: node.horizontal_scroll,
         scroll_parent: None,
+        collection: node.collection,
+        collection_item: None,
+        pane_title: node.pane_title.clone(),
     }
 }
 
@@ -464,10 +578,17 @@ pub(crate) fn scroll_container_for<'a>(
     elements: &'a [AccessibilityElement],
     element: &AccessibilityElement,
 ) -> Option<&'a AccessibilityElement> {
-    let parent = element.scroll_parent?;
-    elements
-        .iter()
-        .find(|candidate| candidate.node_id == parent && candidate.canvas_key.is_none())
+    let mut parent = element.scroll_parent;
+    while let Some(id) = parent {
+        let candidate = elements
+            .iter()
+            .find(|candidate| candidate.node_id == id && candidate.canvas_key.is_none())?;
+        if candidate.vertical_scroll.is_some() || candidate.horizontal_scroll.is_some() {
+            return Some(candidate);
+        }
+        parent = candidate.scroll_parent;
+    }
+    None
 }
 
 fn project_canvas_children(
@@ -517,6 +638,9 @@ fn project_canvas_children(
             vertical_scroll: None,
             horizontal_scroll: None,
             scroll_parent: None,
+            collection: None,
+            collection_item: None,
+            pane_title: None,
         });
     }
 }
@@ -570,6 +694,23 @@ pub(crate) fn set_progress(root: &SemanticsNode, node_id: NodeId, value: f32) ->
     };
     match &node.set_progress {
         Some(action) => action.invoke(value),
+        None => false,
+    }
+}
+
+/// Hands a text field the text a screen reader or a voice tool dictated, and
+/// answers whether the field took it.
+#[cfg(any(
+    test,
+    all(feature = "desktop-shell", feature = "renderer-wgpu"),
+    all(feature = "android", feature = "renderer-wgpu", target_os = "android")
+))]
+pub(crate) fn set_text(root: &SemanticsNode, node_id: NodeId, text: &str) -> bool {
+    let Some(node) = find_semantics_node(root, node_id) else {
+        return false;
+    };
+    match &node.set_text {
+        Some(action) => action.invoke(text),
         None => false,
     }
 }
@@ -653,6 +794,42 @@ pub(crate) fn live_region_announcements(
     announcements
 }
 
+/// The title of each pane that opened or changed since the last publish, so a
+/// reader hears where it is when the app moves on. Nothing on the first
+/// publish, which would read the first screen's title over its content.
+#[cfg(any(
+    test,
+    all(feature = "desktop-shell", feature = "renderer-wgpu"),
+    all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"),
+    all(feature = "android", feature = "renderer-wgpu", target_os = "android"),
+    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
+))]
+pub(crate) fn pane_title_announcements(
+    previous: &[AccessibilityElement],
+    current: &[AccessibilityElement],
+) -> Vec<Announcement> {
+    if previous.is_empty() {
+        return Vec::new();
+    }
+    current
+        .iter()
+        .filter_map(|element| {
+            let title = element
+                .pane_title
+                .as_deref()
+                .filter(|title| !title.trim().is_empty())?;
+            let was = previous
+                .iter()
+                .find(|other| other.node_id == element.node_id)
+                .and_then(|other| other.pane_title.as_deref());
+            (was != Some(title)).then(|| Announcement {
+                text: title.to_owned(),
+                mode: LiveRegionMode::Polite,
+            })
+        })
+        .collect()
+}
+
 #[cfg(any(
     test,
     all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"),
@@ -671,6 +848,45 @@ fn spoken_text(element: &AccessibilityElement) -> String {
     }
     parts.retain(|part| !part.trim().is_empty());
     parts.join(", ")
+}
+
+/// Whether two publications of one control read the same: the words, a
+/// toggle, a pick and a value.
+#[cfg(any(
+    test,
+    all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"),
+    all(feature = "android", feature = "renderer-wgpu", target_os = "android")
+))]
+fn speaks_the_same(was: &AccessibilityElement, now: &AccessibilityElement) -> bool {
+    spoken_text(was) == spoken_text(now)
+        && was.toggled == now.toggled
+        && was.selected == now.selected
+        && was.progress == now.progress
+}
+
+/// For each element of `current`, whether it was published before and now
+/// says something else: a toggle that flipped, a counter that moved on, a
+/// value a reader just set. A reader speaks the one under its cursor again.
+#[cfg(any(
+    test,
+    all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"),
+    all(feature = "android", feature = "renderer-wgpu", target_os = "android")
+))]
+pub(crate) fn spoken_changes(
+    previous: &[AccessibilityElement],
+    current: &[AccessibilityElement],
+) -> Vec<bool> {
+    current
+        .iter()
+        .map(|element| {
+            previous
+                .iter()
+                .find(|other| {
+                    other.node_id == element.node_id && other.canvas_key == element.canvas_key
+                })
+                .is_some_and(|was| !speaks_the_same(was, element))
+        })
+        .collect()
 }
 
 #[cfg(any(
@@ -703,7 +919,7 @@ fn descendant_label(node: &SemanticsNode) -> Option<String> {
 }
 
 fn collect_descendant_labels<'a>(node: &'a SemanticsNode, labels: &mut Vec<&'a str>) {
-    for child in &node.children {
+    for child in node.children.iter().filter(|child| !child.hidden) {
         if let Some(label) = node_label(child) {
             if !label.trim().is_empty() && !labels.contains(&label) {
                 labels.push(label);
@@ -913,6 +1129,266 @@ mod tests {
         assert!(!projected[2].enabled);
     }
 
+    fn click(node_id: NodeId) -> SemanticsAction {
+        SemanticsAction::Click {
+            handler: SemanticsCallback::new(node_id),
+        }
+    }
+
+    fn tab(node_id: NodeId, label: &str, picked: bool) -> SemanticsNode {
+        let mut tab = node(
+            node_id,
+            SemanticsRole::Layout,
+            vec![click(node_id)],
+            Some(label),
+            Vec::new(),
+        );
+        tab.selected = Some(picked);
+        tab
+    }
+
+    fn tab_group(node_id: NodeId, tabs: Vec<SemanticsNode>) -> SemanticsNode {
+        let mut group = node(node_id, SemanticsRole::Layout, Vec::new(), None, tabs);
+        group.selectable_group = true;
+        group
+    }
+
+    #[test]
+    fn tabs_in_a_group_know_their_place() {
+        let root = tab_group(
+            1,
+            vec![
+                tab(2, "Home", true),
+                tab(3, "Library", false),
+                tab(4, "Settings", false),
+            ],
+        );
+        let bounds = HashMap::from_iter([
+            (1, AccessibilityRect::new(0.0, 0.0, 300.0, 60.0)),
+            (2, AccessibilityRect::new(0.0, 0.0, 100.0, 60.0)),
+            (3, AccessibilityRect::new(100.0, 0.0, 100.0, 60.0)),
+            (4, AccessibilityRect::new(200.0, 0.0, 100.0, 60.0)),
+        ]);
+
+        let projected = project_semantics(&root, &bounds);
+
+        assert_eq!(
+            projected[0].collection,
+            Some(CollectionInfo {
+                rows: 1,
+                columns: 3
+            })
+        );
+        let places: Vec<_> = projected[1..]
+            .iter()
+            .map(|tab| tab.collection_item.expect("a tab knows its place"))
+            .collect();
+        assert_eq!(
+            places,
+            vec![
+                CollectionItem {
+                    position: 1,
+                    count: 3,
+                    horizontal: true
+                },
+                CollectionItem {
+                    position: 2,
+                    count: 3,
+                    horizontal: true
+                },
+                CollectionItem {
+                    position: 3,
+                    count: 3,
+                    horizontal: true
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_tab_pages_the_list_around_its_group() {
+        let mut list = node(
+            1,
+            SemanticsRole::Layout,
+            Vec::new(),
+            None,
+            vec![tab_group(2, vec![tab(3, "Home", true)])],
+        );
+        list.vertical_scroll = Some(cranpose_ui::ScrollAxisRange::new(0.0, 900.0, false));
+        let bounds = HashMap::from_iter([
+            (1, AccessibilityRect::new(0.0, 0.0, 300.0, 600.0)),
+            (2, AccessibilityRect::new(0.0, 0.0, 300.0, 60.0)),
+            (3, AccessibilityRect::new(0.0, 0.0, 100.0, 60.0)),
+        ]);
+
+        let projected = project_semantics(&root_of(list), &bounds);
+        let tab = projected.last().expect("the tab is published");
+
+        assert_eq!(tab.scroll_parent, Some(2), "the tab sits under its group");
+        assert_eq!(
+            scroll_container_for(&projected, tab).map(|list| list.node_id),
+            Some(1),
+            "a page from the tab reaches the list above the group"
+        );
+    }
+
+    fn root_of(node: SemanticsNode) -> SemanticsNode {
+        node
+    }
+
+    #[test]
+    fn a_pane_is_published_with_its_title_and_no_label() {
+        let mut screen = node(
+            1,
+            SemanticsRole::Layout,
+            Vec::new(),
+            None,
+            vec![node(
+                2,
+                SemanticsRole::Text {
+                    value: "Milk".into(),
+                },
+                Vec::new(),
+                None,
+                Vec::new(),
+            )],
+        );
+        screen.pane_title = Some("Library".into());
+        let bounds = HashMap::from_iter([
+            (1, AccessibilityRect::new(0.0, 0.0, 300.0, 600.0)),
+            (2, AccessibilityRect::new(0.0, 0.0, 300.0, 40.0)),
+        ]);
+
+        let projected = project_semantics(&screen, &bounds);
+
+        assert_eq!(projected.len(), 2, "the pane and its text: {projected:?}");
+        assert_eq!(projected[0].label, "");
+        assert_eq!(projected[0].pane_title.as_deref(), Some("Library"));
+        assert_eq!(projected[1].label, "Milk");
+        assert_eq!(projected[1].scroll_parent, None, "a pane is no container");
+    }
+
+    #[test]
+    fn a_merged_row_is_one_stop() {
+        let mut row = node(
+            2,
+            SemanticsRole::Layout,
+            Vec::new(),
+            None,
+            vec![
+                node(
+                    3,
+                    SemanticsRole::Text {
+                        value: "Milk".into(),
+                    },
+                    Vec::new(),
+                    None,
+                    Vec::new(),
+                ),
+                node(
+                    4,
+                    SemanticsRole::Text { value: "2".into() },
+                    Vec::new(),
+                    None,
+                    Vec::new(),
+                ),
+                node(
+                    5,
+                    SemanticsRole::Text {
+                        value: "3.40".into(),
+                    },
+                    Vec::new(),
+                    None,
+                    Vec::new(),
+                ),
+            ],
+        );
+        row.merge_descendants = true;
+        let root = node(1, SemanticsRole::Layout, Vec::new(), None, vec![row]);
+        let bounds = HashMap::from_iter(
+            (1..=5).map(|id| (id, AccessibilityRect::new(0.0, 0.0, 300.0, 40.0))),
+        );
+
+        let projected = project_semantics(&root, &bounds);
+
+        assert_eq!(projected.len(), 1, "the row is one stop: {projected:?}");
+        assert_eq!(projected[0].label, "Milk, 2, 3.40");
+        assert_eq!(projected[0].role, AccessibilityRole::StaticText);
+        assert!(!projected[0].clickable);
+    }
+
+    #[test]
+    fn a_hidden_node_and_everything_under_it_stay_out() {
+        let mut placeholder = node(
+            2,
+            SemanticsRole::Layout,
+            Vec::new(),
+            Some("Item"),
+            Vec::new(),
+        );
+        placeholder.hidden = true;
+        let mut root = node(
+            1,
+            SemanticsRole::Layout,
+            Vec::new(),
+            None,
+            vec![placeholder],
+        );
+        root.children[0].children.push(node(
+            3,
+            SemanticsRole::Layout,
+            Vec::new(),
+            Some("Under it"),
+            Vec::new(),
+        ));
+        let bounds = HashMap::from_iter([
+            (1, AccessibilityRect::new(0.0, 0.0, 300.0, 200.0)),
+            (2, AccessibilityRect::new(0.0, 0.0, 300.0, 40.0)),
+            (3, AccessibilityRect::new(0.0, 0.0, 300.0, 40.0)),
+        ]);
+
+        let projected = project_semantics(&root, &bounds);
+
+        assert!(
+            projected.is_empty(),
+            "a hidden node is not published: {projected:?}"
+        );
+    }
+
+    fn projected_field(name: Option<&str>, text: &str) -> Vec<AccessibilityElement> {
+        let mut field = node(2, SemanticsRole::Layout, Vec::new(), name, Vec::new());
+        field.editable_text = true;
+        field.text = Some(text.to_owned());
+        let root = node(1, SemanticsRole::Layout, Vec::new(), None, vec![field]);
+        let bounds = HashMap::from_iter([
+            (1, AccessibilityRect::new(0.0, 0.0, 300.0, 200.0)),
+            (2, AccessibilityRect::new(0.0, 0.0, 300.0, 40.0)),
+        ]);
+        project_semantics(&root, &bounds)
+    }
+
+    #[test]
+    fn an_empty_text_field_is_still_a_stop() {
+        let projected = projected_field(Some(""), "");
+
+        assert_eq!(
+            projected.len(),
+            1,
+            "the field is published with nothing to read"
+        );
+        assert_eq!(projected[0].role, AccessibilityRole::TextField);
+        assert_eq!(projected[0].label, "");
+        assert_eq!(projected[0].value.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn a_named_text_field_keeps_its_name_and_carries_its_text() {
+        let projected = projected_field(Some("Folder name"), "Milk");
+
+        assert_eq!(projected[0].label, "Folder name");
+        assert_eq!(projected[0].value.as_deref(), Some("Milk"));
+    }
+
     #[test]
     fn drawn_controls_without_a_label_or_a_size_are_not_published() {
         let canvas_id = 4;
@@ -1089,6 +1565,53 @@ mod tests {
         assert!(live_region_announcements(&before, &after).is_empty());
     }
 
+    fn pane(node_id: NodeId, title: &str) -> AccessibilityElement {
+        AccessibilityElement {
+            node_id,
+            bounds: AccessibilityRect::new(0.0, 0.0, 300.0, 600.0),
+            pane_title: Some(title.into()),
+            ..AccessibilityElement::default()
+        }
+    }
+
+    #[test]
+    fn a_new_pane_title_is_read_out() {
+        let before = vec![pane(1, "Library")];
+        let after = vec![pane(1, "Receipt")];
+        let announcements = pane_title_announcements(&before, &after);
+        assert_eq!(announcements.len(), 1);
+        assert_eq!(announcements[0].text, "Receipt");
+        assert!(
+            pane_title_announcements(&after, &after).is_empty(),
+            "the same title stays quiet"
+        );
+    }
+
+    #[test]
+    fn the_first_publish_keeps_pane_titles_quiet() {
+        assert!(pane_title_announcements(&[], &[pane(1, "Library")]).is_empty());
+    }
+
+    #[test]
+    fn a_toggle_that_flipped_is_a_spoken_change() {
+        let mut before = live_text(1, "Dark theme");
+        before.toggled = Some(false);
+        let mut after = before.clone();
+        after.toggled = Some(true);
+        assert_eq!(spoken_changes(&[before], &[after]), vec![true]);
+    }
+
+    #[test]
+    fn an_element_that_kept_its_words_is_not_a_spoken_change() {
+        let before = live_text(1, "Dark theme");
+        let after = live_text(1, "Dark theme");
+        let fresh = live_text(2, "Fresh");
+        assert_eq!(
+            spoken_changes(&[before], &[after, fresh]),
+            vec![false, false]
+        );
+    }
+
     #[test]
     fn a_live_region_that_just_appeared_is_read_out() {
         let before = vec![live_text(1, "3 receipts")];
@@ -1171,6 +1694,22 @@ mod tests {
         assert!(set_progress(&root, 7, 0.6));
         assert_eq!(*taken.borrow(), vec![0.6]);
         assert!(!set_progress(&root, 99, 0.6), "no such control");
+    }
+
+    #[test]
+    fn a_reader_hands_a_field_its_text() {
+        let taken = Rc::new(RefCell::new(Vec::new()));
+        let seen = Rc::clone(&taken);
+        let mut root = node(7, SemanticsRole::Layout, Vec::new(), Some(""), Vec::new());
+        root.editable_text = true;
+        root.set_text = Some(cranpose_ui::SemanticsSetText::new(move |text| {
+            seen.borrow_mut().push(text.to_owned());
+            true
+        }));
+
+        assert!(set_text(&root, 7, "Milk"));
+        assert_eq!(*taken.borrow(), vec!["Milk".to_owned()]);
+        assert!(!set_text(&root, 99, "Milk"), "no such field");
     }
 
     #[test]

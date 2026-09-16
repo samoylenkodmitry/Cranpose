@@ -617,3 +617,19 @@ fn only_single_line_fields_expose_pan_resolver() {
         );
     });
 }
+
+#[test]
+fn a_reader_can_hand_a_text_field_its_text() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    with_test_runtime(|| {
+        let state = TextFieldState::new("Hello");
+        let chain = focused_text_field_chain(state, TextStyle::default());
+        let semantics = collect_semantics_from_chain(&chain).expect("text field semantics");
+
+        let set_text = semantics
+            .set_text
+            .expect("a field takes text from a reader");
+        assert!(set_text.invoke("Milk"));
+        assert_eq!(state.text(), "Milk");
+    });
+}

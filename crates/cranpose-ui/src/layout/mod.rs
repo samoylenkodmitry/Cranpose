@@ -14,9 +14,10 @@ use cranpose_core::{
     Phase, RuntimeHandle, SlotTable, SlotsHost, SnapshotStateObserver,
 };
 use cranpose_foundation::{
-    CanvasSemanticsNode, InvalidationKind, LiveRegionMode, ModifierNodeContext, NodeCapabilities,
-    ProgressBarRangeInfo, ScrollAxisRange, SemanticsConfiguration, SemanticsCustomAction,
-    SemanticsScrollBy, SemanticsSetProgress, SemanticsWidgetRole, text::TextRange,
+    CanvasSemanticsNode, CollectionInfo, InvalidationKind, LiveRegionMode, ModifierNodeContext,
+    NodeCapabilities, ProgressBarRangeInfo, ScrollAxisRange, SemanticsConfiguration,
+    SemanticsCustomAction, SemanticsScrollBy, SemanticsSetProgress, SemanticsSetText,
+    SemanticsWidgetRole, text::TextRange,
 };
 use cranpose_ui_layout::{Constraints, MeasurePolicy, Placement};
 use web_time::Instant;
@@ -367,6 +368,17 @@ pub struct SemanticsNode {
     /// to this node's own top-left. See [`CanvasSemanticsNode`].
     pub canvas_children: Vec<CanvasSemanticsNode>,
     pub editable_text: bool,
+    /// Whether a screen reader skips this node and everything under it.
+    pub hidden: bool,
+    /// Whether a screen reader takes this node and the text under it as one
+    /// stop.
+    pub merge_descendants: bool,
+    /// Whether the selectable controls under this node form one group.
+    pub selectable_group: bool,
+    /// The title of the screen or pane this node is the root of.
+    pub pane_title: Option<String>,
+    /// The text an editable field holds.
+    pub text: Option<String>,
     pub text_selection: Option<TextRange>,
     /// Whether this node registered a focus target, so focus can land on it.
     /// Compose's `SemanticsProperties.Focused` companion.
@@ -381,12 +393,16 @@ pub struct SemanticsNode {
     pub progress: Option<ProgressBarRangeInfo>,
     /// What this control does when a screen reader moves its value.
     pub set_progress: Option<SemanticsSetProgress>,
+    /// What this field does when a screen reader hands it text.
+    pub set_text: Option<SemanticsSetText>,
     /// How far this container scrolled up and down, when it scrolls.
     pub vertical_scroll: Option<ScrollAxisRange>,
     /// How far this container scrolled left and right, when it scrolls.
     pub horizontal_scroll: Option<ScrollAxisRange>,
     /// What this container does when a screen reader pages it.
     pub scroll_by: Option<SemanticsScrollBy>,
+    /// How many rows and columns this list holds, when it is a list.
+    pub collection: Option<CollectionInfo>,
 }
 
 impl Default for SemanticsNode {
@@ -406,15 +422,22 @@ impl Default for SemanticsNode {
             custom_actions: Vec::new(),
             canvas_children: Vec::new(),
             editable_text: false,
+            hidden: false,
+            merge_descendants: false,
+            selectable_group: false,
+            pane_title: None,
+            text: None,
             text_selection: None,
             focusable: false,
             focused: false,
             live_region: None,
             progress: None,
             set_progress: None,
+            set_text: None,
             vertical_scroll: None,
             horizontal_scroll: None,
             scroll_by: None,
+            collection: None,
         }
     }
 }
@@ -3063,13 +3086,20 @@ fn semantics_node_from_parts(
         node.custom_actions = config.custom_actions;
         node.canvas_children = config.canvas_children;
         node.editable_text = config.is_editable_text;
+        node.hidden = config.hidden;
+        node.merge_descendants = config.merge_descendants;
+        node.selectable_group = config.selectable_group;
+        node.pane_title = config.pane_title;
+        node.text = config.text;
         node.text_selection = config.text_selection;
         node.live_region = config.live_region;
         node.progress = config.progress;
         node.set_progress = config.set_progress;
+        node.set_text = config.set_text;
         node.vertical_scroll = config.vertical_scroll;
         node.horizontal_scroll = config.horizontal_scroll;
         node.scroll_by = config.scroll_by;
+        node.collection = config.collection;
     }
 
     node.focusable = crate::focus_dispatch::has_focus_target(node_id);

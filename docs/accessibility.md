@@ -162,6 +162,11 @@ Modifier::empty().semantics(|config| {
 })
 ```
 
+A lazy list also says how many rows it holds, through `config.collection`;
+`LazyColumn` and `LazyRow` do this on their own. TalkBack reads "list, 12
+items" as its cursor enters the list, and accesskit gives the container the
+list role. VoiceOver and the web mirror have no place for the count.
+
 `vertical_scroll` and `horizontal_scroll` are Compose's
 `verticalScrollAxisRange` and `horizontalScrollAxisRange`; `scroll_by` is
 `SemanticsActions.ScrollBy`. `verticalScroll`, `horizontalScroll`,
@@ -197,12 +202,45 @@ dropdown or a menu shown through `PopupDismissable`, the way an outside tap
 would. An app that handles back on its own does so through `BackHandler`, as
 on Android.
 
+A dialog that opens takes app focus, so the reader's cursor lands on it with
+no app code: VoiceOver gets a screen change aimed at the dialog, TalkBack gets
+the focus event the Android host sends for every app focus move, the web
+mirror focuses the dialog's node, and accesskit follows the app focus it
+already receives.
+
 | Platform | Gesture | Where it goes |
 | --- | --- | --- |
 | accesskit | Escape on the keyboard | `AppShell::dismiss_top_modal` |
 | iOS | a VoiceOver two-finger scrub, through `accessibilityPerformEscape` | the dialog on top; with none open, the app's `BackHandler` |
 | Android | TalkBack's back gesture, which is the system back key | the dialog on top, then the app's `BackHandler` |
 | Web | Escape on the keyboard, with focus on the mirror or the canvas | `AppShell::dismiss_top_modal` |
+
+## 7. A control that changes under the cursor
+
+A reader that activates a toggle, or sits on a counter while the app moves
+it on, needs to hear the new state without moving its cursor. Each publish
+compares every control with its last publication; one that now says
+something else is marked as changed.
+
+| Platform | What the change does |
+| --- | --- |
+| accesskit | The tree update carries the new value; the reader speaks it on its own. |
+| iOS | A layout change names the element under the VoiceOver cursor, which reads it again. |
+| Android | A content-changed event with the text, description and state change types goes out for the control, and TalkBack speaks the one under its cursor. |
+| Web | The mirror node keeps its focus and takes the new label; a reader speaks it on the next move. Text that has to be heard at once is a live region. |
+
+## 8. Where a reader is
+
+A person who cannot see the screen needs to hear where the app took them
+when it moves on by itself: a receipt opens after a scan, a folder replaces
+the list. `Modifier::pane_title("Receipt")` on the root of a screen names it,
+Compose's `paneTitle`. Every publish compares the titles with the last one
+and reads a new or changed title out the way a live region is read: TalkBack
+and VoiceOver speak it, the web mirror's live region carries it, and the
+accesskit tree announces it. The root itself is not a stop; on Android it
+carries the pane title of its node, on the web it is a region landmark with
+the title as its name, and accesskit sees a labeled region. The first
+publish stays quiet, so the first screen is not read twice.
 
 ## What the built-in widgets say on their own
 
@@ -214,17 +252,46 @@ An app gets this with no code of its own:
 | `Button`, `clickable` | the label, "button" | activate it |
 | `toggleable`, a switch or checkbox | the label, its state | flip it |
 | `selectable`, a tab or a radio row | the label, its role, whether it is picked | pick it |
-| `BasicTextField` | the label, the text it holds | type into it |
+| `LiquidTabBar` | the tab, whether it is picked, and which of how many | pick it |
+| `BasicTextField` | the name the app gave it, or the text it holds; an empty field is still a stop | type into it, or hand it whole text |
 | `Slider` | the value | move it |
 | `CircularProgressIndicator`, `LinearProgressIndicator` | "Loading" | |
 | `SwipeToDismiss` | the row's content | run "Dismiss" from the actions menu |
-| `verticalScroll`, `horizontalScroll`, `LazyColumn`, `LazyRow` | the rows inside | page on and back |
+| `verticalScroll`, `horizontalScroll`, `LazyColumn`, `LazyRow` | the rows inside, and on Android how many rows there are | page on and back |
 | `LinkedText` | the whole text | open each link from the actions menu, as "Open <link text>" |
-| `Dialog` | its content, and nothing outside it | leave it with the reader's escape gesture |
+| `Dialog` | its content, and nothing outside it; the reader lands on it as it opens | leave it with the reader's escape gesture |
 | `Image`, `Icon` | the description the app gave | |
 
 A control an app draws itself declares what it is through
 `Modifier::semantics`; see section 1.
+
+A text field takes its name from `Modifier::content_description` on the
+field, and the text it holds is its value: a reader hears "Folder name, text
+field, Milk". With no name the text stands in for it, and a field that is
+empty as well is still a stop that says "text field", so a reader can find
+it and type. A debug build logs a warning for such a field.
+
+A reader or a voice tool can also hand a field whole text at once: the
+set-text action on Android, which TalkBack's braille keyboard and Voice
+Access use, and accesskit's set-value action on the desktop. VoiceOver and
+the web type through the keyboard.
+
+The other way round, `Modifier::hide_from_accessibility()` takes a node and
+everything under it out of what a reader sees: a decorative image, or a
+placeholder drawn under a field that already carries the same words as its
+name.
+
+A row of texts that belong together, a name with its count and its price,
+reads as three stops unless the app says otherwise. `Modifier::merge_descendants()`
+on the row makes it one stop, "Milk, 2, 3.40", the way a button with text
+inside already reads; the texts under it are not published on their own.
+
+A row of tabs or radio buttons is a group, and a reader says which of how
+many its cursor is on. `Modifier::selectable_group()` on the row declares it;
+`LiquidTabBar` does so on its own. TalkBack says "Library, tab, 2 of 5",
+VoiceOver reads "2 of 5" as the tab's value, the web mirror sets
+`aria-posinset` and `aria-setsize`, and accesskit gets the position and the
+size of the set.
 
 ## What a reader hears, end to end
 
@@ -254,7 +321,9 @@ DevTools protocol against a served web demo (`apps/desktop-demo/build-web.sh
 in the tab row, presses Page Down and Page Up, reads the mirror's positions
 and the browser console, and prints one JSON report. A page that works moves
 the row by nine tenths of its width and back, keeps the focus on the same
-button, and leaves no panic in the console.
+button, and leaves no panic in the console. The report also lists the text
+fields of the Text Input page: an empty one is a stop with an empty label,
+and each of the others carries its text as content.
 
 ## Check it by hand
 

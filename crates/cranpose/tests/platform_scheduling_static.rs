@@ -3337,3 +3337,168 @@ fn every_platform_bridge_offers_custom_actions() {
         "the web mirror puts one button per custom action after the control"
     );
 }
+
+#[test]
+fn a_dialog_takes_the_reader_along_when_it_opens() {
+    let dialog_source = workspace_source("crates/cranpose-ui/src/widgets/dialog.rs");
+    assert!(
+        dialog_source.contains(".focus_target()")
+            && dialog_source.contains(".focus_requester(&requester)")
+            && dialog_source.contains("requester_for_open.request_focus()"),
+        "a dialog takes app focus as it opens, so every bridge's focus following moves the reader onto it"
+    );
+
+    let ios_source = crate_source("src/ios_accessibility.rs");
+    assert!(
+        ios_source.contains("fn opened_dialog(")
+            && ios_source.contains("UIAccessibilityPostNotification(notification, landing);"),
+        "VoiceOver gets a screen change aimed at the dialog that opened"
+    );
+
+    let web_source = crate_source("src/web_accessibility.rs");
+    assert!(
+        web_source.contains("fn opened_dialog(")
+            && web_source.contains("if opened_dialog == Some(element.node_id) {"),
+        "the web mirror focuses the dialog node that opened"
+    );
+}
+
+#[test]
+fn every_lazy_list_tells_android_how_many_rows_it_holds() {
+    let scroll_source = workspace_source("crates/cranpose-ui/src/modifier/scroll.rs");
+    assert!(
+        scroll_source.contains("config.collection = Some(cranpose_foundation::CollectionInfo {"),
+        "a lazy list declares its row count with its scroll range"
+    );
+
+    let java_source = crate_source("android/java/dev/cranpose/android/CranposeActivity.java");
+    assert!(
+        java_source.contains("info.setCollectionInfo(AccessibilityNodeInfo.CollectionInfo.obtain(")
+            && java_source.contains("private static final int ACCESSIBILITY_FIELDS = 33;"),
+        "the Android host hands TalkBack the row count of a list"
+    );
+}
+
+#[test]
+fn every_platform_lets_a_reader_find_an_empty_text_field() {
+    let projection_source = crate_source("src/accessibility.rs");
+    assert!(
+        projection_source
+            .contains("fn unnamed_field_label(node: &SemanticsNode) -> Option<Cow<'_, str>> {"),
+        "the projection publishes an editable field even with nothing to read"
+    );
+
+    let ios_source = crate_source("src/ios_accessibility.rs");
+    assert!(
+        ios_source
+            .contains("!element.label.is_empty() || element.role == AccessibilityRole::TextField"),
+        "VoiceOver stops on an empty text field"
+    );
+}
+
+#[test]
+fn every_platform_speaks_a_control_that_changed_under_the_cursor() {
+    let ios_source = crate_source("src/ios_accessibility.rs");
+    assert!(
+        ios_source.contains("fn respeak_under_cursor(&self, changed: &[bool]) {")
+            && ios_source
+                .contains("let changed = accessibility::spoken_changes(&self.snapshot, &next);"),
+        "VoiceOver reads the element under its cursor again when its words changed"
+    );
+
+    let java_source = crate_source("android/java/dev/cranpose/android/CranposeActivity.java");
+    assert!(
+        java_source.contains("| AccessibilityEvent.CONTENT_CHANGE_TYPE_STATE_DESCRIPTION);")
+            && java_source.contains("private void announceChanges() {"),
+        "TalkBack gets a content-changed event for a control that says something new"
+    );
+
+    let bridge_source = crate_source("src/android_accessibility.rs");
+    assert!(
+        bridge_source.contains("let changed = accessibility::spoken_changes(previous, &elements);"),
+        "the Android bridge marks the controls that changed"
+    );
+}
+
+#[test]
+fn every_platform_says_which_tab_of_how_many() {
+    let tab_bar = workspace_source("crates/cranpose-liquid/src/widgets/tab_bar.rs");
+    assert!(
+        tab_bar.contains("                    .selectable_group()"),
+        "the liquid tab bar declares its tabs as one group"
+    );
+
+    let java_source = crate_source("android/java/dev/cranpose/android/CranposeActivity.java");
+    assert!(
+        java_source.contains(
+            "info.setCollectionItemInfo(AccessibilityNodeInfo.CollectionItemInfo.obtain("
+        ),
+        "TalkBack gets each tab's place in its group"
+    );
+
+    let ios_source = crate_source("src/ios_accessibility.rs");
+    assert!(
+        ios_source.contains(".map(|item| format!(\"{} of {}\", item.position, item.count));"),
+        "VoiceOver reads the tab's place as its value"
+    );
+
+    let web_source = crate_source("src/web_accessibility.rs");
+    assert!(
+        web_source.contains("node.set_attribute(\"aria-posinset\", &item.position.to_string())?;"),
+        "the web mirror sets the tab's position in its set"
+    );
+
+    let desktop_source = crate_source("src/desktop_accessibility.rs");
+    assert!(
+        desktop_source.contains("node.set_position_in_set(item.position);"),
+        "accesskit gets the tab's position in its set"
+    );
+}
+
+#[test]
+fn a_reader_can_hand_a_field_its_text_on_android_and_the_desktop() {
+    let java_source = crate_source("android/java/dev/cranpose/android/CranposeActivity.java");
+    assert!(
+        java_source.contains("info.addAction(AccessibilityNodeInfo.ACTION_SET_TEXT);")
+            && java_source.contains(
+                "nativeOnAccessibilitySetText(element.id, text == null ? \"\" : text.toString());"
+            ),
+        "the Android host offers and forwards the set-text action"
+    );
+
+    let bridge_source = crate_source("src/android_accessibility.rs");
+    assert!(
+        bridge_source.contains(
+            "fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccessibilitySetText("
+        ),
+        "the Android bridge takes the text"
+    );
+
+    let desktop_source = crate_source("src/desktop_accessibility.rs");
+    assert!(
+        desktop_source.contains("accessibility::set_text(root, node_id, &text)")
+            && desktop_source.contains("Some(ActionData::Value(text)) => {"),
+        "accesskit's set-value action reaches the field"
+    );
+}
+
+#[test]
+fn every_platform_reads_a_pane_title_when_the_app_moves_on() {
+    for source in [
+        crate_source("src/android_accessibility.rs"),
+        crate_source("src/ios_accessibility.rs"),
+        crate_source("src/web_accessibility.rs"),
+        crate_source("src/desktop_accessibility.rs"),
+    ] {
+        assert!(
+            source.contains("accessibility::pane_title_announcements("),
+            "every bridge reads a changed pane title out"
+        );
+    }
+
+    let java_source = crate_source("android/java/dev/cranpose/android/CranposeActivity.java");
+    assert!(
+        java_source.contains("info.setPaneTitle(element.paneTitle);"),
+        "the Android host carries the pane title on its node"
+    );
+}

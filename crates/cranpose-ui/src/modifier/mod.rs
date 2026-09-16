@@ -491,6 +491,38 @@ impl Modifier {
         self.semantics(move |config| config.progress = Some(info))
     }
 
+    /// Names the screen or pane this node is the root of, so a screen reader
+    /// hears where it is when the app moves on: "Library" as the library
+    /// opens. Compose's `Modifier.semantics { paneTitle = "..." }`.
+    pub fn pane_title(self, title: impl Into<String>) -> Self {
+        let title = title.into();
+        self.semantics(move |config| config.pane_title = Some(title.clone()))
+    }
+
+    /// Makes the selectable controls under this node one group, so a screen
+    /// reader says which of how many a tab or a radio button is: "Library,
+    /// tab, 2 of 5". `LiquidTabBar` declares it on its own. Compose's
+    /// `Modifier.selectableGroup()`.
+    pub fn selectable_group(self) -> Self {
+        self.semantics(|config| config.selectable_group = true)
+    }
+
+    /// Makes a screen reader take this node and the text under it as one
+    /// stop, the way it does for a button: a row whose name, count and price
+    /// belong together reads as "Milk, 2, 3.40" and not as three stops.
+    /// Compose's `Modifier.semantics(mergeDescendants = true) {}`.
+    pub fn merge_descendants(self) -> Self {
+        self.semantics(|config| config.merge_descendants = true)
+    }
+
+    /// Takes this node and everything under it out of what a screen reader
+    /// sees: a decorative image, or a placeholder drawn under a field that
+    /// carries the same words as its name. Compose's
+    /// `semantics { hideFromAccessibility() }`.
+    pub fn hide_from_accessibility(self) -> Self {
+        self.semantics(|config| config.hidden = true)
+    }
+
     /// Marks this component as a heading, so a screen reader lists it among
     /// the headings of the screen and a person can jump between them.
     ///
@@ -505,6 +537,15 @@ impl Modifier {
     /// This is Compose's `Modifier.semantics { role = Role.Button }`.
     pub fn role(self, role: cranpose_foundation::SemanticsWidgetRole) -> Self {
         self.semantics(move |config| config.role = Some(role))
+    }
+
+    /// Makes a screen reader read this component's text out whenever it
+    /// changes, without the reader's cursor on it: a status line, a toast, a
+    /// count that moves.
+    ///
+    /// This is Compose's `Modifier.semantics { liveRegion = LiveRegionMode.Polite }`.
+    pub fn live_region(self, mode: cranpose_foundation::LiveRegionMode) -> Self {
+        self.semantics(move |config| config.live_region = Some(mode))
     }
 
     /// Gives this component the text a screen reader reads for it, for a

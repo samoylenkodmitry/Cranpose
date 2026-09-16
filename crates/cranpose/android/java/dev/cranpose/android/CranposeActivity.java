@@ -709,6 +709,7 @@ public class CranposeActivity extends NativeActivity {
     /** Reports the virtual view TalkBack focused, so app focus follows it. */
     private static native void nativeOnAccessibilityFocus(int virtualViewId);
     private static native void nativeOnAccessibilitySetProgress(int virtualViewId, float value);
+    private static native void nativeOnAccessibilitySetText(int virtualViewId, String text);
     private static native void nativeOnAccessibilityScroll(int virtualViewId, boolean forward);
 
     private static native void nativeOnAccessibilityStateChanged(boolean enabled);
@@ -770,7 +771,7 @@ public class CranposeActivity extends NativeActivity {
     }
 
     /** Field count of one accessibility record; see android_accessibility_wire.rs. */
-    private static final int ACCESSIBILITY_FIELDS = 27;
+    private static final int ACCESSIBILITY_FIELDS = 33;
 
     /** Separator packing a node's custom action labels into one field. */
     private static final String ACCESSIBILITY_ACTION_SEPARATOR = String.valueOf((char) 0x1f);
@@ -804,7 +805,10 @@ public class CranposeActivity extends NativeActivity {
                         Float.parseFloat(fields[20]), Float.parseFloat(fields[21]),
                         Float.parseFloat(fields[22]), "1".equals(fields[23]),
                         "1".equals(fields[24]), "1".equals(fields[25]),
-                        Integer.parseInt(fields[26])));
+                        Integer.parseInt(fields[26]), Integer.parseInt(fields[27]),
+                        Integer.parseInt(fields[28]), "1".equals(fields[29]),
+                        Integer.parseInt(fields[30]), Integer.parseInt(fields[31]),
+                        unescapeAccessibility(fields[32])));
             } catch (RuntimeException ignored) {
                 // A malformed record must not make the host Activity inaccessible.
             }
@@ -859,6 +863,12 @@ public class CranposeActivity extends NativeActivity {
         final boolean canScrollBackward;
         /** The virtual id of the scroll container above this control, or -1. */
         final int scrollParent;
+        final int collectionRows;
+        final int collectionColumns;
+        final boolean changed;
+        final int itemRow;
+        final int itemColumn;
+        final String paneTitle;
 
         CranposeAccessibilityElement(int id, int role, Rect bounds, float centerX,
                 float centerY, boolean clickable, String label, String value,
@@ -866,7 +876,9 @@ public class CranposeActivity extends NativeActivity {
                 boolean enabled, String[] customActions, boolean focusable,
                 boolean focused, boolean adjustable, float progressCurrent,
                 float progressMin, float progressMax, boolean scrollable,
-                boolean canScrollForward, boolean canScrollBackward, int scrollParent) {
+                boolean canScrollForward, boolean canScrollBackward, int scrollParent,
+                int collectionRows, int collectionColumns, boolean changed, int itemRow,
+                int itemColumn, String paneTitle) {
             this.id = id;
             this.role = role;
             this.bounds = bounds;
@@ -891,6 +903,12 @@ public class CranposeActivity extends NativeActivity {
             this.canScrollForward = canScrollForward;
             this.canScrollBackward = canScrollBackward;
             this.scrollParent = scrollParent;
+            this.collectionRows = collectionRows;
+            this.collectionColumns = collectionColumns;
+            this.changed = changed;
+            this.itemRow = itemRow;
+            this.itemColumn = itemColumn;
+            this.paneTitle = paneTitle;
         }
 
         /**
@@ -932,6 +950,7 @@ public class CranposeActivity extends NativeActivity {
             this.elements = elements;
             host.sendAccessibilityEvent(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED);
             followAppFocus();
+            announceChanges();
         }
 
         /**
@@ -946,6 +965,22 @@ public class CranposeActivity extends NativeActivity {
                 focusedId = element.id;
                 sendEvent(element.id, AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUSED);
                 return;
+            }
+        }
+
+        /**
+         * Tells TalkBack which controls now say something else, so the one
+         * under its cursor is spoken again: a toggle that flipped, a counter
+         * that moved on, a value a reader just set.
+         */
+        private void announceChanges() {
+            for (CranposeAccessibilityElement element : elements) {
+                if (!element.changed) continue;
+                AccessibilityEvent event = AccessibilityEvent.obtain(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED);
+                event.setContentChangeTypes(AccessibilityEvent.CONTENT_CHANGE_TYPE_CONTENT_DESCRIPTION
+                        | AccessibilityEvent.CONTENT_CHANGE_TYPE_TEXT
+                        | AccessibilityEvent.CONTENT_CHANGE_TYPE_STATE_DESCRIPTION);
+                send(element.id, event);
             }
         }
 
@@ -972,7 +1007,8 @@ public class CranposeActivity extends NativeActivity {
             } else {
                 info.setParent(host);
             }
-            if (element.scrollable) {
+            boolean container = element.scrollable || element.collectionRows > 0 || element.collectionColumns > 0;
+            if (container) {
                 for (CranposeAccessibilityElement child : elements) {
                     if (child.scrollParent == element.id) info.addChild(host, child.id);
                 }
@@ -980,7 +1016,8 @@ public class CranposeActivity extends NativeActivity {
             info.setPackageName(host.getContext().getPackageName());
             info.setEnabled(element.enabled);
             info.setVisibleToUser(true);
-            info.setFocusable(!element.scrollable || !element.label.isEmpty());
+            boolean pane = !element.paneTitle.isEmpty();
+            info.setFocusable(!(container || pane) || !element.label.isEmpty());
             info.setAccessibilityFocused(focusedId == element.id);
             info.setFocused(element.focused);
             if (element.focusable) info.addAction(AccessibilityNodeInfo.ACTION_FOCUS);
@@ -990,6 +1027,14 @@ public class CranposeActivity extends NativeActivity {
                 info.setScrollable(true);
                 if (element.canScrollForward) info.addAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD);
                 if (element.canScrollBackward) info.addAction(AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD);
+            }
+            if (element.collectionRows > 0 || element.collectionColumns > 0) {
+                info.setCollectionInfo(AccessibilityNodeInfo.CollectionInfo.obtain(
+                        element.collectionRows, element.collectionColumns, false));
+            }
+            if (element.itemRow >= 0 || element.itemColumn >= 0) {
+                info.setCollectionItemInfo(AccessibilityNodeInfo.CollectionItemInfo.obtain(
+                        element.itemRow, 1, element.itemColumn, 1, false));
             }
             if (element.adjustable) {
                 info.setRangeInfo(AccessibilityNodeInfo.RangeInfo.obtain(
@@ -1004,8 +1049,10 @@ public class CranposeActivity extends NativeActivity {
             if (element.role == 3) {
                 info.setEditable(true);
                 info.setText(element.value);
+                info.addAction(AccessibilityNodeInfo.ACTION_SET_TEXT);
             }
             if (element.role == 9 && Build.VERSION.SDK_INT >= 28) info.setHeading(true);
+            if (Build.VERSION.SDK_INT >= 28 && !element.paneTitle.isEmpty()) info.setPaneTitle(element.paneTitle);
             // Compose's stateDescription. TalkBack speaks it after the label
             // and, unlike the label, re-speaks it on its own when only the
             // state changed — which is what makes a settings toggle usable.
@@ -1088,6 +1135,12 @@ public class CranposeActivity extends NativeActivity {
                 nativeOnAccessibilitySetProgress(element.id, value);
                 return true;
             }
+            if (element.role == 3 && action == AccessibilityNodeInfo.ACTION_SET_TEXT) {
+                CharSequence text = arguments == null ? null
+                        : arguments.getCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE);
+                nativeOnAccessibilitySetText(element.id, text == null ? "" : text.toString());
+                return true;
+            }
             if (action == AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS) {
                 focusedId = HOST_ID;
                 sendEvent(element.id, AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUS_CLEARED);
@@ -1104,8 +1157,11 @@ public class CranposeActivity extends NativeActivity {
         }
 
         private void sendEvent(int id, int type) {
+            send(id, AccessibilityEvent.obtain(type));
+        }
+
+        private void send(int id, AccessibilityEvent event) {
             if (!host.isShown()) return;
-            AccessibilityEvent event = AccessibilityEvent.obtain(type);
             event.setPackageName(host.getContext().getPackageName());
             event.setSource(host, id);
             host.getParent().requestSendAccessibilityEvent(host, event);

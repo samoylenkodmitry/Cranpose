@@ -1,11 +1,15 @@
 use crate::{
-    accessibility::{AccessibilityElement, AccessibilityRole, element_ids},
+    accessibility::{AccessibilityElement, AccessibilityRole, CollectionItem, element_ids},
     android_wire_escape::escape_wire_field,
 };
 
 const ACTION_SEPARATOR: char = '\u{1f}';
 
-pub(crate) fn encode_elements(elements: &[AccessibilityElement], density: f32) -> String {
+pub(crate) fn encode_elements(
+    elements: &[AccessibilityElement],
+    changed: &[bool],
+    density: f32,
+) -> String {
     let density = density.max(f32::EPSILON);
     let ids = element_ids(elements);
     let parents = scroll_parent_ids(elements, &ids);
@@ -13,7 +17,8 @@ pub(crate) fn encode_elements(elements: &[AccessibilityElement], density: f32) -
         .iter()
         .zip(ids)
         .zip(parents)
-        .map(|((element, id), parent)| {
+        .enumerate()
+        .map(|(index, ((element, id), parent))| {
             let role = match element.role {
                 AccessibilityRole::Button => 1,
                 AccessibilityRole::StaticText => 2,
@@ -36,7 +41,7 @@ pub(crate) fn encode_elements(elements: &[AccessibilityElement], density: f32) -
             let progress = element.progress;
             let scroll = element.vertical_scroll.or(element.horizontal_scroll);
             format!(
-                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                 id,
                 role,
                 (element.bounds.x * density).round() as i32,
@@ -64,6 +69,12 @@ pub(crate) fn encode_elements(elements: &[AccessibilityElement], density: f32) -
                 i32::from(scroll.is_some_and(|range| range.can_scroll_forward())),
                 i32::from(scroll.is_some_and(|range| range.can_scroll_backward())),
                 parent,
+                element.collection.map_or(0, |collection| collection.rows),
+                element.collection.map_or(0, |collection| collection.columns),
+                i32::from(changed.get(index).copied().unwrap_or(false)),
+                element.collection_item.map_or(-1, item_row),
+                element.collection_item.map_or(-1, item_column),
+                escape(element.pane_title.as_deref().unwrap_or("")),
             )
         })
         .collect::<Vec<_>>()
@@ -87,6 +98,25 @@ fn scroll_parent_ids(elements: &[AccessibilityElement], ids: &[i32]) -> Vec<i32>
                 .unwrap_or(-1)
         })
         .collect()
+}
+
+/// The row a control takes inside its group, counted from zero, for the
+/// host's collection item info: a group that runs left to right is one row.
+fn item_row(item: CollectionItem) -> i32 {
+    if item.horizontal {
+        0
+    } else {
+        item.position as i32 - 1
+    }
+}
+
+/// The column a control takes inside its group, counted from zero.
+fn item_column(item: CollectionItem) -> i32 {
+    if item.horizontal {
+        item.position as i32 - 1
+    } else {
+        0
+    }
 }
 
 fn tristate(value: Option<bool>) -> i32 {
@@ -139,11 +169,11 @@ mod tests {
             element_with(5, Some(1)),
         ];
 
-        let payload = encode_elements(&elements, 2.0);
+        let payload = encode_elements(&elements, &[], 2.0);
         let records: Vec<_> = payload.split('\n').collect();
         assert_eq!(records.len(), 2);
         for record in &records {
-            assert_eq!(record.split('\t').count(), 27, "record: {record}");
+            assert_eq!(record.split('\t').count(), 33, "record: {record}");
         }
 
         let fields: Vec<_> = records[0].split('\t').collect();
@@ -183,7 +213,7 @@ mod tests {
             },
         ];
 
-        let payload = encode_elements(&elements, 1.0);
+        let payload = encode_elements(&elements, &[], 1.0);
         let records: Vec<_> = payload.split('\n').collect();
         let focused: Vec<_> = records[0].split('\t').collect();
         let other: Vec<_> = records[1].split('\t').collect();
@@ -224,7 +254,7 @@ mod tests {
             save_button(8),
         ];
 
-        let payload = encode_elements(&elements, 1.0);
+        let payload = encode_elements(&elements, &[], 1.0);
         let records: Vec<_> = payload.split('\n').collect();
         let list: Vec<_> = records[0].split('\t').collect();
         let row: Vec<_> = records[1].split('\t').collect();
@@ -256,7 +286,7 @@ mod tests {
             save_button(8),
         ];
 
-        let payload = encode_elements(&elements, 1.0);
+        let payload = encode_elements(&elements, &[], 1.0);
         let records: Vec<_> = payload.split('\n').collect();
         let top: Vec<_> = records[0].split('\t').collect();
         let bottom: Vec<_> = records[1].split('\t').collect();
@@ -284,7 +314,7 @@ mod tests {
             save_button(5),
         ];
 
-        let payload = encode_elements(&elements, 1.0);
+        let payload = encode_elements(&elements, &[], 1.0);
         let records: Vec<_> = payload.split('\n').collect();
         let slider: Vec<_> = records[0].split('\t').collect();
         let button: Vec<_> = records[1].split('\t').collect();
@@ -294,5 +324,95 @@ mod tests {
         assert_eq!(slider[21], "0");
         assert_eq!(slider[22], "1");
         assert_eq!(button[19], "0", "a button holds no range");
+    }
+
+    #[test]
+    fn the_record_says_how_many_rows_a_list_holds() {
+        let mut list = AccessibilityElement {
+            node_id: 6,
+            bounds: AccessibilityRect::new(0.0, 0.0, 400.0, 600.0),
+            vertical_scroll: Some(cranpose_ui::ScrollAxisRange::new(0.0, 900.0, false)),
+            ..AccessibilityElement::default()
+        };
+        list.collection = Some(cranpose_ui::CollectionInfo {
+            rows: 12,
+            columns: 1,
+        });
+
+        let payload = encode_elements(&[list, save_button(8)], &[], 1.0);
+        let records: Vec<_> = payload.split('\n').collect();
+        let list: Vec<_> = records[0].split('\t').collect();
+        let button: Vec<_> = records[1].split('\t').collect();
+
+        assert_eq!(
+            (list[27], list[28]),
+            ("12", "1"),
+            "the list says its rows and columns"
+        );
+        assert_eq!((button[27], button[28]), ("0", "0"), "a button is no list");
+    }
+
+    #[test]
+    fn the_record_flags_a_control_that_says_something_new() {
+        let flagged = encode_elements(&[save_button(8)], &[true], 1.0);
+        let quiet = encode_elements(&[save_button(8)], &[], 1.0);
+
+        assert_eq!(
+            flagged.split('\t').nth(29),
+            Some("1"),
+            "the button says something new"
+        );
+        assert_eq!(
+            quiet.split('\t').nth(29),
+            Some("0"),
+            "the button reads as before"
+        );
+    }
+
+    #[test]
+    fn the_record_places_a_tab_in_its_group() {
+        let mut tab = save_button(8);
+        tab.selected = Some(true);
+        tab.collection_item = Some(CollectionItem {
+            position: 2,
+            count: 5,
+            horizontal: true,
+        });
+
+        let payload = encode_elements(&[tab, save_button(9)], &[], 1.0);
+        let records: Vec<_> = payload.split('\n').collect();
+        let placed: Vec<_> = records[0].split('\t').collect();
+        let loose: Vec<_> = records[1].split('\t').collect();
+
+        assert_eq!(
+            (placed[30], placed[31]),
+            ("0", "1"),
+            "the second tab of a row is column one"
+        );
+        assert_eq!(
+            (loose[30], loose[31]),
+            ("-1", "-1"),
+            "a button outside a group has no place"
+        );
+    }
+
+    #[test]
+    fn the_record_carries_the_title_of_a_pane() {
+        let mut screen = AccessibilityElement {
+            node_id: 1,
+            bounds: AccessibilityRect::new(0.0, 0.0, 300.0, 600.0),
+            ..AccessibilityElement::default()
+        };
+        screen.pane_title = Some("Library".into());
+
+        let payload = encode_elements(&[screen, save_button(8)], &[], 1.0);
+        let records: Vec<_> = payload.split('\n').collect();
+
+        assert_eq!(records[0].split('\t').nth(32), Some("Library"));
+        assert_eq!(
+            records[1].split('\t').nth(32),
+            Some(""),
+            "a button names no pane"
+        );
     }
 }

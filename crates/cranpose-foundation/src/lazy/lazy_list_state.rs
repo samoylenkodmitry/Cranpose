@@ -386,6 +386,12 @@ impl LazyListState {
         self.scroll_position.index()
     }
 
+    /// How many items the list holds, as of its last measure.
+    pub fn total_items_count(&self) -> usize {
+        self.inner
+            .with(|rc| rc.borrow().layout_info.total_items_count)
+    }
+
     /// Returns the first visible item index without subscribing the current composition scope.
     ///
     /// Use this from draw/input/diagnostic code that needs the latest position but must not

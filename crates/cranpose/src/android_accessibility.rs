@@ -8,8 +8,8 @@ use std::sync::{
 use cranpose_app_shell::AppShell;
 use cranpose_render_wgpu::WgpuRenderer;
 use jni::{
-    EnvUnowned, jni_sig, jni_str,
-    objects::{JClass, JObject, JValue},
+    EnvUnowned, Outcome, jni_sig, jni_str,
+    objects::{JClass, JObject, JString, JValue},
     sys::{jboolean, jfloat, jint},
 };
 
@@ -24,6 +24,7 @@ static ACTIVATIONS: OnceLock<Mutex<Vec<(f32, f32)>>> = OnceLock::new();
 static CUSTOM_ACTIONS: OnceLock<Mutex<Vec<(i32, usize)>>> = OnceLock::new();
 static FOCUS_REQUESTS: OnceLock<Mutex<Vec<i32>>> = OnceLock::new();
 static VALUE_REQUESTS: OnceLock<Mutex<Vec<(i32, f32)>>> = OnceLock::new();
+static TEXT_REQUESTS: OnceLock<Mutex<Vec<(i32, String)>>> = OnceLock::new();
 static SCROLL_REQUESTS: OnceLock<Mutex<Vec<(i32, bool)>>> = OnceLock::new();
 static LOOP_WAKER: Mutex<Option<android_activity::AndroidAppWaker>> = Mutex::new(None);
 static PLATFORM_ACCESSIBILITY_ENABLED: AtomicBool = AtomicBool::new(false);
@@ -74,6 +75,10 @@ fn value_requests() -> &'static Mutex<Vec<(i32, f32)>> {
     VALUE_REQUESTS.get_or_init(|| Mutex::new(Vec::new()))
 }
 
+fn text_requests() -> &'static Mutex<Vec<(i32, String)>> {
+    TEXT_REQUESTS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
 fn scroll_requests() -> &'static Mutex<Vec<(i32, bool)>> {
     SCROLL_REQUESTS.get_or_init(|| Mutex::new(Vec::new()))
 }
@@ -107,6 +112,15 @@ pub(crate) fn drain_focus_requests() -> Vec<i32> {
 pub(crate) fn drain_value_requests() -> Vec<(i32, f32)> {
     std::mem::take(
         &mut *value_requests()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()),
+    )
+}
+
+/// Text TalkBack or a voice tool handed to text fields, as virtual view ids.
+pub(crate) fn drain_text_requests() -> Vec<(i32, String)> {
+    std::mem::take(
+        &mut *text_requests()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()),
     )
@@ -178,13 +192,15 @@ pub(crate) fn sync(
     let elements = elements.filter(|elements| elements != previous);
     if let Some(elements) = &elements {
         announcements.extend(accessibility::live_region_announcements(previous, elements));
+        announcements.extend(accessibility::pane_title_announcements(previous, elements));
     }
     speak(app, announcements)?;
     let Some(elements) = elements else {
         return Ok(());
     };
+    let changed = accessibility::spoken_changes(previous, &elements);
     *previous = elements;
-    let payload = encode_elements(previous, density);
+    let payload = encode_elements(previous, &changed, density);
     with_android_activity_env(app, |env, activity| {
         let payload = env.new_string(payload).map_err(|error| {
             clear_pending_android_jni_exception(env);
@@ -282,6 +298,29 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccess
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .push((virtual_id, value));
+    wake_loop();
+}
+
+/// TalkBack or a voice tool handed a text field new text. The frame loop
+/// resolves the field against the live semantics tree.
+#[doc(hidden)]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccessibilitySetText(
+    mut env: EnvUnowned<'_>,
+    _class: JClass<'_>,
+    virtual_id: jint,
+    text: JString<'_>,
+) {
+    let Outcome::Ok(text) = env
+        .with_env(|env| -> jni::errors::Result<String> { text.try_to_string(env) })
+        .into_outcome()
+    else {
+        return;
+    };
+    text_requests()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .push((virtual_id, text));
     wake_loop();
 }
 
