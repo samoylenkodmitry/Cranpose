@@ -15,6 +15,10 @@ fn apply_role_and_state(node: &HtmlElement, element: &AccessibilityElement) -> R
         None => aria_role(element.role),
     };
     node.set_attribute("role", role)?;
+    let scrolls = element.vertical_scroll.is_some() || element.horizontal_scroll.is_some();
+    if element.label.is_empty() && scrolls {
+        node.set_attribute("aria-hidden", "true")?;
+    }
     apply_role_extras(node, element)?;
     apply_progress(node, element)?;
     apply_aria_state(node, element)
