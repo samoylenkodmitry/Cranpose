@@ -60,6 +60,8 @@ pub(crate) struct DesktopAccessibilityBridge {
     centers: HashMap<NodeId, (f32, f32)>,
     pending_custom_actions: Vec<(NodeId, usize)>,
     pending_focus: Vec<NodeId>,
+    pending_values: Vec<(NodeId, f32)>,
+    pending_scrolls: Vec<(NodeId, bool)>,
     previous: Vec<AccessibilityElement>,
     seen_revision: Option<u64>,
     announcement: Option<Announcement>,
@@ -86,6 +88,8 @@ impl DesktopAccessibilityBridge {
             centers: HashMap::new(),
             pending_custom_actions: Vec::new(),
             pending_focus: Vec::new(),
+            pending_values: Vec::new(),
+            pending_scrolls: Vec::new(),
             previous: Vec::new(),
             seen_revision: None,
             announcement: None,
@@ -155,10 +159,41 @@ impl DesktopAccessibilityBridge {
                     }
                 }
                 Action::Focus => self.pending_focus.push(request.target_node),
+                Action::SetValue => {
+                    if let Some(ActionData::NumericValue(value)) = request.data {
+                        self.pending_values
+                            .push((request.target_node, value as f32));
+                    }
+                }
+                Action::Increment => self.step_value(request.target_node, true),
+                Action::Decrement => self.step_value(request.target_node, false),
+                Action::ScrollDown | Action::ScrollRight => {
+                    self.pending_scrolls.push((request.target_node, true));
+                }
+                Action::ScrollUp | Action::ScrollLeft => {
+                    self.pending_scrolls.push((request.target_node, false));
+                }
                 _ => {}
             }
         }
         clicks
+    }
+
+    /// Queues the value one step up or down from the one an adjustable control
+    /// holds now, for a reader that offers a step rather than a value.
+    fn step_value(&mut self, target: NodeId, up: bool) {
+        let ids = accessibility::element_ids(&self.previous);
+        let Some(element) = ids
+            .iter()
+            .position(|id| NodeId(*id as u64) == target)
+            .and_then(|position| self.previous.get(position))
+        else {
+            return;
+        };
+        if let Some(progress) = element.progress {
+            self.pending_values
+                .push((target, accessibility::stepped_value(&progress, up)));
+        }
     }
 
     /// Moves app focus onto the element a screen reader asked for, so the two
@@ -189,9 +224,6 @@ impl DesktopAccessibilityBridge {
         }
         let pending = std::mem::take(&mut self.pending_custom_actions);
         let ids = accessibility::element_ids(&self.previous);
-        let Some(tree) = shell.semantics_tree() else {
-            return false;
-        };
         let mut ran = false;
         for (target, index) in pending {
             let Some(element) = ids
@@ -201,14 +233,63 @@ impl DesktopAccessibilityBridge {
             else {
                 continue;
             };
-            ran |= accessibility::perform_custom_action(
-                tree.root(),
-                element.node_id,
-                element.canvas_key,
-                index,
-            );
+            let (node_id, canvas_key) = (element.node_id, element.canvas_key);
+            ran |= accessibility::run_reader_action(shell, |root| {
+                accessibility::perform_custom_action(root, node_id, canvas_key, index)
+            });
         }
         ran
+    }
+
+    /// Pages a scroll container a screen reader asked to move on or back.
+    /// Answers whether one moved.
+    pub(crate) fn run_scroll_requests(&mut self, shell: &mut AppShell<WgpuRenderer>) -> bool {
+        if self.pending_scrolls.is_empty() {
+            return false;
+        }
+        let pending = std::mem::take(&mut self.pending_scrolls);
+        let ids = accessibility::element_ids(&self.previous);
+        let mut moved = false;
+        for (target, forward) in pending {
+            let Some(element) = ids
+                .iter()
+                .position(|id| NodeId(*id as u64) == target)
+                .and_then(|position| self.previous.get(position))
+            else {
+                continue;
+            };
+            let (dx, dy) = accessibility::page_delta(element, forward);
+            let node_id = element.node_id;
+            moved |= accessibility::run_reader_action(shell, |root| {
+                accessibility::scroll_by(root, node_id, dx, dy)
+            });
+        }
+        moved
+    }
+
+    /// Moves the value of an adjustable control a screen reader asked to
+    /// change. Answers whether one took the new value.
+    pub(crate) fn run_value_requests(&mut self, shell: &mut AppShell<WgpuRenderer>) -> bool {
+        if self.pending_values.is_empty() {
+            return false;
+        }
+        let pending = std::mem::take(&mut self.pending_values);
+        let ids = accessibility::element_ids(&self.previous);
+        let mut moved = false;
+        for (target, value) in pending {
+            let Some(element) = ids
+                .iter()
+                .position(|id| NodeId(*id as u64) == target)
+                .and_then(|position| self.previous.get(position))
+            else {
+                continue;
+            };
+            let node_id = element.node_id;
+            moved |= accessibility::run_reader_action(shell, |root| {
+                accessibility::set_progress(root, node_id, value)
+            });
+        }
+        moved
     }
 }
 
@@ -249,7 +330,13 @@ fn tree_update(
 
 /// One control as accesskit describes it to a screen reader.
 fn accesskit_node(element: &AccessibilityElement) -> Node {
-    let mut node = Node::new(accesskit_role(element.role));
+    let scrolls = element.vertical_scroll.is_some() || element.horizontal_scroll.is_some();
+    let role = match element.progress {
+        Some(_) => Role::Slider,
+        None if scrolls && element.label.is_empty() => Role::ScrollView,
+        None => accesskit_role(element.role),
+    };
+    let mut node = Node::new(role);
     if element.role == AccessibilityRole::StaticText {
         node.set_value(element.label.as_str());
     } else {
@@ -346,6 +433,22 @@ fn apply_state(node: &mut Node, element: &AccessibilityElement) {
     if let Some(mode) = element.live_region {
         node.set_live(accesskit_live(mode));
     }
+    if let Some(progress) = element.progress {
+        node.set_numeric_value(progress.current as f64);
+        node.set_min_numeric_value(progress.start as f64);
+        node.set_max_numeric_value(progress.end as f64);
+        node.set_numeric_value_step(progress.step() as f64);
+    }
+    if let Some(range) = element.vertical_scroll {
+        node.set_scroll_y(range.value as f64);
+        node.set_scroll_y_min(0.0);
+        node.set_scroll_y_max(range.max_value as f64);
+    }
+    if let Some(range) = element.horizontal_scroll {
+        node.set_scroll_x(range.value as f64);
+        node.set_scroll_x_min(0.0);
+        node.set_scroll_x_max(range.max_value as f64);
+    }
 }
 
 /// What a screen reader can do with the control: activate it, run one of its
@@ -370,6 +473,27 @@ fn apply_actions(node: &mut Node, element: &AccessibilityElement) {
     }
     if element.focusable {
         node.add_action(Action::Focus);
+    }
+    if element.adjustable {
+        node.add_action(Action::SetValue);
+        node.add_action(Action::Increment);
+        node.add_action(Action::Decrement);
+    }
+    if let Some(range) = element.vertical_scroll {
+        if range.can_scroll_forward() {
+            node.add_action(Action::ScrollDown);
+        }
+        if range.can_scroll_backward() {
+            node.add_action(Action::ScrollUp);
+        }
+    }
+    if let Some(range) = element.horizontal_scroll {
+        if range.can_scroll_forward() {
+            node.add_action(Action::ScrollRight);
+        }
+        if range.can_scroll_backward() {
+            node.add_action(Action::ScrollLeft);
+        }
     }
 }
 
@@ -674,6 +798,32 @@ mod tests {
 
         let update = tree_update(&elements, None, false);
         assert_eq!(update.nodes[1].1.live(), Some(Live::Polite));
+    }
+
+    #[test]
+    fn an_adjustable_control_reads_as_a_slider_with_a_value_and_a_way_to_move_it() {
+        let elements = vec![AccessibilityElement {
+            node_id: 1,
+            label: "Volume".into(),
+            state_description: Some("40 %".into()),
+            bounds: AccessibilityRect::new(0.0, 0.0, 200.0, 40.0),
+            progress: Some(cranpose_ui::ProgressBarRangeInfo::new(0.4, 0.0, 1.0, 0)),
+            adjustable: true,
+            ..AccessibilityElement::default()
+        }];
+
+        let update = tree_update(&elements, None, false);
+        let slider = &update.nodes[1].1;
+        assert_eq!(slider.role(), Role::Slider);
+        let near =
+            |value: Option<f64>, want: f64| value.is_some_and(|value| (value - want).abs() < 1e-6);
+        assert!(near(slider.numeric_value(), 0.4));
+        assert!(near(slider.min_numeric_value(), 0.0));
+        assert!(near(slider.max_numeric_value(), 1.0));
+        assert!(near(slider.numeric_value_step(), 0.1));
+        assert!(slider.supports_action(Action::SetValue));
+        assert!(slider.supports_action(Action::Increment));
+        assert!(slider.supports_action(Action::Decrement));
     }
 
     #[test]

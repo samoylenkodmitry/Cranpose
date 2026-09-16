@@ -162,8 +162,13 @@ where
         let input = Modifier::empty()
             .fill_max_size()
             .semantics(move |config| {
-                config.enabled = spec.enabled;
-                config.state_description = Some(format!("{}%", (value * 100.0).round() as u32));
+                slider_semantics(
+                    config,
+                    value,
+                    spec.enabled,
+                    on_value_change,
+                    on_value_change_finished,
+                );
             })
             .pointer_input(
                 (
@@ -299,6 +304,32 @@ fn value_for_position(position: f32, extent: f32, thumb_extent: f32, reverse: bo
         value = 1.0 - value;
     }
     value
+}
+
+/// What a screen reader learns about the slider: its value as text, the range
+/// it holds the value in, and, when the slider is enabled, the way to move
+/// it. Compose's `progressSemantics` and `setProgress` on one control.
+fn slider_semantics(
+    config: &mut cranpose_foundation::SemanticsConfiguration,
+    value: f32,
+    enabled: bool,
+    on_value_change: cranpose_core::MutableState<Rc<dyn Fn(f32)>>,
+    on_value_change_finished: cranpose_core::MutableState<Rc<dyn Fn()>>,
+) {
+    config.enabled = enabled;
+    config.state_description = Some(format!("{}%", (value * 100.0).round() as u32));
+    config.progress = Some(cranpose_foundation::ProgressBarRangeInfo::new(
+        value, 0.0, 1.0, 0,
+    ));
+    if enabled {
+        config.set_progress = Some(cranpose_foundation::SemanticsSetProgress::new(
+            move |next: f32| {
+                (on_value_change.value())(next.clamp(0.0, 1.0));
+                (on_value_change_finished.value())();
+                true
+            },
+        ));
+    }
 }
 
 #[cfg(test)]

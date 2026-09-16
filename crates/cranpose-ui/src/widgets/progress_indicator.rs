@@ -97,7 +97,9 @@ pub fn CircularProgressIndicator(modifier: Modifier, color: Color, stroke_width:
         "circular_progress_sweep",
     );
 
-    let sized = modifier.size_points(CIRCULAR_INDICATOR_DIAMETER, CIRCULAR_INDICATOR_DIAMETER);
+    let sized = modifier
+        .size_points(CIRCULAR_INDICATOR_DIAMETER, CIRCULAR_INDICATOR_DIAMETER)
+        .semantics(busy_semantics);
     Canvas(sized, move |scope| {
         let size = scope.size();
         let start_angle = rotation.get() - 90.0;
@@ -141,7 +143,9 @@ pub fn LinearProgressIndicator(modifier: Modifier, color: Color) -> NodeId {
         "linear_progress_phase",
     );
 
-    let sized = modifier.size_points(LINEAR_INDICATOR_WIDTH, LINEAR_INDICATOR_HEIGHT);
+    let sized = modifier
+        .size_points(LINEAR_INDICATOR_WIDTH, LINEAR_INDICATOR_HEIGHT)
+        .semantics(busy_semantics);
     Canvas(sized, move |scope| {
         let size = scope.size();
         let track = Color(color.0, color.1, color.2, color.3 * LINEAR_TRACK_ALPHA);
@@ -416,6 +420,29 @@ mod tests {
         assert_ne!(
             before, after,
             "spinner draw primitives must change as the transition animates"
+        );
+    }
+}
+
+/// What a screen reader says at an indicator with no value: that the app is
+/// busy. Compose's `progressSemantics()` with no arguments does the same, and
+/// without it a spinner is a silent drawing a blind user walks past.
+fn busy_semantics(config: &mut cranpose_foundation::SemanticsConfiguration) {
+    config.content_description = Some("Loading".into());
+}
+
+#[cfg(test)]
+mod busy_semantics_tests {
+    use super::*;
+
+    #[test]
+    fn an_indicator_tells_a_reader_the_app_is_busy() {
+        let mut config = cranpose_foundation::SemanticsConfiguration::default();
+        busy_semantics(&mut config);
+        assert_eq!(config.content_description.as_deref(), Some("Loading"));
+        assert!(
+            config.progress.is_none(),
+            "an indicator with no value must not read as a slider"
         );
     }
 }

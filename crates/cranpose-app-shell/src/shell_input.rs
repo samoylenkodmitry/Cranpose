@@ -968,6 +968,34 @@ where
         self.move_focus_in_context(direction)
     }
 
+    /// Escape closes the modal surface on top, as Compose's `Dialog` takes
+    /// Escape on desktop. With no modal open the key belongs to the app.
+    fn on_escape_key(&mut self, event: &KeyEvent) -> bool {
+        if event.event_type != KeyEventType::KeyDown || event.key_code != KeyCode::Escape {
+            return false;
+        }
+        self.dismiss_top_modal_in_context()
+    }
+
+    /// Asks the innermost open dialog or popup to close, the way the platform
+    /// back gesture does. Answers whether one was open to take the request.
+    pub fn dismiss_top_modal(&mut self) -> bool {
+        let _event_handler = enter_event_handler_scope();
+        let app_context = Rc::clone(&self.app_context);
+        app_context.enter(|| self.dismiss_top_modal_in_context())
+    }
+
+    fn dismiss_top_modal_in_context(&mut self) -> bool {
+        if cranpose_ui::modal_depth() == 0 {
+            return false;
+        }
+        let closed = run_in_mutable_snapshot(cranpose_ui::dispatch_modal_back).unwrap_or(false);
+        if closed {
+            self.mark_dirty();
+        }
+        closed
+    }
+
     /// Publishes the focus order layout left behind and moves focus one step.
     /// Answers whether focus moved.
     pub fn move_focus_in_context(&mut self, direction: FocusDirection) -> bool {
@@ -1030,6 +1058,10 @@ where
         }
 
         if self.on_focus_key(event) {
+            return true;
+        }
+
+        if self.on_escape_key(event) {
             return true;
         }
 

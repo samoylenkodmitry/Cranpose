@@ -30,6 +30,7 @@ mod padding;
 pub(crate) mod pointer_input;
 mod rotary_input;
 mod scroll;
+mod selectable;
 mod semantics;
 mod shadow;
 mod size;
@@ -43,7 +44,7 @@ pub use cranpose_foundation::{
     AnyModifierElement, DynModifierElement, FocusState, PointerEvent, PointerEventKind,
     PointerSource, RotaryScrollEvent, SemanticsConfiguration, modifier_element,
 };
-use cranpose_foundation::{ModifierNodeElement, NodeCapabilities};
+use cranpose_foundation::{ModifierNodeElement, NodeCapabilities, ProgressBarRangeInfo};
 #[allow(unused_imports)]
 pub use cranpose_ui_graphics::{
     BlendMode, BlurredEdgeTreatment, Brush, Color, ColorFilter, CompositingStrategy, CornerRadii,
@@ -65,6 +66,8 @@ pub use local::{ModifierLocalKey, ModifierLocalReadScope};
 #[allow(unused_imports)]
 pub use pointer_input::{AwaitPointerEventScope, PointerInputScope};
 pub use rotary_input::RotaryInputModifierNode;
+#[cfg(test)]
+pub(crate) use scroll::lazy_scroll_semantics;
 #[cfg(feature = "test-helpers")]
 pub use scroll::{last_fling_velocity, reset_last_fling_velocity};
 use semantics::SemanticsElement;
@@ -473,6 +476,44 @@ impl Modifier {
         let modifier =
             Modifier::from_parts(vec![modifier_element(element)]).with_inspector_metadata(metadata);
         self.then(modifier)
+    }
+
+    /// Tells a screen reader the value this control holds inside a range, so
+    /// it reads the value and offers its own way to change it.
+    ///
+    /// This is Compose's `Modifier.progressSemantics(value, valueRange,
+    /// steps)`. Without it a slider reads as text and a person who cannot see
+    /// the screen has no way to move it.
+    ///
+    /// Example: `Modifier::empty().progress_semantics(0.35, 0.0, 1.0, 0)`
+    pub fn progress_semantics(self, current: f32, start: f32, end: f32, steps: u32) -> Self {
+        let info = ProgressBarRangeInfo::new(current, start, end, steps);
+        self.semantics(move |config| config.progress = Some(info))
+    }
+
+    /// Marks this component as a heading, so a screen reader lists it among
+    /// the headings of the screen and a person can jump between them.
+    ///
+    /// This is Compose's `Modifier.semantics { heading() }`.
+    pub fn heading(self) -> Self {
+        self.role(cranpose_foundation::SemanticsWidgetRole::Header)
+    }
+
+    /// Tells a screen reader what kind of control this is, when the widget
+    /// does not say so on its own.
+    ///
+    /// This is Compose's `Modifier.semantics { role = Role.Button }`.
+    pub fn role(self, role: cranpose_foundation::SemanticsWidgetRole) -> Self {
+        self.semantics(move |config| config.role = Some(role))
+    }
+
+    /// Gives this component the text a screen reader reads for it, for a
+    /// drawing, an icon or a control with no text of its own.
+    ///
+    /// This is Compose's `Modifier.semantics { contentDescription = "..." }`.
+    pub fn content_description(self, description: impl Into<String>) -> Self {
+        let description = description.into();
+        self.semantics(move |config| config.content_description = Some(description.clone()))
     }
 
     /// Makes this component focusable.

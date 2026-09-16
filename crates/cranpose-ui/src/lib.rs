@@ -62,8 +62,8 @@ pub use bring_into_view::{
 };
 pub use cranpose_foundation::{
     CanvasSemanticsNode, DelegatableNode, LiveRegionMode, ModifierNode, ModifierNodeElement,
-    NodeCapabilities, NodeState, SemanticsConfiguration, SemanticsCustomAction,
-    SemanticsWidgetRole,
+    NodeCapabilities, NodeState, ProgressBarRangeInfo, ScrollAxisRange, SemanticsConfiguration,
+    SemanticsCustomAction, SemanticsScrollBy, SemanticsSetProgress, SemanticsWidgetRole,
     lazy::{
         LazyItems, LazyListItemInfo, LazyListLayoutInfo, LazyListScope, LazyListState,
         rememberLazyListState, rememberLazyListStateWithPosition,

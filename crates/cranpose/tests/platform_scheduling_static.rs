@@ -842,8 +842,58 @@ fn every_platform_bridge_carries_focus_both_ways() {
         web_source.contains("\"focusin\"")
             && web_source.contains("node.focus()")
             && web_source.contains("\"tabindex\",")
-            && web_source.contains("if element.focusable {"),
+            && web_source.contains("if element.focusable || element.adjustable {"),
         "the web mirror should take Tab focus, follow the app's focus, and report a focus back"
+    );
+}
+
+#[test]
+fn every_platform_bridge_lets_a_reader_move_an_adjustable_control() {
+    let projection_source = crate_source("src/accessibility.rs");
+    assert!(
+        projection_source.contains("pub(crate) progress: Option<ProgressBarRangeInfo>")
+            && projection_source.contains("pub(crate) adjustable: bool")
+            && projection_source.contains("pub(crate) fn set_progress("),
+        "the range a control holds and the way back to move it are platform-neutral"
+    );
+
+    let desktop_source = crate_source("src/desktop_accessibility.rs");
+    assert!(
+        desktop_source.contains("node.set_numeric_value(progress.current as f64)")
+            && desktop_source.contains("node.add_action(Action::SetValue)")
+            && desktop_source.contains("pub(crate) fn run_value_requests("),
+        "accesskit should carry the value and take SetValue, Increment and Decrement back"
+    );
+
+    let ios_source = crate_source("src/ios_accessibility.rs");
+    assert!(
+        ios_source.contains("UIAccessibilityTraitAdjustable")
+            && ios_source.contains("accessibilityIncrement")
+            && ios_source.contains("accessibilityDecrement")
+            && ios_source.contains("fn drain_value_steps<R>("),
+        "VoiceOver moves an adjustable control with a swipe up and down, not with a value"
+    );
+
+    let java_source =
+        workspace_source("crates/cranpose/android/java/dev/cranpose/android/CranposeActivity.java");
+    let android_source = crate_source("src/android_accessibility.rs");
+    let wire_source = crate_source("src/android_accessibility_wire.rs");
+    assert!(
+        java_source.contains("info.setRangeInfo(AccessibilityNodeInfo.RangeInfo.obtain(")
+            && java_source.contains("ACTION_ARGUMENT_PROGRESS_VALUE")
+            && android_source.contains(
+                "Java_dev_cranpose_android_CranposeActivity_nativeOnAccessibilitySetProgress"
+            )
+            && wire_source.contains("i32::from(element.adjustable)"),
+        "TalkBack reads a RangeInfo and hands a new value back through the wire"
+    );
+
+    let web_source = crate_source("src/web_accessibility.rs");
+    assert!(
+        web_source.contains("\"aria-valuenow\"")
+            && web_source.contains("fn attach_key_listener(")
+            && web_source.contains("accessibility::set_progress("),
+        "the web mirror should read as a slider and move on the arrow keys"
     );
 }
 
@@ -3130,6 +3180,116 @@ fn every_service_the_plugin_offers_has_a_manifest() {
         assert!(
             workspace_path(&cranpose_manifest(service)).is_file(),
             "the plugin offers `{service}` but has no manifest fragment for it"
+        );
+    }
+}
+
+#[test]
+fn every_platform_bridge_pages_a_scroll_container() {
+    let projection_source = crate_source("src/accessibility.rs");
+    assert!(
+        projection_source.contains("pub(crate) vertical_scroll: Option<ScrollAxisRange>")
+            && projection_source.contains("pub(crate) fn scroll_by(")
+            && projection_source.contains("pub(crate) fn page_delta("),
+        "a scroll container and the page it moves by are platform-neutral"
+    );
+
+    let desktop_source = crate_source("src/desktop_accessibility.rs");
+    assert!(
+        desktop_source.contains("Role::ScrollView")
+            && desktop_source.contains("Action::ScrollDown")
+            && desktop_source.contains("pub(crate) fn run_scroll_requests("),
+        "accesskit should read a scroll view and take a scroll action back"
+    );
+
+    let ios_source = crate_source("src/ios_accessibility.rs");
+    assert!(
+        ios_source.contains("#[unsafe(method(accessibilityScroll:))]")
+            && ios_source.contains("fn drain_scrolls<R>(")
+            && ios_source.contains("accessibility::scroll_container_for("),
+        "VoiceOver pages with a three-finger swipe on the element under its cursor"
+    );
+
+    let java_source =
+        workspace_source("crates/cranpose/android/java/dev/cranpose/android/CranposeActivity.java");
+    let android_source = crate_source("src/android_accessibility.rs");
+    let rust_shell_source = crate_source("src/android.rs");
+    assert!(
+        java_source.contains("AccessibilityNodeInfo.ACTION_SCROLL_FORWARD")
+            && java_source.contains("nativeOnAccessibilityScroll(")
+            && android_source
+                .contains("Java_dev_cranpose_android_CranposeActivity_nativeOnAccessibilityScroll")
+            && rust_shell_source
+                .contains("drain_accessibility_scrolls(shell, &accessibility_elements);"),
+        "TalkBack pages a scrollable node through the wire and the shell drains it each frame"
+    );
+
+    let web_source = crate_source("src/web_accessibility.rs");
+    assert!(
+        web_source.contains("\"PageDown\"")
+            && web_source.contains("data-cranpose-page")
+            && web_source.contains("attach_page_listener(&root"),
+        "a keyboard reader pages the mirror with Page Down and Page Up"
+    );
+}
+
+#[test]
+fn every_platform_lets_a_reader_leave_a_dialog() {
+    let shell_source = workspace_source("crates/cranpose-app-shell/src/shell_input.rs");
+    assert!(
+        shell_source.contains("fn on_escape_key(")
+            && shell_source.contains("pub fn dismiss_top_modal(")
+            && shell_source.contains("run_in_mutable_snapshot(cranpose_ui::dispatch_modal_back)"),
+        "Escape on a keyboard closes the modal on top through the same stack the back gesture uses"
+    );
+
+    let ios_source = crate_source("src/ios_accessibility.rs");
+    assert!(
+        ios_source.contains("#[unsafe(method(accessibilityPerformEscape))]")
+            && ios_source.contains("fn drain_escapes<R>(")
+            && ios_source.contains("shell.dismiss_top_modal() || accessibility::request_back()"),
+        "a VoiceOver two-finger scrub closes the dialog on top, or goes back"
+    );
+
+    let android_source = crate_source("src/android.rs");
+    assert!(
+        android_source.contains("android_activity::input::Keycode::Back")
+            && android_source.contains("cranpose_services::push_back_request()"),
+        "TalkBack's back gesture is the system back key, which the shell already takes"
+    );
+
+    let web_source = crate_source("src/web.rs");
+    assert!(
+        web_source.contains("(\"Escape\", KeyCode::Escape)")
+            && web_source.contains("document.add_event_listener_with_callback(\"keydown\""),
+        "Escape reaches the shell from the mirror too, because the key listener sits on the document"
+    );
+}
+
+#[test]
+fn every_reader_action_runs_inside_the_app_context() {
+    let projection_source = crate_source("src/accessibility.rs");
+    assert!(
+        projection_source.contains("pub(crate) fn run_reader_action<R>(")
+            && projection_source.contains("let context = std::rc::Rc::clone(shell.app_context());")
+            && projection_source.contains("cranpose_core::run_in_mutable_snapshot(|| {"),
+        "a reader action writes state and invalidates layout, which the render state refuses outside the app context"
+    );
+
+    for path in [
+        "src/desktop_accessibility.rs",
+        "src/ios_accessibility.rs",
+        "src/android.rs",
+        "src/web_accessibility.rs",
+    ] {
+        let source = crate_source(path);
+        assert!(
+            source.contains("run_reader_action("),
+            "{path} should run its reader actions through the app context wrapper"
+        );
+        assert!(
+            !source.contains("(tree.root(),") && !source.contains("(tree.root()"),
+            "{path} reaches the live tree outside the app context; route it through run_reader_action"
         );
     }
 }

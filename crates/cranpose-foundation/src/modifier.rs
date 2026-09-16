@@ -683,6 +683,165 @@ pub enum SemanticsWidgetRole {
     Dialog,
 }
 
+/// The value a control holds inside a range, for a slider, a dial or a
+/// progress bar.
+///
+/// This is Compose's `ProgressBarRangeInfo` (`Modifier.progressSemantics(value,
+/// range, steps)`). A control without it reads as plain text: a screen reader
+/// user hears "47 percent" and has no way to change it, because nothing tells
+/// the platform the control is adjustable.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ProgressBarRangeInfo {
+    pub current: f32,
+    pub start: f32,
+    pub end: f32,
+    /// How many stops sit between `start` and `end`, as Compose counts them.
+    /// Zero means the value moves without stops.
+    pub steps: u32,
+}
+
+impl ProgressBarRangeInfo {
+    pub fn new(current: f32, start: f32, end: f32, steps: u32) -> Self {
+        Self {
+            current,
+            start,
+            end,
+            steps,
+        }
+    }
+
+    /// Where the value sits between the two ends, from 0 to 1.
+    pub fn fraction(&self) -> f32 {
+        let span = self.end - self.start;
+        if span.abs() < f32::EPSILON {
+            return 0.0;
+        }
+        ((self.current - self.start) / span).clamp(0.0, 1.0)
+    }
+
+    /// How far one stop moves the value. With no stops, one tenth of the
+    /// range, which is what a screen reader's swipe up and down expects.
+    pub fn step(&self) -> f32 {
+        let span = self.end - self.start;
+        if self.steps == 0 {
+            span / 10.0
+        } else {
+            span / (self.steps as f32 + 1.0)
+        }
+    }
+}
+
+/// How far a container has scrolled along one axis and how far it can go.
+///
+/// This is Compose's `ScrollAxisRange` (`verticalScrollAxisRange`,
+/// `horizontalScrollAxisRange`). A lazy list has no whole extent to give, so
+/// it reports the first visible item as the value and one more than that as
+/// the end while it can still scroll; a reader only needs to know whether it
+/// can page on.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ScrollAxisRange {
+    pub value: f32,
+    pub max_value: f32,
+    pub reverse: bool,
+}
+
+impl ScrollAxisRange {
+    pub fn new(value: f32, max_value: f32, reverse: bool) -> Self {
+        Self {
+            value,
+            max_value,
+            reverse,
+        }
+    }
+
+    pub fn can_scroll_forward(&self) -> bool {
+        self.value < self.max_value
+    }
+
+    pub fn can_scroll_backward(&self) -> bool {
+        self.value > 0.0
+    }
+}
+
+/// What a container does when a screen reader pages it, e.g. TalkBack's
+/// scroll forward action or an accesskit scroll down. The two deltas are in
+/// layout pixels; the answer says whether anything moved.
+///
+/// This is Compose's `SemanticsActions.ScrollBy`.
+#[derive(Clone)]
+pub struct SemanticsScrollBy {
+    handler: Rc<dyn Fn(f32, f32) -> bool>,
+}
+
+impl SemanticsScrollBy {
+    pub fn new(handler: impl Fn(f32, f32) -> bool + 'static) -> Self {
+        Self {
+            handler: Rc::new(handler),
+        }
+    }
+
+    pub fn invoke(&self, dx: f32, dy: f32) -> bool {
+        (self.handler)(dx, dy)
+    }
+}
+
+impl fmt::Debug for SemanticsScrollBy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SemanticsScrollBy").finish_non_exhaustive()
+    }
+}
+
+/// Two scroll actions always read as the same action, for the reason
+/// [`SemanticsCustomAction`]'s own comparison gives.
+impl PartialEq for SemanticsScrollBy {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for SemanticsScrollBy {}
+
+/// What a control does when a screen reader moves its value, e.g. a VoiceOver
+/// swipe up or a TalkBack set-progress action.
+///
+/// This is Compose's `SemanticsActions.SetProgress`. The value comes in the
+/// control's own range, and the answer says whether the control took it.
+#[derive(Clone)]
+pub struct SemanticsSetProgress {
+    handler: Rc<dyn Fn(f32) -> bool>,
+}
+
+impl SemanticsSetProgress {
+    pub fn new(handler: impl Fn(f32) -> bool + 'static) -> Self {
+        Self {
+            handler: Rc::new(handler),
+        }
+    }
+
+    pub fn invoke(&self, value: f32) -> bool {
+        (self.handler)(value)
+    }
+}
+
+impl fmt::Debug for SemanticsSetProgress {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SemanticsSetProgress")
+            .finish_non_exhaustive()
+    }
+}
+
+/// Two set-progress actions always read as the same action, for the reason
+/// [`SemanticsCustomAction`]'s own comparison gives: the closure is rebuilt on
+/// every semantics collection, so comparing handler identity would report a
+/// changed tree on every frame.
+impl PartialEq for SemanticsSetProgress {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for SemanticsSetProgress {}
+
 /// How urgently a screen reader reads a node whose text changed on its own.
 ///
 /// This is Compose's `LiveRegionMode` (`Modifier.semantics { liveRegion =
@@ -900,6 +1059,21 @@ pub struct SemanticsConfiguration {
     /// Compose's `liveRegion`. When set, a screen reader reads this node again
     /// whenever its text changes, without the user moving to it.
     pub live_region: Option<LiveRegionMode>,
+    /// Compose's `progressBarRangeInfo`. A control with it is adjustable: a
+    /// screen reader offers its own way to move the value.
+    pub progress: Option<ProgressBarRangeInfo>,
+    /// What the control does when a screen reader moves its value. Compose's
+    /// `setProgress`.
+    pub set_progress: Option<SemanticsSetProgress>,
+    /// How far this container scrolled up and down. Compose's
+    /// `verticalScrollAxisRange`.
+    pub vertical_scroll: Option<ScrollAxisRange>,
+    /// How far this container scrolled left and right. Compose's
+    /// `horizontalScrollAxisRange`.
+    pub horizontal_scroll: Option<ScrollAxisRange>,
+    /// What this container does when a screen reader pages it. Compose's
+    /// `scrollBy`.
+    pub scroll_by: Option<SemanticsScrollBy>,
 }
 
 impl Default for SemanticsConfiguration {
@@ -919,6 +1093,11 @@ impl Default for SemanticsConfiguration {
             canvas_children: Vec::new(),
             is_modal: false,
             live_region: None,
+            progress: None,
+            set_progress: None,
+            vertical_scroll: None,
+            horizontal_scroll: None,
+            scroll_by: None,
         }
     }
 }
@@ -956,6 +1135,21 @@ impl SemanticsConfiguration {
         self.is_modal |= other.is_modal;
         if let Some(live_region) = other.live_region {
             self.live_region = Some(live_region);
+        }
+        if let Some(set_progress) = &other.set_progress {
+            self.set_progress = Some(set_progress.clone());
+        }
+        if let Some(progress) = other.progress {
+            self.progress = Some(progress);
+        }
+        if let Some(range) = other.vertical_scroll {
+            self.vertical_scroll = Some(range);
+        }
+        if let Some(range) = other.horizontal_scroll {
+            self.horizontal_scroll = Some(range);
+        }
+        if let Some(scroll_by) = &other.scroll_by {
+            self.scroll_by = Some(scroll_by.clone());
         }
     }
 
