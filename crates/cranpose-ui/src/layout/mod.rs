@@ -381,6 +381,8 @@ pub struct SemanticsNode {
     pub error: Option<String>,
     /// Whether this field holds a secret, so its text stays unspoken.
     pub password: bool,
+    /// Where a screen reader visits this node among the ones beside it.
+    pub traversal_index: f32,
     /// The text an editable field holds.
     pub text: Option<String>,
     pub text_selection: Option<TextRange>,
@@ -432,6 +434,7 @@ impl Default for SemanticsNode {
             pane_title: None,
             error: None,
             password: false,
+            traversal_index: 0.0,
             text: None,
             text_selection: None,
             focusable: false,
@@ -3098,6 +3101,7 @@ fn semantics_node_from_parts(
         node.pane_title = config.pane_title;
         node.error = config.error;
         node.password = config.password;
+        node.traversal_index = config.traversal_index;
         node.text = config.text;
         node.text_selection = config.text_selection;
         node.live_region = config.live_region;

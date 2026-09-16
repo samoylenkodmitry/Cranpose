@@ -181,7 +181,10 @@ fn apply_role_extras(node: &HtmlElement, element: &AccessibilityElement) -> Resu
 /// What the control says about itself in words: the state description with
 /// the reason its content is wrong, whether it holds a secret, and where it
 /// sits in a group.
-fn apply_aria_description(node: &HtmlElement, element: &AccessibilityElement) -> Result<(), JsValue> {
+fn apply_aria_description(
+    node: &HtmlElement,
+    element: &AccessibilityElement,
+) -> Result<(), JsValue> {
     if let Some(state) = accessibility::state_with_error(element) {
         node.set_attribute("aria-description", &state)?;
     }

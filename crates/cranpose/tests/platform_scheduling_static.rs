@@ -3563,3 +3563,22 @@ fn no_platform_reads_a_password_out() {
         "the text never leaves the projection"
     );
 }
+
+#[test]
+fn every_platform_reads_the_traversal_order_from_the_projection() {
+    assert!(
+        crate_source("src/accessibility.rs").contains("for child in reading_order(node) {"),
+        "the projection puts the nodes in the order a reader walks them"
+    );
+    for source in [
+        crate_source("src/ios_accessibility.rs"),
+        crate_source("src/web_accessibility.rs"),
+        crate_source("src/desktop_accessibility.rs"),
+        crate_source("src/android_accessibility_wire.rs"),
+    ] {
+        assert!(
+            !source.contains(".sort_by_key(|element| element.bounds"),
+            "no bridge sorts the elements again on its own"
+        );
+    }
+}

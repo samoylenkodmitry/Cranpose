@@ -1116,6 +1116,10 @@ pub struct SemanticsConfiguration {
     /// Whether this field holds a secret, so no screen reader reads its text
     /// out and no platform mirror carries it. Compose's `password`.
     pub password: bool,
+    /// Where a screen reader visits this node among the ones beside it: a
+    /// smaller number comes first, and nodes left at zero keep the order the
+    /// app laid them out in. Compose's `traversalIndex`.
+    pub traversal_index: f32,
     /// Compose's `liveRegion`. When set, a screen reader reads this node again
     /// whenever its text changes, without the user moving to it.
     pub live_region: Option<LiveRegionMode>,
@@ -1164,6 +1168,7 @@ impl Default for SemanticsConfiguration {
             pane_title: None,
             error: None,
             password: false,
+            traversal_index: 0.0,
             live_region: None,
             progress: None,
             set_progress: None,
@@ -1220,6 +1225,9 @@ impl SemanticsConfiguration {
             self.error = Some(error.clone());
         }
         self.password |= other.password;
+        if other.traversal_index != 0.0 {
+            self.traversal_index = other.traversal_index;
+        }
         if let Some(live_region) = other.live_region {
             self.live_region = Some(live_region);
         }

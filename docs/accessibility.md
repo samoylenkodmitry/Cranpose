@@ -179,6 +179,19 @@ field keeps the name the app gave it; with no name a reader hears
 | Android | `setPassword` on the node, which TalkBack reads as "password", and an empty value |
 | Web | `aria-roledescription="password"` on the mirror node, with no text content |
 
+## 4e. The order a reader walks a screen
+
+A screen reader walks the controls in the order the app laid them out. A
+search field drawn last so it sits above the rest is reached last, after
+everything it filters. `Modifier::traversal_index(-1.0)` on it, Compose's
+`traversalIndex`, moves it to the front of the nodes beside it; a larger
+number moves a node back. Nodes left alone keep the laid-out order, so one
+number on one node is the whole change.
+
+The order is the projection's order, and every platform reads it from
+there: the element list on iOS, the virtual node ids on Android, the mirror
+nodes in the page on the web, and the children of the accesskit tree.
+
 ## 5. A list a reader can page
 
 A lazy list builds only the rows on screen. A reader that walks the rows one

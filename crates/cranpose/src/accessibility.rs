@@ -328,7 +328,7 @@ fn project_children(
     elements: &mut Vec<AccessibilityElement>,
 ) {
     let first_child = elements.len();
-    for child in &node.children {
+    for child in reading_order(node) {
         project_node(
             child,
             bounds,
@@ -341,6 +341,18 @@ fn project_children(
     if node.selectable_group {
         number_group(node.node_id, first_child, elements);
     }
+}
+
+/// The order a screen reader visits the nodes under a container: the order
+/// the app laid them out, with any node the app gave a traversal index moved
+/// to where that index puts it. The sort keeps the laid-out order of nodes
+/// that share an index. Compose's `traversalIndex`.
+fn reading_order(node: &SemanticsNode) -> Vec<&SemanticsNode> {
+    let mut order: Vec<&SemanticsNode> = node.children.iter().collect();
+    if order.iter().any(|child| child.traversal_index != 0.0) {
+        order.sort_by(|left, right| left.traversal_index.total_cmp(&right.traversal_index));
+    }
+    order
 }
 
 /// Gives each selectable control under a group its place and the group's
@@ -1697,6 +1709,53 @@ mod tests {
         let unnamed = projected_field(None, "hunter2", true);
         assert_eq!(unnamed[0].label, "password", "no name reads no secret");
         assert_eq!(unnamed[0].value, None);
+    }
+
+    #[test]
+    fn a_traversal_index_moves_a_node_in_the_reading_order() {
+        let mut search = node(
+            2,
+            SemanticsRole::Text {
+                value: "Search".into(),
+            },
+            Vec::new(),
+            None,
+            Vec::new(),
+        );
+        search.traversal_index = -1.0;
+        let title = node(
+            3,
+            SemanticsRole::Text {
+                value: "Receipts".into(),
+            },
+            Vec::new(),
+            None,
+            Vec::new(),
+        );
+        let root = node(
+            1,
+            SemanticsRole::Layout,
+            Vec::new(),
+            None,
+            vec![title, search],
+        );
+        let bounds = HashMap::from_iter([
+            (1, AccessibilityRect::new(0.0, 0.0, 300.0, 200.0)),
+            (2, AccessibilityRect::new(0.0, 60.0, 300.0, 40.0)),
+            (3, AccessibilityRect::new(0.0, 0.0, 300.0, 40.0)),
+        ]);
+
+        let projected = project_semantics(&root, &bounds);
+        let labels: Vec<&str> = projected
+            .iter()
+            .map(|element| element.label.as_str())
+            .collect();
+
+        assert_eq!(
+            labels,
+            vec!["Search", "Receipts"],
+            "the search field is read first"
+        );
     }
 
     #[test]

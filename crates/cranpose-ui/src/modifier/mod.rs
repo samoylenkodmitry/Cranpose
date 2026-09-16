@@ -491,6 +491,15 @@ impl Modifier {
         self.semantics(move |config| config.progress = Some(info))
     }
 
+    /// Moves this node in the order a screen reader visits the nodes beside
+    /// it: a smaller number comes first, and a node left alone keeps the
+    /// order the app laid it out in. A search field drawn last but meant to
+    /// be read first takes a negative number. Compose's
+    /// `Modifier.semantics { traversalIndex = -1f }`.
+    pub fn traversal_index(self, index: f32) -> Self {
+        self.semantics(move |config| config.traversal_index = index)
+    }
+
     /// Marks a field as one that holds a secret, so no screen reader reads
     /// its text out: a reader hears the name the app gave the field, and
     /// "password" in place of the text. Compose's
