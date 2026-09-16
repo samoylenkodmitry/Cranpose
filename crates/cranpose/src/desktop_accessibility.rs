@@ -1,7 +1,7 @@
 #![allow(unsafe_code)]
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{Arc, Mutex},
 };
 
@@ -315,7 +315,8 @@ fn tree_update(
     announcement_turn: bool,
 ) -> TreeUpdate {
     let ids = accessibility::element_ids(elements);
-    let mut children: Vec<NodeId> = ids.iter().map(|id| NodeId(*id as u64)).collect();
+    let mut nested = nested_children(&ids, elements);
+    let mut children = nested.remove(&None).unwrap_or_default();
     if announcement.is_some() {
         children.push(ANNOUNCEMENT_ID);
     }
@@ -323,11 +324,15 @@ fn tree_update(
     root.set_label("Cranpose application");
     root.set_children(children);
     let mut nodes = vec![(ROOT_ID, root)];
-    nodes.extend(
-        ids.iter()
-            .zip(elements)
-            .map(|(id, element)| (NodeId(*id as u64), accesskit_node(element))),
-    );
+    nodes.extend(ids.iter().zip(elements).map(|(id, element)| {
+        let mut node = accesskit_node(element);
+        if element.canvas_key.is_none()
+            && let Some(children) = nested.remove(&Some(element.node_id))
+        {
+            node.set_children(children);
+        }
+        (NodeId(*id as u64), node)
+    }));
     if let Some(announcement) = announcement {
         nodes.push((
             ANNOUNCEMENT_ID,
@@ -342,6 +347,29 @@ fn tree_update(
         tree_id: TreeId::ROOT,
         focus: focused_node(&ids, elements),
     }
+}
+
+/// The accesskit ids under each container, keyed by the container's node, and
+/// under `None` the ones with nothing above them, so a reader hears "list, 12
+/// items" and "tab 2 of 5" from the shape of the tree. A row whose container
+/// was not published sits at the root rather than out of reach.
+fn nested_children(
+    ids: &[i32],
+    elements: &[AccessibilityElement],
+) -> HashMap<Option<cranpose_core::NodeId>, Vec<NodeId>> {
+    let containers: HashSet<cranpose_core::NodeId> = elements
+        .iter()
+        .filter(|element| element.canvas_key.is_none())
+        .map(|element| element.node_id)
+        .collect();
+    let mut nested: HashMap<Option<cranpose_core::NodeId>, Vec<NodeId>> = HashMap::new();
+    for (id, element) in ids.iter().zip(elements) {
+        let parent = element
+            .scroll_parent
+            .filter(|parent| containers.contains(parent));
+        nested.entry(parent).or_default().push(NodeId(*id as u64));
+    }
+    nested
 }
 
 /// One control as accesskit describes it to a screen reader.
@@ -879,5 +907,36 @@ mod tests {
         assert_eq!(joined.text, "Import done. Two receipts failed");
         assert_eq!(joined.mode, LiveRegionMode::Assertive);
         assert!(join_announcements(Vec::new()).is_none());
+    }
+
+    #[test]
+    fn rows_sit_under_their_list_in_the_desktop_tree() {
+        let list = AccessibilityElement {
+            node_id: 6,
+            bounds: AccessibilityRect::new(0.0, 0.0, 400.0, 600.0),
+            vertical_scroll: Some(cranpose_ui::ScrollAxisRange::new(0.0, 900.0, false)),
+            ..AccessibilityElement::default()
+        };
+        let row = AccessibilityElement {
+            node_id: 9,
+            label: "Milk".into(),
+            bounds: AccessibilityRect::new(0.0, 10.0, 400.0, 40.0),
+            scroll_parent: Some(6),
+            ..AccessibilityElement::default()
+        };
+
+        let update = tree_update(&[list, row], None, false);
+        let ids: Vec<_> = update.nodes.iter().map(|(id, _)| *id).collect();
+
+        assert_eq!(
+            update.nodes[0].1.children(),
+            &ids[1..2],
+            "the root holds the list alone"
+        );
+        assert_eq!(
+            update.nodes[1].1.children(),
+            &ids[2..],
+            "the list holds its row"
+        );
     }
 }

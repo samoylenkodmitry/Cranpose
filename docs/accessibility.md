@@ -183,7 +183,7 @@ pages its own list. The move runs through `scroll_by` on the live tree.
 
 | Platform | Reads | Pages |
 | --- | --- | --- |
-| accesskit | `Role::ScrollView` with the offset and its range | `Action::ScrollDown`, `ScrollUp`, `ScrollRight`, `ScrollLeft` |
+| accesskit | `Role::ScrollView` with the offset and its range, and the rows as its children | `Action::ScrollDown`, `ScrollUp`, `ScrollRight`, `ScrollLeft` |
 | iOS | nothing; the container stays out of the cursor's way | a VoiceOver three-finger swipe, through `accessibilityScroll:` on the focused element |
 | Android | `isScrollable` with `ACTION_SCROLL_FORWARD` and `BACKWARD` as the offset allows; each row sits under its list in the virtual view tree, and a list with no text is not focusable | TalkBack's page gesture on a row, which reaches the list above it |
 | Web | nothing on the mirror | Page Down and Page Up on the focused mirrored element |

@@ -3502,3 +3502,13 @@ fn every_platform_reads_a_pane_title_when_the_app_moves_on() {
         "the Android host carries the pane title on its node"
     );
 }
+
+#[test]
+fn the_desktop_tree_keeps_rows_under_their_list() {
+    let desktop_source = crate_source("src/desktop_accessibility.rs");
+    assert!(
+        desktop_source.contains("fn nested_children(")
+            && desktop_source.contains("node.set_children(children);"),
+        "accesskit gets each row under its list and each tab under its group"
+    );
+}
