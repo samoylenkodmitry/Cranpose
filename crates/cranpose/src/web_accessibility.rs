@@ -157,6 +157,8 @@ fn aria_role(role: AccessibilityRole) -> &'static str {
         AccessibilityRole::RadioButton => "radio",
         AccessibilityRole::Tab => "tab",
         AccessibilityRole::Image => "img",
+        AccessibilityRole::DropdownList => "combobox",
+        AccessibilityRole::ValuePicker => "spinbutton",
         AccessibilityRole::Header => "heading",
         AccessibilityRole::Dialog => "dialog",
     }

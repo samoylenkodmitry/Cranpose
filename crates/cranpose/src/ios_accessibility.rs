@@ -593,6 +593,8 @@ fn update_native_element(
             AccessibilityRole::TextField => UIAccessibilityTraitNone,
             AccessibilityRole::Tab => UIAccessibilityTraitButton,
             AccessibilityRole::Image => UIAccessibilityTraitImage,
+            AccessibilityRole::DropdownList => UIAccessibilityTraitButton,
+            AccessibilityRole::ValuePicker => UIAccessibilityTraitAdjustable,
             AccessibilityRole::Header => UIAccessibilityTraitHeader,
             AccessibilityRole::Dialog => UIAccessibilityTraitHeader,
         }

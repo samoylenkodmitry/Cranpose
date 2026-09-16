@@ -208,6 +208,24 @@ Compose's `expand` and `collapse` actions work.
 | Android | `ACTION_EXPAND` or `ACTION_COLLAPSE` on the node, which TalkBack offers in its menu |
 | Web | `aria-expanded` on the mirror node |
 
+## 4g. A dropdown and a value picker
+
+A control that opens a list of choices read as a plain button, and a
+control that steps through an ordered set read as a button too, so a
+reader could not tell either from a save button. `Modifier::dropdown_list()`
+and `Modifier::value_picker()`, Compose's `Role.DropdownList` and
+`Role.ValuePicker`, name them.
+
+| Platform | What the reader gets |
+| --- | --- |
+| accesskit | `ComboBox` and `SpinButton` |
+| iOS | a button, and an adjustable element VoiceOver steps with a swipe |
+| Android | `android.widget.Spinner` and `android.widget.NumberPicker` as the node's class |
+| Web | `role="combobox"` and `role="spinbutton"` |
+
+A dropdown that also declares `Modifier::expand(..)` or
+`Modifier::collapse(..)` tells a reader whether the list is open.
+
 ## 5. A list a reader can page
 
 A lazy list builds only the rows on screen. A reader that walks the rows one

@@ -672,6 +672,12 @@ pub enum SemanticsWidgetRole {
     RadioButton,
     Tab,
     Image,
+    /// A control that opens a list of choices and holds the one that is
+    /// picked. Compose's `Role.DropdownList`.
+    DropdownList,
+    /// A control that holds one value out of an ordered set and steps through
+    /// them. Compose's `Role.ValuePicker`.
+    ValuePicker,
     /// Compose's `heading()`, which is a property rather than a `Role`, but
     /// reaches the platform through the same field on every backend Cranpose
     /// targets (`AccessibilityNodeInfo.setHeading`, `Role::Heading`,

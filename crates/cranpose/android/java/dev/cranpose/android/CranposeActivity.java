@@ -934,6 +934,8 @@ public class CranposeActivity extends NativeActivity {
                 case 6: return "android.widget.RadioButton";
                 case 7: return "android.widget.TabWidget";
                 case 8: return "android.widget.ImageView";
+                case 11: return "android.widget.Spinner";
+                case 12: return "android.widget.NumberPicker";
                 default: return "android.widget.TextView";
             }
         }

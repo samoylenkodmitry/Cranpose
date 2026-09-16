@@ -491,6 +491,19 @@ impl Modifier {
         self.semantics(move |config| config.progress = Some(info))
     }
 
+    /// Marks this control as one that opens a list of choices, so a reader
+    /// says "combo box" rather than "button" and knows to look for the
+    /// choice it holds. Compose's `Role.DropdownList`.
+    pub fn dropdown_list(self) -> Self {
+        self.role(cranpose_foundation::SemanticsWidgetRole::DropdownList)
+    }
+
+    /// Marks this control as one that holds one value out of an ordered set,
+    /// so a reader steps through them. Compose's `Role.ValuePicker`.
+    pub fn value_picker(self) -> Self {
+        self.role(cranpose_foundation::SemanticsWidgetRole::ValuePicker)
+    }
+
     /// Says what this control does when a screen reader asks it to open, and
     /// marks it as closed right now: a reader offers "expand" and says the
     /// control is collapsed. Compose's
