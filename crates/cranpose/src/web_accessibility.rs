@@ -178,11 +178,15 @@ fn apply_role_extras(node: &HtmlElement, element: &AccessibilityElement) -> Resu
     Ok(())
 }
 
-/// The state description, the checked or selected flag, and whether the
-/// control is disabled.
-fn apply_aria_state(node: &HtmlElement, element: &AccessibilityElement) -> Result<(), JsValue> {
+/// What the control says about itself in words: the state description with
+/// the reason its content is wrong, whether it holds a secret, and where it
+/// sits in a group.
+fn apply_aria_description(node: &HtmlElement, element: &AccessibilityElement) -> Result<(), JsValue> {
     if let Some(state) = accessibility::state_with_error(element) {
         node.set_attribute("aria-description", &state)?;
+    }
+    if element.password {
+        node.set_attribute("aria-roledescription", "password")?;
     }
     if element.error.is_some() {
         node.set_attribute("aria-invalid", "true")?;
@@ -191,6 +195,12 @@ fn apply_aria_state(node: &HtmlElement, element: &AccessibilityElement) -> Resul
         node.set_attribute("aria-posinset", &item.position.to_string())?;
         node.set_attribute("aria-setsize", &item.count.to_string())?;
     }
+    Ok(())
+}
+
+/// The checked or selected flag, and whether the control is disabled.
+fn apply_aria_state(node: &HtmlElement, element: &AccessibilityElement) -> Result<(), JsValue> {
+    apply_aria_description(node, element)?;
     if let Some(toggled) = element.toggled {
         node.set_attribute("aria-checked", if toggled { "true" } else { "false" })?;
     }

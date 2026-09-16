@@ -379,6 +379,8 @@ pub struct SemanticsNode {
     pub pane_title: Option<String>,
     /// Why the control's content is wrong, when it is.
     pub error: Option<String>,
+    /// Whether this field holds a secret, so its text stays unspoken.
+    pub password: bool,
     /// The text an editable field holds.
     pub text: Option<String>,
     pub text_selection: Option<TextRange>,
@@ -429,6 +431,7 @@ impl Default for SemanticsNode {
             selectable_group: false,
             pane_title: None,
             error: None,
+            password: false,
             text: None,
             text_selection: None,
             focusable: false,
@@ -3094,6 +3097,7 @@ fn semantics_node_from_parts(
         node.selectable_group = config.selectable_group;
         node.pane_title = config.pane_title;
         node.error = config.error;
+        node.password = config.password;
         node.text = config.text;
         node.text_selection = config.text_selection;
         node.live_region = config.live_region;

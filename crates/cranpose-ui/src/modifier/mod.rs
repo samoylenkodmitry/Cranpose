@@ -491,6 +491,14 @@ impl Modifier {
         self.semantics(move |config| config.progress = Some(info))
     }
 
+    /// Marks a field as one that holds a secret, so no screen reader reads
+    /// its text out: a reader hears the name the app gave the field, and
+    /// "password" in place of the text. Compose's
+    /// `Modifier.semantics { password() }`.
+    pub fn password(self) -> Self {
+        self.semantics(|config| config.password = true)
+    }
+
     /// Says why the control's content is wrong, so a screen reader reads
     /// "invalid, the amount needs a number" after the control's state.
     /// Compose's `Modifier.semantics { error("...") }`.

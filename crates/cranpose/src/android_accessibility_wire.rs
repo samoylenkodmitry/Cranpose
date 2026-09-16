@@ -41,7 +41,7 @@ pub(crate) fn encode_elements(
             let progress = element.progress;
             let scroll = element.vertical_scroll.or(element.horizontal_scroll);
             format!(
-                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                 id,
                 role,
                 (element.bounds.x * density).round() as i32,
@@ -76,6 +76,7 @@ pub(crate) fn encode_elements(
                 element.collection_item.map_or(-1, item_column),
                 escape(element.pane_title.as_deref().unwrap_or("")),
                 escape(element.error.as_deref().unwrap_or("")),
+                i32::from(element.password),
             )
         })
         .collect::<Vec<_>>()
@@ -174,7 +175,7 @@ mod tests {
         let records: Vec<_> = payload.split('\n').collect();
         assert_eq!(records.len(), 2);
         for record in &records {
-            assert_eq!(record.split('\t').count(), 34, "record: {record}");
+            assert_eq!(record.split('\t').count(), 35, "record: {record}");
         }
 
         let fields: Vec<_> = records[0].split('\t').collect();
@@ -431,5 +432,17 @@ mod tests {
             Some(""),
             "a sound control names no error"
         );
+    }
+
+    #[test]
+    fn the_record_marks_a_field_that_holds_a_secret() {
+        let mut field = save_button(8);
+        field.password = true;
+
+        let payload = encode_elements(&[field, save_button(9)], &[], 1.0);
+        let records: Vec<_> = payload.split('\n').collect();
+
+        assert_eq!(records[0].split('\t').nth(34), Some("1"));
+        assert_eq!(records[1].split('\t').nth(34), Some("0"));
     }
 }

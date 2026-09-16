@@ -163,6 +163,22 @@ change is spoken when the field is under the cursor.
 | Android | `setContentInvalid` and `setError` on the node, which TalkBack reads as "invalid" and the reason |
 | Web | `aria-invalid` on the mirror node, with the reason in `aria-description` |
 
+## 4d. A field that holds a secret
+
+A password field shows dots on the screen, but a screen reader asks the app
+for the text, so without a mark it reads the password out loud in a room
+full of people. `Modifier::password()` on the field, Compose's `password`,
+keeps the text out of the projection, so it reaches no platform at all. The
+field keeps the name the app gave it; with no name a reader hears
+"password".
+
+| Platform | What the reader gets |
+| --- | --- |
+| accesskit | the node as a password input, with no value |
+| iOS | the name and "password" as the value, never the text |
+| Android | `setPassword` on the node, which TalkBack reads as "password", and an empty value |
+| Web | `aria-roledescription="password"` on the mirror node, with no text content |
+
 ## 5. A list a reader can page
 
 A lazy list builds only the rows on screen. A reader that walks the rows one

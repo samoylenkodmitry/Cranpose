@@ -96,6 +96,7 @@ pub(crate) struct AccessibilityElement {
     pub(crate) collection_item: Option<CollectionItem>,
     pub(crate) pane_title: Option<String>,
     pub(crate) error: Option<String>,
+    pub(crate) password: bool,
 }
 
 impl Default for AccessibilityElement {
@@ -126,6 +127,7 @@ impl Default for AccessibilityElement {
             collection_item: None,
             pane_title: None,
             error: None,
+            password: false,
         }
     }
 }
@@ -381,6 +383,9 @@ fn number_group(group: NodeId, first_child: usize, elements: &mut [Accessibility
 /// row the text under it; an editable field with nothing to read still gets
 /// an empty one.
 fn published_label(node: &SemanticsNode, merges: bool) -> Option<Cow<'_, str>> {
+    if node.password {
+        return password_label(node);
+    }
     let own_label = node_label(node).map(Cow::Borrowed);
     let label = if merges {
         own_label.or_else(|| descendant_label(node).map(Cow::Owned))
@@ -390,6 +395,16 @@ fn published_label(node: &SemanticsNode, merges: bool) -> Option<Cow<'_, str>> {
     label
         .filter(|label| !label.trim().is_empty())
         .or_else(|| unnamed_field_label(node))
+}
+
+/// A field that holds a secret never reads its text out: the name the app
+/// gave it stands, and with no name a reader hears "password" rather than
+/// the text the field put in as a stand-in for a name.
+fn password_label(node: &SemanticsNode) -> Option<Cow<'_, str>> {
+    let named = node_label(node)
+        .filter(|name| !name.trim().is_empty())
+        .filter(|name| Some(*name) != node.text.as_deref());
+    Some(named.map_or(Cow::Borrowed("password"), Cow::Borrowed))
 }
 
 /// An editable field with no name and no text is still a stop for a reader,
@@ -452,7 +467,8 @@ fn element_for_node(
         value: node
             .text
             .clone()
-            .or_else(|| node.editable_text.then(|| label.clone())),
+            .or_else(|| node.editable_text.then(|| label.clone()))
+            .filter(|_| !node.password),
         label,
         state_description: node.state_description.clone(),
         click_label: node.on_click_label.clone(),
@@ -479,6 +495,7 @@ fn element_for_node(
         collection_item: None,
         pane_title: node.pane_title.clone(),
         error: node.error.clone(),
+        password: node.password,
     }
 }
 
@@ -645,6 +662,7 @@ fn project_canvas_children(
             collection_item: None,
             pane_title: None,
             error: None,
+            password: false,
         });
     }
 }
@@ -1395,9 +1413,14 @@ mod tests {
         );
     }
 
-    fn projected_field(name: Option<&str>, text: &str) -> Vec<AccessibilityElement> {
+    fn projected_field(
+        name: Option<&str>,
+        text: &str,
+        password: bool,
+    ) -> Vec<AccessibilityElement> {
         let mut field = node(2, SemanticsRole::Layout, Vec::new(), name, Vec::new());
         field.editable_text = true;
+        field.password = password;
         field.text = Some(text.to_owned());
         let root = node(1, SemanticsRole::Layout, Vec::new(), None, vec![field]);
         let bounds = HashMap::from_iter([
@@ -1409,7 +1432,7 @@ mod tests {
 
     #[test]
     fn an_empty_text_field_is_still_a_stop() {
-        let projected = projected_field(Some(""), "");
+        let projected = projected_field(Some(""), "", false);
 
         assert_eq!(
             projected.len(),
@@ -1423,7 +1446,7 @@ mod tests {
 
     #[test]
     fn a_named_text_field_keeps_its_name_and_carries_its_text() {
-        let projected = projected_field(Some("Folder name"), "Milk");
+        let projected = projected_field(Some("Folder name"), "Milk", false);
 
         assert_eq!(projected[0].label, "Folder name");
         assert_eq!(projected[0].value.as_deref(), Some("Milk"));
@@ -1662,6 +1685,18 @@ mod tests {
             state_with_error(&after).as_deref(),
             Some("invalid, needs a number")
         );
+    }
+
+    #[test]
+    fn a_password_field_never_reads_its_text_out() {
+        let named = projected_field(Some("Passphrase"), "hunter2", true);
+        assert_eq!(named[0].label, "Passphrase");
+        assert_eq!(named[0].value, None, "the text stays unspoken");
+        assert!(named[0].password);
+
+        let unnamed = projected_field(None, "hunter2", true);
+        assert_eq!(unnamed[0].label, "password", "no name reads no secret");
+        assert_eq!(unnamed[0].value, None);
     }
 
     #[test]

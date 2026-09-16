@@ -3374,7 +3374,7 @@ fn every_lazy_list_tells_android_how_many_rows_it_holds() {
     let java_source = crate_source("android/java/dev/cranpose/android/CranposeActivity.java");
     assert!(
         java_source.contains("info.setCollectionInfo(AccessibilityNodeInfo.CollectionInfo.obtain(")
-            && java_source.contains("private static final int ACCESSIBILITY_FIELDS = 34;"),
+            && java_source.contains("private static final int ACCESSIBILITY_FIELDS = 35;"),
         "the Android host hands TalkBack the row count of a list"
     );
 }
@@ -3541,4 +3541,25 @@ fn every_platform_says_why_a_field_is_wrong() {
             "every other bridge reads the reason after the state"
         );
     }
+}
+
+#[test]
+fn no_platform_reads_a_password_out() {
+    assert!(
+        crate_source("android/java/dev/cranpose/android/CranposeActivity.java")
+            .contains("if (element.password) info.setPassword(true);"),
+        "TalkBack reads the node as a password"
+    );
+    assert!(
+        crate_source("src/desktop_accessibility.rs").contains("Role::PasswordInput"),
+        "accesskit reads the node as a password input"
+    );
+    assert!(
+        crate_source("src/web_accessibility.rs").contains(r#""aria-roledescription", "password""#),
+        "the web mirror says the field is a password"
+    );
+    assert!(
+        crate_source("src/accessibility.rs").contains(".filter(|_| !node.password),"),
+        "the text never leaves the projection"
+    );
 }

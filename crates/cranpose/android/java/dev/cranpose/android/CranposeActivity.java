@@ -771,7 +771,7 @@ public class CranposeActivity extends NativeActivity {
     }
 
     /** Field count of one accessibility record; see android_accessibility_wire.rs. */
-    private static final int ACCESSIBILITY_FIELDS = 34;
+    private static final int ACCESSIBILITY_FIELDS = 35;
 
     /** Separator packing a node's custom action labels into one field. */
     private static final String ACCESSIBILITY_ACTION_SEPARATOR = String.valueOf((char) 0x1f);
@@ -808,7 +808,8 @@ public class CranposeActivity extends NativeActivity {
                         Integer.parseInt(fields[26]), Integer.parseInt(fields[27]),
                         Integer.parseInt(fields[28]), "1".equals(fields[29]),
                         Integer.parseInt(fields[30]), Integer.parseInt(fields[31]),
-                        unescapeAccessibility(fields[32]), unescapeAccessibility(fields[33])));
+                        unescapeAccessibility(fields[32]), unescapeAccessibility(fields[33]),
+                        "1".equals(fields[34])));
             } catch (RuntimeException ignored) {
                 // A malformed record must not make the host Activity inaccessible.
             }
@@ -870,6 +871,7 @@ public class CranposeActivity extends NativeActivity {
         final int itemColumn;
         final String paneTitle;
         final String error;
+        final boolean password;
 
         CranposeAccessibilityElement(int id, int role, Rect bounds, float centerX,
                 float centerY, boolean clickable, String label, String value,
@@ -879,7 +881,7 @@ public class CranposeActivity extends NativeActivity {
                 float progressMin, float progressMax, boolean scrollable,
                 boolean canScrollForward, boolean canScrollBackward, int scrollParent,
                 int collectionRows, int collectionColumns, boolean changed, int itemRow,
-                int itemColumn, String paneTitle, String error) {
+                int itemColumn, String paneTitle, String error, boolean password) {
             this.id = id;
             this.role = role;
             this.bounds = bounds;
@@ -911,6 +913,7 @@ public class CranposeActivity extends NativeActivity {
             this.itemColumn = itemColumn;
             this.paneTitle = paneTitle;
             this.error = error;
+            this.password = password;
         }
 
         /**
@@ -1054,6 +1057,7 @@ public class CranposeActivity extends NativeActivity {
                 info.addAction(AccessibilityNodeInfo.ACTION_SET_TEXT);
             }
             if (element.role == 9 && Build.VERSION.SDK_INT >= 28) info.setHeading(true);
+            if (element.password) info.setPassword(true);
             if (Build.VERSION.SDK_INT >= 28 && !element.paneTitle.isEmpty()) info.setPaneTitle(element.paneTitle);
             if (!element.error.isEmpty()) {
                 info.setContentInvalid(true);

@@ -380,6 +380,7 @@ fn accesskit_node(element: &AccessibilityElement) -> Node {
         Some(_) => Role::Slider,
         None if element.pane_title.is_some() => Role::Region,
         None if scrolls && element.label.is_empty() => scroll_role(element),
+        None if element.password => Role::PasswordInput,
         None => accesskit_role(element.role),
     };
     let mut node = Node::new(role);
