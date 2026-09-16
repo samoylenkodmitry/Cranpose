@@ -491,6 +491,14 @@ impl Modifier {
         self.semantics(move |config| config.progress = Some(info))
     }
 
+    /// Makes a screen reader take this node and the text under it as one
+    /// stop, the way it does for a button: a row whose name, count and price
+    /// belong together reads as "Milk, 2, 3.40" and not as three stops.
+    /// Compose's `Modifier.semantics(mergeDescendants = true) {}`.
+    pub fn merge_descendants(self) -> Self {
+        self.semantics(|config| config.merge_descendants = true)
+    }
+
     /// Takes this node and everything under it out of what a screen reader
     /// sees: a decorative image, or a placeholder drawn under a field that
     /// carries the same words as its name. Compose's

@@ -262,6 +262,11 @@ everything under it out of what a reader sees: a decorative image, or a
 placeholder drawn under a field that already carries the same words as its
 name.
 
+A row of texts that belong together, a name with its count and its price,
+reads as three stops unless the app says otherwise. `Modifier::merge_descendants()`
+on the row makes it one stop, "Milk, 2, 3.40", the way a button with text
+inside already reads; the texts under it are not published on their own.
+
 ## What a reader hears, end to end
 
 1. Layout builds the semantics tree, one node per control, with focus flags.

@@ -370,6 +370,9 @@ pub struct SemanticsNode {
     pub editable_text: bool,
     /// Whether a screen reader skips this node and everything under it.
     pub hidden: bool,
+    /// Whether a screen reader takes this node and the text under it as one
+    /// stop.
+    pub merge_descendants: bool,
     /// The text an editable field holds.
     pub text: Option<String>,
     pub text_selection: Option<TextRange>,
@@ -414,6 +417,7 @@ impl Default for SemanticsNode {
             canvas_children: Vec::new(),
             editable_text: false,
             hidden: false,
+            merge_descendants: false,
             text: None,
             text_selection: None,
             focusable: false,
@@ -3074,6 +3078,7 @@ fn semantics_node_from_parts(
         node.canvas_children = config.canvas_children;
         node.editable_text = config.is_editable_text;
         node.hidden = config.hidden;
+        node.merge_descendants = config.merge_descendants;
         node.text = config.text;
         node.text_selection = config.text_selection;
         node.live_region = config.live_region;

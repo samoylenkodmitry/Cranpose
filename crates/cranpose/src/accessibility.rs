@@ -248,13 +248,14 @@ fn project_node(
         .iter()
         .any(|action| matches!(action, SemanticsAction::Click { .. }));
     let actionable = clickable || node.editable_text;
-    let label = published_label(node, actionable);
+    let merges = actionable || node.merge_descendants;
+    let label = published_label(node, merges);
     let rect = bounds.get(&node.node_id).copied().unwrap_or_default();
 
     let scrollable = node.vertical_scroll.is_some() || node.horizontal_scroll.is_some();
     if let Some(label) = label
         && rect.is_visible()
-        && (actionable || !suppress_static_text)
+        && (merges || !suppress_static_text)
     {
         elements.push(element_for_node(
             node,
@@ -280,7 +281,7 @@ fn project_node(
         element.scroll_parent = inherited_scroll;
     }
 
-    let suppress_children = suppress_static_text || actionable;
+    let suppress_children = suppress_static_text || merges;
     let scroll_for_children = if scrollable {
         Some(node.node_id)
     } else {
@@ -301,11 +302,12 @@ fn project_node(
 /// Names, once per node and only in a debug build, a control that takes a
 /// click or text but reaches no reader: it has no label and no text inside,
 /// so a screen reader has nothing to say for it.
-/// The label a reader hears for a node: its own, or for a control the text
-/// under it; an editable field with nothing to read still gets an empty one.
-fn published_label(node: &SemanticsNode, actionable: bool) -> Option<Cow<'_, str>> {
+/// The label a reader hears for a node: its own, or for a control or a merged
+/// row the text under it; an editable field with nothing to read still gets
+/// an empty one.
+fn published_label(node: &SemanticsNode, merges: bool) -> Option<Cow<'_, str>> {
     let own_label = node_label(node).map(Cow::Borrowed);
-    let label = if actionable {
+    let label = if merges {
         own_label.or_else(|| descendant_label(node).map(Cow::Owned))
     } else {
         own_label
@@ -979,6 +981,55 @@ mod tests {
 
         assert_eq!(projected[2].click_label.as_deref(), Some("Reset"));
         assert!(!projected[2].enabled);
+    }
+
+    #[test]
+    fn a_merged_row_is_one_stop() {
+        let mut row = node(
+            2,
+            SemanticsRole::Layout,
+            Vec::new(),
+            None,
+            vec![
+                node(
+                    3,
+                    SemanticsRole::Text {
+                        value: "Milk".into(),
+                    },
+                    Vec::new(),
+                    None,
+                    Vec::new(),
+                ),
+                node(
+                    4,
+                    SemanticsRole::Text { value: "2".into() },
+                    Vec::new(),
+                    None,
+                    Vec::new(),
+                ),
+                node(
+                    5,
+                    SemanticsRole::Text {
+                        value: "3.40".into(),
+                    },
+                    Vec::new(),
+                    None,
+                    Vec::new(),
+                ),
+            ],
+        );
+        row.merge_descendants = true;
+        let root = node(1, SemanticsRole::Layout, Vec::new(), None, vec![row]);
+        let bounds = HashMap::from_iter(
+            (1..=5).map(|id| (id, AccessibilityRect::new(0.0, 0.0, 300.0, 40.0))),
+        );
+
+        let projected = project_semantics(&root, &bounds);
+
+        assert_eq!(projected.len(), 1, "the row is one stop: {projected:?}");
+        assert_eq!(projected[0].label, "Milk, 2, 3.40");
+        assert_eq!(projected[0].role, AccessibilityRole::StaticText);
+        assert!(!projected[0].clickable);
     }
 
     #[test]
