@@ -54,24 +54,221 @@ pub(crate) enum AccessibilityRole {
     Dialog,
     DropdownList,
     ValuePicker,
+    Link,
+    SearchField,
+    ProgressBar,
+    ToggleButton,
+    Alert,
+    Toolbar,
+    Menu,
+    MenuItem,
+    TabBar,
+    List,
+    ListItem,
+}
+
+/// The role a reader names for each role an app declares. A table rather than
+/// a match, so the platforms that name roles with plain data read theirs the
+/// same way; the length assertion below keeps it whole when a role is added.
+const WIDGET_ROLES: [(SemanticsWidgetRole, AccessibilityRole); 21] = [
+    (SemanticsWidgetRole::Button, AccessibilityRole::Button),
+    (SemanticsWidgetRole::Checkbox, AccessibilityRole::Checkbox),
+    (SemanticsWidgetRole::Switch, AccessibilityRole::Switch),
+    (
+        SemanticsWidgetRole::RadioButton,
+        AccessibilityRole::RadioButton,
+    ),
+    (SemanticsWidgetRole::Tab, AccessibilityRole::Tab),
+    (SemanticsWidgetRole::Image, AccessibilityRole::Image),
+    (
+        SemanticsWidgetRole::DropdownList,
+        AccessibilityRole::DropdownList,
+    ),
+    (
+        SemanticsWidgetRole::ValuePicker,
+        AccessibilityRole::ValuePicker,
+    ),
+    (SemanticsWidgetRole::Header, AccessibilityRole::Header),
+    (SemanticsWidgetRole::Dialog, AccessibilityRole::Dialog),
+    (SemanticsWidgetRole::Link, AccessibilityRole::Link),
+    (
+        SemanticsWidgetRole::SearchField,
+        AccessibilityRole::SearchField,
+    ),
+    (
+        SemanticsWidgetRole::ProgressBar,
+        AccessibilityRole::ProgressBar,
+    ),
+    (
+        SemanticsWidgetRole::ToggleButton,
+        AccessibilityRole::ToggleButton,
+    ),
+    (SemanticsWidgetRole::Alert, AccessibilityRole::Alert),
+    (SemanticsWidgetRole::Toolbar, AccessibilityRole::Toolbar),
+    (SemanticsWidgetRole::Menu, AccessibilityRole::Menu),
+    (SemanticsWidgetRole::MenuItem, AccessibilityRole::MenuItem),
+    (SemanticsWidgetRole::TabBar, AccessibilityRole::TabBar),
+    (SemanticsWidgetRole::List, AccessibilityRole::List),
+    (SemanticsWidgetRole::ListItem, AccessibilityRole::ListItem),
+];
+
+const _: () = assert!(WIDGET_ROLES.len() == SemanticsWidgetRole::ListItem as usize + 1);
+
+/// The ARIA role of each role, for the web mirror.
+#[cfg(any(
+    test,
+    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
+))]
+const ARIA_ROLES: [(AccessibilityRole, &str); 23] = [
+    (AccessibilityRole::Button, "button"),
+    (AccessibilityRole::StaticText, "text"),
+    (AccessibilityRole::TextField, "textbox"),
+    (AccessibilityRole::Checkbox, "checkbox"),
+    (AccessibilityRole::Switch, "switch"),
+    (AccessibilityRole::RadioButton, "radio"),
+    (AccessibilityRole::Tab, "tab"),
+    (AccessibilityRole::Image, "img"),
+    (AccessibilityRole::Header, "heading"),
+    (AccessibilityRole::Dialog, "dialog"),
+    (AccessibilityRole::DropdownList, "combobox"),
+    (AccessibilityRole::ValuePicker, "spinbutton"),
+    (AccessibilityRole::Link, "link"),
+    (AccessibilityRole::SearchField, "searchbox"),
+    (AccessibilityRole::ProgressBar, "progressbar"),
+    (AccessibilityRole::ToggleButton, "button"),
+    (AccessibilityRole::Alert, "alert"),
+    (AccessibilityRole::Toolbar, "toolbar"),
+    (AccessibilityRole::Menu, "menu"),
+    (AccessibilityRole::MenuItem, "menuitem"),
+    (AccessibilityRole::TabBar, "tablist"),
+    (AccessibilityRole::List, "list"),
+    (AccessibilityRole::ListItem, "listitem"),
+];
+
+/// The number the Android host reads each role as; the host's `className()`
+/// and `roleDescription()` turn it back into what TalkBack says.
+#[cfg(any(
+    test,
+    all(feature = "android", feature = "renderer-wgpu", target_os = "android")
+))]
+const ANDROID_ROLE_CODES: [(AccessibilityRole, i32); 23] = [
+    (AccessibilityRole::Button, 1),
+    (AccessibilityRole::StaticText, 2),
+    (AccessibilityRole::TextField, 3),
+    (AccessibilityRole::Checkbox, 4),
+    (AccessibilityRole::Switch, 5),
+    (AccessibilityRole::RadioButton, 6),
+    (AccessibilityRole::Tab, 7),
+    (AccessibilityRole::Image, 8),
+    (AccessibilityRole::Header, 9),
+    (AccessibilityRole::Dialog, 10),
+    (AccessibilityRole::DropdownList, 11),
+    (AccessibilityRole::ValuePicker, 12),
+    (AccessibilityRole::Link, 13),
+    (AccessibilityRole::SearchField, 14),
+    (AccessibilityRole::ProgressBar, 15),
+    (AccessibilityRole::ToggleButton, 16),
+    (AccessibilityRole::Alert, 17),
+    (AccessibilityRole::Toolbar, 18),
+    (AccessibilityRole::Menu, 19),
+    (AccessibilityRole::MenuItem, 20),
+    (AccessibilityRole::TabBar, 21),
+    (AccessibilityRole::List, 22),
+    (AccessibilityRole::ListItem, 23),
+];
+
+/// What a table names a role as, or the fallback for a role the table lacks.
+#[cfg(any(
+    test,
+    all(feature = "desktop-shell", feature = "renderer-wgpu"),
+    all(feature = "android", feature = "renderer-wgpu", target_os = "android"),
+    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
+))]
+pub(crate) fn role_entry<T: Copy>(
+    table: &[(AccessibilityRole, T)],
+    role: AccessibilityRole,
+    fallback: T,
+) -> T {
+    table
+        .iter()
+        .find(|(named, _)| *named == role)
+        .map_or(fallback, |(_, value)| *value)
 }
 
 impl AccessibilityRole {
+    /// Every role, for the tables that name a role on a platform and the
+    /// tests that check none is left out.
+    pub(crate) const ALL: [Self; 23] = [
+        Self::Button,
+        Self::StaticText,
+        Self::TextField,
+        Self::Checkbox,
+        Self::Switch,
+        Self::RadioButton,
+        Self::Tab,
+        Self::Image,
+        Self::Header,
+        Self::Dialog,
+        Self::DropdownList,
+        Self::ValuePicker,
+        Self::Link,
+        Self::SearchField,
+        Self::ProgressBar,
+        Self::ToggleButton,
+        Self::Alert,
+        Self::Toolbar,
+        Self::Menu,
+        Self::MenuItem,
+        Self::TabBar,
+        Self::List,
+        Self::ListItem,
+    ];
+
     fn from_widget_role(role: SemanticsWidgetRole) -> Self {
-        match role {
-            SemanticsWidgetRole::Button => Self::Button,
-            SemanticsWidgetRole::Checkbox => Self::Checkbox,
-            SemanticsWidgetRole::Switch => Self::Switch,
-            SemanticsWidgetRole::RadioButton => Self::RadioButton,
-            SemanticsWidgetRole::Tab => Self::Tab,
-            SemanticsWidgetRole::Image => Self::Image,
-            SemanticsWidgetRole::DropdownList => Self::DropdownList,
-            SemanticsWidgetRole::ValuePicker => Self::ValuePicker,
-            SemanticsWidgetRole::Header => Self::Header,
-            SemanticsWidgetRole::Dialog => Self::Dialog,
-        }
+        WIDGET_ROLES
+            .iter()
+            .find(|(widget, _)| *widget == role)
+            .map_or(Self::StaticText, |(_, own)| *own)
+    }
+
+    /// The ARIA role a browser reads the control as.
+    #[cfg(any(
+        test,
+        all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
+    ))]
+    pub(crate) fn aria_name(self) -> &'static str {
+        role_entry(&ARIA_ROLES, self, "text")
+    }
+
+    /// The number the Android host reads the control's role as.
+    #[cfg(any(
+        test,
+        all(feature = "android", feature = "renderer-wgpu", target_os = "android")
+    ))]
+    pub(crate) fn android_code(self) -> i32 {
+        role_entry(&ANDROID_ROLE_CODES, self, 2)
+    }
+
+    /// Whether a reader types into the control: a plain text field or a
+    /// search field.
+    #[cfg(any(
+        test,
+        all(feature = "desktop-shell", feature = "renderer-wgpu"),
+        all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"),
+        all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
+    ))]
+    pub(crate) fn is_text_field(self) -> bool {
+        matches!(self, Self::TextField | Self::SearchField)
+    }
+
+    /// Whether the control is a container a reader walks into rather than
+    /// stops on, named by its role: a toolbar, a menu, a tab bar or a list.
+    pub(crate) fn is_named_container(self) -> bool {
+        matches!(self, Self::Toolbar | Self::Menu | Self::TabBar | Self::List)
     }
 }
+
+const _: () = assert!(AccessibilityRole::ALL.len() == AccessibilityRole::ListItem as usize + 1);
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct AccessibilityElement {
@@ -83,6 +280,13 @@ pub(crate) struct AccessibilityElement {
     /// What a long press on the control does, named for a reader. Present
     /// only when the control declared a long press at all.
     pub(crate) long_click_label: Option<String>,
+    /// What the magic tap does, named for a reader. Present only when the
+    /// control declared one.
+    pub(crate) magic_tap_label: Option<String>,
+    /// The short names Voice Control shows for the control.
+    pub(crate) input_labels: Vec<String>,
+    /// The language of the control's text, as a BCP 47 tag.
+    pub(crate) language: Option<String>,
     pub(crate) value: Option<String>,
     pub(crate) bounds: AccessibilityRect,
     pub(crate) role: AccessibilityRole,
@@ -108,6 +312,10 @@ pub(crate) struct AccessibilityElement {
     pub(crate) password: bool,
     pub(crate) expanded: Option<bool>,
     pub(crate) dismissable: bool,
+    /// Where the caret of an editable field sits, or which stretch of its
+    /// text is picked: the anchor and the end that moves, as byte offsets into
+    /// `value`. A field that holds a secret publishes none.
+    pub(crate) text_selection: Option<(usize, usize)>,
 }
 
 impl Default for AccessibilityElement {
@@ -119,6 +327,9 @@ impl Default for AccessibilityElement {
             state_description: None,
             click_label: None,
             long_click_label: None,
+            magic_tap_label: None,
+            input_labels: Vec::new(),
+            language: None,
             value: None,
             bounds: AccessibilityRect::default(),
             role: AccessibilityRole::StaticText,
@@ -143,6 +354,7 @@ impl Default for AccessibilityElement {
             password: false,
             expanded: None,
             dismissable: false,
+            text_selection: None,
         }
     }
 }
@@ -323,7 +535,12 @@ fn project_node(
 /// A node a reader walks into rather than stops on: a list, a scroll view, or
 /// a group of tabs or radio buttons.
 fn is_container(node: &SemanticsNode) -> bool {
-    node.vertical_scroll.is_some() || node.horizontal_scroll.is_some() || node.selectable_group
+    node.vertical_scroll.is_some()
+        || node.horizontal_scroll.is_some()
+        || node.selectable_group
+        || node
+            .widget_role
+            .is_some_and(|role| AccessibilityRole::from_widget_role(role).is_named_container())
 }
 
 /// A node published with no label of its own: a container, or the root of a
@@ -456,6 +673,18 @@ fn long_click_label(node: &SemanticsNode) -> Option<String> {
     Some(named.unwrap_or_else(|| "long press".to_owned()))
 }
 
+/// What a reader lists for a control's magic tap: the verb phrase the app
+/// gave, or the plain words for the gesture. A control with no magic tap
+/// gets nothing.
+fn magic_tap_label(node: &SemanticsNode) -> Option<String> {
+    node.on_magic_tap.as_ref()?;
+    let named = node
+        .on_magic_tap_label
+        .clone()
+        .filter(|label| !label.trim().is_empty());
+    Some(named.unwrap_or_else(|| "magic tap".to_owned()))
+}
+
 /// An editable field with no name and no text is still a stop for a reader,
 /// which hears "text field" and nothing else; a debug build says so.
 fn unnamed_field_label(node: &SemanticsNode) -> Option<Cow<'_, str>> {
@@ -522,6 +751,9 @@ fn element_for_node(
         state_description: node.state_description.clone(),
         click_label: node.on_click_label.clone(),
         long_click_label: long_click_label(node),
+        magic_tap_label: magic_tap_label(node),
+        input_labels: node.input_labels.clone(),
+        language: node.language.clone(),
         bounds: rect,
         role,
         clickable,
@@ -535,7 +767,10 @@ fn element_for_node(
             .collect(),
         focusable: node.focusable,
         focused: node.focused,
-        live_region,
+        live_region: live_region.or_else(|| {
+            (node.widget_role == Some(SemanticsWidgetRole::Alert))
+                .then_some(LiveRegionMode::Assertive)
+        }),
         progress: node.progress,
         adjustable: node.set_progress.is_some(),
         vertical_scroll: node.vertical_scroll,
@@ -549,6 +784,10 @@ fn element_for_node(
         password: node.password,
         expanded: expansion(node),
         dismissable: node.dismiss.is_some(),
+        text_selection: node
+            .text_selection
+            .filter(|_| node.editable_text && !node.password)
+            .map(|range| (range.start, range.end)),
     }
 }
 
@@ -774,14 +1013,27 @@ pub(crate) fn perform_custom_action(
             action.invoke();
             true
         }
-        None if canvas_key.is_none() && action_index == actions.len() => {
-            match &node.on_long_click {
-                Some(action) => action.invoke(),
-                None => false,
+        None if canvas_key.is_none() => {
+            let after = action_index - actions.len();
+            match (after, &node.on_long_click, &node.on_magic_tap) {
+                (0, Some(long_click), _) => long_click.invoke(),
+                (0, None, Some(tap)) | (1, Some(_), Some(tap)) => tap.invoke(),
+                _ => false,
             }
         }
         None => false,
     }
+}
+
+/// Runs the magic tap a VoiceOver user made on a control, and answers
+/// whether the control took it.
+#[cfg(any(
+    test,
+    all(feature = "ios", feature = "renderer-wgpu", target_os = "ios")
+))]
+pub(crate) fn magic_tap(root: &SemanticsNode, node_id: NodeId) -> bool {
+    find_semantics_node(root, node_id)
+        .is_some_and(|node| node.on_magic_tap.as_ref().is_some_and(|tap| tap.invoke()))
 }
 
 /// What a screen reader lists for a node, in the order the platforms number
@@ -801,6 +1053,7 @@ pub(crate) fn reader_actions(element: &AccessibilityElement) -> Vec<String> {
         .iter()
         .cloned()
         .chain(element.long_click_label.clone())
+        .chain(element.magic_tap_label.clone())
         .collect()
 }
 
@@ -840,6 +1093,146 @@ pub(crate) fn set_text(root: &SemanticsNode, node_id: NodeId, text: &str) -> boo
         Some(action) => action.invoke(text),
         None => false,
     }
+}
+
+/// Moves the caret of a field, or picks a stretch of its text, for a screen
+/// reader. The ends are byte offsets into the field's text, the anchor first
+/// and the end that moves second. Answers whether the field took the selection.
+#[cfg(any(
+    test,
+    all(feature = "desktop-shell", feature = "renderer-wgpu"),
+    all(feature = "android", feature = "renderer-wgpu", target_os = "android"),
+    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
+))]
+pub(crate) fn set_text_selection(
+    root: &SemanticsNode,
+    node_id: NodeId,
+    anchor: usize,
+    focus: usize,
+) -> bool {
+    let Some(node) = find_semantics_node(root, node_id) else {
+        return false;
+    };
+    match &node.set_selection {
+        Some(action) => action.invoke(anchor, focus),
+        None => false,
+    }
+}
+
+/// The same move with the ends counted in UTF-16 units, which is how Android
+/// and a browser count text.
+#[cfg(any(
+    test,
+    all(feature = "android", feature = "renderer-wgpu", target_os = "android"),
+    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
+))]
+pub(crate) fn set_text_selection_utf16(
+    root: &SemanticsNode,
+    node_id: NodeId,
+    anchor: usize,
+    focus: usize,
+) -> bool {
+    set_text_selection_counted(root, node_id, anchor, focus, byte_offset_for_utf16)
+}
+
+/// The same move with the ends counted in characters, which is how accesskit
+/// counts text.
+#[cfg(any(test, all(feature = "desktop-shell", feature = "renderer-wgpu")))]
+pub(crate) fn set_text_selection_chars(
+    root: &SemanticsNode,
+    node_id: NodeId,
+    anchor: usize,
+    focus: usize,
+) -> bool {
+    set_text_selection_counted(root, node_id, anchor, focus, byte_offset_for_chars)
+}
+
+/// Moves the selection of a field with its ends counted in some unit of the
+/// field's own text, turned into bytes by `byte_offset`.
+#[cfg(any(
+    test,
+    all(feature = "desktop-shell", feature = "renderer-wgpu"),
+    all(feature = "android", feature = "renderer-wgpu", target_os = "android"),
+    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
+))]
+fn set_text_selection_counted(
+    root: &SemanticsNode,
+    node_id: NodeId,
+    anchor: usize,
+    focus: usize,
+    byte_offset: fn(&str, usize) -> usize,
+) -> bool {
+    let Some(node) = find_semantics_node(root, node_id) else {
+        return false;
+    };
+    let text = node.text.as_deref().unwrap_or("");
+    set_text_selection(
+        root,
+        node_id,
+        byte_offset(text, anchor),
+        byte_offset(text, focus),
+    )
+}
+
+/// The byte offset at or before `byte` that starts a character.
+#[cfg(any(
+    test,
+    all(feature = "desktop-shell", feature = "renderer-wgpu"),
+    all(feature = "android", feature = "renderer-wgpu", target_os = "android"),
+    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
+))]
+fn floor_char_boundary(text: &str, byte: usize) -> usize {
+    let mut byte = byte.min(text.len());
+    while !text.is_char_boundary(byte) {
+        byte -= 1;
+    }
+    byte
+}
+
+/// How many UTF-16 units the text holds before the byte offset.
+#[cfg(any(
+    test,
+    all(feature = "android", feature = "renderer-wgpu", target_os = "android"),
+    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
+))]
+pub(crate) fn utf16_offset(text: &str, byte: usize) -> usize {
+    text[..floor_char_boundary(text, byte)]
+        .encode_utf16()
+        .count()
+}
+
+/// The byte offset where the character at a count of UTF-16 units starts. A
+/// count past the end, or one that falls inside a surrogate pair, lands on
+/// the end of the text or on the next character.
+#[cfg(any(
+    test,
+    all(feature = "android", feature = "renderer-wgpu", target_os = "android"),
+    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
+))]
+pub(crate) fn byte_offset_for_utf16(text: &str, units: usize) -> usize {
+    let mut seen = 0;
+    for (byte, character) in text.char_indices() {
+        if seen >= units {
+            return byte;
+        }
+        seen += character.len_utf16();
+    }
+    text.len()
+}
+
+/// How many characters the text holds before the byte offset.
+#[cfg(any(test, all(feature = "desktop-shell", feature = "renderer-wgpu")))]
+pub(crate) fn char_offset(text: &str, byte: usize) -> usize {
+    text[..floor_char_boundary(text, byte)].chars().count()
+}
+
+/// The byte offset where the character at an index starts, or the end of the
+/// text for an index past the last character.
+#[cfg(any(test, all(feature = "desktop-shell", feature = "renderer-wgpu")))]
+pub(crate) fn byte_offset_for_chars(text: &str, characters: usize) -> usize {
+    text.char_indices()
+        .nth(characters)
+        .map_or(text.len(), |(byte, _)| byte)
 }
 
 /// Opens or closes a control a screen reader asked to open or to close.
@@ -981,6 +1374,26 @@ pub(crate) fn focus_node(node_id: NodeId) -> bool {
 /// Text the app asked a screen reader to read out, through
 /// [`cranpose_ui::Announcer`]. Every platform bridge takes this queue once a
 /// frame.
+/// Installs the display options the system reports and asks for a root
+/// render when they changed, so the theme, the glass and the animations read
+/// them. A backend that scales text calls `set_font_scale` on the shell
+/// beside this.
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) fn apply_accessibility_options<R>(
+    shell: &mut AppShell<R>,
+    options: cranpose_services::AccessibilityOptions,
+) -> bool
+where
+    R: Renderer,
+    R::Error: Debug,
+{
+    let changed = cranpose_services::set_platform_accessibility_options(options);
+    if changed {
+        shell.request_root_render();
+    }
+    changed
+}
+
 #[cfg_attr(test, allow(dead_code))]
 pub(crate) fn drain_app_announcements() -> Vec<Announcement> {
     cranpose_ui::drain_announcements()
@@ -1069,6 +1482,7 @@ pub(crate) fn pane_title_announcements(
 
 #[cfg(any(
     test,
+    feature = "robot",
     all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"),
     all(feature = "android", feature = "renderer-wgpu", target_os = "android"),
     all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
@@ -1212,6 +1626,115 @@ pub(crate) fn element_with(node_id: NodeId, canvas_key: Option<u64>) -> Accessib
         bounds: AccessibilityRect::new(0.0, 0.0, 10.0, 10.0),
         ..AccessibilityElement::default()
     }
+}
+
+/// The word a reader says for each role, for the robot's spoken tree. Plain
+/// text has no word: its name is the whole of what a reader says.
+#[cfg(any(test, feature = "robot"))]
+const SPOKEN_ROLES: [(AccessibilityRole, &str); 23] = [
+    (AccessibilityRole::Button, "button"),
+    (AccessibilityRole::StaticText, ""),
+    (AccessibilityRole::TextField, "text field"),
+    (AccessibilityRole::Checkbox, "checkbox"),
+    (AccessibilityRole::Switch, "switch"),
+    (AccessibilityRole::RadioButton, "radio button"),
+    (AccessibilityRole::Tab, "tab"),
+    (AccessibilityRole::Image, "image"),
+    (AccessibilityRole::Header, "heading"),
+    (AccessibilityRole::Dialog, "dialog"),
+    (AccessibilityRole::DropdownList, "pop up button"),
+    (AccessibilityRole::ValuePicker, "picker"),
+    (AccessibilityRole::Link, "link"),
+    (AccessibilityRole::SearchField, "search field"),
+    (AccessibilityRole::ProgressBar, "progress bar"),
+    (AccessibilityRole::ToggleButton, "toggle button"),
+    (AccessibilityRole::Alert, "alert"),
+    (AccessibilityRole::Toolbar, "toolbar"),
+    (AccessibilityRole::Menu, "menu"),
+    (AccessibilityRole::MenuItem, "menu item"),
+    (AccessibilityRole::TabBar, "tab bar"),
+    (AccessibilityRole::List, "list"),
+    (AccessibilityRole::ListItem, "list item"),
+];
+
+/// One control the way a reader speaks it: the name, the role, the state,
+/// the value and the actions it offers, in the order VoiceOver says them.
+#[cfg(any(test, feature = "robot"))]
+pub(crate) fn spoken_line(element: &AccessibilityElement) -> String {
+    let role_word = SPOKEN_ROLES
+        .iter()
+        .find(|(role, _)| *role == element.role)
+        .map(|(_, word)| *word)
+        .unwrap_or("");
+    let name = match (&element.pane_title, element.label.is_empty()) {
+        (Some(title), true) => format!("{title}, pane"),
+        _ => spoken_text(element),
+    };
+    let toggle_words = if element.role == AccessibilityRole::Switch {
+        ("on", "off")
+    } else {
+        ("checked", "not checked")
+    };
+    let actions: Vec<&str> = element
+        .custom_actions
+        .iter()
+        .map(String::as_str)
+        .chain(element.long_click_label.as_deref())
+        .chain(element.magic_tap_label.as_deref())
+        .collect();
+    let mut parts: Vec<String> = vec![name, role_word.to_string()];
+    parts.extend(
+        element
+            .toggled
+            .map(|on| if on { toggle_words.0 } else { toggle_words.1 }.to_string()),
+    );
+    parts.extend(
+        element
+            .selected
+            .filter(|picked| *picked)
+            .map(|_| "selected".to_string()),
+    );
+    parts.extend(element.expanded.map(|open| {
+        if open {
+            "expanded".to_string()
+        } else {
+            "collapsed".to_string()
+        }
+    }));
+    parts.extend(element.progress.as_ref().and_then(spoken_percent));
+    parts.extend((!element.enabled).then(|| "dimmed".to_string()));
+    parts.extend(element.focused.then(|| "focused".to_string()));
+    parts.extend((!actions.is_empty()).then(|| format!("actions: {}", actions.join(", "))));
+    parts.retain(|part| !part.is_empty());
+    parts.join(", ")
+}
+
+#[cfg(any(test, feature = "robot"))]
+fn spoken_percent(progress: &ProgressBarRangeInfo) -> Option<String> {
+    let span = progress.end - progress.start;
+    (span > 0.0).then(|| {
+        let percent = ((progress.current - progress.start) / span * 100.0).round();
+        format!("{percent} percent")
+    })
+}
+
+/// Every control on the screen the way a reader speaks it, one per line, in
+/// reading order: what the robot's `spoken_tree` prints.
+#[cfg(feature = "robot")]
+pub(crate) fn spoken_tree<R>(shell: &mut AppShell<R>) -> String
+where
+    R: Renderer,
+    R::Error: Debug,
+{
+    snapshot(shell)
+        .iter()
+        .map(spoken_line)
+        .filter(|line| !line.is_empty())
+        .fold(String::new(), |mut tree, line| {
+            tree.push_str(&line);
+            tree.push('\n');
+            tree
+        })
 }
 
 #[cfg(test)]
@@ -2279,6 +2802,195 @@ mod tests {
     }
 
     #[test]
+    fn every_role_is_named_once_on_every_platform() {
+        let once = |count: usize, what: &str, role: AccessibilityRole| {
+            assert_eq!(count, 1, "{role:?} should be in the {what} table once");
+        };
+        for role in AccessibilityRole::ALL {
+            let widget = WIDGET_ROLES.iter().filter(|(_, own)| *own == role).count();
+            if role != AccessibilityRole::StaticText && role != AccessibilityRole::TextField {
+                once(widget, "widget role", role);
+            }
+            once(
+                ARIA_ROLES
+                    .iter()
+                    .filter(|(named, _)| *named == role)
+                    .count(),
+                "ARIA",
+                role,
+            );
+            once(
+                ANDROID_ROLE_CODES
+                    .iter()
+                    .filter(|(named, _)| *named == role)
+                    .count(),
+                "Android",
+                role,
+            );
+        }
+        let mut codes: Vec<i32> = ANDROID_ROLE_CODES.iter().map(|(_, code)| *code).collect();
+        codes.sort_unstable();
+        codes.dedup();
+        assert_eq!(
+            codes.len(),
+            ANDROID_ROLE_CODES.len(),
+            "every Android code is its own"
+        );
+        assert_eq!(
+            AccessibilityRole::from_widget_role(SemanticsWidgetRole::SearchField),
+            AccessibilityRole::SearchField
+        );
+        assert_eq!(AccessibilityRole::SearchField.aria_name(), "searchbox");
+        assert_eq!(AccessibilityRole::ListItem.android_code(), 23);
+    }
+
+    #[test]
+    fn a_magic_tap_is_listed_after_the_long_press_and_runs_from_the_list() {
+        let taps = Rc::new(Cell::new(0));
+        let presses = Rc::new(Cell::new(0));
+        let mut root = node(
+            7,
+            SemanticsRole::Layout,
+            Vec::new(),
+            Some("Shutter"),
+            Vec::new(),
+        );
+        root.custom_actions = vec![SemanticsCustomAction::new("Flash", || {})];
+        root.on_long_click_label = Some("Hold to focus".into());
+        root.on_long_click = Some(cranpose_ui::SemanticsLongClick::new({
+            let presses = Rc::clone(&presses);
+            move || {
+                presses.set(presses.get() + 1);
+                true
+            }
+        }));
+        root.on_magic_tap_label = Some("Take the photo".into());
+        root.on_magic_tap = Some(cranpose_ui::SemanticsMagicTap::new({
+            let taps = Rc::clone(&taps);
+            move || {
+                taps.set(taps.get() + 1);
+                true
+            }
+        }));
+        let bounds = HashMap::from_iter([(7, AccessibilityRect::new(0.0, 0.0, 80.0, 44.0))]);
+        let projected = project_semantics(&root, &bounds);
+
+        assert_eq!(
+            reader_actions(&projected[0]),
+            vec!["Flash", "Hold to focus", "Take the photo"]
+        );
+        assert!(perform_custom_action(&root, 7, None, 1));
+        assert!(perform_custom_action(&root, 7, None, 2));
+        assert!(!perform_custom_action(&root, 7, None, 3));
+        assert!(magic_tap(&root, 7));
+        assert!(!magic_tap(&root, 99));
+        assert_eq!((presses.get(), taps.get()), (1, 2));
+
+        root.on_long_click = None;
+        root.on_long_click_label = None;
+        let projected = project_semantics(&root, &bounds);
+        assert_eq!(
+            reader_actions(&projected[0]),
+            vec!["Flash", "Take the photo"]
+        );
+        assert!(perform_custom_action(&root, 7, None, 1));
+        assert_eq!(taps.get(), 3);
+    }
+
+    #[test]
+    fn voice_control_names_and_a_language_reach_the_element() {
+        let mut root = node(
+            7,
+            SemanticsRole::Layout,
+            Vec::new(),
+            Some("Importieren"),
+            Vec::new(),
+        );
+        root.input_labels = vec!["Import".into()];
+        root.language = Some("de".into());
+        let bounds = HashMap::from_iter([(7, AccessibilityRect::new(0.0, 0.0, 80.0, 44.0))]);
+
+        let projected = project_semantics(&root, &bounds);
+
+        assert_eq!(projected[0].input_labels, vec!["Import".to_owned()]);
+        assert_eq!(projected[0].language.as_deref(), Some("de"));
+        assert_eq!(projected[0].magic_tap_label, None);
+    }
+
+    #[test]
+    fn a_reader_moves_the_caret_of_a_field() {
+        let taken = Rc::new(RefCell::new(Vec::new()));
+        let seen = Rc::clone(&taken);
+        let mut root = node(7, SemanticsRole::Layout, Vec::new(), Some(""), Vec::new());
+        root.editable_text = true;
+        root.text = Some("añb😀c".to_owned());
+        root.set_selection = Some(cranpose_ui::SemanticsSetSelection::new(
+            move |anchor, focus| {
+                seen.borrow_mut().push((anchor, focus));
+                true
+            },
+        ));
+
+        assert!(set_text_selection(&root, 7, 1, 3));
+        assert!(set_text_selection_utf16(&root, 7, 2, 5));
+        assert!(set_text_selection_chars(&root, 7, 4, 2));
+        assert_eq!(*taken.borrow(), vec![(1, 3), (3, 8), (8, 3)]);
+        assert!(!set_text_selection(&root, 99, 0, 0), "no such field");
+    }
+
+    #[test]
+    fn text_offsets_convert_between_bytes_utf16_units_and_characters() {
+        let text = "añb😀c";
+        assert_eq!(utf16_offset(text, 0), 0);
+        assert_eq!(utf16_offset(text, 3), 2);
+        assert_eq!(utf16_offset(text, 8), 5);
+        assert_eq!(
+            utf16_offset(text, 2),
+            1,
+            "inside ñ rounds down to its start"
+        );
+        assert_eq!(utf16_offset(text, 99), 6);
+        assert_eq!(byte_offset_for_utf16(text, 2), 3);
+        assert_eq!(
+            byte_offset_for_utf16(text, 4),
+            8,
+            "inside the emoji lands after it"
+        );
+        assert_eq!(byte_offset_for_utf16(text, 99), 9);
+        assert_eq!(char_offset(text, 8), 4);
+        assert_eq!(char_offset(text, 99), 5);
+        assert_eq!(byte_offset_for_chars(text, 3), 4);
+        assert_eq!(byte_offset_for_chars(text, 4), 8);
+        assert_eq!(byte_offset_for_chars(text, 99), 9);
+    }
+
+    #[test]
+    fn an_editable_field_publishes_where_its_caret_is_and_a_password_does_not() {
+        for (password, expected) in [(false, Some((1, 3))), (true, None)] {
+            let mut field = node(
+                2,
+                SemanticsRole::Layout,
+                Vec::new(),
+                Some("Name"),
+                Vec::new(),
+            );
+            field.editable_text = true;
+            field.password = password;
+            field.text = Some("Milk".to_owned());
+            field.text_selection = Some(cranpose_ui::TextRange::new(1, 3));
+            let root = node(1, SemanticsRole::Layout, Vec::new(), None, vec![field]);
+            let bounds = HashMap::from_iter([
+                (1, AccessibilityRect::new(0.0, 0.0, 300.0, 200.0)),
+                (2, AccessibilityRect::new(0.0, 0.0, 300.0, 40.0)),
+            ]);
+
+            let projected = project_semantics(&root, &bounds);
+
+            assert_eq!(projected[0].text_selection, expected);
+        }
+    }
+
+    #[test]
     fn a_step_moves_one_stop_and_stops_at_the_ends() {
         let ten = cranpose_ui::ProgressBarRangeInfo::new(0.5, 0.0, 1.0, 0);
         assert!((stepped_value(&ten, true) - 0.6).abs() < 1e-6);
@@ -2448,5 +3160,35 @@ mod tests {
         let elements = project_semantics(&root, &bounds);
         assert!(elements[0].progress.is_none());
         assert!(!elements[0].adjustable);
+    }
+
+    #[test]
+    fn a_spoken_line_says_the_name_the_role_the_state_and_the_actions() {
+        let mut flash = element_with(1, None);
+        flash.label = "Flash".to_string();
+        flash.role = AccessibilityRole::Switch;
+        flash.toggled = Some(true);
+        flash.custom_actions = vec!["Reset".to_string()];
+        assert_eq!(spoken_line(&flash), "Flash, switch, on, actions: Reset");
+
+        let mut loading = element_with(2, None);
+        loading.label = "Loading".to_string();
+        loading.role = AccessibilityRole::ProgressBar;
+        loading.progress = Some(ProgressBarRangeInfo::new(0.4, 0.0, 1.0, 0));
+        loading.enabled = false;
+        assert_eq!(
+            spoken_line(&loading),
+            "Loading, progress bar, 40 percent, dimmed"
+        );
+
+        let mut library = element_with(3, None);
+        library.label = String::new();
+        library.pane_title = Some("Library".to_string());
+        assert_eq!(spoken_line(&library), "Library, pane");
+
+        let mut plain = element_with(4, None);
+        plain.label = "Milk".to_string();
+        plain.focused = true;
+        assert_eq!(spoken_line(&plain), "Milk, focused");
     }
 }

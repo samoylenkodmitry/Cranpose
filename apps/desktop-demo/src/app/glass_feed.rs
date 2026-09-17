@@ -188,7 +188,12 @@ fn FeedCard(index: usize) {
                     );
                     if index.is_multiple_of(3) {
                         GlassButton(
-                            Modifier::empty().size(Size::new(44.0, 44.0)),
+                            Modifier::empty()
+                                .size(Size::new(44.0, 44.0))
+                                .content_description(format!(
+                                    "Star {title}, receipt {:04}",
+                                    index + 1
+                                )),
                             feed_button_spec(),
                             || {},
                             || {

@@ -3,6 +3,8 @@
 #[cfg(test)]
 use cranpose_core::{Composition, MemoryApplier, location_key};
 
+pub mod accessibility_options;
+pub mod accessibility_state;
 pub mod app_info;
 pub mod app_update;
 pub mod async_io;
@@ -39,6 +41,14 @@ pub mod theme;
 pub mod uri_handler;
 pub mod writable_folder;
 
+pub use accessibility_options::{
+    AccessibilityOptions, ProvideAccessibilityOptions, local_accessibility_options,
+    platform_accessibility_options, set_platform_accessibility_options,
+};
+pub use accessibility_state::{
+    AccessibilityState, ProvideAccessibilityState, local_accessibility_state,
+    platform_accessibility_state, set_platform_accessibility_state,
+};
 pub use app_info::{
     AppInfo, AppInfoRef, app_info, build_version, clear_platform_app_info, set_platform_app_info,
     version_name,
@@ -242,4 +252,16 @@ pub(crate) fn run_test_composition(build: impl FnMut()) -> TestComposition {
         .render(location_key(file!(), line!(), column!()), build)
         .expect("initial render succeeds");
     composition
+}
+
+/// What a composable read while a test composition ran once, or `None` when
+/// the read never ran.
+#[cfg(test)]
+pub(crate) fn captured_in_composition<T: Copy + 'static>(
+    read: impl Fn() -> T + 'static,
+) -> Option<T> {
+    let captured = std::rc::Rc::new(std::cell::Cell::new(None));
+    let sink = std::rc::Rc::clone(&captured);
+    run_test_composition(move || sink.set(Some(read())));
+    captured.get()
 }

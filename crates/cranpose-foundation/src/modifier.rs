@@ -687,6 +687,35 @@ pub enum SemanticsWidgetRole {
     /// Screen readers announce it and confine their traversal to it, which is
     /// the accessible half of what makes a dialog modal.
     Dialog,
+    /// Text that takes the user somewhere else when pressed. Compose has no
+    /// such `Role`; SwiftUI's `.isLink`, ARIA's `link`.
+    Link,
+    /// A field that narrows what is on the screen as the user types. ARIA's
+    /// `searchbox`, VoiceOver's search field trait.
+    SearchField,
+    /// A control that shows how far work has come and takes no input. ARIA's
+    /// `progressbar`.
+    ProgressBar,
+    /// A button that stays pressed or released. ARIA's `button` with
+    /// `aria-pressed`.
+    ToggleButton,
+    /// A message a reader speaks as soon as it shows, with no move to it.
+    /// ARIA's `alert`.
+    Alert,
+    /// A row of controls that act on the content beside them. ARIA's
+    /// `toolbar`.
+    Toolbar,
+    /// A list of commands that opens on a press. ARIA's `menu`.
+    Menu,
+    /// One command inside a menu. ARIA's `menuitem`.
+    MenuItem,
+    /// The row that holds the tabs of a screen. ARIA's `tablist`, VoiceOver's
+    /// tab bar trait.
+    TabBar,
+    /// A container whose rows a reader counts and walks into. ARIA's `list`.
+    List,
+    /// One row of a list. ARIA's `listitem`.
+    ListItem,
 }
 
 /// The value a control holds inside a range, for a slider, a dial or a
@@ -905,6 +934,30 @@ impl fmt::Debug for SemanticsSetText {
     }
 }
 
+/// What a text field does when a screen reader moves its caret or picks a
+/// stretch of its text: the two ends of the new selection, as byte offsets
+/// into the field's text, the anchor first and the end that moves second. Equal
+/// ends are a caret. This is Compose's `SemanticsActions.SetSelection`; the
+/// answer says whether the field took the selection.
+#[derive(Clone)]
+pub struct SemanticsSetSelection(Rc<dyn Fn(usize, usize) -> bool>);
+
+impl SemanticsSetSelection {
+    pub fn new(handler: impl Fn(usize, usize) -> bool + 'static) -> Self {
+        Self(Rc::new(handler))
+    }
+
+    pub fn invoke(&self, anchor: usize, focus: usize) -> bool {
+        (self.0)(anchor, focus)
+    }
+}
+
+impl fmt::Debug for SemanticsSetSelection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("SemanticsSetSelection")
+    }
+}
+
 /// What a control does when a screen reader asks it to open or to close.
 /// Compose's `expand` and `collapse` actions.
 #[derive(Clone)]
@@ -989,6 +1042,42 @@ impl PartialEq for SemanticsDismiss {
 }
 
 impl PartialEq for SemanticsSetText {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
+impl PartialEq for SemanticsSetSelection {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
+/// What a control does when a VoiceOver user makes the magic tap, the two
+/// finger double tap that starts or stops the main action of a screen. On
+/// the other platforms the action is listed by its label among the control's
+/// actions. SwiftUI's `accessibilityAction(.magicTap)`; the answer says
+/// whether the control took the tap.
+#[derive(Clone)]
+pub struct SemanticsMagicTap(Rc<dyn Fn() -> bool>);
+
+impl SemanticsMagicTap {
+    pub fn new(handler: impl Fn() -> bool + 'static) -> Self {
+        Self(Rc::new(handler))
+    }
+
+    pub fn invoke(&self) -> bool {
+        (self.0)()
+    }
+}
+
+impl fmt::Debug for SemanticsMagicTap {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("SemanticsMagicTap")
+    }
+}
+
+impl PartialEq for SemanticsMagicTap {
     fn eq(&self, _other: &Self) -> bool {
         true
     }
@@ -1211,6 +1300,21 @@ pub struct SemanticsConfiguration {
     /// What the long press does, as a verb phrase a reader reads out:
     /// "Remove receipt". Compose's `onLongClick(label = …)`.
     pub on_long_click_label: Option<String>,
+    /// What this control does on VoiceOver's magic tap, and on the other
+    /// platforms as an action listed by [`Self::on_magic_tap_label`].
+    /// SwiftUI's `accessibilityAction(.magicTap)`.
+    pub on_magic_tap: Option<SemanticsMagicTap>,
+    /// What the magic tap does, as a verb phrase a reader reads out: "Take
+    /// the photo".
+    pub on_magic_tap_label: Option<String>,
+    /// The short names a person says to Voice Control to reach this control,
+    /// when the name a reader hears is too long to say. SwiftUI's
+    /// `accessibilityInputLabels`; iOS only.
+    pub input_labels: Vec<String>,
+    /// The language of this control's text as a BCP 47 tag, "de" or "pt-BR",
+    /// so a reader picks the right voice for it. SwiftUI's
+    /// `accessibilityLanguage`, ARIA's `lang`.
+    pub language: Option<String>,
     /// Compose's `Role`.
     pub role: Option<SemanticsWidgetRole>,
     pub selected: Option<bool>,
@@ -1266,6 +1370,9 @@ pub struct SemanticsConfiguration {
     /// What this field does when a screen reader or a voice tool hands it
     /// text. Compose's `setText`.
     pub set_text: Option<SemanticsSetText>,
+    /// What this field does when a screen reader moves its caret or picks a
+    /// stretch of its text. Compose's `setSelection`.
+    pub set_selection: Option<SemanticsSetSelection>,
     /// What this control does when a screen reader asks it to open. A control
     /// that says so reads as closed. Compose's `expand`.
     pub expand: Option<SemanticsExpand>,
@@ -1301,6 +1408,10 @@ impl Default for SemanticsConfiguration {
             on_click_label: None,
             on_long_click: None,
             on_long_click_label: None,
+            on_magic_tap: None,
+            on_magic_tap_label: None,
+            input_labels: Vec::new(),
+            language: None,
             role: None,
             selected: None,
             toggled: None,
@@ -1323,6 +1434,7 @@ impl Default for SemanticsConfiguration {
             progress: None,
             set_progress: None,
             set_text: None,
+            set_selection: None,
             expand: None,
             dismiss: None,
             collapse: None,
@@ -1382,6 +1494,33 @@ impl SemanticsConfiguration {
     ) -> Self {
         self.on_long_click_label = Some(label.into());
         self.on_long_click = Some(SemanticsLongClick::new(action));
+        self
+    }
+
+    /// What the control does on VoiceOver's magic tap, and the verb phrase
+    /// the other platforms list it under. SwiftUI's
+    /// `accessibilityAction(.magicTap)`.
+    pub fn on_magic_tap(
+        mut self,
+        label: impl Into<String>,
+        action: impl Fn() -> bool + 'static,
+    ) -> Self {
+        self.on_magic_tap_label = Some(label.into());
+        self.on_magic_tap = Some(SemanticsMagicTap::new(action));
+        self
+    }
+
+    /// The short names a person says to Voice Control to reach the control.
+    /// SwiftUI's `accessibilityInputLabels`.
+    pub fn input_labels<S: Into<String>>(mut self, labels: impl IntoIterator<Item = S>) -> Self {
+        self.input_labels = labels.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// The language of the control's text, as a BCP 47 tag. SwiftUI's
+    /// `accessibilityLanguage`, ARIA's `lang`.
+    pub fn language(mut self, tag: impl Into<String>) -> Self {
+        self.language = Some(tag.into());
         self
     }
 
@@ -1476,6 +1615,15 @@ impl SemanticsConfiguration {
         if let Some(label) = &other.on_long_click_label {
             self.on_long_click_label = Some(label.clone());
         }
+        if let Some(label) = &other.on_magic_tap_label {
+            self.on_magic_tap_label = Some(label.clone());
+        }
+        if !other.input_labels.is_empty() {
+            self.input_labels.clone_from(&other.input_labels);
+        }
+        if let Some(language) = &other.language {
+            self.language = Some(language.clone());
+        }
         if let Some(role) = other.role {
             self.role = Some(role);
         }
@@ -1531,6 +1679,9 @@ impl SemanticsConfiguration {
         if let Some(set_text) = &other.set_text {
             self.set_text = Some(set_text.clone());
         }
+        if let Some(set_selection) = &other.set_selection {
+            self.set_selection = Some(set_selection.clone());
+        }
         if let Some(expand) = &other.expand {
             self.expand = Some(expand.clone());
         }
@@ -1542,6 +1693,9 @@ impl SemanticsConfiguration {
         }
         if let Some(long_click) = &other.on_long_click {
             self.on_long_click = Some(long_click.clone());
+        }
+        if let Some(magic_tap) = &other.on_magic_tap {
+            self.on_magic_tap = Some(magic_tap.clone());
         }
         if let Some(scroll_by) = &other.scroll_by {
             self.scroll_by = Some(scroll_by.clone());

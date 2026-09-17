@@ -492,6 +492,7 @@ fn TabCells(
                 Modifier::empty()
                     .size(size)
                     .selectable_group()
+                    .role(SemanticsWidgetRole::TabBar)
                     .graphics_layer_value(transform.clone()),
                 BoxSpec::default(),
                 move || {
@@ -507,7 +508,8 @@ fn TabCells(
                                 config.is_clickable = true;
                                 config.selected = Some(index == spec.committed_selection);
                                 config.content_description = Some(label_for_semantics.to_string());
-                            });
+                            })
+                            .focusable();
                         let icon = tab.icon.clone();
                         let icon_style = tab.icon_style;
                         let icon_scale = tab.icon_scale;
@@ -1088,7 +1090,7 @@ fn LiquidTabBarLayout(
 #[allow(non_snake_case)]
 pub fn LiquidTabBarSearchAccessory(on_click: impl Fn() + 'static) {
     crate::widgets::GlassIconButton(
-        Modifier::empty(),
+        Modifier::empty().content_description("Search"),
         crate::widgets::GlassButtonSpec::glass(),
         BAR_HEIGHT * 0.94,
         on_click,

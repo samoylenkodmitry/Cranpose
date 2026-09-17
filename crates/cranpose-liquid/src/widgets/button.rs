@@ -863,7 +863,8 @@ pub fn GlassIconButtonGroup(
                     config.role = Some(SemanticsWidgetRole::Button);
                     config.is_clickable = true;
                     config.content_description = Some(description.clone());
-                });
+                })
+                .focusable();
             Box(
                 foreground,
                 BoxSpec::default().content_alignment(Alignment::CENTER),

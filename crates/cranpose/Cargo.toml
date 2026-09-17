@@ -198,6 +198,7 @@ web-sys = { version = "0.3", optional = true, features = [
     "BatteryManager",
     # IME composition support (hidden textarea + composition events)
     "CompositionEvent",
+    "HtmlInputElement",
     "HtmlTextAreaElement",
     "Node",
     # System theme (prefers-color-scheme live updates)
@@ -395,12 +396,14 @@ objc2-ui-kit = { version = "0.3", default-features = false, optional = true, fea
     "UIActivity",
     "UIActivityViewController",
     "UIAccessibility",
+    "UIAccessibilityAdditions",
     "UIAccessibilityConstants",
     "UIAccessibilityContainer",
     "UIAccessibilityCustomAction",
     "UIAccessibilityElement",
     "UIAccessibilityIdentification",
     "UIApplication",
+    "UIContentSizeCategory",
     "UIDevice",
     "UIDocumentPickerViewController",
     "UIFeedbackGenerator",

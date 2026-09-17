@@ -2,13 +2,16 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use accesskit::{
     Action, ActionData, ActionHandler, ActionRequest, ActivationHandler, CustomAction,
-    DeactivationHandler, Invalid, Live, Node, NodeId, Point, Rect, Role, Toggled, Tree, TreeId,
-    TreeUpdate,
+    DeactivationHandler, Invalid, Live, Node, NodeId, Point, Rect, Role, TextDirection,
+    TextPosition, TextSelection, Toggled, Tree, TreeId, TreeUpdate,
 };
 use cranpose_app_shell::AppShell;
 use cranpose_render_wgpu::WgpuRenderer;
@@ -19,13 +22,24 @@ use crate::accessibility::{self, AccessibilityElement, AccessibilityRole};
 
 const ROOT_ID: NodeId = NodeId(u64::MAX);
 const ANNOUNCEMENT_ID: NodeId = NodeId(u64::MAX - 1);
+/// Set on the accesskit id of a text run, above the bits that hold the run's
+/// index and the virtual id of the field it belongs to.
+const TEXT_RUN_BIT: u64 = 1 << 40;
+/// The most characters one text run holds: accesskit counts the words of a
+/// run in a byte, so a long line is broken into runs at a space.
+const TEXT_RUN_CHARS: usize = 200;
 
+/// The tree a reader gets when it connects, and the flag that says one did.
 #[derive(Clone)]
-struct InitialTree(Arc<Mutex<Option<TreeUpdate>>>);
+struct InitialTree {
+    tree: Arc<Mutex<Option<TreeUpdate>>>,
+    reader_connected: Arc<AtomicBool>,
+}
 
 impl ActivationHandler for InitialTree {
     fn request_initial_tree(&mut self) -> Option<TreeUpdate> {
-        self.0
+        self.reader_connected.store(true, Ordering::Relaxed);
+        self.tree
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone()
@@ -48,21 +62,26 @@ impl ActionHandler for Actions {
     }
 }
 
-struct Deactivation;
+/// Clears the reader flag when the reader lets go of the tree.
+struct Deactivation(Arc<AtomicBool>);
 
 impl DeactivationHandler for Deactivation {
-    fn deactivate_accessibility(&mut self) {}
+    fn deactivate_accessibility(&mut self) {
+        self.0.store(false, Ordering::Relaxed);
+    }
 }
 
 pub(crate) struct DesktopAccessibilityBridge {
     adapter: PlatformAdapter,
     initial_tree: Arc<Mutex<Option<TreeUpdate>>>,
     actions: Arc<Mutex<Vec<ActionRequest>>>,
+    reader_connected: Arc<AtomicBool>,
     centers: HashMap<NodeId, (f32, f32)>,
     pending_custom_actions: Vec<(NodeId, usize)>,
     pending_focus: Vec<NodeId>,
     pending_values: Vec<(NodeId, f32)>,
     pending_texts: Vec<(NodeId, String)>,
+    pending_selections: Vec<(NodeId, TextSelection)>,
     pending_scrolls: Vec<(NodeId, bool)>,
     pending_jumps: Vec<(NodeId, usize)>,
     pending_expansions: Vec<(NodeId, bool)>,
@@ -70,30 +89,37 @@ pub(crate) struct DesktopAccessibilityBridge {
     seen_revision: Option<u64>,
     announcement: Option<Announcement>,
     announcement_turn: bool,
+    options: crate::desktop_accessibility_options::OptionsProbe,
 }
 
 impl DesktopAccessibilityBridge {
-    pub(crate) fn new(window: &dyn Window, waker: EventLoopProxy) -> Self {
+    pub(crate) fn new(window: &dyn Window, waker: EventLoopProxy, robot_drives: bool) -> Self {
         let initial_tree = Arc::new(Mutex::new(None));
         let actions = Arc::new(Mutex::new(Vec::new()));
+        let reader_connected = Arc::new(AtomicBool::new(false));
         let adapter = PlatformAdapter::new(
             window,
-            InitialTree(Arc::clone(&initial_tree)),
+            InitialTree {
+                tree: Arc::clone(&initial_tree),
+                reader_connected: Arc::clone(&reader_connected),
+            },
             Actions {
                 queue: Arc::clone(&actions),
                 waker,
             },
-            Deactivation,
+            Deactivation(Arc::clone(&reader_connected)),
         );
         Self {
             adapter,
             initial_tree,
             actions,
+            reader_connected,
             centers: HashMap::new(),
             pending_custom_actions: Vec::new(),
             pending_focus: Vec::new(),
             pending_values: Vec::new(),
             pending_texts: Vec::new(),
+            pending_selections: Vec::new(),
             pending_scrolls: Vec::new(),
             pending_jumps: Vec::new(),
             pending_expansions: Vec::new(),
@@ -101,6 +127,7 @@ impl DesktopAccessibilityBridge {
             seen_revision: None,
             announcement: None,
             announcement_turn: false,
+            options: crate::desktop_accessibility_options::OptionsProbe::start(!robot_drives),
         }
     }
 
@@ -109,6 +136,13 @@ impl DesktopAccessibilityBridge {
     }
 
     pub(crate) fn sync(&mut self, shell: &mut AppShell<WgpuRenderer>) {
+        let reader_on = cranpose_services::AccessibilityState {
+            screen_reader_on: self.reader_connected.load(Ordering::Relaxed),
+        };
+        if cranpose_services::set_platform_accessibility_state(reader_on) {
+            shell.request_root_render();
+        }
+        self.options.apply(shell);
         let mut announcements = accessibility::drain_app_announcements();
         let mut changed = false;
         if let Some(elements) = accessibility::snapshot_if_changed(shell, &mut self.seen_revision)
@@ -192,6 +226,9 @@ impl DesktopAccessibilityBridge {
             }
             (Action::SetValue, Some(ActionData::Value(text))) => {
                 self.pending_texts.push((target, text.to_string()));
+            }
+            (Action::SetTextSelection, Some(ActionData::SetTextSelection(selection))) => {
+                self.pending_selections.push((target, selection));
             }
             (Action::SetScrollOffset, Some(ActionData::SetScrollOffset(point))) => {
                 if let Some(index) = row_offset(&point) {
@@ -335,6 +372,16 @@ impl DesktopAccessibilityBridge {
                 accessibility::set_text(root, node_id, &text)
             });
         }
+        for (target, selection) in std::mem::take(&mut self.pending_selections) {
+            let Some((node_id, anchor, focus)) =
+                selection_chars(&self.previous, target, &selection)
+            else {
+                continue;
+            };
+            moved |= accessibility::run_reader_action(shell, |root| {
+                accessibility::set_text_selection_chars(root, node_id, anchor, focus)
+            });
+        }
         moved
     }
 
@@ -361,15 +408,22 @@ fn tree_update(
     root.set_label("Cranpose application");
     root.set_children(children);
     let mut nodes = vec![(ROOT_ID, root)];
-    nodes.extend(ids.iter().zip(elements).map(|(id, element)| {
+    for (id, element) in ids.iter().zip(elements) {
         let mut node = accesskit_node(element);
-        if element.canvas_key.is_none()
-            && let Some(children) = nested.remove(&Some(element.node_id))
-        {
-            node.set_children(children);
+        let mut below = if element.canvas_key.is_none() {
+            nested.remove(&Some(element.node_id)).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let runs = text_run_nodes(*id, element);
+        below.extend(runs.iter().map(|(run_id, _)| *run_id));
+        if !below.is_empty() {
+            node.set_children(below);
         }
-        (NodeId(*id as u64), node)
-    }));
+        apply_text_selection(&mut node, *id, element);
+        nodes.push((NodeId(*id as u64), node));
+        nodes.extend(runs);
+    }
     if let Some(announcement) = announcement {
         nodes.push((
             ANNOUNCEMENT_ID,
@@ -415,8 +469,11 @@ fn accesskit_node(element: &AccessibilityElement) -> Node {
     let role = match element.progress {
         Some(_) => Role::Slider,
         None if element.pane_title.is_some() => Role::Region,
-        None if scrolls && element.label.is_empty() => scroll_role(element),
+        None if scrolls && element.label.is_empty() && !element.role.is_named_container() => {
+            scroll_role(element)
+        }
         None if element.password => Role::PasswordInput,
+        None if element.role.is_text_field() && holds_lines(element) => Role::MultilineTextInput,
         None => accesskit_role(element.role),
     };
     let mut node = Node::new(role);
@@ -488,22 +545,38 @@ fn scroll_role(element: &AccessibilityElement) -> Role {
     }
 }
 
+/// The accesskit role of each role a reader names.
+const ACCESSKIT_ROLES: [(AccessibilityRole, Role); 23] = [
+    (AccessibilityRole::Button, Role::Button),
+    (AccessibilityRole::StaticText, Role::Label),
+    (AccessibilityRole::TextField, Role::TextInput),
+    (AccessibilityRole::Checkbox, Role::CheckBox),
+    (AccessibilityRole::Switch, Role::Switch),
+    (AccessibilityRole::RadioButton, Role::RadioButton),
+    (AccessibilityRole::Tab, Role::Tab),
+    (AccessibilityRole::Image, Role::Image),
+    (AccessibilityRole::Header, Role::Heading),
+    (AccessibilityRole::Dialog, Role::Dialog),
+    (AccessibilityRole::DropdownList, Role::ComboBox),
+    (AccessibilityRole::ValuePicker, Role::SpinButton),
+    (AccessibilityRole::Link, Role::Link),
+    (AccessibilityRole::SearchField, Role::SearchInput),
+    (AccessibilityRole::ProgressBar, Role::ProgressIndicator),
+    (AccessibilityRole::ToggleButton, Role::Button),
+    (AccessibilityRole::Alert, Role::Alert),
+    (AccessibilityRole::Toolbar, Role::Toolbar),
+    (AccessibilityRole::Menu, Role::Menu),
+    (AccessibilityRole::MenuItem, Role::MenuItem),
+    (AccessibilityRole::TabBar, Role::TabList),
+    (AccessibilityRole::List, Role::List),
+    (AccessibilityRole::ListItem, Role::ListItem),
+];
+
+const _: () = assert!(ACCESSKIT_ROLES.len() == AccessibilityRole::ALL.len());
+
 /// The accesskit role a screen reader reads the control as.
 fn accesskit_role(role: AccessibilityRole) -> Role {
-    match role {
-        AccessibilityRole::Button => Role::Button,
-        AccessibilityRole::StaticText => Role::Label,
-        AccessibilityRole::TextField => Role::TextInput,
-        AccessibilityRole::Checkbox => Role::CheckBox,
-        AccessibilityRole::Switch => Role::Switch,
-        AccessibilityRole::RadioButton => Role::RadioButton,
-        AccessibilityRole::Tab => Role::Tab,
-        AccessibilityRole::Image => Role::Image,
-        AccessibilityRole::DropdownList => Role::ComboBox,
-        AccessibilityRole::ValuePicker => Role::SpinButton,
-        AccessibilityRole::Header => Role::Heading,
-        AccessibilityRole::Dialog => Role::Dialog,
-    }
+    accessibility::role_entry(&ACCESSKIT_ROLES, role, Role::Unknown)
 }
 
 /// What the control says about itself beyond its name: its value, the state
@@ -514,6 +587,9 @@ fn apply_state(node: &mut Node, element: &AccessibilityElement) {
     }
     if let Some(state) = accessibility::state_with_error(element) {
         node.set_description(state.as_str());
+    }
+    if let Some(language) = &element.language {
+        node.set_language(language.as_str());
     }
     if element.error.is_some() {
         node.set_invalid(Invalid::True);
@@ -588,8 +664,11 @@ fn apply_actions(node: &mut Node, element: &AccessibilityElement) {
     if element.focusable {
         node.add_action(Action::Focus);
     }
-    if element.role == AccessibilityRole::TextField {
+    if element.role.is_text_field() {
         node.add_action(Action::SetValue);
+    }
+    if element.text_selection.is_some() {
+        node.add_action(Action::SetTextSelection);
     }
     if element.adjustable {
         node.add_action(Action::SetValue);
@@ -772,6 +851,209 @@ impl PlatformAdapter {
     }
 }
 
+/// Whether a field's text runs over more than one line.
+fn holds_lines(element: &AccessibilityElement) -> bool {
+    element
+        .value
+        .as_deref()
+        .is_some_and(|value| value.contains('\n'))
+}
+
+/// One stretch of a field's text that accesskit reads as a text run: where it
+/// starts and ends in bytes, and where it starts in characters.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct TextRunSpan {
+    start_byte: usize,
+    end_byte: usize,
+    start_char: usize,
+}
+
+/// The text runs of a field: one per line, with the line break at the end of
+/// the line it ends, and a line longer than [`TEXT_RUN_CHARS`] broken at the
+/// last space before that, because accesskit counts the words of a run in a
+/// byte. An empty text is one empty run, so a caret has a place to sit.
+fn text_runs(text: &str) -> Vec<TextRunSpan> {
+    let mut runs = Vec::new();
+    let mut start_byte = 0;
+    let mut start_char = 0;
+    let mut chars = 0;
+    let mut last_space: Option<(usize, usize)> = None;
+    for (byte, character) in text.char_indices() {
+        chars += 1;
+        let end = byte + character.len_utf8();
+        if character == '\n' {
+            runs.push(TextRunSpan {
+                start_byte,
+                end_byte: end,
+                start_char,
+            });
+            start_byte = end;
+            start_char += chars;
+            chars = 0;
+            last_space = None;
+            continue;
+        }
+        if character.is_whitespace() {
+            last_space = Some((end, chars));
+        }
+        if chars >= TEXT_RUN_CHARS {
+            let (cut_byte, cut_chars) = last_space.unwrap_or((end, chars));
+            runs.push(TextRunSpan {
+                start_byte,
+                end_byte: cut_byte,
+                start_char,
+            });
+            start_byte = cut_byte;
+            start_char += cut_chars;
+            chars -= cut_chars;
+            last_space = None;
+        }
+    }
+    if chars > 0 || runs.is_empty() {
+        runs.push(TextRunSpan {
+            start_byte,
+            end_byte: text.len(),
+            start_char,
+        });
+    }
+    runs
+}
+
+/// Where the words of a run start, in characters: after each stretch of
+/// spaces. The first character starts a word on its own, so it is left out.
+fn word_starts(run: &str) -> Vec<u8> {
+    let mut starts = Vec::new();
+    let mut after_space = false;
+    for (index, character) in run.chars().enumerate() {
+        if index > 0 && after_space && !character.is_whitespace() {
+            starts.push(index as u8);
+        }
+        after_space = character.is_whitespace();
+    }
+    starts
+}
+
+/// The accesskit id of one text run of a field.
+fn text_run_id(field_id: i32, run_index: usize) -> NodeId {
+    NodeId(TEXT_RUN_BIT | ((run_index as u64) << 32) | field_id as u64)
+}
+
+/// The field and the run index behind the accesskit id of a text run, or
+/// nothing for the id of a control.
+fn text_run_owner(id: NodeId) -> Option<(i32, usize)> {
+    if id.0 & TEXT_RUN_BIT == 0 {
+        return None;
+    }
+    let field_id = (id.0 & 0xffff_ffff) as i32;
+    let run_index = ((id.0 >> 32) & 0xff) as usize;
+    Some((field_id, run_index))
+}
+
+/// The text runs under an editable field, each with the text it holds, the
+/// length of each character in bytes and where its words start, so a screen
+/// reader walks the text by character, word and line and puts the caret
+/// where the user asks. A control that is not a field, or one that holds a
+/// secret, has none.
+fn text_run_nodes(field_id: i32, element: &AccessibilityElement) -> Vec<(NodeId, Node)> {
+    let (Some(value), Some(_)) = (&element.value, element.text_selection) else {
+        return Vec::new();
+    };
+    text_runs(value)
+        .into_iter()
+        .enumerate()
+        .take(0xff)
+        .map(|(index, span)| {
+            let text = &value[span.start_byte..span.end_byte];
+            let mut run = Node::new(Role::TextRun);
+            run.set_value(text);
+            run.set_character_lengths(
+                text.chars()
+                    .map(|character| character.len_utf8() as u8)
+                    .collect::<Vec<_>>(),
+            );
+            run.set_word_starts(word_starts(text));
+            run.set_text_direction(TextDirection::LeftToRight);
+            run.set_bounds(Rect {
+                x0: element.bounds.x as f64,
+                y0: element.bounds.y as f64,
+                x1: (element.bounds.x + element.bounds.width) as f64,
+                y1: (element.bounds.y + element.bounds.height) as f64,
+            });
+            (text_run_id(field_id, index), run)
+        })
+        .collect()
+}
+
+/// The run and the character inside it that a character offset into a
+/// field's text falls on. An offset right after a line break belongs to the
+/// start of the next line.
+fn text_position(field_id: i32, value: &str, runs: &[TextRunSpan], chars: usize) -> TextPosition {
+    let chars = chars.min(value.chars().count());
+    let mut run_index = runs
+        .iter()
+        .rposition(|run| run.start_char <= chars)
+        .unwrap_or(0);
+    if run_index + 1 < runs.len()
+        && runs[run_index + 1].start_char == chars
+        && value[..runs[run_index].end_byte].ends_with('\n')
+    {
+        run_index += 1;
+    }
+    TextPosition {
+        node: text_run_id(field_id, run_index.min(0xfe)),
+        character_index: chars - runs[run_index].start_char,
+    }
+}
+
+/// Puts the caret, or the picked stretch of text, on the accesskit node of an
+/// editable field, in the characters of its text runs.
+fn apply_text_selection(node: &mut Node, field_id: i32, element: &AccessibilityElement) {
+    let (Some(value), Some((anchor, focus))) = (&element.value, element.text_selection) else {
+        return;
+    };
+    let runs = text_runs(value);
+    node.set_text_selection(TextSelection {
+        anchor: text_position(
+            field_id,
+            value,
+            &runs,
+            accessibility::char_offset(value, anchor),
+        ),
+        focus: text_position(
+            field_id,
+            value,
+            &runs,
+            accessibility::char_offset(value, focus),
+        ),
+    });
+}
+
+/// The live node of the field a screen reader set a selection on, with the
+/// two ends counted in characters of the whole text, or nothing when the
+/// selection names a run that is not in the published tree.
+fn selection_chars(
+    elements: &[AccessibilityElement],
+    target: NodeId,
+    selection: &TextSelection,
+) -> Option<(cranpose_core::NodeId, usize, usize)> {
+    let (field_id, _) = text_run_owner(selection.anchor.node)
+        .or_else(|| text_run_owner(target))
+        .unwrap_or((target.0 as i32, 0));
+    let ids = accessibility::element_ids(elements);
+    let element = elements.get(ids.iter().position(|id| *id == field_id)?)?;
+    let runs = text_runs(element.value.as_deref()?);
+    let offset = |position: &TextPosition| -> Option<usize> {
+        let (owner, run_index) = text_run_owner(position.node)?;
+        (owner == field_id).then_some(())?;
+        Some(runs.get(run_index)?.start_char + position.character_index)
+    };
+    Some((
+        element.node_id,
+        offset(&selection.anchor)?,
+        offset(&selection.focus)?,
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -823,6 +1105,21 @@ mod tests {
     }
 
     #[test]
+    fn every_role_has_an_accesskit_role_of_its_own() {
+        for role in AccessibilityRole::ALL {
+            assert_eq!(
+                ACCESSKIT_ROLES
+                    .iter()
+                    .filter(|(named, _)| *named == role)
+                    .count(),
+                1,
+                "{role:?} should be in the accesskit table once"
+            );
+            assert_ne!(accesskit_role(role), Role::Unknown);
+        }
+    }
+
+    #[test]
     fn a_tree_with_nothing_focused_leaves_focus_on_the_window() {
         let elements = vec![AccessibilityElement {
             node_id: 7,
@@ -865,6 +1162,159 @@ mod tests {
         let label = &update.nodes[2].1;
         assert_eq!(label.role(), Role::Label);
         assert_eq!(label.value(), Some("Receipts"));
+    }
+
+    fn field(value: &str, anchor: usize, focus: usize) -> AccessibilityElement {
+        AccessibilityElement {
+            node_id: 7,
+            label: "Note".into(),
+            value: Some(value.into()),
+            text_selection: Some((anchor, focus)),
+            bounds: AccessibilityRect::new(0.0, 0.0, 200.0, 44.0),
+            role: AccessibilityRole::TextField,
+            focusable: true,
+            ..AccessibilityElement::default()
+        }
+    }
+
+    #[test]
+    fn a_text_field_carries_its_text_as_runs_with_characters_words_and_a_caret() {
+        let update = tree_update(&[field("Milk añd eggs", 5, 8)], None, false);
+
+        let input = &update.nodes[1].1;
+        assert_eq!(input.role(), Role::TextInput);
+        assert!(input.supports_action(Action::SetTextSelection));
+        let run_id = text_run_id(7, 0);
+        assert_eq!(input.children(), &[run_id]);
+        let selection = input.text_selection().expect("the caret is published");
+        assert_eq!(
+            selection.anchor,
+            TextPosition {
+                node: run_id,
+                character_index: 5
+            }
+        );
+        assert_eq!(
+            selection.focus,
+            TextPosition {
+                node: run_id,
+                character_index: 7
+            }
+        );
+
+        let (id, run) = &update.nodes[2];
+        assert_eq!(*id, run_id);
+        assert_eq!(run.role(), Role::TextRun);
+        assert_eq!(run.value(), Some("Milk añd eggs"));
+        assert_eq!(
+            run.character_lengths(),
+            &[1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1]
+        );
+        assert_eq!(run.word_starts(), &[5, 9]);
+    }
+
+    #[test]
+    fn a_field_with_lines_is_multiline_and_puts_the_caret_after_a_break_on_the_next_line() {
+        let update = tree_update(&[field("one\ntwo", 4, 4)], None, false);
+
+        let input = &update.nodes[1].1;
+        assert_eq!(input.role(), Role::MultilineTextInput);
+        assert_eq!(input.children(), &[text_run_id(7, 0), text_run_id(7, 1)]);
+        let caret = input
+            .text_selection()
+            .expect("the caret is published")
+            .focus;
+        assert_eq!(
+            caret,
+            TextPosition {
+                node: text_run_id(7, 1),
+                character_index: 0
+            }
+        );
+        assert_eq!(update.nodes[2].1.value(), Some("one\n"));
+        assert_eq!(update.nodes[3].1.value(), Some("two"));
+    }
+
+    #[test]
+    fn a_password_field_and_a_button_carry_no_text_runs() {
+        let mut secret = field("hunter2", 0, 0);
+        secret.password = true;
+        secret.text_selection = None;
+        let elements = vec![
+            secret,
+            AccessibilityElement {
+                node_id: 8,
+                label: "Save".into(),
+                bounds: AccessibilityRect::new(0.0, 50.0, 80.0, 44.0),
+                role: AccessibilityRole::Button,
+                clickable: true,
+                ..AccessibilityElement::default()
+            },
+        ];
+
+        let update = tree_update(&elements, None, false);
+
+        assert_eq!(update.nodes.len(), 3);
+        assert!(update.nodes[1].1.children().is_empty());
+        assert!(update.nodes[1].1.text_selection().is_none());
+    }
+
+    #[test]
+    fn a_long_line_breaks_into_runs_at_a_space_before_the_word_limit() {
+        let word = "abcdefghi ";
+        let text = word.repeat(50);
+        let runs = text_runs(&text);
+
+        assert!(runs.len() > 1);
+        assert!(runs.iter().all(|run| {
+            let chars = text[run.start_byte..run.end_byte].chars().count();
+            chars <= TEXT_RUN_CHARS && chars > 0
+        }));
+        assert!(
+            runs.iter().all(|run| text[..run.end_byte].ends_with(' ')),
+            "every run ends where a word ends: {runs:?}"
+        );
+        assert_eq!(runs[0].start_char, 0);
+        assert_eq!(runs.last().map(|run| run.end_byte), Some(text.len()));
+        assert_eq!(
+            text_runs(""),
+            vec![TextRunSpan {
+                start_byte: 0,
+                end_byte: 0,
+                start_char: 0
+            }]
+        );
+    }
+
+    #[test]
+    fn a_selection_a_reader_set_on_a_run_comes_back_in_characters_of_the_whole_text() {
+        let elements = vec![field("one\ntwo", 0, 0)];
+        let selection = TextSelection {
+            anchor: TextPosition {
+                node: text_run_id(7, 1),
+                character_index: 1,
+            },
+            focus: TextPosition {
+                node: text_run_id(7, 0),
+                character_index: 2,
+            },
+        };
+
+        assert_eq!(
+            selection_chars(&elements, NodeId(7), &selection),
+            Some((7, 5, 2))
+        );
+        let stray = TextSelection {
+            anchor: TextPosition {
+                node: text_run_id(9, 0),
+                character_index: 1,
+            },
+            focus: TextPosition {
+                node: text_run_id(9, 0),
+                character_index: 1,
+            },
+        };
+        assert_eq!(selection_chars(&elements, NodeId(9), &stray), None);
     }
 
     #[test]

@@ -466,8 +466,10 @@ pub fn mineswapper2_tab() {
                                     } else {
                                         Color(0.12, 0.14, 0.22, 0.9)
                                     };
+                                    let cell_name = cell_name(x, y, &cell);
                                     Button(
                                         Modifier::empty()
+                                            .content_description(cell_name)
                                             .size_points(36.0, 36.0)
                                             .rounded_corners(8.0)
                                             .draw_behind(move |scope| {
@@ -504,4 +506,21 @@ pub fn mineswapper2_tab() {
             );
         },
     );
+}
+
+fn cell_name(x: usize, y: usize, cell: &MineswapperCell) -> String {
+    let state_word = if cell.is_revealed {
+        if cell.is_mine {
+            "mine".to_string()
+        } else if cell.adjacent == 0 {
+            "clear".to_string()
+        } else {
+            format!("{} nearby", cell.adjacent)
+        }
+    } else if cell.is_flagged {
+        "flag".to_string()
+    } else {
+        "covered".to_string()
+    };
+    format!("Row {}, column {}, {state_word}", y + 1, x + 1)
 }

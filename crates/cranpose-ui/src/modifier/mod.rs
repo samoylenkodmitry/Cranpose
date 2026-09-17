@@ -23,8 +23,10 @@ mod clickable;
 mod draw_cache;
 mod fill;
 mod focus;
+mod focus_ring;
 mod graphics_layer;
 mod local;
+mod minimum_interactive;
 mod offset;
 mod padding;
 mod pointer_icon;
@@ -549,6 +551,39 @@ impl Modifier {
         })
     }
 
+    /// Says what this control does on VoiceOver's magic tap, the two finger
+    /// double tap for the main action of a screen, and the verb phrase the
+    /// other platforms list it under: "Take the photo". SwiftUI's
+    /// `accessibilityAction(.magicTap)`.
+    pub fn on_magic_tap(
+        self,
+        label: impl Into<String>,
+        action: impl Fn() -> bool + 'static,
+    ) -> Self {
+        let label = label.into();
+        let action = cranpose_foundation::SemanticsMagicTap::new(action);
+        self.semantics(move |config| {
+            config.on_magic_tap_label = Some(label.clone());
+            config.on_magic_tap = Some(action.clone());
+        })
+    }
+
+    /// The short names a person says to Voice Control to reach this control,
+    /// when the name a reader hears is too long to say. SwiftUI's
+    /// `accessibilityInputLabels`.
+    pub fn input_labels<S: Into<String>>(self, labels: impl IntoIterator<Item = S>) -> Self {
+        let labels: Vec<String> = labels.into_iter().map(Into::into).collect();
+        self.semantics(move |config| config.input_labels.clone_from(&labels))
+    }
+
+    /// The language of this control's text, as a BCP 47 tag such as "de" or
+    /// "pt-BR", so a reader picks the right voice. SwiftUI's
+    /// `accessibilityLanguage`, ARIA's `lang`.
+    pub fn language(self, tag: impl Into<String>) -> Self {
+        let tag = tag.into();
+        self.semantics(move |config| config.language = Some(tag.clone()))
+    }
+
     /// Says what this control does when a screen reader asks it to close, and
     /// marks it as open right now. Compose's
     /// `Modifier.semantics { collapse { … } }`.
@@ -701,18 +736,6 @@ impl Modifier {
         let element = FocusRequesterElement::new(requester.clone());
         let modifier = Modifier::from_parts(vec![modifier_element(element)]);
         self.then(modifier)
-    }
-
-    /// The Compose `Modifier.focusable()` convenience.
-    ///
-    /// Compose's version also wires an optional `MutableInteractionSource` so
-    /// a `focusable` can drive its own visual indication. Cranpose's
-    /// [`MutableInteractionSource`](crate::MutableInteractionSource) only
-    /// emits press interactions — there is no focus interaction or indication
-    /// concept to plug in yet — so `focusable` here is honestly just
-    /// [`focus_target`](Self::focus_target), nothing more.
-    pub fn focusable(self) -> Self {
-        self.focus_target()
     }
 
     /// Binds a [`SemanticsRequester`] to this node, so an app can mark the

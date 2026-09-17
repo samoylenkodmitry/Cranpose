@@ -943,6 +943,10 @@ impl<T: SpringScalar + 'static> Animatable<T> {
             inner.target = target;
             inner.animation_type = animation;
             inner.start_time_nanos = exact_start_time_nanos;
+            if cranpose_services::platform_accessibility_options().reduce_motion {
+                Self::settle_at_target(&mut inner);
+                return;
+            }
             match animation {
                 AnimationType::Spring(spec) => {
                     let continues_spring = matches!(previous_animation, AnimationType::Spring(_));
@@ -1046,6 +1050,18 @@ impl<T: SpringScalar + 'static> Animatable<T> {
         inner.state.set_value(target);
     }
 
+    /// Ends the animation on its first frame, for a person who asked the
+    /// system for less motion: the value is the target at once, nothing is
+    /// scheduled, and a reader of the state sees one change.
+    fn settle_at_target(inner: &mut AnimatableInner<T>) {
+        inner.current = inner.target.clone();
+        inner.start = inner.target.clone();
+        inner.start_time_nanos = None;
+        inner.last_frame_nanos = None;
+        inner.velocity = [0.0; SPRING_MAX_DIMENSIONS];
+        inner.state.set_value(inner.target.clone());
+    }
+
     fn schedule_frame(this: &Rc<RefCell<AnimatableInner<T>>>) {
         let runtime = {
             let inner = this.borrow();
@@ -1099,10 +1115,7 @@ impl<T: SpringScalar + 'static> Animatable<T> {
                     inner.state.set_value(new_value);
 
                     if linear_progress >= 1.0 {
-                        inner.current = inner.target.clone();
-                        inner.start = inner.target.clone();
-                        inner.start_time_nanos = None;
-                        inner.state.set_value(inner.target.clone());
+                        Self::settle_at_target(inner);
                     } else {
                         schedule_next = true;
                     }

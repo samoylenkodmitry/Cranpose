@@ -11,15 +11,19 @@ use std::{
 
 use cranpose_ui::text_input_session::{PlatformTextInputHandler, set_platform_text_input_handler};
 use objc2::{
-    DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, rc::Retained,
-    runtime::ProtocolObject,
+    DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send,
+    rc::Retained,
+    runtime::{AnyObject, ProtocolObject},
 };
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
-use objc2_foundation::{NSArray, NSComparisonResult, NSObjectProtocol, NSRange, NSString};
+use objc2_foundation::{
+    NSArray, NSComparisonResult, NSObject, NSObjectProtocol, NSRange, NSString,
+};
 use objc2_ui_kit::{
-    NSWritingDirection, UIKeyInput, UIResponder, UITextInput, UITextInputStringTokenizer,
-    UITextInputTokenizer, UITextInputTraits, UITextLayoutDirection, UITextPosition, UITextRange,
-    UITextSelectionRect, UITextStorageDirection, UIView,
+    NSObjectUIAccessibility, NSWritingDirection, UIAccessibilityConvertFrameToScreenCoordinates,
+    UIAccessibilityIdentification, UIKeyInput, UIResponder, UITextInput, UITextInputDelegate,
+    UITextInputStringTokenizer, UITextInputTokenizer, UITextInputTraits, UITextLayoutDirection,
+    UITextPosition, UITextRange, UITextSelectionRect, UITextStorageDirection, UIView,
 };
 
 #[derive(Default, Clone)]
@@ -34,11 +38,75 @@ fn mirror() -> &'static Mutex<Mirror> {
 }
 
 pub(crate) fn set_mirror(text: String, sel_start: usize, sel_end: usize) {
-    if let Ok(mut m) = mirror().lock() {
-        let len = text.len();
-        m.text = text;
-        m.sel = (sel_start.min(len), sel_end.min(len));
+    let Ok(mut m) = mirror().lock() else {
+        return;
+    };
+    let len = text.len();
+    let sel = (sel_start.min(len), sel_end.min(len));
+    let text_changed = m.text != text;
+    let selection_changed = m.sel != sel;
+    m.text = text;
+    m.sel = sel;
+    drop(m);
+    if text_changed || selection_changed {
+        tell_input_delegate(text_changed);
     }
+}
+
+/// Tells the keyboard and VoiceOver that the app changed the text or moved
+/// the caret on its own, which UIKit asks of a text input for any change the
+/// keyboard did not make itself. An edit the keyboard made already matches
+/// the mirror and passes here in silence.
+fn tell_input_delegate(text_changed: bool) {
+    if MainThreadMarker::new().is_none() {
+        return;
+    }
+    VIEW.with(|cell| {
+        if let Some(view) = cell.borrow().as_ref() {
+            view.notify_input_delegate(text_changed);
+        }
+    });
+}
+
+/// Puts the key input view in front of VoiceOver as the text field that
+/// holds app focus, with the field's name, hint, frame and identifier, so a
+/// reader walks and edits the text through the view's `UITextInput`. Answers
+/// the view as the object to list among the accessibility elements.
+pub(crate) fn describe_for_reader(
+    label: &str,
+    hint: Option<&str>,
+    frame: CGRect,
+    host: &UIView,
+    identifier: &str,
+) -> Option<Retained<AnyObject>> {
+    let mtm = MainThreadMarker::new()?;
+    VIEW.with(|cell| {
+        let view = cell.borrow().clone()?;
+        let object: &NSObject = &view;
+        object.setIsAccessibilityElement(true, mtm);
+        object.setAccessibilityLabel(Some(&NSString::from_str(label)), mtm);
+        object.setAccessibilityHint(hint.map(NSString::from_str).as_deref(), mtm);
+        object.setAccessibilityFrame(
+            UIAccessibilityConvertFrameToScreenCoordinates(frame, host),
+            mtm,
+        );
+        view.setAccessibilityIdentifier(Some(&NSString::from_str(identifier)));
+        Some(view.into())
+    })
+}
+
+/// Takes the key input view out of VoiceOver's reach while no text field
+/// holds app focus.
+pub(crate) fn hide_from_reader() {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    VIEW.with(|cell| {
+        if let Some(view) = cell.borrow().as_ref() {
+            let object: &NSObject = view;
+            object.setIsAccessibilityElement(false, mtm);
+        }
+    });
 }
 
 fn read_mirror() -> Mirror {
@@ -292,11 +360,15 @@ thread_local! {
     static VIEW: RefCell<Option<Retained<KeyInputView>>> = const { RefCell::new(None) };
 }
 
+struct KeyInputIvars {
+    delegate: RefCell<Option<Retained<ProtocolObject<dyn UITextInputDelegate>>>>,
+}
+
 define_class!(
     #[unsafe(super(UIView))]
     #[thread_kind = MainThreadOnly]
     #[name = "CranposeKeyInputView"]
-    #[ivars = ()]
+    #[ivars = KeyInputIvars]
     struct KeyInputView;
 
     unsafe impl NSObjectProtocol for KeyInputView {}
@@ -575,17 +647,13 @@ define_class!(
         }
 
         #[unsafe(method_id(inputDelegate))]
-        fn input_delegate(
-            &self,
-        ) -> Option<Retained<ProtocolObject<dyn objc2_ui_kit::UITextInputDelegate>>> {
-            None
+        fn input_delegate(&self) -> Option<Retained<ProtocolObject<dyn UITextInputDelegate>>> {
+            self.ivars().delegate.borrow().clone()
         }
 
         #[unsafe(method(setInputDelegate:))]
-        fn set_input_delegate(
-            &self,
-            _delegate: Option<&ProtocolObject<dyn objc2_ui_kit::UITextInputDelegate>>,
-        ) {
+        fn set_input_delegate(&self, delegate: Option<&ProtocolObject<dyn UITextInputDelegate>>) {
+            *self.ivars().delegate.borrow_mut() = delegate.map(Message::retain);
         }
     }
 
@@ -599,8 +667,25 @@ define_class!(
 
 impl KeyInputView {
     fn new(mtm: MainThreadMarker) -> Retained<Self> {
-        let this = Self::alloc(mtm).set_ivars(());
+        let this = Self::alloc(mtm).set_ivars(KeyInputIvars {
+            delegate: RefCell::new(None),
+        });
         unsafe { msg_send![super(this), init] }
+    }
+
+    fn notify_input_delegate(&self, text_changed: bool) {
+        let delegate = self.ivars().delegate.borrow().clone();
+        let Some(delegate) = delegate else {
+            return;
+        };
+        let input: &ProtocolObject<dyn UITextInput> = ProtocolObject::from_ref(self);
+        if text_changed {
+            delegate.textWillChange(Some(input));
+            delegate.textDidChange(Some(input));
+        } else {
+            delegate.selectionWillChange(Some(input));
+            delegate.selectionDidChange(Some(input));
+        }
     }
 }
 

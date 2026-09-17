@@ -187,6 +187,7 @@ macro_rules! impl_layout_modifier_node {
         }
     };
 }
+pub(crate) use impl_layout_modifier_node;
 
 macro_rules! impl_draw_modifier_node {
     ($ty:ty) => {

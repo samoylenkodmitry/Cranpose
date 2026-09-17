@@ -3465,7 +3465,7 @@ fn every_lazy_list_tells_android_how_many_rows_it_holds() {
     let java_source = crate_source("android/java/dev/cranpose/android/CranposeActivity.java");
     assert!(
         java_source.contains("info.setCollectionInfo(AccessibilityNodeInfo.CollectionInfo.obtain(")
-            && java_source.contains("private static final int ACCESSIBILITY_FIELDS = 39;"),
+            && java_source.contains("private static final int ACCESSIBILITY_FIELDS = 41;"),
         "the Android host hands TalkBack the row count of a list"
     );
 }
@@ -3481,8 +3481,7 @@ fn every_platform_lets_a_reader_find_an_empty_text_field() {
 
     let ios_source = crate_source("src/ios_accessibility.rs");
     assert!(
-        ios_source
-            .contains("!element.label.is_empty() || element.role == AccessibilityRole::TextField"),
+        ios_source.contains("!element.label.is_empty() || element.role.is_text_field()"),
         "VoiceOver stops on an empty text field"
     );
 }
@@ -3599,8 +3598,136 @@ fn the_desktop_tree_keeps_rows_under_their_list() {
     let desktop_source = crate_source("src/desktop_accessibility.rs");
     assert!(
         desktop_source.contains("fn nested_children(")
-            && desktop_source.contains("node.set_children(children);"),
+            && desktop_source.contains("node.set_children(below);"),
         "accesskit gets each row under its list and each tab under its group"
+    );
+}
+
+#[test]
+fn every_platform_lets_a_reader_move_the_caret_of_a_field() {
+    let projection_source = crate_source("src/accessibility.rs");
+    assert!(
+        projection_source.contains("pub(crate) fn set_text_selection(")
+            && projection_source.contains("text_selection: node"),
+        "the projection publishes the caret and takes a new selection"
+    );
+
+    let text_field = workspace_source("crates/cranpose-ui/src/text_field_modifier_node.rs");
+    assert!(
+        text_field.contains(
+            "config.set_selection = Some(cranpose_foundation::SemanticsSetSelection::new("
+        ),
+        "the text field declares the set-selection action"
+    );
+
+    let desktop_source = crate_source("src/desktop_accessibility.rs");
+    assert!(
+        desktop_source.contains(
+            "(Action::SetTextSelection, Some(ActionData::SetTextSelection(selection))) => {"
+        ) && desktop_source.contains("run.set_character_lengths(")
+            && desktop_source
+                .contains("accessibility::set_text_selection_chars(root, node_id, anchor, focus)"),
+        "accesskit gets text runs and its set-text-selection action reaches the field"
+    );
+
+    let java_source = crate_source("android/java/dev/cranpose/android/CranposeActivity.java");
+    assert!(
+        java_source
+            .contains("info.addAction(AccessibilityNodeInfo.ACTION_NEXT_AT_MOVEMENT_GRANULARITY);")
+            && java_source.contains("info.setTextSelection(")
+            && java_source
+                .contains("nativeOnAccessibilitySetSelection(element.id, anchor, moved);"),
+        "the Android host walks text by granularity and forwards the caret"
+    );
+    let bridge_source = crate_source("src/android_accessibility.rs");
+    assert!(
+        bridge_source.contains(
+            "fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccessibilitySetSelection("
+        ),
+        "the Android bridge takes the selection"
+    );
+
+    let ios_source = crate_source("src/ios_accessibility.rs");
+    assert!(
+        ios_source.contains("crate::ios_keyboard::describe_for_reader("),
+        "VoiceOver gets the focused field as the keyboard's UITextInput view"
+    );
+
+    let web_source = crate_source("src/web_accessibility.rs");
+    assert!(
+        web_source.contains("\"selectionchange\"")
+            && web_source
+                .contains("accessibility::set_text_selection_utf16(root, node_id, anchor, focus)")
+            && web_source.contains("fn only_focused_field_changed("),
+        "the web mirror is an input whose caret goes both ways without a rebuild"
+    );
+}
+
+#[test]
+fn every_platform_with_a_reader_signal_reports_it_and_voiceover_takes_the_magic_tap() {
+    let ios_source = crate_source("src/ios_accessibility.rs");
+    assert!(
+        ios_source.contains("screen_reader_on: UIAccessibilityIsVoiceOverRunning(),")
+            && ios_source.contains("#[unsafe(method(accessibilityPerformMagicTap))]")
+            && ios_source
+                .contains("native.setAccessibilityUserInputLabels(input_labels.as_deref(), mtm);")
+            && ios_source.contains("native.setAccessibilityLanguage("),
+        "VoiceOver reports its state and takes the magic tap, the input labels and the language"
+    );
+    for (source, platform) in [
+        (crate_source("src/android_accessibility.rs"), "Android"),
+        (crate_source("src/desktop_accessibility.rs"), "accesskit"),
+    ] {
+        assert!(
+            source.contains("cranpose_services::set_platform_accessibility_state(reader_on)"),
+            "{platform} reports whether a reader is on"
+        );
+    }
+    let ios_loop = crate_source("src/ios.rs");
+    assert!(
+        ios_loop.contains("accessibility.drain_magic_taps(shell);"),
+        "the iOS frame loop runs the magic tap"
+    );
+    let projection_source = crate_source("src/accessibility.rs");
+    assert!(
+        projection_source.contains(".chain(element.magic_tap_label.clone())"),
+        "the other platforms list the magic tap by its label"
+    );
+    let web_source = crate_source("src/web_accessibility.rs");
+    assert!(
+        web_source.contains("node.set_attribute(\"lang\", language)?;"),
+        "the web mirror carries the language"
+    );
+    let desktop_source = crate_source("src/desktop_accessibility.rs");
+    assert!(
+        desktop_source.contains("node.set_language(language.as_str());"),
+        "accesskit carries the language"
+    );
+}
+
+#[test]
+fn the_android_host_names_every_role_the_projection_has() {
+    let java_source = crate_source("android/java/dev/cranpose/android/CranposeActivity.java");
+    for expected in [
+        "case 14: return \"android.widget.EditText\";",
+        "case 15: return \"android.widget.ProgressBar\";",
+        "case 16: return \"android.widget.ToggleButton\";",
+        "case 22: return \"android.widget.ListView\";",
+        "case 13: return \"link\";",
+        "case 20: return \"menu item\";",
+        "case 21: return \"tab bar\";",
+        "return role == 3 || role == 14;",
+        "return role == 18 || role == 19 || role == 21 || role == 22;",
+    ] {
+        assert!(
+            java_source.contains(expected),
+            "the Android host should carry `{expected}`"
+        );
+    }
+    let projection_source = crate_source("src/accessibility.rs");
+    assert!(
+        projection_source.contains("(AccessibilityRole::ListItem, 23),"),
+        "the projection numbers every role for the wire"
     );
 }
 
@@ -3735,7 +3862,7 @@ fn every_platform_names_a_dropdown_and_a_picker() {
         "accesskit reads the node as a combo box"
     );
     assert!(
-        crate_source("src/web_accessibility.rs").contains(r#""combobox""#),
+        crate_source("src/accessibility.rs").contains(r#""combobox""#),
         "the web mirror names the role"
     );
     assert!(
@@ -3763,4 +3890,127 @@ fn an_icon_cannot_be_drawn_without_an_answer_about_its_name() {
             "the caller says what the icon is, or says it is decoration"
         );
     }
+}
+
+#[test]
+fn a_keyboard_presses_and_moves_among_controls_and_a_ring_shows_where_it_is() {
+    let shell_input = workspace_source("crates/cranpose-app-shell/src/shell_input.rs");
+    assert!(
+        shell_input.contains("matches!(event.key_code, KeyCode::Enter | KeyCode::Space)"),
+        "Enter and Space press the focused control"
+    );
+    assert!(
+        shell_input.contains("cranpose_ui::selectable_group_of(layout_tree, focused)?"),
+        "an arrow key moves focus inside a selectable group"
+    );
+    assert!(
+        shell_input.contains("self.note_focus_moved_by_keyboard(false);"),
+        "a pointer press takes the focus ring away"
+    );
+    let clickable = workspace_source("crates/cranpose-ui/src/modifier/clickable.rs");
+    assert!(
+        clickable.contains(".focusable()")
+            && clickable.matches("self.then(pressable(modifier))").count() == 2,
+        "every clickable control takes keyboard focus and shows the ring"
+    );
+    for path in [
+        "crates/cranpose-liquid/src/widgets/tab_bar.rs",
+        "crates/cranpose-liquid/src/widgets/segmented.rs",
+        "crates/cranpose-liquid/src/widgets/menu.rs",
+        "crates/cranpose-liquid/src/widgets/toggle.rs",
+        "crates/cranpose-liquid/src/widgets/button.rs",
+    ] {
+        assert!(
+            workspace_source(path).contains(".focusable()"),
+            "{path} takes keyboard focus"
+        );
+    }
+}
+
+#[test]
+fn a_test_audits_a_screen_and_a_robot_prints_what_a_reader_speaks() {
+    let audit = workspace_source("crates/cranpose-testing/src/accessibility_audit.rs");
+    for kind in [
+        "NoName",
+        "SameName",
+        "SmallTarget",
+        "OutOfOrder",
+        "NoPaneTitle",
+        "UnnamedImage",
+    ] {
+        assert!(
+            audit.contains(&format!("AccessibilityIssueKind::{kind}")),
+            "the audit reports {kind}"
+        );
+    }
+    let demo_test = workspace_source("apps/desktop-demo/tests/accessibility_audit.rs");
+    assert!(
+        demo_test.contains("for info in DEMO_TAB_INFO.iter()")
+            && demo_test.contains("audit_accessibility(&placed)"),
+        "every demo tab runs under the audit"
+    );
+    let desktop_loop = crate_source("src/desktop.rs");
+    assert!(
+        desktop_loop.contains("RobotCommand::GetSemantics | RobotCommand::GetSpokenTree")
+            && desktop_loop.contains("crate::accessibility::spoken_tree(app)"),
+        "the robot answers spoken_tree from the app thread"
+    );
+    let android_test = workspace_source(
+        "apps/android-demo/android/app/src/androidTest/java/com/compose_rs/demo/CranposeAccessibilityAuditTest.java",
+    );
+    let android_build = workspace_source("apps/android-demo/android/app/build.gradle.kts");
+    assert!(
+        android_test.contains("AccessibilityCheckPreset.LATEST")
+            && android_build.contains("accessibility-test-framework"),
+        "the Android instrumented tests run the Accessibility Test Framework"
+    );
+}
+
+#[test]
+fn every_platform_reports_the_display_options_and_the_framework_acts_on_them() {
+    let ios = crate_source("src/ios_accessibility.rs");
+    assert!(
+        ios.contains("reduce_motion: UIAccessibilityIsReduceMotionEnabled(),")
+            && ios.contains("font_scale: dynamic_type_scale(&category),")
+            && ios.contains("host_view.setAccessibilityIgnoresInvertColors(true);"),
+        "iOS reads the five switches and Dynamic Type, and inverts its own colors"
+    );
+    let android_java = crate_source("android/java/dev/cranpose/android/CranposeActivity.java");
+    let android_rust = crate_source("src/android_accessibility.rs");
+    assert!(
+        android_java
+            .contains("nativeOnAccessibilityOptions(reduceMotion, increaseContrast, boldText);")
+            && android_rust
+                .contains("accessibility::apply_accessibility_options(shell, system_options());"),
+        "Android reports animations off, high contrast text and bold text"
+    );
+    let web = crate_source("src/web_accessibility_options.rs");
+    for query in [
+        "(prefers-reduced-motion: reduce)",
+        "(prefers-reduced-transparency: reduce)",
+        "(prefers-contrast: more)",
+    ] {
+        assert!(web.contains(query), "the web watches {query}");
+    }
+    let desktop = crate_source("src/desktop_accessibility_options.rs");
+    assert!(
+        desktop.contains("\"defaults\"")
+            && desktop.contains("\"gsettings\"")
+            && desktop.contains("\"reg\"")
+            && desktop.contains("CRANPOSE_REDUCE_MOTION")
+            && crate_source("src/desktop_accessibility.rs")
+                .contains("OptionsProbe::start(!robot_drives)"),
+        "the desktop asks macOS, GNOME and Windows, takes an environment override, and leaves the host alone under a robot"
+    );
+    let animation = workspace_source("crates/cranpose-animation/src/animation.rs");
+    let material = workspace_source("crates/cranpose-liquid/src/material.rs");
+    let theme = workspace_source("crates/cranpose-liquid/src/theme.rs");
+    assert!(
+        animation.contains("platform_accessibility_options().reduce_motion")
+            && material.contains("options.reduce_transparency")
+            && theme.contains("options.increase_contrast")
+            && theme.contains("options.bold_text")
+            && theme.contains("!= options.invert_colors"),
+        "animations, glass and the theme follow the options"
+    );
 }

@@ -124,6 +124,26 @@ impl LiquidColors {
 
 /// The iOS text-style ramp as ready-to-use [`TextStyle`]s (colors come from
 /// [`LiquidColors::label`] by default at the call site).
+impl LiquidColors {
+    /// The palette for a person who asked the system for more contrast: the
+    /// secondary and tertiary labels, the separator, the fills and the glass
+    /// edge move toward the label color, and the off toggle darkens.
+    pub fn with_more_contrast(mut self) -> Self {
+        self.secondary_label = self.secondary_label.with_alpha(0.9);
+        self.tertiary_label = self.tertiary_label.with_alpha(0.7);
+        self.separator = self.separator.with_alpha(0.6);
+        self.fill = self.fill.with_alpha(0.32);
+        self.secondary_fill = self.secondary_fill.with_alpha(0.24);
+        self.glass_stroke = self.glass_stroke.with_alpha(0.9);
+        self.toggle_off = if self.is_dark {
+            Color::from_rgb_u8(142, 142, 147)
+        } else {
+            Color::from_rgb_u8(99, 99, 108)
+        };
+        self
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct LiquidTypography {
     pub large_title: TextStyle,
@@ -148,6 +168,33 @@ fn ramp_style(size_sp: f32, weight: FontWeight) -> TextStyle {
         },
         ..Default::default()
     }
+}
+
+impl LiquidTypography {
+    /// The ramp for a person who asked the system for bold text: every style
+    /// gains two hundred of weight, so body text reads semi bold and titles
+    /// extra bold.
+    pub fn bolder(self) -> Self {
+        Self {
+            large_title: bolder(self.large_title),
+            title1: bolder(self.title1),
+            title2: bolder(self.title2),
+            title3: bolder(self.title3),
+            headline: bolder(self.headline),
+            body: bolder(self.body),
+            callout: bolder(self.callout),
+            subheadline: bolder(self.subheadline),
+            footnote: bolder(self.footnote),
+            caption1: bolder(self.caption1),
+            caption2: bolder(self.caption2),
+        }
+    }
+}
+
+fn bolder(mut style: TextStyle) -> TextStyle {
+    let weight = style.span_style.font_weight.unwrap_or(FontWeight::NORMAL);
+    style.span_style.font_weight = Some(FontWeight((weight.0 + 200).min(900)));
+    style
 }
 
 impl Default for LiquidTypography {
@@ -247,20 +294,31 @@ pub fn liquid_typography() -> LiquidTypography {
 /// `SchemeMode::Auto` follows the OS light/dark appearance live.
 #[composable]
 pub fn LiquidTheme(spec: LiquidThemeSpec, content: impl FnOnce()) {
+    let options = cranpose_services::local_accessibility_options().current();
     let dark = match spec.scheme {
         SchemeMode::Auto => isSystemInDarkTheme(),
         SchemeMode::Light => false,
         SchemeMode::Dark => true,
-    };
+    } != options.invert_colors;
     let colors = if dark {
         LiquidColors::dark(spec.accent)
     } else {
         LiquidColors::light(spec.accent)
     };
+    let colors = if options.increase_contrast {
+        colors.with_more_contrast()
+    } else {
+        colors
+    };
+    let typography = if options.bold_text {
+        spec.typography.clone().bolder()
+    } else {
+        spec.typography.clone()
+    };
     CompositionLocalProvider(
         vec![
             local_liquid_colors().provides(colors),
-            local_liquid_typography().provides(spec.typography.clone()),
+            local_liquid_typography().provides(typography),
             local_liquid_glass_tint_amount().provides(spec.glass_tint_amount),
         ],
         move || {
@@ -305,5 +363,38 @@ mod tests {
             .map(|style| style.span_style.font_size.value())
             .collect();
         assert!(values.windows(2).all(|pair| pair[0] >= pair[1]));
+    }
+}
+
+#[cfg(test)]
+mod option_tests {
+    use super::*;
+
+    #[test]
+    fn more_contrast_lifts_the_quiet_colors_toward_the_label() {
+        let plain = LiquidColors::light(Color::from_rgb_u8(0, 122, 255));
+        let strong = plain.with_more_contrast();
+        assert!(strong.secondary_label.a() > plain.secondary_label.a());
+        assert!(strong.separator.a() > plain.separator.a());
+        assert_eq!(strong.label, plain.label);
+        assert_eq!(strong.accent, plain.accent);
+    }
+
+    #[test]
+    fn bold_text_adds_a_weight_step_and_stops_at_the_top() {
+        let ramp = LiquidTypography::default().bolder();
+        assert_eq!(
+            ramp.body.span_style.font_weight,
+            Some(FontWeight::SEMI_BOLD)
+        );
+        assert_eq!(
+            ramp.headline.span_style.font_weight,
+            Some(FontWeight::EXTRA_BOLD)
+        );
+        assert_eq!(
+            ramp.large_title.span_style.font_weight,
+            Some(FontWeight(900))
+        );
+        assert_eq!(ramp.body.span_style.font_size, TextUnit::Sp(17.0));
     }
 }

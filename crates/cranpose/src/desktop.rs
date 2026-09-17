@@ -117,6 +117,18 @@ fn log_desktop_frame_telemetry(
 }
 
 #[cfg(feature = "robot")]
+/// The tree the robot asked for: the elements with bounds, or the lines a
+/// reader speaks.
+fn robot_tree_response(app: &mut AppShell<WgpuRenderer>, command: &RobotCommand) -> RobotResponse {
+    match command {
+        RobotCommand::GetSpokenTree => {
+            RobotResponse::SpokenTree(crate::accessibility::spoken_tree(app))
+        }
+        _ => RobotResponse::Semantics(extract_semantics(app)),
+    }
+}
+
+#[cfg(feature = "robot")]
 fn pump_robot_frame(
     app: &mut AppShell<WgpuRenderer>,
     registry: &Rc<native_window::NativeWindowRegistry>,
@@ -2665,6 +2677,18 @@ impl App {
     fn set_robot_controller(&mut self, controller: RobotController) {
         self.robot_controller = Some(controller);
     }
+
+    /// Whether a robot drives this run. Such a run reads no display option
+    /// from the host, so a screenshot does not follow the host's text scale.
+    #[cfg(feature = "robot")]
+    fn robot_drives(&self) -> bool {
+        self.robot_controller.is_some()
+    }
+
+    #[cfg(not(feature = "robot"))]
+    fn robot_drives(&self) -> bool {
+        false
+    }
 }
 
 #[cfg(feature = "robot")]
@@ -4392,6 +4416,7 @@ impl ApplicationHandler for App {
         let mut accessibility = crate::desktop_accessibility::DesktopAccessibilityBridge::new(
             window.as_ref(),
             self.event_proxy.clone(),
+            self.robot_drives(),
         );
         accessibility.sync(&mut app);
         if !headless && primary_window_visible {
@@ -5105,12 +5130,11 @@ impl ApplicationHandler for App {
                         robot_visual_dirty |= cursor_dirty || release_dirty;
                         let _ = controller.tx.send(RobotResponse::Ok);
                     }
-                    RobotCommand::GetSemantics => {
+                    command @ (RobotCommand::GetSemantics | RobotCommand::GetSpokenTree) => {
                         let update_result = pump_robot_frame(app, &registry);
                         robot_visual_dirty |=
                             robot_query_visual_dirty(update_result, app.needs_redraw());
-                        let semantics = extract_semantics(app);
-                        let _ = controller.tx.send(RobotResponse::Semantics(semantics));
+                        let _ = controller.tx.send(robot_tree_response(app, &command));
                     }
                     RobotCommand::FindText { text, match_kind } => {
                         let update_result = pump_robot_frame(app, &registry);

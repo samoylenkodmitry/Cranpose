@@ -988,11 +988,10 @@ pub fn LiquidMenuIconButton(
         });
 
     Box(
-        pressed_modifier
-            .then(modifier)
-            .size(Size::new(diameter, diameter)),
+        pressed_modifier.size(Size::new(diameter, diameter)),
         BoxSpec::default().content_alignment(cranpose_ui_layout::Alignment::CENTER),
         move || {
+            let modifier = modifier.clone();
             let visual_alpha = trigger_visual.get().clamp(0.0, 1.0);
             let melt = 1.0 - visual_alpha;
             let visual_spec = spec.clone();
@@ -1010,7 +1009,7 @@ pub fn LiquidMenuIconButton(
                 move || {
                     if visual_alpha > MENU_TRIGGER_GLASS_CUTOFF {
                         crate::widgets::GlassIconButton(
-                            Modifier::empty(),
+                            modifier.clone(),
                             visual_spec.clone(),
                             diameter,
                             || {},
@@ -1302,6 +1301,7 @@ pub fn LiquidMenu(
                     Color::from_rgba_u8(246, 247, 250, 210)
                 });
                 let card = Modifier::empty()
+                    .role(SemanticsWidgetRole::Menu)
                     .report_size(Rc::clone(&node_size))
                     .glass_effect_with(glass, move || {
                         let glow_touch = glow_for_glass.get().map(|(x, y)| {
@@ -1657,7 +1657,7 @@ fn menu_header_row(
 fn menu_row_semantics(label: String, has_checks: bool, checked: bool) -> SemanticsSpec {
     let spec = SemanticsSpec::new()
         .content_description(label)
-        .role(SemanticsWidgetRole::Button)
+        .role(SemanticsWidgetRole::MenuItem)
         .clickable();
     match has_checks {
         true => spec.toggled(checked),
@@ -1698,6 +1698,7 @@ fn menu_item_row(
         .fill_max_width()
         .report_window_rect(rect_sink)
         .semantics_spec(menu_row_semantics(row_label, has_checks, checked))
+        .focusable()
         .pointer_input(index, {
             let on_item = Rc::clone(&on_item);
             let on_dismiss = Rc::clone(&on_dismiss);

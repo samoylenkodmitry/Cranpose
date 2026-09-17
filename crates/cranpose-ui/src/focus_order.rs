@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 
 use cranpose_core::NodeId;
+use cranpose_foundation::SemanticsWidgetRole;
 use cranpose_ui_graphics::Rect;
 
 use crate::layout::{LayoutBox, LayoutTree};
@@ -68,4 +69,51 @@ fn takes_space(rect: Rect) -> bool {
         && rect.y.is_finite()
         && rect.width.is_finite()
         && rect.height.is_finite()
+}
+
+/// The focus targets under one node, in the order layout gave them. An arrow
+/// key inside a selectable group moves among these and no others.
+pub fn collect_focus_order_under(tree: &LayoutTree, node_id: NodeId) -> Vec<FocusEntry> {
+    let mut entries = Vec::new();
+    if let Some(layout_box) = find_box(tree.root(), node_id) {
+        collect_from_box(layout_box, &mut entries);
+    }
+    entries
+}
+
+/// The nearest node above the given one that declares
+/// [`selectable_group`](crate::Modifier::selectable_group), when there is one.
+pub fn selectable_group_of(tree: &LayoutTree, node_id: NodeId) -> Option<NodeId> {
+    group_above(tree.root(), node_id, None)
+}
+
+fn group_above(layout_box: &LayoutBox, node_id: NodeId, group: Option<NodeId>) -> Option<NodeId> {
+    let group = if declares_selectable_group(layout_box) {
+        Some(layout_box.node_id)
+    } else {
+        group
+    };
+    if layout_box.node_id == node_id {
+        return group;
+    }
+    layout_box
+        .children
+        .iter()
+        .find_map(|child| group_above(child, node_id, group))
+}
+
+fn declares_selectable_group(layout_box: &LayoutBox) -> bool {
+    crate::modifier::collect_semantics_from_modifier(&layout_box.node_data.modifier).is_some_and(
+        |config| config.selectable_group || config.role == Some(SemanticsWidgetRole::Menu),
+    )
+}
+
+fn find_box(layout_box: &LayoutBox, node_id: NodeId) -> Option<&LayoutBox> {
+    if layout_box.node_id == node_id {
+        return Some(layout_box);
+    }
+    layout_box
+        .children
+        .iter()
+        .find_map(|child| find_box(child, node_id))
 }

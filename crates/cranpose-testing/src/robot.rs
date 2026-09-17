@@ -252,6 +252,16 @@ where
         self.shell.log_debug_info();
     }
 
+    /// Fails the test with every issue [`crate::audit_accessibility`] finds on
+    /// what the shell shows once it is idle.
+    pub fn assert_accessible(&mut self) {
+        self.shell.set_semantics_enabled(true);
+        self.wait_for_idle();
+        let placed = crate::placed_semantics::placed_semantics_from_shell(&mut self.shell)
+            .expect("the shell has no laid out semantics tree yet");
+        crate::accessibility_audit::assert_accessible(&placed);
+    }
+
     /// Get access to the underlying app shell for advanced scenarios.
     pub fn shell_mut(&mut self) -> &mut AppShell<R> {
         &mut self.shell

@@ -227,7 +227,8 @@ pub fn LiquidSegmentedControl(
                             config.role = Some(SemanticsWidgetRole::Button);
                             config.is_clickable = true;
                             config.content_description = Some(description.clone());
-                        });
+                        })
+                        .focusable();
                     let content = Rc::clone(&segment.content);
                     Box(
                         cell,

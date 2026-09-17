@@ -423,6 +423,8 @@ pub mod desktop;
 #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
 mod desktop_accessibility;
 #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
+mod desktop_accessibility_options;
+#[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
 mod desktop_bundled_assets;
 #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
 mod desktop_cursor;
@@ -578,6 +580,8 @@ mod web_wheel;
 
 #[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]
 mod web_accessibility;
+#[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]
+mod web_accessibility_options;
 
 #[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]
 mod web_clipboard;

@@ -1043,6 +1043,26 @@ fn set_edge_return_depth(shader: &mut RuntimeShader, depth: Option<f32>) {
 }
 
 impl ResolvedGlass {
+    /// The same glass as a flat surface, for a person who asked the system
+    /// for less transparency: the surface color with no blur, no refraction
+    /// and no spectrum, the shape and the shadow as they were.
+    pub(crate) fn without_transparency(mut self, colors: &LiquidColors) -> Self {
+        self.tint = colors.surface;
+        self.tint_amount = None;
+        self.backdrop_blur = None;
+        self.blur_radius_dp = 0.0;
+        self.saturation = 1.0;
+        self.refraction_depth = 0.0;
+        self.refraction_depth_dp = None;
+        self.dispersion = 0.0;
+        self.edge_spectrum = None;
+        self.transmission_refraction = 0.0;
+        self.meniscus_absorption = 0.0;
+        self.rim_reflection = 0.0;
+        self.adaptive_frost = 0.0;
+        self
+    }
+
     fn clips_in_shader(&self) -> bool {
         self.key_fill.and_then(GlassKeyFill::uniforms).is_some()
     }
@@ -1416,7 +1436,12 @@ impl LiquidModifierExt for Modifier {
         dynamics: impl Fn() -> GlassDynamics + 'static,
     ) -> Modifier {
         let colors = crate::theme::liquid_colors();
-        let resolved = glass.resolve(&colors);
+        let options = cranpose_services::local_accessibility_options().current();
+        let resolved = if options.reduce_transparency {
+            glass.resolve(&colors).without_transparency(&colors)
+        } else {
+            glass.resolve(&colors)
+        };
         let shape = resolved.shape;
 
         let mut modifier = self;
@@ -3260,5 +3285,25 @@ mod tests {
             None,
             "cover-mode glass fills its rect"
         );
+    }
+}
+
+#[cfg(test)]
+mod transparency_tests {
+    use super::*;
+
+    #[test]
+    fn less_transparency_makes_glass_a_flat_surface() {
+        let colors = crate::theme::LiquidColors::light(Color::from_rgb_u8(0, 122, 255));
+        let flat = Glass::regular()
+            .resolve(&colors)
+            .without_transparency(&colors);
+        assert_eq!(flat.tint, colors.surface);
+        assert_eq!(flat.blur_radius_dp, 0.0);
+        assert_eq!(flat.refraction_depth, 0.0);
+        assert_eq!(flat.saturation, 1.0);
+        assert!(flat.edge_spectrum.is_none());
+        let clear = Glass::regular().resolve(&colors);
+        assert!(clear.blur_radius_dp > 0.0, "plain glass keeps its blur");
     }
 }

@@ -203,6 +203,7 @@ pub(crate) enum RobotCommand {
     },
     WaitForPresentFrame,
     GetSemantics,
+    GetSpokenTree,
     FindText {
         text: String,
         match_kind: SemanticTextMatchKind,
@@ -252,6 +253,7 @@ pub(crate) enum RobotCommand {
 pub(crate) enum RobotResponse {
     Ok,
     Semantics(Vec<SemanticElement>),
+    SpokenTree(String),
     SemanticQuery(Option<SemanticQueryResult>),
     Screenshot(RobotScreenshot),
     Screenshots(Vec<RobotScreenshot>),
@@ -743,6 +745,19 @@ impl Robot {
             .map_err(|e| format!("Failed to send get_semantics: {}", e))?;
         self.recv_response(|response| match response {
             RobotResponse::Semantics(elements) => Some(elements),
+            _ => None,
+        })
+    }
+
+    /// The screen the way a reader speaks it, one control per line: the
+    /// name, the role, the state, the value and the actions. Turn semantics
+    /// on with [`set_semantics_enabled`](Self::set_semantics_enabled) first.
+    pub fn spoken_tree(&self) -> Result<String, String> {
+        self.tx
+            .send(RobotCommand::GetSpokenTree)
+            .map_err(|e| format!("Failed to send spoken_tree: {e}"))?;
+        self.recv_response(|response| match response {
+            RobotResponse::SpokenTree(tree) => Some(tree),
             _ => None,
         })
     }

@@ -318,6 +318,159 @@ lambda. One shorthand on a chain reads better than a whole spec; four or
 more of them read worse, and each one costs its own chain element, so a
 node with several is the place to reach for the spec.
 
+## 4j. A field a reader moves through
+
+A blind person who types into a field needs more than the text read back as
+one piece: the caret has to move by character, by word and by line, a
+stretch of text has to be picked and cut, and every move has to be heard.
+The field publishes where its caret is and takes a new selection from a
+reader, Compose's `setSelection`. `BasicTextField` declares both on its own,
+so an app gets this with no code.
+
+```rust
+Modifier::empty().semantics(|config| {
+    config.text = Some(text.clone());
+    config.text_selection = Some(selection);
+    config.set_selection = Some(SemanticsSetSelection::new(move |anchor, focus| {
+        state.set_selection(TextRange::new(anchor, focus));
+        true
+    }));
+})
+```
+
+The two ends are byte offsets into the text, the anchor first; equal ends
+are a caret. A field that holds a secret publishes no caret.
+
+| Platform | Reads | Moves |
+| --- | --- | --- |
+| accesskit | the text as text runs, one per line, with the length of each character and where each word starts, and the caret as a text selection on them | `Action::SetTextSelection` from NVDA, Narrator, VoiceOver on macOS or Orca, in characters of a run |
+| iOS | the focused field is the keyboard's own `UITextInput` view, listed among the elements in the field's place with its name, hint and frame, so VoiceOver reads and moves through `UITextInput` | the rotor's characters, words and lines, and a text selection, through `setSelectedTextRange:`; a caret move the app made reaches VoiceOver through the input delegate |
+| Android | `setTextSelection` on the node, a text-changed and a selection-changed event on the focused field, and `setMovementGranularities` for characters, words, lines and paragraphs on every node with text | `ACTION_NEXT_AT_MOVEMENT_GRANULARITY`, `ACTION_PREVIOUS_AT_MOVEMENT_GRANULARITY` and `ACTION_SET_SELECTION`; the host walks the text itself, sends the traversed event TalkBack speaks from, and hands the field the new caret |
+| Web | the mirror node is an `<input>` or a `<textarea>` with the text as its value and the caret as its selection | the arrow keys and a reader's own text commands change the input's selection, and a `selectionchange` hands the app the new ends |
+
+On the web a keystroke or a caret move patches the focused input in place. A
+rebuild of the mirror would drop the browser's focus and make a reader hear
+the whole field again instead of one character.
+
+## 4k. Roles a reader names
+
+A reader says what a control is after its name: "Save, button". Ten roles
+covered the first apps, so a link read as a button, a search field as a
+plain field, a spinner as text, and a menu, a toolbar, a tab row or a list
+as nothing at all. `SemanticsWidgetRole` now also has Link, SearchField,
+ProgressBar, ToggleButton, Alert, Toolbar, Menu, MenuItem, TabBar, List and
+ListItem, set through `Modifier::role(..)` or the spec. The built-in widgets
+declare their own: the progress indicators say progress bar, `LiquidTabBar`
+says tab bar, `LiquidMenu` says menu and its rows say menu item, the liquid
+search field says search field, and `LazyColumn` and `LazyRow` say list.
+
+A toolbar, a menu, a tab bar and a list are containers: a reader walks into
+them, and their rows sit under them on Android and in the accesskit tree,
+the way the rows of a scroll container already do. An alert is a live
+region on its own: a reader speaks it as soon as it shows.
+
+| Role | accesskit | iOS | Android | Web |
+| --- | --- | --- | --- | --- |
+| Link | `Link` | the link trait | "link" as the role description | `link` |
+| SearchField | `SearchInput`, with the text runs of a field | the search field trait, edited like a field | `EditText` and "search field" | `<input type="search">` |
+| ProgressBar | `ProgressIndicator` | the updates-frequently trait | `ProgressBar` | `progressbar` |
+| ToggleButton | `Button` with the toggled state | the button trait with the state | `ToggleButton`, checkable | `button` with `aria-pressed` |
+| Alert | `Alert` | spoken when it shows | "alert", spoken when it shows | `alert` |
+| Toolbar | `Toolbar` | a container | `Toolbar` | `toolbar` |
+| Menu, MenuItem | `Menu`, `MenuItem` | a container, button rows | "menu", "menu item" | `menu`, `menuitem` |
+| TabBar | `TabList` | a container | "tab bar" | `tablist` |
+| List, ListItem | `List`, `ListItem` | a container, text rows | `ListView`, "list item" | `list`, `listitem` |
+
+## 4l. What VoiceOver and Voice Control users expect, and whether a reader is on
+
+Four things an app on iOS is expected to have, three of which reach the
+other platforms as far as they go.
+
+**The magic tap.** A VoiceOver user makes a two finger double tap for the
+main action of a screen: take the photo, play or pause, answer the call.
+`Modifier::on_magic_tap("Take the photo", || …)` says what that action is;
+SwiftUI's `accessibilityAction(.magicTap)`. VoiceOver runs it on the control
+under its cursor, and with the cursor on any other control it runs the first
+one the screen declares, so the tap works from anywhere on the screen. The
+other platforms have no such gesture, so they list the action by its label
+after the control's other actions, the road the long press takes.
+
+**Voice Control names.** Voice Control shows a short name beside each control
+and the user says it. It shows the name a reader hears, which for a control
+named "Import receipts from the camera roll" is a mouthful.
+`Modifier::input_labels(["Import", "Import receipts"])` gives it short names
+to show and take instead; SwiftUI's `accessibilityInputLabels`. iOS only:
+Voice Access on Android and the desktop tools take the name a reader hears.
+
+**A language per control.** A reader speaks with one voice unless the text
+says which language it is in. `Modifier::language("de")` on a control, a BCP
+47 tag, makes VoiceOver, accesskit and the browser pick the voice for it;
+SwiftUI's `accessibilityLanguage`, ARIA's `lang`. TalkBack has no such
+setting on a node.
+
+**Whether a reader is on.** An app that takes a photo on its own after a
+short hold, or that hides its only controls behind a swipe, needs to know
+when a screen reader is on and act otherwise: speak what the camera sees,
+wait for a tap. `cranpose_services::local_accessibility_state()` carries
+`AccessibilityState::screen_reader_on`, and a composable that reads it is
+composed again when it changes.
+
+| Platform | Says a reader is on when |
+| --- | --- |
+| iOS | `UIAccessibilityIsVoiceOverRunning()` answers yes, checked on every frame the bridge publishes |
+| Android | an accessibility service is enabled, the same signal that turns the node provider on |
+| accesskit | a reader asked for the tree, until it lets go |
+| Web | never: a browser gives a page no such signal |
+
+`ProvideAccessibilityState(state, content)` fixes the state for a preview or a
+test, the way `ProvideSystemTheme` fixes the theme.
+
+## 4m. A keyboard and a switch reach every control
+
+Three kinds of people work without a pointer: a blind person with a hardware
+keyboard on a Mac, a PC or an iPad; a switch access user whose one or two
+switches press Tab and Enter; a person with a tremor who cannot hold a
+pointer still on a small target. For all of them a control that only a tap
+reaches does not exist.
+
+**Every clickable control takes focus.** `Modifier::clickable`,
+`toggleable`, `selectable` and every widget built on them, the `Button`, the
+liquid tabs, segments, menu rows, icon groups and the toggle, register a
+focus target. Tab and Shift+Tab walk them in layout order. Nothing to
+declare in an app.
+
+**Enter and Space press the focused control.** The shell sends a press and
+a release at the control's centre, so the same handler runs as for a tap,
+and a widget with its own gesture code needs no second path. While a text
+field holds focus the two keys go to the field.
+
+**Arrow keys inside a group.** Under `Modifier::selectable_group()`, a tab
+bar, a radio group, a segmented control, and inside a menu, the arrow keys
+move focus to the nearest control in that direction and never leave the
+group. Outside a group the arrows stay with the content, so a list still
+scrolls.
+
+**A ring shows where focus is.** `Modifier::focusable()` is a focus target
+that draws a ring, a 2 point blue line with a 1 point white line inside it,
+while the keyboard made the last focus move. The next pointer press anywhere
+takes the ring away, the way `:focus-visible` works in a browser. A widget
+that draws its own focus look keeps `Modifier::focus_target()`.
+
+**A target a finger hits.** `Modifier::minimum_interactive_component_size()`
+keeps at least 48 by 48 points for the press, as far as the parent allows,
+and puts the drawn content in the middle. The drawn size does not change: a
+20 point checkbox still looks 20 points wide and takes a press 14 points to
+each side of it. Compose's `minimumInteractiveComponentSize`, Material's
+48 dp and above Apple's 44 pt. `IconButton` already keeps 48 points on its
+own.
+
+| Key | What happens |
+| --- | --- |
+| Tab, Shift+Tab | focus moves to the next or the previous control |
+| Enter, Space | the focused control is pressed |
+| Left, Right, Up, Down | inside a selectable group or a menu, focus moves to the nearest control that way |
+| Escape | the dialog, sheet, menu or popup on top closes |
+
 ## 4i. An icon says what it is, or says it is decoration
 
 A picture with no words under it is the one thing a screen reader cannot
@@ -492,6 +645,35 @@ carries the pane title of its node, on the web it is a region landmark with
 the title as its name, and accesskit sees a labeled region. The first
 publish stays quiet, so the first screen is not read twice.
 
+## 9. The system's display options
+
+A person sets these once, in the system's accessibility settings, and expects
+every app to follow: larger text, less motion, less transparency, more
+contrast, bold text, inverted colors. Cranpose reads them on every platform
+and acts on them in the framework, so an app follows them with no code of
+its own. `cranpose_services::AccessibilityOptions` holds them;
+`local_accessibility_options().current()` reads them in a composable for
+what an app draws itself, and `ProvideAccessibilityOptions` fixes them for a
+preview or a test.
+
+| Option | What the framework does | iOS | Android | Web | Desktop |
+| --- | --- | --- | --- | --- | --- |
+| `font_scale` | every `Sp` text size grows by it, through the shell's font scale | Dynamic Type, each step as its body size over 17 points | the font size setting, through Android's own curve | the root font size over 16 pixels, as page text does | GNOME's text scaling factor, Windows' text size, `CRANPOSE_FONT_SCALE` |
+| `reduce_motion` | every animation ends on its first frame: the value is the target at once | Reduce Motion | Remove animations, the animator scale at zero | `prefers-reduced-motion` | macOS Reduce Motion, GNOME's animations switch, Windows' animation switch, `CRANPOSE_REDUCE_MOTION` |
+| `reduce_transparency` | glass draws as the surface color with no blur, no refraction and no spectrum; the shape and the shadow stay | Reduce Transparency | no such setting | `prefers-reduced-transparency` | macOS Reduce Transparency, Windows' transparency switch, `CRANPOSE_REDUCE_TRANSPARENCY` |
+| `increase_contrast` | secondary and tertiary labels, separators, fills and the glass edge move toward the label color | Increase Contrast | High contrast text | `prefers-contrast: more` | macOS Increase Contrast, a GNOME high contrast theme, Windows high contrast, `CRANPOSE_INCREASE_CONTRAST` |
+| `bold_text` | every liquid text style gains two hundred of weight | Bold Text | Bold text, a font weight adjustment of 300 | no such setting | `CRANPOSE_BOLD_TEXT` |
+| `invert_colors` | the theme swaps to its other palette and pictures stay as they are | Smart Invert: the window opts out of the system's inversion and inverts its own colors | no: the system inverts the whole screen itself | no | no |
+
+The desktop reads its settings tools once, on a thread at start, and applies
+the answer on the next frame; a change while the app runs takes a restart. A
+run a robot drives reads only the environment variables, so a screenshot test
+does not follow the host's text scale.
+iOS, Android and the web follow a change at once. The demo's robot and a test
+set an option through the environment or `ProvideAccessibilityOptions`; the
+static test `every_platform_reports_the_display_options_and_the_framework_acts_on_them`
+keeps the four platforms and the three framework hooks in step.
+
 ## What the built-in widgets say on their own
 
 An app gets this with no code of its own:
@@ -503,9 +685,10 @@ An app gets this with no code of its own:
 | `toggleable`, a switch or checkbox | the label, its state | flip it |
 | `selectable`, a tab or a radio row | the label, its role, whether it is picked | pick it |
 | `LiquidTabBar` | the tab, whether it is picked, and which of how many | pick it |
-| `BasicTextField` | the name the app gave it, or the text it holds; an empty field is still a stop | type into it, or hand it whole text |
+| `LiquidToggle`, `LiquidSegmented`, `LiquidMenu` rows, the liquid icon group | the switch and its state, the segment, the row | flip or pick it, from a reader, Tab and Enter alike |
+| `BasicTextField` | the name the app gave it, or the text it holds; an empty field is still a stop | type into it, hand it whole text, move the caret by character, word and line, and pick a stretch of text |
 | `Slider` | the value | move it |
-| `CircularProgressIndicator`, `LinearProgressIndicator` | "Loading" | |
+| `CircularProgressIndicator`, `LinearProgressIndicator` | "Loading", progress bar | |
 | `SwipeToDismiss` | the row's content | send the row away with the reader's own dismiss, or run "Dismiss" from the actions menu |
 | `verticalScroll`, `horizontalScroll`, `LazyColumn`, `LazyRow` | the rows inside, and on Android how many rows there are | page on and back |
 | `LinkedText` | the whole text | open each link from the actions menu, as "Open <link text>" |
@@ -562,6 +745,45 @@ reads correctly on one platform reads correctly on all four. The static test
 `every_platform_bridge_reads_announcements_out` and its focus counterpart in
 `crates/cranpose/tests/platform_scheduling_static.rs` keep the four bridges in
 step.
+
+## Check a screen without a hand
+
+Four checks run in a test, so a screen that a reader user cannot use fails
+the build and not the person.
+
+**`assert_accessible`.** `cranpose_testing::assert_accessible(&placed)` walks
+a placed semantics tree and fails the test with every issue and what fixes
+it. `ComposeTestRule::assert_accessible(size)` runs it on composed content,
+`RobotTestRule::assert_accessible()` on what a headless shell shows, and
+`audit_accessibility` returns the list for a test that wants to look at it.
+The issues:
+
+| Issue | What a reader user hits | The fix |
+| --- | --- | --- |
+| `NoName` | a control that says nothing | `content_description`, or a `Text` inside it |
+| `SameName` | two controls of one role with one name, "Delete" and "Delete" | say what each acts on |
+| `SmallTarget` | a control under 24 by 24 points, WCAG 2.5.8 | `Modifier::minimum_interactive_component_size()` |
+| `OutOfOrder` | a control laid out fully above the one read before it | reading order, or `traversal_index` |
+| `NoPaneTitle` | a screen that says nothing on arrival | `pane_title` on the root |
+| `UnnamedImage` | a picture a reader stops on with no words | a description, or `None` so it is skipped |
+
+**The demo screens.** `apps/desktop-demo/tests/accessibility_audit.rs` puts
+all 27 tabs of the desktop demo under `audit_accessibility`. The tabs that
+were caught the first time are named there beside the reason each is left
+as it is, and the list only shrinks: a new issue on any tab fails the test,
+and so does a listed issue that went away without the list saying so.
+
+**Android's own checks.** `CranposeAccessibilityAuditTest` in the Android
+demo runs Google's Accessibility Test Framework, the checks behind the
+Accessibility Scanner app, over the node tree the activity publishes: a name
+on every control, no two controls with one name, a 48 dp touch target and
+text contrast. It runs with the other instrumented tests on a device or an
+emulator.
+
+**The tree a reader speaks.** `robot.spoken_tree()` returns the screen the
+way VoiceOver reads it, one control per line: the name, the role, the state,
+the value, the actions. A robot test compares the lines; a person prints them
+to look at a screen from a terminal. `docs/ROBOT_TESTING.md` has the shape.
 
 ## Check the web mirror without a hand
 

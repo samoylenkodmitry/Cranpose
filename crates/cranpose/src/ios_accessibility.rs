@@ -19,12 +19,24 @@ use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use objc2_foundation::{NSArray, NSObject, NSObjectProtocol, NSString};
 use objc2_ui_kit::{
     NSObjectUIAccessibility, NSObjectUIAccessibilityAction, NSObjectUIAccessibilityContainer,
-    UIAccessibilityAnnouncementNotification, UIAccessibilityCustomAction, UIAccessibilityElement,
-    UIAccessibilityIdentification, UIAccessibilityLayoutChangedNotification,
-    UIAccessibilityPostNotification, UIAccessibilityScreenChangedNotification,
-    UIAccessibilityTraitAdjustable, UIAccessibilityTraitButton, UIAccessibilityTraitHeader,
-    UIAccessibilityTraitImage, UIAccessibilityTraitNone, UIAccessibilityTraitNotEnabled,
-    UIAccessibilityTraitSelected, UIAccessibilityTraitStaticText, UIView,
+    UIAccessibilityAnnouncementNotification, UIAccessibilityCustomAction,
+    UIAccessibilityDarkerSystemColorsEnabled, UIAccessibilityElement,
+    UIAccessibilityIdentification, UIAccessibilityIsBoldTextEnabled,
+    UIAccessibilityIsInvertColorsEnabled, UIAccessibilityIsReduceMotionEnabled,
+    UIAccessibilityIsReduceTransparencyEnabled, UIAccessibilityIsVoiceOverRunning,
+    UIAccessibilityLayoutChangedNotification, UIAccessibilityPostNotification,
+    UIAccessibilityScreenChangedNotification, UIAccessibilityTraitAdjustable,
+    UIAccessibilityTraitButton, UIAccessibilityTraitHeader, UIAccessibilityTraitImage,
+    UIAccessibilityTraitLink, UIAccessibilityTraitNone, UIAccessibilityTraitNotEnabled,
+    UIAccessibilityTraitSearchField, UIAccessibilityTraitSelected, UIAccessibilityTraitStaticText,
+    UIAccessibilityTraitUpdatesFrequently, UIAccessibilityTraits, UIApplication,
+    UIContentSizeCategory, UIContentSizeCategoryAccessibilityExtraExtraExtraLarge,
+    UIContentSizeCategoryAccessibilityExtraExtraLarge,
+    UIContentSizeCategoryAccessibilityExtraLarge, UIContentSizeCategoryAccessibilityLarge,
+    UIContentSizeCategoryAccessibilityMedium, UIContentSizeCategoryExtraExtraExtraLarge,
+    UIContentSizeCategoryExtraExtraLarge, UIContentSizeCategoryExtraLarge,
+    UIContentSizeCategoryExtraSmall, UIContentSizeCategoryLarge, UIContentSizeCategoryMedium,
+    UIContentSizeCategorySmall, UIView,
 };
 use winit::event_loop::EventLoopProxy;
 
@@ -52,12 +64,18 @@ struct ReaderRequests {
     /// Rows a VoiceOver user asked a list for: the element under the cursor,
     /// and whether the last row was asked for rather than the first.
     jumps: Rc<RefCell<Vec<(i32, bool)>>>,
+    /// Elements a VoiceOver user made the magic tap on.
+    magic_taps: Rc<RefCell<Vec<i32>>>,
+    /// The first element of the screen that declares a magic tap, which the
+    /// gesture reaches from a cursor on any other element.
+    screen_action: Rc<Cell<Option<i32>>>,
 }
 
 struct AccessibilityElementIvars {
     element_id: i32,
     actionable: Cell<bool>,
     dismissable: Cell<bool>,
+    magic_tap: Cell<bool>,
     custom_action_labels: RefCell<Vec<String>>,
     requests: ReaderRequests,
     wake_proxy: EventLoopProxy,
@@ -174,6 +192,21 @@ define_class!(
             Bool::YES
         }
 
+        #[unsafe(method(accessibilityPerformMagicTap))]
+        fn accessibility_perform_magic_tap(&self) -> Bool {
+            let own = self
+                .ivars()
+                .magic_tap
+                .get()
+                .then_some(self.ivars().element_id);
+            let Some(target) = own.or(self.ivars().requests.screen_action.get()) else {
+                return Bool::NO;
+            };
+            self.ivars().requests.magic_taps.borrow_mut().push(target);
+            self.ivars().wake_proxy.wake_up();
+            Bool::YES
+        }
+
         #[unsafe(method(accessibilityElementDidBecomeFocused))]
         fn accessibility_element_did_become_focused(&self) {
             self.ivars()
@@ -197,6 +230,7 @@ impl NativeAccessibilityElement {
             element_id,
             actionable: Cell::new(false),
             dismissable: Cell::new(false),
+            magic_tap: Cell::new(false),
             custom_action_labels: RefCell::new(Vec::new()),
             requests,
             wake_proxy,
@@ -212,6 +246,10 @@ impl NativeAccessibilityElement {
 
     fn set_dismissable(&self, dismissable: bool) {
         self.ivars().dismissable.set(dismissable);
+    }
+
+    fn set_magic_tap(&self, magic_tap: bool) {
+        self.ivars().magic_tap.set(magic_tap);
     }
 
     fn set_custom_action_labels(&self, labels: &[String]) {
@@ -241,12 +279,17 @@ pub(crate) struct IosAccessibilityBridge {
     published_once: bool,
     focused_element: Option<i32>,
     reader_cursor: Option<i32>,
+    /// The text field that holds app focus, by virtual id, and the keyboard's
+    /// text input view that stands in for it among the elements, so VoiceOver
+    /// walks and edits the text through `UITextInput`.
+    reader_view: Option<(i32, Retained<AnyObject>)>,
 }
 
 impl IosAccessibilityBridge {
     pub(crate) fn new(event_proxy: EventLoopProxy) -> Option<Self> {
         let mtm = MainThreadMarker::new()?;
         let host_view = root_view_controller(mtm)?.view()?;
+        host_view.setAccessibilityIgnoresInvertColors(true);
         let host_object: &NSObject = host_view.as_ref();
         host_object.setIsAccessibilityElement(false, mtm);
 
@@ -260,6 +303,7 @@ impl IosAccessibilityBridge {
             published_once: false,
             focused_element: None,
             reader_cursor: None,
+            reader_view: None,
         })
     }
 
@@ -268,14 +312,31 @@ impl IosAccessibilityBridge {
         R: Renderer,
         R::Error: Debug,
     {
+        let reader_on = cranpose_services::AccessibilityState {
+            screen_reader_on: UIAccessibilityIsVoiceOverRunning(),
+        };
+        if cranpose_services::set_platform_accessibility_state(reader_on) {
+            shell.request_root_render();
+        }
+        let mtm = MainThreadMarker::new().expect("accessibility sync runs on UIKit's main thread");
+        let options = system_options(mtm);
+        if accessibility::apply_accessibility_options(shell, options) {
+            shell.set_font_scale(options.font_scale);
+        }
         let next = accessibility::snapshot(shell);
         self.speak(&next);
         if next == self.snapshot {
             return;
         }
+        let next_ids = accessibility::element_ids(&next);
+        self.requests.screen_action.set(
+            next.iter()
+                .zip(&next_ids)
+                .find(|(element, _)| element.magic_tap_label.is_some())
+                .map(|(_, id)| *id),
+        );
 
         let structure_changed = !same_structure(&self.snapshot, &next);
-        let next_ids = accessibility::element_ids(&next);
         let current_ids: HashSet<i32> = next_ids.iter().copied().collect();
         self.native_elements
             .retain(|element_id, _| current_ids.contains(element_id));
@@ -293,6 +354,23 @@ impl IosAccessibilityBridge {
             let jumpable = accessibility::scroll_container_for(&next, element)
                 .is_some_and(|container| accessibility::row_count(container) > 0);
             update_native_element(native, element, jumpable, mtm);
+        }
+        self.reader_view = reader_field(&next, &next_ids).and_then(|(id, element)| {
+            let frame = CGRect::new(
+                CGPoint::new(element.bounds.x as f64, element.bounds.y as f64),
+                CGSize::new(element.bounds.width as f64, element.bounds.height as f64),
+            );
+            crate::ios_keyboard::describe_for_reader(
+                &element.label,
+                element.click_label.as_deref(),
+                frame,
+                &self.host_view,
+                &format!("cranpose-node-{id}"),
+            )
+            .map(|view| (id, view))
+        });
+        if self.reader_view.is_none() {
+            crate::ios_keyboard::hide_from_reader();
         }
 
         if structure_changed {
@@ -371,10 +449,18 @@ impl IosAccessibilityBridge {
     /// Posts a layout change that names one element, which moves the
     /// VoiceOver cursor onto it and reads it out.
     fn name_to_reader(&self, element_id: i32) -> bool {
-        let Some(native) = self.native_elements.get(&element_id) else {
+        let reader_view = self
+            .reader_view
+            .as_ref()
+            .filter(|(reader_id, _)| *reader_id == element_id)
+            .map(|(_, view)| &**view);
+        let Some(argument) = reader_view.or_else(|| {
+            self.native_elements
+                .get(&element_id)
+                .map(|native| -> &AnyObject { native.as_ref() })
+        }) else {
             return false;
         };
-        let argument: &AnyObject = native.as_ref();
         // SAFETY: the notification takes the element to move the cursor to,
         // and `native` is a retained accessibility element of this container.
         unsafe {
@@ -545,6 +631,27 @@ impl IosAccessibilityBridge {
         ran
     }
 
+    /// Runs the magic tap a VoiceOver user made, on the control under the
+    /// cursor or on the screen's own, against the live tree. Answers whether
+    /// a control took it.
+    pub(crate) fn drain_magic_taps<R>(&mut self, shell: &mut AppShell<R>) -> bool
+    where
+        R: Renderer,
+        R::Error: Debug,
+    {
+        let pending = self.requests.magic_taps.take();
+        let mut ran = false;
+        for element_id in pending {
+            let Some(node_id) = self.element_for(element_id).map(|element| element.node_id) else {
+                continue;
+            };
+            ran |= accessibility::run_reader_action(shell, |root| {
+                accessibility::magic_tap(root, node_id)
+            });
+        }
+        ran
+    }
+
     /// Sends away the control a VoiceOver user scrubbed on with two fingers,
     /// on the live tree. Answers whether a control took it.
     pub(crate) fn drain_dismissals<R>(&mut self, shell: &mut AppShell<R>) -> bool
@@ -609,8 +716,16 @@ impl IosAccessibilityBridge {
     ) {
         let ordered: Vec<Retained<AnyObject>> = next_ids
             .iter()
-            .filter_map(|element_id| self.native_elements.get(element_id))
-            .map(|element| element.retain().into())
+            .filter_map(|element_id| {
+                if let Some((reader_id, view)) = &self.reader_view
+                    && reader_id == element_id
+                {
+                    return Some(view.clone());
+                }
+                self.native_elements
+                    .get(element_id)
+                    .map(|element| element.retain().into())
+            })
             .collect();
         let array = NSArray::from_retained_slice(&ordered);
         let host_object: &NSObject = self.host_view.as_ref();
@@ -645,11 +760,30 @@ fn update_native_element(
     jumpable: bool,
     mtm: MainThreadMarker,
 ) {
-    native.set_actionable(element.clickable || element.role == AccessibilityRole::TextField);
+    native.set_actionable(element.clickable || element.role.is_text_field());
     native.set_dismissable(element.dismissable);
-    native.setIsAccessibilityElement(
-        !element.label.is_empty() || element.role == AccessibilityRole::TextField,
+    native.set_magic_tap(element.magic_tap_label.is_some());
+    native.setAccessibilityLanguage(
+        element
+            .language
+            .as_deref()
+            .map(NSString::from_str)
+            .as_deref(),
+        mtm,
     );
+    let input_labels: Vec<Retained<NSString>> = element
+        .input_labels
+        .iter()
+        .map(|label| NSString::from_str(label))
+        .collect();
+    let input_labels =
+        (!input_labels.is_empty()).then(|| NSArray::from_retained_slice(&input_labels));
+    // SAFETY: the array holds retained strings and lives until the call
+    // returns; UIKit copies what it keeps.
+    unsafe {
+        native.setAccessibilityUserInputLabels(input_labels.as_deref(), mtm);
+    }
+    native.setIsAccessibilityElement(!element.label.is_empty() || element.role.is_text_field());
     native.setAccessibilityLabel(Some(&NSString::from_str(&element.label)));
     let place = element
         .collection_item
@@ -673,25 +807,9 @@ fn update_native_element(
         CGPoint::new(element.bounds.x as f64, element.bounds.y as f64),
         CGSize::new(element.bounds.width as f64, element.bounds.height as f64),
     ));
+    let mut traits = role_traits(element.role);
     // SAFETY: UIKit accessibility trait constants are immutable process-wide
     // values exported by the linked framework.
-    let mut traits = unsafe {
-        match element.role {
-            AccessibilityRole::Button
-            | AccessibilityRole::Checkbox
-            | AccessibilityRole::Switch
-            | AccessibilityRole::RadioButton => UIAccessibilityTraitButton,
-            AccessibilityRole::StaticText => UIAccessibilityTraitStaticText,
-            AccessibilityRole::TextField => UIAccessibilityTraitNone,
-            AccessibilityRole::Tab => UIAccessibilityTraitButton,
-            AccessibilityRole::Image => UIAccessibilityTraitImage,
-            AccessibilityRole::DropdownList => UIAccessibilityTraitButton,
-            AccessibilityRole::ValuePicker => UIAccessibilityTraitAdjustable,
-            AccessibilityRole::Header => UIAccessibilityTraitHeader,
-            AccessibilityRole::Dialog => UIAccessibilityTraitHeader,
-        }
-    };
-    // SAFETY: as above — immutable framework constants.
     unsafe {
         if element.selected == Some(true) {
             traits |= UIAccessibilityTraitSelected;
@@ -706,6 +824,74 @@ fn update_native_element(
     native.setAccessibilityTraits(traits);
     native.setAccessibilityViewIsModal(element.role == AccessibilityRole::Dialog, mtm);
     offer_custom_actions(native, element, jumpable, mtm);
+}
+
+/// The VoiceOver trait that says what a control is.
+fn role_traits(role: AccessibilityRole) -> UIAccessibilityTraits {
+    // SAFETY: UIKit accessibility trait constants are immutable process-wide
+    // values exported by the linked framework.
+    unsafe {
+        match role {
+            AccessibilityRole::Button
+            | AccessibilityRole::Checkbox
+            | AccessibilityRole::Switch
+            | AccessibilityRole::RadioButton
+            | AccessibilityRole::Tab
+            | AccessibilityRole::DropdownList => UIAccessibilityTraitButton,
+            AccessibilityRole::StaticText => UIAccessibilityTraitStaticText,
+            AccessibilityRole::TextField => UIAccessibilityTraitNone,
+            AccessibilityRole::Image => UIAccessibilityTraitImage,
+            AccessibilityRole::ValuePicker => UIAccessibilityTraitAdjustable,
+            AccessibilityRole::Header | AccessibilityRole::Dialog => UIAccessibilityTraitHeader,
+            AccessibilityRole::Link
+            | AccessibilityRole::SearchField
+            | AccessibilityRole::ProgressBar
+            | AccessibilityRole::ToggleButton
+            | AccessibilityRole::Alert
+            | AccessibilityRole::Toolbar
+            | AccessibilityRole::Menu
+            | AccessibilityRole::MenuItem
+            | AccessibilityRole::TabBar
+            | AccessibilityRole::List
+            | AccessibilityRole::ListItem => named_role_traits(role),
+        }
+    }
+}
+
+/// The VoiceOver traits of the roles beyond Compose's own. A toolbar, a
+/// menu, a tab bar and a list carry no label, so they are never elements.
+fn named_role_traits(role: AccessibilityRole) -> UIAccessibilityTraits {
+    // SAFETY: UIKit accessibility trait constants are immutable process-wide
+    // values exported by the linked framework.
+    unsafe {
+        match role {
+            AccessibilityRole::Link => UIAccessibilityTraitLink,
+            AccessibilityRole::SearchField => UIAccessibilityTraitSearchField,
+            AccessibilityRole::ProgressBar => UIAccessibilityTraitUpdatesFrequently,
+            AccessibilityRole::ToggleButton | AccessibilityRole::MenuItem => {
+                UIAccessibilityTraitButton
+            }
+            AccessibilityRole::Alert | AccessibilityRole::ListItem => {
+                UIAccessibilityTraitStaticText
+            }
+            AccessibilityRole::Toolbar
+            | AccessibilityRole::Menu
+            | AccessibilityRole::TabBar
+            | AccessibilityRole::List => UIAccessibilityTraitNone,
+            AccessibilityRole::Button
+            | AccessibilityRole::StaticText
+            | AccessibilityRole::TextField
+            | AccessibilityRole::Checkbox
+            | AccessibilityRole::Switch
+            | AccessibilityRole::RadioButton
+            | AccessibilityRole::Tab
+            | AccessibilityRole::Image
+            | AccessibilityRole::DropdownList
+            | AccessibilityRole::ValuePicker
+            | AccessibilityRole::Header
+            | AccessibilityRole::Dialog => role_traits(role),
+        }
+    }
 }
 
 /// Lists the actions the element offers in VoiceOver's actions rotor, each
@@ -782,6 +968,22 @@ fn opened_dialog(
         .map(|(_, id)| *id)
 }
 
+/// The text field that holds app focus and publishes its caret, with its
+/// virtual id: the one VoiceOver edits through the keyboard's text input
+/// view rather than through a plain element.
+fn reader_field<'a>(
+    elements: &'a [AccessibilityElement],
+    ids: &[i32],
+) -> Option<(i32, &'a AccessibilityElement)> {
+    elements
+        .iter()
+        .zip(ids)
+        .find(|(element, _)| {
+            element.role.is_text_field() && element.focused && element.text_selection.is_some()
+        })
+        .map(|(element, id)| (*id, element))
+}
+
 fn same_structure(current: &[AccessibilityElement], next: &[AccessibilityElement]) -> bool {
     current.len() == next.len()
         && current.iter().zip(next).all(|(current, next)| {
@@ -791,6 +993,7 @@ fn same_structure(current: &[AccessibilityElement], next: &[AccessibilityElement
                 && current.role == next.role
                 && current.clickable == next.clickable
                 && current.canvas_key == next.canvas_key
+                && (!current.role.is_text_field() || current.focused == next.focused)
         })
 }
 
@@ -814,4 +1017,46 @@ mod tests {
     fn moving_an_element_does_not_rebuild_accessibility_focus_order() {
         assert!(same_structure(&[element(0.0)], &[element(24.0)]));
     }
+}
+
+/// What the person set under Settings, Accessibility and Display: the
+/// Dynamic Type size as a multiplier of the default body size, and the five
+/// switches the framework acts on.
+fn system_options(mtm: MainThreadMarker) -> cranpose_services::AccessibilityOptions {
+    let category = UIApplication::sharedApplication(mtm).preferredContentSizeCategory();
+    cranpose_services::AccessibilityOptions {
+        font_scale: dynamic_type_scale(&category),
+        reduce_motion: UIAccessibilityIsReduceMotionEnabled(),
+        reduce_transparency: UIAccessibilityIsReduceTransparencyEnabled(),
+        increase_contrast: UIAccessibilityDarkerSystemColorsEnabled(),
+        bold_text: UIAccessibilityIsBoldTextEnabled(),
+        invert_colors: UIAccessibilityIsInvertColorsEnabled(),
+    }
+}
+
+/// The body size of each Dynamic Type step over the 17 points of the
+/// default step, from Apple's Human Interface Guidelines table.
+fn dynamic_type_scale(category: &UIContentSizeCategory) -> f32 {
+    // SAFETY: the names are UIKit's constant strings, valid for the whole
+    // life of the process.
+    let steps: [(&UIContentSizeCategory, f32); 12] = unsafe {
+        [
+            (UIContentSizeCategoryExtraSmall, 14.0),
+            (UIContentSizeCategorySmall, 15.0),
+            (UIContentSizeCategoryMedium, 16.0),
+            (UIContentSizeCategoryLarge, 17.0),
+            (UIContentSizeCategoryExtraLarge, 19.0),
+            (UIContentSizeCategoryExtraExtraLarge, 21.0),
+            (UIContentSizeCategoryExtraExtraExtraLarge, 23.0),
+            (UIContentSizeCategoryAccessibilityMedium, 28.0),
+            (UIContentSizeCategoryAccessibilityLarge, 33.0),
+            (UIContentSizeCategoryAccessibilityExtraLarge, 40.0),
+            (UIContentSizeCategoryAccessibilityExtraExtraLarge, 47.0),
+            (UIContentSizeCategoryAccessibilityExtraExtraExtraLarge, 53.0),
+        ]
+    };
+    steps
+        .iter()
+        .find(|(name, _)| category.isEqualToString(name))
+        .map_or(1.0, |(_, body_points)| body_points / 17.0)
 }

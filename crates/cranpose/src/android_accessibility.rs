@@ -2,7 +2,7 @@
 
 use std::sync::{
     Mutex, OnceLock,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU8, Ordering},
 };
 
 use cranpose_app_shell::AppShell;
@@ -25,6 +25,7 @@ static CUSTOM_ACTIONS: OnceLock<Mutex<Vec<(i32, usize)>>> = OnceLock::new();
 static FOCUS_REQUESTS: OnceLock<Mutex<Vec<i32>>> = OnceLock::new();
 static VALUE_REQUESTS: OnceLock<Mutex<Vec<(i32, f32)>>> = OnceLock::new();
 static TEXT_REQUESTS: OnceLock<Mutex<Vec<(i32, String)>>> = OnceLock::new();
+static SELECTION_REQUESTS: OnceLock<Mutex<Vec<(i32, usize, usize)>>> = OnceLock::new();
 static SCROLL_REQUESTS: OnceLock<Mutex<Vec<(i32, bool)>>> = OnceLock::new();
 static EXPAND_REQUESTS: OnceLock<Mutex<Vec<(i32, bool)>>> = OnceLock::new();
 static LONG_CLICK_REQUESTS: OnceLock<Mutex<Vec<i32>>> = OnceLock::new();
@@ -32,6 +33,23 @@ static DISMISS_REQUESTS: OnceLock<Mutex<Vec<i32>>> = OnceLock::new();
 static JUMP_REQUESTS: OnceLock<Mutex<Vec<(i32, usize)>>> = OnceLock::new();
 static LOOP_WAKER: Mutex<Option<android_activity::AndroidAppWaker>> = Mutex::new(None);
 static PLATFORM_ACCESSIBILITY_ENABLED: AtomicBool = AtomicBool::new(false);
+static OPTION_BITS: AtomicU8 = AtomicU8::new(0);
+const REDUCE_MOTION_BIT: u8 = 1;
+const INCREASE_CONTRAST_BIT: u8 = 2;
+const BOLD_TEXT_BIT: u8 = 4;
+
+/// What the person set under Settings, Accessibility, as the activity last
+/// reported it, with the font size the configuration carries.
+fn system_options() -> cranpose_services::AccessibilityOptions {
+    let bits = OPTION_BITS.load(Ordering::Relaxed);
+    cranpose_services::AccessibilityOptions {
+        font_scale: crate::android_font_scale::font_scale_curve().scale(),
+        reduce_motion: bits & REDUCE_MOTION_BIT != 0,
+        increase_contrast: bits & INCREASE_CONTRAST_BIT != 0,
+        bold_text: bits & BOLD_TEXT_BIT != 0,
+        ..cranpose_services::AccessibilityOptions::default()
+    }
+}
 
 fn accessibility_sync_override() -> Option<bool> {
     static OVERRIDE: OnceLock<Option<bool>> = OnceLock::new();
@@ -83,8 +101,22 @@ fn text_requests() -> &'static Mutex<Vec<(i32, String)>> {
     TEXT_REQUESTS.get_or_init(|| Mutex::new(Vec::new()))
 }
 
+fn selection_requests() -> &'static Mutex<Vec<(i32, usize, usize)>> {
+    SELECTION_REQUESTS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
 fn scroll_requests() -> &'static Mutex<Vec<(i32, bool)>> {
     SCROLL_REQUESTS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// Selections TalkBack asked text fields to take, as virtual view ids with
+/// the two ends in UTF-16 units, the anchor first.
+pub(crate) fn drain_selection_requests() -> Vec<(i32, usize, usize)> {
+    std::mem::take(
+        &mut *selection_requests()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()),
+    )
 }
 
 fn expand_requests() -> &'static Mutex<Vec<(i32, bool)>> {
@@ -239,6 +271,13 @@ pub(crate) fn sync(
     if policy.update_enabled(accessibility_bridge_enabled()) {
         *seen_revision = None;
     }
+    let reader_on = cranpose_services::AccessibilityState {
+        screen_reader_on: accessibility_bridge_enabled(),
+    };
+    if cranpose_services::set_platform_accessibility_state(reader_on) {
+        shell.request_root_render();
+    }
+    accessibility::apply_accessibility_options(shell, system_options());
     let mut announcements = accessibility::drain_app_announcements();
     let now = std::time::Instant::now();
     let elements = if policy.try_begin_publish(now) {
@@ -302,6 +341,25 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccess
 ) {
     let previous = PLATFORM_ACCESSIBILITY_ENABLED.swap(enabled, Ordering::Relaxed);
     if previous != enabled {
+        wake_loop();
+    }
+}
+
+/// The activity reports what the person set under Settings, Accessibility:
+/// animations off, high contrast text, bold text.
+#[doc(hidden)]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccessibilityOptions(
+    _env: EnvUnowned<'_>,
+    _class: JClass<'_>,
+    reduce_motion: jboolean,
+    increase_contrast: jboolean,
+    bold_text: jboolean,
+) {
+    let bits = (u8::from(reduce_motion) * REDUCE_MOTION_BIT)
+        | (u8::from(increase_contrast) * INCREASE_CONTRAST_BIT)
+        | (u8::from(bold_text) * BOLD_TEXT_BIT);
+    if OPTION_BITS.swap(bits, Ordering::Relaxed) != bits {
         wake_loop();
     }
 }
@@ -378,6 +436,30 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccess
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .push((virtual_id, text));
+    wake_loop();
+}
+
+/// TalkBack moved the caret of a text field, or picked a stretch of its text,
+/// through Android's set-selection action or a move by character, word or
+/// line. The ends count UTF-16 units, the anchor first; a negative end means
+/// the end of the text. The frame loop resolves the field against the live
+/// semantics tree.
+#[doc(hidden)]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccessibilitySetSelection(
+    _env: EnvUnowned<'_>,
+    _class: JClass<'_>,
+    virtual_id: jint,
+    start: jint,
+    end: jint,
+) {
+    let end_of_text = usize::MAX;
+    let start = usize::try_from(start).unwrap_or(end_of_text);
+    let end = usize::try_from(end).unwrap_or(end_of_text);
+    selection_requests()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .push((virtual_id, start, end));
     wake_loop();
 }
 

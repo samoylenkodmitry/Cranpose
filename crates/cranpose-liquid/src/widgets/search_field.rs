@@ -70,7 +70,7 @@ pub fn LiquidSearchField(modifier: Modifier, state: TextFieldState, spec: Liquid
 
     let placeholder = spec.placeholder.clone();
     Box(
-        base.then(modifier).padding_symmetric(14.0, 9.0),
+        base.then(modifier).padding_symmetric(14.0, 0.0),
         BoxSpec::default().content_alignment(Alignment::new(
             cranpose_ui_layout::HorizontalAlignment::Start,
             cranpose_ui_layout::VerticalAlignment::CenterVertically,
@@ -106,9 +106,14 @@ pub fn LiquidSearchField(modifier: Modifier, state: TextFieldState, spec: Liquid
                         move || {
                             let placeholder = placeholder.clone();
                             let placeholder_style = placeholder_style.clone();
+                            let field_name = placeholder.clone();
                             BasicTextFieldDecorated(
                                 state,
-                                Modifier::empty().fill_max_width(),
+                                Modifier::empty()
+                                    .fill_max_width()
+                                    .padding_symmetric(0.0, 9.0)
+                                    .role(cranpose_ui::SemanticsWidgetRole::SearchField)
+                                    .content_description(field_name),
                                 BasicTextFieldOptions {
                                     text_style: field_style.clone(),
                                     ..BasicTextFieldOptions::default()

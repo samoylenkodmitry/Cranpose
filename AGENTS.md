@@ -20,6 +20,7 @@
 - Check `git status` and the current branch before work and before completion; isolate concurrent edits in a worktree.
 - Before diagnosing a red test, fetch `origin main` and rebase; confirm claimed fixes are ancestors of `HEAD`.
 - Check existing PRs for a reported failure before writing a duplicate fix.
+- After a push, arm a CI watcher before the turn ends (`gh pr checks <n> --watch` under a monitor, or the desktop app's Auto-fix) and act on each result; a wait with no watcher is a stale session.
 - Keep related fixes in one PR; finish requested code changes before optional measurements or PR prose.
 - Never use `git reset`; preserve work with a stash when needed.
 - Worktrees share stashes: inspect contents, resolve the immutable stash hash, and apply only the intended work.

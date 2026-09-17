@@ -453,6 +453,7 @@ pub async fn run(
         query.add_event_listener_with_callback("change", closure.as_ref().unchecked_ref())?;
         closure.forget();
     }
+    crate::web_accessibility_options::watch(&window, app.clone(), request_frame.clone());
 
     {
         let app = app.clone();

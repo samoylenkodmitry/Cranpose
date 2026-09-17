@@ -1232,8 +1232,27 @@ impl SemanticsNode for TextFieldModifierNode {
         config.set_text = Some(cranpose_foundation::SemanticsSetText::new(move |text| {
             state.set_text(text)
         }));
+        config.set_selection = Some(cranpose_foundation::SemanticsSetSelection::new(
+            move |anchor, focus| {
+                let text = state.text();
+                let anchor = floor_char_boundary(&text, anchor);
+                let focus = floor_char_boundary(&text, focus);
+                state.set_selection(TextRange::new(anchor, focus));
+                crate::cursor_animation::reset_cursor_blink();
+                crate::request_render_invalidation();
+                true
+            },
+        ));
         config.text_selection = Some(self.state.selection());
     }
+}
+
+fn floor_char_boundary(text: &str, index: usize) -> usize {
+    let mut index = index.min(text.len());
+    while !text.is_char_boundary(index) {
+        index -= 1;
+    }
+    index
 }
 
 impl PointerInputNode for TextFieldModifierNode {

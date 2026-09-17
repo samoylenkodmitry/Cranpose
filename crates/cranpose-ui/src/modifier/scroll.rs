@@ -1606,6 +1606,9 @@ pub(crate) fn lazy_scroll_semantics(
             rows: if is_vertical { count } else { 1 },
             columns: if is_vertical { 1 } else { count },
         });
+        config
+            .role
+            .get_or_insert(cranpose_foundation::SemanticsWidgetRole::List);
         if is_vertical {
             config.vertical_scroll = Some(range);
         } else {
