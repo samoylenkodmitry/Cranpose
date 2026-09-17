@@ -892,3 +892,34 @@ fn exact_retarget_never_rewinds_an_already_sampled_animation() {
     runtime.drain_frame_callbacks(75_000_000);
     assert_eq!(animatable.state().get(), 75.0);
 }
+
+#[test]
+fn less_motion_ends_an_animation_on_its_first_frame() {
+    let composition = Composition::new(MemoryApplier::new());
+    let runtime = composition.runtime_handle();
+    cranpose_services::set_platform_accessibility_options(
+        cranpose_services::AccessibilityOptions {
+            reduce_motion: true,
+            ..cranpose_services::AccessibilityOptions::default()
+        },
+    );
+    let mut still = Animatable::new(0.0f32, runtime.clone());
+    still.animateTo(1.0, tween(300, Easing::LinearEasing));
+    let settled = (still.state().value(), still.is_running());
+    cranpose_services::set_platform_accessibility_options(
+        cranpose_services::AccessibilityOptions::default(),
+    );
+    assert_eq!(
+        settled,
+        (1.0, false),
+        "the value is the target at once and nothing runs"
+    );
+
+    let mut moving = Animatable::new(0.0f32, runtime);
+    moving.animateTo(1.0, tween(300, Easing::LinearEasing));
+    assert!(
+        moving.is_running(),
+        "with motion on the tween runs over its frames"
+    );
+    assert_eq!(moving.state().value(), 0.0);
+}

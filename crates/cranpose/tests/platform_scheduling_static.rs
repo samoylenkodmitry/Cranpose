@@ -3965,3 +3965,50 @@ fn a_test_audits_a_screen_and_a_robot_prints_what_a_reader_speaks() {
         "the Android instrumented tests run the Accessibility Test Framework"
     );
 }
+
+#[test]
+fn every_platform_reports_the_display_options_and_the_framework_acts_on_them() {
+    let ios = crate_source("src/ios_accessibility.rs");
+    assert!(
+        ios.contains("reduce_motion: UIAccessibilityIsReduceMotionEnabled(),")
+            && ios.contains("font_scale: dynamic_type_scale(&category),")
+            && ios.contains("host_view.setAccessibilityIgnoresInvertColors(true);"),
+        "iOS reads the five switches and Dynamic Type, and inverts its own colors"
+    );
+    let android_java = crate_source("android/java/dev/cranpose/android/CranposeActivity.java");
+    let android_rust = crate_source("src/android_accessibility.rs");
+    assert!(
+        android_java
+            .contains("nativeOnAccessibilityOptions(reduceMotion, increaseContrast, boldText);")
+            && android_rust
+                .contains("accessibility::apply_accessibility_options(shell, system_options());"),
+        "Android reports animations off, high contrast text and bold text"
+    );
+    let web = crate_source("src/web_accessibility_options.rs");
+    for query in [
+        "(prefers-reduced-motion: reduce)",
+        "(prefers-reduced-transparency: reduce)",
+        "(prefers-contrast: more)",
+    ] {
+        assert!(web.contains(query), "the web watches {query}");
+    }
+    let desktop = crate_source("src/desktop_accessibility_options.rs");
+    assert!(
+        desktop.contains("\"defaults\"")
+            && desktop.contains("\"gsettings\"")
+            && desktop.contains("\"reg\"")
+            && desktop.contains("CRANPOSE_REDUCE_MOTION"),
+        "the desktop asks macOS, GNOME and Windows, and takes an environment override"
+    );
+    let animation = workspace_source("crates/cranpose-animation/src/animation.rs");
+    let material = workspace_source("crates/cranpose-liquid/src/material.rs");
+    let theme = workspace_source("crates/cranpose-liquid/src/theme.rs");
+    assert!(
+        animation.contains("platform_accessibility_options().reduce_motion")
+            && material.contains("options.reduce_transparency")
+            && theme.contains("options.increase_contrast")
+            && theme.contains("options.bold_text")
+            && theme.contains("!= options.invert_colors"),
+        "animations, glass and the theme follow the options"
+    );
+}

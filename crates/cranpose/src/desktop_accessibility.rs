@@ -89,6 +89,7 @@ pub(crate) struct DesktopAccessibilityBridge {
     seen_revision: Option<u64>,
     announcement: Option<Announcement>,
     announcement_turn: bool,
+    options: crate::desktop_accessibility_options::OptionsProbe,
 }
 
 impl DesktopAccessibilityBridge {
@@ -126,6 +127,7 @@ impl DesktopAccessibilityBridge {
             seen_revision: None,
             announcement: None,
             announcement_turn: false,
+            options: crate::desktop_accessibility_options::OptionsProbe::start(),
         }
     }
 
@@ -140,6 +142,7 @@ impl DesktopAccessibilityBridge {
         if cranpose_services::set_platform_accessibility_state(reader_on) {
             shell.request_root_render();
         }
+        self.options.apply(shell);
         let mut announcements = accessibility::drain_app_announcements();
         let mut changed = false;
         if let Some(elements) = accessibility::snapshot_if_changed(shell, &mut self.seen_revision)

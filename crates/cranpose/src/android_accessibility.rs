@@ -2,7 +2,7 @@
 
 use std::sync::{
     Mutex, OnceLock,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU8, Ordering},
 };
 
 use cranpose_app_shell::AppShell;
@@ -33,6 +33,23 @@ static DISMISS_REQUESTS: OnceLock<Mutex<Vec<i32>>> = OnceLock::new();
 static JUMP_REQUESTS: OnceLock<Mutex<Vec<(i32, usize)>>> = OnceLock::new();
 static LOOP_WAKER: Mutex<Option<android_activity::AndroidAppWaker>> = Mutex::new(None);
 static PLATFORM_ACCESSIBILITY_ENABLED: AtomicBool = AtomicBool::new(false);
+static OPTION_BITS: AtomicU8 = AtomicU8::new(0);
+const REDUCE_MOTION_BIT: u8 = 1;
+const INCREASE_CONTRAST_BIT: u8 = 2;
+const BOLD_TEXT_BIT: u8 = 4;
+
+/// What the person set under Settings, Accessibility, as the activity last
+/// reported it, with the font size the configuration carries.
+fn system_options() -> cranpose_services::AccessibilityOptions {
+    let bits = OPTION_BITS.load(Ordering::Relaxed);
+    cranpose_services::AccessibilityOptions {
+        font_scale: crate::android_font_scale::font_scale_curve().scale(),
+        reduce_motion: bits & REDUCE_MOTION_BIT != 0,
+        increase_contrast: bits & INCREASE_CONTRAST_BIT != 0,
+        bold_text: bits & BOLD_TEXT_BIT != 0,
+        ..cranpose_services::AccessibilityOptions::default()
+    }
+}
 
 fn accessibility_sync_override() -> Option<bool> {
     static OVERRIDE: OnceLock<Option<bool>> = OnceLock::new();
@@ -260,6 +277,7 @@ pub(crate) fn sync(
     if cranpose_services::set_platform_accessibility_state(reader_on) {
         shell.request_root_render();
     }
+    accessibility::apply_accessibility_options(shell, system_options());
     let mut announcements = accessibility::drain_app_announcements();
     let now = std::time::Instant::now();
     let elements = if policy.try_begin_publish(now) {
@@ -323,6 +341,25 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccess
 ) {
     let previous = PLATFORM_ACCESSIBILITY_ENABLED.swap(enabled, Ordering::Relaxed);
     if previous != enabled {
+        wake_loop();
+    }
+}
+
+/// The activity reports what the person set under Settings, Accessibility:
+/// animations off, high contrast text, bold text.
+#[doc(hidden)]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccessibilityOptions(
+    _env: EnvUnowned<'_>,
+    _class: JClass<'_>,
+    reduce_motion: jboolean,
+    increase_contrast: jboolean,
+    bold_text: jboolean,
+) {
+    let bits = u8::from(reduce_motion) * REDUCE_MOTION_BIT
+        | u8::from(increase_contrast) * INCREASE_CONTRAST_BIT
+        | u8::from(bold_text) * BOLD_TEXT_BIT;
+    if OPTION_BITS.swap(bits, Ordering::Relaxed) != bits {
         wake_loop();
     }
 }

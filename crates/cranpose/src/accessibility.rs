@@ -1374,6 +1374,26 @@ pub(crate) fn focus_node(node_id: NodeId) -> bool {
 /// Text the app asked a screen reader to read out, through
 /// [`cranpose_ui::Announcer`]. Every platform bridge takes this queue once a
 /// frame.
+/// Installs the display options the system reports and asks for a root
+/// render when they changed, so the theme, the glass and the animations read
+/// them. A backend that scales text calls `set_font_scale` on the shell
+/// beside this.
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) fn apply_accessibility_options<R>(
+    shell: &mut AppShell<R>,
+    options: cranpose_services::AccessibilityOptions,
+) -> bool
+where
+    R: Renderer,
+    R::Error: Debug,
+{
+    let changed = cranpose_services::set_platform_accessibility_options(options);
+    if changed {
+        shell.request_root_render();
+    }
+    changed
+}
+
 #[cfg_attr(test, allow(dead_code))]
 pub(crate) fn drain_app_announcements() -> Vec<Announcement> {
     cranpose_ui::drain_announcements()

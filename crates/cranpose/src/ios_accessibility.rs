@@ -19,14 +19,24 @@ use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use objc2_foundation::{NSArray, NSObject, NSObjectProtocol, NSString};
 use objc2_ui_kit::{
     NSObjectUIAccessibility, NSObjectUIAccessibilityAction, NSObjectUIAccessibilityContainer,
-    UIAccessibilityAnnouncementNotification, UIAccessibilityCustomAction, UIAccessibilityElement,
-    UIAccessibilityIdentification, UIAccessibilityIsVoiceOverRunning,
+    UIAccessibilityAnnouncementNotification, UIAccessibilityCustomAction,
+    UIAccessibilityDarkerSystemColorsEnabled, UIAccessibilityElement,
+    UIAccessibilityIdentification, UIAccessibilityIsBoldTextEnabled,
+    UIAccessibilityIsInvertColorsEnabled, UIAccessibilityIsReduceMotionEnabled,
+    UIAccessibilityIsReduceTransparencyEnabled, UIAccessibilityIsVoiceOverRunning,
     UIAccessibilityLayoutChangedNotification, UIAccessibilityPostNotification,
     UIAccessibilityScreenChangedNotification, UIAccessibilityTraitAdjustable,
     UIAccessibilityTraitButton, UIAccessibilityTraitHeader, UIAccessibilityTraitImage,
     UIAccessibilityTraitLink, UIAccessibilityTraitNone, UIAccessibilityTraitNotEnabled,
     UIAccessibilityTraitSearchField, UIAccessibilityTraitSelected, UIAccessibilityTraitStaticText,
-    UIAccessibilityTraitUpdatesFrequently, UIAccessibilityTraits, UIView,
+    UIAccessibilityTraitUpdatesFrequently, UIAccessibilityTraits, UIApplication,
+    UIContentSizeCategory, UIContentSizeCategoryAccessibilityExtraExtraExtraLarge,
+    UIContentSizeCategoryAccessibilityExtraExtraLarge,
+    UIContentSizeCategoryAccessibilityExtraLarge, UIContentSizeCategoryAccessibilityLarge,
+    UIContentSizeCategoryAccessibilityMedium, UIContentSizeCategoryExtraExtraExtraLarge,
+    UIContentSizeCategoryExtraExtraLarge, UIContentSizeCategoryExtraLarge,
+    UIContentSizeCategoryExtraSmall, UIContentSizeCategoryLarge, UIContentSizeCategoryMedium,
+    UIContentSizeCategorySmall, UIView,
 };
 use winit::event_loop::EventLoopProxy;
 
@@ -279,6 +289,7 @@ impl IosAccessibilityBridge {
     pub(crate) fn new(event_proxy: EventLoopProxy) -> Option<Self> {
         let mtm = MainThreadMarker::new()?;
         let host_view = root_view_controller(mtm)?.view()?;
+        host_view.setAccessibilityIgnoresInvertColors(true);
         let host_object: &NSObject = host_view.as_ref();
         host_object.setIsAccessibilityElement(false, mtm);
 
@@ -306,6 +317,11 @@ impl IosAccessibilityBridge {
         };
         if cranpose_services::set_platform_accessibility_state(reader_on) {
             shell.request_root_render();
+        }
+        let mtm = MainThreadMarker::new().expect("accessibility sync runs on UIKit's main thread");
+        let options = system_options(mtm);
+        if accessibility::apply_accessibility_options(shell, options) {
+            shell.set_font_scale(options.font_scale);
         }
         let next = accessibility::snapshot(shell);
         self.speak(&next);
@@ -1001,4 +1017,46 @@ mod tests {
     fn moving_an_element_does_not_rebuild_accessibility_focus_order() {
         assert!(same_structure(&[element(0.0)], &[element(24.0)]));
     }
+}
+
+/// What the person set under Settings, Accessibility and Display: the
+/// Dynamic Type size as a multiplier of the default body size, and the five
+/// switches the framework acts on.
+fn system_options(mtm: MainThreadMarker) -> cranpose_services::AccessibilityOptions {
+    let category = UIApplication::sharedApplication(mtm).preferredContentSizeCategory();
+    cranpose_services::AccessibilityOptions {
+        font_scale: dynamic_type_scale(&category),
+        reduce_motion: UIAccessibilityIsReduceMotionEnabled(),
+        reduce_transparency: UIAccessibilityIsReduceTransparencyEnabled(),
+        increase_contrast: UIAccessibilityDarkerSystemColorsEnabled(),
+        bold_text: UIAccessibilityIsBoldTextEnabled(),
+        invert_colors: UIAccessibilityIsInvertColorsEnabled(),
+    }
+}
+
+/// The body size of each Dynamic Type step over the 17 points of the
+/// default step, from Apple's Human Interface Guidelines table.
+fn dynamic_type_scale(category: &UIContentSizeCategory) -> f32 {
+    // SAFETY: the names are UIKit's constant strings, valid for the whole
+    // life of the process.
+    let steps: [(&UIContentSizeCategory, f32); 12] = unsafe {
+        [
+            (UIContentSizeCategoryExtraSmall, 14.0),
+            (UIContentSizeCategorySmall, 15.0),
+            (UIContentSizeCategoryMedium, 16.0),
+            (UIContentSizeCategoryLarge, 17.0),
+            (UIContentSizeCategoryExtraLarge, 19.0),
+            (UIContentSizeCategoryExtraExtraLarge, 21.0),
+            (UIContentSizeCategoryExtraExtraExtraLarge, 23.0),
+            (UIContentSizeCategoryAccessibilityMedium, 28.0),
+            (UIContentSizeCategoryAccessibilityLarge, 33.0),
+            (UIContentSizeCategoryAccessibilityExtraLarge, 40.0),
+            (UIContentSizeCategoryAccessibilityExtraExtraLarge, 47.0),
+            (UIContentSizeCategoryAccessibilityExtraExtraExtraLarge, 53.0),
+        ]
+    };
+    steps
+        .iter()
+        .find(|(name, _)| category.isEqualToString(name))
+        .map_or(1.0, |(_, body_points)| body_points / 17.0)
 }

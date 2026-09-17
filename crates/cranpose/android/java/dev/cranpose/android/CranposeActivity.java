@@ -725,6 +725,8 @@ public class CranposeActivity extends NativeActivity {
     private static native void nativeOnAccessibilityScrollToIndex(int virtualViewId, int index);
 
     private static native void nativeOnAccessibilityStateChanged(boolean enabled);
+    private static native void nativeOnAccessibilityOptions(
+            boolean reduceMotion, boolean increaseContrast, boolean boldText);
 
     private AccessibilityManager.AccessibilityStateChangeListener
             cranposeAccessibilityStateListener;
@@ -744,6 +746,23 @@ public class CranposeActivity extends NativeActivity {
                 CranposeActivity::nativeOnAccessibilityStateChanged;
         manager.addAccessibilityStateChangeListener(cranposeAccessibilityStateListener);
         nativeOnAccessibilityStateChanged(manager.isEnabled());
+    }
+
+    /**
+     * Tells the framework what the person set under Settings, Accessibility:
+     * animations off, high contrast text, bold text. The font size reaches the
+     * framework through the configuration already. Read on create and on every
+     * resume, since a person changes these in Settings and comes back.
+     */
+    private void reportAccessibilityOptions() {
+        android.content.ContentResolver resolver = getContentResolver();
+        boolean reduceMotion = android.provider.Settings.Global.getFloat(
+                resolver, android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, 1f) == 0f;
+        boolean increaseContrast = android.provider.Settings.Secure.getInt(
+                resolver, "high_text_contrast_enabled", 0) == 1;
+        boolean boldText = android.os.Build.VERSION.SDK_INT >= 31
+                && getResources().getConfiguration().fontWeightAdjustment >= 300;
+        nativeOnAccessibilityOptions(reduceMotion, increaseContrast, boldText);
     }
 
     /**
@@ -2495,6 +2514,7 @@ public class CranposeActivity extends NativeActivity {
         focusNativeContentView();
         installInsetsListener();
         trackAccessibilityState();
+        reportAccessibilityOptions();
         registerNetworkCallback();
         dispatchDeeplink(getIntent());
         dispatchIncomingShares(getIntent());
@@ -2603,6 +2623,7 @@ public class CranposeActivity extends NativeActivity {
     @Override
     protected void onResume() {
         super.onResume();
+        reportAccessibilityOptions();
         cranposePaused = false;
         cranposeEverResumed = true;
         cranposeBackgroundServiceHandler.removeCallbacks(cranposeBackgroundServiceAsk);

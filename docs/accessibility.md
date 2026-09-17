@@ -645,6 +645,33 @@ carries the pane title of its node, on the web it is a region landmark with
 the title as its name, and accesskit sees a labeled region. The first
 publish stays quiet, so the first screen is not read twice.
 
+## 9. The system's display options
+
+A person sets these once, in the system's accessibility settings, and expects
+every app to follow: larger text, less motion, less transparency, more
+contrast, bold text, inverted colors. Cranpose reads them on every platform
+and acts on them in the framework, so an app follows them with no code of
+its own. `cranpose_services::AccessibilityOptions` holds them;
+`local_accessibility_options().current()` reads them in a composable for
+what an app draws itself, and `ProvideAccessibilityOptions` fixes them for a
+preview or a test.
+
+| Option | What the framework does | iOS | Android | Web | Desktop |
+| --- | --- | --- | --- | --- | --- |
+| `font_scale` | every `Sp` text size grows by it, through the shell's font scale | Dynamic Type, each step as its body size over 17 points | the font size setting, through Android's own curve | the root font size over 16 pixels, as page text does | GNOME's text scaling factor, Windows' text size, `CRANPOSE_FONT_SCALE` |
+| `reduce_motion` | every animation ends on its first frame: the value is the target at once | Reduce Motion | Remove animations, the animator scale at zero | `prefers-reduced-motion` | macOS Reduce Motion, GNOME's animations switch, Windows' animation switch, `CRANPOSE_REDUCE_MOTION` |
+| `reduce_transparency` | glass draws as the surface color with no blur, no refraction and no spectrum; the shape and the shadow stay | Reduce Transparency | no such setting | `prefers-reduced-transparency` | macOS Reduce Transparency, Windows' transparency switch, `CRANPOSE_REDUCE_TRANSPARENCY` |
+| `increase_contrast` | secondary and tertiary labels, separators, fills and the glass edge move toward the label color | Increase Contrast | High contrast text | `prefers-contrast: more` | macOS Increase Contrast, a GNOME high contrast theme, Windows high contrast, `CRANPOSE_INCREASE_CONTRAST` |
+| `bold_text` | every liquid text style gains two hundred of weight | Bold Text | Bold text, a font weight adjustment of 300 | no such setting | `CRANPOSE_BOLD_TEXT` |
+| `invert_colors` | the theme swaps to its other palette and pictures stay as they are | Smart Invert: the window opts out of the system's inversion and inverts its own colors | no: the system inverts the whole screen itself | no | no |
+
+The desktop reads its settings tools once, on a thread at start, and applies
+the answer on the next frame; a change while the app runs takes a restart.
+iOS, Android and the web follow a change at once. The demo's robot and a test
+set an option through the environment or `ProvideAccessibilityOptions`; the
+static test `every_platform_reports_the_display_options_and_the_framework_acts_on_them`
+keeps the four platforms and the three framework hooks in step.
+
 ## What the built-in widgets say on their own
 
 An app gets this with no code of its own:

@@ -961,6 +961,7 @@ name = "cranpose-animation"
 version = "0.1.132"
 dependencies = [
  "cranpose-core",
+ "cranpose-services",
  "cranpose-ui-graphics",
 ]
 

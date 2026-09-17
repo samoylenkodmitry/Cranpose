@@ -48,14 +48,14 @@ is ticked when the code, its tests and its docs are on the branch.
 
 ## Step 6. System options, last
 
-- [ ] one `AccessibilityOptions` value in cranpose-services
-- [ ] font scale on iOS, the web and the desktop
-- [ ] reduce motion into cranpose-animation
-- [ ] reduce transparency into cranpose-liquid
-- [ ] increase contrast, bold text and invert colors into the theme and images
-- [ ] docs
+- [x] one `AccessibilityOptions` value in cranpose-services
+- [x] font scale on iOS, the web and the desktop
+- [x] reduce motion into cranpose-animation
+- [x] reduce transparency into cranpose-liquid
+- [x] increase contrast, bold text and invert colors into the theme and images
+- [x] docs
 
 ## Step 7. cranscan takes it up
 
-- [ ] waits for a Cranpose release that carries the steps above
-- [ ] search field role, magic tap on capture, reader guidance, a shutter cue
+- [ ] waits for a Cranpose release that carries the steps above: the branch `a11y-text-edit` has to reach main and crates.io first, and cranscan takes the new version in `app/Cargo.toml`
+- [ ] then in cranscan: the search field role, the magic tap on capture, reader guidance through `local_accessibility_state()`, a shutter cue, and `assert_accessible` over every screen in its tests
