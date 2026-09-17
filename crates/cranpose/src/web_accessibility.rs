@@ -384,14 +384,13 @@ fn field_selection(element: &Element) -> Option<(usize, usize)> {
             input.selection_end().ok()??,
             input.selection_direction().ok()??,
         )
-    } else if let Some(area) = element.dyn_ref::<HtmlTextAreaElement>() {
+    } else {
+        let area = element.dyn_ref::<HtmlTextAreaElement>()?;
         (
             area.selection_start().ok()??,
             area.selection_end().ok()??,
             area.selection_direction().ok()??,
         )
-    } else {
-        return None;
     };
     let (start, end) = (start as usize, end as usize);
     Some(if direction == "backward" {
