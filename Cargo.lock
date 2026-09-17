@@ -899,7 +899,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose"
-version = "0.1.130"
+version = "v0.1.132"
 dependencies = [
  "accesskit",
  "accesskit_macos",
@@ -958,7 +958,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-animation"
-version = "0.1.130"
+version = "v0.1.132"
 dependencies = [
  "cranpose-core",
  "cranpose-ui-graphics",
@@ -966,7 +966,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-app-shell"
-version = "0.1.130"
+version = "v0.1.132"
 dependencies = [
  "arboard",
  "cranpose-core",
@@ -982,11 +982,11 @@ dependencies = [
 
 [[package]]
 name = "cranpose-assets"
-version = "0.1.130"
+version = "v0.1.132"
 
 [[package]]
 name = "cranpose-audio"
-version = "0.1.130"
+version = "v0.1.132"
 dependencies = [
  "cpal",
  "cranpose-services",
@@ -997,7 +997,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-core"
-version = "0.1.130"
+version = "v0.1.132"
 dependencies = [
  "ahash",
  "cranpose-macros",
@@ -1013,7 +1013,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-foundation"
-version = "0.1.130"
+version = "v0.1.132"
 dependencies = [
  "cranpose-core",
  "cranpose-macros",
@@ -1026,7 +1026,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-liquid"
-version = "0.1.130"
+version = "v0.1.132"
 dependencies = [
  "cranpose-animation",
  "cranpose-core",
@@ -1043,7 +1043,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-macros"
-version = "0.1.130"
+version = "v0.1.132"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -1053,7 +1053,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-media"
-version = "0.1.130"
+version = "v0.1.132"
 dependencies = [
  "cranpose-audio",
  "cranpose-core",
@@ -1066,14 +1066,14 @@ dependencies = [
 
 [[package]]
 name = "cranpose-platform-android"
-version = "0.1.130"
+version = "v0.1.132"
 dependencies = [
  "cranpose-ui-graphics",
 ]
 
 [[package]]
 name = "cranpose-platform-desktop-winit"
-version = "0.1.130"
+version = "v0.1.132"
 dependencies = [
  "cranpose-foundation",
  "cranpose-ui-graphics",
@@ -1082,7 +1082,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-platform-web"
-version = "0.1.130"
+version = "v0.1.132"
 dependencies = [
  "cranpose-foundation",
  "cranpose-ui-graphics",
@@ -1090,7 +1090,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-render-common"
-version = "0.1.130"
+version = "v0.1.132"
 dependencies = [
  "ab_glyph",
  "cranpose-core",
@@ -1107,7 +1107,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-render-pixels"
-version = "0.1.130"
+version = "v0.1.132"
 dependencies = [
  "cranpose-core",
  "cranpose-foundation",
@@ -1120,7 +1120,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-render-wgpu"
-version = "0.1.130"
+version = "v0.1.132"
 dependencies = [
  "bytemuck",
  "cranpose-app-shell",
@@ -1144,7 +1144,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-runtime-std"
-version = "0.1.130"
+version = "v0.1.132"
 dependencies = [
  "cranpose-core",
  "web-time",
@@ -1152,7 +1152,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-services"
-version = "0.1.130"
+version = "v0.1.132"
 dependencies = [
  "cranpose-core",
  "cranpose-macros",
@@ -1178,14 +1178,14 @@ dependencies = [
 
 [[package]]
 name = "cranpose-storekit"
-version = "0.1.130"
+version = "v0.1.132"
 dependencies = [
  "cranpose-services",
 ]
 
 [[package]]
 name = "cranpose-testing"
-version = "0.1.130"
+version = "v0.1.132"
 dependencies = [
  "cranpose",
  "cranpose-app-shell",
@@ -1200,7 +1200,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-ui"
-version = "0.1.130"
+version = "v0.1.132"
 dependencies = [
  "cranpose-animation",
  "cranpose-core",
@@ -1219,7 +1219,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-ui-graphics"
-version = "0.1.130"
+version = "v0.1.132"
 dependencies = [
  "arrayvec",
  "bytemuck",
@@ -1228,7 +1228,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-ui-layout"
-version = "0.1.130"
+version = "v0.1.132"
 dependencies = [
  "cranpose-core",
  "cranpose-ui-graphics",
