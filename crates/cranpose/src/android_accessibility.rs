@@ -356,9 +356,9 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccess
     increase_contrast: jboolean,
     bold_text: jboolean,
 ) {
-    let bits = u8::from(reduce_motion) * REDUCE_MOTION_BIT
-        | u8::from(increase_contrast) * INCREASE_CONTRAST_BIT
-        | u8::from(bold_text) * BOLD_TEXT_BIT;
+    let bits = (u8::from(reduce_motion) * REDUCE_MOTION_BIT)
+        | (u8::from(increase_contrast) * INCREASE_CONTRAST_BIT)
+        | (u8::from(bold_text) * BOLD_TEXT_BIT);
     if OPTION_BITS.swap(bits, Ordering::Relaxed) != bits {
         wake_loop();
     }
