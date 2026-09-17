@@ -1588,7 +1588,9 @@ fn FeaturedVideosReferenceCard(
                         }
                     });
                     LiquidMenuAbsorbedIconButton(
-                        Modifier::empty().report_window_rect(std::rc::Rc::clone(&row_absorbed)),
+                        Modifier::empty()
+                            .report_window_rect(std::rc::Rc::clone(&row_absorbed))
+                            .content_description("Filter"),
                         row_spec.clone(),
                         36.0,
                         row_menu.get(),
@@ -1597,7 +1599,9 @@ fn FeaturedVideosReferenceCard(
                     );
                     Box(Modifier::empty().width(6.0), BoxSpec::default(), || {});
                     LiquidMenuIconButton(
-                        Modifier::empty().report_window_rect(std::rc::Rc::clone(&row_anchor)),
+                        Modifier::empty()
+                            .report_window_rect(std::rc::Rc::clone(&row_anchor))
+                            .content_description("More"),
                         GlassButtonSpec::glass(),
                         40.0,
                         row_menu.get(),
@@ -2102,7 +2106,7 @@ pub fn LiquidUiTab() {
                                         );
                                         let clicks_c = clicks;
                                         GlassIconButton(
-                                            Modifier::empty(),
+                                            Modifier::empty().content_description("Add one"),
                                             GlassButtonSpec::glass(),
                                             44.0,
                                             move || clicks_c.set(clicks_c.get() + 1),
@@ -2172,7 +2176,8 @@ pub fn LiquidUiTab() {
                                                     );
                                                     let t = toggle_b2;
                                                     LiquidToggle(
-                                                        Modifier::empty(),
+                                                        Modifier::empty()
+                                                            .content_description("Airplane Mode"),
                                                         t.get(),
                                                         move |value| t.set(value),
                                                     );

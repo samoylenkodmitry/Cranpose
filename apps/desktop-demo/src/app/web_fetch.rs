@@ -132,11 +132,15 @@ pub(crate) fn web_fetch_example() {
                         );
                         Text(
                             api_url,
-                            Modifier::empty().padding(2.0).clickable(move |_| {
-                                if let Err(err) = link_handler.open_uri(api_url) {
-                                    log::error!("Failed to open {}: {:#}", api_url, err);
-                                }
-                            }),
+                            Modifier::empty()
+                                .padding(2.0)
+                                .clickable(move |_| {
+                                    if let Err(err) = link_handler.open_uri(api_url) {
+                                        log::error!("Failed to open {}: {:#}", api_url, err);
+                                    }
+                                })
+                                .role(cranpose_ui::SemanticsWidgetRole::Link)
+                                .minimum_interactive_component_size(),
                             TextStyle {
                                 span_style: SpanStyle {
                                     color: Some(Color(0.32, 0.72, 0.98, 1.0)),

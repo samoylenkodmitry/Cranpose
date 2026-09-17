@@ -988,11 +988,10 @@ pub fn LiquidMenuIconButton(
         });
 
     Box(
-        pressed_modifier
-            .then(modifier)
-            .size(Size::new(diameter, diameter)),
+        pressed_modifier.size(Size::new(diameter, diameter)),
         BoxSpec::default().content_alignment(cranpose_ui_layout::Alignment::CENTER),
         move || {
+            let modifier = modifier.clone();
             let visual_alpha = trigger_visual.get().clamp(0.0, 1.0);
             let melt = 1.0 - visual_alpha;
             let visual_spec = spec.clone();
@@ -1010,7 +1009,7 @@ pub fn LiquidMenuIconButton(
                 move || {
                     if visual_alpha > MENU_TRIGGER_GLASS_CUTOFF {
                         crate::widgets::GlassIconButton(
-                            Modifier::empty(),
+                            modifier.clone(),
                             visual_spec.clone(),
                             diameter,
                             || {},

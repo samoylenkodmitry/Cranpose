@@ -166,6 +166,16 @@ impl ComposeTestRule {
     /// The runtime handle is installed for the duration and taken back off
     /// afterwards: a subcomposing widget cannot be measured without one, and
     /// leaving it on outlives the borrow the applier hands out.
+    /// Fails the test with every issue [`crate::audit_accessibility`] finds on
+    /// the content laid out at the given size.
+    pub fn assert_accessible(&mut self, size: cranpose_ui::Size) -> Result<(), NodeError> {
+        let placed = self
+            .placed_semantics(size)?
+            .expect("assert_accessible needs content; call set_content first");
+        crate::accessibility_audit::assert_accessible(&placed);
+        Ok(())
+    }
+
     pub fn placed_semantics(
         &mut self,
         size: cranpose_ui::Size,

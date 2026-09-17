@@ -97,7 +97,10 @@ pub(crate) fn SourceToggleButton(showing: MutableState<bool>, modifier: Modifier
         TextStyle::default()
     };
     Button(
-        modifier.rounded_corners(12.0).padding(padding),
+        modifier
+            .rounded_corners(12.0)
+            .padding(padding)
+            .minimum_interactive_component_size(),
         ButtonSpec::default(),
         move || showing.set(!showing.get()),
         move || {

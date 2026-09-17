@@ -43,17 +43,20 @@
 
 use std::{collections::HashMap, rc::Rc};
 
+use cranpose_app_shell::AppShell;
 use cranpose_core::{MemoryApplier, NodeError, NodeId};
 use cranpose_foundation::PointerEvent;
 use cranpose_render_common::{
+    Renderer,
     graph::ProjectiveTransform,
     graph_scene::HitGeometry,
     hit_graph::{HitGraphSink, collect_hits_from_graph},
     scene_builder::build_graph_from_applier,
 };
 use cranpose_ui::{
-    LayoutBox, LayoutEngine, Point, Rect, SemanticsAction, SemanticsNode, SemanticsRole,
-    SemanticsWidgetRole, Size, build_layout_tree_from_applier, build_semantics_tree_from_applier,
+    LayoutBox, LayoutEngine, LayoutTree, Point, Rect, SemanticsAction, SemanticsNode,
+    SemanticsRole, SemanticsWidgetRole, Size, build_layout_tree_from_applier,
+    build_semantics_tree_from_applier,
 };
 use cranpose_ui_graphics::RoundedCornerShape;
 
@@ -80,7 +83,18 @@ pub struct PlacedSemanticsNode {
     /// This also includes gesture-only containers such as scrollable lists.
     pub interactive: bool,
     pub toggled: Option<bool>,
+    pub selected: Option<bool>,
     pub enabled: bool,
+    /// Whether a reader can type into the node.
+    pub editable_text: bool,
+    /// Whether Tab and a reader's focus reach the node.
+    pub focusable: bool,
+    /// Whether a reader skips the node and everything under it.
+    pub hidden: bool,
+    /// The title the node gives the screen, when it is the screen's root.
+    pub pane_title: Option<String>,
+    /// Where the app moved the node in the reading order; 0 leaves it be.
+    pub traversal_index: f32,
     /// The box the measure pass gave this node, in window coordinates.
     pub layout_bounds: Rect,
     /// The box the renderer draws and the hit test inverts, ancestor graphics
@@ -224,10 +238,10 @@ fn join(
         node_id: node.node_id,
         role: node.role.clone(),
         widget_role: node.widget_role,
-        label: match &node.role {
+        label: node.description.clone().or_else(|| match &node.role {
             SemanticsRole::Text { value } => Some(value.clone()),
-            _ => node.description.clone(),
-        },
+            _ => None,
+        }),
         state_description: node.state_description.clone(),
         clickable: node
             .actions
@@ -235,9 +249,39 @@ fn join(
             .any(|action| matches!(action, SemanticsAction::Click { .. })),
         interactive: touch_bounds.contains_key(&node.node_id),
         toggled: node.toggled,
+        selected: node.selected,
         enabled: node.enabled,
+        editable_text: node.editable_text,
+        focusable: node.focusable,
+        hidden: node.hidden,
+        pane_title: node.pane_title.clone(),
+        traversal_index: node.traversal_index,
         layout_bounds: bounds,
         touch_bounds: touch_bounds.get(&node.node_id).copied(),
         children,
     })
+}
+
+/// The placed tree of a semantics tree and the layout it was measured in,
+/// without touch bounds: what a shell offers after a frame.
+pub fn placed_semantics_from_trees(
+    semantics: &SemanticsNode,
+    layout: &LayoutTree,
+) -> Result<PlacedSemanticsNode, NodeError> {
+    let mut layout_bounds = HashMap::new();
+    index_layout_bounds(layout.root(), &mut layout_bounds);
+    join(semantics, &layout_bounds, &HashMap::new())
+}
+
+/// The placed tree of what a shell shows right now. `None` before the first
+/// frame, or while the shell does not build semantics; turn them on with
+/// `set_semantics_enabled(true)` first.
+pub fn placed_semantics_from_shell<R>(shell: &mut AppShell<R>) -> Option<PlacedSemanticsNode>
+where
+    R: Renderer,
+    R::Error: std::fmt::Debug,
+{
+    let layout = shell.layout_tree()?.clone();
+    let semantics = shell.semantics_tree()?.root().clone();
+    placed_semantics_from_trees(&semantics, &layout).ok()
 }

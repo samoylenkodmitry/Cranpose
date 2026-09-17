@@ -96,6 +96,27 @@ Retrieve the semantic tree with geometric bounds.
 let semantics = robot.get_semantics()?;
 ```
 
+#### `spoken_tree() -> Result<String, String>`
+The screen the way a screen reader speaks it, one control per line: the name,
+the role, the state, the value and the actions, in reading order. Turn
+semantics on with `set_semantics_enabled(true)` first. A test compares the
+lines a blind user hears; a person prints them to look at a screen from a
+terminal.
+
+```rust
+robot.set_semantics_enabled(true)?;
+println!("{}", robot.spoken_tree()?);
+```
+
+Output:
+```
+Library, pane
+Search receipts, search field
+Flash, switch, on
+Capture, button, actions: Take the photo
+Milk 3.40, list item, 1 of 12
+```
+
 #### `find_by_text(elements, text) -> Option<&SemanticElement>`
 Find any element containing the specified text (recursive search).
 

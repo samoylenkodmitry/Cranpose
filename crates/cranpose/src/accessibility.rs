@@ -1462,6 +1462,7 @@ pub(crate) fn pane_title_announcements(
 
 #[cfg(any(
     test,
+    feature = "robot",
     all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"),
     all(feature = "android", feature = "renderer-wgpu", target_os = "android"),
     all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
@@ -1605,6 +1606,115 @@ pub(crate) fn element_with(node_id: NodeId, canvas_key: Option<u64>) -> Accessib
         bounds: AccessibilityRect::new(0.0, 0.0, 10.0, 10.0),
         ..AccessibilityElement::default()
     }
+}
+
+/// The word a reader says for each role, for the robot's spoken tree. Plain
+/// text has no word: its name is the whole of what a reader says.
+#[cfg(any(test, feature = "robot"))]
+const SPOKEN_ROLES: [(AccessibilityRole, &str); 23] = [
+    (AccessibilityRole::Button, "button"),
+    (AccessibilityRole::StaticText, ""),
+    (AccessibilityRole::TextField, "text field"),
+    (AccessibilityRole::Checkbox, "checkbox"),
+    (AccessibilityRole::Switch, "switch"),
+    (AccessibilityRole::RadioButton, "radio button"),
+    (AccessibilityRole::Tab, "tab"),
+    (AccessibilityRole::Image, "image"),
+    (AccessibilityRole::Header, "heading"),
+    (AccessibilityRole::Dialog, "dialog"),
+    (AccessibilityRole::DropdownList, "pop up button"),
+    (AccessibilityRole::ValuePicker, "picker"),
+    (AccessibilityRole::Link, "link"),
+    (AccessibilityRole::SearchField, "search field"),
+    (AccessibilityRole::ProgressBar, "progress bar"),
+    (AccessibilityRole::ToggleButton, "toggle button"),
+    (AccessibilityRole::Alert, "alert"),
+    (AccessibilityRole::Toolbar, "toolbar"),
+    (AccessibilityRole::Menu, "menu"),
+    (AccessibilityRole::MenuItem, "menu item"),
+    (AccessibilityRole::TabBar, "tab bar"),
+    (AccessibilityRole::List, "list"),
+    (AccessibilityRole::ListItem, "list item"),
+];
+
+/// One control the way a reader speaks it: the name, the role, the state,
+/// the value and the actions it offers, in the order VoiceOver says them.
+#[cfg(any(test, feature = "robot"))]
+pub(crate) fn spoken_line(element: &AccessibilityElement) -> String {
+    let role_word = SPOKEN_ROLES
+        .iter()
+        .find(|(role, _)| *role == element.role)
+        .map(|(_, word)| *word)
+        .unwrap_or("");
+    let name = match (&element.pane_title, element.label.is_empty()) {
+        (Some(title), true) => format!("{title}, pane"),
+        _ => spoken_text(element),
+    };
+    let toggle_words = if element.role == AccessibilityRole::Switch {
+        ("on", "off")
+    } else {
+        ("checked", "not checked")
+    };
+    let actions: Vec<&str> = element
+        .custom_actions
+        .iter()
+        .map(String::as_str)
+        .chain(element.long_click_label.as_deref())
+        .chain(element.magic_tap_label.as_deref())
+        .collect();
+    let mut parts: Vec<String> = vec![name, role_word.to_string()];
+    parts.extend(
+        element
+            .toggled
+            .map(|on| if on { toggle_words.0 } else { toggle_words.1 }.to_string()),
+    );
+    parts.extend(
+        element
+            .selected
+            .filter(|picked| *picked)
+            .map(|_| "selected".to_string()),
+    );
+    parts.extend(element.expanded.map(|open| {
+        if open {
+            "expanded".to_string()
+        } else {
+            "collapsed".to_string()
+        }
+    }));
+    parts.extend(element.progress.as_ref().and_then(spoken_percent));
+    parts.extend((!element.enabled).then(|| "dimmed".to_string()));
+    parts.extend(element.focused.then(|| "focused".to_string()));
+    parts.extend((!actions.is_empty()).then(|| format!("actions: {}", actions.join(", "))));
+    parts.retain(|part| !part.is_empty());
+    parts.join(", ")
+}
+
+#[cfg(any(test, feature = "robot"))]
+fn spoken_percent(progress: &ProgressBarRangeInfo) -> Option<String> {
+    let span = progress.end - progress.start;
+    (span > 0.0).then(|| {
+        let percent = ((progress.current - progress.start) / span * 100.0).round();
+        format!("{percent} percent")
+    })
+}
+
+/// Every control on the screen the way a reader speaks it, one per line, in
+/// reading order: what the robot's `spoken_tree` prints.
+#[cfg(feature = "robot")]
+pub(crate) fn spoken_tree<R>(shell: &mut AppShell<R>) -> String
+where
+    R: Renderer,
+    R::Error: Debug,
+{
+    snapshot(shell)
+        .iter()
+        .map(spoken_line)
+        .filter(|line| !line.is_empty())
+        .fold(String::new(), |mut tree, line| {
+            tree.push_str(&line);
+            tree.push('\n');
+            tree
+        })
 }
 
 #[cfg(test)]
@@ -3030,5 +3140,35 @@ mod tests {
         let elements = project_semantics(&root, &bounds);
         assert!(elements[0].progress.is_none());
         assert!(!elements[0].adjustable);
+    }
+
+    #[test]
+    fn a_spoken_line_says_the_name_the_role_the_state_and_the_actions() {
+        let mut flash = element_with(1, None);
+        flash.label = "Flash".to_string();
+        flash.role = AccessibilityRole::Switch;
+        flash.toggled = Some(true);
+        flash.custom_actions = vec!["Reset".to_string()];
+        assert_eq!(spoken_line(&flash), "Flash, switch, on, actions: Reset");
+
+        let mut loading = element_with(2, None);
+        loading.label = "Loading".to_string();
+        loading.role = AccessibilityRole::ProgressBar;
+        loading.progress = Some(ProgressBarRangeInfo::new(0.4, 0.0, 1.0, 0));
+        loading.enabled = false;
+        assert_eq!(
+            spoken_line(&loading),
+            "Loading, progress bar, 40 percent, dimmed"
+        );
+
+        let mut library = element_with(3, None);
+        library.label = String::new();
+        library.pane_title = Some("Library".to_string());
+        assert_eq!(spoken_line(&library), "Library, pane");
+
+        let mut plain = element_with(4, None);
+        plain.label = "Milk".to_string();
+        plain.focused = true;
+        assert_eq!(spoken_line(&plain), "Milk, focused");
     }
 }

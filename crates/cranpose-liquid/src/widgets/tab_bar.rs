@@ -1090,7 +1090,7 @@ fn LiquidTabBarLayout(
 #[allow(non_snake_case)]
 pub fn LiquidTabBarSearchAccessory(on_click: impl Fn() + 'static) {
     crate::widgets::GlassIconButton(
-        Modifier::empty(),
+        Modifier::empty().content_description("Search"),
         crate::widgets::GlassButtonSpec::glass(),
         BAR_HEIGHT * 0.94,
         on_click,

@@ -40,11 +40,11 @@ is ticked when the code, its tests and its docs are on the branch.
 
 ## Step 5. Checks that run without a hand
 
-- [ ] `assert_accessible` in cranpose-testing: names, duplicate names, target size, order, pane title, images
-- [ ] the desktop demo screens under the audit
-- [ ] Android Accessibility Test Framework in the instrumented test
-- [ ] a robot command that prints the tree the way a reader speaks it
-- [ ] docs
+- [x] `assert_accessible` in cranpose-testing: names, duplicate names, target size, order, pane title, images
+- [x] the desktop demo screens under the audit, with the issues it found fixed and five left on a list that only shrinks
+- [x] Android Accessibility Test Framework in the instrumented test
+- [x] a robot command that prints the tree the way a reader speaks it: `robot.spoken_tree()`
+- [x] docs
 
 ## Step 6. System options, last
 

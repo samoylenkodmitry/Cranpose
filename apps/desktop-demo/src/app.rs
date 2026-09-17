@@ -747,19 +747,27 @@ fn TabContent(
     modifier: Modifier,
 ) {
     let active = active_tab.get();
-    cranpose_ui::Box(modifier.clip_to_bounds(), BoxSpec::default(), move || {
-        if showing_source.get() {
-            source_view::SourcePanel(active);
-        } else {
-            cranpose_core::with_key(&active, || {
-                if tab_requires_scroll(active) {
-                    ScrollableTab(move || render_active_tab(active, startup, winamp_tab_state));
-                } else {
-                    render_active_tab(active, startup, winamp_tab_state);
-                }
-            });
-        }
-    });
+    let title = DEMO_TAB_INFO
+        .iter()
+        .find(|info| info.tab == active)
+        .map_or("Demo", |info| info.label);
+    cranpose_ui::Box(
+        modifier.clip_to_bounds().pane_title(title),
+        BoxSpec::default(),
+        move || {
+            if showing_source.get() {
+                source_view::SourcePanel(active);
+            } else {
+                cranpose_core::with_key(&active, || {
+                    if tab_requires_scroll(active) {
+                        ScrollableTab(move || render_active_tab(active, startup, winamp_tab_state));
+                    } else {
+                        render_active_tab(active, startup, winamp_tab_state);
+                    }
+                });
+            }
+        },
+    );
 }
 
 #[composable]
@@ -1142,7 +1150,8 @@ fn text_input_example() {
                     .fill_max_width()
                     .padding(12.0)
                     .background(Color(0.15, 0.18, 0.25, 1.0))
-                    .rounded_corners(8.0),
+                    .rounded_corners(8.0)
+                    .content_description("Basic text field"),
                 TextStyle::default(),
             );
 
@@ -1186,7 +1195,8 @@ fn text_input_example() {
                     .padding(12.0)
                     .background(Color(0.18, 0.15, 0.22, 1.0))
                     .rounded_corners(8.0)
-                    .focus_requester(&field2_focus),
+                    .focus_requester(&field2_focus)
+                    .content_description("Empty text field"),
                 TextStyle::default(),
             );
 
@@ -1359,7 +1369,8 @@ fn text_input_example() {
                         .fill_max_width()
                         .padding(14.0)
                         .background(Color(0.149, 0.129, 0.125, 1.0))
-                        .rounded_corners(10.0),
+                        .rounded_corners(10.0)
+                        .content_description("Wrapped text field"),
                     BasicTextFieldOptions {
                         text_style: style,
                         cursor_color: Color(0.965, 0.208, 0.557, 1.0),
@@ -1403,7 +1414,8 @@ fn text_input_example() {
                             .fill_max_width()
                             .padding(14.0)
                             .background(Color(1.0, 1.0, 1.0, 1.0))
-                            .rounded_corners(10.0),
+                            .rounded_corners(10.0)
+                            .content_description("Wrapped text field on a light surface"),
                         BasicTextFieldOptions {
                             text_style: style,
                             cursor_color: Color(0.965, 0.208, 0.557, 1.0),

@@ -106,6 +106,7 @@ High-level helpers for finding elements in the semantic tree.
 | `find_text_exact(elem, "text")` | Matches exact text only. |
 | `find_button(elem, "text")` | Matches clickable elements containing text. |
 | `find_button_center(elem, "text")` | Returns center `(x, y)` of a matched button. |
+| `assert_accessible(&placed)` | Fails the test with every issue a screen reader user would hit: a control with no name, two controls with one name, a target under 24 points, a control out of reading order, a screen with no title, a picture with no words. `RobotTestRule::assert_accessible()` and `ComposeTestRule::assert_accessible(size)` run it in place. |
 
 **Example Usage:**
 

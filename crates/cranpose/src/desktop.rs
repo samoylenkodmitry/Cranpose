@@ -117,6 +117,17 @@ fn log_desktop_frame_telemetry(
 }
 
 #[cfg(feature = "robot")]
+/// The tree the robot asked for: the elements with bounds, or the lines a
+/// reader speaks.
+fn robot_tree_response(app: &mut AppShell<WgpuRenderer>, command: &RobotCommand) -> RobotResponse {
+    match command {
+        RobotCommand::GetSpokenTree => {
+            RobotResponse::SpokenTree(crate::accessibility::spoken_tree(app))
+        }
+        _ => RobotResponse::Semantics(extract_semantics(app)),
+    }
+}
+
 fn pump_robot_frame(
     app: &mut AppShell<WgpuRenderer>,
     registry: &Rc<native_window::NativeWindowRegistry>,
@@ -5033,12 +5044,11 @@ impl ApplicationHandler for App {
                         robot_visual_dirty |= cursor_dirty || release_dirty;
                         let _ = controller.tx.send(RobotResponse::Ok);
                     }
-                    RobotCommand::GetSemantics => {
+                    command @ (RobotCommand::GetSemantics | RobotCommand::GetSpokenTree) => {
                         let update_result = pump_robot_frame(app, &registry);
                         robot_visual_dirty |=
                             robot_query_visual_dirty(update_result, app.needs_redraw());
-                        let semantics = extract_semantics(app);
-                        let _ = controller.tx.send(RobotResponse::Semantics(semantics));
+                        let _ = controller.tx.send(robot_tree_response(app, &command));
                     }
                     RobotCommand::FindText { text, match_kind } => {
                         let update_result = pump_robot_frame(app, &registry);

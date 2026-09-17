@@ -717,6 +717,45 @@ reads correctly on one platform reads correctly on all four. The static test
 `crates/cranpose/tests/platform_scheduling_static.rs` keep the four bridges in
 step.
 
+## Check a screen without a hand
+
+Four checks run in a test, so a screen that a reader user cannot use fails
+the build and not the person.
+
+**`assert_accessible`.** `cranpose_testing::assert_accessible(&placed)` walks
+a placed semantics tree and fails the test with every issue and what fixes
+it. `ComposeTestRule::assert_accessible(size)` runs it on composed content,
+`RobotTestRule::assert_accessible()` on what a headless shell shows, and
+`audit_accessibility` returns the list for a test that wants to look at it.
+The issues:
+
+| Issue | What a reader user hits | The fix |
+| --- | --- | --- |
+| `NoName` | a control that says nothing | `content_description`, or a `Text` inside it |
+| `SameName` | two controls of one role with one name, "Delete" and "Delete" | say what each acts on |
+| `SmallTarget` | a control under 24 by 24 points, WCAG 2.5.8 | `Modifier::minimum_interactive_component_size()` |
+| `OutOfOrder` | a control laid out fully above the one read before it | reading order, or `traversal_index` |
+| `NoPaneTitle` | a screen that says nothing on arrival | `pane_title` on the root |
+| `UnnamedImage` | a picture a reader stops on with no words | a description, or `None` so it is skipped |
+
+**The demo screens.** `apps/desktop-demo/tests/accessibility_audit.rs` puts
+all 27 tabs of the desktop demo under `audit_accessibility`. The tabs that
+were caught the first time are named there beside the reason each is left
+as it is, and the list only shrinks: a new issue on any tab fails the test,
+and so does a listed issue that went away without the list saying so.
+
+**Android's own checks.** `CranposeAccessibilityAuditTest` in the Android
+demo runs Google's Accessibility Test Framework, the checks behind the
+Accessibility Scanner app, over the node tree the activity publishes: a name
+on every control, no two controls with one name, a 48 dp touch target and
+text contrast. It runs with the other instrumented tests on a device or an
+emulator.
+
+**The tree a reader speaks.** `robot.spoken_tree()` returns the screen the
+way VoiceOver reads it, one control per line: the name, the role, the state,
+the value, the actions. A robot test compares the lines; a person prints them
+to look at a screen from a terminal. `docs/ROBOT_TESTING.md` has the shape.
+
 ## Check the web mirror without a hand
 
 `scripts/a11y/web-page-check.mjs <url>` drives a headless Chrome over the

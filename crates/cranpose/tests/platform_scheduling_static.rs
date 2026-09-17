@@ -3908,9 +3908,9 @@ fn a_keyboard_presses_and_moves_among_controls_and_a_ring_shows_where_it_is() {
         "a pointer press takes the focus ring away"
     );
     let clickable = workspace_source("crates/cranpose-ui/src/modifier/clickable.rs");
-    assert_eq!(
-        clickable.matches(".focusable()").count(),
-        2,
+    assert!(
+        clickable.contains(".focusable()")
+            && clickable.matches("self.then(pressable(modifier))").count() == 2,
         "every clickable control takes keyboard focus and shows the ring"
     );
     for path in [
@@ -3925,4 +3925,43 @@ fn a_keyboard_presses_and_moves_among_controls_and_a_ring_shows_where_it_is() {
             "{path} takes keyboard focus"
         );
     }
+}
+
+#[test]
+fn a_test_audits_a_screen_and_a_robot_prints_what_a_reader_speaks() {
+    let audit = workspace_source("crates/cranpose-testing/src/accessibility_audit.rs");
+    for kind in [
+        "NoName",
+        "SameName",
+        "SmallTarget",
+        "OutOfOrder",
+        "NoPaneTitle",
+        "UnnamedImage",
+    ] {
+        assert!(
+            audit.contains(&format!("AccessibilityIssueKind::{kind}")),
+            "the audit reports {kind}"
+        );
+    }
+    let demo_test = workspace_source("apps/desktop-demo/tests/accessibility_audit.rs");
+    assert!(
+        demo_test.contains("for info in DEMO_TAB_INFO.iter()")
+            && demo_test.contains("audit_accessibility(&placed)"),
+        "every demo tab runs under the audit"
+    );
+    let desktop_loop = crate_source("src/desktop.rs");
+    assert!(
+        desktop_loop.contains("RobotCommand::GetSemantics | RobotCommand::GetSpokenTree")
+            && desktop_loop.contains("crate::accessibility::spoken_tree(app)"),
+        "the robot answers spoken_tree from the app thread"
+    );
+    let android_test = workspace_source(
+        "apps/android-demo/android/app/src/androidTest/java/com/compose_rs/demo/CranposeAccessibilityAuditTest.java",
+    );
+    let android_build = workspace_source("apps/android-demo/android/app/build.gradle.kts");
+    assert!(
+        android_test.contains("AccessibilityCheckPreset.LATEST")
+            && android_build.contains("accessibility-test-framework"),
+        "the Android instrumented tests run the Accessibility Test Framework"
+    );
 }
