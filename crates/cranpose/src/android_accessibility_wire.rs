@@ -1,7 +1,5 @@
 use crate::{
-    accessibility::{
-        AccessibilityElement, AccessibilityRole, CollectionItem, element_ids, utf16_offset,
-    },
+    accessibility::{AccessibilityElement, CollectionItem, element_ids, utf16_offset},
     android_wire_escape::escape_wire_field,
 };
 
@@ -21,20 +19,7 @@ pub(crate) fn encode_elements(
         .zip(parents)
         .enumerate()
         .map(|(index, ((element, id), parent))| {
-            let role = match element.role {
-                AccessibilityRole::Button => 1,
-                AccessibilityRole::StaticText => 2,
-                AccessibilityRole::TextField => 3,
-                AccessibilityRole::Checkbox => 4,
-                AccessibilityRole::Switch => 5,
-                AccessibilityRole::RadioButton => 6,
-                AccessibilityRole::Tab => 7,
-                AccessibilityRole::Image => 8,
-                AccessibilityRole::Header => 9,
-                AccessibilityRole::Dialog => 10,
-                AccessibilityRole::DropdownList => 11,
-                AccessibilityRole::ValuePicker => 12,
-            };
+            let role = element.role.android_code();
             let (center_x, center_y) = element.bounds.center();
             let actions = element
                 .custom_actions
@@ -159,7 +144,7 @@ fn escape(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::accessibility::{AccessibilityRect, element_with};
+    use crate::accessibility::{AccessibilityRect, AccessibilityRole, element_with};
 
     #[test]
     fn android_accessibility_wire_values_escape_record_delimiters() {

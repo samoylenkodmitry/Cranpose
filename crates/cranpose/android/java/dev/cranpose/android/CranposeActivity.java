@@ -961,7 +961,7 @@ public class CranposeActivity extends NativeActivity {
          * holds, or the words of anything else.
          */
         String traversableText() {
-            return role == 3 ? value : label;
+            return editsText() ? value : label;
         }
 
         /**
@@ -980,13 +980,46 @@ public class CranposeActivity extends NativeActivity {
                 case 8: return "android.widget.ImageView";
                 case 11: return "android.widget.Spinner";
                 case 12: return "android.widget.NumberPicker";
+                case 14: return "android.widget.EditText";
+                case 15: return "android.widget.ProgressBar";
+                case 16: return "android.widget.ToggleButton";
+                case 18: return "android.widget.Toolbar";
+                case 22: return "android.widget.ListView";
                 default: return "android.widget.TextView";
+            }
+        }
+
+        /**
+         * The word TalkBack says after the name for a role no widget class
+         * carries, through the role description every service reads, or null
+         * when the class already says it.
+         */
+        String roleDescription() {
+            switch (role) {
+                case 13: return "link";
+                case 14: return "search field";
+                case 17: return "alert";
+                case 19: return "menu";
+                case 20: return "menu item";
+                case 21: return "tab bar";
+                case 23: return "list item";
+                default: return null;
             }
         }
 
         /** Roles that TalkBack announces an on/off state for. */
         boolean isCheckable() {
-            return role == 4 || role == 5;
+            return role == 4 || role == 5 || role == 16;
+        }
+
+        /** Whether a reader types into this control: a text field or a search field. */
+        boolean editsText() {
+            return role == 3 || role == 14;
+        }
+
+        /** A container a reader walks into rather than stops on, named by its role. */
+        boolean isNamedContainer() {
+            return role == 18 || role == 19 || role == 21 || role == 22;
         }
     }
 
@@ -1025,7 +1058,7 @@ public class CranposeActivity extends NativeActivity {
          */
         private void announceTextChanges(List<CranposeAccessibilityElement> previous) {
             for (CranposeAccessibilityElement element : elements) {
-                if (element.role != 3 || !element.focused) continue;
+                if (!element.editsText() || !element.focused) continue;
                 CranposeAccessibilityElement before = null;
                 for (CranposeAccessibilityElement candidate : previous) {
                     if (candidate.id == element.id) {
@@ -1131,7 +1164,8 @@ public class CranposeActivity extends NativeActivity {
             } else {
                 info.setParent(host);
             }
-            boolean container = element.scrollable || element.collectionRows > 0 || element.collectionColumns > 0;
+            boolean container = element.scrollable || element.collectionRows > 0
+                    || element.collectionColumns > 0 || element.isNamedContainer();
             if (container) {
                 for (CranposeAccessibilityElement child : elements) {
                     if (child.scrollParent == element.id) info.addChild(host, child.id);
@@ -1173,7 +1207,11 @@ public class CranposeActivity extends NativeActivity {
             }
             info.setContentDescription(element.label);
             info.setClassName(element.className());
-            if (element.role == 3) {
+            String roleDescription = element.roleDescription();
+            if (roleDescription != null) {
+                info.getExtras().putCharSequence("AccessibilityNodeInfo.roleDescription", roleDescription);
+            }
+            if (element.editsText()) {
                 info.setEditable(true);
                 info.setText(element.value);
                 info.setMultiLine(element.value.contains("\n"));
@@ -1277,7 +1315,7 @@ public class CranposeActivity extends NativeActivity {
                     || action == AccessibilityNodeInfo.ACTION_PREVIOUS_AT_MOVEMENT_GRANULARITY) {
                 return traverse(element, arguments, action);
             }
-            if (element.role == 3 && action == AccessibilityNodeInfo.ACTION_SET_SELECTION) {
+            if (element.editsText() && action == AccessibilityNodeInfo.ACTION_SET_SELECTION) {
                 int start = arguments == null ? -1
                         : arguments.getInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, -1);
                 int end = arguments == null ? -1
@@ -1313,7 +1351,7 @@ public class CranposeActivity extends NativeActivity {
                 nativeOnAccessibilitySetProgress(element.id, value);
                 return true;
             }
-            if (element.role == 3 && action == AccessibilityNodeInfo.ACTION_SET_TEXT) {
+            if (element.editsText() && action == AccessibilityNodeInfo.ACTION_SET_TEXT) {
                 CharSequence text = arguments == null ? null
                         : arguments.getCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE);
                 nativeOnAccessibilitySetText(element.id, text == null ? "" : text.toString());
@@ -1364,7 +1402,7 @@ public class CranposeActivity extends NativeActivity {
         private int cursorOf(CranposeAccessibilityElement element) {
             Integer moved = cursors.get(element.id);
             if (moved != null) return moved;
-            return element.role == 3 ? element.selectionEnd : -1;
+            return element.editsText() ? element.selectionEnd : -1;
         }
 
         /**
@@ -1388,7 +1426,7 @@ public class CranposeActivity extends NativeActivity {
             if (segment == null) return false;
             int moved = forward ? segment[1] : segment[0];
             cursors.put(element.id, moved);
-            if (element.role == 3) {
+            if (element.editsText()) {
                 int anchor = extend && element.selectionStart >= 0 ? element.selectionStart : moved;
                 nativeOnAccessibilitySetSelection(element.id, anchor, moved);
             }

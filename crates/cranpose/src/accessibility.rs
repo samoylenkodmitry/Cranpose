@@ -54,24 +54,221 @@ pub(crate) enum AccessibilityRole {
     Dialog,
     DropdownList,
     ValuePicker,
+    Link,
+    SearchField,
+    ProgressBar,
+    ToggleButton,
+    Alert,
+    Toolbar,
+    Menu,
+    MenuItem,
+    TabBar,
+    List,
+    ListItem,
+}
+
+/// The role a reader names for each role an app declares. A table rather than
+/// a match, so the platforms that name roles with plain data read theirs the
+/// same way; the length assertion below keeps it whole when a role is added.
+const WIDGET_ROLES: [(SemanticsWidgetRole, AccessibilityRole); 21] = [
+    (SemanticsWidgetRole::Button, AccessibilityRole::Button),
+    (SemanticsWidgetRole::Checkbox, AccessibilityRole::Checkbox),
+    (SemanticsWidgetRole::Switch, AccessibilityRole::Switch),
+    (
+        SemanticsWidgetRole::RadioButton,
+        AccessibilityRole::RadioButton,
+    ),
+    (SemanticsWidgetRole::Tab, AccessibilityRole::Tab),
+    (SemanticsWidgetRole::Image, AccessibilityRole::Image),
+    (
+        SemanticsWidgetRole::DropdownList,
+        AccessibilityRole::DropdownList,
+    ),
+    (
+        SemanticsWidgetRole::ValuePicker,
+        AccessibilityRole::ValuePicker,
+    ),
+    (SemanticsWidgetRole::Header, AccessibilityRole::Header),
+    (SemanticsWidgetRole::Dialog, AccessibilityRole::Dialog),
+    (SemanticsWidgetRole::Link, AccessibilityRole::Link),
+    (
+        SemanticsWidgetRole::SearchField,
+        AccessibilityRole::SearchField,
+    ),
+    (
+        SemanticsWidgetRole::ProgressBar,
+        AccessibilityRole::ProgressBar,
+    ),
+    (
+        SemanticsWidgetRole::ToggleButton,
+        AccessibilityRole::ToggleButton,
+    ),
+    (SemanticsWidgetRole::Alert, AccessibilityRole::Alert),
+    (SemanticsWidgetRole::Toolbar, AccessibilityRole::Toolbar),
+    (SemanticsWidgetRole::Menu, AccessibilityRole::Menu),
+    (SemanticsWidgetRole::MenuItem, AccessibilityRole::MenuItem),
+    (SemanticsWidgetRole::TabBar, AccessibilityRole::TabBar),
+    (SemanticsWidgetRole::List, AccessibilityRole::List),
+    (SemanticsWidgetRole::ListItem, AccessibilityRole::ListItem),
+];
+
+const _: () = assert!(WIDGET_ROLES.len() == SemanticsWidgetRole::ListItem as usize + 1);
+
+/// The ARIA role of each role, for the web mirror.
+#[cfg(any(
+    test,
+    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
+))]
+const ARIA_ROLES: [(AccessibilityRole, &str); 23] = [
+    (AccessibilityRole::Button, "button"),
+    (AccessibilityRole::StaticText, "text"),
+    (AccessibilityRole::TextField, "textbox"),
+    (AccessibilityRole::Checkbox, "checkbox"),
+    (AccessibilityRole::Switch, "switch"),
+    (AccessibilityRole::RadioButton, "radio"),
+    (AccessibilityRole::Tab, "tab"),
+    (AccessibilityRole::Image, "img"),
+    (AccessibilityRole::Header, "heading"),
+    (AccessibilityRole::Dialog, "dialog"),
+    (AccessibilityRole::DropdownList, "combobox"),
+    (AccessibilityRole::ValuePicker, "spinbutton"),
+    (AccessibilityRole::Link, "link"),
+    (AccessibilityRole::SearchField, "searchbox"),
+    (AccessibilityRole::ProgressBar, "progressbar"),
+    (AccessibilityRole::ToggleButton, "button"),
+    (AccessibilityRole::Alert, "alert"),
+    (AccessibilityRole::Toolbar, "toolbar"),
+    (AccessibilityRole::Menu, "menu"),
+    (AccessibilityRole::MenuItem, "menuitem"),
+    (AccessibilityRole::TabBar, "tablist"),
+    (AccessibilityRole::List, "list"),
+    (AccessibilityRole::ListItem, "listitem"),
+];
+
+/// The number the Android host reads each role as; the host's `className()`
+/// and `roleDescription()` turn it back into what TalkBack says.
+#[cfg(any(
+    test,
+    all(feature = "android", feature = "renderer-wgpu", target_os = "android")
+))]
+const ANDROID_ROLE_CODES: [(AccessibilityRole, i32); 23] = [
+    (AccessibilityRole::Button, 1),
+    (AccessibilityRole::StaticText, 2),
+    (AccessibilityRole::TextField, 3),
+    (AccessibilityRole::Checkbox, 4),
+    (AccessibilityRole::Switch, 5),
+    (AccessibilityRole::RadioButton, 6),
+    (AccessibilityRole::Tab, 7),
+    (AccessibilityRole::Image, 8),
+    (AccessibilityRole::Header, 9),
+    (AccessibilityRole::Dialog, 10),
+    (AccessibilityRole::DropdownList, 11),
+    (AccessibilityRole::ValuePicker, 12),
+    (AccessibilityRole::Link, 13),
+    (AccessibilityRole::SearchField, 14),
+    (AccessibilityRole::ProgressBar, 15),
+    (AccessibilityRole::ToggleButton, 16),
+    (AccessibilityRole::Alert, 17),
+    (AccessibilityRole::Toolbar, 18),
+    (AccessibilityRole::Menu, 19),
+    (AccessibilityRole::MenuItem, 20),
+    (AccessibilityRole::TabBar, 21),
+    (AccessibilityRole::List, 22),
+    (AccessibilityRole::ListItem, 23),
+];
+
+/// What a table names a role as, or the fallback for a role the table lacks.
+#[cfg(any(
+    test,
+    all(feature = "desktop-shell", feature = "renderer-wgpu"),
+    all(feature = "android", feature = "renderer-wgpu", target_os = "android"),
+    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
+))]
+pub(crate) fn role_entry<T: Copy>(
+    table: &[(AccessibilityRole, T)],
+    role: AccessibilityRole,
+    fallback: T,
+) -> T {
+    table
+        .iter()
+        .find(|(named, _)| *named == role)
+        .map_or(fallback, |(_, value)| *value)
 }
 
 impl AccessibilityRole {
+    /// Every role, for the tables that name a role on a platform and the
+    /// tests that check none is left out.
+    pub(crate) const ALL: [Self; 23] = [
+        Self::Button,
+        Self::StaticText,
+        Self::TextField,
+        Self::Checkbox,
+        Self::Switch,
+        Self::RadioButton,
+        Self::Tab,
+        Self::Image,
+        Self::Header,
+        Self::Dialog,
+        Self::DropdownList,
+        Self::ValuePicker,
+        Self::Link,
+        Self::SearchField,
+        Self::ProgressBar,
+        Self::ToggleButton,
+        Self::Alert,
+        Self::Toolbar,
+        Self::Menu,
+        Self::MenuItem,
+        Self::TabBar,
+        Self::List,
+        Self::ListItem,
+    ];
+
     fn from_widget_role(role: SemanticsWidgetRole) -> Self {
-        match role {
-            SemanticsWidgetRole::Button => Self::Button,
-            SemanticsWidgetRole::Checkbox => Self::Checkbox,
-            SemanticsWidgetRole::Switch => Self::Switch,
-            SemanticsWidgetRole::RadioButton => Self::RadioButton,
-            SemanticsWidgetRole::Tab => Self::Tab,
-            SemanticsWidgetRole::Image => Self::Image,
-            SemanticsWidgetRole::DropdownList => Self::DropdownList,
-            SemanticsWidgetRole::ValuePicker => Self::ValuePicker,
-            SemanticsWidgetRole::Header => Self::Header,
-            SemanticsWidgetRole::Dialog => Self::Dialog,
-        }
+        WIDGET_ROLES
+            .iter()
+            .find(|(widget, _)| *widget == role)
+            .map_or(Self::StaticText, |(_, own)| *own)
+    }
+
+    /// The ARIA role a browser reads the control as.
+    #[cfg(any(
+        test,
+        all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
+    ))]
+    pub(crate) fn aria_name(self) -> &'static str {
+        role_entry(&ARIA_ROLES, self, "text")
+    }
+
+    /// The number the Android host reads the control's role as.
+    #[cfg(any(
+        test,
+        all(feature = "android", feature = "renderer-wgpu", target_os = "android")
+    ))]
+    pub(crate) fn android_code(self) -> i32 {
+        role_entry(&ANDROID_ROLE_CODES, self, 2)
+    }
+
+    /// Whether a reader types into the control: a plain text field or a
+    /// search field.
+    #[cfg(any(
+        test,
+        all(feature = "desktop-shell", feature = "renderer-wgpu"),
+        all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"),
+        all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
+    ))]
+    pub(crate) fn is_text_field(self) -> bool {
+        matches!(self, Self::TextField | Self::SearchField)
+    }
+
+    /// Whether the control is a container a reader walks into rather than
+    /// stops on, named by its role: a toolbar, a menu, a tab bar or a list.
+    pub(crate) fn is_named_container(self) -> bool {
+        matches!(self, Self::Toolbar | Self::Menu | Self::TabBar | Self::List)
     }
 }
+
+const _: () = assert!(AccessibilityRole::ALL.len() == AccessibilityRole::ListItem as usize + 1);
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct AccessibilityElement {
@@ -328,7 +525,12 @@ fn project_node(
 /// A node a reader walks into rather than stops on: a list, a scroll view, or
 /// a group of tabs or radio buttons.
 fn is_container(node: &SemanticsNode) -> bool {
-    node.vertical_scroll.is_some() || node.horizontal_scroll.is_some() || node.selectable_group
+    node.vertical_scroll.is_some()
+        || node.horizontal_scroll.is_some()
+        || node.selectable_group
+        || node
+            .widget_role
+            .is_some_and(|role| AccessibilityRole::from_widget_role(role).is_named_container())
 }
 
 /// A node published with no label of its own: a container, or the root of a
@@ -540,7 +742,10 @@ fn element_for_node(
             .collect(),
         focusable: node.focusable,
         focused: node.focused,
-        live_region,
+        live_region: live_region.or_else(|| {
+            (node.widget_role == Some(SemanticsWidgetRole::Alert))
+                .then_some(LiveRegionMode::Assertive)
+        }),
         progress: node.progress,
         adjustable: node.set_progress.is_some(),
         vertical_scroll: node.vertical_scroll,
@@ -2425,6 +2630,49 @@ mod tests {
         assert!(set_text(&root, 7, "Milk"));
         assert_eq!(*taken.borrow(), vec!["Milk".to_owned()]);
         assert!(!set_text(&root, 99, "Milk"), "no such field");
+    }
+
+    #[test]
+    fn every_role_is_named_once_on_every_platform() {
+        let once = |count: usize, what: &str, role: AccessibilityRole| {
+            assert_eq!(count, 1, "{role:?} should be in the {what} table once");
+        };
+        for role in AccessibilityRole::ALL {
+            let widget = WIDGET_ROLES.iter().filter(|(_, own)| *own == role).count();
+            if role != AccessibilityRole::StaticText && role != AccessibilityRole::TextField {
+                once(widget, "widget role", role);
+            }
+            once(
+                ARIA_ROLES
+                    .iter()
+                    .filter(|(named, _)| *named == role)
+                    .count(),
+                "ARIA",
+                role,
+            );
+            once(
+                ANDROID_ROLE_CODES
+                    .iter()
+                    .filter(|(named, _)| *named == role)
+                    .count(),
+                "Android",
+                role,
+            );
+        }
+        let mut codes: Vec<i32> = ANDROID_ROLE_CODES.iter().map(|(_, code)| *code).collect();
+        codes.sort_unstable();
+        codes.dedup();
+        assert_eq!(
+            codes.len(),
+            ANDROID_ROLE_CODES.len(),
+            "every Android code is its own"
+        );
+        assert_eq!(
+            AccessibilityRole::from_widget_role(SemanticsWidgetRole::SearchField),
+            AccessibilityRole::SearchField
+        );
+        assert_eq!(AccessibilityRole::SearchField.aria_name(), "searchbox");
+        assert_eq!(AccessibilityRole::ListItem.android_code(), 23);
     }
 
     #[test]

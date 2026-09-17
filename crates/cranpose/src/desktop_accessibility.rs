@@ -443,11 +443,11 @@ fn accesskit_node(element: &AccessibilityElement) -> Node {
     let role = match element.progress {
         Some(_) => Role::Slider,
         None if element.pane_title.is_some() => Role::Region,
-        None if scrolls && element.label.is_empty() => scroll_role(element),
-        None if element.password => Role::PasswordInput,
-        None if element.role == AccessibilityRole::TextField && holds_lines(element) => {
-            Role::MultilineTextInput
+        None if scrolls && element.label.is_empty() && !element.role.is_named_container() => {
+            scroll_role(element)
         }
+        None if element.password => Role::PasswordInput,
+        None if element.role.is_text_field() && holds_lines(element) => Role::MultilineTextInput,
         None => accesskit_role(element.role),
     };
     let mut node = Node::new(role);
@@ -519,22 +519,38 @@ fn scroll_role(element: &AccessibilityElement) -> Role {
     }
 }
 
+/// The accesskit role of each role a reader names.
+const ACCESSKIT_ROLES: [(AccessibilityRole, Role); 23] = [
+    (AccessibilityRole::Button, Role::Button),
+    (AccessibilityRole::StaticText, Role::Label),
+    (AccessibilityRole::TextField, Role::TextInput),
+    (AccessibilityRole::Checkbox, Role::CheckBox),
+    (AccessibilityRole::Switch, Role::Switch),
+    (AccessibilityRole::RadioButton, Role::RadioButton),
+    (AccessibilityRole::Tab, Role::Tab),
+    (AccessibilityRole::Image, Role::Image),
+    (AccessibilityRole::Header, Role::Heading),
+    (AccessibilityRole::Dialog, Role::Dialog),
+    (AccessibilityRole::DropdownList, Role::ComboBox),
+    (AccessibilityRole::ValuePicker, Role::SpinButton),
+    (AccessibilityRole::Link, Role::Link),
+    (AccessibilityRole::SearchField, Role::SearchInput),
+    (AccessibilityRole::ProgressBar, Role::ProgressIndicator),
+    (AccessibilityRole::ToggleButton, Role::Button),
+    (AccessibilityRole::Alert, Role::Alert),
+    (AccessibilityRole::Toolbar, Role::Toolbar),
+    (AccessibilityRole::Menu, Role::Menu),
+    (AccessibilityRole::MenuItem, Role::MenuItem),
+    (AccessibilityRole::TabBar, Role::TabList),
+    (AccessibilityRole::List, Role::List),
+    (AccessibilityRole::ListItem, Role::ListItem),
+];
+
+const _: () = assert!(ACCESSKIT_ROLES.len() == AccessibilityRole::ALL.len());
+
 /// The accesskit role a screen reader reads the control as.
 fn accesskit_role(role: AccessibilityRole) -> Role {
-    match role {
-        AccessibilityRole::Button => Role::Button,
-        AccessibilityRole::StaticText => Role::Label,
-        AccessibilityRole::TextField => Role::TextInput,
-        AccessibilityRole::Checkbox => Role::CheckBox,
-        AccessibilityRole::Switch => Role::Switch,
-        AccessibilityRole::RadioButton => Role::RadioButton,
-        AccessibilityRole::Tab => Role::Tab,
-        AccessibilityRole::Image => Role::Image,
-        AccessibilityRole::DropdownList => Role::ComboBox,
-        AccessibilityRole::ValuePicker => Role::SpinButton,
-        AccessibilityRole::Header => Role::Heading,
-        AccessibilityRole::Dialog => Role::Dialog,
-    }
+    accessibility::role_entry(&ACCESSKIT_ROLES, role, Role::Unknown)
 }
 
 /// What the control says about itself beyond its name: its value, the state
@@ -619,7 +635,7 @@ fn apply_actions(node: &mut Node, element: &AccessibilityElement) {
     if element.focusable {
         node.add_action(Action::Focus);
     }
-    if element.role == AccessibilityRole::TextField {
+    if element.role.is_text_field() {
         node.add_action(Action::SetValue);
     }
     if element.text_selection.is_some() {
@@ -1056,6 +1072,21 @@ mod tests {
                 node.supports_action(Action::Focus),
                 "a control focus can land on offers the Focus action"
             );
+        }
+    }
+
+    #[test]
+    fn every_role_has_an_accesskit_role_of_its_own() {
+        for role in AccessibilityRole::ALL {
+            assert_eq!(
+                ACCESSKIT_ROLES
+                    .iter()
+                    .filter(|(named, _)| *named == role)
+                    .count(),
+                1,
+                "{role:?} should be in the accesskit table once"
+            );
+            assert_ne!(accesskit_role(role), Role::Unknown);
         }
     }
 

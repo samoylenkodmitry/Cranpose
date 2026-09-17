@@ -687,6 +687,35 @@ pub enum SemanticsWidgetRole {
     /// Screen readers announce it and confine their traversal to it, which is
     /// the accessible half of what makes a dialog modal.
     Dialog,
+    /// Text that takes the user somewhere else when pressed. Compose has no
+    /// such `Role`; SwiftUI's `.isLink`, ARIA's `link`.
+    Link,
+    /// A field that narrows what is on the screen as the user types. ARIA's
+    /// `searchbox`, VoiceOver's search field trait.
+    SearchField,
+    /// A control that shows how far work has come and takes no input. ARIA's
+    /// `progressbar`.
+    ProgressBar,
+    /// A button that stays pressed or released. ARIA's `button` with
+    /// `aria-pressed`.
+    ToggleButton,
+    /// A message a reader speaks as soon as it shows, with no move to it.
+    /// ARIA's `alert`.
+    Alert,
+    /// A row of controls that act on the content beside them. ARIA's
+    /// `toolbar`.
+    Toolbar,
+    /// A list of commands that opens on a press. ARIA's `menu`.
+    Menu,
+    /// One command inside a menu. ARIA's `menuitem`.
+    MenuItem,
+    /// The row that holds the tabs of a screen. ARIA's `tablist`, VoiceOver's
+    /// tab bar trait.
+    TabBar,
+    /// A container whose rows a reader counts and walks into. ARIA's `list`.
+    List,
+    /// One row of a list. ARIA's `listitem`.
+    ListItem,
 }
 
 /// The value a control holds inside a range, for a slider, a dial or a

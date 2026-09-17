@@ -15,7 +15,7 @@ use crate::accessibility::{self, AccessibilityElement, AccessibilityRole};
 fn apply_role_and_state(node: &HtmlElement, element: &AccessibilityElement) -> Result<(), JsValue> {
     let role = match element.progress {
         Some(_) => "slider",
-        None => aria_role(element.role),
+        None => element.role.aria_name(),
     };
     if !edits_text(element) {
         node.set_attribute("role", role)?;
@@ -104,7 +104,7 @@ fn apply_page(
 /// text field moves its caret with those two keys and a slider moves its
 /// value, so inside a list those two keep them.
 fn takes_home_and_end(element: &AccessibilityElement) -> bool {
-    element.role != AccessibilityRole::TextField && !element.adjustable
+    !element.role.is_text_field() && !element.adjustable
 }
 
 /// Pages the scroll container around the focused mirror node on Page Down and
@@ -211,30 +211,14 @@ fn on_live_tree(
     }
 }
 
-/// The ARIA role a screen reader reads the control as.
-fn aria_role(role: AccessibilityRole) -> &'static str {
-    match role {
-        AccessibilityRole::Button => "button",
-        AccessibilityRole::StaticText => "text",
-        AccessibilityRole::TextField => "textbox",
-        AccessibilityRole::Checkbox => "checkbox",
-        AccessibilityRole::Switch => "switch",
-        AccessibilityRole::RadioButton => "radio",
-        AccessibilityRole::Tab => "tab",
-        AccessibilityRole::Image => "img",
-        AccessibilityRole::DropdownList => "combobox",
-        AccessibilityRole::ValuePicker => "spinbutton",
-        AccessibilityRole::Header => "heading",
-        AccessibilityRole::Dialog => "dialog",
-    }
-}
-
 /// What a role asks for beyond its name: text to read, a heading level, the
 /// value of a field, or the modal flag on a dialog.
 fn apply_role_extras(node: &HtmlElement, element: &AccessibilityElement) -> Result<(), JsValue> {
     match element.role {
         AccessibilityRole::StaticText => node.set_text_content(Some(&element.label)),
-        AccessibilityRole::TextField => node.set_text_content(element.value.as_deref()),
+        AccessibilityRole::TextField | AccessibilityRole::SearchField => {
+            node.set_text_content(element.value.as_deref())
+        }
         AccessibilityRole::Header => {
             node.set_attribute("aria-level", "2")?;
             node.set_text_content(Some(&element.label));
@@ -275,7 +259,12 @@ fn apply_aria_state(node: &HtmlElement, element: &AccessibilityElement) -> Resul
         node.set_attribute("aria-expanded", if expanded { "true" } else { "false" })?;
     }
     if let Some(toggled) = element.toggled {
-        node.set_attribute("aria-checked", if toggled { "true" } else { "false" })?;
+        let flag = if element.role == AccessibilityRole::ToggleButton {
+            "aria-pressed"
+        } else {
+            "aria-checked"
+        };
+        node.set_attribute(flag, if toggled { "true" } else { "false" })?;
     }
     if let Some(selected) = element.selected {
         let selected = if selected { "true" } else { "false" };
@@ -293,7 +282,7 @@ fn apply_aria_state(node: &HtmlElement, element: &AccessibilityElement) -> Resul
 /// Whether a control is a text field a reader edits: one that publishes its
 /// caret. A field that holds a secret publishes none and stays a plain node.
 fn edits_text(element: &AccessibilityElement) -> bool {
-    element.role == AccessibilityRole::TextField && element.text_selection.is_some()
+    element.role.is_text_field() && element.text_selection.is_some()
 }
 
 /// Whether a field's text runs over more than one line.
@@ -339,7 +328,11 @@ fn apply_field_text(node: &HtmlElement, element: &AccessibilityElement) -> Resul
         "forward"
     };
     if let Some(input) = node.dyn_ref::<HtmlInputElement>() {
-        input.set_type("text");
+        input.set_type(if element.role == AccessibilityRole::SearchField {
+            "search"
+        } else {
+            "text"
+        });
         input.set_value(value);
         input.set_selection_range_with_direction(start, end, direction)?;
     } else if let Some(area) = node.dyn_ref::<HtmlTextAreaElement>() {

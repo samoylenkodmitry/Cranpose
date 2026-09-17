@@ -352,6 +352,35 @@ On the web a keystroke or a caret move patches the focused input in place. A
 rebuild of the mirror would drop the browser's focus and make a reader hear
 the whole field again instead of one character.
 
+## 4k. Roles a reader names
+
+A reader says what a control is after its name: "Save, button". Ten roles
+covered the first apps, so a link read as a button, a search field as a
+plain field, a spinner as text, and a menu, a toolbar, a tab row or a list
+as nothing at all. `SemanticsWidgetRole` now also has Link, SearchField,
+ProgressBar, ToggleButton, Alert, Toolbar, Menu, MenuItem, TabBar, List and
+ListItem, set through `Modifier::role(..)` or the spec. The built-in widgets
+declare their own: the progress indicators say progress bar, `LiquidTabBar`
+says tab bar, `LiquidMenu` says menu and its rows say menu item, the liquid
+search field says search field, and `LazyColumn` and `LazyRow` say list.
+
+A toolbar, a menu, a tab bar and a list are containers: a reader walks into
+them, and their rows sit under them on Android and in the accesskit tree,
+the way the rows of a scroll container already do. An alert is a live
+region on its own: a reader speaks it as soon as it shows.
+
+| Role | accesskit | iOS | Android | Web |
+| --- | --- | --- | --- | --- |
+| Link | `Link` | the link trait | "link" as the role description | `link` |
+| SearchField | `SearchInput`, with the text runs of a field | the search field trait, edited like a field | `EditText` and "search field" | `<input type="search">` |
+| ProgressBar | `ProgressIndicator` | the updates-frequently trait | `ProgressBar` | `progressbar` |
+| ToggleButton | `Button` with the toggled state | the button trait with the state | `ToggleButton`, checkable | `button` with `aria-pressed` |
+| Alert | `Alert` | spoken when it shows | "alert", spoken when it shows | `alert` |
+| Toolbar | `Toolbar` | a container | `Toolbar` | `toolbar` |
+| Menu, MenuItem | `Menu`, `MenuItem` | a container, button rows | "menu", "menu item" | `menu`, `menuitem` |
+| TabBar | `TabList` | a container | "tab bar" | `tablist` |
+| List, ListItem | `List`, `ListItem` | a container, text rows | `ListView`, "list item" | `list`, `listitem` |
+
 ## 4i. An icon says what it is, or says it is decoration
 
 A picture with no words under it is the one thing a screen reader cannot
@@ -539,7 +568,7 @@ An app gets this with no code of its own:
 | `LiquidTabBar` | the tab, whether it is picked, and which of how many | pick it |
 | `BasicTextField` | the name the app gave it, or the text it holds; an empty field is still a stop | type into it, hand it whole text, move the caret by character, word and line, and pick a stretch of text |
 | `Slider` | the value | move it |
-| `CircularProgressIndicator`, `LinearProgressIndicator` | "Loading" | |
+| `CircularProgressIndicator`, `LinearProgressIndicator` | "Loading", progress bar | |
 | `SwipeToDismiss` | the row's content | send the row away with the reader's own dismiss, or run "Dismiss" from the actions menu |
 | `verticalScroll`, `horizontalScroll`, `LazyColumn`, `LazyRow` | the rows inside, and on Android how many rows there are | page on and back |
 | `LinkedText` | the whole text | open each link from the actions menu, as "Open <link text>" |

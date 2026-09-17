@@ -13,14 +13,14 @@ is ticked when the code, its tests and its docs are on the branch.
 - [x] iOS: the focused field as the keyboard's `UITextInput` view, input delegate notices
 - [x] Web: an input or text area as the mirror, `selectionchange`, an in-place patch
 - [x] docs, parity row, static test
-- [ ] commit on `a11y-text-edit`
+- [x] commit on `a11y-text-edit`
 
 ## Step 2. Roles a reader names
 
-- [ ] new roles: Link, SearchField, ProgressBar, ToggleButton, Alert, Toolbar, Menu, MenuItem, TabBar, List, ListItem
-- [ ] each role on every platform: projection, Android code and class name, AccessKit role, ARIA role, iOS trait
-- [ ] widgets declare them: progress indicators, `LiquidTabBar`, liquid menu rows, lazy lists
-- [ ] docs, parity row, static test
+- [x] new roles: Link, SearchField, ProgressBar, ToggleButton, Alert, Toolbar, Menu, MenuItem, TabBar, List, ListItem
+- [x] each role on every platform: projection, Android code and class name, AccessKit role, ARIA role, iOS trait
+- [x] widgets declare them: progress indicators, `LiquidTabBar`, liquid menu rows, lazy lists
+- [x] docs, parity row, static test
 
 ## Step 3. What VoiceOver and Voice Control users expect
 

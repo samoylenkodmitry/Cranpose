@@ -492,6 +492,7 @@ fn TabCells(
                 Modifier::empty()
                     .size(size)
                     .selectable_group()
+                    .role(SemanticsWidgetRole::TabBar)
                     .graphics_layer_value(transform.clone()),
                 BoxSpec::default(),
                 move || {

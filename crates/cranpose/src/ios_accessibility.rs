@@ -23,8 +23,10 @@ use objc2_ui_kit::{
     UIAccessibilityIdentification, UIAccessibilityLayoutChangedNotification,
     UIAccessibilityPostNotification, UIAccessibilityScreenChangedNotification,
     UIAccessibilityTraitAdjustable, UIAccessibilityTraitButton, UIAccessibilityTraitHeader,
-    UIAccessibilityTraitImage, UIAccessibilityTraitNone, UIAccessibilityTraitNotEnabled,
-    UIAccessibilityTraitSelected, UIAccessibilityTraitStaticText, UIView,
+    UIAccessibilityTraitImage, UIAccessibilityTraitLink, UIAccessibilityTraitNone,
+    UIAccessibilityTraitNotEnabled, UIAccessibilityTraitSearchField, UIAccessibilityTraitSelected,
+    UIAccessibilityTraitStaticText, UIAccessibilityTraitUpdatesFrequently, UIAccessibilityTraits,
+    UIView,
 };
 use winit::event_loop::EventLoopProxy;
 
@@ -683,11 +685,9 @@ fn update_native_element(
     jumpable: bool,
     mtm: MainThreadMarker,
 ) {
-    native.set_actionable(element.clickable || element.role == AccessibilityRole::TextField);
+    native.set_actionable(element.clickable || element.role.is_text_field());
     native.set_dismissable(element.dismissable);
-    native.setIsAccessibilityElement(
-        !element.label.is_empty() || element.role == AccessibilityRole::TextField,
-    );
+    native.setIsAccessibilityElement(!element.label.is_empty() || element.role.is_text_field());
     native.setAccessibilityLabel(Some(&NSString::from_str(&element.label)));
     let place = element
         .collection_item
@@ -711,25 +711,9 @@ fn update_native_element(
         CGPoint::new(element.bounds.x as f64, element.bounds.y as f64),
         CGSize::new(element.bounds.width as f64, element.bounds.height as f64),
     ));
+    let mut traits = role_traits(element.role);
     // SAFETY: UIKit accessibility trait constants are immutable process-wide
     // values exported by the linked framework.
-    let mut traits = unsafe {
-        match element.role {
-            AccessibilityRole::Button
-            | AccessibilityRole::Checkbox
-            | AccessibilityRole::Switch
-            | AccessibilityRole::RadioButton => UIAccessibilityTraitButton,
-            AccessibilityRole::StaticText => UIAccessibilityTraitStaticText,
-            AccessibilityRole::TextField => UIAccessibilityTraitNone,
-            AccessibilityRole::Tab => UIAccessibilityTraitButton,
-            AccessibilityRole::Image => UIAccessibilityTraitImage,
-            AccessibilityRole::DropdownList => UIAccessibilityTraitButton,
-            AccessibilityRole::ValuePicker => UIAccessibilityTraitAdjustable,
-            AccessibilityRole::Header => UIAccessibilityTraitHeader,
-            AccessibilityRole::Dialog => UIAccessibilityTraitHeader,
-        }
-    };
-    // SAFETY: as above — immutable framework constants.
     unsafe {
         if element.selected == Some(true) {
             traits |= UIAccessibilityTraitSelected;
@@ -744,6 +728,74 @@ fn update_native_element(
     native.setAccessibilityTraits(traits);
     native.setAccessibilityViewIsModal(element.role == AccessibilityRole::Dialog, mtm);
     offer_custom_actions(native, element, jumpable, mtm);
+}
+
+/// The VoiceOver trait that says what a control is.
+fn role_traits(role: AccessibilityRole) -> UIAccessibilityTraits {
+    // SAFETY: UIKit accessibility trait constants are immutable process-wide
+    // values exported by the linked framework.
+    unsafe {
+        match role {
+            AccessibilityRole::Button
+            | AccessibilityRole::Checkbox
+            | AccessibilityRole::Switch
+            | AccessibilityRole::RadioButton
+            | AccessibilityRole::Tab
+            | AccessibilityRole::DropdownList => UIAccessibilityTraitButton,
+            AccessibilityRole::StaticText => UIAccessibilityTraitStaticText,
+            AccessibilityRole::TextField => UIAccessibilityTraitNone,
+            AccessibilityRole::Image => UIAccessibilityTraitImage,
+            AccessibilityRole::ValuePicker => UIAccessibilityTraitAdjustable,
+            AccessibilityRole::Header | AccessibilityRole::Dialog => UIAccessibilityTraitHeader,
+            AccessibilityRole::Link
+            | AccessibilityRole::SearchField
+            | AccessibilityRole::ProgressBar
+            | AccessibilityRole::ToggleButton
+            | AccessibilityRole::Alert
+            | AccessibilityRole::Toolbar
+            | AccessibilityRole::Menu
+            | AccessibilityRole::MenuItem
+            | AccessibilityRole::TabBar
+            | AccessibilityRole::List
+            | AccessibilityRole::ListItem => named_role_traits(role),
+        }
+    }
+}
+
+/// The VoiceOver traits of the roles beyond Compose's own. A toolbar, a
+/// menu, a tab bar and a list carry no label, so they are never elements.
+fn named_role_traits(role: AccessibilityRole) -> UIAccessibilityTraits {
+    // SAFETY: UIKit accessibility trait constants are immutable process-wide
+    // values exported by the linked framework.
+    unsafe {
+        match role {
+            AccessibilityRole::Link => UIAccessibilityTraitLink,
+            AccessibilityRole::SearchField => UIAccessibilityTraitSearchField,
+            AccessibilityRole::ProgressBar => UIAccessibilityTraitUpdatesFrequently,
+            AccessibilityRole::ToggleButton | AccessibilityRole::MenuItem => {
+                UIAccessibilityTraitButton
+            }
+            AccessibilityRole::Alert | AccessibilityRole::ListItem => {
+                UIAccessibilityTraitStaticText
+            }
+            AccessibilityRole::Toolbar
+            | AccessibilityRole::Menu
+            | AccessibilityRole::TabBar
+            | AccessibilityRole::List => UIAccessibilityTraitNone,
+            AccessibilityRole::Button
+            | AccessibilityRole::StaticText
+            | AccessibilityRole::TextField
+            | AccessibilityRole::Checkbox
+            | AccessibilityRole::Switch
+            | AccessibilityRole::RadioButton
+            | AccessibilityRole::Tab
+            | AccessibilityRole::Image
+            | AccessibilityRole::DropdownList
+            | AccessibilityRole::ValuePicker
+            | AccessibilityRole::Header
+            | AccessibilityRole::Dialog => role_traits(role),
+        }
+    }
 }
 
 /// Lists the actions the element offers in VoiceOver's actions rotor, each
@@ -831,9 +883,7 @@ fn reader_field<'a>(
         .iter()
         .zip(ids)
         .find(|(element, _)| {
-            element.role == AccessibilityRole::TextField
-                && element.focused
-                && element.text_selection.is_some()
+            element.role.is_text_field() && element.focused && element.text_selection.is_some()
         })
         .map(|(element, id)| (*id, element))
 }
@@ -847,7 +897,7 @@ fn same_structure(current: &[AccessibilityElement], next: &[AccessibilityElement
                 && current.role == next.role
                 && current.clickable == next.clickable
                 && current.canvas_key == next.canvas_key
-                && (current.role != AccessibilityRole::TextField || current.focused == next.focused)
+                && (!current.role.is_text_field() || current.focused == next.focused)
         })
 }
 

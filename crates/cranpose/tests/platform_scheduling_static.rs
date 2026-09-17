@@ -3481,8 +3481,7 @@ fn every_platform_lets_a_reader_find_an_empty_text_field() {
 
     let ios_source = crate_source("src/ios_accessibility.rs");
     assert!(
-        ios_source
-            .contains("!element.label.is_empty() || element.role == AccessibilityRole::TextField"),
+        ios_source.contains("!element.label.is_empty() || element.role.is_text_field()"),
         "VoiceOver stops on an empty text field"
     );
 }
@@ -3599,7 +3598,7 @@ fn the_desktop_tree_keeps_rows_under_their_list() {
     let desktop_source = crate_source("src/desktop_accessibility.rs");
     assert!(
         desktop_source.contains("fn nested_children(")
-            && desktop_source.contains("node.set_children(children);"),
+            && desktop_source.contains("node.set_children(below);"),
         "accesskit gets each row under its list and each tab under its group"
     );
 }
@@ -3661,6 +3660,32 @@ fn every_platform_lets_a_reader_move_the_caret_of_a_field() {
                 .contains("accessibility::set_text_selection_utf16(root, node_id, anchor, focus)")
             && web_source.contains("fn only_focused_field_changed("),
         "the web mirror is an input whose caret goes both ways without a rebuild"
+    );
+}
+
+#[test]
+fn the_android_host_names_every_role_the_projection_has() {
+    let java_source = crate_source("android/java/dev/cranpose/android/CranposeActivity.java");
+    for expected in [
+        "case 14: return \"android.widget.EditText\";",
+        "case 15: return \"android.widget.ProgressBar\";",
+        "case 16: return \"android.widget.ToggleButton\";",
+        "case 22: return \"android.widget.ListView\";",
+        "case 13: return \"link\";",
+        "case 20: return \"menu item\";",
+        "case 21: return \"tab bar\";",
+        "return role == 3 || role == 14;",
+        "return role == 18 || role == 19 || role == 21 || role == 22;",
+    ] {
+        assert!(
+            java_source.contains(expected),
+            "the Android host should carry `{expected}`"
+        );
+    }
+    let projection_source = crate_source("src/accessibility.rs");
+    assert!(
+        projection_source.contains("(AccessibilityRole::ListItem, 23),"),
+        "the projection numbers every role for the wire"
     );
 }
 
@@ -3795,7 +3820,7 @@ fn every_platform_names_a_dropdown_and_a_picker() {
         "accesskit reads the node as a combo box"
     );
     assert!(
-        crate_source("src/web_accessibility.rs").contains(r#""combobox""#),
+        crate_source("src/accessibility.rs").contains(r#""combobox""#),
         "the web mirror names the role"
     );
     assert!(

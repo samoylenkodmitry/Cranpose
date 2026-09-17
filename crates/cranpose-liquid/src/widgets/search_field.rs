@@ -108,7 +108,9 @@ pub fn LiquidSearchField(modifier: Modifier, state: TextFieldState, spec: Liquid
                             let placeholder_style = placeholder_style.clone();
                             BasicTextFieldDecorated(
                                 state,
-                                Modifier::empty().fill_max_width(),
+                                Modifier::empty()
+                                    .fill_max_width()
+                                    .role(cranpose_ui::SemanticsWidgetRole::SearchField),
                                 BasicTextFieldOptions {
                                     text_style: field_style.clone(),
                                     ..BasicTextFieldOptions::default()

@@ -1302,6 +1302,7 @@ pub fn LiquidMenu(
                     Color::from_rgba_u8(246, 247, 250, 210)
                 });
                 let card = Modifier::empty()
+                    .role(SemanticsWidgetRole::Menu)
                     .report_size(Rc::clone(&node_size))
                     .glass_effect_with(glass, move || {
                         let glow_touch = glow_for_glass.get().map(|(x, y)| {
@@ -1657,7 +1658,7 @@ fn menu_header_row(
 fn menu_row_semantics(label: String, has_checks: bool, checked: bool) -> SemanticsSpec {
     let spec = SemanticsSpec::new()
         .content_description(label)
-        .role(SemanticsWidgetRole::Button)
+        .role(SemanticsWidgetRole::MenuItem)
         .clickable();
     match has_checks {
         true => spec.toggled(checked),
