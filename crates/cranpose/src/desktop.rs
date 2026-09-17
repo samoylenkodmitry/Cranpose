@@ -128,6 +128,7 @@ fn robot_tree_response(app: &mut AppShell<WgpuRenderer>, command: &RobotCommand)
     }
 }
 
+#[cfg(feature = "robot")]
 fn pump_robot_frame(
     app: &mut AppShell<WgpuRenderer>,
     registry: &Rc<native_window::NativeWindowRegistry>,
