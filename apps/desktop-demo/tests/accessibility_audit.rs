@@ -12,8 +12,13 @@ use tab_switch_regression_support::{
 
 /// The issues a tab still has, each with the reason it stays. A new issue
 /// on any tab fails the test, and so does a listed one that went away: the
-/// list only shrinks.
+/// list only shrinks. The slug `*` stands for every tab.
 const KNOWN: &[(&str, &str, &str)] = &[
+    (
+        "*",
+        "SmallTarget: control \"Show source\" is 79x17 points",
+        "the floating pill sits over the first tab; a larger target would cover it",
+    ),
     (
         "liquid-ui",
         "SameName: tab \"Apps\" appears 2 times",
@@ -70,19 +75,24 @@ fn every_demo_tab_reads_well_to_a_screen_reader() {
     found.sort();
     found.dedup();
 
-    let known: Vec<(String, String)> = KNOWN
-        .iter()
-        .map(|(slug, issue, _)| (slug.to_string(), issue.to_string()))
-        .collect();
+    let is_known = |(slug, issue): &(String, String)| {
+        KNOWN.iter().any(|(known_slug, known_issue, _)| {
+            (*known_slug == "*" || *known_slug == slug) && *known_issue == issue
+        })
+    };
     let new: Vec<String> = found
         .iter()
-        .filter(|entry| !known.contains(entry))
+        .filter(|entry| !is_known(entry))
         .map(|(slug, issue)| format!("{slug}: {issue}"))
         .collect();
-    let gone: Vec<String> = known
+    let gone: Vec<String> = KNOWN
         .iter()
-        .filter(|entry| !found.contains(entry))
-        .map(|(slug, issue)| format!("{slug}: {issue}"))
+        .filter(|(slug, issue, _)| {
+            !found.iter().any(|(found_slug, found_issue)| {
+                (*slug == "*" || *slug == found_slug) && *issue == found_issue
+            })
+        })
+        .map(|(slug, issue, _)| format!("{slug}: {issue}"))
         .collect();
     assert!(
         new.is_empty(),
