@@ -2556,7 +2556,10 @@ impl App {
                 }
                 Self::redraw_native_window(&mut native, &self.native_window_registry);
             }
-            event => present_native_frame_owed_while_hidden(&mut native, &event),
+            event => {
+                restore_pointer_icon_the_window_system_drew_over(Some(&native.app), &event);
+                present_native_frame_owed_while_hidden(&mut native, &event);
+            }
         }
 
         if keep_window {
@@ -3803,6 +3806,22 @@ fn occlusion_leaves_a_frame_owed(occluded: bool) -> bool {
     !occluded
 }
 
+fn pointer_icon_is_owed_again(event: &WindowEvent) -> bool {
+    matches!(
+        event,
+        WindowEvent::Focused(true) | WindowEvent::PointerEntered { .. }
+    )
+}
+
+fn restore_pointer_icon_the_window_system_drew_over(
+    app: Option<&AppShell<WgpuRenderer>>,
+    event: &WindowEvent,
+) {
+    if let Some(app) = app.filter(|_| pointer_icon_is_owed_again(event)) {
+        app.refresh_pointer_icon();
+    }
+}
+
 fn present_native_frame_owed_while_hidden(native: &mut NativeWindowSurface, event: &WindowEvent) {
     if let WindowEvent::Occluded(occluded) = event
         && occlusion_leaves_a_frame_owed(*occluded)
@@ -4845,12 +4864,15 @@ impl ApplicationHandler for App {
                     }
                 }
             }
-            event => present_primary_frame_owed_while_hidden(
-                &event,
-                window,
-                &mut self.primary_surface_dirty,
-                &mut self.primary_redraw_pending,
-            ),
+            event => {
+                restore_pointer_icon_the_window_system_drew_over(self.app.as_ref(), &event);
+                present_primary_frame_owed_while_hidden(
+                    &event,
+                    window,
+                    &mut self.primary_surface_dirty,
+                    &mut self.primary_redraw_pending,
+                );
+            }
         }
 
         if sync_native_windows_after_event {

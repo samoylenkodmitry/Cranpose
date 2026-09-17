@@ -45,6 +45,10 @@ impl PointerIconState {
         self.pending.borrow_mut().take()
     }
 
+    fn refresh(&self) {
+        *self.pending.borrow_mut() = Some(self.current.borrow().clone());
+    }
+
     fn current(&self) -> PointerIcon {
         self.current.borrow().clone()
     }
@@ -67,6 +71,19 @@ pub fn set_pointer_icon(icon: PointerIcon) {
 /// and touches its window only when something comes back.
 pub fn take_pointer_icon_change() -> Option<PointerIcon> {
     crate::render_state::with_pointer_icon_session(|state| state.take_change())
+}
+
+/// Offers the icon the session already holds to the platform again.
+///
+/// A windowing system resets the cursor to its own default on the way back
+/// into a window — when the application is activated, or when the pointer
+/// crosses in — without telling the application what it drew. Nothing in the
+/// hovered region has changed, so no change would be reported and the platform
+/// default would stay on screen over a region that names its own cursor. The
+/// platform layer calls this at those moments so the next poll re-applies what
+/// the region already asked for.
+pub fn refresh_pointer_icon() {
+    crate::render_state::with_pointer_icon_session(|state| state.refresh());
 }
 
 /// The pointer icon currently requested, whether or not the platform has
@@ -145,6 +162,32 @@ mod tests {
             assert_eq!(take_pointer_icon_change(), Some(icon.clone()));
             set_pointer_icon(icon);
             assert_eq!(take_pointer_icon_change(), None);
+        });
+    }
+
+    #[test]
+    fn a_refresh_offers_the_icon_the_region_already_asked_for() {
+        let context = AppContext::new();
+        context.enter(|| {
+            set_pointer_icon(PointerIcon::POINTER);
+            assert_eq!(take_pointer_icon_change(), Some(PointerIcon::POINTER));
+            assert_eq!(take_pointer_icon_change(), None);
+
+            refresh_pointer_icon();
+            assert_eq!(
+                take_pointer_icon_change(),
+                Some(PointerIcon::POINTER),
+                "coming back to the window re-applies the region's own cursor"
+            );
+        });
+    }
+
+    #[test]
+    fn a_refresh_on_a_window_that_asked_for_nothing_restores_the_default() {
+        let context = AppContext::new();
+        context.enter(|| {
+            refresh_pointer_icon();
+            assert_eq!(take_pointer_icon_change(), Some(PointerIcon::DEFAULT));
         });
     }
 
