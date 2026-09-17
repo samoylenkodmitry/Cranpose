@@ -10421,6 +10421,29 @@ fn hovering_a_region_requests_its_pointer_icon() {
 }
 
 #[test]
+fn coming_back_to_a_window_puts_the_regions_own_cursor_back() {
+    let _guard = test_guard();
+    let hits = Rc::new(RefCell::new(vec![PointerIconHitTarget {
+        node_id: 1,
+        pointer_icon: Some(PointerIcon::POINTER),
+    }]));
+    let mut shell = pointer_icon_shell(hits);
+
+    shell.set_cursor(5.0, 5.0);
+    assert_eq!(shell.take_pointer_icon_change(), Some(PointerIcon::POINTER));
+    assert_eq!(shell.take_pointer_icon_change(), None);
+
+    shell.refresh_pointer_icon();
+
+    assert_eq!(
+        shell.take_pointer_icon_change(),
+        Some(PointerIcon::POINTER),
+        "the window system drew its own default over the region's cursor, so the \
+         region's cursor has to be offered again without the pointer moving"
+    );
+}
+
+#[test]
 fn the_topmost_region_decides_the_pointer_icon() {
     let _guard = test_guard();
     let hits = Rc::new(RefCell::new(vec![

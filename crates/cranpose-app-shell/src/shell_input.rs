@@ -915,6 +915,13 @@ where
     /// Platform backends call this after handing the shell a batch of input and
     /// set the returned icon on the window they own. Platforms with no pointing
     /// device never call it.
+    /// Offers this window's current pointer icon to the platform again, for
+    /// the moments a windowing system has drawn its own default over it.
+    pub fn refresh_pointer_icon(&self) {
+        let app_context = Rc::clone(&self.app_context);
+        app_context.enter(cranpose_ui::pointer_icon_session::refresh_pointer_icon);
+    }
+
     pub fn take_pointer_icon_change(&self) -> Option<PointerIcon> {
         let app_context = Rc::clone(&self.app_context);
         app_context.enter(cranpose_ui::pointer_icon_session::take_pointer_icon_change)
