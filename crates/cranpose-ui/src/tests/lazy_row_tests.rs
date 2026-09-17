@@ -363,6 +363,32 @@ fn measure_root(composition: &mut Composition<MemoryApplier>, root: NodeId, size
 }
 
 #[test]
+fn a_reader_reaches_a_row_of_a_lazy_row_by_number() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let (mut composition, root, captured_state) = measured_indicator_lazy_row();
+    let list_state = (*captured_state.borrow()).expect("state captured");
+
+    let mut config = cranpose_foundation::SemanticsConfiguration::default();
+    crate::modifier::lazy_scroll_semantics(list_state, false, false)(&mut config);
+    let jump = config
+        .scroll_to_index
+        .expect("a lazy row takes a row number from a reader");
+
+    assert!(jump.invoke(60), "row 60 is one of the 80 the row holds");
+    measure_root(&mut composition, root, INDICATOR_VIEWPORT);
+    assert_eq!(
+        list_state.first_visible_item_index_non_reactive(),
+        60,
+        "the row a reader named sits at the start of the list"
+    );
+
+    assert!(
+        !jump.invoke(80),
+        "a row past the last one moves nothing, because the list holds 80"
+    );
+}
+
+#[test]
 fn a_reader_page_moves_a_lazy_row_forward() {
     let _app_context = crate::render_state::app_context_test_scope();
     let (mut composition, root, captured_state) = measured_indicator_lazy_row();

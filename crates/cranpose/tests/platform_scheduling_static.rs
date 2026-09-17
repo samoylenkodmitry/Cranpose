@@ -808,7 +808,7 @@ fn every_platform_bridge_carries_focus_both_ways() {
 
     let desktop_source = crate_source("src/desktop_accessibility.rs");
     assert!(
-        desktop_source.contains("Action::Focus => self.pending_focus.push(request.target_node)")
+        desktop_source.contains("Action::Focus => self.pending_focus.push(target)")
             && desktop_source.contains("pub(crate) fn run_focus_requests(")
             && !desktop_source.contains("focus: ROOT_ID,"),
         "accesskit should report the focused control and take a Focus action back, instead of naming the window every time"
@@ -3394,6 +3394,67 @@ fn a_dialog_takes_the_reader_along_when_it_opens() {
 }
 
 #[test]
+fn every_platform_takes_a_reader_to_a_row_by_number() {
+    let scroll_source = workspace_source("crates/cranpose-ui/src/modifier/scroll.rs");
+    assert!(
+        scroll_source.contains("config.scroll_to_index = Some(")
+            && scroll_source.contains("fn jump_to_row("),
+        "a lazy list says on its own what it does when a reader names a row"
+    );
+
+    let projection_source = crate_source("src/accessibility.rs");
+    assert!(
+        projection_source.contains("pub(crate) scroll_to_index: bool")
+            && projection_source.contains("pub(crate) fn scroll_to_index(")
+            && projection_source.contains("pub(crate) fn row_count("),
+        "the row a reader asked for and the rows a list holds are platform-neutral"
+    );
+
+    let desktop_source = crate_source("src/desktop_accessibility.rs");
+    assert!(
+        desktop_source.contains("Action::SetScrollOffset")
+            && desktop_source.contains("fn apply_row_offset(")
+            && desktop_source.contains("pub(crate) fn run_jump_requests("),
+        "accesskit has no scroll-to-index action, so the list carries its rows as a scroll offset"
+    );
+
+    let ios_source = crate_source("src/ios_accessibility.rs");
+    assert!(
+        ios_source.contains("#[unsafe(method(cranposeJumpToFirstRow:))]")
+            && ios_source.contains("#[unsafe(method(cranposeJumpToLastRow:))]")
+            && ios_source.contains("fn drain_jumps<R>("),
+        "VoiceOver has no scroll-to-index action, so the two ends of the list sit in the actions rotor"
+    );
+
+    let java_source =
+        workspace_source("crates/cranpose/android/java/dev/cranpose/android/CranposeActivity.java");
+    let android_source = crate_source("src/android_accessibility.rs");
+    let rust_shell_source = crate_source("src/android.rs");
+    let wire_source = crate_source("src/android_accessibility_wire.rs");
+    assert!(
+        java_source.contains(
+            "info.addAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_TO_POSITION);"
+        ) && java_source.contains("nativeOnAccessibilityScrollToIndex(element.id, row);")
+            && android_source.contains(
+                "Java_dev_cranpose_android_CranposeActivity_nativeOnAccessibilityScrollToIndex"
+            )
+            && rust_shell_source
+                .contains("drain_accessibility_jumps(shell, &accessibility_elements);")
+            && wire_source.contains("i32::from(element.scroll_to_index),"),
+        "TalkBack names a row through Android's own scroll-to-position action"
+    );
+
+    let web_source = crate_source("src/web_accessibility.rs");
+    assert!(
+        web_source.contains("\"Home\"")
+            && web_source.contains("\"End\"")
+            && web_source.contains("data-cranpose-last-row")
+            && web_source.contains("fn jump_mirror("),
+        "ARIA has no scroll-to-index action, so Home and End reach the ends of the list"
+    );
+}
+
+#[test]
 fn every_lazy_list_tells_android_how_many_rows_it_holds() {
     let scroll_source = workspace_source("crates/cranpose-ui/src/modifier/scroll.rs");
     assert!(
@@ -3404,7 +3465,7 @@ fn every_lazy_list_tells_android_how_many_rows_it_holds() {
     let java_source = crate_source("android/java/dev/cranpose/android/CranposeActivity.java");
     assert!(
         java_source.contains("info.setCollectionInfo(AccessibilityNodeInfo.CollectionInfo.obtain(")
-            && java_source.contains("private static final int ACCESSIBILITY_FIELDS = 38;"),
+            && java_source.contains("private static final int ACCESSIBILITY_FIELDS = 39;"),
         "the Android host hands TalkBack the row count of a list"
     );
 }
@@ -3507,7 +3568,7 @@ fn a_reader_can_hand_a_field_its_text_on_android_and_the_desktop() {
     let desktop_source = crate_source("src/desktop_accessibility.rs");
     assert!(
         desktop_source.contains("accessibility::set_text(root, node_id, &text)")
-            && desktop_source.contains("Some(ActionData::Value(text)) => {"),
+            && desktop_source.contains("(Action::SetValue, Some(ActionData::Value(text))) => {"),
         "accesskit's set-value action reaches the field"
     );
 }

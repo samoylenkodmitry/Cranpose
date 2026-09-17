@@ -388,6 +388,53 @@ pages its own list. The move runs through `scroll_by` on the live tree.
 | Android | `isScrollable` with `ACTION_SCROLL_FORWARD` and `BACKWARD` as the offset allows; each row sits under its list in the virtual view tree, and a list with no text is not focusable | TalkBack's page gesture on a row, which reaches the list above it |
 | Web | nothing on the mirror | Page Down and Page Up on the focused mirrored element |
 
+## 5b. A jump to a row of a long list
+
+Paging is slow. A list of 500 rows takes about fifty pages to cross, and a
+person who cannot see the screen hears every row along the way. A reader that
+can name a row goes straight to it.
+
+```rust
+Modifier::empty().scroll_to_index(move |index| {
+    if index >= rows.len() {
+        return false;
+    }
+    state.scroll_to_item(index, 0.0);
+    true
+})
+```
+
+This is Compose's `SemanticsActions.ScrollToIndex`. `LazyColumn` and `LazyRow`
+declare it on their own, beside the scroll range and the row count they
+already declare, so an app written with them needs no code for this. The
+index counts rows from zero and the answer says whether the list moved: a
+number past the last row moves nothing. The row the reader named goes to the
+start of the list.
+
+Only Android has an action for this. The other three platforms carry what
+they can, and the table says which:
+
+| Platform | What a reader does | What it can reach |
+| --- | --- | --- |
+| Android | TalkBack, or any other service, sends `ACTION_SCROLL_TO_POSITION` with a row or a column argument | any row |
+| accesskit | the reader reads the list's scroll range, which counts rows, and sets an offset with `SetScrollOffset` | any row |
+| iOS | the VoiceOver actions rotor on any row of the list offers "first row" and "last row" | the two ends |
+| Web | Home and End on a focused mirrored row | the two ends |
+
+accesskit 0.24.1 has no scroll-to-index action and neither has ARIA, so
+neither claims one. On accesskit the list carries its rows as the scroll
+offset of the axis it runs along: `scroll_y` is the first visible row,
+`scroll_y_max` is the last row, and an offset a reader sets is a row number.
+VoiceOver and the web mirror have no way for a person to type a number at a
+list at all, so the two ends are what they offer, through the custom-action
+road and through the keys a list already answers. A text field moves its
+caret with Home and End and a slider moves its value, so those two keep the
+keys even inside a list; every other mirrored row hands them to the list.
+
+Compose's `SemanticsActions.IndexForKey` has no twin here. It turns an app's
+own item key into a row number, and no screen reader on any of the four
+platforms asks for it; in Compose it serves the test finder, not a reader.
+
 ## 6. A way out of a dialog
 
 A person who cannot see the screen opens a menu or a dialog and needs a way

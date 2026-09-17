@@ -49,6 +49,9 @@ struct ReaderRequests {
     escapes: Rc<Cell<usize>>,
     dismissals: Rc<RefCell<Vec<i32>>>,
     custom_actions: Rc<RefCell<Vec<(i32, usize)>>>,
+    /// Rows a VoiceOver user asked a list for: the element under the cursor,
+    /// and whether the last row was asked for rather than the first.
+    jumps: Rc<RefCell<Vec<(i32, bool)>>>,
 }
 
 struct AccessibilityElementIvars {
@@ -142,6 +145,16 @@ define_class!(
             Bool::YES
         }
 
+        #[unsafe(method(cranposeJumpToFirstRow:))]
+        fn cranpose_jump_to_first_row(&self, _action: &UIAccessibilityCustomAction) -> Bool {
+            self.queue_jump(false)
+        }
+
+        #[unsafe(method(cranposeJumpToLastRow:))]
+        fn cranpose_jump_to_last_row(&self, _action: &UIAccessibilityCustomAction) -> Bool {
+            self.queue_jump(true)
+        }
+
         #[unsafe(method(accessibilityPerformEscape))]
         fn accessibility_perform_escape(&self) -> Bool {
             if self.ivars().dismissable.get() {
@@ -204,6 +217,18 @@ impl NativeAccessibilityElement {
     fn set_custom_action_labels(&self, labels: &[String]) {
         *self.ivars().custom_action_labels.borrow_mut() = labels.to_vec();
     }
+
+    /// Notes that a VoiceOver user picked one end of the list this element
+    /// sits in, for the frame loop to run against the live tree.
+    fn queue_jump(&self, last: bool) -> Bool {
+        self.ivars()
+            .requests
+            .jumps
+            .borrow_mut()
+            .push((self.ivars().element_id, last));
+        self.ivars().wake_proxy.wake_up();
+        Bool::YES
+    }
 }
 
 pub(crate) struct IosAccessibilityBridge {
@@ -265,7 +290,9 @@ impl IosAccessibilityBridge {
                 .native_elements
                 .get(element_id)
                 .expect("accessibility element inserted above");
-            update_native_element(native, element, mtm);
+            let jumpable = accessibility::scroll_container_for(&next, element)
+                .is_some_and(|container| accessibility::row_count(container) > 0);
+            update_native_element(native, element, jumpable, mtm);
         }
 
         if structure_changed {
@@ -468,6 +495,33 @@ impl IosAccessibilityBridge {
         moved
     }
 
+    /// Puts the first or the last row of a list in view after a VoiceOver user
+    /// picked one of them from the actions rotor. Answers whether a list moved.
+    pub(crate) fn drain_jumps<R>(&mut self, shell: &mut AppShell<R>) -> bool
+    where
+        R: Renderer,
+        R::Error: Debug,
+    {
+        let pending = self.requests.jumps.take();
+        let mut moved = false;
+        for (element_id, last) in pending {
+            let Some((node_id, index)) = self
+                .element_for(element_id)
+                .and_then(|element| accessibility::scroll_container_for(&self.snapshot, element))
+                .and_then(|container| {
+                    let rows = accessibility::row_count(container);
+                    (rows > 0).then(|| (container.node_id, if last { rows - 1 } else { 0 }))
+                })
+            else {
+                continue;
+            };
+            moved |= accessibility::run_reader_action(shell, |root| {
+                accessibility::scroll_to_index(root, node_id, index)
+            });
+        }
+        moved
+    }
+
     /// Runs the custom action a VoiceOver user picked from the actions rotor,
     /// on the live tree. Answers whether a handler took it.
     pub(crate) fn drain_custom_actions<R>(&mut self, shell: &mut AppShell<R>) -> bool
@@ -588,6 +642,7 @@ impl IosAccessibilityBridge {
 fn update_native_element(
     native: &NativeAccessibilityElement,
     element: &AccessibilityElement,
+    jumpable: bool,
     mtm: MainThreadMarker,
 ) {
     native.set_actionable(element.clickable || element.role == AccessibilityRole::TextField);
@@ -650,39 +705,63 @@ fn update_native_element(
     }
     native.setAccessibilityTraits(traits);
     native.setAccessibilityViewIsModal(element.role == AccessibilityRole::Dialog, mtm);
-    offer_custom_actions(native, element, mtm);
+    offer_custom_actions(native, element, jumpable, mtm);
 }
 
 /// Lists the actions the element offers in VoiceOver's actions rotor, each
-/// one aimed back at the element by name. VoiceOver has no long press of its
-/// own, so a long press is the last action in the rotor.
+/// one aimed back at the element by name, and after them the two ends of the
+/// list the element sits in. VoiceOver has no long press of its own, so a
+/// long press is the last of the named actions.
 fn offer_custom_actions(
     native: &NativeAccessibilityElement,
     element: &AccessibilityElement,
+    jumpable: bool,
     mtm: MainThreadMarker,
 ) {
     let labels = accessibility::reader_actions(element);
     native.set_custom_action_labels(&labels);
-    let target: &AnyObject = native.as_ref();
-    let actions: Vec<Retained<UIAccessibilityCustomAction>> = labels
+    let mut actions: Vec<Retained<UIAccessibilityCustomAction>> = labels
         .iter()
-        .map(|label| {
-            // SAFETY: the target is this element, which answers
-            // performAccessibilityCustomAction: and outlives the action, and
-            // the selector names that method.
-            unsafe {
-                UIAccessibilityCustomAction::initWithName_target_selector(
-                    UIAccessibilityCustomAction::alloc(mtm),
-                    &NSString::from_str(label),
-                    Some(target),
-                    sel!(performAccessibilityCustomAction:),
-                )
-            }
-        })
+        .map(|label| rotor_action(native, label, sel!(performAccessibilityCustomAction:), mtm))
         .collect();
+    if jumpable {
+        actions.push(rotor_action(
+            native,
+            "first row",
+            sel!(cranposeJumpToFirstRow:),
+            mtm,
+        ));
+        actions.push(rotor_action(
+            native,
+            "last row",
+            sel!(cranposeJumpToLastRow:),
+            mtm,
+        ));
+    }
     let native_object: &NSObject = native;
     let list = (!actions.is_empty()).then(|| NSArray::from_retained_slice(&actions));
     native_object.setAccessibilityCustomActions(list.as_deref(), mtm);
+}
+
+/// One entry of VoiceOver's actions rotor, named for the user and aimed at a
+/// method of the element under the cursor.
+fn rotor_action(
+    native: &NativeAccessibilityElement,
+    label: &str,
+    selector: objc2::runtime::Sel,
+    mtm: MainThreadMarker,
+) -> Retained<UIAccessibilityCustomAction> {
+    let target: &AnyObject = native.as_ref();
+    // SAFETY: the target is this element, which answers every selector passed
+    // here and outlives the action.
+    unsafe {
+        UIAccessibilityCustomAction::initWithName_target_selector(
+            UIAccessibilityCustomAction::alloc(mtm),
+            &NSString::from_str(label),
+            Some(target),
+            selector,
+        )
+    }
 }
 
 /// The virtual id of a dialog that is in the next snapshot and was not in

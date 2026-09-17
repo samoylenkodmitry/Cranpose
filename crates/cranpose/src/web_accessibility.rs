@@ -49,9 +49,16 @@ fn apply_progress(node: &HtmlElement, element: &AccessibilityElement) -> Result<
     Ok(())
 }
 
-/// The scroll container each element sits in, with the move one page on
-/// makes: the container's virtual id and the forward delta.
-fn page_targets(ids: &[i32], elements: &[AccessibilityElement]) -> Vec<Option<(i32, f32, f32)>> {
+/// The scroll container an element sits in: its virtual id, the move one page
+/// on makes, and the last row a reader may ask the container for.
+struct PageTarget {
+    container: i32,
+    dx: f32,
+    dy: f32,
+    last_row: Option<usize>,
+}
+
+fn page_targets(ids: &[i32], elements: &[AccessibilityElement]) -> Vec<Option<PageTarget>> {
     elements
         .iter()
         .map(|element| {
@@ -60,54 +67,107 @@ fn page_targets(ids: &[i32], elements: &[AccessibilityElement]) -> Vec<Option<(i
                 .iter()
                 .position(|candidate| std::ptr::eq(candidate, container))?;
             let (dx, dy) = accessibility::page_delta(container, true);
-            Some((*ids.get(index)?, dx, dy))
+            let rows = accessibility::row_count(container);
+            Some(PageTarget {
+                container: *ids.get(index)?,
+                dx,
+                dy,
+                last_row: (rows > 0).then(|| rows - 1),
+            })
         })
         .collect()
 }
 
-fn apply_page(node: &HtmlElement, page: Option<(i32, f32, f32)>) -> Result<(), JsValue> {
-    let Some((container, dx, dy)) = page else {
+fn apply_page(
+    node: &HtmlElement,
+    element: &AccessibilityElement,
+    page: Option<PageTarget>,
+) -> Result<(), JsValue> {
+    let Some(page) = page else {
         return Ok(());
     };
-    node.set_attribute("data-cranpose-page", &container.to_string())?;
-    node.set_attribute("data-cranpose-page-dx", &dx.to_string())?;
-    node.set_attribute("data-cranpose-page-dy", &dy.to_string())?;
+    node.set_attribute("data-cranpose-page", &page.container.to_string())?;
+    node.set_attribute("data-cranpose-page-dx", &page.dx.to_string())?;
+    node.set_attribute("data-cranpose-page-dy", &page.dy.to_string())?;
+    if let Some(last_row) = page.last_row.filter(|_| takes_home_and_end(element)) {
+        node.set_attribute("data-cranpose-last-row", &last_row.to_string())?;
+    }
     Ok(())
 }
 
+/// Whether Home and End on this mirror node may reach the list around it. A
+/// text field moves its caret with those two keys and a slider moves its
+/// value, so inside a list those two keep them.
+fn takes_home_and_end(element: &AccessibilityElement) -> bool {
+    element.role != AccessibilityRole::TextField && !element.adjustable
+}
+
 /// Pages the scroll container around the focused mirror node on Page Down and
-/// Page Up, so a keyboard reader reaches rows a lazy list has not built yet.
+/// Page Up, so a keyboard reader reaches rows a lazy list has not built yet,
+/// and jumps to the ends of a list on Home and End. ARIA has no scroll-to-row
+/// action, so the two ends are what the mirror can offer.
 fn attach_page_listener(
     root: &HtmlElement,
     app: Rc<RefCell<AppShell<WgpuRenderer>>>,
     node_ids: Rc<RefCell<HashMap<i32, cranpose_core::NodeId>>>,
 ) -> Result<(), JsValue> {
     let key_down = Closure::wrap(Box::new(move |event: web_sys::KeyboardEvent| {
-        let sign = match event.key().as_str() {
-            "PageDown" => 1.0,
-            "PageUp" => -1.0,
-            _ => return,
-        };
         let Some(target) = key_target(&event) else {
-            return;
-        };
-        let (Some(dx), Some(dy)) = (
-            number_attribute(&target, "data-cranpose-page-dx"),
-            number_attribute(&target, "data-cranpose-page-dy"),
-        ) else {
             return;
         };
         let Some(node_id) = node_id_attribute(&target, "data-cranpose-page", &node_ids) else {
             return;
         };
-        event.prevent_default();
-        on_live_tree(&app, |root| {
-            accessibility::scroll_by(root, node_id, sign * dx, sign * dy)
-        });
+        match event.key().as_str() {
+            "PageDown" => page_mirror(&event, &target, &app, node_id, 1.0),
+            "PageUp" => page_mirror(&event, &target, &app, node_id, -1.0),
+            "Home" => jump_mirror(&event, &target, &app, node_id, false),
+            "End" => jump_mirror(&event, &target, &app, node_id, true),
+            _ => {}
+        }
     }) as Box<dyn FnMut(_)>);
     root.add_event_listener_with_callback("keydown", key_down.as_ref().unchecked_ref())?;
     key_down.forget();
     Ok(())
+}
+
+/// Moves the list around the focused mirror node one page, forward or back.
+fn page_mirror(
+    event: &web_sys::KeyboardEvent,
+    target: &Element,
+    app: &Rc<RefCell<AppShell<WgpuRenderer>>>,
+    node_id: cranpose_core::NodeId,
+    sign: f32,
+) {
+    let (Some(dx), Some(dy)) = (
+        number_attribute(target, "data-cranpose-page-dx"),
+        number_attribute(target, "data-cranpose-page-dy"),
+    ) else {
+        return;
+    };
+    event.prevent_default();
+    on_live_tree(app, |root| {
+        accessibility::scroll_by(root, node_id, sign * dx, sign * dy)
+    });
+}
+
+/// Puts the first or the last row of the list around the focused mirror node
+/// in view, which is what Home and End mean inside a list.
+fn jump_mirror(
+    event: &web_sys::KeyboardEvent,
+    target: &Element,
+    app: &Rc<RefCell<AppShell<WgpuRenderer>>>,
+    node_id: cranpose_core::NodeId,
+    last: bool,
+) {
+    let Some(last_row) = number_attribute(target, "data-cranpose-last-row") else {
+        return;
+    };
+    let index = if last { last_row.max(0.0) as usize } else { 0 };
+    event.prevent_default();
+    on_live_tree(app, |root| {
+        accessibility::scroll_to_index(root, node_id, index)
+    });
 }
 
 /// The mirror node a key event landed on.
@@ -231,7 +291,7 @@ fn mirror_node(
     document: &Document,
     id: i32,
     element: &AccessibilityElement,
-    page: Option<(i32, f32, f32)>,
+    page: Option<PageTarget>,
 ) -> Result<HtmlElement, JsValue> {
     let node = document
         .create_element(if element.clickable { "button" } else { "span" })?
@@ -239,7 +299,7 @@ fn mirror_node(
     node.set_attribute("aria-label", &element.label)?;
     node.set_attribute("data-cranpose-node", &id.to_string())?;
     apply_role_and_state(&node, element)?;
-    apply_page(&node, page)?;
+    apply_page(&node, element, page)?;
     if element.clickable {
         let (x, y) = element.bounds.center();
         node.set_attribute("data-cranpose-x", &x.to_string())?;

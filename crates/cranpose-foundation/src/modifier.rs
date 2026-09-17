@@ -815,6 +815,45 @@ impl PartialEq for SemanticsScrollBy {
 
 impl Eq for SemanticsScrollBy {}
 
+/// What a list does when a screen reader asks for the row at an index, e.g. a
+/// TalkBack scroll-to-position action.
+///
+/// This is Compose's `SemanticsActions.ScrollToIndex`. The index counts rows
+/// from zero, and the answer says whether the list moved.
+#[derive(Clone)]
+pub struct SemanticsScrollToIndex {
+    handler: Rc<dyn Fn(usize) -> bool>,
+}
+
+impl SemanticsScrollToIndex {
+    pub fn new(handler: impl Fn(usize) -> bool + 'static) -> Self {
+        Self {
+            handler: Rc::new(handler),
+        }
+    }
+
+    pub fn invoke(&self, index: usize) -> bool {
+        (self.handler)(index)
+    }
+}
+
+impl fmt::Debug for SemanticsScrollToIndex {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SemanticsScrollToIndex")
+            .finish_non_exhaustive()
+    }
+}
+
+/// Two jump actions always read as the same action, for the reason
+/// [`SemanticsCustomAction`]'s own comparison gives.
+impl PartialEq for SemanticsScrollToIndex {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for SemanticsScrollToIndex {}
+
 /// What a control does when a screen reader moves its value, e.g. a VoiceOver
 /// swipe up or a TalkBack set-progress action.
 ///
@@ -1246,6 +1285,10 @@ pub struct SemanticsConfiguration {
     /// What this container does when a screen reader pages it. Compose's
     /// `scrollBy`.
     pub scroll_by: Option<SemanticsScrollBy>,
+    /// What this list does when a screen reader asks for the row at an index,
+    /// so a reader reaches row 300 without paging to it. Compose's
+    /// `scrollToIndex`.
+    pub scroll_to_index: Option<SemanticsScrollToIndex>,
     /// How many rows and columns this list holds. Compose's `collectionInfo`.
     pub collection: Option<CollectionInfo>,
 }
@@ -1286,6 +1329,7 @@ impl Default for SemanticsConfiguration {
             vertical_scroll: None,
             horizontal_scroll: None,
             scroll_by: None,
+            scroll_to_index: None,
             collection: None,
         }
     }
@@ -1501,6 +1545,9 @@ impl SemanticsConfiguration {
         }
         if let Some(scroll_by) = &other.scroll_by {
             self.scroll_by = Some(scroll_by.clone());
+        }
+        if let Some(scroll_to_index) = &other.scroll_to_index {
+            self.scroll_to_index = Some(scroll_to_index.clone());
         }
     }
 

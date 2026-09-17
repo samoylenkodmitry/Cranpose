@@ -17,8 +17,8 @@ use cranpose_foundation::{
     CanvasSemanticsNode, CollectionInfo, InvalidationKind, LiveRegionMode, ModifierNodeContext,
     NodeCapabilities, ProgressBarRangeInfo, ScrollAxisRange, SemanticsConfiguration,
     SemanticsCustomAction, SemanticsDismiss, SemanticsExpand, SemanticsLongClick,
-    SemanticsScrollBy, SemanticsSetProgress, SemanticsSetText, SemanticsWidgetRole,
-    text::TextRange,
+    SemanticsScrollBy, SemanticsScrollToIndex, SemanticsSetProgress, SemanticsSetText,
+    SemanticsWidgetRole, text::TextRange,
 };
 use cranpose_ui_layout::{Constraints, MeasurePolicy, Placement};
 use web_time::Instant;
@@ -418,6 +418,8 @@ pub struct SemanticsNode {
     pub horizontal_scroll: Option<ScrollAxisRange>,
     /// What this container does when a screen reader pages it.
     pub scroll_by: Option<SemanticsScrollBy>,
+    /// What this list does when a screen reader asks for the row at an index.
+    pub scroll_to_index: Option<SemanticsScrollToIndex>,
     /// How many rows and columns this list holds, when it is a list.
     pub collection: Option<CollectionInfo>,
 }
@@ -462,6 +464,7 @@ impl Default for SemanticsNode {
             vertical_scroll: None,
             horizontal_scroll: None,
             scroll_by: None,
+            scroll_to_index: None,
             collection: None,
         }
     }
@@ -3132,6 +3135,7 @@ fn semantics_node_from_parts(
         node.vertical_scroll = config.vertical_scroll;
         node.horizontal_scroll = config.horizontal_scroll;
         node.scroll_by = config.scroll_by;
+        node.scroll_to_index = config.scroll_to_index;
         node.collection = config.collection;
     }
 
