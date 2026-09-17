@@ -711,6 +711,7 @@ public class CranposeActivity extends NativeActivity {
     private static native void nativeOnAccessibilitySetProgress(int virtualViewId, float value);
     private static native void nativeOnAccessibilitySetText(int virtualViewId, String text);
     private static native void nativeOnAccessibilityExpand(int virtualViewId, boolean open);
+    private static native void nativeOnAccessibilityLongClick(int virtualViewId);
     private static native void nativeOnAccessibilityScroll(int virtualViewId, boolean forward);
 
     private static native void nativeOnAccessibilityStateChanged(boolean enabled);
@@ -772,7 +773,7 @@ public class CranposeActivity extends NativeActivity {
     }
 
     /** Field count of one accessibility record; see android_accessibility_wire.rs. */
-    private static final int ACCESSIBILITY_FIELDS = 36;
+    private static final int ACCESSIBILITY_FIELDS = 37;
 
     /** Separator packing a node's custom action labels into one field. */
     private static final String ACCESSIBILITY_ACTION_SEPARATOR = String.valueOf((char) 0x1f);
@@ -810,7 +811,8 @@ public class CranposeActivity extends NativeActivity {
                         Integer.parseInt(fields[28]), "1".equals(fields[29]),
                         Integer.parseInt(fields[30]), Integer.parseInt(fields[31]),
                         unescapeAccessibility(fields[32]), unescapeAccessibility(fields[33]),
-                        "1".equals(fields[34]), Integer.parseInt(fields[35])));
+                        "1".equals(fields[34]), Integer.parseInt(fields[35]),
+                        unescapeAccessibility(fields[36])));
             } catch (RuntimeException ignored) {
                 // A malformed record must not make the host Activity inaccessible.
             }
@@ -874,6 +876,12 @@ public class CranposeActivity extends NativeActivity {
         final String error;
         final boolean password;
         final int expanded;
+        /**
+         * Compose's onLongClick(label = …), or empty when the control takes
+         * no long press. TalkBack reads "double tap and hold to <label>",
+         * which is the only way a blind user reaches a long press.
+         */
+        final String longClickLabel;
 
         CranposeAccessibilityElement(int id, int role, Rect bounds, float centerX,
                 float centerY, boolean clickable, String label, String value,
@@ -884,7 +892,7 @@ public class CranposeActivity extends NativeActivity {
                 boolean canScrollForward, boolean canScrollBackward, int scrollParent,
                 int collectionRows, int collectionColumns, boolean changed, int itemRow,
                 int itemColumn, String paneTitle, String error, boolean password,
-                int expanded) {
+                int expanded, String longClickLabel) {
             this.id = id;
             this.role = role;
             this.bounds = bounds;
@@ -918,6 +926,7 @@ public class CranposeActivity extends NativeActivity {
             this.error = error;
             this.password = password;
             this.expanded = expanded;
+            this.longClickLabel = longClickLabel;
         }
 
         /**
@@ -1103,6 +1112,11 @@ public class CranposeActivity extends NativeActivity {
                             AccessibilityNodeInfo.ACTION_CLICK, element.clickLabel));
                 }
             }
+            if (!element.longClickLabel.isEmpty()) {
+                info.setLongClickable(true);
+                info.addAction(new AccessibilityNodeInfo.AccessibilityAction(
+                        AccessibilityNodeInfo.ACTION_LONG_CLICK, element.longClickLabel));
+            }
             for (int i = 0; i < element.customActions.length; i++) {
                 info.addAction(new AccessibilityNodeInfo.AccessibilityAction(
                         ACCESSIBILITY_CUSTOM_ACTION_BASE + i, element.customActions[i]));
@@ -1120,6 +1134,12 @@ public class CranposeActivity extends NativeActivity {
             if (action == AccessibilityNodeInfo.ACTION_CLICK && element.clickable) {
                 nativeOnAccessibilityActivate(element.centerX, element.centerY);
                 sendEvent(element.id, AccessibilityEvent.TYPE_VIEW_CLICKED);
+                return true;
+            }
+            if (action == AccessibilityNodeInfo.ACTION_LONG_CLICK
+                    && !element.longClickLabel.isEmpty()) {
+                nativeOnAccessibilityLongClick(element.id);
+                sendEvent(element.id, AccessibilityEvent.TYPE_VIEW_LONG_CLICKED);
                 return true;
             }
             int customIndex = action - ACCESSIBILITY_CUSTOM_ACTION_BASE;

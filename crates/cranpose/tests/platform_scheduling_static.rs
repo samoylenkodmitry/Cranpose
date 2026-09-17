@@ -3339,6 +3339,36 @@ fn every_platform_bridge_offers_custom_actions() {
 }
 
 #[test]
+fn every_platform_offers_the_long_press_of_a_control() {
+    let projection_source = crate_source("src/accessibility.rs");
+    assert!(
+        projection_source.contains("pub(crate) fn reader_actions(")
+            && projection_source.contains("pub(crate) fn long_click("),
+        "the projection names the long press for the readers that list it and runs it for the one that does not"
+    );
+
+    let java_source =
+        workspace_source("crates/cranpose/android/java/dev/cranpose/android/CranposeActivity.java");
+    let android_source = crate_source("src/android.rs");
+    assert!(
+        java_source.contains("AccessibilityNodeInfo.ACTION_LONG_CLICK, element.longClickLabel")
+            && java_source.contains("nativeOnAccessibilityLongClick(element.id);")
+            && android_source.contains("fn drain_accessibility_long_clicks("),
+        "TalkBack gets Android's own long-click action with its label, and the shell drains it each frame"
+    );
+
+    let desktop_source = crate_source("src/desktop_accessibility.rs");
+    let ios_source = crate_source("src/ios_accessibility.rs");
+    let web_source = crate_source("src/web_accessibility.rs");
+    assert!(
+        desktop_source.contains("accessibility::reader_actions(element)")
+            && ios_source.contains("accessibility::reader_actions(element)")
+            && web_source.contains("accessibility::reader_actions(element)"),
+        "accesskit, VoiceOver and ARIA have no long press of their own, so the three list it as the last action"
+    );
+}
+
+#[test]
 fn a_dialog_takes_the_reader_along_when_it_opens() {
     let dialog_source = workspace_source("crates/cranpose-ui/src/widgets/dialog.rs");
     assert!(
@@ -3374,7 +3404,7 @@ fn every_lazy_list_tells_android_how_many_rows_it_holds() {
     let java_source = crate_source("android/java/dev/cranpose/android/CranposeActivity.java");
     assert!(
         java_source.contains("info.setCollectionInfo(AccessibilityNodeInfo.CollectionInfo.obtain(")
-            && java_source.contains("private static final int ACCESSIBILITY_FIELDS = 36;"),
+            && java_source.contains("private static final int ACCESSIBILITY_FIELDS = 37;"),
         "the Android host hands TalkBack the row count of a list"
     );
 }

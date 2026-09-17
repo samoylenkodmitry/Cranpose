@@ -20,8 +20,8 @@ Modifier::empty().semantics(|config| {
 ```
 
 `SemanticsConfiguration` mirrors Compose field for field:
-`content_description`, `state_description`, `on_click_label`, `role`,
-`selected`, `toggled`, `enabled`, `custom_actions`, `is_modal`. A `Text`
+`content_description`, `state_description`, `on_click_label`, `on_long_click`,
+`role`, `selected`, `toggled`, `enabled`, `custom_actions`, `is_modal`. A `Text`
 carries its own string, so a label is needed only where the text on screen is
 not the whole story.
 
@@ -147,6 +147,40 @@ platform lists it under the control.
 | Web | one `<button>` per action right after the control, "Dismiss, Milk" | a click on that button |
 
 `SwipeToDismiss` and `LinkedText` fill this on their own.
+
+## 4b2. A long press a reader can ask for
+
+A row a finger opens a menu on, a photo a finger removes: a person who
+cannot see the screen holds a finger on nothing and gets nothing.
+`Modifier::on_long_click("Remove receipt", || …)` is Compose's
+`onLongClick(label) { … }`, which `Modifier.combinedClickable` fills in for a
+control that takes a long press from a finger too.
+
+```rust
+Modifier::empty()
+    .content_description("Milk, 3.40")
+    .on_long_click("Remove receipt", move || {
+        receipts.remove(id);
+        true
+    })
+```
+
+The handler answers whether the control took the ask, as Compose's does. The
+label is asked for rather than optional: Android is the one platform of the
+four with a long press of its own, and the other three list the action by
+name, so a nameless one reads as nothing. A control that declares the action
+with no label through the closure form reads as "long press".
+
+| Platform | What the reader gets |
+| --- | --- |
+| accesskit | one more action on the node, named by the label, after the custom actions; accesskit's `Action` enum has no long press |
+| iOS | one more action in VoiceOver's actions rotor, named by the label; VoiceOver has no long press |
+| Android | `ACTION_LONG_CLICK` with the label, which TalkBack reads as "double tap and hold to remove receipt" |
+| Web | one more `<button>` after the control, "Remove receipt, Milk"; ARIA has no long press |
+
+Only Android carries this as the platform's own long press. The other three
+carry it as the last of the actions a reader lists, which is the same road
+`custom_actions` takes.
 
 ## 4c. A field whose content is wrong
 

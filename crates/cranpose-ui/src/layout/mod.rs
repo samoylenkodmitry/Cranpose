@@ -16,8 +16,8 @@ use cranpose_core::{
 use cranpose_foundation::{
     CanvasSemanticsNode, CollectionInfo, InvalidationKind, LiveRegionMode, ModifierNodeContext,
     NodeCapabilities, ProgressBarRangeInfo, ScrollAxisRange, SemanticsConfiguration,
-    SemanticsCustomAction, SemanticsExpand, SemanticsScrollBy, SemanticsSetProgress,
-    SemanticsSetText, SemanticsWidgetRole, text::TextRange,
+    SemanticsCustomAction, SemanticsExpand, SemanticsLongClick, SemanticsScrollBy,
+    SemanticsSetProgress, SemanticsSetText, SemanticsWidgetRole, text::TextRange,
 };
 use cranpose_ui_layout::{Constraints, MeasurePolicy, Placement};
 use web_time::Instant;
@@ -360,6 +360,10 @@ pub struct SemanticsNode {
     pub description: Option<String>,
     pub state_description: Option<String>,
     pub on_click_label: Option<String>,
+    /// What this control does when a screen reader asks for its long press.
+    pub on_long_click: Option<SemanticsLongClick>,
+    /// What the long press does, as a verb phrase a reader reads out.
+    pub on_long_click_label: Option<String>,
     pub selected: Option<bool>,
     pub toggled: Option<bool>,
     pub enabled: bool,
@@ -426,6 +430,8 @@ impl Default for SemanticsNode {
             description: None,
             state_description: None,
             on_click_label: None,
+            on_long_click: None,
+            on_long_click_label: None,
             selected: None,
             toggled: None,
             enabled: true,
@@ -3095,6 +3101,8 @@ fn semantics_node_from_parts(
         node.description = config.content_description;
         node.state_description = config.state_description;
         node.on_click_label = config.on_click_label;
+        node.on_long_click = config.on_long_click;
+        node.on_long_click_label = config.on_long_click_label;
         node.selected = config.selected;
         node.toggled = config.toggled;
         node.enabled = config.enabled;

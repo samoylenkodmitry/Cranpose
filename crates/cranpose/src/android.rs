@@ -230,6 +230,23 @@ fn drain_accessibility_expansions(
     }
 }
 
+/// Runs the long press TalkBack asked a control for. The control is resolved
+/// against the live semantics tree, as a custom action is.
+fn drain_accessibility_long_clicks(
+    shell: &mut AppShell<WgpuRenderer>,
+    elements: &[crate::accessibility::AccessibilityElement],
+) {
+    for virtual_id in crate::android_accessibility::drain_long_click_requests() {
+        let Some((node_id, _)) = crate::accessibility::resolve_element_id(elements, virtual_id)
+        else {
+            continue;
+        };
+        crate::accessibility::run_reader_action(shell, |root| {
+            crate::accessibility::long_click(root, node_id)
+        });
+    }
+}
+
 fn drain_accessibility_scrolls(
     shell: &mut AppShell<WgpuRenderer>,
     elements: &[crate::accessibility::AccessibilityElement],
@@ -2230,6 +2247,7 @@ pub fn run(
             drain_accessibility_texts(shell, &accessibility_elements);
             drain_accessibility_scrolls(shell, &accessibility_elements);
             drain_accessibility_expansions(shell, &accessibility_elements);
+            drain_accessibility_long_clicks(shell, &accessibility_elements);
             for event in ime_event_queue.drain() {
                 dispatch_android_ime_event(shell, event);
             }

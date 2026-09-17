@@ -616,17 +616,18 @@ fn update_native_element(
     offer_custom_actions(native, element, mtm);
 }
 
-/// Lists the element's custom actions in VoiceOver's actions rotor, each one
-/// aimed back at the element by name.
+/// Lists the actions the element offers in VoiceOver's actions rotor, each
+/// one aimed back at the element by name. VoiceOver has no long press of its
+/// own, so a long press is the last action in the rotor.
 fn offer_custom_actions(
     native: &NativeAccessibilityElement,
     element: &AccessibilityElement,
     mtm: MainThreadMarker,
 ) {
-    native.set_custom_action_labels(&element.custom_actions);
+    let labels = accessibility::reader_actions(element);
+    native.set_custom_action_labels(&labels);
     let target: &AnyObject = native.as_ref();
-    let actions: Vec<Retained<UIAccessibilityCustomAction>> = element
-        .custom_actions
+    let actions: Vec<Retained<UIAccessibilityCustomAction>> = labels
         .iter()
         .map(|label| {
             // SAFETY: the target is this element, which answers

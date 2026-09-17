@@ -639,6 +639,7 @@ The vocabulary mirrors Jetpack Compose's `SemanticsProperties`:
 | `content_description` | `contentDescription` |
 | `state_description` | `stateDescription` |
 | `on_click_label` | `onClick(label = …)` — implies the click action |
+| `on_long_click`, `on_long_click_label` | `onLongClick(label) { … }` |
 | `role` | `Role` (`Button`, `Checkbox`, `Switch`, `RadioButton`, `Tab`, `Image`, `Header`) |
 | `selected` | `selected` |
 | `toggled` | `toggleableState` |

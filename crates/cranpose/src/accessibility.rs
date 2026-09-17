@@ -80,6 +80,9 @@ pub(crate) struct AccessibilityElement {
     pub(crate) label: String,
     pub(crate) state_description: Option<String>,
     pub(crate) click_label: Option<String>,
+    /// What a long press on the control does, named for a reader. Present
+    /// only when the control declared a long press at all.
+    pub(crate) long_click_label: Option<String>,
     pub(crate) value: Option<String>,
     pub(crate) bounds: AccessibilityRect,
     pub(crate) role: AccessibilityRole,
@@ -112,6 +115,7 @@ impl Default for AccessibilityElement {
             label: String::new(),
             state_description: None,
             click_label: None,
+            long_click_label: None,
             value: None,
             bounds: AccessibilityRect::default(),
             role: AccessibilityRole::StaticText,
@@ -435,6 +439,18 @@ fn expansion(node: &SemanticsNode) -> Option<bool> {
         .or_else(|| node.expand.is_some().then_some(false))
 }
 
+/// What a reader reads out for a control's long press: the verb phrase the
+/// app gave, and for a control that declared the action with no phrase the
+/// plain words for what it is. A control with no long press gets nothing.
+fn long_click_label(node: &SemanticsNode) -> Option<String> {
+    node.on_long_click.as_ref()?;
+    let named = node
+        .on_long_click_label
+        .clone()
+        .filter(|label| !label.trim().is_empty());
+    Some(named.unwrap_or_else(|| "long press".to_owned()))
+}
+
 /// An editable field with no name and no text is still a stop for a reader,
 /// which hears "text field" and nothing else; a debug build says so.
 fn unnamed_field_label(node: &SemanticsNode) -> Option<Cow<'_, str>> {
@@ -500,6 +516,7 @@ fn element_for_node(
         label,
         state_description: node.state_description.clone(),
         click_label: node.on_click_label.clone(),
+        long_click_label: long_click_label(node),
         bounds: rect,
         role,
         clickable,
@@ -667,6 +684,7 @@ fn project_canvas_children(
             label: child.label.clone(),
             state_description: child.state_description.clone(),
             click_label: child.on_click_label.clone(),
+            long_click_label: None,
             value: None,
             bounds: rect,
             role,
@@ -725,8 +743,34 @@ pub(crate) fn perform_custom_action(
             action.invoke();
             true
         }
+        None if canvas_key.is_none() && action_index == actions.len() => {
+            match &node.on_long_click {
+                Some(action) => action.invoke(),
+                None => false,
+            }
+        }
         None => false,
     }
+}
+
+/// What a screen reader lists for a node, in the order the platforms number
+/// them: the custom actions the app gave, and after them the long press on
+/// the three platforms that have no long press of their own. The index a
+/// platform hands back is a place in this list, which is what
+/// [`perform_custom_action`] reads.
+#[cfg(any(
+    test,
+    all(feature = "desktop-shell", feature = "renderer-wgpu"),
+    all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"),
+    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
+))]
+pub(crate) fn reader_actions(element: &AccessibilityElement) -> Vec<String> {
+    element
+        .custom_actions
+        .iter()
+        .cloned()
+        .chain(element.long_click_label.clone())
+        .collect()
 }
 
 /// Moves the value of an adjustable control, for a screen reader that offers
@@ -780,6 +824,22 @@ pub(crate) fn set_expanded(root: &SemanticsNode, node_id: NodeId, open: bool) ->
     };
     let action = if open { &node.expand } else { &node.collapse };
     match action {
+        Some(action) => action.invoke(),
+        None => false,
+    }
+}
+
+/// Runs the long press a screen reader asked a control for, and answers
+/// whether the control took the ask. Compose's `onLongClick` action.
+#[cfg(any(
+    test,
+    all(feature = "android", feature = "renderer-wgpu", target_os = "android")
+))]
+pub(crate) fn long_click(root: &SemanticsNode, node_id: NodeId) -> bool {
+    let Some(node) = find_semantics_node(root, node_id) else {
+        return false;
+    };
+    match &node.on_long_click {
         Some(action) => action.invoke(),
         None => false,
     }
@@ -1061,7 +1121,10 @@ pub(crate) fn element_with(node_id: NodeId, canvas_key: Option<u64>) -> Accessib
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::RefCell, rc::Rc};
+    use std::{
+        cell::{Cell, RefCell},
+        rc::Rc,
+    };
 
     use cranpose_core::NodeId;
     use cranpose_ui::{
@@ -1848,6 +1911,88 @@ mod tests {
         assert_eq!(projected[0].expanded, Some(true));
         assert_eq!(expansion_word(&projected[0]), Some("expanded"));
         assert!(set_expanded(&root, 2, false));
+    }
+
+    #[test]
+    fn a_long_press_is_named_and_sits_after_the_custom_actions() {
+        let ran = Rc::new(Cell::new(0));
+        let mut row = node(
+            2,
+            SemanticsRole::Text {
+                value: "Milk".into(),
+            },
+            Vec::new(),
+            None,
+            Vec::new(),
+        );
+        row.custom_actions = vec![cranpose_ui::SemanticsCustomAction::new("Pause", || {})];
+        row.on_long_click_label = Some("Remove receipt".into());
+        row.on_long_click = Some(cranpose_ui::SemanticsLongClick::new({
+            let ran = Rc::clone(&ran);
+            move || {
+                ran.set(ran.get() + 1);
+                true
+            }
+        }));
+        let root = node(1, SemanticsRole::Layout, Vec::new(), None, vec![row]);
+        let bounds = HashMap::from_iter([
+            (1, AccessibilityRect::new(0.0, 0.0, 300.0, 200.0)),
+            (2, AccessibilityRect::new(0.0, 0.0, 300.0, 40.0)),
+        ]);
+
+        let projected = project_semantics(&root, &bounds);
+        assert_eq!(
+            projected[0].long_click_label.as_deref(),
+            Some("Remove receipt")
+        );
+        assert_eq!(
+            reader_actions(&projected[0]),
+            vec!["Pause".to_owned(), "Remove receipt".to_owned()],
+            "the long press is the last action a reader lists"
+        );
+
+        assert!(perform_custom_action(&root, 2, None, 1));
+        assert_eq!(ran.get(), 1, "the trailing action is the long press");
+        assert!(long_click(&root, 2));
+        assert_eq!(ran.get(), 2);
+        assert!(!perform_custom_action(&root, 2, None, 2));
+    }
+
+    #[test]
+    fn a_control_with_no_long_press_offers_none_and_a_nameless_one_is_still_read() {
+        let mut plain = node(
+            2,
+            SemanticsRole::Text {
+                value: "Milk".into(),
+            },
+            Vec::new(),
+            None,
+            Vec::new(),
+        );
+        let bounds = HashMap::from_iter([
+            (1, AccessibilityRect::new(0.0, 0.0, 300.0, 200.0)),
+            (2, AccessibilityRect::new(0.0, 0.0, 300.0, 40.0)),
+        ]);
+        let root = node(
+            1,
+            SemanticsRole::Layout,
+            Vec::new(),
+            None,
+            vec![plain.clone()],
+        );
+        assert_eq!(project_semantics(&root, &bounds)[0].long_click_label, None);
+        assert!(!long_click(&root, 2), "there is nothing to run");
+
+        plain.on_long_click = Some(cranpose_ui::SemanticsLongClick::new(|| true));
+        plain.on_long_click_label = Some("   ".into());
+        let root = node(1, SemanticsRole::Layout, Vec::new(), None, vec![plain]);
+        assert_eq!(
+            project_semantics(&root, &bounds)[0]
+                .long_click_label
+                .as_deref(),
+            Some("long press"),
+            "a control that takes a long press with no phrase still reads as one"
+        );
     }
 
     #[test]
