@@ -1,5 +1,7 @@
 use crate::{
-    accessibility::{AccessibilityElement, AccessibilityRole, CollectionItem, element_ids},
+    accessibility::{
+        AccessibilityElement, AccessibilityRole, CollectionItem, element_ids, utf16_offset,
+    },
     android_wire_escape::escape_wire_field,
 };
 
@@ -42,8 +44,9 @@ pub(crate) fn encode_elements(
                 .join(&ACTION_SEPARATOR.to_string());
             let progress = element.progress;
             let scroll = element.vertical_scroll.or(element.horizontal_scroll);
+            let (selection_start, selection_end) = selection_in_utf16(element);
             format!(
-                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                 id,
                 role,
                 (element.bounds.x * density).round() as i32,
@@ -83,10 +86,24 @@ pub(crate) fn encode_elements(
                 escape(element.long_click_label.as_deref().unwrap_or("")),
                 i32::from(element.dismissable),
                 i32::from(element.scroll_to_index),
+                selection_start,
+                selection_end,
             )
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// The two ends of a field's selection as Android counts text, in UTF-16
+/// units, the anchor first; -1 and -1 for a control with no caret.
+fn selection_in_utf16(element: &AccessibilityElement) -> (i32, i32) {
+    match (&element.value, element.text_selection) {
+        (Some(value), Some((anchor, focus))) => (
+            utf16_offset(value, anchor) as i32,
+            utf16_offset(value, focus) as i32,
+        ),
+        _ => (-1, -1),
+    }
 }
 
 /// The virtual id of the scroll container above each element, or -1, so the
@@ -181,7 +198,7 @@ mod tests {
         let records: Vec<_> = payload.split('\n').collect();
         assert_eq!(records.len(), 2);
         for record in &records {
-            assert_eq!(record.split('\t').count(), 39, "record: {record}");
+            assert_eq!(record.split('\t').count(), 41, "record: {record}");
         }
 
         let fields: Vec<_> = records[0].split('\t').collect();
@@ -196,6 +213,30 @@ mod tests {
         assert_eq!(fields[16], format!("Pause{ACTION_SEPARATOR}Resume"));
         assert_eq!(fields[17], "0", "this element registered no focus target");
         assert_eq!(fields[18], "0", "and focus does not sit on it");
+    }
+
+    #[test]
+    fn the_record_carries_a_field_selection_in_utf16_units_and_nothing_for_the_rest() {
+        let elements = vec![
+            AccessibilityElement {
+                node_id: 4,
+                label: "Note".into(),
+                value: Some("añb😀c".into()),
+                text_selection: Some((8, 3)),
+                bounds: AccessibilityRect::new(1.0, 2.0, 30.0, 40.0),
+                role: AccessibilityRole::TextField,
+                ..AccessibilityElement::default()
+            },
+            element_with(5, None),
+        ];
+
+        let payload = encode_elements(&elements, &[], 1.0);
+        let records: Vec<Vec<_>> = payload
+            .split('\n')
+            .map(|record| record.split('\t').collect())
+            .collect();
+        assert_eq!(&records[0][39..41], ["5", "2"]);
+        assert_eq!(&records[1][39..41], ["-1", "-1"]);
     }
 
     #[test]

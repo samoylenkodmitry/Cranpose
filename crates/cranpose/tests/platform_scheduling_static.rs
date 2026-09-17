@@ -3465,7 +3465,7 @@ fn every_lazy_list_tells_android_how_many_rows_it_holds() {
     let java_source = crate_source("android/java/dev/cranpose/android/CranposeActivity.java");
     assert!(
         java_source.contains("info.setCollectionInfo(AccessibilityNodeInfo.CollectionInfo.obtain(")
-            && java_source.contains("private static final int ACCESSIBILITY_FIELDS = 39;"),
+            && java_source.contains("private static final int ACCESSIBILITY_FIELDS = 41;"),
         "the Android host hands TalkBack the row count of a list"
     );
 }
@@ -3601,6 +3601,66 @@ fn the_desktop_tree_keeps_rows_under_their_list() {
         desktop_source.contains("fn nested_children(")
             && desktop_source.contains("node.set_children(children);"),
         "accesskit gets each row under its list and each tab under its group"
+    );
+}
+
+#[test]
+fn every_platform_lets_a_reader_move_the_caret_of_a_field() {
+    let projection_source = crate_source("src/accessibility.rs");
+    assert!(
+        projection_source.contains("pub(crate) fn set_text_selection(")
+            && projection_source.contains("text_selection: node"),
+        "the projection publishes the caret and takes a new selection"
+    );
+
+    let text_field = workspace_source("crates/cranpose-ui/src/text_field_modifier_node.rs");
+    assert!(
+        text_field.contains(
+            "config.set_selection = Some(cranpose_foundation::SemanticsSetSelection::new("
+        ),
+        "the text field declares the set-selection action"
+    );
+
+    let desktop_source = crate_source("src/desktop_accessibility.rs");
+    assert!(
+        desktop_source.contains(
+            "(Action::SetTextSelection, Some(ActionData::SetTextSelection(selection))) => {"
+        ) && desktop_source.contains("run.set_character_lengths(")
+            && desktop_source
+                .contains("accessibility::set_text_selection_chars(root, node_id, anchor, focus)"),
+        "accesskit gets text runs and its set-text-selection action reaches the field"
+    );
+
+    let java_source = crate_source("android/java/dev/cranpose/android/CranposeActivity.java");
+    assert!(
+        java_source
+            .contains("info.addAction(AccessibilityNodeInfo.ACTION_NEXT_AT_MOVEMENT_GRANULARITY);")
+            && java_source.contains("info.setTextSelection(")
+            && java_source
+                .contains("nativeOnAccessibilitySetSelection(element.id, anchor, moved);"),
+        "the Android host walks text by granularity and forwards the caret"
+    );
+    let bridge_source = crate_source("src/android_accessibility.rs");
+    assert!(
+        bridge_source.contains(
+            "fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccessibilitySetSelection("
+        ),
+        "the Android bridge takes the selection"
+    );
+
+    let ios_source = crate_source("src/ios_accessibility.rs");
+    assert!(
+        ios_source.contains("crate::ios_keyboard::describe_for_reader("),
+        "VoiceOver gets the focused field as the keyboard's UITextInput view"
+    );
+
+    let web_source = crate_source("src/web_accessibility.rs");
+    assert!(
+        web_source.contains("\"selectionchange\"")
+            && web_source
+                .contains("accessibility::set_text_selection_utf16(root, node_id, anchor, focus)")
+            && web_source.contains("fn only_focused_field_changed("),
+        "the web mirror is an input whose caret goes both ways without a rebuild"
     );
 }
 

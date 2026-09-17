@@ -48,8 +48,10 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.text.BreakIterator;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 
@@ -710,6 +712,12 @@ public class CranposeActivity extends NativeActivity {
     private static native void nativeOnAccessibilityFocus(int virtualViewId);
     private static native void nativeOnAccessibilitySetProgress(int virtualViewId, float value);
     private static native void nativeOnAccessibilitySetText(int virtualViewId, String text);
+    /**
+     * Moves the caret of a text field, or picks a stretch of its text, with
+     * the two ends in UTF-16 units and the anchor first; a negative end means
+     * the end of the text.
+     */
+    private static native void nativeOnAccessibilitySetSelection(int virtualViewId, int start, int end);
     private static native void nativeOnAccessibilityExpand(int virtualViewId, boolean open);
     private static native void nativeOnAccessibilityLongClick(int virtualViewId);
     private static native void nativeOnAccessibilityDismiss(int virtualViewId);
@@ -775,7 +783,7 @@ public class CranposeActivity extends NativeActivity {
     }
 
     /** Field count of one accessibility record; see android_accessibility_wire.rs. */
-    private static final int ACCESSIBILITY_FIELDS = 39;
+    private static final int ACCESSIBILITY_FIELDS = 41;
 
     /** Separator packing a node's custom action labels into one field. */
     private static final String ACCESSIBILITY_ACTION_SEPARATOR = String.valueOf((char) 0x1f);
@@ -815,7 +823,8 @@ public class CranposeActivity extends NativeActivity {
                         unescapeAccessibility(fields[32]), unescapeAccessibility(fields[33]),
                         "1".equals(fields[34]), Integer.parseInt(fields[35]),
                         unescapeAccessibility(fields[36]), "1".equals(fields[37]),
-                        "1".equals(fields[38])));
+                        "1".equals(fields[38]), Integer.parseInt(fields[39]),
+                        Integer.parseInt(fields[40])));
             } catch (RuntimeException ignored) {
                 // A malformed record must not make the host Activity inaccessible.
             }
@@ -889,6 +898,12 @@ public class CranposeActivity extends NativeActivity {
         final boolean dismissable;
         /** Whether a screen reader may ask this list for the row at an index. */
         final boolean scrollToIndex;
+        /**
+         * The two ends of a text field's selection in UTF-16 units of its
+         * value, the anchor first, or -1 and -1 for a control with no caret.
+         */
+        final int selectionStart;
+        final int selectionEnd;
 
         CranposeAccessibilityElement(int id, int role, Rect bounds, float centerX,
                 float centerY, boolean clickable, String label, String value,
@@ -900,7 +915,7 @@ public class CranposeActivity extends NativeActivity {
                 int collectionRows, int collectionColumns, boolean changed, int itemRow,
                 int itemColumn, String paneTitle, String error, boolean password,
                 int expanded, String longClickLabel, boolean dismissable,
-                boolean scrollToIndex) {
+                boolean scrollToIndex, int selectionStart, int selectionEnd) {
             this.id = id;
             this.role = role;
             this.bounds = bounds;
@@ -937,6 +952,16 @@ public class CranposeActivity extends NativeActivity {
             this.longClickLabel = longClickLabel;
             this.dismissable = dismissable;
             this.scrollToIndex = scrollToIndex;
+            this.selectionStart = selectionStart;
+            this.selectionEnd = selectionEnd;
+        }
+
+        /**
+         * The text a reader walks by character, word or line: what a field
+         * holds, or the words of anything else.
+         */
+        String traversableText() {
+            return role == 3 ? value : label;
         }
 
         /**
@@ -971,16 +996,85 @@ public class CranposeActivity extends NativeActivity {
         private final View host;
         private List<CranposeAccessibilityElement> elements = Collections.emptyList();
         private int focusedId = HOST_ID;
+        /**
+         * Where a reader's move by character, word or line left its cursor in
+         * the text of a control, by virtual id, until the app catches up or
+         * the cursor leaves the control. Compose keeps the same place as its
+         * accessibility cursor position.
+         */
+        private final HashMap<Integer, Integer> cursors = new HashMap<>();
 
         CranposeAccessibilityProvider(View host) {
             this.host = host;
         }
 
         void setElements(List<CranposeAccessibilityElement> elements) {
+            List<CranposeAccessibilityElement> previous = this.elements;
             this.elements = elements;
             host.sendAccessibilityEvent(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED);
             followAppFocus();
             announceChanges();
+            announceTextChanges(previous);
+        }
+
+        /**
+         * Tells TalkBack what a focused field's text became and where its
+         * caret went, the events a native EditText sends, so a reader speaks
+         * the text that was typed or removed and the character the caret
+         * crossed.
+         */
+        private void announceTextChanges(List<CranposeAccessibilityElement> previous) {
+            for (CranposeAccessibilityElement element : elements) {
+                if (element.role != 3 || !element.focused) continue;
+                CranposeAccessibilityElement before = null;
+                for (CranposeAccessibilityElement candidate : previous) {
+                    if (candidate.id == element.id) {
+                        before = candidate;
+                        break;
+                    }
+                }
+                if (before == null) continue;
+                if (!before.value.equals(element.value)) {
+                    cursors.remove(element.id);
+                    int prefix = commonPrefix(before.value, element.value);
+                    int suffix = commonSuffix(before.value, element.value, prefix);
+                    AccessibilityEvent event = AccessibilityEvent.obtain(AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED);
+                    event.setFromIndex(prefix);
+                    event.setRemovedCount(before.value.length() - prefix - suffix);
+                    event.setAddedCount(element.value.length() - prefix - suffix);
+                    event.setBeforeText(before.value);
+                    event.getText().add(element.value);
+                    send(element.id, event);
+                }
+                if (before.selectionStart != element.selectionStart
+                        || before.selectionEnd != element.selectionEnd) {
+                    Integer moved = cursors.get(element.id);
+                    if (moved != null && moved == element.selectionEnd) cursors.remove(element.id);
+                    AccessibilityEvent event = AccessibilityEvent.obtain(AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED);
+                    event.setFromIndex(Math.min(element.selectionStart, element.selectionEnd));
+                    event.setToIndex(Math.max(element.selectionStart, element.selectionEnd));
+                    event.setItemCount(element.value.length());
+                    event.getText().add(element.value);
+                    send(element.id, event);
+                }
+            }
+        }
+
+        private static int commonPrefix(String before, String after) {
+            int shared = 0;
+            int limit = Math.min(before.length(), after.length());
+            while (shared < limit && before.charAt(shared) == after.charAt(shared)) shared++;
+            return shared;
+        }
+
+        private static int commonSuffix(String before, String after, int prefix) {
+            int shared = 0;
+            while (shared < before.length() - prefix && shared < after.length() - prefix
+                    && before.charAt(before.length() - 1 - shared)
+                            == after.charAt(after.length() - 1 - shared)) {
+                shared++;
+            }
+            return shared;
         }
 
         /**
@@ -1082,7 +1176,22 @@ public class CranposeActivity extends NativeActivity {
             if (element.role == 3) {
                 info.setEditable(true);
                 info.setText(element.value);
+                info.setMultiLine(element.value.contains("\n"));
+                if (element.selectionStart >= 0 && element.selectionEnd >= 0) {
+                    info.setTextSelection(
+                            Math.min(element.selectionStart, element.selectionEnd),
+                            Math.max(element.selectionStart, element.selectionEnd));
+                }
                 info.addAction(AccessibilityNodeInfo.ACTION_SET_TEXT);
+                info.addAction(AccessibilityNodeInfo.ACTION_SET_SELECTION);
+            }
+            if (!element.traversableText().isEmpty()) {
+                info.setMovementGranularities(AccessibilityNodeInfo.MOVEMENT_GRANULARITY_CHARACTER
+                        | AccessibilityNodeInfo.MOVEMENT_GRANULARITY_WORD
+                        | AccessibilityNodeInfo.MOVEMENT_GRANULARITY_LINE
+                        | AccessibilityNodeInfo.MOVEMENT_GRANULARITY_PARAGRAPH);
+                info.addAction(AccessibilityNodeInfo.ACTION_NEXT_AT_MOVEMENT_GRANULARITY);
+                info.addAction(AccessibilityNodeInfo.ACTION_PREVIOUS_AT_MOVEMENT_GRANULARITY);
             }
             if (element.role == 9 && Build.VERSION.SDK_INT >= 28) info.setHeading(true);
             if (element.password) info.setPassword(true);
@@ -1164,8 +1273,22 @@ public class CranposeActivity extends NativeActivity {
                 nativeOnAccessibilityCustomAction(element.id, customIndex);
                 return true;
             }
+            if (action == AccessibilityNodeInfo.ACTION_NEXT_AT_MOVEMENT_GRANULARITY
+                    || action == AccessibilityNodeInfo.ACTION_PREVIOUS_AT_MOVEMENT_GRANULARITY) {
+                return traverse(element, arguments, action);
+            }
+            if (element.role == 3 && action == AccessibilityNodeInfo.ACTION_SET_SELECTION) {
+                int start = arguments == null ? -1
+                        : arguments.getInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, -1);
+                int end = arguments == null ? -1
+                        : arguments.getInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, -1);
+                cursors.remove(element.id);
+                nativeOnAccessibilitySetSelection(element.id, start, end);
+                return true;
+            }
             if (action == AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS) {
                 focusedId = element.id;
+                cursors.clear();
                 sendEvent(element.id, AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUSED);
                 // The app moves its own focus to the control the reader landed
                 // on, so a later Tab carries on from there.
@@ -1232,6 +1355,140 @@ public class CranposeActivity extends NativeActivity {
             int row = arguments.getInt(AccessibilityNodeInfo.ACTION_ARGUMENT_ROW_INT, -1);
             if (row >= 0) return row;
             return arguments.getInt(AccessibilityNodeInfo.ACTION_ARGUMENT_COLUMN_INT, -1);
+        }
+
+        /**
+         * Where the reader's cursor sits in the text of a control: the place
+         * the last move left, else the caret of a field, else nowhere.
+         */
+        private int cursorOf(CranposeAccessibilityElement element) {
+            Integer moved = cursors.get(element.id);
+            if (moved != null) return moved;
+            return element.role == 3 ? element.selectionEnd : -1;
+        }
+
+        /**
+         * Moves the reader's cursor one character, word, line or paragraph
+         * through the text of a control, the way Compose's traverseAtGranularity
+         * does: a field moves its caret, any other text remembers the place.
+         * TalkBack speaks the stretch crossed from the traversed event. Answers
+         * false at the end of the text, so TalkBack moves on to the next control.
+         */
+        private boolean traverse(CranposeAccessibilityElement element, Bundle arguments, int action) {
+            String text = element.traversableText();
+            if (text.isEmpty() || arguments == null) return false;
+            int granularity = arguments.getInt(
+                    AccessibilityNodeInfo.ACTION_ARGUMENT_MOVEMENT_GRANULARITY_INT, 0);
+            boolean extend = arguments.getBoolean(
+                    AccessibilityNodeInfo.ACTION_ARGUMENT_EXTEND_SELECTION_BOOLEAN, false);
+            boolean forward = action == AccessibilityNodeInfo.ACTION_NEXT_AT_MOVEMENT_GRANULARITY;
+            int cursor = cursorOf(element);
+            int[] segment = forward ? segmentAfter(text, granularity, cursor)
+                    : segmentBefore(text, granularity, cursor);
+            if (segment == null) return false;
+            int moved = forward ? segment[1] : segment[0];
+            cursors.put(element.id, moved);
+            if (element.role == 3) {
+                int anchor = extend && element.selectionStart >= 0 ? element.selectionStart : moved;
+                nativeOnAccessibilitySetSelection(element.id, anchor, moved);
+            }
+            AccessibilityEvent event = AccessibilityEvent.obtain(
+                    AccessibilityEvent.TYPE_VIEW_TEXT_TRAVERSED_AT_MOVEMENT_GRANULARITY);
+            event.setFromIndex(segment[0]);
+            event.setToIndex(segment[1]);
+            event.setAction(action);
+            event.setMovementGranularity(granularity);
+            event.getText().add(text);
+            send(element.id, event);
+            return true;
+        }
+
+        /**
+         * The stretch of text right after the cursor at a granularity, as its
+         * two ends, or null at the end of the text. A cursor below zero is
+         * the start.
+         */
+        static int[] segmentAfter(String text, int granularity, int cursor) {
+            int from = Math.max(cursor, 0);
+            if (from >= text.length()) return null;
+            switch (granularity) {
+                case AccessibilityNodeInfo.MOVEMENT_GRANULARITY_WORD: {
+                    int start = isWordChar(text, from) ? from : wordStartAtOrAfter(text, from);
+                    if (start < 0) return null;
+                    return new int[] {start, wordEndAfter(text, start)};
+                }
+                case AccessibilityNodeInfo.MOVEMENT_GRANULARITY_LINE:
+                case AccessibilityNodeInfo.MOVEMENT_GRANULARITY_PARAGRAPH: {
+                    int end = text.indexOf('\n', from);
+                    return new int[] {from, end < 0 ? text.length() : end + 1};
+                }
+                default: {
+                    BreakIterator characters = BreakIterator.getCharacterInstance();
+                    characters.setText(text);
+                    int end = characters.following(from);
+                    return end == BreakIterator.DONE ? null : new int[] {from, end};
+                }
+            }
+        }
+
+        /**
+         * The stretch of text right before the cursor at a granularity, as
+         * its two ends, or null at the start of the text. A cursor below zero
+         * is the end.
+         */
+        static int[] segmentBefore(String text, int granularity, int cursor) {
+            int to = cursor < 0 ? text.length() : Math.min(cursor, text.length());
+            if (to <= 0) return null;
+            switch (granularity) {
+                case AccessibilityNodeInfo.MOVEMENT_GRANULARITY_WORD: {
+                    int end = isWordChar(text, to - 1) ? to : wordEndAtOrBefore(text, to);
+                    if (end < 0) return null;
+                    return new int[] {wordStartBefore(text, end), end};
+                }
+                case AccessibilityNodeInfo.MOVEMENT_GRANULARITY_LINE:
+                case AccessibilityNodeInfo.MOVEMENT_GRANULARITY_PARAGRAPH: {
+                    int start = to >= 2 ? text.lastIndexOf('\n', to - 2) + 1 : 0;
+                    return new int[] {start, to};
+                }
+                default: {
+                    BreakIterator characters = BreakIterator.getCharacterInstance();
+                    characters.setText(text);
+                    int start = characters.preceding(to);
+                    return start == BreakIterator.DONE ? null : new int[] {start, to};
+                }
+            }
+        }
+
+        /** A word is a run of letters and digits, as it is in Compose's word iterator. */
+        private static boolean isWordChar(String text, int index) {
+            return index >= 0 && index < text.length()
+                    && Character.isLetterOrDigit(text.codePointAt(index));
+        }
+
+        private static int wordStartAtOrAfter(String text, int from) {
+            for (int index = from; index < text.length(); index++) {
+                if (isWordChar(text, index) && !isWordChar(text, index - 1)) return index;
+            }
+            return -1;
+        }
+
+        private static int wordEndAfter(String text, int start) {
+            int index = start;
+            while (isWordChar(text, index)) index++;
+            return index;
+        }
+
+        private static int wordEndAtOrBefore(String text, int to) {
+            for (int index = to; index > 0; index--) {
+                if (isWordChar(text, index - 1) && !isWordChar(text, index)) return index;
+            }
+            return -1;
+        }
+
+        private static int wordStartBefore(String text, int end) {
+            int index = end;
+            while (isWordChar(text, index - 1)) index--;
+            return index;
         }
 
         private CranposeAccessibilityElement find(int id) {

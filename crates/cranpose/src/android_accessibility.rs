@@ -25,6 +25,7 @@ static CUSTOM_ACTIONS: OnceLock<Mutex<Vec<(i32, usize)>>> = OnceLock::new();
 static FOCUS_REQUESTS: OnceLock<Mutex<Vec<i32>>> = OnceLock::new();
 static VALUE_REQUESTS: OnceLock<Mutex<Vec<(i32, f32)>>> = OnceLock::new();
 static TEXT_REQUESTS: OnceLock<Mutex<Vec<(i32, String)>>> = OnceLock::new();
+static SELECTION_REQUESTS: OnceLock<Mutex<Vec<(i32, usize, usize)>>> = OnceLock::new();
 static SCROLL_REQUESTS: OnceLock<Mutex<Vec<(i32, bool)>>> = OnceLock::new();
 static EXPAND_REQUESTS: OnceLock<Mutex<Vec<(i32, bool)>>> = OnceLock::new();
 static LONG_CLICK_REQUESTS: OnceLock<Mutex<Vec<i32>>> = OnceLock::new();
@@ -83,8 +84,22 @@ fn text_requests() -> &'static Mutex<Vec<(i32, String)>> {
     TEXT_REQUESTS.get_or_init(|| Mutex::new(Vec::new()))
 }
 
+fn selection_requests() -> &'static Mutex<Vec<(i32, usize, usize)>> {
+    SELECTION_REQUESTS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
 fn scroll_requests() -> &'static Mutex<Vec<(i32, bool)>> {
     SCROLL_REQUESTS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// Selections TalkBack asked text fields to take, as virtual view ids with
+/// the two ends in UTF-16 units, the anchor first.
+pub(crate) fn drain_selection_requests() -> Vec<(i32, usize, usize)> {
+    std::mem::take(
+        &mut *selection_requests()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()),
+    )
 }
 
 fn expand_requests() -> &'static Mutex<Vec<(i32, bool)>> {
@@ -378,6 +393,30 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccess
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .push((virtual_id, text));
+    wake_loop();
+}
+
+/// TalkBack moved the caret of a text field, or picked a stretch of its text,
+/// through Android's set-selection action or a move by character, word or
+/// line. The ends count UTF-16 units, the anchor first; a negative end means
+/// the end of the text. The frame loop resolves the field against the live
+/// semantics tree.
+#[doc(hidden)]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccessibilitySetSelection(
+    _env: EnvUnowned<'_>,
+    _class: JClass<'_>,
+    virtual_id: jint,
+    start: jint,
+    end: jint,
+) {
+    let end_of_text = usize::MAX;
+    let start = usize::try_from(start).unwrap_or(end_of_text);
+    let end = usize::try_from(end).unwrap_or(end_of_text);
+    selection_requests()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .push((virtual_id, start, end));
     wake_loop();
 }
 

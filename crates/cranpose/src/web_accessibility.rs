@@ -4,7 +4,10 @@ use cranpose_app_shell::AppShell;
 use cranpose_render_wgpu::WgpuRenderer;
 use cranpose_ui::LiveRegionMode;
 use wasm_bindgen::{JsCast, JsValue, closure::Closure};
-use web_sys::{Document, Element, HtmlCanvasElement, HtmlElement, MouseEvent};
+use web_sys::{
+    Document, Element, HtmlCanvasElement, HtmlElement, HtmlInputElement, HtmlTextAreaElement,
+    MouseEvent,
+};
 
 use crate::accessibility::{self, AccessibilityElement, AccessibilityRole};
 
@@ -14,7 +17,9 @@ fn apply_role_and_state(node: &HtmlElement, element: &AccessibilityElement) -> R
         Some(_) => "slider",
         None => aria_role(element.role),
     };
-    node.set_attribute("role", role)?;
+    if !edits_text(element) {
+        node.set_attribute("role", role)?;
+    }
     if let Some(title) = &element.pane_title {
         node.set_attribute("role", "region")?;
         node.set_attribute("aria-label", title)?;
@@ -285,8 +290,192 @@ fn apply_aria_state(node: &HtmlElement, element: &AccessibilityElement) -> Resul
     Ok(())
 }
 
-/// One mirror node for a control: a button when a click reaches it, a
-/// span otherwise, carrying its label, role, state and paging data.
+/// Whether a control is a text field a reader edits: one that publishes its
+/// caret. A field that holds a secret publishes none and stays a plain node.
+fn edits_text(element: &AccessibilityElement) -> bool {
+    element.role == AccessibilityRole::TextField && element.text_selection.is_some()
+}
+
+/// Whether a field's text runs over more than one line.
+fn holds_lines(element: &AccessibilityElement) -> bool {
+    element
+        .value
+        .as_deref()
+        .is_some_and(|value| value.contains('\n'))
+}
+
+/// The element a control is mirrored as: a text field is an input or a text
+/// area, so a reader walks and edits its text the way it does any form
+/// field; a control a click reaches is a button; anything else is a span.
+fn mirror_tag(element: &AccessibilityElement) -> &'static str {
+    if edits_text(element) {
+        if holds_lines(element) {
+            "textarea"
+        } else {
+            "input"
+        }
+    } else if element.clickable {
+        "button"
+    } else {
+        "span"
+    }
+}
+
+/// The text a field holds, as the value of its mirrored input, and where its
+/// caret or its picked stretch of text sits, in the UTF-16 units a browser
+/// counts. The same ends go on the node, so the selection listener can tell
+/// a move the app made from one the reader made.
+fn apply_field_text(node: &HtmlElement, element: &AccessibilityElement) -> Result<(), JsValue> {
+    let (Some(value), Some((anchor, focus))) = (&element.value, element.text_selection) else {
+        return Ok(());
+    };
+    let anchor = accessibility::utf16_offset(value, anchor) as u32;
+    let focus = accessibility::utf16_offset(value, focus) as u32;
+    node.set_attribute("data-cranpose-selection", &format!("{anchor}:{focus}"))?;
+    let (start, end) = (anchor.min(focus), anchor.max(focus));
+    let direction = if focus < anchor {
+        "backward"
+    } else {
+        "forward"
+    };
+    if let Some(input) = node.dyn_ref::<HtmlInputElement>() {
+        input.set_type("text");
+        input.set_value(value);
+        input.set_selection_range_with_direction(start, end, direction)?;
+    } else if let Some(area) = node.dyn_ref::<HtmlTextAreaElement>() {
+        area.set_value(value);
+        area.set_selection_range_with_direction(start, end, direction)?;
+    }
+    Ok(())
+}
+
+/// Puts the caret of a mirrored field back where the app last published it,
+/// after the browser's focus moved onto the field.
+fn restore_field_caret(node: &HtmlElement) -> Result<(), JsValue> {
+    let Some(ends) = node.get_attribute("data-cranpose-selection") else {
+        return Ok(());
+    };
+    let Some((anchor, focus)) = ends.split_once(':').and_then(|(anchor, focus)| {
+        Some((anchor.parse::<u32>().ok()?, focus.parse::<u32>().ok()?))
+    }) else {
+        return Ok(());
+    };
+    let (start, end) = (anchor.min(focus), anchor.max(focus));
+    let direction = if focus < anchor {
+        "backward"
+    } else {
+        "forward"
+    };
+    if let Some(input) = node.dyn_ref::<HtmlInputElement>() {
+        input.set_selection_range_with_direction(start, end, direction)?;
+    } else if let Some(area) = node.dyn_ref::<HtmlTextAreaElement>() {
+        area.set_selection_range_with_direction(start, end, direction)?;
+    }
+    Ok(())
+}
+
+/// Moves the browser's focus onto a mirror node, and for a field puts the
+/// caret back where it was, because a fresh input starts with its caret at
+/// the start.
+fn focus_mirror_node(node: &HtmlElement) -> Result<(), JsValue> {
+    node.focus()?;
+    restore_field_caret(node)
+}
+
+/// The two ends of the selection in a mirrored field, the anchor first, in
+/// UTF-16 units, or nothing for a node that is not a field.
+fn field_selection(element: &Element) -> Option<(usize, usize)> {
+    let (start, end, direction) = if let Some(input) = element.dyn_ref::<HtmlInputElement>() {
+        (
+            input.selection_start().ok()??,
+            input.selection_end().ok()??,
+            input.selection_direction().ok()??,
+        )
+    } else if let Some(area) = element.dyn_ref::<HtmlTextAreaElement>() {
+        (
+            area.selection_start().ok()??,
+            area.selection_end().ok()??,
+            area.selection_direction().ok()??,
+        )
+    } else {
+        return None;
+    };
+    let (start, end) = (start as usize, end as usize);
+    Some(if direction == "backward" {
+        (end, start)
+    } else {
+        (start, end)
+    })
+}
+
+/// Hands the app the caret a reader or a keyboard moved inside a mirrored
+/// field, through the browser's own selection change. A change that only
+/// echoes the ends the app published is not sent back.
+fn attach_selection_listener(
+    document: &Document,
+    app: Rc<RefCell<AppShell<WgpuRenderer>>>,
+    node_ids: Rc<RefCell<HashMap<i32, cranpose_core::NodeId>>>,
+) -> Result<(), JsValue> {
+    let owner = document.clone();
+    let on_change = Closure::wrap(Box::new(move |_event: web_sys::Event| {
+        let Some(active) = owner.active_element() else {
+            return;
+        };
+        let Some((anchor, focus)) = field_selection(&active) else {
+            return;
+        };
+        let ends = format!("{anchor}:{focus}");
+        if active.get_attribute("data-cranpose-selection").as_deref() == Some(ends.as_str()) {
+            return;
+        }
+        let Some(node_id) = node_id_attribute(&active, "data-cranpose-node", &node_ids) else {
+            return;
+        };
+        let _ = active.set_attribute("data-cranpose-selection", &ends);
+        on_live_tree(&app, |root| {
+            accessibility::set_text_selection_utf16(root, node_id, anchor, focus)
+        });
+    }) as Box<dyn FnMut(_)>);
+    document
+        .add_event_listener_with_callback("selectionchange", on_change.as_ref().unchecked_ref())?;
+    on_change.forget();
+    Ok(())
+}
+
+/// The one element whose text or caret changed while everything else on the
+/// screen stayed the same, when that element is the focused field: the case
+/// of a keystroke or a caret move, which must not rebuild the mirror, or the
+/// reader would hear the whole field again instead of one character.
+fn only_focused_field_changed(
+    previous: &[AccessibilityElement],
+    next: &[AccessibilityElement],
+) -> Option<usize> {
+    if previous.len() != next.len() {
+        return None;
+    }
+    let mut changed = None;
+    for (index, (before, after)) in previous.iter().zip(next).enumerate() {
+        if before == after {
+            continue;
+        }
+        if changed.is_some() || !after.focused || !edits_text(after) {
+            return None;
+        }
+        let mut same_but_text = after.clone();
+        same_but_text.label.clone_from(&before.label);
+        same_but_text.value.clone_from(&before.value);
+        same_but_text.text_selection = before.text_selection;
+        if same_but_text != *before {
+            return None;
+        }
+        changed = Some(index);
+    }
+    changed
+}
+
+/// One mirror node for a control: a text field as an input, a button when a
+/// click reaches it, a span otherwise, carrying its label, role, state and
+/// paging data.
 fn mirror_node(
     document: &Document,
     id: i32,
@@ -294,12 +483,13 @@ fn mirror_node(
     page: Option<PageTarget>,
 ) -> Result<HtmlElement, JsValue> {
     let node = document
-        .create_element(if element.clickable { "button" } else { "span" })?
+        .create_element(mirror_tag(element))?
         .dyn_into::<HtmlElement>()?;
     node.set_attribute("aria-label", &element.label)?;
     node.set_attribute("data-cranpose-node", &id.to_string())?;
     apply_role_and_state(&node, element)?;
     apply_page(&node, element, page)?;
+    apply_field_text(&node, element)?;
     if element.clickable {
         let (x, y) = element.bounds.center();
         node.set_attribute("data-cranpose-x", &x.to_string())?;
@@ -575,6 +765,7 @@ impl WebAccessibilityBridge {
         attach_focus_listener(&root, Rc::clone(&node_ids))?;
         attach_key_listener(&root, Rc::clone(&app), Rc::clone(&node_ids))?;
         attach_action_listener(&root, Rc::clone(&app), Rc::clone(&node_ids))?;
+        attach_selection_listener(document, Rc::clone(&app), Rc::clone(&node_ids))?;
         attach_page_listener(&root, app, Rc::clone(&node_ids))?;
 
         Ok(Self {
@@ -630,7 +821,27 @@ impl WebAccessibilityBridge {
             return Ok(());
         }
         self.focused_element = Some(id);
-        node.focus()
+        focus_mirror_node(node)
+    }
+
+    /// Puts a keystroke or a caret move into the focused field's mirror node
+    /// in place, so the browser's focus and the reader's place in the text
+    /// stay where they are. Answers whether that was all that changed.
+    fn patch_focused_field(&mut self, elements: &[AccessibilityElement]) -> Result<bool, JsValue> {
+        let Some(index) = only_focused_field_changed(&self.previous, elements) else {
+            return Ok(false);
+        };
+        let id = accessibility::element_ids(elements)[index];
+        let selector = format!("[data-cranpose-node=\"{id}\"]");
+        let Some(node) = self.root.query_selector(&selector)? else {
+            return Ok(false);
+        };
+        let node = node.dyn_into::<HtmlElement>()?;
+        let element = &elements[index];
+        node.set_attribute("aria-label", &element.label)?;
+        apply_field_text(&node, element)?;
+        self.previous = elements.to_vec();
+        Ok(true)
     }
 
     pub(crate) fn sync(
@@ -640,7 +851,7 @@ impl WebAccessibilityBridge {
     ) -> Result<(), JsValue> {
         let elements = accessibility::snapshot(shell);
         self.speak(&elements);
-        if elements == self.previous {
+        if elements == self.previous || self.patch_focused_field(&elements)? {
             return Ok(());
         }
         let opened_dialog = opened_dialog(&self.previous, &elements);
@@ -733,7 +944,7 @@ impl WebAccessibilityBridge {
         if let Some(node) = self.root.query_selector(&selector)?
             && let Ok(node) = node.dyn_into::<HtmlElement>()
         {
-            node.focus()?;
+            focus_mirror_node(&node)?;
         }
         Ok(())
     }

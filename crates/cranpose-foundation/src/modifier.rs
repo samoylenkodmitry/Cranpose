@@ -905,6 +905,30 @@ impl fmt::Debug for SemanticsSetText {
     }
 }
 
+/// What a text field does when a screen reader moves its caret or picks a
+/// stretch of its text: the two ends of the new selection, as byte offsets
+/// into the field's text, the anchor first and the end that moves second. Equal
+/// ends are a caret. This is Compose's `SemanticsActions.SetSelection`; the
+/// answer says whether the field took the selection.
+#[derive(Clone)]
+pub struct SemanticsSetSelection(Rc<dyn Fn(usize, usize) -> bool>);
+
+impl SemanticsSetSelection {
+    pub fn new(handler: impl Fn(usize, usize) -> bool + 'static) -> Self {
+        Self(Rc::new(handler))
+    }
+
+    pub fn invoke(&self, anchor: usize, focus: usize) -> bool {
+        (self.0)(anchor, focus)
+    }
+}
+
+impl fmt::Debug for SemanticsSetSelection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("SemanticsSetSelection")
+    }
+}
+
 /// What a control does when a screen reader asks it to open or to close.
 /// Compose's `expand` and `collapse` actions.
 #[derive(Clone)]
@@ -989,6 +1013,12 @@ impl PartialEq for SemanticsDismiss {
 }
 
 impl PartialEq for SemanticsSetText {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
+impl PartialEq for SemanticsSetSelection {
     fn eq(&self, _other: &Self) -> bool {
         true
     }
@@ -1266,6 +1296,9 @@ pub struct SemanticsConfiguration {
     /// What this field does when a screen reader or a voice tool hands it
     /// text. Compose's `setText`.
     pub set_text: Option<SemanticsSetText>,
+    /// What this field does when a screen reader moves its caret or picks a
+    /// stretch of its text. Compose's `setSelection`.
+    pub set_selection: Option<SemanticsSetSelection>,
     /// What this control does when a screen reader asks it to open. A control
     /// that says so reads as closed. Compose's `expand`.
     pub expand: Option<SemanticsExpand>,
@@ -1323,6 +1356,7 @@ impl Default for SemanticsConfiguration {
             progress: None,
             set_progress: None,
             set_text: None,
+            set_selection: None,
             expand: None,
             dismiss: None,
             collapse: None,
@@ -1530,6 +1564,9 @@ impl SemanticsConfiguration {
         }
         if let Some(set_text) = &other.set_text {
             self.set_text = Some(set_text.clone());
+        }
+        if let Some(set_selection) = &other.set_selection {
+            self.set_selection = Some(set_selection.clone());
         }
         if let Some(expand) = &other.expand {
             self.expand = Some(expand.clone());

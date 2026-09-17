@@ -65,7 +65,7 @@ pub use cranpose_foundation::{
     ModifierNodeElement, NodeCapabilities, NodeState, ProgressBarRangeInfo, ScrollAxisRange,
     SemanticsConfiguration, SemanticsCustomAction, SemanticsDismiss, SemanticsExpand,
     SemanticsLongClick, SemanticsScrollBy, SemanticsScrollToIndex, SemanticsSetProgress,
-    SemanticsSetText, SemanticsSpec, SemanticsWidgetRole,
+    SemanticsSetSelection, SemanticsSetText, SemanticsSpec, SemanticsWidgetRole,
     lazy::{
         LazyItems, LazyListItemInfo, LazyListLayoutInfo, LazyListScope, LazyListState,
         rememberLazyListState, rememberLazyListStateWithPosition,

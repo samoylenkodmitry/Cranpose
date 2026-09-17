@@ -241,6 +241,10 @@ pub(crate) struct IosAccessibilityBridge {
     published_once: bool,
     focused_element: Option<i32>,
     reader_cursor: Option<i32>,
+    /// The text field that holds app focus, by virtual id, and the keyboard's
+    /// text input view that stands in for it among the elements, so VoiceOver
+    /// walks and edits the text through `UITextInput`.
+    reader_view: Option<(i32, Retained<AnyObject>)>,
 }
 
 impl IosAccessibilityBridge {
@@ -260,6 +264,7 @@ impl IosAccessibilityBridge {
             published_once: false,
             focused_element: None,
             reader_cursor: None,
+            reader_view: None,
         })
     }
 
@@ -293,6 +298,23 @@ impl IosAccessibilityBridge {
             let jumpable = accessibility::scroll_container_for(&next, element)
                 .is_some_and(|container| accessibility::row_count(container) > 0);
             update_native_element(native, element, jumpable, mtm);
+        }
+        self.reader_view = reader_field(&next, &next_ids).and_then(|(id, element)| {
+            let frame = CGRect::new(
+                CGPoint::new(element.bounds.x as f64, element.bounds.y as f64),
+                CGSize::new(element.bounds.width as f64, element.bounds.height as f64),
+            );
+            crate::ios_keyboard::describe_for_reader(
+                &element.label,
+                element.click_label.as_deref(),
+                frame,
+                &self.host_view,
+                &format!("cranpose-node-{id}"),
+            )
+            .map(|view| (id, view))
+        });
+        if self.reader_view.is_none() {
+            crate::ios_keyboard::hide_from_reader();
         }
 
         if structure_changed {
@@ -371,10 +393,18 @@ impl IosAccessibilityBridge {
     /// Posts a layout change that names one element, which moves the
     /// VoiceOver cursor onto it and reads it out.
     fn name_to_reader(&self, element_id: i32) -> bool {
-        let Some(native) = self.native_elements.get(&element_id) else {
+        let reader_view = self
+            .reader_view
+            .as_ref()
+            .filter(|(reader_id, _)| *reader_id == element_id)
+            .map(|(_, view)| &**view);
+        let Some(argument) = reader_view.or_else(|| {
+            self.native_elements
+                .get(&element_id)
+                .map(|native| -> &AnyObject { native.as_ref() })
+        }) else {
             return false;
         };
-        let argument: &AnyObject = native.as_ref();
         // SAFETY: the notification takes the element to move the cursor to,
         // and `native` is a retained accessibility element of this container.
         unsafe {
@@ -609,8 +639,16 @@ impl IosAccessibilityBridge {
     ) {
         let ordered: Vec<Retained<AnyObject>> = next_ids
             .iter()
-            .filter_map(|element_id| self.native_elements.get(element_id))
-            .map(|element| element.retain().into())
+            .filter_map(|element_id| {
+                if let Some((reader_id, view)) = &self.reader_view
+                    && reader_id == element_id
+                {
+                    return Some(view.clone());
+                }
+                self.native_elements
+                    .get(element_id)
+                    .map(|element| element.retain().into())
+            })
             .collect();
         let array = NSArray::from_retained_slice(&ordered);
         let host_object: &NSObject = self.host_view.as_ref();
@@ -782,6 +820,24 @@ fn opened_dialog(
         .map(|(_, id)| *id)
 }
 
+/// The text field that holds app focus and publishes its caret, with its
+/// virtual id: the one VoiceOver edits through the keyboard's text input
+/// view rather than through a plain element.
+fn reader_field<'a>(
+    elements: &'a [AccessibilityElement],
+    ids: &[i32],
+) -> Option<(i32, &'a AccessibilityElement)> {
+    elements
+        .iter()
+        .zip(ids)
+        .find(|(element, _)| {
+            element.role == AccessibilityRole::TextField
+                && element.focused
+                && element.text_selection.is_some()
+        })
+        .map(|(element, id)| (*id, element))
+}
+
 fn same_structure(current: &[AccessibilityElement], next: &[AccessibilityElement]) -> bool {
     current.len() == next.len()
         && current.iter().zip(next).all(|(current, next)| {
@@ -791,6 +847,7 @@ fn same_structure(current: &[AccessibilityElement], next: &[AccessibilityElement
                 && current.role == next.role
                 && current.clickable == next.clickable
                 && current.canvas_key == next.canvas_key
+                && (current.role != AccessibilityRole::TextField || current.focused == next.focused)
         })
 }
 

@@ -108,6 +108,10 @@ pub(crate) struct AccessibilityElement {
     pub(crate) password: bool,
     pub(crate) expanded: Option<bool>,
     pub(crate) dismissable: bool,
+    /// Where the caret of an editable field sits, or which stretch of its
+    /// text is picked: the anchor and the end that moves, as byte offsets into
+    /// `value`. A field that holds a secret publishes none.
+    pub(crate) text_selection: Option<(usize, usize)>,
 }
 
 impl Default for AccessibilityElement {
@@ -143,6 +147,7 @@ impl Default for AccessibilityElement {
             password: false,
             expanded: None,
             dismissable: false,
+            text_selection: None,
         }
     }
 }
@@ -549,6 +554,10 @@ fn element_for_node(
         password: node.password,
         expanded: expansion(node),
         dismissable: node.dismiss.is_some(),
+        text_selection: node
+            .text_selection
+            .filter(|_| node.editable_text && !node.password)
+            .map(|range| (range.start, range.end)),
     }
 }
 
@@ -840,6 +849,146 @@ pub(crate) fn set_text(root: &SemanticsNode, node_id: NodeId, text: &str) -> boo
         Some(action) => action.invoke(text),
         None => false,
     }
+}
+
+/// Moves the caret of a field, or picks a stretch of its text, for a screen
+/// reader. The ends are byte offsets into the field's text, the anchor first
+/// and the end that moves second. Answers whether the field took the selection.
+#[cfg(any(
+    test,
+    all(feature = "desktop-shell", feature = "renderer-wgpu"),
+    all(feature = "android", feature = "renderer-wgpu", target_os = "android"),
+    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
+))]
+pub(crate) fn set_text_selection(
+    root: &SemanticsNode,
+    node_id: NodeId,
+    anchor: usize,
+    focus: usize,
+) -> bool {
+    let Some(node) = find_semantics_node(root, node_id) else {
+        return false;
+    };
+    match &node.set_selection {
+        Some(action) => action.invoke(anchor, focus),
+        None => false,
+    }
+}
+
+/// The same move with the ends counted in UTF-16 units, which is how Android
+/// and a browser count text.
+#[cfg(any(
+    test,
+    all(feature = "android", feature = "renderer-wgpu", target_os = "android"),
+    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
+))]
+pub(crate) fn set_text_selection_utf16(
+    root: &SemanticsNode,
+    node_id: NodeId,
+    anchor: usize,
+    focus: usize,
+) -> bool {
+    set_text_selection_counted(root, node_id, anchor, focus, byte_offset_for_utf16)
+}
+
+/// The same move with the ends counted in characters, which is how accesskit
+/// counts text.
+#[cfg(any(test, all(feature = "desktop-shell", feature = "renderer-wgpu")))]
+pub(crate) fn set_text_selection_chars(
+    root: &SemanticsNode,
+    node_id: NodeId,
+    anchor: usize,
+    focus: usize,
+) -> bool {
+    set_text_selection_counted(root, node_id, anchor, focus, byte_offset_for_chars)
+}
+
+/// Moves the selection of a field with its ends counted in some unit of the
+/// field's own text, turned into bytes by `byte_offset`.
+#[cfg(any(
+    test,
+    all(feature = "desktop-shell", feature = "renderer-wgpu"),
+    all(feature = "android", feature = "renderer-wgpu", target_os = "android"),
+    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
+))]
+fn set_text_selection_counted(
+    root: &SemanticsNode,
+    node_id: NodeId,
+    anchor: usize,
+    focus: usize,
+    byte_offset: fn(&str, usize) -> usize,
+) -> bool {
+    let Some(node) = find_semantics_node(root, node_id) else {
+        return false;
+    };
+    let text = node.text.as_deref().unwrap_or("");
+    set_text_selection(
+        root,
+        node_id,
+        byte_offset(text, anchor),
+        byte_offset(text, focus),
+    )
+}
+
+/// The byte offset at or before `byte` that starts a character.
+#[cfg(any(
+    test,
+    all(feature = "desktop-shell", feature = "renderer-wgpu"),
+    all(feature = "android", feature = "renderer-wgpu", target_os = "android"),
+    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
+))]
+fn floor_char_boundary(text: &str, byte: usize) -> usize {
+    let mut byte = byte.min(text.len());
+    while !text.is_char_boundary(byte) {
+        byte -= 1;
+    }
+    byte
+}
+
+/// How many UTF-16 units the text holds before the byte offset.
+#[cfg(any(
+    test,
+    all(feature = "android", feature = "renderer-wgpu", target_os = "android"),
+    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
+))]
+pub(crate) fn utf16_offset(text: &str, byte: usize) -> usize {
+    text[..floor_char_boundary(text, byte)]
+        .encode_utf16()
+        .count()
+}
+
+/// The byte offset where the character at a count of UTF-16 units starts. A
+/// count past the end, or one that falls inside a surrogate pair, lands on
+/// the end of the text or on the next character.
+#[cfg(any(
+    test,
+    all(feature = "android", feature = "renderer-wgpu", target_os = "android"),
+    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
+))]
+pub(crate) fn byte_offset_for_utf16(text: &str, units: usize) -> usize {
+    let mut seen = 0;
+    for (byte, character) in text.char_indices() {
+        if seen >= units {
+            return byte;
+        }
+        seen += character.len_utf16();
+    }
+    text.len()
+}
+
+/// How many characters the text holds before the byte offset.
+#[cfg(any(test, all(feature = "desktop-shell", feature = "renderer-wgpu")))]
+pub(crate) fn char_offset(text: &str, byte: usize) -> usize {
+    text[..floor_char_boundary(text, byte)].chars().count()
+}
+
+/// The byte offset where the character at an index starts, or the end of the
+/// text for an index past the last character.
+#[cfg(any(test, all(feature = "desktop-shell", feature = "renderer-wgpu")))]
+pub(crate) fn byte_offset_for_chars(text: &str, characters: usize) -> usize {
+    text.char_indices()
+        .nth(characters)
+        .map_or(text.len(), |(byte, _)| byte)
 }
 
 /// Opens or closes a control a screen reader asked to open or to close.
@@ -2276,6 +2425,79 @@ mod tests {
         assert!(set_text(&root, 7, "Milk"));
         assert_eq!(*taken.borrow(), vec!["Milk".to_owned()]);
         assert!(!set_text(&root, 99, "Milk"), "no such field");
+    }
+
+    #[test]
+    fn a_reader_moves_the_caret_of_a_field() {
+        let taken = Rc::new(RefCell::new(Vec::new()));
+        let seen = Rc::clone(&taken);
+        let mut root = node(7, SemanticsRole::Layout, Vec::new(), Some(""), Vec::new());
+        root.editable_text = true;
+        root.text = Some("añb😀c".to_owned());
+        root.set_selection = Some(cranpose_ui::SemanticsSetSelection::new(
+            move |anchor, focus| {
+                seen.borrow_mut().push((anchor, focus));
+                true
+            },
+        ));
+
+        assert!(set_text_selection(&root, 7, 1, 3));
+        assert!(set_text_selection_utf16(&root, 7, 2, 5));
+        assert!(set_text_selection_chars(&root, 7, 4, 2));
+        assert_eq!(*taken.borrow(), vec![(1, 3), (3, 8), (8, 3)]);
+        assert!(!set_text_selection(&root, 99, 0, 0), "no such field");
+    }
+
+    #[test]
+    fn text_offsets_convert_between_bytes_utf16_units_and_characters() {
+        let text = "añb😀c";
+        assert_eq!(utf16_offset(text, 0), 0);
+        assert_eq!(utf16_offset(text, 3), 2);
+        assert_eq!(utf16_offset(text, 8), 5);
+        assert_eq!(
+            utf16_offset(text, 2),
+            1,
+            "inside ñ rounds down to its start"
+        );
+        assert_eq!(utf16_offset(text, 99), 6);
+        assert_eq!(byte_offset_for_utf16(text, 2), 3);
+        assert_eq!(
+            byte_offset_for_utf16(text, 4),
+            8,
+            "inside the emoji lands after it"
+        );
+        assert_eq!(byte_offset_for_utf16(text, 99), 9);
+        assert_eq!(char_offset(text, 8), 4);
+        assert_eq!(char_offset(text, 99), 5);
+        assert_eq!(byte_offset_for_chars(text, 3), 4);
+        assert_eq!(byte_offset_for_chars(text, 4), 8);
+        assert_eq!(byte_offset_for_chars(text, 99), 9);
+    }
+
+    #[test]
+    fn an_editable_field_publishes_where_its_caret_is_and_a_password_does_not() {
+        for (password, expected) in [(false, Some((1, 3))), (true, None)] {
+            let mut field = node(
+                2,
+                SemanticsRole::Layout,
+                Vec::new(),
+                Some("Name"),
+                Vec::new(),
+            );
+            field.editable_text = true;
+            field.password = password;
+            field.text = Some("Milk".to_owned());
+            field.text_selection = Some(cranpose_ui::TextRange::new(1, 3));
+            let root = node(1, SemanticsRole::Layout, Vec::new(), None, vec![field]);
+            let bounds = HashMap::from_iter([
+                (1, AccessibilityRect::new(0.0, 0.0, 300.0, 200.0)),
+                (2, AccessibilityRect::new(0.0, 0.0, 300.0, 40.0)),
+            ]);
+
+            let projected = project_semantics(&root, &bounds);
+
+            assert_eq!(projected[0].text_selection, expected);
+        }
     }
 
     #[test]

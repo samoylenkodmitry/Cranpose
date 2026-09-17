@@ -318,6 +318,40 @@ lambda. One shorthand on a chain reads better than a whole spec; four or
 more of them read worse, and each one costs its own chain element, so a
 node with several is the place to reach for the spec.
 
+## 4j. A field a reader moves through
+
+A blind person who types into a field needs more than the text read back as
+one piece: the caret has to move by character, by word and by line, a
+stretch of text has to be picked and cut, and every move has to be heard.
+The field publishes where its caret is and takes a new selection from a
+reader, Compose's `setSelection`. `BasicTextField` declares both on its own,
+so an app gets this with no code.
+
+```rust
+Modifier::empty().semantics(|config| {
+    config.text = Some(text.clone());
+    config.text_selection = Some(selection);
+    config.set_selection = Some(SemanticsSetSelection::new(move |anchor, focus| {
+        state.set_selection(TextRange::new(anchor, focus));
+        true
+    }));
+})
+```
+
+The two ends are byte offsets into the text, the anchor first; equal ends
+are a caret. A field that holds a secret publishes no caret.
+
+| Platform | Reads | Moves |
+| --- | --- | --- |
+| accesskit | the text as text runs, one per line, with the length of each character and where each word starts, and the caret as a text selection on them | `Action::SetTextSelection` from NVDA, Narrator, VoiceOver on macOS or Orca, in characters of a run |
+| iOS | the focused field is the keyboard's own `UITextInput` view, listed among the elements in the field's place with its name, hint and frame, so VoiceOver reads and moves through `UITextInput` | the rotor's characters, words and lines, and a text selection, through `setSelectedTextRange:`; a caret move the app made reaches VoiceOver through the input delegate |
+| Android | `setTextSelection` on the node, a text-changed and a selection-changed event on the focused field, and `setMovementGranularities` for characters, words, lines and paragraphs on every node with text | `ACTION_NEXT_AT_MOVEMENT_GRANULARITY`, `ACTION_PREVIOUS_AT_MOVEMENT_GRANULARITY` and `ACTION_SET_SELECTION`; the host walks the text itself, sends the traversed event TalkBack speaks from, and hands the field the new caret |
+| Web | the mirror node is an `<input>` or a `<textarea>` with the text as its value and the caret as its selection | the arrow keys and a reader's own text commands change the input's selection, and a `selectionchange` hands the app the new ends |
+
+On the web a keystroke or a caret move patches the focused input in place. A
+rebuild of the mirror would drop the browser's focus and make a reader hear
+the whole field again instead of one character.
+
 ## 4i. An icon says what it is, or says it is decoration
 
 A picture with no words under it is the one thing a screen reader cannot
@@ -503,7 +537,7 @@ An app gets this with no code of its own:
 | `toggleable`, a switch or checkbox | the label, its state | flip it |
 | `selectable`, a tab or a radio row | the label, its role, whether it is picked | pick it |
 | `LiquidTabBar` | the tab, whether it is picked, and which of how many | pick it |
-| `BasicTextField` | the name the app gave it, or the text it holds; an empty field is still a stop | type into it, or hand it whole text |
+| `BasicTextField` | the name the app gave it, or the text it holds; an empty field is still a stop | type into it, hand it whole text, move the caret by character, word and line, and pick a stretch of text |
 | `Slider` | the value | move it |
 | `CircularProgressIndicator`, `LinearProgressIndicator` | "Loading" | |
 | `SwipeToDismiss` | the row's content | send the row away with the reader's own dismiss, or run "Dismiss" from the actions menu |
