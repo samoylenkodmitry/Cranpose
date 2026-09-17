@@ -231,9 +231,11 @@ fn print_bump_release_version_usage() {
          \n\
          Bumps Cargo.toml's workspace.package.version and every cranpose\n\
          workspace.dependencies entry, plus every cranpose package's version\n\
-         in Cargo.lock, to <tag> (a leading 'v' is required and stripped).\n\
-         Rewrites the files in place with line-level text edits, so unrelated\n\
-         formatting and comments are left untouched."
+         in Cargo.lock, to <tag>. The tag must have the shape\n\
+         v<major>.<minor>.<patch>, as in v0.1.132; the 'v' is stripped and\n\
+         any other shape is refused. Rewrites the files in place with\n\
+         line-level text edits, so unrelated formatting and comments are\n\
+         left untouched."
     );
 }
 
@@ -241,7 +243,8 @@ fn print_verify_tag_usage() {
     eprintln!(
         "usage: cargo xtask verify-tag <tag>\n\
          \n\
-         Checks that <tag> (a leading 'v' is required and stripped) matches\n\
+         Checks that <tag> has the shape v<major>.<minor>.<patch>, as in\n\
+         v0.1.132, that it matches\n\
          Cargo.toml's workspace version, and that every cranpose workspace\n\
          dependency matches it too. Does not check Cargo.lock or\n\
          apps/isolated-demo -- this runs between `sync_versions` and\n\
@@ -2494,10 +2497,26 @@ fn bump_release_version(tag: &str) -> Result<(), String> {
     bump_release_version_at(&root, tag)
 }
 
+const RELEASE_TAG_SHAPE: &str = "v<major>.<minor>.<patch>, as in v0.1.132";
+
+fn is_release_number(part: &str) -> bool {
+    !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+fn release_version_from_tag(tag: &str) -> Result<&str, String> {
+    if let Some(version) = tag.strip_prefix('v') {
+        let parts: Vec<&str> = version.split('.').collect();
+        if parts.len() == 3 && parts.iter().copied().all(is_release_number) {
+            return Ok(version);
+        }
+    }
+    Err(format!(
+        "Malformed release tag '{tag}': expected the shape {RELEASE_TAG_SHAPE}"
+    ))
+}
+
 fn bump_release_version_at(root: &Path, tag: &str) -> Result<(), String> {
-    let version = tag
-        .strip_prefix('v')
-        .ok_or_else(|| format!("Expected tag starting with 'v', got '{tag}'"))?;
+    let version = release_version_from_tag(tag)?;
     bump_cargo_toml_version(&root.join("Cargo.toml"), version)?;
     bump_cargo_lock_version(&root.join("Cargo.lock"), version)?;
     Ok(())
@@ -2516,9 +2535,7 @@ fn verify_tag(tag: &str) -> Result<(), String> {
 }
 
 fn verify_tag_at(root: &Path, tag: &str) -> Result<(), String> {
-    let tag_version = tag
-        .strip_prefix('v')
-        .ok_or_else(|| format!("Expected tag starting with 'v', got '{tag}'"))?;
+    let tag_version = release_version_from_tag(tag)?;
 
     let manifest = load_toml(&root.join("Cargo.toml"))?;
     let workspace = manifest
@@ -6167,7 +6184,59 @@ cranpose v0.1.0
         let error = bump_release_version_at(&root, "0.1.105")
             .expect_err("a tag without a leading v must be rejected");
 
-        assert_eq!(error, "Expected tag starting with 'v', got '0.1.105'");
+        assert_eq!(
+            error,
+            format!("Malformed release tag '0.1.105': expected the shape {RELEASE_TAG_SHAPE}")
+        );
+    }
+
+    #[test]
+    fn release_version_from_tag_takes_one_v_and_three_numbers() {
+        assert_eq!(release_version_from_tag("v0.1.132"), Ok("0.1.132"));
+        assert_eq!(release_version_from_tag("v1.10.0"), Ok("1.10.0"));
+
+        for tag in [
+            "vv0.1.132",
+            "0.1.132",
+            "0.1",
+            "v0.1",
+            "v0.1.132-rc1",
+            "v0.1.x",
+            "v",
+            "v0.1.2.3",
+        ] {
+            let error =
+                release_version_from_tag(tag).expect_err("only v and three numbers may pass");
+            assert_eq!(
+                error,
+                format!("Malformed release tag '{tag}': expected the shape {RELEASE_TAG_SHAPE}")
+            );
+        }
+    }
+
+    #[test]
+    fn bump_release_version_rejects_a_doubled_v_and_writes_nothing() {
+        let root = unique_temp_dir();
+        write_root_manifest(&root, FIXTURE_VERSION, FIXTURE_VERSION);
+        write_root_lock(&root, FIXTURE_VERSION);
+        let manifest_before = fs::read_to_string(root.join("Cargo.toml")).expect("read manifest");
+        let lock_before = fs::read_to_string(root.join("Cargo.lock")).expect("read lock");
+
+        let error =
+            bump_release_version_at(&root, "vv0.1.132").expect_err("a doubled v must be rejected");
+
+        assert_eq!(
+            error,
+            "Malformed release tag 'vv0.1.132': expected the shape v<major>.<minor>.<patch>, as in v0.1.132"
+        );
+        assert_eq!(
+            fs::read_to_string(root.join("Cargo.toml")).expect("read manifest"),
+            manifest_before
+        );
+        assert_eq!(
+            fs::read_to_string(root.join("Cargo.lock")).expect("read lock"),
+            lock_before
+        );
     }
 
     #[test]
@@ -6240,7 +6309,23 @@ cranpose v0.1.0
         let error =
             verify_tag_at(&root, "0.1.105").expect_err("a tag without a leading v must fail");
 
-        assert_eq!(error, "Expected tag starting with 'v', got '0.1.105'");
+        assert_eq!(
+            error,
+            format!("Malformed release tag '0.1.105': expected the shape {RELEASE_TAG_SHAPE}")
+        );
+    }
+
+    #[test]
+    fn verify_tag_rejects_a_doubled_v() {
+        let root = unique_temp_dir();
+        write_root_manifest(&root, FIXTURE_VERSION, FIXTURE_VERSION);
+
+        let error = verify_tag_at(&root, "vv0.1.105").expect_err("a doubled v must fail");
+
+        assert_eq!(
+            error,
+            format!("Malformed release tag 'vv0.1.105': expected the shape {RELEASE_TAG_SHAPE}")
+        );
     }
 
     #[test]
