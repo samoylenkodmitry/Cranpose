@@ -32,11 +32,11 @@ is ticked when the code, its tests and its docs are on the branch.
 
 ## Step 4. Keyboard and switch access
 
-- [ ] Enter and Space activate the focused control
-- [ ] arrow keys move focus inside a selectable group
-- [ ] a focus ring drawn on keyboard focus
-- [ ] `Modifier::minimum_interactive_component_size()`
-- [ ] docs, tests
+- [x] Enter and Space activate the focused control
+- [x] arrow keys move focus inside a selectable group, and inside a menu
+- [x] a focus ring drawn on keyboard focus; every clickable control takes focus
+- [x] `Modifier::minimum_interactive_component_size()`
+- [x] docs, tests
 
 ## Step 5. Checks that run without a hand
 

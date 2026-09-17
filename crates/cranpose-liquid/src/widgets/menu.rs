@@ -1699,6 +1699,7 @@ fn menu_item_row(
         .fill_max_width()
         .report_window_rect(rect_sink)
         .semantics_spec(menu_row_semantics(row_label, has_checks, checked))
+        .focusable()
         .pointer_input(index, {
             let on_item = Rc::clone(&on_item);
             let on_dismiss = Rc::clone(&on_dismiss);

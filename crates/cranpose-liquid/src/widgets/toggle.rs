@@ -201,6 +201,8 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
     let on_change = std::rc::Rc::new(on_change);
     let track = Modifier::empty()
         .size(Size::new(TRACK_WIDTH, TRACK_HEIGHT))
+        .semantics(switch_semantics(checked))
+        .focusable()
         .pointer_input(checked, {
             let on_change = std::rc::Rc::clone(&on_change);
             let lens_axis = std::rc::Rc::clone(&lens_axis);
@@ -483,5 +485,13 @@ mod tests {
         assert_eq!(spec.duration_millis, LENS_RELEASE_FADE_MS);
         assert_eq!(spec.easing, Easing::EaseIn);
         assert!((700..=900).contains(&(spec.delay_millis + spec.duration_millis)));
+    }
+}
+
+fn switch_semantics(checked: bool) -> impl Fn(&mut cranpose_ui::SemanticsConfiguration) {
+    move |config| {
+        config.role = Some(cranpose_ui::SemanticsWidgetRole::Switch);
+        config.is_clickable = true;
+        config.toggled = Some(checked);
     }
 }

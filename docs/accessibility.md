@@ -425,6 +425,52 @@ composed again when it changes.
 `ProvideAccessibilityState(state, content)` fixes the state for a preview or a
 test, the way `ProvideSystemTheme` fixes the theme.
 
+## 4m. A keyboard and a switch reach every control
+
+Three kinds of people work without a pointer: a blind person with a hardware
+keyboard on a Mac, a PC or an iPad; a switch access user whose one or two
+switches press Tab and Enter; a person with a tremor who cannot hold a
+pointer still on a small target. For all of them a control that only a tap
+reaches does not exist.
+
+**Every clickable control takes focus.** `Modifier::clickable`,
+`toggleable`, `selectable` and every widget built on them, the `Button`, the
+liquid tabs, segments, menu rows, icon groups and the toggle, register a
+focus target. Tab and Shift+Tab walk them in layout order. Nothing to
+declare in an app.
+
+**Enter and Space press the focused control.** The shell sends a press and
+a release at the control's centre, so the same handler runs as for a tap,
+and a widget with its own gesture code needs no second path. While a text
+field holds focus the two keys go to the field.
+
+**Arrow keys inside a group.** Under `Modifier::selectable_group()`, a tab
+bar, a radio group, a segmented control, and inside a menu, the arrow keys
+move focus to the nearest control in that direction and never leave the
+group. Outside a group the arrows stay with the content, so a list still
+scrolls.
+
+**A ring shows where focus is.** `Modifier::focusable()` is a focus target
+that draws a ring, a 2 point blue line with a 1 point white line inside it,
+while the keyboard made the last focus move. The next pointer press anywhere
+takes the ring away, the way `:focus-visible` works in a browser. A widget
+that draws its own focus look keeps `Modifier::focus_target()`.
+
+**A target a finger hits.** `Modifier::minimum_interactive_component_size()`
+keeps at least 48 by 48 points for the press, as far as the parent allows,
+and puts the drawn content in the middle. The drawn size does not change: a
+20 point checkbox still looks 20 points wide and takes a press 14 points to
+each side of it. Compose's `minimumInteractiveComponentSize`, Material's
+48 dp and above Apple's 44 pt. `IconButton` already keeps 48 points on its
+own.
+
+| Key | What happens |
+| --- | --- |
+| Tab, Shift+Tab | focus moves to the next or the previous control |
+| Enter, Space | the focused control is pressed |
+| Left, Right, Up, Down | inside a selectable group or a menu, focus moves to the nearest control that way |
+| Escape | the dialog, sheet, menu or popup on top closes |
+
 ## 4i. An icon says what it is, or says it is decoration
 
 A picture with no words under it is the one thing a screen reader cannot
@@ -610,6 +656,7 @@ An app gets this with no code of its own:
 | `toggleable`, a switch or checkbox | the label, its state | flip it |
 | `selectable`, a tab or a radio row | the label, its role, whether it is picked | pick it |
 | `LiquidTabBar` | the tab, whether it is picked, and which of how many | pick it |
+| `LiquidToggle`, `LiquidSegmented`, `LiquidMenu` rows, the liquid icon group | the switch and its state, the segment, the row | flip or pick it, from a reader, Tab and Enter alike |
 | `BasicTextField` | the name the app gave it, or the text it holds; an empty field is still a stop | type into it, hand it whole text, move the caret by character, word and line, and pick a stretch of text |
 | `Slider` | the value | move it |
 | `CircularProgressIndicator`, `LinearProgressIndicator` | "Loading", progress bar | |

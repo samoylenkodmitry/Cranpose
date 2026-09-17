@@ -10338,3 +10338,143 @@ fn a_copy_with_no_focused_field_answers_none_and_syncs_nothing() {
         "a caret was reported with no focused text field"
     );
 }
+
+fn focus_box(name: &'static str, width: f32) -> impl Fn() + 'static {
+    move || {
+        Box(
+            Modifier::empty()
+                .size(Size::new(width, 40.0))
+                .focusable()
+                .content_description(name),
+            BoxSpec::default(),
+            || {},
+        );
+    }
+}
+
+fn focused_description<R>(shell: &mut AppShell<R>) -> Option<String>
+where
+    R: Renderer,
+    R::Error: std::fmt::Debug,
+{
+    fn description_of(
+        node: &cranpose_ui::SemanticsNode,
+        node_id: cranpose_core::NodeId,
+    ) -> Option<String> {
+        if node.node_id == node_id {
+            return node.description.clone();
+        }
+        node.children
+            .iter()
+            .find_map(|below| description_of(below, node_id))
+    }
+    let active = Rc::new(Cell::new(None));
+    let seen = Rc::clone(&active);
+    shell.debug_enter_app_context(move || seen.set(cranpose_ui::active_focus_target()));
+    let node_id = active.get()?;
+    description_of(shell.semantics_tree().expect("a tree").root(), node_id)
+}
+
+#[test]
+fn enter_and_space_press_the_control_the_keyboard_focused() {
+    let _guard = test_guard();
+    cranpose_ui::set_keyboard_focus_visible(false);
+    let root_key = location_key(file!(), line!(), column!());
+    let presses = Rc::new(Cell::new(0));
+    let presses_for_content = Rc::clone(&presses);
+    let mut shell = AppShell::new(HitGraphRenderer::default(), root_key, move || {
+        let presses = Rc::clone(&presses_for_content);
+        Box(
+            Modifier::empty()
+                .size(Size::new(80.0, 40.0))
+                .clickable(move |_| presses.set(presses.get() + 1))
+                .content_description("Send"),
+            BoxSpec::default(),
+            || {},
+        );
+    });
+    shell.set_semantics_enabled(true);
+    shell.update();
+
+    assert!(
+        !shell.on_key_event(&KeyEvent::key_down(KeyCode::Enter, "")),
+        "Enter does nothing while no control has focus"
+    );
+    assert!(shell.on_key_event(&KeyEvent::key_down(KeyCode::Tab, "")));
+    shell.update();
+    assert_eq!(focused_description(&mut shell).as_deref(), Some("Send"));
+    assert!(
+        cranpose_ui::keyboard_focus_visible(),
+        "the ring shows after a keyboard move"
+    );
+
+    assert!(shell.on_key_event(&KeyEvent::key_down(KeyCode::Enter, "")));
+    shell.update();
+    assert!(shell.on_key_event(&KeyEvent::key_down(KeyCode::Space, " ")));
+    shell.update();
+    assert_eq!(presses.get(), 2, "Enter and Space each pressed the control");
+    assert!(
+        cranpose_ui::keyboard_focus_visible(),
+        "a key press keeps the ring"
+    );
+
+    shell.set_cursor(40.0, 20.0);
+    assert!(shell.pointer_pressed());
+    assert!(shell.pointer_released());
+    assert_eq!(presses.get(), 3);
+    assert!(
+        !cranpose_ui::keyboard_focus_visible(),
+        "a pointer press takes the ring away"
+    );
+}
+
+#[test]
+fn arrow_keys_move_focus_inside_a_selectable_group_and_nowhere_else() {
+    let _guard = test_guard();
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(HitGraphRenderer::default(), root_key, || {
+        Column(Modifier::empty(), ColumnSpec::default(), || {
+            Row(
+                Modifier::empty().selectable_group(),
+                RowSpec::default(),
+                || {
+                    focus_box("One", 60.0)();
+                    focus_box("Two", 60.0)();
+                    focus_box("Three", 60.0)();
+                },
+            );
+            focus_box("Below", 180.0)();
+        });
+    });
+    shell.set_semantics_enabled(true);
+    shell.update();
+
+    assert!(shell.on_key_event(&KeyEvent::key_down(KeyCode::Tab, "")));
+    shell.update();
+    assert_eq!(focused_description(&mut shell).as_deref(), Some("One"));
+
+    assert!(shell.on_key_event(&KeyEvent::key_down(KeyCode::ArrowRight, "")));
+    shell.update();
+    assert_eq!(focused_description(&mut shell).as_deref(), Some("Two"));
+
+    assert!(
+        !shell.on_key_event(&KeyEvent::key_down(KeyCode::ArrowDown, "")),
+        "the control below the group is out of reach for an arrow key"
+    );
+    shell.update();
+    assert_eq!(focused_description(&mut shell).as_deref(), Some("Two"));
+
+    assert!(shell.on_key_event(&KeyEvent::key_down(KeyCode::ArrowLeft, "")));
+    shell.update();
+    assert_eq!(focused_description(&mut shell).as_deref(), Some("One"));
+
+    assert!(shell.on_key_event(&KeyEvent::key_down(KeyCode::Tab, "")));
+    assert!(shell.on_key_event(&KeyEvent::key_down(KeyCode::Tab, "")));
+    assert!(shell.on_key_event(&KeyEvent::key_down(KeyCode::Tab, "")));
+    shell.update();
+    assert_eq!(focused_description(&mut shell).as_deref(), Some("Below"));
+    assert!(
+        !shell.on_key_event(&KeyEvent::key_down(KeyCode::ArrowUp, "")),
+        "outside a group an arrow key is left to the content"
+    );
+}

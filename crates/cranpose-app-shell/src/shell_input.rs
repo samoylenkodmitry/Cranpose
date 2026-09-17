@@ -264,6 +264,7 @@ where
     }
 
     fn pointer_pressed_inner(&mut self, event_time: PointerEventTime) -> bool {
+        self.note_focus_moved_by_keyboard(false);
         self.buttons_pressed.insert(PointerButton::Primary);
 
         let hits = self.renderer.scene().hit_test(self.cursor.0, self.cursor.1);
@@ -954,10 +955,7 @@ where
     /// Tab moves focus to the next target and Shift+Tab to the previous one,
     /// as in Compose. A Tab carrying Ctrl, Alt or Meta belongs to the app.
     fn on_focus_key(&mut self, event: &KeyEvent) -> bool {
-        if event.event_type != KeyEventType::KeyDown || event.key_code != KeyCode::Tab {
-            return false;
-        }
-        if event.modifiers.ctrl || event.modifiers.meta || event.modifiers.alt {
+        if !plain_key_down(event) || event.key_code != KeyCode::Tab {
             return false;
         }
         let direction = if event.modifiers.shift {
@@ -966,6 +964,63 @@ where
             FocusDirection::Next
         };
         self.move_focus_in_context(direction)
+    }
+
+    fn on_activation_key(&mut self, event: &KeyEvent) -> bool {
+        if !plain_key_down(event)
+            || !matches!(event.key_code, KeyCode::Enter | KeyCode::Space)
+            || cranpose_ui::text_field_focus::has_focused_field()
+        {
+            return false;
+        }
+        let Some(focused) = cranpose_ui::active_focus_target() else {
+            return false;
+        };
+        let center = self.with_layout_tree(|layout_tree| {
+            layout_tree
+                .map(cranpose_ui::collect_focus_order)
+                .unwrap_or_default()
+                .iter()
+                .find(|entry| entry.node_id == focused)
+                .map(cranpose_ui::FocusEntry::center)
+        });
+        let Some((x, y)) = center else {
+            return false;
+        };
+        self.set_cursor(x, y);
+        let pressed = self.pointer_pressed();
+        let released = self.pointer_released_at_position(x, y);
+        self.note_focus_moved_by_keyboard(true);
+        pressed || released
+    }
+
+    fn on_arrow_key(&mut self, event: &KeyEvent) -> bool {
+        if !plain_key_down(event) || cranpose_ui::text_field_focus::has_focused_field() {
+            return false;
+        }
+        let direction = match event.key_code {
+            KeyCode::ArrowLeft => FocusDirection::Left,
+            KeyCode::ArrowRight => FocusDirection::Right,
+            KeyCode::ArrowUp => FocusDirection::Up,
+            KeyCode::ArrowDown => FocusDirection::Down,
+            _ => return false,
+        };
+        let Some(focused) = cranpose_ui::active_focus_target() else {
+            return false;
+        };
+        let order = self.with_layout_tree(|layout_tree| {
+            let layout_tree = layout_tree?;
+            let group = cranpose_ui::selectable_group_of(layout_tree, focused)?;
+            Some(cranpose_ui::collect_focus_order_under(layout_tree, group))
+        });
+        order.is_some_and(|order| self.move_focus_in_order(order, direction))
+    }
+
+    fn note_focus_moved_by_keyboard(&mut self, keyboard: bool) {
+        if cranpose_ui::set_keyboard_focus_visible(keyboard) {
+            cranpose_ui::request_render_invalidation();
+            self.mark_dirty();
+        }
     }
 
     /// Escape closes the modal surface on top, as Compose's `Dialog` takes
@@ -1009,11 +1064,20 @@ where
                 .map(cranpose_ui::collect_focus_order)
                 .unwrap_or_default()
         });
+        self.move_focus_in_order(order, direction)
+    }
+
+    fn move_focus_in_order(
+        &mut self,
+        order: Vec<cranpose_ui::FocusEntry>,
+        direction: FocusDirection,
+    ) -> bool {
         cranpose_ui::set_focus_order(order);
         let moved = run_in_mutable_snapshot(|| cranpose_ui::FocusManager.move_focus(direction))
             .unwrap_or(false);
         if moved {
             self.mark_dirty();
+            self.note_focus_moved_by_keyboard(true);
         }
         moved
     }
@@ -1067,6 +1131,10 @@ where
         }
 
         if self.on_escape_key(event) {
+            return true;
+        }
+
+        if self.on_activation_key(event) || self.on_arrow_key(event) {
             return true;
         }
 
@@ -1352,4 +1420,11 @@ where
 
         handled
     }
+}
+
+fn plain_key_down(event: &KeyEvent) -> bool {
+    event.event_type == KeyEventType::KeyDown
+        && !event.modifiers.ctrl
+        && !event.modifiers.meta
+        && !event.modifiers.alt
 }

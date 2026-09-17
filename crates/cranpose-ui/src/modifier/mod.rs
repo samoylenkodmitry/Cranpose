@@ -23,8 +23,10 @@ mod clickable;
 mod draw_cache;
 mod fill;
 mod focus;
+mod focus_ring;
 mod graphics_layer;
 mod local;
+mod minimum_interactive;
 mod offset;
 mod padding;
 pub(crate) mod pointer_input;
@@ -733,18 +735,6 @@ impl Modifier {
         let element = FocusRequesterElement::new(requester.clone());
         let modifier = Modifier::from_parts(vec![modifier_element(element)]);
         self.then(modifier)
-    }
-
-    /// The Compose `Modifier.focusable()` convenience.
-    ///
-    /// Compose's version also wires an optional `MutableInteractionSource` so
-    /// a `focusable` can drive its own visual indication. Cranpose's
-    /// [`MutableInteractionSource`](crate::MutableInteractionSource) only
-    /// emits press interactions — there is no focus interaction or indication
-    /// concept to plug in yet — so `focusable` here is honestly just
-    /// [`focus_target`](Self::focus_target), nothing more.
-    pub fn focusable(self) -> Self {
-        self.focus_target()
     }
 
     /// Binds a [`SemanticsRequester`] to this node, so an app can mark the

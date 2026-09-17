@@ -12,13 +12,8 @@ impl Modifier {
         let modifier = Self::with_element(ClickableElement::with_handler(handler))
             .with_inspector_metadata(inspector_metadata("clickable", |info| {
                 info.add_property("onClick", "provided");
-            }))
-            .then(
-                Modifier::empty().semantics(|config: &mut SemanticsConfiguration| {
-                    config.is_clickable = true;
-                }),
-            );
-        self.then(modifier)
+            }));
+        self.then(pressable(modifier))
     }
 
     /// Make the component react synchronously to primary-pointer press while
@@ -35,12 +30,20 @@ impl Modifier {
         .with_inspector_metadata(inspector_metadata("clickableOnPress", |info| {
             info.add_property("onPress", "provided");
             info.add_property("onClick", "provided");
-        }))
+        }));
+        self.then(pressable(modifier))
+    }
+}
+
+/// What every control a pointer presses also gets: a reader's click, and a
+/// focus target with the keyboard ring, so Tab reaches it and Enter presses
+/// it.
+fn pressable(modifier: Modifier) -> Modifier {
+    modifier
         .then(
             Modifier::empty().semantics(|config: &mut SemanticsConfiguration| {
                 config.is_clickable = true;
             }),
-        );
-        self.then(modifier)
-    }
+        )
+        .focusable()
 }

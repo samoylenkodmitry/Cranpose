@@ -3891,3 +3891,38 @@ fn an_icon_cannot_be_drawn_without_an_answer_about_its_name() {
         );
     }
 }
+
+#[test]
+fn a_keyboard_presses_and_moves_among_controls_and_a_ring_shows_where_it_is() {
+    let shell_input = workspace_source("crates/cranpose-app-shell/src/shell_input.rs");
+    assert!(
+        shell_input.contains("matches!(event.key_code, KeyCode::Enter | KeyCode::Space)"),
+        "Enter and Space press the focused control"
+    );
+    assert!(
+        shell_input.contains("cranpose_ui::selectable_group_of(layout_tree, focused)?"),
+        "an arrow key moves focus inside a selectable group"
+    );
+    assert!(
+        shell_input.contains("self.note_focus_moved_by_keyboard(false);"),
+        "a pointer press takes the focus ring away"
+    );
+    let clickable = workspace_source("crates/cranpose-ui/src/modifier/clickable.rs");
+    assert_eq!(
+        clickable.matches(".focusable()").count(),
+        2,
+        "every clickable control takes keyboard focus and shows the ring"
+    );
+    for path in [
+        "crates/cranpose-liquid/src/widgets/tab_bar.rs",
+        "crates/cranpose-liquid/src/widgets/segmented.rs",
+        "crates/cranpose-liquid/src/widgets/menu.rs",
+        "crates/cranpose-liquid/src/widgets/toggle.rs",
+        "crates/cranpose-liquid/src/widgets/button.rs",
+    ] {
+        assert!(
+            workspace_source(path).contains(".focusable()"),
+            "{path} takes keyboard focus"
+        );
+    }
+}

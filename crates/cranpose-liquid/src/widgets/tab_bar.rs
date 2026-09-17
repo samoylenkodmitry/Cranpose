@@ -508,7 +508,8 @@ fn TabCells(
                                 config.is_clickable = true;
                                 config.selected = Some(index == spec.committed_selection);
                                 config.content_description = Some(label_for_semantics.to_string());
-                            });
+                            })
+                            .focusable();
                         let icon = tab.icon.clone();
                         let icon_style = tab.icon_style;
                         let icon_scale = tab.icon_scale;

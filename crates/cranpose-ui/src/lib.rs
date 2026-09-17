@@ -92,10 +92,14 @@ pub use draw::{
 };
 pub use focus_dispatch::{
     active_focus_target, clear_focus_invalidations, has_pending_focus_invalidations,
-    process_focus_invalidations, schedule_focus_invalidation, set_active_focus_target,
+    keyboard_focus_visible, process_focus_invalidations, schedule_focus_invalidation,
+    set_active_focus_target, set_keyboard_focus_visible,
 };
 pub use focus_manager::{FocusManager, local_focus_manager, request_focus_from_platform};
-pub use focus_order::{FocusEntry, collect_focus_order, focus_order_len, set_focus_order};
+pub use focus_order::{
+    FocusEntry, collect_focus_order, collect_focus_order_under, focus_order_len,
+    selectable_group_of, set_focus_order,
+};
 pub use font_scale::{FontScaleCurve, MAX_FONT_SCALE_KNOTS};
 pub use interaction::{
     Interaction, MutableInteractionSource, PressInteraction, PressInteractionCancel,
