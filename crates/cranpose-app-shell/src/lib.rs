@@ -37,7 +37,7 @@ use cranpose_ui::{
     take_layout_invalidation, take_pointer_invalidation, take_render_invalidation,
 };
 pub use cranpose_ui::{KeyCode, KeyEvent, KeyEventType};
-use cranpose_ui_graphics::{Point, Rect, Size};
+use cranpose_ui_graphics::{Point, PointerIcon, Rect, Size};
 pub use fps_monitor::FpsStats;
 use hit_path_tracker::{HitPathTracker, PointerId};
 #[cfg(test)]

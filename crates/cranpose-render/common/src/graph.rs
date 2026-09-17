@@ -7,7 +7,8 @@ use cranpose_ui::{
     text::AnnotatedString,
 };
 use cranpose_ui_graphics::{
-    BlendMode, ColorFilter, CommandRecording, DrawPrimitive, RecordingSummary, ShadowPrimitive,
+    BlendMode, ColorFilter, CommandRecording, DrawPrimitive, PointerIcon, RecordingSummary,
+    ShadowPrimitive,
 };
 
 use crate::{raster_cache::LayerRasterCacheHashes, style_shared::DrawPlacement};
@@ -236,6 +237,10 @@ pub struct HitTestNode {
     pub shape: Option<RoundedCornerShape>,
     pub click_actions: Vec<Rc<dyn Fn(Point)>>,
     pub pointer_inputs: Vec<Rc<dyn Fn(PointerEvent)>>,
+    /// The pointer's appearance while it hovers this target. A region that only
+    /// names an icon still becomes a hit target, which is how a decorative
+    /// panel carries a cursor without handling clicks.
+    pub pointer_icon: Option<PointerIcon>,
     pub clip: Option<Rect>,
 }
 

@@ -15,6 +15,7 @@ mod geometry;
 mod gradient_blur;
 mod image;
 pub mod liquid_glass;
+mod pointer_icon;
 mod record;
 pub mod render_effect;
 mod render_hash;
@@ -33,6 +34,7 @@ pub use geometry::*;
 pub use gradient_blur::*;
 pub use image::*;
 pub use liquid_glass::*;
+pub use pointer_icon::*;
 pub use record::*;
 pub use render_effect::*;
 pub use render_hash::*;
@@ -49,6 +51,7 @@ pub mod prelude {
         color::Color,
         geometry::{CornerRadii, EdgeInsets, Point, Rect, RoundedCornerShape, Size},
         image::{ColorFilter, ImageBitmap, ImageBitmapError, ImageSampling},
+        pointer_icon::{CursorIcon, CustomPointerIcon, PointerIcon, PointerIconError},
         stroke::{ArcGeometry, Stroke, StrokeCap, StrokeJoin},
         unit::{Dp, Sp},
         vector_path::{PathFillRule, SvgPathError, VectorPath},

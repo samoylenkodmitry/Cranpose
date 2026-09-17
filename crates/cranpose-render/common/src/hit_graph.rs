@@ -1,14 +1,10 @@
-use std::rc::Rc;
-
 use cranpose_core::NodeId;
-use cranpose_foundation::PointerEvent;
-use cranpose_ui::Point;
-use cranpose_ui_graphics::{Rect, RoundedCornerShape};
+use cranpose_ui_graphics::Rect;
 use smallvec::SmallVec;
 
 use crate::{
-    graph::{LayerNode, ProjectiveTransform, RenderNode, quad_bounds},
-    graph_scene::{ClickAction, HitClip, HitGeometry, Scene},
+    graph::{HitTestNode, LayerNode, ProjectiveTransform, RenderNode, quad_bounds},
+    graph_scene::{ClickAction, HitClip, HitGeometry, HitTargetSpec, Scene},
     primitive_emit::resolve_clip,
 };
 
@@ -18,9 +14,7 @@ pub trait HitGraphSink {
         node_id: NodeId,
         capture_path: &[NodeId],
         geometry: HitGeometry<'_>,
-        shape: Option<RoundedCornerShape>,
-        click_actions: &[Rc<dyn Fn(Point)>],
-        pointer_inputs: &[Rc<dyn Fn(PointerEvent)>],
+        hit: &HitTestNode,
     );
 }
 
@@ -30,18 +24,23 @@ impl HitGraphSink for Scene {
         node_id: NodeId,
         capture_path: &[NodeId],
         geometry: HitGeometry<'_>,
-        shape: Option<RoundedCornerShape>,
-        click_actions: &[Rc<dyn Fn(Point)>],
-        pointer_inputs: &[Rc<dyn Fn(PointerEvent)>],
+        hit: &HitTestNode,
     ) {
         Scene::push_hit(
             self,
             node_id,
             capture_path,
             geometry,
-            shape,
-            click_actions.iter().cloned().map(ClickAction::WithPoint),
-            pointer_inputs,
+            HitTargetSpec {
+                shape: hit.shape,
+                click_actions: hit
+                    .click_actions
+                    .iter()
+                    .cloned()
+                    .map(ClickAction::WithPoint),
+                pointer_inputs: &hit.pointer_inputs,
+                pointer_icon: hit.pointer_icon.as_ref(),
+            },
         );
     }
 }
@@ -125,9 +124,7 @@ fn collect_hits_from_graph_inner<S: HitGraphSink>(
                 hit_clip_bounds,
                 hit_clips,
             },
-            hit.shape,
-            &hit.click_actions,
-            &hit.pointer_inputs,
+            hit,
         );
     }
 
@@ -165,6 +162,8 @@ fn collect_hits_from_graph_inner<S: HitGraphSink>(
 
 #[cfg(test)]
 mod tests {
+    use std::rc::Rc;
+
     use super::*;
     use crate::graph::HitTestNode;
 
@@ -188,9 +187,7 @@ mod tests {
             node_id: NodeId,
             capture_path: &[NodeId],
             geometry: HitGeometry<'_>,
-            _shape: Option<RoundedCornerShape>,
-            _click_actions: &[Rc<dyn Fn(Point)>],
-            _pointer_inputs: &[Rc<dyn Fn(PointerEvent)>],
+            _hit: &HitTestNode,
         ) {
             self.hits.push((
                 node_id,
@@ -218,6 +215,7 @@ mod tests {
                 shape: None,
                 click_actions: vec![Rc::new(|_point| {})],
                 pointer_inputs: vec![],
+                pointer_icon: None,
                 clip: None,
             }),
             has_hit_targets: true,

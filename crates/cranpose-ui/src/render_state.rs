@@ -50,6 +50,7 @@ pub struct AppContext {
     text_field_focus: crate::text_field_focus::TextFieldFocusState,
     text_input_session: crate::text_input_session::PlatformTextInputState,
     clipboard_session: crate::clipboard_session::ClipboardSessionState,
+    pointer_icon: crate::pointer_icon_session::PointerIconState,
     pointer_input_tasks: crate::modifier::pointer_input::PointerInputTaskRegistry,
     modifier_chain_trace: RefCell<Option<Arc<ModifierChainTraceCallback>>>,
 }
@@ -215,6 +216,7 @@ impl AppContext {
             text_field_focus: crate::text_field_focus::TextFieldFocusState::new(),
             text_input_session: crate::text_input_session::PlatformTextInputState::new(),
             clipboard_session: crate::clipboard_session::ClipboardSessionState::new(),
+            pointer_icon: crate::pointer_icon_session::PointerIconState::new(),
             pointer_input_tasks: crate::modifier::pointer_input::PointerInputTaskRegistry::new(),
             modifier_chain_trace: RefCell::new(None),
         });
@@ -550,6 +552,13 @@ pub(crate) fn with_clipboard_session<R>(
 ) -> R {
     let context = require_current_app_context("clipboard session access");
     f(&context.clipboard_session)
+}
+
+pub(crate) fn with_pointer_icon_session<R>(
+    f: impl FnOnce(&crate::pointer_icon_session::PointerIconState) -> R,
+) -> R {
+    let context = require_current_app_context("pointer icon session access");
+    f(&context.pointer_icon)
 }
 
 pub(crate) fn register_pointer_input_task(

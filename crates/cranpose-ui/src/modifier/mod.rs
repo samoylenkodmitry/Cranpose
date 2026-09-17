@@ -27,6 +27,7 @@ mod graphics_layer;
 mod local;
 mod offset;
 mod padding;
+mod pointer_icon;
 pub(crate) mod pointer_input;
 mod rotary_input;
 mod scroll;
@@ -48,9 +49,9 @@ use cranpose_foundation::{ModifierNodeElement, NodeCapabilities, ProgressBarRang
 #[allow(unused_imports)]
 pub use cranpose_ui_graphics::{
     BlendMode, BlurredEdgeTreatment, Brush, Color, ColorFilter, CompositingStrategy, CornerRadii,
-    CutDirection, Dp, DpOffset, EdgeInsets, GradientCutMaskSpec, GradientFadeMaskSpec,
-    GraphicsLayer, LayerShape, Point, Rect, RenderEffect, RoundedCornerShape, RuntimeShader,
-    Shadow, ShadowScope, Size, TransformOrigin,
+    CursorIcon, CustomPointerIcon, CutDirection, Dp, DpOffset, EdgeInsets, GradientCutMaskSpec,
+    GradientFadeMaskSpec, GraphicsLayer, LayerShape, Point, PointerIcon, PointerIconError, Rect,
+    RenderEffect, RoundedCornerShape, RuntimeShader, Shadow, ShadowScope, Size, TransformOrigin,
 };
 use cranpose_ui_layout::{Alignment, HorizontalAlignment, IntrinsicSize, VerticalAlignment};
 use focus::FocusTargetElement;

@@ -21,6 +21,7 @@ workspace = true
 [dependencies]
 arrayvec = "0.7.6"
 bytemuck = { workspace = true }
+cursor-icon = { workspace = true }
 thiserror = "2.0.18"
 
 [features]

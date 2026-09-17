@@ -65,6 +65,7 @@ cranpose-storekit = { path = "crates/cranpose-storekit", version = "0.1.132", de
 cranpose-ui = { path = "crates/cranpose-ui", version = "0.1.132" }
 cranpose-ui-graphics = { path = "crates/cranpose-ui-graphics", version = "0.1.132" }
 cranpose-ui-layout = { path = "crates/cranpose-ui-layout", version = "0.1.132" }
+cursor-icon = "1.2"
 web-time = "1.1"
 
 # Rules that AGENTS.md states as prose, enforced by the compiler instead.
