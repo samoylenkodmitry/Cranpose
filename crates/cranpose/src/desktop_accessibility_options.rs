@@ -32,19 +32,25 @@ const SWITCH_VARS: [(&str, SwitchField); 4] = [
 ];
 
 /// Reads the system's options on a thread and hands them to the shell once.
+/// A run a robot drives reads only the environment, so a screenshot test
+/// does not follow the host's text scale or animation switch.
 pub(crate) struct OptionsProbe {
     slot: Arc<Mutex<Option<AccessibilityOptions>>>,
     applied: bool,
 }
 
 impl OptionsProbe {
-    pub(crate) fn start() -> Self {
+    pub(crate) fn start(read_system: bool) -> Self {
         let slot = Arc::new(Mutex::new(None));
         let filled = Arc::clone(&slot);
         std::thread::Builder::new()
             .name("cranpose-accessibility-options".to_string())
             .spawn(move || {
-                let options = with_environment(system_options());
+                let options = with_environment(if read_system {
+                    system_options()
+                } else {
+                    AccessibilityOptions::default()
+                });
                 if let Ok(mut slot) = filled.lock() {
                     *slot = Some(options);
                 }

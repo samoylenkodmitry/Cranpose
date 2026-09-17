@@ -666,7 +666,9 @@ preview or a test.
 | `invert_colors` | the theme swaps to its other palette and pictures stay as they are | Smart Invert: the window opts out of the system's inversion and inverts its own colors | no: the system inverts the whole screen itself | no | no |
 
 The desktop reads its settings tools once, on a thread at start, and applies
-the answer on the next frame; a change while the app runs takes a restart.
+the answer on the next frame; a change while the app runs takes a restart. A
+run a robot drives reads only the environment variables, so a screenshot test
+does not follow the host's text scale.
 iOS, Android and the web follow a change at once. The demo's robot and a test
 set an option through the environment or `ProvideAccessibilityOptions`; the
 static test `every_platform_reports_the_display_options_and_the_framework_acts_on_them`

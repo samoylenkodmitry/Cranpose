@@ -2674,6 +2674,18 @@ impl App {
     fn set_robot_controller(&mut self, controller: RobotController) {
         self.robot_controller = Some(controller);
     }
+
+    /// Whether a robot drives this run. Such a run reads no display option
+    /// from the host, so a screenshot does not follow the host's text scale.
+    #[cfg(feature = "robot")]
+    fn robot_drives(&self) -> bool {
+        self.robot_controller.is_some()
+    }
+
+    #[cfg(not(feature = "robot"))]
+    fn robot_drives(&self) -> bool {
+        false
+    }
 }
 
 #[cfg(feature = "robot")]
@@ -4385,6 +4397,7 @@ impl ApplicationHandler for App {
         let mut accessibility = crate::desktop_accessibility::DesktopAccessibilityBridge::new(
             window.as_ref(),
             self.event_proxy.clone(),
+            self.robot_drives(),
         );
         accessibility.sync(&mut app);
         if !headless && primary_window_visible {

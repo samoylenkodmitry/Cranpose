@@ -93,7 +93,7 @@ pub(crate) struct DesktopAccessibilityBridge {
 }
 
 impl DesktopAccessibilityBridge {
-    pub(crate) fn new(window: &dyn Window, waker: EventLoopProxy) -> Self {
+    pub(crate) fn new(window: &dyn Window, waker: EventLoopProxy, robot_drives: bool) -> Self {
         let initial_tree = Arc::new(Mutex::new(None));
         let actions = Arc::new(Mutex::new(Vec::new()));
         let reader_connected = Arc::new(AtomicBool::new(false));
@@ -127,7 +127,7 @@ impl DesktopAccessibilityBridge {
             seen_revision: None,
             announcement: None,
             announcement_turn: false,
-            options: crate::desktop_accessibility_options::OptionsProbe::start(),
+            options: crate::desktop_accessibility_options::OptionsProbe::start(!robot_drives),
         }
     }
 
