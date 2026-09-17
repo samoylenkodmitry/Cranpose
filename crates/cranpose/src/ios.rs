@@ -187,6 +187,7 @@ impl<F: FnMut() + 'static> IosApp<F> {
             accessibility.drain_jumps(shell);
             accessibility.drain_escapes(shell);
             accessibility.drain_custom_actions(shell);
+            accessibility.drain_magic_taps(shell);
             accessibility.drain_focus();
         }
 

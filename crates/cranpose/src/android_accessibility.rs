@@ -254,6 +254,12 @@ pub(crate) fn sync(
     if policy.update_enabled(accessibility_bridge_enabled()) {
         *seen_revision = None;
     }
+    let reader_on = cranpose_services::AccessibilityState {
+        screen_reader_on: accessibility_bridge_enabled(),
+    };
+    if cranpose_services::set_platform_accessibility_state(reader_on) {
+        shell.request_root_render();
+    }
     let mut announcements = accessibility::drain_app_announcements();
     let now = std::time::Instant::now();
     let elements = if policy.try_begin_publish(now) {

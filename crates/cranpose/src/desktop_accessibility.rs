@@ -2,7 +2,10 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use accesskit::{
@@ -26,12 +29,17 @@ const TEXT_RUN_BIT: u64 = 1 << 40;
 /// run in a byte, so a long line is broken into runs at a space.
 const TEXT_RUN_CHARS: usize = 200;
 
+/// The tree a reader gets when it connects, and the flag that says one did.
 #[derive(Clone)]
-struct InitialTree(Arc<Mutex<Option<TreeUpdate>>>);
+struct InitialTree {
+    tree: Arc<Mutex<Option<TreeUpdate>>>,
+    reader_connected: Arc<AtomicBool>,
+}
 
 impl ActivationHandler for InitialTree {
     fn request_initial_tree(&mut self) -> Option<TreeUpdate> {
-        self.0
+        self.reader_connected.store(true, Ordering::Relaxed);
+        self.tree
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone()
@@ -54,16 +62,20 @@ impl ActionHandler for Actions {
     }
 }
 
-struct Deactivation;
+/// Clears the reader flag when the reader lets go of the tree.
+struct Deactivation(Arc<AtomicBool>);
 
 impl DeactivationHandler for Deactivation {
-    fn deactivate_accessibility(&mut self) {}
+    fn deactivate_accessibility(&mut self) {
+        self.0.store(false, Ordering::Relaxed);
+    }
 }
 
 pub(crate) struct DesktopAccessibilityBridge {
     adapter: PlatformAdapter,
     initial_tree: Arc<Mutex<Option<TreeUpdate>>>,
     actions: Arc<Mutex<Vec<ActionRequest>>>,
+    reader_connected: Arc<AtomicBool>,
     centers: HashMap<NodeId, (f32, f32)>,
     pending_custom_actions: Vec<(NodeId, usize)>,
     pending_focus: Vec<NodeId>,
@@ -83,19 +95,24 @@ impl DesktopAccessibilityBridge {
     pub(crate) fn new(window: &dyn Window, waker: EventLoopProxy) -> Self {
         let initial_tree = Arc::new(Mutex::new(None));
         let actions = Arc::new(Mutex::new(Vec::new()));
+        let reader_connected = Arc::new(AtomicBool::new(false));
         let adapter = PlatformAdapter::new(
             window,
-            InitialTree(Arc::clone(&initial_tree)),
+            InitialTree {
+                tree: Arc::clone(&initial_tree),
+                reader_connected: Arc::clone(&reader_connected),
+            },
             Actions {
                 queue: Arc::clone(&actions),
                 waker,
             },
-            Deactivation,
+            Deactivation(Arc::clone(&reader_connected)),
         );
         Self {
             adapter,
             initial_tree,
             actions,
+            reader_connected,
             centers: HashMap::new(),
             pending_custom_actions: Vec::new(),
             pending_focus: Vec::new(),
@@ -117,6 +134,12 @@ impl DesktopAccessibilityBridge {
     }
 
     pub(crate) fn sync(&mut self, shell: &mut AppShell<WgpuRenderer>) {
+        let reader_on = cranpose_services::AccessibilityState {
+            screen_reader_on: self.reader_connected.load(Ordering::Relaxed),
+        };
+        if cranpose_services::set_platform_accessibility_state(reader_on) {
+            shell.request_root_render();
+        }
         let mut announcements = accessibility::drain_app_announcements();
         let mut changed = false;
         if let Some(elements) = accessibility::snapshot_if_changed(shell, &mut self.seen_revision)
@@ -561,6 +584,9 @@ fn apply_state(node: &mut Node, element: &AccessibilityElement) {
     }
     if let Some(state) = accessibility::state_with_error(element) {
         node.set_description(state.as_str());
+    }
+    if let Some(language) = &element.language {
+        node.set_language(language.as_str());
     }
     if element.error.is_some() {
         node.set_invalid(Invalid::True);

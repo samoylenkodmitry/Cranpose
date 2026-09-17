@@ -480,6 +480,9 @@ fn mirror_node(
         .dyn_into::<HtmlElement>()?;
     node.set_attribute("aria-label", &element.label)?;
     node.set_attribute("data-cranpose-node", &id.to_string())?;
+    if let Some(language) = &element.language {
+        node.set_attribute("lang", language)?;
+    }
     apply_role_and_state(&node, element)?;
     apply_page(&node, element, page)?;
     apply_field_text(&node, element)?;

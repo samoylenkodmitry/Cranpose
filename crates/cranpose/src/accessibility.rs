@@ -280,6 +280,13 @@ pub(crate) struct AccessibilityElement {
     /// What a long press on the control does, named for a reader. Present
     /// only when the control declared a long press at all.
     pub(crate) long_click_label: Option<String>,
+    /// What the magic tap does, named for a reader. Present only when the
+    /// control declared one.
+    pub(crate) magic_tap_label: Option<String>,
+    /// The short names Voice Control shows for the control.
+    pub(crate) input_labels: Vec<String>,
+    /// The language of the control's text, as a BCP 47 tag.
+    pub(crate) language: Option<String>,
     pub(crate) value: Option<String>,
     pub(crate) bounds: AccessibilityRect,
     pub(crate) role: AccessibilityRole,
@@ -320,6 +327,9 @@ impl Default for AccessibilityElement {
             state_description: None,
             click_label: None,
             long_click_label: None,
+            magic_tap_label: None,
+            input_labels: Vec::new(),
+            language: None,
             value: None,
             bounds: AccessibilityRect::default(),
             role: AccessibilityRole::StaticText,
@@ -663,6 +673,18 @@ fn long_click_label(node: &SemanticsNode) -> Option<String> {
     Some(named.unwrap_or_else(|| "long press".to_owned()))
 }
 
+/// What a reader lists for a control's magic tap: the verb phrase the app
+/// gave, or the plain words for the gesture. A control with no magic tap
+/// gets nothing.
+fn magic_tap_label(node: &SemanticsNode) -> Option<String> {
+    node.on_magic_tap.as_ref()?;
+    let named = node
+        .on_magic_tap_label
+        .clone()
+        .filter(|label| !label.trim().is_empty());
+    Some(named.unwrap_or_else(|| "magic tap".to_owned()))
+}
+
 /// An editable field with no name and no text is still a stop for a reader,
 /// which hears "text field" and nothing else; a debug build says so.
 fn unnamed_field_label(node: &SemanticsNode) -> Option<Cow<'_, str>> {
@@ -729,6 +751,9 @@ fn element_for_node(
         state_description: node.state_description.clone(),
         click_label: node.on_click_label.clone(),
         long_click_label: long_click_label(node),
+        magic_tap_label: magic_tap_label(node),
+        input_labels: node.input_labels.clone(),
+        language: node.language.clone(),
         bounds: rect,
         role,
         clickable,
@@ -988,14 +1013,27 @@ pub(crate) fn perform_custom_action(
             action.invoke();
             true
         }
-        None if canvas_key.is_none() && action_index == actions.len() => {
-            match &node.on_long_click {
-                Some(action) => action.invoke(),
-                None => false,
+        None if canvas_key.is_none() => {
+            let after = action_index - actions.len();
+            match (after, &node.on_long_click, &node.on_magic_tap) {
+                (0, Some(long_click), _) => long_click.invoke(),
+                (0, None, Some(tap)) | (1, Some(_), Some(tap)) => tap.invoke(),
+                _ => false,
             }
         }
         None => false,
     }
+}
+
+/// Runs the magic tap a VoiceOver user made on a control, and answers
+/// whether the control took it.
+#[cfg(any(
+    test,
+    all(feature = "ios", feature = "renderer-wgpu", target_os = "ios")
+))]
+pub(crate) fn magic_tap(root: &SemanticsNode, node_id: NodeId) -> bool {
+    find_semantics_node(root, node_id)
+        .is_some_and(|node| node.on_magic_tap.as_ref().is_some_and(|tap| tap.invoke()))
 }
 
 /// What a screen reader lists for a node, in the order the platforms number
@@ -1015,6 +1053,7 @@ pub(crate) fn reader_actions(element: &AccessibilityElement) -> Vec<String> {
         .iter()
         .cloned()
         .chain(element.long_click_label.clone())
+        .chain(element.magic_tap_label.clone())
         .collect()
 }
 
@@ -2673,6 +2712,79 @@ mod tests {
         );
         assert_eq!(AccessibilityRole::SearchField.aria_name(), "searchbox");
         assert_eq!(AccessibilityRole::ListItem.android_code(), 23);
+    }
+
+    #[test]
+    fn a_magic_tap_is_listed_after_the_long_press_and_runs_from_the_list() {
+        let taps = Rc::new(Cell::new(0));
+        let presses = Rc::new(Cell::new(0));
+        let mut root = node(
+            7,
+            SemanticsRole::Layout,
+            Vec::new(),
+            Some("Shutter"),
+            Vec::new(),
+        );
+        root.custom_actions = vec![SemanticsCustomAction::new("Flash", || {})];
+        root.on_long_click_label = Some("Hold to focus".into());
+        root.on_long_click = Some(cranpose_ui::SemanticsLongClick::new({
+            let presses = Rc::clone(&presses);
+            move || {
+                presses.set(presses.get() + 1);
+                true
+            }
+        }));
+        root.on_magic_tap_label = Some("Take the photo".into());
+        root.on_magic_tap = Some(cranpose_ui::SemanticsMagicTap::new({
+            let taps = Rc::clone(&taps);
+            move || {
+                taps.set(taps.get() + 1);
+                true
+            }
+        }));
+        let bounds = HashMap::from_iter([(7, AccessibilityRect::new(0.0, 0.0, 80.0, 44.0))]);
+        let projected = project_semantics(&root, &bounds);
+
+        assert_eq!(
+            reader_actions(&projected[0]),
+            vec!["Flash", "Hold to focus", "Take the photo"]
+        );
+        assert!(perform_custom_action(&root, 7, None, 1));
+        assert!(perform_custom_action(&root, 7, None, 2));
+        assert!(!perform_custom_action(&root, 7, None, 3));
+        assert!(magic_tap(&root, 7));
+        assert!(!magic_tap(&root, 99));
+        assert_eq!((presses.get(), taps.get()), (1, 2));
+
+        root.on_long_click = None;
+        root.on_long_click_label = None;
+        let projected = project_semantics(&root, &bounds);
+        assert_eq!(
+            reader_actions(&projected[0]),
+            vec!["Flash", "Take the photo"]
+        );
+        assert!(perform_custom_action(&root, 7, None, 1));
+        assert_eq!(taps.get(), 3);
+    }
+
+    #[test]
+    fn voice_control_names_and_a_language_reach_the_element() {
+        let mut root = node(
+            7,
+            SemanticsRole::Layout,
+            Vec::new(),
+            Some("Importieren"),
+            Vec::new(),
+        );
+        root.input_labels = vec!["Import".into()];
+        root.language = Some("de".into());
+        let bounds = HashMap::from_iter([(7, AccessibilityRect::new(0.0, 0.0, 80.0, 44.0))]);
+
+        let projected = project_semantics(&root, &bounds);
+
+        assert_eq!(projected[0].input_labels, vec!["Import".to_owned()]);
+        assert_eq!(projected[0].language.as_deref(), Some("de"));
+        assert_eq!(projected[0].magic_tap_label, None);
     }
 
     #[test]

@@ -64,8 +64,9 @@ pub use cranpose_foundation::{
     CanvasSemanticsNode, CollectionInfo, DelegatableNode, LiveRegionMode, ModifierNode,
     ModifierNodeElement, NodeCapabilities, NodeState, ProgressBarRangeInfo, ScrollAxisRange,
     SemanticsConfiguration, SemanticsCustomAction, SemanticsDismiss, SemanticsExpand,
-    SemanticsLongClick, SemanticsScrollBy, SemanticsScrollToIndex, SemanticsSetProgress,
-    SemanticsSetSelection, SemanticsSetText, SemanticsSpec, SemanticsWidgetRole,
+    SemanticsLongClick, SemanticsMagicTap, SemanticsScrollBy, SemanticsScrollToIndex,
+    SemanticsSetProgress, SemanticsSetSelection, SemanticsSetText, SemanticsSpec,
+    SemanticsWidgetRole,
     lazy::{
         LazyItems, LazyListItemInfo, LazyListLayoutInfo, LazyListScope, LazyListState,
         rememberLazyListState, rememberLazyListStateWithPosition,

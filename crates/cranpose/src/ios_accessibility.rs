@@ -20,13 +20,13 @@ use objc2_foundation::{NSArray, NSObject, NSObjectProtocol, NSString};
 use objc2_ui_kit::{
     NSObjectUIAccessibility, NSObjectUIAccessibilityAction, NSObjectUIAccessibilityContainer,
     UIAccessibilityAnnouncementNotification, UIAccessibilityCustomAction, UIAccessibilityElement,
-    UIAccessibilityIdentification, UIAccessibilityLayoutChangedNotification,
-    UIAccessibilityPostNotification, UIAccessibilityScreenChangedNotification,
-    UIAccessibilityTraitAdjustable, UIAccessibilityTraitButton, UIAccessibilityTraitHeader,
-    UIAccessibilityTraitImage, UIAccessibilityTraitLink, UIAccessibilityTraitNone,
-    UIAccessibilityTraitNotEnabled, UIAccessibilityTraitSearchField, UIAccessibilityTraitSelected,
-    UIAccessibilityTraitStaticText, UIAccessibilityTraitUpdatesFrequently, UIAccessibilityTraits,
-    UIView,
+    UIAccessibilityIdentification, UIAccessibilityIsVoiceOverRunning,
+    UIAccessibilityLayoutChangedNotification, UIAccessibilityPostNotification,
+    UIAccessibilityScreenChangedNotification, UIAccessibilityTraitAdjustable,
+    UIAccessibilityTraitButton, UIAccessibilityTraitHeader, UIAccessibilityTraitImage,
+    UIAccessibilityTraitLink, UIAccessibilityTraitNone, UIAccessibilityTraitNotEnabled,
+    UIAccessibilityTraitSearchField, UIAccessibilityTraitSelected, UIAccessibilityTraitStaticText,
+    UIAccessibilityTraitUpdatesFrequently, UIAccessibilityTraits, UIView,
 };
 use winit::event_loop::EventLoopProxy;
 
@@ -54,12 +54,18 @@ struct ReaderRequests {
     /// Rows a VoiceOver user asked a list for: the element under the cursor,
     /// and whether the last row was asked for rather than the first.
     jumps: Rc<RefCell<Vec<(i32, bool)>>>,
+    /// Elements a VoiceOver user made the magic tap on.
+    magic_taps: Rc<RefCell<Vec<i32>>>,
+    /// The first element of the screen that declares a magic tap, which the
+    /// gesture reaches from a cursor on any other element.
+    screen_action: Rc<Cell<Option<i32>>>,
 }
 
 struct AccessibilityElementIvars {
     element_id: i32,
     actionable: Cell<bool>,
     dismissable: Cell<bool>,
+    magic_tap: Cell<bool>,
     custom_action_labels: RefCell<Vec<String>>,
     requests: ReaderRequests,
     wake_proxy: EventLoopProxy,
@@ -176,6 +182,21 @@ define_class!(
             Bool::YES
         }
 
+        #[unsafe(method(accessibilityPerformMagicTap))]
+        fn accessibility_perform_magic_tap(&self) -> Bool {
+            let own = self
+                .ivars()
+                .magic_tap
+                .get()
+                .then_some(self.ivars().element_id);
+            let Some(target) = own.or(self.ivars().requests.screen_action.get()) else {
+                return Bool::NO;
+            };
+            self.ivars().requests.magic_taps.borrow_mut().push(target);
+            self.ivars().wake_proxy.wake_up();
+            Bool::YES
+        }
+
         #[unsafe(method(accessibilityElementDidBecomeFocused))]
         fn accessibility_element_did_become_focused(&self) {
             self.ivars()
@@ -199,6 +220,7 @@ impl NativeAccessibilityElement {
             element_id,
             actionable: Cell::new(false),
             dismissable: Cell::new(false),
+            magic_tap: Cell::new(false),
             custom_action_labels: RefCell::new(Vec::new()),
             requests,
             wake_proxy,
@@ -214,6 +236,10 @@ impl NativeAccessibilityElement {
 
     fn set_dismissable(&self, dismissable: bool) {
         self.ivars().dismissable.set(dismissable);
+    }
+
+    fn set_magic_tap(&self, magic_tap: bool) {
+        self.ivars().magic_tap.set(magic_tap);
     }
 
     fn set_custom_action_labels(&self, labels: &[String]) {
@@ -275,14 +301,26 @@ impl IosAccessibilityBridge {
         R: Renderer,
         R::Error: Debug,
     {
+        let reader_on = cranpose_services::AccessibilityState {
+            screen_reader_on: UIAccessibilityIsVoiceOverRunning(),
+        };
+        if cranpose_services::set_platform_accessibility_state(reader_on) {
+            shell.request_root_render();
+        }
         let next = accessibility::snapshot(shell);
         self.speak(&next);
         if next == self.snapshot {
             return;
         }
+        let next_ids = accessibility::element_ids(&next);
+        self.requests.screen_action.set(
+            next.iter()
+                .zip(&next_ids)
+                .find(|(element, _)| element.magic_tap_label.is_some())
+                .map(|(_, id)| *id),
+        );
 
         let structure_changed = !same_structure(&self.snapshot, &next);
-        let next_ids = accessibility::element_ids(&next);
         let current_ids: HashSet<i32> = next_ids.iter().copied().collect();
         self.native_elements
             .retain(|element_id, _| current_ids.contains(element_id));
@@ -577,6 +615,27 @@ impl IosAccessibilityBridge {
         ran
     }
 
+    /// Runs the magic tap a VoiceOver user made, on the control under the
+    /// cursor or on the screen's own, against the live tree. Answers whether
+    /// a control took it.
+    pub(crate) fn drain_magic_taps<R>(&mut self, shell: &mut AppShell<R>) -> bool
+    where
+        R: Renderer,
+        R::Error: Debug,
+    {
+        let pending = self.requests.magic_taps.take();
+        let mut ran = false;
+        for element_id in pending {
+            let Some(node_id) = self.element_for(element_id).map(|element| element.node_id) else {
+                continue;
+            };
+            ran |= accessibility::run_reader_action(shell, |root| {
+                accessibility::magic_tap(root, node_id)
+            });
+        }
+        ran
+    }
+
     /// Sends away the control a VoiceOver user scrubbed on with two fingers,
     /// on the live tree. Answers whether a control took it.
     pub(crate) fn drain_dismissals<R>(&mut self, shell: &mut AppShell<R>) -> bool
@@ -687,6 +746,27 @@ fn update_native_element(
 ) {
     native.set_actionable(element.clickable || element.role.is_text_field());
     native.set_dismissable(element.dismissable);
+    native.set_magic_tap(element.magic_tap_label.is_some());
+    native.setAccessibilityLanguage(
+        element
+            .language
+            .as_deref()
+            .map(NSString::from_str)
+            .as_deref(),
+        mtm,
+    );
+    let input_labels: Vec<Retained<NSString>> = element
+        .input_labels
+        .iter()
+        .map(|label| NSString::from_str(label))
+        .collect();
+    let input_labels =
+        (!input_labels.is_empty()).then(|| NSArray::from_retained_slice(&input_labels));
+    // SAFETY: the array holds retained strings and lives until the call
+    // returns; UIKit copies what it keeps.
+    unsafe {
+        native.setAccessibilityUserInputLabels(input_labels.as_deref(), mtm);
+    }
     native.setIsAccessibilityElement(!element.label.is_empty() || element.role.is_text_field());
     native.setAccessibilityLabel(Some(&NSString::from_str(&element.label)));
     let place = element

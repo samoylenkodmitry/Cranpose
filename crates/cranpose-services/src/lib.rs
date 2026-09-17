@@ -3,6 +3,7 @@
 #[cfg(test)]
 use cranpose_core::{Composition, MemoryApplier, location_key};
 
+pub mod accessibility_state;
 pub mod app_info;
 pub mod app_update;
 pub mod async_io;
@@ -39,6 +40,10 @@ pub mod theme;
 pub mod uri_handler;
 pub mod writable_folder;
 
+pub use accessibility_state::{
+    AccessibilityState, ProvideAccessibilityState, local_accessibility_state,
+    platform_accessibility_state, set_platform_accessibility_state,
+};
 pub use app_info::{
     AppInfo, AppInfoRef, app_info, build_version, clear_platform_app_info, set_platform_app_info,
     version_name,

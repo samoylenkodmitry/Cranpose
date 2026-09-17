@@ -24,11 +24,11 @@ is ticked when the code, its tests and its docs are on the branch.
 
 ## Step 3. What VoiceOver and Voice Control users expect
 
-- [ ] `input_labels`, the short names Voice Control shows (`accessibilityUserInputLabels`)
-- [ ] `on_magic_tap`: the iOS magic tap, a named action on the other platforms
-- [ ] `language` per node on iOS, AccessKit and the web
-- [ ] reader state: `local_accessibility_state()` with `screen_reader_on`, fed by iOS, Android and AccessKit
-- [ ] docs, static test
+- [x] `input_labels`, the short names Voice Control shows (`accessibilityUserInputLabels`)
+- [x] `on_magic_tap`: the iOS magic tap, a named action on the other platforms
+- [x] `language` per node on iOS, AccessKit and the web
+- [x] reader state: `local_accessibility_state()` with `screen_reader_on`, fed by iOS, Android and AccessKit
+- [x] docs, static test
 
 ## Step 4. Keyboard and switch access
 

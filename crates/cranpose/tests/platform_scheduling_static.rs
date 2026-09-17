@@ -3664,6 +3664,48 @@ fn every_platform_lets_a_reader_move_the_caret_of_a_field() {
 }
 
 #[test]
+fn every_platform_with_a_reader_signal_reports_it_and_voiceover_takes_the_magic_tap() {
+    let ios_source = crate_source("src/ios_accessibility.rs");
+    assert!(
+        ios_source.contains("screen_reader_on: UIAccessibilityIsVoiceOverRunning(),")
+            && ios_source.contains("#[unsafe(method(accessibilityPerformMagicTap))]")
+            && ios_source
+                .contains("native.setAccessibilityUserInputLabels(input_labels.as_deref(), mtm);")
+            && ios_source.contains("native.setAccessibilityLanguage("),
+        "VoiceOver reports its state and takes the magic tap, the input labels and the language"
+    );
+    for (source, platform) in [
+        (crate_source("src/android_accessibility.rs"), "Android"),
+        (crate_source("src/desktop_accessibility.rs"), "accesskit"),
+    ] {
+        assert!(
+            source.contains("cranpose_services::set_platform_accessibility_state(reader_on)"),
+            "{platform} reports whether a reader is on"
+        );
+    }
+    let ios_loop = crate_source("src/ios.rs");
+    assert!(
+        ios_loop.contains("accessibility.drain_magic_taps(shell);"),
+        "the iOS frame loop runs the magic tap"
+    );
+    let projection_source = crate_source("src/accessibility.rs");
+    assert!(
+        projection_source.contains(".chain(element.magic_tap_label.clone())"),
+        "the other platforms list the magic tap by its label"
+    );
+    let web_source = crate_source("src/web_accessibility.rs");
+    assert!(
+        web_source.contains("node.set_attribute(\"lang\", language)?;"),
+        "the web mirror carries the language"
+    );
+    let desktop_source = crate_source("src/desktop_accessibility.rs");
+    assert!(
+        desktop_source.contains("node.set_language(language.as_str());"),
+        "accesskit carries the language"
+    );
+}
+
+#[test]
 fn the_android_host_names_every_role_the_projection_has() {
     let java_source = crate_source("android/java/dev/cranpose/android/CranposeActivity.java");
     for expected in [

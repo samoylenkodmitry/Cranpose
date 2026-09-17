@@ -381,6 +381,50 @@ region on its own: a reader speaks it as soon as it shows.
 | TabBar | `TabList` | a container | "tab bar" | `tablist` |
 | List, ListItem | `List`, `ListItem` | a container, text rows | `ListView`, "list item" | `list`, `listitem` |
 
+## 4l. What VoiceOver and Voice Control users expect, and whether a reader is on
+
+Four things an app on iOS is expected to have, three of which reach the
+other platforms as far as they go.
+
+**The magic tap.** A VoiceOver user makes a two finger double tap for the
+main action of a screen: take the photo, play or pause, answer the call.
+`Modifier::on_magic_tap("Take the photo", || …)` says what that action is;
+SwiftUI's `accessibilityAction(.magicTap)`. VoiceOver runs it on the control
+under its cursor, and with the cursor on any other control it runs the first
+one the screen declares, so the tap works from anywhere on the screen. The
+other platforms have no such gesture, so they list the action by its label
+after the control's other actions, the road the long press takes.
+
+**Voice Control names.** Voice Control shows a short name beside each control
+and the user says it. It shows the name a reader hears, which for a control
+named "Import receipts from the camera roll" is a mouthful.
+`Modifier::input_labels(["Import", "Import receipts"])` gives it short names
+to show and take instead; SwiftUI's `accessibilityInputLabels`. iOS only:
+Voice Access on Android and the desktop tools take the name a reader hears.
+
+**A language per control.** A reader speaks with one voice unless the text
+says which language it is in. `Modifier::language("de")` on a control, a BCP
+47 tag, makes VoiceOver, accesskit and the browser pick the voice for it;
+SwiftUI's `accessibilityLanguage`, ARIA's `lang`. TalkBack has no such
+setting on a node.
+
+**Whether a reader is on.** An app that takes a photo on its own after a
+short hold, or that hides its only controls behind a swipe, needs to know
+when a screen reader is on and act otherwise: speak what the camera sees,
+wait for a tap. `cranpose_services::local_accessibility_state()` carries
+`AccessibilityState::screen_reader_on`, and a composable that reads it is
+composed again when it changes.
+
+| Platform | Says a reader is on when |
+| --- | --- |
+| iOS | `UIAccessibilityIsVoiceOverRunning()` answers yes, checked on every frame the bridge publishes |
+| Android | an accessibility service is enabled, the same signal that turns the node provider on |
+| accesskit | a reader asked for the tree, until it lets go |
+| Web | never: a browser gives a page no such signal |
+
+`ProvideAccessibilityState(state, content)` fixes the state for a preview or a
+test, the way `ProvideSystemTheme` fixes the theme.
+
 ## 4i. An icon says what it is, or says it is decoration
 
 A picture with no words under it is the one thing a screen reader cannot

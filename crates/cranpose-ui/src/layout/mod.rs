@@ -17,8 +17,8 @@ use cranpose_foundation::{
     CanvasSemanticsNode, CollectionInfo, InvalidationKind, LiveRegionMode, ModifierNodeContext,
     NodeCapabilities, ProgressBarRangeInfo, ScrollAxisRange, SemanticsConfiguration,
     SemanticsCustomAction, SemanticsDismiss, SemanticsExpand, SemanticsLongClick,
-    SemanticsScrollBy, SemanticsScrollToIndex, SemanticsSetProgress, SemanticsSetSelection,
-    SemanticsSetText, SemanticsWidgetRole, text::TextRange,
+    SemanticsMagicTap, SemanticsScrollBy, SemanticsScrollToIndex, SemanticsSetProgress,
+    SemanticsSetSelection, SemanticsSetText, SemanticsWidgetRole, text::TextRange,
 };
 use cranpose_ui_layout::{Constraints, MeasurePolicy, Placement};
 use web_time::Instant;
@@ -365,6 +365,14 @@ pub struct SemanticsNode {
     pub on_long_click: Option<SemanticsLongClick>,
     /// What the long press does, as a verb phrase a reader reads out.
     pub on_long_click_label: Option<String>,
+    /// What this control does on VoiceOver's magic tap.
+    pub on_magic_tap: Option<SemanticsMagicTap>,
+    /// What the magic tap does, as a verb phrase a reader reads out.
+    pub on_magic_tap_label: Option<String>,
+    /// The short names a person says to Voice Control to reach this control.
+    pub input_labels: Vec<String>,
+    /// The language of this control's text, as a BCP 47 tag.
+    pub language: Option<String>,
     pub selected: Option<bool>,
     pub toggled: Option<bool>,
     pub enabled: bool,
@@ -440,6 +448,10 @@ impl Default for SemanticsNode {
             on_click_label: None,
             on_long_click: None,
             on_long_click_label: None,
+            on_magic_tap: None,
+            on_magic_tap_label: None,
+            input_labels: Vec::new(),
+            language: None,
             selected: None,
             toggled: None,
             enabled: true,
@@ -3114,6 +3126,10 @@ fn semantics_node_from_parts(
         node.on_click_label = config.on_click_label;
         node.on_long_click = config.on_long_click;
         node.on_long_click_label = config.on_long_click_label;
+        node.on_magic_tap = config.on_magic_tap;
+        node.on_magic_tap_label = config.on_magic_tap_label;
+        node.input_labels = config.input_labels;
+        node.language = config.language;
         node.selected = config.selected;
         node.toggled = config.toggled;
         node.enabled = config.enabled;
