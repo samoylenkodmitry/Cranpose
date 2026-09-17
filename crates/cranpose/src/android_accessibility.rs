@@ -28,6 +28,7 @@ static TEXT_REQUESTS: OnceLock<Mutex<Vec<(i32, String)>>> = OnceLock::new();
 static SCROLL_REQUESTS: OnceLock<Mutex<Vec<(i32, bool)>>> = OnceLock::new();
 static EXPAND_REQUESTS: OnceLock<Mutex<Vec<(i32, bool)>>> = OnceLock::new();
 static LONG_CLICK_REQUESTS: OnceLock<Mutex<Vec<i32>>> = OnceLock::new();
+static DISMISS_REQUESTS: OnceLock<Mutex<Vec<i32>>> = OnceLock::new();
 static LOOP_WAKER: Mutex<Option<android_activity::AndroidAppWaker>> = Mutex::new(None);
 static PLATFORM_ACCESSIBILITY_ENABLED: AtomicBool = AtomicBool::new(false);
 
@@ -91,6 +92,10 @@ fn expand_requests() -> &'static Mutex<Vec<(i32, bool)>> {
 
 fn long_click_requests() -> &'static Mutex<Vec<i32>> {
     LONG_CLICK_REQUESTS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn dismiss_requests() -> &'static Mutex<Vec<i32>> {
+    DISMISS_REQUESTS.get_or_init(|| Mutex::new(Vec::new()))
 }
 
 pub(crate) fn drain_activations() -> Vec<(f32, f32)> {
@@ -158,6 +163,15 @@ pub(crate) fn drain_expand_requests() -> Vec<(i32, bool)> {
 pub(crate) fn drain_long_click_requests() -> Vec<i32> {
     std::mem::take(
         &mut *long_click_requests()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()),
+    )
+}
+
+/// Controls TalkBack asked to send away, as virtual view ids.
+pub(crate) fn drain_dismiss_requests() -> Vec<i32> {
+    std::mem::take(
+        &mut *dismiss_requests()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()),
     )
@@ -396,6 +410,22 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccess
     virtual_id: jint,
 ) {
     long_click_requests()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .push(virtual_id);
+    wake_loop();
+}
+
+/// TalkBack asked a control to go away. The frame loop resolves the control
+/// against the live semantics tree, as a custom action does.
+#[doc(hidden)]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccessibilityDismiss(
+    _env: EnvUnowned<'_>,
+    _class: JClass<'_>,
+    virtual_id: jint,
+) {
+    dismiss_requests()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .push(virtual_id);

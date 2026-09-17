@@ -43,7 +43,7 @@ pub(crate) fn encode_elements(
             let progress = element.progress;
             let scroll = element.vertical_scroll.or(element.horizontal_scroll);
             format!(
-                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                 id,
                 role,
                 (element.bounds.x * density).round() as i32,
@@ -81,6 +81,7 @@ pub(crate) fn encode_elements(
                 i32::from(element.password),
                 tristate(element.expanded),
                 escape(element.long_click_label.as_deref().unwrap_or("")),
+                i32::from(element.dismissable),
             )
         })
         .collect::<Vec<_>>()
@@ -179,7 +180,7 @@ mod tests {
         let records: Vec<_> = payload.split('\n').collect();
         assert_eq!(records.len(), 2);
         for record in &records {
-            assert_eq!(record.split('\t').count(), 37, "record: {record}");
+            assert_eq!(record.split('\t').count(), 38, "record: {record}");
         }
 
         let fields: Vec<_> = records[0].split('\t').collect();
@@ -490,6 +491,22 @@ mod tests {
             records[2].split('\t').nth(35),
             Some("-1"),
             "a plain button opens nothing"
+        );
+    }
+
+    #[test]
+    fn the_record_says_whether_a_control_has_a_way_out() {
+        let mut row = save_button(8);
+        row.dismissable = true;
+
+        let payload = encode_elements(&[row, save_button(9)], &[], 1.0);
+        let records: Vec<_> = payload.split('\n').collect();
+
+        assert_eq!(records[0].split('\t').nth(37), Some("1"));
+        assert_eq!(
+            records[1].split('\t').nth(37),
+            Some("0"),
+            "a plain button says nothing about a way out"
         );
     }
 }

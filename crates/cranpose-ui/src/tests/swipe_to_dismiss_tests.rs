@@ -732,4 +732,24 @@ fn a_row_that_takes_no_swipe_offers_no_dismiss_action() {
     let mut config = cranpose_foundation::SemanticsConfiguration::default();
     dismiss_semantics(Rc::clone(&harness.controller), SwipeDismissDirection::Both)(&mut config);
     assert!(config.custom_actions.is_empty());
+    assert!(config.dismiss.is_none());
+}
+
+#[test]
+fn a_reader_dismisses_the_row_through_the_platform_dismiss() {
+    let mut harness = Harness::new(300.0, 0.5);
+    let mut config = cranpose_foundation::SemanticsConfiguration::default();
+    dismiss_semantics(Rc::clone(&harness.controller), SwipeDismissDirection::Both)(&mut config);
+
+    let dismiss = config
+        .dismiss
+        .expect("the row says what it does when a reader sends it away");
+    assert!(dismiss.invoke(), "the row takes the ask");
+    harness.pump_frames(120);
+    assert!(harness.state().is_dismissed());
+    assert_eq!(
+        harness.dismiss_count.get(),
+        1,
+        "on_dismiss fires once, as a swipe does"
+    );
 }

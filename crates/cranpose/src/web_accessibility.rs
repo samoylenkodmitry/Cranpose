@@ -382,7 +382,8 @@ fn attach_click_listener(
     Ok(())
 }
 
-/// Runs the custom action behind an action button, on the live tree.
+/// Runs the action behind an action button, on the live tree: one the app
+/// named, or the way out that sits after them.
 fn attach_action_listener(
     root: &HtmlElement,
     app: Rc<RefCell<AppShell<WgpuRenderer>>>,
@@ -401,6 +402,12 @@ fn attach_action_listener(
         else {
             return;
         };
+        let Some(named) = target
+            .get_attribute("data-cranpose-action-named")
+            .and_then(|value| value.parse::<usize>().ok())
+        else {
+            return;
+        };
         let Some(node_id) = node_id_attribute(&target, "data-cranpose-action-node", &node_ids)
         else {
             return;
@@ -409,7 +416,7 @@ fn attach_action_listener(
             .get_attribute("data-cranpose-canvas")
             .and_then(|value| value.parse::<u64>().ok());
         on_live_tree(&app, |root| {
-            accessibility::perform_custom_action(root, node_id, canvas_key, index)
+            accessibility::perform_listed_action(root, node_id, canvas_key, named, index)
         });
     }) as Box<dyn FnMut(_)>);
     root.add_event_listener_with_callback("click", click.as_ref().unchecked_ref())?;
@@ -612,8 +619,9 @@ impl WebAccessibilityBridge {
 
     /// One button per action the control offers, over the control it belongs
     /// to, so a reader lists "Dismiss, Milk" right after "Milk" and a keyboard
-    /// reaches it with Tab. ARIA has neither an actions menu nor a long press
-    /// of its own, so a long press is the last of these buttons.
+    /// reaches it with Tab. ARIA has no actions menu, no long press and no
+    /// dismiss action of its own, so the long press and then the way out sit
+    /// here after the actions the app named.
     fn append_action_buttons(
         &self,
         document: &Document,
@@ -621,17 +629,22 @@ impl WebAccessibilityBridge {
         id: i32,
         placement: &Placement,
     ) -> Result<(), JsValue> {
-        for (index, action) in accessibility::reader_actions(element).iter().enumerate() {
+        let named = accessibility::reader_actions(element).len();
+        for (index, action) in accessibility::listed_actions(element)
+            .into_iter()
+            .enumerate()
+        {
             let button = document
                 .create_element("button")?
                 .dyn_into::<HtmlElement>()?;
             let label = if element.label.is_empty() {
-                action.clone()
+                action.to_owned()
             } else {
                 format!("{action}, {}", element.label)
             };
             button.set_attribute("aria-label", &label)?;
             button.set_attribute("data-cranpose-action", &index.to_string())?;
+            button.set_attribute("data-cranpose-action-named", &named.to_string())?;
             button.set_attribute("data-cranpose-action-node", &id.to_string())?;
             if let Some(key) = element.canvas_key {
                 button.set_attribute("data-cranpose-canvas", &key.to_string())?;

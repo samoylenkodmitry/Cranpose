@@ -712,6 +712,7 @@ public class CranposeActivity extends NativeActivity {
     private static native void nativeOnAccessibilitySetText(int virtualViewId, String text);
     private static native void nativeOnAccessibilityExpand(int virtualViewId, boolean open);
     private static native void nativeOnAccessibilityLongClick(int virtualViewId);
+    private static native void nativeOnAccessibilityDismiss(int virtualViewId);
     private static native void nativeOnAccessibilityScroll(int virtualViewId, boolean forward);
 
     private static native void nativeOnAccessibilityStateChanged(boolean enabled);
@@ -773,7 +774,7 @@ public class CranposeActivity extends NativeActivity {
     }
 
     /** Field count of one accessibility record; see android_accessibility_wire.rs. */
-    private static final int ACCESSIBILITY_FIELDS = 37;
+    private static final int ACCESSIBILITY_FIELDS = 38;
 
     /** Separator packing a node's custom action labels into one field. */
     private static final String ACCESSIBILITY_ACTION_SEPARATOR = String.valueOf((char) 0x1f);
@@ -812,7 +813,7 @@ public class CranposeActivity extends NativeActivity {
                         Integer.parseInt(fields[30]), Integer.parseInt(fields[31]),
                         unescapeAccessibility(fields[32]), unescapeAccessibility(fields[33]),
                         "1".equals(fields[34]), Integer.parseInt(fields[35]),
-                        unescapeAccessibility(fields[36])));
+                        unescapeAccessibility(fields[36]), "1".equals(fields[37])));
             } catch (RuntimeException ignored) {
                 // A malformed record must not make the host Activity inaccessible.
             }
@@ -882,6 +883,8 @@ public class CranposeActivity extends NativeActivity {
          * which is the only way a blind user reaches a long press.
          */
         final String longClickLabel;
+        /** Whether the app said what this control does when a reader sends it away. */
+        final boolean dismissable;
 
         CranposeAccessibilityElement(int id, int role, Rect bounds, float centerX,
                 float centerY, boolean clickable, String label, String value,
@@ -892,7 +895,7 @@ public class CranposeActivity extends NativeActivity {
                 boolean canScrollForward, boolean canScrollBackward, int scrollParent,
                 int collectionRows, int collectionColumns, boolean changed, int itemRow,
                 int itemColumn, String paneTitle, String error, boolean password,
-                int expanded, String longClickLabel) {
+                int expanded, String longClickLabel, boolean dismissable) {
             this.id = id;
             this.role = role;
             this.bounds = bounds;
@@ -927,6 +930,7 @@ public class CranposeActivity extends NativeActivity {
             this.password = password;
             this.expanded = expanded;
             this.longClickLabel = longClickLabel;
+            this.dismissable = dismissable;
         }
 
         /**
@@ -1078,6 +1082,7 @@ public class CranposeActivity extends NativeActivity {
                         ? AccessibilityNodeInfo.ACTION_COLLAPSE
                         : AccessibilityNodeInfo.ACTION_EXPAND);
             }
+            if (element.dismissable) info.addAction(AccessibilityNodeInfo.ACTION_DISMISS);
             if (Build.VERSION.SDK_INT >= 28 && !element.paneTitle.isEmpty()) info.setPaneTitle(element.paneTitle);
             if (!element.error.isEmpty()) {
                 info.setContentInvalid(true);
@@ -1186,6 +1191,10 @@ public class CranposeActivity extends NativeActivity {
                     || action == AccessibilityNodeInfo.ACTION_COLLAPSE)) {
                 nativeOnAccessibilityExpand(element.id,
                         action == AccessibilityNodeInfo.ACTION_EXPAND);
+                return true;
+            }
+            if (element.dismissable && action == AccessibilityNodeInfo.ACTION_DISMISS) {
+                nativeOnAccessibilityDismiss(element.id);
                 return true;
             }
             if (action == AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS) {

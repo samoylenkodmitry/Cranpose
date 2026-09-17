@@ -3404,7 +3404,7 @@ fn every_lazy_list_tells_android_how_many_rows_it_holds() {
     let java_source = crate_source("android/java/dev/cranpose/android/CranposeActivity.java");
     assert!(
         java_source.contains("info.setCollectionInfo(AccessibilityNodeInfo.CollectionInfo.obtain(")
-            && java_source.contains("private static final int ACCESSIBILITY_FIELDS = 37;"),
+            && java_source.contains("private static final int ACCESSIBILITY_FIELDS = 38;"),
         "the Android host hands TalkBack the row count of a list"
     );
 }
@@ -3633,6 +3633,33 @@ fn every_platform_opens_and_closes_a_control() {
         crate_source("src/ios_accessibility.rs").contains("accessibility::expansion_word(element)"),
         "VoiceOver hears the word"
     );
+}
+
+#[test]
+fn every_platform_sends_a_control_away() {
+    let java_source = crate_source("android/java/dev/cranpose/android/CranposeActivity.java");
+    assert!(
+        java_source.contains("AccessibilityNodeInfo.ACTION_DISMISS")
+            && java_source.contains("nativeOnAccessibilityDismiss(element.id);"),
+        "TalkBack offers the ask and it crosses back"
+    );
+    assert!(
+        crate_source("src/ios_accessibility.rs").contains("native.set_dismissable(element."),
+        "a VoiceOver two-finger scrub reaches the control itself"
+    );
+    for source in [
+        crate_source("src/desktop_accessibility.rs"),
+        crate_source("src/web_accessibility.rs"),
+    ] {
+        assert!(
+            source.contains("accessibility::listed_actions(element)"),
+            "accesskit and ARIA carry no dismiss action, so the way out is listed beside the named actions"
+        );
+        assert!(
+            source.contains("accessibility::perform_listed_action("),
+            "the picked action runs against the live tree"
+        );
+    }
 }
 
 #[test]

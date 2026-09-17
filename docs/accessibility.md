@@ -260,6 +260,30 @@ and `Modifier::value_picker()`, Compose's `Role.DropdownList` and
 A dropdown that also declares `Modifier::expand(..)` or
 `Modifier::collapse(..)` tells a reader whether the list is open.
 
+## 4ga. A control a reader can send away
+
+A row a sighted person swipes off, a sheet a sighted person taps outside
+of: a person who cannot see the screen can make neither gesture, and the
+row stays. `Modifier::dismiss(..)` says what the control does when a reader
+sends it away, the way Compose's `dismiss` action does. The handler answers
+whether the control took the ask.
+
+| Platform | What the reader gets |
+| --- | --- |
+| accesskit | "Dismiss" among the node's actions, after the ones the app named |
+| iOS | the VoiceOver two-finger scrub on the control itself |
+| Android | `ACTION_DISMISS` on the node, which TalkBack lists as "Dismiss" |
+| Web | one more `<button>` right after the control, "Dismiss, Milk" |
+
+accesskit 0.24 has no dismiss action, and ARIA has none either, so on those
+two the way out sits in the same list as the actions of section 4b, after
+the ones the app named. On iOS a scrub on a control that declares a way out
+runs that one; a scrub on any other control closes the dialog on top, as
+section 6 says.
+
+`SwipeToDismiss` declares it on its own, so a row inside one needs no app
+code at all.
+
 ## 4h. One spec value, or the closure Compose takes
 
 Compose declares semantics through a receiver lambda:
@@ -435,7 +459,7 @@ An app gets this with no code of its own:
 | `BasicTextField` | the name the app gave it, or the text it holds; an empty field is still a stop | type into it, or hand it whole text |
 | `Slider` | the value | move it |
 | `CircularProgressIndicator`, `LinearProgressIndicator` | "Loading" | |
-| `SwipeToDismiss` | the row's content | run "Dismiss" from the actions menu |
+| `SwipeToDismiss` | the row's content | send the row away with the reader's own dismiss, or run "Dismiss" from the actions menu |
 | `verticalScroll`, `horizontalScroll`, `LazyColumn`, `LazyRow` | the rows inside, and on Android how many rows there are | page on and back |
 | `LinkedText` | the whole text | open each link from the actions menu, as "Open <link text>" |
 | `Dialog` | its content, and nothing outside it; the reader lands on it as it opens | leave it with the reader's escape gesture, and land back on the control that opened it |
