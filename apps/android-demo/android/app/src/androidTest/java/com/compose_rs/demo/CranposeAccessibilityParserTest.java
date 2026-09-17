@@ -31,7 +31,8 @@ public final class CranposeAccessibilityParserTest {
     private static String record(String id, String label, String actions) {
         return String.join("\t", id, "5", "2", "4", "62", "84", "16", "22",
                 "1", label, "", "On", "Toggle", "-1", "1", "1", actions,
-                "1", "0", "0", "0", "0", "0", "0", "0", "0", "-1", "0", "0", "0", "-1", "-1", "", "", "0", "-1");
+                "1", "0", "0", "0", "0", "0", "0", "0", "0", "-1", "0", "0", "0", "-1", "-1", "", "", "0", "-1",
+                "Remove receipt");
     }
 
     @Test
@@ -51,6 +52,7 @@ public final class CranposeAccessibilityParserTest {
         assertEquals("", field(first, "value"));
         assertEquals("On", field(first, "stateDescription"));
         assertEquals("Toggle", field(first, "clickLabel"));
+        assertEquals("Remove receipt", field(first, "longClickLabel"));
         assertEquals(-1, field(first, "selected"));
         assertEquals(1, field(first, "toggled"));
         assertEquals(true, field(first, "enabled"));

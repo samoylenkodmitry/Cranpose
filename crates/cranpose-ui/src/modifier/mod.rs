@@ -526,6 +526,28 @@ impl Modifier {
         self.semantics(move |config| config.expand = Some(action.clone()))
     }
 
+    /// Says what a long press on this control does, so a screen reader can
+    /// ask for it and read the label out first: "Remove receipt". Compose's
+    /// `Modifier.semantics { onLongClick("Remove receipt") { … } }`, which
+    /// `Modifier.combinedClickable(onLongClickLabel = …)` fills in for a
+    /// control that takes a long press from a finger too.
+    ///
+    /// The label is asked for, not optional as in Compose: Android is the one
+    /// platform of the four with a long press of its own, and the other three
+    /// list the action by name, so a nameless one reads as nothing.
+    pub fn on_long_click(
+        self,
+        label: impl Into<String>,
+        action: impl Fn() -> bool + 'static,
+    ) -> Self {
+        let label = label.into();
+        let action = cranpose_foundation::SemanticsLongClick::new(action);
+        self.semantics(move |config| {
+            config.on_long_click_label = Some(label.clone());
+            config.on_long_click = Some(action.clone());
+        })
+    }
+
     /// Says what this control does when a screen reader asks it to close, and
     /// marks it as open right now. Compose's
     /// `Modifier.semantics { collapse { … } }`.

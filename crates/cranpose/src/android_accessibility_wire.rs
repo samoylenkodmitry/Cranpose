@@ -43,7 +43,7 @@ pub(crate) fn encode_elements(
             let progress = element.progress;
             let scroll = element.vertical_scroll.or(element.horizontal_scroll);
             format!(
-                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                 id,
                 role,
                 (element.bounds.x * density).round() as i32,
@@ -80,6 +80,7 @@ pub(crate) fn encode_elements(
                 escape(element.error.as_deref().unwrap_or("")),
                 i32::from(element.password),
                 tristate(element.expanded),
+                escape(element.long_click_label.as_deref().unwrap_or("")),
             )
         })
         .collect::<Vec<_>>()
@@ -178,7 +179,7 @@ mod tests {
         let records: Vec<_> = payload.split('\n').collect();
         assert_eq!(records.len(), 2);
         for record in &records {
-            assert_eq!(record.split('\t').count(), 36, "record: {record}");
+            assert_eq!(record.split('\t').count(), 37, "record: {record}");
         }
 
         let fields: Vec<_> = records[0].split('\t').collect();
@@ -193,6 +194,30 @@ mod tests {
         assert_eq!(fields[16], format!("Pause{ACTION_SEPARATOR}Resume"));
         assert_eq!(fields[17], "0", "this element registered no focus target");
         assert_eq!(fields[18], "0", "and focus does not sit on it");
+    }
+
+    #[test]
+    fn the_record_names_what_a_long_press_does() {
+        let elements = vec![
+            AccessibilityElement {
+                node_id: 4,
+                label: "Milk".into(),
+                long_click_label: Some("Remove receipt".into()),
+                bounds: AccessibilityRect::new(0.0, 0.0, 30.0, 40.0),
+                role: AccessibilityRole::Button,
+                clickable: true,
+                ..AccessibilityElement::default()
+            },
+            save_button(5),
+        ];
+
+        let payload = encode_elements(&elements, &[], 1.0);
+        let records: Vec<_> = payload.split('\n').collect();
+        let with_long_press: Vec<_> = records[0].split('\t').collect();
+        let plain: Vec<_> = records[1].split('\t').collect();
+
+        assert_eq!(with_long_press[36], "Remove receipt");
+        assert_eq!(plain[36], "", "a control with no long press says nothing");
     }
 
     #[test]

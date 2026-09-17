@@ -610,9 +610,10 @@ impl WebAccessibilityBridge {
         self.settle_focus(held, app_focus_before)
     }
 
-    /// One button per custom action, over the control it belongs to, so a
-    /// reader lists "Dismiss, Milk" right after "Milk" and a keyboard reaches
-    /// it with Tab. ARIA has no actions menu of its own.
+    /// One button per action the control offers, over the control it belongs
+    /// to, so a reader lists "Dismiss, Milk" right after "Milk" and a keyboard
+    /// reaches it with Tab. ARIA has neither an actions menu nor a long press
+    /// of its own, so a long press is the last of these buttons.
     fn append_action_buttons(
         &self,
         document: &Document,
@@ -620,7 +621,7 @@ impl WebAccessibilityBridge {
         id: i32,
         placement: &Placement,
     ) -> Result<(), JsValue> {
-        for (index, action) in element.custom_actions.iter().enumerate() {
+        for (index, action) in accessibility::reader_actions(element).iter().enumerate() {
             let button = document
                 .create_element("button")?
                 .dyn_into::<HtmlElement>()?;

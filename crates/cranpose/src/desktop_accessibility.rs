@@ -532,17 +532,18 @@ fn apply_state(node: &mut Node, element: &AccessibilityElement) {
     }
 }
 
-/// What a screen reader can do with the control: activate it, run one of its
-/// custom actions, or put focus on it.
+/// What a screen reader can do with the control: activate it, run one of the
+/// actions it lists, or put focus on it. accesskit has no long press of its
+/// own, so a long press is the last action in that list.
 fn apply_actions(node: &mut Node, element: &AccessibilityElement) {
     if element.clickable {
         node.add_action(Action::Click);
     }
-    if !element.custom_actions.is_empty() {
+    let actions = accessibility::reader_actions(element);
+    if !actions.is_empty() {
         node.add_action(Action::CustomAction);
         node.set_custom_actions(
-            element
-                .custom_actions
+            actions
                 .iter()
                 .enumerate()
                 .map(|(index, label)| CustomAction {

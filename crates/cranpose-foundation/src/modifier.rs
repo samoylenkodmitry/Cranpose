@@ -887,6 +887,34 @@ impl fmt::Debug for SemanticsExpand {
     }
 }
 
+/// What a control does when a screen reader asks for its long press. This is
+/// Compose's `SemanticsActions.OnLongClick`; the answer says whether the
+/// control took the ask.
+#[derive(Clone)]
+pub struct SemanticsLongClick(Rc<dyn Fn() -> bool>);
+
+impl SemanticsLongClick {
+    pub fn new(handler: impl Fn() -> bool + 'static) -> Self {
+        Self(Rc::new(handler))
+    }
+
+    pub fn invoke(&self) -> bool {
+        (self.0)()
+    }
+}
+
+impl fmt::Debug for SemanticsLongClick {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("SemanticsLongClick")
+    }
+}
+
+impl PartialEq for SemanticsLongClick {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
 impl PartialEq for SemanticsExpand {
     fn eq(&self, _other: &Self) -> bool {
         true
@@ -1110,6 +1138,12 @@ pub struct SemanticsConfiguration {
     pub state_description: Option<String>,
     /// Compose's `onClick(label = …)`; implies clickable.
     pub on_click_label: Option<String>,
+    /// What this control does when a screen reader asks for its long press.
+    /// Compose's `onLongClick`.
+    pub on_long_click: Option<SemanticsLongClick>,
+    /// What the long press does, as a verb phrase a reader reads out:
+    /// "Remove receipt". Compose's `onLongClick(label = …)`.
+    pub on_long_click_label: Option<String>,
     /// Compose's `Role`.
     pub role: Option<SemanticsWidgetRole>,
     pub selected: Option<bool>,
@@ -1190,6 +1224,8 @@ impl Default for SemanticsConfiguration {
             content_description: None,
             state_description: None,
             on_click_label: None,
+            on_long_click: None,
+            on_long_click_label: None,
             role: None,
             selected: None,
             toggled: None,
@@ -1256,6 +1292,19 @@ impl SemanticsConfiguration {
     /// A screen reader offers to activate the control. Compose's `onClick`.
     pub fn clickable(mut self) -> Self {
         self.is_clickable = true;
+        self
+    }
+
+    /// What the control does when a screen reader asks for its long press,
+    /// and the verb phrase a reader reads out for it. Compose's
+    /// `onLongClick(label) { … }`.
+    pub fn on_long_click(
+        mut self,
+        label: impl Into<String>,
+        action: impl Fn() -> bool + 'static,
+    ) -> Self {
+        self.on_long_click_label = Some(label.into());
+        self.on_long_click = Some(SemanticsLongClick::new(action));
         self
     }
 
@@ -1347,6 +1396,9 @@ impl SemanticsConfiguration {
         if let Some(label) = &other.on_click_label {
             self.on_click_label = Some(label.clone());
         }
+        if let Some(label) = &other.on_long_click_label {
+            self.on_long_click_label = Some(label.clone());
+        }
         if let Some(role) = other.role {
             self.role = Some(role);
         }
@@ -1407,6 +1459,9 @@ impl SemanticsConfiguration {
         }
         if let Some(collapse) = &other.collapse {
             self.collapse = Some(collapse.clone());
+        }
+        if let Some(long_click) = &other.on_long_click {
+            self.on_long_click = Some(long_click.clone());
         }
         if let Some(scroll_by) = &other.scroll_by {
             self.scroll_by = Some(scroll_by.clone());

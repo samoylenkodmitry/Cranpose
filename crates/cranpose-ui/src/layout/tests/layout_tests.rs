@@ -2222,6 +2222,47 @@ fn semantics_tree_carries_the_controls_a_canvas_published() -> Result<(), NodeEr
 }
 
 #[test]
+fn semantics_tree_carries_the_long_press_a_modifier_declared() -> Result<(), NodeError> {
+    let _app_context = crate::render_state::app_context_test_scope();
+    use std::{cell::Cell, rc::Rc as StdRc};
+
+    let removed = StdRc::new(Cell::new(false));
+    let mut applier = MemoryApplier::new();
+    let row = LayoutNode::new(
+        Modifier::empty()
+            .content_description("Milk")
+            .on_long_click("Remove receipt", {
+                let removed = StdRc::clone(&removed);
+                move || {
+                    removed.set(true);
+                    true
+                }
+            }),
+        Rc::new(MaxSizePolicy),
+    );
+    let row_id = applier.create(Box::new(row));
+
+    let measurements = measure_layout(&mut applier, row_id, Size::new(200.0, 60.0))?;
+    let root = measurements
+        .semantics_tree()
+        .expect("expected semantics tree")
+        .root();
+
+    assert_eq!(root.on_long_click_label.as_deref(), Some("Remove receipt"));
+    let action = root
+        .on_long_click
+        .as_ref()
+        .expect("the long press should reach the node");
+    assert!(action.invoke());
+    assert!(
+        removed.get(),
+        "the published handler should be the live one"
+    );
+
+    Ok(())
+}
+
+#[test]
 fn measure_layout_can_skip_semantics_until_consumer_is_enabled() -> Result<(), NodeError> {
     let _app_context = crate::render_state::app_context_test_scope();
     let mut applier = MemoryApplier::new();
