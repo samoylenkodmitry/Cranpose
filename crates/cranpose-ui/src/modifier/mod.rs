@@ -439,6 +439,19 @@ impl Modifier {
         self.then(modifier)
     }
 
+    /// Says what a screen reader reads for this node, as one spec value.
+    ///
+    /// This is [`Modifier::semantics`] with a value in place of a closure.
+    /// Compose has only the closure form, because Kotlin's receiver lambda
+    /// makes `semantics { contentDescription = "Save" }` read well; Rust has
+    /// none, so a spec value reads better, costs one chain element rather
+    /// than one per property, and can be compared with another.
+    ///
+    /// Example:
+    /// `Modifier::empty().semantics_spec(SemanticsSpec::new().content_description("Amount").error("needs a number"))`
+    pub fn semantics_spec(self, spec: cranpose_foundation::SemanticsSpec) -> Self {
+        self.semantics(move |config: &mut SemanticsConfiguration| config.merge(&spec))
+    }
     pub fn semantics<F>(self, recorder: F) -> Self
     where
         F: Fn(&mut SemanticsConfiguration) + 'static,
@@ -489,6 +502,19 @@ impl Modifier {
     pub fn progress_semantics(self, current: f32, start: f32, end: f32, steps: u32) -> Self {
         let info = ProgressBarRangeInfo::new(current, start, end, steps);
         self.semantics(move |config| config.progress = Some(info))
+    }
+
+    /// Marks this control as one that opens a list of choices, so a reader
+    /// says "combo box" rather than "button" and knows to look for the
+    /// choice it holds. Compose's `Role.DropdownList`.
+    pub fn dropdown_list(self) -> Self {
+        self.role(cranpose_foundation::SemanticsWidgetRole::DropdownList)
+    }
+
+    /// Marks this control as one that holds one value out of an ordered set,
+    /// so a reader steps through them. Compose's `Role.ValuePicker`.
+    pub fn value_picker(self) -> Self {
+        self.role(cranpose_foundation::SemanticsWidgetRole::ValuePicker)
     }
 
     /// Says what this control does when a screen reader asks it to open, and

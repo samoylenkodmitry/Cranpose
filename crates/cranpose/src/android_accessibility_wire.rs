@@ -30,6 +30,8 @@ pub(crate) fn encode_elements(
                 AccessibilityRole::Image => 8,
                 AccessibilityRole::Header => 9,
                 AccessibilityRole::Dialog => 10,
+                AccessibilityRole::DropdownList => 11,
+                AccessibilityRole::ValuePicker => 12,
             };
             let (center_x, center_y) = element.bounds.center();
             let actions = element

@@ -3604,3 +3604,45 @@ fn every_platform_opens_and_closes_a_control() {
         "VoiceOver hears the word"
     );
 }
+
+#[test]
+fn every_platform_names_a_dropdown_and_a_picker() {
+    assert!(
+        crate_source("android/java/dev/cranpose/android/CranposeActivity.java")
+            .contains("android.widget.Spinner"),
+        "TalkBack reads the node as a dropdown"
+    );
+    assert!(
+        crate_source("src/desktop_accessibility.rs").contains("Role::ComboBox"),
+        "accesskit reads the node as a combo box"
+    );
+    assert!(
+        crate_source("src/web_accessibility.rs").contains(r#""combobox""#),
+        "the web mirror names the role"
+    );
+    assert!(
+        crate_source("src/ios_accessibility.rs").contains("AccessibilityRole::ValuePicker"),
+        "VoiceOver steps a value picker"
+    );
+}
+
+#[test]
+fn an_icon_cannot_be_drawn_without_an_answer_about_its_name() {
+    for source in [
+        std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../cranpose-ui/src/widgets/icon.rs"),
+        )
+        .expect("the ui icon source"),
+        std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../cranpose-liquid/src/icons.rs"),
+        )
+        .expect("the liquid icon source"),
+    ] {
+        assert!(
+            source.contains("content_description: Option<String>,"),
+            "the caller says what the icon is, or says it is decoration"
+        );
+    }
+}

@@ -82,7 +82,7 @@ pub fn LiquidSearchField(modifier: Modifier, state: TextFieldState, spec: Liquid
                 Modifier::empty().fill_max_width(),
                 RowSpec::default().vertical_alignment(VerticalAlignment::CenterVertically),
                 move || {
-                    crate::icons::Icon(crate::icons::SEARCH, 18.0, secondary_foreground);
+                    crate::icons::Icon(crate::icons::SEARCH, None, 18.0, secondary_foreground);
                     Box(Modifier::empty().width(8.0), BoxSpec::default(), || {});
 
                     let field_style = TextStyle {

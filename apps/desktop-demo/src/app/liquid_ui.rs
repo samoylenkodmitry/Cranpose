@@ -1090,6 +1090,7 @@ fn SortFilterStage(suggestion_offset: f32) {
                                                             || {
                                                                 icons::Icon(
                                                                     icons::FILTER,
+                                                                    None,
                                                                     20.0,
                                                                     Color::WHITE,
                                                                 );
@@ -1100,6 +1101,7 @@ fn SortFilterStage(suggestion_offset: f32) {
                                                                 );
                                                                 icons::Icon(
                                                                     icons::ACCOUNT_CIRCLE,
+                                                                    None,
                                                                     28.0,
                                                                     Color::WHITE,
                                                                 );
@@ -1471,7 +1473,7 @@ fn SessionCard(icon: &'static str, title: &'static str, subtitle: &'static str) 
                         }),
                     BoxSpec::default().content_alignment(Alignment::CENTER),
                     move || {
-                        icons::Icon(icon, 34.0, Color::from_rgb_u8(214, 222, 240));
+                        icons::Icon(icon, None, 34.0, Color::from_rgb_u8(214, 222, 240));
                     },
                 );
                 Box(Modifier::empty().width(16.0), BoxSpec::default(), || {});
@@ -1653,7 +1655,7 @@ fn FeaturedVideosReferenceCard(
                                 ..Default::default()
                             },
                         );
-                        icons::Icon(icons::CHEVRON_RIGHT, 16.0, colors.secondary_label);
+                        icons::Icon(icons::CHEVRON_RIGHT, None, 16.0, colors.secondary_label);
                     },
                 );
                 Box(Modifier::empty().height(10.0), BoxSpec::default(), || {});
@@ -2262,7 +2264,12 @@ pub fn LiquidUiTab() {
                                                         VerticalAlignment::CenterVertically,
                                                     ),
                                                     move || {
-                                                        icons::Icon(icon, 20.0, colors.accent);
+                                                        icons::Icon(
+                                                            icon,
+                                                            None,
+                                                            20.0,
+                                                            colors.accent,
+                                                        );
                                                         Box(
                                                             Modifier::empty().width(12.0),
                                                             BoxSpec::default(),
@@ -2275,6 +2282,7 @@ pub fn LiquidUiTab() {
                                                         );
                                                         icons::Icon(
                                                             icons::CHEVRON_RIGHT,
+                                                            None,
                                                             16.0,
                                                             colors.tertiary_label,
                                                         );

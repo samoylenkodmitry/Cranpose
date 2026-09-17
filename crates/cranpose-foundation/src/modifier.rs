@@ -672,6 +672,12 @@ pub enum SemanticsWidgetRole {
     RadioButton,
     Tab,
     Image,
+    /// A control that opens a list of choices and holds the one that is
+    /// picked. Compose's `Role.DropdownList`.
+    DropdownList,
+    /// A control that holds one value out of an ordered set and steps through
+    /// them. Compose's `Role.ValuePicker`.
+    ValuePicker,
     /// Compose's `heading()`, which is a property rather than a `Role`, but
     /// reaches the platform through the same field on every backend Cranpose
     /// targets (`AccessibilityNodeInfo.setHeading`, `Role::Heading`,
@@ -1216,7 +1222,121 @@ impl Default for SemanticsConfiguration {
     }
 }
 
+/// One value that says what a screen reader reads for a node, built up with
+/// the methods below and handed to `Modifier::semantics_spec`.
+///
+/// Compose has no such value: it takes a receiver lambda, which Kotlin makes
+/// read well and Rust has no match for. `SemanticsSpec::new().content_description("Save")`
+/// reads better than `|config| config.content_description = Some("Save".into())`,
+/// it is one chain element rather than one per property, and two specs can be
+/// compared. The closure form stays as `Modifier::semantics` for parity.
+pub type SemanticsSpec = SemanticsConfiguration;
+
 impl SemanticsConfiguration {
+    /// An empty spec to build on. Every field is what it is with no semantics
+    /// declared at all.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The name a screen reader reads for the control. Compose's
+    /// `contentDescription`.
+    pub fn content_description(mut self, name: impl Into<String>) -> Self {
+        self.content_description = Some(name.into());
+        self
+    }
+
+    /// What the control says about itself after its name. Compose's
+    /// `stateDescription`.
+    pub fn state_description(mut self, state: impl Into<String>) -> Self {
+        self.state_description = Some(state.into());
+        self
+    }
+
+    /// A screen reader offers to activate the control. Compose's `onClick`.
+    pub fn clickable(mut self) -> Self {
+        self.is_clickable = true;
+        self
+    }
+
+    /// Whether the control is on or off. Compose's `toggleableState`.
+    pub fn toggled(mut self, toggled: bool) -> Self {
+        self.toggled = Some(toggled);
+        self
+    }
+
+    /// Whether the control is the one picked out of a group. Compose's
+    /// `selected`.
+    pub fn selected(mut self, selected: bool) -> Self {
+        self.selected = Some(selected);
+        self
+    }
+
+    /// What kind of control a screen reader reads this as. Compose's `Role`.
+    pub fn role(mut self, role: SemanticsWidgetRole) -> Self {
+        self.role = Some(role);
+        self
+    }
+
+    /// Reads as a heading, so a reader can jump between the headings of a
+    /// screen. Compose's `heading()`.
+    pub fn heading(self) -> Self {
+        self.role(SemanticsWidgetRole::Header)
+    }
+
+    /// Why the control's content is wrong. Compose's `error`.
+    pub fn error(mut self, message: impl Into<String>) -> Self {
+        self.error = Some(message.into());
+        self
+    }
+
+    /// Holds a secret, so no reader reads the text out. Compose's `password`.
+    pub fn password(mut self) -> Self {
+        self.password = true;
+        self
+    }
+
+    /// Names the screen or pane this node is the root of. Compose's
+    /// `paneTitle`.
+    pub fn pane_title(mut self, title: impl Into<String>) -> Self {
+        self.pane_title = Some(title.into());
+        self
+    }
+
+    /// Where a reader visits this node among the ones beside it. Compose's
+    /// `traversalIndex`.
+    pub fn traversal_index(mut self, index: f32) -> Self {
+        self.traversal_index = index;
+        self
+    }
+
+    /// Skips this node and everything under it. Compose's
+    /// `hideFromAccessibility`.
+    pub fn hidden(mut self) -> Self {
+        self.hidden = true;
+        self
+    }
+
+    /// Takes this node and the text under it as one stop. Compose's
+    /// `mergeDescendants`.
+    pub fn merge_descendants(mut self) -> Self {
+        self.merge_descendants = true;
+        self
+    }
+
+    /// Makes the selectable controls under this node one group. Compose's
+    /// `selectableGroup`.
+    pub fn selectable_group(mut self) -> Self {
+        self.selectable_group = true;
+        self
+    }
+
+    /// Reads this node again whenever its text changes. Compose's
+    /// `liveRegion`.
+    pub fn live_region(mut self, mode: LiveRegionMode) -> Self {
+        self.live_region = Some(mode);
+        self
+    }
     pub fn merge(&mut self, other: &SemanticsConfiguration) {
         if let Some(description) = &other.content_description {
             self.content_description = Some(description.clone());

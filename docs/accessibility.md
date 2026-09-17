@@ -208,6 +208,88 @@ Compose's `expand` and `collapse` actions work.
 | Android | `ACTION_EXPAND` or `ACTION_COLLAPSE` on the node, which TalkBack offers in its menu |
 | Web | `aria-expanded` on the mirror node |
 
+## 4g. A dropdown and a value picker
+
+A control that opens a list of choices read as a plain button, and a
+control that steps through an ordered set read as a button too, so a
+reader could not tell either from a save button. `Modifier::dropdown_list()`
+and `Modifier::value_picker()`, Compose's `Role.DropdownList` and
+`Role.ValuePicker`, name them.
+
+| Platform | What the reader gets |
+| --- | --- |
+| accesskit | `ComboBox` and `SpinButton` |
+| iOS | a button, and an adjustable element VoiceOver steps with a swipe |
+| Android | `android.widget.Spinner` and `android.widget.NumberPicker` as the node's class |
+| Web | `role="combobox"` and `role="spinbutton"` |
+
+A dropdown that also declares `Modifier::expand(..)` or
+`Modifier::collapse(..)` tells a reader whether the list is open.
+
+## 4h. One spec value, or the closure Compose takes
+
+Compose declares semantics through a receiver lambda:
+`Modifier.semantics { contentDescription = "Save" }`. Kotlin makes that
+read well. Rust has no receiver lambda, so the same call is
+`Modifier::semantics(|config| config.content_description = Some("Save".into()))`.
+Cranpose keeps that form for parity and adds a spec value beside it:
+
+```rust
+Modifier::empty().semantics_spec(
+    SemanticsSpec::new()
+        .content_description("Amount")
+        .error("needs a number"),
+)
+```
+
+`SemanticsSpec` is `SemanticsConfiguration` under a short name, so there is
+one type and one set of field names. Every builder method is named after
+the field it sets. Three things the spec form gives that the closure does
+not: it reads as one value rather than a body of assignments, it is one
+element on the modifier chain rather than one per property, and two specs
+can be compared, because the data half of the config derives `PartialEq`.
+
+The `Modifier::` shorthands (`content_description`, `role`, `heading`,
+`error`, `password`, `pane_title`, `traversal_index`, `merge_descendants`,
+`selectable_group`, `hide_from_accessibility`, `live_region`,
+`dropdown_list`, `value_picker`, `expand`, `collapse`) stay. They are
+Cranpose's own shape, not Compose's: Compose has only `semantics`,
+`clearAndSetSemantics`, `testTag`, `progressSemantics` and
+`selectableGroup` as modifiers, and puts everything else inside the
+lambda. One shorthand on a chain reads better than a whole spec; four or
+more of them read worse, and each one costs its own chain element, so a
+node with several is the place to reach for the spec.
+
+## 4i. An icon says what it is, or says it is decoration
+
+A picture with no words under it is the one thing a screen reader cannot
+work out on its own. Compose asks for the answer at the call site:
+`Icon(imageVector, contentDescription)` takes the name as its second
+argument, and `null` means the icon is decoration a reader should skip.
+
+Cranpose now asks the same way. `cranpose_ui::widgets::Icon` and
+`cranpose_liquid::icons::Icon` both take
+`content_description: Option<String>` right after the path. A name reaches
+a reader as the node's name with the image role. `None` publishes nothing,
+so a reader walks past it.
+
+`None` is the right answer more often than not, and the call sites in this
+repo show why: the glyph inside a search field, an icon button, a tab or a
+menu row is decoration, because the control around it already carries the
+name. What the argument buys is that the writer says so on purpose rather
+than by forgetting.
+
+Two faults came out of that sweep. A liquid menu row said its label and
+that it was clickable, and never said it was checked; a reader heard no
+difference between the picked row and the rest, because the check mark was
+the only signal. The row now carries `toggled`.
+
+The same rule is not put on `Text` or `Button`. A `Text`'s name is its
+words, and a `Button`'s name is what it holds, so an argument there would
+be the empty answer at every call site, and a writer who types the empty
+answer often enough stops reading it. Compose asks at the same two places
+and no others.
+
 ## 5. A list a reader can page
 
 A lazy list builds only the rows on screen. A reader that walks the rows one

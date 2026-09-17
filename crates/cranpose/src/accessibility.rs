@@ -52,6 +52,8 @@ pub(crate) enum AccessibilityRole {
     Image,
     Header,
     Dialog,
+    DropdownList,
+    ValuePicker,
 }
 
 impl AccessibilityRole {
@@ -63,6 +65,8 @@ impl AccessibilityRole {
             SemanticsWidgetRole::RadioButton => Self::RadioButton,
             SemanticsWidgetRole::Tab => Self::Tab,
             SemanticsWidgetRole::Image => Self::Image,
+            SemanticsWidgetRole::DropdownList => Self::DropdownList,
+            SemanticsWidgetRole::ValuePicker => Self::ValuePicker,
             SemanticsWidgetRole::Header => Self::Header,
             SemanticsWidgetRole::Dialog => Self::Dialog,
         }
@@ -1844,6 +1848,47 @@ mod tests {
         assert_eq!(projected[0].expanded, Some(true));
         assert_eq!(expansion_word(&projected[0]), Some("expanded"));
         assert!(set_expanded(&root, 2, false));
+    }
+
+    #[test]
+    fn a_dropdown_and_a_picker_keep_their_own_roles() {
+        let mut dropdown = node(
+            2,
+            SemanticsRole::Text {
+                value: "Sort by".into(),
+            },
+            Vec::new(),
+            None,
+            Vec::new(),
+        );
+        dropdown.widget_role = Some(cranpose_ui::SemanticsWidgetRole::DropdownList);
+        let mut picker = node(
+            3,
+            SemanticsRole::Text {
+                value: "Copies".into(),
+            },
+            Vec::new(),
+            None,
+            Vec::new(),
+        );
+        picker.widget_role = Some(cranpose_ui::SemanticsWidgetRole::ValuePicker);
+        let root = node(
+            1,
+            SemanticsRole::Layout,
+            Vec::new(),
+            None,
+            vec![dropdown, picker],
+        );
+        let bounds = HashMap::from_iter([
+            (1, AccessibilityRect::new(0.0, 0.0, 300.0, 200.0)),
+            (2, AccessibilityRect::new(0.0, 0.0, 300.0, 40.0)),
+            (3, AccessibilityRect::new(0.0, 40.0, 300.0, 40.0)),
+        ]);
+
+        let projected = project_semantics(&root, &bounds);
+
+        assert_eq!(projected[0].role, AccessibilityRole::DropdownList);
+        assert_eq!(projected[1].role, AccessibilityRole::ValuePicker);
     }
 
     #[test]

@@ -475,6 +475,8 @@ fn accesskit_role(role: AccessibilityRole) -> Role {
         AccessibilityRole::RadioButton => Role::RadioButton,
         AccessibilityRole::Tab => Role::Tab,
         AccessibilityRole::Image => Role::Image,
+        AccessibilityRole::DropdownList => Role::ComboBox,
+        AccessibilityRole::ValuePicker => Role::SpinButton,
         AccessibilityRole::Header => Role::Heading,
         AccessibilityRole::Dialog => Role::Dialog,
     }

@@ -7,8 +7,8 @@ use cranpose_core::{MutableState, SideEffect, mutableStateOf, remember, remember
 use cranpose_foundation::PointerId;
 use cranpose_macros::composable;
 use cranpose_ui::{
-    Modifier, PointerEventKind, PointerInputScope, PressInteractionPress, SemanticsWidgetRole,
-    Size, rememberMutableInteractionSource,
+    Modifier, PointerEventKind, PointerInputScope, PressInteractionPress, SemanticsSpec,
+    SemanticsWidgetRole, Size, rememberMutableInteractionSource,
     text::{FontWeight, SpanStyle, TextStyle, TextUnit},
     widgets::{Box, BoxSpec, Column, ColumnSpec, PopupDismissableWhen, Row, RowSpec, Text},
 };
@@ -1650,6 +1650,21 @@ fn menu_header_row(
     });
 }
 
+/// What a screen reader reads for a menu row: its label, that it can be
+/// pressed, and whether it is the picked one when the menu carries checks.
+/// Without the last part a reader hears no difference between the picked row
+/// and the rest, because the check mark beside it is drawn, not spoken.
+fn menu_row_semantics(label: String, has_checks: bool, checked: bool) -> SemanticsSpec {
+    let spec = SemanticsSpec::new()
+        .content_description(label)
+        .role(SemanticsWidgetRole::Button)
+        .clickable();
+    match has_checks {
+        true => spec.toggled(checked),
+        false => spec,
+    }
+}
+
 #[allow(non_snake_case)]
 #[allow(clippy::too_many_arguments)]
 fn menu_item_row(
@@ -1677,15 +1692,12 @@ fn menu_item_row(
         cranpose_ui_graphics::Color::from_rgba_u8(120, 120, 128, 30)
     };
     let row_label = item.label.clone();
+    let checked = item.checked;
     let keeps_open = item.keeps_open;
     let row = Modifier::empty()
         .fill_max_width()
         .report_window_rect(rect_sink)
-        .semantics(move |config| {
-            config.role = Some(SemanticsWidgetRole::Button);
-            config.is_clickable = true;
-            config.content_description = Some(row_label.clone());
-        })
+        .semantics_spec(menu_row_semantics(row_label, has_checks, checked))
         .pointer_input(index, {
             let on_item = Rc::clone(&on_item);
             let on_dismiss = Rc::clone(&on_dismiss);
@@ -1749,7 +1761,6 @@ fn menu_item_row(
     let label = item.label.clone();
     let subtitle = item.subtitle.clone();
     let icon = item.icon;
-    let checked = item.checked;
     let accordion_chevron = item.keeps_open && subtitle.is_some();
     let secondary = colors.secondary_label;
     let typography = typography.clone();
@@ -1765,13 +1776,13 @@ fn menu_item_row(
                     BoxSpec::default(),
                     move || {
                         if checked {
-                            crate::icons::Icon(crate::icons::CHECK, 16.0, color);
+                            crate::icons::Icon(crate::icons::CHECK, None, 16.0, color);
                         }
                     },
                 );
             }
             if let Some(icon) = icon {
-                crate::icons::Icon(icon, ICON_SIZE, color);
+                crate::icons::Icon(icon, None, ICON_SIZE, color);
                 Box(Modifier::empty().width(ICON_GAP), BoxSpec::default(), || {});
             }
             let style = TextStyle {
@@ -1803,7 +1814,7 @@ fn menu_item_row(
                 Text(label, Modifier::empty().weight(1.0), style);
             }
             if accordion_chevron {
-                crate::icons::Icon(crate::icons::CHEVRON_DOWN, 18.0, secondary);
+                crate::icons::Icon(crate::icons::CHEVRON_DOWN, None, 18.0, secondary);
             }
         },
     );

@@ -1816,3 +1816,50 @@ fn descendants_and_ancestors_walk_the_same_chain_from_opposite_ends() {
         "walking up from the tail missed part of the chain"
     );
 }
+
+#[test]
+fn a_semantics_spec_says_what_the_closure_form_says() {
+    let spec = SemanticsSpec::new()
+        .content_description("Amount")
+        .state_description("empty")
+        .role(SemanticsWidgetRole::Button)
+        .error("needs a number")
+        .password()
+        .pane_title("Receipt")
+        .traversal_index(-1.0)
+        .hidden()
+        .merge_descendants()
+        .selectable_group()
+        .live_region(LiveRegionMode::Polite);
+
+    let by_hand = SemanticsConfiguration {
+        content_description: Some("Amount".into()),
+        state_description: Some("empty".into()),
+        role: Some(SemanticsWidgetRole::Button),
+        error: Some("needs a number".into()),
+        password: true,
+        pane_title: Some("Receipt".into()),
+        traversal_index: -1.0,
+        hidden: true,
+        merge_descendants: true,
+        selectable_group: true,
+        live_region: Some(LiveRegionMode::Polite),
+        ..SemanticsConfiguration::default()
+    };
+
+    assert_eq!(spec, by_hand);
+
+    let mut merged = SemanticsConfiguration::default();
+    merged.merge(&spec);
+    assert_eq!(merged, by_hand, "a spec merges into a config whole");
+}
+
+#[test]
+fn an_empty_semantics_spec_changes_nothing() {
+    let mut config = SemanticsSpec::new().content_description("Save");
+    let before = config.clone();
+
+    config.merge(&SemanticsSpec::new());
+
+    assert_eq!(config, before);
+}

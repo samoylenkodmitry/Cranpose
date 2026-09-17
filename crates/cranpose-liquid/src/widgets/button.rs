@@ -446,11 +446,16 @@ pub(crate) fn GlassIconForeground(spec: GlassButtonSpec, diameter: f32, icon_pat
                 }),
             BoxSpec::default().content_alignment(Alignment::CENTER),
             move || {
-                crate::icons::Icon(icon_path, diameter * ICON_BACKPLATE_GLYPH_RATIO, icon_color);
+                crate::icons::Icon(
+                    icon_path,
+                    None,
+                    diameter * ICON_BACKPLATE_GLYPH_RATIO,
+                    icon_color,
+                );
             },
         );
     } else {
-        crate::icons::Icon(icon_path, diameter * 0.5, icon_color);
+        crate::icons::Icon(icon_path, None, diameter * 0.5, icon_color);
     }
 }
 

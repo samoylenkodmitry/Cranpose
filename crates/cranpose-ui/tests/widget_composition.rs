@@ -332,6 +332,7 @@ fn an_icon_composes_from_a_path_size_and_colour() {
     composed(|| {
         cranpose_ui::widgets::icon::Icon(
             ICON,
+            Some("Star".into()),
             24.0,
             cranpose_ui_graphics::Color::rgba(1.0, 1.0, 1.0, 1.0),
         );
