@@ -10478,3 +10478,195 @@ fn arrow_keys_move_focus_inside_a_selectable_group_and_nowhere_else() {
         "outside a group an arrow key is left to the content"
     );
 }
+
+#[derive(Clone)]
+struct PointerIconHitTarget {
+    node_id: cranpose_core::NodeId,
+    pointer_icon: Option<PointerIcon>,
+}
+
+impl HitTestTarget for PointerIconHitTarget {
+    fn dispatch(&self, _event: PointerEvent) {}
+
+    fn node_id(&self) -> cranpose_core::NodeId {
+        self.node_id
+    }
+
+    fn pointer_icon(&self) -> Option<PointerIcon> {
+        self.pointer_icon.clone()
+    }
+}
+
+#[derive(Default)]
+struct PointerIconScene {
+    hits: Rc<RefCell<Vec<PointerIconHitTarget>>>,
+}
+
+impl RenderScene for PointerIconScene {
+    type HitTarget = PointerIconHitTarget;
+
+    fn clear(&mut self) {}
+
+    fn hit_test(&self, _x: f32, _y: f32) -> Vec<Self::HitTarget> {
+        self.hits.borrow().clone()
+    }
+
+    fn find_target(&self, node_id: cranpose_core::NodeId) -> Option<Self::HitTarget> {
+        self.hits
+            .borrow()
+            .iter()
+            .find(|target| target.node_id == node_id)
+            .cloned()
+    }
+}
+
+#[derive(Default)]
+struct PointerIconRenderer {
+    scene: PointerIconScene,
+}
+
+impl Renderer for PointerIconRenderer {
+    type Scene = PointerIconScene;
+    type Error = ();
+
+    renderer_scene_accessors!();
+    renderer_noop_rebuild!();
+}
+
+fn pointer_icon_shell(
+    hits: Rc<RefCell<Vec<PointerIconHitTarget>>>,
+) -> AppShell<PointerIconRenderer> {
+    AppShell::new(
+        PointerIconRenderer {
+            scene: PointerIconScene { hits },
+        },
+        location_key(file!(), line!(), column!()),
+        || {},
+    )
+}
+
+#[test]
+fn hovering_a_region_requests_its_pointer_icon() {
+    let _guard = test_guard();
+    let hits = Rc::new(RefCell::new(vec![PointerIconHitTarget {
+        node_id: 1,
+        pointer_icon: Some(PointerIcon::POINTER),
+    }]));
+    let mut shell = pointer_icon_shell(hits);
+
+    shell.set_cursor(5.0, 5.0);
+
+    assert_eq!(shell.take_pointer_icon_change(), Some(PointerIcon::POINTER));
+    assert_eq!(shell.take_pointer_icon_change(), None);
+}
+
+#[test]
+fn the_topmost_region_decides_the_pointer_icon() {
+    let _guard = test_guard();
+    let hits = Rc::new(RefCell::new(vec![
+        PointerIconHitTarget {
+            node_id: 2,
+            pointer_icon: Some(PointerIcon::TEXT),
+        },
+        PointerIconHitTarget {
+            node_id: 1,
+            pointer_icon: Some(PointerIcon::POINTER),
+        },
+    ]));
+    let mut shell = pointer_icon_shell(hits);
+
+    shell.set_cursor(5.0, 5.0);
+
+    assert_eq!(shell.take_pointer_icon_change(), Some(PointerIcon::TEXT));
+}
+
+#[test]
+fn a_region_without_an_icon_falls_through_to_the_one_below() {
+    let _guard = test_guard();
+    let hits = Rc::new(RefCell::new(vec![
+        PointerIconHitTarget {
+            node_id: 2,
+            pointer_icon: None,
+        },
+        PointerIconHitTarget {
+            node_id: 1,
+            pointer_icon: Some(PointerIcon::POINTER),
+        },
+    ]));
+    let mut shell = pointer_icon_shell(hits);
+
+    shell.set_cursor(5.0, 5.0);
+
+    assert_eq!(shell.take_pointer_icon_change(), Some(PointerIcon::POINTER));
+}
+
+#[test]
+fn leaving_every_icon_region_restores_the_default_pointer() {
+    let _guard = test_guard();
+    let hits = Rc::new(RefCell::new(vec![PointerIconHitTarget {
+        node_id: 1,
+        pointer_icon: Some(PointerIcon::POINTER),
+    }]));
+    let mut shell = pointer_icon_shell(Rc::clone(&hits));
+
+    shell.set_cursor(5.0, 5.0);
+    assert_eq!(shell.take_pointer_icon_change(), Some(PointerIcon::POINTER));
+
+    hits.borrow_mut().clear();
+    shell.set_cursor(500.0, 500.0);
+
+    assert_eq!(shell.take_pointer_icon_change(), Some(PointerIcon::DEFAULT));
+}
+
+#[test]
+fn cancelling_a_gesture_restores_the_default_pointer() {
+    let _guard = test_guard();
+    let hits = Rc::new(RefCell::new(vec![PointerIconHitTarget {
+        node_id: 1,
+        pointer_icon: Some(PointerIcon::POINTER),
+    }]));
+    let mut shell = pointer_icon_shell(hits);
+
+    shell.set_cursor(5.0, 5.0);
+    assert_eq!(shell.take_pointer_icon_change(), Some(PointerIcon::POINTER));
+
+    shell.cancel_gesture();
+
+    assert_eq!(shell.take_pointer_icon_change(), Some(PointerIcon::DEFAULT));
+}
+
+#[test]
+fn moving_inside_one_region_does_not_repeat_the_icon_change() {
+    let _guard = test_guard();
+    let hits = Rc::new(RefCell::new(vec![PointerIconHitTarget {
+        node_id: 1,
+        pointer_icon: Some(PointerIcon::POINTER),
+    }]));
+    let mut shell = pointer_icon_shell(hits);
+
+    shell.set_cursor(5.0, 5.0);
+    assert_eq!(shell.take_pointer_icon_change(), Some(PointerIcon::POINTER));
+
+    shell.set_cursor(6.0, 7.0);
+
+    assert_eq!(shell.take_pointer_icon_change(), None);
+}
+
+#[test]
+fn a_drag_holds_the_icon_the_press_started_with() {
+    let _guard = test_guard();
+    let hits = Rc::new(RefCell::new(vec![PointerIconHitTarget {
+        node_id: 1,
+        pointer_icon: Some(PointerIcon::POINTER),
+    }]));
+    let mut shell = pointer_icon_shell(Rc::clone(&hits));
+
+    shell.set_cursor(5.0, 5.0);
+    assert_eq!(shell.take_pointer_icon_change(), Some(PointerIcon::POINTER));
+
+    shell.pointer_pressed();
+    hits.borrow_mut()[0].pointer_icon = Some(PointerIcon::TEXT);
+    shell.set_cursor(40.0, 40.0);
+
+    assert_eq!(shell.take_pointer_icon_change(), None);
+}

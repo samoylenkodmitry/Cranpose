@@ -610,6 +610,7 @@ struct App {
     next_native_window_position_poll_at: Instant,
     native_window_platform_probe: NativeWindowPlatformProbe,
     native_global_primary_down: bool,
+    cursors: crate::desktop_cursor::DesktopCursors,
     current_modifiers: winit::keyboard::ModifiersState,
     last_cursor_position: Option<(f32, f32)>,
     #[cfg(feature = "robot")]
@@ -677,6 +678,7 @@ impl App {
             #[allow(clippy::default_constructed_unit_structs)]
             native_window_platform_probe: NativeWindowPlatformProbe::default(),
             native_global_primary_down: false,
+            cursors: crate::desktop_cursor::DesktopCursors::default(),
             current_modifiers: winit::keyboard::ModifiersState::empty(),
             last_cursor_position: None,
             #[cfg(feature = "robot")]
@@ -937,6 +939,21 @@ impl App {
             native_window_surface_origin(platform_probe, &native.window),
             || native.app.set_cursor(logical.x, logical.y),
         )
+    }
+
+    /// Hands every window the pointer icon its shell resolved since the last
+    /// pass, so the cursor is set from the event loop that owns the window.
+    fn sync_pointer_icons(&mut self, event_loop: &dyn ActiveEventLoop) {
+        if let (Some(app), Some(window)) = (self.app.as_ref(), self.window.as_ref())
+            && let Some(icon) = app.take_pointer_icon_change()
+        {
+            self.cursors.apply(event_loop, window, &icon);
+        }
+        for native in self.native_windows.values() {
+            if let Some(icon) = native.app.take_pointer_icon_change() {
+                self.cursors.apply(event_loop, &native.window, &icon);
+            }
+        }
     }
 
     fn sync_native_windows(&mut self, event_loop: &dyn ActiveEventLoop) {
@@ -2550,7 +2567,7 @@ impl App {
                 }
                 Self::redraw_native_window(&mut native, &self.native_window_registry);
             }
-            _ => {}
+            event => present_native_frame_owed_while_hidden(&mut native, &event),
         }
 
         if keep_window {
@@ -3793,6 +3810,33 @@ fn surface_reconfigure_requires_redraw(width: u32, height: u32) -> bool {
     width > 0 && height > 0
 }
 
+fn occlusion_leaves_a_frame_owed(occluded: bool) -> bool {
+    !occluded
+}
+
+fn present_native_frame_owed_while_hidden(native: &mut NativeWindowSurface, event: &WindowEvent) {
+    if let WindowEvent::Occluded(occluded) = event
+        && occlusion_leaves_a_frame_owed(*occluded)
+    {
+        native.surface_dirty = true;
+        native.window.request_redraw();
+    }
+}
+
+fn present_primary_frame_owed_while_hidden(
+    event: &WindowEvent,
+    window: &Arc<dyn Window>,
+    surface_dirty: &mut bool,
+    redraw_pending: &mut bool,
+) {
+    if let WindowEvent::Occluded(occluded) = event
+        && occlusion_leaves_a_frame_owed(*occluded)
+    {
+        *surface_dirty = true;
+        request_redraw_once(window, redraw_pending);
+    }
+}
+
 fn initial_present_redraw_needed(initial_present_pending: bool, redraw_pending: bool) -> bool {
     initial_present_pending && !redraw_pending
 }
@@ -4812,7 +4856,12 @@ impl ApplicationHandler for App {
                     }
                 }
             }
-            _ => {}
+            event => present_primary_frame_owed_while_hidden(
+                &event,
+                window,
+                &mut self.primary_surface_dirty,
+                &mut self.primary_redraw_pending,
+            ),
         }
 
         if sync_native_windows_after_event {
@@ -4849,6 +4898,7 @@ impl ApplicationHandler for App {
         }
 
         self.sync_frame_pacing();
+        self.sync_pointer_icons(event_loop);
 
         let last_frame_start_time = self.last_frame_start_time;
         let registry = Rc::clone(&self.native_window_registry);
@@ -5979,14 +6029,15 @@ mod tests {
         clamp_rect_to_monitor_delta, desired_frame_latency, frame_interval_for_mode,
         free_running_frame, initial_present_redraw_needed, native_window_graph_position,
         native_window_options_change_is_position_only, native_window_position_poll_needed,
-        nearest_monitor_to_rect, next_frame_anchor, physical_outer_origin_from_surface,
-        physical_surface_local_pointer, physical_surface_origin_from_outer,
-        physical_surface_rect_contains_pointer, pointer_button_frame_request,
-        primary_declaration_host_needs_direct_update, primary_frame_waker_uses_event_proxy,
-        primary_launch_requires_initial_redraw, primary_pointer_gesture_poll_action,
-        primary_pointer_move_should_recover_press, primary_surface_redraw_drives_app,
-        primary_viewport_for_surface_size, recovered_native_window_drag_start_pointer,
-        scroll_frame_request, should_chain_no_vsync_redraw, surface_reconfigure_requires_redraw,
+        nearest_monitor_to_rect, next_frame_anchor, occlusion_leaves_a_frame_owed,
+        physical_outer_origin_from_surface, physical_surface_local_pointer,
+        physical_surface_origin_from_outer, physical_surface_rect_contains_pointer,
+        pointer_button_frame_request, primary_declaration_host_needs_direct_update,
+        primary_frame_waker_uses_event_proxy, primary_launch_requires_initial_redraw,
+        primary_pointer_gesture_poll_action, primary_pointer_move_should_recover_press,
+        primary_surface_redraw_drives_app, primary_viewport_for_surface_size,
+        recovered_native_window_drag_start_pointer, scroll_frame_request,
+        should_chain_no_vsync_redraw, surface_reconfigure_requires_redraw,
     };
     #[cfg(feature = "robot")]
     use super::{
@@ -6000,7 +6051,7 @@ mod tests {
         resolve_robot_screenshot_params_with_scale, robot_query_visual_dirty,
         robot_visible_present_target, robot_visible_pump_present_target,
     };
-    use crate::app_launcher::AppSettings;
+    use crate::{app_launcher::AppSettings, wgpu_surface::surface_present_required};
 
     #[test]
     fn native_window_screen_position_is_declarative() {
@@ -6621,6 +6672,21 @@ mod tests {
         assert!(surface_reconfigure_requires_redraw(1920, 1080));
         assert!(!surface_reconfigure_requires_redraw(0, 1080));
         assert!(!surface_reconfigure_requires_redraw(1920, 0));
+    }
+
+    /// While the platform hides a window every surface acquire is skipped, so
+    /// the frame it owed is still pending when it comes back. An idle app
+    /// produces no input and no animation, so unless the window is asked for
+    /// that frame the moment it reappears, it stays blank: this is what a
+    /// player launched behind another app's window used to show.
+    #[test]
+    fn a_window_back_on_screen_is_owed_the_frame_it_could_not_present() {
+        assert!(occlusion_leaves_a_frame_owed(false));
+        assert!(!occlusion_leaves_a_frame_owed(true));
+        assert!(
+            surface_present_required(occlusion_leaves_a_frame_owed(false), false, false),
+            "a reappearing window presents even when nothing new was drawn"
+        );
     }
 
     #[test]

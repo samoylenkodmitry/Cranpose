@@ -217,6 +217,7 @@ where
         }
 
         self.hovered_nodes = new_ids;
+        self.apply_hovered_pointer_icon(&hits);
 
         if !hits.is_empty() {
             let event = self
@@ -906,6 +907,34 @@ where
             }
         }
         self.hovered_nodes.clear();
+        cranpose_ui::pointer_icon_session::set_pointer_icon(PointerIcon::DEFAULT);
+    }
+
+    /// The pointer icon the platform has not applied yet, or `None` when the
+    /// icon has not changed since the last call.
+    ///
+    /// Platform backends call this after handing the shell a batch of input and
+    /// set the returned icon on the window they own. Platforms with no pointing
+    /// device never call it.
+    pub fn take_pointer_icon_change(&self) -> Option<PointerIcon> {
+        let app_context = Rc::clone(&self.app_context);
+        app_context.enter(cranpose_ui::pointer_icon_session::take_pointer_icon_change)
+    }
+
+    /// Records the icon of the topmost hovered region, or the platform default
+    /// when nothing under the pointer names one.
+    ///
+    /// `hits` arrives ordered top-to-bottom, so the first region that names an
+    /// icon is the innermost one drawn over the pointer.
+    fn apply_hovered_pointer_icon(
+        &self,
+        hits: &[<<R as Renderer>::Scene as RenderScene>::HitTarget],
+    ) {
+        let icon = hits
+            .iter()
+            .find_map(HitTestTarget::pointer_icon)
+            .unwrap_or(PointerIcon::DEFAULT);
+        cranpose_ui::pointer_icon_session::set_pointer_icon(icon);
     }
 
     /// Installs the platform soft-keyboard handler for this shell's app context.

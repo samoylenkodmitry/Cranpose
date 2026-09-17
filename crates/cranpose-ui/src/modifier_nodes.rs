@@ -10,6 +10,7 @@ use cranpose_foundation::{
     LayoutModifierNode, Measurable, ModifierNode, ModifierNodeContext, ModifierNodeElement,
     NodeCapabilities, NodeState, PointerEvent, PointerEventKind, PointerInputNode, Size,
 };
+use cranpose_ui_graphics::PointerIcon;
 use cranpose_ui_layout::{Alignment, HorizontalAlignment, IntrinsicSize, VerticalAlignment};
 
 use crate::{
@@ -1309,6 +1310,99 @@ impl ModifierNodeElement for ClickableElement {
 
     fn always_update(&self) -> bool {
         true
+    }
+}
+
+/// Node that names the pointer's appearance over its layout node.
+///
+/// It handles no pointer events; it carries [`PointerIcon`] as pointer-input
+/// data so the node becomes a hit target and the shell can read the icon off
+/// the topmost region under the pointer.
+#[derive(Debug)]
+pub struct PointerIconNode {
+    icon: PointerIcon,
+    state: NodeState,
+}
+
+impl PointerIconNode {
+    /// Creates a node requesting `icon` while the pointer is over it.
+    pub fn new(icon: PointerIcon) -> Self {
+        Self {
+            icon,
+            state: NodeState::new(),
+        }
+    }
+
+    /// The icon this node requests.
+    pub fn icon(&self) -> &PointerIcon {
+        &self.icon
+    }
+}
+
+impl DelegatableNode for PointerIconNode {
+    fn node_state(&self) -> &NodeState {
+        &self.state
+    }
+}
+
+impl ModifierNode for PointerIconNode {
+    fn on_attach(&mut self, context: &mut dyn ModifierNodeContext) {
+        context.invalidate(cranpose_foundation::InvalidationKind::PointerInput);
+    }
+
+    fn as_pointer_input_node(&self) -> Option<&dyn PointerInputNode> {
+        Some(self)
+    }
+
+    fn as_pointer_input_node_mut(&mut self) -> Option<&mut dyn PointerInputNode> {
+        Some(self)
+    }
+}
+
+impl PointerInputNode for PointerIconNode {
+    fn on_pointer_event(
+        &mut self,
+        _context: &mut dyn ModifierNodeContext,
+        _event: &PointerEvent,
+    ) -> bool {
+        false
+    }
+
+    fn hit_test(&self, _x: f32, _y: f32) -> bool {
+        true
+    }
+
+    fn pointer_input_handler(&self) -> Option<Rc<dyn Fn(PointerEvent)>> {
+        None
+    }
+}
+
+/// Element that creates and updates [`PointerIconNode`]s.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct PointerIconElement {
+    icon: PointerIcon,
+}
+
+impl PointerIconElement {
+    /// Creates an element requesting `icon`.
+    pub fn new(icon: PointerIcon) -> Self {
+        Self { icon }
+    }
+}
+
+impl ModifierNodeElement for PointerIconElement {
+    type Node = PointerIconNode;
+
+    fn create(&self) -> Self::Node {
+        PointerIconNode::new(self.icon.clone())
+    }
+
+    fn update(&self, node: &mut Self::Node) {
+        node.icon = self.icon.clone();
+    }
+
+    fn capabilities(&self) -> NodeCapabilities {
+        NodeCapabilities::POINTER_INPUT
     }
 }
 

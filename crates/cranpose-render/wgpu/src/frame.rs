@@ -4641,7 +4641,10 @@ mod tests {
         assert_eq!(depths(&excluded_scene), [0, 2, 4]);
         assert!(matches!(excluded_scene, Cow::Borrowed(_)));
         assert!(pending_draw_ops(&scene, 0, 0, &[], &deferred).is_empty());
-        assert_eq!(depths(&pending_draw_ops(&scene, 0, 3, &[(0, 3)], &[])), []);
+        assert_eq!(
+            depths(&pending_draw_ops(&scene, 0, 3, &[(0, 3)], &[])),
+            [0usize; 0]
+        );
     }
 
     #[test]

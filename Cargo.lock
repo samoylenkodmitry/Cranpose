@@ -1224,6 +1224,7 @@ version = "0.1.132"
 dependencies = [
  "arrayvec",
  "bytemuck",
+ "cursor-icon",
  "thiserror 2.0.18",
 ]
 

@@ -41,24 +41,21 @@
 //! one of them loses is lost by all of them. A caller cannot be handed bounds
 //! for a control the renderer never drew.
 
-use std::{collections::HashMap, rc::Rc};
+use std::collections::HashMap;
 
 use cranpose_app_shell::AppShell;
 use cranpose_core::{MemoryApplier, NodeError, NodeId};
-use cranpose_foundation::PointerEvent;
 use cranpose_render_common::{
     Renderer,
-    graph::ProjectiveTransform,
+    graph::{HitTestNode, ProjectiveTransform},
     graph_scene::HitGeometry,
     hit_graph::{HitGraphSink, collect_hits_from_graph},
     scene_builder::build_graph_from_applier,
 };
 use cranpose_ui::{
-    LayoutBox, LayoutEngine, LayoutTree, Point, Rect, SemanticsAction, SemanticsNode,
-    SemanticsRole, SemanticsWidgetRole, Size, build_layout_tree_from_applier,
-    build_semantics_tree_from_applier,
+    LayoutBox, LayoutEngine, LayoutTree, Rect, SemanticsAction, SemanticsNode, SemanticsRole,
+    SemanticsWidgetRole, Size, build_layout_tree_from_applier, build_semantics_tree_from_applier,
 };
-use cranpose_ui_graphics::RoundedCornerShape;
 
 /// One semantics node, with the geometry it was placed and drawn at.
 ///
@@ -209,9 +206,7 @@ impl HitGraphSink for TouchBoundsSink<'_> {
         node_id: NodeId,
         _capture_path: &[NodeId],
         geometry: HitGeometry<'_>,
-        _shape: Option<RoundedCornerShape>,
-        _click_actions: &[Rc<dyn Fn(Point)>],
-        _pointer_inputs: &[Rc<dyn Fn(PointerEvent)>],
+        _hit: &HitTestNode,
     ) {
         self.bounds.entry(node_id).or_insert(geometry.rect);
     }
