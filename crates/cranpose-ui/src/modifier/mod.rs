@@ -556,6 +556,15 @@ impl Modifier {
         self.semantics(move |config| config.collapse = Some(action.clone()))
     }
 
+    /// Says what this control does when a screen reader asks to send it away:
+    /// a row a sighted person swipes off, a sheet a sighted person taps
+    /// outside of. A reader that cannot make the gesture gets the same way
+    /// out. Compose's `Modifier.semantics { dismiss { … } }`.
+    pub fn dismiss(self, action: impl Fn() -> bool + 'static) -> Self {
+        let action = cranpose_foundation::SemanticsDismiss::new(action);
+        self.semantics(move |config| config.dismiss = Some(action.clone()))
+    }
+
     /// Moves this node in the order a screen reader visits the nodes beside
     /// it: a smaller number comes first, and a node left alone keeps the
     /// order the app laid it out in. A search field drawn last but meant to

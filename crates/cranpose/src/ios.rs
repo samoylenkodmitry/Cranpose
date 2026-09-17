@@ -183,6 +183,7 @@ impl<F: FnMut() + 'static> IosApp<F> {
             accessibility.drain_activations(shell);
             accessibility.drain_value_steps(shell);
             accessibility.drain_scrolls(shell);
+            accessibility.drain_dismissals(shell);
             accessibility.drain_escapes(shell);
             accessibility.drain_custom_actions(shell);
             accessibility.drain_focus();

@@ -47,12 +47,14 @@ struct ReaderRequests {
     steps: Rc<RefCell<Vec<(i32, bool)>>>,
     scrolls: Rc<RefCell<Vec<(i32, bool)>>>,
     escapes: Rc<Cell<usize>>,
+    dismissals: Rc<RefCell<Vec<i32>>>,
     custom_actions: Rc<RefCell<Vec<(i32, usize)>>>,
 }
 
 struct AccessibilityElementIvars {
     element_id: i32,
     actionable: Cell<bool>,
+    dismissable: Cell<bool>,
     custom_action_labels: RefCell<Vec<String>>,
     requests: ReaderRequests,
     wake_proxy: EventLoopProxy,
@@ -142,6 +144,14 @@ define_class!(
 
         #[unsafe(method(accessibilityPerformEscape))]
         fn accessibility_perform_escape(&self) -> Bool {
+            if self.ivars().dismissable.get() {
+                self.ivars()
+                    .requests.dismissals
+                    .borrow_mut()
+                    .push(self.ivars().element_id);
+                self.ivars().wake_proxy.wake_up();
+                return Bool::YES;
+            }
             if !accessibility::escape_has_a_taker() {
                 return Bool::NO;
             }
@@ -173,6 +183,7 @@ impl NativeAccessibilityElement {
         let this = Self::alloc(mtm).set_ivars(AccessibilityElementIvars {
             element_id,
             actionable: Cell::new(false),
+            dismissable: Cell::new(false),
             custom_action_labels: RefCell::new(Vec::new()),
             requests,
             wake_proxy,
@@ -184,6 +195,10 @@ impl NativeAccessibilityElement {
 
     fn set_actionable(&self, actionable: bool) {
         self.ivars().actionable.set(actionable);
+    }
+
+    fn set_dismissable(&self, dismissable: bool) {
+        self.ivars().dismissable.set(dismissable);
     }
 
     fn set_custom_action_labels(&self, labels: &[String]) {
@@ -476,8 +491,29 @@ impl IosAccessibilityBridge {
         ran
     }
 
+    /// Sends away the control a VoiceOver user scrubbed on with two fingers,
+    /// on the live tree. Answers whether a control took it.
+    pub(crate) fn drain_dismissals<R>(&mut self, shell: &mut AppShell<R>) -> bool
+    where
+        R: Renderer,
+        R::Error: Debug,
+    {
+        let pending = self.requests.dismissals.take();
+        let mut ran = false;
+        for element_id in pending {
+            let Some(node_id) = self.element_for(element_id).map(|element| element.node_id) else {
+                continue;
+            };
+            ran |= accessibility::run_reader_action(shell, |root| {
+                accessibility::dismiss(root, node_id)
+            });
+        }
+        ran
+    }
+
     /// Closes the dialog on top, or asks the app to go back, after a VoiceOver
-    /// two-finger scrub. Answers whether anything took the request.
+    /// two-finger scrub on a control with no way out of its own. Answers
+    /// whether anything took the request.
     pub(crate) fn drain_escapes<R>(&mut self, shell: &mut AppShell<R>) -> bool
     where
         R: Renderer,
@@ -555,6 +591,7 @@ fn update_native_element(
     mtm: MainThreadMarker,
 ) {
     native.set_actionable(element.clickable || element.role == AccessibilityRole::TextField);
+    native.set_dismissable(element.dismissable);
     native.setIsAccessibilityElement(
         !element.label.is_empty() || element.role == AccessibilityRole::TextField,
     );

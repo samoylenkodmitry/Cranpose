@@ -930,10 +930,12 @@ where
 #[path = "../tests/swipe_to_dismiss_tests.rs"]
 mod tests;
 
-/// A screen reader cannot swipe a row away, so the row offers "Dismiss" as a
-/// custom action, the way Compose's `SwipeToDismissBox` reaches TalkBack's
-/// actions menu. The row flings off toward the side the spec allows and fires
-/// `on_dismiss` once, as a finished swipe does.
+/// A screen reader cannot swipe a row away, so the row declares Compose's
+/// `dismiss` action and offers "Dismiss" as a custom action beside it. The
+/// first reaches TalkBack's `ACTION_DISMISS` and VoiceOver's two-finger
+/// scrub; the second reaches the readers that have no way out of their own.
+/// The row flings off toward the side the spec allows and fires `on_dismiss`
+/// once, as a finished swipe does.
 fn dismiss_semantics(
     controller: Rc<SwipeToDismissController>,
     direction: SwipeDismissDirection,
@@ -942,19 +944,35 @@ fn dismiss_semantics(
         if !controller.enabled.get() {
             return;
         }
-        let controller = Rc::clone(&controller);
+        let fling = fling_away(Rc::clone(&controller), direction);
         config
             .custom_actions
             .push(cranpose_foundation::SemanticsCustomAction::new(
                 "Dismiss",
-                move || {
-                    let width = controller.width_px.get();
-                    let target = match direction {
-                        SwipeDismissDirection::EndToStart => -width,
-                        SwipeDismissDirection::StartToEnd | SwipeDismissDirection::Both => width,
-                    };
-                    animate_dismiss(&controller, target);
+                {
+                    let fling = fling.clone();
+                    move || {
+                        fling();
+                    }
                 },
             ));
+        config.dismiss = Some(cranpose_foundation::SemanticsDismiss::new(move || fling()));
     }
+}
+
+/// Flings the row off toward the side the spec allows, the way a finished
+/// swipe does. Answers that the row took the ask.
+fn fling_away(
+    controller: Rc<SwipeToDismissController>,
+    direction: SwipeDismissDirection,
+) -> Rc<dyn Fn() -> bool> {
+    Rc::new(move || {
+        let width = controller.width_px.get();
+        let target = match direction {
+            SwipeDismissDirection::EndToStart => -width,
+            SwipeDismissDirection::StartToEnd | SwipeDismissDirection::Both => width,
+        };
+        animate_dismiss(&controller, target);
+        true
+    })
 }

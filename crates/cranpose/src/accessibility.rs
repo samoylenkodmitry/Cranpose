@@ -105,6 +105,7 @@ pub(crate) struct AccessibilityElement {
     pub(crate) error: Option<String>,
     pub(crate) password: bool,
     pub(crate) expanded: Option<bool>,
+    pub(crate) dismissable: bool,
 }
 
 impl Default for AccessibilityElement {
@@ -138,6 +139,7 @@ impl Default for AccessibilityElement {
             error: None,
             password: false,
             expanded: None,
+            dismissable: false,
         }
     }
 }
@@ -542,6 +544,7 @@ fn element_for_node(
         error: node.error.clone(),
         password: node.password,
         expanded: expansion(node),
+        dismissable: node.dismiss.is_some(),
     }
 }
 
@@ -684,8 +687,6 @@ fn project_canvas_children(
             label: child.label.clone(),
             state_description: child.state_description.clone(),
             click_label: child.on_click_label.clone(),
-            long_click_label: None,
-            value: None,
             bounds: rect,
             role,
             clickable: child.clickable,
@@ -697,20 +698,8 @@ fn project_canvas_children(
                 .iter()
                 .map(|action| action.label.clone())
                 .collect(),
-            focusable: false,
-            focused: false,
             live_region,
-            progress: None,
-            adjustable: false,
-            vertical_scroll: None,
-            horizontal_scroll: None,
-            scroll_parent: None,
-            collection: None,
-            collection_item: None,
-            pane_title: None,
-            error: None,
-            password: false,
-            expanded: None,
+            ..AccessibilityElement::default()
         });
     }
 }
@@ -827,6 +816,70 @@ pub(crate) fn set_expanded(root: &SemanticsNode, node_id: NodeId, open: bool) ->
         Some(action) => action.invoke(),
         None => false,
     }
+}
+
+/// Sends away the control a screen reader asked to send away. Answers whether
+/// the control took the ask.
+#[cfg(any(
+    test,
+    all(feature = "desktop-shell", feature = "renderer-wgpu"),
+    all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"),
+    all(feature = "android", feature = "renderer-wgpu", target_os = "android"),
+    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
+))]
+pub(crate) fn dismiss(root: &SemanticsNode, node_id: NodeId) -> bool {
+    let Some(node) = find_semantics_node(root, node_id) else {
+        return false;
+    };
+    match &node.dismiss {
+        Some(action) => action.invoke(),
+        None => false,
+    }
+}
+
+/// The name a reader lists the way out under, on the platforms that have no
+/// dismiss action of their own and offer it beside the app's own actions.
+#[cfg(any(
+    test,
+    all(feature = "desktop-shell", feature = "renderer-wgpu"),
+    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
+))]
+pub(crate) const DISMISS_LABEL: &str = "Dismiss";
+
+/// The actions a reader lists for a control: the ones
+/// [`reader_actions`] names, and the way out after them when the control
+/// declares one. accesskit 0.24 and ARIA carry no dismiss action, so both
+/// reach it as one more named action.
+#[cfg(any(
+    test,
+    all(feature = "desktop-shell", feature = "renderer-wgpu"),
+    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
+))]
+pub(crate) fn listed_actions(element: &AccessibilityElement) -> Vec<String> {
+    reader_actions(element)
+        .into_iter()
+        .chain(element.dismissable.then(|| DISMISS_LABEL.to_owned()))
+        .collect()
+}
+
+/// Runs the action a reader picked out of a control's listed actions: one the
+/// app named, or the way out that sits after them.
+#[cfg(any(
+    test,
+    all(feature = "desktop-shell", feature = "renderer-wgpu"),
+    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
+))]
+pub(crate) fn perform_listed_action(
+    root: &SemanticsNode,
+    node_id: NodeId,
+    canvas_key: Option<u64>,
+    named: usize,
+    index: usize,
+) -> bool {
+    if index == named {
+        return dismiss(root, node_id);
+    }
+    perform_custom_action(root, node_id, canvas_key, index)
 }
 
 /// Runs the long press a screen reader asked a control for, and answers
@@ -1417,6 +1470,27 @@ mod tests {
         node
     }
 
+    fn text_node(node_id: NodeId, label: &str) -> SemanticsNode {
+        node(
+            node_id,
+            SemanticsRole::Text {
+                value: label.to_owned(),
+            },
+            Vec::new(),
+            None,
+            Vec::new(),
+        )
+    }
+
+    fn one_row_tree(row: SemanticsNode) -> (SemanticsNode, HashMap<NodeId, AccessibilityRect>) {
+        let root = node(1, SemanticsRole::Layout, Vec::new(), None, vec![row]);
+        let bounds = HashMap::from_iter([
+            (1, AccessibilityRect::new(0.0, 0.0, 300.0, 200.0)),
+            (2, AccessibilityRect::new(0.0, 0.0, 300.0, 40.0)),
+        ]);
+        (root, bounds)
+    }
+
     #[test]
     fn a_pane_is_published_with_its_title_and_no_label() {
         let mut screen = node(
@@ -1914,17 +1988,65 @@ mod tests {
     }
 
     #[test]
+    fn a_control_says_what_it_does_when_a_reader_sends_it_away() {
+        let ran = Rc::new(Cell::new(0));
+        let mut row = text_node(2, "Milk");
+        row.dismiss = Some(cranpose_ui::SemanticsDismiss::new({
+            let ran = Rc::clone(&ran);
+            move || {
+                ran.set(ran.get() + 1);
+                true
+            }
+        }));
+        let quiet = text_node(3, "Bread");
+        let root = node(1, SemanticsRole::Layout, Vec::new(), None, vec![row, quiet]);
+        let bounds = HashMap::from_iter([
+            (1, AccessibilityRect::new(0.0, 0.0, 300.0, 200.0)),
+            (2, AccessibilityRect::new(0.0, 0.0, 300.0, 40.0)),
+            (3, AccessibilityRect::new(0.0, 40.0, 300.0, 40.0)),
+        ]);
+
+        let projected = project_semantics(&root, &bounds);
+        assert!(projected[0].dismissable, "the row says it has a way out");
+        assert!(!projected[1].dismissable, "the other row says nothing");
+        assert_eq!(listed_actions(&projected[0]), vec![DISMISS_LABEL]);
+        assert!(listed_actions(&projected[1]).is_empty());
+
+        assert!(dismiss(&root, 2), "the row takes the ask");
+        assert_eq!(ran.get(), 1);
+        assert!(!dismiss(&root, 3), "the other row has no way out");
+    }
+
+    #[test]
+    fn the_way_out_sits_after_the_actions_the_app_named() {
+        let ran = Rc::new(Cell::new(String::new()));
+        let mut row = text_node(2, "Milk");
+        row.custom_actions = vec![cranpose_ui::SemanticsCustomAction::new("Pin", {
+            let ran = Rc::clone(&ran);
+            move || ran.set("Pin".into())
+        })];
+        row.dismiss = Some(cranpose_ui::SemanticsDismiss::new({
+            let ran = Rc::clone(&ran);
+            move || {
+                ran.set("Dismiss".into());
+                true
+            }
+        }));
+        let (root, bounds) = one_row_tree(row);
+
+        let projected = project_semantics(&root, &bounds);
+        assert_eq!(listed_actions(&projected[0]), vec!["Pin", DISMISS_LABEL]);
+
+        assert!(perform_listed_action(&root, 2, None, 1, 0));
+        assert_eq!(ran.take(), "Pin");
+        assert!(perform_listed_action(&root, 2, None, 1, 1));
+        assert_eq!(ran.take(), "Dismiss");
+    }
+
+    #[test]
     fn a_long_press_is_named_and_sits_after_the_custom_actions() {
         let ran = Rc::new(Cell::new(0));
-        let mut row = node(
-            2,
-            SemanticsRole::Text {
-                value: "Milk".into(),
-            },
-            Vec::new(),
-            None,
-            Vec::new(),
-        );
+        let mut row = text_node(2, "Milk");
         row.custom_actions = vec![cranpose_ui::SemanticsCustomAction::new("Pause", || {})];
         row.on_long_click_label = Some("Remove receipt".into());
         row.on_long_click = Some(cranpose_ui::SemanticsLongClick::new({
@@ -1934,11 +2056,7 @@ mod tests {
                 true
             }
         }));
-        let root = node(1, SemanticsRole::Layout, Vec::new(), None, vec![row]);
-        let bounds = HashMap::from_iter([
-            (1, AccessibilityRect::new(0.0, 0.0, 300.0, 200.0)),
-            (2, AccessibilityRect::new(0.0, 0.0, 300.0, 40.0)),
-        ]);
+        let (root, bounds) = one_row_tree(row);
 
         let projected = project_semantics(&root, &bounds);
         assert_eq!(
@@ -1960,32 +2078,14 @@ mod tests {
 
     #[test]
     fn a_control_with_no_long_press_offers_none_and_a_nameless_one_is_still_read() {
-        let mut plain = node(
-            2,
-            SemanticsRole::Text {
-                value: "Milk".into(),
-            },
-            Vec::new(),
-            None,
-            Vec::new(),
-        );
-        let bounds = HashMap::from_iter([
-            (1, AccessibilityRect::new(0.0, 0.0, 300.0, 200.0)),
-            (2, AccessibilityRect::new(0.0, 0.0, 300.0, 40.0)),
-        ]);
-        let root = node(
-            1,
-            SemanticsRole::Layout,
-            Vec::new(),
-            None,
-            vec![plain.clone()],
-        );
+        let mut plain = text_node(2, "Milk");
+        let (root, bounds) = one_row_tree(plain.clone());
         assert_eq!(project_semantics(&root, &bounds)[0].long_click_label, None);
         assert!(!long_click(&root, 2), "there is nothing to run");
 
         plain.on_long_click = Some(cranpose_ui::SemanticsLongClick::new(|| true));
         plain.on_long_click_label = Some("   ".into());
-        let root = node(1, SemanticsRole::Layout, Vec::new(), None, vec![plain]);
+        let (root, bounds) = one_row_tree(plain);
         assert_eq!(
             project_semantics(&root, &bounds)[0]
                 .long_click_label

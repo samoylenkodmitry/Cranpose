@@ -16,8 +16,9 @@ use cranpose_core::{
 use cranpose_foundation::{
     CanvasSemanticsNode, CollectionInfo, InvalidationKind, LiveRegionMode, ModifierNodeContext,
     NodeCapabilities, ProgressBarRangeInfo, ScrollAxisRange, SemanticsConfiguration,
-    SemanticsCustomAction, SemanticsExpand, SemanticsLongClick, SemanticsScrollBy,
-    SemanticsSetProgress, SemanticsSetText, SemanticsWidgetRole, text::TextRange,
+    SemanticsCustomAction, SemanticsDismiss, SemanticsExpand, SemanticsLongClick,
+    SemanticsScrollBy, SemanticsSetProgress, SemanticsSetText, SemanticsWidgetRole,
+    text::TextRange,
 };
 use cranpose_ui_layout::{Constraints, MeasurePolicy, Placement};
 use web_time::Instant;
@@ -409,6 +410,8 @@ pub struct SemanticsNode {
     pub expand: Option<SemanticsExpand>,
     /// What this control does when a screen reader asks it to close.
     pub collapse: Option<SemanticsExpand>,
+    /// What this control does when a screen reader asks to send it away.
+    pub dismiss: Option<SemanticsDismiss>,
     /// How far this container scrolled up and down, when it scrolls.
     pub vertical_scroll: Option<ScrollAxisRange>,
     /// How far this container scrolled left and right, when it scrolls.
@@ -455,6 +458,7 @@ impl Default for SemanticsNode {
             set_text: None,
             expand: None,
             collapse: None,
+            dismiss: None,
             vertical_scroll: None,
             horizontal_scroll: None,
             scroll_by: None,
@@ -3124,6 +3128,7 @@ fn semantics_node_from_parts(
         node.set_text = config.set_text;
         node.expand = config.expand;
         node.collapse = config.collapse;
+        node.dismiss = config.dismiss;
         node.vertical_scroll = config.vertical_scroll;
         node.horizontal_scroll = config.horizontal_scroll;
         node.scroll_by = config.scroll_by;

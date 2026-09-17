@@ -250,8 +250,9 @@ impl DesktopAccessibilityBridge {
                 continue;
             };
             let (node_id, canvas_key) = (element.node_id, element.canvas_key);
+            let named = accessibility::reader_actions(element).len();
             ran |= accessibility::run_reader_action(shell, |root| {
-                accessibility::perform_custom_action(root, node_id, canvas_key, index)
+                accessibility::perform_listed_action(root, node_id, canvas_key, named, index)
             });
         }
         ran
@@ -539,16 +540,16 @@ fn apply_actions(node: &mut Node, element: &AccessibilityElement) {
     if element.clickable {
         node.add_action(Action::Click);
     }
-    let actions = accessibility::reader_actions(element);
-    if !actions.is_empty() {
+    let listed = accessibility::listed_actions(element);
+    if !listed.is_empty() {
         node.add_action(Action::CustomAction);
         node.set_custom_actions(
-            actions
-                .iter()
+            listed
+                .into_iter()
                 .enumerate()
                 .map(|(index, label)| CustomAction {
                     id: index as i32,
-                    description: label.as_str().into(),
+                    description: label.into(),
                 })
                 .collect::<Vec<_>>(),
         );

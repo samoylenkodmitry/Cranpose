@@ -32,7 +32,7 @@ public final class CranposeAccessibilityParserTest {
         return String.join("\t", id, "5", "2", "4", "62", "84", "16", "22",
                 "1", label, "", "On", "Toggle", "-1", "1", "1", actions,
                 "1", "0", "0", "0", "0", "0", "0", "0", "0", "-1", "0", "0", "0", "-1", "-1", "", "", "0", "-1",
-                "Remove receipt");
+                "Remove receipt", "0");
     }
 
     @Test

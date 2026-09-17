@@ -921,6 +921,34 @@ impl PartialEq for SemanticsExpand {
     }
 }
 
+/// What a control does when a screen reader asks to send it away: a row a
+/// sighted person swipes off, a sheet a sighted person taps outside of.
+/// Compose's `dismiss` action.
+#[derive(Clone)]
+pub struct SemanticsDismiss(Rc<dyn Fn() -> bool>);
+
+impl SemanticsDismiss {
+    pub fn new(handler: impl Fn() -> bool + 'static) -> Self {
+        Self(Rc::new(handler))
+    }
+
+    pub fn invoke(&self) -> bool {
+        (self.0)()
+    }
+}
+
+impl fmt::Debug for SemanticsDismiss {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("SemanticsDismiss")
+    }
+}
+
+impl PartialEq for SemanticsDismiss {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
 impl PartialEq for SemanticsSetText {
     fn eq(&self, _other: &Self) -> bool {
         true
@@ -1202,6 +1230,10 @@ pub struct SemanticsConfiguration {
     /// What this control does when a screen reader asks it to open. A control
     /// that says so reads as closed. Compose's `expand`.
     pub expand: Option<SemanticsExpand>,
+    /// What this control does when a screen reader asks to send it away: a row
+    /// a sighted person swipes off, a sheet a sighted person taps outside of.
+    /// Compose's `dismiss`.
+    pub dismiss: Option<SemanticsDismiss>,
     /// What this control does when a screen reader asks it to close. A control
     /// that says so reads as open. Compose's `collapse`.
     pub collapse: Option<SemanticsExpand>,
@@ -1249,6 +1281,7 @@ impl Default for SemanticsConfiguration {
             set_progress: None,
             set_text: None,
             expand: None,
+            dismiss: None,
             collapse: None,
             vertical_scroll: None,
             horizontal_scroll: None,
@@ -1459,6 +1492,9 @@ impl SemanticsConfiguration {
         }
         if let Some(collapse) = &other.collapse {
             self.collapse = Some(collapse.clone());
+        }
+        if let Some(dismiss) = &other.dismiss {
+            self.dismiss = Some(dismiss.clone());
         }
         if let Some(long_click) = &other.on_long_click {
             self.on_long_click = Some(long_click.clone());
