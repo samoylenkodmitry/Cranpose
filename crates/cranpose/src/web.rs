@@ -810,10 +810,18 @@ pub async fn run(
     let request_frame_for_loop = request_frame.clone();
     let document_for_loop = document.clone();
     let accessibility_for_loop = accessibility.clone();
+    let cursors_for_loop = RefCell::new(crate::web_cursor::WebCursors::default());
+    let canvas_for_cursor = canvas.clone();
 
     *render_loop.borrow_mut() = Some(Closure::wrap(Box::new(move || {
         frame_pending_for_loop.set(false);
         let update_result = app.borrow_mut().update();
+        crate::web_cursor::sync_pointer_icon(
+            &cursors_for_loop,
+            &document_for_loop,
+            &canvas_for_cursor,
+            app.borrow().take_pointer_icon_change(),
+        );
         if let Ok(mut app_mut) = app.try_borrow_mut()
             && let Err(error) = accessibility_for_loop
                 .borrow_mut()

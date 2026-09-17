@@ -32,6 +32,7 @@ mod modifier;
 mod modifier_nodes;
 pub mod nine_patch;
 mod pointer_dispatch;
+pub mod pointer_icon_session;
 mod primitives;
 mod render_state;
 mod renderer;
@@ -72,7 +73,10 @@ pub use cranpose_foundation::{
     },
     text::{TextFieldBuffer, TextFieldLineLimits, TextFieldState, TextFieldValue, TextRange},
 };
-pub use cranpose_ui_graphics::{BlurredEdgeTreatment, ColorFilter, Dp, ImageBitmap, ImageSampling};
+pub use cranpose_ui_graphics::{
+    BlurredEdgeTreatment, ColorFilter, CursorIcon, CustomPointerIcon, Dp, ImageBitmap,
+    ImageSampling, PointerIcon, PointerIconError,
+};
 pub use cranpose_ui_layout::IntrinsicSize;
 pub use cursor_animation::{
     is_cursor_visible, next_cursor_blink_time, reset_cursor_blink, start_cursor_blink,

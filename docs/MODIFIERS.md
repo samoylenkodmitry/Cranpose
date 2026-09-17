@@ -618,6 +618,32 @@ impl PointerInputNode for ClickableNode {
 }
 ```
 
+#### PointerIconNode
+
+- **Capability**: `POINTER_INPUT`
+- **Behavior**: Names the pointer's appearance over the node. It handles no
+  events; it carries a `PointerIcon` that the scene builder puts on the node's
+  `HitTestNode`, so the shell can read the cursor off the topmost region under
+  the pointer and hand it to the window.
+- **Hit targets**: a node that only names an icon still becomes a hit target,
+  which is how a decorative panel carries a cursor without handling clicks.
+
+```rust
+Modifier::empty().pointer_icon(PointerIcon::POINTER);
+Modifier::empty().cursor(CursorIcon::EwResize);
+Modifier::empty().pointer_icon(PointerIcon::custom(bitmap, hotspot_x, hotspot_y)?);
+```
+
+The icon travels modifier -> `ModifierNodeSlices::pointer_icon` ->
+`HitTestNode::pointer_icon` -> `HitRegion` -> `AppShell`, which records it in
+`cranpose_ui::pointer_icon_session`. Platform backends poll
+`AppShell::take_pointer_icon_change` and set it on the window they own: winit's
+`Window::set_cursor` on desktop, the canvas's CSS `cursor` on the web. Android
+and iOS have no pointing device and ignore it.
+
+Within one chain the innermost declaration wins; across nested nodes the
+topmost hit region wins, so a control's cursor beats its window's.
+
 ### Semantics Modifiers
 
 #### SemanticsModifierNode
@@ -1185,6 +1211,9 @@ let modifier = Modifier::empty()
 | `cranpose-ui/src/modifier/background.rs` | Background/corner shape factory methods (`background()`, `corner_shape()`), element definitions |
 | `cranpose-ui/src/modifier/clickable.rs` | Clickable modifier factory method, `ClickableElement` and `ClickableNode` implementations |
 | `cranpose-ui/src/modifier/offset.rs` | Offset modifier factory methods (`offset()`, `absolute_offset()`), RTL support |
+| `cranpose-ui/src/modifier/pointer_icon.rs` | Pointer icon factory methods (`pointer_icon()`, `cursor()`) |
+| `cranpose-ui/src/pointer_icon_session.rs` | The per-`AppContext` pointer icon a platform backend polls and applies to its window |
+| `cranpose-ui-graphics/src/pointer_icon.rs` | `PointerIcon`, `CustomPointerIcon` and the standard `CursorIcon` shapes |
 | `cranpose-foundation/src/modifier_helpers.rs` | Helper macros (`impl_modifier_node!`), boilerplate reduction utilities |
 
 ---

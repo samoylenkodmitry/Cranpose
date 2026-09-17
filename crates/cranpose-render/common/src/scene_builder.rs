@@ -7,8 +7,8 @@ use cranpose_ui::{
     text::{AnnotatedString, TextAlign, TextStyle, resolve_text_direction},
 };
 use cranpose_ui_graphics::{
-    CommandRecording, CompositingStrategy, GraphicsLayer, LayerShape, RoundedCornerShape,
-    rounded_corner_alpha_mask_effect,
+    CommandRecording, CompositingStrategy, GraphicsLayer, LayerShape, PointerIcon,
+    RoundedCornerShape, rounded_corner_alpha_mask_effect,
 };
 use smallvec::SmallVec;
 
@@ -41,6 +41,7 @@ struct BuildNodeSnapshot {
     outer_draw_command_count: usize,
     click_actions: Vec<Rc<dyn Fn(Point)>>,
     pointer_inputs: Vec<Rc<dyn Fn(cranpose_foundation::PointerEvent)>>,
+    pointer_icon: Option<PointerIcon>,
     clip_to_bounds: bool,
     annotated_text: Option<AnnotatedString>,
     text_style: Option<TextStyle>,
@@ -1089,6 +1090,7 @@ fn build_layer_node_internal(
         outer_draw_command_count,
         click_actions,
         pointer_inputs,
+        pointer_icon,
         clip_to_bounds,
         annotated_text,
         text_style,
@@ -1114,10 +1116,14 @@ fn build_layer_node_internal(
         CachePolicy::None
     };
     let shadow_clip = clip_to_bounds.then_some(local_bounds);
-    let hit_test = (!click_actions.is_empty() || !pointer_inputs.is_empty()).then(|| HitTestNode {
+    let hit_test = (!click_actions.is_empty()
+        || !pointer_inputs.is_empty()
+        || pointer_icon.is_some())
+    .then(|| HitTestNode {
         shape: None,
         click_actions,
         pointer_inputs,
+        pointer_icon,
         clip: (clip_to_bounds || graphics_layer.clip).then_some(local_bounds),
     });
 
@@ -1308,11 +1314,15 @@ fn hit_test_from_slices(
 ) -> Option<HitTestNode> {
     let click_actions = slices.click_handlers();
     let pointer_inputs = slices.pointer_inputs();
-    (!click_actions.is_empty() || !pointer_inputs.is_empty()).then(|| HitTestNode {
-        shape: None,
-        click_actions: click_actions.to_vec(),
-        pointer_inputs: pointer_inputs.to_vec(),
-        clip: clip.then_some(bounds),
+    let pointer_icon = slices.pointer_icon();
+    (!click_actions.is_empty() || !pointer_inputs.is_empty() || pointer_icon.is_some()).then(|| {
+        HitTestNode {
+            shape: None,
+            click_actions: click_actions.to_vec(),
+            pointer_inputs: pointer_inputs.to_vec(),
+            pointer_icon: pointer_icon.cloned(),
+            clip: clip.then_some(bounds),
+        }
     })
 }
 
@@ -1924,6 +1934,7 @@ fn layout_box_to_snapshot(node: &LayoutBox, parent: Option<&LayoutBox>) -> Build
         outer_draw_command_count: node.node_data.modifier_slices.outer_draw_command_count(),
         click_actions: node.node_data.modifier_slices.click_handlers().to_vec(),
         pointer_inputs: node.node_data.modifier_slices.pointer_inputs().to_vec(),
+        pointer_icon: node.node_data.modifier_slices.pointer_icon().cloned(),
         clip_to_bounds: node.node_data.modifier_slices.clip_to_bounds(),
         annotated_text: node.node_data.modifier_slices.annotated_string(),
         text_style: node.node_data.modifier_slices.text_style().cloned(),

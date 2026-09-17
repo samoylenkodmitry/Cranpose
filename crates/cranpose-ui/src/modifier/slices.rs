@@ -2,7 +2,8 @@ use std::{fmt, mem::size_of, rc::Rc};
 
 use cranpose_foundation::{ModifierNodeChain, NodeCapabilities, PointerEvent};
 use cranpose_ui_graphics::{
-    ColorFilter, EdgeInsets, GraphicsLayer, LayerShape, RenderEffect, RoundedCornerShape,
+    ColorFilter, EdgeInsets, GraphicsLayer, LayerShape, PointerIcon, RenderEffect,
+    RoundedCornerShape,
 };
 
 use super::{ModifierChainHandle, Point};
@@ -14,7 +15,7 @@ use crate::{
     },
     modifier_nodes::{
         BackgroundNode, ClipToBoundsNode, CornerShapeNode, DrawCommandNode, GraphicsLayerNode,
-        PaddingNode, WindowRectReporterNode,
+        PaddingNode, PointerIconNode, WindowRectReporterNode,
     },
     text::{TextLayoutOptions, TextStyle},
     text_field_modifier_node::{TextFieldModifierNode, TextPanResolver},
@@ -29,6 +30,7 @@ pub struct ModifierNodeSlices {
     pointer_inputs: Vec<Rc<dyn Fn(PointerEvent)>>,
     pointer_input_sizes: Vec<Rc<std::cell::Cell<cranpose_ui_graphics::Size>>>,
     click_handlers: Vec<Rc<dyn Fn(Point)>>,
+    pointer_icon: Option<PointerIcon>,
     clip_to_bounds: bool,
     motion_context_animated: bool,
     translated_content_context: bool,
@@ -76,6 +78,7 @@ impl Clone for ModifierNodeSlices {
             pointer_inputs: self.pointer_inputs.clone(),
             pointer_input_sizes: self.pointer_input_sizes.clone(),
             click_handlers: self.click_handlers.clone(),
+            pointer_icon: self.pointer_icon.clone(),
             clip_to_bounds: self.clip_to_bounds,
             motion_context_animated: self.motion_context_animated,
             translated_content_context: self.translated_content_context,
@@ -222,6 +225,12 @@ impl ModifierNodeSlices {
 
     pub fn click_handlers(&self) -> &[Rc<dyn Fn(Point)>] {
         &self.click_handlers
+    }
+
+    /// The pointer's appearance over this node, when a `pointer_icon`
+    /// modifier names one. The innermost declaration in the chain wins.
+    pub fn pointer_icon(&self) -> Option<&PointerIcon> {
+        self.pointer_icon.as_ref()
     }
 
     pub fn clip_to_bounds(&self) -> bool {
@@ -389,6 +398,7 @@ impl ModifierNodeSlices {
         self.pointer_inputs.clear();
         self.pointer_input_sizes.clear();
         self.click_handlers.clear();
+        self.pointer_icon = None;
         self.clip_to_bounds = false;
         self.motion_context_animated = false;
         self.translated_content_context = false;
@@ -412,6 +422,7 @@ impl fmt::Debug for ModifierNodeSlices {
             .field("draw_commands", &self.draw_commands.len())
             .field("pointer_inputs", &self.pointer_inputs.len())
             .field("click_handlers", &self.click_handlers.len())
+            .field("pointer_icon", &self.pointer_icon)
             .field("clip_to_bounds", &self.clip_to_bounds)
             .field("motion_context_animated", &self.motion_context_animated)
             .field(
@@ -437,6 +448,17 @@ impl fmt::Debug for ModifierNodeSlices {
             )
             .field("corner_shape", &self.corner_shape)
             .finish()
+    }
+}
+
+/// Records `node`'s pointer icon when it declares one, leaving the icon already
+/// collected in place when it does not.
+///
+/// The chain is walked head to tail, so the innermost declaration is the last
+/// one written and the one that survives.
+fn collect_pointer_icon(node: &dyn std::any::Any, slices: &mut ModifierNodeSlices) {
+    if let Some(icon_node) = node.downcast_ref::<PointerIconNode>() {
+        slices.pointer_icon = Some(icon_node.icon().clone());
     }
 }
 
@@ -485,6 +507,7 @@ pub fn collect_modifier_slices_into(chain: &ModifierNodeChain, slices: &mut Modi
                 if let Some(sink) = pointer_node.layout_size_sink() {
                     slices.pointer_input_sizes.push(sink);
                 }
+                collect_pointer_icon(any, slices);
             }
 
             if has_draw && node_caps.intersects(NodeCapabilities::DRAW) {

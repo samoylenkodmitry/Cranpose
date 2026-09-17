@@ -425,6 +425,8 @@ mod desktop_accessibility;
 #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
 mod desktop_bundled_assets;
 #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
+mod desktop_cursor;
+#[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
 mod desktop_host_surface;
 #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
 mod desktop_incoming;
@@ -579,6 +581,9 @@ mod web_accessibility;
 
 #[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]
 mod web_clipboard;
+
+#[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]
+mod web_cursor;
 
 #[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]
 mod web_host_surface;

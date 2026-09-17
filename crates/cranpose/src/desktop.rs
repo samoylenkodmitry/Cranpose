@@ -599,6 +599,7 @@ struct App {
     next_native_window_position_poll_at: Instant,
     native_window_platform_probe: NativeWindowPlatformProbe,
     native_global_primary_down: bool,
+    cursors: crate::desktop_cursor::DesktopCursors,
     current_modifiers: winit::keyboard::ModifiersState,
     last_cursor_position: Option<(f32, f32)>,
     #[cfg(feature = "robot")]
@@ -666,6 +667,7 @@ impl App {
             #[allow(clippy::default_constructed_unit_structs)]
             native_window_platform_probe: NativeWindowPlatformProbe::default(),
             native_global_primary_down: false,
+            cursors: crate::desktop_cursor::DesktopCursors::default(),
             current_modifiers: winit::keyboard::ModifiersState::empty(),
             last_cursor_position: None,
             #[cfg(feature = "robot")]
@@ -926,6 +928,21 @@ impl App {
             native_window_surface_origin(platform_probe, &native.window),
             || native.app.set_cursor(logical.x, logical.y),
         )
+    }
+
+    /// Hands every window the pointer icon its shell resolved since the last
+    /// pass, so the cursor is set from the event loop that owns the window.
+    fn sync_pointer_icons(&mut self, event_loop: &dyn ActiveEventLoop) {
+        if let (Some(app), Some(window)) = (self.app.as_ref(), self.window.as_ref())
+            && let Some(icon) = app.take_pointer_icon_change()
+        {
+            self.cursors.apply(event_loop, window, &icon);
+        }
+        for native in self.native_windows.values() {
+            if let Some(icon) = native.app.take_pointer_icon_change() {
+                self.cursors.apply(event_loop, &native.window, &icon);
+            }
+        }
     }
 
     fn sync_native_windows(&mut self, event_loop: &dyn ActiveEventLoop) {
@@ -4838,6 +4855,7 @@ impl ApplicationHandler for App {
         }
 
         self.sync_frame_pacing();
+        self.sync_pointer_icons(event_loop);
 
         let last_frame_start_time = self.last_frame_start_time;
         let registry = Rc::clone(&self.native_window_registry);

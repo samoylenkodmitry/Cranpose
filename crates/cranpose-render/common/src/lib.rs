@@ -56,6 +56,15 @@ pub trait HitTestTarget {
     /// Used by HitPathTracker to cache stable identity instead of geometry.
     fn node_id(&self) -> cranpose_core::NodeId;
 
+    /// The pointer's appearance while it hovers this target, when the target
+    /// names one.
+    ///
+    /// The shell asks the hit list top-down and applies the first answer, so
+    /// the innermost region under the pointer decides the cursor.
+    fn pointer_icon(&self) -> Option<cranpose_ui_graphics::PointerIcon> {
+        None
+    }
+
     /// Returns the node capture path that should stay attached to this target's gesture.
     ///
     /// The default is just this target's own node. Renderers can override this to

@@ -2412,6 +2412,7 @@ mod tests {
                 shape: None,
                 click_actions: vec![Rc::new(|_point| {})],
                 pointer_inputs: vec![],
+                pointer_icon: None,
                 clip: None,
             }),
             has_hit_targets: true,
