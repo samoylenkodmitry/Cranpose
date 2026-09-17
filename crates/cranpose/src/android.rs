@@ -282,6 +282,23 @@ fn drain_accessibility_scrolls(
     }
 }
 
+/// Puts the row TalkBack named by number in view, on the list that carries
+/// Android's scroll-to-position action.
+fn drain_accessibility_jumps(
+    shell: &mut AppShell<WgpuRenderer>,
+    elements: &[crate::accessibility::AccessibilityElement],
+) {
+    for (virtual_id, index) in crate::android_accessibility::drain_jump_requests() {
+        let Some((node_id, _)) = crate::accessibility::resolve_element_id(elements, virtual_id)
+        else {
+            continue;
+        };
+        crate::accessibility::run_reader_action(shell, |root| {
+            crate::accessibility::scroll_to_index(root, node_id, index)
+        });
+    }
+}
+
 fn dispatch_android_ime_event(shell: &mut AppShell<WgpuRenderer>, event: AndroidImeEvent) {
     match event {
         AndroidImeEvent::CommitText { text, .. } => {
@@ -2261,6 +2278,7 @@ pub fn run(
             drain_accessibility_values(shell, &accessibility_elements);
             drain_accessibility_texts(shell, &accessibility_elements);
             drain_accessibility_scrolls(shell, &accessibility_elements);
+            drain_accessibility_jumps(shell, &accessibility_elements);
             drain_accessibility_expansions(shell, &accessibility_elements);
             drain_accessibility_dismissals(shell, &accessibility_elements);
             drain_accessibility_long_clicks(shell, &accessibility_elements);

@@ -98,6 +98,8 @@ pub(crate) struct AccessibilityElement {
     pub(crate) adjustable: bool,
     pub(crate) vertical_scroll: Option<ScrollAxisRange>,
     pub(crate) horizontal_scroll: Option<ScrollAxisRange>,
+    /// Whether a screen reader may ask this list for the row at an index.
+    pub(crate) scroll_to_index: bool,
     pub(crate) scroll_parent: Option<NodeId>,
     pub(crate) collection: Option<CollectionInfo>,
     pub(crate) collection_item: Option<CollectionItem>,
@@ -132,6 +134,7 @@ impl Default for AccessibilityElement {
             adjustable: false,
             vertical_scroll: None,
             horizontal_scroll: None,
+            scroll_to_index: false,
             scroll_parent: None,
             collection: None,
             collection_item: None,
@@ -537,6 +540,7 @@ fn element_for_node(
         adjustable: node.set_progress.is_some(),
         vertical_scroll: node.vertical_scroll,
         horizontal_scroll: node.horizontal_scroll,
+        scroll_to_index: node.scroll_to_index.is_some(),
         scroll_parent: None,
         collection: node.collection,
         collection_item: None,
@@ -566,6 +570,44 @@ pub(crate) fn scroll_by(root: &SemanticsNode, node_id: NodeId, dx: f32, dy: f32)
         Some(action) => action.invoke(dx, dy),
         None => false,
     }
+}
+
+/// Puts the row at `index` in view for a screen reader that asked for it by
+/// number, rather than paging until the row shows up. The index counts rows
+/// from zero. Answers whether the list moved.
+#[cfg(any(
+    test,
+    all(feature = "desktop-shell", feature = "renderer-wgpu"),
+    all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"),
+    all(feature = "android", feature = "renderer-wgpu", target_os = "android"),
+    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
+))]
+pub(crate) fn scroll_to_index(root: &SemanticsNode, node_id: NodeId, index: usize) -> bool {
+    let Some(node) = find_semantics_node(root, node_id) else {
+        return false;
+    };
+    match &node.scroll_to_index {
+        Some(action) => action.invoke(index),
+        None => false,
+    }
+}
+
+/// How many rows a list holds, for a platform that has to name the last one.
+/// A list that runs down the screen holds its rows in one column, and one that
+/// runs across holds them in one row.
+#[cfg(any(
+    test,
+    all(feature = "desktop-shell", feature = "renderer-wgpu"),
+    all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"),
+    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
+))]
+pub(crate) fn row_count(element: &AccessibilityElement) -> usize {
+    if !element.scroll_to_index {
+        return 0;
+    }
+    element
+        .collection
+        .map_or(0, |collection| collection.rows.max(collection.columns))
 }
 
 /// How far one reader page moves a container: most of what it shows, so the
@@ -2294,6 +2336,44 @@ mod tests {
             "one page is nine tenths of the list height"
         );
         assert_eq!(page_delta(around_row, false), (0.0, -270.0));
+    }
+
+    #[test]
+    fn a_list_publishes_its_rows_and_takes_a_row_number() {
+        let taken = Rc::new(RefCell::new(Vec::new()));
+        let seen = Rc::clone(&taken);
+        let bounds = HashMap::from_iter([(7, AccessibilityRect::new(0.0, 0.0, 400.0, 600.0))]);
+        let mut root = node(7, SemanticsRole::Layout, Vec::new(), Some(""), Vec::new());
+        root.vertical_scroll = Some(cranpose_ui::ScrollAxisRange::new(0.0, 1.0, false));
+        root.collection = Some(cranpose_ui::CollectionInfo {
+            rows: 500,
+            columns: 1,
+        });
+        root.scroll_to_index = Some(cranpose_ui::SemanticsScrollToIndex::new(move |index| {
+            seen.borrow_mut().push(index);
+            true
+        }));
+
+        let elements = project_semantics(&root, &bounds);
+        assert_eq!(elements.len(), 1);
+        assert!(elements[0].scroll_to_index);
+        assert_eq!(row_count(&elements[0]), 500, "the last row is 499");
+
+        assert!(scroll_to_index(&root, 7, 300));
+        assert_eq!(*taken.borrow(), vec![300]);
+        assert!(!scroll_to_index(&root, 99, 300), "no such list");
+    }
+
+    #[test]
+    fn a_plain_scroll_view_takes_no_row_number() {
+        let list = scroll_box(1, None, 300.0);
+
+        assert!(!list.scroll_to_index);
+        assert_eq!(
+            row_count(&list),
+            0,
+            "a container that answers no row number names no last row"
+        );
     }
 
     #[test]

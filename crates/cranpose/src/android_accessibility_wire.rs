@@ -43,7 +43,7 @@ pub(crate) fn encode_elements(
             let progress = element.progress;
             let scroll = element.vertical_scroll.or(element.horizontal_scroll);
             format!(
-                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                 id,
                 role,
                 (element.bounds.x * density).round() as i32,
@@ -82,6 +82,7 @@ pub(crate) fn encode_elements(
                 tristate(element.expanded),
                 escape(element.long_click_label.as_deref().unwrap_or("")),
                 i32::from(element.dismissable),
+                i32::from(element.scroll_to_index),
             )
         })
         .collect::<Vec<_>>()
@@ -180,7 +181,7 @@ mod tests {
         let records: Vec<_> = payload.split('\n').collect();
         assert_eq!(records.len(), 2);
         for record in &records {
-            assert_eq!(record.split('\t').count(), 38, "record: {record}");
+            assert_eq!(record.split('\t').count(), 39, "record: {record}");
         }
 
         let fields: Vec<_> = records[0].split('\t').collect();
@@ -507,6 +508,22 @@ mod tests {
             records[1].split('\t').nth(37),
             Some("0"),
             "a plain button says nothing about a way out"
+        );
+    }
+
+    #[test]
+    fn the_record_says_whether_a_list_takes_a_row_number() {
+        let mut list = save_button(8);
+        list.scroll_to_index = true;
+
+        let payload = encode_elements(&[list, save_button(9)], &[], 1.0);
+        let records: Vec<_> = payload.split('\n').collect();
+
+        assert_eq!(records[0].split('\t').nth(38), Some("1"));
+        assert_eq!(
+            records[1].split('\t').nth(38),
+            Some("0"),
+            "a plain button takes no row number"
         );
     }
 }

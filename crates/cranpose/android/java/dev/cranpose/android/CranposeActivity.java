@@ -714,6 +714,7 @@ public class CranposeActivity extends NativeActivity {
     private static native void nativeOnAccessibilityLongClick(int virtualViewId);
     private static native void nativeOnAccessibilityDismiss(int virtualViewId);
     private static native void nativeOnAccessibilityScroll(int virtualViewId, boolean forward);
+    private static native void nativeOnAccessibilityScrollToIndex(int virtualViewId, int index);
 
     private static native void nativeOnAccessibilityStateChanged(boolean enabled);
 
@@ -774,7 +775,7 @@ public class CranposeActivity extends NativeActivity {
     }
 
     /** Field count of one accessibility record; see android_accessibility_wire.rs. */
-    private static final int ACCESSIBILITY_FIELDS = 38;
+    private static final int ACCESSIBILITY_FIELDS = 39;
 
     /** Separator packing a node's custom action labels into one field. */
     private static final String ACCESSIBILITY_ACTION_SEPARATOR = String.valueOf((char) 0x1f);
@@ -813,7 +814,8 @@ public class CranposeActivity extends NativeActivity {
                         Integer.parseInt(fields[30]), Integer.parseInt(fields[31]),
                         unescapeAccessibility(fields[32]), unescapeAccessibility(fields[33]),
                         "1".equals(fields[34]), Integer.parseInt(fields[35]),
-                        unescapeAccessibility(fields[36]), "1".equals(fields[37])));
+                        unescapeAccessibility(fields[36]), "1".equals(fields[37]),
+                        "1".equals(fields[38])));
             } catch (RuntimeException ignored) {
                 // A malformed record must not make the host Activity inaccessible.
             }
@@ -885,6 +887,8 @@ public class CranposeActivity extends NativeActivity {
         final String longClickLabel;
         /** Whether the app said what this control does when a reader sends it away. */
         final boolean dismissable;
+        /** Whether a screen reader may ask this list for the row at an index. */
+        final boolean scrollToIndex;
 
         CranposeAccessibilityElement(int id, int role, Rect bounds, float centerX,
                 float centerY, boolean clickable, String label, String value,
@@ -895,7 +899,8 @@ public class CranposeActivity extends NativeActivity {
                 boolean canScrollForward, boolean canScrollBackward, int scrollParent,
                 int collectionRows, int collectionColumns, boolean changed, int itemRow,
                 int itemColumn, String paneTitle, String error, boolean password,
-                int expanded, String longClickLabel, boolean dismissable) {
+                int expanded, String longClickLabel, boolean dismissable,
+                boolean scrollToIndex) {
             this.id = id;
             this.role = role;
             this.bounds = bounds;
@@ -931,6 +936,7 @@ public class CranposeActivity extends NativeActivity {
             this.expanded = expanded;
             this.longClickLabel = longClickLabel;
             this.dismissable = dismissable;
+            this.scrollToIndex = scrollToIndex;
         }
 
         /**
@@ -1051,6 +1057,9 @@ public class CranposeActivity extends NativeActivity {
                 info.setScrollable(true);
                 if (element.canScrollForward) info.addAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD);
                 if (element.canScrollBackward) info.addAction(AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD);
+            }
+            if (element.scrollToIndex && Build.VERSION.SDK_INT >= 23) {
+                info.addAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_TO_POSITION);
             }
             if (element.collectionRows > 0 || element.collectionColumns > 0) {
                 info.setCollectionInfo(AccessibilityNodeInfo.CollectionInfo.obtain(
@@ -1187,6 +1196,14 @@ public class CranposeActivity extends NativeActivity {
                 nativeOnAccessibilitySetText(element.id, text == null ? "" : text.toString());
                 return true;
             }
+            if (Build.VERSION.SDK_INT >= 23 && element.scrollToIndex && arguments != null
+                    && action == AccessibilityNodeInfo.AccessibilityAction
+                            .ACTION_SCROLL_TO_POSITION.getId()) {
+                int row = rowArgument(arguments);
+                if (row < 0) return false;
+                nativeOnAccessibilityScrollToIndex(element.id, row);
+                return true;
+            }
             if (element.expanded >= 0 && (action == AccessibilityNodeInfo.ACTION_EXPAND
                     || action == AccessibilityNodeInfo.ACTION_COLLAPSE)) {
                 nativeOnAccessibilityExpand(element.id,
@@ -1203,6 +1220,18 @@ public class CranposeActivity extends NativeActivity {
                 return true;
             }
             return false;
+        }
+
+        /**
+         * The row a screen reader named through ACTION_SCROLL_TO_POSITION. A
+         * list that runs down the screen holds its rows in one column and a
+         * list that runs across holds them in one row, so whichever argument
+         * the service filled in is the row, and -1 means neither.
+         */
+        private static int rowArgument(Bundle arguments) {
+            int row = arguments.getInt(AccessibilityNodeInfo.ACTION_ARGUMENT_ROW_INT, -1);
+            if (row >= 0) return row;
+            return arguments.getInt(AccessibilityNodeInfo.ACTION_ARGUMENT_COLUMN_INT, -1);
         }
 
         private CranposeAccessibilityElement find(int id) {

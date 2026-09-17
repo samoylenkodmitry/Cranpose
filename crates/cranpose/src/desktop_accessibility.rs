@@ -7,7 +7,7 @@ use std::{
 
 use accesskit::{
     Action, ActionData, ActionHandler, ActionRequest, ActivationHandler, CustomAction,
-    DeactivationHandler, Invalid, Live, Node, NodeId, Rect, Role, Toggled, Tree, TreeId,
+    DeactivationHandler, Invalid, Live, Node, NodeId, Point, Rect, Role, Toggled, Tree, TreeId,
     TreeUpdate,
 };
 use cranpose_app_shell::AppShell;
@@ -64,6 +64,7 @@ pub(crate) struct DesktopAccessibilityBridge {
     pending_values: Vec<(NodeId, f32)>,
     pending_texts: Vec<(NodeId, String)>,
     pending_scrolls: Vec<(NodeId, bool)>,
+    pending_jumps: Vec<(NodeId, usize)>,
     pending_expansions: Vec<(NodeId, bool)>,
     previous: Vec<AccessibilityElement>,
     seen_revision: Option<u64>,
@@ -94,6 +95,7 @@ impl DesktopAccessibilityBridge {
             pending_values: Vec::new(),
             pending_texts: Vec::new(),
             pending_scrolls: Vec::new(),
+            pending_jumps: Vec::new(),
             pending_expansions: Vec::new(),
             previous: Vec::new(),
             seen_revision: None,
@@ -151,48 +153,53 @@ impl DesktopAccessibilityBridge {
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner()),
         );
-        let mut clicks = Vec::new();
-        for request in requests {
-            match request.action {
-                Action::Click => {
-                    if let Some(center) = self.centers.get(&request.target_node) {
-                        clicks.push(*center);
-                    }
-                }
-                Action::CustomAction => {
-                    if let Some(ActionData::CustomAction(index)) = request.data
-                        && index >= 0
-                    {
-                        self.pending_custom_actions
-                            .push((request.target_node, index as usize));
-                    }
-                }
-                Action::Focus => self.pending_focus.push(request.target_node),
-                Action::SetValue => match request.data {
-                    Some(ActionData::NumericValue(value)) => {
-                        self.pending_values
-                            .push((request.target_node, value as f32));
-                    }
-                    Some(ActionData::Value(text)) => {
-                        self.pending_texts
-                            .push((request.target_node, text.to_string()));
-                    }
-                    _ => {}
-                },
-                Action::Expand => self.pending_expansions.push((request.target_node, true)),
-                Action::Collapse => self.pending_expansions.push((request.target_node, false)),
-                Action::Increment => self.step_value(request.target_node, true),
-                Action::Decrement => self.step_value(request.target_node, false),
-                Action::ScrollDown | Action::ScrollRight => {
-                    self.pending_scrolls.push((request.target_node, true));
-                }
-                Action::ScrollUp | Action::ScrollLeft => {
-                    self.pending_scrolls.push((request.target_node, false));
-                }
-                _ => {}
-            }
+        requests
+            .into_iter()
+            .filter_map(|request| self.queue_request(request))
+            .collect()
+    }
+
+    /// Notes one screen reader request for the frame loop to run against the
+    /// live tree. A click is the exception: it answers the point on screen,
+    /// which the shell takes as a tap.
+    fn queue_request(&mut self, request: ActionRequest) -> Option<(f32, f32)> {
+        let target = request.target_node;
+        match request.action {
+            Action::Click => return self.centers.get(&target).copied(),
+            Action::Focus => self.pending_focus.push(target),
+            Action::Expand => self.pending_expansions.push((target, true)),
+            Action::Collapse => self.pending_expansions.push((target, false)),
+            Action::Increment => self.step_value(target, true),
+            Action::Decrement => self.step_value(target, false),
+            Action::ScrollDown | Action::ScrollRight => self.pending_scrolls.push((target, true)),
+            Action::ScrollUp | Action::ScrollLeft => self.pending_scrolls.push((target, false)),
+            _ => self.queue_request_with_data(request),
         }
-        clicks
+        None
+    }
+
+    /// The requests that carry a value of their own: which custom action a
+    /// reader picked, the number or the text it handed a control, and the row
+    /// it asked a list for.
+    fn queue_request_with_data(&mut self, request: ActionRequest) {
+        let target = request.target_node;
+        match (request.action, request.data) {
+            (Action::CustomAction, Some(ActionData::CustomAction(index))) if index >= 0 => {
+                self.pending_custom_actions.push((target, index as usize));
+            }
+            (Action::SetValue, Some(ActionData::NumericValue(value))) => {
+                self.pending_values.push((target, value as f32));
+            }
+            (Action::SetValue, Some(ActionData::Value(text))) => {
+                self.pending_texts.push((target, text.to_string()));
+            }
+            (Action::SetScrollOffset, Some(ActionData::SetScrollOffset(point))) => {
+                if let Some(index) = row_offset(&point) {
+                    self.pending_jumps.push((target, index));
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Queues the value one step up or down from the one an adjustable control
@@ -279,6 +286,22 @@ impl DesktopAccessibilityBridge {
             let node_id = element.node_id;
             moved |= accessibility::run_reader_action(shell, |root| {
                 accessibility::scroll_by(root, node_id, dx, dy)
+            });
+        }
+        moved | self.run_jump_requests(shell)
+    }
+
+    /// Puts the row a screen reader named by number in view. accesskit has no
+    /// scroll-to-index action, so the offset a reader sets on a list counts
+    /// rows. Answers whether a list moved.
+    pub(crate) fn run_jump_requests(&mut self, shell: &mut AppShell<WgpuRenderer>) -> bool {
+        let mut moved = false;
+        for (target, index) in std::mem::take(&mut self.pending_jumps) {
+            let Some(node_id) = self.node_id_for(target) else {
+                continue;
+            };
+            moved |= accessibility::run_reader_action(shell, |root| {
+                accessibility::scroll_to_index(root, node_id, index)
             });
         }
         moved
@@ -589,6 +612,41 @@ fn apply_actions(node: &mut Node, element: &AccessibilityElement) {
             node.add_action(Action::ScrollLeft);
         }
     }
+    apply_row_offset(node, element);
+}
+
+/// The rows a screen reader may ask a list for. accesskit 0.24.1 has no
+/// scroll-to-index action, so the list carries its rows as the scroll offset
+/// of the axis it runs along: the reader reads the range, sets an offset in
+/// rows, and the list puts that row at the top.
+fn apply_row_offset(node: &mut Node, element: &AccessibilityElement) {
+    let count = accessibility::row_count(element);
+    if count == 0 {
+        return;
+    }
+    let last = (count - 1) as f64;
+    let first_visible = element
+        .vertical_scroll
+        .or(element.horizontal_scroll)
+        .map_or(0.0, |range| f64::from(range.value).clamp(0.0, last));
+    if element.vertical_scroll.is_some() {
+        node.set_scroll_y_min(0.0);
+        node.set_scroll_y_max(last);
+        node.set_scroll_y(first_visible);
+    } else {
+        node.set_scroll_x_min(0.0);
+        node.set_scroll_x_max(last);
+        node.set_scroll_x(first_visible);
+    }
+    node.add_action(Action::SetScrollOffset);
+}
+
+/// The row a screen reader named through an accesskit scroll offset. The list
+/// publishes its rows on one axis and leaves the other at zero, so the larger
+/// of the two is the row the reader asked for.
+fn row_offset(point: &Point) -> Option<usize> {
+    let row = point.x.max(point.y);
+    (row.is_finite() && row >= 0.0).then(|| row.round() as usize)
 }
 
 /// The node a screen reader should sit on: the control the app focused, or the

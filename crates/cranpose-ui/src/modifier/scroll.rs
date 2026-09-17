@@ -1617,7 +1617,21 @@ pub(crate) fn lazy_scroll_semantics(
                 state.dispatch_scroll_delta(-delta).abs() > f32::EPSILON
             },
         ));
+        config.scroll_to_index = Some(cranpose_foundation::SemanticsScrollToIndex::new(
+            move |index| jump_to_row(&state, index),
+        ));
     }
+}
+
+/// Puts the row at `index` at the top of a lazy list for a screen reader that
+/// asked for it. A list with no rows, or an index past the last row, takes
+/// nothing and says so.
+fn jump_to_row(state: &LazyListState, index: usize) -> bool {
+    if index >= state.total_items_count() {
+        return false;
+    }
+    state.scroll_to_item(index, 0.0);
+    true
 }
 
 impl Modifier {

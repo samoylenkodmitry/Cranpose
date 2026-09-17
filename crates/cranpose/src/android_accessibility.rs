@@ -29,6 +29,7 @@ static SCROLL_REQUESTS: OnceLock<Mutex<Vec<(i32, bool)>>> = OnceLock::new();
 static EXPAND_REQUESTS: OnceLock<Mutex<Vec<(i32, bool)>>> = OnceLock::new();
 static LONG_CLICK_REQUESTS: OnceLock<Mutex<Vec<i32>>> = OnceLock::new();
 static DISMISS_REQUESTS: OnceLock<Mutex<Vec<i32>>> = OnceLock::new();
+static JUMP_REQUESTS: OnceLock<Mutex<Vec<(i32, usize)>>> = OnceLock::new();
 static LOOP_WAKER: Mutex<Option<android_activity::AndroidAppWaker>> = Mutex::new(None);
 static PLATFORM_ACCESSIBILITY_ENABLED: AtomicBool = AtomicBool::new(false);
 
@@ -96,6 +97,10 @@ fn long_click_requests() -> &'static Mutex<Vec<i32>> {
 
 fn dismiss_requests() -> &'static Mutex<Vec<i32>> {
     DISMISS_REQUESTS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn jump_requests() -> &'static Mutex<Vec<(i32, usize)>> {
+    JUMP_REQUESTS.get_or_init(|| Mutex::new(Vec::new()))
 }
 
 pub(crate) fn drain_activations() -> Vec<(f32, f32)> {
@@ -172,6 +177,16 @@ pub(crate) fn drain_long_click_requests() -> Vec<i32> {
 pub(crate) fn drain_dismiss_requests() -> Vec<i32> {
     std::mem::take(
         &mut *dismiss_requests()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()),
+    )
+}
+
+/// Rows TalkBack asked a list for by number, as virtual view ids and the row
+/// counted from zero.
+pub(crate) fn drain_jump_requests() -> Vec<(i32, usize)> {
+    std::mem::take(
+        &mut *jump_requests()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()),
     )
@@ -380,6 +395,27 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccess
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .push((virtual_id, forward));
+    wake_loop();
+}
+
+/// TalkBack asked a list for the row at a number, through Android's
+/// scroll-to-position action. The frame loop resolves the list against the
+/// live semantics tree and puts that row in view.
+#[doc(hidden)]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccessibilityScrollToIndex(
+    _env: EnvUnowned<'_>,
+    _class: JClass<'_>,
+    virtual_id: jint,
+    index: jint,
+) {
+    if index < 0 {
+        return;
+    }
+    jump_requests()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .push((virtual_id, index as usize));
     wake_loop();
 }
 

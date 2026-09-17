@@ -565,6 +565,16 @@ impl Modifier {
         self.semantics(move |config| config.dismiss = Some(action.clone()))
     }
 
+    /// Says what this list does when a screen reader asks for the row at an
+    /// index, so a reader reaches row 300 of a long list at once instead of
+    /// paging to it. The index counts rows from zero and the answer says
+    /// whether the list moved. `LazyColumn` and `LazyRow` declare it on their
+    /// own. Compose's `Modifier.semantics { scrollToIndex { … } }`.
+    pub fn scroll_to_index(self, action: impl Fn(usize) -> bool + 'static) -> Self {
+        let action = cranpose_foundation::SemanticsScrollToIndex::new(action);
+        self.semantics(move |config| config.scroll_to_index = Some(action.clone()))
+    }
+
     /// Moves this node in the order a screen reader visits the nodes beside
     /// it: a smaller number comes first, and a node left alone keeps the
     /// order the app laid it out in. A search field drawn last but meant to
