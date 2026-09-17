@@ -1253,6 +1253,25 @@ impl SemanticsConfiguration {
         self
     }
 
+    /// A screen reader offers to activate the control. Compose's `onClick`.
+    pub fn clickable(mut self) -> Self {
+        self.is_clickable = true;
+        self
+    }
+
+    /// Whether the control is on or off. Compose's `toggleableState`.
+    pub fn toggled(mut self, toggled: bool) -> Self {
+        self.toggled = Some(toggled);
+        self
+    }
+
+    /// Whether the control is the one picked out of a group. Compose's
+    /// `selected`.
+    pub fn selected(mut self, selected: bool) -> Self {
+        self.selected = Some(selected);
+        self
+    }
+
     /// What kind of control a screen reader reads this as. Compose's `Role`.
     pub fn role(mut self, role: SemanticsWidgetRole) -> Self {
         self.role = Some(role);

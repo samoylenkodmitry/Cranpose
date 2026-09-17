@@ -7,8 +7,8 @@ use cranpose_core::{MutableState, SideEffect, mutableStateOf, remember, remember
 use cranpose_foundation::PointerId;
 use cranpose_macros::composable;
 use cranpose_ui::{
-    Modifier, PointerEventKind, PointerInputScope, PressInteractionPress, SemanticsWidgetRole,
-    Size, rememberMutableInteractionSource,
+    Modifier, PointerEventKind, PointerInputScope, PressInteractionPress, SemanticsSpec,
+    SemanticsWidgetRole, Size, rememberMutableInteractionSource,
     text::{FontWeight, SpanStyle, TextStyle, TextUnit},
     widgets::{Box, BoxSpec, Column, ColumnSpec, PopupDismissableWhen, Row, RowSpec, Text},
 };
@@ -1650,6 +1650,21 @@ fn menu_header_row(
     });
 }
 
+/// What a screen reader reads for a menu row: its label, that it can be
+/// pressed, and whether it is the picked one when the menu carries checks.
+/// Without the last part a reader hears no difference between the picked row
+/// and the rest, because the check mark beside it is drawn, not spoken.
+fn menu_row_semantics(label: String, has_checks: bool, checked: bool) -> SemanticsSpec {
+    let spec = SemanticsSpec::new()
+        .content_description(label)
+        .role(SemanticsWidgetRole::Button)
+        .clickable();
+    match has_checks {
+        true => spec.toggled(checked),
+        false => spec,
+    }
+}
+
 #[allow(non_snake_case)]
 #[allow(clippy::too_many_arguments)]
 fn menu_item_row(
@@ -1682,14 +1697,7 @@ fn menu_item_row(
     let row = Modifier::empty()
         .fill_max_width()
         .report_window_rect(rect_sink)
-        .semantics(move |config| {
-            config.role = Some(SemanticsWidgetRole::Button);
-            config.is_clickable = true;
-            config.content_description = Some(row_label.clone());
-            if has_checks {
-                config.toggled = Some(checked);
-            }
-        })
+        .semantics_spec(menu_row_semantics(row_label, has_checks, checked))
         .pointer_input(index, {
             let on_item = Rc::clone(&on_item);
             let on_dismiss = Rc::clone(&on_dismiss);
