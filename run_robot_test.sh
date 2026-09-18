@@ -347,11 +347,6 @@ robot_example_needs_real_window() {
     return 1
 }
 
-# Whether each example can be given a display server of its own.
-robot_display_isolation_available() {
-    [ -n "${ROBOT_XVFB_SCREEN:-}" ] && command -v xvfb-run >/dev/null 2>&1
-}
-
 # Whether the host can currently present a frame to a real, awake display.
 #
 # A DPMS-blanked panel leaves DISPLAY set and the X connection alive while
@@ -366,13 +361,6 @@ robot_display_isolation_available() {
 # extension, so `xset q` there prints no "Monitor is ..." line at all and
 # this probe reports presentable — CI behavior is unchanged by this check.
 robot_display_can_present() {
-    # ROBOT_XVFB_SCREEN means every example gets its own fresh X server, so
-    # there is a presentable display whether or not this shell is sitting in
-    # front of one. A virtual server has no DPMS extension and no monitor to
-    # blank, which is what the rest of this probe is for.
-    if robot_display_isolation_available; then
-        return 0
-    fi
     if [ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
         return 1
     fi
@@ -521,11 +509,11 @@ SERIAL_EXAMPLES=()
 for example in "${EXAMPLES[@]}"; do
     if robot_example_is_serial "$example"; then
         SERIAL_EXAMPLES+=("$example")
-    elif robot_example_needs_real_window "$example" \
-        && ! robot_display_isolation_available; then
-        # A windowed example is parallel-safe only where the suite can hand it
-        # its own display. On a developer's desktop there is one display and it
-        # is the developer's, so these run one at a time there.
+    elif robot_example_needs_real_window "$example"; then
+        # The suite has one display and a display has one pointer, one focus
+        # and one root window. Two examples that draw into real windows would
+        # read each other's input and screenshot each other's windows, so
+        # these run one at a time whatever else is true of them.
         SERIAL_EXAMPLES+=("$example")
     else
         PARALLEL_EXAMPLES+=("$example")
@@ -923,23 +911,12 @@ run_test() {
         # (the exclusive phase closed it), but closing both here as well
         # means no lock fd survives into this child even if that ever
         # changes, and even if the exclusive holder below dies mid-run.
-        # One X server per example, not one per suite. Two robot examples
-        # sharing a display share its pointer, its focus and its root window,
-        # so a drag in one lands in the other and a screenshot catches a
-        # neighbour's window -- which is why the suite could only ever run one
-        # at a time. `xvfb-run -a` picks a free display number under its own
-        # lock, so any number of these may start at once.
-        local display_prefix=()
-        if [ -n "${ROBOT_XVFB_SCREEN:-}" ] && command -v xvfb-run >/dev/null 2>&1; then
-            display_prefix=(xvfb-run -a -s "-screen 0 $ROBOT_XVFB_SCREEN")
-        fi
-
         if command -v timeout >/dev/null 2>&1; then
-            env -i "${robot_env_args[@]}" timeout --kill-after=15s "${timeout_secs}s" ${display_prefix[@]+"${display_prefix[@]}"} "$example_bin" > "$attempt_output" 2>&1 8>&- 9>&-
+            env -i "${robot_env_args[@]}" timeout --kill-after=15s "${timeout_secs}s" "$example_bin" > "$attempt_output" 2>&1 8>&- 9>&-
             local exit_code=$?
         else
             run_with_portable_timeout "$timeout_secs" 15 "$attempt_output" \
-                env -i "${robot_env_args[@]}" ${display_prefix[@]+"${display_prefix[@]}"} "$example_bin" 8>&- 9>&-
+                env -i "${robot_env_args[@]}" "$example_bin" 8>&- 9>&-
             local exit_code=$?
         fi
 

@@ -498,7 +498,7 @@ test-android-surface-contract:
 
 # CI's GPU half of the robot suite.
 robot-gpu:
-    ROBOT_XVFB_SCREEN=1280x800x24 ./run_robot_test.sh \
+    xvfb-run -a -s "-screen 0 1280x800x24" ./run_robot_test.sh \
       --skip robot_underline_screenshot \
       --skip robot_text_strikeout_presented \
       --skip robot_leetcodedaily_full_layout_scroll_stability \
@@ -506,8 +506,8 @@ robot-gpu:
 
 # CI's software-present half: exactly the four captures excluded above.
 robot-captures:
-    WGPU_BACKEND=gl LIBGL_ALWAYS_SOFTWARE=1 ROBOT_XVFB_SCREEN=1600x1200x24 \
-      ./run_robot_test.sh \
+    WGPU_BACKEND=gl LIBGL_ALWAYS_SOFTWARE=1 \
+      xvfb-run -a -s "-screen 0 1600x1200x24" ./run_robot_test.sh \
       --example robot_underline_screenshot \
       --example robot_text_strikeout_presented \
       --example robot_leetcodedaily_full_layout_scroll_stability \
