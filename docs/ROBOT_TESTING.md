@@ -117,6 +117,21 @@ Capture, button, actions: Take the photo
 Milk 3.40, list item, 1 of 12
 ```
 
+#### `audit_accessibility() -> Result<Vec<String>, String>`
+The issues `cranpose_testing::audit_accessibility` finds on the screen the app
+shows, one line each: what a reader user hits and what fixes it. Empty when
+the screen passes. A suite that walks every screen of an app calls it on each
+one and keeps a list of the issues it leaves as they are, so a new issue
+fails the run and the list only shrinks.
+
+```rust
+let issues = robot.audit_accessibility()?;
+assert!(issues.is_empty(), "{}", issues.join("\n"));
+```
+
+#### `assert_accessible()`
+Panics with every issue `audit_accessibility` finds, or returns.
+
 #### `find_by_text(elements, text) -> Option<&SemanticElement>`
 Find any element containing the specified text (recursive search).
 

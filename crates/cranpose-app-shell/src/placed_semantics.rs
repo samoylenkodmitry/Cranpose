@@ -43,7 +43,6 @@
 
 use std::collections::HashMap;
 
-use cranpose_app_shell::AppShell;
 use cranpose_core::{MemoryApplier, NodeError, NodeId};
 use cranpose_render_common::{
     Renderer,
@@ -56,6 +55,8 @@ use cranpose_ui::{
     LayoutBox, LayoutEngine, LayoutTree, Rect, SemanticsAction, SemanticsNode, SemanticsRole,
     SemanticsWidgetRole, Size, build_layout_tree_from_applier, build_semantics_tree_from_applier,
 };
+
+use crate::AppShell;
 
 /// One semantics node, with the geometry it was placed and drawn at.
 ///
@@ -151,7 +152,7 @@ impl PlacedSemanticsNode {
 ///
 /// The applier must already be carrying a runtime handle
 /// (`MemoryApplier::set_runtime_handle`) — a subcomposing widget cannot be
-/// measured without one. [`crate::testing::ComposeTestRule::placed_semantics`]
+/// measured without one. `ComposeTestRule::placed_semantics` in cranpose-testing
 /// does that part; this is for a caller driving a `TestComposition` by hand.
 ///
 /// `None` means the composition placed nothing at all, which for a root that

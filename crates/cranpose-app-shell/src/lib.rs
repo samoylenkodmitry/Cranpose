@@ -89,6 +89,10 @@ use cranpose_core::{
     debug_recompose_scope_registry_stats,
 };
 pub use cranpose_ui::{ImeEditorState, PlatformTextInputHandler};
+#[cfg(any(test, feature = "test-support"))]
+pub mod accessibility_audit;
+#[cfg(any(test, feature = "test-support"))]
+pub mod placed_semantics;
 
 /// How the platform should vote the display's frame rate on behalf of the app.
 ///

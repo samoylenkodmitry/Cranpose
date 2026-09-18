@@ -756,6 +756,8 @@ a placed semantics tree and fails the test with every issue and what fixes
 it. `ComposeTestRule::assert_accessible(size)` runs it on composed content,
 `RobotTestRule::assert_accessible()` on what a headless shell shows, and
 `audit_accessibility` returns the list for a test that wants to look at it.
+Over the external robot, `robot.audit_accessibility()` returns the same list
+for the screen a running app shows, and `robot.assert_accessible()` fails on it.
 The issues:
 
 | Issue | What a reader user hits | The fix |
