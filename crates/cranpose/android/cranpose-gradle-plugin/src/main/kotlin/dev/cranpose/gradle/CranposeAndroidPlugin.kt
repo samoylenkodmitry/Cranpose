@@ -71,6 +71,68 @@ class CranposeAndroidPlugin : Plugin<Project> {
          * to prove the application assembles asks for none of them.
          */
         const val RELEASE_ABIS_PROPERTY = "cranposeReleaseAbis"
+
+        val KNOWN_SERVICES = setOf(
+            "background",
+            "billing",
+            "camera",
+            "haptics",
+            "media",
+            "network",
+            "notifications",
+            "overlay",
+            "update",
+        )
+
+        /**
+         * Extra Java source directories a service contributes, relative to
+         * `androidRoot()`. Most services are manifest-only; `billing` also
+         * carries `CranposeBilling`, which needs the Play Billing library and
+         * so lives outside the base `java/` every application compiles.
+         */
+        val SERVICE_JAVA_SOURCE = mapOf(
+            "billing" to "java-billing",
+        )
+
+        /** Third-party dependencies a service needs beyond the framework's own. */
+        val SERVICE_DEPENDENCIES = mapOf(
+            "billing" to listOf("com.android.billingclient:billing:9.1.0"),
+        )
+
+        /**
+         * The permissions each service needs to work, which the application
+         * declares in its own manifest.
+         *
+         * The framework declares none of them. A permission is a line in the
+         * store listing and a question to the person holding the phone, so it
+         * belongs to the application that shows it, written where anyone
+         * reading that application can see it. What the framework does instead
+         * is refuse to build when a service is used and its permission is not
+         * there, so the code path does not fail silently on a device.
+         */
+        val SERVICE_PERMISSIONS = mapOf(
+            "background" to listOf(
+                "android.permission.FOREGROUND_SERVICE",
+                "android.permission.FOREGROUND_SERVICE_DATA_SYNC",
+            ),
+            "billing" to listOf("com.android.vending.BILLING"),
+            "camera" to listOf("android.permission.CAMERA"),
+            "haptics" to listOf("android.permission.VIBRATE"),
+            "media" to listOf(
+                "android.permission.FOREGROUND_SERVICE",
+                "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
+            ),
+            "network" to listOf(
+                "android.permission.INTERNET",
+                "android.permission.ACCESS_NETWORK_STATE",
+            ),
+            "notifications" to listOf("android.permission.POST_NOTIFICATIONS"),
+            "overlay" to listOf("android.permission.SYSTEM_ALERT_WINDOW"),
+            "update" to listOf("android.permission.REQUEST_INSTALL_PACKAGES"),
+        )
+
+        /** Written by this plugin's build, relative to this class's package. */
+        const val ANDROID_ROOT_RESOURCE = "android-root.txt"
     }
 
     private fun applyDefaults(project: Project, cranpose: CranposeExtension) {
@@ -549,69 +611,5 @@ class CranposeAndroidPlugin : Plugin<Project> {
                     "Install it with `cargo install cargo-ndk`."
             )
         }
-    }
-
-    private companion object {
-        val KNOWN_SERVICES = setOf(
-            "background",
-            "billing",
-            "camera",
-            "haptics",
-            "media",
-            "network",
-            "notifications",
-            "overlay",
-            "update",
-        )
-
-        /**
-         * Extra Java source directories a service contributes, relative to
-         * `androidRoot()`. Most services are manifest-only; `billing` also
-         * carries `CranposeBilling`, which needs the Play Billing library and
-         * so lives outside the base `java/` every application compiles.
-         */
-        val SERVICE_JAVA_SOURCE = mapOf(
-            "billing" to "java-billing",
-        )
-
-        /** Third-party dependencies a service needs beyond the framework's own. */
-        val SERVICE_DEPENDENCIES = mapOf(
-            "billing" to listOf("com.android.billingclient:billing:9.1.0"),
-        )
-
-        /**
-         * The permissions each service needs to work, which the application
-         * declares in its own manifest.
-         *
-         * The framework declares none of them. A permission is a line in the
-         * store listing and a question to the person holding the phone, so it
-         * belongs to the application that shows it, written where anyone
-         * reading that application can see it. What the framework does instead
-         * is refuse to build when a service is used and its permission is not
-         * there, so the code path does not fail silently on a device.
-         */
-        val SERVICE_PERMISSIONS = mapOf(
-            "background" to listOf(
-                "android.permission.FOREGROUND_SERVICE",
-                "android.permission.FOREGROUND_SERVICE_DATA_SYNC",
-            ),
-            "billing" to listOf("com.android.vending.BILLING"),
-            "camera" to listOf("android.permission.CAMERA"),
-            "haptics" to listOf("android.permission.VIBRATE"),
-            "media" to listOf(
-                "android.permission.FOREGROUND_SERVICE",
-                "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
-            ),
-            "network" to listOf(
-                "android.permission.INTERNET",
-                "android.permission.ACCESS_NETWORK_STATE",
-            ),
-            "notifications" to listOf("android.permission.POST_NOTIFICATIONS"),
-            "overlay" to listOf("android.permission.SYSTEM_ALERT_WINDOW"),
-            "update" to listOf("android.permission.REQUEST_INSTALL_PACKAGES"),
-        )
-
-        /** Written by this plugin's build, relative to this class's package. */
-        const val ANDROID_ROOT_RESOURCE = "android-root.txt"
     }
 }
