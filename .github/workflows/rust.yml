@@ -5,6 +5,13 @@ name: Rust
 # heads before allocating a runner; same-repository pull requests remain safe.
 # The robot suite lives in heavy-selfhosted.yml where it runs on the real GPU.
 #
+# The mac work is three jobs, cheapest first. `lint` answers in about a
+# minute and is what a typo, a stale version or an unformatted file comes
+# back as; `tests` and `clippy` are the long ones. Splitting them is what
+# makes a single failure re-runnable on its own -- GitHub re-runs jobs, not
+# steps, so one job carrying every gate meant a one-line fix at the end
+# re-ran everything before it.
+#
 # `architecture budgets` and `wasm build` both draw on the heavy pool, so they
 # short-circuit on a prose-only diff the same way the heavy workflow's jobs do.
 # `checks` never does, and must not: `just typos` spell-checks docs/ and every
@@ -28,41 +35,17 @@ env:
   MACOSX_DEPLOYMENT_TARGET: "12.0"
 
 jobs:
-  checks:
-    name: fmt + tests + clippy (mac)
+  lint:
+    name: lint + gates (mac)
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, macOS, ARM64]
-    # Carries what were four separate mac jobs. The fleet has one online macOS
-    # runner, so those never ran in parallel anyway -- they queued.
-    timeout-minutes: 75
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
-      - name: Provision PATH and sccache
+      - name: Provision toolchain
         id: provision
-        run: |
-          # Both, and in this order. `GITHUB_PATH` only reaches LATER steps,
-          # and the `cargo install` on the next line runs in THIS one -- so on
-          # a self-hosted runner whose service PATH does not already carry
-          # `~/.cargo/bin` the step dies with `cargo: command not found` and
-          # exit 127, having "provisioned" a PATH it never used itself.
-          # Resolve the account's real home rather than trusting $HOME:
-          # actions/checkout temporarily overrides HOME, and a step that runs
-          # while it is overridden prepends a .cargo/bin that does not exist.
-          # That is why the sccache line below survived for so long -- sccache
-          # was already on the runner's own PATH, so nothing needed `cargo`
-          # until another tool did, and then it failed with exit 127.
-          real_home="$(eval echo "~$(id -un)")"
-          export PATH="$real_home/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
-          echo "$real_home/.cargo/bin" >> "$GITHUB_PATH"
-          command -v cargo >/dev/null || {
-            echo "cargo not found. HOME=$HOME real_home=$real_home PATH=$PATH" >&2
-            exit 1
-          }
-          # CI runs the same recipes a developer runs, so a gate cannot mean
-          # one thing locally and another thing here.
-          command -v just >/dev/null || cargo install just --locked
-          scripts/ci/start_sccache.sh
+        run: scripts/ci/provision_toolchain.sh
 
       - name: Check formatting
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
@@ -76,6 +59,14 @@ jobs:
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
         run: just typos
 
+      - name: Check cyclomatic complexity of changed functions
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
+        run: just complexity-gate
+
+      - name: Check for duplicated code in the diff
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
+        run: just duplication-gate
+
       - name: Test the quality gates' diff-scoping logic
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
         run: just test-quality-gates
@@ -88,10 +79,13 @@ jobs:
 
       - name: Check robot test discovery
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
-        # The predicate the robot suite discovers its examples by. It runs in
-        # this job, not the robot suite's own, so a bad predicate is pinned
+        # The predicate the robot suite discovers its examples by, pinned
         # before the heavy job ever spends a build on it.
         run: just test-robot-discovery
+
+      - name: Check the robot suite's two halves still partition it
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
+        run: just test-robot-suite-partition
 
       - name: Test Android robot result validation
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
@@ -105,21 +99,45 @@ jobs:
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
         run: just test-ci-gate-reachability
 
-      - name: Check the robot suite's two halves still partition it
-        if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
-        run: just test-robot-suite-partition
+  tests:
+    name: tests (mac)
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, macOS, ARM64]
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
-      - name: Check cyclomatic complexity of changed functions
-        if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
-        run: just complexity-gate
-
-      - name: Check for duplicated code in the diff
-        if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
-        run: just duplication-gate
+      - name: Provision toolchain
+        id: provision
+        run: scripts/ci/provision_toolchain.sh
 
       - name: Run workspace tests
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
         run: just test
+
+      - name: Run feature permutations the default build skips
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
+        run: just test-features
+
+      - name: Run the deterministic slot-table model check
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
+        run: just test-property
+
+      - name: Run the slot-table Criterion smoke
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
+        run: just bench-smoke
+
+  clippy:
+    name: clippy + docs (mac)
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, macOS, ARM64]
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Provision toolchain
+        id: provision
+        run: scripts/ci/provision_toolchain.sh
 
       - name: Run workspace clippy
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
@@ -146,18 +164,6 @@ jobs:
         # A broken intra-doc link is a broken published page.
         run: just doc
 
-      - name: Run feature permutations the default build skips
-        if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
-        run: just test-features
-
-      - name: Run the deterministic slot-table model check
-        if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
-        run: just test-property
-
-      - name: Run the slot-table Criterion smoke
-        if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
-        run: just bench-smoke
-
   architecture-budget:
     name: architecture budgets (linux)
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
@@ -175,31 +181,9 @@ jobs:
         # Why a short-circuit and not paths-ignore: see the header.
         run: scripts/ci/docs_only_change.sh
 
-      - name: Provision PATH and sccache
+      - name: Provision toolchain
         if: steps.changes.outputs.docs_only != 'true'
-        run: |
-          # Both, and in this order. `GITHUB_PATH` only reaches LATER steps,
-          # and the `cargo install` on the next line runs in THIS one -- so on
-          # a self-hosted runner whose service PATH does not already carry
-          # `~/.cargo/bin` the step dies with `cargo: command not found` and
-          # exit 127, having "provisioned" a PATH it never used itself.
-          # Resolve the account's real home rather than trusting $HOME:
-          # actions/checkout temporarily overrides HOME, and a step that runs
-          # while it is overridden prepends a .cargo/bin that does not exist.
-          # That is why the sccache line below survived for so long -- sccache
-          # was already on the runner's own PATH, so nothing needed `cargo`
-          # until another tool did, and then it failed with exit 127.
-          real_home="$(eval echo "~$(id -un)")"
-          export PATH="$real_home/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
-          echo "$real_home/.cargo/bin" >> "$GITHUB_PATH"
-          command -v cargo >/dev/null || {
-            echo "cargo not found. HOME=$HOME real_home=$real_home PATH=$PATH" >&2
-            exit 1
-          }
-          # CI runs the same recipes a developer runs, so a gate cannot mean
-          # one thing locally and another thing here.
-          command -v just >/dev/null || cargo install just --locked
-          scripts/ci/start_sccache.sh
+        run: scripts/ci/provision_toolchain.sh
 
       - name: Run the host capacity lock suite
         if: steps.changes.outputs.docs_only != 'true'
@@ -236,32 +220,11 @@ jobs:
         # Why a short-circuit and not paths-ignore: see the header.
         run: scripts/ci/docs_only_change.sh
 
-      - name: Provision PATH and sccache
+      - name: Provision toolchain
         id: provision
         if: steps.changes.outputs.docs_only != 'true'
         run: |
-          # Both, and in this order. `GITHUB_PATH` only reaches LATER steps,
-          # and the `cargo install` on the next line runs in THIS one -- so on
-          # a self-hosted runner whose service PATH does not already carry
-          # `~/.cargo/bin` the step dies with `cargo: command not found` and
-          # exit 127, having "provisioned" a PATH it never used itself.
-          # Resolve the account's real home rather than trusting $HOME:
-          # actions/checkout temporarily overrides HOME, and a step that runs
-          # while it is overridden prepends a .cargo/bin that does not exist.
-          # That is why the sccache line below survived for so long -- sccache
-          # was already on the runner's own PATH, so nothing needed `cargo`
-          # until another tool did, and then it failed with exit 127.
-          real_home="$(eval echo "~$(id -un)")"
-          export PATH="$real_home/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
-          echo "$real_home/.cargo/bin" >> "$GITHUB_PATH"
-          command -v cargo >/dev/null || {
-            echo "cargo not found. HOME=$HOME real_home=$real_home PATH=$PATH" >&2
-            exit 1
-          }
-          # CI runs the same recipes a developer runs, so a gate cannot mean
-          # one thing locally and another thing here.
-          command -v just >/dev/null || cargo install just --locked
-          scripts/ci/start_sccache.sh
+          scripts/ci/provision_toolchain.sh
           rustup target add wasm32-unknown-unknown
           command -v wasm-pack >/dev/null || cargo install wasm-pack --version 0.13.1 --locked
           # wasm-pack fetches its own binaryen when the host has none, so a
