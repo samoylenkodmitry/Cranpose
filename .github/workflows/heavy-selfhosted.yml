@@ -5,10 +5,13 @@ name: heavy (self-hosted)
 # events only ever come from the owner's branches — self-hosted execution
 # is safe for every trigger.
 #
-# These are the most expensive jobs on the board and the two Linux runners
-# that carry [self-hosted, Linux, cranpose-heavy] are the whole pool the
-# robot suite can use, so a prose-only pull request that occupies them
-# delays a release. Every job here therefore checks the diff first and
+# The robot suite is the most expensive job on the board, and the two Linux
+# runners that carry [self-hosted, Linux, cranpose-heavy] are the whole pool
+# it can use, so a prose-only pull request that occupies them delays a
+# release. Both of its halves run in ONE job: they take the same exclusive
+# host lock and each produces the load the other's quiet guard waits out, so
+# as separate jobs they spent minutes blocking each other and occupied the
+# entire Linux pool doing it. Every job here therefore checks the diff first and
 # short-circuits to success on one, via scripts/ci/docs_only_change.sh.
 #
 # Deliberately not `paths-ignore`. A trigger filter stops the check from
@@ -34,8 +37,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  robot-e2e-gpu:
-    name: robot e2e (self-hosted GPU)
+  robot-linux:
+    name: robot suite (self-hosted Linux)
     # X11 suite: Linux runners only — the macOS boxes serve the Android
     # builds. The workspace persists between runs on a self-hosted runner,
     # so the robot-profile target stays warm.
@@ -86,78 +89,19 @@ jobs:
       - name: Run the robot suite's parallel half (pull request)
         if: github.event_name == 'pull_request' && steps.changes.outputs.docs_only != 'true'
         # A pull request waits for the examples that assert on pixels and
-        # structure; they all run at once, so the whole half costs about a
-        # minute. The examples that measure time cannot run beside anything,
-        # including each other, so a pull request cannot afford them and the
-        # step below runs them on main and nightly instead.
-        run: just robot-gpu-fast
+        # structure; they all run at once, so both halves together cost about
+        # two minutes. The examples that measure time cannot run beside
+        # anything, including each other, so a pull request cannot afford them
+        # and the step below runs them on main and nightly instead.
+        run: just robot-linux-fast
 
-      - name: Run the whole robot suite on the GPU
+      - name: Run the whole robot suite
         if: github.event_name != 'pull_request' && steps.changes.outputs.docs_only != 'true'
-        # The suite relaxes the environment-sensitive frame-rate assertions
-        # itself; the Vulkan ICD here still selects the real GPU. The three
-        # external-framebuffer capture tests run in robot-capture-software
-        # below: a GPU swapchain under Xvfb never lands pixels in the X
-        # server's buffer, so they can only read their screenshots on
-        # software present.
-        #
-        # This and robot-capture-software both drive the same GPU and X
-        # server. Two Linux runners can now pick either job up, so a
-        # host-level lock serialises the two robot jobs against each other
-        # without serialising anything else in the fleet — see
-        # scripts/ci/with_host_lock.sh.
-        run: just robot-gpu
+        run: just robot-linux
 
       - name: sccache stats
         if: always() && steps.changes.outputs.docs_only != 'true'
         run: '"$RUSTC_WRAPPER" --show-stats || true'
-
-  robot-capture-software:
-    name: robot external captures (software present)
-    # The external-framebuffer trio reads its pixels from the X server's
-    # buffer, which only software present fills under Xvfb — the GL
-    # backend on llvmpipe is the fleet's cloud-equivalent path.
-    runs-on: [self-hosted, Linux, cranpose-heavy]
-    timeout-minutes: ${{ github.event_name == 'pull_request' && 20 || 45 }}
-    env:
-      SCCACHE_CACHE_SIZE: 40G
-      CARGO_INCREMENTAL: "0"
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          # Both parents of the merge commit, for the diff below.
-          fetch-depth: 2
-
-      - name: Detect a docs-only change
-        id: changes
-        # Why a short-circuit and not paths-ignore: see the header.
-        run: scripts/ci/docs_only_change.sh
-
-      - name: Configure machine-local knobs
-        if: steps.changes.outputs.docs_only != 'true'
-        env:
-          RUNNER_NAME: ${{ runner.name }}
-        run: |
-          if [[ "$RUNNER_NAME" == samarch-1-cranpose* ]]; then
-            # See robot-e2e-gpu above: match the host's runner-name prefix,
-            # not one runner's exact name.
-            echo "CRANPOSE_HOST_MAX_TEMP_C=97" >> "$GITHUB_ENV"
-            echo "CRANPOSE_HOST_RESUME_TEMP_C=93" >> "$GITHUB_ENV"
-            echo "SCCACHE_DIR=/home/s/ci-cache/cranpose/sccache" >> "$GITHUB_ENV"
-          fi
-          echo "$(eval echo "~$(id -un)")/.cargo/bin" >> "$GITHUB_PATH"
-
-      - name: Start sccache
-        if: steps.changes.outputs.docs_only != 'true'
-        run: |
-          command -v just >/dev/null || cargo install just --locked
-          scripts/ci/start_sccache.sh
-
-      - name: Run the external capture trio on software present
-        if: steps.changes.outputs.docs_only != 'true'
-        # See robot-e2e-gpu above: this suite and that one share a
-        # host-level lock so they never run at once on the same box.
-        run: just robot-captures
 
   ios-build:
     name: iOS build (self-hosted)
