@@ -2,8 +2,7 @@
 
 #![allow(non_snake_case)]
 
-pub mod accessibility_audit;
-pub mod placed_semantics;
+pub use cranpose_app_shell::{accessibility_audit, placed_semantics};
 pub mod robot;
 pub mod robot_assertions;
 #[cfg(feature = "desktop-robot")]
@@ -11,8 +10,8 @@ pub mod robot_helpers;
 pub mod testing;
 
 pub use accessibility_audit::{
-    AccessibilityIssue, AccessibilityIssueKind, MINIMUM_TARGET_SIZE, assert_accessible,
-    audit_accessibility, spoken_name,
+    AccessibilityIssue, AccessibilityIssueKind, KnownIssue, MINIMUM_TARGET_SIZE, assert_accessible,
+    audit_accessibility, audit_changes, spoken_name,
 };
 pub use placed_semantics::{
     PlacedSemanticsNode, placed_semantics_from_applier, placed_semantics_from_shell,
@@ -33,7 +32,8 @@ pub mod prelude {
     pub use crate::robot_helpers::*;
     pub use crate::{
         accessibility_audit::{
-            AccessibilityIssue, AccessibilityIssueKind, assert_accessible, audit_accessibility,
+            AccessibilityIssue, AccessibilityIssueKind, KnownIssue, assert_accessible,
+            audit_accessibility, audit_changes,
         },
         placed_semantics::{
             PlacedSemanticsNode, placed_semantics_from_applier, placed_semantics_from_shell,

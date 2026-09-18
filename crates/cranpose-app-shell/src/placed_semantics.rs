@@ -43,7 +43,6 @@
 
 use std::collections::HashMap;
 
-use cranpose_app_shell::AppShell;
 use cranpose_core::{MemoryApplier, NodeError, NodeId};
 use cranpose_render_common::{
     Renderer,
@@ -56,6 +55,8 @@ use cranpose_ui::{
     LayoutBox, LayoutEngine, LayoutTree, Rect, SemanticsAction, SemanticsNode, SemanticsRole,
     SemanticsWidgetRole, Size, build_layout_tree_from_applier, build_semantics_tree_from_applier,
 };
+
+use crate::AppShell;
 
 /// One semantics node, with the geometry it was placed and drawn at.
 ///
@@ -92,6 +93,10 @@ pub struct PlacedSemanticsNode {
     pub pane_title: Option<String>,
     /// Where the app moved the node in the reading order; 0 leaves it be.
     pub traversal_index: f32,
+    /// The place of a row among the rows of its list, counted from 1, when
+    /// the parent says it is a collection. A reader speaks it, so two rows
+    /// with one name are told apart.
+    pub list_position: Option<usize>,
     /// The box the measure pass gave this node, in window coordinates.
     pub layout_bounds: Rect,
     /// The box the renderer draws and the hit test inverts, ancestor graphics
@@ -151,7 +156,7 @@ impl PlacedSemanticsNode {
 ///
 /// The applier must already be carrying a runtime handle
 /// (`MemoryApplier::set_runtime_handle`) — a subcomposing widget cannot be
-/// measured without one. [`crate::testing::ComposeTestRule::placed_semantics`]
+/// measured without one. `ComposeTestRule::placed_semantics` in cranpose-testing
 /// does that part; this is for a caller driving a `TestComposition` by hand.
 ///
 /// `None` means the composition placed nothing at all, which for a root that
@@ -212,6 +217,18 @@ impl HitGraphSink for TouchBoundsSink<'_> {
     }
 }
 
+/// Gives a row and everything inside it the place of the row, so that two
+/// rows with one name, and the controls inside them, are apart. A list inside
+/// a row keeps the places it gave its own rows.
+pub(crate) fn place_row(row: &mut PlacedSemanticsNode, position: usize) {
+    if row.list_position.is_some() {
+        return;
+    }
+    row.list_position = Some(position);
+    for child in &mut row.children {
+        place_row(child, position);
+    }
+}
 fn join(
     node: &SemanticsNode,
     layout_bounds: &HashMap<NodeId, Rect>,
@@ -228,6 +245,11 @@ fn join(
     let mut children = Vec::with_capacity(node.children.len());
     for child in &node.children {
         children.push(join(child, layout_bounds, touch_bounds)?);
+    }
+    if node.collection.is_some() {
+        for (child, position) in children.iter_mut().zip(1..) {
+            place_row(child, position);
+        }
     }
     Ok(PlacedSemanticsNode {
         node_id: node.node_id,
@@ -251,6 +273,7 @@ fn join(
         hidden: node.hidden,
         pane_title: node.pane_title.clone(),
         traversal_index: node.traversal_index,
+        list_position: None,
         layout_bounds: bounds,
         touch_bounds: touch_bounds.get(&node.node_id).copied(),
         children,

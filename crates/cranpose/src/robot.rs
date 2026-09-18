@@ -204,6 +204,7 @@ pub(crate) enum RobotCommand {
     WaitForPresentFrame,
     GetSemantics,
     GetSpokenTree,
+    AuditAccessibility,
     FindText {
         text: String,
         match_kind: SemanticTextMatchKind,
@@ -254,6 +255,7 @@ pub(crate) enum RobotResponse {
     Ok,
     Semantics(Vec<SemanticElement>),
     SpokenTree(String),
+    AccessibilityIssues(Vec<String>),
     SemanticQuery(Option<SemanticQueryResult>),
     Screenshot(RobotScreenshot),
     Screenshots(Vec<RobotScreenshot>),
@@ -760,6 +762,34 @@ impl Robot {
             RobotResponse::SpokenTree(tree) => Some(tree),
             _ => None,
         })
+    }
+
+    /// The issues the accessibility audit of cranpose-testing finds on the
+    /// screen the app shows, one line each: what a reader user hits and what
+    /// fixes it. Empty when the screen passes. A suite that walks every
+    /// screen of an app calls this on each one and keeps the issues it
+    /// leaves as they are in a list that only shrinks.
+    pub fn audit_accessibility(&self) -> Result<Vec<String>, String> {
+        self.tx
+            .send(RobotCommand::AuditAccessibility)
+            .map_err(|e| format!("Failed to send audit_accessibility: {e}"))?;
+        self.recv_response(|response| match response {
+            RobotResponse::AccessibilityIssues(issues) => Some(issues),
+            _ => None,
+        })
+    }
+
+    /// Panics with every issue [`audit_accessibility`](Self::audit_accessibility)
+    /// finds, or returns.
+    pub fn assert_accessible(&self) {
+        let issues = self
+            .audit_accessibility()
+            .unwrap_or_else(|e| panic!("the accessibility audit did not run: {e}"));
+        assert!(
+            issues.is_empty(),
+            "accessibility issues on the screen:\n{}",
+            issues.join("\n")
+        );
     }
 
     fn request_semantic_query(

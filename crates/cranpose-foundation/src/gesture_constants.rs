@@ -32,3 +32,8 @@ pub const DRAG_THRESHOLD: f32 = 8.0;
 /// baseline density. Platform-specific configuration should feed this value
 /// through the input runtime when host APIs expose it.
 pub const MAX_FLING_VELOCITY: f32 = 8_000.0;
+
+/// The least size of a touch target, in logical pixels. A press that misses
+/// every target but lands inside a smaller target grown to this size reaches
+/// that target, as it does on Android and in Compose.
+pub const MINIMUM_TOUCH_TARGET_SIZE: f32 = 48.0;

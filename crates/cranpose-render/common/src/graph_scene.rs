@@ -6,7 +6,7 @@ use std::{
 };
 
 use cranpose_core::{MemoryApplier, NodeId, collections::map::HashSet};
-use cranpose_foundation::{PointerEvent, PointerEventKind};
+use cranpose_foundation::{MINIMUM_TOUCH_TARGET_SIZE, PointerEvent, PointerEventKind};
 use cranpose_ui::{LayoutNode, ModifierNodeSlices, SubcomposeLayoutNode};
 use cranpose_ui_graphics::{Point, PointerIcon, Rect, RoundedCornerShape};
 
@@ -231,6 +231,38 @@ impl HitRegion {
         } else {
             self.local_bounds.contains(local_point.x, local_point.y)
         }
+    }
+
+    /// The squared distance from the point to this target when the point lies
+    /// inside the target grown to the minimum touch size and the target takes
+    /// input. None when the target is large enough on its own, when the point
+    /// is outside its reach, or when a clip cuts the point off.
+    fn reach_distance(&self, x: f32, y: f32) -> Option<f32> {
+        if self.click_actions.is_empty() && self.pointer_inputs.is_empty() {
+            return None;
+        }
+        if let Some(clip_bounds) = self.hit_clip_bounds
+            && !clip_bounds.contains(x, y)
+        {
+            return None;
+        }
+        let grow_x = ((MINIMUM_TOUCH_TARGET_SIZE - self.rect.width) / 2.0).max(0.0);
+        let grow_y = ((MINIMUM_TOUCH_TARGET_SIZE - self.rect.height) / 2.0).max(0.0);
+        if grow_x <= 0.0 && grow_y <= 0.0 {
+            return None;
+        }
+        let right = self.rect.x + self.rect.width;
+        let bottom = self.rect.y + self.rect.height;
+        let in_reach = x >= self.rect.x - grow_x
+            && x <= right + grow_x
+            && y >= self.rect.y - grow_y
+            && y <= bottom + grow_y;
+        if !in_reach {
+            return None;
+        }
+        let dx = (self.rect.x - x).max(x - right).max(0.0);
+        let dy = (self.rect.y - y).max(y - bottom).max(0.0);
+        Some(dx * dx + dy * dy)
     }
 
     fn localize_event(&self, event: &PointerEvent) -> (PointerEvent, Point) {
@@ -471,6 +503,17 @@ impl RenderScene for Scene {
             .into_iter()
             .map(|index| self.hits[index].clone())
             .collect()
+    }
+
+    fn hit_test_near(&self, x: f32, y: f32) -> Option<Self::HitTarget> {
+        self.hits
+            .iter()
+            .filter_map(|hit| hit.reach_distance(x, y).map(|distance| (distance, hit)))
+            .min_by(|(near, hit), (other_near, other)| {
+                near.total_cmp(other_near)
+                    .then_with(|| other.z_index.cmp(&hit.z_index))
+            })
+            .map(|(_, hit)| hit.clone())
     }
 
     fn find_target(&self, node_id: NodeId) -> Option<Self::HitTarget> {
@@ -786,6 +829,75 @@ mod tests {
 
         assert!(scene.hit_test(60.0, 20.0).is_empty());
         assert_eq!(scene.hit_test(20.0, 20.0).len(), 1);
+    }
+
+    fn push_input_target(scene: &mut Scene, node_id: NodeId, rect: Rect) {
+        scene.push_hit(
+            node_id,
+            &[node_id],
+            hit_geometry_for_rect(rect),
+            HitTargetSpec {
+                shape: None,
+                click_actions: Vec::new(),
+                pointer_inputs: &[Rc::new(|_event: PointerEvent| {})],
+                pointer_icon: None,
+            },
+        );
+    }
+
+    fn small_target(x: f32) -> Rect {
+        Rect {
+            x,
+            y: 100.0,
+            width: 20.0,
+            height: 20.0,
+        }
+    }
+
+    #[test]
+    fn a_press_beside_a_small_target_reaches_it_when_nothing_else_claims_the_point() {
+        let mut scene = Scene::new();
+        push_input_target(&mut scene, 1, small_target(100.0));
+
+        assert!(scene.hit_test(125.0, 110.0).is_empty());
+        let near = scene
+            .hit_test_near(125.0, 110.0)
+            .expect("the press lands inside the target grown to 48");
+        assert_eq!(near.node_id, 1);
+        assert!(scene.hit_test_near(140.0, 110.0).is_none());
+    }
+
+    #[test]
+    fn the_nearest_small_target_takes_the_press() {
+        let mut scene = Scene::new();
+        push_input_target(&mut scene, 1, small_target(100.0));
+        push_input_target(&mut scene, 2, small_target(140.0));
+
+        assert_eq!(
+            scene.hit_test_near(122.0, 110.0).map(|hit| hit.node_id),
+            Some(1)
+        );
+        assert_eq!(
+            scene.hit_test_near(138.0, 110.0).map(|hit| hit.node_id),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn a_target_of_the_minimum_size_has_no_reach_beyond_its_box() {
+        let mut scene = Scene::new();
+        push_input_target(
+            &mut scene,
+            1,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 48.0,
+                height: 48.0,
+            },
+        );
+
+        assert!(scene.hit_test_near(50.0, 10.0).is_none());
     }
 
     #[test]

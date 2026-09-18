@@ -226,6 +226,7 @@ pub fn LiquidSegmentedControl(
                         .semantics(move |config| {
                             config.role = Some(SemanticsWidgetRole::Button);
                             config.is_clickable = true;
+                            config.selected = Some(is_selected);
                             config.content_description = Some(description.clone());
                         })
                         .focusable();

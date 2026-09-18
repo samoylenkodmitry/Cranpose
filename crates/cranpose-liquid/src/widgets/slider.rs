@@ -32,7 +32,7 @@ fn slider_deformation(pose: crate::dynamics::LiquidPose) -> crate::material::Gla
 pub fn LiquidSlider(modifier: Modifier, value: f32, on_change: impl Fn(f32) + 'static) {
     let colors = liquid_colors();
     let value = value.clamp(0.0, 1.0);
-    let on_change = Rc::new(on_change);
+    let on_change: Rc<dyn Fn(f32)> = Rc::new(on_change);
     let pressed = remember(|| mutableStateOf(false)).with(|s| *s);
     let active_pointer = remember(|| Rc::new(Cell::new(Option::<PointerId>::None))).with(Rc::clone);
 
@@ -47,7 +47,10 @@ pub fn LiquidSlider(modifier: Modifier, value: f32, on_change: impl Fn(f32) + 's
     );
 
     Box(
-        Modifier::empty().height(SLIDER_HEIGHT).then(modifier),
+        Modifier::empty()
+            .height(SLIDER_HEIGHT)
+            .semantics(slider_semantics(value, Rc::clone(&on_change)))
+            .then(modifier),
         BoxSpec::default(),
         move || {
             let on_change = Rc::clone(&on_change);
@@ -237,6 +240,20 @@ pub fn LiquidSlider(modifier: Modifier, value: f32, on_change: impl Fn(f32) + 's
     );
 }
 
+fn slider_semantics(
+    value: f32,
+    on_change: Rc<dyn Fn(f32)>,
+) -> impl Fn(&mut cranpose_ui::SemanticsConfiguration) {
+    move |config| {
+        config.state_description = Some(format!("{}%", (value * 100.0).round() as u32));
+        config.progress = Some(cranpose_ui::ProgressBarRangeInfo::new(value, 0.0, 1.0, 0));
+        let on_change = Rc::clone(&on_change);
+        config.set_progress = Some(cranpose_ui::SemanticsSetProgress::new(move |next: f32| {
+            on_change(next.clamp(0.0, 1.0));
+            true
+        }));
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;

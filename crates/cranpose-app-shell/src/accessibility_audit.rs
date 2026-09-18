@@ -222,22 +222,23 @@ fn check_order(parent: &PlacedSemanticsNode, issues: &mut Vec<AccessibilityIssue
     }
 }
 
+/// Two controls of one role with one name. Rows of a list at different
+/// places are apart: a reader speaks their place.
 fn check_same_names(visible: &[&PlacedSemanticsNode], issues: &mut Vec<AccessibilityIssue>) {
-    let mut seen: Vec<(String, Option<SemanticsWidgetRole>, usize)> = Vec::new();
+    let mut seen: Vec<(String, Option<SemanticsWidgetRole>, Option<usize>, usize)> = Vec::new();
     for node in visible.iter().filter(|node| is_control(node)) {
         let name = spoken_name(node);
         if name.is_empty() {
             continue;
         }
-        match seen
-            .iter_mut()
-            .find(|(seen_name, role, _)| *seen_name == name && *role == node.widget_role)
-        {
-            Some(entry) => entry.2 += 1,
-            None => seen.push((name, node.widget_role, 1)),
+        match seen.iter_mut().find(|(seen_name, role, position, _)| {
+            *seen_name == name && *role == node.widget_role && *position == node.list_position
+        }) {
+            Some(entry) => entry.3 += 1,
+            None => seen.push((name, node.widget_role, node.list_position, 1)),
         }
     }
-    for (name, role, count) in seen.into_iter().filter(|(_, _, count)| *count > 1) {
+    for (name, role, _, count) in seen.into_iter().filter(|(_, _, _, count)| *count > 1) {
         issues.push(AccessibilityIssue {
             kind: AccessibilityIssueKind::SameName,
             control: format!("{} {name:?}", role_word(role)),
@@ -277,6 +278,52 @@ fn role_word(role: Option<SemanticsWidgetRole>) -> String {
     }
 }
 
+/// An issue a test leaves as it is: the screen it is on, `*` for every
+/// screen; the start of the issue line; the reason it stays.
+pub type KnownIssue = (&'static str, &'static str, &'static str);
+
+/// Compares the issues found on `screen` with the list a test keeps and
+/// reports what changed: the lines that are new, and the listed issues that
+/// went away. A test fails on either, so the list only shrinks. An issue
+/// matches a listed one when its line starts with the listed text; a `*`
+/// entry matches on every screen and is never reported as gone.
+pub fn audit_changes(screen: &str, issues: &[String], known: &[KnownIssue]) -> Result<(), String> {
+    let listed = |issue: &str| {
+        known
+            .iter()
+            .any(|(on, text, _)| (*on == "*" || *on == screen) && issue.starts_with(text))
+    };
+    let new: Vec<&str> = issues
+        .iter()
+        .map(String::as_str)
+        .filter(|issue| !listed(issue))
+        .collect();
+    let gone: Vec<&str> = known
+        .iter()
+        .filter(|(on, text, _)| {
+            *on == screen && !issues.iter().any(|issue| issue.starts_with(text))
+        })
+        .map(|(_, text, _)| *text)
+        .collect();
+    if new.is_empty() && gone.is_empty() {
+        return Ok(());
+    }
+    let mut report = String::new();
+    if !new.is_empty() {
+        report.push_str(&format!(
+            "new accessibility issues on {screen}:\n  {}\n",
+            new.join("\n  ")
+        ));
+    }
+    if !gone.is_empty() {
+        report.push_str(&format!(
+            "issues listed for {screen} went away; take them off the list:\n  {}\n",
+            gone.join("\n  ")
+        ));
+    }
+    Err(report)
+}
+
 #[cfg(test)]
 mod tests {
     use cranpose_ui::{Rect, SemanticsRole};
@@ -300,6 +347,7 @@ mod tests {
             hidden: false,
             pane_title: None,
             traversal_index: 0.0,
+            list_position: None,
             layout_bounds: rect,
             touch_bounds: None,
             children: Vec::new(),
@@ -449,5 +497,106 @@ mod tests {
     #[should_panic(expected = "NoName: button \"\"")]
     fn the_assertion_names_every_issue_and_the_fix() {
         assert_accessible(&screen(vec![button(None, rect(0.0, 0.0, 48.0, 48.0))]));
+    }
+
+    #[test]
+    fn a_new_issue_and_a_listed_issue_that_went_away_both_fail_the_comparison() {
+        let known: &[KnownIssue] = &[
+            (
+                "library",
+                "SmallTarget: control \"Pill\"",
+                "sits over a tab",
+            ),
+            (
+                "*",
+                "SameName: tab \"Apps\"",
+                "two bars show one set of tabs",
+            ),
+        ];
+        let issues = vec![
+            "SmallTarget: control \"Pill\" is 79x17 points".to_string(),
+            "SameName: tab \"Apps\" appears 2 times".to_string(),
+        ];
+        assert_eq!(audit_changes("library", &issues, known), Ok(()));
+        assert_eq!(
+            audit_changes("settings", &issues[1..], known),
+            Ok(()),
+            "a * entry matches on every screen"
+        );
+        let with_new = [
+            issues.clone(),
+            vec!["NoName: control \"\" is 40x40 points at (1, 2)".to_string()],
+        ]
+        .concat();
+        let report = audit_changes("library", &with_new, known).unwrap_err();
+        assert!(report.contains("new accessibility issues on library"));
+        assert!(report.contains("NoName"));
+        let report = audit_changes("library", &issues[1..], known).unwrap_err();
+        assert!(report.contains("went away"));
+        assert!(report.contains("SmallTarget"));
+        assert_eq!(
+            audit_changes("settings", &[], known),
+            Ok(()),
+            "a * entry is never reported as gone"
+        );
+    }
+
+    #[test]
+    fn rows_of_a_list_with_one_name_are_apart_when_each_has_its_place() {
+        let mut list = screen(vec![
+            button(Some("Scan"), rect(0.0, 0.0, 200.0, 40.0)),
+            button(Some("Scan"), rect(0.0, 50.0, 200.0, 40.0)),
+        ]);
+        let same_names = |root: &PlacedSemanticsNode| {
+            audit_accessibility(root)
+                .iter()
+                .any(|issue| issue.kind == AccessibilityIssueKind::SameName)
+        };
+        assert!(same_names(&list), "two buttons with one name and no place");
+        for (row, position) in list.children.iter_mut().zip(1..) {
+            row.list_position = Some(position);
+        }
+        assert!(!same_names(&list), "the same two as rows 1 and 2 of a list");
+    }
+
+    #[test]
+    fn a_row_wrapped_by_its_list_still_gets_its_place() {
+        let wrapped = |y: f32| PlacedSemanticsNode {
+            children: vec![button(Some("Scan"), rect(0.0, y, 200.0, 40.0))],
+            ..node(None, rect(0.0, y, 200.0, 40.0))
+        };
+        let mut list = screen(vec![wrapped(0.0), wrapped(50.0)]);
+        for (row, position) in list.children.iter_mut().zip(1..) {
+            crate::placed_semantics::place_row(row, position);
+        }
+        let issues = audit_accessibility(&list);
+        assert!(
+            !issues
+                .iter()
+                .any(|issue| issue.kind == AccessibilityIssueKind::SameName),
+            "the buttons under the wrappers carry places 1 and 2: {issues:?}"
+        );
+    }
+
+    #[test]
+    fn a_control_inside_a_row_carries_the_place_of_the_row() {
+        let row = |y: f32| PlacedSemanticsNode {
+            children: vec![
+                button(Some("page thumbnail"), rect(0.0, y, 40.0, 40.0)),
+                button(Some("More"), rect(160.0, y, 40.0, 40.0)),
+            ],
+            ..node(None, rect(0.0, y, 200.0, 40.0))
+        };
+        let mut list = screen(vec![row(0.0), row(50.0)]);
+        for (row, position) in list.children.iter_mut().zip(1..) {
+            crate::placed_semantics::place_row(row, position);
+        }
+        let issues = audit_accessibility(&list);
+        assert!(
+            !issues
+                .iter()
+                .any(|issue| issue.kind == AccessibilityIssueKind::SameName),
+            "the thumbnails and the More buttons sit in rows 1 and 2: {issues:?}"
+        );
     }
 }
