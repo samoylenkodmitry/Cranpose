@@ -60,19 +60,6 @@ class CranposeAndroidPlugin : Plugin<Project> {
         }
     }
 
-    private companion object {
-        /**
-         * Gradle property naming the architectures a release build produces,
-         * comma separated.
-         *
-         * The default is the one architecture a development device runs.
-         * Every architecture a release carries is one more full native build
-         * of the workspace, run one after another, so a build that only has
-         * to prove the application assembles asks for none of them.
-         */
-        const val RELEASE_ABIS_PROPERTY = "cranposeReleaseAbis"
-    }
-
     private fun applyDefaults(project: Project, cranpose: CranposeExtension) {
         cranpose.workspaceRoot.convention("../../../..")
         cranpose.features.convention(listOf("android", "renderer-wgpu"))
@@ -552,6 +539,17 @@ class CranposeAndroidPlugin : Plugin<Project> {
     }
 
     private companion object {
+        /**
+         * Gradle property naming the architectures a release build produces,
+         * comma separated.
+         *
+         * The default is the one architecture a development device runs.
+         * Every architecture a release carries is one more full native build
+         * of the workspace, run one after another, so a build that only has
+         * to prove the application assembles asks for none of them.
+         */
+        const val RELEASE_ABIS_PROPERTY = "cranposeReleaseAbis"
+
         val KNOWN_SERVICES = setOf(
             "background",
             "billing",

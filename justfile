@@ -389,6 +389,14 @@ web-isolated:
 # serving a foreign project's build.
 
 # Build the Android demo.
+# Type-check the Cranpose Gradle plugin's Kotlin. Eleven seconds, and on a
+# pull request it is the only thing that does: `clippy-android` checks the Rust
+# side, and assembling the APK -- which used to be what compiled this -- runs
+# after the merge. A plugin that does not compile reached main exactly once
+# that way.
+android-plugin-check:
+    cd apps/android-demo/android && ./gradlew --no-daemon :cranpose-gradle-plugin:compileKotlin
+
 android: _disk-guard
     cd apps/android-demo/android && ../../../scripts/ci/with_host_lock.sh --shared \
       ./gradlew --no-daemon :app:assembleRelease
