@@ -103,4 +103,74 @@ impl Modifier {
         ));
         self.then(modifier)
     }
+
+    /// Keep the width of the content between `min` and `max`, as far as the
+    /// incoming constraints allow. `f32::INFINITY` leaves the upper side open.
+    ///
+    /// Matches Kotlin: `Modifier.widthIn(min: Dp, max: Dp)`
+    ///
+    /// Example: `Modifier::empty().width_in(48.0, f32::INFINITY)`
+    pub fn width_in(self, min: f32, max: f32) -> Self {
+        let modifier = Self::with_element(SizeElement::with_constraints(
+            bound(min),
+            bound(max),
+            None,
+            None,
+            true,
+        ))
+        .with_inspector_metadata(inspector_metadata("widthIn", move |info| {
+            info.add_dimension("minWidth", DimensionConstraint::Points(min));
+        }));
+        self.then(modifier)
+    }
+
+    /// Keep the height of the content between `min` and `max`, as far as the
+    /// incoming constraints allow. `f32::INFINITY` leaves the upper side open.
+    /// A text field or a chip that a finger has to find gets its 24 points
+    /// this way without growing to the 48 of
+    /// [`minimum_interactive_component_size`](Self::minimum_interactive_component_size).
+    ///
+    /// Matches Kotlin: `Modifier.heightIn(min: Dp, max: Dp)`
+    ///
+    /// Example: `Modifier::empty().height_in(24.0, f32::INFINITY)`
+    pub fn height_in(self, min: f32, max: f32) -> Self {
+        let modifier = Self::with_element(SizeElement::with_constraints(
+            None,
+            None,
+            bound(min),
+            bound(max),
+            true,
+        ))
+        .with_inspector_metadata(inspector_metadata("heightIn", move |info| {
+            info.add_dimension("minHeight", DimensionConstraint::Points(min));
+        }));
+        self.then(modifier)
+    }
+
+    /// Keep the size of the content between `min` and `max` on each side, as
+    /// far as the incoming constraints allow. `f32::INFINITY` on a side of
+    /// `max` leaves it open.
+    ///
+    /// Matches Kotlin: `Modifier.sizeIn(minWidth, minHeight, maxWidth, maxHeight)`
+    ///
+    /// Example: `Modifier::empty().size_in(Size::new(24.0, 24.0), Size::new(f32::INFINITY, 40.0))`
+    pub fn size_in(self, min: Size, max: Size) -> Self {
+        let modifier = Self::with_element(SizeElement::with_constraints(
+            bound(min.width),
+            bound(max.width),
+            bound(min.height),
+            bound(max.height),
+            true,
+        ))
+        .with_inspector_metadata(inspector_metadata("sizeIn", move |info| {
+            info.add_dimension("minWidth", DimensionConstraint::Points(min.width));
+            info.add_dimension("minHeight", DimensionConstraint::Points(min.height));
+        }));
+        self.then(modifier)
+    }
+}
+
+/// A finite side of a size bound; an infinite or zero bound is no bound.
+fn bound(value: f32) -> Option<f32> {
+    (value.is_finite() && value > 0.0).then_some(value)
 }

@@ -300,27 +300,47 @@ impl ModifierChainHandle {
         result
     }
 }
-
 fn apply_size_node(layout: &mut LayoutProperties, node: &SizeNode) {
-    if let Some(width) = node.max_width().or(node.min_width()) {
-        layout.width = DimensionConstraint::Points(width);
+    apply_size_axis(
+        node.min_width(),
+        node.max_width(),
+        node.enforce_incoming(),
+        &mut layout.width,
+        &mut layout.min_width,
+        &mut layout.max_width,
+    );
+    apply_size_axis(
+        node.min_height(),
+        node.max_height(),
+        node.enforce_incoming(),
+        &mut layout.height,
+        &mut layout.min_height,
+        &mut layout.max_height,
+    );
+}
+
+/// One axis of a size node: a range keeps its two bounds, a fixed side sets
+/// the dimension, and a required size sets both.
+fn apply_size_axis(
+    min: Option<f32>,
+    max: Option<f32>,
+    enforce_incoming: bool,
+    dimension: &mut DimensionConstraint,
+    min_slot: &mut Option<f32>,
+    max_slot: &mut Option<f32>,
+) {
+    let fixed = min == max;
+    if let (true, Some(size)) = (fixed, max.or(min)) {
+        *dimension = DimensionConstraint::Points(size);
     }
-    if let Some(height) = node.max_height().or(node.min_height()) {
-        layout.height = DimensionConstraint::Points(height);
+    if fixed && enforce_incoming {
+        return;
     }
-    if !node.enforce_incoming() {
-        if let Some(min_width) = node.min_width() {
-            layout.min_width = Some(min_width);
-        }
-        if let Some(max_width) = node.max_width() {
-            layout.max_width = Some(max_width);
-        }
-        if let Some(min_height) = node.min_height() {
-            layout.min_height = Some(min_height);
-        }
-        if let Some(max_height) = node.max_height() {
-            layout.max_height = Some(max_height);
-        }
+    if let Some(min) = min {
+        *min_slot = Some(min);
+    }
+    if let Some(max) = max {
+        *max_slot = Some(max);
     }
 }
 
