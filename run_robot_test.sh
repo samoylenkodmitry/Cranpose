@@ -1136,6 +1136,25 @@ if [ "$RUN_CLASSES" = "parallel" ]; then
     SERIAL_EXAMPLES=()
 fi
 
+# A class filter that removes everything is legitimate -- `robot-captures`
+# asked for the parallel class and all four of its examples measure -- but a
+# run that reports "Total: 0, Passed: 0" and exits zero reads exactly like a
+# run that checked something. It did not, and CI believed it for a whole
+# board. Say so in a line nobody can mistake for a pass.
+if [ $(( ${#PARALLEL_EXAMPLES[@]} + ${#SERIAL_EXAMPLES[@]} )) -eq 0 ]; then
+    {
+        echo "============================================"
+        echo "NOTHING RAN: none of the ${#EXAMPLES[@]} selected example(s) are in class"
+        echo "'$RUN_CLASSES', so this invocation checked nothing at all."
+        echo "This is not a pass. The examples it would have run are:"
+        for example in "${EXAMPLES[@]}"; do
+            echo "  $example"
+        done
+        echo "============================================"
+    } | tee -a "$LOG_FILE"
+    exit 0
+fi
+
 run_example_list parallel ${PARALLEL_EXAMPLES[@]+"${PARALLEL_EXAMPLES[@]}"}
 
 # The exclusive lock is taken here and not a moment earlier: everything above

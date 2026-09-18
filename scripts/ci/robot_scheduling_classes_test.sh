@@ -88,6 +88,21 @@ fn main() {
 }
 RS
 
+# A class filter that removes every selected example must say so. It is a
+# legitimate configuration -- `robot-captures` asks for the parallel class and
+# all four of its examples measure -- but reporting "Total: 0, Passed: 0" and
+# exiting zero reads exactly like a run that checked something, and CI
+# believed that for a whole board.
+empty_class_output="$(
+    cd "$REPO_ROOT" \
+        && "$RUNNER" --classes parallel --skip-build \
+            --example robot_glass_tiles --example robot_lazy_perf 2>&1 || true
+)"
+check "a class filter that selects nothing says so" \
+    grep -q "NOTHING RAN" <<< "$empty_class_output"
+check "and does not call it a pass" \
+    grep -q "This is not a pass" <<< "$empty_class_output"
+
 fixture_classes="$(cd "$fixture" && "$RUNNER" --list-classes 2>/dev/null | grep -E '^(parallel|serial) ')"
 check "an example that measures only through a module is serial" \
     grep -qx "serial robot_via_module" <<< "$fixture_classes"
