@@ -524,10 +524,22 @@ pub fn android_manifest(capabilities: &Capabilities<'_>) -> String {
     text
 }
 
-/// The Apple usage descriptions the declaration becomes, as property list
-/// entries to merge into an `Info.plist`.
+/// The Apple usage descriptions the declaration becomes, as a property list
+/// to merge into an `Info.plist`.
+///
+/// It is a property list of its own, so an Apple build merges it with one
+/// line and no tool beyond the ones macOS ships:
+///
+/// ```text
+/// /usr/libexec/PlistBuddy -c "Merge target/cranpose/my-app-usage.plist" MyApp.app/Info.plist
+/// ```
 pub fn apple_usage(capabilities: &Capabilities<'_>) -> String {
-    let mut text = String::new();
+    let mut text = String::from(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+         <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \
+         \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
+         <plist version=\"1.0\">\n<dict>\n",
+    );
     for entry in capabilities.uses {
         let (Some(key), Some(reason)) = (entry.service.apple_key(), entry.reason) else {
             continue;
@@ -535,6 +547,7 @@ pub fn apple_usage(capabilities: &Capabilities<'_>) -> String {
         let _ = writeln!(text, "\t<key>{key}</key>");
         let _ = writeln!(text, "\t<string>{}</string>", escape_xml(reason));
     }
+    text.push_str("</dict>\n</plist>\n");
     text
 }
 
@@ -601,8 +614,10 @@ mod tests {
     #[test]
     fn apple_takes_only_the_services_it_shows_a_sentence_for() {
         let text = apple_usage(&SCANNER);
+        assert!(text.starts_with("<?xml"));
         assert!(text.contains("<key>NSCameraUsageDescription</key>"));
         assert!(text.contains(READS));
+        assert!(text.ends_with("</dict>\n</plist>\n"));
         assert!(!text.contains("Notification"));
     }
 
