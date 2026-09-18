@@ -282,7 +282,14 @@ jobs:
         run: just clippy-android
 
       - name: Build Android release APK
-        if: ${{ !cancelled() && steps.provision.conclusion == 'success' && steps.changes.outputs.docs_only != 'true' }}
+        if: ${{ !cancelled() && github.event_name == 'push' && steps.provision.conclusion == 'success' && steps.changes.outputs.docs_only != 'true' }}
+        # Pushes to main only. `clippy-android` above type-checks every
+        # architecture the release carries on a pull request too, in about a
+        # minute; assembling the APK proves the Gradle and packaging side, and
+        # nothing about that depends on which branch the commit arrives on. It
+        # is the one Android answer that a merge cannot invalidate, so it runs
+        # once, after the merge, instead of on every push to every branch.
+        #
         # --no-daemon: never attach to a shared/foreign Gradle daemon on this
         # self-hosted box. Reused daemons started by other builds on the runner
         # can carry a PATH without ~/.cargo/bin, which makes the cargo-ndk check

@@ -49,34 +49,18 @@ fi
 # lock further down never has to spawn the server itself.
 enable_local_sccache
 
-# The host lock, in two phases (scripts/dev_build_common.sh owns the files
-# and the turnstile fairness fix; scripts/ci/with_host_lock.sh calls the same
-# functions for its own single-command case).
-#
-# Phase one, from here: the shared side, the same side every heavy build on
-# this machine takes. The suite's own build is a build like any other, and
-# holding it here is what keeps a second robot suite -- or an Android release
-# -- from compiling beside the tests further down. It passes through the
-# turnstile first so that an exclusive acquirer already waiting (phase two of
-# some other robot job on this box) is not passed over -- see
-# host_capacity_turnstile_pass's comment in dev_build_common.sh.
-#
-# Phase two, once the build is done: this fd is CLOSED and the exclusive side
-# taken on another. Converting in place would deadlock two suites that each
-# hold the shared side and each want the exclusive one; releasing first cannot,
-# and the worst it costs is letting a builder in during the gap, which the
-# exclusive acquire then waits out.
-if host_capacity_lock_available; then
-    host_capacity_turnstile_pass
-    exec 8>"$HOST_CAPACITY_LOCK_FILE"
-    flock -s 8 || true
-fi
 
-# Default to sequential execution for stability. Parallel runs remain opt-in.
+# Half the cores, because a robot example is an app and a GPU queue rather
+# than a compiler: the second half absorbs its render thread and the X server
+# each worker now starts for itself. Only the parallel class uses this; the
+# examples that measure time still run one at a time on an empty machine.
 if [ -n "${CRANPOSE_ROBOT_PARALLEL:-}" ]; then
     PARALLEL_JOBS="$CRANPOSE_ROBOT_PARALLEL"
 else
-    PARALLEL_JOBS=1
+    PARALLEL_JOBS=$(( $(host_cpu_count) / 2 ))
+    if [ "$PARALLEL_JOBS" -lt 1 ]; then
+        PARALLEL_JOBS=1
+    fi
 fi
 ROBOT_TEST_TIMEOUT_CAP_SECS="${CRANPOSE_ROBOT_TEST_TIMEOUT_CAP_SECS:-900}"
 ROBOT_TIMEOUT_RETRY_ATTEMPTS="${CRANPOSE_ROBOT_TIMEOUT_RETRY_ATTEMPTS:-2}"
@@ -88,6 +72,7 @@ SHARD_INDEX=""
 SHARD_COUNT=""
 BUILD_ONLY=0
 SKIP_BUILD=0
+LIST_CLASSES=0
 STAGE_ARTIFACT_DIR=""
 STAGE_ARTIFACT_SHARDS=16
 
@@ -172,6 +157,10 @@ while [[ $# -gt 0 ]]; do
             BUILD_ONLY=1
             shift
             ;;
+        --list-classes)
+            LIST_CLASSES=1
+            shift
+            ;;
         --skip-build)
             SKIP_BUILD=1
             shift
@@ -185,7 +174,7 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         --help)
-            echo "Usage: $0 [--parallel N] [--sequential] [--example robot_name] [--skip robot_name] [--shard INDEX/TOTAL] [--build-only] [--skip-build]"
+            echo "Usage: $0 [--parallel N] [--sequential] [--example robot_name] [--skip robot_name] [--shard INDEX/TOTAL] [--build-only] [--skip-build] [--list-classes]"
             echo ""
             echo "Options:"
             echo "  --parallel N    Run N tests in parallel"
@@ -194,6 +183,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --skip NAME     Exclude the named robot example (repeatable)"
             echo "  --shard N/M     Run the deterministic shard N of M"
             echo "  --build-only    Build matching robot examples and exit"
+            echo "  --list-classes  Print each example's scheduling class and exit"
             echo "  --skip-build    Reuse existing robot example binaries"
             echo "  --stage-artifacts DIR"
             echo "                  Write per-shard robot binary tarballs after building"
@@ -218,6 +208,32 @@ done
 if [ "$BUILD_ONLY" = "1" ] && [ "$SKIP_BUILD" = "1" ]; then
     echo "--build-only and --skip-build cannot be used together"
     exit 1
+fi
+
+# The host lock, in two phases (scripts/dev_build_common.sh owns the files
+# and the turnstile fairness fix; scripts/ci/with_host_lock.sh calls the same
+# functions for its own single-command case).
+#
+# Phase one, from here: the shared side, the same side every heavy build on
+# this machine takes. The suite's own build is a build like any other, and
+# holding it here is what keeps a second robot suite -- or an Android release
+# -- from compiling beside the tests further down. It passes through the
+# turnstile first so that an exclusive acquirer already waiting (phase two of
+# some other robot job on this box) is not passed over -- see
+# host_capacity_turnstile_pass's comment in dev_build_common.sh.
+#
+# Phase two, once the build is done: this fd is CLOSED and the exclusive side
+# taken on another. Converting in place would deadlock two suites that each
+# hold the shared side and each want the exclusive one; releasing first cannot,
+# and the worst it costs is letting a builder in during the gap, which the
+# exclusive acquire then waits out.
+# `--list-classes` reads source files and exits. It neither builds nor
+# measures, so it takes no lock: queueing behind a robot suite to print a
+# partition would make the gate that checks it wait out the job it describes.
+if [ "$LIST_CLASSES" = "0" ] && host_capacity_lock_available; then
+    host_capacity_turnstile_pass
+    exec 8>"$HOST_CAPACITY_LOCK_FILE"
+    flock -s 8 || true
 fi
 
 # The strict frame-rate contracts inside the robot runners measure presented
@@ -282,6 +298,60 @@ robot_source_path() {
     return 1
 }
 
+# The tokens that make an example's result depend on how busy the machine is:
+# a clock read, or a frame statistic derived from one. An example that names
+# none of them asserts on pixels and structure alone, and a neighbour on
+# another core cannot change its answer.
+ROBOT_TIMING_SURFACE='Instant::now|\.elapsed\(|work_avg_ms|work_p95_ms|avg_ms|p95_ms|fps|frame_time'
+
+# Whether an example measures time, following the `mod` declarations that pull
+# in the shared runner modules: a runner that reads its frame statistics
+# through perf_robot_stats is load-sensitive whether or not it spells the
+# field names itself.
+robot_example_is_serial() {
+    local example="$1"
+    local pending=("$example")
+    local seen=""
+    local unit source
+
+    while [ ${#pending[@]} -gt 0 ]; do
+        unit="${pending[0]}"
+        pending=("${pending[@]:1}")
+        case " $seen " in
+            *" $unit "*) continue ;;
+        esac
+        seen="$seen $unit"
+
+        source="$(robot_source_path "$unit")" || continue
+        if grep -qE "$ROBOT_TIMING_SURFACE" "$source"; then
+            return 0
+        fi
+        while IFS= read -r dependency; do
+            pending+=("$dependency")
+        done < <(sed -n 's/^mod \([a-z0-9_]*\);.*/\1/p' "$source")
+    done
+
+    return 1
+}
+
+# Whether an example draws into a real window on the display server rather
+# than rendering offscreen. Such an example owns the pointer, the focus and
+# the root window for as long as it runs, so two of them on one display read
+# each other's input and screenshot each other's windows.
+robot_example_needs_real_window() {
+    case "$1" in
+        robot_glass_backdrop_scroll_stability|robot_hacker_news_scroll_exact_external_contract|robot_leetcodedaily_full_layout_scroll_stability|robot_liquid_scroll_exact_external_contract|robot_markdown_default_visual_contract|robot_markdown_scroll_exact_external_contract|robot_presented_window_geometry|robot_presented_window_hidpi_geometry|robot_presented_window_redraw|robot_renderer_micro_contract|robot_regression_shader_visual_contract|robot_shader_external_x11_drag|robot_shader_rect_external_animation|robot_tab_walk_text_visual_contract|robot_text_scroll_exact_external_contract|robot_text_strikeout_presented|robot_underline_screenshot|robot_winamp_native_window_geometry)
+            return 0
+            ;;
+    esac
+    return 1
+}
+
+# Whether each example can be given a display server of its own.
+robot_display_isolation_available() {
+    [ -n "${ROBOT_XVFB_SCREEN:-}" ] && command -v xvfb-run >/dev/null 2>&1
+}
+
 # Whether the host can currently present a frame to a real, awake display.
 #
 # A DPMS-blanked panel leaves DISPLAY set and the X connection alive while
@@ -296,6 +366,13 @@ robot_source_path() {
 # extension, so `xset q` there prints no "Monitor is ..." line at all and
 # this probe reports presentable — CI behavior is unchanged by this check.
 robot_display_can_present() {
+    # ROBOT_XVFB_SCREEN means every example gets its own fresh X server, so
+    # there is a presentable display whether or not this shell is sitting in
+    # front of one. A virtual server has no DPMS extension and no monitor to
+    # blank, which is what the rest of this probe is for.
+    if [ -n "${ROBOT_XVFB_SCREEN:-}" ] && command -v xvfb-run >/dev/null 2>&1; then
+        return 0
+    fi
     if [ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
         return 1
     fi
@@ -409,6 +486,20 @@ if [ -n "$SHARD_INDEX" ] || [ -n "$SHARD_COUNT" ]; then
     EXAMPLES=("${SHARDED_EXAMPLES[@]}")
 fi
 
+# Before the capability filter: an example's scheduling class is a property of
+# its source, so the gate that checks this partition must read the same answer
+# on a machine that cannot run half of them.
+if [ "$LIST_CLASSES" = "1" ]; then
+    for example in "${EXAMPLES[@]}"; do
+        if robot_example_is_serial "$example"; then
+            echo "serial $example"
+        else
+            echo "parallel $example"
+        fi
+    done
+    exit 0
+fi
+
 CAPABLE_EXAMPLES=()
 for example in "${EXAMPLES[@]}"; do
     if reason=$(robot_capability_skip_reason "$example"); then
@@ -424,6 +515,22 @@ if [ ${#EXAMPLES[@]} -eq 0 ]; then
     echo "No selected robot tests can run with the available host capabilities." | tee -a "$LOG_FILE"
     exit 0
 fi
+
+PARALLEL_EXAMPLES=()
+SERIAL_EXAMPLES=()
+for example in "${EXAMPLES[@]}"; do
+    if robot_example_is_serial "$example"; then
+        SERIAL_EXAMPLES+=("$example")
+    elif robot_example_needs_real_window "$example" \
+        && ! robot_display_isolation_available; then
+        # A windowed example is parallel-safe only where the suite can hand it
+        # its own display. On a developer's desktop there is one display and it
+        # is the developer's, so these run one at a time there.
+        SERIAL_EXAMPLES+=("$example")
+    else
+        PARALLEL_EXAMPLES+=("$example")
+    fi
+done
 
 BUILD_ARGS=(--profile "$ROBOT_PROFILE" --package desktop-app --features robot-app)
 if [ ${#EXAMPLES[@]} -eq 1 ]; then
@@ -511,26 +618,28 @@ if [ "$BUILD_ONLY" = "1" ]; then
     exit 0
 fi
 
-# Everything below this line is timed, and nothing above it was.
-#
-# Phase two of the host lock: drop the shared side taken for the build, and
-# take the exclusive one. It waits out every build sharing this machine and
-# keeps the next from starting until the suite is done -- so builds still
-# overlap builds, and only a measurement empties the machine.
-#
-# host_capacity_turnstile_hold is taken first and held across the wait: a
-# continuous stream of new --shared builds would otherwise keep this acquire
-# waiting forever, because plain flock only ever checks locks currently
-# held, never ones merely queued -- see that function's comment in
-# dev_build_common.sh for the experiment that proved it.
-#
-# The file descriptor is the lock. It is released when this script exits, by
-# the kernel, however it exits. On timeout this now FAILS the suite instead
-# of measuring anyway: a build's correctness never depended on isolation,
-# but a measurement's does, so proceeding here would reproduce the exact
-# phantom regression this lock exists to prevent, just reported as a failed
-# timing assertion instead of an honest lock timeout.
-if host_capacity_lock_available; then
+# Phase two of the host lock is taken below, immediately before the serial
+# examples and nothing else. The parallel examples that precede it assert on
+# pixels and structure, so they keep the shared side the build already holds:
+# emptying the machine for them bought isolation their answers never needed,
+# and paid for it with the whole suite's wall time and with the exclusive
+# wait every other robot job on this box then queued behind.
+take_exclusive_host_lock() {
+    # host_capacity_turnstile_hold is taken first and held across the wait: a
+    # continuous stream of new --shared builds would otherwise keep this
+    # acquire waiting forever, because plain flock only ever checks locks
+    # currently held, never ones merely queued -- see that function's comment
+    # in dev_build_common.sh for the experiment that proved it.
+    #
+    # The file descriptor is the lock. It is released when this script exits,
+    # by the kernel, however it exits. On timeout this FAILS the suite instead
+    # of measuring anyway: a build's correctness never depended on isolation,
+    # but a measurement's does, so proceeding here would reproduce the exact
+    # phantom regression this lock exists to prevent, just reported as a
+    # failed timing assertion instead of an honest lock timeout.
+    if ! host_capacity_lock_available; then
+        return 0
+    fi
     exec 8>&-
     host_capacity_turnstile_hold
     exec 9>"$HOST_CAPACITY_LOCK_FILE"
@@ -539,15 +648,15 @@ if host_capacity_lock_available; then
     if [ "${PIPESTATUS[0]}" -ne 0 ]; then
         echo "Aborting: could not get exclusive host capacity for the robot suite." \
             | tee -a "$LOG_FILE"
-        exit 1
+        return 1
     fi
     host_capacity_turnstile_release
-fi
 
-# The lock covers this fleet. It does not cover the nineteen other
-# repositories' runners on the same box, so also wait for the load average
-# itself -- our own build's, and any stranger's that is still running.
-wait_for_host_quiet "the robot suite" | tee -a "$LOG_FILE"
+    # The lock covers this fleet. It does not cover the nineteen other
+    # repositories' runners on the same box, so also wait for the load average
+    # itself -- our own build's, and any stranger's that is still running.
+    wait_for_host_quiet "the robot suite" | tee -a "$LOG_FILE"
+}
 
 echo "============================================" | tee -a "$LOG_FILE"
 echo "Running Robot Test Suite" | tee -a "$LOG_FILE"
@@ -769,11 +878,9 @@ run_test() {
     fi
 
     local headless_env="CRANPOSE_HEADLESS=1"
-    case "$example" in
-        robot_glass_backdrop_scroll_stability|robot_hacker_news_scroll_exact_external_contract|robot_leetcodedaily_full_layout_scroll_stability|robot_liquid_scroll_exact_external_contract|robot_markdown_default_visual_contract|robot_markdown_scroll_exact_external_contract|robot_presented_window_geometry|robot_presented_window_hidpi_geometry|robot_presented_window_redraw|robot_renderer_micro_contract|robot_regression_shader_visual_contract|robot_shader_external_x11_drag|robot_shader_rect_external_animation|robot_tab_walk_text_visual_contract|robot_text_scroll_exact_external_contract|robot_text_strikeout_presented|robot_underline_screenshot|robot_winamp_native_window_geometry)
-            headless_env="CRANPOSE_HEADLESS=0"
-            ;;
-    esac
+    if robot_example_needs_real_window "$example"; then
+        headless_env="CRANPOSE_HEADLESS=0"
+    fi
 
     local example_env=()
     case "$example" in
@@ -795,9 +902,14 @@ run_test() {
             echo "Host before attempt: $(host_state_summary)"
         } >> "$output_file"
 
-        if ! wait_for_host_capacity "robot $example attempt $attempt" >> "$output_file" 2>&1; then
-            echo "FAIL:host_not_ready" > "$result_file"
-            return 75
+        # Only the serial phase waits for a quiet machine. In the parallel
+        # phase every worker is the load this would wait out, so the wait
+        # never ends and each worker is the reason the others are stuck.
+        if [ "${ROBOT_PHASE:-serial}" = "serial" ]; then
+            if ! wait_for_host_capacity "robot $example attempt $attempt" >> "$output_file" 2>&1; then
+                echo "FAIL:host_not_ready" > "$result_file"
+                return 75
+            fi
         fi
 
         local robot_env_args=()
@@ -810,12 +922,23 @@ run_test() {
         # (the exclusive phase closed it), but closing both here as well
         # means no lock fd survives into this child even if that ever
         # changes, and even if the exclusive holder below dies mid-run.
+        # One X server per example, not one per suite. Two robot examples
+        # sharing a display share its pointer, its focus and its root window,
+        # so a drag in one lands in the other and a screenshot catches a
+        # neighbour's window -- which is why the suite could only ever run one
+        # at a time. `xvfb-run -a` picks a free display number under its own
+        # lock, so any number of these may start at once.
+        local display_prefix=()
+        if [ -n "${ROBOT_XVFB_SCREEN:-}" ] && command -v xvfb-run >/dev/null 2>&1; then
+            display_prefix=(xvfb-run -a -s "-screen 0 $ROBOT_XVFB_SCREEN")
+        fi
+
         if command -v timeout >/dev/null 2>&1; then
-            env -i "${robot_env_args[@]}" timeout --kill-after=15s "${timeout_secs}s" "$example_bin" > "$attempt_output" 2>&1 8>&- 9>&-
+            env -i "${robot_env_args[@]}" timeout --kill-after=15s "${timeout_secs}s" ${display_prefix[@]+"${display_prefix[@]}"} "$example_bin" > "$attempt_output" 2>&1 8>&- 9>&-
             local exit_code=$?
         else
             run_with_portable_timeout "$timeout_secs" 15 "$attempt_output" \
-                env -i "${robot_env_args[@]}" "$example_bin" 8>&- 9>&-
+                env -i "${robot_env_args[@]}" ${display_prefix[@]+"${display_prefix[@]}"} "$example_bin" 8>&- 9>&-
             local exit_code=$?
         fi
 
@@ -887,6 +1010,12 @@ robot_process_env() {
 
 export -f run_test
 export -f robot_process_env
+# run_test's own callees, all of them: a worker is a fresh shell that inherits
+# only what is exported, and a missing one there is not a missing command --
+# it is every example in the parallel phase exiting 127 at once. A host with
+# GNU timeout never reaches this one, which is how it stayed missing.
+export -f run_with_portable_timeout
+export -f robot_example_needs_real_window
 export -f is_ci_env
 export -f host_cpu_min_mhz
 export -f host_cpu_freq_summary
@@ -896,6 +1025,7 @@ export -f number_lt
 export -f number_gt
 export -f wait_for_host_capacity
 export RESULTS_DIR
+export ROBOT_PHASE
 export EXAMPLE_BIN_DIR
 export ROBOT_TEST_TIMEOUT_CAP_SECS
 export ROBOT_TIMEOUT_RETRY_ATTEMPTS
@@ -915,18 +1045,29 @@ print_failure_excerpt() {
     echo "--------------------------------------------------" | tee -a "$LOG_FILE"
 }
 
-# Run tests in parallel using xargs or GNU parallel
 STOPPED_EARLY=0
-if [ "$PARALLEL_JOBS" -gt 1 ]; then
-    RUN_EXAMPLES=("${EXAMPLES[@]}")
-    # Use xargs for parallel execution
-    if ! printf '%s\n' "${EXAMPLES[@]}" | xargs -P "$PARALLEL_JOBS" -I {} bash -c 'run_test "$@"' _ {}; then
-        echo "One or more robot workers stopped before completing their assigned examples" | tee -a "$LOG_FILE"
-        STOPPED_EARLY=1
+
+run_example_list() {
+    local phase="$1"
+    shift
+    if [ "$#" -eq 0 ]; then
+        return 0
     fi
-else
-    # Sequential execution with progress
-    for example in "${EXAMPLES[@]}"; do
+
+    export ROBOT_PHASE="$phase"
+    if [ "$phase" = "parallel" ] && [ "$PARALLEL_JOBS" -gt 1 ]; then
+        echo "Running $# $phase-class examples, $PARALLEL_JOBS at a time" | tee -a "$LOG_FILE"
+        RUN_EXAMPLES+=("$@")
+        if ! printf '%s\n' "$@" | xargs -P "$PARALLEL_JOBS" -I {} bash -c 'run_test "$@"' _ {}; then
+            echo "One or more robot workers stopped before completing their assigned examples" | tee -a "$LOG_FILE"
+            STOPPED_EARLY=1
+        fi
+        return 0
+    fi
+
+    echo "Running $# $phase-class examples one at a time" | tee -a "$LOG_FILE"
+    local example run_status
+    for example in "$@"; do
         RUN_EXAMPLES+=("$example")
         echo "Running $example..." | tee -a "$LOG_FILE"
         if run_test "$example"; then
@@ -937,13 +1078,25 @@ else
         if [ "$run_status" -eq 75 ]; then
             echo "Stopping robot suite after host or timeout limit for $example" | tee -a "$LOG_FILE"
             STOPPED_EARLY=1
-            break
+            return 0
         fi
         if [ "$run_status" -ne 0 ]; then
             echo "Robot runner returned status $run_status for $example" | tee -a "$LOG_FILE"
         fi
         sleep 0.1
     done
+}
+
+run_example_list parallel ${PARALLEL_EXAMPLES[@]+"${PARALLEL_EXAMPLES[@]}"}
+
+# The exclusive lock is taken here and not a moment earlier: everything above
+# ran beside the fleet's builds, and only what follows needs the machine to
+# itself.
+if [ ${#SERIAL_EXAMPLES[@]} -gt 0 ] && [ "$STOPPED_EARLY" = "0" ]; then
+    if ! take_exclusive_host_lock; then
+        exit 1
+    fi
+    run_example_list serial "${SERIAL_EXAMPLES[@]}"
 fi
 
 # Wait for all tests to complete and gather results
