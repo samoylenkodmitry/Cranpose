@@ -203,7 +203,7 @@ class CranposeAndroidPlugin : Plugin<Project> {
             SERVICE_PERMISSIONS[service].orEmpty().map { permission -> permission to service }
         }.toMap()
         val declared = File(
-            File(requireWorkspace(project, cranpose), "target/cranpose"),
+            declarationDir(requireWorkspace(project, cranpose)),
             "${requireCargoPackage(cranpose)}-capabilities.json",
         )
         task.configure {
@@ -455,6 +455,9 @@ class CranposeAndroidPlugin : Plugin<Project> {
             .map { (features, grouped) -> NativeBuildGroup(grouped, features) }
     }
 
+    /** Where a build script writes what the application declared. */
+    private fun declarationDir(workspace: File): File = File(workspace, "target/cranpose")
+
     private fun registerNativeBuild(
         project: Project,
         taskName: String,
@@ -497,6 +500,12 @@ class CranposeAndroidPlugin : Plugin<Project> {
             arguments += listOf("--features", pass.features.joinToString(","))
         }
         commandLine(listOf("cargo") + arguments)
+        // Where the build script writes the application's declaration. The
+        // build says it rather than letting the build script work it out: a
+        // checkout inside another checkout of the same repository has two
+        // workspace manifests above the crate, and the two sides then disagree
+        // about which one holds the declaration.
+        environment(CAPABILITIES_DIR_VARIABLE, declarationDir(workspace).absolutePath)
         for ((name, value) in cranpose.environment.get()) {
             environment(name, value)
         }
@@ -549,6 +558,9 @@ class CranposeAndroidPlugin : Plugin<Project> {
          * to prove the application assembles asks for none of them.
          */
         const val RELEASE_ABIS_PROPERTY = "cranposeReleaseAbis"
+
+        /** Names the directory a build script writes the declaration into. */
+        const val CAPABILITIES_DIR_VARIABLE = "CRANPOSE_CAPABILITIES_DIR"
 
         val KNOWN_SERVICES = setOf(
             "background",
