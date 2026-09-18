@@ -124,7 +124,23 @@ fn robot_tree_response(app: &mut AppShell<WgpuRenderer>, command: &RobotCommand)
         RobotCommand::GetSpokenTree => {
             RobotResponse::SpokenTree(crate::accessibility::spoken_tree(app))
         }
+        RobotCommand::AuditAccessibility => audit_response(app),
         _ => RobotResponse::Semantics(extract_semantics(app)),
+    }
+}
+
+#[cfg(feature = "robot")]
+fn audit_response(app: &mut AppShell<WgpuRenderer>) -> RobotResponse {
+    match cranpose_app_shell::placed_semantics::placed_semantics_from_shell(app) {
+        Some(placed) => RobotResponse::AccessibilityIssues(
+            cranpose_app_shell::accessibility_audit::audit_accessibility(&placed)
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+        ),
+        None => RobotResponse::Error(
+            "the app has no laid out semantics tree yet; wait for a frame first".to_string(),
+        ),
     }
 }
 
@@ -5130,7 +5146,9 @@ impl ApplicationHandler for App {
                         robot_visual_dirty |= cursor_dirty || release_dirty;
                         let _ = controller.tx.send(RobotResponse::Ok);
                     }
-                    command @ (RobotCommand::GetSemantics | RobotCommand::GetSpokenTree) => {
+                    command @ (RobotCommand::GetSemantics
+                    | RobotCommand::GetSpokenTree
+                    | RobotCommand::AuditAccessibility) => {
                         let update_result = pump_robot_frame(app, &registry);
                         robot_visual_dirty |=
                             robot_query_visual_dirty(update_result, app.needs_redraw());

@@ -76,6 +76,19 @@ fn main() {
             std::thread::sleep(Duration::from_millis(600));
             let _ = robot.wait_for_idle();
 
+            let issues = robot
+                .audit_accessibility()
+                .expect("the accessibility audit runs");
+            if !issues.is_empty() {
+                robot_exit::fail(
+                    &robot,
+                    &format!(
+                        "the controls grid has accessibility issues:\n{}",
+                        issues.join("\n")
+                    ),
+                );
+            }
+
             expect_reading(
                 &robot,
                 "Checkmark",

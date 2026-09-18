@@ -2,8 +2,7 @@
 
 #![allow(non_snake_case)]
 
-pub mod accessibility_audit;
-pub mod placed_semantics;
+pub use cranpose_app_shell::{accessibility_audit, placed_semantics};
 pub mod robot;
 pub mod robot_assertions;
 #[cfg(feature = "desktop-robot")]

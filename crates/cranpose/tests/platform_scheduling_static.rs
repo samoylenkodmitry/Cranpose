@@ -3929,7 +3929,7 @@ fn a_keyboard_presses_and_moves_among_controls_and_a_ring_shows_where_it_is() {
 
 #[test]
 fn a_test_audits_a_screen_and_a_robot_prints_what_a_reader_speaks() {
-    let audit = workspace_source("crates/cranpose-testing/src/accessibility_audit.rs");
+    let audit = workspace_source("crates/cranpose-app-shell/src/accessibility_audit.rs");
     for kind in [
         "NoName",
         "SameName",
@@ -3951,9 +3951,9 @@ fn a_test_audits_a_screen_and_a_robot_prints_what_a_reader_speaks() {
     );
     let desktop_loop = crate_source("src/desktop.rs");
     assert!(
-        desktop_loop.contains("RobotCommand::GetSemantics | RobotCommand::GetSpokenTree")
+        desktop_loop.contains("RobotCommand::AuditAccessibility => audit_response(app)")
             && desktop_loop.contains("crate::accessibility::spoken_tree(app)"),
-        "the robot answers spoken_tree from the app thread"
+        "the robot answers spoken_tree and the audit from the app thread"
     );
     let android_test = workspace_source(
         "apps/android-demo/android/app/src/androidTest/java/com/compose_rs/demo/CranposeAccessibilityAuditTest.java",

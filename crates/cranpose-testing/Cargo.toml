@@ -29,7 +29,7 @@ desktop-robot = ["cranpose/robot"]
 cranpose-core = { workspace = true }
 cranpose-foundation = { workspace = true }
 cranpose-ui = { workspace = true, features = ["test-helpers"] }
-cranpose-app-shell = { workspace = true }
+cranpose-app-shell = { workspace = true, features = ["test-support"] }
 cranpose-render-common = { workspace = true }
 cranpose-ui-graphics = { workspace = true }
 
