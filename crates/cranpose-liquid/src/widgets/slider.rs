@@ -240,6 +240,20 @@ pub fn LiquidSlider(modifier: Modifier, value: f32, on_change: impl Fn(f32) + 's
     );
 }
 
+fn slider_semantics(
+    value: f32,
+    on_change: Rc<dyn Fn(f32)>,
+) -> impl Fn(&mut cranpose_ui::SemanticsConfiguration) {
+    move |config| {
+        config.state_description = Some(format!("{}%", (value * 100.0).round() as u32));
+        config.progress = Some(cranpose_ui::ProgressBarRangeInfo::new(value, 0.0, 1.0, 0));
+        let on_change = Rc::clone(&on_change);
+        config.set_progress = Some(cranpose_ui::SemanticsSetProgress::new(move |next: f32| {
+            on_change(next.clamp(0.0, 1.0));
+            true
+        }));
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -266,20 +280,5 @@ mod tests {
         let deformation = slider_deformation(pose);
         assert!((deformation.along() - pose.stretch).abs() < 1e-6);
         assert!(deformation.across() > 1.0);
-    }
-}
-
-fn slider_semantics(
-    value: f32,
-    on_change: Rc<dyn Fn(f32)>,
-) -> impl Fn(&mut cranpose_ui::SemanticsConfiguration) {
-    move |config| {
-        config.state_description = Some(format!("{}%", (value * 100.0).round() as u32));
-        config.progress = Some(cranpose_ui::ProgressBarRangeInfo::new(value, 0.0, 1.0, 0));
-        let on_change = Rc::clone(&on_change);
-        config.set_progress = Some(cranpose_ui::SemanticsSetProgress::new(move |next: f32| {
-            on_change(next.clamp(0.0, 1.0));
-            true
-        }));
     }
 }
