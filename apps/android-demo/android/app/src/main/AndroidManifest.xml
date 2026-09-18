@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    The demo declares only what is specific to it. The activity, its launcher
-    entry, the `android.app.lib_name` metadata and every framework permission
-    come from the Cranpose library and the optional service modules the Gradle
-    plugin added.
+    The demo declares only what is specific to it: the permissions its services
+    need, and its own application attributes. The activity, its launcher entry
+    and the `android.app.lib_name` metadata come from the Cranpose library and
+    the service modules the Gradle plugin added.
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
