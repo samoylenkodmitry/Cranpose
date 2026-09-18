@@ -1546,11 +1546,6 @@ fn FeaturedVideosReferenceCard(
     Column(
         Modifier::empty()
             .required_size(Size::new(330.0, 226.0))
-            .semantics(|config| {
-                config.role = Some(SemanticsWidgetRole::Button);
-                config.is_clickable = true;
-                config.content_description = Some("Featured videos".to_string());
-            })
             .draw_behind(|scope| {
                 scope.draw_round_rect(Brush::solid(Color::WHITE), CornerRadii::uniform(14.0));
             })

@@ -736,7 +736,8 @@ fn CompactTabPicker(
                                 CornerRadii::uniform(0.0),
                             );
                         })
-                        .padding_each(DEMO_PAGE_PADDING, 14.0, DEMO_PAGE_PADDING, 14.0),
+                        .padding_each(DEMO_PAGE_PADDING, 14.0, DEMO_PAGE_PADDING, 14.0)
+                        .semantics(move |config| config.selected = Some(is_active)),
                     ButtonSpec::default(),
                     move || {
                         active_tab.set(tab);

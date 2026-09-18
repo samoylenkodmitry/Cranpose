@@ -329,8 +329,9 @@ fn capture_menu_open(
     window_id: &str,
     output: &Path,
 ) -> Result<Vec<PathBuf>> {
-    let card = find_button(robot, "Featured videos")?;
-    let anchor = (card.0 + card.2 - 34.0, card.1 + 34.0);
+    let more = find_button(robot, "More")?;
+    let anchor = center(more);
+    let card = (anchor.0 + 34.0 - 330.0, anchor.1 - 34.0);
     let keyframes = relative_keyframes(&[0, 100, 200, 300, 500, 800, 1_100, 1_383]);
     capture_x11_keyframes(
         robot,
