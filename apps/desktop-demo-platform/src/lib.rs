@@ -4,6 +4,8 @@
 ))]
 use cranpose::AppLauncher;
 
+cranpose::app_capabilities!();
+
 #[cfg(any(
     all(feature = "android", target_os = "android", feature = "renderer-wgpu"),
     all(feature = "web", target_arch = "wasm32", feature = "renderer-wgpu")
@@ -11,6 +13,7 @@ use cranpose::AppLauncher;
 fn create_app() -> AppLauncher {
     let dev_controls = cranpose::launch_args().string("test_screen").is_none();
     AppLauncher::new()
+        .with_capabilities(&CAPABILITIES)
         .with_title("Cranpose Demo")
         .with_size(800, 600)
         .with_web_fill_viewport(true)

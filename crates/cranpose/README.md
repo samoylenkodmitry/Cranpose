@@ -93,20 +93,96 @@ Every application gets `CranposeActivity` and the rest of the framework's
 Java, the activity declaration with its launcher entry and
 `android.app.lib_name` metadata, the provider that serves shared files, the
 `androidx.appcompat` dependency it needs, and the consumer ProGuard rules that
-keep the JNI surface. `cranpose { services.add(...) }` adds more, one
-permission set at a time so an application that does not use a service never
-asks the user for it:
+keep the JNI surface. It gets no permission: the framework declares none, not
+even `INTERNET`. `cranpose { services.add(...) }` adds the code and components
+a service needs, and the application declares that service's permissions in
+its own manifest:
 
-| Service | What it adds |
-| --- | --- |
-| `background` | The foreground service Cranpose runs while a background-work lease is held, and the permissions to start it. |
-| `billing` | `CranposeBilling`, the Google Play Billing library, and the permission. |
-| `camera` | The camera permission and the optional camera hardware feature. |
-| `haptics` | The vibrator the haptics service drives. |
-| `media` | The media-playback foreground service and its permissions. |
-| `notifications` | Notification posting. |
-| `overlay` | Windows drawn above other applications. |
-| `update` | The permission `PackageInstaller` requires to install an application update. |
+| Service | What it adds | Permissions the application declares |
+| --- | --- | --- |
+| `background` | The foreground service Cranpose runs while a background-work lease is held. | `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_DATA_SYNC` |
+| `billing` | `CranposeBilling` and the Google Play Billing library. | `com.android.vending.BILLING` |
+| `camera` | The camera capability. | `CAMERA` |
+| `haptics` | The vibrator the haptics service drives. | `VIBRATE` |
+| `media` | The media-playback foreground service. | `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_MEDIA_PLAYBACK` |
+| `network` | `cranpose_services::http` and the online / metered state the activity reports. | `INTERNET`, `ACCESS_NETWORK_STATE` |
+| `notifications` | Notification posting. | `POST_NOTIFICATIONS` |
+| `overlay` | Windows drawn above other applications. | `SYSTEM_ALERT_WINDOW` |
+| `update` | Handing a downloaded package to `PackageInstaller`. | `REQUEST_INSTALL_PACKAGES` |
+
+### One declaration, in Rust, for every platform
+
+A permission is a line in the store listing and a question to the person
+holding the phone. It belongs to the application, and an application that
+ships on five platforms should say it once rather than in an Android manifest,
+an `Info.plist` and a Gradle block that can drift apart.
+
+So it says it in its build script:
+
+```rust
+use cranpose::capabilities::{Demand, Use, declare};
+
+fn main() {
+    declare(&[
+        Use::camera("Reads a receipt with the camera. Nothing leaves this device."),
+        Use::notifications(),
+    ])
+    .emit();
+}
+```
+
+A service is a function, so a name cannot be misspelled. A service Apple shows
+a sentence for takes that sentence as an argument, so it cannot be forgotten.
+Hardware an application cannot run without is an enum: `.demanding(&[Demand::Watch])`.
+
+`emit` writes the Android permissions and feature declarations, the Apple
+usage descriptions, and a constant the application itself reads:
+
+```rust
+cranpose::app_capabilities!();
+
+AppLauncher::new().with_capabilities(&CAPABILITIES)
+```
+
+The Android build takes the permissions from there. An application that has
+not declared anything in Rust keeps working: the build then reads
+`cranpose { services }` as before, and refuses a service whose permission the
+application's own manifest does not hold.
+
+One permission still arrives on its own: `androidx.core`, inside the
+`appcompat` dependency, declares
+`<applicationId>.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION` for its own
+receivers. The application grants it to itself and no store listing shows it.
+
+One permission still arrives on its own: `androidx.core`, inside the
+`appcompat` dependency, declares
+`<applicationId>.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION` for its own
+receivers. The application grants it to itself and no store listing shows it.
+
+### Hardware features stay optional unless you ask
+
+A permission carries hardware with it. `android.permission.CAMERA` makes
+Android's packaging tools require `android.hardware.camera`, which takes the
+application off every device without a camera and stops updates for people who
+already have it installed — a loss Play reports only once a release is
+prepared, in a warning that is easy to read past.
+
+The plugin writes those features into the merged manifest as
+`android:required="false"`, one for each permission that carries one, and
+refuses a build where a feature stays required that the application did not
+ask for. An application that cannot work without the hardware names it:
+
+```kotlin
+cranpose {
+    services.add("camera")
+    requiredFeatures.add("android.hardware.camera")
+}
+```
+
+A watch-only application names `android.hardware.type.watch` the same way. An
+application that only reads a photo it was given says nothing and reaches
+every device. The refusal names the feature, the permission behind it, and the
+line that would allow it.
 
 ### The escape hatch
 

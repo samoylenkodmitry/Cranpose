@@ -137,6 +137,32 @@ pub use native_window::{
     WindowMoveMode, WindowNode, WindowResizeDirection, WindowState,
     current_native_window_surface_origin, rememberWindowState,
 };
+/// Brings in what this crate's build script declared.
+///
+/// Writes `pub const CAPABILITIES: cranpose::capabilities::Capabilities`, read
+/// from the file `cranpose::capabilities::Declaration::emit` wrote:
+///
+/// ```ignore
+/// cranpose::app_capabilities!();
+///
+/// cranpose::android_main! {
+///     launcher: cranpose::AppLauncher::new().with_capabilities(&CAPABILITIES),
+///     content: my_app::Root,
+/// }
+/// ```
+#[macro_export]
+macro_rules! app_capabilities {
+    () => {
+        #[doc(hidden)]
+        mod cranpose_declared_capabilities {
+            use $crate::capabilities as cranpose_capabilities;
+
+            include!(concat!(env!("OUT_DIR"), "/cranpose_capabilities.rs"));
+        }
+        pub use cranpose_declared_capabilities::CAPABILITIES;
+    };
+}
+
 macro_rules! renderer_wgpu_platform_modules {
     ($($name:ident),+ $(,)?) => {
         $(
@@ -160,6 +186,11 @@ renderer_wgpu_platform_modules!(present_mode, surface_format, wgpu_surface);
 /// [`install_audio`] once at startup; Android installs it automatically.
 #[cfg(feature = "audio")]
 pub use cranpose_audio::{AudioEngine, install as install_audio};
+/// What an application asks of a device: the services it uses and the
+/// hardware it cannot run without, declared in its build script with
+/// `cranpose::capabilities::declare` and read back with
+/// [`app_capabilities!`](crate::app_capabilities).
+pub use cranpose_capabilities as capabilities;
 /// Core runtime helpers commonly used by applications.
 pub use cranpose_core::{
     CoroutineScope, DisposableEffect, DisposableEffectResult, DisposableEffectScope,

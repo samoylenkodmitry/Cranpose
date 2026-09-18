@@ -21,8 +21,25 @@ fn strip_xml_comments(source: &str) -> String {
 
 const CRANPOSE_GRADLE_PLUGIN: &str = "crates/cranpose/android/cranpose-gradle-plugin/src/main/kotlin/dev/cranpose/gradle/CranposeAndroidPlugin.kt";
 
+const CRANPOSE_CAPABILITIES: &str = "crates/cranpose-capabilities/src/lib.rs";
+
 fn cranpose_manifest(service: &str) -> String {
     format!("crates/cranpose/android/manifests/{service}.xml")
+}
+
+/// The variant name a service carries in `Service`, from the name the plugin
+/// knows it by: `photo-library` is `PhotoLibrary`.
+fn pascal(service: &str) -> String {
+    service
+        .split('-')
+        .map(|word| {
+            let mut letters = word.chars();
+            match letters.next() {
+                Some(first) => first.to_uppercase().collect::<String>() + letters.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect()
 }
 
 const ANDROID_APPLICATION_BUILD_FILES: [&str; 2] = [
@@ -2911,13 +2928,22 @@ fn android_media_declares_the_foreground_service_it_needs() {
         "playback that outlives the surface needs a mediaPlayback service"
     );
     assert!(
-        manifest.contains("android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"),
-        "the mediaPlayback service needs its own permission"
+        !manifest.contains("uses-permission"),
+        "the framework declares no permission; the application states what it asks for"
     );
     let plugin = workspace_source(CRANPOSE_GRADLE_PLUGIN);
     assert!(
         plugin.contains("\"media\","),
         "an application asks for the media service by name, so the plugin must know it"
+    );
+    assert!(
+        plugin.contains("android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"),
+        "the plugin must know the permission the mediaPlayback service needs"
+    );
+    let capabilities = workspace_source(CRANPOSE_CAPABILITIES);
+    assert!(
+        capabilities.contains("android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"),
+        "an application declaring the media service must get that permission written for it"
     );
 }
 
@@ -3124,10 +3150,15 @@ fn the_framework_declares_the_provider_its_own_sharing_needs() {
 
 #[test]
 fn installing_an_update_asks_for_its_permission_through_a_service() {
-    let module = workspace_source(&cranpose_manifest("update"));
+    let plugin = workspace_source(CRANPOSE_GRADLE_PLUGIN);
     assert!(
-        module.contains("android.permission.REQUEST_INSTALL_PACKAGES"),
-        "the update module must contribute the permission PackageInstaller requires"
+        plugin.contains("\"update\" to listOf(\"android.permission.REQUEST_INSTALL_PACKAGES\")"),
+        "the plugin must know the permission PackageInstaller requires of the update service"
+    );
+    let capabilities = workspace_source(CRANPOSE_CAPABILITIES);
+    assert!(
+        capabilities.contains("android.permission.REQUEST_INSTALL_PACKAGES"),
+        "an application declaring the update service must get that permission written for it"
     );
     let library = workspace_source(&cranpose_manifest("base"));
     assert!(
@@ -3160,7 +3191,7 @@ fn the_plugin_drives_abi_splits_from_the_architectures_it_builds() {
 }
 
 #[test]
-fn every_service_the_plugin_offers_has_a_manifest() {
+fn every_service_the_plugin_offers_says_what_it_needs() {
     let plugin = workspace_source(CRANPOSE_GRADLE_PLUGIN);
     let known = plugin
         .split("val KNOWN_SERVICES = setOf(")
@@ -3176,10 +3207,18 @@ fn every_service_the_plugin_offers_has_a_manifest() {
         services.len() >= 5,
         "the plugin should know several services, found {services:?}"
     );
+    let capabilities = workspace_source(CRANPOSE_CAPABILITIES);
     for service in services {
+        let components = workspace_path(&cranpose_manifest(service)).is_file();
+        let permissions = plugin.contains(&format!("\"{service}\" to listOf("));
         assert!(
-            workspace_path(&cranpose_manifest(service)).is_file(),
-            "the plugin offers `{service}` but has no manifest fragment for it"
+            components || permissions,
+            "the plugin offers `{service}` but neither contributes components for it nor knows \
+             what it asks the device for"
+        );
+        assert!(
+            capabilities.contains(&format!("Service::{}", pascal(service))),
+            "the plugin offers `{service}` but an application cannot declare it in Rust"
         );
     }
 }

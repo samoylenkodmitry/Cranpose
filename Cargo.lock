@@ -911,6 +911,7 @@ dependencies = [
  "console_error_panic_hook",
  "cranpose-app-shell",
  "cranpose-audio",
+ "cranpose-capabilities",
  "cranpose-core",
  "cranpose-liquid",
  "cranpose-media",
@@ -995,6 +996,10 @@ dependencies = [
  "ndk",
  "parking_lot",
 ]
+
+[[package]]
+name = "cranpose-capabilities"
+version = "0.1.134"
 
 [[package]]
 name = "cranpose-core"
@@ -1372,6 +1377,7 @@ version = "0.1.0"
 dependencies = [
  "console_error_panic_hook",
  "cranpose",
+ "cranpose-capabilities",
  "desktop-app",
  "env_logger",
  "log",

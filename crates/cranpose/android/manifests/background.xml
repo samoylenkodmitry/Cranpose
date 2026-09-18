@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
     Background execution: the foreground service Cranpose starts while an
-    application holds a background-work lease, and the permissions Android
-    requires to start it.
+    application holds a background-work lease.
+
+    The permissions Android requires to start it are the application's to
+    declare; the build fails and names them if it does not.
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
     <application>
         <service

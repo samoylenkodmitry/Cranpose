@@ -1,7 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
     What every Cranpose application needs, contributed by the library so no
-    application repeats it.
+    application repeats it. Permissions are not in that set: the framework
+    declares none, and an application writes the ones its services need in its
+    own manifest.
 
     The activity is declared here in full, including the launcher intent filter:
     an application supplies its label, icon and theme through the manifest
@@ -11,7 +13,6 @@
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <uses-permission android:name="android.permission.INTERNET" />
 
     <application>
         <activity
