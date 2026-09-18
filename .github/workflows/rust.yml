@@ -279,3 +279,13 @@ jobs:
       - name: Build web demo
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' && steps.changes.outputs.docs_only != 'true' }}
         run: just web
+      - name: Package the web demo for a check in a browser
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' && steps.changes.outputs.docs_only != 'true' }}
+        run: apps/desktop-demo/package-web.sh "$RUNNER_TEMP/web-demo"
+      - name: Keep the web demo three days
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' && steps.changes.outputs.docs_only != 'true' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: web-demo
+          path: ${{ runner.temp }}/web-demo
+          retention-days: 3
