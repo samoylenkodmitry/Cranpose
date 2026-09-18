@@ -297,6 +297,44 @@ fn the_publish_job_checks_out_the_tree_the_tag_names() {
 }
 
 #[test]
+fn the_release_board_can_be_pointed_at_a_tag() {
+    // A Publish that ran from a tag push carries the tag in
+    // `workflow_run.head_branch`. A Publish recovered by dispatch carries
+    // `main`, so this board skipped every job and v0.1.139 got its crates but
+    // no GitHub Release and no binaries -- silently, because skipped is green.
+    let workflow = workspace_source(".github/workflows/release.yml");
+
+    assert!(
+        workflow.contains("  workflow_dispatch:") && workflow.contains("      tag:"),
+        "the release board must be nameable by tag, or a recovered publish leaves no release"
+    );
+
+    let create = workflow_job_block(&workflow, "create-release");
+    assert!(
+        create.contains("^v[0-9]+\\.[0-9]+\\.[0-9]+$"),
+        "a hand-typed tag must be checked for shape before it opens a release under that name"
+    );
+    assert!(
+        create.contains("tag: ${{ github.event_name == 'workflow_dispatch' && inputs.tag"),
+        "create-release must publish the resolved tag as an output for the jobs below it"
+    );
+
+    // One source for the tag. A job reading the event directly is a job that
+    // builds the wrong tree the moment the board is dispatched.
+    for job in ["build", "build-windows", "build-android"] {
+        let block = workflow_job_block(&workflow, job);
+        assert!(
+            block.contains("needs: create-release"),
+            "{job} must depend on create-release to read its tag"
+        );
+        assert!(
+            !block.contains("github.event.workflow_run.head_branch"),
+            "{job} must take the tag from create-release, not from the event that started the board"
+        );
+    }
+}
+
+#[test]
 fn workflow_actions_are_pinned_to_commit_shas() {
     let mut unpinned = Vec::new();
     let mut seen = 0usize;
@@ -371,7 +409,12 @@ fn release_jobs_require_every_expected_asset() {
 #[test]
 fn release_artifacts_wait_for_publish_to_finalize_the_tag() {
     let workflow = workspace_source(".github/workflows/release.yml");
-    let finalized_tag = "${{ github.event.workflow_run.head_branch }}";
+    // Downstream jobs read one value; create-release resolves it once.
+    let finalized_tag = "${{ needs.create-release.outputs.tag }}";
+    let resolved_tag = concat!(
+        "${{ github.event_name == 'workflow_dispatch' && inputs.tag",
+        " || github.event.workflow_run.head_branch }}"
+    );
 
     assert!(
         workflow.contains("workflow_run:\n    workflows: [\"Publish\"]\n    types: [completed]")
@@ -379,10 +422,9 @@ fn release_artifacts_wait_for_publish_to_finalize_the_tag() {
         "release artifacts must start only after Publish has finalized the release tag"
     );
     assert!(
-        workflow.contains(
-            "if: github.event.workflow_run.conclusion == 'success' && startsWith(github.event.workflow_run.head_branch, 'v')"
-        ),
-        "release artifacts must reject failed Publish runs and non-tag manual runs"
+        workflow.contains("github.event.workflow_run.conclusion == 'success'")
+            && workflow.contains("startsWith(github.event.workflow_run.head_branch, 'v')"),
+        "release artifacts must reject failed Publish runs and a Publish that did not run from a tag"
     );
     assert_eq!(
         workflow.matches(&format!("ref: {finalized_tag}")).count(),
@@ -392,9 +434,12 @@ fn release_artifacts_wait_for_publish_to_finalize_the_tag() {
     assert_eq!(
         workflow
             .matches(&format!("tag_name: {finalized_tag}"))
-            .count(),
+            .count()
+            + workflow
+                .matches(&format!("tag_name: {resolved_tag}"))
+                .count(),
         4,
-        "every release action must explicitly target the finalized tag under workflow_run"
+        "every release action must explicitly target the finalized tag"
     );
     assert!(
         !workflow.contains("github.ref_name"),
