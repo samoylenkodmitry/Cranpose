@@ -370,7 +370,7 @@ robot_display_can_present() {
     # there is a presentable display whether or not this shell is sitting in
     # front of one. A virtual server has no DPMS extension and no monitor to
     # blank, which is what the rest of this probe is for.
-    if [ -n "${ROBOT_XVFB_SCREEN:-}" ] && command -v xvfb-run >/dev/null 2>&1; then
+    if robot_display_isolation_available; then
         return 0
     fi
     if [ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
