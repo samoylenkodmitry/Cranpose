@@ -175,7 +175,6 @@ fn TogglePressReferenceStage(checked: bool, on_change: impl Fn(bool) + 'static) 
                 Modifier::empty()
                     .offset(layout.track_origin.x, layout.track_origin.y)
                     .semantics(|config| {
-                        config.role = Some(SemanticsWidgetRole::Button);
                         config.is_clickable = true;
                         config.content_description = Some("Wi-Fi switch".to_string());
                     }),
@@ -354,7 +353,9 @@ fn OpticalParameterRow(label: &'static str, value: f32, on_change: impl Fn(f32) 
                 body_style(colors.label),
             );
             LiquidSlider(
-                Modifier::empty().weight(1.0),
+                Modifier::empty().weight(1.0).semantics(move |config| {
+                    config.content_description = Some(label.to_string());
+                }),
                 value.clamp(0.0, 1.0),
                 move |next| slider_change(next),
             );
@@ -1545,11 +1546,6 @@ fn FeaturedVideosReferenceCard(
     Column(
         Modifier::empty()
             .required_size(Size::new(330.0, 226.0))
-            .semantics(|config| {
-                config.role = Some(SemanticsWidgetRole::Button);
-                config.is_clickable = true;
-                config.content_description = Some("Featured videos".to_string());
-            })
             .draw_behind(|scope| {
                 scope.draw_round_rect(Brush::solid(Color::WHITE), CornerRadii::uniform(14.0));
             })
@@ -2145,8 +2141,6 @@ pub fn LiquidUiTab() {
                                                     let t = toggle_a2;
                                                     LiquidToggle(
                                                         Modifier::empty().semantics(|config| {
-                                                            config.role =
-                                                                Some(SemanticsWidgetRole::Button);
                                                             config.is_clickable = true;
                                                             config.content_description = Some(
                                                                 "Wi-Fi settings switch".to_string(),

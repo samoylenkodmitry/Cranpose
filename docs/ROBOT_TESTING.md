@@ -129,6 +129,18 @@ let issues = robot.audit_accessibility()?;
 assert!(issues.is_empty(), "{}", issues.join("\n"));
 ```
 
+`cranpose_testing::audit_changes(screen, &issues, KNOWN)` keeps that list for
+you: it returns the new lines and the listed issues that went away, and a
+test fails on either. A `*` entry stands for every screen.
+
+```rust
+const KNOWN: &[cranpose_testing::KnownIssue] = &[
+    ("library", "SmallTarget: control \"Pill\"", "the pill sits over the first tab"),
+];
+let issues = robot.audit_accessibility()?;
+cranpose_testing::audit_changes("library", &issues, KNOWN).unwrap();
+```
+
 #### `assert_accessible()`
 Panics with every issue `audit_accessibility` finds, or returns.
 

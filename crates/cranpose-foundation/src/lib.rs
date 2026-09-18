@@ -10,7 +10,7 @@ pub mod nodes;
 pub mod text;
 pub mod velocity_tracker;
 
-pub use gesture_constants::{DRAG_THRESHOLD, MAX_FLING_VELOCITY};
+pub use gesture_constants::{DRAG_THRESHOLD, MAX_FLING_VELOCITY, MINIMUM_TOUCH_TARGET_SIZE};
 pub use modifier::*;
 #[allow(unused_imports)]
 pub use modifier_helpers::*;

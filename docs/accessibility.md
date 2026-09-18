@@ -352,6 +352,14 @@ On the web a keystroke or a caret move patches the focused input in place. A
 rebuild of the mirror would drop the browser's focus and make a reader hear
 the whole field again instead of one character.
 
+**The target of a decorated field.** A decorated field's semantics and its
+touch target sit on the field itself, not on the box the decoration draws
+around it. A field whose padding lives on the decoration box measures as
+tall as its one line of text, 18 points, and fails the 24 point rule of the
+audit. Put the padding on the field's modifier instead, the way the liquid
+search field does with `Modifier::empty().padding_symmetric(0.0, 9.0)`, so
+the padded box is what a reader and a finger get.
+
 ## 4k. Roles a reader names
 
 A reader says what a control is after its name: "Save, button". Ten roles
@@ -463,6 +471,15 @@ and puts the drawn content in the middle. The drawn size does not change: a
 each side of it. Compose's `minimumInteractiveComponentSize`, Material's
 48 dp and above Apple's 44 pt. `IconButton` already keeps 48 points on its
 own.
+
+A press from a finger or a pen that misses every control, but lands within
+the 48 points around a smaller control, reaches that control when no other
+control claims the point, the way Compose's minimum touch target hit test
+does. A scroll container or another parent around the control does not
+claim it; a sibling under the finger does. The nearest such control takes
+it. The release then counts as a click when it stays within the drag
+threshold of the press, as any release does. A mouse, or a pointer of an
+unknown kind, keeps its exact point.
 
 | Key | What happens |
 | --- | --- |
@@ -685,9 +702,10 @@ An app gets this with no code of its own:
 | `toggleable`, a switch or checkbox | the label, its state | flip it |
 | `selectable`, a tab or a radio row | the label, its role, whether it is picked | pick it |
 | `LiquidTabBar` | the tab, whether it is picked, and which of how many | pick it |
-| `LiquidToggle`, `LiquidSegmented`, `LiquidMenu` rows, the liquid icon group | the switch and its state, the segment, the row | flip or pick it, from a reader, Tab and Enter alike |
+| `LiquidToggle`, `LiquidSegmented`, `LiquidChip`, `LiquidMenu` rows, the liquid icon group | the switch and its state, the segment or the chip and whether it is picked, the row | flip or pick it, from a reader, Tab and Enter alike |
 | `BasicTextField` | the name the app gave it, or the text it holds; an empty field is still a stop | type into it, hand it whole text, move the caret by character, word and line, and pick a stretch of text |
 | `Slider` | the value | move it |
+| `LiquidSlider` | the name the app gave it, and the value in percent | move it with a swipe up or down |
 | `CircularProgressIndicator`, `LinearProgressIndicator` | "Loading", progress bar | |
 | `SwipeToDismiss` | the row's content | send the row away with the reader's own dismiss, or run "Dismiss" from the actions menu |
 | `verticalScroll`, `horizontalScroll`, `LazyColumn`, `LazyRow` | the rows inside, and on Android how many rows there are | page on and back |
@@ -757,13 +775,14 @@ it. `ComposeTestRule::assert_accessible(size)` runs it on composed content,
 `RobotTestRule::assert_accessible()` on what a headless shell shows, and
 `audit_accessibility` returns the list for a test that wants to look at it.
 Over the external robot, `robot.audit_accessibility()` returns the same list
-for the screen a running app shows, and `robot.assert_accessible()` fails on it.
+for the screen a running app shows, and `robot.assert_accessible()` fails on it;
+`audit_changes` compares that list with the issues a suite leaves as they are.
 The issues:
 
 | Issue | What a reader user hits | The fix |
 | --- | --- | --- |
 | `NoName` | a control that says nothing | `content_description`, or a `Text` inside it |
-| `SameName` | two controls of one role with one name, "Delete" and "Delete" | say what each acts on |
+| `SameName` | two controls of one role with one name, "Delete" and "Delete"; rows of a list at different places are apart, a reader speaks their place | say what each acts on |
 | `SmallTarget` | a control under 24 by 24 points, WCAG 2.5.8 | `Modifier::minimum_interactive_component_size()` |
 | `OutOfOrder` | a control laid out fully above the one read before it | reading order, or `traversal_index` |
 | `NoPaneTitle` | a screen that says nothing on arrival | `pane_title` on the root |

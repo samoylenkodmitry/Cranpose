@@ -57,5 +57,20 @@ is ticked when the code, its tests and its docs are on the branch.
 
 ## Step 7. cranscan takes it up
 
-- [ ] waits for a Cranpose release that carries the steps above: the branch `a11y-text-edit` has to reach main and crates.io first, and cranscan takes the new version in `app/Cargo.toml`
-- [ ] then in cranscan: the search field role, the magic tap on capture, reader guidance through `local_accessibility_state()`, a shutter cue, and `assert_accessible` over every screen in its tests
+- [x] the robot of every app can audit the screen it shows: `robot.audit_accessibility()` and `robot.assert_accessible()`, and `audit_changes` keeps the list of issues a suite leaves as they are
+- [x] in cranscan, on branch `a11y/step-7` built against the Cranpose branch: the search field role from the framework, the magic tap on the shutter, "Photo taken" through the announcer, a live hint that names the shutter when a reader is on, and an audit of every screen the robot suite photographs plus About, Insights and Unlock
+- [x] what that audit found and cranscan fixed: same named Edit item, Remove and Row actions controls, five unnamed switches, and six targets under 24 points
+- [ ] a Cranpose release with the steps above and the robot audit, then cranscan takes that version and the branch merges
+
+## Step 8. What the first audits taught
+
+- [x] `width_in`, `height_in` and `size_in`: a small field gets its 24 points without growing to 48
+- [x] rows of one list with one name are apart in the audit, because a reader speaks their place
+- [x] the target of a decorated field is the field, not its decoration box: the guide says to put the padding on the field's modifier, as the liquid search field does
+- [x] the iOS bridge comes up at the first frame when the root view controller was not there at startup: on the simulator the reader got no tree at all
+- [x] the Liquid slider speaks its value and takes a swipe, segments and chips speak their selected state; the demo names its sliders and lets its switches keep the switch role
+- [x] the iOS demo logs the spoken tree under `cranpose::spoken_tree` when built with `EXTRA_FEATURES=logging`, so a check needs no VoiceOver on the simulator
+- [x] a touch slop: a press from a finger or a pen within the 48 points around a small control that nothing else claims reaches it, the way Compose's minimum touch target hit test does; the release counts as a click through the drag threshold, so the clickable node needs no change
+- [x] a check by hand of the demo on the iOS simulator through its accessibility tree: names, roles and traits read well on the counter, Liquid UI and text input screens; the magic tap has no control in the demo and waits for cranscan on the iPhone
+- [ ] a check by hand of the web mirror in a browser: focus order and live regions
+- [ ] cranscan on the iPhone with VoiceOver on

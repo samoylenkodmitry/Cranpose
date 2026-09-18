@@ -218,6 +218,10 @@ impl<F: FnMut() + 'static> IosApp<F> {
 
         let dirty_before = gpu.surface_dirty;
         let update_result = shell.update();
+        if self.accessibility.is_none() {
+            self.accessibility =
+                crate::ios_accessibility::IosAccessibilityBridge::new(self.event_proxy.clone());
+        }
         if let Some(accessibility) = self.accessibility.as_mut() {
             accessibility.sync(shell);
         }

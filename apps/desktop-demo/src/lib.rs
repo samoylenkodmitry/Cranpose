@@ -82,6 +82,8 @@ fn ios_root() {
 
 #[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
 pub fn ios_entry_point() {
+    #[cfg(feature = "logging")]
+    let _ = env_logger::try_init();
     if let Err(error) = IosAppLauncher::new()
         .with_title("Cranpose Demo")
         .with_fonts(IOS_DEMO_FONTS)

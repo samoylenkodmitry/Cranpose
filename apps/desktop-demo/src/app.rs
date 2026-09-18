@@ -671,16 +671,30 @@ fn CompactAppBar(
         move || {
             let label = active_tab.get().label();
             let is_open = picker_open.get();
+            let picker = Modifier::empty()
+                .rounded_corners(12.0)
+                .draw_behind(move |scope| {
+                    scope.draw_round_rect(
+                        Brush::solid(Color(0.3, 0.3, 0.3, 0.5)),
+                        CornerRadii::uniform(12.0),
+                    );
+                })
+                .padding(10.0)
+                .content_description(label.to_string())
+                .dropdown_list();
+            let picker = if is_open {
+                picker.collapse(move || {
+                    picker_open.set(false);
+                    true
+                })
+            } else {
+                picker.expand(move || {
+                    picker_open.set(true);
+                    true
+                })
+            };
             Button(
-                Modifier::empty()
-                    .rounded_corners(12.0)
-                    .draw_behind(move |scope| {
-                        scope.draw_round_rect(
-                            Brush::solid(Color(0.3, 0.3, 0.3, 0.5)),
-                            CornerRadii::uniform(12.0),
-                        );
-                    })
-                    .padding(10.0),
+                picker,
                 ButtonSpec::default(),
                 move || picker_open.set(!is_open),
                 move || {
@@ -722,7 +736,8 @@ fn CompactTabPicker(
                                 CornerRadii::uniform(0.0),
                             );
                         })
-                        .padding_each(DEMO_PAGE_PADDING, 14.0, DEMO_PAGE_PADDING, 14.0),
+                        .padding_each(DEMO_PAGE_PADDING, 14.0, DEMO_PAGE_PADDING, 14.0)
+                        .semantics(move |config| config.selected = Some(is_active)),
                     ButtonSpec::default(),
                     move || {
                         active_tab.set(tab);

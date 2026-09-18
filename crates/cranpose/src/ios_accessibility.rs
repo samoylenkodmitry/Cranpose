@@ -328,6 +328,7 @@ impl IosAccessibilityBridge {
         if next == self.snapshot {
             return;
         }
+        accessibility::log_spoken_tree(&next);
         let next_ids = accessibility::element_ids(&next);
         self.requests.screen_action.set(
             next.iter()
