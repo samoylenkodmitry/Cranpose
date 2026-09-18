@@ -44,7 +44,14 @@ trap cleanup EXIT INT TERM
 number_file="$work_dir/display"
 : > "$number_file"
 
-Xvfb -screen 0 "$screen" -nolisten tcp -displayfd 3 3>"$number_file" &
+# The server's own log goes to its own file, never to the command's streams.
+# The robot suite reads an example's output to decide whether it failed, and
+# Xvfb greets every start with "Errors from xkbcomp are not fatal to the X
+# server" -- a line that says nothing is wrong and contains the word the
+# detector looks for. That alone failed robot_tab_walk_text_visual_contract
+# on a green run.
+Xvfb -screen 0 "$screen" -nolisten tcp -displayfd 3 \
+    3>"$number_file" >"$work_dir/xvfb.log" 2>&1 &
 server_pid=$!
 
 display_number=""
