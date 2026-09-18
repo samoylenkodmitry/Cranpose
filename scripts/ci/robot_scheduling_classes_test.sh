@@ -87,6 +87,11 @@ fn main() {
     println!("pixels only");
 }
 RS
+cat > "$fixture/apps/desktop-demo/robot-runners/robot_plain_two.rs" <<'RS'
+fn main() {
+    println!("pixels only, again");
+}
+RS
 
 # A class filter that removes every selected example must say so. It is a
 # legitimate configuration -- `robot-captures` asks for the parallel class and
@@ -110,6 +115,51 @@ check "a fixture example with no measurement is parallel" \
     grep -qx "parallel robot_plain" <<< "$fixture_classes"
 check "a module without a main is not itself an example" \
     bash -c '! grep -q " frame_stats$" <<< "$1"' _ "$fixture_classes"
+
+# The class the suite runs is the class it builds. Every example is its own
+# crate and codegens its own copy of what it instantiates, so the 78 examples a
+# pull request never runs were 44% of a build that took 10m12s. A stub cargo
+# records what the runner actually asked for.
+stub_dir="$fixture/bin"
+mkdir -p "$stub_dir"
+cargo_args_file="$fixture/cargo-args"
+cat > "$stub_dir/cargo" <<'CARGO'
+#!/usr/bin/env bash
+printf '%s\n' "$@" > "$ROBOT_CLASSES_TEST_CARGO_ARGS"
+exit 0
+CARGO
+chmod +x "$stub_dir/cargo"
+
+build_selection() {
+    : > "$cargo_args_file"
+    (
+        cd "$fixture" \
+            && PATH="$stub_dir:$PATH" \
+               ROBOT_CLASSES_TEST_CARGO_ARGS="$cargo_args_file" \
+               "$RUNNER" --classes "$1" --build-only
+    ) > /dev/null 2>&1 || true
+    cat "$cargo_args_file"
+}
+
+parallel_build="$(build_selection parallel)"
+check "the parallel build really reached cargo, so the next checks read something" \
+    grep -qx -- "--profile" <<< "$parallel_build"
+check "a parallel run builds the parallel examples" \
+    bash -c 'grep -qx "robot_plain" <<< "$1" && grep -qx "robot_plain_two" <<< "$1"' _ "$parallel_build"
+check "a parallel run does not build the serial example it will not run" \
+    bash -c '! grep -qx "robot_via_module" <<< "$1"' _ "$parallel_build"
+check "a parallel run never falls back to building every example" \
+    bash -c '! grep -qx -- "--examples" <<< "$1"' _ "$parallel_build"
+
+serial_build="$(build_selection serial)"
+check "a serial run builds the serial example" \
+    grep -qx "robot_via_module" <<< "$serial_build"
+check "a serial run does not build the parallel examples it will not run" \
+    bash -c '! grep -qx "robot_plain" <<< "$1" && ! grep -qx "robot_plain_two" <<< "$1"' _ "$serial_build"
+
+all_build="$(build_selection all)"
+check "an unfiltered run still builds every example in one cargo invocation" \
+    grep -qx -- "--examples" <<< "$all_build"
 
 if [ "$failures" -ne 0 ]; then
     echo "$failures robot scheduling-class check(s) failed" >&2
