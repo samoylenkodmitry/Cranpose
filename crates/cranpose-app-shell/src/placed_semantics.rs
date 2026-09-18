@@ -217,6 +217,18 @@ impl HitGraphSink for TouchBoundsSink<'_> {
     }
 }
 
+/// Gives a row its place, and passes it down through the wrappers a list
+/// puts around its rows to the first control: the row a reader stops on.
+pub(crate) fn place_row(row: &mut PlacedSemanticsNode, position: usize) {
+    let mut node = row;
+    loop {
+        node.list_position = Some(position);
+        if node.clickable || node.children.len() != 1 {
+            return;
+        }
+        node = &mut node.children[0];
+    }
+}
 fn join(
     node: &SemanticsNode,
     layout_bounds: &HashMap<NodeId, Rect>,
@@ -236,7 +248,7 @@ fn join(
     }
     if node.collection.is_some() {
         for (child, position) in children.iter_mut().zip(1..) {
-            child.list_position = Some(position);
+            place_row(child, position);
         }
     }
     Ok(PlacedSemanticsNode {

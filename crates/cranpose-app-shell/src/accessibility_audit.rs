@@ -558,4 +558,23 @@ mod tests {
         }
         assert!(!same_names(&list), "the same two as rows 1 and 2 of a list");
     }
+
+    #[test]
+    fn a_row_wrapped_by_its_list_still_gets_its_place() {
+        let wrapped = |y: f32| PlacedSemanticsNode {
+            children: vec![button(Some("Scan"), rect(0.0, y, 200.0, 40.0))],
+            ..node(None, rect(0.0, y, 200.0, 40.0))
+        };
+        let mut list = screen(vec![wrapped(0.0), wrapped(50.0)]);
+        for (row, position) in list.children.iter_mut().zip(1..) {
+            crate::placed_semantics::place_row(row, position);
+        }
+        let issues = audit_accessibility(&list);
+        assert!(
+            !issues
+                .iter()
+                .any(|issue| issue.kind == AccessibilityIssueKind::SameName),
+            "the buttons under the wrappers carry places 1 and 2: {issues:?}"
+        );
+    }
 }
