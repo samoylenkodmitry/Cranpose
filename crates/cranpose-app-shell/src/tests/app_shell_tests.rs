@@ -10659,6 +10659,46 @@ fn cancelling_a_gesture_restores_the_default_pointer() {
 }
 
 #[test]
+fn a_held_press_outlives_the_pointer_leaving_the_window() {
+    let _guard = test_guard();
+    let hits = Rc::new(RefCell::new(vec![PointerIconHitTarget {
+        node_id: 1,
+        pointer_icon: Some(PointerIcon::POINTER),
+    }]));
+    let mut shell = pointer_icon_shell(hits);
+
+    shell.set_cursor(5.0, 5.0);
+    assert_eq!(shell.take_pointer_icon_change(), Some(PointerIcon::POINTER));
+    shell.pointer_pressed();
+
+    shell.cancel_gesture_unless_pressed();
+
+    assert_eq!(
+        shell.take_pointer_icon_change(),
+        None,
+        "a window another one is drawn over, or a drag carried past an edge, \
+         still owns the press and still receives its release"
+    );
+}
+
+#[test]
+fn an_idle_pointer_leaving_the_window_ends_the_gesture() {
+    let _guard = test_guard();
+    let hits = Rc::new(RefCell::new(vec![PointerIconHitTarget {
+        node_id: 1,
+        pointer_icon: Some(PointerIcon::POINTER),
+    }]));
+    let mut shell = pointer_icon_shell(hits);
+
+    shell.set_cursor(5.0, 5.0);
+    assert_eq!(shell.take_pointer_icon_change(), Some(PointerIcon::POINTER));
+
+    shell.cancel_gesture_unless_pressed();
+
+    assert_eq!(shell.take_pointer_icon_change(), Some(PointerIcon::DEFAULT));
+}
+
+#[test]
 fn moving_inside_one_region_does_not_repeat_the_icon_change() {
     let _guard = test_guard();
     let hits = Rc::new(RefCell::new(vec![PointerIconHitTarget {

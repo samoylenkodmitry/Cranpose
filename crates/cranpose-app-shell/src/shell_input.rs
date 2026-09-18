@@ -879,6 +879,21 @@ where
         });
     }
 
+    /// Ends the gesture only when the pointer leaving really ended it.
+    ///
+    /// A held button belongs to the surface that received the press until
+    /// the release: a window drawn over the cursor, or a drag carried past
+    /// an edge, both leave the press where it started and deliver the
+    /// release there too. Cancelling on either would drop a gesture the
+    /// user has not finished, so a pressed pointer is left alone and only
+    /// an idle one cancels.
+    pub fn cancel_gesture_unless_pressed(&mut self) {
+        if self.buttons_pressed != PointerButtons::NONE {
+            return;
+        }
+        self.cancel_gesture();
+    }
+
     fn cancel_gesture_inner(&mut self, event_time: PointerEventTime) {
         let targets = self.resolve_gesture_targets(PointerId::PRIMARY);
 

@@ -990,6 +990,38 @@ impl App {
         }
     }
 
+    fn let_go_of_windows_no_longer_declared(&mut self, active_keys: &HashSet<NativeWindowKey>) {
+        let stale_window_ids: Vec<WinitWindowId> = self
+            .native_windows
+            .iter()
+            .filter_map(|(window_id, native)| {
+                (!active_keys.contains(&native.key)).then_some(*window_id)
+            })
+            .collect();
+        for window_id in stale_window_ids {
+            if let Some(native) = self.native_windows.get(&window_id) {
+                trace_native_window(format_args!(
+                    "sync stale key={:?} title={:?} visible={}",
+                    native.key, native.options.title, native.options.visible
+                ));
+                if let Some((x, y)) =
+                    current_native_window_position(&self.native_window_platform_probe, native)
+                {
+                    self.native_window_positions.insert(native.key, (x, y));
+                    notify_native_window_moved(&native.events, x, y);
+                }
+            }
+            if let Some(native) = self.native_windows.get_mut(&window_id) {
+                native.state = None;
+                if native.options.visible {
+                    native.window.set_visible(false);
+                    native.options.visible = false;
+                    cancel_app_input(&mut native.app);
+                }
+            }
+        }
+    }
+
     fn sync_native_windows(&mut self, event_loop: &dyn ActiveEventLoop) {
         if self.gpu_context.is_none() {
             return;
@@ -1023,34 +1055,7 @@ impl App {
         self.closed_native_windows
             .retain(|key| active_keys.contains(key));
 
-        let stale_window_ids: Vec<WinitWindowId> = self
-            .native_windows
-            .iter()
-            .filter_map(|(window_id, native)| {
-                (!active_keys.contains(&native.key)).then_some(*window_id)
-            })
-            .collect();
-        for window_id in stale_window_ids {
-            if let Some(native) = self.native_windows.get(&window_id) {
-                trace_native_window(format_args!(
-                    "sync stale key={:?} title={:?} visible={}",
-                    native.key, native.options.title, native.options.visible
-                ));
-                if let Some((x, y)) =
-                    current_native_window_position(&self.native_window_platform_probe, native)
-                {
-                    self.native_window_positions.insert(native.key, (x, y));
-                    notify_native_window_moved(&native.events, x, y);
-                }
-            }
-            if let Some(native) = self.native_windows.get_mut(&window_id)
-                && native.options.visible
-            {
-                native.window.set_visible(false);
-                native.options.visible = false;
-                cancel_app_input(&mut native.app);
-            }
-        }
+        self.let_go_of_windows_no_longer_declared(&active_keys);
 
         let mut native_windows_to_create = Vec::new();
         for request in requests {
@@ -1117,12 +1122,21 @@ impl App {
         );
 
         let mut native_window_shells = Vec::with_capacity(native_windows_to_create.len());
+        let anything_focused = self
+            .native_windows
+            .values()
+            .any(|open| open.window.has_focus());
         for request in native_windows_to_create {
             trace_native_window(format_args!(
                 "sync create key={:?} title={:?} visible={}",
                 request.key, request.options.title, request.options.visible
             ));
-            match Self::create_native_window_shell(event_loop, request, self.settings.headless) {
+            match Self::create_native_window_shell(
+                event_loop,
+                request,
+                self.settings.headless,
+                anything_focused,
+            ) {
                 Ok(shell) => native_window_shells.push(shell),
                 Err(error) => {
                     self.abort_launch(event_loop, error);
@@ -1457,10 +1471,15 @@ impl App {
         event_loop: &dyn ActiveEventLoop,
         request: NativeWindowRequest,
         headless: bool,
+        anything_focused: bool,
     ) -> Result<NativeWindowShell, LaunchError> {
         let create_started = Instant::now();
         let options = &request.options;
-        let attributes = native_window_attributes(options, headless);
+        let attributes = native_window_attributes(
+            options,
+            headless,
+            a_new_window_comes_up_key(headless, options.visible, anything_focused),
+        );
 
         let window: Arc<dyn Window> = event_loop
             .create_window(attributes)
@@ -1922,15 +1941,10 @@ impl App {
         now: Instant,
         start_pointer_screen: Option<PhysicalPosition<f64>>,
     ) -> Option<NativeWindowPollingDragSession> {
-        let pointer = start_pointer_screen
-            .or_else(|| {
-                native_window_global_pointer_state(platform_probe).map(|state| state.position)
-            })
-            .or_else(|| {
-                native.last_cursor_physical_position.and_then(|position| {
-                    native_window_screen_pointer_physical(platform_probe, &native.window, position)
-                })
-            })?;
+        let pointer = native_window_polling_drag_pointer(
+            native_window_global_pointer_state(platform_probe),
+            start_pointer_screen,
+        )?;
         let window_outer = current_native_window_physical_position(platform_probe, &native.window)?;
         Some(NativeWindowPollingDragSession::new(
             pointer,
@@ -2586,7 +2600,7 @@ impl App {
                 dispatch_ime_event(&mut native.app, ime_event);
             }
             WindowEvent::PointerLeft { .. } if native.active_drag.is_none() => {
-                native.app.cancel_gesture();
+                native.app.cancel_gesture_unless_pressed();
             }
             WindowEvent::PointerLeft { .. } => {}
             WindowEvent::RedrawRequested => {
@@ -3127,8 +3141,21 @@ fn a_new_window_comes_up_key(headless: bool, visible: bool, anything_focused: bo
     !headless && visible && !anything_focused
 }
 
-fn native_window_attributes(options: &NativeWindowOptions, headless: bool) -> WindowAttributes {
+fn native_window_polling_drag_pointer(
+    global: Option<NativeWindowPointerState>,
+    start_pointer_screen: Option<PhysicalPosition<f64>>,
+) -> Option<PhysicalPosition<f64>> {
+    let global = global?;
+    Some(start_pointer_screen.unwrap_or(global.position))
+}
+
+fn native_window_attributes(
+    options: &NativeWindowOptions,
+    headless: bool,
+    active: bool,
+) -> WindowAttributes {
     let mut attributes = WindowAttributes::default()
+        .with_active(active)
         .with_title(options.title.clone())
         .with_surface_size(LogicalSize::new(
             options.width.max(1.0) as f64,
@@ -4800,7 +4827,7 @@ impl ApplicationHandler for App {
                 dispatch_ime_event(app, ime_event);
             }
             WindowEvent::PointerLeft { .. } => {
-                app.cancel_gesture();
+                app.cancel_gesture_unless_pressed();
             }
             WindowEvent::RedrawRequested => {
                 record_pacing_event(|diag| &mut diag.redraw_events);
@@ -6122,6 +6149,72 @@ mod tests {
     fn a_window_with_nothing_on_screen_is_left_alone() {
         assert!(!super::a_new_window_comes_up_key(false, false, false));
         assert!(!super::a_new_window_comes_up_key(true, true, false));
+    }
+
+    fn window_options() -> crate::native_window::NativeWindowOptions {
+        crate::native_window::NativeWindowOptions {
+            title: "w".to_string(),
+            width: 320.0,
+            height: 240.0,
+            x: None,
+            y: None,
+            position_origin: crate::native_window::NativeWindowPositionOrigin::Screen,
+            decorations: false,
+            transparent: false,
+            resizable: true,
+            visible: true,
+            always_on_top: false,
+            min_width: None,
+            min_height: None,
+            max_width: None,
+            max_height: None,
+        }
+    }
+
+    #[test]
+    fn a_window_that_must_not_take_focus_comes_up_inactive() {
+        assert!(
+            !super::native_window_attributes(&window_options(), false, false).active,
+            "a window that comes up key steals the press the focused window is \
+             holding, and the gesture it was in the middle of is cancelled"
+        );
+    }
+
+    #[test]
+    fn a_window_that_may_take_focus_comes_up_active() {
+        assert!(super::native_window_attributes(&window_options(), false, true).active);
+    }
+
+    #[test]
+    fn a_drag_with_no_pointer_to_poll_leaves_the_move_to_the_platform() {
+        assert!(
+            super::native_window_polling_drag_pointer(
+                None,
+                Some(winit::dpi::PhysicalPosition::new(7.0, 9.0)),
+            )
+            .is_none(),
+            "polling reads the pointer every frame, so without one the window \
+             never moves and the platform drag has to take the gesture"
+        );
+    }
+
+    #[test]
+    fn a_drag_polls_from_the_anchor_the_press_recorded() {
+        let global = super::NativeWindowPointerState {
+            position: winit::dpi::PhysicalPosition::new(1.0, 2.0),
+            primary_down: true,
+        };
+        assert_eq!(
+            super::native_window_polling_drag_pointer(
+                Some(global),
+                Some(winit::dpi::PhysicalPosition::new(7.0, 9.0)),
+            ),
+            Some(winit::dpi::PhysicalPosition::new(7.0, 9.0))
+        );
+        assert_eq!(
+            super::native_window_polling_drag_pointer(Some(global), None),
+            Some(winit::dpi::PhysicalPosition::new(1.0, 2.0))
+        );
     }
 
     #[cfg(feature = "robot")]

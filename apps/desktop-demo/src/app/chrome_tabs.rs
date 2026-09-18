@@ -12,8 +12,8 @@
 use cranpose::{Dock, DockHost, DockKey, DockModifierExt, DockPolicy, Pane, WindowModifierExt};
 use cranpose_core::{key, rememberMutableStateOf, MutableState};
 use cranpose_ui::{
-    composable, text::TextUnit, Color, Column, ColumnSpec, HorizontalAlignment, Modifier, Row,
-    RowSpec, Size, Text, TextStyle, VerticalAlignment,
+    composable, text::TextUnit, Box, BoxSpec, Color, Column, ColumnSpec, HorizontalAlignment,
+    Modifier, Row, RowSpec, Size, Text, TextStyle, VerticalAlignment,
 };
 
 /// What one tab holds.
@@ -99,8 +99,7 @@ fn TabStrip(host: DockHost, pages: MutableState<Vec<Page>>, next: MutableState<u
         Modifier::empty()
             .fill_max_width()
             .height(STRIP_HEIGHT)
-            .background(CHROME)
-            .window_drag_area(),
+            .background(CHROME),
         RowSpec {
             vertical_alignment: VerticalAlignment::CenterVertically,
             ..RowSpec::default()
@@ -111,6 +110,14 @@ fn TabStrip(host: DockHost, pages: MutableState<Vec<Page>>, next: MutableState<u
                 key(pane.raw(), || StripTab(pages, pane, pane == active));
             }
             NewTabButton(host.clone(), pages, next);
+            Box(
+                Modifier::empty()
+                    .weight(1.0)
+                    .fill_max_height()
+                    .window_drag_area(),
+                BoxSpec::default(),
+                || {},
+            );
         },
     );
 }

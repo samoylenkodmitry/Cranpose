@@ -569,12 +569,17 @@ impl DockRef {
 
     fn press(&self, pane: DockKey, window: DockWindowId, local: Point) {
         let Some(origin) = current_native_window_surface_origin() else {
+            trace_dock(format_args!("press ignored: no surface origin"));
             return;
         };
         let screen = plus(origin, local);
-        self.model.update(|model| {
-            model.press(pane, window, local, screen);
-        });
+        let began = self
+            .model
+            .update(|model| model.press(pane, window, local, screen));
+        trace_dock(format_args!(
+            "press pane={pane:?} window={window:?} local=({:.1},{:.1}) origin=({:.1},{:.1}) began={began}",
+            local.x, local.y, origin.x, origin.y
+        ));
     }
 
     fn drag_step(&self, window: DockWindowId, local: Point) {
@@ -584,6 +589,7 @@ impl DockRef {
             .drag()
             .is_some_and(|drag| drag.source == window);
         let Some(origin) = current_native_window_surface_origin() else {
+            trace_dock(format_args!("move ignored: no surface origin"));
             return;
         };
         if !drives {
@@ -595,6 +601,25 @@ impl DockRef {
         let step = self
             .model
             .update(|model| model.drag_to(screen, &rects, &policy));
+        trace_dock(format_args!(
+            "move window={window:?} local=({:.1},{:.1}) origin=({:.1},{:.1}) screen=({:.1},{:.1}) rects={:?} step={step:?}",
+            local.x,
+            local.y,
+            origin.x,
+            origin.y,
+            screen.x,
+            screen.y,
+            rects
+                .iter()
+                .map(|r| (
+                    r.window.raw(),
+                    r.origin.x,
+                    r.origin.y,
+                    r.size.width,
+                    r.size.height
+                ))
+                .collect::<Vec<_>>()
+        ));
         if let DockStep::Carry(carried, at) = step {
             let state = self
                 .shared
@@ -606,9 +631,8 @@ impl DockRef {
     }
 
     fn release(&self) {
-        self.model.update(|model| {
-            model.release();
-        });
+        let released = self.model.update(|model| model.release());
+        trace_dock(format_args!("release released={released}"));
     }
 }
 
@@ -871,6 +895,12 @@ fn drag_session(base: Modifier, dock: DockRef, id: DockWindowId) -> Modifier {
                 .await;
         }
     })
+}
+
+fn trace_dock(args: std::fmt::Arguments<'_>) {
+    if std::env::var_os("CRANPOSE_DOCK_TRACE").is_some() {
+        println!("dock trace: {args}");
+    }
 }
 
 fn hash_of(namespace: &'static str, key: u64) -> u64 {
