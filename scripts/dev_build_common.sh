@@ -21,6 +21,34 @@ start_shared_sccache() {
     env -u RUNNER_TRACKING_ID "$1" --start-server
 }
 
+# Links with mold where it is installed, for builds whose output is run and
+# thrown away rather than measured or shipped.
+#
+# sccache caches compilations and cannot cache a link, so linking is what is
+# left of a warm robot build: 174 example binaries, each one the whole
+# framework. Deliberately not applied workspace-wide -- `size-budget` weighs
+# the bytes a linker produces against a fixed ceiling, and changing the
+# linker underneath it would move the number it guards.
+enable_fast_linker() {
+    if [ -n "${CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER:-}" ]; then
+        return 0
+    fi
+    if [ "$(uname -s)" != "Linux" ] || [ "$(uname -m)" != "x86_64" ]; then
+        return 0
+    fi
+    if ! command -v mold >/dev/null 2>&1 || ! command -v cc >/dev/null 2>&1; then
+        return 0
+    fi
+
+    local wrapper
+    wrapper="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ci/mold_cc.sh"
+    if [ ! -x "$wrapper" ]; then
+        return 0
+    fi
+    export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER="$wrapper"
+    echo "Linking with mold via $wrapper"
+}
+
 enable_local_sccache() {
     local sccache_bin="${RUSTC_WRAPPER:-}"
 

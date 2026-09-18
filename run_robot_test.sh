@@ -548,6 +548,7 @@ if [ "$SKIP_BUILD" = "1" ]; then
     echo "Skipping robot example build; reusing profile '$ROBOT_PROFILE' binaries." | tee -a "$LOG_FILE"
 else
     echo "Building desktop-app examples with profile '$ROBOT_PROFILE'..."
+    enable_fast_linker
     if ! wait_for_host_capacity "robot build"; then
         echo "Host was not ready for robot build." | tee -a "$LOG_FILE"
         exit 1
