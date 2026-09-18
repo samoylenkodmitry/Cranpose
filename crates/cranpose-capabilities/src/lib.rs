@@ -359,7 +359,10 @@ impl<'a> Declaration<'a> {
             &rust_source(&self.capabilities),
         );
 
-        let shared = target_root(&out).join("cranpose");
+        let crate_dir = PathBuf::from(
+            env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is set for a build script"),
+        );
+        let shared = workspace_root(&crate_dir).join("target").join("cranpose");
         fs::create_dir_all(&shared).expect("the shared capabilities directory");
         write_file(
             &shared.join(format!("{package}-capabilities.json")),
@@ -381,29 +384,27 @@ fn write_file(path: &Path, text: &str) {
     fs::write(path, text).unwrap_or_else(|error| panic!("writing {}: {error}", path.display()));
 }
 
-/// The directory Cargo builds into, found from a build script's `OUT_DIR`.
+/// The workspace this crate belongs to, found from its own directory.
 ///
-/// `OUT_DIR` sits at `<target>/[<triple>/]<profile>/build/<crate>-<hash>/out`,
-/// so the number of directories above it changes with the target and counting
-/// them is wrong for one of the two shapes. Cargo marks the directory it owns
-/// with a `CACHEDIR.TAG`, so that mark is what this looks for.
-fn target_root(out: &Path) -> PathBuf {
-    found_root(out, &|path| path.join("CACHEDIR.TAG").is_file())
+/// The platform builds read the declaration from `<workspace>/target/cranpose`,
+/// and they know the workspace because they already resolved this crate's
+/// source there. The directory Cargo happens to build into is not that place:
+/// it moves with `CARGO_TARGET_DIR`, and continuous integration sets it.
+fn workspace_root(crate_dir: &Path) -> PathBuf {
+    found_workspace(crate_dir, &|path| {
+        fs::read_to_string(path.join("Cargo.toml"))
+            .is_ok_and(|manifest| manifest.contains("[workspace]"))
+    })
 }
 
-fn found_root(out: &Path, marked: &dyn Fn(&Path) -> bool) -> PathBuf {
-    // Cargo marks the directory it builds into and, for a cross build, the
-    // directory of each target inside it. The outermost mark is the one every
-    // target shares, which is where a platform build looks.
-    if let Some(outermost) = out.ancestors().filter(|path| marked(path)).last() {
-        return outermost.to_path_buf();
-    }
-    for ancestor in out.ancestors() {
-        if ancestor.file_name().is_some_and(|name| name == "target") {
-            return ancestor.to_path_buf();
-        }
-    }
-    out.to_path_buf()
+fn found_workspace(crate_dir: &Path, holds_workspace: &dyn Fn(&Path) -> bool) -> PathBuf {
+    // The outermost workspace, so a crate inside a workspace that is itself
+    // vendored into another one still answers with the tree the build drives.
+    crate_dir
+        .ancestors()
+        .filter(|path| holds_workspace(path))
+        .last()
+        .map_or_else(|| crate_dir.to_path_buf(), Path::to_path_buf)
 }
 
 /// The Rust the application includes, so it reads the same declaration the
@@ -627,27 +628,25 @@ mod tests {
     }
 
     #[test]
-    fn the_target_root_is_the_directory_cargo_marked() {
-        let out = Path::new("/w/build-here/aarch64-linux-android/release/build/app-1234/out");
-        let marked = |path: &Path| path == Path::new("/w/build-here");
-        assert_eq!(found_root(out, &marked), Path::new("/w/build-here"));
+    fn the_workspace_is_the_tree_the_platform_builds_know() {
+        let crate_dir = Path::new("/w/app");
+        let holds = |path: &Path| path == Path::new("/w");
+        assert_eq!(found_workspace(crate_dir, &holds), Path::new("/w"));
     }
 
     #[test]
-    fn a_cross_build_takes_the_directory_every_target_shares() {
-        let out = Path::new("/w/target/aarch64-linux-android/release/build/app-1234/out");
-        let marked = |path: &Path| {
-            path == Path::new("/w/target") || path == Path::new("/w/target/aarch64-linux-android")
-        };
-        assert_eq!(found_root(out, &marked), Path::new("/w/target"));
+    fn a_workspace_inside_a_workspace_answers_with_the_outer_one() {
+        let crate_dir = Path::new("/w/vendor/thing/crates/one");
+        let holds = |path: &Path| path == Path::new("/w") || path == Path::new("/w/vendor/thing");
+        assert_eq!(found_workspace(crate_dir, &holds), Path::new("/w"));
     }
 
     #[test]
-    fn an_unmarked_tree_falls_back_to_the_target_directory() {
-        let nothing = |_: &Path| false;
-        let with_triple = Path::new("/w/target/aarch64-linux-android/release/build/app-1234/out");
-        assert_eq!(found_root(with_triple, &nothing), Path::new("/w/target"));
-        let host = Path::new("/w/target/debug/build/app-1234/out");
-        assert_eq!(found_root(host, &nothing), Path::new("/w/target"));
+    fn a_crate_in_no_workspace_answers_with_itself() {
+        let crate_dir = Path::new("/w/single");
+        assert_eq!(
+            found_workspace(crate_dir, &|_| false),
+            Path::new("/w/single")
+        );
     }
 }
