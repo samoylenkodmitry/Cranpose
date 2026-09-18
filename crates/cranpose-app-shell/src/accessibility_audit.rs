@@ -222,22 +222,23 @@ fn check_order(parent: &PlacedSemanticsNode, issues: &mut Vec<AccessibilityIssue
     }
 }
 
+/// Two controls of one role with one name. Rows of a list at different
+/// places are apart: a reader speaks their place.
 fn check_same_names(visible: &[&PlacedSemanticsNode], issues: &mut Vec<AccessibilityIssue>) {
-    let mut seen: Vec<(String, Option<SemanticsWidgetRole>, usize)> = Vec::new();
+    let mut seen: Vec<(String, Option<SemanticsWidgetRole>, Option<usize>, usize)> = Vec::new();
     for node in visible.iter().filter(|node| is_control(node)) {
         let name = spoken_name(node);
         if name.is_empty() {
             continue;
         }
-        match seen
-            .iter_mut()
-            .find(|(seen_name, role, _)| *seen_name == name && *role == node.widget_role)
-        {
-            Some(entry) => entry.2 += 1,
-            None => seen.push((name, node.widget_role, 1)),
+        match seen.iter_mut().find(|(seen_name, role, position, _)| {
+            *seen_name == name && *role == node.widget_role && *position == node.list_position
+        }) {
+            Some(entry) => entry.3 += 1,
+            None => seen.push((name, node.widget_role, node.list_position, 1)),
         }
     }
-    for (name, role, count) in seen.into_iter().filter(|(_, _, count)| *count > 1) {
+    for (name, role, _, count) in seen.into_iter().filter(|(_, _, _, count)| *count > 1) {
         issues.push(AccessibilityIssue {
             kind: AccessibilityIssueKind::SameName,
             control: format!("{} {name:?}", role_word(role)),
@@ -346,6 +347,7 @@ mod tests {
             hidden: false,
             pane_title: None,
             traversal_index: 0.0,
+            list_position: None,
             layout_bounds: rect,
             touch_bounds: None,
             children: Vec::new(),
@@ -537,5 +539,23 @@ mod tests {
             Ok(()),
             "a * entry is never reported as gone"
         );
+    }
+
+    #[test]
+    fn rows_of_a_list_with_one_name_are_apart_when_each_has_its_place() {
+        let mut list = screen(vec![
+            button(Some("Scan"), rect(0.0, 0.0, 200.0, 40.0)),
+            button(Some("Scan"), rect(0.0, 50.0, 200.0, 40.0)),
+        ]);
+        let same_names = |root: &PlacedSemanticsNode| {
+            audit_accessibility(root)
+                .iter()
+                .any(|issue| issue.kind == AccessibilityIssueKind::SameName)
+        };
+        assert!(same_names(&list), "two buttons with one name and no place");
+        for (row, position) in list.children.iter_mut().zip(1..) {
+            row.list_position = Some(position);
+        }
+        assert!(!same_names(&list), "the same two as rows 1 and 2 of a list");
     }
 }

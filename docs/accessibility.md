@@ -764,7 +764,7 @@ The issues:
 | Issue | What a reader user hits | The fix |
 | --- | --- | --- |
 | `NoName` | a control that says nothing | `content_description`, or a `Text` inside it |
-| `SameName` | two controls of one role with one name, "Delete" and "Delete" | say what each acts on |
+| `SameName` | two controls of one role with one name, "Delete" and "Delete"; rows of a list at different places are apart, a reader speaks their place | say what each acts on |
 | `SmallTarget` | a control under 24 by 24 points, WCAG 2.5.8 | `Modifier::minimum_interactive_component_size()` |
 | `OutOfOrder` | a control laid out fully above the one read before it | reading order, or `traversal_index` |
 | `NoPaneTitle` | a screen that says nothing on arrival | `pane_title` on the root |

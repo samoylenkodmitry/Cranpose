@@ -93,6 +93,10 @@ pub struct PlacedSemanticsNode {
     pub pane_title: Option<String>,
     /// Where the app moved the node in the reading order; 0 leaves it be.
     pub traversal_index: f32,
+    /// The place of a row among the rows of its list, counted from 1, when
+    /// the parent says it is a collection. A reader speaks it, so two rows
+    /// with one name are told apart.
+    pub list_position: Option<usize>,
     /// The box the measure pass gave this node, in window coordinates.
     pub layout_bounds: Rect,
     /// The box the renderer draws and the hit test inverts, ancestor graphics
@@ -230,6 +234,11 @@ fn join(
     for child in &node.children {
         children.push(join(child, layout_bounds, touch_bounds)?);
     }
+    if node.collection.is_some() {
+        for (child, position) in children.iter_mut().zip(1..) {
+            child.list_position = Some(position);
+        }
+    }
     Ok(PlacedSemanticsNode {
         node_id: node.node_id,
         role: node.role.clone(),
@@ -252,6 +261,7 @@ fn join(
         hidden: node.hidden,
         pane_title: node.pane_title.clone(),
         traversal_index: node.traversal_index,
+        list_position: None,
         layout_bounds: bounds,
         touch_bounds: touch_bounds.get(&node.node_id).copied(),
         children,
