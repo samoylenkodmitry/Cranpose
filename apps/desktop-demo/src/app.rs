@@ -862,7 +862,13 @@ pub fn combined_app_with_startup(startup: StartupSelection) {
 #[allow(non_snake_case)]
 #[composable]
 pub fn ControlsUiRobotApp() {
-    ControlsUiTab();
+    cranpose_ui::Box(
+        Modifier::empty()
+            .fill_max_size()
+            .pane_title("Controls grid"),
+        BoxSpec::default(),
+        ControlsUiTab,
+    );
 }
 
 #[allow(non_snake_case)]
