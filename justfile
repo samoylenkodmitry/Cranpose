@@ -229,6 +229,7 @@ test-shell-helpers: _benchmark-python
     scripts/wait_until_quiet_test.sh
     scripts/dev/target_gc_test.sh
     scripts/ci/robot_scheduling_classes_test.sh
+    scripts/ci/robot_worker_contract_test.sh
     {{benchmark_python}} scripts/android_benchmark_test.py
     {{benchmark_python}} scripts/android_visual_contract_test.py
     python3 scripts/perf_report_test.py
@@ -498,7 +499,8 @@ test-android-surface-contract:
 
 # CI's GPU half of the robot suite.
 robot-gpu:
-    xvfb-run -a -s "-screen 0 1280x800x24" ./run_robot_test.sh \
+    ROBOT_PRIVATE_DISPLAY_SCREEN=1280x800x24 \
+      xvfb-run -a -s "-screen 0 1280x800x24" ./run_robot_test.sh \
       --skip robot_underline_screenshot \
       --skip robot_text_strikeout_presented \
       --skip robot_leetcodedaily_full_layout_scroll_stability \
@@ -506,7 +508,7 @@ robot-gpu:
 
 # CI's software-present half: exactly the four captures excluded above.
 robot-captures:
-    WGPU_BACKEND=gl LIBGL_ALWAYS_SOFTWARE=1 \
+    WGPU_BACKEND=gl LIBGL_ALWAYS_SOFTWARE=1 ROBOT_PRIVATE_DISPLAY_SCREEN=1600x1200x24 \
       xvfb-run -a -s "-screen 0 1600x1200x24" ./run_robot_test.sh \
       --example robot_underline_screenshot \
       --example robot_text_strikeout_presented \

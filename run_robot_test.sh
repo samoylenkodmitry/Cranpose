@@ -334,6 +334,11 @@ robot_example_is_serial() {
     return 1
 }
 
+# Whether the suite can hand a windowed example a display server of its own.
+robot_private_display_available() {
+    [ -n "${ROBOT_PRIVATE_DISPLAY_SCREEN:-}" ] && command -v Xvfb >/dev/null 2>&1
+}
+
 # Whether an example draws into a real window on the display server rather
 # than rendering offscreen. Such an example owns the pointer, the focus and
 # the root window for as long as it runs, so two of them on one display read
@@ -509,11 +514,14 @@ SERIAL_EXAMPLES=()
 for example in "${EXAMPLES[@]}"; do
     if robot_example_is_serial "$example"; then
         SERIAL_EXAMPLES+=("$example")
-    elif robot_example_needs_real_window "$example"; then
-        # The suite has one display and a display has one pointer, one focus
-        # and one root window. Two examples that draw into real windows would
-        # read each other's input and screenshot each other's windows, so
-        # these run one at a time whatever else is true of them.
+    elif robot_example_needs_real_window "$example" \
+        && ! robot_private_display_available; then
+        # One display has one pointer, one focus and one root window, so two
+        # examples drawing into real windows would read each other's input
+        # and screenshot each other's windows. Where the suite can give each
+        # of them a server of its own that stops being true and they run in
+        # parallel like everything else; where it cannot -- a developer's
+        # desktop has one display and it is theirs -- they run one at a time.
         SERIAL_EXAMPLES+=("$example")
     else
         PARALLEL_EXAMPLES+=("$example")
@@ -911,12 +919,21 @@ run_test() {
         # (the exclusive phase closed it), but closing both here as well
         # means no lock fd survives into this child even if that ever
         # changes, and even if the exclusive holder below dies mid-run.
+        # A windowed example gets a server of its own so that it can run
+        # beside its neighbours; inside the timeout, so that killing the
+        # example takes the server with it.
+        local launch=("$example_bin")
+        if robot_private_display_available && robot_example_needs_real_window "$example"; then
+            launch=("$SCRIPT_DIR/scripts/ci/with_private_display.sh" \
+                "$ROBOT_PRIVATE_DISPLAY_SCREEN" "$example_bin")
+        fi
+
         if command -v timeout >/dev/null 2>&1; then
-            env -i "${robot_env_args[@]}" timeout --kill-after=15s "${timeout_secs}s" "$example_bin" > "$attempt_output" 2>&1 8>&- 9>&-
+            env -i "${robot_env_args[@]}" timeout --kill-after=15s "${timeout_secs}s" "${launch[@]}" > "$attempt_output" 2>&1 8>&- 9>&-
             local exit_code=$?
         else
             run_with_portable_timeout "$timeout_secs" 15 "$attempt_output" \
-                env -i "${robot_env_args[@]}" "$example_bin" 8>&- 9>&-
+                env -i "${robot_env_args[@]}" "${launch[@]}" 8>&- 9>&-
             local exit_code=$?
         fi
 
@@ -986,22 +1003,20 @@ robot_process_env() {
     printf '%s\0' "${env_args[@]}"
 }
 
+# What a worker needs from THIS file. Everything it needs from
+# scripts/dev_build_common.sh it gets by sourcing that file, not from a list
+# here: a list is a hand-copied call graph, and a name missing from it is not
+# a missing command but every example in the parallel phase failing at once.
+# `run_with_portable_timeout` went missing that way (exit 127 on any host
+# without GNU timeout), and so did `host_load_1m`, two levels down through
+# `host_state_summary`.
 export -f run_test
 export -f robot_process_env
-# run_test's own callees, all of them: a worker is a fresh shell that inherits
-# only what is exported, and a missing one there is not a missing command --
-# it is every example in the parallel phase exiting 127 at once. A host with
-# GNU timeout never reaches this one, which is how it stayed missing.
 export -f run_with_portable_timeout
 export -f robot_example_needs_real_window
-export -f is_ci_env
-export -f host_cpu_min_mhz
-export -f host_cpu_freq_summary
-export -f host_max_temp_c
-export -f host_state_summary
-export -f number_lt
-export -f number_gt
-export -f wait_for_host_capacity
+export -f robot_private_display_available
+export SCRIPT_DIR
+export ROBOT_COMMON_SH="$SCRIPT_DIR/scripts/dev_build_common.sh"
 export RESULTS_DIR
 export ROBOT_PHASE
 export EXAMPLE_BIN_DIR
@@ -1036,7 +1051,9 @@ run_example_list() {
     if [ "$phase" = "parallel" ] && [ "$PARALLEL_JOBS" -gt 1 ]; then
         echo "Running $# $phase-class examples, $PARALLEL_JOBS at a time" | tee -a "$LOG_FILE"
         RUN_EXAMPLES+=("$@")
-        if ! printf '%s\n' "$@" | xargs -P "$PARALLEL_JOBS" -I {} bash -c 'run_test "$@"' _ {}; then
+        if ! printf '%s\n' "$@" \
+            | xargs -P "$PARALLEL_JOBS" -I {} \
+                bash -c '. "$ROBOT_COMMON_SH"; run_test "$@"' _ {}; then
             echo "One or more robot workers stopped before completing their assigned examples" | tee -a "$LOG_FILE"
             STOPPED_EARLY=1
         fi
