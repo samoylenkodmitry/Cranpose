@@ -352,6 +352,14 @@ On the web a keystroke or a caret move patches the focused input in place. A
 rebuild of the mirror would drop the browser's focus and make a reader hear
 the whole field again instead of one character.
 
+**The target of a decorated field.** A decorated field's semantics and its
+touch target sit on the field itself, not on the box the decoration draws
+around it. A field whose padding lives on the decoration box measures as
+tall as its one line of text, 18 points, and fails the 24 point rule of the
+audit. Put the padding on the field's modifier instead, the way the liquid
+search field does with `Modifier::empty().padding_symmetric(0.0, 9.0)`, so
+the padded box is what a reader and a finger get.
+
 ## 4k. Roles a reader names
 
 A reader says what a control is after its name: "Save, button". Ten roles
