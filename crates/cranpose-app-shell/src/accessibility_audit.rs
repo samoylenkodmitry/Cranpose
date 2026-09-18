@@ -277,6 +277,52 @@ fn role_word(role: Option<SemanticsWidgetRole>) -> String {
     }
 }
 
+/// An issue a test leaves as it is: the screen it is on, `*` for every
+/// screen; the start of the issue line; the reason it stays.
+pub type KnownIssue = (&'static str, &'static str, &'static str);
+
+/// Compares the issues found on `screen` with the list a test keeps and
+/// reports what changed: the lines that are new, and the listed issues that
+/// went away. A test fails on either, so the list only shrinks. An issue
+/// matches a listed one when its line starts with the listed text; a `*`
+/// entry matches on every screen and is never reported as gone.
+pub fn audit_changes(screen: &str, issues: &[String], known: &[KnownIssue]) -> Result<(), String> {
+    let listed = |issue: &str| {
+        known
+            .iter()
+            .any(|(on, text, _)| (*on == "*" || *on == screen) && issue.starts_with(text))
+    };
+    let new: Vec<&str> = issues
+        .iter()
+        .map(String::as_str)
+        .filter(|issue| !listed(issue))
+        .collect();
+    let gone: Vec<&str> = known
+        .iter()
+        .filter(|(on, text, _)| {
+            *on == screen && !issues.iter().any(|issue| issue.starts_with(text))
+        })
+        .map(|(_, text, _)| *text)
+        .collect();
+    if new.is_empty() && gone.is_empty() {
+        return Ok(());
+    }
+    let mut report = String::new();
+    if !new.is_empty() {
+        report.push_str(&format!(
+            "new accessibility issues on {screen}:\n  {}\n",
+            new.join("\n  ")
+        ));
+    }
+    if !gone.is_empty() {
+        report.push_str(&format!(
+            "issues listed for {screen} went away; take them off the list:\n  {}\n",
+            gone.join("\n  ")
+        ));
+    }
+    Err(report)
+}
+
 #[cfg(test)]
 mod tests {
     use cranpose_ui::{Rect, SemanticsRole};
@@ -449,5 +495,47 @@ mod tests {
     #[should_panic(expected = "NoName: button \"\"")]
     fn the_assertion_names_every_issue_and_the_fix() {
         assert_accessible(&screen(vec![button(None, rect(0.0, 0.0, 48.0, 48.0))]));
+    }
+
+    #[test]
+    fn a_new_issue_and_a_listed_issue_that_went_away_both_fail_the_comparison() {
+        let known: &[KnownIssue] = &[
+            (
+                "library",
+                "SmallTarget: control \"Pill\"",
+                "sits over a tab",
+            ),
+            (
+                "*",
+                "SameName: tab \"Apps\"",
+                "two bars show one set of tabs",
+            ),
+        ];
+        let issues = vec![
+            "SmallTarget: control \"Pill\" is 79x17 points".to_string(),
+            "SameName: tab \"Apps\" appears 2 times".to_string(),
+        ];
+        assert_eq!(audit_changes("library", &issues, known), Ok(()));
+        assert_eq!(
+            audit_changes("settings", &issues[1..], known),
+            Ok(()),
+            "a * entry matches on every screen"
+        );
+        let with_new = [
+            issues.clone(),
+            vec!["NoName: control \"\" is 40x40 points at (1, 2)".to_string()],
+        ]
+        .concat();
+        let report = audit_changes("library", &with_new, known).unwrap_err();
+        assert!(report.contains("new accessibility issues on library"));
+        assert!(report.contains("NoName"));
+        let report = audit_changes("library", &issues[1..], known).unwrap_err();
+        assert!(report.contains("went away"));
+        assert!(report.contains("SmallTarget"));
+        assert_eq!(
+            audit_changes("settings", &[], known),
+            Ok(()),
+            "a * entry is never reported as gone"
+        );
     }
 }
