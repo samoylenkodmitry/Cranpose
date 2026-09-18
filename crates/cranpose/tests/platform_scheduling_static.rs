@@ -71,12 +71,13 @@ fn ci_architecture_budget_runs_required_gates() {
     let heavy_workflow = workspace_source(".github/workflows/heavy-selfhosted.yml");
     let release_workflow = workspace_source(".github/workflows/release.yml");
     let pages_workflow = workspace_source(".github/workflows/deploy-pages.yml");
+    let nightly_workflow = workspace_source(".github/workflows/nightly.yml");
     let justfile = workspace_source("justfile");
 
     assert!(
-        workflow.contains("architecture-budget:")
-            && workflow.contains("name: architecture budgets (linux)"),
-        "Rust CI should keep a dedicated architecture budget job"
+        nightly_workflow.contains("architecture-budget:")
+            && nightly_workflow.contains("name: architecture budgets (linux)"),
+        "the architecture budgets should keep a dedicated job"
     );
 
     for recipe in [
@@ -86,7 +87,6 @@ fn ci_architecture_budget_runs_required_gates() {
         "run: just test",
         "run: just clippy",
         "run: just doc",
-        "run: just budgets",
         "run: just clippy-wasm",
         "run: just web",
     ] {
@@ -95,6 +95,27 @@ fn ci_architecture_budget_runs_required_gates() {
             "Rust CI should invoke `{recipe}` rather than spelling the gate inline"
         );
     }
+
+    for recipe in [
+        "run: just budgets",
+        "run: just robot-linux",
+        "run: just android",
+    ] {
+        assert!(
+            nightly_workflow.contains(recipe),
+            "the nightly board should invoke `{recipe}` rather than spelling it inline"
+        );
+    }
+
+    assert!(
+        !workflow.contains("run: just budgets") && !heavy_workflow.contains("run: just budgets"),
+        "architecture budgets belong to the nightly board, not to a board a merge waits for"
+    );
+    assert!(
+        !heavy_workflow.contains("run: just robot-linux\n"),
+        "the load-sensitive robot examples belong to the nightly board: they run one at a \
+         time on a machine the exclusive host lock has emptied, which no merge should wait for"
+    );
     let provision = workspace_source("scripts/ci/provision_toolchain.sh");
     assert!(
         workflow.contains("run: scripts/ci/provision_toolchain.sh"),
@@ -170,6 +191,7 @@ fn workflow_actions_are_pinned_to_commit_shas() {
     for name in [
         "rust.yml",
         "heavy-selfhosted.yml",
+        "nightly.yml",
         "publish.yml",
         "release.yml",
         "deploy-pages.yml",

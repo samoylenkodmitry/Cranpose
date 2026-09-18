@@ -26,10 +26,6 @@ on:
   pull_request:
     branches: ["main"]
   workflow_dispatch:
-  schedule:
-    # Nightly, so the half a pull request cannot afford still runs every day
-    # even when nothing merges.
-    - cron: "0 3 * * *"
 
 # Supersede older runs of the same ref: fleet minutes are real machines.
 concurrency:
@@ -43,7 +39,7 @@ jobs:
     # builds. The workspace persists between runs on a self-hosted runner,
     # so the robot-profile target stays warm.
     runs-on: [self-hosted, Linux, cranpose-heavy]
-    timeout-minutes: ${{ github.event_name == 'pull_request' && 20 || 90 }}
+    timeout-minutes: 20
     env:
       SCCACHE_CACHE_SIZE: 40G
       CARGO_INCREMENTAL: "0"
@@ -86,18 +82,15 @@ jobs:
           command -v just >/dev/null || cargo install just --locked
           scripts/ci/start_sccache.sh
 
-      - name: Run the robot suite's parallel half (pull request)
-        if: github.event_name == 'pull_request' && steps.changes.outputs.docs_only != 'true'
-        # A pull request waits for the examples that assert on pixels and
-        # structure; they all run at once, so both halves together cost about
-        # two minutes. The examples that measure time cannot run beside
-        # anything, including each other, so a pull request cannot afford them
-        # and the step below runs them on main and nightly instead.
+      - name: Run the robot suite
+        if: steps.changes.outputs.docs_only != 'true'
+        # The examples that assert on pixels and structure, all at once.
+        # The load-sensitive half lives in nightly.yml: it runs one at a time
+        # on a machine the exclusive host lock has emptied, and on a box
+        # shared with nineteen other repositories' runners that is both slow
+        # and unreliable. Nothing on this board stalls waiting for a quiet
+        # machine.
         run: just robot-linux-fast
-
-      - name: Run the whole robot suite
-        if: github.event_name != 'pull_request' && steps.changes.outputs.docs_only != 'true'
-        run: just robot-linux
 
       - name: sccache stats
         if: always() && steps.changes.outputs.docs_only != 'true'
@@ -152,7 +145,7 @@ jobs:
     # provisioned on both, but the two Linux slots are the fleet's scarce
     # resource and the robot suite cannot run anywhere else.
     runs-on: [self-hosted, macOS, ARM64]
-    timeout-minutes: ${{ github.event_name == 'pull_request' && 20 || 90 }}
+    timeout-minutes: 20
     env:
       SCCACHE_CACHE_SIZE: 40G
       CARGO_INCREMENTAL: "0"
@@ -236,22 +229,6 @@ jobs:
         # main took the only compile of it off pull requests -- a plugin with
         # two companion objects reached main before anything said so.
         run: just android-plugin-check
-
-      - name: Build Android release APK
-        if: ${{ !cancelled() && github.event_name == 'push' && steps.provision.conclusion == 'success' && steps.changes.outputs.docs_only != 'true' }}
-        # Pushes to main only. `clippy-android` above type-checks every
-        # architecture the release carries on a pull request too, in about a
-        # minute; assembling the APK proves the Gradle and packaging side, and
-        # nothing about that depends on which branch the commit arrives on. It
-        # is the one Android answer that a merge cannot invalidate, so it runs
-        # once, after the merge, instead of on every push to every branch.
-        #
-        # --no-daemon: never attach to a shared/foreign Gradle daemon on this
-        # self-hosted box. Reused daemons started by other builds on the runner
-        # can carry a PATH without ~/.cargo/bin, which makes the cargo-ndk check
-        # (providers.exec "cargo ndk") fail spuriously. A single-use daemon
-        # inherits this step's PATH (which includes ~/.cargo/bin), fixing the race.
-        run: just android
 
       - name: sccache stats
         if: always() && steps.changes.outputs.docs_only != 'true'
