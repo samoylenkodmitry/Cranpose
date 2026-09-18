@@ -12,7 +12,12 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
-python3 - "$REPO_ROOT" <<'PY'
+# The reader needs PyYAML, which a stock macOS python3 does not carry. The
+# repository's own environment does, and `just _benchmark-python` builds it.
+PYTHON="$REPO_ROOT/target/python-benchmark/bin/python"
+[ -x "$PYTHON" ] || PYTHON=python3
+
+"$PYTHON" - "$REPO_ROOT" <<'PY'
 import sys, pathlib, yaml, re
 
 BUDGET = 20

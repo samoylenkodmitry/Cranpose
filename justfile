@@ -182,7 +182,7 @@ precommit: fmt-check typos complexity-gate duplication-gate ci-contract-gates
 # a change to one of those answers is exactly the kind that looks harmless
 # and is not -- widening the load-sensitive predicate without rerunning this
 # took main red.
-ci-contract-gates:
+ci-contract-gates: _benchmark-python
     scripts/ci/robot_scheduling_classes_test.sh
     scripts/ci/robot_worker_contract_test.sh
     scripts/ci/pr_budget_test.sh
