@@ -472,6 +472,13 @@ each side of it. Compose's `minimumInteractiveComponentSize`, Material's
 48 dp and above Apple's 44 pt. `IconButton` already keeps 48 points on its
 own.
 
+A press from a finger or a pen that misses every control, but lands within
+the 48 points around a smaller control, reaches that control when no other
+control claims the point, the way Compose's minimum touch target hit test
+does. The nearest such control takes it. The release then counts as a click
+when it stays within the drag threshold of the press, as any release does. A
+mouse, or a pointer of an unknown kind, keeps its exact point.
+
 | Key | What happens |
 | --- | --- |
 | Tab, Shift+Tab | focus moves to the next or the previous control |

@@ -10693,3 +10693,58 @@ fn a_drag_holds_the_icon_the_press_started_with() {
 
     assert_eq!(shell.take_pointer_icon_change(), None);
 }
+
+#[test]
+fn a_finger_beside_a_small_control_presses_it_and_a_mouse_does_not() {
+    let _guard = test_guard();
+    let root_key = location_key(file!(), line!(), column!());
+    let presses = Rc::new(Cell::new(0));
+    let presses_for_content = Rc::clone(&presses);
+    let mut shell = AppShell::new(HitGraphRenderer::default(), root_key, move || {
+        let presses = Rc::clone(&presses_for_content);
+        Box(
+            Modifier::empty()
+                .size(Size::new(200.0, 200.0))
+                .padding_each(100.0, 100.0, 0.0, 0.0),
+            BoxSpec::default(),
+            move || {
+                let presses = Rc::clone(&presses);
+                Box(
+                    Modifier::empty()
+                        .size(Size::new(20.0, 20.0))
+                        .clickable(move |_| presses.set(presses.get() + 1)),
+                    BoxSpec::default(),
+                    || {},
+                );
+            },
+        );
+    });
+    shell.update();
+
+    shell.set_pointer_source(cranpose_foundation::PointerSource::Touch);
+    shell.set_cursor(125.0, 110.0);
+    assert!(
+        shell.pointer_pressed(),
+        "the press beside the control reaches it"
+    );
+    assert!(shell.pointer_released());
+    assert_eq!(
+        presses.get(),
+        1,
+        "the release at the same spot counts as a click"
+    );
+
+    shell.set_cursor(140.0, 110.0);
+    assert!(
+        !shell.pointer_pressed(),
+        "a press outside the 48 point reach hits nothing"
+    );
+    shell.pointer_released();
+    assert_eq!(presses.get(), 1);
+
+    shell.set_pointer_source(cranpose_foundation::PointerSource::Mouse);
+    shell.set_cursor(125.0, 110.0);
+    assert!(!shell.pointer_pressed(), "a mouse keeps its exact point");
+    shell.pointer_released();
+    assert_eq!(presses.get(), 1);
+}

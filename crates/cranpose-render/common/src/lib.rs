@@ -86,6 +86,13 @@ pub trait RenderScene {
     /// Returns hit targets ordered by z-index (top-to-bottom).
     fn hit_test(&self, x: f32, y: f32) -> Vec<Self::HitTarget>;
 
+    /// The one target a press reaches when it misses every target but lands
+    /// inside a small target grown to the minimum touch size: the nearest such
+    /// target, and none when the point is outside every grown target.
+    fn hit_test_near(&self, _x: f32, _y: f32) -> Option<Self::HitTarget> {
+        None
+    }
+
     /// Returns NodeIds of all hit regions at the given coordinates.
     /// This is a convenience method equivalent to `hit_test().map(|h| h.node_id())`.
     fn hit_test_nodes(&self, x: f32, y: f32) -> Vec<cranpose_core::NodeId> {

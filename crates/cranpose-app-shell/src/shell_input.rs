@@ -268,7 +268,14 @@ where
         self.note_focus_moved_by_keyboard(false);
         self.buttons_pressed.insert(PointerButton::Primary);
 
-        let hits = self.renderer.scene().hit_test(self.cursor.0, self.cursor.1);
+        let mut hits = self.renderer.scene().hit_test(self.cursor.0, self.cursor.1);
+        if hits.is_empty() && self.pointer_source.is_touch_like() {
+            hits.extend(
+                self.renderer
+                    .scene()
+                    .hit_test_near(self.cursor.0, self.cursor.1),
+            );
+        }
         if hits.is_empty() {
             self.hit_path_tracker.remove_path(PointerId::PRIMARY);
             false
