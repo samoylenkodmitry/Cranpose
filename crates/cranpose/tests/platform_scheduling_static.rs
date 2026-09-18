@@ -95,9 +95,14 @@ fn ci_architecture_budget_runs_required_gates() {
             "Rust CI should invoke `{recipe}` rather than spelling the gate inline"
         );
     }
+    let provision = workspace_source("scripts/ci/provision_toolchain.sh");
     assert!(
-        workflow.contains("command -v just >/dev/null || cargo install just --locked"),
-        "every CI job that runs a recipe must provision `just` first"
+        workflow.contains("run: scripts/ci/provision_toolchain.sh"),
+        "every CI job that runs a recipe must provision the toolchain first"
+    );
+    assert!(
+        provision.contains("command -v just >/dev/null || cargo install just --locked"),
+        "provisioning must install `just`, since every gate is a recipe"
     );
 
     assert!(

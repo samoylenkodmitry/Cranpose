@@ -285,6 +285,14 @@ jobs:
         # not wait behind a full release APK.
         run: just clippy-android
 
+      - name: Type-check the Cranpose Gradle plugin
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' && steps.changes.outputs.docs_only != 'true' }}
+        # Runs on pull requests too, unlike the APK below. Assembling the APK
+        # is what used to compile this plugin's Kotlin, and moving that to
+        # main took the only compile of it off pull requests -- a plugin with
+        # two companion objects reached main before anything said so.
+        run: just android-plugin-check
+
       - name: Build Android release APK
         if: ${{ !cancelled() && github.event_name == 'push' && steps.provision.conclusion == 'success' && steps.changes.outputs.docs_only != 'true' }}
         # Pushes to main only. `clippy-android` above type-checks every
