@@ -60,7 +60,7 @@ make_target() {
     local dir="$1" stamp="$2"
     mkdir -p "$dir/ci/.fingerprint" "$dir/ci/deps"
     printf 'Signature: 8a477f597d28d172789f06886806bc55\n' > "$dir/CACHEDIR.TAG"
-    dd if=/dev/zero of="$dir/ci/deps/blob" bs=1048576 count=120 2>/dev/null
+    dd if=/dev/zero of="$dir/ci/deps/blob" bs=1048576 count=120
     touch -t "$stamp" "$dir/ci/.fingerprint" "$dir/ci" "$dir"
 }
 

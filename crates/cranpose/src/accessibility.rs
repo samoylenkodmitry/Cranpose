@@ -1630,7 +1630,7 @@ pub(crate) fn element_with(node_id: NodeId, canvas_key: Option<u64>) -> Accessib
 
 /// The word a reader says for each role, for the robot's spoken tree. Plain
 /// text has no word: its name is the whole of what a reader says.
-#[cfg(any(test, feature = "robot", target_os = "ios", target_os = "android"))]
+#[cfg(any(test, feature = "robot", target_os = "ios"))]
 const SPOKEN_ROLES: [(AccessibilityRole, &str); 23] = [
     (AccessibilityRole::Button, "button"),
     (AccessibilityRole::StaticText, ""),
@@ -1659,7 +1659,7 @@ const SPOKEN_ROLES: [(AccessibilityRole, &str); 23] = [
 
 /// One control the way a reader speaks it: the name, the role, the state,
 /// the value and the actions it offers, in the order VoiceOver says them.
-#[cfg(any(test, feature = "robot", target_os = "ios", target_os = "android"))]
+#[cfg(any(test, feature = "robot", target_os = "ios"))]
 pub(crate) fn spoken_line(element: &AccessibilityElement) -> String {
     let role_word = SPOKEN_ROLES
         .iter()
@@ -1716,7 +1716,7 @@ pub(crate) fn spoken_line(element: &AccessibilityElement) -> String {
 /// debug level: `RUST_LOG=cranpose::spoken_tree=debug`. A platform bridge
 /// calls it on every change, so a person reads a device's screen from the
 /// console the way the robot's `spoken_tree` prints it.
-#[cfg(any(test, feature = "robot", target_os = "ios", target_os = "android"))]
+#[cfg(target_os = "ios")]
 pub(crate) fn log_spoken_tree(elements: &[AccessibilityElement]) {
     const TARGET: &str = "cranpose::spoken_tree";
     if !log::log_enabled!(target: TARGET, log::Level::Debug) {
@@ -1732,7 +1732,7 @@ pub(crate) fn log_spoken_tree(elements: &[AccessibilityElement]) {
     }
 }
 
-#[cfg(any(test, feature = "robot", target_os = "ios", target_os = "android"))]
+#[cfg(any(test, feature = "robot", target_os = "ios"))]
 fn spoken_percent(progress: &ProgressBarRangeInfo) -> Option<String> {
     let span = progress.end - progress.start;
     (span > 0.0).then(|| {
