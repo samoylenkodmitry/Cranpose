@@ -2126,3 +2126,29 @@ fn a_fill_fraction_outside_the_unit_range_is_pulled_back_into_it() {
         .layout_properties();
     assert_eq!(under.height(), DimensionConstraint::Fraction(0.0));
 }
+
+#[test]
+fn height_in_and_size_in_set_the_bounds_they_are_given_and_leave_the_rest_open() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let props = Modifier::empty()
+        .height_in(24.0, f32::INFINITY)
+        .resolved_modifiers()
+        .layout_properties();
+    assert_eq!(props.min_height(), Some(24.0));
+    assert_eq!(props.max_height(), None);
+    assert_eq!(props.min_width(), None);
+    let props = Modifier::empty()
+        .size_in(Size::new(24.0, 24.0), Size::new(f32::INFINITY, 40.0))
+        .resolved_modifiers()
+        .layout_properties();
+    assert_eq!(props.min_width(), Some(24.0));
+    assert_eq!(props.max_width(), None);
+    assert_eq!(props.min_height(), Some(24.0));
+    assert_eq!(props.max_height(), Some(40.0));
+    let props = Modifier::empty()
+        .width_in(0.0, 120.0)
+        .resolved_modifiers()
+        .layout_properties();
+    assert_eq!(props.min_width(), None);
+    assert_eq!(props.max_width(), Some(120.0));
+}
