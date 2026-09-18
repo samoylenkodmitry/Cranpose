@@ -78,10 +78,14 @@ impl Service {
     }
 
     /// The Android permissions this service needs.
+    ///
+    /// Both photo library services are empty here: Android reads and writes
+    /// photos through the system picker, which asks the person for one file
+    /// and needs no permission from the application.
     pub const fn android_permissions(self) -> &'static [&'static str] {
         match self {
             Service::Camera => &["android.permission.CAMERA"],
-            Service::PhotoLibrary => &["android.permission.READ_MEDIA_IMAGES"],
+            Service::PhotoLibrary => &[],
             Service::PhotoLibraryAdd => &[],
             Service::Microphone => &["android.permission.RECORD_AUDIO"],
             Service::Location => &["android.permission.ACCESS_COARSE_LOCATION"],
