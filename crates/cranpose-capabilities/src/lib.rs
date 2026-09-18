@@ -21,6 +21,7 @@
 use std::{
     collections::BTreeSet,
     env,
+    ffi::OsString,
     fmt::Write as _,
     fs,
     path::{Path, PathBuf},
@@ -366,7 +367,7 @@ impl<'a> Declaration<'a> {
         let crate_dir = PathBuf::from(
             env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is set for a build script"),
         );
-        let shared = workspace_root(&crate_dir).join("target").join("cranpose");
+        let shared = shared_dir(&crate_dir, env::var_os(CAPABILITIES_DIR));
         fs::create_dir_all(&shared).expect("the shared capabilities directory");
         write_file(
             &shared.join(format!("{package}-capabilities.json")),
@@ -381,11 +382,28 @@ impl<'a> Declaration<'a> {
             &apple_usage(&self.capabilities),
         );
         println!("cargo::rerun-if-changed=build.rs");
+        println!("cargo::rerun-if-env-changed={CAPABILITIES_DIR}");
     }
 }
 
 fn write_file(path: &Path, text: &str) {
     fs::write(path, text).unwrap_or_else(|error| panic!("writing {}: {error}", path.display()));
+}
+
+/// Names the directory the declaration is written into.
+///
+/// A platform build sets it, because the build knows the tree it drives. A
+/// plain `cargo build` does not, and the declaration then goes to
+/// `<workspace>/target/cranpose`.
+const CAPABILITIES_DIR: &str = "CRANPOSE_CAPABILITIES_DIR";
+
+/// Where the declaration goes: the directory the build named, or the one under
+/// the workspace this crate belongs to.
+fn shared_dir(crate_dir: &Path, named: Option<OsString>) -> PathBuf {
+    match named.filter(|value| !value.is_empty()) {
+        Some(value) => PathBuf::from(value),
+        None => workspace_root(crate_dir).join("target").join("cranpose"),
+    }
 }
 
 /// The workspace this crate belongs to, found from its own directory.
@@ -609,6 +627,24 @@ mod tests {
         assert!(text.contains(
             "<uses-feature android:name=\"android.hardware.type.watch\" android:required=\"true\" />"
         ));
+    }
+
+    #[test]
+    fn the_build_names_where_the_declaration_goes() {
+        let named = shared_dir(
+            Path::new("/checkout/crates/app"),
+            Some(OsString::from("/checkout/target/cranpose")),
+        );
+        assert_eq!(named, PathBuf::from("/checkout/target/cranpose"));
+    }
+
+    #[test]
+    fn an_empty_name_is_no_name() {
+        let crate_dir = Path::new("/checkout/crates/app");
+        assert_eq!(
+            shared_dir(crate_dir, Some(OsString::new())),
+            shared_dir(crate_dir, None)
+        );
     }
 
     #[test]
