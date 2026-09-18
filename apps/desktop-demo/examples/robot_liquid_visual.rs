@@ -279,12 +279,12 @@ fn main() {
                 std::thread::sleep(Duration::from_millis(60));
             }
             settle(&robot, 600);
-            let card = robot
-                .find_button_bounds_exact("Featured videos")
+            let more = robot
+                .find_button_bounds_exact("More")
                 .ok()
                 .flatten()
-                .expect("featured videos card in semantics");
-            let menu_anchor = (card.0 + card.2 - 34.0, card.1 + 34.0);
+                .expect("the More button of the featured videos card in semantics");
+            let menu_anchor = (more.0 + more.2 / 2.0, more.1 + more.3 / 2.0);
             robot
                 .click(menu_anchor.0, menu_anchor.1)
                 .expect("open menu");
