@@ -973,6 +973,23 @@ impl App {
         }
     }
 
+    /// Makes `native` the key window when nothing of ours holds focus yet.
+    ///
+    /// macOS reads a window's cursor rectangles only while it is key, so a
+    /// window that never takes focus shows the system arrow however often the
+    /// application sets a cursor on it.
+    fn let_the_first_window_take_focus(&self, native: &NativeWindowSurface) {
+        if a_new_window_comes_up_key(
+            self.settings.headless,
+            native.options.visible,
+            self.native_windows
+                .values()
+                .any(|open| open.window.has_focus()),
+        ) {
+            native.window.focus_window();
+        }
+    }
+
     fn sync_native_windows(&mut self, event_loop: &dyn ActiveEventLoop) {
         if self.gpu_context.is_none() {
             return;
@@ -1118,6 +1135,7 @@ impl App {
             match self.create_native_window(shell) {
                 Ok(native) => {
                     let window_id = native.window.id();
+                    self.let_the_first_window_take_focus(&native);
                     self.remember_native_window_position(&native);
                     self.native_window_ids.insert(native.key, window_id);
                     self.native_windows.insert(window_id, native);
@@ -3095,6 +3113,18 @@ fn clamped_axis_origin(
     } else {
         monitor_origin + (monitor_length - length) / 2.0
     }
+}
+
+/// Whether a window coming up should be made the key window.
+///
+/// macOS reads a window's cursor rectangles only while that window is key, so
+/// one that never takes focus keeps the system arrow however often the
+/// application sets a cursor on it. An undecorated window is the common case,
+/// because activating the application is not enough to make it key. A window
+/// comes up key only when nothing of ours already holds focus, so a window the
+/// user chose keeps it.
+fn a_new_window_comes_up_key(headless: bool, visible: bool, anything_focused: bool) -> bool {
+    !headless && visible && !anything_focused
 }
 
 fn native_window_attributes(options: &NativeWindowOptions, headless: bool) -> WindowAttributes {
@@ -6070,6 +6100,29 @@ fn resolve_robot_screenshot_params_with_scale(
 #[cfg(test)]
 mod tests {
     use std::time::Instant;
+
+    #[test]
+    fn a_window_coming_up_alone_takes_focus_so_its_cursor_is_drawn() {
+        assert!(
+            super::a_new_window_comes_up_key(false, true, false),
+            "macOS reads cursor rectangles only for the key window, so the \
+             first window up has to take focus or its cursor is never drawn"
+        );
+    }
+
+    #[test]
+    fn a_window_coming_up_beside_a_focused_one_leaves_the_focus_alone() {
+        assert!(
+            !super::a_new_window_comes_up_key(false, true, true),
+            "a window the user is already working in keeps focus"
+        );
+    }
+
+    #[test]
+    fn a_window_with_nothing_on_screen_is_left_alone() {
+        assert!(!super::a_new_window_comes_up_key(false, false, false));
+        assert!(!super::a_new_window_comes_up_key(true, true, false));
+    }
 
     #[cfg(feature = "robot")]
     use cranpose_app_shell::FrameUpdateResult;
