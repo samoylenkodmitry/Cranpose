@@ -121,10 +121,21 @@ jobs:
       CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
       TAG_NAME: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
     steps:
+      # The tag, not the branch.
+      #
+      # `sync_versions` lands the version bump on the default branch and moves
+      # the tag onto it, so for a moment the tag and the branch are the same
+      # commit -- and checking out the branch worked for as long as nothing
+      # else landed in that moment. v0.1.139 failed with "Tag v0.1.139 does
+      # not point to HEAD" because a pull request merged between the two jobs,
+      # which is not a rare accident: every release races every merge.
+      #
+      # What this job must publish is the tree the tag names. That is true
+      # whatever main does next.
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
-          ref: ${{ github.event.repository.default_branch }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
       - name: Provision the pinned Rust toolchain
         run: |
           # $HOME is not reliable here: actions/checkout temporarily overrides

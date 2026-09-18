@@ -240,6 +240,62 @@ fn every_workflow_says_what_happens_when_it_overlaps_itself() {
     }
 }
 
+/// Returns the lines of one job in a workflow, from its key to the next job.
+fn workflow_job_block(workflow: &str, job: &str) -> String {
+    let header = format!("  {job}:");
+    let mut block = Vec::new();
+    let mut inside = false;
+    for line in workflow.lines() {
+        if line == header {
+            inside = true;
+            continue;
+        }
+        if inside {
+            let starts_a_job = line.starts_with("  ")
+                && !line.starts_with("   ")
+                && line.trim_end().ends_with(':');
+            if starts_a_job {
+                break;
+            }
+            block.push(line);
+        }
+    }
+    assert!(
+        inside,
+        "{job} is no longer a job in this workflow; the assertions below would read nothing"
+    );
+    block.join("\n")
+}
+
+#[test]
+fn the_publish_job_checks_out_the_tree_the_tag_names() {
+    // `sync_versions` lands the version bump on the default branch and moves
+    // the tag onto it. Checking out the branch afterwards publishes whatever
+    // main happens to be, which for v0.1.139 was a pull request that merged in
+    // between -- the job stopped at "Tag v0.1.139 does not point to HEAD".
+    let workflow = workspace_source(".github/workflows/publish.yml");
+    let publish = workflow_job_block(&workflow, "publish");
+
+    assert!(
+        publish.contains(
+            "ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
+        ),
+        "the publish job must check out the tag, not the default branch: every release races every merge"
+    );
+    assert!(
+        !publish.contains("ref: ${{ github.event.repository.default_branch }}"),
+        "the publish job must not follow the default branch"
+    );
+
+    // The isolated demo pointer is a commit ON the branch, so that job keeps
+    // checking the branch out. Naming it here says the difference is meant.
+    let isolated = workflow_job_block(&workflow, "bump_isolated_demo");
+    assert!(
+        isolated.contains("ref: ${{ github.event.repository.default_branch }}"),
+        "the job that commits the isolated demo pointer still belongs on the default branch"
+    );
+}
+
 #[test]
 fn workflow_actions_are_pinned_to_commit_shas() {
     let mut unpinned = Vec::new();
