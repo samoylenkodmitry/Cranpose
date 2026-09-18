@@ -191,7 +191,10 @@ jobs:
 
   android-release:
     name: Android release build (self-hosted)
-    runs-on: [self-hosted, cranpose-heavy]
+    # macOS, not the shared `cranpose-heavy` label: the Android toolchain is
+    # provisioned on both, but the two Linux slots are the fleet's scarce
+    # resource and the robot suite cannot run anywhere else.
+    runs-on: [self-hosted, macOS, ARM64]
     timeout-minutes: 90
     env:
       SCCACHE_CACHE_SIZE: 40G

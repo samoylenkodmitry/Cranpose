@@ -202,12 +202,15 @@ jobs:
   wasm-build:
     name: wasm build
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    # A wasm32 build and lint do not depend on the host, and the step below
-    # provisions what they need, so any cranpose-heavy runner can serve them.
-    # Pinning to Linux put every wasm result behind the one Linux machine, which
-    # also carries the X11 robot suite and the binary-size budget -- the work
-    # that genuinely cannot move.
-    runs-on: [self-hosted, cranpose-heavy]
+    # A wasm32 build and lint do not depend on the host, so this runs where
+    # the fleet has room rather than where the work is stuck. Pinning it to
+    # Linux was the original mistake: that machine also carries the X11 robot
+    # suite and the binary-size budget, the two jobs that genuinely cannot
+    # move, and it has two slots against the macOS pool's three. Leaving it
+    # on the shared `cranpose-heavy` label was only half a fix -- a free
+    # Linux slot still won the job, and every wasm build that took one made
+    # the robot suite wait.
+    runs-on: [self-hosted, macOS, ARM64]
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
