@@ -108,6 +108,31 @@ asks the user for it:
 | `overlay` | Windows drawn above other applications. |
 | `update` | The permission `PackageInstaller` requires to install an application update. |
 
+### Hardware features stay optional unless you ask
+
+A permission carries hardware with it. `android.permission.CAMERA` makes
+Android's packaging tools require `android.hardware.camera`, which takes the
+application off every device without a camera and stops updates for people who
+already have it installed — a loss Play reports only once a release is
+prepared, in a warning that is easy to read past.
+
+The plugin writes those features into the merged manifest as
+`android:required="false"`, one for each permission that carries one, and
+refuses a build where a feature stays required that the application did not
+ask for. An application that cannot work without the hardware names it:
+
+```kotlin
+cranpose {
+    services.add("camera")
+    requiredFeatures.add("android.hardware.camera")
+}
+```
+
+A watch-only application names `android.hardware.type.watch` the same way. An
+application that only reads a photo it was given says nothing and reaches
+every device. The refusal names the feature, the permission behind it, and the
+line that would allow it.
+
 ### The escape hatch
 
 Everything above is additive, not exclusive. An application adds its own

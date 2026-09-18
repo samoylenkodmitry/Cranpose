@@ -107,6 +107,29 @@ abstract class CranposeExtension @Inject constructor(objects: ObjectFactory) {
      */
     val services: SetProperty<String> = objects.setProperty(String::class.java)
 
+    /**
+     * The hardware features this application demands of a device.
+     *
+     * The default is none, and that is the point. A permission carries a
+     * hardware feature with it: `android.permission.CAMERA` makes Android's
+     * packaging tools require `android.hardware.camera`, which takes the
+     * application off every device with no camera and stops updates for people
+     * who already have it. The plugin writes those features into the merged
+     * manifest as `android:required="false"`, and refuses a build where a
+     * feature stays required that is not named here.
+     *
+     * So an application that cannot work without a camera says so, once:
+     *
+     *     cranpose {
+     *         services.add("camera")
+     *         requiredFeatures.add("android.hardware.camera")
+     *     }
+     *
+     * and one that scans a photo it was given, or imports a file, says
+     * nothing and reaches every device.
+     */
+    val requiredFeatures: SetProperty<String> = objects.setProperty(String::class.java)
+
     /** The activity label, used for the launcher entry. */
     val label: Property<String> = objects.property(String::class.java)
 

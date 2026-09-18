@@ -1,5 +1,6 @@
 package dev.cranpose.gradle
 
+import com.android.build.api.artifact.SingleArtifact
 import com.android.build.api.dsl.ApplicationExtension
 import com.android.build.api.variant.ApplicationAndroidComponentsExtension
 import com.android.build.api.variant.ApplicationVariant
@@ -80,6 +81,7 @@ class CranposeAndroidPlugin : Plugin<Project> {
         cranpose.debugAbiFeatures.convention(emptyMap())
         cranpose.releaseAbiFeatures.convention(emptyMap())
         cranpose.services.convention(emptySet())
+        cranpose.requiredFeatures.convention(emptySet())
         cranpose.environment.convention(emptyMap())
         cranpose.label.convention(project.rootProject.name)
         cranpose.theme.convention("@android:style/Theme.NoTitleBar.Fullscreen")
@@ -126,6 +128,7 @@ class CranposeAndroidPlugin : Plugin<Project> {
         // from a repository.
         androidComponents.onVariants { variant ->
             contributeCranposeSources(project, cranpose, variant)
+            guardManifestFeatures(project, cranpose, variant)
         }
 
         project.afterEvaluate {
@@ -174,6 +177,38 @@ class CranposeAndroidPlugin : Plugin<Project> {
 
     private fun contributeManifest(variant: ApplicationVariant, root: File, name: String) {
         variant.sources.manifests.addStaticManifestFile(File(root, "manifests/$name.xml").absolutePath)
+    }
+
+    /**
+     * Declares the hardware features the merged manifest's permissions carry,
+     * and fails the build when one of them stays required without
+     * `cranpose { requiredFeatures }` naming it.
+     *
+     * This runs on the merged manifest rather than on the framework's own
+     * fragments because a permission from the application itself, or from any
+     * library it depends on, costs it the same devices.
+     */
+    private fun guardManifestFeatures(
+        project: Project,
+        cranpose: CranposeExtension,
+        variant: ApplicationVariant,
+    ) {
+        val name = variant.name.replaceFirstChar { first -> first.uppercase() }
+        val task = project.tasks.register(
+            "cranpose${name}ManifestFeatures",
+            CranposeManifestFeatures::class.java,
+        )
+        task.configure {
+            description = "Declares the hardware features ${variant.name}'s permissions carry"
+            requiredFeatures.set(cranpose.requiredFeatures)
+        }
+        variant.artifacts
+            .use(task)
+            .wiredWithFiles(
+                CranposeManifestFeatures::mergedManifest,
+                CranposeManifestFeatures::updatedManifest,
+            )
+            .toTransform(SingleArtifact.MERGED_MANIFEST)
     }
 
     private fun requireCargoPackage(cranpose: CranposeExtension): String =
