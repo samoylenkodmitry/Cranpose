@@ -1716,7 +1716,7 @@ pub(crate) fn spoken_line(element: &AccessibilityElement) -> String {
 /// debug level: `RUST_LOG=cranpose::spoken_tree=debug`. A platform bridge
 /// calls it on every change, so a person reads a device's screen from the
 /// console the way the robot's `spoken_tree` prints it.
-#[cfg(any(test, feature = "robot", target_os = "ios", target_os = "android"))]
+#[cfg(target_os = "ios")]
 pub(crate) fn log_spoken_tree(elements: &[AccessibilityElement]) {
     const TARGET: &str = "cranpose::spoken_tree";
     if !log::log_enabled!(target: TARGET, log::Level::Debug) {
