@@ -536,13 +536,32 @@ robot-gpu-fast: (robot-gpu "parallel")
 robot-gpu-measured: (robot-gpu "serial")
 
 # CI's software-present half: exactly the four captures excluded above.
-robot-captures:
+robot-captures classes="all":
     WGPU_BACKEND=gl LIBGL_ALWAYS_SOFTWARE=1 ROBOT_PRIVATE_DISPLAY_SCREEN=1600x1200x24 \
       xvfb-run -a -s "-screen 0 1600x1200x24" ./run_robot_test.sh \
+      --classes {{classes}} \
       --example robot_underline_screenshot \
       --example robot_text_strikeout_presented \
       --example robot_leetcodedaily_full_layout_scroll_stability \
       --example robot_glass_backdrop_scroll_stability
+
+# Both halves of CI's Linux robot suite, in turn, in one job.
+#
+# They cannot usefully run at the same time. Each takes the exclusive host
+# lock for its measured examples, and each runs a parallel phase that pushes
+# the load average well past the quiet guard's threshold -- so as two jobs one
+# sits on the lock while the OTHER one's parallel phase keeps it from
+# starting. Caught in the act on samarch-1: the GPU half 1m18s into `flock -x`
+# with nothing compiling on the box, while the captures half held the lock and
+# logged `load_1m=11.65 over 7.20 on 12 cpus`, waiting out load its neighbour
+# had just produced.
+#
+# One job runs them in turn and leaves the fleet's second Linux slot -- half
+# of everything the robot suite cannot run without -- free for someone else.
+robot-linux classes="all": (robot-gpu classes) (robot-captures classes)
+
+# The half of the Linux suite a pull request waits for.
+robot-linux-fast: (robot-linux "parallel")
 
 # Render the liquid-glass cheatsheet montages.
 cheatsheets:
