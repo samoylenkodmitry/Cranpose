@@ -192,6 +192,7 @@ fn workflow_actions_are_pinned_to_commit_shas() {
         "rust.yml",
         "heavy-selfhosted.yml",
         "nightly.yml",
+        "cancel-superseded.yml",
         "publish.yml",
         "release.yml",
         "deploy-pages.yml",

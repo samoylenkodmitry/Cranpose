@@ -1,0 +1,42 @@
+name: Cancel superseded runs
+
+# Merging a pull request does not stop the runs that pull request started.
+#
+# This repository has five self-hosted runners and two of them are the only
+# Linux slots the robot suite can use. When a branch merges, its own
+# `pull_request` runs keep the slots they hold -- on 034ccea6 four of the five
+# runners were still building a branch that had already landed, while main's
+# board sat entirely queued behind them. `concurrency` cannot help: it cancels a
+# run when a newer event arrives on the same ref, and a merge sends no event to
+# the branch it came from.
+#
+# So the close event does it. `pull_request_target` is what grants a writable
+# token on a fork's pull request; nothing here checks out or runs pull request
+# code, only the base branch's own script.
+on:
+  pull_request_target:
+    types: [closed]
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: cancel-superseded-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  cancel:
+    name: free the runners a closed pull request still holds
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Cancel the runs this pull request no longer needs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          REPO: ${{ github.repository }}
+        run: bash scripts/ci/cancel_pr_runs.sh --repo "$REPO" --head-sha "$HEAD_SHA"
