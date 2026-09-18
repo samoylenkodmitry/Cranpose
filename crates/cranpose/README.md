@@ -154,11 +154,6 @@ One permission still arrives on its own: `androidx.core`, inside the
 `<applicationId>.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION` for its own
 receivers. The application grants it to itself and no store listing shows it.
 
-One permission still arrives on its own: `androidx.core`, inside the
-`appcompat` dependency, declares
-`<applicationId>.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION` for its own
-receivers. The application grants it to itself and no store listing shows it.
-
 ### Hardware features stay optional unless you ask
 
 A permission carries hardware with it. `android.permission.CAMERA` makes
@@ -179,10 +174,12 @@ cranpose {
 }
 ```
 
-A watch-only application names `android.hardware.type.watch` the same way. An
-application that only reads a photo it was given says nothing and reaches
-every device. The refusal names the feature, the permission behind it, and the
-line that would allow it.
+A watch-only application says it in Rust instead, with
+`.demanding(&[Demand::Watch])`, and the build writes
+`android.hardware.type.watch` into the manifest as required. An application
+that only reads a photo it was given says nothing and reaches every device.
+The refusal names the feature, the permission behind it, and the line that
+would allow it.
 
 ### The escape hatch
 
