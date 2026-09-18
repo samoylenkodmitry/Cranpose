@@ -186,6 +186,7 @@ ci-contract-gates:
     scripts/ci/robot_scheduling_classes_test.sh
     scripts/ci/robot_worker_contract_test.sh
     scripts/ci/pr_budget_test.sh
+    scripts/ci/terminate_descendants_test.sh
 
 # Point git at the repository's hooks. Once per clone.
 hooks:

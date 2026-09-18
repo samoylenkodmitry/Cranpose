@@ -29,6 +29,26 @@ start_shared_sccache() {
 # framework. Deliberately not applied workspace-wide -- `size-budget` weighs
 # the bytes a linker produces against a fixed ceiling, and changing the
 # linker underneath it would move the number it guards.
+# Sends SIGTERM to every descendant of a process, depth first.
+#
+# By process id, walked from a parent this caller owns -- never by matching a
+# command line. samarch-1 carries nineteen other repositories' runners, and a
+# pattern kill has already reached into a neighbour's job once.
+#
+# Depth first so a child is signalled before the parent that would otherwise
+# outlive it briefly and respawn nothing; the caller signals `parent` itself
+# if it wants to, because the common case is a shell asking for its own tree
+# to go while it stays alive long enough to report why.
+terminate_descendants() {
+    local parent="$1"
+    local child
+
+    for child in $(pgrep -P "$parent" 2>/dev/null); do
+        terminate_descendants "$child"
+        kill -TERM "$child" 2>/dev/null || true
+    done
+}
+
 enable_fast_linker() {
     if [ -n "${CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER:-}" ]; then
         return 0
