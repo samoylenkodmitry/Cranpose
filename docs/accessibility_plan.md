@@ -72,5 +72,5 @@ is ticked when the code, its tests and its docs are on the branch.
 - [x] the iOS demo logs the spoken tree under `cranpose::spoken_tree` when built with `EXTRA_FEATURES=logging`, so a check needs no VoiceOver on the simulator
 - [x] a touch slop: a press from a finger or a pen within the 48 points around a small control that nothing else claims reaches it, the way Compose's minimum touch target hit test does; the release counts as a click through the drag threshold, so the clickable node needs no change
 - [x] a check by hand of the demo on the iOS simulator through its accessibility tree: names, roles and traits read well on the counter, Liquid UI and text input screens; the magic tap has no control in the demo and waits for cranscan on the iPhone
-- [ ] a check by hand of the web mirror in a browser: focus order and live regions
+- [x] a check by hand of the web mirror in a browser, on the v0.1.134 Pages deploy: Tab walks the controls in tree order, a pane change lands in the polite live region, sliders carry value and range, switches and tabs their state; the loading overlay and the input proxy stay out of the reader tree
 - [ ] cranscan on the iPhone with VoiceOver on
