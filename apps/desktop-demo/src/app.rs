@@ -22,6 +22,7 @@ use cranpose_ui::{
 };
 
 mod animations;
+pub mod chrome_tabs;
 mod controls_ui;
 mod glass_feed;
 mod glass_tiles;
@@ -49,6 +50,7 @@ mod winamp;
 mod xkcd;
 
 use animations::AnimationsTab;
+pub use chrome_tabs::chrome_tabs_app;
 use controls_ui::ControlsUiTab;
 use glass_feed::GlassFeedTab;
 pub use glass_feed::GLASS_FEED_LIST_TAG;

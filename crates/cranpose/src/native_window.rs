@@ -28,6 +28,21 @@ impl WindowId {
     pub fn from_static(id: &'static str) -> Self {
         Self(hash_id(id))
     }
+
+    /// Creates a window identifier for a window that exists because of user
+    /// action rather than because the source names it.
+    ///
+    /// A torn-off tab, a second document, a detached tool panel: none of these
+    /// can be identified by a `&'static str`, because how many of them exist is
+    /// decided at runtime. `namespace` separates one such family of windows
+    /// from another so that a runtime key cannot collide with an unrelated
+    /// window, and `key` distinguishes the windows within that family.
+    pub fn from_runtime(namespace: &'static str, key: u64) -> Self {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        namespace.hash(&mut hasher);
+        key.hash(&mut hasher);
+        Self(hasher.finish())
+    }
 }
 
 #[cfg(all(
