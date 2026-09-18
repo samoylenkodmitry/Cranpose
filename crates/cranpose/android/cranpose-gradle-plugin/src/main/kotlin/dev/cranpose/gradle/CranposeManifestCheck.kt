@@ -74,8 +74,10 @@ internal data class RustDeclaration(val permissions: List<String>, val demands: 
 /**
  * What the merged manifest says about features, and what should be done to it.
  *
- * [missing] are the features a permission demands that nothing declares yet;
- * each is written as `required="false"` unless the application asked for it.
+ * [missing] are the features nothing declares yet: the ones a permission
+ * carries, each written as `required="false"` unless the application asked for
+ * it, and the hardware the application's own declaration demands, written as
+ * `required="true"`.
  * [unwanted] are the features that stay required although the application
  * never named them, which is the regression this task refuses to ship.
  */
@@ -95,6 +97,7 @@ internal fun planFeatures(
     permissions: List<String>,
     declared: List<FeatureLine>,
     wanted: Set<String>,
+    demanded: Set<String> = emptySet(),
 ): FeaturePlan {
     val reasons = mutableMapOf<String, String>()
     for (permission in permissions) {
@@ -104,7 +107,7 @@ internal fun planFeatures(
     }
 
     val names = declared.map(FeatureLine::name).toSet()
-    val missing = reasons.keys
+    val missing = (reasons.keys + demanded)
         .filterNot(names::contains)
         .sorted()
         .map { name -> FeatureLine(name, wanted.contains(name)) }
@@ -270,7 +273,12 @@ abstract class CranposeManifestCheck : DefaultTask() {
             throw GradleException(missingPermissionText(missing))
         }
 
-        val plan = planFeatures(permissions, declared, requiredFeatures.get() + rust.demands)
+        val plan = planFeatures(
+            permissions,
+            declared,
+            requiredFeatures.get() + rust.demands,
+            rust.demands.toSet(),
+        )
         if (plan.unwanted.isNotEmpty()) {
             throw GradleException(refusalText(plan.unwanted, plan.reasons))
         }
@@ -282,7 +290,7 @@ abstract class CranposeManifestCheck : DefaultTask() {
             manifest.appendChild(element)
             logger.lifecycle(
                 "cranpose: ${line.name} declared android:required=\"${line.required}\" " +
-                    "for ${plan.reasons[line.name]}"
+                    "for ${plan.reasons[line.name] ?: "this application's declaration"}"
             )
         }
 
