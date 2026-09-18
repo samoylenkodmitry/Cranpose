@@ -1701,7 +1701,9 @@ pub(crate) fn spoken_line(element: &AccessibilityElement) -> String {
             "collapsed".to_string()
         }
     }));
-    parts.extend(element.progress.as_ref().and_then(spoken_percent));
+    if element.state_description.is_none() {
+        parts.extend(element.progress.as_ref().and_then(spoken_percent));
+    }
     parts.extend((!element.enabled).then(|| "dimmed".to_string()));
     parts.extend(element.focused.then(|| "focused".to_string()));
     parts.extend((!actions.is_empty()).then(|| format!("actions: {}", actions.join(", "))));
