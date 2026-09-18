@@ -60,21 +60,28 @@ class CranposeAndroidPlugin : Plugin<Project> {
         }
     }
 
-    private fun applyDefaults(project: Project, cranpose: CranposeExtension) {
-        val continuousIntegration =
-            project.providers.environmentVariable("CI").isPresent ||
-                project.providers.environmentVariable("GITHUB_ACTIONS").isPresent
+    private companion object {
+        /**
+         * Gradle property naming the architectures a release build produces,
+         * comma separated.
+         *
+         * The default is the one architecture a development device runs.
+         * Every architecture a release carries is one more full native build
+         * of the workspace, run one after another, so a build that only has
+         * to prove the application assembles asks for none of them.
+         */
+        const val RELEASE_ABIS_PROPERTY = "cranposeReleaseAbis"
+    }
 
+    private fun applyDefaults(project: Project, cranpose: CranposeExtension) {
         cranpose.workspaceRoot.convention("../../../..")
         cranpose.features.convention(listOf("android", "renderer-wgpu"))
         cranpose.defaultFeatures.convention(false)
         cranpose.debugAbis.convention(listOf("x86_64"))
         cranpose.releaseAbis.convention(
-            if (continuousIntegration) {
-                listOf("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
-            } else {
-                listOf("arm64-v8a")
-            }
+            project.providers.gradleProperty(RELEASE_ABIS_PROPERTY).map { value ->
+                value.split(',').map(String::trim).filter(String::isNotEmpty)
+            }.orElse(listOf("arm64-v8a"))
         )
         cranpose.releaseProfile.convention("release")
         cranpose.debugProfile.convention("dev")

@@ -228,6 +228,9 @@ test-shell-helpers: _benchmark-python
     bash scripts/ci/sccache_lifetime_test.sh
     scripts/wait_until_quiet_test.sh
     scripts/dev/target_gc_test.sh
+    scripts/ci/robot_scheduling_classes_test.sh
+    scripts/ci/robot_worker_contract_test.sh
+    scripts/ci/pr_budget_test.sh
     {{benchmark_python}} scripts/android_benchmark_test.py
     {{benchmark_python}} scripts/android_visual_contract_test.py
     python3 scripts/perf_report_test.py
@@ -382,10 +385,13 @@ android: _disk-guard
     cd apps/android-demo/android && ../../../scripts/ci/with_host_lock.sh --shared \
       ./gradlew --no-daemon :app:assembleRelease
 
-# Build the Android release artifact, with the Rust side fully optimised.
+# Build the shippable Android release artifact: every architecture it carries.
+# `android` above builds the one a development device runs, because each extra
+# architecture is another full native build of the workspace, run in turn.
 android-release:
     cd apps/android-demo/android && ../../../scripts/ci/with_host_lock.sh --shared \
-      ./gradlew --no-daemon :app:assembleRelease -PrustFastRelease=false
+      ./gradlew --no-daemon :app:assembleRelease \
+      -PcranposeReleaseAbis=arm64-v8a,armeabi-v7a,x86,x86_64
 
 # Build the starter template for Android, the way the publish canary does.
 android-isolated:
@@ -459,7 +465,7 @@ test-substrates filter="":
 
 # The full robot suite, as documented for local runs.
 robot: _disk-guard
-    ./run_robot_test.sh --sequential
+    ./run_robot_test.sh
 
 # Compile every robot example without running any of them.
 robot-build: _disk-guard
@@ -493,19 +499,29 @@ test-android-surface-contract:
 # their screenshots on software present.
 
 # CI's GPU half of the robot suite.
-robot-gpu:
-    xvfb-run -a -s "-screen 0 1280x800x24" ./run_robot_test.sh \
-      --sequential \
+robot-gpu classes="all":
+    ROBOT_PRIVATE_DISPLAY_SCREEN=1280x800x24 \
+      xvfb-run -a -s "-screen 0 1280x800x24" ./run_robot_test.sh \
+      --classes {{classes}} \
       --skip robot_underline_screenshot \
       --skip robot_text_strikeout_presented \
       --skip robot_leetcodedaily_full_layout_scroll_stability \
       --skip robot_glass_backdrop_scroll_stability
 
+# The half of the GPU suite a pull request waits for: the examples that assert
+# on pixels and structure, which run all at once. The examples that measure
+# time run one at a time by definition, so they cannot fit a pull request's
+# budget and run on main and nightly instead -- see `robot-gpu-measured`.
+robot-gpu-fast: (robot-gpu "parallel")
+
+# The other half: every example whose answer depends on how busy the machine
+# is, one at a time on a machine the exclusive host lock has emptied.
+robot-gpu-measured: (robot-gpu "serial")
+
 # CI's software-present half: exactly the four captures excluded above.
 robot-captures:
-    WGPU_BACKEND=gl LIBGL_ALWAYS_SOFTWARE=1 \
+    WGPU_BACKEND=gl LIBGL_ALWAYS_SOFTWARE=1 ROBOT_PRIVATE_DISPLAY_SCREEN=1600x1200x24 \
       xvfb-run -a -s "-screen 0 1600x1200x24" ./run_robot_test.sh \
-      --sequential \
       --example robot_underline_screenshot \
       --example robot_text_strikeout_presented \
       --example robot_leetcodedaily_full_layout_scroll_stability \

@@ -23,6 +23,10 @@ on:
   pull_request:
     branches: ["main"]
   workflow_dispatch:
+  schedule:
+    # Nightly, so the half a pull request cannot afford still runs every day
+    # even when nothing merges.
+    - cron: "0 3 * * *"
 
 # Supersede older runs of the same ref: fleet minutes are real machines.
 concurrency:
@@ -36,7 +40,7 @@ jobs:
     # builds. The workspace persists between runs on a self-hosted runner,
     # so the robot-profile target stays warm.
     runs-on: [self-hosted, Linux, cranpose-heavy]
-    timeout-minutes: 90
+    timeout-minutes: ${{ github.event_name == 'pull_request' && 20 || 90 }}
     env:
       SCCACHE_CACHE_SIZE: 40G
       CARGO_INCREMENTAL: "0"
@@ -79,8 +83,17 @@ jobs:
           command -v just >/dev/null || cargo install just --locked
           scripts/ci/start_sccache.sh
 
-      - name: Run the robot suite on the GPU
-        if: steps.changes.outputs.docs_only != 'true'
+      - name: Run the robot suite's parallel half (pull request)
+        if: github.event_name == 'pull_request' && steps.changes.outputs.docs_only != 'true'
+        # A pull request waits for the examples that assert on pixels and
+        # structure; they all run at once, so the whole half costs about a
+        # minute. The examples that measure time cannot run beside anything,
+        # including each other, so a pull request cannot afford them and the
+        # step below runs them on main and nightly instead.
+        run: just robot-gpu-fast
+
+      - name: Run the whole robot suite on the GPU
+        if: github.event_name != 'pull_request' && steps.changes.outputs.docs_only != 'true'
         # The suite relaxes the environment-sensitive frame-rate assertions
         # itself; the Vulkan ICD here still selects the real GPU. The three
         # external-framebuffer capture tests run in robot-capture-software
@@ -105,7 +118,7 @@ jobs:
     # buffer, which only software present fills under Xvfb — the GL
     # backend on llvmpipe is the fleet's cloud-equivalent path.
     runs-on: [self-hosted, Linux, cranpose-heavy]
-    timeout-minutes: 45
+    timeout-minutes: ${{ github.event_name == 'pull_request' && 20 || 45 }}
     env:
       SCCACHE_CACHE_SIZE: 40G
       CARGO_INCREMENTAL: "0"
@@ -149,7 +162,7 @@ jobs:
   ios-build:
     name: iOS build (self-hosted)
     runs-on: [self-hosted, macOS, ARM64]
-    timeout-minutes: 45
+    timeout-minutes: 20
     env:
       CARGO_INCREMENTAL: "0"
     steps:
@@ -167,19 +180,7 @@ jobs:
         id: provision
         if: steps.changes.outputs.docs_only != 'true'
         run: |
-          # Resolve the account's real home rather than trusting $HOME:
-          # actions/checkout temporarily overrides HOME, and a step that runs
-          # while it is overridden prepends a .cargo/bin that does not exist.
-          # That is why the sccache line below survived for so long -- sccache
-          # was already on the runner's own PATH, so nothing needed `cargo`
-          # until another tool did, and then it failed with exit 127.
-          real_home="$(eval echo "~$(id -un)")"
-          export PATH="$real_home/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
-          echo "$real_home/.cargo/bin" >> "$GITHUB_PATH"
-          command -v cargo >/dev/null || {
-            echo "cargo not found. HOME=$HOME real_home=$real_home PATH=$PATH" >&2
-            exit 1
-          }
+          scripts/ci/provision_toolchain.sh
           # No toolchain action here: rust-toolchain.toml owns the version and
           # the rustup shim installs it on first use. Adding targets without
           # `--toolchain` puts them on that pinned toolchain instead of on
@@ -203,8 +204,11 @@ jobs:
 
   android-release:
     name: Android release build (self-hosted)
-    runs-on: [self-hosted, cranpose-heavy]
-    timeout-minutes: 90
+    # macOS, not the shared `cranpose-heavy` label: the Android toolchain is
+    # provisioned on both, but the two Linux slots are the fleet's scarce
+    # resource and the robot suite cannot run anywhere else.
+    runs-on: [self-hosted, macOS, ARM64]
+    timeout-minutes: ${{ github.event_name == 'pull_request' && 20 || 90 }}
     env:
       SCCACHE_CACHE_SIZE: 40G
       CARGO_INCREMENTAL: "0"
@@ -282,7 +286,14 @@ jobs:
         run: just clippy-android
 
       - name: Build Android release APK
-        if: ${{ !cancelled() && steps.provision.conclusion == 'success' && steps.changes.outputs.docs_only != 'true' }}
+        if: ${{ !cancelled() && github.event_name == 'push' && steps.provision.conclusion == 'success' && steps.changes.outputs.docs_only != 'true' }}
+        # Pushes to main only. `clippy-android` above type-checks every
+        # architecture the release carries on a pull request too, in about a
+        # minute; assembling the APK proves the Gradle and packaging side, and
+        # nothing about that depends on which branch the commit arrives on. It
+        # is the one Android answer that a merge cannot invalidate, so it runs
+        # once, after the merge, instead of on every push to every branch.
+        #
         # --no-daemon: never attach to a shared/foreign Gradle daemon on this
         # self-hosted box. Reused daemons started by other builds on the runner
         # can carry a PATH without ~/.cargo/bin, which makes the cargo-ndk check
