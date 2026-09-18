@@ -269,12 +269,16 @@ where
         self.buttons_pressed.insert(PointerButton::Primary);
 
         let mut hits = self.renderer.scene().hit_test(self.cursor.0, self.cursor.1);
-        if hits.is_empty() && self.pointer_source.is_touch_like() {
-            hits.extend(
-                self.renderer
-                    .scene()
-                    .hit_test_near(self.cursor.0, self.cursor.1),
-            );
+        if self.pointer_source.is_touch_like()
+            && let Some(near) = self
+                .renderer
+                .scene()
+                .hit_test_near(self.cursor.0, self.cursor.1)
+            && hits.iter().all(|hit| {
+                hit.node_id() != near.node_id() && near.capture_path().contains(&hit.node_id())
+            })
+        {
+            hits.insert(0, near);
         }
         if hits.is_empty() {
             self.hit_path_tracker.remove_path(PointerId::PRIMARY);

@@ -475,9 +475,11 @@ own.
 A press from a finger or a pen that misses every control, but lands within
 the 48 points around a smaller control, reaches that control when no other
 control claims the point, the way Compose's minimum touch target hit test
-does. The nearest such control takes it. The release then counts as a click
-when it stays within the drag threshold of the press, as any release does. A
-mouse, or a pointer of an unknown kind, keeps its exact point.
+does. A scroll container or another parent around the control does not
+claim it; a sibling under the finger does. The nearest such control takes
+it. The release then counts as a click when it stays within the drag
+threshold of the press, as any release does. A mouse, or a pointer of an
+unknown kind, keeps its exact point.
 
 | Key | What happens |
 | --- | --- |

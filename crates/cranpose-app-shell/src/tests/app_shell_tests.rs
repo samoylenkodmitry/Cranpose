@@ -10748,3 +10748,77 @@ fn a_finger_beside_a_small_control_presses_it_and_a_mouse_does_not() {
     shell.pointer_released();
     assert_eq!(presses.get(), 1);
 }
+
+#[test]
+fn a_finger_beside_a_small_control_in_a_scroll_container_presses_it_unless_a_sibling_is_under_it() {
+    let _guard = test_guard();
+    let root_key = location_key(file!(), line!(), column!());
+    let small_presses = Rc::new(Cell::new(0));
+    let big_presses = Rc::new(Cell::new(0));
+    let small_for_content = Rc::clone(&small_presses);
+    let big_for_content = Rc::clone(&big_presses);
+    let mut shell = AppShell::new(HitGraphRenderer::default(), root_key, move || {
+        let small = Rc::clone(&small_for_content);
+        let big = Rc::clone(&big_for_content);
+        let scroll_state = cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| *state);
+        Column(
+            Modifier::empty()
+                .size(Size::new(200.0, 400.0))
+                .vertical_scroll(scroll_state, false),
+            ColumnSpec::default(),
+            move || {
+                let small = Rc::clone(&small);
+                let big = Rc::clone(&big);
+                Box(
+                    Modifier::empty().size(Size::new(200.0, 100.0)),
+                    BoxSpec::default(),
+                    || {},
+                );
+                Row(Modifier::empty(), RowSpec::default(), move || {
+                    let small = Rc::clone(&small);
+                    Box(
+                        Modifier::empty().size(Size::new(100.0, 20.0)),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                    Box(
+                        Modifier::empty()
+                            .size(Size::new(20.0, 20.0))
+                            .clickable(move |_| small.set(small.get() + 1)),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                });
+                Box(
+                    Modifier::empty()
+                        .size(Size::new(200.0, 60.0))
+                        .clickable(move |_| big.set(big.get() + 1)),
+                    BoxSpec::default(),
+                    || {},
+                );
+            },
+        );
+    });
+    shell.update();
+    shell.set_pointer_source(cranpose_foundation::PointerSource::Touch);
+
+    shell.set_cursor(125.0, 110.0);
+    assert!(shell.pointer_pressed());
+    assert!(shell.pointer_released());
+    assert_eq!(
+        small_presses.get(),
+        1,
+        "the scroll container around the control does not claim the point"
+    );
+    assert_eq!(big_presses.get(), 0);
+
+    shell.set_cursor(125.0, 125.0);
+    assert!(shell.pointer_pressed());
+    assert!(shell.pointer_released());
+    assert_eq!(
+        big_presses.get(),
+        1,
+        "the sibling under the finger takes the press"
+    );
+    assert_eq!(small_presses.get(), 1);
+}
