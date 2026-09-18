@@ -45,8 +45,19 @@ check "every discovered example is classified ($discovered)" \
 
 check "an example that compares frame work is serial" \
     [ "$(class_of robot_text_handle_cycle_stability)" = serial ]
-check "an example that asserts on pixels alone is parallel" \
-    [ "$(class_of robot_lazy_list)" = parallel ]
+
+# Not a named example on the parallel side. `robot_lazy_list` was that name
+# until it turned out to define its own `wait_for_text`, which is a bounded
+# wait and so genuinely serial -- the expectation was stale, not the
+# classifier, and it took main red. What actually matters is that the
+# partition still buys something: a predicate that widens until nearly
+# everything measures time leaves a suite that is sequential again with extra
+# steps. The fixtures below pin the classifier's logic in both directions.
+parallel_count=$(awk '$1 == "parallel"' "$classes_file" | grep -c '')
+check "most examples still run in parallel ($parallel_count of $classified)" \
+    [ "$parallel_count" -ge "$((classified / 2))" ]
+check "some examples run serially ($((classified - parallel_count)))" \
+    [ "$parallel_count" -lt "$classified" ]
 
 # The transitive case has no instance in the suite today: every example that
 # measures time also names the measurement itself. A fixture proves the

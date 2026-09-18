@@ -4189,12 +4189,22 @@ mod robot_suite_partition {
     /// Collects the arguments of every `--<flag> <value>` occurrence inside a
     /// recipe's body, where the recipe runs from `name:` at column zero to the
     /// next line at column zero.
+    /// The recipe a `just` header declares, ignoring its parameters and
+    /// dependencies.
+    ///
+    /// `robot-gpu classes="all":` declares `robot-gpu`. Matching the whole
+    /// header instead read that as a different recipe and reported the split
+    /// gone.
+    fn recipe_header_name(line: &str) -> Option<&str> {
+        let (head, _) = line.split_once(':')?;
+        head.split_whitespace().next()
+    }
+
     pub(crate) fn recipe_flag_values(
         justfile_text: &str,
         recipe: &str,
         flag: &str,
     ) -> BTreeSet<String> {
-        let header = format!("{recipe}:");
         let mut values = BTreeSet::new();
         let mut inside = false;
         for line in justfile_text.split('\n') {
@@ -4203,7 +4213,7 @@ mod robot_suite_partition {
                 if inside {
                     break;
                 }
-                inside = line.trim_end() == header;
+                inside = recipe_header_name(line) == Some(recipe);
                 continue;
             }
             if !inside {
@@ -4651,6 +4661,27 @@ mod robot_suite_partition_tests {
             "leaked from a later recipe: {skipped:?}"
         );
         assert_eq!(skipped.len(), 1);
+    }
+
+    #[test]
+    fn a_parameterised_recipe_header_still_names_its_recipe() {
+        let text = concat!(
+            "robot-gpu classes=\"all\":\n",
+            "    ./run_robot_test.sh --classes {{classes}} \\\n",
+            "      --skip robot_underline_screenshot\n",
+            "\n",
+            "robot-gpu-fast: (robot-gpu \"parallel\")\n",
+        );
+        let skipped = recipe_flag_values(text, "robot-gpu", "--skip");
+        assert_eq!(
+            skipped.iter().map(String::as_str).collect::<Vec<_>>(),
+            vec!["robot_underline_screenshot"],
+            "a recipe with parameters declares the same recipe"
+        );
+        assert!(
+            recipe_flag_values(text, "robot-gpu-fast", "--skip").is_empty(),
+            "a recipe whose name merely starts with another's is a different recipe"
+        );
     }
 
     #[test]

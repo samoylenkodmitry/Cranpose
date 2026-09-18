@@ -174,7 +174,18 @@ duplication-gate base="origin/main":
 
 # The gates fast enough to run before every commit: what `.githooks/pre-commit`
 # runs. Everything here finishes in seconds against a warm xtask build.
-precommit: fmt-check typos complexity-gate duplication-gate
+precommit: fmt-check typos complexity-gate duplication-gate ci-contract-gates
+
+# The gates that describe CI to itself: which scheduling class each robot
+# example is in, what a parallel worker can reach, and the twenty-minute cap
+# on a pull request. Under five seconds together, and in `precommit` because
+# a change to one of those answers is exactly the kind that looks harmless
+# and is not -- widening the load-sensitive predicate without rerunning this
+# took main red.
+ci-contract-gates:
+    scripts/ci/robot_scheduling_classes_test.sh
+    scripts/ci/robot_worker_contract_test.sh
+    scripts/ci/pr_budget_test.sh
 
 # Point git at the repository's hooks. Once per clone.
 hooks:
@@ -224,13 +235,10 @@ _benchmark-python:
     {{benchmark_python}} -m pip install --disable-pip-version-check --requirement scripts/android_benchmark_requirements.txt
 
 # The shell helpers agents run by hand, pinned so they cannot rot.
-test-shell-helpers: _benchmark-python
+test-shell-helpers: _benchmark-python ci-contract-gates
     bash scripts/ci/sccache_lifetime_test.sh
     scripts/wait_until_quiet_test.sh
     scripts/dev/target_gc_test.sh
-    scripts/ci/robot_scheduling_classes_test.sh
-    scripts/ci/robot_worker_contract_test.sh
-    scripts/ci/pr_budget_test.sh
     {{benchmark_python}} scripts/android_benchmark_test.py
     {{benchmark_python}} scripts/android_visual_contract_test.py
     python3 scripts/perf_report_test.py
