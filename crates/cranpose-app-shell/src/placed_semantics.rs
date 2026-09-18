@@ -217,16 +217,16 @@ impl HitGraphSink for TouchBoundsSink<'_> {
     }
 }
 
-/// Gives a row its place, and passes it down through the wrappers a list
-/// puts around its rows to the first control: the row a reader stops on.
+/// Gives a row and everything inside it the place of the row, so that two
+/// rows with one name, and the controls inside them, are apart. A list inside
+/// a row keeps the places it gave its own rows.
 pub(crate) fn place_row(row: &mut PlacedSemanticsNode, position: usize) {
-    let mut node = row;
-    loop {
-        node.list_position = Some(position);
-        if node.clickable || node.children.len() != 1 {
-            return;
-        }
-        node = &mut node.children[0];
+    if row.list_position.is_some() {
+        return;
+    }
+    row.list_position = Some(position);
+    for child in &mut row.children {
+        place_row(child, position);
     }
 }
 fn join(

@@ -577,4 +577,26 @@ mod tests {
             "the buttons under the wrappers carry places 1 and 2: {issues:?}"
         );
     }
+
+    #[test]
+    fn a_control_inside_a_row_carries_the_place_of_the_row() {
+        let row = |y: f32| PlacedSemanticsNode {
+            children: vec![
+                button(Some("page thumbnail"), rect(0.0, y, 40.0, 40.0)),
+                button(Some("More"), rect(160.0, y, 40.0, 40.0)),
+            ],
+            ..node(None, rect(0.0, y, 200.0, 40.0))
+        };
+        let mut list = screen(vec![row(0.0), row(50.0)]);
+        for (row, position) in list.children.iter_mut().zip(1..) {
+            crate::placed_semantics::place_row(row, position);
+        }
+        let issues = audit_accessibility(&list);
+        assert!(
+            !issues
+                .iter()
+                .any(|issue| issue.kind == AccessibilityIssueKind::SameName),
+            "the thumbnails and the More buttons sit in rows 1 and 2: {issues:?}"
+        );
+    }
 }

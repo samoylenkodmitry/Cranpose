@@ -17,6 +17,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 TARGET="${1:-aarch64-apple-ios-sim}"
 PROFILE="${PROFILE:-debug}"
+EXTRA_FEATURES="${EXTRA_FEATURES:-}"
 APP_NAME="CranposeDemo"
 
 case "$PROFILE" in
@@ -28,7 +29,7 @@ esac
 # shellcheck disable=SC2086
 cargo build --manifest-path "$WORKSPACE/Cargo.toml" \
   -p desktop-app --bin cranpose-ios \
-  --target "$TARGET" --no-default-features --features ios $PROFILE_FLAG >&2
+  --target "$TARGET" --no-default-features --features ios ${EXTRA_FEATURES:+--features "$EXTRA_FEATURES"} $PROFILE_FLAG >&2
 
 BIN="$WORKSPACE/target/$TARGET/$PROFILE/cranpose-ios"
 APP="$WORKSPACE/target/$TARGET/$PROFILE/$APP_NAME.app"

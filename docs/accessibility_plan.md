@@ -67,7 +67,10 @@ is ticked when the code, its tests and its docs are on the branch.
 - [x] `width_in`, `height_in` and `size_in`: a small field gets its 24 points without growing to 48
 - [x] rows of one list with one name are apart in the audit, because a reader speaks their place
 - [x] the target of a decorated field is the field, not its decoration box: the guide says to put the padding on the field's modifier, as the liquid search field does
+- [x] the iOS bridge comes up at the first frame when the root view controller was not there at startup: on the simulator the reader got no tree at all
+- [x] the Liquid slider speaks its value and takes a swipe, segments and chips speak their selected state; the demo names its sliders and lets its switches keep the switch role
+- [x] the iOS demo logs the spoken tree under `cranpose::spoken_tree` when built with `EXTRA_FEATURES=logging`, so a check needs no VoiceOver on the simulator
 - [ ] a touch slop: a press within the minimum target of a control that nothing else claims reaches it, the way Compose's minimum touch target hit testing does; the clickable node has to take a release inside the slop too
-- [ ] a check by hand of the demo on the iOS simulator through its accessibility tree: names, roles, traits, the magic tap
+- [x] a check by hand of the demo on the iOS simulator through its accessibility tree: names, roles and traits read well on the counter, Liquid UI and text input screens; the magic tap has no control in the demo and waits for cranscan on the iPhone
 - [ ] a check by hand of the web mirror in a browser: focus order and live regions
 - [ ] cranscan on the iPhone with VoiceOver on
