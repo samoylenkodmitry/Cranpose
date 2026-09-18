@@ -381,14 +381,14 @@ fn binary_size_budget_targets_minimal_isolated_app() {
         .and_then(std::path::Path::parent)
         .expect("desktop demo should live under workspace/apps")
         .to_path_buf();
-    let workflow = fs::read_to_string(workspace_root.join(".github/workflows/rust.yml"))
-        .expect("failed to read rust workflow");
+    let workflow = fs::read_to_string(workspace_root.join(".github/workflows/nightly.yml"))
+        .expect("failed to read nightly workflow");
     let justfile =
         fs::read_to_string(workspace_root.join("justfile")).expect("failed to read justfile");
 
     assert!(
         workflow.contains("run: just budgets"),
-        "CI must invoke the budgets recipe rather than spelling the gate inline"
+        "the nightly board must invoke the budgets recipe rather than spelling the gate inline"
     );
     assert!(
         justfile.contains("--package isolated-demo")

@@ -24,8 +24,9 @@ name: Nightly
 # the tree it names is still the tree everything else went green on.
 on:
   schedule:
-    # 03:07 local, off the hour: every scheduled workflow on the planet asks
-    # for :00, and this fleet is shared.
+    # 03:07 UTC. GitHub runs scheduled workflows in UTC regardless of where
+    # the fleet sits, and only from the default branch. Off the hour on
+    # purpose: every scheduled workflow on the planet asks for :00.
     - cron: "7 3 * * *"
   workflow_dispatch:
 
