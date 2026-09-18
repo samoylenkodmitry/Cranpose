@@ -10,6 +10,17 @@ on:
         required: true
         type: string
 
+# One publish at a time, and never cancelled.
+#
+# Two tags 27 seconds apart both ran this workflow in full, on the same
+# self-hosted mac, racing each other through `cargo publish` of one workspace.
+# Serialising them is the point, so `cancel-in-progress` stays false: a publish
+# that has already pushed some crates to crates.io must finish pushing the
+# rest, and the tag behind it waits its turn instead of dying.
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
 permissions:
   contents: read
 

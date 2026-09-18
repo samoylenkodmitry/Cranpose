@@ -184,6 +184,62 @@ fn ci_architecture_budget_runs_required_gates() {
     );
 }
 
+/// Reads a workflow's top-level `concurrency:` block.
+fn workflow_concurrency(name: &str) -> Option<(String, String)> {
+    let workflow = workspace_source(&format!(".github/workflows/{name}"));
+    let mut lines = workflow.lines().skip_while(|line| *line != "concurrency:");
+    lines.next()?;
+    let mut group = String::new();
+    let mut cancel = String::new();
+    for line in lines {
+        if !line.starts_with(' ') {
+            break;
+        }
+        let trimmed = line.trim();
+        if let Some(value) = trimmed.strip_prefix("group:") {
+            group = value.trim().to_string();
+        } else if let Some(value) = trimmed.strip_prefix("cancel-in-progress:") {
+            cancel = value.trim().to_string();
+        }
+    }
+    Some((group, cancel))
+}
+
+#[test]
+fn every_workflow_says_what_happens_when_it_overlaps_itself() {
+    for name in ["rust.yml", "heavy-selfhosted.yml", "build-one.yml"] {
+        let (group, cancel) = workflow_concurrency(name)
+            .unwrap_or_else(|| panic!("{name} must declare a concurrency group"));
+        assert!(
+            group.contains("github.ref"),
+            "{name} groups per ref so a new push supersedes the old one, found {group:?}"
+        );
+        assert_eq!(
+            cancel, "true",
+            "{name} answers a merge; an older commit's answer is dead weight on five runners"
+        );
+    }
+
+    for name in [
+        "nightly.yml",
+        "publish.yml",
+        "release.yml",
+        "deploy-pages.yml",
+        "cancel-superseded.yml",
+    ] {
+        let (group, cancel) = workflow_concurrency(name)
+            .unwrap_or_else(|| panic!("{name} must declare a concurrency group"));
+        assert!(
+            !group.is_empty(),
+            "{name} must name its concurrency group so two of them cannot run at once"
+        );
+        assert_eq!(
+            cancel, "false",
+            "{name} publishes or deploys; killing one halfway leaves the result half written"
+        );
+    }
+}
+
 #[test]
 fn workflow_actions_are_pinned_to_commit_shas() {
     let mut unpinned = Vec::new();
