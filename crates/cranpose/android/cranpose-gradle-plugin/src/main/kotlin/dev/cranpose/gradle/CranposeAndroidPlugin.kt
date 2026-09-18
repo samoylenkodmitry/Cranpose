@@ -208,10 +208,15 @@ class CranposeAndroidPlugin : Plugin<Project> {
         val needed = requireKnownServices(cranpose).flatMap { service ->
             SERVICE_PERMISSIONS[service].orEmpty().map { permission -> permission to service }
         }.toMap()
+        val declared = File(
+            File(requireWorkspace(project, cranpose), "target/cranpose"),
+            "${requireCargoPackage(cranpose)}-capabilities.json",
+        )
         task.configure {
             description = "Checks ${variant.name}'s permissions and the features they carry"
             requiredFeatures.set(cranpose.requiredFeatures)
             servicePermissions.set(needed)
+            declaration.from(declared)
         }
         variant.artifacts
             .use(task)
@@ -363,6 +368,17 @@ class CranposeAndroidPlugin : Plugin<Project> {
             task.name.startsWith("merge") &&
                 (task.name.contains("NativeLibs") || task.name.contains("JniLibFolders"))
         }.configureEach {
+            when {
+                name.contains("Debug", ignoreCase = true) -> dependsOn(debug)
+                name.contains("Release", ignoreCase = true) -> dependsOn(release)
+            }
+        }
+
+        // The capabilities an application declares in Rust are written by its
+        // build script, so the manifest check reads them only after Cargo has
+        // run. Packaging waits for that build anyway; this moves the manifest
+        // step behind it as well.
+        project.tasks.withType(CranposeManifestCheck::class.java).configureEach {
             when {
                 name.contains("Debug", ignoreCase = true) -> dependsOn(debug)
                 name.contains("Release", ignoreCase = true) -> dependsOn(release)

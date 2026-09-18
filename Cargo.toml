@@ -3,6 +3,7 @@ members = [
     "crates/cranpose-app-shell",
     "crates/cranpose",
     "crates/cranpose-assets",
+    "crates/cranpose-capabilities",
     "crates/cranpose-core",
     "crates/cranpose-macros",
     "crates/cranpose-runtime-std",
@@ -45,6 +46,7 @@ categories = ["gui"]
 android-activity = { version = "0.6", features = ["native-activity"] }
 bytemuck = { version = "1.25", features = ["derive"] }
 cranpose-animation = { path = "crates/cranpose-animation", version = "0.1.133" }
+cranpose-capabilities = { path = "crates/cranpose-capabilities", version = "0.1.133" }
 cranpose-liquid = { path = "crates/cranpose-liquid", version = "0.1.133" }
 cranpose = { path = "crates/cranpose", version = "0.1.133", default-features = false }
 cranpose-app-shell = { path = "crates/cranpose-app-shell", version = "0.1.133" }

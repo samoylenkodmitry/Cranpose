@@ -1,12 +1,15 @@
 package dev.cranpose.gradle
 
+import groovy.json.JsonSlurper
 import org.gradle.api.DefaultTask
 import org.gradle.api.GradleException
+import org.gradle.api.file.ConfigurableFileCollection
 import org.gradle.api.file.RegularFileProperty
 import org.gradle.api.provider.MapProperty
 import org.gradle.api.provider.SetProperty
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputFile
+import org.gradle.api.tasks.InputFiles
 import org.gradle.api.tasks.OutputFile
 import org.gradle.api.tasks.TaskAction
 import org.w3c.dom.Element
@@ -61,6 +64,12 @@ internal val FEATURES_BEHIND_PERMISSIONS: Map<String, List<String>> = mapOf(
  * One feature declaration as the merged manifest holds it.
  */
 internal data class FeatureLine(val name: String, val required: Boolean)
+
+/**
+ * What an application's build script declared in Rust: the permissions its
+ * services need, and the hardware it cannot run without.
+ */
+internal data class RustDeclaration(val permissions: List<String>, val demands: List<String>)
 
 /**
  * What the merged manifest says about features, and what should be done to it.
@@ -184,6 +193,41 @@ abstract class CranposeManifestCheck : DefaultTask() {
     @get:Input
     abstract val servicePermissions: MapProperty<String, String>
 
+    /**
+     * What the application's build script declared, as
+     * `cranpose_capabilities::Declaration::emit` wrote it.
+     *
+     * Empty until an application declares its capabilities in Rust; the build
+     * then reads its services and hardware from there instead of from the
+     * Gradle block, and writes the permissions into the manifest itself.
+     */
+    @get:InputFiles
+    abstract val declaration: ConfigurableFileCollection
+
+    private fun namedPermissions(document: org.w3c.dom.Document): List<String> =
+        document.getElementsByTagName("uses-permission")
+            .let { nodes -> (0 until nodes.length).mapNotNull { at -> nodes.item(at) as? Element } }
+            .mapNotNull { element ->
+                element.getAttributeNS(ANDROID_NAMESPACE, "name").takeIf(String::isNotEmpty)
+            }
+
+    /**
+     * What the application declared in Rust, or nothing when it has not.
+     */
+    private fun rustDeclaration(): RustDeclaration {
+        val file = declaration.files.firstOrNull { candidate -> candidate.isFile }
+            ?: return RustDeclaration(emptyList(), emptyList())
+        val parsed = JsonSlurper().parse(file) as? Map<*, *>
+            ?: throw GradleException("${file.path} is not the declaration cranpose wrote")
+        return RustDeclaration(
+            permissions = names(parsed["permissions"]),
+            demands = names(parsed["demands"]),
+        )
+    }
+
+    private fun names(value: Any?): List<String> =
+        (value as? List<*>).orEmpty().map { entry -> entry.toString() }
+
     @TaskAction
     fun run() {
         val builder = DocumentBuilderFactory.newInstance()
@@ -192,9 +236,22 @@ abstract class CranposeManifestCheck : DefaultTask() {
         val document = builder.parse(mergedManifest.get().asFile)
         val manifest = document.documentElement
 
-        val permissions = document.getElementsByTagName("uses-permission")
-            .let { nodes -> (0 until nodes.length).mapNotNull { at -> nodes.item(at) as? Element } }
-            .mapNotNull { element -> element.getAttributeNS(ANDROID_NAMESPACE, "name").takeIf(String::isNotEmpty) }
+        val rust = rustDeclaration()
+        val already = namedPermissions(document)
+        val added = rust.permissions.filterNot(already::contains)
+        for (permission in added) {
+            val element = document.createElement("uses-permission")
+            element.setAttributeNS(ANDROID_NAMESPACE, "android:name", permission)
+            manifest.appendChild(element)
+        }
+        if (added.isNotEmpty()) {
+            logger.lifecycle(
+                "cranpose: ${added.joinToString(", ")} written from this application's " +
+                    "own declaration"
+            )
+        }
+
+        val permissions = already + added
 
         val featureElements = document.getElementsByTagName("uses-feature")
             .let { nodes -> (0 until nodes.length).mapNotNull { at -> nodes.item(at) as? Element } }
@@ -213,7 +270,7 @@ abstract class CranposeManifestCheck : DefaultTask() {
             throw GradleException(missingPermissionText(missing))
         }
 
-        val plan = planFeatures(permissions, declared, requiredFeatures.get())
+        val plan = planFeatures(permissions, declared, requiredFeatures.get() + rust.demands)
         if (plan.unwanted.isNotEmpty()) {
             throw GradleException(refusalText(plan.unwanted, plan.reasons))
         }

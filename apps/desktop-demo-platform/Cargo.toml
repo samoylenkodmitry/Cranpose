@@ -45,3 +45,6 @@ env_logger = { version = "0.11", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 console_error_panic_hook = "0.1"
+
+[build-dependencies]
+cranpose-capabilities = { path = "../../crates/cranpose-capabilities" }

@@ -1,0 +1,23 @@
+[package]
+name = "cranpose-capabilities"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme = "README.md"
+description = "What a Cranpose application asks of a device, declared once in Rust and written into every platform's manifest"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "cranpose-plist"
+path = "src/bin/cranpose_plist.rs"

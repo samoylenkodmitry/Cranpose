@@ -110,26 +110,49 @@ its own manifest:
 | `overlay` | Windows drawn above other applications. | `SYSTEM_ALERT_WINDOW` |
 | `update` | Handing a downloaded package to `PackageInstaller`. | `REQUEST_INSTALL_PACKAGES` |
 
-### Permissions belong to the application
+### One declaration, in Rust, for every platform
 
 A permission is a line in the store listing and a question to the person
-holding the phone. It belongs in the manifest of the application that shows
-it, where anyone reading that application can see the whole list, rather than
-arriving from a framework nobody reads.
+holding the phone. It belongs to the application, and an application that
+ships on five platforms should say it once rather than in an Android manifest,
+an `Info.plist` and a Gradle block that can drift apart.
 
-So Cranpose declares none, and the build refuses a service whose permission is
-not there:
+So it says it in its build script:
 
+```rust
+use cranpose::capabilities::{Demand, Use, declare};
+
+fn main() {
+    declare(&[
+        Use::camera("Reads a receipt with the camera. Nothing leaves this device."),
+        Use::notifications(),
+    ])
+    .emit();
+}
 ```
-Services this application uses need permissions it does not declare:
-  android.permission.VIBRATE (the haptics service)
 
-  <uses-permission android:name="android.permission.VIBRATE" />
+A service is a function, so a name cannot be misspelled. A service Apple shows
+a sentence for takes that sentence as an argument, so it cannot be forgotten.
+Hardware an application cannot run without is an enum: `.demanding(&[Demand::Watch])`.
+
+`emit` writes the Android permissions and feature declarations, the Apple
+usage descriptions, and a constant the application itself reads:
+
+```rust
+cranpose::app_capabilities!();
+
+AppLauncher::new().with_capabilities(&CAPABILITIES)
 ```
 
-The check reads the merged manifest, so a permission from a library counts
-too, and a service that is dropped from `cranpose { services }` leaves nothing
-behind.
+The Android build takes the permissions from there. An application that has
+not declared anything in Rust keeps working: the build then reads
+`cranpose { services }` as before, and refuses a service whose permission the
+application's own manifest does not hold.
+
+One permission still arrives on its own: `androidx.core`, inside the
+`appcompat` dependency, declares
+`<applicationId>.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION` for its own
+receivers. The application grants it to itself and no store listing shows it.
 
 One permission still arrives on its own: `androidx.core`, inside the
 `appcompat` dependency, declares

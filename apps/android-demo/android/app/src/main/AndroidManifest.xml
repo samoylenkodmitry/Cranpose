@@ -1,16 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    The demo declares only what is specific to it: the permissions its services
-    need, and its own application attributes. The activity, its launcher entry
-    and the `android.app.lib_name` metadata come from the Cranpose library and
-    the service modules the Gradle plugin added.
+    The demo declares only its own application attributes. The activity, its
+    launcher entry and the `android.app.lib_name` metadata come from the
+    Cranpose library; the permissions come from what the platform crate's build
+    script declares, which iOS and macOS read too.
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- What the demo's two services need. Cranpose declares no permission on
-         an application's behalf, and the build names the ones it is missing. -->
-    <uses-permission android:name="android.permission.VIBRATE" />
-    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <application
         android:allowBackup="true"
         android:label="Compose Demo"

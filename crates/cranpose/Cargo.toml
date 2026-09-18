@@ -233,6 +233,7 @@ web-sys = { version = "0.3", optional = true, features = [
 ] }
 js-sys = { version = "0.3", optional = true }
 log = "0.4"
+cranpose-capabilities = { workspace = true }
 cranpose-liquid = { workspace = true }
 cranpose-services = { workspace = true, default-features = false }
 cranpose-storekit = { workspace = true, default-features = false, optional = true }

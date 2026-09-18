@@ -59,6 +59,11 @@ pub struct AppSettings {
     /// from the executable name, which is right for a development build and
     /// wrong for a shipped one.
     pub application_id: Option<String>,
+    /// What this application declared it asks of a device.
+    ///
+    /// The same declaration the platform builds read, so a service can answer
+    /// on every platform without each one keeping its own list.
+    pub capabilities: cranpose_capabilities::Capabilities<'static>,
     /// Initial window width in logical pixels.
     pub initial_width: u32,
     /// Initial window height in logical pixels.
@@ -142,6 +147,7 @@ impl Default for AppSettings {
         Self {
             window_title: "Compose App".into(),
             application_id: None,
+            capabilities: cranpose_capabilities::Capabilities::NONE,
             initial_width: 800,
             initial_height: 600,
             initial_size_explicit: false,
@@ -403,6 +409,29 @@ impl AppLauncher {
     /// * `title` - The string to display in the window title bar (Desktop/Web) or the activity label (Android).
     pub fn with_title(mut self, title: impl Into<String>) -> Self {
         self.settings.window_title = title.into();
+        self
+    }
+
+    /// State what this application asks of a device.
+    ///
+    /// The value comes from the build script, through
+    /// [`app_capabilities!`](crate::app_capabilities):
+    ///
+    /// ```ignore
+    /// cranpose::app_capabilities!();
+    ///
+    /// AppLauncher::new().with_capabilities(&CAPABILITIES)
+    /// ```
+    ///
+    /// The platform builds read the same declaration, so the permissions in
+    /// the manifest and the answers a service gives at run time cannot drift
+    /// apart.
+    #[must_use]
+    pub fn with_capabilities(
+        mut self,
+        capabilities: &cranpose_capabilities::Capabilities<'static>,
+    ) -> Self {
+        self.settings.capabilities = *capabilities;
         self
     }
 
