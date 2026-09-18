@@ -708,6 +708,28 @@ cleanup_results_dir() {
 }
 trap cleanup_results_dir EXIT
 
+# What a cancelled job leaves behind, if nothing does this.
+#
+# GitHub cancels a run by signalling the step, not the tree under it. The
+# suite's own children -- xargs, its workers, each example, each private X
+# server -- are not signalled, so they run on: a cancelled robot job held the
+# exclusive host lock for a hundred minutes on samarch-1 while the next job
+# sat behind it, and cancelled jobs on this board reached twenty-four minutes
+# of runner time apiece. The lock lives on a file descriptor, so the kernel
+# releases it the moment this process actually exits; the work is getting
+# there promptly.
+#
+# `terminate_descendants` lives in scripts/dev_build_common.sh, where it can
+# be tested against a real process tree.
+on_cancelled() {
+    trap - INT TERM
+    echo "Robot suite cancelled; stopping its children." | tee -a "$LOG_FILE"
+    terminate_descendants $$
+    # 128 + SIGTERM, which is what a shell killed by one reports.
+    exit 143
+}
+trap on_cancelled INT TERM
+
 run_with_portable_timeout() {
     local timeout_secs="$1"
     local kill_after_secs="$2"
