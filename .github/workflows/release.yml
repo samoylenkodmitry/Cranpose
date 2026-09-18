@@ -8,6 +8,13 @@ on:
 permissions:
   contents: write
 
+# The release board builds and uploads assets for a tag. Two of them writing
+# the same release would race, and killing one halfway leaves a release with
+# some of its assets, so they queue instead.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   create-release:
     name: Create GitHub Release
