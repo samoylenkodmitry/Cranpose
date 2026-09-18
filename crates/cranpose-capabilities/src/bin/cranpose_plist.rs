@@ -61,10 +61,10 @@ fn pairs(entries: &str) -> Vec<(String, String)> {
         let line = line.trim();
         if let Some(name) = between(line, "<key>", "</key>") {
             key = Some(name.to_string());
-        } else if let Some(value) = between(line, "<string>", "</string>") {
-            if let Some(name) = key.take() {
-                found.push((name, value.to_string()));
-            }
+        } else if let Some(value) = between(line, "<string>", "</string>")
+            && let Some(name) = key.take()
+        {
+            found.push((name, value.to_string()));
         }
     }
     found
