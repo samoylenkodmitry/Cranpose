@@ -6,6 +6,11 @@
     plugin added.
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- What the demo's two services need. Cranpose declares no permission on
+         an application's behalf, and the build names the ones it is missing. -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <application
         android:allowBackup="true"
         android:label="Compose Demo"

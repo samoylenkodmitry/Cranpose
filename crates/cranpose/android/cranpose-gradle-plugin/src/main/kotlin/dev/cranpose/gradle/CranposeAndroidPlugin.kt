@@ -128,7 +128,7 @@ class CranposeAndroidPlugin : Plugin<Project> {
         // from a repository.
         androidComponents.onVariants { variant ->
             contributeCranposeSources(project, cranpose, variant)
-            guardManifestFeatures(project, cranpose, variant)
+            checkManifest(project, cranpose, variant)
         }
 
         project.afterEvaluate {
@@ -175,38 +175,49 @@ class CranposeAndroidPlugin : Plugin<Project> {
         }
     }
 
+    /**
+     * Adds a service's manifest when it has one. A service that only needs a
+     * permission has none: the permission is the application's to declare.
+     */
     private fun contributeManifest(variant: ApplicationVariant, root: File, name: String) {
-        variant.sources.manifests.addStaticManifestFile(File(root, "manifests/$name.xml").absolutePath)
+        val manifest = File(root, "manifests/$name.xml")
+        if (manifest.isFile) {
+            variant.sources.manifests.addStaticManifestFile(manifest.absolutePath)
+        }
     }
 
     /**
-     * Declares the hardware features the merged manifest's permissions carry,
-     * and fails the build when one of them stays required without
-     * `cranpose { requiredFeatures }` naming it.
+     * Checks the merged manifest: every permission the application's services
+     * need is declared in it, and every hardware feature those permissions
+     * carry is either optional or named by `cranpose { requiredFeatures }`.
      *
-     * This runs on the merged manifest rather than on the framework's own
-     * fragments because a permission from the application itself, or from any
-     * library it depends on, costs it the same devices.
+     * This reads the merged manifest rather than the framework's own fragments
+     * because a permission from the application itself, or from any library it
+     * depends on, reaches users and costs devices just the same.
      */
-    private fun guardManifestFeatures(
+    private fun checkManifest(
         project: Project,
         cranpose: CranposeExtension,
         variant: ApplicationVariant,
     ) {
         val name = variant.name.replaceFirstChar { first -> first.uppercase() }
         val task = project.tasks.register(
-            "cranpose${name}ManifestFeatures",
-            CranposeManifestFeatures::class.java,
+            "cranpose${name}ManifestCheck",
+            CranposeManifestCheck::class.java,
         )
+        val needed = requireKnownServices(cranpose).flatMap { service ->
+            SERVICE_PERMISSIONS[service].orEmpty().map { permission -> permission to service }
+        }.toMap()
         task.configure {
-            description = "Declares the hardware features ${variant.name}'s permissions carry"
+            description = "Checks ${variant.name}'s permissions and the features they carry"
             requiredFeatures.set(cranpose.requiredFeatures)
+            servicePermissions.set(needed)
         }
         variant.artifacts
             .use(task)
             .wiredWithFiles(
-                CranposeManifestFeatures::mergedManifest,
-                CranposeManifestFeatures::updatedManifest,
+                CranposeManifestCheck::mergedManifest,
+                CranposeManifestCheck::updatedManifest,
             )
             .toTransform(SingleArtifact.MERGED_MANIFEST)
     }
@@ -524,6 +535,7 @@ class CranposeAndroidPlugin : Plugin<Project> {
             "camera",
             "haptics",
             "media",
+            "network",
             "notifications",
             "overlay",
             "update",
@@ -542,6 +554,38 @@ class CranposeAndroidPlugin : Plugin<Project> {
         /** Third-party dependencies a service needs beyond the framework's own. */
         val SERVICE_DEPENDENCIES = mapOf(
             "billing" to listOf("com.android.billingclient:billing:9.1.0"),
+        )
+
+        /**
+         * The permissions each service needs to work, which the application
+         * declares in its own manifest.
+         *
+         * The framework declares none of them. A permission is a line in the
+         * store listing and a question to the person holding the phone, so it
+         * belongs to the application that shows it, written where anyone
+         * reading that application can see it. What the framework does instead
+         * is refuse to build when a service is used and its permission is not
+         * there, so the code path does not fail silently on a device.
+         */
+        val SERVICE_PERMISSIONS = mapOf(
+            "background" to listOf(
+                "android.permission.FOREGROUND_SERVICE",
+                "android.permission.FOREGROUND_SERVICE_DATA_SYNC",
+            ),
+            "billing" to listOf("com.android.vending.BILLING"),
+            "camera" to listOf("android.permission.CAMERA"),
+            "haptics" to listOf("android.permission.VIBRATE"),
+            "media" to listOf(
+                "android.permission.FOREGROUND_SERVICE",
+                "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
+            ),
+            "network" to listOf(
+                "android.permission.INTERNET",
+                "android.permission.ACCESS_NETWORK_STATE",
+            ),
+            "notifications" to listOf("android.permission.POST_NOTIFICATIONS"),
+            "overlay" to listOf("android.permission.SYSTEM_ALERT_WINDOW"),
+            "update" to listOf("android.permission.REQUEST_INSTALL_PACKAGES"),
         )
 
         /** Written by this plugin's build, relative to this class's package. */

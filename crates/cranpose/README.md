@@ -93,20 +93,48 @@ Every application gets `CranposeActivity` and the rest of the framework's
 Java, the activity declaration with its launcher entry and
 `android.app.lib_name` metadata, the provider that serves shared files, the
 `androidx.appcompat` dependency it needs, and the consumer ProGuard rules that
-keep the JNI surface. `cranpose { services.add(...) }` adds more, one
-permission set at a time so an application that does not use a service never
-asks the user for it:
+keep the JNI surface. It gets no permission: the framework declares none, not
+even `INTERNET`. `cranpose { services.add(...) }` adds the code and components
+a service needs, and the application declares that service's permissions in
+its own manifest:
 
-| Service | What it adds |
-| --- | --- |
-| `background` | The foreground service Cranpose runs while a background-work lease is held, and the permissions to start it. |
-| `billing` | `CranposeBilling`, the Google Play Billing library, and the permission. |
-| `camera` | The camera permission and the optional camera hardware feature. |
-| `haptics` | The vibrator the haptics service drives. |
-| `media` | The media-playback foreground service and its permissions. |
-| `notifications` | Notification posting. |
-| `overlay` | Windows drawn above other applications. |
-| `update` | The permission `PackageInstaller` requires to install an application update. |
+| Service | What it adds | Permissions the application declares |
+| --- | --- | --- |
+| `background` | The foreground service Cranpose runs while a background-work lease is held. | `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_DATA_SYNC` |
+| `billing` | `CranposeBilling` and the Google Play Billing library. | `com.android.vending.BILLING` |
+| `camera` | The camera capability. | `CAMERA` |
+| `haptics` | The vibrator the haptics service drives. | `VIBRATE` |
+| `media` | The media-playback foreground service. | `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_MEDIA_PLAYBACK` |
+| `network` | `cranpose_services::http` and the online / metered state the activity reports. | `INTERNET`, `ACCESS_NETWORK_STATE` |
+| `notifications` | Notification posting. | `POST_NOTIFICATIONS` |
+| `overlay` | Windows drawn above other applications. | `SYSTEM_ALERT_WINDOW` |
+| `update` | Handing a downloaded package to `PackageInstaller`. | `REQUEST_INSTALL_PACKAGES` |
+
+### Permissions belong to the application
+
+A permission is a line in the store listing and a question to the person
+holding the phone. It belongs in the manifest of the application that shows
+it, where anyone reading that application can see the whole list, rather than
+arriving from a framework nobody reads.
+
+So Cranpose declares none, and the build refuses a service whose permission is
+not there:
+
+```
+Services this application uses need permissions it does not declare:
+  android.permission.VIBRATE (the haptics service)
+
+  <uses-permission android:name="android.permission.VIBRATE" />
+```
+
+The check reads the merged manifest, so a permission from a library counts
+too, and a service that is dropped from `cranpose { services }` leaves nothing
+behind.
+
+One permission still arrives on its own: `androidx.core`, inside the
+`appcompat` dependency, declares
+`<applicationId>.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION` for its own
+receivers. The application grants it to itself and no store listing shows it.
 
 ### Hardware features stay optional unless you ask
 

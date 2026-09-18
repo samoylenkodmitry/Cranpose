@@ -3,6 +3,7 @@ package dev.cranpose.gradle
 import org.gradle.api.DefaultTask
 import org.gradle.api.GradleException
 import org.gradle.api.file.RegularFileProperty
+import org.gradle.api.provider.MapProperty
 import org.gradle.api.provider.SetProperty
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputFile
@@ -26,7 +27,7 @@ private const val ANDROID_NAMESPACE = "http://schemas.android.com/apk/res/androi
  * Play reports the loss only when the release is already prepared, and users
  * on those devices stop getting updates. Naming the feature with
  * `android:required="false"` is what stops it, which is what
- * [CranposeManifestFeatures] writes for each one.
+ * [CranposeManifestCheck] writes for each one.
  */
 internal val FEATURES_BEHIND_PERMISSIONS: Map<String, List<String>> = mapOf(
     "android.permission.CAMERA" to listOf("android.hardware.camera"),
@@ -108,6 +109,29 @@ internal fun planFeatures(
 }
 
 /**
+ * The message a build fails with when a service's permission is not declared.
+ *
+ * [missing] maps each permission to the service that needs it.
+ */
+internal fun missingPermissionText(missing: Map<String, String>): String {
+    val named = missing.keys.sorted()
+    val lines = named.joinToString("\n") { permission ->
+        "  $permission (the ${missing.getValue(permission)} service)"
+    }
+    val manifest = named.joinToString("\n") { permission ->
+        "  <uses-permission android:name=\"$permission\" />"
+    }
+    return "Services this application uses need permissions it does not declare:\n" +
+        lines +
+        "\n\nCranpose declares no permission of its own: a permission is a line in the " +
+        "store listing and a question to the person holding the phone, so it belongs " +
+        "in this application's own AndroidManifest.xml.\n\n" +
+        manifest +
+        "\n\nOr drop the service from cranpose { services } if the application does not " +
+        "use it."
+}
+
+/**
  * The message a build fails with when a feature nobody asked for is required.
  */
 internal fun refusalText(unwanted: List<String>, reasons: Map<String, String>): String {
@@ -131,13 +155,18 @@ internal fun refusalText(unwanted: List<String>, reasons: Map<String, String>): 
 }
 
 /**
- * Writes the feature declarations the merged manifest is missing, and refuses
- * a build that would require hardware the application never asked for.
+ * Refuses a build whose manifest does not say what the application does.
+ *
+ * Two rules. A service the application uses needs its permissions declared in
+ * the application's own manifest, because Cranpose declares none. A hardware
+ * feature a permission carries stays optional unless
+ * `cranpose { requiredFeatures }` names it, and the missing declarations are
+ * written here.
  *
  * The task transforms the merged manifest, so it sees everything: the
- * framework's service manifests, the application's own, and any library's.
+ * framework's contributions, the application's own manifest, and any library's.
  */
-abstract class CranposeManifestFeatures : DefaultTask() {
+abstract class CranposeManifestCheck : DefaultTask() {
 
     /** The merged manifest AGP produced. */
     @get:InputFile
@@ -150,6 +179,10 @@ abstract class CranposeManifestFeatures : DefaultTask() {
     /** The features named by `cranpose { requiredFeatures }`. */
     @get:Input
     abstract val requiredFeatures: SetProperty<String>
+
+    /** Each permission the application's services need, and the service that needs it. */
+    @get:Input
+    abstract val servicePermissions: MapProperty<String, String>
 
     @TaskAction
     fun run() {
@@ -173,6 +206,11 @@ abstract class CranposeManifestFeatures : DefaultTask() {
                 val required = element.getAttributeNS(ANDROID_NAMESPACE, "required")
                 FeatureLine(name, required.isEmpty() || required.toBoolean())
             }
+        }
+
+        val missing = servicePermissions.get().filterKeys { name -> !permissions.contains(name) }
+        if (missing.isNotEmpty()) {
+            throw GradleException(missingPermissionText(missing))
         }
 
         val plan = planFeatures(permissions, declared, requiredFeatures.get())
