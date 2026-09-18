@@ -230,6 +230,7 @@ test-shell-helpers: _benchmark-python
     scripts/dev/target_gc_test.sh
     scripts/ci/robot_scheduling_classes_test.sh
     scripts/ci/robot_worker_contract_test.sh
+    scripts/ci/pr_budget_test.sh
     {{benchmark_python}} scripts/android_benchmark_test.py
     {{benchmark_python}} scripts/android_visual_contract_test.py
     python3 scripts/perf_report_test.py
@@ -498,13 +499,24 @@ test-android-surface-contract:
 # their screenshots on software present.
 
 # CI's GPU half of the robot suite.
-robot-gpu:
+robot-gpu classes="all":
     ROBOT_PRIVATE_DISPLAY_SCREEN=1280x800x24 \
       xvfb-run -a -s "-screen 0 1280x800x24" ./run_robot_test.sh \
+      --classes {{classes}} \
       --skip robot_underline_screenshot \
       --skip robot_text_strikeout_presented \
       --skip robot_leetcodedaily_full_layout_scroll_stability \
       --skip robot_glass_backdrop_scroll_stability
+
+# The half of the GPU suite a pull request waits for: the examples that assert
+# on pixels and structure, which run all at once. The examples that measure
+# time run one at a time by definition, so they cannot fit a pull request's
+# budget and run on main and nightly instead -- see `robot-gpu-measured`.
+robot-gpu-fast: (robot-gpu "parallel")
+
+# The other half: every example whose answer depends on how busy the machine
+# is, one at a time on a machine the exclusive host lock has emptied.
+robot-gpu-measured: (robot-gpu "serial")
 
 # CI's software-present half: exactly the four captures excluded above.
 robot-captures:

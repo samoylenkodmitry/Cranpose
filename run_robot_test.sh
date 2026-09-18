@@ -73,6 +73,7 @@ SHARD_COUNT=""
 BUILD_ONLY=0
 SKIP_BUILD=0
 LIST_CLASSES=0
+RUN_CLASSES=all
 STAGE_ARTIFACT_DIR=""
 STAGE_ARTIFACT_SHARDS=16
 
@@ -161,6 +162,16 @@ while [[ $# -gt 0 ]]; do
             LIST_CLASSES=1
             shift
             ;;
+        --classes)
+            case "$2" in
+                all|parallel|serial) RUN_CLASSES="$2" ;;
+                *)
+                    echo "--classes takes all, parallel or serial"
+                    exit 1
+                    ;;
+            esac
+            shift 2
+            ;;
         --skip-build)
             SKIP_BUILD=1
             shift
@@ -184,6 +195,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --shard N/M     Run the deterministic shard N of M"
             echo "  --build-only    Build matching robot examples and exit"
             echo "  --list-classes  Print each example's scheduling class and exit"
+            echo "  --classes C     Run only class C: all (default), parallel or serial"
             echo "  --skip-build    Reuse existing robot example binaries"
             echo "  --stage-artifacts DIR"
             echo "                  Write per-shard robot binary tarballs after building"
@@ -298,11 +310,24 @@ robot_source_path() {
     return 1
 }
 
-# The tokens that make an example's result depend on how busy the machine is:
-# a clock read, or a frame statistic derived from one. An example that names
-# none of them asserts on pixels and structure alone, and a neighbour on
-# another core cannot change its answer.
-ROBOT_TIMING_SURFACE='Instant::now|\.elapsed\(|work_avg_ms|work_p95_ms|avg_ms|p95_ms|fps|frame_time'
+# The tokens that make an example's result depend on how busy the machine is.
+#
+# Two kinds. A clock read or a frame statistic derived from one is the obvious
+# kind. The second is a wait with a budget -- `settle`, `wait_for_text`,
+# `scroll_until_...` all give the application a fixed number of attempts to
+# reach a state, and a loaded machine spends that budget without arriving.
+# Those assert on time without naming it: `robot_glass_tiles` came back
+# "a tile must settle back once the pointer leaves it" and
+# `robot_hacker_news_scroll` came back "long mock comment body 3 did not
+# become visible", both six-wide, both passing alone on the same commit.
+#
+# `wait_for_idle` is deliberately absent. It pumps frames until the
+# application says it is idle, with no budget to overrun, and the 109
+# examples that call it run in parallel without trouble.
+#
+# An example that names none of these asserts on pixels and structure alone,
+# and a neighbour on another core cannot change its answer.
+ROBOT_TIMING_SURFACE='Instant::now|\.elapsed\(|work_avg_ms|work_p95_ms|avg_ms|p95_ms|fps|frame_time|settle\(|wait_for_text|wait_for_no_text|scroll_until_'
 
 # Whether an example measures time, following the `mod` declarations that pull
 # in the shared runner modules: a runner that reads its frame statistics
@@ -1081,6 +1106,13 @@ run_example_list() {
         sleep 0.1
     done
 }
+
+if [ "$RUN_CLASSES" = "serial" ]; then
+    PARALLEL_EXAMPLES=()
+fi
+if [ "$RUN_CLASSES" = "parallel" ]; then
+    SERIAL_EXAMPLES=()
+fi
 
 run_example_list parallel ${PARALLEL_EXAMPLES[@]+"${PARALLEL_EXAMPLES[@]}"}
 
