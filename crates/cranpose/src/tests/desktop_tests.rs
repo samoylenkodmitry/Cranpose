@@ -1613,12 +1613,19 @@ fn a_hidden_primarys_update_is_paced_while_an_animation_still_needs_frames() {
 
 #[test]
 fn a_peer_window_redraws_when_its_scene_is_dirty_even_with_no_frame_owed() {
-    assert!(!super::native_surface_needs_frame(false, false, false));
-    assert!(super::native_surface_needs_frame(true, false, false));
-    assert!(super::native_surface_needs_frame(false, true, false));
+    assert!(!super::native_surface_needs_frame(
+        false, false, false, false
+    ));
+    assert!(super::native_surface_needs_frame(true, false, false, false));
+    assert!(super::native_surface_needs_frame(false, true, false, false));
     assert!(
-        super::native_surface_needs_frame(false, false, true),
+        super::native_surface_needs_frame(false, false, true, false),
         "an animated layer in a peer dirties the scene without owing a frame"
+    );
+    assert!(
+        super::native_surface_needs_frame(false, false, false, true),
+        "a window whose present was skipped, because the desktop had it covered, still owes \
+         the frame it drew; nothing else asks for it once the scene is clean again"
     );
 }
 

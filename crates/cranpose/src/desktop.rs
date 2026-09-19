@@ -3527,8 +3527,13 @@ fn declaration_host_frame_anchor(
     }
 }
 
-fn native_surface_needs_frame(needs_frame: bool, frame_owed: bool, scene_dirty: bool) -> bool {
-    needs_frame || frame_owed || scene_dirty
+fn native_surface_needs_frame(
+    needs_frame: bool,
+    frame_owed: bool,
+    scene_dirty: bool,
+    surface_dirty: bool,
+) -> bool {
+    needs_frame || frame_owed || scene_dirty || surface_dirty
 }
 
 fn should_chain_no_vsync_redraw(frame_interval: Option<Duration>, needs_frame: bool) -> bool {
@@ -6789,6 +6794,7 @@ impl ApplicationHandler for App {
                 frame_schedule.needs_frame,
                 surface.frame_owed(),
                 surface.needs_redraw(),
+                native.surface_dirty,
             );
             let next_frame_time = native.last_frame_start_time.and_then(|started_at| {
                 native

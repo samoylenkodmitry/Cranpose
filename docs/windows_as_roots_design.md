@@ -788,3 +788,14 @@ carried by the framework's window group. Neither has a model.
    `scripts/dev/check_tear_blink.sh` records a tear and a dock and saves
    every frame of it, cropped to the desk the two windows share, which is
    how the spread frames were found and how their absence was checked.
+11. **A peer window that could not present still owes the frame it drew.**
+   A window covered by another window at the moment it first tried to
+   present got no drawable back, skipped the frame, and stayed blank after
+   the desktop uncovered it: the idle pass asked a peer to redraw when it
+   needed a frame, owed one, or had a dirty scene, and a skipped present is
+   none of those once the scene settles. The uncovering does request a
+   redraw, but the frame cap can swallow that one request, and nothing asks
+   again. `native_surface_needs_frame` takes the surface's own dirty flag
+   now, which a present clears, so the window keeps asking at the frame
+   rate until it has a drawable and then stops. Found by launching the tabs
+   demo behind another window.
