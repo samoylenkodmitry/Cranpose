@@ -804,11 +804,16 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
         self.try_with_value(Clone::clone)
     }
 
-    pub(crate) fn get(&self) -> T {
+    /// Runs `f` on the value the active snapshot reads, in place.
+    pub(crate) fn with_value<R>(&self, f: impl FnOnce(&T) -> R) -> R {
         let record = self
             .readable_record_for_active_snapshot()
             .unwrap_or_else(|failure| panic!("{failure}"));
-        record.with_value(|value: &T| value.clone())
+        record.with_value(f)
+    }
+
+    pub(crate) fn get(&self) -> T {
+        self.with_value(Clone::clone)
     }
 
     pub(crate) fn set(&self, new_value: T) -> bool {
@@ -1405,10 +1410,23 @@ impl<T: Clone + 'static> State<T> {
         self.try_with_inner(|inner| inner.state.try_get())?
     }
 
+    /// Reads a copy of the value through `f` and subscribes the current
+    /// scope. `f` may write this state; see [`Self::read`] for a read that
+    /// borrows instead of copying.
     pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
         let value = self.with_inner(|inner| inner.state.get());
         self.subscribe_current_scope();
         f(&value)
+    }
+
+    /// Reads the value in place through `f` and subscribes the current
+    /// scope. Nothing is cloned, so a read of a large value costs nothing
+    /// beyond `f`; in return `f` borrows the stored value and must not write
+    /// this state.
+    pub fn read<R>(&self, f: impl FnOnce(&T) -> R) -> R {
+        let result = self.with_inner(|inner| inner.state.with_value(f));
+        self.subscribe_current_scope();
+        result
     }
 
     pub fn value(&self) -> T {
@@ -1522,10 +1540,23 @@ impl<T: Clone + 'static> MutableState<T> {
             .unwrap_or_else(|| panic!("state {:?} is no longer alive", self.state_id()))
     }
 
+    /// Reads a copy of the value through `f` and subscribes the current
+    /// scope. `f` may write this state; see [`Self::read`] for a read that
+    /// borrows instead of copying.
     pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
         let value = self.with_inner(|inner| inner.state.get());
         self.subscribe_current_scope();
         f(&value)
+    }
+
+    /// Reads the value in place through `f` and subscribes the current
+    /// scope. Nothing is cloned, so a read of a large value costs nothing
+    /// beyond `f`; in return `f` borrows the stored value and must not write
+    /// this state.
+    pub fn read<R>(&self, f: impl FnOnce(&T) -> R) -> R {
+        let result = self.with_inner(|inner| inner.state.with_value(f));
+        self.subscribe_current_scope();
+        result
     }
 
     pub fn update<R>(&self, f: impl FnOnce(&mut T) -> R) -> R {

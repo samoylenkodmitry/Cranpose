@@ -1886,3 +1886,35 @@ fn keyed_effect_removed_in_the_pass_its_key_changes_still_disposes() {
 fn keyed_effect_removed_before_its_key_write_still_disposes() {
     removal_races_keyed_effect_rerun(false);
 }
+
+/// A value whose clones are counted, so a read can prove it borrowed.
+#[derive(Debug)]
+struct CountedClones(std::rc::Rc<std::cell::Cell<u32>>);
+
+impl Clone for CountedClones {
+    fn clone(&self) -> Self {
+        self.0.set(self.0.get() + 1);
+        Self(std::rc::Rc::clone(&self.0))
+    }
+}
+
+/// Every read of a state used to copy the value, which made a read of a
+/// list of windows a copy of that list on every pointer move.
+#[test]
+fn reading_state_through_read_borrows_instead_of_cloning() {
+    let (handle, _runtime) = runtime_handle();
+    let clones = std::rc::Rc::new(std::cell::Cell::new(0));
+    let state = MutableState::with_runtime(CountedClones(std::rc::Rc::clone(&clones)), handle);
+    let before = clones.get();
+
+    let strong = state.read(|value| std::rc::Rc::strong_count(&value.0));
+    assert!(strong >= 2, "the read sees the stored value");
+    assert_eq!(
+        clones.get(),
+        before,
+        "`read` reads the stored value in place"
+    );
+
+    let _copy = state.get();
+    assert_eq!(clones.get(), before + 1, "`get` is the read that copies");
+}

@@ -14,6 +14,8 @@
 #   drag_window.sh oswindows <example>                the OS windows of the running example: x y w h title
 #   drag_window.sh click <x,y>                        press and release
 #   drag_window.sh key <text>                         type text into the focused window
+#   drag_window.sh cpu <example> <command...>         CPU seconds the running example spends while
+#                                                     the command runs, for a gesture that must not spin
 #   drag_window.sh drag <x0,y0> <x1,y1> [steps] [ms]  press, move in steps, release
 #   drag_window.sh drag-pane <log> <id> <lx,ly> <dx,dy> [steps]
 #                                                     drag from a demo window's local point by a delta,
@@ -74,6 +76,22 @@ windows() {
 key() {
     need cliclick
     cliclick "t:$1" "w:400"
+}
+
+cpu_seconds() {
+    ps -o utime= -o stime= -p "$1" \
+        | awk '{ split($1, u, /[:.]/); split($2, s, /[:.]/); print (u[1] * 60 + u[2]) + (s[1] * 60 + s[2]) + (u[3] + s[3]) / 100 }'
+}
+
+cpu() {
+    local example="$1"; shift
+    local pid before after
+    pid="$(pgrep -f "examples/$example" | head -1)"
+    [ -n "$pid" ] || { echo "drag_window.sh: $example is not running" >&2; exit 1; }
+    before="$(cpu_seconds "$pid")"
+    "$@" > /dev/null
+    after="$(cpu_seconds "$pid")"
+    echo "cpu seconds during '$*': $(echo "$after - $before" | bc)"
 }
 
 oswindows() {
@@ -227,6 +245,7 @@ case "$command" in
     click) click "$@" ;;
     oswindows) oswindows "$@" ;;
     key) key "$@" ;;
+    cpu) cpu "$@" ;;
     drag) drag "$@" ;;
     drag-pane) drag_pane "$@" ;;
     snap) snap "$@" ;;

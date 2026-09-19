@@ -490,3 +490,45 @@ is gone), and the two examples start the demo's logger when built with
 `logging`, so the debug key's layout dump reaches the tool's log.
 `scripts/dev/mutation_check.sh` takes cargo arguments for a package whose
 tests need features, as the desktop tests do.
+
+### Step 6: plumbing
+
+Five items, each small, each with a number or a test.
+
+- **A window's state knows when it is on the screen.** `WindowState`
+  gained `presented()`, set by the desktop after a present and cleared
+  when the window is hidden or let go. An app that moves content into a
+  new window can keep it in the old one until the new one has a frame up,
+  so the content is never in neither. The demo's window trace prints it.
+- **The loop spun while a button was held.** A pressed pointer keeps a
+  surface's schedule asking for a frame, so its platform's frame driver
+  stays awake; the desktop turned that into a redraw request the moment
+  the previous one returned, and each redraw found nothing to present and
+  recorded no frame time to pace the next. Measured with the drag tool's
+  new `cpu` command on the tabs demo: a button held for two seconds cost
+  2.7 CPU seconds and 110,000 native redraws a second. An attempt that
+  presents nothing now paces the next attempt like a frame
+  (`pace_after_empty_redraw`, for the primary and the native path); the
+  same two seconds cost 0.07 CPU seconds after.
+- **The loop spun during a platform drag.** A window drag polled the
+  global pointer with a zero interval and made the loop poll for as long
+  as the drag lasted; on every platform but X11 there is no global
+  pointer, so each poll only wrote `drag poll skipped`. One second of
+  dragging the strip wrote 210,000 of those and cost 2.9 CPU seconds. A
+  build that cannot read the pointer on the screen never polls a drag
+  (`native_window_drag_poll_deadline`); one that can polls every 16 ms,
+  and a poll ahead is a deadline the loop waits for, not a reason to
+  spin. The choice of `Poll`, `WaitUntil` and `Wait` moved out of
+  `about_to_wait` into `event_loop_control_flow`, which is tested. The
+  same drag costs 0.10 CPU seconds and writes 128 lines after.
+- **Focus is a policy.** `WindowConfig::with_focus` takes a
+  `WindowFocus`: `Never`, `WhenNoneFocused` (the default and the old
+  constant) or `Always`, applied when the desktop creates the window.
+- **Reads that borrow.** `MutableState::read` and `State::read` run the
+  closure on the stored value in place, so a read of the window model on
+  a pointer move no longer copies it. `with` keeps copying: its contract,
+  held by a test, lets the closure write the state it reads, which a
+  borrow cannot allow without touching the record chain the snapshots
+  keep. The traces are macros that evaluate their arguments only when the
+  trace is on, and read their environment variable once.
+

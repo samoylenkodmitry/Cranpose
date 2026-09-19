@@ -133,9 +133,9 @@ pub use cranpose_render_common::font_source::{
 };
 pub use host_environment::{host_density, system_font_directory};
 pub use native_window::{
-    Window, WindowAttachPolicy, WindowConfig, WindowGroup, WindowId, WindowModifierExt,
-    WindowMoveMode, WindowNode, WindowResizeDirection, WindowState, rememberWindowState,
-    rememberWindowStateAt,
+    Window, WindowAttachPolicy, WindowConfig, WindowFocus, WindowGroup, WindowId,
+    WindowModifierExt, WindowMoveMode, WindowNode, WindowResizeDirection, WindowState,
+    rememberWindowState, rememberWindowStateAt,
 };
 /// Brings in what this crate's build script declared.
 ///

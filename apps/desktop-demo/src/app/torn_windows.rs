@@ -38,6 +38,16 @@ use cranpose_ui::{
     composable, Box, BoxSpec, Modifier, Point, PointerEventKind, PointerInputScope, Size,
 };
 
+/// Prints a `demo trace:` line when `CRANPOSE_DEMO_TRACE` is set, and
+/// otherwise evaluates none of its arguments.
+macro_rules! trace {
+    ($($arg:tt)*) => {
+        if trace_enabled() {
+            print_trace(format_args!($($arg)*));
+        }
+    };
+}
+
 /// One window: the panes it holds in order, and the one in front.
 ///
 /// A window holds at least one pane unless it is parked: a window whose last
@@ -825,49 +835,51 @@ impl Windows {
     }
 
     fn rects(&self) -> Vec<Rect> {
-        let model = self.model.get_non_reactive();
         let shared = self.shared.borrow();
-        model
-            .windows()
-            .iter()
-            .filter(|window| !window.parked)
-            .filter_map(|window| {
-                let state = shared.states.get(&window.id)?;
-                Some(Rect {
-                    window: window.id,
-                    origin: state.position_non_reactive()?,
-                    size: state.size_non_reactive(),
+        self.model.read(|model| {
+            model
+                .windows()
+                .iter()
+                .filter(|window| !window.parked)
+                .filter_map(|window| {
+                    let state = shared.states.get(&window.id)?;
+                    Some(Rect {
+                        window: window.id,
+                        origin: state.position_non_reactive()?,
+                        size: state.size_non_reactive(),
+                    })
                 })
-            })
-            .collect()
+                .collect()
+        })
     }
 
     fn press(&self, pane: u64, local: Point, screen: Option<Point>) {
         let Some(screen) = screen else {
-            trace(format_args!("press ignored: no screen position"));
+            trace!("press ignored: no screen position");
             return;
         };
         let rules = self.rules();
         let began = self
             .model
             .update(|model| model.press(pane, local, screen, &rules));
-        trace(format_args!(
+        trace!(
             "press pane={pane} local=({:.1},{:.1}) screen=({:.1},{:.1}) began={began}",
-            local.x, local.y, screen.x, screen.y
-        ));
+            local.x,
+            local.y,
+            screen.x,
+            screen.y
+        );
     }
 
     fn drag_step(&self, window: u64, local: Point, screen: Option<Point>) {
         let drives = self
             .model
-            .get_non_reactive()
-            .drag()
-            .is_some_and(|drag| drag.source == window);
+            .read(|model| model.drag().is_some_and(|drag| drag.source == window));
         if !drives {
             return;
         }
         let Some(screen) = screen else {
-            trace(format_args!("move ignored: no screen position"));
+            trace!("move ignored: no screen position");
             return;
         };
         let rules = self.rules();
@@ -875,7 +887,7 @@ impl Windows {
         let step = self
             .model
             .update(|model| model.drag_to(screen, &rects, &rules));
-        trace(format_args!(
+        trace!(
             "move window={window} local=({:.1},{:.1}) screen=({:.1},{:.1}) rects={:?} step={step:?}",
             local.x,
             local.y,
@@ -885,7 +897,7 @@ impl Windows {
                 .iter()
                 .map(|r| (r.window, r.origin.x, r.origin.y, r.size.width, r.size.height))
                 .collect::<Vec<_>>()
-        ));
+        );
         if step != Step::Rest {
             self.sync_states();
         }
@@ -893,7 +905,7 @@ impl Windows {
 
     fn release(&self) {
         let released = self.model.update(|model| model.release());
-        trace(format_args!("release released={released}"));
+        trace!("release released={released}");
     }
 
     fn drag_session(&self, base: Modifier, window: u64) -> Modifier {
@@ -991,7 +1003,7 @@ pub fn TornWindowsHost(
     windows.reconcile(&panes);
     windows.sync_states();
     let snapshot = model.get().windows().to_vec();
-    trace(format_args!(
+    trace!(
         "windows={}",
         snapshot
             .iter()
@@ -999,7 +1011,7 @@ pub fn TornWindowsHost(
             .map(|window| window.id.to_string())
             .collect::<Vec<_>>()
             .join(",")
-    ));
+    );
     for window in snapshot {
         let windows = windows.clone();
         key(window.id, move || TornWindowNode(windows, window));
@@ -1019,15 +1031,16 @@ fn TornWindowNode(windows: Windows, window: TornWindow) {
     let id = window.id;
     if let Some(origin) = state.position() {
         let size = state.size();
-        trace(format_args!(
-            "window id={id} origin=({:.1},{:.1}) size=({:.1},{:.1}) panes={} parked={}",
+        trace!(
+            "window id={id} origin=({:.1},{:.1}) size=({:.1},{:.1}) panes={} parked={} presented={}",
             origin.x,
             origin.y,
             size.width,
             size.height,
             window.panes.len(),
-            window.parked
-        ));
+            window.parked,
+            state.presented_non_reactive()
+        );
     }
     let parked = window.parked;
     let view = WindowView { windows, window };
@@ -1053,10 +1066,13 @@ fn TornWindowNode(windows: Windows, window: TornWindow) {
     );
 }
 
-fn trace(args: std::fmt::Arguments<'_>) {
-    if std::env::var_os("CRANPOSE_DEMO_TRACE").is_some() {
-        println!("demo trace: {args}");
-    }
+fn trace_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("CRANPOSE_DEMO_TRACE").is_some())
+}
+
+fn print_trace(args: std::fmt::Arguments<'_>) {
+    println!("demo trace: {args}");
 }
 
 fn minus(a: Point, b: Point) -> Point {

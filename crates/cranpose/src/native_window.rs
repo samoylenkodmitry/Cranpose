@@ -83,6 +83,24 @@ pub enum NativeWindowPositionOrigin {
     HostWindow,
 }
 
+/// Whether a window takes keyboard focus when it is created.
+///
+/// macOS reads a window's cursor rectangles only while it is key, so a window
+/// that never takes focus shows the system arrow whatever the application
+/// sets. The policy applies when the desktop creates the window; a window
+/// shown later comes up as the platform shows it.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum WindowFocus {
+    /// The window never takes focus when it is created.
+    Never,
+    /// The window takes focus only when no window of the application holds
+    /// it, so a window the user is working in keeps it.
+    #[default]
+    WhenNoneFocused,
+    /// The window takes focus whenever it is created.
+    Always,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct NativeWindowOptions {
     pub title: String,
@@ -100,6 +118,8 @@ pub struct NativeWindowOptions {
     pub min_height: Option<f32>,
     pub max_width: Option<f32>,
     pub max_height: Option<f32>,
+    /// Whether the window takes focus when it is created.
+    pub focus: WindowFocus,
 }
 
 /// Movement behavior for a group of attached peer windows.
@@ -186,6 +206,7 @@ impl NativeWindowOptions {
             min_height: None,
             max_width: None,
             max_height: None,
+            focus: WindowFocus::default(),
         }
     }
 
@@ -228,6 +249,12 @@ impl NativeWindowOptions {
 
     pub fn with_always_on_top(mut self, always_on_top: bool) -> Self {
         self.always_on_top = always_on_top;
+        self
+    }
+
+    /// Sets whether the window takes focus when it is created.
+    pub fn with_focus(mut self, focus: WindowFocus) -> Self {
+        self.focus = focus;
         self
     }
 
@@ -293,11 +320,13 @@ impl NativeWindowEvents {
     }
 }
 
-/// Mutable position and size state for a declarative OS window.
+/// Mutable position and size state for a declarative OS window, and whether
+/// the window has a frame on the screen.
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub struct WindowState {
     position: MutableState<Option<Point>>,
     size: MutableState<Size>,
+    presented: MutableState<bool>,
 }
 
 impl WindowState {
@@ -341,6 +370,31 @@ impl WindowState {
             self.size.set(size);
         }
     }
+
+    /// Whether the window has presented a frame since it was last shown.
+    ///
+    /// A window comes up a few frames after it is declared, and the desktop
+    /// cannot present to it before it is on the screen. Content that moves
+    /// from one window into a new one can wait for this before it leaves the
+    /// old window, so the user never sees it in neither.
+    pub fn presented(self) -> bool {
+        self.presented.get()
+    }
+
+    /// Whether the window has presented a frame, without subscribing to changes.
+    pub fn presented_non_reactive(self) -> bool {
+        self.presented.get_non_reactive()
+    }
+
+    /// Records whether the window has a frame on the screen. The desktop sets
+    /// it after a present and clears it when the window is hidden or let go,
+    /// which can be after the composition that remembered the state is gone;
+    /// a state that is gone is left alone.
+    pub fn set_presented(self, presented: bool) {
+        if self.presented.is_alive() && self.presented.get_non_reactive() != presented {
+            self.presented.set(presented);
+        }
+    }
 }
 
 /// Remembers native-window position and size across recompositions.
@@ -351,6 +405,7 @@ pub fn rememberWindowState(width: f32, height: f32) -> WindowState {
     WindowState {
         position: cranpose_core::rememberMutableStateOf(|| None::<Point>),
         size: cranpose_core::rememberMutableStateOf(move || Size::new(width, height)),
+        presented: cranpose_core::rememberMutableStateOf(|| false),
     }
 }
 
@@ -363,6 +418,7 @@ pub fn rememberWindowStateAt(x: f32, y: f32, width: f32, height: f32) -> WindowS
     WindowState {
         position: cranpose_core::rememberMutableStateOf(move || Some(Point::new(x, y))),
         size: cranpose_core::rememberMutableStateOf(move || Size::new(width, height)),
+        presented: cranpose_core::rememberMutableStateOf(|| false),
     }
 }
 
@@ -442,6 +498,13 @@ impl WindowConfig {
     /// Sets whether the window should be kept above normal windows.
     pub fn with_always_on_top(mut self, always_on_top: bool) -> Self {
         self.options = self.options.with_always_on_top(always_on_top);
+        self
+    }
+
+    /// Sets whether the window takes focus when it is created. See
+    /// [`WindowFocus`].
+    pub fn with_focus(mut self, focus: WindowFocus) -> Self {
+        self.options = self.options.with_focus(focus);
         self
     }
 
@@ -1598,25 +1661,36 @@ mod tests {
 
     use super::*;
 
-    fn test_window_state(
-        width: f32,
-        height: f32,
-    ) -> (
-        cranpose_core::Runtime,
-        cranpose_core::OwnedMutableState<Option<Point>>,
-        cranpose_core::OwnedMutableState<Size>,
-        WindowState,
-    ) {
+    struct OwnedWindowState {
+        _runtime: cranpose_core::Runtime,
+        _position: cranpose_core::OwnedMutableState<Option<Point>>,
+        _size: cranpose_core::OwnedMutableState<Size>,
+        _presented: cranpose_core::OwnedMutableState<bool>,
+        state: WindowState,
+    }
+
+    fn test_window_state(width: f32, height: f32) -> OwnedWindowState {
         let runtime = cranpose_core::Runtime::new(Arc::new(cranpose_core::DefaultScheduler));
         let handle = runtime.handle();
         let position =
             cranpose_core::OwnedMutableState::with_runtime(None::<Point>, handle.clone());
-        let size = cranpose_core::OwnedMutableState::with_runtime(Size::new(width, height), handle);
+        let size = cranpose_core::OwnedMutableState::with_runtime(
+            Size::new(width, height),
+            handle.clone(),
+        );
+        let presented = cranpose_core::OwnedMutableState::with_runtime(false, handle);
         let state = WindowState {
             position: position.handle(),
             size: size.handle(),
+            presented: presented.handle(),
         };
-        (runtime, position, size, state)
+        OwnedWindowState {
+            _runtime: runtime,
+            _position: position,
+            _size: size,
+            _presented: presented,
+            state,
+        }
     }
 
     #[cfg(all(
@@ -1985,7 +2059,8 @@ mod tests {
 
     #[test]
     fn window_state_accessors_update_position_and_size() {
-        let (_runtime, _position_owner, _size_owner, state) = test_window_state(100.0, 50.0);
+        let owned = test_window_state(100.0, 50.0);
+        let state = owned.state;
 
         assert_eq!(state.position_non_reactive(), None);
         assert_eq!(state.size_non_reactive(), Size::new(100.0, 50.0));
@@ -2000,6 +2075,41 @@ mod tests {
         assert_eq!(state.size_non_reactive(), Size::new(120.0, 64.0));
     }
 
+    /// The desktop lets a window go after the composition that remembered
+    /// its state has dropped it; the last write must not reach a dead cell.
+    #[test]
+    fn a_window_state_the_composition_dropped_takes_the_last_present_quietly() {
+        let OwnedWindowState {
+            _runtime,
+            _presented,
+            state,
+            ..
+        } = test_window_state(100.0, 50.0);
+        drop(_presented);
+        state.set_presented(false);
+        assert!(!state.presented.is_alive());
+    }
+
+    /// Content torn into a new window can wait for the window's first frame
+    /// before it leaves the old one; the state says when that frame is up.
+    #[test]
+    fn window_state_reports_a_frame_on_the_screen_only_after_a_present() {
+        let owned = test_window_state(100.0, 50.0);
+        let state = owned.state;
+
+        assert!(
+            !state.presented_non_reactive(),
+            "a new window has no frame up"
+        );
+        state.set_presented(true);
+        assert!(state.presented_non_reactive());
+        state.set_presented(false);
+        assert!(
+            !state.presented_non_reactive(),
+            "a hidden window has no frame up"
+        );
+    }
+
     #[test]
     fn window_config_collects_window_settings_and_callbacks() {
         let config = WindowConfig::borderless("Panel", 100.0, 50.0)
@@ -2008,6 +2118,7 @@ mod tests {
             .with_resizable(false)
             .with_visible(false)
             .with_always_on_top(true)
+            .with_focus(WindowFocus::Always)
             .with_min_size(20.0, 10.0)
             .with_max_size(400.0, 200.0)
             .on_moved(|_, _| {})
@@ -2029,6 +2140,7 @@ mod tests {
         assert!(!options.resizable);
         assert!(!options.visible);
         assert!(options.always_on_top);
+        assert_eq!(options.focus, WindowFocus::Always);
         assert_eq!(options.min_width, Some(20.0));
         assert_eq!(options.min_height, Some(10.0));
         assert_eq!(options.max_width, Some(400.0));
@@ -2041,7 +2153,8 @@ mod tests {
 
     #[test]
     fn state_window_configs_bind_size_position() {
-        let (_runtime, _position_owner, _size_owner, state) = test_window_state(100.0, 50.0);
+        let owned = test_window_state(100.0, 50.0);
+        let state = owned.state;
         state.set_position(Some(Point::new(7.0, 9.0)));
 
         let (options, callbacks, bound_state) =
