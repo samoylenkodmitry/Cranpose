@@ -28,6 +28,7 @@
 - Run each removal as a standalone command, then verify separately; never chain it with another operation or loop body.
 - Never run ad hoc complex shell commands or pipelines; write a reusable script for the job, keep it under `scripts/` when it serves the repository, and run that.
 - Check draggable and droppable windows with `scripts/dev/drag_window.sh` (launch, windows, oswindows, drag, drag-pane, snap, key, cpu, trace, shot); never drive the pointer or the keyboard with ad hoc `cliclick` calls.
+- Do every refactoring, code search and code analysis through the RustRover MCP (`mcp__rustrover__*`), never with ad hoc grep, sed or hand edits for those jobs: `rename_refactoring` for renames, `search_symbol`, `search_text`, `search_regex` and `analyze_calls` for search and call graphs, `get_file_problems`, `lint_files` and `run_inspection_kts` for analysis, `reformat_file` for formatting. Pass `projectPath` on every call; when the tools are missing, open the tree in RustRover first (`open -a RustRover <path>`), and say so before any fallback.
 - Reclaim build artifacts only with `just gc` and `just gc-apply`; never remove `target/`, `build/`, source or uncommitted work by hand.
 - Check `df -h /` before large builds; recent writes and live processes both protect another task's artifacts.
 - Install hooks once per clone with `just hooks`; stage new files before `just precommit` so diff checks include them.
