@@ -197,6 +197,14 @@ pub struct PointerEvent {
     pub phase: PointerPhase,
     pub position: Point,
     pub global_position: Point,
+    /// Where the pointer is on the screen, in logical pixels, when the
+    /// platform told the shell where the window drawing this event's root
+    /// sits. `None` on platforms without window positions and for events a
+    /// test dispatches without one. A gesture that crosses windows, such as
+    /// a tab torn out of one window and dropped on another, compares this
+    /// with the windows' positions instead of translating `global_position`
+    /// itself.
+    pub screen_position: Option<Point>,
     /// Scroll delta in logical pixels.
     ///
     /// This is non-zero for [`PointerEventKind::Scroll`] events and zero for
@@ -256,6 +264,7 @@ impl PointerEvent {
             },
             position,
             global_position,
+            screen_position: None,
             scroll_delta: Point { x: 0.0, y: 0.0 },
             buttons: PointerButtons::NONE,
             time_ms: None,
@@ -297,6 +306,12 @@ impl PointerEvent {
     /// Set the timestamp in the animation frame-clock domain.
     pub fn with_animation_time_nanos(mut self, time_nanos: u64) -> Self {
         self.animation_time_nanos = Some(time_nanos);
+        self
+    }
+
+    /// Set where the pointer is on the screen, when the platform knows.
+    pub fn with_screen_position(mut self, screen_position: Option<Point>) -> Self {
+        self.screen_position = screen_position;
         self
     }
 
@@ -401,6 +416,7 @@ impl PointerEvent {
             phase: self.phase,
             position,
             global_position: self.global_position,
+            screen_position: self.screen_position,
             scroll_delta: self.scroll_delta,
             buttons: self.buttons,
             time_ms: self.time_ms,

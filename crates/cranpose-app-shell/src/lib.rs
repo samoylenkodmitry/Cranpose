@@ -866,6 +866,12 @@ where
         self.surfaces[0].viewport
     }
 
+    /// Tells the shell where the primary window sits on the screen. See
+    /// [`SurfaceMut::set_screen_origin`].
+    pub fn set_screen_origin(&mut self, origin: Option<cranpose_ui_graphics::Point>) {
+        self.surfaces[0].screen_origin = origin;
+    }
+
     pub fn set_buffer_size(&mut self, width: u32, height: u32) {
         self.surfaces[0].buffer_size = (width, height);
     }

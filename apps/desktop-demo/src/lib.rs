@@ -47,9 +47,22 @@ fn create_app() -> AppLauncher {
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
-pub fn entry_point() {
+/// Starts the demo's logger when the `logging` feature is on, so a binary
+/// built with it prints what `RUST_LOG` asks for.
+pub fn init_logging() {
     #[cfg(feature = "logging")]
     let _ = env_logger::try_init();
+}
+
+#[cfg(all(
+    feature = "desktop",
+    feature = "renderer-wgpu",
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+pub fn entry_point() {
+    init_logging();
     if let Err(error) = create_app().try_run(app::DesktopApp) {
         eprintln!("Failed to launch Cranpose Demo: {error}");
         std::process::exit(1);

@@ -522,3 +522,280 @@ fn a_surface_keeps_owing_its_frame_until_the_platform_takes_it() {
     assert!(!window.take_frame_owed(), "taken once");
     assert!(!shell.take_frame_owed(), "the primary drew nothing");
 }
+
+/// A box that remembers the screen position of the last press on it.
+fn press_recorder(recorded: Rc<Cell<Option<Option<cranpose_ui::Point>>>>) {
+    Box(
+        Modifier::empty().size(Size::new(80.0, 40.0)).pointer_input(
+            (),
+            move |scope: cranpose_ui::PointerInputScope| {
+                let recorded = Rc::clone(&recorded);
+                async move {
+                    scope
+                        .await_pointer_event_scope(|await_scope| async move {
+                            loop {
+                                let event = await_scope.await_pointer_event().await;
+                                if event.kind == cranpose_ui::PointerEventKind::Down {
+                                    recorded.set(Some(event.screen_position));
+                                }
+                            }
+                        })
+                        .await;
+                }
+            },
+        ),
+        BoxSpec::default(),
+        || {},
+    );
+}
+
+#[test]
+fn a_press_carries_the_screen_position_of_its_surfaces_window() {
+    let _guard = test_guard();
+    let primary_press = Rc::new(Cell::new(None));
+    let window_press = Rc::new(Cell::new(None));
+    let window = test_window(200.0, 100.0);
+    let mut shell = AppShell::new(
+        HitGraphRenderer::default(),
+        location_key(file!(), line!(), column!()),
+        {
+            let primary_press = Rc::clone(&primary_press);
+            let window_press = Rc::clone(&window_press);
+            let window = Rc::clone(&window);
+            move || {
+                let primary_press = Rc::clone(&primary_press);
+                let window_press = Rc::clone(&window_press);
+                let window = Rc::clone(&window);
+                Column(Modifier::empty(), ColumnSpec::default(), move || {
+                    press_recorder(Rc::clone(&primary_press));
+                    let window_press = Rc::clone(&window_press);
+                    Box(
+                        Modifier::empty().window_root(WINDOW, Rc::clone(&window)),
+                        BoxSpec::default(),
+                        move || press_recorder(Rc::clone(&window_press)),
+                    );
+                });
+            }
+        },
+    );
+    shell.add_window_surface(
+        WINDOW,
+        HitGraphRenderer::default(),
+        (200, 100),
+        (200.0, 100.0),
+    );
+    shell.update();
+
+    let mut window = shell
+        .surface(RootId::Window(WINDOW))
+        .expect("window surface");
+    window.set_screen_origin(Some(cranpose_ui::Point::new(100.0, 50.0)));
+    assert!(click(&mut window, 10.0, 5.0));
+    assert_eq!(
+        window_press.get(),
+        Some(Some(cranpose_ui::Point::new(110.0, 55.0))),
+        "the window's origin plus the press inside it"
+    );
+
+    window.set_screen_origin(Some(cranpose_ui::Point::new(0.0, 300.0)));
+    assert!(click(&mut window, 10.0, 5.0));
+    assert_eq!(
+        window_press.get(),
+        Some(Some(cranpose_ui::Point::new(10.0, 305.0))),
+        "the window moved before the next press"
+    );
+
+    let mut primary = shell.primary();
+    assert!(click(&mut primary, 10.0, 5.0));
+    assert_eq!(
+        primary_press.get(),
+        Some(None),
+        "the primary window's position was never told"
+    );
+}
+
+fn find_box_sized(layout: &LayoutBox, width: f32, height: f32) -> Option<(f32, f32)> {
+    if layout.rect.width == width && layout.rect.height == height {
+        return Some((layout.rect.x, layout.rect.y));
+    }
+    layout
+        .children
+        .iter()
+        .find_map(|child| find_box_sized(child, width, height))
+}
+
+#[test]
+fn movable_content_torn_into_a_fresh_column_lays_out_after_the_strip() {
+    let _guard = test_guard();
+    let torn: Rc<RefCell<Option<MutableState<bool>>>> = Rc::new(RefCell::new(None));
+    let mut shell = AppShell::new(
+        HitGraphRenderer::default(),
+        location_key(file!(), line!(), column!()),
+        {
+            let torn = Rc::clone(&torn);
+            move || {
+                let is_torn = rememberMutableStateOf(|| false);
+                *torn.borrow_mut() = Some(is_torn);
+                Column(Modifier::empty(), ColumnSpec::default(), move || {
+                    if !is_torn.get() {
+                        Column(Modifier::empty(), ColumnSpec::default(), || {
+                            cranpose_core::movable("page", || {
+                                Box(
+                                    Modifier::empty().size(Size::new(90.0, 30.0)),
+                                    BoxSpec::default(),
+                                    || {},
+                                );
+                            });
+                        });
+                    } else {
+                        Column(Modifier::empty(), ColumnSpec::default(), || {
+                            Box(
+                                Modifier::empty().size(Size::new(80.0, 36.0)),
+                                BoxSpec::default(),
+                                || {},
+                            );
+                            cranpose_core::movable("page", || {
+                                Box(
+                                    Modifier::empty().size(Size::new(90.0, 30.0)),
+                                    BoxSpec::default(),
+                                    || {},
+                                );
+                            });
+                        });
+                    }
+                });
+            }
+        },
+    );
+    shell.update();
+    (*torn.borrow()).expect("state").set(true);
+    shell.update();
+    shell.update();
+    let page =
+        shell.with_layout_tree(|tree| find_box_sized(tree.expect("layout").root(), 90.0, 30.0));
+    assert_eq!(
+        page,
+        Some((0.0, 36.0)),
+        "the page lays out below the 36px strip"
+    );
+}
+
+const SECOND_WINDOW: u64 = 8;
+
+#[cranpose_ui::composable]
+#[allow(non_snake_case)]
+fn TornStrip() {
+    Box(
+        Modifier::empty().size(Size::new(80.0, 36.0)),
+        BoxSpec::default(),
+        || {},
+    );
+}
+
+#[cranpose_ui::composable]
+#[allow(non_snake_case)]
+fn TornBody(page: u64) {
+    let _clicks = rememberMutableStateOf(|| 0u32);
+    let _ = page;
+    Box(
+        Modifier::empty().size(Size::new(90.0, 30.0)),
+        BoxSpec::default(),
+        || {},
+    );
+}
+
+#[cranpose_ui::composable]
+#[allow(non_snake_case)]
+fn TornWindowChrome(page: u64) {
+    Column(Modifier::empty(), ColumnSpec::default(), move || {
+        TornStrip();
+        cranpose_core::movable(("page", page), move || TornBody(page));
+    });
+}
+
+/// The tabs demo in miniature: two window roots whose chrome is a strip and
+/// a movable page body composed by skippable composables, the second root
+/// opened by the same state change that moves the page into it.
+#[test]
+fn a_page_torn_into_a_new_window_root_lays_out_below_that_windows_strip() {
+    let _guard = test_guard();
+    let torn: Rc<RefCell<Option<MutableState<bool>>>> = Rc::new(RefCell::new(None));
+    let ticks: Rc<RefCell<Option<MutableState<u32>>>> = Rc::new(RefCell::new(None));
+    let first = test_window(200.0, 100.0);
+    let second = test_window(200.0, 100.0);
+    let mut shell = AppShell::new(
+        HitGraphRenderer::default(),
+        location_key(file!(), line!(), column!()),
+        {
+            let torn = Rc::clone(&torn);
+            let ticks = Rc::clone(&ticks);
+            let first = Rc::clone(&first);
+            let second = Rc::clone(&second);
+            move || {
+                let is_torn = rememberMutableStateOf(|| false);
+                *torn.borrow_mut() = Some(is_torn);
+                let tick = rememberMutableStateOf(|| 0u32);
+                *ticks.borrow_mut() = Some(tick);
+                let first = Rc::clone(&first);
+                let second = Rc::clone(&second);
+                Column(Modifier::empty(), ColumnSpec::default(), move || {
+                    let shown_first = if is_torn.get() { 2 } else { 1 };
+                    Box(
+                        Modifier::empty().window_root(WINDOW, Rc::clone(&first)),
+                        BoxSpec::default(),
+                        move || {
+                            cranpose_ui::widgets::PopupHost(move || TornWindowChrome(shown_first))
+                        },
+                    );
+                    if is_torn.get() {
+                        Box(
+                            Modifier::empty().window_root(SECOND_WINDOW, Rc::clone(&second)),
+                            BoxSpec::default(),
+                            move || {
+                                tick.get();
+                                cranpose_ui::widgets::PopupHost(move || TornWindowChrome(1));
+                            },
+                        );
+                    }
+                });
+            }
+        },
+    );
+    shell.add_window_surface(
+        WINDOW,
+        HitGraphRenderer::default(),
+        (200, 100),
+        (200.0, 100.0),
+    );
+    shell.update();
+    (*torn.borrow()).expect("state").set(true);
+    shell.update();
+    shell.add_window_surface(
+        SECOND_WINDOW,
+        HitGraphRenderer::default(),
+        (200, 100),
+        (200.0, 100.0),
+    );
+    shell.update();
+    shell.update();
+    let page_in_second = |shell: &mut AppShell<HitGraphRenderer>| {
+        shell
+            .surface(RootId::Window(SECOND_WINDOW))
+            .expect("second window")
+            .with_layout_tree(|tree| find_box_sized(tree.expect("layout").root(), 90.0, 30.0))
+    };
+    assert_eq!(
+        page_in_second(&mut shell),
+        Some((0.0, 36.0)),
+        "the page lays out below the new window's strip"
+    );
+
+    (*ticks.borrow()).expect("ticks").set(1);
+    shell.update();
+    shell.update();
+    assert_eq!(
+        page_in_second(&mut shell),
+        Some((0.0, 36.0)),
+        "a recomposition that skips the strip and the page leaves the page in place"
+    );
+}

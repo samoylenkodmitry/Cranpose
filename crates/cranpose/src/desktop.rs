@@ -993,10 +993,8 @@ impl App {
         let Some(mut surface) = native_surface(app, native) else {
             return false;
         };
-        native_window::with_native_window_surface_origin(
-            native_window_surface_origin(platform_probe, &native.window),
-            || surface.set_cursor(logical.x, logical.y),
-        )
+        surface.set_screen_origin(native_window_surface_origin(platform_probe, &native.window));
+        surface.set_cursor(logical.x, logical.y)
     }
 
     /// Hands every window the pointer icon its surface resolved since the
@@ -1126,8 +1124,11 @@ impl App {
         for window_id in stale_window_ids {
             if let Some(native) = self.native_windows.get(&window_id) {
                 trace_native_window(format_args!(
-                    "sync stale key={:?} title={:?} visible={}",
-                    native.key, native.options.title, native.options.visible
+                    "sync stale key={:?} title={:?} visible={} shown={:?}",
+                    native.key,
+                    native.options.title,
+                    native.options.visible,
+                    native.window.is_visible()
                 ));
                 if let Some((x, y)) =
                     current_native_window_position(&self.native_window_platform_probe, native)
@@ -1139,8 +1140,8 @@ impl App {
             if let Some(native) = self.native_windows.get_mut(&window_id) {
                 native.state = None;
                 if native.options.visible {
-                    native.window.set_visible(false);
                     native.options.visible = false;
+                    native.window.set_visible(false);
                     if let Some(mut surface) = native_surface(app, native) {
                         cancel_surface_input(&mut surface);
                     }
@@ -2001,12 +2002,10 @@ impl App {
                 log::debug!("native window resize request failed: {error}");
             }
         });
+        surface.set_screen_origin(native_window_surface_origin(platform_probe, &native.window));
         let handled =
             native_window::with_native_window_drag_handler(drag_handler, resize_handler, || {
-                native_window::with_native_window_surface_origin(
-                    native_window_surface_origin(platform_probe, &native.window),
-                    || surface.pointer_pressed(),
-                )
+                surface.pointer_pressed()
             });
         (handled, drag_requested.get())
     }
@@ -2150,10 +2149,11 @@ impl App {
             native.last_cursor_position = Some((logical.x, logical.y));
             native.last_cursor_physical_position = Some(local);
             if let Some(mut surface) = native_surface(app, &native) {
-                native_window::with_native_window_surface_origin(
-                    native_window_surface_origin(platform_probe, &native.window),
-                    || surface.set_cursor(logical.x, logical.y),
-                );
+                surface.set_screen_origin(native_window_surface_origin(
+                    platform_probe,
+                    &native.window,
+                ));
+                surface.set_cursor(logical.x, logical.y);
             }
         }
 
@@ -2193,10 +2193,8 @@ impl App {
             let Some(mut surface) = native_surface(app, native) else {
                 continue;
             };
-            let handled = native_window::with_native_window_surface_origin(
-                native_window_surface_origin(platform_probe, &native.window),
-                || surface.pointer_released(),
-            );
+            surface.set_screen_origin(native_window_surface_origin(platform_probe, &native.window));
+            let handled = surface.pointer_released();
             app.sync_selection_to_primary();
             if handled {
                 apply_pointer_button_frame_request(
@@ -2626,10 +2624,11 @@ impl App {
                 let pointer_position = global_pointer.map(|state| state.position).or(event_pointer);
                 let handled = native_surface(app, native).is_some_and(|mut surface| {
                     surface.set_pointer_source(pointer_source_from_winit(&source));
-                    native_window::with_native_window_surface_origin(
-                        native_window_surface_origin(platform_probe, &native.window),
-                        || surface.set_cursor(logical.x, logical.y),
-                    )
+                    surface.set_screen_origin(native_window_surface_origin(
+                        platform_probe,
+                        &native.window,
+                    ));
+                    surface.set_cursor(logical.x, logical.y)
                 });
                 if let Some(pointer) = pointer_position
                     && let Some((key, position)) =
@@ -2720,10 +2719,11 @@ impl App {
                 if let Some(mut surface) = native_surface(app, native) {
                     surface.set_pointer_source(source);
                     let platform_probe = &self.native_window_platform_probe;
-                    native_window::with_native_window_surface_origin(
-                        native_window_surface_origin(platform_probe, &native.window),
-                        || surface.set_cursor(logical.x, logical.y),
-                    );
+                    surface.set_screen_origin(native_window_surface_origin(
+                        platform_probe,
+                        &native.window,
+                    ));
+                    surface.set_cursor(logical.x, logical.y);
                 }
                 match state {
                     ElementState::Pressed => {
@@ -2767,19 +2767,15 @@ impl App {
                             ));
                         }
                         let handled = native_surface(app, native).is_some_and(|mut surface| {
-                            native_window::with_native_window_surface_origin(
-                                native_window_surface_origin(
-                                    &self.native_window_platform_probe,
-                                    &native.window,
-                                ),
-                                || {
-                                    if source.is_touch_like() {
-                                        surface.pointer_released_at_position(logical.x, logical.y)
-                                    } else {
-                                        surface.pointer_released()
-                                    }
-                                },
-                            )
+                            surface.set_screen_origin(native_window_surface_origin(
+                                &self.native_window_platform_probe,
+                                &native.window,
+                            ));
+                            if source.is_touch_like() {
+                                surface.pointer_released_at_position(logical.x, logical.y)
+                            } else {
+                                surface.pointer_released()
+                            }
                         });
                         app.sync_selection_to_primary();
                         if handled {
@@ -2873,6 +2869,9 @@ impl App {
         native: &mut NativeWindowSurface,
         registry: &Rc<native_window::NativeWindowRegistry>,
     ) -> bool {
+        if native_window_redraw_held_while_hidden(native.options.visible) {
+            return false;
+        }
         let frame_started_at = Instant::now();
         update_app_with_native_window_registry(app, registry);
         let after_update = Instant::now();
@@ -2930,8 +2929,11 @@ impl App {
         output.present();
         let after_present = Instant::now();
         trace_native_window_timing(format_args!(
-            "{} presented {}x{}",
-            native.options.title, native.surface_config.width, native.surface_config.height
+            "{} presented {}x{} key={:?}",
+            native.options.title,
+            native.surface_config.width,
+            native.surface_config.height,
+            native.key
         ));
         native.surface_dirty = false;
         app.record_presented_frame(frame_started_at, after_render);
@@ -4138,6 +4140,16 @@ fn occlusion_leaves_a_frame_owed(occluded: bool) -> bool {
     !occluded
 }
 
+/// Whether a native window's redraw waits because the window is hidden.
+///
+/// The desktop orders a hidden window out, but a frame presented to it
+/// afterwards puts its surface back on the screen: a ghost that no window
+/// owns, takes no clicks, and stays until something else paints over it.
+/// The frame stays owed instead, and is presented when the window shows.
+fn native_window_redraw_held_while_hidden(visible: bool) -> bool {
+    !visible
+}
+
 fn pointer_icon_is_owed_again(event: &WindowEvent) -> bool {
     matches!(
         event,
@@ -4791,6 +4803,10 @@ impl ApplicationHandler for App {
         app.set_dev_options(dev_options);
 
         DesktopTextInput::install(&mut app.primary(), &window);
+        app.set_screen_origin(native_window_surface_origin(
+            &self.native_window_platform_probe,
+            &window,
+        ));
 
         let frame_waker_window = window.clone();
         let frame_waker_event_proxy = self.event_proxy.clone();
@@ -4940,6 +4956,10 @@ impl ApplicationHandler for App {
             }
             WindowEvent::Moved(_) => {
                 self.vsync_interval = monitor_refresh_interval(window);
+                app.set_screen_origin(native_window_surface_origin(
+                    &self.native_window_platform_probe,
+                    window,
+                ));
             }
             WindowEvent::ThemeChanged(theme)
                 if self
@@ -6516,15 +6536,15 @@ mod tests {
         clamp_rect_to_monitor_delta, desired_frame_latency, frame_interval_for_mode,
         free_running_frame, initial_present_redraw_needed, native_window_graph_position,
         native_window_options_change_is_position_only, native_window_position_poll_needed,
-        nearest_monitor_to_rect, next_frame_anchor, occlusion_leaves_a_frame_owed,
-        physical_outer_origin_from_surface, physical_surface_local_pointer,
-        physical_surface_origin_from_outer, physical_surface_rect_contains_pointer,
-        pointer_button_frame_request, primary_declaration_host_needs_direct_update,
-        primary_frame_waker_uses_event_proxy, primary_launch_requires_initial_redraw,
-        primary_pointer_gesture_poll_action, primary_pointer_move_should_recover_press,
-        primary_surface_redraw_drives_app, primary_viewport_for_surface_size,
-        recovered_native_window_drag_start_pointer, scroll_frame_request,
-        should_chain_no_vsync_redraw, surface_reconfigure_requires_redraw,
+        native_window_redraw_held_while_hidden, nearest_monitor_to_rect, next_frame_anchor,
+        occlusion_leaves_a_frame_owed, physical_outer_origin_from_surface,
+        physical_surface_local_pointer, physical_surface_origin_from_outer,
+        physical_surface_rect_contains_pointer, pointer_button_frame_request,
+        primary_declaration_host_needs_direct_update, primary_frame_waker_uses_event_proxy,
+        primary_launch_requires_initial_redraw, primary_pointer_gesture_poll_action,
+        primary_pointer_move_should_recover_press, primary_surface_redraw_drives_app,
+        primary_viewport_for_surface_size, recovered_native_window_drag_start_pointer,
+        scroll_frame_request, should_chain_no_vsync_redraw, surface_reconfigure_requires_redraw,
     };
     #[cfg(feature = "robot")]
     use super::{
@@ -7174,6 +7194,16 @@ mod tests {
             surface_present_required(occlusion_leaves_a_frame_owed(false), false, false),
             "a reappearing window presents even when nothing new was drawn"
         );
+    }
+
+    /// A window hidden mid-drag was still handed the redraw queued for it,
+    /// and the frame it presented after being ordered out stayed on the
+    /// screen as a ghost of the torn window until another window painted
+    /// over it.
+    #[test]
+    fn a_hidden_native_window_holds_its_redraw_until_it_shows() {
+        assert!(native_window_redraw_held_while_hidden(false));
+        assert!(!native_window_redraw_held_while_hidden(true));
     }
 
     #[test]

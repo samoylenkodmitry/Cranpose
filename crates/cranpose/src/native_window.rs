@@ -686,7 +686,6 @@ type NativeWindowResizeHandler = Rc<dyn Fn(WindowResizeDirection)>;
 struct NativeWindowDispatchContext {
     drag_handler: Option<NativeWindowDragHandler>,
     resize_handler: Option<NativeWindowResizeHandler>,
-    surface_origin: Option<Point>,
 }
 
 #[cfg(all(
@@ -938,14 +937,6 @@ fn request_native_window_resize(direction: WindowResizeDirection) -> bool {
         })
 }
 
-/// Returns the desktop-space origin of the current native window surface while
-/// dispatching input inside a native window.
-///
-/// This is `None` for inline content and outside native-window input dispatch.
-pub fn current_native_window_surface_origin() -> Option<Point> {
-    current_native_window_dispatch_context().and_then(|context| context.surface_origin)
-}
-
 #[cfg(all(
     feature = "desktop-shell",
     feature = "renderer-wgpu",
@@ -1038,20 +1029,6 @@ pub(crate) fn with_native_window_drag_handler<R>(
     let mut context = current_native_window_dispatch_context().unwrap_or_default();
     context.drag_handler = Some(handler);
     context.resize_handler = Some(resize_handler);
-    with_native_window_dispatch_context(context, f)
-}
-
-#[cfg(all(
-    feature = "desktop-shell",
-    feature = "renderer-wgpu",
-    not(target_arch = "wasm32")
-))]
-pub(crate) fn with_native_window_surface_origin<R>(
-    origin: Option<Point>,
-    f: impl FnOnce() -> R,
-) -> R {
-    let mut context = current_native_window_dispatch_context().unwrap_or_default();
-    context.surface_origin = origin;
     with_native_window_dispatch_context(context, f)
 }
 
@@ -2214,35 +2191,6 @@ mod tests {
         assert!(!request_native_window_resize(
             WindowResizeDirection::SouthEast
         ));
-    }
-
-    #[cfg(all(
-        feature = "desktop-shell",
-        feature = "renderer-wgpu",
-        not(target_arch = "wasm32")
-    ))]
-    #[test]
-    fn native_window_surface_origin_is_scoped_to_dispatch() {
-        assert_eq!(current_native_window_surface_origin(), None);
-
-        with_native_window_surface_origin(Some(Point::new(4.0, 8.0)), || {
-            assert_eq!(
-                current_native_window_surface_origin(),
-                Some(Point::new(4.0, 8.0))
-            );
-            with_native_window_surface_origin(Some(Point::new(12.0, 16.0)), || {
-                assert_eq!(
-                    current_native_window_surface_origin(),
-                    Some(Point::new(12.0, 16.0))
-                );
-            });
-            assert_eq!(
-                current_native_window_surface_origin(),
-                Some(Point::new(4.0, 8.0))
-            );
-        });
-
-        assert_eq!(current_native_window_surface_origin(), None);
     }
 
     #[cfg(all(

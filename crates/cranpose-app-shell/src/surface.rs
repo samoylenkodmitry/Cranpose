@@ -18,7 +18,7 @@ use cranpose_render_common::Renderer;
 use cranpose_ui::{
     LayoutTree, PlatformTextInputHandler, SemanticsTree, pointer_icon_session::PointerIconState,
 };
-use cranpose_ui_graphics::{PointerIcon, Size};
+use cranpose_ui_graphics::{Point, PointerIcon, Size};
 use web_time::Instant;
 
 use crate::{
@@ -72,6 +72,7 @@ pub struct RootSurface<R: Renderer> {
     pub(crate) pointer_icon: PointerIconState,
     pub(crate) last_update: FrameUpdateResult,
     pub(crate) frame_owed: bool,
+    pub(crate) screen_origin: Option<Point>,
 }
 
 impl<R: Renderer> RootSurface<R> {
@@ -108,6 +109,7 @@ impl<R: Renderer> RootSurface<R> {
             pointer_icon: PointerIconState::new(),
             last_update: FrameUpdateResult::default(),
             frame_owed: false,
+            screen_origin: None,
         }
     }
 
@@ -468,6 +470,21 @@ where
         }
         self.surface_mut().scene_dirty = true;
         self.mark_dirty();
+    }
+
+    /// Tells the shell where the window drawing this surface sits on the
+    /// screen, in logical pixels, so pointer events can carry a
+    /// [`screen_position`](cranpose_foundation::PointerEvent::screen_position).
+    /// A platform sets it when the window moves and before it delivers a
+    /// pointer sample; `None` says the platform does not know.
+    pub fn set_screen_origin(&mut self, origin: Option<Point>) {
+        self.surface_mut().screen_origin = origin;
+    }
+
+    /// Where the window drawing this surface sits on the screen, as the
+    /// platform last said.
+    pub fn screen_origin(&self) -> Option<Point> {
+        self.surface().screen_origin
     }
 
     /// The logical size this surface draws into.

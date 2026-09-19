@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Drive desktop windows with the real pointer to check draggable and
-# droppable windows: dock panes torn between OS windows, window groups that
+# droppable windows: panes torn between OS windows, window groups that
 # follow a dragged peer, borderless windows moved by a drag area.
 #
 # A demo built from this tree is launched with every trace on and a throwaway
@@ -10,14 +10,16 @@
 # not a memory of what the screen looked like.
 #
 #   drag_window.sh launch <example> <log>            start ./target/debug/examples/<example>
-#   drag_window.sh windows <log>                      dock windows at rest: id x y w h panes=n
+#   drag_window.sh windows <log>                      demo windows at rest: id x y w h panes=n
+#   drag_window.sh oswindows <example>                the OS windows of the running example: x y w h title
 #   drag_window.sh click <x,y>                        press and release
+#   drag_window.sh key <text>                         type text into the focused window
 #   drag_window.sh drag <x0,y0> <x1,y1> [steps] [ms]  press, move in steps, release
 #   drag_window.sh drag-pane <log> <id> <lx,ly> <dx,dy> [steps]
-#                                                     drag from a dock window's local point by a delta,
-#                                                     then print what the dock did
+#                                                     drag from a demo window's local point by a delta,
+#                                                     then print what the demo did
 #   drag_window.sh snap <log> <id> <onto-id> above|below [lx,ly]
-#                                                     carry a dock window's pane clear of everything, then
+#                                                     carry a demo window's pane clear of everything, then
 #                                                     bring it in line with another window, edge to edge
 #   drag_window.sh mark <log>                         line count, for `trace`
 #   drag_window.sh trace <log> <since> [regex]        trace lines after <since>, poll noise dropped
@@ -46,7 +48,7 @@ launch() {
     pkill -f "examples/$example" 2>/dev/null || true
     sleep 1
     : > "$log"
-    (cd "$tree" && RUST_BACKTRACE=1 CRANPOSE_DOCK_TRACE=1 CRANPOSE_NATIVE_TRACE=1 CRANPOSE_NATIVE_WINDOW_TIMING=1 HOME="$home" \
+    (cd "$tree" && RUST_BACKTRACE=1 CRANPOSE_DEMO_TRACE=1 CRANPOSE_NATIVE_TRACE=1 CRANPOSE_NATIVE_WINDOW_TIMING=1 HOME="$home" \
         nohup "./target/debug/examples/$example" > "$log" 2>&1 &)
     local _
     for _ in $(seq 1 60); do
@@ -60,13 +62,22 @@ windows() {
     local log="$1"
     set +o pipefail
     local open
-    open="$(grep -E 'dock trace: windows=' "$log" | tail -1 | sed -E 's/.*windows=//')"
-    grep -E 'dock trace: window id=' "$log" \
+    open="$(grep -E 'demo trace: windows=' "$log" | tail -1 | sed -E 's/.*windows=//')"
+    grep -E 'demo trace: window id=' "$log" \
         | sed -E 's/.*id=([0-9]+) origin=\(([0-9.-]+),([0-9.-]+)\) size=\(([0-9.]+),([0-9.]+)\) panes=([0-9]+) parked=(true|false).*/\1 \2 \3 \4 \5 \6 \7/' \
         | awk '{ last[$1] = $0 } END { for (id in last) print last[id] }' \
         | awk -v open=",$open," '$7 == "false" && index(open, "," $1 ",") { printf "%s %d %d %d %d panes=%s\n", $1, $2, $3, $4, $5, $6 }' \
         | sort -n
     set -o pipefail
+}
+
+key() {
+    need cliclick
+    cliclick "t:$1" "w:400"
+}
+
+oswindows() {
+    osascript -e "tell application \"System Events\" to tell (first process whose name is \"$1\") to get {position, size, title} of every window" 2>&1
 }
 
 click() {
@@ -92,7 +103,7 @@ drag_pane() {
     local log="$1" id="$2" local_point="$3" delta="$4" steps="${5:-10}"
     local origin
     origin="$(windows "$log" | awk -v id="$id" '$1 == id { print $2 "," $3 }')"
-    [ -n "$origin" ] || { echo "drag_window.sh: no dock window $id in $log" >&2; exit 1; }
+    [ -n "$origin" ] || { echo "drag_window.sh: no demo window $id in $log" >&2; exit 1; }
     local ox="${origin%,*}" oy="${origin#*,}"
     local x0=$(( ox + ${local_point%,*} )) y0=$(( oy + ${local_point#*,} ))
     local x1=$(( x0 + ${delta%,*} )) y1=$(( y0 + ${delta#*,} ))
@@ -101,7 +112,7 @@ drag_pane() {
     drag "$x0,$y0" "$x1,$y1" "$steps"
     sleep 1
     echo "gesture ($x0,$y0) -> ($x1,$y1)"
-    trace "$log" "$since" 'dock trace: (press|release)|step=(Carry|Join)|sync create|presented=|panicked' \
+    trace "$log" "$since" 'demo trace: (press|release)|step=(Carry|Join)|sync create|presented=|panicked' \
         | awk '/step=Carry/ { carry = $0; if (seen_carry++) next } { print } END { if (seen_carry > 1) print carry }'
     grep -q panicked "$log" && { echo "PANIC in $log" >&2; exit 1; }
     return 0
@@ -140,7 +151,7 @@ snap() {
     cliclick "du:$ex,$ey" "w:400"
     sleep 1
     echo "snap $id $side $onto: ($gx,$gy) -> ($ex,$ey)"
-    trace "$log" "$since" 'dock trace: (press|release)|step=Join|sync create|presented=|panicked' | awk '!seen[$0]++'
+    trace "$log" "$since" 'demo trace: (press|release)|step=Join|sync create|presented=|panicked' | awk '!seen[$0]++'
     grep -q panicked "$log" && { echo "PANIC in $log" >&2; exit 1; }
     return 0
 }
@@ -154,7 +165,7 @@ trace() {
     awk -v s="$since" 'NR>s' "$log" \
         | grep -v 'poll skipped' \
         | grep -E "$pattern" \
-        | sed -e 's/native window trace: /NW /' -e 's/dock trace: /DOCK /' \
+        | sed -e 's/native window trace: /NW /' -e 's/demo trace: /DEMO /' \
               -e 's/WindowId(\([0-9]\{4\}\)[0-9]*)/W\1/g' || true
 }
 
@@ -214,6 +225,8 @@ case "$command" in
     launch) launch "$@" ;;
     windows) windows "$@" ;;
     click) click "$@" ;;
+    oswindows) oswindows "$@" ;;
+    key) key "$@" ;;
     drag) drag "$@" ;;
     drag-pane) drag_pane "$@" ;;
     snap) snap "$@" ;;

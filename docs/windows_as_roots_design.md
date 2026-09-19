@@ -426,3 +426,67 @@ the main window. All through `scripts/dev/drag_window.sh`, with an idle
 log that stops growing once the windows are up. The shell test
 `a_surface_keeps_owing_its_frame_until_the_platform_takes_it` covers the
 owed-frame flag.
+
+### Step 5: demos on the primitives, dock deleted
+
+`crates/cranpose/src/dock.rs` and every `Dock*` export are gone, and with
+them the thread-local surface origin: `current_native_window_surface_origin`
+and the dispatch context field behind it. In their place a `PointerEvent`
+carries `screen_position`, the pointer on the screen in logical pixels
+when the platform told the shell where the window sits. Each `RootSurface`
+keeps a `screen_origin` the platform sets through
+`SurfaceMut::set_screen_origin` (`AppShell::set_screen_origin` for the
+primary); the desktop sets it from the OS position before every pointer
+sample, as the dispatch context used to be set, and on every `Moved`. The
+shell adds it to the root-relative position when it builds an event, so a
+cross-window gesture reads one field and compares it with the windows'
+`WindowState`s.
+
+The two demos are plain app code in `apps/desktop-demo/src/app/`:
+
+- `torn_windows.rs` is what an app writes for tabs or tool windows: a pure
+  model of windows, panes and the drag in flight (the dock's model, with
+  its tests), and a `TornWindowsHost` composable that opens one
+  `WindowNode` per window with a `rememberWindowStateAt`, gives the chrome
+  a `WindowView`, and puts a `pointer_input` on each window's root that
+  steps the drag from the events' screen positions. `Windows::grip` marks
+  a pane's grip; it names only the pane and looks the holding window up at
+  the press, so it may sit inside the pane's movable content.
+- `chrome_tabs.rs` composes each page's body under `movable`, keyed by the
+  page. The click counter is remembered inside that body, so nothing above
+  the page holds its state and the count survives the tear; closing a tab
+  calls `forget_movable`. `tool_windows.rs` composes each tool under
+  `movable` with the grip in its title.
+
+Tearing the first tab out showed a core defect the earlier tests had not
+reached: a restored subtree's root node record still named its old parent,
+so the next pass that skipped the enclosing group (a window moving after
+the release) took the page for one of that group's own root nodes and hung
+it a level up, under the drag box, where it covered the strip.
+`DetachedSubtree::set_root_nodes_parent` now records the node the composer
+attaches a restored subtree under, passed through `begin_group`. Tests at
+three levels cover it: the core moves content into a fresh parent and
+skips that parent on the next pass; the shell tears a page into a second
+window root and recomposes that root with its chrome skipped; the demo
+module tears through its own model and moves the new window. The first
+two fail without the fix; the demo test drives the glue end to end and
+passes either way, so it guards the demo, not the core.
+
+Joining a tab back left a ghost: the torn window, hidden at the join,
+stayed painted on the screen at its last position, owned by no window and
+taking no clicks. AppKit had ordered the window out, but the redraw winit
+queues itself for a content change still ran, and a frame presented to an
+ordered-out window puts its surface back on the screen. A hidden native
+window now holds its redraw (`native_window_redraw_held_while_hidden`),
+keeping the frame owed until the window shows again. In the tabs demo a
+parked window also composes no page: a window holds no pane once it is
+parked, so the page moves into the joined window at the join itself
+rather than after the release.
+
+`scripts/dev/drag_window.sh` launches with `CRANPOSE_DEMO_TRACE` and reads
+the `demo trace:` lines the host prints, gained `key` and `oswindows`
+(what the desktop lists for the example, for a window the demo believes
+is gone), and the two examples start the demo's logger when built with
+`logging`, so the debug key's layout dump reaches the tool's log.
+`scripts/dev/mutation_check.sh` takes cargo arguments for a package whose
+tests need features, as the desktop tests do.

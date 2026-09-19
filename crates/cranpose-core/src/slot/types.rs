@@ -396,6 +396,23 @@ impl DetachedSubtree {
         self.set_node_lifecycle(NodeLifecycle::RetainedDetached);
     }
 
+    /// Names `parent` as the parent of every root node of this subtree, so
+    /// the records say where the nodes hang once the subtree is restored
+    /// under a new parent. A group skipped later collects its root nodes from
+    /// these records; a root still naming the old parent would be taken for
+    /// a root of the enclosing group and attached a level too high.
+    pub(crate) fn set_root_nodes_parent(&mut self, parent: Option<NodeId>) {
+        let mut roots = Vec::new();
+        self.collect_root_nodes_into(&mut roots);
+        for node in self
+            .nodes
+            .iter_mut()
+            .filter(|node| roots.contains(&node.id))
+        {
+            node.parent_id = parent;
+        }
+    }
+
     pub(crate) fn mark_nodes_active(&mut self) {
         self.set_node_lifecycle(NodeLifecycle::Active);
     }

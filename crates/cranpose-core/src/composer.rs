@@ -1315,13 +1315,14 @@ impl Composer {
         let restored_scopes = restored
             .as_ref()
             .map(crate::slot::DetachedSubtree::scope_ids);
+        let parent_node = self.current_parent_hint();
         let (group, anchor, start_scope_id, start_kind) = self.with_slot_session_mut(|slots| {
             let GroupStart {
                 group,
                 anchor,
                 scope_id,
                 kind,
-            } = slots.begin_group(reserved_key, restored);
+            } = slots.begin_group(reserved_key, restored, parent_node);
             (group, anchor, scope_id, kind)
         });
         let scope_ref = self.scope_for_started_group(group, start_scope_id);

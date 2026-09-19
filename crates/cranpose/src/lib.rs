@@ -104,7 +104,6 @@ mod android_wire_escape;
 #[cfg(all(feature = "android", target_os = "android"))]
 mod android_writable_folder;
 mod app_launcher;
-mod dock;
 mod host_environment;
 #[cfg(all(feature = "ios", target_os = "ios"))]
 mod ios_host;
@@ -132,15 +131,11 @@ pub use app_launcher::{AndroidGpuBackend, AndroidOverlayWindowOptions, AppLaunch
 pub use cranpose_render_common::font_source::{
     ANDROID_SYSTEM_FONT_DIR, DEFAULT_SYSTEM_FAMILY_WEIGHTS, FontLoadError, SoftwareTextFontRegistry,
 };
-pub use dock::{
-    Dock, DockAxis, DockDrag, DockHost, DockKey, DockLayout, DockModel, DockModifierExt,
-    DockPolicy, DockRect, DockRef, DockSide, DockStep, DockWindow, DockWindowId, Pane, SizedPane,
-};
 pub use host_environment::{host_density, system_font_directory};
 pub use native_window::{
     Window, WindowAttachPolicy, WindowConfig, WindowGroup, WindowId, WindowModifierExt,
-    WindowMoveMode, WindowNode, WindowResizeDirection, WindowState,
-    current_native_window_surface_origin, rememberWindowState, rememberWindowStateAt,
+    WindowMoveMode, WindowNode, WindowResizeDirection, WindowState, rememberWindowState,
+    rememberWindowStateAt,
 };
 /// Brings in what this crate's build script declared.
 ///

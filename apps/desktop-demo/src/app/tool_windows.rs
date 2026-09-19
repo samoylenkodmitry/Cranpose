@@ -5,20 +5,24 @@
 //! it to just above or just below another window to snap it on: the two
 //! become one window, sized for both. Drag a pane's body to move the window
 //! that holds it, panes and all. Every pair and every triple is reachable.
+//! Each pane is `movable` content, so the window that shows it composes the
+//! same subtree wherever it goes; the grip sits inside that content and names
+//! only the pane.
 #![allow(non_snake_case)]
 
-use cranpose::{
-    Dock, DockAxis, DockHost, DockKey, DockModifierExt, DockPolicy, SizedPane, WindowModifierExt,
-};
-use cranpose_core::key;
+use cranpose::WindowModifierExt;
+use cranpose_core::{key, movable};
 use cranpose_ui::{composable, Box, BoxSpec, Color, Column, ColumnSpec, Modifier, Size, Text};
 
-use super::chrome_tabs::{label_style, CHROME, INK};
+use super::{
+    chrome_tabs::{label_style, CHROME, INK},
+    torn_windows::{Axis, Rules, TornWindowsHost, WindowView, Windows},
+};
 
 /// One tool pane: its identity, its label, its size and its tint.
 #[derive(Clone, Copy, PartialEq, Debug)]
 struct Tool {
-    key: DockKey,
+    key: u64,
     title: &'static str,
     size: Size,
     tint: Color,
@@ -27,7 +31,7 @@ struct Tool {
 fn tools() -> [Tool; 3] {
     [
         Tool {
-            key: DockKey::from_static("player"),
+            key: 1,
             title: "Player",
             size: Size {
                 width: PANE_WIDTH,
@@ -36,7 +40,7 @@ fn tools() -> [Tool; 3] {
             tint: Color(0.36, 0.42, 0.52, 1.0),
         },
         Tool {
-            key: DockKey::from_static("equalizer"),
+            key: 2,
             title: "Equalizer",
             size: Size {
                 width: PANE_WIDTH,
@@ -45,7 +49,7 @@ fn tools() -> [Tool; 3] {
             tint: Color(0.38, 0.50, 0.44, 1.0),
         },
         Tool {
-            key: DockKey::from_static("playlist"),
+            key: 3,
             title: "Playlist",
             size: Size {
                 width: PANE_WIDTH,
@@ -59,53 +63,51 @@ fn tools() -> [Tool; 3] {
 /// Three snapping tool windows.
 #[composable]
 pub fn tool_windows_app() {
-    Dock(
-        "tool-windows",
-        DockPolicy::stack(
-            "Cranpose Tool Windows",
-            tools()[0].size,
-            DockAxis::Vertical,
-            SNAP_REACH,
-        ),
-        |host| ToolStack(host.clone()),
-        || {
-            for tool in tools() {
-                SizedPane(tool.key, tool.size, move || ToolPane(tool));
-            }
-        },
+    let rules = Rules::stack(
+        "Cranpose Tool Windows",
+        tools()[0].size,
+        Axis::Vertical,
+        SNAP_REACH,
     );
+    let panes = tools().iter().map(|tool| (tool.key, tool.size)).collect();
+    TornWindowsHost("tool-windows", rules, panes, |view| ToolStack(view.clone()));
 }
 
 #[composable]
-fn ToolStack(host: DockHost) {
-    let panes = host.panes().to_vec();
+fn ToolStack(view: WindowView) {
+    let panes = view.panes().to_vec();
+    let windows = view.windows().clone();
     Column(
         Modifier::empty().background(CHROME),
         ColumnSpec::default(),
         move || {
             for pane in &panes {
                 let pane = *pane;
-                let host = host.clone();
-                key(pane.raw(), move || host.content(pane));
+                let windows = windows.clone();
+                key(pane, move || {
+                    if let Some(tool) = tools().into_iter().find(|tool| tool.key == pane) {
+                        movable(("tool", pane), move || ToolPane(windows, tool));
+                    }
+                });
             }
         },
     );
 }
 
 #[composable]
-fn ToolPane(tool: Tool) {
+fn ToolPane(windows: Windows, tool: Tool) {
     Column(
         Modifier::empty().size(tool.size).background(tool.tint),
         ColumnSpec::default(),
         move || {
             Text(
                 tool.title,
-                Modifier::empty()
+                windows
+                    .grip(Modifier::empty(), tool.key)
                     .fill_max_width()
                     .height(TITLE_HEIGHT)
                     .background(CHROME)
-                    .padding(3.0)
-                    .dock_handle(tool.key),
+                    .padding(3.0),
                 label_style(11.0, INK),
             );
             Box(

@@ -57,6 +57,13 @@ impl MovableProbe {
     fn assert_untouched(&self, node: NodeId, remembered: i32, context: &str) {
         assert_eq!(self.node(), node, "node identity must survive: {context}");
         assert_eq!(self.remembered(), remembered, "remembered value: {context}");
+        self.assert_alive(context);
+    }
+
+    /// The checks of [`Self::assert_untouched`] that need no fresh
+    /// composition of the content: nothing dropped, unmounted, cancelled or
+    /// cleaned up.
+    fn assert_alive(&self, context: &str) {
         assert_eq!(self.payload_drops.get(), 0, "payload drops: {context}");
         assert_eq!(self.node_unmounts.get(), 0, "node unmounts: {context}");
         assert_eq!(
@@ -266,8 +273,18 @@ fn movable_content_arrives_when_the_old_parent_releases_it_a_pass_later() {
     assert_eq!(composition.debug_slot_snapshot().retained_subtree_count, 0);
 }
 
+/// The movable content behind a skippable composable of its own, the way a
+/// page body sits behind a composable in an app: a restore that recomposes
+/// the movable root leaves this one skipped.
 #[composable]
-fn rich_holder(show: bool, payload_drops: Rc<Cell<usize>>) -> NodeId {
+fn framed_movable_content() {
+    movable_content();
+}
+
+/// A holder with a node before and after the movable. With `framed`, the
+/// movable content sits behind [`framed_movable_content`].
+#[composable]
+fn rich_holder(show: bool, payload_drops: Rc<Cell<usize>>, framed: bool) -> NodeId {
     let id = with_current_composer(|composer| composer.emit_node(RecordingNode::default));
     cranpose_core::push_parent(id);
     if show {
@@ -276,7 +293,11 @@ fn rich_holder(show: bool, payload_drops: Rc<Cell<usize>>) -> NodeId {
                 composer.remember(|| ReentrantDropState::new(2, payload_drops.clone(), false));
             composer.emit_node(TrackingChild::default);
         });
-        movable(MOVABLE_ID, movable_content);
+        if framed {
+            movable(MOVABLE_ID, framed_movable_content);
+        } else {
+            movable(MOVABLE_ID, movable_content);
+        }
         with_current_composer(|composer| {
             let _after =
                 composer.remember(|| ReentrantDropState::new(3, payload_drops.clone(), false));
@@ -305,7 +326,7 @@ fn movable_content_survives_the_disposal_of_the_parent_that_held_it() {
             if show {
                 holders
                     .first
-                    .set(Some(rich_holder(true, Rc::clone(&holder_drops))));
+                    .set(Some(rich_holder(true, Rc::clone(&holder_drops), false)));
             }
         });
     };
@@ -532,4 +553,95 @@ fn movable_inner_scope_recomposes_under_the_new_parent_after_a_move() {
         "nodes the leaf emits after the move must attach under the parent it moved to"
     );
     assert!(parent_children(&mut composition, first).is_empty());
+}
+
+/// A node around a rich holder, the way a window's root box sits around
+/// the column that shows a page. `pass` changes so the wrapper recomposes
+/// while the holder inside it is skipped.
+#[composable]
+fn wrapped_rich_holder(
+    pass: u32,
+    payload_drops: Rc<Cell<usize>>,
+    inner: Rc<Cell<Option<NodeId>>>,
+) -> NodeId {
+    let _ = pass;
+    let id = with_current_composer(|composer| composer.emit_node(RecordingNode::default));
+    cranpose_core::push_parent(id);
+    inner.set(Some(rich_holder(true, payload_drops, true)));
+    cranpose_core::pop_parent();
+    id
+}
+
+/// A window opened by a tear: its strip composes fresh in the same pass in
+/// which the movable page arrives from the window it left. The page must
+/// land after the strip, where the parent emitted it, and stay there when
+/// a later pass skips that parent: a root node record still naming the
+/// old parent would be taken for a root of the skipped group and hung
+/// under the wrapper instead.
+#[test]
+fn movable_content_arriving_in_a_fresh_parent_keeps_its_place_among_siblings() {
+    let mut composition = test_composition();
+    let runtime = composition.runtime_handle();
+    let torn = MutableState::with_runtime(false, runtime.clone());
+    let pass = MutableState::with_runtime(0u32, runtime);
+    let holder_drops = Rc::new(Cell::new(0));
+    let source_drops = Rc::new(Cell::new(0));
+    let holders = TwoHolders::default();
+    let inner = Rc::new(Cell::new(None));
+    let root_key = location_key(file!(), line!(), column!());
+    let render = |composition: &mut Composition<MemoryApplier>| {
+        let holder_drops = Rc::clone(&holder_drops);
+        let source_drops = Rc::clone(&source_drops);
+        let inner = Rc::clone(&inner);
+        render_holders(composition, root_key, &holders, move |holders| {
+            let torn = torn.value();
+            holders
+                .first
+                .set(Some(rich_holder(!torn, Rc::clone(&source_drops), true)));
+            if torn {
+                holders.second.set(Some(wrapped_rich_holder(
+                    pass.value(),
+                    Rc::clone(&holder_drops),
+                    Rc::clone(&inner),
+                )));
+            }
+        });
+    };
+
+    render(&mut composition);
+    let probe = probe();
+    let node = probe.node();
+
+    torn.set_value(true);
+    render(&mut composition);
+    let (source, wrapper) = holders.ids();
+    let target = inner.get().expect("the rich holder composed");
+    probe.assert_alive("after arriving in the fresh parent behind a skipped composable");
+    assert_eq!(
+        probe.bodies.get(),
+        1,
+        "the framed content is skipped on arrival, not composed again"
+    );
+    assert!(parent_children(&mut composition, source).is_empty());
+    let children = parent_children(&mut composition, target);
+    assert_eq!(children.len(), 3, "the frame's two nodes and the page");
+    assert_eq!(
+        children[1], node,
+        "the page sits between the nodes emitted before and after it: {children:?}"
+    );
+    assert_eq!(parent_children(&mut composition, wrapper), vec![target]);
+
+    pass.set_value(1);
+    render(&mut composition);
+    assert_eq!(
+        parent_children(&mut composition, target),
+        children,
+        "a pass that skips the parent leaves the page where it was"
+    );
+    assert_eq!(
+        parent_children(&mut composition, wrapper),
+        vec![target],
+        "the page must not be hung under the wrapper as a root of the skipped group"
+    );
+    assert_eq!(child_parent(&mut composition, node), Some(target));
 }

@@ -14,9 +14,14 @@ where
         global_position: Point,
         event_time: PointerEventTime,
     ) -> PointerEvent {
+        let screen_position = self.surface().screen_origin.map(|origin| Point {
+            x: origin.x + global_position.x,
+            y: origin.y + global_position.y,
+        });
         let mut event = PointerEvent::new(kind, position, global_position)
             .with_time_ms(event_time.platform_time_ms)
-            .with_animation_time_nanos(event_time.animation_time_nanos);
+            .with_animation_time_nanos(event_time.animation_time_nanos)
+            .with_screen_position(screen_position);
         event.modifiers = self.shell.app.modifiers;
         event
     }
