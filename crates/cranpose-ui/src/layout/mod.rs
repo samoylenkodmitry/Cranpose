@@ -878,6 +878,7 @@ pub fn build_semantics_tree_from_applier(
             Some((role, config, children))
         }) {
             Ok(Some((role, config, child_ids))) => {
+                let child_ids = children_in_this_window(applier, child_ids);
                 let mut children = Vec::with_capacity(child_ids.len());
                 for child_id in child_ids {
                     if let Some(child) = node(applier, child_id)? {
@@ -904,6 +905,7 @@ pub fn build_semantics_tree_from_applier(
             Some((config, children))
         }) {
             Ok(Some((config, child_ids))) => {
+                let child_ids = children_in_this_window(applier, child_ids);
                 let mut children = Vec::with_capacity(child_ids.len());
                 for child_id in child_ids {
                     if let Some(child) = node(applier, child_id)? {
@@ -983,6 +985,17 @@ fn publish_window_geometry(
 /// its parent's window leaves out.
 fn is_window_root_node(applier: &mut MemoryApplier, node: NodeId) -> bool {
     crate::modifier::is_window_root(applier, node)
+}
+
+/// The children that belong to this window: every child but the roots of
+/// other windows. A window's subtree is placed in its own window, so a
+/// semantics tree that took it would name nodes its layout tree does not
+/// hold, and the placed semantics of the parent window could not be built.
+fn children_in_this_window(applier: &mut MemoryApplier, children: Vec<NodeId>) -> Vec<NodeId> {
+    children
+        .into_iter()
+        .filter(|child| !is_window_root_node(applier, *child))
+        .collect()
 }
 
 /// Check if the root semantics snapshot is dirty.

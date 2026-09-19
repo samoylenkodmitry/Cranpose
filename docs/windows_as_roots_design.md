@@ -308,7 +308,10 @@ Differences from the plan:
 - The scene builder skips window roots wherever it lowers a child (one
   check in `build_layer_node_from_applier_internal`) and, when asked to
   build from a window root, starts at the origin. The two layout-tree
-  builders accessibility reads skip window-root children the same way.
+  builders accessibility reads skip window-root children the same way,
+  and so does the semantics builder over the applier: CI's screen reader
+  audit of the Winamp tab found it walking into the three windows, naming
+  nodes the primary layout tree does not hold.
 - `nearest_window_root(applier, node)` tells a shell which surface a dirty
   node belongs to; step 3 partitions dirty nodes with it.
 

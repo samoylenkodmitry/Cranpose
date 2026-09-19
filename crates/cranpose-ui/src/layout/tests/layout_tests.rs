@@ -3032,3 +3032,34 @@ fn window_root_subtree_is_left_out_of_the_parent_layout_tree() -> Result<(), Nod
     );
     Ok(())
 }
+
+/// The Winamp tab's windows, placed in their own windows, were read into
+/// the primary window's semantics tree, which then named nodes the primary
+/// layout tree did not hold; the screen reader audit got no tree at all.
+#[test]
+fn window_root_subtree_is_left_out_of_the_parent_semantics_tree() -> Result<(), NodeError> {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let mut applier = MemoryApplier::new();
+    let window = Rc::new(TestWindow {
+        size: Cell::new(Size::new(300.0, 200.0)),
+    });
+    let (root, window_node, _) = window_root_tree(&mut applier, window)?;
+    super::measure_layout_with_options(
+        &mut applier,
+        root,
+        Size::new(100.0, 100.0),
+        MeasureLayoutOptions {
+            collect_semantics: true,
+            build_layout_tree: true,
+        },
+    )?;
+
+    let tree = super::build_semantics_tree_from_applier(&mut applier, root)?.expect("semantics");
+    let child_ids: Vec<NodeId> = tree.root().children.iter().map(|n| n.node_id).collect();
+    assert_eq!(child_ids.len(), 1, "one child stays: {child_ids:?}");
+    assert!(
+        !child_ids.contains(&window_node),
+        "the parent's semantics tree leaves the window subtree out: {child_ids:?}"
+    );
+    Ok(())
+}
