@@ -74,11 +74,35 @@ fn ci_architecture_budget_runs_required_gates() {
     let nightly_workflow = workspace_source(".github/workflows/nightly.yml");
     let justfile = workspace_source("justfile");
 
-    assert!(
-        nightly_workflow.contains("architecture-budget:")
-            && nightly_workflow.contains("name: architecture budgets (linux)"),
-        "the architecture budgets should keep a dedicated job"
-    );
+    // Both of these are short and answer a question about the tree that just
+    // landed, so they run on the merge board rather than hours later. Neither
+    // runs on a pull request, which is what keeps them out of its budget.
+    for (job, name) in [
+        ("architecture-budget:", "name: architecture budgets (linux)"),
+        ("android-apk:", "name: Android release APK (macOS)"),
+    ] {
+        assert!(
+            heavy_workflow.contains(job) && heavy_workflow.contains(name),
+            "{job} should be its own job on the board a merge triggers"
+        );
+        assert!(
+            !nightly_workflow.contains(job),
+            "{job} moved off the nightly board; two boards running it is the duplication \
+             the nightly board was just trimmed of"
+        );
+    }
+    let budget_block = workflow_job_block(&heavy_workflow, "architecture-budget");
+    let apk_block = workflow_job_block(&heavy_workflow, "android-apk");
+    for (label, block) in [
+        ("architecture-budget", &budget_block),
+        ("android-apk", &apk_block),
+    ] {
+        assert!(
+            block.contains("if: github.event_name != 'pull_request'"),
+            "{label} must not run on a pull request: it is exactly the string \
+             scripts/ci/pr_budget_test.sh reads as `no pull request waits for this`"
+        );
+    }
 
     for recipe in [
         "run: just fmt-check",
@@ -96,11 +120,7 @@ fn ci_architecture_budget_runs_required_gates() {
         );
     }
 
-    for recipe in [
-        "run: just budgets",
-        "run: just robot-linux serial",
-        "run: just android",
-    ] {
+    for recipe in ["run: just robot-linux serial"] {
         assert!(
             nightly_workflow.contains(recipe),
             "the nightly board should invoke `{recipe}` rather than spelling it inline"
@@ -118,9 +138,15 @@ fn ci_architecture_budget_runs_required_gates() {
     );
 
     assert!(
-        !workflow.contains("run: just budgets") && !heavy_workflow.contains("run: just budgets"),
-        "architecture budgets belong to the nightly board, not to a board a merge waits for"
+        !workflow.contains("run: just budgets"),
+        "architecture budgets are not part of the board a pull request waits for"
     );
+    for recipe in ["run: just budgets", "run: just android"] {
+        assert!(
+            heavy_workflow.contains(recipe),
+            "the merge board should invoke `{recipe}` rather than spelling it inline"
+        );
+    }
     assert!(
         !heavy_workflow.contains("run: just robot-linux\n"),
         "the load-sensitive robot examples belong to the nightly board: they run one at a \
@@ -388,7 +414,7 @@ fn every_nightly_job_waits_for_the_duplicate_check() {
 
     let names = workflow_job_names(&workflow);
     assert!(
-        names.len() >= 4,
+        names.len() >= 2 && names.contains(&"decide".to_string()),
         "expected to inspect every nightly job, saw only {names:?}: the parser has drifted"
     );
     for name in names.iter().filter(|name| *name != "decide") {
