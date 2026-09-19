@@ -269,8 +269,8 @@ fn the_card_material_raises_most_specialization_flags() {
     let raised = shader.overrides().len();
     assert!(
         raised >= LIQUID_GLASS_SPECIALIZATIONS.len() - 3,
-        "a plain glass pane leaves almost every optional feature inactive; only {raised} of \
-         {} flags were raised: {:?}",
+        "a card material with folds on should raise almost every optional feature; only \
+         {raised} of {} were raised: {:?}",
         LIQUID_GLASS_SPECIALIZATIONS.len(),
         shader.overrides()
     );
