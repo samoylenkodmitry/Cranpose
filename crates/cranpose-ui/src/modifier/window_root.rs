@@ -115,6 +115,13 @@ pub fn window_roots_revision() -> u64 {
     current_app_context().map_or(0, |context| context.window_roots().revision())
 }
 
+/// Whether `node` is a layout node whose modifier chain carries a window root.
+pub fn is_window_root(applier: &mut MemoryApplier, node: NodeId) -> bool {
+    applier
+        .with_node::<LayoutNode, _>(node, |layout_node| layout_node.is_window_root())
+        .unwrap_or(false)
+}
+
 /// The window root that owns `node`: the nearest node, `node` included, whose
 /// modifier chain carries a window root. `None` when the node belongs to the
 /// primary root.

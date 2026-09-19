@@ -982,9 +982,7 @@ fn publish_window_geometry(
 /// Whether `node` is the root of a separate window, which a tree built for
 /// its parent's window leaves out.
 fn is_window_root_node(applier: &mut MemoryApplier, node: NodeId) -> bool {
-    applier
-        .with_node::<LayoutNode, _>(node, |layout_node| layout_node.is_window_root())
-        .unwrap_or(false)
+    crate::modifier::is_window_root(applier, node)
 }
 
 /// Check if the root semantics snapshot is dirty.

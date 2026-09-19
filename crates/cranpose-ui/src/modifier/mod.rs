@@ -85,7 +85,7 @@ pub use slices::{
 };
 pub use window_root::{
     WindowRootDescriptor, WindowRootElement, WindowRootEntry, WindowRootNode, WindowRootRegistry,
-    nearest_window_root, window_roots, window_roots_revision,
+    is_window_root, nearest_window_root, window_roots, window_roots_revision,
 };
 
 pub use crate::draw::{DrawCacheBuilder, DrawCommand};

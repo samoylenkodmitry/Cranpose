@@ -311,3 +311,67 @@ Differences from the plan:
   builders accessibility reads skip window-root children the same way.
 - `nearest_window_root(applier, node)` tells a shell which surface a dirty
   node belongs to; step 3 partitions dirty nodes with it.
+
+### Step 3: surfaces
+
+`AppShell` is now the application (`ShellApp` inside the crate: runtime,
+composition, content, clock, layout flags, dev options, clipboard, text
+input routes) plus one `RootSurface` per window, the primary first. A
+platform hands a window root a renderer with
+`add_window_surface(id, renderer, buffer_size, viewport)`, reads the
+window's frame and delivers its events through `surface(RootId::Window(id))`,
+and takes the renderer back with `remove_window_surface`. Every shell
+method that names no root still acts on the primary surface, so the
+existing platforms compile and behave unchanged. Differences from the plan:
+
+- The per-root input entry points are methods of a `SurfaceMut` handle
+  rather than a second family of `*_on(root, ...)` methods. The handle
+  borrows the shell and the surface index, so a press can still reach
+  whole-app operations such as the dev overlay's pacing switch.
+- A window surface follows the registry by id: after each recomposition
+  the shell points it at the node registered under its id, and at nothing
+  while the window is out of the tree. Node ids are recycled, so a window
+  composed anew may get its old id back; the surface reads the registry,
+  not the id.
+- Dirty nodes are sorted by `nearest_window_root`: draw repass nodes,
+  structural parents, repass and geometry nodes all go to the surface
+  owning the window root above them, or to the primary when there is none,
+  and are dropped when their window has no surface yet. The retained
+  redraw walk stops at nested window roots. The frame-wide "draw repass
+  pending" flag became "this surface received repass nodes", which is what
+  it always meant for one surface.
+- A render invalidation is one app-wide boolean. When the frame's dirt
+  named nodes, the surfaces that received none report nothing to present;
+  when it named none, every surface presents its retained scene again.
+  This keeps a caret blink in one window from presenting every window.
+- The layout pass sets `scene_dirty` on every surface for a global pass,
+  and only on the surfaces that received geometry nodes for a scoped one;
+  a scoped pass that named no node at all marks every surface, as one
+  surface was marked before.
+- Draw observations are pruned to the union of every surface's retained
+  visual nodes, once per frame.
+- The pointer icon session moved onto the surface (`PointerIconState` is
+  public in `cranpose-ui` for that); the app context keeps its own for the
+  free functions.
+- Text input: one router sits in the app context's text input session and
+  forwards a show to the handler of the active surface, a hide to the
+  handler that showed. A press activates its surface; a platform names the
+  focused surface with `set_active_root` otherwise.
+- Focus order per root falls out of the per-surface layout snapshot, since
+  the keyboard paths collect the order from the surface's own tree.
+- `SurfaceMut::set_viewport` requests a measure repass of the window root
+  and leaves the frame to the next update, unlike `AppShell::set_viewport`,
+  which keeps its synchronous frame for the primary.
+- Semantics snapshots are per surface but the accessibility bridge still
+  reads the primary, as planned.
+
+Tests in `crates/cranpose-app-shell/src/tests/surface_tests.rs`: a press in
+a window reaches only that window's content and activates it; a hover
+changes only that surface's pointer icon; each surface snapshots its own
+root; a surface follows its root out of the tree and back; removing a
+surface hands back its renderer; the soft keyboard belongs to the active
+surface; a draw change in a window updates only that window's scene and
+only that surface reports a frame. Six mutations of the partition,
+attribution, retained walk, activation and routing were killed by them.
+`scripts/dev/function_complexity.sh` lists function complexities as the
+gate measures them, for splitting a body before it moves under a new name.

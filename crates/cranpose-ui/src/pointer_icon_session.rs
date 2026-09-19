@@ -20,20 +20,32 @@ use std::cell::RefCell;
 
 use cranpose_ui_graphics::PointerIcon;
 
-pub(crate) struct PointerIconState {
+/// The icon one window's pointer shows, with the change its platform has not
+/// applied yet. The app context keeps one for callers of the free functions
+/// below; a shell keeps one per surface, because the OS owns cursors per
+/// window.
+pub struct PointerIconState {
     current: RefCell<PointerIcon>,
     pending: RefCell<Option<PointerIcon>>,
 }
 
+impl Default for PointerIconState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PointerIconState {
-    pub(crate) fn new() -> Self {
+    /// A session showing the platform default with no change pending.
+    pub fn new() -> Self {
         Self {
             current: RefCell::new(PointerIcon::DEFAULT),
             pending: RefCell::new(None),
         }
     }
 
-    fn set(&self, icon: PointerIcon) {
+    /// Requests `icon`; a request for the icon already held changes nothing.
+    pub fn set(&self, icon: PointerIcon) {
         if *self.current.borrow() == icon {
             return;
         }
@@ -41,15 +53,18 @@ impl PointerIconState {
         *self.pending.borrow_mut() = Some(icon);
     }
 
-    fn take_change(&self) -> Option<PointerIcon> {
+    /// The change the platform has not applied yet, taken.
+    pub fn take_change(&self) -> Option<PointerIcon> {
         self.pending.borrow_mut().take()
     }
 
-    fn refresh(&self) {
+    /// Offers the held icon to the platform again, as a pending change.
+    pub fn refresh(&self) {
         *self.pending.borrow_mut() = Some(self.current.borrow().clone());
     }
 
-    fn current(&self) -> PointerIcon {
+    /// The icon currently requested, applied or not.
+    pub fn current(&self) -> PointerIcon {
         self.current.borrow().clone()
     }
 }
