@@ -2857,7 +2857,6 @@ fn focus_order_follows_the_tree_and_skips_nodes_with_no_focus_target() -> Result
     Ok(())
 }
 
-/// A window whose size a test changes between passes.
 struct TestWindow {
     size: Cell<Size>,
 }
@@ -2872,8 +2871,6 @@ impl crate::modifier::WindowRootDescriptor for TestWindow {
     }
 }
 
-/// A root stacking a leaf over a window root whose content fills whatever it
-/// is given. Returns the root, the window node and the content node.
 fn window_root_tree(
     applier: &mut MemoryApplier,
     window: Rc<TestWindow>,
@@ -3033,9 +3030,6 @@ fn window_root_subtree_is_left_out_of_the_parent_layout_tree() -> Result<(), Nod
     Ok(())
 }
 
-/// The Winamp tab's windows, placed in their own windows, were read into
-/// the primary window's semantics tree, which then named nodes the primary
-/// layout tree did not hold; the screen reader audit got no tree at all.
 #[test]
 fn window_root_subtree_is_left_out_of_the_parent_semantics_tree() -> Result<(), NodeError> {
     let _app_context = crate::render_state::app_context_test_scope();

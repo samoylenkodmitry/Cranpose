@@ -79,21 +79,17 @@ fn bind_slots_host_to_runtime_state(
     Rc::clone(host)
 }
 
-/// What a site resolved to before it opens its group.
 struct GroupEntry {
     key: crate::slot::GroupKey,
     restored: Option<crate::slot::DetachedSubtree>,
-    /// Set when `key` is a placeholder standing in for this movable key.
     placeholder_for: Option<crate::slot::GroupKey>,
 }
 
-/// Everything a started group's scope is wired with.
 struct GroupScopeEntry<'a> {
     parent_scope: Option<RecomposeScope>,
     options: RecomposeOptions,
     start_kind: GroupStartKind,
     host: &'a Rc<SlotsHost>,
-    /// The scopes of a restored subtree, root included.
     restored_scopes: Option<Vec<ScopeId>>,
 }
 
@@ -130,10 +126,6 @@ impl Drop for SlotHostPassGuard {
     }
 }
 
-/// A site that asked for movable content while that content was still
-/// attached under another parent. The site holds an empty placeholder group
-/// until the content is retained, then its enclosing scope is recomposed so
-/// the site takes the content back through the ordinary restore path.
 pub(crate) struct PendingMovable {
     pub(crate) key: crate::slot::GroupKey,
     pub(crate) placeholder: AnchorId,
@@ -284,8 +276,6 @@ impl ComposerRuntimeState {
             .is_some_and(|manager| manager.contains(key))
     }
 
-    /// Takes the retained movable with identity `id` out of whichever live
-    /// host holds it, so the caller can dispose it there.
     pub(crate) fn take_retained_movable(
         &self,
         id: Key,
@@ -889,10 +879,6 @@ impl Composer {
         Ok(finished.outcome)
     }
 
-    /// Recomposes the scope around every placeholder whose movable content
-    /// has been retained since the site asked for it. A site whose
-    /// placeholder has left the table is dropped; the rest keep waiting, so
-    /// a move whose two halves land in different passes still completes.
     fn wake_sites_whose_movable_arrived(&self, slots: &Rc<SlotsHost>) {
         let pending = self.core.shared_state.take_pending_movables(slots);
         if pending.is_empty() {
@@ -922,7 +908,6 @@ impl Composer {
         self.core.shared_state.keep_pending_movables(slots, waiting);
     }
 
-    /// Disposes the retained state of every movable identity in `ids`.
     pub(crate) fn forget_movables(&self, ids: &[Key]) -> Result<(), NodeError> {
         for id in ids {
             let Some((host, subtree)) = self.core.shared_state.take_retained_movable(*id) else {
@@ -1147,9 +1132,6 @@ impl Composer {
         self.apply_pending_commands()
     }
 
-    /// Which group a site opens: the reserved key, the retained subtree it
-    /// takes back, and, for a movable whose content is still attached under
-    /// another parent, the movable key the placeholder stands in for.
     fn resolve_group_entry(
         &self,
         seed: crate::slot::GroupKeySeed,
@@ -1205,9 +1187,6 @@ impl Composer {
         scope
     }
 
-    /// Wires a started group's scope into the composition: activity, parent
-    /// scope, lifetime owner, retention, forced recomposition, host, stacks,
-    /// locals and the parent node hint.
     fn enter_group_scope(&self, scope_ref: &RecomposeScope, entry: GroupScopeEntry<'_>) {
         let GroupScopeEntry {
             parent_scope,
@@ -1257,10 +1236,6 @@ impl Composer {
         scope_ref.set_parent_hint(parent_hint);
     }
 
-    /// Points every scope of a restored subtree at the parent it now lives
-    /// under. A scope with no node between it and the subtree root still
-    /// names the old parent node as the place its nodes attach, and the
-    /// whole subtree was deactivated when it was retained.
     fn reparent_restored_scopes(
         &self,
         root: &RecomposeScope,
@@ -1383,9 +1358,6 @@ impl Composer {
         result.expect("group body must run exactly once")
     }
 
-    /// Composes `f` as movable content with identity `id`. The body does not
-    /// run while the content is attached under another parent; the site
-    /// composes again once the content is retained.
     pub(crate) fn with_movable_group(&self, id: Key, f: impl FnOnce(&Composer)) {
         let mut f = Some(f);
         self.with_group_seed_dyn(crate::slot::GroupKeySeed::movable(id), &mut |composer| {
@@ -1528,10 +1500,6 @@ impl Composer {
         Ok(())
     }
 
-    /// Retains or disposes each detached subtree. Movable content is always
-    /// retained under its own identity: a movable root as a whole, and every
-    /// movable nested below any root split out first, so it survives the
-    /// disposal of what contained it and can be taken back by any parent.
     fn handle_detached_children_in_host(
         &self,
         slots_host: &Rc<SlotsHost>,

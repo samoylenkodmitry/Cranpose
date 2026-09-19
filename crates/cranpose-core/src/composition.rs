@@ -532,8 +532,6 @@ impl<A: Applier + 'static> Composition<A> {
         self.process_invalid_scopes_until_root_request()
     }
 
-    /// Disposes the retained state of movable identities the app released
-    /// with [`crate::forget_movable`], applying the node removals at once.
     fn dispose_forgotten_movables(&mut self) -> Result<(), NodeError> {
         let runtime_handle = self.runtime_handle();
         let ids = runtime_handle.take_forgotten_movables();
@@ -557,8 +555,6 @@ impl<A: Applier + 'static> Composition<A> {
     }
 }
 
-/// The invalidated scopes still alive, or `None` when nothing was queued.
-/// A dead scope is marked recomposed so the queue forgets it.
 fn live_invalidated_scopes(runtime_handle: &RuntimeHandle) -> Option<Vec<RecomposeScope>> {
     let pending = runtime_handle.take_invalidated_scopes();
     if pending.is_empty() {

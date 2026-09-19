@@ -535,3 +535,87 @@ Five items, each small, each with a number or a test.
   keep. The traces are macros that evaluate their arguments only when the
   trace is on, and read their environment variable once.
 
+## Second cut: windows are modifiers, nothing else
+
+The first cut left three gaps the review named: the launcher and the shell
+still command windows, the demos carry a model and a host of their own to
+tear a page out, and the framework grew helpers a developer has to learn.
+The second cut removes all three. What an application writes:
+
+```rust
+let torn = rememberMutableStateOf(|| false);
+let modifier = if torn.get() {
+    Modifier::empty().window(WindowConfig::borderless("Tab 2", 520.0, 360.0))
+} else {
+    Modifier::empty()
+};
+Column(modifier, ColumnSpec::default(), || { ... });
+```
+
+A subtree is in its own window while the modifier is applied and back in
+place when it is not; its remembered state and running effects survive
+either way, because the modifier only changes where the subtree is laid out
+and drawn. Everything a window can do is a modifier on that subtree, or a
+field of its `WindowConfig`:
+
+- `window(config)`: be a window. `config` carries title, size, position,
+  decorations, transparency, focus policy, and a `group(id, policy)` for
+  windows that snap to and move with their peers, which is what
+  `WindowGroup` did as a composable.
+- `window_drag_area()` and `window_resize_area(direction)`: move and resize
+  the window from this node, as today. A window created while the pointer
+  is still down in another window takes that press as its drag, so a page
+  torn out under the pointer follows it without the application moving
+  anything.
+- `drag_and_drop_source(payload)` and `drag_and_drop_target(handlers)`:
+  Compose's pair, routed across windows. The shell tracks one transfer by
+  screen position and finds targets in every surface; the target's handlers
+  see enter, move, exit and drop with the payload. The source's handlers
+  see the drag start, where it is, and that it ended outside every target.
+
+What leaves: `Window`, `WindowNode`, `WindowGroup`, `AppLauncher::run_windows`
+and `try_run_windows`, `WindowView`, `TornWindowsHost` and the torn-windows
+model. The primary window shows the root composition; when the root
+composition places every visible node in a window of its own, the primary
+window stays hidden, which the launcher decided by a flag before. The shell
+keeps its surfaces, but what a platform loop calls to open, close and
+address them lives on one `Surfaces` handle documented as the platform
+contract, not on the application-facing shell.
+
+The tabs demo becomes pages, each inline or in a window of its own, a strip
+that is a drop target, and tabs that are drag sources; the tool windows
+demo becomes three panes with `window(config.group(...))`, snapped and
+carried by the framework's window group. Neither has a model.
+
+### Steps
+
+1. **Tests out of implementation files.** Every inline `#[cfg(test)] mod`
+   in a file this branch touched moves to a `tests/` file beside it,
+   declared through `#[path]`, so `use super::*` keeps its reach
+   (`scripts/dev/move_inline_tests.py`).
+2. **Comments.** Only documentation of public items in published crates
+   stays; every other comment goes (`scripts/dev/strip_private_docs.py`).
+3. **`window(config)` and `WindowConfig::group`.** The composable wrappers
+   are deleted; Winamp and the demos apply the modifier. A window's
+   identity is the node that carries the modifier, so an application names
+   nothing: the node keeps its identity across recompositions and moves,
+   and the modifier's node registers the window request on attach, on
+   every config change, and unregisters on detach, where the wrappers ran
+   effects. A group's drag leader is a config flag (`leads_group`), since
+   no application can name another window's node. Popups inside a window
+   subtree still register with the primary window's host; a host per
+   window is a follow-up the surfaces make possible.
+4. **The launcher sets the root composition only.** `run_windows` and
+   `try_run_windows` go; the primary window hides itself when the root
+   composition has nothing of its own to show. The shell's surface
+   management moves onto a `Surfaces` handle for platform loops.
+5. **A new window under a held press follows the pointer.** The desktop's
+   drag session starts from the press already in flight when the node
+   under it now lives in a window that just appeared.
+6. **Drag and drop across windows.** The two modifiers, the shell's transfer
+   tracking across surfaces, and tests for enter, exit, drop and a drop
+   outside every target.
+7. **Demos on the modifiers.** Tabs and tool windows rewritten as above,
+   `torn_windows.rs` deleted, the drag tool reading the demos' new trace.
+8. **Docs and PR.** As built, the PR description, and the gates.
+

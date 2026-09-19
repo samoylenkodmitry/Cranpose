@@ -206,7 +206,6 @@ fn layout_box_bounds(layout_box: &LayoutBox) -> (f32, f32, f32, f32) {
     )
 }
 
-/// The layout tree and headless scene of `surface`, for a log.
 fn debug_info_report<R: Renderer>(app: &mut ShellApp, surface: &mut RootSurface<R>) -> String {
     let app_context = std::rc::Rc::clone(&app.app_context);
     app_context.enter(|| {

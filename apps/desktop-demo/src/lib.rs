@@ -47,8 +47,6 @@ fn create_app() -> AppLauncher {
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
-/// Starts the demo's logger when the `logging` feature is on, so a binary
-/// built with it prints what `RUST_LOG` asks for.
 pub fn init_logging() {
     #[cfg(feature = "logging")]
     let _ = env_logger::try_init();

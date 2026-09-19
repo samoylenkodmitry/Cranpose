@@ -113,9 +113,6 @@ impl<R: Renderer> RootSurface<R> {
         }
     }
 
-    /// The node this surface draws from: the composition root for the
-    /// primary surface, the window root node for a window surface while it
-    /// is attached.
     pub(crate) fn root_node(&self, app: &ShellApp) -> Option<NodeId> {
         match self.id {
             RootId::Primary => app.composition.root(),
@@ -123,8 +120,6 @@ impl<R: Renderer> RootSurface<R> {
         }
     }
 
-    /// Whether a node whose nearest window root is `window_root` draws here.
-    /// The primary surface owns the nodes under no window root.
     pub(crate) fn owns_nodes_under(&self, window_root: Option<NodeId>) -> bool {
         match self.id {
             RootId::Primary => window_root.is_none(),
@@ -139,9 +134,6 @@ impl<R: Renderer> RootSurface<R> {
         }
     }
 
-    /// Points a window surface at `root`, forgetting everything built for
-    /// the previous root. The next frame rebuilds the scene, which is empty
-    /// while there is no root.
     pub(crate) fn set_root(&mut self, root: Option<NodeId>) {
         if self.root == root {
             return;
@@ -167,17 +159,10 @@ impl<R: Renderer> RootSurface<R> {
             && self.hit_path_tracker.has_path(PointerId::PRIMARY)
     }
 
-    /// A renderer warmup is a frame rendered only so caches see their content
-    /// a second time. While a frame callback is armed the app is about to
-    /// produce a frame anyway, and rendering the same scene again first would
-    /// double every animated frame's cost for entries the next frame replaces.
     pub(crate) fn renderer_warmup_due(&self, app: &ShellApp) -> bool {
         self.renderer.needs_frame_warmup() && !app.runtime.runtime_handle().has_frame_callbacks()
     }
 
-    /// Whether this surface owes the display a frame: its own dirt, work
-    /// queued for every surface, or a renderer warmup. Read inside the app
-    /// context.
     pub(crate) fn needs_redraw_in_context(&self, app: &ShellApp) -> bool {
         app.has_stale_work_in_context()
             || self.is_dirty
@@ -185,9 +170,6 @@ impl<R: Renderer> RootSurface<R> {
             || self.renderer_warmup_due(app)
     }
 
-    /// The frame this surface asks its platform for. `surfaces_dirty` says
-    /// whether any surface of the app is dirty, which is what makes an
-    /// update worth running.
     pub(crate) fn compute_frame_schedule(
         &self,
         app: &ShellApp,
@@ -275,10 +257,6 @@ impl<R: Renderer> RootSurface<R> {
     }
 }
 
-/// Which surface's platform text input the app context's one text input
-/// session reaches: the surface the platform last called active, and the
-/// surface whose keyboard is showing, so a hide reaches the window that
-/// showed it even after activity moved on.
 #[derive(Default)]
 pub(crate) struct TextInputRoutes {
     active: Option<RootId>,
@@ -329,8 +307,6 @@ impl TextInputRoutes {
     }
 }
 
-/// The handler the shell installs in the app context's text input session:
-/// forwards each request to the surface it belongs to.
 pub(crate) struct TextInputRouter {
     pub(crate) routes: Rc<RefCell<TextInputRoutes>>,
 }
@@ -351,9 +327,6 @@ impl PlatformTextInputHandler for TextInputRouter {
     }
 }
 
-/// Sorts `nodes` into the surfaces that draw them. Nodes that hang from no
-/// surface are dropped: detached nodes, and nodes under a window root the
-/// platform has not given a surface yet, which starts fully dirty anyway.
 pub(crate) fn partition_nodes_by_surface<R: Renderer>(
     app: &mut ShellApp,
     surfaces: &[RootSurface<R>],
@@ -421,8 +394,6 @@ where
         &mut self.shell.surfaces[self.index]
     }
 
-    /// The app and this surface, borrowed apart, for code that reads the
-    /// scene while it drives the applier.
     pub(crate) fn parts(&mut self) -> (&mut ShellApp, &mut RootSurface<R>) {
         let shell = &mut *self.shell;
         (&mut shell.app, &mut shell.surfaces[self.index])

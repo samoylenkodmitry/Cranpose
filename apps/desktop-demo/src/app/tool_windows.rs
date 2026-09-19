@@ -1,13 +1,3 @@
-//! Tool windows that stack and snap, the way a classic media player's do.
-//!
-//! Three panes of different heights. Drag a pane's title to tear it out of
-//! its window into a window of its own that follows the pointer, and carry
-//! it to just above or just below another window to snap it on: the two
-//! become one window, sized for both. Drag a pane's body to move the window
-//! that holds it, panes and all. Every pair and every triple is reachable.
-//! Each pane is `movable` content, so the window that shows it composes the
-//! same subtree wherever it goes; the grip sits inside that content and names
-//! only the pane.
 #![allow(non_snake_case)]
 
 use cranpose::WindowModifierExt;
@@ -19,7 +9,6 @@ use super::{
     torn_windows::{Axis, Rules, TornWindowsHost, WindowView, Windows},
 };
 
-/// One tool pane: its identity, its label, its size and its tint.
 #[derive(Clone, Copy, PartialEq, Debug)]
 struct Tool {
     key: u64,
@@ -60,7 +49,6 @@ fn tools() -> [Tool; 3] {
     ]
 }
 
-/// Three snapping tool windows.
 #[composable]
 pub fn tool_windows_app() {
     let rules = Rules::stack(

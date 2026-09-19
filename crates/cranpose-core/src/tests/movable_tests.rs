@@ -2,8 +2,6 @@ use super::*;
 
 const MOVABLE_ID: &str = "movable-content";
 
-/// What one composition of the movable content exposed, read back by a test
-/// after every pass.
 #[derive(Default)]
 struct MovableProbe {
     node: Cell<Option<NodeId>>,
@@ -36,8 +34,6 @@ impl MovableProbe {
             .with(|value| *value)
     }
 
-    /// Writes into the remembered slot, so a later pass can prove the slot
-    /// survived rather than being re-initialised to the same value.
     fn seed_remembered(&self, value: i32) {
         self.remembered
             .borrow()
@@ -60,9 +56,6 @@ impl MovableProbe {
         self.assert_alive(context);
     }
 
-    /// The checks of [`Self::assert_untouched`] that need no fresh
-    /// composition of the content: nothing dropped, unmounted, cancelled or
-    /// cleaned up.
     fn assert_alive(&self, context: &str) {
         assert_eq!(self.payload_drops.get(), 0, "payload drops: {context}");
         assert_eq!(self.node_unmounts.get(), 0, "node unmounts: {context}");
@@ -91,8 +84,6 @@ fn probe() -> Rc<MovableProbe> {
     PROBE.with(Rc::clone)
 }
 
-/// The content every test moves around: a remembered value, a running
-/// launched effect, a disposable effect and one node.
 fn movable_content() {
     let probe = probe();
     probe.bodies.set(probe.bodies.get() + 1);
@@ -141,7 +132,6 @@ fn holder(label: &'static str, show: bool) -> NodeId {
     id
 }
 
-/// The node ids two holders exposed on the last render.
 #[derive(Clone, Default)]
 struct TwoHolders {
     first: Rc<Cell<Option<NodeId>>>,
@@ -157,8 +147,6 @@ impl TwoHolders {
     }
 }
 
-/// Renders `body` as the root content, with the probe cleared first so a
-/// pass that composes nothing leaves nothing behind to read.
 fn render_holders(
     composition: &mut Composition<MemoryApplier>,
     root_key: Key,
@@ -175,10 +163,6 @@ fn render_holders(
     assert_composition_valid(composition);
 }
 
-/// Two parents, the first composed before the second. Moving from the
-/// first to the second lets the old parent release the content before the
-/// new one asks; moving back makes the new parent ask first, so it waits on
-/// a placeholder until the old parent's sweep retains the content.
 #[test]
 fn movable_content_keeps_node_state_and_effects_in_both_orderings() {
     let mut composition = test_composition();
@@ -223,8 +207,6 @@ fn movable_content_keeps_node_state_and_effects_in_both_orderings() {
     );
 }
 
-/// The new parent asks in one pass and the old parent releases in a later
-/// one. The site waits on its placeholder across the pass boundary.
 #[test]
 fn movable_content_arrives_when_the_old_parent_releases_it_a_pass_later() {
     let mut composition = test_composition();
@@ -273,16 +255,11 @@ fn movable_content_arrives_when_the_old_parent_releases_it_a_pass_later() {
     assert_eq!(composition.debug_slot_snapshot().retained_subtree_count, 0);
 }
 
-/// The movable content behind a skippable composable of its own, the way a
-/// page body sits behind a composable in an app: a restore that recomposes
-/// the movable root leaves this one skipped.
 #[composable]
 fn framed_movable_content() {
     movable_content();
 }
 
-/// A holder with a node before and after the movable. With `framed`, the
-/// movable content sits behind [`framed_movable_content`].
 #[composable]
 fn rich_holder(show: bool, payload_drops: Rc<Cell<usize>>, framed: bool) -> NodeId {
     let id = with_current_composer(|composer| composer.emit_node(RecordingNode::default));
@@ -308,9 +285,6 @@ fn rich_holder(show: bool, payload_drops: Rc<Cell<usize>>, framed: bool) -> Node
     id
 }
 
-/// A window that closes because its last tab left: the parent subtree is
-/// disposed while the movable inside it moves on, with its own payloads
-/// and node intact and the parent's payloads dropped.
 #[test]
 fn movable_content_survives_the_disposal_of_the_parent_that_held_it() {
     let mut composition = test_composition();
@@ -355,7 +329,6 @@ fn movable_content_survives_the_disposal_of_the_parent_that_held_it() {
     assert_eq!(composition.debug_slot_snapshot().retained_subtree_count, 0);
 }
 
-/// Content is shown at most once: a second live site composes nothing.
 #[test]
 fn movable_content_shown_twice_leaves_the_later_site_empty() {
     let mut composition = test_composition();
@@ -386,8 +359,6 @@ fn movable_content_shown_twice_leaves_the_later_site_empty() {
     assert_eq!(composition.debug_slot_snapshot().retained_subtree_count, 0);
 }
 
-/// Content no parent shows is kept, pinned against the retention budget,
-/// until the app forgets it; forgetting disposes node, payloads and effects.
 #[test]
 fn movable_content_is_pinned_until_forgotten() {
     let mut composition = test_composition_retaining_at_most(1);
@@ -493,9 +464,6 @@ fn scope_holder(show: bool, counter: MutableState<i32>) -> NodeId {
     id
 }
 
-/// A scope two levels below the movable root, with a skipped composable
-/// between, still recomposes after a move and attaches its node under the
-/// new parent: the whole subtree is reactivated and repointed on arrival.
 #[test]
 fn movable_inner_scope_recomposes_under_the_new_parent_after_a_move() {
     let mut composition = test_composition();
@@ -555,9 +523,6 @@ fn movable_inner_scope_recomposes_under_the_new_parent_after_a_move() {
     assert!(parent_children(&mut composition, first).is_empty());
 }
 
-/// A node around a rich holder, the way a window's root box sits around
-/// the column that shows a page. `pass` changes so the wrapper recomposes
-/// while the holder inside it is skipped.
 #[composable]
 fn wrapped_rich_holder(
     pass: u32,
@@ -572,12 +537,6 @@ fn wrapped_rich_holder(
     id
 }
 
-/// A window opened by a tear: its strip composes fresh in the same pass in
-/// which the movable page arrives from the window it left. The page must
-/// land after the strip, where the parent emitted it, and stay there when
-/// a later pass skips that parent: a root node record still naming the
-/// old parent would be taken for a root of the skipped group and hung
-/// under the wrapper instead.
 #[test]
 fn movable_content_arriving_in_a_fresh_parent_keeps_its_place_among_siblings() {
     let mut composition = test_composition();

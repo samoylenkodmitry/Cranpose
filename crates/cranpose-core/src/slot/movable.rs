@@ -13,28 +13,20 @@ use super::{
 };
 use crate::{AnchorId, Key, collections::map::HashMap};
 
-/// The static half of every movable group's key. It is one fixed value
-/// rather than a call-site key so a movable has the same identity wherever
-/// it is emitted.
 pub(crate) const MOVABLE_STATIC_KEY: Key = 0x6d6f_7661_626c_6521;
 
-/// The static half of the placeholder a site keeps while the movable it asked
-/// for is still attached somewhere else in the same table.
 pub(crate) const MOVABLE_PLACEHOLDER_STATIC_KEY: Key = 0x6d6f_7661_626c_6520;
 
 impl GroupKey {
-    /// Whether this key names movable content.
     pub(crate) fn is_movable(self) -> bool {
         self.static_key == MOVABLE_STATIC_KEY && self.explicit_key.is_some()
     }
 
-    /// The movable identity this key carries, if it names movable content.
     pub(crate) fn movable_id(self) -> Option<Key> {
         self.is_movable().then_some(self.explicit_key).flatten()
     }
 }
 
-/// Which attached group currently holds each movable identity in a table.
 #[derive(Default)]
 pub(crate) struct MovableIndex {
     anchors: HashMap<Key, AnchorId>,
@@ -77,7 +69,6 @@ impl MovableIndex {
 }
 
 impl SlotTable {
-    /// Whether `anchor` names a group that is attached in this table.
     pub(crate) fn group_is_active(&self, anchor: AnchorId) -> bool {
         self.active_group_index(anchor).is_some()
     }
@@ -90,9 +81,6 @@ impl SlotTable {
 }
 
 impl SlotWriteSession<'_> {
-    /// Whether `key` names a movable whose content is attached under a parent
-    /// other than the one being composed. Content under the same parent is
-    /// this site's own group, which the keyed reconciliation reuses.
     pub(crate) fn movable_attached_elsewhere(&self, key: GroupKey) -> bool {
         let Some(id) = key.movable_id() else {
             return false;
@@ -104,11 +92,6 @@ impl SlotWriteSession<'_> {
 }
 
 impl DetachedSubtree {
-    /// Splits every movable group below the root out into its own detached
-    /// subtree, so each keeps its state under its own identity rather than
-    /// leaving with, or being disposed with, whatever contained it. A movable
-    /// nested inside another leaves with the outer one's split, which is why
-    /// the scan restarts at the index a split vacates.
     pub(crate) fn split_off_nested_movables(&mut self) -> Vec<DetachedSubtree> {
         let mut split = Vec::new();
         let mut index = 1;
@@ -177,9 +160,6 @@ impl DetachedSubtree {
         subtree
     }
 
-    /// Shrinks the span and node count of every ancestor of the group that
-    /// sat at `index` with depth `depth`: the nearest earlier group at each
-    /// shallower depth, up to the root.
     fn shrink_ancestors_before(&mut self, index: usize, depth: u32, span: i64, nodes: i64) {
         let span = CheckedU32Delta::from_i64(-span, "detached group subtree span");
         let nodes = CheckedU32Delta::from_i64(-nodes, "detached group subtree node count");

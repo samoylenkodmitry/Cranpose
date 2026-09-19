@@ -1,14 +1,3 @@
-//! Browser-style tabs over ordinary composables.
-//!
-//! The application owns its pages and draws its own strip. Each page's body
-//! is `movable` content keyed by the page, so whichever window shows it
-//! composes the same subtree: the click counter remembered inside the body is
-//! the proof that a torn tab keeps its state, since nothing above the body
-//! holds it. Which window holds which tab, tearing a tab out under the
-//! pointer, dropping it onto another strip, opening and closing windows are
-//! the app's [`TornWindowsHost`], written over `WindowNode` and the pointer
-//! events' screen positions.
-
 #![allow(non_snake_case)]
 
 use cranpose::WindowModifierExt;
@@ -20,19 +9,14 @@ use cranpose_ui::{
 
 use super::torn_windows::{Rules, TornWindowsHost, WindowView};
 
-/// What one tab holds.
 #[derive(Clone, PartialEq, Debug)]
 pub struct Page {
-    /// Identity of the page, stable across every window it is torn into.
     pub id: u64,
-    /// The title the strip shows.
     pub title: String,
-    /// The tint of the body, so one page stays recognisable across windows.
     pub tint: Color,
 }
 
 impl Page {
-    /// Creates the `nth` page, numbered and tinted so it can be told apart.
     pub fn new(nth: u64) -> Self {
         let hue = (nth as f32 * 0.37).fract();
         Self {
@@ -53,12 +37,10 @@ fn tint_for(hue: f32) -> Color {
     )
 }
 
-/// The key a page's movable body is retained under.
 fn page_key(id: u64) -> (&'static str, u64) {
     ("page", id)
 }
 
-/// The whole demo: pages declared as panes, windows left to the host.
 #[composable]
 pub fn chrome_tabs_app() {
     let pages = rememberMutableStateOf(|| vec![Page::new(1)]);
@@ -78,8 +60,6 @@ pub fn chrome_tabs_app() {
     });
 }
 
-/// One window: the strip, then the page in front. A parked window holds no
-/// pane and shows no page, so the page it last showed is free to move on.
 #[composable]
 fn BrowserWindow(view: WindowView, pages: MutableState<Vec<Page>>, next: MutableState<u64>) {
     let active = view.active();
@@ -191,8 +171,6 @@ fn NewTabButton(view: WindowView, pages: MutableState<Vec<Page>>, next: MutableS
     );
 }
 
-/// A page's body. The counter is remembered here, inside the movable
-/// subtree, and so goes with the page wherever it is torn to.
 #[composable]
 fn PageBody(page: Page) {
     let clicks = rememberMutableStateOf(|| 0u32);

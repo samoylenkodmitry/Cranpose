@@ -326,8 +326,6 @@ pub(crate) fn test_composition() -> Composition<MemoryApplier> {
     Composition::new(test_applier())
 }
 
-/// A composition whose retention budget keeps at most `subtrees` detached
-/// subtrees, evicting the least recently detached one first.
 pub(crate) fn test_composition_retaining_at_most(subtrees: usize) -> Composition<MemoryApplier> {
     let composition = test_composition();
     composition.set_retention_policy(RetentionPolicy {

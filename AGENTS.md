@@ -3,7 +3,7 @@
 - No unsafe code.
 - `unwrap()` is forbidden
 - Use KISS, DRY and SOLID; duplicated code of ten or more lines needs a shared abstraction.
-- Do every refactoring, code search and code analysis through the RustRover MCP (`mcp__rustrover__*`): `rename_refactoring` for renames, `search_symbol`, `search_text`, `search_regex` and `analyze_calls` for search and call graphs, `get_file_problems`, `lint_files` and `run_inspection_kts` for analysis, `reformat_file` for formatting. Pass `projectPath` on every call; when the tools are missing, open the tree in RustRover first (`open -a RustRover <path>`), and say so before any fallback.
+- Do every refactoring, code search and code analysis through the RustRover MCP (`mcp__rustrover__*`): `rename_refactoring` for renames, `search_symbol`, `search_text`, `search_regex` and `analyze_calls` for search and call graphs, `get_file_problems`, `lint_files` and `run_inspection_kts` for analysis, `reformat_file` for formatting; for searches run `scripts/dev/ide_search.py text|regex|symbol|file <query> [--in <glob>]... [--context N]` from the project root, which asks the same IDE server and prints each hit as path, line and matched text. Pass `projectPath` on every call; when the tools are missing, open the tree in RustRover first (`open -a RustRover <path>`), and say so before any fallback.
 - Fix root causes completely; do not leave partial changes, deprecated paths or compatibility layers in this pre-alpha repository.
 - A wrong value fixed at one consumer is still wrong at the others; audit every consumer of that value before calling the bug fixed.
 - Review architecture, correctness and maintainability before completion; fix supported problems without inventing new ones.
@@ -13,9 +13,9 @@
 - Use specific `Result<T, E>` errors for failure and `Option<T>` for absence.
 - Use idiomatic Rust names; composable functions use CamelCase.
 - Prefer `async`/`await` and Tokio for asynchronous work.
-- Document every public API reachable from a published crate root; all other code comments are forbidden.
+- Document every public API reachable from a published crate root; all other code comments are forbidden (`scripts/dev/strip_private_docs.py <file>...` removes the rest).
 - Write unit tests for all public functions and methods; put integration tests in `tests/`.
-- do not write tests in the same file with the implementation; all tests should be under `/test*/` folder
+- do not write tests in the same file with the implementation; all tests should be under `/test*/` folder, declared with `#[cfg(test)] #[path = "tests/<name>.rs"] mod tests;` (`scripts/dev/move_inline_tests.py <file>...` moves an inline module out)
 - Do not hardcode configuration; consider parallelism and SIMD where measured benefits hold, including wasm.
 - `#[cfg(feature = "robot-app")]` is forbidden.
 - Use plain, direct explanations; omit historical labels, "migration", and conditional offers to fix known problems.

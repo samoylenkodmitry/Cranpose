@@ -108,13 +108,6 @@ fn log_render_phase_dirty_diagnostics(diagnostics: RenderPhaseDirtyDiagnostics<'
     }
 }
 
-/// The invalidations one frame takes once and applies to every surface.
-///
-/// `attributed` says the frame's dirt named nodes: some surface received
-/// draw, layout or structural nodes. A render invalidation that came with
-/// nodes belongs to the surfaces holding them, so the others have nothing to
-/// present; one that came with none could concern any surface, so every
-/// surface presents its retained scene again.
 #[derive(Clone, Copy)]
 struct FrameDirt {
     render_dirty: bool,
@@ -123,8 +116,6 @@ struct FrameDirt {
     recomposed_this_frame: bool,
 }
 
-/// What one surface's frame decided from the dirt handed to it: the node
-/// lists it will feed its renderer, and the path those lists put it on.
 struct SurfaceDirt {
     draw_dirty_nodes: Vec<NodeId>,
     layout_dirty_nodes: Vec<NodeId>,
@@ -234,13 +225,11 @@ impl SurfaceDirt {
     }
 }
 
-/// What one surface's frame produced, and whether its scene was rebuilt.
 struct SurfaceFrame {
     result: FrameUpdateResult,
     rebuilt: bool,
 }
 
-/// The nodes waiting for a scoped layout or measure repass, each once.
 fn pending_repass_nodes() -> Vec<NodeId> {
     let mut nodes = if cranpose_ui::has_pending_layout_repasses() {
         cranpose_ui::pending_layout_repass_nodes_snapshot()
@@ -257,8 +246,6 @@ fn pending_repass_nodes() -> Vec<NodeId> {
     nodes
 }
 
-/// Marks the composition root for a full measure and layout, whichever kind
-/// of layout node it is.
 fn mark_root_for_layout(applier: &mut MemoryApplier, root: NodeId) {
     match applier.with_node::<LayoutNode, _>(root, |node| {
         node.mark_needs_measure();
@@ -433,8 +420,6 @@ where
         }
     }
 
-    /// Drops every surface's layout and semantics snapshot after a layout
-    /// pass, and moves the semantics revision.
     fn forget_frame_snapshots(&mut self) {
         self.app.semantics_snapshot_revision = self.app.semantics_snapshot_revision.wrapping_add(1);
         for surface in &mut self.surfaces {
@@ -442,8 +427,6 @@ where
         }
     }
 
-    /// The state after a layout pass that could not run or failed: no
-    /// snapshots, no scoped nodes, every scene to be rebuilt.
     fn reset_layout_snapshots(&mut self) {
         self.forget_frame_snapshots();
         for surface in &mut self.surfaces {
@@ -455,9 +438,6 @@ where
         self.app.force_layout_pass = false;
     }
 
-    /// Hands each surface the nodes whose geometry the layout pass changed.
-    /// A global pass rebuilds every scene instead; a scoped pass that named
-    /// no node at all does the same, since something moved.
     fn record_layout_scene_nodes(
         &mut self,
         global: bool,
@@ -627,8 +607,6 @@ where
         app_context.enter(|| self.run_render_phase_in_context(false))
     }
 
-    /// Takes this frame's invalidations once, sorts the dirty nodes to the
-    /// surfaces that draw them, and renders every surface.
     fn run_render_phase_in_context(&mut self, recomposed_this_frame: bool) -> FrameUpdateResult {
         cranpose_ui::tick_cursor_blink();
         let render_dirty = take_render_invalidation();
@@ -682,8 +660,6 @@ where
     }
 }
 
-/// Renders one surface from the dirt handed to it, or decides that nothing
-/// it draws changed.
 fn render_surface<R>(
     app: &mut ShellApp,
     surface: &mut RootSurface<R>,
@@ -799,8 +775,6 @@ fn draw_dev_overlay<R: Renderer>(app: &ShellApp, surface: &mut RootSurface<R>) {
         .draw_dev_overlay(surface.dev_overlay_text.as_str(), viewport_size);
 }
 
-/// Refreshes the surface's layout snapshot for `dirty_nodes`, and answers
-/// them deduplicated.
 fn refresh_draw_nodes<R: Renderer>(
     app: &mut ShellApp,
     surface: &mut RootSurface<R>,
@@ -825,8 +799,6 @@ fn refresh_draw_nodes<R: Renderer>(
     dirty_set.into_iter().collect()
 }
 
-/// Takes the redraw flags the surface's tree still holds, its own window
-/// roots excluded, and refreshes the layout snapshot for them.
 fn refresh_retained_redraw_nodes<R: Renderer>(
     app: &mut ShellApp,
     surface: &mut RootSurface<R>,
@@ -995,7 +967,6 @@ pub(crate) fn build_draw_refresh_scope(
     refresh_scope
 }
 
-/// Takes the redraw flag `node_id` holds, whichever kind of layout node it is.
 fn take_needs_redraw(applier: &mut MemoryApplier, node_id: NodeId) -> bool {
     match applier.with_node::<LayoutNode, _>(node_id, |node| {
         let needs_redraw = node.needs_redraw();
@@ -1018,9 +989,6 @@ fn take_needs_redraw(applier: &mut MemoryApplier, node_id: NodeId) -> bool {
     }
 }
 
-/// Collects the nodes under `root` that still hold a redraw flag, taking the
-/// flags. A window root below `root` belongs to another surface and is left
-/// alone with its subtree.
 fn collect_retained_redraw_nodes(
     applier: &mut MemoryApplier,
     root: NodeId,
@@ -1087,42 +1055,5 @@ fn refresh_layout_box_data(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn retained_redraw_traversal_keeps_wide_child_lists_and_clears_only_attached_nodes() {
-        cranpose_ui::AppContext::new().enter(|| {
-            let mut applier = MemoryApplier::new();
-            let children: Vec<_> = (0..16)
-                .map(|_| {
-                    let node = LayoutNode::new_virtual();
-                    node.clear_needs_redraw();
-                    applier.create(Box::new(node))
-                })
-                .collect();
-            let detached = applier.create(Box::new(LayoutNode::new_virtual()));
-            let mut parent = LayoutNode::new_virtual();
-            parent.clear_needs_redraw();
-            parent.children.clone_from(&children);
-            let root = applier.create(Box::new(parent));
-            for id in [children[0], children[15], detached] {
-                applier
-                    .with_node::<LayoutNode, _>(id, |node| node.mark_needs_redraw())
-                    .expect("node to redraw");
-            }
-
-            let mut dirty = Vec::new();
-            collect_retained_redraw_nodes(&mut applier, root, &mut dirty);
-            assert_eq!(dirty, [children[0], children[15]]);
-            dirty.clear();
-            collect_retained_redraw_nodes(&mut applier, root, &mut dirty);
-            assert!(dirty.is_empty());
-            assert!(
-                applier
-                    .with_node::<LayoutNode, _>(detached, |node| node.needs_redraw())
-                    .expect("detached node")
-            );
-        });
-    }
-}
+#[path = "tests/shell_frame_tests.rs"]
+mod tests;

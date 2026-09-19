@@ -72,9 +72,6 @@ pub(crate) struct RetainKey {
 }
 
 impl RetainKey {
-    /// The key a group with `key` is retained under when it leaves the child
-    /// list of `parent_scope`. Movable content is keyed by its identity
-    /// alone, so any parent can take it back.
     pub(crate) fn for_group(parent_scope: Option<ScopeId>, key: GroupKey) -> Self {
         Self {
             parent_scope: if key.is_movable() { None } else { parent_scope },
@@ -88,8 +85,6 @@ pub(crate) struct RetainedGroup {
     detached_pass: u64,
     detached_order: u64,
     last_restored_order: u64,
-    /// A pinned group is never evicted by the budget: its owner asked for
-    /// the state to be kept until it is taken back or forgotten.
     pinned: bool,
 }
 
@@ -615,40 +610,5 @@ fn retain_key_cmp(left: &RetainKey, right: &RetainKey) -> Ordering {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn retention_budget_default_is_unbounded() {
-        assert_eq!(RetentionBudget::default(), RetentionBudget::UNBOUNDED);
-        assert_eq!(RetentionBudget::default().max_retained_subtrees, None);
-        assert_eq!(RetentionBudget::default().max_retained_bytes, None);
-        assert_eq!(RetentionBudget::default().max_age_passes, None);
-    }
-
-    #[test]
-    fn retention_policy_default_uses_unbounded_budget_and_detach_lru() {
-        assert_eq!(RetentionPolicy::default(), RetentionPolicy::UNBOUNDED);
-        assert_eq!(
-            RetentionPolicy::default().budget,
-            RetentionBudget::UNBOUNDED
-        );
-        assert_eq!(
-            RetentionPolicy::default().eviction,
-            RetentionEvictionPolicy::LeastRecentlyDetached
-        );
-    }
-
-    #[test]
-    fn retention_budget_can_express_all_limits() {
-        let budget = RetentionBudget {
-            max_retained_subtrees: Some(3),
-            max_retained_bytes: Some(4096),
-            max_age_passes: Some(5),
-        };
-
-        assert_eq!(budget.max_retained_subtrees, Some(3));
-        assert_eq!(budget.max_retained_bytes, Some(4096));
-        assert_eq!(budget.max_age_passes, Some(5));
-    }
-}
+#[path = "tests/retention_tests.rs"]
+mod tests;

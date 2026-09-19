@@ -27,8 +27,6 @@ fn cranpose_manifest(service: &str) -> String {
     format!("crates/cranpose/android/manifests/{service}.xml")
 }
 
-/// The variant name a service carries in `Service`, from the name the plugin
-/// knows it by: `photo-library` is `PhotoLibrary`.
 fn pascal(service: &str) -> String {
     service
         .split('-')
@@ -2089,9 +2087,6 @@ fn source_has_unsafe_boundary_escape(source: &str) -> bool {
     })
 }
 
-/// Blanks out string and character literals so a keyword spelled inside one is
-/// not read as code. A syntax highlighter's keyword table lists `"unsafe"`
-/// without going anywhere near an FFI boundary.
 fn strip_quoted_spans(line: &str) -> String {
     let bytes = line.as_bytes();
     let mut out = String::with_capacity(line.len());

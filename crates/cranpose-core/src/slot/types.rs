@@ -39,9 +39,6 @@ impl GroupKey {
 pub(crate) struct GroupKeySeed {
     pub(crate) static_key: Key,
     pub(crate) explicit_key: Option<Key>,
-    /// Whether `static_key` is final as given. A seed from a call site has
-    /// the enclosing branch path folded in so two sites never collide; a
-    /// movable's identity must be the same at every site, so it opts out.
     pub(crate) exact: bool,
 }
 
@@ -396,11 +393,6 @@ impl DetachedSubtree {
         self.set_node_lifecycle(NodeLifecycle::RetainedDetached);
     }
 
-    /// Names `parent` as the parent of every root node of this subtree, so
-    /// the records say where the nodes hang once the subtree is restored
-    /// under a new parent. A group skipped later collects its root nodes from
-    /// these records; a root still naming the old parent would be taken for
-    /// a root of the enclosing group and attached a level too high.
     pub(crate) fn set_root_nodes_parent(&mut self, parent: Option<NodeId>) {
         let mut roots = Vec::new();
         self.collect_root_nodes_into(&mut roots);

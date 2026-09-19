@@ -247,8 +247,6 @@ struct ModifierChainMeasurement {
     size: Size,
     content_offset: Point,
     offset: Point,
-    /// The chain carries a window root, so the parent is told a zero size
-    /// while the node keeps `size` as its own.
     window_root: bool,
 }
 
@@ -955,8 +953,6 @@ pub fn tree_needs_layout(applier: &mut dyn Applier, root: NodeId) -> Result<bool
     Ok(applier.get_mut(root)?.needs_layout())
 }
 
-/// Tells the modifiers that track window geometry where a node landed:
-/// its window origin, its window rectangle and its pointer-input size.
 fn publish_window_geometry(
     modifier_slices: &crate::modifier::ModifierNodeSlices,
     top_left: Point,
@@ -981,16 +977,10 @@ fn publish_window_geometry(
     modifier_slices.publish_pointer_input_size(size);
 }
 
-/// Whether `node` is the root of a separate window, which a tree built for
-/// its parent's window leaves out.
 fn is_window_root_node(applier: &mut MemoryApplier, node: NodeId) -> bool {
     crate::modifier::is_window_root(applier, node)
 }
 
-/// The children that belong to this window: every child but the roots of
-/// other windows. A window's subtree is placed in its own window, so a
-/// semantics tree that took it would name nodes its layout tree does not
-/// hold, and the placed semantics of the parent window could not be built.
 fn children_in_this_window(applier: &mut MemoryApplier, children: Vec<NodeId>) -> Vec<NodeId> {
     children
         .into_iter()
@@ -2160,8 +2150,6 @@ pub(crate) struct MeasuredNode {
     offset: Point,
     content_offset: Point,
     children: Vec<MeasuredChild>,
-    /// The node is the root of another window: `size` is the window's, and
-    /// the parent is handed a zero size instead.
     window_root: bool,
 }
 
@@ -2188,8 +2176,6 @@ impl MeasuredNode {
         self
     }
 
-    /// The size the parent lays out with: zero for a window root, whose
-    /// content belongs to another window.
     pub(crate) fn size_for_parent(&self) -> Size {
         if self.window_root {
             Size::new(0.0, 0.0)

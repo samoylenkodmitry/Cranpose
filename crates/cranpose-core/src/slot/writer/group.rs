@@ -264,9 +264,6 @@ impl SlotWriteSession<'_> {
         Some(group)
     }
 
-    /// Opens the group `key` at the cursor. A `restored` subtree is spliced
-    /// in first, with `parent_node` recorded as the parent of its root nodes:
-    /// the node the composer attaches them under.
     pub(crate) fn begin_group(
         &mut self,
         key: GroupKey,

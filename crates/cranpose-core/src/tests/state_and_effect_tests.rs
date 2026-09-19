@@ -1887,7 +1887,6 @@ fn keyed_effect_removed_before_its_key_write_still_disposes() {
     removal_races_keyed_effect_rerun(false);
 }
 
-/// A value whose clones are counted, so a read can prove it borrowed.
 #[derive(Debug)]
 struct CountedClones(std::rc::Rc<std::cell::Cell<u32>>);
 
@@ -1898,8 +1897,6 @@ impl Clone for CountedClones {
     }
 }
 
-/// Every read of a state used to copy the value, which made a read of a
-/// list of windows a copy of that list on every pointer move.
 #[test]
 fn reading_state_through_read_borrows_instead_of_cloning() {
     let (handle, _runtime) = runtime_handle();

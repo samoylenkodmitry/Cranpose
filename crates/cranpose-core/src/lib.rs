@@ -4438,8 +4438,6 @@ impl SlotsHost {
         })
     }
 
-    /// Runs the payload drops queued outside a pass, so cleanup a disposal
-    /// owes does not wait for the next pass to end.
     pub(crate) fn flush_pending_drops(&self) {
         self.inner.borrow_mut().lifecycle.flush_pending_drops();
     }

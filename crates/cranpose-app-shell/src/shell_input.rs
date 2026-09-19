@@ -928,11 +928,6 @@ where
         self.surface().pointer_icon.set(PointerIcon::DEFAULT);
     }
 
-    /// Records the icon of the topmost hovered region, or the platform default
-    /// when nothing under the pointer names one.
-    ///
-    /// `hits` arrives ordered top-to-bottom, so the first region that names an
-    /// icon is the innermost one drawn over the pointer.
     fn apply_hovered_pointer_icon(
         &self,
         hits: &[<<R as Renderer>::Scene as RenderScene>::HitTarget],
@@ -944,14 +939,6 @@ where
         self.surface().pointer_icon.set(icon);
     }
 
-    /// Routes a keyboard event to the focused text field, if any.
-    ///
-    /// Returns `true` if the event was consumed by a text field.
-    ///
-    /// On desktop, Ctrl+C/X/V are handled here when native clipboard support is enabled.
-    /// On web, these keys are NOT handled here - they bubble to browser for native copy/paste events.
-    /// Tab moves focus to the next target and Shift+Tab to the previous one,
-    /// as in Compose. A Tab carrying Ctrl, Alt or Meta belongs to the app.
     fn on_focus_key(&mut self, event: &KeyEvent) -> bool {
         if !plain_key_down(event) || event.key_code != KeyCode::Tab {
             return false;
@@ -1021,9 +1008,6 @@ where
         }
     }
 
-    /// Escape closes the modal surface on top, as Compose's `Dialog` takes
-    /// Escape on desktop, or the dismissable popup on top when no dialog is
-    /// open. With neither open the key belongs to the app.
     fn on_escape_key(&mut self, event: &KeyEvent) -> bool {
         if event.event_type != KeyEventType::KeyDown || event.key_code != KeyCode::Escape {
             return false;
@@ -1419,9 +1403,6 @@ where
         app_context.enter(cranpose_ui::text_input_session::notify_app_resumed)
     }
 
-    /// Sets the Linux primary selection (for middle-click paste).
-    /// This is called when text is selected in a text field.
-    /// On non-Linux platforms, this is a no-op.
     #[cfg(all(
         feature = "clipboard-native",
         target_os = "linux",
@@ -1447,8 +1428,6 @@ where
     )))]
     pub fn set_primary_selection(&mut self, _text: &str) {}
 
-    /// Gets text from the Linux primary selection (for middle-click paste).
-    /// On non-Linux platforms, returns None.
     #[cfg(all(
         feature = "clipboard-native",
         target_os = "linux",

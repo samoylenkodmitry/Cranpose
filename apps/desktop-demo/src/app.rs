@@ -90,8 +90,6 @@ use xkcd::xkcd_tab;
 const DEMO_PAGE_PADDING: f32 = 20.0;
 const DEMO_TAB_BAR_PADDING: f32 = 8.0;
 
-/// Where the floating source toggle sits, inside the tab strip's top padding
-/// and clear of the tab buttons beneath it.
 const FLOATING_TOGGLE_TOP: f32 = 2.0;
 
 const COMPACT_WINDOW_SIZE_CLASS_MAX_WIDTH: f32 = 600.0;
@@ -141,9 +139,6 @@ pub enum DemoTab {
 
 pub const DESKTOP_INITIAL_TAB: DemoTab = DemoTab::HackerNews;
 
-/// Everything the demo shell needs to know about one tab besides how to draw
-/// it: the tab bar's label, the robot runners' slug, the source file the "view
-/// source" pane fetches, and the names a startup request may use.
 pub struct DemoTabInfo {
     pub tab: DemoTab,
     pub label: &'static str,
@@ -360,13 +355,10 @@ impl DemoTab {
         self.info().label
     }
 
-    /// The stable identifier robot runners and screenshot dumps address this
-    /// tab by.
     pub fn slug(self) -> &'static str {
         self.info().slug
     }
 
-    /// The repository path of the file that implements this tab.
     pub fn source_path(self) -> &'static str {
         self.info().source_path
     }
@@ -877,8 +869,6 @@ pub fn combined_app_with_startup(startup: StartupSelection) {
     );
 }
 
-/// The controls tab on its own, for tests that drive its cards without the
-/// demo shell's tab bar around them.
 #[allow(non_snake_case)]
 #[composable]
 pub fn ControlsUiRobotApp() {

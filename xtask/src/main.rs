@@ -3845,6 +3845,7 @@ mod duplication_gate {
         pub(crate) first_file: DuplicateSide,
         pub(crate) second_file: DuplicateSide,
         pub(crate) lines: usize,
+        pub(crate) fragment: String,
     }
 
     pub(crate) struct DuplicationConfig {
@@ -3899,6 +3900,11 @@ mod duplication_gate {
             first_file: duplicate_side_from_json(value.get("firstFile")?)?,
             second_file: duplicate_side_from_json(value.get("secondFile")?)?,
             lines: value.get("lines")?.as_u64()? as usize,
+            fragment: value
+                .get("fragment")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                .unwrap_or_default(),
         })
     }
 
@@ -3979,6 +3985,26 @@ mod duplication_gate {
         )
     }
 
+    /// Code with its comment lines and all its whitespace dropped, so code
+    /// that moved out of a module, reformatted one level shallower and
+    /// without its comments, still reads the same.
+    pub(crate) fn clone_text(source: &str) -> String {
+        source
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.starts_with("//"))
+            .flat_map(str::split_whitespace)
+            .collect()
+    }
+
+    /// A clone whose text was in the tree before the diff, at any path:
+    /// code that moved, such as a test module leaving its implementation
+    /// file, brings its old clones along without introducing them.
+    pub(crate) fn text_existed_before(candidate: &Duplicate, old_sources: &[String]) -> bool {
+        let text = clone_text(&candidate.fragment);
+        !text.is_empty() && old_sources.iter().any(|source| source.contains(&text))
+    }
+
     pub(crate) fn already_duplicated_before(
         candidate: &Duplicate,
         old_duplicates: &[Duplicate],
@@ -4002,6 +4028,7 @@ mod duplication_gate {
     pub(crate) fn find_violations(
         new_duplicates: &[Duplicate],
         old_duplicates: &[Duplicate],
+        old_sources: &[String],
         ranges: &gate_diff::RangesByFile,
     ) -> Vec<String> {
         let mut old_by_pair: BTreeMap<(String, String), Vec<Duplicate>> = BTreeMap::new();
@@ -4021,7 +4048,7 @@ mod duplication_gate {
                 .get(&file_pair(dup))
                 .map(Vec::as_slice)
                 .unwrap_or(&[]);
-            if already_duplicated_before(dup, comparable) {
+            if already_duplicated_before(dup, comparable) || text_existed_before(dup, old_sources) {
                 continue;
             }
             let (first_file, first_span) = side_span(&dup.first_file);
@@ -4069,9 +4096,9 @@ mod duplication_gate {
         tmp_dir: &Path,
         jscpd: &Path,
         config: &DuplicationConfig,
-    ) -> Result<Vec<Duplicate>, String> {
+    ) -> Result<(Vec<Duplicate>, Vec<String>), String> {
         if involved_files.is_empty() {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), Vec::new()));
         }
         let old_src = tmp_dir.join("old-src");
         fs::create_dir(&old_src).map_err(|error| {
@@ -4082,8 +4109,16 @@ mod duplication_gate {
         })?;
         let old_files = gate_diff::write_old_blobs(root, base_sha, involved_files, &old_src)?;
         if old_files.is_empty() {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), Vec::new()));
         }
+        let old_sources = old_files
+            .iter()
+            .map(|file| {
+                fs::read_to_string(old_src.join(file))
+                    .map(|text| clone_text(&text))
+                    .map_err(|error| format!("duplication-gate: failed to read `{file}`: {error}"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let old_out = tmp_dir.join("old-out");
         fs::create_dir(&old_out).map_err(|error| {
             format!(
@@ -4091,14 +4126,15 @@ mod duplication_gate {
                 old_out.display()
             )
         })?;
-        run_jscpd(
+        let old_duplicates = run_jscpd(
             jscpd,
             config.min_lines,
             config.min_tokens,
             &config.ignore_globs,
             &old_out,
             &old_src,
-        )
+        )?;
+        Ok((old_duplicates, old_sources))
     }
 
     pub(crate) fn run_at(root: &Path, base: &str, config_path: &Path) -> Result<(), String> {
@@ -4136,8 +4172,11 @@ mod duplication_gate {
             .filter(|dup| touches_diff(dup, &ranges))
             .cloned()
             .collect();
-        let files_to_check = involved_files(&candidates);
-        let old_duplicates = old_duplicates_for(
+        let mut files_to_check = involved_files(&candidates);
+        files_to_check.extend(ranges.keys().cloned());
+        files_to_check.sort();
+        files_to_check.dedup();
+        let (old_duplicates, old_sources) = old_duplicates_for(
             root,
             &base_sha,
             &files_to_check,
@@ -4146,7 +4185,7 @@ mod duplication_gate {
             &config,
         )?;
 
-        let violations = find_violations(&duplicates, &old_duplicates, &ranges);
+        let violations = find_violations(&duplicates, &old_duplicates, &old_sources, &ranges);
         if !violations.is_empty() {
             return Err(super::violations_message(
                 format!(
@@ -7767,14 +7806,53 @@ version = \"0.1.0\"
                 end: second.2,
             },
             lines,
+            fragment: String::new(),
         }
+    }
+
+    fn duplicate_of(
+        first: (&str, usize, usize),
+        second: (&str, usize, usize),
+        lines: usize,
+        fragment: &str,
+    ) -> duplication_gate::Duplicate {
+        duplication_gate::Duplicate {
+            fragment: fragment.to_owned(),
+            ..duplicate(first, second, lines)
+        }
+    }
+
+    #[test]
+    fn duplication_find_violations_clone_that_moved_with_its_code_passes() {
+        let ranges = BTreeMap::from([
+            ("src/tests/a_tests.rs".to_owned(), vec![(1, 40)]),
+            ("src/a.rs".to_owned(), vec![(300, 340)]),
+        ]);
+        let moved = duplicate_of(
+            ("src/tests/a_tests.rs", 1, 12),
+            ("src/tests/a_tests.rs", 20, 31),
+            12,
+            "let x = 1;\nlet y = 2;\n",
+        );
+        let old_source = duplication_gate::clone_text(
+            "    /// The value.\n    let x =\n        1;\n    // and the other\n    let y = 2;\n",
+        );
+        assert_eq!(
+            duplication_gate::find_violations(&[moved.clone()], &[], &[old_source], &ranges),
+            Vec::<String>::new()
+        );
+        let other = duplication_gate::clone_text("    let z = 3;\n");
+        assert_eq!(
+            duplication_gate::find_violations(&[moved], &[], &[other], &ranges).len(),
+            1
+        );
     }
 
     #[test]
     fn duplication_find_violations_new_code_duplicating_old_code_fails() {
         let ranges = BTreeMap::from([("src/new.rs".to_owned(), vec![(1, 20)])]);
         let dup = duplicate(("src/new.rs", 5, 16), ("src/old.rs", 100, 111), 12);
-        let violations = duplication_gate::find_violations(&[dup], &[], &ranges);
+        let violations = duplication_gate::find_violations(&[dup], &[], &[], &ranges);
         assert_eq!(violations.len(), 1);
         assert!(violations[0].contains("src/new.rs:5-16 (new)"));
         assert!(!violations[0].contains("src/old.rs:100-111 (new)"));
@@ -7785,7 +7863,7 @@ version = \"0.1.0\"
         let ranges = BTreeMap::from([("src/elsewhere.rs".to_owned(), vec![(1, 5)])]);
         let dup = duplicate(("src/old_a.rs", 1, 12), ("src/old_b.rs", 1, 12), 12);
         assert_eq!(
-            duplication_gate::find_violations(&[dup], &[], &ranges),
+            duplication_gate::find_violations(&[dup], &[], &[], &ranges),
             Vec::<String>::new()
         );
     }
@@ -7794,7 +7872,7 @@ version = \"0.1.0\"
     fn duplication_find_violations_new_code_duplicating_itself_flags_both_sides() {
         let ranges = BTreeMap::from([("src/new.rs".to_owned(), vec![(1, 50)])]);
         let dup = duplicate(("src/new.rs", 1, 12), ("src/new.rs", 20, 31), 12);
-        let violations = duplication_gate::find_violations(&[dup], &[], &ranges);
+        let violations = duplication_gate::find_violations(&[dup], &[], &[], &ranges);
         assert_eq!(violations.len(), 1);
         assert!(violations[0].contains("(new)"));
     }
@@ -7805,7 +7883,7 @@ version = \"0.1.0\"
         let new_dup = duplicate(("src/a.rs", 10, 21), ("src/b.rs", 40, 51), 12);
         let old_dup = duplicate(("src/a.rs", 9, 20), ("src/b.rs", 38, 49), 12);
         assert_eq!(
-            duplication_gate::find_violations(&[new_dup], &[old_dup], &ranges),
+            duplication_gate::find_violations(&[new_dup], &[old_dup], &[], &ranges),
             Vec::<String>::new()
         );
     }
@@ -7814,7 +7892,7 @@ version = \"0.1.0\"
     fn duplication_find_violations_touched_clone_with_no_old_counterpart_still_fails() {
         let ranges = BTreeMap::from([("src/a.rs".to_owned(), vec![(10, 12)])]);
         let new_dup = duplicate(("src/a.rs", 10, 21), ("src/b.rs", 40, 51), 12);
-        let violations = duplication_gate::find_violations(&[new_dup], &[], &ranges);
+        let violations = duplication_gate::find_violations(&[new_dup], &[], &[], &ranges);
         assert_eq!(violations.len(), 1);
         assert!(violations[0].contains("introduced by this diff"));
     }
@@ -7825,7 +7903,7 @@ version = \"0.1.0\"
         let new_dup = duplicate(("src/a.rs", 10, 21), ("src/b.rs", 40, 51), 12);
         let unrelated_old_dup = duplicate(("src/a.rs", 200, 299), ("src/b.rs", 300, 399), 100);
         let violations =
-            duplication_gate::find_violations(&[new_dup], &[unrelated_old_dup], &ranges);
+            duplication_gate::find_violations(&[new_dup], &[unrelated_old_dup], &[], &ranges);
         assert_eq!(violations.len(), 1);
     }
 
@@ -7835,7 +7913,7 @@ version = \"0.1.0\"
         let new_dup = duplicate(("src/a.rs", 10, 19), ("src/b.rs", 40, 49), 10);
         let old_dup = duplicate(("src/a.rs", 9, 20), ("src/b.rs", 38, 49), 12);
         assert_eq!(
-            duplication_gate::find_violations(&[new_dup], &[old_dup], &ranges),
+            duplication_gate::find_violations(&[new_dup], &[old_dup], &[], &ranges),
             Vec::<String>::new()
         );
     }

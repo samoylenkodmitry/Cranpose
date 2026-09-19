@@ -20,7 +20,6 @@ use super::{
 
 const WINDOW: u64 = 7;
 
-/// A window whose size a test changes between passes.
 struct TestWindow {
     size: Cell<Size>,
 }
@@ -41,7 +40,6 @@ fn test_window(width: f32, height: f32) -> Rc<dyn WindowRootDescriptor> {
     })
 }
 
-/// What the two-window content lets a test observe and steer.
 #[derive(Clone)]
 struct TwoWindows {
     primary_presses: Rc<Cell<u32>>,
@@ -72,8 +70,6 @@ impl TwoWindows {
             .set(shown);
     }
 
-    /// A column holding a clickable box and, while shown, a window root
-    /// whose content is a clickable box of its own.
     fn content(&self) {
         let shown = rememberMutableStateOf(|| true);
         *self.show_window.borrow_mut() = Some(shown);
@@ -330,7 +326,6 @@ fn the_soft_keyboard_belongs_to_the_active_surface() {
     assert!(primary_keyboard.calls.borrow().is_empty());
 }
 
-/// Counters of one scoped-update renderer.
 #[derive(Clone, Default)]
 struct RendererCounts {
     rebuilds: Rc<Cell<usize>>,
@@ -523,7 +518,6 @@ fn a_surface_keeps_owing_its_frame_until_the_platform_takes_it() {
     assert!(!shell.take_frame_owed(), "the primary drew nothing");
 }
 
-/// A box that remembers the screen position of the last press on it.
 fn press_recorder(recorded: Rc<Cell<Option<Option<cranpose_ui::Point>>>>) {
     Box(
         Modifier::empty().size(Size::new(80.0, 40.0)).pointer_input(
@@ -713,9 +707,6 @@ fn TornWindowChrome(page: u64) {
     });
 }
 
-/// The tabs demo in miniature: two window roots whose chrome is a strip and
-/// a movable page body composed by skippable composables, the second root
-/// opened by the same state change that moves the page into it.
 #[test]
 fn a_page_torn_into_a_new_window_root_lays_out_below_that_windows_strip() {
     let _guard = test_guard();
