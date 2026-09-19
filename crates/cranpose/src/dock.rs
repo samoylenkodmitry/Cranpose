@@ -764,6 +764,7 @@ impl DockModel {
 }
 
 type PaneContent = Rc<RefCell<dyn FnMut()>>;
+type HostChrome = Rc<dyn Fn(&DockHost)>;
 
 #[derive(Default)]
 struct DockShared {
@@ -771,7 +772,7 @@ struct DockShared {
     declared: Vec<(DockKey, Size)>,
     states: HashMap<DockWindowId, WindowState>,
     policy: Option<DockPolicy>,
-    host: Option<Rc<dyn Fn(&DockHost)>>,
+    host: Option<HostChrome>,
 }
 
 /// A handle to one dock, cheap to clone and valid inside every window of it.
@@ -800,7 +801,7 @@ impl DockRef {
             .unwrap_or_else(|| DockPolicy::tabs("", Size::new(320.0, 240.0), 32.0))
     }
 
-    fn adopt(&self, policy: DockPolicy, host: Rc<dyn Fn(&DockHost)>) {
+    fn adopt(&self, policy: DockPolicy, host: HostChrome) {
         self.shared.update(|shared| {
             shared.policy = Some(policy);
             shared.host = Some(host);
@@ -1367,7 +1368,7 @@ mod tests {
 
     #[test]
     fn pulling_inside_the_strip_does_not_tear() {
-        let (mut model, window, rects) = second_tab_pressed();
+        let (mut model, _, rects) = second_tab_pressed();
         let step = model.drag_to(Point::new(260.0, 120.0), &rects, &tabs());
         assert_eq!(step, DockStep::Rest);
         assert_eq!(model.windows().len(), 1);
