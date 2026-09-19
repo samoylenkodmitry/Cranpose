@@ -113,9 +113,14 @@ jobs:
         id: provision
         run: scripts/ci/provision_toolchain.sh
 
-      - name: Run the whole robot suite
+      # The serial class only. The 100 parallel-class examples ran on the
+      # merge board for this same commit, in `robot-linux-fast`; running them
+      # again here checks nothing new and costs both Linux slots the build of
+      # 100 extra example crates. 78 + 100 = 178, so nothing goes unrun --
+      # the two boards partition the suite rather than overlap it.
+      - name: Run the robot suite's measuring half
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
-        run: just robot-linux
+        run: just robot-linux serial
 
       - name: sccache stats
         if: always()
