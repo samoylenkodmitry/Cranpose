@@ -133,14 +133,14 @@ pub use cranpose_render_common::font_source::{
     ANDROID_SYSTEM_FONT_DIR, DEFAULT_SYSTEM_FAMILY_WEIGHTS, FontLoadError, SoftwareTextFontRegistry,
 };
 pub use dock::{
-    Dock, DockDrag, DockDropZone, DockHost, DockKey, DockModel, DockModifierExt, DockPolicy,
-    DockRect, DockRef, DockStep, DockWindow, DockWindowId, Pane,
+    Dock, DockAxis, DockDrag, DockHost, DockKey, DockLayout, DockModel, DockModifierExt,
+    DockPolicy, DockRect, DockRef, DockSide, DockStep, DockWindow, DockWindowId, Pane, SizedPane,
 };
 pub use host_environment::{host_density, system_font_directory};
 pub use native_window::{
     Window, WindowAttachPolicy, WindowConfig, WindowGroup, WindowId, WindowModifierExt,
     WindowMoveMode, WindowNode, WindowResizeDirection, WindowState,
-    current_native_window_surface_origin, rememberWindowState,
+    current_native_window_surface_origin, rememberWindowState, rememberWindowStateAt,
 };
 /// Brings in what this crate's build script declared.
 ///
@@ -427,7 +427,7 @@ pub mod prelude {
     pub use crate::{
         AndroidOverlayWindowOptions, AppLauncher, AppSettings, Window, WindowAttachPolicy,
         WindowConfig, WindowGroup, WindowId, WindowModifierExt, WindowMoveMode, WindowNode,
-        WindowResizeDirection, WindowState, rememberWindowState,
+        WindowResizeDirection, WindowState, rememberWindowState, rememberWindowStateAt,
     };
 }
 

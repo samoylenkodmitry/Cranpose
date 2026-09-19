@@ -219,7 +219,7 @@ fn PageBody(pages: MutableState<Vec<Page>>, page: Page) {
     );
 }
 
-fn label_style(size: f32, color: Color) -> TextStyle {
+pub(crate) fn label_style(size: f32, color: Color) -> TextStyle {
     let mut style = TextStyle::default();
     style.span_style.font_size = TextUnit::Sp(size);
     style.span_style.color = Some(color);
@@ -232,8 +232,8 @@ const STRIP_HEIGHT: f32 = 36.0;
 const TAB_WIDTH: f32 = 140.0;
 const TAB_HEIGHT: f32 = 30.0;
 const NEW_TAB_WIDTH: f32 = 36.0;
-const CHROME: Color = Color(0.13, 0.14, 0.17, 1.0);
+pub(crate) const CHROME: Color = Color(0.13, 0.14, 0.17, 1.0);
 const IDLE_TAB: Color = Color(0.20, 0.21, 0.25, 1.0);
 const ACTIVE_TAB: Color = Color(0.32, 0.34, 0.40, 1.0);
-const INK: Color = Color(0.96, 0.97, 1.0, 1.0);
+pub(crate) const INK: Color = Color(0.96, 0.97, 1.0, 1.0);
 const FADED_INK: Color = Color(0.70, 0.72, 0.80, 1.0);

@@ -16,6 +16,9 @@
 #   drag_window.sh drag-pane <log> <id> <lx,ly> <dx,dy> [steps]
 #                                                     drag from a dock window's local point by a delta,
 #                                                     then print what the dock did
+#   drag_window.sh snap <log> <id> <onto-id> above|below [lx,ly]
+#                                                     carry a dock window's pane clear of everything, then
+#                                                     bring it in line with another window, edge to edge
 #   drag_window.sh mark <log>                         line count, for `trace`
 #   drag_window.sh trace <log> <since> [regex]        trace lines after <since>, poll noise dropped
 #   drag_window.sh shot <png> [x,y,w,h]               screenshot a region
@@ -49,10 +52,12 @@ launch() {
 windows() {
     local log="$1"
     set +o pipefail
+    local open
+    open="$(grep -E 'dock trace: windows=' "$log" | tail -1 | sed -E 's/.*windows=//')"
     grep -E 'dock trace: window id=' "$log" \
         | sed -E 's/.*id=([0-9]+) origin=\(([0-9.-]+),([0-9.-]+)\) size=\(([0-9.]+),([0-9.]+)\) panes=([0-9]+) parked=(true|false).*/\1 \2 \3 \4 \5 \6 \7/' \
         | awk '{ last[$1] = $0 } END { for (id in last) print last[id] }' \
-        | awk '$7 == "false" { printf "%s %d %d %d %d panes=%s\n", $1, $2, $3, $4, $5, $6 }' \
+        | awk -v open=",$open," '$7 == "false" && index(open, "," $1 ",") { printf "%s %d %d %d %d panes=%s\n", $1, $2, $3, $4, $5, $6 }' \
         | sort -n
     set -o pipefail
 }
@@ -95,6 +100,44 @@ drag_pane() {
     return 0
 }
 
+snap() {
+    need cliclick
+    local log="$1" id="$2" onto="$3" side="$4" local_point="${5:-137,10}"
+    local mine theirs
+    mine="$(windows "$log" | awk -v id="$id" '$1 == id')"
+    theirs="$(windows "$log" | awk -v id="$onto" '$1 == id')"
+    [ -n "$mine" ] && [ -n "$theirs" ] || { echo "drag_window.sh: windows $id and $onto must both be at rest in $log" >&2; exit 1; }
+    local ox oy ow oh tx ty tw th
+    read -r _ ox oy ow oh _ <<< "$mine"
+    read -r _ tx ty tw th _ <<< "$theirs"
+    local gx=$(( ox + ${local_point%,*} )) gy=$(( oy + ${local_point#*,} ))
+    local dest_y
+    case "$side" in
+        above) dest_y=$(( ty - oh - 3 )) ;;
+        below) dest_y=$(( ty + th + 3 )) ;;
+        *) echo "drag_window.sh: side is above or below" >&2; exit 2 ;;
+    esac
+    local ex=$(( tx + ${local_point%,*} )) ey=$(( dest_y + ${local_point#*,} ))
+    local since
+    since="$(mark "$log")"
+    cliclick "dd:$gx,$gy" "w:250"
+    local i x y clear_x=$(( gx + 90 )) clear_y=$(( gy + 90 ))
+    for i in 1 2 3 4; do
+        cliclick "dm:$(( gx + (clear_x - gx) * i / 4 )),$(( gy + (clear_y - gy) * i / 4 ))" "w:80"
+    done
+    for i in $(seq 1 12); do
+        x=$(( clear_x + (ex - clear_x) * i / 12 ))
+        y=$(( clear_y + (ey - clear_y) * i / 12 ))
+        cliclick "dm:$x,$y" "w:80"
+    done
+    cliclick "du:$ex,$ey" "w:400"
+    sleep 1
+    echo "snap $id $side $onto: ($gx,$gy) -> ($ex,$ey)"
+    trace "$log" "$since" 'dock trace: (press|release)|step=Join|panicked' | awk '!seen[$0]++'
+    grep -q panicked "$log" && { echo "PANIC in $log" >&2; exit 1; }
+    return 0
+}
+
 mark() {
     wc -l < "$1" | tr -d ' '
 }
@@ -121,6 +164,7 @@ case "$command" in
     click) click "$@" ;;
     drag) drag "$@" ;;
     drag-pane) drag_pane "$@" ;;
+    snap) snap "$@" ;;
     mark) mark "$@" ;;
     trace) trace "$@" ;;
     shot) shot "$@" ;;

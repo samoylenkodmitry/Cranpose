@@ -14,9 +14,18 @@
 //! that is how every desktop routes a held button. A handler on that window's
 //! root therefore survives the pane leaving it, and does the whole job: it tears
 //! the pane into a window of its own, carries that window under the pointer by
-//! setting its position, and lets the pane join another window when the pointer
-//! enters that window's drop zone. Positions are read from the OS at the moment
-//! of each event, so the carried window never drifts from the pointer.
+//! setting its position, and lets the pane join another window when it reaches
+//! that window's drop zone. Positions are read from the OS at the moment of
+//! each event, so the carried window never drifts from the pointer.
+//!
+//! Two layouts. [`DockLayout::Tabs`] shows one pane at a time behind a strip,
+//! and a pane joins by being dropped on the strip. [`DockLayout::Stack`] shows
+//! every pane laid along an axis, sizes the window from its panes, and a pane
+//! joins by being carried edge to edge with a window it lines up with, the way
+//! a classic media player's windows glue together; tearing a pane out of the
+//! middle of a stack splits the stack around the gap so nothing else moves.
+//! A grip marked with [`DockModifierExt::dock_handle`] tears and snaps its
+//! pane; a [`WindowModifierExt::window_drag_area`] moves the whole window.
 
 use std::{
     cell::RefCell,
@@ -33,9 +42,11 @@ use cranpose_ui::{
     BoxSpec, Modifier, Point, PointerEventKind, PointerInputScope, Size, composable,
 };
 
+#[allow(unused_imports)]
+use crate::native_window::WindowModifierExt;
 use crate::native_window::{
     WindowConfig, WindowId, WindowNode, WindowState, current_native_window_surface_origin,
-    rememberWindowState,
+    rememberWindowStateAt,
 };
 
 /// Names one pane for as long as it exists, in whichever window holds it.
@@ -86,19 +97,96 @@ pub struct DockWindow {
     pub panes: Vec<DockKey>,
     /// The pane in front. Meaningless while the window is parked.
     pub active: DockKey,
-    /// Where the window is first placed, in screen coordinates.
+    /// Where the window sits, in screen coordinates, as the dock last placed
+    /// it or last saw the OS place it.
     pub origin: Point,
     /// Whether the window is empty and hidden until the current drag ends.
     pub parked: bool,
 }
 
-/// Where a carried pane joins a window when the pointer enters it.
+/// The axis along which a stacking dock lays a window's panes.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum DockAxis {
+    /// Panes stack top to bottom.
+    Vertical,
+    /// Panes sit left to right.
+    Horizontal,
+}
+
+impl DockAxis {
+    fn along(self, size: Size) -> f32 {
+        match self {
+            Self::Vertical => size.height,
+            Self::Horizontal => size.width,
+        }
+    }
+
+    fn across(self, size: Size) -> f32 {
+        match self {
+            Self::Vertical => size.width,
+            Self::Horizontal => size.height,
+        }
+    }
+
+    fn at(self, point: Point) -> f32 {
+        match self {
+            Self::Vertical => point.y,
+            Self::Horizontal => point.x,
+        }
+    }
+
+    fn beside(self, point: Point) -> f32 {
+        match self {
+            Self::Vertical => point.x,
+            Self::Horizontal => point.y,
+        }
+    }
+
+    fn size(self, along: f32, across: f32) -> Size {
+        match self {
+            Self::Vertical => Size::new(across, along),
+            Self::Horizontal => Size::new(along, across),
+        }
+    }
+
+    fn shifted(self, point: Point, along: f32) -> Point {
+        match self {
+            Self::Vertical => Point::new(point.x, point.y + along),
+            Self::Horizontal => Point::new(point.x + along, point.y),
+        }
+    }
+}
+
+/// How a dock lays out one window's panes, and where a carried pane joins.
 #[derive(Clone, Copy, PartialEq, Debug)]
-pub enum DockDropZone {
-    /// A band this tall along the top of every window, like a tab strip.
-    TopBand(f32),
-    /// The whole window, grown outward by this much, like a snapping edge.
-    Around(f32),
+pub enum DockLayout {
+    /// One pane in front at a time, behind a strip along the top. Every
+    /// window has the policy's `window_size`; a pane joins a window by being
+    /// dropped on its strip.
+    Tabs {
+        /// Height of the strip.
+        strip_height: f32,
+    },
+    /// Every pane shown, laid along `axis` in order; a window is as large as
+    /// its panes together. A carried pane joins a window when the window
+    /// carrying it lines up with that window across the axis and its edge
+    /// comes within `reach` of that window's edge along the axis, going before
+    /// it or after it.
+    Stack {
+        /// The direction panes are laid along.
+        axis: DockAxis,
+        /// How close two edges must come to snap.
+        reach: f32,
+    },
+}
+
+/// Which end of a window a joining pane goes to.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum DockSide {
+    /// In front of the window's first pane.
+    Before,
+    /// After the window's last pane.
+    After,
 }
 
 /// How a dock hosts its panes.
@@ -106,15 +194,16 @@ pub enum DockDropZone {
 pub struct DockPolicy {
     /// The OS title of every window of the dock.
     pub title: String,
-    /// The content size of every window of the dock.
+    /// The size of every window of a tabs dock, and of any pane that declares
+    /// no size of its own.
     pub window_size: Size,
-    /// Where a carried pane may join a window.
-    pub drop_zone: DockDropZone,
+    /// How a window lays out its panes, and where a carried pane joins.
+    pub layout: DockLayout,
     /// How far a pressed pane travels before it tears out of its window.
     pub tear_distance: f32,
     /// Where the first window goes when no window exists yet.
     pub first_origin: Point,
-    /// Where the pointer sits inside a window that has just been torn off.
+    /// Where the pointer sits inside a window torn off a tabs dock.
     pub tear_grab: Point,
 }
 
@@ -124,64 +213,90 @@ impl DockPolicy {
         Self {
             title: title.into(),
             window_size,
-            drop_zone: DockDropZone::TopBand(strip_height),
+            layout: DockLayout::Tabs { strip_height },
             tear_distance: 24.0,
             first_origin: Point::new(200.0, 160.0),
             tear_grab: Point::new(56.0, strip_height / 2.0),
         }
     }
 
-    /// Windows that snap: panes join when carried within this distance of a window.
-    pub fn snapping(title: impl Into<String>, window_size: Size, snap_distance: f32) -> Self {
+    /// Windows that stack their panes along `axis` and snap edge to edge:
+    /// a carried pane joins a window when their edges come within `reach`.
+    /// `pane_size` is the size of a pane that declares none.
+    pub fn stack(title: impl Into<String>, pane_size: Size, axis: DockAxis, reach: f32) -> Self {
         Self {
             title: title.into(),
-            window_size,
-            drop_zone: DockDropZone::Around(snap_distance),
+            window_size: pane_size,
+            layout: DockLayout::Stack { axis, reach },
             tear_distance: 12.0,
             first_origin: Point::new(200.0, 160.0),
-            tear_grab: Point::new(window_size.width / 2.0, 8.0),
+            tear_grab: Point::new(0.0, 0.0),
         }
     }
 
     fn keeps(&self, screen: Point, anchor: Point, holder: DockRect) -> bool {
-        match self.drop_zone {
-            DockDropZone::TopBand(height) => {
+        match self.layout {
+            DockLayout::Tabs { strip_height } => {
                 let y = screen.y - holder.origin.y;
-                y >= -self.tear_distance && y <= height + self.tear_distance
+                y >= -self.tear_distance && y <= strip_height + self.tear_distance
             }
-            DockDropZone::Around(_) => distance(screen, anchor) < self.tear_distance,
+            DockLayout::Stack { .. } => distance(screen, anchor) < self.tear_distance,
         }
     }
 
-    fn zone_hit(
+    fn join_target(
         &self,
+        carried: DockRect,
         screen: Point,
         rects: &[DockRect],
-        except: DockWindowId,
-    ) -> Option<DockWindowId> {
-        rects
-            .iter()
-            .filter(|rect| rect.window != except)
-            .find(|rect| self.zone_contains(rect, screen))
-            .map(|rect| rect.window)
-    }
-
-    fn zone_contains(&self, rect: &DockRect, point: Point) -> bool {
-        let (origin, size) = (rect.origin, rect.size);
-        match self.drop_zone {
-            DockDropZone::TopBand(height) => {
-                point.x >= origin.x
-                    && point.x <= origin.x + size.width
-                    && point.y >= origin.y
-                    && point.y <= origin.y + height
-            }
-            DockDropZone::Around(reach) => {
-                point.x >= origin.x - reach
-                    && point.x <= origin.x + size.width + reach
-                    && point.y >= origin.y - reach
-                    && point.y <= origin.y + size.height + reach
-            }
+    ) -> Option<(DockWindowId, DockSide)> {
+        let mut others = rects.iter().filter(|rect| rect.window != carried.window);
+        match self.layout {
+            DockLayout::Tabs { strip_height } => others
+                .filter(|rect| strip_contains(rect, strip_height, screen))
+                .map(|rect| (rect.window, DockSide::After))
+                .next(),
+            DockLayout::Stack { axis, reach } => others.find_map(|rect| {
+                stack_side(axis, reach, carried, *rect).map(|side| (rect.window, side))
+            }),
         }
+    }
+}
+
+fn strip_contains(rect: &DockRect, strip_height: f32, point: Point) -> bool {
+    let (origin, size) = (rect.origin, rect.size);
+    point.x >= origin.x
+        && point.x <= origin.x + size.width
+        && point.y >= origin.y
+        && point.y <= origin.y + strip_height
+}
+
+fn whole(point: Point) -> Point {
+    Point::new(point.x.round(), point.y.round())
+}
+
+fn tear_grab(drag: DockDrag, alone: bool, policy: &DockPolicy) -> Point {
+    match policy.layout {
+        DockLayout::Tabs { .. } if !alone => policy.tear_grab,
+        DockLayout::Tabs { .. } | DockLayout::Stack { .. } => drag.grab,
+    }
+}
+
+fn stack_side(axis: DockAxis, reach: f32, carried: DockRect, target: DockRect) -> Option<DockSide> {
+    let aligned = (axis.beside(carried.origin) - axis.beside(target.origin)).abs() <= reach;
+    if !aligned {
+        return None;
+    }
+    let carried_start = axis.at(carried.origin);
+    let carried_end = carried_start + axis.along(carried.size);
+    let target_start = axis.at(target.origin);
+    let target_end = target_start + axis.along(target.size);
+    if (carried_end - target_start).abs() <= reach {
+        Some(DockSide::Before)
+    } else if (carried_start - target_end).abs() <= reach {
+        Some(DockSide::After)
+    } else {
+        None
     }
 }
 
@@ -203,29 +318,35 @@ pub struct DockDrag {
     pub pane: DockKey,
     /// The window that received the press, and so receives every move.
     pub source: DockWindowId,
-    /// The pointer's offset inside the carried window.
+    /// The pointer's offset inside the pane, which is its offset inside the
+    /// window carrying the pane alone.
     pub grab: Point,
     /// Where the pointer was when the pane last settled in a window.
     pub anchor: Point,
     /// The window carried under the pointer, when the pane is loose.
     pub carrying: Option<DockWindowId>,
+    /// Whether the carried window has been clear of every window since it
+    /// was torn off; a pane joins nothing until it has been.
+    pub clear: bool,
 }
 
-/// What one step of a drag asks the windows to do.
+/// What one step of a drag did.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum DockStep {
     /// Nothing moved.
     Rest,
-    /// Move this window so that its origin lands here.
+    /// This window is carried, and its origin is now here.
     Carry(DockWindowId, Point),
-    /// The pane joined this window.
-    Join(DockWindowId),
+    /// The pane joined this window at this end.
+    Join(DockWindowId, DockSide),
 }
 
-/// Which panes exist, which window holds each, and the drag in flight.
+/// Which panes exist, how large each is, which window holds each, and the
+/// drag in flight.
 #[derive(Clone, PartialEq, Debug, Default)]
 pub struct DockModel {
     windows: Vec<DockWindow>,
+    sizes: Vec<(DockKey, Size)>,
     drag: Option<DockDrag>,
     placements: Vec<(DockKey, DockWindowId)>,
     next_id: u64,
@@ -260,26 +381,95 @@ impl DockModel {
         self.drag
     }
 
-    /// Brings the windows in line with the panes the application declares.
+    /// The size the given pane was declared with.
+    pub fn pane_size(&self, pane: DockKey) -> Size {
+        self.sizes
+            .iter()
+            .find(|(held, _)| *held == pane)
+            .map(|(_, size)| *size)
+            .unwrap_or(Size::new(0.0, 0.0))
+    }
+
+    /// The content size of the given window under `policy`: the policy's
+    /// window size for tabs, the panes laid along the axis for a stack.
+    pub fn window_size(&self, window: DockWindowId, policy: &DockPolicy) -> Size {
+        match policy.layout {
+            DockLayout::Tabs { .. } => policy.window_size,
+            DockLayout::Stack { axis, .. } => {
+                let panes = self
+                    .window(window)
+                    .map(|window| window.panes.as_slice())
+                    .unwrap_or(&[]);
+                let across = panes
+                    .iter()
+                    .map(|pane| axis.across(self.pane_size(*pane)))
+                    .fold(0.0, f32::max);
+                axis.size(self.extent(panes, axis), across)
+            }
+        }
+    }
+
+    /// Where the given pane's top-left corner sits inside its window.
+    pub fn pane_offset(&self, pane: DockKey, policy: &DockPolicy) -> Point {
+        let DockLayout::Stack { axis, .. } = policy.layout else {
+            return Point::new(0.0, 0.0);
+        };
+        let before: Vec<DockKey> = self
+            .windows
+            .iter()
+            .find(|window| window.panes.contains(&pane))
+            .map(|window| {
+                window
+                    .panes
+                    .iter()
+                    .take_while(|held| **held != pane)
+                    .copied()
+                    .collect()
+            })
+            .unwrap_or_default();
+        axis.shifted(Point::new(0.0, 0.0), self.extent(&before, axis))
+    }
+
+    /// Takes the windows' current positions from where the OS put them.
+    /// Returns whether any window had moved.
+    pub fn adopt(&mut self, rects: &[DockRect]) -> bool {
+        let mut moved = false;
+        for rect in rects {
+            if let Some(window) = self
+                .windows
+                .iter_mut()
+                .find(|window| window.id == rect.window)
+                && window.origin != rect.origin
+            {
+                window.origin = rect.origin;
+                moved = true;
+            }
+        }
+        moved
+    }
+
+    /// Brings the windows in line with the panes the application declares,
+    /// each with its size.
     ///
     /// Panes no longer declared leave their windows; panes declared for the
     /// first time go where [`DockModel::place_next_in`] asked, else into the
-    /// first window, else into a new window at `first_origin`. Returns whether
-    /// anything changed.
-    pub fn reconcile(&mut self, declared: &[DockKey], first_origin: Point) -> bool {
+    /// first window, else into a new window at the policy's first origin.
+    /// Returns whether anything changed.
+    pub fn reconcile(&mut self, declared: &[(DockKey, Size)], policy: &DockPolicy) -> bool {
         let gone: Vec<DockKey> = self
             .windows
             .iter()
             .flat_map(|window| window.panes.iter().copied())
-            .filter(|pane| !declared.contains(pane))
+            .filter(|pane| !declared.iter().any(|(held, _)| held == pane))
             .collect();
         for pane in &gone {
-            self.detach(*pane);
+            self.detach(*pane, policy);
         }
-        let mut changed = !gone.is_empty();
-        for &pane in declared {
-            if self.window_of(pane).is_none() {
-                self.place(pane, first_origin);
+        let mut changed = !gone.is_empty() || self.sizes != declared;
+        self.sizes = declared.to_vec();
+        for (pane, _) in declared {
+            if self.window_of(*pane).is_none() {
+                self.place(*pane, policy);
                 changed = true;
             }
         }
@@ -302,15 +492,16 @@ impl DockModel {
         }
     }
 
-    /// Starts dragging `pane` from `source`, where `grab` is the pointer inside
-    /// the window and `screen` the pointer on screen. Returns whether a drag
-    /// began.
+    /// Starts dragging `pane` from `source`, where `local` is the pointer
+    /// inside the window and `screen` the pointer on screen. Returns whether a
+    /// drag began.
     pub fn press(
         &mut self,
         pane: DockKey,
         source: DockWindowId,
-        grab: Point,
+        local: Point,
         screen: Point,
+        policy: &DockPolicy,
     ) -> bool {
         if self.drag.is_some() || self.window_of(pane) != Some(source) {
             return false;
@@ -319,15 +510,17 @@ impl DockModel {
         self.drag = Some(DockDrag {
             pane,
             source,
-            grab,
+            grab: minus(local, self.pane_offset(pane, policy)),
             anchor: screen,
             carrying: None,
+            clear: false,
         });
         true
     }
 
     /// Moves the drag in flight to `screen`, given where every open window sits.
     pub fn drag_to(&mut self, screen: Point, rects: &[DockRect], policy: &DockPolicy) -> DockStep {
+        self.adopt(rects);
         let Some(drag) = self.drag else {
             return DockStep::Rest;
         };
@@ -342,6 +535,13 @@ impl DockModel {
         let released = self.drag.take().is_some();
         self.windows.retain(|window| !window.parked);
         released
+    }
+
+    fn extent(&self, panes: &[DockKey], axis: DockAxis) -> f32 {
+        panes
+            .iter()
+            .map(|pane| axis.along(self.pane_size(*pane)))
+            .sum()
     }
 
     fn tear_if_pulled(
@@ -363,20 +563,42 @@ impl DockModel {
         let alone = self
             .window(holder)
             .is_some_and(|window| window.panes.len() == 1);
-        let grab = if alone { drag.grab } else { policy.tear_grab };
-        let origin = minus(screen, grab);
+        let grab = tear_grab(drag, alone, policy);
+        let origin = whole(minus(screen, grab));
         let carried = if alone {
+            self.set_origin(holder, origin);
             holder
         } else {
-            self.detach(drag.pane);
+            self.detach(drag.pane, policy);
             self.reopen_or_open(drag.pane, origin)
         };
+        let rect = DockRect {
+            window: carried,
+            origin,
+            size: self.window_size(carried, policy),
+        };
+        let clear = policy
+            .join_target(rect, screen, &self.placed_rects(policy))
+            .is_none();
         self.drag = Some(DockDrag {
             grab,
             carrying: Some(carried),
+            clear,
             ..drag
         });
         DockStep::Carry(carried, origin)
+    }
+
+    fn placed_rects(&self, policy: &DockPolicy) -> Vec<DockRect> {
+        self.windows
+            .iter()
+            .filter(|window| !window.parked)
+            .map(|window| DockRect {
+                window: window.id,
+                origin: window.origin,
+                size: self.window_size(window.id, policy),
+            })
+            .collect()
     }
 
     fn carry(
@@ -387,21 +609,38 @@ impl DockModel {
         rects: &[DockRect],
         policy: &DockPolicy,
     ) -> DockStep {
-        let origin = minus(screen, drag.grab);
-        let Some(target) = policy.zone_hit(screen, rects, carried) else {
+        let origin = whole(minus(screen, drag.grab));
+        let rect = DockRect {
+            window: carried,
+            origin,
+            size: self.window_size(carried, policy),
+        };
+        let target = policy.join_target(rect, screen, rects);
+        let Some((target, side)) = target.filter(|_| drag.clear) else {
+            self.set_origin(carried, origin);
+            self.drag = Some(DockDrag {
+                clear: drag.clear || target.is_none(),
+                ..drag
+            });
             return DockStep::Carry(carried, origin);
         };
-        self.detach(drag.pane);
-        self.attach(drag.pane, target);
+        self.detach(drag.pane, policy);
+        self.attach(drag.pane, target, side, policy);
         self.drag = Some(DockDrag {
             anchor: screen,
             carrying: None,
             ..drag
         });
-        DockStep::Join(target)
+        DockStep::Join(target, side)
     }
 
-    fn place(&mut self, pane: DockKey, first_origin: Point) {
+    fn set_origin(&mut self, window: DockWindowId, origin: Point) {
+        if let Some(found) = self.windows.iter_mut().find(|held| held.id == window) {
+            found.origin = origin;
+        }
+    }
+
+    fn place(&mut self, pane: DockKey, policy: &DockPolicy) {
         let hinted = self.take_placement(pane);
         let target = hinted
             .filter(|id| self.window(*id).is_some_and(|window| !window.parked))
@@ -412,11 +651,9 @@ impl DockModel {
                     .map(|w| w.id)
             });
         match target {
-            Some(id) => {
-                self.attach(pane, id);
-            }
+            Some(id) => self.attach(pane, id, DockSide::After, policy),
             None => {
-                self.open_window(pane, first_origin);
+                self.open_window(vec![pane], policy.first_origin);
             }
         }
     }
@@ -426,15 +663,28 @@ impl DockModel {
         Some(self.placements.remove(index).1)
     }
 
-    fn attach(&mut self, pane: DockKey, window: DockWindowId) {
-        if let Some(found) = self.windows.iter_mut().find(|held| held.id == window) {
-            found.panes.push(pane);
-            found.active = pane;
-            found.parked = false;
+    fn attach(&mut self, pane: DockKey, window: DockWindowId, side: DockSide, policy: &DockPolicy) {
+        let pull = match (policy.layout, side) {
+            (DockLayout::Stack { axis, .. }, DockSide::Before) => {
+                Some((axis, -axis.along(self.pane_size(pane))))
+            }
+            _ => None,
+        };
+        let Some(found) = self.windows.iter_mut().find(|held| held.id == window) else {
+            return;
+        };
+        match side {
+            DockSide::Before => found.panes.insert(0, pane),
+            DockSide::After => found.panes.push(pane),
         }
+        if let Some((axis, by)) = pull {
+            found.origin = axis.shifted(found.origin, by);
+        }
+        found.active = pane;
+        found.parked = false;
     }
 
-    fn detach(&mut self, pane: DockKey) {
+    fn detach(&mut self, pane: DockKey, policy: &DockPolicy) {
         let Some(index) = self
             .windows
             .iter()
@@ -442,13 +692,16 @@ impl DockModel {
         else {
             return;
         };
-        let window = &mut self.windows[index];
-        let removed = window
+        let removed = self.windows[index]
             .panes
             .iter()
             .position(|held| *held == pane)
             .unwrap_or_default();
-        window.panes.retain(|held| *held != pane);
+        self.windows[index].panes.retain(|held| *held != pane);
+        if let DockLayout::Stack { axis, .. } = policy.layout {
+            self.keep_neighbours_in_place(index, removed, pane, axis);
+        }
+        let window = &mut self.windows[index];
         match window.panes.len().checked_sub(1) {
             Some(last) if window.active == pane => window.active = window.panes[removed.min(last)],
             Some(_) => {}
@@ -459,6 +712,31 @@ impl DockModel {
         }
     }
 
+    fn keep_neighbours_in_place(
+        &mut self,
+        index: usize,
+        removed: usize,
+        pane: DockKey,
+        axis: DockAxis,
+    ) {
+        let gap = axis.along(self.pane_size(pane));
+        if removed == 0 {
+            let window = &mut self.windows[index];
+            window.origin = axis.shifted(window.origin, gap);
+            return;
+        }
+        if removed >= self.windows[index].panes.len() {
+            return;
+        }
+        let tail = self.windows[index].panes.split_off(removed);
+        let head = self.windows[index].panes.clone();
+        let origin = axis.shifted(self.windows[index].origin, self.extent(&head, axis) + gap);
+        if tail.contains(&self.windows[index].active) {
+            self.windows[index].active = head[0];
+        }
+        self.open_window(tail, origin);
+    }
+
     fn reopen_or_open(&mut self, pane: DockKey, origin: Point) -> DockWindowId {
         if let Some(parked) = self.windows.iter_mut().find(|window| window.parked) {
             parked.panes = vec![pane];
@@ -467,16 +745,17 @@ impl DockModel {
             parked.parked = false;
             return parked.id;
         }
-        self.open_window(pane, origin)
+        self.open_window(vec![pane], origin)
     }
 
-    fn open_window(&mut self, pane: DockKey, origin: Point) -> DockWindowId {
+    fn open_window(&mut self, panes: Vec<DockKey>, origin: Point) -> DockWindowId {
         self.next_id += 1;
         let id = DockWindowId(self.next_id);
+        let active = panes[0];
         self.windows.push(DockWindow {
             id,
-            panes: vec![pane],
-            active: pane,
+            panes,
+            active,
             origin,
             parked: false,
         });
@@ -489,7 +768,7 @@ type PaneContent = Rc<RefCell<dyn FnMut()>>;
 #[derive(Default)]
 struct DockShared {
     contents: HashMap<DockKey, PaneContent>,
-    declared: Vec<DockKey>,
+    declared: Vec<(DockKey, Size)>,
     states: HashMap<DockWindowId, WindowState>,
     policy: Option<DockPolicy>,
     host: Option<Rc<dyn Fn(&DockHost)>>,
@@ -528,7 +807,7 @@ impl DockRef {
         });
     }
 
-    fn declare(&self, mut panes: impl FnMut()) -> Vec<DockKey> {
+    fn declare(&self, mut panes: impl FnMut()) -> Vec<(DockKey, Size)> {
         self.shared.update(|shared| shared.declared.clear());
         {
             let _declaring = Declaring::begin(self.clone());
@@ -536,15 +815,36 @@ impl DockRef {
         }
         let declared = self.shared.with(|shared| shared.declared.clone());
         self.shared.update(|shared| {
-            shared.contents.retain(|pane, _| declared.contains(pane));
+            shared
+                .contents
+                .retain(|pane, _| declared.iter().any(|(held, _)| held == pane));
         });
         declared
     }
 
-    fn reconcile(&self, declared: &[DockKey], first_origin: Point) {
+    fn reconcile(&self, declared: &[(DockKey, Size)], policy: &DockPolicy) {
         let mut next = self.model.get_non_reactive();
-        if next.reconcile(declared, first_origin) {
+        let moved = next.adopt(&self.rects());
+        if next.reconcile(declared, policy) || moved {
             self.model.set(next);
+        }
+    }
+
+    fn sync_states(&self) {
+        let model = self.model.get_non_reactive();
+        let policy = self.policy();
+        let states: Vec<(DockWindowId, WindowState)> = self.shared.with(|shared| {
+            shared
+                .states
+                .iter()
+                .map(|(id, state)| (*id, *state))
+                .collect()
+        });
+        for (id, state) in states {
+            if let Some(window) = model.window(id) {
+                state.set_position(Some(window.origin));
+                state.set_size(model.window_size(id, &policy));
+            }
         }
     }
 
@@ -573,9 +873,10 @@ impl DockRef {
             return;
         };
         let screen = plus(origin, local);
+        let policy = self.policy();
         let began = self
             .model
-            .update(|model| model.press(pane, window, local, screen));
+            .update(|model| model.press(pane, window, local, screen, &policy));
         trace_dock(format_args!(
             "press pane={pane:?} window={window:?} local=({:.1},{:.1}) origin=({:.1},{:.1}) began={began}",
             local.x, local.y, origin.x, origin.y
@@ -620,13 +921,8 @@ impl DockRef {
                 ))
                 .collect::<Vec<_>>()
         ));
-        if let DockStep::Carry(carried, at) = step {
-            let state = self
-                .shared
-                .with(|shared| shared.states.get(&carried).copied());
-            if let Some(state) = state {
-                state.set_position(Some(at));
-            }
+        if step != DockStep::Rest {
+            self.sync_states();
         }
     }
 
@@ -713,6 +1009,11 @@ impl DockHost {
             .update(|model| model.place_next_in(pane, window));
     }
 
+    /// The size the given pane was declared with.
+    pub fn size_of(&self, pane: DockKey) -> Size {
+        self.dock.model.get_non_reactive().pane_size(pane)
+    }
+
     /// Composes the given pane's content at this point of the window.
     pub fn content(&self, pane: DockKey) {
         let content = self
@@ -778,7 +1079,7 @@ impl DockModifierExt for Modifier {
     }
 }
 
-/// Declares one pane of the enclosing [`Dock`].
+/// Declares one pane of the enclosing [`Dock`], sized by the policy.
 ///
 /// The content is not composed here: it is composed inside whichever window
 /// currently holds the pane, where the window's chrome calls
@@ -789,8 +1090,23 @@ pub fn Pane(key: DockKey, content: impl FnMut() + 'static) {
     let Some(dock) = DECLARING.with(|stack| stack.borrow().last().cloned()) else {
         return;
     };
+    let size = dock.policy().window_size;
+    declare_pane(&dock, key, size, content);
+}
+
+/// Declares one pane of the enclosing [`Dock`] with a size of its own, which
+/// a stacking dock adds up to size the window that holds it.
+#[allow(non_snake_case)]
+pub fn SizedPane(key: DockKey, size: Size, content: impl FnMut() + 'static) {
+    let Some(dock) = DECLARING.with(|stack| stack.borrow().last().cloned()) else {
+        return;
+    };
+    declare_pane(&dock, key, size, content);
+}
+
+fn declare_pane(dock: &DockRef, key: DockKey, size: Size, content: impl FnMut() + 'static) {
     dock.shared.update(|shared| {
-        shared.declared.push(key);
+        shared.declared.push((key, size));
         shared.contents.insert(key, Rc::new(RefCell::new(content)));
     });
 }
@@ -813,8 +1129,18 @@ pub fn Dock(
     let dock = rememberDock(id);
     dock.adopt(policy.clone(), Rc::new(host));
     let declared = dock.declare(panes);
-    dock.reconcile(&declared, policy.first_origin);
+    dock.reconcile(&declared, &policy);
+    dock.sync_states();
     let windows = dock.model.get().windows().to_vec();
+    trace_dock(format_args!(
+        "windows={}",
+        windows
+            .iter()
+            .filter(|window| !window.parked)
+            .map(|window| window.id.raw().to_string())
+            .collect::<Vec<_>>()
+            .join(",")
+    ));
     for window in windows {
         let dock = dock.clone();
         key(window.id.raw(), move || DockWindowNode(dock, window));
@@ -834,7 +1160,11 @@ fn rememberDock(id: &'static str) -> DockRef {
 #[allow(non_snake_case)]
 fn DockWindowNode(dock: DockRef, window: DockWindow) {
     let policy = dock.policy();
-    let state = rememberWindowState(policy.window_size.width, policy.window_size.height);
+    let size = dock
+        .model
+        .get_non_reactive()
+        .window_size(window.id, &policy);
+    let state = rememberWindowStateAt(window.origin.x, window.origin.y, size.width, size.height);
     dock.shared.update(|shared| {
         shared.states.insert(window.id, state);
     });
@@ -855,7 +1185,6 @@ fn DockWindowNode(dock: DockRef, window: DockWindow) {
     WindowNode(
         WindowId::from_runtime(dock.id, id.raw()),
         WindowConfig::borderless_for_state(policy.title.clone(), state)
-            .with_position(window.origin.x, window.origin.y)
             .with_visible(!window.parked),
         move || DockHostRoot(dock.clone(), id),
     );
@@ -944,6 +1273,10 @@ mod tests {
         width: 400.0,
         height: 300.0,
     };
+    const PANE: Size = Size {
+        width: 200.0,
+        height: 100.0,
+    };
 
     fn pane(n: u64) -> DockKey {
         DockKey::from_runtime("pane", n)
@@ -953,8 +1286,15 @@ mod tests {
         DockPolicy::tabs("t", SIZE, 30.0)
     }
 
-    fn rect(model: &DockModel, window: DockWindowId, origin: Point) -> DockRect {
-        let _ = model;
+    fn stack() -> DockPolicy {
+        DockPolicy::stack("s", PANE, DockAxis::Vertical, 10.0)
+    }
+
+    fn declared(panes: &[DockKey]) -> Vec<(DockKey, Size)> {
+        panes.iter().map(|pane| (*pane, SIZE)).collect()
+    }
+
+    fn rect(window: DockWindowId, origin: Point) -> DockRect {
         DockRect {
             window,
             origin,
@@ -964,9 +1304,21 @@ mod tests {
 
     fn two_panes_in_one_window() -> (DockModel, DockWindowId) {
         let mut model = DockModel::new();
-        model.reconcile(&[pane(1), pane(2)], ORIGIN);
+        model.reconcile(&declared(&[pane(1), pane(2)]), &tabs());
         let window = model.windows()[0].id;
         (model, window)
+    }
+
+    fn second_tab_pressed() -> (DockModel, DockWindowId, [DockRect; 1]) {
+        let (mut model, window) = two_panes_in_one_window();
+        model.press(
+            pane(2),
+            window,
+            Point::new(80.0, 15.0),
+            Point::new(180.0, 115.0),
+            &tabs(),
+        );
+        (model, window, [rect(window, ORIGIN)])
     }
 
     #[test]
@@ -982,16 +1334,16 @@ mod tests {
     #[test]
     fn an_undeclared_pane_leaves_and_an_empty_window_closes() {
         let (mut model, _) = two_panes_in_one_window();
-        assert!(model.reconcile(&[pane(2)], ORIGIN));
+        assert!(model.reconcile(&declared(&[pane(2)]), &tabs()));
         assert_eq!(model.window_of(pane(1)), None);
-        assert!(model.reconcile(&[], ORIGIN));
+        assert!(model.reconcile(&[], &tabs()));
         assert!(model.windows().is_empty());
     }
 
     #[test]
     fn reconciling_with_nothing_new_changes_nothing() {
         let (mut model, _) = two_panes_in_one_window();
-        assert!(!model.reconcile(&[pane(1), pane(2)], ORIGIN));
+        assert!(!model.reconcile(&declared(&[pane(1), pane(2)]), &tabs()));
     }
 
     #[test]
@@ -1002,26 +1354,20 @@ mod tests {
             first,
             Point::new(80.0, 15.0),
             Point::new(180.0, 115.0),
+            &tabs(),
         );
-        let rects = [rect(&model, first, ORIGIN)];
+        let rects = [rect(first, ORIGIN)];
         model.drag_to(Point::new(180.0, 300.0), &rects, &tabs());
         model.release();
         let second = model.window_of(pane(2)).expect("torn window");
         model.place_next_in(pane(3), second);
-        model.reconcile(&[pane(1), pane(2), pane(3)], ORIGIN);
+        model.reconcile(&declared(&[pane(1), pane(2), pane(3)]), &tabs());
         assert_eq!(model.window_of(pane(3)), Some(second));
     }
 
     #[test]
     fn pulling_inside_the_strip_does_not_tear() {
-        let (mut model, window) = two_panes_in_one_window();
-        model.press(
-            pane(2),
-            window,
-            Point::new(80.0, 15.0),
-            Point::new(180.0, 115.0),
-        );
-        let rects = [rect(&model, window, ORIGIN)];
+        let (mut model, window, rects) = second_tab_pressed();
         let step = model.drag_to(Point::new(260.0, 120.0), &rects, &tabs());
         assert_eq!(step, DockStep::Rest);
         assert_eq!(model.windows().len(), 1);
@@ -1029,14 +1375,7 @@ mod tests {
 
     #[test]
     fn pulling_out_of_the_strip_tears_into_a_carried_window() {
-        let (mut model, window) = two_panes_in_one_window();
-        model.press(
-            pane(2),
-            window,
-            Point::new(80.0, 15.0),
-            Point::new(180.0, 115.0),
-        );
-        let rects = [rect(&model, window, ORIGIN)];
+        let (mut model, window, rects) = second_tab_pressed();
         let step = model.drag_to(Point::new(180.0, 300.0), &rects, &tabs());
         let DockStep::Carry(carried, at) = step else {
             panic!("expected a carry, got {step:?}");
@@ -1044,29 +1383,23 @@ mod tests {
         assert_ne!(carried, window);
         assert_eq!(model.window_of(pane(2)), Some(carried));
         assert_eq!(at, minus(Point::new(180.0, 300.0), tabs().tear_grab));
+        assert_eq!(model.window(carried).map(|w| w.origin), Some(at));
         assert_eq!(model.drag().and_then(|d| d.carrying), Some(carried));
     }
 
     #[test]
     fn a_carried_pane_joins_the_window_whose_strip_it_enters() {
-        let (mut model, window) = two_panes_in_one_window();
-        model.press(
-            pane(2),
-            window,
-            Point::new(80.0, 15.0),
-            Point::new(180.0, 115.0),
-        );
-        let rects = [rect(&model, window, ORIGIN)];
+        let (mut model, window, rects) = second_tab_pressed();
         let DockStep::Carry(carried, _) = model.drag_to(Point::new(180.0, 300.0), &rects, &tabs())
         else {
             panic!("expected a carry");
         };
         let rects = [
-            rect(&model, window, ORIGIN),
-            rect(&model, carried, Point::new(600.0, 600.0)),
+            rect(window, ORIGIN),
+            rect(carried, Point::new(600.0, 600.0)),
         ];
         let step = model.drag_to(Point::new(300.0, 110.0), &rects, &tabs());
-        assert_eq!(step, DockStep::Join(window));
+        assert_eq!(step, DockStep::Join(window, DockSide::After));
         assert_eq!(model.window_of(pane(2)), Some(window));
         assert!(model.window(carried).is_none());
         assert_eq!(model.drag().and_then(|d| d.carrying), None);
@@ -1075,21 +1408,22 @@ mod tests {
     #[test]
     fn a_lone_pane_carries_its_own_window_and_parks_it_on_joining() {
         let mut model = DockModel::new();
-        model.reconcile(&[pane(1)], ORIGIN);
+        model.reconcile(&declared(&[pane(1)]), &tabs());
         let first = model.windows()[0].id;
         model.press(
             pane(1),
             first,
             Point::new(80.0, 15.0),
             Point::new(180.0, 115.0),
+            &tabs(),
         );
-        let rects = [rect(&model, first, ORIGIN)];
+        let rects = [rect(first, ORIGIN)];
         model.drag_to(Point::new(180.0, 300.0), &rects, &tabs());
         model.release();
         let second = model.window_of(pane(1)).expect("lone window");
         assert_eq!(second, first);
 
-        model.reconcile(&[pane(1), pane(2)], ORIGIN);
+        model.reconcile(&declared(&[pane(1), pane(2)]), &tabs());
         let other = model.window_of(pane(2)).expect("second window");
         assert_eq!(other, first);
         model.drag_to(Point::new(0.0, 0.0), &[], &tabs());
@@ -1098,21 +1432,32 @@ mod tests {
             first,
             Point::new(10.0, 10.0),
             Point::new(110.0, 110.0),
+            &tabs(),
         );
         assert!(step);
     }
 
+    #[test]
+    fn a_window_the_os_moved_is_adopted_before_the_next_step() {
+        let (mut model, window) = two_panes_in_one_window();
+        let moved = Point::new(700.0, 50.0);
+        assert!(model.adopt(&[rect(window, moved)]));
+        assert_eq!(model.window(window).map(|w| w.origin), Some(moved));
+        assert!(!model.adopt(&[rect(window, moved)]));
+    }
+
     fn torn_out_then_carried_back() -> (DockModel, DockWindowId, DockWindowId, [DockRect; 2]) {
         let mut model = DockModel::new();
-        model.reconcile(&[pane(1), pane(2)], ORIGIN);
+        model.reconcile(&declared(&[pane(1), pane(2)]), &tabs());
         let first = model.windows()[0].id;
         model.press(
             pane(2),
             first,
             Point::new(80.0, 15.0),
             Point::new(180.0, 115.0),
+            &tabs(),
         );
-        let rects = [rect(&model, first, ORIGIN)];
+        let rects = [rect(first, ORIGIN)];
         let DockStep::Carry(second, _) = model.drag_to(Point::new(180.0, 300.0), &rects, &tabs())
         else {
             panic!("expected a carry");
@@ -1124,11 +1469,9 @@ mod tests {
             second,
             Point::new(20.0, 15.0),
             Point::new(620.0, 615.0),
+            &tabs(),
         );
-        let rects = [
-            rect(&model, first, ORIGIN),
-            rect(&model, second, Point::new(600.0, 600.0)),
-        ];
+        let rects = [rect(first, ORIGIN), rect(second, Point::new(600.0, 600.0))];
         let step = model.drag_to(Point::new(620.0, 700.0), &rects, &tabs());
         assert_eq!(step, DockStep::Carry(second, Point::new(600.0, 685.0)));
         (model, first, second, rects)
@@ -1138,7 +1481,7 @@ mod tests {
     fn a_lone_window_that_joins_another_is_parked_until_release() {
         let (mut model, first, second, rects) = torn_out_then_carried_back();
         let step = model.drag_to(Point::new(300.0, 110.0), &rects, &tabs());
-        assert_eq!(step, DockStep::Join(first));
+        assert_eq!(step, DockStep::Join(first, DockSide::After));
         assert_eq!(model.window(second).map(|w| w.parked), Some(true));
         assert_eq!(model.windows().len(), 2);
         model.release();
@@ -1149,7 +1492,7 @@ mod tests {
     fn tearing_again_reuses_the_parked_source_window() {
         let (mut model, first, second, rects) = torn_out_then_carried_back();
         model.drag_to(Point::new(300.0, 110.0), &rects, &tabs());
-        let rects = [rect(&model, first, ORIGIN)];
+        let rects = [rect(first, ORIGIN)];
         let step = model.drag_to(Point::new(300.0, 400.0), &rects, &tabs());
         let DockStep::Carry(reused, _) = step else {
             panic!("expected a carry, got {step:?}");
@@ -1161,10 +1504,250 @@ mod tests {
     #[test]
     fn closing_the_shown_pane_shows_its_neighbour() {
         let mut model = DockModel::new();
-        model.reconcile(&[pane(1), pane(2), pane(3)], ORIGIN);
+        model.reconcile(&declared(&[pane(1), pane(2), pane(3)]), &tabs());
         let window = model.windows()[0].id;
         model.activate(pane(2));
-        model.reconcile(&[pane(1), pane(3)], ORIGIN);
+        model.reconcile(&declared(&[pane(1), pane(3)]), &tabs());
         assert_eq!(model.window(window).map(|w| w.active), Some(pane(3)));
+    }
+
+    fn sized(panes: &[(u64, f32)]) -> Vec<(DockKey, Size)> {
+        panes
+            .iter()
+            .map(|(n, height)| (pane(*n), Size::new(200.0, *height)))
+            .collect()
+    }
+
+    fn three_stacked() -> (DockModel, DockWindowId) {
+        let mut model = DockModel::new();
+        model.reconcile(&sized(&[(1, 100.0), (2, 100.0), (3, 200.0)]), &stack());
+        let window = model.windows()[0].id;
+        model.adopt(&[DockRect {
+            window,
+            origin: ORIGIN,
+            size: model.window_size(window, &stack()),
+        }]);
+        (model, window)
+    }
+
+    fn stack_rects(model: &DockModel) -> Vec<DockRect> {
+        model
+            .windows()
+            .iter()
+            .map(|window| DockRect {
+                window: window.id,
+                origin: window.origin,
+                size: model.window_size(window.id, &stack()),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_stacked_window_is_as_large_as_its_panes_together() {
+        let (model, window) = three_stacked();
+        assert_eq!(model.window_size(window, &stack()), Size::new(200.0, 400.0));
+        assert_eq!(model.pane_offset(pane(3), &stack()), Point::new(0.0, 200.0));
+    }
+
+    #[test]
+    fn tearing_the_first_pane_leaves_the_others_where_they_were() {
+        let (mut model, window) = three_stacked();
+        model.press(
+            pane(1),
+            window,
+            Point::new(100.0, 10.0),
+            Point::new(200.0, 110.0),
+            &stack(),
+        );
+        let step = model.drag_to(Point::new(200.0, 140.0), &stack_rects(&model), &stack());
+        let DockStep::Carry(carried, at) = step else {
+            panic!("expected a carry, got {step:?}");
+        };
+        assert_eq!(
+            at,
+            Point::new(100.0, 130.0),
+            "the pane stays under the pointer"
+        );
+        assert_eq!(model.window_of(pane(1)), Some(carried));
+        assert_eq!(
+            model.window(window).map(|w| (w.panes.clone(), w.origin)),
+            Some((vec![pane(2), pane(3)], Point::new(100.0, 200.0))),
+            "the rest of the stack does not jump up into the gap"
+        );
+    }
+
+    #[test]
+    fn tearing_a_middle_pane_splits_the_stack_in_two() {
+        let (mut model, window) = three_stacked();
+        model.press(
+            pane(2),
+            window,
+            Point::new(100.0, 110.0),
+            Point::new(200.0, 210.0),
+            &stack(),
+        );
+        let step = model.drag_to(Point::new(230.0, 210.0), &stack_rects(&model), &stack());
+        let DockStep::Carry(carried, at) = step else {
+            panic!("expected a carry, got {step:?}");
+        };
+        assert_eq!(at, Point::new(130.0, 200.0));
+        assert_eq!(model.windows().len(), 3);
+        assert_eq!(
+            model.window(window).map(|w| (w.panes.clone(), w.origin)),
+            Some((vec![pane(1)], ORIGIN))
+        );
+        let tail = model.window_of(pane(3)).expect("a window for the tail");
+        assert_ne!(tail, carried);
+        assert_eq!(
+            model.window(tail).map(|w| w.origin),
+            Some(Point::new(100.0, 300.0)),
+            "the panes below the gap stay where they were"
+        );
+    }
+
+    #[test]
+    fn closing_a_middle_pane_splits_the_stack_too() {
+        let (mut model, window) = three_stacked();
+        assert!(model.reconcile(&sized(&[(1, 100.0), (3, 200.0)]), &stack()));
+        assert_eq!(
+            model.window(window).map(|w| w.panes.clone()),
+            Some(vec![pane(1)])
+        );
+        let tail = model.window_of(pane(3)).expect("a window for the tail");
+        assert_eq!(
+            model.window(tail).map(|w| w.origin),
+            Some(Point::new(100.0, 300.0))
+        );
+    }
+
+    fn a_pane_alone_beside_a_stack() -> (DockModel, DockWindowId, DockWindowId) {
+        let mut model = DockModel::new();
+        model.reconcile(&sized(&[(1, 100.0)]), &stack());
+        let first = model.windows()[0].id;
+        model.place_next_in(pane(2), DockWindowId(u64::MAX));
+        model.reconcile(&sized(&[(1, 100.0), (2, 100.0)]), &stack());
+        let second = model.windows()[0].id;
+        assert_eq!(
+            first, second,
+            "a missing placement falls back to the first window"
+        );
+        model.press(
+            pane(2),
+            first,
+            Point::new(100.0, 110.0),
+            Point::new(200.0, 210.0),
+            &stack(),
+        );
+        model.adopt(&[rect(first, ORIGIN)]);
+        let step = model.drag_to(Point::new(600.0, 610.0), &stack_rects(&model), &stack());
+        let DockStep::Carry(carried, _) = step else {
+            panic!("expected a carry, got {step:?}");
+        };
+        (model, first, carried)
+    }
+
+    #[test]
+    fn a_carried_pane_snaps_under_the_window_it_nears() {
+        let (mut model, first, carried) = a_pane_alone_beside_a_stack();
+        let step = model.drag_to(Point::new(205.0, 215.0), &stack_rects(&model), &stack());
+        assert_eq!(step, DockStep::Join(first, DockSide::After));
+        assert_eq!(
+            model.window(first).map(|w| (w.panes.clone(), w.origin)),
+            Some((vec![pane(1), pane(2)], ORIGIN))
+        );
+        assert_eq!(model.window_size(first, &stack()), Size::new(200.0, 200.0));
+        assert!(
+            model.window(carried).is_none(),
+            "the carried window was not the one pressed, so nothing routes to it"
+        );
+    }
+
+    #[test]
+    fn a_carried_pane_snaps_above_a_window_which_grows_upward() {
+        let (mut model, first, _) = a_pane_alone_beside_a_stack();
+        let step = model.drag_to(Point::new(205.0, 5.0), &stack_rects(&model), &stack());
+        assert_eq!(step, DockStep::Join(first, DockSide::Before));
+        assert_eq!(
+            model.window(first).map(|w| (w.panes.clone(), w.origin)),
+            Some((vec![pane(2), pane(1)], Point::new(100.0, 0.0))),
+            "the window's top moves up by the pane's height so pane 1 stays put"
+        );
+    }
+
+    #[test]
+    fn a_carried_pane_beside_a_window_does_not_snap() {
+        let (mut model, first, carried) = a_pane_alone_beside_a_stack();
+        let step = model.drag_to(Point::new(450.0, 215.0), &stack_rects(&model), &stack());
+        assert_eq!(step, DockStep::Carry(carried, Point::new(350.0, 205.0)));
+        assert_eq!(model.window(first).map(|w| w.panes.len()), Some(1));
+    }
+
+    #[test]
+    fn a_carried_pane_overlapping_a_window_by_a_sliver_does_not_snap() {
+        let (mut model, first, carried) = a_pane_alone_beside_a_stack();
+        let step = model.drag_to(Point::new(390.0, 215.0), &stack_rects(&model), &stack());
+        assert_eq!(
+            step,
+            DockStep::Carry(carried, Point::new(290.0, 205.0)),
+            "joining would drag the pane 190 pixels sideways into the stack"
+        );
+        assert_eq!(model.window(first).map(|w| w.panes.len()), Some(1));
+    }
+
+    #[test]
+    fn a_carried_pane_nearly_in_line_with_a_window_still_snaps() {
+        let (mut model, first, _) = a_pane_alone_beside_a_stack();
+        let step = model.drag_to(Point::new(208.0, 215.0), &stack_rects(&model), &stack());
+        assert_eq!(step, DockStep::Join(first, DockSide::After));
+    }
+
+    #[test]
+    fn a_torn_pane_does_not_snap_back_onto_the_stack_it_left() {
+        let (mut model, window) = three_stacked();
+        model.press(
+            pane(2),
+            window,
+            Point::new(100.0, 110.0),
+            Point::new(200.0, 210.0),
+            &stack(),
+        );
+        let step = model.drag_to(Point::new(200.0, 225.0), &stack_rects(&model), &stack());
+        let DockStep::Carry(carried, _) = step else {
+            panic!("expected a carry, got {step:?}");
+        };
+        let step = model.drag_to(Point::new(200.0, 226.0), &stack_rects(&model), &stack());
+        assert_eq!(
+            step,
+            DockStep::Carry(carried, Point::new(100.0, 216.0)),
+            "a pane torn off starts edge to edge with the stack and must first get clear of it"
+        );
+        model.drag_to(Point::new(200.0, 400.0), &stack_rects(&model), &stack());
+        let step = model.drag_to(Point::new(200.0, 215.0), &stack_rects(&model), &stack());
+        assert_eq!(step, DockStep::Join(window, DockSide::After));
+    }
+
+    #[test]
+    fn a_pane_torn_off_a_second_time_stays_under_the_pointer() {
+        let (mut model, window) = three_stacked();
+        model.press(
+            pane(3),
+            window,
+            Point::new(100.0, 210.0),
+            Point::new(200.0, 310.0),
+            &stack(),
+        );
+        model.drag_to(Point::new(200.0, 340.0), &stack_rects(&model), &stack());
+        model.drag_to(Point::new(200.0, 500.0), &stack_rects(&model), &stack());
+        model.drag_to(Point::new(200.0, 315.0), &stack_rects(&model), &stack());
+        assert_eq!(model.window_of(pane(3)), Some(window), "snapped back on");
+        let step = model.drag_to(Point::new(200.0, 340.0), &stack_rects(&model), &stack());
+        assert_eq!(
+            step,
+            DockStep::Carry(
+                model.window_of(pane(3)).expect("carried"),
+                Point::new(100.0, 330.0)
+            ),
+            "the grab is the pointer's place in the pane, whatever window holds it"
+        );
     }
 }

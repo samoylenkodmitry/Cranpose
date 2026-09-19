@@ -348,6 +348,18 @@ pub fn rememberWindowState(width: f32, height: f32) -> WindowState {
     }
 }
 
+/// Remembers native-window position and size across recompositions, with the
+/// window first placed at the given screen position.
+#[allow(non_snake_case)]
+#[composable]
+#[track_caller]
+pub fn rememberWindowStateAt(x: f32, y: f32, width: f32, height: f32) -> WindowState {
+    WindowState {
+        position: cranpose_core::rememberMutableStateOf(move || Some(Point::new(x, y))),
+        size: cranpose_core::rememberMutableStateOf(move || Size::new(width, height)),
+    }
+}
+
 /// Declarative configuration for an operating-system window.
 ///
 /// Use this with [`Window`] to render a composable subtree into a separate OS
