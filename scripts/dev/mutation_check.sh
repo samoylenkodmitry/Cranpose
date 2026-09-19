@@ -1,7 +1,9 @@
 #!/bin/sh
 # Proves that a test guards a fix. Applies one sed expression to a source
 # file, runs the named library tests expecting at least one to fail, and
-# restores the file whatever happens.
+# restores the file whatever happens. The restored file is touched so that
+# cargo rebuilds it: `mv` keeps the backup's older timestamp, and a build
+# that ran after it would otherwise keep the mutated object code.
 #
 # usage: scripts/dev/mutation_check.sh <package> <test-filter> <file> <sed-expression> [cargo-args]
 #
@@ -20,7 +22,7 @@ cargo_args=${5:-}
 
 backup="$file.mutation-backup"
 cp "$file" "$backup"
-trap 'mv "$backup" "$file"' EXIT
+trap 'mv "$backup" "$file" && touch "$file"' EXIT
 
 sed -e "$expression" "$backup" > "$file"
 if cmp -s "$file" "$backup"; then

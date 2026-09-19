@@ -108,6 +108,12 @@ mod host_environment;
 #[cfg(all(feature = "ios", target_os = "ios"))]
 mod ios_host;
 mod native_window;
+#[cfg(all(
+    feature = "desktop-shell",
+    feature = "renderer-wgpu",
+    not(target_arch = "wasm32")
+))]
+mod window_node;
 /// The activity handle `NativeActivity` hands to the entry point. Re-exported so
 /// an application declares its entry point with [`android_main!`] and never
 /// depends on `android_activity` for a parameter type.
@@ -133,9 +139,8 @@ pub use cranpose_render_common::font_source::{
 };
 pub use host_environment::{host_density, system_font_directory};
 pub use native_window::{
-    Window, WindowAttachPolicy, WindowConfig, WindowFocus, WindowGroup, WindowId,
-    WindowModifierExt, WindowMoveMode, WindowNode, WindowResizeDirection, WindowState,
-    rememberWindowState, rememberWindowStateAt,
+    WindowAttachPolicy, WindowConfig, WindowFocus, WindowModifierExt, WindowMoveMode,
+    WindowResizeDirection, WindowState, rememberWindowState, rememberWindowStateAt,
 };
 /// Brings in what this crate's build script declared.
 ///
@@ -420,9 +425,9 @@ pub mod prelude {
         AndroidHostWindowState, rememberAndroidHostWindowState,
     };
     pub use crate::{
-        AndroidOverlayWindowOptions, AppLauncher, AppSettings, Window, WindowAttachPolicy,
-        WindowConfig, WindowGroup, WindowId, WindowModifierExt, WindowMoveMode, WindowNode,
-        WindowResizeDirection, WindowState, rememberWindowState, rememberWindowStateAt,
+        AndroidOverlayWindowOptions, AppLauncher, AppSettings, WindowAttachPolicy, WindowConfig,
+        WindowModifierExt, WindowMoveMode, WindowResizeDirection, WindowState, rememberWindowState,
+        rememberWindowStateAt,
     };
 }
 

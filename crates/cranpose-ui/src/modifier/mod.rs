@@ -1018,7 +1018,9 @@ impl Modifier {
         handle.resolved_modifiers()
     }
 
-    pub(crate) fn with_element<E>(element: E) -> Self
+    /// A modifier of the one `element`. Platform crates build their own
+    /// modifiers on it, the way [`Modifier::window_root`] is built.
+    pub fn with_element<E>(element: E) -> Self
     where
         E: ModifierNodeElement,
     {

@@ -10,44 +10,42 @@ use std::cell::Cell;
     not(target_arch = "wasm32")
 ))]
 use std::collections::HashMap;
-use std::{
-    cell::RefCell,
-    hash::{Hash, Hasher},
-    rc::Rc,
-};
+#[cfg(all(
+    feature = "desktop-shell",
+    feature = "renderer-wgpu",
+    not(target_arch = "wasm32")
+))]
+use std::hash::{Hash, Hasher};
+use std::{cell::RefCell, fmt, rc::Rc};
 
 use cranpose_core::MutableState;
 use cranpose_ui::{Modifier, Point, PointerEventKind, PointerInputScope, Size, composable};
 
-/// A stable identifier for a declarative operating-system window.
+#[cfg(all(
+    feature = "desktop-shell",
+    feature = "renderer-wgpu",
+    not(target_arch = "wasm32")
+))]
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub struct WindowId(u64);
+pub(crate) struct WindowId(u64);
 
+#[cfg(all(
+    feature = "desktop-shell",
+    feature = "renderer-wgpu",
+    not(target_arch = "wasm32")
+))]
 impl WindowId {
-    /// Creates a window identifier from a static application identifier.
-    pub fn from_static(id: &'static str) -> Self {
+    #[cfg(test)]
+    pub(crate) fn from_static(id: &'static str) -> Self {
         Self(hash_id(id))
     }
 
-    /// Creates a window identifier for a window that exists because of user
-    /// action rather than because the source names it.
-    ///
-    /// A torn-off tab, a second document, a detached tool panel: none of these
-    /// can be identified by a `&'static str`, because how many of them exist is
-    /// decided at runtime. `namespace` separates one such family of windows
-    /// from another so that a runtime key cannot collide with an unrelated
-    /// window, and `key` distinguishes the windows within that family.
-    pub fn from_runtime(namespace: &'static str, key: u64) -> Self {
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        namespace.hash(&mut hasher);
-        key.hash(&mut hasher);
-        Self(hasher.finish())
+    pub(crate) fn raw(self) -> u64 {
+        self.0
     }
 
-    /// The number behind the identifier, which names the window's root in
-    /// the app shell.
-    pub fn raw(self) -> u64 {
-        self.0
+    pub(crate) fn from_node(node: cranpose_core::NodeId) -> Self {
+        Self(node as u64)
     }
 }
 
@@ -72,7 +70,7 @@ pub(crate) struct WindowGroupId(u64);
     not(target_arch = "wasm32")
 ))]
 impl WindowGroupId {
-    fn from_static(id: &'static str) -> Self {
+    pub(crate) fn from_static(id: &'static str) -> Self {
         Self(hash_id(id))
     }
 }
@@ -123,12 +121,13 @@ pub struct NativeWindowOptions {
 }
 
 /// Movement behavior for a group of attached peer windows.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WindowMoveMode {
     /// Dragging any window in the group moves its attached component.
     AllAttached,
-    /// Only the listed windows move their attached component; other windows move alone.
-    DragLeaderOnly(Vec<WindowId>),
+    /// Only windows configured with [`WindowConfig::leads_group`] move their
+    /// attached component; other windows move alone.
+    LeadersOnly,
 }
 
 impl WindowMoveMode {
@@ -137,10 +136,10 @@ impl WindowMoveMode {
         feature = "renderer-wgpu",
         not(target_arch = "wasm32")
     ))]
-    fn moves_attached_component(&self, window_id: WindowId) -> bool {
+    fn moves_attached_component(self, leads_group: bool) -> bool {
         match self {
             Self::AllAttached => true,
-            Self::DragLeaderOnly(leaders) => leaders.contains(&window_id),
+            Self::LeadersOnly => leads_group,
         }
     }
 }
@@ -186,6 +185,20 @@ impl Default for WindowAttachPolicy {
 pub(crate) struct NativeWindowGroupMembership {
     pub(crate) id: WindowGroupId,
     pub(crate) policy: WindowAttachPolicy,
+    pub(crate) leads: bool,
+}
+
+#[cfg(all(
+    feature = "desktop-shell",
+    feature = "renderer-wgpu",
+    not(target_arch = "wasm32")
+))]
+#[derive(Clone)]
+pub(crate) struct NativeWindowParts {
+    pub(crate) options: NativeWindowOptions,
+    pub(crate) events: NativeWindowEvents,
+    pub(crate) state: Option<WindowState>,
+    pub(crate) group: Option<NativeWindowGroupMembership>,
 }
 
 impl NativeWindowOptions {
@@ -424,14 +437,43 @@ pub fn rememberWindowStateAt(x: f32, y: f32, width: f32, height: f32) -> WindowS
 
 /// Declarative configuration for an operating-system window.
 ///
-/// Use this with [`Window`] to render a composable subtree into a separate OS
-/// window on desktop. Platforms without native sub-window support render the
-/// content inline, so pointer input and other composable behavior stay shared.
+/// Apply it with [`WindowModifierExt::window`] to render a composable subtree
+/// in a separate OS window on desktop. Platforms without native sub-window
+/// support render the content inline, so pointer input and other composable
+/// behavior stay shared. Two configurations compare equal when they ask the
+/// same of the window; their callbacks are not compared.
 #[derive(Clone)]
 pub struct WindowConfig {
     options: NativeWindowOptions,
     callbacks: NativeWindowEvents,
     state: Option<WindowState>,
+    group: Option<WindowGroupConfig>,
+    leads_group: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct WindowGroupConfig {
+    id: &'static str,
+    policy: WindowAttachPolicy,
+}
+
+impl PartialEq for WindowConfig {
+    fn eq(&self, other: &Self) -> bool {
+        self.options == other.options
+            && self.state == other.state
+            && self.group == other.group
+            && self.leads_group == other.leads_group
+    }
+}
+
+impl fmt::Debug for WindowConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("WindowConfig")
+            .field("options", &self.options)
+            .field("group", &self.group)
+            .field("leads_group", &self.leads_group)
+            .finish_non_exhaustive()
+    }
 }
 
 impl WindowConfig {
@@ -441,6 +483,8 @@ impl WindowConfig {
             options: NativeWindowOptions::new(title, width, height),
             callbacks: NativeWindowEvents::new(),
             state: None,
+            group: None,
+            leads_group: false,
         }
     }
 
@@ -456,6 +500,8 @@ impl WindowConfig {
             options: NativeWindowOptions::borderless(title, width, height),
             callbacks: NativeWindowEvents::new(),
             state: None,
+            group: None,
+            leads_group: false,
         }
     }
 
@@ -559,10 +605,45 @@ impl WindowConfig {
         self
     }
 
-    pub(crate) fn into_parts(
-        self,
-    ) -> (NativeWindowOptions, NativeWindowEvents, Option<WindowState>) {
-        (self.options, self.callbacks, self.state)
+    /// Joins the window to the group named `id`. Windows of one group snap
+    /// to each other's edges and, under `policy`, move together.
+    pub fn group(mut self, id: &'static str, policy: WindowAttachPolicy) -> Self {
+        self.group = Some(WindowGroupConfig { id, policy });
+        self
+    }
+
+    /// Whether dragging this window carries the windows attached to it when
+    /// its group moves under [`WindowMoveMode::LeadersOnly`].
+    pub fn leads_group(mut self, leads: bool) -> Self {
+        self.leads_group = leads;
+        self
+    }
+
+    #[cfg(all(
+        feature = "desktop-shell",
+        feature = "renderer-wgpu",
+        not(target_arch = "wasm32")
+    ))]
+    pub(crate) fn title(&self) -> &str {
+        &self.options.title
+    }
+
+    #[cfg(all(
+        feature = "desktop-shell",
+        feature = "renderer-wgpu",
+        not(target_arch = "wasm32")
+    ))]
+    pub(crate) fn into_parts(self) -> NativeWindowParts {
+        NativeWindowParts {
+            options: self.options,
+            events: self.callbacks,
+            state: self.state,
+            group: self.group.map(|group| NativeWindowGroupMembership {
+                id: WindowGroupId::from_static(group.id),
+                policy: group.policy,
+                leads: self.leads_group,
+            }),
+        }
     }
 }
 
@@ -589,6 +670,14 @@ pub enum WindowResizeDirection {
 
 /// Modifier helpers for composables rendered in OS windows.
 pub trait WindowModifierExt {
+    /// Renders this node's subtree in an operating-system window of its own
+    /// while the modifier is applied, and inline again when it is not. The
+    /// node keeps its identity, its remembered state and its running effects
+    /// either way, so an application tears a subtree out by choosing the
+    /// modifier from state. Platforms without native sub-windows leave the
+    /// subtree inline.
+    fn window(self, config: WindowConfig) -> Modifier;
+
     /// Marks this component as a drag target for its containing OS window.
     ///
     /// The modifier is inert when the component is not currently rendered in a
@@ -613,6 +702,27 @@ pub trait WindowModifierExt {
 }
 
 impl WindowModifierExt for Modifier {
+    fn window(self, config: WindowConfig) -> Modifier {
+        #[cfg(all(
+            feature = "desktop-shell",
+            feature = "renderer-wgpu",
+            not(target_arch = "wasm32")
+        ))]
+        {
+            crate::window_node::window(self, config)
+        }
+
+        #[cfg(not(all(
+            feature = "desktop-shell",
+            feature = "renderer-wgpu",
+            not(target_arch = "wasm32")
+        )))]
+        {
+            let _ = config;
+            self
+        }
+    }
+
     fn window_drag_area(self) -> Modifier {
         self.window_drag_area_with_callbacks(|| {}, || {})
     }
@@ -738,7 +848,7 @@ pub(crate) type NativeWindowRootHandle = Rc<NativeWindowRoot>;
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
-type NativeWindowOwner = Rc<()>;
+pub(crate) type NativeWindowOwner = Rc<()>;
 
 type NativeWindowDragHandler = Rc<dyn Fn() -> bool>;
 type NativeWindowResizeHandler = Rc<dyn Fn(WindowResizeDirection)>;
@@ -858,129 +968,6 @@ thread_local! {
 
 thread_local! {
     static CURRENT_NATIVE_WINDOW_DISPATCH: RefCell<Vec<NativeWindowDispatchContext>> = const { RefCell::new(Vec::new()) };
-    #[cfg(all(
-        feature = "desktop-shell",
-        feature = "renderer-wgpu",
-        not(target_arch = "wasm32")
-    ))]
-    static CURRENT_WINDOW_GROUP: RefCell<Option<NativeWindowGroupMembership>> = const { RefCell::new(None) };
-}
-
-/// Renders content in an operating-system window owned by the current composition.
-///
-/// On desktop this creates or updates a separate OS window. Other platforms compose
-/// the content inline so the same UI remains usable without native sub-window support.
-#[allow(non_snake_case)]
-#[composable(no_skip)]
-pub fn Window(id: &'static str, config: WindowConfig, content: impl FnMut() + 'static) {
-    let (options, events, state) = config.into_parts();
-    let window_id = WindowId::from_static(id);
-    NativeWindowWithEvents(window_id, options, events, state, content);
-}
-
-/// Renders content in a peer operating-system window.
-///
-/// This is the first-class multi-window spelling. [`Window`] remains a compact
-/// alias for the same peer-window declaration.
-#[allow(non_snake_case)]
-#[composable(no_skip)]
-pub fn WindowNode(id: WindowId, config: WindowConfig, content: impl FnMut() + 'static) {
-    let (options, events, state) = config.into_parts();
-    NativeWindowWithEvents(id, options, events, state, content);
-}
-
-/// Applies attachment and move policy to all peer windows declared inside it.
-#[allow(non_snake_case)]
-#[composable(no_skip)]
-pub fn WindowGroup(id: &'static str, policy: WindowAttachPolicy, content: impl FnMut() + 'static) {
-    #[cfg(all(
-        feature = "desktop-shell",
-        feature = "renderer-wgpu",
-        not(target_arch = "wasm32")
-    ))]
-    {
-        with_window_group(
-            NativeWindowGroupMembership {
-                id: WindowGroupId::from_static(id),
-                policy,
-            },
-            content,
-        );
-    }
-
-    #[cfg(not(all(
-        feature = "desktop-shell",
-        feature = "renderer-wgpu",
-        not(target_arch = "wasm32")
-    )))]
-    {
-        let _ = (id, policy);
-        let mut content = content;
-        content();
-    }
-}
-
-#[allow(non_snake_case)]
-#[composable(no_skip)]
-fn NativeWindowWithEvents(
-    id: WindowId,
-    options: NativeWindowOptions,
-    events: NativeWindowEvents,
-    state: Option<WindowState>,
-    content: impl FnMut() + 'static,
-) {
-    #[cfg(all(
-        feature = "desktop-shell",
-        feature = "renderer-wgpu",
-        not(target_arch = "wasm32")
-    ))]
-    {
-        let key = id;
-        let group = current_window_group();
-        let owner = cranpose_core::remember(|| Rc::new(())).with(Rc::clone);
-        let initial_size = Size::new(options.width, options.height);
-        let root = cranpose_core::remember(move || Rc::new(NativeWindowRoot::new(initial_size)))
-            .with(Rc::clone);
-
-        {
-            let options = options.clone();
-            let events = events.clone();
-            let root = Rc::clone(&root);
-            let owner = Rc::clone(&owner);
-            cranpose_core::SideEffect(move || {
-                register_native_window(key, options, events, state, group, root, owner);
-            });
-        }
-
-        {
-            let owner = Rc::clone(&owner);
-            cranpose_core::DisposableEffect(key, move |scope| {
-                scope.on_dispose(move || unregister_native_window(key, owner))
-            });
-        }
-
-        let descriptor: Rc<dyn cranpose_ui::WindowRootDescriptor> = root;
-        let content = Rc::new(RefCell::new(content));
-        cranpose_ui::Box(
-            Modifier::empty().window_root(key.raw(), descriptor),
-            cranpose_ui::BoxSpec::default(),
-            move || {
-                let content = Rc::clone(&content);
-                cranpose_ui::widgets::PopupHost(move || (content.borrow_mut())());
-            },
-        );
-    }
-
-    #[cfg(not(all(
-        feature = "desktop-shell",
-        feature = "renderer-wgpu",
-        not(target_arch = "wasm32")
-    )))]
-    {
-        let mut content = content;
-        let _ = (id, options, events, state);
-        content();
-    }
 }
 
 fn request_native_window_drag() -> bool {
@@ -1098,39 +1085,7 @@ pub(crate) fn with_native_window_drag_handler<R>(
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
-fn current_window_group() -> Option<NativeWindowGroupMembership> {
-    CURRENT_WINDOW_GROUP.with(|slot| slot.borrow().clone())
-}
-
-#[cfg(all(
-    feature = "desktop-shell",
-    feature = "renderer-wgpu",
-    not(target_arch = "wasm32")
-))]
-fn with_window_group<R>(group: NativeWindowGroupMembership, f: impl FnOnce() -> R) -> R {
-    struct WindowGroupGuard(Option<NativeWindowGroupMembership>);
-
-    impl Drop for WindowGroupGuard {
-        fn drop(&mut self) {
-            CURRENT_WINDOW_GROUP.with(|slot| {
-                *slot.borrow_mut() = self.0.take();
-            });
-        }
-    }
-
-    let previous = CURRENT_WINDOW_GROUP.with(|slot| slot.borrow_mut().replace(group));
-    let guard = WindowGroupGuard(previous);
-    let result = f();
-    drop(guard);
-    result
-}
-
-#[cfg(all(
-    feature = "desktop-shell",
-    feature = "renderer-wgpu",
-    not(target_arch = "wasm32")
-))]
-fn register_native_window(
+pub(crate) fn register_native_window(
     key: NativeWindowKey,
     options: NativeWindowOptions,
     events: NativeWindowEvents,
@@ -1161,7 +1116,7 @@ fn register_native_window(
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
-fn unregister_native_window(key: NativeWindowKey, owner: NativeWindowOwner) {
+pub(crate) fn unregister_native_window(key: NativeWindowKey, owner: NativeWindowOwner) {
     let Some(registry) = current_native_window_registry() else {
         log::error!(
             "native window declaration {key:?} could not unregister because no native-window registry is active"
@@ -1171,6 +1126,11 @@ fn unregister_native_window(key: NativeWindowKey, owner: NativeWindowOwner) {
     registry.unregister(key, owner);
 }
 
+#[cfg(all(
+    feature = "desktop-shell",
+    feature = "renderer-wgpu",
+    not(target_arch = "wasm32")
+))]
 fn hash_id(id: &'static str) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     id.hash(&mut hasher);
@@ -1248,7 +1208,7 @@ impl WindowGraphState {
         let group = dragged_window.group.clone();
         let captured = if let Some(group) = &group {
             let group_windows = group_windows(windows, group);
-            let moves_attached = group.policy.move_mode.moves_attached_component(dragged);
+            let moves_attached = group.policy.move_mode.moves_attached_component(group.leads);
             let component = if moves_attached {
                 attached_component(&group_windows, dragged, group.policy.attach_epsilon)
             } else {
@@ -1321,10 +1281,7 @@ impl WindowGraphState {
             return Vec::new();
         }
 
-        let moves_attached = group
-            .policy
-            .move_mode
-            .moves_attached_component(session.dragged);
+        let moves_attached = group.policy.move_mode.moves_attached_component(group.leads);
         let mut component = if moves_attached {
             session.captured.iter().map(|window| window.id).collect()
         } else {
@@ -1365,7 +1322,7 @@ impl WindowGraphState {
         let Some(group) = &moved_window.group else {
             return Vec::new();
         };
-        if !group.policy.move_mode.moves_attached_component(moved) {
+        if !group.policy.move_mode.moves_attached_component(group.leads) {
             return Vec::new();
         }
 

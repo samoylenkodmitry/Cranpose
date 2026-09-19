@@ -605,6 +605,18 @@ carried by the framework's window group. Neither has a model.
    no application can name another window's node. Popups inside a window
    subtree still register with the primary window's host; a host per
    window is a follow-up the surfaces make possible.
+   As built: `WindowModifierExt::window(config)` adds a `NativeWindowElement`
+   (`crates/cranpose/src/window_node.rs`) whose node delegates layout and
+   window-root registration to `cranpose_ui::WindowRootNode` and keeps the
+   native request registered under `WindowId::from_node`. `Modifier::window_root`
+   and `WindowRootEntry` lost their `id`; the shell finds a surface's root by
+   node, and `WindowId` is crate-private. `WindowMoveMode::LeadersOnly` with
+   `WindowConfig::leads_group` replaced `DragLeaderOnly(Vec<WindowId>)`. The
+   element updates on every recomposition (`always_update`) so callbacks stay
+   current, as the wrappers' `SideEffect` did, and it declines the chain's
+   automatic layout invalidation because the window's size reaches the node
+   from the platform through the descriptor. `Modifier::with_element` became
+   public for platform crates.
 4. **The launcher sets the root composition only.** `run_windows` and
    `try_run_windows` go; the primary window hides itself when the root
    composition has nothing of its own to show. The shell's surface
@@ -618,4 +630,3 @@ carried by the framework's window group. Neither has a model.
 7. **Demos on the modifiers.** Tabs and tool windows rewritten as above,
    `torn_windows.rs` deleted, the drag tool reading the demos' new trace.
 8. **Docs and PR.** As built, the PR description, and the gates.
-

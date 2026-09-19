@@ -736,7 +736,7 @@ where
             };
             let root = entries
                 .iter()
-                .find(|entry| entry.id == id)
+                .find(|entry| entry.node as u64 == id)
                 .map(|entry| entry.node);
             surface.set_root(root);
         }

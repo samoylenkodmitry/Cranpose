@@ -55,10 +55,23 @@ fn reset_request_test_state(registry: &NativeWindowRegistry) {
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
-fn request_exists(registry: &NativeWindowRegistry, key: NativeWindowKey) -> bool {
-    native_window_requests(registry)
-        .into_iter()
-        .any(|request| request.key == key)
+fn request_count(registry: &NativeWindowRegistry) -> usize {
+    native_window_requests(registry).len()
+}
+
+#[cfg(all(
+    feature = "desktop-shell",
+    feature = "renderer-wgpu",
+    not(target_arch = "wasm32")
+))]
+#[composable]
+#[allow(non_snake_case)]
+fn WindowBox(config: WindowConfig) -> cranpose_core::NodeId {
+    cranpose_ui::Box(
+        Modifier::empty().window(config),
+        cranpose_ui::BoxSpec::default(),
+        || {},
+    )
 }
 
 #[cfg(all(
@@ -193,11 +206,7 @@ fn RequestCounterText(counter: cranpose_core::MutableState<i32>) {
 #[allow(non_snake_case)]
 fn PersistentRequestRoot(counter: cranpose_core::MutableState<i32>) {
     RequestCounterText(counter);
-    WindowNode(
-        WindowId::from_static("persistent-request"),
-        WindowConfig::new("Persistent request", 100.0, 50.0),
-        || {},
-    );
+    WindowBox(WindowConfig::new("Persistent request", 100.0, 50.0));
 }
 
 #[cfg(all(
@@ -209,11 +218,7 @@ fn PersistentRequestRoot(counter: cranpose_core::MutableState<i32>) {
 #[allow(non_snake_case)]
 fn ConditionalRequestRoot(show: cranpose_core::MutableState<bool>) {
     if show.get() {
-        WindowNode(
-            WindowId::from_static("conditional-request"),
-            WindowConfig::new("Conditional request", 100.0, 50.0),
-            || {},
-        );
+        WindowBox(WindowConfig::new("Conditional request", 100.0, 50.0));
     }
 }
 
@@ -228,11 +233,7 @@ fn KeyedReplacementRequestRoot(show: cranpose_core::MutableState<bool>) {
     let active = show.get();
     cranpose_core::with_key(&active, || {
         if active {
-            WindowNode(
-                WindowId::from_static("keyed-replacement-request"),
-                WindowConfig::new("Keyed replacement request", 100.0, 50.0),
-                || {},
-            );
+            WindowBox(WindowConfig::new("Keyed replacement request", 100.0, 50.0));
         } else {
             cranpose_ui::Text(
                 "Inactive branch",
@@ -253,14 +254,13 @@ fn native_window_request_survives_unrelated_scoped_recompose() {
     let mut test = request_test_composition();
     reset_request_test_state(&test.registry);
     let counter = cranpose_core::MutableState::with_runtime(0i32, test.runtime.handle());
-    let key = WindowId::from_static("persistent-request");
     let root_key = cranpose_core::location_key(file!(), line!(), column!());
     test.with_registry(|composition| {
         composition
             .render_stable(root_key, || PersistentRequestRoot(counter))
             .expect("initial persistent native-window request render");
     });
-    assert!(request_exists(&test.registry, key));
+    assert_eq!(request_count(&test.registry), 1);
 
     counter.set(1);
     test.with_registry(|composition| {
@@ -269,8 +269,9 @@ fn native_window_request_survives_unrelated_scoped_recompose() {
             .expect("persistent native-window request reconcile");
     });
 
-    assert!(
-        request_exists(&test.registry, key),
+    assert_eq!(
+        request_count(&test.registry),
+        1,
         "unchanged native-window declarations must stay registered when only a sibling scope recomposes"
     );
     clear_native_window_requests(&test.registry);
@@ -286,14 +287,13 @@ fn native_window_request_unregisters_when_conditional_declaration_is_removed() {
     let mut test = request_test_composition();
     reset_request_test_state(&test.registry);
     let show = cranpose_core::MutableState::with_runtime(true, test.runtime.handle());
-    let key = WindowId::from_static("conditional-request");
     let root_key = cranpose_core::location_key(file!(), line!(), column!());
     test.with_registry(|composition| {
         composition
             .render_stable(root_key, || ConditionalRequestRoot(show))
             .expect("initial conditional native-window request render");
     });
-    assert!(request_exists(&test.registry, key));
+    assert_eq!(request_count(&test.registry), 1);
 
     show.set(false);
     test.with_registry(|composition| {
@@ -302,9 +302,10 @@ fn native_window_request_unregisters_when_conditional_declaration_is_removed() {
             .expect("conditional native-window request reconcile");
     });
 
-    assert!(
-        !request_exists(&test.registry, key),
-        "removed native-window declarations must unregister through their disposable owner"
+    assert_eq!(
+        request_count(&test.registry),
+        0,
+        "a window modifier that left the composition withdraws its request"
     );
     clear_native_window_requests(&test.registry);
 }
@@ -319,14 +320,13 @@ fn native_window_request_unregisters_when_keyed_branch_is_replaced() {
     let mut test = request_test_composition();
     reset_request_test_state(&test.registry);
     let show = cranpose_core::MutableState::with_runtime(true, test.runtime.handle());
-    let key = WindowId::from_static("keyed-replacement-request");
     let root_key = cranpose_core::location_key(file!(), line!(), column!());
     test.with_registry(|composition| {
         composition
             .render_stable(root_key, || KeyedReplacementRequestRoot(show))
             .expect("initial keyed native-window request render");
     });
-    assert!(request_exists(&test.registry, key));
+    assert_eq!(request_count(&test.registry), 1);
 
     show.set(false);
     test.with_registry(|composition| {
@@ -335,8 +335,9 @@ fn native_window_request_unregisters_when_keyed_branch_is_replaced() {
             .expect("keyed native-window request reconcile");
     });
 
-    assert!(
-        !request_exists(&test.registry, key),
+    assert_eq!(
+        request_count(&test.registry),
+        0,
         "keyed branch replacement must unregister native-window declarations from the inactive branch"
     );
     clear_native_window_requests(&test.registry);
@@ -458,7 +459,12 @@ fn window_config_collects_window_settings_and_callbacks() {
         .on_resized(|_, _| {})
         .on_close_requested(|| {});
 
-    let (options, callbacks, state) = config.into_parts();
+    let NativeWindowParts {
+        options,
+        events: callbacks,
+        state,
+        ..
+    } = config.into_parts();
     assert_eq!(options.title, "Panel");
     assert_eq!(options.width, 100.0);
     assert_eq!(options.height, 50.0);
@@ -490,8 +496,12 @@ fn state_window_configs_bind_size_position() {
     let state = owned.state;
     state.set_position(Some(Point::new(7.0, 9.0)));
 
-    let (options, callbacks, bound_state) =
-        WindowConfig::borderless_for_state("Panel", state).into_parts();
+    let NativeWindowParts {
+        options,
+        events: callbacks,
+        state: bound_state,
+        ..
+    } = WindowConfig::borderless_for_state("Panel", state).into_parts();
     assert_eq!(options.title, "Panel");
     assert_eq!(options.width, 100.0);
     assert_eq!(options.height, 50.0);
@@ -505,8 +515,11 @@ fn state_window_configs_bind_size_position() {
 
     state.set_size(Size::new(320.0, 200.0));
 
-    let (decorated_options, _, decorated_state) =
-        WindowConfig::new_for_state("Decorated", state).into_parts();
+    let NativeWindowParts {
+        options: decorated_options,
+        state: decorated_state,
+        ..
+    } = WindowConfig::new_for_state("Decorated", state).into_parts();
     assert_eq!(decorated_options.width, 320.0);
     assert_eq!(decorated_options.height, 200.0);
     assert!(decorated_options.decorations);
@@ -665,6 +678,20 @@ fn graph_group(policy: WindowAttachPolicy) -> NativeWindowGroupMembership {
     NativeWindowGroupMembership {
         id: WindowGroupId::from_static("test-group"),
         policy,
+        leads: false,
+    }
+}
+
+#[cfg(all(
+    feature = "desktop-shell",
+    feature = "renderer-wgpu",
+    not(target_arch = "wasm32")
+))]
+fn lead_group(windows: &mut [WindowGraphPeerSnapshot], leader: WindowId) {
+    for window in windows.iter_mut().filter(|window| window.node.id == leader) {
+        if let Some(group) = &mut window.group {
+            group.leads = true;
+        }
     }
 }
 
@@ -922,9 +949,10 @@ fn graph_drag_leader_only_moves_attached_component() {
     let group = graph_group(WindowAttachPolicy::new(
         8.0,
         3.0,
-        WindowMoveMode::DragLeaderOnly(vec![main]),
+        WindowMoveMode::LeadersOnly,
     ));
-    let windows = main_and_eq_windows(&group);
+    let mut windows = main_and_eq_windows(&group);
+    lead_group(&mut windows, main);
 
     let mut graph = WindowGraphState::default();
     graph.start_drag(&windows, eq);
@@ -1144,4 +1172,184 @@ fn clear_does_not_reuse_same_content_revision() {
 
         clear_native_window_requests(registry);
     });
+}
+#[cfg(all(
+    feature = "desktop-shell",
+    feature = "renderer-wgpu",
+    not(target_arch = "wasm32")
+))]
+#[composable(no_skip)]
+#[allow(non_snake_case)]
+fn TornPageRoot(
+    torn: cranpose_core::MutableState<bool>,
+    title: cranpose_core::MutableState<&'static str>,
+    node: Rc<Cell<Option<cranpose_core::NodeId>>>,
+) {
+    cranpose_ui::Box(
+        Modifier::empty(),
+        cranpose_ui::BoxSpec::default(),
+        move || {
+            let modifier = if torn.get() {
+                Modifier::empty().window(WindowConfig::new(title.get(), 100.0, 50.0))
+            } else {
+                Modifier::empty()
+            };
+            let id = cranpose_ui::Box(modifier, cranpose_ui::BoxSpec::default(), || {});
+            node.set(Some(id));
+        },
+    );
+}
+
+#[cfg(all(
+    feature = "desktop-shell",
+    feature = "renderer-wgpu",
+    not(target_arch = "wasm32")
+))]
+struct TornPage {
+    test: RequestTestComposition,
+    torn: cranpose_core::MutableState<bool>,
+    title: cranpose_core::MutableState<&'static str>,
+    node: Rc<Cell<Option<cranpose_core::NodeId>>>,
+    root_key: cranpose_core::Key,
+}
+
+#[cfg(all(
+    feature = "desktop-shell",
+    feature = "renderer-wgpu",
+    not(target_arch = "wasm32")
+))]
+impl TornPage {
+    fn composed() -> Self {
+        let test = request_test_composition();
+        let torn = cranpose_core::MutableState::with_runtime(true, test.runtime.handle());
+        let title = cranpose_core::MutableState::with_runtime("Torn page", test.runtime.handle());
+        let node = Rc::new(Cell::new(None));
+        let root_key = cranpose_core::location_key(file!(), line!(), column!());
+        let mut page = Self {
+            test,
+            torn,
+            title,
+            node,
+            root_key,
+        };
+        let (torn, title, node) = (page.torn, page.title, Rc::clone(&page.node));
+        page.test.with_registry(|composition| {
+            composition
+                .render_stable(root_key, move || {
+                    TornPageRoot(torn, title, Rc::clone(&node))
+                })
+                .expect("the torn page renders");
+        });
+        page
+    }
+
+    fn recompose(&mut self) {
+        let (torn, title, node) = (self.torn, self.title, Rc::clone(&self.node));
+        let root_key = self.root_key;
+        self.test.with_registry(|composition| {
+            composition
+                .reconcile(root_key, move || {
+                    TornPageRoot(torn, title, Rc::clone(&node))
+                })
+                .expect("the torn page recomposes");
+        });
+    }
+
+    fn node(&self) -> cranpose_core::NodeId {
+        self.node.get().expect("the page composed")
+    }
+
+    fn only_request(&self) -> NativeWindowRequest {
+        let requests = native_window_requests(&self.test.registry);
+        assert_eq!(requests.len(), 1, "one window request");
+        requests.into_iter().next().expect("one window request")
+    }
+}
+
+#[cfg(all(
+    feature = "desktop-shell",
+    feature = "renderer-wgpu",
+    not(target_arch = "wasm32")
+))]
+#[test]
+fn the_window_modifier_requests_a_window_for_its_own_node() {
+    let page = TornPage::composed();
+    let request = page.only_request();
+    assert_eq!(
+        request.key.raw(),
+        page.node() as u64,
+        "the request's key is the node, which names the window's surface root"
+    );
+    assert_eq!(request.options.title, "Torn page");
+    let roots = cranpose_ui::window_roots();
+    assert_eq!(roots.len(), 1, "the node is a window root");
+    assert_eq!(roots[0].node, page.node());
+}
+
+#[cfg(all(
+    feature = "desktop-shell",
+    feature = "renderer-wgpu",
+    not(target_arch = "wasm32")
+))]
+#[test]
+fn dropping_the_window_modifier_keeps_the_node_and_withdraws_the_request() {
+    let mut page = TornPage::composed();
+    let node = page.node();
+    page.torn.set(false);
+    page.recompose();
+    assert_eq!(page.node(), node, "the subtree keeps its node inline");
+    assert_eq!(request_count(&page.test.registry), 0);
+    assert!(cranpose_ui::window_roots().is_empty());
+
+    page.torn.set(true);
+    page.recompose();
+    assert_eq!(page.node(), node, "the subtree keeps its node in a window");
+    assert_eq!(page.only_request().key, WindowId::from_node(node));
+}
+
+#[cfg(all(
+    feature = "desktop-shell",
+    feature = "renderer-wgpu",
+    not(target_arch = "wasm32")
+))]
+#[test]
+fn a_changed_config_reaches_the_request_with_a_new_revision() {
+    let mut page = TornPage::composed();
+    let first = page.only_request();
+    page.title.set("Renamed page");
+    page.recompose();
+    let second = page.only_request();
+    assert_eq!(second.options.title, "Renamed page");
+    assert_ne!(second.revision, first.revision);
+}
+
+#[cfg(all(
+    feature = "desktop-shell",
+    feature = "renderer-wgpu",
+    not(target_arch = "wasm32")
+))]
+#[test]
+fn group_and_leadership_reach_the_request() {
+    let mut test = request_test_composition();
+    let root_key = cranpose_core::location_key(file!(), line!(), column!());
+    let policy = WindowAttachPolicy::new(8.0, 3.0, WindowMoveMode::LeadersOnly);
+    let config = WindowConfig::new("Grouped", 100.0, 50.0)
+        .group("tools", policy.clone())
+        .leads_group(true);
+    test.with_registry(|composition| {
+        composition
+            .render_stable(root_key, move || {
+                WindowBox(config.clone());
+            })
+            .expect("the grouped window renders");
+    });
+    let requests = native_window_requests(&test.registry);
+    assert_eq!(
+        requests[0].group,
+        Some(NativeWindowGroupMembership {
+            id: WindowGroupId::from_static("tools"),
+            policy,
+            leads: true,
+        })
+    );
 }

@@ -3184,7 +3184,7 @@ fn window_root_subtree_leaves_the_parent_scene_and_starts_its_own() {
                     TextStyle::default(),
                 );
                 let id = cranpose_ui::Box(
-                    Modifier::empty().window_root(1, Rc::clone(&window)),
+                    Modifier::empty().window_root(Rc::clone(&window)),
                     cranpose_ui::BoxSpec::default(),
                     || {
                         Text(

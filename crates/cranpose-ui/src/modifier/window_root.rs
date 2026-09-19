@@ -4,7 +4,8 @@
 //! The node measures its content into the window's size and reports a zero
 //! size to its parent, so the parent lays out as if the subtree were absent.
 //! It registers itself with the app context's window root registry, which a
-//! platform reads after each update to learn which windows exist. The scene
+//! platform reads after each update to learn which windows exist; the window
+//! is identified by the layout node that carries the modifier. The scene
 //! builder skips window roots when it builds a parent's scene and starts at
 //! one when it builds that window's scene.
 
@@ -44,10 +45,9 @@ pub trait WindowRootDescriptor: Any {
 /// A window root the registry knows about.
 #[derive(Clone)]
 pub struct WindowRootEntry {
-    /// The layout node carrying the window root modifier.
+    /// The layout node carrying the window root modifier, which identifies
+    /// the window: it stays the same node across recompositions.
     pub node: NodeId,
-    /// The window's identity, stable across recompositions.
-    pub id: u64,
     /// The platform's description of the window.
     pub descriptor: Rc<dyn WindowRootDescriptor>,
 }
@@ -56,7 +56,6 @@ impl fmt::Debug for WindowRootEntry {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("WindowRootEntry")
             .field("node", &self.node)
-            .field("id", &self.id)
             .finish()
     }
 }
@@ -143,7 +142,6 @@ pub fn nearest_window_root(applier: &mut MemoryApplier, node: NodeId) -> Option<
 /// node's own, for the window's scene; the layout pass reports a zero size
 /// to the node's parent.
 pub struct WindowRootNode {
-    id: u64,
     descriptor: Rc<dyn WindowRootDescriptor>,
     node_id: Cell<Option<NodeId>>,
     owner: Cell<Option<AppContextId>>,
@@ -153,16 +151,16 @@ pub struct WindowRootNode {
 impl fmt::Debug for WindowRootNode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("WindowRootNode")
-            .field("id", &self.id)
             .field("node_id", &self.node_id.get())
             .finish()
     }
 }
 
 impl WindowRootNode {
-    fn new(id: u64, descriptor: Rc<dyn WindowRootDescriptor>) -> Self {
+    /// A window root described by `descriptor`, for a platform node that
+    /// delegates its layout and registration here.
+    pub fn new(descriptor: Rc<dyn WindowRootDescriptor>) -> Self {
         Self {
-            id,
             descriptor,
             node_id: Cell::new(None),
             owner: Cell::new(None),
@@ -170,10 +168,16 @@ impl WindowRootNode {
         }
     }
 
+    /// Takes a new description of the window and re-registers the root when
+    /// it is attached.
+    pub fn set_descriptor(&mut self, descriptor: Rc<dyn WindowRootDescriptor>) {
+        self.descriptor = descriptor;
+        self.register();
+    }
+
     fn entry(&self, node: NodeId) -> WindowRootEntry {
         WindowRootEntry {
             node,
-            id: self.id,
             descriptor: Rc::clone(&self.descriptor),
         }
     }
@@ -183,7 +187,7 @@ impl WindowRootNode {
             return;
         };
         let Some(context) = current_app_context() else {
-            log::debug!("window root {} attached outside an app context", self.id);
+            log::debug!("window root {node} attached outside an app context");
             return;
         };
         self.owner.set(Some(context.id()));
@@ -262,34 +266,35 @@ impl LayoutModifierNode for WindowRootNode {
 /// Element that creates and updates window root nodes.
 #[derive(Clone)]
 pub struct WindowRootElement {
-    id: u64,
     descriptor: Rc<dyn WindowRootDescriptor>,
 }
 
 impl WindowRootElement {
-    /// A window root with identity `id`, described by `descriptor`.
-    pub fn new(id: u64, descriptor: Rc<dyn WindowRootDescriptor>) -> Self {
-        Self { id, descriptor }
+    /// A window root described by `descriptor`.
+    pub fn new(descriptor: Rc<dyn WindowRootDescriptor>) -> Self {
+        Self { descriptor }
+    }
+
+    fn descriptor_address(&self) -> usize {
+        Rc::as_ptr(&self.descriptor).cast::<()>() as usize
     }
 }
 
 impl fmt::Debug for WindowRootElement {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("WindowRootElement")
-            .field("id", &self.id)
-            .finish()
+        f.debug_struct("WindowRootElement").finish()
     }
 }
 
 impl PartialEq for WindowRootElement {
     fn eq(&self, other: &Self) -> bool {
-        self.id == other.id && Rc::ptr_eq(&self.descriptor, &other.descriptor)
+        Rc::ptr_eq(&self.descriptor, &other.descriptor)
     }
 }
 
 impl Hash for WindowRootElement {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.id.hash(state);
+        self.descriptor_address().hash(state);
     }
 }
 
@@ -297,13 +302,11 @@ impl ModifierNodeElement for WindowRootElement {
     type Node = WindowRootNode;
 
     fn create(&self) -> Self::Node {
-        WindowRootNode::new(self.id, Rc::clone(&self.descriptor))
+        WindowRootNode::new(Rc::clone(&self.descriptor))
     }
 
     fn update(&self, node: &mut Self::Node) {
-        node.id = self.id;
-        node.descriptor = Rc::clone(&self.descriptor);
-        node.register();
+        node.set_descriptor(Rc::clone(&self.descriptor));
     }
 
     fn capabilities(&self) -> NodeCapabilities {
@@ -316,12 +319,12 @@ impl ModifierNodeElement for WindowRootElement {
 }
 
 impl Modifier {
-    /// Makes the node the root of its own window, identified by `id` and
-    /// described by `descriptor`. The subtree is laid out into the
+    /// Makes the node the root of its own window, described by `descriptor`
+    /// and identified by the node itself. The subtree is laid out into the
     /// descriptor's size and drawn into that window's scene; the parent sees
     /// a node of zero size and its scene skips the subtree. Platforms wrap
     /// this in a modifier that takes their own window configuration.
-    pub fn window_root(self, id: u64, descriptor: Rc<dyn WindowRootDescriptor>) -> Self {
-        self.then(Self::with_element(WindowRootElement::new(id, descriptor)))
+    pub fn window_root(self, descriptor: Rc<dyn WindowRootDescriptor>) -> Self {
+        self.then(Self::with_element(WindowRootElement::new(descriptor)))
     }
 }

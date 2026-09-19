@@ -2884,7 +2884,7 @@ fn window_root_tree(
         Rc::new(MaxSizePolicy),
     )));
     let mut window_node = LayoutNode::new(
-        Modifier::empty().window_root(7, window),
+        Modifier::empty().window_root(window),
         Rc::new(VerticalStackPolicy),
     );
     window_node.children.push(content);
@@ -2972,7 +2972,6 @@ fn window_root_registers_while_attached_and_leaves_with_its_node() -> Result<(),
     let roots = crate::window_roots();
     assert_eq!(roots.len(), 1, "one window root is attached");
     assert_eq!(roots[0].node, window_node);
-    assert_eq!(roots[0].id, 7);
     assert_eq!(roots[0].descriptor.layout_size(), Size::new(300.0, 200.0));
     let attached = crate::window_roots_revision();
     assert_ne!(

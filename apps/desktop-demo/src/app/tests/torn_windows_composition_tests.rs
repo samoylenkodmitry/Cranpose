@@ -53,16 +53,19 @@ fn find_box_sized(layout: &LayoutBox, size: Size) -> Placement {
         .find_map(|child| find_box_sized(child, size))
 }
 
-fn window_root_id(window: u64) -> u64 {
-    WindowId::from_runtime("test-tabs", window).raw()
+fn window_root_at(shell: &AppShell<TestRenderer>, index: usize) -> u64 {
+    shell
+        .window_roots()
+        .get(index)
+        .map(|entry| entry.node as u64)
+        .expect("a window root attached")
 }
 
-fn strip_and_body_in(shell: &mut AppShell<TestRenderer>, window: u64) -> (Placement, Placement) {
+fn strip_and_body_in(shell: &mut AppShell<TestRenderer>, index: usize) -> (Placement, Placement) {
     shell.update();
     shell.update();
-    let mut surface = shell
-        .surface(RootId::Window(window_root_id(window)))
-        .expect("window surface");
+    let root = window_root_at(shell, index);
+    let mut surface = shell.surface(RootId::Window(root)).expect("window surface");
     surface.with_layout_tree(|tree| {
         let root = tree.expect("window layout").root();
         (find_box_sized(root, STRIP), find_box_sized(root, BODY))
@@ -91,8 +94,9 @@ fn a_page_torn_into_a_new_window_lays_out_below_that_windows_strip() {
             }
         },
     );
+    shell.update();
     shell.add_window_surface(
-        window_root_id(1),
+        window_root_at(&shell, 0),
         TestRenderer::default(),
         (200, 100),
         (200.0, 100.0),
@@ -111,12 +115,12 @@ fn a_page_torn_into_a_new_window_lays_out_below_that_windows_strip() {
 
     shell.update();
     shell.add_window_surface(
-        window_root_id(2),
+        window_root_at(&shell, 1),
         TestRenderer::default(),
         (200, 100),
         (200.0, 100.0),
     );
-    let (strip, body) = strip_and_body_in(&mut shell, 2);
+    let (strip, body) = strip_and_body_in(&mut shell, 1);
     assert_eq!(strip, Some((0.0, 0.0)), "the strip is at the top");
     assert_eq!(body, Some((0.0, 36.0)), "the page lays out below the strip");
 
@@ -128,7 +132,7 @@ fn a_page_torn_into_a_new_window_lays_out_below_that_windows_strip() {
         .get(&2)
         .expect("the second window remembered its state");
     state.set_size(Size::new(WINDOW.width + 10.0, WINDOW.height));
-    let (strip, body) = strip_and_body_in(&mut shell, 2);
+    let (strip, body) = strip_and_body_in(&mut shell, 1);
     assert_eq!(strip, Some((0.0, 0.0)), "the strip stays at the top");
     assert_eq!(
         body,

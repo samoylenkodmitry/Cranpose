@@ -6,8 +6,8 @@ mod sprites;
 use std::rc::Rc;
 
 use cranpose::{
-    rememberWindowState, WindowAttachPolicy, WindowConfig, WindowGroup, WindowId,
-    WindowModifierExt, WindowMoveMode, WindowNode, WindowResizeDirection, WindowState,
+    rememberWindowState, WindowAttachPolicy, WindowConfig, WindowModifierExt, WindowMoveMode,
+    WindowResizeDirection, WindowState,
 };
 use cranpose_core::{self, MutableState};
 use cranpose_foundation::PointerButton;
@@ -325,77 +325,71 @@ fn WinampNativeWindows(
     scale: f32,
     snapshot: WinampState,
 ) {
-    WindowGroup("winamp", winamp_attach_policy(), move || {
-        WindowNode(
-            winamp_main_window_id(),
+    WinampWindow(
+        true,
+        winamp_window_config(WinampWindowPlacement {
+            title: "Winamp",
+            initial_position: WinampInitialWindowPosition::Host(inline_windows.main.get()),
+            state: peer_windows.main,
+        }),
+        {
+            let skin = skin.clone();
+            move || {
+                MainWindow(
+                    skin.clone(),
+                    state,
+                    WinampDragTarget::NativeGroup,
+                    WinampCloseAction::SetStatus,
+                    scale,
+                );
+            }
+        },
+    );
+
+    if snapshot.eq_visible {
+        WinampWindow(
+            false,
             winamp_window_config(WinampWindowPlacement {
-                title: "Winamp",
-                initial_position: WinampInitialWindowPosition::Host(inline_windows.main.get()),
-                state: peer_windows.main,
+                title: "Winamp Equalizer",
+                initial_position: WinampInitialWindowPosition::Host(inline_windows.equalizer.get()),
+                state: peer_windows.equalizer,
             }),
             {
                 let skin = skin.clone();
                 move || {
-                    MainWindow(
-                        skin.clone(),
+                    EqualizerWindow(skin.clone(), state, WinampDragTarget::NativeGroup, scale);
+                }
+            },
+        );
+    }
+
+    if snapshot.playlist_visible {
+        WinampWindow(
+            false,
+            winamp_window_config(WinampWindowPlacement {
+                title: "Winamp Playlist",
+                initial_position: WinampInitialWindowPosition::Host(inline_windows.playlist.get()),
+                state: peer_windows.playlist,
+            })
+            .with_resizable(true)
+            .with_min_size(
+                scaled(PLAYLIST_WIDTH, scale),
+                scaled(PLAYLIST_HEIGHT, scale),
+            ),
+            {
+                let pledit = skin.pledit.clone();
+                move || {
+                    PlaylistWindow(
+                        pledit.clone(),
                         state,
                         WinampDragTarget::NativeGroup,
-                        WinampCloseAction::SetStatus,
+                        WinampWindowSize::State(peer_windows.playlist),
                         scale,
                     );
                 }
             },
         );
-
-        if snapshot.eq_visible {
-            WindowNode(
-                winamp_equalizer_window_id(),
-                winamp_window_config(WinampWindowPlacement {
-                    title: "Winamp Equalizer",
-                    initial_position: WinampInitialWindowPosition::Host(
-                        inline_windows.equalizer.get(),
-                    ),
-                    state: peer_windows.equalizer,
-                }),
-                {
-                    let skin = skin.clone();
-                    move || {
-                        EqualizerWindow(skin.clone(), state, WinampDragTarget::NativeGroup, scale);
-                    }
-                },
-            );
-        }
-
-        if snapshot.playlist_visible {
-            WindowNode(
-                winamp_playlist_window_id(),
-                winamp_window_config(WinampWindowPlacement {
-                    title: "Winamp Playlist",
-                    initial_position: WinampInitialWindowPosition::Host(
-                        inline_windows.playlist.get(),
-                    ),
-                    state: peer_windows.playlist,
-                })
-                .with_resizable(true)
-                .with_min_size(
-                    scaled(PLAYLIST_WIDTH, scale),
-                    scaled(PLAYLIST_HEIGHT, scale),
-                ),
-                {
-                    let pledit = skin.pledit.clone();
-                    move || {
-                        PlaylistWindow(
-                            pledit.clone(),
-                            state,
-                            WinampDragTarget::NativeGroup,
-                            WinampWindowSize::State(peer_windows.playlist),
-                            scale,
-                        );
-                    }
-                },
-            );
-        }
-    });
+    }
 }
 
 #[composable]
@@ -418,81 +412,79 @@ pub fn WinampStandaloneApp() {
         }
     };
 
-    WindowGroup("winamp", winamp_attach_policy(), move || {
-        WindowNode(
-            winamp_main_window_id(),
+    WinampWindow(
+        true,
+        winamp_window_config(WinampWindowPlacement {
+            title: "Winamp",
+            initial_position: WinampInitialWindowPosition::Screen(Point::new(140.0, 120.0)),
+            state: peer_windows.main,
+        }),
+        {
+            let skin = skin.clone();
+            move || {
+                MainWindow(
+                    skin.clone(),
+                    state,
+                    WinampDragTarget::NativeGroup,
+                    WinampCloseAction::CloseApp,
+                    ui_scale(),
+                );
+            }
+        },
+    );
+
+    if snapshot.eq_visible {
+        WinampWindow(
+            false,
             winamp_window_config(WinampWindowPlacement {
-                title: "Winamp",
-                initial_position: WinampInitialWindowPosition::Screen(Point::new(140.0, 120.0)),
-                state: peer_windows.main,
+                title: "Winamp Equalizer",
+                initial_position: WinampInitialWindowPosition::Screen(Point::new(
+                    140.0,
+                    120.0 + MAIN_HEIGHT,
+                )),
+                state: peer_windows.equalizer,
             }),
             {
                 let skin = skin.clone();
                 move || {
-                    MainWindow(
+                    EqualizerWindow(
                         skin.clone(),
                         state,
                         WinampDragTarget::NativeGroup,
-                        WinampCloseAction::CloseApp,
                         ui_scale(),
                     );
                 }
             },
         );
+    }
 
-        if snapshot.eq_visible {
-            WindowNode(
-                winamp_equalizer_window_id(),
-                winamp_window_config(WinampWindowPlacement {
-                    title: "Winamp Equalizer",
-                    initial_position: WinampInitialWindowPosition::Screen(Point::new(
-                        140.0,
-                        120.0 + MAIN_HEIGHT,
-                    )),
-                    state: peer_windows.equalizer,
-                }),
-                {
-                    let skin = skin.clone();
-                    move || {
-                        EqualizerWindow(
-                            skin.clone(),
-                            state,
-                            WinampDragTarget::NativeGroup,
-                            ui_scale(),
-                        );
-                    }
-                },
-            );
-        }
-
-        if snapshot.playlist_visible {
-            WindowNode(
-                winamp_playlist_window_id(),
-                winamp_window_config(WinampWindowPlacement {
-                    title: "Winamp Playlist",
-                    initial_position: WinampInitialWindowPosition::Screen(Point::new(
-                        140.0 + EQ_WIDTH,
-                        120.0 + MAIN_HEIGHT,
-                    )),
-                    state: peer_windows.playlist,
-                })
-                .with_resizable(true)
-                .with_min_size(PLAYLIST_WIDTH, PLAYLIST_HEIGHT),
-                {
-                    let pledit = skin.pledit.clone();
-                    move || {
-                        PlaylistWindow(
-                            pledit.clone(),
-                            state,
-                            WinampDragTarget::NativeGroup,
-                            WinampWindowSize::State(peer_windows.playlist),
-                            ui_scale(),
-                        );
-                    }
-                },
-            );
-        }
-    });
+    if snapshot.playlist_visible {
+        WinampWindow(
+            false,
+            winamp_window_config(WinampWindowPlacement {
+                title: "Winamp Playlist",
+                initial_position: WinampInitialWindowPosition::Screen(Point::new(
+                    140.0 + EQ_WIDTH,
+                    120.0 + MAIN_HEIGHT,
+                )),
+                state: peer_windows.playlist,
+            })
+            .with_resizable(true)
+            .with_min_size(PLAYLIST_WIDTH, PLAYLIST_HEIGHT),
+            {
+                let pledit = skin.pledit.clone();
+                move || {
+                    PlaylistWindow(
+                        pledit.clone(),
+                        state,
+                        WinampDragTarget::NativeGroup,
+                        WinampWindowSize::State(peer_windows.playlist),
+                        ui_scale(),
+                    );
+                }
+            },
+        );
+    }
 }
 
 #[composable]
@@ -1698,20 +1690,21 @@ fn winamp_attach_policy() -> WindowAttachPolicy {
     WindowAttachPolicy::new(
         WINAMP_SNAP_DISTANCE,
         WINAMP_ATTACH_EPSILON,
-        WindowMoveMode::DragLeaderOnly(vec![winamp_main_window_id()]),
+        WindowMoveMode::LeadersOnly,
     )
 }
 
-fn winamp_main_window_id() -> WindowId {
-    WindowId::from_static("winamp-main")
-}
-
-fn winamp_equalizer_window_id() -> WindowId {
-    WindowId::from_static("winamp-equalizer")
-}
-
-fn winamp_playlist_window_id() -> WindowId {
-    WindowId::from_static("winamp-playlist")
+#[composable]
+fn WinampWindow(leads: bool, config: WindowConfig, content: impl FnMut() + 'static) {
+    Box(
+        Modifier::empty().window(
+            config
+                .group("winamp", winamp_attach_policy())
+                .leads_group(leads),
+        ),
+        BoxSpec::default(),
+        content,
+    );
 }
 
 fn winamp_window_modifier(

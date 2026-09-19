@@ -18,7 +18,29 @@ use super::{
     *,
 };
 
-const WINDOW: u64 = 7;
+fn window_root_at<R>(shell: &AppShell<R>, index: usize) -> u64
+where
+    R: Renderer,
+    R::Error: std::fmt::Debug,
+{
+    shell
+        .window_roots()
+        .get(index)
+        .map(|entry| entry.node as u64)
+        .expect("a window root attached")
+}
+
+fn attach_first_window<R>(shell: &mut AppShell<R>, renderer: R) -> u64
+where
+    R: Renderer,
+    R::Error: std::fmt::Debug,
+{
+    shell.update();
+    let window_id = window_root_at(shell, 0);
+    shell.add_window_surface(window_id, renderer, (200, 100), (200.0, 100.0));
+    shell.update();
+    window_id
+}
 
 struct TestWindow {
     size: Cell<Size>,
@@ -87,7 +109,7 @@ impl TwoWindows {
             if shown.get() {
                 let presses = Rc::clone(&windows.window_presses);
                 Box(
-                    Modifier::empty().window_root(WINDOW, Rc::clone(&windows.window)),
+                    Modifier::empty().window_root(Rc::clone(&windows.window)),
                     BoxSpec::default(),
                     move || {
                         let presses = Rc::clone(&presses);
@@ -106,21 +128,15 @@ impl TwoWindows {
     }
 }
 
-fn two_window_shell(windows: &TwoWindows) -> AppShell<HitGraphRenderer> {
+fn two_window_shell(windows: &TwoWindows) -> (AppShell<HitGraphRenderer>, u64) {
     let content = windows.clone();
     let mut shell = AppShell::new(
         HitGraphRenderer::default(),
         location_key(file!(), line!(), column!()),
         move || content.content(),
     );
-    shell.add_window_surface(
-        WINDOW,
-        HitGraphRenderer::default(),
-        (200, 100),
-        (200.0, 100.0),
-    );
-    shell.update();
-    shell
+    let window_id = attach_first_window(&mut shell, HitGraphRenderer::default());
+    (shell, window_id)
 }
 
 fn click<R>(surface: &mut SurfaceMut<'_, R>, x: f32, y: f32) -> bool
@@ -152,22 +168,22 @@ fn root_size(tree: Option<&LayoutTree>) -> (f32, f32) {
 fn a_press_in_a_window_reaches_only_that_windows_content() {
     let _guard = test_guard();
     let windows = TwoWindows::new();
-    let mut shell = two_window_shell(&windows);
+    let (mut shell, window_id) = two_window_shell(&windows);
     assert_eq!(shell.window_roots().len(), 1, "the window root registered");
     assert_eq!(
         shell.surface_ids(),
-        vec![RootId::Primary, RootId::Window(WINDOW)]
+        vec![RootId::Primary, RootId::Window(window_id)]
     );
 
     let mut window = shell
-        .surface(RootId::Window(WINDOW))
+        .surface(RootId::Window(window_id))
         .expect("window surface");
     assert!(
         click(&mut window, 40.0, 20.0),
         "the window's box is under the press"
     );
     assert_eq!(windows.presses(), (0, 1));
-    assert_eq!(shell.active_root(), RootId::Window(WINDOW));
+    assert_eq!(shell.active_root(), RootId::Window(window_id));
 
     let mut primary = shell.primary();
     assert!(click(&mut primary, 40.0, 20.0));
@@ -179,10 +195,10 @@ fn a_press_in_a_window_reaches_only_that_windows_content() {
 fn hovering_a_window_changes_only_that_windows_pointer_icon() {
     let _guard = test_guard();
     let windows = TwoWindows::new();
-    let mut shell = two_window_shell(&windows);
+    let (mut shell, window_id) = two_window_shell(&windows);
 
     let mut window = shell
-        .surface(RootId::Window(WINDOW))
+        .surface(RootId::Window(window_id))
         .expect("window surface");
     assert!(window.set_cursor(10.0, 10.0));
     assert_eq!(window.take_pointer_icon_change(), Some(PointerIcon::TEXT));
@@ -195,7 +211,7 @@ fn hovering_a_window_changes_only_that_windows_pointer_icon() {
     assert!(shell.set_cursor(10.0, 10.0));
     assert_eq!(shell.take_pointer_icon_change(), Some(PointerIcon::POINTER));
     let window = shell
-        .surface(RootId::Window(WINDOW))
+        .surface(RootId::Window(window_id))
         .expect("window surface");
     assert_eq!(window.take_pointer_icon_change(), None);
 }
@@ -204,7 +220,7 @@ fn hovering_a_window_changes_only_that_windows_pointer_icon() {
 fn each_surface_snapshots_the_layout_of_its_own_root() {
     let _guard = test_guard();
     let windows = TwoWindows::new();
-    let mut shell = two_window_shell(&windows);
+    let (mut shell, window_id) = two_window_shell(&windows);
 
     shell.with_layout_tree(|tree| {
         let root = tree.expect("primary layout").root();
@@ -221,7 +237,7 @@ fn each_surface_snapshots_the_layout_of_its_own_root() {
         );
     });
     let mut window = shell
-        .surface(RootId::Window(WINDOW))
+        .surface(RootId::Window(window_id))
         .expect("window surface");
     window.with_layout_tree(|tree| {
         let root = tree.expect("window layout").root();
@@ -239,10 +255,10 @@ fn each_surface_snapshots_the_layout_of_its_own_root() {
 fn a_window_surface_follows_its_root_out_of_the_tree_and_back() {
     let _guard = test_guard();
     let windows = TwoWindows::new();
-    let mut shell = two_window_shell(&windows);
+    let (mut shell, window_id) = two_window_shell(&windows);
     assert!(
         shell
-            .surface(RootId::Window(WINDOW))
+            .surface(RootId::Window(window_id))
             .and_then(|surface| surface.root())
             .is_some(),
         "the surface found its root"
@@ -252,7 +268,7 @@ fn a_window_surface_follows_its_root_out_of_the_tree_and_back() {
     shell.update();
     assert!(shell.window_roots().is_empty());
     let window = shell
-        .surface(RootId::Window(WINDOW))
+        .surface(RootId::Window(window_id))
         .expect("the surface stays");
     assert_eq!(window.root(), None);
     assert!(
@@ -263,7 +279,7 @@ fn a_window_surface_follows_its_root_out_of_the_tree_and_back() {
     windows.show_window(true);
     shell.update();
     let mut window = shell
-        .surface(RootId::Window(WINDOW))
+        .surface(RootId::Window(window_id))
         .expect("window surface");
     assert!(window.root().is_some(), "the window root came back");
     assert!(click(&mut window, 40.0, 20.0));
@@ -274,11 +290,11 @@ fn a_window_surface_follows_its_root_out_of_the_tree_and_back() {
 fn removing_a_window_surface_hands_back_its_renderer() {
     let _guard = test_guard();
     let windows = TwoWindows::new();
-    let mut shell = two_window_shell(&windows);
+    let (mut shell, window_id) = two_window_shell(&windows);
 
-    assert!(shell.remove_window_surface(WINDOW).is_some());
-    assert!(shell.surface(RootId::Window(WINDOW)).is_none());
-    assert!(shell.remove_window_surface(WINDOW).is_none());
+    assert!(shell.remove_window_surface(window_id).is_some());
+    assert!(shell.surface(RootId::Window(window_id)).is_none());
+    assert!(shell.remove_window_surface(window_id).is_none());
     shell.update();
     assert_eq!(
         shell.window_roots().len(),
@@ -295,17 +311,17 @@ fn removing_a_window_surface_hands_back_its_renderer() {
 fn the_soft_keyboard_belongs_to_the_active_surface() {
     let _guard = test_guard();
     let windows = TwoWindows::new();
-    let mut shell = two_window_shell(&windows);
+    let (mut shell, window_id) = two_window_shell(&windows);
     let primary_keyboard = Rc::new(SoftKeyboardProbe::default());
     let window_keyboard = Rc::new(SoftKeyboardProbe::default());
     shell.set_platform_text_input(primary_keyboard.clone());
     shell
-        .surface(RootId::Window(WINDOW))
+        .surface(RootId::Window(window_id))
         .expect("window surface")
         .set_platform_text_input(window_keyboard.clone());
 
     let mut window = shell
-        .surface(RootId::Window(WINDOW))
+        .surface(RootId::Window(window_id))
         .expect("window surface");
     assert!(click(&mut window, 40.0, 20.0));
     let focus_flag = Rc::new(RefCell::new(false));
@@ -395,7 +411,7 @@ fn a_draw_change_in_a_window_updates_only_that_windows_scene() {
                 Column(Modifier::empty(), ColumnSpec::default(), move || {
                     translated_box(primary_offset);
                     Box(
-                        Modifier::empty().window_root(WINDOW, Rc::clone(&window)),
+                        Modifier::empty().window_root(Rc::clone(&window)),
                         BoxSpec::default(),
                         move || translated_box(window_offset),
                     );
@@ -403,8 +419,7 @@ fn a_draw_change_in_a_window_updates_only_that_windows_scene() {
             }
         },
     );
-    shell.add_window_surface(WINDOW, window_counts.renderer(), (200, 100), (200.0, 100.0));
-    shell.update();
+    let window_id = attach_first_window(&mut shell, window_counts.renderer());
     primary.reset();
     window_counts.reset();
     shell.debug_enter_app_context(cranpose_ui::request_render_invalidation);
@@ -444,7 +459,7 @@ fn a_draw_change_in_a_window_updates_only_that_windows_scene() {
     assert!(!window_counts.last_dirty_nodes.borrow().is_empty());
     assert!(
         shell
-            .surface(RootId::Window(WINDOW))
+            .surface(RootId::Window(window_id))
             .expect("window surface")
             .last_update_result()
             .visual_changed
@@ -480,20 +495,19 @@ fn a_surface_keeps_owing_its_frame_until_the_platform_takes_it() {
                 *offset.borrow_mut() = Some(window_offset);
                 let window = Rc::clone(&window);
                 Box(
-                    Modifier::empty().window_root(WINDOW, Rc::clone(&window)),
+                    Modifier::empty().window_root(Rc::clone(&window)),
                     BoxSpec::default(),
                     move || translated_box(window_offset),
                 );
             }
         },
     );
-    shell.add_window_surface(WINDOW, window_counts.renderer(), (200, 100), (200.0, 100.0));
-    shell.update();
+    let window_id = attach_first_window(&mut shell, window_counts.renderer());
     shell.update();
     assert!(shell.take_frame_owed(), "the first frames drew the primary");
     assert!(
         shell
-            .surface(RootId::Window(WINDOW))
+            .surface(RootId::Window(window_id))
             .expect("window surface")
             .take_frame_owed()
     );
@@ -503,7 +517,7 @@ fn a_surface_keeps_owing_its_frame_until_the_platform_takes_it() {
     shell.update();
     shell.update();
     let mut window = shell
-        .surface(RootId::Window(WINDOW))
+        .surface(RootId::Window(window_id))
         .expect("window surface");
     assert!(
         !window.last_update_result().visual_changed,
@@ -564,7 +578,7 @@ fn a_press_carries_the_screen_position_of_its_surfaces_window() {
                     press_recorder(Rc::clone(&primary_press));
                     let window_press = Rc::clone(&window_press);
                     Box(
-                        Modifier::empty().window_root(WINDOW, Rc::clone(&window)),
+                        Modifier::empty().window_root(Rc::clone(&window)),
                         BoxSpec::default(),
                         move || press_recorder(Rc::clone(&window_press)),
                     );
@@ -572,16 +586,10 @@ fn a_press_carries_the_screen_position_of_its_surfaces_window() {
             }
         },
     );
-    shell.add_window_surface(
-        WINDOW,
-        HitGraphRenderer::default(),
-        (200, 100),
-        (200.0, 100.0),
-    );
-    shell.update();
+    let window_id = attach_first_window(&mut shell, HitGraphRenderer::default());
 
     let mut window = shell
-        .surface(RootId::Window(WINDOW))
+        .surface(RootId::Window(window_id))
         .expect("window surface");
     window.set_screen_origin(Some(cranpose_ui::Point::new(100.0, 50.0)));
     assert!(click(&mut window, 10.0, 5.0));
@@ -674,8 +682,6 @@ fn movable_content_torn_into_a_fresh_column_lays_out_after_the_strip() {
     );
 }
 
-const SECOND_WINDOW: u64 = 8;
-
 #[cranpose_ui::composable]
 #[allow(non_snake_case)]
 fn TornStrip() {
@@ -732,7 +738,7 @@ fn a_page_torn_into_a_new_window_root_lays_out_below_that_windows_strip() {
                 Column(Modifier::empty(), ColumnSpec::default(), move || {
                     let shown_first = if is_torn.get() { 2 } else { 1 };
                     Box(
-                        Modifier::empty().window_root(WINDOW, Rc::clone(&first)),
+                        Modifier::empty().window_root(Rc::clone(&first)),
                         BoxSpec::default(),
                         move || {
                             cranpose_ui::widgets::PopupHost(move || TornWindowChrome(shown_first))
@@ -740,7 +746,7 @@ fn a_page_torn_into_a_new_window_root_lays_out_below_that_windows_strip() {
                     );
                     if is_torn.get() {
                         Box(
-                            Modifier::empty().window_root(SECOND_WINDOW, Rc::clone(&second)),
+                            Modifier::empty().window_root(Rc::clone(&second)),
                             BoxSpec::default(),
                             move || {
                                 tick.get();
@@ -752,17 +758,12 @@ fn a_page_torn_into_a_new_window_root_lays_out_below_that_windows_strip() {
             }
         },
     );
-    shell.add_window_surface(
-        WINDOW,
-        HitGraphRenderer::default(),
-        (200, 100),
-        (200.0, 100.0),
-    );
-    shell.update();
+    attach_first_window(&mut shell, HitGraphRenderer::default());
     (*torn.borrow()).expect("state").set(true);
     shell.update();
+    let second_window_id = window_root_at(&shell, 1);
     shell.add_window_surface(
-        SECOND_WINDOW,
+        second_window_id,
         HitGraphRenderer::default(),
         (200, 100),
         (200.0, 100.0),
@@ -771,7 +772,7 @@ fn a_page_torn_into_a_new_window_root_lays_out_below_that_windows_strip() {
     shell.update();
     let page_in_second = |shell: &mut AppShell<HitGraphRenderer>| {
         shell
-            .surface(RootId::Window(SECOND_WINDOW))
+            .surface(RootId::Window(second_window_id))
             .expect("second window")
             .with_layout_tree(|tree| find_box_sized(tree.expect("layout").root(), 90.0, 30.0))
     };

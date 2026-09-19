@@ -7838,7 +7838,12 @@ version = \"0.1.0\"
             "    /// The value.\n    let x =\n        1;\n    // and the other\n    let y = 2;\n",
         );
         assert_eq!(
-            duplication_gate::find_violations(&[moved.clone()], &[], &[old_source], &ranges),
+            duplication_gate::find_violations(
+                std::slice::from_ref(&moved),
+                &[],
+                &[old_source],
+                &ranges
+            ),
             Vec::<String>::new()
         );
         let other = duplication_gate::clone_text("    let z = 3;\n");

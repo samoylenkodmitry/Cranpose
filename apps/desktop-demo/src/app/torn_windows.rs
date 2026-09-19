@@ -1,6 +1,6 @@
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
-use cranpose::{rememberWindowStateAt, WindowConfig, WindowId, WindowNode, WindowState};
+use cranpose::{rememberWindowStateAt, WindowConfig, WindowModifierExt, WindowState};
 use cranpose_core::{key, remember, rememberMutableStateOf, MutableState};
 use cranpose_ui::{
     composable, Box, BoxSpec, Modifier, Point, PointerEventKind, PointerInputScope, Size,
@@ -889,11 +889,13 @@ fn TornWindowNode(windows: Windows, window: TornWindow) {
     }
     let parked = window.parked;
     let view = WindowView { windows, window };
-    WindowNode(
-        WindowId::from_runtime(view.windows.id, id),
-        WindowConfig::borderless_for_state(rules.title, state)
-            .with_transparent(true)
-            .with_visible(!parked),
+    Box(
+        Modifier::empty().window(
+            WindowConfig::borderless_for_state(rules.title, state)
+                .with_transparent(true)
+                .with_visible(!parked),
+        ),
+        BoxSpec::default(),
         move || {
             let view = view.clone();
             let chrome = view.windows.chrome();
