@@ -134,6 +134,19 @@ impl<R: Renderer> RootSurface<R> {
         }
     }
 
+    pub(crate) fn screen_point_inside(&self, screen: Point) -> Option<Point> {
+        let origin = self.screen_origin?;
+        let local = Point {
+            x: screen.x - origin.x,
+            y: screen.y - origin.y,
+        };
+        (local.x >= 0.0
+            && local.y >= 0.0
+            && local.x <= self.viewport.0
+            && local.y <= self.viewport.1)
+            .then_some(local)
+    }
+
     pub(crate) fn set_root(&mut self, root: Option<NodeId>) {
         if self.root == root {
             return;

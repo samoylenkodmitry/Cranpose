@@ -137,6 +137,7 @@ where
         let result = app_context.enter(|| {
             run_in_mutable_snapshot(|| self.set_cursor_inner(x, y, event_time)).unwrap_or(false)
         });
+        self.route_drag_and_drop();
         if result {
             self.mark_dirty();
         }
@@ -375,6 +376,7 @@ where
             })
             .unwrap_or(false)
         });
+        self.route_drag_and_drop();
         if result {
             self.mark_dirty();
         }
@@ -401,6 +403,7 @@ where
         let result = app_context.enter(|| {
             run_in_mutable_snapshot(|| self.pointer_released_inner(event_time)).unwrap_or(false)
         });
+        self.route_drag_and_drop();
         if result {
             self.mark_dirty();
         }
@@ -869,6 +872,24 @@ where
                 self.cancel_gesture_inner(event_time);
             })
         });
+        self.route_drag_and_drop();
+    }
+
+    fn route_drag_and_drop(&mut self) {
+        let app_context = Rc::clone(&self.shell.app.app_context);
+        let source = self.index;
+        let shell = &mut *self.shell;
+        let routed = app_context.enter(|| {
+            run_in_mutable_snapshot(|| {
+                app_context
+                    .drag_and_drop()
+                    .route(|point| shell.drag_and_drop_target_at(point, source))
+            })
+            .unwrap_or(false)
+        });
+        if routed {
+            shell.mark_all_dirty();
+        }
     }
 
     /// Ends the gesture only when the pointer leaving really ended it.

@@ -719,6 +719,38 @@ where
         })
     }
 
+    /// The `drag_and_drop_target` under `point` and where the point falls in
+    /// that target's surface. A point on the screen is looked up in every
+    /// surface whose window position the platform told, later windows
+    /// first and the primary last; a point without one only in `source`,
+    /// the surface holding the press.
+    pub(crate) fn drag_and_drop_target_at(
+        &mut self,
+        point: cranpose_ui::DragAndDropPoint,
+        source: usize,
+    ) -> Option<(NodeId, cranpose_ui::Point)> {
+        let app_context = Rc::clone(&self.app.app_context);
+        let candidates: Vec<(usize, cranpose_ui::Point)> = match point.screen {
+            Some(screen) => (0..self.surfaces.len())
+                .rev()
+                .filter_map(|index| {
+                    let local = self.surfaces[index].screen_point_inside(screen)?;
+                    Some((index, local))
+                })
+                .collect(),
+            None => vec![(source, point.local)],
+        };
+        candidates.into_iter().find_map(|(index, local)| {
+            self.surfaces[index]
+                .renderer
+                .scene()
+                .hit_test_nodes(local.x, local.y)
+                .into_iter()
+                .find(|node| app_context.drag_and_drop().is_target(*node))
+                .map(|node| (node, local))
+        })
+    }
+
     /// Names the surface the platform considers focused, which is where the
     /// soft keyboard belongs. Pointer presses activate their surface on
     /// their own; a platform calls this for focus it grants otherwise.

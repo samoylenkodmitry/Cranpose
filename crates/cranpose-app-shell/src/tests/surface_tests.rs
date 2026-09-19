@@ -6,7 +6,8 @@ use std::{
 use cranpose_core::{MutableState, location_key, rememberMutableStateOf};
 use cranpose_render_common::RenderScene;
 use cranpose_ui::{
-    Box, BoxSpec, Column, ColumnSpec, LayoutBox, LayoutTree, Modifier, Size, WindowRootDescriptor,
+    Box, BoxSpec, Column, ColumnSpec, DragAndDropSource, DragAndDropTarget, LayoutBox, LayoutTree,
+    Modifier, Point, Size, WindowRootDescriptor,
 };
 use cranpose_ui_graphics::{GraphicsLayer, PointerIcon};
 
@@ -86,6 +87,125 @@ fn the_primary_has_content_only_outside_window_roots() {
         shell.primary_has_content(),
         "the page back inline is the primary's own content"
     );
+}
+
+type TransferLog = RefCell<Vec<String>>;
+
+fn note(log: &TransferLog, line: impl Into<String>) {
+    log.borrow_mut().push(line.into());
+}
+
+fn payload_number(payload: &cranpose_ui::DragAndDropPayload) -> u64 {
+    payload.downcast_ref::<u64>().copied().unwrap_or(0)
+}
+
+fn logged_source(log: &Rc<TransferLog>) -> DragAndDropSource {
+    let started = Rc::clone(log);
+    let ended = Rc::clone(log);
+    DragAndDropSource::new(7u64)
+        .on_started(move |_| note(&started, "started"))
+        .on_ended(move |outcome| note(&ended, format!("ended {outcome:?}")))
+}
+
+fn logged_target(log: &Rc<TransferLog>) -> DragAndDropTarget {
+    let entered = Rc::clone(log);
+    let exited = Rc::clone(log);
+    let dropped = Rc::clone(log);
+    DragAndDropTarget::new()
+        .on_entered(move |payload| note(&entered, format!("entered {}", payload_number(payload))))
+        .on_exited(move |_| note(&exited, "exited"))
+        .on_drop(move |payload, at| {
+            note(
+                &dropped,
+                format!("drop {} at {},{}", payload_number(payload), at.x, at.y),
+            );
+            true
+        })
+}
+
+fn drag_and_drop_shell(log: &Rc<TransferLog>) -> AppShell<HitGraphRenderer> {
+    let window = test_window(200.0, 100.0);
+    let mut shell = AppShell::new(
+        HitGraphRenderer::default(),
+        location_key(file!(), line!(), column!()),
+        {
+            let log = Rc::clone(log);
+            move || {
+                let log = Rc::clone(&log);
+                let window = Rc::clone(&window);
+                Column(Modifier::empty(), ColumnSpec::default(), move || {
+                    Box(
+                        Modifier::empty()
+                            .size(Size::new(40.0, 40.0))
+                            .drag_and_drop_source(logged_source(&log)),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                    let target = logged_target(&log);
+                    Box(
+                        Modifier::empty().window_root(Rc::clone(&window)),
+                        BoxSpec::default(),
+                        move || {
+                            Box(
+                                Modifier::empty()
+                                    .size(Size::new(90.0, 30.0))
+                                    .drag_and_drop_target(target.clone()),
+                                BoxSpec::default(),
+                                || {},
+                            );
+                        },
+                    );
+                });
+            }
+        },
+    );
+    let window_id = attach_first_window(&mut shell, HitGraphRenderer::default());
+    shell.set_screen_origin(Some(Point::new(0.0, 0.0)));
+    shell
+        .surface(RootId::Window(window_id))
+        .expect("window surface")
+        .set_screen_origin(Some(Point::new(300.0, 100.0)));
+    shell
+}
+
+fn drag_from_the_source_to(shell: &mut AppShell<HitGraphRenderer>, x: f32, y: f32) {
+    let mut primary = shell.primary();
+    primary.set_cursor(10.0, 10.0);
+    primary.pointer_pressed();
+    primary.set_cursor(30.0, 10.0);
+    primary.set_cursor(x, y);
+}
+
+#[test]
+fn a_payload_dragged_out_of_one_window_drops_on_a_target_in_another() {
+    let _guard = test_guard();
+    let log = Rc::new(TransferLog::default());
+    let mut shell = drag_and_drop_shell(&log);
+    drag_from_the_source_to(&mut shell, 320.0, 115.0);
+    assert_eq!(
+        log.take(),
+        vec!["started", "entered 7"],
+        "the transfer reaches the target through the window's screen position"
+    );
+    shell.primary().set_cursor(500.0, 500.0);
+    assert_eq!(log.take(), vec!["exited"]);
+    shell.primary().set_cursor(320.0, 115.0);
+    shell.primary().pointer_released();
+    assert_eq!(
+        log.take(),
+        vec!["entered 7", "drop 7 at 20,15", "ended Dropped"],
+        "the drop lands in the target's own coordinates"
+    );
+}
+
+#[test]
+fn a_payload_released_over_no_target_misses() {
+    let _guard = test_guard();
+    let log = Rc::new(TransferLog::default());
+    let mut shell = drag_and_drop_shell(&log);
+    drag_from_the_source_to(&mut shell, 500.0, 500.0);
+    shell.primary().pointer_released();
+    assert_eq!(log.take(), vec!["started", "ended Missed"]);
 }
 
 struct TestWindow {

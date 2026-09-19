@@ -54,6 +54,7 @@ pub struct AppContext {
     pointer_input_tasks: crate::modifier::pointer_input::PointerInputTaskRegistry,
     modifier_chain_trace: RefCell<Option<Arc<ModifierChainTraceCallback>>>,
     window_roots: crate::modifier::WindowRootRegistry,
+    drag_and_drop: crate::modifier::DragAndDropState,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -221,6 +222,7 @@ impl AppContext {
             pointer_input_tasks: crate::modifier::pointer_input::PointerInputTaskRegistry::new(),
             modifier_chain_trace: RefCell::new(None),
             window_roots: crate::modifier::WindowRootRegistry::default(),
+            drag_and_drop: crate::modifier::DragAndDropState::default(),
         });
         *context.self_weak.borrow_mut() = Rc::downgrade(&context);
         APP_CONTEXTS.with(|contexts| {
@@ -243,6 +245,11 @@ impl AppContext {
     /// The window roots attached in this context.
     pub fn window_roots(&self) -> &crate::modifier::WindowRootRegistry {
         &self.window_roots
+    }
+
+    /// The drag and drop transfer and targets of this context.
+    pub fn drag_and_drop(&self) -> &crate::modifier::DragAndDropState {
+        &self.drag_and_drop
     }
 
     #[doc(hidden)]

@@ -647,6 +647,20 @@ carried by the framework's window group. Neither has a model.
 6. **Drag and drop across windows.** The two modifiers, the shell's transfer
    tracking across surfaces, and tests for enter, exit, drop and a drop
    outside every target.
+   As built: `Modifier::drag_and_drop_source(DragAndDropSource)` and
+   `Modifier::drag_and_drop_target(DragAndDropTarget)` in
+   `crates/cranpose-ui/src/modifier/drag_and_drop.rs`. The source is a
+   pointer node that starts a transfer once a press moves past the drag
+   threshold and records every step; the target registers its node in the
+   app context's `DragAndDropState` and is a pointer target so a hit test
+   finds it. The state routes the steps (`DragAndDropState::route`) given
+   one answer from the shell, the target under a point: the shell looks a
+   screen point up in every surface whose window position it knows, later
+   windows first and the primary last, and a point without a screen
+   position only in the surface holding the press. Every surface's cursor,
+   release and cancel path routes afterwards, so a peer window's events
+   drive a transfer like the primary's. Handlers get positions in the
+   target's own surface; the source hears `Dropped`, `Missed` or `Cancelled`.
 7. **Demos on the modifiers.** Tabs and tool windows rewritten as above,
    `torn_windows.rs` deleted, the drag tool reading the demos' new trace.
 8. **Docs and PR.** As built, the PR description, and the gates.
