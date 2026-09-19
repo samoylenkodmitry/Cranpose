@@ -5,7 +5,6 @@ fn main() {
     init_logging();
     AppLauncher::new()
         .with_title("Cranpose Tool Windows")
-        .with_size(1, 1)
         .with_fonts(DEMO_FONTS)
-        .run_windows(tool_windows_app);
+        .run(tool_windows_app);
 }

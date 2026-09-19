@@ -222,8 +222,9 @@ use super::{
     primary_declaration_host_needs_direct_update, primary_frame_waker_uses_event_proxy,
     primary_launch_requires_initial_redraw, primary_pointer_gesture_poll_action,
     primary_pointer_move_should_recover_press, primary_surface_redraw_drives_app,
-    primary_viewport_for_surface_size, recovered_native_window_drag_start_pointer,
-    scroll_frame_request, should_chain_no_vsync_redraw, surface_reconfigure_requires_redraw,
+    primary_viewport_for_surface_size, primary_window_should_show,
+    recovered_native_window_drag_start_pointer, scroll_frame_request, should_chain_no_vsync_redraw,
+    surface_reconfigure_requires_redraw,
 };
 #[cfg(feature = "robot")]
 use super::{
@@ -836,6 +837,13 @@ fn hidden_primary_frame_waker_uses_event_loop_proxy() {
     assert!(!primary_frame_waker_uses_event_proxy(true, false));
     assert!(primary_frame_waker_uses_event_proxy(false, false));
     assert!(primary_frame_waker_uses_event_proxy(true, true));
+}
+
+#[test]
+fn the_primary_window_shows_only_content_of_its_own_and_never_headless() {
+    assert!(primary_window_should_show(false, true));
+    assert!(!primary_window_should_show(false, false));
+    assert!(!primary_window_should_show(true, true));
 }
 
 #[test]

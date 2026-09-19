@@ -42,6 +42,52 @@ where
     window_id
 }
 
+#[test]
+fn the_primary_has_content_only_outside_window_roots() {
+    let _guard = test_guard();
+    let torn: Rc<RefCell<Option<MutableState<bool>>>> = Rc::new(RefCell::new(None));
+    let window = test_window(200.0, 100.0);
+    let mut shell = AppShell::new(
+        HitGraphRenderer::default(),
+        location_key(file!(), line!(), column!()),
+        {
+            let torn = Rc::clone(&torn);
+            let window = Rc::clone(&window);
+            move || {
+                let is_torn = rememberMutableStateOf(|| true);
+                *torn.borrow_mut() = Some(is_torn);
+                let window = Rc::clone(&window);
+                Column(Modifier::empty(), ColumnSpec::default(), move || {
+                    Box(Modifier::empty(), BoxSpec::default(), || {});
+                    let modifier = if is_torn.get() {
+                        Modifier::empty().window_root(Rc::clone(&window))
+                    } else {
+                        Modifier::empty()
+                    };
+                    Box(modifier, BoxSpec::default(), || {
+                        Box(
+                            Modifier::empty().size(Size::new(90.0, 30.0)),
+                            BoxSpec::default(),
+                            || {},
+                        );
+                    });
+                });
+            }
+        },
+    );
+    shell.update();
+    assert!(
+        !shell.primary_has_content(),
+        "a root whose only sized node is in a window shows nothing of its own"
+    );
+    (*torn.borrow()).expect("state").set(false);
+    shell.update();
+    assert!(
+        shell.primary_has_content(),
+        "the page back inline is the primary's own content"
+    );
+}
+
 struct TestWindow {
     size: Cell<Size>,
 }

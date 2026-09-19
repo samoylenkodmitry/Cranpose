@@ -677,6 +677,7 @@ struct App {
     cursors: crate::desktop_cursor::DesktopCursors,
     current_modifiers: winit::keyboard::ModifiersState,
     last_cursor_position: Option<(f32, f32)>,
+    primary_shown: Arc<std::sync::atomic::AtomicBool>,
     #[cfg(feature = "robot")]
     robot_controller: Option<RobotController>,
     #[cfg(feature = "robot")]
@@ -745,6 +746,7 @@ impl App {
             cursors: crate::desktop_cursor::DesktopCursors::default(),
             current_modifiers: winit::keyboard::ModifiersState::empty(),
             last_cursor_position: None,
+            primary_shown: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             #[cfg(feature = "robot")]
             robot_controller: None,
             #[cfg(feature = "robot")]
@@ -853,6 +855,7 @@ impl App {
             .last_frame_start_time
             .and_then(|started_at| frame_interval.map(|interval| started_at + interval))
             .is_some_and(|deadline| deadline > Instant::now());
+        let primary_visible = self.primary_visible();
         let direct_declaration_update = {
             let Some(app) = &mut self.app else {
                 return;
@@ -862,7 +865,7 @@ impl App {
                 return;
             }
             let direct_declaration_update = primary_declaration_host_needs_direct_update(
-                self.settings.primary_window_visible,
+                primary_visible,
                 self.settings.headless,
                 needs_redraw,
                 waiting_for_frame_cap,
@@ -870,7 +873,7 @@ impl App {
             if direct_declaration_update {
                 trace_native_window!(
                     "primary declaration host proxy update visible={} headless={}",
-                    self.settings.primary_window_visible,
+                    primary_visible,
                     self.settings.headless
                 );
                 let update_result = update_declaration_host_frame(
@@ -1254,7 +1257,7 @@ impl App {
             }
         }
         trace_native_window_timing!("sync done in {}ms", sync_started.elapsed().as_millis());
-        if self.hidden_bootstrap_has_no_visible_peer_windows() {
+        if self.no_window_left_to_show() {
             event_loop.exit();
         }
     }
@@ -1296,8 +1299,35 @@ impl App {
         native_windows_to_create
     }
 
-    fn hidden_bootstrap_has_no_visible_peer_windows(&self) -> bool {
-        if self.settings.primary_window_visible || self.settings.headless {
+    fn primary_visible(&self) -> bool {
+        self.primary_shown
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    fn sync_primary_visibility(&mut self) {
+        let (Some(window), Some(app)) = (self.window.clone(), self.app.as_mut()) else {
+            return;
+        };
+        let was_shown = self
+            .primary_shown
+            .load(std::sync::atomic::Ordering::Relaxed);
+        show_primary_when_it_has_content(
+            &self.primary_shown,
+            app,
+            window.as_ref(),
+            self.settings.headless,
+        );
+        if !was_shown
+            && self
+                .primary_shown
+                .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            request_redraw_once(&window, &mut self.primary_redraw_pending);
+        }
+    }
+
+    fn no_window_left_to_show(&self) -> bool {
+        if self.primary_visible() || self.settings.headless {
             return false;
         }
         if self
@@ -4210,6 +4240,23 @@ fn primary_surface_redraw_drives_app(primary_window_visible: bool, headless: boo
     primary_window_visible && !headless
 }
 
+fn primary_window_should_show(headless: bool, has_content: bool) -> bool {
+    !headless && has_content
+}
+
+fn show_primary_when_it_has_content(
+    shown: &std::sync::atomic::AtomicBool,
+    app: &mut AppShell<WgpuRenderer>,
+    window: &dyn Window,
+    headless: bool,
+) {
+    let show = primary_window_should_show(headless, app.primary_has_content());
+    if show != shown.load(std::sync::atomic::Ordering::Relaxed) {
+        shown.store(show, std::sync::atomic::Ordering::Relaxed);
+        window.set_visible(show);
+    }
+}
+
 fn primary_frame_waker_uses_event_proxy(primary_window_visible: bool, headless: bool) -> bool {
     !primary_surface_redraw_drives_app(primary_window_visible, headless)
 }
@@ -4737,7 +4784,6 @@ impl ApplicationHandler for App {
         let initial_width = self.settings.initial_width;
         let initial_height = self.settings.initial_height;
         let headless = self.settings.headless;
-        let primary_window_visible = self.settings.primary_window_visible;
 
         let window: Arc<dyn Window> = match event_loop.create_window(
             WindowAttributes::default()
@@ -4864,9 +4910,7 @@ impl ApplicationHandler for App {
             self.robot_drives(),
         );
         accessibility.sync(&mut app);
-        if !headless && primary_window_visible {
-            window.set_visible(true);
-        }
+        show_primary_when_it_has_content(&self.primary_shown, &mut app, window.as_ref(), headless);
 
         let mut dev_options = self.settings.dev_options.clone();
         dev_options.frame_pacing_mode = self.frame_pacing_mode();
@@ -4880,12 +4924,10 @@ impl ApplicationHandler for App {
 
         let frame_waker_window = window.clone();
         let frame_waker_event_proxy = self.event_proxy.clone();
-        let use_event_proxy = primary_frame_waker_uses_event_proxy(
-            self.settings.primary_window_visible,
-            self.settings.headless,
-        );
+        let frame_waker_shown = Arc::clone(&self.primary_shown);
         app.set_frame_waker(move || {
-            if use_event_proxy {
+            let shown = frame_waker_shown.load(std::sync::atomic::Ordering::Relaxed);
+            if primary_frame_waker_uses_event_proxy(shown, headless) {
                 frame_waker_event_proxy.wake_up();
             } else {
                 frame_waker_window.request_redraw();
@@ -4894,10 +4936,8 @@ impl ApplicationHandler for App {
 
         let mut platform = DesktopWinitPlatform::default();
         platform.set_scale_factor(initial_scale);
-        let request_initial_redraw = primary_launch_requires_initial_redraw(
-            self.settings.primary_window_visible,
-            self.settings.headless,
-        );
+        let request_initial_redraw =
+            primary_launch_requires_initial_redraw(self.primary_visible(), self.settings.headless);
 
         if let Some(theme) = window.theme() {
             self.platform_env
@@ -5399,6 +5439,7 @@ impl ApplicationHandler for App {
 
         let last_frame_start_time = self.last_frame_start_time;
         let registry = Rc::clone(&self.native_window_registry);
+        let primary_visible = self.primary_visible();
         let Some(app) = &mut self.app else { return };
         let Some(window) = self.window.clone() else {
             return;
@@ -5480,7 +5521,7 @@ impl ApplicationHandler for App {
                             app,
                             delta_x,
                             delta_y,
-                            self.settings.primary_window_visible,
+                            primary_visible,
                             self.settings.headless,
                             self.presented_frame_generation,
                         ) else {
@@ -5512,7 +5553,7 @@ impl ApplicationHandler for App {
                             app,
                             delta_x,
                             delta_y,
-                            self.settings.primary_window_visible,
+                            primary_visible,
                             self.settings.headless,
                             self.presented_frame_generation,
                         ) else {
@@ -5564,7 +5605,7 @@ impl ApplicationHandler for App {
                         let present_target = visual_dirty
                             .then(|| {
                                 robot_visible_pump_present_target(
-                                    self.settings.primary_window_visible,
+                                    primary_visible,
                                     self.settings.headless,
                                     1,
                                     self.presented_frame_generation,
@@ -5874,7 +5915,7 @@ impl ApplicationHandler for App {
                             || robot_visual_dirty
                             || self.primary_redraw_pending;
                         controller.waiting_for_present_generation = robot_visible_present_target(
-                            self.settings.primary_window_visible,
+                            primary_visible,
                             self.settings.headless,
                             visual_frame_pending,
                             self.presented_frame_generation,
@@ -5899,7 +5940,7 @@ impl ApplicationHandler for App {
                         let present_target = robot_visual_dirty
                             .then(|| {
                                 robot_visible_pump_present_target(
-                                    self.settings.primary_window_visible,
+                                    primary_visible,
                                     self.settings.headless,
                                     count,
                                     self.presented_frame_generation,
@@ -5927,7 +5968,7 @@ impl ApplicationHandler for App {
                         let present_target = visual_frame_pending
                             .then(|| {
                                 robot_visible_pump_present_target(
-                                    self.settings.primary_window_visible,
+                                    primary_visible,
                                     self.settings.headless,
                                     1,
                                     self.presented_frame_generation,
@@ -5952,10 +5993,7 @@ impl ApplicationHandler for App {
             }
             if robot_visual_dirty {
                 self.robot_visible_surface_dirty = true;
-                if primary_surface_redraw_drives_app(
-                    self.settings.primary_window_visible,
-                    self.settings.headless,
-                ) {
+                if primary_surface_redraw_drives_app(primary_visible, self.settings.headless) {
                     self.last_frame_start_time = None;
                     request_redraw_once(&window, &mut self.primary_redraw_pending);
                 }
@@ -6016,7 +6054,7 @@ impl ApplicationHandler for App {
                     && visible_redraw_pending
                 {
                     controller.waiting_for_present_generation = robot_visible_present_target(
-                        self.settings.primary_window_visible,
+                        primary_visible,
                         self.settings.headless,
                         true,
                         self.presented_frame_generation,
@@ -6053,7 +6091,7 @@ impl ApplicationHandler for App {
                         if follow_up_schedule.needs_frame || update_result.structure_changed {
                             finish_idle = false;
                             if primary_surface_redraw_drives_app(
-                                self.settings.primary_window_visible,
+                                primary_visible,
                                 self.settings.headless,
                             ) {
                                 request_redraw_once(&window, &mut self.primary_redraw_pending);
@@ -6069,7 +6107,7 @@ impl ApplicationHandler for App {
                 } else {
                     if needs_frame
                         && primary_surface_redraw_drives_app(
-                            self.settings.primary_window_visible,
+                            primary_visible,
                             self.settings.headless,
                         )
                     {
@@ -6146,7 +6184,7 @@ impl ApplicationHandler for App {
         let waiting_for_frame_cap =
             needs_redraw && next_frame_time.is_some_and(|deadline| deadline > now);
         let direct_declaration_update = primary_declaration_host_needs_direct_update(
-            self.settings.primary_window_visible,
+            primary_visible,
             self.settings.headless,
             needs_redraw,
             waiting_for_frame_cap,
@@ -6161,7 +6199,7 @@ impl ApplicationHandler for App {
             if direct_declaration_update {
                 trace_native_window!(
                     "primary declaration host direct update visible={} headless={}",
-                    self.settings.primary_window_visible,
+                    primary_visible,
                     self.settings.headless
                 );
                 record_pacing_event(|diag| &mut diag.direct_updates);
@@ -6176,6 +6214,7 @@ impl ApplicationHandler for App {
             }
         }
         let primary_next_event_time = frame_schedule.next_deadline;
+        self.sync_primary_visibility();
         if direct_declaration_update {
             self.sync_native_windows(event_loop);
         }

@@ -706,6 +706,19 @@ where
         app_context.enter(cranpose_ui::window_roots_revision)
     }
 
+    /// Whether the primary root lays out anything of its own: a node with
+    /// area outside every window root. A platform hides the primary window
+    /// while this is false, because every visible node is then in a window
+    /// of its own.
+    pub fn primary_has_content(&mut self) -> bool {
+        let app_context = Rc::clone(&self.app.app_context);
+        app_context.enter(|| {
+            self.surfaces[0]
+                .layout_tree_in_context(&mut self.app)
+                .is_some_and(|tree| tree.root().children.iter().any(layout_has_area))
+        })
+    }
+
     /// Names the surface the platform considers focused, which is where the
     /// soft keyboard belongs. Pointer presses activate their surface on
     /// their own; a platform calls this for focus it grants otherwise.
@@ -1211,6 +1224,11 @@ where
     fn drop(&mut self) {
         self.app.runtime.clear_frame_waker();
     }
+}
+
+fn layout_has_area(layout: &cranpose_ui::LayoutBox) -> bool {
+    (layout.rect.width > 0.0 && layout.rect.height > 0.0)
+        || layout.children.iter().any(layout_has_area)
 }
 
 pub fn default_root_key() -> Key {

@@ -578,9 +578,10 @@ and `try_run_windows`, `WindowView`, `TornWindowsHost` and the torn-windows
 model. The primary window shows the root composition; when the root
 composition places every visible node in a window of its own, the primary
 window stays hidden, which the launcher decided by a flag before. The shell
-keeps its surfaces, but what a platform loop calls to open, close and
-address them lives on one `Surfaces` handle documented as the platform
-contract, not on the application-facing shell.
+keeps its surfaces: what a platform loop calls to open, close and address
+them (`add_window_surface`, `remove_window_surface`, `surface`,
+`window_roots`) is the platform's side of the contract, and nothing an
+application composes ever names a window.
 
 The tabs demo becomes pages, each inline or in a window of its own, a strip
 that is a drop target, and tabs that are drag sources; the tool windows
@@ -619,8 +620,19 @@ carried by the framework's window group. Neither has a model.
    public for platform crates.
 4. **The launcher sets the root composition only.** `run_windows` and
    `try_run_windows` go; the primary window hides itself when the root
-   composition has nothing of its own to show. The shell's surface
-   management moves onto a `Surfaces` handle for platform loops.
+   composition has nothing of its own to show.
+   As built: `AppLauncher::run` is the one entry point and
+   `AppSettings::primary_window_visible` is gone. `AppShell::primary_has_content`
+   answers whether the primary root lays out a node with area outside every
+   window root; the desktop loop shows the primary window when it does and
+   hides it when it does not, checking after the first update and after
+   every idle pass (`sync_primary_visibility`), and the frame waker, the
+   redraw drive and the exit-when-nothing-is-left rule read that runtime
+   state where they read the setting before. The demos launch with `run`.
+   The surface methods stay on `AppShell`: they are what a platform loop
+   calls, a `Surfaces` handle would only rename them, and the
+   application-facing API (`window`, `WindowConfig`, `WindowState`) never
+   reaches them.
 5. **A new window under a held press follows the pointer.** The desktop's
    drag session starts from the press already in flight when the node
    under it now lives in a window that just appeared.
