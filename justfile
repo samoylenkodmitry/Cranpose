@@ -157,6 +157,9 @@ clippy-android:
 
 # Unit tests for the diff-scoping logic itself -- synthetic diffs and
 # synthetic tool output, no git history or external tool required.
+# The gates' own tests. `ci` does not name this and neither does the lint
+# board: xtask is a workspace member, so `just test` already runs exactly
+# these. Kept as its own recipe for running them alone while changing a gate.
 test-quality-gates:
     cargo test -p xtask
 
@@ -647,7 +650,7 @@ _disk-guard:
 # all seven on every pull request.
 
 # What a pull request is gated on. Run this before pushing.
-ci: fmt-check typos versions test clippy clippy-optional-backends clippy-svg clippy-hyphenation clippy-robot clippy-wasm doc budgets test-quality-gates complexity-gate duplication-gate test-robot-discovery test-shell-helpers test-host-lock test-ci-filters test-features test-property bench-smoke test-ci-gate-reachability test-robot-suite-partition test-android-accessibility-contract
+ci: fmt-check typos versions test clippy clippy-optional-backends clippy-svg clippy-hyphenation clippy-robot clippy-wasm doc budgets complexity-gate duplication-gate test-robot-discovery test-shell-helpers test-host-lock test-ci-filters test-features test-property bench-smoke test-ci-gate-reachability test-robot-suite-partition test-android-accessibility-contract
 
 # Needs a Linux box with the X11 stack, an Android SDK and (on macOS) Xcode.
 

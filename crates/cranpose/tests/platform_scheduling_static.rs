@@ -98,7 +98,7 @@ fn ci_architecture_budget_runs_required_gates() {
 
     for recipe in [
         "run: just budgets",
-        "run: just robot-linux",
+        "run: just robot-linux serial",
         "run: just android",
     ] {
         assert!(
@@ -106,6 +106,16 @@ fn ci_architecture_budget_runs_required_gates() {
             "the nightly board should invoke `{recipe}` rather than spelling it inline"
         );
     }
+
+    // The class, not just the recipe. Every push to main runs the parallel
+    // class in `robot-linux-fast`, so a nightly that asked for `all` would
+    // rebuild and rerun those 100 examples to learn nothing. Matching the bare
+    // recipe name would accept exactly that, because it is a prefix of this.
+    assert!(
+        !nightly_workflow.contains("run: just robot-linux\n")
+            && !nightly_workflow.contains("run: just robot-linux all"),
+        "nightly runs the measuring half only; the parallel class is already covered per push"
+    );
 
     assert!(
         !workflow.contains("run: just budgets") && !heavy_workflow.contains("run: just budgets"),

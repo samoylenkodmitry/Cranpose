@@ -68,10 +68,6 @@ jobs:
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
         run: just duplication-gate
 
-      - name: Test the quality gates' diff-scoping logic
-        if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
-        run: just test-quality-gates
-
       - name: Check the docs-only trigger filter
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
         # The predicate the heavy jobs skip on. It runs in this job because
