@@ -212,8 +212,8 @@ use super::{
     NativeWindowPollingDragSession, NativeWindowPositionObservation, NativeWindowPositionOrigin,
     PendingNativeWindowPositions, PrimaryPointerGesturePollAction, WindowFocus,
     clamp_rect_to_monitor_delta, desired_frame_latency, event_loop_control_flow,
-    frame_interval_for_mode, free_running_frame, initial_present_redraw_needed,
-    native_window_drag_poll_deadline, native_window_graph_position,
+    frame_interval_for_mode, free_running_frame, held_press_to_hand_over,
+    initial_present_redraw_needed, native_window_drag_poll_deadline, native_window_graph_position,
     native_window_options_change_is_position_only, native_window_position_poll_needed,
     native_window_redraw_held_while_hidden, nearest_monitor_to_rect, next_frame_anchor,
     occlusion_leaves_a_frame_owed, pace_after_empty_redraw, physical_outer_origin_from_surface,
@@ -1129,6 +1129,38 @@ fn recovered_native_window_drag_prefers_delivered_event_pointer() {
         recovered_native_window_drag_start_pointer(None, Some(global_pointer)),
         Some(global_pointer.position)
     );
+}
+
+#[test]
+fn a_new_window_takes_over_a_held_press_only_when_it_is_under_the_pointer() {
+    let down = NativeWindowPointerState {
+        position: PhysicalPosition::new(40.0, 30.0),
+        primary_down: true,
+    };
+    let up = NativeWindowPointerState {
+        primary_down: false,
+        ..down
+    };
+    assert_eq!(
+        held_press_to_hand_over(Some(down), true, |_| true),
+        Some(down)
+    );
+    assert_eq!(
+        held_press_to_hand_over(Some(down), true, |position| position.x > 100.0),
+        None,
+        "a window elsewhere leaves the press where it is"
+    );
+    assert_eq!(
+        held_press_to_hand_over(Some(down), false, |_| true),
+        None,
+        "a hidden window, or one appearing during a window drag, takes nothing"
+    );
+    assert_eq!(
+        held_press_to_hand_over(Some(up), true, |_| true),
+        None,
+        "a released button is no press to hand over"
+    );
+    assert_eq!(held_press_to_hand_over(None, true, |_| true), None);
 }
 
 #[test]

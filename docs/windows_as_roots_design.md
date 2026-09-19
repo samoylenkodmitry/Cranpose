@@ -636,6 +636,14 @@ carried by the framework's window group. Neither has a model.
 5. **A new window under a held press follows the pointer.** The desktop's
    drag session starts from the press already in flight when the node
    under it now lives in a window that just appeared.
+   As built: when the sync creates a native window while the primary
+   button is down over it and no window drag is running, the loop hands
+   the press over (`hand_held_press_to_new_window`): the surface that held
+   it, primary or peer, gets its gesture cancelled, and the new window gets
+   the press at the pointer through the same path that recovers a press a
+   platform never delivered, so a `window_drag_area` under the pointer
+   starts the window's drag anchored where the pointer is. The rule itself
+   is `held_press_to_hand_over`; the application only chooses the modifier.
 6. **Drag and drop across windows.** The two modifiers, the shell's transfer
    tracking across surfaces, and tests for enter, exit, drop and a drop
    outside every target.

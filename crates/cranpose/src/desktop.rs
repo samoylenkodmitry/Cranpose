@@ -1249,6 +1249,7 @@ impl App {
                     self.remember_native_window_position(&native);
                     self.native_window_ids.insert(native.key, window_id);
                     self.native_windows.insert(window_id, native);
+                    self.hand_held_press_to_new_window(app, window_id);
                 }
                 Err(error) => {
                     self.abort_launch(event_loop, error);
@@ -2173,6 +2174,67 @@ impl App {
             return false;
         };
 
+        self.recover_primary_press_into(app, window_id, pointer)
+    }
+
+    fn hand_held_press_to_new_window(
+        &mut self,
+        app: &mut AppShell<WgpuRenderer>,
+        window_id: WinitWindowId,
+    ) {
+        let platform_probe = &self.native_window_platform_probe;
+        let Some(native) = self.native_windows.get(&window_id) else {
+            return;
+        };
+        let dragging_elsewhere = self
+            .native_windows
+            .values()
+            .any(|other| other.active_drag.is_some());
+        let Some(pointer) = held_press_to_hand_over(
+            native_window_global_pointer_state(platform_probe),
+            native.options.visible && !dragging_elsewhere,
+            |position| native_window_surface_contains_pointer(platform_probe, native, position),
+        ) else {
+            return;
+        };
+        trace_native_window!(
+            "held press handed to key={:?} pointer=({:.1},{:.1})",
+            native.key,
+            pointer.position.x,
+            pointer.position.y
+        );
+        self.cancel_held_press_elsewhere(app, window_id);
+        self.recover_primary_press_into(app, window_id, pointer);
+    }
+
+    fn cancel_held_press_elsewhere(
+        &mut self,
+        app: &mut AppShell<WgpuRenderer>,
+        keep: WinitWindowId,
+    ) {
+        if app.has_active_pointer_gesture() {
+            cancel_app_input(app);
+        }
+        for native in self.native_windows.values_mut() {
+            if native.window.id() == keep {
+                continue;
+            }
+            if let Some(mut surface) = native_surface(app, native)
+                && surface.has_active_pointer_gesture()
+            {
+                cancel_surface_input(&mut surface);
+            }
+        }
+        self.native_global_primary_down = false;
+    }
+
+    fn recover_primary_press_into(
+        &mut self,
+        app: &mut AppShell<WgpuRenderer>,
+        window_id: WinitWindowId,
+        pointer: NativeWindowPointerState,
+    ) -> bool {
+        let platform_probe = &self.native_window_platform_probe;
         let Some(mut native) = self.native_windows.remove(&window_id) else {
             self.native_global_primary_down = false;
             return false;
@@ -3755,6 +3817,15 @@ fn recovered_native_window_drag_start_pointer(
     global_pointer: Option<NativeWindowPointerState>,
 ) -> Option<PhysicalPosition<f64>> {
     event_pointer.or_else(|| global_pointer.map(|pointer| pointer.position))
+}
+
+fn held_press_to_hand_over(
+    pointer: Option<NativeWindowPointerState>,
+    window_can_take_it: bool,
+    window_contains: impl FnOnce(PhysicalPosition<f64>) -> bool,
+) -> Option<NativeWindowPointerState> {
+    let pointer = pointer.filter(|pointer| pointer.primary_down)?;
+    (window_can_take_it && window_contains(pointer.position)).then_some(pointer)
 }
 
 fn primary_pointer_move_should_recover_press(
