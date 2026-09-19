@@ -120,12 +120,10 @@ fn ci_architecture_budget_runs_required_gates() {
         );
     }
 
-    for recipe in ["run: just robot-linux serial"] {
-        assert!(
-            nightly_workflow.contains(recipe),
-            "the nightly board should invoke `{recipe}` rather than spelling it inline"
-        );
-    }
+    assert!(
+        nightly_workflow.contains("run: just robot-linux serial"),
+        "the nightly board should invoke the recipe rather than spelling it inline"
+    );
 
     // The class, not just the recipe. Every push to main runs the parallel
     // class in `robot-linux-fast`, so a nightly that asked for `all` would
