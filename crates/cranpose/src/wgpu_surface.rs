@@ -58,15 +58,17 @@ pub(crate) fn present_initial_placeholder_frame(
     queue: &wgpu::Queue,
     format: wgpu::TextureFormat,
     context: &str,
-) {
-    if let SurfaceFrame::Ready(frame) = current_surface_texture(surface, context) {
-        let view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
-            format: Some(format.remove_srgb_suffix()),
-            ..Default::default()
-        });
-        cranpose_render_wgpu::clear_to_default_background(device, queue, &view);
-        frame.present();
-    }
+) -> bool {
+    let SurfaceFrame::Ready(frame) = current_surface_texture(surface, context) else {
+        return false;
+    };
+    let view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
+        format: Some(format.remove_srgb_suffix()),
+        ..Default::default()
+    });
+    cranpose_render_wgpu::clear_to_default_background(device, queue, &view);
+    frame.present();
+    true
 }
 
 pub(crate) fn surface_present_required(

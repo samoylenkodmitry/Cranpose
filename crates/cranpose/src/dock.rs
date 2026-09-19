@@ -26,6 +26,11 @@
 //! middle of a stack splits the stack around the gap so nothing else moves.
 //! A grip marked with [`DockModifierExt::dock_handle`] tears and snaps its
 //! pane; a [`WindowModifierExt::window_drag_area`] moves the whole window.
+//!
+//! Every window of a dock is transparent. A window torn off mid-drag comes
+//! up before the desktop has marked it visible, and until it has, nothing
+//! can be presented into it; an opaque window would show the desktop's
+//! window colour for those frames, a transparent one shows nothing.
 
 use std::{
     cell::RefCell,
@@ -1186,6 +1191,7 @@ fn DockWindowNode(dock: DockRef, window: DockWindow) {
     WindowNode(
         WindowId::from_runtime(dock.id, id.raw()),
         WindowConfig::borderless_for_state(policy.title.clone(), state)
+            .with_transparent(true)
             .with_visible(!window.parked),
         move || DockHostRoot(dock.clone(), id),
     );

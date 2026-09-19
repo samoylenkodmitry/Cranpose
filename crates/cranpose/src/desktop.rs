@@ -990,6 +990,73 @@ impl App {
         }
     }
 
+    fn refresh_native_window(
+        platform_probe: &NativeWindowPlatformProbe,
+        registry: &Rc<native_window::NativeWindowRegistry>,
+        headless: bool,
+        native: &mut NativeWindowSurface,
+        request: &NativeWindowRequest,
+    ) {
+        native.events = request.events.clone();
+        native.state = request.state;
+        native.group = request.group.clone();
+        let revision_changed = native.revision != request.revision;
+        let options_changed = native.options != request.options;
+        let position_only_options_change = options_changed
+            && native_window_options_change_is_position_only(&native.options, &request.options);
+        let resized =
+            Self::apply_native_window_options(platform_probe, native, &request.options, headless);
+        if revision_changed {
+            native.revision = request.revision;
+            if position_only_options_change {
+                trace_native_window(format_args!(
+                    "sync update position key={:?} title={:?}",
+                    native.key, native.options.title
+                ));
+            } else {
+                trace_native_window(format_args!(
+                    "sync update content key={:?} title={:?}",
+                    native.key, native.options.title
+                ));
+                native.app.request_root_render();
+                native.window.request_redraw();
+            }
+        } else if options_changed && request.options.visible {
+            trace_native_window(format_args!(
+                "sync update options key={:?} title={:?} visible={}",
+                native.key, native.options.title, request.options.visible
+            ));
+            native.window.request_redraw();
+        }
+        if resized {
+            Self::present_before_the_desktop_composites(native, registry, "resize");
+        }
+    }
+
+    /// Renders and presents `native` now, before control returns to the
+    /// desktop.
+    ///
+    /// The desktop composites whatever a window's surface holds the moment
+    /// it gets the run loop back. A window that was just created holds the
+    /// placeholder clear, and a window that was just resized holds a frame
+    /// of the wrong size; waiting for the next redraw request shows either
+    /// for a frame, as a dark blink. Presenting here, inside the same call
+    /// that changed the surface, leaves the desktop nothing stale to show.
+    fn present_before_the_desktop_composites(
+        native: &mut NativeWindowSurface,
+        registry: &Rc<native_window::NativeWindowRegistry>,
+        why: &str,
+    ) {
+        let started = Instant::now();
+        let presented = Self::redraw_native_window(native, registry);
+        trace_native_window_timing(format_args!(
+            "{} {} presented={presented} in {}ms",
+            native.options.title,
+            why,
+            started.elapsed().as_millis()
+        ));
+    }
+
     fn let_go_of_windows_no_longer_declared(&mut self, active_keys: &HashSet<NativeWindowKey>) {
         let stale_window_ids: Vec<WinitWindowId> = self
             .native_windows
@@ -1070,44 +1137,13 @@ impl App {
             let request = self.native_window_request_for_host(&request);
             if let Some(window_id) = self.native_window_ids.get(&request.key).copied() {
                 if let Some(native) = self.native_windows.get_mut(&window_id) {
-                    native.events = request.events.clone();
-                    native.state = request.state;
-                    native.group = request.group.clone();
-                    let revision_changed = native.revision != request.revision;
-                    let options_changed = native.options != request.options;
-                    let position_only_options_change = options_changed
-                        && native_window_options_change_is_position_only(
-                            &native.options,
-                            &request.options,
-                        );
-                    Self::apply_native_window_options(
+                    Self::refresh_native_window(
                         &self.native_window_platform_probe,
-                        native,
-                        &request.options,
+                        &self.native_window_registry,
                         self.settings.headless,
+                        native,
+                        &request,
                     );
-                    if revision_changed {
-                        native.revision = request.revision;
-                        if position_only_options_change {
-                            trace_native_window(format_args!(
-                                "sync update position key={:?} title={:?}",
-                                native.key, native.options.title
-                            ));
-                        } else {
-                            trace_native_window(format_args!(
-                                "sync update content key={:?} title={:?}",
-                                native.key, native.options.title
-                            ));
-                            native.app.request_root_render();
-                            native.window.request_redraw();
-                        }
-                    } else if options_changed && request.options.visible {
-                        trace_native_window(format_args!(
-                            "sync update options key={:?} title={:?} visible={}",
-                            native.key, native.options.title, request.options.visible
-                        ));
-                        native.window.request_redraw();
-                    }
                     continue;
                 }
                 self.native_window_ids.remove(&request.key);
@@ -1535,7 +1571,7 @@ impl App {
             desired_frame_latency(self.frame_pacing_mode(), monitor_refresh_interval(&window)),
         )?;
         surface.configure(&context.device, &surface_config);
-        present_initial_placeholder_frame(
+        let placeholder_presented = present_initial_placeholder_frame(
             &surface,
             &context.device,
             &context.queue,
@@ -1543,7 +1579,7 @@ impl App {
             "native window initial present",
         );
         trace_native_window_timing(format_args!(
-            "{} configure {}ms",
+            "{} configure {}ms placeholder_presented={placeholder_presented}",
             options.title,
             create_started.elapsed().as_millis()
         ));
@@ -1607,7 +1643,7 @@ impl App {
             create_started.elapsed().as_millis()
         ));
 
-        Ok(NativeWindowSurface {
+        let mut native = NativeWindowSurface {
             key: request.key,
             revision: request.revision,
             options: request.options.clone(),
@@ -1627,7 +1663,9 @@ impl App {
             vsync_interval: default_vsync_interval(),
             pending_outer_positions: PendingNativeWindowPositions::default(),
             active_drag: None,
-        })
+        };
+        Self::present_before_the_desktop_composites(&mut native, &registry, "first frame");
+        Ok(native)
     }
 
     fn apply_native_window_options(
@@ -1635,7 +1673,8 @@ impl App {
         native: &mut NativeWindowSurface,
         options: &NativeWindowOptions,
         headless: bool,
-    ) {
+    ) -> bool {
+        let mut resized = false;
         if native.options.title != options.title {
             native.window.set_title(&options.title);
         }
@@ -1701,8 +1740,10 @@ impl App {
             )
         {
             Self::resize_native_surface(native, size.width, size.height);
+            resized = true;
         }
         native.options = options.clone();
+        resized
     }
 
     fn resize_native_surface(native: &mut NativeWindowSurface, width: u32, height: u32) {
@@ -2274,6 +2315,11 @@ impl App {
             }
             WindowEvent::SurfaceResized(new_size) => {
                 Self::apply_native_window_resize(&mut native, new_size.width, new_size.height);
+                Self::present_before_the_desktop_composites(
+                    &mut native,
+                    &self.native_window_registry,
+                    "resize",
+                );
                 sync_after_event = true;
             }
             WindowEvent::ScaleFactorChanged {
@@ -2649,7 +2695,7 @@ impl App {
     fn redraw_native_window(
         native: &mut NativeWindowSurface,
         registry: &Rc<native_window::NativeWindowRegistry>,
-    ) {
+    ) -> bool {
         let frame_started_at = Instant::now();
         let scale_factor = native.window.scale_factor();
         native.app.set_density(scale_factor as f32);
@@ -2660,22 +2706,27 @@ impl App {
             update_result.visual_changed,
             native.app.needs_redraw(),
         ) {
-            return;
+            return false;
         }
         native.surface_dirty = true;
 
         let output = match current_surface_texture(&native.surface, "native window") {
             SurfaceFrame::Ready(output) => output,
             SurfaceFrame::Reconfigure => {
+                trace_native_window(format_args!("redraw surface outdated key={:?}", native.key));
                 let size = native.window.surface_size();
                 Self::resize_native_surface(native, size.width, size.height);
                 if surface_reconfigure_requires_redraw(size.width, size.height) {
                     native.window.request_redraw();
                 }
-                return;
+                return false;
             }
             SurfaceFrame::Skip => {
-                return;
+                trace_native_window(format_args!(
+                    "redraw surface unavailable key={:?}",
+                    native.key
+                ));
+                return false;
             }
         };
         let after_acquire = Instant::now();
@@ -2693,13 +2744,17 @@ impl App {
             native.surface_config.height,
         ) {
             log::error!("native window render failed: {error:?}");
-            return;
+            return false;
         }
         let after_render = Instant::now();
 
         native.window.pre_present_notify();
         output.present();
         let after_present = Instant::now();
+        trace_native_window_timing(format_args!(
+            "{} presented {}x{}",
+            native.options.title, native.surface_config.width, native.surface_config.height
+        ));
         native.surface_dirty = false;
         native
             .app
@@ -2719,6 +2774,7 @@ impl App {
         ) {
             native.window.request_redraw();
         }
+        true
     }
 
     #[cfg(feature = "robot")]
@@ -3873,8 +3929,16 @@ fn native_window_position_poll_needed(
 
 fn trace_native_window_timing(args: std::fmt::Arguments<'_>) {
     if std::env::var_os("CRANPOSE_NATIVE_WINDOW_TIMING").is_some() {
-        println!("native window timing: {args}");
+        println!(
+            "native window timing: t={:.1}ms {args}",
+            timing_trace_clock().elapsed().as_secs_f64() * 1000.0
+        );
     }
+}
+
+fn timing_trace_clock() -> Instant {
+    static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    *START.get_or_init(Instant::now)
 }
 
 fn trace_native_window(args: std::fmt::Arguments<'_>) {

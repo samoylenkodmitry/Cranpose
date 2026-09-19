@@ -22,8 +22,15 @@
 #   drag_window.sh mark <log>                         line count, for `trace`
 #   drag_window.sh trace <log> <since> [regex]        trace lines after <since>, poll noise dropped
 #   drag_window.sh shot <png> [x,y,w,h]               screenshot a region
+#   drag_window.sh record <mov> <seconds>             record the screen in the background; gesture
+#                                                     meanwhile, then `frames` when the time is up
+#   drag_window.sh frame <mov> <n> <png>              save the nth recorded frame as a picture
+#   drag_window.sh frames <mov> [dip]                 frame rate, brightness range, and every frame
+#                                                     darker than both neighbours by more than dip
 #
-# macOS only: needs `cliclick` (brew install cliclick) and `screencapture`.
+# macOS only: needs `cliclick` (brew install cliclick) and `screencapture`;
+# `record`/`frame`/`frames` need ffmpeg (brew install ffmpeg), because
+# `screencapture -V` records a still from a background shell.
 set -euo pipefail
 
 tree="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -94,7 +101,7 @@ drag_pane() {
     drag "$x0,$y0" "$x1,$y1" "$steps"
     sleep 1
     echo "gesture ($x0,$y0) -> ($x1,$y1)"
-    trace "$log" "$since" 'dock trace: (press|release)|step=(Carry|Join)|sync create|panicked' \
+    trace "$log" "$since" 'dock trace: (press|release)|step=(Carry|Join)|sync create|presented=|panicked' \
         | awk '/step=Carry/ { carry = $0; if (seen_carry++) next } { print } END { if (seen_carry > 1) print carry }'
     grep -q panicked "$log" && { echo "PANIC in $log" >&2; exit 1; }
     return 0
@@ -133,7 +140,7 @@ snap() {
     cliclick "du:$ex,$ey" "w:400"
     sleep 1
     echo "snap $id $side $onto: ($gx,$gy) -> ($ex,$ey)"
-    trace "$log" "$since" 'dock trace: (press|release)|step=Join|panicked' | awk '!seen[$0]++'
+    trace "$log" "$since" 'dock trace: (press|release)|step=Join|sync create|presented=|panicked' | awk '!seen[$0]++'
     grep -q panicked "$log" && { echo "PANIC in $log" >&2; exit 1; }
     return 0
 }
@@ -156,6 +163,51 @@ shot() {
     screencapture -x -R"${2:-0,100,1500,1000}" "$1" && echo "$1"
 }
 
+screen_device() {
+    ffmpeg -hide_banner -f avfoundation -list_devices true -i "" 2>&1 \
+        | sed -n -E 's/.*\[([0-9]+)\] Capture screen 0$/\1/p' \
+        | head -1 || true
+}
+
+record() {
+    need ffmpeg
+    local mov="$1" seconds="$2" device
+    device="$(screen_device)"
+    [ -n "$device" ] || { echo "drag_window.sh: ffmpeg sees no screen to capture" >&2; exit 2; }
+    rm -f "$mov"
+    (ffmpeg -nostats -loglevel error -y -f avfoundation -framerate 60 -capture_cursor 1 \
+        -i "$device:none" -t "$seconds" -pix_fmt yuv420p "$mov" &)
+    sleep 1.5
+    echo "recording $mov for ${seconds}s"
+}
+
+frame() {
+    need ffmpeg
+    local mov="$1" index="$2" png="$3"
+    ffmpeg -nostats -loglevel error -y -i "$mov" -vf "select=eq(n\,$index)" -vframes 1 "$png" && echo "$png"
+}
+
+frames() {
+    need ffmpeg
+    local mov="$1" dip="${2:-2}"
+    while pgrep -x ffmpeg >/dev/null; do sleep 0.5; done
+    ffprobe -v error -select_streams v -show_entries stream=r_frame_rate,nb_frames -of csv=p=0 "$mov"
+    ffmpeg -nostats -loglevel error -i "$mov" \
+        -vf "tblend=all_mode=difference,signalstats,metadata=print:key=lavfi.signalstats.YAVG:file=-" -f null - \
+        | awk -F= '/YAVG/ { if ($2 > m) m = $2 } END { printf "motion between frames: max %.2f (0 means a still)\n", m }'
+    ffmpeg -nostats -loglevel error -i "$mov" \
+        -vf "signalstats,metadata=print:key=lavfi.signalstats.YAVG:file=-" -f null - \
+        | awk -F= -v dip="$dip" '/YAVG/ { y[n++] = $2 }
+            END {
+                lo = y[0]; hi = y[0];
+                for (i = 1; i < n; i++) { if (y[i] < lo) lo = y[i]; if (y[i] > hi) hi = y[i] }
+                printf "frames=%d brightness min=%.1f max=%.1f\n", n, lo, hi;
+                for (i = 1; i < n - 1; i++)
+                    if (y[i] < y[i-1] - dip && y[i] < y[i+1] - dip)
+                        printf "DIP frame=%d %.1f between %.1f and %.1f\n", i, y[i], y[i-1], y[i+1]
+            }'
+}
+
 command="${1:-}"
 shift || true
 case "$command" in
@@ -168,5 +220,8 @@ case "$command" in
     mark) mark "$@" ;;
     trace) trace "$@" ;;
     shot) shot "$@" ;;
-    *) sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 2 ;;
+    record) record "$@" ;;
+    frame) frame "$@" ;;
+    frames) frames "$@" ;;
+    *) sed -n '2,24p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac
