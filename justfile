@@ -188,6 +188,7 @@ ci-contract-gates:
     scripts/ci/pr_budget_test.sh
     scripts/ci/terminate_descendants_test.sh
     scripts/ci/cancel_pr_runs_test.sh
+    scripts/ci/nightly_should_run_test.sh
 
 # Point git at the repository's hooks. Once per clone.
 hooks:

@@ -29,10 +29,20 @@ on:
     # purpose: every scheduled workflow on the planet asks for :00.
     - cron: "7 3 * * *"
   workflow_dispatch:
+    inputs:
+      force:
+        description: "Run even if tonight's nightly already succeeded"
+        type: boolean
+        default: false
 
 concurrency:
   group: nightly
   cancel-in-progress: false
+
+# `decide` reads this workflow's own run history.
+permissions:
+  contents: read
+  actions: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -41,8 +51,46 @@ env:
   MACOSX_DEPLOYMENT_TARGET: "12.0"
 
 jobs:
+  # GitHub's schedule is free and unreliable: on the night this was added it
+  # was seventeen minutes late and then never arrived at all, with the
+  # workflow active, the cron valid and the file on the default branch. A
+  # crontab on samarch-1 dispatches this board as well, so that a night is
+  # only lost if both GitHub's scheduler and that box are down.
+  #
+  # Two triggers would otherwise run the whole suite twice on the two Linux
+  # slots, so whichever arrives second asks whether tonight is already covered
+  # and becomes a fifteen-second no-op. A failed run is not covered -- a retry
+  # is what should happen.
+  decide:
+    name: decide whether tonight's nightly already ran
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.check.outputs.run }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Check whether tonight's nightly already ran
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+          FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.force }}
+        run: |
+          set -euo pipefail
+          args=(--repo "$REPO" --sha "$SHA" --run-id "$RUN_ID")
+          if [ "$FORCE" = "true" ]; then
+            args+=(--force)
+          fi
+          bash scripts/ci/nightly_should_run.sh "${args[@]}" >> "$GITHUB_OUTPUT"
+
   robot-suite:
     name: robot suite, both halves (linux)
+    needs: decide
+    if: needs.decide.outputs.run == 'true'
     runs-on: [self-hosted, Linux, cranpose-heavy]
     timeout-minutes: 120
     steps:
@@ -75,6 +123,8 @@ jobs:
 
   architecture-budget:
     name: architecture budgets (linux)
+    needs: decide
+    if: needs.decide.outputs.run == 'true'
     # The binary-size budget is pinned against Linux codegen.
     runs-on: [self-hosted, Linux, cranpose-heavy]
     timeout-minutes: 60
@@ -99,6 +149,8 @@ jobs:
 
   android-apk:
     name: Android release APK (macOS)
+    needs: decide
+    if: needs.decide.outputs.run == 'true'
     runs-on: [self-hosted, macOS, ARM64]
     timeout-minutes: 60
     steps:

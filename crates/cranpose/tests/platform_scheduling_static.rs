@@ -334,6 +334,63 @@ fn the_release_board_can_be_pointed_at_a_tag() {
     }
 }
 
+/// Returns the job keys of a workflow, in file order.
+fn workflow_job_names(workflow: &str) -> Vec<String> {
+    let body = workflow
+        .split_once("\njobs:\n")
+        .expect("a workflow must declare jobs")
+        .1;
+    body.lines()
+        .filter(|line| {
+            line.starts_with("  ")
+                && !line.starts_with("   ")
+                && line.trim_end().ends_with(':')
+                && !line.trim_start().starts_with('#')
+        })
+        .map(|line| line.trim().trim_end_matches(':').to_string())
+        .collect()
+}
+
+#[test]
+fn every_nightly_job_waits_for_the_duplicate_check() {
+    // The nightly board has two triggers on purpose: GitHub's schedule, which
+    // on the night this was written was seventeen minutes late and then never
+    // arrived, and a crontab on samarch-1. A night is lost only if both fail.
+    // The cost of two triggers is that the second one would run the whole
+    // suite again on the two Linux slots, so every job waits on `decide`.
+    let workflow = workspace_source(".github/workflows/nightly.yml");
+
+    assert!(
+        workflow.contains("      force:"),
+        "a human must be able to force the board even when tonight is covered"
+    );
+
+    let decide = workflow_job_block(&workflow, "decide");
+    assert!(
+        decide.contains("runs-on: ubuntu-latest"),
+        "the duplicate check must not take one of the five self-hosted runners"
+    );
+    assert!(
+        decide.contains("run: ${{ steps.check.outputs.run }}")
+            && decide.contains("scripts/ci/nightly_should_run.sh"),
+        "decide must publish the answer the jobs below it read"
+    );
+
+    let names = workflow_job_names(&workflow);
+    assert!(
+        names.len() >= 4,
+        "expected to inspect every nightly job, saw only {names:?}: the parser has drifted"
+    );
+    for name in names.iter().filter(|name| *name != "decide") {
+        let block = workflow_job_block(&workflow, name);
+        assert!(
+            block.contains("needs: decide")
+                && block.contains("if: needs.decide.outputs.run == 'true'"),
+            "nightly job {name} must wait for the duplicate check, or two triggers run it twice"
+        );
+    }
+}
+
 #[test]
 fn workflow_actions_are_pinned_to_commit_shas() {
     let mut unpinned = Vec::new();
