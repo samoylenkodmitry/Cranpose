@@ -209,7 +209,8 @@ hooks:
 # as a step that stops its job -- one problem hides the rest, and the fix
 # costs a full second run to find the second one.
 test: _disk-guard
-    cargo test --profile ci --workspace --no-fail-fast
+    cargo nextest run --cargo-profile ci --workspace --no-fail-fast
+    cargo test --profile ci --workspace --doc
 
 # Feature permutations that the default build does not cover.
 test-features:

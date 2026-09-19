@@ -31,5 +31,12 @@ fi
 # locally and another thing here.
 command -v just >/dev/null || cargo install just --locked
 
+# `cargo test` runs the workspace's test binaries one after another and pays
+# every process start end to end: 181 binaries, 205s, of which about half was
+# startup and two binaries. nextest runs them in parallel -- same 5452 tests in
+# 62s. It does not run doctests, so `just test` still runs those with cargo.
+command -v cargo-nextest >/dev/null \
+    || cargo install cargo-nextest --locked --version 0.9.145
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 "$SCRIPT_DIR/start_sccache.sh"
