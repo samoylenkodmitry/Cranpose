@@ -839,6 +839,19 @@ fn DockWindowNode(dock: DockRef, window: DockWindow) {
         shared.states.insert(window.id, state);
     });
     let id = window.id;
+    if let Some(origin) = state.position() {
+        let size = state.size();
+        trace_dock(format_args!(
+            "window id={} origin=({:.1},{:.1}) size=({:.1},{:.1}) panes={} parked={}",
+            id.raw(),
+            origin.x,
+            origin.y,
+            size.width,
+            size.height,
+            window.panes.len(),
+            window.parked
+        ));
+    }
     WindowNode(
         WindowId::from_runtime(dock.id, id.raw()),
         WindowConfig::borderless_for_state(policy.title.clone(), state)

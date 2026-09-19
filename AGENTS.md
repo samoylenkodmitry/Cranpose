@@ -26,6 +26,8 @@
 - Worktrees share stashes: inspect contents, resolve the immutable stash hash, and apply only the intended work.
 - Never use recursive forced removal; preserve source under another name instead.
 - Run each removal as a standalone command, then verify separately; never chain it with another operation or loop body.
+- Never run ad hoc complex shell commands or pipelines; write a reusable script for the job, keep it under `scripts/` when it serves the repository, and run that.
+- Check draggable and droppable windows with `scripts/dev/drag_window.sh` (launch, windows, drag, drag-pane, trace, shot); never drive the pointer with ad hoc `cliclick` calls.
 - Reclaim build artifacts only with `just gc` and `just gc-apply`; never remove `target/`, `build/`, source or uncommitted work by hand.
 - Check `df -h /` before large builds; recent writes and live processes both protect another task's artifacts.
 - Install hooks once per clone with `just hooks`; stage new files before `just precommit` so diff checks include them.
