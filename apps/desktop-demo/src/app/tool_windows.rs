@@ -1,7 +1,8 @@
 #![allow(non_snake_case)]
 
 use cranpose::{
-    rememberWindowStateAt, WindowAttachPolicy, WindowConfig, WindowModifierExt, WindowMoveMode,
+    rememberWindowStateAt, LocalWindowState, WindowAttachPolicy, WindowConfig, WindowModifierExt,
+    WindowMoveMode, WindowState,
 };
 use cranpose_core::{key, movable, rememberMutableStateOf, MutableState};
 use cranpose_ui::{
@@ -102,7 +103,7 @@ pub fn tool_windows_app() {
             for tool in tools() {
                 if inline.torn_origin(tool.key).is_none() {
                     key(tool.key, move || {
-                        movable(("tool", tool.key), move || ToolPane(tool, places, false));
+                        movable(("tool", tool.key), move || ToolPane(tool, places));
                     });
                 }
             }
@@ -143,12 +144,13 @@ fn TornTool(tool: Tool, origin: Point, places: MutableState<ToolPlaces>) {
                 ),
         ),
         BoxSpec::default(),
-        move || movable(("tool", tool.key), move || ToolPane(tool, places, true)),
+        move || movable(("tool", tool.key), move || ToolPane(tool, places)),
     );
 }
 
 #[composable]
-fn ToolPane(tool: Tool, places: MutableState<ToolPlaces>, torn: bool) {
+fn ToolPane(tool: Tool, places: MutableState<ToolPlaces>) {
+    let torn = LocalWindowState::current().is_some_and(WindowState::presented);
     Column(
         Modifier::empty().size(tool.size).background(tool.tint),
         ColumnSpec::default(),

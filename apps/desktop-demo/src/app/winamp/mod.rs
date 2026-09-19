@@ -1,13 +1,13 @@
 #![allow(non_snake_case)]
 
 mod skin;
-mod sprites;
+pub(crate) mod sprites;
 
 use std::rc::Rc;
 
 use cranpose::{
-    rememberWindowState, WindowAttachPolicy, WindowConfig, WindowModifierExt, WindowMoveMode,
-    WindowResizeDirection, WindowState,
+    rememberWindowState, LocalWindowState, WindowAttachPolicy, WindowConfig, WindowModifierExt,
+    WindowMoveMode, WindowResizeDirection, WindowState,
 };
 use cranpose_core::{self, MutableState};
 use cranpose_foundation::PointerButton;
@@ -99,23 +99,8 @@ enum WinampCloseAction {
     CloseApp,
 }
 
-#[derive(Clone, Copy, PartialEq)]
-enum WinampWindowSize {
-    Fixed(Size),
-    State(WindowState),
-}
-
 const MAIN_TITLE_DRAG_HIT_AREA: SpriteRect = (16.0, 0.0, 228.0, 14.0);
 const EQ_TITLE_DRAG_HIT_AREA: SpriteRect = (0.0, 0.0, 264.0, 14.0);
-
-impl WinampWindowSize {
-    fn get(self) -> Size {
-        match self {
-            Self::Fixed(size) => size,
-            Self::State(state) => state.size(),
-        }
-    }
-}
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(crate) struct WinampTabState {
@@ -308,7 +293,6 @@ fn WinampInlineStage(
                     skin.pledit.clone(),
                     state,
                     WinampDragTarget::Inline(windows.playlist),
-                    WinampWindowSize::Fixed(Size::new(PLAYLIST_WIDTH, PLAYLIST_HEIGHT)),
                     scale,
                 );
             }
@@ -379,13 +363,7 @@ fn WinampNativeWindows(
             {
                 let pledit = skin.pledit.clone();
                 move || {
-                    PlaylistWindow(
-                        pledit.clone(),
-                        state,
-                        WinampDragTarget::NativeGroup,
-                        WinampWindowSize::State(peer_windows.playlist),
-                        scale,
-                    );
+                    PlaylistWindow(pledit.clone(), state, WinampDragTarget::NativeGroup, scale);
                 }
             },
         );
@@ -478,7 +456,6 @@ pub fn WinampStandaloneApp() {
                         pledit.clone(),
                         state,
                         WinampDragTarget::NativeGroup,
-                        WinampWindowSize::State(peer_windows.playlist),
                         ui_scale(),
                     );
                 }
@@ -1035,11 +1012,10 @@ fn PlaylistWindow(
     pledit: ImageBitmap,
     state: MutableState<WinampState>,
     drag_target: WinampDragTarget,
-    window_size: WinampWindowSize,
     scale: f32,
 ) {
     let snapshot = state.get();
-    let window_size = window_size.get();
+    let window_size = playlist_window_size(LocalWindowState::current());
     let skin_scale = scale.max(f32::EPSILON);
     let width = (window_size.width / skin_scale).max(PLAYLIST_WIDTH);
     let height = (window_size.height / skin_scale).max(PLAYLIST_HEIGHT);
@@ -1684,6 +1660,12 @@ fn base_winamp_window_config(placement: WinampWindowPlacement) -> WindowConfig {
 fn winamp_window_config(placement: WinampWindowPlacement) -> WindowConfig {
     let state = placement.state;
     base_winamp_window_config(placement).with_state(state)
+}
+
+pub(crate) fn playlist_window_size(window: Option<WindowState>) -> Size {
+    window
+        .map(WindowState::size)
+        .unwrap_or_else(|| Size::new(PLAYLIST_WIDTH, PLAYLIST_HEIGHT))
 }
 
 fn winamp_attach_policy() -> WindowAttachPolicy {

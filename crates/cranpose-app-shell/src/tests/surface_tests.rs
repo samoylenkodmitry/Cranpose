@@ -1050,3 +1050,54 @@ fn the_primary_content_size_is_the_extent_of_what_it_lays_out_outside_window_roo
         "a pane in a window of its own is not the primary's content"
     );
 }
+
+#[test]
+fn a_window_root_lays_out_from_its_own_origin_wherever_its_node_sits() {
+    let _guard = test_guard();
+    let window = test_window(200.0, 100.0);
+    let mut shell = AppShell::new(
+        HitGraphRenderer::default(),
+        location_key(file!(), line!(), column!()),
+        {
+            let window = Rc::clone(&window);
+            move || {
+                let window = Rc::clone(&window);
+                Column(Modifier::empty(), ColumnSpec::default(), move || {
+                    Box(
+                        Modifier::empty().size(Size::new(120.0, 210.0)),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                    Box(
+                        Modifier::empty().window_root(Rc::clone(&window)),
+                        BoxSpec::default(),
+                        || {
+                            Box(
+                                Modifier::empty().size(Size::new(90.0, 30.0)),
+                                BoxSpec::default(),
+                                || {},
+                            );
+                        },
+                    );
+                });
+            }
+        },
+    );
+    let window_id = attach_first_window(&mut shell, HitGraphRenderer::default());
+    let mut surface = shell
+        .surface(RootId::Window(window_id))
+        .expect("window surface");
+    surface.with_layout_tree(|tree| {
+        let root = tree.expect("window layout").root();
+        assert_eq!(
+            (root.rect.x, root.rect.y),
+            (0.0, 0.0),
+            "the window's own root starts at its own origin, not at 210 down the parent"
+        );
+        assert_eq!(
+            find_box_sized(root, 90.0, 30.0),
+            Some((0.0, 0.0)),
+            "and its content with it"
+        );
+    });
+}

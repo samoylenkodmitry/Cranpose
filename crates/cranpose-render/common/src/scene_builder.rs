@@ -897,8 +897,13 @@ fn translate_layer_from_data(
         modifier_slices,
         resolved_modifiers: _,
         children: fresh_children,
-        window_root: _,
+        window_root,
     } = data;
+    let layout_state = if window_root {
+        layout_state.at_origin()
+    } else {
+        layout_state
+    };
     let container_plan = match translated_container(
         container,
         &layout_state,

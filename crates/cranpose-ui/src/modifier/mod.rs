@@ -13,7 +13,7 @@ use std::{
     rc::Rc,
 };
 
-use cranpose_core::hash::default;
+use cranpose_core::{ProvidedValue, hash::default};
 
 mod alignment;
 mod background;
@@ -395,6 +395,7 @@ pub struct Modifier {
     strict_fingerprint: u64,
     structural_fingerprint: u64,
     element_count: usize,
+    provides_composition_locals: bool,
 }
 
 impl Default for Modifier {
@@ -405,6 +406,7 @@ impl Default for Modifier {
             strict_fingerprint: fingerprints.strict,
             structural_fingerprint: fingerprints.structural,
             element_count: 0,
+            provides_composition_locals: false,
         }
     }
 }
@@ -909,6 +911,8 @@ impl Modifier {
             strict_fingerprint: fingerprints.strict,
             structural_fingerprint: fingerprints.structural,
             element_count: self.element_count + next.element_count,
+            provides_composition_locals: self.provides_composition_locals
+                || next.provides_composition_locals,
         }
     }
 
@@ -919,6 +923,15 @@ impl Modifier {
                 inner: elements.iter(),
             },
         }
+    }
+
+    pub(crate) fn provided_composition_locals(&self) -> Vec<ProvidedValue> {
+        if !self.provides_composition_locals {
+            return Vec::new();
+        }
+        self.iter_elements()
+            .flat_map(|element| element.provided_composition_locals())
+            .collect()
     }
 
     pub(crate) fn iter_inspector_metadata(&self) -> ModifierInspectorIterator<'_> {
@@ -959,6 +972,7 @@ impl Modifier {
                 strict_fingerprint: self.strict_fingerprint,
                 structural_fingerprint: self.structural_fingerprint,
                 element_count: self.element_count,
+                provides_composition_locals: self.provides_composition_locals,
             },
         }
     }
@@ -1039,6 +1053,9 @@ impl Modifier {
             Self::default()
         } else {
             let element_count = elements.len();
+            let provides_composition_locals = elements
+                .iter()
+                .any(|element| element.provides_composition_locals());
             let fingerprints = single_fingerprints(elements.as_slice());
             Self {
                 kind: ModifierKind::Single {
@@ -1048,6 +1065,7 @@ impl Modifier {
                 strict_fingerprint: fingerprints.strict,
                 structural_fingerprint: fingerprints.structural,
                 element_count,
+                provides_composition_locals,
             }
         }
     }
@@ -1086,6 +1104,7 @@ impl Modifier {
                     strict_fingerprint: self.strict_fingerprint,
                     structural_fingerprint: self.structural_fingerprint,
                     element_count: self.element_count,
+                    provides_composition_locals: self.provides_composition_locals,
                 }
             }
         }

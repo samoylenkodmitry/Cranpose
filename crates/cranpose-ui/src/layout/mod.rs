@@ -760,95 +760,108 @@ pub fn build_layout_tree_from_applier(
     applier: &mut MemoryApplier,
     root: NodeId,
 ) -> Result<Option<LayoutTree>, NodeError> {
-    fn snapshot(
-        applier: &mut MemoryApplier,
-        node_id: NodeId,
-    ) -> Result<Option<(crate::widgets::nodes::layout_node::LayoutState, Vec<NodeId>)>, NodeError>
+    let origin = layout_tree_origin(layout_snapshot(applier, root)?);
+    place_layout_box(applier, root, origin, Point::default()).map(|root| root.map(LayoutTree::new))
+}
+
+type LayoutSnapshot = (crate::widgets::nodes::layout_node::LayoutState, Vec<NodeId>);
+
+fn layout_tree_origin(root: Option<LayoutSnapshot>) -> Point {
+    let Some((state, _)) = root else {
+        return Point::default();
+    };
+    let position = state.position();
+    Point {
+        x: -position.x,
+        y: -position.y,
+    }
+}
+
+fn layout_snapshot(
+    applier: &mut MemoryApplier,
+    node_id: NodeId,
+) -> Result<Option<LayoutSnapshot>, NodeError> {
+    match applier
+        .with_node::<LayoutNode, _>(node_id, |node| (node.layout_state(), node.children.clone()))
     {
-        match applier.with_node::<LayoutNode, _>(node_id, |node| {
-            (node.layout_state(), node.children.clone())
-        }) {
-            Ok(snapshot) => return Ok(Some(snapshot)),
-            Err(NodeError::TypeMismatch { .. }) | Err(NodeError::Missing { .. }) => {}
-            Err(err) => return Err(err),
-        }
+        Ok(snapshot) => return Ok(Some(snapshot)),
+        Err(NodeError::TypeMismatch { .. }) | Err(NodeError::Missing { .. }) => {}
+        Err(err) => return Err(err),
+    }
 
-        match applier.with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
-            (node.layout_state(), node.active_children())
-        }) {
-            Ok(snapshot) => Ok(Some(snapshot)),
-            Err(NodeError::TypeMismatch { .. }) | Err(NodeError::Missing { .. }) => Ok(None),
-            Err(err) => Err(err),
+    match applier.with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
+        (node.layout_state(), node.active_children())
+    }) {
+        Ok(snapshot) => Ok(Some(snapshot)),
+        Err(NodeError::TypeMismatch { .. }) | Err(NodeError::Missing { .. }) => Ok(None),
+        Err(err) => Err(err),
+    }
+}
+
+fn place_layout_box(
+    applier: &mut MemoryApplier,
+    node_id: NodeId,
+    parent_content_origin: Point,
+    parent_layer_translation: Point,
+) -> Result<Option<LayoutBox>, NodeError> {
+    let Some((state, child_ids)) = layout_snapshot(applier, node_id)? else {
+        return Ok(None);
+    };
+    if !state.is_placed() {
+        return Ok(None);
+    }
+
+    let top_left = Point {
+        x: parent_content_origin.x + state.position().x,
+        y: parent_content_origin.y + state.position().y,
+    };
+    let rect = GeometryRect {
+        x: top_left.x,
+        y: top_left.y,
+        width: state.size().width,
+        height: state.size().height,
+    };
+    let info = runtime_metadata_for(applier, node_id)?;
+    let kind = layout_kind_from_metadata(node_id, &info);
+    let RuntimeNodeMetadata {
+        modifier,
+        resolved_modifiers,
+        modifier_slices,
+        ..
+    } = info;
+
+    let layer_translation = match modifier_slices.graphics_layer() {
+        Some(layer) => Point {
+            x: parent_layer_translation.x + layer.translation_x,
+            y: parent_layer_translation.y + layer.translation_y,
+        },
+        None => parent_layer_translation,
+    };
+
+    publish_window_geometry(&modifier_slices, top_left, layer_translation, state.size());
+
+    let data = LayoutNodeData::new(modifier, resolved_modifiers, modifier_slices, kind);
+    let child_origin = Point {
+        x: top_left.x + state.content_offset.x,
+        y: top_left.y + state.content_offset.y,
+    };
+    let mut children = Vec::with_capacity(child_ids.len());
+    for child_id in child_ids {
+        if is_window_root_node(applier, child_id) {
+            continue;
+        }
+        if let Some(child) = place_layout_box(applier, child_id, child_origin, layer_translation)? {
+            children.push(child);
         }
     }
 
-    fn place(
-        applier: &mut MemoryApplier,
-        node_id: NodeId,
-        parent_content_origin: Point,
-        parent_layer_translation: Point,
-    ) -> Result<Option<LayoutBox>, NodeError> {
-        let Some((state, child_ids)) = snapshot(applier, node_id)? else {
-            return Ok(None);
-        };
-        if !state.is_placed() {
-            return Ok(None);
-        }
-
-        let top_left = Point {
-            x: parent_content_origin.x + state.position().x,
-            y: parent_content_origin.y + state.position().y,
-        };
-        let rect = GeometryRect {
-            x: top_left.x,
-            y: top_left.y,
-            width: state.size().width,
-            height: state.size().height,
-        };
-        let info = runtime_metadata_for(applier, node_id)?;
-        let kind = layout_kind_from_metadata(node_id, &info);
-        let RuntimeNodeMetadata {
-            modifier,
-            resolved_modifiers,
-            modifier_slices,
-            ..
-        } = info;
-
-        let layer_translation = match modifier_slices.graphics_layer() {
-            Some(layer) => Point {
-                x: parent_layer_translation.x + layer.translation_x,
-                y: parent_layer_translation.y + layer.translation_y,
-            },
-            None => parent_layer_translation,
-        };
-
-        publish_window_geometry(&modifier_slices, top_left, layer_translation, state.size());
-
-        let data = LayoutNodeData::new(modifier, resolved_modifiers, modifier_slices, kind);
-        let child_origin = Point {
-            x: top_left.x + state.content_offset.x,
-            y: top_left.y + state.content_offset.y,
-        };
-        let mut children = Vec::with_capacity(child_ids.len());
-        for child_id in child_ids {
-            if is_window_root_node(applier, child_id) {
-                continue;
-            }
-            if let Some(child) = place(applier, child_id, child_origin, layer_translation)? {
-                children.push(child);
-            }
-        }
-
-        Ok(Some(LayoutBox::new(
-            node_id,
-            rect,
-            state.content_offset,
-            data,
-            children,
-        )))
-    }
-
-    place(applier, root, Point::default(), Point::default()).map(|root| root.map(LayoutTree::new))
+    Ok(Some(LayoutBox::new(
+        node_id,
+        rect,
+        state.content_offset,
+        data,
+        children,
+    )))
 }
 
 /// Builds a semantics snapshot from retained layout state in the live applier tree.

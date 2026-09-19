@@ -25,6 +25,9 @@ mod animations;
 pub mod chrome_tabs;
 mod controls_ui;
 mod demo_trace;
+pub mod flame_window;
+mod floating_input;
+mod floating_windows;
 mod glass_feed;
 mod glass_tiles;
 mod hacker_news;
@@ -38,6 +41,7 @@ mod liquid_ui;
 mod markdown;
 mod mineswapper2;
 mod net_image;
+pub mod pet;
 mod recomposition_lab;
 pub mod rotary;
 pub(crate) mod shader_rect;
@@ -54,6 +58,8 @@ mod xkcd;
 use animations::AnimationsTab;
 pub use chrome_tabs::chrome_tabs_app;
 use controls_ui::ControlsUiTab;
+pub use flame_window::flame_window_app;
+use floating_windows::FloatingWindowsTab;
 use glass_feed::GlassFeedTab;
 pub use glass_feed::GLASS_FEED_LIST_TAG;
 use glass_tiles::GlassTilesTab;
@@ -75,6 +81,7 @@ use markdown::{
     markdown_viewer_tab, MarkdownScrollStabilityFixtureTab, MarkdownScrollStressFixtureTab,
     MarkdownScrollStressFixtureTabWithState,
 };
+pub use pet::pet_app;
 use recomposition_lab::RecompositionLabTab;
 use rotary::rotary_tab;
 use shader_rect::ShaderRectTab;
@@ -132,6 +139,7 @@ pub enum DemoTab {
     GlassFeed,
     GlassTiles,
     MarkdownViewer,
+    FloatingWindows,
     FilePicker,
     Rotary,
     Wear,
@@ -147,7 +155,7 @@ pub struct DemoTabInfo {
     pub startup_aliases: &'static [&'static str],
 }
 
-pub const DEMO_TAB_INFO: [DemoTabInfo; 27] = [
+pub const DEMO_TAB_INFO: [DemoTabInfo; 28] = [
     DemoTabInfo {
         tab: DemoTab::Counter,
         label: "Counter App",
@@ -321,6 +329,13 @@ pub const DEMO_TAB_INFO: [DemoTabInfo; 27] = [
         startup_aliases: &["markdown", "markdownviewer"],
     },
     DemoTabInfo {
+        tab: DemoTab::FloatingWindows,
+        label: "Windows",
+        slug: "floating-windows",
+        source_path: "apps/desktop-demo/src/app/floating_windows.rs",
+        startup_aliases: &["floatingwindows", "windows", "pet", "flame"],
+    },
+    DemoTabInfo {
         tab: DemoTab::FilePicker,
         label: "File Picker",
         slug: "file-picker",
@@ -363,7 +378,6 @@ impl DemoTab {
         self.info().source_path
     }
 
-    #[cfg(any(test, target_arch = "wasm32"))]
     pub fn from_startup_name(name: &str) -> Option<Self> {
         let normalized = name
             .chars()
@@ -377,7 +391,14 @@ impl DemoTab {
     }
 }
 
-pub const DEMO_TABS: [DemoTab; 27] = [
+pub fn startup_tab_from_args(args: impl IntoIterator<Item = String>) -> DemoTab {
+    args.into_iter()
+        .next()
+        .and_then(|name| DemoTab::from_startup_name(&name))
+        .unwrap_or(DESKTOP_INITIAL_TAB)
+}
+
+pub const DEMO_TABS: [DemoTab; 28] = [
     DemoTab::Counter,
     DemoTab::Liquid,
     DemoTab::CompositionLocal,
@@ -397,6 +418,7 @@ pub const DEMO_TABS: [DemoTab; 27] = [
     DemoTab::Xkcd,
     DemoTab::Shaders,
     DemoTab::ShaderRect,
+    DemoTab::FloatingWindows,
     DemoTab::Controls,
     DemoTab::MarkdownViewer,
     DemoTab::InteractiveAnim,
@@ -790,7 +812,7 @@ pub fn combined_app() {
 #[composable]
 #[allow(non_snake_case)]
 pub fn DesktopApp() {
-    combined_app_with_initial_tab(Some(DESKTOP_INITIAL_TAB));
+    combined_app_with_initial_tab(Some(startup_tab_from_args(std::env::args().skip(1))));
 }
 
 #[composable]
@@ -939,6 +961,7 @@ fn render_active_tab(active: DemoTab, startup: StartupSelection, winamp_tab_stat
         DemoTab::LazyList => lazy_list_example(),
         DemoTab::Mineswapper2 => mineswapper2::mineswapper2_tab(),
         DemoTab::RecompositionLab => RecompositionLabTab(),
+        DemoTab::FloatingWindows => FloatingWindowsTab(),
         DemoTab::FilePicker => file_picker_tab(),
         DemoTab::Rotary => rotary_tab(),
         DemoTab::Wear => wear::wear_tab(),
@@ -988,6 +1011,7 @@ fn render_showcase_tab(
         | DemoTab::LazyList
         | DemoTab::Mineswapper2
         | DemoTab::RecompositionLab
+        | DemoTab::FloatingWindows
         | DemoTab::FilePicker
         | DemoTab::Rotary
         | DemoTab::Wear => {}

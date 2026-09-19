@@ -42,7 +42,7 @@ use crate::{
     },
     wgpu_surface::{
         SurfaceFrame, current_surface_texture, present_initial_placeholder_frame,
-        surface_present_required,
+        present_initial_placeholder_frame_cleared_to, surface_present_required,
     },
     winit_pointer::{
         is_primary_pointer_button, pointer_source_from_button, pointer_source_from_winit,
@@ -853,6 +853,17 @@ impl App {
         }
     }
 
+    fn set_native_transparency(
+        app: &mut AppShell<WgpuRenderer>,
+        native: &mut NativeWindowSurface,
+        transparent: bool,
+    ) {
+        native.window.set_transparent(transparent);
+        if let Some(mut surface) = native_surface(app, native) {
+            surface.renderer().set_transparent_background(transparent);
+        }
+    }
+
     fn refresh_native_window_requests(&mut self) {
         let registry = Rc::clone(&self.native_window_registry);
         if let Some(app) = &mut self.app {
@@ -1357,6 +1368,9 @@ impl App {
     }
 
     fn sync_primary_size(&mut self) {
+        if self.primary_visible() {
+            return;
+        }
         let (Some(window), Some(app)) = (self.window.clone(), self.app.as_mut()) else {
             return;
         };
@@ -1737,21 +1751,23 @@ impl App {
             desired_frame_latency(self.frame_pacing_mode(), monitor_refresh_interval(&window)),
         )?;
         surface.configure(&context.device, &surface_config);
-        let placeholder_presented = present_initial_placeholder_frame(
+        let placeholder_presented = present_initial_placeholder_frame_cleared_to(
             &surface,
             &context.device,
             &context.queue,
             surface_format,
             "native window initial present",
+            cranpose_render_wgpu::frame_clear_color(options.transparent),
         );
         trace_native_window_timing!(
-            "{} configure {}ms placeholder_presented={placeholder_presented}",
+            "{} configure {}ms placeholder_presented={placeholder_presented} alpha={:?}",
             options.title,
-            create_started.elapsed().as_millis()
+            create_started.elapsed().as_millis(),
+            surface_config.alpha_mode
         );
 
         let scale_factor = window.scale_factor();
-        let renderer = wgpu_renderer_for_surface(
+        let mut renderer = wgpu_renderer_for_surface(
             context.text_system.clone(),
             Arc::clone(&context.device),
             Arc::clone(&context.queue),
@@ -1760,6 +1776,7 @@ impl App {
             context.adapter.get_downlevel_capabilities().flags,
             scale_factor,
         );
+        renderer.set_transparent_background(options.transparent);
         trace_native_window_timing!(
             "{} renderer {}ms",
             options.title,
@@ -1832,6 +1849,18 @@ impl App {
         headless: bool,
     ) -> bool {
         let mut resized = false;
+        Self::apply_native_window_appearance(app, native, options);
+        resized |=
+            Self::apply_native_window_geometry(platform_probe, app, native, options, headless);
+        native.options = options.clone();
+        resized
+    }
+
+    fn apply_native_window_appearance(
+        app: &mut AppShell<WgpuRenderer>,
+        native: &mut NativeWindowSurface,
+        options: &NativeWindowOptions,
+    ) {
         if native.options.title != options.title {
             native.window.set_title(&options.title);
         }
@@ -1842,13 +1871,26 @@ impl App {
             native.window.set_resizable(options.resizable);
         }
         if native.options.transparent != options.transparent {
-            native.window.set_transparent(options.transparent);
+            Self::set_native_transparency(app, native, options.transparent);
+        }
+        if native.options.shadow != options.shadow {
+            set_native_window_shadow(&native.window, options.shadow);
         }
         if native.options.always_on_top != options.always_on_top {
             native
                 .window
                 .set_window_level(native_window_level(options.always_on_top));
         }
+    }
+
+    fn apply_native_window_geometry(
+        platform_probe: &NativeWindowPlatformProbe,
+        app: &mut AppShell<WgpuRenderer>,
+        native: &mut NativeWindowSurface,
+        options: &NativeWindowOptions,
+        headless: bool,
+    ) -> bool {
+        let mut resized = false;
         if native.options.min_width != options.min_width
             || native.options.min_height != options.min_height
         {
@@ -1900,7 +1942,6 @@ impl App {
             Self::resize_native_surface(app, native, size.width, size.height);
             resized = true;
         }
-        native.options = options.clone();
         resized
     }
 
@@ -3458,15 +3499,36 @@ fn update_declaration_host_frame(
 ) -> FrameUpdateResult {
     let frame_started_at = Instant::now();
     let update_result = update_app_with_native_window_registry(app, registry);
-    if app.take_frame_owed() {
+    let presented = app.take_frame_owed();
+    if presented {
         app.record_presented_frame(frame_started_at, Instant::now());
-        *last_frame_start_time = Some(next_frame_anchor(
-            *last_frame_start_time,
-            frame_started_at,
-            frame_interval,
-        ));
     }
+    *last_frame_start_time = declaration_host_frame_anchor(
+        *last_frame_start_time,
+        frame_started_at,
+        frame_interval,
+        presented,
+        app.frame_schedule().needs_frame,
+    );
     update_result
+}
+
+fn declaration_host_frame_anchor(
+    previous: Option<Instant>,
+    frame_started_at: Instant,
+    interval: Option<Duration>,
+    presented: bool,
+    still_needs_frame: bool,
+) -> Option<Instant> {
+    if presented || still_needs_frame {
+        Some(next_frame_anchor(previous, frame_started_at, interval))
+    } else {
+        previous
+    }
+}
+
+fn native_surface_needs_frame(needs_frame: bool, frame_owed: bool, scene_dirty: bool) -> bool {
+    needs_frame || frame_owed || scene_dirty
 }
 
 fn should_chain_no_vsync_redraw(frame_interval: Option<Duration>, needs_frame: bool) -> bool {
@@ -3560,6 +3622,47 @@ fn wrap_primary_window_to_content(
         window.set_outer_position(Position::Physical(origin));
     }
     Some((width, height))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn wrap_primary_window_for_frame(
+    app: &mut AppShell<WgpuRenderer>,
+    surface: &wgpu::Surface<'static>,
+    surface_config: &mut wgpu::SurfaceConfiguration,
+    window: &Arc<dyn Window>,
+    registry: &Rc<native_window::NativeWindowRegistry>,
+    primary_viewport_override: Option<(f32, f32)>,
+    wraps_content: bool,
+    last: &mut Option<(u32, u32)>,
+) {
+    let content = wraps_content.then(|| app.primary_content_size()).flatten();
+    let Some((width, height)) = primary_wrap_request(content, *last) else {
+        return;
+    };
+    trace_native_window!("primary window wraps {width}x{height} with the frame it drew");
+    let origin = window.outer_position().ok();
+    let applied = window.request_surface_size(LogicalSize::new(width as f64, height as f64).into());
+    if let Some(origin) = origin {
+        window.set_outer_position(Position::Physical(origin));
+    }
+    *last = Some((width, height));
+    if let Some(size) = applied {
+        let viewport = viewport_for_surface_size(
+            primary_viewport_override,
+            size.width,
+            size.height,
+            window.scale_factor(),
+        );
+        configure_app_surface_size(
+            app,
+            surface,
+            surface_config,
+            size.width,
+            size.height,
+            viewport,
+        );
+        update_app_with_native_window_registry(app, registry);
+    }
 }
 
 fn note_native_window_presented(state: Option<WindowState>, presented: bool) {
@@ -3775,6 +3878,7 @@ fn native_window_attributes(
         .with_resizable(options.resizable)
         .with_visible(!headless && options.visible)
         .with_window_level(native_window_level(options.always_on_top));
+    attributes = with_native_window_shadow(attributes, options.shadow);
     if let (Some(width), Some(height)) = (options.min_width, options.min_height) {
         attributes = attributes.with_min_surface_size(LogicalSize::new(
             width.max(1.0) as f64,
@@ -3854,12 +3958,7 @@ fn select_alpha_mode(
     transparent: bool,
 ) -> Result<wgpu::CompositeAlphaMode, LaunchError> {
     if transparent {
-        return surface_caps
-            .alpha_modes
-            .iter()
-            .copied()
-            .find(|mode| *mode == wgpu::CompositeAlphaMode::PreMultiplied)
-            .or_else(|| surface_caps.alpha_modes.first().copied())
+        return transparent_alpha_mode(&surface_caps.alpha_modes)
             .ok_or(LaunchError::NoSurfaceAlphaMode);
     }
 
@@ -3872,6 +3971,18 @@ fn select_alpha_mode(
         .ok_or(LaunchError::NoSurfaceAlphaMode)
 }
 
+fn transparent_alpha_mode(
+    offered: &[wgpu::CompositeAlphaMode],
+) -> Option<wgpu::CompositeAlphaMode> {
+    [
+        wgpu::CompositeAlphaMode::PreMultiplied,
+        wgpu::CompositeAlphaMode::PostMultiplied,
+    ]
+    .into_iter()
+    .find(|wanted| offered.contains(wanted))
+    .or_else(|| offered.first().copied())
+}
+
 fn native_window_level(always_on_top: bool) -> WindowLevel {
     if always_on_top {
         WindowLevel::AlwaysOnTop
@@ -3879,6 +3990,30 @@ fn native_window_level(always_on_top: bool) -> WindowLevel {
         WindowLevel::Normal
     }
 }
+
+#[cfg(target_os = "macos")]
+fn with_native_window_shadow(attributes: WindowAttributes, shadow: bool) -> WindowAttributes {
+    use winit::platform::macos::WindowAttributesMacOS;
+
+    attributes.with_platform_attributes(Box::new(
+        WindowAttributesMacOS::default().with_has_shadow(shadow),
+    ))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn with_native_window_shadow(attributes: WindowAttributes, _shadow: bool) -> WindowAttributes {
+    attributes
+}
+
+#[cfg(target_os = "macos")]
+fn set_native_window_shadow(window: &Arc<dyn Window>, shadow: bool) {
+    use winit::platform::macos::WindowExtMacOS;
+
+    window.set_has_shadow(shadow);
+}
+
+#[cfg(not(target_os = "macos"))]
+fn set_native_window_shadow(_window: &Arc<dyn Window>, _shadow: bool) {}
 
 fn current_native_window_physical_position(
     platform_probe: &NativeWindowPlatformProbe,
@@ -5663,6 +5798,16 @@ impl ApplicationHandler for App {
                 app.set_density(window.scale_factor() as f32);
                 #[cfg_attr(not(feature = "robot"), allow(unused_variables))]
                 let update_result = update_app_with_native_window_registry(app, &registry);
+                wrap_primary_window_for_frame(
+                    app,
+                    surface,
+                    surface_config,
+                    window,
+                    &registry,
+                    primary_viewport_override,
+                    self.settings.primary_wraps_content,
+                    &mut self.primary_wrap_size,
+                );
                 if let Some(accessibility) = &mut self.accessibility {
                     accessibility.sync(app);
                 }
@@ -6640,7 +6785,11 @@ impl ApplicationHandler for App {
             };
 
             let frame_schedule = surface.frame_schedule();
-            let needs_redraw = frame_schedule.needs_frame || surface.frame_owed();
+            let needs_redraw = native_surface_needs_frame(
+                frame_schedule.needs_frame,
+                surface.frame_owed(),
+                surface.needs_redraw(),
+            );
             let next_frame_time = native.last_frame_start_time.and_then(|started_at| {
                 native
                     .frame_interval(pacing_mode)

@@ -145,6 +145,7 @@ fn window_options() -> crate::native_window::NativeWindowOptions {
         position_origin: crate::native_window::NativeWindowPositionOrigin::Screen,
         decorations: false,
         transparent: false,
+        shadow: true,
         resizable: true,
         visible: true,
         always_on_top: false,
@@ -1581,4 +1582,60 @@ fn a_primary_that_wraps_its_content_asks_for_each_new_content_size_once() {
         Some((275, 348)),
         "a pane gone shrinks the window"
     );
+}
+
+#[test]
+fn a_hidden_primarys_update_is_paced_while_an_animation_still_needs_frames() {
+    let started = Instant::now();
+    let interval = Some(std::time::Duration::from_millis(16));
+    assert_eq!(
+        super::declaration_host_frame_anchor(None, started, interval, false, false),
+        None,
+        "nothing presented and nothing running: no cap"
+    );
+    assert_eq!(
+        super::declaration_host_frame_anchor(None, started, interval, true, false),
+        Some(started),
+        "a presented frame anchors the next"
+    );
+    assert_eq!(
+        super::declaration_host_frame_anchor(None, started, interval, false, true),
+        Some(started),
+        "an animation that only dirties a peer's scene is paced like a presented frame"
+    );
+    let previous = Some(started - std::time::Duration::from_millis(1));
+    assert_eq!(
+        super::declaration_host_frame_anchor(previous, started, interval, false, false),
+        previous,
+        "an idle update leaves the anchor where it was"
+    );
+}
+
+#[test]
+fn a_peer_window_redraws_when_its_scene_is_dirty_even_with_no_frame_owed() {
+    assert!(!super::native_surface_needs_frame(false, false, false));
+    assert!(super::native_surface_needs_frame(true, false, false));
+    assert!(super::native_surface_needs_frame(false, true, false));
+    assert!(
+        super::native_surface_needs_frame(false, false, true),
+        "an animated layer in a peer dirties the scene without owing a frame"
+    );
+}
+
+#[test]
+fn a_transparent_window_takes_the_alpha_mode_the_platform_composites_with() {
+    use wgpu::CompositeAlphaMode::{Opaque, PostMultiplied, PreMultiplied};
+    assert_eq!(
+        super::transparent_alpha_mode(&[Opaque, PreMultiplied, PostMultiplied]),
+        Some(PreMultiplied),
+        "the frame is premultiplied, so that mode comes first"
+    );
+    assert_eq!(
+        super::transparent_alpha_mode(&[Opaque, PostMultiplied]),
+        Some(PostMultiplied),
+        "Metal offers no premultiplied mode and composites its non-opaque layer as one; \
+         the opaque fallback painted every transparent window black"
+    );
+    assert_eq!(super::transparent_alpha_mode(&[Opaque]), Some(Opaque));
+    assert_eq!(super::transparent_alpha_mode(&[]), None);
 }

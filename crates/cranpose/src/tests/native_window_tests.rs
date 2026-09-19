@@ -446,9 +446,14 @@ fn window_state_reports_a_frame_on_the_screen_only_after_a_present() {
 
 #[test]
 fn window_config_collects_window_settings_and_callbacks() {
+    assert!(
+        NativeWindowOptions::new("Panel", 100.0, 50.0).shadow,
+        "a window keeps the desktop's own drop shadow unless it asks otherwise"
+    );
     let config = WindowConfig::borderless("Panel", 100.0, 50.0)
         .with_host_window_position(7.0, 9.0)
         .with_transparent(true)
+        .with_shadow(false)
         .with_resizable(false)
         .with_visible(false)
         .with_always_on_top(true)
@@ -476,6 +481,10 @@ fn window_config_collects_window_settings_and_callbacks() {
     );
     assert!(!options.decorations);
     assert!(options.transparent);
+    assert!(
+        !options.shadow,
+        "a window that fades out draws its own shadow, not the desktop's"
+    );
     assert!(!options.resizable);
     assert!(!options.visible);
     assert!(options.always_on_top);
@@ -1351,5 +1360,160 @@ fn group_and_leadership_reach_the_request() {
             policy,
             leads: true,
         })
+    );
+}
+
+#[cfg(all(
+    feature = "desktop-shell",
+    feature = "renderer-wgpu",
+    not(target_arch = "wasm32")
+))]
+#[composable(no_skip)]
+#[allow(non_snake_case)]
+fn LocalWindowStateRoot(
+    torn: cranpose_core::MutableState<bool>,
+    declared: Rc<Cell<Option<WindowState>>>,
+    inside: Rc<Cell<Option<WindowState>>>,
+    beside: Rc<Cell<Option<WindowState>>>,
+) {
+    let state = rememberWindowStateAt(12.0, 34.0, 100.0, 50.0);
+    declared.set(Some(state));
+    let modifier = if torn.get() {
+        Modifier::empty().window(WindowConfig::borderless_for_state("Local window", state))
+    } else {
+        Modifier::empty()
+    };
+    cranpose_ui::Box(modifier, cranpose_ui::BoxSpec::default(), move || {
+        inside.set(crate::LocalWindowState::current());
+    });
+    cranpose_ui::Box(
+        Modifier::empty(),
+        cranpose_ui::BoxSpec::default(),
+        move || {
+            beside.set(crate::LocalWindowState::current());
+        },
+    );
+}
+
+#[cfg(all(
+    feature = "desktop-shell",
+    feature = "renderer-wgpu",
+    not(target_arch = "wasm32")
+))]
+struct LocalWindowStatePage {
+    test: RequestTestComposition,
+    torn: cranpose_core::MutableState<bool>,
+    declared: Rc<Cell<Option<WindowState>>>,
+    inside: Rc<Cell<Option<WindowState>>>,
+    beside: Rc<Cell<Option<WindowState>>>,
+    root_key: cranpose_core::Key,
+}
+
+#[cfg(all(
+    feature = "desktop-shell",
+    feature = "renderer-wgpu",
+    not(target_arch = "wasm32")
+))]
+impl LocalWindowStatePage {
+    fn composed(torn_at_first: bool) -> Self {
+        let test = request_test_composition();
+        let torn = cranpose_core::MutableState::with_runtime(torn_at_first, test.runtime.handle());
+        let mut page = Self {
+            test,
+            torn,
+            declared: Rc::new(Cell::new(None)),
+            inside: Rc::new(Cell::new(None)),
+            beside: Rc::new(Cell::new(None)),
+            root_key: cranpose_core::location_key(file!(), line!(), column!()),
+        };
+        let root_key = page.root_key;
+        let content = page.content();
+        page.test.with_registry(|composition| {
+            composition
+                .render_stable(root_key, content)
+                .expect("the window content renders");
+        });
+        page
+    }
+
+    fn content(&self) -> impl FnMut() + 'static {
+        let torn = self.torn;
+        let declared = Rc::clone(&self.declared);
+        let inside = Rc::clone(&self.inside);
+        let beside = Rc::clone(&self.beside);
+        move || {
+            LocalWindowStateRoot(
+                torn,
+                Rc::clone(&declared),
+                Rc::clone(&inside),
+                Rc::clone(&beside),
+            )
+        }
+    }
+
+    fn recompose(&mut self) {
+        let root_key = self.root_key;
+        let content = self.content();
+        self.test.with_registry(|composition| {
+            composition
+                .reconcile(root_key, content)
+                .expect("the window content recomposes");
+        });
+    }
+}
+
+#[cfg(all(
+    feature = "desktop-shell",
+    feature = "renderer-wgpu",
+    not(target_arch = "wasm32")
+))]
+#[test]
+fn window_content_reads_its_own_window_from_the_composition_local() {
+    let page = LocalWindowStatePage::composed(true);
+    assert_eq!(
+        page.inside.get(),
+        page.declared.get(),
+        "content inside the window reads the state the window was declared with"
+    );
+    assert_eq!(
+        page.beside.get(),
+        None,
+        "a sibling outside the window is in no window of its own"
+    );
+}
+
+#[cfg(all(
+    feature = "desktop-shell",
+    feature = "renderer-wgpu",
+    not(target_arch = "wasm32")
+))]
+#[test]
+fn content_put_back_inline_stops_reading_a_window() {
+    let mut page = LocalWindowStatePage::composed(true);
+    assert!(page.inside.get().is_some(), "the content starts torn out");
+    page.torn.set(false);
+    page.recompose();
+    assert_eq!(
+        page.inside.get(),
+        None,
+        "the same node put back inline has no window to read"
+    );
+}
+
+#[cfg(all(
+    feature = "desktop-shell",
+    feature = "renderer-wgpu",
+    not(target_arch = "wasm32")
+))]
+#[test]
+fn content_torn_out_starts_reading_the_window_it_moved_into() {
+    let mut page = LocalWindowStatePage::composed(false);
+    assert_eq!(page.inside.get(), None, "the content starts inline");
+    page.torn.set(true);
+    page.recompose();
+    assert_eq!(
+        page.inside.get(),
+        page.declared.get(),
+        "the node that grew a window reads the window it grew"
     );
 }

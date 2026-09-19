@@ -59,6 +59,24 @@ pub(crate) fn present_initial_placeholder_frame(
     format: wgpu::TextureFormat,
     context: &str,
 ) -> bool {
+    present_initial_placeholder_frame_cleared_to(
+        surface,
+        device,
+        queue,
+        format,
+        context,
+        cranpose_render_wgpu::frame_clear_color(false),
+    )
+}
+
+pub(crate) fn present_initial_placeholder_frame_cleared_to(
+    surface: &wgpu::Surface<'_>,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    format: wgpu::TextureFormat,
+    context: &str,
+    clear: wgpu::Color,
+) -> bool {
     let SurfaceFrame::Ready(frame) = current_surface_texture(surface, context) else {
         return false;
     };
@@ -66,7 +84,7 @@ pub(crate) fn present_initial_placeholder_frame(
         format: Some(format.remove_srgb_suffix()),
         ..Default::default()
     });
-    cranpose_render_wgpu::clear_to_default_background(device, queue, &view);
+    cranpose_render_wgpu::clear_to_background(device, queue, &view, clear);
     frame.present();
     true
 }

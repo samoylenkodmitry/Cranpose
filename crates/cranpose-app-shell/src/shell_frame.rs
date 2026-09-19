@@ -713,7 +713,7 @@ where
     surface.scene_dirty = false;
     let structure_changed = !dirt.render_only_dirty && !dirt.visual_update_only();
     rebuild_surface_scene(app, surface, frame, scene_dirty, &dirt);
-    if app.dev_options.fps_counter {
+    if dev_overlay_belongs_on(surface.id, app.dev_options.fps_counter) {
         draw_dev_overlay(app, surface);
     }
     SurfaceFrame {
@@ -765,6 +765,10 @@ fn rebuild_surface_scene<R>(
         log::error!("renderer rebuild failed: {err:?}");
         surface.renderer.scene_mut().clear();
     }
+}
+
+fn dev_overlay_belongs_on(id: RootId, fps_counter: bool) -> bool {
+    fps_counter && matches!(id, RootId::Primary)
 }
 
 fn draw_dev_overlay<R: Renderer>(app: &ShellApp, surface: &mut RootSurface<R>) {

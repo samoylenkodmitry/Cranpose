@@ -14,7 +14,7 @@ use std::{
     rc::Rc,
 };
 
-use cranpose_core::{collections::map::HashMap, hash::default};
+use cranpose_core::{ProvidedValue, collections::map::HashMap, hash::default};
 pub use cranpose_ui_graphics::{DrawScope, Size};
 pub use cranpose_ui_layout::{Constraints, Measurable};
 
@@ -1776,6 +1776,16 @@ pub trait ModifierNodeElement: fmt::Debug + Hash + PartialEq + 'static {
     fn update_invalidation_kind(&self) -> Option<InvalidationKind> {
         None
     }
+
+    /// Composition locals this element hands to the content composed inside
+    /// the node it decorates.
+    ///
+    /// A modifier that stands for something its subtree lives in, the way a
+    /// window does, passes that thing down here instead of asking every
+    /// composable in between to carry it as an argument.
+    fn provided_composition_locals(&self) -> Vec<ProvidedValue> {
+        Vec::new()
+    }
 }
 
 /// Capability flags indicating which specialized traits a modifier node implements.
@@ -1934,21 +1944,34 @@ pub trait AnyModifierElement: fmt::Debug {
 
     fn update_invalidation_kind(&self) -> Option<InvalidationKind>;
 
+    /// Whether this element has composition locals for its content.
+    fn provides_composition_locals(&self) -> bool {
+        false
+    }
+
+    /// The composition locals this element hands to its content.
+    fn provided_composition_locals(&self) -> Vec<ProvidedValue> {
+        Vec::new()
+    }
+
     fn as_any(&self) -> &dyn Any;
 }
 
 struct TypedModifierElement<E: ModifierNodeElement> {
     element: E,
     cached_hash: u64,
+    provides_locals: bool,
 }
 
 impl<E: ModifierNodeElement> TypedModifierElement<E> {
     fn new(element: E) -> Self {
         let mut hasher = default::new();
         element.hash(&mut hasher);
+        let provides_locals = !element.provided_composition_locals().is_empty();
         Self {
             element,
             cached_hash: hasher.finish(),
+            provides_locals,
         }
     }
 }
@@ -1996,6 +2019,14 @@ where
 
     fn capabilities(&self) -> NodeCapabilities {
         self.element.capabilities()
+    }
+
+    fn provides_composition_locals(&self) -> bool {
+        self.provides_locals
+    }
+
+    fn provided_composition_locals(&self) -> Vec<ProvidedValue> {
+        self.element.provided_composition_locals()
     }
 
     fn hash_code(&self) -> u64 {

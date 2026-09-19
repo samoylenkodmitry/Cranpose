@@ -581,6 +581,23 @@ fn startup_names_round_trip_through_their_aliases() {
 }
 
 #[test]
+fn the_first_argument_opens_the_tab_it_names() {
+    let named = |name: &str| startup_tab_from_args([name.to_string()]);
+    assert_eq!(named("floating-windows"), DemoTab::FloatingWindows);
+    assert_eq!(named("pet"), DemoTab::FloatingWindows);
+    assert_eq!(
+        named("no-such-tab"),
+        DESKTOP_INITIAL_TAB,
+        "a name that fits no tab leaves the desktop on its own"
+    );
+    assert_eq!(
+        startup_tab_from_args([]),
+        DESKTOP_INITIAL_TAB,
+        "no argument leaves the desktop on its own"
+    );
+}
+
+#[test]
 fn tab_source_paths_point_at_files_that_exist() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -595,4 +612,17 @@ fn tab_source_paths_point_at_files_that_exist() {
             path.display()
         );
     }
+}
+
+#[test]
+fn an_inline_playlist_falls_back_to_the_size_the_skin_draws() {
+    let size = crate::app::winamp::playlist_window_size(None);
+    assert_eq!(
+        (size.width, size.height),
+        (
+            crate::app::winamp::sprites::PLAYLIST_WIDTH,
+            crate::app::winamp::sprites::PLAYLIST_HEIGHT
+        ),
+        "a playlist that is not in a window of its own is the size the skin draws"
+    );
 }

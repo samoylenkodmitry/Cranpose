@@ -109,6 +109,7 @@ pub struct NativeWindowOptions {
     pub position_origin: NativeWindowPositionOrigin,
     pub decorations: bool,
     pub transparent: bool,
+    pub shadow: bool,
     pub resizable: bool,
     pub visible: bool,
     pub always_on_top: bool,
@@ -212,6 +213,7 @@ impl NativeWindowOptions {
             position_origin: NativeWindowPositionOrigin::Screen,
             decorations: true,
             transparent: false,
+            shadow: true,
             resizable: true,
             visible: true,
             always_on_top: false,
@@ -247,6 +249,17 @@ impl NativeWindowOptions {
 
     pub fn with_transparent(mut self, transparent: bool) -> Self {
         self.transparent = transparent;
+        self
+    }
+
+    /// Whether the desktop draws its own drop shadow behind the window.
+    ///
+    /// The desktop takes the shadow's shape from the window's alpha, which
+    /// suits a window whose edges are hard. A window that fades out, a glow
+    /// or a blur, gets a contour drawn where the desktop's threshold falls,
+    /// and turns the shadow off to draw its own.
+    pub fn with_shadow(mut self, shadow: bool) -> Self {
+        self.shadow = shadow;
         self
     }
 
@@ -335,7 +348,7 @@ impl NativeWindowEvents {
 
 /// Mutable position and size state for a declarative OS window, and whether
 /// the window has a frame on the screen.
-#[derive(Clone, Copy, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct WindowState {
     position: MutableState<Option<Point>>,
     size: MutableState<Size>,
@@ -529,6 +542,17 @@ impl WindowConfig {
         self
     }
 
+    /// Sets whether the desktop draws its own drop shadow behind the window.
+    ///
+    /// The desktop takes the shadow's shape from the window's alpha, which
+    /// suits a window whose edges are hard. A window that fades out, a glow
+    /// or a blur, gets a contour drawn where the desktop's threshold falls,
+    /// and turns the shadow off to draw its own.
+    pub fn with_shadow(mut self, shadow: bool) -> Self {
+        self.options = self.options.with_shadow(shadow);
+        self
+    }
+
     /// Sets whether the operating system should allow interactive resizing.
     pub fn with_resizable(mut self, resizable: bool) -> Self {
         self.options = self.options.with_resizable(resizable);
@@ -619,6 +643,10 @@ impl WindowConfig {
         self
     }
 
+    pub(crate) fn state(&self) -> Option<WindowState> {
+        self.state
+    }
+
     #[cfg(all(
         feature = "desktop-shell",
         feature = "renderer-wgpu",
@@ -703,13 +731,15 @@ pub trait WindowModifierExt {
 
 impl WindowModifierExt for Modifier {
     fn window(self, config: WindowConfig) -> Modifier {
+        let modifier = crate::window_local::with_window_state_local(self, config.state());
+
         #[cfg(all(
             feature = "desktop-shell",
             feature = "renderer-wgpu",
             not(target_arch = "wasm32")
         ))]
         {
-            crate::window_node::window(self, config)
+            crate::window_node::window(modifier, config)
         }
 
         #[cfg(not(all(
@@ -719,7 +749,7 @@ impl WindowModifierExt for Modifier {
         )))]
         {
             let _ = config;
-            self
+            modifier
         }
     }
 

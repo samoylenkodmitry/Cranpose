@@ -65,14 +65,16 @@ use frame_packet::RenderReturns;
 pub use frame_packet::{CancelReason, PresentOutcome};
 use frontend::{DevOverlayCache, RendererFrontend};
 pub use gpu_stats::FrameStatsSnapshot as RenderStatsSnapshot;
-pub use initial_present::clear_to_default_background;
+pub use initial_present::{clear_to_background, clear_to_default_background};
 pub use pass_timing::{GpuPassTimingEntry, GpuPassTimingReport};
 #[cfg(not(target_arch = "wasm32"))]
 use present_runtime::{
     PresentControl, PresentHandle, PresentMsg, PresentRuntimeInit, PresentState,
 };
 use render::GpuRenderer;
-pub use render::{frames_presented, pipelines_created, pipelines_created_off_frame};
+pub use render::{
+    frame_clear_color, frames_presented, pipelines_created, pipelines_created_off_frame,
+};
 pub use scene::{ClickAction, HitRegion, Scene};
 
 /// The optional device features the renderer exploits when the adapter
@@ -455,6 +457,14 @@ impl WgpuRenderer {
     /// Set root scale factor for text rendering (e.g., density scaling on Android)
     pub fn set_root_scale(&mut self, scale: f32) {
         self.frontend.root_scale = scale;
+    }
+
+    /// Clears each frame to nothing instead of the framework's background,
+    /// for a window whose surface composites with the desktop behind it. A
+    /// renderer starts opaque; `false` puts the background back. Takes
+    /// effect from the next frame, on either present backend.
+    pub fn set_transparent_background(&mut self, transparent: bool) {
+        self.frontend.transparent_background = transparent;
     }
 
     pub fn root_scale(&self) -> f32 {

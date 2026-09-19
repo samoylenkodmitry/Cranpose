@@ -639,6 +639,11 @@ carried by the framework's window group. Neither has a model.
    every window root, and resizes the window to it when it changed, keeping
    the top-left corner, so a window that holds a stack of panes is exactly
    that stack and shrinks when a pane leaves for a window of its own.
+   While the primary is hidden the peers drive their own frames: the idle
+   pass asks a peer to redraw when its scene is dirty, not only when it
+   owes a frame, and the hidden primary's update is paced by the frame
+   interval while an animation still needs frames, where it anchored the
+   cap only after a presented frame and spun otherwise.
 5. **A new window under a held press follows the pointer.** The desktop's
    drag session starts from the press already in flight when the node
    under it now lives in a window that just appeared.
@@ -703,4 +708,83 @@ carried by the framework's window group. Neither has a model.
    windows as the WindowServer orders them and `shotwindow` pictures one by
    id; `scripts/dev/check_tool_tear.sh` tears a pane with the real pointer
    and checks the handover, the follow, the primary's size and the dock.
+   `pet.rs` is the showcase: one borderless, transparent, always-on-top
+   `window` whose body is a runtime shader (a soft-union distance field
+   with a visor, a blinking prompt, a hover glow, a press squash, a bob
+   and a shadow), draggable anywhere through the drag area's callbacks,
+   clicks cycling its mood, and a liquid-glass caption refracting its
+   feet. The transparent pixels take no clicks, so the window is the
+   shape of what it draws.
+   A transparent window needed two things it did not have. Its frames
+   cleared to the framework's background, an opaque dark grey, so the
+   window was a black rectangle whatever it drew; the clear colour now
+   travels in the frame packet (`WgpuRenderer::set_transparent_background`,
+   `frame_clear_color`), so it reaches the present thread like the scene
+   and a transparent window clears to nothing. And the surface asked for
+   `PreMultiplied` alpha and fell back to the first mode offered, which
+   on Metal is `Opaque`: wgpu's Metal backend offers only `Opaque` and
+   `PostMultiplied`, and `PostMultiplied` is what sets the layer
+   non-opaque, so `transparent_alpha_mode` prefers premultiplied, then
+   post-multiplied, over any first-listed mode. macOS then draws its
+   window shadow along the window's alpha, which contours a window whose
+   edges fade, so `WindowConfig::with_shadow(false)` turns it off and the
+   window draws its own. The shape the shader draws is then the shape the
+   desktop sees, and the transparent pixels take no clicks.
+   `flame_window.rs` is a second showcase: a panel with the flame's reach
+   around it on every side, the shader wrapping the panel's contour so the
+   fire licks over the desktop, hovering fanning it, a press a full blaze
+   and a click walking the four fires. The pet wears the same fire along
+   its own silhouette, where the angle around its body stands in for the
+   perimeter a rounded box parameterises by, and its click walks the fires
+   with the face. The fire's noise field, ridge and colour ramp are
+   `shader_rect.rs`'s own, extracted into `FIRE_FIELD_WGSL` and shared.
+   A halo over the desktop wants what a halo over opaque content does not,
+   so the fire shader took three inputs, inert at their defaults: its
+   alpha follows its colour's brightness, which is right for premultiplied
+   output but steps from the opaque band to the faint smoke, and
+   `glow_spread` carries the band's opacity out into the smoke instead;
+   `halo_falloff` eases the whole halo to nothing over a chosen distance;
+   and `edge_fade` keeps the layer's own edge from cutting anything.
 8. **Docs and PR.** As built, the PR description, and the gates.
+9. **The window a subtree lives in is a composition local.** Window content
+   took its own `WindowState` as an argument, so every composable between
+   the window modifier and the one that reads the window's position or size
+   carried it, which is the boilerplate this cut exists to remove.
+   As built: a modifier element hands composition locals to the content
+   composed inside the node it decorates
+   (`ModifierNodeElement::provided_composition_locals`, forwarded through
+   `AnyModifierElement` and cached on the element so a chain with none pays
+   a bool), `Layout` provides whatever its modifier carries around its
+   content, and `WindowModifierExt::window` provides `LocalWindowState`
+   from the config's state on every platform, native sub-windows or not.
+   `LocalWindowState::current()` is the window a composable is drawn in and
+   `None` for content in no window of its own. It follows a subtree torn out
+   or put back inline, because the provider is on the node's own modifier
+   and moves with it. Winamp's playlist reads its size from it and
+   `WinampWindowSize` is gone; the pet and the flame window read their
+   position from it, and their content composables take no arguments.
+   A tool pane reads whether it is torn out at all, where both call sites
+   used to say so, and the tear check still tears it, follows the pointer
+   and docks it again.
+10. **A wrapping window changes size with the frame that needs it.** A pane
+   torn out of the primary left frames on the screen that no application
+   drew: the primary kept its old size for a few frames with the content
+   that was left spread over it, and where the pane had been the window
+   cleared to nothing. The wrap ran in `about_to_wait`, after the frame was
+   presented, and read `primary_content_size` from a layout that had not run
+   since the composition changed, so the size always arrived a frame late.
+   As built: `wrap_primary_window_for_frame` runs inside the redraw, after
+   the update that lays the content out and before the surface texture is
+   acquired. It resizes the window, reconfigures the surface to the size the
+   platform gave back, and lays the content out again at that size, so the
+   frame presented is the first one anybody sees at the new size. The old
+   `sync_primary_size` stays for a primary that is hidden, where there is no
+   redraw to ride and nothing on the screen to tear.
+   The size is recorded as asked for whether or not the platform applies it
+   there and then: macOS applies a primary's resize later, through the
+   surface-resized event, and a wrap that only recorded what it could apply
+   at once asked for the same size every frame and never grew the window
+   back when the pane docked.
+   `scripts/dev/check_tear_blink.sh` records a tear and a dock and saves
+   every frame of it, cropped to the desk the two windows share, which is
+   how the spread frames were found and how their absence was checked.

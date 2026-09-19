@@ -54,7 +54,7 @@ launch() {
     sleep 1
     : > "$log"
     (cd "$tree" && RUST_BACKTRACE=1 CRANPOSE_DEMO_TRACE=1 CRANPOSE_NATIVE_TRACE=1 CRANPOSE_NATIVE_WINDOW_TIMING=1 HOME="$home" \
-        nohup "./target/debug/examples/$example" > "$log" 2>&1 &)
+        nohup "./target/debug/examples/$example" > "$log" 2>&1 &) > /dev/null 2>&1 < /dev/null
     local _
     for _ in $(seq 1 60); do
         grep -q "sync create" "$log" && break

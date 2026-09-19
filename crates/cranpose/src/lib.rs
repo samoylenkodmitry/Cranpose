@@ -108,6 +108,7 @@ mod host_environment;
 #[cfg(all(feature = "ios", target_os = "ios"))]
 mod ios_host;
 mod native_window;
+mod window_local;
 #[cfg(all(
     feature = "desktop-shell",
     feature = "renderer-wgpu",
@@ -142,6 +143,7 @@ pub use native_window::{
     WindowAttachPolicy, WindowConfig, WindowFocus, WindowModifierExt, WindowMoveMode,
     WindowResizeDirection, WindowState, rememberWindowState, rememberWindowStateAt,
 };
+pub use window_local::LocalWindowState;
 /// Brings in what this crate's build script declared.
 ///
 /// Writes `pub const CAPABILITIES: cranpose::capabilities::Capabilities`, read

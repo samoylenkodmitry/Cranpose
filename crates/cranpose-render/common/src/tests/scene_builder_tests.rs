@@ -3164,8 +3164,7 @@ impl cranpose_ui::WindowRootDescriptor for TestWindow {
     }
 }
 
-#[test]
-fn window_root_subtree_leaves_the_parent_scene_and_starts_its_own() {
+fn with_window_root_scene(check: impl FnOnce(&mut MemoryApplier, NodeId, NodeId)) {
     let window_node = Rc::new(std::cell::Cell::new(None));
     let window: Rc<dyn cranpose_ui::WindowRootDescriptor> = Rc::new(TestWindow(Size {
         width: 320.0,
@@ -3212,28 +3211,11 @@ fn window_root_subtree_leaves_the_parent_scene_and_starts_its_own() {
         )
         .expect("layout");
     let window_node = window_node.get().expect("window node");
-
-    let primary = build_graph_from_applier(&mut applier, root, 1.0).expect("primary graph");
-    let mut labels = Vec::new();
-    collect_text_labels(&primary.root, &mut labels);
-    assert_eq!(labels, vec!["outside".to_string()]);
-
-    let graph = build_graph_from_applier(&mut applier, window_node, 1.0).expect("window graph");
+    check(&mut applier, root, window_node);
     applier.clear_runtime_handle();
-    let mut labels = Vec::new();
-    collect_text_labels(&graph.root, &mut labels);
-    assert_eq!(labels, vec!["inside".to_string()]);
-    assert_eq!(layer_identity(&graph.root), Some(window_node));
-    assert_eq!(
-        graph.root.local_bounds,
-        Rect {
-            x: 0.0,
-            y: 0.0,
-            width: 320.0,
-            height: 240.0
-        },
-        "the window's scene is the window's size"
-    );
+}
+
+fn window_scene_starts_at_the_origin(graph: &RenderGraph, why: &str) {
     assert_eq!(
         graph.root.transform_to_parent,
         layer_transform_to_parent(
@@ -3241,7 +3223,154 @@ fn window_root_subtree_leaves_the_parent_scene_and_starts_its_own() {
             Point::default(),
             &GraphicsLayer::default()
         ),
-        "the window's scene starts at the origin, not where the column placed the box"
+        "{why}"
+    );
+}
+
+#[test]
+fn window_root_subtree_leaves_the_parent_scene_and_starts_its_own() {
+    with_window_root_scene(|applier, root, window_node| {
+        let primary = build_graph_from_applier(applier, root, 1.0).expect("primary graph");
+        let mut labels = Vec::new();
+        collect_text_labels(&primary.root, &mut labels);
+        assert_eq!(labels, vec!["outside".to_string()]);
+
+        let graph = build_graph_from_applier(applier, window_node, 1.0).expect("window graph");
+        let mut labels = Vec::new();
+        collect_text_labels(&graph.root, &mut labels);
+        assert_eq!(labels, vec!["inside".to_string()]);
+        assert_eq!(layer_identity(&graph.root), Some(window_node));
+        assert_eq!(
+            graph.root.local_bounds,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 320.0,
+                height: 240.0
+            },
+            "the window's scene is the window's size"
+        );
+        window_scene_starts_at_the_origin(
+            &graph,
+            "the window's scene starts at the origin, not where the column placed the box",
+        );
+    });
+}
+
+#[test]
+fn a_patched_window_scene_stays_at_the_window_s_own_origin() {
+    with_window_root_scene(|applier, _root, window_node| {
+        let mut graph = build_graph_from_applier(applier, window_node, 1.0).expect("window graph");
+        assert!(
+            update_graph_from_applier(applier, &mut graph, &[window_node], 1.0),
+            "the window's own node is patched in place rather than rebuilt"
+        );
+        window_scene_starts_at_the_origin(
+            &graph,
+            "a window scene patched in place still starts at the window's origin, not at the \
+             placement its node has in the window it was declared in",
+        );
+    });
+}
+
+#[test]
+fn a_patched_parent_leaves_a_window_root_child_out_of_its_scene() {
+    with_window_root_scene(|applier, root, _window_node| {
+        let mut graph = build_graph_from_applier(applier, root, 1.0).expect("primary graph");
+        assert!(
+            update_graph_from_applier(applier, &mut graph, &[root], 1.0),
+            "a parent whose child is in a window of its own is patched in place; taking the \
+             child for one of its own leaves the scoped update no choice but to rebuild"
+        );
+        let mut labels = Vec::new();
+        collect_text_labels(&graph.root, &mut labels);
+        assert_eq!(
+            labels,
+            vec!["outside".to_string()],
+            "the window's content belongs to the window's scene, not its parent's"
+        );
+    });
+}
+
+#[test]
+fn a_child_that_leaves_for_a_window_leaves_its_parent_s_scene_with_it() {
+    let torn: Rc<RefCell<Option<cranpose_core::MutableState<bool>>>> = Rc::new(RefCell::new(None));
+    let window: Rc<dyn cranpose_ui::WindowRootDescriptor> = Rc::new(TestWindow(Size {
+        width: 320.0,
+        height: 240.0,
+    }));
+    let mut composition = cranpose_ui::run_test_composition({
+        let torn = Rc::clone(&torn);
+        let window = Rc::clone(&window);
+        move || {
+            let torn = Rc::clone(&torn);
+            let window = Rc::clone(&window);
+            Column(Modifier::empty(), ColumnSpec::default(), move || {
+                let state = cranpose_core::rememberMutableStateOf(|| false);
+                *torn.borrow_mut() = Some(state);
+                Text(
+                    "outside".to_string(),
+                    Modifier::empty().height(20.0),
+                    TextStyle::default(),
+                );
+                let modifier = if state.get() {
+                    Modifier::empty().window_root(Rc::clone(&window))
+                } else {
+                    Modifier::empty()
+                };
+                cranpose_ui::Box(modifier, cranpose_ui::BoxSpec::default(), || {
+                    Text(
+                        "inside".to_string(),
+                        Modifier::empty().height(20.0),
+                        TextStyle::default(),
+                    );
+                });
+            });
+        }
+    });
+    let root = composition.root().expect("root");
+    let viewport = Size {
+        width: 240.0,
+        height: 300.0,
+    };
+    let handle = composition.runtime_handle();
+    let mut applier = composition.applier_mut();
+    applier.set_runtime_handle(handle);
+    applier.compute_layout(root, viewport).expect("layout");
+    let mut graph = build_graph_from_applier(&mut applier, root, 1.0).expect("graph");
+    applier.clear_runtime_handle();
+    drop(applier);
+    let mut labels = Vec::new();
+    collect_text_labels(&graph.root, &mut labels);
+    assert_eq!(
+        labels,
+        vec!["outside".to_string(), "inside".to_string()],
+        "both are in the one window to start with"
+    );
+
+    let state = torn.borrow().expect("the torn state");
+    state.set_value(true);
+    composition
+        .process_invalid_scopes()
+        .expect("the child takes a window of its own");
+    let handle = composition.runtime_handle();
+    let mut applier = composition.applier_mut();
+    applier.set_runtime_handle(handle);
+    applier.compute_layout(root, viewport).expect("layout");
+    let patched = update_graph_from_applier(&mut applier, &mut graph, &[root], 1.0);
+    applier.clear_runtime_handle();
+    drop(applier);
+
+    assert!(
+        patched,
+        "a parent whose child left for a window of its own is patched in place"
+    );
+    let mut labels = Vec::new();
+    collect_text_labels(&graph.root, &mut labels);
+    assert_eq!(
+        labels,
+        vec!["outside".to_string()],
+        "the child that left draws in its own window now, not in the one it left"
     );
 }
 
