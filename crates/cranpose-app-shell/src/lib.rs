@@ -1044,6 +1044,16 @@ where
         self.surfaces[0].has_active_pointer_gesture()
     }
 
+    /// Primary-surface form of [`SurfaceMut::frame_owed`].
+    pub fn frame_owed(&self) -> bool {
+        self.surfaces[0].frame_owed
+    }
+
+    /// Primary-surface form of [`SurfaceMut::take_frame_owed`].
+    pub fn take_frame_owed(&mut self) -> bool {
+        std::mem::take(&mut self.surfaces[0].frame_owed)
+    }
+
     /// Returns the next scheduled event time for cursor blink.
     /// Use this for `ControlFlow::WaitUntil` scheduling.
     pub fn next_event_time(&self) -> Option<web_time::Instant> {

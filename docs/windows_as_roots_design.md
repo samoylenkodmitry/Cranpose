@@ -375,3 +375,54 @@ only that surface reports a frame. Six mutations of the partition,
 attribution, retained walk, activation and routing were killed by them.
 `scripts/dev/function_complexity.sh` lists function complexities as the
 gate measures them, for splitting a body before it moves under a new name.
+
+### Step 4: windows are surfaces
+
+The desktop owns one `AppShell` again. A declared window composes its
+content under `Modifier::window_root(id, descriptor)` inside a `PopupHost`,
+where the descriptor is the window's `NativeWindowRoot`, a cell holding the
+logical size the desktop keeps equal to the window's surface. The registry
+carries that root instead of a content closure; the id is the `WindowId`
+hash, exposed as `WindowId::raw`. Creating an OS window hands the shell a
+renderer with `add_window_surface`, resizing sets the root's size and the
+surface's buffer and viewport, closing takes the renderer back with
+`remove_window_surface`. Every native event reaches its surface through
+`app.surface(RootId::Window(id))`; the wrappers that used to call the
+window's shell (`dispatch_mouse_wheel`, `dispatch_keyboard_input`,
+`dispatch_ime_event`, `dispatch_middle_click_paste`, `cancel_surface_input`,
+`DesktopTextInput::install`) take a `SurfaceMut`, and the primary window
+passes `app.primary()`. Differences from the plan:
+
+- **One update, many presents.** A native redraw runs the whole-app
+  `update` and presents its own surface when that surface owes a frame.
+  `RootSurface::frame_owed` remembers a visual change until the platform
+  takes it with `take_frame_owed`, so a change to window B produced while
+  window A was redrawing is not lost, and the primary presents a frame a
+  native redraw produced for it. The hidden primary of a declaration host
+  takes the flag in its direct update. `about_to_wait` asks a native window
+  to redraw when its schedule needs a frame or it owes one, and no longer
+  runs per-window updates.
+- **The event handler returns what to settle.** `dispatch_native_window_event`
+  takes the app and the window out of their maps; `native_window_event` answers whether the
+  window stays plus a `NativeWindowEventSettlement` (graph moves, graph
+  drag, finish, sync). `settle_native_window_event` applies it once the
+  window is back in the map, which is what the old tail of the function
+  did inline.
+- **Modifiers and pointer source** are set on the shell and the surface
+  respectively; the frame pacing mode is set once on the app, and
+  `apply_frame_pacing_mode` configures a wgpu surface from the device.
+- **Scale factor** of a native window sets the platform's scale and the
+  surface renderer's root scale; density stays app-wide as the plan's
+  limits say.
+- `Focused(true)` on any window calls `set_active_root`, so the soft
+  keyboard and the text input router follow the OS focus.
+- The dock still reads `current_native_window_surface_origin`; step 5
+  removes both.
+
+Checks: `chrome_tabs` tears a pressed tab into a new window with its
+counter intact and joins it back; `tool_windows` tears a pane out and snaps
+it back in line; `winamp_standalone` moves its equalizer and playlist with
+the main window. All through `scripts/dev/drag_window.sh`, with an idle
+log that stops growing once the windows are up. The shell test
+`a_surface_keeps_owing_its_frame_until_the_platform_takes_it` covers the
+owed-frame flag.

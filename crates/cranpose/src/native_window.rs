@@ -43,6 +43,12 @@ impl WindowId {
         key.hash(&mut hasher);
         Self(hasher.finish())
     }
+
+    /// The number behind the identifier, which names the window's root in
+    /// the app shell.
+    pub fn raw(self) -> u64 {
+        self.0
+    }
 }
 
 #[cfg(all(
@@ -621,7 +627,50 @@ impl WindowModifierExt for Modifier {
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
-pub(crate) type NativeWindowContent = Rc<RefCell<Box<dyn FnMut()>>>;
+/// The window root of a declared OS window: the size its subtree lays out
+/// into, which the desktop keeps equal to the window's surface.
+pub(crate) struct NativeWindowRoot {
+    size: Cell<Size>,
+}
+
+#[cfg(all(
+    feature = "desktop-shell",
+    feature = "renderer-wgpu",
+    not(target_arch = "wasm32")
+))]
+impl NativeWindowRoot {
+    pub(crate) fn new(size: Size) -> Self {
+        Self {
+            size: Cell::new(size),
+        }
+    }
+
+    pub(crate) fn set_size(&self, size: Size) {
+        self.size.set(size);
+    }
+}
+
+#[cfg(all(
+    feature = "desktop-shell",
+    feature = "renderer-wgpu",
+    not(target_arch = "wasm32")
+))]
+impl cranpose_ui::WindowRootDescriptor for NativeWindowRoot {
+    fn layout_size(&self) -> Size {
+        self.size.get()
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+#[cfg(all(
+    feature = "desktop-shell",
+    feature = "renderer-wgpu",
+    not(target_arch = "wasm32")
+))]
+pub(crate) type NativeWindowRootHandle = Rc<NativeWindowRoot>;
 
 #[cfg(all(
     feature = "desktop-shell",
@@ -652,7 +701,7 @@ pub(crate) struct NativeWindowRequest {
     pub(crate) events: NativeWindowEvents,
     pub(crate) state: Option<WindowState>,
     pub(crate) group: Option<NativeWindowGroupMembership>,
-    pub(crate) content: NativeWindowContent,
+    pub(crate) root: NativeWindowRootHandle,
     pub(crate) revision: u64,
     owner: NativeWindowOwner,
 }
@@ -668,7 +717,7 @@ struct NativeWindowRegistration {
     events: NativeWindowEvents,
     state: Option<WindowState>,
     group: Option<NativeWindowGroupMembership>,
-    content: NativeWindowContent,
+    root: NativeWindowRootHandle,
     owner: NativeWindowOwner,
 }
 
@@ -713,7 +762,7 @@ impl NativeWindowRegistry {
                 events: registration.events,
                 state: registration.state,
                 group: registration.group,
-                content: registration.content,
+                root: registration.root,
                 revision,
                 owner: registration.owner,
             },
@@ -829,18 +878,17 @@ fn NativeWindowWithEvents(
         let key = id;
         let group = current_window_group();
         let owner = cranpose_core::remember(|| Rc::new(())).with(Rc::clone);
-        let content_cell =
-            cranpose_core::remember(|| Rc::new(RefCell::new(Box::new(|| {}) as Box<dyn FnMut()>)))
-                .with(Rc::clone);
-        *content_cell.borrow_mut() = Box::new(content);
+        let initial_size = Size::new(options.width, options.height);
+        let root = cranpose_core::remember(move || Rc::new(NativeWindowRoot::new(initial_size)))
+            .with(Rc::clone);
 
         {
             let options = options.clone();
             let events = events.clone();
-            let content = Rc::clone(&content_cell);
+            let root = Rc::clone(&root);
             let owner = Rc::clone(&owner);
             cranpose_core::SideEffect(move || {
-                register_native_window(key, options, events, state, group, content, owner);
+                register_native_window(key, options, events, state, group, root, owner);
             });
         }
 
@@ -850,6 +898,17 @@ fn NativeWindowWithEvents(
                 scope.on_dispose(move || unregister_native_window(key, owner))
             });
         }
+
+        let descriptor: Rc<dyn cranpose_ui::WindowRootDescriptor> = root;
+        let content = Rc::new(RefCell::new(content));
+        cranpose_ui::Box(
+            Modifier::empty().window_root(key.raw(), descriptor),
+            cranpose_ui::BoxSpec::default(),
+            move || {
+                let content = Rc::clone(&content);
+                cranpose_ui::widgets::PopupHost(move || (content.borrow_mut())());
+            },
+        );
     }
 
     #[cfg(not(all(
@@ -1039,7 +1098,7 @@ fn register_native_window(
     events: NativeWindowEvents,
     state: Option<WindowState>,
     group: Option<NativeWindowGroupMembership>,
-    content: NativeWindowContent,
+    root: NativeWindowRootHandle,
     owner: NativeWindowOwner,
 ) {
     let Some(registry) = current_native_window_registry() else {
@@ -1054,7 +1113,7 @@ fn register_native_window(
         events,
         state,
         group,
-        content,
+        root,
         owner,
     });
 }
@@ -1626,8 +1685,8 @@ mod tests {
         let second_key = WindowId::from_static("second-registry-window");
         let first_owner = Rc::new(());
         let second_owner = Rc::new(());
-        let first_content = Rc::new(RefCell::new(Box::new(|| {}) as Box<dyn FnMut()>));
-        let second_content = Rc::new(RefCell::new(Box::new(|| {}) as Box<dyn FnMut()>));
+        let first_content = Rc::new(NativeWindowRoot::new(Size::new(1.0, 1.0)));
+        let second_content = Rc::new(NativeWindowRoot::new(Size::new(1.0, 1.0)));
 
         with_native_window_registry(&first_registry, || {
             register_native_window(
@@ -2510,8 +2569,8 @@ mod tests {
         feature = "renderer-wgpu",
         not(target_arch = "wasm32")
     ))]
-    fn test_content() -> NativeWindowContent {
-        Rc::new(RefCell::new(Box::new(|| {}) as Box<dyn FnMut()>))
+    fn test_root() -> NativeWindowRootHandle {
+        Rc::new(NativeWindowRoot::new(Size::new(1.0, 1.0)))
     }
 
     #[cfg(all(
@@ -2521,7 +2580,7 @@ mod tests {
     ))]
     fn register_panel(
         key: NativeWindowKey,
-        content: NativeWindowContent,
+        content: NativeWindowRootHandle,
         owner: NativeWindowOwner,
     ) {
         register_native_window(
@@ -2543,7 +2602,7 @@ mod tests {
     fn register_visible_panel(
         key: NativeWindowKey,
         visible: bool,
-        content: NativeWindowContent,
+        content: NativeWindowRootHandle,
         owner: NativeWindowOwner,
     ) {
         register_native_window(
@@ -2582,7 +2641,7 @@ mod tests {
 
             let key = NativeWindowKey::from_static("visibility-update");
             let owner = test_owner();
-            let content = test_content();
+            let content = test_root();
 
             register_visible_panel(key, true, Rc::clone(&content), Rc::clone(&owner));
             let initial_revision = latest_revision(registry);
@@ -2613,10 +2672,10 @@ mod tests {
             let key = NativeWindowKey::from_static("content-update");
             let owner = test_owner();
 
-            register_panel(key, test_content(), Rc::clone(&owner));
+            register_panel(key, test_root(), Rc::clone(&owner));
             let first_revision = latest_revision(registry);
 
-            register_panel(key, test_content(), owner);
+            register_panel(key, test_root(), owner);
             let second_revision = latest_revision(registry);
 
             assert_ne!(first_revision, second_revision);
@@ -2637,7 +2696,7 @@ mod tests {
 
             let key = NativeWindowKey::from_static("same-content-update");
             let owner = test_owner();
-            let content = test_content();
+            let content = test_root();
 
             register_panel(key, Rc::clone(&content), Rc::clone(&owner));
             let first_revision = latest_revision(registry);
@@ -2664,16 +2723,16 @@ mod tests {
             let key = NativeWindowKey::from_static("reattach-window");
             let stale_owner = test_owner();
             let current_owner = test_owner();
-            let second_content = test_content();
+            let second_content = test_root();
 
-            register_panel(key, test_content(), Rc::clone(&stale_owner));
+            register_panel(key, test_root(), Rc::clone(&stale_owner));
             register_panel(key, Rc::clone(&second_content), Rc::clone(&current_owner));
             unregister_native_window(key, stale_owner);
 
             let requests = native_window_requests(registry);
             assert_eq!(requests.len(), 1);
             assert_eq!(requests[0].key, key);
-            assert!(Rc::ptr_eq(&requests[0].content, &second_content));
+            assert!(Rc::ptr_eq(&requests[0].root, &second_content));
 
             unregister_native_window(key, current_owner);
             assert!(native_window_requests(registry).is_empty());
@@ -2694,7 +2753,7 @@ mod tests {
 
             let key = NativeWindowKey::from_static("remove-window");
             let owner = test_owner();
-            let content = test_content();
+            let content = test_root();
 
             register_panel(key, Rc::clone(&content), Rc::clone(&owner));
             let first_revision = latest_revision(registry);

@@ -6,26 +6,7 @@ where
     R::Error: Debug,
 {
     pub fn debug_info_report(&mut self) -> String {
-        let app_context = std::rc::Rc::clone(&self.app.app_context);
-        app_context.enter(|| {
-            let mut report = String::new();
-            writeln!(report, "=== DEBUG: CURRENT SCREEN STATE ===").ok();
-            if let Some(layout_tree) = self.surfaces[0].layout_tree_in_context(&mut self.app) {
-                let renderer = HeadlessRenderer::new();
-                let render_scene = renderer.render(layout_tree);
-                writeln!(report, "{}", format_layout_tree(layout_tree)).ok();
-                writeln!(report, "{}", format_render_scene(&render_scene)).ok();
-                writeln!(
-                    report,
-                    "{}",
-                    format_screen_summary(layout_tree, &render_scene)
-                )
-                .ok();
-            } else {
-                writeln!(report, "No layout available").ok();
-            }
-            report
-        })
+        debug_info_report(&mut self.app, &mut self.surfaces[0])
     }
 
     pub fn log_debug_info(&mut self) -> String {
@@ -223,4 +204,47 @@ fn layout_box_bounds(layout_box: &LayoutBox) -> (f32, f32, f32, f32) {
         layout_box.rect.width,
         layout_box.rect.height,
     )
+}
+
+/// The layout tree and headless scene of `surface`, for a log.
+fn debug_info_report<R: Renderer>(app: &mut ShellApp, surface: &mut RootSurface<R>) -> String {
+    let app_context = std::rc::Rc::clone(&app.app_context);
+    app_context.enter(|| {
+        let mut report = String::new();
+        writeln!(report, "=== DEBUG: CURRENT SCREEN STATE ===").ok();
+        if let Some(layout_tree) = surface.layout_tree_in_context(app) {
+            let renderer = HeadlessRenderer::new();
+            let render_scene = renderer.render(layout_tree);
+            writeln!(report, "{}", format_layout_tree(layout_tree)).ok();
+            writeln!(report, "{}", format_render_scene(&render_scene)).ok();
+            writeln!(
+                report,
+                "{}",
+                format_screen_summary(layout_tree, &render_scene)
+            )
+            .ok();
+        } else {
+            writeln!(report, "No layout available").ok();
+        }
+        report
+    })
+}
+
+impl<R> SurfaceMut<'_, R>
+where
+    R: Renderer,
+    R::Error: Debug,
+{
+    /// The layout tree and headless scene of this surface, for a log.
+    pub fn debug_info_report(&mut self) -> String {
+        let (app, surface) = self.parts();
+        debug_info_report(app, surface)
+    }
+
+    /// Logs [`Self::debug_info_report`] and answers it.
+    pub fn log_debug_info(&mut self) -> String {
+        let report = self.debug_info_report();
+        log::info!(target: "cranpose::debug::screen", "\n{report}");
+        report
+    }
 }

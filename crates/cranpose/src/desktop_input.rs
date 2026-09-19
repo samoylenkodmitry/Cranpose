@@ -1,7 +1,7 @@
-use cranpose_app_shell::AppShell;
+use cranpose_app_shell::SurfaceMut;
 
 pub(crate) fn dispatch_keyboard_input<R>(
-    app: &mut AppShell<R>,
+    surface: &mut SurfaceMut<'_, R>,
     current_modifiers: winit::keyboard::ModifiersState,
     event: winit::event::KeyEvent,
 ) where
@@ -23,10 +23,10 @@ pub(crate) fn dispatch_keyboard_input<R>(
     let key_event = KeyEvent::new(key_code, text, app_modifiers(current_modifiers), event_type);
 
     if key_code == cranpose_app_shell::KeyCode::D && event_type == KeyEventType::KeyDown {
-        app.log_debug_info();
+        surface.log_debug_info();
     }
 
-    app.on_key_event(&key_event);
+    surface.on_key_event(&key_event);
 }
 
 pub(crate) fn app_key_code(

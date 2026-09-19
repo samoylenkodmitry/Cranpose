@@ -71,6 +71,7 @@ pub struct RootSurface<R: Renderer> {
     pub(crate) frame_scheduler: FrameScheduler,
     pub(crate) pointer_icon: PointerIconState,
     pub(crate) last_update: FrameUpdateResult,
+    pub(crate) frame_owed: bool,
 }
 
 impl<R: Renderer> RootSurface<R> {
@@ -106,6 +107,7 @@ impl<R: Renderer> RootSurface<R> {
             frame_scheduler: FrameScheduler::default(),
             pointer_icon: PointerIconState::new(),
             last_update: FrameUpdateResult::default(),
+            frame_owed: false,
         }
     }
 
@@ -395,15 +397,17 @@ where
         Self { shell, index }
     }
 
-    pub(crate) fn shell(&mut self) -> &mut AppShell<R> {
+    /// The whole app, for what a window's event needs beyond its surface:
+    /// the clipboard, the dev options, a debug report.
+    pub fn shell(&mut self) -> &mut AppShell<R> {
         self.shell
     }
 
-    pub(crate) fn app(&mut self) -> &mut ShellApp {
+    pub(crate) fn shell_app(&mut self) -> &mut ShellApp {
         &mut self.shell.app
     }
 
-    pub(crate) fn app_ref(&self) -> &ShellApp {
+    pub(crate) fn shell_app_ref(&self) -> &ShellApp {
         &self.shell.app
     }
 
@@ -430,7 +434,7 @@ where
     /// The node this surface draws from, when it has one.
     pub fn root(&self) -> Option<NodeId> {
         let surface = self.surface();
-        surface.root_node(self.app_ref())
+        surface.root_node(self.shell_app_ref())
     }
 
     /// The renderer that draws this surface.
@@ -453,13 +457,13 @@ where
     pub fn set_viewport(&mut self, width: f32, height: f32) {
         self.surface_mut().viewport = (width, height);
         match self.id() {
-            RootId::Primary => self.app().request_forced_layout_pass(),
+            RootId::Primary => self.shell_app().request_forced_layout_pass(),
             RootId::Window(_) => {
                 if let Some(root) = self.root() {
-                    let app_context = Rc::clone(&self.app_ref().app_context);
+                    let app_context = Rc::clone(&self.shell_app_ref().app_context);
                     app_context.enter(|| cranpose_ui::schedule_measure_repass(root));
                 }
-                self.app().request_layout_pass();
+                self.shell_app().request_layout_pass();
             }
         }
         self.surface_mut().scene_dirty = true;
@@ -490,8 +494,8 @@ where
     /// renderer that has not warmed its swapchain yet. See
     /// [`AppShell::needs_redraw`].
     pub fn needs_redraw(&self) -> bool {
-        let app_context = Rc::clone(&self.app_ref().app_context);
-        app_context.enter(|| self.surface().needs_redraw_in_context(self.app_ref()))
+        let app_context = Rc::clone(&self.shell_app_ref().app_context);
+        app_context.enter(|| self.surface().needs_redraw_in_context(self.shell_app_ref()))
     }
 
     /// Whether a primary-button gesture that started on this surface is
@@ -506,9 +510,22 @@ where
         self.surface().last_update
     }
 
+    /// Whether an update since the platform last presented this surface
+    /// changed its pixels. An update runs for the whole app, so the update a
+    /// platform ran for one window may have drawn another; this is how the
+    /// other window learns it has a frame to show.
+    pub fn frame_owed(&self) -> bool {
+        self.surface().frame_owed
+    }
+
+    /// [`Self::frame_owed`], cleared: the platform is about to present.
+    pub fn take_frame_owed(&mut self) -> bool {
+        std::mem::take(&mut self.surface_mut().frame_owed)
+    }
+
     fn compute_frame_schedule(&self) -> FrameSchedule {
         self.surface()
-            .compute_frame_schedule(self.app_ref(), self.shell.any_surface_dirty())
+            .compute_frame_schedule(self.shell_app_ref(), self.shell.any_surface_dirty())
     }
 
     /// The frame this surface asks its platform for, recorded for
@@ -552,7 +569,7 @@ where
     }
 
     pub(crate) fn dev_overlay_press(&mut self, x: f32, y: f32) -> bool {
-        if !self.app_ref().dev_options.frame_pacing_controls {
+        if !self.shell_app_ref().dev_options.frame_pacing_controls {
             return false;
         }
         let Some(mode) = self
@@ -601,7 +618,7 @@ where
     /// showed. See [`AppShell::set_platform_text_input`].
     pub fn set_platform_text_input(&mut self, handler: Rc<dyn PlatformTextInputHandler>) {
         let id = self.id();
-        let app = self.app();
+        let app = self.shell_app();
         app.text_input_routes.borrow_mut().set_handler(id, handler);
         app.install_text_input_router();
     }
@@ -610,6 +627,9 @@ where
     /// soft keyboard belongs to. Pointer presses do this on their own.
     pub fn activate(&mut self) {
         let id = self.id();
-        self.app().text_input_routes.borrow_mut().set_active(id);
+        self.shell_app()
+            .text_input_routes
+            .borrow_mut()
+            .set_active(id);
     }
 }

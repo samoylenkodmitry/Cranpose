@@ -662,6 +662,7 @@ where
         {
             let frame = render_surface(&mut self.app, surface, &frame, draw_dirty, structural);
             surface.last_update = frame.result;
+            surface.frame_owed |= frame.result.visual_changed;
             result.visual_changed |= frame.result.visual_changed;
             result.structure_changed |= frame.result.structure_changed;
             if frame.rebuilt

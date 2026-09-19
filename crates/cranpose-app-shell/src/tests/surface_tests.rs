@@ -466,3 +466,59 @@ fn a_draw_change_in_a_window_updates_only_that_windows_scene() {
     assert_eq!(primary.scene_work(), (0, 0, 1));
     assert_eq!(window_counts.scene_work(), (0, 0, 0));
 }
+
+#[test]
+fn a_surface_keeps_owing_its_frame_until_the_platform_takes_it() {
+    let _guard = test_guard();
+    let primary = RendererCounts::default();
+    let window_counts = RendererCounts::default();
+    let window = test_window(200.0, 100.0);
+    let offset: Rc<RefCell<Option<MutableState<f32>>>> = Rc::new(RefCell::new(None));
+    let mut shell = AppShell::new(
+        primary.renderer(),
+        location_key(file!(), line!(), column!()),
+        {
+            let offset = Rc::clone(&offset);
+            let window = Rc::clone(&window);
+            move || {
+                let window_offset = rememberMutableStateOf(|| 0.0f32);
+                *offset.borrow_mut() = Some(window_offset);
+                let window = Rc::clone(&window);
+                Box(
+                    Modifier::empty().window_root(WINDOW, Rc::clone(&window)),
+                    BoxSpec::default(),
+                    move || translated_box(window_offset),
+                );
+            }
+        },
+    );
+    shell.add_window_surface(WINDOW, window_counts.renderer(), (200, 100), (200.0, 100.0));
+    shell.update();
+    shell.update();
+    assert!(shell.take_frame_owed(), "the first frames drew the primary");
+    assert!(
+        shell
+            .surface(RootId::Window(WINDOW))
+            .expect("window surface")
+            .take_frame_owed()
+    );
+
+    let offset = (*offset.borrow()).expect("offset");
+    offset.set(12.0);
+    shell.update();
+    shell.update();
+    let mut window = shell
+        .surface(RootId::Window(WINDOW))
+        .expect("window surface");
+    assert!(
+        !window.last_update_result().visual_changed,
+        "the second update drew nothing new"
+    );
+    assert!(
+        window.frame_owed(),
+        "the frame the first update drew is still owed to the platform"
+    );
+    assert!(window.take_frame_owed());
+    assert!(!window.take_frame_owed(), "taken once");
+    assert!(!shell.take_frame_owed(), "the primary drew nothing");
+}
