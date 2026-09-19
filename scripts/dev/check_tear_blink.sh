@@ -2,11 +2,15 @@
 # Records the moment a tool pane tears into its own window and saves every
 # frame of it, cropped to the desk the two windows share.
 #
-#   check_tear_blink.sh <out-dir> [seconds] [grip-y]
+#   check_tear_blink.sh <out-dir> [seconds] [grip-y] [steps] [ms]
 #
 # The grip is a pane title's offset down the primary window: 43 is the
 # Player, 154 the Equalizer, 270 the Playlist, which is the pane that leaves
 # the bottom edge and so shows the most.
+#
+# `steps` and `ms` are the pointer's own pace. A slow carry, say 40 steps of
+# 40ms, shows whether the window that came up under the pointer keeps
+# following it or stops where it appeared.
 #
 # A tear changes two things at once: the primary window loses a pane and
 # shrinks, and a new window comes up under the pointer. A dock changes them
@@ -26,6 +30,8 @@ drag="$here/drag_window.sh"
 out="${1:?usage: check_tear_blink.sh <out-dir> [seconds]}"
 seconds="${2:-4}"
 grip_y="${3:-270}"
+steps="${4:-18}"
+step_ms="${5:-14}"
 mkdir -p "$out"
 log="$out/tear_blink.log"
 mov="$out/tear.mov"
@@ -42,7 +48,7 @@ from_x=$((px + grip_x)) from_y=$((py + grip_y))
 to_x=$((from_x + carry_x)) to_y=$((from_y + carry_y))
 
 "$drag" record "$mov" "$seconds"
-"$drag" drag "$from_x,$from_y" "$to_x,$to_y" 18 14 > /dev/null
+"$drag" drag "$from_x,$from_y" "$to_x,$to_y" "$steps" "$step_ms" > /dev/null
 sleep 1
 torn="$("$drag" windows "$log" | awk -v y="$grip_y" 'NR > 0 && $1 != ""' | tail -1)"
 if [ -n "$torn" ]; then

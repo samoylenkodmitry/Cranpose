@@ -799,3 +799,28 @@ carried by the framework's window group. Neither has a model.
    now, which a present clears, so the window keeps asking at the frame
    rate until it has a drawable and then stops. Found by launching the tabs
    demo behind another window.
+12. **A window shown again is new to the press that is still down.** Tearing
+   a tool pane out, docking it and tearing it again worked five times and
+   then stopped: the window came up where the pane was and stood there while
+   the pointer carried on without it. A pane that docks leaves its window
+   hidden rather than closing it, and a node id that comes round again asks
+   the desktop for a window it already has, so the sync took the update path
+   instead of the create path. The held press was handed over on create
+   only. It is handed over whenever a window goes from hidden to shown too,
+   which is the same birth as far as the application is concerned.
+   `scripts/dev/check_tear_repeats.sh` tears and docks a pane over and over
+   and reports, for each round, whether the window took the press and how
+   many positions it followed the pointer through; one round on its own
+   never shows the fault.
+13. **A tab leaves the strip while the pointer is still carrying it.** The
+   tabs demo made the torn tab's window when the transfer ended, so nothing
+   moved until the button went up and then the window appeared at the
+   pointer. It tears while the pointer is still down now, as soon as the
+   pointer carries the tab clear of the strip, and the window that comes up
+   takes the held press the way a torn tool pane does. A tab that is alone
+   in its window is that window's drag area, which is what the handed press
+   lands on and what makes the window follow; a tab with others beside it
+   keeps the transfer, so it can still be dropped onto another window's
+   strip. `scripts/dev/check_tab_tear.sh` adds a tab, carries the first one
+   out from under the strip, and reports how many positions the window it
+   became took with the pointer.

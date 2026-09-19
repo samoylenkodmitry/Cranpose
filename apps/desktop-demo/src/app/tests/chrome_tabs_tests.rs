@@ -53,3 +53,23 @@ fn closing_the_active_page_activates_a_neighbour_and_the_last_close_removes_the_
     windows.close_page(1);
     assert!(windows.windows().is_empty());
 }
+
+#[test]
+fn a_tab_leaves_the_strip_when_the_pointer_carries_it_clear_of_it() {
+    assert!(
+        !tab_left_the_strip(Point::new(60.0, 18.0)),
+        "a pointer still on the strip is reordering, not tearing"
+    );
+    assert!(!tab_left_the_strip(Point::new(
+        60.0,
+        STRIP_HEIGHT + TEAR_DEPTH
+    )));
+    assert!(
+        tab_left_the_strip(Point::new(60.0, STRIP_HEIGHT + TEAR_DEPTH + 1.0)),
+        "carried below the strip, the tab is a window of its own and takes the press with it"
+    );
+    assert!(
+        tab_left_the_strip(Point::new(60.0, -TEAR_DEPTH - 1.0)),
+        "carried above it counts too"
+    );
+}

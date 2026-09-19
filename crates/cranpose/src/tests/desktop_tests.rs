@@ -1646,3 +1646,16 @@ fn a_transparent_window_takes_the_alpha_mode_the_platform_composites_with() {
     assert_eq!(super::transparent_alpha_mode(&[Opaque]), Some(Opaque));
     assert_eq!(super::transparent_alpha_mode(&[]), None);
 }
+
+#[test]
+fn a_window_shown_again_is_new_to_the_press_that_is_still_down() {
+    assert!(
+        super::window_shown_again_takes_a_held_press(true, true),
+        "a pane docked and torn out again reaches the desktop as a window it already has, \
+         hidden; the press that tore it has to go to it the way it goes to a window that \
+         was made on the spot, or the window stands still where it appeared"
+    );
+    assert!(!super::window_shown_again_takes_a_held_press(false, true));
+    assert!(!super::window_shown_again_takes_a_held_press(true, false));
+    assert!(!super::window_shown_again_takes_a_held_press(false, false));
+}

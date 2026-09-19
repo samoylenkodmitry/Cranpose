@@ -1250,8 +1250,12 @@ impl App {
 
         self.let_go_of_windows_no_longer_declared(app, &active_keys);
 
+        let mut shown_again = Vec::new();
         let mut native_windows_to_create =
-            self.refresh_native_windows_or_collect_new(app, requests);
+            self.refresh_native_windows_or_collect_new(app, requests, &mut shown_again);
+        for window_id in shown_again {
+            self.hand_held_press_to_new_window(app, window_id);
+        }
 
         self.place_initial_native_windows_on_visible_monitors(
             event_loop,
@@ -1307,6 +1311,7 @@ impl App {
         &mut self,
         app: &mut AppShell<WgpuRenderer>,
         requests: Vec<NativeWindowRequest>,
+        shown_again: &mut Vec<WinitWindowId>,
     ) -> Vec<NativeWindowRequest> {
         let mut native_windows_to_create = Vec::new();
         for request in requests {
@@ -1322,6 +1327,7 @@ impl App {
             let request = self.native_window_request_for_host(&request);
             if let Some(window_id) = self.native_window_ids.get(&request.key).copied() {
                 if let Some(native) = self.native_windows.get_mut(&window_id) {
+                    let was_hidden = !native.options.visible;
                     Self::refresh_native_window(
                         &self.native_window_platform_probe,
                         &self.native_window_registry,
@@ -1330,6 +1336,14 @@ impl App {
                         native,
                         &request,
                     );
+                    if window_shown_again_takes_a_held_press(was_hidden, native.options.visible) {
+                        trace_native_window!(
+                            "sync shown again key={:?} title={:?}",
+                            native.key,
+                            native.options.title
+                        );
+                        shown_again.push(window_id);
+                    }
                     continue;
                 }
                 self.native_window_ids.remove(&request.key);
@@ -4783,6 +4797,10 @@ fn surface_reconfigure_requires_redraw(width: u32, height: u32) -> bool {
 
 fn occlusion_leaves_a_frame_owed(occluded: bool) -> bool {
     !occluded
+}
+
+fn window_shown_again_takes_a_held_press(was_hidden: bool, visible_now: bool) -> bool {
+    was_hidden && visible_now
 }
 
 fn native_window_lifecycle_event(event: &WindowEvent) -> Option<&'static str> {

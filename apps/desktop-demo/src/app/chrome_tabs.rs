@@ -259,8 +259,9 @@ fn TabStrip(
         },
         move || {
             for page in window.pages.clone() {
+                let alone = window.pages.len() == 1;
                 key(page, move || {
-                    StripTab(id, page, page == active, windows, pages);
+                    StripTab(id, page, page == active, alone, windows, pages);
                 });
             }
             NewTabButton(id, windows, pages, next_page);
@@ -281,6 +282,7 @@ fn StripTab(
     window: u64,
     page: u64,
     selected: bool,
+    alone: bool,
     windows: MutableState<TabWindows>,
     pages: MutableState<Vec<Page>>,
 ) {
@@ -291,15 +293,19 @@ fn StripTab(
         .map(|held| held.title.clone())
         .unwrap_or_default();
     let last_screen = remember(|| Rc::new(Cell::new(None::<Point>))).with(Rc::clone);
-    let source = tab_source(window, page, windows, last_screen);
+    let torn = remember(|| Rc::new(Cell::new(false))).with(Rc::clone);
+    let source = tab_source(window, page, windows, last_screen, torn);
     let background = if selected { ACTIVE_TAB } else { IDLE_TAB };
     Row(
-        Modifier::empty()
-            .width(TAB_WIDTH)
-            .height(TAB_HEIGHT)
-            .background(background)
-            .clickable(move |_| windows.update(|held| held.activate(page)))
-            .drag_and_drop_source(source),
+        tab_grip(
+            Modifier::empty()
+                .width(TAB_WIDTH)
+                .height(TAB_HEIGHT)
+                .background(background)
+                .clickable(move |_| windows.update(|held| held.activate(page))),
+            alone,
+            source,
+        ),
         RowSpec {
             vertical_alignment: VerticalAlignment::CenterVertically,
             ..RowSpec::default()
@@ -331,16 +337,64 @@ fn tab_source(
     page: u64,
     windows: MutableState<TabWindows>,
     last_screen: Rc<Cell<Option<Point>>>,
+    torn: Rc<Cell<bool>>,
 ) -> DragAndDropSource {
     let moved = Rc::clone(&last_screen);
+    let moved_torn = Rc::clone(&torn);
+    let started_torn = Rc::clone(&torn);
     DragAndDropSource::new(page)
-        .on_started(move |_| trace!("transfer started page={page} from={window}"))
-        .on_moved(move |point| moved.set(point.screen))
+        .on_started(move |_| {
+            started_torn.set(false);
+            trace!("transfer started page={page} from={window}");
+        })
+        .on_moved(move |point| {
+            moved.set(point.screen);
+            if moved_torn.get() || !tab_left_the_strip(point.local) {
+                return;
+            }
+            let Some(screen) = point.screen else {
+                return;
+            };
+            if tear_into_a_window_of_its_own(windows, page, screen) {
+                moved_torn.set(true);
+            }
+        })
         .on_ended(move |outcome| match outcome {
-            DragAndDropOutcome::Missed => tear(windows, page, last_screen.get()),
+            DragAndDropOutcome::Missed if !torn.get() => tear(windows, page, last_screen.get()),
+            DragAndDropOutcome::Missed => trace!("transfer let go of a torn page={page}"),
             DragAndDropOutcome::Dropped => trace!("transfer done page={page}"),
             DragAndDropOutcome::Cancelled => trace!("transfer cancelled page={page}"),
         })
+}
+
+/// Whether the pointer has carried the tab clear of the strip it sits in,
+/// which is when the tab becomes a window of its own and takes the press
+/// with it, the way a tool pane does.
+pub(crate) fn tab_left_the_strip(local: Point) -> bool {
+    local.y > STRIP_HEIGHT + TEAR_DEPTH || local.y < -TEAR_DEPTH
+}
+
+fn tab_grip(modifier: Modifier, alone: bool, source: DragAndDropSource) -> Modifier {
+    if alone {
+        modifier.window_drag_area()
+    } else {
+        modifier.drag_and_drop_source(source)
+    }
+}
+
+fn tear_into_a_window_of_its_own(
+    windows: MutableState<TabWindows>,
+    page: u64,
+    screen: Point,
+) -> bool {
+    let origin = Point::new(screen.x - TEAR_GRAB.x, screen.y - TEAR_GRAB.y);
+    let torn = windows.update(|held| held.tear_page(page, origin));
+    trace!(
+        "tab left the strip page={page} torn={torn:?} at=({:.1},{:.1})",
+        origin.x,
+        origin.y
+    );
+    torn.is_some()
 }
 
 fn tear(windows: MutableState<TabWindows>, page: u64, screen: Option<Point>) {
@@ -428,6 +482,7 @@ const TAB_HEIGHT: f32 = 30.0;
 const NEW_TAB_WIDTH: f32 = 36.0;
 const FIRST_ORIGIN: Point = Point { x: 200.0, y: 160.0 };
 const TEAR_GRAB: Point = Point { x: 56.0, y: 18.0 };
+const TEAR_DEPTH: f32 = 24.0;
 pub(crate) const CHROME: Color = Color(0.13, 0.14, 0.17, 1.0);
 const IDLE_TAB: Color = Color(0.20, 0.21, 0.25, 1.0);
 const ACTIVE_TAB: Color = Color(0.32, 0.34, 0.40, 1.0);
