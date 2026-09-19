@@ -39,7 +39,7 @@ launch() {
     pkill -f "examples/$example" 2>/dev/null || true
     sleep 1
     : > "$log"
-    (cd "$tree" && RUST_BACKTRACE=1 CRANPOSE_DOCK_TRACE=1 CRANPOSE_NATIVE_TRACE=1 HOME="$home" \
+    (cd "$tree" && RUST_BACKTRACE=1 CRANPOSE_DOCK_TRACE=1 CRANPOSE_NATIVE_TRACE=1 CRANPOSE_NATIVE_WINDOW_TIMING=1 HOME="$home" \
         nohup "./target/debug/examples/$example" > "$log" 2>&1 &)
     local _
     for _ in $(seq 1 60); do
