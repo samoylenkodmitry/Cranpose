@@ -1192,10 +1192,21 @@ fn a_press_the_platform_reports_is_handed_over_without_a_relay() {
             |_| true
         ),
         Some(PressToHandOver {
+            pointer: held,
+            relayed_by: None,
+        }),
+        "a platform that reports the pointer polls the drag itself, but it reports where the \
+         pointer is now, and the window was placed for where the pointer was when the frame \
+         asked for it; handing the press on at the newer reading drops it past the grip the \
+         frame put under it, so the press goes on at the reading the frame had"
+    );
+    assert_eq!(
+        press_to_hand_over(Some(platform), None, true, |_| true),
+        Some(PressToHandOver {
             pointer: platform,
             relayed_by: None,
         }),
-        "a platform that reports the pointer polls the drag itself"
+        "with no window holding the press the platform reading is all there is"
     );
 }
 

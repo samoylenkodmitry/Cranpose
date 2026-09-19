@@ -2289,9 +2289,10 @@ impl App {
             .native_windows
             .values()
             .any(|other| other.active_drag.is_some());
+        let held = self.held_press_pointer_state();
         let Some(handover) = press_to_hand_over(
             native_window_global_pointer_state(platform_probe),
-            self.held_press_pointer_state(),
+            held,
             native.options.visible && !dragging_elsewhere,
             |position| native_window_surface_contains_pointer(platform_probe, native, position),
         ) else {
@@ -4317,11 +4318,16 @@ fn press_to_hand_over(
     window_can_take_it: bool,
     window_contains: impl FnOnce(PhysicalPosition<f64>) -> bool,
 ) -> Option<PressToHandOver> {
-    let (relayed_by, pointer) = match platform_pointer {
-        Some(pointer) => (None, pointer),
-        None => held.map(|(holder, pointer)| (Some(holder), pointer))?,
+    let relayed_by = match platform_pointer {
+        Some(_) => None,
+        None => Some(held?.0),
     };
-    let pointer = held_press_to_hand_over(Some(pointer), window_can_take_it, window_contains)?;
+    let pointer = held
+        .map(|(_, pointer)| pointer)
+        .or(platform_pointer)
+        .and_then(|pointer| {
+            held_press_to_hand_over(Some(pointer), window_can_take_it, window_contains)
+        })?;
     Some(PressToHandOver {
         pointer,
         relayed_by,
