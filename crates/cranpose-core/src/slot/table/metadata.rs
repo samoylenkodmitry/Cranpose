@@ -22,6 +22,7 @@ impl SlotTable {
 
     pub(in crate::slot) fn clear_group_indexes(&mut self, groups: &[GroupRecord]) {
         self.anchors.mark_detached_groups(groups);
+        self.movables.forget_groups(groups);
     }
 
     pub(in crate::slot) fn clear_scope_index_for_groups(&mut self, groups: &[GroupRecord]) {

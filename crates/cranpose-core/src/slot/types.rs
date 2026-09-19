@@ -39,6 +39,10 @@ impl GroupKey {
 pub(crate) struct GroupKeySeed {
     pub(crate) static_key: Key,
     pub(crate) explicit_key: Option<Key>,
+    /// Whether `static_key` is final as given. A seed from a call site has
+    /// the enclosing branch path folded in so two sites never collide; a
+    /// movable's identity must be the same at every site, so it opts out.
+    pub(crate) exact: bool,
 }
 
 impl GroupKeySeed {
@@ -46,6 +50,7 @@ impl GroupKeySeed {
         Self {
             static_key,
             explicit_key: None,
+            exact: false,
         }
     }
 
@@ -53,6 +58,23 @@ impl GroupKeySeed {
         Self {
             static_key,
             explicit_key: Some(explicit_key),
+            exact: false,
+        }
+    }
+
+    pub(crate) fn movable(id: Key) -> Self {
+        Self {
+            static_key: super::MOVABLE_STATIC_KEY,
+            explicit_key: Some(id),
+            exact: true,
+        }
+    }
+
+    pub(crate) fn movable_placeholder(id: Key) -> Self {
+        Self {
+            static_key: super::MOVABLE_PLACEHOLDER_STATIC_KEY,
+            explicit_key: Some(id),
+            exact: true,
         }
     }
 }

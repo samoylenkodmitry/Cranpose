@@ -251,4 +251,36 @@ composites.
 
 ## As built
 
-Filled in as steps land.
+### Step 1: movable content
+
+`movable(key, content)` and `forget_movable(key)` in `cranpose-core`,
+re-exported from `cranpose` and its prelude. Differences from the plan
+above, all in `crates/cranpose-core/src`:
+
+- No `RetainKey::Movable` variant. A movable group's key is exact (the
+  seed skips the branch fold, `slot/types.rs`) with a fixed static half, so
+  `RetainKey::for_group` simply drops the parent scope for it and the
+  existing validators keep comparing the root key.
+- The table indexes attached movables by identity (`slot/movable.rs`), so a
+  site can tell "still attached under another parent" in constant time. The
+  site then opens a placeholder group under its own exact key and records a
+  pending site; at pass end, once the movable is retained, the site's
+  enclosing scope is forced to recompose and takes the content back through
+  the ordinary restore path. The placeholder is then an unvisited sibling
+  and is disposed by the usual sweep. No splice at pass end.
+- A pending site survives passes, so a move whose two halves land in
+  different frames still completes; a second live site for the same key
+  stays empty.
+- Every detached subtree gives up the movables nested below its root
+  (`DetachedSubtree::split_off_nested_movables`) before it is retained or
+  disposed, so a window that closes because its last tab left does not take
+  the tab's state with it. The node detach commands run before the
+  container's disposal, so the applier keeps the nodes.
+- Restored subtrees now reactivate every scope and repoint the parent hint
+  of scopes with no node between them and the root; before, a scope two
+  levels down behind a skipped composable stayed inactive and attached new
+  nodes to the old parent.
+- Retained movables are pinned against the retention budget and released
+  by `forget_movable`, which works from an event handler through the
+  runtime and disposes on the composition's next recompose entry.
+- `scripts/dev/mutation_check.sh` proves each test guards its fix.

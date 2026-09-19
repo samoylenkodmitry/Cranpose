@@ -200,9 +200,9 @@ pub use cranpose_capabilities as capabilities;
 pub use cranpose_core::{
     CoroutineScope, DisposableEffect, DisposableEffectResult, DisposableEffectScope,
     LaunchedEffect, LaunchedEffectAsync, LaunchedEffectScope, MutableState, SnapshotStateList,
-    SnapshotStateMap, State, delay, interval, key, launchBlocking, mutableStateList,
-    mutableStateListOf, mutableStateMap, mutableStateMapOf, mutableStateOf, produceState, remember,
-    rememberCoroutineScope, rememberKeyed, rememberMutableStateOf,
+    SnapshotStateMap, State, delay, forget_movable, interval, key, launchBlocking, movable,
+    mutableStateList, mutableStateListOf, mutableStateMap, mutableStateMapOf, mutableStateOf,
+    produceState, remember, rememberCoroutineScope, rememberKeyed, rememberMutableStateOf,
     rememberMutableStateOfNeverEqual, rememberUpdatedState,
 };
 /// Liquid UI — the first-party glass component library
@@ -411,9 +411,9 @@ pub mod prelude {
     pub use cranpose_core::{
         CoroutineScope, DisposableEffect, DisposableEffectResult, DisposableEffectScope,
         LaunchedEffect, LaunchedEffectAsync, LaunchedEffectScope, MutableState, SnapshotStateList,
-        SnapshotStateMap, State, delay, interval, key, launchBlocking, mutableStateList,
-        mutableStateListOf, mutableStateMap, mutableStateMapOf, mutableStateOf, produceState,
-        remember, rememberCoroutineScope, rememberKeyed, rememberMutableStateOf,
+        SnapshotStateMap, State, delay, forget_movable, interval, key, launchBlocking, movable,
+        mutableStateList, mutableStateListOf, mutableStateMap, mutableStateMapOf, mutableStateOf,
+        produceState, remember, rememberCoroutineScope, rememberKeyed, rememberMutableStateOf,
         rememberMutableStateOfNeverEqual, rememberUpdatedState,
     };
     pub use cranpose_services::*;

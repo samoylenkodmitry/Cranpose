@@ -18,7 +18,8 @@ use std::{
 #[cfg(any(feature = "internal", test))]
 use crate::frame_clock::FrameClock;
 use crate::{
-    Applier, Command, FrameCallbackId, MutableStateInner, NodeError, RecomposeScopeInner, ScopeId,
+    Applier, Command, FrameCallbackId, Key, MutableStateInner, NodeError, RecomposeScopeInner,
+    ScopeId,
     collections::map::{HashMap, HashSet},
     platform::{RuntimeScheduler, SchedulerRef},
     state::{MutationPolicy, NeverEqual},
@@ -429,6 +430,10 @@ struct RuntimeInner {
     state_arena: StateArena,
     external_state_owners: RefCell<HashMap<StateId, Rc<StateHandleLease>>>,
     live_recompose_scope_count: Cell<usize>,
+    /// Movable identities an app has released since the composition last
+    /// looked. Written from anywhere on the UI thread, drained by the
+    /// composition before it processes invalid scopes.
+    forgotten_movables: RefCell<Vec<Key>>,
     runtime_id: RuntimeId,
 }
 
@@ -472,6 +477,7 @@ impl RuntimeInner {
             state_arena: StateArena::default(),
             external_state_owners: RefCell::new(HashMap::default()),
             live_recompose_scope_count: Cell::new(0),
+            forgotten_movables: RefCell::new(Vec::new()),
             runtime_id: RuntimeId::next(),
         }
     }
@@ -1241,6 +1247,23 @@ impl RuntimeHandle {
         self.inner
             .upgrade()
             .map(|inner| inner.take_invalidated_scopes())
+            .unwrap_or_default()
+    }
+
+    /// Releases the retained state of the movable content with identity
+    /// `id` at the composition's next opportunity. See
+    /// [`crate::forget_movable`].
+    pub fn forget_movable(&self, id: Key) {
+        if let Some(inner) = self.inner.upgrade() {
+            inner.forgotten_movables.borrow_mut().push(id);
+            inner.schedule();
+        }
+    }
+
+    pub(crate) fn take_forgotten_movables(&self) -> Vec<Key> {
+        self.inner
+            .upgrade()
+            .map(|inner| std::mem::take(&mut *inner.forgotten_movables.borrow_mut()))
             .unwrap_or_default()
     }
 

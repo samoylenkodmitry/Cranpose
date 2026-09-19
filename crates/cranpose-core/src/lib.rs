@@ -1077,6 +1077,44 @@ pub fn key<K: Hash, R>(keys: K, content: impl FnOnce() -> R) -> R {
     key_scoped(&keys, std::panic::Location::caller(), content)
 }
 
+/// Composes `content` under an identity that is `key` alone, the same at
+/// every call site, so the subtree can be emitted from any parent and keep
+/// its remembered values, its running effects and its nodes.
+///
+/// Move content by emitting it under a different parent, in the same pass
+/// or a later one: when the old parent stops emitting it, the subtree is
+/// retained under `key`; when a parent emits it, the retained subtree is
+/// taken back. A site that asks for content still attached elsewhere
+/// composes nothing and is recomposed once the content is retained, so the
+/// order in which the two parents recompose does not matter.
+///
+/// Content is shown at most once. Two live sites with the same key leave
+/// the later one empty. Retained content is kept
+/// until a parent takes it back or [`forget_movable`] releases it, so an
+/// item the app closes for good must be forgotten or its state stays in
+/// memory. A subtree cannot cross into or out of a `SubcomposeLayout` slot,
+/// whose content lives in its own slot table: it composes fresh there.
+#[track_caller]
+pub fn movable<K: Hash>(key: K, content: impl FnOnce()) {
+    let id = hash_key(&key);
+    with_current_composer(|composer| composer.with_movable_group(id, |_| content()));
+}
+
+/// Releases the state of [`movable`] content with identity `key` that no
+/// parent is showing. Call it when the item is closed for good, from an
+/// event handler or inside composition. Content a parent is still showing
+/// is unaffected. Needs a runtime: an active composition or one created on
+/// this thread.
+pub fn forget_movable<K: Hash>(key: K) {
+    let id = hash_key(&key);
+    let runtime = composer_context::try_with_composer(|composer| composer.runtime_handle())
+        .or_else(runtime::current_runtime_handle);
+    match runtime {
+        Some(runtime) => runtime.forget_movable(id),
+        None => log::error!("forget_movable called without an active runtime"),
+    }
+}
+
 #[derive(Default)]
 struct DisposableEffectState {
     key: Option<effect_key::EffectKey>,
@@ -4398,6 +4436,12 @@ impl SlotsHost {
             },
             detached_root_children,
         })
+    }
+
+    /// Runs the payload drops queued outside a pass, so cleanup a disposal
+    /// owes does not wait for the next pass to end.
+    pub(crate) fn flush_pending_drops(&self) {
+        self.inner.borrow_mut().lifecycle.flush_pending_drops();
     }
 
     pub(crate) fn complete_pass_cleanup(&self, outcome: &SlotPassOutcome) {

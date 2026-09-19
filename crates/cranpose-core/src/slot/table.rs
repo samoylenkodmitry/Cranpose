@@ -1,8 +1,9 @@
 use std::rc::Rc;
 
 use super::{
-    AnchorRegistry, DeferredDrop, GroupRecord, NodeRecord, PayloadAnchorRegistry, PayloadRecord,
-    ScopeIndex, SlotLifecycleCoordinator, SlotWriteSessionState, debug::SlotTableDiagnostics,
+    AnchorRegistry, DeferredDrop, GroupRecord, MovableIndex, NodeRecord, PayloadAnchorRegistry,
+    PayloadRecord, ScopeIndex, SlotLifecycleCoordinator, SlotWriteSessionState,
+    debug::SlotTableDiagnostics,
 };
 
 mod metadata;
@@ -38,6 +39,7 @@ pub struct SlotTable {
     pub(super) anchors: AnchorRegistry,
     pub(super) payload_anchors: PayloadAnchorRegistry,
     pub(super) scope_index: ScopeIndex,
+    pub(super) movables: MovableIndex,
     pub(super) diagnostics: SlotTableDiagnostics,
     next_group_generation: u32,
 }
@@ -52,6 +54,7 @@ impl SlotTable {
             anchors: AnchorRegistry::new(),
             payload_anchors: PayloadAnchorRegistry::new(),
             scope_index: ScopeIndex::new(),
+            movables: MovableIndex::default(),
             diagnostics: SlotTableDiagnostics::default(),
             next_group_generation: 1,
         }
@@ -95,6 +98,7 @@ impl SlotTable {
         self.anchors.shrink_to_fit();
         self.payload_anchors.shrink_to_fit();
         self.scope_index.shrink_to_fit();
+        self.movables.shrink_to_fit();
     }
 
     pub(crate) fn take_effect_drops(&mut self) -> Vec<DeferredDrop> {
@@ -120,6 +124,7 @@ impl SlotTable {
         self.anchors.clear();
         self.payload_anchors.clear();
         self.scope_index.clear();
+        self.movables.clear();
         drops
     }
 }

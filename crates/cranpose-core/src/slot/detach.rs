@@ -313,6 +313,7 @@ impl SlotTable {
         subtree.mark_nodes_active();
         self.restore_payloads_for_groups(insert_index, &mut subtree.groups, subtree.payloads);
         self.restore_nodes_for_groups(insert_index, &mut subtree.groups, subtree.nodes);
+        self.movables.note_groups(&subtree.groups);
         self.groups
             .splice(insert_index..insert_index, subtree.groups);
         self.refresh_group_indexes_from(insert_index);

@@ -71,11 +71,26 @@ pub(crate) struct RetainKey {
     pub(crate) key: GroupKey,
 }
 
+impl RetainKey {
+    /// The key a group with `key` is retained under when it leaves the child
+    /// list of `parent_scope`. Movable content is keyed by its identity
+    /// alone, so any parent can take it back.
+    pub(crate) fn for_group(parent_scope: Option<ScopeId>, key: GroupKey) -> Self {
+        Self {
+            parent_scope: if key.is_movable() { None } else { parent_scope },
+            key,
+        }
+    }
+}
+
 pub(crate) struct RetainedGroup {
     pub(crate) subtree: DetachedSubtree,
     detached_pass: u64,
     detached_order: u64,
     last_restored_order: u64,
+    /// A pinned group is never evicted by the budget: its owner asked for
+    /// the state to be kept until it is taken back or forgotten.
+    pinned: bool,
 }
 
 impl RetainedGroup {
@@ -181,10 +196,31 @@ impl RetentionManager {
         self.take(key)
     }
 
+    pub(crate) fn contains(&self, key: RetainKey) -> bool {
+        self.groups.contains_key(&key)
+    }
+
     pub(crate) fn insert(
         &mut self,
         key: RetainKey,
+        subtree: DetachedSubtree,
+    ) -> Vec<DetachedSubtree> {
+        self.insert_with_pin(key, subtree, false)
+    }
+
+    pub(crate) fn insert_pinned(
+        &mut self,
+        key: RetainKey,
+        subtree: DetachedSubtree,
+    ) -> Vec<DetachedSubtree> {
+        self.insert_with_pin(key, subtree, true)
+    }
+
+    fn insert_with_pin(
+        &mut self,
+        key: RetainKey,
         mut subtree: DetachedSubtree,
+        pinned: bool,
     ) -> Vec<DetachedSubtree> {
         if self.groups.contains_key(&key) {
             log::error!(
@@ -210,6 +246,7 @@ impl RetentionManager {
                 detached_pass: self.pass_clock,
                 detached_order,
                 last_restored_order,
+                pinned,
             },
         );
         self.evict_to_budget()
@@ -431,9 +468,12 @@ impl RetentionManager {
             .flatten()
     }
 
+    fn evictable(&self) -> impl Iterator<Item = (&RetainKey, &RetainedGroup)> + '_ {
+        self.groups.iter().filter(|(_, retained)| !retained.pinned)
+    }
+
     fn age_eviction_key(&self, max_age_passes: u64) -> Option<RetainKey> {
-        self.groups
-            .iter()
+        self.evictable()
             .filter(|(_, retained)| {
                 self.pass_clock.saturating_sub(retained.detached_pass) > max_age_passes
             })
@@ -455,8 +495,7 @@ impl RetentionManager {
     }
 
     fn least_recently_detached_key(&self) -> Option<RetainKey> {
-        self.groups
-            .iter()
+        self.evictable()
             .min_by(|(left_key, left), (right_key, right)| {
                 left.detached_order
                     .cmp(&right.detached_order)
@@ -466,8 +505,7 @@ impl RetentionManager {
     }
 
     fn least_recently_restored_key(&self) -> Option<RetainKey> {
-        self.groups
-            .iter()
+        self.evictable()
             .min_by(|(left_key, left), (right_key, right)| {
                 left.last_restored_order
                     .cmp(&right.last_restored_order)
@@ -478,8 +516,7 @@ impl RetentionManager {
     }
 
     fn largest_first_key(&self) -> Option<RetainKey> {
-        self.groups
-            .iter()
+        self.evictable()
             .max_by(|(left_key, left), (right_key, right)| {
                 left.heap_bytes()
                     .cmp(&right.heap_bytes())
