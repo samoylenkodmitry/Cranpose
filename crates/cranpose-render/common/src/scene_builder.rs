@@ -56,6 +56,9 @@ struct SnapshotNodeData {
     modifier_slices: Rc<ModifierNodeSlices>,
     resolved_modifiers: ResolvedModifiers,
     children: SmallVec<[NodeId; 8]>,
+    /// The node is the root of another window: its parent's scene skips it
+    /// and its own scene starts at it, at the origin.
+    window_root: bool,
 }
 
 /// Why a scoped scene update could not be applied, forcing the caller to throw
@@ -901,6 +904,7 @@ fn translate_layer_from_data(
         modifier_slices,
         resolved_modifiers: _,
         children: fresh_children,
+        window_root: _,
     } = data;
     let container_plan = match translated_container(
         container,
@@ -1248,9 +1252,14 @@ fn build_layer_node_from_applier(
     _root_scale: f32,
     inherited_motion_context_animated: bool,
 ) -> Option<LayerNode> {
-    build_layer_node_from_applier_internal(
+    let mut data = snapshot_node_data(applier, node_id)?;
+    if data.window_root {
+        data.layout_state = data.layout_state.at_origin();
+    }
+    build_layer_node_from_data(
         applier,
         node_id,
+        data,
         inherited_motion_context_animated,
         false,
         Some(AbsOrigin::ROOT),
@@ -1268,6 +1277,7 @@ fn snapshot_node_data(applier: &mut MemoryApplier, node_id: NodeId) -> Option<Sn
             modifier_slices,
             resolved_modifiers: node.resolved_modifiers(),
             children,
+            window_root: node.is_window_root(),
         }
     }) {
         return Some(data);
@@ -1284,6 +1294,7 @@ fn snapshot_node_data(applier: &mut MemoryApplier, node_id: NodeId) -> Option<Sn
                 modifier_slices,
                 resolved_modifiers: node.resolved_modifiers(),
                 children,
+                window_root: false,
             }
         })
         .ok()
@@ -1297,6 +1308,9 @@ fn build_layer_node_from_applier_internal(
     parent_abs: Option<AbsOrigin>,
 ) -> Option<LayerNode> {
     let data = snapshot_node_data(applier, node_id)?;
+    if data.window_root {
+        return None;
+    }
     build_layer_node_from_data(
         applier,
         node_id,
@@ -1340,6 +1354,7 @@ fn build_layer_node_from_data(
         modifier_slices,
         resolved_modifiers,
         children,
+        window_root: _,
     } = data;
     if !layout_state.is_placed() {
         return None;
@@ -5448,5 +5463,102 @@ mod tests {
                 following_top
             );
         });
+    }
+
+    struct TestWindow(Size);
+
+    impl cranpose_ui::WindowRootDescriptor for TestWindow {
+        fn layout_size(&self) -> Size {
+            self.0
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    /// A column with a text and a window-rooted box below it: the primary
+    /// scene holds only the text, the window's scene holds only the box's
+    /// content, sized to the window and placed at its origin rather than
+    /// where the column put the box.
+    #[test]
+    fn window_root_subtree_leaves_the_parent_scene_and_starts_its_own() {
+        let window_node = Rc::new(std::cell::Cell::new(None));
+        let window: Rc<dyn cranpose_ui::WindowRootDescriptor> = Rc::new(TestWindow(Size {
+            width: 320.0,
+            height: 240.0,
+        }));
+        let mut composition = cranpose_ui::run_test_composition({
+            let window_node = Rc::clone(&window_node);
+            let window = Rc::clone(&window);
+            move || {
+                let window = Rc::clone(&window);
+                let window_node = Rc::clone(&window_node);
+                Column(Modifier::empty(), ColumnSpec::default(), move || {
+                    Text(
+                        "outside".to_string(),
+                        Modifier::empty().height(20.0),
+                        TextStyle::default(),
+                    );
+                    let id = cranpose_ui::Box(
+                        Modifier::empty().window_root(1, Rc::clone(&window)),
+                        cranpose_ui::BoxSpec::default(),
+                        || {
+                            Text(
+                                "inside".to_string(),
+                                Modifier::empty().height(20.0),
+                                TextStyle::default(),
+                            );
+                        },
+                    );
+                    window_node.set(Some(id));
+                });
+            }
+        });
+        let root = composition.root().expect("root");
+        let handle = composition.runtime_handle();
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        applier
+            .compute_layout(
+                root,
+                Size {
+                    width: 240.0,
+                    height: 300.0,
+                },
+            )
+            .expect("layout");
+        let window_node = window_node.get().expect("window node");
+
+        let primary = build_graph_from_applier(&mut applier, root, 1.0).expect("primary graph");
+        let mut labels = Vec::new();
+        collect_text_labels(&primary.root, &mut labels);
+        assert_eq!(labels, vec!["outside".to_string()]);
+
+        let graph = build_graph_from_applier(&mut applier, window_node, 1.0).expect("window graph");
+        applier.clear_runtime_handle();
+        let mut labels = Vec::new();
+        collect_text_labels(&graph.root, &mut labels);
+        assert_eq!(labels, vec!["inside".to_string()]);
+        assert_eq!(layer_identity(&graph.root), Some(window_node));
+        assert_eq!(
+            graph.root.local_bounds,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 320.0,
+                height: 240.0
+            },
+            "the window's scene is the window's size"
+        );
+        assert_eq!(
+            graph.root.transform_to_parent,
+            layer_transform_to_parent(
+                graph.root.local_bounds,
+                Point::default(),
+                &GraphicsLayer::default()
+            ),
+            "the window's scene starts at the origin, not where the column placed the box"
+        );
     }
 }

@@ -114,6 +114,14 @@ impl LayoutState {
         self.position
     }
 
+    /// The same state placed at the origin: what a window root's own scene
+    /// starts from, since the position its parent gave it belongs to the
+    /// parent's window.
+    pub fn at_origin(mut self) -> Self {
+        self.position = Point::default();
+        self
+    }
+
     pub fn is_placed(&self) -> bool {
         self.is_placed
     }
@@ -701,6 +709,14 @@ impl LayoutNode {
 
     pub fn modifier_capabilities(&self) -> NodeCapabilities {
         self.modifier_capabilities
+    }
+
+    /// Whether this node's modifier chain makes it the root of a separate
+    /// window. Its parent lays out as if it had no size and its parent's
+    /// scene skips it; its own scene starts here.
+    pub fn is_window_root(&self) -> bool {
+        self.modifier_capabilities
+            .contains(NodeCapabilities::WINDOW_ROOT)
     }
 
     pub fn modifier_child_capabilities(&self) -> NodeCapabilities {

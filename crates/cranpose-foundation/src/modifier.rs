@@ -1823,6 +1823,10 @@ impl NodeCapabilities {
     pub const MODIFIER_LOCALS: Self = Self(1 << 4);
     /// Modifier participates in focus management.
     pub const FOCUS: Self = Self(1 << 5);
+    /// Modifier makes its node the root of a separate window: the node's
+    /// subtree is laid out into that window's size and drawn into that
+    /// window's scene, and the parent's scene skips it.
+    pub const WINDOW_ROOT: Self = Self(1 << 6);
 
     /// Returns an empty capability set.
     pub const fn empty() -> Self {
@@ -1881,6 +1885,7 @@ impl fmt::Debug for NodeCapabilities {
             .field("semantics", &self.contains(Self::SEMANTICS))
             .field("modifier_locals", &self.contains(Self::MODIFIER_LOCALS))
             .field("focus", &self.contains(Self::FOCUS))
+            .field("window_root", &self.contains(Self::WINDOW_ROOT))
             .finish()
     }
 }

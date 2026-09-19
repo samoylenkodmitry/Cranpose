@@ -2856,3 +2856,179 @@ fn focus_order_follows_the_tree_and_skips_nodes_with_no_focus_target() -> Result
 
     Ok(())
 }
+
+/// A window whose size a test changes between passes.
+struct TestWindow {
+    size: Cell<Size>,
+}
+
+impl crate::modifier::WindowRootDescriptor for TestWindow {
+    fn layout_size(&self) -> Size {
+        self.size.get()
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+/// A root stacking a leaf over a window root whose content fills whatever it
+/// is given. Returns the root, the window node and the content node.
+fn window_root_tree(
+    applier: &mut MemoryApplier,
+    window: Rc<TestWindow>,
+) -> Result<(NodeId, NodeId, NodeId), NodeError> {
+    let sibling = applier.create(Box::new(LayoutNode::new(
+        Modifier::empty(),
+        Rc::new(LeafMeasurePolicy::new(Size::new(10.0, 10.0))),
+    )));
+    let content = applier.create(Box::new(LayoutNode::new(
+        Modifier::empty(),
+        Rc::new(MaxSizePolicy),
+    )));
+    let mut window_node = LayoutNode::new(
+        Modifier::empty().window_root(7, window),
+        Rc::new(VerticalStackPolicy),
+    );
+    window_node.children.push(content);
+    let window_node = applier.create(Box::new(window_node));
+    applier.get_mut(window_node)?.set_node_id(window_node);
+    let mut root = LayoutNode::new(Modifier::empty(), Rc::new(VerticalStackPolicy));
+    root.children.push(sibling);
+    root.children.push(window_node);
+    let root = applier.create(Box::new(root));
+    Ok((root, window_node, content))
+}
+
+fn measured_size(applier: &mut MemoryApplier, node: NodeId) -> Result<Size, NodeError> {
+    applier.with_node::<LayoutNode, _>(node, |node| node.measured_size())
+}
+
+#[test]
+fn window_root_lays_out_into_its_window_and_takes_no_room_from_its_parent() -> Result<(), NodeError>
+{
+    let _app_context = crate::render_state::app_context_test_scope();
+    let mut applier = MemoryApplier::new();
+    let window = Rc::new(TestWindow {
+        size: Cell::new(Size::new(300.0, 200.0)),
+    });
+    let (root, window_node, content) = window_root_tree(&mut applier, Rc::clone(&window))?;
+
+    measure_layout(&mut applier, root, Size::new(100.0, 100.0))?;
+
+    assert_eq!(
+        measured_size(&mut applier, root)?,
+        Size::new(10.0, 10.0),
+        "the parent lays out as if the window subtree were absent"
+    );
+    assert_eq!(
+        measured_size(&mut applier, window_node)?,
+        Size::new(300.0, 200.0),
+        "the window root's own size is the window's, for the window's scene"
+    );
+    assert_eq!(
+        measured_size(&mut applier, content)?,
+        Size::new(300.0, 200.0),
+        "the content is measured into the window's size, not the parent's"
+    );
+    applier.get_mut(content)?.on_attached_to_parent(window_node);
+    applier.get_mut(window_node)?.on_attached_to_parent(root);
+    assert_eq!(
+        crate::nearest_window_root(&mut applier, content),
+        Some(window_node),
+        "content inside a window belongs to that window"
+    );
+    assert_eq!(
+        crate::nearest_window_root(&mut applier, window_node),
+        Some(window_node)
+    );
+    assert_eq!(
+        crate::nearest_window_root(&mut applier, root),
+        None,
+        "the parent belongs to the primary root"
+    );
+
+    window.size.set(Size::new(400.0, 300.0));
+    crate::schedule_measure_repass(window_node);
+    measure_layout(&mut applier, root, Size::new(100.0, 100.0))?;
+
+    assert_eq!(measured_size(&mut applier, root)?, Size::new(10.0, 10.0));
+    assert_eq!(
+        measured_size(&mut applier, content)?,
+        Size::new(400.0, 300.0),
+        "a resized window re-measures its content on the next pass"
+    );
+    Ok(())
+}
+
+#[test]
+fn window_root_registers_while_attached_and_leaves_with_its_node() -> Result<(), NodeError> {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let mut applier = MemoryApplier::new();
+    let window = Rc::new(TestWindow {
+        size: Cell::new(Size::new(300.0, 200.0)),
+    });
+    let before = crate::window_roots_revision();
+    let (root, window_node, _) = window_root_tree(&mut applier, window)?;
+    measure_layout(&mut applier, root, Size::new(100.0, 100.0))?;
+
+    let roots = crate::window_roots();
+    assert_eq!(roots.len(), 1, "one window root is attached");
+    assert_eq!(roots[0].node, window_node);
+    assert_eq!(roots[0].id, 7);
+    assert_eq!(roots[0].descriptor.layout_size(), Size::new(300.0, 200.0));
+    let attached = crate::window_roots_revision();
+    assert_ne!(
+        attached, before,
+        "attaching a window root changes the revision"
+    );
+
+    applier.get_mut(window_node)?.unmount();
+
+    assert!(
+        crate::window_roots().is_empty(),
+        "an unmounted window root leaves the registry"
+    );
+    assert_ne!(
+        crate::window_roots_revision(),
+        attached,
+        "detaching a window root changes the revision"
+    );
+    Ok(())
+}
+
+#[test]
+fn window_root_subtree_is_left_out_of_the_parent_layout_tree() -> Result<(), NodeError> {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let mut applier = MemoryApplier::new();
+    let window = Rc::new(TestWindow {
+        size: Cell::new(Size::new(300.0, 200.0)),
+    });
+    let (root, window_node, _) = window_root_tree(&mut applier, window)?;
+
+    let measurements = super::measure_layout_with_options(
+        &mut applier,
+        root,
+        Size::new(100.0, 100.0),
+        MeasureLayoutOptions {
+            collect_semantics: false,
+            build_layout_tree: true,
+        },
+    )?;
+    let tree = measurements.layout_tree().expect("layout tree");
+    let child_ids: Vec<NodeId> = tree.root().children.iter().map(|b| b.node_id).collect();
+    assert_eq!(child_ids.len(), 1, "one child stays: {child_ids:?}");
+    assert!(
+        !child_ids.contains(&window_node),
+        "the parent's layout tree leaves the window subtree out: {child_ids:?}"
+    );
+
+    let tree = super::build_layout_tree_from_applier(&mut applier, root)?.expect("tree");
+    let child_ids: Vec<NodeId> = tree.root().children.iter().map(|b| b.node_id).collect();
+    assert_eq!(child_ids.len(), 1, "one child stays: {child_ids:?}");
+    assert!(
+        !child_ids.contains(&window_node),
+        "the applier-built layout tree leaves the window subtree out: {child_ids:?}"
+    );
+    Ok(())
+}

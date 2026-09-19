@@ -53,6 +53,7 @@ pub struct AppContext {
     pointer_icon: crate::pointer_icon_session::PointerIconState,
     pointer_input_tasks: crate::modifier::pointer_input::PointerInputTaskRegistry,
     modifier_chain_trace: RefCell<Option<Arc<ModifierChainTraceCallback>>>,
+    window_roots: crate::modifier::WindowRootRegistry,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -219,6 +220,7 @@ impl AppContext {
             pointer_icon: crate::pointer_icon_session::PointerIconState::new(),
             pointer_input_tasks: crate::modifier::pointer_input::PointerInputTaskRegistry::new(),
             modifier_chain_trace: RefCell::new(None),
+            window_roots: crate::modifier::WindowRootRegistry::default(),
         });
         *context.self_weak.borrow_mut() = Rc::downgrade(&context);
         APP_CONTEXTS.with(|contexts| {
@@ -232,6 +234,16 @@ impl AppContext {
     pub fn enter<R>(self: &Rc<Self>, block: impl FnOnce() -> R) -> R {
         let _scope = self.enter_scope();
         block()
+    }
+
+    /// This context's identity.
+    pub(crate) fn id(&self) -> AppContextId {
+        self.id
+    }
+
+    /// The window roots attached in this context.
+    pub fn window_roots(&self) -> &crate::modifier::WindowRootRegistry {
+        &self.window_roots
     }
 
     #[doc(hidden)]
@@ -289,7 +301,10 @@ fn app_context_registry_entry_count() -> usize {
         .unwrap_or_default()
 }
 
-fn with_app_context_by_id<R>(id: AppContextId, f: impl FnOnce(&Rc<AppContext>) -> R) -> Option<R> {
+pub(crate) fn with_app_context_by_id<R>(
+    id: AppContextId,
+    f: impl FnOnce(&Rc<AppContext>) -> R,
+) -> Option<R> {
     app_context_by_id(id).map(|context| f(&context))
 }
 

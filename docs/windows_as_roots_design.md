@@ -284,3 +284,30 @@ above, all in `crates/cranpose-core/src`:
   by `forget_movable`, which works from an event handler through the
   runtime and disposes on the composition's next recompose entry.
 - `scripts/dev/mutation_check.sh` proves each test guards its fix.
+
+### Step 2: window roots
+
+`Modifier::window_root(id, descriptor)` in `cranpose-ui`
+(`modifier/window_root.rs`), with `NodeCapabilities::WINDOW_ROOT` in the
+foundation crate so layout and the scene builder both read one bit.
+Differences from the plan:
+
+- The window root's own size is the window's size, not zero: `LayoutState`
+  keeps it, so the window's scene has real bounds for clipping and hit
+  testing. Only what the parent is handed is zero: `MeasuredNode` carries a
+  `window_root` flag and `size_for_parent()` answers the parent's placeable
+  and intrinsic queries. Apply `window_root` first in a chain; everything
+  after it is inside the window.
+- The descriptor is a trait object (`WindowRootDescriptor`) the platform
+  implements over its own window configuration. Its `layout_size()` is read
+  on every measure, so a resize is `schedule_measure_repass(node)` and no
+  new modifier.
+- The registry lives on the `AppContext` (`window_roots()`, revision
+  counter); the node registers in `on_attach` with the node id the chain
+  context supplies and unregisters by the context id it recorded.
+- The scene builder skips window roots wherever it lowers a child (one
+  check in `build_layer_node_from_applier_internal`) and, when asked to
+  build from a window root, starts at the origin. The two layout-tree
+  builders accessibility reads skip window-root children the same way.
+- `nearest_window_root(applier, node)` tells a shell which surface a dirty
+  node belongs to; step 3 partitions dirty nodes with it.

@@ -40,6 +40,7 @@ mod size;
 mod slices;
 mod toggleable;
 mod weight;
+mod window_root;
 
 #[allow(unused_imports)]
 pub use chain::{ModifierChainHandle, ModifierChainInspectorNode, ModifierLocalsHandle};
@@ -81,6 +82,10 @@ pub use semantics::{
 pub use slices::{
     ModifierNodeSlices, ModifierNodeSlicesDebugStats, collect_modifier_slices,
     collect_modifier_slices_into, collect_slices_from_modifier,
+};
+pub use window_root::{
+    WindowRootDescriptor, WindowRootElement, WindowRootEntry, WindowRootNode, WindowRootRegistry,
+    nearest_window_root, window_roots, window_roots_revision,
 };
 
 pub use crate::draw::{DrawCacheBuilder, DrawCommand};
