@@ -633,6 +633,12 @@ carried by the framework's window group. Neither has a model.
    calls, a `Surfaces` handle would only rename them, and the
    application-facing API (`window`, `WindowConfig`, `WindowState`) never
    reaches them.
+   `AppLauncher::with_window_wrapping_content` makes the primary window the
+   size of what it lays out: after every update the loop asks the shell for
+   `primary_content_size`, the extent of the root's nodes with area outside
+   every window root, and resizes the window to it when it changed, keeping
+   the top-left corner, so a window that holds a stack of panes is exactly
+   that stack and shrinks when a pane leaves for a window of its own.
 5. **A new window under a held press follows the pointer.** The desktop's
    drag session starts from the press already in flight when the node
    under it now lives in a window that just appeared.
@@ -644,6 +650,22 @@ carried by the framework's window group. Neither has a model.
    platform never delivered, so a `window_drag_area` under the pointer
    starts the window's drag anchored where the pointer is. The rule itself
    is `held_press_to_hand_over`; the application only chooses the modifier.
+   Where the platform reports no global pointer (macOS, Windows), the press
+   comes from the window that holds it: every window remembers its own
+   primary press (`held_press`), `press_to_hand_over` falls back to that
+   press and names the holder, and the loop records the pair
+   (`HandedPress`) so the holder's later moves and release are relayed into
+   the new window's surface and its polling drag session
+   (`relay_held_press_step`), because the desktop keeps delivering the
+   gesture to the window that got the press. A polling drag session starts
+   from the handover anchor alone (`native_window_polling_drag_pointer`),
+   so the new window follows without a global pointer.
+   When the relayed press ends, the taker is raised (`focus_window`): AppKit
+   orders the window that receives the mouse-up, the holder, above every
+   other, and would leave the new window behind a primary it overlaps, where
+   it neither shows nor takes the next click. A fresh window's surface is
+   unavailable for its first few dozen milliseconds; a redraw that finds it
+   so paces the next attempt like an empty frame instead of spinning.
 6. **Drag and drop across windows.** The two modifiers, the shell's transfer
    tracking across surfaces, and tests for enter, exit, drop and a drop
    outside every target.
@@ -663,4 +685,22 @@ carried by the framework's window group. Neither has a model.
    target's own surface; the source hears `Dropped`, `Missed` or `Cancelled`.
 7. **Demos on the modifiers.** Tabs and tool windows rewritten as above,
    `torn_windows.rs` deleted, the drag tool reading the demos' new trace.
+   As built: `chrome_tabs.rs` keeps a `TabWindows` value (which pages each
+   window holds, where it opened) and composes one `window` per entry; a
+   tab is a `drag_and_drop_source` carrying its page id, a strip is a
+   `drag_and_drop_target` that moves the page into its window, and a drop
+   over no strip tears the page into a new window at the drop point (the
+   only page of a window stays). `tool_windows.rs` keeps `ToolPlaces`
+   (which panes are torn, and where): panes sit inline in the primary
+   window until a press on a title moves past the tear distance, when the
+   pane becomes a `window` in the `tools` group under the pointer and the
+   held press hands over to it, so the title's `window_drag_area` carries
+   it on; torn panes snap to each other and `dock` puts one back. The
+   primary window wraps the stack. The models are unit tested;
+   `torn_windows.rs` and its tests are gone; the drag tool's `drag-pane` and
+   `snap` read the new `transfer`, `torn` and `docked` traces, `windows`
+   reads the unchanged `window id=` lines, `screenwindows` lists a demo's
+   windows as the WindowServer orders them and `shotwindow` pictures one by
+   id; `scripts/dev/check_tool_tear.sh` tears a pane with the real pointer
+   and checks the handover, the follow, the primary's size and the dock.
 8. **Docs and PR.** As built, the PR description, and the gates.

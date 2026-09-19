@@ -12,6 +12,9 @@
 #   drag_window.sh launch <example> <log>            start ./target/debug/examples/<example>
 #   drag_window.sh windows <log>                      demo windows at rest: id x y w h panes=n
 #   drag_window.sh oswindows <example>                the OS windows of the running example: x y w h title
+#   drag_window.sh screenwindows <example>            the example's windows as the WindowServer holds them,
+#                                                     front to back: id, bounds, alpha, layer, on screen or not
+#   drag_window.sh shotwindow <id> <png>              picture of one window alone, by its WindowServer id
 #   drag_window.sh click <x,y>                        press and release
 #   drag_window.sh key <text>                         type text into the focused window
 #   drag_window.sh cpu <example> <command...>         CPU seconds the running example spends while
@@ -95,7 +98,46 @@ cpu() {
 }
 
 oswindows() {
-    osascript -e "tell application \"System Events\" to tell (first process whose name is \"$1\") to get {position, size, title} of every window" 2>&1
+    osascript \
+        -e 'on run argv' \
+        -e 'set report to ""' \
+        -e 'tell application "System Events" to tell (first process whose name is (item 1 of argv))' \
+        -e 'repeat with w in windows' \
+        -e 'set {x, y} to position of w' \
+        -e 'set {wd, ht} to size of w' \
+        -e 'set report to report & x & " " & y & " " & wd & " " & ht & " " & (title of w) & linefeed' \
+        -e 'end repeat' \
+        -e 'end tell' \
+        -e 'return report' \
+        -e 'end run' \
+        "$1" 2>&1
+}
+
+screenwindows() {
+    need swift
+    swift - "$1" <<'SWIFT'
+import CoreGraphics
+import Foundation
+let owner = CommandLine.arguments[1]
+let onScreen = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
+let onScreenIds = onScreen.compactMap { $0["kCGWindowNumber"] as? Int }
+let offScreen = (CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] ?? [])
+    .filter { !onScreenIds.contains($0["kCGWindowNumber"] as? Int ?? 0) }
+for row in onScreen + offScreen where (row["kCGWindowOwnerName"] as? String) == owner {
+    let id = row["kCGWindowNumber"] as? Int ?? 0
+    let b = row["kCGWindowBounds"] as? [String: Any] ?? [:]
+    let name = row["kCGWindowName"] as? String ?? ""
+    let alpha = row["kCGWindowAlpha"] as? Double ?? -1
+    let layer = row["kCGWindowLayer"] as? Int ?? 0
+    let x = b["X"] ?? 0, y = b["Y"] ?? 0, w = b["Width"] ?? 0, h = b["Height"] ?? 0
+    print("id=\(id) bounds=(\(x),\(y),\(w),\(h)) alpha=\(alpha) layer=\(layer) onscreen=\(onScreenIds.contains(id)) name=\(name)")
+}
+SWIFT
+}
+
+shotwindow() {
+    need screencapture
+    screencapture -x -o -l "$1" "$2" && echo "$2"
 }
 
 click() {
@@ -130,8 +172,7 @@ drag_pane() {
     drag "$x0,$y0" "$x1,$y1" "$steps"
     sleep 1
     echo "gesture ($x0,$y0) -> ($x1,$y1)"
-    trace "$log" "$since" 'demo trace: (press|release)|step=(Carry|Join)|sync create|presented=|panicked' \
-        | awk '/step=Carry/ { carry = $0; if (seen_carry++) next } { print } END { if (seen_carry > 1) print carry }'
+    trace "$log" "$since" 'demo trace: (transfer|torn|docked)|held press|sync create|presented=|panicked'
     grep -q panicked "$log" && { echo "PANIC in $log" >&2; exit 1; }
     return 0
 }
@@ -169,7 +210,7 @@ snap() {
     cliclick "du:$ex,$ey" "w:400"
     sleep 1
     echo "snap $id $side $onto: ($gx,$gy) -> ($ex,$ey)"
-    trace "$log" "$since" 'demo trace: (press|release)|step=Join|sync create|presented=|panicked' | awk '!seen[$0]++'
+    trace "$log" "$since" 'demo trace: (transfer|torn|docked)|drag (start|finish)|snap|sync create|presented=|panicked' | awk '!seen[$0]++'
     grep -q panicked "$log" && { echo "PANIC in $log" >&2; exit 1; }
     return 0
 }
@@ -244,6 +285,8 @@ case "$command" in
     windows) windows "$@" ;;
     click) click "$@" ;;
     oswindows) oswindows "$@" ;;
+    screenwindows) screenwindows "$@" ;;
+    shotwindow) shotwindow "$@" ;;
     key) key "$@" ;;
     cpu) cpu "$@" ;;
     drag) drag "$@" ;;

@@ -28,7 +28,7 @@
 - Worktrees share stashes: inspect contents, resolve the immutable stash hash, and apply only the intended work.
 - Run each `rm` as a standalone command, then verify separately; never chain it with another operation or loop body.
 - Never run ad hoc complex shell commands or pipelines; write a reusable script for the job, keep it under `scripts/` when it serves the repository, and run that.
-- Check draggable and droppable windows with `scripts/dev/drag_window.sh` (launch, windows, oswindows, drag, drag-pane, snap, key, cpu, trace, shot); never drive the pointer or the keyboard with ad hoc `cliclick` calls.
+- Check draggable and droppable windows with `scripts/dev/drag_window.sh` (launch, windows, oswindows, screenwindows, shotwindow, drag, drag-pane, snap, key, cpu, trace, shot); never drive the pointer or the keyboard with ad hoc `cliclick` calls. `scripts/dev/check_tool_tear.sh <out-dir>` is the whole tear of a tool pane as one check: it reads the traces back and pictures only the torn window's region, never the whole screen.
 - Reclaim build artifacts only with `just gc` and `just gc-apply`; never remove `target/`, `build/`, source or uncommitted work by hand.
 - Install hooks once per clone with `just hooks`; stage new files before `just precommit` so diff checks include them.
 - Use the exact CI recipes and shipped features; change checks in `justfile`, never inline in workflows.

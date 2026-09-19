@@ -719,6 +719,26 @@ where
         })
     }
 
+    /// The extent of what the primary root lays out: the far right and
+    /// bottom edges of its nodes with area, measured from the root's origin
+    /// and leaving out every window root's subtree. `None` while it lays
+    /// out nothing. A platform whose primary window wraps its content sizes
+    /// the window to this after every update.
+    pub fn primary_content_size(&mut self) -> Option<Size> {
+        let app_context = Rc::clone(&self.app.app_context);
+        app_context.enter(|| {
+            self.surfaces[0]
+                .layout_tree_in_context(&mut self.app)
+                .and_then(|tree| {
+                    tree.root()
+                        .children
+                        .iter()
+                        .filter_map(layout_extent)
+                        .reduce(farther_extent)
+                })
+        })
+    }
+
     /// The `drag_and_drop_target` under `point` and where the point falls in
     /// that target's surface. A point on the screen is looked up in every
     /// surface whose window position the platform told, later windows
@@ -1261,6 +1281,25 @@ where
 fn layout_has_area(layout: &cranpose_ui::LayoutBox) -> bool {
     (layout.rect.width > 0.0 && layout.rect.height > 0.0)
         || layout.children.iter().any(layout_has_area)
+}
+
+fn layout_extent(layout: &cranpose_ui::LayoutBox) -> Option<Size> {
+    let own = (layout.rect.width > 0.0 && layout.rect.height > 0.0).then(|| {
+        Size::new(
+            layout.rect.x + layout.rect.width,
+            layout.rect.y + layout.rect.height,
+        )
+    });
+    layout
+        .children
+        .iter()
+        .filter_map(layout_extent)
+        .chain(own)
+        .reduce(farther_extent)
+}
+
+fn farther_extent(a: Size, b: Size) -> Size {
+    Size::new(a.width.max(b.width), a.height.max(b.height))
 }
 
 pub fn default_root_key() -> Key {

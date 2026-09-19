@@ -24,6 +24,7 @@ use cranpose_ui::{
 mod animations;
 pub mod chrome_tabs;
 mod controls_ui;
+mod demo_trace;
 mod glass_feed;
 mod glass_tiles;
 mod hacker_news;
@@ -44,7 +45,6 @@ mod shaders;
 mod source_view;
 mod text_showcase;
 pub mod tool_windows;
-pub mod torn_windows;
 mod url_resolve;
 pub mod wear;
 mod web_fetch;

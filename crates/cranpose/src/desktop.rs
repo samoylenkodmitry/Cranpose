@@ -395,6 +395,7 @@ struct NativeWindowSurface {
     vsync_interval: Duration,
     pending_outer_positions: PendingNativeWindowPositions,
     active_drag: Option<NativeWindowDragSession>,
+    held_press: Option<PhysicalPosition<f64>>,
 }
 
 struct NativeWindowShell {
@@ -410,6 +411,16 @@ struct NativeWindowEventSettlement {
     graph_moves: Vec<WindowGraphMove>,
     graph_moves_apply_mode: NativeWindowPositionApplyMode,
     finish_graph_drag: bool,
+}
+
+impl NativeWindowEventSettlement {
+    fn also(mut self, other: Self) -> Self {
+        self.sync_after_event |= other.sync_after_event;
+        self.graph_drag = self.graph_drag.or(other.graph_drag);
+        self.graph_moves.extend(other.graph_moves);
+        self.finish_graph_drag |= other.finish_graph_drag;
+        self
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -674,6 +685,9 @@ struct App {
     next_native_window_position_poll_at: Instant,
     native_window_platform_probe: NativeWindowPlatformProbe,
     native_global_primary_down: bool,
+    primary_held_press: Option<PhysicalPosition<f64>>,
+    handed_press: Option<HandedPress>,
+    primary_wrap_size: Option<(u32, u32)>,
     cursors: crate::desktop_cursor::DesktopCursors,
     current_modifiers: winit::keyboard::ModifiersState,
     last_cursor_position: Option<(f32, f32)>,
@@ -743,6 +757,9 @@ impl App {
             #[allow(clippy::default_constructed_unit_structs)]
             native_window_platform_probe: NativeWindowPlatformProbe::default(),
             native_global_primary_down: false,
+            primary_held_press: None,
+            handed_press: None,
+            primary_wrap_size: None,
             cursors: crate::desktop_cursor::DesktopCursors::default(),
             current_modifiers: winit::keyboard::ModifiersState::empty(),
             last_cursor_position: None,
@@ -1041,13 +1058,28 @@ impl App {
         if a_new_window_comes_up_key(
             self.settings.headless,
             native.options.visible,
-            self.native_windows
-                .values()
-                .any(|open| open.window.has_focus()),
+            self.any_window_has_focus(),
             native.options.focus,
         ) {
             native.window.focus_window();
         }
+    }
+
+    fn any_window_has_focus(&self) -> bool {
+        let primary_focused = self.primary_visible()
+            && self
+                .window
+                .as_ref()
+                .is_some_and(|window| window.has_focus());
+        primary_focused
+            || self
+                .native_windows
+                .values()
+                .any(|open| open.window.has_focus())
+    }
+
+    fn primary_window_id(&self) -> Option<WinitWindowId> {
+        self.window.as_ref().map(|window| window.id())
     }
 
     fn refresh_native_window(
@@ -1216,10 +1248,7 @@ impl App {
         );
 
         let mut native_window_shells = Vec::with_capacity(native_windows_to_create.len());
-        let anything_focused = self
-            .native_windows
-            .values()
-            .any(|open| open.window.has_focus());
+        let anything_focused = self.any_window_has_focus();
         for request in native_windows_to_create {
             trace_native_window!(
                 "sync create key={:?} title={:?} visible={}",
@@ -1324,6 +1353,20 @@ impl App {
                 .load(std::sync::atomic::Ordering::Relaxed)
         {
             request_redraw_once(&window, &mut self.primary_redraw_pending);
+        }
+    }
+
+    fn sync_primary_size(&mut self) {
+        let (Some(window), Some(app)) = (self.window.clone(), self.app.as_mut()) else {
+            return;
+        };
+        if let Some(size) = wrap_primary_window_to_content(
+            window.as_ref(),
+            app,
+            self.settings.primary_wraps_content,
+            self.primary_wrap_size,
+        ) {
+            self.primary_wrap_size = Some(size);
         }
     }
 
@@ -1775,6 +1818,7 @@ impl App {
             vsync_interval: default_vsync_interval(),
             pending_outer_positions: PendingNativeWindowPositions::default(),
             active_drag: None,
+            held_press: None,
         };
         Self::present_before_the_desktop_composites(app, &mut native, &registry, "first frame");
         Ok(native)
@@ -2190,21 +2234,183 @@ impl App {
             .native_windows
             .values()
             .any(|other| other.active_drag.is_some());
-        let Some(pointer) = held_press_to_hand_over(
+        let Some(handover) = press_to_hand_over(
             native_window_global_pointer_state(platform_probe),
+            self.held_press_pointer_state(),
             native.options.visible && !dragging_elsewhere,
             |position| native_window_surface_contains_pointer(platform_probe, native, position),
         ) else {
             return;
         };
         trace_native_window!(
-            "held press handed to key={:?} pointer=({:.1},{:.1})",
+            "held press handed to key={:?} pointer=({:.1},{:.1}) relayed_by={:?}",
             native.key,
-            pointer.position.x,
-            pointer.position.y
+            handover.pointer.position.x,
+            handover.pointer.position.y,
+            handover.relayed_by
         );
         self.cancel_held_press_elsewhere(app, window_id);
-        self.recover_primary_press_into(app, window_id, pointer);
+        let recovered = self.recover_primary_press_into(app, window_id, handover.pointer);
+        self.handed_press = handover
+            .relayed_by
+            .filter(|_| recovered)
+            .map(|holder| HandedPress {
+                holder,
+                taker: window_id,
+            });
+    }
+
+    fn held_press_pointer_state(&self) -> Option<(WinitWindowId, NativeWindowPointerState)> {
+        let platform_probe = &self.native_window_platform_probe;
+        let primary = self
+            .window
+            .as_ref()
+            .map(|window| (window, self.primary_held_press));
+        let peers = self
+            .native_windows
+            .values()
+            .map(|native| (&native.window, native.held_press));
+        primary.into_iter().chain(peers).find_map(|(window, held)| {
+            let pointer = held_press_on_screen(platform_probe, window, held?)?;
+            Some((window.id(), pointer))
+        })
+    }
+
+    fn relay_primary_held_press(&mut self, event_loop: &dyn ActiveEventLoop, event: &WindowEvent) {
+        let Some(step) = held_press_step(event) else {
+            return;
+        };
+        self.primary_held_press = held_press_after_step(self.primary_held_press, step);
+        if self.handed_press.is_none() {
+            return;
+        }
+        let Some(window) = self.window.clone() else {
+            return;
+        };
+        let Some(mut app) = self.app.take() else {
+            return;
+        };
+        let settlement = self.relay_held_press_step(&mut app, window.id(), &window, step);
+        self.app = Some(app);
+        self.settle_native_window_event(event_loop, settlement);
+    }
+
+    fn relay_native_held_press(
+        &mut self,
+        app: &mut AppShell<WgpuRenderer>,
+        native: &mut NativeWindowSurface,
+        event: &WindowEvent,
+    ) -> NativeWindowEventSettlement {
+        let Some(step) = held_press_step(event) else {
+            return NativeWindowEventSettlement::default();
+        };
+        native.held_press = held_press_after_step(native.held_press, step);
+        self.relay_held_press_step(app, native.window.id(), &native.window, step)
+    }
+
+    fn relay_held_press_step(
+        &mut self,
+        app: &mut AppShell<WgpuRenderer>,
+        holder: WinitWindowId,
+        holder_window: &Arc<dyn Window>,
+        step: HeldPressStep,
+    ) -> NativeWindowEventSettlement {
+        let Some(taker) = self
+            .handed_press
+            .and_then(|handed| handed.taker_for(holder))
+        else {
+            return NativeWindowEventSettlement::default();
+        };
+        if let HeldPressStep::Pressed(_) = step {
+            self.handed_press = None;
+            return NativeWindowEventSettlement::default();
+        }
+        let platform_probe = &self.native_window_platform_probe;
+        let Some(native) = self.native_windows.get_mut(&taker) else {
+            self.handed_press = None;
+            return NativeWindowEventSettlement::default();
+        };
+        let Some(screen) =
+            native_window_screen_pointer_physical(platform_probe, holder_window, step.position())
+        else {
+            return NativeWindowEventSettlement::default();
+        };
+        Self::set_native_cursor_from_screen(platform_probe, app, native, screen);
+        match step {
+            HeldPressStep::Pressed(_) | HeldPressStep::Moved(_) => NativeWindowEventSettlement {
+                graph_drag: Self::update_native_window_polling_drag_target(native, screen),
+                ..NativeWindowEventSettlement::default()
+            },
+            HeldPressStep::Released(_) => {
+                self.handed_press = None;
+                self.native_global_primary_down = false;
+                let settlement = Self::finish_native_press(
+                    platform_probe,
+                    app,
+                    native,
+                    Some(screen),
+                    "relayed-release",
+                    |surface| surface.pointer_released(),
+                );
+                trace_native_window!("held press released, key={:?} raised", native.key);
+                native.window.focus_window();
+                settlement
+            }
+        }
+    }
+
+    fn set_native_cursor_from_screen(
+        platform_probe: &NativeWindowPlatformProbe,
+        app: &mut AppShell<WgpuRenderer>,
+        native: &mut NativeWindowSurface,
+        screen: PhysicalPosition<f64>,
+    ) {
+        let Some(local) =
+            native_window_local_pointer_physical(platform_probe, &native.window, screen)
+        else {
+            return;
+        };
+        let logical = native.platform.pointer_position(local);
+        native.last_cursor_position = Some((logical.x, logical.y));
+        native.last_cursor_physical_position = Some(local);
+        if let Some(mut surface) = native_surface(app, native) {
+            surface.set_screen_origin(native_window_surface_origin(platform_probe, &native.window));
+            surface.set_cursor(logical.x, logical.y);
+        }
+    }
+
+    fn finish_native_press(
+        platform_probe: &NativeWindowPlatformProbe,
+        app: &mut AppShell<WgpuRenderer>,
+        native: &mut NativeWindowSurface,
+        pointer: Option<PhysicalPosition<f64>>,
+        reason: &str,
+        release: impl FnOnce(&mut SurfaceMut<'_, WgpuRenderer>) -> bool,
+    ) -> NativeWindowEventSettlement {
+        let graph_drag = pointer
+            .and_then(|pointer| Self::update_native_window_polling_drag_target(native, pointer));
+        let finish_graph_drag = native.active_drag.take().is_some();
+        if finish_graph_drag {
+            trace_native_window!("drag finish key={:?} reason={reason}", native.key);
+        }
+        let handled = native_surface(app, native).is_some_and(|mut surface| {
+            surface.set_screen_origin(native_window_surface_origin(platform_probe, &native.window));
+            release(&mut surface)
+        });
+        app.sync_selection_to_primary();
+        if handled {
+            apply_pointer_button_frame_request(
+                &native.window,
+                &mut native.last_frame_start_time,
+                pointer_button_frame_request(handled),
+            );
+        }
+        NativeWindowEventSettlement {
+            sync_after_event: handled,
+            graph_drag,
+            finish_graph_drag,
+            ..NativeWindowEventSettlement::default()
+        }
     }
 
     fn cancel_held_press_elsewhere(
@@ -2239,20 +2445,7 @@ impl App {
             self.native_global_primary_down = false;
             return false;
         };
-        if let Some(local) =
-            native_window_local_pointer_physical(platform_probe, &native.window, pointer.position)
-        {
-            let logical = native.platform.pointer_position(local);
-            native.last_cursor_position = Some((logical.x, logical.y));
-            native.last_cursor_physical_position = Some(local);
-            if let Some(mut surface) = native_surface(app, &native) {
-                surface.set_screen_origin(native_window_surface_origin(
-                    platform_probe,
-                    &native.window,
-                ));
-                surface.set_cursor(logical.x, logical.y);
-            }
-        }
+        Self::set_native_cursor_from_screen(platform_probe, app, &mut native, pointer.position);
 
         let (press_handled, drag_requested) =
             Self::dispatch_native_primary_pressed(platform_probe, app, &mut native);
@@ -2541,12 +2734,13 @@ impl App {
             self.native_windows.insert(window_id, native);
             return;
         };
+        let relayed = self.relay_native_held_press(&mut app, &mut native, &event);
         let (keep_window, settlement) =
             self.native_window_event(&mut app, event_loop, &mut native, event);
         self.app = Some(app);
         if keep_window {
             self.native_windows.insert(window_id, native);
-            self.settle_native_window_event(event_loop, settlement);
+            self.settle_native_window_event(event_loop, settlement.also(relayed));
         }
     }
 
@@ -2563,6 +2757,9 @@ impl App {
         let mut graph_moves_after_insert = Vec::<WindowGraphMove>::new();
         let mut graph_moves_apply_mode_after_insert = NativeWindowPositionApplyMode::WaitForSettle;
         let mut finish_graph_drag_after_insert = false;
+        if let Some(label) = native_window_lifecycle_event(&event) {
+            trace_native_window!("event {label} key={:?}", native.key);
+        }
         let Some(event) = deliver_native_surface_event(app, native, self.current_modifiers, event)
         else {
             return (true, NativeWindowEventSettlement::default());
@@ -2858,42 +3055,27 @@ impl App {
                                     position,
                                 )
                             });
-                        if let Some(pointer) =
+                        let pointer =
                             native_window_global_pointer_state(&self.native_window_platform_probe)
                                 .map(|state| state.position)
-                                .or(fallback_pointer)
-                            && let Some((key, position)) =
-                                Self::update_native_window_polling_drag_target(native, pointer)
-                        {
-                            graph_drag_after_insert = Some((key, position));
-                        }
-                        finish_graph_drag_after_insert = native.active_drag.take().is_some();
-                        if finish_graph_drag_after_insert {
-                            trace_native_window!(
-                                "drag finish key={:?} reason=local-release",
-                                native.key
-                            );
-                        }
-                        let handled = native_surface(app, native).is_some_and(|mut surface| {
-                            surface.set_screen_origin(native_window_surface_origin(
-                                &self.native_window_platform_probe,
-                                &native.window,
-                            ));
-                            if source.is_touch_like() {
-                                surface.pointer_released_at_position(logical.x, logical.y)
-                            } else {
-                                surface.pointer_released()
-                            }
-                        });
-                        app.sync_selection_to_primary();
-                        if handled {
-                            apply_pointer_button_frame_request(
-                                &native.window,
-                                &mut native.last_frame_start_time,
-                                pointer_button_frame_request(handled),
-                            );
-                            sync_after_event = true;
-                        }
+                                .or(fallback_pointer);
+                        let released = Self::finish_native_press(
+                            &self.native_window_platform_probe,
+                            app,
+                            native,
+                            pointer,
+                            "local-release",
+                            |surface| {
+                                if source.is_touch_like() {
+                                    surface.pointer_released_at_position(logical.x, logical.y)
+                                } else {
+                                    surface.pointer_released()
+                                }
+                            },
+                        );
+                        graph_drag_after_insert = released.graph_drag;
+                        finish_graph_drag_after_insert = released.finish_graph_drag;
+                        sync_after_event |= released.sync_after_event;
                     }
                 }
             }
@@ -3010,6 +3192,7 @@ impl App {
             }
             SurfaceFrame::Skip => {
                 trace_native_window!("redraw surface unavailable key={:?}", native.key);
+                pace_after_empty_redraw(&mut native.last_frame_start_time, frame_started_at, false);
                 return false;
             }
         };
@@ -3353,6 +3536,32 @@ fn pace_after_empty_redraw(
     }
 }
 
+fn primary_wrap_request(
+    content: Option<cranpose_ui::Size>,
+    last: Option<(u32, u32)>,
+) -> Option<(u32, u32)> {
+    let content = content.filter(|size| size.width > 0.0 && size.height > 0.0)?;
+    let wanted = (content.width.ceil() as u32, content.height.ceil() as u32);
+    (last != Some(wanted)).then_some(wanted)
+}
+
+fn wrap_primary_window_to_content(
+    window: &dyn Window,
+    app: &mut AppShell<WgpuRenderer>,
+    wraps_content: bool,
+    last: Option<(u32, u32)>,
+) -> Option<(u32, u32)> {
+    let content = wraps_content.then(|| app.primary_content_size()).flatten();
+    let (width, height) = primary_wrap_request(content, last)?;
+    trace_native_window!("primary window wraps {width}x{height}");
+    let origin = window.outer_position().ok();
+    let _ = window.request_surface_size(LogicalSize::new(width as f64, height as f64).into());
+    if let Some(origin) = origin {
+        window.set_outer_position(Position::Physical(origin));
+    }
+    Some((width, height))
+}
+
 fn note_native_window_presented(state: Option<WindowState>, presented: bool) {
     if let Some(state) = state {
         state.set_presented(presented);
@@ -3546,8 +3755,7 @@ fn native_window_polling_drag_pointer(
     global: Option<NativeWindowPointerState>,
     start_pointer_screen: Option<PhysicalPosition<f64>>,
 ) -> Option<PhysicalPosition<f64>> {
-    let global = global?;
-    Some(start_pointer_screen.unwrap_or(global.position))
+    start_pointer_screen.or(global.map(|global| global.position))
 }
 
 fn native_window_attributes(
@@ -3872,6 +4080,98 @@ fn physical_surface_rect_contains_pointer(
 struct NativeWindowPointerState {
     position: PhysicalPosition<f64>,
     primary_down: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct HandedPress {
+    holder: WinitWindowId,
+    taker: WinitWindowId,
+}
+
+impl HandedPress {
+    fn taker_for(self, holder: WinitWindowId) -> Option<WinitWindowId> {
+        (self.holder == holder).then_some(self.taker)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum HeldPressStep {
+    Pressed(PhysicalPosition<f64>),
+    Moved(PhysicalPosition<f64>),
+    Released(PhysicalPosition<f64>),
+}
+
+impl HeldPressStep {
+    fn position(self) -> PhysicalPosition<f64> {
+        match self {
+            Self::Pressed(position) | Self::Moved(position) | Self::Released(position) => position,
+        }
+    }
+}
+
+fn held_press_step(event: &WindowEvent) -> Option<HeldPressStep> {
+    match event {
+        WindowEvent::PointerButton {
+            state: ElementState::Pressed,
+            position,
+            button,
+            ..
+        } if is_primary_pointer_button(button) => Some(HeldPressStep::Pressed(*position)),
+        WindowEvent::PointerButton {
+            state: ElementState::Released,
+            position,
+            button,
+            ..
+        } if is_primary_pointer_button(button) => Some(HeldPressStep::Released(*position)),
+        WindowEvent::PointerMoved { position, .. } => Some(HeldPressStep::Moved(*position)),
+        _ => None,
+    }
+}
+
+fn held_press_after_step(
+    held: Option<PhysicalPosition<f64>>,
+    step: HeldPressStep,
+) -> Option<PhysicalPosition<f64>> {
+    match step {
+        HeldPressStep::Pressed(position) => Some(position),
+        HeldPressStep::Moved(position) => held.map(|_| position),
+        HeldPressStep::Released(_) => None,
+    }
+}
+
+fn held_press_on_screen(
+    platform_probe: &NativeWindowPlatformProbe,
+    window: &Arc<dyn Window>,
+    local: PhysicalPosition<f64>,
+) -> Option<NativeWindowPointerState> {
+    let position = native_window_screen_pointer_physical(platform_probe, window, local)?;
+    Some(NativeWindowPointerState {
+        position,
+        primary_down: true,
+    })
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct PressToHandOver {
+    pointer: NativeWindowPointerState,
+    relayed_by: Option<WinitWindowId>,
+}
+
+fn press_to_hand_over(
+    platform_pointer: Option<NativeWindowPointerState>,
+    held: Option<(WinitWindowId, NativeWindowPointerState)>,
+    window_can_take_it: bool,
+    window_contains: impl FnOnce(PhysicalPosition<f64>) -> bool,
+) -> Option<PressToHandOver> {
+    let (relayed_by, pointer) = match platform_pointer {
+        Some(pointer) => (None, pointer),
+        None => held.map(|(holder, pointer)| (Some(holder), pointer))?,
+    };
+    let pointer = held_press_to_hand_over(Some(pointer), window_can_take_it, window_contains)?;
+    Some(PressToHandOver {
+        pointer,
+        relayed_by,
+    })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -4324,6 +4624,7 @@ fn show_primary_when_it_has_content(
     let show = primary_window_should_show(headless, app.primary_has_content());
     if show != shown.load(std::sync::atomic::Ordering::Relaxed) {
         shown.store(show, std::sync::atomic::Ordering::Relaxed);
+        trace_native_window!("primary window {}", if show { "shown" } else { "hidden" });
         window.set_visible(show);
     }
 }
@@ -4342,6 +4643,22 @@ fn surface_reconfigure_requires_redraw(width: u32, height: u32) -> bool {
 
 fn occlusion_leaves_a_frame_owed(occluded: bool) -> bool {
     !occluded
+}
+
+fn native_window_lifecycle_event(event: &WindowEvent) -> Option<&'static str> {
+    Some(match event {
+        WindowEvent::Occluded(true) => "occluded",
+        WindowEvent::Occluded(false) => "unoccluded",
+        WindowEvent::Focused(true) => "focused",
+        WindowEvent::Focused(false) => "unfocused",
+        WindowEvent::Moved(_) => "moved",
+        WindowEvent::SurfaceResized(_) => "resized",
+        WindowEvent::ScaleFactorChanged { .. } => "rescaled",
+        WindowEvent::PointerEntered { .. } => "pointer-entered",
+        WindowEvent::PointerLeft { .. } => "pointer-left",
+        WindowEvent::CloseRequested => "close-requested",
+        _ => return None,
+    })
 }
 
 fn native_window_redraw_held_while_hidden(visible: bool) -> bool {
@@ -4981,6 +5298,13 @@ impl ApplicationHandler for App {
             self.robot_drives(),
         );
         accessibility.sync(&mut app);
+        self.primary_wrap_size = wrap_primary_window_to_content(
+            window.as_ref(),
+            &mut app,
+            self.settings.primary_wraps_content,
+            self.primary_wrap_size,
+        )
+        .or(self.primary_wrap_size);
         show_primary_when_it_has_content(&self.primary_shown, &mut app, window.as_ref(), headless);
 
         let mut dev_options = self.settings.dev_options.clone();
@@ -5046,14 +5370,14 @@ impl ApplicationHandler for App {
         event: WindowEvent,
     ) {
         self.sync_frame_pacing();
-        let Some(window) = &self.window else {
-            self.dispatch_native_window_event(event_loop, window_id, event);
-            return;
-        };
-        if window_id != window.id() {
+        if self.primary_window_id() != Some(window_id) {
             self.dispatch_native_window_event(event_loop, window_id, event);
             return;
         }
+        self.relay_primary_held_press(event_loop, &event);
+        let Some(window) = &self.window else {
+            return;
+        };
         if let Some(accessibility) = &mut self.accessibility {
             accessibility.process_event(window.as_ref(), &event);
         }
@@ -6285,6 +6609,7 @@ impl ApplicationHandler for App {
             }
         }
         let primary_next_event_time = frame_schedule.next_deadline;
+        self.sync_primary_size();
         self.sync_primary_visibility();
         if direct_declaration_update {
             self.sync_native_windows(event_loop);

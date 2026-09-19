@@ -3,7 +3,7 @@ use std::{
     rc::Rc,
 };
 
-use cranpose_core::{MutableState, location_key, rememberMutableStateOf};
+use cranpose_core::{MutableState, location_key, movable, rememberMutableStateOf};
 use cranpose_render_common::RenderScene;
 use cranpose_ui::{
     Box, BoxSpec, Column, ColumnSpec, DragAndDropSource, DragAndDropTarget, LayoutBox, LayoutTree,
@@ -43,9 +43,10 @@ where
     window_id
 }
 
-#[test]
-fn the_primary_has_content_only_outside_window_roots() {
-    let _guard = test_guard();
+fn shell_with_a_tearable_pane(
+    torn_at_first: bool,
+    content: impl Fn(bool, &Rc<dyn WindowRootDescriptor>) + 'static,
+) -> (AppShell<HitGraphRenderer>, MutableState<bool>) {
     let torn: Rc<RefCell<Option<MutableState<bool>>>> = Rc::new(RefCell::new(None));
     let window = test_window(200.0, 100.0);
     let mut shell = AppShell::new(
@@ -53,35 +54,47 @@ fn the_primary_has_content_only_outside_window_roots() {
         location_key(file!(), line!(), column!()),
         {
             let torn = Rc::clone(&torn);
-            let window = Rc::clone(&window);
             move || {
-                let is_torn = rememberMutableStateOf(|| true);
+                let is_torn = rememberMutableStateOf(|| torn_at_first);
                 *torn.borrow_mut() = Some(is_torn);
-                let window = Rc::clone(&window);
-                Column(Modifier::empty(), ColumnSpec::default(), move || {
-                    Box(Modifier::empty(), BoxSpec::default(), || {});
-                    let modifier = if is_torn.get() {
-                        Modifier::empty().window_root(Rc::clone(&window))
-                    } else {
-                        Modifier::empty()
-                    };
-                    Box(modifier, BoxSpec::default(), || {
-                        Box(
-                            Modifier::empty().size(Size::new(90.0, 30.0)),
-                            BoxSpec::default(),
-                            || {},
-                        );
-                    });
-                });
+                content(is_torn.get(), &window);
             }
         },
     );
     shell.update();
+    let torn = (*torn.borrow()).expect("the composition remembered whether the pane is torn");
+    (shell, torn)
+}
+
+fn tear_modifier(torn: bool, window: &Rc<dyn WindowRootDescriptor>) -> Modifier {
+    if torn {
+        Modifier::empty().window_root(Rc::clone(window))
+    } else {
+        Modifier::empty()
+    }
+}
+
+#[test]
+fn the_primary_has_content_only_outside_window_roots() {
+    let _guard = test_guard();
+    let (mut shell, torn) = shell_with_a_tearable_pane(true, |is_torn, window| {
+        let window = Rc::clone(window);
+        Column(Modifier::empty(), ColumnSpec::default(), move || {
+            Box(Modifier::empty(), BoxSpec::default(), || {});
+            Box(tear_modifier(is_torn, &window), BoxSpec::default(), || {
+                Box(
+                    Modifier::empty().size(Size::new(90.0, 30.0)),
+                    BoxSpec::default(),
+                    || {},
+                );
+            });
+        });
+    });
     assert!(
         !shell.primary_has_content(),
         "a root whose only sized node is in a window shows nothing of its own"
     );
-    (*torn.borrow()).expect("state").set(false);
+    torn.set(false);
     shell.update();
     assert!(
         shell.primary_has_content(),
@@ -955,5 +968,85 @@ fn a_page_torn_into_a_new_window_root_lays_out_below_that_windows_strip() {
         page_in_second(&mut shell),
         Some((0.0, 36.0)),
         "a recomposition that skips the strip and the page leaves the page in place"
+    );
+}
+
+fn pane() {
+    Box(
+        Modifier::empty()
+            .size(Size::new(90.0, 30.0))
+            .clickable(|_| {}),
+        BoxSpec::default(),
+        || {},
+    );
+}
+
+#[test]
+fn a_pane_moved_into_a_new_window_draws_in_that_windows_first_frame() {
+    let _guard = test_guard();
+    let (mut shell, torn) = shell_with_a_tearable_pane(false, |is_torn, window| {
+        Column(Modifier::empty(), ColumnSpec::default(), move || {
+            if !is_torn {
+                movable("pane", pane);
+            }
+        });
+        if is_torn {
+            Box(
+                Modifier::empty().window_root(Rc::clone(window)),
+                BoxSpec::default(),
+                || movable("pane", pane),
+            );
+        }
+    });
+    torn.set(true);
+    shell.update();
+    let window_id = window_root_at(&shell, 0);
+    shell.add_window_surface(
+        window_id,
+        HitGraphRenderer::default(),
+        (200, 100),
+        (200.0, 100.0),
+    );
+    shell.update();
+    let window = shell
+        .surface(RootId::Window(window_id))
+        .expect("window surface");
+    assert!(
+        !window.scene().hit_test(40.0, 15.0).is_empty(),
+        "the moved pane is in the window's first frame"
+    );
+}
+
+#[test]
+fn the_primary_content_size_is_the_extent_of_what_it_lays_out_outside_window_roots() {
+    let _guard = test_guard();
+    let (mut shell, torn) = shell_with_a_tearable_pane(false, |is_torn, window| {
+        let window = Rc::clone(window);
+        Column(Modifier::empty(), ColumnSpec::default(), move || {
+            Box(
+                Modifier::empty().size(Size::new(90.0, 30.0)),
+                BoxSpec::default(),
+                || {},
+            );
+            Box(tear_modifier(is_torn, &window), BoxSpec::default(), || {
+                Box(
+                    Modifier::empty().size(Size::new(120.0, 50.0)),
+                    BoxSpec::default(),
+                    || {},
+                );
+            });
+        });
+    });
+    assert_eq!(
+        shell.primary_content_size(),
+        Some(Size::new(120.0, 80.0)),
+        "two panes inline: the stack is as wide as the wider and as tall as both"
+    );
+    torn.set(true);
+    shell.update();
+    assert_eq!(
+        shell.primary_content_size(),
+        Some(Size::new(90.0, 30.0)),
+        "a pane in a window of its own is not the primary's content"
     );
 }

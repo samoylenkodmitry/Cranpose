@@ -70,6 +70,8 @@ pub struct AppSettings {
     pub initial_height: u32,
     /// Whether the initial size was explicitly supplied by the app.
     pub initial_size_explicit: bool,
+    /// Desktop only: keep the primary window the size of what it lays out.
+    pub primary_wraps_content: bool,
     /// Web only: give the canvas the full browser viewport instead of the box
     /// the host page lays it out in.
     ///
@@ -146,6 +148,7 @@ impl Default for AppSettings {
             initial_width: 800,
             initial_height: 600,
             initial_size_explicit: false,
+            primary_wraps_content: false,
             web_fill_viewport: false,
             fonts: None,
             font_registry: SoftwareTextFontRegistry::new(),
@@ -462,6 +465,17 @@ impl AppLauncher {
         self.settings.initial_width = width;
         self.settings.initial_height = height;
         self.settings.initial_size_explicit = true;
+        self
+    }
+
+    /// Desktop only: keep the primary window the size of what it lays out,
+    /// measured after every update, so a window that holds a stack of panes
+    /// is exactly that stack and shrinks when a pane leaves for a window of
+    /// its own. The window keeps its top-left corner as it resizes. The
+    /// initial size applies until the first layout; other platforms ignore
+    /// this.
+    pub fn with_window_wrapping_content(mut self) -> Self {
+        self.settings.primary_wraps_content = true;
         self
     }
 

@@ -171,15 +171,24 @@ fn a_window_that_may_take_focus_comes_up_active() {
 }
 
 #[test]
-fn a_drag_with_no_pointer_to_poll_leaves_the_move_to_the_platform() {
+fn a_drag_with_no_pointer_to_poll_and_no_anchor_leaves_the_move_to_the_platform() {
     assert!(
+        super::native_window_polling_drag_pointer(None, None).is_none(),
+        "polling reads the pointer every frame, so without one the window \
+         never moves and the platform drag has to take the gesture"
+    );
+}
+
+#[test]
+fn a_drag_anchored_at_a_handed_over_press_polls_without_a_platform_pointer() {
+    assert_eq!(
         super::native_window_polling_drag_pointer(
             None,
             Some(winit::dpi::PhysicalPosition::new(7.0, 9.0)),
-        )
-        .is_none(),
-        "polling reads the pointer every frame, so without one the window \
-         never moves and the platform drag has to take the gesture"
+        ),
+        Some(winit::dpi::PhysicalPosition::new(7.0, 9.0)),
+        "the window holding the button relays its moves, so the session has \
+         a pointer to follow from the anchor on"
     );
 }
 
@@ -207,18 +216,19 @@ use cranpose_app_shell::FrameUpdateResult;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 
 use super::{
-    App, ControlFlow, DesktopRect, FramePacingMode, LoopControlInputs, NativeWindowDragSession,
-    NativeWindowGraphPositionSource, NativeWindowOptions, NativeWindowPointerState,
-    NativeWindowPollingDragSession, NativeWindowPositionObservation, NativeWindowPositionOrigin,
-    PendingNativeWindowPositions, PrimaryPointerGesturePollAction, WindowFocus,
-    clamp_rect_to_monitor_delta, desired_frame_latency, event_loop_control_flow,
-    frame_interval_for_mode, free_running_frame, held_press_to_hand_over,
-    initial_present_redraw_needed, native_window_drag_poll_deadline, native_window_graph_position,
+    App, ControlFlow, DesktopRect, FramePacingMode, HandedPress, HeldPressStep, LoopControlInputs,
+    NativeWindowDragSession, NativeWindowGraphPositionSource, NativeWindowOptions,
+    NativeWindowPointerState, NativeWindowPollingDragSession, NativeWindowPositionObservation,
+    NativeWindowPositionOrigin, PendingNativeWindowPositions, PressToHandOver,
+    PrimaryPointerGesturePollAction, WindowFocus, WinitWindowId, clamp_rect_to_monitor_delta,
+    desired_frame_latency, event_loop_control_flow, frame_interval_for_mode, free_running_frame,
+    held_press_after_step, held_press_step, held_press_to_hand_over, initial_present_redraw_needed,
+    native_window_drag_poll_deadline, native_window_graph_position,
     native_window_options_change_is_position_only, native_window_position_poll_needed,
     native_window_redraw_held_while_hidden, nearest_monitor_to_rect, next_frame_anchor,
     occlusion_leaves_a_frame_owed, pace_after_empty_redraw, physical_outer_origin_from_surface,
     physical_surface_local_pointer, physical_surface_origin_from_outer,
-    physical_surface_rect_contains_pointer, pointer_button_frame_request,
+    physical_surface_rect_contains_pointer, pointer_button_frame_request, press_to_hand_over,
     primary_declaration_host_needs_direct_update, primary_frame_waker_uses_event_proxy,
     primary_launch_requires_initial_redraw, primary_pointer_gesture_poll_action,
     primary_pointer_move_should_recover_press, primary_surface_redraw_drives_app,
@@ -1164,6 +1174,142 @@ fn a_new_window_takes_over_a_held_press_only_when_it_is_under_the_pointer() {
 }
 
 #[test]
+fn a_press_the_platform_reports_is_handed_over_without_a_relay() {
+    let platform = NativeWindowPointerState {
+        position: PhysicalPosition::new(40.0, 30.0),
+        primary_down: true,
+    };
+    let held = NativeWindowPointerState {
+        position: PhysicalPosition::new(1.0, 2.0),
+        primary_down: true,
+    };
+    assert_eq!(
+        press_to_hand_over(
+            Some(platform),
+            Some((WinitWindowId::from_raw(1), held)),
+            true,
+            |_| true
+        ),
+        Some(PressToHandOver {
+            pointer: platform,
+            relayed_by: None,
+        }),
+        "a platform that reports the pointer polls the drag itself"
+    );
+}
+
+#[test]
+fn a_press_a_window_holds_is_handed_over_and_relayed_when_the_platform_reports_nothing() {
+    let holder = WinitWindowId::from_raw(1);
+    let held = NativeWindowPointerState {
+        position: PhysicalPosition::new(40.0, 30.0),
+        primary_down: true,
+    };
+    assert_eq!(
+        press_to_hand_over(None, Some((holder, held)), true, |_| true),
+        Some(PressToHandOver {
+            pointer: held,
+            relayed_by: Some(holder),
+        }),
+        "the window that got the button keeps its events, so it relays them"
+    );
+    assert_eq!(
+        press_to_hand_over(None, Some((holder, held)), true, |position| {
+            position.x > 100.0
+        }),
+        None,
+        "the new window still has to be under the press"
+    );
+    assert_eq!(press_to_hand_over(None, None, true, |_| true), None);
+}
+
+#[test]
+fn a_held_press_follows_the_button_on_the_window_that_got_it() {
+    let down = PhysicalPosition::new(10.0, 20.0);
+    let moved = PhysicalPosition::new(30.0, 40.0);
+    assert_eq!(
+        held_press_after_step(None, HeldPressStep::Pressed(down)),
+        Some(down)
+    );
+    assert_eq!(
+        held_press_after_step(Some(down), HeldPressStep::Moved(moved)),
+        Some(moved)
+    );
+    assert_eq!(
+        held_press_after_step(None, HeldPressStep::Moved(moved)),
+        None,
+        "a move with the button up holds nothing"
+    );
+    assert_eq!(
+        held_press_after_step(Some(moved), HeldPressStep::Released(moved)),
+        None
+    );
+}
+
+#[test]
+fn only_the_primary_button_steps_a_held_press() {
+    use winit::event::{ButtonSource, ElementState, MouseButton, PointerSource, WindowEvent};
+    let position = PhysicalPosition::new(3.0, 4.0);
+    let button = |state, button| WindowEvent::PointerButton {
+        device_id: None,
+        state,
+        position,
+        primary: true,
+        button,
+    };
+    assert_eq!(
+        held_press_step(&button(
+            ElementState::Pressed,
+            ButtonSource::Mouse(MouseButton::Left)
+        )),
+        Some(HeldPressStep::Pressed(position))
+    );
+    assert_eq!(
+        held_press_step(&button(
+            ElementState::Released,
+            ButtonSource::Mouse(MouseButton::Left)
+        )),
+        Some(HeldPressStep::Released(position))
+    );
+    assert_eq!(
+        held_press_step(&button(
+            ElementState::Pressed,
+            ButtonSource::Mouse(MouseButton::Right)
+        )),
+        None,
+        "a secondary button is no press to hand over"
+    );
+    assert_eq!(
+        held_press_step(&WindowEvent::PointerMoved {
+            device_id: None,
+            position,
+            primary: true,
+            source: PointerSource::Mouse,
+        }),
+        Some(HeldPressStep::Moved(position))
+    );
+    assert_eq!(held_press_step(&WindowEvent::Focused(true)), None);
+}
+
+#[test]
+fn a_handed_press_relays_only_the_holders_events() {
+    let handed = HandedPress {
+        holder: WinitWindowId::from_raw(1),
+        taker: WinitWindowId::from_raw(2),
+    };
+    assert_eq!(
+        handed.taker_for(WinitWindowId::from_raw(1)),
+        Some(WinitWindowId::from_raw(2))
+    );
+    assert_eq!(
+        handed.taker_for(WinitWindowId::from_raw(2)),
+        None,
+        "the taker gets no events of its own to relay"
+    );
+    assert_eq!(handed.taker_for(WinitWindowId::from_raw(3)), None);
+}
+
+#[test]
 fn primary_pointer_move_recovers_missed_x11_press_once() {
     let global_pointer = Some(NativeWindowPointerState {
         position: PhysicalPosition::new(112.0, 57.0),
@@ -1405,4 +1551,34 @@ fn robot_screenshot_honors_capture_scale() {
     );
     assert_eq!(parse_robot_capture_scale(Some("junk")), 1.0);
     assert_eq!(parse_robot_capture_scale(None), 1.0);
+}
+
+#[test]
+fn a_primary_that_wraps_its_content_asks_for_each_new_content_size_once() {
+    let content = |width, height| Some(cranpose_ui::Size::new(width, height));
+    assert_eq!(
+        super::primary_wrap_request(None, None),
+        None,
+        "nothing laid out, nothing asked"
+    );
+    assert_eq!(
+        super::primary_wrap_request(content(0.0, 40.0), None),
+        None,
+        "content without area is nothing to wrap"
+    );
+    assert_eq!(
+        super::primary_wrap_request(content(275.0, 463.5), None),
+        Some((275, 464)),
+        "the window is whole pixels around the content"
+    );
+    assert_eq!(
+        super::primary_wrap_request(content(275.0, 463.5), Some((275, 464))),
+        None,
+        "the size already asked for is not asked for again"
+    );
+    assert_eq!(
+        super::primary_wrap_request(content(275.0, 348.0), Some((275, 464))),
+        Some((275, 348)),
+        "a pane gone shrinks the window"
+    );
 }
