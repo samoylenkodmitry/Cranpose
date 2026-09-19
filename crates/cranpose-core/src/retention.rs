@@ -71,11 +71,21 @@ pub(crate) struct RetainKey {
     pub(crate) key: GroupKey,
 }
 
+impl RetainKey {
+    pub(crate) fn for_group(parent_scope: Option<ScopeId>, key: GroupKey) -> Self {
+        Self {
+            parent_scope: if key.is_movable() { None } else { parent_scope },
+            key,
+        }
+    }
+}
+
 pub(crate) struct RetainedGroup {
     pub(crate) subtree: DetachedSubtree,
     detached_pass: u64,
     detached_order: u64,
     last_restored_order: u64,
+    pinned: bool,
 }
 
 impl RetainedGroup {
@@ -181,10 +191,31 @@ impl RetentionManager {
         self.take(key)
     }
 
+    pub(crate) fn contains(&self, key: RetainKey) -> bool {
+        self.groups.contains_key(&key)
+    }
+
     pub(crate) fn insert(
         &mut self,
         key: RetainKey,
+        subtree: DetachedSubtree,
+    ) -> Vec<DetachedSubtree> {
+        self.insert_with_pin(key, subtree, false)
+    }
+
+    pub(crate) fn insert_pinned(
+        &mut self,
+        key: RetainKey,
+        subtree: DetachedSubtree,
+    ) -> Vec<DetachedSubtree> {
+        self.insert_with_pin(key, subtree, true)
+    }
+
+    fn insert_with_pin(
+        &mut self,
+        key: RetainKey,
         mut subtree: DetachedSubtree,
+        pinned: bool,
     ) -> Vec<DetachedSubtree> {
         if self.groups.contains_key(&key) {
             log::error!(
@@ -210,6 +241,7 @@ impl RetentionManager {
                 detached_pass: self.pass_clock,
                 detached_order,
                 last_restored_order,
+                pinned,
             },
         );
         self.evict_to_budget()
@@ -431,9 +463,12 @@ impl RetentionManager {
             .flatten()
     }
 
+    fn evictable(&self) -> impl Iterator<Item = (&RetainKey, &RetainedGroup)> + '_ {
+        self.groups.iter().filter(|(_, retained)| !retained.pinned)
+    }
+
     fn age_eviction_key(&self, max_age_passes: u64) -> Option<RetainKey> {
-        self.groups
-            .iter()
+        self.evictable()
             .filter(|(_, retained)| {
                 self.pass_clock.saturating_sub(retained.detached_pass) > max_age_passes
             })
@@ -455,8 +490,7 @@ impl RetentionManager {
     }
 
     fn least_recently_detached_key(&self) -> Option<RetainKey> {
-        self.groups
-            .iter()
+        self.evictable()
             .min_by(|(left_key, left), (right_key, right)| {
                 left.detached_order
                     .cmp(&right.detached_order)
@@ -466,8 +500,7 @@ impl RetentionManager {
     }
 
     fn least_recently_restored_key(&self) -> Option<RetainKey> {
-        self.groups
-            .iter()
+        self.evictable()
             .min_by(|(left_key, left), (right_key, right)| {
                 left.last_restored_order
                     .cmp(&right.last_restored_order)
@@ -478,8 +511,7 @@ impl RetentionManager {
     }
 
     fn largest_first_key(&self) -> Option<RetainKey> {
-        self.groups
-            .iter()
+        self.evictable()
             .max_by(|(left_key, left), (right_key, right)| {
                 left.heap_bytes()
                     .cmp(&right.heap_bytes())
@@ -578,40 +610,5 @@ fn retain_key_cmp(left: &RetainKey, right: &RetainKey) -> Ordering {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn retention_budget_default_is_unbounded() {
-        assert_eq!(RetentionBudget::default(), RetentionBudget::UNBOUNDED);
-        assert_eq!(RetentionBudget::default().max_retained_subtrees, None);
-        assert_eq!(RetentionBudget::default().max_retained_bytes, None);
-        assert_eq!(RetentionBudget::default().max_age_passes, None);
-    }
-
-    #[test]
-    fn retention_policy_default_uses_unbounded_budget_and_detach_lru() {
-        assert_eq!(RetentionPolicy::default(), RetentionPolicy::UNBOUNDED);
-        assert_eq!(
-            RetentionPolicy::default().budget,
-            RetentionBudget::UNBOUNDED
-        );
-        assert_eq!(
-            RetentionPolicy::default().eviction,
-            RetentionEvictionPolicy::LeastRecentlyDetached
-        );
-    }
-
-    #[test]
-    fn retention_budget_can_express_all_limits() {
-        let budget = RetentionBudget {
-            max_retained_subtrees: Some(3),
-            max_retained_bytes: Some(4096),
-            max_age_passes: Some(5),
-        };
-
-        assert_eq!(budget.max_retained_subtrees, Some(3));
-        assert_eq!(budget.max_retained_bytes, Some(4096));
-        assert_eq!(budget.max_age_passes, Some(5));
-    }
-}
+#[path = "tests/retention_tests.rs"]
+mod tests;

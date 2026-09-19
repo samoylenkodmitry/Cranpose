@@ -22,7 +22,11 @@ impl SlotWriteSessionState {
     }
 
     pub(in crate::slot) fn preview_group_key(&mut self, seed: GroupKeySeed) -> GroupKey {
-        let static_key = self.mix_branch_fold(seed.static_key);
+        let static_key = if seed.exact {
+            seed.static_key
+        } else {
+            self.mix_branch_fold(seed.static_key)
+        };
         let ordinal = if seed.explicit_key.is_some() {
             0
         } else {

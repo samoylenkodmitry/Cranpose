@@ -108,6 +108,12 @@ mod host_environment;
 #[cfg(all(feature = "ios", target_os = "ios"))]
 mod ios_host;
 mod native_window;
+#[cfg(all(
+    feature = "desktop-shell",
+    feature = "renderer-wgpu",
+    not(target_arch = "wasm32")
+))]
+mod window_node;
 /// The activity handle `NativeActivity` hands to the entry point. Re-exported so
 /// an application declares its entry point with [`android_main!`] and never
 /// depends on `android_activity` for a parameter type.
@@ -133,9 +139,8 @@ pub use cranpose_render_common::font_source::{
 };
 pub use host_environment::{host_density, system_font_directory};
 pub use native_window::{
-    Window, WindowAttachPolicy, WindowConfig, WindowGroup, WindowId, WindowModifierExt,
-    WindowMoveMode, WindowNode, WindowResizeDirection, WindowState,
-    current_native_window_surface_origin, rememberWindowState,
+    WindowAttachPolicy, WindowConfig, WindowFocus, WindowModifierExt, WindowMoveMode,
+    WindowResizeDirection, WindowState, rememberWindowState, rememberWindowStateAt,
 };
 /// Brings in what this crate's build script declared.
 ///
@@ -195,9 +200,9 @@ pub use cranpose_capabilities as capabilities;
 pub use cranpose_core::{
     CoroutineScope, DisposableEffect, DisposableEffectResult, DisposableEffectScope,
     LaunchedEffect, LaunchedEffectAsync, LaunchedEffectScope, MutableState, SnapshotStateList,
-    SnapshotStateMap, State, delay, interval, key, launchBlocking, mutableStateList,
-    mutableStateListOf, mutableStateMap, mutableStateMapOf, mutableStateOf, produceState, remember,
-    rememberCoroutineScope, rememberKeyed, rememberMutableStateOf,
+    SnapshotStateMap, State, delay, forget_movable, interval, key, launchBlocking, movable,
+    mutableStateList, mutableStateListOf, mutableStateMap, mutableStateMapOf, mutableStateOf,
+    produceState, remember, rememberCoroutineScope, rememberKeyed, rememberMutableStateOf,
     rememberMutableStateOfNeverEqual, rememberUpdatedState,
 };
 /// Liquid UI — the first-party glass component library
@@ -406,9 +411,9 @@ pub mod prelude {
     pub use cranpose_core::{
         CoroutineScope, DisposableEffect, DisposableEffectResult, DisposableEffectScope,
         LaunchedEffect, LaunchedEffectAsync, LaunchedEffectScope, MutableState, SnapshotStateList,
-        SnapshotStateMap, State, delay, interval, key, launchBlocking, mutableStateList,
-        mutableStateListOf, mutableStateMap, mutableStateMapOf, mutableStateOf, produceState,
-        remember, rememberCoroutineScope, rememberKeyed, rememberMutableStateOf,
+        SnapshotStateMap, State, delay, forget_movable, interval, key, launchBlocking, movable,
+        mutableStateList, mutableStateListOf, mutableStateMap, mutableStateMapOf, mutableStateOf,
+        produceState, remember, rememberCoroutineScope, rememberKeyed, rememberMutableStateOf,
         rememberMutableStateOfNeverEqual, rememberUpdatedState,
     };
     pub use cranpose_services::*;
@@ -420,9 +425,9 @@ pub mod prelude {
         AndroidHostWindowState, rememberAndroidHostWindowState,
     };
     pub use crate::{
-        AndroidOverlayWindowOptions, AppLauncher, AppSettings, Window, WindowAttachPolicy,
-        WindowConfig, WindowGroup, WindowId, WindowModifierExt, WindowMoveMode, WindowNode,
-        WindowResizeDirection, WindowState, rememberWindowState,
+        AndroidOverlayWindowOptions, AppLauncher, AppSettings, WindowAttachPolicy, WindowConfig,
+        WindowModifierExt, WindowMoveMode, WindowResizeDirection, WindowState, rememberWindowState,
+        rememberWindowStateAt,
     };
 }
 
@@ -638,12 +643,6 @@ mod web_drop;
 /// Development frame pacing and FPS statistics types.
 #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
 pub use cranpose_app_shell::{DevOptions, FpsStats, FramePacingMode};
-/// Pipelines the renderer has built since this process started.
-///
-/// Every one of these ran the backend's shader compiler. A robot test that
-/// watches this across an interaction is asserting that the interaction
-/// compiled nothing, which holds whatever the driver's own caches made a
-/// compile cost on the machine running it.
 #[cfg(all(
     feature = "desktop-shell",
     feature = "robot",

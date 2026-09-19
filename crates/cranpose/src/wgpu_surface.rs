@@ -58,15 +58,17 @@ pub(crate) fn present_initial_placeholder_frame(
     queue: &wgpu::Queue,
     format: wgpu::TextureFormat,
     context: &str,
-) {
-    if let SurfaceFrame::Ready(frame) = current_surface_texture(surface, context) {
-        let view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
-            format: Some(format.remove_srgb_suffix()),
-            ..Default::default()
-        });
-        cranpose_render_wgpu::clear_to_default_background(device, queue, &view);
-        frame.present();
-    }
+) -> bool {
+    let SurfaceFrame::Ready(frame) = current_surface_texture(surface, context) else {
+        return false;
+    };
+    let view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
+        format: Some(format.remove_srgb_suffix()),
+        ..Default::default()
+    });
+    cranpose_render_wgpu::clear_to_default_background(device, queue, &view);
+    frame.present();
+    true
 }
 
 pub(crate) fn surface_present_required(
@@ -78,14 +80,5 @@ pub(crate) fn surface_present_required(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::surface_present_required;
-
-    #[test]
-    fn present_is_required_until_surface_is_clean() {
-        assert!(surface_present_required(true, false, false));
-        assert!(surface_present_required(false, true, false));
-        assert!(surface_present_required(false, false, true));
-        assert!(!surface_present_required(false, false, false));
-    }
-}
+#[path = "tests/wgpu_surface_tests.rs"]
+mod tests;

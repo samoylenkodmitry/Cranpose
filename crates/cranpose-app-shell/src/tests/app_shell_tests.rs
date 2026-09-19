@@ -28,7 +28,7 @@ use cranpose_ui_graphics::{
 
 use super::*;
 
-fn test_guard() -> MutexGuard<'static, ()> {
+pub(super) fn test_guard() -> MutexGuard<'static, ()> {
     static TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     match TEST_LOCK.get_or_init(|| Mutex::new(())).lock() {
         Ok(guard) => guard,
@@ -928,6 +928,7 @@ fn renderer_warmup_waits_until_no_animation_frame_is_pending() {
 
     shell.update();
     shell
+        .app
         .runtime
         .runtime_handle()
         .register_frame_callback(|_| {});
@@ -953,7 +954,7 @@ fn idle_ui_task_wakes_for_an_update_without_scheduling_a_frame() {
     );
 
     shell.update();
-    shell.runtime.runtime_handle().post_ui(|| {});
+    shell.app.runtime.runtime_handle().post_ui(|| {});
 
     let pending = shell.frame_schedule();
     assert!(pending.needs_update, "queued UI work must wake the shell");
@@ -1475,7 +1476,7 @@ impl Renderer for CountingRenderer {
     }
 }
 
-struct ScopedUpdateCountingRenderer {
+pub(super) struct ScopedUpdateCountingRenderer {
     scene: cranpose_render_common::graph_scene::Scene,
     rebuilds: Rc<Cell<usize>>,
     updates: Rc<Cell<usize>>,
@@ -1492,7 +1493,7 @@ impl ScopedUpdateCountingRenderer {
         Self::with_visual_updates(rebuilds, updates, Rc::new(Cell::new(0)), last_dirty_nodes)
     }
 
-    fn with_visual_updates(
+    pub(super) fn with_visual_updates(
         rebuilds: Rc<Cell<usize>>,
         updates: Rc<Cell<usize>>,
         visual_updates: Rc<Cell<usize>>,
@@ -1605,7 +1606,7 @@ impl Renderer for ScopedUpdateCountingRenderer {
 }
 
 #[derive(Default)]
-struct HitGraphRenderer {
+pub(super) struct HitGraphRenderer {
     scene: cranpose_render_common::graph_scene::Scene,
 }
 
@@ -2396,7 +2397,7 @@ fn pointer_driven_graphics_layer_point_app(position_state: cranpose_core::Mutabl
 }
 
 #[derive(Default)]
-struct TextFieldDispatchProbe {
+pub(super) struct TextFieldDispatchProbe {
     pasted_text: RefCell<Option<String>>,
     cut_in_event_handler: Cell<bool>,
     cut_in_applied_snapshot: Cell<bool>,
@@ -2508,8 +2509,8 @@ fn layout_recovers_after_tab_switching_updates() {
 }
 
 #[derive(Default)]
-struct SoftKeyboardProbe {
-    calls: RefCell<Vec<&'static str>>,
+pub(super) struct SoftKeyboardProbe {
+    pub(super) calls: RefCell<Vec<&'static str>>,
 }
 
 impl cranpose_ui::PlatformTextInputHandler for SoftKeyboardProbe {
@@ -2922,18 +2923,18 @@ fn pending_layout_request_skips_clean_tree_without_forcing_measure() {
         );
     });
 
-    shell.scene_dirty = false;
-    shell.layout_requested = true;
-    shell.force_layout_pass = false;
+    shell.surfaces[0].scene_dirty = false;
+    shell.app.layout_requested = true;
+    shell.app.force_layout_pass = false;
 
     shell.run_layout_phase();
 
     assert!(
-        !shell.scene_dirty,
+        !shell.surfaces[0].scene_dirty,
         "clean trees should not trigger a fresh layout pass when the request is not forced",
     );
-    assert!(!shell.layout_requested);
-    assert!(!shell.force_layout_pass);
+    assert!(!shell.app.layout_requested);
+    assert!(!shell.app.force_layout_pass);
 }
 
 #[test]
@@ -3942,7 +3943,7 @@ fn draw_repass_updates_render_data_without_layout() {
         shell.layout_tree().is_some(),
         "layout tree should be available when a caller requests a snapshot"
     );
-    let initial_scene = shell
+    let initial_scene = shell.surfaces[0]
         .renderer
         .last_scene
         .as_ref()
@@ -3957,20 +3958,21 @@ fn draw_repass_updates_render_data_without_layout() {
         .expect("width state should be captured");
     width_state.set(120.0);
 
-    let app_context = Rc::clone(&shell.app_context);
+    let app_context = Rc::clone(&shell.app.app_context);
     app_context.enter(|| {
         shell
+            .app
             .composition
             .process_invalid_scopes()
             .expect("recompose after width change");
     });
     shell.run_render_phase();
     assert!(
-        shell.layout_tree.is_some(),
+        shell.surfaces[0].layout_tree.is_some(),
         "draw-only refresh should keep the retained layout tree available"
     );
 
-    let updated_scene = shell
+    let updated_scene = shell.surfaces[0]
         .renderer
         .last_scene
         .as_ref()
@@ -4000,7 +4002,7 @@ fn draw_state_reads_schedule_draw_repass_without_composition_read() {
     });
 
     shell.update();
-    let initial_scene = shell
+    let initial_scene = shell.surfaces[0]
         .renderer
         .last_scene
         .as_ref()
@@ -4017,7 +4019,7 @@ fn draw_state_reads_schedule_draw_repass_without_composition_read() {
 
     shell.update();
 
-    let updated_scene = shell
+    let updated_scene = shell.surfaces[0]
         .renderer
         .last_scene
         .as_ref()
@@ -4073,13 +4075,17 @@ fn draw_only_repass_uses_scoped_renderer_update() {
         .as_ref()
         .cloned()
         .expect("width state should be captured");
-    assert!(!shell.retained_visual_nodes.is_empty());
-    shell.retained_visual_nodes.insert(usize::MAX);
+    assert!(!shell.surfaces[0].retained_visual_nodes.is_empty());
+    shell.surfaces[0].retained_visual_nodes.insert(usize::MAX);
     width_state.set(120.0);
 
     shell.update();
-    assert!(!shell.retained_visual_nodes.contains(&usize::MAX));
-    assert!(!shell.retained_visual_nodes.is_empty());
+    assert!(
+        !shell.surfaces[0]
+            .retained_visual_nodes
+            .contains(&usize::MAX)
+    );
+    assert!(!shell.surfaces[0].retained_visual_nodes.is_empty());
 
     assert_eq!(
         updates.get(),
@@ -4141,7 +4147,7 @@ fn draw_only_scene_dirty_repass_uses_visual_scoped_renderer_update() {
         .cloned()
         .expect("width state should be captured");
     width_state.set(120.0);
-    shell.scene_dirty = true;
+    shell.surfaces[0].scene_dirty = true;
 
     shell.update();
 
@@ -4357,7 +4363,7 @@ fn lazy_column_scroll_repass_uses_scoped_renderer_update_without_stale_rows() {
     let list_state = APP_SHELL_LAZY_LIST_STATE
         .with(|slot| *slot.borrow())
         .expect("lazy scroll probe should expose its list state");
-    let initial_labels = graph_scene_text_values(shell.renderer.scene());
+    let initial_labels = graph_scene_text_values(shell.surfaces[0].renderer.scene());
     let initial_rows = row_label_indices(&initial_labels);
     assert!(
         initial_rows.contains(&0),
@@ -4393,7 +4399,7 @@ fn lazy_column_scroll_repass_uses_scoped_renderer_update_without_stale_rows() {
     }
 
     let first_visible = list_state.first_visible_item_index_non_reactive();
-    let updated_labels = graph_scene_text_values(shell.renderer.scene());
+    let updated_labels = graph_scene_text_values(shell.surfaces[0].renderer.scene());
     let updated_rows = row_label_indices(&updated_labels);
     assert!(
         first_visible > 0,
@@ -5076,7 +5082,7 @@ fn size_reactive_topology_switches_on_resize_and_settles() {
             break;
         }
     }
-    let labels = graph_scene_text_values(shell.renderer.scene());
+    let labels = graph_scene_text_values(shell.surfaces[0].renderer.scene());
     assert!(
         labels.iter().any(|l| l == "compact") && !labels.iter().any(|l| l == "wide"),
         "at 320dp the size-reactive topology must be compact: {labels:?}"
@@ -5088,17 +5094,17 @@ fn size_reactive_topology_switches_on_resize_and_settles() {
     for _ in 0..5 {
         shell.update();
         settle_frames += 1;
-        if !shell.needs_redraw() && !shell.composition.should_recompose() {
+        if !shell.needs_redraw() && !shell.app.composition.should_recompose() {
             break;
         }
     }
     assert!(
-        !shell.needs_redraw() && !shell.composition.should_recompose(),
+        !shell.needs_redraw() && !shell.app.composition.should_recompose(),
         "a single resize must settle within 5 frames; a pending recomposition \
          here is the unconditional-write feedback loop (a size write during \
          measure that is not equality-gated recomposes forever)"
     );
-    let labels = graph_scene_text_values(shell.renderer.scene());
+    let labels = graph_scene_text_values(shell.surfaces[0].renderer.scene());
     assert!(
         labels.iter().any(|l| l == "wide") && !labels.iter().any(|l| l == "compact"),
         "crossing 700dp must switch the composed topology to wide within \
@@ -5224,7 +5230,7 @@ fn a_scroll_measure_repass_does_not_recompose_a_subcompose_slot_that_read_no_scr
     shell.set_viewport(320.0, 480.0);
     for _ in 0..5 {
         shell.update();
-        if !shell.needs_redraw() && !shell.composition.should_recompose() {
+        if !shell.needs_redraw() && !shell.app.composition.should_recompose() {
             break;
         }
     }
@@ -5343,7 +5349,7 @@ fn a_state_write_reaches_slot_content_without_any_concurrent_layout_dirt() {
     shell.set_viewport(320.0, 240.0);
     for _ in 0..5 {
         shell.update();
-        if !shell.needs_redraw() && !shell.composition.should_recompose() {
+        if !shell.needs_redraw() && !shell.app.composition.should_recompose() {
             break;
         }
     }
@@ -5358,7 +5364,7 @@ fn a_state_write_reaches_slot_content_without_any_concurrent_layout_dirt() {
         .expect("probe must expose its state");
     value.set(2);
     assert!(
-        shell.composition.should_recompose(),
+        shell.app.composition.should_recompose(),
         "the load-bearing claim of slot retention: a write to state read only \
          inside a measure-time slot composition must invalidate that slot's \
          recompose scope BEFORE any measure pass runs. Slot reads ride \
@@ -5369,7 +5375,7 @@ fn a_state_write_reaches_slot_content_without_any_concurrent_layout_dirt() {
     );
     for _ in 0..5 {
         shell.update();
-        if !shell.needs_redraw() && !shell.composition.should_recompose() {
+        if !shell.needs_redraw() && !shell.app.composition.should_recompose() {
             break;
         }
     }
@@ -5470,7 +5476,7 @@ fn a_slot_reading_a_changed_cell_outside_the_key_panics_in_debug_instead_of_goin
     shell.set_viewport(320.0, 480.0);
     for _ in 0..5 {
         shell.update();
-        if !shell.needs_redraw() && !shell.composition.should_recompose() {
+        if !shell.needs_redraw() && !shell.app.composition.should_recompose() {
             break;
         }
     }
@@ -5555,7 +5561,7 @@ fn a_measure_computed_capture_reaches_slot_content_through_the_subcompose_key() 
     shell.set_viewport(320.0, 240.0);
     for _ in 0..5 {
         shell.update();
-        if !shell.needs_redraw() && !shell.composition.should_recompose() {
+        if !shell.needs_redraw() && !shell.app.composition.should_recompose() {
             break;
         }
     }
@@ -5571,7 +5577,7 @@ fn a_measure_computed_capture_reaches_slot_content_through_the_subcompose_key() 
     height.set(72.0);
     for _ in 0..5 {
         shell.update();
-        if !shell.needs_redraw() && !shell.composition.should_recompose() {
+        if !shell.needs_redraw() && !shell.app.composition.should_recompose() {
             break;
         }
     }
@@ -5654,7 +5660,7 @@ fn a_horizontal_scroll_inside_a_lazy_item_still_moves_when_its_measurement_is_ca
     shell.set_viewport(320.0, 480.0);
     for _ in 0..5 {
         shell.update();
-        if !shell.needs_redraw() && !shell.composition.should_recompose() {
+        if !shell.needs_redraw() && !shell.app.composition.should_recompose() {
             break;
         }
     }
@@ -5672,7 +5678,7 @@ fn a_horizontal_scroll_inside_a_lazy_item_still_moves_when_its_measurement_is_ca
     shell.app_context().clone().enter(|| inner.scroll_to(80.0));
     for _ in 0..4 {
         shell.update();
-        if !shell.needs_redraw() && !shell.composition.should_recompose() {
+        if !shell.needs_redraw() && !shell.app.composition.should_recompose() {
             break;
         }
     }
@@ -5787,7 +5793,7 @@ fn sibling_in_an_ordinary_column_moves_in_the_scene_when_a_row_grows() {
         .with(|slot| *slot.borrow())
         .expect("grower probe should expose its state");
     let resting_sibling_y =
-        graph_scene_solid_rect_y(shell.renderer.scene(), ORDINARY_SIBLING_COLOR)
+        graph_scene_solid_rect_y(shell.surfaces[0].renderer.scene(), ORDINARY_SIBLING_COLOR)
             .expect("resting scene should contain the sibling box");
 
     rebuilds.set(0);
@@ -5796,8 +5802,9 @@ fn sibling_in_an_ordinary_column_moves_in_the_scene_when_a_row_grows() {
     grown.set_value(true);
     shell.update();
 
-    let moved_sibling_y = graph_scene_solid_rect_y(shell.renderer.scene(), ORDINARY_SIBLING_COLOR)
-        .expect("grown scene should still contain the sibling box");
+    let moved_sibling_y =
+        graph_scene_solid_rect_y(shell.surfaces[0].renderer.scene(), ORDINARY_SIBLING_COLOR)
+            .expect("grown scene should still contain the sibling box");
     assert!(
         moved_sibling_y >= resting_sibling_y + 39.0,
         "an ordinary column's sibling must move in the SCENE when the row \
@@ -5869,7 +5876,7 @@ fn a_nested_lazy_list_moves_in_the_scene_when_the_row_above_grows() {
     let grown = APP_SHELL_GROWER_STATE
         .with(|slot| *slot.borrow())
         .expect("grower probe should expose its state");
-    let resting_nested_y = graph_scene_text_y(shell.renderer.scene(), "nested 0")
+    let resting_nested_y = graph_scene_text_y(shell.surfaces[0].renderer.scene(), "nested 0")
         .expect("resting scene should contain the nested list's first row");
 
     rebuilds.set(0);
@@ -5878,7 +5885,7 @@ fn a_nested_lazy_list_moves_in_the_scene_when_the_row_above_grows() {
     grown.set_value(true);
     shell.update();
 
-    let moved_nested_y = graph_scene_text_y(shell.renderer.scene(), "nested 0")
+    let moved_nested_y = graph_scene_text_y(shell.surfaces[0].renderer.scene(), "nested 0")
         .expect("grown scene should still contain the nested list's first row");
     assert!(
         moved_nested_y >= resting_nested_y + 39.0,
@@ -5957,7 +5964,7 @@ fn sibling_moved_by_another_rows_growth_reaches_the_scoped_scene_update() {
     let expanded = APP_SHELL_EXPANSION_STATE
         .with(|slot| *slot.borrow())
         .expect("expansion probe should expose its state");
-    let resting_sibling_y = graph_scene_text_y(shell.renderer.scene(), "sibling")
+    let resting_sibling_y = graph_scene_text_y(shell.surfaces[0].renderer.scene(), "sibling")
         .expect("resting scene should contain the sibling row");
 
     rebuilds.set(0);
@@ -5966,9 +5973,9 @@ fn sibling_moved_by_another_rows_growth_reaches_the_scoped_scene_update() {
     expanded.set_value(true);
     shell.update();
 
-    let strip_y = graph_scene_text_y(shell.renderer.scene(), "strip")
+    let strip_y = graph_scene_text_y(shell.surfaces[0].renderer.scene(), "strip")
         .expect("expanded scene should contain the strip");
-    let moved_sibling_y = graph_scene_text_y(shell.renderer.scene(), "sibling")
+    let moved_sibling_y = graph_scene_text_y(shell.surfaces[0].renderer.scene(), "sibling")
         .expect("expanded scene should still contain the sibling row");
     assert!(
         moved_sibling_y > resting_sibling_y + 1.0,
@@ -6038,7 +6045,7 @@ fn absolute_offset_text_rows_redraw_after_state_only_change() {
     });
 
     shell.update();
-    let initial_scene = shell
+    let initial_scene = shell.surfaces[0]
         .renderer
         .last_scene
         .as_ref()
@@ -6055,7 +6062,7 @@ fn absolute_offset_text_rows_redraw_after_state_only_change() {
     start.set(30);
     shell.update();
 
-    let updated_scene = shell
+    let updated_scene = shell.surfaces[0]
         .renderer
         .last_scene
         .as_ref()
@@ -6090,7 +6097,7 @@ fn app_shell_new_drains_root_render_requests_before_first_frame() {
         "AppShell::new must replay pending root renders before publishing the first frame"
     );
     assert!(
-        !shell.composition.take_root_render_request(),
+        !shell.app.composition.take_root_render_request(),
         "initial shell setup should not leave a pending root render request behind"
     );
 
@@ -6266,7 +6273,8 @@ fn dev_overlay_reuses_text_inside_refresh_window_and_updates_after_it() {
     );
 
     overlay_texts.borrow_mut().clear();
-    shell.dev_overlay_last_refresh = Some(web_time::Instant::now() - Duration::from_millis(300));
+    shell.surfaces[0].dev_overlay_last_refresh =
+        Some(web_time::Instant::now() - Duration::from_millis(300));
     shell.debug_enter_app_context(cranpose_ui::request_render_invalidation);
     shell.update();
     let fast_overlay = overlay_texts
@@ -6355,15 +6363,20 @@ fn pointer_invalidation_without_scene_changes_skips_scene_rebuild() {
     shell.update();
     rebuilds.set(0);
 
-    let root = shell.composition.root().expect("expected composition root");
+    let root = shell
+        .app
+        .composition
+        .root()
+        .expect("expected composition root");
     shell
+        .app
         .composition
         .applier_mut()
         .with_node::<LayoutNode, _>(root, |node| {
             node.mark_needs_pointer_pass();
         })
         .expect("expected layout root node");
-    let app_context = Rc::clone(&shell.app_context);
+    let app_context = Rc::clone(&shell.app.app_context);
     app_context.enter(|| {
         cranpose_ui::schedule_pointer_repass(root);
         cranpose_ui::request_pointer_invalidation();
@@ -6377,6 +6390,7 @@ fn pointer_invalidation_without_scene_changes_skips_scene_rebuild() {
         "pure pointer invalidation should refresh dispatch state without rebuilding the visual scene"
     );
     let needs_pointer_pass = shell
+        .app
         .composition
         .applier_mut()
         .with_node::<LayoutNode, _>(root, |node| node.needs_pointer_pass())
@@ -6401,15 +6415,20 @@ fn focus_invalidation_without_scene_changes_skips_rebuild() {
     shell.update();
     rebuilds.set(0);
 
-    let root = shell.composition.root().expect("expected composition root");
+    let root = shell
+        .app
+        .composition
+        .root()
+        .expect("expected composition root");
     shell
+        .app
         .composition
         .applier_mut()
         .with_node::<LayoutNode, _>(root, |node| {
             node.mark_needs_focus_sync();
         })
         .expect("expected layout root node");
-    let app_context = Rc::clone(&shell.app_context);
+    let app_context = Rc::clone(&shell.app.app_context);
     app_context.enter(|| {
         cranpose_ui::schedule_focus_invalidation(root);
         cranpose_ui::request_focus_invalidation();
@@ -6423,6 +6442,7 @@ fn focus_invalidation_without_scene_changes_skips_rebuild() {
         "pure focus invalidation should reuse the retained scene"
     );
     let needs_focus_sync = shell
+        .app
         .composition
         .applier_mut()
         .with_node::<LayoutNode, _>(root, |node| node.needs_focus_sync())
@@ -6520,7 +6540,7 @@ fn layout_tree_snapshot_is_built_on_demand() {
     let mut shell = AppShell::new(TestRenderer::default(), root_key, semantics_content);
 
     assert!(
-        shell.layout_tree.is_none(),
+        shell.surfaces[0].layout_tree.is_none(),
         "layout should render from retained node state without eagerly caching a LayoutTree"
     );
     assert!(
@@ -6528,7 +6548,7 @@ fn layout_tree_snapshot_is_built_on_demand() {
         "debug and robot callers should still be able to request a LayoutTree snapshot"
     );
     assert!(
-        shell.layout_tree.is_some(),
+        shell.surfaces[0].layout_tree.is_some(),
         "requested LayoutTree snapshot should be cached until the next layout pass"
     );
 }
@@ -6791,7 +6811,7 @@ fn draw_refresh_scope_only_contains_dirty_ancestors() {
 
     let dirty_nodes = HashSet::from([left_leaf]);
     let refresh_scope = {
-        let mut applier = shell.composition.applier_mut();
+        let mut applier = shell.app.composition.applier_mut();
         build_draw_refresh_scope(&mut applier, &dirty_nodes)
     };
 
@@ -6814,14 +6834,14 @@ fn layout_bounds_index_matches_cached_layout_tree() {
         "query helpers should be able to request a measured layout tree"
     );
 
-    let cached_tree_ptr = shell
+    let cached_tree_ptr = shell.surfaces[0]
         .layout_tree
         .as_ref()
         .map(|tree| tree as *const cranpose_ui::LayoutTree)
         .expect("expected retained layout tree");
 
     let (root_id, root_bounds, left_leaf_id, left_leaf_bounds, right_id, right_bounds) = {
-        let layout_tree = shell
+        let layout_tree = shell.surfaces[0]
             .layout_tree
             .as_ref()
             .expect("expected cached layout tree");
@@ -6854,7 +6874,7 @@ fn layout_bounds_index_matches_cached_layout_tree() {
         Some((root_bounds.2, root_bounds.3))
     );
     assert_eq!(
-        shell
+        shell.surfaces[0]
             .layout_tree
             .as_ref()
             .map(|tree| tree as *const cranpose_ui::LayoutTree),
@@ -6868,7 +6888,7 @@ fn layout_bounds_index_matches_cached_layout_tree() {
     );
     assert_eq!(shell.node_layout_bounds(right_id), Some(right_bounds));
     assert_eq!(
-        shell
+        shell.surfaces[0]
             .layout_tree
             .as_ref()
             .map(|tree| tree as *const cranpose_ui::LayoutTree),
@@ -8654,7 +8674,14 @@ fn canvas_pressed_state_draws_on_pointer_down_before_release() {
     );
 
     shell.update();
-    let colors = graph_rect_colors(shell.renderer.scene.graph.as_ref().expect("initial graph"));
+    let colors = graph_rect_colors(
+        shell.surfaces[0]
+            .renderer
+            .scene
+            .graph
+            .as_ref()
+            .expect("initial graph"),
+    );
     assert!(
         colors.contains(&PRESSABLE_CANVAS_NORMAL_COLOR),
         "canvas should draw the normal color before any press: {colors:?}"
@@ -8675,7 +8702,14 @@ fn canvas_pressed_state_draws_on_pointer_down_before_release() {
     );
     shell.update();
 
-    let colors = graph_rect_colors(shell.renderer.scene.graph.as_ref().expect("pressed graph"));
+    let colors = graph_rect_colors(
+        shell.surfaces[0]
+            .renderer
+            .scene
+            .graph
+            .as_ref()
+            .expect("pressed graph"),
+    );
     assert!(
         colors.contains(&PRESSABLE_CANVAS_PRESSED_COLOR),
         "canvas must draw the pressed color after pointer down, before release: {colors:?}"
@@ -8687,7 +8721,14 @@ fn canvas_pressed_state_draws_on_pointer_down_before_release() {
     );
     shell.update();
 
-    let colors = graph_rect_colors(shell.renderer.scene.graph.as_ref().expect("released graph"));
+    let colors = graph_rect_colors(
+        shell.surfaces[0]
+            .renderer
+            .scene
+            .graph
+            .as_ref()
+            .expect("released graph"),
+    );
     assert!(
         colors.contains(&PRESSABLE_CANVAS_NORMAL_COLOR),
         "canvas should draw the normal color again after release: {colors:?}"
@@ -10654,6 +10695,46 @@ fn cancelling_a_gesture_restores_the_default_pointer() {
     assert_eq!(shell.take_pointer_icon_change(), Some(PointerIcon::POINTER));
 
     shell.cancel_gesture();
+
+    assert_eq!(shell.take_pointer_icon_change(), Some(PointerIcon::DEFAULT));
+}
+
+#[test]
+fn a_held_press_outlives_the_pointer_leaving_the_window() {
+    let _guard = test_guard();
+    let hits = Rc::new(RefCell::new(vec![PointerIconHitTarget {
+        node_id: 1,
+        pointer_icon: Some(PointerIcon::POINTER),
+    }]));
+    let mut shell = pointer_icon_shell(hits);
+
+    shell.set_cursor(5.0, 5.0);
+    assert_eq!(shell.take_pointer_icon_change(), Some(PointerIcon::POINTER));
+    shell.pointer_pressed();
+
+    shell.cancel_gesture_unless_pressed();
+
+    assert_eq!(
+        shell.take_pointer_icon_change(),
+        None,
+        "a window another one is drawn over, or a drag carried past an edge, \
+         still owns the press and still receives its release"
+    );
+}
+
+#[test]
+fn an_idle_pointer_leaving_the_window_ends_the_gesture() {
+    let _guard = test_guard();
+    let hits = Rc::new(RefCell::new(vec![PointerIconHitTarget {
+        node_id: 1,
+        pointer_icon: Some(PointerIcon::POINTER),
+    }]));
+    let mut shell = pointer_icon_shell(hits);
+
+    shell.set_cursor(5.0, 5.0);
+    assert_eq!(shell.take_pointer_icon_change(), Some(PointerIcon::POINTER));
+
+    shell.cancel_gesture_unless_pressed();
 
     assert_eq!(shell.take_pointer_icon_change(), Some(PointerIcon::DEFAULT));
 }

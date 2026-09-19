@@ -27,8 +27,6 @@ fn cranpose_manifest(service: &str) -> String {
     format!("crates/cranpose/android/manifests/{service}.xml")
 }
 
-/// The variant name a service carries in `Service`, from the name the plugin
-/// knows it by: `photo-library` is `PhotoLibrary`.
 fn pascal(service: &str) -> String {
     service
         .split('-')
@@ -588,6 +586,7 @@ fn render_common_package_embeds_crate_owned_text_assets() {
 #[test]
 fn app_shell_frame_schedule_targets_platform_frame_driver() {
     let source = workspace_source("crates/cranpose-app-shell/src/lib.rs");
+    let surface = workspace_source("crates/cranpose-app-shell/src/surface.rs");
 
     assert!(
         source.contains("pub trait PlatformFrameDriver")
@@ -599,11 +598,13 @@ fn app_shell_frame_schedule_targets_platform_frame_driver() {
             && source.contains("pub fn apply_to<D>(self, driver: &D)")
             && source.contains("pub fn schedule<D>(&self, schedule: FrameSchedule, driver: &D)")
             && source.contains("pub fn schedule_platform_frame<D>(&self, driver: &D)")
-            && source.contains("self.frame_scheduler.schedule(schedule, driver)")
+            && source.contains("self.surfaces[0].frame_scheduler.schedule(schedule, driver)")
+            && surface.contains("pub fn schedule_platform_frame<D>(&self, driver: &D)")
+            && surface.contains("self.surface().frame_scheduler.schedule(schedule, driver)")
             && source.contains("driver.request_frame()")
             && source.contains("driver.request_wake_at(deadline)")
             && source.contains("driver.clear_wake()"),
-        "FrameSchedule should be interpreted through the AppShell-owned scheduler and platform driver contract"
+        "FrameSchedule should be interpreted through the scheduler each surface owns and the platform driver contract"
     );
 }
 
@@ -626,7 +627,7 @@ fn desktop_no_vsync_chains_dirty_presented_frames_only() {
     );
     assert!(
         source.contains(
-            "native.frame_interval(),\n            native.app.frame_schedule().needs_frame"
+            "if should_chain_no_vsync_redraw(native.frame_interval(app.frame_pacing_mode()), needs_frame)"
         ) && source.contains("native.window.request_redraw();"),
         "native desktop frames should use the same no-vsync redraw chaining rule"
     );
@@ -648,13 +649,13 @@ fn desktop_renderer_warmup_reaches_primary_and_native_surfaces() {
 
     assert!(
         source.contains(
-            "surface_present_required(\n            native.surface_dirty,\n            update_result.visual_changed,\n            native.app.needs_redraw(),"
+            "surface_present_required(native.surface_dirty, frame_owed, surface.needs_redraw())"
         ),
         "native windows must still render when renderer-side warmup is the only pending frame work"
     );
     assert!(
         source.contains(
-            "surface_present_required(\n                    primary_surface_dirty_before_update || robot_surface_dirty_before_update,\n                    update_result.visual_changed,\n                    app.needs_redraw(),"
+            "surface_present_required(\n                    primary_surface_dirty_before_update || robot_surface_dirty_before_update,\n                    frame_owed,\n                    app.needs_redraw(),"
         ),
         "primary windows must not skip a redraw requested only by renderer-side warmup"
     );
@@ -2357,9 +2358,6 @@ fn source_has_unsafe_boundary_escape(source: &str) -> bool {
     })
 }
 
-/// Blanks out string and character literals so a keyword spelled inside one is
-/// not read as code. A syntax highlighter's keyword table lists `"unsafe"`
-/// without going anywhere near an FFI boundary.
 fn strip_quoted_spans(line: &str) -> String {
     let bytes = line.as_bytes();
     let mut out = String::with_capacity(line.len());

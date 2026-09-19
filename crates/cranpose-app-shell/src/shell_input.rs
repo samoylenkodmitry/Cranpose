@@ -2,7 +2,7 @@ use cranpose_ui::FocusDirection;
 
 use super::*;
 
-impl<R> AppShell<R>
+impl<R> SurfaceMut<'_, R>
 where
     R: Renderer,
     R::Error: Debug,
@@ -14,10 +14,15 @@ where
         global_position: Point,
         event_time: PointerEventTime,
     ) -> PointerEvent {
+        let screen_position = self.surface().screen_origin.map(|origin| Point {
+            x: origin.x + global_position.x,
+            y: origin.y + global_position.y,
+        });
         let mut event = PointerEvent::new(kind, position, global_position)
             .with_time_ms(event_time.platform_time_ms)
-            .with_animation_time_nanos(event_time.animation_time_nanos);
-        event.modifiers = self.modifiers;
+            .with_animation_time_nanos(event_time.animation_time_nanos)
+            .with_screen_position(screen_position);
+        event.modifiers = self.shell.app.modifiers;
         event
     }
 
@@ -32,11 +37,11 @@ where
         &self,
         pointer: PointerId,
     ) -> Vec<<<R as Renderer>::Scene as RenderScene>::HitTarget> {
-        let Some(node_ids) = self.hit_path_tracker.dispatch_order(pointer) else {
+        let Some(node_ids) = self.surface().hit_path_tracker.dispatch_order(pointer) else {
             return Vec::new();
         };
 
-        let scene = self.renderer.scene();
+        let scene = self.surface().renderer.scene();
         let targets: Vec<_> = node_ids
             .iter()
             .filter_map(|&id| scene.find_target(id))
@@ -53,7 +58,7 @@ where
     where
         I: IntoIterator<Item = <<R as Renderer>::Scene as RenderScene>::HitTarget>,
     {
-        let mut applier = self.composition.applier_mut();
+        let mut applier = self.shell.app.composition.applier_mut();
         for target in targets {
             let node_id = target.node_id();
             target.dispatch_with_applier(&mut applier, event.clone());
@@ -83,7 +88,7 @@ where
             .collect::<Vec<_>>();
         let targets = crate::hit_path_tracker::dispatch_order_for_paths(&capture_paths)
             .into_iter()
-            .filter_map(|node_id| self.renderer.scene().find_target(node_id))
+            .filter_map(|node_id| self.surface().renderer.scene().find_target(node_id))
             .collect::<Vec<_>>();
 
         self.dispatch_targets(targets, event.clone(), true);
@@ -97,31 +102,12 @@ where
     /// carry the source so consumers can preserve device-specific gesture
     /// details without changing shared pointer UI.
     pub fn set_pointer_source(&mut self, source: PointerSource) {
-        self.pointer_source = source;
+        self.surface_mut().pointer_source = source;
     }
 
     /// The device source of the most recent pointer sample.
     pub fn pointer_source(&self) -> PointerSource {
-        self.pointer_source
-    }
-
-    /// Sets the keyboard modifiers held right now, so the platform's live
-    /// modifier state (winit's `ModifiersChanged`, a DOM event's
-    /// `shiftKey`/`ctrlKey`/`altKey`/`metaKey`) reaches every `PointerEvent`
-    /// the shell dispatches from here on -- the same state the wheel path
-    /// already carries via [`WheelScroll::with_modifiers`](crate::WheelScroll::with_modifiers).
-    /// A platform that never calls this leaves pointer events reporting
-    /// `None` (see [`PointerEvent::modifiers`]) rather than a silently wrong
-    /// "nothing held".
-    pub fn set_modifiers(&mut self, modifiers: Modifiers) {
-        self.modifiers = Some(modifiers);
-    }
-
-    /// The keyboard modifiers most recently set via
-    /// [`set_modifiers`](Self::set_modifiers), or `None` if the platform has
-    /// never reported them.
-    pub fn modifiers(&self) -> Option<Modifiers> {
-        self.modifiers
+        self.surface().pointer_source
     }
 
     pub fn set_cursor(&mut self, x: f32, y: f32) -> bool {
@@ -135,7 +121,7 @@ where
     /// this so gesture velocity is computed from real event times instead of
     /// delivery times.
     pub fn set_cursor_at_time(&mut self, x: f32, y: f32, time_ms: Option<i64>) -> bool {
-        let event_time = self.realtime_pointer_event_time(time_ms);
+        let event_time = self.shell.app.realtime_pointer_event_time(time_ms);
         self.set_cursor_at_event_time(x, y, event_time)
     }
 
@@ -147,10 +133,11 @@ where
         event_time: PointerEventTime,
     ) -> bool {
         let _event_handler = enter_event_handler_scope();
-        let app_context = Rc::clone(&self.app_context);
+        let app_context = Rc::clone(&self.shell.app.app_context);
         let result = app_context.enter(|| {
             run_in_mutable_snapshot(|| self.set_cursor_inner(x, y, event_time)).unwrap_or(false)
         });
+        self.route_drag_and_drop();
         if result {
             self.mark_dirty();
         }
@@ -164,10 +151,10 @@ where
     }
 
     fn set_cursor_inner(&mut self, x: f32, y: f32, event_time: PointerEventTime) -> bool {
-        self.cursor = (x, y);
+        self.surface_mut().cursor = (x, y);
 
-        if self.buttons_pressed != PointerButtons::NONE {
-            if self.hit_path_tracker.has_path(PointerId::PRIMARY) {
+        if self.surface().buttons_pressed != PointerButtons::NONE {
+            if self.surface().hit_path_tracker.has_path(PointerId::PRIMARY) {
                 let targets = self.resolve_gesture_targets(PointerId::PRIMARY);
                 if !targets.is_empty() {
                     let event = self
@@ -177,8 +164,8 @@ where
                             Point { x, y },
                             event_time,
                         )
-                        .with_buttons(self.buttons_pressed)
-                        .with_source(self.pointer_source);
+                        .with_buttons(self.surface().buttons_pressed)
+                        .with_source(self.surface().pointer_source);
                     self.dispatch_targets(targets, event, false);
                     return true;
                 }
@@ -189,41 +176,41 @@ where
             return false;
         }
 
-        let hits = self.renderer.scene().hit_test(x, y);
+        let hits = self.surface().renderer.scene().hit_test(x, y);
         let new_ids: Vec<NodeId> = hits.iter().map(|h| h.node_id()).collect();
 
         let pos = Point { x, y };
-        let previously_hovered = self.hovered_nodes.clone();
+        let previously_hovered = self.surface().hovered_nodes.clone();
         for old_id in previously_hovered {
             if !new_ids.contains(&old_id)
-                && let Some(target) = self.renderer.scene().find_target(old_id)
+                && let Some(target) = self.surface().renderer.scene().find_target(old_id)
             {
                 let exit_event = self
                     .pointer_event(PointerEventKind::Exit, pos, pos, event_time)
-                    .with_buttons(self.buttons_pressed)
-                    .with_source(self.pointer_source);
+                    .with_buttons(self.surface().buttons_pressed)
+                    .with_source(self.surface().pointer_source);
                 self.dispatch_targets(std::iter::once(target), exit_event, false);
             }
         }
 
         for hit in &hits {
-            if !self.hovered_nodes.contains(&hit.node_id()) {
+            if !self.surface().hovered_nodes.contains(&hit.node_id()) {
                 let enter_event = self
                     .pointer_event(PointerEventKind::Enter, pos, pos, event_time)
-                    .with_buttons(self.buttons_pressed)
-                    .with_source(self.pointer_source);
+                    .with_buttons(self.surface().buttons_pressed)
+                    .with_source(self.surface().pointer_source);
                 self.dispatch_targets(std::iter::once(hit.clone()), enter_event, false);
             }
         }
 
-        self.hovered_nodes = new_ids;
+        self.surface_mut().hovered_nodes = new_ids;
         self.apply_hovered_pointer_icon(&hits);
 
         if !hits.is_empty() {
             let event = self
                 .pointer_event(PointerEventKind::Move, pos, pos, event_time)
-                .with_buttons(self.buttons_pressed)
-                .with_source(self.pointer_source);
+                .with_buttons(self.surface().buttons_pressed)
+                .with_source(self.surface().pointer_source);
             self.dispatch_targets(hits, event, true);
             true
         } else {
@@ -238,17 +225,18 @@ where
     /// Like [`pointer_pressed`](Self::pointer_pressed), but carries the
     /// platform input timestamp (milliseconds) of the press sample.
     pub fn pointer_pressed_at_time(&mut self, time_ms: Option<i64>) -> bool {
-        let event_time = self.realtime_pointer_event_time(time_ms);
+        let event_time = self.shell.app.realtime_pointer_event_time(time_ms);
         self.pointer_pressed_at_event_time(event_time)
     }
 
     /// Dispatch primary-button down with an already resolved event timestamp.
     pub fn pointer_pressed_at_event_time(&mut self, event_time: PointerEventTime) -> bool {
-        if self.dev_overlay_press(self.cursor.0, self.cursor.1) {
+        let (cursor_x, cursor_y) = self.surface().cursor;
+        if self.dev_overlay_press(cursor_x, cursor_y) {
             return true;
         }
         let _event_handler = enter_event_handler_scope();
-        let app_context = Rc::clone(&self.app_context);
+        let app_context = Rc::clone(&self.shell.app.app_context);
         let result = app_context.enter(|| {
             run_in_mutable_snapshot(|| self.pointer_pressed_inner(event_time)).unwrap_or(false)
         });
@@ -265,15 +253,20 @@ where
     }
 
     fn pointer_pressed_inner(&mut self, event_time: PointerEventTime) -> bool {
+        self.activate();
         self.note_focus_moved_by_keyboard(false);
-        self.buttons_pressed.insert(PointerButton::Primary);
+        self.surface_mut()
+            .buttons_pressed
+            .insert(PointerButton::Primary);
 
-        let mut hits = self.renderer.scene().hit_test(self.cursor.0, self.cursor.1);
-        if self.pointer_source.is_touch_like()
+        let (cursor_x, cursor_y) = self.surface().cursor;
+        let mut hits = self.surface().renderer.scene().hit_test(cursor_x, cursor_y);
+        if self.surface().pointer_source.is_touch_like()
             && let Some(near) = self
+                .surface()
                 .renderer
                 .scene()
-                .hit_test_near(self.cursor.0, self.cursor.1)
+                .hit_test_near(cursor_x, cursor_y)
             && hits.iter().all(|hit| {
                 hit.node_id() != near.node_id() && near.capture_path().contains(&hit.node_id())
             })
@@ -281,27 +274,30 @@ where
             hits.insert(0, near);
         }
         if hits.is_empty() {
-            self.hit_path_tracker.remove_path(PointerId::PRIMARY);
+            self.surface_mut()
+                .hit_path_tracker
+                .remove_path(PointerId::PRIMARY);
             false
         } else {
             let event = self
                 .pointer_event(
                     PointerEventKind::Down,
                     Point {
-                        x: self.cursor.0,
-                        y: self.cursor.1,
+                        x: self.surface().cursor.0,
+                        y: self.surface().cursor.1,
                     },
                     Point {
-                        x: self.cursor.0,
-                        y: self.cursor.1,
+                        x: self.surface().cursor.0,
+                        y: self.surface().cursor.1,
                     },
                     event_time,
                 )
-                .with_buttons(self.buttons_pressed)
-                .with_source(self.pointer_source);
+                .with_buttons(self.surface().buttons_pressed)
+                .with_source(self.surface().pointer_source);
 
             let mut delivered_capture_paths = Vec::new();
-            let mut applier = self.composition.applier_mut();
+            let (app, surface) = self.parts();
+            let mut applier = app.composition.applier_mut();
             for hit in hits {
                 let node_id = hit.node_id();
                 delivered_capture_paths.push(hit.capture_path());
@@ -318,12 +314,13 @@ where
                 }
             }
 
-            self.hit_path_tracker
+            surface
+                .hit_path_tracker
                 .add_hit_path(PointerId::PRIMARY, delivered_capture_paths);
             log::trace!(
                 target: "cranpose::input",
                 "pointer_pressed_inner cached_hit_path={:?}",
-                self.hit_path_tracker.get_path(PointerId::PRIMARY),
+                surface.hit_path_tracker.get_path(PointerId::PRIMARY),
             );
 
             true
@@ -359,7 +356,7 @@ where
         y: f32,
         time_ms: Option<i64>,
     ) -> bool {
-        let event_time = self.realtime_pointer_event_time(time_ms);
+        let event_time = self.shell.app.realtime_pointer_event_time(time_ms);
         self.pointer_released_at_position_event_time(x, y, event_time)
     }
 
@@ -371,14 +368,15 @@ where
         event_time: PointerEventTime,
     ) -> bool {
         let _event_handler = enter_event_handler_scope();
-        let app_context = Rc::clone(&self.app_context);
+        let app_context = Rc::clone(&self.shell.app.app_context);
         let result = app_context.enter(|| {
             run_in_mutable_snapshot(|| {
-                self.cursor = (x, y);
+                self.surface_mut().cursor = (x, y);
                 self.pointer_released_inner(event_time)
             })
             .unwrap_or(false)
         });
+        self.route_drag_and_drop();
         if result {
             self.mark_dirty();
         }
@@ -394,17 +392,18 @@ where
     /// Like [`pointer_released`](Self::pointer_released), but carries the
     /// platform input timestamp (milliseconds) of the release sample.
     pub fn pointer_released_at_time(&mut self, time_ms: Option<i64>) -> bool {
-        let event_time = self.realtime_pointer_event_time(time_ms);
+        let event_time = self.shell.app.realtime_pointer_event_time(time_ms);
         self.pointer_released_at_event_time(event_time)
     }
 
     /// Dispatch primary-button up with an already resolved event timestamp.
     pub fn pointer_released_at_event_time(&mut self, event_time: PointerEventTime) -> bool {
         let _event_handler = enter_event_handler_scope();
-        let app_context = Rc::clone(&self.app_context);
+        let app_context = Rc::clone(&self.shell.app.app_context);
         let result = app_context.enter(|| {
             run_in_mutable_snapshot(|| self.pointer_released_inner(event_time)).unwrap_or(false)
         });
+        self.route_drag_and_drop();
         if result {
             self.mark_dirty();
         }
@@ -418,28 +417,32 @@ where
     }
 
     fn pointer_released_inner(&mut self, event_time: PointerEventTime) -> bool {
-        self.buttons_pressed.remove(PointerButton::Primary);
-        let corrected_buttons = self.buttons_pressed;
+        self.surface_mut()
+            .buttons_pressed
+            .remove(PointerButton::Primary);
+        let corrected_buttons = self.surface().buttons_pressed;
         let targets = self.resolve_gesture_targets(PointerId::PRIMARY);
 
-        self.hit_path_tracker.remove_path(PointerId::PRIMARY);
+        self.surface_mut()
+            .hit_path_tracker
+            .remove_path(PointerId::PRIMARY);
 
         if !targets.is_empty() {
             let event = self
                 .pointer_event(
                     PointerEventKind::Up,
                     Point {
-                        x: self.cursor.0,
-                        y: self.cursor.1,
+                        x: self.surface().cursor.0,
+                        y: self.surface().cursor.1,
                     },
                     Point {
-                        x: self.cursor.0,
-                        y: self.cursor.1,
+                        x: self.surface().cursor.0,
+                        y: self.surface().cursor.1,
                     },
                     event_time,
                 )
                 .with_buttons(corrected_buttons)
-                .with_source(self.pointer_source);
+                .with_source(self.surface().pointer_source);
 
             self.dispatch_targets(targets, event, false);
             true
@@ -463,7 +466,7 @@ where
         y: f32,
         time_ms: Option<i64>,
     ) -> bool {
-        let event_time = self.realtime_pointer_event_time(time_ms);
+        let event_time = self.shell.app.realtime_pointer_event_time(time_ms);
         self.dispatch_secondary_pointer(PointerEventKind::Down, pointer_id, x, y, event_time)
     }
 
@@ -475,7 +478,7 @@ where
         y: f32,
         time_ms: Option<i64>,
     ) -> bool {
-        let event_time = self.realtime_pointer_event_time(time_ms);
+        let event_time = self.shell.app.realtime_pointer_event_time(time_ms);
         self.dispatch_secondary_pointer(PointerEventKind::Move, pointer_id, x, y, event_time)
     }
 
@@ -487,7 +490,7 @@ where
         y: f32,
         time_ms: Option<i64>,
     ) -> bool {
-        let event_time = self.realtime_pointer_event_time(time_ms);
+        let event_time = self.shell.app.realtime_pointer_event_time(time_ms);
         self.dispatch_secondary_pointer(PointerEventKind::Up, pointer_id, x, y, event_time)
     }
 
@@ -508,10 +511,10 @@ where
         }
 
         let _event_handler = enter_event_handler_scope();
-        let app_context = Rc::clone(&self.app_context);
+        let app_context = Rc::clone(&self.shell.app.app_context);
         let result = app_context.enter(|| {
             run_in_mutable_snapshot(|| {
-                if !self.hit_path_tracker.has_path(PointerId::PRIMARY) {
+                if !self.surface().hit_path_tracker.has_path(PointerId::PRIMARY) {
                     return false;
                 }
                 let targets = self.resolve_gesture_targets(PointerId::PRIMARY);
@@ -521,9 +524,9 @@ where
                 let pos = Point { x, y };
                 let event = self
                     .pointer_event(kind, pos, pos, event_time)
-                    .with_buttons(self.buttons_pressed)
+                    .with_buttons(self.surface().buttons_pressed)
                     .with_id(pointer_id)
-                    .with_source(self.pointer_source);
+                    .with_source(self.surface().pointer_source);
                 self.dispatch_targets(targets, event, false);
                 true
             })
@@ -547,9 +550,9 @@ where
     /// `zoom_factor` is multiplicative: `> 1.0` zooms in, `< 1.0` zooms out.
     /// Returns `true` if a handler consumed the event.
     pub fn pointer_zoomed(&mut self, zoom_factor: f32) -> bool {
-        let event_time = self.realtime_pointer_event_time(None);
+        let event_time = self.shell.app.realtime_pointer_event_time(None);
         let _event_handler = enter_event_handler_scope();
-        let app_context = Rc::clone(&self.app_context);
+        let app_context = Rc::clone(&self.shell.app.app_context);
         let result = app_context.enter(|| {
             run_in_mutable_snapshot(|| self.pointer_zoomed_inner(zoom_factor, event_time))
                 .unwrap_or(false)
@@ -569,20 +572,24 @@ where
             return false;
         }
 
-        let hits = self.renderer.scene().hit_test(self.cursor.0, self.cursor.1);
+        let hits = self
+            .surface()
+            .renderer
+            .scene()
+            .hit_test(self.surface().cursor.0, self.surface().cursor.1);
         if hits.is_empty() {
             return false;
         }
 
         let pos = Point {
-            x: self.cursor.0,
-            y: self.cursor.1,
+            x: self.surface().cursor.0,
+            y: self.surface().cursor.1,
         };
         let event = self
             .pointer_event(PointerEventKind::Zoom, pos, pos, event_time)
-            .with_buttons(self.buttons_pressed)
+            .with_buttons(self.surface().buttons_pressed)
             .with_zoom_delta(zoom_factor)
-            .with_source(self.pointer_source);
+            .with_source(self.surface().pointer_source);
 
         self.dispatch_to_hits(&hits, event)
     }
@@ -646,9 +653,9 @@ where
     /// call [`wheel_scrolled`](Self::wheel_scrolled), which reaches here once
     /// zoom and rotary have declined the sample.
     pub fn pointer_scrolled(&mut self, delta_x: f32, delta_y: f32) -> bool {
-        let event_time = self.realtime_pointer_event_time(None);
+        let event_time = self.shell.app.realtime_pointer_event_time(None);
         let _event_handler = enter_event_handler_scope();
-        let app_context = Rc::clone(&self.app_context);
+        let app_context = Rc::clone(&self.shell.app.app_context);
         let result = app_context.enter(|| {
             run_in_mutable_snapshot(|| self.pointer_scrolled_inner(delta_x, delta_y, event_time))
                 .unwrap_or(false)
@@ -673,7 +680,11 @@ where
             return false;
         }
 
-        let hits = self.renderer.scene().hit_test(self.cursor.0, self.cursor.1);
+        let hits = self
+            .surface()
+            .renderer
+            .scene()
+            .hit_test(self.surface().cursor.0, self.surface().cursor.1);
         if hits.is_empty() {
             return false;
         }
@@ -682,21 +693,21 @@ where
             .pointer_event(
                 PointerEventKind::Scroll,
                 Point {
-                    x: self.cursor.0,
-                    y: self.cursor.1,
+                    x: self.surface().cursor.0,
+                    y: self.surface().cursor.1,
                 },
                 Point {
-                    x: self.cursor.0,
-                    y: self.cursor.1,
+                    x: self.surface().cursor.0,
+                    y: self.surface().cursor.1,
                 },
                 event_time,
             )
-            .with_buttons(self.buttons_pressed)
+            .with_buttons(self.surface().buttons_pressed)
             .with_scroll_delta(Point {
                 x: delta_x,
                 y: delta_y,
             })
-            .with_source(self.pointer_source);
+            .with_source(self.surface().pointer_source);
 
         self.dispatch_to_hits(&hits, event)
     }
@@ -715,32 +726,12 @@ where
     where
         F: Fn(RotaryScrollEvent) -> bool + 'static,
     {
-        self.on_rotary_scroll = Some(Rc::new(handler));
+        self.surface_mut().on_rotary_scroll = Some(Rc::new(handler));
     }
 
     /// Removes the window-level rotary handler, if one is installed.
     pub fn clear_on_rotary_scroll(&mut self) {
-        self.on_rotary_scroll = None;
-    }
-
-    /// Pixels per rotary detent used by
-    /// [`rotary_scrolled_by_detents`](Self::rotary_scrolled_by_detents).
-    pub fn rotary_scroll_factor(&self) -> f32 {
-        self.rotary_scroll_factor
-    }
-
-    /// Sets the pixels-per-detent factor for rotary input.
-    ///
-    /// On Wear OS this must be `ViewConfiguration.getScaledVerticalScrollFactor()`
-    /// for pixel-exact parity with Compose. The host activity can read it over
-    /// JNI once at startup and push it here; when it does not, the shell falls
-    /// back to [`DEFAULT_ROTARY_SCROLL_FACTOR_DP`] scaled by display density.
-    ///
-    /// Non-finite or non-positive values are ignored.
-    pub fn set_rotary_scroll_factor(&mut self, factor: f32) {
-        if factor.is_finite() && factor > 0.0 {
-            self.rotary_scroll_factor = factor;
-        }
+        self.surface_mut().on_rotary_scroll = None;
     }
 
     /// Dispatches a rotary scroll expressed in raw detents (Android
@@ -749,7 +740,7 @@ where
     /// Applies Compose's sign convention: a positive detent value (crown turned
     /// up/away) produces a negative `vertical_scroll_pixels`.
     pub fn rotary_scrolled_by_detents(&mut self, detents: f32, uptime_millis: u64) -> bool {
-        let factor = self.rotary_scroll_factor;
+        let factor = self.shell.app.rotary_scroll_factor;
         self.rotary_scrolled(RotaryScrollEvent::from_detents(
             detents,
             factor,
@@ -780,7 +771,7 @@ where
     /// remaining step. Returns `true` when the event was consumed.
     pub fn rotary_scrolled(&mut self, event: RotaryScrollEvent) -> bool {
         let _event_handler = enter_event_handler_scope();
-        let app_context = Rc::clone(&self.app_context);
+        let app_context = Rc::clone(&self.shell.app.app_context);
         let result = app_context.enter(|| {
             run_in_mutable_snapshot(|| self.rotary_scrolled_inner(event)).unwrap_or(false)
         });
@@ -804,19 +795,19 @@ where
 
         let bubble_order = self.rotary_dispatch_order();
         let position = Point {
-            x: self.cursor.0,
-            y: self.cursor.1,
+            x: self.surface().cursor.0,
+            y: self.surface().cursor.1,
         };
 
         if !bubble_order.is_empty() {
             let capture_targets = bubble_order
                 .iter()
                 .rev()
-                .filter_map(|&node_id| self.renderer.scene().find_target(node_id))
+                .filter_map(|&node_id| self.surface().renderer.scene().find_target(node_id))
                 .collect::<Vec<_>>();
             let mut capture_event =
                 PointerEvent::rotary(PointerEventKind::RotaryScrollPre, rotary, position);
-            capture_event.modifiers = self.modifiers;
+            capture_event.modifiers = self.shell.app.modifiers;
             self.dispatch_targets(capture_targets, capture_event.clone(), true);
             if capture_event.is_consumed() {
                 return true;
@@ -824,18 +815,18 @@ where
 
             let bubble_targets = bubble_order
                 .iter()
-                .filter_map(|&node_id| self.renderer.scene().find_target(node_id))
+                .filter_map(|&node_id| self.surface().renderer.scene().find_target(node_id))
                 .collect::<Vec<_>>();
             let mut bubble_event =
                 PointerEvent::rotary(PointerEventKind::RotaryScroll, rotary, position);
-            bubble_event.modifiers = self.modifiers;
+            bubble_event.modifiers = self.shell.app.modifiers;
             self.dispatch_targets(bubble_targets, bubble_event.clone(), true);
             if bubble_event.is_consumed() {
                 return true;
             }
         }
 
-        if let Some(handler) = self.on_rotary_scroll.clone() {
+        if let Some(handler) = self.surface().on_rotary_scroll.clone() {
             return handler(rotary);
         }
 
@@ -844,7 +835,7 @@ where
 
     fn rotary_dispatch_order(&self) -> Vec<NodeId> {
         if let Some(focused) = cranpose_ui::active_focus_target()
-            && let Some(target) = self.renderer.scene().find_target(focused)
+            && let Some(target) = self.surface().renderer.scene().find_target(focused)
         {
             let path = target.capture_path();
             if !path.is_empty() {
@@ -852,7 +843,11 @@ where
             }
         }
 
-        let hits = self.renderer.scene().hit_test(self.cursor.0, self.cursor.1);
+        let hits = self
+            .surface()
+            .renderer
+            .scene()
+            .hit_test(self.surface().cursor.0, self.surface().cursor.1);
         if hits.is_empty() {
             return Vec::new();
         }
@@ -869,81 +864,91 @@ where
     /// - Mouse leaves window while button pressed
     /// - Any other gesture abort scenario
     pub fn cancel_gesture(&mut self) {
-        let event_time = self.realtime_pointer_event_time(None);
+        let event_time = self.shell.app.realtime_pointer_event_time(None);
         let _event_handler = enter_event_handler_scope();
-        let app_context = Rc::clone(&self.app_context);
+        let app_context = Rc::clone(&self.shell.app.app_context);
         let _ = app_context.enter(|| {
             run_in_mutable_snapshot(|| {
                 self.cancel_gesture_inner(event_time);
             })
         });
+        self.route_drag_and_drop();
+    }
+
+    fn route_drag_and_drop(&mut self) {
+        let app_context = Rc::clone(&self.shell.app.app_context);
+        let source = self.index;
+        let shell = &mut *self.shell;
+        let routed = app_context.enter(|| {
+            run_in_mutable_snapshot(|| {
+                app_context
+                    .drag_and_drop()
+                    .route(|point| shell.drag_and_drop_target_at(point, source))
+            })
+            .unwrap_or(false)
+        });
+        if routed {
+            shell.mark_all_dirty();
+        }
+    }
+
+    /// Ends the gesture only when the pointer leaving really ended it.
+    ///
+    /// A held button belongs to the surface that received the press until
+    /// the release: a window drawn over the cursor, or a drag carried past
+    /// an edge, both leave the press where it started and deliver the
+    /// release there too. Cancelling on either would drop a gesture the
+    /// user has not finished, so a pressed pointer is left alone and only
+    /// an idle one cancels.
+    pub fn cancel_gesture_unless_pressed(&mut self) {
+        if self.surface().buttons_pressed != PointerButtons::NONE {
+            return;
+        }
+        self.cancel_gesture();
     }
 
     fn cancel_gesture_inner(&mut self, event_time: PointerEventTime) {
         let targets = self.resolve_gesture_targets(PointerId::PRIMARY);
 
-        self.hit_path_tracker.clear();
-        self.buttons_pressed = PointerButtons::NONE;
+        self.surface_mut().hit_path_tracker.clear();
+        self.surface_mut().buttons_pressed = PointerButtons::NONE;
 
         if !targets.is_empty() {
             let event = self
                 .pointer_event(
                     PointerEventKind::Cancel,
                     Point {
-                        x: self.cursor.0,
-                        y: self.cursor.1,
+                        x: self.surface().cursor.0,
+                        y: self.surface().cursor.1,
                     },
                     Point {
-                        x: self.cursor.0,
-                        y: self.cursor.1,
+                        x: self.surface().cursor.0,
+                        y: self.surface().cursor.1,
                     },
                     event_time,
                 )
-                .with_source(self.pointer_source);
+                .with_source(self.surface().pointer_source);
 
             self.dispatch_targets(targets, event, false);
         }
 
         let pos = Point {
-            x: self.cursor.0,
-            y: self.cursor.1,
+            x: self.surface().cursor.0,
+            y: self.surface().cursor.1,
         };
-        let hovered_nodes = self.hovered_nodes.clone();
+        let hovered_nodes = self.surface().hovered_nodes.clone();
         for node_id in hovered_nodes {
-            if let Some(target) = self.renderer.scene().find_target(node_id) {
+            if let Some(target) = self.surface().renderer.scene().find_target(node_id) {
                 let exit_event = self
                     .pointer_event(PointerEventKind::Exit, pos, pos, event_time)
-                    .with_source(self.pointer_source);
+                    .with_source(self.surface().pointer_source);
                 self.dispatch_targets(std::iter::once(target), exit_event, false);
             }
         }
-        self.hovered_nodes.clear();
-        cranpose_ui::pointer_icon_session::set_pointer_icon(PointerIcon::DEFAULT);
+        self.surface_mut().hovered_nodes.clear();
+        self.surface().pointer_icon.set(PointerIcon::DEFAULT);
     }
 
-    /// The pointer icon the platform has not applied yet, or `None` when the
-    /// icon has not changed since the last call.
-    ///
-    /// Platform backends call this after handing the shell a batch of input and
-    /// set the returned icon on the window they own. Platforms with no pointing
-    /// device never call it.
-    /// Offers this window's current pointer icon to the platform again, for
-    /// the moments a windowing system has drawn its own default over it.
-    pub fn refresh_pointer_icon(&self) {
-        let app_context = Rc::clone(&self.app_context);
-        app_context.enter(cranpose_ui::pointer_icon_session::refresh_pointer_icon);
-    }
-
-    pub fn take_pointer_icon_change(&self) -> Option<PointerIcon> {
-        let app_context = Rc::clone(&self.app_context);
-        app_context.enter(cranpose_ui::pointer_icon_session::take_pointer_icon_change)
-    }
-
-    /// Records the icon of the topmost hovered region, or the platform default
-    /// when nothing under the pointer names one.
-    ///
-    /// `hits` arrives ordered top-to-bottom, so the first region that names an
-    /// icon is the innermost one drawn over the pointer.
     fn apply_hovered_pointer_icon(
         &self,
         hits: &[<<R as Renderer>::Scene as RenderScene>::HitTarget],
@@ -952,55 +957,9 @@ where
             .iter()
             .find_map(HitTestTarget::pointer_icon)
             .unwrap_or(PointerIcon::DEFAULT);
-        cranpose_ui::pointer_icon_session::set_pointer_icon(icon);
+        self.surface().pointer_icon.set(icon);
     }
 
-    /// Installs the platform soft-keyboard handler for this shell's app context.
-    ///
-    /// The handler is invoked when a text field gains focus (`show_keyboard`)
-    /// or when text-field focus is cleared or goes stale (`hide_keyboard`).
-    /// Platform runtimes with an on-screen keyboard (Android, iOS) call this
-    /// once after creating the shell.
-    pub fn set_platform_text_input(
-        &mut self,
-        handler: Rc<dyn cranpose_ui::PlatformTextInputHandler>,
-    ) {
-        let app_context = Rc::clone(&self.app_context);
-        app_context
-            .enter(|| cranpose_ui::text_input_session::set_platform_text_input_handler(handler));
-    }
-
-    /// Notifies the framework that the host app was paused/backgrounded.
-    ///
-    /// Withdraws any outstanding soft-keyboard request (and hides the keyboard)
-    /// so the "keyboard shown" state does not survive across the pause and get
-    /// restored on resume with no focused field. Platform runtimes call this
-    /// from their pause lifecycle event.
-    pub fn notify_app_paused(&mut self) {
-        let app_context = Rc::clone(&self.app_context);
-        app_context.enter(cranpose_ui::text_input_session::notify_app_paused);
-    }
-
-    /// Notifies the framework that the host app resumed/foregrounded.
-    ///
-    /// Never auto-shows the soft keyboard, even for a still-focused field: a
-    /// warm resume keeps the caret but must not resurrect the keyboard (the user
-    /// taps the field to bring it back). Always returns `false` so the platform
-    /// runtime force-hides the OS-restored keyboard. Platform runtimes call this
-    /// from their resume lifecycle event.
-    pub fn notify_app_resumed(&mut self) -> bool {
-        let app_context = Rc::clone(&self.app_context);
-        app_context.enter(cranpose_ui::text_input_session::notify_app_resumed)
-    }
-
-    /// Routes a keyboard event to the focused text field, if any.
-    ///
-    /// Returns `true` if the event was consumed by a text field.
-    ///
-    /// On desktop, Ctrl+C/X/V are handled here when native clipboard support is enabled.
-    /// On web, these keys are NOT handled here - they bubble to browser for native copy/paste events.
-    /// Tab moves focus to the next target and Shift+Tab to the previous one,
-    /// as in Compose. A Tab carrying Ctrl, Alt or Meta belongs to the app.
     fn on_focus_key(&mut self, event: &KeyEvent) -> bool {
         if !plain_key_down(event) || event.key_code != KeyCode::Tab {
             return false;
@@ -1070,9 +1029,6 @@ where
         }
     }
 
-    /// Escape closes the modal surface on top, as Compose's `Dialog` takes
-    /// Escape on desktop, or the dismissable popup on top when no dialog is
-    /// open. With neither open the key belongs to the app.
     fn on_escape_key(&mut self, event: &KeyEvent) -> bool {
         if event.event_type != KeyEventType::KeyDown || event.key_code != KeyCode::Escape {
             return false;
@@ -1084,7 +1040,7 @@ where
     /// back gesture does. Answers whether one was open to take the request.
     pub fn dismiss_top_modal(&mut self) -> bool {
         let _event_handler = enter_event_handler_scope();
-        let app_context = Rc::clone(&self.app_context);
+        let app_context = Rc::clone(&self.shell.app.app_context);
         app_context.enter(|| self.dismiss_top_modal_in_context())
     }
 
@@ -1131,7 +1087,7 @@ where
 
     pub fn on_key_event(&mut self, event: &KeyEvent) -> bool {
         let _event_handler = enter_event_handler_scope();
-        let app_context = Rc::clone(&self.app_context);
+        let app_context = Rc::clone(&self.shell.app.app_context);
         app_context.enter(|| self.on_key_event_inner(event))
     }
 
@@ -1157,7 +1113,7 @@ where
                         if let Some(text) = self.on_cut_inner() {
                             cranpose_ui::clipboard_session::clipboard_write_text(&text);
                             self.mark_dirty();
-                            self.request_layout_pass();
+                            self.shell.app.request_layout_pass();
                             return true;
                         }
                     }
@@ -1195,7 +1151,7 @@ where
 
         if handled {
             self.mark_dirty();
-            self.request_layout_pass();
+            self.shell.app.request_layout_pass();
         }
 
         handled
@@ -1206,7 +1162,7 @@ where
     /// O(1) operation using stored handler.
     pub fn on_paste(&mut self, text: &str) -> bool {
         let _event_handler = enter_event_handler_scope();
-        let app_context = Rc::clone(&self.app_context);
+        let app_context = Rc::clone(&self.shell.app.app_context);
         app_context.enter(|| self.on_paste_inner(text))
     }
 
@@ -1217,7 +1173,7 @@ where
 
         if handled {
             self.mark_dirty();
-            self.request_layout_pass();
+            self.shell.app.request_layout_pass();
         }
 
         handled
@@ -1227,7 +1183,7 @@ where
     /// Returns the selected text from focused text field, or None.
     /// O(1) operation using stored handler.
     pub fn on_copy(&mut self) -> Option<String> {
-        let app_context = Rc::clone(&self.app_context);
+        let app_context = Rc::clone(&self.shell.app.app_context);
         app_context.enter(|| self.on_copy_inner())
     }
 
@@ -1240,7 +1196,7 @@ where
     /// O(1) operation using stored handler.
     pub fn on_cut(&mut self) -> Option<String> {
         let _event_handler = enter_event_handler_scope();
-        let app_context = Rc::clone(&self.app_context);
+        let app_context = Rc::clone(&self.shell.app.app_context);
         app_context.enter(|| self.on_cut_inner())
     }
 
@@ -1250,15 +1206,224 @@ where
 
         if text.is_some() {
             self.mark_dirty();
-            self.request_layout_pass();
+            self.shell.app.request_layout_pass();
         }
 
         text
     }
 
-    /// Sets the Linux primary selection (for middle-click paste).
-    /// This is called when text is selected in a text field.
-    /// On non-Linux platforms, this is a no-op.
+    /// Handles IME preedit (composition) events.
+    /// Called when the input method is composing text (e.g., typing CJK characters).
+    ///
+    /// - `text`: The current preedit text (empty to clear composition state)
+    /// - `cursor`: Optional cursor position within the preedit text (start, end)
+    ///
+    /// Returns `true` if a text field consumed the event.
+    pub fn on_ime_preedit(&mut self, text: &str, cursor: Option<(usize, usize)>) -> bool {
+        let _event_handler = enter_event_handler_scope();
+        let app_context = Rc::clone(&self.shell.app.app_context);
+        app_context.enter(|| self.on_ime_preedit_inner(text, cursor))
+    }
+
+    fn on_ime_preedit_inner(&mut self, text: &str, cursor: Option<(usize, usize)>) -> bool {
+        let handled = run_in_mutable_snapshot(|| {
+            cranpose_ui::text_field_focus::dispatch_ime_preedit(text, cursor)
+        })
+        .unwrap_or(false);
+
+        if handled {
+            self.mark_dirty();
+            self.shell.app.request_layout_pass();
+        }
+
+        handled
+    }
+
+    /// Finishes the active IME composition, keeping the composed text as
+    /// committed text (Android `finishComposingText` semantics).
+    /// Returns `true` if a text field consumed the event.
+    pub fn on_ime_finish_composing(&mut self) -> bool {
+        let _event_handler = enter_event_handler_scope();
+        let app_context = Rc::clone(&self.shell.app.app_context);
+        app_context.enter(|| self.on_ime_finish_composing_inner())
+    }
+
+    fn on_ime_finish_composing_inner(&mut self) -> bool {
+        let handled =
+            run_in_mutable_snapshot(cranpose_ui::text_field_focus::dispatch_ime_finish_composing)
+                .unwrap_or(false);
+
+        if handled {
+            self.mark_dirty();
+            self.shell.app.request_layout_pass();
+        }
+
+        handled
+    }
+
+    /// Marks existing text in the focused field as the composing region
+    /// without changing it (Android `setComposingRegion` semantics). Offsets
+    /// are UTF-8 bytes. Returns `true` if a text field consumed the event.
+    pub fn on_ime_set_composing_region(&mut self, start_bytes: usize, end_bytes: usize) -> bool {
+        let _event_handler = enter_event_handler_scope();
+        let app_context = Rc::clone(&self.shell.app.app_context);
+        app_context.enter(|| {
+            let handled = run_in_mutable_snapshot(|| {
+                cranpose_ui::text_field_focus::dispatch_ime_set_composing_region(
+                    start_bytes,
+                    end_bytes,
+                )
+            })
+            .unwrap_or(false);
+
+            if handled {
+                self.mark_dirty();
+                self.shell.app.request_layout_pass();
+            }
+
+            handled
+        })
+    }
+
+    /// Moves the focused field's selection/caret to `[start_bytes, end_bytes)`
+    /// without editing text (Android `InputConnection.setSelection`; the path
+    /// Gboard's spacebar-swipe uses to scrub the cursor). Offsets are UTF-8
+    /// bytes. Returns `true` if a text field consumed the event.
+    pub fn on_ime_set_selection(&mut self, start_bytes: usize, end_bytes: usize) -> bool {
+        let _event_handler = enter_event_handler_scope();
+        let app_context = Rc::clone(&self.shell.app.app_context);
+        app_context.enter(|| {
+            let handled = run_in_mutable_snapshot(|| {
+                cranpose_ui::text_field_focus::dispatch_ime_set_selection(start_bytes, end_bytes)
+            })
+            .unwrap_or(false);
+
+            if handled {
+                self.mark_dirty();
+            }
+
+            handled
+        })
+    }
+
+    /// Returns a snapshot of the focused text field's editable state for
+    /// platform IMEs (text, selection and composition in UTF-8 bytes), or
+    /// `None` when no text field is focused.
+    pub fn ime_editor_state(&mut self) -> Option<cranpose_ui::text_field_focus::ImeEditorState> {
+        let app_context = Rc::clone(&self.shell.app.app_context);
+        app_context.enter(cranpose_ui::text_field_focus::focused_editor_state)
+    }
+
+    /// Window-space caret geometry of the focused field for coordinate-based
+    /// platform text input (iOS trackpad cursor + tap-to-position), or `None`
+    /// when no text field is focused.
+    pub fn ime_caret_geometry(
+        &mut self,
+    ) -> Option<cranpose_ui::text_field_focus::ImeCaretGeometry> {
+        let app_context = Rc::clone(&self.shell.app.app_context);
+        app_context.enter(cranpose_ui::text_field_focus::focused_caret_geometry)
+    }
+
+    /// Clears text-field focus (used by platform IME actions such as
+    /// Android's Done). The focus-loss notification hides the soft keyboard.
+    pub fn clear_text_field_focus(&mut self) {
+        let _event_handler = enter_event_handler_scope();
+        let app_context = Rc::clone(&self.shell.app.app_context);
+        app_context.enter(cranpose_ui::text_field_focus::clear_focus);
+        self.mark_dirty();
+        self.shell.app.request_layout_pass();
+    }
+
+    /// Handles IME delete-surrounding events.
+    /// Returns `true` if a text field consumed the event.
+    pub fn on_ime_delete_surrounding(&mut self, before_bytes: usize, after_bytes: usize) -> bool {
+        let _event_handler = enter_event_handler_scope();
+        let app_context = Rc::clone(&self.shell.app.app_context);
+        app_context.enter(|| self.on_ime_delete_surrounding_inner(before_bytes, after_bytes))
+    }
+
+    fn on_ime_delete_surrounding_inner(&mut self, before_bytes: usize, after_bytes: usize) -> bool {
+        let handled = run_in_mutable_snapshot(|| {
+            cranpose_ui::text_field_focus::dispatch_delete_surrounding(before_bytes, after_bytes)
+        })
+        .unwrap_or(false);
+
+        if handled {
+            self.mark_dirty();
+            self.shell.app.request_layout_pass();
+        }
+
+        handled
+    }
+}
+
+impl<R> AppShell<R>
+where
+    R: Renderer,
+    R::Error: Debug,
+{
+    /// Sets the keyboard modifiers held right now, so the platform's live
+    /// modifier state (winit's `ModifiersChanged`, a DOM event's
+    /// `shiftKey`/`ctrlKey`/`altKey`/`metaKey`) reaches every `PointerEvent`
+    /// the shell dispatches from here on -- the same state the wheel path
+    /// already carries via [`WheelScroll::with_modifiers`](crate::WheelScroll::with_modifiers).
+    /// A platform that never calls this leaves pointer events reporting
+    /// `None` (see [`PointerEvent::modifiers`]) rather than a silently wrong
+    /// "nothing held".
+    pub fn set_modifiers(&mut self, modifiers: Modifiers) {
+        self.app.modifiers = Some(modifiers);
+    }
+
+    /// The keyboard modifiers most recently set via
+    /// [`set_modifiers`](Self::set_modifiers), or `None` if the platform has
+    /// never reported them.
+    pub fn modifiers(&self) -> Option<Modifiers> {
+        self.app.modifiers
+    }
+
+    /// Pixels per rotary detent used by
+    /// [`rotary_scrolled_by_detents`](Self::rotary_scrolled_by_detents).
+    pub fn rotary_scroll_factor(&self) -> f32 {
+        self.app.rotary_scroll_factor
+    }
+
+    /// Sets the pixels-per-detent factor for rotary input.
+    ///
+    /// On Wear OS this must be `ViewConfiguration.getScaledVerticalScrollFactor()`
+    /// for pixel-exact parity with Compose. The host activity can read it over
+    /// JNI once at startup and push it here; when it does not, the shell falls
+    /// back to [`DEFAULT_ROTARY_SCROLL_FACTOR_DP`] scaled by display density.
+    ///
+    /// Non-finite or non-positive values are ignored.
+    pub fn set_rotary_scroll_factor(&mut self, factor: f32) {
+        if factor.is_finite() && factor > 0.0 {
+            self.app.rotary_scroll_factor = factor;
+        }
+    }
+
+    /// Notifies the framework that the host app was paused/backgrounded.
+    ///
+    /// Withdraws any outstanding soft-keyboard request (and hides the keyboard)
+    /// so the "keyboard shown" state does not survive across the pause and get
+    /// restored on resume with no focused field. Platform runtimes call this
+    /// from their pause lifecycle event.
+    pub fn notify_app_paused(&mut self) {
+        let app_context = Rc::clone(&self.app.app_context);
+        app_context.enter(cranpose_ui::text_input_session::notify_app_paused);
+    }
+
+    /// Notifies the framework that the host app resumed/foregrounded.
+    ///
+    /// Never auto-shows the soft keyboard, even for a still-focused field: a
+    /// warm resume keeps the caret but must not resurrect the keyboard (the user
+    /// taps the field to bring it back). Always returns `false` so the platform
+    /// runtime force-hides the OS-restored keyboard. Platform runtimes call this
+    /// from their resume lifecycle event.
+    pub fn notify_app_resumed(&mut self) -> bool {
+        let app_context = Rc::clone(&self.app.app_context);
+        app_context.enter(cranpose_ui::text_input_session::notify_app_resumed)
+    }
+
     #[cfg(all(
         feature = "clipboard-native",
         target_os = "linux",
@@ -1266,7 +1431,7 @@ where
     ))]
     pub fn set_primary_selection(&mut self, text: &str) {
         use arboard::{LinuxClipboardKind, SetExtLinux};
-        if let Some(ref mut clipboard) = self.clipboard {
+        if let Some(ref mut clipboard) = self.app.clipboard {
             let result = clipboard
                 .set()
                 .clipboard(LinuxClipboardKind::Primary)
@@ -1284,8 +1449,6 @@ where
     )))]
     pub fn set_primary_selection(&mut self, _text: &str) {}
 
-    /// Gets text from the Linux primary selection (for middle-click paste).
-    /// On non-Linux platforms, returns None.
     #[cfg(all(
         feature = "clipboard-native",
         target_os = "linux",
@@ -1293,7 +1456,7 @@ where
     ))]
     pub fn get_primary_selection(&mut self) -> Option<String> {
         use arboard::{GetExtLinux, LinuxClipboardKind};
-        if let Some(ref mut clipboard) = self.clipboard {
+        if let Some(ref mut clipboard) = self.app.clipboard {
             clipboard
                 .get()
                 .clipboard(LinuxClipboardKind::Primary)
@@ -1324,148 +1487,282 @@ where
         }
     }
 
-    /// Handles IME preedit (composition) events.
-    /// Called when the input method is composing text (e.g., typing CJK characters).
+    /// Primary-surface form of [`SurfaceMut::set_pointer_source`].
+    pub fn set_pointer_source(&mut self, source: PointerSource) {
+        self.primary().set_pointer_source(source);
+    }
+
+    /// Primary-surface form of [`SurfaceMut::pointer_source`].
+    pub fn pointer_source(&self) -> PointerSource {
+        self.surfaces[0].pointer_source
+    }
+
+    /// Primary-surface form of [`SurfaceMut::set_cursor`].
+    pub fn set_cursor(&mut self, x: f32, y: f32) -> bool {
+        self.primary().set_cursor(x, y)
+    }
+
+    /// Primary-surface form of [`SurfaceMut::set_cursor_at_time`].
+    pub fn set_cursor_at_time(&mut self, x: f32, y: f32, time_ms: Option<i64>) -> bool {
+        self.primary().set_cursor_at_time(x, y, time_ms)
+    }
+
+    /// Primary-surface form of [`SurfaceMut::set_cursor_at_event_time`].
+    pub fn set_cursor_at_event_time(
+        &mut self,
+        x: f32,
+        y: f32,
+        event_time: PointerEventTime,
+    ) -> bool {
+        self.primary().set_cursor_at_event_time(x, y, event_time)
+    }
+
+    /// Primary-surface form of [`SurfaceMut::pointer_pressed`].
+    pub fn pointer_pressed(&mut self) -> bool {
+        self.primary().pointer_pressed()
+    }
+
+    /// Primary-surface form of [`SurfaceMut::pointer_pressed_at_time`].
+    pub fn pointer_pressed_at_time(&mut self, time_ms: Option<i64>) -> bool {
+        self.primary().pointer_pressed_at_time(time_ms)
+    }
+
+    /// Primary-surface form of [`SurfaceMut::pointer_pressed_at_event_time`].
+    pub fn pointer_pressed_at_event_time(&mut self, event_time: PointerEventTime) -> bool {
+        self.primary().pointer_pressed_at_event_time(event_time)
+    }
+
+    /// Primary-surface form of [`SurfaceMut::pointer_released`].
+    pub fn pointer_released(&mut self) -> bool {
+        self.primary().pointer_released()
+    }
+
+    /// Primary-surface form of [`SurfaceMut::pointer_released_at_position`].
+    pub fn pointer_released_at_position(&mut self, x: f32, y: f32) -> bool {
+        self.primary().pointer_released_at_position(x, y)
+    }
+
+    /// Primary-surface form of
+    /// [`SurfaceMut::pointer_released_at_position_time`].
+    pub fn pointer_released_at_position_time(
+        &mut self,
+        x: f32,
+        y: f32,
+        time_ms: Option<i64>,
+    ) -> bool {
+        self.primary()
+            .pointer_released_at_position_time(x, y, time_ms)
+    }
+
+    /// Primary-surface form of
+    /// [`SurfaceMut::pointer_released_at_position_event_time`].
+    pub fn pointer_released_at_position_event_time(
+        &mut self,
+        x: f32,
+        y: f32,
+        event_time: PointerEventTime,
+    ) -> bool {
+        self.primary()
+            .pointer_released_at_position_event_time(x, y, event_time)
+    }
+
+    /// Primary-surface form of [`SurfaceMut::pointer_released_at_time`].
+    pub fn pointer_released_at_time(&mut self, time_ms: Option<i64>) -> bool {
+        self.primary().pointer_released_at_time(time_ms)
+    }
+
+    /// Primary-surface form of [`SurfaceMut::pointer_released_at_event_time`].
+    pub fn pointer_released_at_event_time(&mut self, event_time: PointerEventTime) -> bool {
+        self.primary().pointer_released_at_event_time(event_time)
+    }
+
+    /// Primary-surface form of [`SurfaceMut::secondary_pointer_pressed`].
+    pub fn secondary_pointer_pressed(
+        &mut self,
+        pointer_id: u64,
+        x: f32,
+        y: f32,
+        time_ms: Option<i64>,
+    ) -> bool {
+        self.primary()
+            .secondary_pointer_pressed(pointer_id, x, y, time_ms)
+    }
+
+    /// Primary-surface form of [`SurfaceMut::secondary_pointer_moved`].
+    pub fn secondary_pointer_moved(
+        &mut self,
+        pointer_id: u64,
+        x: f32,
+        y: f32,
+        time_ms: Option<i64>,
+    ) -> bool {
+        self.primary()
+            .secondary_pointer_moved(pointer_id, x, y, time_ms)
+    }
+
+    /// Primary-surface form of [`SurfaceMut::secondary_pointer_released`].
+    pub fn secondary_pointer_released(
+        &mut self,
+        pointer_id: u64,
+        x: f32,
+        y: f32,
+        time_ms: Option<i64>,
+    ) -> bool {
+        self.primary()
+            .secondary_pointer_released(pointer_id, x, y, time_ms)
+    }
+
+    /// Primary-surface form of [`SurfaceMut::pointer_zoomed`].
+    pub fn pointer_zoomed(&mut self, zoom_factor: f32) -> bool {
+        self.primary().pointer_zoomed(zoom_factor)
+    }
+
+    /// Primary-surface form of [`SurfaceMut::wheel_scrolled`].
+    pub fn wheel_scrolled(&mut self, wheel: crate::WheelScroll) -> bool {
+        self.primary().wheel_scrolled(wheel)
+    }
+
+    /// Primary-surface form of [`SurfaceMut::pointer_scrolled`].
+    pub fn pointer_scrolled(&mut self, delta_x: f32, delta_y: f32) -> bool {
+        self.primary().pointer_scrolled(delta_x, delta_y)
+    }
+
+    /// Primary-surface form of [`SurfaceMut::set_on_rotary_scroll`].
+    pub fn set_on_rotary_scroll<F>(&mut self, handler: F)
+    where
+        F: Fn(RotaryScrollEvent) -> bool + 'static,
+    {
+        self.primary().set_on_rotary_scroll(handler);
+    }
+
+    /// Primary-surface form of [`SurfaceMut::clear_on_rotary_scroll`].
+    pub fn clear_on_rotary_scroll(&mut self) {
+        self.primary().clear_on_rotary_scroll();
+    }
+
+    /// Primary-surface form of [`SurfaceMut::rotary_scrolled_by_detents`].
+    pub fn rotary_scrolled_by_detents(&mut self, detents: f32, uptime_millis: u64) -> bool {
+        self.primary()
+            .rotary_scrolled_by_detents(detents, uptime_millis)
+    }
+
+    /// Primary-surface form of [`SurfaceMut::rotary_scrolled`].
+    pub fn rotary_scrolled(&mut self, event: RotaryScrollEvent) -> bool {
+        self.primary().rotary_scrolled(event)
+    }
+
+    /// Primary-surface form of [`SurfaceMut::cancel_gesture`].
+    pub fn cancel_gesture(&mut self) {
+        self.primary().cancel_gesture();
+    }
+
+    /// Primary-surface form of [`SurfaceMut::cancel_gesture_unless_pressed`].
+    pub fn cancel_gesture_unless_pressed(&mut self) {
+        self.primary().cancel_gesture_unless_pressed();
+    }
+
+    /// Offers the primary window's current pointer icon to the platform
+    /// again, for the moments a windowing system has drawn its own default
+    /// over it.
+    pub fn refresh_pointer_icon(&self) {
+        self.surfaces[0].pointer_icon.refresh();
+    }
+
+    /// The pointer icon the platform has not applied to the primary window
+    /// yet, or `None` when the icon has not changed since the last call.
     ///
-    /// - `text`: The current preedit text (empty to clear composition state)
-    /// - `cursor`: Optional cursor position within the preedit text (start, end)
+    /// Platform backends call this after handing the shell a batch of input and
+    /// set the returned icon on the window they own. Platforms with no pointing
+    /// device never call it.
+    pub fn take_pointer_icon_change(&self) -> Option<PointerIcon> {
+        self.surfaces[0].pointer_icon.take_change()
+    }
+
+    /// Installs the platform soft-keyboard handler for the primary window.
     ///
-    /// Returns `true` if a text field consumed the event.
+    /// The handler is invoked when a text field gains focus (`show_keyboard`)
+    /// or when text-field focus is cleared or goes stale (`hide_keyboard`).
+    /// Platform runtimes with an on-screen keyboard (Android, iOS) call this
+    /// once after creating the shell.
+    pub fn set_platform_text_input(
+        &mut self,
+        handler: Rc<dyn cranpose_ui::PlatformTextInputHandler>,
+    ) {
+        self.primary().set_platform_text_input(handler);
+    }
+
+    /// Primary-surface form of [`SurfaceMut::dismiss_top_modal`].
+    pub fn dismiss_top_modal(&mut self) -> bool {
+        self.primary().dismiss_top_modal()
+    }
+
+    /// Primary-surface form of [`SurfaceMut::move_focus_in_context`].
+    pub fn move_focus_in_context(&mut self, direction: FocusDirection) -> bool {
+        self.primary().move_focus_in_context(direction)
+    }
+
+    /// Primary-surface form of [`SurfaceMut::on_key_event`].
+    pub fn on_key_event(&mut self, event: &KeyEvent) -> bool {
+        self.primary().on_key_event(event)
+    }
+
+    /// Primary-surface form of [`SurfaceMut::on_paste`].
+    pub fn on_paste(&mut self, text: &str) -> bool {
+        self.primary().on_paste(text)
+    }
+
+    /// Primary-surface form of [`SurfaceMut::on_copy`].
+    pub fn on_copy(&mut self) -> Option<String> {
+        self.primary().on_copy()
+    }
+
+    /// Primary-surface form of [`SurfaceMut::on_cut`].
+    pub fn on_cut(&mut self) -> Option<String> {
+        self.primary().on_cut()
+    }
+
+    /// Primary-surface form of [`SurfaceMut::on_ime_preedit`].
     pub fn on_ime_preedit(&mut self, text: &str, cursor: Option<(usize, usize)>) -> bool {
-        let _event_handler = enter_event_handler_scope();
-        let app_context = Rc::clone(&self.app_context);
-        app_context.enter(|| self.on_ime_preedit_inner(text, cursor))
+        self.primary().on_ime_preedit(text, cursor)
     }
 
-    fn on_ime_preedit_inner(&mut self, text: &str, cursor: Option<(usize, usize)>) -> bool {
-        let handled = run_in_mutable_snapshot(|| {
-            cranpose_ui::text_field_focus::dispatch_ime_preedit(text, cursor)
-        })
-        .unwrap_or(false);
-
-        if handled {
-            self.mark_dirty();
-            self.request_layout_pass();
-        }
-
-        handled
-    }
-
-    /// Finishes the active IME composition, keeping the composed text as
-    /// committed text (Android `finishComposingText` semantics).
-    /// Returns `true` if a text field consumed the event.
+    /// Primary-surface form of [`SurfaceMut::on_ime_finish_composing`].
     pub fn on_ime_finish_composing(&mut self) -> bool {
-        let _event_handler = enter_event_handler_scope();
-        let app_context = Rc::clone(&self.app_context);
-        app_context.enter(|| self.on_ime_finish_composing_inner())
+        self.primary().on_ime_finish_composing()
     }
 
-    fn on_ime_finish_composing_inner(&mut self) -> bool {
-        let handled =
-            run_in_mutable_snapshot(cranpose_ui::text_field_focus::dispatch_ime_finish_composing)
-                .unwrap_or(false);
-
-        if handled {
-            self.mark_dirty();
-            self.request_layout_pass();
-        }
-
-        handled
-    }
-
-    /// Marks existing text in the focused field as the composing region
-    /// without changing it (Android `setComposingRegion` semantics). Offsets
-    /// are UTF-8 bytes. Returns `true` if a text field consumed the event.
+    /// Primary-surface form of [`SurfaceMut::on_ime_set_composing_region`].
     pub fn on_ime_set_composing_region(&mut self, start_bytes: usize, end_bytes: usize) -> bool {
-        let _event_handler = enter_event_handler_scope();
-        let app_context = Rc::clone(&self.app_context);
-        app_context.enter(|| {
-            let handled = run_in_mutable_snapshot(|| {
-                cranpose_ui::text_field_focus::dispatch_ime_set_composing_region(
-                    start_bytes,
-                    end_bytes,
-                )
-            })
-            .unwrap_or(false);
-
-            if handled {
-                self.mark_dirty();
-                self.request_layout_pass();
-            }
-
-            handled
-        })
+        self.primary()
+            .on_ime_set_composing_region(start_bytes, end_bytes)
     }
 
-    /// Moves the focused field's selection/caret to `[start_bytes, end_bytes)`
-    /// without editing text (Android `InputConnection.setSelection`; the path
-    /// Gboard's spacebar-swipe uses to scrub the cursor). Offsets are UTF-8
-    /// bytes. Returns `true` if a text field consumed the event.
+    /// Primary-surface form of [`SurfaceMut::on_ime_set_selection`].
     pub fn on_ime_set_selection(&mut self, start_bytes: usize, end_bytes: usize) -> bool {
-        let _event_handler = enter_event_handler_scope();
-        let app_context = Rc::clone(&self.app_context);
-        app_context.enter(|| {
-            let handled = run_in_mutable_snapshot(|| {
-                cranpose_ui::text_field_focus::dispatch_ime_set_selection(start_bytes, end_bytes)
-            })
-            .unwrap_or(false);
-
-            if handled {
-                self.mark_dirty();
-            }
-
-            handled
-        })
+        self.primary().on_ime_set_selection(start_bytes, end_bytes)
     }
 
-    /// Returns a snapshot of the focused text field's editable state for
-    /// platform IMEs (text, selection and composition in UTF-8 bytes), or
-    /// `None` when no text field is focused.
+    /// Primary-surface form of [`SurfaceMut::ime_editor_state`].
     pub fn ime_editor_state(&mut self) -> Option<cranpose_ui::text_field_focus::ImeEditorState> {
-        let app_context = Rc::clone(&self.app_context);
-        app_context.enter(cranpose_ui::text_field_focus::focused_editor_state)
+        self.primary().ime_editor_state()
     }
 
-    /// Window-space caret geometry of the focused field for coordinate-based
-    /// platform text input (iOS trackpad cursor + tap-to-position), or `None`
-    /// when no text field is focused.
+    /// Primary-surface form of [`SurfaceMut::ime_caret_geometry`].
     pub fn ime_caret_geometry(
         &mut self,
     ) -> Option<cranpose_ui::text_field_focus::ImeCaretGeometry> {
-        let app_context = Rc::clone(&self.app_context);
-        app_context.enter(cranpose_ui::text_field_focus::focused_caret_geometry)
+        self.primary().ime_caret_geometry()
     }
 
-    /// Clears text-field focus (used by platform IME actions such as
-    /// Android's Done). The focus-loss notification hides the soft keyboard.
+    /// Primary-surface form of [`SurfaceMut::clear_text_field_focus`].
     pub fn clear_text_field_focus(&mut self) {
-        let _event_handler = enter_event_handler_scope();
-        let app_context = Rc::clone(&self.app_context);
-        app_context.enter(cranpose_ui::text_field_focus::clear_focus);
-        self.mark_dirty();
-        self.request_layout_pass();
+        self.primary().clear_text_field_focus();
     }
 
-    /// Handles IME delete-surrounding events.
-    /// Returns `true` if a text field consumed the event.
+    /// Primary-surface form of [`SurfaceMut::on_ime_delete_surrounding`].
     pub fn on_ime_delete_surrounding(&mut self, before_bytes: usize, after_bytes: usize) -> bool {
-        let _event_handler = enter_event_handler_scope();
-        let app_context = Rc::clone(&self.app_context);
-        app_context.enter(|| self.on_ime_delete_surrounding_inner(before_bytes, after_bytes))
-    }
-
-    fn on_ime_delete_surrounding_inner(&mut self, before_bytes: usize, after_bytes: usize) -> bool {
-        let handled = run_in_mutable_snapshot(|| {
-            cranpose_ui::text_field_focus::dispatch_delete_surrounding(before_bytes, after_bytes)
-        })
-        .unwrap_or(false);
-
-        if handled {
-            self.mark_dirty();
-            self.request_layout_pass();
-        }
-
-        handled
+        self.primary()
+            .on_ime_delete_surrounding(before_bytes, after_bytes)
     }
 }
 

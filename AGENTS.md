@@ -1,7 +1,9 @@
 # Agent Notes for Cranpose
 
 - No unsafe code.
+- `unwrap()` is forbidden
 - Use KISS, DRY and SOLID; duplicated code of ten or more lines needs a shared abstraction.
+- Do every refactoring, code search, code analysis and code edit through the RustRover MCP (`mcp__rustrover__*`): `rename_refactoring` for renames, `apply_patch` and `create_new_file` for edits (never an ad hoc Python, sed or shell rewrite of a source file), `search_symbol`, `get_symbol_info` and `analyze_calls` for declarations, usages and call graphs (the IDE knows the code; a regex over its text does not, so `search_text` and `search_regex` are for strings and comments only, and `grep` never), `get_file_problems`, `lint_files` and `run_inspection_kts` for analysis, `reformat_file` for formatting; for text searches run `scripts/dev/ide_search.py text|regex|symbol|file <query> [--in <glob>]... [--context N]` from the project root, which asks the same IDE server and prints each hit as path, line and matched text. Pass `projectPath` on every call; when the tools are missing, open the tree in RustRover first (`open -a RustRover <path>`), and say so before any fallback.
 - Fix root causes completely; do not leave partial changes, deprecated paths or compatibility layers in this pre-alpha repository.
 - A wrong value fixed at one consumer is still wrong at the others; audit every consumer of that value before calling the bug fixed.
 - Review architecture, correctness and maintainability before completion; fix supported problems without inventing new ones.
@@ -11,25 +13,24 @@
 - Use specific `Result<T, E>` errors for failure and `Option<T>` for absence.
 - Use idiomatic Rust names; composable functions use CamelCase.
 - Prefer `async`/`await` and Tokio for asynchronous work.
-- Document every public API reachable from a published crate root; all other code comments are forbidden.
+- Document every public API reachable from a published crate root; all other code comments are forbidden (`scripts/dev/strip_private_docs.py <file>...` removes the rest).
 - Write unit tests for all public functions and methods; put integration tests in `tests/`.
+- do not write tests in the same file with the implementation; all tests should be under `/test*/` folder, declared with `#[cfg(test)] #[path = "tests/<name>.rs"] mod tests;` (`scripts/dev/move_inline_tests.py <file>...` moves an inline module out)
 - Do not hardcode configuration; consider parallelism and SIMD where measured benefits hold, including wasm.
 - `#[cfg(feature = "robot-app")]` is forbidden.
 - Use plain, direct explanations; omit historical labels, "migration", and conditional offers to fix known problems.
 - Use only small, fast, inexpensive models when subagents are requested.
 - Check `git status` and the current branch before work and before completion; isolate concurrent edits in a worktree.
 - Before diagnosing a red test, fetch `origin main` and rebase; confirm claimed fixes are ancestors of `HEAD`.
-- Check existing PRs for a reported failure before writing a duplicate fix.
 - After a push, arm a CI watcher before the turn ends (`gh pr checks <n> --watch` under a monitor, or the desktop app's Auto-fix) and act on each result; a wait with no watcher is a stale session.
 - Keep related fixes in one PR; finish requested code changes before optional measurements or PR prose.
 - Never use `git reset`; preserve work with a stash when needed.
 - Worktrees share stashes: inspect contents, resolve the immutable stash hash, and apply only the intended work.
-- Never use recursive forced removal; preserve source under another name instead.
-- Run each removal as a standalone command, then verify separately; never chain it with another operation or loop body.
+- Run each `rm` as a standalone command, then verify separately; never chain it with another operation or loop body.
+- Never run ad hoc complex shell commands or pipelines; write a reusable script for the job, keep it under `scripts/` when it serves the repository, and run that.
+- Check draggable and droppable windows with `scripts/dev/drag_window.sh` (launch, windows, oswindows, screenwindows, shotwindow, drag, drag-pane, snap, key, cpu, trace, shot); never drive the pointer or the keyboard with ad hoc `cliclick` calls. `scripts/dev/check_tool_tear.sh <out-dir>` is the whole tear of a tool pane as one check: it reads the traces back and pictures only the torn window's region, never the whole screen.
 - Reclaim build artifacts only with `just gc` and `just gc-apply`; never remove `target/`, `build/`, source or uncommitted work by hand.
-- Check `df -h /` before large builds; recent writes and live processes both protect another task's artifacts.
 - Install hooks once per clone with `just hooks`; stage new files before `just precommit` so diff checks include them.
-- Follow the user's validation plan; otherwise run affected checks and batch full suites after related fixes, with zero warnings.
 - Use the exact CI recipes and shipped features; change checks in `justfile`, never inline in workflows.
 - Release: a bare `v*` tag at green main, never a hand bump: [runbook](docs/release.md).
 - `just web` always uses release mode; `just android` assembles the Android demo release; root `perf*.sh` scripts run performance checks.
@@ -37,30 +38,13 @@
 - Both SSH hosts use zsh: upload a script and run it with Bash, or quote `bash -lc` without premature variable expansion.
 - On samarch-1, use `scripts/ci/with_host_lock.sh --shared` for builds and `--exclusive` for measurements; acquire the lock instead of polling load.
 - Invoke `run_robot_test.sh` bare: it takes the host lock itself, and an outer lock self-deadlocks.
-- Run GPU scenarios and robot suites sequentially; do not launch competing Cargo commands against one target directory.
-- Attribute processes by checkout and ancestry; stop only your own exact process tree and verify its termination separately.
-- Never stop or restart a shared daemon owned by another job; a timeout is not proof it stopped.
-- Use `scripts/wait_until_quiet.sh` for process waits; every detached command needs an exit status and a staleness deadline.
 - Preserve command failures and stderr; a pipeline's final command or an absent error message does not prove success.
-- Verify automated edits against exact source bytes and inspect the diff before dependent builds or tests.
-- Build immutable source snapshots; verify full source inventories, resolved dependencies and native hashes, and refresh timestamps after archive extraction.
-- Check downstream consumers before removing public APIs; missing test names or local callers do not prove an API unused.
 - For nontrivial bugs: explore, record evidence, rank causes, compare architecture options, implement, verify and iterate.
-- Confirm a suspected cause by removing it and rerunning; withdraw FPS bottleneck claims when paired device results do not improve.
-- Reuse recorded experiments unless changed code, workload or evidence gives a concrete reason to repeat them.
 - Start bugs with a failing regression test; for a device UI bug, write the robot e2e test first.
 - Prove every optimization's correctness test fails when the optimization is deliberately broken; correctness takes priority over speed.
-- Verify every guard accepts valid input and rejects its intended failures; assert tests ran and the intended path executed.
-- Report code changes, verified regressions, CI status and unmet performance targets separately; verify merges by their resulting commit and content.
-- Close an issue only when its stated behavior is resolved; a merged PR or an empty issue list does not establish the performance target.
-- Batch completed changes before pushing; do not repeatedly supersede CI or cancel another task's run on a shared ref.
-- Compare revisions on one host with matching toolchains, features, app sources, assets, settings, data and package identity.
 - Hold the shared per-device lock for the entire FPS sequence; run ABAB then BABA without cooling waits and log temperatures before and after every run.
-- Verify scroll motion and both route endpoints for every run; preserve failed runs and record background work and instrumentation state.
-- Check every recorded motion frame for rendering regressions; clean endpoints cannot establish correctness.
 - Measure production FPS on a physical display; Xvfb presentation measures software presentation.
-- Wake the Pixel Watch before every step and assert `mWakefulness=Awake` before trusting captures or timing.
 - Check system dialogs with device UI tests; iOS tests require USB and Settings > Developer > Enable UI Automation.
 - On GitHub 404 or unexpected permission errors, run `gh auth switch --user samoylenkodmitry`.
-- Check Jetpack Compose sources at samarch-1 `/media/huge/projects/android/androidx`; verify freshness before treating this mid-2023 checkout as current.
+- Check Jetpack Compose sources at ssh samarch `/media/huge/projects/android/androidx`; verify freshness before treating this mid-2023 checkout as current.
 - Route new lessons through [TIME_WASTERS.md](TIME_WASTERS.md); use short one-liners and remove duplicates or resolved incident notes.

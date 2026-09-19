@@ -113,7 +113,7 @@ impl SlotWriteSession<'_> {
             "slot writer value slot requested with an empty group stack; recording recovery group"
         );
         let key = self.preview_group_key(GroupKeySeed::unkeyed(RECOVERY_VALUE_SLOT_STATIC_KEY));
-        let started = self.begin_group(key, None);
+        let started = self.begin_group(key, None, None);
         let slot = self.value_slot_in_active_group(started.anchor, 0, kind, init);
         let result = self.finish_group_body();
         if !result.detached_children.is_empty()

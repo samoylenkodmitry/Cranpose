@@ -154,9 +154,6 @@ impl ModifierNodeContext for BasicModifierNodeContext {
     }
 }
 
-/// Path to a node within a modifier chain, supporting delegate navigation.
-/// Fixed-size Copy type — delegate depth is bounded at 3 in practice
-/// (modifier delegation rarely exceeds 2–3 levels).
 const MAX_DELEGATE_DEPTH: usize = 3;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -834,8 +831,6 @@ impl fmt::Debug for SemanticsScrollBy {
     }
 }
 
-/// Two scroll actions always read as the same action, for the reason
-/// [`SemanticsCustomAction`]'s own comparison gives.
 impl PartialEq for SemanticsScrollBy {
     fn eq(&self, _other: &Self) -> bool {
         true
@@ -873,8 +868,6 @@ impl fmt::Debug for SemanticsScrollToIndex {
     }
 }
 
-/// Two jump actions always read as the same action, for the reason
-/// [`SemanticsCustomAction`]'s own comparison gives.
 impl PartialEq for SemanticsScrollToIndex {
     fn eq(&self, _other: &Self) -> bool {
         true
@@ -1083,10 +1076,6 @@ impl PartialEq for SemanticsMagicTap {
     }
 }
 
-/// Two set-progress actions always read as the same action, for the reason
-/// [`SemanticsCustomAction`]'s own comparison gives: the closure is rebuilt on
-/// every semantics collection, so comparing handler identity would report a
-/// changed tree on every frame.
 impl PartialEq for SemanticsSetProgress {
     fn eq(&self, _other: &Self) -> bool {
         true
@@ -1144,15 +1133,6 @@ impl fmt::Debug for SemanticsCustomAction {
     }
 }
 
-/// Two custom actions are the same action when they read the same.
-///
-/// The handler is deliberately excluded. A semantics recorder runs on every
-/// collection, so the closure is a fresh `Rc` each time and comparing handler
-/// identity would report "the tree changed" on every frame — which on Android
-/// means re-serialising and re-publishing the whole virtual-view tree across
-/// JNI 60 times a second. Handlers are looked up in the live semantics tree at
-/// the moment the action fires (see `perform_custom_action`), so a handler that
-/// is newer than the last published snapshot is still the one that runs.
 impl PartialEq for SemanticsCustomAction {
     fn eq(&self, other: &Self) -> bool {
         self.label == other.label
@@ -1655,8 +1635,6 @@ impl SemanticsConfiguration {
         self.merge_ranges(other);
     }
 
-    /// The lines a screen reader reads out that stand on their own: the title
-    /// of a pane, and the reason a control's content is wrong.
     fn merge_words(&mut self, other: &SemanticsConfiguration) {
         if let Some(title) = &other.pane_title {
             self.pane_title = Some(title.clone());
@@ -1666,8 +1644,6 @@ impl SemanticsConfiguration {
         }
     }
 
-    /// What a screen reader can ask the node to do, and the controls the node
-    /// drew rather than laid out.
     fn merge_actions(&mut self, other: &SemanticsConfiguration) {
         self.custom_actions
             .extend(other.custom_actions.iter().cloned());
@@ -1705,8 +1681,6 @@ impl SemanticsConfiguration {
         }
     }
 
-    /// The numbers behind a control: where a value sits in its range, how far
-    /// a container scrolled, how much a list holds, and what text is picked.
     fn merge_ranges(&mut self, other: &SemanticsConfiguration) {
         if let Some(selection) = other.text_selection {
             self.text_selection = Some(selection);
@@ -1823,6 +1797,10 @@ impl NodeCapabilities {
     pub const MODIFIER_LOCALS: Self = Self(1 << 4);
     /// Modifier participates in focus management.
     pub const FOCUS: Self = Self(1 << 5);
+    /// Modifier makes its node the root of a separate window: the node's
+    /// subtree is laid out into that window's size and drawn into that
+    /// window's scene, and the parent's scene skips it.
+    pub const WINDOW_ROOT: Self = Self(1 << 6);
 
     /// Returns an empty capability set.
     pub const fn empty() -> Self {
@@ -1881,6 +1859,7 @@ impl fmt::Debug for NodeCapabilities {
             .field("semantics", &self.contains(Self::SEMANTICS))
             .field("modifier_locals", &self.contains(Self::MODIFIER_LOCALS))
             .field("focus", &self.contains(Self::FOCUS))
+            .field("window_root", &self.contains(Self::WINDOW_ROOT))
             .finish()
     }
 }
@@ -2260,13 +2239,6 @@ fn request_auto_invalidations(
     context.pop_active_capabilities();
 }
 
-/// Attaches a node tree by calling on_attach for all unattached nodes.
-///
-/// # Safety
-/// Callers must ensure no immutable RefCell borrows are held on the node
-/// when calling this function. The on_attach callback may trigger mutations
-/// (invalidations, state updates, etc.) that require mutable access, which
-/// would panic if an immutable borrow is held across the call.
 fn attach_node_tree(node: &mut dyn ModifierNode, context: &mut dyn ModifierNodeContext) {
     visit_node_tree_mut(node, &mut |n| {
         if !n.node_state().is_attached() {
@@ -2346,10 +2318,6 @@ impl Default for ModifierNodeChain {
     }
 }
 
-/// Index structure for O(1) modifier entry lookups during update.
-///
-/// This avoids O(n²) complexity by pre-building hash maps that allow constant-time
-/// lookups for matching entries by key, hash, or type.
 struct EntryIndex {
     keyed: HashMap<(TypeId, TypeId, u64), Vec<usize>>,
     hashed: HashMap<(TypeId, TypeId, u64), Vec<usize>>,

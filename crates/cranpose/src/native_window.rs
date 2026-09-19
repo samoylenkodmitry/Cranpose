@@ -10,23 +10,42 @@ use std::cell::Cell;
     not(target_arch = "wasm32")
 ))]
 use std::collections::HashMap;
-use std::{
-    cell::RefCell,
-    hash::{Hash, Hasher},
-    rc::Rc,
-};
+#[cfg(all(
+    feature = "desktop-shell",
+    feature = "renderer-wgpu",
+    not(target_arch = "wasm32")
+))]
+use std::hash::{Hash, Hasher};
+use std::{cell::RefCell, fmt, rc::Rc};
 
 use cranpose_core::MutableState;
 use cranpose_ui::{Modifier, Point, PointerEventKind, PointerInputScope, Size, composable};
 
-/// A stable identifier for a declarative operating-system window.
+#[cfg(all(
+    feature = "desktop-shell",
+    feature = "renderer-wgpu",
+    not(target_arch = "wasm32")
+))]
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub struct WindowId(u64);
+pub(crate) struct WindowId(u64);
 
+#[cfg(all(
+    feature = "desktop-shell",
+    feature = "renderer-wgpu",
+    not(target_arch = "wasm32")
+))]
 impl WindowId {
-    /// Creates a window identifier from a static application identifier.
-    pub fn from_static(id: &'static str) -> Self {
+    #[cfg(test)]
+    pub(crate) fn from_static(id: &'static str) -> Self {
         Self(hash_id(id))
+    }
+
+    pub(crate) fn raw(self) -> u64 {
+        self.0
+    }
+
+    pub(crate) fn from_node(node: cranpose_core::NodeId) -> Self {
+        Self(node as u64)
     }
 }
 
@@ -51,7 +70,7 @@ pub(crate) struct WindowGroupId(u64);
     not(target_arch = "wasm32")
 ))]
 impl WindowGroupId {
-    fn from_static(id: &'static str) -> Self {
+    pub(crate) fn from_static(id: &'static str) -> Self {
         Self(hash_id(id))
     }
 }
@@ -60,6 +79,24 @@ impl WindowGroupId {
 pub enum NativeWindowPositionOrigin {
     Screen,
     HostWindow,
+}
+
+/// Whether a window takes keyboard focus when it is created.
+///
+/// macOS reads a window's cursor rectangles only while it is key, so a window
+/// that never takes focus shows the system arrow whatever the application
+/// sets. The policy applies when the desktop creates the window; a window
+/// shown later comes up as the platform shows it.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum WindowFocus {
+    /// The window never takes focus when it is created.
+    Never,
+    /// The window takes focus only when no window of the application holds
+    /// it, so a window the user is working in keeps it.
+    #[default]
+    WhenNoneFocused,
+    /// The window takes focus whenever it is created.
+    Always,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -79,15 +116,18 @@ pub struct NativeWindowOptions {
     pub min_height: Option<f32>,
     pub max_width: Option<f32>,
     pub max_height: Option<f32>,
+    /// Whether the window takes focus when it is created.
+    pub focus: WindowFocus,
 }
 
 /// Movement behavior for a group of attached peer windows.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WindowMoveMode {
     /// Dragging any window in the group moves its attached component.
     AllAttached,
-    /// Only the listed windows move their attached component; other windows move alone.
-    DragLeaderOnly(Vec<WindowId>),
+    /// Only windows configured with [`WindowConfig::leads_group`] move their
+    /// attached component; other windows move alone.
+    LeadersOnly,
 }
 
 impl WindowMoveMode {
@@ -96,10 +136,10 @@ impl WindowMoveMode {
         feature = "renderer-wgpu",
         not(target_arch = "wasm32")
     ))]
-    fn moves_attached_component(&self, window_id: WindowId) -> bool {
+    fn moves_attached_component(self, leads_group: bool) -> bool {
         match self {
             Self::AllAttached => true,
-            Self::DragLeaderOnly(leaders) => leaders.contains(&window_id),
+            Self::LeadersOnly => leads_group,
         }
     }
 }
@@ -145,6 +185,20 @@ impl Default for WindowAttachPolicy {
 pub(crate) struct NativeWindowGroupMembership {
     pub(crate) id: WindowGroupId,
     pub(crate) policy: WindowAttachPolicy,
+    pub(crate) leads: bool,
+}
+
+#[cfg(all(
+    feature = "desktop-shell",
+    feature = "renderer-wgpu",
+    not(target_arch = "wasm32")
+))]
+#[derive(Clone)]
+pub(crate) struct NativeWindowParts {
+    pub(crate) options: NativeWindowOptions,
+    pub(crate) events: NativeWindowEvents,
+    pub(crate) state: Option<WindowState>,
+    pub(crate) group: Option<NativeWindowGroupMembership>,
 }
 
 impl NativeWindowOptions {
@@ -165,6 +219,7 @@ impl NativeWindowOptions {
             min_height: None,
             max_width: None,
             max_height: None,
+            focus: WindowFocus::default(),
         }
     }
 
@@ -207,6 +262,12 @@ impl NativeWindowOptions {
 
     pub fn with_always_on_top(mut self, always_on_top: bool) -> Self {
         self.always_on_top = always_on_top;
+        self
+    }
+
+    /// Sets whether the window takes focus when it is created.
+    pub fn with_focus(mut self, focus: WindowFocus) -> Self {
+        self.focus = focus;
         self
     }
 
@@ -272,11 +333,13 @@ impl NativeWindowEvents {
     }
 }
 
-/// Mutable position and size state for a declarative OS window.
+/// Mutable position and size state for a declarative OS window, and whether
+/// the window has a frame on the screen.
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub struct WindowState {
     position: MutableState<Option<Point>>,
     size: MutableState<Size>,
+    presented: MutableState<bool>,
 }
 
 impl WindowState {
@@ -320,6 +383,31 @@ impl WindowState {
             self.size.set(size);
         }
     }
+
+    /// Whether the window has presented a frame since it was last shown.
+    ///
+    /// A window comes up a few frames after it is declared, and the desktop
+    /// cannot present to it before it is on the screen. Content that moves
+    /// from one window into a new one can wait for this before it leaves the
+    /// old window, so the user never sees it in neither.
+    pub fn presented(self) -> bool {
+        self.presented.get()
+    }
+
+    /// Whether the window has presented a frame, without subscribing to changes.
+    pub fn presented_non_reactive(self) -> bool {
+        self.presented.get_non_reactive()
+    }
+
+    /// Records whether the window has a frame on the screen. The desktop sets
+    /// it after a present and clears it when the window is hidden or let go,
+    /// which can be after the composition that remembered the state is gone;
+    /// a state that is gone is left alone.
+    pub fn set_presented(self, presented: bool) {
+        if self.presented.is_alive() && self.presented.get_non_reactive() != presented {
+            self.presented.set(presented);
+        }
+    }
 }
 
 /// Remembers native-window position and size across recompositions.
@@ -330,19 +418,62 @@ pub fn rememberWindowState(width: f32, height: f32) -> WindowState {
     WindowState {
         position: cranpose_core::rememberMutableStateOf(|| None::<Point>),
         size: cranpose_core::rememberMutableStateOf(move || Size::new(width, height)),
+        presented: cranpose_core::rememberMutableStateOf(|| false),
+    }
+}
+
+/// Remembers native-window position and size across recompositions, with the
+/// window first placed at the given screen position.
+#[allow(non_snake_case)]
+#[composable]
+#[track_caller]
+pub fn rememberWindowStateAt(x: f32, y: f32, width: f32, height: f32) -> WindowState {
+    WindowState {
+        position: cranpose_core::rememberMutableStateOf(move || Some(Point::new(x, y))),
+        size: cranpose_core::rememberMutableStateOf(move || Size::new(width, height)),
+        presented: cranpose_core::rememberMutableStateOf(|| false),
     }
 }
 
 /// Declarative configuration for an operating-system window.
 ///
-/// Use this with [`Window`] to render a composable subtree into a separate OS
-/// window on desktop. Platforms without native sub-window support render the
-/// content inline, so pointer input and other composable behavior stay shared.
+/// Apply it with [`WindowModifierExt::window`] to render a composable subtree
+/// in a separate OS window on desktop. Platforms without native sub-window
+/// support render the content inline, so pointer input and other composable
+/// behavior stay shared. Two configurations compare equal when they ask the
+/// same of the window; their callbacks are not compared.
 #[derive(Clone)]
 pub struct WindowConfig {
     options: NativeWindowOptions,
     callbacks: NativeWindowEvents,
     state: Option<WindowState>,
+    group: Option<WindowGroupConfig>,
+    leads_group: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct WindowGroupConfig {
+    id: &'static str,
+    policy: WindowAttachPolicy,
+}
+
+impl PartialEq for WindowConfig {
+    fn eq(&self, other: &Self) -> bool {
+        self.options == other.options
+            && self.state == other.state
+            && self.group == other.group
+            && self.leads_group == other.leads_group
+    }
+}
+
+impl fmt::Debug for WindowConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("WindowConfig")
+            .field("options", &self.options)
+            .field("group", &self.group)
+            .field("leads_group", &self.leads_group)
+            .finish_non_exhaustive()
+    }
 }
 
 impl WindowConfig {
@@ -352,6 +483,8 @@ impl WindowConfig {
             options: NativeWindowOptions::new(title, width, height),
             callbacks: NativeWindowEvents::new(),
             state: None,
+            group: None,
+            leads_group: false,
         }
     }
 
@@ -367,6 +500,8 @@ impl WindowConfig {
             options: NativeWindowOptions::borderless(title, width, height),
             callbacks: NativeWindowEvents::new(),
             state: None,
+            group: None,
+            leads_group: false,
         }
     }
 
@@ -409,6 +544,13 @@ impl WindowConfig {
     /// Sets whether the window should be kept above normal windows.
     pub fn with_always_on_top(mut self, always_on_top: bool) -> Self {
         self.options = self.options.with_always_on_top(always_on_top);
+        self
+    }
+
+    /// Sets whether the window takes focus when it is created. See
+    /// [`WindowFocus`].
+    pub fn with_focus(mut self, focus: WindowFocus) -> Self {
+        self.options = self.options.with_focus(focus);
         self
     }
 
@@ -463,10 +605,45 @@ impl WindowConfig {
         self
     }
 
-    pub(crate) fn into_parts(
-        self,
-    ) -> (NativeWindowOptions, NativeWindowEvents, Option<WindowState>) {
-        (self.options, self.callbacks, self.state)
+    /// Joins the window to the group named `id`. Windows of one group snap
+    /// to each other's edges and, under `policy`, move together.
+    pub fn group(mut self, id: &'static str, policy: WindowAttachPolicy) -> Self {
+        self.group = Some(WindowGroupConfig { id, policy });
+        self
+    }
+
+    /// Whether dragging this window carries the windows attached to it when
+    /// its group moves under [`WindowMoveMode::LeadersOnly`].
+    pub fn leads_group(mut self, leads: bool) -> Self {
+        self.leads_group = leads;
+        self
+    }
+
+    #[cfg(all(
+        feature = "desktop-shell",
+        feature = "renderer-wgpu",
+        not(target_arch = "wasm32")
+    ))]
+    pub(crate) fn title(&self) -> &str {
+        &self.options.title
+    }
+
+    #[cfg(all(
+        feature = "desktop-shell",
+        feature = "renderer-wgpu",
+        not(target_arch = "wasm32")
+    ))]
+    pub(crate) fn into_parts(self) -> NativeWindowParts {
+        NativeWindowParts {
+            options: self.options,
+            events: self.callbacks,
+            state: self.state,
+            group: self.group.map(|group| NativeWindowGroupMembership {
+                id: WindowGroupId::from_static(group.id),
+                policy: group.policy,
+                leads: self.leads_group,
+            }),
+        }
     }
 }
 
@@ -493,6 +670,14 @@ pub enum WindowResizeDirection {
 
 /// Modifier helpers for composables rendered in OS windows.
 pub trait WindowModifierExt {
+    /// Renders this node's subtree in an operating-system window of its own
+    /// while the modifier is applied, and inline again when it is not. The
+    /// node keeps its identity, its remembered state and its running effects
+    /// either way, so an application tears a subtree out by choosing the
+    /// modifier from state. Platforms without native sub-windows leave the
+    /// subtree inline.
+    fn window(self, config: WindowConfig) -> Modifier;
+
     /// Marks this component as a drag target for its containing OS window.
     ///
     /// The modifier is inert when the component is not currently rendered in a
@@ -517,6 +702,27 @@ pub trait WindowModifierExt {
 }
 
 impl WindowModifierExt for Modifier {
+    fn window(self, config: WindowConfig) -> Modifier {
+        #[cfg(all(
+            feature = "desktop-shell",
+            feature = "renderer-wgpu",
+            not(target_arch = "wasm32")
+        ))]
+        {
+            crate::window_node::window(self, config)
+        }
+
+        #[cfg(not(all(
+            feature = "desktop-shell",
+            feature = "renderer-wgpu",
+            not(target_arch = "wasm32")
+        )))]
+        {
+            let _ = config;
+            self
+        }
+    }
+
     fn window_drag_area(self) -> Modifier {
         self.window_drag_area_with_callbacks(|| {}, || {})
     }
@@ -594,14 +800,55 @@ impl WindowModifierExt for Modifier {
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
-pub(crate) type NativeWindowContent = Rc<RefCell<Box<dyn FnMut()>>>;
+pub(crate) struct NativeWindowRoot {
+    size: Cell<Size>,
+}
 
 #[cfg(all(
     feature = "desktop-shell",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
-type NativeWindowOwner = Rc<()>;
+impl NativeWindowRoot {
+    pub(crate) fn new(size: Size) -> Self {
+        Self {
+            size: Cell::new(size),
+        }
+    }
+
+    pub(crate) fn set_size(&self, size: Size) {
+        self.size.set(size);
+    }
+}
+
+#[cfg(all(
+    feature = "desktop-shell",
+    feature = "renderer-wgpu",
+    not(target_arch = "wasm32")
+))]
+impl cranpose_ui::WindowRootDescriptor for NativeWindowRoot {
+    fn layout_size(&self) -> Size {
+        self.size.get()
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+#[cfg(all(
+    feature = "desktop-shell",
+    feature = "renderer-wgpu",
+    not(target_arch = "wasm32")
+))]
+pub(crate) type NativeWindowRootHandle = Rc<NativeWindowRoot>;
+
+#[cfg(all(
+    feature = "desktop-shell",
+    feature = "renderer-wgpu",
+    not(target_arch = "wasm32")
+))]
+pub(crate) type NativeWindowOwner = Rc<()>;
 
 type NativeWindowDragHandler = Rc<dyn Fn() -> bool>;
 type NativeWindowResizeHandler = Rc<dyn Fn(WindowResizeDirection)>;
@@ -610,7 +857,6 @@ type NativeWindowResizeHandler = Rc<dyn Fn(WindowResizeDirection)>;
 struct NativeWindowDispatchContext {
     drag_handler: Option<NativeWindowDragHandler>,
     resize_handler: Option<NativeWindowResizeHandler>,
-    surface_origin: Option<Point>,
 }
 
 #[cfg(all(
@@ -625,7 +871,7 @@ pub(crate) struct NativeWindowRequest {
     pub(crate) events: NativeWindowEvents,
     pub(crate) state: Option<WindowState>,
     pub(crate) group: Option<NativeWindowGroupMembership>,
-    pub(crate) content: NativeWindowContent,
+    pub(crate) root: NativeWindowRootHandle,
     pub(crate) revision: u64,
     owner: NativeWindowOwner,
 }
@@ -641,7 +887,7 @@ struct NativeWindowRegistration {
     events: NativeWindowEvents,
     state: Option<WindowState>,
     group: Option<NativeWindowGroupMembership>,
-    content: NativeWindowContent,
+    root: NativeWindowRootHandle,
     owner: NativeWindowOwner,
 }
 
@@ -686,7 +932,7 @@ impl NativeWindowRegistry {
                 events: registration.events,
                 state: registration.state,
                 group: registration.group,
-                content: registration.content,
+                root: registration.root,
                 revision,
                 owner: registration.owner,
             },
@@ -722,119 +968,6 @@ thread_local! {
 
 thread_local! {
     static CURRENT_NATIVE_WINDOW_DISPATCH: RefCell<Vec<NativeWindowDispatchContext>> = const { RefCell::new(Vec::new()) };
-    #[cfg(all(
-        feature = "desktop-shell",
-        feature = "renderer-wgpu",
-        not(target_arch = "wasm32")
-    ))]
-    static CURRENT_WINDOW_GROUP: RefCell<Option<NativeWindowGroupMembership>> = const { RefCell::new(None) };
-}
-
-/// Renders content in an operating-system window owned by the current composition.
-///
-/// On desktop this creates or updates a separate OS window. Other platforms compose
-/// the content inline so the same UI remains usable without native sub-window support.
-#[allow(non_snake_case)]
-#[composable(no_skip)]
-pub fn Window(id: &'static str, config: WindowConfig, content: impl FnMut() + 'static) {
-    let (options, events, state) = config.into_parts();
-    let window_id = WindowId::from_static(id);
-    NativeWindowWithEvents(window_id, options, events, state, content);
-}
-
-/// Renders content in a peer operating-system window.
-///
-/// This is the first-class multi-window spelling. [`Window`] remains a compact
-/// alias for the same peer-window declaration.
-#[allow(non_snake_case)]
-#[composable(no_skip)]
-pub fn WindowNode(id: WindowId, config: WindowConfig, content: impl FnMut() + 'static) {
-    let (options, events, state) = config.into_parts();
-    NativeWindowWithEvents(id, options, events, state, content);
-}
-
-/// Applies attachment and move policy to all peer windows declared inside it.
-#[allow(non_snake_case)]
-#[composable(no_skip)]
-pub fn WindowGroup(id: &'static str, policy: WindowAttachPolicy, content: impl FnMut() + 'static) {
-    #[cfg(all(
-        feature = "desktop-shell",
-        feature = "renderer-wgpu",
-        not(target_arch = "wasm32")
-    ))]
-    {
-        with_window_group(
-            NativeWindowGroupMembership {
-                id: WindowGroupId::from_static(id),
-                policy,
-            },
-            content,
-        );
-    }
-
-    #[cfg(not(all(
-        feature = "desktop-shell",
-        feature = "renderer-wgpu",
-        not(target_arch = "wasm32")
-    )))]
-    {
-        let _ = (id, policy);
-        let mut content = content;
-        content();
-    }
-}
-
-#[allow(non_snake_case)]
-#[composable(no_skip)]
-fn NativeWindowWithEvents(
-    id: WindowId,
-    options: NativeWindowOptions,
-    events: NativeWindowEvents,
-    state: Option<WindowState>,
-    content: impl FnMut() + 'static,
-) {
-    #[cfg(all(
-        feature = "desktop-shell",
-        feature = "renderer-wgpu",
-        not(target_arch = "wasm32")
-    ))]
-    {
-        let key = id;
-        let group = current_window_group();
-        let owner = cranpose_core::remember(|| Rc::new(())).with(Rc::clone);
-        let content_cell =
-            cranpose_core::remember(|| Rc::new(RefCell::new(Box::new(|| {}) as Box<dyn FnMut()>)))
-                .with(Rc::clone);
-        *content_cell.borrow_mut() = Box::new(content);
-
-        {
-            let options = options.clone();
-            let events = events.clone();
-            let content = Rc::clone(&content_cell);
-            let owner = Rc::clone(&owner);
-            cranpose_core::SideEffect(move || {
-                register_native_window(key, options, events, state, group, content, owner);
-            });
-        }
-
-        {
-            let owner = Rc::clone(&owner);
-            cranpose_core::DisposableEffect(key, move |scope| {
-                scope.on_dispose(move || unregister_native_window(key, owner))
-            });
-        }
-    }
-
-    #[cfg(not(all(
-        feature = "desktop-shell",
-        feature = "renderer-wgpu",
-        not(target_arch = "wasm32")
-    )))]
-    {
-        let mut content = content;
-        let _ = (id, options, events, state);
-        content();
-    }
 }
 
 fn request_native_window_drag() -> bool {
@@ -850,14 +983,6 @@ fn request_native_window_resize(direction: WindowResizeDirection) -> bool {
             handler(direction);
             true
         })
-}
-
-/// Returns the desktop-space origin of the current native window surface while
-/// dispatching input inside a native window.
-///
-/// This is `None` for inline content and outside native-window input dispatch.
-pub fn current_native_window_surface_origin() -> Option<Point> {
-    current_native_window_dispatch_context().and_then(|context| context.surface_origin)
 }
 
 #[cfg(all(
@@ -960,59 +1085,13 @@ pub(crate) fn with_native_window_drag_handler<R>(
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
-pub(crate) fn with_native_window_surface_origin<R>(
-    origin: Option<Point>,
-    f: impl FnOnce() -> R,
-) -> R {
-    let mut context = current_native_window_dispatch_context().unwrap_or_default();
-    context.surface_origin = origin;
-    with_native_window_dispatch_context(context, f)
-}
-
-#[cfg(all(
-    feature = "desktop-shell",
-    feature = "renderer-wgpu",
-    not(target_arch = "wasm32")
-))]
-fn current_window_group() -> Option<NativeWindowGroupMembership> {
-    CURRENT_WINDOW_GROUP.with(|slot| slot.borrow().clone())
-}
-
-#[cfg(all(
-    feature = "desktop-shell",
-    feature = "renderer-wgpu",
-    not(target_arch = "wasm32")
-))]
-fn with_window_group<R>(group: NativeWindowGroupMembership, f: impl FnOnce() -> R) -> R {
-    struct WindowGroupGuard(Option<NativeWindowGroupMembership>);
-
-    impl Drop for WindowGroupGuard {
-        fn drop(&mut self) {
-            CURRENT_WINDOW_GROUP.with(|slot| {
-                *slot.borrow_mut() = self.0.take();
-            });
-        }
-    }
-
-    let previous = CURRENT_WINDOW_GROUP.with(|slot| slot.borrow_mut().replace(group));
-    let guard = WindowGroupGuard(previous);
-    let result = f();
-    drop(guard);
-    result
-}
-
-#[cfg(all(
-    feature = "desktop-shell",
-    feature = "renderer-wgpu",
-    not(target_arch = "wasm32")
-))]
-fn register_native_window(
+pub(crate) fn register_native_window(
     key: NativeWindowKey,
     options: NativeWindowOptions,
     events: NativeWindowEvents,
     state: Option<WindowState>,
     group: Option<NativeWindowGroupMembership>,
-    content: NativeWindowContent,
+    root: NativeWindowRootHandle,
     owner: NativeWindowOwner,
 ) {
     let Some(registry) = current_native_window_registry() else {
@@ -1027,7 +1106,7 @@ fn register_native_window(
         events,
         state,
         group,
-        content,
+        root,
         owner,
     });
 }
@@ -1037,7 +1116,7 @@ fn register_native_window(
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
-fn unregister_native_window(key: NativeWindowKey, owner: NativeWindowOwner) {
+pub(crate) fn unregister_native_window(key: NativeWindowKey, owner: NativeWindowOwner) {
     let Some(registry) = current_native_window_registry() else {
         log::error!(
             "native window declaration {key:?} could not unregister because no native-window registry is active"
@@ -1047,6 +1126,11 @@ fn unregister_native_window(key: NativeWindowKey, owner: NativeWindowOwner) {
     registry.unregister(key, owner);
 }
 
+#[cfg(all(
+    feature = "desktop-shell",
+    feature = "renderer-wgpu",
+    not(target_arch = "wasm32")
+))]
 fn hash_id(id: &'static str) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     id.hash(&mut hasher);
@@ -1124,7 +1208,7 @@ impl WindowGraphState {
         let group = dragged_window.group.clone();
         let captured = if let Some(group) = &group {
             let group_windows = group_windows(windows, group);
-            let moves_attached = group.policy.move_mode.moves_attached_component(dragged);
+            let moves_attached = group.policy.move_mode.moves_attached_component(group.leads);
             let component = if moves_attached {
                 attached_component(&group_windows, dragged, group.policy.attach_epsilon)
             } else {
@@ -1197,10 +1281,7 @@ impl WindowGraphState {
             return Vec::new();
         }
 
-        let moves_attached = group
-            .policy
-            .move_mode
-            .moves_attached_component(session.dragged);
+        let moves_attached = group.policy.move_mode.moves_attached_component(group.leads);
         let mut component = if moves_attached {
             session.captured.iter().map(|window| window.id).collect()
         } else {
@@ -1241,7 +1322,7 @@ impl WindowGraphState {
         let Some(group) = &moved_window.group else {
             return Vec::new();
         };
-        if !group.policy.move_mode.moves_attached_component(moved) {
+        if !group.policy.move_mode.moves_attached_component(group.leads) {
             return Vec::new();
         }
 
@@ -1530,1157 +1611,5 @@ fn range_overlap_length(a_start: f32, a_end: f32, b_start: f32, b_end: f32) -> f
 }
 
 #[cfg(test)]
-mod tests {
-    use std::sync::Arc;
-
-    use super::*;
-
-    fn test_window_state(
-        width: f32,
-        height: f32,
-    ) -> (
-        cranpose_core::Runtime,
-        cranpose_core::OwnedMutableState<Option<Point>>,
-        cranpose_core::OwnedMutableState<Size>,
-        WindowState,
-    ) {
-        let runtime = cranpose_core::Runtime::new(Arc::new(cranpose_core::DefaultScheduler));
-        let handle = runtime.handle();
-        let position =
-            cranpose_core::OwnedMutableState::with_runtime(None::<Point>, handle.clone());
-        let size = cranpose_core::OwnedMutableState::with_runtime(Size::new(width, height), handle);
-        let state = WindowState {
-            position: position.handle(),
-            size: size.handle(),
-        };
-        (runtime, position, size, state)
-    }
-
-    #[cfg(all(
-        feature = "desktop-shell",
-        feature = "renderer-wgpu",
-        not(target_arch = "wasm32")
-    ))]
-    fn with_request_test_registry<R>(f: impl FnOnce(&Rc<NativeWindowRegistry>) -> R) -> R {
-        let registry = Rc::new(NativeWindowRegistry::default());
-        with_native_window_registry(&registry, || f(&registry))
-    }
-
-    #[cfg(all(
-        feature = "desktop-shell",
-        feature = "renderer-wgpu",
-        not(target_arch = "wasm32")
-    ))]
-    fn reset_request_test_state(registry: &NativeWindowRegistry) {
-        clear_native_window_requests(registry);
-    }
-
-    #[cfg(all(
-        feature = "desktop-shell",
-        feature = "renderer-wgpu",
-        not(target_arch = "wasm32")
-    ))]
-    fn request_exists(registry: &NativeWindowRegistry, key: NativeWindowKey) -> bool {
-        native_window_requests(registry)
-            .into_iter()
-            .any(|request| request.key == key)
-    }
-
-    #[cfg(all(
-        feature = "desktop-shell",
-        feature = "renderer-wgpu",
-        not(target_arch = "wasm32")
-    ))]
-    #[test]
-    fn native_window_requests_are_isolated_by_registry() {
-        let first_registry = Rc::new(NativeWindowRegistry::default());
-        let second_registry = Rc::new(NativeWindowRegistry::default());
-        let first_key = WindowId::from_static("first-registry-window");
-        let second_key = WindowId::from_static("second-registry-window");
-        let first_owner = Rc::new(());
-        let second_owner = Rc::new(());
-        let first_content = Rc::new(RefCell::new(Box::new(|| {}) as Box<dyn FnMut()>));
-        let second_content = Rc::new(RefCell::new(Box::new(|| {}) as Box<dyn FnMut()>));
-
-        with_native_window_registry(&first_registry, || {
-            register_native_window(
-                first_key,
-                NativeWindowOptions::new("first", 80.0, 40.0),
-                NativeWindowEvents::default(),
-                None,
-                None,
-                first_content,
-                first_owner,
-            );
-        });
-        with_native_window_registry(&second_registry, || {
-            register_native_window(
-                second_key,
-                NativeWindowOptions::new("second", 90.0, 45.0),
-                NativeWindowEvents::default(),
-                None,
-                None,
-                second_content,
-                second_owner,
-            );
-        });
-
-        let first_requests = native_window_requests(&first_registry);
-        let second_requests = native_window_requests(&second_registry);
-
-        assert_eq!(first_requests.len(), 1);
-        assert_eq!(first_requests[0].key, first_key);
-        assert_eq!(second_requests.len(), 1);
-        assert_eq!(second_requests[0].key, second_key);
-    }
-
-    #[cfg(all(
-        feature = "desktop-shell",
-        feature = "renderer-wgpu",
-        not(target_arch = "wasm32")
-    ))]
-    struct RequestTestComposition {
-        _context: Rc<cranpose_ui::AppContext>,
-        _scope: cranpose_ui::AppContextScope,
-        runtime: cranpose_core::Runtime,
-        composition: cranpose_core::Composition<cranpose_core::MemoryApplier>,
-        registry: Rc<NativeWindowRegistry>,
-    }
-
-    #[cfg(all(
-        feature = "desktop-shell",
-        feature = "renderer-wgpu",
-        not(target_arch = "wasm32")
-    ))]
-    impl RequestTestComposition {
-        fn with_registry<R>(
-            &mut self,
-            f: impl FnOnce(&mut cranpose_core::Composition<cranpose_core::MemoryApplier>) -> R,
-        ) -> R {
-            let registry = Rc::clone(&self.registry);
-            with_native_window_registry(&registry, || f(&mut self.composition))
-        }
-    }
-
-    #[cfg(all(
-        feature = "desktop-shell",
-        feature = "renderer-wgpu",
-        not(target_arch = "wasm32")
-    ))]
-    fn test_app_context_scope() -> (Rc<cranpose_ui::AppContext>, cranpose_ui::AppContextScope) {
-        let context = cranpose_ui::AppContext::new();
-        let scope = context.enter_scope();
-        (context, scope)
-    }
-
-    #[cfg(all(
-        feature = "desktop-shell",
-        feature = "renderer-wgpu",
-        not(target_arch = "wasm32")
-    ))]
-    fn request_test_composition() -> RequestTestComposition {
-        let (context, scope) = test_app_context_scope();
-        let runtime = cranpose_core::Runtime::new(Arc::new(cranpose_core::DefaultScheduler));
-        let composition = cranpose_core::Composition::with_runtime(
-            cranpose_core::MemoryApplier::new(),
-            runtime.clone(),
-        );
-        RequestTestComposition {
-            _context: context,
-            _scope: scope,
-            runtime,
-            composition,
-            registry: Rc::new(NativeWindowRegistry::default()),
-        }
-    }
-
-    #[cfg(all(
-        feature = "desktop-shell",
-        feature = "renderer-wgpu",
-        not(target_arch = "wasm32")
-    ))]
-    #[composable]
-    #[allow(non_snake_case)]
-    fn RequestCounterText(counter: cranpose_core::MutableState<i32>) {
-        cranpose_ui::Text(
-            format!("Counter {}", counter.get()),
-            cranpose_ui::Modifier::empty(),
-            cranpose_ui::TextStyle::default(),
-        );
-    }
-
-    #[cfg(all(
-        feature = "desktop-shell",
-        feature = "renderer-wgpu",
-        not(target_arch = "wasm32")
-    ))]
-    #[composable]
-    #[allow(non_snake_case)]
-    fn PersistentRequestRoot(counter: cranpose_core::MutableState<i32>) {
-        RequestCounterText(counter);
-        WindowNode(
-            WindowId::from_static("persistent-request"),
-            WindowConfig::new("Persistent request", 100.0, 50.0),
-            || {},
-        );
-    }
-
-    #[cfg(all(
-        feature = "desktop-shell",
-        feature = "renderer-wgpu",
-        not(target_arch = "wasm32")
-    ))]
-    #[composable]
-    #[allow(non_snake_case)]
-    fn ConditionalRequestRoot(show: cranpose_core::MutableState<bool>) {
-        if show.get() {
-            WindowNode(
-                WindowId::from_static("conditional-request"),
-                WindowConfig::new("Conditional request", 100.0, 50.0),
-                || {},
-            );
-        }
-    }
-
-    #[cfg(all(
-        feature = "desktop-shell",
-        feature = "renderer-wgpu",
-        not(target_arch = "wasm32")
-    ))]
-    #[composable]
-    #[allow(non_snake_case)]
-    fn KeyedReplacementRequestRoot(show: cranpose_core::MutableState<bool>) {
-        let active = show.get();
-        cranpose_core::with_key(&active, || {
-            if active {
-                WindowNode(
-                    WindowId::from_static("keyed-replacement-request"),
-                    WindowConfig::new("Keyed replacement request", 100.0, 50.0),
-                    || {},
-                );
-            } else {
-                cranpose_ui::Text(
-                    "Inactive branch",
-                    cranpose_ui::Modifier::empty(),
-                    cranpose_ui::TextStyle::default(),
-                );
-            }
-        });
-    }
-
-    #[cfg(all(
-        feature = "desktop-shell",
-        feature = "renderer-wgpu",
-        not(target_arch = "wasm32")
-    ))]
-    #[test]
-    fn native_window_request_survives_unrelated_scoped_recompose() {
-        let mut test = request_test_composition();
-        reset_request_test_state(&test.registry);
-        let counter = cranpose_core::MutableState::with_runtime(0i32, test.runtime.handle());
-        let key = WindowId::from_static("persistent-request");
-        let root_key = cranpose_core::location_key(file!(), line!(), column!());
-        test.with_registry(|composition| {
-            composition
-                .render_stable(root_key, || PersistentRequestRoot(counter))
-                .expect("initial persistent native-window request render");
-        });
-        assert!(request_exists(&test.registry, key));
-
-        counter.set(1);
-        test.with_registry(|composition| {
-            composition
-                .reconcile(root_key, || PersistentRequestRoot(counter))
-                .expect("persistent native-window request reconcile");
-        });
-
-        assert!(
-            request_exists(&test.registry, key),
-            "unchanged native-window declarations must stay registered when only a sibling scope recomposes"
-        );
-        clear_native_window_requests(&test.registry);
-    }
-
-    #[cfg(all(
-        feature = "desktop-shell",
-        feature = "renderer-wgpu",
-        not(target_arch = "wasm32")
-    ))]
-    #[test]
-    fn native_window_request_unregisters_when_conditional_declaration_is_removed() {
-        let mut test = request_test_composition();
-        reset_request_test_state(&test.registry);
-        let show = cranpose_core::MutableState::with_runtime(true, test.runtime.handle());
-        let key = WindowId::from_static("conditional-request");
-        let root_key = cranpose_core::location_key(file!(), line!(), column!());
-        test.with_registry(|composition| {
-            composition
-                .render_stable(root_key, || ConditionalRequestRoot(show))
-                .expect("initial conditional native-window request render");
-        });
-        assert!(request_exists(&test.registry, key));
-
-        show.set(false);
-        test.with_registry(|composition| {
-            composition
-                .reconcile(root_key, || ConditionalRequestRoot(show))
-                .expect("conditional native-window request reconcile");
-        });
-
-        assert!(
-            !request_exists(&test.registry, key),
-            "removed native-window declarations must unregister through their disposable owner"
-        );
-        clear_native_window_requests(&test.registry);
-    }
-
-    #[cfg(all(
-        feature = "desktop-shell",
-        feature = "renderer-wgpu",
-        not(target_arch = "wasm32")
-    ))]
-    #[test]
-    fn native_window_request_unregisters_when_keyed_branch_is_replaced() {
-        let mut test = request_test_composition();
-        reset_request_test_state(&test.registry);
-        let show = cranpose_core::MutableState::with_runtime(true, test.runtime.handle());
-        let key = WindowId::from_static("keyed-replacement-request");
-        let root_key = cranpose_core::location_key(file!(), line!(), column!());
-        test.with_registry(|composition| {
-            composition
-                .render_stable(root_key, || KeyedReplacementRequestRoot(show))
-                .expect("initial keyed native-window request render");
-        });
-        assert!(request_exists(&test.registry, key));
-
-        show.set(false);
-        test.with_registry(|composition| {
-            composition
-                .reconcile(root_key, || KeyedReplacementRequestRoot(show))
-                .expect("keyed native-window request reconcile");
-        });
-
-        assert!(
-            !request_exists(&test.registry, key),
-            "keyed branch replacement must unregister native-window declarations from the inactive branch"
-        );
-        clear_native_window_requests(&test.registry);
-    }
-
-    #[test]
-    fn borderless_options_disable_decorations_and_resizing() {
-        let options = NativeWindowOptions::borderless("Tool", 100.0, 50.0);
-        assert_eq!(options.title, "Tool");
-        assert_eq!(options.width, 100.0);
-        assert_eq!(options.height, 50.0);
-        assert_eq!(options.position_origin, NativeWindowPositionOrigin::Screen);
-        assert!(!options.decorations);
-        assert!(!options.resizable);
-        assert!(options.visible);
-    }
-
-    #[test]
-    fn option_builders_update_specific_fields() {
-        let options = NativeWindowOptions::new("Panel", 10.0, 20.0)
-            .with_position(3.0, 4.0)
-            .with_transparent(true)
-            .with_resizable(false)
-            .with_visible(false)
-            .with_always_on_top(true)
-            .with_min_size(5.0, 6.0)
-            .with_max_size(50.0, 60.0);
-        assert_eq!(options.x, Some(3.0));
-        assert_eq!(options.y, Some(4.0));
-        assert_eq!(options.position_origin, NativeWindowPositionOrigin::Screen);
-        assert!(options.transparent);
-        assert!(!options.resizable);
-        assert!(!options.visible);
-        assert!(options.always_on_top);
-        assert_eq!(options.min_width, Some(5.0));
-        assert_eq!(options.min_height, Some(6.0));
-        assert_eq!(options.max_width, Some(50.0));
-        assert_eq!(options.max_height, Some(60.0));
-    }
-
-    #[test]
-    fn host_window_position_records_origin() {
-        let options =
-            NativeWindowOptions::new("Panel", 10.0, 20.0).with_host_window_position(3.0, 4.0);
-        assert_eq!(options.x, Some(3.0));
-        assert_eq!(options.y, Some(4.0));
-        assert_eq!(
-            options.position_origin,
-            NativeWindowPositionOrigin::HostWindow
-        );
-    }
-
-    #[test]
-    fn events_builder_registers_move_callback() {
-        let events = NativeWindowEvents::new().with_on_moved(|_, _| {});
-        assert!(events.on_moved.is_some());
-    }
-
-    #[test]
-    fn window_state_accessors_update_position_and_size() {
-        let (_runtime, _position_owner, _size_owner, state) = test_window_state(100.0, 50.0);
-
-        assert_eq!(state.position_non_reactive(), None);
-        assert_eq!(state.size_non_reactive(), Size::new(100.0, 50.0));
-
-        state.set_position(Some(Point::new(4.0, 8.0)));
-        assert_eq!(state.position_non_reactive(), Some(Point::new(4.0, 8.0)));
-
-        state.translate(3.0, -2.0);
-        assert_eq!(state.position_non_reactive(), Some(Point::new(7.0, 6.0)));
-
-        state.set_size(Size::new(120.0, 64.0));
-        assert_eq!(state.size_non_reactive(), Size::new(120.0, 64.0));
-    }
-
-    #[test]
-    fn window_config_collects_window_settings_and_callbacks() {
-        let config = WindowConfig::borderless("Panel", 100.0, 50.0)
-            .with_host_window_position(7.0, 9.0)
-            .with_transparent(true)
-            .with_resizable(false)
-            .with_visible(false)
-            .with_always_on_top(true)
-            .with_min_size(20.0, 10.0)
-            .with_max_size(400.0, 200.0)
-            .on_moved(|_, _| {})
-            .on_resized(|_, _| {})
-            .on_close_requested(|| {});
-
-        let (options, callbacks, state) = config.into_parts();
-        assert_eq!(options.title, "Panel");
-        assert_eq!(options.width, 100.0);
-        assert_eq!(options.height, 50.0);
-        assert_eq!(options.x, Some(7.0));
-        assert_eq!(options.y, Some(9.0));
-        assert_eq!(
-            options.position_origin,
-            NativeWindowPositionOrigin::HostWindow
-        );
-        assert!(!options.decorations);
-        assert!(options.transparent);
-        assert!(!options.resizable);
-        assert!(!options.visible);
-        assert!(options.always_on_top);
-        assert_eq!(options.min_width, Some(20.0));
-        assert_eq!(options.min_height, Some(10.0));
-        assert_eq!(options.max_width, Some(400.0));
-        assert_eq!(options.max_height, Some(200.0));
-        assert!(callbacks.on_moved.is_some());
-        assert!(callbacks.on_resized.is_some());
-        assert!(callbacks.on_close_requested.is_some());
-        assert!(state.is_none());
-    }
-
-    #[test]
-    fn state_window_configs_bind_size_position() {
-        let (_runtime, _position_owner, _size_owner, state) = test_window_state(100.0, 50.0);
-        state.set_position(Some(Point::new(7.0, 9.0)));
-
-        let (options, callbacks, bound_state) =
-            WindowConfig::borderless_for_state("Panel", state).into_parts();
-        assert_eq!(options.title, "Panel");
-        assert_eq!(options.width, 100.0);
-        assert_eq!(options.height, 50.0);
-        assert_eq!(options.x, Some(7.0));
-        assert_eq!(options.y, Some(9.0));
-        assert!(!options.decorations);
-        assert!(!options.resizable);
-        assert!(bound_state == Some(state));
-        assert!(callbacks.on_moved.is_none());
-        assert!(callbacks.on_resized.is_none());
-
-        state.set_size(Size::new(320.0, 200.0));
-
-        let (decorated_options, _, decorated_state) =
-            WindowConfig::new_for_state("Decorated", state).into_parts();
-        assert_eq!(decorated_options.width, 320.0);
-        assert_eq!(decorated_options.height, 200.0);
-        assert!(decorated_options.decorations);
-        assert!(decorated_options.resizable);
-        assert!(decorated_state == Some(state));
-    }
-
-    #[test]
-    fn drag_request_reports_missing_handler() {
-        assert!(!request_native_window_drag());
-    }
-
-    #[cfg(all(
-        feature = "desktop-shell",
-        feature = "renderer-wgpu",
-        not(target_arch = "wasm32")
-    ))]
-    #[test]
-    fn drag_request_uses_handler_result() {
-        let resize_handler: NativeWindowResizeHandler = Rc::new(|_| {});
-
-        with_native_window_drag_handler(Rc::new(|| true), Rc::clone(&resize_handler), || {
-            assert!(request_native_window_drag());
-        });
-        with_native_window_drag_handler(Rc::new(|| false), resize_handler, || {
-            assert!(!request_native_window_drag());
-        });
-
-        assert!(!request_native_window_drag());
-    }
-
-    #[cfg(all(
-        feature = "desktop-shell",
-        feature = "renderer-wgpu",
-        not(target_arch = "wasm32")
-    ))]
-    #[test]
-    fn native_window_drag_handler_restores_outer_scope_after_nested_scope() {
-        let outer_resize_calls = Rc::new(Cell::new(0));
-        let inner_resize_calls = Rc::new(Cell::new(0));
-        let outer_resize_handler: NativeWindowResizeHandler = {
-            let outer_resize_calls = Rc::clone(&outer_resize_calls);
-            Rc::new(move |_| outer_resize_calls.set(outer_resize_calls.get() + 1))
-        };
-        let inner_resize_handler: NativeWindowResizeHandler = {
-            let inner_resize_calls = Rc::clone(&inner_resize_calls);
-            Rc::new(move |_| inner_resize_calls.set(inner_resize_calls.get() + 1))
-        };
-
-        with_native_window_drag_handler(Rc::new(|| true), outer_resize_handler, || {
-            assert!(request_native_window_drag());
-            assert!(request_native_window_resize(
-                WindowResizeDirection::SouthEast
-            ));
-
-            with_native_window_drag_handler(Rc::new(|| false), inner_resize_handler, || {
-                assert!(!request_native_window_drag());
-                assert!(request_native_window_resize(
-                    WindowResizeDirection::NorthWest
-                ));
-            });
-
-            assert!(request_native_window_drag());
-            assert!(request_native_window_resize(
-                WindowResizeDirection::SouthEast
-            ));
-        });
-
-        assert!(!request_native_window_drag());
-        assert_eq!(outer_resize_calls.get(), 2);
-        assert_eq!(inner_resize_calls.get(), 1);
-    }
-
-    #[cfg(all(
-        feature = "desktop-shell",
-        feature = "renderer-wgpu",
-        not(target_arch = "wasm32")
-    ))]
-    #[test]
-    fn drag_area_callbacks_follow_accepted_native_drag_lifecycle() {
-        use std::cell::Cell;
-
-        use cranpose_ui::{PointerEvent, collect_slices_from_modifier};
-
-        let (_app_context, _app_context_scope) = test_app_context_scope();
-        let started = Rc::new(Cell::new(0));
-        let finished = Rc::new(Cell::new(0));
-        let modifier = Modifier::empty().window_drag_area_with_callbacks(
-            {
-                let started = Rc::clone(&started);
-                move || started.set(started.get() + 1)
-            },
-            {
-                let finished = Rc::clone(&finished);
-                move || finished.set(finished.get() + 1)
-            },
-        );
-        let slices = collect_slices_from_modifier(&modifier);
-        let handler = slices
-            .pointer_inputs()
-            .first()
-            .expect("window drag pointer handler")
-            .clone();
-        let resize_handler: NativeWindowResizeHandler = Rc::new(|_| {});
-
-        with_native_window_drag_handler(Rc::new(|| true), resize_handler, || {
-            let down = PointerEvent::new(
-                PointerEventKind::Down,
-                Point::new(4.0, 5.0),
-                Point::new(4.0, 5.0),
-            );
-            handler(down.clone());
-            assert!(down.is_consumed());
-
-            handler(PointerEvent::new(
-                PointerEventKind::Up,
-                Point::new(4.0, 5.0),
-                Point::new(4.0, 5.0),
-            ));
-        });
-
-        assert_eq!(started.get(), 1);
-        assert_eq!(finished.get(), 1);
-    }
-
-    #[test]
-    fn resize_request_reports_missing_handler() {
-        assert!(!request_native_window_resize(
-            WindowResizeDirection::SouthEast
-        ));
-    }
-
-    #[cfg(all(
-        feature = "desktop-shell",
-        feature = "renderer-wgpu",
-        not(target_arch = "wasm32")
-    ))]
-    #[test]
-    fn native_window_surface_origin_is_scoped_to_dispatch() {
-        assert_eq!(current_native_window_surface_origin(), None);
-
-        with_native_window_surface_origin(Some(Point::new(4.0, 8.0)), || {
-            assert_eq!(
-                current_native_window_surface_origin(),
-                Some(Point::new(4.0, 8.0))
-            );
-            with_native_window_surface_origin(Some(Point::new(12.0, 16.0)), || {
-                assert_eq!(
-                    current_native_window_surface_origin(),
-                    Some(Point::new(12.0, 16.0))
-                );
-            });
-            assert_eq!(
-                current_native_window_surface_origin(),
-                Some(Point::new(4.0, 8.0))
-            );
-        });
-
-        assert_eq!(current_native_window_surface_origin(), None);
-    }
-
-    #[cfg(all(
-        feature = "desktop-shell",
-        feature = "renderer-wgpu",
-        not(target_arch = "wasm32")
-    ))]
-    #[test]
-    fn static_keys_are_stable() {
-        assert_eq!(
-            NativeWindowKey::from_static("stable"),
-            NativeWindowKey::from_static("stable")
-        );
-        assert_ne!(
-            NativeWindowKey::from_static("stable"),
-            NativeWindowKey::from_static("other")
-        );
-    }
-
-    #[cfg(all(
-        feature = "desktop-shell",
-        feature = "renderer-wgpu",
-        not(target_arch = "wasm32")
-    ))]
-    fn graph_group(policy: WindowAttachPolicy) -> NativeWindowGroupMembership {
-        NativeWindowGroupMembership {
-            id: WindowGroupId::from_static("test-group"),
-            policy,
-        }
-    }
-
-    #[cfg(all(
-        feature = "desktop-shell",
-        feature = "renderer-wgpu",
-        not(target_arch = "wasm32")
-    ))]
-    fn graph_node(
-        id: &'static str,
-        position: Point,
-        size: Size,
-        group: &NativeWindowGroupMembership,
-    ) -> WindowGraphPeerSnapshot {
-        WindowGraphPeerSnapshot {
-            node: WindowGraphNodeSnapshot {
-                id: WindowId::from_static(id),
-                position,
-                size,
-            },
-            group: Some(group.clone()),
-        }
-    }
-
-    #[cfg(all(
-        feature = "desktop-shell",
-        feature = "renderer-wgpu",
-        not(target_arch = "wasm32")
-    ))]
-    const GRAPH_NODE_SIZE: Size = Size::new(100.0, 50.0);
-
-    #[cfg(all(
-        feature = "desktop-shell",
-        feature = "renderer-wgpu",
-        not(target_arch = "wasm32")
-    ))]
-    fn graph_windows(
-        group: &NativeWindowGroupMembership,
-        nodes: &[(&'static str, Point)],
-    ) -> Vec<WindowGraphPeerSnapshot> {
-        nodes
-            .iter()
-            .map(|(id, position)| graph_node(id, *position, GRAPH_NODE_SIZE, group))
-            .collect()
-    }
-
-    #[cfg(all(
-        feature = "desktop-shell",
-        feature = "renderer-wgpu",
-        not(target_arch = "wasm32")
-    ))]
-    fn main_and_playlist_windows(
-        group: &NativeWindowGroupMembership,
-    ) -> Vec<WindowGraphPeerSnapshot> {
-        graph_windows(
-            group,
-            &[
-                ("main", Point::new(100.0, 100.0)),
-                ("playlist", Point::new(216.0, 100.0)),
-            ],
-        )
-    }
-
-    #[cfg(all(
-        feature = "desktop-shell",
-        feature = "renderer-wgpu",
-        not(target_arch = "wasm32")
-    ))]
-    fn main_and_eq_windows(group: &NativeWindowGroupMembership) -> Vec<WindowGraphPeerSnapshot> {
-        graph_windows(
-            group,
-            &[
-                ("main", Point::new(100.0, 100.0)),
-                ("eq", Point::new(100.0, 150.0)),
-            ],
-        )
-    }
-
-    #[cfg(all(
-        feature = "desktop-shell",
-        feature = "renderer-wgpu",
-        not(target_arch = "wasm32")
-    ))]
-    fn graph_position(moves: &[WindowGraphMove], id: WindowId) -> Option<Point> {
-        moves
-            .iter()
-            .find(|window_move| window_move.id == id)
-            .map(|window_move| window_move.position)
-    }
-
-    #[cfg(all(
-        feature = "desktop-shell",
-        feature = "renderer-wgpu",
-        not(target_arch = "wasm32")
-    ))]
-    #[test]
-    fn graph_drag_capture_freezes_attached_component() {
-        let main = WindowId::from_static("main");
-        let eq = WindowId::from_static("eq");
-        let playlist = WindowId::from_static("playlist");
-        let group = graph_group(WindowAttachPolicy::default());
-        let windows = graph_windows(
-            &group,
-            &[
-                ("main", Point::new(100.0, 100.0)),
-                ("eq", Point::new(100.0, 150.0)),
-                ("playlist", Point::new(240.0, 150.0)),
-            ],
-        );
-
-        let mut graph = WindowGraphState::default();
-        graph.start_drag(&windows, main);
-        let moves = graph.drag_to(main, Point::new(120.0, 100.0));
-
-        assert_eq!(graph_position(&moves, main), Some(Point::new(120.0, 100.0)));
-        assert_eq!(graph_position(&moves, eq), Some(Point::new(120.0, 150.0)));
-        assert_eq!(graph_position(&moves, playlist), None);
-    }
-
-    #[cfg(all(
-        feature = "desktop-shell",
-        feature = "renderer-wgpu",
-        not(target_arch = "wasm32")
-    ))]
-    #[test]
-    fn graph_does_not_attach_new_window_during_drag() {
-        let main = WindowId::from_static("main");
-        let playlist = WindowId::from_static("playlist");
-        let group = graph_group(WindowAttachPolicy::default());
-        let windows = main_and_playlist_windows(&group);
-
-        let mut graph = WindowGraphState::default();
-        graph.start_drag(&windows, main);
-        let moves = graph.drag_to(main, Point::new(112.0, 100.0));
-
-        assert_eq!(graph_position(&moves, main), Some(Point::new(112.0, 100.0)));
-        assert_eq!(graph_position(&moves, playlist), None);
-    }
-
-    #[cfg(all(
-        feature = "desktop-shell",
-        feature = "renderer-wgpu",
-        not(target_arch = "wasm32")
-    ))]
-    #[test]
-    fn graph_does_not_detach_captured_component_during_fast_drag() {
-        let main = WindowId::from_static("main");
-        let eq = WindowId::from_static("eq");
-        let group = graph_group(WindowAttachPolicy::default());
-        let windows = main_and_eq_windows(&group);
-
-        let mut graph = WindowGraphState::default();
-        graph.start_drag(&windows, main);
-        let moves = graph.drag_to(main, Point::new(400.0, 280.0));
-
-        assert_eq!(graph_position(&moves, main), Some(Point::new(400.0, 280.0)));
-        assert_eq!(graph_position(&moves, eq), Some(Point::new(400.0, 330.0)));
-    }
-
-    #[cfg(all(
-        feature = "desktop-shell",
-        feature = "renderer-wgpu",
-        not(target_arch = "wasm32")
-    ))]
-    #[test]
-    fn graph_release_recomputes_attachment_once() {
-        let main = WindowId::from_static("main");
-        let playlist = WindowId::from_static("playlist");
-        let group = graph_group(WindowAttachPolicy::default());
-        let start = main_and_playlist_windows(&group);
-        let finish = graph_windows(
-            &group,
-            &[
-                ("main", Point::new(112.0, 100.0)),
-                ("playlist", Point::new(216.0, 100.0)),
-            ],
-        );
-
-        let mut graph = WindowGraphState::default();
-        graph.start_drag(&start, main);
-        let release_moves = graph.finish_drag(&finish);
-        let second_release_moves = graph.finish_drag(&finish);
-
-        assert_eq!(
-            graph_position(&release_moves, main),
-            Some(Point::new(116.0, 100.0))
-        );
-        assert_eq!(
-            graph_position(&release_moves, playlist),
-            Some(Point::new(216.0, 100.0))
-        );
-        assert!(second_release_moves.is_empty());
-    }
-
-    #[cfg(all(
-        feature = "desktop-shell",
-        feature = "renderer-wgpu",
-        not(target_arch = "wasm32")
-    ))]
-    #[test]
-    fn graph_release_uses_drag_start_component_for_attached_windows() {
-        let main = WindowId::from_static("main");
-        let group = graph_group(WindowAttachPolicy::default());
-        let start = graph_windows(
-            &group,
-            &[
-                ("main", Point::new(100.0, 100.0)),
-                ("equalizer", Point::new(100.0, 150.0)),
-                ("playlist", Point::new(200.0, 150.0)),
-            ],
-        );
-        let finish_with_peer_position_lag = graph_windows(
-            &group,
-            &[
-                ("main", Point::new(112.0, 100.0)),
-                ("equalizer", Point::new(112.0, 150.0)),
-                ("playlist", Point::new(216.0, 150.0)),
-            ],
-        );
-
-        let mut graph = WindowGraphState::default();
-        graph.start_drag(&start, main);
-
-        assert!(
-            graph.finish_drag(&finish_with_peer_position_lag).is_empty(),
-            "release snapping must not drop a start-captured peer from the moving component because OS move events arrived out of phase"
-        );
-    }
-
-    #[cfg(all(
-        feature = "desktop-shell",
-        feature = "renderer-wgpu",
-        not(target_arch = "wasm32")
-    ))]
-    #[test]
-    fn graph_cancel_drag_discards_active_capture_without_release_moves() {
-        let main = WindowId::from_static("main");
-        let group = graph_group(WindowAttachPolicy::default());
-        let windows = main_and_playlist_windows(&group);
-
-        let mut graph = WindowGraphState::default();
-        graph.start_drag(&windows, main);
-        graph.cancel_drag();
-
-        assert!(graph.finish_drag(&windows).is_empty());
-    }
-
-    #[cfg(all(
-        feature = "desktop-shell",
-        feature = "renderer-wgpu",
-        not(target_arch = "wasm32")
-    ))]
-    #[test]
-    fn graph_drag_leader_only_moves_attached_component() {
-        let main = WindowId::from_static("main");
-        let eq = WindowId::from_static("eq");
-        let group = graph_group(WindowAttachPolicy::new(
-            8.0,
-            3.0,
-            WindowMoveMode::DragLeaderOnly(vec![main]),
-        ));
-        let windows = main_and_eq_windows(&group);
-
-        let mut graph = WindowGraphState::default();
-        graph.start_drag(&windows, eq);
-        let eq_moves = graph.drag_to(eq, Point::new(130.0, 170.0));
-        graph.start_drag(&windows, main);
-        let main_moves = graph.drag_to(main, Point::new(130.0, 110.0));
-
-        assert_eq!(
-            graph_position(&eq_moves, eq),
-            Some(Point::new(130.0, 170.0))
-        );
-        assert_eq!(graph_position(&eq_moves, main), None);
-        assert_eq!(
-            graph_position(&main_moves, main),
-            Some(Point::new(130.0, 110.0))
-        );
-        assert_eq!(
-            graph_position(&main_moves, eq),
-            Some(Point::new(130.0, 160.0))
-        );
-    }
-
-    #[cfg(all(
-        feature = "desktop-shell",
-        feature = "renderer-wgpu",
-        not(target_arch = "wasm32")
-    ))]
-    fn test_owner() -> NativeWindowOwner {
-        Rc::new(())
-    }
-
-    #[cfg(all(
-        feature = "desktop-shell",
-        feature = "renderer-wgpu",
-        not(target_arch = "wasm32")
-    ))]
-    fn test_content() -> NativeWindowContent {
-        Rc::new(RefCell::new(Box::new(|| {}) as Box<dyn FnMut()>))
-    }
-
-    #[cfg(all(
-        feature = "desktop-shell",
-        feature = "renderer-wgpu",
-        not(target_arch = "wasm32")
-    ))]
-    fn register_panel(
-        key: NativeWindowKey,
-        content: NativeWindowContent,
-        owner: NativeWindowOwner,
-    ) {
-        register_native_window(
-            key,
-            NativeWindowOptions::new("Panel", 100.0, 50.0),
-            NativeWindowEvents::new(),
-            None,
-            None,
-            content,
-            owner,
-        );
-    }
-
-    #[cfg(all(
-        feature = "desktop-shell",
-        feature = "renderer-wgpu",
-        not(target_arch = "wasm32")
-    ))]
-    fn register_visible_panel(
-        key: NativeWindowKey,
-        visible: bool,
-        content: NativeWindowContent,
-        owner: NativeWindowOwner,
-    ) {
-        register_native_window(
-            key,
-            NativeWindowOptions::new("Panel", 100.0, 50.0).with_visible(visible),
-            NativeWindowEvents::new(),
-            None,
-            None,
-            content,
-            owner,
-        );
-    }
-
-    #[cfg(all(
-        feature = "desktop-shell",
-        feature = "renderer-wgpu",
-        not(target_arch = "wasm32")
-    ))]
-    fn latest_revision(registry: &NativeWindowRegistry) -> u64 {
-        native_window_requests(registry)
-            .into_iter()
-            .next()
-            .expect("native window request")
-            .revision
-    }
-
-    #[cfg(all(
-        feature = "desktop-shell",
-        feature = "renderer-wgpu",
-        not(target_arch = "wasm32")
-    ))]
-    #[test]
-    fn registry_replaces_native_window_declarations_by_key() {
-        with_request_test_registry(|registry| {
-            clear_native_window_requests(registry);
-
-            let key = NativeWindowKey::from_static("visibility-update");
-            let owner = test_owner();
-            let content = test_content();
-
-            register_visible_panel(key, true, Rc::clone(&content), Rc::clone(&owner));
-            let initial_revision = latest_revision(registry);
-
-            register_visible_panel(key, false, content, owner);
-
-            let requests = native_window_requests(registry);
-            assert_eq!(requests.len(), 1);
-            assert_eq!(requests[0].key, key);
-            assert_ne!(requests[0].revision, initial_revision);
-            assert!(!requests[0].options.visible);
-
-            clear_native_window_requests(registry);
-            assert!(native_window_requests(registry).is_empty());
-        });
-    }
-
-    #[cfg(all(
-        feature = "desktop-shell",
-        feature = "renderer-wgpu",
-        not(target_arch = "wasm32")
-    ))]
-    #[test]
-    fn registry_revisions_change_on_each_declaration() {
-        with_request_test_registry(|registry| {
-            clear_native_window_requests(registry);
-
-            let key = NativeWindowKey::from_static("content-update");
-            let owner = test_owner();
-
-            register_panel(key, test_content(), Rc::clone(&owner));
-            let first_revision = latest_revision(registry);
-
-            register_panel(key, test_content(), owner);
-            let second_revision = latest_revision(registry);
-
-            assert_ne!(first_revision, second_revision);
-
-            clear_native_window_requests(registry);
-        });
-    }
-
-    #[cfg(all(
-        feature = "desktop-shell",
-        feature = "renderer-wgpu",
-        not(target_arch = "wasm32")
-    ))]
-    #[test]
-    fn registry_revisions_change_when_same_content_is_updated() {
-        with_request_test_registry(|registry| {
-            clear_native_window_requests(registry);
-
-            let key = NativeWindowKey::from_static("same-content-update");
-            let owner = test_owner();
-            let content = test_content();
-
-            register_panel(key, Rc::clone(&content), Rc::clone(&owner));
-            let first_revision = latest_revision(registry);
-
-            register_panel(key, content, owner);
-            let second_revision = latest_revision(registry);
-
-            assert_ne!(first_revision, second_revision);
-
-            clear_native_window_requests(registry);
-        });
-    }
-
-    #[cfg(all(
-        feature = "desktop-shell",
-        feature = "renderer-wgpu",
-        not(target_arch = "wasm32")
-    ))]
-    #[test]
-    fn unregister_ignores_stale_owner_after_redeclaration() {
-        with_request_test_registry(|registry| {
-            clear_native_window_requests(registry);
-
-            let key = NativeWindowKey::from_static("reattach-window");
-            let stale_owner = test_owner();
-            let current_owner = test_owner();
-            let second_content = test_content();
-
-            register_panel(key, test_content(), Rc::clone(&stale_owner));
-            register_panel(key, Rc::clone(&second_content), Rc::clone(&current_owner));
-            unregister_native_window(key, stale_owner);
-
-            let requests = native_window_requests(registry);
-            assert_eq!(requests.len(), 1);
-            assert_eq!(requests[0].key, key);
-            assert!(Rc::ptr_eq(&requests[0].content, &second_content));
-
-            unregister_native_window(key, current_owner);
-            assert!(native_window_requests(registry).is_empty());
-
-            clear_native_window_requests(registry);
-        });
-    }
-
-    #[cfg(all(
-        feature = "desktop-shell",
-        feature = "renderer-wgpu",
-        not(target_arch = "wasm32")
-    ))]
-    #[test]
-    fn clear_does_not_reuse_same_content_revision() {
-        with_request_test_registry(|registry| {
-            clear_native_window_requests(registry);
-
-            let key = NativeWindowKey::from_static("remove-window");
-            let owner = test_owner();
-            let content = test_content();
-
-            register_panel(key, Rc::clone(&content), Rc::clone(&owner));
-            let first_revision = latest_revision(registry);
-
-            clear_native_window_requests(registry);
-            assert!(native_window_requests(registry).is_empty());
-
-            register_panel(key, content, owner);
-            let second_revision = latest_revision(registry);
-
-            assert_ne!(first_revision, second_revision);
-
-            clear_native_window_requests(registry);
-        });
-    }
-}
+#[path = "tests/native_window_tests.rs"]
+mod tests;
