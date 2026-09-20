@@ -82,6 +82,13 @@ impl TabWindows {
             .map(|window| window.id)
     }
 
+    pub fn active_page(&self, window: u64) -> Option<u64> {
+        self.windows
+            .iter()
+            .find(|held| held.id == window)
+            .map(|held| held.active)
+    }
+
     pub fn add_page(&mut self, window: u64, page: u64) {
         if let Some(window) = self.windows.iter_mut().find(|held| held.id == window) {
             window.pages.push(page);
@@ -97,6 +104,25 @@ impl TabWindows {
         {
             window.active = page;
         }
+    }
+
+    pub fn moved(&mut self, window: u64, origin: Point) {
+        if let Some(window) = self.windows.iter_mut().find(|held| held.id == window) {
+            window.origin = origin;
+        }
+    }
+
+    /// The window whose strip this one's strip has been laid over, which is
+    /// how a window carrying a single tab asks to be taken back in. A window
+    /// being dragged is always under the pointer, so where its tab could be
+    /// dropped is a question about the windows themselves, not about what
+    /// the pointer is over.
+    pub fn strip_laid_over(&self, window: u64) -> Option<u64> {
+        let mine = self.windows.iter().find(|held| held.id == window)?;
+        self.windows
+            .iter()
+            .find(|other| other.id != window && strips_overlap(mine.origin, other.origin))
+            .map(|other| other.id)
     }
 
     pub fn close_page(&mut self, page: u64) {
@@ -150,6 +176,10 @@ impl TabWindows {
     }
 }
 
+fn strips_overlap(mine: Point, other: Point) -> bool {
+    (mine.x - other.x).abs() < WINDOW_WIDTH && (mine.y - other.y).abs() < STRIP_HEIGHT
+}
+
 #[composable]
 pub fn chrome_tabs_app() {
     let pages = rememberMutableStateOf(|| vec![Page::new(1)]);
@@ -179,6 +209,7 @@ fn TabWindowFrame(
     pages: MutableState<Vec<Page>>,
     next_page: MutableState<u64>,
 ) {
+    let id = window.id;
     let state = rememberWindowStateAt(
         window.origin.x,
         window.origin.y,
@@ -199,7 +230,11 @@ fn TabWindowFrame(
     }
     Box(
         Modifier::empty().window(
-            WindowConfig::borderless_for_state("Cranpose Tabs", state).with_transparent(true),
+            WindowConfig::borderless_for_state("Cranpose Tabs", state)
+                .with_transparent(true)
+                .on_moved(move |x, y| {
+                    windows.update(|held| held.moved(id, Point::new(x, y)));
+                }),
         ),
         BoxSpec::default(),
         move || BrowserWindow(window.clone(), windows, pages, next_page),
@@ -303,7 +338,7 @@ fn StripTab(
                 .height(TAB_HEIGHT)
                 .background(background)
                 .clickable(move |_| windows.update(|held| held.activate(page))),
-            alone,
+            alone.then_some((window, windows)),
             source,
         ),
         RowSpec {
@@ -374,12 +409,31 @@ pub(crate) fn tab_left_the_strip(local: Point) -> bool {
     local.y > STRIP_HEIGHT + TEAR_DEPTH || local.y < -TEAR_DEPTH
 }
 
-fn tab_grip(modifier: Modifier, alone: bool, source: DragAndDropSource) -> Modifier {
-    if alone {
-        modifier.window_drag_area()
-    } else {
-        modifier.drag_and_drop_source(source)
-    }
+/// A tab sharing a strip is dragged out of it; a tab alone in its window
+/// drags the window it already has, and goes back into another strip when it
+/// is let go over one. A window being dragged is under the pointer the whole
+/// time, so that last question is about where the windows are, not about
+/// what the pointer is over.
+fn tab_grip(
+    modifier: Modifier,
+    alone: Option<(u64, MutableState<TabWindows>)>,
+    source: DragAndDropSource,
+) -> Modifier {
+    let Some((window, windows)) = alone else {
+        return modifier.drag_and_drop_source(source);
+    };
+    modifier.window_drag_area_with_callbacks(
+        || {},
+        move || {
+            let Some(onto) = windows.get_non_reactive().strip_laid_over(window) else {
+                return;
+            };
+            let page = windows.get_non_reactive().active_page(window);
+            let Some(page) = page else { return };
+            let moved = windows.update(|held| held.move_page(page, onto));
+            trace!("transfer dropped page={page} onto={onto} moved={moved}");
+        },
+    )
 }
 
 fn tear_into_a_window_of_its_own(

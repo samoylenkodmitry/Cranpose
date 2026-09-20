@@ -141,8 +141,11 @@ effects running, and restores it under any parent
   composes fresh on the next pass.
 - On restore, every scope inside the subtree has its parent scope and
   parent hint rewritten; today only the root gets that (`composer.rs:1093`).
-- Movable content does not cross a `SubcomposeLayout` host in this plan,
-  because anchors are per slot table; the composer logs and composes fresh.
+- Movable content crosses a `SubcomposeLayout` host. Anchors are per slot
+  table, so the table that held the content lets go of its anchors and the
+  one taking it over issues its own (`slot/movable.rs`); the retained
+  subtree and the sites waiting for it are looked up across every live host,
+  not only the one composing.
 
 Node reparenting needs no new code: `emit_node_box` adopts the restored
 `NodeId` and `insert_child_with_reparenting` dirties both parents and

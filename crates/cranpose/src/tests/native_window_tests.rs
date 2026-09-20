@@ -6,6 +6,7 @@ struct OwnedWindowState {
     _runtime: cranpose_core::Runtime,
     _position: cranpose_core::OwnedMutableState<Option<Point>>,
     _size: cranpose_core::OwnedMutableState<Size>,
+    _frame: cranpose_core::OwnedMutableState<Size>,
     _presented: cranpose_core::OwnedMutableState<bool>,
     state: WindowState,
 }
@@ -16,16 +17,20 @@ fn test_window_state(width: f32, height: f32) -> OwnedWindowState {
     let position = cranpose_core::OwnedMutableState::with_runtime(None::<Point>, handle.clone());
     let size =
         cranpose_core::OwnedMutableState::with_runtime(Size::new(width, height), handle.clone());
+    let frame =
+        cranpose_core::OwnedMutableState::with_runtime(Size::new(width, height), handle.clone());
     let presented = cranpose_core::OwnedMutableState::with_runtime(false, handle);
     let state = WindowState {
         position: position.handle(),
         size: size.handle(),
+        frame: frame.handle(),
         presented: presented.handle(),
     };
     OwnedWindowState {
         _runtime: runtime,
         _position: position,
         _size: size,
+        _frame: frame,
         _presented: presented,
         state,
     }
@@ -96,7 +101,6 @@ fn native_window_requests_are_isolated_by_registry() {
             NativeWindowOptions::new("first", 80.0, 40.0),
             NativeWindowEvents::default(),
             None,
-            None,
             first_content,
             first_owner,
         );
@@ -106,7 +110,6 @@ fn native_window_requests_are_isolated_by_registry() {
             second_key,
             NativeWindowOptions::new("second", 90.0, 45.0),
             NativeWindowEvents::default(),
-            None,
             None,
             second_content,
             second_owner,
@@ -641,7 +644,10 @@ fn drag_area_callbacks_follow_accepted_native_drag_lifecycle() {
             Point::new(4.0, 5.0),
         );
         handler(down.clone());
-        assert!(down.is_consumed());
+        assert!(
+            !down.is_consumed(),
+            "a press on a drag area must reach whatever is under it, or a title bar could never answer a click"
+        );
 
         handler(PointerEvent::new(
             PointerEventKind::Up,
@@ -683,312 +689,6 @@ fn static_keys_are_stable() {
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
-fn graph_group(policy: WindowAttachPolicy) -> NativeWindowGroupMembership {
-    NativeWindowGroupMembership {
-        id: WindowGroupId::from_static("test-group"),
-        policy,
-        leads: false,
-    }
-}
-
-#[cfg(all(
-    feature = "desktop-shell",
-    feature = "renderer-wgpu",
-    not(target_arch = "wasm32")
-))]
-fn lead_group(windows: &mut [WindowGraphPeerSnapshot], leader: WindowId) {
-    for window in windows.iter_mut().filter(|window| window.node.id == leader) {
-        if let Some(group) = &mut window.group {
-            group.leads = true;
-        }
-    }
-}
-
-#[cfg(all(
-    feature = "desktop-shell",
-    feature = "renderer-wgpu",
-    not(target_arch = "wasm32")
-))]
-fn graph_node(
-    id: &'static str,
-    position: Point,
-    size: Size,
-    group: &NativeWindowGroupMembership,
-) -> WindowGraphPeerSnapshot {
-    WindowGraphPeerSnapshot {
-        node: WindowGraphNodeSnapshot {
-            id: WindowId::from_static(id),
-            position,
-            size,
-        },
-        group: Some(group.clone()),
-    }
-}
-
-#[cfg(all(
-    feature = "desktop-shell",
-    feature = "renderer-wgpu",
-    not(target_arch = "wasm32")
-))]
-const GRAPH_NODE_SIZE: Size = Size::new(100.0, 50.0);
-
-#[cfg(all(
-    feature = "desktop-shell",
-    feature = "renderer-wgpu",
-    not(target_arch = "wasm32")
-))]
-fn graph_windows(
-    group: &NativeWindowGroupMembership,
-    nodes: &[(&'static str, Point)],
-) -> Vec<WindowGraphPeerSnapshot> {
-    nodes
-        .iter()
-        .map(|(id, position)| graph_node(id, *position, GRAPH_NODE_SIZE, group))
-        .collect()
-}
-
-#[cfg(all(
-    feature = "desktop-shell",
-    feature = "renderer-wgpu",
-    not(target_arch = "wasm32")
-))]
-fn main_and_playlist_windows(group: &NativeWindowGroupMembership) -> Vec<WindowGraphPeerSnapshot> {
-    graph_windows(
-        group,
-        &[
-            ("main", Point::new(100.0, 100.0)),
-            ("playlist", Point::new(216.0, 100.0)),
-        ],
-    )
-}
-
-#[cfg(all(
-    feature = "desktop-shell",
-    feature = "renderer-wgpu",
-    not(target_arch = "wasm32")
-))]
-fn main_and_eq_windows(group: &NativeWindowGroupMembership) -> Vec<WindowGraphPeerSnapshot> {
-    graph_windows(
-        group,
-        &[
-            ("main", Point::new(100.0, 100.0)),
-            ("eq", Point::new(100.0, 150.0)),
-        ],
-    )
-}
-
-#[cfg(all(
-    feature = "desktop-shell",
-    feature = "renderer-wgpu",
-    not(target_arch = "wasm32")
-))]
-fn graph_position(moves: &[WindowGraphMove], id: WindowId) -> Option<Point> {
-    moves
-        .iter()
-        .find(|window_move| window_move.id == id)
-        .map(|window_move| window_move.position)
-}
-
-#[cfg(all(
-    feature = "desktop-shell",
-    feature = "renderer-wgpu",
-    not(target_arch = "wasm32")
-))]
-#[test]
-fn graph_drag_capture_freezes_attached_component() {
-    let main = WindowId::from_static("main");
-    let eq = WindowId::from_static("eq");
-    let playlist = WindowId::from_static("playlist");
-    let group = graph_group(WindowAttachPolicy::default());
-    let windows = graph_windows(
-        &group,
-        &[
-            ("main", Point::new(100.0, 100.0)),
-            ("eq", Point::new(100.0, 150.0)),
-            ("playlist", Point::new(240.0, 150.0)),
-        ],
-    );
-
-    let mut graph = WindowGraphState::default();
-    graph.start_drag(&windows, main);
-    let moves = graph.drag_to(main, Point::new(120.0, 100.0));
-
-    assert_eq!(graph_position(&moves, main), Some(Point::new(120.0, 100.0)));
-    assert_eq!(graph_position(&moves, eq), Some(Point::new(120.0, 150.0)));
-    assert_eq!(graph_position(&moves, playlist), None);
-}
-
-#[cfg(all(
-    feature = "desktop-shell",
-    feature = "renderer-wgpu",
-    not(target_arch = "wasm32")
-))]
-#[test]
-fn graph_does_not_attach_new_window_during_drag() {
-    let main = WindowId::from_static("main");
-    let playlist = WindowId::from_static("playlist");
-    let group = graph_group(WindowAttachPolicy::default());
-    let windows = main_and_playlist_windows(&group);
-
-    let mut graph = WindowGraphState::default();
-    graph.start_drag(&windows, main);
-    let moves = graph.drag_to(main, Point::new(112.0, 100.0));
-
-    assert_eq!(graph_position(&moves, main), Some(Point::new(112.0, 100.0)));
-    assert_eq!(graph_position(&moves, playlist), None);
-}
-
-#[cfg(all(
-    feature = "desktop-shell",
-    feature = "renderer-wgpu",
-    not(target_arch = "wasm32")
-))]
-#[test]
-fn graph_does_not_detach_captured_component_during_fast_drag() {
-    let main = WindowId::from_static("main");
-    let eq = WindowId::from_static("eq");
-    let group = graph_group(WindowAttachPolicy::default());
-    let windows = main_and_eq_windows(&group);
-
-    let mut graph = WindowGraphState::default();
-    graph.start_drag(&windows, main);
-    let moves = graph.drag_to(main, Point::new(400.0, 280.0));
-
-    assert_eq!(graph_position(&moves, main), Some(Point::new(400.0, 280.0)));
-    assert_eq!(graph_position(&moves, eq), Some(Point::new(400.0, 330.0)));
-}
-
-#[cfg(all(
-    feature = "desktop-shell",
-    feature = "renderer-wgpu",
-    not(target_arch = "wasm32")
-))]
-#[test]
-fn graph_release_recomputes_attachment_once() {
-    let main = WindowId::from_static("main");
-    let playlist = WindowId::from_static("playlist");
-    let group = graph_group(WindowAttachPolicy::default());
-    let start = main_and_playlist_windows(&group);
-    let finish = graph_windows(
-        &group,
-        &[
-            ("main", Point::new(112.0, 100.0)),
-            ("playlist", Point::new(216.0, 100.0)),
-        ],
-    );
-
-    let mut graph = WindowGraphState::default();
-    graph.start_drag(&start, main);
-    let release_moves = graph.finish_drag(&finish);
-    let second_release_moves = graph.finish_drag(&finish);
-
-    assert_eq!(
-        graph_position(&release_moves, main),
-        Some(Point::new(116.0, 100.0))
-    );
-    assert_eq!(
-        graph_position(&release_moves, playlist),
-        Some(Point::new(216.0, 100.0))
-    );
-    assert!(second_release_moves.is_empty());
-}
-
-#[cfg(all(
-    feature = "desktop-shell",
-    feature = "renderer-wgpu",
-    not(target_arch = "wasm32")
-))]
-#[test]
-fn graph_release_uses_drag_start_component_for_attached_windows() {
-    let main = WindowId::from_static("main");
-    let group = graph_group(WindowAttachPolicy::default());
-    let start = graph_windows(
-        &group,
-        &[
-            ("main", Point::new(100.0, 100.0)),
-            ("equalizer", Point::new(100.0, 150.0)),
-            ("playlist", Point::new(200.0, 150.0)),
-        ],
-    );
-    let finish_with_peer_position_lag = graph_windows(
-        &group,
-        &[
-            ("main", Point::new(112.0, 100.0)),
-            ("equalizer", Point::new(112.0, 150.0)),
-            ("playlist", Point::new(216.0, 150.0)),
-        ],
-    );
-
-    let mut graph = WindowGraphState::default();
-    graph.start_drag(&start, main);
-
-    assert!(
-        graph.finish_drag(&finish_with_peer_position_lag).is_empty(),
-        "release snapping must not drop a start-captured peer from the moving component because OS move events arrived out of phase"
-    );
-}
-
-#[cfg(all(
-    feature = "desktop-shell",
-    feature = "renderer-wgpu",
-    not(target_arch = "wasm32")
-))]
-#[test]
-fn graph_cancel_drag_discards_active_capture_without_release_moves() {
-    let main = WindowId::from_static("main");
-    let group = graph_group(WindowAttachPolicy::default());
-    let windows = main_and_playlist_windows(&group);
-
-    let mut graph = WindowGraphState::default();
-    graph.start_drag(&windows, main);
-    graph.cancel_drag();
-
-    assert!(graph.finish_drag(&windows).is_empty());
-}
-
-#[cfg(all(
-    feature = "desktop-shell",
-    feature = "renderer-wgpu",
-    not(target_arch = "wasm32")
-))]
-#[test]
-fn graph_drag_leader_only_moves_attached_component() {
-    let main = WindowId::from_static("main");
-    let eq = WindowId::from_static("eq");
-    let group = graph_group(WindowAttachPolicy::new(
-        8.0,
-        3.0,
-        WindowMoveMode::LeadersOnly,
-    ));
-    let mut windows = main_and_eq_windows(&group);
-    lead_group(&mut windows, main);
-
-    let mut graph = WindowGraphState::default();
-    graph.start_drag(&windows, eq);
-    let eq_moves = graph.drag_to(eq, Point::new(130.0, 170.0));
-    graph.start_drag(&windows, main);
-    let main_moves = graph.drag_to(main, Point::new(130.0, 110.0));
-
-    assert_eq!(
-        graph_position(&eq_moves, eq),
-        Some(Point::new(130.0, 170.0))
-    );
-    assert_eq!(graph_position(&eq_moves, main), None);
-    assert_eq!(
-        graph_position(&main_moves, main),
-        Some(Point::new(130.0, 110.0))
-    );
-    assert_eq!(
-        graph_position(&main_moves, eq),
-        Some(Point::new(130.0, 160.0))
-    );
-}
-
-#[cfg(all(
-    feature = "desktop-shell",
-    feature = "renderer-wgpu",
-    not(target_arch = "wasm32")
-))]
 fn test_owner() -> NativeWindowOwner {
     Rc::new(())
 }
@@ -1013,7 +713,6 @@ fn register_panel(key: NativeWindowKey, content: NativeWindowRootHandle, owner: 
         NativeWindowOptions::new("Panel", 100.0, 50.0),
         NativeWindowEvents::new(),
         None,
-        None,
         content,
         owner,
     );
@@ -1034,7 +733,6 @@ fn register_visible_panel(
         key,
         NativeWindowOptions::new("Panel", 100.0, 50.0).with_visible(visible),
         NativeWindowEvents::new(),
-        None,
         None,
         content,
         owner,
@@ -1337,37 +1035,6 @@ fn a_changed_config_reaches_the_request_with_a_new_revision() {
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
-#[test]
-fn group_and_leadership_reach_the_request() {
-    let mut test = request_test_composition();
-    let root_key = cranpose_core::location_key(file!(), line!(), column!());
-    let policy = WindowAttachPolicy::new(8.0, 3.0, WindowMoveMode::LeadersOnly);
-    let config = WindowConfig::new("Grouped", 100.0, 50.0)
-        .group("tools", policy.clone())
-        .leads_group(true);
-    test.with_registry(|composition| {
-        composition
-            .render_stable(root_key, move || {
-                WindowBox(config.clone());
-            })
-            .expect("the grouped window renders");
-    });
-    let requests = native_window_requests(&test.registry);
-    assert_eq!(
-        requests[0].group,
-        Some(NativeWindowGroupMembership {
-            id: WindowGroupId::from_static("tools"),
-            policy,
-            leads: true,
-        })
-    );
-}
-
-#[cfg(all(
-    feature = "desktop-shell",
-    feature = "renderer-wgpu",
-    not(target_arch = "wasm32")
-))]
 #[composable(no_skip)]
 #[allow(non_snake_case)]
 fn LocalWindowStateRoot(
@@ -1515,45 +1182,5 @@ fn content_torn_out_starts_reading_the_window_it_moved_into() {
         page.inside.get(),
         page.declared.get(),
         "the node that grew a window reads the window it grew"
-    );
-}
-
-#[cfg(all(
-    feature = "desktop-shell",
-    feature = "renderer-wgpu",
-    not(target_arch = "wasm32")
-))]
-#[test]
-fn a_drag_that_carries_peers_says_so_before_the_window_starts_moving() {
-    let main = WindowId::from_static("main");
-    let group = graph_group(WindowAttachPolicy::default());
-    let windows = main_and_eq_windows(&group);
-
-    let mut graph = WindowGraphState::default();
-    assert!(
-        !graph.drag_carries_peers(),
-        "nothing is being dragged yet, so nothing is being carried"
-    );
-    graph.start_drag(&windows, main);
-    assert!(
-        graph.drag_carries_peers(),
-        "the desktop asks this to decide who moves the window: one it moves itself, \
-         because the peers it carries are placed in the same pass and stay with it, or \
-         the platform, which moves it alone and is read back a poll later"
-    );
-
-    let alone = graph_group(WindowAttachPolicy::default());
-    let lone = vec![graph_node(
-        "main",
-        Point::new(120.0, 80.0),
-        Size::new(275.0, 116.0),
-        &alone,
-    )];
-    let mut graph = WindowGraphState::default();
-    graph.start_drag(&lone, main);
-    assert!(
-        !graph.drag_carries_peers(),
-        "a window with nothing attached keeps the platform drag, and the edge snapping \
-         and spaces that come with it"
     );
 }

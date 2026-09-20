@@ -174,8 +174,14 @@ impl SlotWriteSession<'_> {
     pub(crate) fn retained_restore_ready(
         &mut self,
         key: GroupKey,
-        subtree: &DetachedSubtree,
+        subtree: &mut DetachedSubtree,
     ) -> bool {
+        if !self.table.holds_anchors_of(subtree) && !self.table.adopt_detached_subtree(subtree) {
+            log::error!(
+                "slot table could not issue its own anchors for a subtree arriving from another slot table for key {key:?}"
+            );
+            return false;
+        }
         let parent_anchor = self.state.current_parent_anchor();
         let insert_index = self.state.current_child_cursor();
         let cursor = ChildCursor::new(parent_anchor, insert_index);

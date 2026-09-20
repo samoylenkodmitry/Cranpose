@@ -15,7 +15,7 @@ use std::collections::HashMap;
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 use std::{cell::RefCell, fmt, rc::Rc};
 
 use cranpose_core::MutableState;
@@ -37,7 +37,10 @@ pub(crate) struct WindowId(u64);
 impl WindowId {
     #[cfg(test)]
     pub(crate) fn from_static(id: &'static str) -> Self {
-        Self(hash_id(id))
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        id.hash(&mut hasher);
+        Self(hasher.finish())
     }
 
     pub(crate) fn raw(self) -> u64 {
@@ -55,25 +58,6 @@ impl WindowId {
     not(target_arch = "wasm32")
 ))]
 pub(crate) type NativeWindowKey = WindowId;
-
-#[cfg(all(
-    feature = "desktop-shell",
-    feature = "renderer-wgpu",
-    not(target_arch = "wasm32")
-))]
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(crate) struct WindowGroupId(u64);
-
-#[cfg(all(
-    feature = "desktop-shell",
-    feature = "renderer-wgpu",
-    not(target_arch = "wasm32")
-))]
-impl WindowGroupId {
-    pub(crate) fn from_static(id: &'static str) -> Self {
-        Self(hash_id(id))
-    }
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NativeWindowPositionOrigin {
@@ -121,74 +105,6 @@ pub struct NativeWindowOptions {
     pub focus: WindowFocus,
 }
 
-/// Movement behavior for a group of attached peer windows.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum WindowMoveMode {
-    /// Dragging any window in the group moves its attached component.
-    AllAttached,
-    /// Only windows configured with [`WindowConfig::leads_group`] move their
-    /// attached component; other windows move alone.
-    LeadersOnly,
-}
-
-impl WindowMoveMode {
-    #[cfg(all(
-        feature = "desktop-shell",
-        feature = "renderer-wgpu",
-        not(target_arch = "wasm32")
-    ))]
-    fn moves_attached_component(self, leads_group: bool) -> bool {
-        match self {
-            Self::AllAttached => true,
-            Self::LeadersOnly => leads_group,
-        }
-    }
-}
-
-/// Attachment and snapping policy for a declarative peer-window group.
-#[derive(Clone, Debug, PartialEq)]
-pub struct WindowAttachPolicy {
-    /// Maximum edge distance, in logical pixels, that counts as a snap target.
-    pub snap_distance: f32,
-    /// Maximum edge distance, in logical pixels, that counts as attached.
-    pub attach_epsilon: f32,
-    /// Determines which dragged windows move attached neighbors.
-    pub move_mode: WindowMoveMode,
-}
-
-impl WindowAttachPolicy {
-    /// Creates a peer-window attachment policy.
-    pub fn new(snap_distance: f32, attach_epsilon: f32, move_mode: WindowMoveMode) -> Self {
-        Self {
-            snap_distance,
-            attach_epsilon,
-            move_mode,
-        }
-    }
-}
-
-impl Default for WindowAttachPolicy {
-    fn default() -> Self {
-        Self {
-            snap_distance: 8.0,
-            attach_epsilon: 3.0,
-            move_mode: WindowMoveMode::AllAttached,
-        }
-    }
-}
-
-#[cfg(all(
-    feature = "desktop-shell",
-    feature = "renderer-wgpu",
-    not(target_arch = "wasm32")
-))]
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct NativeWindowGroupMembership {
-    pub(crate) id: WindowGroupId,
-    pub(crate) policy: WindowAttachPolicy,
-    pub(crate) leads: bool,
-}
-
 #[cfg(all(
     feature = "desktop-shell",
     feature = "renderer-wgpu",
@@ -199,7 +115,6 @@ pub(crate) struct NativeWindowParts {
     pub(crate) options: NativeWindowOptions,
     pub(crate) events: NativeWindowEvents,
     pub(crate) state: Option<WindowState>,
-    pub(crate) group: Option<NativeWindowGroupMembership>,
 }
 
 impl NativeWindowOptions {
@@ -352,10 +267,35 @@ impl NativeWindowEvents {
 pub struct WindowState {
     position: MutableState<Option<Point>>,
     size: MutableState<Size>,
+    frame: MutableState<Size>,
     presented: MutableState<bool>,
 }
 
 impl WindowState {
+    /// Returns the size of the whole window, title bar and borders included,
+    /// in logical pixels.
+    ///
+    /// [`WindowState::size`] is the content, which is what a layout is given.
+    /// This is what the window occupies on screen, which is what lines up
+    /// against another window's edge. They are the same for a borderless
+    /// window. Zero until the window is on screen.
+    pub fn frame_size(self) -> Size {
+        self.frame.get()
+    }
+
+    /// The size of the whole window, without subscribing to changes.
+    pub fn frame_size_non_reactive(self) -> Size {
+        self.frame.get_non_reactive()
+    }
+
+    /// Records the size of the whole window. The desktop sets it from the
+    /// window itself; an application reads it.
+    pub fn set_frame_size(self, frame: Size) {
+        if self.frame.get_non_reactive() != frame {
+            self.frame.set(frame);
+        }
+    }
+
     /// Returns the last known outer-window position in logical screen coordinates.
     pub fn position(self) -> Option<Point> {
         self.position.get()
@@ -431,6 +371,7 @@ pub fn rememberWindowState(width: f32, height: f32) -> WindowState {
     WindowState {
         position: cranpose_core::rememberMutableStateOf(|| None::<Point>),
         size: cranpose_core::rememberMutableStateOf(move || Size::new(width, height)),
+        frame: cranpose_core::rememberMutableStateOf(move || Size::new(width, height)),
         presented: cranpose_core::rememberMutableStateOf(|| false),
     }
 }
@@ -444,6 +385,7 @@ pub fn rememberWindowStateAt(x: f32, y: f32, width: f32, height: f32) -> WindowS
     WindowState {
         position: cranpose_core::rememberMutableStateOf(move || Some(Point::new(x, y))),
         size: cranpose_core::rememberMutableStateOf(move || Size::new(width, height)),
+        frame: cranpose_core::rememberMutableStateOf(move || Size::new(width, height)),
         presented: cranpose_core::rememberMutableStateOf(|| false),
     }
 }
@@ -460,22 +402,11 @@ pub struct WindowConfig {
     options: NativeWindowOptions,
     callbacks: NativeWindowEvents,
     state: Option<WindowState>,
-    group: Option<WindowGroupConfig>,
-    leads_group: bool,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-struct WindowGroupConfig {
-    id: &'static str,
-    policy: WindowAttachPolicy,
 }
 
 impl PartialEq for WindowConfig {
     fn eq(&self, other: &Self) -> bool {
-        self.options == other.options
-            && self.state == other.state
-            && self.group == other.group
-            && self.leads_group == other.leads_group
+        self.options == other.options && self.state == other.state
     }
 }
 
@@ -483,8 +414,6 @@ impl fmt::Debug for WindowConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("WindowConfig")
             .field("options", &self.options)
-            .field("group", &self.group)
-            .field("leads_group", &self.leads_group)
             .finish_non_exhaustive()
     }
 }
@@ -496,8 +425,6 @@ impl WindowConfig {
             options: NativeWindowOptions::new(title, width, height),
             callbacks: NativeWindowEvents::new(),
             state: None,
-            group: None,
-            leads_group: false,
         }
     }
 
@@ -513,8 +440,6 @@ impl WindowConfig {
             options: NativeWindowOptions::borderless(title, width, height),
             callbacks: NativeWindowEvents::new(),
             state: None,
-            group: None,
-            leads_group: false,
         }
     }
 
@@ -629,20 +554,6 @@ impl WindowConfig {
         self
     }
 
-    /// Joins the window to the group named `id`. Windows of one group snap
-    /// to each other's edges and, under `policy`, move together.
-    pub fn group(mut self, id: &'static str, policy: WindowAttachPolicy) -> Self {
-        self.group = Some(WindowGroupConfig { id, policy });
-        self
-    }
-
-    /// Whether dragging this window carries the windows attached to it when
-    /// its group moves under [`WindowMoveMode::LeadersOnly`].
-    pub fn leads_group(mut self, leads: bool) -> Self {
-        self.leads_group = leads;
-        self
-    }
-
     pub(crate) fn state(&self) -> Option<WindowState> {
         self.state
     }
@@ -666,11 +577,6 @@ impl WindowConfig {
             options: self.options,
             events: self.callbacks,
             state: self.state,
-            group: self.group.map(|group| NativeWindowGroupMembership {
-                id: WindowGroupId::from_static(group.id),
-                policy: group.policy,
-                leads: self.leads_group,
-            }),
         }
     }
 }
@@ -710,6 +616,11 @@ pub trait WindowModifierExt {
     ///
     /// The modifier is inert when the component is not currently rendered in a
     /// native desktop sub-window, so the same UI can be used inline.
+    ///
+    /// The press is left unconsumed, so whatever sits under the drag area
+    /// still sees it: a title bar moves its window and answers a click, and
+    /// the click is the one `Modifier::clickable` recognises, on every
+    /// platform.
     fn window_drag_area(self) -> Modifier;
 
     /// Marks this component as a drag target and reports the native drag lifecycle.
@@ -777,7 +688,6 @@ impl WindowModifierExt for Modifier {
                                 PointerEventKind::Down => {
                                     if request_native_window_drag() {
                                         dragging = true;
-                                        event.consume();
                                         on_started();
                                     }
                                 }
@@ -900,7 +810,6 @@ pub(crate) struct NativeWindowRequest {
     pub(crate) options: NativeWindowOptions,
     pub(crate) events: NativeWindowEvents,
     pub(crate) state: Option<WindowState>,
-    pub(crate) group: Option<NativeWindowGroupMembership>,
     pub(crate) root: NativeWindowRootHandle,
     pub(crate) revision: u64,
     owner: NativeWindowOwner,
@@ -916,7 +825,6 @@ struct NativeWindowRegistration {
     options: NativeWindowOptions,
     events: NativeWindowEvents,
     state: Option<WindowState>,
-    group: Option<NativeWindowGroupMembership>,
     root: NativeWindowRootHandle,
     owner: NativeWindowOwner,
 }
@@ -961,7 +869,6 @@ impl NativeWindowRegistry {
                 options: registration.options,
                 events: registration.events,
                 state: registration.state,
-                group: registration.group,
                 root: registration.root,
                 revision,
                 owner: registration.owner,
@@ -1120,7 +1027,6 @@ pub(crate) fn register_native_window(
     options: NativeWindowOptions,
     events: NativeWindowEvents,
     state: Option<WindowState>,
-    group: Option<NativeWindowGroupMembership>,
     root: NativeWindowRootHandle,
     owner: NativeWindowOwner,
 ) {
@@ -1135,7 +1041,6 @@ pub(crate) fn register_native_window(
         options,
         events,
         state,
-        group,
         root,
         owner,
     });
@@ -1154,496 +1059,6 @@ pub(crate) fn unregister_native_window(key: NativeWindowKey, owner: NativeWindow
         return;
     };
     registry.unregister(key, owner);
-}
-
-#[cfg(all(
-    feature = "desktop-shell",
-    feature = "renderer-wgpu",
-    not(target_arch = "wasm32")
-))]
-fn hash_id(id: &'static str) -> u64 {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    id.hash(&mut hasher);
-    hasher.finish()
-}
-
-#[cfg(all(
-    feature = "desktop-shell",
-    feature = "renderer-wgpu",
-    not(target_arch = "wasm32")
-))]
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct WindowGraphNodeSnapshot {
-    pub(crate) id: WindowId,
-    pub(crate) position: Point,
-    pub(crate) size: Size,
-}
-
-#[cfg(all(
-    feature = "desktop-shell",
-    feature = "renderer-wgpu",
-    not(target_arch = "wasm32")
-))]
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct WindowGraphPeerSnapshot {
-    pub(crate) node: WindowGraphNodeSnapshot,
-    pub(crate) group: Option<NativeWindowGroupMembership>,
-}
-
-#[cfg(all(
-    feature = "desktop-shell",
-    feature = "renderer-wgpu",
-    not(target_arch = "wasm32")
-))]
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct WindowGraphMove {
-    pub(crate) id: WindowId,
-    pub(crate) position: Point,
-}
-
-#[cfg(all(
-    feature = "desktop-shell",
-    feature = "renderer-wgpu",
-    not(target_arch = "wasm32")
-))]
-#[derive(Clone, Debug)]
-struct WindowGraphDragSession {
-    group: Option<NativeWindowGroupMembership>,
-    dragged: WindowId,
-    start_dragged_position: Point,
-    captured: Vec<WindowGraphNodeSnapshot>,
-}
-
-#[cfg(all(
-    feature = "desktop-shell",
-    feature = "renderer-wgpu",
-    not(target_arch = "wasm32")
-))]
-#[derive(Default)]
-pub(crate) struct WindowGraphState {
-    active_drag: Option<WindowGraphDragSession>,
-}
-
-#[cfg(all(
-    feature = "desktop-shell",
-    feature = "renderer-wgpu",
-    not(target_arch = "wasm32")
-))]
-impl WindowGraphState {
-    pub(crate) fn start_drag(&mut self, windows: &[WindowGraphPeerSnapshot], dragged: WindowId) {
-        let Some(dragged_window) = windows.iter().find(|window| window.node.id == dragged) else {
-            self.active_drag = None;
-            return;
-        };
-        let group = dragged_window.group.clone();
-        let captured = if let Some(group) = &group {
-            let group_windows = group_windows(windows, group);
-            let moves_attached = group.policy.move_mode.moves_attached_component(group.leads);
-            let component = if moves_attached {
-                attached_component(&group_windows, dragged, group.policy.attach_epsilon)
-            } else {
-                vec![dragged]
-            };
-            group_windows
-                .into_iter()
-                .filter(|window| component.contains(&window.id))
-                .collect()
-        } else {
-            vec![dragged_window.node]
-        };
-
-        self.active_drag = Some(WindowGraphDragSession {
-            group,
-            dragged,
-            start_dragged_position: dragged_window.node.position,
-            captured,
-        });
-    }
-
-    pub(crate) fn drag_carries_peers(&self) -> bool {
-        self.active_drag
-            .as_ref()
-            .is_some_and(|session| session.captured.len() > 1)
-    }
-
-    pub(crate) fn drag_to(
-        &self,
-        dragged: WindowId,
-        target_position: Point,
-    ) -> Vec<WindowGraphMove> {
-        let Some(session) = &self.active_drag else {
-            return vec![WindowGraphMove {
-                id: dragged,
-                position: target_position,
-            }];
-        };
-        if session.dragged != dragged {
-            return Vec::new();
-        }
-
-        let delta = Point::new(
-            target_position.x - session.start_dragged_position.x,
-            target_position.y - session.start_dragged_position.y,
-        );
-        session
-            .captured
-            .iter()
-            .map(|window| WindowGraphMove {
-                id: window.id,
-                position: Point::new(window.position.x + delta.x, window.position.y + delta.y),
-            })
-            .collect()
-    }
-
-    pub(crate) fn cancel_drag(&mut self) {
-        self.active_drag = None;
-    }
-
-    pub(crate) fn finish_drag(
-        &mut self,
-        windows: &[WindowGraphPeerSnapshot],
-    ) -> Vec<WindowGraphMove> {
-        let Some(session) = self.active_drag.take() else {
-            return Vec::new();
-        };
-        let Some(group) = &session.group else {
-            return Vec::new();
-        };
-        let group_windows = group_windows(windows, group);
-        if group_windows
-            .iter()
-            .all(|window| window.id != session.dragged)
-        {
-            return Vec::new();
-        }
-
-        let moves_attached = group.policy.move_mode.moves_attached_component(group.leads);
-        let mut component = if moves_attached {
-            session.captured.iter().map(|window| window.id).collect()
-        } else {
-            vec![session.dragged]
-        };
-        if let Some(snap) = closest_snap(&group_windows, &component, group.policy.snap_distance) {
-            let mut moved = group_windows;
-            translate_nodes(&mut moved, &component, snap.delta);
-            if moves_attached {
-                for id in attached_component(&moved, snap.target, group.policy.attach_epsilon) {
-                    if !component.contains(&id) {
-                        component.push(id);
-                    }
-                }
-            }
-            return moved
-                .into_iter()
-                .filter(|window| component.contains(&window.id))
-                .map(|window| WindowGraphMove {
-                    id: window.id,
-                    position: window.position,
-                })
-                .collect();
-        }
-
-        Vec::new()
-    }
-
-    pub(crate) fn external_move(
-        &self,
-        windows: &[WindowGraphPeerSnapshot],
-        moved: WindowId,
-        new_position: Point,
-    ) -> Vec<WindowGraphMove> {
-        let Some(moved_window) = windows.iter().find(|window| window.node.id == moved) else {
-            return Vec::new();
-        };
-        let Some(group) = &moved_window.group else {
-            return Vec::new();
-        };
-        if !group.policy.move_mode.moves_attached_component(group.leads) {
-            return Vec::new();
-        }
-
-        let delta = Point::new(
-            new_position.x - moved_window.node.position.x,
-            new_position.y - moved_window.node.position.y,
-        );
-        if delta.x.abs() <= f32::EPSILON && delta.y.abs() <= f32::EPSILON {
-            return Vec::new();
-        }
-        let group_windows = group_windows(windows, group);
-        let component = attached_component(&group_windows, moved, group.policy.attach_epsilon);
-        group_windows
-            .into_iter()
-            .filter(|window| component.contains(&window.id) && window.id != moved)
-            .map(|window| WindowGraphMove {
-                id: window.id,
-                position: Point::new(window.position.x + delta.x, window.position.y + delta.y),
-            })
-            .collect()
-    }
-}
-
-#[cfg(all(
-    feature = "desktop-shell",
-    feature = "renderer-wgpu",
-    not(target_arch = "wasm32")
-))]
-fn group_windows(
-    windows: &[WindowGraphPeerSnapshot],
-    group: &NativeWindowGroupMembership,
-) -> Vec<WindowGraphNodeSnapshot> {
-    windows
-        .iter()
-        .filter(|window| {
-            window
-                .group
-                .as_ref()
-                .is_some_and(|candidate| candidate.id == group.id)
-        })
-        .map(|window| window.node)
-        .collect()
-}
-
-#[cfg(all(
-    feature = "desktop-shell",
-    feature = "renderer-wgpu",
-    not(target_arch = "wasm32")
-))]
-fn attached_component(
-    windows: &[WindowGraphNodeSnapshot],
-    dragged: WindowId,
-    attach_epsilon: f32,
-) -> Vec<WindowId> {
-    let mut component = vec![dragged];
-    let mut changed = true;
-
-    while changed {
-        changed = false;
-        for candidate in windows {
-            if component.contains(&candidate.id) {
-                continue;
-            }
-            let attached_to_component = windows
-                .iter()
-                .filter(|window| component.contains(&window.id))
-                .any(|window| rects_attached(candidate, window, attach_epsilon));
-            if attached_to_component {
-                component.push(candidate.id);
-                changed = true;
-            }
-        }
-    }
-
-    component
-}
-
-#[cfg(all(
-    feature = "desktop-shell",
-    feature = "renderer-wgpu",
-    not(target_arch = "wasm32")
-))]
-fn rects_attached(
-    child: &WindowGraphNodeSnapshot,
-    main: &WindowGraphNodeSnapshot,
-    attach_epsilon: f32,
-) -> bool {
-    let child_right = child.position.x + child.size.width;
-    let child_bottom = child.position.y + child.size.height;
-    let main_right = main.position.x + main.size.width;
-    let main_bottom = main.position.y + main.size.height;
-
-    let touches_horizontal = near(child.position.x, main_right, attach_epsilon)
-        || near(child_right, main.position.x, attach_epsilon);
-    let overlaps_vertical = ranges_overlap(
-        child.position.y,
-        child_bottom,
-        main.position.y,
-        main_bottom,
-        attach_epsilon,
-    );
-    let touches_vertical = near(child.position.y, main_bottom, attach_epsilon)
-        || near(child_bottom, main.position.y, attach_epsilon);
-    let overlaps_horizontal = ranges_overlap(
-        child.position.x,
-        child_right,
-        main.position.x,
-        main_right,
-        attach_epsilon,
-    );
-
-    touches_horizontal && overlaps_vertical || touches_vertical && overlaps_horizontal
-}
-
-#[cfg(all(
-    feature = "desktop-shell",
-    feature = "renderer-wgpu",
-    not(target_arch = "wasm32")
-))]
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct GraphSnap {
-    target: WindowId,
-    delta: Point,
-    distance: f32,
-    contact: f32,
-}
-
-#[cfg(all(
-    feature = "desktop-shell",
-    feature = "renderer-wgpu",
-    not(target_arch = "wasm32")
-))]
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct GraphSnapCandidate {
-    delta: Point,
-    contact: f32,
-}
-
-#[cfg(all(
-    feature = "desktop-shell",
-    feature = "renderer-wgpu",
-    not(target_arch = "wasm32")
-))]
-fn closest_snap(
-    windows: &[WindowGraphNodeSnapshot],
-    component: &[WindowId],
-    snap_distance: f32,
-) -> Option<GraphSnap> {
-    let mut closest = None::<GraphSnap>;
-
-    for moving in windows
-        .iter()
-        .filter(|window| component.contains(&window.id))
-    {
-        for stationary in windows
-            .iter()
-            .filter(|window| !component.contains(&window.id))
-        {
-            for candidate in snap_candidates(moving, stationary, snap_distance) {
-                let snap = GraphSnap {
-                    target: stationary.id,
-                    delta: candidate.delta,
-                    distance: candidate.delta.x.abs() + candidate.delta.y.abs(),
-                    contact: candidate.contact,
-                };
-                if closest.is_none_or(|current| {
-                    snap.contact > current.contact
-                        || snap.contact == current.contact && snap.distance < current.distance
-                }) {
-                    closest = Some(snap);
-                }
-            }
-        }
-    }
-
-    closest
-}
-
-#[cfg(all(
-    feature = "desktop-shell",
-    feature = "renderer-wgpu",
-    not(target_arch = "wasm32")
-))]
-fn snap_candidates(
-    moving: &WindowGraphNodeSnapshot,
-    stationary: &WindowGraphNodeSnapshot,
-    snap_distance: f32,
-) -> Vec<GraphSnapCandidate> {
-    let moving_left = moving.position.x;
-    let moving_top = moving.position.y;
-    let moving_right = moving.position.x + moving.size.width;
-    let moving_bottom = moving.position.y + moving.size.height;
-    let stationary_left = stationary.position.x;
-    let stationary_top = stationary.position.y;
-    let stationary_right = stationary.position.x + stationary.size.width;
-    let stationary_bottom = stationary.position.y + stationary.size.height;
-
-    let mut candidates = Vec::new();
-    if ranges_overlap_strict(moving_top, moving_bottom, stationary_top, stationary_bottom) {
-        let contact =
-            range_overlap_length(moving_top, moving_bottom, stationary_top, stationary_bottom);
-        if near(moving_right, stationary_left, snap_distance) {
-            candidates.push(GraphSnapCandidate {
-                delta: Point::new(stationary_left - moving_right, 0.0),
-                contact,
-            });
-        }
-        if near(moving_left, stationary_right, snap_distance) {
-            candidates.push(GraphSnapCandidate {
-                delta: Point::new(stationary_right - moving_left, 0.0),
-                contact,
-            });
-        }
-    }
-    if ranges_overlap_strict(moving_left, moving_right, stationary_left, stationary_right) {
-        let contact =
-            range_overlap_length(moving_left, moving_right, stationary_left, stationary_right);
-        if near(moving_bottom, stationary_top, snap_distance) {
-            candidates.push(GraphSnapCandidate {
-                delta: Point::new(0.0, stationary_top - moving_bottom),
-                contact,
-            });
-        }
-        if near(moving_top, stationary_bottom, snap_distance) {
-            candidates.push(GraphSnapCandidate {
-                delta: Point::new(0.0, stationary_bottom - moving_top),
-                contact,
-            });
-        }
-    }
-
-    candidates
-}
-
-#[cfg(all(
-    feature = "desktop-shell",
-    feature = "renderer-wgpu",
-    not(target_arch = "wasm32")
-))]
-fn translate_nodes(windows: &mut [WindowGraphNodeSnapshot], component: &[WindowId], delta: Point) {
-    if delta.x.abs() <= f32::EPSILON && delta.y.abs() <= f32::EPSILON {
-        return;
-    }
-    for window in windows {
-        if component.contains(&window.id) {
-            window.position.x += delta.x;
-            window.position.y += delta.y;
-        }
-    }
-}
-
-#[cfg(all(
-    feature = "desktop-shell",
-    feature = "renderer-wgpu",
-    not(target_arch = "wasm32")
-))]
-fn near(a: f32, b: f32, distance: f32) -> bool {
-    (a - b).abs() <= distance
-}
-
-#[cfg(all(
-    feature = "desktop-shell",
-    feature = "renderer-wgpu",
-    not(target_arch = "wasm32")
-))]
-fn ranges_overlap(a_start: f32, a_end: f32, b_start: f32, b_end: f32, attach_epsilon: f32) -> bool {
-    a_start <= b_end + attach_epsilon && b_start <= a_end + attach_epsilon
-}
-
-#[cfg(all(
-    feature = "desktop-shell",
-    feature = "renderer-wgpu",
-    not(target_arch = "wasm32")
-))]
-fn ranges_overlap_strict(a_start: f32, a_end: f32, b_start: f32, b_end: f32) -> bool {
-    a_start < b_end && b_start < a_end
-}
-
-#[cfg(all(
-    feature = "desktop-shell",
-    feature = "renderer-wgpu",
-    not(target_arch = "wasm32")
-))]
-fn range_overlap_length(a_start: f32, a_end: f32, b_start: f32, b_end: f32) -> f32 {
-    (a_end.min(b_end) - a_start.max(b_start)).max(0.0)
 }
 
 #[cfg(test)]

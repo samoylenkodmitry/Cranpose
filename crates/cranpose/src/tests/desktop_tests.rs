@@ -218,24 +218,23 @@ use winit::dpi::{PhysicalPosition, PhysicalSize};
 
 use super::{
     App, ControlFlow, DesktopRect, FramePacingMode, HandedPress, HeldPressStep, LoopControlInputs,
-    NativeWindowDragSession, NativeWindowGraphPositionSource, NativeWindowOptions,
-    NativeWindowPointerState, NativeWindowPollingDragSession, NativeWindowPositionObservation,
-    NativeWindowPositionOrigin, PendingNativeWindowPositions, PressToHandOver,
-    PrimaryPointerGesturePollAction, WindowFocus, WinitWindowId, clamp_rect_to_monitor_delta,
-    desired_frame_latency, event_loop_control_flow, frame_interval_for_mode, free_running_frame,
-    held_press_after_step, held_press_step, held_press_to_hand_over, initial_present_redraw_needed,
-    native_window_drag_poll_deadline, native_window_graph_position,
+    NativeWindowOptions, NativeWindowPointerState, NativeWindowPollingDragSession,
+    NativeWindowPositionObservation, NativeWindowPositionOrigin, PendingNativeWindowPositions,
+    PressBelongsHere, PressToHandOver, PrimaryPointerGesturePollAction, RootId, WindowFocus,
+    WinitWindowId, clamp_rect_to_monitor_delta, desired_frame_latency, event_loop_control_flow,
+    frame_interval_for_mode, free_running_frame, held_press_after_step, held_press_step,
+    held_press_to_hand_over, initial_present_redraw_needed, native_window_drag_poll_deadline,
     native_window_options_change_is_position_only, native_window_position_poll_needed,
     native_window_redraw_held_while_hidden, nearest_monitor_to_rect, next_frame_anchor,
     occlusion_leaves_a_frame_owed, pace_after_empty_redraw, physical_outer_origin_from_surface,
     physical_surface_local_pointer, physical_surface_origin_from_outer,
-    physical_surface_rect_contains_pointer, pointer_button_frame_request, press_to_hand_over,
-    primary_declaration_host_needs_direct_update, primary_frame_waker_uses_event_proxy,
-    primary_launch_requires_initial_redraw, primary_pointer_gesture_poll_action,
-    primary_pointer_move_should_recover_press, primary_surface_redraw_drives_app,
-    primary_viewport_for_surface_size, primary_window_should_show,
-    recovered_native_window_drag_start_pointer, scroll_frame_request, should_chain_no_vsync_redraw,
-    surface_reconfigure_requires_redraw,
+    physical_surface_rect_contains_pointer, pointer_button_frame_request, press_belongs_here,
+    press_to_hand_over, primary_declaration_host_needs_direct_update,
+    primary_frame_waker_uses_event_proxy, primary_launch_requires_initial_redraw,
+    primary_pointer_gesture_poll_action, primary_pointer_move_should_recover_press,
+    primary_surface_redraw_drives_app, primary_viewport_for_surface_size,
+    primary_window_should_show, recovered_native_window_drag_start_pointer, scroll_frame_request,
+    should_chain_no_vsync_redraw, surface_reconfigure_requires_redraw,
 };
 #[cfg(feature = "robot")]
 use super::{
@@ -1049,45 +1048,6 @@ fn pending_native_window_positions_distinguish_superseded_programmatic_moves() {
 }
 
 #[test]
-fn native_window_graph_position_keeps_cache_first_for_programmatic_moves() {
-    let position = native_window_graph_position(
-        None,
-        Some((100.0, 200.0)),
-        Some((140.0, 240.0)),
-        Some((160.0, 260.0)),
-        NativeWindowGraphPositionSource::CachedThenCurrent,
-    );
-
-    assert_eq!(position, Some(cranpose_ui::Point::new(100.0, 200.0)));
-}
-
-#[test]
-fn native_window_graph_position_uses_current_position_for_external_moves() {
-    let position = native_window_graph_position(
-        None,
-        Some((100.0, 200.0)),
-        Some((140.0, 240.0)),
-        Some((160.0, 260.0)),
-        NativeWindowGraphPositionSource::CurrentThenCached,
-    );
-
-    assert_eq!(position, Some(cranpose_ui::Point::new(140.0, 240.0)));
-}
-
-#[test]
-fn native_window_graph_position_override_wins_over_position_source() {
-    let position = native_window_graph_position(
-        Some(cranpose_ui::Point::new(80.0, 90.0)),
-        Some((100.0, 200.0)),
-        Some((140.0, 240.0)),
-        Some((160.0, 260.0)),
-        NativeWindowGraphPositionSource::CurrentThenCached,
-    );
-
-    assert_eq!(position, Some(cranpose_ui::Point::new(80.0, 90.0)));
-}
-
-#[test]
 fn native_window_polling_drag_target_is_anchored_to_drag_start() {
     let session = NativeWindowPollingDragSession::new(
         PhysicalPosition::new(100.0, 50.0),
@@ -1143,7 +1103,7 @@ fn recovered_native_window_drag_prefers_delivered_event_pointer() {
 }
 
 #[test]
-fn a_new_window_takes_over_a_held_press_only_when_it_is_under_the_pointer() {
+fn a_new_window_takes_over_a_held_press_when_the_node_that_took_it_moved_there() {
     let down = NativeWindowPointerState {
         position: PhysicalPosition::new(40.0, 30.0),
         primary_down: true,
@@ -1153,25 +1113,64 @@ fn a_new_window_takes_over_a_held_press_only_when_it_is_under_the_pointer() {
         ..down
     };
     assert_eq!(
-        held_press_to_hand_over(Some(down), true, |_| true),
+        held_press_to_hand_over(Some(down), true, PressBelongsHere::ItsNodeMovedHere, |_| {
+            panic!("the window the node moved to does not have to be under the pointer")
+        }),
         Some(down)
     );
     assert_eq!(
-        held_press_to_hand_over(Some(down), true, |position| position.x > 100.0),
-        None,
-        "a window elsewhere leaves the press where it is"
+        held_press_to_hand_over(Some(down), true, PressBelongsHere::AskTheRectangle, |_| {
+            true
+        }),
+        Some(down),
+        "a press carried by a node that stayed where it was goes to the window under the pointer"
     );
     assert_eq!(
-        held_press_to_hand_over(Some(down), false, |_| true),
+        held_press_to_hand_over(
+            Some(down),
+            true,
+            PressBelongsHere::AskTheRectangle,
+            |position| position.x > 100.0
+        ),
+        None,
+        "and to no window elsewhere"
+    );
+    assert_eq!(
+        held_press_to_hand_over(
+            Some(down),
+            false,
+            PressBelongsHere::ItsNodeMovedHere,
+            |_| true
+        ),
         None,
         "a hidden window, or one appearing during a window drag, takes nothing"
     );
     assert_eq!(
-        held_press_to_hand_over(Some(up), true, |_| true),
+        held_press_to_hand_over(Some(up), true, PressBelongsHere::ItsNodeMovedHere, |_| true),
         None,
         "a released button is no press to hand over"
     );
-    assert_eq!(held_press_to_hand_over(None, true, |_| true), None);
+    assert_eq!(
+        held_press_to_hand_over(None, true, PressBelongsHere::ItsNodeMovedHere, |_| true),
+        None
+    );
+}
+
+#[test]
+fn a_press_belongs_to_the_window_drawing_the_node_that_took_it() {
+    assert_eq!(
+        press_belongs_here(Some(RootId::Window(7)), RootId::Window(7)),
+        PressBelongsHere::ItsNodeMovedHere
+    );
+    assert_eq!(
+        press_belongs_here(Some(RootId::Primary), RootId::Window(7)),
+        PressBelongsHere::AskTheRectangle,
+        "a gesture whose node stayed behind is still a gesture this window may be taking over"
+    );
+    assert_eq!(
+        press_belongs_here(None, RootId::Window(7)),
+        PressBelongsHere::AskTheRectangle
+    );
 }
 
 #[test]
@@ -1189,6 +1188,7 @@ fn a_press_the_platform_reports_is_handed_over_without_a_relay() {
             Some(platform),
             Some((WinitWindowId::from_raw(1), held)),
             true,
+            PressBelongsHere::AskTheRectangle,
             |_| true
         ),
         Some(PressToHandOver {
@@ -1201,7 +1201,13 @@ fn a_press_the_platform_reports_is_handed_over_without_a_relay() {
          frame put under it, so the press goes on at the reading the frame had"
     );
     assert_eq!(
-        press_to_hand_over(Some(platform), None, true, |_| true),
+        press_to_hand_over(
+            Some(platform),
+            None,
+            true,
+            PressBelongsHere::AskTheRectangle,
+            |_| true
+        ),
         Some(PressToHandOver {
             pointer: platform,
             relayed_by: None,
@@ -1218,7 +1224,13 @@ fn a_press_a_window_holds_is_handed_over_and_relayed_when_the_platform_reports_n
         primary_down: true,
     };
     assert_eq!(
-        press_to_hand_over(None, Some((holder, held)), true, |_| true),
+        press_to_hand_over(
+            None,
+            Some((holder, held)),
+            true,
+            PressBelongsHere::AskTheRectangle,
+            |_| true
+        ),
         Some(PressToHandOver {
             pointer: held,
             relayed_by: Some(holder),
@@ -1226,13 +1238,22 @@ fn a_press_a_window_holds_is_handed_over_and_relayed_when_the_platform_reports_n
         "the window that got the button keeps its events, so it relays them"
     );
     assert_eq!(
-        press_to_hand_over(None, Some((holder, held)), true, |position| {
-            position.x > 100.0
-        }),
+        press_to_hand_over(
+            None,
+            Some((holder, held)),
+            true,
+            PressBelongsHere::AskTheRectangle,
+            |position| position.x > 100.0
+        ),
         None,
         "the new window still has to be under the press"
     );
-    assert_eq!(press_to_hand_over(None, None, true, |_| true), None);
+    assert_eq!(
+        press_to_hand_over(None, None, true, PressBelongsHere::AskTheRectangle, |_| {
+            true
+        }),
+        None
+    );
 }
 
 #[test]
@@ -1412,36 +1433,6 @@ fn primary_pointer_poll_ignores_inactive_synthetic_and_unavailable_input() {
         primary_pointer_gesture_poll_action(true, false, None),
         PrimaryPointerGesturePollAction::Inactive
     );
-}
-
-#[test]
-fn native_window_drag_sessions_finish_on_global_release() {
-    let now = Instant::now();
-
-    assert!(
-        NativeWindowDragSession::Polling(NativeWindowPollingDragSession::new(
-            PhysicalPosition::new(100.0, 50.0),
-            PhysicalPosition::new(300, 200),
-            now,
-        ))
-        .finishes_on_global_pointer_release()
-    );
-    assert!(NativeWindowDragSession::platform(now).finishes_on_global_pointer_release());
-}
-
-#[test]
-fn native_window_polling_drag_does_not_use_moved_events_as_targets() {
-    let now = Instant::now();
-
-    assert!(
-        !NativeWindowDragSession::Polling(NativeWindowPollingDragSession::new(
-            PhysicalPosition::new(100.0, 50.0),
-            PhysicalPosition::new(300, 200),
-            now,
-        ))
-        .uses_moved_events_as_drag_target()
-    );
-    assert!(NativeWindowDragSession::platform(now).uses_moved_events_as_drag_target());
 }
 
 #[test]

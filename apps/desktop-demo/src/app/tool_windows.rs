@@ -1,8 +1,7 @@
 #![allow(non_snake_case)]
 
 use cranpose::{
-    rememberWindowStateAt, LocalWindowState, WindowAttachPolicy, WindowConfig, WindowModifierExt,
-    WindowMoveMode, WindowState,
+    rememberWindowStateAt, LocalWindowState, WindowConfig, WindowModifierExt, WindowState,
 };
 use cranpose_core::{key, movable, rememberMutableStateOf, MutableState};
 use cranpose_ui::{
@@ -13,6 +12,7 @@ use cranpose_ui::{
 use super::{
     chrome_tabs::{label_style, CHROME, INK},
     demo_trace::trace,
+    window_snap::{rememberSnapSet, SnapSet},
 };
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -95,6 +95,17 @@ pub fn tool_windows_app() {
             .collect::<Vec<_>>()
             .join(",")
     );
+    let snap = rememberSnapSet();
+    let mut windows = Vec::new();
+    for tool in tools() {
+        let origin = snapshot
+            .torn_origin(tool.key)
+            .unwrap_or(Point::new(0.0, 0.0));
+        windows.push((
+            tool.key,
+            rememberWindowStateAt(origin.x, origin.y, tool.size.width, tool.size.height),
+        ));
+    }
     let inline = snapshot.clone();
     Column(
         Modifier::empty().background(CHROME),
@@ -109,16 +120,33 @@ pub fn tool_windows_app() {
             }
         },
     );
-    for tool in tools() {
-        if let Some(origin) = snapshot.torn_origin(tool.key) {
-            key(tool.key, move || TornTool(tool, origin, places));
+    for (tool, (_, state)) in tools().into_iter().zip(windows.iter().copied()) {
+        match snapshot.torn_origin(tool.key) {
+            Some(origin) => {
+                let windows = windows.clone();
+                key(tool.key, move || {
+                    TornTool(tool, origin, places, state, snap, windows.clone());
+                });
+            }
+            None => snap.forget(tool.key),
         }
     }
 }
 
 #[composable]
-fn TornTool(tool: Tool, origin: Point, places: MutableState<ToolPlaces>) {
-    let state = rememberWindowStateAt(origin.x, origin.y, tool.size.width, tool.size.height);
+fn TornTool(
+    tool: Tool,
+    origin: Point,
+    places: MutableState<ToolPlaces>,
+    state: WindowState,
+    snap: SnapSet,
+    windows: Vec<(u64, WindowState)>,
+) {
+    let first_frame = cranpose_core::remember(|| std::cell::Cell::new(false))
+        .with(|placed| !placed.replace(true));
+    if first_frame {
+        state.set_position(Some(origin));
+    }
     if let Some(at) = state.position() {
         let size = state.size();
         trace!(
@@ -134,14 +162,9 @@ fn TornTool(tool: Tool, origin: Point, places: MutableState<ToolPlaces>) {
         Modifier::empty().window(
             WindowConfig::borderless_for_state(tool.title, state)
                 .with_transparent(true)
-                .group(
-                    "tools",
-                    WindowAttachPolicy::new(
-                        SNAP_REACH,
-                        ATTACH_EPSILON,
-                        WindowMoveMode::AllAttached,
-                    ),
-                ),
+                .on_moved(move |x, y| {
+                    snap.window_moved(tool.key, Point::new(x, y), &windows);
+                }),
         ),
         BoxSpec::default(),
         move || movable(("tool", tool.key), move || ToolPane(tool, places)),
@@ -263,8 +286,6 @@ fn tear_origin(pressed: Point, event: &PointerEvent) -> Option<Point> {
 
 const PANE_WIDTH: f32 = 275.0;
 const TITLE_HEIGHT: f32 = 20.0;
-const SNAP_REACH: f32 = 12.0;
-const ATTACH_EPSILON: f32 = 3.0;
 const TEAR_DISTANCE: f32 = 12.0;
 
 #[cfg(test)]

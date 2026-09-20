@@ -6,8 +6,8 @@ pub(crate) mod sprites;
 use std::rc::Rc;
 
 use cranpose::{
-    rememberWindowState, LocalWindowState, WindowAttachPolicy, WindowConfig, WindowModifierExt,
-    WindowMoveMode, WindowResizeDirection, WindowState,
+    rememberWindowState, LocalWindowState, WindowConfig, WindowModifierExt, WindowResizeDirection,
+    WindowState,
 };
 use cranpose_core::{self, MutableState};
 use cranpose_foundation::PointerButton;
@@ -1620,8 +1620,6 @@ fn TransportButtons(cbuttons: ImageBitmap, state: MutableState<WinampState>, sca
 
 const WINAMP_NATIVE_HOST_OFFSET_X: f32 = 640.0;
 const WINAMP_NATIVE_HOST_OFFSET_Y: f32 = 118.0;
-const WINAMP_ATTACH_EPSILON: f32 = 3.0;
-const WINAMP_SNAP_DISTANCE: f32 = 8.0;
 
 fn native_winamp_windows_available() -> bool {
     #[cfg(all(
@@ -1668,22 +1666,11 @@ pub(crate) fn playlist_window_size(window: Option<WindowState>) -> Size {
         .unwrap_or_else(|| Size::new(PLAYLIST_WIDTH, PLAYLIST_HEIGHT))
 }
 
-fn winamp_attach_policy() -> WindowAttachPolicy {
-    WindowAttachPolicy::new(
-        WINAMP_SNAP_DISTANCE,
-        WINAMP_ATTACH_EPSILON,
-        WindowMoveMode::LeadersOnly,
-    )
-}
-
 #[composable]
 fn WinampWindow(leads: bool, config: WindowConfig, content: impl FnMut() + 'static) {
+    let _ = leads;
     Box(
-        Modifier::empty().window(
-            config
-                .group("winamp", winamp_attach_policy())
-                .leads_group(leads),
-        ),
+        Modifier::empty().window(config),
         BoxSpec::default(),
         content,
     );

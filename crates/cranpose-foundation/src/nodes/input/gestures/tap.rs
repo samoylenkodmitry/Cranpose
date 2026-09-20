@@ -29,13 +29,13 @@ impl TapGesture {
         match event.kind {
             PointerEventKind::Down if !event.is_consumed() => {
                 self.pointer_id = Some(event.id);
-                self.down_position = event.position;
+                self.down_position = event.travelled_to();
                 self.canceled_by_drag = false;
                 TapGestureEvent::Pressed(event.position)
             }
             PointerEventKind::Move if self.pointer_id == Some(event.id) => {
                 if !self.canceled_by_drag
-                    && distance(self.down_position, event.position) > DRAG_THRESHOLD
+                    && distance(self.down_position, event.travelled_to()) > DRAG_THRESHOLD
                 {
                     self.canceled_by_drag = true;
                     TapGestureEvent::Canceled

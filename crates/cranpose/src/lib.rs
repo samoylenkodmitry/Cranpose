@@ -140,8 +140,8 @@ pub use cranpose_render_common::font_source::{
 };
 pub use host_environment::{host_density, system_font_directory};
 pub use native_window::{
-    WindowAttachPolicy, WindowConfig, WindowFocus, WindowModifierExt, WindowMoveMode,
-    WindowResizeDirection, WindowState, rememberWindowState, rememberWindowStateAt,
+    WindowConfig, WindowFocus, WindowModifierExt, WindowResizeDirection, WindowState,
+    rememberWindowState, rememberWindowStateAt,
 };
 pub use window_local::LocalWindowState;
 /// Brings in what this crate's build script declared.
@@ -427,9 +427,8 @@ pub mod prelude {
         AndroidHostWindowState, rememberAndroidHostWindowState,
     };
     pub use crate::{
-        AndroidOverlayWindowOptions, AppLauncher, AppSettings, WindowAttachPolicy, WindowConfig,
-        WindowModifierExt, WindowMoveMode, WindowResizeDirection, WindowState, rememberWindowState,
-        rememberWindowStateAt,
+        AndroidOverlayWindowOptions, AppLauncher, AppSettings, WindowConfig, WindowModifierExt,
+        WindowResizeDirection, WindowState, rememberWindowState, rememberWindowStateAt,
     };
 }
 

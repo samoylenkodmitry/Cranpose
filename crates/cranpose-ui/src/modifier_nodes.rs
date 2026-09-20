@@ -1149,10 +1149,7 @@ impl ClickableNode {
 
             match event.kind {
                 PointerEventKind::Down => {
-                    *press_position.borrow_mut() = Some(Point {
-                        x: event.global_position.x,
-                        y: event.global_position.y,
-                    });
+                    *press_position.borrow_mut() = Some(event.travelled_to());
                     if let Some(on_press) = on_press.as_ref() {
                         on_press(event.position);
                     }
@@ -1162,8 +1159,9 @@ impl ClickableNode {
                     let press_pos_value = *press_position.borrow();
 
                     let should_click = if let Some(press_pos) = press_pos_value {
-                        let dx = event.global_position.x - press_pos.x;
-                        let dy = event.global_position.y - press_pos.y;
+                        let travelled_to = event.travelled_to();
+                        let dx = travelled_to.x - press_pos.x;
+                        let dy = travelled_to.y - press_pos.y;
                         let distance = (dx * dx + dy * dy).sqrt();
                         distance <= DRAG_THRESHOLD
                     } else {

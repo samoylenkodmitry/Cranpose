@@ -320,7 +320,6 @@ impl DetachedSubtree {
         self.payloads.len()
     }
 
-    #[cfg(any(test, debug_assertions))]
     pub(crate) fn payload_anchors(&self) -> impl Iterator<Item = PayloadAnchor> + '_ {
         self.payloads.iter().map(|payload| payload.anchor)
     }

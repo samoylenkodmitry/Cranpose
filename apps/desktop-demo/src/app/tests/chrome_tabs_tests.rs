@@ -73,3 +73,37 @@ fn a_tab_leaves_the_strip_when_the_pointer_carries_it_clear_of_it() {
         "carried above it counts too"
     );
 }
+
+#[test]
+fn a_window_laid_over_another_ones_strip_is_the_one_its_tab_goes_back_into() {
+    let mut windows = two_pages();
+    windows.tear_page(2, Point::new(900.0, 700.0));
+    assert_eq!(
+        windows.strip_laid_over(2),
+        None,
+        "a window carried well clear of the first is not asking to go back"
+    );
+
+    let home = windows.windows()[0].origin;
+    windows.moved(2, Point::new(home.x + WINDOW_WIDTH - 1.0, home.y));
+    assert_eq!(
+        windows.strip_laid_over(2),
+        Some(1),
+        "a strip laid over another one is a strip that can take the tab"
+    );
+
+    windows.moved(2, Point::new(home.x, home.y + STRIP_HEIGHT));
+    assert_eq!(
+        windows.strip_laid_over(2),
+        None,
+        "below the strip is the page, not the strip"
+    );
+}
+
+#[test]
+fn a_window_knows_which_page_is_showing_in_it() {
+    let mut windows = two_pages();
+    windows.activate(2);
+    assert_eq!(windows.active_page(1), Some(2));
+    assert_eq!(windows.active_page(9), None);
+}

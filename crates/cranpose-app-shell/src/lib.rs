@@ -645,6 +645,32 @@ where
         SurfaceMut::new(self, 0)
     }
 
+    /// The root whose surface now draws the node that took the primary
+    /// press, or `None` while no press is being held.
+    ///
+    /// A press is taken by a node, not by a rectangle. When the application
+    /// moves that node into a window of its own — a tab pulled out of a
+    /// strip, a pane pulled off a stack — the press belongs to that window
+    /// from then on, and a platform can hand it over on the strength of this
+    /// rather than on where the pointer happens to be.
+    pub fn root_holding_the_press(&mut self) -> Option<RootId> {
+        let pressed = self
+            .surfaces
+            .iter()
+            .find_map(|surface| surface.hit_path_tracker.dispatch_order(PointerId::PRIMARY))?;
+        let primary_root = self.app.composition.root()?;
+        let mut applier = self.app.composition.applier_mut();
+        let holder = pressed.into_iter().find_map(|node| {
+            let node = applier.scene_node_attached_to(node, primary_root)?;
+            Some(cranpose_ui::nearest_window_root(&mut applier, node))
+        })?;
+        drop(applier);
+        self.surfaces
+            .iter()
+            .find(|surface| surface.owns_nodes_under(holder))
+            .map(|surface| surface.id)
+    }
+
     fn surface_index(&self, root: RootId) -> Option<usize> {
         self.surfaces.iter().position(|surface| surface.id == root)
     }

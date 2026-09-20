@@ -86,7 +86,6 @@ impl NativeWindowNode {
             self.parts.options.clone(),
             self.parts.events.clone(),
             self.parts.state,
-            self.parts.group.clone(),
             Rc::clone(&self.surface),
             Rc::clone(&self.owner),
         );

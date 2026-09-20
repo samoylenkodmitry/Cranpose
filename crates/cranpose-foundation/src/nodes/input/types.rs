@@ -315,6 +315,18 @@ impl PointerEvent {
         self
     }
 
+    /// Where the pointer is in the steadiest frame the platform offers: on
+    /// the screen where it reports window positions, and in the composition
+    /// where it does not.
+    ///
+    /// Two events compared this way say how far the hand travelled even when
+    /// the window under it travelled too, which is what a drag threshold has
+    /// to measure: a press that drags a borderless window never moves within
+    /// that window, because the window follows it.
+    pub fn travelled_to(&self) -> Point {
+        self.screen_position.unwrap_or(self.global_position)
+    }
+
     /// Set the buttons state for this event
     pub fn with_buttons(mut self, buttons: PointerButtons) -> Self {
         self.buttons = buttons;

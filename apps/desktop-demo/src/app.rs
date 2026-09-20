@@ -53,6 +53,7 @@ mod url_resolve;
 pub mod wear;
 mod web_fetch;
 mod winamp;
+mod window_snap;
 mod xkcd;
 
 use animations::AnimationsTab;

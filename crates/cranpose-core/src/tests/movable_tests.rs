@@ -604,3 +604,78 @@ fn movable_content_arriving_in_a_fresh_parent_keeps_its_place_among_siblings() {
     );
     assert_eq!(child_parent(&mut composition, node), Some(target));
 }
+
+#[test]
+fn movable_content_crosses_into_a_subcomposition_and_back() {
+    let mut composition = test_composition();
+    let inside = MutableState::with_runtime(false, composition.runtime_handle());
+    let sub_slots = Rc::new(SlotsHost::new(SlotTable::new()));
+    let holders = TwoHolders::default();
+    let root_key = location_key(file!(), line!(), column!());
+    // The probe is not reset between passes here: content that arrives
+    // already composed is skipped, and what matters is that it is alive and
+    // under the right parent, not that its body ran again.
+    let render = |composition: &mut Composition<MemoryApplier>| {
+        let holders = holders.clone();
+        let sub_slots = Rc::clone(&sub_slots);
+        composition
+            .render(root_key, move || {
+                let show_inside = inside.value();
+                holders.first.set(Some(holder("outside", !show_inside)));
+                let host =
+                    with_current_composer(|composer| composer.emit_node(RecordingNode::default));
+                holders.second.set(Some(host));
+                with_current_composer(|composer| {
+                    composer
+                        .subcompose_in(&sub_slots, Some(host), |_| {
+                            if show_inside {
+                                movable(MOVABLE_ID, movable_content);
+                            }
+                        })
+                        .expect("subcomposition render");
+                });
+            })
+            .expect("render the movable across a subcomposition");
+        assert_composition_valid(composition);
+    };
+
+    render(&mut composition);
+    let probe = probe();
+    let (outside, host) = holders.ids();
+    let node = probe.node();
+    probe.seed_remembered(31);
+    assert_eq!(parent_children(&mut composition, outside), vec![node]);
+
+    inside.set_value(true);
+    render(&mut composition);
+    // The subcomposition composed while the old parent still held the
+    // content, so it opened a placeholder and waits; it takes the content
+    // over when it is driven again, the way a SubcomposeLayout re-measures.
+    render(&mut composition);
+    probe.assert_alive("after moving into a subcomposition's slot table");
+    assert_eq!(
+        probe.remembered(),
+        31,
+        "remembered value crossed the tables"
+    );
+    assert!(parent_children(&mut composition, outside).is_empty());
+    assert_eq!(child_parent(&mut composition, node), Some(host));
+    assert_eq!(
+        composition.debug_slot_snapshot().retained_subtree_count,
+        0,
+        "the table it left must not go on holding it"
+    );
+
+    inside.set_value(false);
+    render(&mut composition);
+    render(&mut composition);
+    probe.assert_alive("after coming back out of the subcomposition");
+    assert_eq!(probe.remembered(), 31);
+    assert_eq!(parent_children(&mut composition, outside), vec![node]);
+    assert_eq!(child_parent(&mut composition, node), Some(outside));
+    assert_eq!(
+        sub_slots.debug_snapshot().retained_subtree_count,
+        0,
+        "and neither must the subcomposition's"
+    );
+}

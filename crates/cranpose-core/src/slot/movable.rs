@@ -11,7 +11,7 @@ use super::{
     checked_u32_delta, checked_usize_to_i64,
     segments::{NodeSegment, PayloadSegment, extract_subtree_segment},
 };
-use crate::{AnchorId, Key, collections::map::HashMap};
+use crate::{AnchorId, Key, collections::map::HashMap, slot::PayloadAnchor};
 
 pub(crate) const MOVABLE_STATIC_KEY: Key = 0x6d6f_7661_626c_6521;
 
@@ -77,6 +77,67 @@ impl SlotTable {
         let anchor = self.movables.anchor(id)?;
         let index = self.active_group_index(anchor)?;
         Some(self.groups[index].parent_anchor)
+    }
+
+    /// Whether this table currently holds the movable's content.
+    pub(crate) fn movable_is_attached(&self, id: Key) -> bool {
+        self.movables
+            .anchor(id)
+            .is_some_and(|anchor| self.active_group_index(anchor).is_some())
+    }
+
+    /// Whether this table issued the anchors a detached subtree carries.
+    ///
+    /// A subtree detached from another slot table — the one a
+    /// `SubcomposeLayout` keeps for its slot, say — names anchors that mean
+    /// nothing here, and could collide with live ones.
+    pub(crate) fn holds_anchors_of(&self, subtree: &DetachedSubtree) -> bool {
+        subtree
+            .group_anchors()
+            .all(|anchor| self.anchors.is_detached(anchor))
+            && subtree
+                .payload_anchors()
+                .all(|anchor| self.payload_anchors.is_detached(anchor))
+    }
+
+    /// Issues this table's own anchors for a subtree detached from another
+    /// table, so movable content can arrive in a slot table that never held
+    /// it. The subtree keeps its groups, payloads, nodes and scopes; only the
+    /// names this table knows them by are new.
+    pub(crate) fn adopt_detached_subtree(&mut self, subtree: &mut DetachedSubtree) -> bool {
+        let mut groups: HashMap<AnchorId, AnchorId> = HashMap::default();
+        for group in &subtree.groups {
+            let Some(anchor) = self.anchors.try_allocate() else {
+                return false;
+            };
+            self.anchors.mark_detached(anchor);
+            groups.insert(group.anchor, anchor);
+        }
+        let mut payloads: HashMap<PayloadAnchor, PayloadAnchor> = HashMap::default();
+        for payload in &subtree.payloads {
+            let Some(anchor) = self.payload_anchors.try_allocate() else {
+                return false;
+            };
+            payloads.insert(payload.anchor, anchor);
+        }
+        let owner = |old: AnchorId| groups.get(&old).copied().unwrap_or(AnchorId::INVALID);
+        for group in &mut subtree.groups {
+            group.anchor = owner(group.anchor);
+            if group.parent_anchor.is_valid() {
+                group.parent_anchor = owner(group.parent_anchor);
+            }
+        }
+        for payload in &mut subtree.payloads {
+            payload.owner = owner(payload.owner);
+            payload.anchor = payloads
+                .get(&payload.anchor)
+                .copied()
+                .unwrap_or(PayloadAnchor::INVALID);
+        }
+        for node in &mut subtree.nodes {
+            node.owner = owner(node.owner);
+        }
+        true
     }
 }
 

@@ -178,9 +178,9 @@ impl RetentionManager {
     pub(crate) fn take_after_restore_preflight(
         &mut self,
         key: RetainKey,
-        preflight: impl FnOnce(&DetachedSubtree) -> bool,
+        preflight: impl FnOnce(&mut DetachedSubtree) -> bool,
     ) -> Option<DetachedSubtree> {
-        if !preflight(&self.groups.get(&key)?.subtree) {
+        if !preflight(&mut self.groups.get_mut(&key)?.subtree) {
             log::error!(
                 "retention restore preflight rejected subtree for parent_scope={:?} key={:?}",
                 key.parent_scope,

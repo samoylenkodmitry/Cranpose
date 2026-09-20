@@ -132,6 +132,13 @@ pub(crate) struct PendingMovable {
     pub(crate) parent_scope: Option<ScopeId>,
 }
 
+fn movable_retain_key(id: Key) -> RetainKey {
+    RetainKey::for_group(
+        None,
+        crate::slot::GroupKey::new(crate::slot::MOVABLE_STATIC_KEY, Some(id), 0),
+    )
+}
+
 pub(crate) struct ComposerRuntimeState {
     scope_registry: RefCell<HashMap<ScopeId, RecomposeScope>>,
     retention_by_host: RefCell<HashMap<usize, RetentionManager>>,
@@ -233,7 +240,7 @@ impl ComposerRuntimeState {
         &self,
         host: &Rc<SlotsHost>,
         key: RetainKey,
-        preflight: impl FnOnce(&crate::slot::DetachedSubtree) -> bool,
+        preflight: impl FnOnce(&mut crate::slot::DetachedSubtree) -> bool,
     ) -> Option<crate::slot::DetachedSubtree> {
         let host_key = slots_storage_key(host);
         let mut retention = self.retention_by_host.borrow_mut();
@@ -269,21 +276,17 @@ impl ComposerRuntimeState {
         }
     }
 
-    pub(crate) fn retained_contains(&self, host: &Rc<SlotsHost>, key: RetainKey) -> bool {
-        self.retention_by_host
-            .borrow()
-            .get(&slots_storage_key(host))
-            .is_some_and(|manager| manager.contains(key))
-    }
-
     pub(crate) fn take_retained_movable(
         &self,
         id: Key,
     ) -> Option<(Rc<SlotsHost>, crate::slot::DetachedSubtree)> {
-        let key = RetainKey::for_group(
-            None,
-            crate::slot::GroupKey::new(crate::slot::MOVABLE_STATIC_KEY, Some(id), 0),
-        );
+        self.take_retained_movable_by_key(movable_retain_key(id))
+    }
+
+    fn take_retained_movable_by_key(
+        &self,
+        key: RetainKey,
+    ) -> Option<(Rc<SlotsHost>, crate::slot::DetachedSubtree)> {
         let mut retention_by_host = self.retention_by_host.borrow_mut();
         let (host_key, manager) = retention_by_host
             .iter_mut()
@@ -291,6 +294,42 @@ impl ComposerRuntimeState {
         let host = self.host_for_storage_key(*host_key)?;
         let subtree = manager.take(key)?;
         Some((host, subtree))
+    }
+
+    /// Takes a movable's retained content out of a slot table other than the
+    /// one composing, which is how it crosses a subcomposition.
+    pub(crate) fn take_retained_movable_elsewhere(
+        &self,
+        besides: &Rc<SlotsHost>,
+        key: RetainKey,
+    ) -> Option<(Rc<SlotsHost>, crate::slot::DetachedSubtree)> {
+        let besides_key = slots_storage_key(besides);
+        let mut retention_by_host = self.retention_by_host.borrow_mut();
+        let (host_key, manager) = retention_by_host
+            .iter_mut()
+            .find(|(host_key, manager)| **host_key != besides_key && manager.contains(key))?;
+        let host = self.host_for_storage_key(*host_key)?;
+        let subtree = manager.take(key)?;
+        Some((host, subtree))
+    }
+
+    /// Whether a movable's content is retained in any slot table, which is
+    /// what a site waiting for it has to know: the content may have been let
+    /// go by a parent composed in another host, such as a subcomposition.
+    pub(crate) fn movable_retained_anywhere(&self, key: RetainKey) -> bool {
+        self.retention_by_host
+            .borrow()
+            .values()
+            .any(|manager| manager.contains(key))
+    }
+
+    /// The slot table a movable's content is attached to right now, if any.
+    pub(crate) fn host_holding_movable(&self, id: Key) -> Option<Rc<SlotsHost>> {
+        self.live_hosts
+            .borrow()
+            .values()
+            .filter_map(std::rc::Weak::upgrade)
+            .find(|host| host.borrow().movable_is_attached(id))
     }
 
     pub(crate) fn record_pending_movable(&self, host: &Rc<SlotsHost>, pending: PendingMovable) {
@@ -309,6 +348,23 @@ impl ComposerRuntimeState {
             .borrow_mut()
             .remove(&slots_storage_key(host))
             .unwrap_or_default()
+    }
+
+    /// Every slot table with a site still waiting for movable content. The
+    /// content may be let go by a parent composed in another table, so a pass
+    /// that ends has to look wider than itself.
+    pub(crate) fn hosts_awaiting_movables(&self) -> Vec<Rc<SlotsHost>> {
+        let waiting = self
+            .pending_movables_by_host
+            .borrow()
+            .iter()
+            .filter(|(_, sites)| !sites.is_empty())
+            .map(|(host_key, _)| *host_key)
+            .collect::<Vec<_>>();
+        waiting
+            .into_iter()
+            .filter_map(|host_key| self.host_for_storage_key(host_key))
+            .collect()
     }
 
     pub(crate) fn keep_pending_movables(&self, host: &Rc<SlotsHost>, sites: Vec<PendingMovable>) {
@@ -873,13 +929,19 @@ impl Composer {
             slots.finish_pass(&mut *applier)
         }?;
         self.handle_detached_children_in_host(slots, None, finished.detached_root_children)?;
-        self.wake_sites_whose_movable_arrived(slots);
+        self.wake_sites_whose_movable_arrived();
         self.evict_retained_subtrees_for_host(slots)?;
         slots.complete_pass_cleanup(&finished.outcome);
         Ok(finished.outcome)
     }
 
-    fn wake_sites_whose_movable_arrived(&self, slots: &Rc<SlotsHost>) {
+    fn wake_sites_whose_movable_arrived(&self) {
+        for host in self.core.shared_state.hosts_awaiting_movables() {
+            self.wake_sites_in_host(&host);
+        }
+    }
+
+    fn wake_sites_in_host(&self, slots: &Rc<SlotsHost>) {
         let pending = self.core.shared_state.take_pending_movables(slots);
         if pending.is_empty() {
             return;
@@ -890,7 +952,7 @@ impl Composer {
                 continue;
             }
             let retain_key = RetainKey::for_group(None, site.key);
-            if !self.core.shared_state.retained_contains(slots, retain_key) {
+            if !self.core.shared_state.movable_retained_anywhere(retain_key) {
                 waiting.push(site);
                 continue;
             }
@@ -1139,13 +1201,14 @@ impl Composer {
     ) -> GroupEntry {
         let host = self.active_slots_host();
         let key = self.with_slot_session_mut(|slots| slots.reserve_group_key(seed));
-        let restored = self.core.shared_state.take_retained(
-            &host,
-            RetainKey::for_group(parent_scope_id, key),
-            |subtree| {
+        let retain_key = RetainKey::for_group(parent_scope_id, key);
+        let restored = self
+            .core
+            .shared_state
+            .take_retained(&host, retain_key, |subtree| {
                 self.with_slot_session_mut(|slots| slots.retained_restore_ready(key, subtree))
-            },
-        );
+            })
+            .or_else(|| self.take_movable_from_another_table(&host, retain_key, key));
         if restored.is_some() || !key.is_movable() {
             return GroupEntry {
                 key,
@@ -1153,8 +1216,7 @@ impl Composer {
                 placeholder_for: None,
             };
         }
-        let attached_elsewhere =
-            self.with_slot_session_mut(|slots| slots.movable_attached_elsewhere(key));
+        let attached_elsewhere = self.movable_attached_elsewhere(&host, key);
         if !attached_elsewhere {
             return GroupEntry {
                 key,
@@ -1171,6 +1233,53 @@ impl Composer {
             restored: None,
             placeholder_for: Some(key),
         }
+    }
+
+    /// Movable content that was let go by a parent composed in another slot
+    /// table — a `SubcomposeLayout`'s, or the one a subcomposition owns — is
+    /// retained there, not here. Bring it over: the table that held it lets
+    /// go of its anchors, and this one issues its own.
+    fn take_movable_from_another_table(
+        &self,
+        host: &Rc<SlotsHost>,
+        retain_key: RetainKey,
+        key: crate::slot::GroupKey,
+    ) -> Option<crate::slot::DetachedSubtree> {
+        if !key.is_movable() {
+            return None;
+        }
+        let (source, mut subtree) = self
+            .core
+            .shared_state
+            .take_retained_movable_elsewhere(host, retain_key)?;
+        source
+            .borrow_mut()
+            .invalidate_detached_subtree_anchors(&subtree);
+        if self.with_slot_session_mut(|slots| slots.retained_restore_ready(key, &mut subtree)) {
+            return Some(subtree);
+        }
+        log::error!(
+            "movable content {key:?} could not be taken over by the slot table that asked for it"
+        );
+        if let Err(error) = self.dispose_detached_subtree_in_host(host, subtree) {
+            log::error!("disposing movable content that could not move failed: {error}");
+        }
+        None
+    }
+
+    /// Whether the movable's content is attached to some parent that is not
+    /// the one composing, in this slot table or in another.
+    fn movable_attached_elsewhere(&self, host: &Rc<SlotsHost>, key: crate::slot::GroupKey) -> bool {
+        if self.with_slot_session_mut(|slots| slots.movable_attached_elsewhere(key)) {
+            return true;
+        }
+        let Some(id) = key.movable_id() else {
+            return false;
+        };
+        self.core
+            .shared_state
+            .host_holding_movable(id)
+            .is_some_and(|holder| !Rc::ptr_eq(&holder, host))
     }
 
     fn scope_for_started_group(
