@@ -1136,7 +1136,9 @@ fn every_platform_bridge_carries_focus_both_ways() {
         web_source.contains("\"focusin\"")
             && web_source.contains("node.focus()")
             && web_source.contains("\"tabindex\",")
-            && web_source.contains("if element.focusable || element.adjustable {"),
+            && web_source.contains(
+                "element.enabled && (element.focusable || element.adjustable || element.clickable)"
+            ),
         "the web mirror should take Tab focus, follow the app's focus, and report a focus back"
     );
 }
@@ -3645,7 +3647,7 @@ fn every_platform_bridge_offers_custom_actions() {
     let web_source = crate_source("src/web_accessibility.rs");
     assert!(
         web_source.contains("data-cranpose-action")
-            && web_source.contains("fn append_action_buttons(")
+            && web_source.contains("fn update_actions(")
             && web_source.contains("attach_action_listener(&root"),
         "the web mirror puts one button per custom action after the control"
     );
@@ -3787,8 +3789,9 @@ fn every_lazy_list_tells_android_how_many_rows_it_holds() {
 fn every_platform_lets_a_reader_find_an_empty_text_field() {
     let projection_source = crate_source("src/accessibility.rs");
     assert!(
-        projection_source
-            .contains("fn unnamed_field_label(node: &SemanticsNode) -> Option<Cow<'_, str>> {"),
+        projection_source.contains("let label = node.accessibility_label();")
+            && workspace_source("crates/cranpose-ui/src/layout/semantics_labels.rs")
+                .contains("self.editable_text.then_some(Cow::Borrowed(\"\"))"),
         "the projection publishes an editable field even with nothing to read"
     );
 
@@ -3971,7 +3974,9 @@ fn every_platform_lets_a_reader_move_the_caret_of_a_field() {
         web_source.contains("\"selectionchange\"")
             && web_source
                 .contains("accessibility::set_text_selection_utf16(root, node_id, anchor, focus)")
-            && web_source.contains("fn only_focused_field_changed("),
+            && web_source.contains("fn reconcile_children(")
+            && web_source.contains("attach_input_listener(&root")
+            && !web_source.contains("set_inner_html(\"\")"),
         "the web mirror is an input whose caret goes both ways without a rebuild"
     );
 }
@@ -4098,7 +4103,8 @@ fn no_platform_reads_a_password_out() {
 #[test]
 fn every_platform_reads_the_traversal_order_from_the_projection() {
     assert!(
-        crate_source("src/accessibility.rs").contains("for child in reading_order(node) {"),
+        crate_source("src/accessibility.rs")
+            .contains("for child in node.accessibility_children() {"),
         "the projection puts the nodes in the order a reader walks them"
     );
     for source in [

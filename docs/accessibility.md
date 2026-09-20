@@ -720,12 +720,13 @@ A text field takes its name from `Modifier::content_description` on the
 field, and the text it holds is its value: a reader hears "Folder name, text
 field, Milk". With no name the text stands in for it, and a field that is
 empty as well is still a stop that says "text field", so a reader can find
-it and type. A debug build logs a warning for such a field.
+it and type.
 
 A reader or a voice tool can also hand a field whole text at once: the
 set-text action on Android, which TalkBack's braille keyboard and Voice
-Access use, and accesskit's set-value action on the desktop. VoiceOver and
-the web type through the keyboard.
+Access use, and accesskit's set-value action on the desktop. The web mirror
+forwards native input events, including dictated or pasted text and the
+selection, to the same field callbacks. VoiceOver uses the native keyboard.
 
 The other way round, `Modifier::hide_from_accessibility()` takes a node and
 everything under it out of what a reader sees: a decorative image, or a
@@ -736,6 +737,19 @@ A row of texts that belong together, a name with its count and its price,
 reads as three stops unless the app says otherwise. `Modifier::merge_descendants()`
 on the row makes it one stop, "Milk, 2, 3.40", the way a button with text
 inside already reads; the texts under it are not published on their own.
+Independent controls remain separate: a nested button, editable field, slider,
+custom-action control, or explicitly merged group contributes nothing to its
+ancestor's name. Names follow traversal order and retain repeated words.
+Hidden subtrees and password values never contribute text to an ancestor.
+`SemanticsNode::accessibility_label()` supplies the name to both the platform
+projection and the placed tree used by accessibility audits.
+
+Reader callbacks resolve the live tree and reject disabled nodes and hidden
+subtrees, including requests queued before the node changed state. Disabled
+canvas actions also reject activation. Android text search matches names and
+editable values within the requested virtual subtree. Determinate progress
+indicators retain the progress-bar role and numeric range; a range is adjustable
+only when the control provides its adjustment action.
 
 A row of tabs or radio buttons is a group, and a reader says which of how
 many its cursor is on. `Modifier::selectable_group()` on the row declares it;
@@ -758,8 +772,8 @@ size of the set.
    state write trips the render state; the static test
    `every_reader_action_runs_inside_the_app_context` keeps every bridge on it.
 
-Nothing in that path is platform specific above the bridge, so a control that
-reads correctly on one platform reads correctly on all four. The static test
+The shared projection keeps names and control boundaries consistent. Each
+platform still needs its own behavioral checks. The static test
 `every_platform_bridge_reads_announcements_out` and its focus counterpart in
 `crates/cranpose/tests/platform_scheduling_static.rs` keep the four bridges in
 step.
@@ -808,15 +822,19 @@ to look at a screen from a terminal. `docs/ROBOT_TESTING.md` has the shape.
 
 ## Check the web mirror without a hand
 
-`scripts/a11y/web-page-check.mjs <url>` drives a headless Chrome over the
-DevTools protocol against a served web demo (`apps/desktop-demo/build-web.sh
---release`, then `package-web.sh` and any static server): it focuses a button
-in the tab row, presses Page Down and Page Up, reads the mirror's positions
-and the browser console, and prints one JSON report. A page that works moves
-the row by nine tenths of its width and back, keeps the focus on the same
-button, and leaves no panic in the console. The report also lists the text
-fields of the Text Input page: an empty one is a stop with an empty label,
-and each of the others carries its text as content.
+Run `just test-web-accessibility <url>` against a release demo built with
+`just web`, packaged with `apps/desktop-demo/package-web.sh`, and served by a
+static server. The test drives headless Chrome through the DevTools protocol
+and exits with failure on an unmet assertion. Set `CHROME` to choose the
+browser executable and `A11Y_DEBUG_PORT` to choose its debugging port.
+
+The checks cover DOM identity and focus after a counter changes, forward and
+backward Tab navigation, one activation per Enter press, valid Tab indices,
+list ownership, native dictated input, backward selection, and keyboard editing.
+The mirror patches retained nodes and action buttons, removes obsolete
+attributes and nodes, and nests children under their semantic containers.
+Keeping the DOM node alive preserves the object a reader's virtual cursor
+refers to; restoring browser focus after replacing that node is insufficient.
 
 ## Check it by hand
 

@@ -123,11 +123,7 @@ pub fn assert_accessible(root: &PlacedSemanticsNode) {
 /// The name a reader speaks for a node: its own label, else the title it
 /// gives the screen, else the words under it.
 pub fn spoken_name(node: &PlacedSemanticsNode) -> String {
-    if let Some(label) = node
-        .label
-        .as_deref()
-        .filter(|label| !label.trim().is_empty())
-    {
+    if let Some(label) = node.label.as_deref() {
         return label.trim().to_string();
     }
     if let Some(title) = node
@@ -139,7 +135,7 @@ pub fn spoken_name(node: &PlacedSemanticsNode) -> String {
     }
     let mut words = Vec::new();
     for child in &node.children {
-        if child.hidden {
+        if child.hidden || is_control(child) {
             continue;
         }
         let name = spoken_name(child);
@@ -418,6 +414,25 @@ mod tests {
             ..node(Some("Send"), rect(8.0, 8.0, 40.0, 20.0))
         });
         assert!(audit_accessibility(&screen(vec![send])).is_empty());
+    }
+
+    #[test]
+    fn an_independent_child_cannot_name_its_parent() {
+        let mut parent = button(None, rect(0.0, 0.0, 120.0, 48.0));
+        parent
+            .children
+            .push(button(Some("Delete"), rect(0.0, 0.0, 48.0, 48.0)));
+        assert_eq!(spoken_name(&parent), "");
+        assert!(kinds(&screen(vec![parent])).contains(&AccessibilityIssueKind::NoName));
+    }
+
+    #[test]
+    fn an_explicit_empty_name_is_not_replaced_with_descendant_words() {
+        let mut parent = button(Some(""), rect(0.0, 0.0, 120.0, 48.0));
+        parent
+            .children
+            .push(node(Some("Independent action"), rect(0.0, 0.0, 48.0, 48.0)));
+        assert_eq!(spoken_name(&parent), "");
     }
 
     #[test]

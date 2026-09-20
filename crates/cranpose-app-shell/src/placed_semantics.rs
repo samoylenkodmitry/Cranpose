@@ -71,7 +71,7 @@ pub struct PlacedSemanticsNode {
     pub role: SemanticsRole,
     /// What a screen reader announces it as — Compose's `Role`.
     pub widget_role: Option<SemanticsWidgetRole>,
-    /// The text of a `Text` node, or the content description of anything else.
+    /// The name a reader speaks, including merged text and excluding password values.
     pub label: Option<String>,
     pub state_description: Option<String>,
     /// Whether the node carries a click action, which is what separates a
@@ -255,10 +255,10 @@ fn join(
         node_id: node.node_id,
         role: node.role.clone(),
         widget_role: node.widget_role,
-        label: node.description.clone().or_else(|| match &node.role {
-            SemanticsRole::Text { value } => Some(value.clone()),
-            _ => None,
-        }),
+        label: node
+            .accessibility_label()
+            .map(|label| label.into_owned())
+            .or_else(|| node.merges_accessibility_descendants().then(String::new)),
         state_description: node.state_description.clone(),
         clickable: node
             .actions

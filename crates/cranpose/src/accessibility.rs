@@ -1,4 +1,4 @@
-use std::{borrow::Cow, fmt::Debug};
+use std::fmt::Debug;
 
 use cranpose_app_shell::AppShell;
 use cranpose_core::{NodeId, collections::map::HashMap};
@@ -121,7 +121,7 @@ const _: () = assert!(WIDGET_ROLES.len() == SemanticsWidgetRole::ListItem as usi
 ))]
 const ARIA_ROLES: [(AccessibilityRole, &str); 23] = [
     (AccessibilityRole::Button, "button"),
-    (AccessibilityRole::StaticText, "text"),
+    (AccessibilityRole::StaticText, "generic"),
     (AccessibilityRole::TextField, "textbox"),
     (AccessibilityRole::Checkbox, "checkbox"),
     (AccessibilityRole::Switch, "switch"),
@@ -237,7 +237,7 @@ impl AccessibilityRole {
         all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
     ))]
     pub(crate) fn aria_name(self) -> &'static str {
-        role_entry(&ARIA_ROLES, self, "text")
+        role_entry(&ARIA_ROLES, self, "generic")
     }
 
     /// The number the Android host reads the control's role as.
@@ -483,14 +483,15 @@ fn project_node(
         .iter()
         .any(|action| matches!(action, SemanticsAction::Click { .. }));
     let actionable = clickable || node.editable_text;
-    let merges = actionable || node.merge_descendants;
-    let label = published_label(node, merges);
+    let merges = node.merges_accessibility_descendants();
+    let boundary = node.is_accessibility_boundary();
+    let label = node.accessibility_label();
     let rect = bounds.get(&node.node_id).copied().unwrap_or_default();
 
     let container = is_container(node);
     if let Some(label) = label
         && rect.is_visible()
-        && (merges || !suppress_static_text)
+        && (boundary || !suppress_static_text)
     {
         elements.push(element_for_node(
             node,
@@ -516,7 +517,7 @@ fn project_node(
         element.scroll_parent = inherited_scroll;
     }
 
-    let suppress_children = suppress_static_text || merges;
+    let suppress_children = merges || (suppress_static_text && !boundary);
     let scroll_for_children = if container {
         Some(node.node_id)
     } else {
@@ -560,7 +561,7 @@ fn project_children(
     elements: &mut Vec<AccessibilityElement>,
 ) {
     let first_child = elements.len();
-    for child in reading_order(node) {
+    for child in node.accessibility_children() {
         project_node(
             child,
             bounds,
@@ -573,18 +574,6 @@ fn project_children(
     if node.selectable_group {
         number_group(node.node_id, first_child, elements);
     }
-}
-
-/// The order a screen reader visits the nodes under a container: the order
-/// the app laid them out, with any node the app gave a traversal index moved
-/// to where that index puts it. The sort keeps the laid-out order of nodes
-/// that share an index. Compose's `traversalIndex`.
-fn reading_order(node: &SemanticsNode) -> Vec<&SemanticsNode> {
-    let mut order: Vec<&SemanticsNode> = node.children.iter().collect();
-    if order.iter().any(|child| child.traversal_index != 0.0) {
-        order.sort_by(|left, right| left.traversal_index.total_cmp(&right.traversal_index));
-    }
-    order
 }
 
 /// Gives each selectable control under a group its place and the group's
@@ -620,37 +609,6 @@ fn number_group(group: NodeId, first_child: usize, elements: &mut [Accessibility
     }
 }
 
-/// Names, once per node and only in a debug build, a control that takes a
-/// click or text but reaches no reader: it has no label and no text inside,
-/// so a screen reader has nothing to say for it.
-/// The label a reader hears for a node: its own, or for a control or a merged
-/// row the text under it; an editable field with nothing to read still gets
-/// an empty one.
-fn published_label(node: &SemanticsNode, merges: bool) -> Option<Cow<'_, str>> {
-    if node.password {
-        return password_label(node);
-    }
-    let own_label = node_label(node).map(Cow::Borrowed);
-    let label = if merges {
-        own_label.or_else(|| descendant_label(node).map(Cow::Owned))
-    } else {
-        own_label
-    };
-    label
-        .filter(|label| !label.trim().is_empty())
-        .or_else(|| unnamed_field_label(node))
-}
-
-/// A field that holds a secret never reads its text out: the name the app
-/// gave it stands, and with no name a reader hears "password" rather than
-/// the text the field put in as a stand-in for a name.
-fn password_label(node: &SemanticsNode) -> Option<Cow<'_, str>> {
-    let named = node_label(node)
-        .filter(|name| !name.trim().is_empty())
-        .filter(|name| Some(*name) != node.text.as_deref());
-    Some(named.map_or(Cow::Borrowed("password"), Cow::Borrowed))
-}
-
 /// Whether a control reads as open or as closed: one that says what closing
 /// it does is open now, and one that says what opening it does is closed.
 /// A control that says neither is not a thing a reader opens at all.
@@ -683,16 +641,6 @@ fn magic_tap_label(node: &SemanticsNode) -> Option<String> {
         .clone()
         .filter(|label| !label.trim().is_empty());
     Some(named.unwrap_or_else(|| "magic tap".to_owned()))
-}
-
-/// An editable field with no name and no text is still a stop for a reader,
-/// which hears "text field" and nothing else; a debug build says so.
-fn unnamed_field_label(node: &SemanticsNode) -> Option<Cow<'_, str>> {
-    if !node.editable_text {
-        return None;
-    }
-    warn_unlabeled(node.node_id);
-    Some(Cow::Borrowed(""))
 }
 
 #[cfg(debug_assertions)]
@@ -734,6 +682,8 @@ fn element_for_node(
         AccessibilityRole::from_widget_role(role)
     } else if node.editable_text {
         AccessibilityRole::TextField
+    } else if node.progress.is_some() {
+        AccessibilityRole::ProgressBar
     } else if clickable || matches!(node.role, SemanticsRole::Button) {
         AccessibilityRole::Button
     } else {
@@ -756,7 +706,7 @@ fn element_for_node(
         language: node.language.clone(),
         bounds: rect,
         role,
-        clickable,
+        clickable: clickable && node.enabled,
         selected: node.selected,
         toggled: node.toggled,
         enabled: node.enabled,
@@ -970,10 +920,10 @@ fn project_canvas_children(
             click_label: child.on_click_label.clone(),
             bounds: rect,
             role,
-            clickable: child.clickable,
+            clickable: child.clickable && node.enabled && child.enabled,
             selected: child.selected,
             toggled: child.toggled,
-            enabled: child.enabled,
+            enabled: node.enabled && child.enabled,
             custom_actions: child
                 .custom_actions
                 .iter()
@@ -1003,7 +953,8 @@ pub(crate) fn perform_custom_action(
     };
     let actions = match canvas_key {
         Some(key) => match node.canvas_children.iter().find(|child| child.key == key) {
-            Some(child) => &child.custom_actions,
+            Some(child) if child.enabled => &child.custom_actions,
+            Some(_) => return false,
             None => return false,
         },
         None => &node.custom_actions,
@@ -1048,6 +999,9 @@ pub(crate) fn magic_tap(root: &SemanticsNode, node_id: NodeId) -> bool {
     all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
 ))]
 pub(crate) fn reader_actions(element: &AccessibilityElement) -> Vec<String> {
+    if !element.enabled {
+        return Vec::new();
+    }
     element
         .custom_actions
         .iter()
@@ -1083,7 +1037,8 @@ pub(crate) fn set_progress(root: &SemanticsNode, node_id: NodeId, value: f32) ->
 #[cfg(any(
     test,
     all(feature = "desktop-shell", feature = "renderer-wgpu"),
-    all(feature = "android", feature = "renderer-wgpu", target_os = "android")
+    all(feature = "android", feature = "renderer-wgpu", target_os = "android"),
+    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
 ))]
 pub(crate) fn set_text(root: &SemanticsNode, node_id: NodeId, text: &str) -> bool {
     let Some(node) = find_semantics_node(root, node_id) else {
@@ -1293,7 +1248,7 @@ pub(crate) const DISMISS_LABEL: &str = "Dismiss";
 pub(crate) fn listed_actions(element: &AccessibilityElement) -> Vec<String> {
     reader_actions(element)
         .into_iter()
-        .chain(element.dismissable.then(|| DISMISS_LABEL.to_owned()))
+        .chain((element.enabled && element.dismissable).then(|| DISMISS_LABEL.to_owned()))
         .collect()
 }
 
@@ -1584,37 +1539,15 @@ pub(crate) fn spoken_changes(
     all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
 ))]
 fn find_semantics_node(node: &SemanticsNode, node_id: NodeId) -> Option<&SemanticsNode> {
+    if node.hidden {
+        return None;
+    }
     if node.node_id == node_id {
-        return Some(node);
+        return node.enabled.then_some(node);
     }
     node.children
         .iter()
         .find_map(|child| find_semantics_node(child, node_id))
-}
-
-fn node_label(node: &SemanticsNode) -> Option<&str> {
-    node.description.as_deref().or(match &node.role {
-        SemanticsRole::Text { value } => Some(value.as_str()),
-        _ => None,
-    })
-}
-
-fn descendant_label(node: &SemanticsNode) -> Option<String> {
-    let mut labels = Vec::new();
-    collect_descendant_labels(node, &mut labels);
-    (!labels.is_empty()).then(|| labels.join(", "))
-}
-
-fn collect_descendant_labels<'a>(node: &'a SemanticsNode, labels: &mut Vec<&'a str>) {
-    for child in node.children.iter().filter(|child| !child.hidden) {
-        if let Some(label) = node_label(child) {
-            if !label.trim().is_empty() && !labels.contains(&label) {
-                labels.push(label);
-            }
-        } else {
-            collect_descendant_labels(child, labels);
-        }
-    }
 }
 
 #[cfg(test)]
@@ -1799,6 +1732,168 @@ mod tests {
             width,
             height,
         }
+    }
+
+    fn project_test_tree(root: &SemanticsNode) -> Vec<AccessibilityElement> {
+        fn bounds_for(node: &SemanticsNode, bounds: &mut HashMap<NodeId, AccessibilityRect>) {
+            bounds.insert(node.node_id, AccessibilityRect::new(0.0, 0.0, 300.0, 48.0));
+            for child in &node.children {
+                bounds_for(child, bounds);
+            }
+        }
+        let mut bounds = HashMap::default();
+        bounds_for(root, &mut bounds);
+        project_semantics(root, &bounds)
+    }
+
+    fn merged_test_row(children: Vec<SemanticsNode>) -> SemanticsNode {
+        SemanticsNode {
+            node_id: 1,
+            merge_descendants: true,
+            children,
+            ..SemanticsNode::default()
+        }
+    }
+
+    #[test]
+    fn merged_names_exclude_independent_controls_and_passwords() {
+        let mut button = text_node(3, "Delete");
+        button.actions.push(SemanticsAction::Click {
+            handler: SemanticsCallback::new(3),
+        });
+        let mut password = text_node(4, "secret passphrase");
+        password.editable_text = true;
+        password.password = true;
+        password.text = Some("secret passphrase".into());
+        let tree = merged_test_row(vec![text_node(2, "Account"), button, password]);
+        let projected = project_test_tree(&tree);
+        assert_eq!(
+            projected
+                .iter()
+                .map(|element| element.label.as_str())
+                .collect::<Vec<_>>(),
+            ["Account", "Delete", "password"]
+        );
+        assert!(!format!("{projected:?}").contains("secret passphrase"));
+    }
+
+    #[test]
+    fn a_merge_does_not_swallow_slider_or_custom_action_controls() {
+        let mut slider = text_node(3, "Volume");
+        slider.set_progress = Some(cranpose_ui::SemanticsSetProgress::new(|_| true));
+        let mut action = text_node(4, "Attachment");
+        action
+            .custom_actions
+            .push(SemanticsCustomAction::new("Download", || {}));
+        let tree = merged_test_row(vec![text_node(2, "Player"), slider, action]);
+        let projected = project_test_tree(&tree);
+        assert_eq!(
+            projected
+                .iter()
+                .map(|element| element.label.as_str())
+                .collect::<Vec<_>>(),
+            ["Player", "Volume", "Attachment"]
+        );
+    }
+
+    #[test]
+    fn merged_names_follow_traversal_order_and_preserve_repeated_words() {
+        let mut first = text_node(4, "Very");
+        first.traversal_index = -1.0;
+        let tree = merged_test_row(vec![
+            text_node(2, "very"),
+            text_node(3, "good"),
+            first,
+            text_node(5, "good"),
+        ]);
+        let projected = project_test_tree(&tree);
+        assert_eq!(projected[0].label, "Very, very, good, good");
+    }
+
+    #[test]
+    fn a_blank_description_does_not_hide_descendant_text() {
+        let mut tree = merged_test_row(vec![text_node(2, "Save")]);
+        tree.description = Some("  ".into());
+        assert_eq!(project_test_tree(&tree)[0].label, "Save");
+    }
+
+    fn action_test_node() -> SemanticsNode {
+        SemanticsNode {
+            node_id: 2,
+            text: Some("abc".into()),
+            set_progress: Some(cranpose_ui::SemanticsSetProgress::new(|_| true)),
+            set_text: Some(cranpose_ui::SemanticsSetText::new(|_| true)),
+            set_selection: Some(cranpose_ui::SemanticsSetSelection::new(|_, _| true)),
+            expand: Some(cranpose_ui::SemanticsExpand::new(|| true)),
+            collapse: Some(cranpose_ui::SemanticsExpand::new(|| true)),
+            dismiss: Some(cranpose_ui::SemanticsDismiss::new(|| true)),
+            on_long_click: Some(cranpose_ui::SemanticsLongClick::new(|| true)),
+            on_magic_tap: Some(cranpose_ui::SemanticsMagicTap::new(|| true)),
+            scroll_by: Some(cranpose_ui::SemanticsScrollBy::new(|_, _| true)),
+            scroll_to_index: Some(cranpose_ui::SemanticsScrollToIndex::new(|_| true)),
+            custom_actions: vec![SemanticsCustomAction::new("Run", || {})],
+            ..SemanticsNode::default()
+        }
+    }
+
+    fn assert_reader_actions(root: &SemanticsNode, accepts: bool) {
+        let results = [
+            set_progress(root, 2, 0.5),
+            set_text(root, 2, "new"),
+            set_text_selection(root, 2, 0, 1),
+            set_text_selection_utf16(root, 2, 0, 1),
+            set_text_selection_chars(root, 2, 0, 1),
+            set_expanded(root, 2, true),
+            set_expanded(root, 2, false),
+            dismiss(root, 2),
+            long_click(root, 2),
+            magic_tap(root, 2),
+            scroll_by(root, 2, 0.0, 10.0),
+            scroll_to_index(root, 2, 1),
+            perform_custom_action(root, 2, None, 0),
+            perform_custom_action(root, 2, None, 1),
+            perform_custom_action(root, 2, None, 2),
+            perform_listed_action(root, 2, None, 3, 3),
+        ];
+        assert!(
+            results.iter().all(|result| *result == accepts),
+            "expected {accepts}: {results:?}"
+        );
+    }
+
+    #[test]
+    fn reader_actions_reject_disabled_and_hidden_targets() {
+        let mut control = action_test_node();
+        assert_reader_actions(&control, true);
+        control.enabled = false;
+        assert_reader_actions(&control, false);
+        control.enabled = true;
+        control.hidden = true;
+        assert_reader_actions(&control, false);
+    }
+
+    #[test]
+    fn reader_actions_cannot_reach_a_hidden_subtree() {
+        let mut root = merged_test_row(vec![action_test_node()]);
+        assert_reader_actions(&root, true);
+        root.hidden = true;
+        assert_reader_actions(&root, false);
+    }
+
+    #[test]
+    fn disabled_canvas_actions_do_not_invoke_the_callback() {
+        let calls = Rc::new(Cell::new(0));
+        let count = Rc::clone(&calls);
+        let mut root = action_test_node();
+        root.canvas_children.push(
+            CanvasSemanticsNode::control(9, rect(0.0, 0.0, 48.0, 48.0), "Play").with_custom_action(
+                SemanticsCustomAction::new("Pause", move || count.set(count.get() + 1)),
+            ),
+        );
+        assert!(perform_custom_action(&root, 2, Some(9), 0));
+        root.canvas_children[0].enabled = false;
+        assert!(!perform_custom_action(&root, 2, Some(9), 0));
+        assert_eq!(calls.get(), 1);
     }
 
     #[test]

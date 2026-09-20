@@ -38,6 +38,7 @@ def main():
             output = device.command(
                 'shell', 'am', 'instrument', '-w', '-r', '-e', 'class',
                 'com.compose_rs.demo.CranposeAccessibilityNavigationTest,'
+                'com.compose_rs.demo.CranposeAccessibilityAuditTest,'
                 'com.compose_rs.demo.CranposeAccessibilityParserTest',
                 'com.compose_rs.demo.robot.test/androidx.test.runner.AndroidJUnitRunner', timeout=120)
             (args.output / 'instrumentation.log').write_text(output)

@@ -467,7 +467,10 @@ fn nested_children(
 fn accesskit_node(element: &AccessibilityElement) -> Node {
     let scrolls = element.vertical_scroll.is_some() || element.horizontal_scroll.is_some();
     let role = match element.progress {
-        Some(_) => Role::Slider,
+        Some(_) if element.adjustable && element.role != AccessibilityRole::ValuePicker => {
+            Role::Slider
+        }
+        Some(_) => accesskit_role(element.role),
         None if element.pane_title.is_some() => Role::Region,
         None if scrolls && element.label.is_empty() && !element.role.is_named_container() => {
             scroll_role(element)
@@ -611,6 +614,9 @@ fn apply_state(node: &mut Node, element: &AccessibilityElement) {
     if !element.enabled {
         node.set_disabled();
     }
+    if let Some(expanded) = element.expanded {
+        node.set_expanded(expanded);
+    }
     if let Some(mode) = element.live_region {
         node.set_live(accesskit_live(mode));
     }
@@ -636,6 +642,9 @@ fn apply_state(node: &mut Node, element: &AccessibilityElement) {
 /// actions it lists, or put focus on it. accesskit has no long press of its
 /// own, so a long press is the last action in that list.
 fn apply_actions(node: &mut Node, element: &AccessibilityElement) {
+    if !element.enabled {
+        return;
+    }
     if element.clickable {
         node.add_action(Action::Click);
     }
@@ -654,7 +663,6 @@ fn apply_actions(node: &mut Node, element: &AccessibilityElement) {
         );
     }
     if let Some(expanded) = element.expanded {
-        node.set_expanded(expanded);
         node.add_action(if expanded {
             Action::Collapse
         } else {
@@ -1116,6 +1124,47 @@ mod tests {
                 "{role:?} should be in the accesskit table once"
             );
             assert_ne!(accesskit_role(role), Role::Unknown);
+        }
+    }
+
+    #[test]
+    fn progress_indicators_keep_their_role_and_offer_no_adjustment() {
+        let mut element = AccessibilityElement {
+            role: AccessibilityRole::ProgressBar,
+            progress: Some(cranpose_ui::ProgressBarRangeInfo::new(0.4, 0.0, 1.0, 0)),
+            ..AccessibilityElement::default()
+        };
+        let node = accesskit_node(&element);
+        assert_eq!(node.role(), Role::ProgressIndicator);
+        assert!(node.numeric_value().is_some());
+        assert!(!node.supports_action(Action::SetValue));
+        element.adjustable = true;
+        let node = accesskit_node(&element);
+        assert_eq!(node.role(), Role::Slider);
+        assert!(node.supports_action(Action::SetValue));
+    }
+
+    #[test]
+    fn disabled_controls_keep_their_state_without_offering_actions() {
+        let element = AccessibilityElement {
+            enabled: false,
+            clickable: true,
+            adjustable: true,
+            expanded: Some(true),
+            custom_actions: vec!["Delete".into()],
+            ..AccessibilityElement::default()
+        };
+        let node = accesskit_node(&element);
+        assert!(node.is_disabled());
+        assert_eq!(node.is_expanded(), Some(true));
+        for action in [
+            Action::Click,
+            Action::CustomAction,
+            Action::Collapse,
+            Action::SetValue,
+            Action::Increment,
+        ] {
+            assert!(!node.supports_action(action), "{action:?}");
         }
     }
 

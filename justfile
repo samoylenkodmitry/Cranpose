@@ -413,6 +413,9 @@ web: _disk-guard
 web-isolated:
     apps/isolated-demo/build-web.sh
 
+test-web-accessibility url:
+    node scripts/a11y/web-page-check.mjs {{quote(url)}}
+
 # `--no-daemon` keeps a shared Gradle daemon on the self-hosted boxes from
 # serving a foreign project's build.
 

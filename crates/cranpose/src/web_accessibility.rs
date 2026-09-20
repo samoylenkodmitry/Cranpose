@@ -13,20 +13,22 @@ use crate::accessibility::{self, AccessibilityElement, AccessibilityRole};
 
 /// The role, value and state a screen reader reads off the mirrored element.
 fn apply_role_and_state(node: &HtmlElement, element: &AccessibilityElement) -> Result<(), JsValue> {
-    let role = match element.progress {
-        Some(_) => "slider",
-        None => element.role.aria_name(),
+    let role = if element.progress.is_some()
+        && element.adjustable
+        && element.role != AccessibilityRole::ValuePicker
+    {
+        "slider"
+    } else {
+        element.role.aria_name()
     };
-    if !edits_text(element) {
+    if element.role != AccessibilityRole::StaticText && !edits_text(element) {
         node.set_attribute("role", role)?;
     }
     if let Some(title) = &element.pane_title {
-        node.set_attribute("role", "region")?;
+        if !element.role.is_named_container() {
+            node.set_attribute("role", "region")?;
+        }
         node.set_attribute("aria-label", title)?;
-    }
-    let scrolls = element.vertical_scroll.is_some() || element.horizontal_scroll.is_some();
-    if element.label.is_empty() && scrolls {
-        node.set_attribute("aria-hidden", "true")?;
     }
     apply_role_extras(node, element)?;
     apply_progress(node, element)?;
@@ -40,12 +42,18 @@ fn apply_progress(node: &HtmlElement, element: &AccessibilityElement) -> Result<
         return Ok(());
     };
     node.set_attribute("aria-valuenow", &progress.current.to_string())?;
-    node.set_attribute("aria-valuemin", &progress.start.to_string())?;
-    node.set_attribute("aria-valuemax", &progress.end.to_string())?;
+    node.set_attribute(
+        "aria-valuemin",
+        &progress.start.min(progress.end).to_string(),
+    )?;
+    node.set_attribute(
+        "aria-valuemax",
+        &progress.start.max(progress.end).to_string(),
+    )?;
     if let Some(text) = &element.state_description {
         node.set_attribute("aria-valuetext", text)?;
     }
-    if element.adjustable {
+    if element.adjustable && element.enabled {
         node.set_attribute("data-cranpose-value", &progress.current.to_string())?;
         node.set_attribute("data-cranpose-min", &progress.start.to_string())?;
         node.set_attribute("data-cranpose-max", &progress.end.to_string())?;
@@ -214,6 +222,9 @@ fn on_live_tree(
 /// What a role asks for beyond its name: text to read, a heading level, the
 /// value of a field, or the modal flag on a dialog.
 fn apply_role_extras(node: &HtmlElement, element: &AccessibilityElement) -> Result<(), JsValue> {
+    if is_mirror_container(element) && element.role != AccessibilityRole::Dialog {
+        return Ok(());
+    }
     match element.role {
         AccessibilityRole::StaticText => node.set_text_content(Some(&element.label)),
         AccessibilityRole::TextField | AccessibilityRole::SearchField => {
@@ -293,6 +304,13 @@ fn holds_lines(element: &AccessibilityElement) -> bool {
         .is_some_and(|value| value.contains('\n'))
 }
 
+fn is_mirror_container(element: &AccessibilityElement) -> bool {
+    element.role.is_named_container()
+        || element.vertical_scroll.is_some()
+        || element.horizontal_scroll.is_some()
+        || element.pane_title.is_some()
+}
+
 /// The element a control is mirrored as: a text field is an input or a text
 /// area, so a reader walks and edits its text the way it does any form
 /// field; a control a click reaches is a button; anything else is a span.
@@ -303,6 +321,8 @@ fn mirror_tag(element: &AccessibilityElement) -> &'static str {
         } else {
             "input"
         }
+    } else if is_mirror_container(element) {
+        "div"
     } else if element.clickable {
         "button"
     } else {
@@ -333,11 +353,19 @@ fn apply_field_text(node: &HtmlElement, element: &AccessibilityElement) -> Resul
         } else {
             "text"
         });
-        input.set_value(value);
-        input.set_selection_range_with_direction(start, end, direction)?;
+        if input.value() != *value {
+            input.set_value(value);
+        }
+        if field_selection(node) != Some((anchor as usize, focus as usize)) {
+            input.set_selection_range_with_direction(start, end, direction)?;
+        }
     } else if let Some(area) = node.dyn_ref::<HtmlTextAreaElement>() {
-        area.set_value(value);
-        area.set_selection_range_with_direction(start, end, direction)?;
+        if area.value() != *value {
+            area.set_value(value);
+        }
+        if field_selection(node) != Some((anchor as usize, focus as usize)) {
+            area.set_selection_range_with_direction(start, end, direction)?;
+        }
     }
     Ok(())
 }
@@ -434,37 +462,6 @@ fn attach_selection_listener(
     Ok(())
 }
 
-/// The one element whose text or caret changed while everything else on the
-/// screen stayed the same, when that element is the focused field: the case
-/// of a keystroke or a caret move, which must not rebuild the mirror, or the
-/// reader would hear the whole field again instead of one character.
-fn only_focused_field_changed(
-    previous: &[AccessibilityElement],
-    next: &[AccessibilityElement],
-) -> Option<usize> {
-    if previous.len() != next.len() {
-        return None;
-    }
-    let mut changed = None;
-    for (index, (before, after)) in previous.iter().zip(next).enumerate() {
-        if before == after {
-            continue;
-        }
-        if changed.is_some() || !after.focused || !edits_text(after) {
-            return None;
-        }
-        let mut same_but_text = after.clone();
-        same_but_text.label.clone_from(&before.label);
-        same_but_text.value.clone_from(&before.value);
-        same_but_text.text_selection = before.text_selection;
-        if same_but_text != *before {
-            return None;
-        }
-        changed = Some(index);
-    }
-    changed
-}
-
 /// One mirror node for a control: a text field as an input, a button when a
 /// click reaches it, a span otherwise, carrying its label, role, state and
 /// paging data.
@@ -477,7 +474,12 @@ fn mirror_node(
     let node = document
         .create_element(mirror_tag(element))?
         .dyn_into::<HtmlElement>()?;
-    node.set_attribute("aria-label", &element.label)?;
+    if element.role != AccessibilityRole::StaticText {
+        node.set_attribute("aria-label", &element.label)?;
+    }
+    if !element.enabled {
+        node.set_attribute("disabled", "")?;
+    }
     node.set_attribute("data-cranpose-node", &id.to_string())?;
     if let Some(language) = &element.language {
         node.set_attribute("lang", language)?;
@@ -498,10 +500,8 @@ fn mirror_node(
 /// adjustable control takes Tab, a plain button keeps the browser's default,
 /// and text stays out of the way.
 fn tab_index(element: &AccessibilityElement) -> &'static str {
-    if element.focusable || element.adjustable {
+    if element.enabled && (element.focusable || element.adjustable || element.clickable) {
         "0"
-    } else if element.clickable {
-        "auto"
     } else {
         "-1"
     }
@@ -555,6 +555,7 @@ fn place_node(
 /// Hands a Tab landing or a screen reader focus on the mirror back to the app.
 fn attach_focus_listener(
     root: &HtmlElement,
+    app: Rc<RefCell<AppShell<WgpuRenderer>>>,
     node_ids: Rc<RefCell<HashMap<i32, cranpose_core::NodeId>>>,
 ) -> Result<(), JsValue> {
     let focus_in = Closure::wrap(Box::new(move |event: web_sys::Event| {
@@ -570,7 +571,7 @@ fn attach_focus_listener(
         let Some(node_id) = node_ids.borrow().get(&element_id).copied() else {
             return;
         };
-        accessibility::focus_node(node_id);
+        on_live_tree(&app, |_| accessibility::focus_node(node_id));
     }) as Box<dyn FnMut(_)>);
     root.add_event_listener_with_callback("focusin", focus_in.as_ref().unchecked_ref())?;
     focus_in.forget();
@@ -680,6 +681,10 @@ fn attach_key_listener(
         let Some(target) = key_target(&event) else {
             return;
         };
+        if browser_handles_key(&event, &target) {
+            event.stop_propagation();
+            return;
+        }
         let read = |name: &str| number_attribute(&target, name);
         let (Some(current), Some(min), Some(max), Some(step)) = (
             read("data-cranpose-value"),
@@ -700,19 +705,32 @@ fn attach_key_listener(
             return;
         };
         event.prevent_default();
+        event.stop_propagation();
         on_live_tree(&app, |root| {
             accessibility::set_progress(root, node_id, next.clamp(min, max))
         });
     }) as Box<dyn FnMut(_)>);
     root.add_event_listener_with_callback("keydown", key_down.as_ref().unchecked_ref())?;
     key_down.forget();
+    let key_up = Closure::wrap(Box::new(move |event: web_sys::KeyboardEvent| {
+        if key_target(&event).is_some_and(|target| browser_handles_key(&event, &target)) {
+            event.stop_propagation();
+        }
+    }) as Box<dyn FnMut(_)>);
+    root.add_event_listener_with_callback("keyup", key_up.as_ref().unchecked_ref())?;
+    key_up.forget();
     Ok(())
 }
 
-/// A text holder a screen reader watches and reads out when its text changes.
-/// It sits outside the mirrored controls and stays for the life of the page:
-/// the mirror is rebuilt on every change, and a live region that appears
-/// together with its text is read by no reader.
+fn browser_handles_key(event: &web_sys::KeyboardEvent, target: &Element) -> bool {
+    let key = event.key();
+    key == "Tab"
+        || (key != "Escape"
+            && (target.is_instance_of::<HtmlInputElement>()
+                || target.is_instance_of::<HtmlTextAreaElement>()))
+        || (target.tag_name() == "BUTTON" && matches!(key.as_str(), "Enter" | " "))
+}
+
 fn live_region(document: &Document, politeness: &str) -> Result<HtmlElement, JsValue> {
     let region = document.create_element("div")?.dyn_into::<HtmlElement>()?;
     region.set_attribute("aria-live", politeness)?;
@@ -729,10 +747,165 @@ fn live_region(document: &Document, politeness: &str) -> Result<HtmlElement, JsV
     Ok(region)
 }
 
+fn attach_input_listener(
+    root: &HtmlElement,
+    app: Rc<RefCell<AppShell<WgpuRenderer>>>,
+    node_ids: Rc<RefCell<HashMap<i32, cranpose_core::NodeId>>>,
+) -> Result<(), JsValue> {
+    let input = Closure::wrap(Box::new(move |event: web_sys::Event| {
+        let Some(target) = event
+            .target()
+            .and_then(|target| target.dyn_into::<Element>().ok())
+        else {
+            return;
+        };
+        let Some(node_id) = node_id_attribute(&target, "data-cranpose-node", &node_ids) else {
+            return;
+        };
+        let value = if let Some(input) = target.dyn_ref::<HtmlInputElement>() {
+            input.value()
+        } else if let Some(area) = target.dyn_ref::<HtmlTextAreaElement>() {
+            area.value()
+        } else {
+            return;
+        };
+        let selection = field_selection(&target);
+        on_live_tree(&app, |root| {
+            let changed = accessibility::set_text(root, node_id, &value);
+            if let Some((anchor, focus)) = selection {
+                let anchor = accessibility::byte_offset_for_utf16(&value, anchor);
+                let focus = accessibility::byte_offset_for_utf16(&value, focus);
+                return accessibility::set_text_selection(root, node_id, anchor, focus) || changed;
+            }
+            changed
+        });
+    }) as Box<dyn FnMut(_)>);
+    root.add_event_listener_with_callback("input", input.as_ref().unchecked_ref())?;
+    input.forget();
+    Ok(())
+}
+
+struct MirrorEntry {
+    node: HtmlElement,
+    actions: Vec<HtmlElement>,
+}
+
+impl MirrorEntry {
+    fn update(
+        &mut self,
+        document: &Document,
+        id: i32,
+        element: &AccessibilityElement,
+        page: Option<PageTarget>,
+        placement: &Placement,
+    ) -> Result<(), JsValue> {
+        let template = mirror_node(document, id, element, page)?;
+        if self.node.tag_name() != template.tag_name() {
+            self.node.remove();
+            self.node = template;
+        } else {
+            patch_attributes(&self.node, &template)?;
+            if !is_mirror_container(element)
+                && matches!(
+                    element.role,
+                    AccessibilityRole::StaticText | AccessibilityRole::Header
+                )
+                && self.node.text_content() != template.text_content()
+            {
+                self.node
+                    .set_text_content(template.text_content().as_deref());
+            }
+            apply_field_text(&self.node, element)?;
+        }
+        place_node(&self.node, element, placement)?;
+        self.update_actions(document, id, element, placement)
+    }
+
+    fn update_actions(
+        &mut self,
+        document: &Document,
+        id: i32,
+        element: &AccessibilityElement,
+        placement: &Placement,
+    ) -> Result<(), JsValue> {
+        let named = accessibility::reader_actions(element).len();
+        let actions = accessibility::listed_actions(element);
+        for (index, action) in actions.iter().enumerate() {
+            if index == self.actions.len() {
+                self.actions.push(
+                    document
+                        .create_element("button")?
+                        .dyn_into::<HtmlElement>()?,
+                );
+            }
+            let button = &self.actions[index];
+            let label = if element.label.is_empty() {
+                action.clone()
+            } else {
+                format!("{action}, {}", element.label)
+            };
+            button.set_attribute("aria-label", &label)?;
+            button.set_attribute("data-cranpose-action", &index.to_string())?;
+            button.set_attribute("data-cranpose-action-named", &named.to_string())?;
+            button.set_attribute("data-cranpose-action-node", &id.to_string())?;
+            if let Some(key) = element.canvas_key {
+                button.set_attribute("data-cranpose-canvas", &key.to_string())?;
+            } else {
+                button.remove_attribute("data-cranpose-canvas")?;
+            }
+            place_node(button, element, placement)?;
+        }
+        for button in self.actions.drain(actions.len()..) {
+            button.remove();
+        }
+        Ok(())
+    }
+}
+
+fn patch_attributes(node: &HtmlElement, template: &HtmlElement) -> Result<(), JsValue> {
+    for name in node
+        .get_attribute_names()
+        .iter()
+        .filter_map(|name| name.as_string())
+    {
+        if name != "style" && !template.has_attribute(&name) {
+            node.remove_attribute(&name)?;
+        }
+    }
+    for name in template
+        .get_attribute_names()
+        .iter()
+        .filter_map(|name| name.as_string())
+    {
+        if let Some(value) = template.get_attribute(&name)
+            && node.get_attribute(&name).as_ref() != Some(&value)
+        {
+            node.set_attribute(&name, &value)?;
+        }
+    }
+    Ok(())
+}
+
+fn reconcile_children(parent: &HtmlElement, children: &[HtmlElement]) -> Result<(), JsValue> {
+    let mut cursor = parent.first_child();
+    for child in children {
+        if cursor
+            .as_ref()
+            .is_some_and(|cursor| cursor.is_same_node(Some(child)))
+        {
+            cursor = child.next_sibling();
+        } else {
+            parent.insert_before(child, cursor.as_ref())?;
+        }
+    }
+    Ok(())
+}
+
 pub(crate) struct WebAccessibilityBridge {
     root: HtmlElement,
     canvas: HtmlCanvasElement,
     previous: Vec<AccessibilityElement>,
+    entries: HashMap<i32, MirrorEntry>,
     node_ids: Rc<RefCell<HashMap<i32, cranpose_core::NodeId>>>,
     focused_element: Option<i32>,
     polite: HtmlElement,
@@ -757,16 +930,18 @@ impl WebAccessibilityBridge {
         body.append_child(&assertive)?;
         let node_ids: Rc<RefCell<HashMap<i32, cranpose_core::NodeId>>> =
             Rc::new(RefCell::new(HashMap::new()));
-        attach_focus_listener(&root, Rc::clone(&node_ids))?;
+        attach_focus_listener(&root, Rc::clone(&app), Rc::clone(&node_ids))?;
         attach_key_listener(&root, Rc::clone(&app), Rc::clone(&node_ids))?;
         attach_action_listener(&root, Rc::clone(&app), Rc::clone(&node_ids))?;
         attach_selection_listener(document, Rc::clone(&app), Rc::clone(&node_ids))?;
+        attach_input_listener(&root, Rc::clone(&app), Rc::clone(&node_ids))?;
         attach_page_listener(&root, app, Rc::clone(&node_ids))?;
 
         Ok(Self {
             root,
             canvas,
             previous: Vec::new(),
+            entries: HashMap::new(),
             node_ids,
             focused_element: None,
             polite,
@@ -819,26 +994,6 @@ impl WebAccessibilityBridge {
         focus_mirror_node(node)
     }
 
-    /// Puts a keystroke or a caret move into the focused field's mirror node
-    /// in place, so the browser's focus and the reader's place in the text
-    /// stay where they are. Answers whether that was all that changed.
-    fn patch_focused_field(&mut self, elements: &[AccessibilityElement]) -> Result<bool, JsValue> {
-        let Some(index) = only_focused_field_changed(&self.previous, elements) else {
-            return Ok(false);
-        };
-        let id = accessibility::element_ids(elements)[index];
-        let selector = format!("[data-cranpose-node=\"{id}\"]");
-        let Some(node) = self.root.query_selector(&selector)? else {
-            return Ok(false);
-        };
-        let node = node.dyn_into::<HtmlElement>()?;
-        let element = &elements[index];
-        node.set_attribute("aria-label", &element.label)?;
-        apply_field_text(&node, element)?;
-        self.previous = elements.to_vec();
-        Ok(true)
-    }
-
     pub(crate) fn sync(
         &mut self,
         document: &Document,
@@ -846,98 +1001,102 @@ impl WebAccessibilityBridge {
     ) -> Result<(), JsValue> {
         let elements = accessibility::snapshot(shell);
         self.speak(&elements);
-        if elements == self.previous || self.patch_focused_field(&elements)? {
+        if elements == self.previous {
             return Ok(());
         }
         let opened_dialog = opened_dialog(&self.previous, &elements);
-        self.previous.clone_from(&elements);
         let held = reader_focus(document).filter(|_| opened_dialog.is_none());
         let app_focus_before = self.focused_element;
-        self.root.set_inner_html("");
-        self.node_ids.borrow_mut().clear();
-
         let canvas_rect = self.canvas.get_bounding_client_rect();
         let viewport = shell.viewport_size();
-        let scale_x = canvas_rect.width() / viewport.0.max(1.0) as f64;
-        let scale_y = canvas_rect.height() / viewport.1.max(1.0) as f64;
         let placement = Placement {
             left: canvas_rect.left(),
             top: canvas_rect.top(),
-            scale_x,
-            scale_y,
+            scale_x: canvas_rect.width() / viewport.0.max(1.0) as f64,
+            scale_y: canvas_rect.height() / viewport.1.max(1.0) as f64,
         };
-
-        let ids = accessibility::element_ids(&elements);
-        let pages = page_targets(&ids, &elements);
-        for ((id, element), page) in ids.into_iter().zip(elements).zip(pages) {
-            let node = mirror_node(document, id, &element, page)?;
-            self.node_ids.borrow_mut().insert(id, element.node_id);
-            place_node(&node, &element, &placement)?;
-            self.root.append_child(&node)?;
-            self.append_action_buttons(document, &element, id, &placement)?;
-            self.follow_app_focus(&node, &element, id)?;
+        self.reconcile(document, &elements, &placement)?;
+        for (id, element) in accessibility::element_ids(&elements)
+            .into_iter()
+            .zip(&elements)
+        {
+            let node = self.entries[&id].node.clone();
+            self.follow_app_focus(&node, element, id)?;
             if opened_dialog == Some(element.node_id) {
                 node.focus()?;
             }
         }
+        self.previous = elements;
         self.settle_focus(held, app_focus_before)
     }
 
-    /// One button per action the control offers, over the control it belongs
-    /// to, so a reader lists "Dismiss, Milk" right after "Milk" and a keyboard
-    /// reaches it with Tab. ARIA has no actions menu, no long press and no
-    /// dismiss action of its own, so the long press and then the way out sit
-    /// here after the actions the app named.
-    fn append_action_buttons(
-        &self,
+    fn reconcile(
+        &mut self,
         document: &Document,
-        element: &AccessibilityElement,
-        id: i32,
+        elements: &[AccessibilityElement],
         placement: &Placement,
     ) -> Result<(), JsValue> {
-        let named = accessibility::reader_actions(element).len();
-        for (index, action) in accessibility::listed_actions(element)
-            .into_iter()
-            .enumerate()
-        {
-            let button = document
-                .create_element("button")?
-                .dyn_into::<HtmlElement>()?;
-            let label = if element.label.is_empty() {
-                action.to_owned()
-            } else {
-                format!("{action}, {}", element.label)
+        let ids = accessibility::element_ids(elements);
+        let pages = page_targets(&ids, elements);
+        let parents: HashMap<_, _> = ids
+            .iter()
+            .zip(elements)
+            .filter(|(_, element)| element.canvas_key.is_none())
+            .map(|(id, element)| (element.node_id, *id))
+            .collect();
+        let mut children: HashMap<Option<i32>, Vec<HtmlElement>> = HashMap::new();
+        self.node_ids.borrow_mut().clear();
+        for ((id, element), page) in ids.iter().copied().zip(elements).zip(pages) {
+            let entry = match self.entries.entry(id) {
+                std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+                std::collections::hash_map::Entry::Vacant(entry) => entry.insert(MirrorEntry {
+                    node: document
+                        .create_element(mirror_tag(element))?
+                        .dyn_into::<HtmlElement>()?,
+                    actions: Vec::new(),
+                }),
             };
-            button.set_attribute("aria-label", &label)?;
-            button.set_attribute("data-cranpose-action", &index.to_string())?;
-            button.set_attribute("data-cranpose-action-named", &named.to_string())?;
-            button.set_attribute("data-cranpose-action-node", &id.to_string())?;
-            if let Some(key) = element.canvas_key {
-                button.set_attribute("data-cranpose-canvas", &key.to_string())?;
-            }
-            place_node(&button, element, placement)?;
-            self.root.append_child(&button)?;
+            entry.update(document, id, element, page, placement)?;
+            self.node_ids.borrow_mut().insert(id, element.node_id);
+            let parent = element
+                .scroll_parent
+                .and_then(|parent| parents.get(&parent).copied());
+            let siblings = children.entry(parent).or_default();
+            siblings.push(entry.node.clone());
+            siblings.extend(entry.actions.iter().cloned());
         }
+        for (parent, children) in children {
+            let parent = parent.map_or(&self.root, |id| &self.entries[&id].node);
+            reconcile_children(parent, &children)?;
+        }
+        self.entries.retain(|id, entry| {
+            if ids.contains(id) {
+                true
+            } else {
+                entry.node.remove();
+                for button in &entry.actions {
+                    button.remove();
+                }
+                false
+            }
+        });
         Ok(())
     }
 
-    /// Forgets an app focus that left, and puts the browser's focus back on
-    /// the mirror node a reader held before the rebuild, so a page or a value
-    /// change does not drop its cursor. An app that moved focus itself wins.
     fn settle_focus(
         &mut self,
-        held: Option<i32>,
+        held: Option<String>,
         app_focus_before: Option<i32>,
     ) -> Result<(), JsValue> {
         if !self.previous.iter().any(|element| element.focused) {
             self.focused_element = None;
         }
-        let Some(id) = held.filter(|_| self.focused_element == app_focus_before) else {
+        let Some(selector) = held.filter(|_| self.focused_element == app_focus_before) else {
             return Ok(());
         };
-        let selector = format!("[data-cranpose-node=\"{id}\"]");
         if let Some(node) = self.root.query_selector(&selector)?
             && let Ok(node) = node.dyn_into::<HtmlElement>()
+            && !node.matches(":focus")?
         {
             focus_mirror_node(&node)?;
         }
@@ -961,11 +1120,22 @@ fn opened_dialog(
         .map(|element| element.node_id)
 }
 
-/// The mirror node the browser's focus sits on, by its virtual id.
-fn reader_focus(document: &Document) -> Option<i32> {
-    document
-        .active_element()?
-        .get_attribute("data-cranpose-node")?
-        .parse()
-        .ok()
+fn reader_focus(document: &Document) -> Option<String> {
+    let node = document.active_element()?;
+    if let Some(id) = node.get_attribute("data-cranpose-node") {
+        let id = id.parse::<i32>().ok()?;
+        Some(format!("[data-cranpose-node=\"{id}\"]"))
+    } else {
+        let id = node
+            .get_attribute("data-cranpose-action-node")?
+            .parse::<i32>()
+            .ok()?;
+        let index = node
+            .get_attribute("data-cranpose-action")?
+            .parse::<usize>()
+            .ok()?;
+        Some(format!(
+            "[data-cranpose-action-node=\"{id}\"][data-cranpose-action=\"{index}\"]"
+        ))
+    }
 }

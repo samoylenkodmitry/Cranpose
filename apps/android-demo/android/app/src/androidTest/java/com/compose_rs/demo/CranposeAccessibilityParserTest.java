@@ -1,6 +1,11 @@
 package com.compose_rs.demo;
 
 import android.graphics.Rect;
+import android.view.View;
+import android.view.accessibility.AccessibilityNodeInfo;
+import android.view.accessibility.AccessibilityNodeProvider;
+
+import androidx.test.platform.app.InstrumentationRegistry;
 
 import dev.cranpose.android.CranposeActivity;
 
@@ -8,10 +13,13 @@ import org.junit.Test;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.lang.reflect.Constructor;
 import java.util.List;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
 public final class CranposeAccessibilityParserTest {
@@ -77,5 +85,67 @@ public final class CranposeAccessibilityParserTest {
         assertTrue(parse(null).isEmpty());
         assertTrue(parse("").isEmpty());
         assertTrue(parse("\n\n").isEmpty());
+    }
+
+    private static AccessibilityNodeProvider provider(String payload) throws Exception {
+        Class<?> type = Class.forName(CranposeActivity.class.getName() + "$CranposeAccessibilityProvider");
+        Constructor<?> constructor = type.getDeclaredConstructor(View.class);
+        constructor.setAccessible(true);
+        Object provider = constructor.newInstance(new View(
+                InstrumentationRegistry.getInstrumentation().getTargetContext()));
+        Field elements = type.getDeclaredField("elements");
+        elements.setAccessible(true);
+        elements.set(provider, parse(payload));
+        return (AccessibilityNodeProvider) provider;
+    }
+
+    @Test
+    public void progressIndicatorsReportTheirRangeWithoutOfferingAdjustment() throws Exception {
+        String[] fields = record("21", "Loading", "").split("\t", -1);
+        fields[1] = "15";
+        fields[20] = "40";
+        fields[21] = "0";
+        fields[22] = "100";
+        AccessibilityNodeInfo node = provider(String.join("\t", fields)).createAccessibilityNodeInfo(21);
+        assertEquals("android.widget.ProgressBar", node.getClassName());
+        assertNotNull(node.getRangeInfo());
+        assertEquals(40.0f, node.getRangeInfo().getCurrent(), 0.0f);
+        assertEquals(100.0f, node.getRangeInfo().getMax(), 0.0f);
+        assertFalse(node.getActionList().contains(AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_PROGRESS));
+    }
+
+    @Test
+    public void disabledControlsRejectActionsButRemainDiscoverable() throws Exception {
+        String[] fields = record("22", "Disabled", "Remove").split("\t", -1);
+        fields[15] = "0";
+        AccessibilityNodeProvider provider = provider(String.join("\t", fields));
+        AccessibilityNodeInfo node = provider.createAccessibilityNodeInfo(22);
+        assertFalse(node.isEnabled());
+        assertTrue(node.isVisibleToUser());
+        assertFalse(provider.performAction(22, AccessibilityNodeInfo.ACTION_CLICK, null));
+        assertFalse(provider.performAction(22, AccessibilityNodeInfo.ACTION_LONG_CLICK, null));
+        assertFalse(provider.performAction(22, AccessibilityNodeInfo.ACTION_SET_TEXT, null));
+        assertFalse(provider.performAction(22, AccessibilityNodeInfo.ACTION_DISMISS, null));
+        assertEquals(1, node.getActionList().size());
+        assertFalse(node.isClickable());
+        assertFalse(node.isLongClickable());
+        assertTrue(node.getActionList().contains(AccessibilityNodeInfo.AccessibilityAction.ACTION_ACCESSIBILITY_FOCUS));
+    }
+
+    @Test
+    public void textSearchMatchesNamesAndValuesWithinTheRequestedSubtree() throws Exception {
+        String[] child = record("32", "Title", "").split("\t", -1);
+        child[1] = "3";
+        child[10] = "Café notes";
+        child[26] = "31";
+        AccessibilityNodeProvider provider = provider(record("31", "Notebook", "")
+                + "\n" + String.join("\t", child) + "\n" + record("33", "Other notes", ""));
+        assertEquals(2, provider.findAccessibilityNodeInfosByText("NOTES", -1).size());
+        assertEquals(1, provider.findAccessibilityNodeInfosByText("notes", 31).size());
+        assertEquals(1, provider.findAccessibilityNodeInfosByText("CAFÉ", 32).size());
+        assertEquals("Notebook", provider.findAccessibilityNodeInfosByText("book", 31)
+                .get(0).getContentDescription());
+        assertTrue(provider.findAccessibilityNodeInfosByText("notes", 99).isEmpty());
+        assertTrue(provider.findAccessibilityNodeInfosByText("absent", -1).isEmpty());
     }
 }

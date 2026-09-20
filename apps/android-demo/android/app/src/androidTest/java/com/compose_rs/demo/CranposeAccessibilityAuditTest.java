@@ -24,6 +24,7 @@ import org.junit.runner.RunWith;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 
 import static org.junit.Assert.assertTrue;
@@ -54,7 +55,7 @@ public final class CranposeAccessibilityAuditTest {
                     report.append("  ")
                             .append(error.getSourceCheckClass().getSimpleName())
                             .append(": ")
-                            .append(error.getMessage(instrumentation.getTargetContext()))
+                            .append(error.getMessage(Locale.getDefault()))
                             .append('\n');
                 }
                 fail(report.toString());
