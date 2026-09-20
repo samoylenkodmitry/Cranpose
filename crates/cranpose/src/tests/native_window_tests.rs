@@ -1517,3 +1517,43 @@ fn content_torn_out_starts_reading_the_window_it_moved_into() {
         "the node that grew a window reads the window it grew"
     );
 }
+
+#[cfg(all(
+    feature = "desktop-shell",
+    feature = "renderer-wgpu",
+    not(target_arch = "wasm32")
+))]
+#[test]
+fn a_drag_that_carries_peers_says_so_before_the_window_starts_moving() {
+    let main = WindowId::from_static("main");
+    let group = graph_group(WindowAttachPolicy::default());
+    let windows = main_and_eq_windows(&group);
+
+    let mut graph = WindowGraphState::default();
+    assert!(
+        !graph.drag_carries_peers(),
+        "nothing is being dragged yet, so nothing is being carried"
+    );
+    graph.start_drag(&windows, main);
+    assert!(
+        graph.drag_carries_peers(),
+        "the desktop asks this to decide who moves the window: one it moves itself, \
+         because the peers it carries are placed in the same pass and stay with it, or \
+         the platform, which moves it alone and is read back a poll later"
+    );
+
+    let alone = graph_group(WindowAttachPolicy::default());
+    let lone = vec![graph_node(
+        "main",
+        Point::new(120.0, 80.0),
+        Size::new(275.0, 116.0),
+        &alone,
+    )];
+    let mut graph = WindowGraphState::default();
+    graph.start_drag(&lone, main);
+    assert!(
+        !graph.drag_carries_peers(),
+        "a window with nothing attached keeps the platform drag, and the edge snapping \
+         and spaces that come with it"
+    );
+}

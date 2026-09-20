@@ -1260,6 +1260,12 @@ impl WindowGraphState {
         });
     }
 
+    pub(crate) fn drag_carries_peers(&self) -> bool {
+        self.active_drag
+            .as_ref()
+            .is_some_and(|session| session.captured.len() > 1)
+    }
+
     pub(crate) fn drag_to(
         &self,
         dragged: WindowId,

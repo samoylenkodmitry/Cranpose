@@ -2169,7 +2169,13 @@ impl App {
         }
         let graph_snapshots = self.native_window_graph_snapshots_with(native, None);
         self.window_graph.start_drag(&graph_snapshots, native.key);
-        if !Self::start_native_window_drag(platform_probe, native, start_pointer_screen) {
+        let anchor = start_pointer_screen.or_else(|| {
+            self.window_graph
+                .drag_carries_peers()
+                .then(|| native_window_press_anchor(platform_probe, native))
+                .flatten()
+        });
+        if !Self::start_native_window_drag(platform_probe, native, anchor) {
             trace_native_window!("drag cancel key={:?} reason=start-failed", native.key);
             self.window_graph.cancel_drag();
         }
@@ -4292,6 +4298,14 @@ fn held_press_after_step(
         HeldPressStep::Moved(position) => held.map(|_| position),
         HeldPressStep::Released(_) => None,
     }
+}
+
+fn native_window_press_anchor(
+    platform_probe: &NativeWindowPlatformProbe,
+    native: &NativeWindowSurface,
+) -> Option<PhysicalPosition<f64>> {
+    let local = native.last_cursor_physical_position?;
+    native_window_screen_pointer_physical(platform_probe, &native.window, local)
 }
 
 fn held_press_on_screen(
