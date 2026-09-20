@@ -454,7 +454,8 @@ where
         .get(key)
         .and_then(|stored| saver.restore(&stored))
         .unwrap_or_else(initial);
-    let state = cranpose_core::remember(|| cranpose_core::mutableStateOf(restored)).with(|s| *s);
+    let state =
+        cranpose_core::remember(|| cranpose_core::mutableStateOfNeverEqual(restored)).with(|s| *s);
 
     let saved = cranpose_core::remember(|| std::cell::RefCell::new(Option::<String>::None));
     let stored = saver.save(&state.get());

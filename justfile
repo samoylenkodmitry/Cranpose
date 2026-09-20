@@ -175,9 +175,30 @@ complexity-gate base="origin/main":
 duplication-gate base="origin/main":
     cargo xtask duplication-gate --base {{base}}
 
+# A function the diff adds that is only a second name for one call.
+#
+# Diff-based like the two above, and for the same reason: the tree still has
+# some, and a gate that has to be switched off on the day it lands is not a
+# gate. A `// forwards on purpose:` comment opts one out where the name is
+# load-bearing -- in a composable tree an extra function is an extra
+# recomposition scope, and then forwarding is the whole point. It is a comment
+# rather than an attribute because `#[allow(..)]` of a lint rustc has never
+# heard of is an error in its own right.
+wrapper-gate base="origin/main":
+    python3 scripts/ci/pointless_wrapper_gate.py --base {{base}}
+
+# A state holder rebuilt on every pass: a struct whose fields are each their
+# own `rememberMutableStateOf`, so the values are remembered but the struct
+# around them is not. Remember the struct itself instead, the way Jetpack
+# Compose does: `remember(|| Holder { field: mutableStateOf(..) })`.
+#
+# Tree-wide rather than diff-based: there are none left to grandfather.
+state-holder-gate:
+    python3 scripts/ci/state_holder_gate.py
+
 # The gates fast enough to run before every commit: what `.githooks/pre-commit`
 # runs. Everything here finishes in seconds against a warm xtask build.
-precommit: fmt-check typos complexity-gate duplication-gate ci-contract-gates
+precommit: fmt-check typos complexity-gate duplication-gate wrapper-gate state-holder-gate ci-contract-gates
 
 # The gates that describe CI to itself: which scheduling class each robot
 # example is in, what a parallel worker can reach, and the twenty-minute cap
@@ -650,7 +671,7 @@ _disk-guard:
 # all seven on every pull request.
 
 # What a pull request is gated on. Run this before pushing.
-ci: fmt-check typos versions test clippy clippy-optional-backends clippy-svg clippy-hyphenation clippy-robot clippy-wasm doc budgets complexity-gate duplication-gate test-robot-discovery test-shell-helpers test-host-lock test-ci-filters test-features test-property bench-smoke test-ci-gate-reachability test-robot-suite-partition test-android-accessibility-contract
+ci: fmt-check typos versions test clippy clippy-optional-backends clippy-svg clippy-hyphenation clippy-robot clippy-wasm doc budgets complexity-gate duplication-gate state-holder-gate test-robot-discovery test-shell-helpers test-host-lock test-ci-filters test-features test-property bench-smoke test-ci-gate-reachability test-robot-suite-partition test-android-accessibility-contract
 
 # Needs a Linux box with the X11 stack, an Android SDK and (on macOS) Xcode.
 

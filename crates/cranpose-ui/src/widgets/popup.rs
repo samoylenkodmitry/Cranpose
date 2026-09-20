@@ -32,8 +32,8 @@ use std::{
 };
 
 use cranpose_core::{
-    CompositionLocalProvider, MutableState, SideEffect, StaticCompositionLocal, mutableStateOf,
-    remember, staticCompositionLocalOf,
+    CompositionLocalProvider, OwnedMutableState, SideEffect, StaticCompositionLocal,
+    ownedMutableStateOf, remember, staticCompositionLocalOf,
 };
 use cranpose_foundation::PointerEventKind;
 use cranpose_ui_graphics::{Point, Rect};
@@ -54,7 +54,7 @@ struct PopupEntry {
 struct PopupRegistryState {
     entries: RefCell<Vec<PopupEntry>>,
     next_id: Cell<u64>,
-    revision: Option<MutableState<u64>>,
+    revision: Option<OwnedMutableState<u64>>,
 }
 
 /// Shared, cheaply-cloneable handle to the popup registry provided by the
@@ -126,7 +126,7 @@ impl PopupRegistry {
         let inner = Rc::new(PopupRegistryState {
             entries: RefCell::new(Vec::new()),
             next_id: Cell::new(0),
-            revision: Some(mutableStateOf(0u64)),
+            revision: Some(ownedMutableStateOf(0u64)),
         });
         HOSTED_REGISTRIES.with(|hosted| hosted.borrow_mut().push(Rc::downgrade(&inner)));
         Self { inner }

@@ -201,11 +201,12 @@ pub use cranpose_capabilities as capabilities;
 /// Core runtime helpers commonly used by applications.
 pub use cranpose_core::{
     CoroutineScope, DisposableEffect, DisposableEffectResult, DisposableEffectScope,
-    LaunchedEffect, LaunchedEffectAsync, LaunchedEffectScope, MutableState, SnapshotStateList,
-    SnapshotStateMap, State, delay, forget_movable, interval, key, launchBlocking, movable,
-    mutableStateList, mutableStateListOf, mutableStateMap, mutableStateMapOf, mutableStateOf,
-    produceState, remember, rememberCoroutineScope, rememberKeyed, rememberMutableStateOf,
-    rememberMutableStateOfNeverEqual, rememberUpdatedState,
+    LaunchedEffect, LaunchedEffectAsync, LaunchedEffectScope, MovableContent, MutableState,
+    SnapshotStateList, SnapshotStateMap, State, delay, forget_movable, interval, key,
+    launchBlocking, movable, movableContentOf, mutableStateList, mutableStateListOf,
+    mutableStateMap, mutableStateMapOf, mutableStateOf, mutableStateOfNeverEqual, produceState,
+    remember, rememberCoroutineScope, rememberKeyed, rememberMovableContentOf,
+    rememberMutableStateOf, rememberMutableStateOfNeverEqual, rememberUpdatedState,
 };
 /// Liquid UI — the first-party glass component library
 /// (`use cranpose::liquid::prelude::*;`).
@@ -412,11 +413,12 @@ pub mod _docs;
 pub mod prelude {
     pub use cranpose_core::{
         CoroutineScope, DisposableEffect, DisposableEffectResult, DisposableEffectScope,
-        LaunchedEffect, LaunchedEffectAsync, LaunchedEffectScope, MutableState, SnapshotStateList,
-        SnapshotStateMap, State, delay, forget_movable, interval, key, launchBlocking, movable,
-        mutableStateList, mutableStateListOf, mutableStateMap, mutableStateMapOf, mutableStateOf,
-        produceState, remember, rememberCoroutineScope, rememberKeyed, rememberMutableStateOf,
-        rememberMutableStateOfNeverEqual, rememberUpdatedState,
+        LaunchedEffect, LaunchedEffectAsync, LaunchedEffectScope, MovableContent, MutableState,
+        SnapshotStateList, SnapshotStateMap, State, delay, forget_movable, interval, key,
+        launchBlocking, movable, movableContentOf, mutableStateList, mutableStateListOf,
+        mutableStateMap, mutableStateMapOf, mutableStateOf, mutableStateOfNeverEqual, produceState,
+        remember, rememberCoroutineScope, rememberKeyed, rememberMovableContentOf,
+        rememberMutableStateOf, rememberMutableStateOfNeverEqual, rememberUpdatedState,
     };
     pub use cranpose_services::*;
     pub use cranpose_ui::*;

@@ -11,7 +11,9 @@ use std::{
     rc::Rc,
 };
 
-use cranpose_core::{CompositionLocal, MutableState, compositionLocalOf, try_mutableStateOf};
+use cranpose_core::{
+    CompositionLocal, MutableState, OwnedMutableState, compositionLocalOf, try_mutableStateOf,
+};
 
 struct ModalEntry {
     id: u64,
@@ -22,23 +24,24 @@ thread_local! {
     static MODALS: RefCell<Vec<ModalEntry>> = const { RefCell::new(Vec::new()) };
     static NEXT_ID: Cell<u64> = const { Cell::new(1) };
     static DEPTH_COUNT: Cell<usize> = const { Cell::new(0) };
-    static DEPTH: RefCell<Option<MutableState<usize>>> = const { RefCell::new(None) };
+    static DEPTH: RefCell<Option<OwnedMutableState<usize>>> = const { RefCell::new(None) };
 }
 
 fn depth_state() -> Option<MutableState<usize>> {
     DEPTH.with(|cell| {
         let mut cell = cell.borrow_mut();
         if cell.is_none() {
-            *cell = try_mutableStateOf(DEPTH_COUNT.with(Cell::get));
+            *cell = try_mutableStateOf(DEPTH_COUNT.with(Cell::get))
+                .map(|depth| MutableState::retain(&depth));
         }
-        *cell
+        cell.as_ref().map(OwnedMutableState::handle)
     })
 }
 
 fn publish_depth() {
     let depth = MODALS.with(|modals| modals.borrow().len());
     DEPTH_COUNT.with(|count| count.set(depth));
-    if let Some(state) = DEPTH.with(|cell| *cell.borrow())
+    if let Some(state) = DEPTH.with(|cell| cell.borrow().as_ref().map(OwnedMutableState::handle))
         && state.get() != depth
     {
         state.set(depth);

@@ -154,7 +154,10 @@ impl SlotWriteSession<'_> {
         source: crate::Key,
         init: impl FnOnce() -> T,
     ) -> Owned<T> {
-        let slot = self.value_slot_with_kind(kind, source, || Owned::new(init()));
+        let slot = self.value_slot_with_kind(kind, source, || {
+            let (value, states) = crate::runtime::collecting_states(init);
+            Owned::with_states(value, states)
+        });
         #[cfg(any(test, debug_assertions))]
         debug_assert!(
             self.table

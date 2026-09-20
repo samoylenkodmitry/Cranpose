@@ -769,3 +769,4 @@ mod movable_tests;
 mod recompose_and_diff_tests;
 mod snapshot_state_tests;
 mod state_and_effect_tests;
+mod state_holder_tests;

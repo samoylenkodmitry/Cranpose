@@ -1,7 +1,7 @@
 #![allow(non_snake_case)]
 
 use cranpose::WindowModifierExt;
-use cranpose_core::{rememberMutableStateOf, MutableState};
+use cranpose_core::{mutableStateOf, remember, MutableState};
 use cranpose_ui::{composable, Modifier, PointerEventKind, PointerInputScope};
 
 /// Whether the pointer is over a borderless window's content and holding it
@@ -15,13 +15,19 @@ pub struct FloatingInput {
     clicks: MutableState<u32>,
 }
 
+impl FloatingInput {
+    fn new() -> Self {
+        FloatingInput {
+            pressed: mutableStateOf(false),
+            hovered: mutableStateOf(false),
+            clicks: mutableStateOf(0u32),
+        }
+    }
+}
+
 #[composable]
 pub fn rememberFloatingInput() -> FloatingInput {
-    FloatingInput {
-        pressed: rememberMutableStateOf(|| false),
-        hovered: rememberMutableStateOf(|| false),
-        clicks: rememberMutableStateOf(|| 0u32),
-    }
+    remember(FloatingInput::new).with(|input| *input)
 }
 
 impl FloatingInput {
@@ -49,7 +55,7 @@ impl FloatingInputModifierExt for Modifier {
             hovered,
             clicks,
         } = input;
-        self.window_drag_area()
+        self.window_drag_area(|| {}, || {})
             .clickable(move |_| clicks.set(clicks.get() + 1))
             .pointer_input((), move |scope: PointerInputScope| async move {
                 scope

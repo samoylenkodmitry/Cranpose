@@ -155,7 +155,7 @@ fn value_slot_handle_cannot_escape_composable_scope() {
         "value_slot_handle_state.rs",
         &[
             "borrowed data escapes outside of closure",
-            "mutableStateOf(handle)",
+            "mutableStateOfNeverEqual(handle)",
             "must outlive `'static`",
         ],
     );

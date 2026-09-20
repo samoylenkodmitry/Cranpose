@@ -361,6 +361,31 @@ impl WindowState {
             self.presented.set(presented);
         }
     }
+
+    /// A window's states, for code that remembers the window itself.
+    ///
+    /// Call it inside a `remember`, either through [`rememberWindowState`] or
+    /// as one field of a larger holder that is remembered whole; the states
+    /// then belong to that slot. Called straight from a composable body it
+    /// makes a new window state every pass, as in Kotlin.
+    pub fn new(width: f32, height: f32) -> Self {
+        Self::sized(None, Size::new(width, height))
+    }
+
+    /// Like [`WindowState::new`], with the window first placed at the given
+    /// screen position.
+    pub fn placed_at(x: f32, y: f32, width: f32, height: f32) -> Self {
+        Self::sized(Some(Point::new(x, y)), Size::new(width, height))
+    }
+
+    fn sized(position: Option<Point>, size: Size) -> Self {
+        WindowState {
+            position: cranpose_core::mutableStateOf(position),
+            size: cranpose_core::mutableStateOf(size),
+            frame: cranpose_core::mutableStateOf(size),
+            presented: cranpose_core::mutableStateOf(false),
+        }
+    }
 }
 
 /// Remembers native-window position and size across recompositions.
@@ -368,12 +393,7 @@ impl WindowState {
 #[composable]
 #[track_caller]
 pub fn rememberWindowState(width: f32, height: f32) -> WindowState {
-    WindowState {
-        position: cranpose_core::rememberMutableStateOf(|| None::<Point>),
-        size: cranpose_core::rememberMutableStateOf(move || Size::new(width, height)),
-        frame: cranpose_core::rememberMutableStateOf(move || Size::new(width, height)),
-        presented: cranpose_core::rememberMutableStateOf(|| false),
-    }
+    cranpose_core::remember(move || WindowState::new(width, height)).with(|state| *state)
 }
 
 /// Remembers native-window position and size across recompositions, with the
@@ -382,12 +402,8 @@ pub fn rememberWindowState(width: f32, height: f32) -> WindowState {
 #[composable]
 #[track_caller]
 pub fn rememberWindowStateAt(x: f32, y: f32, width: f32, height: f32) -> WindowState {
-    WindowState {
-        position: cranpose_core::rememberMutableStateOf(move || Some(Point::new(x, y))),
-        size: cranpose_core::rememberMutableStateOf(move || Size::new(width, height)),
-        frame: cranpose_core::rememberMutableStateOf(move || Size::new(width, height)),
-        presented: cranpose_core::rememberMutableStateOf(|| false),
-    }
+    cranpose_core::remember(move || WindowState::placed_at(x, y, width, height))
+        .with(|state| *state)
 }
 
 /// Declarative configuration for an operating-system window.
@@ -612,22 +628,19 @@ pub trait WindowModifierExt {
     /// subtree inline.
     fn window(self, config: WindowConfig) -> Modifier;
 
-    /// Marks this component as a drag target for its containing OS window.
+    /// Marks this component as a drag target for its containing OS window,
+    /// and reports when a drag the platform accepted starts and finishes.
     ///
     /// The modifier is inert when the component is not currently rendered in a
     /// native desktop sub-window, so the same UI can be used inline.
+    /// The callbacks run only when a drag is actually accepted; pass
+    /// `|| {}` for either one there is nothing to do about.
     ///
     /// The press is left unconsumed, so whatever sits under the drag area
     /// still sees it: a title bar moves its window and answers a click, and
     /// the click is the one `Modifier::clickable` recognises, on every
     /// platform.
-    fn window_drag_area(self) -> Modifier;
-
-    /// Marks this component as a drag target and reports the native drag lifecycle.
-    ///
-    /// The callbacks run only when an OS-window drag is actually accepted by
-    /// the current native desktop sub-window.
-    fn window_drag_area_with_callbacks(
+    fn window_drag_area(
         self,
         on_started: impl Fn() + 'static,
         on_finished: impl Fn() + 'static,
@@ -664,11 +677,7 @@ impl WindowModifierExt for Modifier {
         }
     }
 
-    fn window_drag_area(self) -> Modifier {
-        self.window_drag_area_with_callbacks(|| {}, || {})
-    }
-
-    fn window_drag_area_with_callbacks(
+    fn window_drag_area(
         self,
         on_started: impl Fn() + 'static,
         on_finished: impl Fn() + 'static,

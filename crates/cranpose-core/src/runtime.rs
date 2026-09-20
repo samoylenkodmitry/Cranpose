@@ -431,6 +431,7 @@ struct RuntimeInner {
     external_state_owners: RefCell<HashMap<StateId, Rc<StateHandleLease>>>,
     live_recompose_scope_count: Cell<usize>,
     forgotten_movables: RefCell<Vec<Key>>,
+    next_movable_content_id: Cell<u64>,
     runtime_id: RuntimeId,
 }
 
@@ -475,6 +476,7 @@ impl RuntimeInner {
             external_state_owners: RefCell::new(HashMap::default()),
             live_recompose_scope_count: Cell::new(0),
             forgotten_movables: RefCell::new(Vec::new()),
+            next_movable_content_id: Cell::new(1),
             runtime_id: RuntimeId::next(),
         }
     }
@@ -975,6 +977,61 @@ impl Drop for StateHandleLease {
     }
 }
 
+thread_local! {
+    static STATE_OWNERS: RefCell<Vec<Vec<Rc<StateHandleLease>>>> =
+        const { RefCell::new(Vec::new()) };
+}
+
+struct StateOwnerFrame;
+
+impl Drop for StateOwnerFrame {
+    fn drop(&mut self) {
+        STATE_OWNERS.with(|owners| owners.borrow_mut().pop());
+    }
+}
+
+/// Runs `build` with every state it creates owned by the caller, and returns
+/// those states beside its value.
+///
+/// This is what makes the Jetpack Compose shape safe here:
+///
+/// ```rust,ignore
+/// remember(|| Holder {
+///     count: mutableStateOf(0),
+/// })
+/// ```
+///
+/// Kotlin leaves the state to the garbage collector, which frees it with the
+/// object that holds it. Nothing collects here, so a state with no owner has
+/// to be kept by the runtime for as long as the runtime lives, and a holder
+/// built once per screen would pile up cells nobody can reach. Handing the
+/// states to whoever is building the value puts them back on the object's
+/// lifetime: the slot drops the value, the value drops the states.
+pub(crate) fn collecting_states<T>(build: impl FnOnce() -> T) -> (T, Vec<Rc<StateHandleLease>>) {
+    STATE_OWNERS.with(|owners| owners.borrow_mut().push(Vec::new()));
+    let frame = StateOwnerFrame;
+    let value = build();
+    let states = STATE_OWNERS.with(|owners| {
+        owners
+            .borrow_mut()
+            .last_mut()
+            .map(std::mem::take)
+            .unwrap_or_default()
+    });
+    drop(frame);
+    (value, states)
+}
+
+fn hand_to_current_owner(lease: &Rc<StateHandleLease>) -> bool {
+    STATE_OWNERS.with(|owners| match owners.borrow_mut().last_mut() {
+        Some(owner) => {
+            owner.push(Rc::clone(lease));
+            true
+        }
+        None => false,
+    })
+}
+
 impl RuntimeHandle {
     pub fn id(&self) -> RuntimeId {
         self.id
@@ -1009,8 +1066,21 @@ impl RuntimeHandle {
         &self,
         value: T,
     ) -> crate::MutableState<T> {
-        let lease = self.alloc_state(value);
-        if let Some(inner) = self.inner.upgrade() {
+        self.hand_out(self.alloc_state(value))
+    }
+
+    pub(crate) fn alloc_persistent_state_with_policy<T: Clone + 'static>(
+        &self,
+        value: T,
+        policy: Arc<dyn MutationPolicy<T>>,
+    ) -> crate::MutableState<T> {
+        self.hand_out(self.alloc_state_with_policy(value, policy))
+    }
+
+    fn hand_out<T: Clone + 'static>(&self, lease: Rc<StateHandleLease>) -> crate::MutableState<T> {
+        if !hand_to_current_owner(&lease)
+            && let Some(inner) = self.inner.upgrade()
+        {
             inner
                 .external_state_owners
                 .borrow_mut()
@@ -1262,6 +1332,20 @@ impl RuntimeHandle {
             .upgrade()
             .map(|inner| std::mem::take(&mut *inner.forgotten_movables.borrow_mut()))
             .unwrap_or_default()
+    }
+
+    /// An identity for a piece of movable content, unique within this
+    /// runtime. Owned by the runtime instance rather than a process-wide
+    /// counter, so two compositions in one process cannot collide and a
+    /// test cannot be made to pass by the order it happens to run in.
+    pub(crate) fn next_movable_content_id(&self) -> Key {
+        let Some(inner) = self.inner.upgrade() else {
+            log::error!("movable content asked a runtime that is gone for an identity");
+            return 0;
+        };
+        let id = inner.next_movable_content_id.get();
+        inner.next_movable_content_id.set(id.wrapping_add(1).max(1));
+        id
     }
 
     pub fn has_invalid_scopes(&self) -> bool {

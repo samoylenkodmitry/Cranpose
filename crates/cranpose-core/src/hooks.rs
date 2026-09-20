@@ -1,4 +1,4 @@
-use std::{hash::Hash, rc::Rc};
+use std::{hash::Hash, rc::Rc, sync::Arc};
 
 use crate::{
     composer_context,
@@ -6,6 +6,7 @@ use crate::{
     runtime,
     state::{
         DerivedState, MutableState, OwnedMutableState, SnapshotStateList, SnapshotStateMap, State,
+        StructuralEqual,
     },
 };
 
@@ -118,15 +119,20 @@ pub fn withFrameMillis(
 /// current composer or snapshot, and writes trigger recomposition of scopes that
 /// read it.
 ///
+/// Writing a value equal to the one already there is not a change, so it does
+/// not recompose anything -- Jetpack Compose's `structuralEqualityPolicy()`,
+/// which is its default too. Use [`mutableStateOfNeverEqual`] for a value that
+/// cannot be compared, or one whose every write must count.
+///
 /// # When to use
 /// Use `mutableStateOf` when:
 /// 1.  You are creating state properties inside a struct or class (not a composable function).
 /// 2.  You are implementing a custom state management solution.
 ///
-/// **If you are inside a `#[composable]` function, use [`rememberMutableStateOf`] instead.**
-/// `rememberMutableStateOf` wraps `mutableStateOf` in `remember`, ensuring the state persists
-/// across recompositions. Using `mutableStateOf` directly in a composable will
-/// recreated the state on every frame, losing data.
+/// **Inside a `#[composable]` function this must sit inside a `remember`**,
+/// either [`rememberMutableStateOf`] for a single state or [`remember`] around
+/// the struct that holds several. Called straight from a composable body it
+/// makes a new state every pass and loses the value, exactly as in Kotlin.
 ///
 /// # Example
 ///
@@ -138,29 +144,57 @@ pub fn withFrameMillis(
 /// impl MyViewModel {
 ///     fn new() -> Self {
 ///         Self {
-///             name: mutableStateOf("Alice".into()),
+///             name: mutableStateOf(String::from("Alice")),
 ///         }
 ///     }
 /// }
+///
+/// #[composable]
+/// fn rememberMyViewModel() -> MyViewModel {
+///     remember(MyViewModel::new).with(|model| model.clone())
+/// }
 /// ```
 ///
-/// This creates a runtime-owned persistent state. If you need the state lifetime
-/// tied to a Rust owner instead, store an [`OwnedMutableState`] or call
-/// [`MutableState::retain`] on a handle returned by [`rememberMutableStateOf`].
+/// A state made while a [`remember`] is building its value belongs to that
+/// slot and is released with it, which is what lets the struct above be
+/// remembered whole. Made anywhere else it is owned by the runtime and lives
+/// as long as the runtime does; to tie that to a Rust owner instead, store an
+/// [`OwnedMutableState`] or call [`MutableState::retain`] on the handle.
 #[allow(non_snake_case)]
-pub fn mutableStateOf<T: Clone + 'static>(initial: T) -> MutableState<T> {
-    let runtime = composer_context::try_with_composer(|composer| composer.runtime_handle())
-        .or_else(runtime::current_runtime_handle)
-        .expect("mutableStateOf requires an active runtime. Create state inside a composition or after a Runtime is created.");
-    runtime.alloc_persistent_state(initial)
+pub fn mutableStateOf<T: Clone + PartialEq + 'static>(initial: T) -> MutableState<T> {
+    current_runtime("mutableStateOf")
+        .alloc_persistent_state_with_policy(initial, Arc::new(StructuralEqual))
+}
+
+/// Like [`mutableStateOf`], for a value that cannot be compared or whose every
+/// write must count as a change.
+///
+/// This is Jetpack Compose's `neverEqualPolicy()`, and the non-remembered form
+/// of [`rememberMutableStateOfNeverEqual`].
+#[allow(non_snake_case)]
+pub fn mutableStateOfNeverEqual<T: Clone + 'static>(initial: T) -> MutableState<T> {
+    current_runtime("mutableStateOfNeverEqual").alloc_persistent_state(initial)
 }
 
 #[allow(non_snake_case)]
-pub fn ownedMutableStateOf<T: Clone + 'static>(initial: T) -> OwnedMutableState<T> {
-    let runtime = composer_context::try_with_composer(|composer| composer.runtime_handle())
+pub fn ownedMutableStateOf<T: Clone + PartialEq + 'static>(initial: T) -> OwnedMutableState<T> {
+    OwnedMutableState::with_runtime_structural_eq(initial, current_runtime("ownedMutableStateOf"))
+}
+
+/// Like [`ownedMutableStateOf`], for a value that cannot be compared.
+#[allow(non_snake_case)]
+pub fn ownedMutableStateOfNeverEqual<T: Clone + 'static>(initial: T) -> OwnedMutableState<T> {
+    OwnedMutableState::with_runtime(initial, current_runtime("ownedMutableStateOfNeverEqual"))
+}
+
+fn current_runtime(what: &str) -> runtime::RuntimeHandle {
+    composer_context::try_with_composer(|composer| composer.runtime_handle())
         .or_else(runtime::current_runtime_handle)
-        .expect("ownedMutableStateOf requires an active runtime. Create state inside a composition or after a Runtime is created.");
-    OwnedMutableState::with_runtime(initial, runtime)
+        .unwrap_or_else(|| {
+            panic!(
+                "{what} requires an active runtime. Create state inside a composition or after a Runtime is created."
+            )
+        })
 }
 
 /// Like [`mutableStateOf`] but returns `None` if no runtime is available.
@@ -168,10 +202,10 @@ pub fn ownedMutableStateOf<T: Clone + 'static>(initial: T) -> OwnedMutableState<
 /// Use this when you want to lazily initialize reactive state and gracefully
 /// handle the case where the runtime isn't yet available.
 #[allow(non_snake_case)]
-pub fn try_mutableStateOf<T: Clone + 'static>(initial: T) -> Option<MutableState<T>> {
+pub fn try_mutableStateOf<T: Clone + PartialEq + 'static>(initial: T) -> Option<MutableState<T>> {
     let runtime = composer_context::try_with_composer(|composer| composer.runtime_handle())
         .or_else(runtime::current_runtime_handle)?;
-    Some(runtime.alloc_persistent_state(initial))
+    Some(runtime.alloc_persistent_state_with_policy(initial, Arc::new(StructuralEqual)))
 }
 
 #[allow(non_snake_case)]

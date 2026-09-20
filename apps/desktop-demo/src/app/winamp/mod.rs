@@ -139,20 +139,21 @@ enum WinampInitialWindowPosition {
 
 #[composable]
 pub(crate) fn remember_winamp_tab_state() -> WinampTabState {
-    WinampTabState {
-        player: cranpose_core::rememberMutableStateOf(WinampState::default),
-        detached: cranpose_core::rememberMutableStateOf(native_winamp_windows_available),
+    cranpose_core::remember(|| WinampTabState {
+        player: cranpose_core::mutableStateOf(WinampState::default()),
+        detached: cranpose_core::mutableStateOf(native_winamp_windows_available()),
         inline_windows: WinampInlineWindowStates {
-            main: cranpose_core::rememberMutableStateOf(|| Point::new(26.0, 22.0)),
-            equalizer: cranpose_core::rememberMutableStateOf(|| Point::new(26.0, 142.0)),
-            playlist: cranpose_core::rememberMutableStateOf(|| Point::new(336.0, 22.0)),
+            main: cranpose_core::mutableStateOf(Point::new(26.0, 22.0)),
+            equalizer: cranpose_core::mutableStateOf(Point::new(26.0, 142.0)),
+            playlist: cranpose_core::mutableStateOf(Point::new(336.0, 22.0)),
         },
         peer_windows: WinampPeerWindowStates {
-            main: rememberWindowState(MAIN_WIDTH, MAIN_HEIGHT),
-            equalizer: rememberWindowState(EQ_WIDTH, EQ_HEIGHT),
-            playlist: rememberWindowState(PLAYLIST_WIDTH, PLAYLIST_HEIGHT),
+            main: WindowState::new(MAIN_WIDTH, MAIN_HEIGHT),
+            equalizer: WindowState::new(EQ_WIDTH, EQ_HEIGHT),
+            playlist: WindowState::new(PLAYLIST_WIDTH, PLAYLIST_HEIGHT),
         },
-    }
+    })
+    .with(|state| *state)
 }
 
 #[composable]
@@ -1429,7 +1430,11 @@ fn WindowDragHandle(drag_target: WinampDragTarget, area: SpriteRect, scale: f32)
 
     match drag_target {
         WinampDragTarget::NativeGroup => {
-            Box(modifier.window_drag_area(), BoxSpec::default(), || {});
+            Box(
+                modifier.window_drag_area(|| {}, || {}),
+                BoxSpec::default(),
+                || {},
+            );
         }
         WinampDragTarget::Inline(window_position) => {
             let drag_offset = cranpose_core::rememberMutableStateOf(|| None::<Point>);

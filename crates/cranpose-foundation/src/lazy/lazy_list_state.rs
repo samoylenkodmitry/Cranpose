@@ -313,61 +313,73 @@ pub fn rememberLazyListStateWithPosition(
     initial_first_visible_item_index: usize,
     initial_first_visible_item_scroll_offset: f32,
 ) -> LazyListState {
-    let scroll_position = LazyListScrollPosition {
-        index: cranpose_core::rememberMutableStateOf(|| initial_first_visible_item_index),
-        scroll_offset: cranpose_core::rememberMutableStateOf(|| {
-            initial_first_visible_item_scroll_offset
-        }),
-        inner: cranpose_core::rememberMutableStateOfNeverEqual(|| {
-            Rc::new(RefCell::new(ScrollPositionInner {
-                current_index: initial_first_visible_item_index,
-                current_scroll_offset: initial_first_visible_item_scroll_offset,
-                last_known_first_item_key: None,
-                nearest_range_state: NearestRangeState::new(initial_first_visible_item_index),
-            }))
-        }),
-    };
-
-    let inner = cranpose_core::rememberMutableStateOfNeverEqual(|| {
-        Rc::new(RefCell::new(LazyListStateInner {
-            scroll_to_be_consumed: 0.0,
-            pending_scroll_to_index: None,
-            layout_info: LazyListLayoutInfo::default(),
-            current_can_scroll_forward: false,
-            current_can_scroll_backward: false,
-            invalidate_callbacks: Vec::new(),
-            next_callback_id: 1,
-            layout_invalidation_callback_id: None,
-            layout_invalidation_node_id: None,
-            total_composed: 0,
-            reuse_count: 0,
-            item_size_cache: std::collections::HashMap::new(),
-            item_size_eviction_queue: BinaryHeap::new(),
-            item_size_clock: 0,
-            average_item_size: super::DEFAULT_ITEM_SIZE_ESTIMATE,
-            total_measured_items: 0,
-            next_measure_cycle_id: 1,
-            next_item_measure_pass_id: 1,
-            prefetch_scheduler: PrefetchScheduler::new(),
-            prefetch_strategy: PrefetchStrategy::default(),
-            last_scroll_direction: 0.0,
-        }))
-    });
-
-    let can_scroll_forward_state = cranpose_core::rememberMutableStateOf(|| false);
-    let can_scroll_backward_state = cranpose_core::rememberMutableStateOf(|| false);
-    let stats_state = cranpose_core::rememberMutableStateOf(LazyLayoutStats::default);
-
-    LazyListState {
-        scroll_position,
-        can_scroll_forward_state,
-        can_scroll_backward_state,
-        stats_state,
-        inner,
-    }
+    cranpose_core::remember(move || {
+        LazyListState::new(
+            initial_first_visible_item_index,
+            initial_first_visible_item_scroll_offset,
+        )
+    })
+    .with(|state| *state)
 }
 
 impl LazyListState {
+    /// A list's scroll states, for code that remembers the list state itself.
+    ///
+    /// Call it inside a `remember` -- [`rememberLazyListState`] is this plus
+    /// the slot -- so that the states belong to that slot and are released
+    /// with it.
+    pub fn new(
+        initial_first_visible_item_index: usize,
+        initial_first_visible_item_scroll_offset: f32,
+    ) -> Self {
+        LazyListState {
+            scroll_position: LazyListScrollPosition {
+                index: cranpose_core::mutableStateOf(initial_first_visible_item_index),
+                scroll_offset: cranpose_core::mutableStateOf(
+                    initial_first_visible_item_scroll_offset,
+                ),
+                inner: cranpose_core::mutableStateOfNeverEqual(Rc::new(RefCell::new(
+                    ScrollPositionInner {
+                        current_index: initial_first_visible_item_index,
+                        current_scroll_offset: initial_first_visible_item_scroll_offset,
+                        last_known_first_item_key: None,
+                        nearest_range_state: NearestRangeState::new(
+                            initial_first_visible_item_index,
+                        ),
+                    },
+                ))),
+            },
+            can_scroll_forward_state: cranpose_core::mutableStateOf(false),
+            can_scroll_backward_state: cranpose_core::mutableStateOf(false),
+            stats_state: cranpose_core::mutableStateOf(LazyLayoutStats::default()),
+            inner: cranpose_core::mutableStateOfNeverEqual(Rc::new(RefCell::new(
+                LazyListStateInner {
+                    scroll_to_be_consumed: 0.0,
+                    pending_scroll_to_index: None,
+                    layout_info: LazyListLayoutInfo::default(),
+                    current_can_scroll_forward: false,
+                    current_can_scroll_backward: false,
+                    invalidate_callbacks: Vec::new(),
+                    next_callback_id: 1,
+                    layout_invalidation_callback_id: None,
+                    layout_invalidation_node_id: None,
+                    total_composed: 0,
+                    reuse_count: 0,
+                    item_size_cache: std::collections::HashMap::new(),
+                    item_size_eviction_queue: BinaryHeap::new(),
+                    item_size_clock: 0,
+                    average_item_size: super::DEFAULT_ITEM_SIZE_ESTIMATE,
+                    total_measured_items: 0,
+                    next_measure_cycle_id: 1,
+                    next_item_measure_pass_id: 1,
+                    prefetch_scheduler: PrefetchScheduler::new(),
+                    prefetch_strategy: PrefetchStrategy::default(),
+                    last_scroll_direction: 0.0,
+                },
+            ))),
+        }
+    }
+
     /// Returns a stable identity pointer for the live inner state allocation.
     ///
     /// The pointer comes from the `Rc` stored inside `inner`, so it remains stable for the
@@ -1181,56 +1193,16 @@ pub mod test_helpers {
         new_lazy_list_state_with_position(0, 0.0)
     }
 
+    // forwards on purpose: the name the lazy-list tests call it by, in about
+    // fifty places; the state itself is built by `LazyListState::new`.
     pub fn new_lazy_list_state_with_position(
         initial_first_visible_item_index: usize,
         initial_first_visible_item_scroll_offset: f32,
     ) -> LazyListState {
-        let scroll_position = LazyListScrollPosition {
-            index: cranpose_core::mutableStateOf(initial_first_visible_item_index),
-            scroll_offset: cranpose_core::mutableStateOf(initial_first_visible_item_scroll_offset),
-            inner: cranpose_core::mutableStateOf(Rc::new(RefCell::new(ScrollPositionInner {
-                current_index: initial_first_visible_item_index,
-                current_scroll_offset: initial_first_visible_item_scroll_offset,
-                last_known_first_item_key: None,
-                nearest_range_state: NearestRangeState::new(initial_first_visible_item_index),
-            }))),
-        };
-
-        let inner = cranpose_core::mutableStateOf(Rc::new(RefCell::new(LazyListStateInner {
-            scroll_to_be_consumed: 0.0,
-            pending_scroll_to_index: None,
-            layout_info: LazyListLayoutInfo::default(),
-            current_can_scroll_forward: false,
-            current_can_scroll_backward: false,
-            invalidate_callbacks: Vec::new(),
-            next_callback_id: 1,
-            layout_invalidation_callback_id: None,
-            layout_invalidation_node_id: None,
-            total_composed: 0,
-            reuse_count: 0,
-            item_size_cache: std::collections::HashMap::new(),
-            item_size_eviction_queue: BinaryHeap::new(),
-            item_size_clock: 0,
-            average_item_size: super::super::DEFAULT_ITEM_SIZE_ESTIMATE,
-            total_measured_items: 0,
-            next_measure_cycle_id: 1,
-            next_item_measure_pass_id: 1,
-            prefetch_scheduler: PrefetchScheduler::new(),
-            prefetch_strategy: PrefetchStrategy::default(),
-            last_scroll_direction: 0.0,
-        })));
-
-        let can_scroll_forward_state = cranpose_core::mutableStateOf(false);
-        let can_scroll_backward_state = cranpose_core::mutableStateOf(false);
-        let stats_state = cranpose_core::mutableStateOf(LazyLayoutStats::default());
-
-        LazyListState {
-            scroll_position,
-            can_scroll_forward_state,
-            can_scroll_backward_state,
-            stats_state,
-            inner,
-        }
+        LazyListState::new(
+            initial_first_visible_item_index,
+            initial_first_visible_item_scroll_offset,
+        )
     }
 }
 
