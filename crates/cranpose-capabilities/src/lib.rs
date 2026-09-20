@@ -21,6 +21,7 @@
 use std::{
     collections::BTreeSet,
     env,
+    ffi::OsString,
     fmt::Write as _,
     fs,
     path::{Path, PathBuf},
@@ -366,26 +367,72 @@ impl<'a> Declaration<'a> {
         let crate_dir = PathBuf::from(
             env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is set for a build script"),
         );
-        let shared = workspace_root(&crate_dir).join("target").join("cranpose");
+        let shared = shared_dir(&crate_dir, env::var_os(CAPABILITIES_DIR));
         fs::create_dir_all(&shared).expect("the shared capabilities directory");
-        write_file(
-            &shared.join(format!("{package}-capabilities.json")),
-            &json(&self.capabilities),
-        );
-        write_file(
-            &shared.join(format!("{package}-permissions.xml")),
-            &android_manifest(&self.capabilities),
-        );
-        write_file(
-            &shared.join(format!("{package}-usage.plist")),
-            &apple_usage(&self.capabilities),
-        );
+        let outputs = shared_outputs(&shared, &package);
+        let contents = [
+            json(&self.capabilities),
+            android_manifest(&self.capabilities),
+            apple_usage(&self.capabilities),
+        ];
+        for (path, text) in outputs.iter().zip(contents.iter()) {
+            write_file(path, text);
+        }
         println!("cargo::rerun-if-changed=build.rs");
+        println!("cargo::rerun-if-env-changed={CAPABILITIES_DIR}");
+        for directive in rerun_directives(&outputs) {
+            println!("{directive}");
+        }
     }
+}
+
+/// The files [`Declaration::emit`] writes outside `OUT_DIR`.
+///
+/// They go where every platform build reads them, which is also where anything
+/// that reclaims build artifacts can remove them.
+fn shared_outputs(shared: &Path, package: &str) -> [PathBuf; 3] {
+    [
+        shared.join(format!("{package}-capabilities.json")),
+        shared.join(format!("{package}-permissions.xml")),
+        shared.join(format!("{package}-usage.plist")),
+    ]
+}
+
+/// Tells cargo that these files are this build script's outputs.
+///
+/// Cargo does not know what a build script writes outside `OUT_DIR`, and a
+/// path named to `rerun-if-changed` counts as changed when it is missing. So
+/// naming them is what makes a deleted declaration come back: without it,
+/// cargo reads an unchanged `build.rs`, skips the script, and the tree keeps
+/// building without the permissions XML that carries SYSTEM_ALERT_WINDOW and
+/// VIBRATE into the merged Android manifest. The Android release APK then
+/// fails `cranposeReleaseManifestCheck` on every run in that workspace,
+/// because nothing will ever write the file again.
+fn rerun_directives(outputs: &[PathBuf]) -> Vec<String> {
+    outputs
+        .iter()
+        .map(|path| format!("cargo::rerun-if-changed={}", path.display()))
+        .collect()
 }
 
 fn write_file(path: &Path, text: &str) {
     fs::write(path, text).unwrap_or_else(|error| panic!("writing {}: {error}", path.display()));
+}
+
+/// Names the directory the declaration is written into.
+///
+/// A platform build sets it, because the build knows the tree it drives. A
+/// plain `cargo build` does not, and the declaration then goes to
+/// `<workspace>/target/cranpose`.
+const CAPABILITIES_DIR: &str = "CRANPOSE_CAPABILITIES_DIR";
+
+/// Where the declaration goes: the directory the build named, or the one under
+/// the workspace this crate belongs to.
+fn shared_dir(crate_dir: &Path, named: Option<OsString>) -> PathBuf {
+    match named.filter(|value| !value.is_empty()) {
+        Some(value) => PathBuf::from(value),
+        None => workspace_root(crate_dir).join("target").join("cranpose"),
+    }
 }
 
 /// The workspace this crate belongs to, found from its own directory.
@@ -612,6 +659,24 @@ mod tests {
     }
 
     #[test]
+    fn the_build_names_where_the_declaration_goes() {
+        let named = shared_dir(
+            Path::new("/checkout/crates/app"),
+            Some(OsString::from("/checkout/target/cranpose")),
+        );
+        assert_eq!(named, PathBuf::from("/checkout/target/cranpose"));
+    }
+
+    #[test]
+    fn an_empty_name_is_no_name() {
+        let crate_dir = Path::new("/checkout/crates/app");
+        assert_eq!(
+            shared_dir(crate_dir, Some(OsString::new())),
+            shared_dir(crate_dir, None)
+        );
+    }
+
+    #[test]
     fn apple_takes_only_the_services_it_shows_a_sentence_for() {
         let text = apple_usage(&SCANNER);
         assert!(text.starts_with("<?xml"));
@@ -666,6 +731,69 @@ mod tests {
         assert_eq!(
             found_workspace(crate_dir, &|_| false),
             Path::new("/w/single")
+        );
+    }
+
+    #[test]
+    fn the_declaration_is_three_files_beside_the_generated_source() {
+        let outputs = shared_outputs(Path::new("/w/target/cranpose"), "desktop-app-platform");
+        let names: Vec<String> = outputs
+            .iter()
+            .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                "desktop-app-platform-capabilities.json",
+                "desktop-app-platform-permissions.xml",
+                "desktop-app-platform-usage.plist",
+            ]
+        );
+    }
+
+    #[test]
+    fn every_file_written_outside_out_dir_is_named_to_cargo() {
+        let outputs = shared_outputs(Path::new("/w/target/cranpose"), "example");
+        let directives = rerun_directives(&outputs);
+        assert_eq!(
+            directives.len(),
+            outputs.len(),
+            "a file cargo is not told about is a file nothing will rewrite once it is gone"
+        );
+        for path in &outputs {
+            let expected = format!("cargo::rerun-if-changed={}", path.display());
+            assert!(
+                directives.contains(&expected),
+                "{} is written but never named to cargo: {directives:?}",
+                path.display()
+            );
+        }
+    }
+
+    /// The coupling is the guard: a file written outside [`shared_outputs`]
+    /// would not appear in [`rerun_directives`] either, and deleting it would
+    /// break the Android manifest check permanently in that workspace.
+    #[test]
+    fn emit_writes_the_shared_files_only_through_the_named_list() {
+        let source = include_str!("lib.rs");
+        let emit = source
+            .split_once("pub fn emit(self)")
+            .expect("emit is still a function")
+            .1
+            .split_once("\n}")
+            .expect("emit still ends")
+            .0;
+        for name in ["-capabilities.json", "-permissions.xml", "-usage.plist"] {
+            assert!(
+                !emit.contains(name),
+                "emit names {name} directly instead of going through shared_outputs, \
+                 so cargo is never told the file exists"
+            );
+        }
+        assert!(
+            emit.contains("shared_outputs(&shared, &package)")
+                && emit.contains("rerun_directives(&outputs)"),
+            "emit must write and announce the same list of files"
         );
     }
 }

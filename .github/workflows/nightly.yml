@@ -1,0 +1,127 @@
+name: Nightly
+
+# Everything whose answer is worth having but not worth waiting for.
+#
+# The rest of the board answers a push in about two minutes. What lands here
+# is the work that cannot, for one of two reasons:
+#
+#   * It measures. The robot suite's load-sensitive examples run one at a
+#     time on a machine emptied by the exclusive host lock -- thirteen
+#     minutes when it goes well, and on samarch-1 it often does not, because
+#     that box carries nineteen other repositories' runners and the Cranpose
+#     lock cannot reach them. A push-time run sat in `load_1m=23.90 over 7.20
+#     on 12 cpus` waiting out a neighbour's build, and the quiet guard
+#     eventually proceeds anyway printing "TREAT ANY TIMING FAILURE BELOW AS
+#     UNMEASURED". Slow AND unreliable. At night the box is quiet, which is
+#     the only time the number means what it says.
+#
+#   * It is slow and it moves slowly. Architecture budgets are five minutes
+#     of `cargo check --workspace --all-features` guarding a property that
+#     changes a few times a year, and they spend those minutes on the two
+#     Linux slots the robot suite cannot run without.
+#
+# Nothing here gates a merge. A red nightly is a bug report against main, and
+# the tree it names is still the tree everything else went green on.
+on:
+  schedule:
+    # 03:07 UTC. GitHub runs scheduled workflows in UTC regardless of where
+    # the fleet sits, and only from the default branch. Off the hour on
+    # purpose: every scheduled workflow on the planet asks for :00.
+    - cron: "7 3 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Run even if tonight's nightly already succeeded"
+        type: boolean
+        default: false
+
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+# `decide` reads this workflow's own run history.
+permissions:
+  contents: read
+  actions: read
+
+env:
+  CARGO_TERM_COLOR: always
+  SCCACHE_CACHE_SIZE: 40G
+  CARGO_INCREMENTAL: "0"
+  MACOSX_DEPLOYMENT_TARGET: "12.0"
+
+jobs:
+  # GitHub's schedule is free and unreliable: on the night this was added it
+  # was seventeen minutes late and then never arrived at all, with the
+  # workflow active, the cron valid and the file on the default branch. A
+  # crontab on samarch-1 dispatches this board as well, so that a night is
+  # only lost if both GitHub's scheduler and that box are down.
+  #
+  # Two triggers would otherwise run the whole suite twice on the two Linux
+  # slots, so whichever arrives second asks whether tonight is already covered
+  # and becomes a fifteen-second no-op. A failed run is not covered -- a retry
+  # is what should happen.
+  decide:
+    name: decide whether tonight's nightly already ran
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.check.outputs.run }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Check whether tonight's nightly already ran
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+          FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.force }}
+        run: |
+          set -euo pipefail
+          args=(--repo "$REPO" --sha "$SHA" --run-id "$RUN_ID")
+          if [ "$FORCE" = "true" ]; then
+            args+=(--force)
+          fi
+          bash scripts/ci/nightly_should_run.sh "${args[@]}" >> "$GITHUB_OUTPUT"
+
+  robot-suite:
+    name: robot suite, both halves (linux)
+    needs: decide
+    if: needs.decide.outputs.run == 'true'
+    runs-on: [self-hosted, Linux, cranpose-heavy]
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Configure machine-local knobs
+        env:
+          RUNNER_NAME: ${{ runner.name }}
+        run: |
+          # Match the host's runner-name prefix, not one runner's exact name:
+          # every runner registered on samarch-1 shares it.
+          if [[ "$RUNNER_NAME" == samarch-1-cranpose* ]]; then
+            echo "CRANPOSE_HOST_MAX_TEMP_C=97" >> "$GITHUB_ENV"
+            echo "CRANPOSE_HOST_RESUME_TEMP_C=93" >> "$GITHUB_ENV"
+            echo "SCCACHE_DIR=/home/s/ci-cache/cranpose/sccache" >> "$GITHUB_ENV"
+          fi
+          echo "$(eval echo "~$(id -un)")/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Provision toolchain
+        id: provision
+        run: scripts/ci/provision_toolchain.sh
+
+      # The serial class only. The 100 parallel-class examples ran on the
+      # merge board for this same commit, in `robot-linux-fast`; running them
+      # again here checks nothing new and costs both Linux slots the build of
+      # 100 extra example crates. 78 + 100 = 178, so nothing goes unrun --
+      # the two boards partition the suite rather than overlap it.
+      - name: Run the robot suite's measuring half
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
+        run: just robot-linux serial
+
+      - name: sccache stats
+        if: always()
+        run: '"$RUSTC_WRAPPER" --show-stats || true'

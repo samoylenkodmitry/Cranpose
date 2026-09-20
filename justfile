@@ -157,6 +157,9 @@ clippy-android:
 
 # Unit tests for the diff-scoping logic itself -- synthetic diffs and
 # synthetic tool output, no git history or external tool required.
+# The gates' own tests. `ci` does not name this and neither does the lint
+# board: xtask is a workspace member, so `just test` already runs exactly
+# these. Kept as its own recipe for running them alone while changing a gate.
 test-quality-gates:
     cargo test -p xtask
 
@@ -187,6 +190,8 @@ ci-contract-gates:
     scripts/ci/robot_worker_contract_test.sh
     scripts/ci/pr_budget_test.sh
     scripts/ci/terminate_descendants_test.sh
+    scripts/ci/cancel_pr_runs_test.sh
+    scripts/ci/nightly_should_run_test.sh
 
 # Point git at the repository's hooks. Once per clone.
 hooks:
@@ -207,7 +212,8 @@ hooks:
 # as a step that stops its job -- one problem hides the rest, and the fix
 # costs a full second run to find the second one.
 test: _disk-guard
-    cargo test --profile ci --workspace --no-fail-fast
+    cargo nextest run --cargo-profile ci --workspace --no-fail-fast
+    cargo test --profile ci --workspace --doc
 
 # Feature permutations that the default build does not cover.
 test-features:
@@ -644,7 +650,7 @@ _disk-guard:
 # all seven on every pull request.
 
 # What a pull request is gated on. Run this before pushing.
-ci: fmt-check typos versions test clippy clippy-optional-backends clippy-svg clippy-hyphenation clippy-robot clippy-wasm doc budgets test-quality-gates complexity-gate duplication-gate test-robot-discovery test-shell-helpers test-host-lock test-ci-filters test-features test-property bench-smoke test-ci-gate-reachability test-robot-suite-partition test-android-accessibility-contract
+ci: fmt-check typos versions test clippy clippy-optional-backends clippy-svg clippy-hyphenation clippy-robot clippy-wasm doc budgets complexity-gate duplication-gate test-robot-discovery test-shell-helpers test-host-lock test-ci-filters test-features test-property bench-smoke test-ci-gate-reachability test-robot-suite-partition test-android-accessibility-contract
 
 # Needs a Linux box with the X11 stack, an Android SDK and (on macOS) Xcode.
 

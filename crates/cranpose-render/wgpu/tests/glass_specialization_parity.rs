@@ -257,11 +257,20 @@ fn the_card_material_raises_most_specialization_flags() {
     ) else {
         panic!("liquid glass must be one runtime shader");
     };
+    // Ask for folds rather than inherit them. `liquid_glass_effect` specializes
+    // with the process-wide `GLASS_MATERIAL_FOLDS`, which is false off Android
+    // until something calls `set_glass_material_folds(true)` -- which
+    // `tests/support.rs` does when a sibling here builds a renderer. This test
+    // passed only because it ran after one of them in the same process: alone
+    // it raised 0 of 20 flags. Every test of the folds inside
+    // cranpose-ui-graphics already asks the same way.
+    let mut shader = (*shader).clone();
+    cranpose_ui_graphics::specialize_liquid_glass_with_folds(&mut shader, true);
     let raised = shader.overrides().len();
     assert!(
         raised >= LIQUID_GLASS_SPECIALIZATIONS.len() - 3,
-        "a plain glass pane leaves almost every optional feature inactive; only {raised} of \
-         {} flags were raised: {:?}",
+        "a card material with folds on should raise almost every optional feature; only \
+         {raised} of {} were raised: {:?}",
         LIQUID_GLASS_SPECIALIZATIONS.len(),
         shader.overrides()
     );

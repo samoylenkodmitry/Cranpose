@@ -69,13 +69,38 @@ fn ci_architecture_budget_runs_required_gates() {
     let heavy_workflow = workspace_source(".github/workflows/heavy-selfhosted.yml");
     let release_workflow = workspace_source(".github/workflows/release.yml");
     let pages_workflow = workspace_source(".github/workflows/deploy-pages.yml");
+    let nightly_workflow = workspace_source(".github/workflows/nightly.yml");
     let justfile = workspace_source("justfile");
 
-    assert!(
-        workflow.contains("architecture-budget:")
-            && workflow.contains("name: architecture budgets (linux)"),
-        "Rust CI should keep a dedicated architecture budget job"
-    );
+    // Both of these are short and answer a question about the tree that just
+    // landed, so they run on the merge board rather than hours later. Neither
+    // runs on a pull request, which is what keeps them out of its budget.
+    for (job, name) in [
+        ("architecture-budget:", "name: architecture budgets (linux)"),
+        ("android-apk:", "name: Android release APK (macOS)"),
+    ] {
+        assert!(
+            heavy_workflow.contains(job) && heavy_workflow.contains(name),
+            "{job} should be its own job on the board a merge triggers"
+        );
+        assert!(
+            !nightly_workflow.contains(job),
+            "{job} moved off the nightly board; two boards running it is the duplication \
+             the nightly board was just trimmed of"
+        );
+    }
+    let budget_block = workflow_job_block(&heavy_workflow, "architecture-budget");
+    let apk_block = workflow_job_block(&heavy_workflow, "android-apk");
+    for (label, block) in [
+        ("architecture-budget", &budget_block),
+        ("android-apk", &apk_block),
+    ] {
+        assert!(
+            block.contains("if: github.event_name != 'pull_request'"),
+            "{label} must not run on a pull request: it is exactly the string \
+             scripts/ci/pr_budget_test.sh reads as `no pull request waits for this`"
+        );
+    }
 
     for recipe in [
         "run: just fmt-check",
@@ -84,7 +109,6 @@ fn ci_architecture_budget_runs_required_gates() {
         "run: just test",
         "run: just clippy",
         "run: just doc",
-        "run: just budgets",
         "run: just clippy-wasm",
         "run: just web",
     ] {
@@ -93,6 +117,37 @@ fn ci_architecture_budget_runs_required_gates() {
             "Rust CI should invoke `{recipe}` rather than spelling the gate inline"
         );
     }
+
+    assert!(
+        nightly_workflow.contains("run: just robot-linux serial"),
+        "the nightly board should invoke the recipe rather than spelling it inline"
+    );
+
+    // The class, not just the recipe. Every push to main runs the parallel
+    // class in `robot-linux-fast`, so a nightly that asked for `all` would
+    // rebuild and rerun those 100 examples to learn nothing. Matching the bare
+    // recipe name would accept exactly that, because it is a prefix of this.
+    assert!(
+        !nightly_workflow.contains("run: just robot-linux\n")
+            && !nightly_workflow.contains("run: just robot-linux all"),
+        "nightly runs the measuring half only; the parallel class is already covered per push"
+    );
+
+    assert!(
+        !workflow.contains("run: just budgets"),
+        "architecture budgets are not part of the board a pull request waits for"
+    );
+    for recipe in ["run: just budgets", "run: just android"] {
+        assert!(
+            heavy_workflow.contains(recipe),
+            "the merge board should invoke `{recipe}` rather than spelling it inline"
+        );
+    }
+    assert!(
+        !heavy_workflow.contains("run: just robot-linux\n"),
+        "the load-sensitive robot examples belong to the nightly board: they run one at a \
+         time on a machine the exclusive host lock has emptied, which no merge should wait for"
+    );
     let provision = workspace_source("scripts/ci/provision_toolchain.sh");
     assert!(
         workflow.contains("run: scripts/ci/provision_toolchain.sh"),
@@ -161,6 +216,213 @@ fn ci_architecture_budget_runs_required_gates() {
     );
 }
 
+/// Reads a workflow's top-level `concurrency:` block.
+fn workflow_concurrency(name: &str) -> Option<(String, String)> {
+    let workflow = workspace_source(&format!(".github/workflows/{name}"));
+    let mut lines = workflow.lines().skip_while(|line| *line != "concurrency:");
+    lines.next()?;
+    let mut group = String::new();
+    let mut cancel = String::new();
+    for line in lines {
+        if !line.starts_with(' ') {
+            break;
+        }
+        let trimmed = line.trim();
+        if let Some(value) = trimmed.strip_prefix("group:") {
+            group = value.trim().to_string();
+        } else if let Some(value) = trimmed.strip_prefix("cancel-in-progress:") {
+            cancel = value.trim().to_string();
+        }
+    }
+    Some((group, cancel))
+}
+
+#[test]
+fn every_workflow_says_what_happens_when_it_overlaps_itself() {
+    for name in ["rust.yml", "heavy-selfhosted.yml", "build-one.yml"] {
+        let (group, cancel) = workflow_concurrency(name)
+            .unwrap_or_else(|| panic!("{name} must declare a concurrency group"));
+        assert!(
+            group.contains("github.ref"),
+            "{name} groups per ref so a new push supersedes the old one, found {group:?}"
+        );
+        assert_eq!(
+            cancel, "true",
+            "{name} answers a merge; an older commit's answer is dead weight on five runners"
+        );
+    }
+
+    for name in [
+        "nightly.yml",
+        "publish.yml",
+        "release.yml",
+        "deploy-pages.yml",
+        "cancel-superseded.yml",
+    ] {
+        let (group, cancel) = workflow_concurrency(name)
+            .unwrap_or_else(|| panic!("{name} must declare a concurrency group"));
+        assert!(
+            !group.is_empty(),
+            "{name} must name its concurrency group so two of them cannot run at once"
+        );
+        assert_eq!(
+            cancel, "false",
+            "{name} publishes or deploys; killing one halfway leaves the result half written"
+        );
+    }
+}
+
+/// Returns the lines of one job in a workflow, from its key to the next job.
+fn workflow_job_block(workflow: &str, job: &str) -> String {
+    let header = format!("  {job}:");
+    let mut block = Vec::new();
+    let mut inside = false;
+    for line in workflow.lines() {
+        if line == header {
+            inside = true;
+            continue;
+        }
+        if inside {
+            let starts_a_job = line.starts_with("  ")
+                && !line.starts_with("   ")
+                && line.trim_end().ends_with(':');
+            if starts_a_job {
+                break;
+            }
+            block.push(line);
+        }
+    }
+    assert!(
+        inside,
+        "{job} is no longer a job in this workflow; the assertions below would read nothing"
+    );
+    block.join("\n")
+}
+
+#[test]
+fn the_publish_job_checks_out_the_tree_the_tag_names() {
+    // `sync_versions` lands the version bump on the default branch and moves
+    // the tag onto it. Checking out the branch afterwards publishes whatever
+    // main happens to be, which for v0.1.139 was a pull request that merged in
+    // between -- the job stopped at "Tag v0.1.139 does not point to HEAD".
+    let workflow = workspace_source(".github/workflows/publish.yml");
+    let publish = workflow_job_block(&workflow, "publish");
+
+    assert!(
+        publish.contains(
+            "ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
+        ),
+        "the publish job must check out the tag, not the default branch: every release races every merge"
+    );
+    assert!(
+        !publish.contains("ref: ${{ github.event.repository.default_branch }}"),
+        "the publish job must not follow the default branch"
+    );
+
+    // The isolated demo pointer is a commit ON the branch, so that job keeps
+    // checking the branch out. Naming it here says the difference is meant.
+    let isolated = workflow_job_block(&workflow, "bump_isolated_demo");
+    assert!(
+        isolated.contains("ref: ${{ github.event.repository.default_branch }}"),
+        "the job that commits the isolated demo pointer still belongs on the default branch"
+    );
+}
+
+#[test]
+fn the_release_board_can_be_pointed_at_a_tag() {
+    // A Publish that ran from a tag push carries the tag in
+    // `workflow_run.head_branch`. A Publish recovered by dispatch carries
+    // `main`, so this board skipped every job and v0.1.139 got its crates but
+    // no GitHub Release and no binaries -- silently, because skipped is green.
+    let workflow = workspace_source(".github/workflows/release.yml");
+
+    assert!(
+        workflow.contains("  workflow_dispatch:") && workflow.contains("      tag:"),
+        "the release board must be nameable by tag, or a recovered publish leaves no release"
+    );
+
+    let create = workflow_job_block(&workflow, "create-release");
+    assert!(
+        create.contains("^v[0-9]+\\.[0-9]+\\.[0-9]+$"),
+        "a hand-typed tag must be checked for shape before it opens a release under that name"
+    );
+    assert!(
+        create.contains("tag: ${{ github.event_name == 'workflow_dispatch' && inputs.tag"),
+        "create-release must publish the resolved tag as an output for the jobs below it"
+    );
+
+    // One source for the tag. A job reading the event directly is a job that
+    // builds the wrong tree the moment the board is dispatched.
+    for job in ["build", "build-windows", "build-android"] {
+        let block = workflow_job_block(&workflow, job);
+        assert!(
+            block.contains("needs: create-release"),
+            "{job} must depend on create-release to read its tag"
+        );
+        assert!(
+            !block.contains("github.event.workflow_run.head_branch"),
+            "{job} must take the tag from create-release, not from the event that started the board"
+        );
+    }
+}
+
+/// Returns the job keys of a workflow, in file order.
+fn workflow_job_names(workflow: &str) -> Vec<String> {
+    let body = workflow
+        .split_once("\njobs:\n")
+        .expect("a workflow must declare jobs")
+        .1;
+    body.lines()
+        .filter(|line| {
+            line.starts_with("  ")
+                && !line.starts_with("   ")
+                && line.trim_end().ends_with(':')
+                && !line.trim_start().starts_with('#')
+        })
+        .map(|line| line.trim().trim_end_matches(':').to_string())
+        .collect()
+}
+
+#[test]
+fn every_nightly_job_waits_for_the_duplicate_check() {
+    // The nightly board has two triggers on purpose: GitHub's schedule, which
+    // on the night this was written was seventeen minutes late and then never
+    // arrived, and a crontab on samarch-1. A night is lost only if both fail.
+    // The cost of two triggers is that the second one would run the whole
+    // suite again on the two Linux slots, so every job waits on `decide`.
+    let workflow = workspace_source(".github/workflows/nightly.yml");
+
+    assert!(
+        workflow.contains("      force:"),
+        "a human must be able to force the board even when tonight is covered"
+    );
+
+    let decide = workflow_job_block(&workflow, "decide");
+    assert!(
+        decide.contains("runs-on: ubuntu-latest"),
+        "the duplicate check must not take one of the five self-hosted runners"
+    );
+    assert!(
+        decide.contains("run: ${{ steps.check.outputs.run }}")
+            && decide.contains("scripts/ci/nightly_should_run.sh"),
+        "decide must publish the answer the jobs below it read"
+    );
+
+    let names = workflow_job_names(&workflow);
+    assert!(
+        names.len() >= 2 && names.contains(&"decide".to_string()),
+        "expected to inspect every nightly job, saw only {names:?}: the parser has drifted"
+    );
+    for name in names.iter().filter(|name| *name != "decide") {
+        let block = workflow_job_block(&workflow, name);
+        assert!(
+            block.contains("needs: decide")
+                && block.contains("if: needs.decide.outputs.run == 'true'"),
+            "nightly job {name} must wait for the duplicate check, or two triggers run it twice"
+        );
+    }
+}
+
 #[test]
 fn workflow_actions_are_pinned_to_commit_shas() {
     let mut unpinned = Vec::new();
@@ -168,6 +430,8 @@ fn workflow_actions_are_pinned_to_commit_shas() {
     for name in [
         "rust.yml",
         "heavy-selfhosted.yml",
+        "nightly.yml",
+        "cancel-superseded.yml",
         "publish.yml",
         "release.yml",
         "deploy-pages.yml",
@@ -234,7 +498,12 @@ fn release_jobs_require_every_expected_asset() {
 #[test]
 fn release_artifacts_wait_for_publish_to_finalize_the_tag() {
     let workflow = workspace_source(".github/workflows/release.yml");
-    let finalized_tag = "${{ github.event.workflow_run.head_branch }}";
+    // Downstream jobs read one value; create-release resolves it once.
+    let finalized_tag = "${{ needs.create-release.outputs.tag }}";
+    let resolved_tag = concat!(
+        "${{ github.event_name == 'workflow_dispatch' && inputs.tag",
+        " || github.event.workflow_run.head_branch }}"
+    );
 
     assert!(
         workflow.contains("workflow_run:\n    workflows: [\"Publish\"]\n    types: [completed]")
@@ -242,10 +511,9 @@ fn release_artifacts_wait_for_publish_to_finalize_the_tag() {
         "release artifacts must start only after Publish has finalized the release tag"
     );
     assert!(
-        workflow.contains(
-            "if: github.event.workflow_run.conclusion == 'success' && startsWith(github.event.workflow_run.head_branch, 'v')"
-        ),
-        "release artifacts must reject failed Publish runs and non-tag manual runs"
+        workflow.contains("github.event.workflow_run.conclusion == 'success'")
+            && workflow.contains("startsWith(github.event.workflow_run.head_branch, 'v')"),
+        "release artifacts must reject failed Publish runs and a Publish that did not run from a tag"
     );
     assert_eq!(
         workflow.matches(&format!("ref: {finalized_tag}")).count(),
@@ -255,9 +523,12 @@ fn release_artifacts_wait_for_publish_to_finalize_the_tag() {
     assert_eq!(
         workflow
             .matches(&format!("tag_name: {finalized_tag}"))
-            .count(),
+            .count()
+            + workflow
+                .matches(&format!("tag_name: {resolved_tag}"))
+                .count(),
         4,
-        "every release action must explicitly target the finalized tag under workflow_run"
+        "every release action must explicitly target the finalized tag"
     );
     assert!(
         !workflow.contains("github.ref_name"),

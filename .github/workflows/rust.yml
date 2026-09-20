@@ -24,8 +24,6 @@ on:
   pull_request:
     branches: ["main"]
   workflow_dispatch:
-  schedule:
-    - cron: "0 3 * * *"
 
 concurrency:
   group: rust-${{ github.ref }}
@@ -69,10 +67,6 @@ jobs:
       - name: Check for duplicated code in the diff
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
         run: just duplication-gate
-
-      - name: Test the quality gates' diff-scoping logic
-        if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
-        run: just test-quality-gates
 
       - name: Check the docs-only trigger filter
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
@@ -166,46 +160,6 @@ jobs:
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
         # A broken intra-doc link is a broken published page.
         run: just doc
-
-  architecture-budget:
-    name: architecture budgets (linux)
-    # Not on pull requests. `cargo check --workspace --all-features` alone is
-    # five of this job's nine minutes, and it runs on the two Linux slots the
-    # robot suite cannot leave -- so on a pull request it is both the slowest
-    # answer and the one standing in the robot suite's way. Architecture
-    # budgets move slowly; main and nightly are soon enough.
-    if: github.event_name != 'pull_request'
-    # The binary-size budget is pinned against Linux codegen.
-    runs-on: [self-hosted, Linux, cranpose-heavy]
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          # Both parents of the merge commit, for the diff below.
-          fetch-depth: 2
-
-      - name: Detect a docs-only change
-        id: changes
-        # Why a short-circuit and not paths-ignore: see the header.
-        run: scripts/ci/docs_only_change.sh
-
-      - name: Provision toolchain
-        if: steps.changes.outputs.docs_only != 'true'
-        run: scripts/ci/provision_toolchain.sh
-
-      - name: Run the host capacity lock suite
-        if: steps.changes.outputs.docs_only != 'true'
-        # Here rather than on the mac job: this is the machine the lock exists
-        # to protect, and the only one of the two with flock(1), so it is the
-        # only place the lock cases run at all. Takes no host lock itself --
-        # it drives a private pair of lock files under a scratch directory.
-        run: just test-host-lock
-
-      - name: Check architecture budgets
-        if: steps.changes.outputs.docs_only != 'true'
-        # Featureless and all-features builds, the per-backend winit checks, the
-        # duplicate-dependency budgets and the desktop binary-size ceiling.
-        run: just budgets
 
   wasm-build:
     name: wasm build

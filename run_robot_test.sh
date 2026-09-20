@@ -553,11 +553,55 @@ for example in "${EXAMPLES[@]}"; do
     fi
 done
 
+# The class filter decides what gets built, not just what gets run.
+#
+# Every example is its own crate, and at opt-level 2 each one codegens its own
+# copy of everything it instantiates out of the engine: 178 of them took 10m12s
+# of the robot job's 11m41s build on samarch-1, and the pull-request half then
+# ran 100 of them in 55 seconds. Compiling the other 78 bought nothing. It did
+# not even buy compile coverage -- `just clippy-robot` type-checks all 178 with
+# `--features robot-app` on the mac board, which is where a robot runner that
+# stopped compiling gets caught.
+CLASSIFIED_EXAMPLES=("${EXAMPLES[@]}")
+if [ "$RUN_CLASSES" = "serial" ]; then
+    PARALLEL_EXAMPLES=()
+fi
+if [ "$RUN_CLASSES" = "parallel" ]; then
+    SERIAL_EXAMPLES=()
+fi
+if [ "$RUN_CLASSES" != "all" ]; then
+    EXAMPLES=(
+        ${PARALLEL_EXAMPLES[@]+"${PARALLEL_EXAMPLES[@]}"}
+        ${SERIAL_EXAMPLES[@]+"${SERIAL_EXAMPLES[@]}"}
+    )
+fi
+
+# A class filter that removes everything is legitimate -- `robot-captures`
+# asked for the parallel class and all four of its examples measure -- but a
+# run that reports "Total: 0, Passed: 0" and exits zero reads exactly like a
+# run that checked something. It did not, and CI believed it for a whole
+# board. Say so in a line nobody can mistake for a pass, and say it before
+# spending a build on it.
+if [ ${#EXAMPLES[@]} -eq 0 ]; then
+    {
+        echo "============================================"
+        echo "NOTHING RAN: none of the ${#CLASSIFIED_EXAMPLES[@]} selected example(s) are in class"
+        echo "'$RUN_CLASSES', so this invocation checked nothing at all."
+        echo "This is not a pass. The examples it would have run are:"
+        for example in "${CLASSIFIED_EXAMPLES[@]}"; do
+            echo "  $example"
+        done
+        echo "============================================"
+    } | tee -a "$LOG_FILE"
+    exit 0
+fi
+
 BUILD_ARGS=(--profile "$ROBOT_PROFILE" --package desktop-app --features robot-app)
 if [ ${#EXAMPLES[@]} -eq 1 ]; then
     BUILD_ARGS+=(--example "${EXAMPLES[0]}")
-elif [ ${#SELECTED_EXAMPLES[@]} -gt 0 ] || [ -n "$SHARD_INDEX" ] \
-    || [ ${#CAPABILITY_SKIPPED_EXAMPLES[@]} -gt 0 ]; then
+elif [ ${#SELECTED_EXAMPLES[@]} -gt 0 ] || [ ${#SKIPPED_EXAMPLES[@]} -gt 0 ] \
+    || [ -n "$SHARD_INDEX" ] || [ ${#CAPABILITY_SKIPPED_EXAMPLES[@]} -gt 0 ] \
+    || [ "$RUN_CLASSES" != "all" ]; then
     for example in "${EXAMPLES[@]}"; do
         BUILD_ARGS+=(--example "$example")
     done
@@ -1128,13 +1172,6 @@ run_example_list() {
         sleep 0.1
     done
 }
-
-if [ "$RUN_CLASSES" = "serial" ]; then
-    PARALLEL_EXAMPLES=()
-fi
-if [ "$RUN_CLASSES" = "parallel" ]; then
-    SERIAL_EXAMPLES=()
-fi
 
 run_example_list parallel ${PARALLEL_EXAMPLES[@]+"${PARALLEL_EXAMPLES[@]}"}
 
