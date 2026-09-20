@@ -51,10 +51,6 @@ fn with_request_test_registry<R>(f: impl FnOnce(&Rc<NativeWindowRegistry>) -> R)
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
-fn reset_request_test_state(registry: &NativeWindowRegistry) {
-    clear_native_window_requests(registry);
-}
-
 #[cfg(all(
     feature = "desktop-shell",
     feature = "renderer-wgpu",
@@ -255,7 +251,7 @@ fn KeyedReplacementRequestRoot(show: cranpose_core::MutableState<bool>) {
 #[test]
 fn native_window_request_survives_unrelated_scoped_recompose() {
     let mut test = request_test_composition();
-    reset_request_test_state(&test.registry);
+    clear_native_window_requests(&test.registry);
     let counter = cranpose_core::MutableState::with_runtime(0i32, test.runtime.handle());
     let root_key = cranpose_core::location_key(file!(), line!(), column!());
     test.with_registry(|composition| {
@@ -288,7 +284,7 @@ fn native_window_request_survives_unrelated_scoped_recompose() {
 #[test]
 fn native_window_request_unregisters_when_conditional_declaration_is_removed() {
     let mut test = request_test_composition();
-    reset_request_test_state(&test.registry);
+    clear_native_window_requests(&test.registry);
     let show = cranpose_core::MutableState::with_runtime(true, test.runtime.handle());
     let root_key = cranpose_core::location_key(file!(), line!(), column!());
     test.with_registry(|composition| {
@@ -321,7 +317,7 @@ fn native_window_request_unregisters_when_conditional_declaration_is_removed() {
 #[test]
 fn native_window_request_unregisters_when_keyed_branch_is_replaced() {
     let mut test = request_test_composition();
-    reset_request_test_state(&test.registry);
+    clear_native_window_requests(&test.registry);
     let show = cranpose_core::MutableState::with_runtime(true, test.runtime.handle());
     let root_key = cranpose_core::location_key(file!(), line!(), column!());
     test.with_registry(|composition| {
@@ -619,7 +615,7 @@ fn drag_area_callbacks_follow_accepted_native_drag_lifecycle() {
     let (_app_context, _app_context_scope) = test_app_context_scope();
     let started = Rc::new(Cell::new(0));
     let finished = Rc::new(Cell::new(0));
-    let modifier = Modifier::empty().window_drag_area_with_callbacks(
+    let modifier = Modifier::empty().window_drag_area(
         {
             let started = Rc::clone(&started);
             move || started.set(started.get() + 1)

@@ -304,7 +304,7 @@ fn TabStrip(
                 Modifier::empty()
                     .weight(1.0)
                     .fill_max_height()
-                    .window_drag_area(),
+                    .window_drag_area(|| {}, || {}),
                 BoxSpec::default(),
                 || {},
             );
@@ -422,7 +422,7 @@ fn tab_grip(
     let Some((window, windows)) = alone else {
         return modifier.drag_and_drop_source(source);
     };
-    modifier.window_drag_area_with_callbacks(
+    modifier.window_drag_area(
         || {},
         move || {
             let Some(onto) = windows.get_non_reactive().strip_laid_over(window) else {

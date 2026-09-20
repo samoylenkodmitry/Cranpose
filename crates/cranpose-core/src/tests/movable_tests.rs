@@ -255,6 +255,8 @@ fn movable_content_arrives_when_the_old_parent_releases_it_a_pass_later() {
     assert_eq!(composition.debug_slot_snapshot().retained_subtree_count, 0);
 }
 
+// forwards on purpose: a scope of its own around the movable content, so the
+// test has a parent that can be skipped while the content it holds is restored.
 #[composable]
 fn framed_movable_content() {
     movable_content();
@@ -448,6 +450,8 @@ fn leaf(counter: MutableState<i32>) {
     }
 }
 
+// forwards on purpose: likewise a scope, so the test can ask whether
+// recomposition reaches through it.
 #[composable]
 fn inner(counter: MutableState<i32>) {
     leaf(counter);
@@ -678,4 +682,59 @@ fn movable_content_crosses_into_a_subcomposition_and_back() {
         0,
         "and neither must the subcomposition's"
     );
+}
+
+#[test]
+fn movable_content_written_once_moves_between_parents() {
+    let mut composition = test_composition();
+    let in_first = MutableState::with_runtime(true, composition.runtime_handle());
+    let holders = TwoHolders::default();
+    let root_key = location_key(file!(), line!(), column!());
+    let render = |composition: &mut Composition<MemoryApplier>| {
+        let holders = holders.clone();
+        composition
+            .render(root_key, move || {
+                probe().reset_pass();
+                // The body appears once. Which parent shows it is the only
+                // thing the two branches differ in.
+                let pane = rememberMovableContentOf(movable_content);
+                let first = holder_showing(in_first.value(), pane.clone());
+                let second = holder_showing(!in_first.value(), pane);
+                holders.first.set(Some(first));
+                holders.second.set(Some(second));
+            })
+            .expect("render movable content held as a value");
+        assert_composition_valid(composition);
+    };
+
+    render(&mut composition);
+    let probe = probe();
+    let (first, second) = holders.ids();
+    let node = probe.node();
+    probe.seed_remembered(17);
+    assert_eq!(parent_children(&mut composition, first), vec![node]);
+    assert!(parent_children(&mut composition, second).is_empty());
+
+    in_first.set_value(false);
+    render(&mut composition);
+    probe.assert_untouched(node, 17, "after the other parent showed it");
+    assert!(parent_children(&mut composition, first).is_empty());
+    assert_eq!(parent_children(&mut composition, second), vec![node]);
+    assert_eq!(composition.debug_slot_snapshot().retained_subtree_count, 0);
+
+    in_first.set_value(true);
+    render(&mut composition);
+    probe.assert_untouched(node, 17, "and back again");
+    assert_eq!(parent_children(&mut composition, first), vec![node]);
+}
+
+#[composable]
+fn holder_showing(show: bool, pane: MovableContent) -> NodeId {
+    let id = with_current_composer(|composer| composer.emit_node(RecordingNode::default));
+    cranpose_core::push_parent(id);
+    if show {
+        pane.show();
+    }
+    cranpose_core::pop_parent();
+    id
 }

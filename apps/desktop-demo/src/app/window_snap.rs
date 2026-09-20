@@ -3,8 +3,8 @@
 use std::collections::HashMap;
 
 use cranpose::WindowState;
-use cranpose_core::{rememberMutableStateOf, MutableState};
-use cranpose_ui::{composable, Point, Size};
+use cranpose_core::MutableState;
+use cranpose_ui::{Point, Size};
 
 /// How near an edge has to come before the window lines up with it.
 pub const SNAP_REACH: f32 = 12.0;
@@ -105,71 +105,63 @@ fn meet(a: f32, b: f32) -> bool {
     (a - b).abs() <= ATTACH_EPSILON
 }
 
-/// Windows that line up with each other and travel together.
+/// Where each window came to rest the last time it was let go, which is what
+/// tells the next move which of its neighbours were lined up with it.
 ///
-/// Hand [`SnapSet::window_moved`] to each window's `on_moved`, with the
-/// states of every window that can snap. Cranpose reports only the moves the
-/// application did not ask for, so what arrives here is the person dragging.
-#[derive(Clone, Copy, PartialEq)]
-pub struct SnapSet {
-    resting: MutableState<HashMap<u64, Point>>,
+/// Remember one of these per set of windows that snap together, with
+/// `rememberMutableStateOf(HashMap::new)`.
+pub type RestingPlaces = MutableState<HashMap<u64, Point>>;
+
+/// Forgets a window that is no longer on screen.
+pub fn forget(resting: RestingPlaces, key: u64) {
+    if resting.get_non_reactive().contains_key(&key) {
+        resting.update(|resting| {
+            resting.remove(&key);
+        });
+    }
 }
 
-#[composable]
-pub fn rememberSnapSet() -> SnapSet {
-    SnapSet {
-        resting: rememberMutableStateOf(HashMap::new),
-    }
-}
+/// Lines a moved window up with its neighbours and carries the ones attached
+/// to it along.
+///
+/// Call it from a window's `on_moved` with the states of every window that can
+/// snap. Cranpose reports only the moves the application did not ask for, so
+/// what arrives here is the person dragging.
+pub fn window_moved(resting: RestingPlaces, moved: u64, to: Point, windows: &[(u64, WindowState)]) {
+    let panes = panes_with(moved, to, windows);
+    let Some(moving) = panes.get(&moved).copied() else {
+        return;
+    };
+    let was = resting.get_non_reactive().get(&moved).copied();
+    let carried = was.map_or_else(Vec::new, |was| {
+        let mut before = panes.clone();
+        before.insert(
+            moved,
+            Pane {
+                origin: was,
+                size: moving.size,
+            },
+        );
+        carried_by(moved, &before)
+    });
+    let loose: Vec<Pane> = panes
+        .iter()
+        .filter(|(key, _)| **key != moved && !carried.contains(key))
+        .map(|(_, pane)| *pane)
+        .collect();
+    let lined_up = lined_up_with_neighbours(moving, &loose);
+    let delta = was.map_or(Point::new(0.0, 0.0), |was| {
+        Point::new(lined_up.x - was.x, lined_up.y - was.y)
+    });
 
-impl SnapSet {
-    /// Forgets a window that is no longer on screen.
-    pub fn forget(self, key: u64) {
-        if self.resting.get_non_reactive().contains_key(&key) {
-            self.resting.update(|resting| {
-                resting.remove(&key);
-            });
+    for (key, state) in windows {
+        if *key == moved {
+            state.set_position(Some(lined_up));
+        } else if carried.contains(key) {
+            state.translate(delta.x, delta.y);
         }
     }
-
-    /// Call from a window's `on_moved` with every window that can snap.
-    pub fn window_moved(self, moved: u64, to: Point, windows: &[(u64, WindowState)]) {
-        let panes = panes_with(moved, to, windows);
-        let Some(moving) = panes.get(&moved).copied() else {
-            return;
-        };
-        let was = self.resting.get_non_reactive().get(&moved).copied();
-        let carried = was.map_or_else(Vec::new, |was| {
-            let mut before = panes.clone();
-            before.insert(
-                moved,
-                Pane {
-                    origin: was,
-                    size: moving.size,
-                },
-            );
-            carried_by(moved, &before)
-        });
-        let loose: Vec<Pane> = panes
-            .iter()
-            .filter(|(key, _)| **key != moved && !carried.contains(key))
-            .map(|(_, pane)| *pane)
-            .collect();
-        let lined_up = lined_up_with_neighbours(moving, &loose);
-        let delta = was.map_or(Point::new(0.0, 0.0), |was| {
-            Point::new(lined_up.x - was.x, lined_up.y - was.y)
-        });
-
-        for (key, state) in windows {
-            if *key == moved {
-                state.set_position(Some(lined_up));
-            } else if carried.contains(key) {
-                state.translate(delta.x, delta.y);
-            }
-        }
-        self.resting
-            .update(|resting| resting.extend(resting_places(moved, lined_up, windows)));
-    }
+    resting.update(|resting| resting.extend(resting_places(moved, lined_up, windows)));
 }
 
 fn panes_with(moved: u64, to: Point, windows: &[(u64, WindowState)]) -> HashMap<u64, Pane> {

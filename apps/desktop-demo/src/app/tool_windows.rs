@@ -1,9 +1,11 @@
 #![allow(non_snake_case)]
 
+use std::{cell::Cell, collections::HashMap, rc::Rc};
+
 use cranpose::{
     rememberWindowStateAt, LocalWindowState, WindowConfig, WindowModifierExt, WindowState,
 };
-use cranpose_core::{key, movable, rememberMutableStateOf, MutableState};
+use cranpose_core::{key, rememberMutableStateOf, MutableState};
 use cranpose_ui::{
     composable, Box, BoxSpec, Color, Column, ColumnSpec, Modifier, Point, PointerEvent,
     PointerEventKind, PointerInputScope, Row, RowSpec, Size, Text, VerticalAlignment,
@@ -12,7 +14,7 @@ use cranpose_ui::{
 use super::{
     chrome_tabs::{label_style, CHROME, INK},
     demo_trace::trace,
-    window_snap::{rememberSnapSet, SnapSet},
+    window_snap,
 };
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -95,7 +97,7 @@ pub fn tool_windows_app() {
             .collect::<Vec<_>>()
             .join(",")
     );
-    let snap = rememberSnapSet();
+    let resting = rememberMutableStateOf(HashMap::new);
     let mut windows = Vec::new();
     for tool in tools() {
         let origin = snapshot
@@ -106,68 +108,67 @@ pub fn tool_windows_app() {
             rememberWindowStateAt(origin.x, origin.y, tool.size.width, tool.size.height),
         ));
     }
-    let inline = snapshot.clone();
     Column(
         Modifier::empty().background(CHROME),
         ColumnSpec::default(),
         move || {
-            for tool in tools() {
-                if inline.torn_origin(tool.key).is_none() {
-                    key(tool.key, move || {
-                        movable(("tool", tool.key), move || ToolPane(tool, places));
-                    });
-                }
-            }
-        },
-    );
-    for (tool, (_, state)) in tools().into_iter().zip(windows.iter().copied()) {
-        match snapshot.torn_origin(tool.key) {
-            Some(origin) => {
-                let windows = windows.clone();
+            for (tool, (_, state)) in tools().into_iter().zip(windows.iter().copied()) {
+                let torn = snapshot.torn_origin(tool.key);
+                let peers = windows.clone();
                 key(tool.key, move || {
-                    TornTool(tool, origin, places, state, snap, windows.clone());
+                    // A pane is composed once, here. Tearing it out is the
+                    // window modifier going on: the subtree draws in an OS
+                    // window of its own, keeps its state and its effects, and
+                    // reports no size to the column it came from.
+                    let placed = cranpose_core::remember(|| Rc::new(Cell::new(None::<Point>)))
+                        .with(Rc::clone);
+                    match torn {
+                        // Put the window where the tear left the pointer, once
+                        // per tear: after that the window's position is the
+                        // person's to change.
+                        Some(origin) if placed.get() != Some(origin) => {
+                            state.set_position(Some(origin));
+                            placed.set(Some(origin));
+                        }
+                        Some(_) => {}
+                        None => {
+                            placed.set(None);
+                            window_snap::forget(resting, tool.key);
+                        }
+                    }
+                    if let Some(at) = state.position().filter(|_| torn.is_some()) {
+                        let size = state.size();
+                        trace!(
+                            "window id={} origin=({:.1},{:.1}) size=({:.1},{:.1}) panes=1 parked=false",
+                            tool.key,
+                            at.x,
+                            at.y,
+                            size.width,
+                            size.height
+                        );
+                    }
+                    Box(
+                        match torn {
+                            Some(_) => Modifier::empty().window(
+                                WindowConfig::borderless_for_state(tool.title, state)
+                                    .with_transparent(true)
+                                    .on_moved(move |x, y| {
+                                        window_snap::window_moved(
+                                            resting,
+                                            tool.key,
+                                            Point::new(x, y),
+                                            &peers,
+                                        );
+                                    }),
+                            ),
+                            None => Modifier::empty(),
+                        },
+                        BoxSpec::default(),
+                        move || ToolPane(tool, places),
+                    );
                 });
             }
-            None => snap.forget(tool.key),
-        }
-    }
-}
-
-#[composable]
-fn TornTool(
-    tool: Tool,
-    origin: Point,
-    places: MutableState<ToolPlaces>,
-    state: WindowState,
-    snap: SnapSet,
-    windows: Vec<(u64, WindowState)>,
-) {
-    let first_frame = cranpose_core::remember(|| std::cell::Cell::new(false))
-        .with(|placed| !placed.replace(true));
-    if first_frame {
-        state.set_position(Some(origin));
-    }
-    if let Some(at) = state.position() {
-        let size = state.size();
-        trace!(
-            "window id={} origin=({:.1},{:.1}) size=({:.1},{:.1}) panes=1 parked=false",
-            tool.key,
-            at.x,
-            at.y,
-            size.width,
-            size.height
-        );
-    }
-    Box(
-        Modifier::empty().window(
-            WindowConfig::borderless_for_state(tool.title, state)
-                .with_transparent(true)
-                .on_moved(move |x, y| {
-                    snap.window_moved(tool.key, Point::new(x, y), &windows);
-                }),
-        ),
-        BoxSpec::default(),
-        move || movable(("tool", tool.key), move || ToolPane(tool, places)),
+        },
     );
 }
 
@@ -184,7 +185,7 @@ fn ToolPane(tool: Tool, places: MutableState<ToolPlaces>) {
                         .fill_max_width()
                         .height(TITLE_HEIGHT)
                         .background(CHROME)
-                        .window_drag_area(),
+                        .window_drag_area(|| {}, || {}),
                     tool,
                     places,
                     torn,
@@ -216,7 +217,7 @@ fn ToolPane(tool: Tool, places: MutableState<ToolPlaces>) {
                     .fill_max_width()
                     .height(tool.size.height - TITLE_HEIGHT)
                     .padding(12.0)
-                    .window_drag_area(),
+                    .window_drag_area(|| {}, || {}),
                 BoxSpec::default(),
                 || {
                     Text(

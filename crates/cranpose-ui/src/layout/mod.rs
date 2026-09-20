@@ -847,7 +847,7 @@ fn place_layout_box(
     };
     let mut children = Vec::with_capacity(child_ids.len());
     for child_id in child_ids {
-        if is_window_root_node(applier, child_id) {
+        if crate::modifier::is_window_root(applier, child_id) {
             continue;
         }
         if let Some(child) = place_layout_box(applier, child_id, child_origin, layer_translation)? {
@@ -990,14 +990,10 @@ fn publish_window_geometry(
     modifier_slices.publish_pointer_input_size(size);
 }
 
-fn is_window_root_node(applier: &mut MemoryApplier, node: NodeId) -> bool {
-    crate::modifier::is_window_root(applier, node)
-}
-
 fn children_in_this_window(applier: &mut MemoryApplier, children: Vec<NodeId>) -> Vec<NodeId> {
     children
         .into_iter()
-        .filter(|child| !is_window_root_node(applier, *child))
+        .filter(|child| !crate::modifier::is_window_root(applier, *child))
         .collect()
 }
 
@@ -3361,7 +3357,7 @@ fn build_layout_tree(
         let data = LayoutNodeData::new(modifier, resolved_modifiers, modifier_slices, kind);
         let mut children = Vec::with_capacity(node.children.len());
         for child in &node.children {
-            if is_window_root_node(applier, child.node.node_id) {
+            if crate::modifier::is_window_root(applier, child.node.node_id) {
                 continue;
             }
             let child_origin = Point {
