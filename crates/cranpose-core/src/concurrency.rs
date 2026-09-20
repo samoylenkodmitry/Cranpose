@@ -28,7 +28,7 @@ use wasm_bindgen::JsCast;
 use web_time::Instant;
 
 use crate::{
-    hooks::{mutableStateOf, remember},
+    hooks::{mutableStateOfNeverEqual, remember},
     runtime::{RuntimeHandle, TaskHandle, current_runtime_handle},
     state::{MutableState, State},
 };
@@ -465,7 +465,7 @@ where
     T: Clone + 'static,
     K: PartialEq + 'static,
 {
-    let state = remember(|| mutableStateOf(initial)).with(|state| *state);
+    let state = remember(|| mutableStateOfNeverEqual(initial)).with(|state| *state);
     let sink = state;
     CollectEvents(stream, key, move |event| sink.set(event));
     state.as_state()
@@ -814,7 +814,7 @@ where
     K: PartialEq + 'static,
     F: FnOnce(ProduceScope<T>) -> Pin<Box<dyn Future<Output = ()>>> + 'static,
 {
-    let state = remember(|| mutableStateOf(initial)).with(|state| *state);
+    let state = remember(|| mutableStateOfNeverEqual(initial)).with(|state| *state);
     let handle = ProduceScope { state };
     crate::__launched_effect_async_impl(
         crate::caller_location_key(),

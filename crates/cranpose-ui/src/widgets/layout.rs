@@ -66,9 +66,18 @@ where
         debug_assert!(false, "failed to update Layout node: {err}");
     }
     cranpose_core::push_parent(id);
-    content();
+    compose_under_modifier_locals(&modifier, &mut content);
     cranpose_core::pop_parent();
     id
+}
+
+fn compose_under_modifier_locals(modifier: &Modifier, content: &mut dyn FnMut()) {
+    let provided = modifier.provided_composition_locals();
+    if provided.is_empty() {
+        content();
+        return;
+    }
+    cranpose_core::CompositionLocalProvider(provided, content);
 }
 
 #[composable]

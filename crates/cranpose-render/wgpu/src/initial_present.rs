@@ -3,7 +3,17 @@ use crate::{
     render::CLEAR_COLOR,
 };
 
-/// Clears `view` to the framework's default background and submits the
+/// Clears `view` to the framework's default background; see
+/// [`clear_to_background`].
+pub fn clear_to_default_background(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    view: &wgpu::TextureView,
+) {
+    clear_to_background(device, queue, view, CLEAR_COLOR);
+}
+
+/// Clears `view` to `color` and submits the
 /// work, through the same `WgpuFrameGraph` every other command encoder
 /// and submission in this crate is required to go through (enforced by
 /// `render_contract.rs`'s `wgpu_command_buffers_are_owned_by_frame_graph_executor`)
@@ -12,10 +22,11 @@ use crate::{
 /// acquire anything itself — callers that mean to show the clear on
 /// screen still acquire a frame and call `wgpu::SurfaceTexture::present`
 /// themselves, exactly as a real content frame would.
-pub fn clear_to_default_background(
+pub fn clear_to_background(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     view: &wgpu::TextureView,
+    color: wgpu::Color,
 ) {
     let mut graph = WgpuFrameGraph::new(Some("Cranpose Initial Present Clear"));
     let target = graph.import_surface("initial-present-clear-target");
@@ -29,7 +40,7 @@ pub fn clear_to_default_background(
                     resolve_target: None,
                     depth_slice: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(CLEAR_COLOR),
+                        load: wgpu::LoadOp::Clear(color),
                         store: wgpu::StoreOp::Store,
                     },
                 })],

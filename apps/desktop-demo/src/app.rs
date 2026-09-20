@@ -22,7 +22,12 @@ use cranpose_ui::{
 };
 
 mod animations;
+pub mod chrome_tabs;
 mod controls_ui;
+mod demo_trace;
+pub mod flame_window;
+mod floating_input;
+mod floating_windows;
 mod glass_feed;
 mod glass_tiles;
 mod hacker_news;
@@ -36,20 +41,26 @@ mod liquid_ui;
 mod markdown;
 mod mineswapper2;
 mod net_image;
+pub mod pet;
 mod recomposition_lab;
 pub mod rotary;
 pub(crate) mod shader_rect;
 mod shaders;
 mod source_view;
 mod text_showcase;
+pub mod tool_windows;
 mod url_resolve;
 pub mod wear;
 mod web_fetch;
 mod winamp;
+mod window_snap;
 mod xkcd;
 
 use animations::AnimationsTab;
+pub use chrome_tabs::chrome_tabs_app;
 use controls_ui::ControlsUiTab;
+pub use flame_window::flame_window_app;
+use floating_windows::FloatingWindowsTab;
 use glass_feed::GlassFeedTab;
 pub use glass_feed::GLASS_FEED_LIST_TAG;
 use glass_tiles::GlassTilesTab;
@@ -71,12 +82,14 @@ use markdown::{
     markdown_viewer_tab, MarkdownScrollStabilityFixtureTab, MarkdownScrollStressFixtureTab,
     MarkdownScrollStressFixtureTabWithState,
 };
+pub use pet::pet_app;
 use recomposition_lab::RecompositionLabTab;
 use rotary::rotary_tab;
 use shader_rect::ShaderRectTab;
 pub use shaders::ShaderSection;
 use shaders::ShadersTab;
 use text_showcase::TextShowcaseTab;
+pub use tool_windows::tool_windows_app;
 use web_fetch::web_fetch_example;
 pub use winamp::WinampStandaloneApp;
 use winamp::{remember_winamp_tab_state, WinampTab, WinampTabState};
@@ -85,8 +98,6 @@ use xkcd::xkcd_tab;
 const DEMO_PAGE_PADDING: f32 = 20.0;
 const DEMO_TAB_BAR_PADDING: f32 = 8.0;
 
-/// Where the floating source toggle sits, inside the tab strip's top padding
-/// and clear of the tab buttons beneath it.
 const FLOATING_TOGGLE_TOP: f32 = 2.0;
 
 const COMPACT_WINDOW_SIZE_CLASS_MAX_WIDTH: f32 = 600.0;
@@ -129,6 +140,7 @@ pub enum DemoTab {
     GlassFeed,
     GlassTiles,
     MarkdownViewer,
+    FloatingWindows,
     FilePicker,
     Rotary,
     Wear,
@@ -136,9 +148,6 @@ pub enum DemoTab {
 
 pub const DESKTOP_INITIAL_TAB: DemoTab = DemoTab::HackerNews;
 
-/// Everything the demo shell needs to know about one tab besides how to draw
-/// it: the tab bar's label, the robot runners' slug, the source file the "view
-/// source" pane fetches, and the names a startup request may use.
 pub struct DemoTabInfo {
     pub tab: DemoTab,
     pub label: &'static str,
@@ -147,7 +156,7 @@ pub struct DemoTabInfo {
     pub startup_aliases: &'static [&'static str],
 }
 
-pub const DEMO_TAB_INFO: [DemoTabInfo; 27] = [
+pub const DEMO_TAB_INFO: [DemoTabInfo; 28] = [
     DemoTabInfo {
         tab: DemoTab::Counter,
         label: "Counter App",
@@ -321,6 +330,13 @@ pub const DEMO_TAB_INFO: [DemoTabInfo; 27] = [
         startup_aliases: &["markdown", "markdownviewer"],
     },
     DemoTabInfo {
+        tab: DemoTab::FloatingWindows,
+        label: "Windows",
+        slug: "floating-windows",
+        source_path: "apps/desktop-demo/src/app/floating_windows.rs",
+        startup_aliases: &["floatingwindows", "windows", "pet", "flame"],
+    },
+    DemoTabInfo {
         tab: DemoTab::FilePicker,
         label: "File Picker",
         slug: "file-picker",
@@ -355,18 +371,14 @@ impl DemoTab {
         self.info().label
     }
 
-    /// The stable identifier robot runners and screenshot dumps address this
-    /// tab by.
     pub fn slug(self) -> &'static str {
         self.info().slug
     }
 
-    /// The repository path of the file that implements this tab.
     pub fn source_path(self) -> &'static str {
         self.info().source_path
     }
 
-    #[cfg(any(test, target_arch = "wasm32"))]
     pub fn from_startup_name(name: &str) -> Option<Self> {
         let normalized = name
             .chars()
@@ -380,7 +392,14 @@ impl DemoTab {
     }
 }
 
-pub const DEMO_TABS: [DemoTab; 27] = [
+pub fn startup_tab_from_args(args: impl IntoIterator<Item = String>) -> DemoTab {
+    args.into_iter()
+        .next()
+        .and_then(|name| DemoTab::from_startup_name(&name))
+        .unwrap_or(DESKTOP_INITIAL_TAB)
+}
+
+pub const DEMO_TABS: [DemoTab; 28] = [
     DemoTab::Counter,
     DemoTab::Liquid,
     DemoTab::CompositionLocal,
@@ -400,6 +419,7 @@ pub const DEMO_TABS: [DemoTab; 27] = [
     DemoTab::Xkcd,
     DemoTab::Shaders,
     DemoTab::ShaderRect,
+    DemoTab::FloatingWindows,
     DemoTab::Controls,
     DemoTab::MarkdownViewer,
     DemoTab::InteractiveAnim,
@@ -793,7 +813,7 @@ pub fn combined_app() {
 #[composable]
 #[allow(non_snake_case)]
 pub fn DesktopApp() {
-    combined_app_with_initial_tab(Some(DESKTOP_INITIAL_TAB));
+    combined_app_with_initial_tab(Some(startup_tab_from_args(std::env::args().skip(1))));
 }
 
 #[composable]
@@ -872,8 +892,6 @@ pub fn combined_app_with_startup(startup: StartupSelection) {
     );
 }
 
-/// The controls tab on its own, for tests that drive its cards without the
-/// demo shell's tab bar around them.
 #[allow(non_snake_case)]
 #[composable]
 pub fn ControlsUiRobotApp() {
@@ -944,6 +962,7 @@ fn render_active_tab(active: DemoTab, startup: StartupSelection, winamp_tab_stat
         DemoTab::LazyList => lazy_list_example(),
         DemoTab::Mineswapper2 => mineswapper2::mineswapper2_tab(),
         DemoTab::RecompositionLab => RecompositionLabTab(),
+        DemoTab::FloatingWindows => FloatingWindowsTab(),
         DemoTab::FilePicker => file_picker_tab(),
         DemoTab::Rotary => rotary_tab(),
         DemoTab::Wear => wear::wear_tab(),
@@ -993,6 +1012,7 @@ fn render_showcase_tab(
         | DemoTab::LazyList
         | DemoTab::Mineswapper2
         | DemoTab::RecompositionLab
+        | DemoTab::FloatingWindows
         | DemoTab::FilePicker
         | DemoTab::Rotary
         | DemoTab::Wear => {}

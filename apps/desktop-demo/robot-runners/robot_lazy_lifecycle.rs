@@ -105,7 +105,9 @@ fn lifecycle_item(index: usize, stats: MutableState<LifecycleStats>) {
         println!("  [EFFECT] Item {} effect started", index);
 
         DisposableEffectResult::new(move || {
-            stats.update(|s| s.total_disposes += 1);
+            if stats.is_alive() {
+                stats.update(|s| s.total_disposes += 1);
+            }
             println!("  [DISPOSE] Item {} disposed", index);
         })
     });

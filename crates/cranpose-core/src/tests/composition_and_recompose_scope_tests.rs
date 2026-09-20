@@ -2002,14 +2002,7 @@ fn retained_branch_preserves_node_payload_and_scope_lifecycle_until_restore() {
 
 #[test]
 fn retention_budget_evicts_least_recently_detached_subtree() {
-    let mut composition = test_composition();
-    composition.set_retention_policy(RetentionPolicy {
-        budget: RetentionBudget {
-            max_retained_subtrees: Some(1),
-            ..Default::default()
-        },
-        eviction: RetentionEvictionPolicy::LeastRecentlyDetached,
-    });
+    let mut composition = test_composition_retaining_at_most(1);
     let runtime = composition.runtime_handle();
     let show_first = MutableState::with_runtime(true, runtime.clone());
     let show_second = MutableState::with_runtime(true, runtime);
@@ -2105,14 +2098,7 @@ fn retention_budget_eviction_disposes_nodes_payloads_anchors_and_scopes() {
     const FIRST_KEY: Key = 0xE71;
     const SECOND_KEY: Key = 0xE72;
 
-    let mut composition = test_composition();
-    composition.set_retention_policy(RetentionPolicy {
-        budget: RetentionBudget {
-            max_retained_subtrees: Some(1),
-            ..Default::default()
-        },
-        eviction: RetentionEvictionPolicy::LeastRecentlyDetached,
-    });
+    let mut composition = test_composition_retaining_at_most(1);
     let runtime = composition.runtime_handle();
     let show_first = MutableState::with_runtime(true, runtime.clone());
     let show_second = MutableState::with_runtime(true, runtime);

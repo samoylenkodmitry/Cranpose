@@ -186,7 +186,7 @@ fn begin_unkeyed(
     restored: Option<DetachedSubtree>,
 ) -> GroupStart<ActiveGroupId> {
     let group_key = session.preview_group_key(GroupKeySeed::unkeyed(key));
-    session.begin_group(group_key, restored)
+    session.begin_group(group_key, restored, None)
 }
 
 fn begin_keyed(
@@ -196,7 +196,7 @@ fn begin_keyed(
     restored: Option<DetachedSubtree>,
 ) -> GroupStart<ActiveGroupId> {
     let group_key = session.preview_group_key(GroupKeySeed::keyed(static_key, explicit_key));
-    session.begin_group(group_key, restored)
+    session.begin_group(group_key, restored, None)
 }
 
 fn composed_parent_child_table(
@@ -310,7 +310,12 @@ fn try_restore_detached_child(
     key: GroupKey,
     detached: DetachedSubtree,
 ) -> Result<AnchorId, DetachedSubtree> {
-    table.restore_subtree(ChildCursor::new(parent_anchor, insert_index), key, detached)
+    table.restore_subtree(
+        ChildCursor::new(parent_anchor, insert_index),
+        key,
+        detached,
+        None,
+    )
 }
 
 fn detached_child_with_grandchild(
@@ -415,7 +420,7 @@ fn exercise_slot_write_session_surface(
     group_key: GroupKey,
     scope_id: ScopeId,
 ) -> (ActiveGroupId, ValueSlotId) {
-    let started = slots.begin_group(group_key, None);
+    let started = slots.begin_group(group_key, None, None);
     assert_eq!(started.kind, GroupStartKind::Inserted);
     slots.set_group_scope(started.group, scope_id);
 

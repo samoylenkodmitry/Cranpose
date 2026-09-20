@@ -1791,6 +1791,16 @@ pub struct GpuRenderer {
     frame_count: u64,
 }
 
+/// What a frame clears to before it draws: nothing for a transparent
+/// window, the framework's background for every other surface.
+pub fn frame_clear_color(transparent: bool) -> wgpu::Color {
+    if transparent {
+        wgpu::Color::TRANSPARENT
+    } else {
+        CLEAR_COLOR
+    }
+}
+
 fn image_sampler_descriptor(sampling: ImageSampling) -> wgpu::SamplerDescriptor<'static> {
     let filter = match sampling {
         ImageSampling::Nearest => wgpu::FilterMode::Nearest,
@@ -2694,6 +2704,7 @@ impl GpuRenderer {
             root,
             overlay,
             root_scale,
+            clear,
             ..
         } = packet;
         let page = Rc::clone(root_target);
@@ -2714,6 +2725,7 @@ impl GpuRenderer {
                         overlay.as_ref(),
                         Rc::clone(&page),
                         root_scale,
+                        clear,
                         output_mode,
                         output,
                     )
@@ -2755,6 +2767,7 @@ impl GpuRenderer {
                     overlay.as_ref(),
                     Rc::clone(&page),
                     root_scale,
+                    clear,
                     output_mode,
                     output,
                 );
@@ -2795,6 +2808,7 @@ impl GpuRenderer {
         overlay: Option<&LayerScene>,
         page: Rc<OffscreenTarget>,
         root_scale: f32,
+        clear: wgpu::Color,
         output_mode: OutputMode,
         output: Option<(&wgpu::TextureView, &wgpu::BindGroup)>,
     ) -> Result<(), String> {
@@ -2803,7 +2817,7 @@ impl GpuRenderer {
             overlay,
             page,
             root_scale,
-            wgpu::LoadOp::Clear(CLEAR_COLOR),
+            wgpu::LoadOp::Clear(clear),
         )?;
         if let Some((output_view, bind_group)) = output {
             match output_mode {
@@ -5238,3 +5252,7 @@ mod retained_glyph_tests {
         draw_queued(&mut renderer, &commands);
     }
 }
+
+#[cfg(test)]
+#[path = "tests/frame_clear_tests.rs"]
+mod frame_clear_tests;

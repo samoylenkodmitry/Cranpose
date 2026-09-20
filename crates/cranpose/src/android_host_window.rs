@@ -89,6 +89,36 @@ pub struct AndroidHostWindowState {
 }
 
 impl AndroidHostWindowState {
+    /// An Android host window's request states, for code that remembers the
+    /// state itself.
+    ///
+    /// Call it inside a `remember`; [`rememberAndroidHostWindowState`] is this
+    /// plus the slot, and also the registration the host needs.
+    pub fn new(width: f32, height: f32) -> Self {
+        let requested = Size::new(width, height);
+        let (initial_requested, initial_status, initial_revision) =
+            match validate_logical_size(requested) {
+                Ok(size) => (
+                    size,
+                    AndroidHostWindowSizeStatus::Pending { requested: size },
+                    1,
+                ),
+                Err(reason) => (
+                    Size::ZERO,
+                    AndroidHostWindowSizeStatus::Rejected { requested, reason },
+                    0,
+                ),
+            };
+        AndroidHostWindowState {
+            requested_size: cranpose_core::mutableStateOf(initial_requested),
+            requested_position: cranpose_core::mutableStateOf(Point::ZERO),
+            actual_size: cranpose_core::mutableStateOf(Size::ZERO),
+            request_revision: cranpose_core::mutableStateOf(initial_revision),
+            position_revision: cranpose_core::mutableStateOf(0_u64),
+            status: cranpose_core::mutableStateOf(initial_status),
+        }
+    }
+
     /// Returns the requested host-window size in logical pixels.
     pub fn requested_size(self) -> Size {
         self.requested_size.get()
@@ -237,30 +267,9 @@ impl AndroidHostWindowState {
 #[composable]
 #[track_caller]
 pub fn rememberAndroidHostWindowState(width: f32, height: f32) -> AndroidHostWindowState {
-    let requested = Size::new(width, height);
-    let (initial_requested, initial_status, initial_revision) =
-        match validate_logical_size(requested) {
-            Ok(size) => (
-                size,
-                AndroidHostWindowSizeStatus::Pending { requested: size },
-                1,
-            ),
-            Err(reason) => (
-                Size::ZERO,
-                AndroidHostWindowSizeStatus::Rejected { requested, reason },
-                0,
-            ),
-        };
-
     let caller = cranpose_core::caller_location_key();
-    let state = AndroidHostWindowState {
-        requested_size: cranpose_core::rememberMutableStateOf(move || initial_requested),
-        requested_position: cranpose_core::rememberMutableStateOf(|| Point::ZERO),
-        actual_size: cranpose_core::rememberMutableStateOf(|| Size::ZERO),
-        request_revision: cranpose_core::rememberMutableStateOf(move || initial_revision),
-        position_revision: cranpose_core::rememberMutableStateOf(|| 0_u64),
-        status: cranpose_core::rememberMutableStateOf(move || initial_status),
-    };
+    let state = cranpose_core::remember(move || AndroidHostWindowState::new(width, height))
+        .with(|state| *state);
 
     let owner = cranpose_core::remember(|| Rc::new(())).with(Rc::clone);
     {

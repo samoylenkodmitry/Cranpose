@@ -18,7 +18,8 @@ use std::{
 #[cfg(any(feature = "internal", test))]
 use crate::frame_clock::FrameClock;
 use crate::{
-    Applier, Command, FrameCallbackId, MutableStateInner, NodeError, RecomposeScopeInner, ScopeId,
+    Applier, Command, FrameCallbackId, Key, MutableStateInner, NodeError, RecomposeScopeInner,
+    ScopeId,
     collections::map::{HashMap, HashSet},
     platform::{RuntimeScheduler, SchedulerRef},
     state::{MutationPolicy, NeverEqual},
@@ -429,6 +430,8 @@ struct RuntimeInner {
     state_arena: StateArena,
     external_state_owners: RefCell<HashMap<StateId, Rc<StateHandleLease>>>,
     live_recompose_scope_count: Cell<usize>,
+    forgotten_movables: RefCell<Vec<Key>>,
+    next_movable_content_id: Cell<u64>,
     runtime_id: RuntimeId,
 }
 
@@ -472,6 +475,8 @@ impl RuntimeInner {
             state_arena: StateArena::default(),
             external_state_owners: RefCell::new(HashMap::default()),
             live_recompose_scope_count: Cell::new(0),
+            forgotten_movables: RefCell::new(Vec::new()),
+            next_movable_content_id: Cell::new(1),
             runtime_id: RuntimeId::next(),
         }
     }
@@ -972,6 +977,61 @@ impl Drop for StateHandleLease {
     }
 }
 
+thread_local! {
+    static STATE_OWNERS: RefCell<Vec<Vec<Rc<StateHandleLease>>>> =
+        const { RefCell::new(Vec::new()) };
+}
+
+struct StateOwnerFrame;
+
+impl Drop for StateOwnerFrame {
+    fn drop(&mut self) {
+        STATE_OWNERS.with(|owners| owners.borrow_mut().pop());
+    }
+}
+
+/// Runs `build` with every state it creates owned by the caller, and returns
+/// those states beside its value.
+///
+/// This is what makes the Jetpack Compose shape safe here:
+///
+/// ```rust,ignore
+/// remember(|| Holder {
+///     count: mutableStateOf(0),
+/// })
+/// ```
+///
+/// Kotlin leaves the state to the garbage collector, which frees it with the
+/// object that holds it. Nothing collects here, so a state with no owner has
+/// to be kept by the runtime for as long as the runtime lives, and a holder
+/// built once per screen would pile up cells nobody can reach. Handing the
+/// states to whoever is building the value puts them back on the object's
+/// lifetime: the slot drops the value, the value drops the states.
+pub(crate) fn collecting_states<T>(build: impl FnOnce() -> T) -> (T, Vec<Rc<StateHandleLease>>) {
+    STATE_OWNERS.with(|owners| owners.borrow_mut().push(Vec::new()));
+    let frame = StateOwnerFrame;
+    let value = build();
+    let states = STATE_OWNERS.with(|owners| {
+        owners
+            .borrow_mut()
+            .last_mut()
+            .map(std::mem::take)
+            .unwrap_or_default()
+    });
+    drop(frame);
+    (value, states)
+}
+
+fn hand_to_current_owner(lease: &Rc<StateHandleLease>) -> bool {
+    STATE_OWNERS.with(|owners| match owners.borrow_mut().last_mut() {
+        Some(owner) => {
+            owner.push(Rc::clone(lease));
+            true
+        }
+        None => false,
+    })
+}
+
 impl RuntimeHandle {
     pub fn id(&self) -> RuntimeId {
         self.id
@@ -1006,8 +1066,21 @@ impl RuntimeHandle {
         &self,
         value: T,
     ) -> crate::MutableState<T> {
-        let lease = self.alloc_state(value);
-        if let Some(inner) = self.inner.upgrade() {
+        self.hand_out(self.alloc_state(value))
+    }
+
+    pub(crate) fn alloc_persistent_state_with_policy<T: Clone + 'static>(
+        &self,
+        value: T,
+        policy: Arc<dyn MutationPolicy<T>>,
+    ) -> crate::MutableState<T> {
+        self.hand_out(self.alloc_state_with_policy(value, policy))
+    }
+
+    fn hand_out<T: Clone + 'static>(&self, lease: Rc<StateHandleLease>) -> crate::MutableState<T> {
+        if !hand_to_current_owner(&lease)
+            && let Some(inner) = self.inner.upgrade()
+        {
             inner
                 .external_state_owners
                 .borrow_mut()
@@ -1242,6 +1315,37 @@ impl RuntimeHandle {
             .upgrade()
             .map(|inner| inner.take_invalidated_scopes())
             .unwrap_or_default()
+    }
+
+    /// Releases the retained state of the movable content with identity
+    /// `id` at the composition's next opportunity. See
+    /// [`crate::forget_movable`].
+    pub fn forget_movable(&self, id: Key) {
+        if let Some(inner) = self.inner.upgrade() {
+            inner.forgotten_movables.borrow_mut().push(id);
+            inner.schedule();
+        }
+    }
+
+    pub(crate) fn take_forgotten_movables(&self) -> Vec<Key> {
+        self.inner
+            .upgrade()
+            .map(|inner| std::mem::take(&mut *inner.forgotten_movables.borrow_mut()))
+            .unwrap_or_default()
+    }
+
+    /// An identity for a piece of movable content, unique within this
+    /// runtime. Owned by the runtime instance rather than a process-wide
+    /// counter, so two compositions in one process cannot collide and a
+    /// test cannot be made to pass by the order it happens to run in.
+    pub(crate) fn next_movable_content_id(&self) -> Key {
+        let Some(inner) = self.inner.upgrade() else {
+            log::error!("movable content asked a runtime that is gone for an identity");
+            return 0;
+        };
+        let id = inner.next_movable_content_id.get();
+        inner.next_movable_content_id.set(id.wrapping_add(1).max(1));
+        id
     }
 
     pub fn has_invalid_scopes(&self) -> bool {
@@ -1544,135 +1648,5 @@ pub fn schedule_node_update(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn state_arena_alloc_skips_free_slot_outside_cell_storage() {
-        let runtime = TestRuntime::new();
-        let arena = StateArena::default();
-        let first = arena.alloc(1_i32, runtime.handle());
-        arena.inner.borrow_mut().free.push(u32::MAX);
-
-        let second = arena.alloc(2_i32, runtime.handle());
-
-        assert_eq!(first.slot(), 0);
-        assert_eq!(second.slot(), 1);
-        assert!(arena.get_typed_opt::<i32>(first).is_some());
-        assert!(arena.get_typed_opt::<i32>(second).is_some());
-    }
-
-    #[test]
-    fn state_arena_alloc_skips_occupied_free_slot() {
-        let runtime = TestRuntime::new();
-        let arena = StateArena::default();
-        let first = arena.alloc(1_i32, runtime.handle());
-        arena.inner.borrow_mut().free.push(first.slot());
-
-        let second = arena.alloc(2_i32, runtime.handle());
-
-        assert_ne!(first.slot(), second.slot());
-        assert_eq!(second.slot(), 1);
-        assert!(arena.get_typed_opt::<i32>(first).is_some());
-        assert!(arena.get_typed_opt::<i32>(second).is_some());
-    }
-
-    #[test]
-    fn state_arena_register_lease_ignores_stale_id() {
-        let runtime = TestRuntime::new();
-        let arena = StateArena::default();
-        let stale_id = StateId::new(99, 0);
-        let lease = Rc::new(StateHandleLease {
-            id: stale_id,
-            runtime: runtime.handle(),
-        });
-
-        arena.register_lease(stale_id, &lease);
-
-        assert!(arena.retain_lease(stale_id).is_none());
-    }
-
-    #[test]
-    fn ui_continuation_type_mismatch_is_ignored_until_matching_payload() {
-        let runtime = TestRuntime::new();
-        let handle = runtime.handle();
-        let received = Rc::new(Cell::new(None));
-        let received_for_continuation = Rc::clone(&received);
-        let cont_id = handle
-            .register_ui_cont(move |value: u32| {
-                received_for_continuation.set(Some(value));
-            })
-            .expect("test runtime is alive");
-
-        handle.dispatcher().post_invoke(cont_id, "wrong payload");
-        handle.drain_ui();
-
-        assert_eq!(received.get(), None);
-        assert_eq!(handle.debug_stats().ui_conts_len, 1);
-
-        handle.dispatcher().post_invoke(cont_id, 42_u32);
-        handle.drain_ui();
-
-        assert_eq!(received.get(), Some(42));
-        assert_eq!(handle.debug_stats().ui_conts_len, 0);
-    }
-
-    #[test]
-    fn ui_dispatcher_failed_send_does_not_leave_pending_work() {
-        let runtime = Runtime::new(Arc::new(TestScheduler));
-        let dispatcher = runtime.handle().dispatcher();
-
-        drop(runtime);
-
-        assert!(!dispatcher.has_pending());
-        dispatcher.post(|| {});
-        assert!(!dispatcher.has_pending());
-        dispatcher.post_invoke(404, 12_u32);
-        assert!(!dispatcher.has_pending());
-    }
-
-    #[test]
-    fn pending_guard_does_not_wrap_on_underflow() {
-        let counter = AtomicUsize::new(0);
-
-        {
-            let _guard = PendingGuard::new(&counter);
-        }
-
-        assert_eq!(counter.load(Ordering::SeqCst), 0);
-    }
-
-    #[test]
-    fn pending_guard_decrements_pending_count() {
-        let counter = AtomicUsize::new(2);
-
-        {
-            let _guard = PendingGuard::new(&counter);
-        }
-
-        assert_eq!(counter.load(Ordering::SeqCst), 1);
-    }
-
-    #[test]
-    fn schedule_frame_without_runtime_is_ignored() {
-        let ok = std::thread::spawn(|| std::panic::catch_unwind(super::schedule_frame).is_ok())
-            .join()
-            .expect("test thread should join");
-
-        assert!(ok);
-    }
-
-    #[test]
-    fn schedule_node_update_without_runtime_is_ignored() {
-        let ok = std::thread::spawn(|| {
-            std::panic::catch_unwind(|| {
-                super::schedule_node_update(|_| Ok(()));
-            })
-            .is_ok()
-        })
-        .join()
-        .expect("test thread should join");
-
-        assert!(ok);
-    }
-}
+#[path = "tests/runtime_tests.rs"]
+mod tests;

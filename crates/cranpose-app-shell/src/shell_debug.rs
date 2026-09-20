@@ -6,26 +6,7 @@ where
     R::Error: Debug,
 {
     pub fn debug_info_report(&mut self) -> String {
-        let app_context = std::rc::Rc::clone(&self.app_context);
-        app_context.enter(|| {
-            let mut report = String::new();
-            writeln!(report, "=== DEBUG: CURRENT SCREEN STATE ===").ok();
-            if let Some(layout_tree) = self.layout_tree_in_context() {
-                let renderer = HeadlessRenderer::new();
-                let render_scene = renderer.render(layout_tree);
-                writeln!(report, "{}", format_layout_tree(layout_tree)).ok();
-                writeln!(report, "{}", format_render_scene(&render_scene)).ok();
-                writeln!(
-                    report,
-                    "{}",
-                    format_screen_summary(layout_tree, &render_scene)
-                )
-                .ok();
-            } else {
-                writeln!(report, "No layout available").ok();
-            }
-            report
-        })
+        debug_info_report(&mut self.app, &mut self.surfaces[0])
     }
 
     pub fn log_debug_info(&mut self) -> String {
@@ -36,41 +17,24 @@ where
 
     /// Get the current layout tree (for robot/testing)
     pub fn layout_tree(&mut self) -> Option<&LayoutTree> {
-        let app_context = std::rc::Rc::clone(&self.app_context);
-        app_context.enter(|| self.layout_tree_in_context())
+        let app_context = std::rc::Rc::clone(&self.app.app_context);
+        app_context.enter(|| self.surfaces[0].layout_tree_in_context(&mut self.app))
     }
 
     #[doc(hidden)]
     pub fn with_layout_tree<T>(&mut self, block: impl FnOnce(Option<&LayoutTree>) -> T) -> T {
-        let app_context = std::rc::Rc::clone(&self.app_context);
+        let app_context = std::rc::Rc::clone(&self.app.app_context);
         app_context.enter(|| {
-            let layout_tree = self.layout_tree_in_context();
+            let layout_tree = self.surfaces[0].layout_tree_in_context(&mut self.app);
             block(layout_tree)
         })
-    }
-
-    fn layout_tree_in_context(&mut self) -> Option<&LayoutTree> {
-        if self.layout_tree.is_none() {
-            let root = self.composition.root()?;
-            let mut applier = self.composition.applier_mut();
-            match cranpose_ui::build_layout_tree_from_applier(&mut applier, root) {
-                Ok(layout_tree) => {
-                    self.layout_tree = layout_tree;
-                }
-                Err(err) => {
-                    log::debug!("failed to build layout snapshot: {err}");
-                    return None;
-                }
-            }
-        }
-        self.layout_tree.as_ref()
     }
 
     /// Whether a semantics snapshot could contain anything at all. Reading the
     /// flag costs nothing, unlike collecting the layout-bounds map only to find
     /// semantics tracking disabled.
     pub fn semantics_active(&self) -> bool {
-        self.semantics_enabled
+        self.app.semantics_enabled
     }
 
     /// Monotonic revision of the accessibility-relevant state. It moves when a
@@ -80,53 +44,27 @@ where
     /// whole snapshot-and-compare while this still reads the same — which on an
     /// animation-only frame is every frame.
     pub fn semantics_snapshot_revision(&mut self) -> u64 {
-        if self.semantics_enabled {
-            let app_context = std::rc::Rc::clone(&self.app_context);
+        if self.app.semantics_enabled {
+            let app_context = std::rc::Rc::clone(&self.app.app_context);
             let semantics_dirty = app_context.enter(|| {
-                let Some(root) = self.composition.root() else {
+                let Some(root) = self.app.composition.root() else {
                     return false;
                 };
-                let mut applier = self.composition.applier_mut();
+                let mut applier = self.app.composition.applier_mut();
                 cranpose_ui::tree_needs_semantics(&mut *applier, root).unwrap_or(true)
             });
             if semantics_dirty {
-                self.semantics_snapshot_revision = self.semantics_snapshot_revision.wrapping_add(1);
+                self.app.semantics_snapshot_revision =
+                    self.app.semantics_snapshot_revision.wrapping_add(1);
             }
         }
-        self.semantics_snapshot_revision
+        self.app.semantics_snapshot_revision
     }
 
     /// Get the current semantics tree (for robot/testing)
     pub fn semantics_tree(&mut self) -> Option<&SemanticsTree> {
-        let app_context = std::rc::Rc::clone(&self.app_context);
-        app_context.enter(|| self.semantics_tree_in_context())
-    }
-
-    fn semantics_tree_in_context(&mut self) -> Option<&SemanticsTree> {
-        if !self.semantics_enabled {
-            return None;
-        }
-        let root = self.composition.root()?;
-        let semantics_dirty = {
-            let mut applier = self.composition.applier_mut();
-            cranpose_ui::tree_needs_semantics(&mut *applier, root).unwrap_or_else(|err| {
-                log::debug!("failed to check semantics dirty status for root #{root}: {err}");
-                true
-            })
-        };
-        if self.semantics_tree.is_none() || semantics_dirty {
-            let mut applier = self.composition.applier_mut();
-            match cranpose_ui::build_semantics_tree_from_applier(&mut applier, root) {
-                Ok(semantics_tree) => {
-                    self.semantics_tree = semantics_tree;
-                }
-                Err(err) => {
-                    log::debug!("failed to build semantics snapshot: {err}");
-                    return None;
-                }
-            }
-        }
-        self.semantics_tree.as_ref()
+        let app_context = std::rc::Rc::clone(&self.app.app_context);
+        app_context.enter(|| self.surfaces[0].semantics_tree_in_context(&mut self.app))
     }
 
     pub fn root_layout_size(&mut self) -> Option<(f32, f32)> {
@@ -145,9 +83,9 @@ where
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn debug_runtime_leak_stats(&mut self) -> RuntimeLeakDebugStats {
-        let runtime = self.composition.runtime_handle();
+        let runtime = self.app.composition.runtime_handle();
         let (applier_stats, live_node_heap_bytes, recycled_node_heap_bytes) = {
-            let applier = self.composition.applier_mut();
+            let applier = self.app.composition.applier_mut();
             (
                 applier.debug_stats(),
                 applier.debug_live_node_heap_bytes(),
@@ -158,10 +96,10 @@ where
             applier_stats,
             live_node_heap_bytes,
             recycled_node_heap_bytes,
-            slot_table_heap_bytes: self.composition.slot_table_heap_bytes(),
-            pass_stats: self.composition.debug_last_pass_stats(),
-            slot_stats: self.composition.debug_slot_table_stats(),
-            observer_stats: self.composition.debug_observer_stats(),
+            slot_table_heap_bytes: self.app.composition.slot_table_heap_bytes(),
+            pass_stats: self.app.composition.debug_last_pass_stats(),
+            slot_stats: self.app.composition.debug_slot_table_stats(),
+            observer_stats: self.app.composition.debug_observer_stats(),
             runtime_stats: runtime.debug_stats(),
             state_arena_stats: runtime.state_arena_debug_stats(),
             recompose_scope_stats: debug_recompose_scope_registry_stats(),
@@ -173,19 +111,19 @@ where
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn debug_slot_table_groups(&self) -> Vec<(usize, Key, Option<usize>, usize)> {
-        self.composition.debug_dump_slot_table_groups()
+        self.app.composition.debug_dump_slot_table_groups()
     }
 
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn debug_slot_entries(&self) -> Vec<cranpose_core::SlotDebugEntry> {
-        self.composition.debug_dump_slot_entries()
+        self.app.composition.debug_dump_slot_entries()
     }
 
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn runtime_handle(&self) -> cranpose_core::RuntimeHandle {
-        self.composition.runtime_handle()
+        self.app.composition.runtime_handle()
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -203,7 +141,7 @@ where
             collect_node_ids(tree.root(), &mut node_ids);
         }
 
-        let mut applier = self.composition.applier_mut();
+        let mut applier = self.app.composition.applier_mut();
         let mut result = Vec::new();
         for node_id in node_ids {
             if let Ok(scope_ids) = applier.with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
@@ -222,7 +160,7 @@ where
         node_id: NodeId,
         slot_id: u64,
     ) -> Option<Vec<cranpose_core::SlotDebugEntry>> {
-        let mut applier = self.composition.applier_mut();
+        let mut applier = self.app.composition.applier_mut();
         applier
             .with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
                 node.debug_slot_table_for_slot(SlotId::new(slot_id))
@@ -238,7 +176,7 @@ where
         node_id: NodeId,
         slot_id: u64,
     ) -> Option<Vec<(usize, Key, Option<usize>, usize)>> {
-        let mut applier = self.composition.applier_mut();
+        let mut applier = self.app.composition.applier_mut();
         applier
             .with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
                 node.debug_slot_table_groups_for_slot(SlotId::new(slot_id))
@@ -266,4 +204,46 @@ fn layout_box_bounds(layout_box: &LayoutBox) -> (f32, f32, f32, f32) {
         layout_box.rect.width,
         layout_box.rect.height,
     )
+}
+
+fn debug_info_report<R: Renderer>(app: &mut ShellApp, surface: &mut RootSurface<R>) -> String {
+    let app_context = std::rc::Rc::clone(&app.app_context);
+    app_context.enter(|| {
+        let mut report = String::new();
+        writeln!(report, "=== DEBUG: CURRENT SCREEN STATE ===").ok();
+        if let Some(layout_tree) = surface.layout_tree_in_context(app) {
+            let renderer = HeadlessRenderer::new();
+            let render_scene = renderer.render(layout_tree);
+            writeln!(report, "{}", format_layout_tree(layout_tree)).ok();
+            writeln!(report, "{}", format_render_scene(&render_scene)).ok();
+            writeln!(
+                report,
+                "{}",
+                format_screen_summary(layout_tree, &render_scene)
+            )
+            .ok();
+        } else {
+            writeln!(report, "No layout available").ok();
+        }
+        report
+    })
+}
+
+impl<R> SurfaceMut<'_, R>
+where
+    R: Renderer,
+    R::Error: Debug,
+{
+    /// The layout tree and headless scene of this surface, for a log.
+    pub fn debug_info_report(&mut self) -> String {
+        let (app, surface) = self.parts();
+        debug_info_report(app, surface)
+    }
+
+    /// Logs [`Self::debug_info_report`] and answers it.
+    pub fn log_debug_info(&mut self) -> String {
+        let report = self.debug_info_report();
+        log::info!(target: "cranpose::debug::screen", "\n{report}");
+        report
+    }
 }

@@ -13,13 +13,14 @@ use std::{
     rc::Rc,
 };
 
-use cranpose_core::hash::default;
+use cranpose_core::{ProvidedValue, hash::default};
 
 mod alignment;
 mod background;
 mod blur;
 mod chain;
 mod clickable;
+mod drag_and_drop;
 mod draw_cache;
 mod fill;
 mod focus;
@@ -40,6 +41,7 @@ mod size;
 mod slices;
 mod toggleable;
 mod weight;
+mod window_root;
 
 #[allow(unused_imports)]
 pub use chain::{ModifierChainHandle, ModifierChainInspectorNode, ModifierLocalsHandle};
@@ -56,6 +58,11 @@ pub use cranpose_ui_graphics::{
     RenderEffect, RoundedCornerShape, RuntimeShader, Shadow, ShadowScope, Size, TransformOrigin,
 };
 use cranpose_ui_layout::{Alignment, HorizontalAlignment, IntrinsicSize, VerticalAlignment};
+pub use drag_and_drop::{
+    DragAndDropEvent, DragAndDropOutcome, DragAndDropPayload, DragAndDropPoint, DragAndDropSource,
+    DragAndDropSourceElement, DragAndDropSourceNode, DragAndDropState, DragAndDropTarget,
+    DragAndDropTargetElement, DragAndDropTargetNode,
+};
 use focus::FocusTargetElement;
 #[allow(unused_imports)]
 pub use focus::{FocusDirection, FocusRequestError, FocusRequester, FocusRequesterElement};
@@ -81,6 +88,10 @@ pub use semantics::{
 pub use slices::{
     ModifierNodeSlices, ModifierNodeSlicesDebugStats, collect_modifier_slices,
     collect_modifier_slices_into, collect_slices_from_modifier,
+};
+pub use window_root::{
+    WindowRootDescriptor, WindowRootElement, WindowRootEntry, WindowRootNode, WindowRootRegistry,
+    is_window_root, nearest_window_root, window_roots, window_roots_revision,
 };
 
 pub use crate::draw::{DrawCacheBuilder, DrawCommand};
@@ -384,6 +395,7 @@ pub struct Modifier {
     strict_fingerprint: u64,
     structural_fingerprint: u64,
     element_count: usize,
+    provides_composition_locals: bool,
 }
 
 impl Default for Modifier {
@@ -394,6 +406,7 @@ impl Default for Modifier {
             strict_fingerprint: fingerprints.strict,
             structural_fingerprint: fingerprints.structural,
             element_count: 0,
+            provides_composition_locals: false,
         }
     }
 }
@@ -898,6 +911,8 @@ impl Modifier {
             strict_fingerprint: fingerprints.strict,
             structural_fingerprint: fingerprints.structural,
             element_count: self.element_count + next.element_count,
+            provides_composition_locals: self.provides_composition_locals
+                || next.provides_composition_locals,
         }
     }
 
@@ -908,6 +923,15 @@ impl Modifier {
                 inner: elements.iter(),
             },
         }
+    }
+
+    pub(crate) fn provided_composition_locals(&self) -> Vec<ProvidedValue> {
+        if !self.provides_composition_locals {
+            return Vec::new();
+        }
+        self.iter_elements()
+            .flat_map(|element| element.provided_composition_locals())
+            .collect()
     }
 
     pub(crate) fn iter_inspector_metadata(&self) -> ModifierInspectorIterator<'_> {
@@ -948,6 +972,7 @@ impl Modifier {
                 strict_fingerprint: self.strict_fingerprint,
                 structural_fingerprint: self.structural_fingerprint,
                 element_count: self.element_count,
+                provides_composition_locals: self.provides_composition_locals,
             },
         }
     }
@@ -1013,7 +1038,9 @@ impl Modifier {
         handle.resolved_modifiers()
     }
 
-    pub(crate) fn with_element<E>(element: E) -> Self
+    /// A modifier of the one `element`. Platform crates build their own
+    /// modifiers on it, the way [`Modifier::window_root`] is built.
+    pub fn with_element<E>(element: E) -> Self
     where
         E: ModifierNodeElement,
     {
@@ -1026,6 +1053,9 @@ impl Modifier {
             Self::default()
         } else {
             let element_count = elements.len();
+            let provides_composition_locals = elements
+                .iter()
+                .any(|element| element.provides_composition_locals());
             let fingerprints = single_fingerprints(elements.as_slice());
             Self {
                 kind: ModifierKind::Single {
@@ -1035,6 +1065,7 @@ impl Modifier {
                 strict_fingerprint: fingerprints.strict,
                 structural_fingerprint: fingerprints.structural,
                 element_count,
+                provides_composition_locals,
             }
         }
     }
@@ -1073,6 +1104,7 @@ impl Modifier {
                     strict_fingerprint: self.strict_fingerprint,
                     structural_fingerprint: self.structural_fingerprint,
                     element_count: self.element_count,
+                    provides_composition_locals: self.provides_composition_locals,
                 }
             }
         }

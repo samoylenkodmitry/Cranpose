@@ -5,8 +5,10 @@ mod hit_path_tracker;
 mod shell_debug;
 mod shell_frame;
 mod shell_input;
+mod surface;
 mod wheel;
 use std::{
+    cell::RefCell,
     fmt::{Debug, Write},
     rc::Rc,
     sync::{
@@ -28,20 +30,23 @@ use cranpose_render_common::{HitTestTarget, RenderScene, Renderer};
 use cranpose_runtime_std::StdRuntime;
 use cranpose_ui::{
     HeadlessRenderer, LayoutBox, LayoutNode, LayoutTree, MeasureLayoutOptions, SemanticsTree,
-    SubcomposeLayoutNode, clear_transient_scroll_motion_contexts, format_layout_tree,
-    format_render_scene, format_screen_summary, has_pending_focus_invalidations,
-    has_pending_pointer_repasses, has_pending_semantics_invalidations, peek_focus_invalidation,
-    peek_layout_invalidation, peek_pointer_invalidation, peek_render_invalidation,
-    process_focus_invalidations, process_pointer_repasses, process_semantics_invalidations,
-    request_render_invalidation, take_draw_repass_nodes, take_focus_invalidation,
-    take_layout_invalidation, take_pointer_invalidation, take_render_invalidation,
+    SubcomposeLayoutNode, WindowRootEntry, clear_transient_scroll_motion_contexts,
+    format_layout_tree, format_render_scene, format_screen_summary,
+    has_pending_focus_invalidations, has_pending_pointer_repasses,
+    has_pending_semantics_invalidations, peek_focus_invalidation, peek_layout_invalidation,
+    peek_pointer_invalidation, peek_render_invalidation, process_focus_invalidations,
+    process_pointer_repasses, process_semantics_invalidations, request_render_invalidation,
+    take_draw_repass_nodes, take_focus_invalidation, take_layout_invalidation,
+    take_pointer_invalidation, take_render_invalidation,
 };
 pub use cranpose_ui::{KeyCode, KeyEvent, KeyEventType};
 use cranpose_ui_graphics::{Point, PointerIcon, Rect, Size};
 pub use fps_monitor::FpsStats;
-use hit_path_tracker::{HitPathTracker, PointerId};
+use hit_path_tracker::PointerId;
 #[cfg(test)]
 use shell_frame::build_draw_refresh_scope;
+pub use surface::{RootId, RootSurface, SurfaceMut};
+use surface::{TextInputRouter, TextInputRoutes, partition_nodes_by_surface};
 use web_time::Instant;
 pub use wheel::WheelScroll;
 
@@ -164,47 +169,41 @@ impl FrameRatePreference {
     }
 }
 
+pub(crate) struct ShellApp {
+    pub(crate) app_context: Rc<cranpose_ui::AppContext>,
+    pub(crate) runtime: StdRuntime,
+    pub(crate) composition: Composition<MemoryApplier>,
+    pub(crate) content: Box<dyn FnMut()>,
+    pub(crate) start_time: Instant,
+    pub(crate) last_frame_time_nanos: u64,
+    pub(crate) semantics_enabled: bool,
+    pub(crate) semantics_snapshot_revision: u64,
+    pub(crate) layout_requested: bool,
+    pub(crate) force_layout_pass: bool,
+    pub(crate) modifiers: Option<Modifiers>,
+    pub(crate) rotary_scroll_factor: f32,
+    #[cfg(all(feature = "clipboard-native", target_os = "linux"))]
+    pub(crate) clipboard: Option<arboard::Clipboard>,
+    pub(crate) dev_options: DevOptions,
+    pub(crate) fps_monitor: fps_monitor::FpsMonitor,
+    pub(crate) text_input_routes: Rc<RefCell<TextInputRoutes>>,
+    pub(crate) text_input_router_installed: bool,
+    pub(crate) window_roots_seen: Option<u64>,
+}
+
+/// The application: one runtime, one composition, and a surface per window
+/// it shows.
+///
+/// Methods that name no root act on the primary surface, so a platform with
+/// one window uses the shell as it always has. A platform showing more
+/// windows reaches the others through [`AppShell::surface`], after giving
+/// each window root a renderer with [`AppShell::add_window_surface`].
 pub struct AppShell<R>
 where
     R: Renderer,
 {
-    app_context: Rc<cranpose_ui::AppContext>,
-    runtime: StdRuntime,
-    composition: Composition<MemoryApplier>,
-    content: Box<dyn FnMut()>,
-    renderer: R,
-    cursor: (f32, f32),
-    viewport: (f32, f32),
-    buffer_size: (u32, u32),
-    start_time: Instant,
-    last_frame_time_nanos: u64,
-    layout_tree: Option<LayoutTree>,
-    semantics_tree: Option<SemanticsTree>,
-    semantics_enabled: bool,
-    semantics_snapshot_revision: u64,
-    frame_rate_preference: FrameRatePreference,
-    layout_requested: bool,
-    force_layout_pass: bool,
-    scene_dirty: bool,
-    scoped_layout_scene_nodes: Vec<NodeId>,
-    retained_visual_nodes: HashSet<NodeId>,
-    is_dirty: bool,
-    buttons_pressed: PointerButtons,
-    pointer_source: PointerSource,
-    modifiers: Option<Modifiers>,
-    hit_path_tracker: HitPathTracker,
-    hovered_nodes: Vec<NodeId>,
-    on_rotary_scroll: Option<Rc<dyn Fn(RotaryScrollEvent) -> bool>>,
-    rotary_scroll_factor: f32,
-    #[cfg(all(feature = "clipboard-native", target_os = "linux"))]
-    clipboard: Option<arboard::Clipboard>,
-    dev_options: DevOptions,
-    dev_overlay_controls: Vec<DevOverlayControl>,
-    dev_overlay_text: String,
-    dev_overlay_last_refresh: Option<Instant>,
-    dev_overlay_viewport: Option<Size>,
-    fps_monitor: fps_monitor::FpsMonitor,
-    frame_scheduler: FrameScheduler,
+    pub(crate) app: ShellApp,
+    pub(crate) surfaces: Vec<RootSurface<R>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -403,7 +402,7 @@ impl FrameSchedule {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct DevOverlayControl {
+pub(crate) struct DevOverlayControl {
     bounds: Rect,
     mode: FramePacingMode,
 }
@@ -440,6 +439,99 @@ pub struct RuntimeLeakDebugStats {
     pub recompose_scope_stats: RecomposeScopeRegistryDebugStats,
     pub snapshot_v2_stats: SnapshotV2DebugStats,
     pub snapshot_pinning_stats: SnapshotPinningDebugStats,
+}
+
+impl ShellApp {
+    pub(crate) fn request_layout_pass(&mut self) {
+        self.layout_requested = true;
+    }
+
+    pub(crate) fn request_forced_layout_pass(&mut self) {
+        self.layout_requested = true;
+        self.force_layout_pass = true;
+    }
+
+    pub(crate) fn composition_tree_needs_layout(&mut self) -> bool {
+        let Some(root) = self.composition.root() else {
+            return true;
+        };
+        let mut applier = self.composition.applier_mut();
+        cranpose_ui::tree_needs_layout(&mut *applier, root).unwrap_or_else(|err| {
+            log::warn!(
+                "Cannot check layout dirty status for root #{}: {}",
+                root,
+                err
+            );
+            true
+        })
+    }
+
+    pub(crate) fn has_stale_work_in_context(&self) -> bool {
+        self.layout_requested
+            || peek_render_invalidation()
+            || peek_pointer_invalidation()
+            || peek_focus_invalidation()
+            || peek_layout_invalidation()
+            || cranpose_ui::has_pending_layout_repasses()
+            || cranpose_ui::has_pending_measure_repasses()
+            || cranpose_ui::has_pending_draw_repasses()
+            || has_pending_pointer_repasses()
+            || has_pending_focus_invalidations()
+    }
+
+    pub(crate) fn wants_frame_in_context(&self) -> bool {
+        self.layout_requested
+            || peek_render_invalidation()
+            || peek_pointer_invalidation()
+            || peek_focus_invalidation()
+            || peek_layout_invalidation()
+            || self.composition.should_render()
+    }
+
+    pub(crate) fn needs_ui_update_in_context(&self, surfaces_dirty: bool) -> bool {
+        surfaces_dirty
+            || self.has_stale_work_in_context()
+            || self.composition.runtime_handle().has_pending_ui()
+            || has_pending_semantics_invalidations()
+            || self.composition.should_render()
+    }
+
+    pub(crate) fn next_event_time(&self) -> Option<web_time::Instant> {
+        let app_context = Rc::clone(&self.app_context);
+        app_context.enter(cranpose_ui::next_cursor_blink_time)
+    }
+
+    pub(crate) fn frame_time_nanos_at(&self, now: Instant) -> u64 {
+        now.checked_duration_since(self.start_time)
+            .unwrap_or_default()
+            .as_nanos()
+            .min(u128::from(u64::MAX)) as u64
+    }
+
+    pub(crate) fn realtime_pointer_event_time(
+        &self,
+        platform_time_ms: Option<i64>,
+    ) -> PointerEventTime {
+        PointerEventTime {
+            platform_time_ms,
+            animation_time_nanos: self
+                .frame_time_nanos_at(Instant::now())
+                .max(self.last_frame_time_nanos),
+        }
+    }
+
+    pub(crate) fn install_text_input_router(&mut self) {
+        if self.text_input_router_installed {
+            return;
+        }
+        let router = Rc::new(TextInputRouter {
+            routes: Rc::clone(&self.text_input_routes),
+        });
+        let app_context = Rc::clone(&self.app_context);
+        app_context
+            .enter(|| cranpose_ui::text_input_session::set_platform_text_input_handler(router));
+        self.text_input_router_installed = true;
+    }
 }
 
 impl<R> AppShell<R>
@@ -499,44 +591,35 @@ where
             }
         });
         renderer.scene_mut().clear();
-        let mut shell = Self {
+        let app = ShellApp {
             app_context,
             runtime,
             composition,
             content: build,
-            renderer,
-            cursor: (0.0, 0.0),
-            viewport,
-            buffer_size,
             start_time: Instant::now(),
             last_frame_time_nanos: 0,
-            layout_tree: None,
-            semantics_tree: None,
             semantics_enabled: false,
             semantics_snapshot_revision: 0,
-            frame_rate_preference: FrameRatePreference::default(),
             layout_requested: true,
             force_layout_pass: true,
-            scene_dirty: true,
-            scoped_layout_scene_nodes: Vec::new(),
-            retained_visual_nodes: HashSet::new(),
-            is_dirty: true,
-            buttons_pressed: PointerButtons::NONE,
-            pointer_source: PointerSource::Unknown,
             modifiers: None,
-            hit_path_tracker: HitPathTracker::new(),
-            hovered_nodes: Vec::new(),
-            on_rotary_scroll: None,
             rotary_scroll_factor: DEFAULT_ROTARY_SCROLL_FACTOR_DP,
             #[cfg(all(feature = "clipboard-native", target_os = "linux"))]
             clipboard: arboard::Clipboard::new().ok(),
             dev_options: DevOptions::default(),
-            dev_overlay_controls: Vec::new(),
-            dev_overlay_text: String::new(),
-            dev_overlay_last_refresh: None,
-            dev_overlay_viewport: None,
             fps_monitor: fps_monitor::FpsMonitor::new(),
-            frame_scheduler: FrameScheduler::default(),
+            text_input_routes: Rc::new(RefCell::new(TextInputRoutes::default())),
+            text_input_router_installed: false,
+            window_roots_seen: None,
+        };
+        let mut shell = Self {
+            app,
+            surfaces: vec![RootSurface::new(
+                RootId::Primary,
+                renderer,
+                buffer_size,
+                viewport,
+            )],
         };
         shell.process_frame();
         shell
@@ -547,7 +630,231 @@ where
     /// need UIKit/JNI access the shell itself does not have: enter the context
     /// and call the relevant `set_platform_*` installer.
     pub fn app_context(&self) -> &Rc<cranpose_ui::AppContext> {
-        &self.app_context
+        &self.app.app_context
+    }
+
+    /// The surface drawing `root`, or `None` when no surface was added for
+    /// it. The primary surface always exists.
+    pub fn surface(&mut self, root: RootId) -> Option<SurfaceMut<'_, R>> {
+        let index = self.surface_index(root)?;
+        Some(SurfaceMut::new(self, index))
+    }
+
+    /// The surface drawing the composition root.
+    pub fn primary(&mut self) -> SurfaceMut<'_, R> {
+        SurfaceMut::new(self, 0)
+    }
+
+    /// The root whose surface now draws the node that took the primary
+    /// press, or `None` while no press is being held.
+    ///
+    /// A press is taken by a node, not by a rectangle. When the application
+    /// moves that node into a window of its own — a tab pulled out of a
+    /// strip, a pane pulled off a stack — the press belongs to that window
+    /// from then on, and a platform can hand it over on the strength of this
+    /// rather than on where the pointer happens to be.
+    pub fn root_holding_the_press(&mut self) -> Option<RootId> {
+        let pressed = self
+            .surfaces
+            .iter()
+            .find_map(|surface| surface.hit_path_tracker.dispatch_order(PointerId::PRIMARY))?;
+        let primary_root = self.app.composition.root()?;
+        let mut applier = self.app.composition.applier_mut();
+        let holder = pressed.into_iter().find_map(|node| {
+            let node = applier.scene_node_attached_to(node, primary_root)?;
+            Some(cranpose_ui::nearest_window_root(&mut applier, node))
+        })?;
+        drop(applier);
+        self.surfaces
+            .iter()
+            .find(|surface| surface.owns_nodes_under(holder))
+            .map(|surface| surface.id)
+    }
+
+    fn surface_index(&self, root: RootId) -> Option<usize> {
+        self.surfaces.iter().position(|surface| surface.id == root)
+    }
+
+    /// Gives the window root registered under `window` a surface of its
+    /// own, drawn by `renderer` into a framebuffer of `buffer_size` physical
+    /// pixels and `viewport` logical pixels. The surface follows the window
+    /// root node while it stays in the tree, and draws nothing while it is
+    /// out. Returns the renderer of the surface this one replaces, if the
+    /// window already had one.
+    ///
+    /// The renderer joins an app whose services the primary renderer
+    /// already installed; nothing is attached to the app context again.
+    pub fn add_window_surface(
+        &mut self,
+        window: u64,
+        renderer: R,
+        buffer_size: (u32, u32),
+        viewport: (f32, f32),
+    ) -> Option<R> {
+        let previous = self.remove_window_surface(window);
+        self.surfaces.push(RootSurface::new(
+            RootId::Window(window),
+            renderer,
+            buffer_size,
+            viewport,
+        ));
+        self.app.window_roots_seen = None;
+        self.sync_window_roots();
+        previous
+    }
+
+    /// Takes the surface of `window` away, handing back its renderer.
+    pub fn remove_window_surface(&mut self, window: u64) -> Option<R> {
+        let root = RootId::Window(window);
+        let index = self.surface_index(root)?;
+        self.app.text_input_routes.borrow_mut().remove(root);
+        Some(self.surfaces.remove(index).renderer)
+    }
+
+    /// Every surface's root, the primary first.
+    pub fn surface_ids(&self) -> Vec<RootId> {
+        self.surfaces.iter().map(|surface| surface.id).collect()
+    }
+
+    /// The window roots attached in the composition right now. A platform
+    /// reads this after an update to open a window for each new entry and
+    /// close the windows whose entries left.
+    pub fn window_roots(&self) -> Vec<WindowRootEntry> {
+        let app_context = Rc::clone(&self.app.app_context);
+        app_context.enter(cranpose_ui::window_roots)
+    }
+
+    /// Changes whenever a window root attaches, detaches or is updated; a
+    /// platform that stored the last value it acted on skips
+    /// [`Self::window_roots`] while it reads the same.
+    pub fn window_roots_revision(&self) -> u64 {
+        let app_context = Rc::clone(&self.app.app_context);
+        app_context.enter(cranpose_ui::window_roots_revision)
+    }
+
+    /// Whether the primary root lays out anything of its own: a node with
+    /// area outside every window root. A platform hides the primary window
+    /// while this is false, because every visible node is then in a window
+    /// of its own.
+    pub fn primary_has_content(&mut self) -> bool {
+        let app_context = Rc::clone(&self.app.app_context);
+        app_context.enter(|| {
+            self.surfaces[0]
+                .layout_tree_in_context(&mut self.app)
+                .is_some_and(|tree| tree.root().children.iter().any(layout_has_area))
+        })
+    }
+
+    /// The extent of what the primary root lays out: the far right and
+    /// bottom edges of its nodes with area, measured from the root's origin
+    /// and leaving out every window root's subtree. `None` while it lays
+    /// out nothing. A platform whose primary window wraps its content sizes
+    /// the window to this after every update.
+    pub fn primary_content_size(&mut self) -> Option<Size> {
+        let app_context = Rc::clone(&self.app.app_context);
+        app_context.enter(|| {
+            self.surfaces[0]
+                .layout_tree_in_context(&mut self.app)
+                .and_then(|tree| {
+                    tree.root()
+                        .children
+                        .iter()
+                        .filter_map(layout_extent)
+                        .reduce(farther_extent)
+                })
+        })
+    }
+
+    /// The `drag_and_drop_target` under `point` and where the point falls in
+    /// that target's surface. A point on the screen is looked up in every
+    /// surface whose window position the platform told, later windows
+    /// first and the primary last; a point without one only in `source`,
+    /// the surface holding the press.
+    pub(crate) fn drag_and_drop_target_at(
+        &mut self,
+        point: cranpose_ui::DragAndDropPoint,
+        source: usize,
+    ) -> Option<(NodeId, cranpose_ui::Point)> {
+        let app_context = Rc::clone(&self.app.app_context);
+        let candidates: Vec<(usize, cranpose_ui::Point)> = match point.screen {
+            Some(screen) => (0..self.surfaces.len())
+                .rev()
+                .filter_map(|index| {
+                    let local = self.surfaces[index].screen_point_inside(screen)?;
+                    Some((index, local))
+                })
+                .collect(),
+            None => vec![(source, point.local)],
+        };
+        candidates.into_iter().find_map(|(index, local)| {
+            self.surfaces[index]
+                .renderer
+                .scene()
+                .hit_test_nodes(local.x, local.y)
+                .into_iter()
+                .find(|node| app_context.drag_and_drop().is_target(*node))
+                .map(|node| (node, local))
+        })
+    }
+
+    /// Names the surface the platform considers focused, which is where the
+    /// soft keyboard belongs. Pointer presses activate their surface on
+    /// their own; a platform calls this for focus it grants otherwise.
+    pub fn set_active_root(&mut self, root: RootId) {
+        self.app.text_input_routes.borrow_mut().set_active(root);
+    }
+
+    /// The surface the platform considers focused.
+    pub fn active_root(&self) -> RootId {
+        self.app.text_input_routes.borrow().active()
+    }
+
+    fn sync_window_roots(&mut self) {
+        let app_context = Rc::clone(&self.app.app_context);
+        app_context.enter(|| self.sync_window_roots_in_context());
+    }
+
+    pub(crate) fn sync_window_roots_in_context(&mut self) {
+        let revision = cranpose_ui::window_roots_revision();
+        if self.app.window_roots_seen == Some(revision) {
+            return;
+        }
+        self.app.window_roots_seen = Some(revision);
+        let entries = cranpose_ui::window_roots();
+        for surface in &mut self.surfaces {
+            let RootId::Window(id) = surface.id else {
+                continue;
+            };
+            let root = entries
+                .iter()
+                .find(|entry| entry.node as u64 == id)
+                .map(|entry| entry.node);
+            surface.set_root(root);
+        }
+    }
+
+    pub(crate) fn any_surface_dirty(&self) -> bool {
+        self.surfaces
+            .iter()
+            .any(|surface| surface.is_dirty || surface.scene_dirty)
+    }
+
+    pub(crate) fn mark_all_dirty(&mut self) {
+        for surface in &mut self.surfaces {
+            surface.is_dirty = true;
+        }
+    }
+
+    fn clear_surface_dirt(&mut self) {
+        for surface in &mut self.surfaces {
+            surface.is_dirty = false;
+        }
+    }
+
+    fn invalidate_dev_overlay_text(&mut self) {
+        for surface in &mut self.surfaces {
+            surface.invalidate_dev_overlay_text();
+        }
     }
 
     /// Set development options for debugging and performance monitoring.
@@ -555,32 +862,32 @@ where
     /// The FPS counter and other overlays are rendered directly by the renderer
     /// (not via composition) to avoid affecting performance measurements.
     pub fn set_dev_options(&mut self, options: DevOptions) {
-        self.dev_options = options;
+        self.app.dev_options = options;
         self.invalidate_dev_overlay_text();
-        let app_context = Rc::clone(&self.app_context);
+        let app_context = Rc::clone(&self.app.app_context);
         app_context.enter(request_render_invalidation);
-        self.mark_dirty();
+        self.mark_all_dirty();
     }
 
     /// Get a reference to the current dev options.
     pub fn dev_options(&self) -> &DevOptions {
-        &self.dev_options
+        &self.app.dev_options
     }
 
     pub fn frame_pacing_mode(&self) -> FramePacingMode {
-        self.dev_options.frame_pacing_mode
+        self.app.dev_options.frame_pacing_mode
     }
 
     pub fn current_fps(&self) -> f32 {
-        self.fps_monitor.current_fps()
+        self.app.fps_monitor.current_fps()
     }
 
     pub fn fps_stats(&self) -> FpsStats {
-        self.fps_monitor.stats()
+        self.app.fps_monitor.stats()
     }
 
     pub fn reset_fps_stats(&mut self) {
-        self.fps_monitor.reset_stats();
+        self.app.fps_monitor.reset_stats();
         self.invalidate_dev_overlay_text();
     }
 
@@ -589,7 +896,8 @@ where
         frame_started_at: Instant,
         frame_finished_at: Instant,
     ) {
-        self.fps_monitor
+        self.app
+            .fps_monitor
             .record_frame_work(frame_started_at, frame_finished_at);
     }
 
@@ -600,20 +908,20 @@ where
         frame_started_nanos: u64,
         frame_finished_nanos: u64,
     ) {
-        let started = self.start_time + std::time::Duration::from_nanos(frame_started_nanos);
-        let finished = self.start_time + std::time::Duration::from_nanos(frame_finished_nanos);
+        let started = self.app.start_time + std::time::Duration::from_nanos(frame_started_nanos);
+        let finished = self.app.start_time + std::time::Duration::from_nanos(frame_finished_nanos);
         self.record_presented_frame(started, finished);
     }
 
     pub fn set_frame_pacing_mode(&mut self, mode: FramePacingMode) {
-        if self.dev_options.frame_pacing_mode == mode {
+        if self.app.dev_options.frame_pacing_mode == mode {
             return;
         }
-        self.dev_options.frame_pacing_mode = mode;
+        self.app.dev_options.frame_pacing_mode = mode;
         self.invalidate_dev_overlay_text();
-        let app_context = Rc::clone(&self.app_context);
+        let app_context = Rc::clone(&self.app.app_context);
         app_context.enter(request_render_invalidation);
-        self.mark_dirty();
+        self.mark_all_dirty();
     }
 
     /// Where the dev overlay draws the control for `mode`, in logical pixels.
@@ -623,121 +931,69 @@ where
     /// a pacing control has to hard-code a coordinate and silently starts
     /// passing against empty space the moment the overlay's text changes.
     pub fn dev_overlay_control_center(&self, mode: FramePacingMode) -> Option<(f32, f32)> {
-        self.dev_overlay_controls
-            .iter()
-            .find(|control| control.mode == mode)
-            .map(|control| {
-                (
-                    control.bounds.x + control.bounds.width * 0.5,
-                    control.bounds.y + control.bounds.height * 0.5,
-                )
-            })
+        self.surfaces[0].dev_overlay_control_center(mode)
     }
 
-    pub(crate) fn dev_overlay_press(&mut self, x: f32, y: f32) -> bool {
-        if !self.dev_options.frame_pacing_controls {
-            return false;
-        }
-        let Some(mode) = self
-            .dev_overlay_controls
-            .iter()
-            .find(|control| control.bounds.contains(x, y))
-            .map(|control| control.mode)
-        else {
-            return false;
-        };
-        self.set_frame_pacing_mode(mode);
-        true
-    }
-
-    fn invalidate_dev_overlay_text(&mut self) {
-        self.dev_overlay_text.clear();
-        self.dev_overlay_last_refresh = None;
-        self.dev_overlay_viewport = None;
-    }
-
+    /// Sets the primary surface's viewport and lays out and renders at once.
     pub fn set_viewport(&mut self, width: f32, height: f32) {
-        self.viewport = (width, height);
-        self.request_forced_layout_pass();
-        self.mark_dirty();
+        self.primary().set_viewport(width, height);
         self.process_frame();
     }
 
     pub fn viewport_size(&self) -> (f32, f32) {
-        self.viewport
+        self.surfaces[0].viewport
+    }
+
+    /// Tells the shell where the primary window sits on the screen. See
+    /// [`SurfaceMut::set_screen_origin`].
+    pub fn set_screen_origin(&mut self, origin: Option<cranpose_ui_graphics::Point>) {
+        self.surfaces[0].screen_origin = origin;
     }
 
     pub fn set_buffer_size(&mut self, width: u32, height: u32) {
-        self.buffer_size = (width, height);
+        self.surfaces[0].buffer_size = (width, height);
     }
 
     pub fn buffer_size(&self) -> (u32, u32) {
-        self.buffer_size
+        self.surfaces[0].buffer_size
     }
 
     pub fn scene(&self) -> &R::Scene {
-        self.renderer.scene()
+        self.surfaces[0].renderer.scene()
     }
 
     pub fn renderer(&mut self) -> &mut R {
-        &mut self.renderer
+        &mut self.surfaces[0].renderer
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     pub fn set_frame_waker(&mut self, waker: impl Fn() + Send + Sync + 'static) {
-        self.runtime.set_frame_waker(waker);
+        self.app.runtime.set_frame_waker(waker);
     }
 
     #[cfg(target_arch = "wasm32")]
     pub fn set_frame_waker(&mut self, waker: impl Fn() + 'static) {
-        self.runtime.set_frame_waker(waker);
+        self.app.runtime.set_frame_waker(waker);
     }
 
     pub fn clear_frame_waker(&mut self) {
-        self.runtime.clear_frame_waker();
+        self.app.runtime.clear_frame_waker();
     }
 
     pub fn should_render(&self) -> bool {
-        let app_context = Rc::clone(&self.app_context);
+        let app_context = Rc::clone(&self.app.app_context);
         app_context.enter(|| {
-            if self.layout_requested
-                || self.scene_dirty
-                || peek_render_invalidation()
-                || peek_pointer_invalidation()
-                || peek_focus_invalidation()
-                || peek_layout_invalidation()
-            {
-                return true;
-            }
-            self.composition.should_render()
+            self.app.wants_frame_in_context()
+                || self.surfaces.iter().any(|surface| surface.scene_dirty)
         })
     }
 
-    fn has_stale_pixels_in_context(&self) -> bool {
-        self.is_dirty
-            || self.layout_requested
-            || self.scene_dirty
-            || peek_render_invalidation()
-            || peek_pointer_invalidation()
-            || peek_focus_invalidation()
-            || peek_layout_invalidation()
-            || cranpose_ui::has_pending_layout_repasses()
-            || cranpose_ui::has_pending_measure_repasses()
-            || cranpose_ui::has_pending_draw_repasses()
-            || has_pending_pointer_repasses()
-            || has_pending_focus_invalidations()
-    }
-
-    fn needs_ui_update_in_context(&self) -> bool {
-        self.has_stale_pixels_in_context()
-            || self.composition.runtime_handle().has_pending_ui()
-            || has_pending_semantics_invalidations()
-            || self.composition.should_render()
-    }
-
     pub fn needs_update(&self) -> bool {
-        let app_context = Rc::clone(&self.app_context);
-        app_context.enter(|| self.needs_ui_update_in_context())
+        let app_context = Rc::clone(&self.app.app_context);
+        app_context.enter(|| {
+            self.app
+                .needs_ui_update_in_context(self.any_surface_dirty())
+        })
     }
 
     /// Returns true when the runtime holds work for the UI thread: posted tasks,
@@ -748,12 +1004,12 @@ where
     /// redrawn. A platform backend running with no surface uses it to compose
     /// for work and stay asleep for animation.
     pub fn has_pending_ui(&self) -> bool {
-        let app_context = Rc::clone(&self.app_context);
-        app_context.enter(|| self.composition.runtime_handle().has_pending_ui())
+        let app_context = Rc::clone(&self.app.app_context);
+        app_context.enter(|| self.app.composition.runtime_handle().has_pending_ui())
     }
 
-    /// Returns true if the shell owes the display a frame: stale pixels, or a
-    /// renderer that has not warmed its swapchain yet.
+    /// Returns true if the primary surface owes the display a frame: stale
+    /// pixels, or a renderer that has not warmed its swapchain yet.
     ///
     /// An app that merely holds an open `next_frame()` await - a game loop, a
     /// polling effect - keeps [`Self::needs_update`] true forever without
@@ -765,41 +1021,33 @@ where
     /// which reports the work that update actually did.
     /// Note: Cursor blink is now timer-based and uses WaitUntil scheduling, not continuous redraw.
     pub fn needs_redraw(&self) -> bool {
-        let app_context = Rc::clone(&self.app_context);
-        app_context.enter(|| self.has_stale_pixels_in_context() || self.renderer_warmup_due())
+        let app_context = Rc::clone(&self.app.app_context);
+        app_context.enter(|| self.surfaces[0].needs_redraw_in_context(&self.app))
     }
 
-    /// A renderer warmup is a frame rendered only so caches see their content
-    /// a second time. While a frame callback is armed the app is about to
-    /// produce a frame anyway, and rendering the same scene again first would
-    /// double every animated frame's cost for entries the next frame replaces.
-    fn renderer_warmup_due(&self) -> bool {
-        self.renderer.needs_frame_warmup() && !self.runtime.runtime_handle().has_frame_callbacks()
-    }
-
-    /// Marks the shell as dirty, indicating a redraw is needed.
+    /// Marks the primary surface as dirty, indicating a redraw is needed.
     pub fn mark_dirty(&mut self) {
-        self.is_dirty = true;
+        self.surfaces[0].is_dirty = true;
     }
 
     pub fn request_root_render(&mut self) {
-        self.composition.request_root_render();
-        self.request_forced_layout_pass();
-        let app_context = Rc::clone(&self.app_context);
+        self.app.composition.request_root_render();
+        self.app.request_forced_layout_pass();
+        let app_context = Rc::clone(&self.app.app_context);
         app_context.enter(request_render_invalidation);
-        self.mark_dirty();
+        self.mark_all_dirty();
     }
 
     pub fn set_density(&mut self, density: f32) {
-        let app_context = Rc::clone(&self.app_context);
+        let app_context = Rc::clone(&self.app.app_context);
         let changed = app_context.enter(|| {
             let previous = cranpose_ui::current_density().to_bits();
             cranpose_ui::set_density(density);
             previous != cranpose_ui::current_density().to_bits()
         });
         if changed {
-            self.request_forced_layout_pass();
-            self.mark_dirty();
+            self.app.request_forced_layout_pass();
+            self.mark_all_dirty();
         }
     }
 
@@ -824,109 +1072,85 @@ where
     /// multiplying, so a host that can read that table hands it over here and
     /// every `Sp` in the app resolves the way the platform's own text does.
     pub fn set_font_scale_curve(&mut self, curve: cranpose_ui::FontScaleCurve) {
-        let app_context = Rc::clone(&self.app_context);
+        let app_context = Rc::clone(&self.app.app_context);
         let changed = app_context.enter(|| {
             let previous = cranpose_ui::current_font_scale_curve();
             cranpose_ui::set_font_scale_curve(curve);
             previous != cranpose_ui::current_font_scale_curve()
         });
         if changed {
-            self.request_forced_layout_pass();
-            self.mark_dirty();
+            self.app.request_forced_layout_pass();
+            self.mark_all_dirty();
         }
     }
 
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn debug_current_density(&self) -> f32 {
-        let app_context = Rc::clone(&self.app_context);
+        let app_context = Rc::clone(&self.app.app_context);
         app_context.enter(cranpose_ui::current_density)
     }
 
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn debug_current_font_scale(&self) -> f32 {
-        let app_context = Rc::clone(&self.app_context);
+        let app_context = Rc::clone(&self.app.app_context);
         app_context.enter(cranpose_ui::current_font_scale)
     }
 
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn debug_current_font_scale_curve(&self) -> cranpose_ui::FontScaleCurve {
-        let app_context = Rc::clone(&self.app_context);
+        let app_context = Rc::clone(&self.app.app_context);
         app_context.enter(cranpose_ui::current_font_scale_curve)
     }
 
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn debug_enter_app_context<T>(&self, block: impl FnOnce() -> T) -> T {
-        let app_context = Rc::clone(&self.app_context);
+        let app_context = Rc::clone(&self.app.app_context);
         app_context.enter(block)
-    }
-
-    fn request_layout_pass(&mut self) {
-        self.layout_requested = true;
-    }
-
-    fn request_forced_layout_pass(&mut self) {
-        self.layout_requested = true;
-        self.force_layout_pass = true;
-    }
-
-    fn composition_tree_needs_layout(&mut self) -> bool {
-        let Some(root) = self.composition.root() else {
-            return true;
-        };
-        let mut applier = self.composition.applier_mut();
-        cranpose_ui::tree_needs_layout(&mut *applier, root).unwrap_or_else(|err| {
-            log::warn!(
-                "Cannot check layout dirty status for root #{}: {}",
-                root,
-                err
-            );
-            true
-        })
     }
 
     /// Returns true if there are active animations or pending recompositions.
     pub fn has_active_animations(&self) -> bool {
-        self.composition.should_render()
+        self.app.composition.should_render()
     }
 
     pub fn has_transient_frame_callbacks(&self) -> bool {
-        self.composition
+        self.app
+            .composition
             .runtime_handle()
             .has_transient_frame_callbacks()
     }
 
     pub fn has_active_pointer_gesture(&self) -> bool {
-        self.buttons_pressed != PointerButtons::NONE
-            && self.hit_path_tracker.has_path(PointerId::PRIMARY)
+        self.surfaces[0].has_active_pointer_gesture()
+    }
+
+    /// Primary-surface form of [`SurfaceMut::frame_owed`].
+    pub fn frame_owed(&self) -> bool {
+        self.surfaces[0].frame_owed
+    }
+
+    /// Primary-surface form of [`SurfaceMut::take_frame_owed`].
+    pub fn take_frame_owed(&mut self) -> bool {
+        std::mem::take(&mut self.surfaces[0].frame_owed)
     }
 
     /// Returns the next scheduled event time for cursor blink.
     /// Use this for `ControlFlow::WaitUntil` scheduling.
     pub fn next_event_time(&self) -> Option<web_time::Instant> {
-        let app_context = Rc::clone(&self.app_context);
-        app_context.enter(cranpose_ui::next_cursor_blink_time)
+        self.app.next_event_time()
     }
 
     fn compute_frame_schedule(&self) -> FrameSchedule {
-        let needs_update = self.needs_update();
-        let needs_frame = self.is_dirty
-            || self.should_render()
-            || self.has_active_pointer_gesture()
-            || self.renderer_warmup_due();
-        FrameSchedule {
-            needs_update,
-            needs_frame,
-            next_deadline: self.next_event_time(),
-        }
+        self.surfaces[0].compute_frame_schedule(&self.app, self.any_surface_dirty())
     }
 
     pub fn frame_schedule(&self) -> FrameSchedule {
         let schedule = self.compute_frame_schedule();
-        self.frame_scheduler.record(schedule);
+        self.surfaces[0].frame_scheduler.record(schedule);
         schedule
     }
 
@@ -935,36 +1159,24 @@ where
         D: PlatformFrameDriver + ?Sized,
     {
         let schedule = self.compute_frame_schedule();
-        self.frame_scheduler.schedule(schedule, driver);
+        self.surfaces[0].frame_scheduler.schedule(schedule, driver);
         schedule
     }
 
     pub fn frame_scheduler_snapshot(&self) -> FrameSchedule {
-        self.frame_scheduler.snapshot()
-    }
-
-    fn frame_time_nanos_at(&self, now: Instant) -> u64 {
-        now.checked_duration_since(self.start_time)
-            .unwrap_or_default()
-            .as_nanos()
-            .min(u128::from(u64::MAX)) as u64
+        self.surfaces[0].frame_scheduler.snapshot()
     }
 
     /// Timestamp a live input sample against the current animation clock.
     pub fn realtime_pointer_event_time(&self, platform_time_ms: Option<i64>) -> PointerEventTime {
-        PointerEventTime {
-            platform_time_ms,
-            animation_time_nanos: self
-                .frame_time_nanos_at(Instant::now())
-                .max(self.last_frame_time_nanos),
-        }
+        self.app.realtime_pointer_event_time(platform_time_ms)
     }
 
     /// Timestamp deterministic input at the most recently processed frame.
     pub fn exact_pointer_event_time(&self, platform_time_ms: Option<i64>) -> PointerEventTime {
         PointerEventTime {
             platform_time_ms,
-            animation_time_nanos: self.last_frame_time_nanos,
+            animation_time_nanos: self.app.last_frame_time_nanos,
         }
     }
 
@@ -972,8 +1184,8 @@ where
         &mut self,
         frame_interval: std::time::Duration,
     ) -> FrameUpdateResult {
-        let wall_frame_time = self.frame_time_nanos_at(Instant::now());
-        let base_frame_time = self.last_frame_time_nanos.max(wall_frame_time);
+        let wall_frame_time = self.app.frame_time_nanos_at(Instant::now());
+        let base_frame_time = self.app.last_frame_time_nanos.max(wall_frame_time);
         let frame_time = base_frame_time
             .saturating_add(frame_interval.as_nanos().min(u128::from(u64::MAX)) as u64);
         self.update_at_frame_time_nanos(frame_time)
@@ -989,79 +1201,36 @@ where
         frame_interval: std::time::Duration,
     ) -> FrameUpdateResult {
         let frame_time = self
+            .app
             .last_frame_time_nanos
             .saturating_add(frame_interval.as_nanos().min(u128::from(u64::MAX)) as u64);
         self.update_at_frame_time_nanos(frame_time)
     }
 
     pub fn update_at_frame_time_nanos(&mut self, frame_time: u64) -> FrameUpdateResult {
-        let app_context = Rc::clone(&self.app_context);
+        let app_context = Rc::clone(&self.app.app_context);
         app_context.enter(|| {
             let update_started_at = Instant::now();
-            let frame_time = frame_time.max(self.last_frame_time_nanos);
-            self.last_frame_time_nanos = frame_time;
-            let runtime_handle = self.runtime.runtime_handle();
+            let frame_time = frame_time.max(self.app.last_frame_time_nanos);
+            self.app.last_frame_time_nanos = frame_time;
+            let runtime_handle = self.app.runtime.runtime_handle();
             runtime_handle.with_deferred_state_releases(|| {
-                self.runtime.drain_frame_callbacks(frame_time);
+                self.app.runtime.drain_frame_callbacks(frame_time);
                 let after_frame_callbacks = Instant::now();
                 runtime_handle.drain_ui();
                 let after_ui_drain = Instant::now();
-                let should_render = self.composition.should_recompose();
+                let should_render = self.app.composition.should_recompose();
                 let mut reconcile_attempted = false;
                 let mut reconcile_changed = false;
                 if should_render {
                     log::trace!(
                         target: "cranpose::input",
                         "update begin: should_render=true layout_requested={} scene_dirty={} is_dirty={}",
-                        self.layout_requested,
-                        self.scene_dirty,
-                        self.is_dirty
+                        self.app.layout_requested,
+                        self.surfaces[0].scene_dirty,
+                        self.surfaces[0].is_dirty
                     );
-                }
-                if should_render {
-                    let Some(root_key) = self.composition.root_key() else {
-                        let result = self.process_frame_in_context(reconcile_changed);
-                        let after_process_frame = Instant::now();
-                        log_update_stage_telemetry(UpdateStageTelemetry {
-                            started_at: update_started_at,
-                            after_frame_callbacks,
-                            after_ui_drain,
-                            after_reconcile: after_ui_drain,
-                            after_process_frame,
-                            should_render,
-                            reconcile_attempted,
-                            reconcile_changed,
-                        });
-                        self.is_dirty = false;
-                        return result;
-                    };
-                    reconcile_attempted = true;
-                    match self.composition.reconcile(root_key, &mut *self.content) {
-                        Ok(changed) => {
-                            reconcile_changed = changed;
-                            log::trace!(
-                                target: "cranpose::input",
-                                "reconcile changed={changed}"
-                            );
-                            if changed {
-                                self.fps_monitor.record_recomposition();
-                                if self.composition_tree_needs_layout() {
-                                    self.request_layout_pass();
-                                }
-                                request_render_invalidation();
-                            }
-                        }
-                        Err(NodeError::Missing { id }) => {
-                            log::debug!("Recomposition skipped: node {} no longer exists", id);
-                            self.request_layout_pass();
-                            request_render_invalidation();
-                        }
-                        Err(err) => {
-                            log::error!("recomposition failed: {err}");
-                            self.request_layout_pass();
-                            request_render_invalidation();
-                        }
-                    }
+                    (reconcile_attempted, reconcile_changed) = self.reconcile_in_context();
                 }
                 let after_reconcile = Instant::now();
                 let result = self.process_frame_in_context(reconcile_changed);
@@ -1076,14 +1245,52 @@ where
                     reconcile_attempted,
                     reconcile_changed,
                 });
-                self.is_dirty = false;
+                self.clear_surface_dirt();
                 result
             })
         })
     }
 
+    fn reconcile_in_context(&mut self) -> (bool, bool) {
+        let Some(root_key) = self.app.composition.root_key() else {
+            return (false, false);
+        };
+        match self
+            .app
+            .composition
+            .reconcile(root_key, &mut *self.app.content)
+        {
+            Ok(changed) => {
+                log::trace!(
+                    target: "cranpose::input",
+                    "reconcile changed={changed}"
+                );
+                if changed {
+                    self.app.fps_monitor.record_recomposition();
+                    if self.app.composition_tree_needs_layout() {
+                        self.app.request_layout_pass();
+                    }
+                    request_render_invalidation();
+                }
+                (true, changed)
+            }
+            Err(NodeError::Missing { id }) => {
+                log::debug!("Recomposition skipped: node {} no longer exists", id);
+                self.app.request_layout_pass();
+                request_render_invalidation();
+                (true, false)
+            }
+            Err(err) => {
+                log::error!("recomposition failed: {err}");
+                self.app.request_layout_pass();
+                request_render_invalidation();
+                (true, false)
+            }
+        }
+    }
+
     pub fn update(&mut self) -> FrameUpdateResult {
-        let frame_time = self.frame_time_nanos_at(Instant::now());
+        let frame_time = self.app.frame_time_nanos_at(Instant::now());
         self.update_at_frame_time_nanos(frame_time)
     }
 }
@@ -1093,8 +1300,32 @@ where
     R: Renderer,
 {
     fn drop(&mut self) {
-        self.runtime.clear_frame_waker();
+        self.app.runtime.clear_frame_waker();
     }
+}
+
+fn layout_has_area(layout: &cranpose_ui::LayoutBox) -> bool {
+    (layout.rect.width > 0.0 && layout.rect.height > 0.0)
+        || layout.children.iter().any(layout_has_area)
+}
+
+fn layout_extent(layout: &cranpose_ui::LayoutBox) -> Option<Size> {
+    let own = (layout.rect.width > 0.0 && layout.rect.height > 0.0).then(|| {
+        Size::new(
+            layout.rect.x + layout.rect.width,
+            layout.rect.y + layout.rect.height,
+        )
+    });
+    layout
+        .children
+        .iter()
+        .filter_map(layout_extent)
+        .chain(own)
+        .reduce(farther_extent)
+}
+
+fn farther_extent(a: Size, b: Size) -> Size {
+    Size::new(a.width.max(b.width), a.height.max(b.height))
 }
 
 pub fn default_root_key() -> Key {
@@ -1102,218 +1333,13 @@ pub fn default_root_key() -> Key {
 }
 
 #[cfg(test)]
-mod frame_pacing_tests {
-    use std::{
-        cell::RefCell,
-        panic::{AssertUnwindSafe, catch_unwind},
-        time::Duration,
-    };
-
-    use web_time::Instant;
-
-    use super::{FramePacingMode, FrameSchedule, FrameScheduler, PlatformFrameDriver};
-
-    #[derive(Clone, Copy, Debug, PartialEq)]
-    enum DriverCall {
-        RequestFrame,
-        RequestWakeAt(Instant),
-        ClearWake,
-    }
-
-    #[derive(Default)]
-    struct RecordingFrameDriver {
-        calls: RefCell<Vec<DriverCall>>,
-    }
-
-    impl RecordingFrameDriver {
-        fn calls(&self) -> Vec<DriverCall> {
-            self.calls.borrow().clone()
-        }
-    }
-
-    impl PlatformFrameDriver for RecordingFrameDriver {
-        fn request_frame(&self) {
-            self.calls.borrow_mut().push(DriverCall::RequestFrame);
-        }
-
-        fn request_wake_at(&self, deadline: Instant) {
-            self.calls
-                .borrow_mut()
-                .push(DriverCall::RequestWakeAt(deadline));
-        }
-
-        fn clear_wake(&self) {
-            self.calls.borrow_mut().push(DriverCall::ClearWake);
-        }
-    }
-
-    #[test]
-    fn frame_pacing_labels_match_overlay_modes() {
-        assert_eq!(FramePacingMode::Vsync.label(), "VSync");
-        assert_eq!(FramePacingMode::Hard60.label(), "60fps");
-        assert_eq!(FramePacingMode::Hard120.label(), "120fps");
-        assert_eq!(FramePacingMode::NoVsync.label(), "NoVSync");
-    }
-
-    #[test]
-    fn only_hard_modes_have_fixed_targets() {
-        assert_eq!(FramePacingMode::Vsync.target_fps(), None);
-        assert_eq!(FramePacingMode::Hard60.target_fps(), Some(60));
-        assert_eq!(FramePacingMode::Hard120.target_fps(), Some(120));
-        assert_eq!(FramePacingMode::NoVsync.target_fps(), None);
-    }
-
-    #[test]
-    fn frame_schedule_requests_immediate_frame_and_clears_deadline() {
-        let driver = RecordingFrameDriver::default();
-        let deadline = Instant::now() + Duration::from_millis(25);
-
-        FrameSchedule {
-            needs_update: true,
-            needs_frame: true,
-            next_deadline: Some(deadline),
-        }
-        .apply_to(&driver);
-
-        assert_eq!(
-            driver.calls(),
-            vec![DriverCall::ClearWake, DriverCall::RequestFrame]
-        );
-    }
-
-    #[test]
-    fn frame_schedule_requests_deadline_when_idle_until_timer() {
-        let driver = RecordingFrameDriver::default();
-        let deadline = Instant::now() + Duration::from_millis(25);
-
-        FrameSchedule {
-            needs_update: false,
-            needs_frame: false,
-            next_deadline: Some(deadline),
-        }
-        .apply_to(&driver);
-
-        assert_eq!(driver.calls(), vec![DriverCall::RequestWakeAt(deadline)]);
-    }
-
-    #[test]
-    fn frame_schedule_wakes_without_requesting_frame_for_update_only_work() {
-        let driver = RecordingFrameDriver::default();
-        let before = Instant::now();
-
-        FrameSchedule {
-            needs_update: true,
-            needs_frame: false,
-            next_deadline: None,
-        }
-        .apply_to(&driver);
-
-        let calls = driver.calls();
-        assert_eq!(calls.len(), 1);
-        match calls[0] {
-            DriverCall::RequestWakeAt(deadline) => {
-                assert!(deadline >= before);
-            }
-            other => panic!("update-only work must wake without requesting a frame: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn frame_schedule_clears_wake_when_fully_idle() {
-        let driver = RecordingFrameDriver::default();
-
-        FrameSchedule {
-            needs_update: false,
-            needs_frame: false,
-            next_deadline: None,
-        }
-        .apply_to(&driver);
-
-        assert_eq!(driver.calls(), vec![DriverCall::ClearWake]);
-    }
-
-    #[test]
-    fn frame_scheduler_records_latest_schedule_and_applies_driver() {
-        let scheduler = FrameScheduler::default();
-        let driver = RecordingFrameDriver::default();
-        let deadline = Instant::now() + Duration::from_millis(25);
-
-        scheduler.schedule(
-            FrameSchedule {
-                needs_update: false,
-                needs_frame: false,
-                next_deadline: Some(deadline),
-            },
-            &driver,
-        );
-
-        assert_eq!(
-            scheduler.snapshot(),
-            FrameSchedule {
-                needs_update: false,
-                needs_frame: false,
-                next_deadline: Some(deadline),
-            }
-        );
-        assert_eq!(driver.calls(), vec![DriverCall::RequestWakeAt(deadline)]);
-    }
-
-    #[test]
-    fn frame_scheduler_clears_deadline_for_immediate_frame() {
-        let scheduler = FrameScheduler::default();
-        let driver = RecordingFrameDriver::default();
-        let deadline = Instant::now() + Duration::from_millis(25);
-
-        scheduler.schedule(
-            FrameSchedule {
-                needs_update: true,
-                needs_frame: true,
-                next_deadline: Some(deadline),
-            },
-            &driver,
-        );
-
-        assert_eq!(
-            scheduler.snapshot(),
-            FrameSchedule {
-                needs_update: true,
-                needs_frame: true,
-                next_deadline: None,
-            }
-        );
-        assert_eq!(
-            driver.calls(),
-            vec![DriverCall::ClearWake, DriverCall::RequestFrame]
-        );
-    }
-
-    #[test]
-    fn frame_scheduler_recovers_poisoned_deadline_lock() {
-        let scheduler = FrameScheduler::default();
-        let deadline = Instant::now() + Duration::from_millis(25);
-
-        let _ = catch_unwind(AssertUnwindSafe(|| {
-            let _guard = scheduler.lock_deadline();
-            panic!("poison frame scheduler deadline lock");
-        }));
-
-        scheduler.record(FrameSchedule {
-            needs_update: false,
-            needs_frame: false,
-            next_deadline: Some(deadline),
-        });
-
-        assert_eq!(
-            scheduler.snapshot(),
-            FrameSchedule {
-                needs_update: false,
-                needs_frame: false,
-                next_deadline: Some(deadline),
-            }
-        );
-    }
-}
+#[path = "tests/app_shell_frame_pacing_tests.rs"]
+mod frame_pacing_tests;
 
 #[cfg(test)]
 #[path = "tests/app_shell_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/surface_tests.rs"]
+mod surface_tests;

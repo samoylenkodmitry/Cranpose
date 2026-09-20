@@ -174,6 +174,7 @@ impl SlotTable {
             },
         );
         self.refresh_group_indexes_from(insert_index);
+        self.movables.note_group(key, anchor);
         self.adjust_ancestor_group_spans(parent_anchor, 1, 0);
         anchor
     }

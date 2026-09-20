@@ -399,18 +399,10 @@ impl<A: Applier + 'static> Composition<A> {
                 });
             }
             runtime_handle.drain_ui();
-            let pending = runtime_handle.take_invalidated_scopes();
-            if pending.is_empty() {
+            self.dispose_forgotten_movables()?;
+            let Some(scopes) = live_invalidated_scopes(&runtime_handle) else {
                 break;
-            }
-            let mut scopes = Vec::new();
-            for (id, weak) in pending {
-                if let Some(inner) = weak.upgrade() {
-                    scopes.push(RecomposeScope { inner });
-                } else {
-                    runtime_handle.mark_scope_recomposed(id);
-                }
-            }
+            };
             if scopes.is_empty() {
                 continue;
             }
@@ -540,6 +532,46 @@ impl<A: Applier + 'static> Composition<A> {
         self.process_invalid_scopes_until_root_request()
     }
 
+    fn dispose_forgotten_movables(&mut self) -> Result<(), NodeError> {
+        let runtime_handle = self.runtime_handle();
+        let ids = runtime_handle.take_forgotten_movables();
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let host = self.slots_host();
+        let composer = Composer::new_with_shared_state(
+            Rc::clone(&self.composer_state),
+            Rc::clone(&host),
+            self.applier_host(),
+            runtime_handle.clone(),
+            self.observer.clone(),
+            self.root,
+        );
+        let commands = composer.install(|composer| {
+            composer.forget_movables(&ids)?;
+            Ok::<_, NodeError>(composer.take_commands())
+        })?;
+        self.apply_commands_and_updates_for_host(&host, &runtime_handle, commands)
+    }
+}
+
+fn live_invalidated_scopes(runtime_handle: &RuntimeHandle) -> Option<Vec<RecomposeScope>> {
+    let pending = runtime_handle.take_invalidated_scopes();
+    if pending.is_empty() {
+        return None;
+    }
+    let mut scopes = Vec::with_capacity(pending.len());
+    for (id, weak) in pending {
+        if let Some(inner) = weak.upgrade() {
+            scopes.push(RecomposeScope { inner });
+        } else {
+            runtime_handle.mark_scope_recomposed(id);
+        }
+    }
+    Some(scopes)
+}
+
+impl<A: Applier + 'static> Composition<A> {
     pub fn flush_pending_node_updates(&mut self) -> Result<(), NodeError> {
         let updates = self.runtime_handle().take_updates();
         let mut applier = self.applier.borrow_dyn();

@@ -247,6 +247,7 @@ struct ModifierChainMeasurement {
     size: Size,
     content_offset: Point,
     offset: Point,
+    window_root: bool,
 }
 
 type LayoutModifierNodeData = (
@@ -759,108 +760,108 @@ pub fn build_layout_tree_from_applier(
     applier: &mut MemoryApplier,
     root: NodeId,
 ) -> Result<Option<LayoutTree>, NodeError> {
-    fn snapshot(
-        applier: &mut MemoryApplier,
-        node_id: NodeId,
-    ) -> Result<Option<(crate::widgets::nodes::layout_node::LayoutState, Vec<NodeId>)>, NodeError>
+    let origin = layout_tree_origin(layout_snapshot(applier, root)?);
+    place_layout_box(applier, root, origin, Point::default()).map(|root| root.map(LayoutTree::new))
+}
+
+type LayoutSnapshot = (crate::widgets::nodes::layout_node::LayoutState, Vec<NodeId>);
+
+fn layout_tree_origin(root: Option<LayoutSnapshot>) -> Point {
+    let Some((state, _)) = root else {
+        return Point::default();
+    };
+    let position = state.position();
+    Point {
+        x: -position.x,
+        y: -position.y,
+    }
+}
+
+fn layout_snapshot(
+    applier: &mut MemoryApplier,
+    node_id: NodeId,
+) -> Result<Option<LayoutSnapshot>, NodeError> {
+    match applier
+        .with_node::<LayoutNode, _>(node_id, |node| (node.layout_state(), node.children.clone()))
     {
-        match applier.with_node::<LayoutNode, _>(node_id, |node| {
-            (node.layout_state(), node.children.clone())
-        }) {
-            Ok(snapshot) => return Ok(Some(snapshot)),
-            Err(NodeError::TypeMismatch { .. }) | Err(NodeError::Missing { .. }) => {}
-            Err(err) => return Err(err),
-        }
+        Ok(snapshot) => return Ok(Some(snapshot)),
+        Err(NodeError::TypeMismatch { .. }) | Err(NodeError::Missing { .. }) => {}
+        Err(err) => return Err(err),
+    }
 
-        match applier.with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
-            (node.layout_state(), node.active_children())
-        }) {
-            Ok(snapshot) => Ok(Some(snapshot)),
-            Err(NodeError::TypeMismatch { .. }) | Err(NodeError::Missing { .. }) => Ok(None),
-            Err(err) => Err(err),
+    match applier.with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
+        (node.layout_state(), node.active_children())
+    }) {
+        Ok(snapshot) => Ok(Some(snapshot)),
+        Err(NodeError::TypeMismatch { .. }) | Err(NodeError::Missing { .. }) => Ok(None),
+        Err(err) => Err(err),
+    }
+}
+
+fn place_layout_box(
+    applier: &mut MemoryApplier,
+    node_id: NodeId,
+    parent_content_origin: Point,
+    parent_layer_translation: Point,
+) -> Result<Option<LayoutBox>, NodeError> {
+    let Some((state, child_ids)) = layout_snapshot(applier, node_id)? else {
+        return Ok(None);
+    };
+    if !state.is_placed() {
+        return Ok(None);
+    }
+
+    let top_left = Point {
+        x: parent_content_origin.x + state.position().x,
+        y: parent_content_origin.y + state.position().y,
+    };
+    let rect = GeometryRect {
+        x: top_left.x,
+        y: top_left.y,
+        width: state.size().width,
+        height: state.size().height,
+    };
+    let info = runtime_metadata_for(applier, node_id)?;
+    let kind = layout_kind_from_metadata(node_id, &info);
+    let RuntimeNodeMetadata {
+        modifier,
+        resolved_modifiers,
+        modifier_slices,
+        ..
+    } = info;
+
+    let layer_translation = match modifier_slices.graphics_layer() {
+        Some(layer) => Point {
+            x: parent_layer_translation.x + layer.translation_x,
+            y: parent_layer_translation.y + layer.translation_y,
+        },
+        None => parent_layer_translation,
+    };
+
+    publish_window_geometry(&modifier_slices, top_left, layer_translation, state.size());
+
+    let data = LayoutNodeData::new(modifier, resolved_modifiers, modifier_slices, kind);
+    let child_origin = Point {
+        x: top_left.x + state.content_offset.x,
+        y: top_left.y + state.content_offset.y,
+    };
+    let mut children = Vec::with_capacity(child_ids.len());
+    for child_id in child_ids {
+        if crate::modifier::is_window_root(applier, child_id) {
+            continue;
+        }
+        if let Some(child) = place_layout_box(applier, child_id, child_origin, layer_translation)? {
+            children.push(child);
         }
     }
 
-    fn place(
-        applier: &mut MemoryApplier,
-        node_id: NodeId,
-        parent_content_origin: Point,
-        parent_layer_translation: Point,
-    ) -> Result<Option<LayoutBox>, NodeError> {
-        let Some((state, child_ids)) = snapshot(applier, node_id)? else {
-            return Ok(None);
-        };
-        if !state.is_placed() {
-            return Ok(None);
-        }
-
-        let top_left = Point {
-            x: parent_content_origin.x + state.position().x,
-            y: parent_content_origin.y + state.position().y,
-        };
-        let rect = GeometryRect {
-            x: top_left.x,
-            y: top_left.y,
-            width: state.size().width,
-            height: state.size().height,
-        };
-        let info = runtime_metadata_for(applier, node_id)?;
-        let kind = layout_kind_from_metadata(node_id, &info);
-        let RuntimeNodeMetadata {
-            modifier,
-            resolved_modifiers,
-            modifier_slices,
-            ..
-        } = info;
-
-        let layer_translation = match modifier_slices.graphics_layer() {
-            Some(layer) => Point {
-                x: parent_layer_translation.x + layer.translation_x,
-                y: parent_layer_translation.y + layer.translation_y,
-            },
-            None => parent_layer_translation,
-        };
-
-        if let Some(sink) = modifier_slices.text_field_window_origin() {
-            sink.set(Point {
-                x: top_left.x + layer_translation.x,
-                y: top_left.y + layer_translation.y,
-            });
-        }
-
-        if let Some(sink) = modifier_slices.viewport_window_rect() {
-            sink.set(GeometryRect {
-                x: top_left.x + layer_translation.x,
-                y: top_left.y + layer_translation.y,
-                width: state.size().width,
-                height: state.size().height,
-            });
-        }
-
-        modifier_slices.publish_pointer_input_size(state.size());
-
-        let data = LayoutNodeData::new(modifier, resolved_modifiers, modifier_slices, kind);
-        let child_origin = Point {
-            x: top_left.x + state.content_offset.x,
-            y: top_left.y + state.content_offset.y,
-        };
-        let mut children = Vec::with_capacity(child_ids.len());
-        for child_id in child_ids {
-            if let Some(child) = place(applier, child_id, child_origin, layer_translation)? {
-                children.push(child);
-            }
-        }
-
-        Ok(Some(LayoutBox::new(
-            node_id,
-            rect,
-            state.content_offset,
-            data,
-            children,
-        )))
-    }
-
-    place(applier, root, Point::default(), Point::default()).map(|root| root.map(LayoutTree::new))
+    Ok(Some(LayoutBox::new(
+        node_id,
+        rect,
+        state.content_offset,
+        data,
+        children,
+    )))
 }
 
 /// Builds a semantics snapshot from retained layout state in the live applier tree.
@@ -888,6 +889,7 @@ pub fn build_semantics_tree_from_applier(
             Some((role, config, children))
         }) {
             Ok(Some((role, config, child_ids))) => {
+                let child_ids = children_in_this_window(applier, child_ids);
                 let mut children = Vec::with_capacity(child_ids.len());
                 for child_id in child_ids {
                     if let Some(child) = node(applier, child_id)? {
@@ -914,6 +916,7 @@ pub fn build_semantics_tree_from_applier(
             Some((config, children))
         }) {
             Ok(Some((config, child_ids))) => {
+                let child_ids = children_in_this_window(applier, child_ids);
                 let mut children = Vec::with_capacity(child_ids.len());
                 for child_id in child_ids {
                     if let Some(child) = node(applier, child_id)? {
@@ -961,6 +964,37 @@ impl Default for MeasureLayoutOptions {
 /// Returns Result to force caller to handle errors explicitly. No more unwrap_or(true) safety net.
 pub fn tree_needs_layout(applier: &mut dyn Applier, root: NodeId) -> Result<bool, NodeError> {
     Ok(applier.get_mut(root)?.needs_layout())
+}
+
+fn publish_window_geometry(
+    modifier_slices: &crate::modifier::ModifierNodeSlices,
+    top_left: Point,
+    layer_translation: Point,
+    size: Size,
+) {
+    let origin = Point {
+        x: top_left.x + layer_translation.x,
+        y: top_left.y + layer_translation.y,
+    };
+    if let Some(sink) = modifier_slices.text_field_window_origin() {
+        sink.set(origin);
+    }
+    if let Some(sink) = modifier_slices.viewport_window_rect() {
+        sink.set(GeometryRect {
+            x: origin.x,
+            y: origin.y,
+            width: size.width,
+            height: size.height,
+        });
+    }
+    modifier_slices.publish_pointer_input_size(size);
+}
+
+fn children_in_this_window(applier: &mut MemoryApplier, children: Vec<NodeId>) -> Vec<NodeId> {
+    children
+        .into_iter()
+        .filter(|child| !crate::modifier::is_window_root(applier, *child))
+        .collect()
 }
 
 /// Check if the root semantics snapshot is dirty.
@@ -1636,6 +1670,7 @@ impl LayoutBuilderState {
         layout_node_data.clear();
         let mut offset = Point::default();
         let mut density = crate::density::Density::default();
+        let mut window_root = false;
 
         {
             let state = state_rc.borrow();
@@ -1643,6 +1678,7 @@ impl LayoutBuilderState {
 
             let _ = applier.with_node::<LayoutNode, _>(node_id, |layout_node| {
                 density = layout_node.density();
+                window_root = layout_node.is_window_root();
                 let chain_handle = layout_node.modifier_chain();
 
                 if !chain_handle.has_layout_nodes() {
@@ -1687,6 +1723,7 @@ impl LayoutBuilderState {
                 size: final_size,
                 content_offset: Point::default(),
                 offset,
+                window_root,
             };
         }
 
@@ -1739,6 +1776,7 @@ impl LayoutBuilderState {
             size: final_size,
             content_offset,
             offset,
+            window_root,
         }
     }
 
@@ -1890,7 +1928,7 @@ impl LayoutBuilderState {
             )
         };
 
-        let (width, height, content_offset, offset) = {
+        let (width, height, content_offset, offset, window_root) = {
             let result = modifier_chain_result;
             if let Some(err) = error.borrow_mut().take() {
                 return Err(err);
@@ -1901,6 +1939,7 @@ impl LayoutBuilderState {
                 result.size.height,
                 result.content_offset,
                 result.offset,
+                result.window_root,
             )
         };
 
@@ -1934,13 +1973,16 @@ impl LayoutBuilderState {
             }
         }
 
-        let measured = Rc::new(MeasuredNode::new(
-            node_id,
-            Size { width, height },
-            offset,
-            content_offset,
-            measured_children,
-        ));
+        let measured = Rc::new(
+            MeasuredNode::new(
+                node_id,
+                Size { width, height },
+                offset,
+                content_offset,
+                measured_children,
+            )
+            .with_window_root(window_root),
+        );
 
         cache.store_measurement(constraints, Rc::clone(&measured));
 
@@ -2117,6 +2159,7 @@ pub(crate) struct MeasuredNode {
     offset: Point,
     content_offset: Point,
     children: Vec<MeasuredChild>,
+    window_root: bool,
 }
 
 impl MeasuredNode {
@@ -2133,6 +2176,20 @@ impl MeasuredNode {
             offset,
             content_offset,
             children,
+            window_root: false,
+        }
+    }
+
+    fn with_window_root(mut self, window_root: bool) -> Self {
+        self.window_root = window_root;
+        self
+    }
+
+    pub(crate) fn size_for_parent(&self) -> Size {
+        if self.window_root {
+            Size::new(0.0, 0.0)
+        } else {
+            self.size
         }
     }
 
@@ -2841,6 +2898,11 @@ impl Measurable for LayoutChildMeasurable {
 
         let state = Rc::clone(&self.state);
         let node_id = state.node_id();
+        let size_for_parent = state
+            .measured
+            .borrow()
+            .as_ref()
+            .map_or(measured_size, |measured| measured.size_for_parent());
 
         let place_fn = Rc::new(move |x: f32, y: f32| {
             let internal_offset = state
@@ -2856,7 +2918,12 @@ impl Measurable for LayoutChildMeasurable {
             });
         });
 
-        Placeable::with_place_fn(measured_size.width, measured_size.height, node_id, place_fn)
+        Placeable::with_place_fn(
+            size_for_parent.width,
+            size_for_parent.height,
+            node_id,
+            place_fn,
+        )
     }
 
     fn min_intrinsic_width(&self, height: f32) -> f32 {
@@ -2875,7 +2942,7 @@ impl Measurable for LayoutChildMeasurable {
             max_height: height,
         };
         if let Some(node) = self.state.intrinsic_measure(constraints) {
-            let value = node.size.width;
+            let value = node.size_for_parent().width;
             cache.store_intrinsic(kind, value);
             value
         } else {
@@ -2899,7 +2966,7 @@ impl Measurable for LayoutChildMeasurable {
             max_height: height,
         };
         if let Some(node) = self.state.intrinsic_measure(constraints) {
-            let value = node.size.width;
+            let value = node.size_for_parent().width;
             cache.store_intrinsic(kind, value);
             value
         } else {
@@ -2923,7 +2990,7 @@ impl Measurable for LayoutChildMeasurable {
             max_height: f32::INFINITY,
         };
         if let Some(node) = self.state.intrinsic_measure(constraints) {
-            let value = node.size.height;
+            let value = node.size_for_parent().height;
             cache.store_intrinsic(kind, value);
             value
         } else {
@@ -2947,7 +3014,7 @@ impl Measurable for LayoutChildMeasurable {
             max_height: f32::INFINITY,
         };
         if let Some(node) = self.state.intrinsic_measure(constraints) {
-            let value = node.size.height;
+            let value = node.size_for_parent().height;
             cache.store_intrinsic(kind, value);
             value
         } else {
@@ -3285,27 +3352,14 @@ fn build_layout_tree(
             None => parent_layer_translation,
         };
 
-        if let Some(sink) = modifier_slices.text_field_window_origin() {
-            sink.set(Point {
-                x: top_left.x + layer_translation.x,
-                y: top_left.y + layer_translation.y,
-            });
-        }
-
-        if let Some(sink) = modifier_slices.viewport_window_rect() {
-            sink.set(GeometryRect {
-                x: top_left.x + layer_translation.x,
-                y: top_left.y + layer_translation.y,
-                width: node.size.width,
-                height: node.size.height,
-            });
-        }
-
-        modifier_slices.publish_pointer_input_size(node.size);
+        publish_window_geometry(&modifier_slices, top_left, layer_translation, node.size);
 
         let data = LayoutNodeData::new(modifier, resolved_modifiers, modifier_slices, kind);
         let mut children = Vec::with_capacity(node.children.len());
         for child in &node.children {
+            if crate::modifier::is_window_root(applier, child.node.node_id) {
+                continue;
+            }
             let child_origin = Point {
                 x: top_left.x + child.offset.x,
                 y: top_left.y + child.offset.y,

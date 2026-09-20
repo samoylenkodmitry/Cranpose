@@ -7,7 +7,7 @@ use crate::{
     TextSystemState,
     collect::{collect_overlay, collect_root},
     frame_packet::{FramePacket, RenderReturns},
-    render::{instant_ms, should_log_wgpu_render_stage},
+    render::{frame_clear_color, instant_ms, should_log_wgpu_render_stage},
     scene::{Scene, SceneCapacityHint},
 };
 
@@ -32,6 +32,7 @@ pub(crate) struct RendererFrontend {
     pub(crate) frame_sequence: u64,
     pub(crate) changed_nodes: Vec<cranpose_core::NodeId>,
     pub(crate) shader_warm_ups: Vec<cranpose_ui_graphics::ShaderWarmUp>,
+    pub(crate) transparent_background: bool,
 }
 
 impl RendererFrontend {
@@ -48,6 +49,7 @@ impl RendererFrontend {
             frame_sequence: 0,
             changed_nodes: Vec::new(),
             shader_warm_ups: Vec::new(),
+            transparent_background: false,
         }
     }
 
@@ -124,6 +126,7 @@ impl RendererFrontend {
             root,
             overlay,
             text_cache_len: self.text_state.text_cache_len(),
+            clear: frame_clear_color(self.transparent_background),
         };
         let after_build = Instant::now();
         if let Some(total_ms) = should_log_wgpu_render_stage(build_start, after_build) {

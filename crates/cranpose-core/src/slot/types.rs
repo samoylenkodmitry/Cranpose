@@ -39,6 +39,7 @@ impl GroupKey {
 pub(crate) struct GroupKeySeed {
     pub(crate) static_key: Key,
     pub(crate) explicit_key: Option<Key>,
+    pub(crate) exact: bool,
 }
 
 impl GroupKeySeed {
@@ -46,6 +47,7 @@ impl GroupKeySeed {
         Self {
             static_key,
             explicit_key: None,
+            exact: false,
         }
     }
 
@@ -53,6 +55,23 @@ impl GroupKeySeed {
         Self {
             static_key,
             explicit_key: Some(explicit_key),
+            exact: false,
+        }
+    }
+
+    pub(crate) fn movable(id: Key) -> Self {
+        Self {
+            static_key: super::MOVABLE_STATIC_KEY,
+            explicit_key: Some(id),
+            exact: true,
+        }
+    }
+
+    pub(crate) fn movable_placeholder(id: Key) -> Self {
+        Self {
+            static_key: super::MOVABLE_PLACEHOLDER_STATIC_KEY,
+            explicit_key: Some(id),
+            exact: true,
         }
     }
 }
@@ -301,7 +320,6 @@ impl DetachedSubtree {
         self.payloads.len()
     }
 
-    #[cfg(any(test, debug_assertions))]
     pub(crate) fn payload_anchors(&self) -> impl Iterator<Item = PayloadAnchor> + '_ {
         self.payloads.iter().map(|payload| payload.anchor)
     }
@@ -372,6 +390,18 @@ impl DetachedSubtree {
 
     pub(crate) fn mark_nodes_retained_detached(&mut self) {
         self.set_node_lifecycle(NodeLifecycle::RetainedDetached);
+    }
+
+    pub(crate) fn set_root_nodes_parent(&mut self, parent: Option<NodeId>) {
+        let mut roots = Vec::new();
+        self.collect_root_nodes_into(&mut roots);
+        for node in self
+            .nodes
+            .iter_mut()
+            .filter(|node| roots.contains(&node.id))
+        {
+            node.parent_id = parent;
+        }
     }
 
     pub(crate) fn mark_nodes_active(&mut self) {

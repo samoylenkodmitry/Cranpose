@@ -93,20 +93,25 @@ impl SlotWriteSession<'_> {
         &mut self,
         key: GroupKey,
         detached: DetachedSubtree,
+        parent_node: Option<NodeId>,
     ) -> Option<GroupStart<ActiveGroupId>> {
-        self.reattach_started_group(key, detached, GroupStartKind::Restored)
+        self.reattach_started_group(key, detached, parent_node, GroupStartKind::Restored)
     }
 
     fn reattach_started_group(
         &mut self,
         key: GroupKey,
         detached: DetachedSubtree,
+        parent_node: Option<NodeId>,
         kind: GroupStartKind,
     ) -> Option<GroupStart<ActiveGroupId>> {
         let parent_anchor = self.state.current_parent_anchor();
         let insert_index = self.state.current_child_cursor();
         let cursor = ChildCursor::new(parent_anchor, insert_index);
-        match self.table.restore_subtree(cursor, key, detached) {
+        match self
+            .table
+            .restore_subtree(cursor, key, detached, parent_node)
+        {
             Ok(anchor) => self.open_started_group(anchor, kind),
             Err(detached) => {
                 log::error!(
@@ -169,8 +174,14 @@ impl SlotWriteSession<'_> {
     pub(crate) fn retained_restore_ready(
         &mut self,
         key: GroupKey,
-        subtree: &DetachedSubtree,
+        subtree: &mut DetachedSubtree,
     ) -> bool {
+        if !self.table.holds_anchors_of(subtree) && !self.table.adopt_detached_subtree(subtree) {
+            log::error!(
+                "slot table could not issue its own anchors for a subtree arriving from another slot table for key {key:?}"
+            );
+            return false;
+        }
         let parent_anchor = self.state.current_parent_anchor();
         let insert_index = self.state.current_child_cursor();
         let cursor = ChildCursor::new(parent_anchor, insert_index);
@@ -263,6 +274,7 @@ impl SlotWriteSession<'_> {
         &mut self,
         key: GroupKey,
         restored: Option<DetachedSubtree>,
+        parent_node: Option<NodeId>,
     ) -> GroupStart<ActiveGroupId> {
         self.flush_payload_location_refreshes();
         #[cfg(any(test, debug_assertions))]
@@ -280,7 +292,7 @@ impl SlotWriteSession<'_> {
         self.state.consume_group_key(key);
 
         if let Some(restored) = restored
-            && let Some(started) = self.restore_started_group(key, restored)
+            && let Some(started) = self.restore_started_group(key, restored, parent_node)
         {
             return started;
         }

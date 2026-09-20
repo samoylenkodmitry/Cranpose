@@ -12,7 +12,9 @@ use std::{
 
 #[cfg(feature = "robot")]
 use cranpose_app_shell::PointerSource;
-use cranpose_app_shell::{AppShell, FramePacingMode, FrameUpdateResult, default_root_key};
+use cranpose_app_shell::{
+    AppShell, FramePacingMode, FrameUpdateResult, RootId, SurfaceMut, default_root_key,
+};
 use cranpose_platform_desktop_winit::DesktopWinitPlatform;
 use cranpose_render_wgpu::{WgpuRenderer, WgpuTextSystem};
 use winit::{
@@ -34,19 +36,23 @@ use crate::{
     desktop_input::{app_modifiers, dispatch_keyboard_input},
     native_window::{
         self, NativeWindowEvents, NativeWindowKey, NativeWindowOptions, NativeWindowPositionOrigin,
-        NativeWindowRequest, WindowGraphMove, WindowGraphNodeSnapshot, WindowGraphPeerSnapshot,
-        WindowGraphState, WindowGroupId, WindowResizeDirection, WindowState,
+        NativeWindowRequest, WindowFocus, WindowResizeDirection, WindowState,
     },
     wgpu_surface::{
         SurfaceFrame, current_surface_texture, present_initial_placeholder_frame,
-        surface_present_required,
+        present_initial_placeholder_frame_cleared_to, surface_present_required,
     },
     winit_pointer::{
         is_primary_pointer_button, pointer_source_from_button, pointer_source_from_winit,
     },
 };
 
-const NATIVE_WINDOW_DRAG_POLL_INTERVAL: Duration = Duration::ZERO;
+const NATIVE_WINDOW_DRAG_POLL_INTERVAL: Duration = Duration::from_millis(16);
+const NATIVE_WINDOW_GLOBAL_POINTER_POLLED: bool = cfg!(all(
+    target_os = "linux",
+    not(target_arch = "wasm32"),
+    feature = "desktop-x11"
+));
 const NATIVE_WINDOW_POSITION_POLL_INTERVAL: Duration = Duration::from_millis(16);
 const NATIVE_WINDOW_POSITION_SETTLE_TIMEOUT: Duration = Duration::from_millis(36);
 const NATIVE_WINDOW_POSITION_SETTLE_POLL: Duration = Duration::from_millis(1);
@@ -67,6 +73,26 @@ const DEFAULT_DESKTOP_FRAME_TELEMETRY_THRESHOLD_MS: f64 = 4.0;
 
 #[cfg(feature = "robot")]
 use std::sync::mpsc;
+
+macro_rules! trace_when {
+    ($enabled:expr, $sink:ident, $($arg:tt)*) => {
+        if $enabled {
+            $sink(format_args!($($arg)*));
+        }
+    };
+}
+
+macro_rules! trace_native_window {
+    ($($arg:tt)*) => {
+        trace_when!(native_window_trace_enabled(), print_native_window_trace, $($arg)*)
+    };
+}
+
+macro_rules! trace_native_window_timing {
+    ($($arg:tt)*) => {
+        trace_when!(native_window_timing_enabled(), print_native_window_timing, $($arg)*)
+    };
+}
 
 fn update_app_with_native_window_registry(
     app: &mut AppShell<WgpuRenderer>,
@@ -117,8 +143,6 @@ fn log_desktop_frame_telemetry(
 }
 
 #[cfg(feature = "robot")]
-/// The tree the robot asked for: the elements with bounds, or the lines a
-/// reader speaks.
 fn robot_tree_response(app: &mut AppShell<WgpuRenderer>, command: &RobotCommand) -> RobotResponse {
     match command {
         RobotCommand::GetSpokenTree => {
@@ -355,26 +379,42 @@ struct NativeWindowSurface {
     options: NativeWindowOptions,
     events: NativeWindowEvents,
     state: Option<WindowState>,
-    group: Option<native_window::NativeWindowGroupMembership>,
     window: Arc<dyn Window>,
     surface: wgpu::Surface<'static>,
     surface_config: wgpu::SurfaceConfiguration,
     surface_caps: wgpu::SurfaceCapabilities,
     surface_dirty: bool,
-    app: AppShell<WgpuRenderer>,
+    root: native_window::NativeWindowRootHandle,
     platform: DesktopWinitPlatform,
     last_cursor_position: Option<(f32, f32)>,
     last_cursor_physical_position: Option<PhysicalPosition<f64>>,
     last_frame_start_time: Option<Instant>,
     vsync_interval: Duration,
     pending_outer_positions: PendingNativeWindowPositions,
-    active_drag: Option<NativeWindowDragSession>,
+    active_drag: Option<NativeWindowPollingDragSession>,
+    held_press: Option<PhysicalPosition<f64>>,
 }
 
 struct NativeWindowShell {
     request: NativeWindowRequest,
     window: Arc<dyn Window>,
     create_started: Instant,
+}
+
+#[derive(Default)]
+struct NativeWindowEventSettlement {
+    sync_after_event: bool,
+    drag_move: Option<(NativeWindowKey, cranpose_ui::Point)>,
+    finish_drag: bool,
+}
+
+impl NativeWindowEventSettlement {
+    fn also(mut self, other: Self) -> Self {
+        self.sync_after_event |= other.sync_after_event;
+        self.drag_move = self.drag_move.or(other.drag_move);
+        self.finish_drag |= other.finish_drag;
+        self
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -424,63 +464,6 @@ impl DesktopRect {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-enum NativeWindowPlacementGroupKey {
-    Group(WindowGroupId),
-    Window(NativeWindowKey),
-}
-
-#[derive(Clone, Copy, Debug)]
-enum NativeWindowDragSession {
-    Platform { next_poll_at: Instant },
-    Polling(NativeWindowPollingDragSession),
-}
-
-impl NativeWindowDragSession {
-    fn platform(now: Instant) -> Self {
-        Self::Platform {
-            next_poll_at: now + NATIVE_WINDOW_DRAG_POLL_INTERVAL,
-        }
-    }
-
-    fn next_poll_at(self) -> Instant {
-        match self {
-            Self::Platform { next_poll_at } => next_poll_at,
-            Self::Polling(session) => session.next_poll_at,
-        }
-    }
-
-    fn set_next_poll_at(&mut self, next_poll_at: Instant) {
-        match self {
-            Self::Platform {
-                next_poll_at: current,
-                ..
-            }
-            | Self::Polling(NativeWindowPollingDragSession {
-                next_poll_at: current,
-                ..
-            }) => {
-                *current = next_poll_at;
-            }
-        }
-    }
-
-    fn polling_mut(&mut self) -> Option<&mut NativeWindowPollingDragSession> {
-        match self {
-            Self::Platform { .. } => None,
-            Self::Polling(session) => Some(session),
-        }
-    }
-
-    fn finishes_on_global_pointer_release(self) -> bool {
-        true
-    }
-
-    fn uses_moved_events_as_drag_target(self) -> bool {
-        matches!(self, Self::Platform { .. })
-    }
-}
-
 #[derive(Clone, Copy, Debug)]
 struct NativeWindowPollingDragSession {
     start_pointer_screen: PhysicalPosition<f64>,
@@ -495,8 +478,9 @@ struct NativeWindowPositionRequest {
     physical: PhysicalPosition<i32>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 enum NativeWindowPositionApplyMode {
+    #[default]
     WaitForSettle,
     FlushOnly,
 }
@@ -535,12 +519,6 @@ impl NativeWindowPollingDragSession {
 #[derive(Default)]
 struct PendingNativeWindowPositions {
     positions: VecDeque<(f32, f32)>,
-}
-
-#[derive(Clone, Copy)]
-enum NativeWindowGraphPositionSource {
-    CachedThenCurrent,
-    CurrentThenCached,
 }
 
 impl PendingNativeWindowPositions {
@@ -601,9 +579,20 @@ impl PendingNativeWindowPositions {
 }
 
 impl NativeWindowSurface {
-    fn frame_interval(&self) -> Option<Duration> {
-        frame_interval_for_mode(self.app.frame_pacing_mode(), self.vsync_interval)
+    fn frame_interval(&self, mode: FramePacingMode) -> Option<Duration> {
+        frame_interval_for_mode(mode, self.vsync_interval)
     }
+
+    fn root_id(&self) -> RootId {
+        RootId::Window(self.key.raw())
+    }
+}
+
+fn native_surface<'a>(
+    app: &'a mut AppShell<WgpuRenderer>,
+    native: &NativeWindowSurface,
+) -> Option<SurfaceMut<'a, WgpuRenderer>> {
+    app.surface(native.root_id())
 }
 
 struct App {
@@ -623,13 +612,16 @@ struct App {
     native_window_ids: HashMap<NativeWindowKey, WinitWindowId>,
     native_window_positions: HashMap<NativeWindowKey, (f32, f32)>,
     closed_native_windows: HashSet<NativeWindowKey>,
-    window_graph: WindowGraphState,
     next_native_window_position_poll_at: Instant,
     native_window_platform_probe: NativeWindowPlatformProbe,
     native_global_primary_down: bool,
+    primary_held_press: Option<PhysicalPosition<f64>>,
+    handed_press: Option<HandedPress>,
+    primary_wrap_size: Option<(u32, u32)>,
     cursors: crate::desktop_cursor::DesktopCursors,
     current_modifiers: winit::keyboard::ModifiersState,
     last_cursor_position: Option<(f32, f32)>,
+    primary_shown: Arc<std::sync::atomic::AtomicBool>,
     #[cfg(feature = "robot")]
     robot_controller: Option<RobotController>,
     #[cfg(feature = "robot")]
@@ -689,15 +681,18 @@ impl App {
             native_window_ids: HashMap::new(),
             native_window_positions: HashMap::new(),
             closed_native_windows: HashSet::new(),
-            window_graph: WindowGraphState::default(),
             next_native_window_position_poll_at: Instant::now()
                 + NATIVE_WINDOW_POSITION_POLL_INTERVAL,
             #[allow(clippy::default_constructed_unit_structs)]
             native_window_platform_probe: NativeWindowPlatformProbe::default(),
             native_global_primary_down: false,
+            primary_held_press: None,
+            handed_press: None,
+            primary_wrap_size: None,
             cursors: crate::desktop_cursor::DesktopCursors::default(),
             current_modifiers: winit::keyboard::ModifiersState::empty(),
             last_cursor_position: None,
+            primary_shown: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             #[cfg(feature = "robot")]
             robot_controller: None,
             #[cfg(feature = "robot")]
@@ -748,11 +743,19 @@ impl App {
         }
         self.applied_frame_pacing_mode = mode;
 
-        if let (Some(app), Some(surface), Some(surface_config)) =
-            (&mut self.app, &self.surface, &mut self.surface_config)
-        {
+        if let Some(app) = &mut self.app {
+            app.set_frame_pacing_mode(mode);
+        }
+        let Some(device) = self
+            .gpu_context
+            .as_ref()
+            .map(|context| Arc::clone(&context.device))
+        else {
+            return;
+        };
+        if let (Some(surface), Some(surface_config)) = (&self.surface, &mut self.surface_config) {
             apply_frame_pacing_mode(
-                app,
+                &device,
                 surface,
                 surface_config,
                 self.surface_caps.as_ref(),
@@ -767,7 +770,7 @@ impl App {
 
         for native in self.native_windows.values_mut() {
             apply_frame_pacing_mode(
-                &mut native.app,
+                &device,
                 &native.surface,
                 &mut native.surface_config,
                 Some(&native.surface_caps),
@@ -776,6 +779,17 @@ impl App {
             );
             native.last_frame_start_time = None;
             native.window.request_redraw();
+        }
+    }
+
+    fn set_native_transparency(
+        app: &mut AppShell<WgpuRenderer>,
+        native: &mut NativeWindowSurface,
+        transparent: bool,
+    ) {
+        native.window.set_transparent(transparent);
+        if let Some(mut surface) = native_surface(app, native) {
+            surface.renderer().set_transparent_background(transparent);
         }
     }
 
@@ -798,6 +812,7 @@ impl App {
             .last_frame_start_time
             .and_then(|started_at| frame_interval.map(|interval| started_at + interval))
             .is_some_and(|deadline| deadline > Instant::now());
+        let primary_visible = self.primary_visible();
         let direct_declaration_update = {
             let Some(app) = &mut self.app else {
                 return;
@@ -807,16 +822,17 @@ impl App {
                 return;
             }
             let direct_declaration_update = primary_declaration_host_needs_direct_update(
-                self.settings.primary_window_visible,
+                primary_visible,
                 self.settings.headless,
                 needs_redraw,
                 waiting_for_frame_cap,
             );
             if direct_declaration_update {
-                trace_native_window(format_args!(
+                trace_native_window!(
                     "primary declaration host proxy update visible={} headless={}",
-                    self.settings.primary_window_visible, self.settings.headless
-                ));
+                    primary_visible,
+                    self.settings.headless
+                );
                 let update_result = update_declaration_host_frame(
                     app,
                     &registry,
@@ -937,6 +953,7 @@ impl App {
 
     fn refresh_native_cursor_from_platform_pointer(
         platform_probe: &NativeWindowPlatformProbe,
+        app: &mut AppShell<WgpuRenderer>,
         native: &mut NativeWindowSurface,
     ) -> bool {
         let Some(pointer) = native_window_global_pointer_state(platform_probe) else {
@@ -952,41 +969,166 @@ impl App {
         let logical = native.platform.pointer_position(local);
         native.last_cursor_position = Some((logical.x, logical.y));
         native.last_cursor_physical_position = Some(local);
-        native_window::with_native_window_surface_origin(
-            native_window_surface_origin(platform_probe, &native.window),
-            || native.app.set_cursor(logical.x, logical.y),
-        )
+        let Some(mut surface) = native_surface(app, native) else {
+            return false;
+        };
+        surface.set_screen_origin(native_window_surface_origin(platform_probe, &native.window));
+        surface.set_cursor(logical.x, logical.y)
     }
 
-    /// Hands every window the pointer icon its shell resolved since the last
-    /// pass, so the cursor is set from the event loop that owns the window.
     fn sync_pointer_icons(&mut self, event_loop: &dyn ActiveEventLoop) {
-        if let (Some(app), Some(window)) = (self.app.as_ref(), self.window.as_ref())
+        let Some(app) = self.app.as_mut() else {
+            return;
+        };
+        if let Some(window) = self.window.as_ref()
             && let Some(icon) = app.take_pointer_icon_change()
         {
             self.cursors.apply(event_loop, window, &icon);
         }
         for native in self.native_windows.values() {
-            if let Some(icon) = native.app.take_pointer_icon_change() {
+            if let Some(icon) =
+                native_surface(app, native).and_then(|surface| surface.take_pointer_icon_change())
+            {
                 self.cursors.apply(event_loop, &native.window, &icon);
             }
         }
     }
 
-    /// Makes `native` the key window when nothing of ours holds focus yet.
-    ///
-    /// macOS reads a window's cursor rectangles only while it is key, so a
-    /// window that never takes focus shows the system arrow however often the
-    /// application sets a cursor on it.
     fn let_the_first_window_take_focus(&self, native: &NativeWindowSurface) {
         if a_new_window_comes_up_key(
             self.settings.headless,
             native.options.visible,
-            self.native_windows
-                .values()
-                .any(|open| open.window.has_focus()),
+            self.any_window_has_focus(),
+            native.options.focus,
         ) {
             native.window.focus_window();
+        }
+    }
+
+    fn any_window_has_focus(&self) -> bool {
+        let primary_focused = self.primary_visible()
+            && self
+                .window
+                .as_ref()
+                .is_some_and(|window| window.has_focus());
+        primary_focused
+            || self
+                .native_windows
+                .values()
+                .any(|open| open.window.has_focus())
+    }
+
+    fn primary_window_id(&self) -> Option<WinitWindowId> {
+        self.window.as_ref().map(|window| window.id())
+    }
+
+    fn refresh_native_window(
+        platform_probe: &NativeWindowPlatformProbe,
+        registry: &Rc<native_window::NativeWindowRegistry>,
+        headless: bool,
+        app: &mut AppShell<WgpuRenderer>,
+        native: &mut NativeWindowSurface,
+        request: &NativeWindowRequest,
+    ) {
+        native.events = request.events.clone();
+        native.state = request.state;
+        native.root = Rc::clone(&request.root);
+        let revision_changed = native.revision != request.revision;
+        let options_changed = native.options != request.options;
+        let position_only_options_change = options_changed
+            && native_window_options_change_is_position_only(&native.options, &request.options);
+        let resized = Self::apply_native_window_options(
+            platform_probe,
+            app,
+            native,
+            &request.options,
+            headless,
+        );
+        if revision_changed {
+            native.revision = request.revision;
+            if position_only_options_change {
+                trace_native_window!(
+                    "sync update position key={:?} title={:?}",
+                    native.key,
+                    native.options.title
+                );
+            } else {
+                trace_native_window!(
+                    "sync update content key={:?} title={:?}",
+                    native.key,
+                    native.options.title
+                );
+                native.window.request_redraw();
+            }
+        } else if options_changed && request.options.visible {
+            trace_native_window!(
+                "sync update options key={:?} title={:?} visible={}",
+                native.key,
+                native.options.title,
+                request.options.visible
+            );
+            native.window.request_redraw();
+        }
+        if resized {
+            Self::present_before_the_desktop_composites(app, native, registry, "resize");
+        }
+    }
+
+    fn present_before_the_desktop_composites(
+        app: &mut AppShell<WgpuRenderer>,
+        native: &mut NativeWindowSurface,
+        registry: &Rc<native_window::NativeWindowRegistry>,
+        why: &str,
+    ) {
+        let started = Instant::now();
+        let presented = Self::redraw_native_window(app, native, registry);
+        trace_native_window_timing!(
+            "{} {} presented={presented} in {}ms",
+            native.options.title,
+            why,
+            started.elapsed().as_millis()
+        );
+    }
+
+    fn let_go_of_windows_no_longer_declared(
+        &mut self,
+        app: &mut AppShell<WgpuRenderer>,
+        active_keys: &HashSet<NativeWindowKey>,
+    ) {
+        let stale_window_ids: Vec<WinitWindowId> = self
+            .native_windows
+            .iter()
+            .filter_map(|(window_id, native)| {
+                (!active_keys.contains(&native.key)).then_some(*window_id)
+            })
+            .collect();
+        for window_id in stale_window_ids {
+            if let Some(native) = self.native_windows.get(&window_id) {
+                trace_native_window!(
+                    "sync stale key={:?} title={:?} visible={} shown={:?}",
+                    native.key,
+                    native.options.title,
+                    native.options.visible,
+                    native.window.is_visible()
+                );
+                if let Some((x, y)) =
+                    current_native_window_position(&self.native_window_platform_probe, native)
+                {
+                    self.native_window_positions.insert(native.key, (x, y));
+                    notify_native_window_moved(&native.events, x, y);
+                }
+            }
+            if let Some(native) = self.native_windows.get_mut(&window_id) {
+                note_native_window_presented(native.state, false);
+                native.state = None;
+                if native.options.visible {
+                    native.options.visible = false;
+                    native.window.set_visible(false);
+                    if let Some(mut surface) = native_surface(app, native) {
+                        cancel_surface_input(&mut surface);
+                    }
+                }
+            }
         }
     }
 
@@ -994,7 +1136,18 @@ impl App {
         if self.gpu_context.is_none() {
             return;
         }
+        let Some(mut app) = self.app.take() else {
+            return;
+        };
+        self.sync_native_windows_with(&mut app, event_loop);
+        self.app = Some(app);
+    }
 
+    fn sync_native_windows_with(
+        &mut self,
+        app: &mut AppShell<WgpuRenderer>,
+        event_loop: &dyn ActiveEventLoop,
+    ) {
         let has_requests = native_window::has_native_window_requests(&self.native_window_registry);
         if self.native_windows.is_empty() && self.closed_native_windows.is_empty() && !has_requests
         {
@@ -1014,101 +1167,22 @@ impl App {
         let requests = native_window::native_window_requests(&self.native_window_registry);
         let active_keys: HashSet<NativeWindowKey> =
             requests.iter().map(|request| request.key).collect();
-        trace_native_window_timing(format_args!(
+        trace_native_window_timing!(
             "sync start requests={} existing={}",
             requests.len(),
             self.native_windows.len()
-        ));
+        );
 
         self.closed_native_windows
             .retain(|key| active_keys.contains(key));
 
-        let stale_window_ids: Vec<WinitWindowId> = self
-            .native_windows
-            .iter()
-            .filter_map(|(window_id, native)| {
-                (!active_keys.contains(&native.key)).then_some(*window_id)
-            })
-            .collect();
-        for window_id in stale_window_ids {
-            if let Some(native) = self.native_windows.get(&window_id) {
-                trace_native_window(format_args!(
-                    "sync stale key={:?} title={:?} visible={}",
-                    native.key, native.options.title, native.options.visible
-                ));
-                if let Some((x, y)) =
-                    current_native_window_position(&self.native_window_platform_probe, native)
-                {
-                    self.native_window_positions.insert(native.key, (x, y));
-                    notify_native_window_moved(&native.events, x, y);
-                }
-            }
-            if let Some(native) = self.native_windows.get_mut(&window_id)
-                && native.options.visible
-            {
-                native.window.set_visible(false);
-                native.options.visible = false;
-                cancel_app_input(&mut native.app);
-            }
-        }
+        self.let_go_of_windows_no_longer_declared(app, &active_keys);
 
-        let mut native_windows_to_create = Vec::new();
-        for request in requests {
-            if self.closed_native_windows.contains(&request.key) {
-                trace_native_window(format_args!(
-                    "sync skip closed key={:?} title={:?}",
-                    request.key, request.options.title
-                ));
-                continue;
-            }
-
-            let request = self.native_window_request_for_host(&request);
-            if let Some(window_id) = self.native_window_ids.get(&request.key).copied() {
-                if let Some(native) = self.native_windows.get_mut(&window_id) {
-                    native.events = request.events.clone();
-                    native.state = request.state;
-                    native.group = request.group.clone();
-                    let revision_changed = native.revision != request.revision;
-                    let options_changed = native.options != request.options;
-                    let position_only_options_change = options_changed
-                        && native_window_options_change_is_position_only(
-                            &native.options,
-                            &request.options,
-                        );
-                    Self::apply_native_window_options(
-                        &self.native_window_platform_probe,
-                        native,
-                        &request.options,
-                        self.settings.headless,
-                    );
-                    if revision_changed {
-                        native.revision = request.revision;
-                        if position_only_options_change {
-                            trace_native_window(format_args!(
-                                "sync update position key={:?} title={:?}",
-                                native.key, native.options.title
-                            ));
-                        } else {
-                            trace_native_window(format_args!(
-                                "sync update content key={:?} title={:?}",
-                                native.key, native.options.title
-                            ));
-                            native.app.request_root_render();
-                            native.window.request_redraw();
-                        }
-                    } else if options_changed && request.options.visible {
-                        trace_native_window(format_args!(
-                            "sync update options key={:?} title={:?} visible={}",
-                            native.key, native.options.title, request.options.visible
-                        ));
-                        native.window.request_redraw();
-                    }
-                    continue;
-                }
-                self.native_window_ids.remove(&request.key);
-            }
-
-            native_windows_to_create.push(request);
+        let mut shown_again = Vec::new();
+        let mut native_windows_to_create =
+            self.refresh_native_windows_or_collect_new(app, requests, &mut shown_again);
+        for window_id in shown_again {
+            self.hand_held_press_to_new_window(app, window_id);
         }
 
         self.place_initial_native_windows_on_visible_monitors(
@@ -1117,12 +1191,20 @@ impl App {
         );
 
         let mut native_window_shells = Vec::with_capacity(native_windows_to_create.len());
+        let anything_focused = self.any_window_has_focus();
         for request in native_windows_to_create {
-            trace_native_window(format_args!(
+            trace_native_window!(
                 "sync create key={:?} title={:?} visible={}",
-                request.key, request.options.title, request.options.visible
-            ));
-            match Self::create_native_window_shell(event_loop, request, self.settings.headless) {
+                request.key,
+                request.options.title,
+                request.options.visible
+            );
+            match Self::create_native_window_shell(
+                event_loop,
+                request,
+                self.settings.headless,
+                anything_focused,
+            ) {
                 Ok(shell) => native_window_shells.push(shell),
                 Err(error) => {
                     self.abort_launch(event_loop, error);
@@ -1132,13 +1214,14 @@ impl App {
         }
 
         for shell in native_window_shells {
-            match self.create_native_window(shell) {
+            match self.create_native_window(app, shell) {
                 Ok(native) => {
                     let window_id = native.window.id();
                     self.let_the_first_window_take_focus(&native);
                     self.remember_native_window_position(&native);
                     self.native_window_ids.insert(native.key, window_id);
                     self.native_windows.insert(window_id, native);
+                    self.hand_held_press_to_new_window(app, window_id);
                 }
                 Err(error) => {
                     self.abort_launch(event_loop, error);
@@ -1146,17 +1229,105 @@ impl App {
                 }
             }
         }
-        trace_native_window_timing(format_args!(
-            "sync done in {}ms",
-            sync_started.elapsed().as_millis()
-        ));
-        if self.hidden_bootstrap_has_no_visible_peer_windows() {
+        trace_native_window_timing!("sync done in {}ms", sync_started.elapsed().as_millis());
+        if self.no_window_left_to_show() {
             event_loop.exit();
         }
     }
 
-    fn hidden_bootstrap_has_no_visible_peer_windows(&self) -> bool {
-        if self.settings.primary_window_visible || self.settings.headless {
+    fn refresh_native_windows_or_collect_new(
+        &mut self,
+        app: &mut AppShell<WgpuRenderer>,
+        requests: Vec<NativeWindowRequest>,
+        shown_again: &mut Vec<WinitWindowId>,
+    ) -> Vec<NativeWindowRequest> {
+        let mut native_windows_to_create = Vec::new();
+        for request in requests {
+            if self.closed_native_windows.contains(&request.key) {
+                trace_native_window!(
+                    "sync skip closed key={:?} title={:?}",
+                    request.key,
+                    request.options.title
+                );
+                continue;
+            }
+
+            let request = self.native_window_request_for_host(&request);
+            if let Some(window_id) = self.native_window_ids.get(&request.key).copied() {
+                if let Some(native) = self.native_windows.get_mut(&window_id) {
+                    let was_hidden = !native.options.visible;
+                    Self::refresh_native_window(
+                        &self.native_window_platform_probe,
+                        &self.native_window_registry,
+                        self.settings.headless,
+                        app,
+                        native,
+                        &request,
+                    );
+                    if window_shown_again_takes_a_held_press(was_hidden, native.options.visible) {
+                        trace_native_window!(
+                            "sync shown again key={:?} title={:?}",
+                            native.key,
+                            native.options.title
+                        );
+                        shown_again.push(window_id);
+                    }
+                    continue;
+                }
+                self.native_window_ids.remove(&request.key);
+            }
+
+            native_windows_to_create.push(request);
+        }
+        native_windows_to_create
+    }
+
+    fn primary_visible(&self) -> bool {
+        self.primary_shown
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    fn sync_primary_visibility(&mut self) {
+        let (Some(window), Some(app)) = (self.window.clone(), self.app.as_mut()) else {
+            return;
+        };
+        let was_shown = self
+            .primary_shown
+            .load(std::sync::atomic::Ordering::Relaxed);
+        show_primary_when_it_has_content(
+            &self.primary_shown,
+            app,
+            window.as_ref(),
+            self.settings.headless,
+        );
+        if !was_shown
+            && self
+                .primary_shown
+                .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            request_redraw_once(&window, &mut self.primary_redraw_pending);
+        }
+    }
+
+    fn sync_primary_size(&mut self) {
+        if self.primary_visible() {
+            return;
+        }
+        let (Some(window), Some(app)) = (self.window.clone(), self.app.as_mut()) else {
+            return;
+        };
+        if let Some(size) = wrap_primary_window_to_content(
+            window.as_ref(),
+            app,
+            self.settings.primary_wraps_content,
+            self.primary_wrap_size,
+        ) {
+            self.primary_wrap_size = Some(size);
+        }
+    }
+
+    fn no_window_left_to_show(&self) -> bool {
+        if self.primary_visible() || self.settings.headless {
             return false;
         }
         if self
@@ -1184,18 +1355,14 @@ impl App {
             return;
         }
 
-        let mut groups: HashMap<NativeWindowPlacementGroupKey, Vec<usize>> = HashMap::new();
+        let mut groups: HashMap<NativeWindowKey, Vec<usize>> = HashMap::new();
         for (index, request) in requests.iter().enumerate() {
             if !request.options.visible
                 || !Self::native_window_options_have_screen_position(&request.options)
             {
                 continue;
             }
-            let key = request.group.as_ref().map_or(
-                NativeWindowPlacementGroupKey::Window(request.key),
-                |group| NativeWindowPlacementGroupKey::Group(group.id),
-            );
-            groups.entry(key).or_default().push(index);
+            groups.entry(request.key).or_default().push(index);
         }
 
         for indices in groups.values() {
@@ -1285,6 +1452,7 @@ impl App {
     }
 
     fn remember_native_window_position(&mut self, native: &NativeWindowSurface) {
+        tell_the_application_the_window_frame(native.state, &native.window);
         if let Some((x, y)) = Self::initial_native_window_position(
             &native.options,
             current_native_window_position(&self.native_window_platform_probe, native),
@@ -1312,165 +1480,29 @@ impl App {
         current_position
     }
 
-    fn native_window_graph_snapshots(&self) -> Vec<WindowGraphPeerSnapshot> {
-        self.native_windows
-            .values()
-            .filter_map(|native| {
-                self.native_window_graph_snapshot(
-                    native,
-                    None,
-                    NativeWindowGraphPositionSource::CachedThenCurrent,
-                )
-            })
-            .collect()
-    }
-
-    fn native_window_graph_snapshots_with(
-        &self,
-        native: &NativeWindowSurface,
-        position: Option<cranpose_ui::Point>,
-    ) -> Vec<WindowGraphPeerSnapshot> {
-        self.native_window_graph_snapshots_with_source(
-            native,
-            position,
-            NativeWindowGraphPositionSource::CachedThenCurrent,
-        )
-    }
-
-    fn native_window_graph_snapshots_with_current_positions(
-        &self,
-        native: &NativeWindowSurface,
-        position: Option<cranpose_ui::Point>,
-    ) -> Vec<WindowGraphPeerSnapshot> {
-        self.native_window_graph_snapshots_with_source(
-            native,
-            position,
-            NativeWindowGraphPositionSource::CurrentThenCached,
-        )
-    }
-
-    fn native_window_graph_snapshots_with_source(
-        &self,
-        native: &NativeWindowSurface,
-        position: Option<cranpose_ui::Point>,
-        source: NativeWindowGraphPositionSource,
-    ) -> Vec<WindowGraphPeerSnapshot> {
-        let mut snapshots: Vec<_> = self
-            .native_windows
-            .values()
-            .filter_map(|native| self.native_window_graph_snapshot(native, None, source))
-            .collect();
-        snapshots.retain(|snapshot| snapshot.node.id != native.key);
-        if let Some(snapshot) = self.native_window_graph_snapshot(native, position, source) {
-            snapshots.push(snapshot);
-        }
-        snapshots
-    }
-
-    fn native_window_graph_snapshot(
-        &self,
-        native: &NativeWindowSurface,
-        position: Option<cranpose_ui::Point>,
-        source: NativeWindowGraphPositionSource,
-    ) -> Option<WindowGraphPeerSnapshot> {
-        let cached_position = self.native_window_positions.get(&native.key).copied();
-        let current_position =
-            current_native_window_position(&self.native_window_platform_probe, native);
-        let options_position = native_window_options_position(&native.options);
-        let position = native_window_graph_position(
-            position,
-            cached_position,
-            current_position,
-            options_position,
-            source,
-        )?;
-        Some(WindowGraphPeerSnapshot {
-            node: WindowGraphNodeSnapshot {
-                id: native.key,
-                position,
-                size: native
-                    .state
-                    .map(WindowState::size_non_reactive)
-                    .unwrap_or_else(|| {
-                        cranpose_ui::Size::new(native.options.width, native.options.height)
-                    }),
-            },
-            group: native.group.clone(),
-        })
-    }
-
-    fn apply_window_graph_drag(
-        &mut self,
-        dragged: NativeWindowKey,
-        target: cranpose_ui::Point,
-    ) -> bool {
-        let moves = self.window_graph.drag_to(dragged, target);
-        self.apply_window_graph_moves_with_mode(moves, NativeWindowPositionApplyMode::FlushOnly)
-    }
-
-    fn finish_window_graph_drag(&mut self) -> bool {
-        let snapshots = self.native_window_graph_snapshots();
-        let moves = self.window_graph.finish_drag(&snapshots);
-        self.apply_window_graph_moves(moves)
-    }
-
-    fn apply_window_graph_moves(&mut self, moves: Vec<WindowGraphMove>) -> bool {
-        self.apply_window_graph_moves_with_mode(moves, NativeWindowPositionApplyMode::WaitForSettle)
-    }
-
-    fn apply_window_graph_moves_with_mode(
-        &mut self,
-        moves: Vec<WindowGraphMove>,
-        mode: NativeWindowPositionApplyMode,
-    ) -> bool {
-        let mut moved = false;
-        let mut native_position_requests = Vec::new();
-        for window_move in moves {
-            let Some(window_id) = self.native_window_ids.get(&window_move.id).copied() else {
-                continue;
-            };
-            let Some(native) = self.native_windows.get_mut(&window_id) else {
-                continue;
-            };
-            if let Some(request) = Self::prepare_native_window_position_request(
-                &self.native_window_platform_probe,
-                native,
-                window_move.position,
-            ) {
-                native_position_requests.push(request);
-                self.native_window_positions.insert(
-                    window_move.id,
-                    (window_move.position.x, window_move.position.y),
-                );
-                moved = true;
-            }
-        }
-        Self::apply_native_window_position_requests(
-            &self.native_window_platform_probe,
-            native_position_requests,
-            mode,
-        );
-        moved
-    }
-
     fn create_native_window_shell(
         event_loop: &dyn ActiveEventLoop,
         request: NativeWindowRequest,
         headless: bool,
+        anything_focused: bool,
     ) -> Result<NativeWindowShell, LaunchError> {
         let create_started = Instant::now();
         let options = &request.options;
-        let attributes = native_window_attributes(options, headless);
+        let attributes = native_window_attributes(
+            options,
+            headless,
+            a_new_window_comes_up_key(headless, options.visible, anything_focused, options.focus),
+        );
 
         let window: Arc<dyn Window> = event_loop
             .create_window(attributes)
             .map_err(LaunchError::WindowCreate)?
             .into();
-        trace_native_window_timing(format_args!(
+        trace_native_window_timing!(
             "{} create_window {}ms",
             options.title,
             create_started.elapsed().as_millis()
-        ));
+        );
         Ok(NativeWindowShell {
             request,
             window,
@@ -1480,6 +1512,7 @@ impl App {
 
     fn create_native_window(
         &self,
+        app: &mut AppShell<WgpuRenderer>,
         shell: NativeWindowShell,
     ) -> Result<NativeWindowSurface, LaunchError> {
         let NativeWindowShell {
@@ -1496,11 +1529,11 @@ impl App {
             .instance
             .create_surface(window.clone())
             .map_err(LaunchError::SurfaceCreate)?;
-        trace_native_window_timing(format_args!(
+        trace_native_window_timing!(
             "{} create_surface {}ms",
             options.title,
             create_started.elapsed().as_millis()
-        ));
+        );
         let surface_caps = surface.get_capabilities(&context.adapter);
         let surface_format = select_surface_format(&surface_caps)?;
         let present_mode = desktop_present_mode(&surface_caps, self.frame_pacing_mode());
@@ -1516,21 +1549,23 @@ impl App {
             desired_frame_latency(self.frame_pacing_mode(), monitor_refresh_interval(&window)),
         )?;
         surface.configure(&context.device, &surface_config);
-        present_initial_placeholder_frame(
+        let placeholder_presented = present_initial_placeholder_frame_cleared_to(
             &surface,
             &context.device,
             &context.queue,
             surface_format,
             "native window initial present",
+            cranpose_render_wgpu::frame_clear_color(options.transparent),
         );
-        trace_native_window_timing(format_args!(
-            "{} configure {}ms",
+        trace_native_window_timing!(
+            "{} configure {}ms placeholder_presented={placeholder_presented} alpha={:?}",
             options.title,
-            create_started.elapsed().as_millis()
-        ));
+            create_started.elapsed().as_millis(),
+            surface_config.alpha_mode
+        );
 
         let scale_factor = window.scale_factor();
-        let renderer = wgpu_renderer_for_surface(
+        let mut renderer = wgpu_renderer_for_surface(
             context.text_system.clone(),
             Arc::clone(&context.device),
             Arc::clone(&context.queue),
@@ -1539,68 +1574,57 @@ impl App {
             context.adapter.get_downlevel_capabilities().flags,
             scale_factor,
         );
-        trace_native_window_timing(format_args!(
+        renderer.set_transparent_background(options.transparent);
+        trace_native_window_timing!(
             "{} renderer {}ms",
             options.title,
             create_started.elapsed().as_millis()
-        ));
-        let content = request.content.clone();
-        let content_env = Rc::clone(&self.platform_env);
+        );
         let viewport = (
             surface_config.width as f32 / scale_factor as f32,
             surface_config.height as f32 / scale_factor as f32,
         );
         let registry = Rc::clone(&self.native_window_registry);
-        let mut app = native_window::with_native_window_registry(&registry, || {
-            AppShell::new_with_size_and_density(
-                renderer,
-                default_root_key(),
-                move || {
-                    content_env.compose_root(|| (content.borrow_mut())());
-                },
-                (surface_config.width, surface_config.height),
-                viewport,
-                scale_factor as f32,
-            )
-        });
-        let mut dev_options = self.settings.dev_options.clone();
-        dev_options.frame_pacing_mode = self.frame_pacing_mode();
-        dev_options.frame_pacing_controls = false;
-        app.set_dev_options(dev_options);
-        DesktopTextInput::install(&mut app, &window);
-        trace_native_window_timing(format_args!(
-            "{} app_shell {}ms",
+        let root_id = request.key.raw();
+        request
+            .root
+            .set_size(cranpose_ui::Size::new(viewport.0, viewport.1));
+        app.add_window_surface(
+            root_id,
+            renderer,
+            (surface_config.width, surface_config.height),
+            viewport,
+        );
+        if let Some(mut surface) = app.surface(RootId::Window(root_id)) {
+            DesktopTextInput::install(&mut surface, &window);
+        }
+        trace_native_window_timing!(
+            "{} surface {}ms",
             options.title,
             create_started.elapsed().as_millis()
-        ));
-
-        let frame_waker_window = window.clone();
-        app.set_frame_waker(move || {
-            frame_waker_window.request_redraw();
-        });
+        );
 
         let mut platform = DesktopWinitPlatform::default();
         platform.set_scale_factor(scale_factor);
         window.request_redraw();
-        trace_native_window_timing(format_args!(
+        trace_native_window_timing!(
             "{} create done {}ms",
             options.title,
             create_started.elapsed().as_millis()
-        ));
+        );
 
-        Ok(NativeWindowSurface {
+        let mut native = NativeWindowSurface {
             key: request.key,
             revision: request.revision,
             options: request.options.clone(),
             events: request.events.clone(),
             state: request.state,
-            group: request.group.clone(),
             window,
             surface,
             surface_config,
             surface_caps,
             surface_dirty: true,
-            app,
+            root: Rc::clone(&request.root),
             platform,
             last_cursor_position: None,
             last_cursor_physical_position: None,
@@ -1608,14 +1632,31 @@ impl App {
             vsync_interval: default_vsync_interval(),
             pending_outer_positions: PendingNativeWindowPositions::default(),
             active_drag: None,
-        })
+            held_press: None,
+        };
+        Self::present_before_the_desktop_composites(app, &mut native, &registry, "first frame");
+        Ok(native)
     }
 
     fn apply_native_window_options(
         platform_probe: &NativeWindowPlatformProbe,
+        app: &mut AppShell<WgpuRenderer>,
         native: &mut NativeWindowSurface,
         options: &NativeWindowOptions,
         headless: bool,
+    ) -> bool {
+        let mut resized = false;
+        Self::apply_native_window_appearance(app, native, options);
+        resized |=
+            Self::apply_native_window_geometry(platform_probe, app, native, options, headless);
+        native.options = options.clone();
+        resized
+    }
+
+    fn apply_native_window_appearance(
+        app: &mut AppShell<WgpuRenderer>,
+        native: &mut NativeWindowSurface,
+        options: &NativeWindowOptions,
     ) {
         if native.options.title != options.title {
             native.window.set_title(&options.title);
@@ -1627,13 +1668,26 @@ impl App {
             native.window.set_resizable(options.resizable);
         }
         if native.options.transparent != options.transparent {
-            native.window.set_transparent(options.transparent);
+            Self::set_native_transparency(app, native, options.transparent);
+        }
+        if native.options.shadow != options.shadow {
+            set_native_window_shadow(&native.window, options.shadow);
         }
         if native.options.always_on_top != options.always_on_top {
             native
                 .window
                 .set_window_level(native_window_level(options.always_on_top));
         }
+    }
+
+    fn apply_native_window_geometry(
+        platform_probe: &NativeWindowPlatformProbe,
+        app: &mut AppShell<WgpuRenderer>,
+        native: &mut NativeWindowSurface,
+        options: &NativeWindowOptions,
+        headless: bool,
+    ) -> bool {
+        let mut resized = false;
         if native.options.min_width != options.min_width
             || native.options.min_height != options.min_height
         {
@@ -1660,6 +1714,7 @@ impl App {
         }
         if native.options.visible != options.visible {
             native.window.set_visible(!headless && options.visible);
+            note_native_window_presented(native.state, false);
         }
         if (native.options.x != options.x || native.options.y != options.y)
             && let (Some(x), Some(y)) = (options.x, options.y)
@@ -1681,27 +1736,48 @@ impl App {
                 .into(),
             )
         {
-            Self::resize_native_surface(native, size.width, size.height);
+            Self::resize_native_surface(app, native, size.width, size.height);
+            resized = true;
         }
-        native.options = options.clone();
+        resized
     }
 
-    fn resize_native_surface(native: &mut NativeWindowSurface, width: u32, height: u32) {
+    fn resize_native_surface(
+        app: &mut AppShell<WgpuRenderer>,
+        native: &mut NativeWindowSurface,
+        width: u32,
+        height: u32,
+    ) {
+        if width == 0 || height == 0 {
+            return;
+        }
         let viewport = surface_logical_viewport_size(width, height, native.window.scale_factor());
-        configure_app_surface_size(
-            &mut native.app,
-            &native.surface,
-            &mut native.surface_config,
-            width,
-            height,
-            viewport,
-        );
+        let Some(device) = app.renderer().try_device() else {
+            log::error!("native surface resize skipped: GPU renderer is not initialized");
+            return;
+        };
+        native.surface_config.width = width;
+        native.surface_config.height = height;
+        native.surface.configure(device, &native.surface_config);
+        native
+            .root
+            .set_size(cranpose_ui::Size::new(viewport.0, viewport.1));
+        if let Some(mut surface) = native_surface(app, native) {
+            surface.set_buffer_size(width, height);
+            surface.set_viewport(viewport.0, viewport.1);
+        }
         native.surface_dirty = surface_reconfigure_requires_redraw(width, height);
     }
 
-    fn apply_native_window_resize(native: &mut NativeWindowSurface, width: u32, height: u32) {
+    fn apply_native_window_resize(
+        app: &mut AppShell<WgpuRenderer>,
+        native: &mut NativeWindowSurface,
+        width: u32,
+        height: u32,
+    ) {
         let previous_state_size = native.state.map(|state| state.size_non_reactive());
         update_native_options_size(&mut native.options, &native.window, width, height);
+        tell_the_application_the_window_frame(native.state, &native.window);
         notify_native_window_resized(&native.events, &native.window, width, height);
         sync_native_window_state_size(
             native.state,
@@ -1710,7 +1786,7 @@ impl App {
             width,
             height,
         );
-        Self::resize_native_surface(native, width, height);
+        Self::resize_native_surface(app, native, width, height);
     }
 
     fn sync_native_window_position_from_os(
@@ -1736,7 +1812,7 @@ impl App {
         native_window_positions.insert(native.key, position);
         update_native_options_position(&mut native.options, position.0, position.1);
         native.pending_outer_positions.clear();
-        notify_native_window_moved(&native.events, position.0, position.1);
+        tell_the_application_the_window_moved(&native.events, native.state, position.0, position.1);
         sync_native_window_state_position(
             native.state,
             previous_state_position,
@@ -1765,7 +1841,7 @@ impl App {
         let physical = logical.to_physical::<i32>(native.window.scale_factor());
         update_native_options_position(&mut native.options, position.x, position.y);
         let previous_state_position = native.state.and_then(|state| state.position_non_reactive());
-        notify_native_window_moved(&native.events, position.x, position.y);
+        tell_the_application_the_window_moved(&native.events, native.state, position.x, position.y);
         sync_native_window_state_position(
             native.state,
             previous_state_position,
@@ -1803,9 +1879,13 @@ impl App {
         }
     }
 
-    fn handle_native_primary_pressed(&mut self, native: &mut NativeWindowSurface) -> bool {
+    fn handle_native_primary_pressed(
+        &mut self,
+        app: &mut AppShell<WgpuRenderer>,
+        native: &mut NativeWindowSurface,
+    ) -> bool {
         let (handled, drag_requested) =
-            Self::dispatch_native_primary_pressed(&self.native_window_platform_probe, native);
+            Self::dispatch_native_primary_pressed(&self.native_window_platform_probe, app, native);
         if handled {
             apply_pointer_button_frame_request(
                 &native.window,
@@ -1821,8 +1901,12 @@ impl App {
 
     fn dispatch_native_primary_pressed(
         platform_probe: &NativeWindowPlatformProbe,
+        app: &mut AppShell<WgpuRenderer>,
         native: &mut NativeWindowSurface,
     ) -> (bool, bool) {
+        let Some(mut surface) = native_surface(app, native) else {
+            return (false, false);
+        };
         let drag_requested = Rc::new(Cell::new(false));
         let drag_requested_for_handler = Rc::clone(&drag_requested);
         let drag_handler: Rc<dyn Fn() -> bool> = Rc::new(move || {
@@ -1836,12 +1920,10 @@ impl App {
                 log::debug!("native window resize request failed: {error}");
             }
         });
+        surface.set_screen_origin(native_window_surface_origin(platform_probe, &native.window));
         let handled =
             native_window::with_native_window_drag_handler(drag_handler, resize_handler, || {
-                native_window::with_native_window_surface_origin(
-                    native_window_surface_origin(platform_probe, &native.window),
-                    || native.app.pointer_pressed(),
-                )
+                surface.pointer_pressed()
             });
         (handled, drag_requested.get())
     }
@@ -1855,7 +1937,7 @@ impl App {
         native: &mut NativeWindowSurface,
         start_pointer_screen: Option<PhysicalPosition<f64>>,
     ) {
-        trace_native_window(format_args!("drag requested key={:?}", native.key));
+        trace_native_window!("drag requested key={:?}", native.key);
         let platform_probe = &self.native_window_platform_probe;
         Self::sync_native_window_position_from_os(
             platform_probe,
@@ -1869,15 +1951,35 @@ impl App {
                 &mut self.native_window_positions,
             );
         }
-        let graph_snapshots = self.native_window_graph_snapshots_with(native, None);
-        self.window_graph.start_drag(&graph_snapshots, native.key);
-        if !Self::start_native_window_drag(platform_probe, native, start_pointer_screen) {
-            trace_native_window(format_args!(
-                "drag cancel key={:?} reason=start-failed",
-                native.key
-            ));
-            self.window_graph.cancel_drag();
+        let anchor =
+            start_pointer_screen.or_else(|| native_window_press_anchor(platform_probe, native));
+        if !Self::start_native_window_drag(platform_probe, native, anchor) {
+            trace_native_window!("drag cancel key={:?} reason=start-failed", native.key);
         }
+    }
+
+    fn move_dragged_window(&mut self, key: NativeWindowKey, target: cranpose_ui::Point) -> bool {
+        let Some(window_id) = self.native_window_ids.get(&key).copied() else {
+            return false;
+        };
+        let Some(native) = self.native_windows.get_mut(&window_id) else {
+            return false;
+        };
+        let Some(request) = Self::prepare_native_window_position_request(
+            &self.native_window_platform_probe,
+            native,
+            target,
+        ) else {
+            return false;
+        };
+        self.native_window_positions
+            .insert(key, (target.x, target.y));
+        Self::apply_native_window_position_requests(
+            &self.native_window_platform_probe,
+            vec![request],
+            NativeWindowPositionApplyMode::FlushOnly,
+        );
+        true
     }
 
     fn start_native_window_drag(
@@ -1894,23 +1996,16 @@ impl App {
         ) {
             let pointer = session.start_pointer_screen;
             let window_outer = session.start_window_outer;
-            native.active_drag = Some(NativeWindowDragSession::Polling(session));
-            trace_native_window(format_args!(
+            native.active_drag = Some(session);
+            trace_native_window!(
                 "drag start polling key={:?} pointer=({:.1},{:.1}) outer=({},{})",
-                native.key, pointer.x, pointer.y, window_outer.x, window_outer.y
-            ));
+                native.key,
+                pointer.x,
+                pointer.y,
+                window_outer.x,
+                window_outer.y
+            );
             return true;
-        }
-
-        match native.window.drag_window() {
-            Ok(()) => {
-                native.active_drag = Some(NativeWindowDragSession::platform(now));
-                trace_native_window(format_args!("drag start platform key={:?}", native.key));
-                return true;
-            }
-            Err(error) => {
-                log::debug!("native window drag request failed: {error}");
-            }
         }
 
         false
@@ -1922,15 +2017,10 @@ impl App {
         now: Instant,
         start_pointer_screen: Option<PhysicalPosition<f64>>,
     ) -> Option<NativeWindowPollingDragSession> {
-        let pointer = start_pointer_screen
-            .or_else(|| {
-                native_window_global_pointer_state(platform_probe).map(|state| state.position)
-            })
-            .or_else(|| {
-                native.last_cursor_physical_position.and_then(|position| {
-                    native_window_screen_pointer_physical(platform_probe, &native.window, position)
-                })
-            })?;
+        let pointer = native_window_polling_drag_pointer(
+            native_window_global_pointer_state(platform_probe),
+            start_pointer_screen,
+        )?;
         let window_outer = current_native_window_physical_position(platform_probe, &native.window)?;
         Some(NativeWindowPollingDragSession::new(
             pointer,
@@ -1940,6 +2030,18 @@ impl App {
     }
 
     fn poll_native_window_global_primary_press(&mut self) -> bool {
+        let Some(mut app) = self.app.take() else {
+            return false;
+        };
+        let handled = self.poll_native_window_global_primary_press_with(&mut app);
+        self.app = Some(app);
+        handled
+    }
+
+    fn poll_native_window_global_primary_press_with(
+        &mut self,
+        app: &mut AppShell<WgpuRenderer>,
+    ) -> bool {
         let platform_probe = &self.native_window_platform_probe;
         let Some(pointer) = native_window_global_pointer_state(platform_probe) else {
             self.native_global_primary_down = false;
@@ -1948,7 +2050,7 @@ impl App {
         if !pointer.primary_down {
             if self.native_global_primary_down {
                 self.native_global_primary_down = false;
-                return self.release_native_global_primary_press();
+                return self.release_native_global_primary_press(app);
             }
             self.native_global_primary_down = false;
             return false;
@@ -1967,30 +2069,247 @@ impl App {
             return false;
         };
 
+        self.recover_primary_press_into(app, window_id, pointer)
+    }
+
+    fn hand_held_press_to_new_window(
+        &mut self,
+        app: &mut AppShell<WgpuRenderer>,
+        window_id: WinitWindowId,
+    ) {
+        let holder = app.root_holding_the_press();
+        let platform_probe = &self.native_window_platform_probe;
+        let Some(native) = self.native_windows.get(&window_id) else {
+            return;
+        };
+        let belongs = press_belongs_here(holder, native.root_id());
+        let dragging_elsewhere = self
+            .native_windows
+            .values()
+            .any(|other| other.active_drag.is_some());
+        let held = self.held_press_pointer_state();
+        let Some(handover) = press_to_hand_over(
+            native_window_global_pointer_state(platform_probe),
+            held,
+            native.options.visible && !dragging_elsewhere,
+            belongs,
+            |position| native_window_surface_contains_pointer(platform_probe, native, position),
+        ) else {
+            return;
+        };
+        trace_native_window!(
+            "held press handed to key={:?} pointer=({:.1},{:.1}) relayed_by={:?}",
+            native.key,
+            handover.pointer.position.x,
+            handover.pointer.position.y,
+            handover.relayed_by
+        );
+        self.cancel_held_press_elsewhere(app, window_id);
+        let recovered = self.recover_primary_press_into(app, window_id, handover.pointer);
+        self.handed_press = handover
+            .relayed_by
+            .filter(|_| recovered)
+            .map(|holder| HandedPress {
+                holder,
+                taker: window_id,
+            });
+    }
+
+    fn held_press_pointer_state(&self) -> Option<(WinitWindowId, NativeWindowPointerState)> {
+        let platform_probe = &self.native_window_platform_probe;
+        let primary = self
+            .window
+            .as_ref()
+            .map(|window| (window, self.primary_held_press));
+        let peers = self
+            .native_windows
+            .values()
+            .map(|native| (&native.window, native.held_press));
+        primary.into_iter().chain(peers).find_map(|(window, held)| {
+            let pointer = held_press_on_screen(platform_probe, window, held?)?;
+            Some((window.id(), pointer))
+        })
+    }
+
+    fn relay_primary_held_press(&mut self, event_loop: &dyn ActiveEventLoop, event: &WindowEvent) {
+        let Some(step) = held_press_step(event) else {
+            return;
+        };
+        self.primary_held_press = held_press_after_step(self.primary_held_press, step);
+        if self.handed_press.is_none() {
+            return;
+        }
+        let Some(window) = self.window.clone() else {
+            return;
+        };
+        let Some(mut app) = self.app.take() else {
+            return;
+        };
+        let settlement = self.relay_held_press_step(&mut app, window.id(), &window, step);
+        self.app = Some(app);
+        self.settle_native_window_event(event_loop, settlement);
+    }
+
+    fn relay_native_held_press(
+        &mut self,
+        app: &mut AppShell<WgpuRenderer>,
+        native: &mut NativeWindowSurface,
+        event: &WindowEvent,
+    ) -> NativeWindowEventSettlement {
+        let Some(step) = held_press_step(event) else {
+            return NativeWindowEventSettlement::default();
+        };
+        native.held_press = held_press_after_step(native.held_press, step);
+        self.relay_held_press_step(app, native.window.id(), &native.window, step)
+    }
+
+    fn relay_held_press_step(
+        &mut self,
+        app: &mut AppShell<WgpuRenderer>,
+        holder: WinitWindowId,
+        holder_window: &Arc<dyn Window>,
+        step: HeldPressStep,
+    ) -> NativeWindowEventSettlement {
+        let Some(taker) = self
+            .handed_press
+            .and_then(|handed| handed.taker_for(holder))
+        else {
+            return NativeWindowEventSettlement::default();
+        };
+        if let HeldPressStep::Pressed(_) = step {
+            self.handed_press = None;
+            return NativeWindowEventSettlement::default();
+        }
+        let platform_probe = &self.native_window_platform_probe;
+        let Some(native) = self.native_windows.get_mut(&taker) else {
+            self.handed_press = None;
+            return NativeWindowEventSettlement::default();
+        };
+        let Some(screen) =
+            native_window_screen_pointer_physical(platform_probe, holder_window, step.position())
+        else {
+            return NativeWindowEventSettlement::default();
+        };
+        Self::set_native_cursor_from_screen(platform_probe, app, native, screen);
+        match step {
+            HeldPressStep::Pressed(_) | HeldPressStep::Moved(_) => NativeWindowEventSettlement {
+                drag_move: Self::update_native_window_polling_drag_target(native, screen),
+                ..NativeWindowEventSettlement::default()
+            },
+            HeldPressStep::Released(_) => {
+                self.handed_press = None;
+                self.native_global_primary_down = false;
+                let settlement = Self::finish_native_press(
+                    platform_probe,
+                    app,
+                    native,
+                    Some(screen),
+                    "relayed-release",
+                    |surface| surface.pointer_released(),
+                );
+                trace_native_window!("held press released, key={:?} raised", native.key);
+                native.window.focus_window();
+                settlement
+            }
+        }
+    }
+
+    fn set_native_cursor_from_screen(
+        platform_probe: &NativeWindowPlatformProbe,
+        app: &mut AppShell<WgpuRenderer>,
+        native: &mut NativeWindowSurface,
+        screen: PhysicalPosition<f64>,
+    ) {
+        let Some(local) =
+            native_window_local_pointer_physical(platform_probe, &native.window, screen)
+        else {
+            return;
+        };
+        let logical = native.platform.pointer_position(local);
+        native.last_cursor_position = Some((logical.x, logical.y));
+        native.last_cursor_physical_position = Some(local);
+        if let Some(mut surface) = native_surface(app, native) {
+            surface.set_screen_origin(native_window_surface_origin(platform_probe, &native.window));
+            surface.set_cursor(logical.x, logical.y);
+        }
+    }
+
+    fn finish_native_press(
+        platform_probe: &NativeWindowPlatformProbe,
+        app: &mut AppShell<WgpuRenderer>,
+        native: &mut NativeWindowSurface,
+        pointer: Option<PhysicalPosition<f64>>,
+        reason: &str,
+        release: impl FnOnce(&mut SurfaceMut<'_, WgpuRenderer>) -> bool,
+    ) -> NativeWindowEventSettlement {
+        let drag_move = pointer
+            .and_then(|pointer| Self::update_native_window_polling_drag_target(native, pointer));
+        let finish_drag = native.active_drag.take().is_some();
+        if finish_drag {
+            trace_native_window!("drag finish key={:?} reason={reason}", native.key);
+        }
+        let handled = native_surface(app, native).is_some_and(|mut surface| {
+            surface.set_screen_origin(native_window_surface_origin(platform_probe, &native.window));
+            release(&mut surface)
+        });
+        app.sync_selection_to_primary();
+        if handled {
+            apply_pointer_button_frame_request(
+                &native.window,
+                &mut native.last_frame_start_time,
+                pointer_button_frame_request(handled),
+            );
+        }
+        NativeWindowEventSettlement {
+            sync_after_event: handled,
+            drag_move,
+            finish_drag,
+        }
+    }
+
+    fn cancel_held_press_elsewhere(
+        &mut self,
+        app: &mut AppShell<WgpuRenderer>,
+        keep: WinitWindowId,
+    ) {
+        if app.has_active_pointer_gesture() {
+            cancel_app_input(app);
+        }
+        for native in self.native_windows.values_mut() {
+            if native.window.id() == keep {
+                continue;
+            }
+            if let Some(mut surface) = native_surface(app, native)
+                && surface.has_active_pointer_gesture()
+            {
+                cancel_surface_input(&mut surface);
+            }
+        }
+        self.native_global_primary_down = false;
+    }
+
+    fn recover_primary_press_into(
+        &mut self,
+        app: &mut AppShell<WgpuRenderer>,
+        window_id: WinitWindowId,
+        pointer: NativeWindowPointerState,
+    ) -> bool {
+        let platform_probe = &self.native_window_platform_probe;
         let Some(mut native) = self.native_windows.remove(&window_id) else {
             self.native_global_primary_down = false;
             return false;
         };
-        if let Some(local) =
-            native_window_local_pointer_physical(platform_probe, &native.window, pointer.position)
-        {
-            let logical = native.platform.pointer_position(local);
-            native.last_cursor_position = Some((logical.x, logical.y));
-            native.last_cursor_physical_position = Some(local);
-            native_window::with_native_window_surface_origin(
-                native_window_surface_origin(platform_probe, &native.window),
-                || native.app.set_cursor(logical.x, logical.y),
-            );
-        }
+        Self::set_native_cursor_from_screen(platform_probe, app, &mut native, pointer.position);
 
         let (press_handled, drag_requested) =
-            Self::dispatch_native_primary_pressed(platform_probe, &mut native);
+            Self::dispatch_native_primary_pressed(platform_probe, app, &mut native);
         if press_handled {
             self.native_global_primary_down = true;
-            trace_native_window(format_args!(
+            trace_native_window!(
                 "global primary recovered key={:?} drag_requested={}",
-                native.key, drag_requested
-            ));
+                native.key,
+                drag_requested
+            );
             apply_pointer_button_frame_request(
                 &native.window,
                 &mut native.last_frame_start_time,
@@ -1999,7 +2318,7 @@ impl App {
             if drag_requested {
                 self.begin_native_window_drag_with_anchor(&mut native, Some(pointer.position));
             } else {
-                native.app.sync_selection_to_primary();
+                app.sync_selection_to_primary();
             }
         } else {
             self.native_global_primary_down = false;
@@ -2009,18 +2328,19 @@ impl App {
         press_handled
     }
 
-    fn release_native_global_primary_press(&mut self) -> bool {
+    fn release_native_global_primary_press(&mut self, app: &mut AppShell<WgpuRenderer>) -> bool {
         let platform_probe = &self.native_window_platform_probe;
         let mut handled_any = false;
         for native in self.native_windows.values_mut() {
             if native.active_drag.is_some() {
                 continue;
             }
-            let handled = native_window::with_native_window_surface_origin(
-                native_window_surface_origin(platform_probe, &native.window),
-                || native.app.pointer_released(),
-            );
-            native.app.sync_selection_to_primary();
+            let Some(mut surface) = native_surface(app, native) else {
+                continue;
+            };
+            surface.set_screen_origin(native_window_surface_origin(platform_probe, &native.window));
+            let handled = surface.pointer_released();
+            app.sync_selection_to_primary();
             if handled {
                 apply_pointer_button_frame_request(
                     &native.window,
@@ -2038,46 +2358,60 @@ impl App {
         let has_due_drag = self.native_windows.values().any(|native| {
             native
                 .active_drag
-                .is_some_and(|active_drag| active_drag.next_poll_at() <= now)
+                .and_then(|active_drag| {
+                    native_window_drag_poll_deadline(
+                        active_drag.next_poll_at,
+                        NATIVE_WINDOW_GLOBAL_POINTER_POLLED,
+                    )
+                })
+                .is_some_and(|deadline| deadline <= now)
         });
         if !has_due_drag {
             return false;
         }
+        let Some(mut app) = self.app.take() else {
+            return false;
+        };
+        let needs_registry_sync = self.poll_active_native_window_drags_with(&mut app, now);
+        self.app = Some(app);
+        needs_registry_sync
+    }
 
+    fn poll_active_native_window_drags_with(
+        &mut self,
+        app: &mut AppShell<WgpuRenderer>,
+        now: Instant,
+    ) -> bool {
         let platform_probe = &self.native_window_platform_probe;
         let pointer = native_window_global_pointer_state(platform_probe);
         let mut updates = Vec::new();
-        let mut finish_drag = false;
         let mut needs_registry_sync = false;
         for native in self.native_windows.values_mut() {
             let Some(active_drag) = native.active_drag.as_mut() else {
                 continue;
             };
-            if active_drag.next_poll_at() > now {
+            if active_drag.next_poll_at > now {
                 continue;
             }
-            active_drag.set_next_poll_at(now + NATIVE_WINDOW_DRAG_POLL_INTERVAL);
+            active_drag.next_poll_at = now + NATIVE_WINDOW_DRAG_POLL_INTERVAL;
 
             let Some(pointer) = pointer else {
-                trace_native_window(format_args!(
+                trace_native_window!(
                     "drag poll skipped key={:?} reason=no-global-pointer",
                     native.key
-                ));
+                );
                 continue;
             };
-            if !pointer.primary_down && active_drag.finishes_on_global_pointer_release() {
+            if !pointer.primary_down {
                 native.active_drag = None;
-                finish_drag = true;
                 needs_registry_sync = true;
-                trace_native_window(format_args!(
-                    "drag finish key={:?} reason=global-release",
-                    native.key
-                ));
-                if native.app.pointer_released() {
+                trace_native_window!("drag finish key={:?} reason=global-release", native.key);
+                if native_surface(app, native).is_some_and(|mut surface| surface.pointer_released())
+                {
                     native.window.request_redraw();
                     needs_registry_sync = true;
                 }
-                native.app.sync_selection_to_primary();
+                app.sync_selection_to_primary();
                 continue;
             }
             if let Some(update) =
@@ -2088,10 +2422,7 @@ impl App {
         }
 
         for (key, position) in updates {
-            self.apply_window_graph_drag(key, position);
-        }
-        if finish_drag {
-            self.finish_window_graph_drag();
+            self.move_dragged_window(key, position);
         }
         needs_registry_sync
     }
@@ -2137,33 +2468,16 @@ impl App {
 
             let previous_state_position =
                 native.state.and_then(|state| state.position_non_reactive());
-            let previous_graph_position = native_window_positions
-                .get(&native.key)
-                .map(|(x, y)| cranpose_ui::Point::new(*x, *y))
-                .or(previous_state_position)
-                .or_else(|| {
-                    native_window_options_position(&native.options)
-                        .map(|(x, y)| cranpose_ui::Point::new(x, y))
-                });
-            external_moves.push((
-                *window_id,
-                native.key,
-                position,
-                previous_state_position,
-                previous_graph_position,
-            ));
+            external_moves.push((*window_id, native.key, position, previous_state_position));
         }
 
         let mut moved = false;
-        for (window_id, key, position, previous_state_position, previous_graph_position) in
-            external_moves
-        {
+        for (window_id, key, position, previous_state_position) in external_moves {
             moved |= self.reconcile_external_native_window_move(
                 window_id,
                 key,
                 position,
                 previous_state_position,
-                previous_graph_position,
             );
         }
         moved
@@ -2175,14 +2489,7 @@ impl App {
         key: NativeWindowKey,
         position: (f32, f32),
         previous_state_position: Option<cranpose_ui::Point>,
-        previous_graph_position: Option<cranpose_ui::Point>,
     ) -> bool {
-        let Some(native) = self.native_windows.get(&window_id) else {
-            return false;
-        };
-        let previous_graph_snapshots = self
-            .native_window_graph_snapshots_with_current_positions(native, previous_graph_position);
-
         let Some(native) = self.native_windows.get_mut(&window_id) else {
             return false;
         };
@@ -2190,25 +2497,22 @@ impl App {
             return false;
         }
 
-        trace_native_window(format_args!(
+        trace_native_window!(
             "poll external move key={:?} pos=({:.1},{:.1})",
-            key, position.0, position.1
-        ));
+            key,
+            position.0,
+            position.1
+        );
         self.native_window_positions.insert(key, position);
         update_native_options_position(&mut native.options, position.0, position.1);
         let position = cranpose_ui::Point::new(position.0, position.1);
-        notify_native_window_moved(&native.events, position.x, position.y);
+        tell_the_application_the_window_moved(&native.events, native.state, position.x, position.y);
         sync_native_window_state_position(
             native.state,
             previous_state_position,
             position.x,
             position.y,
         );
-
-        let graph_moves = self
-            .window_graph
-            .external_move(&previous_graph_snapshots, key, position);
-        self.apply_window_graph_moves(graph_moves);
         true
     }
 
@@ -2216,24 +2520,28 @@ impl App {
         native: &mut NativeWindowSurface,
         pointer: PhysicalPosition<f64>,
     ) -> Option<(NativeWindowKey, cranpose_ui::Point)> {
-        let active_drag = native.active_drag.as_mut()?.polling_mut()?;
+        let active_drag = native.active_drag.as_mut()?;
         let target = active_drag.target_for_pointer(pointer);
         if target == active_drag.last_target_outer {
             return None;
         }
         active_drag.last_target_outer = target;
         let logical = target.to_logical::<f64>(native.window.scale_factor());
-        trace_native_window(format_args!(
+        trace_native_window!(
             "drag target key={:?} logical=({:.1},{:.1}) physical=({},{})",
-            native.key, logical.x, logical.y, target.x, target.y
-        ));
+            native.key,
+            logical.x,
+            logical.y,
+            target.x,
+            target.y
+        );
         Some((
             native.key,
             cranpose_ui::Point::new(logical.x as f32, logical.y as f32),
         ))
     }
 
-    fn native_window_event(
+    fn dispatch_native_window_event(
         &mut self,
         event_loop: &dyn ActiveEventLoop,
         window_id: WinitWindowId,
@@ -2242,56 +2550,82 @@ impl App {
         let Some(mut native) = self.native_windows.remove(&window_id) else {
             return;
         };
+        let Some(mut app) = self.app.take() else {
+            self.native_windows.insert(window_id, native);
+            return;
+        };
+        let relayed = self.relay_native_held_press(&mut app, &mut native, &event);
+        let (keep_window, settlement) =
+            self.native_window_event(&mut app, event_loop, &mut native, event);
+        self.app = Some(app);
+        if keep_window {
+            self.native_windows.insert(window_id, native);
+            self.settle_native_window_event(event_loop, settlement.also(relayed));
+        }
+    }
 
+    fn native_window_event(
+        &mut self,
+        app: &mut AppShell<WgpuRenderer>,
+        event_loop: &dyn ActiveEventLoop,
+        native: &mut NativeWindowSurface,
+        event: WindowEvent,
+    ) -> (bool, NativeWindowEventSettlement) {
         let mut keep_window = true;
         let mut sync_after_event = false;
-        let mut graph_drag_after_insert = None::<(NativeWindowKey, cranpose_ui::Point)>;
-        let mut graph_moves_after_insert = Vec::<WindowGraphMove>::new();
-        let mut graph_moves_apply_mode_after_insert = NativeWindowPositionApplyMode::WaitForSettle;
-        let mut finish_graph_drag_after_insert = false;
+        let mut drag_move_after_insert = None::<(NativeWindowKey, cranpose_ui::Point)>;
+        let mut finish_drag_after_insert = false;
+        if let Some(label) = native_window_lifecycle_event(&event) {
+            trace_native_window!("event {label} key={:?}", native.key);
+        }
+        let Some(event) = deliver_native_surface_event(app, native, self.current_modifiers, event)
+        else {
+            return (true, NativeWindowEventSettlement::default());
+        };
         match event {
             WindowEvent::CloseRequested => {
-                trace_native_window(format_args!("event close-request key={:?}", native.key));
+                trace_native_window!("event close-request key={:?}", native.key);
                 notify_native_window_close_requested(&native.events);
-                self.remember_native_window_position(&native);
+                self.remember_native_window_position(native);
                 self.native_window_ids.remove(&native.key);
                 self.closed_native_windows.insert(native.key);
+                app.remove_window_surface(native.key.raw());
                 keep_window = false;
             }
             WindowEvent::SurfaceResized(new_size) => {
-                Self::apply_native_window_resize(&mut native, new_size.width, new_size.height);
+                Self::apply_native_window_resize(app, native, new_size.width, new_size.height);
+                Self::present_before_the_desktop_composites(
+                    app,
+                    native,
+                    &self.native_window_registry,
+                    "resize",
+                );
                 sync_after_event = true;
             }
             WindowEvent::ScaleFactorChanged {
                 scale_factor,
                 mut surface_size_writer,
             } => {
-                update_app_scale_factor(&mut native.app, &mut native.platform, scale_factor);
+                native.platform.set_scale_factor(scale_factor);
+                if let Some(mut surface) = native_surface(app, native) {
+                    surface.renderer().set_root_scale(scale_factor as f32);
+                }
 
                 let new_size = native.window.surface_size();
                 let _ = surface_size_writer.request_surface_size(new_size);
-                Self::apply_native_window_resize(&mut native, new_size.width, new_size.height);
+                Self::apply_native_window_resize(app, native, new_size.width, new_size.height);
                 sync_after_event = true;
+            }
+            WindowEvent::Focused(true) => {
+                native_window_focused(app, native);
             }
             WindowEvent::Moved(position) => {
                 native.vsync_interval = monitor_refresh_interval(&native.window);
                 let known_position = self.native_window_positions.get(&native.key).copied();
                 let previous_state_position =
                     native.state.and_then(|state| state.position_non_reactive());
-                let previous_graph_position = known_position
-                    .map(|(x, y)| cranpose_ui::Point::new(x, y))
-                    .or(previous_state_position)
-                    .or_else(|| match (native.options.x, native.options.y) {
-                        (Some(x), Some(y)) => Some(cranpose_ui::Point::new(x, y)),
-                        _ => None,
-                    });
-                let previous_graph_snapshots = self
-                    .native_window_graph_snapshots_with_current_positions(
-                        &native,
-                        previous_graph_position,
-                    );
                 let platform_probe = &self.native_window_platform_probe;
-                let position = current_native_window_position(platform_probe, &native)
+                let position = current_native_window_position(platform_probe, native)
                     .unwrap_or_else(|| {
                         let logical = position.to_logical::<f64>(native.window.scale_factor());
                         (logical.x as f32, logical.y as f32)
@@ -2299,14 +2633,14 @@ impl App {
                 let position_observation = native
                     .pending_outer_positions
                     .acknowledge_or_matches_known(position, known_position);
-                trace_native_window(format_args!(
+                trace_native_window!(
                     "event moved key={:?} pos=({:.1},{:.1}) observation={:?} active_drag={}",
                     native.key,
                     position.0,
                     position.1,
                     position_observation,
                     native.active_drag.is_some()
-                ));
+                );
                 match position_observation {
                     NativeWindowPositionObservation::Current => {
                         self.native_window_positions.insert(native.key, position);
@@ -2314,13 +2648,11 @@ impl App {
                     }
                     NativeWindowPositionObservation::Superseded => {}
                     NativeWindowPositionObservation::External => {
-                        if native.active_drag.is_some_and(|active_drag| {
-                            !active_drag.uses_moved_events_as_drag_target()
-                        }) {
-                            trace_native_window(format_args!(
+                        if native.active_drag.is_some() {
+                            trace_native_window!(
                                 "event moved ignored during polling drag key={:?}",
                                 native.key
-                            ));
+                            );
                         } else {
                             self.native_window_positions.insert(native.key, position);
                             update_native_options_position(
@@ -2330,56 +2662,18 @@ impl App {
                             );
                             let position = cranpose_ui::Point::new(position.0, position.1);
                             native.pending_outer_positions.clear();
-                            notify_native_window_moved(&native.events, position.x, position.y);
+                            tell_the_application_the_window_moved(
+                                &native.events,
+                                native.state,
+                                position.x,
+                                position.y,
+                            );
                             sync_native_window_state_position(
                                 native.state,
                                 previous_state_position,
                                 position.x,
                                 position.y,
                             );
-                            if native.active_drag.is_some_and(|active_drag| {
-                                active_drag.uses_moved_events_as_drag_target()
-                            }) {
-                                graph_moves_after_insert =
-                                    self.window_graph.drag_to(native.key, position);
-                                graph_moves_apply_mode_after_insert =
-                                    NativeWindowPositionApplyMode::FlushOnly;
-                            } else if native_window_global_pointer_state(platform_probe)
-                                .is_some_and(|pointer| {
-                                    pointer.primary_down
-                                        && native_window_surface_contains_pointer(
-                                            platform_probe,
-                                            &native,
-                                            pointer.position,
-                                        )
-                                        && previous_graph_position.is_some_and(|previous| {
-                                            native_window_surface_at_logical_position_contains_pointer(
-                                                &native.window,
-                                                previous,
-                                                pointer.position,
-                                            )
-                                        })
-                                })
-                            {
-                                self.window_graph
-                                    .start_drag(&previous_graph_snapshots, native.key);
-                                native.active_drag =
-                                    Some(NativeWindowDragSession::platform(Instant::now()));
-                                trace_native_window(format_args!(
-                                    "drag start inferred-platform key={:?}",
-                                    native.key
-                                ));
-                                graph_moves_after_insert =
-                                    self.window_graph.drag_to(native.key, position);
-                                graph_moves_apply_mode_after_insert =
-                                    NativeWindowPositionApplyMode::FlushOnly;
-                            } else {
-                                graph_moves_after_insert = self.window_graph.external_move(
-                                    &previous_graph_snapshots,
-                                    native.key,
-                                    position,
-                                );
-                            }
                             sync_after_event = true;
                         }
                     }
@@ -2391,23 +2685,24 @@ impl App {
                 let logical = native.platform.pointer_position(position);
                 native.last_cursor_position = Some((logical.x, logical.y));
                 native.last_cursor_physical_position = Some(position);
-                native
-                    .app
-                    .set_pointer_source(pointer_source_from_winit(&source));
                 let platform_probe = &self.native_window_platform_probe;
                 let event_pointer =
                     native_window_screen_pointer_physical(platform_probe, &native.window, position);
                 let global_pointer = native_window_global_pointer_state(platform_probe);
                 let pointer_position = global_pointer.map(|state| state.position).or(event_pointer);
-                let handled = native_window::with_native_window_surface_origin(
-                    native_window_surface_origin(platform_probe, &native.window),
-                    || native.app.set_cursor(logical.x, logical.y),
-                );
+                let handled = native_surface(app, native).is_some_and(|mut surface| {
+                    surface.set_pointer_source(pointer_source_from_winit(&source));
+                    surface.set_screen_origin(native_window_surface_origin(
+                        platform_probe,
+                        &native.window,
+                    ));
+                    surface.set_cursor(logical.x, logical.y)
+                });
                 if let Some(pointer) = pointer_position
                     && let Some((key, position)) =
-                        Self::update_native_window_polling_drag_target(&mut native, pointer)
+                        Self::update_native_window_polling_drag_target(native, pointer)
                 {
-                    graph_drag_after_insert = Some((key, position));
+                    drag_move_after_insert = Some((key, position));
                     sync_after_event = true;
                 }
                 if native.active_drag.is_none()
@@ -2416,19 +2711,20 @@ impl App {
                         pointer.primary_down
                             && native_window_surface_contains_pointer(
                                 platform_probe,
-                                &native,
+                                native,
                                 pointer.position,
                             )
                     })
                 {
                     let (press_handled, drag_requested) =
-                        Self::dispatch_native_primary_pressed(platform_probe, &mut native);
+                        Self::dispatch_native_primary_pressed(platform_probe, app, native);
                     if press_handled {
                         self.native_global_primary_down = true;
-                        trace_native_window(format_args!(
+                        trace_native_window!(
                             "event pointer-move recovered primary-press key={:?} drag_requested={}",
-                            native.key, drag_requested
-                        ));
+                            native.key,
+                            drag_requested
+                        );
                         apply_pointer_button_frame_request(
                             &native.window,
                             &mut native.last_frame_start_time,
@@ -2436,14 +2732,14 @@ impl App {
                         );
                         if drag_requested {
                             self.begin_native_window_drag_with_anchor(
-                                &mut native,
+                                native,
                                 recovered_native_window_drag_start_pointer(
                                     event_pointer,
                                     global_pointer,
                                 ),
                             );
                         } else {
-                            native.app.sync_selection_to_primary();
+                            app.sync_selection_to_primary();
                         }
                         sync_after_event = true;
                     }
@@ -2455,24 +2751,25 @@ impl App {
             }
             WindowEvent::ModifiersChanged(modifiers) => {
                 self.current_modifiers = modifiers.state();
-                native
-                    .app
-                    .set_modifiers(app_modifiers(self.current_modifiers));
+                app.set_modifiers(app_modifiers(self.current_modifiers));
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 if native.last_cursor_position.is_none() {
                     Self::refresh_native_cursor_from_platform_pointer(
                         &self.native_window_platform_probe,
-                        &mut native,
+                        app,
+                        native,
                     );
                 }
-                dispatch_mouse_wheel(
-                    &mut native.app,
-                    &native.platform,
-                    self.current_modifiers,
-                    native.last_cursor_position,
-                    delta,
-                );
+                if let Some(mut surface) = native_surface(app, native) {
+                    dispatch_mouse_wheel(
+                        &mut surface,
+                        &native.platform,
+                        self.current_modifiers,
+                        native.last_cursor_position,
+                        delta,
+                    );
+                }
             }
             WindowEvent::PointerButton {
                 state,
@@ -2481,32 +2778,35 @@ impl App {
                 ..
             } if is_primary_pointer_button(&button) => {
                 let source = pointer_source_from_button(&button);
-                native.app.set_pointer_source(source);
                 let logical = native.platform.pointer_position(position);
                 native.last_cursor_position = Some((logical.x, logical.y));
                 native.last_cursor_physical_position = Some(position);
-                trace_native_window(format_args!(
+                trace_native_window!(
                     "event pointer-button key={:?} state={:?} cursor={:?}",
-                    native.key, state, native.last_cursor_position
-                ));
-                {
+                    native.key,
+                    state,
+                    native.last_cursor_position
+                );
+                if let Some(mut surface) = native_surface(app, native) {
+                    surface.set_pointer_source(source);
                     let platform_probe = &self.native_window_platform_probe;
-                    native_window::with_native_window_surface_origin(
-                        native_window_surface_origin(platform_probe, &native.window),
-                        || native.app.set_cursor(logical.x, logical.y),
-                    );
+                    surface.set_screen_origin(native_window_surface_origin(
+                        platform_probe,
+                        &native.window,
+                    ));
+                    surface.set_cursor(logical.x, logical.y);
                 }
                 match state {
                     ElementState::Pressed => {
                         if self.native_global_primary_down || native.active_drag.is_some() {
-                            trace_native_window(format_args!(
+                            trace_native_window!(
                                 "event pointer-button duplicate-primary-down key={:?}",
                                 native.key
-                            ));
+                            );
                             self.native_global_primary_down = true;
                         } else {
                             self.native_global_primary_down = true;
-                            if self.handle_native_primary_pressed(&mut native) {
+                            if self.handle_native_primary_pressed(app, native) {
                                 sync_after_event = true;
                             }
                         }
@@ -2521,46 +2821,27 @@ impl App {
                                     position,
                                 )
                             });
-                        if let Some(pointer) =
+                        let pointer =
                             native_window_global_pointer_state(&self.native_window_platform_probe)
                                 .map(|state| state.position)
-                                .or(fallback_pointer)
-                            && let Some((key, position)) =
-                                Self::update_native_window_polling_drag_target(&mut native, pointer)
-                        {
-                            graph_drag_after_insert = Some((key, position));
-                        }
-                        finish_graph_drag_after_insert = native.active_drag.take().is_some();
-                        if finish_graph_drag_after_insert {
-                            trace_native_window(format_args!(
-                                "drag finish key={:?} reason=local-release",
-                                native.key
-                            ));
-                        }
-                        let handled = native_window::with_native_window_surface_origin(
-                            native_window_surface_origin(
-                                &self.native_window_platform_probe,
-                                &native.window,
-                            ),
-                            || {
+                                .or(fallback_pointer);
+                        let released = Self::finish_native_press(
+                            &self.native_window_platform_probe,
+                            app,
+                            native,
+                            pointer,
+                            "local-release",
+                            |surface| {
                                 if source.is_touch_like() {
-                                    native
-                                        .app
-                                        .pointer_released_at_position(logical.x, logical.y)
+                                    surface.pointer_released_at_position(logical.x, logical.y)
                                 } else {
-                                    native.app.pointer_released()
+                                    surface.pointer_released()
                                 }
                             },
                         );
-                        native.app.sync_selection_to_primary();
-                        if handled {
-                            apply_pointer_button_frame_request(
-                                &native.window,
-                                &mut native.last_frame_start_time,
-                                pointer_button_frame_request(handled),
-                            );
-                            sync_after_event = true;
-                        }
+                        drag_move_after_insert = released.drag_move;
+                        finish_drag_after_insert = released.finish_drag;
+                        sync_after_event |= released.sync_after_event;
                     }
                 }
             }
@@ -2571,97 +2852,101 @@ impl App {
             } => {
                 Self::refresh_native_cursor_from_platform_pointer(
                     &self.native_window_platform_probe,
-                    &mut native,
+                    app,
+                    native,
                 );
-                dispatch_middle_click_paste(&mut native.app, native.last_cursor_position);
+                if let Some(mut surface) = native_surface(app, native) {
+                    dispatch_middle_click_paste(&mut surface, native.last_cursor_position);
+                }
             }
-            WindowEvent::KeyboardInput { event, .. } => {
-                dispatch_keyboard_input(&mut native.app, self.current_modifiers, event);
-            }
-            WindowEvent::Focused(false) if native.active_drag.is_none() => {
-                cancel_app_input(&mut native.app);
-            }
-            WindowEvent::Focused(false) => {}
-            WindowEvent::Ime(ime_event) => {
-                dispatch_ime_event(&mut native.app, ime_event);
-            }
-            WindowEvent::PointerLeft { .. } if native.active_drag.is_none() => {
-                native.app.cancel_gesture();
-            }
-            WindowEvent::PointerLeft { .. } => {}
             WindowEvent::RedrawRequested => {
                 if let Some(deadline) = native.last_frame_start_time.and_then(|started_at| {
                     native
-                        .frame_interval()
+                        .frame_interval(app.frame_pacing_mode())
                         .map(|interval| started_at + interval)
                 }) && deadline > Instant::now()
                 {
                     event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
-                    self.native_windows.insert(window_id, native);
-                    return;
+                    return (true, NativeWindowEventSettlement::default());
                 }
-                Self::redraw_native_window(&mut native, &self.native_window_registry);
+                Self::redraw_native_window(app, native, &self.native_window_registry);
             }
             event => {
-                restore_pointer_icon_the_window_system_drew_over(Some(&native.app), &event);
-                present_native_frame_owed_while_hidden(&mut native, &event);
+                if pointer_icon_is_owed_again(&event)
+                    && let Some(surface) = native_surface(app, native)
+                {
+                    surface.refresh_pointer_icon();
+                }
+                present_native_frame_owed_while_hidden(native, &event);
             }
         }
 
-        if keep_window {
-            self.native_windows.insert(window_id, native);
-            if !graph_moves_after_insert.is_empty()
-                && self.apply_window_graph_moves_with_mode(
-                    graph_moves_after_insert,
-                    graph_moves_apply_mode_after_insert,
-                )
-            {
-                sync_after_event = true;
-            }
-            if let Some((key, position)) = graph_drag_after_insert
-                && self.apply_window_graph_drag(key, position)
-            {
-                sync_after_event = true;
-            }
-            if finish_graph_drag_after_insert && self.finish_window_graph_drag() {
-                sync_after_event = true;
-            }
-            if sync_after_event {
-                self.refresh_and_sync_native_windows(event_loop);
-            }
+        let settlement = NativeWindowEventSettlement {
+            sync_after_event,
+            drag_move: drag_move_after_insert,
+            finish_drag: finish_drag_after_insert,
+        };
+        (keep_window, settlement)
+    }
+
+    fn settle_native_window_event(
+        &mut self,
+        event_loop: &dyn ActiveEventLoop,
+        settlement: NativeWindowEventSettlement,
+    ) {
+        let mut sync_after_event = settlement.sync_after_event;
+        if let Some((key, position)) = settlement.drag_move
+            && self.move_dragged_window(key, position)
+        {
+            sync_after_event = true;
+        }
+        if sync_after_event {
+            self.refresh_and_sync_native_windows(event_loop);
         }
     }
 
     fn redraw_native_window(
+        app: &mut AppShell<WgpuRenderer>,
         native: &mut NativeWindowSurface,
         registry: &Rc<native_window::NativeWindowRegistry>,
-    ) {
+    ) -> bool {
+        if native_window_redraw_held_while_hidden(native.options.visible) {
+            return false;
+        }
         let frame_started_at = Instant::now();
-        let scale_factor = native.window.scale_factor();
-        native.app.set_density(scale_factor as f32);
-        let update_result = update_app_with_native_window_registry(&mut native.app, registry);
+        update_app_with_native_window_registry(app, registry);
         let after_update = Instant::now();
-        if !surface_present_required(
-            native.surface_dirty,
-            update_result.visual_changed,
-            native.app.needs_redraw(),
-        ) {
-            return;
+        let Some(mut surface) = native_surface(app, native) else {
+            return false;
+        };
+        let frame_owed = surface.take_frame_owed();
+        let present_required =
+            surface_present_required(native.surface_dirty, frame_owed, surface.needs_redraw());
+        pace_after_empty_redraw(
+            &mut native.last_frame_start_time,
+            frame_started_at,
+            present_required,
+        );
+        if !present_required {
+            return false;
         }
         native.surface_dirty = true;
 
         let output = match current_surface_texture(&native.surface, "native window") {
             SurfaceFrame::Ready(output) => output,
             SurfaceFrame::Reconfigure => {
+                trace_native_window!("redraw surface outdated key={:?}", native.key);
                 let size = native.window.surface_size();
-                Self::resize_native_surface(native, size.width, size.height);
+                Self::resize_native_surface(app, native, size.width, size.height);
                 if surface_reconfigure_requires_redraw(size.width, size.height) {
                     native.window.request_redraw();
                 }
-                return;
+                return false;
             }
             SurfaceFrame::Skip => {
-                return;
+                trace_native_window!("redraw surface unavailable key={:?}", native.key);
+                pace_after_empty_redraw(&mut native.last_frame_start_time, frame_started_at, false);
+                return false;
             }
         };
         let after_acquire = Instant::now();
@@ -2672,24 +2957,33 @@ impl App {
             )),
             ..Default::default()
         });
-        if let Err(error) = native.app.renderer().render_surface_texture(
+        let Some(mut surface) = native_surface(app, native) else {
+            return false;
+        };
+        if let Err(error) = surface.renderer().render_surface_texture(
             &output.texture,
             &view,
             native.surface_config.width,
             native.surface_config.height,
         ) {
             log::error!("native window render failed: {error:?}");
-            return;
+            return false;
         }
         let after_render = Instant::now();
 
         native.window.pre_present_notify();
         output.present();
+        note_native_window_presented(native.state, true);
         let after_present = Instant::now();
+        trace_native_window_timing!(
+            "{} presented {}x{} key={:?}",
+            native.options.title,
+            native.surface_config.width,
+            native.surface_config.height,
+            native.key
+        );
         native.surface_dirty = false;
-        native
-            .app
-            .record_presented_frame(frame_started_at, after_render);
+        app.record_presented_frame(frame_started_at, after_render);
         log_desktop_frame_telemetry(
             frame_started_at,
             after_update,
@@ -2699,12 +2993,13 @@ impl App {
             "native",
         );
         native.last_frame_start_time = Some(frame_started_at);
-        if should_chain_no_vsync_redraw(
-            native.frame_interval(),
-            native.app.frame_schedule().needs_frame,
-        ) {
+        let needs_frame =
+            native_surface(app, native).is_some_and(|surface| surface.frame_schedule().needs_frame);
+        if should_chain_no_vsync_redraw(native.frame_interval(app.frame_pacing_mode()), needs_frame)
+        {
             native.window.request_redraw();
         }
+        true
     }
 
     #[cfg(feature = "robot")]
@@ -2712,8 +3007,6 @@ impl App {
         self.robot_controller = Some(controller);
     }
 
-    /// Whether a robot drives this run. Such a run reads no display option
-    /// from the host, so a screenshot does not follow the host's text scale.
     #[cfg(feature = "robot")]
     fn robot_drives(&self) -> bool {
         self.robot_controller.is_some()
@@ -2850,14 +3143,13 @@ fn robot_frame_diagnostics(
 }
 
 fn apply_frame_pacing_mode(
-    app: &mut AppShell<WgpuRenderer>,
+    device: &wgpu::Device,
     surface: &wgpu::Surface<'static>,
     surface_config: &mut wgpu::SurfaceConfiguration,
     surface_caps: Option<&wgpu::SurfaceCapabilities>,
     mode: FramePacingMode,
     vsync_interval: Duration,
 ) {
-    app.set_frame_pacing_mode(mode);
     let Some(caps) = surface_caps else {
         log::error!(
             "desktop surface pacing not applied for {}: surface capabilities are unknown",
@@ -2872,10 +3164,6 @@ fn apply_frame_pacing_mode(
     {
         return;
     }
-    let Some(device) = app.renderer().try_device() else {
-        log::error!("desktop surface reconfigure skipped: GPU renderer is not initialized");
-        return;
-    };
     surface_config.present_mode = present_mode;
     surface_config.desired_maximum_frame_latency = frame_latency;
     surface.configure(device, surface_config);
@@ -2923,15 +3211,41 @@ fn update_declaration_host_frame(
 ) -> FrameUpdateResult {
     let frame_started_at = Instant::now();
     let update_result = update_app_with_native_window_registry(app, registry);
-    if update_result.visual_changed {
+    let presented = app.take_frame_owed();
+    if presented {
         app.record_presented_frame(frame_started_at, Instant::now());
-        *last_frame_start_time = Some(next_frame_anchor(
-            *last_frame_start_time,
-            frame_started_at,
-            frame_interval,
-        ));
     }
+    *last_frame_start_time = declaration_host_frame_anchor(
+        *last_frame_start_time,
+        frame_started_at,
+        frame_interval,
+        presented,
+        app.frame_schedule().needs_frame,
+    );
     update_result
+}
+
+fn declaration_host_frame_anchor(
+    previous: Option<Instant>,
+    frame_started_at: Instant,
+    interval: Option<Duration>,
+    presented: bool,
+    still_needs_frame: bool,
+) -> Option<Instant> {
+    if presented || still_needs_frame {
+        Some(next_frame_anchor(previous, frame_started_at, interval))
+    } else {
+        previous
+    }
+}
+
+fn native_surface_needs_frame(
+    needs_frame: bool,
+    frame_owed: bool,
+    scene_dirty: bool,
+    surface_dirty: bool,
+) -> bool {
+    needs_frame || frame_owed || scene_dirty || surface_dirty
 }
 
 fn should_chain_no_vsync_redraw(frame_interval: Option<Duration>, needs_frame: bool) -> bool {
@@ -2944,6 +3258,134 @@ fn free_running_frame(
     redraw_pending: bool,
 ) -> bool {
     frame_interval.is_none() && (needs_redraw || redraw_pending)
+}
+
+struct LoopControlInputs {
+    robot_needs_poll: bool,
+    free_running: bool,
+    primary_pointer_polled: bool,
+    drag_poll_deadline: Option<Instant>,
+    position_poll_deadline: Option<Instant>,
+    frame_cap_deadline: Option<Instant>,
+    has_active_animations: bool,
+    next_event_time: Option<Instant>,
+}
+
+fn event_loop_control_flow(now: Instant, inputs: LoopControlInputs) -> ControlFlow {
+    let due = |deadline: Option<Instant>| deadline.is_some_and(|deadline| deadline <= now);
+    if inputs.robot_needs_poll
+        || inputs.free_running
+        || inputs.primary_pointer_polled
+        || due(inputs.drag_poll_deadline)
+        || due(inputs.position_poll_deadline)
+    {
+        return ControlFlow::Poll;
+    }
+    let deadline = [
+        inputs.frame_cap_deadline,
+        inputs.position_poll_deadline,
+        inputs.drag_poll_deadline,
+    ]
+    .into_iter()
+    .flatten()
+    .min();
+    match deadline {
+        Some(deadline) => ControlFlow::WaitUntil(deadline),
+        None if inputs.has_active_animations => ControlFlow::Poll,
+        None => inputs
+            .next_event_time
+            .map_or(ControlFlow::Wait, ControlFlow::WaitUntil),
+    }
+}
+
+fn native_window_drag_poll_deadline(
+    next_poll_at: Instant,
+    global_pointer_polled: bool,
+) -> Option<Instant> {
+    global_pointer_polled.then_some(next_poll_at)
+}
+
+fn pace_after_empty_redraw(
+    last_frame_start_time: &mut Option<Instant>,
+    attempt_started_at: Instant,
+    presented_something: bool,
+) {
+    if !presented_something {
+        *last_frame_start_time = Some(attempt_started_at);
+    }
+}
+
+fn primary_wrap_request(
+    content: Option<cranpose_ui::Size>,
+    last: Option<(u32, u32)>,
+) -> Option<(u32, u32)> {
+    let content = content.filter(|size| size.width > 0.0 && size.height > 0.0)?;
+    let wanted = (content.width.ceil() as u32, content.height.ceil() as u32);
+    (last != Some(wanted)).then_some(wanted)
+}
+
+fn wrap_primary_window_to_content(
+    window: &dyn Window,
+    app: &mut AppShell<WgpuRenderer>,
+    wraps_content: bool,
+    last: Option<(u32, u32)>,
+) -> Option<(u32, u32)> {
+    let content = wraps_content.then(|| app.primary_content_size()).flatten();
+    let (width, height) = primary_wrap_request(content, last)?;
+    trace_native_window!("primary window wraps {width}x{height}");
+    let origin = window.outer_position().ok();
+    let _ = window.request_surface_size(LogicalSize::new(width as f64, height as f64).into());
+    if let Some(origin) = origin {
+        window.set_outer_position(Position::Physical(origin));
+    }
+    Some((width, height))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn wrap_primary_window_for_frame(
+    app: &mut AppShell<WgpuRenderer>,
+    surface: &wgpu::Surface<'static>,
+    surface_config: &mut wgpu::SurfaceConfiguration,
+    window: &Arc<dyn Window>,
+    registry: &Rc<native_window::NativeWindowRegistry>,
+    primary_viewport_override: Option<(f32, f32)>,
+    wraps_content: bool,
+    last: &mut Option<(u32, u32)>,
+) {
+    let content = wraps_content.then(|| app.primary_content_size()).flatten();
+    let Some((width, height)) = primary_wrap_request(content, *last) else {
+        return;
+    };
+    trace_native_window!("primary window wraps {width}x{height} with the frame it drew");
+    let origin = window.outer_position().ok();
+    let applied = window.request_surface_size(LogicalSize::new(width as f64, height as f64).into());
+    if let Some(origin) = origin {
+        window.set_outer_position(Position::Physical(origin));
+    }
+    *last = Some((width, height));
+    if let Some(size) = applied {
+        let viewport = viewport_for_surface_size(
+            primary_viewport_override,
+            size.width,
+            size.height,
+            window.scale_factor(),
+        );
+        configure_app_surface_size(
+            app,
+            surface,
+            surface_config,
+            size.width,
+            size.height,
+            viewport,
+        );
+        update_app_with_native_window_registry(app, registry);
+    }
+}
+
+fn note_native_window_presented(state: Option<WindowState>, presented: bool) {
+    if let Some(state) = state {
+        state.set_presented(presented);
+    }
 }
 
 #[derive(Default)]
@@ -3115,20 +3557,34 @@ fn clamped_axis_origin(
     }
 }
 
-/// Whether a window coming up should be made the key window.
-///
-/// macOS reads a window's cursor rectangles only while that window is key, so
-/// one that never takes focus keeps the system arrow however often the
-/// application sets a cursor on it. An undecorated window is the common case,
-/// because activating the application is not enough to make it key. A window
-/// comes up key only when nothing of ours already holds focus, so a window the
-/// user chose keeps it.
-fn a_new_window_comes_up_key(headless: bool, visible: bool, anything_focused: bool) -> bool {
-    !headless && visible && !anything_focused
+fn a_new_window_comes_up_key(
+    headless: bool,
+    visible: bool,
+    anything_focused: bool,
+    focus: WindowFocus,
+) -> bool {
+    let wanted = match focus {
+        WindowFocus::Never => false,
+        WindowFocus::WhenNoneFocused => !anything_focused,
+        WindowFocus::Always => true,
+    };
+    !headless && visible && wanted
 }
 
-fn native_window_attributes(options: &NativeWindowOptions, headless: bool) -> WindowAttributes {
+fn native_window_polling_drag_pointer(
+    global: Option<NativeWindowPointerState>,
+    start_pointer_screen: Option<PhysicalPosition<f64>>,
+) -> Option<PhysicalPosition<f64>> {
+    start_pointer_screen.or(global.map(|global| global.position))
+}
+
+fn native_window_attributes(
+    options: &NativeWindowOptions,
+    headless: bool,
+    active: bool,
+) -> WindowAttributes {
     let mut attributes = WindowAttributes::default()
+        .with_active(active)
         .with_title(options.title.clone())
         .with_surface_size(LogicalSize::new(
             options.width.max(1.0) as f64,
@@ -3139,6 +3595,7 @@ fn native_window_attributes(options: &NativeWindowOptions, headless: bool) -> Wi
         .with_resizable(options.resizable)
         .with_visible(!headless && options.visible)
         .with_window_level(native_window_level(options.always_on_top));
+    attributes = with_native_window_shadow(attributes, options.shadow);
     if let (Some(width), Some(height)) = (options.min_width, options.min_height) {
         attributes = attributes.with_min_surface_size(LogicalSize::new(
             width.max(1.0) as f64,
@@ -3218,12 +3675,7 @@ fn select_alpha_mode(
     transparent: bool,
 ) -> Result<wgpu::CompositeAlphaMode, LaunchError> {
     if transparent {
-        return surface_caps
-            .alpha_modes
-            .iter()
-            .copied()
-            .find(|mode| *mode == wgpu::CompositeAlphaMode::PreMultiplied)
-            .or_else(|| surface_caps.alpha_modes.first().copied())
+        return transparent_alpha_mode(&surface_caps.alpha_modes)
             .ok_or(LaunchError::NoSurfaceAlphaMode);
     }
 
@@ -3236,6 +3688,18 @@ fn select_alpha_mode(
         .ok_or(LaunchError::NoSurfaceAlphaMode)
 }
 
+fn transparent_alpha_mode(
+    offered: &[wgpu::CompositeAlphaMode],
+) -> Option<wgpu::CompositeAlphaMode> {
+    [
+        wgpu::CompositeAlphaMode::PreMultiplied,
+        wgpu::CompositeAlphaMode::PostMultiplied,
+    ]
+    .into_iter()
+    .find(|wanted| offered.contains(wanted))
+    .or_else(|| offered.first().copied())
+}
+
 fn native_window_level(always_on_top: bool) -> WindowLevel {
     if always_on_top {
         WindowLevel::AlwaysOnTop
@@ -3243,6 +3707,30 @@ fn native_window_level(always_on_top: bool) -> WindowLevel {
         WindowLevel::Normal
     }
 }
+
+#[cfg(target_os = "macos")]
+fn with_native_window_shadow(attributes: WindowAttributes, shadow: bool) -> WindowAttributes {
+    use winit::platform::macos::WindowAttributesMacOS;
+
+    attributes.with_platform_attributes(Box::new(
+        WindowAttributesMacOS::default().with_has_shadow(shadow),
+    ))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn with_native_window_shadow(attributes: WindowAttributes, _shadow: bool) -> WindowAttributes {
+    attributes
+}
+
+#[cfg(target_os = "macos")]
+fn set_native_window_shadow(window: &Arc<dyn Window>, shadow: bool) {
+    use winit::platform::macos::WindowExtMacOS;
+
+    window.set_has_shadow(shadow);
+}
+
+#[cfg(not(target_os = "macos"))]
+fn set_native_window_shadow(_window: &Arc<dyn Window>, _shadow: bool) {}
 
 fn current_native_window_physical_position(
     platform_probe: &NativeWindowPlatformProbe,
@@ -3274,33 +3762,6 @@ fn current_native_window_position(
     current_native_window_physical_position(platform_probe, &native.window).map(|position| {
         let logical = position.to_logical::<f64>(native.window.scale_factor());
         (logical.x as f32, logical.y as f32)
-    })
-}
-
-fn native_window_options_position(options: &NativeWindowOptions) -> Option<(f32, f32)> {
-    match (options.x, options.y) {
-        (Some(x), Some(y)) => Some((x, y)),
-        _ => None,
-    }
-}
-
-fn native_window_graph_position(
-    override_position: Option<cranpose_ui::Point>,
-    cached_position: Option<(f32, f32)>,
-    current_position: Option<(f32, f32)>,
-    options_position: Option<(f32, f32)>,
-    source: NativeWindowGraphPositionSource,
-) -> Option<cranpose_ui::Point> {
-    override_position.or_else(|| {
-        let selected = match source {
-            NativeWindowGraphPositionSource::CachedThenCurrent => {
-                cached_position.or(current_position).or(options_position)
-            }
-            NativeWindowGraphPositionSource::CurrentThenCached => {
-                current_position.or(cached_position).or(options_position)
-            }
-        }?;
-        Some(cranpose_ui::Point::new(selected.0, selected.1))
     })
 }
 
@@ -3391,6 +3852,23 @@ fn recovered_native_window_drag_start_pointer(
     event_pointer.or_else(|| global_pointer.map(|pointer| pointer.position))
 }
 
+fn held_press_to_hand_over(
+    pointer: Option<NativeWindowPointerState>,
+    window_can_take_it: bool,
+    belongs: PressBelongsHere,
+    window_contains: impl FnOnce(PhysicalPosition<f64>) -> bool,
+) -> Option<NativeWindowPointerState> {
+    let pointer = pointer.filter(|pointer| pointer.primary_down)?;
+    if !window_can_take_it {
+        return None;
+    }
+    let takes_it = match belongs {
+        PressBelongsHere::ItsNodeMovedHere => true,
+        PressBelongsHere::AskTheRectangle => window_contains(pointer.position),
+    };
+    takes_it.then_some(pointer)
+}
+
 fn primary_pointer_move_should_recover_press(
     active_pointer_gesture: bool,
     synthetic_primary_down: bool,
@@ -3401,21 +3879,6 @@ fn primary_pointer_move_should_recover_press(
         && !synthetic_primary_down
         && pointer_over_surface
         && global_pointer.is_some_and(|pointer| pointer.primary_down)
-}
-
-fn native_window_surface_at_logical_position_contains_pointer(
-    window: &Arc<dyn Window>,
-    position: cranpose_ui::Point,
-    pointer: PhysicalPosition<f64>,
-) -> bool {
-    let outer = LogicalPosition::new(position.x as f64, position.y as f64)
-        .to_physical::<i32>(window.scale_factor());
-    physical_surface_rect_contains_pointer(
-        outer,
-        window.surface_position(),
-        window.surface_size(),
-        pointer,
-    )
 }
 
 fn physical_surface_rect_contains_pointer(
@@ -3435,6 +3898,132 @@ fn physical_surface_rect_contains_pointer(
 struct NativeWindowPointerState {
     position: PhysicalPosition<f64>,
     primary_down: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct HandedPress {
+    holder: WinitWindowId,
+    taker: WinitWindowId,
+}
+
+impl HandedPress {
+    fn taker_for(self, holder: WinitWindowId) -> Option<WinitWindowId> {
+        (self.holder == holder).then_some(self.taker)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum HeldPressStep {
+    Pressed(PhysicalPosition<f64>),
+    Moved(PhysicalPosition<f64>),
+    Released(PhysicalPosition<f64>),
+}
+
+impl HeldPressStep {
+    fn position(self) -> PhysicalPosition<f64> {
+        match self {
+            Self::Pressed(position) | Self::Moved(position) | Self::Released(position) => position,
+        }
+    }
+}
+
+fn held_press_step(event: &WindowEvent) -> Option<HeldPressStep> {
+    match event {
+        WindowEvent::PointerButton {
+            state: ElementState::Pressed,
+            position,
+            button,
+            ..
+        } if is_primary_pointer_button(button) => Some(HeldPressStep::Pressed(*position)),
+        WindowEvent::PointerButton {
+            state: ElementState::Released,
+            position,
+            button,
+            ..
+        } if is_primary_pointer_button(button) => Some(HeldPressStep::Released(*position)),
+        WindowEvent::PointerMoved { position, .. } => Some(HeldPressStep::Moved(*position)),
+        _ => None,
+    }
+}
+
+fn held_press_after_step(
+    held: Option<PhysicalPosition<f64>>,
+    step: HeldPressStep,
+) -> Option<PhysicalPosition<f64>> {
+    match step {
+        HeldPressStep::Pressed(position) => Some(position),
+        HeldPressStep::Moved(position) => held.map(|_| position),
+        HeldPressStep::Released(_) => None,
+    }
+}
+
+fn native_window_press_anchor(
+    platform_probe: &NativeWindowPlatformProbe,
+    native: &NativeWindowSurface,
+) -> Option<PhysicalPosition<f64>> {
+    let local = native.last_cursor_physical_position?;
+    native_window_screen_pointer_physical(platform_probe, &native.window, local)
+}
+
+fn held_press_on_screen(
+    platform_probe: &NativeWindowPlatformProbe,
+    window: &Arc<dyn Window>,
+    local: PhysicalPosition<f64>,
+) -> Option<NativeWindowPointerState> {
+    let position = native_window_screen_pointer_physical(platform_probe, window, local)?;
+    Some(NativeWindowPointerState {
+        position,
+        primary_down: true,
+    })
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct PressToHandOver {
+    pointer: NativeWindowPointerState,
+    relayed_by: Option<WinitWindowId>,
+}
+
+/// Whose the press is, as the application itself says.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PressBelongsHere {
+    /// The node that took the press now draws in this window, so the press
+    /// came here with it and the window takes it wherever it is on screen.
+    ItsNodeMovedHere,
+    /// No node of this window took the press. It may still belong here — a
+    /// gesture can be carried by a node that stays where it is, as a tab's
+    /// drag-and-drop source stays in the strip the tab was pulled out of —
+    /// so the pointer and the window's rectangle are all there is to go on.
+    AskTheRectangle,
+}
+
+fn press_belongs_here(holder: Option<RootId>, window: RootId) -> PressBelongsHere {
+    match holder == Some(window) {
+        true => PressBelongsHere::ItsNodeMovedHere,
+        false => PressBelongsHere::AskTheRectangle,
+    }
+}
+
+fn press_to_hand_over(
+    platform_pointer: Option<NativeWindowPointerState>,
+    held: Option<(WinitWindowId, NativeWindowPointerState)>,
+    window_can_take_it: bool,
+    belongs: PressBelongsHere,
+    window_contains: impl FnOnce(PhysicalPosition<f64>) -> bool,
+) -> Option<PressToHandOver> {
+    let relayed_by = match platform_pointer {
+        Some(_) => None,
+        None => Some(held?.0),
+    };
+    let pointer = held
+        .map(|(_, pointer)| pointer)
+        .or(platform_pointer)
+        .and_then(|pointer| {
+            held_press_to_hand_over(Some(pointer), window_can_take_it, belongs, window_contains)
+        })?;
+    Some(PressToHandOver {
+        pointer,
+        relayed_by,
+    })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -3844,20 +4433,52 @@ fn native_window_position_poll_needed(
     visible && !active_drag && pending_programmatic_position
 }
 
-fn trace_native_window_timing(args: std::fmt::Arguments<'_>) {
-    if std::env::var_os("CRANPOSE_NATIVE_WINDOW_TIMING").is_some() {
-        println!("native window timing: {args}");
-    }
+fn native_window_timing_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("CRANPOSE_NATIVE_WINDOW_TIMING").is_some())
 }
 
-fn trace_native_window(args: std::fmt::Arguments<'_>) {
-    if std::env::var_os("CRANPOSE_NATIVE_TRACE").is_some() {
-        println!("native window trace: {args}");
-    }
+fn print_native_window_timing(args: std::fmt::Arguments<'_>) {
+    println!(
+        "native window timing: t={:.1}ms {args}",
+        timing_trace_clock().elapsed().as_secs_f64() * 1000.0
+    );
+}
+
+fn timing_trace_clock() -> Instant {
+    static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    *START.get_or_init(Instant::now)
+}
+
+fn native_window_trace_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("CRANPOSE_NATIVE_TRACE").is_some())
+}
+
+fn print_native_window_trace(args: std::fmt::Arguments<'_>) {
+    println!("native window trace: {args}");
 }
 
 fn primary_surface_redraw_drives_app(primary_window_visible: bool, headless: bool) -> bool {
     primary_window_visible && !headless
+}
+
+fn primary_window_should_show(headless: bool, has_content: bool) -> bool {
+    !headless && has_content
+}
+
+fn show_primary_when_it_has_content(
+    shown: &std::sync::atomic::AtomicBool,
+    app: &mut AppShell<WgpuRenderer>,
+    window: &dyn Window,
+    headless: bool,
+) {
+    let show = primary_window_should_show(headless, app.primary_has_content());
+    if show != shown.load(std::sync::atomic::Ordering::Relaxed) {
+        shown.store(show, std::sync::atomic::Ordering::Relaxed);
+        trace_native_window!("primary window {}", if show { "shown" } else { "hidden" });
+        window.set_visible(show);
+    }
 }
 
 fn primary_frame_waker_uses_event_proxy(primary_window_visible: bool, headless: bool) -> bool {
@@ -3876,6 +4497,30 @@ fn occlusion_leaves_a_frame_owed(occluded: bool) -> bool {
     !occluded
 }
 
+fn window_shown_again_takes_a_held_press(was_hidden: bool, visible_now: bool) -> bool {
+    was_hidden && visible_now
+}
+
+fn native_window_lifecycle_event(event: &WindowEvent) -> Option<&'static str> {
+    Some(match event {
+        WindowEvent::Occluded(true) => "occluded",
+        WindowEvent::Occluded(false) => "unoccluded",
+        WindowEvent::Focused(true) => "focused",
+        WindowEvent::Focused(false) => "unfocused",
+        WindowEvent::Moved(_) => "moved",
+        WindowEvent::SurfaceResized(_) => "resized",
+        WindowEvent::ScaleFactorChanged { .. } => "rescaled",
+        WindowEvent::PointerEntered { .. } => "pointer-entered",
+        WindowEvent::PointerLeft { .. } => "pointer-left",
+        WindowEvent::CloseRequested => "close-requested",
+        _ => return None,
+    })
+}
+
+fn native_window_redraw_held_while_hidden(visible: bool) -> bool {
+    !visible
+}
+
 fn pointer_icon_is_owed_again(event: &WindowEvent) -> bool {
     matches!(
         event,
@@ -3890,6 +4535,47 @@ fn restore_pointer_icon_the_window_system_drew_over(
     if let Some(app) = app.filter(|_| pointer_icon_is_owed_again(event)) {
         app.refresh_pointer_icon();
     }
+}
+
+fn primary_window_focus_changed(app: &mut AppShell<WgpuRenderer>, focused: bool) {
+    if focused {
+        app.set_active_root(RootId::Primary);
+        app.refresh_pointer_icon();
+    } else {
+        cancel_app_input(app);
+    }
+}
+
+fn native_window_focused(app: &mut AppShell<WgpuRenderer>, native: &NativeWindowSurface) {
+    app.set_active_root(native.root_id());
+    if let Some(surface) = native_surface(app, native) {
+        surface.refresh_pointer_icon();
+    }
+}
+
+fn deliver_native_surface_event(
+    app: &mut AppShell<WgpuRenderer>,
+    native: &NativeWindowSurface,
+    current_modifiers: winit::keyboard::ModifiersState,
+    event: WindowEvent,
+) -> Option<WindowEvent> {
+    let Some(mut surface) = native_surface(app, native) else {
+        return Some(event);
+    };
+    match event {
+        WindowEvent::KeyboardInput { event, .. } => {
+            dispatch_keyboard_input(&mut surface, current_modifiers, event);
+        }
+        WindowEvent::Ime(ime_event) => dispatch_ime_event(&mut surface, ime_event),
+        WindowEvent::Focused(false) if native.active_drag.is_none() => {
+            cancel_surface_input(&mut surface);
+        }
+        WindowEvent::PointerLeft { .. } if native.active_drag.is_none() => {
+            surface.cancel_gesture_unless_pressed();
+        }
+        event => return Some(event),
+    }
+    None
 }
 
 fn present_native_frame_owed_while_hidden(native: &mut NativeWindowSurface, event: &WindowEvent) {
@@ -4126,14 +4812,14 @@ fn update_app_scale_factor(
 }
 
 fn dispatch_mouse_wheel(
-    app: &mut AppShell<WgpuRenderer>,
+    surface: &mut SurfaceMut<'_, WgpuRenderer>,
     platform: &DesktopWinitPlatform,
     current_modifiers: winit::keyboard::ModifiersState,
     cursor_position: Option<(f32, f32)>,
     delta: winit::event::MouseScrollDelta,
 ) -> bool {
     let cursor_dirty = if let Some((x, y)) = cursor_position {
-        app.set_cursor(x, y)
+        surface.set_cursor(x, y)
     } else {
         false
     };
@@ -4143,7 +4829,7 @@ fn dispatch_mouse_wheel(
         current_modifiers,
         wheel_uptime_millis(),
     );
-    let scroll_dirty = app.wheel_scrolled(wheel);
+    let scroll_dirty = surface.wheel_scrolled(wheel);
     cursor_dirty || scroll_dirty
 }
 
@@ -4157,25 +4843,29 @@ fn wheel_uptime_millis() -> u64 {
 }
 
 fn dispatch_middle_click_paste(
-    app: &mut AppShell<WgpuRenderer>,
+    surface: &mut SurfaceMut<'_, WgpuRenderer>,
     cursor_position: Option<(f32, f32)>,
 ) {
     if let Some((x, y)) = cursor_position {
-        app.set_cursor(x, y);
+        surface.set_cursor(x, y);
     }
     #[cfg(all(
         not(target_arch = "wasm32"),
         not(target_os = "android"),
         not(target_os = "ios")
     ))]
-    if let Some(text) = app.get_primary_selection() {
-        app.on_paste(&text);
+    if let Some(text) = surface.shell().get_primary_selection() {
+        surface.on_paste(&text);
     }
 }
 
 fn cancel_app_input(app: &mut AppShell<WgpuRenderer>) {
-    app.cancel_gesture();
-    let _ = app.on_ime_preedit("", None);
+    cancel_surface_input(&mut app.primary());
+}
+
+fn cancel_surface_input(surface: &mut SurfaceMut<'_, WgpuRenderer>) {
+    surface.cancel_gesture();
+    let _ = surface.on_ime_preedit("", None);
 }
 
 fn logical_outer_position(window: &Arc<dyn Window>) -> Option<(f32, f32)> {
@@ -4189,6 +4879,36 @@ fn notify_native_window_moved(events: &NativeWindowEvents, x: f32, y: f32) {
     if let Some(on_moved) = &events.on_moved {
         on_moved(x, y);
     }
+}
+
+fn tell_the_application_the_window_frame(state: Option<WindowState>, window: &Arc<dyn Window>) {
+    let Some(state) = state else {
+        return;
+    };
+    let scale = window.scale_factor() as f32;
+    if scale <= 0.0 {
+        return;
+    }
+    let outer = window.outer_size();
+    state.set_frame_size(cranpose_ui::Size::new(
+        outer.width as f32 / scale,
+        outer.height as f32 / scale,
+    ));
+}
+
+fn tell_the_application_the_window_moved(
+    events: &NativeWindowEvents,
+    state: Option<WindowState>,
+    x: f32,
+    y: f32,
+) {
+    let already_knows = state
+        .and_then(WindowState::position_non_reactive)
+        .is_some_and(|known| (known.x - x).abs() <= 0.5 && (known.y - y).abs() <= 0.5);
+    if already_knows {
+        return;
+    }
+    notify_native_window_moved(events, x, y);
 }
 
 fn notify_native_window_resized(
@@ -4247,26 +4967,26 @@ fn monitor_refresh_interval(window: &Arc<dyn Window>) -> Duration {
         .unwrap_or_else(default_vsync_interval)
 }
 
-fn dispatch_ime_event(app: &mut AppShell<WgpuRenderer>, ime_event: winit::event::Ime) {
+fn dispatch_ime_event(surface: &mut SurfaceMut<'_, WgpuRenderer>, ime_event: winit::event::Ime) {
     use winit::event::Ime;
 
     match ime_event {
         Ime::Preedit(text, cursor) => {
-            app.on_ime_preedit(&text, cursor);
+            surface.on_ime_preedit(&text, cursor);
         }
         Ime::Commit(text) => {
-            let _ = app.on_ime_preedit("", None);
-            app.on_paste(&text);
+            let _ = surface.on_ime_preedit("", None);
+            surface.on_paste(&text);
         }
         Ime::Enabled => {}
         Ime::Disabled => {
-            app.on_ime_preedit("", None);
+            surface.on_ime_preedit("", None);
         }
         Ime::DeleteSurrounding {
             before_bytes,
             after_bytes,
         } => {
-            let _ = app.on_ime_delete_surrounding(before_bytes, after_bytes);
+            let _ = surface.on_ime_delete_surrounding(before_bytes, after_bytes);
         }
     }
 }
@@ -4276,8 +4996,8 @@ struct DesktopTextInput {
 }
 
 impl DesktopTextInput {
-    fn install(app: &mut AppShell<WgpuRenderer>, window: &Arc<dyn Window>) {
-        app.set_platform_text_input(Rc::new(DesktopTextInput {
+    fn install(surface: &mut SurfaceMut<'_, WgpuRenderer>, window: &Arc<dyn Window>) {
+        surface.set_platform_text_input(Rc::new(DesktopTextInput {
             window: Arc::downgrade(window),
         }));
     }
@@ -4338,7 +5058,6 @@ impl ApplicationHandler for App {
         let initial_width = self.settings.initial_width;
         let initial_height = self.settings.initial_height;
         let headless = self.settings.headless;
-        let primary_window_visible = self.settings.primary_window_visible;
 
         let window: Arc<dyn Window> = match event_loop.create_window(
             WindowAttributes::default()
@@ -4465,24 +5184,31 @@ impl ApplicationHandler for App {
             self.robot_drives(),
         );
         accessibility.sync(&mut app);
-        if !headless && primary_window_visible {
-            window.set_visible(true);
-        }
+        self.primary_wrap_size = wrap_primary_window_to_content(
+            window.as_ref(),
+            &mut app,
+            self.settings.primary_wraps_content,
+            self.primary_wrap_size,
+        )
+        .or(self.primary_wrap_size);
+        show_primary_when_it_has_content(&self.primary_shown, &mut app, window.as_ref(), headless);
 
         let mut dev_options = self.settings.dev_options.clone();
         dev_options.frame_pacing_mode = self.frame_pacing_mode();
         app.set_dev_options(dev_options);
 
-        DesktopTextInput::install(&mut app, &window);
+        DesktopTextInput::install(&mut app.primary(), &window);
+        app.set_screen_origin(native_window_surface_origin(
+            &self.native_window_platform_probe,
+            &window,
+        ));
 
         let frame_waker_window = window.clone();
         let frame_waker_event_proxy = self.event_proxy.clone();
-        let use_event_proxy = primary_frame_waker_uses_event_proxy(
-            self.settings.primary_window_visible,
-            self.settings.headless,
-        );
+        let frame_waker_shown = Arc::clone(&self.primary_shown);
         app.set_frame_waker(move || {
-            if use_event_proxy {
+            let shown = frame_waker_shown.load(std::sync::atomic::Ordering::Relaxed);
+            if primary_frame_waker_uses_event_proxy(shown, headless) {
                 frame_waker_event_proxy.wake_up();
             } else {
                 frame_waker_window.request_redraw();
@@ -4491,10 +5217,8 @@ impl ApplicationHandler for App {
 
         let mut platform = DesktopWinitPlatform::default();
         platform.set_scale_factor(initial_scale);
-        let request_initial_redraw = primary_launch_requires_initial_redraw(
-            self.settings.primary_window_visible,
-            self.settings.headless,
-        );
+        let request_initial_redraw =
+            primary_launch_requires_initial_redraw(self.primary_visible(), self.settings.headless);
 
         if let Some(theme) = window.theme() {
             self.platform_env
@@ -4532,14 +5256,14 @@ impl ApplicationHandler for App {
         event: WindowEvent,
     ) {
         self.sync_frame_pacing();
-        let Some(window) = &self.window else {
-            self.native_window_event(event_loop, window_id, event);
-            return;
-        };
-        if window_id != window.id() {
-            self.native_window_event(event_loop, window_id, event);
+        if self.primary_window_id() != Some(window_id) {
+            self.dispatch_native_window_event(event_loop, window_id, event);
             return;
         }
+        self.relay_primary_held_press(event_loop, &event);
+        let Some(window) = &self.window else {
+            return;
+        };
         if let Some(accessibility) = &mut self.accessibility {
             accessibility.process_event(window.as_ref(), &event);
         }
@@ -4623,6 +5347,10 @@ impl ApplicationHandler for App {
             }
             WindowEvent::Moved(_) => {
                 self.vsync_interval = monitor_refresh_interval(window);
+                app.set_screen_origin(native_window_surface_origin(
+                    &self.native_window_platform_probe,
+                    window,
+                ));
             }
             WindowEvent::ThemeChanged(theme)
                 if self
@@ -4705,7 +5433,7 @@ impl ApplicationHandler for App {
                     request_redraw_once(window, &mut self.primary_redraw_pending);
                 }
                 let request = scroll_frame_request(dispatch_mouse_wheel(
-                    app,
+                    &mut app.primary(),
                     platform,
                     self.current_modifiers,
                     self.last_cursor_position,
@@ -4788,19 +5516,19 @@ impl ApplicationHandler for App {
                     app,
                     &mut self.last_cursor_position,
                 );
-                dispatch_middle_click_paste(app, self.last_cursor_position);
+                dispatch_middle_click_paste(&mut app.primary(), self.last_cursor_position);
             }
             WindowEvent::KeyboardInput { event, .. } => {
-                dispatch_keyboard_input(app, self.current_modifiers, event);
+                dispatch_keyboard_input(&mut app.primary(), self.current_modifiers, event);
             }
-            WindowEvent::Focused(false) => {
-                cancel_app_input(app);
+            WindowEvent::Focused(focused) => {
+                primary_window_focus_changed(app, focused);
             }
             WindowEvent::Ime(ime_event) => {
-                dispatch_ime_event(app, ime_event);
+                dispatch_ime_event(&mut app.primary(), ime_event);
             }
             WindowEvent::PointerLeft { .. } => {
-                app.cancel_gesture();
+                app.cancel_gesture_unless_pressed();
             }
             WindowEvent::RedrawRequested => {
                 record_pacing_event(|diag| &mut diag.redraw_events);
@@ -4819,7 +5547,18 @@ impl ApplicationHandler for App {
                 let robot_surface_dirty_before_update = false;
                 let primary_surface_dirty_before_update = self.primary_surface_dirty;
                 app.set_density(window.scale_factor() as f32);
+                #[cfg_attr(not(feature = "robot"), allow(unused_variables))]
                 let update_result = update_app_with_native_window_registry(app, &registry);
+                wrap_primary_window_for_frame(
+                    app,
+                    surface,
+                    surface_config,
+                    window,
+                    &registry,
+                    primary_viewport_override,
+                    self.settings.primary_wraps_content,
+                    &mut self.primary_wrap_size,
+                );
                 if let Some(accessibility) = &mut self.accessibility {
                     accessibility.sync(app);
                 }
@@ -4830,11 +5569,18 @@ impl ApplicationHandler for App {
                 let after_update = Instant::now();
                 sync_native_windows_after_event = true;
 
-                if surface_present_required(
+                let frame_owed = app.take_frame_owed();
+                let present_required = surface_present_required(
                     primary_surface_dirty_before_update || robot_surface_dirty_before_update,
-                    update_result.visual_changed,
+                    frame_owed,
                     app.needs_redraw(),
-                ) {
+                );
+                pace_after_empty_redraw(
+                    &mut self.last_frame_start_time,
+                    frame_started_at,
+                    present_required,
+                );
+                if present_required {
                     self.primary_surface_dirty = true;
                     let output = match current_surface_texture(surface, "primary window") {
                         SurfaceFrame::Ready(output) => output,
@@ -4984,6 +5730,7 @@ impl ApplicationHandler for App {
 
         let last_frame_start_time = self.last_frame_start_time;
         let registry = Rc::clone(&self.native_window_registry);
+        let primary_visible = self.primary_visible();
         let Some(app) = &mut self.app else { return };
         let Some(window) = self.window.clone() else {
             return;
@@ -5065,7 +5812,7 @@ impl ApplicationHandler for App {
                             app,
                             delta_x,
                             delta_y,
-                            self.settings.primary_window_visible,
+                            primary_visible,
                             self.settings.headless,
                             self.presented_frame_generation,
                         ) else {
@@ -5097,7 +5844,7 @@ impl ApplicationHandler for App {
                             app,
                             delta_x,
                             delta_y,
-                            self.settings.primary_window_visible,
+                            primary_visible,
                             self.settings.headless,
                             self.presented_frame_generation,
                         ) else {
@@ -5149,7 +5896,7 @@ impl ApplicationHandler for App {
                         let present_target = visual_dirty
                             .then(|| {
                                 robot_visible_pump_present_target(
-                                    self.settings.primary_window_visible,
+                                    primary_visible,
                                     self.settings.headless,
                                     1,
                                     self.presented_frame_generation,
@@ -5459,7 +6206,7 @@ impl ApplicationHandler for App {
                             || robot_visual_dirty
                             || self.primary_redraw_pending;
                         controller.waiting_for_present_generation = robot_visible_present_target(
-                            self.settings.primary_window_visible,
+                            primary_visible,
                             self.settings.headless,
                             visual_frame_pending,
                             self.presented_frame_generation,
@@ -5484,7 +6231,7 @@ impl ApplicationHandler for App {
                         let present_target = robot_visual_dirty
                             .then(|| {
                                 robot_visible_pump_present_target(
-                                    self.settings.primary_window_visible,
+                                    primary_visible,
                                     self.settings.headless,
                                     count,
                                     self.presented_frame_generation,
@@ -5512,7 +6259,7 @@ impl ApplicationHandler for App {
                         let present_target = visual_frame_pending
                             .then(|| {
                                 robot_visible_pump_present_target(
-                                    self.settings.primary_window_visible,
+                                    primary_visible,
                                     self.settings.headless,
                                     1,
                                     self.presented_frame_generation,
@@ -5537,10 +6284,7 @@ impl ApplicationHandler for App {
             }
             if robot_visual_dirty {
                 self.robot_visible_surface_dirty = true;
-                if primary_surface_redraw_drives_app(
-                    self.settings.primary_window_visible,
-                    self.settings.headless,
-                ) {
+                if primary_surface_redraw_drives_app(primary_visible, self.settings.headless) {
                     self.last_frame_start_time = None;
                     request_redraw_once(&window, &mut self.primary_redraw_pending);
                 }
@@ -5601,7 +6345,7 @@ impl ApplicationHandler for App {
                     && visible_redraw_pending
                 {
                     controller.waiting_for_present_generation = robot_visible_present_target(
-                        self.settings.primary_window_visible,
+                        primary_visible,
                         self.settings.headless,
                         true,
                         self.presented_frame_generation,
@@ -5638,7 +6382,7 @@ impl ApplicationHandler for App {
                         if follow_up_schedule.needs_frame || update_result.structure_changed {
                             finish_idle = false;
                             if primary_surface_redraw_drives_app(
-                                self.settings.primary_window_visible,
+                                primary_visible,
                                 self.settings.headless,
                             ) {
                                 request_redraw_once(&window, &mut self.primary_redraw_pending);
@@ -5654,7 +6398,7 @@ impl ApplicationHandler for App {
                 } else {
                     if needs_frame
                         && primary_surface_redraw_drives_app(
-                            self.settings.primary_window_visible,
+                            primary_visible,
                             self.settings.headless,
                         )
                     {
@@ -5719,7 +6463,7 @@ impl ApplicationHandler for App {
         let frame_schedule = app.frame_schedule();
         let has_active_animations = app.has_active_animations();
         let needs_update = frame_schedule.needs_update;
-        let needs_redraw = frame_schedule.needs_frame;
+        let needs_redraw = frame_schedule.needs_frame || app.frame_owed();
         if needs_redraw {
             log::trace!(
                 target: "cranpose::input",
@@ -5731,23 +6475,24 @@ impl ApplicationHandler for App {
         let waiting_for_frame_cap =
             needs_redraw && next_frame_time.is_some_and(|deadline| deadline > now);
         let direct_declaration_update = primary_declaration_host_needs_direct_update(
-            self.settings.primary_window_visible,
+            primary_visible,
             self.settings.headless,
             needs_redraw,
             waiting_for_frame_cap,
         );
         if needs_update && !needs_redraw && !waiting_for_frame_cap {
             record_pacing_event(|diag| &mut diag.updates);
-            let update_result = update_app_with_native_window_registry(app, &registry);
-            if update_result.visual_changed || app.needs_redraw() {
+            update_app_with_native_window_registry(app, &registry);
+            if app.frame_owed() || app.needs_redraw() {
                 request_redraw_once(&window, &mut self.primary_redraw_pending);
             }
         } else if needs_redraw && !waiting_for_frame_cap {
             if direct_declaration_update {
-                trace_native_window(format_args!(
+                trace_native_window!(
                     "primary declaration host direct update visible={} headless={}",
-                    self.settings.primary_window_visible, self.settings.headless
-                ));
+                    primary_visible,
+                    self.settings.headless
+                );
                 record_pacing_event(|diag| &mut diag.direct_updates);
                 update_declaration_host_frame(
                     app,
@@ -5760,11 +6505,13 @@ impl ApplicationHandler for App {
             }
         }
         let primary_next_event_time = frame_schedule.next_deadline;
+        self.sync_primary_size();
+        self.sync_primary_visibility();
         if direct_declaration_update {
             self.sync_native_windows(event_loop);
         }
 
-        let mut native_has_active_animations = false;
+        let Some(app) = self.app.as_mut() else { return };
         let mut native_drag_deadline: Option<Instant> = None;
         let native_position_poll_deadline = self
             .native_windows
@@ -5779,35 +6526,39 @@ impl ApplicationHandler for App {
             .then_some(self.next_native_window_position_poll_at);
         let mut native_frame_cap_deadline: Option<Instant> = None;
         let mut native_next_event_time: Option<Instant> = None;
+        let pacing_mode = app.frame_pacing_mode();
         for native in self.native_windows.values_mut() {
             if !native.options.visible {
                 continue;
             }
+            let Some(surface) = native_surface(app, native) else {
+                continue;
+            };
 
-            let frame_schedule = native.app.frame_schedule();
-            let has_active_animations = native.app.has_active_animations();
-            native_has_active_animations |= has_active_animations;
-            let needs_update = frame_schedule.needs_update;
-            let needs_redraw = frame_schedule.needs_frame;
+            let frame_schedule = surface.frame_schedule();
+            let needs_redraw = native_surface_needs_frame(
+                frame_schedule.needs_frame,
+                surface.frame_owed(),
+                surface.needs_redraw(),
+                native.surface_dirty,
+            );
             let next_frame_time = native.last_frame_start_time.and_then(|started_at| {
                 native
-                    .frame_interval()
+                    .frame_interval(pacing_mode)
                     .map(|interval| started_at + interval)
             });
             let waiting_for_frame_cap =
                 needs_redraw && next_frame_time.is_some_and(|deadline| deadline > now);
 
-            if needs_update && !needs_redraw && !waiting_for_frame_cap {
-                let update_result =
-                    update_app_with_native_window_registry(&mut native.app, &registry);
-                if update_result.visual_changed || native.app.needs_redraw() {
-                    native.window.request_redraw();
-                }
-            } else if needs_redraw && !waiting_for_frame_cap {
+            if needs_redraw && !waiting_for_frame_cap {
                 native.window.request_redraw();
             }
-            if let Some(active_drag) = native.active_drag {
-                let next_poll_at = active_drag.next_poll_at();
+            if let Some(next_poll_at) = native.active_drag.and_then(|active_drag| {
+                native_window_drag_poll_deadline(
+                    active_drag.next_poll_at,
+                    NATIVE_WINDOW_GLOBAL_POINTER_POLLED,
+                )
+            }) {
                 native_drag_deadline = Some(
                     native_drag_deadline
                         .map(|current| current.min(next_poll_at))
@@ -5839,34 +6590,32 @@ impl ApplicationHandler for App {
         #[cfg(not(feature = "robot"))]
         let robot_needs_poll = false;
 
-        let control_flow = if robot_needs_poll
-            || free_running_frame(frame_interval, needs_redraw, self.primary_redraw_pending)
-            || primary_pointer_polled
-            || native_drag_deadline.is_some()
-            || native_position_poll_deadline.is_some_and(|deadline| deadline <= now)
-        {
-            ControlFlow::Poll
-        } else if let Some(deadline) = [
-            next_frame_time.filter(|_| waiting_for_frame_cap),
-            native_frame_cap_deadline,
-            native_position_poll_deadline,
-        ]
-        .into_iter()
-        .flatten()
-        .min()
-        {
-            ControlFlow::WaitUntil(deadline)
-        } else if has_active_animations || native_has_active_animations {
-            ControlFlow::Poll
-        } else if let Some(next_time) = [primary_next_event_time, native_next_event_time]
-            .into_iter()
-            .flatten()
-            .min()
-        {
-            ControlFlow::WaitUntil(next_time)
-        } else {
-            ControlFlow::Wait
-        };
+        let control_flow = event_loop_control_flow(
+            now,
+            LoopControlInputs {
+                robot_needs_poll,
+                free_running: free_running_frame(
+                    frame_interval,
+                    needs_redraw,
+                    self.primary_redraw_pending,
+                ),
+                primary_pointer_polled,
+                drag_poll_deadline: native_drag_deadline,
+                position_poll_deadline: native_position_poll_deadline,
+                frame_cap_deadline: [
+                    next_frame_time.filter(|_| waiting_for_frame_cap),
+                    native_frame_cap_deadline,
+                ]
+                .into_iter()
+                .flatten()
+                .min(),
+                has_active_animations,
+                next_event_time: [primary_next_event_time, native_next_event_time]
+                    .into_iter()
+                    .flatten()
+                    .min(),
+            },
+        );
 
         #[cfg(feature = "robot")]
         let control_flow = bound_park_for_robot(control_flow, self.robot_controller.is_some(), now);
@@ -6098,1199 +6847,5 @@ fn resolve_robot_screenshot_params_with_scale(
 }
 
 #[cfg(test)]
-mod tests {
-    use std::time::Instant;
-
-    #[test]
-    fn a_window_coming_up_alone_takes_focus_so_its_cursor_is_drawn() {
-        assert!(
-            super::a_new_window_comes_up_key(false, true, false),
-            "macOS reads cursor rectangles only for the key window, so the \
-             first window up has to take focus or its cursor is never drawn"
-        );
-    }
-
-    #[test]
-    fn a_window_coming_up_beside_a_focused_one_leaves_the_focus_alone() {
-        assert!(
-            !super::a_new_window_comes_up_key(false, true, true),
-            "a window the user is already working in keeps focus"
-        );
-    }
-
-    #[test]
-    fn a_window_with_nothing_on_screen_is_left_alone() {
-        assert!(!super::a_new_window_comes_up_key(false, false, false));
-        assert!(!super::a_new_window_comes_up_key(true, true, false));
-    }
-
-    #[cfg(feature = "robot")]
-    use cranpose_app_shell::FrameUpdateResult;
-    use winit::dpi::{PhysicalPosition, PhysicalSize};
-
-    use super::{
-        App, DesktopRect, FramePacingMode, NativeWindowDragSession,
-        NativeWindowGraphPositionSource, NativeWindowOptions, NativeWindowPointerState,
-        NativeWindowPollingDragSession, NativeWindowPositionObservation,
-        NativeWindowPositionOrigin, PendingNativeWindowPositions, PrimaryPointerGesturePollAction,
-        clamp_rect_to_monitor_delta, desired_frame_latency, frame_interval_for_mode,
-        free_running_frame, initial_present_redraw_needed, native_window_graph_position,
-        native_window_options_change_is_position_only, native_window_position_poll_needed,
-        nearest_monitor_to_rect, next_frame_anchor, occlusion_leaves_a_frame_owed,
-        physical_outer_origin_from_surface, physical_surface_local_pointer,
-        physical_surface_origin_from_outer, physical_surface_rect_contains_pointer,
-        pointer_button_frame_request, primary_declaration_host_needs_direct_update,
-        primary_frame_waker_uses_event_proxy, primary_launch_requires_initial_redraw,
-        primary_pointer_gesture_poll_action, primary_pointer_move_should_recover_press,
-        primary_surface_redraw_drives_app, primary_viewport_for_surface_size,
-        recovered_native_window_drag_start_pointer, scroll_frame_request,
-        should_chain_no_vsync_redraw, surface_reconfigure_requires_redraw,
-    };
-    #[cfg(feature = "robot")]
-    use super::{
-        ControlFlow, IdleWaitTimeout, ROBOT_IDLE_MIN_ITERATIONS, ROBOT_IDLE_PRESENT_TIMEOUT,
-        ROBOT_IDLE_STARVATION_CEILING, ROBOT_IDLE_TIMEOUT, ROBOT_PARKED_COMMAND_POLL_INTERVAL,
-        ROBOT_PRESENT_WAIT_TIMEOUT, bound_park_for_robot,
-    };
-    #[cfg(feature = "robot")]
-    use super::{
-        RobotController, parse_robot_capture_scale, resolve_robot_screenshot_params,
-        resolve_robot_screenshot_params_with_scale, robot_query_visual_dirty,
-        robot_visible_present_target, robot_visible_pump_present_target,
-    };
-    use crate::{app_launcher::AppSettings, wgpu_surface::surface_present_required};
-
-    #[test]
-    fn native_window_screen_position_is_declarative() {
-        let options = NativeWindowOptions::new("child", 100.0, 50.0).with_position(10.0, 20.0);
-        assert!(App::native_window_options_have_screen_position(&options));
-    }
-
-    #[test]
-    fn decorated_window_surface_coordinates_apply_frame_offset_once() {
-        let outer = PhysicalPosition::new(100, 200);
-        let surface_offset = PhysicalPosition::new(2, 32);
-        let surface = physical_surface_origin_from_outer(outer, surface_offset);
-
-        assert_eq!(surface, PhysicalPosition::new(102, 232));
-        assert_eq!(
-            physical_outer_origin_from_surface(surface, surface_offset),
-            outer
-        );
-        assert_eq!(
-            physical_surface_local_pointer(surface, PhysicalPosition::new(250.0, 808.0)),
-            PhysicalPosition::new(148.0, 576.0)
-        );
-    }
-
-    #[test]
-    fn desktop_wheel_dispatch_does_not_short_circuit_after_cursor_update() {
-        let source = include_str!("desktop.rs");
-        let short_circuit = ["cursor_dirty ", "|| app.pointer_scrolled"].concat();
-
-        assert!(
-            !source.contains(&short_circuit),
-            "desktop wheel dispatch must always call pointer_scrolled after updating hover cursor"
-        );
-    }
-
-    #[test]
-    fn desktop_input_prefers_winit_cursor_before_x11_global_probe() {
-        let source = include_str!("desktop.rs");
-
-        assert!(
-            source.contains("self.last_cursor_position.is_none()\n                    && Self::refresh_primary_cursor_from_platform_pointer"),
-            "primary pointer-button and wheel handling must not overwrite a winit client cursor with X11 root-pointer coordinates"
-        );
-        assert!(
-            source.contains("if native.last_cursor_position.is_none() {\n                    Self::refresh_native_cursor_from_platform_pointer"),
-            "native pointer-button and wheel handling must not overwrite a winit client cursor with X11 root-pointer coordinates"
-        );
-        assert!(
-            source.contains("if self.last_cursor_position.is_some() {\n            return false;\n        }\n\n        let Some(local) = native_window_local_pointer_physical"),
-            "active primary gestures must not synthesize drag moves from X11 root-pointer coordinates after a winit client cursor is known"
-        );
-    }
-
-    #[test]
-    fn desktop_robot_idle_wait_considers_update_only_work() {
-        let source = include_str!("desktop.rs");
-
-        assert!(
-            source.contains("let needs_update = frame_schedule.needs_update;"),
-            "robot wait_for_idle must read update-only scheduler state"
-        );
-        assert!(
-            source.contains(
-                "if !needs_frame && !has_transient_frame_callbacks && !waiting_for_present"
-            ),
-            "robot wait_for_idle must not finish while update-only work is pending"
-        );
-    }
-
-    #[test]
-    fn desktop_robot_idle_wait_allows_frame_only_loops() {
-        let source = include_str!("desktop.rs");
-
-        assert!(
-            source.contains(
-                "let frame_only = needs_frame\n                    && !needs_update\n                    && !has_transient_frame_callbacks\n                    && !waiting_for_present;",
-            ),
-            "robot wait_for_idle must not block on frame-only renderer or animation loops after pending UI work has drained"
-        );
-    }
-
-    #[test]
-    fn visible_native_window_does_not_schedule_idle_position_poll() {
-        assert!(
-            !native_window_position_poll_needed(true, false, false),
-            "idle visible native windows must not wake the event loop at 60Hz"
-        );
-        assert!(
-            native_window_position_poll_needed(true, false, true),
-            "pending programmatic native-window positions still need a bounded settle poll"
-        );
-        assert!(!native_window_position_poll_needed(false, false, true));
-        assert!(!native_window_position_poll_needed(true, true, true));
-    }
-
-    #[test]
-    fn native_window_position_only_options_change_does_not_require_content_sync() {
-        let previous =
-            NativeWindowOptions::borderless("Winamp", 275.0, 116.0).with_position(10.0, 20.0);
-        let moved =
-            NativeWindowOptions::borderless("Winamp", 275.0, 116.0).with_position(42.0, 48.0);
-        let resized =
-            NativeWindowOptions::borderless("Winamp", 280.0, 116.0).with_position(42.0, 48.0);
-        let retitled =
-            NativeWindowOptions::borderless("Player", 275.0, 116.0).with_position(42.0, 48.0);
-
-        assert!(native_window_options_change_is_position_only(
-            &previous, &moved
-        ));
-        assert!(!native_window_options_change_is_position_only(
-            &previous, &previous
-        ));
-        assert!(!native_window_options_change_is_position_only(
-            &previous, &resized
-        ));
-        assert!(!native_window_options_change_is_position_only(
-            &previous, &retitled
-        ));
-    }
-
-    #[test]
-    fn desktop_robot_queries_do_not_drive_animation_only_frames() {
-        let source = include_str!("desktop.rs");
-
-        assert!(
-            source.contains("if !robot_query_should_drain_frame(app)")
-                && source.contains("fn robot_query_should_drain_frame"),
-            "robot semantic/screenshot queries must use the query drain predicate"
-        );
-        assert!(
-            source.contains("app.needs_redraw()"),
-            "robot query drains should apply visible redraw work without advancing update-only frames"
-        );
-    }
-
-    #[cfg(feature = "robot")]
-    #[test]
-    fn desktop_robot_queries_schedule_presentation_for_drained_visual_updates() {
-        assert!(robot_query_visual_dirty(
-            FrameUpdateResult {
-                visual_changed: true,
-                structure_changed: false,
-            },
-            false,
-        ));
-        assert!(robot_query_visual_dirty(FrameUpdateResult::default(), true,));
-        assert!(!robot_query_visual_dirty(
-            FrameUpdateResult {
-                visual_changed: false,
-                structure_changed: true,
-            },
-            false,
-        ));
-    }
-
-    #[test]
-    fn a_mode_that_outruns_the_display_gets_a_deeper_drawable_queue() {
-        let sixty = std::time::Duration::from_nanos(16_666_667);
-        assert_eq!(desired_frame_latency(FramePacingMode::Hard120, sixty), 2);
-        assert_eq!(desired_frame_latency(FramePacingMode::NoVsync, sixty), 2);
-    }
-
-    #[test]
-    fn a_mode_the_display_can_keep_up_with_keeps_the_shallow_queue() {
-        let sixty = std::time::Duration::from_nanos(16_666_667);
-        let one_twenty = std::time::Duration::from_nanos(8_333_333);
-        assert_eq!(desired_frame_latency(FramePacingMode::Hard60, sixty), 1);
-        assert_eq!(
-            desired_frame_latency(FramePacingMode::Hard60, one_twenty),
-            1
-        );
-        assert_eq!(
-            desired_frame_latency(FramePacingMode::Hard120, one_twenty),
-            1,
-            "120fps on a 120Hz display never outruns the display"
-        );
-    }
-
-    #[test]
-    fn vsync_keeps_its_queue_depth_on_every_display() {
-        for interval in [
-            std::time::Duration::from_nanos(16_666_667),
-            std::time::Duration::from_nanos(8_333_333),
-        ] {
-            assert_eq!(desired_frame_latency(FramePacingMode::Vsync, interval), 2);
-        }
-    }
-
-    #[test]
-    fn no_vsync_redraw_chain_requires_uncapped_dirty_frame() {
-        let vsync_interval = std::time::Duration::from_nanos(16_666_667);
-
-        assert!(should_chain_no_vsync_redraw(
-            frame_interval_for_mode(FramePacingMode::NoVsync, vsync_interval),
-            true
-        ));
-        assert!(!should_chain_no_vsync_redraw(
-            frame_interval_for_mode(FramePacingMode::NoVsync, vsync_interval),
-            false
-        ));
-        assert!(!should_chain_no_vsync_redraw(
-            frame_interval_for_mode(FramePacingMode::Hard120, vsync_interval),
-            true
-        ));
-        assert!(!should_chain_no_vsync_redraw(
-            frame_interval_for_mode(FramePacingMode::Vsync, vsync_interval),
-            true
-        ));
-    }
-
-    #[test]
-    fn free_running_loop_never_parks_on_a_frame_it_already_asked_for() {
-        let vsync_interval = std::time::Duration::from_nanos(16_666_667);
-        let no_vsync = frame_interval_for_mode(FramePacingMode::NoVsync, vsync_interval);
-
-        assert!(free_running_frame(no_vsync, false, true));
-        assert!(free_running_frame(no_vsync, true, false));
-        assert!(!free_running_frame(no_vsync, false, false));
-
-        assert!(!free_running_frame(
-            frame_interval_for_mode(FramePacingMode::Vsync, vsync_interval),
-            true,
-            true
-        ));
-        assert!(!free_running_frame(
-            frame_interval_for_mode(FramePacingMode::Hard120, vsync_interval),
-            true,
-            true
-        ));
-    }
-
-    #[cfg(feature = "robot")]
-    #[test]
-    fn a_driven_run_never_parks_longer_than_its_command_poll() {
-        let now = Instant::now();
-        let far = now + std::time::Duration::from_secs(5);
-        let soon = now + std::time::Duration::from_millis(1);
-        let bound = now + ROBOT_PARKED_COMMAND_POLL_INTERVAL;
-
-        assert_eq!(
-            bound_park_for_robot(ControlFlow::Wait, true, now),
-            ControlFlow::WaitUntil(bound)
-        );
-        assert_eq!(
-            bound_park_for_robot(ControlFlow::WaitUntil(far), true, now),
-            ControlFlow::WaitUntil(bound)
-        );
-        assert_eq!(
-            bound_park_for_robot(ControlFlow::WaitUntil(soon), true, now),
-            ControlFlow::WaitUntil(soon)
-        );
-        assert_eq!(
-            bound_park_for_robot(ControlFlow::Poll, true, now),
-            ControlFlow::Poll
-        );
-        assert_eq!(
-            bound_park_for_robot(ControlFlow::Wait, false, now),
-            ControlFlow::Wait
-        );
-        assert_eq!(
-            bound_park_for_robot(ControlFlow::WaitUntil(far), false, now),
-            ControlFlow::WaitUntil(far)
-        );
-    }
-
-    #[cfg(feature = "robot")]
-    #[test]
-    fn an_idle_robot_lets_the_loop_park() {
-        let (mut controller, robot) = RobotController::new(|| {});
-
-        assert!(!controller.awaiting_progress());
-
-        robot
-            .command_sender()
-            .send(crate::robot::RobotCommand::PumpFrames { count: 1 })
-            .expect("robot command channel should remain open");
-        assert!(controller.awaiting_progress());
-        assert!(matches!(
-            controller.next_command(),
-            Some(crate::robot::RobotCommand::PumpFrames { count: 1 })
-        ));
-        assert!(!controller.awaiting_progress());
-
-        controller.start_idle_wait();
-        assert!(controller.awaiting_progress());
-        controller.finish_idle_wait();
-        assert!(!controller.awaiting_progress());
-
-        controller.begin_pump_present_wait(7);
-        assert!(controller.awaiting_progress());
-        controller.finish_pump_present_wait();
-        assert!(!controller.awaiting_progress());
-
-        controller.begin_synthetic_primary_gesture();
-        assert!(controller.awaiting_progress());
-        controller.end_synthetic_primary_gesture();
-        assert!(!controller.awaiting_progress());
-    }
-
-    #[cfg(feature = "robot")]
-    #[test]
-    fn robot_idle_wait_times_out_once_the_app_keeps_the_loop_busy() {
-        let (mut controller, _robot) = RobotController::new(|| {});
-        let started_at = Instant::now();
-
-        controller.start_idle_wait_at(started_at);
-        controller.idle_iterations = ROBOT_IDLE_MIN_ITERATIONS;
-
-        assert_eq!(
-            controller.idle_wait_timeout(started_at + ROBOT_IDLE_TIMEOUT / 2),
-            None
-        );
-        assert_eq!(
-            controller.idle_wait_timeout(started_at + ROBOT_IDLE_TIMEOUT),
-            Some(IdleWaitTimeout::AppNotConverging)
-        );
-        controller.finish_idle_wait();
-        assert_eq!(
-            controller.idle_wait_timeout(started_at + ROBOT_IDLE_TIMEOUT * 2),
-            None
-        );
-    }
-
-    #[cfg(feature = "robot")]
-    #[test]
-    fn robot_idle_wait_does_not_blame_the_app_for_a_starved_host() {
-        let (mut controller, _robot) = RobotController::new(|| {});
-        let started_at = Instant::now();
-
-        controller.start_idle_wait_at(started_at);
-        controller.idle_iterations = 1;
-
-        assert_eq!(
-            controller.idle_wait_timeout(started_at + ROBOT_IDLE_TIMEOUT),
-            None
-        );
-        assert_eq!(
-            controller.idle_wait_timeout(
-                started_at + ROBOT_IDLE_STARVATION_CEILING - std::time::Duration::from_millis(1)
-            ),
-            None
-        );
-    }
-
-    #[cfg(feature = "robot")]
-    #[test]
-    fn robot_idle_wait_still_gives_up_on_a_permanently_wedged_host() {
-        let (mut controller, _robot) = RobotController::new(|| {});
-        let started_at = Instant::now();
-
-        controller.start_idle_wait_at(started_at);
-        controller.idle_iterations = 1;
-
-        assert_eq!(
-            controller.idle_wait_timeout(started_at + ROBOT_IDLE_STARVATION_CEILING),
-            Some(IdleWaitTimeout::HostStarved)
-        );
-    }
-
-    #[cfg(feature = "robot")]
-    #[test]
-    fn robot_idle_wait_does_not_blame_the_app_for_a_slow_present() {
-        let (mut controller, _robot) = RobotController::new(|| {});
-        let started_at = Instant::now();
-
-        controller.start_idle_wait_at(started_at);
-        controller.idle_iterations = 1_280_577;
-        controller.observe_idle_present_block(true, started_at);
-
-        assert_eq!(
-            controller.idle_wait_timeout(started_at + ROBOT_IDLE_TIMEOUT),
-            None
-        );
-        assert_eq!(
-            controller.idle_wait_timeout(
-                started_at + ROBOT_IDLE_PRESENT_TIMEOUT - std::time::Duration::from_millis(1)
-            ),
-            None
-        );
-    }
-
-    #[cfg(feature = "robot")]
-    #[test]
-    fn robot_idle_wait_blames_the_surface_when_a_present_never_lands() {
-        let (mut controller, _robot) = RobotController::new(|| {});
-        let started_at = Instant::now();
-
-        controller.start_idle_wait_at(started_at);
-        controller.idle_iterations = 1_280_577;
-        controller.observe_idle_present_block(true, started_at);
-
-        assert_eq!(
-            controller.idle_wait_timeout(started_at + ROBOT_IDLE_PRESENT_TIMEOUT),
-            Some(IdleWaitTimeout::SurfaceNotPresenting)
-        );
-    }
-
-    #[cfg(feature = "robot")]
-    #[test]
-    fn robot_idle_wait_still_blames_an_app_that_churns_while_a_present_is_outstanding() {
-        let (mut controller, _robot) = RobotController::new(|| {});
-        let started_at = Instant::now();
-
-        controller.start_idle_wait_at(started_at);
-        controller.idle_iterations = ROBOT_IDLE_MIN_ITERATIONS;
-        controller.observe_idle_present_block(true, started_at);
-        controller.observe_idle_present_block(false, started_at);
-
-        assert_eq!(
-            controller.idle_wait_timeout(started_at + ROBOT_IDLE_TIMEOUT),
-            Some(IdleWaitTimeout::AppNotConverging)
-        );
-    }
-
-    #[cfg(feature = "robot")]
-    #[test]
-    fn a_present_wait_gives_up_when_the_surface_never_presents() {
-        let (mut controller, _robot) = RobotController::new(|| {});
-        let started_at = Instant::now();
-
-        controller.begin_pump_present_wait_at(11, started_at);
-        assert!(!controller.pump_present_wait_timed_out(started_at));
-        assert!(
-            !controller.pump_present_wait_timed_out(started_at + ROBOT_PRESENT_WAIT_TIMEOUT / 2)
-        );
-        assert!(controller.pump_present_wait_timed_out(started_at + ROBOT_PRESENT_WAIT_TIMEOUT));
-    }
-
-    #[cfg(feature = "robot")]
-    #[test]
-    fn a_present_that_arrives_clears_the_wait_deadline() {
-        let (mut controller, _robot) = RobotController::new(|| {});
-        let started_at = Instant::now();
-
-        controller.begin_pump_present_wait_at(11, started_at);
-        controller.finish_pump_present_wait();
-
-        assert!(controller.waiting_for_pump_present_generation.is_none());
-        assert!(
-            !controller.pump_present_wait_timed_out(started_at + ROBOT_PRESENT_WAIT_TIMEOUT * 4),
-            "a finished wait must not report a timeout on the next loop turn"
-        );
-    }
-
-    #[cfg(feature = "robot")]
-    #[test]
-    fn each_presented_scroll_step_restarts_the_wait_deadline() {
-        let (mut controller, _robot) = RobotController::new(|| {});
-        let started_at = Instant::now();
-
-        controller.begin_pump_present_wait_at(11, started_at);
-        let next_step =
-            started_at + ROBOT_PRESENT_WAIT_TIMEOUT - std::time::Duration::from_millis(1);
-        controller.begin_pump_present_wait_at(12, next_step);
-
-        assert!(
-            !controller
-                .pump_present_wait_timed_out(next_step + std::time::Duration::from_millis(2))
-        );
-        assert!(controller.pump_present_wait_timed_out(next_step + ROBOT_PRESENT_WAIT_TIMEOUT));
-    }
-
-    #[test]
-    fn frame_anchor_holds_cadence_despite_late_wakeups() {
-        let interval = std::time::Duration::from_nanos(16_666_667);
-        let start = Instant::now();
-        let mut anchor = start;
-
-        for step in 1..=240u32 {
-            let observed = anchor + interval + std::time::Duration::from_micros(750);
-            anchor = next_frame_anchor(Some(anchor), observed, Some(interval));
-            assert_eq!(anchor, start + interval * step);
-        }
-    }
-
-    #[test]
-    fn frame_anchor_reanchors_after_a_full_interval_overrun() {
-        let interval = std::time::Duration::from_nanos(16_666_667);
-        let previous = Instant::now();
-        let overrun = previous + interval * 4;
-
-        assert_eq!(
-            next_frame_anchor(Some(previous), overrun, Some(interval)),
-            overrun
-        );
-    }
-
-    #[test]
-    fn frame_anchor_falls_back_to_the_observed_start_without_a_cadence() {
-        let interval = std::time::Duration::from_nanos(16_666_667);
-        let now = Instant::now();
-
-        assert_eq!(next_frame_anchor(None, now, Some(interval)), now);
-        assert_eq!(next_frame_anchor(Some(now), now, None), now);
-        assert_eq!(
-            next_frame_anchor(Some(now), now, Some(std::time::Duration::ZERO)),
-            now
-        );
-    }
-
-    #[test]
-    fn native_window_host_position_needs_resolution() {
-        let options =
-            NativeWindowOptions::new("child", 100.0, 50.0).with_host_window_position(10.0, 20.0);
-        assert_eq!(
-            options.position_origin,
-            NativeWindowPositionOrigin::HostWindow
-        );
-        assert!(!App::native_window_options_have_screen_position(&options));
-    }
-
-    #[test]
-    fn native_window_initial_position_prefers_declaration_over_early_os_position() {
-        let options = NativeWindowOptions::new("child", 100.0, 50.0).with_position(10.0, 20.0);
-
-        assert_eq!(
-            App::initial_native_window_position(&options, Some((0.0, 0.0))),
-            Some((10.0, 20.0))
-        );
-    }
-
-    #[test]
-    fn native_window_initial_position_uses_os_position_without_declaration() {
-        let options = NativeWindowOptions::new("child", 100.0, 50.0);
-
-        assert_eq!(
-            App::initial_native_window_position(&options, Some((30.0, 40.0))),
-            Some((30.0, 40.0))
-        );
-    }
-
-    #[test]
-    fn native_window_group_bounds_move_from_virtual_gap_to_nearest_monitor() {
-        let monitors = [
-            DesktopRect {
-                x: 0.0,
-                y: 630.0,
-                width: 1420.0,
-                height: 800.0,
-            },
-            DesktopRect {
-                x: 1920.0,
-                y: 0.0,
-                width: 3840.0,
-                height: 2160.0,
-            },
-        ];
-        let group_bounds = DesktopRect {
-            x: 140.0,
-            y: 120.0,
-            width: 550.0,
-            height: 319.0,
-        };
-
-        let monitor = nearest_monitor_to_rect(&monitors, group_bounds).expect("nearest monitor");
-        let delta = clamp_rect_to_monitor_delta(group_bounds, monitor, 32.0);
-
-        assert_eq!(monitor, monitors[0]);
-        assert_eq!(delta, cranpose_ui::Point::new(0.0, 542.0));
-    }
-
-    #[test]
-    fn native_window_group_bounds_skip_correction_without_monitors() {
-        let group_bounds = DesktopRect {
-            x: 140.0,
-            y: 120.0,
-            width: 550.0,
-            height: 319.0,
-        };
-
-        assert_eq!(nearest_monitor_to_rect(&[], group_bounds), None);
-    }
-
-    #[test]
-    fn native_window_group_bounds_preserve_visible_position() {
-        let monitor = DesktopRect {
-            x: 0.0,
-            y: 630.0,
-            width: 1420.0,
-            height: 800.0,
-        };
-        let group_bounds = DesktopRect {
-            x: 140.0,
-            y: 700.0,
-            width: 550.0,
-            height: 319.0,
-        };
-
-        let delta = clamp_rect_to_monitor_delta(group_bounds, monitor, 32.0);
-
-        assert_eq!(delta, cranpose_ui::Point::new(0.0, 0.0));
-    }
-
-    #[test]
-    fn visible_primary_surface_drives_redraw_updates() {
-        assert!(primary_surface_redraw_drives_app(true, false));
-        assert!(!primary_surface_redraw_drives_app(false, false));
-        assert!(!primary_surface_redraw_drives_app(true, true));
-    }
-
-    #[test]
-    fn hidden_primary_frame_waker_uses_event_loop_proxy() {
-        assert!(!primary_frame_waker_uses_event_proxy(true, false));
-        assert!(primary_frame_waker_uses_event_proxy(false, false));
-        assert!(primary_frame_waker_uses_event_proxy(true, true));
-    }
-
-    #[test]
-    fn visible_primary_launch_requests_initial_redraw() {
-        assert!(primary_launch_requires_initial_redraw(true, false));
-        assert!(!primary_launch_requires_initial_redraw(false, false));
-        assert!(!primary_launch_requires_initial_redraw(true, true));
-    }
-
-    #[test]
-    fn surface_reconfigure_requests_replacement_frame_for_visible_surface() {
-        assert!(surface_reconfigure_requires_redraw(1, 1));
-        assert!(surface_reconfigure_requires_redraw(1920, 1080));
-        assert!(!surface_reconfigure_requires_redraw(0, 1080));
-        assert!(!surface_reconfigure_requires_redraw(1920, 0));
-    }
-
-    /// While the platform hides a window every surface acquire is skipped, so
-    /// the frame it owed is still pending when it comes back. An idle app
-    /// produces no input and no animation, so unless the window is asked for
-    /// that frame the moment it reappears, it stays blank: this is what a
-    /// player launched behind another app's window used to show.
-    #[test]
-    fn a_window_back_on_screen_is_owed_the_frame_it_could_not_present() {
-        assert!(occlusion_leaves_a_frame_owed(false));
-        assert!(!occlusion_leaves_a_frame_owed(true));
-        assert!(
-            surface_present_required(occlusion_leaves_a_frame_owed(false), false, false),
-            "a reappearing window presents even when nothing new was drawn"
-        );
-    }
-
-    #[test]
-    fn initial_present_self_heals_when_redraw_request_is_dropped() {
-        assert!(initial_present_redraw_needed(true, false));
-        assert!(!initial_present_redraw_needed(true, true));
-        assert!(!initial_present_redraw_needed(false, false));
-        assert!(!initial_present_redraw_needed(false, true));
-    }
-
-    #[test]
-    fn hidden_primary_declaration_host_updates_without_redraw_event() {
-        assert!(primary_declaration_host_needs_direct_update(
-            false, false, true, false
-        ));
-        assert!(primary_declaration_host_needs_direct_update(
-            true, true, true, false
-        ));
-        assert!(!primary_declaration_host_needs_direct_update(
-            true, false, true, false
-        ));
-        assert!(!primary_declaration_host_needs_direct_update(
-            false, false, true, true
-        ));
-        assert!(!primary_declaration_host_needs_direct_update(
-            false, false, false, false
-        ));
-    }
-
-    #[cfg(feature = "robot")]
-    #[test]
-    fn visible_robot_wait_requires_present_after_visual_mutation() {
-        assert_eq!(robot_visible_present_target(true, false, true, 7), Some(8));
-        assert_eq!(robot_visible_present_target(true, false, false, 7), None);
-        assert_eq!(robot_visible_present_target(true, true, true, 7), None);
-        assert_eq!(robot_visible_present_target(false, false, true, 7), None);
-    }
-
-    #[cfg(feature = "robot")]
-    #[test]
-    fn visible_robot_frame_pump_waits_for_presented_frames() {
-        assert_eq!(
-            robot_visible_pump_present_target(true, false, 3, 11),
-            Some(14)
-        );
-        assert_eq!(robot_visible_pump_present_target(true, false, 0, 11), None);
-        assert_eq!(robot_visible_pump_present_target(true, true, 3, 11), None);
-        assert_eq!(robot_visible_pump_present_target(false, false, 3, 11), None);
-    }
-
-    #[test]
-    fn pointer_button_input_requests_uncapped_frame_when_handled() {
-        let request = pointer_button_frame_request(true);
-
-        assert!(request.request_redraw);
-        assert!(request.reset_frame_cap);
-        assert_eq!(
-            pointer_button_frame_request(false),
-            super::PointerButtonFrameRequest {
-                request_redraw: false,
-                reset_frame_cap: false,
-            }
-        );
-    }
-
-    #[test]
-    fn scroll_input_requests_uncapped_frame_when_handled() {
-        let request = scroll_frame_request(true);
-
-        assert!(request.request_redraw);
-        assert!(request.reset_frame_cap);
-        assert_eq!(
-            scroll_frame_request(false),
-            super::PointerButtonFrameRequest {
-                request_redraw: false,
-                reset_frame_cap: false,
-            }
-        );
-    }
-
-    #[test]
-    fn pending_native_window_positions_acknowledge_stale_programmatic_moves() {
-        let mut pending = PendingNativeWindowPositions::default();
-        pending.push((100.0, 200.0));
-        pending.push((140.0, 230.0));
-
-        assert!(pending.acknowledge((100.0, 200.0)));
-        assert!(pending.acknowledge((140.0, 230.0)));
-        assert!(!pending.acknowledge((190.0, 260.0)));
-    }
-
-    #[test]
-    fn pending_native_window_positions_match_fractional_window_manager_rounding() {
-        let mut pending = PendingNativeWindowPositions::default();
-        pending.push((100.4, 200.4));
-
-        assert!(pending.acknowledge((101.0, 201.0)));
-        assert!(!pending.acknowledge((101.0, 201.0)));
-    }
-
-    #[test]
-    fn pending_native_window_positions_can_be_cleared_after_external_move() {
-        let mut pending = PendingNativeWindowPositions::default();
-        pending.push((100.0, 200.0));
-        pending.push((140.0, 240.0));
-
-        pending.clear();
-
-        assert!(!pending.acknowledge((100.0, 200.0)));
-        assert!(!pending.acknowledge((140.0, 240.0)));
-    }
-
-    #[test]
-    fn pending_native_window_positions_report_unacknowledged_programmatic_moves() {
-        let mut pending = PendingNativeWindowPositions::default();
-
-        assert!(!pending.has_pending());
-        pending.push((100.0, 200.0));
-        assert!(pending.has_pending());
-        assert!(pending.acknowledge((100.0, 200.0)));
-        assert!(!pending.has_pending());
-    }
-
-    #[test]
-    fn pending_native_window_positions_acknowledge_known_graph_position() {
-        let mut pending = PendingNativeWindowPositions::default();
-        pending.push((100.0, 200.0));
-        pending.push((120.0, 220.0));
-
-        assert_eq!(
-            pending.acknowledge_or_matches_known((140.0, 240.0), Some((140.0, 240.0))),
-            NativeWindowPositionObservation::Current
-        );
-        assert!(!pending.has_pending());
-    }
-
-    #[test]
-    fn pending_native_window_positions_reject_unknown_external_move() {
-        let mut pending = PendingNativeWindowPositions::default();
-        pending.push((100.0, 200.0));
-
-        assert_eq!(
-            pending.acknowledge_or_matches_known((140.0, 240.0), Some((120.0, 220.0))),
-            NativeWindowPositionObservation::External
-        );
-        assert!(pending.has_pending());
-    }
-
-    #[test]
-    fn pending_native_window_positions_distinguish_superseded_programmatic_moves() {
-        let mut pending = PendingNativeWindowPositions::default();
-        pending.push((100.0, 200.0));
-        pending.push((120.0, 220.0));
-        pending.push((140.0, 240.0));
-
-        assert_eq!(
-            pending.acknowledge_or_matches_known((100.0, 200.0), Some((140.0, 240.0))),
-            NativeWindowPositionObservation::Superseded
-        );
-        assert!(pending.has_pending());
-    }
-
-    #[test]
-    fn native_window_graph_position_keeps_cache_first_for_programmatic_moves() {
-        let position = native_window_graph_position(
-            None,
-            Some((100.0, 200.0)),
-            Some((140.0, 240.0)),
-            Some((160.0, 260.0)),
-            NativeWindowGraphPositionSource::CachedThenCurrent,
-        );
-
-        assert_eq!(position, Some(cranpose_ui::Point::new(100.0, 200.0)));
-    }
-
-    #[test]
-    fn native_window_graph_position_uses_current_position_for_external_moves() {
-        let position = native_window_graph_position(
-            None,
-            Some((100.0, 200.0)),
-            Some((140.0, 240.0)),
-            Some((160.0, 260.0)),
-            NativeWindowGraphPositionSource::CurrentThenCached,
-        );
-
-        assert_eq!(position, Some(cranpose_ui::Point::new(140.0, 240.0)));
-    }
-
-    #[test]
-    fn native_window_graph_position_override_wins_over_position_source() {
-        let position = native_window_graph_position(
-            Some(cranpose_ui::Point::new(80.0, 90.0)),
-            Some((100.0, 200.0)),
-            Some((140.0, 240.0)),
-            Some((160.0, 260.0)),
-            NativeWindowGraphPositionSource::CurrentThenCached,
-        );
-
-        assert_eq!(position, Some(cranpose_ui::Point::new(80.0, 90.0)));
-    }
-
-    #[test]
-    fn native_window_polling_drag_target_is_anchored_to_drag_start() {
-        let session = NativeWindowPollingDragSession::new(
-            PhysicalPosition::new(100.0, 50.0),
-            PhysicalPosition::new(300, 200),
-            Instant::now(),
-        );
-
-        assert_eq!(
-            session.target_for_pointer(PhysicalPosition::new(112.0, 57.0)),
-            PhysicalPosition::new(312, 207)
-        );
-        assert_eq!(
-            session.target_for_pointer(PhysicalPosition::new(120.0, 50.0)),
-            PhysicalPosition::new(320, 200)
-        );
-    }
-
-    #[test]
-    fn native_window_polling_drag_target_does_not_accumulate_window_manager_lag() {
-        let session = NativeWindowPollingDragSession::new(
-            PhysicalPosition::new(100.0, 50.0),
-            PhysicalPosition::new(300, 200),
-            Instant::now(),
-        );
-
-        let first_target = session.target_for_pointer(PhysicalPosition::new(112.0, 50.0));
-        let second_target = session.target_for_pointer(PhysicalPosition::new(120.0, 50.0));
-
-        assert_eq!(first_target, PhysicalPosition::new(312, 200));
-        assert_eq!(
-            second_target,
-            PhysicalPosition::new(320, 200),
-            "the target must be based on the drag start, not on the last reported window position"
-        );
-    }
-
-    #[test]
-    fn recovered_native_window_drag_prefers_delivered_event_pointer() {
-        let event_pointer = PhysicalPosition::new(100.0, 50.0);
-        let global_pointer = NativeWindowPointerState {
-            position: PhysicalPosition::new(112.0, 57.0),
-            primary_down: true,
-        };
-
-        assert_eq!(
-            recovered_native_window_drag_start_pointer(Some(event_pointer), Some(global_pointer)),
-            Some(event_pointer)
-        );
-        assert_eq!(
-            recovered_native_window_drag_start_pointer(None, Some(global_pointer)),
-            Some(global_pointer.position)
-        );
-    }
-
-    #[test]
-    fn primary_pointer_move_recovers_missed_x11_press_once() {
-        let global_pointer = Some(NativeWindowPointerState {
-            position: PhysicalPosition::new(112.0, 57.0),
-            primary_down: true,
-        });
-
-        assert!(primary_pointer_move_should_recover_press(
-            false,
-            false,
-            global_pointer,
-            true
-        ));
-        assert!(!primary_pointer_move_should_recover_press(
-            true,
-            false,
-            global_pointer,
-            true
-        ));
-        assert!(!primary_pointer_move_should_recover_press(
-            false,
-            true,
-            global_pointer,
-            true
-        ));
-        assert!(!primary_pointer_move_should_recover_press(
-            false,
-            false,
-            global_pointer,
-            false
-        ));
-        assert!(!primary_pointer_move_should_recover_press(
-            false,
-            false,
-            Some(NativeWindowPointerState {
-                position: PhysicalPosition::new(112.0, 57.0),
-                primary_down: false,
-            }),
-            true
-        ));
-    }
-
-    #[test]
-    fn primary_pointer_poll_synchronizes_global_position_before_releasing() {
-        let position = PhysicalPosition::new(112.0, 57.0);
-
-        assert_eq!(
-            primary_pointer_gesture_poll_action(
-                true,
-                false,
-                Some(NativeWindowPointerState {
-                    position,
-                    primary_down: false,
-                }),
-            ),
-            PrimaryPointerGesturePollAction::ReleaseAt(position)
-        );
-    }
-
-    #[test]
-    fn primary_pointer_poll_preserves_pressed_recovery_state() {
-        let pointer = NativeWindowPointerState {
-            position: PhysicalPosition::new(112.0, 57.0),
-            primary_down: true,
-        };
-
-        assert_eq!(
-            primary_pointer_gesture_poll_action(true, false, Some(pointer)),
-            PrimaryPointerGesturePollAction::Pressed(pointer)
-        );
-    }
-
-    #[test]
-    fn primary_pointer_poll_ignores_inactive_synthetic_and_unavailable_input() {
-        let pointer = Some(NativeWindowPointerState {
-            position: PhysicalPosition::new(112.0, 57.0),
-            primary_down: false,
-        });
-
-        assert_eq!(
-            primary_pointer_gesture_poll_action(false, false, pointer),
-            PrimaryPointerGesturePollAction::Inactive
-        );
-        assert_eq!(
-            primary_pointer_gesture_poll_action(true, true, pointer),
-            PrimaryPointerGesturePollAction::Inactive
-        );
-        assert_eq!(
-            primary_pointer_gesture_poll_action(true, false, None),
-            PrimaryPointerGesturePollAction::Inactive
-        );
-    }
-
-    #[test]
-    fn native_window_drag_sessions_finish_on_global_release() {
-        let now = Instant::now();
-
-        assert!(
-            NativeWindowDragSession::Polling(NativeWindowPollingDragSession::new(
-                PhysicalPosition::new(100.0, 50.0),
-                PhysicalPosition::new(300, 200),
-                now,
-            ))
-            .finishes_on_global_pointer_release()
-        );
-        assert!(NativeWindowDragSession::platform(now).finishes_on_global_pointer_release());
-    }
-
-    #[test]
-    fn native_window_polling_drag_does_not_use_moved_events_as_targets() {
-        let now = Instant::now();
-
-        assert!(
-            !NativeWindowDragSession::Polling(NativeWindowPollingDragSession::new(
-                PhysicalPosition::new(100.0, 50.0),
-                PhysicalPosition::new(300, 200),
-                now,
-            ))
-            .uses_moved_events_as_drag_target()
-        );
-        assert!(NativeWindowDragSession::platform(now).uses_moved_events_as_drag_target());
-    }
-
-    #[test]
-    fn inferred_native_drag_requires_pointer_over_surface() {
-        let outer = PhysicalPosition::new(300, 200);
-        let surface = PhysicalPosition::new(8, 28);
-        let size = PhysicalSize::new(120, 60);
-
-        assert!(physical_surface_rect_contains_pointer(
-            outer,
-            surface,
-            size,
-            PhysicalPosition::new(320.0, 240.0)
-        ));
-        assert!(!physical_surface_rect_contains_pointer(
-            outer,
-            surface,
-            size,
-            PhysicalPosition::new(299.0, 240.0)
-        ));
-    }
-
-    #[cfg(feature = "robot")]
-    #[test]
-    fn robot_controller_tracks_synthetic_primary_button_lifetime() {
-        let (mut controller, _robot) = RobotController::new(|| {});
-
-        assert!(!controller.synthetic_primary_down());
-        controller.begin_synthetic_primary_gesture();
-        assert!(controller.synthetic_primary_down());
-        controller.end_synthetic_primary_gesture();
-        assert!(!controller.synthetic_primary_down());
-    }
-
-    #[cfg(feature = "robot")]
-    #[test]
-    fn robot_controller_stages_commands_during_continuous_frame_wakes() {
-        let (mut controller, robot) = RobotController::new(|| {});
-        robot
-            .command_sender()
-            .send(crate::robot::RobotCommand::PumpFrames { count: 2 })
-            .expect("robot command channel should remain open");
-
-        assert!(controller.stage_pending_command());
-        assert!(matches!(
-            controller.next_command(),
-            Some(crate::robot::RobotCommand::PumpFrames { count: 2 })
-        ));
-        assert!(!controller.stage_pending_command());
-    }
-
-    #[cfg(feature = "robot")]
-    #[test]
-    fn robot_screenshot_prefers_logical_viewport_size() {
-        let resolved = resolve_robot_screenshot_params((1600, 1200), Some((800.0, 600.0)));
-        assert_eq!(resolved, (800, 600, 1.0));
-    }
-
-    #[cfg(feature = "robot")]
-    #[test]
-    fn robot_screenshot_uses_ceil_on_fractional_logical_size() {
-        let resolved = resolve_robot_screenshot_params((0, 0), Some((801.2, 601.3)));
-        assert_eq!(resolved, (802, 602, 1.0));
-    }
-
-    #[test]
-    fn headless_primary_viewport_uses_requested_launcher_size() {
-        let settings = AppSettings {
-            initial_width: 1600,
-            initial_height: 900,
-            headless: true,
-            ..AppSettings::default()
-        };
-
-        let viewport = primary_viewport_for_surface_size(&settings, 1601, 901, 1.0);
-
-        assert_eq!(viewport, (1600.0, 900.0));
-    }
-
-    #[test]
-    fn visible_primary_viewport_uses_actual_surface_size() {
-        let settings = AppSettings {
-            initial_width: 1600,
-            initial_height: 900,
-            headless: false,
-            ..AppSettings::default()
-        };
-
-        let viewport = primary_viewport_for_surface_size(&settings, 1601, 901, 2.0);
-
-        assert_eq!(viewport, (800.5, 450.5));
-    }
-
-    #[cfg(feature = "robot")]
-    #[test]
-    fn robot_screenshot_falls_back_to_physical_buffer_when_layout_is_missing() {
-        let resolved = resolve_robot_screenshot_params((1600, 1200), None);
-        assert_eq!(resolved, (1600, 1200, 1.0));
-    }
-
-    #[cfg(feature = "robot")]
-    #[test]
-    fn robot_screenshot_clamps_to_non_zero_target() {
-        let resolved = resolve_robot_screenshot_params((0, 0), Some((10.0, 20.0)));
-        assert_eq!(resolved, (10, 20, 1.0));
-    }
-
-    #[cfg(feature = "robot")]
-    #[test]
-    fn robot_screenshot_honors_capture_scale() {
-        let resolved = resolve_robot_screenshot_params_with_scale((0, 0), Some((100.0, 50.0)), 2.0);
-        assert_eq!(resolved, (200, 100, 2.0));
-
-        assert_eq!(parse_robot_capture_scale(Some("2")), 2.0);
-        assert_eq!(
-            parse_robot_capture_scale(Some("999")),
-            1.0,
-            "out-of-range scale is ignored"
-        );
-        assert_eq!(parse_robot_capture_scale(Some("junk")), 1.0);
-        assert_eq!(parse_robot_capture_scale(None), 1.0);
-    }
-}
+#[path = "tests/desktop_tests.rs"]
+mod tests;

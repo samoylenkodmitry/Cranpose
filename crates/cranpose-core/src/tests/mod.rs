@@ -326,6 +326,18 @@ pub(crate) fn test_composition() -> Composition<MemoryApplier> {
     Composition::new(test_applier())
 }
 
+pub(crate) fn test_composition_retaining_at_most(subtrees: usize) -> Composition<MemoryApplier> {
+    let composition = test_composition();
+    composition.set_retention_policy(RetentionPolicy {
+        budget: RetentionBudget {
+            max_retained_subtrees: Some(subtrees),
+            ..Default::default()
+        },
+        eviction: RetentionEvictionPolicy::LeastRecentlyDetached,
+    });
+    composition
+}
+
 pub(crate) fn assert_composition_valid(composition: &Composition<MemoryApplier>) {
     composition
         .debug_validate_slots()
@@ -362,7 +374,7 @@ pub(crate) fn begin_test_group(
     with_test_slot_lifecycle(|lifecycle| {
         let mut session = slots.write_session(lifecycle, state);
         let group_key = session.preview_group_key(crate::slot::GroupKeySeed::unkeyed(key));
-        session.begin_group(group_key, None).group
+        session.begin_group(group_key, None, None).group
     })
 }
 
@@ -753,6 +765,8 @@ mod branch_group_tests;
 mod composer_applier_tests;
 mod composition_and_recompose_scope_tests;
 mod internal_surface_tests;
+mod movable_tests;
 mod recompose_and_diff_tests;
 mod snapshot_state_tests;
 mod state_and_effect_tests;
+mod state_holder_tests;

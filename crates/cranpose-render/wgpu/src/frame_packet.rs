@@ -55,6 +55,7 @@ pub(crate) struct FramePacket {
     pub(crate) root: LayerScene,
     pub(crate) overlay: Option<LayerScene>,
     pub(crate) text_cache_len: usize,
+    pub(crate) clear: wgpu::Color,
 }
 
 /// Present-stage timestamps for one consumed packet, in nanoseconds on the

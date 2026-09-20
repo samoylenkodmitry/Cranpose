@@ -144,7 +144,9 @@ fn LifecycleListItem(index: usize, stats: MutableState<LifecycleStats>) {
             current.total_effects += 1;
         });
         DisposableEffectResult::new(move || {
-            stats.update(|current| current.total_disposes += 1);
+            if stats.is_alive() {
+                stats.update(|current| current.total_disposes += 1);
+            }
         })
     });
 

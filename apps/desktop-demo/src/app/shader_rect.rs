@@ -36,21 +36,15 @@ fn sd_round_box(p: vec2<f32>, b: vec2<f32>, r: f32) -> f32 {
 }
 "#;
 
-fn fire_halo_wgsl() -> Arc<str> {
-    static SOURCE: OnceLock<Arc<str>> = OnceLock::new();
-    SOURCE
-        .get_or_init(|| {
-            Arc::<str>::from(format!(
-        r#"{preamble}{helpers}
-
+pub(crate) const FIRE_FIELD_WGSL: &str = r#"
 const PI: f32 = 3.14159265358979;
 const TWO_PI: f32 = 6.28318530717959;
 
-fn rand_f(n: vec2<f32>) -> f32 {{
+fn rand_f(n: vec2<f32>) -> f32 {
     return fract(sin(dot(n, vec2<f32>(12.9898, 12.1414))) * 83758.5453);
-}}
+}
 
-fn noise_f(n: vec2<f32>) -> f32 {{
+fn noise_f(n: vec2<f32>) -> f32 {
     let b = floor(n);
     let f = fract(n);
     return mix(
@@ -58,27 +52,27 @@ fn noise_f(n: vec2<f32>) -> f32 {{
         mix(rand_f(b + vec2<f32>(0.0, 1.0)), rand_f(b + vec2<f32>(1.0, 1.0)), f.x),
         f.y
     );
-}}
+}
 
-fn fire_f(n: vec2<f32>) -> f32 {{
+fn fire_f(n: vec2<f32>) -> f32 {
     return noise_f(n) + noise_f(n * 2.1) * 0.6 + noise_f(n * 5.4) * 0.42;
-}}
+}
 
-fn ramp(t_in: f32) -> vec3<f32> {{
+fn ramp(t_in: f32) -> vec3<f32> {
     let t = max(t_in, 0.001);
-    if (t <= 0.5) {{
+    if (t <= 0.5) {
         return vec3<f32>(1.0 - t * 1.4, 0.2, 1.05) / t;
-    }}
+    }
     return vec3<f32>(0.3 * (1.0 - t) * 2.0, 0.2, 1.05) / t;
-}}
+}
 
-fn shade(uv_in: vec2<f32>, t: f32) -> f32 {{
+fn shade(uv_in: vec2<f32>, t: f32) -> f32 {
     var uv = uv_in;
-    if (uv.y < 0.5) {{
+    if (uv.y < 0.5) {
         uv.x = uv.x + 23.0 + t * 0.035;
-    }} else {{
+    } else {
         uv.x = uv.x - 11.0 + t * 0.03;
-    }}
+    }
     uv.y = abs(uv.y - 0.5);
     uv.x = uv.x * 35.0;
 
@@ -88,14 +82,24 @@ fn shade(uv_in: vec2<f32>, t: f32) -> f32 {{
         fire_f(uv + q - t)
     );
     return pow((rv.y + rv.y) * max(0.0, uv.y) + 0.1, 4.0);
-}}
+}
 
-fn color_from_grad(grad: f32) -> vec3<f32> {{
+fn color_from_grad(grad: f32) -> vec3<f32> {
     let g = sqrt(max(grad, 0.0));
     let c = ramp(g);
     return c / (vec3<f32>(1.15) + max(vec3<f32>(0.0), c));
-}}
+}
 
+"#;
+
+fn fire_halo_wgsl() -> Arc<str> {
+    static SOURCE: OnceLock<Arc<str>> = OnceLock::new();
+    SOURCE
+        .get_or_init(|| {
+            Arc::<str>::from(format!(
+        r#"{preamble}{helpers}
+
+{fire_field}
 fn perimeter_s(p: vec2<f32>, half_size: vec2<f32>, r: f32) -> f32 {{
     let inner = max(half_size - vec2<f32>(r), vec2<f32>(0.0001));
     let lh = 2.0 * inner.x;
@@ -160,6 +164,9 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {{
     let core_scale = get_float(10u);
     let smoke_blue_tint = clamp(get_float(11u), 0.0, 1.0);
     let thin_mode = clamp(get_float(12u), 0.0, 1.0);
+    let edge_fade_dp = max(get_float(16u), 0.0);
+    let halo_falloff_dp = max(get_float(17u), 0.0);
+    let glow_spread = max(get_float(18u), 2.0);
 
     let size_px = resolution * dp_scale;
     let res = max(size_px, vec2<f32>(1.0));
@@ -225,8 +232,24 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {{
     col = col * tint;
 
     var alpha = clamp(max(max(col.r, col.g), col.b), 0.0, 1.0);
-    alpha = max(alpha * 0.95, core_mask * 0.35);
-    let halo = vec4<f32>(col, alpha);
+    let glow_mask = 1.0 - smoothstep(thickness, thickness * glow_spread, abs(d));
+    alpha = max(alpha * 0.95, glow_mask * 0.35);
+    let to_edge = min(
+        min(local_px.x, size_px.x - local_px.x),
+        min(local_px.y, size_px.y - local_px.y)
+    );
+    let fade_px = edge_fade_dp * s;
+    var edge_fade = 1.0;
+    if (fade_px > 0.0) {{
+        edge_fade = smoothstep(0.0, fade_px, to_edge);
+    }}
+    let falloff_px = halo_falloff_dp * s;
+    if (falloff_px > 0.0) {{
+        let out_d = max(d, 0.0);
+        let reach = 1.0 - smoothstep(0.0, falloff_px, out_d);
+        edge_fade = edge_fade * reach * reach;
+    }}
+    let halo = vec4<f32>(col * edge_fade, alpha * edge_fade);
 
     let base = textureSample(input_texture, input_sampler, uv_screen);
     let out_a = base.a + halo.a * (1.0 - base.a);
@@ -235,7 +258,8 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {{
 }}
 "#,
         preamble = RUNTIME_SHADER_PRELUDE_WGSL,
-        helpers = WGSL_HELPERS
+        helpers = WGSL_HELPERS,
+        fire_field = FIRE_FIELD_WGSL
             ))
         })
         .clone()
@@ -307,24 +331,27 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {{
         .clone()
 }
 
-struct FireShaderParams {
-    resolution_w: f32,
-    resolution_h: f32,
-    time: f32,
-    band_width: f32,
-    corner_radius: f32,
-    contour_w: f32,
-    contour_h: f32,
-    smoke_scale: f32,
-    intensity: f32,
-    smoke_opacity: f32,
-    core_scale: f32,
-    smoke_blue_tint: f32,
-    thin_mode: f32,
-    color_tint: [f32; 3],
+pub(crate) struct FireShaderParams {
+    pub(crate) resolution_w: f32,
+    pub(crate) resolution_h: f32,
+    pub(crate) time: f32,
+    pub(crate) band_width: f32,
+    pub(crate) corner_radius: f32,
+    pub(crate) contour_w: f32,
+    pub(crate) contour_h: f32,
+    pub(crate) smoke_scale: f32,
+    pub(crate) intensity: f32,
+    pub(crate) smoke_opacity: f32,
+    pub(crate) core_scale: f32,
+    pub(crate) smoke_blue_tint: f32,
+    pub(crate) thin_mode: f32,
+    pub(crate) color_tint: [f32; 3],
+    pub(crate) edge_fade: f32,
+    pub(crate) halo_falloff: f32,
+    pub(crate) glow_spread: f32,
 }
 
-fn fire_shader_effect(p: &FireShaderParams) -> RenderEffect {
+pub(crate) fn fire_shader_effect(p: &FireShaderParams) -> RenderEffect {
     let mut shader = RuntimeShader::from_shared_source(fire_halo_wgsl());
     shader.set_float2(0, p.resolution_w, p.resolution_h);
     shader.set_float(2, p.time);
@@ -340,6 +367,9 @@ fn fire_shader_effect(p: &FireShaderParams) -> RenderEffect {
     shader.set_float(13, p.color_tint[0]);
     shader.set_float(14, p.color_tint[1]);
     shader.set_float(15, p.color_tint[2]);
+    shader.set_float(16, p.edge_fade);
+    shader.set_float(17, p.halo_falloff);
+    shader.set_float(18, p.glow_spread);
     RenderEffect::runtime_shader(shader)
 }
 
@@ -369,26 +399,26 @@ fn halo_border_effect(p: &HaloBorderParams) -> RenderEffect {
 }
 
 #[derive(Clone, Copy, PartialEq)]
-struct FireStyle {
-    label: &'static str,
-    band_width: f32,
-    corner_radius: f32,
-    smoke_blue_tint: f32,
-    thin_mode: f32,
-    base_intensity: f32,
-    base_smoke_scale: f32,
-    base_smoke_opacity: f32,
-    base_core_scale: f32,
-    bg_color: Color,
-    color_tint: [f32; 3],
-    hover_intensity_mult: f32,
-    hover_smoke_mult: f32,
-    press_intensity_mult: f32,
-    press_smoke_mult: f32,
-    press_core_mult: f32,
+pub(crate) struct FireStyle {
+    pub(crate) label: &'static str,
+    pub(crate) band_width: f32,
+    pub(crate) corner_radius: f32,
+    pub(crate) smoke_blue_tint: f32,
+    pub(crate) thin_mode: f32,
+    pub(crate) base_intensity: f32,
+    pub(crate) base_smoke_scale: f32,
+    pub(crate) base_smoke_opacity: f32,
+    pub(crate) base_core_scale: f32,
+    pub(crate) bg_color: Color,
+    pub(crate) color_tint: [f32; 3],
+    pub(crate) hover_intensity_mult: f32,
+    pub(crate) hover_smoke_mult: f32,
+    pub(crate) press_intensity_mult: f32,
+    pub(crate) press_smoke_mult: f32,
+    pub(crate) press_core_mult: f32,
 }
 
-const FIRE_CLASSIC: FireStyle = FireStyle {
+pub(crate) const FIRE_CLASSIC: FireStyle = FireStyle {
     label: "Classic Fire",
     band_width: 14.0,
     corner_radius: 24.0,
@@ -407,7 +437,7 @@ const FIRE_CLASSIC: FireStyle = FireStyle {
     press_core_mult: 1.5,
 };
 
-const FIRE_BLUE_ICE: FireStyle = FireStyle {
+pub(crate) const FIRE_BLUE_ICE: FireStyle = FireStyle {
     label: "Blue Ice",
     band_width: 18.0,
     corner_radius: 32.0,
@@ -426,7 +456,7 @@ const FIRE_BLUE_ICE: FireStyle = FireStyle {
     press_core_mult: 1.3,
 };
 
-const FIRE_EMERALD: FireStyle = FireStyle {
+pub(crate) const FIRE_EMERALD: FireStyle = FireStyle {
     label: "Emerald",
     band_width: 12.0,
     corner_radius: 16.0,
@@ -445,7 +475,7 @@ const FIRE_EMERALD: FireStyle = FireStyle {
     press_core_mult: 1.4,
 };
 
-const FIRE_NEON_THIN: FireStyle = FireStyle {
+pub(crate) const FIRE_NEON_THIN: FireStyle = FireStyle {
     label: "Neon Wire",
     band_width: 20.0,
     corner_radius: 28.0,
@@ -610,6 +640,9 @@ fn FireShaderBox(style: FireStyle) {
                     smoke_blue_tint: style.smoke_blue_tint,
                     thin_mode: style.thin_mode,
                     color_tint: style.color_tint,
+                    edge_fade: 0.0,
+                    halo_falloff: 0.0,
+                    glow_spread: 2.0,
                 });
                 GraphicsLayer {
                     render_effect: Some(effect),
