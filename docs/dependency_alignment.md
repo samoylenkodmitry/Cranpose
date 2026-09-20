@@ -31,9 +31,15 @@ version, dropping a dependency, or patching a crate to an upstream rev the way
 The recorded debt is cross-platform dependency skew that every pinning crate
 carries at its latest published release, so no `cargo upgrade` collapses it:
 
+- `hashbrown`: AccessKit consumer 0.39 and the macOS/Windows adapters require
+  `^0.17`, while WGPU 29 and indexmap 2.13 require `^0.16`. This AccessKit family
+  supplies native text editing and the pinned upstream Linux disabled-state fix.
+  Keep the renderer's existing alignment; clear this debt when the upstream
+  requirements converge. [Accessibility validation](accessibility_validation.md)
+  records the native checks that require the upgrade.
 - `objc2`, `objc2-app-kit`, `objc2-foundation`: this workspace is on
   `winit 0.31.0-beta.2`, whose `winit-appkit` is already on `objc2 0.6`, while
-  `accesskit_macos 0.26.3` deliberately holds `objc2 0.5`. AccessKit is
+  `accesskit_macos 0.27` holds `objc2 0.5`. AccessKit is
   holding the bump (AccessKit/accesskit#616) precisely so that projects with
   both winit and AccessKit do not carry two objc2 stacks, and will merge it
   when winit 0.31 ships stable. The split is the cost of riding the winit

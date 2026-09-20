@@ -102,6 +102,9 @@ clone_on_copy = "deny"
 redundant_locals = "deny"
 
 [patch.crates-io]
+accesskit = { git = "https://github.com/AccessKit/accesskit", rev = "6ee0558b6315b3ef1594db24ce45a030ecac7cb5" }
+accesskit_consumer = { git = "https://github.com/AccessKit/accesskit", rev = "6ee0558b6315b3ef1594db24ce45a030ecac7cb5" }
+accesskit_atspi_common = { git = "https://github.com/AccessKit/accesskit", rev = "6ee0558b6315b3ef1594db24ce45a030ecac7cb5" }
 # Upstream master moved on to hashbrown 0.17. Pin the 0.16 alignment commit so
 # WGPU 29 and gpu-descriptor share one hashbrown/foldhash version family.
 gpu-descriptor = { git = "https://github.com/zakarumych/gpu-descriptor", rev = "79804e422186805f1ff5ab3d8310c07c145a6731" }

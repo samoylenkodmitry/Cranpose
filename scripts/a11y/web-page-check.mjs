@@ -1,15 +1,18 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, openSync, readFileSync, writeFileSync, closeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const url = process.argv[2];
 assert.ok(url, "pass the URL of a running web demo");
 const chrome = process.env.CHROME ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-const port = Number(process.env.A11Y_DEBUG_PORT ?? 9333);
+let port = Number(process.env.A11Y_DEBUG_PORT ?? 0);
+const output = process.argv[3];
 const profile = mkdtempSync(join(tmpdir(), "a11y-chrome-"));
+const browserLog = output ? openSync(join(output, 'chrome.log'), 'w') : null;
+let browserError;
 
 const browser = spawn(
   chrome,
@@ -24,14 +27,18 @@ const browser = spawn(
     "--window-size=1024,700",
     "about:blank",
   ],
-  { stdio: "ignore" },
+  { stdio: ['ignore', 'ignore', browserLog ?? 'inherit'] },
 );
+browser.on('error', error => { browserError = error; });
 
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function pageTarget() {
   for (let attempt = 0; attempt < 50; attempt += 1) {
+    if (browserError) throw browserError;
+    if (browser.exitCode !== null || browser.signalCode !== null) throw new Error('Chrome exited before connecting');
     try {
+      if (port === 0) port = Number(readFileSync(join(profile, 'DevToolsActivePort'), 'utf8').split('\n')[0]);
       const list = await fetch(`http://127.0.0.1:${port}/json/list`).then((r) => r.json());
       const page = list.find((t) => t.type === "page");
       if (page) return page;
@@ -135,6 +142,26 @@ try {
   report.push("Shift+Tab returns to the previous control");
   await check("tab indices are valid integers", `[...document.querySelectorAll('[data-cranpose-node][tabindex]')].every(node => /^-?\\d+$/.test(node.getAttribute('tabindex')))`);
   await check("no invalid text role", `!document.querySelector('[data-cranpose-node][role="text"]')`);
+  const fixtureUrl = new URL(url);
+  fixtureUrl.searchParams.set('tab', 'accessibility_robot');
+  await send('Page.navigate', { url: fixtureUrl.href });
+  await until(`!!document.querySelector('[data-cranpose-node][aria-label="Remove"]')`);
+  const nativeTree = await send('Accessibility.getFullAXTree');
+  const accessible = nativeTree.nodes.filter(node => !node.ignored);
+  assert.ok(accessible.some(node => node.name?.value === 'Account, Account'), 'merged native name');
+  assert.ok(accessible.some(node => node.name?.value === 'Remove' && node.role?.value === 'button'), 'independent nested native control');
+  assert.ok(!JSON.stringify(accessible).includes('robot-secret-value'), 'password values stay out of the browser accessibility tree');
+  assert.ok(!JSON.stringify(accessible).includes('Decorative secret'), 'hidden content stays out of the browser accessibility tree');
+  const loading = accessible.find(node => node.name?.value === 'Loading' && node.role?.value === 'progressbar');
+  assert.equal(loading?.value?.value, 40, 'native passive progress range');
+  report.push('the browser accessibility tree preserves names, roles, and private content boundaries');
+  await evaluate(`document.querySelector('[aria-label="Disabled action"]').click()`);
+  await pause(200);
+  await check('disabled native controls reject activation', `document.querySelector('[aria-label="Disabled action"]').getAttribute('aria-disabled') === 'true' && document.querySelector('[data-cranpose-accessibility]').textContent.includes('Action count: 0')`);
+  await evaluate(`document.querySelector('[aria-label="Volume"]').focus()`);
+  await key('ArrowRight', 'ArrowRight', 39);
+  await until(`document.querySelector('[data-cranpose-accessibility]').textContent.includes('Volume value: 40')`);
+  report.push('keyboard range adjustment reaches application state');
   const listUrl = new URL(url);
   listUrl.searchParams.set("tab", "lazylist");
   await send("Page.navigate", { url: listUrl.href });
@@ -160,12 +187,26 @@ try {
   await check("keyboard input reaches the application once", `document.querySelector('[data-cranpose-accessibility]').textContent.includes('Voicext café 🌍')`);
   const failures = consoleLines.filter(line => /panicked|exception/.test(line));
   assert.deepEqual(failures, [], "the application must not panic");
-  console.log(JSON.stringify({ passed: report }, null, 2));
+  const result = { platform: 'web', status: 'passed', passed: report };
+  if (output) writeFileSync(join(output, 'report.json'), JSON.stringify(result, null, 2));
+  console.log(JSON.stringify(result, null, 2));
+} catch (error) {
+  if (output) writeFileSync(join(output, 'report.json'), JSON.stringify({ platform: 'web', status: 'failed', passed: report, error: String(error) }, null, 2));
+  throw error;
 } finally {
+  if (output && ws?.readyState === WebSocket.OPEN) {
+    try {
+      const tree = await send('Accessibility.getFullAXTree');
+      writeFileSync(join(output, 'native-tree.json'), JSON.stringify(tree, null, 2));
+      const screenshot = await send('Page.captureScreenshot');
+      writeFileSync(join(output, 'screen.png'), Buffer.from(screenshot.data, 'base64'));
+    } catch (error) { console.error('Artifact capture:', error); }
+  }
   ws?.close();
-  if (browser.exitCode === null && browser.signalCode === null) {
+  if (!browserError && browser.exitCode === null && browser.signalCode === null) {
     const exited = new Promise(resolve => browser.once("exit", resolve));
     browser.kill();
     await exited;
   }
+  if (browserLog !== null) closeSync(browserLog);
 }

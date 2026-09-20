@@ -416,6 +416,26 @@ web-isolated:
 test-web-accessibility url:
     node scripts/a11y/web-page-check.mjs {{quote(url)}}
 
+robot-accessibility-web site output:
+    python3 scripts/a11y/web_robot.py --site {{quote(site)}} --output {{quote(output)}}
+
+build-accessibility-desktop: _disk-guard
+    cargo build --profile ci -p desktop-app --bin desktop-app
+
+clippy-windows: _disk-guard
+    cargo xwin clippy --locked --target x86_64-pc-windows-msvc -p desktop-app --bin desktop-app -- -D warnings
+
+robot-accessibility-macos binary output:
+    python3 -m venv target/a11y-python
+    target/a11y-python/bin/pip install --quiet -r scripts/a11y/requirements-macos.txt
+    target/a11y-python/bin/python scripts/a11y/desktop_robot.py --binary {{quote(binary)}} --output {{quote(output)}}
+
+robot-accessibility-linux binary output:
+    scripts/ci/with_host_lock.sh --exclusive dbus-run-session -- xvfb-run -a python3 scripts/a11y/desktop_robot.py --binary {{quote(binary)}} --output {{quote(output)}}
+
+robot-accessibility-windows binary output:
+    python scripts/a11y/desktop_robot.py --binary {{quote(binary)}} --output {{quote(output)}}
+
 # `--no-daemon` keeps a shared Gradle daemon on the self-hosted boxes from
 # serving a foreign project's build.
 
@@ -455,6 +475,9 @@ ios-device:
 # Boot a simulator and run the iOS demo on it.
 ios-run:
     apps/ios-demo/ios/run-sim.sh
+
+robot-accessibility-ios app device output:
+    python3 scripts/a11y/ios_robot.py --app {{quote(app)}} --device {{quote(device)}} --output {{quote(output)}}
 
 liquid-reference-build destination="generic/platform=iOS Simulator":
     xcodebuild -project apps/liquid-reference/LiquidReference.xcodeproj -scheme LiquidReference -configuration Release -destination '{{destination}}' -derivedDataPath target/liquid-reference build
@@ -532,8 +555,12 @@ android-robot-build: _disk-guard
 robot-android-accessibility serial output:
     python3 scripts/android_accessibility_robot.py --serial {{quote(serial)}} --output {{quote(output)}}
 
+robot-android-accessibility-connected serial output:
+    python3 scripts/android_accessibility_robot.py --serial {{quote(serial)}} --output {{quote(output)}} --connected-only
+
 test-android-accessibility-contract:
     python3 scripts/android_accessibility_robot_test.py
+    PYTHONPATH=scripts:scripts/a11y python3 -m unittest discover -s scripts/a11y/tests
 
 test-presentation-policy binary output:
     scripts/ci/with_host_lock.sh --exclusive python3 scripts/perf_presentation_test.py --binary {{quote(binary)}} --output {{quote(output)}}

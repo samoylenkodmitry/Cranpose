@@ -343,10 +343,14 @@ pub(crate) fn clear_focus_for_closed_modal(depth: usize) {
 
 /// Clears focus from the currently focused text field.
 pub fn clear_focus() {
-    if let Some(node_id) = focused_field_node() {
+    let previous = focused_field_node();
+    if let Some(node_id) = previous {
         crate::schedule_draw_repass(node_id);
     }
     crate::render_state::with_text_field_focus(|state| state.clear_focus());
+    if previous.is_some() && crate::focus_dispatch::active_focus_target() == previous {
+        crate::focus_dispatch::clear_active_focus();
+    }
 
     crate::cursor_animation::stop_cursor_blink();
 

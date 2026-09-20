@@ -41,7 +41,14 @@ impl FocusInvalidationManager {
     }
 
     fn set_active_focus_target(&mut self, node_id: Option<NodeId>) {
+        if self.active_focus_target == node_id {
+            return;
+        }
+        for changed in self.active_focus_target.into_iter().chain(node_id) {
+            crate::semantics_dispatch::schedule_semantics_invalidation(changed);
+        }
         self.active_focus_target = node_id;
+        crate::request_render_invalidation();
     }
 
     fn active_focus_target(&self) -> Option<NodeId> {
@@ -60,7 +67,7 @@ impl FocusInvalidationManager {
         if handles.is_empty() {
             self.focus_targets.remove(&node_id);
             if self.active_focus_target == Some(node_id) {
-                self.active_focus_target = None;
+                self.set_active_focus_target(None);
             }
         }
     }
@@ -80,7 +87,9 @@ impl FocusInvalidationManager {
         if self.active_focus_target == Some(node_id) {
             return None;
         }
-        self.active_focus_target.replace(node_id)
+        let previous = self.active_focus_target;
+        self.set_active_focus_target(Some(node_id));
+        previous
     }
 
     fn take_first_focus_request_if_idle(&mut self) -> Option<NodeId> {

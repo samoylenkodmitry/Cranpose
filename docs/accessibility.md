@@ -88,7 +88,7 @@ Both reach the same four platforms:
 | accesskit (Linux, macOS, Windows) | `Live::Polite` / `Live::Assertive` on the node | a live node under the window, whose value carries the text |
 | iOS | no such notion: Cranpose reads the changed text out | `UIAccessibilityAnnouncementNotification` |
 | Android | TalkBack reads a virtual view's live region only through its host view, so Cranpose reads the changed text out | `announceForAccessibility` on the host view |
-| Web | the DOM mirror is rebuilt on every change, and a live region that appears together with its text is read by no reader, so Cranpose reads the changed text out | a hidden `aria-live` region that outlives the mirror |
+| Web | retained DOM nodes preserve the reader's cursor; changed live text is sent through a persistent announcement region | a hidden `aria-live` region that outlives screen changes |
 
 Where Cranpose reads the text out itself, it compares the new semantics
 snapshot against the one before it. A live region that just appeared is read;
@@ -821,6 +821,10 @@ the value, the actions. A robot test compares the lines; a person prints them
 to look at a screen from a terminal. `docs/ROBOT_TESTING.md` has the shape.
 
 ## Check the web mirror without a hand
+
+The [native robot validation guide](accessibility_validation.md) covers macOS,
+Linux, Windows, Android, iOS, and the browser, including commands, artifacts,
+prerequisites, and the limits of automated checks.
 
 Run `just test-web-accessibility <url>` against a release demo built with
 `just web`, packaged with `apps/desktop-demo/package-web.sh`, and served by a

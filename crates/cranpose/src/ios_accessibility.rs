@@ -795,6 +795,11 @@ fn update_native_element(
         .or_else(|| element.password.then(|| "password".to_owned()))
         .or_else(|| accessibility::expansion_word(element).map(str::to_owned))
         .or_else(|| accessibility::state_with_error(element))
+        .or_else(|| {
+            element
+                .progress
+                .map(|progress| progress.current.to_string())
+        })
         .or(place);
     native.setAccessibilityValue(value.as_deref().map(NSString::from_str).as_deref());
     native.setAccessibilityHint(

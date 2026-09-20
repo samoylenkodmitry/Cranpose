@@ -526,7 +526,7 @@ pub(crate) fn with_focus_dispatch_by_app_context<R>(
     id: AppContextId,
     f: impl FnOnce(&crate::focus_dispatch::FocusInvalidationState) -> R,
 ) -> Option<R> {
-    with_app_context_by_id(id, |context| f(&context.focus_dispatch))
+    with_app_context_by_id(id, |context| context.enter(|| f(&context.focus_dispatch)))
 }
 
 pub(crate) fn with_semantics_dispatch<R>(
