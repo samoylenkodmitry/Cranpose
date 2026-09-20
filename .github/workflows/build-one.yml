@@ -8,13 +8,12 @@ on:
   workflow_dispatch:
     inputs:
       runner:
-        description: "Runner"
+        description: "Runner for non-Windows targets"
         required: true
         type: choice
         options:
           - macOS
           - Linux
-          - Windows
       target:
         description: "What to build"
         required: true
@@ -25,7 +24,7 @@ on:
           - android
           - ios
           - robot-example
-          - accessibility
+          - windows-accessibility
       example:
         description: "Robot example name (only used when target is robot-example)"
         required: false
@@ -42,7 +41,7 @@ concurrency:
 
 jobs:
   build:
-    if: inputs.runner != 'Windows'
+    if: inputs.target != 'windows-accessibility'
     name: ${{ inputs.target }} on ${{ inputs.runner }}
     runs-on: >-
       ${{ inputs.runner == 'macOS'
@@ -115,7 +114,7 @@ jobs:
           if-no-files-found: ignore
 
   windows-accessibility:
-    if: inputs.runner == 'Windows' && inputs.target == 'accessibility'
+    if: inputs.target == 'windows-accessibility'
     runs-on: windows-2025
     timeout-minutes: 60
     steps:

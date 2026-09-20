@@ -465,11 +465,15 @@ fn project_semantics(
     elements
 }
 
-pub(crate) fn install_inspector<R: Renderer>(shell: &mut AppShell<R>, enabled: bool)
+pub(crate) fn install_inspector<R: Renderer>(shell: &mut AppShell<R>, enabled: Option<bool>)
 where
     R::Error: Debug,
 {
-    shell.set_inspector_projector(enabled.then_some(inspector_nodes));
+    shell.set_inspector_projector(
+        enabled
+            .unwrap_or(cfg!(debug_assertions))
+            .then_some(inspector_nodes),
+    );
 }
 
 fn inspector_nodes(

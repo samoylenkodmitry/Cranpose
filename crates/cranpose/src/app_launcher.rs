@@ -114,8 +114,9 @@ pub struct AppSettings {
     /// robot tests to run in parallel without cluttering the screen
     /// and enables CI environments without a display server.
     pub headless: bool,
-    /// Show the developer inspector launcher. Defaults to enabled in debug builds.
-    pub developer_inspector: bool,
+    /// Override the developer inspector default. Unset enables it in debug builds;
+    /// installing a robot driver defaults it to disabled unless explicitly set.
+    pub developer_inspector: Option<bool>,
     /// Development options for debugging and performance monitoring
     #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
     pub dev_options: cranpose_app_shell::DevOptions,
@@ -163,7 +164,7 @@ impl Default for AppSettings {
             log_tag: None,
             android_overlay_window: None,
             headless: false,
-            developer_inspector: cfg!(debug_assertions),
+            developer_inspector: None,
             #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
             dev_options: cranpose_app_shell::DevOptions::default(),
             #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
@@ -714,9 +715,10 @@ impl AppLauncher {
     /// Enables the developer inspector independently of application semantics.
     ///
     /// Enabled by default in debug builds and disabled in release builds.
+    /// Robot drivers default to disabled; this override wins in either builder order.
     /// Open it with the floating Inspector control; drag the control or panel title to move it.
     pub fn with_developer_inspector(mut self, enabled: bool) -> Self {
-        self.settings.developer_inspector = enabled;
+        self.settings.developer_inspector = Some(enabled);
         self
     }
 
@@ -972,6 +974,7 @@ impl AppLauncher {
     ))]
     pub fn with_test_driver(mut self, driver: impl FnOnce(crate::Robot) + Send + 'static) -> Self {
         self.settings.test_driver = Some(Box::new(driver));
+        self.settings.developer_inspector.get_or_insert(false);
         #[cfg(feature = "renderer-wgpu")]
         if !self.settings.frame_pacing_explicit {
             self.settings.frame_pacing_mode = FramePacingMode::NoVsync;

@@ -6,6 +6,13 @@ perform native actions, and verify the resulting application state. They exit
 nonzero on failures and retain a `report.json` plus diagnostic artifacts in a new
 output directory. Do not reuse an output directory.
 
+The Linux results currently require the workspace's pinned AccessKit
+[disabled-state fix](https://github.com/AccessKit/accesskit/commit/6ee0558b6315b3ef1594db24ce45a030ecac7cb5).
+Its latest published AT-SPI adapter, 0.20.0, predates that fix. Cargo only applies
+`[patch]` at the consuming workspace root, so these Linux results do not establish
+the same behavior for an unpatched crates.io consumer. Release validation must
+resolve and test the published dependency graph as well.
+
 ## Coverage
 
 Debug builds show a floating **Inspector** control. Click it to open the panel;
@@ -25,9 +32,11 @@ marks app focus, purple marks selection, and amber marks unnamed actionable elem
 Arrows select elements, 1/2/3 switch views, P picks, Page Up/Down scroll properties,
 and Escape closes the panel. Click the app to return keyboard input to it.
 Closed inspectors collect no tree snapshots. Release builds default to disabled;
-`AppLauncher::with_developer_inspector(bool)` overrides either default.
+Robot drivers default to disabled to preserve application pictures and input.
+`AppLauncher::with_developer_inspector(bool)` overrides these defaults in either
+builder order.
 
-The **build one** workflow accepts runner **Windows** and target **accessibility**.
+The **build one** workflow accepts target **windows-accessibility**.
 It runs `just test-windows-accessibility` on a hosted Windows desktop, checks native
 UI Automation actions, and exercises the floating inspector through the robot.
 The `windows-accessibility` artifact retains native reports and inspector pictures.
