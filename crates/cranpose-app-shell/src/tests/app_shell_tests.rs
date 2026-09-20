@@ -28,6 +28,9 @@ use cranpose_ui_graphics::{
 
 use super::*;
 
+#[path = "inspector_shell_tests.rs"]
+mod inspector_shell_tests;
+
 pub(super) fn test_guard() -> MutexGuard<'static, ()> {
     static TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     match TEST_LOCK.get_or_init(|| Mutex::new(())).lock() {

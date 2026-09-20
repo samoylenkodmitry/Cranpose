@@ -618,9 +618,7 @@ fn attach_click_listener(
             return;
         };
         if let Ok(mut shell) = app.try_borrow_mut() {
-            shell.set_cursor(x, y);
-            shell.pointer_pressed();
-            shell.pointer_released_at_position(x, y);
+            shell.accessibility_activate_at(x, y);
         }
     }) as Box<dyn FnMut(_)>);
     root.add_event_listener_with_callback("click", click.as_ref().unchecked_ref())?;

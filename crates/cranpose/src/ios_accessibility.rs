@@ -515,9 +515,7 @@ impl IosAccessibilityBridge {
             };
             let (x, y) = element.bounds.center();
             shell.set_pointer_source(PointerSource::Touch);
-            changed |= shell.set_cursor(x, y);
-            changed |= shell.pointer_pressed();
-            changed |= shell.pointer_released_at_position(x, y);
+            changed |= shell.accessibility_activate_at(x, y);
         }
         changed
     }

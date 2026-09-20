@@ -48,6 +48,10 @@ impl AndroidGpuBackend {
     }
 }
 
+#[cfg(test)]
+#[path = "tests/inspector_settings.rs"]
+mod inspector_settings_tests;
+
 /// Configuration for application settings.
 pub struct AppSettings {
     /// Window title (desktop) / app name (mobile)
@@ -110,6 +114,8 @@ pub struct AppSettings {
     /// robot tests to run in parallel without cluttering the screen
     /// and enables CI environments without a display server.
     pub headless: bool,
+    /// Show the developer inspector launcher. Defaults to enabled in debug builds.
+    pub developer_inspector: bool,
     /// Development options for debugging and performance monitoring
     #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
     pub dev_options: cranpose_app_shell::DevOptions,
@@ -157,6 +163,7 @@ impl Default for AppSettings {
             log_tag: None,
             android_overlay_window: None,
             headless: false,
+            developer_inspector: cfg!(debug_assertions),
             #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
             dev_options: cranpose_app_shell::DevOptions::default(),
             #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
@@ -701,6 +708,15 @@ impl AppLauncher {
     /// initialises a platform logger of its own to get its name onto its lines.
     pub fn with_log_tag(mut self, tag: impl Into<String>) -> Self {
         self.settings.log_tag = Some(tag.into());
+        self
+    }
+
+    /// Enables the developer inspector independently of application semantics.
+    ///
+    /// Enabled by default in debug builds and disabled in release builds.
+    /// The inspector opens from its button or Ctrl/Cmd+Shift+I.
+    pub fn with_developer_inspector(mut self, enabled: bool) -> Self {
+        self.settings.developer_inspector = enabled;
         self
     }
 

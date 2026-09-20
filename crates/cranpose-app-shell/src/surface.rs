@@ -65,6 +65,7 @@ pub struct RootSurface<R: Renderer> {
     pub(crate) hovered_nodes: Vec<NodeId>,
     pub(crate) on_rotary_scroll: Option<Rc<dyn Fn(RotaryScrollEvent) -> bool>>,
     pub(crate) dev_overlay_controls: Vec<DevOverlayControl>,
+    pub(crate) inspector: crate::inspector::DeveloperInspector,
     pub(crate) dev_overlay_text: String,
     pub(crate) dev_overlay_last_refresh: Option<Instant>,
     pub(crate) dev_overlay_viewport: Option<Size>,
@@ -102,6 +103,7 @@ impl<R: Renderer> RootSurface<R> {
             hovered_nodes: Vec::new(),
             on_rotary_scroll: None,
             dev_overlay_controls: Vec::new(),
+            inspector: crate::inspector::DeveloperInspector::default(),
             dev_overlay_text: String::new(),
             dev_overlay_last_refresh: None,
             dev_overlay_viewport: None,
@@ -243,7 +245,7 @@ impl<R: Renderer> RootSurface<R> {
         &mut self,
         app: &mut ShellApp,
     ) -> Option<&SemanticsTree> {
-        if !app.semantics_enabled {
+        if !app.semantics_enabled && !self.inspector.state.open {
             return None;
         }
         let root = self.root_node(app)?;

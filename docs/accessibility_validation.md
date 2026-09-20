@@ -8,6 +8,39 @@ output directory. Do not reuse an output directory.
 
 ## Coverage
 
+Debug builds enable a developer inspector. Click **Inspector** or press
+**Ctrl/Cmd+Shift+I** to open it. **Normal**, **Overlay**, and **A11y only** switch
+between app rendering, numbered accessible bounds, and the accessible representation.
+**Pick element** temporarily hides the panel so any element can be selected without
+activation. The reading-order list and property panel show the shared platform
+projection, including names, roles, values, focus, state, bounds, and actions.
+Password values remain protected and hidden elements remain excluded.
+
+The panel and overlays use a separate render graph and input route; they never
+become application layout or semantic nodes. Platform readers still activate the
+application while inspection is open. Blue outlines mark accessible bounds, green
+marks app focus, purple marks selection, and amber marks unnamed actionable elements.
+Arrows select elements, 1/2/3 switch views, P picks, Page Up/Down scroll properties,
+and Escape closes the panel. Click the app to return keyboard input to it.
+Closed inspectors collect no tree snapshots. Release builds default to disabled;
+`AppLauncher::with_developer_inspector(bool)` overrides either default.
+
+Run the inspector end-to-end robot with:
+
+```sh
+CRANPOSE_INSPECTOR_ARTIFACTS=/tmp/inspector-pictures ./run_robot_test.sh --example robot_developer_inspector --sequential
+```
+
+On Linux without an X11 or Wayland session, prefix the command with `xvfb-run -a`
+(put the environment assignment before that prefix). The runner acquires its
+own host lock; do not wrap it in another host lock.
+
+The robot checks distinct rendered modes, exact picture restoration, tree isolation,
+privacy, picking without activation, keyboard navigation, and live app-state updates.
+The optional artifact directory receives screenshots of each mode and selection.
+This is the application's common accessibility projection; native platform tools
+and the robots below validate the final OS/browser representation.
+
 | Behavior | macOS AX | Linux AT-SPI | Windows UIA | Android | iOS XCTest | Browser AX/DOM |
 | --- | --- | --- | --- | --- | --- | --- |
 | Repeated words and independent nested controls | Yes | Yes | Yes | Yes | Yes | Yes |

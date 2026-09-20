@@ -176,7 +176,11 @@ where
             return false;
         }
 
-        let hits = self.surface().renderer.scene().hit_test(x, y);
+        let hits = if self.inspector_blocks_pointer(x, y) {
+            Vec::new()
+        } else {
+            self.surface().renderer.scene().hit_test(x, y)
+        };
         let new_ids: Vec<NodeId> = hits.iter().map(|h| h.node_id()).collect();
 
         let pos = Point { x, y };
@@ -218,6 +222,27 @@ where
         }
     }
 
+    /// Activates an application control at logical coordinates for a platform reader.
+    ///
+    /// Developer overlays never receive this synthetic press and release.
+    pub fn accessibility_activate_at(&mut self, x: f32, y: f32) -> bool {
+        let event_time = self.shell.app.realtime_pointer_event_time(None);
+        let _event_handler = enter_event_handler_scope();
+        let app_context = Rc::clone(&self.shell.app.app_context);
+        let result = app_context.enter(|| {
+            run_in_mutable_snapshot(|| {
+                self.surface_mut().cursor = (x, y);
+                let pressed = self.pointer_pressed_inner(event_time);
+                self.release_app_pointer(event_time) || pressed
+            })
+            .unwrap_or(false)
+        });
+        if result {
+            self.mark_dirty();
+        }
+        result
+    }
+
     pub fn pointer_pressed(&mut self) -> bool {
         self.pointer_pressed_at_time(None)
     }
@@ -232,6 +257,9 @@ where
     /// Dispatch primary-button down with an already resolved event timestamp.
     pub fn pointer_pressed_at_event_time(&mut self, event_time: PointerEventTime) -> bool {
         let (cursor_x, cursor_y) = self.surface().cursor;
+        if self.inspector_press(cursor_x, cursor_y) {
+            return true;
+        }
         if self.dev_overlay_press(cursor_x, cursor_y) {
             return true;
         }
@@ -417,6 +445,13 @@ where
     }
 
     fn pointer_released_inner(&mut self, event_time: PointerEventTime) -> bool {
+        if std::mem::take(&mut self.surface_mut().inspector.pointer_captured) {
+            return true;
+        }
+        self.release_app_pointer(event_time)
+    }
+
+    fn release_app_pointer(&mut self, event_time: PointerEventTime) -> bool {
         self.surface_mut()
             .buttons_pressed
             .remove(PointerButton::Primary);
@@ -619,6 +654,9 @@ where
     /// policy lived in the desktop event loop, and the second host that grew a
     /// wheel reimplemented the parts of it that were obvious from the outside.
     pub fn wheel_scrolled(&mut self, wheel: crate::WheelScroll) -> bool {
+        if self.inspector_scroll(wheel.delta.y) {
+            return true;
+        }
         if wheel.is_zoom() {
             let zoom_factor = wheel.zoom_factor();
             log::trace!(
@@ -653,6 +691,9 @@ where
     /// call [`wheel_scrolled`](Self::wheel_scrolled), which reaches here once
     /// zoom and rotary have declined the sample.
     pub fn pointer_scrolled(&mut self, delta_x: f32, delta_y: f32) -> bool {
+        if self.inspector_scroll(delta_y) {
+            return true;
+        }
         let event_time = self.shell.app.realtime_pointer_event_time(None);
         let _event_handler = enter_event_handler_scope();
         let app_context = Rc::clone(&self.shell.app.app_context);
@@ -901,13 +942,16 @@ where
     /// user has not finished, so a pressed pointer is left alone and only
     /// an idle one cancels.
     pub fn cancel_gesture_unless_pressed(&mut self) {
-        if self.surface().buttons_pressed != PointerButtons::NONE {
+        if self.surface().buttons_pressed != PointerButtons::NONE
+            || self.surface().inspector.pointer_captured
+        {
             return;
         }
         self.cancel_gesture();
     }
 
     fn cancel_gesture_inner(&mut self, event_time: PointerEventTime) {
+        self.surface_mut().inspector.pointer_captured = false;
         let targets = self.resolve_gesture_targets(PointerId::PRIMARY);
 
         self.surface_mut().hit_path_tracker.clear();
@@ -1092,6 +1136,9 @@ where
     }
 
     fn on_key_event_inner(&mut self, event: &KeyEvent) -> bool {
+        if self.inspector_key(event) {
+            return true;
+        }
         use KeyEventType::KeyDown;
 
         if event.event_type == KeyDown && event.modifiers.command_or_ctrl() {
@@ -1161,6 +1208,9 @@ where
     /// Returns `true` if the paste was consumed by a focused text field.
     /// O(1) operation using stored handler.
     pub fn on_paste(&mut self, text: &str) -> bool {
+        if self.inspector_owns_keyboard() {
+            return true;
+        }
         let _event_handler = enter_event_handler_scope();
         let app_context = Rc::clone(&self.shell.app.app_context);
         app_context.enter(|| self.on_paste_inner(text))
@@ -1184,6 +1234,9 @@ where
     /// O(1) operation using stored handler.
     pub fn on_copy(&mut self) -> Option<String> {
         let app_context = Rc::clone(&self.shell.app.app_context);
+        if self.inspector_owns_keyboard() {
+            return None;
+        }
         app_context.enter(|| self.on_copy_inner())
     }
 
@@ -1196,6 +1249,9 @@ where
     /// O(1) operation using stored handler.
     pub fn on_cut(&mut self) -> Option<String> {
         let _event_handler = enter_event_handler_scope();
+        if self.inspector_owns_keyboard() {
+            return None;
+        }
         let app_context = Rc::clone(&self.shell.app.app_context);
         app_context.enter(|| self.on_cut_inner())
     }
@@ -1220,6 +1276,9 @@ where
     ///
     /// Returns `true` if a text field consumed the event.
     pub fn on_ime_preedit(&mut self, text: &str, cursor: Option<(usize, usize)>) -> bool {
+        if self.inspector_owns_keyboard() {
+            return true;
+        }
         let _event_handler = enter_event_handler_scope();
         let app_context = Rc::clone(&self.shell.app.app_context);
         app_context.enter(|| self.on_ime_preedit_inner(text, cursor))
@@ -1243,6 +1302,9 @@ where
     /// committed text (Android `finishComposingText` semantics).
     /// Returns `true` if a text field consumed the event.
     pub fn on_ime_finish_composing(&mut self) -> bool {
+        if self.inspector_owns_keyboard() {
+            return true;
+        }
         let _event_handler = enter_event_handler_scope();
         let app_context = Rc::clone(&self.shell.app.app_context);
         app_context.enter(|| self.on_ime_finish_composing_inner())
@@ -1265,6 +1327,9 @@ where
     /// without changing it (Android `setComposingRegion` semantics). Offsets
     /// are UTF-8 bytes. Returns `true` if a text field consumed the event.
     pub fn on_ime_set_composing_region(&mut self, start_bytes: usize, end_bytes: usize) -> bool {
+        if self.inspector_owns_keyboard() {
+            return true;
+        }
         let _event_handler = enter_event_handler_scope();
         let app_context = Rc::clone(&self.shell.app.app_context);
         app_context.enter(|| {
@@ -1290,6 +1355,9 @@ where
     /// Gboard's spacebar-swipe uses to scrub the cursor). Offsets are UTF-8
     /// bytes. Returns `true` if a text field consumed the event.
     pub fn on_ime_set_selection(&mut self, start_bytes: usize, end_bytes: usize) -> bool {
+        if self.inspector_owns_keyboard() {
+            return true;
+        }
         let _event_handler = enter_event_handler_scope();
         let app_context = Rc::clone(&self.shell.app.app_context);
         app_context.enter(|| {
@@ -1337,6 +1405,9 @@ where
     /// Handles IME delete-surrounding events.
     /// Returns `true` if a text field consumed the event.
     pub fn on_ime_delete_surrounding(&mut self, before_bytes: usize, after_bytes: usize) -> bool {
+        if self.inspector_owns_keyboard() {
+            return true;
+        }
         let _event_handler = enter_event_handler_scope();
         let app_context = Rc::clone(&self.shell.app.app_context);
         app_context.enter(|| self.on_ime_delete_surrounding_inner(before_bytes, after_bytes))
@@ -1520,6 +1591,11 @@ where
     /// Primary-surface form of [`SurfaceMut::pointer_pressed`].
     pub fn pointer_pressed(&mut self) -> bool {
         self.primary().pointer_pressed()
+    }
+
+    /// Primary-surface form of [`SurfaceMut::accessibility_activate_at`].
+    pub fn accessibility_activate_at(&mut self, x: f32, y: f32) -> bool {
+        self.primary().accessibility_activate_at(x, y)
     }
 
     /// Primary-surface form of [`SurfaceMut::pointer_pressed_at_time`].

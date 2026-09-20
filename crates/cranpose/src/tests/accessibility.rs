@@ -11,6 +11,35 @@ use cranpose_ui::{
 
 use super::*;
 
+#[test]
+fn inspector_uses_sanitized_projection_and_reports_actions_and_state() {
+    let mut button = element_with(42, Some(7));
+    button.role = AccessibilityRole::Button;
+    button.label = "Account, Account".into();
+    button.enabled = true;
+    button.focused = true;
+    button.clickable = true;
+    button.custom_actions = vec!["Archive".into()];
+    let inspected = inspector_node(button);
+    assert_eq!(inspected.node_id, 42);
+    assert_eq!(inspected.canvas_key, Some(7));
+    assert!(inspected.focused);
+    assert!(!inspected.issue);
+    assert!(inspected.label.contains("Account, Account"));
+    assert!(inspected.details.contains("Activate, Archive"));
+    assert!(inspected.details.contains("Enabled: true  Focused: true"));
+    let mut password = element_with(43, None);
+    password.password = true;
+    password.value = Some("private password".into());
+    let inspected = inspector_node(password);
+    assert!(inspected.details.contains("[protected]"));
+    assert!(!inspected.details.contains("private password"));
+    let mut unnamed = element_with(44, None);
+    unnamed.label.clear();
+    unnamed.clickable = true;
+    assert!(inspector_node(unnamed).issue);
+}
+
 fn node(
     node_id: NodeId,
     role: SemanticsRole,

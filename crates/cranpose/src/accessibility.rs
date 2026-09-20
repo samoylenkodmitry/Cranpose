@@ -465,6 +465,85 @@ fn project_semantics(
     elements
 }
 
+pub(crate) fn install_inspector<R: Renderer>(shell: &mut AppShell<R>, enabled: bool)
+where
+    R::Error: Debug,
+{
+    shell.set_inspector_projector(enabled.then_some(inspector_nodes));
+}
+
+fn inspector_nodes(
+    layout: &cranpose_ui::LayoutTree,
+    semantics: &cranpose_ui::SemanticsTree,
+) -> Vec<cranpose_app_shell::inspector::InspectorNode> {
+    let mut bounds = HashMap::new();
+    collect_bounds(layout.root(), &mut bounds);
+    project_semantics(semantics.root(), &bounds)
+        .into_iter()
+        .map(inspector_node)
+        .collect()
+}
+
+fn inspector_node(element: AccessibilityElement) -> cranpose_app_shell::inspector::InspectorNode {
+    let value = if element.password {
+        "[protected]"
+    } else {
+        element.value.as_deref().unwrap_or("")
+    };
+    let mut actions = Vec::new();
+    if element.clickable {
+        actions.push("Activate".to_string());
+    }
+    if element.adjustable {
+        actions.push("Adjust value".to_string());
+    }
+    if element.focusable {
+        actions.push("Focus".to_string());
+    }
+    if matches!(
+        element.role,
+        AccessibilityRole::TextField | AccessibilityRole::SearchField
+    ) {
+        actions.push("Edit text".to_string());
+    }
+    actions.extend(element.custom_actions.iter().cloned());
+    actions.extend(element.long_click_label.iter().cloned());
+    actions.extend(element.magic_tap_label.iter().cloned());
+    let details = format!(
+        "Name: {}\nRole: {:?}\nValue: {}\nState: {}\nEnabled: {}  Focused: {}\nSelected: {:?}  Toggled: {:?}\nBounds: {:.1}, {:.1}  {:.1} x {:.1}\nActions: {}\nLive: {:?}\nRange: {:?}\nError: {}",
+        element.label,
+        element.role,
+        value,
+        element.state_description.as_deref().unwrap_or(""),
+        element.enabled,
+        element.focused,
+        element.selected,
+        element.toggled,
+        element.bounds.x,
+        element.bounds.y,
+        element.bounds.width,
+        element.bounds.height,
+        actions.join(", "),
+        element.live_region,
+        element.progress,
+        element.error.as_deref().unwrap_or("")
+    );
+    cranpose_app_shell::inspector::InspectorNode {
+        node_id: element.node_id,
+        canvas_key: element.canvas_key,
+        bounds: cranpose_ui::Rect {
+            x: element.bounds.x,
+            y: element.bounds.y,
+            width: element.bounds.width,
+            height: element.bounds.height,
+        },
+        label: format!("{}, {:?}", element.label, element.role),
+        details,
+        focused: element.focused,
+        issue: element.label.is_empty() && (element.clickable || element.focusable),
+    }
+}
+
 fn project_node(
     node: &SemanticsNode,
     bounds: &HashMap<NodeId, AccessibilityRect>,

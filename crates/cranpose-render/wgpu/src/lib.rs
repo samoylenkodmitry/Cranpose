@@ -1009,8 +1009,7 @@ impl Renderer for WgpuRenderer {
         _viewport: Size,
     ) -> Result<(), Self::Error> {
         self.frontend.scene.clear();
-        self.frontend.dev_overlay_graph = None;
-        self.frontend.dev_overlay_cache = None;
+        self.frontend.clear_fps_overlay();
         pipeline::render_layout_tree(layout_tree.root(), &mut self.frontend.scene);
         Ok(())
     }
@@ -1022,8 +1021,7 @@ impl Renderer for WgpuRenderer {
         _viewport: Size,
     ) -> Result<(), Self::Error> {
         self.frontend.scene.clear();
-        self.frontend.dev_overlay_graph = None;
-        self.frontend.dev_overlay_cache = None;
+        self.frontend.clear_fps_overlay();
         pipeline::render_from_applier(applier, root, &mut self.frontend.scene, 1.0);
         Ok(())
     }
@@ -1072,7 +1070,7 @@ impl Renderer for WgpuRenderer {
         {
             return;
         }
-        self.frontend.dev_overlay_graph = Some(
+        self.frontend.fps_overlay_graph = Some(
             cranpose_render_common::dev_overlay::build_dev_overlay_graph(
                 text,
                 viewport,
@@ -1084,6 +1082,12 @@ impl Renderer for WgpuRenderer {
             viewport_width_bits: key.viewport_width_bits,
             viewport_height_bits: key.viewport_height_bits,
         });
+        self.frontend.refresh_dev_overlay();
+    }
+
+    fn set_inspector_overlay(&mut self, graph: Option<cranpose_render_common::graph::RenderGraph>) {
+        self.frontend.inspector_overlay_graph = graph;
+        self.frontend.refresh_dev_overlay();
     }
 
     fn needs_frame_warmup(&self) -> bool {
@@ -1111,6 +1115,9 @@ mod tests {
 
     static TEST_FONT: &[u8] =
         cranpose_render_common::software_text_raster::DEFAULT_SOFTWARE_TEXT_FONT_BYTES;
+
+    #[path = "inspector_overlay.rs"]
+    mod inspector_overlay;
 
     #[test]
     fn dev_overlay_is_recorded_outside_app_graph() {

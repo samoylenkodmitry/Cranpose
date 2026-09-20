@@ -22,17 +22,13 @@ pub fn AccessibilityRobotScreen() {
             .padding(12.0),
         ColumnSpec::default().vertical_arrangement(LinearArrangement::SpacedBy(8.0)),
         move || {
-            Text(
-                "Accessibility robot",
-                Modifier::empty(),
-                TextStyle::default(),
-            );
+            Text("Accessibility robot", Modifier::empty(), robot_text_style());
             Row(
                 Modifier::empty().merge_descendants(),
                 RowSpec::default(),
                 move || {
-                    Text("Account", Modifier::empty(), TextStyle::default());
-                    Text("Account", Modifier::empty(), TextStyle::default());
+                    Text("Account", Modifier::empty(), robot_text_style());
+                    Text("Account", Modifier::empty(), robot_text_style());
                     RobotButton("Remove", true, move || count.set(count.get() + 1));
                 },
             );
@@ -47,18 +43,18 @@ pub fn AccessibilityRobotScreen() {
                 format!("Action count: {}", count.get()),
                 Modifier::empty()
                     .semantics(|config| config.live_region = Some(LiveRegionMode::Polite)),
-                TextStyle::default(),
+                robot_text_style(),
             );
-            BasicTextField(notes, field_modifier("Notes"), TextStyle::default());
+            BasicTextField(notes, field_modifier("Notes"), robot_text_style());
             Text(
                 format!("Edited: {}", notes.text()),
                 Modifier::empty(),
-                TextStyle::default(),
+                robot_text_style(),
             );
             BasicTextField(
                 password,
                 field_modifier("Passphrase").password(),
-                TextStyle::default(),
+                robot_text_style(),
             );
             Text(
                 "Loading",
@@ -66,7 +62,7 @@ pub fn AccessibilityRobotScreen() {
                     config.role = Some(SemanticsWidgetRole::ProgressBar);
                     config.progress = Some(ProgressBarRangeInfo::new(40.0, 0.0, 100.0, 0));
                 }),
-                TextStyle::default(),
+                robot_text_style(),
             );
             Text(
                 "Volume",
@@ -77,20 +73,26 @@ pub fn AccessibilityRobotScreen() {
                         true
                     }));
                 }),
-                TextStyle::default(),
+                robot_text_style(),
             );
             Text(
                 format!("Volume value: {}", volume.get()),
                 Modifier::empty(),
-                TextStyle::default(),
+                robot_text_style(),
             );
             Text(
                 "Decorative secret",
                 Modifier::empty().hide_from_accessibility(),
-                TextStyle::default(),
+                robot_text_style(),
             );
         },
     );
+}
+
+fn robot_text_style() -> TextStyle {
+    let mut style = TextStyle::default();
+    style.span_style.color = Some(Color::BLACK);
+    style
 }
 
 fn field_modifier(name: &str) -> Modifier {
@@ -111,7 +113,7 @@ fn RobotButton(label: &'static str, enabled: bool, action: impl FnMut() + 'stati
         ButtonSpec::default(),
         action,
         move || {
-            Text(label, Modifier::empty(), TextStyle::default());
+            Text(label, Modifier::empty(), robot_text_style());
         },
     );
 }

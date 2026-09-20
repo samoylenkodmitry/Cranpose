@@ -396,6 +396,7 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
         shell.app_context().enter(crate::ios_keyboard::register);
         shell.app_context().enter(crate::ios_back_gesture::register);
         shell.set_semantics_enabled(true);
+        crate::accessibility::install_inspector(&mut shell, self.settings.developer_inspector);
 
         let mut accessibility =
             crate::ios_accessibility::IosAccessibilityBridge::new(self.event_proxy.clone());
