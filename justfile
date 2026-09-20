@@ -436,6 +436,10 @@ robot-accessibility-linux binary output:
 robot-accessibility-windows binary output:
     python scripts/a11y/desktop_robot.py --binary {{quote(binary)}} --output {{quote(output)}}
 
+test-windows-accessibility:
+    cargo build --locked --profile ci -p desktop-app --features robot-app --bin desktop-app --example robot_developer_inspector
+    python scripts/a11y/windows_suite.py
+
 # `--no-daemon` keeps a shared Gradle daemon on the self-hosted boxes from
 # serving a foreign project's build.
 

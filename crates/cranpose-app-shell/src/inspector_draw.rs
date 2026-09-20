@@ -6,7 +6,7 @@ use cranpose_render_common::graph::{
     RenderNode, TextPrimitiveNode,
 };
 use cranpose_ui::{TextLayoutOptions, TextStyle, text::AnnotatedString};
-use cranpose_ui_graphics::{Brush, Color, CornerRadii, DrawPrimitive, Rect, Size, Stroke};
+use cranpose_ui_graphics::{Brush, Color, CornerRadii, DrawPrimitive, Point, Rect, Size, Stroke};
 
 use super::{InspectorAction, InspectorControl, InspectorMode, InspectorState};
 
@@ -17,15 +17,44 @@ const ACCENT: Color = Color(0.2, 0.75, 1.0, 1.0);
 const WARNING: Color = Color(1.0, 0.65, 0.24, 1.0);
 const ROW: f32 = 30.0;
 
-pub(super) fn panel_bounds(viewport: Size) -> Rect {
+pub(super) fn panel_bounds(state: &InspectorState, viewport: Size) -> Rect {
     let width = (viewport.width - 16.0).clamp(0.0, 390.0);
     let height = (viewport.height - 16.0).clamp(0.0, 620.0);
-    Rect {
-        x: (viewport.width - width - 8.0).max(0.0),
-        y: 8.0,
-        width,
-        height,
+    floating_bounds(
+        Rect {
+            x: (viewport.width - width - 8.0).max(0.0),
+            y: 8.0,
+            width,
+            height,
+        },
+        state.panel_position,
+        viewport,
+    )
+}
+
+pub(super) fn launcher_bounds(state: &InspectorState, viewport: Size) -> Rect {
+    floating_bounds(
+        Rect {
+            x: (viewport.width - 158.0).max(0.0),
+            y: (viewport.height - 56.0).max(0.0),
+            width: 146.0_f32.min(viewport.width),
+            height: 44.0_f32.min(viewport.height),
+        },
+        state.launcher_position,
+        viewport,
+    )
+}
+
+fn floating_bounds(mut bounds: Rect, position: Option<Point>, viewport: Size) -> Rect {
+    if let Some(position) = position {
+        bounds.x = position
+            .x
+            .clamp(0.0, (viewport.width - bounds.width).max(0.0));
+        bounds.y = position
+            .y
+            .clamp(0.0, (viewport.height - bounds.height).max(0.0));
     }
+    bounds
 }
 
 struct Canvas {
@@ -119,16 +148,17 @@ pub(super) fn build(state: &mut InspectorState, viewport: Size) -> RenderGraph {
         draw_nodes(&mut canvas, state);
     }
     if !state.open || state.picking {
-        let bounds = Rect {
-            x: (viewport.width - 146.0).max(0.0),
-            y: (viewport.height - 44.0).max(0.0),
-            width: 138.0_f32.min(viewport.width),
-            height: 36.0,
-        };
+        let bounds = launcher_bounds(state, viewport);
+        if state.launcher_position.is_some() {
+            state.launcher_position = Some(Point {
+                x: bounds.x,
+                y: bounds.y,
+            });
+        }
         let label = if state.picking {
             "Cancel picking"
         } else {
-            "Inspector"
+            ":: Inspector"
         };
         let action = if state.picking {
             InspectorAction::Pick
@@ -137,7 +167,14 @@ pub(super) fn build(state: &mut InspectorState, viewport: Size) -> RenderGraph {
         };
         canvas.button(state, action, label, bounds, state.picking);
     } else {
-        draw_panel(&mut canvas, state, panel_bounds(viewport));
+        let panel = panel_bounds(state, viewport);
+        if state.panel_position.is_some() {
+            state.panel_position = Some(Point {
+                x: panel.x,
+                y: panel.y,
+            });
+        }
+        draw_panel(&mut canvas, state, panel);
     }
     canvas.finish()
 }
@@ -198,16 +235,17 @@ fn draw_nodes(canvas: &mut Canvas, state: &InspectorState) {
 
 fn draw_panel(canvas: &mut Canvas, state: &mut InspectorState, panel: Rect) {
     canvas.rectangle(panel, PANEL, None);
-    canvas.text(
-        "ACCESSIBILITY INSPECTOR",
+    canvas.button(
+        state,
+        InspectorAction::Move,
+        ":: ACCESSIBILITY INSPECTOR",
         Rect {
-            x: panel.x + 12.0,
-            y: panel.y + 12.0,
-            width: (panel.width - 68.0).max(0.0),
-            height: 24.0,
+            x: panel.x + 5.0,
+            y: panel.y + 5.0,
+            width: (panel.width - 54.0).max(0.0),
+            height: 32.0,
         },
-        INK,
-        13.0,
+        false,
     );
     canvas.button(
         state,
@@ -304,11 +342,15 @@ fn draw_panel(canvas: &mut Canvas, state: &mut InspectorState, panel: Rect) {
 fn detail_text(state: &InspectorState) -> &str {
     state.selected.and_then(|index| state.nodes.get(index))
         .map(|node| node.details.as_str())
-        .unwrap_or("Select an element from the list, or use Pick element.\n\nBlue: accessible bounds\nGreen: app focus\nPurple: selected\nAmber: missing accessible name")
+        .unwrap_or("Select from the list or use Pick element.\n\nBlue: accessible bounds\nGreen: app focus\nPurple: selected\nAmber: missing accessible name")
 }
 
 pub(super) fn detail_line_count(state: &InspectorState, viewport: Size) -> usize {
-    wrapped_lines(detail_text(state), panel_bounds(viewport).width - 24.0).len()
+    wrapped_lines(
+        detail_text(state),
+        panel_bounds(state, viewport).width - 24.0,
+    )
+    .len()
 }
 
 fn draw_details(canvas: &mut Canvas, state: &mut InspectorState, panel: Rect, y: f32) {
@@ -355,7 +397,7 @@ fn draw_details(canvas: &mut Canvas, state: &mut InspectorState, panel: Rect, y:
         );
     }
     canvas.text(
-        "Ctrl/Cmd+Shift+I  |  1/2/3 view  |  P pick",
+        "Drag the title bar to move this panel",
         Rect {
             x: panel.x + 12.0,
             y: panel.y + panel.height - 37.0,
@@ -366,7 +408,7 @@ fn draw_details(canvas: &mut Canvas, state: &mut InspectorState, panel: Rect, y:
         10.0,
     );
     canvas.text(
-        "Arrows: select  |  Esc: close  |  App projection",
+        "App accessibility projection",
         Rect {
             x: panel.x + 12.0,
             y: panel.y + panel.height - 21.0,

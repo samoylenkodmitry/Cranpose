@@ -13,7 +13,10 @@ fn project(layout: &LayoutTree, _semantics: &cranpose_ui::SemanticsTree) -> Vec<
     }]
 }
 
-fn press(shell: &mut AppShell<TestRenderer>, action: InspectorAction) {
+fn press<R: Renderer>(shell: &mut AppShell<R>, action: InspectorAction)
+where
+    R::Error: std::fmt::Debug,
+{
     let bounds = shell
         .inspector_state()
         .controls
@@ -48,17 +51,8 @@ fn reader_activation_bypasses_picking_and_cancel_releases_inspector_capture() {
         bounds.x + bounds.width / 2.0,
         bounds.y + bounds.height / 2.0,
     );
-    shell.on_key_event(&KeyEvent::key_down_with_modifiers(
-        KeyCode::I,
-        "",
-        Modifiers {
-            ctrl: true,
-            shift: true,
-            ..Default::default()
-        },
-    ));
-    shell.on_key_event(&KeyEvent::key_down(KeyCode::P, "p"));
-    shell.update();
+    press(&mut shell, InspectorAction::Toggle);
+    press(&mut shell, InspectorAction::Pick);
     shell.set_cursor(x, y);
     shell.pointer_pressed();
     shell.pointer_released();
@@ -151,7 +145,7 @@ fn inspector_can_read_semantics_without_enabling_a_platform_bridge() {
 }
 
 #[test]
-fn shortcut_and_navigation_preserve_app_focus() {
+fn floating_control_and_navigation_preserve_app_focus() {
     let _guard = test_guard();
     let mut shell = AppShell::new(
         TestRenderer::default(),
@@ -170,8 +164,10 @@ fn shortcut_and_navigation_preserve_app_focus() {
         },
     );
     let focus = shell.debug_enter_app_context(cranpose_ui::active_focus_target);
-    assert!(shell.on_key_event(&event));
+    shell.on_key_event(&event);
     shell.update();
+    assert!(!shell.inspector_state().open);
+    press(&mut shell, InspectorAction::Toggle);
     assert!(shell.inspector_state().open);
     assert!(shell.on_key_event(&KeyEvent::key_down(KeyCode::A, "a")));
     assert!(shell.on_key_event(&KeyEvent::key_down(KeyCode::Tab, "\t")));
@@ -190,4 +186,32 @@ fn shortcut_and_navigation_preserve_app_focus() {
     assert!(shell.on_key_event(&KeyEvent::key_down(KeyCode::Escape, "")));
     shell.update();
     assert!(!shell.inspector_state().open);
+}
+
+#[test]
+fn cancelled_launcher_drag_never_opens_or_keeps_moving() {
+    let _guard = test_guard();
+    let mut shell = AppShell::new(
+        TestRenderer::default(),
+        location_key(file!(), line!(), column!()),
+        box_content,
+    );
+    shell.set_inspector_projector(Some(project));
+    shell.update();
+    let bounds = shell.inspector_state().controls[0].bounds;
+    shell.set_cursor(bounds.x + 20.0, bounds.y + 20.0);
+    assert!(shell.pointer_pressed());
+    shell.set_cursor(bounds.x - 80.0, bounds.y - 40.0);
+    shell.update();
+    let position = shell.inspector_state().launcher_position;
+    assert!(position.is_some());
+    assert!(!shell.inspector_state().open);
+    shell.cancel_gesture();
+    shell.set_cursor(0.0, 0.0);
+    shell.pointer_released();
+    shell.update();
+    assert_eq!(shell.inspector_state().launcher_position, position);
+    assert!(!shell.inspector_state().open);
+    press(&mut shell, InspectorAction::Toggle);
+    assert!(shell.inspector_state().open);
 }

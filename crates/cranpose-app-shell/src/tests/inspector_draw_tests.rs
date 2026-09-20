@@ -79,3 +79,29 @@ fn picking_hides_panel_to_allow_inspecting_covered_elements() {
     assert_eq!(state.controls.len(), 1);
     assert_eq!(state.controls[0].action, InspectorAction::Pick);
 }
+
+#[test]
+fn floating_positions_remain_reachable_after_resize() {
+    let viewport = Size {
+        width: 192.0,
+        height: 320.0,
+    };
+    let mut state = InspectorState {
+        launcher_position: Some(Point {
+            x: 1000.0,
+            y: -100.0,
+        }),
+        panel_position: Some(Point { x: -50.0, y: 900.0 }),
+        ..Default::default()
+    };
+    build(&mut state, viewport);
+    assert_eq!(state.launcher_position, Some(Point { x: 46.0, y: 0.0 }));
+    state.open = true;
+    build(&mut state, viewport);
+    assert_eq!(state.panel_position, Some(Point { x: 0.0, y: 16.0 }));
+    for control in state.controls {
+        assert!(control.bounds.x >= 0.0 && control.bounds.y >= 0.0);
+        assert!(control.bounds.x + control.bounds.width <= viewport.width);
+        assert!(control.bounds.y + control.bounds.height <= viewport.height);
+    }
+}

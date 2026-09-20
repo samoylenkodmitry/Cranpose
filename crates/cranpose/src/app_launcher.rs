@@ -714,7 +714,7 @@ impl AppLauncher {
     /// Enables the developer inspector independently of application semantics.
     ///
     /// Enabled by default in debug builds and disabled in release builds.
-    /// The inspector opens from its button or Ctrl/Cmd+Shift+I.
+    /// Open it with the floating Inspector control; drag the control or panel title to move it.
     pub fn with_developer_inspector(mut self, enabled: bool) -> Self {
         self.settings.developer_inspector = enabled;
         self

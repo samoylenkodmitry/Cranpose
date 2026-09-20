@@ -54,6 +54,14 @@ fn main() {
                 "normal view must include visible app content above the inspector badge"
             );
             assert!(!robot.inspector_state().expect("collapsed state").open);
+            robot
+                .send_key_with_modifiers("i", true, true, false, false)
+                .expect("former inspector shortcut belongs to the app");
+            robot.wait_for_idle().expect("shortcut settles");
+            assert!(
+                !robot.inspector_state().expect("shortcut state").open,
+                "the inspector must open only from its floating control"
+            );
             press(&robot, InspectorAction::Toggle);
             let state = robot.inspector_state().expect("open state");
             assert!(state.open);
@@ -107,11 +115,30 @@ fn main() {
                 capture(&robot, "restored") == original,
                 "closing restores the app picture"
             );
-            robot
-                .send_key_with_modifiers("i", true, true, false, false)
-                .expect("open with keyboard");
-            robot.wait_for_idle().expect("keyboard open");
-            assert!(robot.inspector_state().expect("keyboard state").open);
+            let launcher = robot.inspector_state().expect("launcher").controls[0].bounds;
+            robot.drag(launcher.x + 20.0, launcher.y + 20.0, launcher.x - 100.0, launcher.y - 60.0)
+                .expect("drag floating control");
+            robot.wait_for_idle().expect("launcher moved");
+            let moved = robot.inspector_state().expect("moved launcher");
+            assert!(!moved.open, "dragging must not open the panel");
+            assert_eq!(moved.controls[0].bounds.x, launcher.x - 120.0);
+            assert_eq!(moved.controls[0].bounds.y, launcher.y - 80.0);
+            assert_eq!(robot.spoken_tree().expect("drag preserves app"), before);
+            press(&robot, InspectorAction::Toggle);
+            assert!(robot.inspector_state().expect("floating control state").open);
+            let state = robot.inspector_state().expect("panel controls");
+            let title = state.controls.iter().find(|control| control.action == InspectorAction::Move)
+                .expect("draggable title").bounds;
+            robot.drag(title.x + 20.0, title.y + 15.0, title.x - 80.0, title.y + 45.0)
+                .expect("move floating panel");
+            robot.wait_for_idle().expect("panel moved");
+            let moved = robot.inspector_state().expect("moved panel");
+            let moved_title = moved.controls.iter().find(|control| control.action == InspectorAction::Move)
+                .expect("moved title").bounds;
+            assert_eq!(moved_title.x, title.x - 100.0);
+            assert_eq!(moved_title.y, title.y + 30.0);
+            assert_eq!(robot.spoken_tree().expect("panel drag preserves app"), before);
+            capture(&robot, "floating");
             robot.send_key("Down").expect("select with keyboard");
             robot.wait_for_idle().expect("keyboard selection");
             assert_eq!(
@@ -138,7 +165,7 @@ fn main() {
                 .spoken_tree()
                 .expect("updated app tree")
                 .contains("Action count: 1"));
-            println!("PASS: inspector rendering, modes, selection, privacy and tree isolation");
+            println!("PASS: floating inspector, dragging, rendering, modes, selection, privacy and tree isolation");
             robot.exit().expect("exit inspector robot");
         })
         .run(desktop_app::test_screens::accessibility_robot::AccessibilityRobotScreen);

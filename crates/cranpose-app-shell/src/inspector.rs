@@ -5,7 +5,7 @@ use std::fmt::Debug;
 use cranpose_core::NodeId;
 use cranpose_render_common::Renderer;
 use cranpose_ui::{KeyCode, KeyEvent, KeyEventType, LayoutTree, SemanticsTree};
-use cranpose_ui_graphics::{Rect, Size};
+use cranpose_ui_graphics::{Point, Rect, Size};
 
 use crate::{AppShell, RootSurface, ShellApp, SurfaceMut};
 
@@ -29,6 +29,8 @@ pub enum InspectorMode {
 pub enum InspectorAction {
     /// Open or close the inspector.
     Toggle,
+    /// Drag the floating panel by its title bar.
+    Move,
     /// Show the normal application.
     Normal,
     /// Show accessibility outlines.
@@ -94,6 +96,10 @@ pub struct InspectorState {
     pub detail_offset: usize,
     /// Visible developer controls for deterministic robot input.
     pub controls: Vec<InspectorControl>,
+    /// User-positioned launcher origin in logical pixels, clamped to the surface.
+    pub launcher_position: Option<Point>,
+    /// User-positioned panel origin in logical pixels, clamped to the surface.
+    pub panel_position: Option<Point>,
 }
 
 /// Projects a surface's trees using the same policy as its platform bridge.
@@ -108,11 +114,20 @@ pub(crate) struct DeveloperInspector {
     pub(crate) pointer_captured: bool,
     keyboard: bool,
     installed: bool,
+    drag: Option<InspectorDrag>,
+}
+
+struct InspectorDrag {
+    action: InspectorAction,
+    start: Point,
+    origin: Point,
+    moved: bool,
 }
 
 impl DeveloperInspector {
     fn apply(&mut self, action: InspectorAction) {
         match action {
+            InspectorAction::Move => return,
             InspectorAction::Toggle => {
                 self.state.open = !self.state.open;
                 self.state.picking = false;
@@ -196,6 +211,65 @@ impl DeveloperInspector {
         self.keyboard = true;
         self.dirty = true;
     }
+
+    fn start_drag(&mut self, action: InspectorAction, x: f32, y: f32) {
+        let viewport = self.viewport.unwrap_or_default();
+        let bounds = if action == InspectorAction::Move {
+            draw::panel_bounds(&self.state, viewport)
+        } else {
+            draw::launcher_bounds(&self.state, viewport)
+        };
+        self.drag = Some(InspectorDrag {
+            action,
+            start: Point { x, y },
+            origin: Point {
+                x: bounds.x,
+                y: bounds.y,
+            },
+            moved: false,
+        });
+    }
+
+    fn move_pointer(&mut self, x: f32, y: f32) -> bool {
+        let Some(drag) = &mut self.drag else {
+            return false;
+        };
+        let dx = x - drag.start.x;
+        let dy = y - drag.start.y;
+        drag.moved |= dx * dx + dy * dy >= 16.0;
+        if !drag.moved {
+            return false;
+        }
+        let position = Some(Point {
+            x: drag.origin.x + dx,
+            y: drag.origin.y + dy,
+        });
+        if drag.action == InspectorAction::Move {
+            self.state.panel_position = position;
+        } else {
+            self.state.launcher_position = position;
+        }
+        self.dirty = true;
+        true
+    }
+
+    pub(crate) fn release_pointer(&mut self) -> bool {
+        if !std::mem::take(&mut self.pointer_captured) {
+            return false;
+        }
+        if let Some(drag) = self.drag.take()
+            && !drag.moved
+            && drag.action != InspectorAction::Move
+        {
+            self.apply(drag.action);
+        }
+        true
+    }
+
+    pub(crate) fn cancel_pointer(&mut self) {
+        self.pointer_captured = false;
+        self.drag = None;
+    }
 }
 
 impl<R: Renderer> AppShell<R>
@@ -251,7 +325,15 @@ where
                     .iter()
                     .any(|control| control.bounds.contains(x, y))
                 || (inspector.state.open
-                    && draw::panel_bounds(inspector.viewport.unwrap_or_default()).contains(x, y)))
+                    && draw::panel_bounds(
+                        &inspector.state,
+                        inspector.viewport.unwrap_or_default(),
+                    )
+                    .contains(x, y)))
+    }
+
+    pub(crate) fn inspector_move(&mut self, x: f32, y: f32) -> bool {
+        self.surface_mut().inspector.move_pointer(x, y)
     }
 
     pub(crate) fn inspector_scroll(&mut self, delta: f32) -> bool {
@@ -283,7 +365,11 @@ where
             .find(|control| control.bounds.contains(x, y))
             .map(|control| control.action);
         let consumed = if let Some(action) = action {
-            inspector.apply(action);
+            if action == InspectorAction::Move || !inspector.state.open || inspector.state.picking {
+                inspector.start_drag(action, x, y);
+            } else {
+                inspector.apply(action);
+            }
             inspector.keyboard = inspector.state.open;
             true
         } else if inspector.state.open && inspector.state.picking {
@@ -292,7 +378,8 @@ where
         } else {
             inspector.keyboard = false;
             inspector.state.open
-                && draw::panel_bounds(inspector.viewport.unwrap_or_default()).contains(x, y)
+                && draw::panel_bounds(&inspector.state, inspector.viewport.unwrap_or_default())
+                    .contains(x, y)
         };
         if consumed {
             inspector.keyboard = inspector.state.open;
@@ -307,12 +394,7 @@ where
             return false;
         }
         let inspector = &mut self.surface_mut().inspector;
-        let toggle = event.key_code == KeyCode::I
-            && (event.modifiers.ctrl || event.modifiers.meta)
-            && event.modifiers.shift;
-        let action = if toggle {
-            Some(InspectorAction::Toggle)
-        } else if inspector.state.open && inspector.keyboard {
+        let action = if inspector.state.open && inspector.keyboard {
             match event.key_code {
                 KeyCode::Escape => Some(InspectorAction::Toggle),
                 KeyCode::ArrowUp | KeyCode::ArrowLeft => Some(InspectorAction::Previous),

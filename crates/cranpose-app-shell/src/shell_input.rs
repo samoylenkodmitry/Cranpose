@@ -152,6 +152,9 @@ where
 
     fn set_cursor_inner(&mut self, x: f32, y: f32, event_time: PointerEventTime) -> bool {
         self.surface_mut().cursor = (x, y);
+        if self.inspector_move(x, y) {
+            return true;
+        }
 
         if self.surface().buttons_pressed != PointerButtons::NONE {
             if self.surface().hit_path_tracker.has_path(PointerId::PRIMARY) {
@@ -445,7 +448,7 @@ where
     }
 
     fn pointer_released_inner(&mut self, event_time: PointerEventTime) -> bool {
-        if std::mem::take(&mut self.surface_mut().inspector.pointer_captured) {
+        if self.surface_mut().inspector.release_pointer() {
             return true;
         }
         self.release_app_pointer(event_time)
@@ -951,7 +954,7 @@ where
     }
 
     fn cancel_gesture_inner(&mut self, event_time: PointerEventTime) {
-        self.surface_mut().inspector.pointer_captured = false;
+        self.surface_mut().inspector.cancel_pointer();
         let targets = self.resolve_gesture_targets(PointerId::PRIMARY);
 
         self.surface_mut().hit_path_tracker.clear();

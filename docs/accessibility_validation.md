@@ -8,8 +8,10 @@ output directory. Do not reuse an output directory.
 
 ## Coverage
 
-Debug builds enable a developer inspector. Click **Inspector** or press
-**Ctrl/Cmd+Shift+I** to open it. **Normal**, **Overlay**, and **A11y only** switch
+Debug builds show a floating **Inspector** control. Click it to open the panel;
+drag the control or the panel's title bar to move it out of the way. Positions
+stay within the window when it resizes. No opening shortcut is registered.
+**Normal**, **Overlay**, and **A11y only** switch
 between app rendering, numbered accessible bounds, and the accessible representation.
 **Pick element** temporarily hides the panel so any element can be selected without
 activation. The reading-order list and property panel show the shared platform
@@ -24,6 +26,11 @@ Arrows select elements, 1/2/3 switch views, P picks, Page Up/Down scroll propert
 and Escape closes the panel. Click the app to return keyboard input to it.
 Closed inspectors collect no tree snapshots. Release builds default to disabled;
 `AppLauncher::with_developer_inspector(bool)` overrides either default.
+
+The **build one** workflow accepts runner **Windows** and target **accessibility**.
+It runs `just test-windows-accessibility` on a hosted Windows desktop, checks native
+UI Automation actions, and exercises the floating inspector through the robot.
+The `windows-accessibility` artifact retains native reports and inspector pictures.
 
 Run the inspector end-to-end robot with:
 

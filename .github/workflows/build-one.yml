@@ -14,6 +14,7 @@ on:
         options:
           - macOS
           - Linux
+          - Windows
       target:
         description: "What to build"
         required: true
@@ -24,6 +25,7 @@ on:
           - android
           - ios
           - robot-example
+          - accessibility
       example:
         description: "Robot example name (only used when target is robot-example)"
         required: false
@@ -40,6 +42,7 @@ concurrency:
 
 jobs:
   build:
+    if: inputs.runner != 'Windows'
     name: ${{ inputs.target }} on ${{ inputs.runner }}
     runs-on: >-
       ${{ inputs.runner == 'macOS'
@@ -110,3 +113,21 @@ jobs:
             robot_test.log
             robot_test_summary.txt
           if-no-files-found: ignore
+
+  windows-accessibility:
+    if: inputs.runner == 'Windows' && inputs.target == 'accessibility'
+    runs-on: windows-2025
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Provision just
+        run: cargo install just --locked
+      - name: Run native Windows accessibility and inspector robots
+        run: just test-windows-accessibility
+      - name: Keep Windows robot evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-accessibility
+          path: target/windows-accessibility
+          if-no-files-found: error
