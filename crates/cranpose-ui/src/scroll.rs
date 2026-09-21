@@ -225,7 +225,7 @@ impl OverscrollEffect {
         self.inner
             .invalidate_callbacks
             .borrow_mut()
-            .insert(id, Rc::from(callback));
+            .insert(id, app_owned_invalidation_callback(callback));
         id
     }
 
@@ -390,7 +390,7 @@ impl ScrollState {
         let inner = self.inner();
         let id = inner.next_invalidate_callback_id.get();
         inner.next_invalidate_callback_id.set(id.saturating_add(1));
-        let callback: Rc<dyn Fn()> = Rc::from(callback);
+        let callback = app_owned_invalidation_callback(callback);
         inner
             .invalidate_callbacks
             .borrow_mut()
@@ -419,6 +419,18 @@ impl ScrollState {
             callback();
         }
     }
+}
+
+fn app_owned_invalidation_callback(callback: Box<dyn Fn()>) -> Rc<dyn Fn()> {
+    let Some(owner) = crate::render_state::current_app_context() else {
+        return Rc::from(callback);
+    };
+    let owner = Rc::downgrade(&owner);
+    Rc::new(move || {
+        if let Some(owner) = owner.upgrade() {
+            owner.enter(&callback);
+        }
+    })
 }
 
 #[derive(Clone)]
@@ -554,7 +566,7 @@ impl ScrollMotionContext {
         self.inner
             .next_invalidate_callback_id
             .set(id.saturating_add(1));
-        let callback: Rc<dyn Fn()> = Rc::from(callback);
+        let callback = app_owned_invalidation_callback(callback);
         self.inner
             .invalidate_callbacks
             .borrow_mut()

@@ -425,7 +425,8 @@ struct RuntimeInner {
     ui_conts: RefCell<UiContinuationMap>,
     next_cont_id: Cell<u64>,
     ui_thread_id: ThreadId,
-    tasks: RefCell<Vec<TaskEntry>>,
+    tasks: RefCell<HashMap<u64, TaskEntry>>,
+    task_order: RefCell<Vec<u64>>,
     next_task_id: Cell<u64>,
     state_arena: StateArena,
     external_state_owners: RefCell<HashMap<StateId, Rc<StateHandleLease>>>,
@@ -436,9 +437,8 @@ struct RuntimeInner {
 }
 
 struct TaskEntry {
-    id: u64,
     label: String,
-    future: Pin<Box<dyn Future<Output = ()> + 'static>>,
+    future: Option<Pin<Box<dyn Future<Output = ()> + 'static>>>,
     runnable: Arc<AtomicBool>,
     waker: Waker,
 }
@@ -470,7 +470,8 @@ impl RuntimeInner {
             ui_conts: RefCell::new(UiContinuationMap::default()),
             next_cont_id: Cell::new(1),
             ui_thread_id: std::thread::current().id(),
-            tasks: RefCell::new(Vec::new()),
+            tasks: RefCell::new(HashMap::default()),
+            task_order: RefCell::new(Vec::new()),
             next_task_id: Cell::new(1),
             state_arena: StateArena::default(),
             external_state_owners: RefCell::new(HashMap::default()),
@@ -574,54 +575,77 @@ impl RuntimeInner {
             .unwrap_or_else(|| "unnamed".to_string());
         let runnable = Arc::new(AtomicBool::new(true));
         let waker = RuntimeTaskWaker::new(self, Arc::clone(&runnable)).into_waker();
-        self.tasks.borrow_mut().push(TaskEntry {
+        self.tasks.borrow_mut().insert(
             id,
-            label,
-            future,
-            runnable,
-            waker,
-        });
+            TaskEntry {
+                label,
+                future: Some(future),
+                runnable,
+                waker,
+            },
+        );
+        self.task_order.borrow_mut().push(id);
         self.schedule();
         id
     }
 
     fn cancel_task(&self, id: u64) {
-        let mut tasks = self.tasks.borrow_mut();
-        if tasks.iter().any(|entry| entry.id == id) {
-            tasks.retain(|entry| entry.id != id);
-        }
+        let task = self.tasks.borrow_mut().remove(&id);
+        self.task_order.borrow_mut().retain(|queued| *queued != id);
+        drop(task);
     }
 
     fn has_task(&self, id: u64) -> bool {
         self.tasks
             .try_borrow()
-            .map(|tasks| tasks.iter().any(|entry| entry.id == id))
+            .map(|tasks| tasks.contains_key(&id))
             .unwrap_or(true)
     }
 
     fn poll_async_tasks(&self) -> bool {
-        let mut tasks_ref = self.tasks.borrow_mut();
-        let tasks = std::mem::take(&mut *tasks_ref);
-        drop(tasks_ref);
-        let mut pending = Vec::with_capacity(tasks.len());
+        let order = std::mem::take(&mut *self.task_order.borrow_mut());
+        let mut pending = Vec::with_capacity(order.len());
         let mut made_progress = false;
-        for mut entry in tasks.into_iter() {
-            if !entry.runnable.swap(false, Ordering::AcqRel) {
-                pending.push(entry);
+        for id in order {
+            let task = {
+                let mut tasks = self.tasks.borrow_mut();
+                let Some(entry) = tasks.get_mut(&id) else {
+                    continue;
+                };
+                if entry.runnable.swap(false, Ordering::AcqRel) {
+                    entry
+                        .future
+                        .take()
+                        .map(|future| (future, entry.waker.clone()))
+                } else {
+                    None
+                }
+            };
+            let Some((mut future, waker)) = task else {
+                pending.push(id);
                 continue;
-            }
-            let mut cx = Context::from_waker(&entry.waker);
-            match entry.future.as_mut().poll(&mut cx) {
+            };
+            let mut cx = Context::from_waker(&waker);
+            match future.as_mut().poll(&mut cx) {
                 Poll::Ready(()) => {
+                    self.cancel_task(id);
                     made_progress = true;
                 }
                 Poll::Pending => {
-                    pending.push(entry);
+                    let mut tasks = self.tasks.borrow_mut();
+                    if let Some(entry) = tasks.get_mut(&id) {
+                        entry.future = Some(future);
+                        pending.push(id);
+                    } else {
+                        drop(tasks);
+                        drop(future);
+                    }
                 }
             }
         }
         if !pending.is_empty() {
-            self.tasks.borrow_mut().extend(pending);
+            pending.retain(|id| self.has_task(*id));
+            self.task_order.borrow_mut().extend(pending);
         }
         made_progress
     }
@@ -688,7 +712,7 @@ impl RuntimeInner {
             .try_borrow()
             .map(|tasks| {
                 tasks
-                    .iter()
+                    .values()
                     .any(|task| task.runnable.load(Ordering::Acquire))
             })
             .unwrap_or(true)
@@ -735,7 +759,8 @@ impl RuntimeInner {
     }
 
     fn cancel_ui_cont(&self, id: u64) {
-        self.ui_conts.borrow_mut().remove(&id);
+        let continuation = self.ui_conts.borrow_mut().remove(&id);
+        drop(continuation);
     }
 
     fn register_frame_callback(
@@ -757,11 +782,14 @@ impl RuntimeInner {
     }
 
     fn cancel_frame_callback(&self, id: FrameCallbackId) {
-        let mut callbacks = self.frame_callbacks.borrow_mut();
-        if let Some(index) = callbacks.iter().position(|entry| entry.id == id) {
-            callbacks.remove(index);
-        }
-        drop(callbacks);
+        let removed = {
+            let mut callbacks = self.frame_callbacks.borrow_mut();
+            callbacks
+                .iter()
+                .position(|entry| entry.id == id)
+                .and_then(|index| callbacks.remove(index))
+        };
+        drop(removed);
         self.clear_needs_frame_if_idle();
     }
 
@@ -777,19 +805,27 @@ impl RuntimeInner {
 
     fn drain_frame_callbacks(&self, frame_time_nanos: u64) {
         self.last_frame_time_nanos.set(Some(frame_time_nanos));
-        let mut callbacks = self.frame_callbacks.borrow_mut();
-        let mut pending: Vec<Box<dyn FnOnce(u64) + 'static>> = Vec::with_capacity(callbacks.len());
-        while let Some(mut entry) = callbacks.pop_front() {
-            if let Some(callback) = entry.callback.take() {
-                pending.push(callback);
-            }
-        }
-        drop(callbacks);
-
-        if !pending.is_empty() {
+        let next_frame_id = self.next_frame_callback_id.get();
+        if self.has_frame_callbacks() {
             let _ = crate::run_in_mutable_snapshot(|| {
-                for callback in pending {
-                    callback(frame_time_nanos);
+                loop {
+                    let entry = {
+                        let mut callbacks = self.frame_callbacks.borrow_mut();
+                        if callbacks
+                            .front()
+                            .is_some_and(|entry| entry.id < next_frame_id)
+                        {
+                            callbacks.pop_front()
+                        } else {
+                            None
+                        }
+                    };
+                    let Some(mut entry) = entry else {
+                        break;
+                    };
+                    if let Some(callback) = entry.callback.take() {
+                        callback(frame_time_nanos);
+                    }
                 }
             });
         }
@@ -1133,7 +1169,7 @@ impl RuntimeHandle {
                     .tasks
                     .borrow()
                     .iter()
-                    .map(|entry| (entry.id, entry.label.clone()))
+                    .map(|(id, entry)| (*id, entry.label.clone()))
                     .collect()
             })
             .unwrap_or_default()

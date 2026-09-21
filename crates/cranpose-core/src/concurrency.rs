@@ -11,7 +11,7 @@
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::{Condvar, Mutex};
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     future::Future,
     pin::Pin,
     rc::Rc,
@@ -55,13 +55,23 @@ pub struct CoroutineScope {
 struct ScopeInner {
     runtime: Option<RuntimeHandle>,
     tasks: RefCell<Vec<TaskHandle>>,
+    closed: Cell<bool>,
 }
 
 impl Drop for ScopeInner {
     fn drop(&mut self) {
-        for task in self.tasks.borrow_mut().drain(..) {
+        for task in self.tasks.get_mut().drain(..) {
             task.cancel();
         }
+    }
+}
+
+struct CompositionScopeOwner(CoroutineScope);
+
+impl Drop for CompositionScopeOwner {
+    fn drop(&mut self) {
+        self.0.inner.closed.set(true);
+        self.0.cancel();
     }
 }
 
@@ -69,6 +79,9 @@ impl CoroutineScope {
     /// Launches `future`, keeping it alive until it finishes or the scope is
     /// cancelled.
     pub fn launch(&self, future: impl Future<Output = ()> + 'static) {
+        if self.inner.closed.get() {
+            return;
+        }
         let Some(runtime) = self.inner.runtime.clone() else {
             log::warn!("cranpose: a coroutine scope with no runtime dropped its work");
             return;
@@ -84,7 +97,8 @@ impl CoroutineScope {
 
     /// Cancels every task this scope launched.
     pub fn cancel(&self) {
-        for task in self.inner.tasks.borrow_mut().drain(..) {
+        let tasks = std::mem::take(&mut *self.inner.tasks.borrow_mut());
+        for task in tasks {
             task.cancel();
         }
     }
@@ -99,13 +113,16 @@ impl CoroutineScope {
 #[allow(non_snake_case)]
 #[track_caller]
 pub fn rememberCoroutineScope() -> CoroutineScope {
-    remember(|| CoroutineScope {
-        inner: Rc::new(ScopeInner {
-            runtime: current_runtime_handle(),
-            tasks: RefCell::new(Vec::new()),
-        }),
+    remember(|| {
+        CompositionScopeOwner(CoroutineScope {
+            inner: Rc::new(ScopeInner {
+                runtime: current_runtime_handle(),
+                tasks: RefCell::new(Vec::new()),
+                closed: Cell::new(false),
+            }),
+        })
     })
-    .with(|scope| scope.clone())
+    .with(|owner| owner.0.clone())
 }
 
 /// Resolves after `duration` has elapsed.

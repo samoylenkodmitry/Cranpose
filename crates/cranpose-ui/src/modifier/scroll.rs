@@ -41,6 +41,7 @@ fn set_last_fling_velocity(velocity: f32) {
 }
 
 struct ScrollGestureState {
+    disposed: bool,
     drag_down_position: Option<Point>,
 
     last_position: Option<Point>,
@@ -69,6 +70,7 @@ struct ScrollGestureState {
 impl Default for ScrollGestureState {
     fn default() -> Self {
         Self {
+            disposed: false,
             drag_down_position: None,
             last_position: None,
             is_dragging: false,
@@ -82,6 +84,25 @@ impl Default for ScrollGestureState {
             settle_animation: None,
             wheel_settle_watcher: None,
         }
+    }
+}
+
+impl ScrollGestureState {
+    fn is_active(&self) -> bool {
+        self.is_dragging
+            || self.is_overscrolling
+            || self
+                .fling_animation
+                .as_ref()
+                .is_some_and(FlingAnimation::is_running)
+            || self
+                .settle_animation
+                .as_ref()
+                .is_some_and(SettleAnimation::is_running)
+            || self
+                .wheel_settle_watcher
+                .as_ref()
+                .is_some_and(|watcher| watcher.is_running.get())
     }
 }
 
@@ -214,11 +235,40 @@ impl ScrollTarget for LazyListState {
 
 struct DragGesture<S: ScrollTarget> {
     target: S,
-    gesture_state: Rc<RefCell<ScrollGestureState>>,
     is_vertical: bool,
     reverse_input: bool,
     motion_context: ScrollMotionContext,
     guard: Option<Rc<dyn Fn() -> bool>>,
+}
+
+struct ScrollGestureLifetime {
+    gesture_state: Rc<RefCell<ScrollGestureState>>,
+    motion_context: ScrollMotionContext,
+}
+
+impl Drop for ScrollGestureLifetime {
+    fn drop(&mut self) {
+        let state = std::mem::replace(
+            &mut *self.gesture_state.borrow_mut(),
+            ScrollGestureState {
+                disposed: true,
+                ..ScrollGestureState::default()
+            },
+        );
+        let was_active = state.is_active();
+        if let Some(fling) = state.fling_animation {
+            fling.cancel();
+        }
+        if let Some(settle) = state.settle_animation {
+            settle.cancel();
+        }
+        if let Some(watcher) = state.wheel_settle_watcher {
+            watcher.cancel();
+        }
+        if was_active {
+            self.motion_context.set_active(false);
+        }
+    }
 }
 
 fn drag_gesture_input<K, S>(key: K, gesture: DragGesture<S>) -> Modifier
@@ -228,7 +278,6 @@ where
 {
     let DragGesture {
         target,
-        gesture_state,
         is_vertical,
         reverse_input,
         motion_context,
@@ -236,6 +285,7 @@ where
     } = gesture;
 
     Modifier::empty().pointer_input(key, move |scope| {
+        let gesture_state = Rc::new(RefCell::new(ScrollGestureState::default()));
         let detector = ScrollGestureDetector::new(
             gesture_state.clone(),
             target.clone(),
@@ -245,8 +295,13 @@ where
             motion_context.clone(),
         );
         let guard = guard.clone();
+        let lifetime = ScrollGestureLifetime {
+            gesture_state: Rc::clone(&gesture_state),
+            motion_context: motion_context.clone(),
+        };
 
         async move {
+            let _lifetime = lifetime;
             scope
                 .await_pointer_event_scope(|await_scope| async move {
                     loop {
@@ -575,6 +630,9 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
     }
 
     fn apply_overscroll_candidate(&self, delta: f32) -> bool {
+        if self.gesture_state.borrow().disposed {
+            return false;
+        }
         let consumed = self.apply_overscroll_delta(delta);
         if consumed {
             self.gesture_state.borrow_mut().is_overscrolling = true;
@@ -797,16 +855,7 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
     }
 
     fn update_motion_active(&self, motion_context: &ScrollMotionContext) {
-        let running = {
-            let gs = self.gesture_state.borrow();
-            gs.fling_animation
-                .as_ref()
-                .is_some_and(FlingAnimation::is_running)
-                || gs
-                    .settle_animation
-                    .as_ref()
-                    .is_some_and(SettleAnimation::is_running)
-        };
+        let running = self.gesture_state.borrow().is_active();
         if !running {
             motion_context.set_active(false);
         }
@@ -841,6 +890,9 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
     fn apply_wheel_delta(&self, delta: f32) -> bool {
         {
             let mut gs = self.gesture_state.borrow_mut();
+            if gs.disposed {
+                return false;
+            }
             if let Some(fling) = gs.fling_animation.take() {
                 fling.cancel();
             }
@@ -1030,6 +1082,33 @@ impl MotionContextAnimatedNode {
     pub(crate) fn is_active(&self) -> bool {
         self.motion_context.is_active()
     }
+
+    fn attach_callbacks(&mut self) {
+        if let Some(node_id) = self.node_id {
+            self.invalidation_callback_id = Some(self.motion_context.add_invalidate_callback(
+                Box::new(move || schedule_modifier_slices_repass(node_id)),
+            ));
+            self.overscroll_callback_id = Some(
+                self.motion_context
+                    .overscroll()
+                    .add_invalidate_callback(Box::new(move || {
+                        crate::schedule_measure_repass(node_id);
+                        schedule_modifier_slices_repass(node_id);
+                    })),
+            );
+        }
+    }
+
+    fn detach_callbacks(&mut self) {
+        if let Some(id) = self.invalidation_callback_id.take() {
+            self.motion_context.remove_invalidate_callback(id);
+        }
+        if let Some(id) = self.overscroll_callback_id.take() {
+            self.motion_context
+                .overscroll()
+                .remove_invalidate_callback(id);
+        }
+    }
 }
 
 pub(crate) struct TranslatedContentContextNode {
@@ -1038,6 +1117,7 @@ pub(crate) struct TranslatedContentContextNode {
     offset_source: TranslatedContentOffsetSource,
     overscroll: crate::scroll::OverscrollEffect,
     overscroll_callback_id: Option<u64>,
+    node_id: Option<NodeId>,
 }
 
 impl TranslatedContentContextNode {
@@ -1052,6 +1132,7 @@ impl TranslatedContentContextNode {
             offset_source,
             overscroll,
             overscroll_callback_id: None,
+            node_id: None,
         }
     }
 
@@ -1067,6 +1148,21 @@ impl TranslatedContentContextNode {
         self.offset_source
             .content_offset_reader(self.overscroll.clone())
     }
+
+    fn attach_callback(&mut self) {
+        if let Some(node_id) = self.node_id {
+            self.overscroll_callback_id =
+                Some(self.overscroll.add_invalidate_callback(Box::new(move || {
+                    schedule_modifier_slices_repass(node_id)
+                })));
+        }
+    }
+
+    fn detach_callback(&mut self) {
+        if let Some(id) = self.overscroll_callback_id.take() {
+            self.overscroll.remove_invalidate_callback(id);
+        }
+    }
 }
 
 impl DelegatableNode for TranslatedContentContextNode {
@@ -1077,18 +1173,13 @@ impl DelegatableNode for TranslatedContentContextNode {
 
 impl ModifierNode for TranslatedContentContextNode {
     fn on_attach(&mut self, context: &mut dyn cranpose_foundation::ModifierNodeContext) {
-        if let Some(node_id) = context.node_id() {
-            self.overscroll_callback_id =
-                Some(self.overscroll.add_invalidate_callback(Box::new(move || {
-                    schedule_modifier_slices_repass(node_id)
-                })));
-        }
+        self.node_id = context.node_id();
+        self.attach_callback();
     }
 
     fn on_detach(&mut self) {
-        if let Some(id) = self.overscroll_callback_id.take() {
-            self.overscroll.remove_invalidate_callback(id);
-        }
+        self.detach_callback();
+        self.node_id = None;
     }
 }
 
@@ -1100,35 +1191,12 @@ impl DelegatableNode for MotionContextAnimatedNode {
 
 impl ModifierNode for MotionContextAnimatedNode {
     fn on_attach(&mut self, context: &mut dyn cranpose_foundation::ModifierNodeContext) {
-        let node_id = context.node_id();
-        self.node_id = node_id;
-        if let Some(node_id) = node_id {
-            let callback_id = self
-                .motion_context
-                .add_invalidate_callback(Box::new(move || {
-                    schedule_modifier_slices_repass(node_id);
-                }));
-            self.invalidation_callback_id = Some(callback_id);
-            let callback_id = self
-                .motion_context
-                .overscroll()
-                .add_invalidate_callback(Box::new(move || {
-                    crate::schedule_measure_repass(node_id);
-                    schedule_modifier_slices_repass(node_id);
-                }));
-            self.overscroll_callback_id = Some(callback_id);
-        }
+        self.node_id = context.node_id();
+        self.attach_callbacks();
     }
 
     fn on_detach(&mut self) {
-        if let Some(id) = self.invalidation_callback_id.take() {
-            self.motion_context.remove_invalidate_callback(id);
-        }
-        if let Some(id) = self.overscroll_callback_id.take() {
-            self.motion_context
-                .overscroll()
-                .remove_invalidate_callback(id);
-        }
+        self.detach_callbacks();
         self.node_id = None;
     }
 }
@@ -1175,18 +1243,9 @@ impl ModifierNodeElement for MotionContextAnimatedElement {
         if node.motion_context.ptr_eq(&self.motion_context) {
             return;
         }
-        if let Some(id) = node.invalidation_callback_id.take() {
-            node.motion_context.remove_invalidate_callback(id);
-        }
+        node.detach_callbacks();
         node.motion_context = self.motion_context.clone();
-        if let Some(node_id) = node.node_id {
-            let callback_id = node
-                .motion_context
-                .add_invalidate_callback(Box::new(move || {
-                    schedule_modifier_slices_repass(node_id);
-                }));
-            node.invalidation_callback_id = Some(callback_id);
-        }
+        node.attach_callbacks();
     }
 
     fn capabilities(&self) -> NodeCapabilities {
@@ -1326,7 +1385,11 @@ impl ModifierNodeElement for TranslatedContentContextElement {
     fn update(&self, node: &mut Self::Node) {
         node.identity = self.identity;
         node.offset_source = self.offset_source.clone();
-        node.overscroll = self.overscroll.clone();
+        if !node.overscroll.ptr_eq(&self.overscroll) {
+            node.detach_callback();
+            node.overscroll = self.overscroll.clone();
+            node.attach_callback();
+        }
     }
 
     fn capabilities(&self) -> NodeCapabilities {
@@ -1410,7 +1473,6 @@ fn scroll_impl(
     reverse_scrolling: bool,
     guard: Option<Rc<dyn Fn() -> bool>>,
 ) -> Modifier {
-    let gesture_state = Rc::new(RefCell::new(ScrollGestureState::default()));
     let motion_context = scroll_motion_context_for_key(ScrollMotionContextKey::ScrollState {
         state_id: state.id(),
         is_vertical,
@@ -1421,7 +1483,6 @@ fn scroll_impl(
         (state.id(), is_vertical),
         DragGesture {
             target: state,
-            gesture_state,
             is_vertical,
             reverse_input: false,
             motion_context: motion_context.clone(),
@@ -1545,7 +1606,6 @@ fn lazy_scroll_impl(
     reverse_scrolling: bool,
     motion_context: ScrollMotionContext,
 ) -> Modifier {
-    let gesture_state = Rc::new(RefCell::new(ScrollGestureState::default()));
     let list_state = state;
     let state_id = state.inner_ptr() as usize;
     let key = (state_id, is_vertical, reverse_scrolling);
@@ -1566,7 +1626,6 @@ fn lazy_scroll_impl(
             key,
             DragGesture {
                 target: list_state,
-                gesture_state,
                 is_vertical,
                 reverse_input: reverse_scrolling,
                 motion_context,
@@ -1679,7 +1738,6 @@ fn draggable_impl(
         (identity, is_vertical),
         DragGesture {
             target: state,
-            gesture_state: Rc::new(RefCell::new(ScrollGestureState::default())),
             is_vertical,
             reverse_input: false,
             motion_context: scroll_motion_context_for_key(ScrollMotionContextKey::Draggable {

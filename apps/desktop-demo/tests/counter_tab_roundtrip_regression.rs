@@ -634,3 +634,25 @@ fn animations_tab_alpha_advances_on_shell_path() {
         debug.pass_stats,
     );
 }
+
+#[test]
+fn every_tab_can_render_after_its_predecessor_is_disposed() {
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(HitGraphRenderer::default(), root_key, combined_app);
+    shell.set_buffer_size(1200, 800);
+    shell.set_viewport(1200.0, 800.0);
+    shell.set_semantics_enabled(true);
+    pump_shell_until_stable(&mut shell);
+
+    for tab in desktop_app::app::DEMO_TABS {
+        eprintln!("Switching to {tab:?}");
+        active_tab_state().set(tab);
+        for _ in 0..30 {
+            shell.update_after_exact_interval(Duration::from_millis(16));
+        }
+        assert!(shell.layout_tree().is_some(), "{tab:?} has no layout");
+        assert!(shell.scene().graph.is_some(), "{tab:?} has no render graph");
+        shell.set_cursor(200.0, 300.0);
+        shell.pointer_scrolled(0.0, 120.0);
+    }
+}
