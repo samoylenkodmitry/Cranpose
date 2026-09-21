@@ -1011,12 +1011,33 @@ where
         if !plain_key_down(event) || event.key_code != KeyCode::Tab {
             return false;
         }
-        let direction = if event.modifiers.shift {
-            FocusDirection::Previous
-        } else {
-            FocusDirection::Next
+        self.on_group_navigation_key(event)
+    }
+
+    fn on_group_navigation_key(&mut self, event: &KeyEvent) -> bool {
+        let focused = cranpose_ui::active_focus_target();
+        let target = self.with_layout_tree(|tree| {
+            cranpose_ui::keyboard_focus_target(
+                tree?,
+                focused,
+                event.key_code,
+                event.modifiers.shift,
+            )
+        });
+        let Some(target) = target else {
+            return false;
         };
-        self.move_focus_in_context(direction)
+        let moved =
+            run_in_mutable_snapshot(|| cranpose_ui::request_focus_from_platform(target.node_id))
+                .unwrap_or(false);
+        if moved {
+            self.mark_dirty();
+            self.note_focus_moved_by_keyboard(true);
+            if target.activate {
+                self.on_activation_key(&KeyEvent::key_down(KeyCode::Space, " "));
+            }
+        }
+        moved
     }
 
     fn on_activation_key(&mut self, event: &KeyEvent) -> bool {
@@ -1050,6 +1071,9 @@ where
     fn on_arrow_key(&mut self, event: &KeyEvent) -> bool {
         if !plain_key_down(event) || cranpose_ui::text_field_focus::has_focused_field() {
             return false;
+        }
+        if self.on_group_navigation_key(event) {
+            return true;
         }
         let direction = match event.key_code {
             KeyCode::ArrowLeft => FocusDirection::Left,

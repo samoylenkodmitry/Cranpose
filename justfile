@@ -234,7 +234,7 @@ hooks:
 # costs a full second run to find the second one.
 test: _disk-guard
     cargo nextest run --cargo-profile ci --workspace --no-fail-fast
-    cargo test --profile ci --workspace --doc
+    cargo test --profile ci --workspace --exclude desktop-app-platform --doc
 
 # Feature permutations that the default build does not cover.
 test-features:

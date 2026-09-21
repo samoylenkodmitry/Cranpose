@@ -1,7 +1,8 @@
 import copy
 import unittest
+from unittest.mock import Mock, patch
 
-from desktop_access import NativeAdapter
+from desktop_access import LinuxAdapter, MacAdapter, NativeAdapter
 from desktop_robot import run_checks, wait_for
 from ios_robot import verify_summary
 
@@ -15,10 +16,14 @@ class FixtureAdapter(NativeAdapter):
         self.disabled_enabled = False
         self.disabled_description = 'Disabled'
         self.progress_role = 'progress'
+        self.modal = 0
 
     def nodes(self):
+        if self.modal:
+            names = ['Close confirmation'] if self.modal == 2 else ['Close preferences', 'Open confirmation']
+            return [{'name': name, 'enabled': True} for name in names]
         names = ['Accessibility robot', 'Account, Account', 'Remove', 'Increase', 'Decrease',
-                 f'Action count: {self.count}', f'Volume value: {self.volume}', f'Edited: {self.text}']
+                 'Open preferences', f'Action count: {self.count}', f'Volume value: {self.volume}', f'Edited: {self.text}']
         return ([{'name': name, 'enabled': True} for name in names] + self.extra
                 + [{'name': 'Disabled action', 'enabled': self.disabled_enabled,
                     'description': self.disabled_description},
@@ -27,6 +32,10 @@ class FixtureAdapter(NativeAdapter):
                    {'name': 'Notes', 'value': self.text}])
 
     def activate(self, node):
+        modal = {'Open preferences': 1, 'Open confirmation': 2, 'Close confirmation': 1, 'Close preferences': 0}
+        if node['name'] in modal:
+            self.modal = modal[node['name']]
+            return True
         delta = {'Increase': 1, 'Remove': 1, 'Decrease': -1}.get(node['name'])
         if delta is None:
             return False
@@ -44,10 +53,44 @@ class FixtureAdapter(NativeAdapter):
 
 
 class DesktopContractTests(unittest.TestCase):
+    def test_linux_retries_only_transient_removed_nodes(self):
+        for message, recover, attempts in [
+                ("Unknown object '/org/a11y/atspi/accessible/removed'", True, 2),
+                ("Unknown object '/org/a11y/atspi/accessible/removed'", False, 3),
+                ('Permission denied', False, 1)]:
+            with self.subTest(message=message, recover=recover):
+                adapter = LinuxAdapter.__new__(LinuxAdapter)
+                adapter.api = Mock()
+                adapter.pid = 42
+                adapter.error_type = RuntimeError
+                error = RuntimeError(message)
+                error.message = message
+                desktop = Mock()
+                desktop.get_child_count.return_value = 0
+                adapter.api.get_desktop.side_effect = [error, desktop] if recover else error
+                if recover:
+                    self.assertEqual(adapter.nodes(), [])
+                else:
+                    with self.assertRaises(RuntimeError):
+                        adapter.nodes()
+                self.assertEqual(adapter.api.get_desktop.call_count, attempts)
+
+    def test_macos_queries_have_a_configurable_timeout(self):
+        api = Mock()
+        api.AXIsProcessTrusted.return_value = True
+        api.AXUIElementSetMessagingTimeout.return_value = 0
+        with patch.dict('sys.modules', {'ApplicationServices': api}):
+            MacAdapter(42, timeout=2.0)
+            api.AXUIElementSetMessagingTimeout.assert_called_once_with(
+                api.AXUIElementCreateSystemWide.return_value, 2.0)
+            api.AXUIElementSetMessagingTimeout.return_value = -1
+            with self.assertRaisesRegex(RuntimeError, 'accessibility timeout: -1'):
+                MacAdapter(42)
+
     def test_all_native_scenarios_must_execute(self):
         report = {'passed': []}
         run_checks(FixtureAdapter(), report)
-        self.assertEqual(len(report['passed']), 5)
+        self.assertEqual(len(report['passed']), 6)
 
     def test_rejects_sensitive_text_disabled_actions_and_wrong_roles(self):
         for attribute, value, message in [
@@ -65,12 +108,19 @@ class DesktopContractTests(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, 'Timed out'):
             wait_for(lambda: None, 'missing node', timeout=0)
 
+    def test_rejects_modal_background_controls(self):
+        adapter = FixtureAdapter()
+        nodes = adapter.nodes
+        adapter.nodes = lambda: nodes() + ([{'name': 'Increase'}] if adapter.modal else [])
+        with self.assertRaisesRegex(AssertionError, 'modal exposes background control Increase'):
+            run_checks(adapter, {'passed': []})
+
     def test_linux_exception_records_only_the_known_native_state_bug(self):
         adapter = FixtureAdapter()
         adapter.disabled_enabled = True
         report = {'platform': 'linux', 'passed': []}
         run_checks(adapter, report, allow_linux_disabled_state_bug=True)
-        self.assertEqual(len(report['passed']), 5)
+        self.assertEqual(len(report['passed']), 6)
         self.assertEqual(len(report['known_limitations']), 1)
         for platform, allow in [('linux', False), ('darwin', True), ('win32', True)]:
             with self.subTest(platform=platform, allow=allow):

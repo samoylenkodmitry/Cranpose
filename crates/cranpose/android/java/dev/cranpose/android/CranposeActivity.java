@@ -1004,6 +1004,7 @@ public class CranposeActivity extends NativeActivity {
                 case 16: return "android.widget.ToggleButton";
                 case 18: return "android.widget.Toolbar";
                 case 22: return "android.widget.ListView";
+                case 24: return "android.widget.RadioGroup";
                 default: return "android.widget.TextView";
             }
         }
@@ -1028,7 +1029,7 @@ public class CranposeActivity extends NativeActivity {
 
         /** Roles that TalkBack announces an on/off state for. */
         boolean isCheckable() {
-            return role == 4 || role == 5 || role == 16;
+            return role == 4 || role == 5 || role == 6 || role == 16;
         }
 
         /** Whether a reader types into this control: a text field or a search field. */
@@ -1038,7 +1039,7 @@ public class CranposeActivity extends NativeActivity {
 
         /** A container a reader walks into rather than stops on, named by its role. */
         boolean isNamedContainer() {
-            return role == 18 || role == 19 || role == 21 || role == 22;
+            return role == 10 || role == 18 || role == 19 || role == 21 || role == 22 || role == 24;
         }
     }
 
@@ -1210,10 +1211,8 @@ public class CranposeActivity extends NativeActivity {
             }
             boolean container = element.scrollable || element.collectionRows > 0
                     || element.collectionColumns > 0 || element.isNamedContainer();
-            if (container) {
-                for (CranposeAccessibilityElement child : elements) {
-                    if (child.scrollParent == element.id) info.addChild(host, child.id);
-                }
+            for (CranposeAccessibilityElement child : elements) {
+                if (child.scrollParent == element.id) info.addChild(host, child.id);
             }
             info.setPackageName(host.getContext().getPackageName());
             info.setEnabled(element.enabled);
@@ -1298,7 +1297,7 @@ public class CranposeActivity extends NativeActivity {
                 info.setCheckable(true);
                 info.setChecked(element.toggled == 1);
             }
-            if (element.selected >= 0) info.setSelected(element.selected == 1);
+            if (element.selected >= 0 && element.role != 6) info.setSelected(element.selected == 1);
             info.setBoundsInParent(element.bounds);
             int[] location = new int[2];
             host.getLocationOnScreen(location);

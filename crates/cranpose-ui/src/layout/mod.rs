@@ -385,6 +385,8 @@ pub struct SemanticsNode {
     pub editable_text: bool,
     /// Whether a screen reader skips this node and everything under it.
     pub hidden: bool,
+    /// Whether this subtree makes content outside it unavailable to assistive technology.
+    pub is_modal: bool,
     /// Whether a screen reader takes this node and the text under it as one
     /// stop.
     pub merge_descendants: bool,
@@ -461,6 +463,7 @@ impl Default for SemanticsNode {
             canvas_children: Vec::new(),
             editable_text: false,
             hidden: false,
+            is_modal: false,
             merge_descendants: false,
             selectable_group: false,
             pane_title: None,
@@ -495,13 +498,29 @@ pub struct SemanticsTree {
 }
 
 impl SemanticsTree {
-    fn new(root: SemanticsNode) -> Self {
+    fn new(mut root: SemanticsNode) -> Self {
+        if let Some(modal) = take_top_modal(&mut root) {
+            root = modal;
+        }
         Self { root }
     }
 
+    /// Returns the top visible modal subtree, or the full root when no modal is open.
     pub fn root(&self) -> &SemanticsNode {
         &self.root
     }
+}
+
+fn take_top_modal(node: &mut SemanticsNode) -> Option<SemanticsNode> {
+    if node.hidden {
+        return None;
+    }
+    for child in node.children.iter_mut().rev() {
+        if let Some(modal) = take_top_modal(child) {
+            return Some(modal);
+        }
+    }
+    node.is_modal.then(|| std::mem::take(node))
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -3205,6 +3224,7 @@ fn semantics_node_from_parts(
         node.canvas_children = config.canvas_children;
         node.editable_text = config.is_editable_text;
         node.hidden = config.hidden;
+        node.is_modal = config.is_modal;
         node.merge_descendants = config.merge_descendants;
         node.selectable_group = config.selectable_group;
         node.pane_title = config.pane_title;

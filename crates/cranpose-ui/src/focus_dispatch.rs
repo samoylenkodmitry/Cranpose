@@ -133,13 +133,23 @@ impl FocusInvalidationManager {
 
 pub(crate) struct FocusInvalidationState {
     manager: RefCell<FocusInvalidationManager>,
+    order: RefCell<Vec<crate::FocusEntry>>,
 }
 
 impl FocusInvalidationState {
     pub(crate) fn new() -> Self {
         Self {
             manager: RefCell::new(FocusInvalidationManager::new()),
+            order: RefCell::new(Vec::new()),
         }
+    }
+
+    pub(crate) fn set_focus_order(&self, entries: Vec<crate::FocusEntry>) {
+        *self.order.borrow_mut() = entries;
+    }
+
+    pub(crate) fn with_focus_order<T>(&self, reader: impl FnOnce(&[crate::FocusEntry]) -> T) -> T {
+        reader(&self.order.borrow())
     }
 
     fn schedule_invalidation(&self, node_id: NodeId) {

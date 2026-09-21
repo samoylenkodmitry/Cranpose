@@ -5,6 +5,15 @@ fn crate_source(path: &str) -> String {
     std::fs::read_to_string(crate_dir.join(path)).expect("failed to read cranpose source file")
 }
 
+fn voiceover_value_source() -> String {
+    assert!(
+        crate_source("src/ios_accessibility.rs")
+            .contains("accessibility::voiceover_value(element)"),
+        "VoiceOver uses the shared value projection"
+    );
+    crate_source("src/accessibility.rs")
+}
+
 fn strip_xml_comments(source: &str) -> String {
     let mut remaining = source;
     let mut out = String::with_capacity(source.len());
@@ -1112,7 +1121,7 @@ fn every_platform_bridge_carries_focus_both_ways() {
     assert!(
         ios_source.contains("accessibilityElementDidBecomeFocused")
             && ios_source.contains("UIAccessibilityLayoutChangedNotification")
-            && ios_source.contains("pub(crate) fn drain_focus("),
+            && ios_source.contains("pub(crate) fn drain_focus<R>("),
         "VoiceOver should move the app's focus when its cursor lands, and follow the app when the app moves focus"
     );
 
@@ -1136,9 +1145,10 @@ fn every_platform_bridge_carries_focus_both_ways() {
         web_source.contains("\"focusin\"")
             && web_source.contains("node.focus()")
             && web_source.contains("\"tabindex\",")
-            && web_source.contains(
-                "element.enabled && (element.focusable || element.adjustable || element.clickable)"
-            ),
+            && web_source.contains("if element.enabled")
+            && web_source.contains("&& element.tab_stop")
+            && web_source
+                .contains("&& (element.focusable || element.adjustable || element.clickable)"),
         "the web mirror should take Tab focus, follow the app's focus, and report a focus back"
     );
 }
@@ -3842,9 +3852,9 @@ fn every_platform_says_which_tab_of_how_many() {
         "TalkBack gets each tab's place in its group"
     );
 
-    let ios_source = crate_source("src/ios_accessibility.rs");
+    let ios_source = voiceover_value_source();
     assert!(
-        ios_source.contains(".map(|item| format!(\"{} of {}\", item.position, item.count));"),
+        ios_source.contains("parts.push(format!(\"{} of {}\", item.position, item.count));"),
         "VoiceOver reads the tab's place as its value"
     );
 
@@ -3856,7 +3866,7 @@ fn every_platform_says_which_tab_of_how_many() {
 
     let desktop_source = crate_source("src/desktop_accessibility.rs");
     assert!(
-        desktop_source.contains("node.set_position_in_set(item.position);"),
+        desktop_source.contains("node.set_position_in_set(item.position.saturating_sub(1));"),
         "accesskit gets the tab's position in its set"
     );
 }
@@ -4035,7 +4045,7 @@ fn the_android_host_names_every_role_the_projection_has() {
         "case 20: return \"menu item\";",
         "case 21: return \"tab bar\";",
         "return role == 3 || role == 14;",
-        "return role == 18 || role == 19 || role == 21 || role == 22;",
+        "return role == 10 || role == 18 || role == 19 || role == 21 || role == 22 || role == 24;",
     ] {
         assert!(
             java_source.contains(expected),
@@ -4068,7 +4078,6 @@ fn every_platform_says_why_a_field_is_wrong() {
         "TalkBack gets the node's error"
     );
     for source in [
-        crate_source("src/ios_accessibility.rs"),
         crate_source("src/web_accessibility.rs"),
         crate_source("src/desktop_accessibility.rs"),
     ] {
@@ -4077,6 +4086,7 @@ fn every_platform_says_why_a_field_is_wrong() {
             "every other bridge reads the reason after the state"
         );
     }
+    assert!(voiceover_value_source().contains("parts.extend(state_with_error(element));"));
 }
 
 #[test]
@@ -4137,7 +4147,8 @@ fn every_platform_opens_and_closes_a_control() {
         "the web mirror says whether the control is open"
     );
     assert!(
-        crate_source("src/ios_accessibility.rs").contains("accessibility::expansion_word(element)"),
+        voiceover_value_source()
+            .contains("parts.extend(expansion_word(element).map(str::to_owned));"),
         "VoiceOver hears the word"
     );
 }

@@ -4880,8 +4880,6 @@ ci-full: ci platform-only
 
 #[cfg(test)]
 mod tests {
-    use std::time::{SystemTime, UNIX_EPOCH};
-
     use super::*;
 
     #[test]
@@ -8097,31 +8095,13 @@ version = \"0.1.0\"
         );
     }
 
-    /// A fresh, never-reused scratch directory for a single test.
-    ///
-    /// The wall-clock timestamp alone is not a reliable uniqueness key: `cargo
-    /// test` runs test functions on a thread pool, and a clock whose tick is
-    /// coarser than the time between two threads calling `SystemTime::now()`
-    /// hands them the same nanosecond count. That collision is rare enough to
-    /// hide in a small suite but turned up routinely once enough tests here
-    /// used this helper -- two tests silently shared one directory and
-    /// stomped on each other's fixture files, failing whichever ran second,
-    /// nondeterministically and on whichever test happened to lose the race.
-    /// A monotonic in-process counter guarantees uniqueness regardless of
-    /// clock resolution; the timestamp stays only to make directories sort
-    /// and read chronologically.
     fn unique_temp_dir() -> PathBuf {
-        static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("clock after epoch")
-            .as_nanos();
-        let sequence = SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../target/test-output/xtask")
-            .join(format!("cranpose-xtask-test-{nanos}-{sequence}"));
-        fs::create_dir_all(&path).expect("create temp dir");
-        path
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../target/test-output/xtask");
+        fs::create_dir_all(&root).expect("create fixture root");
+        tempfile::Builder::new()
+            .prefix("cranpose-xtask-test-")
+            .tempdir_in(root)
+            .expect("reserve a unique fixture directory")
+            .keep()
     }
 }

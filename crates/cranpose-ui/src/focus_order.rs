@@ -1,7 +1,5 @@
-use std::cell::RefCell;
-
 use cranpose_core::NodeId;
-use cranpose_foundation::SemanticsWidgetRole;
+use cranpose_foundation::{SemanticsConfiguration, SemanticsWidgetRole};
 use cranpose_ui_graphics::Rect;
 
 use crate::layout::{LayoutBox, LayoutTree};
@@ -22,36 +20,40 @@ impl FocusEntry {
     }
 }
 
-thread_local! {
-    static FOCUS_ORDER: RefCell<Vec<FocusEntry>> = const { RefCell::new(Vec::new()) };
-}
-
 /// Replaces the focus order a later [`crate::FocusManager`] move reads. The
-/// app shell publishes it after a layout pass.
+/// order belongs to the current [`crate::AppContext`]. Keyboard navigation
+/// publishes the order from the latest layout before choosing a target.
 pub fn set_focus_order(entries: Vec<FocusEntry>) {
-    FOCUS_ORDER.with(|cell| *cell.borrow_mut() = entries);
+    crate::render_state::with_focus_dispatch(|state| state.set_focus_order(entries));
 }
 
 /// Reads the published focus order.
 pub fn with_focus_order<T>(reader: impl FnOnce(&[FocusEntry]) -> T) -> T {
-    FOCUS_ORDER.with(|cell| reader(&cell.borrow()))
+    crate::render_state::with_focus_dispatch(|state| state.with_focus_order(reader))
 }
 
 /// How many focus targets the last published order holds.
 pub fn focus_order_len() -> usize {
-    FOCUS_ORDER.with(|cell| cell.borrow().len())
+    with_focus_order(<[FocusEntry]>::len)
 }
 
 /// Walks `tree` in the order the layout pass placed it and keeps the nodes
 /// that registered a focus target and take space on screen.
 pub fn collect_focus_order(tree: &LayoutTree) -> Vec<FocusEntry> {
     let mut entries = Vec::new();
-    collect_from_box(tree.root(), &mut entries);
+    collect_from_box(focus_root(tree.root()), &mut entries);
     entries
 }
 
 fn collect_from_box(layout_box: &LayoutBox, entries: &mut Vec<FocusEntry>) {
-    if crate::focus_dispatch::has_focus_target(layout_box.node_id) && takes_space(layout_box.rect) {
+    let config = crate::modifier::collect_semantics_from_modifier(&layout_box.node_data.modifier);
+    if config.as_ref().is_some_and(|config| config.hidden) {
+        return;
+    }
+    if crate::focus_dispatch::has_focus_target(layout_box.node_id)
+        && takes_space(layout_box.rect)
+        && config.as_ref().is_none_or(|config| config.enabled)
+    {
         entries.push(FocusEntry {
             node_id: layout_box.node_id,
             rect: layout_box.rect,
@@ -62,7 +64,7 @@ fn collect_from_box(layout_box: &LayoutBox, entries: &mut Vec<FocusEntry>) {
     }
 }
 
-fn takes_space(rect: Rect) -> bool {
+pub(crate) fn takes_space(rect: Rect) -> bool {
     rect.width > 0.0
         && rect.height > 0.0
         && rect.x.is_finite()
@@ -75,7 +77,7 @@ fn takes_space(rect: Rect) -> bool {
 /// key inside a selectable group moves among these and no others.
 pub fn collect_focus_order_under(tree: &LayoutTree, node_id: NodeId) -> Vec<FocusEntry> {
     let mut entries = Vec::new();
-    if let Some(layout_box) = find_box(tree.root(), node_id) {
+    if let Some(layout_box) = find_box(focus_root(tree.root()), node_id) {
         collect_from_box(layout_box, &mut entries);
     }
     entries
@@ -84,7 +86,27 @@ pub fn collect_focus_order_under(tree: &LayoutTree, node_id: NodeId) -> Vec<Focu
 /// The nearest node above the given one that declares
 /// [`selectable_group`](crate::Modifier::selectable_group), when there is one.
 pub fn selectable_group_of(tree: &LayoutTree, node_id: NodeId) -> Option<NodeId> {
-    group_above(tree.root(), node_id, None)
+    group_above(focus_root(tree.root()), node_id, None)
+}
+
+pub(crate) fn focus_root(root: &LayoutBox) -> &LayoutBox {
+    top_modal(root).unwrap_or(root)
+}
+
+fn top_modal(layout_box: &LayoutBox) -> Option<&LayoutBox> {
+    let config = crate::modifier::collect_semantics_from_modifier(&layout_box.node_data.modifier);
+    if config.as_ref().is_some_and(|config| config.hidden) {
+        return None;
+    }
+    layout_box
+        .children
+        .iter()
+        .rev()
+        .find_map(top_modal)
+        .or_else(|| {
+            (takes_space(layout_box.rect) && config.is_some_and(|config| config.is_modal))
+                .then_some(layout_box)
+        })
 }
 
 fn group_above(layout_box: &LayoutBox, node_id: NodeId, group: Option<NodeId>) -> Option<NodeId> {
@@ -103,9 +125,21 @@ fn group_above(layout_box: &LayoutBox, node_id: NodeId, group: Option<NodeId>) -
 }
 
 fn declares_selectable_group(layout_box: &LayoutBox) -> bool {
-    crate::modifier::collect_semantics_from_modifier(&layout_box.node_data.modifier).is_some_and(
-        |config| config.selectable_group || config.role == Some(SemanticsWidgetRole::Menu),
-    )
+    crate::modifier::collect_semantics_from_modifier(&layout_box.node_data.modifier)
+        .as_ref()
+        .is_some_and(is_selectable_group)
+}
+
+pub(crate) fn is_selectable_group(config: &SemanticsConfiguration) -> bool {
+    config.selectable_group
+        || matches!(
+            config.role,
+            Some(
+                SemanticsWidgetRole::Menu
+                    | SemanticsWidgetRole::RadioGroup
+                    | SemanticsWidgetRole::TabBar
+            )
+        )
 }
 
 fn find_box(layout_box: &LayoutBox, node_id: NodeId) -> Option<&LayoutBox> {

@@ -713,6 +713,8 @@ pub enum SemanticsWidgetRole {
     List,
     /// One row of a list. ARIA's `listitem`.
     ListItem,
+    /// A set of mutually exclusive radio choices. ARIA's `radiogroup`.
+    RadioGroup,
 }
 
 /// The value a control holds inside a range, for a slider, a dial or a

@@ -16,6 +16,35 @@ use crate::{
     subcompose_layout::SubcomposeLayoutScope,
 };
 
+#[test]
+fn semantics_keep_only_the_last_visible_modal_and_its_descendants() {
+    let modal = |id, hidden| SemanticsNode {
+        node_id: id,
+        is_modal: true,
+        hidden,
+        children: vec![SemanticsNode {
+            node_id: id + 1,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let root = SemanticsNode {
+        node_id: 1,
+        children: vec![modal(2, false), modal(4, false), modal(6, true)],
+        ..Default::default()
+    };
+    let tree = SemanticsTree::new(root);
+    assert_eq!(tree.root().node_id, 4);
+    assert_eq!(tree.root().children[0].node_id, 5);
+    let mut outer = modal(10, false);
+    outer.children.push(modal(12, false));
+    assert_eq!(SemanticsTree::new(outer).root().node_id, 12);
+    assert_eq!(
+        SemanticsTree::new(SemanticsNode::default()).root().node_id,
+        0
+    );
+}
+
 fn measure_layout(
     applier: &mut MemoryApplier,
     root: NodeId,

@@ -188,7 +188,7 @@ impl<F: FnMut() + 'static> IosApp<F> {
             accessibility.drain_escapes(shell);
             accessibility.drain_custom_actions(shell);
             accessibility.drain_magic_taps(shell);
-            accessibility.drain_focus();
+            accessibility.drain_focus(shell);
         }
 
         let (Some(gpu), Some(shell)) = (self.gpu.as_mut(), self.shell.as_mut()) else {

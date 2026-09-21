@@ -12,6 +12,87 @@ use cranpose_ui::{
 use super::*;
 
 #[test]
+fn voiceover_values_include_control_state_without_repeating_the_label() {
+    let mut element = AccessibilityElement {
+        role: AccessibilityRole::Switch,
+        label: "Notifications".into(),
+        value: Some("Notifications".into()),
+        toggled: Some(true),
+        error: Some("Network unavailable".into()),
+        ..Default::default()
+    };
+    assert_eq!(
+        voiceover_value(&element).as_deref(),
+        Some("on, invalid, Network unavailable")
+    );
+    element.toggled = Some(false);
+    assert_eq!(
+        voiceover_value(&element).as_deref(),
+        Some("off, invalid, Network unavailable")
+    );
+    element.state_description = Some("Paused".into());
+    assert_eq!(
+        voiceover_value(&element).as_deref(),
+        Some("Paused, invalid, Network unavailable")
+    );
+}
+
+#[test]
+fn voiceover_values_keep_text_state_and_collection_position_together() {
+    let element = AccessibilityElement {
+        role: AccessibilityRole::TextField,
+        label: "Name".into(),
+        value: Some("Ada".into()),
+        state_description: Some("Required".into()),
+        collection_item: Some(CollectionItem {
+            position: 2,
+            count: 3,
+            horizontal: false,
+        }),
+        ..Default::default()
+    };
+    assert_eq!(
+        voiceover_value(&element).as_deref(),
+        Some("Ada, Required, 2 of 3")
+    );
+}
+
+#[test]
+fn voiceover_passwords_never_read_values_and_radios_read_checked_state() {
+    let mut element = AccessibilityElement {
+        role: AccessibilityRole::RadioButton,
+        selected: Some(true),
+        ..Default::default()
+    };
+    assert_eq!(voiceover_value(&element).as_deref(), Some("checked"));
+    element.selected = Some(false);
+    assert_eq!(voiceover_value(&element).as_deref(), Some("not checked"));
+    element = AccessibilityElement {
+        role: AccessibilityRole::TextField,
+        password: true,
+        value: Some("private".into()),
+        ..Default::default()
+    };
+    assert_eq!(voiceover_value(&element).as_deref(), Some("password"));
+}
+
+#[test]
+fn reader_focus_rejects_missing_hidden_disabled_and_nonfocusable_targets() {
+    let mut root = SemanticsNode {
+        node_id: 1,
+        ..Default::default()
+    };
+    assert!(!focus_node(&root, 2));
+    assert!(!focus_node(&root, 1));
+    root.focusable = true;
+    root.hidden = true;
+    assert!(!focus_node(&root, 1));
+    root.hidden = false;
+    root.enabled = false;
+    assert!(!focus_node(&root, 1));
+}
+
+#[test]
 fn inspector_uses_sanitized_projection_and_reports_actions_and_state() {
     let mut button = element_with(42, Some(7));
     button.role = AccessibilityRole::Button;
@@ -535,7 +616,11 @@ fn a_pane_is_published_with_its_title_and_no_label() {
     assert_eq!(projected[0].label, "");
     assert_eq!(projected[0].pane_title.as_deref(), Some("Library"));
     assert_eq!(projected[1].label, "Milk");
-    assert_eq!(projected[1].scroll_parent, None, "a pane is no container");
+    assert_eq!(
+        projected[1].scroll_parent,
+        Some(1),
+        "pane content belongs to its landmark"
+    );
 }
 
 #[test]

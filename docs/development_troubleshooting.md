@@ -25,6 +25,7 @@
 
 - Pin the complete toolchain from `rust-toolchain.toml`; rustup aliases such as `1.98` and `1.98.0` have separate target installations.
 - `cargo ndk` may omit JSON artifact records; verify the executable's freshness, source inventory and native hash explicitly.
+- Match Android robot APKs to the emulator ABI; use `ORG_GRADLE_PROJECT_cranposeReleaseAbis=x86_64 just android-robot-build` for x86_64 emulators to avoid ARM translation during native startup.
 - Run browser builds through `just web`; host builds and invented wasm feature combinations do not validate the shipped browser.
 - Review lint autofixes across shipped ABIs and rustflags; a cast redundant on 64-bit can be required on 32-bit.
 - `just dep-budget` covers all shipped triples; inspect `WORKSPACE_DUPLICATE_DEBT` before proposing an unavailable dependency upgrade.

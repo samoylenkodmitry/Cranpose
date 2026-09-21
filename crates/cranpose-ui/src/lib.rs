@@ -20,6 +20,7 @@ mod draw;
 pub mod fling_animation;
 mod focus_dispatch;
 pub mod focus_manager;
+mod focus_navigation;
 pub mod focus_order;
 pub mod font_scale;
 mod interaction;
@@ -100,6 +101,7 @@ pub use focus_dispatch::{
     set_active_focus_target, set_keyboard_focus_visible,
 };
 pub use focus_manager::{FocusManager, local_focus_manager, request_focus_from_platform};
+pub use focus_navigation::{KeyboardFocusTarget, keyboard_focus_target};
 pub use focus_order::{
     FocusEntry, collect_focus_order, collect_focus_order_under, focus_order_len,
     selectable_group_of, set_focus_order,

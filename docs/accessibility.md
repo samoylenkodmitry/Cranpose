@@ -48,6 +48,19 @@ manager, which walks the focus targets in layout order. `FocusDirection::Up`,
 `Down`, `Left` and `Right` pick the nearest target in that direction, measured
 on the laid-out rectangles.
 
+Keyboard Tab enters a radio group or tab list at its selected control. Arrow
+keys wrap within the group, and Home/End reach its first/last enabled member.
+Radio navigation selects the destination; tabs activate with Enter or Space.
+One Tab leaves the group. Disabled and hidden targets are excluded, and nested
+groups keep their own navigation scope. `SemanticsWidgetRole::RadioGroup`
+declares the native group role; a `selectable_group()` containing radios also
+infers it. Menu items use the same single Tab stop and wrapping navigation.
+
+An open modal restricts both the semantics tree and keyboard traversal to its
+subtree. Nested modals expose only the top modal. Queued reader focus requests
+resolve the current tree, so they cannot focus a background, hidden, disabled,
+or removed control. Dialogs and pane landmarks own their accessible children.
+
 Focus travels both ways across every platform boundary:
 
 * the semantics tree reports `focusable` and `focused` on each node;
