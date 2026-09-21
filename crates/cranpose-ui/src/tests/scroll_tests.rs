@@ -1048,12 +1048,83 @@ fn detaching_scroll_cancels_pending_motion_on_both_axes() {
 }
 
 #[test]
+fn a_deferred_wheel_event_cannot_restart_detached_scroll_work() {
+    assert_deferred_scroll_stops_on_detach(PointerEventKind::Scroll);
+}
+
+#[test]
+fn a_deferred_drag_event_cannot_restart_detached_scroll_work() {
+    assert_deferred_scroll_stops_on_detach(PointerEventKind::Move);
+}
+
+fn assert_deferred_scroll_stops_on_detach(kind: PointerEventKind) {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let runtime = Runtime::new(Arc::new(DefaultScheduler));
+    let state = ScrollState::new(0.0);
+    state.set_max_value(100.0);
+    let (handler, mut chain) = pointer_handler_for(Modifier::empty().vertical_scroll(state, false));
+    let event = if kind == PointerEventKind::Scroll {
+        scroll_wheel_event(0.0, 200.0)
+    } else {
+        handler(scroll_pointer_event(PointerEventKind::Down, 0.0, 100.0));
+        scroll_pointer_event(PointerEventKind::Move, 0.0, 200.0)
+    };
+    handler(event.clone());
+    chain.detach_all();
+
+    event.finish_post_dispatch();
+
+    assert!(!runtime.handle().has_frame_callbacks());
+    let motion = scroll_motion_context_for_key(ScrollMotionContextKey::ScrollState {
+        state_id: state.id(),
+        is_vertical: true,
+        reverse_scrolling: false,
+    });
+    assert_eq!(motion.overscroll().offset(), 0.0);
+}
+
+#[test]
+fn an_idle_modifier_clone_cannot_cancel_another_instances_fling() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let runtime = Runtime::new(Arc::new(DefaultScheduler));
+    let state = ScrollState::new(200.0);
+    state.set_max_value(10_000.0);
+    let modifier = Modifier::empty().vertical_scroll(state, false);
+    let (handler, _chain) = pointer_handler_for(modifier.clone());
+    let (_, mut idle_chain) = pointer_handler_for(modifier);
+    let motion = scroll_motion_context_for_key(ScrollMotionContextKey::ScrollState {
+        state_id: state.id(),
+        is_vertical: true,
+        reverse_scrolling: false,
+    });
+    start_detached_scroll_motion(&*handler, DetachedScrollMotion::Fling, true);
+    assert!(runtime.handle().has_frame_callbacks());
+    assert!(motion.is_active());
+
+    idle_chain.detach_all();
+
+    assert!(runtime.handle().has_frame_callbacks());
+    assert!(motion.is_active());
+    let released = state.value_non_reactive();
+    for frame in 1..=10 {
+        runtime.handle().drain_frame_callbacks(frame * 16_000_000);
+    }
+    assert!(state.value_non_reactive() > released);
+}
+
+#[test]
 fn scroll_motion_invalidation_stays_with_its_owning_app() {
+    for replace_state in [false, true] {
+        assert_motion_invalidation_owner(replace_state);
+    }
+}
+
+fn assert_motion_invalidation_owner(replace_state: bool) {
     let _runtime = Runtime::new(Arc::new(DefaultScheduler));
     let owner = crate::AppContext::new();
     let other = crate::AppContext::new();
     let node_id = 123;
-    let (mut chain, motion) = owner.enter(|| {
+    let (mut chain, mut motion) = owner.enter(|| {
         let state = ScrollState::new(0.0);
         let modifier = Modifier::empty().vertical_scroll(state, false);
         let motion = scroll_motion_context_for_key(ScrollMotionContextKey::ScrollState {
@@ -1068,6 +1139,28 @@ fn scroll_motion_invalidation_stays_with_its_owning_app() {
         crate::render_state::take_modifier_slice_repass_nodes();
         (chain, motion)
     });
+    if replace_state {
+        motion = owner.enter(|| {
+            let state = ScrollState::new(0.0);
+            let modifier = Modifier::empty().vertical_scroll(state, false);
+            let mut context = BasicModifierNodeContext::new();
+            context.set_node_id(Some(node_id));
+            chain.update_from_slice(&modifier.elements(), &mut context);
+            crate::render_state::take_modifier_slice_repass_nodes();
+            crate::render_state::take_measure_repass_nodes();
+            crate::render_state::take_layout_repass_nodes();
+            motion.set_active(true);
+            motion.overscroll().apply_drag_delta(40.0);
+            assert!(crate::render_state::take_modifier_slice_repass_nodes().is_empty());
+            assert!(crate::render_state::take_measure_repass_nodes().is_empty());
+            assert!(crate::render_state::take_layout_repass_nodes().is_empty());
+            scroll_motion_context_for_key(ScrollMotionContextKey::ScrollState {
+                state_id: state.id(),
+                is_vertical: true,
+                reverse_scrolling: false,
+            })
+        });
+    }
     other.enter(|| {
         motion.set_active(true);
         assert!(crate::render_state::take_modifier_slice_repass_nodes().is_empty());
@@ -1076,8 +1169,27 @@ fn scroll_motion_invalidation_stays_with_its_owning_app() {
         owner.enter(crate::render_state::take_modifier_slice_repass_nodes),
         vec![node_id]
     );
+    other.enter(|| {
+        motion.overscroll().apply_drag_delta(30.0);
+        assert!(crate::render_state::take_modifier_slice_repass_nodes().is_empty());
+        assert!(crate::render_state::take_measure_repass_nodes().is_empty());
+        assert!(crate::render_state::take_layout_repass_nodes().is_empty());
+    });
+    assert_eq!(
+        owner.enter(crate::render_state::take_modifier_slice_repass_nodes),
+        vec![node_id]
+    );
+    assert_eq!(
+        owner.enter(crate::render_state::take_measure_repass_nodes),
+        vec![node_id]
+    );
+    assert_eq!(
+        owner.enter(crate::render_state::take_layout_repass_nodes),
+        vec![node_id]
+    );
     drop(owner);
     motion.set_active(false);
+    motion.overscroll().apply_drag_delta(10.0);
     chain.detach_all();
 }
 
