@@ -29,7 +29,7 @@ impl AccessibilitySnapshot {
             .zip(&self.ids)
             .map(|(element, id)| ((element.node_id, element.canvas_key), *id))
             .collect();
-        let mut identities = HashMap::default();
+        let mut identities: HashMap<_, _> = HashMap::default();
         let mut indices = HashMap::default();
         let mut ids = Vec::with_capacity(elements.len());
         let mut last_id = self.last_id;
