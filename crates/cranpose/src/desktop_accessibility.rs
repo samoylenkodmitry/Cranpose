@@ -258,7 +258,7 @@ impl DesktopAccessibilityBridge {
 
     /// Moves app focus onto the element a screen reader asked for, so the two
     /// agree on what holds focus. Answers whether focus moved.
-    pub(crate) fn run_focus_requests(&mut self) -> bool {
+    pub(crate) fn run_focus_requests(&mut self, shell: &mut AppShell<WgpuRenderer>) -> bool {
         if self.pending_focus.is_empty() {
             return false;
         }
@@ -273,7 +273,9 @@ impl DesktopAccessibilityBridge {
             else {
                 continue;
             };
-            moved |= accessibility::focus_node(element.node_id);
+            moved |= accessibility::run_reader_action(shell, |root| {
+                accessibility::focus_node(root, element.node_id)
+            });
         }
         moved
     }
@@ -549,7 +551,7 @@ fn scroll_role(element: &AccessibilityElement) -> Role {
 }
 
 /// The accesskit role of each role a reader names.
-const ACCESSKIT_ROLES: [(AccessibilityRole, Role); 23] = [
+const ACCESSKIT_ROLES: [(AccessibilityRole, Role); 24] = [
     (AccessibilityRole::Button, Role::Button),
     (AccessibilityRole::StaticText, Role::Label),
     (AccessibilityRole::TextField, Role::TextInput),
@@ -573,6 +575,7 @@ const ACCESSKIT_ROLES: [(AccessibilityRole, Role); 23] = [
     (AccessibilityRole::TabBar, Role::TabList),
     (AccessibilityRole::List, Role::List),
     (AccessibilityRole::ListItem, Role::ListItem),
+    (AccessibilityRole::RadioGroup, Role::RadioGroup),
 ];
 
 const _: () = assert!(ACCESSKIT_ROLES.len() == AccessibilityRole::ALL.len());
@@ -585,6 +588,9 @@ fn accesskit_role(role: AccessibilityRole) -> Role {
 /// What the control says about itself beyond its name: its value, the state
 /// description, and whether it is selected, toggled or disabled.
 fn apply_state(node: &mut Node, element: &AccessibilityElement) {
+    if element.is_modal {
+        node.set_modal();
+    }
     if let Some(value) = &element.value {
         node.set_value(value.as_str());
     }
@@ -598,13 +604,16 @@ fn apply_state(node: &mut Node, element: &AccessibilityElement) {
         node.set_invalid(Invalid::True);
     }
     if let Some(item) = element.collection_item {
-        node.set_position_in_set(item.position);
+        node.set_position_in_set(item.position.saturating_sub(1));
         node.set_size_of_set(item.count);
     }
-    if let Some(selected) = element.selected {
+    if let Some(selected) = element
+        .selected
+        .filter(|_| element.role != AccessibilityRole::RadioButton)
+    {
         node.set_selected(selected);
     }
-    if let Some(toggled) = element.toggled {
+    if let Some(toggled) = accessibility::checked_state(element) {
         node.set_toggled(if toggled {
             Toggled::True
         } else {

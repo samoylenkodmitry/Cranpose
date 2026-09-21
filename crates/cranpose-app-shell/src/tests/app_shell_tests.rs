@@ -2658,6 +2658,8 @@ fn a_dialog_takes_focus_when_it_opens() {
         });
     });
     shell.set_semantics_enabled(true);
+    shell.set_buffer_size(640, 480);
+    shell.set_viewport(640.0, 480.0);
     shell.update();
     shell.update();
 
@@ -2668,6 +2670,13 @@ fn a_dialog_takes_focus_when_it_opens() {
     )
     .expect("the tree carries a dialog");
     assert!(dialog.focused, "the dialog took focus as it opened");
+    let id = dialog.node_id;
+    assert_eq!(shell.node_layout_bounds(id), Some((0.0, 0.0, 640.0, 480.0)));
+    shell.set_buffer_size(800, 600);
+    shell.set_viewport(800.0, 600.0);
+    shell.update();
+    shell.update();
+    assert_eq!(shell.node_layout_bounds(id), Some((0.0, 0.0, 800.0, 600.0)));
     cranpose_ui::clear_modals();
 }
 
@@ -10393,6 +10402,168 @@ fn focus_box(name: &'static str, width: f32) -> impl Fn() + 'static {
             BoxSpec::default(),
             || {},
         );
+    }
+}
+
+#[test]
+fn a_modal_excludes_background_semantics_and_keyboard_targets() {
+    let _guard = test_guard();
+    let mut shell = AppShell::new(
+        HitGraphRenderer::default(),
+        location_key(file!(), line!(), column!()),
+        || {
+            Column(Modifier::empty(), ColumnSpec::default(), || {
+                focus_box("Background", 100.0)();
+                Column(
+                    Modifier::empty().semantics(|config| {
+                        config.is_modal = true;
+                        config.role = Some(cranpose_ui::SemanticsWidgetRole::Dialog);
+                    }),
+                    ColumnSpec::default(),
+                    || {
+                        focus_box("Modal first", 100.0)();
+                        focus_box("Modal last", 100.0)();
+                    },
+                );
+                focus_box("Background after", 100.0)();
+            });
+        },
+    );
+    shell.set_semantics_enabled(true);
+    shell.update();
+    let root = shell.semantics_tree().expect("tree").root();
+    assert!(find_semantics_described(root, "Background").is_none());
+    assert!(find_semantics_described(root, "Background after").is_none());
+    assert!(find_semantics_described(root, "Modal first").is_some());
+    for expected in ["Modal first", "Modal last", "Modal first"] {
+        assert!(shell.on_key_event(&KeyEvent::key_down(KeyCode::Tab, "")));
+        shell.update();
+        assert_eq!(focused_description(&mut shell).as_deref(), Some(expected));
+    }
+}
+
+#[test]
+fn a_reader_activates_a_dialog_button_without_dismissing_its_dialog() {
+    let _guard = test_guard();
+    let clicks = Rc::new(Cell::new(0));
+    let dismissals = Rc::new(Cell::new(0));
+    let clicked = Rc::clone(&clicks);
+    let dismissed = Rc::clone(&dismissals);
+    let open = Rc::new(RefCell::new(None));
+    let captured_open = Rc::clone(&open);
+    let mut shell = AppShell::new(
+        HitGraphRenderer::default(),
+        location_key(file!(), line!(), column!()),
+        move || {
+            let clicked = Rc::clone(&clicked);
+            let dismissed = Rc::clone(&dismissed);
+            let captured_open = Rc::clone(&captured_open);
+            cranpose_ui::widgets::popup::PopupHost(move || {
+                let visible = rememberMutableStateOf(|| false);
+                *captured_open.borrow_mut() = Some(visible);
+                if !visible.get() {
+                    return;
+                }
+                let clicked = Rc::clone(&clicked);
+                let dismissed = Rc::clone(&dismissed);
+                cranpose_ui::widgets::dialog::Dialog(
+                    cranpose_ui::widgets::dialog::DialogSpec::default(),
+                    move |_| dismissed.set(dismissed.get() + 1),
+                    move || {
+                        let clicked = Rc::clone(&clicked);
+                        Button(
+                            Modifier::empty().size(Size::new(160.0, 48.0)),
+                            ButtonSpec::default(),
+                            move || clicked.set(clicked.get() + 1),
+                            || {
+                                Text("Inner action", Modifier::empty(), TextStyle::default());
+                            },
+                        );
+                    },
+                );
+            });
+        },
+    );
+    shell.set_buffer_size(640, 480);
+    shell.set_viewport(640.0, 480.0);
+    shell.update();
+    open.borrow().expect("dialog state").set(true);
+    for _ in 0..3 {
+        shell.update();
+    }
+    let tree = shell.layout_tree().expect("layout");
+    let rect = find_layout_box_with_text(tree.root(), "Inner action")
+        .expect("dialog button")
+        .rect;
+    assert!(
+        rect.width > 0.0 && rect.height > 0.0,
+        "the button is on screen"
+    );
+    assert!(shell.accessibility_activate_at(rect.x + rect.width / 2.0, rect.y + rect.height / 2.0));
+    shell.update();
+    assert_eq!(
+        clicks.get(),
+        1,
+        "the reader's action reaches the button; dismissals={}",
+        dismissals.get()
+    );
+    assert_eq!(dismissals.get(), 0, "a button press is not an outside tap");
+}
+
+#[test]
+fn radio_keyboard_navigation_wraps_selects_and_uses_one_tab_stop() {
+    let _guard = test_guard();
+    let picked = Rc::new(Cell::new(1));
+    let output = Rc::clone(&picked);
+    let mut shell = AppShell::new(
+        HitGraphRenderer::default(),
+        location_key(file!(), line!(), column!()),
+        move || {
+            let picked = Rc::clone(&output);
+            Column(Modifier::empty(), ColumnSpec::default(), move || {
+                let picked = Rc::clone(&picked);
+                Row(
+                    Modifier::empty().selectable_group(),
+                    RowSpec::default(),
+                    move || {
+                        for (index, name) in ["Radio one", "Radio two", "Radio three"]
+                            .into_iter()
+                            .enumerate()
+                        {
+                            let picked = Rc::clone(&picked);
+                            Box(
+                                Modifier::empty()
+                                    .size(Size::new(100.0, 48.0))
+                                    .selectable(
+                                        index == 1,
+                                        Some(cranpose_ui::SemanticsWidgetRole::RadioButton),
+                                        move || picked.set(index),
+                                    )
+                                    .content_description(name),
+                                BoxSpec::default(),
+                                || {},
+                            );
+                        }
+                    },
+                );
+                focus_box("After radios", 100.0)();
+            });
+        },
+    );
+    shell.set_semantics_enabled(true);
+    shell.update();
+    for (key, expected, selection) in [
+        (KeyCode::Tab, "Radio two", 1),
+        (KeyCode::ArrowRight, "Radio three", 2),
+        (KeyCode::ArrowRight, "Radio one", 0),
+        (KeyCode::End, "Radio three", 2),
+        (KeyCode::Home, "Radio one", 0),
+        (KeyCode::Tab, "After radios", 0),
+    ] {
+        assert!(shell.on_key_event(&KeyEvent::key_down(key, "")), "{key:?}");
+        shell.update();
+        assert_eq!(focused_description(&mut shell).as_deref(), Some(expected));
+        assert_eq!(picked.get(), selection);
     }
 }
 

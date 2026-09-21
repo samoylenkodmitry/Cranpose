@@ -23,6 +23,7 @@ pub fn AccessibilityRobotScreen() {
         ColumnSpec::default().vertical_arrangement(LinearArrangement::SpacedBy(8.0)),
         move || {
             Text("Accessibility robot", Modifier::empty(), robot_text_style());
+            RobotNavigationControls();
             Row(
                 Modifier::empty().merge_descendants(),
                 RowSpec::default(),
@@ -89,6 +90,38 @@ pub fn AccessibilityRobotScreen() {
     );
 }
 
+#[allow(non_snake_case)]
+#[composable]
+fn RobotDialog(
+    title: &'static str,
+    close_label: &'static str,
+    visible: cranpose_core::MutableState<bool>,
+    content: impl Fn() + 'static,
+) {
+    let content = std::rc::Rc::new(content);
+    let notes = remember(|| TextFieldState::new("")).with(|state| *state);
+    cranpose_ui::widgets::dialog::Dialog(
+        cranpose_ui::widgets::dialog::DialogSpec::default(),
+        move |_| visible.set(false),
+        move || {
+            let content = content.clone();
+            Column(
+                Modifier::empty()
+                    .width(280.0)
+                    .background(Color::WHITE)
+                    .padding(16.0),
+                ColumnSpec::default(),
+                move || {
+                    Text(title, Modifier::empty(), robot_text_style());
+                    content();
+                    BasicTextField(notes, field_modifier("Dialog notes"), robot_text_style());
+                    RobotButton(close_label, true, move || visible.set(false));
+                },
+            );
+        },
+    );
+}
+
 fn robot_text_style() -> TextStyle {
     let mut style = TextStyle::default();
     style.span_style.color = Some(Color::BLACK);
@@ -119,4 +152,43 @@ fn RobotButton(label: &'static str, enabled: bool, action: impl FnMut() + 'stati
             Text(label, Modifier::empty(), robot_text_style());
         },
     );
+}
+
+#[allow(non_snake_case)]
+#[composable]
+fn RobotNavigationControls() {
+    let delivery = rememberMutableStateOf(|| 1usize);
+    let preferences = rememberMutableStateOf(|| false);
+    let confirmation = rememberMutableStateOf(|| false);
+    Row(
+        Modifier::empty().selectable_group(),
+        RowSpec::default(),
+        move || {
+            for (index, label) in ["Standard", "Express", "Collection"]
+                .into_iter()
+                .enumerate()
+            {
+                Text(
+                    label,
+                    Modifier::empty()
+                        .size(cranpose_ui::Size::new(100.0, 48.0))
+                        .selectable(
+                            delivery.get() == index,
+                            Some(SemanticsWidgetRole::RadioButton),
+                            move || delivery.set(index),
+                        ),
+                    robot_text_style(),
+                );
+            }
+        },
+    );
+    RobotButton("Open preferences", true, move || preferences.set(true));
+    if preferences.get() {
+        RobotDialog("Preferences", "Close preferences", preferences, move || {
+            RobotButton("Open confirmation", true, move || confirmation.set(true));
+            if confirmation.get() {
+                RobotDialog("Confirmation", "Close confirmation", confirmation, || {});
+            }
+        });
+    }
 }

@@ -81,6 +81,8 @@ and the robots below validate the final OS/browser representation.
 | Editable text reaches application state | Yes | Yes | Yes | Yes | Native keyboard | Native input/keyboard |
 | Selection survives editing | — | — | — | Yes | — | Yes |
 | Accessibility reconnect and navigation | — | — | — | Yes | — | Navigation |
+| Nested modal isolation and restoration | Yes | Yes | Yes | Yes | Yes | Yes |
+| Radio state and collection position | — | — | — | Yes | Yes | Yes |
 
 Coverage describes implemented assertions, not a claim that every platform has
 been run on every change. Record the actual platform, artifact hash, test counts,
@@ -98,7 +100,7 @@ just robot-accessibility-linux target/ci/desktop-app /tmp/a11y-linux
 just robot-accessibility-windows target/ci/desktop-app.exe a11y-windows
 ```
 
-Each command runs five assertion groups and saves the native tree, application
+Each command runs six assertion groups and saves the native tree, application
 log, and executable SHA-256. macOS requires Accessibility permission for the
 terminal or runner; the recipe installs its pinned PyObjC dependency in a local
 virtual environment. Linux requires Python GObject introspection, the AT-SPI 2
@@ -128,10 +130,11 @@ just robot-accessibility-web /tmp/a11y-web-build/site /tmp/a11y-web
 
 The build runs the shipped wasm feature lint, release build, and packaging.
 The robot serves only the packaged site on a private localhost port and runs
-headless Chrome. Set `CHROME` to select an executable. Its fifteen checks cover
+headless Chrome. Set `CHROME` to select an executable. Its checks cover
 native names and roles, disabled activation, adjustable values, retained DOM
 identity and focus, forward/backward Tab, single keyboard activation, list
-ownership, dictated Unicode input, selection, and keyboard editing. Artifacts
+ownership, dictated Unicode input, selection, keyboard editing, radio-group
+navigation, modal focus containment, and nested dialog dismissal. Artifacts
 include the browser log, native tree, screenshot, and report.
 
 ## Android
@@ -140,6 +143,11 @@ include the browser log, native tree, screenshot, and report.
 just android-robot-build
 just robot-android-accessibility emulator-5554 /tmp/a11y-android
 ```
+
+For an x86_64 emulator, build with
+`ORG_GRADLE_PROJECT_cranposeReleaseAbis=x86_64 just android-robot-build`.
+The APK must contain the emulator's native ABI; see
+[build troubleshooting](development_troubleshooting.md#builds-and-ci).
 
 The ten instrumentation tests include Google's Accessibility Test Framework,
 tree parsing, live navigation, reconnect, and actions on the shared screen.

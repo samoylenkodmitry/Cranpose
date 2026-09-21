@@ -32,6 +32,7 @@ def run_checks(adapter, report, allow_linux_disabled_state_bug=False):
 
     def passed(name):
         report['passed'].append(name)
+        print(f'PASS: {name}', flush=True)
 
     node('Accessibility robot')
     node('Action count: 0')
@@ -69,6 +70,18 @@ def run_checks(adapter, report, allow_linux_disabled_state_bug=False):
     require(adapter.set_value(node('Notes'), 'Robot notes'), 'native text replacement failed')
     node('Edited: Robot notes')
     passed('native editable text reaches application state')
+    for opener, closer, background in [
+            ('Open preferences', 'Close preferences', 'Increase'),
+            ('Open confirmation', 'Close confirmation', 'Close preferences')]:
+        require(adapter.activate(node(opener)), f'{opener} has no native activation action')
+        node(closer)
+        require(not any(n['name'] == background for n in adapter.nodes()),
+                f'modal exposes background control {background}')
+    for closer, restored in [('Close confirmation', 'Close preferences'),
+                             ('Close preferences', 'Increase')]:
+        require(adapter.activate(node(closer)), f'{closer} has no native activation action')
+        node(restored)
+    passed('nested modals isolate the native tree and restore background controls')
 
 
 def main():

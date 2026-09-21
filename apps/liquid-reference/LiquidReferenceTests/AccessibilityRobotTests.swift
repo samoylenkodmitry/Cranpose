@@ -38,6 +38,8 @@ final class AccessibilityRobotTests: XCTestCase {
         let volume = named("Volume", in: app)
         XCTAssertTrue(volume.exists)
         XCTAssertEqual(volume.value as? String, "30")
+        XCTAssertEqual(named("Express", in: app).value as? String, "checked, 2 of 3")
+        XCTAssertEqual(named("Standard", in: app).value as? String, "not checked, 1 of 3")
     }
 
     func testActivationThroughNativeControls() {
@@ -47,6 +49,16 @@ final class AccessibilityRobotTests: XCTestCase {
             app.buttons[name].tap()
             XCTAssertTrue(named("Action count: \(count)", in: app).waitForExistence(timeout: 5))
         }
+        app.buttons["Open preferences"].tap()
+        XCTAssertTrue(app.buttons["Close preferences"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["Increase"].exists)
+        app.buttons["Open confirmation"].tap()
+        XCTAssertTrue(app.buttons["Close confirmation"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["Close preferences"].exists)
+        app.buttons["Close confirmation"].tap()
+        XCTAssertTrue(app.buttons["Close preferences"].waitForExistence(timeout: 5))
+        app.buttons["Close preferences"].tap()
+        XCTAssertTrue(app.buttons["Increase"].waitForExistence(timeout: 5))
     }
 
     func testNativeTextEditing() {

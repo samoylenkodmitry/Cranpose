@@ -2,6 +2,37 @@ use super::*;
 use crate::accessibility::AccessibilityRect;
 
 #[test]
+fn collection_positions_use_accesskits_zero_based_index() {
+    for position in 1..=3 {
+        let element = AccessibilityElement {
+            role: AccessibilityRole::Tab,
+            collection_item: Some(accessibility::CollectionItem {
+                position,
+                count: 3,
+                horizontal: true,
+            }),
+            ..AccessibilityElement::default()
+        };
+        let node = accesskit_node(&element);
+        assert_eq!(node.position_in_set(), Some(position - 1));
+        assert_eq!(node.size_of_set(), Some(3));
+    }
+}
+
+#[test]
+fn radio_selection_is_a_native_checked_state() {
+    for selected in [false, true] {
+        let element = AccessibilityElement {
+            role: AccessibilityRole::RadioButton,
+            selected: Some(selected),
+            ..AccessibilityElement::default()
+        };
+        let node = accesskit_node(&element);
+        assert_eq!(node.toggled(), Some(Toggled::from(selected)));
+        assert_eq!(node.is_selected(), None);
+    }
+}
+#[test]
 fn the_tree_points_at_the_focused_control_and_offers_focus_on_the_others() {
     let elements = vec![
         AccessibilityElement {

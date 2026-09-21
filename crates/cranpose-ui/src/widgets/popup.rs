@@ -22,7 +22,9 @@
 //! its `(position, content)` into a [`PopupRegistry`] carried down the tree by
 //! a `CompositionLocal`; the enclosing [`PopupHost`] reads that registry and
 //! composes the content at the root. Registration/teardown is reactive:
-//! adding, removing, or moving a popup invalidates the host so it recomposes.
+//! adding or removing a popup recomposes the list. Moving or refreshing one
+//! popup recomposes its own layer, keeping nested popups from invalidating
+//! their parents as their content changes.
 
 #![allow(non_snake_case)]
 
@@ -46,9 +48,32 @@ use crate::{PointerInputScope, composable, modifier::Modifier};
 #[derive(Clone)]
 struct PopupEntry {
     id: u64,
+    data: OwnedMutableState<PopupContent>,
+}
+
+impl PartialEq for PopupEntry {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id && self.data.handle() == other.data.handle()
+    }
+}
+
+#[derive(Clone)]
+struct PopupContent {
     position: Point,
     content: Rc<dyn Fn()>,
     on_dismiss: Option<Rc<dyn Fn()>>,
+}
+
+impl PartialEq for PopupContent {
+    fn eq(&self, other: &Self) -> bool {
+        self.position == other.position
+            && Rc::ptr_eq(&self.content, &other.content)
+            && match (&self.on_dismiss, &other.on_dismiss) {
+                (Some(left), Some(right)) => Rc::ptr_eq(left, right),
+                (None, None) => true,
+                _ => false,
+            }
+    }
 }
 
 struct PopupRegistryState {
@@ -88,7 +113,7 @@ pub fn dismiss_top_popup() -> bool {
             entries
                 .iter()
                 .rev()
-                .find_map(|entry| entry.on_dismiss.clone())
+                .find_map(|entry| entry.data.get_non_reactive().on_dismiss)
         })
     });
     match on_dismiss {
@@ -116,7 +141,7 @@ pub fn dismissable_popup_open() -> bool {
                 .entries
                 .borrow()
                 .iter()
-                .any(|entry| entry.on_dismiss.is_some())
+                .any(|entry| entry.data.get_non_reactive().on_dismiss.is_some())
         })
     })
 }
@@ -161,24 +186,25 @@ impl PopupRegistry {
         content: Rc<dyn Fn()>,
         on_dismiss: Option<Rc<dyn Fn()>>,
     ) {
+        let next = PopupContent {
+            position,
+            content,
+            on_dismiss,
+        };
         let mut entries = self.inner.entries.borrow_mut();
         if let Some(existing) = entries.iter_mut().find(|entry| entry.id == id) {
-            let moved = existing.position != position;
-            let content_changed =
-                !std::ptr::addr_eq(Rc::as_ptr(&existing.content), Rc::as_ptr(&content));
-            existing.position = position;
-            existing.content = content;
-            existing.on_dismiss = on_dismiss;
+            let state = existing.data.clone();
+            let dismiss_changed =
+                state.get_non_reactive().on_dismiss.is_some() != next.on_dismiss.is_some();
             drop(entries);
-            if moved || content_changed {
+            state.set(next);
+            if dismiss_changed {
                 self.bump();
             }
         } else {
             entries.push(PopupEntry {
                 id,
-                position,
-                content,
-                on_dismiss,
+                data: ownedMutableStateOf(next),
             });
             drop(entries);
             self.bump();
@@ -222,24 +248,20 @@ fn local_popup_registry() -> StaticCompositionLocal<PopupRegistry> {
 }
 
 /// The [`PopupHost`]'s live measured viewport size (logical px), published on
-/// every measure pass through a shared cell. Overlay content (selection
-/// menus, the loupe) reads it to clamp itself to the window edges;
+/// every measure pass through observable state. Overlay content recomposes
+/// when the host is first measured or resized, keeping its bounds in the window;
 /// `Size::ZERO` means "not measured yet" (or no host) — treat as unclamped.
-pub fn local_popup_viewport() -> StaticCompositionLocal<Rc<Cell<cranpose_ui_graphics::Size>>> {
-    type ViewportCell = Rc<Cell<cranpose_ui_graphics::Size>>;
+pub fn local_popup_viewport()
+-> StaticCompositionLocal<OwnedMutableState<cranpose_ui_graphics::Size>> {
+    type ViewportState = OwnedMutableState<cranpose_ui_graphics::Size>;
     thread_local! {
-        static LOCAL: RefCell<Option<StaticCompositionLocal<ViewportCell>>> =
+        static LOCAL: RefCell<Option<StaticCompositionLocal<ViewportState>>> =
             const { RefCell::new(None) };
     }
     LOCAL.with(|cell| {
         cell.borrow_mut()
             .get_or_insert_with(|| {
-                staticCompositionLocalOf(|| {
-                    Rc::new(Cell::new(cranpose_ui_graphics::Size {
-                        width: 0.0,
-                        height: 0.0,
-                    }))
-                })
+                staticCompositionLocalOf(|| ownedMutableStateOf(cranpose_ui_graphics::Size::ZERO))
             })
             .clone()
     })
@@ -258,20 +280,17 @@ where
     F: FnMut() + 'static,
 {
     let registry = remember(PopupRegistry::hosted).with(PopupRegistry::clone);
-    let viewport = remember(|| {
-        Rc::new(Cell::new(cranpose_ui_graphics::Size {
-            width: 0.0,
-            height: 0.0,
-        }))
-    })
-    .with(Rc::clone);
-    let report_sink = Rc::clone(&viewport);
+    let viewport =
+        remember(|| ownedMutableStateOf(cranpose_ui_graphics::Size::ZERO)).with(Clone::clone);
+    let report_sink = viewport.handle();
     Box(
-        Modifier::empty().fill_max_size().report_size(report_sink),
+        Modifier::empty()
+            .fill_max_size()
+            .report_size_state(report_sink),
         BoxSpec::default(),
         move || {
             let registry = registry.clone();
-            let viewport = Rc::clone(&viewport);
+            let viewport = viewport.clone();
             CompositionLocalProvider(
                 [
                     local_popup_registry().provides(registry.clone()),
@@ -286,28 +305,32 @@ where
     );
 }
 
-/// Renders the registered popups. Isolated in its own composable so registry
-/// changes (add/remove/move/content refresh) recompose only the overlay.
 #[composable]
 fn PopupOverlay(registry: PopupRegistry) {
     registry.subscribe();
     for entry in registry.snapshot() {
-        if let Some(on_dismiss) = entry.on_dismiss {
-            Box(
-                Modifier::empty()
-                    .fill_max_size()
-                    .then(popup_scrim_pointer_input(entry.id, on_dismiss)),
-                BoxSpec::default(),
-                || {},
-            );
-        }
-        let content = entry.content;
+        cranpose_core::key(entry.id, || PopupLayer(entry));
+    }
+}
+
+#[composable]
+fn PopupLayer(entry: PopupEntry) {
+    let data = entry.data.get();
+    if let Some(on_dismiss) = data.on_dismiss {
         Box(
-            Modifier::empty().absolute_offset(entry.position.x, entry.position.y),
+            Modifier::empty()
+                .fill_max_size()
+                .then(popup_scrim_pointer_input(entry.id, on_dismiss)),
             BoxSpec::default(),
-            move || content(),
+            || {},
         );
     }
+    let content = data.content;
+    Box(
+        Modifier::empty().absolute_offset(data.position.x, data.position.y),
+        BoxSpec::default(),
+        move || content(),
+    );
 }
 
 /// Modal outside-tap handling for dismissable popups. Consuming Down prevents
@@ -330,7 +353,7 @@ fn popup_scrim_pointer_input(id: u64, on_dismiss: Rc<dyn Fn()>) -> Modifier {
                             }
                             PointerEventKind::Move => event.consume(),
                             PointerEventKind::Up => {
-                                let should_dismiss = pressed;
+                                let should_dismiss = pressed && !event.is_consumed();
                                 pressed = false;
                                 event.consume();
                                 if should_dismiss {
@@ -471,6 +494,49 @@ mod tests {
     use crate::modifier::collect_slices_from_modifier;
 
     #[test]
+    fn refreshing_popup_content_does_not_invalidate_the_popup_list() {
+        let mut composition = cranpose_core::Composition::new(cranpose_core::MemoryApplier::new());
+        composition
+            .render(
+                cranpose_core::location_key(file!(), line!(), column!()),
+                || {
+                    let registry = PopupRegistry::hosted();
+                    let id = registry.allocate_id();
+                    registry.upsert(id, Point::default(), Rc::new(|| {}), Some(Rc::new(|| {})));
+                    let revision = registry.inner.revision.as_ref().expect("hosted revision");
+                    let before = revision.get_non_reactive();
+                    let calls = Rc::new(Cell::new(0));
+                    let content_calls = calls.clone();
+                    let dismiss_calls = calls.clone();
+                    registry.upsert(
+                        id,
+                        Point::new(10.0, 20.0),
+                        Rc::new(move || content_calls.set(content_calls.get() + 1)),
+                        Some(Rc::new(move || dismiss_calls.set(dismiss_calls.get() + 10))),
+                    );
+                    assert_eq!(
+                        revision.get_non_reactive(),
+                        before,
+                        "only the changed popup needs recomposition"
+                    );
+                    let entries = registry.snapshot();
+                    assert_eq!(entries.len(), 1);
+                    let updated = entries[0].data.get_non_reactive();
+                    assert_eq!(updated.position, Point::new(10.0, 20.0));
+                    (updated.content)();
+                    assert_eq!(calls.get(), 1);
+                    (updated.on_dismiss.expect("updated dismiss callback"))();
+                    assert_eq!(calls.get(), 11);
+                    registry.upsert(id, Point::default(), Rc::new(|| {}), None);
+                    assert_eq!(revision.get_non_reactive(), before + 1);
+                    registry.remove(id);
+                    assert_eq!(revision.get_non_reactive(), before + 2);
+                },
+            )
+            .expect("composition");
+    }
+
+    #[test]
     fn non_dismissable_exit_frame_has_no_modal_scrim_callback() {
         let callback: Rc<dyn Fn()> = Rc::new(|| {});
         assert!(popup_dismiss_callback(false, Rc::clone(&callback)).is_none());
@@ -490,11 +556,8 @@ mod tests {
         assert_eq!(slices.pointer_inputs().len(), 1);
         let handler = slices.pointer_inputs()[0].clone();
 
-        let down = PointerEvent::new(
-            PointerEventKind::Down,
-            Point { x: 12.0, y: 18.0 },
-            Point { x: 12.0, y: 18.0 },
-        );
+        let event = |kind| PointerEvent::new(kind, Point::new(12.0, 18.0), Point::new(12.0, 18.0));
+        let down = event(PointerEventKind::Down);
         handler(down.clone());
         assert!(
             down.is_consumed(),
@@ -502,16 +565,23 @@ mod tests {
         );
         assert!(!dismissed.get(), "dismissal fires on release");
 
-        let up = PointerEvent::new(
-            PointerEventKind::Up,
-            Point { x: 12.0, y: 18.0 },
-            Point { x: 12.0, y: 18.0 },
-        );
+        let up = event(PointerEventKind::Up);
         handler(up.clone());
         assert!(up.is_consumed(), "the release stays inside the scrim");
         assert!(
             dismissed.get(),
             "a completed outside tap dismisses the popup"
         );
+        for terminal in [PointerEventKind::Up, PointerEventKind::Cancel] {
+            dismissed.set(false);
+            handler(event(PointerEventKind::Down));
+            let handled = event(terminal);
+            handled.consume();
+            handler(handled);
+            assert!(
+                !dismissed.get(),
+                "a handled or cancelled press stays inside the popup"
+            );
+        }
     }
 }

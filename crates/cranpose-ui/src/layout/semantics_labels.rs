@@ -38,6 +38,7 @@ impl SemanticsNode {
                         | SemanticsWidgetRole::Menu
                         | SemanticsWidgetRole::TabBar
                         | SemanticsWidgetRole::List
+                        | SemanticsWidgetRole::RadioGroup
                 )
             )
     }

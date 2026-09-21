@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import time
 
 
 class NativeAdapter:
@@ -10,11 +11,14 @@ class NativeAdapter:
 
 
 class MacAdapter(NativeAdapter):
-    def __init__(self, pid):
+    def __init__(self, pid, timeout=1.0):
         import ApplicationServices as ax
         self.ax = ax
         if not ax.AXIsProcessTrusted():
             raise RuntimeError('The macOS robot process needs Accessibility permission')
+        error = ax.AXUIElementSetMessagingTimeout(ax.AXUIElementCreateSystemWide(), timeout)
+        if error:
+            raise RuntimeError(f'Could not set the macOS accessibility timeout: {error}')
         self.root = ax.AXUIElementCreateApplication(pid)
 
     def attribute(self, node, name):
@@ -57,14 +61,24 @@ class LinuxAdapter(NativeAdapter):
     def __init__(self, pid):
         import gi
         gi.require_version('Atspi', '2.0')
-        from gi.repository import Atspi
+        from gi.repository import Atspi, GLib
         self.api = Atspi
+        self.error_type = GLib.Error
         self.pid = pid
         Atspi.set_timeout(1000, 1000)
         subprocess.run(['busctl', '--user', 'set-property', 'org.a11y.Bus', '/org/a11y/bus',
                         'org.a11y.Status', 'IsEnabled', 'b', 'true'], check=True, timeout=10)
 
     def nodes(self):
+        for attempt in range(3):
+            try:
+                return self._nodes()
+            except self.error_type as error:
+                if attempt == 2 or not error.message.startswith('Unknown object '):
+                    raise
+                time.sleep(0.02)
+
+    def _nodes(self):
         desktop = self.api.get_desktop(0)
         pending = [desktop.get_child_at_index(i) for i in range(desktop.get_child_count())]
         pending = [node for node in pending if node.get_process_id() == self.pid]

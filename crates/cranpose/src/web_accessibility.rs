@@ -234,7 +234,10 @@ fn apply_role_extras(node: &HtmlElement, element: &AccessibilityElement) -> Resu
             node.set_attribute("aria-level", "2")?;
             node.set_text_content(Some(&element.label));
         }
-        AccessibilityRole::Dialog => node.set_attribute("aria-modal", "true")?,
+        AccessibilityRole::Dialog => node.set_attribute(
+            "aria-modal",
+            if element.is_modal { "true" } else { "false" },
+        )?,
         _ => {}
     }
     Ok(())
@@ -306,6 +309,7 @@ fn holds_lines(element: &AccessibilityElement) -> bool {
 
 fn is_mirror_container(element: &AccessibilityElement) -> bool {
     element.role.is_named_container()
+        || element.role == AccessibilityRole::Dialog
         || element.vertical_scroll.is_some()
         || element.horizontal_scroll.is_some()
         || element.pane_title.is_some()
@@ -500,7 +504,10 @@ fn mirror_node(
 /// adjustable control takes Tab, a plain button keeps the browser's default,
 /// and text stays out of the way.
 fn tab_index(element: &AccessibilityElement) -> &'static str {
-    if element.enabled && (element.focusable || element.adjustable || element.clickable) {
+    if element.enabled
+        && element.tab_stop
+        && (element.focusable || element.adjustable || element.clickable)
+    {
         "0"
     } else {
         "-1"
@@ -571,7 +578,7 @@ fn attach_focus_listener(
         let Some(node_id) = node_ids.borrow().get(&element_id).copied() else {
             return;
         };
-        on_live_tree(&app, |_| accessibility::focus_node(node_id));
+        on_live_tree(&app, |root| accessibility::focus_node(root, node_id));
     }) as Box<dyn FnMut(_)>);
     root.add_event_listener_with_callback("focusin", focus_in.as_ref().unchecked_ref())?;
     focus_in.forget();
@@ -722,10 +729,16 @@ fn attach_key_listener(
 
 fn browser_handles_key(event: &web_sys::KeyboardEvent, target: &Element) -> bool {
     let key = event.key();
-    key == "Tab"
-        || (key != "Escape"
-            && (target.is_instance_of::<HtmlInputElement>()
-                || target.is_instance_of::<HtmlTextAreaElement>()))
+    if key == "Tab" {
+        return target
+            .closest("[aria-modal=\"true\"]")
+            .ok()
+            .flatten()
+            .is_none();
+    }
+    (key != "Escape"
+        && (target.is_instance_of::<HtmlInputElement>()
+            || target.is_instance_of::<HtmlTextAreaElement>()))
         || (target.tag_name() == "BUTTON" && matches!(key.as_str(), "Enter" | " "))
 }
 

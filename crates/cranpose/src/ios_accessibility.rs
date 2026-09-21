@@ -482,7 +482,11 @@ impl IosAccessibilityBridge {
     }
 
     /// Hands focus to the app when VoiceOver lands its cursor on an element.
-    pub(crate) fn drain_focus(&mut self) -> bool {
+    pub(crate) fn drain_focus<R>(&mut self, shell: &mut AppShell<R>) -> bool
+    where
+        R: Renderer,
+        R::Error: Debug,
+    {
         let pending = self.requests.focus.take();
         let mut moved = false;
         for element_id in pending {
@@ -497,7 +501,9 @@ impl IosAccessibilityBridge {
                 continue;
             }
             self.focused_element = Some(element_id);
-            moved |= accessibility::focus_node(node_id);
+            moved |= accessibility::run_reader_action(shell, |root| {
+                accessibility::focus_node(root, node_id)
+            });
         }
         moved
     }
@@ -784,21 +790,7 @@ fn update_native_element(
     }
     native.setIsAccessibilityElement(!element.label.is_empty() || element.role.is_text_field());
     native.setAccessibilityLabel(Some(&NSString::from_str(&element.label)));
-    let place = element
-        .collection_item
-        .map(|item| format!("{} of {}", item.position, item.count));
-    let value = element
-        .value
-        .clone()
-        .or_else(|| element.password.then(|| "password".to_owned()))
-        .or_else(|| accessibility::expansion_word(element).map(str::to_owned))
-        .or_else(|| accessibility::state_with_error(element))
-        .or_else(|| {
-            element
-                .progress
-                .map(|progress| progress.current.to_string())
-        })
-        .or(place);
+    let value = accessibility::voiceover_value(element);
     native.setAccessibilityValue(value.as_deref().map(NSString::from_str).as_deref());
     native.setAccessibilityHint(
         element
@@ -815,7 +807,7 @@ fn update_native_element(
     // SAFETY: UIKit accessibility trait constants are immutable process-wide
     // values exported by the linked framework.
     unsafe {
-        if element.selected == Some(true) {
+        if element.selected == Some(true) && element.role != AccessibilityRole::RadioButton {
             traits |= UIAccessibilityTraitSelected;
         }
         if !element.enabled {
@@ -826,7 +818,7 @@ fn update_native_element(
         }
     }
     native.setAccessibilityTraits(traits);
-    native.setAccessibilityViewIsModal(element.role == AccessibilityRole::Dialog, mtm);
+    native.setAccessibilityViewIsModal(element.is_modal, mtm);
     offer_custom_actions(native, element, jumpable, mtm);
 }
 
@@ -857,7 +849,8 @@ fn role_traits(role: AccessibilityRole) -> UIAccessibilityTraits {
             | AccessibilityRole::MenuItem
             | AccessibilityRole::TabBar
             | AccessibilityRole::List
-            | AccessibilityRole::ListItem => named_role_traits(role),
+            | AccessibilityRole::ListItem
+            | AccessibilityRole::RadioGroup => named_role_traits(role),
         }
     }
 }
@@ -881,7 +874,8 @@ fn named_role_traits(role: AccessibilityRole) -> UIAccessibilityTraits {
             AccessibilityRole::Toolbar
             | AccessibilityRole::Menu
             | AccessibilityRole::TabBar
-            | AccessibilityRole::List => UIAccessibilityTraitNone,
+            | AccessibilityRole::List
+            | AccessibilityRole::RadioGroup => UIAccessibilityTraitNone,
             AccessibilityRole::Button
             | AccessibilityRole::StaticText
             | AccessibilityRole::TextField

@@ -65,12 +65,13 @@ pub(crate) enum AccessibilityRole {
     TabBar,
     List,
     ListItem,
+    RadioGroup,
 }
 
 /// The role a reader names for each role an app declares. A table rather than
 /// a match, so the platforms that name roles with plain data read theirs the
 /// same way; the length assertion below keeps it whole when a role is added.
-const WIDGET_ROLES: [(SemanticsWidgetRole, AccessibilityRole); 21] = [
+const WIDGET_ROLES: [(SemanticsWidgetRole, AccessibilityRole); 22] = [
     (SemanticsWidgetRole::Button, AccessibilityRole::Button),
     (SemanticsWidgetRole::Checkbox, AccessibilityRole::Checkbox),
     (SemanticsWidgetRole::Switch, AccessibilityRole::Switch),
@@ -110,16 +111,20 @@ const WIDGET_ROLES: [(SemanticsWidgetRole, AccessibilityRole); 21] = [
     (SemanticsWidgetRole::TabBar, AccessibilityRole::TabBar),
     (SemanticsWidgetRole::List, AccessibilityRole::List),
     (SemanticsWidgetRole::ListItem, AccessibilityRole::ListItem),
+    (
+        SemanticsWidgetRole::RadioGroup,
+        AccessibilityRole::RadioGroup,
+    ),
 ];
 
-const _: () = assert!(WIDGET_ROLES.len() == SemanticsWidgetRole::ListItem as usize + 1);
+const _: () = assert!(WIDGET_ROLES.len() == SemanticsWidgetRole::RadioGroup as usize + 1);
 
 /// The ARIA role of each role, for the web mirror.
 #[cfg(any(
     test,
     all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
 ))]
-const ARIA_ROLES: [(AccessibilityRole, &str); 23] = [
+const ARIA_ROLES: [(AccessibilityRole, &str); 24] = [
     (AccessibilityRole::Button, "button"),
     (AccessibilityRole::StaticText, "generic"),
     (AccessibilityRole::TextField, "textbox"),
@@ -143,6 +148,7 @@ const ARIA_ROLES: [(AccessibilityRole, &str); 23] = [
     (AccessibilityRole::TabBar, "tablist"),
     (AccessibilityRole::List, "list"),
     (AccessibilityRole::ListItem, "listitem"),
+    (AccessibilityRole::RadioGroup, "radiogroup"),
 ];
 
 /// The number the Android host reads each role as; the host's `className()`
@@ -151,7 +157,7 @@ const ARIA_ROLES: [(AccessibilityRole, &str); 23] = [
     test,
     all(feature = "android", feature = "renderer-wgpu", target_os = "android")
 ))]
-const ANDROID_ROLE_CODES: [(AccessibilityRole, i32); 23] = [
+const ANDROID_ROLE_CODES: [(AccessibilityRole, i32); 24] = [
     (AccessibilityRole::Button, 1),
     (AccessibilityRole::StaticText, 2),
     (AccessibilityRole::TextField, 3),
@@ -175,6 +181,7 @@ const ANDROID_ROLE_CODES: [(AccessibilityRole, i32); 23] = [
     (AccessibilityRole::TabBar, 21),
     (AccessibilityRole::List, 22),
     (AccessibilityRole::ListItem, 23),
+    (AccessibilityRole::RadioGroup, 24),
 ];
 
 /// What a table names a role as, or the fallback for a role the table lacks.
@@ -198,7 +205,7 @@ pub(crate) fn role_entry<T: Copy>(
 impl AccessibilityRole {
     /// Every role, for the tables that name a role on a platform and the
     /// tests that check none is left out.
-    pub(crate) const ALL: [Self; 23] = [
+    pub(crate) const ALL: [Self; 24] = [
         Self::Button,
         Self::StaticText,
         Self::TextField,
@@ -222,6 +229,7 @@ impl AccessibilityRole {
         Self::TabBar,
         Self::List,
         Self::ListItem,
+        Self::RadioGroup,
     ];
 
     fn from_widget_role(role: SemanticsWidgetRole) -> Self {
@@ -264,11 +272,14 @@ impl AccessibilityRole {
     /// Whether the control is a container a reader walks into rather than
     /// stops on, named by its role: a toolbar, a menu, a tab bar or a list.
     pub(crate) fn is_named_container(self) -> bool {
-        matches!(self, Self::Toolbar | Self::Menu | Self::TabBar | Self::List)
+        matches!(
+            self,
+            Self::Toolbar | Self::Menu | Self::TabBar | Self::List | Self::RadioGroup
+        )
     }
 }
 
-const _: () = assert!(AccessibilityRole::ALL.len() == AccessibilityRole::ListItem as usize + 1);
+const _: () = assert!(AccessibilityRole::ALL.len() == AccessibilityRole::RadioGroup as usize + 1);
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct AccessibilityElement {
@@ -296,6 +307,7 @@ pub(crate) struct AccessibilityElement {
     pub(crate) enabled: bool,
     pub(crate) custom_actions: Vec<String>,
     pub(crate) focusable: bool,
+    pub(crate) tab_stop: bool,
     pub(crate) focused: bool,
     pub(crate) live_region: Option<LiveRegionMode>,
     pub(crate) progress: Option<ProgressBarRangeInfo>,
@@ -312,6 +324,7 @@ pub(crate) struct AccessibilityElement {
     pub(crate) password: bool,
     pub(crate) expanded: Option<bool>,
     pub(crate) dismissable: bool,
+    pub(crate) is_modal: bool,
     /// Where the caret of an editable field sits, or which stretch of its
     /// text is picked: the anchor and the end that moves, as byte offsets into
     /// `value`. A field that holds a secret publishes none.
@@ -339,6 +352,7 @@ impl Default for AccessibilityElement {
             enabled: true,
             custom_actions: Vec::new(),
             focusable: false,
+            tab_stop: true,
             focused: false,
             live_region: None,
             progress: None,
@@ -354,6 +368,7 @@ impl Default for AccessibilityElement {
             password: false,
             expanded: None,
             dismissable: false,
+            is_modal: false,
             text_selection: None,
         }
     }
@@ -522,7 +537,7 @@ fn inspector_node(element: AccessibilityElement) -> cranpose_app_shell::inspecto
         element.enabled,
         element.focused,
         element.selected,
-        element.toggled,
+        checked_state(&element),
         element.bounds.x,
         element.bounds.y,
         element.bounds.width,
@@ -583,7 +598,7 @@ fn project_node(
             clickable,
             live_region,
         ));
-    } else if publishes_unlabeled(node) && rect.is_visible() {
+    } else if container && rect.is_visible() {
         elements.push(element_for_node(
             node,
             rect,
@@ -622,15 +637,20 @@ fn is_container(node: &SemanticsNode) -> bool {
     node.vertical_scroll.is_some()
         || node.horizontal_scroll.is_some()
         || node.selectable_group
+        || node.is_modal
+        || node.pane_title.is_some()
+        || node.widget_role == Some(SemanticsWidgetRole::Dialog)
         || node
             .widget_role
             .is_some_and(|role| AccessibilityRole::from_widget_role(role).is_named_container())
 }
 
-/// A node published with no label of its own: a container, or the root of a
-/// pane whose title a reader hears.
-fn publishes_unlabeled(node: &SemanticsNode) -> bool {
-    is_container(node) || node.pane_title.is_some()
+pub(crate) fn checked_state(element: &AccessibilityElement) -> Option<bool> {
+    if element.role == AccessibilityRole::RadioButton {
+        element.selected.or(element.toggled)
+    } else {
+        element.toggled
+    }
 }
 
 /// Projects the nodes under a container, then numbers the selectable controls
@@ -654,8 +674,45 @@ fn project_children(
             elements,
         );
     }
-    if node.selectable_group {
+    let selectable_group = node.selectable_group
+        || matches!(
+            node.widget_role,
+            Some(SemanticsWidgetRole::RadioGroup | SemanticsWidgetRole::TabBar)
+        );
+    if selectable_group {
         number_group(node.node_id, first_child, elements);
+    }
+    if selectable_group || node.widget_role == Some(SemanticsWidgetRole::Menu) {
+        mark_group_tab_stop(node.node_id, first_child, elements);
+    }
+}
+
+fn mark_group_tab_stop(group: NodeId, first_child: usize, elements: &mut [AccessibilityElement]) {
+    let members: Vec<_> = (first_child..elements.len())
+        .filter(|index| {
+            let element = &elements[*index];
+            element.scroll_parent == Some(group)
+                && matches!(
+                    element.role,
+                    AccessibilityRole::RadioButton
+                        | AccessibilityRole::Tab
+                        | AccessibilityRole::MenuItem
+                )
+        })
+        .collect();
+    let stop = members
+        .iter()
+        .copied()
+        .filter(|index| elements[*index].enabled)
+        .max_by_key(|index| {
+            (
+                elements[*index].focused,
+                elements[*index].selected == Some(true),
+                std::cmp::Reverse(*index),
+            )
+        });
+    for index in members {
+        elements[index].tab_stop = Some(index) == stop;
     }
 }
 
@@ -684,11 +741,17 @@ fn number_group(group: NodeId, first_child: usize, elements: &mut [Accessibility
         });
     }
     let (rows, columns) = if horizontal { (1, count) } else { (count, 1) };
+    let radio_group = members
+        .iter()
+        .all(|index| elements[*index].role == AccessibilityRole::RadioButton);
     if let Some(element) = elements
         .iter_mut()
         .find(|element| element.node_id == group && element.canvas_key.is_none())
     {
         element.collection = Some(CollectionInfo { rows, columns });
+        if element.role == AccessibilityRole::StaticText && radio_group {
+            element.role = AccessibilityRole::RadioGroup;
+        }
     }
 }
 
@@ -761,7 +824,9 @@ fn element_for_node(
     clickable: bool,
     live_region: Option<LiveRegionMode>,
 ) -> AccessibilityElement {
-    let role = if let Some(role) = node.widget_role {
+    let role = if node.is_modal {
+        AccessibilityRole::Dialog
+    } else if let Some(role) = node.widget_role {
         AccessibilityRole::from_widget_role(role)
     } else if node.editable_text {
         AccessibilityRole::TextField
@@ -799,6 +864,7 @@ fn element_for_node(
             .map(|action| action.label.clone())
             .collect(),
         focusable: node.focusable,
+        tab_stop: true,
         focused: node.focused,
         live_region: live_region.or_else(|| {
             (node.widget_role == Some(SemanticsWidgetRole::Alert))
@@ -817,6 +883,7 @@ fn element_for_node(
         password: node.password,
         expanded: expansion(node),
         dismissable: node.dismiss.is_some(),
+        is_modal: node.is_modal,
         text_selection: node
             .text_selection
             .filter(|_| node.editable_text && !node.password)
@@ -1405,8 +1472,9 @@ pub(crate) fn stepped_value(progress: &ProgressBarRangeInfo, up: bool) -> f32 {
 /// Moves app focus onto the node a platform's accessibility layer asked for,
 /// so a screen reader and the app agree on what holds focus. Answers whether
 /// focus moved.
-pub(crate) fn focus_node(node_id: NodeId) -> bool {
-    cranpose_ui::request_focus_from_platform(node_id)
+pub(crate) fn focus_node(root: &SemanticsNode, node_id: NodeId) -> bool {
+    find_semantics_node(root, node_id)
+        .is_some_and(|node| node.focusable && cranpose_ui::request_focus_from_platform(node_id))
 }
 
 /// Text the app asked a screen reader to read out, through
@@ -1647,7 +1715,7 @@ pub(crate) fn element_with(node_id: NodeId, canvas_key: Option<u64>) -> Accessib
 /// The word a reader says for each role, for the robot's spoken tree. Plain
 /// text has no word: its name is the whole of what a reader says.
 #[cfg(any(test, feature = "robot", target_os = "ios"))]
-const SPOKEN_ROLES: [(AccessibilityRole, &str); 23] = [
+const SPOKEN_ROLES: [(AccessibilityRole, &str); 24] = [
     (AccessibilityRole::Button, "button"),
     (AccessibilityRole::StaticText, ""),
     (AccessibilityRole::TextField, "text field"),
@@ -1671,6 +1739,7 @@ const SPOKEN_ROLES: [(AccessibilityRole, &str); 23] = [
     (AccessibilityRole::TabBar, "tab bar"),
     (AccessibilityRole::List, "list"),
     (AccessibilityRole::ListItem, "list item"),
+    (AccessibilityRole::RadioGroup, "radio group"),
 ];
 
 /// One control the way a reader speaks it: the name, the role, the state,
@@ -1700,14 +1769,13 @@ pub(crate) fn spoken_line(element: &AccessibilityElement) -> String {
         .collect();
     let mut parts: Vec<String> = vec![name, role_word.to_string()];
     parts.extend(
-        element
-            .toggled
+        checked_state(element)
             .map(|on| if on { toggle_words.0 } else { toggle_words.1 }.to_string()),
     );
     parts.extend(
         element
             .selected
-            .filter(|picked| *picked)
+            .filter(|picked| *picked && element.role != AccessibilityRole::RadioButton)
             .map(|_| "selected".to_string()),
     );
     parts.extend(element.expanded.map(|open| {
@@ -1779,3 +1847,43 @@ where
 #[cfg(test)]
 #[path = "tests/accessibility.rs"]
 mod tests;
+
+#[cfg(any(
+    test,
+    all(feature = "ios", feature = "renderer-wgpu", target_os = "ios")
+))]
+pub(crate) fn voiceover_value(element: &AccessibilityElement) -> Option<String> {
+    let mut parts = Vec::new();
+    if element.password {
+        parts.push("password".to_owned());
+    } else if let Some(value) = &element.value
+        && (element.role.is_text_field() || value != &element.label)
+        && !value.trim().is_empty()
+    {
+        parts.push(value.clone());
+    }
+    if element
+        .state_description
+        .as_deref()
+        .is_none_or(|state| state.trim().is_empty())
+    {
+        if let Some(checked) = checked_state(element) {
+            let word = match (element.role, checked) {
+                (AccessibilityRole::Switch, true) => "on",
+                (AccessibilityRole::Switch, false) => "off",
+                (_, true) => "checked",
+                (_, false) => "not checked",
+            };
+            parts.push(word.to_owned());
+        }
+        if let Some(progress) = element.progress {
+            parts.push(progress.current.to_string());
+        }
+    }
+    parts.extend(expansion_word(element).map(str::to_owned));
+    parts.extend(state_with_error(element));
+    if let Some(item) = element.collection_item {
+        parts.push(format!("{} of {}", item.position, item.count));
+    }
+    (!parts.is_empty()).then(|| parts.join(", "))
+}

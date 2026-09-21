@@ -78,6 +78,25 @@ public final class CranposeAccessibilityInteractionTest {
             } while (SystemClock.uptimeMillis() < deadline);
             assertEquals(2, field.getTextSelectionStart());
             assertEquals(7, field.getTextSelectionEnd());
+            assertTrue(awaitNode(automation, "Express").isCheckable());
+            assertTrue(awaitNode(automation, "Express").isChecked());
+            assertFalse(awaitNode(automation, "Standard").isChecked());
+            assertTrue(awaitNode(automation, "Standard").performAction(AccessibilityNodeInfo.ACTION_CLICK));
+            long radioDeadline = SystemClock.uptimeMillis() + 5000;
+            while (!awaitNode(automation, "Standard").isChecked() && SystemClock.uptimeMillis() < radioDeadline) {
+                SystemClock.sleep(50);
+            }
+            assertTrue(awaitNode(automation, "Standard").isChecked());
+            assertFalse(awaitNode(automation, "Express").isChecked());
+            assertTrue(awaitNode(automation, "Open preferences").performAction(AccessibilityNodeInfo.ACTION_CLICK));
+            awaitNode(automation, "Close preferences");
+            assertFalse(publishedText(automation).contains("Increase"));
+            assertTrue(awaitNode(automation, "Open confirmation").performAction(AccessibilityNodeInfo.ACTION_CLICK));
+            awaitNode(automation, "Close confirmation");
+            assertFalse(publishedText(automation).contains("Close preferences"));
+            assertTrue(awaitNode(automation, "Close confirmation").performAction(AccessibilityNodeInfo.ACTION_CLICK));
+            assertTrue(awaitNode(automation, "Close preferences").performAction(AccessibilityNodeInfo.ACTION_CLICK));
+            awaitNode(automation, "Increase");
         }
     }
 

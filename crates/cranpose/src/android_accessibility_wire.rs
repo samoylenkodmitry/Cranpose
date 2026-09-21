@@ -1,5 +1,7 @@
 use crate::{
-    accessibility::{AccessibilityElement, CollectionItem, element_ids, utf16_offset},
+    accessibility::{
+        AccessibilityElement, CollectionItem, checked_state, element_ids, utf16_offset,
+    },
     android_wire_escape::escape_wire_field,
 };
 
@@ -46,7 +48,7 @@ pub(crate) fn encode_elements(
                 escape(element.state_description.as_deref().unwrap_or("")),
                 escape(element.click_label.as_deref().unwrap_or("")),
                 tristate(element.selected),
-                tristate(element.toggled),
+                tristate(checked_state(element)),
                 i32::from(element.enabled),
                 actions,
                 i32::from(element.focusable),
