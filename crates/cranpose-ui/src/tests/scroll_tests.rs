@@ -955,6 +955,132 @@ fn timed_pointer_event(kind: PointerEventKind, x: f32, y: f32, time_ms: i64) -> 
         .with_time_ms(Some(time_ms))
 }
 
+#[derive(Clone, Copy, Debug)]
+enum DetachedScrollMotion {
+    WheelWait,
+    Fling,
+    Settle,
+    Bounce,
+}
+
+fn start_detached_scroll_motion(
+    handler: &dyn Fn(PointerEvent),
+    motion: DetachedScrollMotion,
+    vertical: bool,
+) {
+    if matches!(
+        motion,
+        DetachedScrollMotion::WheelWait | DetachedScrollMotion::Bounce
+    ) {
+        let (dx, dy) = if vertical { (0.0, 200.0) } else { (200.0, 0.0) };
+        let event = scroll_wheel_event(dx, dy);
+        handler(event.clone());
+        event.finish_post_dispatch();
+        return;
+    }
+    let event = |kind, position, time| {
+        let (x, y) = if vertical {
+            (0.0, position)
+        } else {
+            (position, 0.0)
+        };
+        timed_pointer_event(kind, x, y, time)
+    };
+    handler(event(PointerEventKind::Down, 400.0, 0));
+    for sample in 1..=12 {
+        handler(event(
+            PointerEventKind::Move,
+            400.0 - sample as f32 * 8.0,
+            sample * 8,
+        ));
+    }
+    handler(event(PointerEventKind::Up, 304.0, 104));
+}
+
+#[test]
+fn detaching_scroll_cancels_pending_motion_on_both_axes() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    for vertical in [true, false] {
+        for motion in [
+            DetachedScrollMotion::WheelWait,
+            DetachedScrollMotion::Fling,
+            DetachedScrollMotion::Settle,
+            DetachedScrollMotion::Bounce,
+        ] {
+            let runtime = Runtime::new(Arc::new(DefaultScheduler));
+            let state = ScrollState::new(0.0);
+            state.set_max_value(10_000.0);
+            if matches!(motion, DetachedScrollMotion::Settle) {
+                state.set_settle_policy(Some(Rc::new(|_, _| 1000.0)));
+            }
+            let modifier = if vertical {
+                Modifier::empty().vertical_scroll(state, false)
+            } else {
+                Modifier::empty().horizontal_scroll(state, false)
+            };
+            let (handler, mut chain) = pointer_handler_for(modifier);
+            let context = scroll_motion_context_for_key(ScrollMotionContextKey::ScrollState {
+                state_id: state.id(),
+                is_vertical: vertical,
+                reverse_scrolling: false,
+            });
+            start_detached_scroll_motion(&*handler, motion, vertical);
+            if matches!(motion, DetachedScrollMotion::Bounce) {
+                for frame in 1..=14 {
+                    runtime.handle().drain_frame_callbacks(frame * 16_000_000);
+                }
+            }
+            assert!(
+                runtime.handle().has_frame_callbacks(),
+                "{motion:?} did not start"
+            );
+            chain.detach_all();
+            assert!(
+                !runtime.handle().has_frame_callbacks(),
+                "{motion:?} survived detach on vertical={vertical}"
+            );
+            assert!(!context.is_active());
+            let offset = state.value_non_reactive();
+            runtime.handle().drain_frame_callbacks(1_000_000_000);
+            assert_eq!(state.value_non_reactive(), offset);
+        }
+    }
+}
+
+#[test]
+fn scroll_motion_invalidation_stays_with_its_owning_app() {
+    let _runtime = Runtime::new(Arc::new(DefaultScheduler));
+    let owner = crate::AppContext::new();
+    let other = crate::AppContext::new();
+    let node_id = 123;
+    let (mut chain, motion) = owner.enter(|| {
+        let state = ScrollState::new(0.0);
+        let modifier = Modifier::empty().vertical_scroll(state, false);
+        let motion = scroll_motion_context_for_key(ScrollMotionContextKey::ScrollState {
+            state_id: state.id(),
+            is_vertical: true,
+            reverse_scrolling: false,
+        });
+        let mut chain = ModifierNodeChain::new();
+        let mut context = BasicModifierNodeContext::new();
+        context.set_node_id(Some(node_id));
+        chain.update_from_slice(&modifier.elements(), &mut context);
+        crate::render_state::take_modifier_slice_repass_nodes();
+        (chain, motion)
+    });
+    other.enter(|| {
+        motion.set_active(true);
+        assert!(crate::render_state::take_modifier_slice_repass_nodes().is_empty());
+    });
+    assert_eq!(
+        owner.enter(crate::render_state::take_modifier_slice_repass_nodes),
+        vec![node_id]
+    );
+    drop(owner);
+    motion.set_active(false);
+    chain.detach_all();
+}
+
 #[test]
 fn batched_touch_delivery_computes_real_finger_velocity() {
     let _app_context = crate::render_state::app_context_test_scope();

@@ -221,6 +221,27 @@ struct DragGesture<S: ScrollTarget> {
     guard: Option<Rc<dyn Fn() -> bool>>,
 }
 
+struct ScrollGestureLifetime {
+    gesture_state: Rc<RefCell<ScrollGestureState>>,
+    motion_context: ScrollMotionContext,
+}
+
+impl Drop for ScrollGestureLifetime {
+    fn drop(&mut self) {
+        let state = std::mem::take(&mut *self.gesture_state.borrow_mut());
+        if let Some(fling) = state.fling_animation {
+            fling.cancel();
+        }
+        if let Some(settle) = state.settle_animation {
+            settle.cancel();
+        }
+        if let Some(watcher) = state.wheel_settle_watcher {
+            watcher.cancel();
+        }
+        self.motion_context.set_active(false);
+    }
+}
+
 fn drag_gesture_input<K, S>(key: K, gesture: DragGesture<S>) -> Modifier
 where
     K: std::hash::Hash + 'static,
@@ -245,8 +266,13 @@ where
             motion_context.clone(),
         );
         let guard = guard.clone();
+        let lifetime = ScrollGestureLifetime {
+            gesture_state: Rc::clone(&gesture_state),
+            motion_context: motion_context.clone(),
+        };
 
         async move {
+            let _lifetime = lifetime;
             scope
                 .await_pointer_event_scope(|await_scope| async move {
                     loop {
@@ -1078,10 +1104,9 @@ impl DelegatableNode for TranslatedContentContextNode {
 impl ModifierNode for TranslatedContentContextNode {
     fn on_attach(&mut self, context: &mut dyn cranpose_foundation::ModifierNodeContext) {
         if let Some(node_id) = context.node_id() {
-            self.overscroll_callback_id =
-                Some(self.overscroll.add_invalidate_callback(Box::new(move || {
-                    schedule_modifier_slices_repass(node_id)
-                })));
+            self.overscroll_callback_id = Some(self.overscroll.add_invalidate_callback(
+                motion_invalidation_callback(move || schedule_modifier_slices_repass(node_id)),
+            ));
         }
     }
 
@@ -1090,6 +1115,13 @@ impl ModifierNode for TranslatedContentContextNode {
             self.overscroll.remove_invalidate_callback(id);
         }
     }
+}
+
+fn motion_invalidation_callback(invalidate: impl Fn() + 'static) -> Box<dyn Fn()> {
+    let owner = crate::render_state::current_app_context_id();
+    Box::new(move || {
+        crate::render_state::enter_app_context_by_id(owner, &invalidate);
+    })
 }
 
 impl DelegatableNode for MotionContextAnimatedNode {
@@ -1103,19 +1135,18 @@ impl ModifierNode for MotionContextAnimatedNode {
         let node_id = context.node_id();
         self.node_id = node_id;
         if let Some(node_id) = node_id {
-            let callback_id = self
-                .motion_context
-                .add_invalidate_callback(Box::new(move || {
-                    schedule_modifier_slices_repass(node_id);
-                }));
+            let callback_id =
+                self.motion_context
+                    .add_invalidate_callback(motion_invalidation_callback(move || {
+                        schedule_modifier_slices_repass(node_id);
+                    }));
             self.invalidation_callback_id = Some(callback_id);
-            let callback_id = self
-                .motion_context
-                .overscroll()
-                .add_invalidate_callback(Box::new(move || {
+            let callback_id = self.motion_context.overscroll().add_invalidate_callback(
+                motion_invalidation_callback(move || {
                     crate::schedule_measure_repass(node_id);
                     schedule_modifier_slices_repass(node_id);
-                }));
+                }),
+            );
             self.overscroll_callback_id = Some(callback_id);
         }
     }
