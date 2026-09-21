@@ -20,7 +20,7 @@ use super::{
     highlight::{language_from_fence, Language},
     highlight_theme::append_highlighted,
     lazy_scrollbar::{LazyListWithScrollbar, LazyScrollbarStyle},
-    net_image::{cors_url, decode_bitmap},
+    net_image::decode_bitmap,
     url_resolve::resolve_url,
 };
 
@@ -887,7 +887,7 @@ fn cache_image(url: String, bitmap: ImageBitmap) {
 
 async fn fetch_image(client: &HttpClientRef, url: &str) -> Result<ImageBitmap, String> {
     let bytes = client
-        .get_bytes(&cors_url(url))
+        .get_bytes(url)
         .await
         .map_err(|err| format!("failed to download image: {err}"))?;
     decode_bitmap(&bytes).map_err(|err| format!("failed to decode image: {err}"))

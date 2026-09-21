@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, openSync, readFileSync, writeFileSync, closeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { checkMarkdownImages } from "./tests/markdown-images.mjs";
 
 const url = process.argv[2];
 assert.ok(url, "pass the URL of a running web demo");
@@ -119,6 +120,7 @@ try {
   await connect();
   await send("Page.enable");
   await send("Runtime.enable");
+  await checkMarkdownImages({ send, until, evaluate, report, url, output });
   await send("Page.navigate", { url });
   await until(`!!document.querySelector('[data-cranpose-node][aria-label="Increment"]')`);
   await pause(500);
