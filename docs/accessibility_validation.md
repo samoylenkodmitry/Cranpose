@@ -123,6 +123,61 @@ from the recipe. Native editable-text checks remain required.
 
 ## Web
 
+### Browser and screen reader targets
+
+Support is assessed for an operating system, browser and screen reader together.
+The browser's accessibility tree and native input tests are prerequisites; a
+passing browser robot does not establish spoken output or reader navigation.
+
+| Platform | Required reader and browser checks |
+| --- | --- |
+| Windows | NVDA with Chrome and Firefox; JAWS with Chrome and Edge |
+| macOS | VoiceOver with Safari |
+| iPhone/iPad | VoiceOver with Safari on physical hardware |
+| Android | TalkBack with Chrome on physical hardware |
+
+Also check NVDA with Edge, Narrator with Edge, and Orca with Firefox when the
+relevant platform or reader integration changes. Keep standard HTML semantics
+working across these combinations; do not select behavior by detecting a reader.
+
+These priorities reflect [WebAIM's 2024 survey](https://webaim.org/projects/screenreadersurvey10/):
+Chrome, Edge and Firefox led desktop browser use, JAWS and NVDA led desktop
+reader use, and Safari and Chrome led mobile browser use. The sample was
+self-selected and is not a population estimate. As checked on 2026-09-21,
+[survey 11](https://webaim.org/projects/screenreadersurvey11/) is closed but its
+results are not yet published.
+
+For each required combination, run the packaged release with the reader enabled:
+
+1. Navigate headings, links, landmarks and controls using the reader's browsing
+   commands. Confirm names, roles, state and reading order, including items
+   reached by scrolling a lazy list.
+2. Enter and leave text editing with the reader's normal focus/forms commands.
+   Type, select and replace Unicode text; edit multiline and password fields;
+   confirm selection, focus and native password protection survive rendering.
+3. Operate radio groups, menus, tabs and sliders without a pointer. Open nested
+   dialogs, confirm background content is excluded, then close each dialog and
+   confirm focus returns to its opener.
+4. Trigger validation, loading and application announcements. Confirm the reader
+   reports each meaningful update without losing its reading position or
+   repeatedly announcing the whole screen.
+5. On phones, use touch exploration, sequential swipes, activation and text
+   navigation through the reader's rotor or reading controls with the software
+   keyboard present.
+
+Record OS, browser and reader versions, release artifact hash, steps and outcomes.
+Retain speech-viewer output or recordings when available. Track blocked and
+untested combinations separately from passes, and include blind users in
+usability validation before making a general support claim.
+
+The 2026-09-21 IME checks cover Chromium browser-native composition, Safari and
+Firefox WebDriver editing, and physical Android keyboard input plus platform
+password protection. They do not establish NVDA, JAWS, VoiceOver or TalkBack
+interaction. Windows reader/browser testing and physical iPhone browser testing
+remain gaps in that verification. See the [web input runners](../scripts/a11y/README.md).
+
+### Automated browser checks
+
 ```sh
 bash scripts/a11y/build_platform.sh web /tmp/a11y-web-build
 just robot-accessibility-web /tmp/a11y-web-build/site /tmp/a11y-web
@@ -187,5 +242,6 @@ password privacy, and progress roles.
 
 The robots validate native contracts, not spoken output, speech timing, every
 screen reader's navigation model, or all application screens. Complete a release
-review with VoiceOver, TalkBack, Orca, and NVDA or Narrator on the relevant
+review with the required web reader/browser combinations above, and with
+VoiceOver, TalkBack, Orca, and NVDA or Narrator for native apps on the relevant
 hardware. Keep runtime results separate from build checks and manual review.

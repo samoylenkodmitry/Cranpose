@@ -9,6 +9,11 @@ Four platforms carry it: iOS through VoiceOver, Android through TalkBack, the
 web through a DOM mirror that a browser screen reader reads, and Linux, macOS
 and Windows through accesskit (Orca, VoiceOver, NVDA, Narrator).
 
+For web apps, validate the browser and screen reader together. The
+[web support targets and acceptance checks](accessibility_validation.md#browser-and-screen-reader-targets)
+cover JAWS and NVDA on Windows, VoiceOver with Safari, and TalkBack with Chrome.
+An accessibility-tree test alone does not establish screen reader usability.
+
 ## 1. Name every control
 
 ```rust
@@ -215,7 +220,10 @@ change is spoken when the field is under the cursor.
 A password field shows dots on the screen, but a screen reader asks the app
 for the text, so without a mark it reads the password out loud in a room
 full of people. `Modifier::password()` on the field, Compose's `password`,
-keeps the text out of the projection, so it reaches no platform at all. The
+keeps the text out of the shared accessibility projection. A web editor still
+needs its actual value to support native editing, so it uses a password input
+whose browser and operating system apply their native protection policy. Every
+exposed password editor has its current value before it receives focus. The
 field keeps the name the app gave it; with no name a reader hears
 "password".
 
@@ -224,7 +232,7 @@ field keeps the name the app gave it; with no name a reader hears
 | accesskit | the node as a password input, with no value |
 | iOS | the name and "password" as the value, never the text |
 | Android | `setPassword` on the node, which TalkBack reads as "password", and an empty value |
-| Web | `aria-roledescription="password"` on the mirror node, with no text content |
+| Web | a native `<input type="password">` with its editing value; the browser and operating system control protected speech and braille output |
 
 ## 4e. The order a reader walks a screen
 
@@ -352,7 +360,8 @@ Modifier::empty().semantics(|config| {
 ```
 
 The two ends are byte offsets into the text, the anchor first; equal ends
-are a caret. A field that holds a secret publishes no caret.
+are a caret. A field that holds a secret publishes no caret in the shared
+accessibility projection; its native web editor retains a selection for editing.
 
 | Platform | Reads | Moves |
 | --- | --- | --- |
@@ -364,6 +373,11 @@ are a caret. A field that holds a secret publishes no caret.
 On the web a keystroke or a caret move patches the focused input in place. A
 rebuild of the mirror would drop the browser's focus and make a reader hear
 the whole field again instead of one character.
+
+The accessible native editor also owns keyboard and IME focus. It is never
+hidden from accessibility while focused. Multiline capability chooses the
+control type independently of its current value, and rendering preserves a
+new browser selection while its selection notification is pending.
 
 **The target of a decorated field.** A decorated field's semantics and its
 touch target sit on the field itself, not on the box the decoration draws

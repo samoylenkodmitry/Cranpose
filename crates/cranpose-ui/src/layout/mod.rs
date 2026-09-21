@@ -383,6 +383,8 @@ pub struct SemanticsNode {
     /// to this node's own top-left. See [`CanvasSemanticsNode`].
     pub canvas_children: Vec<CanvasSemanticsNode>,
     pub editable_text: bool,
+    /// Whether an editable field accepts line breaks, independent of its current text.
+    pub multiline: bool,
     /// Whether a screen reader skips this node and everything under it.
     pub hidden: bool,
     /// Whether this subtree makes content outside it unavailable to assistive technology.
@@ -462,6 +464,7 @@ impl Default for SemanticsNode {
             custom_actions: Vec::new(),
             canvas_children: Vec::new(),
             editable_text: false,
+            multiline: false,
             hidden: false,
             is_modal: false,
             merge_descendants: false,
@@ -3223,6 +3226,7 @@ fn semantics_node_from_parts(
         node.custom_actions = config.custom_actions;
         node.canvas_children = config.canvas_children;
         node.editable_text = config.is_editable_text;
+        node.multiline = config.multiline;
         node.hidden = config.hidden;
         node.is_modal = config.is_modal;
         node.merge_descendants = config.merge_descendants;

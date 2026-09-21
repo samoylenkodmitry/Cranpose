@@ -1863,3 +1863,20 @@ fn an_empty_semantics_spec_changes_nothing() {
 
     assert_eq!(config, before);
 }
+
+#[test]
+fn multiline_semantics_merge_independently_of_text() {
+    for text in [None, Some(String::new()), Some("one line".to_owned())] {
+        let mut config = SemanticsConfiguration::default();
+        assert!(!config.multiline);
+        config.merge(&SemanticsConfiguration {
+            is_editable_text: true,
+            multiline: true,
+            text,
+            ..SemanticsConfiguration::default()
+        });
+        assert!(config.multiline);
+        config.merge(&SemanticsConfiguration::default());
+        assert!(config.multiline);
+    }
+}

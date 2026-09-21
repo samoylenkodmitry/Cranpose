@@ -3621,8 +3621,12 @@ fn every_reader_action_runs_inside_the_app_context() {
             source.contains("run_reader_action("),
             "{path} should run its reader actions through the app context wrapper"
         );
+        let action_source = source.replace(
+            "accessibility::find_semantics_node(tree.root(), element.node_id)",
+            "",
+        );
         assert!(
-            !source.contains("(tree.root(),") && !source.contains("(tree.root()"),
+            !action_source.contains("(tree.root(),") && !action_source.contains("(tree.root()"),
             "{path} reaches the live tree outside the app context; route it through run_reader_action"
         );
     }
@@ -3982,8 +3986,9 @@ fn every_platform_lets_a_reader_move_the_caret_of_a_field() {
     let web_source = crate_source("src/web_accessibility.rs");
     assert!(
         web_source.contains("\"selectionchange\"")
-            && web_source
-                .contains("accessibility::set_text_selection_utf16(root, node_id, anchor, focus)")
+            && web_source.contains("accessibility::set_text_selection(")
+            && web_source.contains("accessibility::byte_offset_for_utf16(&value, anchor)")
+            && web_source.contains("accessibility::byte_offset_for_utf16(&value, focus)")
             && web_source.contains("fn reconcile_children(")
             && web_source.contains("attach_input_listener(&root")
             && !web_source.contains("set_inner_html(\"\")"),

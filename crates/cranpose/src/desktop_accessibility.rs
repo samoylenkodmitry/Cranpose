@@ -478,7 +478,7 @@ fn accesskit_node(element: &AccessibilityElement) -> Node {
             scroll_role(element)
         }
         None if element.password => Role::PasswordInput,
-        None if element.role.is_text_field() && holds_lines(element) => Role::MultilineTextInput,
+        None if element.role.is_text_field() && element.multiline => Role::MultilineTextInput,
         None => accesskit_role(element.role),
     };
     let mut node = Node::new(role);
@@ -866,14 +866,6 @@ impl PlatformAdapter {
     fn update_if_active(&mut self, update: impl FnOnce() -> TreeUpdate) {
         self.0.update_if_active(update);
     }
-}
-
-/// Whether a field's text runs over more than one line.
-fn holds_lines(element: &AccessibilityElement) -> bool {
-    element
-        .value
-        .as_deref()
-        .is_some_and(|value| value.contains('\n'))
 }
 
 /// One stretch of a field's text that accesskit reads as a text run: where it

@@ -90,6 +90,27 @@ fn text_field_semantics_expose_editable_selection_state() {
 }
 
 #[test]
+fn text_field_semantics_publish_line_limits_independently_of_content() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    with_test_runtime(|| {
+        for text in ["", "one line", "two\nlines"] {
+            let single = focused_single_line_chain(TextFieldState::new(text), TextStyle::default());
+            let multi = focused_text_field_chain(TextFieldState::new(text), TextStyle::default());
+            assert!(
+                !collect_semantics_from_chain(&single)
+                    .expect("single-line semantics")
+                    .multiline
+            );
+            assert!(
+                collect_semantics_from_chain(&multi)
+                    .expect("multiline semantics")
+                    .multiline
+            );
+        }
+    });
+}
+
+#[test]
 fn cursor_draw_command_created_when_focused() {
     let _app_context = crate::render_state::app_context_test_scope();
     with_test_runtime(|| {
