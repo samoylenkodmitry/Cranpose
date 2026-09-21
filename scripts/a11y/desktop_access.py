@@ -78,6 +78,7 @@ class LinuxAdapter(NativeAdapter):
                 value = self.api.Text.get_text(native, 0, -1)
             role = native.get_role_name()
             result.append({'native': native, 'name': native.get_name(),
+                           'description': native.get_description(),
                            'role': {'progress bar': 'progress', 'slider': 'slider'}.get(role, role),
                            'value': value,
                            'enabled': native.get_state_set().contains(self.api.StateType.ENABLED)})

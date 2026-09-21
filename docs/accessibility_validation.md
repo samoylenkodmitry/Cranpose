@@ -6,12 +6,26 @@ perform native actions, and verify the resulting application state. They exit
 nonzero on failures and retain a `report.json` plus diagnostic artifacts in a new
 output directory. Do not reuse an output directory.
 
-The Linux results currently require the workspace's pinned AccessKit
-[disabled-state fix](https://github.com/AccessKit/accesskit/commit/6ee0558b6315b3ef1594db24ce45a030ecac7cb5).
-Its latest published AT-SPI adapter, 0.20.0, predates that fix. Cargo only applies
-`[patch]` at the consuming workspace root, so these Linux results do not establish
-the same behavior for an unpatched crates.io consumer. Release validation must
-resolve and test the published dependency graph as well.
+AccessKit comes from crates.io, with no accessibility workspace patches or forks.
+The published AT-SPI translation layer, 0.20.0, can report disabled buttons as
+enabled on Linux. The [upstream fix](https://github.com/AccessKit/accesskit/commit/6ee0558b6315b3ef1594db24ce45a030ecac7cb5)
+will be adopted when released. Cranpose still publishes the disabled property and
+rejects disabled actions. This native state-bit limitation is accepted for this
+release and recorded separately from successful checks.
+
+Applications can provide a localized state description alongside a button's name:
+
+```rust
+Modifier::empty().semantics(move |config| {
+    config.enabled = enabled;
+    config.state_description = (!enabled).then(|| "Disabled".to_owned());
+})
+```
+
+Use the application's translated text in place of `"Disabled"`. Desktop readers
+receive this as the accessible description; their settings determine when it is
+spoken. The robot verifies the description reaches Linux AT-SPI. This text does
+not repair the upstream native state bit.
 
 ## Coverage
 
@@ -61,7 +75,7 @@ and the robots below validate the final OS/browser representation.
 | --- | --- | --- | --- | --- | --- | --- |
 | Repeated words and independent nested controls | Yes | Yes | Yes | Yes | Yes | Yes |
 | Hidden content and password privacy | Yes | Yes | Yes | Yes | Yes | Yes |
-| Disabled state and rejected activation | Yes | Yes | Yes | Yes | State | Yes |
+| Disabled state and rejected activation | Yes | Description and action; state-bit limitation | Yes | Yes | State | Yes |
 | Native activation changes application state | Yes | Yes | Yes | Yes | Yes | Yes |
 | Passive progress and adjustable ranges | Yes | Yes | Yes | Yes | Values | Yes |
 | Editable text reaches application state | Yes | Yes | Yes | Yes | Native keyboard | Native input/keyboard |
@@ -97,11 +111,13 @@ launched and uses Invoke, Value, and RangeValue patterns.
 `cargo-xwin`; install that tool before running the recipe. Native builds use the
 normal Windows Rust toolchain.
 
-The AccessKit family is upgraded together. The workspace pins the core,
-consumer, and AT-SPI common crates to upstream commit
-`6ee0558b6315b3ef1594db24ce45a030ecac7cb5`, which fixes disabled nodes being exposed
-as enabled on Linux. The released AT-SPI adapter does not yet contain that fix.
-The Linux robot checks the resulting native state and editable-text behavior.
+The AccessKit family is upgraded together using published packages. The Linux
+recipe explicitly passes `--allow-linux-disabled-state-bug`; the robot still
+requires the `Disabled` description and rejected activation. If the native bit is
+wrong, its report uses `passed_with_known_limitations` and links the upstream fix.
+The standalone robot defaults to strict state checking, and this exception never
+applies to macOS or Windows. Once upstream ships the fix, remove the exception
+from the recipe. Native editable-text checks remain required.
 
 ## Web
 

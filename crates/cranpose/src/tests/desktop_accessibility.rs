@@ -81,6 +81,9 @@ fn progress_indicators_keep_their_role_and_offer_no_adjustment() {
 #[test]
 fn disabled_controls_keep_their_state_without_offering_actions() {
     let element = AccessibilityElement {
+        label: "Save".into(),
+        state_description: Some("Disabled".into()),
+        role: AccessibilityRole::Button,
         enabled: false,
         clickable: true,
         adjustable: true,
@@ -90,6 +93,8 @@ fn disabled_controls_keep_their_state_without_offering_actions() {
     };
     let node = accesskit_node(&element);
     assert!(node.is_disabled());
+    assert_eq!(node.label(), Some("Save"));
+    assert_eq!(node.description(), Some("Disabled"));
     assert_eq!(node.is_expanded(), Some(true));
     for action in [
         Action::Click,
