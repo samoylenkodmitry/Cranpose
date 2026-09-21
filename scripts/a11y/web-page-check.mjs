@@ -1,13 +1,18 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import assert from "node:assert/strict";
+import { mkdtempSync, openSync, readFileSync, writeFileSync, closeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const url = process.argv[2] ?? "http://192.168.50.114:8080/";
+const url = process.argv[2];
+assert.ok(url, "pass the URL of a running web demo");
 const chrome = process.env.CHROME ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-const port = 9333;
+let port = Number(process.env.A11Y_DEBUG_PORT ?? 0);
+const output = process.argv[3];
 const profile = mkdtempSync(join(tmpdir(), "a11y-chrome-"));
+const browserLog = output ? openSync(join(output, 'chrome.log'), 'w') : null;
+let browserError;
 
 const browser = spawn(
   chrome,
@@ -22,14 +27,18 @@ const browser = spawn(
     "--window-size=1024,700",
     "about:blank",
   ],
-  { stdio: "ignore" },
+  { stdio: ['ignore', 'ignore', browserLog ?? 'inherit'] },
 );
+browser.on('error', error => { browserError = error; });
 
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function pageTarget() {
   for (let attempt = 0; attempt < 50; attempt += 1) {
+    if (browserError) throw browserError;
+    if (browser.exitCode !== null || browser.signalCode !== null) throw new Error('Chrome exited before connecting');
     try {
+      if (port === 0) port = Number(readFileSync(join(profile, 'DevToolsActivePort'), 'utf8').split('\n')[0]);
       const list = await fetch(`http://127.0.0.1:${port}/json/list`).then((r) => r.json());
       const page = list.find((t) => t.type === "page");
       if (page) return page;
@@ -39,16 +48,21 @@ async function pageTarget() {
   throw new Error("chrome did not answer on the debugging port");
 }
 
-const target = await pageTarget();
-const ws = new WebSocket(target.webSocketDebuggerUrl);
-await new Promise((resolve, reject) => {
-  ws.onopen = resolve;
-  ws.onerror = reject;
-});
+let ws;
+async function connect() {
+  const target = await pageTarget();
+  ws = new WebSocket(target.webSocketDebuggerUrl);
+  await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error("debugger connection timed out")), 10000);
+    ws.onopen = () => { clearTimeout(timeout); resolve(); };
+    ws.onerror = (error) => { clearTimeout(timeout); reject(error); };
+  });
+  ws.onmessage = receive;
+}
 let nextId = 1;
 const pending = new Map();
 const consoleLines = [];
-ws.onmessage = (event) => {
+function receive(event) {
   const message = JSON.parse(event.data);
   if (message.method === "Runtime.consoleAPICalled") {
     consoleLines.push(`${message.params.type}: ${message.params.args.map((a) => a.value ?? a.description ?? "").join(" ")}`);
@@ -67,77 +81,132 @@ ws.onmessage = (event) => {
 function send(method, params = {}) {
   const id = nextId++;
   ws.send(JSON.stringify({ id, method, params }));
-  return new Promise((resolve, reject) => pending.set(id, { resolve, reject }));
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { pending.delete(id); reject(new Error(`${method} timed out`)); }, 15000);
+    pending.set(id, {
+      resolve: (value) => { clearTimeout(timer); resolve(value); },
+      reject: (error) => { clearTimeout(timer); reject(error); },
+    });
+  });
 }
 async function evaluate(expression) {
   const result = await send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true });
   if (result.exceptionDetails) throw new Error(JSON.stringify(result.exceptionDetails));
   return result.result.value;
 }
-async function key(keyName, code, keyCode) {
-  await send("Input.dispatchKeyEvent", { type: "keyDown", key: keyName, code, windowsVirtualKeyCode: keyCode });
-  await send("Input.dispatchKeyEvent", { type: "keyUp", key: keyName, code, windowsVirtualKeyCode: keyCode });
+async function key(keyName, code, keyCode, modifiers = 0) {
+  await send("Input.dispatchKeyEvent", {
+    type: "keyDown", key: keyName, code, windowsVirtualKeyCode: keyCode, modifiers,
+    ...(keyName === "Enter" ? { text: "\r" } : {}),
+  });
+  await send("Input.dispatchKeyEvent", { type: "keyUp", key: keyName, code, windowsVirtualKeyCode: keyCode, modifiers });
 }
 
-const report = {};
+const report = [];
+const counter = `Number(document.querySelector('[data-cranpose-accessibility]').textContent.match(/Counter: (-?\\d+)/)[1])`;
+async function check(name, expression) {
+  assert.equal(await evaluate(expression), true, name);
+  report.push(name);
+}
+async function until(expression) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (await evaluate(expression)) return;
+    await pause(200);
+  }
+  throw new Error(`condition did not become true: ${expression}`);
+}
 try {
+  await connect();
   await send("Page.enable");
   await send("Runtime.enable");
   await send("Page.navigate", { url });
-  for (let attempt = 0; attempt < 40; attempt += 1) {
-    await pause(1000);
-    const ready = await evaluate(`document.querySelectorAll('[data-cranpose-node]').length > 0`);
-    if (ready) break;
-  }
-  await pause(1500);
-  report.mirror = await evaluate(`(() => {
-    const nodes = [...document.querySelectorAll('[data-cranpose-node]')];
-    return { count: nodes.length, paged: nodes.filter(n => n.hasAttribute('data-cranpose-page')).length,
-      counter: nodes.filter(n => n.getAttribute('aria-label') === 'Counter App').map(n => [n.style.left, n.getAttribute('data-cranpose-page'), n.getAttribute('data-cranpose-page-dx'), n.getAttribute('data-cranpose-page-dy')]),
-      hacker: nodes.filter(n => n.getAttribute('aria-label') === 'Hacker News').map(n => n.style.left) };
+  await until(`!!document.querySelector('[data-cranpose-node][aria-label="Increment"]')`);
+  await pause(500);
+  await evaluate(`(() => {
+    window.a11yButton = document.querySelector('[data-cranpose-node][aria-label="Increment"]');
+    window.a11yBefore = ${counter};
+    window.a11yButton.focus();
+    window.a11yButton.click();
   })()`);
-  report.textboxes = await evaluate(`[...document.querySelectorAll('[data-cranpose-node][role="textbox"]')].map(n => [n.getAttribute('aria-label'), n.textContent, n.getAttribute('tabindex')])`);
-  report.focused = await evaluate(`(() => { const n = document.querySelector('[data-cranpose-node][aria-label="Counter App"]'); if (!n) return null; n.focus(); return document.activeElement === n; })()`);
-  await key("PageDown", "PageDown", 34);
-  await pause(1200);
-  report.afterPageDown = await evaluate(`(() => {
-    const live = [...document.querySelectorAll('[aria-live]')].map(n => n.textContent);
-    const counter = document.querySelector('[data-cranpose-node][aria-label="Counter App"]');
-    const hacker = document.querySelector('[data-cranpose-node][aria-label="Hacker News"]');
-    return { live, counterLeft: counter && counter.style.left, hackerLeft: hacker && hacker.style.left, active: document.activeElement && document.activeElement.getAttribute('aria-label') };
+  await until(`${counter} === window.a11yBefore + 1`);
+  await check("a state change preserves the reader's control", `window.a11yButton === document.querySelector('[data-cranpose-node][aria-label="Increment"]')`);
+  await check("a state change preserves focus", `document.activeElement === window.a11yButton`);
+  await key("Tab", "Tab", 9);
+  await until(`document.activeElement?.getAttribute('aria-label') === 'Decrement'`);
+  report.push("Tab advances to the next control");
+  await key("Enter", "Enter", 13);
+  await until(`${counter} === window.a11yBefore`);
+  report.push("Enter activates the focused control once");
+  await key("Tab", "Tab", 9, 8);
+  await until(`document.activeElement?.getAttribute('aria-label') === 'Increment'`);
+  report.push("Shift+Tab returns to the previous control");
+  await check("tab indices are valid integers", `[...document.querySelectorAll('[data-cranpose-node][tabindex]')].every(node => /^-?\\d+$/.test(node.getAttribute('tabindex')))`);
+  await check("no invalid text role", `!document.querySelector('[data-cranpose-node][role="text"]')`);
+  const fixtureUrl = new URL(url);
+  fixtureUrl.searchParams.set('tab', 'accessibility_robot');
+  await send('Page.navigate', { url: fixtureUrl.href });
+  await until(`!!document.querySelector('[data-cranpose-node][aria-label="Remove"]')`);
+  const nativeTree = await send('Accessibility.getFullAXTree');
+  const accessible = nativeTree.nodes.filter(node => !node.ignored);
+  assert.ok(accessible.some(node => node.name?.value === 'Account, Account'), 'merged native name');
+  assert.ok(accessible.some(node => node.name?.value === 'Remove' && node.role?.value === 'button'), 'independent nested native control');
+  assert.ok(!JSON.stringify(accessible).includes('robot-secret-value'), 'password values stay out of the browser accessibility tree');
+  assert.ok(!JSON.stringify(accessible).includes('Decorative secret'), 'hidden content stays out of the browser accessibility tree');
+  const loading = accessible.find(node => node.name?.value === 'Loading' && node.role?.value === 'progressbar');
+  assert.equal(loading?.value?.value, 40, 'native passive progress range');
+  report.push('the browser accessibility tree preserves names, roles, and private content boundaries');
+  await evaluate(`document.querySelector('[aria-label="Disabled action"]').click()`);
+  await pause(200);
+  await check('disabled native controls reject activation', `document.querySelector('[aria-label="Disabled action"]').getAttribute('aria-disabled') === 'true' && document.querySelector('[data-cranpose-accessibility]').textContent.includes('Action count: 0')`);
+  await evaluate(`document.querySelector('[aria-label="Volume"]').focus()`);
+  await key('ArrowRight', 'ArrowRight', 39);
+  await until(`document.querySelector('[data-cranpose-accessibility]').textContent.includes('Volume value: 40')`);
+  report.push('keyboard range adjustment reaches application state');
+  const listUrl = new URL(url);
+  listUrl.searchParams.set("tab", "lazylist");
+  await send("Page.navigate", { url: listUrl.href });
+  await until(`!!document.querySelector('[data-cranpose-node][role="list"]')`);
+  await check("list children belong to their container", `!!document.querySelector('[data-cranpose-node][role="list"] [data-cranpose-node]')`);
+  const inputUrl = new URL(url);
+  inputUrl.searchParams.set("tab", "textinput");
+  await send("Page.navigate", { url: inputUrl.href });
+  await until(`!!document.querySelector('[data-cranpose-node] input, input[data-cranpose-node], textarea[data-cranpose-node]')`);
+  await evaluate(`(() => {
+    window.a11yField = document.querySelector('input[data-cranpose-node], textarea[data-cranpose-node]');
+    window.a11yField.focus();
+    window.a11yField.value = 'Voice input café 🌍';
+    window.a11yField.setSelectionRange(5, 10, 'backward');
+    window.a11yField.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertReplacementText' }));
   })()`);
-  await key("PageUp", "PageUp", 33);
-  await pause(1200);
-  report.afterPageUp = await evaluate(`(() => {
-    const live = [...document.querySelectorAll('[data-cranpose-live]')].map(n => n.textContent);
-    const counter = document.querySelector('[data-cranpose-node][aria-label="Counter App"]');
-    return { live, counterLeft: counter && counter.style.left, active: document.activeElement && document.activeElement.getAttribute('aria-label') };
-  })()`);
-  await evaluate(`(() => { const n = document.querySelector('[data-cranpose-node][aria-label="Liquid UI"]'); if (n) n.click(); return !!n; })()`);
-  await pause(1500);
-  report.afterClick = await evaluate(`(() => {
-    const labels = [...document.querySelectorAll('[data-cranpose-node]')].map(n => n.getAttribute('aria-label')).filter(Boolean);
-    const textboxes = [...document.querySelectorAll('[data-cranpose-node][role="textbox"]')].map(n => [n.getAttribute('aria-label'), n.textContent]);
-    return { count: labels.length, first: labels.slice(0, 12), textboxes };
-  })()`);
-  await evaluate(`(() => { const n = document.querySelector('[data-cranpose-node][aria-label="Counter App"]'); if (n) n.click(); return !!n; })()`);
-  await pause(1500);
-  await evaluate(`(() => { const n = document.querySelector('[data-cranpose-node][aria-label="Text Input"]'); if (n) n.click(); return !!n; })()`);
-  await pause(1500);
-  report.textInput = await evaluate(`(() => {
-    const textboxes = [...document.querySelectorAll('[data-cranpose-node][role="textbox"]')].map(n => [n.getAttribute('aria-label'), n.textContent, n.getAttribute('tabindex')]);
-    const labels = [...document.querySelectorAll('[data-cranpose-node]')].map(n => n.getAttribute('aria-label')).filter(Boolean);
-    const tab = document.querySelector('[data-cranpose-node][aria-label="Text Input"]');
-    const roles = [...new Set([...document.querySelectorAll('[data-cranpose-node]')].map(n => n.getAttribute('role')))];
-    return { textboxes, count: labels.length, roles, later: labels.slice(16, 40), tab: tab && [tab.getAttribute('data-cranpose-x'), tab.getAttribute('data-cranpose-y'), tab.style.left], active: document.activeElement && document.activeElement.getAttribute('aria-label') };
-  })()`);
+  await pause(500);
+  await check("dictated input reaches the application", `document.querySelector('[data-cranpose-accessibility]').textContent.includes('Voice input café 🌍')`);
+  await check("editing preserves the native field", `window.a11yField.isConnected && window.a11yField.value === 'Voice input café 🌍'`);
+  await check("editing preserves backward selection", `window.a11yField.selectionStart === 5 && window.a11yField.selectionEnd === 10 && window.a11yField.selectionDirection === 'backward'`);
+  await key("x", "KeyX", 88);
+  await until(`window.a11yField.value === 'Voicext café 🌍'`);
+  await check("keyboard input reaches the application once", `document.querySelector('[data-cranpose-accessibility]').textContent.includes('Voicext café 🌍')`);
+  const failures = consoleLines.filter(line => /panicked|exception/.test(line));
+  assert.deepEqual(failures, [], "the application must not panic");
+  const result = { platform: 'web', status: 'passed', passed: report };
+  if (output) writeFileSync(join(output, 'report.json'), JSON.stringify(result, null, 2));
+  console.log(JSON.stringify(result, null, 2));
 } catch (error) {
-  report.error = String(error);
+  if (output) writeFileSync(join(output, 'report.json'), JSON.stringify({ platform: 'web', status: 'failed', passed: report, error: String(error) }, null, 2));
+  throw error;
 } finally {
-  const kept = consoleLines.filter((line) => !line.includes("Graphics startup")).map((line) => line.split("\n").slice(0, 3).join(" / "));
-  const bad = kept.filter((line) => line.includes("panicked") || line.includes("exception") || line.includes("error"));
-  report.console = { total: kept.length, firstBad: bad.slice(0, 3) };
-  ws.close();
-  browser.kill();
+  if (output && ws?.readyState === WebSocket.OPEN) {
+    try {
+      const tree = await send('Accessibility.getFullAXTree');
+      writeFileSync(join(output, 'native-tree.json'), JSON.stringify(tree, null, 2));
+      const screenshot = await send('Page.captureScreenshot');
+      writeFileSync(join(output, 'screen.png'), Buffer.from(screenshot.data, 'base64'));
+    } catch (error) { console.error('Artifact capture:', error); }
+  }
+  ws?.close();
+  if (!browserError && browser.exitCode === null && browser.signalCode === null) {
+    const exited = new Promise(resolve => browser.once("exit", resolve));
+    browser.kill();
+    await exited;
+  }
+  if (browserLog !== null) closeSync(browserLog);
 }
-console.log(JSON.stringify(report, null, 2));

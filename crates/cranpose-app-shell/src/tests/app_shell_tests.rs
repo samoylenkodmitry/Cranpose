@@ -28,6 +28,9 @@ use cranpose_ui_graphics::{
 
 use super::*;
 
+#[path = "inspector_shell_tests.rs"]
+mod inspector_shell_tests;
+
 pub(super) fn test_guard() -> MutexGuard<'static, ()> {
     static TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     match TEST_LOCK.get_or_init(|| Mutex::new(())).lock() {
@@ -10414,6 +10417,50 @@ where
     shell.debug_enter_app_context(move || seen.set(cranpose_ui::active_focus_target()));
     let node_id = active.get()?;
     description_of(shell.semantics_tree().expect("a tree").root(), node_id)
+}
+
+#[test]
+fn pointer_text_focus_is_published_to_accessibility() {
+    let _guard = test_guard();
+    let mut shell = AppShell::new(
+        HitGraphRenderer::default(),
+        location_key(file!(), line!(), column!()),
+        || {
+            let state = cranpose_core::remember(|| {
+                cranpose_foundation::text::TextFieldState::new("initial")
+            })
+            .with(|state| *state);
+            cranpose_ui::BasicTextField(
+                state,
+                Modifier::empty()
+                    .size(Size::new(200.0, 48.0))
+                    .content_description("Notes"),
+                cranpose_ui::TextStyle::default(),
+            );
+        },
+    );
+    shell.set_semantics_enabled(true);
+    shell.update();
+    let revision = shell.semantics_snapshot_revision();
+    shell.set_cursor(100.0, 20.0);
+    assert!(shell.pointer_pressed());
+    assert!(shell.pointer_released());
+    shell.update();
+    assert_ne!(shell.semantics_snapshot_revision(), revision);
+    assert_eq!(focused_description(&mut shell).as_deref(), Some("Notes"));
+    assert!(
+        find_semantics_described(shell.semantics_tree().expect("tree").root(), "Notes")
+            .expect("Notes")
+            .focused
+    );
+    shell.clear_text_field_focus();
+    shell.update();
+    assert_eq!(focused_description(&mut shell), None);
+    assert!(
+        !find_semantics_described(shell.semantics_tree().expect("tree").root(), "Notes")
+            .expect("Notes")
+            .focused
+    );
 }
 
 #[test]

@@ -311,6 +311,28 @@ fn build_focus_handler(
     )
 }
 
+fn request_pointer_focus(
+    state: TextFieldState,
+    refs: &TextFieldRefs,
+    line_limits: TextFieldLineLimits,
+    style: &TextStyle,
+    modal_depth: usize,
+) {
+    if modal_depth < crate::modal::current_modal_depth()
+        || refs
+            .node_id
+            .get()
+            .is_some_and(crate::focus_dispatch::request_focus_in_context)
+    {
+        return;
+    }
+    crate::text_field_focus::request_focus(
+        refs.is_focused.clone(),
+        build_focus_handler(state, refs, line_limits, style),
+        modal_depth,
+    );
+}
+
 struct TextFieldFocusBridge {
     state: TextFieldState,
     refs: TextFieldRefs,
@@ -568,11 +590,7 @@ impl TextFieldModifierNode {
                     }));
                     refs.gesture_claimed.set(false);
 
-                    crate::text_field_focus::request_focus(
-                        refs.is_focused.clone(),
-                        build_focus_handler(state, &refs, line_limits, &style),
-                        modal_depth,
-                    );
+                    request_pointer_focus(state, &refs, line_limits, &style, modal_depth);
 
                     let now = web_time::Instant::now();
                     let text = state.text();

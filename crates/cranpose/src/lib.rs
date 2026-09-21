@@ -104,6 +104,10 @@ mod android_wire_escape;
 #[cfg(all(feature = "android", target_os = "android"))]
 mod android_writable_folder;
 mod app_launcher;
+#[cfg(feature = "renderer-wgpu")]
+pub use cranpose_app_shell::inspector::{
+    InspectorAction, InspectorControl, InspectorMode, InspectorNode, InspectorState,
+};
 mod host_environment;
 #[cfg(all(feature = "ios", target_os = "ios"))]
 mod ios_host;

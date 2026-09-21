@@ -1161,6 +1161,31 @@ public class CranposeActivity extends NativeActivity {
         }
 
         @Override
+        public List<AccessibilityNodeInfo> findAccessibilityNodeInfosByText(String text, int virtualViewId) {
+            ArrayList<AccessibilityNodeInfo> matches = new ArrayList<>();
+            if (text == null) return matches;
+            String query = text.toLowerCase(Locale.ROOT);
+            for (CranposeAccessibilityElement element : elements) {
+                boolean named = element.label.toLowerCase(Locale.ROOT).contains(query);
+                boolean valued = !element.password && element.editsText()
+                        && element.value.toLowerCase(Locale.ROOT).contains(query);
+                if ((named || valued) && isInSubtree(element, virtualViewId)) {
+                    matches.add(createAccessibilityNodeInfo(element.id));
+                }
+            }
+            return matches;
+        }
+
+        private boolean isInSubtree(CranposeAccessibilityElement element, int rootId) {
+            if (rootId == HOST_ID) return true;
+            for (int depth = 0; element != null && depth < elements.size(); depth++) {
+                if (element.id == rootId) return true;
+                element = find(element.scrollParent);
+            }
+            return false;
+        }
+
+        @Override
         public AccessibilityNodeInfo createAccessibilityNodeInfo(int virtualViewId) {
             if (virtualViewId == HOST_ID) {
                 AccessibilityNodeInfo info = AccessibilityNodeInfo.obtain(host);
@@ -1216,11 +1241,11 @@ public class CranposeActivity extends NativeActivity {
                 info.setCollectionItemInfo(AccessibilityNodeInfo.CollectionItemInfo.obtain(
                         element.itemRow, 1, element.itemColumn, 1, false));
             }
-            if (element.adjustable) {
+            if (element.adjustable || (element.role == 15 && element.progressMax > element.progressMin)) {
                 info.setRangeInfo(AccessibilityNodeInfo.RangeInfo.obtain(
                         AccessibilityNodeInfo.RangeInfo.RANGE_TYPE_FLOAT,
                         element.progressMin, element.progressMax, element.progressCurrent));
-                if (Build.VERSION.SDK_INT >= 24) {
+                if (element.adjustable && element.enabled && Build.VERSION.SDK_INT >= 24) {
                     info.addAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_PROGRESS);
                 }
             }
@@ -1301,6 +1326,13 @@ public class CranposeActivity extends NativeActivity {
                 info.addAction(new AccessibilityNodeInfo.AccessibilityAction(
                         ACCESSIBILITY_CUSTOM_ACTION_BASE + i, element.customActions[i]));
             }
+            if (!element.enabled) {
+                for (AccessibilityNodeInfo.AccessibilityAction action : new ArrayList<>(info.getActionList())) {
+                    info.removeAction(action);
+                }
+                info.setClickable(false);
+                info.setLongClickable(false);
+            }
             info.addAction(focusedId == element.id
                     ? AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS
                     : AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS);
@@ -1311,6 +1343,9 @@ public class CranposeActivity extends NativeActivity {
         public boolean performAction(int virtualViewId, int action, Bundle arguments) {
             CranposeAccessibilityElement element = find(virtualViewId);
             if (element == null) return false;
+            if (!element.enabled
+                    && action != AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS
+                    && action != AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS) return false;
             if (action == AccessibilityNodeInfo.ACTION_CLICK && element.clickable) {
                 nativeOnAccessibilityActivate(element.centerX, element.centerY);
                 sendEvent(element.id, AccessibilityEvent.TYPE_VIEW_CLICKED);

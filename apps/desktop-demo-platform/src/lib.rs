@@ -59,6 +59,15 @@ pub async fn run_app(
 ) -> Result<(), JsValue> {
     log::info!("Initializing Cranpose app");
 
+    if initial_tab.as_deref() == Some("accessibility_robot") {
+        return create_app()
+            .run_web(
+                "cranpose-canvas",
+                desktop_demo::test_screens::accessibility_robot::AccessibilityRobotScreen,
+            )
+            .await;
+    }
+
     let requested_tab = initial_tab
         .as_deref()
         .and_then(desktop_demo::app::DemoTab::from_startup_name);

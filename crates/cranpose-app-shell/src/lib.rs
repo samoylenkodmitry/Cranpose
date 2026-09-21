@@ -2,6 +2,7 @@
 
 mod fps_monitor;
 mod hit_path_tracker;
+pub mod inspector;
 mod shell_debug;
 mod shell_frame;
 mod shell_input;
@@ -185,6 +186,7 @@ pub(crate) struct ShellApp {
     #[cfg(all(feature = "clipboard-native", target_os = "linux"))]
     pub(crate) clipboard: Option<arboard::Clipboard>,
     pub(crate) dev_options: DevOptions,
+    pub(crate) inspector_projector: Option<inspector::InspectorProjector>,
     pub(crate) fps_monitor: fps_monitor::FpsMonitor,
     pub(crate) text_input_routes: Rc<RefCell<TextInputRoutes>>,
     pub(crate) text_input_router_installed: bool,
@@ -607,6 +609,7 @@ where
             #[cfg(all(feature = "clipboard-native", target_os = "linux"))]
             clipboard: arboard::Clipboard::new().ok(),
             dev_options: DevOptions::default(),
+            inspector_projector: None,
             fps_monitor: fps_monitor::FpsMonitor::new(),
             text_input_routes: Rc::new(RefCell::new(TextInputRoutes::default())),
             text_input_router_installed: false,

@@ -31,10 +31,14 @@ cargo build --manifest-path "$WORKSPACE/Cargo.toml" \
   -p desktop-app --bin cranpose-ios \
   --target "$TARGET" --no-default-features --features ios ${EXTRA_FEATURES:+--features "$EXTRA_FEATURES"} $PROFILE_FLAG >&2
 
-BIN="$WORKSPACE/target/$TARGET/$PROFILE/cranpose-ios"
-APP="$WORKSPACE/target/$TARGET/$PROFILE/$APP_NAME.app"
+BUILD_ROOT="${CARGO_TARGET_DIR:-$WORKSPACE/target}"
+BIN="$BUILD_ROOT/$TARGET/$PROFILE/cranpose-ios"
+APP="$BUILD_ROOT/$TARGET/$PROFILE/$APP_NAME.app"
 
-rm -rf "$APP"
+if [[ -d "$APP" ]]; then
+  PREVIOUS_APP="$(mktemp -d "$APP.previous.XXXXXX")"
+  mv "$APP" "$PREVIOUS_APP/$APP_NAME.app"
+fi
 mkdir -p "$APP"
 cp "$BIN" "$APP/$APP_NAME"
 cp "$SCRIPT_DIR/CranposeDemo/Info.plist" "$APP/Info.plist"

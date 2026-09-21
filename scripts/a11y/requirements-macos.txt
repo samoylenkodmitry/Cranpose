@@ -1,0 +1,1 @@
+pyobjc-framework-ApplicationServices==12.2.2

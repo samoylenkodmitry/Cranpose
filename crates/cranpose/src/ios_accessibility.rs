@@ -515,9 +515,7 @@ impl IosAccessibilityBridge {
             };
             let (x, y) = element.bounds.center();
             shell.set_pointer_source(PointerSource::Touch);
-            changed |= shell.set_cursor(x, y);
-            changed |= shell.pointer_pressed();
-            changed |= shell.pointer_released_at_position(x, y);
+            changed |= shell.accessibility_activate_at(x, y);
         }
         changed
     }
@@ -795,6 +793,11 @@ fn update_native_element(
         .or_else(|| element.password.then(|| "password".to_owned()))
         .or_else(|| accessibility::expansion_word(element).map(str::to_owned))
         .or_else(|| accessibility::state_with_error(element))
+        .or_else(|| {
+            element
+                .progress
+                .map(|progress| progress.current.to_string())
+        })
         .or(place);
     native.setAccessibilityValue(value.as_deref().map(NSString::from_str).as_deref());
     native.setAccessibilityHint(

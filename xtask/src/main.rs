@@ -402,20 +402,24 @@ struct DuplicateDebt {
 
 const WORKSPACE_DUPLICATE_DEBT: &[DuplicateDebt] = &[
     DuplicateDebt {
+        family: "hashbrown",
+        reason: "accesskit_consumer 0.39 and the macOS/Windows adapters require ^0.17; WGPU 29 and indexmap 2.13 require ^0.16; the accessibility fixes need this AccessKit release family",
+    },
+    DuplicateDebt {
         family: "jni-sys",
         reason: "ndk 0.9.0 and ndk-sys 0.6.0 (latest) pin jni-sys ^0.3 while jni 0.22 is on ^0.4",
     },
     DuplicateDebt {
         family: "objc2",
-        reason: "winit 0.31 is still a beta; accesskit_macos 0.26.3 (latest) holds objc2 0.5 on purpose until winit 0.31 ships stable (AccessKit/accesskit#616), while winit-appkit 0.31.0-beta.2 is already on 0.6",
+        reason: "accesskit_macos 0.27 holds objc2 0.5 while winit-appkit 0.31.0-beta.2 is on 0.6 (AccessKit/accesskit#616)",
     },
     DuplicateDebt {
         family: "objc2-app-kit",
-        reason: "follows the objc2 split via accesskit_macos 0.26.3",
+        reason: "follows the objc2 split via accesskit_macos 0.27",
     },
     DuplicateDebt {
         family: "objc2-foundation",
-        reason: "follows the objc2 split via accesskit_macos 0.26.3",
+        reason: "follows the objc2 split via accesskit_macos 0.27",
     },
     DuplicateDebt {
         family: "thiserror",
@@ -2160,7 +2164,7 @@ static INLINE_TABLE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
         r#"(?m)(?P<head>^[ \t]*cranpose[\w-]*[ \t]*=[ \t]*\{[^}\n]*?version[ \t]*=[ \t]*")(?P<version>[^"]+)(?P<tail>")"#,
     )
-    .expect("INLINE_TABLE_RE is a valid pattern")
+        .expect("INLINE_TABLE_RE is a valid pattern")
 });
 
 /// `cranpose[-foo] = "x"` (bare string) in the same places.

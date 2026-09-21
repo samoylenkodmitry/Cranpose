@@ -3,6 +3,7 @@
 - Fix reproducible bugs with a failing regression test; remove their notes once the fix is verified.
 - Put general agent rules in [AGENTS.md](AGENTS.md), with one short rule per line.
 - Put build, shell and CI details in [development troubleshooting](docs/development_troubleshooting.md).
+- Workspace dependency patches do not reach crates.io consumers; validate required upstream fixes against the published dependency graph before tagging.
 - Put robot and image-check details in [render verification](docs/render_verification.md).
 - Put Android measurement details in [device measurement](docs/device_measurement.md).
 - Reuse [mobile performance evidence](docs/mobile_watch_performance.md) before repeating experiments; keep one conclusion and evidence link per row.
@@ -52,3 +53,4 @@
 - A CI board red on every mac step at once (`linking with cc failed: exit status 69`) is macm3's Xcode licence after an update, not the change; read one step's log before touching code.
 - The browser-safe-time static test scans `cfg(test)` modules of the wasm-delivered crates too: import `web_time::{Duration, Instant}` in wgpu crate tests, never `std::time`.
 - A composite rule gated on "translated" silently drops for a scaled child: the showcase star's pulse showed the glass band as a square because the rounded mask required translation; gate on the geometry the mask needs (uniform scale plus translation), and reproduce with a scratch showcase copy patched to the local crates.
+- Android accessibility reconnect tests require no active user accessibility service; use a dedicated device when a shared control service keeps accessibility enabled.

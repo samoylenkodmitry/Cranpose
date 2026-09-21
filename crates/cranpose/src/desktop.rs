@@ -145,6 +145,9 @@ fn log_desktop_frame_telemetry(
 #[cfg(feature = "robot")]
 fn robot_tree_response(app: &mut AppShell<WgpuRenderer>, command: &RobotCommand) -> RobotResponse {
     match command {
+        RobotCommand::GetInspectorState => {
+            RobotResponse::InspectorState(Box::new(app.inspector_state().clone()))
+        }
         RobotCommand::GetSpokenTree => {
             RobotResponse::SpokenTree(crate::accessibility::spoken_tree(app))
         }
@@ -5177,6 +5180,7 @@ impl ApplicationHandler for App {
             )
         });
         app.set_semantics_enabled(true);
+        crate::accessibility::install_inspector(&mut app, self.settings.developer_inspector);
 
         let mut accessibility = crate::desktop_accessibility::DesktopAccessibilityBridge::new(
             window.as_ref(),
@@ -5279,9 +5283,7 @@ impl ApplicationHandler for App {
         let Some(app) = &mut self.app else { return };
         if let Some(accessibility) = &mut self.accessibility {
             for (x, y) in accessibility.drain_clicks() {
-                app.set_cursor(x, y);
-                app.pointer_pressed();
-                app.pointer_released_at_position(x, y);
+                app.accessibility_activate_at(x, y);
             }
             accessibility.run_custom_actions(app);
             accessibility.run_value_requests(app);
@@ -5738,9 +5740,7 @@ impl ApplicationHandler for App {
         if let Some(accessibility) = &mut self.accessibility {
             let mut activated = false;
             for (x, y) in accessibility.drain_clicks() {
-                app.set_cursor(x, y);
-                app.pointer_pressed();
-                app.pointer_released_at_position(x, y);
+                app.accessibility_activate_at(x, y);
                 activated = true;
             }
             activated |= accessibility.run_custom_actions(app);
@@ -5925,6 +5925,7 @@ impl ApplicationHandler for App {
                     }
                     command @ (RobotCommand::GetSemantics
                     | RobotCommand::GetSpokenTree
+                    | RobotCommand::GetInspectorState
                     | RobotCommand::AuditAccessibility) => {
                         let update_result = pump_robot_frame(app, &registry);
                         robot_visual_dirty |=

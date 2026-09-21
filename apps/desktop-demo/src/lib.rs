@@ -32,12 +32,13 @@ use crate::fonts::DEMO_FONTS;
     not(target_arch = "wasm32")
 ))]
 fn create_app() -> AppLauncher {
+    let dev_controls = cranpose::launch_args().string("test_screen").is_none();
     AppLauncher::new()
         .with_title("Cranpose Demo")
         .with_size(800, 600)
         .with_fonts(DEMO_FONTS)
-        .with_fps_counter(true)
-        .with_frame_pacing_controls(true)
+        .with_fps_counter(dev_controls)
+        .with_frame_pacing_controls(dev_controls)
 }
 
 #[cfg(all(

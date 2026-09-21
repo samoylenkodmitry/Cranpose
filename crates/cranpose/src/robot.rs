@@ -204,6 +204,7 @@ pub(crate) enum RobotCommand {
     WaitForPresentFrame,
     GetSemantics,
     GetSpokenTree,
+    GetInspectorState,
     AuditAccessibility,
     FindText {
         text: String,
@@ -255,6 +256,7 @@ pub(crate) enum RobotResponse {
     Ok,
     Semantics(Vec<SemanticElement>),
     SpokenTree(String),
+    InspectorState(Box<cranpose_app_shell::inspector::InspectorState>),
     AccessibilityIssues(Vec<String>),
     SemanticQuery(Option<SemanticQueryResult>),
     Screenshot(RobotScreenshot),
@@ -316,6 +318,10 @@ impl RobotCommandSender {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "tests/inspector_robot.rs"]
+mod inspector_robot_tests;
 
 /// Robot handle for test drivers
 pub struct Robot {
@@ -760,6 +766,17 @@ impl Robot {
             .map_err(|e| format!("Failed to send spoken_tree: {e}"))?;
         self.recv_response(|response| match response {
             RobotResponse::SpokenTree(tree) => Some(tree),
+            _ => None,
+        })
+    }
+
+    /// Reads the developer inspector independently of the application's semantics.
+    pub fn inspector_state(&self) -> Result<cranpose_app_shell::inspector::InspectorState, String> {
+        self.tx
+            .send(RobotCommand::GetInspectorState)
+            .map_err(|error| format!("Failed to query inspector: {error}"))?;
+        self.recv_response(|response| match response {
+            RobotResponse::InspectorState(state) => Some(*state),
             _ => None,
         })
     }

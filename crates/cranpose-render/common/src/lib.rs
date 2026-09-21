@@ -184,6 +184,12 @@ pub trait Renderer {
     /// Default implementation does nothing.
     fn draw_dev_overlay(&mut self, _text: &str, _viewport: Size) {}
 
+    /// Replaces the developer inspector graph outside the application scene.
+    ///
+    /// Passing `None` removes the inspector. Its primitives must not participate
+    /// in application hit testing, layout, or accessibility.
+    fn set_inspector_overlay(&mut self, _graph: Option<graph::RenderGraph>) {}
+
     /// Returns whether renderer-side cache materialization needs a visible follow-up frame.
     fn needs_frame_warmup(&self) -> bool {
         false

@@ -8,11 +8,12 @@ from android_robot_device import locked_device
 
 
 def completed_tests(output):
-    result = re.search(r'^OK \((\d+) tests?\)$', output, re.M)
-    if (result is None or int(result[1]) < 1 or 'FAILURES!!!' in output
-            or 'INSTRUMENTATION_FAILED' in output):
+    results = re.findall(r'^OK \((\d+) tests?\)$', output, re.M)
+    if (len(results) != 1 or int(results[0]) < 1 or 'FAILURES!!!' in output
+            or 'INSTRUMENTATION_FAILED' in output
+            or re.search(r'^INSTRUMENTATION_STATUS_CODE: -(?:[1-4])\s*$', output, re.M)):
         raise RuntimeError('Android accessibility robot did not pass; inspect instrumentation.log')
-    return int(result[1])
+    return int(results[0])
 
 
 def main():
@@ -24,6 +25,7 @@ def main():
     parser.add_argument('--app-apk', type=Path, default=apk_root / 'release/app-release.apk')
     parser.add_argument('--test-apk', type=Path,
                         default=apk_root / 'androidTest/release/app-release-androidTest.apk')
+    parser.add_argument('--connected-only', action='store_true')
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
     report = {'serial': args.serial, 'status': 'running', 'apks': {}}
@@ -35,17 +37,30 @@ def main():
                 device.wake()
                 device.command('install', '-r', '-t', str(apk), timeout=180)
             device.wake()
+            navigation = 'com.compose_rs.demo.CranposeAccessibilityNavigationTest'
+            if args.connected_only:
+                navigation += '#connectedAccessibilityTracksPageChangesInBothDirections'
+            tests = ','.join([navigation,
+                              'com.compose_rs.demo.CranposeAccessibilityAuditTest',
+                              'com.compose_rs.demo.CranposeAccessibilityParserTest',
+                              'com.compose_rs.demo.CranposeAccessibilityInteractionTest'])
             output = device.command(
                 'shell', 'am', 'instrument', '-w', '-r', '-e', 'class',
-                'com.compose_rs.demo.CranposeAccessibilityNavigationTest,'
-                'com.compose_rs.demo.CranposeAccessibilityParserTest',
+                tests,
                 'com.compose_rs.demo.robot.test/androidx.test.runner.AndroidJUnitRunner', timeout=120)
             (args.output / 'instrumentation.log').write_text(output)
             report['tests_passed'] = completed_tests(output)
+            expected = 9 if args.connected_only else 10
+            if report['tests_passed'] != expected:
+                raise RuntimeError(f"Expected {expected} Android tests, got {report['tests_passed']}")
+            report['reconnect'] = 'not_requested' if args.connected_only else 'included'
             report['status'] = 'passed'
             print(output)
     except BaseException as error:
         report.update(status='failed', error=str(error))
+        output = getattr(error, 'output', None)
+        if output:
+            (args.output / 'command-error.log').write_bytes(output.encode() if isinstance(output, str) else output)
         raise
     finally:
         (args.output / 'report.json').write_text(json.dumps(report, indent=2) + '\n')

@@ -608,6 +608,16 @@ where
     }
 
     fn run_render_phase_in_context(&mut self, recomposed_this_frame: bool) -> FrameUpdateResult {
+        let inspector_revision = if self.app.inspector_projector.is_some()
+            && self
+                .surfaces
+                .iter()
+                .any(|surface| surface.inspector.state.open)
+        {
+            self.semantics_snapshot_revision()
+        } else {
+            0
+        };
         cranpose_ui::tick_cursor_blink();
         let render_dirty = take_render_invalidation();
         let pointer_dirty = take_pointer_invalidation();
@@ -638,7 +648,9 @@ where
         for ((surface, draw_dirty), structural) in
             self.surfaces.iter_mut().zip(draw_dirty).zip(structural)
         {
-            let frame = render_surface(&mut self.app, surface, &frame, draw_dirty, structural);
+            let mut frame = render_surface(&mut self.app, surface, &frame, draw_dirty, structural);
+            frame.result.visual_changed |=
+                crate::inspector::refresh(&mut self.app, surface, inspector_revision);
             surface.last_update = frame.result;
             surface.frame_owed |= frame.result.visual_changed;
             result.visual_changed |= frame.result.visual_changed;

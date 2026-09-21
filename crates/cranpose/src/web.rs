@@ -390,6 +390,7 @@ pub async fn run(
         effective_scale as f32,
     )));
     app.borrow_mut().set_semantics_enabled(true);
+    crate::accessibility::install_inspector(&mut app.borrow_mut(), settings.developer_inspector);
     let accessibility = Rc::new(RefCell::new(
         crate::web_accessibility::WebAccessibilityBridge::install(
             &document,

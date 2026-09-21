@@ -44,7 +44,12 @@ where
     /// whole snapshot-and-compare while this still reads the same — which on an
     /// animation-only frame is every frame.
     pub fn semantics_snapshot_revision(&mut self) -> u64 {
-        if self.app.semantics_enabled {
+        if self.app.semantics_enabled
+            || self
+                .surfaces
+                .iter()
+                .any(|surface| surface.inspector.state.open)
+        {
             let app_context = std::rc::Rc::clone(&self.app.app_context);
             let semantics_dirty = app_context.enter(|| {
                 let Some(root) = self.app.composition.root() else {

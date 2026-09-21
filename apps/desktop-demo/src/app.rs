@@ -826,6 +826,10 @@ pub fn combined_app_with_initial_tab(initial_tab: Option<DemoTab>) {
 
 #[composable]
 pub fn combined_app_with_startup(startup: StartupSelection) {
+    if cranpose::launch_args().string("test_screen") == Some("accessibility_robot") {
+        crate::test_screens::accessibility_robot::AccessibilityRobotScreen();
+        return;
+    }
     let initial_tab = startup.initial_tab.unwrap_or(DemoTab::Counter);
     let active_tab = cranpose_core::rememberMutableStateOf(move || initial_tab);
     let winamp_tab_state = remember_winamp_tab_state();

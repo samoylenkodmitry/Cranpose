@@ -1047,6 +1047,7 @@ where
             density,
         );
         shell.set_semantics_enabled(true);
+        crate::accessibility::install_inspector(&mut shell, settings.developer_inspector);
 
         *app_shell = Some(shell);
 
@@ -2284,9 +2285,7 @@ pub fn run(
 
         if let Some(shell) = &mut app_shell {
             for (x, y) in crate::android_accessibility::drain_activations() {
-                shell.set_cursor(x, y);
-                shell.pointer_pressed();
-                shell.pointer_released_at_position(x, y);
+                shell.accessibility_activate_at(x, y);
             }
             drain_accessibility_custom_actions(shell, &accessibility_elements);
             drain_accessibility_focus(&accessibility_elements);

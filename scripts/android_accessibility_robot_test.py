@@ -10,7 +10,10 @@ class InstrumentationResultTest(unittest.TestCase):
     def test_rejects_empty_failed_and_incomplete_instrumentation(self):
         for result in ['OK (0 tests)\n', 'INSTRUMENTATION_CODE: -1\n',
                        'FAILURES!!!\nTests run: 1,  Failures: 1\n',
-                       'OK (1 test)\nINSTRUMENTATION_FAILED: runner crashed\n']:
+                       'OK (1 test)\nINSTRUMENTATION_FAILED: runner crashed\n',
+                       'OK (1 test)\nOK (1 test)\n',
+                       'INSTRUMENTATION_STATUS_CODE: -3\nOK (1 test)\n',
+                       'INSTRUMENTATION_STATUS_CODE: -4\nOK (1 test)\n']:
             with self.subTest(result=result), self.assertRaises(RuntimeError):
                 completed_tests(result)
 

@@ -28,6 +28,8 @@ pub(crate) struct RendererFrontend {
     pub(crate) root_scale: f32,
     pub(crate) dev_overlay_cache: Option<DevOverlayCache>,
     pub(crate) dev_overlay_graph: Option<RenderGraph>,
+    pub(crate) fps_overlay_graph: Option<RenderGraph>,
+    pub(crate) inspector_overlay_graph: Option<RenderGraph>,
     pub(crate) root_scene_capacity: SceneCapacityHint,
     pub(crate) frame_sequence: u64,
     pub(crate) changed_nodes: Vec<cranpose_core::NodeId>,
@@ -36,6 +38,27 @@ pub(crate) struct RendererFrontend {
 }
 
 impl RendererFrontend {
+    pub(crate) fn refresh_dev_overlay(&mut self) {
+        self.dev_overlay_graph = self.fps_overlay_graph.clone();
+        if let Some(inspector) = &self.inspector_overlay_graph {
+            let graph = self.dev_overlay_graph.get_or_insert_with(|| {
+                RenderGraph::new(cranpose_render_common::graph::LayerNode::default())
+            });
+            graph
+                .root
+                .children
+                .push(cranpose_render_common::graph::RenderNode::Layer(Box::new(
+                    inspector.root.clone(),
+                )));
+            graph.root.recompute_raster_cache_hashes();
+        }
+    }
+
+    pub(crate) fn clear_fps_overlay(&mut self) {
+        self.fps_overlay_graph = None;
+        self.dev_overlay_cache = None;
+        self.refresh_dev_overlay();
+    }
     pub(crate) fn new(text_state: TextSystemState, text_fonts: SoftwareTextFontSet) -> Self {
         Self {
             scene: Scene::new(),
@@ -45,6 +68,8 @@ impl RendererFrontend {
             root_scale: 1.0,
             dev_overlay_cache: None,
             dev_overlay_graph: None,
+            fps_overlay_graph: None,
+            inspector_overlay_graph: None,
             root_scene_capacity: SceneCapacityHint::default(),
             frame_sequence: 0,
             changed_nodes: Vec::new(),
