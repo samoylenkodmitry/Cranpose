@@ -8,6 +8,29 @@ use cranpose_ui::{
     SemanticsAction, SemanticsNode, SemanticsRole, SemanticsWidgetRole,
 };
 
+#[path = "accessibility_identity.rs"]
+mod identity;
+pub(crate) use identity::AccessibilitySnapshot;
+
+#[cfg(any(
+    test,
+    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"),
+    all(feature = "ios", feature = "renderer-wgpu", target_os = "ios")
+))]
+pub(crate) fn opened_dialog(
+    current: &[AccessibilityElement],
+    next: &[AccessibilityElement],
+) -> Option<NodeId> {
+    next.iter()
+        .find(|element| {
+            element.role == AccessibilityRole::Dialog
+                && !current.iter().any(|old| {
+                    old.node_id == element.node_id && old.role == AccessibilityRole::Dialog
+                })
+        })
+        .map(|element| element.node_id)
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct AccessibilityRect {
     pub(crate) x: f32,
@@ -452,46 +475,6 @@ fn collect_bounds(root: &LayoutBox, bounds: &mut HashMap<NodeId, AccessibilityRe
     for child in &root.children {
         collect_bounds(child, bounds);
     }
-}
-
-pub(crate) fn element_ids(elements: &[AccessibilityElement]) -> Vec<i32> {
-    let mut assigned: Vec<i32> = Vec::with_capacity(elements.len());
-    for element in elements {
-        let mut id = element_id(element.node_id, element.canvas_key);
-        while assigned.contains(&id) {
-            id = if id == i32::MAX { 1 } else { id + 1 };
-        }
-        assigned.push(id);
-    }
-    assigned
-}
-
-fn element_id(node_id: NodeId, canvas_key: Option<u64>) -> i32 {
-    let mixed = match canvas_key {
-        None => node_id as u64,
-        Some(key) => {
-            (node_id as u64)
-                .wrapping_mul(0x9e37_79b9_7f4a_7c15)
-                .rotate_left(17)
-                ^ key.wrapping_mul(0xd6e8_feb8_6659_fd93)
-        }
-    };
-    ((mixed & 0x7fff_ffff) as i32).max(1)
-}
-
-#[cfg(any(
-    test,
-    all(feature = "android", feature = "renderer-wgpu", target_os = "android")
-))]
-pub(crate) fn resolve_element_id(
-    elements: &[AccessibilityElement],
-    id: i32,
-) -> Option<(NodeId, Option<u64>)> {
-    element_ids(elements)
-        .into_iter()
-        .zip(elements)
-        .find(|(assigned, _)| *assigned == id)
-        .map(|(_, element)| (element.node_id, element.canvas_key))
 }
 
 fn project_semantics(

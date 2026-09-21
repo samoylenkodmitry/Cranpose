@@ -70,6 +70,8 @@ class DesktopContractTests(unittest.TestCase):
                 adapter.error_type = RuntimeError
                 error = RuntimeError(message)
                 error.message = message
+                error.domain = 'atspi_error'
+                error.code = 1
                 desktop = Mock()
                 desktop.get_child_count.return_value = 0
                 adapter.api.get_desktop.side_effect = [error, desktop] if recover else error

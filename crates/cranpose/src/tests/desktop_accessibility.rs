@@ -1,5 +1,109 @@
 use super::*;
-use crate::accessibility::AccessibilityRect;
+use crate::accessibility::{AccessibilityRect, AccessibilitySnapshot};
+
+fn published(elements: &[AccessibilityElement]) -> AccessibilitySnapshot {
+    let mut snapshot = AccessibilitySnapshot::default();
+    snapshot
+        .update(elements.to_vec())
+        .expect("unique identities");
+    snapshot
+}
+
+fn tree_update(
+    elements: &[AccessibilityElement],
+    announcement: Option<&Announcement>,
+    turn: bool,
+) -> TreeUpdate {
+    super::tree_update(&published(elements), announcement, turn)
+}
+
+#[test]
+fn pane_titles_preserve_native_dialog_and_control_roles() {
+    for (role, expected) in [
+        (AccessibilityRole::Dialog, Role::Dialog),
+        (AccessibilityRole::Alert, Role::Alert),
+        (AccessibilityRole::Button, Role::Button),
+        (AccessibilityRole::Toolbar, Role::Toolbar),
+        (AccessibilityRole::StaticText, Role::Region),
+    ] {
+        let element = AccessibilityElement {
+            role,
+            pane_title: Some("Preferences".into()),
+            ..Default::default()
+        };
+        assert_eq!(accesskit_node(&element).role(), expected);
+    }
+}
+
+#[test]
+fn text_selection_cannot_redirect_an_action_to_another_field() {
+    let first = field("first", 0, 0);
+    let mut second = field("second", 0, 0);
+    second.node_id = 8;
+    let elements = vec![first, second];
+    let ids = published(&elements).ids;
+    let selection = TextSelection {
+        anchor: TextPosition {
+            node: text_run_id(ids[1], 0),
+            character_index: 0,
+        },
+        focus: TextPosition {
+            node: text_run_id(ids[1], 0),
+            character_index: 2,
+        },
+    };
+    assert!(selection_chars(&published(&elements), NodeId(ids[0] as u64), &selection).is_none());
+}
+
+#[test]
+fn long_multiline_text_keeps_every_run_and_the_end_selection_accessible() {
+    let value = "line\n".repeat(300);
+    let mut field = field(&value, value.len(), value.len());
+    field.multiline = true;
+    let elements = vec![field];
+    let snapshot = published(&elements);
+    let update = super::tree_update(&snapshot, None, false);
+    let input = &update.nodes[1].1;
+    assert_eq!(input.children().len(), text_runs(&value).len());
+    let selection = input.text_selection().expect("selection at end");
+    assert!(
+        update
+            .nodes
+            .iter()
+            .any(|(id, _)| *id == selection.focus.node)
+    );
+    assert_eq!(
+        selection_chars(&snapshot, NodeId(snapshot.ids[0] as u64), selection),
+        Some((7, value.chars().count(), value.chars().count()))
+    );
+}
+
+#[test]
+fn selection_offsets_cannot_escape_the_named_run() {
+    let snapshot = published(&[field("one\ntwo", 0, 0)]);
+    let selection = TextSelection {
+        anchor: TextPosition {
+            node: text_run_id(snapshot.ids[0], 0),
+            character_index: 0,
+        },
+        focus: TextPosition {
+            node: text_run_id(snapshot.ids[0], 0),
+            character_index: 6,
+        },
+    };
+    assert!(selection_chars(&snapshot, NodeId(snapshot.ids[0] as u64), &selection).is_none());
+}
+
+#[test]
+fn text_run_identity_round_trips_beyond_eight_bits() {
+    for index in [0, 254, 255, 256, 65_536, u32::MAX - 1] {
+        let id = text_run_id(7, index);
+        assert_eq!(text_run_owner(id), Some((7, index as usize)));
+        assert_ne!(id, NodeId(7));
+    }
+    assert_eq!(text_run_owner(ROOT_ID), None);
+    assert_eq!(text_run_owner(ANNOUNCEMENT_ID), None);
+}
 
 #[test]
 fn collection_positions_use_accesskits_zero_based_index() {
@@ -56,7 +160,7 @@ fn the_tree_points_at_the_focused_control_and_offers_focus_on_the_others() {
     ];
 
     let update = tree_update(&elements, None, false);
-    let ids = accessibility::element_ids(&elements);
+    let ids = published(&elements).ids;
 
     assert_eq!(
         update.focus,
@@ -203,7 +307,7 @@ fn a_text_field_carries_its_text_as_runs_with_characters_words_and_a_caret() {
     let input = &update.nodes[1].1;
     assert_eq!(input.role(), Role::TextInput);
     assert!(input.supports_action(Action::SetTextSelection));
-    let run_id = text_run_id(7, 0);
+    let run_id = text_run_id(1, 0);
     assert_eq!(input.children(), &[run_id]);
     let selection = input.text_selection().expect("the caret is published");
     assert_eq!(
@@ -240,7 +344,7 @@ fn a_field_with_lines_is_multiline_and_puts_the_caret_after_a_break_on_the_next_
 
     let input = &update.nodes[1].1;
     assert_eq!(input.role(), Role::MultilineTextInput);
-    assert_eq!(input.children(), &[text_run_id(7, 0), text_run_id(7, 1)]);
+    assert_eq!(input.children(), &[text_run_id(1, 0), text_run_id(1, 1)]);
     let caret = input
         .text_selection()
         .expect("the caret is published")
@@ -248,7 +352,7 @@ fn a_field_with_lines_is_multiline_and_puts_the_caret_after_a_break_on_the_next_
     assert_eq!(
         caret,
         TextPosition {
-            node: text_run_id(7, 1),
+            node: text_run_id(1, 1),
             character_index: 0
         }
     );
@@ -326,17 +430,17 @@ fn a_selection_a_reader_set_on_a_run_comes_back_in_characters_of_the_whole_text(
     let elements = vec![field("one\ntwo", 0, 0)];
     let selection = TextSelection {
         anchor: TextPosition {
-            node: text_run_id(7, 1),
+            node: text_run_id(1, 1),
             character_index: 1,
         },
         focus: TextPosition {
-            node: text_run_id(7, 0),
+            node: text_run_id(1, 0),
             character_index: 2,
         },
     };
 
     assert_eq!(
-        selection_chars(&elements, NodeId(7), &selection),
+        selection_chars(&published(&elements), NodeId(1), &selection),
         Some((7, 5, 2))
     );
     let stray = TextSelection {
@@ -349,7 +453,10 @@ fn a_selection_a_reader_set_on_a_run_comes_back_in_characters_of_the_whole_text(
             character_index: 1,
         },
     };
-    assert_eq!(selection_chars(&elements, NodeId(9), &stray), None);
+    assert_eq!(
+        selection_chars(&published(&elements), NodeId(9), &stray),
+        None
+    );
 }
 
 #[test]

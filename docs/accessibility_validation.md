@@ -235,6 +235,9 @@ the report. `just clippy-ios` checks the shipped simulator feature set;
 
 ## Regression and harness checks
 
+The [2026-09-21 identity validation](accessibility_identity_validation.md) records
+the shared identity regressions, native runs, artifact fingerprints, and limits.
+
 Run `just test-android-accessibility-contract` to verify that the Android,
 desktop, and iOS result guards accept valid runs and reject their intended
 failures. Shared Rust regressions run under `just test`, including pointer focus
@@ -244,6 +247,10 @@ password privacy, and progress roles.
 `just test-reader-actions` runs the shared shell and platform projection tests.
 The shell regressions cover identity-based activation, keyboard-only operation,
 canvas movement, disabled and removed nodes, modal isolation, and inspector input.
+Projection regressions cover colliding canvas keys, reordered and removed nodes,
+retired IDs, duplicate identities, ID exhaustion, named native dialogs, long
+multiline fields, and text selections that attempt to address another field or
+leave their named run.
 `bash scripts/a11y/check_reader_actions.sh OUTPUT` also builds the production
 desktop demo and runs the Linux native robot, retaining a log and native report.
 `bash scripts/a11y/check_platform.sh PLATFORM OUTPUT` records the shipped platform

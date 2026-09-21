@@ -1073,6 +1073,7 @@ fn android_accessibility_custom_actions_reach_the_frame_loop() {
     let boundary_source = crate_source("src/android_accessibility.rs");
     let loop_source = crate_source("src/android.rs");
     let projection_source = crate_source("src/accessibility.rs");
+    let identity_source = crate_source("src/accessibility_identity.rs");
 
     assert!(
         java_source.contains(
@@ -1088,13 +1089,14 @@ fn android_accessibility_custom_actions_reach_the_frame_loop() {
     );
     assert!(
         loop_source.contains("crate::android_accessibility::drain_custom_actions()")
-            && loop_source.contains("crate::accessibility::resolve_element_id(")
+            && loop_source.contains("elements.identity(virtual_id)")
             && loop_source.contains("crate::accessibility::perform_custom_action("),
         "the frame loop should resolve the virtual view id and run the action against the live semantics tree"
     );
     assert!(
         projection_source.contains("pub(crate) fn perform_custom_action(")
-            && projection_source.contains("pub(crate) fn element_ids("),
+            && identity_source.contains("pub(crate) struct AccessibilitySnapshot")
+            && identity_source.contains("pub(crate) fn identity("),
         "resolving an accessibility id and running its action are platform-neutral and belong outside the JNI boundary"
     );
 }
@@ -3709,14 +3711,14 @@ fn a_dialog_takes_the_reader_along_when_it_opens() {
 
     let ios_source = crate_source("src/ios_accessibility.rs");
     assert!(
-        ios_source.contains("fn opened_dialog(")
+        ios_source.contains("accessibility::opened_dialog(")
             && ios_source.contains("UIAccessibilityPostNotification(notification, landing);"),
         "VoiceOver gets a screen change aimed at the dialog that opened"
     );
 
     let web_source = crate_source("src/web_accessibility.rs");
     assert!(
-        web_source.contains("fn opened_dialog(")
+        web_source.contains("accessibility::opened_dialog(")
             && web_source.contains("if opened_dialog == Some(element.node_id) {"),
         "the web mirror focuses the dialog node that opened"
     );
@@ -3821,8 +3823,9 @@ fn every_platform_speaks_a_control_that_changed_under_the_cursor() {
     let ios_source = crate_source("src/ios_accessibility.rs");
     assert!(
         ios_source.contains("fn respeak_under_cursor(&self, changed: &[bool]) {")
-            && ios_source
-                .contains("let changed = accessibility::spoken_changes(&self.snapshot, &next);"),
+            && ios_source.contains(
+                "let changed = accessibility::spoken_changes(&self.snapshot.elements, &next);"
+            ),
         "VoiceOver reads the element under its cursor again when its words changed"
     );
 
@@ -3835,7 +3838,9 @@ fn every_platform_speaks_a_control_that_changed_under_the_cursor() {
 
     let bridge_source = crate_source("src/android_accessibility.rs");
     assert!(
-        bridge_source.contains("let changed = accessibility::spoken_changes(previous, &elements);"),
+        bridge_source.contains(
+            "let changed = accessibility::spoken_changes(&previous.elements, &elements);"
+        ),
         "the Android bridge marks the controls that changed"
     );
 }
