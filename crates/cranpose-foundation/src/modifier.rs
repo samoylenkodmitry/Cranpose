@@ -1304,6 +1304,8 @@ pub struct SemanticsConfiguration {
     pub enabled: bool,
     pub is_clickable: bool,
     pub is_editable_text: bool,
+    /// Whether an editable field accepts line breaks, independent of its current text.
+    pub multiline: bool,
     /// The text an editable field holds, read as its value. Compose's
     /// `editableText`.
     pub text: Option<String>,
@@ -1333,8 +1335,8 @@ pub struct SemanticsConfiguration {
     /// Why the control's content is wrong, read after its state: "invalid,
     /// the amount needs a number". Compose's `error`.
     pub error: Option<String>,
-    /// Whether this field holds a secret, so no screen reader reads its text
-    /// out and no platform mirror carries it. Compose's `password`.
+    /// Whether this field holds a secret, so screen readers never receive its
+    /// text and native editors use protected input. Compose's `password`.
     pub password: bool,
     /// Where a screen reader visits this node among the ones beside it: a
     /// smaller number comes first, and nodes left at zero keep the order the
@@ -1400,6 +1402,7 @@ impl Default for SemanticsConfiguration {
             enabled: true,
             is_clickable: false,
             is_editable_text: false,
+            multiline: false,
             text: None,
             text_selection: None,
             custom_actions: Vec::new(),
@@ -1618,6 +1621,7 @@ impl SemanticsConfiguration {
         self.enabled &= other.enabled;
         self.is_clickable |= other.is_clickable;
         self.is_editable_text |= other.is_editable_text;
+        self.multiline |= other.multiline;
         if let Some(text) = &other.text {
             self.text = Some(text.clone());
         }

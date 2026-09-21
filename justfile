@@ -419,6 +419,15 @@ test-web-accessibility url:
 robot-accessibility-web site output:
     python3 scripts/a11y/web_robot.py --site {{quote(site)}} --output {{quote(output)}}
 
+test-web-ime-webdriver endpoint browser url output *args:
+    python3 scripts/a11y/web_ime_robot.py --endpoint {{quote(endpoint)}} --browser {{quote(browser)}} --url {{quote(url)}} --output {{quote(output)}} {{args}}
+
+test-web-ime-firefox site output driver_port server_port:
+    bash scripts/a11y/run_webdriver.sh {{quote(site)}} {{quote(output)}} {{quote(driver_port)}} {{quote(server_port)}}
+
+test-web-ime-android serial endpoint url output keyboard_layout:
+    node scripts/a11y/android-ime.mjs {{quote(serial)}} {{quote(endpoint)}} {{quote(url)}} {{quote(output)}} {{quote(keyboard_layout)}}
+
 build-accessibility-desktop: _disk-guard
     cargo build --profile ci -p desktop-app --bin desktop-app
 

@@ -424,11 +424,8 @@ pub async fn run(
 
     crate::web_power::start_battery_probe(request_frame.clone());
 
-    let ime_textarea = create_ime_textarea(&document)?;
     app.borrow_mut()
-        .set_platform_text_input(Rc::new(WebTextInput {
-            textarea: ime_textarea.clone(),
-        }));
+        .set_platform_text_input(accessibility.borrow().text_input_handler());
 
     if let Ok(Some(query)) = window.match_media("(prefers-color-scheme: dark)") {
         let initial = if query.matches() {
@@ -687,43 +684,6 @@ pub async fn run(
         closure.forget();
     }
 
-    {
-        let app = app.clone();
-        let request_frame = request_frame.clone();
-        let closure = Closure::wrap(Box::new(move |event: web_sys::CompositionEvent| {
-            let text = event.data().unwrap_or_default();
-            if let Ok(mut app_mut) = app.try_borrow_mut() {
-                app_mut.on_ime_preedit(&text, None);
-                request_frame();
-            }
-        }) as Box<dyn FnMut(_)>);
-        ime_textarea.add_event_listener_with_callback(
-            "compositionupdate",
-            closure.as_ref().unchecked_ref(),
-        )?;
-        closure.forget();
-    }
-
-    {
-        let app = app.clone();
-        let request_frame = request_frame.clone();
-        let textarea = ime_textarea.clone();
-        let closure = Closure::wrap(Box::new(move |event: web_sys::CompositionEvent| {
-            let text = event.data().unwrap_or_default();
-            if let Ok(mut app_mut) = app.try_borrow_mut() {
-                let _ = app_mut.on_ime_preedit("", None);
-                if !text.is_empty() {
-                    app_mut.on_paste(&text);
-                }
-                request_frame();
-            }
-            textarea.set_value("");
-        }) as Box<dyn FnMut(_)>);
-        ime_textarea
-            .add_event_listener_with_callback("compositionend", closure.as_ref().unchecked_ref())?;
-        closure.forget();
-    }
-
     let reshape: ReshapeFn = {
         let canvas = canvas.clone();
         let window = window.clone();
@@ -894,56 +854,6 @@ pub async fn run(
     request_frame();
 
     Ok(())
-}
-
-struct WebTextInput {
-    textarea: web_sys::HtmlTextAreaElement,
-}
-
-impl cranpose_app_shell::PlatformTextInputHandler for WebTextInput {
-    fn show_keyboard(&self) {
-        let _ = self.textarea.focus();
-    }
-
-    fn hide_keyboard(&self) {
-        self.textarea.set_value("");
-        let _ = self.textarea.blur();
-    }
-}
-
-fn create_ime_textarea(
-    document: &web_sys::Document,
-) -> Result<web_sys::HtmlTextAreaElement, JsValue> {
-    let textarea: web_sys::HtmlTextAreaElement = document.create_element("textarea")?.dyn_into()?;
-
-    textarea.set_attribute("autocomplete", "off")?;
-    textarea.set_attribute("autocorrect", "off")?;
-    textarea.set_attribute("autocapitalize", "off")?;
-    textarea.set_attribute("spellcheck", "false")?;
-    textarea.set_attribute("tabindex", "-1")?;
-    textarea.set_attribute("aria-hidden", "true")?;
-
-    let style = textarea.style();
-    style.set_property("position", "fixed")?;
-    style.set_property("top", "0")?;
-    style.set_property("left", "0")?;
-    style.set_property("width", "1px")?;
-    style.set_property("height", "1px")?;
-    style.set_property("opacity", "0")?;
-    style.set_property("border", "0")?;
-    style.set_property("padding", "0")?;
-    style.set_property("margin", "0")?;
-    style.set_property("outline", "none")?;
-    style.set_property("resize", "none")?;
-    style.set_property("overflow", "hidden")?;
-    style.set_property("background", "transparent")?;
-    style.set_property("pointer-events", "none")?;
-
-    let body = document
-        .body()
-        .ok_or_else(|| JsValue::from_str("document has no body for the IME textarea"))?;
-    body.append_child(&textarea)?;
-    Ok(textarea)
 }
 
 fn request_animation_frame(f: &Closure<dyn FnMut()>) -> bool {

@@ -1503,6 +1503,7 @@ fn an_editable_field_publishes_where_its_caret_is_and_a_password_does_not() {
         );
         field.editable_text = true;
         field.password = password;
+        field.multiline = true;
         field.text = Some("Milk".to_owned());
         field.text_selection = Some(cranpose_ui::TextRange::new(1, 3));
         let root = node(1, SemanticsRole::Layout, Vec::new(), None, vec![field]);
@@ -1514,6 +1515,7 @@ fn an_editable_field_publishes_where_its_caret_is_and_a_password_does_not() {
         let projected = project_semantics(&root, &bounds);
 
         assert_eq!(projected[0].text_selection, expected);
+        assert!(projected[0].multiline);
     }
 }
 

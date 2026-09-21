@@ -234,7 +234,9 @@ fn a_text_field_carries_its_text_as_runs_with_characters_words_and_a_caret() {
 
 #[test]
 fn a_field_with_lines_is_multiline_and_puts_the_caret_after_a_break_on_the_next_line() {
-    let update = tree_update(&[field("one\ntwo", 4, 4)], None, false);
+    let mut multiline = field("one\ntwo", 4, 4);
+    multiline.multiline = true;
+    let update = tree_update(&[multiline], None, false);
 
     let input = &update.nodes[1].1;
     assert_eq!(input.role(), Role::MultilineTextInput);
@@ -252,6 +254,20 @@ fn a_field_with_lines_is_multiline_and_puts_the_caret_after_a_break_on_the_next_
     );
     assert_eq!(update.nodes[2].1.value(), Some("one\n"));
     assert_eq!(update.nodes[3].1.value(), Some("two"));
+}
+
+#[test]
+fn an_empty_multiline_field_keeps_its_native_role() {
+    let mut multiline = field("", 0, 0);
+    multiline.multiline = true;
+    let update = tree_update(&[multiline], None, false);
+    assert_eq!(update.nodes[1].1.role(), Role::MultilineTextInput);
+}
+
+#[test]
+fn a_single_line_fields_role_does_not_depend_on_its_value() {
+    let update = tree_update(&[field("one\ntwo", 4, 4)], None, false);
+    assert_eq!(update.nodes[1].1.role(), Role::TextInput);
 }
 
 #[test]

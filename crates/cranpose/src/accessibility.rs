@@ -329,6 +329,7 @@ pub(crate) struct AccessibilityElement {
     /// text is picked: the anchor and the end that moves, as byte offsets into
     /// `value`. A field that holds a secret publishes none.
     pub(crate) text_selection: Option<(usize, usize)>,
+    pub(crate) multiline: bool,
 }
 
 impl Default for AccessibilityElement {
@@ -370,6 +371,7 @@ impl Default for AccessibilityElement {
             dismissable: false,
             is_modal: false,
             text_selection: None,
+            multiline: false,
         }
     }
 }
@@ -888,6 +890,7 @@ fn element_for_node(
             .text_selection
             .filter(|_| node.editable_text && !node.password)
             .map(|range| (range.start, range.end)),
+        multiline: node.multiline,
     }
 }
 
@@ -1228,8 +1231,7 @@ pub(crate) fn set_text_selection(
 /// and a browser count text.
 #[cfg(any(
     test,
-    all(feature = "android", feature = "renderer-wgpu", target_os = "android"),
-    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
+    all(feature = "android", feature = "renderer-wgpu", target_os = "android")
 ))]
 pub(crate) fn set_text_selection_utf16(
     root: &SemanticsNode,
@@ -1257,8 +1259,7 @@ pub(crate) fn set_text_selection_chars(
 #[cfg(any(
     test,
     all(feature = "desktop-shell", feature = "renderer-wgpu"),
-    all(feature = "android", feature = "renderer-wgpu", target_os = "android"),
-    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
+    all(feature = "android", feature = "renderer-wgpu", target_os = "android")
 ))]
 fn set_text_selection_counted(
     root: &SemanticsNode,
@@ -1689,7 +1690,7 @@ pub(crate) fn spoken_changes(
     all(feature = "android", feature = "renderer-wgpu", target_os = "android"),
     all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
 ))]
-fn find_semantics_node(node: &SemanticsNode, node_id: NodeId) -> Option<&SemanticsNode> {
+pub(crate) fn find_semantics_node(node: &SemanticsNode, node_id: NodeId) -> Option<&SemanticsNode> {
     if node.hidden {
         return None;
     }

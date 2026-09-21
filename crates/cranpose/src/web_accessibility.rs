@@ -293,18 +293,8 @@ fn apply_aria_state(node: &HtmlElement, element: &AccessibilityElement) -> Resul
     Ok(())
 }
 
-/// Whether a control is a text field a reader edits: one that publishes its
-/// caret. A field that holds a secret publishes none and stays a plain node.
 fn edits_text(element: &AccessibilityElement) -> bool {
-    element.role.is_text_field() && element.text_selection.is_some()
-}
-
-/// Whether a field's text runs over more than one line.
-fn holds_lines(element: &AccessibilityElement) -> bool {
-    element
-        .value
-        .as_deref()
-        .is_some_and(|value| value.contains('\n'))
+    element.role.is_text_field() && (element.text_selection.is_some() || element.password)
 }
 
 fn is_mirror_container(element: &AccessibilityElement) -> bool {
@@ -320,7 +310,7 @@ fn is_mirror_container(element: &AccessibilityElement) -> bool {
 /// field; a control a click reaches is a button; anything else is a span.
 fn mirror_tag(element: &AccessibilityElement) -> &'static str {
     if edits_text(element) {
-        if holds_lines(element) {
+        if element.multiline && !element.password {
             "textarea"
         } else {
             "input"
@@ -342,34 +332,38 @@ fn apply_field_text(node: &HtmlElement, element: &AccessibilityElement) -> Resul
     let (Some(value), Some((anchor, focus))) = (&element.value, element.text_selection) else {
         return Ok(());
     };
+    apply_editor_text(node, value, anchor, focus)
+}
+
+fn apply_editor_text(
+    node: &HtmlElement,
+    value: &str,
+    anchor: usize,
+    focus: usize,
+) -> Result<(), JsValue> {
+    if node.has_attribute("data-cranpose-composition") {
+        return Ok(());
+    }
     let anchor = accessibility::utf16_offset(value, anchor) as u32;
     let focus = accessibility::utf16_offset(value, focus) as u32;
-    node.set_attribute("data-cranpose-selection", &format!("{anchor}:{focus}"))?;
-    let (start, end) = (anchor.min(focus), anchor.max(focus));
-    let direction = if focus < anchor {
-        "backward"
-    } else {
-        "forward"
-    };
-    if let Some(input) = node.dyn_ref::<HtmlInputElement>() {
-        input.set_type(if element.role == AccessibilityRole::SearchField {
-            "search"
-        } else {
-            "text"
-        });
-        if input.value() != *value {
+    let ends = format!("{anchor}:{focus}");
+    let previous = node.get_attribute("data-cranpose-selection");
+    let selection_changed = previous.as_deref() != Some(ends.as_str());
+    let native_selection = field_selection(node).map(|(anchor, focus)| format!("{anchor}:{focus}"));
+    let pending_selection = previous.is_some()
+        && node.matches(":focus")?
+        && native_selection.as_ref() != previous.as_ref();
+    let value_changed = field_value(node).as_deref() != Some(value);
+    if value_changed {
+        if let Some(input) = node.dyn_ref::<HtmlInputElement>() {
             input.set_value(value);
-        }
-        if field_selection(node) != Some((anchor as usize, focus as usize)) {
-            input.set_selection_range_with_direction(start, end, direction)?;
-        }
-    } else if let Some(area) = node.dyn_ref::<HtmlTextAreaElement>() {
-        if area.value() != *value {
+        } else if let Some(area) = node.dyn_ref::<HtmlTextAreaElement>() {
             area.set_value(value);
         }
-        if field_selection(node) != Some((anchor as usize, focus as usize)) {
-            area.set_selection_range_with_direction(start, end, direction)?;
-        }
+    }
+    node.set_attribute("data-cranpose-selection", &ends)?;
+    if value_changed || (selection_changed && !pending_selection) {
+        restore_field_caret(node)?;
     }
     Ok(())
 }
@@ -403,6 +397,9 @@ fn restore_field_caret(node: &HtmlElement) -> Result<(), JsValue> {
 /// caret back where it was, because a fresh input starts with its caret at
 /// the start.
 fn focus_mirror_node(node: &HtmlElement) -> Result<(), JsValue> {
+    if node.matches(":focus")? {
+        return Ok(());
+    }
     node.focus()?;
     restore_field_caret(node)
 }
@@ -445,6 +442,9 @@ fn attach_selection_listener(
         let Some(active) = owner.active_element() else {
             return;
         };
+        if active.has_attribute("data-cranpose-composition") {
+            return;
+        }
         let Some((anchor, focus)) = field_selection(&active) else {
             return;
         };
@@ -455,9 +455,17 @@ fn attach_selection_listener(
         let Some(node_id) = node_id_attribute(&active, "data-cranpose-node", &node_ids) else {
             return;
         };
+        let Some(value) = field_value(&active) else {
+            return;
+        };
         let _ = active.set_attribute("data-cranpose-selection", &ends);
         on_live_tree(&app, |root| {
-            accessibility::set_text_selection_utf16(root, node_id, anchor, focus)
+            accessibility::set_text_selection(
+                root,
+                node_id,
+                accessibility::byte_offset_for_utf16(&value, anchor),
+                accessibility::byte_offset_for_utf16(&value, focus),
+            )
         });
     }) as Box<dyn FnMut(_)>);
     document
@@ -489,6 +497,15 @@ fn mirror_node(
         node.set_attribute("lang", language)?;
     }
     apply_role_and_state(&node, element)?;
+    if let Some(input) = node.dyn_ref::<HtmlInputElement>() {
+        input.set_type(if element.password {
+            "password"
+        } else if element.role == AccessibilityRole::SearchField {
+            "search"
+        } else {
+            "text"
+        });
+    }
     apply_page(&node, element, page)?;
     apply_field_text(&node, element)?;
     if element.clickable {
@@ -565,6 +582,23 @@ fn attach_focus_listener(
     app: Rc<RefCell<AppShell<WgpuRenderer>>>,
     node_ids: Rc<RefCell<HashMap<i32, cranpose_core::NodeId>>>,
 ) -> Result<(), JsValue> {
+    let blur_app = Rc::clone(&app);
+    let focus_out = Closure::wrap(Box::new(move |event: web_sys::Event| {
+        let Some(target) = event
+            .target()
+            .and_then(|target| target.dyn_into::<Element>().ok())
+            .filter(|target| field_value(target).is_some())
+        else {
+            return;
+        };
+        let _ = target.remove_attribute("data-cranpose-composition");
+        if let Ok(mut shell) = blur_app.try_borrow_mut() {
+            shell.on_ime_finish_composing();
+            shell.clear_text_field_focus();
+        }
+    }) as Box<dyn FnMut(_)>);
+    root.add_event_listener_with_callback("focusout", focus_out.as_ref().unchecked_ref())?;
+    focus_out.forget();
     let focus_in = Closure::wrap(Box::new(move |event: web_sys::Event| {
         let Some(target) = event.target().and_then(|t| t.dyn_into::<Element>().ok()) else {
             return;
@@ -728,6 +762,12 @@ fn attach_key_listener(
 }
 
 fn browser_handles_key(event: &web_sys::KeyboardEvent, target: &Element) -> bool {
+    if event.is_composing()
+        || event.key_code() == 229
+        || target.has_attribute("data-cranpose-composition")
+    {
+        return true;
+    }
     let key = event.key();
     if key == "Tab" {
         return target
@@ -770,30 +810,147 @@ fn attach_input_listener(
         else {
             return;
         };
-        let Some(node_id) = node_id_attribute(&target, "data-cranpose-node", &node_ids) else {
-            return;
-        };
-        let value = if let Some(input) = target.dyn_ref::<HtmlInputElement>() {
-            input.value()
-        } else if let Some(area) = target.dyn_ref::<HtmlTextAreaElement>() {
-            area.value()
-        } else {
-            return;
-        };
-        let selection = field_selection(&target);
-        on_live_tree(&app, |root| {
-            let changed = accessibility::set_text(root, node_id, &value);
-            if let Some((anchor, focus)) = selection {
-                let anchor = accessibility::byte_offset_for_utf16(&value, anchor);
-                let focus = accessibility::byte_offset_for_utf16(&value, focus);
-                return accessibility::set_text_selection(root, node_id, anchor, focus) || changed;
-            }
-            changed
-        });
+        sync_field_input(&target, &app, &node_ids);
     }) as Box<dyn FnMut(_)>);
     root.add_event_listener_with_callback("input", input.as_ref().unchecked_ref())?;
     input.forget();
     Ok(())
+}
+
+fn field_value(target: &Element) -> Option<String> {
+    if let Some(input) = target.dyn_ref::<HtmlInputElement>() {
+        Some(input.value())
+    } else {
+        target
+            .dyn_ref::<HtmlTextAreaElement>()
+            .map(HtmlTextAreaElement::value)
+    }
+}
+
+fn composition_range(target: &Element) -> Option<(usize, usize)> {
+    let range = target.get_attribute("data-cranpose-composition")?;
+    let (start, end) = range.split_once(':')?;
+    Some((start.parse().ok()?, end.parse().ok()?))
+}
+
+fn sync_field_input(
+    target: &Element,
+    app: &Rc<RefCell<AppShell<WgpuRenderer>>>,
+    node_ids: &RefCell<HashMap<i32, cranpose_core::NodeId>>,
+) {
+    let Some(node_id) = node_id_attribute(target, "data-cranpose-node", node_ids) else {
+        return;
+    };
+    let Some(value) = field_value(target) else {
+        return;
+    };
+    let selection = field_selection(target);
+    if let Some((anchor, focus)) = selection {
+        let _ = target.set_attribute("data-cranpose-selection", &format!("{anchor}:{focus}"));
+    }
+    on_live_tree(app, |root| {
+        let changed = accessibility::set_text(root, node_id, &value);
+        if let Some((anchor, focus)) = selection {
+            let anchor = accessibility::byte_offset_for_utf16(&value, anchor);
+            let focus = accessibility::byte_offset_for_utf16(&value, focus);
+            return accessibility::set_text_selection(root, node_id, anchor, focus) || changed;
+        }
+        changed
+    });
+    if let Some((start, end)) = composition_range(target)
+        && let Ok(mut shell) = app.try_borrow_mut()
+    {
+        shell.on_ime_set_composing_region(
+            accessibility::byte_offset_for_utf16(&value, start),
+            accessibility::byte_offset_for_utf16(&value, end),
+        );
+    }
+}
+
+fn attach_composition_listener(
+    root: &HtmlElement,
+    app: Rc<RefCell<AppShell<WgpuRenderer>>>,
+    node_ids: Rc<RefCell<HashMap<i32, cranpose_core::NodeId>>>,
+) -> Result<(), JsValue> {
+    for name in ["compositionstart", "compositionupdate", "compositionend"] {
+        let app = Rc::clone(&app);
+        let node_ids = Rc::clone(&node_ids);
+        let listener = Closure::wrap(Box::new(move |event: web_sys::CompositionEvent| {
+            let Some(target) = event
+                .target()
+                .and_then(|target| target.dyn_into::<Element>().ok())
+            else {
+                return;
+            };
+            let Some((anchor, focus)) = field_selection(&target) else {
+                return;
+            };
+            if name == "compositionend" {
+                let _ = target.remove_attribute("data-cranpose-composition");
+                sync_field_input(&target, &app, &node_ids);
+                if let Ok(mut shell) = app.try_borrow_mut() {
+                    shell.on_ime_finish_composing();
+                }
+            } else {
+                let start = composition_range(&target).map_or(anchor.min(focus), |range| range.0);
+                let end = start + event.data().unwrap_or_default().encode_utf16().count();
+                let _ =
+                    target.set_attribute("data-cranpose-composition", &format!("{start}:{end}"));
+            }
+        }) as Box<dyn FnMut(_)>);
+        root.add_event_listener_with_callback(name, listener.as_ref().unchecked_ref())?;
+        listener.forget();
+    }
+    for name in ["copy", "cut", "paste"] {
+        let listener = Closure::wrap(Box::new(move |event: web_sys::Event| {
+            if event
+                .target()
+                .and_then(|target| target.dyn_into::<Element>().ok())
+                .is_some_and(|target| field_value(&target).is_some())
+            {
+                event.stop_propagation();
+            }
+        }) as Box<dyn FnMut(_)>);
+        root.add_event_listener_with_callback(name, listener.as_ref().unchecked_ref())?;
+        listener.forget();
+    }
+    Ok(())
+}
+
+#[derive(Default)]
+struct WebTextInput {
+    fields: RefCell<HashMap<cranpose_core::NodeId, HtmlElement>>,
+    active: RefCell<Option<HtmlElement>>,
+}
+
+impl cranpose_app_shell::PlatformTextInputHandler for WebTextInput {
+    fn show_keyboard(&self) {
+        let Some(node_id) = cranpose_ui::text_field_focus::focused_field_node() else {
+            return;
+        };
+        let Some(node) = self.fields.borrow().get(&node_id).cloned() else {
+            return;
+        };
+        if let Some(editor) = cranpose_ui::text_field_focus::focused_editor_state()
+            && field_value(&node).as_deref() != Some(&editor.text)
+        {
+            let _ = apply_editor_text(
+                &node,
+                &editor.text,
+                editor.selection_start,
+                editor.selection_end,
+            );
+        }
+        *self.active.borrow_mut() = Some(node.clone());
+        let _ = focus_mirror_node(&node);
+    }
+
+    fn hide_keyboard(&self) {
+        let active = self.active.borrow_mut().take();
+        if let Some(node) = active {
+            let _ = node.blur();
+        }
+    }
 }
 
 struct MirrorEntry {
@@ -879,7 +1036,11 @@ fn patch_attributes(node: &HtmlElement, template: &HtmlElement) -> Result<(), Js
         .iter()
         .filter_map(|name| name.as_string())
     {
-        if name != "style" && !template.has_attribute(&name) {
+        if name != "style"
+            && name != "data-cranpose-composition"
+            && name != "data-cranpose-selection"
+            && !template.has_attribute(&name)
+        {
             node.remove_attribute(&name)?;
         }
     }
@@ -888,7 +1049,8 @@ fn patch_attributes(node: &HtmlElement, template: &HtmlElement) -> Result<(), Js
         .iter()
         .filter_map(|name| name.as_string())
     {
-        if let Some(value) = template.get_attribute(&name)
+        if name != "data-cranpose-selection"
+            && let Some(value) = template.get_attribute(&name)
             && node.get_attribute(&name).as_ref() != Some(&value)
         {
             node.set_attribute(&name, &value)?;
@@ -918,6 +1080,7 @@ pub(crate) struct WebAccessibilityBridge {
     previous: Vec<AccessibilityElement>,
     entries: HashMap<i32, MirrorEntry>,
     node_ids: Rc<RefCell<HashMap<i32, cranpose_core::NodeId>>>,
+    text_input: Rc<WebTextInput>,
     focused_element: Option<i32>,
     polite: HtmlElement,
     assertive: HtmlElement,
@@ -946,6 +1109,7 @@ impl WebAccessibilityBridge {
         attach_action_listener(&root, Rc::clone(&app), Rc::clone(&node_ids))?;
         attach_selection_listener(document, Rc::clone(&app), Rc::clone(&node_ids))?;
         attach_input_listener(&root, Rc::clone(&app), Rc::clone(&node_ids))?;
+        attach_composition_listener(&root, Rc::clone(&app), Rc::clone(&node_ids))?;
         attach_page_listener(&root, app, Rc::clone(&node_ids))?;
 
         Ok(Self {
@@ -954,11 +1118,18 @@ impl WebAccessibilityBridge {
             previous: Vec::new(),
             entries: HashMap::new(),
             node_ids,
+            text_input: Rc::default(),
             focused_element: None,
             polite,
             assertive,
             announcement_turn: false,
         })
+    }
+
+    pub(crate) fn text_input_handler(
+        &self,
+    ) -> Rc<dyn cranpose_app_shell::PlatformTextInputHandler> {
+        self.text_input.clone()
     }
 
     /// Puts text a screen reader reads out into the live region that matches
@@ -1002,6 +1173,9 @@ impl WebAccessibilityBridge {
             return Ok(());
         }
         self.focused_element = Some(id);
+        if edits_text(element) {
+            *self.text_input.active.borrow_mut() = Some(node.clone());
+        }
         focus_mirror_node(node)
     }
 
@@ -1013,7 +1187,7 @@ impl WebAccessibilityBridge {
         let elements = accessibility::snapshot(shell);
         self.speak(&elements);
         if elements == self.previous {
-            return Ok(());
+            return self.sync_password(shell, &elements);
         }
         let opened_dialog = opened_dialog(&self.previous, &elements);
         let held = reader_focus(document).filter(|_| opened_dialog.is_none());
@@ -1027,6 +1201,7 @@ impl WebAccessibilityBridge {
             scale_y: canvas_rect.height() / viewport.1.max(1.0) as f64,
         };
         self.reconcile(document, &elements, &placement)?;
+        self.sync_password(shell, &elements)?;
         for (id, element) in accessibility::element_ids(&elements)
             .into_iter()
             .zip(&elements)
@@ -1039,6 +1214,34 @@ impl WebAccessibilityBridge {
         }
         self.previous = elements;
         self.settle_focus(held, app_focus_before)
+    }
+
+    fn sync_password(
+        &self,
+        shell: &mut AppShell<WgpuRenderer>,
+        elements: &[AccessibilityElement],
+    ) -> Result<(), JsValue> {
+        let mut passwords = elements
+            .iter()
+            .filter(|element| element.password)
+            .peekable();
+        if passwords.peek().is_none() {
+            return Ok(());
+        }
+        let Some(tree) = shell.semantics_tree() else {
+            return Ok(());
+        };
+        let fields = self.text_input.fields.borrow();
+        for element in passwords {
+            if let Some(node) = fields.get(&element.node_id)
+                && let Some(field) =
+                    accessibility::find_semantics_node(tree.root(), element.node_id)
+                && let (Some(text), Some(selection)) = (&field.text, field.text_selection)
+            {
+                apply_editor_text(node, text, selection.start, selection.end)?;
+            }
+        }
+        Ok(())
     }
 
     fn reconcile(
@@ -1057,6 +1260,7 @@ impl WebAccessibilityBridge {
             .collect();
         let mut children: HashMap<Option<i32>, Vec<HtmlElement>> = HashMap::new();
         self.node_ids.borrow_mut().clear();
+        self.text_input.fields.borrow_mut().clear();
         for ((id, element), page) in ids.iter().copied().zip(elements).zip(pages) {
             let entry = match self.entries.entry(id) {
                 std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
@@ -1069,6 +1273,12 @@ impl WebAccessibilityBridge {
             };
             entry.update(document, id, element, page, placement)?;
             self.node_ids.borrow_mut().insert(id, element.node_id);
+            if edits_text(element) {
+                self.text_input
+                    .fields
+                    .borrow_mut()
+                    .insert(element.node_id, entry.node.clone());
+            }
             let parent = element
                 .scroll_parent
                 .and_then(|parent| parents.get(&parent).copied());

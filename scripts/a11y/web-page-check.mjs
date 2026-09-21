@@ -5,6 +5,8 @@ import { mkdtempSync, openSync, readFileSync, writeFileSync, closeSync } from "n
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { checkMarkdownImages } from "./tests/markdown-images.mjs";
+import { checkImeFocus } from "./tests/ime-focus.mjs";
+import { Cdp } from "./cdp.mjs";
 
 const url = process.argv[2];
 assert.ok(url, "pass the URL of a running web demo");
@@ -49,56 +51,16 @@ async function pageTarget() {
   throw new Error("chrome did not answer on the debugging port");
 }
 
-let ws;
-async function connect() {
-  const target = await pageTarget();
-  ws = new WebSocket(target.webSocketDebuggerUrl);
-  await new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error("debugger connection timed out")), 10000);
-    ws.onopen = () => { clearTimeout(timeout); resolve(); };
-    ws.onerror = (error) => { clearTimeout(timeout); reject(error); };
-  });
-  ws.onmessage = receive;
-}
-let nextId = 1;
-const pending = new Map();
-const consoleLines = [];
-function receive(event) {
-  const message = JSON.parse(event.data);
-  if (message.method === "Runtime.consoleAPICalled") {
-    consoleLines.push(`${message.params.type}: ${message.params.args.map((a) => a.value ?? a.description ?? "").join(" ")}`);
-  }
-  if (message.method === "Runtime.exceptionThrown") {
-    const details = message.params.exceptionDetails;
-    consoleLines.push(`exception: ${details.text} ${details.exception?.description ?? ""}`);
-  }
-  if (message.id && pending.has(message.id)) {
-    const { resolve, reject } = pending.get(message.id);
-    pending.delete(message.id);
-    if (message.error) reject(new Error(JSON.stringify(message.error)));
-    else resolve(message.result);
-  }
-};
-function send(method, params = {}) {
-  const id = nextId++;
-  ws.send(JSON.stringify({ id, method, params }));
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => { pending.delete(id); reject(new Error(`${method} timed out`)); }, 15000);
-    pending.set(id, {
-      resolve: (value) => { clearTimeout(timer); resolve(value); },
-      reject: (error) => { clearTimeout(timer); reject(error); },
-    });
-  });
-}
-async function evaluate(expression) {
-  const result = await send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true });
-  if (result.exceptionDetails) throw new Error(JSON.stringify(result.exceptionDetails));
-  return result.result.value;
-}
+const cdp = new Cdp();
+const send = cdp.send.bind(cdp);
+const evaluate = cdp.evaluate.bind(cdp);
+const until = cdp.until.bind(cdp);
+const consoleLines = cdp.logs;
 async function key(keyName, code, keyCode, modifiers = 0) {
   await send("Input.dispatchKeyEvent", {
     type: "keyDown", key: keyName, code, windowsVirtualKeyCode: keyCode, modifiers,
-    ...(keyName === "Enter" ? { text: "\r" } : {}),
+    ...(keyName === "Enter" ? { text: "\r" }
+      : keyName.length === 1 && (modifiers & 7) === 0 ? { text: keyName } : {}),
   });
   await send("Input.dispatchKeyEvent", { type: "keyUp", key: keyName, code, windowsVirtualKeyCode: keyCode, modifiers });
 }
@@ -109,17 +71,12 @@ async function check(name, expression) {
   assert.equal(await evaluate(expression), true, name);
   report.push(name);
 }
-async function until(expression) {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    if (await evaluate(expression)) return;
-    await pause(200);
-  }
-  throw new Error(`condition did not become true: ${expression}`);
-}
 try {
-  await connect();
+  await cdp.connect((await pageTarget()).webSocketDebuggerUrl);
   await send("Page.enable");
   await send("Runtime.enable");
+  await send("Log.enable");
+  await checkImeFocus({ send, until, evaluate, report, url });
   await checkMarkdownImages({ send, until, evaluate, report, url, output });
   await send("Page.navigate", { url });
   await until(`!!document.querySelector('[data-cranpose-node][aria-label="Increment"]')`);
@@ -214,10 +171,10 @@ try {
   await check("editing preserves the native field", `window.a11yField.isConnected && window.a11yField.value === 'Voice input café 🌍'`);
   await check("editing preserves backward selection", `window.a11yField.selectionStart === 5 && window.a11yField.selectionEnd === 10 && window.a11yField.selectionDirection === 'backward'`);
   await key("x", "KeyX", 88);
-  await until(`window.a11yField.value === 'Voicext café 🌍'`);
+  await until(`window.a11yField.value === 'Voicext café 🌍' && document.querySelector('[data-cranpose-accessibility]').textContent.includes('Voicext café 🌍')`);
   await check("keyboard input reaches the application once", `document.querySelector('[data-cranpose-accessibility]').textContent.includes('Voicext café 🌍')`);
-  const failures = consoleLines.filter(line => /panicked|exception/.test(line));
-  assert.deepEqual(failures, [], "the application must not panic");
+  const failures = consoleLines.filter(line => /panicked|exception|Blocked aria-hidden/.test(line));
+  assert.deepEqual(failures, [], "the application must not panic or hide focused controls");
   const result = { platform: 'web', status: 'passed', passed: report };
   if (output) writeFileSync(join(output, 'report.json'), JSON.stringify(result, null, 2));
   console.log(JSON.stringify(result, null, 2));
@@ -225,7 +182,8 @@ try {
   if (output) writeFileSync(join(output, 'report.json'), JSON.stringify({ platform: 'web', status: 'failed', passed: report, error: String(error) }, null, 2));
   throw error;
 } finally {
-  if (output && ws?.readyState === WebSocket.OPEN) {
+  if (output) writeFileSync(join(output, 'console.json'), JSON.stringify(consoleLines, null, 2));
+  if (output && cdp.ws?.readyState === WebSocket.OPEN) {
     try {
       const tree = await send('Accessibility.getFullAXTree');
       writeFileSync(join(output, 'native-tree.json'), JSON.stringify(tree, null, 2));
@@ -233,7 +191,7 @@ try {
       writeFileSync(join(output, 'screen.png'), Buffer.from(screenshot.data, 'base64'));
     } catch (error) { console.error('Artifact capture:', error); }
   }
-  ws?.close();
+  cdp.close();
   if (!browserError && browser.exitCode === null && browser.signalCode === null) {
     const exited = new Promise(resolve => browser.once("exit", resolve));
     browser.kill();
