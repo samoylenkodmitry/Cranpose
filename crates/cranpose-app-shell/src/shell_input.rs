@@ -225,25 +225,53 @@ where
         }
     }
 
-    /// Activates an application control at logical coordinates for a platform reader.
+    /// Activates the identified control using its current semantics and geometry.
     ///
-    /// Developer overlays never receive this synthetic press and release.
-    pub fn accessibility_activate_at(&mut self, x: f32, y: f32) -> bool {
+    /// Hidden, disabled, removed and modal-background controls reject activation.
+    /// `canvas_key` identifies a drawn child of `node_id`. The action bypasses
+    /// overlapping controls and developer overlays without changing pointer capture.
+    pub fn accessibility_activate(&mut self, node_id: NodeId, canvas_key: Option<u64>) -> bool {
         let event_time = self.shell.app.realtime_pointer_event_time(None);
         let _event_handler = enter_event_handler_scope();
         let app_context = Rc::clone(&self.shell.app.app_context);
         let result = app_context.enter(|| {
-            run_in_mutable_snapshot(|| {
-                self.surface_mut().cursor = (x, y);
-                let pressed = self.pointer_pressed_inner(event_time);
-                self.release_app_pointer(event_time) || pressed
-            })
-            .unwrap_or(false)
+            run_in_mutable_snapshot(|| self.activate_node(node_id, canvas_key, event_time))
+                .unwrap_or(false)
         });
         if result {
             self.mark_dirty();
         }
         result
+    }
+
+    fn activate_node(
+        &mut self,
+        node_id: NodeId,
+        canvas_key: Option<u64>,
+        event_time: PointerEventTime,
+    ) -> bool {
+        let target = {
+            let (app, surface) = self.parts();
+            surface
+                .semantics_tree_for_input(app)
+                .and_then(|tree| activation_target(tree.root(), node_id, canvas_key))
+        };
+        let Some((target_id, canvas_bounds)) = target else {
+            return false;
+        };
+        let position = self
+            .with_layout_tree(|tree| activation_position(tree?.root(), target_id, canvas_bounds));
+        let Some(position) = position else {
+            return false;
+        };
+        let Some(target) = self.surface().renderer.scene().find_target(target_id) else {
+            return false;
+        };
+        for kind in [PointerEventKind::Down, PointerEventKind::Up] {
+            let event = self.pointer_event(kind, position, position, event_time);
+            self.dispatch_targets(std::iter::once(target.clone()), event, false);
+        }
+        true
     }
 
     pub fn pointer_pressed(&mut self) -> bool {
@@ -1050,22 +1078,9 @@ where
         let Some(focused) = cranpose_ui::active_focus_target() else {
             return false;
         };
-        let center = self.with_layout_tree(|layout_tree| {
-            layout_tree
-                .map(cranpose_ui::collect_focus_order)
-                .unwrap_or_default()
-                .iter()
-                .find(|entry| entry.node_id == focused)
-                .map(cranpose_ui::FocusEntry::center)
-        });
-        let Some((x, y)) = center else {
-            return false;
-        };
-        self.set_cursor(x, y);
-        let pressed = self.pointer_pressed();
-        let released = self.pointer_released_at_position(x, y);
+        let activated = self.accessibility_activate(focused, None);
         self.note_focus_moved_by_keyboard(true);
-        pressed || released
+        activated
     }
 
     fn on_arrow_key(&mut self, event: &KeyEvent) -> bool {
@@ -1620,9 +1635,9 @@ where
         self.primary().pointer_pressed()
     }
 
-    /// Primary-surface form of [`SurfaceMut::accessibility_activate_at`].
-    pub fn accessibility_activate_at(&mut self, x: f32, y: f32) -> bool {
-        self.primary().accessibility_activate_at(x, y)
+    /// Primary-surface form of [`SurfaceMut::accessibility_activate`].
+    pub fn accessibility_activate(&mut self, node_id: NodeId, canvas_key: Option<u64>) -> bool {
+        self.primary().accessibility_activate(node_id, canvas_key)
     }
 
     /// Primary-surface form of [`SurfaceMut::pointer_pressed_at_time`].
@@ -1867,6 +1882,56 @@ where
         self.primary()
             .on_ime_delete_surrounding(before_bytes, after_bytes)
     }
+}
+
+fn activation_target(
+    node: &cranpose_ui::SemanticsNode,
+    node_id: NodeId,
+    canvas_key: Option<u64>,
+) -> Option<(NodeId, Option<Rect>)> {
+    if node.hidden {
+        return None;
+    }
+    if node.node_id != node_id {
+        return node
+            .children
+            .iter()
+            .find_map(|child| activation_target(child, node_id, canvas_key));
+    }
+    if !node.enabled {
+        return None;
+    }
+    if let Some(key) = canvas_key {
+        let child = node.canvas_children.iter().find(|child| child.key == key)?;
+        return (child.enabled && child.clickable).then_some((node_id, Some(child.bounds)));
+    }
+    node.actions.first().map(|action| match action {
+        cranpose_ui::SemanticsAction::Click { handler } => (handler.node_id(), None),
+    })
+}
+
+fn activation_position(
+    root: &LayoutBox,
+    node_id: NodeId,
+    canvas_bounds: Option<Rect>,
+) -> Option<Point> {
+    if root.node_id != node_id {
+        return root
+            .children
+            .iter()
+            .find_map(|child| activation_position(child, node_id, canvas_bounds));
+    }
+    let bounds = canvas_bounds.map_or(root.rect, |bounds| Rect {
+        x: root.rect.x + bounds.x,
+        y: root.rect.y + bounds.y,
+        ..bounds
+    });
+    let position = Point {
+        x: bounds.x + bounds.width * 0.5,
+        y: bounds.y + bounds.height * 0.5,
+    };
+    (bounds.width > 0.0 && bounds.height > 0.0 && position.x.is_finite() && position.y.is_finite())
+        .then_some(position)
 }
 
 fn plain_key_down(event: &KeyEvent) -> bool {

@@ -575,6 +575,10 @@ test-android-accessibility-contract:
     python3 scripts/android_accessibility_robot_test.py
     PYTHONPATH=scripts:scripts/a11y python3 -m unittest discover -s scripts/a11y/tests
 
+test-reader-actions:
+    cargo test --profile ci -p cranpose-app-shell --lib
+    cargo test --profile ci -p cranpose --lib --features desktop,renderer-wgpu
+
 test-presentation-policy binary output:
     scripts/ci/with_host_lock.sh --exclusive python3 scripts/perf_presentation_test.py --binary {{quote(binary)}} --output {{quote(output)}}
 

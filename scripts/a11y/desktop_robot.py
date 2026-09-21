@@ -46,6 +46,10 @@ def run_checks(adapter, report, allow_linux_disabled_state_bug=False):
         require(adapter.activate(node(name)), f'{name} has no native activation action')
         node(f'Action count: {expected}')
     passed('native activation updates the application exactly once')
+    for name, expected in [('Rear action', 1), ('Front action', 11)]:
+        require(adapter.activate(node(name)), f'{name} has no native activation action')
+        node(f'Overlap count: {expected}')
+    passed('native activation targets identity when accessible controls overlap')
     disabled = node('Disabled action')
     if report.get('platform') == 'linux':
         require(disabled.get('description') == 'Disabled', 'disabled state description missing')

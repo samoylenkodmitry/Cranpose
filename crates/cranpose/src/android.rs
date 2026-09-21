@@ -154,6 +154,19 @@ fn system_theme_from_android(
 
 const IME_ACTION_DONE: i32 = 6;
 
+fn drain_accessibility_activations(
+    shell: &mut AppShell<WgpuRenderer>,
+    elements: &[crate::accessibility::AccessibilityElement],
+) {
+    for virtual_id in crate::android_accessibility::drain_activations() {
+        if let Some((node_id, canvas_key)) =
+            crate::accessibility::resolve_element_id(elements, virtual_id)
+        {
+            shell.accessibility_activate(node_id, canvas_key);
+        }
+    }
+}
+
 /// Moves app focus onto the control TalkBack put its cursor on, so the reader
 /// and the app agree on what holds focus.
 fn drain_accessibility_focus(
@@ -2289,9 +2302,7 @@ pub fn run(
         }
 
         if let Some(shell) = &mut app_shell {
-            for (x, y) in crate::android_accessibility::drain_activations() {
-                shell.accessibility_activate_at(x, y);
-            }
+            drain_accessibility_activations(shell, &accessibility_elements);
             drain_accessibility_custom_actions(shell, &accessibility_elements);
             drain_accessibility_focus(shell, &accessibility_elements);
             drain_accessibility_values(shell, &accessibility_elements);

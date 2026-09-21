@@ -11,23 +11,13 @@ use web_sys::{
 
 use crate::accessibility::{self, AccessibilityElement, AccessibilityRole};
 
-/// The role, value and state a screen reader reads off the mirrored element.
 fn apply_role_and_state(node: &HtmlElement, element: &AccessibilityElement) -> Result<(), JsValue> {
-    let role = if element.progress.is_some()
-        && element.adjustable
-        && element.role != AccessibilityRole::ValuePicker
+    if (element.role != AccessibilityRole::StaticText || element.pane_title.is_some())
+        && !edits_text(element)
     {
-        "slider"
-    } else {
-        element.role.aria_name()
-    };
-    if element.role != AccessibilityRole::StaticText && !edits_text(element) {
-        node.set_attribute("role", role)?;
+        node.set_attribute("role", accessibility::web_role(element))?;
     }
     if let Some(title) = &element.pane_title {
-        if !element.role.is_named_container() {
-            node.set_attribute("role", "region")?;
-        }
         node.set_attribute("aria-label", title)?;
     }
     apply_role_extras(node, element)?;
@@ -492,7 +482,7 @@ fn mirror_node(
     if !element.enabled {
         node.set_attribute("disabled", "")?;
     }
-    node.set_attribute("data-cranpose-node", &id.to_string())?;
+    apply_activation_identity(&node, id, element)?;
     if let Some(language) = &element.language {
         node.set_attribute("lang", language)?;
     }
@@ -508,13 +498,23 @@ fn mirror_node(
     }
     apply_page(&node, element, page)?;
     apply_field_text(&node, element)?;
-    if element.clickable {
-        let (x, y) = element.bounds.center();
-        node.set_attribute("data-cranpose-x", &x.to_string())?;
-        node.set_attribute("data-cranpose-y", &y.to_string())?;
-    }
     node.set_attribute("tabindex", tab_index(element))?;
     Ok(node)
+}
+
+fn apply_activation_identity(
+    node: &HtmlElement,
+    id: i32,
+    element: &AccessibilityElement,
+) -> Result<(), JsValue> {
+    node.set_attribute("data-cranpose-node", &id.to_string())?;
+    if element.clickable {
+        node.set_attribute("data-cranpose-clickable", "")?;
+    }
+    if let Some(key) = element.canvas_key {
+        node.set_attribute("data-cranpose-canvas", &key.to_string())?;
+    }
+    Ok(())
 }
 
 /// Where the mirrored control sits in the Tab order: a focus target or an
@@ -633,33 +633,16 @@ fn mirror_root(document: &Document) -> Result<HtmlElement, JsValue> {
     Ok(root)
 }
 
-/// Hands a screen reader's activation of a mirrored control back to the app as
-/// a press at the middle of the control it stands for.
-fn attach_click_listener(
+fn on_mirror_click(
     root: &HtmlElement,
-    app: Rc<RefCell<AppShell<WgpuRenderer>>>,
+    mut action: impl FnMut(Element) + 'static,
 ) -> Result<(), JsValue> {
     let click = Closure::wrap(Box::new(move |event: MouseEvent| {
-        let Some(target) = event
+        if let Some(target) = event
             .target()
             .and_then(|target| target.dyn_into::<Element>().ok())
-        else {
-            return;
-        };
-        let Some(x) = target
-            .get_attribute("data-cranpose-x")
-            .and_then(|value| value.parse::<f32>().ok())
-        else {
-            return;
-        };
-        let Some(y) = target
-            .get_attribute("data-cranpose-y")
-            .and_then(|value| value.parse::<f32>().ok())
-        else {
-            return;
-        };
-        if let Ok(mut shell) = app.try_borrow_mut() {
-            shell.accessibility_activate_at(x, y);
+        {
+            action(target);
         }
     }) as Box<dyn FnMut(_)>);
     root.add_event_listener_with_callback("click", click.as_ref().unchecked_ref())?;
@@ -667,20 +650,33 @@ fn attach_click_listener(
     Ok(())
 }
 
-/// Runs the action behind an action button, on the live tree: one the app
-/// named, or the way out that sits after them.
+fn attach_click_listener(
+    root: &HtmlElement,
+    app: Rc<RefCell<AppShell<WgpuRenderer>>>,
+    node_ids: Rc<RefCell<HashMap<i32, cranpose_core::NodeId>>>,
+) -> Result<(), JsValue> {
+    on_mirror_click(root, move |target| {
+        if !target.has_attribute("data-cranpose-clickable") {
+            return;
+        }
+        let Some(node_id) = node_id_attribute(&target, "data-cranpose-node", &node_ids) else {
+            return;
+        };
+        let canvas_key = target
+            .get_attribute("data-cranpose-canvas")
+            .and_then(|value| value.parse::<u64>().ok());
+        if let Ok(mut shell) = app.try_borrow_mut() {
+            shell.accessibility_activate(node_id, canvas_key);
+        }
+    })
+}
+
 fn attach_action_listener(
     root: &HtmlElement,
     app: Rc<RefCell<AppShell<WgpuRenderer>>>,
     node_ids: Rc<RefCell<HashMap<i32, cranpose_core::NodeId>>>,
 ) -> Result<(), JsValue> {
-    let click = Closure::wrap(Box::new(move |event: MouseEvent| {
-        let Some(target) = event
-            .target()
-            .and_then(|target| target.dyn_into::<Element>().ok())
-        else {
-            return;
-        };
+    on_mirror_click(root, move |target| {
         let Some(index) = target
             .get_attribute("data-cranpose-action")
             .and_then(|value| value.parse::<usize>().ok())
@@ -703,10 +699,7 @@ fn attach_action_listener(
         on_live_tree(&app, |root| {
             accessibility::perform_listed_action(root, node_id, canvas_key, named, index)
         });
-    }) as Box<dyn FnMut(_)>);
-    root.add_event_listener_with_callback("click", click.as_ref().unchecked_ref())?;
-    click.forget();
-    Ok(())
+    })
 }
 
 /// Moves the value of an adjustable control with the arrow keys, the way a
@@ -1094,7 +1087,6 @@ impl WebAccessibilityBridge {
         app: Rc<RefCell<AppShell<WgpuRenderer>>>,
     ) -> Result<Self, JsValue> {
         let root = mirror_root(document)?;
-        attach_click_listener(&root, Rc::clone(&app))?;
 
         let body = document.body().ok_or("document has no body")?;
         body.append_child(&root)?;
@@ -1104,6 +1096,7 @@ impl WebAccessibilityBridge {
         body.append_child(&assertive)?;
         let node_ids: Rc<RefCell<HashMap<i32, cranpose_core::NodeId>>> =
             Rc::new(RefCell::new(HashMap::new()));
+        attach_click_listener(&root, Rc::clone(&app), Rc::clone(&node_ids))?;
         attach_focus_listener(&root, Rc::clone(&app), Rc::clone(&node_ids))?;
         attach_key_listener(&root, Rc::clone(&app), Rc::clone(&node_ids))?;
         attach_action_listener(&root, Rc::clone(&app), Rc::clone(&node_ids))?;

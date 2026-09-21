@@ -76,7 +76,6 @@ pub(crate) struct DesktopAccessibilityBridge {
     initial_tree: Arc<Mutex<Option<TreeUpdate>>>,
     actions: Arc<Mutex<Vec<ActionRequest>>>,
     reader_connected: Arc<AtomicBool>,
-    centers: HashMap<NodeId, (f32, f32)>,
     pending_custom_actions: Vec<(NodeId, usize)>,
     pending_focus: Vec<NodeId>,
     pending_values: Vec<(NodeId, f32)>,
@@ -114,7 +113,6 @@ impl DesktopAccessibilityBridge {
             initial_tree,
             actions,
             reader_connected,
-            centers: HashMap::new(),
             pending_custom_actions: Vec::new(),
             pending_focus: Vec::new(),
             pending_values: Vec::new(),
@@ -153,11 +151,6 @@ impl DesktopAccessibilityBridge {
                 &elements,
             ));
             self.previous = elements;
-            self.centers = accessibility::element_ids(&self.previous)
-                .into_iter()
-                .zip(&self.previous)
-                .map(|(id, element)| (NodeId(id as u64), element.bounds.center()))
-                .collect();
             changed = true;
         }
         if let Some(spoken) = join_announcements(announcements) {
@@ -180,7 +173,7 @@ impl DesktopAccessibilityBridge {
         self.adapter.update_if_active(|| update);
     }
 
-    pub(crate) fn drain_clicks(&mut self) -> Vec<(f32, f32)> {
+    pub(crate) fn drain_clicks(&mut self) -> Vec<(cranpose_core::NodeId, Option<u64>)> {
         let requests = std::mem::take(
             &mut *self
                 .actions
@@ -193,13 +186,17 @@ impl DesktopAccessibilityBridge {
             .collect()
     }
 
-    /// Notes one screen reader request for the frame loop to run against the
-    /// live tree. A click is the exception: it answers the point on screen,
-    /// which the shell takes as a tap.
-    fn queue_request(&mut self, request: ActionRequest) -> Option<(f32, f32)> {
+    fn queue_request(
+        &mut self,
+        request: ActionRequest,
+    ) -> Option<(cranpose_core::NodeId, Option<u64>)> {
         let target = request.target_node;
         match request.action {
-            Action::Click => return self.centers.get(&target).copied(),
+            Action::Click => {
+                let element = self.element_for(target)?;
+                return (element.enabled && element.clickable)
+                    .then_some((element.node_id, element.canvas_key));
+            }
             Action::Focus => self.pending_focus.push(target),
             Action::Expand => self.pending_expansions.push((target, true)),
             Action::Collapse => self.pending_expansions.push((target, false)),
@@ -387,11 +384,14 @@ impl DesktopAccessibilityBridge {
         moved
     }
 
-    /// The live node behind the accesskit id of a published element.
     fn node_id_for(&self, target: NodeId) -> Option<cranpose_core::NodeId> {
+        self.element_for(target).map(|element| element.node_id)
+    }
+
+    fn element_for(&self, target: NodeId) -> Option<&AccessibilityElement> {
         let ids = accessibility::element_ids(&self.previous);
         let position = ids.iter().position(|id| NodeId(*id as u64) == target)?;
-        self.previous.get(position).map(|element| element.node_id)
+        self.previous.get(position)
     }
 }
 

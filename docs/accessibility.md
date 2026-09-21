@@ -34,6 +34,16 @@ A control drawn on a canvas has no layout node of its own. `canvas_children`
 gives each drawn control its own bounds, label, role and actions, so a reader
 reaches a ring segment the same way it reaches a button.
 
+Reader activation addresses the control's identity on every platform. The shell
+checks the current semantics before dispatching to that control, even if another
+control overlaps it. Hidden, disabled, removed and modal-background controls reject
+the action. Canvas activation resolves the stable child key and its current bounds.
+Enter and Space use the same path, without moving the pointer or changing capture.
+
+On the web, a pane title names its region without replacing an explicit dialog,
+alert, button or range role. Adjustable controls retain their slider or spinbutton
+semantics, so readers continue offering the appropriate operations.
+
 A debug build says so when a control takes a click or text and has no name:
 the log carries one `accessibility: control <id> takes a click or text but has
 no label` line per node. A release build stays quiet.

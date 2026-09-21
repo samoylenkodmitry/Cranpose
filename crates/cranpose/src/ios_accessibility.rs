@@ -7,7 +7,7 @@ use std::{
     rc::Rc,
 };
 
-use cranpose_app_shell::{AppShell, PointerSource};
+use cranpose_app_shell::AppShell;
 use cranpose_render_common::Renderer;
 use objc2::{
     DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send,
@@ -519,9 +519,7 @@ impl IosAccessibilityBridge {
             let Some(element) = self.element_for(element_id) else {
                 continue;
             };
-            let (x, y) = element.bounds.center();
-            shell.set_pointer_source(PointerSource::Touch);
-            changed |= shell.accessibility_activate_at(x, y);
+            changed |= shell.accessibility_activate(element.node_id, element.canvas_key);
         }
         changed
     }

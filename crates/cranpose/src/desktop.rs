@@ -5282,8 +5282,8 @@ impl ApplicationHandler for App {
         let registry = Rc::clone(&self.native_window_registry);
         let Some(app) = &mut self.app else { return };
         if let Some(accessibility) = &mut self.accessibility {
-            for (x, y) in accessibility.drain_clicks() {
-                app.accessibility_activate_at(x, y);
+            for (node_id, canvas_key) in accessibility.drain_clicks() {
+                app.accessibility_activate(node_id, canvas_key);
             }
             accessibility.run_custom_actions(app);
             accessibility.run_value_requests(app);
@@ -5739,9 +5739,8 @@ impl ApplicationHandler for App {
         };
         if let Some(accessibility) = &mut self.accessibility {
             let mut activated = false;
-            for (x, y) in accessibility.drain_clicks() {
-                app.accessibility_activate_at(x, y);
-                activated = true;
+            for (node_id, canvas_key) in accessibility.drain_clicks() {
+                activated |= app.accessibility_activate(node_id, canvas_key);
             }
             activated |= accessibility.run_custom_actions(app);
             activated |= accessibility.run_value_requests(app);

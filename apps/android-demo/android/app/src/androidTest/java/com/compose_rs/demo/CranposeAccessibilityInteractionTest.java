@@ -45,6 +45,10 @@ public final class CranposeAccessibilityInteractionTest {
                         .performAction(AccessibilityNodeInfo.ACTION_CLICK));
                 awaitNode(automation, "Action count: " + counts[index]);
             }
+            assertTrue(awaitNode(automation, "Rear action").performAction(AccessibilityNodeInfo.ACTION_CLICK));
+            awaitNode(automation, "Overlap count: 1");
+            assertTrue(awaitNode(automation, "Front action").performAction(AccessibilityNodeInfo.ACTION_CLICK));
+            awaitNode(automation, "Overlap count: 11");
             AccessibilityNodeInfo disabled = awaitNode(automation, "Disabled action");
             assertFalse(disabled.isEnabled());
             assertFalse(disabled.getActionList().contains(AccessibilityNodeInfo.AccessibilityAction.ACTION_CLICK));

@@ -26,6 +26,10 @@ impl AccessibilityRect {
         }
     }
 
+    #[cfg(any(
+        test,
+        all(feature = "android", feature = "renderer-wgpu", target_os = "android")
+    ))]
     pub(crate) fn center(self) -> (f32, f32) {
         (self.x + self.width * 0.5, self.y + self.height * 0.5)
     }
@@ -200,6 +204,23 @@ pub(crate) fn role_entry<T: Copy>(
         .iter()
         .find(|(named, _)| *named == role)
         .map_or(fallback, |(_, value)| *value)
+}
+
+#[cfg(any(
+    test,
+    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
+))]
+pub(crate) fn web_role(element: &AccessibilityElement) -> &'static str {
+    if element.progress.is_some()
+        && element.adjustable
+        && element.role != AccessibilityRole::ValuePicker
+    {
+        "slider"
+    } else if element.pane_title.is_some() && element.role == AccessibilityRole::StaticText {
+        "region"
+    } else {
+        element.role.aria_name()
+    }
 }
 
 impl AccessibilityRole {

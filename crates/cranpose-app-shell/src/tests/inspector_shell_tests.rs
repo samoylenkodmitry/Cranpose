@@ -63,7 +63,8 @@ fn reader_activation_bypasses_picking_and_cancel_releases_inspector_capture() {
             .any(|text| text == "Counter: 0")
     );
     shell.on_key_event(&KeyEvent::key_down(KeyCode::P, "p"));
-    assert!(shell.accessibility_activate_at(x, y));
+    let node_id = reader_control_id(&mut shell, "Increment");
+    assert!(shell.accessibility_activate(node_id, None));
     shell.update();
     assert!(shell.inspector_state().picking);
     assert!(
@@ -71,7 +72,7 @@ fn reader_activation_bypasses_picking_and_cancel_releases_inspector_capture() {
             .iter()
             .any(|text| text == "Counter: 1")
     );
-    assert!(shell.primary().accessibility_activate_at(x, y));
+    assert!(shell.primary().accessibility_activate(node_id, None));
     shell.update();
     assert!(
         layout_tree_texts(shell.layout_tree().expect("second activation"))

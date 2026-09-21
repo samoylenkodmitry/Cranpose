@@ -12,6 +12,37 @@ use cranpose_ui::{
 use super::*;
 
 #[test]
+fn a_pane_title_preserves_dialog_and_control_roles_on_the_web() {
+    for (role, expected) in [
+        (AccessibilityRole::Dialog, "dialog"),
+        (AccessibilityRole::Alert, "alert"),
+        (AccessibilityRole::Button, "button"),
+        (AccessibilityRole::Toolbar, "toolbar"),
+        (AccessibilityRole::StaticText, "region"),
+    ] {
+        let element = AccessibilityElement {
+            role,
+            pane_title: Some("Preferences".into()),
+            ..Default::default()
+        };
+        assert_eq!(web_role(&element), expected);
+    }
+}
+
+#[test]
+fn a_named_adjustable_range_preserves_its_web_control_role() {
+    let mut element = AccessibilityElement {
+        pane_title: Some("Volume".into()),
+        progress: Some(cranpose_ui::ProgressBarRangeInfo::new(40.0, 0.0, 100.0, 0)),
+        adjustable: true,
+        ..Default::default()
+    };
+    assert_eq!(web_role(&element), "slider");
+    element.role = AccessibilityRole::ValuePicker;
+    assert_eq!(web_role(&element), "spinbutton");
+}
+
+#[test]
 fn voiceover_values_include_control_state_without_repeating_the_label() {
     let mut element = AccessibilityElement {
         role: AccessibilityRole::Switch,

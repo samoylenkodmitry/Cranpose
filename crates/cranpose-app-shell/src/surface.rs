@@ -248,6 +248,13 @@ impl<R: Renderer> RootSurface<R> {
         if !app.semantics_enabled && !self.inspector.state.open {
             return None;
         }
+        self.semantics_tree_for_input(app)
+    }
+
+    pub(crate) fn semantics_tree_for_input(
+        &mut self,
+        app: &mut ShellApp,
+    ) -> Option<&SemanticsTree> {
         let root = self.root_node(app)?;
         let semantics_dirty = {
             let mut applier = app.composition.applier_mut();
