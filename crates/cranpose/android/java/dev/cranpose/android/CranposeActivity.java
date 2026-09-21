@@ -704,7 +704,7 @@ public class CranposeActivity extends NativeActivity {
         runOnUiThread(() -> cranposeMedia().setMetadata(title, artist));
     }
 
-    private static native void nativeOnAccessibilityActivate(float x, float y);
+    private static native void nativeOnAccessibilityActivate(int virtualViewId);
 
     private static native void nativeOnAccessibilityCustomAction(int virtualViewId, int actionIndex);
 
@@ -1346,7 +1346,7 @@ public class CranposeActivity extends NativeActivity {
                     && action != AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS
                     && action != AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS) return false;
             if (action == AccessibilityNodeInfo.ACTION_CLICK && element.clickable) {
-                nativeOnAccessibilityActivate(element.centerX, element.centerY);
+                nativeOnAccessibilityActivate(element.id);
                 sendEvent(element.id, AccessibilityEvent.TYPE_VIEW_CLICKED);
                 return true;
             }

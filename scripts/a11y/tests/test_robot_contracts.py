@@ -10,6 +10,7 @@ from ios_robot import verify_summary
 class FixtureAdapter(NativeAdapter):
     def __init__(self):
         self.count = 0
+        self.overlap_count = 0
         self.volume = 30
         self.text = 'initial'
         self.extra = []
@@ -23,6 +24,7 @@ class FixtureAdapter(NativeAdapter):
             names = ['Close confirmation'] if self.modal == 2 else ['Close preferences', 'Open confirmation']
             return [{'name': name, 'enabled': True} for name in names]
         names = ['Accessibility robot', 'Account, Account', 'Remove', 'Increase', 'Decrease',
+                 'Rear action', 'Front action', f'Overlap count: {self.overlap_count}',
                  'Open preferences', f'Action count: {self.count}', f'Volume value: {self.volume}', f'Edited: {self.text}']
         return ([{'name': name, 'enabled': True} for name in names] + self.extra
                 + [{'name': 'Disabled action', 'enabled': self.disabled_enabled,
@@ -32,6 +34,9 @@ class FixtureAdapter(NativeAdapter):
                    {'name': 'Notes', 'value': self.text}])
 
     def activate(self, node):
+        if node['name'] in ['Rear action', 'Front action']:
+            self.overlap_count += 1 if node['name'] == 'Rear action' else 10
+            return True
         modal = {'Open preferences': 1, 'Open confirmation': 2, 'Close confirmation': 1, 'Close preferences': 0}
         if node['name'] in modal:
             self.modal = modal[node['name']]
@@ -90,7 +95,7 @@ class DesktopContractTests(unittest.TestCase):
     def test_all_native_scenarios_must_execute(self):
         report = {'passed': []}
         run_checks(FixtureAdapter(), report)
-        self.assertEqual(len(report['passed']), 6)
+        self.assertEqual(len(report['passed']), 7)
 
     def test_rejects_sensitive_text_disabled_actions_and_wrong_roles(self):
         for attribute, value, message in [
@@ -120,7 +125,7 @@ class DesktopContractTests(unittest.TestCase):
         adapter.disabled_enabled = True
         report = {'platform': 'linux', 'passed': []}
         run_checks(adapter, report, allow_linux_disabled_state_bug=True)
-        self.assertEqual(len(report['passed']), 6)
+        self.assertEqual(len(report['passed']), 7)
         self.assertEqual(len(report['known_limitations']), 1)
         for platform, allow in [('linux', False), ('darwin', True), ('win32', True)]:
             with self.subTest(platform=platform, allow=allow):

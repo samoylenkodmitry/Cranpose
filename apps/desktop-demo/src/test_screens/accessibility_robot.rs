@@ -24,6 +24,7 @@ pub fn AccessibilityRobotScreen() {
         move || {
             Text("Accessibility robot", Modifier::empty(), robot_text_style());
             RobotNavigationControls();
+            RobotOverlappingControls();
             Row(
                 Modifier::empty().merge_descendants(),
                 RowSpec::default(),
@@ -120,6 +121,34 @@ fn RobotDialog(
             );
         },
     );
+}
+
+#[allow(non_snake_case)]
+#[composable]
+fn RobotOverlappingControls() {
+    let count = rememberMutableStateOf(|| 0i32);
+    Row(Modifier::empty(), RowSpec::default(), move || {
+        cranpose_ui::Box(
+            Modifier::empty().size(cranpose_ui::Size::new(160.0, 48.0)),
+            cranpose_ui::BoxSpec::default(),
+            move || {
+                for (label, increment) in [("Rear action", 1), ("Front action", 10)] {
+                    Text(
+                        label,
+                        Modifier::empty()
+                            .size(cranpose_ui::Size::new(160.0, 48.0))
+                            .clickable(move |_| count.set(count.get() + increment)),
+                        robot_text_style(),
+                    );
+                }
+            },
+        );
+        Text(
+            format!("Overlap count: {}", count.get()),
+            Modifier::empty(),
+            robot_text_style(),
+        );
+    });
 }
 
 fn robot_text_style() -> TextStyle {

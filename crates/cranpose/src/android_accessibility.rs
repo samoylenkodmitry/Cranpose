@@ -20,7 +20,7 @@ use crate::{
     android_jni::{clear_pending_android_jni_exception, with_android_activity_env},
 };
 
-static ACTIVATIONS: OnceLock<Mutex<Vec<(f32, f32)>>> = OnceLock::new();
+static ACTIVATIONS: OnceLock<Mutex<Vec<i32>>> = OnceLock::new();
 static CUSTOM_ACTIONS: OnceLock<Mutex<Vec<(i32, usize)>>> = OnceLock::new();
 static FOCUS_REQUESTS: OnceLock<Mutex<Vec<i32>>> = OnceLock::new();
 static VALUE_REQUESTS: OnceLock<Mutex<Vec<(i32, f32)>>> = OnceLock::new();
@@ -81,7 +81,7 @@ fn wake_loop() {
     }
 }
 
-fn activations() -> &'static Mutex<Vec<(f32, f32)>> {
+fn activations() -> &'static Mutex<Vec<i32>> {
     ACTIVATIONS.get_or_init(|| Mutex::new(Vec::new()))
 }
 
@@ -135,7 +135,7 @@ fn jump_requests() -> &'static Mutex<Vec<(i32, usize)>> {
     JUMP_REQUESTS.get_or_init(|| Mutex::new(Vec::new()))
 }
 
-pub(crate) fn drain_activations() -> Vec<(f32, f32)> {
+pub(crate) fn drain_activations() -> Vec<i32> {
     std::mem::take(
         &mut *activations()
             .lock()
@@ -322,13 +322,12 @@ pub(crate) fn sync(
 pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccessibilityActivate(
     _env: EnvUnowned<'_>,
     _class: JClass<'_>,
-    x: jfloat,
-    y: jfloat,
+    virtual_id: jint,
 ) {
     activations()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .push((x, y));
+        .push(virtual_id);
     wake_loop();
 }
 

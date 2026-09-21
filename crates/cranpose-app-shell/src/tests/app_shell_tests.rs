@@ -31,6 +31,23 @@ use super::*;
 #[path = "inspector_shell_tests.rs"]
 mod inspector_shell_tests;
 
+#[path = "reader_activation_tests.rs"]
+mod reader_activation_tests;
+
+fn reader_control_id<R: Renderer>(shell: &mut AppShell<R>, name: &str) -> NodeId
+where
+    R::Error: Debug,
+{
+    fn find(node: &cranpose_ui::SemanticsNode, name: &str) -> Option<NodeId> {
+        if !node.actions.is_empty() && node.accessibility_label().as_deref() == Some(name) {
+            return Some(node.node_id);
+        }
+        node.children.iter().find_map(|child| find(child, name))
+    }
+    shell.set_semantics_enabled(true);
+    find(shell.semantics_tree().expect("semantics").root(), name).expect("accessible control")
+}
+
 pub(super) fn test_guard() -> MutexGuard<'static, ()> {
     static TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     match TEST_LOCK.get_or_init(|| Mutex::new(())).lock() {
@@ -10499,7 +10516,8 @@ fn a_reader_activates_a_dialog_button_without_dismissing_its_dialog() {
         rect.width > 0.0 && rect.height > 0.0,
         "the button is on screen"
     );
-    assert!(shell.accessibility_activate_at(rect.x + rect.width / 2.0, rect.y + rect.height / 2.0));
+    let node_id = reader_control_id(&mut shell, "Inner action");
+    assert!(shell.accessibility_activate(node_id, None));
     shell.update();
     assert_eq!(
         clicks.get(),

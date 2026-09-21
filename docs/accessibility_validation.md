@@ -77,6 +77,7 @@ and the robots below validate the final OS/browser representation.
 | Hidden content and password privacy | Yes | Yes | Yes | Yes | Yes | Yes |
 | Disabled state and rejected activation | Yes | Description and action; state-bit limitation | Yes | Yes | State | Yes |
 | Native activation changes application state | Yes | Yes | Yes | Yes | Yes | Yes |
+| Activation identifies overlapping controls independently | Yes | Yes | Yes | Yes | — | Yes |
 | Passive progress and adjustable ranges | Yes | Yes | Yes | Yes | Values | Yes |
 | Editable text reaches application state | Yes | Yes | Yes | Yes | Native keyboard | Native input/keyboard |
 | Selection survives editing | — | — | — | Yes | — | Yes |
@@ -100,7 +101,7 @@ just robot-accessibility-linux target/ci/desktop-app /tmp/a11y-linux
 just robot-accessibility-windows target/ci/desktop-app.exe a11y-windows
 ```
 
-Each command runs six assertion groups and saves the native tree, application
+Each command runs seven assertion groups and saves the native tree, application
 log, and executable SHA-256. macOS requires Accessibility permission for the
 terminal or runner; the recipe installs its pinned PyObjC dependency in a local
 virtual environment. Linux requires Python GObject introspection, the AT-SPI 2
@@ -186,7 +187,7 @@ just robot-accessibility-web /tmp/a11y-web-build/site /tmp/a11y-web
 The build runs the shipped wasm feature lint, release build, and packaging.
 The robot serves only the packaged site on a private localhost port and runs
 headless Chrome. Set `CHROME` to select an executable. Its checks cover
-native names and roles, disabled activation, adjustable values, retained DOM
+native names and roles, overlapping controls, disabled activation, adjustable values, retained DOM
 identity and focus, forward/backward Tab, single keyboard activation, list
 ownership, dictated Unicode input, selection, keyboard editing, radio-group
 navigation, modal focus containment, and nested dialog dismissal. Artifacts
@@ -239,6 +240,18 @@ desktop, and iOS result guards accept valid runs and reject their intended
 failures. Shared Rust regressions run under `just test`, including pointer focus
 publication and clearing, semantic names and boundaries, disabled actions,
 password privacy, and progress roles.
+
+`just test-reader-actions` runs the shared shell and platform projection tests.
+The shell regressions cover identity-based activation, keyboard-only operation,
+canvas movement, disabled and removed nodes, modal isolation, and inspector input.
+`bash scripts/a11y/check_reader_actions.sh OUTPUT` also builds the production
+desktop demo and runs the Linux native robot, retaining a log and native report.
+`bash scripts/a11y/check_platform.sh PLATFORM OUTPUT` records the shipped platform
+checks; supported targets are `web`, `web-build`, `android`, `android-build`, `ios`,
+`ios-build`, `macos`, `windows`, and `quality`. Set `ANDROID_HOME` for Android.
+`web-build` packages a site for a browser robot on another host; `windows` checks
+the Windows build and requires `cargo-xwin`. Both runners require a new
+output directory and use the same `just` recipes as CI.
 
 The robots validate native contracts, not spoken output, speech timing, every
 screen reader's navigation model, or all application screens. Complete a release
