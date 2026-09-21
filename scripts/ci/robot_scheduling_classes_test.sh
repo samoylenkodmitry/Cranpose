@@ -59,6 +59,17 @@ check "most examples still run in parallel ($parallel_count of $classified)" \
 check "some examples run serially ($((classified - parallel_count)))" \
     [ "$parallel_count" -lt "$classified" ]
 
+capture_command="$(cd "$REPO_ROOT" && just --dry-run robot-captures 2>&1)"
+capture_examples="$(awk '{ for (i = 1; i < NF; i++) if ($i == "--example") print $(i + 1) }' <<< "$capture_command")"
+check "the capture recipe declares examples" [ -n "$capture_examples" ]
+fast_command="$(cd "$REPO_ROOT" && just --dry-run robot-linux-fast 2>&1)"
+for example in $capture_examples; do
+    check "$example belongs to the serial capture suite" \
+        [ "$(class_of "$example")" = serial ]
+    check "the fast suite does not start an empty capture run for $example" \
+        bash -c '! grep -q -- "--example $2" <<< "$1"' _ "$fast_command" "$example"
+done
+
 # The transitive case has no instance in the suite today: every example that
 # measures time also names the measurement itself. A fixture proves the
 # classifier would still catch one that reached it only through a module,

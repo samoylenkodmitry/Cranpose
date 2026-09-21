@@ -622,7 +622,7 @@ robot-captures classes="all":
 robot-linux classes="all": (robot-gpu classes) (robot-captures classes)
 
 # The half of the Linux suite a pull request waits for.
-robot-linux-fast: (robot-linux "parallel")
+robot-linux-fast: robot-gpu-fast
 
 # Render the liquid-glass cheatsheet montages.
 cheatsheets:
