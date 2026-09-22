@@ -256,6 +256,80 @@ fn dialog_action(label: &'static str, stage: MutableState<u8>, next: u8) {
 }
 
 #[test]
+fn described_images_expose_the_image_role_and_preserve_explicit_control_roles() {
+    let _guard = test_guard();
+    let mut shell = AppShell::new(
+        HitGraphRenderer::default(),
+        location_key(file!(), line!(), column!()),
+        || {
+            Column(Modifier::empty(), ColumnSpec::default(), || {
+                for (description, override_description, role) in [
+                    (Some("Receipt photo"), None, None),
+                    (
+                        Some("Fallback description"),
+                        Some("Open receipt"),
+                        Some(cranpose_ui::SemanticsWidgetRole::Button),
+                    ),
+                    (None, Some("Lens preview"), None),
+                    (None, None, None),
+                ] {
+                    let bitmap = cranpose_ui::ImageBitmap::from_rgba8(1, 1, vec![255; 4])
+                        .expect("one pixel");
+                    let modifier =
+                        Modifier::empty()
+                            .size(Size::new(48.0, 48.0))
+                            .semantics(move |config| {
+                                if let Some(role) = role {
+                                    config.role = Some(role);
+                                }
+                                if let Some(description) = override_description {
+                                    config.content_description = Some(description.into());
+                                }
+                            });
+                    cranpose_ui::Image(
+                        bitmap,
+                        description.map(String::from),
+                        modifier,
+                        cranpose_ui::Alignment::CENTER,
+                        cranpose_ui::ContentScale::Fit,
+                        1.0,
+                        None,
+                    );
+                }
+            });
+        },
+    );
+    shell.set_semantics_enabled(true);
+    shell.update();
+    let root = shell.semantics_tree().expect("image semantics").root();
+    for (label, role) in [
+        ("Receipt photo", cranpose_ui::SemanticsWidgetRole::Image),
+        ("Open receipt", cranpose_ui::SemanticsWidgetRole::Button),
+        ("Lens preview", cranpose_ui::SemanticsWidgetRole::Image),
+    ] {
+        assert_eq!(
+            find_semantics_described(root, label)
+                .expect(label)
+                .widget_role,
+            Some(role)
+        );
+    }
+    assert!(find_semantics_described(root, "Fallback description").is_none());
+    let mut pending = vec![root];
+    while let Some(node) = pending.pop() {
+        if node.widget_role == Some(cranpose_ui::SemanticsWidgetRole::Image) {
+            assert!(
+                node.description
+                    .as_ref()
+                    .is_some_and(|label| !label.is_empty()),
+                "Decorative images must not create unnamed image semantics"
+            );
+        }
+        pending.extend(node.children.iter());
+    }
+}
+
+#[test]
 fn an_unfocused_app_without_a_reader_keeps_semantics_lazy() {
     let _guard = test_guard();
     let (mut shell, _) = overlapping_shell();

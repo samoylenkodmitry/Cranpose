@@ -87,6 +87,8 @@ pub(crate) struct DesktopAccessibilityBridge {
     announcement: Option<Announcement>,
     announcement_turn: bool,
     options: crate::desktop_accessibility_options::OptionsProbe,
+    scale_factor: f64,
+    geometry_changed: bool,
 }
 
 impl DesktopAccessibilityBridge {
@@ -124,11 +126,19 @@ impl DesktopAccessibilityBridge {
             announcement: None,
             announcement_turn: false,
             options: crate::desktop_accessibility_options::OptionsProbe::start(!robot_drives),
+            scale_factor: window.scale_factor(),
+            geometry_changed: true,
         }
     }
 
     pub(crate) fn process_event(&mut self, window: &dyn Window, event: &WindowEvent) {
         self.adapter.process_event(window, event);
+        if let WindowEvent::ScaleFactorChanged { scale_factor, .. } = event
+            && self.scale_factor != *scale_factor
+        {
+            self.scale_factor = *scale_factor;
+            self.geometry_changed = true;
+        }
     }
 
     pub(crate) fn sync(&mut self, shell: &mut AppShell<WgpuRenderer>) {
@@ -140,7 +150,7 @@ impl DesktopAccessibilityBridge {
         }
         self.options.apply(shell);
         let mut announcements = accessibility::drain_app_announcements();
-        let mut changed = false;
+        let mut changed = std::mem::take(&mut self.geometry_changed);
         if let Some(elements) = accessibility::snapshot_if_changed(shell, &mut self.seen_revision)
             && elements != self.previous.elements
         {
@@ -166,6 +176,7 @@ impl DesktopAccessibilityBridge {
             &self.previous,
             self.announcement.as_ref(),
             self.announcement_turn,
+            self.scale_factor,
         );
         *self
             .initial_tree
@@ -378,6 +389,7 @@ fn tree_update(
     snapshot: &accessibility::AccessibilitySnapshot,
     announcement: Option<&Announcement>,
     announcement_turn: bool,
+    scale_factor: f64,
 ) -> TreeUpdate {
     let elements = &snapshot.elements;
     let ids = &snapshot.ids;
@@ -387,6 +399,9 @@ fn tree_update(
         children.push(ANNOUNCEMENT_ID);
     }
     let mut root = Node::new(Role::Window);
+    if scale_factor != 1.0 {
+        root.set_transform(accesskit::Affine::scale(scale_factor));
+    }
     root.set_label("Cranpose application");
     root.set_children(children);
     let mut nodes = vec![(ROOT_ID, root)];

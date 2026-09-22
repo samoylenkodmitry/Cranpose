@@ -14,7 +14,48 @@ fn tree_update(
     announcement: Option<&Announcement>,
     turn: bool,
 ) -> TreeUpdate {
-    super::tree_update(&published(elements), announcement, turn)
+    super::tree_update(&published(elements), announcement, turn, 1.0)
+}
+
+#[test]
+fn desktop_tree_scales_logical_bounds_once_for_each_display_density() {
+    let bounds = Rect::new(24.0, 40.0, 104.0, 104.0);
+    let snapshot = published(&[AccessibilityElement {
+        node_id: 7,
+        label: "Take photo".into(),
+        role: AccessibilityRole::Button,
+        bounds: AccessibilityRect::new(24.0, 40.0, 80.0, 64.0),
+        ..Default::default()
+    }]);
+    for scale in [1.0, 1.25, 2.0, 3.0] {
+        let update = super::tree_update(&snapshot, None, false, scale);
+        let root = &update
+            .nodes
+            .iter()
+            .find(|(id, _)| *id == ROOT_ID)
+            .expect("root")
+            .1;
+        let element = &update
+            .nodes
+            .iter()
+            .find(|(id, _)| id.0 == snapshot.ids[0] as u64)
+            .expect("control")
+            .1;
+        assert_eq!(element.bounds(), Some(bounds));
+        let transform = root
+            .transform()
+            .copied()
+            .unwrap_or(accesskit::Affine::IDENTITY);
+        assert_eq!(
+            transform * Point::new(bounds.x0, bounds.y0),
+            Point::new(24.0 * scale, 40.0 * scale)
+        );
+        assert_eq!(
+            transform * Point::new(bounds.x1, bounds.y1),
+            Point::new(104.0 * scale, 104.0 * scale)
+        );
+        assert_eq!(root.transform().is_none(), scale == 1.0);
+    }
 }
 
 #[test]
@@ -62,7 +103,7 @@ fn long_multiline_text_keeps_every_run_and_the_end_selection_accessible() {
     field.multiline = true;
     let elements = vec![field];
     let snapshot = published(&elements);
-    let update = super::tree_update(&snapshot, None, false);
+    let update = super::tree_update(&snapshot, None, false, 1.0);
     let input = &update.nodes[1].1;
     assert_eq!(input.children().len(), text_runs(&value).len());
     let selection = input.text_selection().expect("selection at end");

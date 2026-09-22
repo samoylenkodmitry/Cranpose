@@ -12,6 +12,52 @@ use cranpose_ui::{
 use super::*;
 
 #[test]
+fn voiceover_content_updates_preserve_navigation_order() {
+    let current = AccessibilityElement {
+        node_id: 7,
+        label: "Receipt".into(),
+        value: Some("Preparing".into()),
+        role: AccessibilityRole::Button,
+        clickable: true,
+        ..Default::default()
+    };
+    let mut next = current.clone();
+    next.bounds.x = 24.0;
+    assert!(voiceover_same_structure(
+        std::slice::from_ref(&current),
+        std::slice::from_ref(&next)
+    ));
+    next.label = "Receipt ready".into();
+    next.value = Some("One page".into());
+    next.selected = Some(true);
+    assert!(voiceover_same_structure(&[current], &[next]));
+}
+
+#[test]
+fn voiceover_reorders_only_when_native_elements_change() {
+    let first = element_with(1, None);
+    let second = element_with(2, None);
+    assert!(!voiceover_same_structure(
+        &[first.clone(), second.clone()],
+        &[second, first.clone()]
+    ));
+    assert!(!voiceover_same_structure(std::slice::from_ref(&first), &[]));
+    let mut canvas = first.clone();
+    canvas.canvas_key = Some(3);
+    assert!(!voiceover_same_structure(
+        std::slice::from_ref(&first),
+        &[canvas]
+    ));
+    let mut text = first.clone();
+    text.role = AccessibilityRole::TextField;
+    assert!(!voiceover_same_structure(&[first], &[text.clone()]));
+    let mut focused = text.clone();
+    focused.focused = true;
+    focused.text_selection = Some((0, 0));
+    assert!(!voiceover_same_structure(&[text], &[focused]));
+}
+
+#[test]
 fn colliding_canvas_ids_survive_reordering_and_removal() {
     let first = element_with(42, Some(0));
     let second = element_with(42, Some(1 << 31));
