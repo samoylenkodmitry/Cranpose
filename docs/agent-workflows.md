@@ -4,7 +4,9 @@ Read only the sections required by the current operation. These are project requ
 
 ## Code tools
 
-- Do every refactoring, code search, code analysis and code edit through the RustRover MCP (`mcp__rustrover__*`): `rename_refactoring` for renames, `apply_patch` and `create_new_file` for edits (never an ad hoc Python, sed or shell rewrite of a source file), `search_symbol`, `get_symbol_info` and `analyze_calls` for declarations, usages and call graphs (the IDE knows the code; a regex over its text does not, so `search_text` and `search_regex` are for strings and comments only, and `grep` never), `get_file_problems`, `lint_files` and `run_inspection_kts` for analysis, `reformat_file` for formatting; for text searches run `scripts/dev/ide_search.py text|regex|symbol|file <query> [--in <glob>]... [--context N]` from the project root, which asks the same IDE server and prints each hit as path, line and matched text. Pass `projectPath` on every call; when the tools are missing, open the tree in RustRover first (`open -a RustRover <path>`), and say so before any fallback.
+- Use RustRover MCP (`mcp__rustrover__*`) for code search, understanding, analysis, refactoring and edits: `search_symbol`, `get_symbol_info` and `analyze_calls` for declarations, usages and call graphs; `rename_refactoring` for renames; `apply_patch` and `create_new_file` for edits; `get_file_problems`, `lint_files` and `run_inspection_kts` for analysis; `reformat_file` for formatting. Pass `projectPath` on every call. Use IDE `search_text` and `search_regex` only for strings and comments. Do not replace code intelligence with Bash/grep/rg scans, or code edits with sed, ad hoc scripts or hand edits.
+- Run build, test, Git, SSH and other shell commands directly through the shell/exec tool. RustRover's MCP terminal is not required; use it only for a specific IDE-terminal need or an explicit request. This does not permit shell-based code discovery when IDE tools can answer the question. Follow [builds and shell](#builds-and-shell) for host and command constraints.
+- If direct IDE tools are unavailable, open the tree in RustRover first (`open -a RustRover <path>`) and retry; explain any remaining limitation before a fallback. The existing `scripts/dev/ide_search.py text|regex|symbol|file <query> [--in <glob>]... [--context N]` helper queries the same IDE server and may serve as a fallback, not the default when direct MCP search works.
 
 ## Rust and API conventions
 
@@ -24,7 +26,7 @@ Read only the sections required by the current operation. These are project requ
 - do not write tests in the same file with the implementation; all tests should be under `/test*/` folder, declared with `#[cfg(test)] #[path = "tests/<name>.rs"] mod tests;` (`scripts/dev/move_inline_tests.py <file>...` moves an inline module out)
 - Do not hardcode configuration; consider parallelism and SIMD where measured benefits hold, including wasm.
 - `#[cfg(feature = "robot-app")]` is forbidden.
-- Use plain, direct explanations; omit historical labels, "migration", and conditional offers to fix known problems.
+- Use plain, direct explanations about current behavior; omit historical or transitional labels and conditional offers to fix known problems.
 
 ## Git and CI
 
