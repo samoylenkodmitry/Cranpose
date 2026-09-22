@@ -20,7 +20,7 @@ use crate::{
 pub(crate) const RECORD_CHUNK: usize = 128;
 pub(crate) const BRUSH_CHUNK: usize = 256;
 pub(crate) const STOP_CHUNK: usize = 256;
-pub(crate) const PLACEMENT_CHUNK: usize = 64;
+pub(crate) const PLACEMENT_CHUNK: usize = 4;
 
 /// Runs with at least this many records keep retained GPU buffers keyed by
 /// their command; smaller runs are copied into the frame arena, where
@@ -36,6 +36,9 @@ const INITIAL_PLACEMENTS: usize = 64;
 const STORE_PLACEMENTS: usize = 1;
 
 const PLACEMENT_CANONICALIZE: u32 = 1;
+#[cfg(test)]
+#[path = "../tests/unit/uniform_placement_chunks.rs"]
+mod uniform_placement_chunks;
 const PLACEMENT_CLIPPED: u32 = 2;
 const PLACEMENT_FILTERED: u32 = 4;
 const PLACEMENT_PAINTED: u32 = 8;

@@ -194,7 +194,7 @@ var<uniform> brushes: array<BrushRecord, 256>;
 var<uniform> gradient_stops: array<GradientStop, 256>;
 
 @group(1) @binding(3)
-var<uniform> placements: array<Placement, 64>;
+var<uniform> placements: array<Placement, 4>;
 
 const RECORD_KIND_ROUND_RECT: u32 = 1u;
 const RECORD_KIND_ARC: u32 = 2u;

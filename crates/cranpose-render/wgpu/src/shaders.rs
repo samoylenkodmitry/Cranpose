@@ -23,7 +23,7 @@ pub(crate) const RUN_TABLE_DECLARATIONS: [(&str, &str); 3] = [
         "var<storage, read> gradient_stops: array<GradientStop>;",
     ),
     (
-        "var<uniform> placements: array<Placement, 64>;",
+        "var<uniform> placements: array<Placement, 4>;",
         "var<storage, read> placements: array<Placement>;",
     ),
 ];

@@ -60,31 +60,12 @@ impl ShapePipelines {
             #[cfg(not(target_arch = "wasm32"))]
             compiler,
         };
-        pipelines.prewarm_general();
+        if pipelines.asynchronous() {
+            pipelines.prewarm_general();
+        }
         pipelines
     }
 
-    /// Builds every general pipeline before the first frame.
-    ///
-    /// A pipeline built on demand is built inside the frame that first needs
-    /// it, and the driver's compile lands as a stall the user sees while
-    /// scrolling. The general space is small and fully known --
-    /// `SUPPORTED_BLEND_MODES` over both run tiers, six in all -- so there is
-    /// nothing to gain by waiting: a scene that never draws `DstOut` pays for
-    /// two pipelines it does not use, and one that does pays for them at
-    /// startup instead of mid-scroll.
-    ///
-    /// Built here, on the thread creating the renderer, rather than queued
-    /// on the background compiler: that thread has nothing else to do until
-    /// the first frame, so these compiles overlap the compiler's glyph,
-    /// image and blit work. Queued behind them on the one compiler thread,
-    /// the first frame waited for the lot (Mate 20 X cold first frame
-    /// 286-755 ms against 245-294 ms).
-    ///
-    /// Only the general variants. Specialized ones are unbounded in principle
-    /// and the background compiler already keeps them off the frame where it
-    /// runs; where it does not, `get` falls back to the general pipeline,
-    /// which is why every one of these has to exist before any draw.
     fn prewarm_general(&mut self) {
         let started = web_time::Instant::now();
         for blend_mode in crate::render::SUPPORTED_BLEND_MODES {
