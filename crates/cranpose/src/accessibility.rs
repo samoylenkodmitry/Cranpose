@@ -1858,6 +1858,25 @@ mod tests;
     test,
     all(feature = "ios", feature = "renderer-wgpu", target_os = "ios")
 ))]
+pub(crate) fn voiceover_same_structure(
+    current: &[AccessibilityElement],
+    next: &[AccessibilityElement],
+) -> bool {
+    current.len() == next.len()
+        && current.iter().zip(next).all(|(current, next)| {
+            current.node_id == next.node_id
+                && current.label.is_empty() == next.label.is_empty()
+                && current.role == next.role
+                && current.clickable == next.clickable
+                && current.canvas_key == next.canvas_key
+                && (!current.role.is_text_field() || current.focused == next.focused)
+        })
+}
+
+#[cfg(any(
+    test,
+    all(feature = "ios", feature = "renderer-wgpu", target_os = "ios")
+))]
 pub(crate) fn voiceover_value(element: &AccessibilityElement) -> Option<String> {
     let mut parts = Vec::new();
     if element.password {

@@ -952,6 +952,10 @@ fn svg_raster_axis(value: f32) -> Result<u32, SvgPainterError> {
     Ok(rounded as u32)
 }
 
+/// Displays a painter with an optional accessible description.
+///
+/// Images use the image accessibility role unless `modifier` supplies another role.
+/// Without a description or modifier semantics, the image is decorative.
 #[composable]
 pub fn Image<P>(
     painter: P,
@@ -970,90 +974,95 @@ where
     let draw_alpha = alpha.clamp(0.0, 1.0);
     let draw_painter = painter.clone();
 
-    let semantics_modifier = if let Some(description) = content_description {
-        Modifier::empty().semantics(move |config| {
-            config.content_description = Some(description.clone());
-        })
-    } else {
-        Modifier::empty()
-    };
+    let semantics_modifier = Modifier::empty().semantics(move |config| {
+        config.content_description = content_description.clone();
+    });
 
-    let image_modifier =
-        modifier
-            .then(semantics_modifier)
-            .draw_behind(move |scope: &mut dyn DrawScope| {
-                if draw_alpha <= 0.0 {
-                    return;
-                }
-                let container_size = scope.size();
-                if container_size.width <= 0.0 || container_size.height <= 0.0 {
-                    return;
-                }
-                match &draw_painter.kind {
-                    PainterKind::Bitmap(bitmap) => draw_bitmap_painter(
-                        scope,
-                        bitmap.clone(),
-                        intrinsic_dp,
-                        alignment,
-                        content_scale,
-                        draw_alpha,
-                        color_filter,
-                    ),
-                    PainterKind::BitmapRegion {
-                        bitmap,
-                        source,
-                        sampling,
-                    } => draw_bitmap_region_painter(
-                        scope,
-                        bitmap.clone(),
-                        source.rect(),
-                        alignment,
-                        content_scale,
-                        draw_alpha,
-                        color_filter,
-                        *sampling,
-                    ),
-                    PainterKind::BitmapTiled {
-                        bitmap,
-                        source,
-                        sampling,
-                    } => draw_bitmap_tiled_painter(
-                        scope,
-                        bitmap.clone(),
-                        source.rect(),
-                        draw_alpha,
-                        color_filter,
-                        *sampling,
-                    ),
-                    PainterKind::NinePatch {
-                        bitmap,
-                        source,
-                        insets,
-                        center,
-                        edges,
-                        sampling,
-                    } => draw_nine_patch_painter(
-                        scope,
-                        bitmap.clone(),
-                        source.rect(),
-                        insets.insets(),
-                        *center,
-                        *edges,
-                        draw_alpha,
-                        color_filter,
-                        *sampling,
-                    ),
-                    PainterKind::Svg(svg) => draw_svg_painter(
-                        scope,
-                        svg.clone(),
-                        intrinsic_dp,
-                        alignment,
-                        content_scale,
-                        draw_alpha,
-                        color_filter,
-                    ),
-                }
-            });
+    let image_modifier = semantics_modifier
+        .then(modifier)
+        .semantics(|config| {
+            if config.role.is_none()
+                && config
+                    .content_description
+                    .as_ref()
+                    .is_some_and(|label| !label.trim().is_empty())
+            {
+                config.role = Some(crate::SemanticsWidgetRole::Image);
+            }
+        })
+        .draw_behind(move |scope: &mut dyn DrawScope| {
+            if draw_alpha <= 0.0 {
+                return;
+            }
+            let container_size = scope.size();
+            if container_size.width <= 0.0 || container_size.height <= 0.0 {
+                return;
+            }
+            match &draw_painter.kind {
+                PainterKind::Bitmap(bitmap) => draw_bitmap_painter(
+                    scope,
+                    bitmap.clone(),
+                    intrinsic_dp,
+                    alignment,
+                    content_scale,
+                    draw_alpha,
+                    color_filter,
+                ),
+                PainterKind::BitmapRegion {
+                    bitmap,
+                    source,
+                    sampling,
+                } => draw_bitmap_region_painter(
+                    scope,
+                    bitmap.clone(),
+                    source.rect(),
+                    alignment,
+                    content_scale,
+                    draw_alpha,
+                    color_filter,
+                    *sampling,
+                ),
+                PainterKind::BitmapTiled {
+                    bitmap,
+                    source,
+                    sampling,
+                } => draw_bitmap_tiled_painter(
+                    scope,
+                    bitmap.clone(),
+                    source.rect(),
+                    draw_alpha,
+                    color_filter,
+                    *sampling,
+                ),
+                PainterKind::NinePatch {
+                    bitmap,
+                    source,
+                    insets,
+                    center,
+                    edges,
+                    sampling,
+                } => draw_nine_patch_painter(
+                    scope,
+                    bitmap.clone(),
+                    source.rect(),
+                    insets.insets(),
+                    *center,
+                    *edges,
+                    draw_alpha,
+                    color_filter,
+                    *sampling,
+                ),
+                PainterKind::Svg(svg) => draw_svg_painter(
+                    scope,
+                    svg.clone(),
+                    intrinsic_dp,
+                    alignment,
+                    content_scale,
+                    draw_alpha,
+                    color_filter,
+                ),
+            }
+        });
 
     Layout(
         image_modifier,

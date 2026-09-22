@@ -232,6 +232,16 @@ fn back_lenses() -> Vec<Retained<AVCaptureDevice>> {
     };
     let mut found = discover_devices(&types, AVCaptureDevicePosition::Back);
     found.sort_by_key(|device| lens_order(device));
+    if let Some(automatic) = automatic_camera_types()
+        .into_iter()
+        .find_map(|device_type| {
+            discover_devices(&[device_type], AVCaptureDevicePosition::Back)
+                .into_iter()
+                .next()
+        })
+    {
+        found.push(automatic);
+    }
     found
 }
 
@@ -324,7 +334,9 @@ fn lens_order(device: &AVCaptureDevice) -> u8 {
     let kind = unsafe { device.deviceType() };
     let ultra = unsafe { AVCaptureDeviceTypeBuiltInUltraWideCamera };
     let wide = unsafe { AVCaptureDeviceTypeBuiltInWideAngleCamera };
-    if &*kind == ultra {
+    if automatic_camera_types().contains(&&*kind) {
+        3
+    } else if &*kind == ultra {
         0
     } else if &*kind == wide {
         1
@@ -338,6 +350,7 @@ fn lens_name(device: &AVCaptureDevice) -> String {
     match lens_order(device) {
         0 => "Ultra wide".into(),
         1 => "Wide".into(),
+        3 => "Automatic".into(),
         _ => "Tele".into(),
     }
 }
@@ -526,6 +539,16 @@ fn frame_from_sample(sample: &CMSampleBuffer) -> Option<CameraFrame> {
     )
 }
 
+#[cfg(target_os = "ios")]
+fn automatic_camera_types() -> [&'static AVCaptureDeviceType; 2] {
+    unsafe {
+        [
+            AVCaptureDeviceTypeBuiltInTripleCamera,
+            AVCaptureDeviceTypeBuiltInDualWideCamera,
+        ]
+    }
+}
+
 fn select_camera_device(media_type: &AVMediaType) -> Option<Retained<AVCaptureDevice>> {
     if let Some(id) = lens_slot().lock().ok().and_then(|slot| slot.clone()) {
         let wanted = NSString::from_str(&id);
@@ -535,13 +558,7 @@ fn select_camera_device(media_type: &AVMediaType) -> Option<Retained<AVCaptureDe
     }
     #[cfg(target_os = "ios")]
     {
-        let virtual_types: [&AVCaptureDeviceType; 2] = unsafe {
-            [
-                AVCaptureDeviceTypeBuiltInTripleCamera,
-                AVCaptureDeviceTypeBuiltInDualWideCamera,
-            ]
-        };
-        for device_type in virtual_types {
+        for device_type in automatic_camera_types() {
             if let Some(device) = unsafe {
                 AVCaptureDevice::defaultDeviceWithDeviceType_mediaType_position(
                     device_type,

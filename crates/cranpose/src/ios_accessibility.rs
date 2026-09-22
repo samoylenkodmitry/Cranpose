@@ -327,7 +327,8 @@ impl IosAccessibilityBridge {
             return;
         }
         accessibility::log_spoken_tree(&next);
-        let structure_changed = !same_structure(&self.snapshot.elements, &next);
+        let structure_changed =
+            !accessibility::voiceover_same_structure(&self.snapshot.elements, &next);
         let changed = accessibility::spoken_changes(&self.snapshot.elements, &next);
         let opened = accessibility::opened_dialog(&self.snapshot.elements, &next);
         let mut next_snapshot = std::mem::take(&mut self.snapshot);
@@ -363,6 +364,7 @@ impl IosAccessibilityBridge {
                 .is_some_and(|container| accessibility::row_count(container) > 0);
             update_native_element(native, element, jumpable, mtm);
         }
+        let previous_reader_view = self.reader_view.as_ref().map(|(id, _)| *id);
         self.reader_view = reader_field(next, next_ids).and_then(|(id, element)| {
             let frame = CGRect::new(
                 CGPoint::new(element.bounds.x as f64, element.bounds.y as f64),
@@ -387,7 +389,9 @@ impl IosAccessibilityBridge {
                 .zip(next_ids)
                 .find(|(element, _)| Some(element.node_id) == opened)
                 .map(|(_, id)| *id);
-            self.publish_container(next_ids, opened_dialog, mtm);
+            let reader_view_changed =
+                previous_reader_view != self.reader_view.as_ref().map(|(id, _)| *id);
+            self.publish_container(next_ids, opened_dialog, reader_view_changed, mtm);
         }
         self.snapshot = next_snapshot;
         if !self.follow_app_focus() {
@@ -438,6 +442,9 @@ impl IosAccessibilityBridge {
             return false;
         }
         self.focused_element = focused;
+        if focused == self.reader_cursor {
+            return false;
+        }
         let Some(element_id) = focused else {
             return false;
         };
@@ -457,19 +464,20 @@ impl IosAccessibilityBridge {
         }
     }
 
-    /// Posts a layout change that names one element, which moves the
-    /// VoiceOver cursor onto it and reads it out.
-    fn name_to_reader(&self, element_id: i32) -> bool {
-        let reader_view = self
-            .reader_view
+    fn reader_element(&self, element_id: i32) -> Option<&AnyObject> {
+        self.reader_view
             .as_ref()
             .filter(|(reader_id, _)| *reader_id == element_id)
-            .map(|(_, view)| &**view);
-        let Some(argument) = reader_view.or_else(|| {
-            self.native_elements
-                .get(&element_id)
-                .map(|native| -> &AnyObject { native.as_ref() })
-        }) else {
+            .map(|(_, view)| &**view)
+            .or_else(|| {
+                self.native_elements
+                    .get(&element_id)
+                    .map(|native| -> &AnyObject { native.as_ref() })
+            })
+    }
+
+    fn name_to_reader(&self, element_id: i32) -> bool {
+        let Some(argument) = self.reader_element(element_id) else {
             return false;
         };
         // SAFETY: the notification takes the element to move the cursor to,
@@ -726,6 +734,7 @@ impl IosAccessibilityBridge {
         &mut self,
         next_ids: &[i32],
         opened_dialog: Option<i32>,
+        reader_view_changed: bool,
         mtm: MainThreadMarker,
     ) {
         let ordered: Vec<Retained<AnyObject>> = next_ids
@@ -750,14 +759,21 @@ impl IosAccessibilityBridge {
             host_object.setAutomationElements(Some(&array), mtm);
         }
 
-        let landing: Option<&AnyObject> = opened_dialog
-            .and_then(|element_id| self.native_elements.get(&element_id))
-            .map(|native| native.as_ref());
+        let cursor = self.reader_cursor.and_then(|id| self.reader_element(id));
+        if self.published_once
+            && opened_dialog.is_none()
+            && !reader_view_changed
+            && cursor.is_some()
+        {
+            return;
+        }
+        let landing = opened_dialog.and_then(|element_id| self.reader_element(element_id));
+        let landing = landing.or(if reader_view_changed { cursor } else { None });
         // SAFETY: UIKit owns both immutable notification constants; a null
         // argument asks the accessibility service to retain its current focus,
         // and a dialog that just opened is the element it moves to.
         unsafe {
-            let notification = if self.published_once && landing.is_none() {
+            let notification = if self.published_once && opened_dialog.is_none() {
                 UIAccessibilityLayoutChangedNotification
             } else {
                 UIAccessibilityScreenChangedNotification
@@ -816,7 +832,7 @@ fn update_native_element(
     // SAFETY: UIKit accessibility trait constants are immutable process-wide
     // values exported by the linked framework.
     unsafe {
-        if element.selected == Some(true) && element.role != AccessibilityRole::RadioButton {
+        if element.selected == Some(true) {
             traits |= UIAccessibilityTraitSelected;
         }
         if !element.enabled {
@@ -971,41 +987,6 @@ fn reader_field<'a>(
             element.role.is_text_field() && element.focused && element.text_selection.is_some()
         })
         .map(|(element, id)| (*id, element))
-}
-
-fn same_structure(current: &[AccessibilityElement], next: &[AccessibilityElement]) -> bool {
-    current.len() == next.len()
-        && current.iter().zip(next).all(|(current, next)| {
-            current.node_id == next.node_id
-                && current.label == next.label
-                && current.value == next.value
-                && current.role == next.role
-                && current.clickable == next.clickable
-                && current.canvas_key == next.canvas_key
-                && (!current.role.is_text_field() || current.focused == next.focused)
-        })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::same_structure;
-    use crate::accessibility::{AccessibilityElement, AccessibilityRect, AccessibilityRole};
-
-    fn element(x: f32) -> AccessibilityElement {
-        AccessibilityElement {
-            node_id: 7,
-            label: "Library".into(),
-            bounds: AccessibilityRect::new(x, 20.0, 80.0, 64.0),
-            role: AccessibilityRole::Button,
-            clickable: true,
-            ..AccessibilityElement::default()
-        }
-    }
-
-    #[test]
-    fn moving_an_element_does_not_rebuild_accessibility_focus_order() {
-        assert!(same_structure(&[element(0.0)], &[element(24.0)]));
-    }
 }
 
 /// What the person set under Settings, Accessibility and Display: the
