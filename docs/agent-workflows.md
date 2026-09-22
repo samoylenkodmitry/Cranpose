@@ -26,7 +26,7 @@ Read only the sections required by the current operation. These are project requ
 - do not write tests in the same file with the implementation; all tests should be under `/test*/` folder, declared with `#[cfg(test)] #[path = "tests/<name>.rs"] mod tests;` (`scripts/dev/move_inline_tests.py <file>...` moves an inline module out)
 - Do not hardcode configuration; consider parallelism and SIMD where measured benefits hold, including wasm.
 - `#[cfg(feature = "robot-app")]` is forbidden.
-- Use plain, direct explanations; omit historical labels, "migration", and conditional offers to fix known problems.
+- Use plain, direct explanations about current behavior; omit historical or transitional labels and conditional offers to fix known problems.
 
 ## Git and CI
 
