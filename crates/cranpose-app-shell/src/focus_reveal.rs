@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use cranpose_core::{NodeId, run_in_mutable_snapshot};
 use cranpose_foundation::{ScrollAxisRange, SemanticsScrollBy};
 use cranpose_render_common::Renderer;
@@ -10,6 +12,15 @@ impl<R: Renderer> AppShell<R>
 where
     R::Error: std::fmt::Debug,
 {
+    /// Reveals a screen reader's target without changing keyboard focus.
+    ///
+    /// Hidden, disabled, removed and modal-background targets are rejected.
+    /// Returns whether a scroll action reports movement.
+    pub fn accessibility_reveal(&mut self, node_id: NodeId) -> bool {
+        let app_context = Rc::clone(&self.app.app_context);
+        app_context.enter(|| self.reveal_node_in_context(node_id))
+    }
+
     pub(crate) fn reveal_new_focus(&mut self) {
         let focused = cranpose_ui::active_focus_target();
         if focused == self.app.revealed_focus {
@@ -17,35 +28,56 @@ where
         }
         self.app.revealed_focus = focused;
         let Some(focused) = focused else { return };
+        self.reveal_node_in_context(focused);
+    }
+
+    fn reveal_node_in_context(&mut self, focused: NodeId) -> bool {
+        let mut revealed = false;
         for index in 0..self.surfaces.len() {
             let ancestors = self.surfaces[index]
                 .semantics_tree_for_input(&mut self.app)
                 .and_then(|tree| scroll_ancestors(tree.root(), focused))
                 .unwrap_or_default();
             for ancestor in ancestors {
-                let surface = &mut self.surfaces[index];
-                let bounds = surface
-                    .layout_tree_in_context(&mut self.app)
-                    .and_then(|tree| {
-                        Some((
-                            bounds_of(tree.root(), focused)?,
-                            bounds_of(tree.root(), ancestor)?,
-                        ))
-                    });
-                let request = bounds.and_then(|(target, viewport)| {
-                    let tree = surface.semantics_tree_for_input(&mut self.app)?;
-                    let container = semantics_of(tree.root(), ancestor)?;
-                    scroll_request(container, target, viewport)
-                });
-                if let Some((action, dx, dy)) = request {
-                    let moved = run_in_mutable_snapshot(|| action.invoke(dx, dy)).unwrap_or(false);
-                    if moved {
-                        self.app.request_layout_pass();
-                        self.run_layout_phase_in_context();
-                    }
-                }
+                revealed |= self.reveal_within_container(index, focused, ancestor);
             }
         }
+        revealed
+    }
+
+    fn reveal_within_container(&mut self, index: usize, focused: NodeId, ancestor: NodeId) -> bool {
+        let mut revealed = false;
+        let mut previous_distance = f32::INFINITY;
+        loop {
+            let surface = &mut self.surfaces[index];
+            let request = surface
+                .layout_tree_in_context(&mut self.app)
+                .and_then(|tree| {
+                    Some((
+                        bounds_of(tree.root(), focused)?,
+                        bounds_of(tree.root(), ancestor)?,
+                    ))
+                })
+                .and_then(|(target, viewport)| {
+                    let tree = surface.semantics_tree_for_input(&mut self.app)?;
+                    scroll_request(semantics_of(tree.root(), ancestor)?, target, viewport)
+                });
+            let Some((action, dx, dy)) = request else {
+                break;
+            };
+            let distance = dx.abs() + dy.abs();
+            if distance >= previous_distance {
+                break;
+            }
+            previous_distance = distance;
+            if !run_in_mutable_snapshot(|| action.invoke(dx, dy)).unwrap_or(false) {
+                break;
+            }
+            revealed = true;
+            self.app.request_layout_pass();
+            self.run_layout_phase_in_context();
+        }
+        revealed
     }
 }
 

@@ -165,8 +165,6 @@ fn drain_accessibility_activations(
     }
 }
 
-/// Moves app focus onto the control TalkBack put its cursor on, so the reader
-/// and the app agree on what holds focus.
 fn drain_accessibility_focus(
     shell: &mut AppShell<WgpuRenderer>,
     elements: &crate::accessibility::AccessibilitySnapshot,
@@ -175,9 +173,7 @@ fn drain_accessibility_focus(
         let Some((node_id, _)) = elements.identity(virtual_id) else {
             continue;
         };
-        crate::accessibility::run_reader_action(shell, |root| {
-            crate::accessibility::focus_node(root, node_id)
-        });
+        shell.accessibility_reveal(node_id);
     }
 }
 

@@ -25,7 +25,8 @@ pub(crate) fn opened_dialog(
         .find(|element| {
             element.role == AccessibilityRole::Dialog
                 && !current.iter().any(|old| {
-                    old.node_id == element.node_id && old.role == AccessibilityRole::Dialog
+                    old.identity_key() == element.identity_key()
+                        && old.role == AccessibilityRole::Dialog
                 })
         })
         .map(|element| element.node_id)
@@ -328,6 +329,7 @@ const _: () = assert!(AccessibilityRole::ALL.len() == AccessibilityRole::RadioGr
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct AccessibilityElement {
     pub(crate) node_id: NodeId,
+    pub(crate) node_generation: u32,
     pub(crate) canvas_key: Option<u64>,
     pub(crate) label: String,
     pub(crate) state_description: Option<String>,
@@ -376,10 +378,17 @@ pub(crate) struct AccessibilityElement {
     pub(crate) multiline: bool,
 }
 
+impl AccessibilityElement {
+    fn identity_key(&self) -> (NodeId, u32, Option<u64>) {
+        (self.node_id, self.node_generation, self.canvas_key)
+    }
+}
+
 impl Default for AccessibilityElement {
     fn default() -> Self {
         Self {
             node_id: 0,
+            node_generation: 0,
             canvas_key: None,
             label: String::new(),
             state_description: None,
@@ -619,6 +628,7 @@ fn project_node(
 
     project_canvas_children(node, rect, live_region, elements);
     for element in &mut elements[first_new..] {
+        element.node_generation = node.node_generation;
         element.scroll_parent = inherited_scroll;
     }
 
@@ -846,6 +856,7 @@ fn element_for_node(
     };
     AccessibilityElement {
         node_id: node.node_id,
+        node_generation: node.node_generation,
         canvas_key: None,
         value: node
             .text
@@ -1475,9 +1486,11 @@ pub(crate) fn stepped_value(progress: &ProgressBarRangeInfo, up: bool) -> f32 {
     next.clamp(low, high)
 }
 
-/// Moves app focus onto the node a platform's accessibility layer asked for,
-/// so a screen reader and the app agree on what holds focus. Answers whether
-/// focus moved.
+#[cfg(any(
+    test,
+    all(feature = "desktop-shell", feature = "renderer-wgpu"),
+    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
+))]
 pub(crate) fn focus_node(root: &SemanticsNode, node_id: NodeId) -> bool {
     find_semantics_node(root, node_id)
         .is_some_and(|node| node.focusable && cranpose_ui::request_focus_from_platform(node_id))
@@ -1545,9 +1558,7 @@ pub(crate) fn live_region_announcements(
         }
         let was = previous
             .iter()
-            .find(|other| {
-                other.node_id == element.node_id && other.canvas_key == element.canvas_key
-            })
+            .find(|other| other.identity_key() == element.identity_key())
             .map(spoken_text);
         if was.as_deref() != Some(text.as_str()) {
             announcements.push(Announcement { text, mode });
@@ -1582,7 +1593,7 @@ pub(crate) fn pane_title_announcements(
                 .filter(|title| !title.trim().is_empty())?;
             let was = previous
                 .iter()
-                .find(|other| other.node_id == element.node_id)
+                .find(|other| other.identity_key() == element.identity_key())
                 .and_then(|other| other.pane_title.as_deref());
             (was != Some(title)).then(|| Announcement {
                 text: title.to_owned(),
@@ -1680,9 +1691,7 @@ pub(crate) fn spoken_changes(
         .map(|element| {
             previous
                 .iter()
-                .find(|other| {
-                    other.node_id == element.node_id && other.canvas_key == element.canvas_key
-                })
+                .find(|other| other.identity_key() == element.identity_key())
                 .is_some_and(|was| !speaks_the_same(was, element))
         })
         .collect()
@@ -1864,13 +1873,32 @@ pub(crate) fn voiceover_same_structure(
 ) -> bool {
     current.len() == next.len()
         && current.iter().zip(next).all(|(current, next)| {
-            current.node_id == next.node_id
+            current.identity_key() == next.identity_key()
                 && current.label.is_empty() == next.label.is_empty()
                 && current.role == next.role
                 && current.clickable == next.clickable
-                && current.canvas_key == next.canvas_key
                 && (!current.role.is_text_field() || current.focused == next.focused)
         })
+}
+
+#[cfg(any(
+    test,
+    all(feature = "ios", feature = "renderer-wgpu", target_os = "ios")
+))]
+pub(crate) fn voiceover_replacement_focus(
+    elements: &[AccessibilityElement],
+    ids: &[i32],
+    cursor: Option<i32>,
+) -> Option<i32> {
+    let cursor = cursor?;
+    if ids.contains(&cursor) {
+        return None;
+    }
+    elements
+        .iter()
+        .zip(ids)
+        .find(|(element, _)| !element.label.trim().is_empty() && element.bounds.is_visible())
+        .map(|(_, id)| *id)
 }
 
 #[cfg(any(

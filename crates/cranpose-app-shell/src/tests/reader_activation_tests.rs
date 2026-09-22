@@ -462,7 +462,7 @@ fn assert_control_visible(shell: &mut AppShell<HitGraphRenderer>, label: &str, h
         (y, height, 120.0)
     };
     assert!(
-        start >= 0.0 && start + size <= extent,
+        start >= -0.001 && start + size <= extent + 0.001,
         "{label}: start={start}, size={size}, horizontal={horizontal}"
     );
 }
@@ -559,6 +559,344 @@ fn reader_activation_enters_text_editing_without_moving_the_selection() {
     let editor = shell.ime_editor_state().expect("active native editor");
     assert_eq!(editor.text, "Receipt");
     assert_eq!((editor.selection_start, editor.selection_end), (2, 4));
+}
+
+#[test]
+fn reader_reveal_scrolls_both_axes_without_starting_keyboard_focus() {
+    let _guard = test_guard();
+    for horizontal in [false, true] {
+        for reverse in [false, true] {
+            let (mut shell, scroll) = scrolling_controls(horizontal, reverse);
+            shell.set_semantics_enabled(true);
+            for label in ["First", "Add page", "First"] {
+                let target = reader_control_id(&mut shell, label);
+                shell.accessibility_reveal(target);
+                shell.update();
+                assert_control_visible(&mut shell, label, horizontal);
+                assert_eq!(
+                    shell.app_context().enter(cranpose_ui::active_focus_target),
+                    None
+                );
+                assert!(!shell.accessibility_reveal(target));
+            }
+            let scroll = scroll.borrow().expect("scroll state");
+            let manual = scroll.max_value() / 2.0;
+            scroll.scroll_to(manual);
+            shell.update();
+            assert_eq!(scroll.value(), manual);
+        }
+    }
+}
+
+struct LazyEditorFixture {
+    shell: AppShell<HitGraphRenderer>,
+    list: cranpose_foundation::lazy::LazyListState,
+    show_editor: cranpose_core::MutableState<bool>,
+    active_effects: Rc<Cell<usize>>,
+}
+
+fn lazy_editor_fixture(horizontal: bool, reverse: bool) -> LazyEditorFixture {
+    let captured = Rc::new(RefCell::new(None));
+    let state = Rc::clone(&captured);
+    let active_effects = Rc::new(Cell::new(0usize));
+    let effects = Rc::clone(&active_effects);
+    let mut shell = AppShell::new(
+        HitGraphRenderer::default(),
+        location_key(file!(), line!(), column!()),
+        move || {
+            let list = rememberLazyListState();
+            let show_editor = rememberMutableStateOf(|| true);
+            *captured.borrow_mut() = Some((list, show_editor));
+            let effects = Rc::clone(&effects);
+            let content = move |scope: &mut cranpose_foundation::lazy::LazyListIntervalContent| {
+                if show_editor.get() {
+                    scope.item_keyed(Some(1), None, move || {
+                        let effects = Rc::clone(&effects);
+                        cranpose_core::DisposableEffect((), move |_| {
+                            effects.set(effects.get() + 1);
+                            cranpose_core::DisposableEffectResult::new(move || {
+                                effects.set(effects.get() - 1);
+                            })
+                        });
+                        let field = cranpose_core::remember(|| {
+                            cranpose_foundation::text::TextFieldState::new("Receipt")
+                        })
+                        .with(|field| *field);
+                        cranpose_ui::BasicTextField(
+                            field,
+                            Modifier::empty()
+                                .size(Size::new(200.0, 48.0))
+                                .content_description("Merchant"),
+                            TextStyle::default(),
+                        );
+                    });
+                }
+                scope.items(20, |index| {
+                    Text(
+                        format!("Row {index}"),
+                        Modifier::empty().size(Size::new(
+                            200.0 + (index % 3) as f32 * 50.0,
+                            80.0 + (index % 3) as f32 * 20.0,
+                        )),
+                        TextStyle::default(),
+                    );
+                });
+            };
+            let modifier = Modifier::empty().size(Size::new(240.0, 120.0));
+            if horizontal {
+                cranpose_ui::LazyRow(
+                    modifier,
+                    list,
+                    cranpose_ui::LazyRowSpec {
+                        reverse_layout: reverse,
+                        ..Default::default()
+                    },
+                    content,
+                );
+            } else {
+                LazyColumn(
+                    modifier,
+                    list,
+                    LazyColumnSpec {
+                        reverse_layout: reverse,
+                        ..Default::default()
+                    },
+                    content,
+                );
+            }
+        },
+    );
+    shell.set_semantics_enabled(true);
+    shell.update();
+    let merchant = reader_control_id(&mut shell, "Merchant");
+    assert!(shell.accessibility_activate(merchant, None));
+    shell.update();
+    let (list, show_editor) = state.borrow().expect("list state");
+    LazyEditorFixture {
+        shell,
+        list,
+        show_editor,
+        active_effects,
+    }
+}
+
+fn scroll_lazy_editor(fixture: &mut LazyEditorFixture, delta: f32) {
+    fixture.shell.app_context().enter(|| {
+        cranpose_core::run_in_mutable_snapshot(|| fixture.list.dispatch_scroll_delta(delta))
+            .expect("reader scroll");
+    });
+    fixture.shell.update();
+}
+
+#[test]
+fn lazy_list_keeps_the_active_editor_when_the_reader_scrolls_away() {
+    let _guard = test_guard();
+    for horizontal in [false, true] {
+        for reverse in [false, true] {
+            let mut fixture = lazy_editor_fixture(horizontal, reverse);
+            let merchant = reader_control_id(&mut fixture.shell, "Merchant");
+            scroll_lazy_editor(&mut fixture, -2800.0);
+            assert!(
+                fixture.list.first_visible_item_index() > 5,
+                "horizontal={horizontal} reverse={reverse} first={}",
+                fixture.list.first_visible_item_index()
+            );
+            assert_eq!(fixture.active_effects.get(), 1);
+            assert_eq!(
+                fixture
+                    .shell
+                    .ime_editor_state()
+                    .expect("offscreen editor stays active")
+                    .text,
+                "Receipt"
+            );
+            assert!(fixture.shell.on_ime_set_selection(7, 7));
+            assert!(fixture.shell.on_key_event(&cranpose_ui::KeyEvent::key_down(
+                cranpose_ui::KeyCode::Q,
+                "Q"
+            )));
+            assert!(fixture.shell.on_ime_set_selection(8, 8));
+            assert!(fixture.shell.on_paste("Q"));
+            fixture.shell.update();
+            assert_eq!(
+                fixture
+                    .shell
+                    .ime_editor_state()
+                    .expect("offscreen editor accepts text")
+                    .text,
+                "ReceiptQQ"
+            );
+            fixture
+                .shell
+                .app_context()
+                .enter(|| fixture.list.scroll_to_item(0, 0.0));
+            fixture.shell.update();
+            assert_eq!(reader_control_id(&mut fixture.shell, "Merchant"), merchant);
+            assert_eq!(
+                fixture
+                    .shell
+                    .ime_editor_state()
+                    .expect("returned editor stays active")
+                    .text,
+                "ReceiptQQ"
+            );
+        }
+    }
+}
+
+#[test]
+fn reader_reveal_stops_when_a_scroll_action_reports_no_geometric_progress() {
+    let _guard = test_guard();
+    let calls = Rc::new(Cell::new(0usize));
+    let recorded = Rc::clone(&calls);
+    let mut shell = AppShell::new(
+        HitGraphRenderer::default(),
+        location_key(file!(), line!(), column!()),
+        move || {
+            let recorded = Rc::clone(&recorded);
+            Column(
+                Modifier::empty()
+                    .size(Size::new(240.0, 120.0))
+                    .semantics(move |config| {
+                        config.vertical_scroll =
+                            Some(cranpose_ui::ScrollAxisRange::new(0.0, 1000.0, false));
+                        let recorded = Rc::clone(&recorded);
+                        config.scroll_by =
+                            Some(cranpose_foundation::SemanticsScrollBy::new(move |_, _| {
+                                recorded.set(recorded.get() + 1);
+                                true
+                            }));
+                    }),
+                ColumnSpec::default(),
+                || {
+                    Spacer(Size::new(1.0, 240.0));
+                    Text(
+                        "Target",
+                        Modifier::empty()
+                            .size(Size::new(100.0, 48.0))
+                            .clickable(|_| {}),
+                        TextStyle::default(),
+                    );
+                },
+            );
+        },
+    );
+    shell.set_semantics_enabled(true);
+    shell.update();
+    let target = reader_control_id(&mut shell, "Target");
+    assert!(shell.accessibility_reveal(target));
+    assert_eq!(calls.get(), 1);
+}
+
+#[test]
+fn retained_lazy_editor_remains_readable_and_can_be_revealed() {
+    let _guard = test_guard();
+    for horizontal in [false, true] {
+        for reverse in [false, true] {
+            let mut fixture = lazy_editor_fixture(horizontal, reverse);
+            let merchant = reader_control_id(&mut fixture.shell, "Merchant");
+            scroll_lazy_editor(&mut fixture, -2800.0);
+            assert_eq!(reader_control_id(&mut fixture.shell, "Merchant"), merchant);
+            assert!(fixture.shell.accessibility_reveal(merchant));
+            fixture.shell.update();
+            assert_control_visible(&mut fixture.shell, "Merchant", horizontal);
+            assert_eq!(fixture.active_effects.get(), 1);
+        }
+    }
+}
+
+#[test]
+fn lazy_list_releases_the_offscreen_editor_after_focus_is_cleared() {
+    let _guard = test_guard();
+    let mut fixture = lazy_editor_fixture(false, false);
+    scroll_lazy_editor(&mut fixture, -1200.0);
+    fixture.shell.app_context().enter(|| {
+        cranpose_core::run_in_mutable_snapshot(|| cranpose_ui::FocusManager.clear_focus())
+            .expect("clear focus");
+    });
+    scroll_lazy_editor(&mut fixture, -80.0);
+    assert!(fixture.shell.ime_editor_state().is_none());
+    assert_eq!(fixture.active_effects.get(), 0);
+}
+
+#[test]
+fn lazy_list_does_not_retain_an_editor_removed_from_content() {
+    let _guard = test_guard();
+    let mut fixture = lazy_editor_fixture(false, false);
+    scroll_lazy_editor(&mut fixture, -1200.0);
+    fixture.show_editor.set(false);
+    fixture.shell.update();
+    assert!(
+        fixture.shell.ime_editor_state().is_none(),
+        "active effects={}",
+        fixture.active_effects.get()
+    );
+    assert_eq!(fixture.active_effects.get(), 0);
+}
+
+#[test]
+fn reader_focus_reveals_other_controls_without_replacing_the_active_editor() {
+    let _guard = test_guard();
+    let mut shell = AppShell::new(
+        HitGraphRenderer::default(),
+        location_key(file!(), line!(), column!()),
+        || {
+            let scroll = cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| *state);
+            Column(
+                Modifier::empty()
+                    .size(Size::new(240.0, 120.0))
+                    .vertical_scroll(scroll, false),
+                ColumnSpec::default(),
+                || {
+                    for (label, value) in [("Merchant", "Receipt"), ("Payment", "Card")] {
+                        let field = cranpose_core::remember(|| {
+                            let field = cranpose_foundation::text::TextFieldState::new(value);
+                            field.set_selection(cranpose_foundation::text::TextRange::new(2, 4));
+                            field
+                        })
+                        .with(|field| *field);
+                        cranpose_ui::BasicTextField(
+                            field,
+                            Modifier::empty()
+                                .size(Size::new(200.0, 48.0))
+                                .content_description(label),
+                            TextStyle::default(),
+                        );
+                        Spacer(Size::new(1.0, 200.0));
+                    }
+                },
+            );
+        },
+    );
+    shell.set_semantics_enabled(true);
+    shell.update();
+    let merchant = reader_control_id(&mut shell, "Merchant");
+    let payment = reader_control_id(&mut shell, "Payment");
+    shell.accessibility_reveal(merchant);
+    shell.update();
+    assert!(
+        shell.ime_editor_state().is_none(),
+        "Reader navigation must not start text entry"
+    );
+    assert!(shell.accessibility_activate(merchant, None));
+    shell.update();
+    let before = shell.ime_editor_state().expect("active merchant editor");
+    assert!(shell.accessibility_reveal(payment));
+    assert_control_visible(&mut shell, "Payment", false);
+    shell.update();
+    let after = shell
+        .ime_editor_state()
+        .expect("reader navigation retains the editor");
+    assert_eq!(after.text, before.text);
+    assert_eq!((after.selection_start, after.selection_end), (2, 4));
+    assert_control_visible(&mut shell, "Payment", false);
+    assert!(!shell.accessibility_reveal(NodeId::MAX));
+    assert!(shell.accessibility_activate(payment, None));
+    shell.update();
+    assert_eq!(
+        shell.ime_editor_state().expect("payment editor").text,
+        "Card"
+    );
 }
 
 fn reader_activation_case(

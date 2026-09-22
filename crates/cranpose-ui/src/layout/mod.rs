@@ -352,6 +352,8 @@ pub enum SemanticsRole {
 #[derive(Clone, Debug, PartialEq)]
 pub struct SemanticsNode {
     pub node_id: NodeId,
+    /// Incarnation of the runtime node, incremented when its storage is recycled.
+    pub node_generation: u32,
     /// Where this node sits in the tree (layout, text, subcomposition …).
     pub role: SemanticsRole,
     /// What kind of control this node is, as a screen reader announces it —
@@ -447,6 +449,7 @@ impl Default for SemanticsNode {
     fn default() -> Self {
         Self {
             node_id: 0,
+            node_generation: 0,
             role: SemanticsRole::Unknown,
             widget_role: None,
             actions: Vec::new(),
@@ -614,6 +617,8 @@ impl LayoutTree {
 #[derive(Debug, Clone)]
 pub struct LayoutBox {
     pub node_id: NodeId,
+    /// Incarnation of the runtime node captured with these layout bounds.
+    pub node_generation: u32,
     pub rect: GeometryRect,
     /// Content offset for scroll/inner transforms (applies to children, NOT this node's position)
     pub content_offset: Point,
@@ -631,6 +636,7 @@ impl LayoutBox {
     ) -> Self {
         Self {
             node_id,
+            node_generation: 0,
             rect,
             content_offset,
             node_data,
@@ -881,13 +887,10 @@ fn place_layout_box(
         }
     }
 
-    Ok(Some(LayoutBox::new(
-        node_id,
-        rect,
-        state.content_offset,
-        data,
-        children,
-    )))
+    Ok(Some(LayoutBox {
+        node_generation: applier.node_generation(node_id),
+        ..LayoutBox::new(node_id, rect, state.content_offset, data, children)
+    }))
 }
 
 /// Builds a semantics snapshot from retained layout state in the live applier tree.
@@ -923,7 +926,12 @@ pub fn build_semantics_tree_from_applier(
                     }
                 }
                 return Ok(Some(semantics_node_from_parts(
-                    node_id, role, config, children, size,
+                    node_id,
+                    applier.node_generation(node_id),
+                    role,
+                    config,
+                    children,
+                    size,
                 )));
             }
             Ok(None) => return Ok(None),
@@ -951,6 +959,7 @@ pub fn build_semantics_tree_from_applier(
                 }
                 Ok(Some(semantics_node_from_parts(
                     node_id,
+                    applier.node_generation(node_id),
                     SemanticsRole::Subcompose,
                     config,
                     children,
@@ -3195,6 +3204,7 @@ fn build_semantics_tree_from_live_nodes(
 
 fn semantics_node_from_parts(
     node_id: NodeId,
+    node_generation: u32,
     mut role: SemanticsRole,
     config: Option<SemanticsConfiguration>,
     children: Vec<SemanticsNode>,
@@ -3202,6 +3212,7 @@ fn semantics_node_from_parts(
 ) -> SemanticsNode {
     let mut node = SemanticsNode {
         node_id,
+        node_generation,
         children,
         ..SemanticsNode::default()
     };
@@ -3310,6 +3321,7 @@ fn build_semantics_node_from_live_nodes(
 
     Ok(semantics_node_from_parts(
         node.node_id,
+        applier.node_generation(node.node_id),
         role,
         config,
         children,
@@ -3412,13 +3424,10 @@ fn build_layout_tree(
                 layer_translation,
             )?);
         }
-        Ok(LayoutBox::new(
-            node.node_id,
-            rect,
-            node.content_offset,
-            data,
-            children,
-        ))
+        Ok(LayoutBox {
+            node_generation: applier.node_generation(node.node_id),
+            ..LayoutBox::new(node.node_id, rect, node.content_offset, data, children)
+        })
     }
 
     Ok(LayoutTree::new(place(
@@ -3455,6 +3464,7 @@ fn build_semantics_node_from_layout_box(layout_box: &LayoutBox) -> SemanticsNode
 
     semantics_node_from_parts(
         layout_box.node_id,
+        layout_box.node_generation,
         semantics_role_from_layout_box(layout_box),
         collect_semantics_from_modifier(&layout_box.node_data.modifier),
         children,

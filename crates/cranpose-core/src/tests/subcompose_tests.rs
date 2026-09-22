@@ -1,6 +1,20 @@
 use super::*;
 use crate::TestRuntime;
 
+#[test]
+fn active_slot_for_node_excludes_reusable_and_unknown_nodes() {
+    let mut state = SubcomposeState::default();
+    let slot = SlotId::new(7);
+    assert_eq!(state.active_slot_for_node(42), None);
+    state.register_active(slot, &[42], &[]);
+    assert_eq!(state.active_slot_for_node(42), Some(slot));
+    assert_eq!(state.active_slot_for_node(43), None);
+    state.begin_pass();
+    assert_eq!(state.active_slot_for_node(42), Some(slot));
+    state.finish_pass();
+    assert_eq!(state.active_slot_for_node(42), None);
+}
+
 struct RetainEvenPolicy;
 
 impl SlotReusePolicy for RetainEvenPolicy {

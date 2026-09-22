@@ -25,12 +25,14 @@ fn test_count_nodes() {
     };
     let root = LayoutBox {
         node_id: 0,
+        node_generation: 0,
         rect: empty_rect,
         content_offset: Point::default(),
         node_data: node_data(),
         children: vec![
             LayoutBox {
                 node_id: 1,
+                node_generation: 0,
                 rect: empty_rect,
                 content_offset: Point::default(),
                 node_data: node_data(),
@@ -38,6 +40,7 @@ fn test_count_nodes() {
             },
             LayoutBox {
                 node_id: 2,
+                node_generation: 0,
                 rect: empty_rect,
                 content_offset: Point::default(),
                 node_data: node_data(),

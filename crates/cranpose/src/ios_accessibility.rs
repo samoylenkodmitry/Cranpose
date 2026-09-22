@@ -1,7 +1,7 @@
 #![allow(unsafe_code)]
 
 use std::{
-    cell::{Cell, RefCell},
+    cell::{Cell, OnceCell, RefCell},
     collections::{HashMap, HashSet},
     fmt::Debug,
     rc::Rc,
@@ -36,7 +36,7 @@ use objc2_ui_kit::{
     UIContentSizeCategoryAccessibilityMedium, UIContentSizeCategoryExtraExtraExtraLarge,
     UIContentSizeCategoryExtraExtraLarge, UIContentSizeCategoryExtraLarge,
     UIContentSizeCategoryExtraSmall, UIContentSizeCategoryLarge, UIContentSizeCategoryMedium,
-    UIContentSizeCategorySmall, UIView,
+    UIContentSizeCategorySmall, UITextField, UIView,
 };
 use winit::event_loop::EventLoopProxy;
 
@@ -323,12 +323,15 @@ impl IosAccessibilityBridge {
         }
         let next = accessibility::snapshot(shell);
         self.speak(&next);
-        if next == self.snapshot.elements {
+        let input_changed = (crate::ios_keyboard::reader_input_active()
+            && reader_field(&next).is_some())
+            != self.reader_view.is_some();
+        if next == self.snapshot.elements && !input_changed {
             return;
         }
         accessibility::log_spoken_tree(&next);
-        let structure_changed =
-            !accessibility::voiceover_same_structure(&self.snapshot.elements, &next);
+        let structure_changed = input_changed
+            || !accessibility::voiceover_same_structure(&self.snapshot.elements, &next);
         let changed = accessibility::spoken_changes(&self.snapshot.elements, &next);
         let opened = accessibility::opened_dialog(&self.snapshot.elements, &next);
         let mut next_snapshot = std::mem::take(&mut self.snapshot);
@@ -364,24 +367,7 @@ impl IosAccessibilityBridge {
                 .is_some_and(|container| accessibility::row_count(container) > 0);
             update_native_element(native, element, jumpable, mtm);
         }
-        let previous_reader_view = self.reader_view.as_ref().map(|(id, _)| *id);
-        self.reader_view = reader_field(next, next_ids).and_then(|(id, element)| {
-            let frame = CGRect::new(
-                CGPoint::new(element.bounds.x as f64, element.bounds.y as f64),
-                CGSize::new(element.bounds.width as f64, element.bounds.height as f64),
-            );
-            crate::ios_keyboard::describe_for_reader(
-                &element.label,
-                element.click_label.as_deref(),
-                frame,
-                &self.host_view,
-                &format!("cranpose-node-{id}"),
-            )
-            .map(|view| (id, view))
-        });
-        if self.reader_view.is_none() {
-            crate::ios_keyboard::hide_from_reader();
-        }
+        let reader_view_changed = self.update_reader_view(next, next_ids);
 
         if structure_changed {
             let opened_dialog = next
@@ -389,9 +375,7 @@ impl IosAccessibilityBridge {
                 .zip(next_ids)
                 .find(|(element, _)| Some(element.node_id) == opened)
                 .map(|(_, id)| *id);
-            let reader_view_changed =
-                previous_reader_view != self.reader_view.as_ref().map(|(id, _)| *id);
-            self.publish_container(next_ids, opened_dialog, reader_view_changed, mtm);
+            self.publish_container(next, next_ids, opened_dialog, reader_view_changed, mtm);
         }
         self.snapshot = next_snapshot;
         if !self.follow_app_focus() {
@@ -496,7 +480,6 @@ impl IosAccessibilityBridge {
         self.snapshot.element(element_id)
     }
 
-    /// Hands focus to the app when VoiceOver lands its cursor on an element.
     pub(crate) fn drain_focus<R>(&mut self, shell: &mut AppShell<R>) -> bool
     where
         R: Renderer,
@@ -505,20 +488,11 @@ impl IosAccessibilityBridge {
         let pending = self.requests.focus.take();
         let mut moved = false;
         for element_id in pending {
-            let Some((node_id, focusable)) = self
-                .element_for(element_id)
-                .map(|element| (element.node_id, element.focusable))
-            else {
+            let Some(node_id) = self.element_for(element_id).map(|element| element.node_id) else {
                 continue;
             };
             self.reader_cursor = Some(element_id);
-            if !focusable {
-                continue;
-            }
-            self.focused_element = Some(element_id);
-            moved |= accessibility::run_reader_action(shell, |root| {
-                accessibility::focus_node(root, node_id)
-            });
+            moved |= shell.accessibility_reveal(node_id);
         }
         moved
     }
@@ -730,8 +704,33 @@ impl IosAccessibilityBridge {
         native
     }
 
+    fn update_reader_view(&mut self, next: &[AccessibilityElement], next_ids: &[i32]) -> bool {
+        let previous = self.reader_view.as_ref().map(|(id, _)| *id);
+        self.reader_view = reader_field(next).and_then(|(index, element)| {
+            let id = next_ids[index];
+            let frame = CGRect::new(
+                CGPoint::new(element.bounds.x as f64, element.bounds.y as f64),
+                CGSize::new(element.bounds.width as f64, element.bounds.height as f64),
+            );
+            crate::ios_keyboard::describe_for_reader(
+                &element.label,
+                element.click_label.as_deref(),
+                element.value.as_deref().filter(|_| !element.password),
+                frame,
+                &self.host_view,
+                &format!("cranpose-node-{id}"),
+            )
+            .map(|view| (id, view))
+        });
+        if self.reader_view.is_none() {
+            crate::ios_keyboard::hide_from_reader();
+        }
+        previous != self.reader_view.as_ref().map(|(id, _)| *id)
+    }
+
     fn publish_container(
         &mut self,
+        next: &[AccessibilityElement],
         next_ids: &[i32],
         opened_dialog: Option<i32>,
         reader_view_changed: bool,
@@ -767,17 +766,22 @@ impl IosAccessibilityBridge {
         {
             return;
         }
-        let landing = opened_dialog.and_then(|element_id| self.reader_element(element_id));
+        let replacement =
+            accessibility::voiceover_replacement_focus(next, next_ids, self.reader_cursor);
+        let landing = opened_dialog
+            .or(replacement)
+            .and_then(|element_id| self.reader_element(element_id));
         let landing = landing.or(if reader_view_changed { cursor } else { None });
         // SAFETY: UIKit owns both immutable notification constants; a null
         // argument asks the accessibility service to retain its current focus,
         // and a dialog that just opened is the element it moves to.
         unsafe {
-            let notification = if self.published_once && opened_dialog.is_none() {
-                UIAccessibilityLayoutChangedNotification
-            } else {
-                UIAccessibilityScreenChangedNotification
-            };
+            let notification =
+                if self.published_once && opened_dialog.is_none() && replacement.is_none() {
+                    UIAccessibilityLayoutChangedNotification
+                } else {
+                    UIAccessibilityScreenChangedNotification
+                };
             UIAccessibilityPostNotification(notification, landing);
         }
         self.published_once = true;
@@ -828,7 +832,7 @@ fn update_native_element(
         CGPoint::new(element.bounds.x as f64, element.bounds.y as f64),
         CGSize::new(element.bounds.width as f64, element.bounds.height as f64),
     ));
-    let mut traits = role_traits(element.role);
+    let mut traits = role_traits(element.role, mtm);
     // SAFETY: UIKit accessibility trait constants are immutable process-wide
     // values exported by the linked framework.
     unsafe {
@@ -847,8 +851,20 @@ fn update_native_element(
     offer_custom_actions(native, element, jumpable, mtm);
 }
 
-/// The VoiceOver trait that says what a control is.
-fn role_traits(role: AccessibilityRole) -> UIAccessibilityTraits {
+fn text_field_traits(mtm: MainThreadMarker) -> UIAccessibilityTraits {
+    thread_local! {
+        static TRAITS: OnceCell<UIAccessibilityTraits> = const { OnceCell::new() };
+    }
+    TRAITS.with(|traits| {
+        *traits.get_or_init(|| {
+            let field = UITextField::new(mtm);
+            let object: &NSObject = &field;
+            object.accessibilityTraits(mtm)
+        })
+    })
+}
+
+fn role_traits(role: AccessibilityRole, mtm: MainThreadMarker) -> UIAccessibilityTraits {
     // SAFETY: UIKit accessibility trait constants are immutable process-wide
     // values exported by the linked framework.
     unsafe {
@@ -860,7 +876,7 @@ fn role_traits(role: AccessibilityRole) -> UIAccessibilityTraits {
             | AccessibilityRole::Tab
             | AccessibilityRole::DropdownList => UIAccessibilityTraitButton,
             AccessibilityRole::StaticText => UIAccessibilityTraitStaticText,
-            AccessibilityRole::TextField => UIAccessibilityTraitNone,
+            AccessibilityRole::TextField => text_field_traits(mtm),
             AccessibilityRole::Image => UIAccessibilityTraitImage,
             AccessibilityRole::ValuePicker => UIAccessibilityTraitAdjustable,
             AccessibilityRole::Header | AccessibilityRole::Dialog => UIAccessibilityTraitHeader,
@@ -875,14 +891,14 @@ fn role_traits(role: AccessibilityRole) -> UIAccessibilityTraits {
             | AccessibilityRole::TabBar
             | AccessibilityRole::List
             | AccessibilityRole::ListItem
-            | AccessibilityRole::RadioGroup => named_role_traits(role),
+            | AccessibilityRole::RadioGroup => named_role_traits(role, mtm),
         }
     }
 }
 
 /// The VoiceOver traits of the roles beyond Compose's own. A toolbar, a
 /// menu, a tab bar and a list carry no label, so they are never elements.
-fn named_role_traits(role: AccessibilityRole) -> UIAccessibilityTraits {
+fn named_role_traits(role: AccessibilityRole, mtm: MainThreadMarker) -> UIAccessibilityTraits {
     // SAFETY: UIKit accessibility trait constants are immutable process-wide
     // values exported by the linked framework.
     unsafe {
@@ -912,7 +928,7 @@ fn named_role_traits(role: AccessibilityRole) -> UIAccessibilityTraits {
             | AccessibilityRole::DropdownList
             | AccessibilityRole::ValuePicker
             | AccessibilityRole::Header
-            | AccessibilityRole::Dialog => role_traits(role),
+            | AccessibilityRole::Dialog => role_traits(role, mtm),
         }
     }
 }
@@ -976,17 +992,10 @@ fn rotor_action(
 /// The text field that holds app focus and publishes its caret, with its
 /// virtual id: the one VoiceOver edits through the keyboard's text input
 /// view rather than through a plain element.
-fn reader_field<'a>(
-    elements: &'a [AccessibilityElement],
-    ids: &[i32],
-) -> Option<(i32, &'a AccessibilityElement)> {
-    elements
-        .iter()
-        .zip(ids)
-        .find(|(element, _)| {
-            element.role.is_text_field() && element.focused && element.text_selection.is_some()
-        })
-        .map(|(element, id)| (*id, element))
+fn reader_field(elements: &[AccessibilityElement]) -> Option<(usize, &AccessibilityElement)> {
+    elements.iter().enumerate().find(|(_, element)| {
+        element.role.is_text_field() && element.focused && element.text_selection.is_some()
+    })
 }
 
 /// What the person set under Settings, Accessibility and Display: the

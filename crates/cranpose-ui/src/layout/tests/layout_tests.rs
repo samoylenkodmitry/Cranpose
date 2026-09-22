@@ -2113,6 +2113,49 @@ fn semantics_tree_derives_roles_from_configuration() -> Result<(), NodeError> {
 }
 
 #[test]
+fn recycled_node_generation_reaches_every_semantics_snapshot() -> Result<(), NodeError> {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let make_node = || {
+        LayoutNode::new(
+            Modifier::empty().content_description("Receipt"),
+            Rc::new(MaxSizePolicy),
+        )
+    };
+    let mut applier = MemoryApplier::new();
+    let node_id = applier.create(Box::new(make_node()));
+    measure_layout(&mut applier, node_id, Size::new(100.0, 100.0))?;
+    applier.remove(node_id)?;
+    applier.insert_with_id(node_id, Box::new(make_node()))?;
+    let generation = applier.node_generation(node_id);
+    assert_ne!(generation, 0);
+    let measurements = measure_layout(&mut applier, node_id, Size::new(100.0, 100.0))?;
+    assert_eq!(
+        measurements
+            .semantics_tree()
+            .expect("measured semantics")
+            .root()
+            .node_generation,
+        generation
+    );
+    let measured_layout = measurements.layout_tree().expect("measured layout");
+    let retained_layout =
+        build_layout_tree_from_applier(&mut applier, node_id)?.expect("retained layout");
+    for layout in [measured_layout, retained_layout] {
+        assert_eq!(layout.root().node_generation, generation);
+        assert_eq!(
+            build_semantics_tree_from_layout_tree(&layout)
+                .root()
+                .node_generation,
+            generation
+        );
+    }
+    let retained_semantics =
+        build_semantics_tree_from_applier(&mut applier, node_id)?.expect("retained semantics");
+    assert_eq!(retained_semantics.root().node_generation, generation);
+    Ok(())
+}
+
+#[test]
 fn re_recording_semantics_reopens_the_snapshot() -> Result<(), NodeError> {
     let _app_context = crate::render_state::app_context_test_scope();
     use std::{cell::Cell, rc::Rc as StdRc};

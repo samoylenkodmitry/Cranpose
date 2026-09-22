@@ -529,6 +529,7 @@ fn drawn_controls_become_elements_positioned_inside_their_canvas() {
             .with_click_label("Reset")
             .with_enabled(false),
     ];
+    root.node_generation = 9;
     let bounds =
         HashMap::from_iter([(canvas_id, AccessibilityRect::new(20.0, 100.0, 200.0, 300.0))]);
 
@@ -536,6 +537,7 @@ fn drawn_controls_become_elements_positioned_inside_their_canvas() {
 
     assert_eq!(projected.len(), 3);
     assert!(projected.iter().all(|element| element.node_id == canvas_id));
+    assert!(projected.iter().all(|element| element.node_generation == 9));
     assert_eq!(
         projected
             .iter()
