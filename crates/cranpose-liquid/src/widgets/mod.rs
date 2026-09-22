@@ -9,6 +9,7 @@ mod menu;
 mod nav_bar;
 mod search_field;
 mod segmented;
+mod selection;
 mod slider;
 mod tab_bar;
 mod tab_lighting;

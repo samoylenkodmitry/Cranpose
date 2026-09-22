@@ -985,7 +985,7 @@ impl Composer {
         self.core.parent_stack.borrow_mut()
     }
 
-    fn current_parent_hint(&self) -> Option<NodeId> {
+    pub(crate) fn current_parent_hint(&self) -> Option<NodeId> {
         let stack = self.core.parent_stack.borrow();
         let stack_hint = stack
             .last()
@@ -2088,7 +2088,7 @@ impl Composer {
 
     fn attach_root_nodes(&self, root_nodes: Vec<NodeId>) {
         for id in root_nodes {
-            self.attach_to_parent_with_mode(id, true);
+            self.attach_to_parent(id);
         }
     }
 

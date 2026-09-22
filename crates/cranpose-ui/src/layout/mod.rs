@@ -363,6 +363,8 @@ pub struct SemanticsNode {
     pub description: Option<String>,
     pub state_description: Option<String>,
     pub on_click_label: Option<String>,
+    /// Direct activation callback for keyboard and assistive technology.
+    pub on_click: Option<SemanticsCustomAction>,
     /// What this control does when a screen reader asks for its long press.
     pub on_long_click: Option<SemanticsLongClick>,
     /// What the long press does, as a verb phrase a reader reads out.
@@ -452,6 +454,7 @@ impl Default for SemanticsNode {
             description: None,
             state_description: None,
             on_click_label: None,
+            on_click: None,
             on_long_click: None,
             on_long_click_label: None,
             on_magic_tap: None,
@@ -909,9 +912,9 @@ pub fn build_semantics_tree_from_applier(
             let config = layout.semantics_configuration();
             let children = layout.children.clone();
             layout.clear_needs_semantics();
-            Some((role, config, children))
+            Some((role, config, children, state.size()))
         }) {
-            Ok(Some((role, config, child_ids))) => {
+            Ok(Some((role, config, child_ids, size))) => {
                 let child_ids = children_in_this_window(applier, child_ids);
                 let mut children = Vec::with_capacity(child_ids.len());
                 for child_id in child_ids {
@@ -920,7 +923,7 @@ pub fn build_semantics_tree_from_applier(
                     }
                 }
                 return Ok(Some(semantics_node_from_parts(
-                    node_id, role, config, children,
+                    node_id, role, config, children, size,
                 )));
             }
             Ok(None) => return Ok(None),
@@ -936,9 +939,9 @@ pub fn build_semantics_tree_from_applier(
             let config = collect_semantics_from_modifier(&subcompose.modifier());
             let children = subcompose.active_children();
             subcompose.clear_needs_semantics();
-            Some((config, children))
+            Some((config, children, state.size()))
         }) {
-            Ok(Some((config, child_ids))) => {
+            Ok(Some((config, child_ids, size))) => {
                 let child_ids = children_in_this_window(applier, child_ids);
                 let mut children = Vec::with_capacity(child_ids.len());
                 for child_id in child_ids {
@@ -951,6 +954,7 @@ pub fn build_semantics_tree_from_applier(
                     SemanticsRole::Subcompose,
                     config,
                     children,
+                    size,
                 )))
             }
             Ok(None) | Err(NodeError::TypeMismatch { .. }) | Err(NodeError::Missing { .. }) => {
@@ -3194,6 +3198,7 @@ fn semantics_node_from_parts(
     mut role: SemanticsRole,
     config: Option<SemanticsConfiguration>,
     children: Vec<SemanticsNode>,
+    size: Size,
 ) -> SemanticsNode {
     let mut node = SemanticsNode {
         node_id,
@@ -3213,7 +3218,13 @@ fn semantics_node_from_parts(
         node.widget_role = config.role;
         node.description = config.content_description;
         node.state_description = config.state_description;
-        node.on_click_label = config.on_click_label;
+        node.on_click_label = config.on_click_label.or_else(|| {
+            config
+                .on_click
+                .as_ref()
+                .and_then(|action| (!action.label.is_empty()).then(|| action.label.clone()))
+        });
+        node.on_click = config.on_click;
         node.on_long_click = config.on_long_click;
         node.on_long_click_label = config.on_long_click_label;
         node.on_magic_tap = config.on_magic_tap;
@@ -3228,7 +3239,11 @@ fn semantics_node_from_parts(
         node.editable_text = config.is_editable_text;
         node.multiline = config.multiline;
         node.hidden = config.hidden;
-        node.is_modal = config.is_modal;
+        node.is_modal = config.is_modal
+            && size.width > 0.0
+            && size.height > 0.0
+            && size.width.is_finite()
+            && size.height.is_finite();
         node.merge_descendants = config.merge_descendants;
         node.selectable_group = config.selectable_group;
         node.pane_title = config.pane_title;
@@ -3298,6 +3313,7 @@ fn build_semantics_node_from_live_nodes(
         role,
         config,
         children,
+        node.size,
     ))
 }
 
@@ -3442,6 +3458,7 @@ fn build_semantics_node_from_layout_box(layout_box: &LayoutBox) -> SemanticsNode
         semantics_role_from_layout_box(layout_box),
         collect_semantics_from_modifier(&layout_box.node_data.modifier),
         children,
+        Size::new(layout_box.rect.width, layout_box.rect.height),
     )
 }
 

@@ -1,6 +1,43 @@
 use super::*;
 
 #[test]
+fn deferred_reparenting_removes_the_node_from_its_previous_container() {
+    let (handle, _runtime) = runtime_handle();
+    let mut slots = SlotTable::default();
+    let mut applier = test_applier();
+    let first = applier.create(Box::new(RecordingNode::default()));
+    let second = applier.create(Box::new(RecordingNode::default()));
+    let control = applier.create(Box::new(RecordingNode::default()));
+    assert!(insert_child_with_reparenting(&mut applier, first, control));
+    let (composer, slots_host, applier_host) =
+        setup_composer(&mut slots, &mut applier, handle, None);
+    composer.push_parent(second);
+    composer.attach_to_parent(control);
+    composer.pop_parent();
+    let commands = composer.take_commands();
+    drop(composer);
+    teardown_composer(&mut slots, &mut applier, slots_host, applier_host);
+    commands.apply(&mut applier).expect("apply parent change");
+    assert!(
+        applier
+            .with_node(first, |node: &mut RecordingNode| node.children.is_empty())
+            .expect("first container")
+    );
+    assert_eq!(
+        applier
+            .with_node(second, |node: &mut RecordingNode| node.children.clone())
+            .expect("second container"),
+        vec![control]
+    );
+    assert_eq!(
+        applier
+            .with_node(control, |node: &mut RecordingNode| node.parent)
+            .expect("control"),
+        Some(second)
+    );
+}
+
+#[test]
 fn slots_host_into_table_reports_live_host_references() {
     let slots_host = Rc::new(SlotsHost::new(SlotTable::new()));
     let _held = Rc::clone(&slots_host);

@@ -300,14 +300,8 @@ impl HitRegion {
             return;
         }
 
-        let (local_event, local_position) = self.localize_event(&event);
-        Self::dispatch_pointer_inputs(modifier_slices.pointer_inputs(), &local_event);
-
-        if event.kind == PointerEventKind::Down && !local_event.is_consumed() {
-            for handler in modifier_slices.click_handlers() {
-                handler(local_position);
-            }
-        }
+        let (local_event, _) = self.localize_event(&event);
+        modifier_slices.dispatch_pointer_event(local_event);
     }
 
     fn dispatch_cached_handlers(&self, event: PointerEvent) {

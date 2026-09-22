@@ -46,6 +46,18 @@ fn fresh_node() -> LayoutNode {
 }
 
 #[test]
+fn bubbling_preserves_the_layout_nodes_existing_owner() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let mut node = fresh_node();
+    node.set_parent_for_bubbling(41);
+    node.set_parent_for_bubbling(42);
+    assert_eq!(node.parent(), Some(41));
+    node.on_removed_from_parent();
+    node.set_parent_for_bubbling(42);
+    assert_eq!(node.parent(), Some(42));
+}
+
+#[test]
 fn modifier_slices_cache_reuses_unique_snapshot_allocation() {
     let _app_context = crate::render_state::app_context_test_scope();
     let mut node = fresh_node();

@@ -20,31 +20,38 @@ struct ModalEntry {
     on_back: Rc<dyn Fn()>,
 }
 
-thread_local! {
-    static MODALS: RefCell<Vec<ModalEntry>> = const { RefCell::new(Vec::new()) };
-    static NEXT_ID: Cell<u64> = const { Cell::new(1) };
-    static DEPTH_COUNT: Cell<usize> = const { Cell::new(0) };
-    static DEPTH: RefCell<Option<OwnedMutableState<usize>>> = const { RefCell::new(None) };
+pub(crate) struct ModalState {
+    entries: RefCell<Vec<ModalEntry>>,
+    next_id: Cell<u64>,
+    depth: RefCell<Option<OwnedMutableState<usize>>>,
 }
 
-fn depth_state() -> Option<MutableState<usize>> {
-    DEPTH.with(|cell| {
-        let mut cell = cell.borrow_mut();
-        if cell.is_none() {
-            *cell = try_mutableStateOf(DEPTH_COUNT.with(Cell::get))
+impl ModalState {
+    pub(crate) fn new() -> Self {
+        Self {
+            entries: RefCell::new(Vec::new()),
+            next_id: Cell::new(1),
+            depth: RefCell::new(None),
+        }
+    }
+
+    fn depth_state(&self) -> Option<MutableState<usize>> {
+        let mut state = self.depth.borrow_mut();
+        if state.is_none() {
+            *state = try_mutableStateOf(self.entries.borrow().len())
                 .map(|depth| MutableState::retain(&depth));
         }
-        cell.as_ref().map(OwnedMutableState::handle)
-    })
-}
+        state.as_ref().map(OwnedMutableState::handle)
+    }
 
-fn publish_depth() {
-    let depth = MODALS.with(|modals| modals.borrow().len());
-    DEPTH_COUNT.with(|count| count.set(depth));
-    if let Some(state) = DEPTH.with(|cell| cell.borrow().as_ref().map(OwnedMutableState::handle))
-        && state.get() != depth
-    {
-        state.set(depth);
+    fn publish_depth(&self) {
+        let depth = self.entries.borrow().len();
+        let state = self.depth.borrow().as_ref().map(OwnedMutableState::handle);
+        if let Some(state) = state
+            && state.get() != depth
+        {
+            state.set(depth);
+        }
     }
 }
 
@@ -52,46 +59,55 @@ fn publish_depth() {
 pub struct ModalRegistration {
     id: u64,
     depth: usize,
+    app_context: crate::render_state::AppContextId,
 }
 
 impl Drop for ModalRegistration {
     fn drop(&mut self) {
-        MODALS.with(|modals| modals.borrow_mut().retain(|entry| entry.id != self.id));
-        publish_depth();
-        if crate::render_state::has_current_app_context() {
+        crate::render_state::enter_app_context_by_id(self.app_context, || {
+            crate::render_state::with_modal_state(|state| {
+                state
+                    .entries
+                    .borrow_mut()
+                    .retain(|entry| entry.id != self.id);
+                state.publish_depth();
+            });
             crate::text_field_focus::clear_focus_for_closed_modal(self.depth);
-        }
+        });
     }
 }
 
 /// Pushes a modal surface onto the stack. The innermost registration is the one
 /// [`dispatch_modal_back`] asks to close.
+/// The registration belongs to the current [`crate::AppContext`].
 pub fn register_modal(on_back: Rc<dyn Fn()>) -> ModalRegistration {
-    let id = NEXT_ID.with(|next| {
-        let id = next.get();
-        next.set(id + 1);
-        id
-    });
-    let depth = MODALS.with(|modals| {
-        let mut modals = modals.borrow_mut();
-        modals.push(ModalEntry { id, on_back });
-        modals.len()
-    });
-    publish_depth();
-    ModalRegistration { id, depth }
+    let app_context = crate::render_state::current_app_context_id();
+    crate::render_state::with_modal_state(|state| {
+        let id = state.next_id.get();
+        state.next_id.set(id + 1);
+        state.entries.borrow_mut().push(ModalEntry { id, on_back });
+        let depth = state.entries.borrow().len();
+        state.publish_depth();
+        ModalRegistration {
+            id,
+            depth,
+            app_context,
+        }
+    })
 }
 
 /// How many modal surfaces are open. Reading this in a composable subscribes to
 /// it, so the reader recomposes when a modal opens or closes.
 pub fn modal_depth() -> usize {
-    match depth_state() {
-        Some(state) => state.get(),
-        None => DEPTH_COUNT.with(Cell::get),
-    }
+    crate::render_state::with_modal_state(|state| {
+        state
+            .depth_state()
+            .map_or_else(|| state.entries.borrow().len(), |depth| depth.get())
+    })
 }
 
 pub(crate) fn current_modal_depth() -> usize {
-    DEPTH_COUNT.with(Cell::get)
+    crate::render_state::with_modal_state(|state| state.entries.borrow().len())
 }
 
 /// CompositionLocal carrying the modal depth at which content is being
@@ -124,8 +140,9 @@ pub fn local_modal_depth() -> CompositionLocal<usize> {
 /// still takes it, because the screen behind a modal must not react to a back
 /// gesture aimed at the modal.
 pub fn dispatch_modal_back() -> bool {
-    let innermost = MODALS.with(|modals| {
-        modals
+    let innermost = crate::render_state::with_modal_state(|state| {
+        state
+            .entries
             .borrow()
             .last()
             .map(|entry| Rc::clone(&entry.on_back))
@@ -139,70 +156,14 @@ pub fn dispatch_modal_back() -> bool {
     }
 }
 
-/// Clears every registration. Used by tests and by host teardown so one
-/// composition's modals never outlive it.
+/// Clears every registration in the current [`crate::AppContext`].
 pub fn clear_modals() {
-    MODALS.with(|modals| modals.borrow_mut().clear());
-    publish_depth();
+    crate::render_state::with_modal_state(|state| {
+        state.entries.borrow_mut().clear();
+        state.publish_depth();
+    });
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_innermost_modal_takes_the_back_request() {
-        clear_modals();
-        let outer = Rc::new(Cell::new(0u32));
-        let inner = Rc::new(Cell::new(0u32));
-        let outer_counter = Rc::clone(&outer);
-        let inner_counter = Rc::clone(&inner);
-
-        let _outer = register_modal(Rc::new(move || outer_counter.set(outer_counter.get() + 1)));
-        let inner_registration =
-            register_modal(Rc::new(move || inner_counter.set(inner_counter.get() + 1)));
-
-        assert!(dispatch_modal_back());
-        assert_eq!(inner.get(), 1);
-        assert_eq!(outer.get(), 0);
-
-        drop(inner_registration);
-        assert!(dispatch_modal_back());
-        assert_eq!(outer.get(), 1);
-        clear_modals();
-    }
-
-    #[test]
-    fn a_back_request_with_no_modal_open_is_not_taken() {
-        clear_modals();
-        assert!(!dispatch_modal_back());
-    }
-
-    #[test]
-    fn the_depth_counts_what_is_open_and_falls_back_to_zero() {
-        clear_modals();
-        assert_eq!(modal_depth(), 0);
-
-        let outer = register_modal(Rc::new(|| {}));
-        assert_eq!(modal_depth(), 1);
-        let inner = register_modal(Rc::new(|| {}));
-        assert_eq!(modal_depth(), 2);
-
-        drop(inner);
-        assert_eq!(modal_depth(), 1);
-        drop(outer);
-        assert_eq!(modal_depth(), 0);
-    }
-
-    #[test]
-    fn registrations_leave_the_stack_when_dropped() {
-        clear_modals();
-        {
-            let _first = register_modal(Rc::new(|| {}));
-            let _second = register_modal(Rc::new(|| {}));
-            assert_eq!(MODALS.with(|modals| modals.borrow().len()), 2);
-        }
-        assert_eq!(MODALS.with(|modals| modals.borrow().len()), 0);
-        assert!(!dispatch_modal_back());
-    }
-}
+#[path = "tests/modal_tests.rs"]
+mod tests;

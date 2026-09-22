@@ -26,8 +26,7 @@ use std::rc::Rc;
 
 use cranpose_app_shell::AppShell;
 use cranpose_core::location_key;
-use cranpose_foundation::PointerEvent;
-use cranpose_render_common::{HitTestTarget, RenderScene, Renderer};
+use cranpose_render_common::{RenderScene, Renderer, graph::RenderGraph, graph_scene::Scene};
 use cranpose_ui::{LayoutTree, TextMeasurer};
 use cranpose_ui_graphics::{Point, Rect, Size};
 
@@ -143,10 +142,10 @@ where
     /// Returns true if the click hit a UI element, false otherwise.
     pub fn click_at(&mut self, x: f32, y: f32) -> bool {
         self.shell.set_cursor(x, y);
-        self.shell.pointer_pressed();
-        self.shell.pointer_released();
+        let pressed = self.shell.pointer_pressed();
+        let released = self.shell.pointer_released();
         self.wait_for_idle();
-        true
+        pressed || released
     }
 
     /// Move the cursor to the given coordinates.
@@ -437,27 +436,37 @@ fn extract_rects_from_layout(layout: &LayoutTree) -> Vec<(Rect, Option<String>)>
     results
 }
 
-/// A simple test renderer for robot tests.
+/// A headless renderer using the production scene and input geometry.
 ///
-/// This renderer doesn't actually render anything, but provides the
-/// Renderer trait implementation needed for testing.
+/// Controls receive pointer and accessibility actions without a GPU or window.
 #[derive(Default)]
 pub struct TestRenderer {
-    scene: TestScene,
+    scene: Scene,
     text_measurer: Option<Rc<dyn TextMeasurer>>,
 }
 
 impl TestRenderer {
+    /// Creates a renderer using the supplied text measurement service.
     pub fn with_text_measurer(text_measurer: Rc<dyn TextMeasurer>) -> Self {
         Self {
-            scene: TestScene,
+            scene: Scene::default(),
             text_measurer: Some(text_measurer),
         }
+    }
+
+    fn install_graph(&mut self, graph: RenderGraph) {
+        cranpose_render_common::hit_graph::collect_hits_from_graph(
+            &graph.root,
+            cranpose_render_common::graph::ProjectiveTransform::identity(),
+            &mut self.scene,
+            None,
+        );
+        self.scene.replace_graph(graph);
     }
 }
 
 impl Renderer for TestRenderer {
-    type Scene = TestScene;
+    type Scene = Scene;
     type Error = ();
 
     fn attach_app_context_services(&mut self, app_context: &cranpose_ui::AppContext) {
@@ -476,49 +485,32 @@ impl Renderer for TestRenderer {
 
     fn rebuild_scene(
         &mut self,
-        _layout_tree: &LayoutTree,
+        layout_tree: &LayoutTree,
         _viewport: Size,
     ) -> Result<(), Self::Error> {
+        self.scene.clear();
+        self.install_graph(
+            cranpose_render_common::scene_builder::build_graph_from_layout_tree(
+                layout_tree.root(),
+                1.0,
+            ),
+        );
         Ok(())
     }
 
     fn rebuild_scene_from_applier(
         &mut self,
-        _applier: &mut cranpose_core::MemoryApplier,
-        _root: cranpose_core::NodeId,
+        applier: &mut cranpose_core::MemoryApplier,
+        root: cranpose_core::NodeId,
         _viewport: Size,
     ) -> Result<(), Self::Error> {
+        self.scene.clear();
+        if let Some(graph) =
+            cranpose_render_common::scene_builder::build_graph_from_applier(applier, root, 1.0)
+        {
+            self.install_graph(graph);
+        }
         Ok(())
-    }
-}
-
-/// The scene used by TestRenderer.
-#[derive(Default)]
-pub struct TestScene;
-
-impl RenderScene for TestScene {
-    type HitTarget = TestHitTarget;
-
-    fn clear(&mut self) {}
-
-    fn hit_test(&self, _x: f32, _y: f32) -> Vec<Self::HitTarget> {
-        vec![TestHitTarget]
-    }
-
-    fn find_target(&self, _node_id: cranpose_core::NodeId) -> Option<Self::HitTarget> {
-        None
-    }
-}
-
-/// A hit target used by TestScene.
-#[derive(Default, Clone)]
-pub struct TestHitTarget;
-
-impl HitTestTarget for TestHitTarget {
-    fn dispatch(&self, _event: PointerEvent) {}
-
-    fn node_id(&self) -> cranpose_core::NodeId {
-        0
     }
 }
 
@@ -606,7 +598,7 @@ mod tests {
     }
 
     impl Renderer for NeverWarmRenderer {
-        type Scene = TestScene;
+        type Scene = Scene;
         type Error = ();
 
         fn attach_app_context_services(&mut self, app_context: &cranpose_ui::AppContext) {

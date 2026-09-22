@@ -1300,7 +1300,9 @@ impl cranpose_core::Node for SubcomposeLayoutNode {
     }
 
     fn set_parent_for_bubbling(&mut self, parent: NodeId) {
-        self.parent.set(Some(parent));
+        if self.parent.get().is_none() {
+            self.parent.set(Some(parent));
+        }
     }
 }
 

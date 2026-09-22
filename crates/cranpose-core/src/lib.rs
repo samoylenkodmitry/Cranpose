@@ -1430,9 +1430,12 @@ pub trait Node: Any {
     /// need to establish parent connections for bubble_measure_dirty without
     /// causing the full attachment lifecycle.
     ///
-    /// Default implementation uses the normal parent-attachment hook.
+    /// An existing parent is preserved until the structural attach operation
+    /// removes the node from its previous container.
     fn set_parent_for_bubbling(&mut self, parent: NodeId) {
-        self.on_attached_to_parent(parent);
+        if self.parent().is_none() {
+            self.on_attached_to_parent(parent);
+        }
     }
 
     /// Returns a recycle pool key when this node supports shell reuse.

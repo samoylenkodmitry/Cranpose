@@ -1008,7 +1008,9 @@ impl Node for LayoutNode {
     }
 
     fn set_parent_for_bubbling(&mut self, parent: NodeId) {
-        self.parent.set(Some(parent));
+        if self.parent.get().is_none() {
+            self.parent.set(Some(parent));
+        }
     }
 
     fn recycle_key(&self) -> Option<TypeId> {
