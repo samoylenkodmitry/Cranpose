@@ -2,6 +2,91 @@ use super::*;
 use crate::accessibility::element_with;
 
 #[test]
+fn recycled_node_generations_never_retain_accessibility_ids() {
+    for canvas_key in [None, Some(5)] {
+        let mut snapshot = AccessibilitySnapshot::default();
+        let original = element_with(7, canvas_key);
+        snapshot
+            .update(vec![original.clone()])
+            .expect("initial control");
+        let old_id = snapshot.ids[0];
+        let replacement = AccessibilityElement {
+            node_generation: 1,
+            ..original
+        };
+        snapshot
+            .update(vec![replacement])
+            .expect("recycled control");
+        assert_ne!(snapshot.ids[0], old_id);
+        assert!(snapshot.element(old_id).is_none());
+    }
+}
+
+#[test]
+fn recycled_generation_updates_structure_and_announcements() {
+    use crate::accessibility::{
+        AccessibilityRole, live_region_announcements, opened_dialog, pane_title_announcements,
+        spoken_changes, voiceover_same_structure,
+    };
+    let original = AccessibilityElement {
+        node_id: 7,
+        label: "Receipt".into(),
+        role: AccessibilityRole::Dialog,
+        live_region: Some(cranpose_ui::LiveRegionMode::Polite),
+        pane_title: Some("Receipt".into()),
+        ..Default::default()
+    };
+    let replacement = AccessibilityElement {
+        node_generation: 1,
+        ..original.clone()
+    };
+    let previous = [original];
+    let current = [replacement];
+    assert!(!voiceover_same_structure(&previous, &current));
+    assert_eq!(opened_dialog(&previous, &current), Some(7));
+    assert_eq!(live_region_announcements(&previous, &current).len(), 1);
+    assert_eq!(pane_title_announcements(&previous, &current).len(), 1);
+    assert_eq!(spoken_changes(&previous, &current), vec![false]);
+}
+
+#[test]
+fn removed_reader_cursor_starts_at_the_first_named_visible_control() {
+    use crate::accessibility::{AccessibilityRect, voiceover_replacement_focus};
+    let unnamed = AccessibilityElement {
+        label: String::new(),
+        ..element_with(1, None)
+    };
+    let hidden = AccessibilityElement {
+        label: "Hidden".into(),
+        bounds: AccessibilityRect::default(),
+        ..element_with(2, None)
+    };
+    let back = AccessibilityElement {
+        label: "Back".into(),
+        bounds: AccessibilityRect {
+            x: 0.0,
+            y: 0.0,
+            width: 44.0,
+            height: 44.0,
+        },
+        ..element_with(3, None)
+    };
+    let elements = [unnamed, hidden, back];
+    assert_eq!(
+        voiceover_replacement_focus(&elements, &[10, 11, 12], Some(9)),
+        Some(12)
+    );
+    assert_eq!(
+        voiceover_replacement_focus(&elements, &[10, 11, 12], Some(12)),
+        None
+    );
+    assert_eq!(
+        voiceover_replacement_focus(&elements, &[10, 11, 12], None),
+        None
+    );
+}
+
+#[test]
 fn removed_ids_never_target_replacements_or_reappearing_controls() {
     let mut snapshot = AccessibilitySnapshot::default();
     snapshot

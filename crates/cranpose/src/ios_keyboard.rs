@@ -75,6 +75,7 @@ fn tell_input_delegate(text_changed: bool) {
 pub(crate) fn describe_for_reader(
     label: &str,
     hint: Option<&str>,
+    value: Option<&str>,
     frame: CGRect,
     host: &UIView,
     identifier: &str,
@@ -82,16 +83,31 @@ pub(crate) fn describe_for_reader(
     let mtm = MainThreadMarker::new()?;
     VIEW.with(|cell| {
         let view = cell.borrow().clone()?;
+        if !view.isFirstResponder() {
+            return None;
+        }
+        if let Some(parent) = view.superview() {
+            view.setFrame(host.convertRect_toView(frame, Some(&parent)));
+        }
         let object: &NSObject = &view;
         object.setIsAccessibilityElement(true, mtm);
         object.setAccessibilityLabel(Some(&NSString::from_str(label)), mtm);
         object.setAccessibilityHint(hint.map(NSString::from_str).as_deref(), mtm);
+        object.setAccessibilityValue(value.map(NSString::from_str).as_deref(), mtm);
         object.setAccessibilityFrame(
             UIAccessibilityConvertFrameToScreenCoordinates(frame, host),
             mtm,
         );
         view.setAccessibilityIdentifier(Some(&NSString::from_str(identifier)));
         Some(view.into())
+    })
+}
+
+pub(crate) fn reader_input_active() -> bool {
+    VIEW.with(|cell| {
+        cell.borrow()
+            .as_ref()
+            .is_some_and(|view| view.isFirstResponder())
     })
 }
 
@@ -722,6 +738,7 @@ pub(crate) fn register() {
         return;
     };
     let view = KeyInputView::new(mtm);
+    view.setUserInteractionEnabled(false);
     if let Some(root) = crate::ios_file_picker::root_view_controller(mtm)
         && let Some(root_view) = root.view()
     {

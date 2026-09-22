@@ -27,7 +27,7 @@ impl AccessibilitySnapshot {
             .elements
             .iter()
             .zip(&self.ids)
-            .map(|(element, id)| ((element.node_id, element.canvas_key), *id))
+            .map(|(element, id)| (element.identity_key(), *id))
             .collect();
         let mut identities: HashMap<_, _> = HashMap::default();
         let mut indices = HashMap::default();
@@ -40,7 +40,7 @@ impl AccessibilitySnapshot {
                     identity.0, identity.1,
                 ));
             }
-            let id = match previous.remove(&identity) {
+            let id = match previous.remove(&element.identity_key()) {
                 Some(id) => id,
                 None => {
                     last_id = last_id

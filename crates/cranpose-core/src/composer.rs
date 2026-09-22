@@ -1086,6 +1086,15 @@ impl Composer {
         }
     }
 
+    /// Returns a node's parent, or `None` for a root node.
+    ///
+    /// Returns an error when the node is no longer present in the applier.
+    pub fn node_parent(&self, node_id: NodeId) -> Result<Option<NodeId>, NodeError> {
+        self.borrow_applier()
+            .get_mut(node_id)
+            .map(|node| node.parent())
+    }
+
     /// Gets the children of a node from the Applier.
     ///
     /// This is used by SubcomposeLayoutNode to get children of virtual nodes

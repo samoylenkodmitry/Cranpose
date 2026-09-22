@@ -641,6 +641,17 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
         self.state.set_reusable_pool_limits(per_type, untyped);
     }
 
+    pub(crate) fn focused_slot(&self) -> Option<SlotId> {
+        let mut node_id = crate::active_focus_target()?;
+        while node_id != self.root_id {
+            if let Some(slot) = self.state.active_slot_for_node(node_id) {
+                return Some(slot);
+            }
+            node_id = self.composer.node_parent(node_id).ok()??;
+        }
+        None
+    }
+
     pub(crate) fn recycle_active_slots_where(&mut self, predicate: impl FnMut(SlotId) -> bool) {
         let disposed = self.state.recycle_active_slots_where(predicate);
         debug_assert!(

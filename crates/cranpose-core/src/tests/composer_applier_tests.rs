@@ -1,6 +1,26 @@
 use super::*;
 
 #[test]
+fn node_parent_distinguishes_roots_descendants_and_missing_nodes() {
+    let (handle, _runtime) = runtime_handle();
+    let mut slots = SlotTable::default();
+    let mut applier = test_applier();
+    let root = applier.create(Box::new(RecordingNode::default()));
+    let control = applier.create(Box::new(RecordingNode::default()));
+    assert!(insert_child_with_reparenting(&mut applier, root, control));
+    let (composer, slots_host, applier_host) =
+        setup_composer(&mut slots, &mut applier, handle, None);
+    assert_eq!(composer.node_parent(root).expect("root exists"), None);
+    assert_eq!(
+        composer.node_parent(control).expect("control exists"),
+        Some(root)
+    );
+    assert!(composer.node_parent(NodeId::MAX).is_err());
+    drop(composer);
+    teardown_composer(&mut slots, &mut applier, slots_host, applier_host);
+}
+
+#[test]
 fn deferred_reparenting_removes_the_node_from_its_previous_container() {
     let (handle, _runtime) = runtime_handle();
     let mut slots = SlotTable::default();

@@ -50,6 +50,9 @@ Platform IDs stay attached to a control while it remains in the published tree,
 including when canvas children reorder or nearby controls disappear. Removed IDs
 are retired for the bridge's lifetime, so a delayed reader request cannot activate
 a replacement control. Canvas keys use their full 64-bit identity.
+The identity includes the allocation generation of each layout node, so a new
+control that reuses a removed node's storage receives a new platform ID. Layout
+and semantics snapshots carry this generation automatically.
 
 On desktop, editable fields expose every text run beyond the first 255 lines or
 chunks. Caret and selection positions refer to the published runs; requests for a

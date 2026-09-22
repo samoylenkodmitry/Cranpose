@@ -456,6 +456,9 @@ fn measure_lazy_list_internal(
         measured_item_cache,
     };
 
+    let focused_item =
+        measure_focused_lazy_item(scope, &item_measure_inputs, &mut retained_measurement_batch);
+
     let measure_item = |index: usize| -> LazyListMeasuredItem {
         if !skipped_slots_recycled.get()
             && recycle_forward_skipped_active_slots(
@@ -475,45 +478,16 @@ fn measure_lazy_list_internal(
         )
     };
     let mut measure_item = measure_item;
-    let active_scroll = scroll_delta_for_direction.abs() > 0.001;
-    let result = if active_scroll {
-        let measured_item_cache_for_policy = Rc::clone(measured_item_cache);
-        let uncached_beyond_frontier = Cell::new(ACTIVE_SCROLL_UNCACHED_BEYOND_BOUNDS_FRONTIER);
-        measure_lazy_list_with_beyond_bounds_policy(
-            items_count,
-            state,
-            raw_viewport_size,
-            cross_axis_size,
-            config,
-            &mut measure_item,
-            |index| {
-                let key_slot_id = content.get_key(index).to_slot_id();
-                let content_type = content.get_content_type(index);
-                if measured_item_cache_for_policy.borrow().has_candidate(
-                    index,
-                    key_slot_id,
-                    content_type,
-                ) {
-                    return true;
-                }
-                let remaining = uncached_beyond_frontier.get();
-                if remaining == 0 {
-                    return false;
-                }
-                uncached_beyond_frontier.set(remaining - 1);
-                true
-            },
-        )
-    } else {
-        measure_lazy_list(
-            items_count,
-            state,
-            raw_viewport_size,
-            cross_axis_size,
-            config,
-            &mut measure_item,
-        )
-    };
+    let mut result = measure_lazy_viewport(
+        &item_measure_inputs,
+        config,
+        raw_viewport_size,
+        scroll_delta_for_direction.abs() > 0.001,
+        &mut measure_item,
+    );
+    if let Some(item) = focused_item {
+        place_focused_lazy_item(&mut result, item, &item_measure_inputs, config.spacing);
+    }
     if !retained_measurement_batch.is_empty() {
         scope.register_retained_measurements(&retained_measurement_batch);
     }
@@ -593,6 +567,105 @@ fn measure_lazy_list_internal(
             }
         }
     })
+}
+
+fn measure_lazy_viewport(
+    inputs: &LazyListItemMeasureInputs<'_>,
+    config: &LazyListMeasureConfig,
+    viewport_size: f32,
+    active_scroll: bool,
+    measure_item: &mut impl FnMut(usize) -> LazyListMeasuredItem,
+) -> LazyListMeasureResult {
+    let items_count = inputs.content.item_count();
+    if !active_scroll {
+        return measure_lazy_list(
+            items_count,
+            inputs.state,
+            viewport_size,
+            inputs.cross_axis_size,
+            config,
+            measure_item,
+        );
+    }
+    let uncached_beyond_frontier = Cell::new(ACTIVE_SCROLL_UNCACHED_BEYOND_BOUNDS_FRONTIER);
+    measure_lazy_list_with_beyond_bounds_policy(
+        items_count,
+        inputs.state,
+        viewport_size,
+        inputs.cross_axis_size,
+        config,
+        measure_item,
+        |index| {
+            let key_slot_id = inputs.content.get_key(index).to_slot_id();
+            let content_type = inputs.content.get_content_type(index);
+            if inputs
+                .measured_item_cache
+                .borrow()
+                .has_candidate(index, key_slot_id, content_type)
+            {
+                return true;
+            }
+            let remaining = uncached_beyond_frontier.get();
+            if remaining == 0 {
+                return false;
+            }
+            uncached_beyond_frontier.set(remaining - 1);
+            true
+        },
+    )
+}
+
+fn measure_focused_lazy_item(
+    scope: &mut SubcomposeMeasureScopeImpl<'_>,
+    inputs: &LazyListItemMeasureInputs<'_>,
+    retained_measurement_batch: &mut Vec<Rc<MeasuredNode>>,
+) -> Option<LazyListMeasuredItem> {
+    let slot = scope.focused_slot()?;
+    let Some(index) = inputs.content.get_index_by_slot_id(slot.raw()) else {
+        let _ = cranpose_core::run_in_mutable_snapshot(|| crate::FocusManager.clear_focus());
+        return None;
+    };
+    Some(measure_lazy_list_item(
+        scope,
+        index,
+        inputs,
+        retained_measurement_batch,
+    ))
+}
+
+fn place_focused_lazy_item(
+    result: &mut LazyListMeasureResult,
+    mut item: LazyListMeasuredItem,
+    inputs: &LazyListItemMeasureInputs<'_>,
+    spacing: f32,
+) {
+    let Err(position) = result
+        .visible_items
+        .binary_search_by_key(&item.index, |entry| entry.index)
+    else {
+        return;
+    };
+    let Some(anchor) = result.visible_items.first() else {
+        return;
+    };
+    let start = item.index.min(anchor.index);
+    let end = item.index.max(anchor.index);
+    let estimate = anchor.main_axis_size;
+    let mut distance = (end - start) as f32 * (estimate + spacing);
+    for (&index, cached) in &inputs.measured_item_cache.borrow().entries {
+        if (start..end).contains(&index)
+            && cached.item.key == inputs.content.get_key(index).to_slot_id()
+        {
+            distance += cached.item.main_axis_size - estimate;
+        }
+    }
+    item.offset = anchor.offset
+        + if item.index < anchor.index {
+            -distance
+        } else {
+            distance
+        };
+    result.visible_items.insert(position, item);
 }
 
 fn get_spacing(arrangement: LinearArrangement) -> f32 {

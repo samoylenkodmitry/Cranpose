@@ -419,6 +419,18 @@ impl SubcomposeState {
         self.slot_content_types.get(&slot_id).copied()
     }
 
+    /// Returns the active slot that owns a registered root node.
+    ///
+    /// Descendants must be resolved to their slot root by the caller. Reusable
+    /// and removed slots are excluded.
+    pub fn active_slot_for_node(&self, node_id: NodeId) -> Option<SlotId> {
+        self.mapping
+            .node_to_slot
+            .get(&node_id)
+            .copied()
+            .filter(|slot| self.live_slots.contains(slot))
+    }
+
     /// Starts a new subcompose pass.
     ///
     /// Call this before subcomposing the current frame so the state can
