@@ -1,50 +1,20 @@
 # Agent Notes for Cranpose
 
-- No unsafe code.
-- `unwrap()` is forbidden
-- Use KISS, DRY and SOLID; duplicated code of ten or more lines needs a shared abstraction.
-- Do every refactoring, code search, code analysis and code edit through the RustRover MCP (`mcp__rustrover__*`): `rename_refactoring` for renames, `apply_patch` and `create_new_file` for edits (never an ad hoc Python, sed or shell rewrite of a source file), `search_symbol`, `get_symbol_info` and `analyze_calls` for declarations, usages and call graphs (the IDE knows the code; a regex over its text does not, so `search_text` and `search_regex` are for strings and comments only, and `grep` never), `get_file_problems`, `lint_files` and `run_inspection_kts` for analysis, `reformat_file` for formatting; for text searches run `scripts/dev/ide_search.py text|regex|symbol|file <query> [--in <glob>]... [--context N]` from the project root, which asks the same IDE server and prints each hit as path, line and matched text. Pass `projectPath` on every call; when the tools are missing, open the tree in RustRover first (`open -a RustRover <path>`), and say so before any fallback.
-- Fix root causes completely; do not leave partial changes, deprecated paths or compatibility layers in this pre-alpha repository.
-- A wrong value fixed at one consumer is still wrong at the others; audit every consumer of that value before calling the bug fixed.
-- Review architecture, correctness and maintainability before completion; fix supported problems without inventing new ones.
-- Follow the [performance coding guide](docs/performance_coding_guide.md); reduce measured work and preserve exact pictures on shipped targets.
-- Use `cargo add` for dependencies and `cargo upgrade` for upgrades.
-- Use `anyhow` in applications and `thiserror` in libraries.
-- Use specific `Result<T, E>` errors for failure and `Option<T>` for absence.
-- Use idiomatic Rust names; composable functions use CamelCase.
-- Prefer `async`/`await` and Tokio for asynchronous work.
-- Document every public API reachable from a published crate root; all other code comments are forbidden (`scripts/dev/strip_private_docs.py <file>...` removes the rest).
-- Write unit tests for all public functions and methods; put integration tests in `tests/`.
-- do not write tests in the same file with the implementation; all tests should be under `/test*/` folder, declared with `#[cfg(test)] #[path = "tests/<name>.rs"] mod tests;` (`scripts/dev/move_inline_tests.py <file>...` moves an inline module out)
-- Do not hardcode configuration; consider parallelism and SIMD where measured benefits hold, including wasm.
-- `#[cfg(feature = "robot-app")]` is forbidden.
-- Use plain, direct explanations; omit historical labels, "migration", and conditional offers to fix known problems.
-- Use only small, fast, inexpensive models when subagents are requested.
-- Check `git status` and the current branch before work and before completion; isolate concurrent edits in a worktree.
-- Before diagnosing a red test, fetch `origin main` and rebase; confirm claimed fixes are ancestors of `HEAD`.
-- After a push, arm a CI watcher before the turn ends (`gh pr checks <n> --watch` under a monitor, or the desktop app's Auto-fix) and act on each result; a wait with no watcher is a stale session.
-- Keep related fixes in one PR; finish requested code changes before optional measurements or PR prose.
-- Never use `git reset`; preserve work with a stash when needed.
-- Worktrees share stashes: inspect contents, resolve the immutable stash hash, and apply only the intended work.
-- Run each `rm` as a standalone command, then verify separately; never chain it with another operation or loop body.
-- Never run ad hoc complex shell commands or pipelines; write a reusable script for the job, keep it under `scripts/` when it serves the repository, and run that.
-- Check draggable and droppable windows with `scripts/dev/drag_window.sh` (launch, windows, oswindows, screenwindows, shotwindow, drag, drag-pane, snap, key, cpu, trace, shot); never drive the pointer or the keyboard with ad hoc `cliclick` calls. `scripts/dev/check_tool_tear.sh <out-dir>` is the whole tear of a tool pane as one check: it reads the traces back and pictures only the torn window's region, never the whole screen.
-- Reclaim build artifacts only with `just gc` and `just gc-apply`; never remove `target/`, `build/`, source or uncommitted work by hand.
-- Install hooks once per clone with `just hooks`; stage new files before `just precommit` so diff checks include them.
-- Use the exact CI recipes and shipped features; change checks in `justfile`, never inline in workflows.
-- Release: a bare `v*` tag at green main, never a hand bump: [runbook](docs/release.md).
-- `just web` always uses release mode; `just android` assembles the Android demo release; root `perf*.sh` scripts run performance checks.
-- Prefer SSH builds on `samarch-1` or `macm3`; see [host details](docs/development_troubleshooting.md).
-- Both SSH hosts use zsh: upload a script and run it with Bash, or quote `bash -lc` without premature variable expansion.
-- On samarch-1, use `scripts/ci/with_host_lock.sh --shared` for builds and `--exclusive` for measurements; acquire the lock instead of polling load.
-- Invoke `run_robot_test.sh` bare: it takes the host lock itself, and an outer lock self-deadlocks.
-- Preserve command failures and stderr; a pipeline's final command or an absent error message does not prove success.
-- For nontrivial bugs: explore, record evidence, rank causes, compare architecture options, implement, verify and iterate.
-- Start bugs with a failing regression test; for a device UI bug, write the robot e2e test first.
-- Prove every optimization's correctness test fails when the optimization is deliberately broken; correctness takes priority over speed.
-- Hold the shared per-device lock for the entire FPS sequence; run ABAB then BABA without cooling waits and log temperatures before and after every run.
-- Measure production FPS on a physical display; Xvfb presentation measures software presentation.
-- Check system dialogs with device UI tests; iOS tests require USB and Settings > Developer > Enable UI Automation.
-- On GitHub 404 or unexpected permission errors, run `gh auth switch --user samoylenkodmitry`.
-- Check Jetpack Compose sources at ssh samarch `/media/huge/projects/android/androidx`; verify freshness before treating this mid-2023 checkout as current.
-- Route new lessons through [TIME_WASTERS.md](TIME_WASTERS.md); use short one-liners and remove duplicates or resolved incident notes.
+- No unsafe code or `unwrap()`. Keep KISS, DRY and SOLID; duplicated code of ten or more lines needs a shared abstraction.
+- Fix root causes and audit every consumer of a wrong value. Leave no partial fixes, deprecated paths or compatibility layers in this pre-alpha repo. Review architecture, correctness and maintainability before completion.
+- For implementation, read [Rust/API conventions](docs/agent-workflows.md#rust-and-api-conventions) and the [performance coding guide](docs/performance_coding_guide.md). Test every public function/method; all test bodies belong under `/test*/`, never beside implementation. Document public APIs only.
+- All code search, analysis, refactoring and edits use RustRover MCP with `projectPath`; read [code tools](docs/agent-workflows.md#code-tools).
+- Check branch/status at start and completion and after relevant git operations; isolate concurrent work. Never use `git reset`. Preserve unrelated and uncommitted work.
+
+- Keep tool results near 2,000 tokens by default; return relevant excerpts, failures and changed results. Save full logs to files and expand only when needed. Discover only needed tool schemas; reuse unchanged instructions and evidence.
+- Batch independent reads/checks. Wait 30–60 seconds for long jobs when supported; report progress between waits. Avoid tight polling, repeated status checks and unchanged log dumps.
+- Run targeted checks after meaningful edits and required broad checks before integration; rerun only for changed code, failures or new risks. Documentation-only edits need link/format validation, not product builds.
+- Work without subagents unless requested. When requested, use bounded tasks and minimal context; use only small, fast, inexpensive models. After two passes with no measurable progress, revisit the hypothesis or reference and change approach. Do not declare unfinished work complete.
+
+Read the matching workflow before the operation; do not load all references at startup:
+
+- Git changes, red tests, pushes and PRs: [Git and CI](docs/agent-workflows.md#git-and-ci); arm a CI watcher after pushes.
+- Builds, shell, remote hosts or artifact cleanup: [builds and shell](docs/agent-workflows.md#builds-and-shell).
+- Bug fixes and optimization: [bugs and performance](docs/agent-workflows.md#bugs-and-performance); failing regression first, measured work, exact pictures.
+- Device UI, dragging or Compose comparisons: [UI/platform references](docs/agent-workflows.md#ui-and-platform-references).
+- Releases or new lessons: [release and lessons](docs/agent-workflows.md#release-and-lessons). Keep notes short and remove resolved/duplicate incidents.
