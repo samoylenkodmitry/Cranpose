@@ -7,7 +7,10 @@ use crate::{
 };
 
 impl Composer {
-    fn recorded_node_parent(&self, id: NodeId) -> Option<NodeId> {
+    fn planned_node_parent(&self, id: NodeId) -> Option<NodeId> {
+        if let Some(parent) = self.current_parent_hint().filter(|parent| *parent != id) {
+            return Some(parent);
+        }
         let mut applier = self.borrow_applier();
         applier.get_mut(id).ok().and_then(|node| node.parent())
     }
@@ -88,7 +91,7 @@ impl Composer {
             );
             self.commands_mut().push(Command::update_node::<N>(id));
             self.attach_to_parent(id);
-            let parent_id = self.recorded_node_parent(id);
+            let parent_id = self.planned_node_parent(id);
             let recorded = self.with_slot_session_mut(|slots| {
                 slots.record_node_with_parent(id, slot_gen, parent_id, source)
             });
@@ -158,7 +161,7 @@ impl Composer {
         );
         self.commands_mut().push(Command::MountNode { id });
         self.attach_to_parent(id);
-        let parent_id = self.recorded_node_parent(id);
+        let parent_id = self.planned_node_parent(id);
         let recorded = self.with_slot_session_mut(|slots| {
             slots.record_node_with_parent(id, generation, parent_id, source)
         });
@@ -227,21 +230,20 @@ impl Composer {
         })
     }
 
-    fn attach_to_parent(&self, id: NodeId) {
-        self.attach_to_parent_with_mode(id, false);
-    }
-
     fn advance_recompose_child_cursor(&self) -> Option<usize> {
         let cursor = self.core.recompose_child_cursor.get()?;
         self.core.recompose_child_cursor.set(Some(cursor + 1));
         Some(cursor)
     }
 
-    pub(crate) fn attach_to_parent_with_mode(
-        &self,
-        id: NodeId,
-        force_reparent_current_parent: bool,
-    ) {
+    pub(crate) fn attach_to_parent(&self, id: NodeId) {
+        if self.attach_to_current_parent(id) {
+            return;
+        }
+        self.attach_without_parent_frame(id);
+    }
+
+    fn attach_to_current_parent(&self, id: NodeId) -> bool {
         let mut parent_stack = self.parent_stack();
         if let Some(parent_id) = parent_stack.last().map(|frame| frame.id) {
             let stale_root_parent = self.core.root.get() == Some(parent_id) && {
@@ -253,11 +255,11 @@ impl Composer {
                 self.set_root(None);
             } else {
                 let Some(frame) = parent_stack.last_mut() else {
-                    return;
+                    return false;
                 };
                 let attach_mode = frame.attach_mode;
                 if parent_id == id {
-                    return;
+                    return true;
                 }
                 if matches!(attach_mode, ParentAttachMode::DeferredSync) {
                     frame.new_children.push(id);
@@ -267,22 +269,7 @@ impl Composer {
                 {
                     let mut applier = self.borrow_applier();
                     if let Ok(child_node) = applier.get_mut(id) {
-                        let existing_parent = child_node.parent();
-                        let should_set = if force_reparent_current_parent {
-                            existing_parent != Some(parent_id)
-                        } else {
-                            match existing_parent {
-                                None => true,
-                                Some(existing) => {
-                                    let root_id = self.core.root.get();
-                                    parent_id != root_id.unwrap_or(0)
-                                        || existing == root_id.unwrap_or(0)
-                                }
-                            }
-                        };
-                        if should_set {
-                            child_node.set_parent_for_bubbling(parent_id);
-                        }
+                        child_node.set_parent_for_bubbling(parent_id);
                     }
                 }
                 if matches!(attach_mode, ParentAttachMode::ImmediateAppend) {
@@ -293,11 +280,13 @@ impl Composer {
                         bubble: DirtyBubble::LAYOUT_AND_MEASURE,
                     });
                 }
-                return;
+                return true;
             }
         }
-        drop(parent_stack);
+        false
+    }
 
+    fn attach_without_parent_frame(&self, id: NodeId) {
         let in_subcompose = !self.subcompose_stack().is_empty();
         if in_subcompose {
             let has_parent = {

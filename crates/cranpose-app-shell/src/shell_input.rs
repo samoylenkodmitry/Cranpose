@@ -256,8 +256,17 @@ where
                 .semantics_tree_for_input(app)
                 .and_then(|tree| activation_target(tree.root(), node_id, canvas_key))
         };
-        let Some((target_id, canvas_bounds)) = target else {
-            return false;
+        let (target_id, canvas_bounds) = match target {
+            Some(ActivationTarget::Direct(action)) => {
+                action.invoke();
+                return true;
+            }
+            Some(ActivationTarget::Edit(node_id)) => {
+                self.activate();
+                return cranpose_ui::request_focus_from_platform(node_id);
+            }
+            Some(ActivationTarget::Pointer(node_id, bounds)) => (node_id, bounds),
+            None => return false,
         };
         let position = self
             .with_layout_tree(|tree| activation_position(tree?.root(), target_id, canvas_bounds));
@@ -1884,11 +1893,17 @@ where
     }
 }
 
+enum ActivationTarget {
+    Direct(cranpose_foundation::SemanticsCustomAction),
+    Edit(NodeId),
+    Pointer(NodeId, Option<Rect>),
+}
+
 fn activation_target(
     node: &cranpose_ui::SemanticsNode,
     node_id: NodeId,
     canvas_key: Option<u64>,
-) -> Option<(NodeId, Option<Rect>)> {
+) -> Option<ActivationTarget> {
     if node.hidden {
         return None;
     }
@@ -1903,10 +1918,19 @@ fn activation_target(
     }
     if let Some(key) = canvas_key {
         let child = node.canvas_children.iter().find(|child| child.key == key)?;
-        return (child.enabled && child.clickable).then_some((node_id, Some(child.bounds)));
+        return (child.enabled && child.clickable)
+            .then_some(ActivationTarget::Pointer(node_id, Some(child.bounds)));
+    }
+    if let Some(action) = &node.on_click {
+        return Some(ActivationTarget::Direct(action.clone()));
+    }
+    if node.editable_text && node.focusable {
+        return Some(ActivationTarget::Edit(node_id));
     }
     node.actions.first().map(|action| match action {
-        cranpose_ui::SemanticsAction::Click { handler } => (handler.node_id(), None),
+        cranpose_ui::SemanticsAction::Click { handler } => {
+            ActivationTarget::Pointer(handler.node_id(), None)
+        }
     })
 }
 

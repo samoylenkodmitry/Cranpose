@@ -436,8 +436,9 @@ where
     if *seen_revision == Some(revision) {
         return None;
     }
-    *seen_revision = Some(revision);
-    Some(snapshot(shell))
+    let next = snapshot(shell);
+    *seen_revision = Some(shell.semantics_snapshot_revision());
+    Some(next)
 }
 
 #[cfg_attr(test, allow(dead_code))]

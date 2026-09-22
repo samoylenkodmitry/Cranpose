@@ -217,27 +217,34 @@ pub fn LiquidSegmentedControl(
                 "segmented-lens",
             );
 
-            Row(Modifier::empty(), RowSpec::default(), move || {
-                for (index, segment) in segments.iter().enumerate() {
-                    let is_selected = index == visual_index;
-                    let description = segment.description.clone();
-                    let cell = Modifier::empty()
-                        .size(Size::new(segment_width, SEGMENT_HEIGHT))
-                        .semantics(move |config| {
-                            config.role = Some(SemanticsWidgetRole::Button);
-                            config.is_clickable = true;
-                            config.selected = Some(is_selected);
-                            config.content_description = Some(description.clone());
-                        })
-                        .focusable();
-                    let content = Rc::clone(&segment.content);
-                    Box(
-                        cell,
-                        BoxSpec::default().content_alignment(Alignment::CENTER),
-                        move || content(is_selected),
-                    );
-                }
-            });
+            let semantic_selection = Rc::clone(&on_select);
+            Row(
+                Modifier::empty().selectable_group(),
+                RowSpec::default(),
+                move || {
+                    for (index, segment) in segments.iter().enumerate() {
+                        let is_selected = index == visual_index;
+                        let description = segment.description.clone();
+                        let on_select = Rc::clone(&semantic_selection);
+                        let cell = Modifier::empty()
+                            .size(Size::new(segment_width, SEGMENT_HEIGHT))
+                            .semantics(super::selection::selection_semantics(
+                                description,
+                                SemanticsWidgetRole::RadioButton,
+                                index,
+                                selected,
+                                on_select,
+                            ))
+                            .focusable();
+                        let content = Rc::clone(&segment.content);
+                        Box(
+                            cell,
+                            BoxSpec::default().content_alignment(Alignment::CENTER),
+                            move || content(is_selected),
+                        );
+                    }
+                },
+            );
 
             let gesture = Modifier::empty()
                 .size(Size::new(total_width, SEGMENT_HEIGHT))

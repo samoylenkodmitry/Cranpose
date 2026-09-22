@@ -1246,6 +1246,7 @@ impl SemanticsNode for TextFieldModifierNode {
         }
         config.text = Some(text);
         config.is_editable_text = true;
+        config.is_clickable = true;
         config.multiline = !matches!(self.line_limits, TextFieldLineLimits::SingleLine);
         let state = self.state;
         config.set_text = Some(cranpose_foundation::SemanticsSetText::new(move |text| {

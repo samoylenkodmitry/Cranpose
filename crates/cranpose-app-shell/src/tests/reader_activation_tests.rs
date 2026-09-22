@@ -1,4 +1,558 @@
+use cranpose_ui::widgets::dialog::{Dialog, DialogSpec};
+
 use super::*;
+
+thread_local! {
+    static READER_LENS_EVENTS: RefCell<Option<cranpose_core::EventSender<usize>>> = const { RefCell::new(None) };
+}
+
+#[test]
+fn controls_inserted_by_a_recomposed_loop_have_unique_semantic_nodes() {
+    let _guard = test_guard();
+    let captured = Rc::new(RefCell::new(None));
+    let content_state = Rc::clone(&captured);
+    let mut shell = AppShell::new(
+        HitGraphRenderer::default(),
+        location_key(file!(), line!(), column!()),
+        move || {
+            let count = rememberMutableStateOf(|| 0usize);
+            *content_state.borrow_mut() = Some(count);
+            let route = usize::from(count.get() > 0);
+            cranpose_ui::widgets::Scaffold(
+                Modifier::empty().fill_max_size(),
+                || {},
+                || {},
+                move |_| {
+                    let content_size = rememberMutableStateOf(Size::default);
+                    Box(
+                        Modifier::empty()
+                            .fill_max_size()
+                            .report_size_state(content_size),
+                        BoxSpec::default(),
+                        move || {
+                            if content_size.get().width <= 0.0 {
+                                return;
+                            }
+                            Box(
+                                Modifier::empty().fill_max_size(),
+                                BoxSpec::default(),
+                                move || {
+                                    reader_screen_body(count, route);
+                                },
+                            );
+                        },
+                    );
+                },
+            );
+        },
+    );
+    shell.set_semantics_enabled(true);
+    let count = captured.borrow().expect("choice count");
+    for expected in [0usize, 1, 2, 3, 4, 2, 0, 3] {
+        READER_LENS_EVENTS.with(|events| {
+            if let Some(sender) = events.borrow().as_ref() {
+                sender.send(expected);
+            }
+        });
+        for _ in 0..5 {
+            shell.update();
+        }
+        count.set(expected);
+        for _ in 0..5 {
+            shell.update();
+        }
+        let root = shell.semantics_tree().expect("semantics").root();
+        let mut ids = std::collections::BTreeSet::new();
+        let mut labels = Vec::new();
+        collect_unique_semantic_nodes(root, &mut ids, &mut labels);
+        assert_eq!(labels.len(), if expected < 2 { 0 } else { expected });
+        let layout = shell.layout_tree().expect("layout");
+        for id in labels {
+            let bounds = reader_node_bounds(layout.root(), id).expect("lens bounds");
+            assert!(
+                bounds.y >= 120.0,
+                "lens {id} has incorrect bounds {bounds:?}"
+            );
+        }
+    }
+    READER_LENS_EVENTS.with(|events| events.borrow_mut().take());
+}
+
+fn collect_unique_semantic_nodes(
+    node: &cranpose_ui::SemanticsNode,
+    ids: &mut std::collections::BTreeSet<NodeId>,
+    labels: &mut Vec<NodeId>,
+) {
+    assert!(
+        ids.insert(node.node_id),
+        "duplicate semantic node {}",
+        node.node_id
+    );
+    if node
+        .description
+        .as_ref()
+        .is_some_and(|label| label.starts_with("Lens ") && !node.actions.is_empty())
+    {
+        labels.push(node.node_id);
+    }
+    for descendant in &node.children {
+        collect_unique_semantic_nodes(descendant, ids, labels);
+    }
+}
+
+fn reader_node_bounds(node: &cranpose_ui::LayoutBox, id: NodeId) -> Option<Rect> {
+    if node.node_id == id {
+        return Some(node.rect);
+    }
+    node.children
+        .iter()
+        .find_map(|node| reader_node_bounds(node, id))
+}
+
+#[cranpose_ui::composable]
+fn reader_screen_body(count: MutableState<usize>, route: usize) {
+    match route {
+        0 => {
+            Column(Modifier::empty(), ColumnSpec::default(), || {
+                for index in 0..40 {
+                    Box(Modifier::empty(), BoxSpec::default(), move || {
+                        Text(
+                            format!("Document {index}"),
+                            Modifier::empty(),
+                            TextStyle::default(),
+                        );
+                    });
+                }
+            });
+        }
+        _ => reader_camera_screen(count),
+    }
+}
+
+#[cranpose_ui::composable]
+fn reader_camera_screen(count: MutableState<usize>) {
+    let title = format!("Camera {}", count.get());
+    Box(
+        Modifier::empty().fill_max_size(),
+        BoxSpec::default(),
+        move || {
+            let title = title.clone();
+            Column(
+                Modifier::empty().padding_each(0.0, 120.0, 0.0, 0.0),
+                ColumnSpec::default(),
+                move || {
+                    Text(title.clone(), Modifier::empty(), TextStyle::default());
+                    reader_lens_choices(count);
+                },
+            );
+        },
+    );
+}
+
+#[cranpose_ui::composable]
+fn reader_lens_choices(count: MutableState<usize>) {
+    let initial = count.get_non_reactive();
+    let updates = cranpose_core::rememberEventStream((), move |sender| {
+        sender.send(initial);
+        READER_LENS_EVENTS.with(|events| *events.borrow_mut() = Some(sender));
+    });
+    let count = cranpose_core::collectAsState(updates, (), initial).get();
+    let choices: Vec<_> = (0..count)
+        .map(|index| (index.to_string(), format!("Lens {index}")))
+        .collect();
+    if choices.len() < 2 {
+        return;
+    }
+    let active = (count - 1).to_string();
+    Row(
+        Modifier::empty().padding_each(6.0, 4.0, 6.0, 4.0),
+        RowSpec::default(),
+        move || {
+            for (id, label) in choices.clone() {
+                let picked = id == active;
+                let told = label.clone();
+                let mut pill = Modifier::empty()
+                    .rounded_corners(999.0)
+                    .padding_each(10.0, 5.0, 10.0, 5.0)
+                    .semantics(move |config| config.content_description = Some(told.clone()));
+                if picked {
+                    pill = pill.background(Color(1.0, 1.0, 1.0, 0.14));
+                }
+                Box(
+                    pill.clickable(move |_| {
+                        let _ = (&id, picked);
+                    }),
+                    BoxSpec::default(),
+                    move || {
+                        Text(label.clone(), Modifier::empty(), TextStyle::default());
+                    },
+                );
+            }
+        },
+    );
+}
+
+#[test]
+fn nested_dialogs_focus_their_controls_and_restore_each_opener() {
+    let _guard = test_guard();
+    for reader in [false, true] {
+        let mut shell = AppShell::new(
+            HitGraphRenderer::default(),
+            location_key(file!(), line!(), column!()),
+            || {
+                cranpose_ui::widgets::popup::PopupHost(|| {
+                    let stage = rememberMutableStateOf(|| 0u8);
+                    dialog_action("Open preferences", stage, 1);
+                    if stage.get() > 0 {
+                        Dialog(
+                            DialogSpec::default(),
+                            move |_| stage.set(0),
+                            move || {
+                                Column(Modifier::empty(), ColumnSpec::default(), move || {
+                                    dialog_action("Open confirmation", stage, 2);
+                                    if stage.get() == 2 {
+                                        Dialog(
+                                            DialogSpec::default(),
+                                            move |_| stage.set(1),
+                                            move || {
+                                                dialog_action("Finish", stage, 1);
+                                            },
+                                        );
+                                    }
+                                });
+                            },
+                        );
+                    }
+                });
+            },
+        );
+        shell.set_semantics_enabled(reader);
+        shell.update();
+        for (key, expected) in [
+            (KeyCode::Tab, "Open preferences"),
+            (KeyCode::Enter, "Open confirmation"),
+            (KeyCode::Enter, "Finish"),
+            (KeyCode::Enter, "Open confirmation"),
+            (KeyCode::Escape, "Open preferences"),
+        ] {
+            assert!(shell.on_key_event(&KeyEvent::key_down(key, "")));
+            shell.update();
+            assert_eq!(focused_description(&mut shell).as_deref(), Some(expected));
+        }
+    }
+}
+
+fn dialog_action(label: &'static str, stage: MutableState<u8>, next: u8) {
+    Button(
+        Modifier::empty()
+            .size(Size::new(220.0, 48.0))
+            .content_description(label),
+        ButtonSpec::default(),
+        move || stage.set(next),
+        move || {
+            Text(label, Modifier::empty(), TextStyle::default());
+        },
+    );
+}
+
+#[test]
+fn an_unfocused_app_without_a_reader_keeps_semantics_lazy() {
+    let _guard = test_guard();
+    let (mut shell, _) = overlapping_shell();
+    shell.update();
+    assert!(shell.surfaces[0].semantics_tree.is_none());
+}
+
+#[test]
+fn zero_sized_modal_does_not_hide_visible_controls() {
+    let _guard = test_guard();
+    let mut shell = AppShell::new(
+        HitGraphRenderer::default(),
+        location_key(file!(), line!(), column!()),
+        || {
+            Column(Modifier::empty(), ColumnSpec::default(), || {
+                focus_box("Visible control", 100.0)();
+                Box(
+                    Modifier::empty()
+                        .size(Size::ZERO)
+                        .semantics(|config| config.is_modal = true),
+                    BoxSpec::default(),
+                    || {},
+                );
+            });
+        },
+    );
+    shell.set_semantics_enabled(true);
+    shell.update();
+    let retained = shell.semantics_tree().expect("retained semantics");
+    assert!(find_semantics_described(retained.root(), "Visible control").is_some());
+    let layout = shell.layout_tree().expect("layout").clone();
+    let projected = shell
+        .app_context()
+        .enter(|| cranpose_ui::build_semantics_tree_from_layout_tree(&layout));
+    assert!(find_semantics_described(projected.root(), "Visible control").is_some());
+}
+
+#[test]
+fn native_snapshot_revision_survives_an_earlier_semantics_read() {
+    let _guard = test_guard();
+    let (mut shell, _) = overlapping_shell();
+    shell.set_semantics_enabled(true);
+    shell.update();
+    shell.semantics_tree().expect("initial semantics");
+    let before = shell.semantics_snapshot_revision();
+    assert!(shell.on_key_event(&KeyEvent::key_down(KeyCode::Tab, "\t")));
+    shell.update();
+    shell
+        .semantics_tree()
+        .expect("semantics read before native bridge");
+    assert_ne!(shell.semantics_snapshot_revision(), before);
+}
+
+#[test]
+fn keyboard_focus_reveals_an_offscreen_control() {
+    let _guard = test_guard();
+    for horizontal in [false, true] {
+        for reverse in [false, true] {
+            let (mut shell, scroll) = scrolling_controls(horizontal, reverse);
+            assert!(shell.on_key_event(&KeyEvent::key_down(KeyCode::Tab, "\t")));
+            shell.update();
+            assert_control_visible(&mut shell, "First", horizontal);
+            assert!(shell.on_key_event(&KeyEvent::key_down(KeyCode::Tab, "\t")));
+            shell.update();
+            assert_control_visible(&mut shell, "Add page", horizontal);
+            let scroll = scroll.borrow().expect("scroll state");
+            let manual = if reverse { scroll.max_value() } else { 0.0 };
+            scroll.scroll_to(manual);
+            shell.update();
+            assert_eq!(
+                scroll.value(),
+                manual,
+                "focus must not override subsequent scrolling"
+            );
+        }
+    }
+}
+
+#[test]
+fn keyboard_reaches_every_item_in_a_lazy_list() {
+    let _guard = test_guard();
+    for item_height in [48.0, 120.0] {
+        let mut shell = AppShell::new(
+            HitGraphRenderer::default(),
+            location_key(file!(), line!(), column!()),
+            move || {
+                LazyColumn(
+                    Modifier::empty().size(Size::new(240.0, 120.0)),
+                    rememberLazyListState(),
+                    LazyColumnSpec::default(),
+                    |scope| {
+                        scope.items(
+                            cranpose_foundation::lazy::LazyItems::new(10),
+                            move |index| {
+                                Text(
+                                    format!("Receipt {index}"),
+                                    Modifier::empty()
+                                        .size(Size::new(200.0, item_height))
+                                        .clickable(|_| {}),
+                                    TextStyle::default(),
+                                );
+                            },
+                        );
+                    },
+                );
+            },
+        );
+        shell.update();
+        for index in 0..10 {
+            assert!(shell.on_key_event(&KeyEvent::key_down(KeyCode::Tab, "\t")));
+            shell.update();
+            let focused = shell.app_context().enter(cranpose_ui::active_focus_target);
+            let label = format!("Receipt {index}");
+            assert_eq!(
+                focused,
+                Some(reader_control_id(&mut shell, &label)),
+                "{label}"
+            );
+            assert_control_visible(&mut shell, &label, false);
+        }
+    }
+}
+
+fn assert_control_visible(shell: &mut AppShell<HitGraphRenderer>, label: &str, horizontal: bool) {
+    let target = reader_control_id(shell, label);
+    let (x, y, width, height) = shell.node_layout_bounds(target).expect("focused bounds");
+    let (start, size, extent) = if horizontal {
+        (x, width, 240.0)
+    } else {
+        (y, height, 120.0)
+    };
+    assert!(
+        start >= 0.0 && start + size <= extent,
+        "{label}: start={start}, size={size}, horizontal={horizontal}"
+    );
+}
+
+fn scrolling_controls(
+    horizontal: bool,
+    reverse: bool,
+) -> (AppShell<HitGraphRenderer>, Rc<RefCell<Option<ScrollState>>>) {
+    let scroll = Rc::new(RefCell::new(None));
+    let recorded_scroll = Rc::clone(&scroll);
+    let mut shell = AppShell::new(
+        HitGraphRenderer::default(),
+        location_key(file!(), line!(), column!()),
+        move || {
+            let content_scroll =
+                cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| *state);
+            *recorded_scroll.borrow_mut() = Some(content_scroll);
+            let modifier = Modifier::empty().size(Size::new(240.0, 120.0));
+            let content = move || {
+                Box(
+                    Modifier::empty()
+                        .size(Size::new(200.0, 48.0))
+                        .content_description("First")
+                        .clickable(|_| {}),
+                    BoxSpec::default(),
+                    || {},
+                );
+                Spacer(if horizontal {
+                    Size::new(400.0, 1.0)
+                } else {
+                    Size::new(1.0, 400.0)
+                });
+                Box(
+                    Modifier::empty()
+                        .size(Size::new(200.0, 48.0))
+                        .content_description("Add page")
+                        .clickable(|_| {}),
+                    BoxSpec::default(),
+                    || {},
+                );
+            };
+            if horizontal {
+                Row(
+                    modifier.horizontal_scroll(content_scroll, reverse),
+                    RowSpec::default(),
+                    content,
+                );
+            } else {
+                Column(
+                    modifier.vertical_scroll(content_scroll, reverse),
+                    ColumnSpec::default(),
+                    content,
+                );
+            }
+        },
+    );
+    shell.update();
+    (shell, scroll)
+}
+
+#[test]
+fn reader_activation_enters_text_editing_without_moving_the_selection() {
+    let _guard = test_guard();
+    let mut shell = AppShell::new(
+        HitGraphRenderer::default(),
+        location_key(file!(), line!(), column!()),
+        || {
+            let field = cranpose_core::remember(|| {
+                let field = cranpose_foundation::text::TextFieldState::new("Receipt");
+                field.set_selection(cranpose_foundation::text::TextRange::new(2, 4));
+                field
+            })
+            .with(|field| *field);
+            cranpose_ui::BasicTextField(
+                field,
+                Modifier::empty()
+                    .size(Size::new(200.0, 48.0))
+                    .content_description("Merchant"),
+                TextStyle::default(),
+            );
+        },
+    );
+    shell.set_semantics_enabled(true);
+    shell.update();
+    let placed =
+        crate::placed_semantics::placed_semantics_from_shell(&mut shell).expect("placed field");
+    let field = placed
+        .flatten()
+        .into_iter()
+        .find(|node| node.editable_text && node.label.as_deref() == Some("Merchant"))
+        .expect("named editable field");
+    assert!(shell.accessibility_activate(field.node_id, None));
+    shell.update();
+    let editor = shell.ime_editor_state().expect("active native editor");
+    assert_eq!(editor.text, "Receipt");
+    assert_eq!((editor.selection_start, editor.selection_end), (2, 4));
+}
+
+fn reader_activation_case(
+    content: impl Fn(MutableState<i32>, Rc<Cell<i32>>) + 'static,
+) -> (AppShell<HitGraphRenderer>, MutableState<i32>, Rc<Cell<i32>>) {
+    let count = Rc::new(Cell::new(0));
+    let recorded = Rc::clone(&count);
+    let mode = Rc::new(RefCell::new(None));
+    let captured = Rc::clone(&mode);
+    let shell = AppShell::new(
+        HitGraphRenderer::default(),
+        location_key(file!(), line!(), column!()),
+        move || {
+            let state = rememberMutableStateOf(|| 0);
+            *captured.borrow_mut() = Some(state);
+            content(state, Rc::clone(&recorded));
+        },
+    );
+    let state = mode.borrow().expect("control state");
+    (shell, state, count)
+}
+
+#[test]
+fn direct_activation_uses_current_callback_without_pointer_events() {
+    let _guard = test_guard();
+    let (mut shell, mode, count) = reader_activation_case(|state, recorded| {
+        let mode = state.get();
+        if mode == 3 {
+            return;
+        }
+        let action = cranpose_foundation::SemanticsCustomAction::new("Activate", move || {
+            recorded.set(recorded.get() + mode + 1);
+        });
+        Box(
+            Modifier::empty()
+                .size(Size::new(100.0, 48.0))
+                .clickable(|_| panic!("semantic activation must not synthesize pointer input"))
+                .semantics(move |config| {
+                    config.content_description = Some("Direct".into());
+                    config.on_click = Some(action.clone());
+                    config.enabled = mode != 1;
+                    config.hidden = mode == 2;
+                }),
+            BoxSpec::default(),
+            || {},
+        );
+    });
+    shell.update();
+    let node_id = reader_control_id(&mut shell, "Direct");
+    assert!(shell.accessibility_activate(node_id, None));
+    assert_eq!(count.get(), 1);
+    mode.set(4);
+    shell.update();
+    assert!(shell.accessibility_activate(node_id, None));
+    assert_eq!(count.get(), 6);
+    assert!(shell.on_key_event(&KeyEvent::key_down(KeyCode::Tab, "\t")));
+    assert!(shell.on_key_event(&KeyEvent::key_down(KeyCode::Enter, "\r")));
+    assert_eq!(count.get(), 11);
+    for value in 1..=3 {
+        mode.set(value);
+        shell.update();
+        assert!(
+            !shell.accessibility_activate(node_id, None),
+            "state {value}"
+        );
+    }
+    assert_eq!(count.get(), 11);
+}
 
 fn overlapping_shell() -> (AppShell<HitGraphRenderer>, Rc<Cell<i32>>) {
     let count = Rc::new(Cell::new(0));
@@ -62,39 +616,28 @@ fn keyboard_activation_targets_focused_control_without_a_screen_reader() {
 #[test]
 fn reader_activation_revalidates_disabled_hidden_and_removed_controls() {
     let _guard = test_guard();
-    let count = Rc::new(Cell::new(0));
-    let recorded = Rc::clone(&count);
-    let mode = Rc::new(RefCell::new(None));
-    let captured = Rc::clone(&mode);
-    let mut shell = AppShell::new(
-        HitGraphRenderer::default(),
-        location_key(file!(), line!(), column!()),
-        move || {
-            let state = rememberMutableStateOf(|| 0);
-            *captured.borrow_mut() = Some(state);
-            if state.get() == 3 {
-                return;
-            }
-            let recorded = Rc::clone(&recorded);
-            Box(
-                Modifier::empty()
-                    .size(Size::new(100.0, 48.0))
-                    .content_description("Action")
-                    .clickable(move |_| recorded.set(recorded.get() + 1))
-                    .semantics(move |config| {
-                        config.enabled = state.get() != 1;
-                        config.hidden = state.get() == 2;
-                    }),
-                BoxSpec::default(),
-                || {},
-            );
-        },
-    );
+    let (mut shell, mode, count) = reader_activation_case(|state, recorded| {
+        if state.get() == 3 {
+            return;
+        }
+        Box(
+            Modifier::empty()
+                .size(Size::new(100.0, 48.0))
+                .content_description("Action")
+                .clickable(move |_| recorded.set(recorded.get() + 1))
+                .semantics(move |config| {
+                    config.enabled = state.get() != 1;
+                    config.hidden = state.get() == 2;
+                }),
+            BoxSpec::default(),
+            || {},
+        );
+    });
     shell.update();
     let node_id = reader_control_id(&mut shell, "Action");
     assert!(shell.accessibility_activate(node_id, None));
     for value in 1..=3 {
-        mode.borrow().expect("state").set(value);
+        mode.set(value);
         shell.update();
         assert!(
             !shell.accessibility_activate(node_id, None),

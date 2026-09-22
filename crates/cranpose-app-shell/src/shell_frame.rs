@@ -318,6 +318,8 @@ where
         let after_layout = Instant::now();
 
         self.run_dispatch_queues();
+        self.update_modal_focus();
+        self.reveal_new_focus();
 
         let after_dispatch = Instant::now();
 
@@ -341,7 +343,7 @@ where
         app_context.enter(|| self.run_layout_phase_in_context());
     }
 
-    fn run_layout_phase_in_context(&mut self) {
+    pub(crate) fn run_layout_phase_in_context(&mut self) {
         let has_scoped_repasses = cranpose_ui::has_pending_layout_repasses()
             || cranpose_ui::has_pending_measure_repasses();
         let scoped_layout_nodes = pending_repass_nodes();

@@ -1,11 +1,25 @@
 use std::{cell::RefCell, rc::Rc};
 
 use cranpose_core::{
-    self, Applier, ConcreteApplierHost, MutableState, SlotTable, SlotsHost, SnapshotStateObserver,
+    self, Applier, ConcreteApplierHost, MutableState, Node, SlotTable, SlotsHost,
+    SnapshotStateObserver,
 };
 use smallvec::SmallVec;
 
 use super::*;
+
+#[test]
+fn bubbling_preserves_the_subcompose_nodes_existing_owner() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let policy: Rc<MeasurePolicy> = Rc::new(|scope, _| scope.layout(0.0, 0.0, Vec::new()));
+    let mut node = SubcomposeLayoutNode::new(crate::modifier::Modifier::empty(), policy);
+    node.set_parent_for_bubbling(41);
+    node.set_parent_for_bubbling(42);
+    assert_eq!(node.parent(), Some(41));
+    node.on_removed_from_parent();
+    node.set_parent_for_bubbling(42);
+    assert_eq!(node.parent(), Some(42));
+}
 
 #[derive(Default)]
 struct DummyNode;

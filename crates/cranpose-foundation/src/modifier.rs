@@ -1101,7 +1101,7 @@ pub enum LiveRegionMode {
     Assertive,
 }
 
-/// A screen-reader action that is not a click, e.g. Compose's
+/// A named accessibility operation, e.g. Compose's
 /// `customActions = listOf(CustomAccessibilityAction("Pause") { … })`.
 ///
 /// TalkBack surfaces these through its actions menu rather than by activating
@@ -1276,6 +1276,9 @@ pub struct SemanticsConfiguration {
     pub state_description: Option<String>,
     /// Compose's `onClick(label = …)`; implies clickable.
     pub on_click_label: Option<String>,
+    /// Activation callback for controls whose pointer gesture is handled separately.
+    /// Invoked by keyboard and native accessibility activation after validation.
+    pub on_click: Option<SemanticsCustomAction>,
     /// What this control does when a screen reader asks for its long press.
     /// Compose's `onLongClick`.
     pub on_long_click: Option<SemanticsLongClick>,
@@ -1390,6 +1393,7 @@ impl Default for SemanticsConfiguration {
             content_description: None,
             state_description: None,
             on_click_label: None,
+            on_click: None,
             on_long_click: None,
             on_long_click_label: None,
             on_magic_tap: None,
@@ -1466,6 +1470,13 @@ impl SemanticsConfiguration {
     /// A screen reader offers to activate the control. Compose's `onClick`.
     pub fn clickable(mut self) -> Self {
         self.is_clickable = true;
+        self
+    }
+
+    /// Handles keyboard and screen-reader activation without adding a pointer gesture.
+    /// An empty label uses the platform's default activation instruction.
+    pub fn on_click(mut self, label: impl Into<String>, action: impl Fn() + 'static) -> Self {
+        self.on_click = Some(SemanticsCustomAction::new(label, action));
         self
     }
 
@@ -1651,6 +1662,9 @@ impl SemanticsConfiguration {
     }
 
     fn merge_actions(&mut self, other: &SemanticsConfiguration) {
+        if let Some(on_click) = &other.on_click {
+            self.on_click = Some(on_click.clone());
+        }
         self.custom_actions
             .extend(other.custom_actions.iter().cloned());
         self.canvas_children
@@ -1708,7 +1722,7 @@ impl SemanticsConfiguration {
     /// Whether a screen reader should offer activation. A named click label is
     /// how Compose declares `onClick`, so it implies the action the same way.
     pub fn is_activatable(&self) -> bool {
-        self.is_clickable || self.on_click_label.is_some()
+        self.is_clickable || self.on_click_label.is_some() || self.on_click.is_some()
     }
 }
 

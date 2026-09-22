@@ -4,6 +4,9 @@
 - Put general agent rules in [AGENTS.md](AGENTS.md), with one short rule per line.
 - Put build, shell and CI details in [development troubleshooting](docs/development_troubleshooting.md).
 - Workspace dependency patches do not reach crates.io consumers; validate required upstream fixes against the published dependency graph before tagging.
+- Use a build cache from one compiler for compile-fail checks; newest-artifact lookup can otherwise select an incompatible proc macro.
+- iOS keyboards can expose individual keys without a Keyboard container; verify editable focus, text entry and the saved value.
+- Verify that VoiceOver receives audit commands; app-directed automation can insert their text while VoiceOver is enabled.
 - Put robot and image-check details in [render verification](docs/render_verification.md).
 - Put Android measurement details in [device measurement](docs/device_measurement.md).
 - Reuse [mobile performance evidence](docs/mobile_watch_performance.md) before repeating experiments; keep one conclusion and evidence link per row.

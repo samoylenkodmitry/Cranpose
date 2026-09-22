@@ -1,8 +1,10 @@
 #![allow(clippy::type_complexity)]
 
+mod focus_reveal;
 mod fps_monitor;
 mod hit_path_tracker;
 pub mod inspector;
+mod modal_focus;
 mod shell_debug;
 mod shell_frame;
 mod shell_input;
@@ -179,6 +181,7 @@ pub(crate) struct ShellApp {
     pub(crate) last_frame_time_nanos: u64,
     pub(crate) semantics_enabled: bool,
     pub(crate) semantics_snapshot_revision: u64,
+    pub(crate) revealed_focus: Option<NodeId>,
     pub(crate) layout_requested: bool,
     pub(crate) force_layout_pass: bool,
     pub(crate) modifiers: Option<Modifiers>,
@@ -602,6 +605,7 @@ where
             last_frame_time_nanos: 0,
             semantics_enabled: false,
             semantics_snapshot_revision: 0,
+            revealed_focus: None,
             layout_requested: true,
             force_layout_pass: true,
             modifiers: None,

@@ -54,6 +54,7 @@ pub struct RootSurface<R: Renderer> {
     pub(crate) buffer_size: (u32, u32),
     pub(crate) layout_tree: Option<LayoutTree>,
     pub(crate) semantics_tree: Option<SemanticsTree>,
+    pub(crate) modal_focus: Vec<(NodeId, Option<NodeId>)>,
     pub(crate) frame_rate_preference: FrameRatePreference,
     pub(crate) scene_dirty: bool,
     pub(crate) scoped_layout_scene_nodes: Vec<NodeId>,
@@ -92,6 +93,7 @@ impl<R: Renderer> RootSurface<R> {
             buffer_size,
             layout_tree: None,
             semantics_tree: None,
+            modal_focus: Vec::new(),
             frame_rate_preference: FrameRatePreference::default(),
             scene_dirty: true,
             scoped_layout_scene_nodes: Vec::new(),
@@ -268,6 +270,8 @@ impl<R: Renderer> RootSurface<R> {
             match cranpose_ui::build_semantics_tree_from_applier(&mut applier, root) {
                 Ok(semantics_tree) => {
                     self.semantics_tree = semantics_tree;
+                    app.semantics_snapshot_revision =
+                        app.semantics_snapshot_revision.wrapping_add(1);
                 }
                 Err(err) => {
                     log::debug!("failed to build semantics snapshot: {err}");

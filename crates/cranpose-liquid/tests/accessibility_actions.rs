@@ -1,0 +1,237 @@
+use cranpose_core::rememberMutableStateOf;
+use cranpose_liquid::prelude::*;
+use cranpose_testing::{
+    RobotTestRule, TestRenderer, create_headless_robot_test, placed_semantics_from_shell,
+};
+use cranpose_ui::Modifier;
+
+#[test]
+fn reader_selects_each_tab_without_pointer_input() {
+    for accessory in [false, true] {
+        let mut robot = create_headless_robot_test(400, 800, move || {
+            LiquidTheme(LiquidThemeSpec::default(), move || {
+                let selected = rememberMutableStateOf(|| 0usize);
+                let tabs = |tabs: &LiquidTabBarScope| {
+                    tabs.tab(cranpose_liquid::icons::BOOKMARK, "Library");
+                    tabs.tab(cranpose_liquid::icons::SEARCH, "Scan");
+                    tabs.tab(cranpose_liquid::icons::STAR, "Settings");
+                };
+                if accessory {
+                    LiquidTabBarWithAccessory(
+                        Modifier::empty(),
+                        LiquidTabBarSpec::default(),
+                        selected.get(),
+                        move |index| selected.set(index),
+                        tabs,
+                        || LiquidTabBarSearchAccessory(|| {}),
+                    );
+                } else {
+                    LiquidTabBar(
+                        Modifier::empty(),
+                        LiquidTabBarSpec::default(),
+                        selected.get(),
+                        move |index| selected.set(index),
+                        tabs,
+                    );
+                }
+            });
+        });
+        robot.shell_mut().set_semantics_enabled(true);
+        robot.wait_for_idle();
+        for label in ["Settings", "Scan", "Library"] {
+            activate(&mut robot, label);
+            assert_selected(&mut robot, label);
+        }
+    }
+}
+
+fn activate(robot: &mut RobotTestRule<TestRenderer>, label: &str) {
+    let tree = placed_semantics_from_shell(robot.shell_mut()).expect("placed controls");
+    let node = tree
+        .flatten()
+        .into_iter()
+        .find(|node| node.label.as_deref() == Some(label))
+        .expect("named control");
+    assert!(node.clickable, "{label} advertises activation");
+    assert!(
+        robot.shell_mut().accessibility_activate(node.node_id, None),
+        "{label}"
+    );
+    robot.wait_for_idle();
+}
+
+fn assert_selected(robot: &mut RobotTestRule<TestRenderer>, label: &str) {
+    let tree = placed_semantics_from_shell(robot.shell_mut()).expect("updated controls");
+    let selected: Vec<_> = tree
+        .flatten()
+        .into_iter()
+        .filter(|node| node.selected == Some(true))
+        .filter_map(|node| node.label.as_deref())
+        .collect();
+    assert_eq!(selected, [label]);
+}
+
+#[test]
+fn reader_selects_each_segment_and_receives_the_committed_value() {
+    let mut robot = create_headless_robot_test(400, 800, || {
+        LiquidTheme(LiquidThemeSpec::default(), || {
+            let selected = rememberMutableStateOf(|| 0usize);
+            LiquidSegmentedControl(
+                Modifier::empty().width(300.0),
+                selected.get(),
+                move |index| selected.set(index),
+                |scope| {
+                    for label in ["Day", "Month", "Year"] {
+                        scope.segment(label);
+                    }
+                },
+            );
+            cranpose_ui::Text(
+                "After segments",
+                Modifier::empty().clickable(|_| {}),
+                cranpose_ui::TextStyle::default(),
+            );
+        });
+    });
+    robot.shell_mut().set_semantics_enabled(true);
+    robot.wait_for_idle();
+    for label in ["Year", "Month", "Day"] {
+        activate(&mut robot, label);
+        assert_selected(&mut robot, label);
+    }
+    press_key(&mut robot, cranpose_ui::KeyCode::Tab, "\t");
+    assert_focused(&mut robot, "Day");
+    for (key, label) in [
+        (cranpose_ui::KeyCode::ArrowRight, "Month"),
+        (cranpose_ui::KeyCode::End, "Year"),
+        (cranpose_ui::KeyCode::Home, "Day"),
+    ] {
+        press_key(&mut robot, key, "");
+        assert_selected(&mut robot, label);
+    }
+    press_key(&mut robot, cranpose_ui::KeyCode::Tab, "\t");
+    assert_focused(&mut robot, "After segments");
+}
+
+fn press_key(robot: &mut RobotTestRule<TestRenderer>, key: cranpose_ui::KeyCode, text: &str) {
+    assert!(
+        robot
+            .shell_mut()
+            .on_key_event(&cranpose_ui::KeyEvent::key_down(key, text))
+    );
+    robot.wait_for_idle();
+}
+
+fn assert_focused(robot: &mut RobotTestRule<TestRenderer>, label: &str) {
+    let focused_id = robot
+        .shell_mut()
+        .app_context()
+        .enter(cranpose_ui::active_focus_target);
+    let tree = placed_semantics_from_shell(robot.shell_mut()).expect("focus semantics");
+    let focused = tree
+        .flatten()
+        .into_iter()
+        .find(|node| Some(node.node_id) == focused_id)
+        .expect("focused control");
+    assert_eq!(focused.label.as_deref(), Some(label));
+}
+
+#[test]
+fn reader_changes_a_switch_in_both_directions() {
+    let mut robot = create_headless_robot_test(400, 800, || {
+        LiquidTheme(LiquidThemeSpec::default(), || {
+            let checked = rememberMutableStateOf(|| false);
+            LiquidToggle(
+                Modifier::empty().content_description("Use cellular data"),
+                checked.get(),
+                move |next| checked.set(next),
+            );
+        });
+    });
+    robot.shell_mut().set_semantics_enabled(true);
+    robot.wait_for_idle();
+    for expected in [true, false, true] {
+        activate(&mut robot, "Use cellular data");
+        let tree = placed_semantics_from_shell(robot.shell_mut()).expect("switch state");
+        let switch = tree
+            .flatten()
+            .into_iter()
+            .find(|node| node.label.as_deref() == Some("Use cellular data"))
+            .expect("named switch");
+        assert_eq!(switch.toggled, Some(expected));
+    }
+}
+
+#[test]
+fn reader_selects_a_menu_item_and_dismisses_the_popup() {
+    for keyboard in [false, true] {
+        let result = std::rc::Rc::new(std::cell::Cell::new(0));
+        let recorded = std::rc::Rc::clone(&result);
+        let mut robot = create_headless_robot_test(400, 800, move || {
+            let recorded = std::rc::Rc::clone(&recorded);
+            LiquidTheme(LiquidThemeSpec::default(), move || {
+                let expanded = rememberMutableStateOf(|| false);
+                let recorded = std::rc::Rc::clone(&recorded);
+                LiquidDropdownMenu(
+                    Modifier::empty(),
+                    expanded.get(),
+                    LiquidDropdownMenuSpec::default(),
+                    move || expanded.set(false),
+                    move || {
+                        cranpose_ui::Text(
+                            "More",
+                            Modifier::empty()
+                                .size(cranpose_ui::Size::new(100.0, 48.0))
+                                .clickable(move |_| expanded.set(true)),
+                            cranpose_ui::TextStyle::default(),
+                        );
+                    },
+                    move |scope| {
+                        scope.header("Document actions");
+                        let copied = std::rc::Rc::clone(&recorded);
+                        let recorded = std::rc::Rc::clone(&recorded);
+                        scope.item(LiquidMenuItem::new("Export text"), move || {
+                            recorded.set(recorded.get() + 1)
+                        });
+                        scope.item(LiquidMenuItem::new("Copy text"), move || {
+                            copied.set(copied.get() + 10)
+                        });
+                    },
+                );
+            });
+        });
+        robot.shell_mut().set_semantics_enabled(true);
+        robot.wait_for_idle();
+        activate(&mut robot, "More");
+        if keyboard {
+            assert!(
+                robot
+                    .shell_mut()
+                    .on_key_event(&cranpose_ui::KeyEvent::key_down(
+                        cranpose_ui::KeyCode::ArrowDown,
+                        ""
+                    ))
+            );
+            assert!(
+                robot
+                    .shell_mut()
+                    .on_key_event(&cranpose_ui::KeyEvent::key_down(
+                        cranpose_ui::KeyCode::Enter,
+                        "\r"
+                    ))
+            );
+            robot.wait_for_idle();
+        } else {
+            activate(&mut robot, "Export text");
+        }
+        assert_eq!(result.get(), if keyboard { 10 } else { 1 });
+        let tree = placed_semantics_from_shell(robot.shell_mut()).expect("closed menu");
+        assert!(
+            !tree
+                .flatten()
+                .into_iter()
+                .any(|node| node.label.as_deref() == Some("Export text") && !node.hidden)
+        );
+        assert_focused(&mut robot, "More");
+    }
+}

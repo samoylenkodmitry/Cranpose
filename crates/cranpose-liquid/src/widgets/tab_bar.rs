@@ -148,6 +148,15 @@ impl LiquidTabBarSpec {
             },
         }
     }
+
+    fn cell_width(self, available_width: f32, count: usize) -> f32 {
+        let constrained = available_width - BLOB_MARGIN * 2.0;
+        if constrained.is_finite() && constrained > 1.0 {
+            (constrained / count as f32).min(self.max_tab_width)
+        } else {
+            self.max_tab_width
+        }
+    }
 }
 
 impl Default for LiquidTabBarSpec {
@@ -457,7 +466,9 @@ fn TabCells(
     geometry: TabGeometry,
     spec: TabCellsSpec,
     transform: cranpose_ui_graphics::GraphicsLayer,
+    on_select: impl Fn(usize) + 'static,
 ) {
+    let on_select: Rc<dyn Fn(usize)> = Rc::new(on_select);
     let size = Size::new(geometry.width + BLOB_MARGIN * 2.0, BAR_HEIGHT);
     let mut selection = spec.selection;
     let center = selection.bounds.x + selection.bounds.width * 0.5 + BLOB_MARGIN;
@@ -488,6 +499,7 @@ fn TabCells(
         move || {
             let tabs = Rc::clone(&tabs);
             let typography = typography.clone();
+            let on_select = Rc::clone(&on_select);
             Box(
                 Modifier::empty()
                     .size(size)
@@ -500,15 +512,17 @@ fn TabCells(
                         let color = spec.base_color;
                         let label_for_semantics = tab.label;
                         let icon_offset = tab.icon_offset;
+                        let on_select = Rc::clone(&on_select);
                         let cell = Modifier::empty()
                             .offset(BLOB_MARGIN + index as f32 * geometry.pitch, BLOB_MARGIN)
                             .size(Size::new(geometry.cell_width, BLOB_HEIGHT))
-                            .semantics(move |config| {
-                                config.role = Some(SemanticsWidgetRole::Tab);
-                                config.is_clickable = true;
-                                config.selected = Some(index == spec.committed_selection);
-                                config.content_description = Some(label_for_semantics.to_string());
-                            })
+                            .semantics(super::selection::selection_semantics(
+                                label_for_semantics.to_string(),
+                                SemanticsWidgetRole::Tab,
+                                index,
+                                spec.committed_selection,
+                                on_select,
+                            ))
                             .focusable();
                         let icon = tab.icon.clone();
                         let icon_style = tab.icon_style;
@@ -845,6 +859,7 @@ fn LiquidTabBarLayout(
                     let tabs = Rc::clone(&tabs);
                     let typography = typography.clone();
                     let on_select = Rc::clone(&on_select);
+                    let semantic_selection = Rc::clone(&on_select);
                     let contact_motion = Rc::clone(&contact_motion);
                     let pill = bar_lift.clone().height(BAR_HEIGHT);
                     Box(pill, BoxSpec::default(), move || {
@@ -852,12 +867,7 @@ fn LiquidTabBarLayout(
                         let contact_motion = Rc::clone(&contact_motion);
                         BoxWithConstraints(Modifier::empty(), move |scope| {
                             let on_select = Rc::clone(&on_select);
-                            let constrained = scope.constraints().max_width - BLOB_MARGIN * 2.0;
-                            let tab_width = if constrained.is_finite() && constrained > 1.0 {
-                                (constrained / count as f32).min(spec.max_tab_width)
-                            } else {
-                                spec.max_tab_width
-                            };
+                            let tab_width = spec.cell_width(scope.constraints().max_width, count);
 
                             let geometry = TabGeometry::new(tab_width, count);
                             Box(
@@ -1058,6 +1068,7 @@ fn LiquidTabBarLayout(
                             committed_selection: selected,
                         },
                         transform,
+                        move |index| semantic_selection(index),
                     );
                     Box(
                         lens_node_modifier.graphics_layer(move || {

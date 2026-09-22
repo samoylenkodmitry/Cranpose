@@ -3701,14 +3701,6 @@ fn every_platform_offers_the_long_press_of_a_control() {
 
 #[test]
 fn a_dialog_takes_the_reader_along_when_it_opens() {
-    let dialog_source = workspace_source("crates/cranpose-ui/src/widgets/dialog.rs");
-    assert!(
-        dialog_source.contains(".focus_target()")
-            && dialog_source.contains(".focus_requester(&requester)")
-            && dialog_source.contains("requester_for_open.request_focus()"),
-        "a dialog takes app focus as it opens, so every bridge's focus following moves the reader onto it"
-    );
-
     let ios_source = crate_source("src/ios_accessibility.rs");
     assert!(
         ios_source.contains("accessibility::opened_dialog(")
@@ -4066,16 +4058,6 @@ fn the_android_host_names_every_role_the_projection_has() {
     assert!(
         projection_source.contains("(AccessibilityRole::ListItem, 23),"),
         "the projection numbers every role for the wire"
-    );
-}
-
-#[test]
-fn a_dialog_hands_focus_back_to_its_opener() {
-    let dialog_source = workspace_source("crates/cranpose-ui/src/widgets/dialog.rs");
-    assert!(
-        dialog_source.contains("cranpose_core::remember(crate::active_focus_target)")
-            && dialog_source.contains("crate::request_focus_from_platform(opener);"),
-        "a dialog remembers the control that had focus and hands it back as it closes"
     );
 }
 

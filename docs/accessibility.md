@@ -1,9 +1,9 @@
 # Accessibility
 
-What a Cranpose app owes a person who cannot see the screen, and what the
-framework already does for it. The API mirrors Jetpack Compose, so a Compose
-developer writes the same three things: semantics on a control, focus movement,
-and text to read out.
+Built-in controls provide names from their text, roles, state and actions.
+The app shell supplies keyboard navigation, focus reveal and modal focus.
+Applications supply information the framework cannot infer from pixels, such
+as the purpose of an icon, a receipt's recognized text or a custom chart's data.
 
 Four platforms carry it: iOS through VoiceOver, Android through TalkBack, the
 web through a DOM mirror that a browser screen reader reads, and Linux, macOS
@@ -40,6 +40,12 @@ control overlaps it. Hidden, disabled, removed and modal-background controls rej
 the action. Canvas activation resolves the stable child key and its current bounds.
 Enter and Space use the same path, without moving the pointer or changing capture.
 
+Controls with custom pointer gestures can supply `SemanticsSpec::on_click` or
+`SemanticsConfiguration::on_click`. This callback runs directly; it does not
+synthesize a tap. Liquid tabs and segments provide it automatically and publish
+the committed selection even while their visual indicator moves. Activating an
+editable field opens its native text input without changing its selection.
+
 Platform IDs stay attached to a control while it remains in the published tree,
 including when canvas children reorder or nearby controls disappear. Removed IDs
 are retired for the bridge's lifetime, so a delayed reader request cannot activate
@@ -72,6 +78,11 @@ manager, which walks the focus targets in layout order. `FocusDirection::Up`,
 `Down`, `Left` and `Right` pick the nearest target in that direction, measured
 on the laid-out rectangles.
 
+When focus changes, scroll containers reveal the target with the smallest
+necessary movement. This applies to keyboard and programmatic focus, horizontal
+and reverse scrolling, and focus traversal through lazy lists. Subsequent manual
+scrolling is preserved until focus changes again.
+
 Keyboard Tab enters a radio group or tab list at its selected control. Arrow
 keys wrap within the group, and Home/End reach its first/last enabled member.
 Radio navigation selects the destination; tabs activate with Enter or Space.
@@ -84,6 +95,11 @@ An open modal restricts both the semantics tree and keyboard traversal to its
 subtree. Nested modals expose only the top modal. Queued reader focus requests
 resolve the current tree, so they cannot focus a background, hidden, disabled,
 or removed control. Dialogs and pane landmarks own their accessible children.
+
+Dialogs and menus focus their first available control when they open and restore
+the opener when they close. Nested dialogs restore each opener in turn. Modal and
+popup state belongs to its application context; separate application instances
+do not share focus history. A popup with no visible area does not hide the page.
 
 Focus travels both ways across every platform boundary:
 

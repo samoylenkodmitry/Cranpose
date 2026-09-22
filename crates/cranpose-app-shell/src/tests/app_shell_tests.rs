@@ -2598,7 +2598,6 @@ fn escape_closes_the_modal_on_top_and_nothing_else() {
     let root_key = location_key(file!(), line!(), column!());
     let mut shell = AppShell::new(TestRenderer::default(), root_key, empty_content);
     shell.update();
-    cranpose_ui::clear_modals();
 
     let escape = KeyEvent::key_down(KeyCode::Escape, "");
     assert!(
@@ -2609,7 +2608,9 @@ fn escape_closes_the_modal_on_top_and_nothing_else() {
     let closed = Rc::new(RefCell::new(false));
     let registration = {
         let closed = Rc::clone(&closed);
-        cranpose_ui::modal::register_modal(Rc::new(move || *closed.borrow_mut() = true))
+        shell.debug_enter_app_context(|| {
+            cranpose_ui::modal::register_modal(Rc::new(move || *closed.borrow_mut() = true))
+        })
     };
     assert!(shell.on_key_event(&escape));
     assert!(*closed.borrow(), "the dialog on top took the request");
@@ -2645,7 +2646,6 @@ fn escape_closes_the_menu_on_top_when_no_dialog_is_open() {
         });
     });
     shell.update();
-    cranpose_ui::clear_modals();
     let open = captured.borrow().expect("the popup state is captured");
 
     let escape = KeyEvent::key_down(KeyCode::Escape, "");
@@ -2694,7 +2694,6 @@ fn a_dialog_takes_focus_when_it_opens() {
     shell.update();
     shell.update();
     assert_eq!(shell.node_layout_bounds(id), Some((0.0, 0.0, 800.0, 600.0)));
-    cranpose_ui::clear_modals();
 }
 
 #[test]
@@ -2778,7 +2777,6 @@ fn focus_returns_to_the_opener_when_a_dialog_closes() {
         opener.focused,
         "focus came back to the control that opened the dialog"
     );
-    cranpose_ui::clear_modals();
 }
 
 fn find_semantics_described<'a>(
@@ -10452,7 +10450,11 @@ fn a_modal_excludes_background_semantics_and_keyboard_targets() {
     assert!(find_semantics_described(root, "Background").is_none());
     assert!(find_semantics_described(root, "Background after").is_none());
     assert!(find_semantics_described(root, "Modal first").is_some());
-    for expected in ["Modal first", "Modal last", "Modal first"] {
+    assert_eq!(
+        focused_description(&mut shell).as_deref(),
+        Some("Modal first")
+    );
+    for expected in ["Modal last", "Modal first", "Modal last"] {
         assert!(shell.on_key_event(&KeyEvent::key_down(KeyCode::Tab, "")));
         shell.update();
         assert_eq!(focused_description(&mut shell).as_deref(), Some(expected));
@@ -10601,11 +10603,12 @@ where
             .iter()
             .find_map(|below| description_of(below, node_id))
     }
-    let active = Rc::new(Cell::new(None));
-    let seen = Rc::clone(&active);
-    shell.debug_enter_app_context(move || seen.set(cranpose_ui::active_focus_target()));
-    let node_id = active.get()?;
-    description_of(shell.semantics_tree().expect("a tree").root(), node_id)
+    let context = Rc::clone(shell.app_context());
+    context.enter(|| {
+        let node_id = cranpose_ui::active_focus_target()?;
+        let tree = shell.surfaces[0].semantics_tree_for_input(&mut shell.app)?;
+        description_of(tree.root(), node_id)
+    })
 }
 
 #[test]
