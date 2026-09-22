@@ -1,6 +1,6 @@
 use std::{fmt, mem::size_of, rc::Rc};
 
-use cranpose_foundation::{ModifierNodeChain, NodeCapabilities, PointerEvent};
+use cranpose_foundation::{ModifierNodeChain, NodeCapabilities, PointerEvent, PointerEventKind};
 use cranpose_ui_graphics::{
     ColorFilter, EdgeInsets, GraphicsLayer, LayerShape, PointerIcon, RenderEffect,
     RoundedCornerShape,
@@ -197,6 +197,24 @@ impl ModifierNodeSlices {
 
     pub fn pointer_inputs(&self) -> &[Rc<dyn Fn(PointerEvent)>] {
         &self.pointer_inputs
+    }
+
+    /// Dispatches an event whose position is already local to this layout node.
+    /// Consumed events stop propagation except for release and cancellation,
+    /// which reach every handler so each can finish its active interaction.
+    pub fn dispatch_pointer_event(&self, event: PointerEvent) {
+        let terminal = matches!(event.kind, PointerEventKind::Up | PointerEventKind::Cancel);
+        for handler in &self.pointer_inputs {
+            if event.is_consumed() && !terminal {
+                break;
+            }
+            handler(event.clone());
+        }
+        if event.kind == PointerEventKind::Down && !event.is_consumed() {
+            for handler in &self.click_handlers {
+                handler(event.position);
+            }
+        }
     }
 
     /// The write targets for this node's resolved size, one per pointer-input
@@ -652,3 +670,7 @@ pub fn collect_slices_from_modifier(modifier: &Modifier) -> ModifierNodeSlices {
     let _ = handle.update(modifier);
     collect_modifier_slices(handle.chain()).with_chain_guard(handle)
 }
+
+#[cfg(test)]
+#[path = "tests/slices_tests.rs"]
+mod tests;

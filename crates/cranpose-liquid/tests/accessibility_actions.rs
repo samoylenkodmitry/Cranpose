@@ -6,6 +6,39 @@ use cranpose_testing::{
 use cranpose_ui::Modifier;
 
 #[test]
+fn reader_activates_a_glass_button_beyond_the_scroll_viewport() {
+    let clicks = std::rc::Rc::new(std::cell::Cell::new(0));
+    let recorded = std::rc::Rc::clone(&clicks);
+    let mut robot = create_headless_robot_test(400, 300, move || {
+        let recorded = std::rc::Rc::clone(&recorded);
+        LiquidTheme(LiquidThemeSpec::default(), move || {
+            let recorded = std::rc::Rc::clone(&recorded);
+            let scroll = cranpose_ui::rememberScrollState!(0.0);
+            cranpose_ui::Column(
+                Modifier::empty()
+                    .fill_max_size()
+                    .vertical_scroll(scroll, false),
+                cranpose_ui::ColumnSpec::default(),
+                move || {
+                    cranpose_ui::Spacer(cranpose_ui::Size::new(1.0, 600.0));
+                    let recorded = std::rc::Rc::clone(&recorded);
+                    GlassButton(
+                        Modifier::empty().fill_max_width(),
+                        GlassButtonSpec::glass(),
+                        move || recorded.set(recorded.get() + 1),
+                        || GlassButtonLabel("Edit more fields", GlassButtonSpec::glass()),
+                    );
+                },
+            );
+        });
+    });
+    robot.shell_mut().set_semantics_enabled(true);
+    robot.wait_for_idle();
+    activate(&mut robot, "Edit more fields");
+    assert_eq!(clicks.get(), 1);
+}
+
+#[test]
 fn reader_selects_each_tab_without_pointer_input() {
     for accessory in [false, true] {
         let mut robot = create_headless_robot_test(400, 800, move || {

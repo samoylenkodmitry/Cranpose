@@ -268,17 +268,15 @@ where
             Some(ActivationTarget::Pointer(node_id, bounds)) => (node_id, bounds),
             None => return false,
         };
-        let position = self
-            .with_layout_tree(|tree| activation_position(tree?.root(), target_id, canvas_bounds));
-        let Some(position) = position else {
-            return false;
-        };
-        let Some(target) = self.surface().renderer.scene().find_target(target_id) else {
+        let position =
+            self.with_layout_tree(|tree| activation_input(tree?.root(), target_id, canvas_bounds));
+        let Some((position, local, handlers)) = position else {
             return false;
         };
         for kind in [PointerEventKind::Down, PointerEventKind::Up] {
-            let event = self.pointer_event(kind, position, position, event_time);
-            self.dispatch_targets(std::iter::once(target.clone()), event, false);
+            let event = self.pointer_event(kind, local, position, event_time);
+            handlers.dispatch_pointer_event(event.clone());
+            event.finish_post_dispatch();
         }
         true
     }
@@ -1934,16 +1932,16 @@ fn activation_target(
     })
 }
 
-fn activation_position(
+fn activation_input(
     root: &LayoutBox,
     node_id: NodeId,
     canvas_bounds: Option<Rect>,
-) -> Option<Point> {
+) -> Option<(Point, Point, Rc<cranpose_ui::ModifierNodeSlices>)> {
     if root.node_id != node_id {
         return root
             .children
             .iter()
-            .find_map(|child| activation_position(child, node_id, canvas_bounds));
+            .find_map(|child| activation_input(child, node_id, canvas_bounds));
     }
     let bounds = canvas_bounds.map_or(root.rect, |bounds| Rect {
         x: root.rect.x + bounds.x,
@@ -1954,8 +1952,12 @@ fn activation_position(
         x: bounds.x + bounds.width * 0.5,
         y: bounds.y + bounds.height * 0.5,
     };
+    let local = Point {
+        x: position.x - root.rect.x,
+        y: position.y - root.rect.y,
+    };
     (bounds.width > 0.0 && bounds.height > 0.0 && position.x.is_finite() && position.y.is_finite())
-        .then_some(position)
+        .then(|| (position, local, Rc::clone(&root.node_data.modifier_slices)))
 }
 
 fn plain_key_down(event: &KeyEvent) -> bool {
