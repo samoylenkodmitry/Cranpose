@@ -40,6 +40,15 @@ control overlaps it. Hidden, disabled, removed and modal-background controls rej
 the action. Canvas activation resolves the stable child key and its current bounds.
 Enter and Space use the same path, without moving the pointer or changing capture.
 
+Platform IDs stay attached to a control while it remains in the published tree,
+including when canvas children reorder or nearby controls disappear. Removed IDs
+are retired for the bridge's lifetime, so a delayed reader request cannot activate
+a replacement control. Canvas keys use their full 64-bit identity.
+
+On desktop, editable fields expose every text run beyond the first 255 lines or
+chunks. Caret and selection positions refer to the published runs; requests for a
+different field, missing run or offset outside a run are rejected.
+
 On the web, a pane title names its region without replacing an explicit dialog,
 alert, button or range role. Adjustable controls retain their slider or spinbutton
 semantics, so readers continue offering the appropriate operations.

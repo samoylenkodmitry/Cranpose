@@ -14,7 +14,7 @@ use jni::{
 };
 
 use crate::{
-    accessibility::{self, AccessibilityElement},
+    accessibility::{self, AccessibilitySnapshot},
     accessibility_publish_policy::AccessibilityPublishPolicy,
     android_accessibility_wire::encode_elements,
     android_jni::{clear_pending_android_jni_exception, with_android_activity_env},
@@ -264,7 +264,7 @@ pub(crate) fn sync(
     app: &android_activity::AndroidApp,
     shell: &mut AppShell<WgpuRenderer>,
     density: f32,
-    previous: &mut Vec<AccessibilityElement>,
+    previous: &mut AccessibilitySnapshot,
     seen_revision: &mut Option<u64>,
     policy: &mut AccessibilityPublishPolicy,
 ) -> Result<(), String> {
@@ -285,17 +285,25 @@ pub(crate) fn sync(
     } else {
         None
     };
-    let elements = elements.filter(|elements| elements != previous);
+    let elements = elements.filter(|elements| *elements != previous.elements);
     if let Some(elements) = &elements {
-        announcements.extend(accessibility::live_region_announcements(previous, elements));
-        announcements.extend(accessibility::pane_title_announcements(previous, elements));
+        announcements.extend(accessibility::live_region_announcements(
+            &previous.elements,
+            elements,
+        ));
+        announcements.extend(accessibility::pane_title_announcements(
+            &previous.elements,
+            elements,
+        ));
     }
     speak(app, announcements)?;
     let Some(elements) = elements else {
         return Ok(());
     };
-    let changed = accessibility::spoken_changes(previous, &elements);
-    *previous = elements;
+    let changed = accessibility::spoken_changes(&previous.elements, &elements);
+    previous
+        .update(elements)
+        .map_err(|error| error.to_string())?;
     let payload = encode_elements(previous, &changed, density);
     with_android_activity_env(app, |env, activity| {
         let payload = env.new_string(payload).map_err(|error| {

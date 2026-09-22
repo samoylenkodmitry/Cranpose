@@ -12,6 +12,25 @@ use cranpose_ui::{
 use super::*;
 
 #[test]
+fn colliding_canvas_ids_survive_reordering_and_removal() {
+    let first = element_with(42, Some(0));
+    let second = element_with(42, Some(1 << 31));
+    let mut snapshot = AccessibilitySnapshot::default();
+    snapshot
+        .update(vec![first.clone(), second.clone()])
+        .expect("unique elements");
+    let original = snapshot.ids.clone();
+    snapshot
+        .update(vec![second.clone(), first])
+        .expect("unique elements");
+    let reordered = snapshot.ids.clone();
+    assert_eq!(original[0], reordered[1]);
+    assert_eq!(original[1], reordered[0]);
+    snapshot.update(vec![second]).expect("unique element");
+    assert_eq!(snapshot.ids, vec![original[1]]);
+}
+
+#[test]
 fn a_pane_title_preserves_dialog_and_control_roles_on_the_web() {
     for (role, expected) in [
         (AccessibilityRole::Dialog, "dialog"),
@@ -27,6 +46,15 @@ fn a_pane_title_preserves_dialog_and_control_roles_on_the_web() {
         };
         assert_eq!(web_role(&element), expected);
     }
+}
+
+#[test]
+fn opening_a_dialog_reports_its_identity_once() {
+    let mut dialog = element_with(7, None);
+    dialog.role = AccessibilityRole::Dialog;
+    assert_eq!(opened_dialog(&[], &[dialog.clone()]), Some(7));
+    assert_eq!(opened_dialog(&[dialog.clone()], &[dialog]), None);
+    assert_eq!(opened_dialog(&[], &[element_with(8, None)]), None);
 }
 
 #[test]
@@ -343,7 +371,9 @@ fn disabled_canvas_actions_do_not_invoke_the_callback() {
 #[test]
 fn drawn_controls_get_distinct_ids_that_do_not_move_with_list_position() {
     let rows: Vec<_> = (0..24).map(|key| element_with(7, Some(key))).collect();
-    let ids = element_ids(&rows);
+    let mut snapshot = AccessibilitySnapshot::default();
+    snapshot.update(rows.clone()).expect("unique rows");
+    let ids = snapshot.ids.clone();
 
     let mut sorted = ids.clone();
     sorted.sort_unstable();
@@ -351,17 +381,16 @@ fn drawn_controls_get_distinct_ids_that_do_not_move_with_list_position() {
     assert_eq!(sorted.len(), ids.len(), "ids collided: {ids:?}");
     assert!(ids.iter().all(|id| *id > 0));
 
-    let scrolled = element_ids(&rows[1..]);
-    assert_eq!(scrolled, ids[1..]);
-
-    assert_eq!(element_ids(&[element_with(7, None)]), vec![7]);
-    assert!(
-        !ids.contains(&7),
-        "a drawn control took the layout node's id"
-    );
-
-    let across = element_ids(&[element_with(7, Some(3)), element_with(8, Some(3))]);
-    assert_ne!(across[0], across[1]);
+    snapshot.update(rows[1..].to_vec()).expect("unique rows");
+    assert_eq!(snapshot.ids, ids[1..]);
+    snapshot
+        .update(vec![element_with(7, None)])
+        .expect("layout node");
+    assert!(!ids.contains(&snapshot.ids[0]));
+    snapshot
+        .update(vec![element_with(7, Some(3)), element_with(8, Some(3))])
+        .expect("distinct canvases");
+    assert_ne!(snapshot.ids[0], snapshot.ids[1]);
 }
 
 #[test]
@@ -371,19 +400,12 @@ fn an_element_id_resolves_back_to_the_element_that_published_it() {
         element_with(7, Some(3)),
         element_with(9, Some(3)),
     ];
-    let ids = element_ids(&elements);
-
-    assert_eq!(resolve_element_id(&elements, ids[1]), Some((7, Some(3))));
-    assert_eq!(resolve_element_id(&elements, ids[2]), Some((9, Some(3))));
-    assert_eq!(resolve_element_id(&elements, ids[0]), Some((7, None)));
-    assert_eq!(resolve_element_id(&elements, -12), None);
-}
-
-#[test]
-fn a_layout_node_element_keeps_its_cranpose_node_id() {
-    assert_eq!(element_id(42, None), 42);
-    assert_eq!(element_id(0, None), 1);
-    assert_eq!(element_id(42, None), element_id(42, None));
+    let mut snapshot = AccessibilitySnapshot::default();
+    snapshot.update(elements).expect("unique elements");
+    assert_eq!(snapshot.identity(snapshot.ids[1]), Some((7, Some(3))));
+    assert_eq!(snapshot.identity(snapshot.ids[2]), Some((9, Some(3))));
+    assert_eq!(snapshot.identity(snapshot.ids[0]), Some((7, None)));
+    assert_eq!(snapshot.identity(-12), None);
 }
 
 #[test]

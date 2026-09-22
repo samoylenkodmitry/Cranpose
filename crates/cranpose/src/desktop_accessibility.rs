@@ -22,9 +22,7 @@ use crate::accessibility::{self, AccessibilityElement, AccessibilityRole};
 
 const ROOT_ID: NodeId = NodeId(u64::MAX);
 const ANNOUNCEMENT_ID: NodeId = NodeId(u64::MAX - 1);
-/// Set on the accesskit id of a text run, above the bits that hold the run's
-/// index and the virtual id of the field it belongs to.
-const TEXT_RUN_BIT: u64 = 1 << 40;
+const TEXT_RUN_BIT: u64 = 1 << 31;
 /// The most characters one text run holds: accesskit counts the words of a
 /// run in a byte, so a long line is broken into runs at a space.
 const TEXT_RUN_CHARS: usize = 200;
@@ -84,7 +82,7 @@ pub(crate) struct DesktopAccessibilityBridge {
     pending_scrolls: Vec<(NodeId, bool)>,
     pending_jumps: Vec<(NodeId, usize)>,
     pending_expansions: Vec<(NodeId, bool)>,
-    previous: Vec<AccessibilityElement>,
+    previous: accessibility::AccessibilitySnapshot,
     seen_revision: Option<u64>,
     announcement: Option<Announcement>,
     announcement_turn: bool,
@@ -121,7 +119,7 @@ impl DesktopAccessibilityBridge {
             pending_scrolls: Vec::new(),
             pending_jumps: Vec::new(),
             pending_expansions: Vec::new(),
-            previous: Vec::new(),
+            previous: accessibility::AccessibilitySnapshot::default(),
             seen_revision: None,
             announcement: None,
             announcement_turn: false,
@@ -144,13 +142,16 @@ impl DesktopAccessibilityBridge {
         let mut announcements = accessibility::drain_app_announcements();
         let mut changed = false;
         if let Some(elements) = accessibility::snapshot_if_changed(shell, &mut self.seen_revision)
-            && elements != self.previous
+            && elements != self.previous.elements
         {
             announcements.extend(accessibility::pane_title_announcements(
-                &self.previous,
+                &self.previous.elements,
                 &elements,
             ));
-            self.previous = elements;
+            if let Err(error) = self.previous.update(elements) {
+                log::error!("Could not publish accessibility tree: {error}");
+                return;
+            }
             changed = true;
         }
         if let Some(spoken) = join_announcements(announcements) {
@@ -239,12 +240,7 @@ impl DesktopAccessibilityBridge {
     /// Queues the value one step up or down from the one an adjustable control
     /// holds now, for a reader that offers a step rather than a value.
     fn step_value(&mut self, target: NodeId, up: bool) {
-        let ids = accessibility::element_ids(&self.previous);
-        let Some(element) = ids
-            .iter()
-            .position(|id| NodeId(*id as u64) == target)
-            .and_then(|position| self.previous.get(position))
-        else {
+        let Some(element) = self.element_for(target) else {
             return;
         };
         if let Some(progress) = element.progress {
@@ -260,14 +256,9 @@ impl DesktopAccessibilityBridge {
             return false;
         }
         let pending = std::mem::take(&mut self.pending_focus);
-        let ids = accessibility::element_ids(&self.previous);
         let mut moved = false;
         for target in pending {
-            let Some(element) = ids
-                .iter()
-                .position(|id| NodeId(*id as u64) == target)
-                .and_then(|position| self.previous.get(position))
-            else {
+            let Some(element) = self.element_for(target) else {
                 continue;
             };
             moved |= accessibility::run_reader_action(shell, |root| {
@@ -282,14 +273,9 @@ impl DesktopAccessibilityBridge {
             return false;
         }
         let pending = std::mem::take(&mut self.pending_custom_actions);
-        let ids = accessibility::element_ids(&self.previous);
         let mut ran = false;
         for (target, index) in pending {
-            let Some(element) = ids
-                .iter()
-                .position(|id| NodeId(*id as u64) == target)
-                .and_then(|position| self.previous.get(position))
-            else {
+            let Some(element) = self.element_for(target) else {
                 continue;
             };
             let (node_id, canvas_key) = (element.node_id, element.canvas_key);
@@ -308,14 +294,9 @@ impl DesktopAccessibilityBridge {
             return false;
         }
         let pending = std::mem::take(&mut self.pending_scrolls);
-        let ids = accessibility::element_ids(&self.previous);
         let mut moved = false;
         for (target, forward) in pending {
-            let Some(element) = ids
-                .iter()
-                .position(|id| NodeId(*id as u64) == target)
-                .and_then(|position| self.previous.get(position))
-            else {
+            let Some(element) = self.element_for(target) else {
                 continue;
             };
             let (dx, dy) = accessibility::page_delta(element, forward);
@@ -389,19 +370,18 @@ impl DesktopAccessibilityBridge {
     }
 
     fn element_for(&self, target: NodeId) -> Option<&AccessibilityElement> {
-        let ids = accessibility::element_ids(&self.previous);
-        let position = ids.iter().position(|id| NodeId(*id as u64) == target)?;
-        self.previous.get(position)
+        self.previous.element(i32::try_from(target.0).ok()?)
     }
 }
 
 fn tree_update(
-    elements: &[AccessibilityElement],
+    snapshot: &accessibility::AccessibilitySnapshot,
     announcement: Option<&Announcement>,
     announcement_turn: bool,
 ) -> TreeUpdate {
-    let ids = accessibility::element_ids(elements);
-    let mut nested = nested_children(&ids, elements);
+    let elements = &snapshot.elements;
+    let ids = &snapshot.ids;
+    let mut nested = nested_children(ids, elements);
     let mut children = nested.remove(&None).unwrap_or_default();
     if announcement.is_some() {
         children.push(ANNOUNCEMENT_ID);
@@ -438,7 +418,7 @@ fn tree_update(
         nodes,
         tree: Some(tree),
         tree_id: TreeId::ROOT,
-        focus: focused_node(&ids, elements),
+        focus: focused_node(ids, elements),
     }
 }
 
@@ -465,23 +445,27 @@ fn nested_children(
     nested
 }
 
-/// One control as accesskit describes it to a screen reader.
-fn accesskit_node(element: &AccessibilityElement) -> Node {
+fn accesskit_element_role(element: &AccessibilityElement) -> Role {
     let scrolls = element.vertical_scroll.is_some() || element.horizontal_scroll.is_some();
-    let role = match element.progress {
+    match element.progress {
         Some(_) if element.adjustable && element.role != AccessibilityRole::ValuePicker => {
             Role::Slider
         }
         Some(_) => accesskit_role(element.role),
-        None if element.pane_title.is_some() => Role::Region,
+        None if element.pane_title.is_some() && element.role == AccessibilityRole::StaticText => {
+            Role::Region
+        }
         None if scrolls && element.label.is_empty() && !element.role.is_named_container() => {
             scroll_role(element)
         }
         None if element.password => Role::PasswordInput,
         None if element.role.is_text_field() && element.multiline => Role::MultilineTextInput,
         None => accesskit_role(element.role),
-    };
-    let mut node = Node::new(role);
+    }
+}
+
+fn accesskit_node(element: &AccessibilityElement) -> Node {
+    let mut node = Node::new(accesskit_element_role(element));
     if element.role == AccessibilityRole::StaticText {
         node.set_value(element.label.as_str());
     } else {
@@ -943,18 +927,18 @@ fn word_starts(run: &str) -> Vec<u8> {
 }
 
 /// The accesskit id of one text run of a field.
-fn text_run_id(field_id: i32, run_index: usize) -> NodeId {
+fn text_run_id(field_id: i32, run_index: u32) -> NodeId {
     NodeId(TEXT_RUN_BIT | ((run_index as u64) << 32) | field_id as u64)
 }
 
 /// The field and the run index behind the accesskit id of a text run, or
 /// nothing for the id of a control.
 fn text_run_owner(id: NodeId) -> Option<(i32, usize)> {
-    if id.0 & TEXT_RUN_BIT == 0 {
+    if id.0 & TEXT_RUN_BIT == 0 || id == ROOT_ID || id == ANNOUNCEMENT_ID {
         return None;
     }
-    let field_id = (id.0 & 0xffff_ffff) as i32;
-    let run_index = ((id.0 >> 32) & 0xff) as usize;
+    let field_id = (id.0 & 0x7fff_ffff) as i32;
+    let run_index = (id.0 >> 32) as usize;
     Some((field_id, run_index))
 }
 
@@ -967,10 +951,8 @@ fn text_run_nodes(field_id: i32, element: &AccessibilityElement) -> Vec<(NodeId,
     let (Some(value), Some(_)) = (&element.value, element.text_selection) else {
         return Vec::new();
     };
-    text_runs(value)
-        .into_iter()
-        .enumerate()
-        .take(0xff)
+    (0u32..)
+        .zip(text_runs(value))
         .map(|(index, span)| {
             let text = &value[span.start_byte..span.end_byte];
             let mut run = Node::new(Role::TextRun);
@@ -996,7 +978,12 @@ fn text_run_nodes(field_id: i32, element: &AccessibilityElement) -> Vec<(NodeId,
 /// The run and the character inside it that a character offset into a
 /// field's text falls on. An offset right after a line break belongs to the
 /// start of the next line.
-fn text_position(field_id: i32, value: &str, runs: &[TextRunSpan], chars: usize) -> TextPosition {
+fn text_position(
+    field_id: i32,
+    value: &str,
+    runs: &[TextRunSpan],
+    chars: usize,
+) -> Option<TextPosition> {
     let chars = chars.min(value.chars().count());
     let mut run_index = runs
         .iter()
@@ -1008,10 +995,10 @@ fn text_position(field_id: i32, value: &str, runs: &[TextRunSpan], chars: usize)
     {
         run_index += 1;
     }
-    TextPosition {
-        node: text_run_id(field_id, run_index.min(0xfe)),
+    Some(TextPosition {
+        node: text_run_id(field_id, u32::try_from(run_index).ok()?),
         character_index: chars - runs[run_index].start_char,
-    }
+    })
 }
 
 /// Puts the caret, or the picked stretch of text, on the accesskit node of an
@@ -1021,40 +1008,49 @@ fn apply_text_selection(node: &mut Node, field_id: i32, element: &AccessibilityE
         return;
     };
     let runs = text_runs(value);
-    node.set_text_selection(TextSelection {
-        anchor: text_position(
-            field_id,
-            value,
-            &runs,
-            accessibility::char_offset(value, anchor),
-        ),
-        focus: text_position(
-            field_id,
-            value,
-            &runs,
-            accessibility::char_offset(value, focus),
-        ),
-    });
+    let Some(anchor) = text_position(
+        field_id,
+        value,
+        &runs,
+        accessibility::char_offset(value, anchor),
+    ) else {
+        return;
+    };
+    let Some(focus) = text_position(
+        field_id,
+        value,
+        &runs,
+        accessibility::char_offset(value, focus),
+    ) else {
+        return;
+    };
+    node.set_text_selection(TextSelection { anchor, focus });
 }
 
 /// The live node of the field a screen reader set a selection on, with the
 /// two ends counted in characters of the whole text, or nothing when the
 /// selection names a run that is not in the published tree.
 fn selection_chars(
-    elements: &[AccessibilityElement],
+    snapshot: &accessibility::AccessibilitySnapshot,
     target: NodeId,
     selection: &TextSelection,
 ) -> Option<(cranpose_core::NodeId, usize, usize)> {
-    let (field_id, _) = text_run_owner(selection.anchor.node)
-        .or_else(|| text_run_owner(target))
-        .unwrap_or((target.0 as i32, 0));
-    let ids = accessibility::element_ids(elements);
-    let element = elements.get(ids.iter().position(|id| *id == field_id)?)?;
-    let runs = text_runs(element.value.as_deref()?);
+    let field_id = match text_run_owner(target) {
+        Some((owner, _)) => owner,
+        None => i32::try_from(target.0).ok()?,
+    };
+    let element = snapshot.element(field_id)?;
+    let value = element.value.as_deref()?;
+    let runs = text_runs(value);
+    if let Some((_, index)) = text_run_owner(target) {
+        runs.get(index)?;
+    }
     let offset = |position: &TextPosition| -> Option<usize> {
         let (owner, run_index) = text_run_owner(position.node)?;
         (owner == field_id).then_some(())?;
-        Some(runs.get(run_index)?.start_char + position.character_index)
+        let run = runs.get(run_index)?;
+        let length = value[run.start_byte..run.end_byte].chars().count();
+        (position.character_index <= length).then(|| run.start_char + position.character_index)
     };
     Some((
         element.node_id,

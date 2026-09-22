@@ -156,12 +156,10 @@ const IME_ACTION_DONE: i32 = 6;
 
 fn drain_accessibility_activations(
     shell: &mut AppShell<WgpuRenderer>,
-    elements: &[crate::accessibility::AccessibilityElement],
+    elements: &crate::accessibility::AccessibilitySnapshot,
 ) {
     for virtual_id in crate::android_accessibility::drain_activations() {
-        if let Some((node_id, canvas_key)) =
-            crate::accessibility::resolve_element_id(elements, virtual_id)
-        {
+        if let Some((node_id, canvas_key)) = elements.identity(virtual_id) {
             shell.accessibility_activate(node_id, canvas_key);
         }
     }
@@ -171,11 +169,10 @@ fn drain_accessibility_activations(
 /// and the app agree on what holds focus.
 fn drain_accessibility_focus(
     shell: &mut AppShell<WgpuRenderer>,
-    elements: &[crate::accessibility::AccessibilityElement],
+    elements: &crate::accessibility::AccessibilitySnapshot,
 ) {
     for virtual_id in crate::android_accessibility::drain_focus_requests() {
-        let Some((node_id, _)) = crate::accessibility::resolve_element_id(elements, virtual_id)
-        else {
+        let Some((node_id, _)) = elements.identity(virtual_id) else {
             continue;
         };
         crate::accessibility::run_reader_action(shell, |root| {
@@ -189,12 +186,10 @@ fn drain_accessibility_focus(
 /// snapshot cannot move the wrong one.
 fn drain_accessibility_custom_actions(
     shell: &mut AppShell<WgpuRenderer>,
-    elements: &[crate::accessibility::AccessibilityElement],
+    elements: &crate::accessibility::AccessibilitySnapshot,
 ) {
     for (virtual_id, action_index) in crate::android_accessibility::drain_custom_actions() {
-        let Some((node_id, canvas_key)) =
-            crate::accessibility::resolve_element_id(elements, virtual_id)
-        else {
+        let Some((node_id, canvas_key)) = elements.identity(virtual_id) else {
             continue;
         };
         crate::accessibility::run_reader_action(shell, |root| {
@@ -205,11 +200,10 @@ fn drain_accessibility_custom_actions(
 
 fn drain_accessibility_values(
     shell: &mut AppShell<WgpuRenderer>,
-    elements: &[crate::accessibility::AccessibilityElement],
+    elements: &crate::accessibility::AccessibilitySnapshot,
 ) {
     for (virtual_id, value) in crate::android_accessibility::drain_value_requests() {
-        let Some((node_id, _)) = crate::accessibility::resolve_element_id(elements, virtual_id)
-        else {
+        let Some((node_id, _)) = elements.identity(virtual_id) else {
             continue;
         };
         crate::accessibility::run_reader_action(shell, |root| {
@@ -220,11 +214,10 @@ fn drain_accessibility_values(
 
 fn drain_accessibility_texts(
     shell: &mut AppShell<WgpuRenderer>,
-    elements: &[crate::accessibility::AccessibilityElement],
+    elements: &crate::accessibility::AccessibilitySnapshot,
 ) {
     for (virtual_id, text) in crate::android_accessibility::drain_text_requests() {
-        let Some((node_id, _)) = crate::accessibility::resolve_element_id(elements, virtual_id)
-        else {
+        let Some((node_id, _)) = elements.identity(virtual_id) else {
             continue;
         };
         crate::accessibility::run_reader_action(shell, |root| {
@@ -235,11 +228,10 @@ fn drain_accessibility_texts(
 
 fn drain_accessibility_selections(
     shell: &mut AppShell<WgpuRenderer>,
-    elements: &[crate::accessibility::AccessibilityElement],
+    elements: &crate::accessibility::AccessibilitySnapshot,
 ) {
     for (virtual_id, start, end) in crate::android_accessibility::drain_selection_requests() {
-        let Some((node_id, _)) = crate::accessibility::resolve_element_id(elements, virtual_id)
-        else {
+        let Some((node_id, _)) = elements.identity(virtual_id) else {
             continue;
         };
         crate::accessibility::run_reader_action(shell, |root| {
@@ -250,11 +242,10 @@ fn drain_accessibility_selections(
 
 fn drain_accessibility_expansions(
     shell: &mut AppShell<WgpuRenderer>,
-    elements: &[crate::accessibility::AccessibilityElement],
+    elements: &crate::accessibility::AccessibilitySnapshot,
 ) {
     for (virtual_id, open) in crate::android_accessibility::drain_expand_requests() {
-        let Some((node_id, _)) = crate::accessibility::resolve_element_id(elements, virtual_id)
-        else {
+        let Some((node_id, _)) = elements.identity(virtual_id) else {
             continue;
         };
         crate::accessibility::run_reader_action(shell, |root| {
@@ -265,11 +256,10 @@ fn drain_accessibility_expansions(
 
 fn drain_accessibility_dismissals(
     shell: &mut AppShell<WgpuRenderer>,
-    elements: &[crate::accessibility::AccessibilityElement],
+    elements: &crate::accessibility::AccessibilitySnapshot,
 ) {
     for virtual_id in crate::android_accessibility::drain_dismiss_requests() {
-        let Some((node_id, _)) = crate::accessibility::resolve_element_id(elements, virtual_id)
-        else {
+        let Some((node_id, _)) = elements.identity(virtual_id) else {
             continue;
         };
         crate::accessibility::run_reader_action(shell, |root| {
@@ -282,11 +272,10 @@ fn drain_accessibility_dismissals(
 /// against the live semantics tree, as a custom action is.
 fn drain_accessibility_long_clicks(
     shell: &mut AppShell<WgpuRenderer>,
-    elements: &[crate::accessibility::AccessibilityElement],
+    elements: &crate::accessibility::AccessibilitySnapshot,
 ) {
     for virtual_id in crate::android_accessibility::drain_long_click_requests() {
-        let Some((node_id, _)) = crate::accessibility::resolve_element_id(elements, virtual_id)
-        else {
+        let Some((node_id, _)) = elements.identity(virtual_id) else {
             continue;
         };
         crate::accessibility::run_reader_action(shell, |root| {
@@ -297,14 +286,10 @@ fn drain_accessibility_long_clicks(
 
 fn drain_accessibility_scrolls(
     shell: &mut AppShell<WgpuRenderer>,
-    elements: &[crate::accessibility::AccessibilityElement],
+    elements: &crate::accessibility::AccessibilitySnapshot,
 ) {
     for (virtual_id, forward) in crate::android_accessibility::drain_scroll_requests() {
-        let Some(element) = crate::accessibility::element_ids(elements)
-            .into_iter()
-            .position(|id| id == virtual_id)
-            .and_then(|index| elements.get(index))
-        else {
+        let Some(element) = elements.element(virtual_id) else {
             continue;
         };
         let (dx, dy) = crate::accessibility::page_delta(element, forward);
@@ -319,11 +304,10 @@ fn drain_accessibility_scrolls(
 /// Android's scroll-to-position action.
 fn drain_accessibility_jumps(
     shell: &mut AppShell<WgpuRenderer>,
-    elements: &[crate::accessibility::AccessibilityElement],
+    elements: &crate::accessibility::AccessibilitySnapshot,
 ) {
     for (virtual_id, index) in crate::android_accessibility::drain_jump_requests() {
-        let Some((node_id, _)) = crate::accessibility::resolve_element_id(elements, virtual_id)
-        else {
+        let Some((node_id, _)) = elements.identity(virtual_id) else {
             continue;
         };
         crate::accessibility::run_reader_action(shell, |root| {
@@ -1696,7 +1680,7 @@ pub fn run(
     let content = std::rc::Rc::new(std::cell::RefCell::new(content));
 
     let mut app_shell: Option<AppShell<WgpuRenderer>> = None;
-    let mut accessibility_elements = Vec::new();
+    let mut accessibility_elements = crate::accessibility::AccessibilitySnapshot::default();
     let mut accessibility_revision = None;
     let mut accessibility_policy =
         crate::accessibility_publish_policy::AccessibilityPublishPolicy::new();

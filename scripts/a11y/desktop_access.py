@@ -74,7 +74,10 @@ class LinuxAdapter(NativeAdapter):
             try:
                 return self._nodes()
             except self.error_type as error:
-                if attempt == 2 or not error.message.startswith('Unknown object '):
+                removed = error.message.startswith('Unknown object ') or (
+                    error.domain == 'atspi_error' and error.code == 1
+                    and error.message.startswith('/org/a11y/atspi/accessible/'))
+                if attempt == 2 or not removed:
                     raise
                 time.sleep(0.02)
 

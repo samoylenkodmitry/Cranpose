@@ -1070,7 +1070,8 @@ fn reconcile_children(parent: &HtmlElement, children: &[HtmlElement]) -> Result<
 pub(crate) struct WebAccessibilityBridge {
     root: HtmlElement,
     canvas: HtmlCanvasElement,
-    previous: Vec<AccessibilityElement>,
+    previous: accessibility::AccessibilitySnapshot,
+    dirty: bool,
     entries: HashMap<i32, MirrorEntry>,
     node_ids: Rc<RefCell<HashMap<i32, cranpose_core::NodeId>>>,
     text_input: Rc<WebTextInput>,
@@ -1108,7 +1109,8 @@ impl WebAccessibilityBridge {
         Ok(Self {
             root,
             canvas,
-            previous: Vec::new(),
+            previous: accessibility::AccessibilitySnapshot::default(),
+            dirty: false,
             entries: HashMap::new(),
             node_ids,
             text_input: Rc::default(),
@@ -1132,11 +1134,11 @@ impl WebAccessibilityBridge {
     fn speak(&mut self, next: &[AccessibilityElement]) {
         let mut announcements = accessibility::drain_app_announcements();
         announcements.extend(accessibility::live_region_announcements(
-            &self.previous,
+            &self.previous.elements,
             next,
         ));
         announcements.extend(accessibility::pane_title_announcements(
-            &self.previous,
+            &self.previous.elements,
             next,
         ));
         for announcement in announcements {
@@ -1179,10 +1181,10 @@ impl WebAccessibilityBridge {
     ) -> Result<(), JsValue> {
         let elements = accessibility::snapshot(shell);
         self.speak(&elements);
-        if elements == self.previous {
+        if elements == self.previous.elements && !self.dirty {
             return self.sync_password(shell, &elements);
         }
-        let opened_dialog = opened_dialog(&self.previous, &elements);
+        let opened_dialog = accessibility::opened_dialog(&self.previous.elements, &elements);
         let held = reader_focus(document).filter(|_| opened_dialog.is_none());
         let app_focus_before = self.focused_element;
         let canvas_rect = self.canvas.get_bounding_client_rect();
@@ -1193,20 +1195,32 @@ impl WebAccessibilityBridge {
             scale_x: canvas_rect.width() / viewport.0.max(1.0) as f64,
             scale_y: canvas_rect.height() / viewport.1.max(1.0) as f64,
         };
-        self.reconcile(document, &elements, &placement)?;
-        self.sync_password(shell, &elements)?;
-        for (id, element) in accessibility::element_ids(&elements)
-            .into_iter()
-            .zip(&elements)
-        {
-            let node = self.entries[&id].node.clone();
-            self.follow_app_focus(&node, element, id)?;
-            if opened_dialog == Some(element.node_id) {
-                node.focus()?;
-            }
+        let mut next_snapshot = std::mem::take(&mut self.previous);
+        if let Err(error) = next_snapshot.update(elements) {
+            self.previous = next_snapshot;
+            return Err(JsValue::from_str(&error.to_string()));
         }
-        self.previous = elements;
-        self.settle_focus(held, app_focus_before)
+        let mut result = (|| {
+            self.reconcile(document, &next_snapshot, &placement)?;
+            self.sync_password(shell, &next_snapshot.elements)?;
+            for id in &next_snapshot.ids {
+                let Some(element) = next_snapshot.element(*id) else {
+                    continue;
+                };
+                let node = self.entries[id].node.clone();
+                self.follow_app_focus(&node, element, *id)?;
+                if opened_dialog == Some(element.node_id) {
+                    node.focus()?;
+                }
+            }
+            Ok(())
+        })();
+        self.previous = next_snapshot;
+        if result.is_ok() {
+            result = self.settle_focus(held, app_focus_before);
+        }
+        self.dirty = result.is_err();
+        result
     }
 
     fn sync_password(
@@ -1240,11 +1254,12 @@ impl WebAccessibilityBridge {
     fn reconcile(
         &mut self,
         document: &Document,
-        elements: &[AccessibilityElement],
+        snapshot: &accessibility::AccessibilitySnapshot,
         placement: &Placement,
     ) -> Result<(), JsValue> {
-        let ids = accessibility::element_ids(elements);
-        let pages = page_targets(&ids, elements);
+        let elements = &snapshot.elements;
+        let ids = &snapshot.ids;
+        let pages = page_targets(ids, elements);
         let parents: HashMap<_, _> = ids
             .iter()
             .zip(elements)
@@ -1302,7 +1317,7 @@ impl WebAccessibilityBridge {
         held: Option<String>,
         app_focus_before: Option<i32>,
     ) -> Result<(), JsValue> {
-        if !self.previous.iter().any(|element| element.focused) {
+        if !self.previous.elements.iter().any(|element| element.focused) {
             self.focused_element = None;
         }
         let Some(selector) = held.filter(|_| self.focused_element == app_focus_before) else {
@@ -1316,22 +1331,6 @@ impl WebAccessibilityBridge {
         }
         Ok(())
     }
-}
-
-/// The node id of a dialog that is in the next snapshot and was not in the
-/// current one: the node a reader's cursor should land on.
-fn opened_dialog(
-    current: &[AccessibilityElement],
-    next: &[AccessibilityElement],
-) -> Option<cranpose_core::NodeId> {
-    next.iter()
-        .find(|element| {
-            element.role == AccessibilityRole::Dialog
-                && !current.iter().any(|old| {
-                    old.node_id == element.node_id && old.role == AccessibilityRole::Dialog
-                })
-        })
-        .map(|element| element.node_id)
 }
 
 fn reader_focus(document: &Document) -> Option<String> {

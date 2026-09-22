@@ -272,8 +272,7 @@ impl NativeAccessibilityElement {
 pub(crate) struct IosAccessibilityBridge {
     host_view: Retained<UIView>,
     native_elements: HashMap<i32, Retained<NativeAccessibilityElement>>,
-    snapshot: Vec<AccessibilityElement>,
-    snapshot_ids: Vec<i32>,
+    snapshot: accessibility::AccessibilitySnapshot,
     requests: ReaderRequests,
     wake_proxy: EventLoopProxy,
     published_once: bool,
@@ -296,8 +295,7 @@ impl IosAccessibilityBridge {
         Some(Self {
             host_view,
             native_elements: HashMap::new(),
-            snapshot: Vec::new(),
-            snapshot_ids: Vec::new(),
+            snapshot: accessibility::AccessibilitySnapshot::default(),
             requests: ReaderRequests::default(),
             wake_proxy: event_proxy,
             published_once: false,
@@ -325,25 +323,34 @@ impl IosAccessibilityBridge {
         }
         let next = accessibility::snapshot(shell);
         self.speak(&next);
-        if next == self.snapshot {
+        if next == self.snapshot.elements {
             return;
         }
         accessibility::log_spoken_tree(&next);
-        let next_ids = accessibility::element_ids(&next);
+        let structure_changed = !same_structure(&self.snapshot.elements, &next);
+        let changed = accessibility::spoken_changes(&self.snapshot.elements, &next);
+        let opened = accessibility::opened_dialog(&self.snapshot.elements, &next);
+        let mut next_snapshot = std::mem::take(&mut self.snapshot);
+        if let Err(error) = next_snapshot.update(next) {
+            self.snapshot = next_snapshot;
+            log::error!("Could not publish accessibility tree: {error}");
+            return;
+        }
+        let next = &next_snapshot.elements;
+        let next_ids = &next_snapshot.ids;
         self.requests.screen_action.set(
             next.iter()
-                .zip(&next_ids)
+                .zip(next_ids)
                 .find(|(element, _)| element.magic_tap_label.is_some())
                 .map(|(_, id)| *id),
         );
 
-        let structure_changed = !same_structure(&self.snapshot, &next);
         let current_ids: HashSet<i32> = next_ids.iter().copied().collect();
         self.native_elements
             .retain(|element_id, _| current_ids.contains(element_id));
 
         let mtm = MainThreadMarker::new().expect("accessibility sync runs on UIKit's main thread");
-        for (element_id, element) in next_ids.iter().zip(&next) {
+        for (element_id, element) in next_ids.iter().zip(next) {
             if !self.native_elements.contains_key(element_id) {
                 let native = self.create_element(*element_id, mtm);
                 self.native_elements.insert(*element_id, native);
@@ -352,11 +359,11 @@ impl IosAccessibilityBridge {
                 .native_elements
                 .get(element_id)
                 .expect("accessibility element inserted above");
-            let jumpable = accessibility::scroll_container_for(&next, element)
+            let jumpable = accessibility::scroll_container_for(next, element)
                 .is_some_and(|container| accessibility::row_count(container) > 0);
             update_native_element(native, element, jumpable, mtm);
         }
-        self.reader_view = reader_field(&next, &next_ids).and_then(|(id, element)| {
+        self.reader_view = reader_field(next, next_ids).and_then(|(id, element)| {
             let frame = CGRect::new(
                 CGPoint::new(element.bounds.x as f64, element.bounds.y as f64),
                 CGSize::new(element.bounds.width as f64, element.bounds.height as f64),
@@ -375,12 +382,14 @@ impl IosAccessibilityBridge {
         }
 
         if structure_changed {
-            let opened_dialog = opened_dialog(&self.snapshot, &next, &next_ids);
-            self.publish_container(&next_ids, opened_dialog, mtm);
+            let opened_dialog = next
+                .iter()
+                .zip(next_ids)
+                .find(|(element, _)| Some(element.node_id) == opened)
+                .map(|(_, id)| *id);
+            self.publish_container(next_ids, opened_dialog, mtm);
         }
-        let changed = accessibility::spoken_changes(&self.snapshot, &next);
-        self.snapshot = next;
-        self.snapshot_ids = next_ids;
+        self.snapshot = next_snapshot;
         if !self.follow_app_focus() {
             self.respeak_under_cursor(&changed);
         }
@@ -394,11 +403,11 @@ impl IosAccessibilityBridge {
     fn speak(&self, next: &[AccessibilityElement]) {
         let mut announcements = accessibility::drain_app_announcements();
         announcements.extend(accessibility::live_region_announcements(
-            &self.snapshot,
+            &self.snapshot.elements,
             next,
         ));
         announcements.extend(accessibility::pane_title_announcements(
-            &self.snapshot,
+            &self.snapshot.elements,
             next,
         ));
         for announcement in announcements {
@@ -419,9 +428,10 @@ impl IosAccessibilityBridge {
     /// focus move from the keyboard or from the app reaches the reader.
     fn follow_app_focus(&mut self) -> bool {
         let focused = self
-            .snapshot_ids
+            .snapshot
+            .ids
             .iter()
-            .zip(&self.snapshot)
+            .zip(&self.snapshot.elements)
             .find(|(_, element)| element.focused)
             .map(|(id, _)| *id);
         if focused == self.focused_element {
@@ -441,7 +451,7 @@ impl IosAccessibilityBridge {
         let Some(element_id) = self.reader_cursor else {
             return;
         };
-        let index = self.snapshot_ids.iter().position(|id| *id == element_id);
+        let index = self.snapshot.ids.iter().position(|id| *id == element_id);
         if index.is_some_and(|index| changed.get(index).copied().unwrap_or(false)) {
             self.name_to_reader(element_id);
         }
@@ -475,10 +485,7 @@ impl IosAccessibilityBridge {
 
     /// The element a virtual id stands for in the snapshot last published.
     fn element_for(&self, element_id: i32) -> Option<&AccessibilityElement> {
-        self.snapshot_ids
-            .iter()
-            .position(|id| *id == element_id)
-            .and_then(|index| self.snapshot.get(index))
+        self.snapshot.element(element_id)
     }
 
     /// Hands focus to the app when VoiceOver lands its cursor on an element.
@@ -569,7 +576,9 @@ impl IosAccessibilityBridge {
         for (element_id, forward) in pending {
             let Some((node_id, dx, dy)) = self
                 .element_for(element_id)
-                .and_then(|element| accessibility::scroll_container_for(&self.snapshot, element))
+                .and_then(|element| {
+                    accessibility::scroll_container_for(&self.snapshot.elements, element)
+                })
                 .map(|container| {
                     let (dx, dy) = accessibility::page_delta(container, forward);
                     (container.node_id, dx, dy)
@@ -596,7 +605,9 @@ impl IosAccessibilityBridge {
         for (element_id, last) in pending {
             let Some((node_id, index)) = self
                 .element_for(element_id)
-                .and_then(|element| accessibility::scroll_container_for(&self.snapshot, element))
+                .and_then(|element| {
+                    accessibility::scroll_container_for(&self.snapshot.elements, element)
+                })
                 .and_then(|container| {
                     let rows = accessibility::row_count(container);
                     (rows > 0).then(|| (container.node_id, if last { rows - 1 } else { 0 }))
@@ -944,24 +955,6 @@ fn rotor_action(
             selector,
         )
     }
-}
-
-/// The virtual id of a dialog that is in the next snapshot and was not in
-/// the current one: the element a reader's cursor should land on.
-fn opened_dialog(
-    current: &[AccessibilityElement],
-    next: &[AccessibilityElement],
-    next_ids: &[i32],
-) -> Option<i32> {
-    next.iter()
-        .zip(next_ids)
-        .find(|(element, _)| {
-            element.role == AccessibilityRole::Dialog
-                && !current.iter().any(|old| {
-                    old.node_id == element.node_id && old.role == AccessibilityRole::Dialog
-                })
-        })
-        .map(|(_, id)| *id)
 }
 
 /// The text field that holds app focus and publishes its caret, with its
