@@ -203,7 +203,7 @@ mod desktop {
         fn notify(&self, request: NotifyRequest) {
             #[cfg(target_os = "linux")]
             {
-                let mut command = Command::new("notify-send");
+                let mut command = crate::windowless_command("notify-send");
                 command
                     .arg("--replace-id")
                     .arg(numeric_id(&request.id).to_string())
@@ -220,7 +220,7 @@ mod desktop {
                     request.body.replace('\\', "\\\\").replace('"', "\\\""),
                     request.title.replace('\\', "\\\\").replace('"', "\\\"")
                 );
-                let mut command = Command::new("osascript");
+                let mut command = crate::windowless_command("osascript");
                 command.arg("-e").arg(script);
                 spawn_silent(command);
             }
@@ -236,7 +236,7 @@ mod desktop {
                     request.title.replace('\'', "''"),
                     request.body.replace('\'', "''")
                 );
-                let mut command = Command::new("powershell");
+                let mut command = crate::windowless_command("powershell");
                 command.arg("-NoProfile").arg("-Command").arg(script);
                 spawn_silent(command);
             }
@@ -246,7 +246,7 @@ mod desktop {
         fn cancel(&self, id: &str) {
             #[cfg(target_os = "linux")]
             {
-                let mut command = Command::new("gdbus");
+                let mut command = crate::windowless_command("gdbus");
                 command.args([
                     "call",
                     "--session",
