@@ -51,7 +51,7 @@ use crate::{
     gpu_stats::{self, gpu_stats_enabled},
     layer_cache::LayerCache,
     lazy_resource::LazyGpuResource,
-    offscreen::{OffscreenTarget, composition_bytes_per_pixel, composition_format},
+    offscreen::{OffscreenTarget, composition_bytes_per_pixel},
     output_conversion::OutputConverter,
     pipeline_compiler::{CompilerSend, PipelineCompiler},
     record_columns::record_vertex_layouts,
@@ -1832,13 +1832,14 @@ impl GpuRenderer {
         renderer_epoch: u64,
     ) -> Self {
         let display_format = surface_format;
-        let composition_format = composition_format();
         let construction_started = Instant::now();
         let device_errors = Arc::new(DeviceErrorSentry::default());
         if survive_gpu_errors_enabled() {
             let sentry = Arc::clone(&device_errors);
             device.on_uncaptured_error(Arc::new(move |error| sentry.record(&error)));
         }
+        let composition_format =
+            crate::offscreen::settle_composition_format(&device, adapter_backend);
         device.set_device_lost_callback(|reason, message| {
             log::error!("[gpu-device] device lost ({reason:?}): {message}");
         });
@@ -5106,6 +5107,7 @@ mod text_bounds_tests {
 #[cfg(test)]
 mod retained_glyph_tests {
     use super::*;
+    use crate::offscreen::composition_format;
 
     fn test_renderer() -> (std::sync::MutexGuard<'static, ()>, GpuRenderer) {
         let (lock, device, queue) = crate::frame_graph::upload_test_device();

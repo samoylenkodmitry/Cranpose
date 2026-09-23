@@ -1,15 +1,72 @@
-use std::cell::OnceCell;
+use std::{
+    cell::OnceCell,
+    future::Future,
+    sync::atomic::{AtomicBool, Ordering},
+    task::{Context, Poll, Waker},
+};
 
 use crate::gpu_stats::FrameStats;
 
+/// Set once a device turns out unable to draw into the float format, which
+/// then no renderer in the process composites in.
+static FLOAT_COMPOSITION_UNSUPPORTED: AtomicBool = AtomicBool::new(false);
+
 pub(crate) fn composition_format() -> wgpu::TextureFormat {
     static FORMAT: std::sync::OnceLock<wgpu::TextureFormat> = std::sync::OnceLock::new();
-    *FORMAT.get_or_init(|| {
+    let preferred = *FORMAT.get_or_init(|| {
         resolve_composition_format(
             crate::debug_toggles::debug_toggle("CRANPOSE_COMPOSITION_8BIT").as_deref(),
             cfg!(target_os = "android"),
         )
-    })
+    });
+    if FLOAT_COMPOSITION_UNSUPPORTED.load(Ordering::Relaxed) {
+        wgpu::TextureFormat::Rgba8Unorm
+    } else {
+        preferred
+    }
+}
+
+/// The format a renderer on `device` composites in: the float format where
+/// the device can draw into it, eight bits where it cannot.
+///
+/// WebGPU, Vulkan, Metal and DirectX all draw into `Rgba16Float`. OpenGL ES
+/// and WebGL2 draw into it only through `EXT_color_buffer_float` or
+/// `EXT_color_buffer_half_float`, which some browsers and drivers leave out;
+/// every offscreen layer and effect pipeline would then fail validation and
+/// leave the window blank.
+pub(crate) fn settle_composition_format(
+    device: &wgpu::Device,
+    backend: wgpu::Backend,
+) -> wgpu::TextureFormat {
+    let format = composition_format();
+    if backend == wgpu::Backend::Gl
+        && format != wgpu::TextureFormat::Rgba8Unorm
+        && !renders_into(device, format)
+    {
+        log::warn!("[gpu-init] this device cannot draw into {format:?}; compositing in Rgba8Unorm");
+        FLOAT_COMPOSITION_UNSUPPORTED.store(true, Ordering::Relaxed);
+    }
+    composition_format()
+}
+
+/// Whether `device` accepts a texture of `format` to draw into and sample.
+pub(crate) fn renders_into(device: &wgpu::Device, format: wgpu::TextureFormat) -> bool {
+    let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let _probe = create_2d_texture(
+        device,
+        format,
+        1,
+        1,
+        wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+        Some("Composition format probe"),
+    );
+    let mut error = std::pin::pin!(scope.pop());
+    // A device wgpu validates itself answers at once; only a browser's
+    // WebGPU answers later, and WebGPU draws into every format asked here.
+    match error.as_mut().poll(&mut Context::from_waker(Waker::noop())) {
+        Poll::Ready(error) => error.is_none(),
+        Poll::Pending => true,
+    }
 }
 
 fn resolve_composition_format(requested: Option<&str>, android: bool) -> wgpu::TextureFormat {
@@ -328,6 +385,24 @@ mod tests {
             resolve_composition_format(Some(""), false),
             wgpu::TextureFormat::Rgba16Float
         );
+    }
+
+    #[test]
+    fn a_device_is_asked_whether_it_can_draw_into_a_format() {
+        let (_lock, device, _queue) = crate::frame_graph::upload_test_device();
+        assert!(renders_into(&device, wgpu::TextureFormat::Rgba8Unorm));
+        assert!(
+            !renders_into(&device, wgpu::TextureFormat::Rgb9e5Ufloat),
+            "no device draws into a shared-exponent format"
+        );
+    }
+
+    #[test]
+    fn a_device_that_draws_into_the_float_format_keeps_it() {
+        let (_lock, device, _queue) = crate::frame_graph::upload_test_device();
+        let backend = device.adapter_info().backend;
+        let preferred = composition_format();
+        assert_eq!(settle_composition_format(&device, backend), preferred);
     }
 
     #[test]
