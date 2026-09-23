@@ -1076,7 +1076,7 @@ pub(crate) fn create_shape_pipeline(
         ("SHAPE_DISCARD", f64::from(u8::from(variant.ablation.fill))),
     ];
     let (vertex_entry, fragment_entry) = variant.entries();
-    let instance_layout = record_vertex_layouts();
+    let instance_layout = record_vertex_layouts().map(Some);
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("Shape Shader"),
         source: wgpu::ShaderSource::Wgsl(shape_shader_source(mode)),
@@ -1163,7 +1163,7 @@ fn create_image_pipeline(
                 module: &image_shader,
                 entry_point: Some("image_vs_main"),
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
-                buffers: &[Vertex::desc()],
+                buffers: &[Some(Vertex::desc())],
             },
             fragment: Some(wgpu::FragmentState {
                 module: &image_shader,
@@ -1221,7 +1221,7 @@ fn create_glyph_atlas_pipeline(
                 module: &shader,
                 entry_point: Some("glyph_atlas_vs_main"),
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
-                buffers: &[Vertex::desc()],
+                buffers: &[Some(Vertex::desc())],
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
@@ -2673,7 +2673,9 @@ impl GpuRenderer {
             Err(err) => return Err(format!("Screenshot readback timed out: {err}")),
         }
 
-        let mapped = buffer_slice.get_mapped_range();
+        let mapped = buffer_slice
+            .get_mapped_range()
+            .map_err(|err| format!("Screenshot readback could not be read: {err}"))?;
         let mut pixels = vec![0u8; (width as usize) * (height as usize) * 4];
 
         let src_row_len = padded_bytes_per_row as usize;

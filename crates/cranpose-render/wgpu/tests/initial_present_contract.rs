@@ -4,15 +4,7 @@ use cranpose_render_wgpu::{clear_to_default_background, offscreen_render_target_
 use support::read_texture;
 
 fn headless_device() -> Option<(wgpu::Device, wgpu::Queue)> {
-    let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
-    instance_descriptor.backends = wgpu::Backends::all();
-    let instance = wgpu::Instance::new(instance_descriptor);
-    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-        power_preference: wgpu::PowerPreference::LowPower,
-        compatible_surface: None,
-        force_fallback_adapter: false,
-    }))
-    .ok()?;
+    let adapter = support::device::headless_adapter(wgpu::Backends::all()).ok()?;
     pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("initial-present-clear-test-device"),
         required_features: wgpu::Features::empty(),

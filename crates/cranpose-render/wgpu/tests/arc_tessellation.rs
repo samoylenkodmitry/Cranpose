@@ -81,7 +81,7 @@ fn pipeline(device: &wgpu::Device, source: &str, segments: u32, kind: i32) -> wg
             module: &shader,
             entry_point: Some("vs_record_solid"),
             compilation_options: options(),
-            buffers: &record_columns::record_vertex_layouts(),
+            buffers: &record_columns::record_vertex_layouts().map(Some),
         },
         fragment: Some(wgpu::FragmentState {
             module: &shader,

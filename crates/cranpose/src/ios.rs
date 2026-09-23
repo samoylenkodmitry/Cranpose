@@ -253,7 +253,7 @@ impl<F: FnMut() + 'static> IosApp<F> {
                 {
                     log::error!("iOS render error: {error:?}");
                 }
-                frame.present();
+                shell.renderer().present(frame);
                 gpu.surface_dirty = false;
             }
             SurfaceFrame::Reconfigure => {
@@ -588,6 +588,7 @@ fn ios_surface_config(
         height,
         present_mode,
         alpha_mode,
+        color_space: wgpu::SurfaceColorSpace::Auto,
         view_formats: crate::surface_format::display_surface_view_formats(format),
         desired_maximum_frame_latency: 2,
     })

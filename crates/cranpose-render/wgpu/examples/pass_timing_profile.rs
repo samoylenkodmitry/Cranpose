@@ -142,8 +142,7 @@ fn main() {
     let instance = wgpu::Instance::default();
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::HighPerformance,
-        compatible_surface: None,
-        force_fallback_adapter: false,
+        ..wgpu::RequestAdapterOptions::default()
     }))
     .expect("adapter");
     eprintln!(

@@ -814,7 +814,7 @@ fn render_once(
             }
 
             timings.after_render_ns = telemetry.now();
-            frame.present();
+            shell.renderer().present(frame);
             timings.after_present_ns = telemetry.now();
             telemetry.record_frame(timings);
             resources.surface_dirty = false;
@@ -1241,6 +1241,7 @@ fn create_android_gpu_resources(
         power_preference: wgpu::PowerPreference::HighPerformance,
         compatible_surface: Some(&surface),
         force_fallback_adapter: false,
+        apply_limit_buckets: false,
     }))?;
 
     let adapter_info = adapter.get_info();
@@ -1399,6 +1400,7 @@ fn create_android_surface_config(
         height,
         present_mode,
         alpha_mode,
+        color_space: wgpu::SurfaceColorSpace::Auto,
         view_formats: crate::surface_format::display_surface_view_formats(surface_format),
         desired_maximum_frame_latency,
     })

@@ -65,7 +65,7 @@ log = "0.4"
 instant = { version = "0.1", features = ["wasm-bindgen"] }
 wasm-bindgen = { version = "0.2", optional = true }
 wasm-logger = { version = "0.2", optional = true }
-getrandom = { version = "0.3.4", features = ["wasm_js"] }
+getrandom = { version = "0.4.3", features = ["wasm_js"] }
 anyhow = "1.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
@@ -94,7 +94,7 @@ cranpose-render-common = { path = "../../crates/cranpose-render/common" }
 cranpose-render-wgpu = { path = "../../crates/cranpose-render/wgpu" }
 cranpose-testing = { path = "../../crates/cranpose-testing", features = ["desktop-robot"] }
 pollster = "0.4.0"
-wgpu = { version = "29.0", default-features = false }
+wgpu = { version = "30.0", default-features = false }
 
 # Robot test runners
 [[example]]

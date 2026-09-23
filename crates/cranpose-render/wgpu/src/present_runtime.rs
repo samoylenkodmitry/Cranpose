@@ -335,7 +335,7 @@ impl PresentState {
             &mut returns,
         );
         let after_render_ns = self.now();
-        frame.present();
+        self.gpu_renderer.queue.present(frame);
         returns.timings = PresentTimings {
             after_acquire_ns,
             after_render_ns,
@@ -362,7 +362,7 @@ impl PresentState {
                     &self.gpu_renderer.queue,
                     &view,
                 );
-                frame.present();
+                self.gpu_renderer.queue.present(frame);
                 self.status
                     .placeholder_frames
                     .fetch_add(1, Ordering::Relaxed);

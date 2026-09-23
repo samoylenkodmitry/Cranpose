@@ -359,6 +359,7 @@ pub async fn run(
             power_preference: wgpu::PowerPreference::HighPerformance,
             compatible_surface: Some(&surface),
             force_fallback_adapter: false,
+            apply_limit_buckets: false,
         })
         .await
         .map_err(|e| format!("failed to find suitable adapter: {:?}", e))?;
@@ -409,6 +410,7 @@ pub async fn run(
         height: buffer_height,
         present_mode,
         alpha_mode,
+        color_space: wgpu::SurfaceColorSpace::Auto,
         view_formats: crate::surface_format::display_surface_view_formats(surface_format),
         desired_maximum_frame_latency: 2,
     };
@@ -445,7 +447,7 @@ pub async fn run(
                 ..Default::default()
             });
             cranpose_render_wgpu::clear_to_default_background(&device, &queue, &probe_view);
-            probe.present();
+            queue.present(probe);
             let effective_scale =
                 if actual_width < surface_config.width || actual_height < surface_config.height {
                     let fit_x = actual_width as f64 / width as f64;
@@ -926,9 +928,9 @@ pub async fn run(
                         ) {
                             log::error!("render failed: {:?}", err);
                         }
+                        app_mut.renderer().present(output);
                     }
 
-                    output.present();
                     surface_dirty_for_loop.set(false);
                 }
                 SurfaceFrame::Reconfigure => {

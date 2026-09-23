@@ -101,11 +101,6 @@ dbg_macro = "deny"
 clone_on_copy = "deny"
 redundant_locals = "deny"
 
-[patch.crates-io]
-# Upstream master moved on to hashbrown 0.17. Pin the 0.16 alignment commit so
-# WGPU 29 and gpu-descriptor share one hashbrown/foldhash version family.
-gpu-descriptor = { git = "https://github.com/zakarumych/gpu-descriptor", rev = "79804e422186805f1ff5ab3d8310c07c145a6731" }
-
 # Faster local debug builds while preserving useful panic locations.
 [profile.dev]
 debug = "line-tables-only"

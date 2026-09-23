@@ -407,7 +407,7 @@ const WORKSPACE_DUPLICATE_DEBT: &[DuplicateDebt] = &[
     },
     DuplicateDebt {
         family: "hashbrown",
-        reason: "accesskit_consumer 0.39 and the macOS/Windows adapters require ^0.17; WGPU 29 and indexmap 2.13 require ^0.16; the accessibility fixes need this AccessKit release family",
+        reason: "gpu-allocator 0.28.0 (latest, and on upstream main) holds ^0.16 for wgpu-hal 30 while wgpu, AccessKit and indexmap are on ^0.17",
     },
     DuplicateDebt {
         family: "jni-sys",

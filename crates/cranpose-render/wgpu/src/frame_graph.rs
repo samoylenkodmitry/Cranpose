@@ -1728,7 +1728,10 @@ pub(crate) fn read_uploaded_bytes(
             timeout: None,
         })
         .expect("copy completion");
-    let bytes = readback.get_mapped_range(..).to_vec();
+    let bytes = readback
+        .get_mapped_range(..)
+        .expect("mapped readback")
+        .to_vec();
     readback.unmap();
     bytes
 }

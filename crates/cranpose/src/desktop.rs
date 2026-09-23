@@ -3010,7 +3010,7 @@ impl App {
         let after_render = Instant::now();
 
         native.window.pre_present_notify();
-        output.present();
+        surface.renderer().present(output);
         note_native_window_presented(native.state, true);
         let after_present = Instant::now();
         trace_native_window_timing!(
@@ -3708,6 +3708,7 @@ fn surface_config_for_window(
         height,
         present_mode,
         alpha_mode: select_alpha_mode(surface_caps, transparent)?,
+        color_space: wgpu::SurfaceColorSpace::Auto,
         view_formats: crate::surface_format::display_surface_view_formats(surface_format),
         desired_maximum_frame_latency: frame_latency,
     })
@@ -5727,7 +5728,7 @@ impl ApplicationHandler for App {
                     let after_render = Instant::now();
 
                     window.pre_present_notify();
-                    output.present();
+                    app.renderer().present(output);
                     let after_present = Instant::now();
                     record_pacing_event(|diag| &mut diag.presents);
                     self.primary_surface_dirty = false;

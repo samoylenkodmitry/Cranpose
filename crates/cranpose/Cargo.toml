@@ -252,7 +252,7 @@ accesskit = { version = "0.25.0", optional = true }
 console_error_panic_hook = "0.1"
 # Awaits the Async Clipboard API's promises (`web_clipboard`).
 wasm-bindgen-futures = "0.4"
-wgpu = { version = "29.0", optional = true, default-features = false, features = [
+wgpu = { version = "30.0", optional = true, default-features = false, features = [
     "std",
     "webgpu",
     "webgl",
@@ -275,7 +275,7 @@ ndk-sys = "0.6.0"
 raw-window-handle = "0.6"
 zune-core = "0.5.3"
 zune-jpeg = "0.5.15"
-wgpu = { version = "29.0", optional = true, default-features = false, features = [
+wgpu = { version = "30.0", optional = true, default-features = false, features = [
     "std",
     "parking_lot",
     "vulkan",
@@ -284,7 +284,7 @@ wgpu = { version = "29.0", optional = true, default-features = false, features =
 [target.'cfg(all(target_os = "linux", not(target_arch = "wasm32")))'.dependencies]
 accesskit_unix = { version = "0.23.0", default-features = false, features = ["async-io"] }
 x11rb = { version = "0.13.2", optional = true }
-wgpu = { version = "29.0", optional = true, default-features = false, features = [
+wgpu = { version = "30.0", optional = true, default-features = false, features = [
     "std",
     "parking_lot",
     "vulkan",
@@ -294,8 +294,8 @@ wgpu = { version = "29.0", optional = true, default-features = false, features =
 accesskit_windows = "0.35.0"
 # The pointer size the person chose (`windows_cursor`), which custom cursors
 # are scaled to. The version winit already resolves.
-windows-sys = { version = "0.59", optional = true, features = ["Win32_System_Registry"] }
-wgpu = { version = "29.0", optional = true, default-features = false, features = [
+windows-sys = { version = "0.61", optional = true, features = ["Win32_System_Registry"] }
+wgpu = { version = "30.0", optional = true, default-features = false, features = [
     "std",
     "parking_lot",
     "dx12",
@@ -378,14 +378,14 @@ objc2-core-video = { version = "0.3", default-features = false, optional = true,
     "CVBuffer",
     "CVReturn",
 ] }
-wgpu = { version = "29.0", optional = true, default-features = false, features = [
+wgpu = { version = "30.0", optional = true, default-features = false, features = [
     "std",
     "parking_lot",
     "metal",
 ] }
 
 [target.'cfg(target_os = "ios")'.dependencies]
-wgpu = { version = "29.0", optional = true, default-features = false, features = [
+wgpu = { version = "30.0", optional = true, default-features = false, features = [
     "std",
     "parking_lot",
     "metal",
@@ -536,7 +536,7 @@ objc2-media-player = { version = "0.3.2", default-features = false, optional = t
 ] }
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android"), not(target_os = "linux"), not(target_os = "windows"), not(target_os = "macos"), not(target_os = "ios")))'.dependencies]
-wgpu = { version = "29.0", optional = true, default-features = false, features = [
+wgpu = { version = "30.0", optional = true, default-features = false, features = [
     "std",
     "parking_lot",
     "vulkan",

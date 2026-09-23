@@ -2,6 +2,17 @@ use std::sync::Arc;
 
 use cranpose_render_wgpu::WgpuRenderer;
 
+pub fn headless_adapter(backends: wgpu::Backends) -> Result<wgpu::Adapter, String> {
+    let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+    descriptor.backends = backends;
+    let instance = wgpu::Instance::new(descriptor);
+    pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::LowPower,
+        ..wgpu::RequestAdapterOptions::default()
+    }))
+    .map_err(|err| format!("adapter request failed: {err:?}"))
+}
+
 pub struct HeadlessDevice {
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,
@@ -15,15 +26,7 @@ impl HeadlessDevice {
         limits: wgpu::Limits,
         label: &str,
     ) -> Result<Self, String> {
-        let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
-        descriptor.backends = backends;
-        let instance = wgpu::Instance::new(descriptor);
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::LowPower,
-            compatible_surface: None,
-            force_fallback_adapter: false,
-        }))
-        .map_err(|err| format!("adapter request failed: {err:?}"))?;
+        let adapter = headless_adapter(backends)?;
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some(label),
             required_features: cranpose_render_wgpu::optional_device_features(&adapter),

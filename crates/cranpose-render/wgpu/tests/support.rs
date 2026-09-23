@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 #[path = "support/device.rs"]
-mod device;
+pub mod device;
 
 use std::{
     ops::{Deref, DerefMut},
@@ -382,7 +382,7 @@ pub fn read_texture(
     rx.recv_timeout(Duration::from_secs(3))
         .expect("readback timed out")
         .expect("readback map failed");
-    let mapped = slice.get_mapped_range();
+    let mapped = slice.get_mapped_range().expect("mapped readback");
     let mut pixels = Vec::with_capacity((unpadded * height) as usize);
     for row in 0..height as usize {
         let start = row * padded as usize;

@@ -69,6 +69,7 @@ fn surface_config(width: u32, height: u32) -> wgpu::SurfaceConfiguration {
         height,
         present_mode: wgpu::PresentMode::Fifo,
         alpha_mode: wgpu::CompositeAlphaMode::Auto,
+        color_space: wgpu::SurfaceColorSpace::Auto,
         view_formats: vec![],
         desired_maximum_frame_latency: 2,
     }
@@ -87,15 +88,7 @@ fn threaded_parts() -> Result<
     String,
 > {
     let lock = support::gpu_test_lock();
-    let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
-    instance_descriptor.backends = wgpu::Backends::all();
-    let instance = wgpu::Instance::new(instance_descriptor);
-    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-        power_preference: wgpu::PowerPreference::LowPower,
-        compatible_surface: None,
-        force_fallback_adapter: false,
-    }))
-    .map_err(|err| format!("adapter request failed: {err:?}"))?;
+    let adapter = support::device::headless_adapter(wgpu::Backends::all())?;
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("Present Runtime Contract Test Device"),
         required_features: wgpu::Features::empty(),

@@ -500,6 +500,19 @@ impl WgpuRenderer {
         self.render_frame(texture, view, width, height)
     }
 
+    /// Presents a surface image this renderer drew with
+    /// [`render_surface_texture`](Self::render_surface_texture), on the queue
+    /// that recorded it.
+    ///
+    /// Before [`init_gpu`](Self::init_gpu) there is no queue, and the image is
+    /// released without being shown.
+    pub fn present(&self, frame: wgpu::SurfaceTexture) {
+        match self.sync_gpu_renderer() {
+            Some(gpu_renderer) => gpu_renderer.queue.present(frame),
+            None => log::debug!("surface image released: the renderer has no GPU queue"),
+        }
+    }
+
     fn render_frame(
         &mut self,
         texture: &wgpu::Texture,
