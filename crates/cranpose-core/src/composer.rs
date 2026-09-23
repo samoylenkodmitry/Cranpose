@@ -1979,11 +1979,11 @@ impl Composer {
             self.core.applier.compact();
             self.core.applier.borrow_dyn().clear_recycled_nodes();
         }
-        runtime_handle.drain_ui();
-        for effect in side_effects {
-            effect();
-        }
-        runtime_handle.drain_ui();
+        composer_context::without_composer(|| {
+            for effect in side_effects {
+                effect();
+            }
+        });
         Ok(())
     }
 

@@ -465,9 +465,7 @@ impl Composer {
                 host.abandon_after_apply_failure();
             }
         }
-        result?;
-        runtime_handle.drain_ui();
-        Ok(())
+        result
     }
 
     pub fn register_side_effect(&self, effect: impl FnOnce() + 'static) {
