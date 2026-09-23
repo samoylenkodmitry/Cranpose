@@ -1920,6 +1920,7 @@ fn unsafe_code_stays_in_reviewed_platform_boundary_modules() {
         "ios_accessibility.rs",
         "desktop_accessibility.rs",
         "macos_cursor.rs",
+        "windows_cursor.rs",
     ];
     let mut offenders = Vec::new();
 
@@ -2116,6 +2117,7 @@ fn workspace_ffi_boundaries_are_explicit() {
         "crates/cranpose/src/ios_accessibility.rs",
         "crates/cranpose/src/desktop_accessibility.rs",
         "crates/cranpose/src/macos_cursor.rs",
+        "crates/cranpose/src/windows_cursor.rs",
         "crates/cranpose-storekit/src/apple.rs",
         "crates/cranpose-audio/src/ring.rs",
         "crates/cranpose-audio/src/backend/aaudio.rs",

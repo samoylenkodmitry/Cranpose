@@ -4586,9 +4586,12 @@ fn native_window_redraw_held_while_hidden(visible: bool) -> bool {
 }
 
 fn pointer_icon_is_owed_again(event: &WindowEvent) -> bool {
+    // A new display density changes the size a custom cursor is handed over at.
     matches!(
         event,
-        WindowEvent::Focused(true) | WindowEvent::PointerEntered { .. }
+        WindowEvent::Focused(true)
+            | WindowEvent::PointerEntered { .. }
+            | WindowEvent::ScaleFactorChanged { .. }
     )
 }
 

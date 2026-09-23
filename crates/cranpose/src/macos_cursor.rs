@@ -2,8 +2,9 @@
 //!
 //! macOS enlarges every cursor by its accessibility pointer size, an app's own
 //! images included. A cursor asked for as drawn keeps every pixel of its image
-//! but is described to AppKit as that many points divided by the pointer size,
-//! which the system then enlarges back to the size it was drawn at.
+//! but is described to AppKit in fewer points, by the factor
+//! [`crate::cursor_scale::image_scale`] gives, which the system then enlarges
+//! back to the size it was drawn at.
 //!
 //! winit accepts only cursors it built itself, one point to a pixel, so a
 //! cursor sized this way is shown from here. AppKit re-applies a window's
@@ -37,13 +38,13 @@ pub(crate) fn pointer_scale() -> f64 {
 pub(crate) struct AsDrawnCursor(Retained<NSCursor>);
 
 /// The RGBA `pixels`, `width` by `height`, as a cursor whose image and hotspot
-/// are `scale` times smaller in points than in pixels.
+/// measure `points_per_pixel` points to each of their pixels.
 pub(crate) fn as_drawn(
     pixels: &[u8],
     width: u32,
     height: u32,
     hotspot: (u32, u32),
-    scale: f64,
+    points_per_pixel: f64,
 ) -> Option<AsDrawnCursor> {
     let row = width as usize * 4;
     if width == 0 || height == 0 || pixels.len() != row * height as usize {
@@ -71,11 +72,17 @@ pub(crate) fn as_drawn(
     let storage = unsafe { std::slice::from_raw_parts_mut(bitmap.bitmapData(), pixels.len()) };
     storage.copy_from_slice(pixels);
 
-    let size = NSSize::new(f64::from(width) / scale, f64::from(height) / scale);
+    let size = NSSize::new(
+        f64::from(width) * points_per_pixel,
+        f64::from(height) * points_per_pixel,
+    );
     bitmap.setSize(size);
     let image = NSImage::initWithSize(NSImage::alloc(), size);
     image.addRepresentation(&bitmap);
-    let hotspot = NSPoint::new(f64::from(hotspot.0) / scale, f64::from(hotspot.1) / scale);
+    let hotspot = NSPoint::new(
+        f64::from(hotspot.0) * points_per_pixel,
+        f64::from(hotspot.1) * points_per_pixel,
+    );
     Some(AsDrawnCursor(NSCursor::initWithImage_hotSpot(
         NSCursor::alloc(),
         &image,

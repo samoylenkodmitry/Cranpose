@@ -39,22 +39,51 @@ fn a_cursor_that_is_not(icon: &PointerIcon) -> CursorIcon {
     }
 }
 
+/// A custom cursor as the platform takes it: the icon's
+/// [`CustomPointerIcon::id`] and the scale its image was handed over at.
+type CursorKey = (u64, u64);
+
+fn cursor_key(custom: &CustomPointerIcon, factor: f64) -> CursorKey {
+    (custom.id(), factor.to_bits())
+}
+
+/// What the platform under `window` does to a custom cursor image by itself.
+fn cursor_surface(window: &dyn Window) -> crate::cursor_scale::CursorSurface {
+    #[cfg(target_os = "macos")]
+    let (pointer_scale, image_in_points) = (crate::macos_cursor::pointer_scale(), true);
+    #[cfg(target_os = "windows")]
+    let (pointer_scale, image_in_points) = (crate::windows_cursor::pointer_scale(), false);
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let (pointer_scale, image_in_points) = (
+        crate::cursor_scale::xcursor_scale(std::env::var("XCURSOR_SIZE").ok().as_deref()),
+        false,
+    );
+    crate::cursor_scale::CursorSurface {
+        pointer_scale,
+        density: window.scale_factor(),
+        image_in_points,
+        // Only macOS enlarges an app's own cursor images; the others show
+        // them pixel for pixel.
+        enlarges_custom_images: image_in_points,
+    }
+}
+
 /// Per-window store of the custom cursors the windowing system has accepted,
-/// keyed by [`CustomPointerIcon::id`].
+/// keyed by [`CursorKey`].
 #[derive(Default)]
 pub(crate) struct DesktopCursors {
     size: CustomCursorSize,
-    uploaded: HashMap<u64, CustomCursor>,
-    rejected: HashSet<u64>,
+    uploaded: HashMap<CursorKey, CustomCursor>,
+    rejected: HashSet<CursorKey>,
     applied: HashMap<WindowId, PointerIcon>,
-    /// Cursors built to keep their drawn size, by icon and the pointer size
-    /// they undo.
+    /// Cursors winit cannot build, sized in points rather than one point to a
+    /// pixel.
     #[cfg(target_os = "macos")]
-    as_drawn: HashMap<(u64, u64), crate::macos_cursor::AsDrawnCursor>,
+    as_drawn: HashMap<CursorKey, crate::macos_cursor::AsDrawnCursor>,
     /// The window under the pointer showing one of those, with its cursor
     /// rectangles held off, and which one it shows.
     #[cfg(target_os = "macos")]
-    held: HashMap<WindowId, (u64, u64)>,
+    held: HashMap<WindowId, CursorKey>,
     /// The pointer moved over a held window since the cursor was last shown.
     #[cfg(target_os = "macos")]
     moved_over_held: bool,
@@ -69,7 +98,8 @@ impl DesktopCursors {
     }
 
     /// Sets `icon` as `window`'s cursor, uploading a custom image the first
-    /// time it appears.
+    /// time it appears, scaled so it shows at the size [`CustomCursorSize`]
+    /// asks for.
     pub(crate) fn apply(
         &mut self,
         event_loop: &dyn ActiveEventLoop,
@@ -77,9 +107,15 @@ impl DesktopCursors {
         icon: &PointerIcon,
     ) {
         let id = window.id();
+        let factor = match icon {
+            PointerIcon::Custom(_) => {
+                crate::cursor_scale::image_scale(self.size, cursor_surface(window.as_ref()))
+            }
+            PointerIcon::System(_) => 1.0,
+        };
         #[cfg(target_os = "macos")]
         {
-            if self.hold_as_drawn(window, icon) {
+            if self.hold_as_drawn(window, icon, factor) {
                 self.applied.insert(id, icon.clone());
                 return;
             }
@@ -96,7 +132,7 @@ impl DesktopCursors {
         match icon {
             PointerIcon::System(system) => window.set_cursor(Cursor::Icon(*system)),
             PointerIcon::Custom(custom) => {
-                if let Some(cursor) = self.custom_cursor(event_loop, custom) {
+                if let Some(cursor) = self.custom_cursor(event_loop, custom, factor) {
                     window.set_cursor(Cursor::Custom(cursor));
                 }
             }
@@ -104,18 +140,17 @@ impl DesktopCursors {
         self.applied.insert(id, icon.clone());
     }
 
-    /// Shows `icon` at the size it was drawn at, when it is a custom cursor
-    /// the app asked for that way and the system pointer is enlarged.
+    /// Shows `icon` sized in points by `factor`, when it is a custom cursor
+    /// winit's one point to a pixel would show at the wrong size.
     #[cfg(target_os = "macos")]
-    fn hold_as_drawn(&mut self, window: &Arc<dyn Window>, icon: &PointerIcon) -> bool {
+    fn hold_as_drawn(&mut self, window: &Arc<dyn Window>, icon: &PointerIcon, factor: f64) -> bool {
         let PointerIcon::Custom(custom) = icon else {
             return false;
         };
-        let scale = crate::macos_cursor::pointer_scale();
-        if !crate::cursor_scale::compensates(self.size, scale) {
+        if !crate::cursor_scale::rescales(factor) {
             return false;
         }
-        let key = (custom.id(), scale.to_bits());
+        let key = cursor_key(custom, factor);
         let cursor = match self.as_drawn.entry(key) {
             std::collections::hash_map::Entry::Occupied(built) => built.into_mut(),
             std::collections::hash_map::Entry::Vacant(slot) => {
@@ -125,7 +160,7 @@ impl DesktopCursors {
                     image.width(),
                     image.height(),
                     (custom.hotspot_x(), custom.hotspot_y()),
-                    scale,
+                    factor,
                 ) else {
                     return false;
                 };
@@ -182,8 +217,9 @@ impl DesktopCursors {
         &mut self,
         event_loop: &dyn ActiveEventLoop,
         custom: &CustomPointerIcon,
+        factor: f64,
     ) -> Option<CustomCursor> {
-        let id = custom.id();
+        let id = cursor_key(custom, factor);
         if let Some(cursor) = self.uploaded.get(&id) {
             return Some(cursor.clone());
         }
@@ -192,12 +228,29 @@ impl DesktopCursors {
         }
 
         let image = custom.image();
+        let hotspot = (custom.hotspot_x(), custom.hotspot_y());
+        let (pixels, width, height, hotspot) = if crate::cursor_scale::rescales(factor) {
+            crate::cursor_scale::scaled_image(
+                image.pixels(),
+                image.width(),
+                image.height(),
+                hotspot,
+                factor,
+            )
+        } else {
+            (
+                image.pixels().to_vec(),
+                image.width(),
+                image.height(),
+                hotspot,
+            )
+        };
         let source = CustomCursorSource::from_rgba(
-            image.pixels().to_vec(),
-            image.width() as u16,
-            image.height() as u16,
-            custom.hotspot_x() as u16,
-            custom.hotspot_y() as u16,
+            pixels,
+            width as u16,
+            height as u16,
+            hotspot.0 as u16,
+            hotspot.1 as u16,
         );
         let cursor = match source {
             Ok(source) => event_loop.create_custom_cursor(source).map_err(|error| {
