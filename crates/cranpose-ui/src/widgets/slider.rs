@@ -279,7 +279,7 @@ where
                 },
             );
         Box(input, BoxSpec::default(), move || {
-            (content.borrow_mut())(slider_scope.clone())
+            (content.borrow_mut())(slider_scope.clone());
         });
     })
 }

@@ -39,7 +39,7 @@ fn dump_layout_tree(layout_box: &LayoutBox, depth: usize) -> String {
         .node_data
         .modifier_slices()
         .text_content()
-        .map(|s| format!(" text=\"{}\"", s))
+        .map(|s| format!(" text=\"{s}\""))
         .unwrap_or_default();
 
     let mut output = format!(
@@ -249,16 +249,13 @@ fn test_item_list_spacing() {
     let spacing_1_2 = item2.rect.y - (item1.rect.y + item1.rect.height);
     let spacing_2_3 = item3.rect.y - (item2.rect.y + item2.rect.height);
 
-    println!("Spacing between Item 1 and 2: {:.1}", spacing_1_2);
-    println!("Spacing between Item 2 and 3: {:.1}", spacing_2_3);
+    println!("Spacing between Item 1 and 2: {spacing_1_2:.1}");
+    println!("Spacing between Item 2 and 3: {spacing_2_3:.1}");
 
     let spacing_diff = (spacing_1_2 - spacing_2_3).abs();
     assert!(
         spacing_diff < 1.0,
-        "Item spacing should be consistent: {:.2} vs {:.2} (diff: {:.2})",
-        spacing_1_2,
-        spacing_2_3,
-        spacing_diff
+        "Item spacing should be consistent: {spacing_1_2:.2} vs {spacing_2_3:.2} (diff: {spacing_diff:.2})"
     );
 
     let renderer = HeadlessRenderer::new();
@@ -270,11 +267,10 @@ fn test_item_list_spacing() {
         .filter(|op| matches!(op, RenderOp::Primitive { .. }))
         .count();
 
-    println!("Background primitives found: {}", background_count);
+    println!("Background primitives found: {background_count}");
     assert!(
         background_count >= 16,
-        "Should have at least 16 background primitives (title + 5 items with borders and status), got {}",
-        background_count
+        "Should have at least 16 background primitives (title + 5 items with borders and status), got {background_count}"
     );
 
     println!("✓ Item list with alternating colors, borders, and status indicators is correct");
@@ -309,7 +305,7 @@ fn test_complex_chain_modifier_ordering() {
                 layer,
                 primitive: _,
             } => {
-                println!("  [{}] Primitive node={} layer={:?}", i, node_id, layer);
+                println!("  [{i}] Primitive node={node_id} layer={layer:?}");
                 background_count += 1;
             }
             RenderOp::Text {
@@ -326,19 +322,17 @@ fn test_complex_chain_modifier_ordering() {
         }
     }
 
-    println!("\nBackground primitives: {}", background_count);
-    println!("Text elements: {}", text_count);
+    println!("\nBackground primitives: {background_count}");
+    println!("Text elements: {text_count}");
 
     assert_eq!(
         background_count, 6,
-        "Should have 6 background primitives for nested box structure, got {}",
-        background_count
+        "Should have 6 background primitives for nested box structure, got {background_count}"
     );
 
     assert_eq!(
         text_count, 5,
-        "Should have 5 text elements, got {}",
-        text_count
+        "Should have 5 text elements, got {text_count}"
     );
 
     let nested_text =
@@ -429,10 +423,10 @@ fn test_dynamic_modifiers_frame_advancement() {
     println!("{}", dump_layout_tree(layout19.root(), 0));
 
     match validate_layout_hierarchy(layout19.root()) {
-        Ok(_) => println!("✓ Layout valid at frame 19"),
+        Ok(()) => println!("✓ Layout valid at frame 19"),
         Err(e) => {
-            println!("✗ BUG FOUND at frame 19: {}", e);
-            panic!("Layout hierarchy validation failed at frame 19: {}", e);
+            println!("✗ BUG FOUND at frame 19: {e}");
+            panic!("Layout hierarchy validation failed at frame 19: {e}");
         }
     }
 
@@ -492,7 +486,7 @@ fn dynamic_modifiers_showcase_with_frame(frame: MutableState<i32>) {
         });
 
         Text(
-            format!("Frame: {}, X: {:.1}", current_frame, x),
+            format!("Frame: {current_frame}, X: {x:.1}"),
             Modifier::empty()
                 .padding(8.0)
                 .then(Modifier::empty().background(Color(0.2, 0.2, 0.3, 0.6)))
@@ -512,27 +506,25 @@ fn test_all_showcases_have_valid_layouts() {
     ];
 
     for (name, showcase_fn) in showcases {
-        println!("\n=== Testing {} ===", name);
+        println!("\n=== Testing {name} ===");
 
         let mut rule = ComposeTestRule::new();
         rule.set_content(showcase_fn)
-            .unwrap_or_else(|_| panic!("{} should render", name));
+            .unwrap_or_else(|_| panic!("{name} should render"));
 
         let layout = compute_layout_from_rule(&mut rule, 800.0, 600.0)
-            .unwrap_or_else(|_| panic!("{} should compute layout", name));
+            .unwrap_or_else(|_| panic!("{name} should compute layout"));
 
         validate_layout_hierarchy(layout.root())
-            .unwrap_or_else(|_| panic!("{} layout hierarchy should be valid", name));
+            .unwrap_or_else(|_| panic!("{name} layout hierarchy should be valid"));
 
         assert!(
             layout.root().rect.width > 0.0,
-            "{} root should have width",
-            name
+            "{name} root should have width"
         );
         assert!(
             layout.root().rect.height > 0.0,
-            "{} root should have height",
-            name
+            "{name} root should have height"
         );
 
         let mut all_boxes = Vec::new();

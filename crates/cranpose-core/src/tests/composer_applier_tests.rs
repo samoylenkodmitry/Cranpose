@@ -236,8 +236,7 @@ fn inspect_mismatched_slot_pass_host(
     let active_storage_key = active_host.storage_key();
     let rebound_to_other_state = active_host
         .runtime_state()
-        .map(|state| Rc::ptr_eq(&state, other_state))
-        .unwrap_or(false);
+        .is_some_and(|state| Rc::ptr_eq(&state, other_state));
     let registered_during_pass = other_state
         .host_for_storage_key(active_storage_key)
         .is_some();
@@ -271,8 +270,7 @@ fn assert_mismatched_slot_pass_uses_replacement(
         fixture
             .mismatched_host
             .runtime_state()
-            .map(|state| Rc::ptr_eq(&state, &fixture.owner_state))
-            .unwrap_or(false)
+            .is_some_and(|state| Rc::ptr_eq(&state, &fixture.owner_state))
     );
 }
 
@@ -1758,7 +1756,7 @@ fn emit_node_creates_nodes_when_parent_restored_after_conditional_removal() {
     }
 
     let first_child_id = child_ids.borrow()[0];
-    println!("First child ID: {}", first_child_id);
+    println!("First child ID: {first_child_id}");
     assert!(first_child_id > 0, "First child should be created");
 
     println!("=== Second render: parent hidden ===");
@@ -1779,14 +1777,14 @@ fn emit_node_creates_nodes_when_parent_restored_after_conditional_removal() {
                     with_current_composer(|composer| {
                         let _parent = composer.emit_node(|| TestDummyNode);
                         let reused = composer.core.last_node_reused.get();
-                        println!("Parent reused: {:?}", reused);
+                        println!("Parent reused: {reused:?}");
                         composer.push_parent(_parent);
 
                         let child = composer.emit_node(|| TestTextNode {
                             text: "Reusable Child".to_string(),
                         });
                         child_ids.borrow_mut().push(child);
-                        println!("Third render child ID: {}", child);
+                        println!("Third render child ID: {child}");
 
                         composer.pop_parent();
                     });
@@ -1796,7 +1794,7 @@ fn emit_node_creates_nodes_when_parent_restored_after_conditional_removal() {
     }
 
     let third_child_id = child_ids.borrow().last().copied().unwrap();
-    println!("Third child ID: {}", third_child_id);
+    println!("Third child ID: {third_child_id}");
 
     assert!(
         composition.applier_mut().get_mut(third_child_id).is_ok(),

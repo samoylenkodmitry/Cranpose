@@ -64,7 +64,7 @@ fn main() {
             };
 
             println!("\n--- Test: Scroll should move content visually ---");
-            println!("  First visible index before scroll: {}", before_index);
+            println!("  First visible index before scroll: {before_index}");
 
             println!("  Clicking 'Jump to Middle' to change scroll position...");
             let jump_button = find_button_in_semantics(&robot, "Jump to Middle");
@@ -94,13 +94,10 @@ fn main() {
 
             match after_index {
                 Some(idx) if idx >= 40 => {
-                    println!("  ✓ PASS: First visible index moved to {}", idx);
+                    println!("  ✓ PASS: First visible index moved to {idx}");
                 }
                 Some(idx) => {
-                    println!(
-                        "  ✗ FAIL: First visible index did not move far enough ({})",
-                        idx
-                    );
+                    println!("  ✗ FAIL: First visible index did not move far enough ({idx})");
                     std::process::exit(1);
                 }
                 None => {

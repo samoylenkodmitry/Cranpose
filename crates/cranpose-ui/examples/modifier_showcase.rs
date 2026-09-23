@@ -173,12 +173,12 @@ fn main() {
         .render(location_key(file!(), line!(), column!()), showcase)
         .unwrap();
     let initial_duration = start.elapsed();
-    println!("✅ Initial render: {:?}\n", initial_duration);
+    println!("✅ Initial render: {initial_duration:?}\n");
 
     if let Some(root) = composition.root() {
         let mut applier = composition.applier_mut();
         let node_count = count_nodes(&mut applier, root, 0);
-        println!("📦 Total nodes created: {}", node_count);
+        println!("📦 Total nodes created: {node_count}");
         println!("🎯 Demonstrates: Complex nesting, dynamic modifiers, performance\n");
     }
 
@@ -194,7 +194,7 @@ fn main() {
         })
         .unwrap();
     let recomp_duration = recomp_start.elapsed();
-    println!("✅ Recomposition: {:?}", recomp_duration);
+    println!("✅ Recomposition: {recomp_duration:?}");
     println!(
         "⚡ Speedup vs initial: {:.2}x\n",
         initial_duration.as_secs_f64() / recomp_duration.as_secs_f64()
@@ -208,7 +208,7 @@ fn main() {
         })
         .unwrap();
     let stress_duration = stress_start.elapsed();
-    println!("✅ 1000 items rendered: {:?}", stress_duration);
+    println!("✅ 1000 items rendered: {stress_duration:?}");
     println!("📈 Per-item average: {:?}", stress_duration / 1000);
 
     println!("\n🎉 Showcase complete!");

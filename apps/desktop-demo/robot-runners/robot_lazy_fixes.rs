@@ -21,7 +21,7 @@ fn main() {
                     std::thread::sleep(Duration::from_millis(200));
                     true
                 } else {
-                    println!("  ✗ Button '{}' not found!", name);
+                    println!("  ✗ Button '{name}' not found!");
                     false
                 }
             };
@@ -29,7 +29,7 @@ fn main() {
             let find_visible_items = || -> Vec<usize> {
                 let mut items = Vec::new();
                 for i in 0..100 {
-                    let item_text = format!("Item #{}", i);
+                    let item_text = format!("Item #{i}");
                     if find_text_in_semantics(&robot, &item_text).is_some() {
                         items.push(i);
                     }
@@ -48,7 +48,7 @@ fn main() {
             println!("\n--- PHASE 2: Verify Initial Rendering ---");
             println!("  (validates DEFAULT_ITEM_SIZE_ESTIMATE constant)");
             let initial_items = find_visible_items();
-            println!("  Visible items: {:?}", initial_items);
+            println!("  Visible items: {initial_items:?}");
 
             if initial_items.is_empty() {
                 println!("  ✗ FAIL: No items rendered! DEFAULT_ITEM_SIZE_ESTIMATE may be wrong.");
@@ -74,7 +74,7 @@ fn main() {
                 std::thread::sleep(Duration::from_millis(300));
 
                 let after_scroll = find_visible_items();
-                println!("  After scroll: {:?}", after_scroll);
+                println!("  After scroll: {after_scroll:?}");
 
                 if after_scroll.is_empty() {
                     println!("  ✗ FAIL: No items after scroll!");
@@ -125,9 +125,9 @@ fn main() {
                 std::thread::sleep(Duration::from_millis(300));
 
                 if jump_time.as_millis() < 1000 {
-                    println!("  ✓ Jump completed in {:?} (O(1) performance)", jump_time);
+                    println!("  ✓ Jump completed in {jump_time:?} (O(1) performance)");
                 } else {
-                    println!("  ⚠ Jump took {:?} (may be slow)", jump_time);
+                    println!("  ⚠ Jump took {jump_time:?} (may be slow)");
                 }
 
                 let middle_items = find_visible_items();
@@ -138,9 +138,9 @@ fn main() {
                         9223372036854775808,
                         9223372036854775809,
                     ] {
-                        let text = format!("Item #{}", check);
+                        let text = format!("Item #{check}");
                         if find_text_in_semantics(&robot, &text).is_some() {
-                            println!("  ✓ Found Item #{} (middle of usize::MAX)", check);
+                            println!("  ✓ Found Item #{check} (middle of usize::MAX)");
                             found_large = true;
                             break;
                         }

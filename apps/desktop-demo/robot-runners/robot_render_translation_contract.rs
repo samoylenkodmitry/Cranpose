@@ -157,8 +157,8 @@ fn log_render_stats(robot: &cranpose::Robot, stage: &str) {
                 );
             }
         }
-        Ok(None) => println!("  render_stats stage={} unavailable", stage),
-        Err(err) => println!("  render_stats stage={} error={}", stage, err),
+        Ok(None) => println!("  render_stats stage={stage} unavailable"),
+        Err(err) => println!("  render_stats stage={stage} error={err}"),
     }
 }
 

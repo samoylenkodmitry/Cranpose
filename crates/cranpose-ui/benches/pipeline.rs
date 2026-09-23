@@ -191,7 +191,7 @@ impl RecursiveFixture {
         app_context.enter(|| {
             self.composition
                 .render(self.key, || {
-                    recursive_pipeline_content(depth, rows_per_level)
+                    recursive_pipeline_content(depth, rows_per_level);
                 })
                 .expect("composition");
         });

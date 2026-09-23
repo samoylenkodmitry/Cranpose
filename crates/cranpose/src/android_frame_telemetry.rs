@@ -328,14 +328,14 @@ pub(crate) struct AndroidFrameTelemetry {
 
 impl AndroidFrameTelemetry {
     pub(crate) fn from_system_properties() -> Self {
-        let window_frames = system_property("debug.cranpose.frame_telemetry")
-            .map(|value| match value.parse::<usize>() {
+        let window_frames = system_property("debug.cranpose.frame_telemetry").map_or(0, |value| {
+            match value.parse::<usize>() {
                 Ok(0) => 0,
                 Ok(1) => DEFAULT_WINDOW_FRAMES,
                 Ok(frames) => frames,
                 Err(_) => DEFAULT_WINDOW_FRAMES,
-            })
-            .unwrap_or(0);
+            }
+        });
         let enabled = window_frames > 0;
         if enabled {
             log::info!("[android-frame] telemetry enabled, window={window_frames} frames");
@@ -381,9 +381,7 @@ impl AndroidFrameTelemetry {
             acquire_us: us(timings.after_acquire_ns - timings.after_sync_ns),
             render_us: us(timings.after_render_ns - timings.after_acquire_ns),
             present_us: us(timings.after_present_ns - timings.after_render_ns),
-            vsync_offset_us: vsync_offset_ns(timings.iteration_start_ns)
-                .map(us)
-                .unwrap_or(-1),
+            vsync_offset_us: vsync_offset_ns(timings.iteration_start_ns).map_or(-1, us),
         });
         if self.samples.len() >= self.window_frames {
             self.flush();

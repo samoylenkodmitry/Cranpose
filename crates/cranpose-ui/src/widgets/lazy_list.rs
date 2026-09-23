@@ -330,13 +330,13 @@ fn measure_lazy_list_children(
 
     for child in root_children {
         let (placeable, retained) = scope.measure_retained(child, child_constraints);
-        let size = retained
-            .as_ref()
-            .map(|measured| measured.size())
-            .unwrap_or_else(|| Size {
+        let size = retained.as_ref().map_or_else(
+            || Size {
                 width: placeable.width(),
                 height: placeable.height(),
-            });
+            },
+            |measured| measured.size(),
+        );
         let (main, cross) = if context.is_vertical {
             (size.height, size.width)
         } else {
@@ -682,7 +682,7 @@ fn bind_layout_invalidation_callback(
     node_id: NodeId,
 ) {
     let callback_owner =
-        cranpose_core::remember(|| Rc::new(RefCell::new(None::<u64>))).with(|cell| cell.clone());
+        cranpose_core::remember(|| Rc::new(RefCell::new(None::<u64>))).with(Clone::clone);
     let app_context_id = crate::render_state::current_app_context_id();
     let callback_id = state.try_register_layout_callback(
         node_id,
@@ -700,7 +700,7 @@ fn bind_layout_invalidation_callback(
     }
 
     let overscroll_callback_owner =
-        cranpose_core::remember(|| Rc::new(RefCell::new(None::<u64>))).with(|cell| cell.clone());
+        cranpose_core::remember(|| Rc::new(RefCell::new(None::<u64>))).with(Clone::clone);
     let overscroll_callback_id = overscroll.add_invalidate_callback(Box::new(move || {
         let _ = crate::render_state::enter_app_context_by_id(app_context_id, || {
             crate::schedule_measure_repass(node_id);
@@ -1067,7 +1067,7 @@ fn LazyColumnImpl(
 
     let content_cell =
         cranpose_core::remember(|| Rc::new(RefCell::new(LazyListContentHandle::empty())))
-            .with(|cell| cell.clone());
+            .with(Clone::clone);
 
     let refresh_content = !lazy_list_state_only_recomposition(&state);
     if refresh_content {
@@ -1085,7 +1085,7 @@ fn LazyColumnImpl(
         horizontal_arrangement: None,
     };
     let config_cell =
-        cranpose_core::remember(|| Rc::new(RefCell::new(config.clone()))).with(|cell| cell.clone());
+        cranpose_core::remember(|| Rc::new(RefCell::new(config.clone()))).with(Clone::clone);
     let config_changed = {
         let mut current = config_cell.borrow_mut();
         let changed = *current != config;
@@ -1096,7 +1096,7 @@ fn LazyColumnImpl(
     };
     let measured_item_cache =
         cranpose_core::remember(|| Rc::new(RefCell::new(LazyMeasuredItemCache::default())))
-            .with(|cache| cache.clone());
+            .with(Clone::clone);
     let motion_context = scroll_motion_context_for_key(ScrollMotionContextKey::LazyList {
         state_identity: lazy_list_state_identity(&state),
         is_vertical: true,
@@ -1152,7 +1152,7 @@ fn LazyColumnImpl(
         })
     });
     let captured_context =
-        cranpose_core::with_current_composer(|composer| composer.capture_composition_context());
+        cranpose_core::with_current_composer(cranpose_core::Composer::capture_composition_context);
     let composed_density = crate::density::density();
     if let Err(err) = cranpose_core::with_node_mut(node_id, |node: &mut SubcomposeLayoutNode| {
         let modifier_changed = !node.modifier().structural_eq(&scroll_modifier);
@@ -1187,7 +1187,7 @@ fn LazyRowImpl(
 
     let content_cell =
         cranpose_core::remember(|| Rc::new(RefCell::new(LazyListContentHandle::empty())))
-            .with(|cell| cell.clone());
+            .with(Clone::clone);
 
     let refresh_content = !lazy_list_state_only_recomposition(&state);
     if refresh_content {
@@ -1205,7 +1205,7 @@ fn LazyRowImpl(
         horizontal_arrangement: Some(spec.horizontal_arrangement),
     };
     let config_cell =
-        cranpose_core::remember(|| Rc::new(RefCell::new(config.clone()))).with(|cell| cell.clone());
+        cranpose_core::remember(|| Rc::new(RefCell::new(config.clone()))).with(Clone::clone);
     let config_changed = {
         let mut current = config_cell.borrow_mut();
         let changed = *current != config;
@@ -1216,7 +1216,7 @@ fn LazyRowImpl(
     };
     let measured_item_cache =
         cranpose_core::remember(|| Rc::new(RefCell::new(LazyMeasuredItemCache::default())))
-            .with(|cache| cache.clone());
+            .with(Clone::clone);
     let motion_context = scroll_motion_context_for_key(ScrollMotionContextKey::LazyList {
         state_identity: lazy_list_state_identity(&state),
         is_vertical: false,
@@ -1274,7 +1274,7 @@ fn LazyRowImpl(
         })
     });
     let captured_context =
-        cranpose_core::with_current_composer(|composer| composer.capture_composition_context());
+        cranpose_core::with_current_composer(cranpose_core::Composer::capture_composition_context);
     let composed_density = crate::density::density();
     if let Err(err) = cranpose_core::with_node_mut(node_id, |node: &mut SubcomposeLayoutNode| {
         let modifier_changed = !node.modifier().structural_eq(&scroll_modifier);

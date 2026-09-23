@@ -219,7 +219,7 @@ impl<A: Applier + 'static> Composition<A> {
             );
             self.observer.begin_frame();
             let (root, commands, side_effects, compact_applier) = composer.install(|composer| {
-                let (_, outcome) = composer.try_with_slot_host_pass(
+                let ((), outcome) = composer.try_with_slot_host_pass(
                     Rc::clone(&self.slots),
                     crate::slot::SlotPassMode::Compose,
                     |composer| composer.with_group(key, |_| content()),
@@ -455,7 +455,7 @@ impl<A: Applier + 'static> Composition<A> {
                     self.observer.begin_frame();
                     let (root, commands, side_effects, requested_root_render, compact_applier) =
                         composer.install(|composer| {
-                            let (_, outcome) = composer.try_with_slot_host_pass(
+                            let ((), outcome) = composer.try_with_slot_host_pass(
                                 Rc::clone(host),
                                 crate::slot::SlotPassMode::Recompose,
                                 |composer| {

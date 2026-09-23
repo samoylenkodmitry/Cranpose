@@ -1553,16 +1553,13 @@ fn a_materialized_shell_reuses_its_node_across_passes() {
     composition
         .render(46, deferred_shell_nodes::probe)
         .expect("initial composition");
-    assert_eq!(
-        deferred_shell_nodes::NODE_BUILDS.with(std::cell::Cell::get),
-        1
-    );
+    assert_eq!(deferred_shell_nodes::NODE_BUILDS.with(Cell::get), 1);
 
     composition
         .render(46, deferred_shell_nodes::probe)
         .expect("recompose the same shape");
     assert_eq!(
-        deferred_shell_nodes::NODE_BUILDS.with(std::cell::Cell::get),
+        deferred_shell_nodes::NODE_BUILDS.with(Cell::get),
         1,
         "the node inside a materialized shell must be reused, not rebuilt every pass"
     );
@@ -2058,7 +2055,7 @@ fn stateful_holder() -> StatefulHolder {
         "row".to_string()
     });
     StatefulHolder {
-        item: Some(value.with(std::clone::Clone::clone)),
+        item: Some(value.with(Clone::clone)),
     }
 }
 
@@ -2789,7 +2786,7 @@ fn branch_entry_probe(enabled: bool) {
     });
     BRANCH_LOG.with(|log| {
         log.borrow_mut()
-            .push(format!("tail {}", tail.with(|value| *value)))
+            .push(format!("tail {}", tail.with(|value| *value)));
     });
 }
 
@@ -4028,7 +4025,7 @@ macro_rules! maybe_lead_page {
 fn braced_macro_statement_probe(enabled: bool) {
     let page: fn(i32) = CountingPage;
     maybe_lead_page! { enabled, page }
-    page(1)
+    page(1);
 }
 
 #[test]
@@ -4143,10 +4140,10 @@ fn suspending_tail_probe(flag: bool) {
         let page: fn(i32) = CountingPage;
         if flag {
             std::future::ready(()).await;
-            page(1)
+            page(1);
         } else {
             std::future::ready(()).await;
-            page(2)
+            page(2);
         }
     });
 }

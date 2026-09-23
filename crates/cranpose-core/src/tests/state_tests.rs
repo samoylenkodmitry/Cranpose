@@ -1,3 +1,5 @@
+use std::sync::PoisonError;
+
 use super::*;
 
 fn create_record_chain(ids: &[SnapshotId]) -> Rc<StateRecord> {
@@ -50,9 +52,7 @@ impl StateObject for ManualState {
 
 fn poison_mutex<T>(mutex: &Mutex<T>) {
     let poison_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let _guard = mutex
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _guard = mutex.lock().unwrap_or_else(PoisonError::into_inner);
         panic!("poison snapshot state mutex for recovery test");
     }));
 

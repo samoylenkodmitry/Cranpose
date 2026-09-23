@@ -110,7 +110,7 @@ fn absolute_offset_text_pixels_redraw_after_state_only_change() {
     let start = state_holder
         .borrow()
         .as_ref()
-        .cloned()
+        .copied()
         .expect("start state should be captured");
     start.set(30);
     shell.update();

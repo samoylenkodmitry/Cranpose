@@ -34,9 +34,8 @@ impl BackgroundActivity for IosBackgroundActivity {
 }
 
 fn begin_task(mtm: MainThreadMarker) {
-    let mut slot = match task_slot().lock() {
-        Ok(slot) => slot,
-        Err(_) => return,
+    let Ok(mut slot) = task_slot().lock() else {
+        return;
     };
     if slot.is_some() {
         return;

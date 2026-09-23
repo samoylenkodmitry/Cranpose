@@ -604,9 +604,7 @@ impl SlotTable {
         let current_range = current_range.as_range();
         if requested_range.start < current_range.start || requested_range.end > current_range.end {
             log::error!(
-                "slot table ignored payload removal for owner {owner:?}: requested range {:?} is outside current group payload range {:?}",
-                requested_range,
-                current_range
+                "slot table ignored payload removal for owner {owner:?}: requested range {requested_range:?} is outside current group payload range {current_range:?}"
             );
             return Vec::new();
         }
@@ -692,15 +690,12 @@ impl SlotTable {
         &mut self,
         retention: Option<&mut RetentionManager>,
     ) {
-        let retained_payload_count = retention
-            .as_ref()
-            .map(|retention| {
-                retention
-                    .subtrees()
-                    .map(|subtree| subtree.payloads.len())
-                    .sum::<usize>()
-            })
-            .unwrap_or(0);
+        let retained_payload_count = retention.as_ref().map_or(0, |retention| {
+            retention
+                .subtrees()
+                .map(|subtree| subtree.payloads.len())
+                .sum::<usize>()
+        });
         let total_payload_count = self.payloads.len() + retained_payload_count;
         if total_payload_count == 0 {
             self.payload_anchors.shrink_to_fit();

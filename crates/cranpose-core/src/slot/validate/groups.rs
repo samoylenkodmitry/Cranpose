@@ -331,8 +331,7 @@ pub(super) fn validate_slot_tree(
 
         let expected_parent = stack
             .last()
-            .map(|(anchor, _)| *anchor)
-            .unwrap_or(AnchorId::INVALID);
+            .map_or(AnchorId::INVALID, |(anchor, _)| *anchor);
         if group.parent_anchor != expected_parent {
             return Err(view.invalid_parent(index, expected_parent, group.parent_anchor));
         }

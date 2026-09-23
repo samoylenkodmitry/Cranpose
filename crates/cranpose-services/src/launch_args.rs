@@ -287,7 +287,7 @@ pub fn launch_args_from_command_line(
         };
         match option.split_once('=') {
             Some((name, value)) => {
-                entries.push((name.to_string(), LaunchArgValue::Text(value.to_string())))
+                entries.push((name.to_string(), LaunchArgValue::Text(value.to_string())));
             }
             None => entries.push((option.to_string(), LaunchArgValue::Bool(true))),
         }

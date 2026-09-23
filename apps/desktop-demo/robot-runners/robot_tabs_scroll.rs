@@ -15,8 +15,8 @@ fn main() {
             std::thread::sleep(Duration::from_millis(500));
 
             match robot.wait_for_idle() {
-                Ok(_) => println!("✓ App ready\n"),
-                Err(e) => println!("Note: {}\n", e),
+                Ok(()) => println!("✓ App ready\n"),
+                Err(e) => println!("Note: {e}\n"),
             }
 
             let tab_labels = app::demo_tab_labels();
@@ -36,18 +36,18 @@ fn main() {
                         }
                     }
                     for (i, elem) in semantics.iter().enumerate() {
-                        println!("\nRoot element {}:", i);
+                        println!("\nRoot element {i}:");
                         print_element(elem, 0);
                     }
                 }
-                Err(e) => println!("Failed to get semantics: {}", e),
+                Err(e) => println!("Failed to get semantics: {e}"),
             }
             println!("--- End Semantic Tree ---\n");
 
             println!("\n=== Initial Tab Positions ===");
             let initial_tabs = collect_tab_bounds(&robot, &tab_labels);
             for (i, (label, (x, y, _, _))) in initial_tabs.iter().enumerate() {
-                println!("  Tab {}: '{}' at x={:.1}, y={:.1}", i, label, x, y);
+                println!("  Tab {i}: '{label}' at x={x:.1}, y={y:.1}");
             }
 
             if initial_tabs.is_empty() {
@@ -81,12 +81,11 @@ fn main() {
                         TabAxis::Vertical => (start_x, start_y - 300.0),
                     };
                     println!(
-                        "Dragging from ({:.1}, {:.1}) to ({:.1}, {:.1})",
-                        start_x, start_y, end_x, end_y
+                        "Dragging from ({start_x:.1}, {start_y:.1}) to ({end_x:.1}, {end_y:.1})"
                     );
                     match robot.drag(start_x, start_y, end_x, end_y) {
-                        Ok(_) => println!("✓ Drag completed"),
-                        Err(e) => println!("✗ Drag failed: {}", e),
+                        Ok(()) => println!("✓ Drag completed"),
+                        Err(e) => println!("✗ Drag failed: {e}"),
                     }
                     std::thread::sleep(Duration::from_millis(500));
                 } else {
@@ -100,7 +99,7 @@ fn main() {
             println!("\n=== Tab Positions After Drag ===");
             let after_drag_tabs = collect_tab_bounds(&robot, &tab_labels);
             for (i, (label, (x, y, _, _))) in after_drag_tabs.iter().enumerate() {
-                println!("  Tab {}: '{}' at x={:.1}, y={:.1}", i, label, x, y);
+                println!("  Tab {i}: '{label}' at x={x:.1}, y={y:.1}");
             }
 
             let mut tabs_moved = false;
@@ -149,12 +148,11 @@ fn main() {
                         TabAxis::Vertical => (start_x, start_y + 300.0),
                     };
                     println!(
-                        "\nDragging back from ({:.1}, {:.1}) to ({:.1}, {:.1})",
-                        start_x, start_y, end_x, end_y
+                        "\nDragging back from ({start_x:.1}, {start_y:.1}) to ({end_x:.1}, {end_y:.1})"
                     );
                     match robot.drag(start_x, start_y, end_x, end_y) {
-                        Ok(_) => println!("✓ Drag completed"),
-                        Err(e) => println!("✗ Drag failed: {}", e),
+                        Ok(()) => println!("✓ Drag completed"),
+                        Err(e) => println!("✗ Drag failed: {e}"),
                     }
                     std::thread::sleep(Duration::from_millis(500));
                 }
@@ -165,15 +163,14 @@ fn main() {
                 let click_x = x + w / 2.0;
                 let click_y = y + h / 2.0;
                 println!(
-                    "Tapping on first tab '{}' at ({:.1}, {:.1})",
-                    label, click_x, click_y
+                    "Tapping on first tab '{label}' at ({click_x:.1}, {click_y:.1})"
                 );
                 match robot.click(click_x, click_y) {
-                    Ok(_) => println!("✓ Tap completed"),
-                    Err(e) => println!("✗ Tap failed: {}", e),
+                    Ok(()) => println!("✓ Tap completed"),
+                    Err(e) => println!("✗ Tap failed: {e}"),
                 }
                 std::thread::sleep(Duration::from_millis(300));
-                println!("Expected: ONE '{}' button clicked message", label);
+                println!("Expected: ONE '{label}' button clicked message");
             }
 
             println!("\n=== Test Summary ===");
@@ -189,7 +186,7 @@ fn main() {
             println!("Window will stay open for 1 seconds...\n");
 
             for remaining in (1..=1).rev() {
-                println!("Closing in {} seconds...", remaining);
+                println!("Closing in {remaining} seconds...");
                 std::thread::sleep(Duration::from_secs(1));
             }
 

@@ -355,10 +355,10 @@ impl ModifierNodeSlices {
         resolver: Option<Rc<dyn Fn() -> GraphicsLayer>>,
     ) {
         let existing_snapshot = self.graphics_layer.clone();
-        let next_snapshot = existing_snapshot
-            .as_ref()
-            .map(|current| merge_graphics_layers(current.clone(), layer.clone()))
-            .unwrap_or_else(|| layer.clone());
+        let next_snapshot = existing_snapshot.as_ref().map_or_else(
+            || layer.clone(),
+            |current| merge_graphics_layers(current.clone(), layer.clone()),
+        );
         let existing_resolver = self.graphics_layer_resolver.clone();
 
         self.graphics_layer = Some(next_snapshot);
@@ -566,7 +566,7 @@ pub fn collect_modifier_slices_into(chain: &ModifierNodeChain, slices: &mut Modi
                         if !primitives.is_empty() {
                             let draw_cmd = Rc::new(
                                 move |scope: &mut cranpose_ui_graphics::DrawScopeDefault| {
-                                    scope.push_recorded(primitives.clone())
+                                    scope.push_recorded(primitives.clone());
                                 },
                             );
                             slices.draw_commands.push(DrawCommand::Overlay(draw_cmd));

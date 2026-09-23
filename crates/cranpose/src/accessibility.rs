@@ -1153,8 +1153,11 @@ pub(crate) fn perform_custom_action(
     all(feature = "ios", feature = "renderer-wgpu", target_os = "ios")
 ))]
 pub(crate) fn magic_tap(root: &SemanticsNode, node_id: NodeId) -> bool {
-    find_semantics_node(root, node_id)
-        .is_some_and(|node| node.on_magic_tap.as_ref().is_some_and(|tap| tap.invoke()))
+    find_semantics_node(root, node_id).is_some_and(|node| {
+        node.on_magic_tap
+            .as_ref()
+            .is_some_and(cranpose_foundation::SemanticsMagicTap::invoke)
+    })
 }
 
 /// What a screen reader lists for a node, in the order the platforms number
@@ -1765,8 +1768,7 @@ pub(crate) fn spoken_line(element: &AccessibilityElement) -> String {
     let role_word = SPOKEN_ROLES
         .iter()
         .find(|(role, _)| *role == element.role)
-        .map(|(_, word)| *word)
-        .unwrap_or("");
+        .map_or("", |(_, word)| *word);
     let name = match (&element.pane_title, element.label.is_empty()) {
         (Some(title), true) => format!("{title}, pane"),
         _ => spoken_text(element),

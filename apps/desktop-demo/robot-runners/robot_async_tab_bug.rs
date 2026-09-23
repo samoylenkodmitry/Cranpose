@@ -29,7 +29,7 @@ fn main() {
                 .find_map(|root| find_text_center(root, "Async Runtime"));
 
             if let Some((x, y)) = async_tab_pos {
-                println!("Found Async Runtime tab at ({}, {})", x, y);
+                println!("Found Async Runtime tab at ({x}, {y})");
                 println!("Async Runtime button clicked");
                 let _ = robot.mouse_move(x, y);
                 let _ = robot.mouse_down();
@@ -64,7 +64,7 @@ fn main() {
                 .find_map(|root| find_text_center(root, "Counter App"));
 
             if let Some((x, y)) = counter_tab_pos {
-                println!("Found Counter App tab at ({}, {})", x, y);
+                println!("Found Counter App tab at ({x}, {y})");
                 let _ = robot.mouse_move(x, y);
                 let _ = robot.mouse_down();
                 println!("Counter App button clicked");

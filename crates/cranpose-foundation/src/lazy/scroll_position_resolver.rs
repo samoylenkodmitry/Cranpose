@@ -248,7 +248,7 @@ mod tests {
             );
 
             let (index, offset) = resolver.normalize_forward(0, 1500.0);
-            assert!(index > 0, "Expected forward jump, got index={}", index);
+            assert!(index > 0, "Expected forward jump, got index={index}");
             assert!(offset < 1500.0, "Expected offset reduction");
         });
     }
@@ -290,7 +290,7 @@ mod tests {
             );
 
             let (index, offset) = resolver.normalize_backward_jump(50, -2000.0);
-            assert!(index < 50, "Expected backward jump, got index={}", index);
+            assert!(index < 50, "Expected backward jump, got index={index}");
             assert!(offset > -2000.0, "Expected offset increase");
         });
     }

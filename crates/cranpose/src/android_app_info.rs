@@ -47,7 +47,7 @@ fn query_app_info(
                 jni_sig!("()Landroid/content/pm/PackageManager;"),
                 &[],
             )
-            .and_then(|value| value.l())
+            .and_then(jni::JValueOwned::l)
             .map_err(|error| describe(env, "Activity.getPackageManager", error))?;
         let package = env
             .call_method(
@@ -56,7 +56,7 @@ fn query_app_info(
                 jni_sig!("()Ljava/lang/String;"),
                 &[],
             )
-            .and_then(|value| value.l())
+            .and_then(jni::JValueOwned::l)
             .map_err(|error| describe(env, "Activity.getPackageName", error))?;
         let info = env
             .call_method(
@@ -65,7 +65,7 @@ fn query_app_info(
                 jni_sig!("(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;"),
                 &[(&package).into(), 0i32.into()],
             )
-            .and_then(|value| value.l())
+            .and_then(jni::JValueOwned::l)
             .map_err(|error| describe(env, "PackageManager.getPackageInfo", error))?;
 
         let name_object = env
@@ -74,7 +74,7 @@ fn query_app_info(
                 jni_str!("versionName"),
                 jni_sig!("Ljava/lang/String;"),
             )
-            .and_then(|value| value.l())
+            .and_then(jni::JValueOwned::l)
             .map_err(|error| describe(env, "PackageInfo.versionName", error))?;
         let version_name = if name_object.is_null() {
             None
@@ -86,11 +86,11 @@ fn query_app_info(
 
         let build_version = env
             .call_method(&info, jni_str!("getLongVersionCode"), jni_sig!("()J"), &[])
-            .and_then(|value| value.j())
+            .and_then(jni::JValueOwned::j)
             .or_else(|_| {
                 crate::android_jni::clear_pending_android_jni_exception(env);
                 env.get_field(&info, jni_str!("versionCode"), jni_sig!("I"))
-                    .and_then(|value| value.i())
+                    .and_then(jni::JValueOwned::i)
                     .map(i64::from)
             })
             .ok()

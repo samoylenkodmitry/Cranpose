@@ -67,7 +67,7 @@ fn infinite_transition_drives_state_updates() {
     let observer = SnapshotStateObserver::new(|callback| callback());
     let initial = observer.observe_reads(
         (),
-        |_| {},
+        |()| {},
         || state_slot.borrow().as_ref().expect("state available").get(),
     );
     assert_eq!(initial, 0.0);
@@ -142,7 +142,7 @@ fn infinite_transition_survives_conditional_cycle() {
     let observer = SnapshotStateObserver::new(|callback| callback());
     observer.observe_reads(
         (),
-        |_| {},
+        |()| {},
         || state_slot.borrow().as_ref().expect("state available").get(),
     );
     runtime.drain_ui();
@@ -237,7 +237,7 @@ fn infinite_transition_inserted_after_state_change_advances() {
     let observer = SnapshotStateObserver::new(|callback| callback());
     let initial = observer.observe_reads(
         (),
-        |_| {},
+        |()| {},
         || state_slot.borrow().as_ref().expect("state available").get(),
     );
     assert_eq!(initial, 0.0);
@@ -316,7 +316,7 @@ fn infinite_transition_restarts_when_first_animation_is_inserted_later() {
     let observer = SnapshotStateObserver::new(|callback| callback());
     let initial = observer.observe_reads(
         (),
-        |_| {},
+        |()| {},
         || state_slot.borrow().as_ref().expect("state available").get(),
     );
     assert_eq!(initial, 0.0);
@@ -399,7 +399,7 @@ fn infinite_transition_conditional_cycle_does_not_leak_slots() {
     let observer = SnapshotStateObserver::new(|callback| callback());
     observer.observe_reads(
         (),
-        |_| {},
+        |()| {},
         || state_slot.borrow().as_ref().expect("state available").get(),
     );
     runtime.drain_ui();
@@ -481,7 +481,7 @@ fn respec_animation_keeps_advancing_after_its_readers_leave_and_return() {
     let sheen = || sheen_slot.borrow().as_ref().expect("sheen").get();
     let observer = SnapshotStateObserver::new(|callback| callback());
     let subscribe = |observer: &SnapshotStateObserver| {
-        observer.observe_reads((), |_| {}, || (rotation(), sheen()));
+        observer.observe_reads((), |()| {}, || (rotation(), sheen()));
     };
     subscribe(&observer);
     runtime.drain_ui();

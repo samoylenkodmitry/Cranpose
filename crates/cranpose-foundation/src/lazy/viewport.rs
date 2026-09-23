@@ -18,9 +18,8 @@ impl ViewportHandler {
             let avg_size = average_item_size.max(DEFAULT_ITEM_SIZE_ESTIMATE);
             let estimated_size = (avg_size + spacing) * INFINITE_VIEWPORT_ITEM_COUNT;
             log::warn!(
-                "LazyList: Detected infinite viewport ({}); realizing all items without \
-                 virtualization. Consider wrapping LazyList in a constrained container.",
-                viewport_size
+                "LazyList: Detected infinite viewport ({viewport_size}); realizing all items without \
+                 virtualization. Consider wrapping LazyList in a constrained container."
             );
             estimated_size
         } else {

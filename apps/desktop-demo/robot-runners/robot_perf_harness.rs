@@ -324,7 +324,7 @@ fn ShadowedCardRow(index: usize) {
         BoxSpec::new(),
         move || {
             Text(
-                format!("Receipt {}", index),
+                format!("Receipt {index}"),
                 Modifier::empty(),
                 TextStyle::default(),
             );
@@ -357,7 +357,7 @@ fn CacheRow(index: usize, scenario: PerfScenario) {
                         ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(4.0)),
                         move || {
                             Text(
-                                format!("Cache row {}", index),
+                                format!("Cache row {index}"),
                                 Modifier::empty(),
                                 TextStyle::default(),
                             );
@@ -396,7 +396,7 @@ fn TextHeavyRow(index: usize, scenario: PerfScenario) {
                 ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(6.0)),
                 move || {
                     Text(
-                        format!("Paragraph card {}", index),
+                        format!("Paragraph card {index}"),
                         Modifier::empty(),
                         TextStyle::default(),
                     );
@@ -447,7 +447,7 @@ fn BackdropRow(index: usize) {
                 ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(4.0)),
                 move || {
                     Text(
-                        format!("Backdrop band {}", index),
+                        format!("Backdrop band {index}"),
                         Modifier::empty(),
                         TextStyle::default(),
                     );
@@ -614,7 +614,7 @@ fn GlassRow(index: usize) {
                         ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(4.0)),
                         move || {
                             Text(
-                                format!("Glass row {}", index),
+                                format!("Glass row {index}"),
                                 Modifier::empty(),
                                 TextStyle::default(),
                             );
@@ -724,12 +724,11 @@ fn frame_ms_budget_from(value: Option<&str>, default: f32) -> f32 {
 fn env_bool(key: &str, default: bool) -> bool {
     std::env::var(key)
         .ok()
-        .map(|value| match value.to_lowercase().as_str() {
+        .map_or(default, |value| match value.to_lowercase().as_str() {
             "1" | "true" | "yes" | "on" => true,
             "0" | "false" | "no" | "off" => false,
             _ => default,
         })
-        .unwrap_or(default)
 }
 
 fn timeout_slack_secs_from(value: Option<&str>) -> u64 {
@@ -1079,10 +1078,9 @@ fn main() {
 
     println!("=== Robot Perf Harness ===");
     println!("Scenario: {} ({})", scenario.name(), scenario.title());
-    println!("Duration: {}s (warmup {}s)", duration_secs, warmup_secs);
+    println!("Duration: {duration_secs}s (warmup {warmup_secs}s)");
     println!(
-        "Memory validation: {} (max growth {} KB, sample {} ms)",
-        validate_mem, max_growth_kb, sample_interval_ms
+        "Memory validation: {validate_mem} (max growth {max_growth_kb} KB, sample {sample_interval_ms} ms)"
     );
     println!("Wait idle after drag: {wait_idle_after_drag}");
     if min_fps > 0.0 {
@@ -1105,7 +1103,7 @@ fn main() {
             let timeout_secs = timeout_budget_secs(duration_secs, warmup_secs, timeout_slack_secs);
             std::thread::spawn(move || {
                 std::thread::sleep(Duration::from_secs(timeout_secs));
-                eprintln!("TIMEOUT: Perf harness exceeded {} seconds", timeout_secs);
+                eprintln!("TIMEOUT: Perf harness exceeded {timeout_secs} seconds");
                 std::process::exit(1);
             });
 
@@ -1235,7 +1233,7 @@ fn main() {
                             peak_rss_kb / 1024
                         );
                     }
-                    println!("Samples: {}", sample_count);
+                    println!("Samples: {sample_count}");
 
                     if growth > max_growth_kb {
                         fatal(

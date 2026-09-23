@@ -380,7 +380,7 @@ fn PrimitiveScrollReactiveStoriesBranch(list_state: LazyListState, captures: Cap
                 |scope| {
                     scope.items(40, |index| {
                         Text(
-                            format!("Item {}", index),
+                            format!("Item {index}"),
                             Modifier::empty(),
                             TextStyle::default(),
                         );
@@ -414,7 +414,7 @@ fn PrimitiveLazyColumnWithScrollIndicator(
                         |scope| {
                             scope.items(40, |index| {
                                 Text(
-                                    format!("Item {}", index),
+                                    format!("Item {index}"),
                                     Modifier::empty(),
                                     TextStyle::default(),
                                 );
@@ -1435,9 +1435,7 @@ fn test_fill_max_width_respects_parent_bounds() {
 
     assert!(
         row_right <= column_right_inner + EPSILON,
-        "Row overflows Column: Row right edge={} > Column inner right={}",
-        row_right,
-        column_right_inner
+        "Row overflows Column: Row right edge={row_right} > Column inner right={column_right_inner}"
     );
 }
 
@@ -1573,9 +1571,7 @@ fn test_fill_max_width_with_background_and_double_padding() {
     let column_right = inner_layout.rect.x + inner_layout.rect.width;
     assert!(
         row_right <= column_right + EPSILON,
-        "Row overflows Inner Column: row_right={} > column_right={}",
-        row_right,
-        column_right
+        "Row overflows Inner Column: row_right={row_right} > column_right={column_right}"
     );
 }
 

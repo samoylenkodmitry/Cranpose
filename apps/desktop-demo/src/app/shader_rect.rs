@@ -18,7 +18,7 @@ use cranpose_ui_graphics::{
 /// The uniform readers and distance functions every runtime shader in the
 /// demo uses after the shared prelude; a fragment stage is appended per
 /// effect.
-pub(crate) const WGSL_HELPERS: &str = r#"
+pub(crate) const WGSL_HELPERS: &str = r"
 
 fn get_float(index: u32) -> f32 {
     return u[index / 4u][index % 4u];
@@ -32,9 +32,9 @@ fn sd_round_box(p: vec2<f32>, b: vec2<f32>, r: f32) -> f32 {
     let q = abs(p) - b + vec2<f32>(r);
     return length(max(q, vec2<f32>(0.0))) + min(max(q.x, q.y), 0.0) - r;
 }
-"#;
+";
 
-pub(crate) const FIRE_FIELD_WGSL: &str = r#"
+pub(crate) const FIRE_FIELD_WGSL: &str = r"
 const PI: f32 = 3.14159265358979;
 const TWO_PI: f32 = 6.28318530717959;
 
@@ -88,16 +88,16 @@ fn color_from_grad(grad: f32) -> vec3<f32> {
     return c / (vec3<f32>(1.15) + max(vec3<f32>(0.0), c));
 }
 
-"#;
+";
 
 fn fire_halo_wgsl() -> Arc<str> {
     static SOURCE: OnceLock<Arc<str>> = OnceLock::new();
     SOURCE
         .get_or_init(|| {
             Arc::<str>::from(format!(
-        r#"{preamble}{helpers}
+        r"{RUNTIME_SHADER_PRELUDE_WGSL}{WGSL_HELPERS}
 
-{fire_field}
+{FIRE_FIELD_WGSL}
 fn perimeter_s(p: vec2<f32>, half_size: vec2<f32>, r: f32) -> f32 {{
     let inner = max(half_size - vec2<f32>(r), vec2<f32>(0.0001));
     let lh = 2.0 * inner.x;
@@ -254,10 +254,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {{
     let out_rgb = base.rgb + halo.rgb * (1.0 - base.a);
     return vec4<f32>(out_rgb, out_a);
 }}
-"#,
-        preamble = RUNTIME_SHADER_PRELUDE_WGSL,
-        helpers = WGSL_HELPERS,
-        fire_field = FIRE_FIELD_WGSL
+"
             ))
         })
         .clone()
@@ -268,7 +265,7 @@ fn halo_border_wgsl() -> Arc<str> {
     SOURCE
         .get_or_init(|| {
             Arc::<str>::from(format!(
-        r#"{preamble}{helpers}
+        r"{RUNTIME_SHADER_PRELUDE_WGSL}{WGSL_HELPERS}
 
 @fragment
 fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {{
@@ -321,9 +318,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {{
     let out_rgb = base.rgb + halo.rgb * (1.0 - base.a);
     return vec4<f32>(out_rgb, out_a);
 }}
-"#,
-        preamble = RUNTIME_SHADER_PRELUDE_WGSL,
-        helpers = WGSL_HELPERS
+"
             ))
         })
         .clone()

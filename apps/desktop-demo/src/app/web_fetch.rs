@@ -21,7 +21,7 @@ fn parse_ip_response(body: &str) -> String {
             if let Some(quote_start) = after_colon.find('"') {
                 if let Some(quote_end) = after_colon[quote_start + 1..].find('"') {
                     let ip = &after_colon[quote_start + 1..quote_start + 1 + quote_end];
-                    return format!("Your public IP: {}", ip);
+                    return format!("Your public IP: {ip}");
                 }
             }
         }
@@ -33,7 +33,7 @@ async fn fetch_ipify(client: &HttpClientRef) -> Result<String, String> {
     let body = client
         .get_text("https://api.ipify.org?format=json")
         .await
-        .map_err(|err| format!("Request failed: {}", err))?;
+        .map_err(|err| format!("Request failed: {err}"))?;
     Ok(parse_ip_response(&body))
 }
 
@@ -136,7 +136,7 @@ pub(crate) fn web_fetch_example() {
                                 .padding(2.0)
                                 .clickable(move |_| {
                                     if let Err(err) = link_handler.open_uri(api_url) {
-                                        log::error!("Failed to open {}: {:#}", api_url, err);
+                                        log::error!("Failed to open {api_url}: {err:#}");
                                     }
                                 })
                                 .role(cranpose_ui::SemanticsWidgetRole::Link)
@@ -255,7 +255,7 @@ pub(crate) fn web_fetch_example() {
                     }
                     FetchStatus::Success(message) => {
                         Text(
-                            format!("\"{}\"", message),
+                            format!("\"{message}\""),
                             Modifier::empty()
                                 .padding(12.0)
                                 .background(Color(0.14, 0.34, 0.26, 0.9))
@@ -265,7 +265,7 @@ pub(crate) fn web_fetch_example() {
                     }
                     FetchStatus::Error(error) => {
                         Text(
-                            format!("Error: {}", error),
+                            format!("Error: {error}"),
                             Modifier::empty()
                                 .padding(12.0)
                                 .background(Color(0.40, 0.18, 0.18, 0.9))

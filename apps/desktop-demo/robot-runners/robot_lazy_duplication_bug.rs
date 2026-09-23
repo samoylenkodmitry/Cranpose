@@ -46,7 +46,7 @@ fn main() {
                     for node in tree {
                         let prefix = "  ".repeat(indent);
                         if let Some(text) = &node.text {
-                            println!("{prefix}Text: {}", text);
+                            println!("{prefix}Text: {text}");
                         } else {
                             println!("{prefix}Node (children={})", node.children.len());
                         }
@@ -60,23 +60,17 @@ fn main() {
                 let visible_count = count_text_starting_with(&elements, "Visible:");
                 let cached_count = count_text_starting_with(&elements, "Cached:");
 
-                println!("Found 'Visible:' count: {}", visible_count);
-                println!("Found 'Cached:' count: {}", cached_count);
+                println!("Found 'Visible:' count: {visible_count}");
+                println!("Found 'Cached:' count: {cached_count}");
 
                 if visible_count != 1 {
-                    println!(
-                        "❌ FAIL: Expected 1 'Visible:' indicator, found {}",
-                        visible_count
-                    );
+                    println!("❌ FAIL: Expected 1 'Visible:' indicator, found {visible_count}");
                     robot.exit().ok();
                     std::process::exit(1);
                 }
 
                 if cached_count != 1 {
-                    println!(
-                        "❌ FAIL: Expected 1 'Cached:' indicator, found {}",
-                        cached_count
-                    );
+                    println!("❌ FAIL: Expected 1 'Cached:' indicator, found {cached_count}");
                     robot.exit().ok();
                     std::process::exit(1);
                 }

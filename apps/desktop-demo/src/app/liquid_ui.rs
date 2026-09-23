@@ -213,7 +213,7 @@ fn TouchedUpButtonGroup(
             .with_glue_radius(36.0),
         move |scope| {
             scope.action(icons::MORE_HORIZ, "More grouped action", move || {
-                more_confirmed.set(false)
+                more_confirmed.set(false);
             });
             if show_confirm {
                 scope.push(
@@ -1161,7 +1161,7 @@ fn SortFilterStage(suggestion_offset: f32) {
                             dismiss_section.set(0);
                         },
                         move |scope| {
-                            sort_filter_menu_content(scope, section, sort_choice, filter_choice)
+                            sort_filter_menu_content(scope, section, sort_choice, filter_choice);
                         },
                     );
                 },
@@ -1993,7 +1993,7 @@ pub fn LiquidUiTab() {
                             SectionTitle("TOGGLE PRESS");
                             let reference_toggle = toggle_a;
                             TogglePressReferenceStage(reference_toggle.get(), move |value| {
-                                reference_toggle.set(value)
+                                reference_toggle.set(value);
                             });
                             Box(Modifier::empty().height(12.0), BoxSpec::default(), || {});
 

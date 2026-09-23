@@ -22,8 +22,8 @@ fn main() {
             std::thread::sleep(Duration::from_millis(500));
 
             match robot.wait_for_idle() {
-                Ok(_) => println!("✓ App ready\n"),
-                Err(e) => println!("Note: {}\n", e),
+                Ok(()) => println!("✓ App ready\n"),
+                Err(e) => println!("Note: {e}\n"),
             }
 
             let mut all_passed = true;
@@ -61,7 +61,7 @@ fn main() {
             if let Some((x, y, w, h)) = find_button_in_semantics(&robot, "Modifiers Showcase") {
                 let cx = x + w / 2.0;
                 let cy = y + h / 2.0;
-                println!("  Found 'Modifiers Showcase' tab at ({:.1}, {:.1})", cx, cy);
+                println!("  Found 'Modifiers Showcase' tab at ({cx:.1}, {cy:.1})");
 
                 let _ = robot.click(cx, cy);
                 std::thread::sleep(Duration::from_millis(500));
@@ -79,10 +79,7 @@ fn main() {
             {
                 let cx = x + w / 2.0;
                 let cy = y + h / 2.0;
-                println!(
-                    "  Found 'Dynamic Modifiers' button at ({:.1}, {:.1})",
-                    cx, cy
-                );
+                println!("  Found 'Dynamic Modifiers' button at ({cx:.1}, {cy:.1})");
 
                 let _ = robot.click(cx, cy);
                 std::thread::sleep(Duration::from_millis(500));
@@ -97,16 +94,16 @@ fn main() {
 
             let frame_before = get_frame_value(&robot);
             if let Some(frame) = frame_before {
-                println!("  Frame value before: {}\n", frame);
+                println!("  Frame value before: {frame}\n");
             } else {
                 println!("  Could not find Frame value in semantics");
                 if let Ok(semantics) = robot.get_semantics() {
                     fn dump_texts(elem: &cranpose::SemanticElement, prefix: &str) {
                         if let Some(ref text) = elem.text {
-                            println!("  {}Text: '{}'", prefix, text);
+                            println!("  {prefix}Text: '{text}'");
                         }
                         for child in &elem.children {
-                            dump_texts(child, &format!("  {}", prefix));
+                            dump_texts(child, &format!("  {prefix}"));
                         }
                     }
                     println!("  Semantics tree:");
@@ -124,7 +121,7 @@ fn main() {
             {
                 let cx = x + w / 2.0;
                 let cy = y + h / 2.0;
-                println!("  Found 'Advance Frame' button at ({:.1}, {:.1})", cx, cy);
+                println!("  Found 'Advance Frame' button at ({cx:.1}, {cy:.1})");
 
                 let _ = robot.click(cx, cy);
                 std::thread::sleep(Duration::from_millis(500));
@@ -142,20 +139,20 @@ fn main() {
             match (frame_before, frame_after) {
                 (Some(before), Some(after)) => {
                     if after > before {
-                        println!("  ✓ PASS: Frame advanced from {} to {}\n", before, after);
+                        println!("  ✓ PASS: Frame advanced from {before} to {after}\n");
                     } else {
                         println!("  ✗ FAIL: Frame did NOT advance!");
-                        println!("    Before: {}, After: {}", before, after);
+                        println!("    Before: {before}, After: {after}");
                         println!("    BUG CONFIRMED: Advance Frame button doesn't work.\n");
                         all_passed = false;
                     }
                 }
                 (None, Some(after)) => {
-                    println!("  Frame after: {}", after);
+                    println!("  Frame after: {after}");
                     println!("  Could not compare (no 'before' value)\n");
                 }
                 (Some(before), None) => {
-                    println!("  Frame before: {}", before);
+                    println!("  Frame before: {before}");
                     println!("  ✗ FAIL: Frame value disappeared after click!\n");
                     all_passed = false;
                 }

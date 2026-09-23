@@ -99,7 +99,7 @@ impl<F: FnMut() + 'static> IosApp<F> {
         let pending_ui = self
             .shell
             .as_ref()
-            .is_some_and(|shell| shell.has_pending_ui());
+            .is_some_and(cranpose_app_shell::AppShell::has_pending_ui);
         let due = self
             .next_off_screen_render
             .is_some_and(|at| at <= Instant::now());

@@ -421,8 +421,7 @@ fn push_text_style_draws(
         .span_style
         .baseline_shift
         .filter(|shift| shift.is_specified())
-        .map(|shift| -(shift.0 * font_size))
-        .unwrap_or(0.0);
+        .map_or(0.0, |shift| -(shift.0 * font_size));
     let shifted_text_rect = Rect {
         x: text_rect.x,
         y: text_rect.y + baseline_shift_px,
@@ -574,8 +573,7 @@ fn push_text_decorations(
         let brush = merged_style.brush.clone().unwrap_or_else(|| {
             merged_style
                 .color
-                .map(Brush::solid)
-                .unwrap_or_else(|| text_brush.clone())
+                .map_or_else(|| text_brush.clone(), Brush::solid)
         });
 
         let line_top = text_rect.y;
@@ -1307,7 +1305,7 @@ mod tests {
                 14.0,
                 TextLayoutOptions::default(),
                 clip,
-            )
+            );
         });
     }
 

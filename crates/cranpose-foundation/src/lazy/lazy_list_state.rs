@@ -581,9 +581,7 @@ impl LazyListState {
         }
         if diagnostics::telemetry_enabled() {
             log::warn!(
-                "[lazy-measure-telemetry] scroll_to_item request index={} offset={:.2}",
-                index,
-                scroll_offset
+                "[lazy-measure-telemetry] scroll_to_item request index={index} offset={scroll_offset:.2}"
             );
         }
         self.inner.with(|rc| {
@@ -658,9 +656,7 @@ impl LazyListState {
             if reverse_input {
                 if diagnostics::telemetry_enabled() {
                     log::warn!(
-                        "[lazy-measure-telemetry] dispatch_scroll_delta direction_change pending={:.2} new_delta={:.2}",
-                        pending,
-                        delta
+                        "[lazy-measure-telemetry] dispatch_scroll_delta direction_change pending={pending:.2} new_delta={delta:.2}"
                     );
                 }
                 inner.scroll_to_be_consumed = delta;

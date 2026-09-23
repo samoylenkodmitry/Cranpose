@@ -1,7 +1,7 @@
 use std::{
     cell::RefCell,
     rc::Rc,
-    sync::{Mutex, MutexGuard, OnceLock},
+    sync::{Mutex, MutexGuard, OnceLock, PoisonError},
     time::{Duration, Instant},
 };
 
@@ -14,7 +14,7 @@ fn serial() -> MutexGuard<'static, ()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
         .lock()
-        .unwrap_or_else(|error| error.into_inner())
+        .unwrap_or_else(PoisonError::into_inner)
 }
 
 fn pump_until(composition: &mut Composition<MemoryApplier>, done: impl Fn() -> bool) -> bool {

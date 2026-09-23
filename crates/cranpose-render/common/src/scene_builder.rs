@@ -1,4 +1,4 @@
-use std::rc::Rc;
+use std::{cell::Cell, rc::Rc};
 
 use cranpose_core::{MemoryApplier, Node, NodeId, collections::map::HashSet};
 use cranpose_ui::{
@@ -122,7 +122,7 @@ fn reset_lowered_layer_count() {
 
 #[cfg(test)]
 fn lowered_layer_count() -> usize {
-    LOWERED_LAYER_COUNT.with(std::cell::Cell::get)
+    LOWERED_LAYER_COUNT.with(Cell::get)
 }
 
 pub fn build_graph_from_layout_tree(root: &LayoutBox, scale: f32) -> RenderGraph {
@@ -263,21 +263,18 @@ fn update_graph_from_applier_report_into_inner(
     }
 
     let inherited_translated_content_context = graph.root.translated_content_context;
-    let report = match replace_dirty_layers_from_applier(
+    let Some(report) = replace_dirty_layers_from_applier(
         applier,
         &mut graph.root,
         &mut remaining_dirty_nodes,
         inherited_translated_content_context,
         false,
         changed_nodes,
-    ) {
-        Some(report) => report,
-        None => {
-            return GraphUpdateReport {
-                update: GraphUpdate::NeedsRebuild(GraphRebuildReason::DirtyLayerUnavailable),
-                hit_graph_dirty: true,
-            };
-        }
+    ) else {
+        return GraphUpdateReport {
+            update: GraphUpdate::NeedsRebuild(GraphRebuildReason::DirtyLayerUnavailable),
+            hit_graph_dirty: true,
+        };
     };
 
     match classify_walk(true, &remaining_dirty_nodes) {
@@ -1612,7 +1609,7 @@ fn publish_recording(id: DrawCommandId, recording: CommandRecording) -> Rc<Comma
     let shared = Rc::new(recording);
     COMMAND_RECORDINGS.with(|map| {
         let mut map = map.borrow_mut();
-        let generation = RECORDING_GENERATION.with(std::cell::Cell::get);
+        let generation = RECORDING_GENERATION.with(Cell::get);
         let slot = map.entry(id).or_insert_with(|| RecorderSlot {
             generation,
             handles: [None, None],
@@ -1842,8 +1839,7 @@ fn text_node_from_parts(parts: TextNodeParts<'_>) -> Option<TextPrimitiveNode> {
 
     let pan_offset = text_pan
         .as_ref()
-        .map(|resolve| resolve(content_width))
-        .unwrap_or(0.0);
+        .map_or(0.0, |resolve| resolve(content_width));
     let pans_horizontally = text_pan.is_some();
 
     let max_width = if pans_horizontally {
@@ -2026,8 +2022,7 @@ pub fn expand_text_bounds_for_baseline_shift(
         .span_style
         .baseline_shift
         .filter(|shift| shift.is_specified())
-        .map(|shift| -(shift.0 * font_size))
-        .unwrap_or(0.0);
+        .map_or(0.0, |shift| -(shift.0 * font_size));
     if baseline_shift_px == 0.0 {
         return text_bounds;
     }

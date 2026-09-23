@@ -75,7 +75,7 @@ pub fn observe_back_requests(listener: impl Fn() + 'static) -> BackRequestObserv
     BACK_LISTENERS.with(|listeners| {
         listeners
             .borrow_mut()
-            .push((id, std::rc::Rc::new(listener)))
+            .push((id, std::rc::Rc::new(listener)));
     });
     BackRequestObserver { id }
 }
@@ -212,13 +212,13 @@ pub fn take_exit_request() -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::sync::{Arc, PoisonError};
 
     use super::*;
 
     fn navigation_lock() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        LOCK.lock().unwrap_or_else(|e| e.into_inner())
+        LOCK.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     #[test]

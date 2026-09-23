@@ -479,7 +479,7 @@ mod tests {
                         |scope| {
                             scope.items(40, |index| {
                                 Text(
-                                    format!("Item {}", index),
+                                    format!("Item {index}"),
                                     Modifier::empty(),
                                     TextStyle::default(),
                                 );

@@ -97,22 +97,22 @@ fn varheight_test_app() {
 #[composable]
 fn variable_height_item(index: usize, stats: MutableState<LifecycleStats>) {
     let height = item_height(index);
-    println!("  [COMPOSE] Item {} (h={})", index, height);
+    println!("  [COMPOSE] Item {index} (h={height})");
 
     cranpose_core::SideEffect(move || {
         stats.update(|s| s.total_composes += 1);
-        println!("  [COMPOSE] Item {} composition", index);
+        println!("  [COMPOSE] Item {index} composition");
     });
 
     DisposableEffect(index, move |_key| {
         stats.update(|s| s.total_effects += 1);
-        println!("  [EFFECT] Item {} effect started", index);
+        println!("  [EFFECT] Item {index} effect started");
 
         DisposableEffectResult::new(move || {
             if stats.is_alive() {
                 stats.update(|s| s.total_disposes += 1);
             }
-            println!("  [DISPOSE] Item {} disposed", index);
+            println!("  [DISPOSE] Item {index} disposed");
         })
     });
 
@@ -132,7 +132,7 @@ fn variable_height_item(index: usize, stats: MutableState<LifecycleStats>) {
             .vertical_alignment(VerticalAlignment::CenterVertically),
         move || {
             Text(
-                format!("Item #{}", index),
+                format!("Item #{index}"),
                 Modifier::empty().padding(4.0),
                 TextStyle::default(),
             );
@@ -161,14 +161,14 @@ fn main() {
                 let semantics = match robot.get_semantics() {
                     Ok(semantics) => semantics,
                     Err(e) => {
-                        eprintln!("  ✗ Failed to get semantics: {}", e);
+                        eprintln!("  ✗ Failed to get semantics: {e}");
                         return Vec::new();
                     }
                 };
 
                 let mut items: Vec<usize> = Vec::new();
                 for i in 0..30 {
-                    let item_text = format!("Item #{}", i);
+                    let item_text = format!("Item #{i}");
                     if semantics
                         .iter()
                         .any(|root| cranpose_testing::find_text_exact(root, &item_text).is_some())
@@ -181,7 +181,7 @@ fn main() {
 
             let read_stats = || -> Option<(usize, usize, usize)> {
                 let semantics = robot.get_semantics().ok()?;
-                for root in semantics.iter() {
+                for root in &semantics {
                     if let Some((_, _, _, _, text)) =
                         cranpose_testing::find_text_by_prefix(root, "Stats: C=")
                     {
@@ -206,7 +206,7 @@ fn main() {
                 initial_items.len()
             );
             let _initial_composes = if let Some((c, e, d)) = read_stats() {
-                println!("  Stats: Composes={} Effects={} Disposes={}", c, e, d);
+                println!("  Stats: Composes={c} Effects={e} Disposes={d}");
                 assert_eq!(c, e, "Composes should equal effects initially");
                 assert_eq!(d, 0, "No disposes initially");
                 c
@@ -231,9 +231,9 @@ fn main() {
             }
             let _ = robot.wait_for_idle();
             let after_scroll = find_visible_items();
-            println!("  Visible after scroll: {:?}", after_scroll);
+            println!("  Visible after scroll: {after_scroll:?}");
             if let Some((c, e, d)) = read_stats() {
-                println!("  Stats: Composes={} Effects={} Disposes={}", c, e, d);
+                println!("  Stats: Composes={c} Effects={e} Disposes={d}");
                 assert_eq!(c, e, "Composes should equal effects after scroll");
             }
 
@@ -249,17 +249,17 @@ fn main() {
             }
             let _ = robot.wait_for_idle();
             let after_back = find_visible_items();
-            println!("  Visible after scroll back: {:?}", after_back);
+            println!("  Visible after scroll back: {after_back:?}");
 
             if let Some((c, e, d)) = read_stats() {
                 println!("\n=== FINAL STATS ===");
-                println!("  Total Composes: {}", c);
-                println!("  Total Effects: {}", e);
-                println!("  Total Disposes: {}", d);
+                println!("  Total Composes: {c}");
+                println!("  Total Effects: {e}");
+                println!("  Total Disposes: {d}");
 
                 assert_eq!(c, e, "Composes should equal effects");
 
-                println!("  Note: Disposes={} (items in reuse pool keep effects)", d);
+                println!("  Note: Disposes={d} (items in reuse pool keep effects)");
 
                 println!("\n✓ Variable height lifecycle test PASSED!");
             }

@@ -72,9 +72,8 @@ impl VelocityTracker1D {
         let mut times = [0.0f32; HISTORY_SIZE];
         let mut sample_count = 0;
 
-        let newest_sample = match self.samples[self.index] {
-            Some(sample) => sample,
-            None => return 0.0,
+        let Some(newest_sample) = self.samples[self.index] else {
+            return 0.0;
         };
 
         let mut current_index = self.index;
@@ -209,8 +208,7 @@ mod tests {
         let velocity = tracker.calculate_velocity();
         assert!(
             (velocity - 10000.0).abs() < 1000.0,
-            "Expected ~10000, got {}",
-            velocity
+            "Expected ~10000, got {velocity}"
         );
     }
 
@@ -233,11 +231,7 @@ mod tests {
         tracker.add_data_point(20, 100.0);
 
         let velocity = tracker.calculate_velocity();
-        assert!(
-            velocity < 0.0,
-            "Expected negative velocity, got {}",
-            velocity
-        );
+        assert!(velocity < 0.0, "Expected negative velocity, got {velocity}");
     }
 
     #[test]

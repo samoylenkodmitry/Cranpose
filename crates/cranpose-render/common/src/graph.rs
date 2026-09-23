@@ -612,7 +612,7 @@ fn draw_primitive_heap_bytes(primitive: &DrawPrimitive) -> usize {
                     .style
                     .font_family
                     .as_ref()
-                    .map_or(0, |family| family.capacity())
+                    .map_or(0, std::string::String::capacity)
         }
         DrawPrimitive::Shadow(shadow) => shadow_primitive_heap_bytes(shadow),
     }

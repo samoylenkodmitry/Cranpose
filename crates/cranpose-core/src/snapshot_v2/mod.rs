@@ -86,9 +86,7 @@ impl SnapshotApplyResult {
     /// Panic if the result is a failure (for use in tests).
     #[track_caller]
     pub fn check(&self) {
-        if self.is_failure() {
-            panic!("Snapshot apply failed");
-        }
+        assert!(!self.is_failure(), "Snapshot apply failed");
     }
 }
 
@@ -565,7 +563,7 @@ pub fn debug_snapshot_v2_stats() -> SnapshotV2DebugStats {
         len: extra_state_objects_len,
         capacity: extra_state_objects_cap,
     } = EXTRA_STATE_OBJECTS.with(|cell| cell.borrow().debug_stats());
-    let last_unused_record_cleanup = LAST_UNUSED_RECORD_CLEANUP.with(|cell| cell.get());
+    let last_unused_record_cleanup = LAST_UNUSED_RECORD_CLEANUP.with(Cell::get);
 
     SnapshotV2DebugStats {
         apply_observers_len,
@@ -641,7 +639,7 @@ pub(crate) fn clear_last_writes() {
 pub(crate) fn check_and_overwrite_unused_records_locked() {
     EXTRA_STATE_OBJECTS.with(|cell| {
         cell.borrow_mut()
-            .remove_if(|state| state.overwrite_unused_records());
+            .remove_if(super::state::StateObject::overwrite_unused_records);
     });
 }
 
@@ -651,7 +649,7 @@ pub(crate) fn maybe_check_and_overwrite_unused_records_locked(current_snapshot_i
         if set.is_empty() {
             return false;
         }
-        let last_cleanup = LAST_UNUSED_RECORD_CLEANUP.with(|last| last.get());
+        let last_cleanup = LAST_UNUSED_RECORD_CLEANUP.with(Cell::get);
         let interval = if set.len() >= UNUSED_RECORD_CLEANUP_MIN_SIZE {
             UNUSED_RECORD_CLEANUP_BUSY_INTERVAL
         } else {
@@ -684,16 +682,13 @@ pub(crate) fn optimistic_merges(
 
     let mut result: Option<HashMap<usize, Rc<StateRecord>>> = None;
 
-    for (_, state, writer_id) in modified_objects.iter() {
+    for (_, state, writer_id) in modified_objects {
         let head = state.first_record();
 
-        let current = match crate::state::readable_record_for(
-            &head,
-            current_snapshot_id,
-            invalid_snapshots,
-        ) {
-            Some(record) => record,
-            None => continue,
+        let Some(current) =
+            crate::state::readable_record_for(&head, current_snapshot_id, invalid_snapshots)
+        else {
+            continue;
         };
 
         let (previous_opt, found_base) =

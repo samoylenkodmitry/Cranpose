@@ -262,7 +262,7 @@ impl ModifierChainHandle {
                 let inspector = if depth == 0 {
                     entry_index
                         .and_then(|idx| inspector_entry_scratch.get_mut(idx))
-                        .and_then(|slot| slot.take())
+                        .and_then(Option::take)
                 } else {
                     None
                 };

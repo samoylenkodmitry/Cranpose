@@ -1,6 +1,6 @@
 #![allow(unsafe_code)]
 
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
 use android_activity::AndroidAppWaker;
 use cranpose_app_shell::ImeEditorState;
@@ -82,9 +82,7 @@ impl AndroidImeEventQueue {
     }
 
     fn lock_events(&self) -> MutexGuard<'_, Vec<AndroidImeEvent>> {
-        self.events
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+        self.events.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
@@ -168,7 +166,7 @@ pub(crate) fn show_android_text_input(
                 JValue::Bool(state.single_line),
             ],
         )
-        .and_then(|value| value.i())
+        .and_then(jni::JValueOwned::i)
         .map_err(|error| {
             clear_pending_android_jni_exception(env);
             format!("failed to show Android text input: {error}")

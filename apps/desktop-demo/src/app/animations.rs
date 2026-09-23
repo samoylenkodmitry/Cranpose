@@ -93,7 +93,7 @@ pub(crate) fn AnimationsTab() {
                             RowSpec::new().vertical_alignment(VerticalAlignment::CenterVertically),
                             move || {
                                 Text(
-                                    format!("Alpha {:.2}", alpha),
+                                    format!("Alpha {alpha:.2}"),
                                     Modifier::empty(),
                                     TextStyle {
                                         span_style: SpanStyle {
@@ -140,7 +140,7 @@ pub(crate) fn AnimationsTab() {
                                     height: 0.0,
                                 });
                                 Text(
-                                    format!("Offset {:.1}", offset_x),
+                                    format!("Offset {offset_x:.1}"),
                                     Modifier::empty(),
                                     TextStyle {
                                         span_style: SpanStyle {
@@ -256,7 +256,7 @@ pub(crate) fn AnimationsTab() {
                                     let lazy_pulse = PulseModel(800, "lazy_pulse");
                                     let display = (lazy_pulse.value.value() * 100.0).round() as i32;
                                     Text(
-                                        format!("Lazy Pulse: {}", display),
+                                        format!("Lazy Pulse: {display}"),
                                         Modifier::empty(),
                                         TextStyle {
                                             span_style: SpanStyle {

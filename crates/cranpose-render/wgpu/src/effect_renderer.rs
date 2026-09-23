@@ -677,7 +677,7 @@ impl ChainedSubstrates {
                             SubstrateSpec::Average { block } => SubstrateAverage::Block(block),
                             _ => SubstrateAverage::Mean,
                         },
-                    })
+                    });
                 }
             }
         }

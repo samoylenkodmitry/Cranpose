@@ -15,7 +15,7 @@ use std::{
     collections::VecDeque,
     future::Future,
     pin::Pin,
-    sync::{Arc, Condvar, Mutex},
+    sync::{Arc, Condvar, Mutex, PoisonError},
     task::{Context, Poll, Waker},
 };
 
@@ -182,7 +182,7 @@ impl<E> ChunkChannel<E> {
                     .shared
                     .room
                     .wait(state)
-                    .unwrap_or_else(|error| error.into_inner());
+                    .unwrap_or_else(PoisonError::into_inner);
             }
             if state.abandoned || state.finished {
                 return false;
@@ -289,7 +289,7 @@ impl<E> Future for ChunkNext<'_, E> {
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(|error| error.into_inner())
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 #[cfg(test)]

@@ -120,13 +120,11 @@ fn lens_press_travel(checked: bool) -> f32 {
 }
 
 fn lens_ride_x(drag_progress: Option<f32>, thumb_x: f32) -> f32 {
-    drag_progress
-        .map(|progress| {
-            let min_x = THUMB_MARGIN;
-            let max_x = TRACK_WIDTH - THUMB_MARGIN - THUMB_WIDTH;
-            min_x + (max_x - min_x) * progress.clamp(0.0, 1.0)
-        })
-        .unwrap_or(thumb_x)
+    drag_progress.map_or(thumb_x, |progress| {
+        let min_x = THUMB_MARGIN;
+        let max_x = TRACK_WIDTH - THUMB_MARGIN - THUMB_WIDTH;
+        min_x + (max_x - min_x) * progress.clamp(0.0, 1.0)
+    })
 }
 
 /// An on/off switch. `checked` is owned by the caller; `on_change` receives

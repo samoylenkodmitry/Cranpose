@@ -147,11 +147,11 @@ fn main() {
         .unwrap();
     let duration = start.elapsed();
 
-    println!("✅ Rendered in {:?}\n", duration);
+    println!("✅ Rendered in {duration:?}\n");
 
     if let Some(root) = composition.root() {
         let count = count_all_nodes(&mut composition.applier_mut(), root);
-        println!("📦 Created {} total nodes", count);
+        println!("📦 Created {count} total nodes");
     }
 
     println!("\n🔄 Testing recomposition...");
@@ -171,7 +171,7 @@ fn main() {
         .unwrap();
     let recomp_duration = recomp_start.elapsed();
 
-    println!("✅ Recomposed in {:?}", recomp_duration);
+    println!("✅ Recomposed in {recomp_duration:?}");
 
     println!("\n💪 Performance test: 100 items...");
     let perf_start = std::time::Instant::now();
@@ -180,7 +180,7 @@ fn main() {
         .unwrap();
     let perf_duration = perf_start.elapsed();
 
-    println!("✅ 100 items in {:?}", perf_duration);
+    println!("✅ 100 items in {perf_duration:?}");
     println!("📈 Per-item: {:?}", perf_duration / 100);
 
     println!("\n🎉 Demo complete - modifier system working perfectly!");

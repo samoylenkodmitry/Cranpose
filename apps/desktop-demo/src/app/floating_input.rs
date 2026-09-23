@@ -65,7 +65,7 @@ impl FloatingInputModifierExt for Modifier {
                                 PointerEventKind::Exit => hovered.set(false),
                                 PointerEventKind::Down => pressed.set(true),
                                 PointerEventKind::Up | PointerEventKind::Cancel => {
-                                    pressed.set(false)
+                                    pressed.set(false);
                                 }
                                 _ => {}
                             }

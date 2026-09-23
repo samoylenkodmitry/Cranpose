@@ -106,7 +106,7 @@ fn shadow_occluder(
         return None;
     }
     let inset = resolved_shape
-        .map(|shape| {
+        .map_or(0.0, |shape| {
             let radii = shape.radii();
             radii
                 .top_left
@@ -114,7 +114,6 @@ fn shadow_occluder(
                 .max(radii.bottom_right)
                 .max(radii.bottom_left)
         })
-        .unwrap_or(0.0)
         .max(0.0);
     let occluder = Rect {
         x: transformed_bounds.x + inset,
@@ -1018,8 +1017,7 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
         .span_style
         .baseline_shift
         .filter(|shift| shift.is_specified())
-        .map(|shift| -(shift.0 * font_size))
-        .unwrap_or(0.0);
+        .map_or(0.0, |shift| -(shift.0 * font_size));
     let shifted_text_rect = Rect {
         x: text_rect.x,
         y: text_rect.y + baseline_shift_px,
@@ -2222,7 +2220,7 @@ mod tests {
                 options,
                 text_clip,
                 None,
-            )
+            );
         });
     }
 
@@ -3003,7 +3001,7 @@ mod tests {
         assert_eq!(records.len(), 3, "one underline per visual line");
         let line_height = measure_text_for_test(&text, &style).line_height.max(1.0);
         let mut ys: Vec<f32> = records.iter().map(|entry| record_rect(entry).y).collect();
-        ys.sort_by(|a, b| a.total_cmp(b));
+        ys.sort_by(f32::total_cmp);
         assert!(ys[1] > ys[0], "second underline should be below first line");
         assert!(ys[2] > ys[1], "third underline should be below second line");
         assert!(

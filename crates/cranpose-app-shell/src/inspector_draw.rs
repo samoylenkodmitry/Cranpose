@@ -341,8 +341,7 @@ fn draw_panel(canvas: &mut Canvas, state: &mut InspectorState, panel: Rect) {
 
 fn detail_text(state: &InspectorState) -> &str {
     state.selected.and_then(|index| state.nodes.get(index))
-        .map(|node| node.details.as_str())
-        .unwrap_or("Select from the list or use Pick element.\n\nBlue: accessible bounds\nGreen: app focus\nPurple: selected\nAmber: missing accessible name")
+        .map_or("Select from the list or use Pick element.\n\nBlue: accessible bounds\nGreen: app focus\nPurple: selected\nAmber: missing accessible name", |node| node.details.as_str())
 }
 
 pub(super) fn detail_line_count(state: &InspectorState, viewport: Size) -> usize {

@@ -66,21 +66,15 @@ fn main() {
                 return;
             }
 
-            let list_bounds = match find_bounds_by_text(&robot, "LazyListViewport") {
-                Some(bounds) => bounds,
-                None => {
-                    println!("✗ Could not find LazyListViewport bounds - aborting");
-                    let _ = robot.exit();
-                    return;
-                }
+            let Some(list_bounds) = find_bounds_by_text(&robot, "LazyListViewport") else {
+                println!("✗ Could not find LazyListViewport bounds - aborting");
+                let _ = robot.exit();
+                return;
             };
-            let visible_bounds = match visible_bounds_in_viewport(&robot, list_bounds, 12.0) {
-                Some(bounds) => bounds,
-                None => {
-                    println!("✗ LazyListViewport is not visible in the viewport");
-                    let _ = robot.exit();
-                    return;
-                }
+            let Some(visible_bounds) = visible_bounds_in_viewport(&robot, list_bounds, 12.0) else {
+                println!("✗ LazyListViewport is not visible in the viewport");
+                let _ = robot.exit();
+                return;
             };
 
             let center_x = visible_bounds.0 + visible_bounds.2 * 0.5;
@@ -95,7 +89,7 @@ fn main() {
 
             fn find_any_item(robot: &Robot) -> Option<(f32, String)> {
                 for i in 0..20 {
-                    let item_text = format!("Item #{}", i);
+                    let item_text = format!("Item #{i}");
                     if let Some((_, y)) = find_item(robot, &item_text) {
                         return Some((y, item_text));
                     }
@@ -154,8 +148,7 @@ fn main() {
                         let delta = after_y - before_y;
                         if delta > -50.0 {
                             return Err(format!(
-                                "Item 0 delta {} (expected < -50, before={}, after={})",
-                                delta, before_y, after_y
+                                "Item 0 delta {delta} (expected < -50, before={before_y}, after={after_y})"
                             ));
                         }
                         Ok(())
@@ -193,7 +186,7 @@ fn main() {
                     .map_err(|err| format!("failed to reset fling velocity: {err}"))?;
 
                 let before = find_item(&robot, "Item #0");
-                let before_y = before.map(|(_, y)| y).unwrap_or(100.0);
+                let before_y = before.map_or(100.0, |(_, y)| y);
 
                 let _ = robot.mouse_move(center_x, lower_y);
                 std::thread::sleep(Duration::from_millis(50));
@@ -221,18 +214,16 @@ fn main() {
                             .map_err(|err| format!("failed to query fling velocity: {err}"))?;
                         if velocity.abs() < 50.0 {
                             return Err(format!(
-                                "Fling velocity {:.1} < 50px/sec (expected fling momentum)",
-                                velocity
+                                "Fling velocity {velocity:.1} < 50px/sec (expected fling momentum)"
                             ));
                         }
                         let min_expected = (drag_distance * 0.6).max(80.0);
                         if total_movement < min_expected {
                             return Err(format!(
-                                "Total movement {} < {:.1}px (expected fling momentum)",
-                                total_movement, min_expected
+                                "Total movement {total_movement} < {min_expected:.1}px (expected fling momentum)"
                             ));
                         }
-                        eprintln!("  (Item 0 moved {} px total)", total_movement);
+                        eprintln!("  (Item 0 moved {total_movement} px total)");
                         Ok(())
                     }
                     None => {
@@ -258,7 +249,7 @@ fn main() {
                 let _ = robot.wait_for_idle();
 
                 let after_first = find_any_item(&robot);
-                let after_first_y = after_first.as_ref().map(|(y, _)| *y).unwrap_or(300.0);
+                let after_first_y = after_first.as_ref().map_or(300.0, |(y, _)| *y);
 
                 let _ = robot.mouse_move(center_x, lower_y);
                 std::thread::sleep(Duration::from_millis(30));
@@ -266,7 +257,7 @@ fn main() {
                 std::thread::sleep(Duration::from_millis(30));
 
                 let during_second = find_any_item(&robot);
-                let during_y = during_second.as_ref().map(|(y, _)| *y).unwrap_or(300.0);
+                let during_y = during_second.as_ref().map_or(300.0, |(y, _)| *y);
 
                 let _ = robot.mouse_up();
                 std::thread::sleep(Duration::from_millis(100));
@@ -274,16 +265,15 @@ fn main() {
                 let jump = (during_y - after_first_y).abs();
                 if jump > 50.0 {
                     return Err(format!(
-                        "Jump-back detected! After first scroll Y={}, on second down Y={}, jump={}",
-                        after_first_y, during_y, jump
+                        "Jump-back detected! After first scroll Y={after_first_y}, on second down Y={during_y}, jump={jump}"
                     ));
                 }
-                eprintln!("  (No jump-back: delta={:.1}px)", jump);
+                eprintln!("  (No jump-back: delta={jump:.1}px)");
                 Ok(())
             });
 
             println!("\n=== Test Summary ===");
-            println!("{} / {} tests passed", pass_count, test_count);
+            println!("{pass_count} / {test_count} tests passed");
 
             if all_passed {
                 println!("✓ ALL TESTS PASSED");

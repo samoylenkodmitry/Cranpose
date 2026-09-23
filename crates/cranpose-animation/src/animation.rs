@@ -710,7 +710,7 @@ impl InfiniteTransition {
         animation_spec: InfiniteRepeatableSpec<T>,
     ) -> State<T> {
         let caller = cranpose_core::caller_location_key();
-        let runtime = with_current_composer(|composer| composer.runtime_handle());
+        let runtime = with_current_composer(cranpose_core::Composer::runtime_handle);
         let initial_for_remember = initial_value.clone();
         let target_for_remember = target_value.clone();
         let spec_for_remember = animation_spec.clone();
@@ -833,10 +833,10 @@ impl InfiniteTransitionInner {
 #[allow(non_snake_case)]
 #[track_caller]
 pub fn rememberInfiniteTransition(label: &str) -> InfiniteTransition {
-    let runtime = with_current_composer(|composer| composer.runtime_handle());
+    let runtime = with_current_composer(cranpose_core::Composer::runtime_handle);
     let transition =
         cranpose_core::remember(move || InfiniteTransition::new(label, runtime.clone()))
-            .with(|transition| transition.clone());
+            .with(Clone::clone);
     transition.run();
     transition
 }
@@ -1130,9 +1130,9 @@ impl<T: SpringScalar + 'static> Animatable<T> {
                     schedule_next = true;
                 } else {
                     let last = inner.last_frame_nanos.replace(frame_time_nanos);
-                    let dt = last
-                        .map(|last| frame_time_nanos.saturating_sub(last) as f32 / 1_000_000_000.0)
-                        .unwrap_or(0.0);
+                    let dt = last.map_or(0.0, |last| {
+                        frame_time_nanos.saturating_sub(last) as f32 / 1_000_000_000.0
+                    });
 
                     if dt <= 0.0 {
                         schedule_next = true;
@@ -1206,7 +1206,7 @@ pub fn animate_float_as_state_with_initial(
                 animatable.animateTo(target, animation);
             }
         });
-        anim.with(|animatable| animatable.state())
+        anim.with(Animatable::state)
     })
 }
 
@@ -1238,7 +1238,7 @@ pub fn animateValueAsState<T: SpringScalar + PartialEq + 'static>(
                 animatable.animateTo(target.clone(), animation);
             }
         });
-        anim.with(|animatable| animatable.state())
+        anim.with(Animatable::state)
     })
 }
 

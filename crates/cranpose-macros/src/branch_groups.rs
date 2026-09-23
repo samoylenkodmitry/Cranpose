@@ -60,7 +60,7 @@ impl VisitMut for SyncInteriors<'_, '_> {
     fn visit_expr_mut(&mut self, expr: &mut Expr) {
         match expr {
             Expr::Closure(_) | Expr::Async(_) | Expr::Const(_) => {
-                self.injector.visit_expr_mut(expr)
+                self.injector.visit_expr_mut(expr);
             }
             _ => visit_mut::visit_expr_mut(self, expr),
         }

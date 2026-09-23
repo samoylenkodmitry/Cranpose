@@ -215,6 +215,8 @@ pub fn rememberHostSurfaceSize() -> State<HostSurfaceSize> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::PoisonError;
+
     use super::*;
 
     struct FixedSurface;
@@ -237,7 +239,7 @@ mod tests {
             *self
                 .requested
                 .lock()
-                .unwrap_or_else(|error| error.into_inner()) = Some((width, height));
+                .unwrap_or_else(PoisonError::into_inner) = Some((width, height));
             Ok(())
         }
     }
@@ -296,7 +298,7 @@ mod tests {
             *surface
                 .requested
                 .lock()
-                .unwrap_or_else(|error| error.into_inner()),
+                .unwrap_or_else(PoisonError::into_inner),
             Some((275.0, 116.0))
         );
         assert_eq!(
@@ -319,8 +321,8 @@ mod tests {
         let registration = observe_host_surface_size(move |size| {
             recorder
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .push(size)
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(size);
         });
         let first = HostSurfaceSize {
             width: 100.0,
@@ -330,7 +332,9 @@ mod tests {
         publish_host_surface_size(first);
         publish_host_surface_size(first);
         assert_eq!(
-            seen.lock().unwrap_or_else(|e| e.into_inner()).as_slice(),
+            seen.lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .as_slice(),
             [first]
         );
         drop(registration);
@@ -338,7 +342,7 @@ mod tests {
             width: 200.0,
             ..first
         });
-        assert_eq!(seen.lock().unwrap_or_else(|e| e.into_inner()).len(), 1);
+        assert_eq!(seen.lock().unwrap_or_else(PoisonError::into_inner).len(), 1);
         clear_platform_host_surface();
     }
 }

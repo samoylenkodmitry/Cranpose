@@ -31,11 +31,11 @@ fn main() {
             println!("\n--- Step 1: Initial state ---");
             let initial_stats = read_stats();
             if let Some((c, e, d)) = initial_stats {
-                println!("  Initial: Composes={} Effects={} Disposes={}", c, e, d);
+                println!("  Initial: Composes={c} Effects={e} Disposes={d}");
                 assert_eq!(c, e, "Composes should equal effects");
                 assert_eq!(d, 0, "No disposes initially");
             }
-            let initial_composes = initial_stats.map(|(c, _, _)| c).unwrap_or(0);
+            let initial_composes = initial_stats.map_or(0, |(c, _, _)| c);
 
             println!("\n--- Step 2: Rapid scroll down ---");
 
@@ -53,23 +53,21 @@ fn main() {
                 let scroll_time = start.elapsed();
                 std::thread::sleep(Duration::from_millis(100));
 
-                println!("  Scroll time: {:?}", scroll_time);
+                println!("  Scroll time: {scroll_time:?}");
             }
 
             let after_scroll_down = read_stats();
             if let Some((c, e, d)) = after_scroll_down {
                 println!(
-                    "  After scroll down: Composes={} Effects={} Disposes={}",
-                    c, e, d
+                    "  After scroll down: Composes={c} Effects={e} Disposes={d}"
                 );
 
                 let new_composes = c - initial_composes;
-                println!("  New composes during scroll: {}", new_composes);
+                println!("  New composes during scroll: {new_composes}");
 
                 assert!(
                     new_composes < 100,
-                    "Too many composes during scroll: {} (expected <100)",
-                    new_composes
+                    "Too many composes during scroll: {new_composes} (expected <100)"
                 );
                 assert_eq!(c, e, "Composes should equal effects");
             }
@@ -91,23 +89,22 @@ fn main() {
             let after_scroll_back = read_stats();
             if let Some((c, e, d)) = after_scroll_back {
                 println!(
-                    "  After scroll back: Composes={} Effects={} Disposes={}",
-                    c, e, d
+                    "  After scroll back: Composes={c} Effects={e} Disposes={d}"
                 );
 
                 assert_eq!(c, e, "Composes should equal effects");
 
                 println!("\n=== PERFORMANCE ASSERTIONS PASSED ===");
-                println!("  Total composes: {}", c);
-                println!("  Total effects: {}", e);
-                println!("  Total disposes: {}", d);
+                println!("  Total composes: {c}");
+                println!("  Total effects: {e}");
+                println!("  Total disposes: {d}");
 
                 let efficiency = if c > 0 {
                     (c as f64 - d as f64) / c as f64 * 100.0
                 } else {
                     100.0
                 };
-                println!("  Retention efficiency: {:.1}%", efficiency);
+                println!("  Retention efficiency: {efficiency:.1}%");
             } else {
                 println!("  Could not read stats after scroll back");
             }

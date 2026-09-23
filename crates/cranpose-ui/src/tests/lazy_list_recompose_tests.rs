@@ -159,7 +159,7 @@ fn ScrollIndicatorLazyList(captured_state: Rc<RefCell<Option<LazyListState>>>) {
             |scope| {
                 scope.items(80, |index| {
                     Text(
-                        format!("Row {}", index),
+                        format!("Row {index}"),
                         Modifier::empty().height(48.0),
                         TextStyle::default(),
                     );
@@ -216,7 +216,7 @@ fn ChildScrollIndicatorLazyList(captured_state: Rc<RefCell<Option<LazyListState>
             |scope| {
                 scope.items(80, |index| {
                     Text(
-                        format!("Row {}", index),
+                        format!("Row {index}"),
                         Modifier::empty().height(48.0),
                         TextStyle::default(),
                     );
@@ -252,7 +252,7 @@ fn ReactiveSiblingLazyList(
                         move |index| {
                             item_invocations.set(item_invocations.get() + 1);
                             Text(
-                                format!("Stable Row {}", index),
+                                format!("Stable Row {index}"),
                                 Modifier::empty().height(48.0),
                                 TextStyle::default(),
                             );
@@ -284,7 +284,7 @@ fn StableKeyedCountingLazyList(
                     move |index| {
                         item_invocations.set(item_invocations.get() + 1);
                         Text(
-                            format!("Cached Row {}", index),
+                            format!("Cached Row {index}"),
                             Modifier::empty().height(48.0),
                             TextStyle::default(),
                         );
@@ -777,7 +777,7 @@ fn scroll_state_recomposition_does_not_reprepare_stable_lazy_rows() {
             let item_invocations = Rc::clone(&item_invocations);
             let captured_state = Rc::clone(&captured_state);
             move || {
-                ReactiveSiblingLazyList(Rc::clone(&item_invocations), Rc::clone(&captured_state))
+                ReactiveSiblingLazyList(Rc::clone(&item_invocations), Rc::clone(&captured_state));
             }
         })
         .expect("initial render");
@@ -1024,7 +1024,7 @@ fn invalidated_cached_lazy_item_recomposes_instead_of_reusing_stale_content() {
                     Rc::clone(&item_invocations),
                     label_state,
                     Rc::clone(&captured_state),
-                )
+                );
             }
         })
         .expect("initial render");
@@ -1257,7 +1257,7 @@ fn GrowingLazyList(
                         ColumnSpec::default(),
                         move || {
                             Text(
-                                format!("Item {}", index),
+                                format!("Item {index}"),
                                 Modifier::empty(),
                                 TextStyle::default(),
                             );

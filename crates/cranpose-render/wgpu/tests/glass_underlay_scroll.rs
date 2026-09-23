@@ -144,7 +144,7 @@ fn a_glass_bar_with_a_nested_glass_button_follows_the_feed_scrolling_beneath_it(
     let root_key = location_key(file!(), line!(), column!());
     let slot_for_content = Rc::clone(&scroll_slot);
     let mut shell = AppShell::new(renderer, root_key, move || {
-        GlassOverScrollingFeed(Rc::clone(&slot_for_content))
+        GlassOverScrollingFeed(Rc::clone(&slot_for_content));
     });
     shell.set_viewport(FRAME_WIDTH as f32, FRAME_HEIGHT as f32);
     shell.set_buffer_size(FRAME_WIDTH, FRAME_HEIGHT);
@@ -235,7 +235,7 @@ fn a_liquid_glass_bar_with_a_glass_button_follows_a_lazy_feed_scrolling_beneath_
     let root_key = location_key(file!(), line!(), column!());
     let slot_for_content = Rc::clone(&list_slot);
     let mut shell = AppShell::new(renderer, root_key, move || {
-        LiquidBarOverLazyFeed(Rc::clone(&slot_for_content))
+        LiquidBarOverLazyFeed(Rc::clone(&slot_for_content));
     });
     shell.set_viewport(FRAME_WIDTH as f32, FRAME_HEIGHT as f32);
     shell.set_buffer_size(FRAME_WIDTH, FRAME_HEIGHT);

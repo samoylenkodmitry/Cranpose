@@ -34,7 +34,7 @@ pub fn set_platform_accessibility_state(state: AccessibilityState) -> bool {
 
 /// What the platform last reported.
 pub fn platform_accessibility_state() -> AccessibilityState {
-    PLATFORM_ACCESSIBILITY_STATE.with(|cell| cell.get())
+    PLATFORM_ACCESSIBILITY_STATE.with(Cell::get)
 }
 
 /// The state a composable reads: what the platform reported, unless a

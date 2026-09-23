@@ -21,8 +21,8 @@ fn main() {
             std::thread::sleep(Duration::from_millis(500));
 
             match robot.wait_for_idle() {
-                Ok(_) => println!("✓ App ready\n"),
-                Err(e) => println!("Note: {}\n", e),
+                Ok(()) => println!("✓ App ready\n"),
+                Err(e) => println!("Note: {e}\n"),
             }
 
             let mut all_passed = true;
@@ -32,13 +32,13 @@ fn main() {
 
             let initial_counter = find_in_semantics(&robot, |elem| find_text(elem, "Counter:"));
             if let Some((x, y, _w, _h)) = initial_counter {
-                println!("  Initial counter found at ({:.1}, {:.1})", x, y);
+                println!("  Initial counter found at ({x:.1}, {y:.1})");
             }
 
             if let Some((x, y, w, h)) = find_in_semantics(&robot, |elem| find_button(elem, "Increment")) {
                 let cx = x + w / 2.0;
                 let cy = y + h / 2.0;
-                println!("  Found 'Increment' button at center ({:.1}, {:.1})", cx, cy);
+                println!("  Found 'Increment' button at center ({cx:.1}, {cy:.1})");
 
                 let _ = robot.mouse_move(cx, cy);
                 std::thread::sleep(Duration::from_millis(50));
@@ -64,7 +64,7 @@ fn main() {
             if let Some((x, y, w, h)) = find_in_semantics(&robot, |elem| find_button(elem, "Increment")) {
                 let cx = x + w / 2.0;
                 let cy = y + h / 2.0;
-                println!("  Found 'Increment' button at center ({:.1}, {:.1})", cx, cy);
+                println!("  Found 'Increment' button at center ({cx:.1}, {cy:.1})");
 
                 let _ = robot.mouse_move(cx, cy);
                 std::thread::sleep(Duration::from_millis(50));
@@ -94,7 +94,7 @@ fn main() {
             if let Some((x, y, w, h)) = find_button_in_semantics(&robot, "Async Runtime") {
                 let cx = x + w / 2.0;
                 let cy = y + h / 2.0;
-                println!("  Found 'Async Runtime' tab at ({:.1}, {:.1})", cx, cy);
+                println!("  Found 'Async Runtime' tab at ({cx:.1}, {cy:.1})");
 
                 let _ = robot.mouse_move(cx, cy);
                 std::thread::sleep(Duration::from_millis(50));
@@ -117,7 +117,7 @@ fn main() {
             if let Some((x, y, w, h)) = find_button_in_semantics(&robot, "Counter App") {
                 let cx = x + w / 2.0;
                 let cy = y + h / 2.0;
-                println!("  Found 'Counter App' tab at ({:.1}, {:.1})", cx, cy);
+                println!("  Found 'Counter App' tab at ({cx:.1}, {cy:.1})");
 
                 let _ = robot.mouse_move(cx, cy);
                 std::thread::sleep(Duration::from_millis(50));
@@ -143,7 +143,7 @@ fn main() {
             if let Some((x, y, w, h)) = find_in_semantics(&robot, |elem| find_button(elem, "Increment")) {
                 let cx = x + w / 2.0;
                 let cy = y + h / 2.0;
-                println!("  Found 'Increment' button at center ({:.1}, {:.1})", cx, cy);
+                println!("  Found 'Increment' button at center ({cx:.1}, {cy:.1})");
 
                 let _ = robot.mouse_move(cx, cy);
                 std::thread::sleep(Duration::from_millis(100));

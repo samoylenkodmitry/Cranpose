@@ -70,7 +70,7 @@ fn Parent(value: i32) {
 
 #[composable]
 fn Child(value: i32) {
-    Text(format!("value: {}", value));
+    Text(format!("value: {value}"));
 }
 
 #[test]

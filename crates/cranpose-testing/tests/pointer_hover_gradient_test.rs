@@ -14,9 +14,9 @@ fn gradient_follows_state_app(pointer_position: MutableState<Point>) {
             })
             .then(Modifier::empty().draw_with_content({
                 let position = pointer_position.get();
-                eprintln!("Creating draw closure with position: {:?}", position);
+                eprintln!("Creating draw closure with position: {position:?}");
                 move |scope| {
-                    eprintln!("Drawing with captured position: {:?}", position);
+                    eprintln!("Drawing with captured position: {position:?}");
                     scope.draw_rect(Brush::radial_gradient(
                         vec![Color(1.0, 0.0, 0.0, 0.8), Color(0.0, 0.0, 0.0, 0.0)],
                         position,
@@ -102,7 +102,7 @@ fn working_gradient_app(pointer_position: MutableState<Point>) {
             .then(Modifier::empty().draw_with_content({
                 move |scope| {
                     let position = pointer_position.get();
-                    eprintln!("Drawing with current state position: {:?}", position);
+                    eprintln!("Drawing with current state position: {position:?}");
                     scope.draw_rect(Brush::radial_gradient(
                         vec![Color(0.0, 1.0, 0.0, 0.8), Color(0.0, 0.0, 0.0, 0.0)],
                         position,

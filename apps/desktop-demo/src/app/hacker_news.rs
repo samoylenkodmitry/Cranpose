@@ -955,8 +955,7 @@ fn discussion_status_detail(data: &CommentThreadData) -> String {
 
     if data.is_depth_truncated() {
         detail.push_str(&format!(
-            " Replies deeper than {} levels stay collapsed.",
-            MAX_COMMENT_DEPTH
+            " Replies deeper than {MAX_COMMENT_DEPTH} levels stay collapsed."
         ));
     }
 
@@ -2144,10 +2143,11 @@ fn scroll_stability_news_data() -> NewsData {
 #[cfg(test)]
 mod tests {
     use std::{
+        cell::Cell,
         collections::HashMap,
         sync::{
             atomic::{AtomicUsize, Ordering},
-            Arc, Mutex, MutexGuard, OnceLock,
+            Arc, Mutex, MutexGuard, OnceLock, PoisonError,
         },
         time::Duration,
     };
@@ -2170,7 +2170,7 @@ mod tests {
         TEST_LOCK
             .get_or_init(|| Mutex::new(()))
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .unwrap_or_else(PoisonError::into_inner)
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -2745,8 +2745,8 @@ mod tests {
         panic!(
             "{context}; visible_texts={:?} stories_pane_calls={} thread_pane_calls={} stories_pane_node_id={stories_pane_node_id:?} stories_pane_bounds={stories_pane_bounds:?} stories_pane_child_count={stories_pane_child_count:?} stories_pane_layout={stories_pane_layout:?}",
             layout_texts(robot),
-            super::STORIES_PANE_CALLS.with(|count| count.get()),
-            super::THREAD_PANE_CALLS.with(|count| count.get()),
+            super::STORIES_PANE_CALLS.with(Cell::get),
+            super::THREAD_PANE_CALLS.with(Cell::get),
         );
     }
 
@@ -3345,8 +3345,8 @@ mod tests {
             unique_node_ids,
             vec![restored_list_node_id],
             "restored HackerNewsList host changed during drag; initial_list_node_id={initial_list_node_id} restored_list_node_id={restored_list_node_id} seen_node_ids={seen_node_ids:?} stories_pane_calls={} thread_pane_calls={} visible_texts={:?}",
-            super::STORIES_PANE_CALLS.with(|count| count.get()),
-            super::THREAD_PANE_CALLS.with(|count| count.get()),
+            super::STORIES_PANE_CALLS.with(Cell::get),
+            super::THREAD_PANE_CALLS.with(Cell::get),
             layout_texts(&mut robot),
         );
     }

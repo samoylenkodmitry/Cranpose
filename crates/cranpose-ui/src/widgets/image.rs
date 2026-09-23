@@ -429,7 +429,7 @@ impl SvgPainter {
         self.inner
             .cache
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     #[cfg(feature = "svg")]
@@ -515,7 +515,7 @@ pub fn rememberSvg(bytes: &'static [u8]) -> Result<SvgPainter, SvgPainterError> 
         composer.with_key(&key, |composer| {
             composer
                 .remember(|| SvgPainter::from_bytes(bytes))
-                .with(|result| result.clone())
+                .with(Clone::clone)
         })
     })
 }
@@ -975,7 +975,7 @@ where
     let draw_painter = painter.clone();
 
     let semantics_modifier = Modifier::empty().semantics(move |config| {
-        config.content_description = content_description.clone();
+        config.content_description.clone_from(&content_description);
     });
 
     let image_modifier = semantics_modifier
@@ -1448,7 +1448,7 @@ mod tests {
                 .inner
                 .cache
                 .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             panic!("poison svg raster cache for recovery test");
         }));
 

@@ -1,5 +1,6 @@
 use std::{
     borrow::Cow,
+    cell::Cell,
     collections::HashMap,
     hash::{Hash, Hasher},
     rc::Rc,
@@ -905,7 +906,7 @@ pub(crate) fn create_render_pipeline_logged<'a>(
         instant_ms(started, Instant::now()),
         std::thread::current().name().unwrap_or("unnamed thread"),
     );
-    if OFF_FRAME_BUILDS.with(std::cell::Cell::get) {
+    if OFF_FRAME_BUILDS.with(Cell::get) {
         PIPELINES_CREATED_OFF_FRAME.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     } else {
         PIPELINES_CREATED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -2465,16 +2466,11 @@ impl GpuRenderer {
         self.frame_stats.offscreen_pool_bytes.set(
             (self.effect_renderer.retained_offscreen_bytes() as u64)
                 .saturating_add(self.frame_graph_executor.retained_texture_bytes())
-                .saturating_add(
-                    self.composition_target
-                        .as_ref()
-                        .map(|target| {
-                            u64::from(target.target.width)
-                                .saturating_mul(u64::from(target.target.height))
-                                .saturating_mul(composition_bytes_per_pixel())
-                        })
-                        .unwrap_or(0),
-                ),
+                .saturating_add(self.composition_target.as_ref().map_or(0, |target| {
+                    u64::from(target.target.width)
+                        .saturating_mul(u64::from(target.target.height))
+                        .saturating_mul(composition_bytes_per_pixel())
+                })),
         );
         self.frame_stats
             .text_pool_size

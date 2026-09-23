@@ -170,8 +170,7 @@ impl SlotWriteSessionState {
     fn fold_watermark(&self) -> usize {
         self.group_stack
             .last()
-            .map(|frame| frame.fold_watermark)
-            .unwrap_or(0)
+            .map_or(0, |frame| frame.fold_watermark)
             .min(self.branch_fold_entries.len())
     }
 
@@ -238,8 +237,7 @@ impl SlotWriteSessionState {
     pub(in crate::slot) fn current_parent_anchor(&self) -> AnchorId {
         self.group_stack
             .last()
-            .map(|frame| frame.group_anchor)
-            .unwrap_or(AnchorId::INVALID)
+            .map_or(AnchorId::INVALID, |frame| frame.group_anchor)
     }
 
     pub(in crate::slot) fn current_child_cursor(&self) -> usize {

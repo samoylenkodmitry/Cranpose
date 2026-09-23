@@ -84,7 +84,7 @@ fn query_panel_max_refresh_rate(app: &android_activity::AndroidApp) -> Result<f3
                 jni_sig!("()Landroid/view/WindowManager;"),
                 &[],
             )
-            .and_then(|value| value.l())
+            .and_then(jni::JValueOwned::l)
             .map_err(|error| describe(env, "Activity.getWindowManager", error))?;
         let display = env
             .call_method(
@@ -93,7 +93,7 @@ fn query_panel_max_refresh_rate(app: &android_activity::AndroidApp) -> Result<f3
                 jni_sig!("()Landroid/view/Display;"),
                 &[],
             )
-            .and_then(|value| value.l())
+            .and_then(jni::JValueOwned::l)
             .map_err(|error| describe(env, "WindowManager.getDefaultDisplay", error))?;
         let rates = env
             .call_method(
@@ -102,7 +102,7 @@ fn query_panel_max_refresh_rate(app: &android_activity::AndroidApp) -> Result<f3
                 jni_sig!("()[F"),
                 &[],
             )
-            .and_then(|value| value.l())
+            .and_then(jni::JValueOwned::l)
             .map_err(|error| describe(env, "Display.getSupportedRefreshRates", error))?;
         let rates = env
             .cast_local::<JFloatArray>(rates)

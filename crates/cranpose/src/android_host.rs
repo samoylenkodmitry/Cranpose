@@ -28,7 +28,7 @@ impl HostController for AndroidHost {
         });
     }
     fn platform_directories(&self) -> Option<PlatformDirectories> {
-        let data = self.app.internal_data_path()?.to_path_buf();
+        let data = self.app.internal_data_path()?;
         let sandbox = data.parent().unwrap_or(&data);
         Some(PlatformDirectories {
             data: data.clone(),
@@ -72,7 +72,7 @@ fn package_name(app: &android_activity::AndroidApp) -> Option<String> {
                 jni_sig!("()Ljava/lang/String;"),
                 &[],
             )
-            .and_then(|value| value.l())
+            .and_then(jni::JValueOwned::l)
             .map_err(|error| {
                 clear_pending_android_jni_exception(env);
                 error.to_string()

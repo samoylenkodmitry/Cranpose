@@ -260,6 +260,8 @@ pub fn rememberPowerState() -> State<PowerState> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::PoisonError;
+
     use super::*;
 
     struct DesktopMonitor;
@@ -341,19 +343,21 @@ mod tests {
         let registration = observe_power_state(move |state| {
             recorder
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .push(state.thermal)
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(state.thermal);
         });
         publish_power_state(PowerState {
             thermal: PowerReading::Known(ThermalState::Moderate),
             ..PowerState::unsupported()
         });
         assert_eq!(
-            seen.lock().unwrap_or_else(|e| e.into_inner()).as_slice(),
+            seen.lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .as_slice(),
             [PowerReading::Known(ThermalState::Moderate)]
         );
         drop(registration);
         publish_power_state(PowerState::unsupported());
-        assert_eq!(seen.lock().unwrap_or_else(|e| e.into_inner()).len(), 1);
+        assert_eq!(seen.lock().unwrap_or_else(PoisonError::into_inner).len(), 1);
     }
 }

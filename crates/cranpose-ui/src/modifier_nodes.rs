@@ -810,32 +810,26 @@ impl SizeNode {
     }
 
     fn target_constraints(&self) -> Constraints {
-        let max_width = self.max_width.map(|v| v.max(0.0)).unwrap_or(f32::INFINITY);
-        let max_height = self.max_height.map(|v| v.max(0.0)).unwrap_or(f32::INFINITY);
+        let max_width = self.max_width.map_or(f32::INFINITY, |v| v.max(0.0));
+        let max_height = self.max_height.map_or(f32::INFINITY, |v| v.max(0.0));
 
-        let min_width = self
-            .min_width
-            .map(|v| {
-                let clamped = v.clamp(0.0, max_width);
-                if clamped == f32::INFINITY {
-                    0.0
-                } else {
-                    clamped
-                }
-            })
-            .unwrap_or(0.0);
+        let min_width = self.min_width.map_or(0.0, |v| {
+            let clamped = v.clamp(0.0, max_width);
+            if clamped == f32::INFINITY {
+                0.0
+            } else {
+                clamped
+            }
+        });
 
-        let min_height = self
-            .min_height
-            .map(|v| {
-                let clamped = v.clamp(0.0, max_height);
-                if clamped == f32::INFINITY {
-                    0.0
-                } else {
-                    clamped
-                }
-            })
-            .unwrap_or(0.0);
+        let min_height = self.min_height.map_or(0.0, |v| {
+            let clamped = v.clamp(0.0, max_height);
+            if clamped == f32::INFINITY {
+                0.0
+            } else {
+                clamped
+            }
+        });
 
         Constraints {
             min_width,
@@ -1293,8 +1287,8 @@ impl ModifierNodeElement for ClickableElement {
     }
 
     fn update(&self, node: &mut Self::Node) {
-        node.on_press = self.on_press.clone();
-        node.on_click = self.on_click.clone();
+        node.on_press.clone_from(&self.on_press);
+        node.on_click.clone_from(&self.on_click);
         node.cached_handler = ClickableNode::create_handler(
             node.on_press.clone(),
             node.on_click.clone(),
@@ -1795,13 +1789,13 @@ fn observe_draw_command(
     let observation = crate::render_state::DrawObservationScope::new(node_id, command_index);
     match command {
         DrawCommand::Behind(draw) => DrawCommand::Behind(Rc::new(move |scope| {
-            crate::render_state::observe_draw_reads(observation, || draw(scope))
+            crate::render_state::observe_draw_reads(observation, || draw(scope));
         })),
         DrawCommand::WithContent(draw) => DrawCommand::WithContent(Rc::new(move |scope| {
-            crate::render_state::observe_draw_reads(observation, || draw(scope))
+            crate::render_state::observe_draw_reads(observation, || draw(scope));
         })),
         DrawCommand::Overlay(draw) => DrawCommand::Overlay(Rc::new(move |scope| {
-            crate::render_state::observe_draw_reads(observation, || draw(scope))
+            crate::render_state::observe_draw_reads(observation, || draw(scope));
         })),
     }
 }
@@ -1883,7 +1877,7 @@ impl ModifierNodeElement for DrawCommandElement {
     }
 
     fn update(&self, node: &mut Self::Node) {
-        node.commands = self.commands.clone();
+        node.commands.clone_from(&self.commands);
     }
 
     fn capabilities(&self) -> NodeCapabilities {

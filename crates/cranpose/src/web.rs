@@ -109,7 +109,7 @@ fn resize_owed_on_release(
         let canvas = canvas.clone();
         let page = page.clone();
         Closure::wrap(Box::new(move |_event: PointerEvent| {
-            resize_owed_floating_window(&canvas, &page, &owed)
+            resize_owed_floating_window(&canvas, &page, &owed);
         }) as Box<dyn FnMut(PointerEvent)>)
     };
     canvas.add_event_listener_with_callback("pointerup", on_release.as_ref().unchecked_ref())?;
@@ -320,7 +320,7 @@ pub async fn run(
 
     let canvas = document
         .get_element_by_id(canvas_id)
-        .ok_or_else(|| format!("canvas with id '{}' not found", canvas_id))?
+        .ok_or_else(|| format!("canvas with id '{canvas_id}' not found"))?
         .dyn_into::<HtmlCanvasElement>()?;
 
     let scale_factor = window.device_pixel_ratio();
@@ -352,7 +352,7 @@ pub async fn run(
 
     let surface = instance
         .create_surface(wgpu::SurfaceTarget::Canvas(canvas.clone()))
-        .map_err(|e| format!("failed to create surface: {:?}", e))?;
+        .map_err(|e| format!("failed to create surface: {e:?}"))?;
 
     let adapter = instance
         .request_adapter(&wgpu::RequestAdapterOptions {
@@ -362,7 +362,7 @@ pub async fn run(
             apply_limit_buckets: false,
         })
         .await
-        .map_err(|e| format!("failed to find suitable adapter: {:?}", e))?;
+        .map_err(|e| format!("failed to find suitable adapter: {e:?}"))?;
 
     let adapter_info = adapter.get_info();
     let render_scale = crate::web_surface_scale::web_canvas_buffer_scale(scale_factor);
@@ -390,7 +390,7 @@ pub async fn run(
             trace: wgpu::Trace::Off,
         })
         .await
-        .map_err(|e| format!("failed to create device: {:?}", e))?;
+        .map_err(|e| format!("failed to create device: {e:?}"))?;
 
     let surface_caps = surface.get_capabilities(&adapter);
     let surface_format =
@@ -462,13 +462,7 @@ pub async fn run(
             (actual_width, actual_height, effective_scale)
         };
     log::info!(
-        "Web canvas css={}x{}, buffer={}x{}, effective_scale={:.2}, device_scale={:.2}",
-        width,
-        height,
-        actual_width,
-        actual_height,
-        effective_scale,
-        scale_factor
+        "Web canvas css={width}x{height}, buffer={actual_width}x{actual_height}, effective_scale={effective_scale:.2}, device_scale={scale_factor:.2}"
     );
 
     let fonts = settings.resolve_font_set();
@@ -926,7 +920,7 @@ pub async fn run(
                             render_width,
                             render_height,
                         ) {
-                            log::error!("render failed: {:?}", err);
+                            log::error!("render failed: {err:?}");
                         }
                         app_mut.renderer().present(output);
                     }

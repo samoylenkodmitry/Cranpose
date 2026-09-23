@@ -152,10 +152,7 @@ fn test_large_modifier_chain_performance() {
         .unwrap();
     let duration = start.elapsed();
 
-    println!(
-        "Large modifier chain (100+ modifiers) completed in: {:?}",
-        duration
-    );
+    println!("Large modifier chain (100+ modifiers) completed in: {duration:?}");
 
     assert!(composition.root().is_some());
 }
@@ -208,7 +205,7 @@ fn test_many_items_with_modifiers() {
         .unwrap();
     let duration = start.elapsed();
 
-    println!("100 items with modifiers completed in: {:?}", duration);
+    println!("100 items with modifiers completed in: {duration:?}");
 
     assert!(composition.root().is_some());
 }
@@ -296,7 +293,7 @@ fn test_dynamic_list_recomposition() {
 
     composition
         .render(location_key(file!(), line!(), column!()), || {
-            dynamic_list(5)
+            dynamic_list(5);
         })
         .unwrap();
 
@@ -304,7 +301,7 @@ fn test_dynamic_list_recomposition() {
 
     composition
         .render(location_key(file!(), line!(), column!()), || {
-            dynamic_list(10)
+            dynamic_list(10);
         })
         .unwrap();
 
@@ -312,7 +309,7 @@ fn test_dynamic_list_recomposition() {
 
     composition
         .render(location_key(file!(), line!(), column!()), || {
-            dynamic_list(3)
+            dynamic_list(3);
         })
         .unwrap();
 
@@ -396,7 +393,7 @@ fn test_card_list_pattern() {
         .unwrap();
     let duration = start.elapsed();
 
-    println!("Card list pattern: {:?}", duration);
+    println!("Card list pattern: {duration:?}");
 
     assert!(composition.root().is_some());
 }
@@ -424,20 +421,17 @@ fn test_rapid_modifier_changes() {
     for frame in 0..100 {
         composition
             .render(location_key(file!(), line!(), column!()), || {
-                animated(frame)
+                animated(frame);
             })
             .unwrap();
     }
 
     let duration = start.elapsed();
 
-    println!("100 recompositions: {:?}", duration);
+    println!("100 recompositions: {duration:?}");
     println!("Average per frame: {:?}", duration / 100);
 
-    println!(
-        "Completed 100 recompositions successfully in {:?}",
-        duration
-    );
+    println!("Completed 100 recompositions successfully in {duration:?}");
 }
 
 #[test]

@@ -279,8 +279,7 @@ impl DependencyRecord {
                     return true;
                 }
                 ancestor_lookup(&self.token)
-                    .map(|resolved| resolved.version() != self.version)
-                    .unwrap_or(true)
+                    .is_none_or(|resolved| resolved.version() != self.version)
             }
             DependencySource::Default => {
                 providers.contains_key(&self.token.id()) || ancestor_lookup(&self.token).is_some()
@@ -661,8 +660,7 @@ impl ModifierLocalManager {
                 let needs_update = self
                     .consumers
                     .get(&id)
-                    .map(|state| state.needs_update(&providers, ancestor_lookup))
-                    .unwrap_or(true);
+                    .is_none_or(|state| state.needs_update(&providers, ancestor_lookup));
                 if !needs_update {
                     return;
                 }

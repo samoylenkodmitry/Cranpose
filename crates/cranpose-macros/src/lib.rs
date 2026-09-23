@@ -284,7 +284,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                     });
                 } else {
                     param_info.push(ParamInfo {
-                        ident: Ident::new(&format!("__arg{}", index), Span::mixed_site()),
+                        ident: Ident::new(&format!("__arg{index}"), Span::mixed_site()),
                         pat: original_pat,
                         ty: ty.as_ref().clone(),
                         pat_is_mut,
@@ -292,7 +292,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                     });
                 }
             } else {
-                let ident = Ident::new(&format!("__arg{}", index), Span::mixed_site());
+                let ident = Ident::new(&format!("__arg{index}"), Span::mixed_site());
                 let original_pat: Box<Pat> = pat.clone();
                 **pat = syn::parse_quote! { #ident };
                 param_info.push(ParamInfo {
@@ -468,7 +468,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
             .collect();
 
         let param_state_slots: Vec<Ident> = (0..param_info.len())
-            .map(|index| Ident::new(&format!("__param_state_slot{}", index), Span::mixed_site()))
+            .map(|index| Ident::new(&format!("__param_state_slot{index}"), Span::mixed_site()))
             .collect();
 
         let param_setup: Vec<TokenStream2> = param_info

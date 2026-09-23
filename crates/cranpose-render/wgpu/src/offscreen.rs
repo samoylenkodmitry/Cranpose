@@ -71,8 +71,8 @@ pub(crate) fn renders_into(device: &wgpu::Device, format: wgpu::TextureFormat) -
 
 fn resolve_composition_format(requested: Option<&str>, android: bool) -> wgpu::TextureFormat {
     let eight_bit = match requested.map(str::trim) {
-        Some("1") | Some("true") | Some("yes") => true,
-        Some("0") | Some("false") | Some("no") => false,
+        Some("1" | "true" | "yes") => true,
+        Some("0" | "false" | "no") => false,
         _ => android,
     };
     if eight_bit {

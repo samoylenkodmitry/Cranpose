@@ -43,7 +43,7 @@ fn local_pointer_dispatch_calls_click_handlers_only_for_an_unconsumed_press() {
     let recorded = Rc::clone(&clicks);
     let slices = ModifierNodeSlices {
         click_handlers: vec![Rc::new(move |position| {
-            recorded.borrow_mut().push(position)
+            recorded.borrow_mut().push(position);
         })],
         ..Default::default()
     };

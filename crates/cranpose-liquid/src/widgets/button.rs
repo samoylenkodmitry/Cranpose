@@ -714,8 +714,7 @@ pub fn GlassIconButtonGroup(
                     .resolve_material(&colors, item.spec.icon_color(&colors))
             })
             .and_then(|material| material.tint)
-            .map(|tint| tint.with_alpha(0.85))
-            .unwrap_or(Color::WHITE.with_alpha(0.035));
+            .map_or(Color(1.0, 1.0, 1.0, 0.035), |tint| tint.with_alpha(0.85));
         let shared = Modifier::empty()
             .required_size(Size::new(node_width, node_height))
             .offset(-pad, (spec.diameter - node_height) * 0.5)

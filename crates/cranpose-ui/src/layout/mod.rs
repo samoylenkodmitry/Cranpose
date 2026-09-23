@@ -817,7 +817,7 @@ fn layout_snapshot(
         .with_node::<LayoutNode, _>(node_id, |node| (node.layout_state(), node.children.clone()))
     {
         Ok(snapshot) => return Ok(Some(snapshot)),
-        Err(NodeError::TypeMismatch { .. }) | Err(NodeError::Missing { .. }) => {}
+        Err(NodeError::TypeMismatch { .. } | NodeError::Missing { .. }) => {}
         Err(err) => return Err(err),
     }
 
@@ -825,7 +825,7 @@ fn layout_snapshot(
         (node.layout_state(), node.active_children())
     }) {
         Ok(snapshot) => Ok(Some(snapshot)),
-        Err(NodeError::TypeMismatch { .. }) | Err(NodeError::Missing { .. }) => Ok(None),
+        Err(NodeError::TypeMismatch { .. } | NodeError::Missing { .. }) => Ok(None),
         Err(err) => Err(err),
     }
 }
@@ -935,7 +935,7 @@ pub fn build_semantics_tree_from_applier(
                 )));
             }
             Ok(None) => return Ok(None),
-            Err(NodeError::TypeMismatch { .. }) | Err(NodeError::Missing { .. }) => {}
+            Err(NodeError::TypeMismatch { .. } | NodeError::Missing { .. }) => {}
             Err(err) => return Err(err),
         }
 
@@ -966,9 +966,7 @@ pub fn build_semantics_tree_from_applier(
                     size,
                 )))
             }
-            Ok(None) | Err(NodeError::TypeMismatch { .. }) | Err(NodeError::Missing { .. }) => {
-                Ok(None)
-            }
+            Ok(None) | Err(NodeError::TypeMismatch { .. } | NodeError::Missing { .. }) => Ok(None),
             Err(err) => Err(err),
         }
     }
@@ -1369,7 +1367,7 @@ impl LayoutBuilderState {
                 LayoutNodeSnapshot::from_layout_node(layout_node)
             }) {
                 Ok(snapshot) => Ok(Some(snapshot)),
-                Err(NodeError::TypeMismatch { .. }) | Err(NodeError::Missing { .. }) => Ok(None),
+                Err(NodeError::TypeMismatch { .. } | NodeError::Missing { .. }) => Ok(None),
                 Err(err) => Err(err),
             }
         }) && let Some(snapshot) = result?
@@ -1839,9 +1837,7 @@ impl LayoutBuilderState {
                     }
                 }) {
                     Ok(data) => Ok(Some(data)),
-                    Err(NodeError::TypeMismatch { .. }) | Err(NodeError::Missing { .. }) => {
-                        Ok(None)
-                    }
+                    Err(NodeError::TypeMismatch { .. } | NodeError::Missing { .. }) => Ok(None),
                     Err(err) => Err(err),
                 }
             }
@@ -2376,7 +2372,7 @@ impl CoordinatorChain {
         let mut previous_nodes = std::mem::take(&mut self.nodes);
         self.nodes.reserve(layout_node_data.len());
 
-        for (modifier_index, node) in layout_node_data.iter() {
+        for (modifier_index, node) in layout_node_data {
             if let Some(position) = previous_nodes
                 .iter()
                 .position(|candidate| candidate.matches(*modifier_index, node))
@@ -2485,10 +2481,10 @@ impl CoordinatorChain {
             index: index + 1,
         };
         let node_borrow = node.node.borrow();
-        node_borrow
-            .as_layout_node()
-            .map(|layout_node| layout_node.min_intrinsic_width(&wrapped, height))
-            .unwrap_or_else(|| wrapped.min_intrinsic_width(height))
+        node_borrow.as_layout_node().map_or_else(
+            || wrapped.min_intrinsic_width(height),
+            |layout_node| layout_node.min_intrinsic_width(&wrapped, height),
+        )
     }
 
     fn max_intrinsic_width_from(
@@ -2508,10 +2504,10 @@ impl CoordinatorChain {
             index: index + 1,
         };
         let node_borrow = node.node.borrow();
-        node_borrow
-            .as_layout_node()
-            .map(|layout_node| layout_node.max_intrinsic_width(&wrapped, height))
-            .unwrap_or_else(|| wrapped.max_intrinsic_width(height))
+        node_borrow.as_layout_node().map_or_else(
+            || wrapped.max_intrinsic_width(height),
+            |layout_node| layout_node.max_intrinsic_width(&wrapped, height),
+        )
     }
 
     fn min_intrinsic_height_from(
@@ -2531,10 +2527,10 @@ impl CoordinatorChain {
             index: index + 1,
         };
         let node_borrow = node.node.borrow();
-        node_borrow
-            .as_layout_node()
-            .map(|layout_node| layout_node.min_intrinsic_height(&wrapped, width))
-            .unwrap_or_else(|| wrapped.min_intrinsic_height(width))
+        node_borrow.as_layout_node().map_or_else(
+            || wrapped.min_intrinsic_height(width),
+            |layout_node| layout_node.min_intrinsic_height(&wrapped, width),
+        )
     }
 
     fn max_intrinsic_height_from(
@@ -2554,10 +2550,10 @@ impl CoordinatorChain {
             index: index + 1,
         };
         let node_borrow = node.node.borrow();
-        node_borrow
-            .as_layout_node()
-            .map(|layout_node| layout_node.max_intrinsic_height(&wrapped, width))
-            .unwrap_or_else(|| wrapped.max_intrinsic_height(width))
+        node_borrow.as_layout_node().map_or_else(
+            || wrapped.max_intrinsic_height(width),
+            |layout_node| layout_node.max_intrinsic_height(&wrapped, width),
+        )
     }
 
     fn total_content_offset_from(&self, index: usize) -> Point {
@@ -3127,10 +3123,9 @@ impl Default for RuntimeNodeMetadata {
 fn role_from_modifier_slices(modifier_slices: &ModifierNodeSlices) -> SemanticsRole {
     modifier_slices
         .text_content()
-        .map(|text| SemanticsRole::Text {
+        .map_or(SemanticsRole::Layout, |text| SemanticsRole::Text {
             value: text.to_string(),
         })
-        .unwrap_or(SemanticsRole::Layout)
 }
 
 fn runtime_metadata_for(
@@ -3187,7 +3182,7 @@ fn clear_semantics_dirty_flags(
             match applier.with_node::<SubcomposeLayoutNode, _>(node.node_id, |subcompose| {
                 subcompose.clear_needs_semantics();
             }) {
-                Ok(()) | Err(NodeError::Missing { .. }) | Err(NodeError::TypeMismatch { .. }) => {}
+                Ok(()) | Err(NodeError::Missing { .. } | NodeError::TypeMismatch { .. }) => {}
                 Err(err) => return Err(err),
             }
         }
@@ -3304,7 +3299,7 @@ fn build_semantics_node_from_live_nodes(
         (role, config)
     }) {
         Ok(data) => data,
-        Err(NodeError::TypeMismatch { .. }) | Err(NodeError::Missing { .. }) => {
+        Err(NodeError::TypeMismatch { .. } | NodeError::Missing { .. }) => {
             match applier.with_node::<SubcomposeLayoutNode, _>(node.node_id, |subcompose| {
                 subcompose.clear_needs_semantics();
                 (
@@ -3313,7 +3308,7 @@ fn build_semantics_node_from_live_nodes(
                 )
             }) {
                 Ok(data) => data,
-                Err(NodeError::TypeMismatch { .. }) | Err(NodeError::Missing { .. }) => {
+                Err(NodeError::TypeMismatch { .. } | NodeError::Missing { .. }) => {
                     (SemanticsRole::Unknown, None)
                 }
                 Err(err) => return Err(err),
@@ -3456,10 +3451,9 @@ fn semantics_role_from_layout_box(layout_box: &LayoutBox) -> SemanticsRole {
             .node_data
             .modifier_slices()
             .text_content()
-            .map(|text| SemanticsRole::Text {
+            .map_or(SemanticsRole::Layout, |text| SemanticsRole::Text {
                 value: text.to_string(),
-            })
-            .unwrap_or(SemanticsRole::Layout),
+            }),
     }
 }
 

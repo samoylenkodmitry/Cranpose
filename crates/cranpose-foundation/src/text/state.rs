@@ -263,7 +263,7 @@ impl TextFieldState {
     /// Returns the current value snapshot.
     /// Creates composition dependency when read during composition.
     pub fn value(&self) -> TextFieldValue {
-        self.value.with(|v| v.clone())
+        self.value.with(Clone::clone)
     }
 
     /// Adds a listener that is called when the value changes.
@@ -309,7 +309,7 @@ impl TextFieldState {
         let inner_state = self.inner();
         let mut inner = inner_state.borrow_mut();
         if let Some(previous_state) = inner.undo_stack.pop_back() {
-            let current = self.value.with(|v| v.clone());
+            let current = self.value.with(Clone::clone);
             inner.redo_stack.push_back(current);
             inner.last_edit_time.set(None);
             drop(inner);
@@ -326,7 +326,7 @@ impl TextFieldState {
         let inner_state = self.inner();
         let mut inner = inner_state.borrow_mut();
         if let Some(redo_state) = inner.redo_stack.pop_back() {
-            let current = self.value.with(|v| v.clone());
+            let current = self.value.with(Clone::clone);
             inner.undo_stack.push_back(current);
             drop(inner);
             self.value.set(redo_state);
@@ -392,8 +392,7 @@ impl TextFieldState {
                 let timeout_expired = inner
                     .last_edit_time
                     .get()
-                    .map(|last| now.duration_since(last).as_millis() > UNDO_COALESCE_MS)
-                    .unwrap_or(true);
+                    .is_none_or(|last| now.duration_since(last).as_millis() > UNDO_COALESCE_MS);
 
                 if timeout_expired {
                     true

@@ -24,7 +24,7 @@ fn main() {
 
             println!("--- Step 1: Navigate to 'Lazy List' tab ---");
             if let Some((x, y, w, h)) = find_button_in_semantics(&robot, "Lazy List") {
-                println!("  Found 'Lazy List' tab at ({:.1}, {:.1})", x, y);
+                println!("  Found 'Lazy List' tab at ({x:.1}, {y:.1})");
                 robot.click(x + w / 2.0, y + h / 2.0).ok();
                 std::thread::sleep(Duration::from_millis(500));
                 let _ = robot.wait_for_idle();
@@ -41,7 +41,7 @@ fn main() {
 
             let initial_index = find_text_by_prefix_in_semantics(&robot, "FirstIndex:");
             if let Some((_, _, _, _, text)) = initial_index {
-                println!("  Found: '{}'", text);
+                println!("  Found: '{text}'");
                 if text.contains("0") {
                     println!("  PASS: Initial FirstIndex is 0\n");
                 } else {
@@ -55,7 +55,7 @@ fn main() {
 
             println!("--- Step 3: Click 'Jump to Middle' button ---");
             if let Some((x, y, w, h)) = find_button_in_semantics(&robot, "Jump to Middle") {
-                println!("  Found 'Jump to Middle' button at ({:.1}, {:.1})", x, y);
+                println!("  Found 'Jump to Middle' button at ({x:.1}, {y:.1})");
                 robot.click(x + w / 2.0, y + h / 2.0).ok();
                 std::thread::sleep(Duration::from_millis(500));
                 let _ = robot.wait_for_idle();
@@ -76,8 +76,8 @@ fn main() {
 
             let after_jump_index = find_text_by_prefix_in_semantics(&robot, "FirstIndex:");
             if let Some((_, _, _, _, text)) = after_jump_index {
-                println!("\n  Found: '{}'", text);
-                if let Some(num_str) = text.strip_prefix("FirstIndex:").map(|s| s.trim()) {
+                println!("\n  Found: '{text}'");
+                if let Some(num_str) = text.strip_prefix("FirstIndex:").map(str::trim) {
                     if let Ok(num) = num_str.parse::<usize>() {
                         if num == 50 {
                             println!("  PASS: FirstIndex reactively updated to 50\n");
@@ -89,13 +89,13 @@ fn main() {
                             all_passed = false;
                         } else {
                             if (45..=55).contains(&num) {
-                                println!("  PASS: FirstIndex is {} (close to 50)\n", num);
+                                println!("  PASS: FirstIndex is {num} (close to 50)\n");
                             } else {
-                                println!("  WARN: FirstIndex is {} (expected ~50)\n", num);
+                                println!("  WARN: FirstIndex is {num} (expected ~50)\n");
                             }
                         }
                     } else {
-                        println!("  WARN: Could not parse number from '{}'\n", num_str);
+                        println!("  WARN: Could not parse number from '{num_str}'\n");
                     }
                 }
             } else {
@@ -107,7 +107,7 @@ fn main() {
             let start_button = find_button_in_semantics(&robot, "Start")
                 .or_else(|| find_button_in_semantics(&robot, "⏫ Start"));
             if let Some((x, y, w, h)) = start_button {
-                println!("  Found 'Start' button at ({:.1}, {:.1})", x, y);
+                println!("  Found 'Start' button at ({x:.1}, {y:.1})");
                 robot.click(x + w / 2.0, y + h / 2.0).ok();
                 std::thread::sleep(Duration::from_millis(500));
                 let _ = robot.wait_for_idle();
@@ -123,20 +123,19 @@ fn main() {
 
             let after_start_index = find_text_by_prefix_in_semantics(&robot, "FirstIndex:");
             if let Some((_, _, _, _, text)) = after_start_index {
-                println!("  Found: '{}'", text);
-                if let Some(num_str) = text.strip_prefix("FirstIndex:").map(|s| s.trim()) {
+                println!("  Found: '{text}'");
+                if let Some(num_str) = text.strip_prefix("FirstIndex:").map(str::trim) {
                     if let Ok(num) = num_str.parse::<usize>() {
                         if num == 0 {
                             println!("  PASS: FirstIndex reactively updated back to 0\n");
                         } else if num == 50 || num >= 45 {
                             println!(
-                                "  FAIL: FirstIndex is still {} - REACTIVITY BUG CONFIRMED!",
-                                num
+                                "  FAIL: FirstIndex is still {num} - REACTIVITY BUG CONFIRMED!"
                             );
                             println!("        The UI did not update after scroll_to_item(0).\n");
                             all_passed = false;
                         } else {
-                            println!("  WARN: FirstIndex is {} (expected 0)\n", num);
+                            println!("  WARN: FirstIndex is {num} (expected 0)\n");
                         }
                     }
                 }

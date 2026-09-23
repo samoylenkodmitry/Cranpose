@@ -120,7 +120,7 @@ pub trait WritableFolderStore: Send + Sync {
             .trim_end_matches(['/', '\\'])
             .rsplit(['/', '\\', ':'])
             .find(|segment| !segment.is_empty())
-            .map(|segment| segment.to_string())
+            .map(ToString::to_string)
             .unwrap_or(handle)
     }
 

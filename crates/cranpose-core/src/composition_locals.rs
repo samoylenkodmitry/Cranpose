@@ -41,7 +41,7 @@ pub fn CompositionLocalProvider(
     composer_context::with_composer(|composer| {
         let provided: Vec<ProvidedValue> = values.into_iter().collect();
         composer.with_composition_locals(provided, site, |_composer| content());
-    })
+    });
 }
 
 pub(crate) struct LocalStateEntry<T: Clone + 'static> {

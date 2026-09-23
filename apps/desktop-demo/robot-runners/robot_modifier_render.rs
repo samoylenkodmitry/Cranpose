@@ -42,7 +42,7 @@ fn main() {
                     find_in_semantics(&robot, |elem| find_button(elem, "Positioned Boxes"))
                         .is_some()
                 });
-                println!("✓ Clicked Modifiers Showcase tab at ({:.1}, {:.1})", cx, cy);
+                println!("✓ Clicked Modifiers Showcase tab at ({cx:.1}, {cy:.1})");
             } else {
                 println!("✗ FAIL: Could not find Modifiers Showcase tab");
                 robot.exit().expect("exit");
@@ -56,7 +56,7 @@ fn main() {
             {
                 let cx = x + w / 2.0;
                 let cy = y + h / 2.0;
-                println!("  Found 'Positioned Boxes' at ({:.1}, {:.1})", cx, cy);
+                println!("  Found 'Positioned Boxes' at ({cx:.1}, {cy:.1})");
 
                 robot.click(cx, cy).expect("click Positioned Boxes");
                 wait_for_condition(&robot, "positioned boxes content", 5_000, || {
@@ -147,12 +147,9 @@ fn main() {
 
             let delta = (after_center_x - before_center_x).abs();
             if delta < 4.0 {
-                println!(
-                    "✗ FAIL: Dynamic Modifiers did not update position (Δx={:.1})",
-                    delta
-                );
+                println!("✗ FAIL: Dynamic Modifiers did not update position (Δx={delta:.1})");
             } else {
-                println!("✓ Dynamic Modifiers updated position (Δx={:.1})", delta);
+                println!("✓ Dynamic Modifiers updated position (Δx={delta:.1})");
             }
 
             robot.exit().expect("exit");

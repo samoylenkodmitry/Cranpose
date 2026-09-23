@@ -20,8 +20,8 @@ fn main() {
             std::thread::sleep(Duration::from_millis(500));
 
             match robot.wait_for_idle() {
-                Ok(_) => println!("✓ App ready\n"),
-                Err(e) => println!("Note: {}\n", e),
+                Ok(()) => println!("✓ App ready\n"),
+                Err(e) => println!("Note: {e}\n"),
             }
 
             let mut all_passed = true;
@@ -36,7 +36,7 @@ fn main() {
             if let Some((x, y, w, h)) = find_button_in_semantics(&robot, "Text Input") {
                 let cx = x + w / 2.0;
                 let cy = y + h / 2.0;
-                println!("  Found 'Text Input' tab at ({:.1}, {:.1})", cx, cy);
+                println!("  Found 'Text Input' tab at ({cx:.1}, {cy:.1})");
 
                 let _ = robot.mouse_move(cx, cy);
                 std::thread::sleep(Duration::from_millis(50));
@@ -63,10 +63,7 @@ fn main() {
             {
                 let cx = x + w / 2.0;
                 let cy = y + h / 2.0;
-                println!(
-                    "  Found text field with 'Type here...' at ({:.1}, {:.1})",
-                    cx, cy
-                );
+                println!("  Found text field with 'Type here...' at ({cx:.1}, {cy:.1})");
 
                 let _ = robot.mouse_move(cx, cy);
                 std::thread::sleep(Duration::from_millis(30));
@@ -80,7 +77,7 @@ fn main() {
                 std::thread::sleep(Duration::from_millis(100));
 
                 match robot.type_text("abcdef") {
-                    Ok(_) => {
+                    Ok(()) => {
                         println!("  Typed 'abcdef' (replacing initial text)");
                         let _ = robot.wait_for_idle();
                         std::thread::sleep(Duration::from_millis(300));
@@ -95,7 +92,7 @@ fn main() {
                         }
                     }
                     Err(e) => {
-                        println!("  ✗ FAIL: Could not type text: {}\n", e);
+                        println!("  ✗ FAIL: Could not type text: {e}\n");
                         all_passed = false;
                         false
                     }
@@ -118,9 +115,9 @@ fn main() {
 
             for i in 1..=3 {
                 match robot.send_key_with_modifiers("Left", true, false, false, false) {
-                    Ok(_) => println!("  Shift+Left ({}/3)", i),
+                    Ok(()) => println!("  Shift+Left ({i}/3)"),
                     Err(e) => {
-                        println!("  ✗ FAIL: Could not send Shift+Left: {}", e);
+                        println!("  ✗ FAIL: Could not send Shift+Left: {e}");
                         all_passed = false;
                     }
                 }
@@ -132,13 +129,13 @@ fn main() {
             println!("--- Test 4: Copy Selected Text (Ctrl+C) ---");
 
             match robot.send_key_with_modifiers("c", false, command_ctrl, false, command_meta) {
-                Ok(_) => {
+                Ok(()) => {
                     let _ = robot.wait_for_idle();
                     std::thread::sleep(Duration::from_millis(200));
                     println!("  ✓ Sent Ctrl+C (copy)\n");
                 }
                 Err(e) => {
-                    println!("  ✗ FAIL: Could not send Ctrl+C: {}\n", e);
+                    println!("  ✗ FAIL: Could not send Ctrl+C: {e}\n");
                     all_passed = false;
                 }
             }
@@ -149,26 +146,26 @@ fn main() {
             std::thread::sleep(Duration::from_millis(100));
 
             match robot.send_key_with_modifiers("v", false, command_ctrl, false, command_meta) {
-                Ok(_) => {
+                Ok(()) => {
                     let _ = robot.wait_for_idle();
                     std::thread::sleep(Duration::from_millis(200));
                     println!("  Pasted first time (Ctrl+V)");
                 }
                 Err(e) => {
-                    println!("  ✗ FAIL: Could not send first Ctrl+V: {}", e);
+                    println!("  ✗ FAIL: Could not send first Ctrl+V: {e}");
                     all_passed = false;
                 }
             }
 
             match robot.send_key_with_modifiers("v", false, command_ctrl, false, command_meta) {
-                Ok(_) => {
+                Ok(()) => {
                     let _ = robot.wait_for_idle();
                     std::thread::sleep(Duration::from_millis(200));
                     println!("  Pasted second time (Ctrl+V)");
                     println!("  ✓ Pasted text twice\n");
                 }
                 Err(e) => {
-                    println!("  ✗ FAIL: Could not send second Ctrl+V: {}\n", e);
+                    println!("  ✗ FAIL: Could not send second Ctrl+V: {e}\n");
                     all_passed = false;
                 }
             }
@@ -179,24 +176,21 @@ fn main() {
 
             std::thread::sleep(Duration::from_millis(300));
             if find_in_semantics(&robot, |elem| find_text(elem, expected_text)).is_some() {
-                println!("  ✓ PASS: Text field contains '{}'\n", expected_text);
+                println!("  ✓ PASS: Text field contains '{expected_text}'\n");
             } else if find_in_semantics(&robot, |elem| {
-                find_text(elem, &format!("Current value: \"{}\"", expected_text))
+                find_text(elem, &format!("Current value: \"{expected_text}\""))
             })
             .is_some()
             {
-                println!("  ✓ PASS: Current value shows '{}'\n", expected_text);
+                println!("  ✓ PASS: Current value shows '{expected_text}'\n");
             } else {
-                println!(
-                    "  ✗ FAIL: Expected '{}' but got different text",
-                    expected_text
-                );
+                println!("  ✗ FAIL: Expected '{expected_text}' but got different text");
                 println!("  Looking for actual text in semantics...");
 
                 if let Some((_, _, _, _)) = find_in_semantics(&robot, |elem| {
                     if let Some(ref text) = elem.text {
                         if text.contains("abc") {
-                            println!("    Found text: '{}'", text);
+                            println!("    Found text: '{text}'");
                             return Some((
                                 elem.bounds.x,
                                 elem.bounds.y,
@@ -217,7 +211,7 @@ fn main() {
             {
                 let cx = x + w / 2.0;
                 let cy = y + h / 2.0;
-                println!("  Found 'Add !' button at ({:.1}, {:.1})", cx, cy);
+                println!("  Found 'Add !' button at ({cx:.1}, {cy:.1})");
 
                 let _ = robot.mouse_move(cx, cy);
                 std::thread::sleep(Duration::from_millis(50));
@@ -234,19 +228,19 @@ fn main() {
 
             println!("--- Test 8: Validate Final Text ---");
 
-            let final_text = format!("{}!", expected_text);
+            let final_text = format!("{expected_text}!");
 
             std::thread::sleep(Duration::from_millis(200));
             if find_in_semantics(&robot, |elem| find_text(elem, &final_text)).is_some() {
-                println!("  ✓ PASS: Text field contains '{}'\n", final_text);
+                println!("  ✓ PASS: Text field contains '{final_text}'\n");
             } else if find_in_semantics(&robot, |elem| {
-                find_text(elem, &format!("Current value: \"{}\"", final_text))
+                find_text(elem, &format!("Current value: \"{final_text}\""))
             })
             .is_some()
             {
-                println!("  ✓ PASS: Current value shows '{}'\n", final_text);
+                println!("  ✓ PASS: Current value shows '{final_text}'\n");
             } else {
-                println!("  ✗ FAIL: Expected final text '{}'", final_text);
+                println!("  ✗ FAIL: Expected final text '{final_text}'");
                 println!("  Looking for actual text in semantics...");
                 let _ = find_in_semantics(&robot, |elem| {
                     if let Some(ref text) = elem.text {
@@ -254,7 +248,7 @@ fn main() {
                             || text.contains("!")
                             || text.contains("Current value")
                         {
-                            println!("    Found: '{}'", text);
+                            println!("    Found: '{text}'");
                         }
                     }
                     None::<(f32, f32, f32, f32)>

@@ -359,7 +359,7 @@ pub fn observe_store_news(listener: impl Fn() + 'static) -> StoreObserver {
     STORE_LISTENERS.with(|listeners| {
         listeners
             .borrow_mut()
-            .push((id, std::rc::Rc::new(listener)))
+            .push((id, std::rc::Rc::new(listener)));
     });
     StoreObserver { id }
 }

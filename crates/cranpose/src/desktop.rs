@@ -989,7 +989,7 @@ impl App {
         match event {
             WindowEvent::PointerLeft { .. } => self.pointer_left_window(window_id),
             WindowEvent::PointerMoved { .. } | WindowEvent::PointerEntered { .. } => {
-                self.cursors.pointer_moved(window_id)
+                self.cursors.pointer_moved(window_id);
             }
             _ => {}
         }
@@ -1813,7 +1813,9 @@ impl App {
         width: u32,
         height: u32,
     ) {
-        let previous_state_size = native.state.map(|state| state.size_non_reactive());
+        let previous_state_size = native
+            .state
+            .map(super::native_window::WindowState::size_non_reactive);
         update_native_options_size(&mut native.options, &native.window, width, height);
         tell_the_application_the_window_frame(native.state, &native.window);
         notify_native_window_resized(&native.events, &native.window, width, height);
@@ -1840,13 +1842,15 @@ impl App {
             .is_some_and(|known| native_window_positions_close(*known, position))
             && native
                 .state
-                .and_then(|state| state.position_non_reactive())
+                .and_then(super::native_window::WindowState::position_non_reactive)
                 .is_some_and(|known| native_window_positions_close((known.x, known.y), position))
         {
             return false;
         }
 
-        let previous_state_position = native.state.and_then(|state| state.position_non_reactive());
+        let previous_state_position = native
+            .state
+            .and_then(super::native_window::WindowState::position_non_reactive);
         native_window_positions.insert(native.key, position);
         update_native_options_position(&mut native.options, position.0, position.1);
         native.pending_outer_positions.clear();
@@ -1878,7 +1882,9 @@ impl App {
         let logical = LogicalPosition::new(position.x as f64, position.y as f64);
         let physical = logical.to_physical::<i32>(native.window.scale_factor());
         update_native_options_position(&mut native.options, position.x, position.y);
-        let previous_state_position = native.state.and_then(|state| state.position_non_reactive());
+        let previous_state_position = native
+            .state
+            .and_then(super::native_window::WindowState::position_non_reactive);
         tell_the_application_the_window_moved(&native.events, native.state, position.x, position.y);
         sync_native_window_state_position(
             native.state,
@@ -2237,6 +2243,10 @@ impl App {
             HeldPressStep::Released(_) => {
                 self.handed_press = None;
                 self.native_global_primary_down = false;
+                #[expect(
+                    clippy::redundant_closure_for_method_calls,
+                    reason = "the method path is not general over the surface lifetime"
+                )]
                 let settlement = Self::finish_native_press(
                     platform_probe,
                     app,
@@ -2504,8 +2514,9 @@ impl App {
                 continue;
             }
 
-            let previous_state_position =
-                native.state.and_then(|state| state.position_non_reactive());
+            let previous_state_position = native
+                .state
+                .and_then(super::native_window::WindowState::position_non_reactive);
             external_moves.push((*window_id, native.key, position, previous_state_position));
         }
 
@@ -2660,8 +2671,9 @@ impl App {
             WindowEvent::Moved(position) => {
                 native.vsync_interval = monitor_refresh_interval(&native.window);
                 let known_position = self.native_window_positions.get(&native.key).copied();
-                let previous_state_position =
-                    native.state.and_then(|state| state.position_non_reactive());
+                let previous_state_position = native
+                    .state
+                    .and_then(super::native_window::WindowState::position_non_reactive);
                 let platform_probe = &self.native_window_platform_probe;
                 let position = current_native_window_position(platform_probe, native)
                     .unwrap_or_else(|| {
@@ -3613,7 +3625,7 @@ fn native_window_polling_drag_pointer(
     global: Option<NativeWindowPointerState>,
     start_pointer_screen: Option<PhysicalPosition<f64>>,
 ) -> Option<PhysicalPosition<f64>> {
-    start_pointer_screen.or(global.map(|global| global.position))
+    start_pointer_screen.or_else(|| global.map(|global| global.position))
 }
 
 fn winit_window_icon(bitmap: &cranpose_ui::ImageBitmap) -> Option<Icon> {
@@ -4174,12 +4186,11 @@ struct NativeWindowPlatformProbe;
 impl NativeWindowPlatformProbe {
     fn probe_x11_window_client<R>(&self, f: impl FnOnce(&X11WindowClient) -> R) -> Option<R> {
         if self.x11_window_client.borrow().is_none() {
-            *self.x11_window_client.borrow_mut() = Some(
-                X11WindowClient::connect()
-                    .map(Box::new)
-                    .map(X11WindowClientState::Available)
-                    .unwrap_or(X11WindowClientState::Unavailable),
-            );
+            *self.x11_window_client.borrow_mut() =
+                Some(X11WindowClient::connect().map(Box::new).map_or(
+                    X11WindowClientState::Unavailable,
+                    X11WindowClientState::Available,
+                ));
         }
 
         match self.x11_window_client.borrow().as_ref()? {
@@ -5053,11 +5064,10 @@ fn monitor_refresh_interval(window: &Arc<dyn Window>) -> Duration {
         .current_monitor()
         .and_then(|monitor| monitor.current_video_mode())
         .and_then(|mode| mode.refresh_rate_millihertz())
-        .map(|millihertz| {
+        .map_or_else(default_vsync_interval, |millihertz| {
             let nanos = 1_000_000_000_000u64 / u64::from(millihertz.get());
             Duration::from_nanos(nanos)
         })
-        .unwrap_or_else(default_vsync_interval)
 }
 
 fn dispatch_ime_event(surface: &mut SurfaceMut<'_, WgpuRenderer>, ime_event: winit::event::Ime) {
@@ -5395,7 +5405,7 @@ impl ApplicationHandler for App {
                 if let Some(recorder) = self.recorder.take()
                     && let Err(e) = recorder.finish()
                 {
-                    eprintln!("[Recorder] Error saving recording: {}", e);
+                    eprintln!("[Recorder] Error saving recording: {e}");
                 }
                 self.exiting = true;
                 event_loop.exit();
@@ -6651,23 +6661,17 @@ impl ApplicationHandler for App {
                 )
             }) {
                 native_drag_deadline = Some(
-                    native_drag_deadline
-                        .map(|current| current.min(next_poll_at))
-                        .unwrap_or(next_poll_at),
+                    native_drag_deadline.map_or(next_poll_at, |current| current.min(next_poll_at)),
                 );
             }
             if waiting_for_frame_cap && let Some(deadline) = next_frame_time {
                 native_frame_cap_deadline = Some(
-                    native_frame_cap_deadline
-                        .map(|current| current.min(deadline))
-                        .unwrap_or(deadline),
+                    native_frame_cap_deadline.map_or(deadline, |current| current.min(deadline)),
                 );
             }
             if let Some(next_time) = frame_schedule.next_deadline {
                 native_next_event_time = Some(
-                    native_next_event_time
-                        .map(|current| current.min(next_time))
-                        .unwrap_or(next_time),
+                    native_next_event_time.map_or(next_time, |current| current.min(next_time)),
                 );
             }
         }

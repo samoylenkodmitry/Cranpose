@@ -37,7 +37,7 @@ pub fn AccessibilityRobotScreen() {
                 RobotButton("Increase", true, move || count.set(count.get() + 1));
                 RobotButton("Decrease", true, move || count.set(count.get() - 1));
                 RobotButton("Disabled action", false, move || {
-                    count.set(count.get() + 100)
+                    count.set(count.get() + 100);
                 });
             });
             Text(

@@ -43,19 +43,19 @@ pub(crate) fn with_runtime<T>(f: impl FnOnce(&mut SnapshotRuntime) -> T) -> T {
 
 #[cfg(test)]
 pub(crate) fn runtime_lock_depth() -> usize {
-    RUNTIME_LOCK_DEPTH.with(|cell| cell.get())
+    RUNTIME_LOCK_DEPTH.with(Cell::get)
 }
 
 pub(crate) fn allocate_snapshot() -> (SnapshotId, SnapshotIdSet) {
-    with_runtime(|runtime| runtime.allocate_snapshot())
+    with_runtime(SnapshotRuntime::allocate_snapshot)
 }
 
 pub(crate) fn close_snapshot(id: SnapshotId) {
-    with_runtime(|runtime| runtime.close_snapshot(id))
+    with_runtime(|runtime| runtime.close_snapshot(id));
 }
 
 pub(crate) fn allocate_record_id() -> SnapshotId {
-    with_runtime(|runtime| runtime.allocate_record_id())
+    with_runtime(SnapshotRuntime::allocate_record_id)
 }
 
 pub(crate) fn peek_next_snapshot_id() -> SnapshotId {
@@ -75,7 +75,7 @@ pub(crate) struct TestRuntimeGuard;
 
 #[cfg(test)]
 pub(crate) fn reset_runtime_for_tests() -> TestRuntimeGuard {
-    with_runtime(|runtime| runtime.reset_for_tests());
+    with_runtime(SnapshotRuntime::reset_for_tests);
     super::clear_last_writes();
     super::global::clear_global_snapshot_for_tests();
     super::clear_unused_record_cleanup_for_tests();

@@ -382,7 +382,7 @@ impl DemoTab {
     pub fn from_startup_name(name: &str) -> Option<Self> {
         let normalized = name
             .chars()
-            .filter(|ch| ch.is_ascii_alphanumeric())
+            .filter(char::is_ascii_alphanumeric)
             .map(|ch| ch.to_ascii_lowercase())
             .collect::<String>();
         DEMO_TAB_INFO
@@ -1088,24 +1088,24 @@ fn file_picker_tab() {
             );
             let open_file = open_file.clone();
             picker_button("Pick a file", move || {
-                open_file.launch(cranpose::FilePickerOptions::default().with_title("Pick a file"))
+                open_file.launch(cranpose::FilePickerOptions::default().with_title("Pick a file"));
             });
             let open_files = open_files.clone();
             picker_button("Pick several files", move || {
                 open_files
-                    .launch(cranpose::FilePickerOptions::default().with_title("Pick some files"))
+                    .launch(cranpose::FilePickerOptions::default().with_title("Pick some files"));
             });
             let open_folder = open_folder.clone();
             picker_button("Pick a folder", move || {
                 open_folder
-                    .launch(cranpose::FilePickerOptions::default().with_title("Pick a folder"))
+                    .launch(cranpose::FilePickerOptions::default().with_title("Pick a folder"));
             });
             let save_document = save_document.clone();
             picker_button("Save a document", move || {
                 save_document.launch(
                     cranpose::SaveDocumentRequest::new("cranpose-demo.txt", "text/plain")
                         .with_title("Save the demo document"),
-                )
+                );
             });
             Text(
                 status.get(),
@@ -1195,7 +1195,7 @@ fn text_input_example() {
             {
                 let current_text = text_state1.text();
                 Text(
-                    format!("Current value: \"{}\"", current_text),
+                    format!("Current value: \"{current_text}\""),
                     Modifier::empty()
                         .padding(8.0)
                         .background(Color(0.12, 0.16, 0.28, 0.8))
@@ -1235,7 +1235,7 @@ fn text_input_example() {
             {
                 let field2_text = text_state2.text();
                 Text(
-                    format!("Field 2 value: \"{}\"", field2_text),
+                    format!("Field 2 value: \"{field2_text}\""),
                     Modifier::empty()
                         .padding(8.0)
                         .background(Color(0.12, 0.16, 0.28, 0.8))
@@ -2421,7 +2421,7 @@ fn counter_app() {
                                     ButtonSpec::default(),
                                     move || {
                                         println!("Incrementing counter to {}", counter.get() + 1);
-                                        counter.set(counter.get() + 1)
+                                        counter.set(counter.get() + 1);
                                     },
                                     || {
                                         Text(
@@ -3076,7 +3076,7 @@ pub fn dynamic_modifiers_showcase() {
         });
 
         Text(
-            format!("Frame: {}, X: {:.1}", current_frame, x),
+            format!("Frame: {current_frame}, X: {x:.1}"),
             Modifier::empty()
                 .padding(8.0)
                 .background(Color(0.2, 0.2, 0.3, 0.6))

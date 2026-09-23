@@ -185,7 +185,7 @@ fn main() {
         let state = list_state
             .borrow()
             .as_ref()
-            .cloned()
+            .copied()
             .expect("list state captured");
         shell.debug_enter_app_context(|| state.dispatch_scroll_delta(SCROLL_DELTA_PER_FRAME));
     };

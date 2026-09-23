@@ -331,7 +331,7 @@ pub fn place_rows_with(
 
 /// [`place_rows_with`] under Wear's own ramp.
 pub fn place_rows(run: RowRun, heights: &[f32], out: &mut Vec<PlacedRow>) {
-    place_rows_with(ScalingParams::WEAR, run, heights, out)
+    place_rows_with(ScalingParams::WEAR, run, heights, out);
 }
 
 /// A row's unscaled place in the column: where it would sit and how tall it is
@@ -477,12 +477,12 @@ pub fn auto_centring_spacers(slots: &[Slot], viewport_px: f32, anchor: CentreAnc
     let leading = slots
         .get(anchor.index)
         .or_else(|| slots.last())
-        .map(|slot| leading_auto_centring_spacer(viewport_px, slot.centre(), anchor.offset))
-        .unwrap_or(0.0);
-    let trailing = slots
-        .last()
-        .map(|slot| trailing_auto_centring_spacer(viewport_px, slot.height))
-        .unwrap_or(0.0);
+        .map_or(0.0, |slot| {
+            leading_auto_centring_spacer(viewport_px, slot.centre(), anchor.offset)
+        });
+    let trailing = slots.last().map_or(0.0, |slot| {
+        trailing_auto_centring_spacer(viewport_px, slot.height)
+    });
     (leading, trailing)
 }
 

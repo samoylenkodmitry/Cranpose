@@ -121,7 +121,9 @@ pub(crate) fn schedule_semantics_invalidation_in(
 
 /// Whether any semantics invalidations are waiting to be serviced.
 pub fn has_pending_semantics_invalidations() -> bool {
-    crate::render_state::with_semantics_dispatch(|state| state.has_pending_invalidation())
+    crate::render_state::with_semantics_dispatch(
+        SemanticsInvalidationState::has_pending_invalidation,
+    )
 }
 
 /// Services every pending semantics invalidation.
@@ -137,7 +139,7 @@ where
 
 /// Drops every pending semantics invalidation without servicing it.
 pub fn clear_semantics_invalidations() {
-    crate::render_state::with_semantics_dispatch(|state| state.clear());
+    crate::render_state::with_semantics_dispatch(SemanticsInvalidationState::clear);
 }
 
 #[cfg(test)]

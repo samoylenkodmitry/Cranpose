@@ -42,8 +42,7 @@ impl SnapshotIdSet {
         } else {
             self.below_bound
                 .as_ref()
-                .map(|arr| arr.binary_search(&id).is_ok())
-                .unwrap_or(false)
+                .is_some_and(|arr| arr.binary_search(&id).is_ok())
         }
     }
 
@@ -333,7 +332,7 @@ impl fmt::Debug for SnapshotIdSet {
             if i > 0 {
                 write!(f, ", ")?;
             }
-            write!(f, "{}", id)?;
+            write!(f, "{id}")?;
         }
         write!(f, "}}")
     }
@@ -360,7 +359,7 @@ impl<'a> SnapshotIdSetIter<'a> {
     }
 }
 
-impl<'a> Iterator for SnapshotIdSetIter<'a> {
+impl Iterator for SnapshotIdSetIter<'_> {
     type Item = SnapshotId;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -646,7 +645,7 @@ mod tests {
     #[test]
     fn test_debug_format() {
         let set = SnapshotIdSet::new().set(10).set(20);
-        let debug_str = format!("{:?}", set);
+        let debug_str = format!("{set:?}");
         assert_eq!(debug_str, "SnapshotIdSet{10, 20}");
     }
 

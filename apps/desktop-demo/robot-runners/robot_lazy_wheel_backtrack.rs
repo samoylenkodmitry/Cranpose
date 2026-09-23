@@ -128,7 +128,7 @@ fn VariableHeightWheelReproScreen() {
                                 ColumnSpec::default(),
                                 move || {
                                     Text(
-                                        format!("Item {}", index),
+                                        format!("Item {index}"),
                                         Modifier::empty(),
                                         TextStyle::default(),
                                     );

@@ -81,7 +81,7 @@ impl Harness {
                 .list_state
                 .borrow()
                 .as_ref()
-                .cloned()
+                .copied()
                 .expect("list state captured");
             self.shell
                 .debug_enter_app_context(|| state.dispatch_scroll_delta(scroll_delta));
@@ -128,9 +128,10 @@ fn the_shadow_ring_survives_and_the_card_interior_stays_clean() {
     for _ in 0..4 {
         harness.frame(-12.0);
     }
-    if harness.frame(-12.0).shadow_shape_cache_hits == 0 {
-        panic!("fixture stopped exercising cached card shadows");
-    }
+    assert!(
+        harness.frame(-12.0).shadow_shape_cache_hits != 0,
+        "fixture stopped exercising cached card shadows"
+    );
     let frame = {
         self::Harness::frame(&mut harness, -12.0);
         harness

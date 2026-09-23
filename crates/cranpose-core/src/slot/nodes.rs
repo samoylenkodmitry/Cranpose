@@ -290,9 +290,7 @@ impl SlotTable {
         let current_range = current_range.as_range();
         if requested_range.start < current_range.start || requested_range.end > current_range.end {
             log::error!(
-                "slot table ignored node removal: requested range {:?} is outside current group node range {:?}",
-                requested_range,
-                current_range
+                "slot table ignored node removal: requested range {requested_range:?} is outside current group node range {current_range:?}"
             );
             return Vec::new();
         }

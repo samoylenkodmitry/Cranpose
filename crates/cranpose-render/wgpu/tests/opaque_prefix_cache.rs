@@ -107,7 +107,7 @@ fn primitives(spec: Spec, phase: u32) -> Vec<cranpose_ui_graphics::DrawPrimitive
     match spec.first {
         First::Radial => scope.draw_rect(radial(stops(dark), TileMode::Clamp)),
         First::OtherRadial => {
-            scope.draw_rect(radial(stops(Color::from_rgb_u8(4, 12, 4)), TileMode::Clamp))
+            scope.draw_rect(radial(stops(Color::from_rgb_u8(4, 12, 4)), TileMode::Clamp));
         }
         First::RadialFiveStops => scope.draw_rect(radial(
             vec![

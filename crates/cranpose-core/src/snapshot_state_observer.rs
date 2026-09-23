@@ -836,8 +836,7 @@ impl ScopeEntry {
         match &self.scope {
             ScopeStorage::Owned(stored) => stored
                 .downcast_ref::<T>()
-                .map(|stored| stored == scope)
-                .unwrap_or(false),
+                .is_some_and(|stored| stored == scope),
             ScopeStorage::RecomposeScope { .. } => false,
         }
     }
@@ -847,8 +846,7 @@ impl ScopeEntry {
             ScopeStorage::Owned(scope) => predicate(scope.as_ref()),
             ScopeStorage::RecomposeScope { weak, .. } => weak
                 .upgrade()
-                .map(|inner| predicate(&RecomposeScope { inner }))
-                .unwrap_or(true),
+                .is_none_or(|inner| predicate(&RecomposeScope { inner })),
         }
     }
 

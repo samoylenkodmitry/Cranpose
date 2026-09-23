@@ -337,7 +337,7 @@ impl Robot {
         match self.rx.recv() {
             Ok(RobotResponse::Error(e)) => Err(e),
             Ok(response) => extract(response).ok_or_else(|| "Unexpected response".to_string()),
-            Err(e) => Err(format!("Failed to receive response: {}", e)),
+            Err(e) => Err(format!("Failed to receive response: {e}")),
         }
     }
 
@@ -348,7 +348,7 @@ impl Robot {
     fn send_and_ack(&self, command: RobotCommand, what: &str) -> Result<(), String> {
         self.tx
             .send(command)
-            .map_err(|e| format!("Failed to send {what}: {}", e))?;
+            .map_err(|e| format!("Failed to send {what}: {e}"))?;
         self.recv_ack()
     }
 
@@ -363,7 +363,7 @@ impl Robot {
     pub fn click(&self, x: f32, y: f32) -> Result<(), String> {
         self.tx
             .send(RobotCommand::Click { x, y })
-            .map_err(|e| format!("Failed to send click command: {}", e))?;
+            .map_err(|e| format!("Failed to send click command: {e}"))?;
         self.recv_ack()
     }
 
@@ -384,7 +384,7 @@ impl Robot {
     fn primary_pointer_down(&self, x: f32, y: f32, source: PointerSource) -> Result<(), String> {
         self.tx
             .send(RobotCommand::TouchDown { x, y, source })
-            .map_err(|e| format!("Failed to send touch down: {}", e))?;
+            .map_err(|e| format!("Failed to send touch down: {e}"))?;
         self.recv_ack()
     }
 
@@ -401,7 +401,7 @@ impl Robot {
     fn primary_pointer_move(&self, x: f32, y: f32, source: PointerSource) -> Result<(), String> {
         self.tx
             .send(RobotCommand::TouchMove { x, y, source })
-            .map_err(|e| format!("Failed to send touch move: {}", e))?;
+            .map_err(|e| format!("Failed to send touch move: {e}"))?;
         self.recv_ack()
     }
 
@@ -430,7 +430,7 @@ impl Robot {
     fn primary_pointer_up(&self, x: f32, y: f32, source: PointerSource) -> Result<(), String> {
         self.tx
             .send(RobotCommand::TouchUp { x, y, source })
-            .map_err(|e| format!("Failed to send touch up: {}", e))?;
+            .map_err(|e| format!("Failed to send touch up: {e}"))?;
         self.recv_ack()
     }
 
@@ -443,7 +443,7 @@ impl Robot {
     pub fn move_to(&self, x: f32, y: f32) -> Result<(), String> {
         self.tx
             .send(RobotCommand::MoveTo { x, y })
-            .map_err(|e| format!("Failed to send move command: {}", e))?;
+            .map_err(|e| format!("Failed to send move command: {e}"))?;
         self.recv_ack()
     }
 
@@ -461,7 +461,7 @@ impl Robot {
     pub fn mouse_down(&self) -> Result<(), String> {
         self.tx
             .send(RobotCommand::MouseDown)
-            .map_err(|e| format!("Failed to send mouse down command: {}", e))?;
+            .map_err(|e| format!("Failed to send mouse down command: {e}"))?;
         self.recv_ack()
     }
 
@@ -474,7 +474,7 @@ impl Robot {
     pub fn mouse_up(&self) -> Result<(), String> {
         self.tx
             .send(RobotCommand::MouseUp)
-            .map_err(|e| format!("Failed to send mouse up command: {}", e))?;
+            .map_err(|e| format!("Failed to send mouse up command: {e}"))?;
         self.recv_ack()
     }
 
@@ -485,7 +485,7 @@ impl Robot {
     pub fn mouse_scroll(&self, delta_x: f32, delta_y: f32) -> Result<(), String> {
         self.tx
             .send(RobotCommand::MouseScroll { delta_x, delta_y })
-            .map_err(|e| format!("Failed to send mouse scroll command: {}", e))?;
+            .map_err(|e| format!("Failed to send mouse scroll command: {e}"))?;
         self.recv_ack()
     }
 
@@ -497,7 +497,7 @@ impl Robot {
     ) -> Result<(), String> {
         self.tx
             .send(RobotCommand::MouseScrollAndWaitForFrame { delta_x, delta_y })
-            .map_err(|e| format!("Failed to send mouse scroll command: {}", e))?;
+            .map_err(|e| format!("Failed to send mouse scroll command: {e}"))?;
         self.recv_ack()
     }
 
@@ -515,7 +515,7 @@ impl Robot {
                 delta_y,
                 count,
             })
-            .map_err(|e| format!("Failed to send mouse scroll sequence command: {}", e))?;
+            .map_err(|e| format!("Failed to send mouse scroll sequence command: {e}"))?;
         self.recv_ack()
     }
 
@@ -589,7 +589,7 @@ impl Robot {
                 y: from_y,
                 source: PointerSource::Touch,
             })
-            .map_err(|e| format!("Failed to send touch down: {}", e))?;
+            .map_err(|e| format!("Failed to send touch down: {e}"))?;
         self.recv_ack()?;
 
         let steps = steps.max(1);
@@ -604,7 +604,7 @@ impl Robot {
                     y,
                     source: PointerSource::Touch,
                 })
-                .map_err(|e| format!("Failed to send touch move: {}", e))?;
+                .map_err(|e| format!("Failed to send touch move: {e}"))?;
             self.recv_ack()?;
         }
 
@@ -614,7 +614,7 @@ impl Robot {
                 y: to_y,
                 source: PointerSource::Touch,
             })
-            .map_err(|e| format!("Failed to send touch up: {}", e))?;
+            .map_err(|e| format!("Failed to send touch up: {e}"))?;
         self.recv_ack()
     }
 
@@ -631,7 +631,7 @@ impl Robot {
     pub fn wait_for_idle(&self) -> Result<(), String> {
         self.tx
             .send(RobotCommand::WaitForIdle)
-            .map_err(|e| format!("Failed to send wait command: {}", e))?;
+            .map_err(|e| format!("Failed to send wait command: {e}"))?;
         self.recv_ack()
     }
 
@@ -643,7 +643,7 @@ impl Robot {
     pub fn pump_frames(&self, count: u32) -> Result<(), String> {
         self.tx
             .send(RobotCommand::PumpFrames { count })
-            .map_err(|e| format!("Failed to send pump_frames command: {}", e))?;
+            .map_err(|e| format!("Failed to send pump_frames command: {e}"))?;
         self.recv_ack()
     }
 
@@ -651,7 +651,7 @@ impl Robot {
     pub fn wait_for_present_frame(&self) -> Result<(), String> {
         self.tx
             .send(RobotCommand::WaitForPresentFrame)
-            .map_err(|e| format!("Failed to send present-frame wait command: {}", e))?;
+            .map_err(|e| format!("Failed to send present-frame wait command: {e}"))?;
         self.recv_ack()
     }
 
@@ -668,7 +668,7 @@ impl Robot {
     pub fn type_text(&self, text: &str) -> Result<(), String> {
         self.tx
             .send(RobotCommand::TypeText(text.to_string()))
-            .map_err(|e| format!("Failed to send type_text command: {}", e))?;
+            .map_err(|e| format!("Failed to send type_text command: {e}"))?;
         self.recv_ack()
     }
 
@@ -687,7 +687,7 @@ impl Robot {
     pub fn send_key(&self, key: &str) -> Result<(), String> {
         self.tx
             .send(RobotCommand::SendKey(key.to_string()))
-            .map_err(|e| format!("Failed to send send_key command: {}", e))?;
+            .map_err(|e| format!("Failed to send send_key command: {e}"))?;
         self.recv_ack()
     }
 
@@ -718,7 +718,7 @@ impl Robot {
                 alt,
                 meta,
             })
-            .map_err(|e| format!("Failed to send send_key_with_modifiers command: {}", e))?;
+            .map_err(|e| format!("Failed to send send_key_with_modifiers command: {e}"))?;
         self.recv_ack()
     }
 
@@ -733,7 +733,7 @@ impl Robot {
     pub fn exit(&self) -> Result<(), String> {
         self.tx
             .send(RobotCommand::Exit)
-            .map_err(|e| format!("Failed to send exit command: {}", e))?;
+            .map_err(|e| format!("Failed to send exit command: {e}"))?;
         self.recv_ack()
     }
 
@@ -750,7 +750,7 @@ impl Robot {
     pub fn get_semantics(&self) -> Result<Vec<SemanticElement>, String> {
         self.tx
             .send(RobotCommand::GetSemantics)
-            .map_err(|e| format!("Failed to send get_semantics: {}", e))?;
+            .map_err(|e| format!("Failed to send get_semantics: {e}"))?;
         self.recv_response(|response| match response {
             RobotResponse::Semantics(elements) => Some(elements),
             _ => None,
@@ -815,7 +815,7 @@ impl Robot {
     ) -> Result<Option<SemanticQueryResult>, String> {
         self.tx
             .send(command)
-            .map_err(|e| format!("Failed to send semantic query: {}", e))?;
+            .map_err(|e| format!("Failed to send semantic query: {e}"))?;
         self.recv_response(|response| match response {
             RobotResponse::SemanticQuery(result) => Some(result),
             _ => None,
@@ -903,7 +903,7 @@ impl Robot {
     pub fn screenshot(&self) -> Result<RobotScreenshot, String> {
         self.tx
             .send(RobotCommand::GetScreenshot)
-            .map_err(|e| format!("Failed to send screenshot command: {}", e))?;
+            .map_err(|e| format!("Failed to send screenshot command: {e}"))?;
         self.recv_response(|response| match response {
             RobotResponse::Screenshot(image) => Some(image),
             _ => None,
@@ -914,7 +914,7 @@ impl Robot {
     pub fn screenshot_with_scale(&self, scale: f32) -> Result<RobotScreenshot, String> {
         self.tx
             .send(RobotCommand::GetScreenshotWithScale(scale))
-            .map_err(|e| format!("Failed to send screenshot command: {}", e))?;
+            .map_err(|e| format!("Failed to send screenshot command: {e}"))?;
         self.recv_response(|response| match response {
             RobotResponse::Screenshot(image) => Some(image),
             _ => None,
@@ -935,7 +935,7 @@ impl Robot {
                 scale,
                 steps: steps.to_vec(),
             })
-            .map_err(|e| format!("Failed to send capture command: {}", e))?;
+            .map_err(|e| format!("Failed to send capture command: {e}"))?;
         self.recv_response(|response| match response {
             RobotResponse::Screenshots(shots) => Some(shots),
             _ => None,
@@ -970,7 +970,7 @@ impl Robot {
     pub fn get_render_stats(&self) -> Result<Option<RenderStatsSnapshot>, String> {
         self.tx
             .send(RobotCommand::GetRenderStats)
-            .map_err(|e| format!("Failed to send render stats command: {}", e))?;
+            .map_err(|e| format!("Failed to send render stats command: {e}"))?;
         self.recv_response(|response| match response {
             RobotResponse::RenderStats(stats) => Some(*stats),
             _ => None,
@@ -981,7 +981,7 @@ impl Robot {
     pub fn fps_stats(&self) -> Result<cranpose_app_shell::FpsStats, String> {
         self.tx
             .send(RobotCommand::GetFpsStats)
-            .map_err(|e| format!("Failed to send FPS stats command: {}", e))?;
+            .map_err(|e| format!("Failed to send FPS stats command: {e}"))?;
         self.recv_response(|response| match response {
             RobotResponse::FpsStats(stats) => Some(stats),
             _ => None,
@@ -1021,7 +1021,7 @@ impl Robot {
     ) -> Result<Option<(f32, f32)>, String> {
         self.tx
             .send(RobotCommand::GetPacingControlCenter(mode))
-            .map_err(|e| format!("Failed to send pacing control command: {}", e))?;
+            .map_err(|e| format!("Failed to send pacing control command: {e}"))?;
         self.recv_response(|response| match response {
             RobotResponse::PacingControlCenter(center) => Some(center),
             _ => None,
@@ -1032,7 +1032,7 @@ impl Robot {
     pub fn reset_fps_stats(&self) -> Result<(), String> {
         self.tx
             .send(RobotCommand::ResetFpsStats)
-            .map_err(|e| format!("Failed to send FPS stats reset command: {}", e))?;
+            .map_err(|e| format!("Failed to send FPS stats reset command: {e}"))?;
         self.recv_ack()
     }
 
@@ -1040,7 +1040,7 @@ impl Robot {
     pub fn last_fling_velocity(&self) -> Result<f32, String> {
         self.tx
             .send(RobotCommand::GetLastFlingVelocity)
-            .map_err(|e| format!("Failed to send fling velocity command: {}", e))?;
+            .map_err(|e| format!("Failed to send fling velocity command: {e}"))?;
         self.recv_response(|response| match response {
             RobotResponse::F32(value) => Some(value),
             _ => None,
@@ -1051,7 +1051,7 @@ impl Robot {
     pub fn reset_last_fling_velocity(&self) -> Result<(), String> {
         self.tx
             .send(RobotCommand::ResetLastFlingVelocity)
-            .map_err(|e| format!("Failed to send fling velocity reset command: {}", e))?;
+            .map_err(|e| format!("Failed to send fling velocity reset command: {e}"))?;
         self.recv_ack()
     }
 
@@ -1060,7 +1060,7 @@ impl Robot {
     pub fn get_render_cpu_allocation_stats(&self) -> Result<DebugCpuAllocationStats, String> {
         self.tx
             .send(RobotCommand::GetRenderCpuAllocationStats)
-            .map_err(|e| format!("Failed to send render CPU allocation stats command: {}", e))?;
+            .map_err(|e| format!("Failed to send render CPU allocation stats command: {e}"))?;
         self.recv_response(|response| match response {
             RobotResponse::RenderCpuAllocationStats(stats) => Some(*stats),
             _ => None,
@@ -1071,7 +1071,7 @@ impl Robot {
     pub fn get_runtime_leak_debug_stats(&self) -> Result<RuntimeLeakDebugStats, String> {
         self.tx
             .send(RobotCommand::GetRuntimeLeakDebugStats)
-            .map_err(|e| format!("Failed to send runtime leak debug stats command: {}", e))?;
+            .map_err(|e| format!("Failed to send runtime leak debug stats command: {e}"))?;
         self.recv_response(|response| match response {
             RobotResponse::RuntimeLeakDebugStats(stats) => Some(*stats),
             _ => None,
@@ -1087,7 +1087,7 @@ impl Robot {
     pub fn live_ui_task_labels(&self) -> Result<Vec<(u64, String)>, String> {
         self.tx
             .send(RobotCommand::GetLiveUiTaskLabels)
-            .map_err(|e| format!("Failed to send live UI task labels command: {}", e))?;
+            .map_err(|e| format!("Failed to send live UI task labels command: {e}"))?;
         self.recv_response(|response| match response {
             RobotResponse::LiveUiTaskLabels(labels) => Some(labels),
             _ => None,
@@ -1105,7 +1105,7 @@ impl Robot {
                 text: text.text.clone(),
                 style: Box::new(style.clone()),
             })
-            .map_err(|e| format!("Failed to send measure_text command: {}", e))?;
+            .map_err(|e| format!("Failed to send measure_text command: {e}"))?;
         self.recv_response(|response| match response {
             RobotResponse::TextMetrics(metrics) => Some(metrics),
             _ => None,
@@ -1116,7 +1116,7 @@ impl Robot {
     pub fn has_focused_text_field(&self) -> Result<bool, String> {
         self.tx
             .send(RobotCommand::HasFocusedTextField)
-            .map_err(|e| format!("Failed to send focus query command: {}", e))?;
+            .map_err(|e| format!("Failed to send focus query command: {e}"))?;
         self.recv_response(|response| match response {
             RobotResponse::Bool(value) => Some(value),
             _ => None,
@@ -1127,7 +1127,7 @@ impl Robot {
     pub fn set_semantics_enabled(&self, enabled: bool) -> Result<(), String> {
         self.tx
             .send(RobotCommand::SetSemanticsEnabled(enabled))
-            .map_err(|e| format!("Failed to send semantics toggle command: {}", e))?;
+            .map_err(|e| format!("Failed to send semantics toggle command: {e}"))?;
         self.recv_ack()
     }
 
@@ -1138,7 +1138,7 @@ impl Robot {
                 name: name.to_string(),
                 argument: argument.to_string(),
             })
-            .map_err(|e| format!("Failed to send app hook command: {}", e))?;
+            .map_err(|e| format!("Failed to send app hook command: {e}"))?;
         self.recv_response(|response| match response {
             RobotResponse::AppHookResult(result) => Some(result),
             _ => None,
@@ -1210,7 +1210,7 @@ impl Robot {
     pub fn click_by_text(&self, text: &str) -> Result<(), String> {
         let (x, y, w, h) = self
             .find_button_bounds(text)?
-            .ok_or_else(|| format!("Button '{}' not found in semantic tree", text))?;
+            .ok_or_else(|| format!("Button '{text}' not found in semantic tree"))?;
         let center_x = x + w / 2.0;
         let center_y = y + h / 2.0;
 
@@ -1230,7 +1230,7 @@ impl Robot {
         if self.find_text_bounds(expected)?.is_some() {
             Ok(())
         } else {
-            Err(format!("Validation failed: '{}' not found", expected))
+            Err(format!("Validation failed: '{expected}' not found"))
         }
     }
 
@@ -1261,7 +1261,7 @@ impl Robot {
                 let text_info = elem
                     .text
                     .as_ref()
-                    .map(|t| format!(" text=\"{}\"", t))
+                    .map(|t| format!(" text=\"{t}\""))
                     .unwrap_or_default();
                 let clickable = if elem.clickable { " [CLICKABLE]" } else { "" };
                 let _ = std::fmt::Write::write_fmt(

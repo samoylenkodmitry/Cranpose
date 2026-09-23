@@ -806,8 +806,7 @@ impl SoundBank {
         self.inner
             .entries
             .get(index)
-            .map(|entry| entry.id)
-            .unwrap_or(SoundId::NONE)
+            .map_or(SoundId::NONE, |entry| entry.id)
     }
 
     /// The handle for `name`, if the bank holds it.
@@ -891,8 +890,7 @@ impl Index<usize> for SoundBank {
         self.inner
             .entries
             .get(index)
-            .map(|entry| &entry.id)
-            .unwrap_or(&NONE)
+            .map_or(&NONE, |entry| &entry.id)
     }
 }
 

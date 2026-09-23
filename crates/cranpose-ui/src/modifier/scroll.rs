@@ -1153,7 +1153,7 @@ impl TranslatedContentContextNode {
         if let Some(node_id) = self.node_id {
             self.overscroll_callback_id =
                 Some(self.overscroll.add_invalidate_callback(Box::new(move || {
-                    schedule_modifier_slices_repass(node_id)
+                    schedule_modifier_slices_repass(node_id);
                 })));
         }
     }

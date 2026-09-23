@@ -245,7 +245,7 @@ fn drain_all<A: cranpose_core::Applier + 'static>(
     loop {
         if !composition.process_invalid_scopes()? {
             if iterations > 100 {
-                println!("drain_all: Took {} iterations to stabilize", iterations);
+                println!("drain_all: Took {iterations} iterations to stabilize");
             }
             return Ok(());
         }
@@ -332,7 +332,7 @@ fn async_runtime_full_layout_freezes_after_forward_flip() {
     );
 
     let frames_at_flip = stats.get().frames;
-    println!("Stats frames at flip: {}", frames_at_flip);
+    println!("Stats frames at flip: {frames_at_flip}");
 
     println!("Advancing 100 frames after flip...");
     for _ in 0..100 {
@@ -365,7 +365,7 @@ fn async_runtime_full_layout_freezes_after_forward_flip() {
     let frames_after_flip = stats.get().frames;
     let anim_after = animation.get();
 
-    println!("Stats frames after flip: {}", frames_after_flip);
+    println!("Stats frames after flip: {frames_after_flip}");
     println!(
         "Animation after flip: progress={:.3}, direction={:.1}",
         anim_after.progress, anim_after.direction

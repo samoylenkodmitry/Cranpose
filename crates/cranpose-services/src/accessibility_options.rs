@@ -84,7 +84,7 @@ pub fn set_platform_accessibility_options(options: AccessibilityOptions) -> bool
 
 /// What the platform last reported.
 pub fn platform_accessibility_options() -> AccessibilityOptions {
-    PLATFORM_ACCESSIBILITY_OPTIONS.with(|cell| cell.get())
+    PLATFORM_ACCESSIBILITY_OPTIONS.with(Cell::get)
 }
 
 /// The options a composable reads: what the platform reported, unless a

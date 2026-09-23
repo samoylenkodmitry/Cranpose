@@ -17,7 +17,7 @@ fn main() {
 
             println!("\n--- Step 1: Navigate to 'Lazy List' tab ---");
             if let Some((x, y, w, h)) = find_button_in_semantics(&robot, "Lazy List") {
-                println!("  Found 'Lazy List' tab at ({:.1}, {:.1})", x, y);
+                println!("  Found 'Lazy List' tab at ({x:.1}, {y:.1})");
                 robot.click(x + w / 2.0, y + h / 2.0).ok();
                 std::thread::sleep(Duration::from_millis(500));
             } else {
@@ -36,19 +36,19 @@ fn main() {
 
             let visible_text = find_text_by_prefix_in_semantics(&robot, "Visible:");
             if let Some((x, y, _w, _h, text)) = visible_text {
-                println!("  Found: '{}' at ({:.1}, {:.1})", text, x, y);
+                println!("  Found: '{text}' at ({x:.1}, {y:.1})");
 
-                if let Some(num_str) = text.strip_prefix("Visible:").map(|s| s.trim()) {
+                if let Some(num_str) = text.strip_prefix("Visible:").map(str::trim) {
                     if let Ok(num) = num_str.parse::<usize>() {
                         if num > 0 {
-                            println!("  ✓ PASS: Visible count is {} (non-zero)", num);
+                            println!("  ✓ PASS: Visible count is {num} (non-zero)");
                         } else {
                             println!("  ✗ FAIL: Visible count is 0 - reactive stats not working!");
                             robot.exit().ok();
                             std::process::exit(1);
                         }
                     } else {
-                        println!("  ⚠️ Could not parse number from '{}'", num_str);
+                        println!("  ⚠️ Could not parse number from '{num_str}'");
                     }
                 }
             } else {
@@ -59,7 +59,7 @@ fn main() {
 
             println!("\n--- Step 5: Check 'Cached:' stats ---");
             if let Some((_, _, _, _, text)) = find_text_by_prefix_in_semantics(&robot, "Cached:") {
-                println!("  Found: '{}'", text);
+                println!("  Found: '{text}'");
             } else {
                 println!("  'Cached:' text not found");
             }

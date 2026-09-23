@@ -66,8 +66,7 @@ pub fn format_render_scene(scene: &RecordedRenderScene) -> String {
             } => {
                 writeln!(
                     output,
-                    "[{}] Node #{} - Layer: {:?}, Primitive: {:?}",
-                    idx, node_id, layer, primitive
+                    "[{idx}] Node #{node_id} - Layer: {layer:?}, Primitive: {primitive:?}"
                 )
                 .ok();
             }
@@ -111,8 +110,8 @@ pub fn format_screen_summary(layout: &LayoutTree, scene: &RecordedRenderScene) -
     }
 
     writeln!(output, "Render operations:").ok();
-    writeln!(output, "  - Text elements: {}", text_count).ok();
-    writeln!(output, "  - Primitive shapes: {}", primitive_count).ok();
+    writeln!(output, "  - Text elements: {text_count}").ok();
+    writeln!(output, "  - Primitive shapes: {primitive_count}").ok();
     writeln!(output, "=== END SUMMARY ===").ok();
     output
 }

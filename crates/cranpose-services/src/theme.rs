@@ -26,7 +26,7 @@ pub fn clear_platform_system_theme() {
 }
 
 pub fn default_system_theme() -> SystemTheme {
-    if let Some(theme) = PLATFORM_SYSTEM_THEME.with(|cell| cell.get()) {
+    if let Some(theme) = PLATFORM_SYSTEM_THEME.with(Cell::get) {
         return theme;
     }
     detected_system_theme()
@@ -66,14 +66,13 @@ fn detect_system_theme_uncached() -> SystemTheme {
                     .ok()
                     .flatten()
             })
-            .map(|query| {
+            .map_or(SystemTheme::Light, |query| {
                 if query.matches() {
                     SystemTheme::Dark
                 } else {
                     SystemTheme::Light
                 }
             })
-            .unwrap_or(SystemTheme::Light)
     }
 
     #[cfg(any(

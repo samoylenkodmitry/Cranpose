@@ -933,7 +933,7 @@ impl TornPage {
         page.test.with_registry(|composition| {
             composition
                 .render_stable(root_key, move || {
-                    TornPageRoot(torn, title, Rc::clone(&node))
+                    TornPageRoot(torn, title, Rc::clone(&node));
                 })
                 .expect("the torn page renders");
         });
@@ -946,7 +946,7 @@ impl TornPage {
         self.test.with_registry(|composition| {
             composition
                 .reconcile(root_key, move || {
-                    TornPageRoot(torn, title, Rc::clone(&node))
+                    TornPageRoot(torn, title, Rc::clone(&node));
                 })
                 .expect("the torn page recomposes");
         });
@@ -1103,7 +1103,7 @@ impl LocalWindowStatePage {
                 Rc::clone(&declared),
                 Rc::clone(&inside),
                 Rc::clone(&beside),
-            )
+            );
         }
     }
 

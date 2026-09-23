@@ -101,6 +101,30 @@ dbg_macro = "deny"
 clone_on_copy = "deny"
 redundant_locals = "deny"
 
+# Work the code asks for and then throws away: a default computed on the path
+# that does not use it, a copy spelled as a clone, a fresh allocation where the
+# destination's could be reused. `redundant_clone`, `needless_collect` and
+# `iter_with_drain` stay off: here a clone's last use keeps a handle alive
+# that a subscriber registry holds only weakly, a collect ends a RefCell borrow
+# before re-entrant calls, and `drain(..)` keeps a scratch buffer's capacity.
+or_fun_call = "warn"
+cloned_instead_of_copied = "warn"
+assigning_clones = "warn"
+
+# One spelling for each shape, so a reader does not decode two forms of the
+# same thing. None of these changes a float result, so pictures stay exact.
+uninlined_format_args = "warn"
+redundant_closure_for_method_calls = "warn"
+map_unwrap_or = "warn"
+semicolon_if_nothing_returned = "warn"
+manual_let_else = "warn"
+unnested_or_patterns = "warn"
+explicit_iter_loop = "warn"
+ignored_unit_patterns = "warn"
+needless_raw_string_hashes = "warn"
+elidable_lifetime_names = "warn"
+manual_assert = "warn"
+
 # Faster local debug builds while preserving useful panic locations.
 [profile.dev]
 debug = "line-tables-only"

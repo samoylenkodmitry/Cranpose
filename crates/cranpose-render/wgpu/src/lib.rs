@@ -837,7 +837,7 @@ impl WgpuRenderer {
                 .status()
                 .last_frame_stats
                 .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
             PresentBackend::None => None,
         }
     }
@@ -861,15 +861,13 @@ impl WgpuRenderer {
             .scene
             .graph
             .as_ref()
-            .map(RenderGraph::node_count)
-            .unwrap_or(0);
+            .map_or(0, RenderGraph::node_count);
         stats.scene_graph_heap_bytes = self
             .frontend
             .scene
             .graph
             .as_ref()
-            .map(RenderGraph::heap_bytes)
-            .unwrap_or(0);
+            .map_or(0, RenderGraph::heap_bytes);
         stats.scene_hits_len = self.frontend.scene.hits.len();
         stats.scene_hits_cap = self.frontend.scene.hits.capacity();
         stats.scene_node_index_len = self.frontend.scene.node_index.len();
@@ -892,8 +890,7 @@ impl WgpuRenderer {
     #[doc(hidden)]
     pub fn device_error_count_for_tests(&self) -> u64 {
         self.sync_gpu_renderer()
-            .map(GpuRenderer::device_error_count)
-            .unwrap_or(0)
+            .map_or(0, GpuRenderer::device_error_count)
     }
 
     #[doc(hidden)]

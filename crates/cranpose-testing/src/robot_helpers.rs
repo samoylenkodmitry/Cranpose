@@ -129,7 +129,7 @@ where
 {
     match robot.get_semantics() {
         Ok(semantics) => {
-            for root in semantics.iter() {
+            for root in &semantics {
                 if let Some(result) = finder(root) {
                     return Some(result);
                 }
@@ -137,7 +137,7 @@ where
             None
         }
         Err(e) => {
-            eprintln!("  ✗ Failed to get semantics: {}", e);
+            eprintln!("  ✗ Failed to get semantics: {e}");
             None
         }
     }
@@ -151,7 +151,7 @@ pub fn find_text_in_semantics(robot: &cranpose::Robot, text: &str) -> Option<(f3
     match robot.find_text_bounds(text) {
         Ok(bounds) => bounds,
         Err(e) => {
-            eprintln!("  ✗ Failed to query text semantics: {}", e);
+            eprintln!("  ✗ Failed to query text semantics: {e}");
             None
         }
     }
@@ -169,7 +169,7 @@ pub fn find_text_in_semantics_exact(
     match robot.find_text_bounds_exact(text) {
         Ok(bounds) => bounds,
         Err(e) => {
-            eprintln!("  ✗ Failed to query exact text semantics: {}", e);
+            eprintln!("  ✗ Failed to query exact text semantics: {e}");
             None
         }
     }
@@ -210,7 +210,7 @@ pub fn find_text_by_prefix_in_semantics(
     match robot.find_text_by_prefix(prefix) {
         Ok(bounds) => bounds,
         Err(e) => {
-            eprintln!("  ✗ Failed to query text prefix semantics: {}", e);
+            eprintln!("  ✗ Failed to query text prefix semantics: {e}");
             None
         }
     }
@@ -237,10 +237,10 @@ pub fn find_button_exact_in_semantics(
 /// settle. Returns whether the button was found.
 pub fn click_button_in_semantics(robot: &cranpose::Robot, name: &str) -> bool {
     let Some((x, y, w, h)) = find_button_in_semantics(robot, name) else {
-        println!("  ✗ Button '{}' not found!", name);
+        println!("  ✗ Button '{name}' not found!");
         return false;
     };
-    println!("  Found button '{}' at ({:.1}, {:.1})", name, x, y);
+    println!("  Found button '{name}' at ({x:.1}, {y:.1})");
     robot.click(x + w / 2.0, y + h / 2.0).ok();
     std::thread::sleep(Duration::from_millis(200));
     true
@@ -305,7 +305,7 @@ fn find_button_in_semantics_by(
         let semantics = match robot.get_semantics() {
             Ok(semantics) => semantics,
             Err(e) => {
-                eprintln!("  ✗ Failed to get semantics: {}", e);
+                eprintln!("  ✗ Failed to get semantics: {e}");
                 break;
             }
         };
@@ -443,7 +443,7 @@ pub fn visible_bounds_in_viewport(
 ) -> Option<(f32, f32, f32, f32)> {
     let semantics = robot.get_semantics().ok()?;
     let mut viewport = None;
-    for elem in semantics.iter() {
+    for elem in &semantics {
         let elem_bounds = (
             elem.bounds.x,
             elem.bounds.y,
@@ -679,7 +679,7 @@ fn find_button_bounds_for_mode(
     let semantics = match robot.get_semantics() {
         Ok(semantics) => semantics,
         Err(e) => {
-            eprintln!("  ✗ Failed to query button semantics: {}", e);
+            eprintln!("  ✗ Failed to query button semantics: {e}");
             return Vec::new();
         }
     };

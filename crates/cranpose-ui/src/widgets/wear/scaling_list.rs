@@ -1385,8 +1385,7 @@ fn measure_wear_scaling_list(
             ..WearScalingLayoutInfo::default()
         });
         indicator.borrow_mut().clear();
-        return scope
-            .layout_with_placement_builder(width, viewport, |placements| placements.clear());
+        return scope.layout_with_placement_builder(width, viewport, std::vec::Vec::clear);
     }
 
     scope.set_reusable_pool_limits(REUSABLE_SLOTS, REUSABLE_SLOTS);
@@ -1604,7 +1603,7 @@ fn compose_and_measure_item(
         let content = Rc::clone(&content);
         crate::lazy_item::ProvideLazyItemKey(identity, || {
             WearScalingItem(Modifier::empty(), transform.clone(), strategy, move || {
-                content()
+                content();
             });
         });
     });

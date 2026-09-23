@@ -84,7 +84,7 @@ where
     ) -> bool {
         let capture_paths = hits
             .iter()
-            .map(|hit| hit.capture_path())
+            .map(cranpose_render_common::HitTestTarget::capture_path)
             .collect::<Vec<_>>();
         let targets = crate::hit_path_tracker::dispatch_order_for_paths(&capture_paths)
             .into_iter()
@@ -184,7 +184,10 @@ where
         } else {
             self.surface().renderer.scene().hit_test(x, y)
         };
-        let new_ids: Vec<NodeId> = hits.iter().map(|h| h.node_id()).collect();
+        let new_ids: Vec<NodeId> = hits
+            .iter()
+            .map(cranpose_render_common::HitTestTarget::node_id)
+            .collect();
 
         let pos = Point { x, y };
         let previously_hovered = self.surface().hovered_nodes.clone();
@@ -932,7 +935,7 @@ where
         }
         let capture_paths = hits
             .iter()
-            .map(|hit| hit.capture_path())
+            .map(cranpose_render_common::HitTestTarget::capture_path)
             .collect::<Vec<_>>();
         crate::hit_path_tracker::dispatch_order_for_paths(&capture_paths)
     }
@@ -1556,7 +1559,7 @@ where
                 .clipboard(LinuxClipboardKind::Primary)
                 .text(text.to_string());
             if let Err(e) = result {
-                log::debug!("Primary selection set failed: {:?}", e);
+                log::debug!("Primary selection set failed: {e:?}");
             }
         }
     }

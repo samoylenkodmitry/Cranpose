@@ -163,8 +163,7 @@ fn main() -> ExitCode {
                 );
             });
         })
-        .map(|()| robot_exit::exit_code(&FAILED))
-        .unwrap_or(ExitCode::FAILURE)
+        .map_or(ExitCode::FAILURE, |()| robot_exit::exit_code(&FAILED))
 }
 
 fn report(label: &str, stats: &cranpose::FpsStats, wall_ms: f32, pipelines: u64) {

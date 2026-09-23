@@ -5,7 +5,7 @@ use std::{
     collections::HashMap,
     rc::{Rc, Weak},
     sync::{
-        Arc, Mutex, MutexGuard,
+        Arc, Mutex, MutexGuard, PoisonError,
         atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
     },
 };
@@ -126,7 +126,7 @@ pub(crate) fn observe_draw_reads<R>(scope: DrawObservationScope, block: impl FnO
 /// mid-flight. Callable only from inside a recording draw closure; anywhere
 /// else it degrades to a plain frame request.
 pub fn request_current_draw_redraw() {
-    if let Some(node_id) = CURRENT_DRAW_NODE.with(std::cell::Cell::get) {
+    if let Some(node_id) = CURRENT_DRAW_NODE.with(Cell::get) {
         schedule_draw_repass(node_id);
     }
     request_render_invalidation();
@@ -706,9 +706,7 @@ impl DrawRepassManager {
 }
 
 fn lock_repass_manager<T>(manager: &Mutex<T>) -> MutexGuard<'_, T> {
-    manager
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+    manager.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// Schedules a layout repass for a specific node.
@@ -759,11 +757,10 @@ fn layout_repass_schedule_diagnostics_enabled_for(node_id: NodeId) -> bool {
         if value == "all" {
             return LayoutRepassScheduleDiag::All;
         }
-        value
-            .to_string_lossy()
-            .parse::<NodeId>()
-            .map(LayoutRepassScheduleDiag::Node)
-            .unwrap_or(LayoutRepassScheduleDiag::Disabled)
+        value.to_string_lossy().parse::<NodeId>().map_or(
+            LayoutRepassScheduleDiag::Disabled,
+            LayoutRepassScheduleDiag::Node,
+        )
     }) {
         LayoutRepassScheduleDiag::Disabled => false,
         LayoutRepassScheduleDiag::All => true,

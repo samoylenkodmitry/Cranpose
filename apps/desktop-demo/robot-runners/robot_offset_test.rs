@@ -185,10 +185,10 @@ fn main() {
                 println!("   Initial 'Move' box position: x={:.1}", elem.bounds.x);
             }
 
-            let mut prev_x = move_elem_before.map(|e| e.bounds.x).unwrap_or(0.0);
+            let mut prev_x = move_elem_before.map_or(0.0, |e| e.bounds.x);
 
             for i in 1..=3 {
-                println!("\n   --- Frame {} ---", i);
+                println!("\n   --- Frame {i} ---");
 
                 if let Err(err) = robot.click_by_text("Advance Frame") {
                     println!("   ✗ Failed to click Advance Frame: {err}");

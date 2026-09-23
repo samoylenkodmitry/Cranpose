@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+use std::sync::PoisonError;
 #[path = "support/device.rs"]
 pub mod device;
 
@@ -87,9 +88,7 @@ fn lock_gpu_test() -> MutexGuard<'static, ()> {
     if log::set_logger(&STDERR_WARNINGS).is_ok() {
         log::set_max_level(log::LevelFilter::Warn);
     }
-    let lock = GPU_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let lock = GPU_TEST_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
     cranpose_ui_graphics::set_glass_material_folds(true);
     lock
 }
@@ -608,8 +607,7 @@ pub fn substrate_probe(spec: SubstrateSpec, read: SubstrateProbeRead) -> RenderE
         }
     };
     let mut shader = RuntimeShader::new(&format!(
-        "{}\n@fragment\nfn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {{\n    let substrate = u[58u];\n    if (substrate.z < 0.5) {{\n        return vec4<f32>(1.0, 0.0, 1.0, 1.0);\n    }}\n    let dims = vec2<f32>(textureDimensions(input_texture));\n    let uv = {uv};\n    return vec4<f32>(textureSampleLevel(input_texture, input_sampler, uv, 0.0).rgb, 1.0);\n}}\n",
-        RUNTIME_SHADER_PRELUDE_WGSL,
+        "{RUNTIME_SHADER_PRELUDE_WGSL}\n@fragment\nfn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {{\n    let substrate = u[58u];\n    if (substrate.z < 0.5) {{\n        return vec4<f32>(1.0, 0.0, 1.0, 1.0);\n    }}\n    let dims = vec2<f32>(textureDimensions(input_texture));\n    let uv = {uv};\n    return vec4<f32>(textureSampleLevel(input_texture, input_sampler, uv, 0.0).rgb, 1.0);\n}}\n",
     ));
     shader.set_batched_source(true);
     shader.set_substrates(&[spec]);

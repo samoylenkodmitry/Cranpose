@@ -104,8 +104,7 @@ fn group_segment_storage_available_len<S: GroupSegment>(
     }
     let next_start = groups
         .get(group_index + 1)
-        .map(|group| S::start(group) as usize)
-        .unwrap_or(item_count);
+        .map_or(item_count, |group| S::start(group) as usize);
     next_start.min(item_count).saturating_sub(start)
 }
 
@@ -164,8 +163,7 @@ fn removed_subtree_segment_end<S: GroupSegment>(
 ) -> usize {
     groups
         .get(removed_group_index)
-        .map(|group| S::start(group) as usize)
-        .unwrap_or(item_count)
+        .map_or(item_count, |group| S::start(group) as usize)
         .min(item_count)
 }
 
@@ -259,8 +257,7 @@ fn empty_group_segment_range<S: GroupSegment>(
 ) -> GroupItemRange<S::RangeKind> {
     let start = groups
         .get(group_index)
-        .map(|group| S::start(group) as usize)
-        .unwrap_or(item_count)
+        .map_or(item_count, |group| S::start(group) as usize)
         .min(item_count);
     GroupItemRange::new(group_index, TypedItemRange::new(start, start), 0, 0)
 }

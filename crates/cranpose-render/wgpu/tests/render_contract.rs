@@ -659,8 +659,7 @@ fn wgpu_renderer_matches_shared_render_contracts() {
         Ok(renderer) => renderer,
         Err(err) => {
             eprintln!(
-                "skipping shared render contract assertions because headless WGPU init failed: {}",
-                err
+                "skipping shared render contract assertions because headless WGPU init failed: {err}"
             );
             return;
         }
@@ -695,8 +694,7 @@ fn wgpu_renderer_matches_shared_stroke_and_arc_contracts() {
         Ok(renderer) => renderer,
         Err(err) => {
             eprintln!(
-                "skipping shared stroke/arc contract assertions because headless WGPU init failed: {}",
-                err
+                "skipping shared stroke/arc contract assertions because headless WGPU init failed: {err}"
             );
             return;
         }

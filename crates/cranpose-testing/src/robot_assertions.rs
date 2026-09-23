@@ -67,12 +67,7 @@ pub fn assert_approx_eq(actual: f32, expected: f32, tolerance: f32, msg: &str) {
     let diff = (actual - expected).abs();
     assert!(
         diff <= tolerance,
-        "{}: expected {} (±{}), got {} (diff: {})",
-        msg,
-        expected,
-        tolerance,
-        actual,
-        diff
+        "{msg}: expected {expected} (±{tolerance}), got {actual} (diff: {diff})"
     );
 }
 
@@ -100,19 +95,19 @@ pub fn assert_approx_eq(actual: f32, expected: f32, tolerance: f32, msg: &str) {
 /// assert_rect_approx_eq(r1, r2, 0.2, "Rects should match");
 /// ```
 pub fn assert_rect_approx_eq(actual: Rect, expected: Rect, tolerance: f32, msg: &str) {
-    assert_approx_eq(actual.x, expected.x, tolerance, &format!("{} - x", msg));
-    assert_approx_eq(actual.y, expected.y, tolerance, &format!("{} - y", msg));
+    assert_approx_eq(actual.x, expected.x, tolerance, &format!("{msg} - x"));
+    assert_approx_eq(actual.y, expected.y, tolerance, &format!("{msg} - y"));
     assert_approx_eq(
         actual.width,
         expected.width,
         tolerance,
-        &format!("{} - width", msg),
+        &format!("{msg} - width"),
     );
     assert_approx_eq(
         actual.height,
         expected.height,
         tolerance,
-        &format!("{} - height", msg),
+        &format!("{msg} - height"),
     );
 }
 
@@ -122,11 +117,7 @@ pub fn assert_rect_approx_eq(actual: Rect, expected: Rect, tolerance: f32, msg: 
 pub fn assert_rect_contains_point(rect: Rect, x: f32, y: f32, msg: &str) {
     assert!(
         x >= rect.x && x <= rect.x + rect.width && y >= rect.y && y <= rect.y + rect.height,
-        "{}: point ({}, {}) not in rect {:?}",
-        msg,
-        x,
-        y,
-        rect
+        "{msg}: point ({x}, {y}) not in rect {rect:?}"
     );
 }
 
@@ -136,10 +127,7 @@ pub fn assert_rect_contains_point(rect: Rect, x: f32, y: f32, msg: &str) {
 pub fn assert_contains_text(texts: &[String], fragment: &str, msg: &str) {
     assert!(
         texts.iter().any(|t| t.contains(fragment)),
-        "{}: text '{}' not found in {:?}",
-        msg,
-        fragment,
-        texts
+        "{msg}: text '{fragment}' not found in {texts:?}"
     );
 }
 
@@ -149,10 +137,7 @@ pub fn assert_contains_text(texts: &[String], fragment: &str, msg: &str) {
 pub fn assert_not_contains_text(texts: &[String], fragment: &str, msg: &str) {
     assert!(
         !texts.iter().any(|t| t.contains(fragment)),
-        "{}: text '{}' unexpectedly found in {:?}",
-        msg,
-        fragment,
-        texts
+        "{msg}: text '{fragment}' unexpectedly found in {texts:?}"
     );
 }
 

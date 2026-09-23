@@ -108,7 +108,7 @@ pub fn schedule_pointer_repass(node_id: NodeId) {
 
 /// Returns true if any pointer repasses are pending.
 pub fn has_pending_pointer_repasses() -> bool {
-    crate::render_state::with_pointer_dispatch(|state| state.has_pending_repass())
+    crate::render_state::with_pointer_dispatch(PointerDispatchState::has_pending_repass)
 }
 
 /// Processes all pending pointer repasses.
@@ -125,7 +125,7 @@ where
 
 /// Clears all pending pointer repasses without processing them.
 pub fn clear_pointer_repasses() {
-    crate::render_state::with_pointer_dispatch(|state| state.clear());
+    crate::render_state::with_pointer_dispatch(PointerDispatchState::clear);
 }
 
 #[cfg(test)]

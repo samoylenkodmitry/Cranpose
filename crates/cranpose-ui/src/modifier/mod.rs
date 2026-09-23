@@ -1026,7 +1026,7 @@ impl Modifier {
     pub fn collect_inspector_records(&self) -> Vec<ModifierInspectorRecord> {
         self.inspector_metadata()
             .iter()
-            .map(|metadata| metadata.to_record())
+            .map(InspectorMetadata::to_record)
             .collect()
     }
 

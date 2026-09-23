@@ -22,8 +22,8 @@ fn main() {
             std::thread::sleep(Duration::from_millis(500));
 
             match robot.wait_for_idle() {
-                Ok(_) => println!("✓ App ready\n"),
-                Err(e) => println!("Note: {}\n", e),
+                Ok(()) => println!("✓ App ready\n"),
+                Err(e) => println!("Note: {e}\n"),
             }
 
             println!("--- Navigating to Lazy List Tab ---");
@@ -94,9 +94,9 @@ fn main() {
             match (pos_after_fling1, pos_after_scroll2) {
                 (Some(p1), Some(p2)) => {
                     let delta = (p2 - p1).abs();
-                    println!("    Item 10 after fling 1: Y={:.1}", p1);
-                    println!("    Item 10 after scroll 2: Y={:.1}", p2);
-                    println!("    Delta: {:.1}px", delta);
+                    println!("    Item 10 after fling 1: Y={p1:.1}");
+                    println!("    Item 10 after scroll 2: Y={p2:.1}");
+                    println!("    Delta: {delta:.1}px");
 
                     if delta < 100.0 {
                         println!("\n  ✓ PASS: Scroll position persisted correctly");

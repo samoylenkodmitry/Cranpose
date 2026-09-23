@@ -134,7 +134,7 @@ fn set_android_ime_density(density: f32) {
 }
 
 fn set_android_ime_bottom_px(bottom_px: i32) -> bool {
-    let density = ANDROID_IME_DENSITY.with(|cell| cell.get());
+    let density = ANDROID_IME_DENSITY.with(Cell::get);
     let bottom = (bottom_px.max(0) as f32) / density;
     let insets = cranpose_ui::EdgeInsets {
         bottom,
@@ -708,7 +708,7 @@ fn get_display_density(app: &android_activity::AndroidApp) -> f32 {
     let config = app.config();
     let density_dpi = config.density();
 
-    density_dpi.map(|dpi| dpi as f32 / 160.0).unwrap_or(2.0)
+    density_dpi.map_or(2.0, |dpi| dpi as f32 / 160.0)
 }
 
 fn surface_inset_px(app: &android_activity::AndroidApp) -> (f64, f64) {
@@ -810,7 +810,7 @@ fn render_once(
                     .renderer()
                     .render_surface_texture(&frame.texture, &view, width, height)
             {
-                log::error!("Render error: {:?}", e);
+                log::error!("Render error: {e:?}");
             }
 
             timings.after_render_ns = telemetry.now();
@@ -1454,8 +1454,9 @@ fn dispatch_registered_android_surface_size_request(
 
     let position = overlay_options
         .filter(|_| request.position_revision == 0)
-        .map(|options| Point::new(options.x as f32, options.y as f32))
-        .unwrap_or(request.position);
+        .map_or(request.position, |options| {
+            Point::new(options.x as f32, options.y as f32)
+        });
     request.state.mark_pending(request.size);
     match dispatch_android_surface_size_request(
         app,
@@ -1540,7 +1541,7 @@ fn android_activity_in_multi_window_mode(app: &android_activity::AndroidApp) -> 
             jni_sig!("()Z"),
             &[],
         )
-        .and_then(|value| value.z())
+        .and_then(jni::JValueOwned::z)
         .map_err(|error| {
             clear_pending_android_jni_exception(env);
             format!("failed to query Android multi-window mode: {error}")
@@ -1572,7 +1573,7 @@ fn set_android_window_layout_px(
                     JValue::Int(height_px),
                 ],
             )
-            .and_then(|value| value.i())
+            .and_then(jni::JValueOwned::i)
             .map_err(|error| {
                 clear_pending_android_jni_exception(env);
                 format!("failed to request Android window layout: {error}")
@@ -1614,9 +1615,8 @@ pub fn run(
 
     crate::android_frame_telemetry::seed_env_from_system_properties();
 
-    let machine_parallelism = std::thread::available_parallelism()
-        .map(std::num::NonZeroUsize::get)
-        .unwrap_or(1);
+    let machine_parallelism =
+        std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
 
     cranpose_render_wgpu::pin_current_thread_to_fast_cores("producer");
 
@@ -1654,10 +1654,10 @@ pub fn run(
     let previous_hook = std::panic::take_hook();
     std::panic::set_hook(crate::android_panic_hook::chained_panic_hook(
         |panic_info| {
-            let location = panic_info
-                .location()
-                .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
-                .unwrap_or_else(|| "unknown location".to_string());
+            let location = panic_info.location().map_or_else(
+                || "unknown location".to_string(),
+                |l| format!("{}:{}:{}", l.file(), l.line(), l.column()),
+            );
             let message = panic_info
                 .payload()
                 .downcast_ref::<&str>()
@@ -1790,7 +1790,7 @@ pub fn run(
         let offscreen_pending_ui = offscreen
             && app_shell
                 .as_ref()
-                .is_some_and(|shell| shell.has_pending_ui());
+                .is_some_and(cranpose_app_shell::AppShell::has_pending_ui);
         let offscreen_timeout = next_offscreen_update.map(duration_until_frame_deadline);
         let accessibility_flush_timeout = accessibility_policy
             .wake_deadline()
@@ -1885,10 +1885,7 @@ pub fn run(
                                 let (input_offset_x, input_offset_y) =
                                     android_platform.input_surface_offset_px();
                                 log::info!(
-                                    "Display density: {:.2}x, input surface offset: ({:.1}, {:.1}) px",
-                                    density,
-                                    input_offset_x,
-                                    input_offset_y
+                                    "Display density: {density:.2}x, input surface offset: ({input_offset_x:.1}, {input_offset_y:.1}) px"
                                 );
 
                                 match initialize_android_rendering_with_backend_fallback(
@@ -1913,12 +1910,7 @@ pub fn run(
                                         let width_dp = current_host_window_size.width;
                                         let height_dp = current_host_window_size.height;
                                         log::info!(
-                                            "Set viewport to {:.1}x{:.1} dp ({}x{} px at {:.2}x density)",
-                                            width_dp,
-                                            height_dp,
-                                            width,
-                                            height,
-                                            density
+                                            "Set viewport to {width_dp:.1}x{height_dp:.1} dp ({width}x{height} px at {density:.2}x density)"
                                         );
 
                                         if let Some(requested) = initial_host_window_size.take() {
@@ -1988,12 +1980,7 @@ pub fn run(
                                 let (input_offset_x, input_offset_y) =
                                     android_platform.input_surface_offset_px();
                                 log::info!(
-                                    "Window resized to {}x{} at {:.2}x density with input surface offset ({:.1}, {:.1}) px",
-                                    width,
-                                    height,
-                                    density,
-                                    input_offset_x,
-                                    input_offset_y
+                                    "Window resized to {width}x{height} at {density:.2}x density with input surface offset ({input_offset_x:.1}, {input_offset_y:.1}) px"
                                 );
 
                                 if let (Some(resources), Some(shell)) =
@@ -2032,10 +2019,7 @@ pub fn run(
                         let (input_offset_x, input_offset_y) =
                             android_platform.input_surface_offset_px();
                         log::info!(
-                            "Content rect changed; input surface offset: ({:.1}, {:.1}) px at {:.2}x density",
-                            input_offset_x,
-                            input_offset_y,
-                            density
+                            "Content rect changed; input surface offset: ({input_offset_x:.1}, {input_offset_y:.1}) px at {density:.2}x density"
                         );
 
                         if let Some(shell) = &mut app_shell
@@ -2067,8 +2051,7 @@ pub fn run(
                         );
                         let reopened = app_shell
                             .as_mut()
-                            .map(|shell| shell.notify_app_resumed())
-                            .unwrap_or(false);
+                            .is_some_and(cranpose_app_shell::AppShell::notify_app_resumed);
                         if !reopened {
                             ime_session.ensure_hidden();
                         }
@@ -2209,10 +2192,7 @@ pub fn run(
                                     actual_size,
                                 );
                                 log::info!(
-                                    "Android overlay surface ready at {}x{} px ({:.2}x density)",
-                                    width,
-                                    height,
-                                    density
+                                    "Android overlay surface ready at {width}x{height} px ({density:.2}x density)"
                                 );
                             }
                             Err(error) => {

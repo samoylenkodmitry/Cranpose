@@ -208,8 +208,7 @@ fn a_capsule_rim_reads_as_a_continuous_line_around_its_cap() {
         Ok(renderer) => renderer,
         Err(err) => {
             eprintln!(
-                "skipping rim continuity assertions because headless WGPU init failed: {}",
-                err
+                "skipping rim continuity assertions because headless WGPU init failed: {err}"
             );
             return;
         }

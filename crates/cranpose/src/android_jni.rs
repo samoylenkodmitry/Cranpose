@@ -74,7 +74,7 @@ pub(crate) fn load_cranpose_java_class<'local>(
             jni_sig!("()Ljava/lang/ClassLoader;"),
             &[],
         )
-        .and_then(|value| value.l())
+        .and_then(jni::JValueOwned::l)
         .and_then(|class_loader| {
             env.call_method(
                 &class_loader,
@@ -82,13 +82,12 @@ pub(crate) fn load_cranpose_java_class<'local>(
                 jni_sig!("(Ljava/lang/String;)Ljava/lang/Class;"),
                 &[JValue::Object(&class_name_string)],
             )
-            .and_then(|value| value.l())
+            .and_then(jni::JValueOwned::l)
         })
         .map_err(|error| {
             clear_pending_android_jni_exception(env);
             format!(
-                "failed to load Android helper class {}; include cranpose/android/java in the Android source set: {error}",
-                class_name
+                "failed to load Android helper class {class_name}; include cranpose/android/java in the Android source set: {error}"
             )
         })?;
 

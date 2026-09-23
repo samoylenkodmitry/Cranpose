@@ -623,7 +623,7 @@ where
     /// Offers this surface's pointer icon to the platform again. See
     /// [`AppShell::refresh_pointer_icon`].
     pub fn refresh_pointer_icon(&self) {
-        self.surface().pointer_icon.refresh()
+        self.surface().pointer_icon.refresh();
     }
 
     /// Installs the platform text input for the window showing this

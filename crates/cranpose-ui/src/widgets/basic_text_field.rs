@@ -682,7 +682,7 @@ fn SelectionHandles(
                 Some(HandleKind::SelectionStart) => {
                     (start_tip.x, start_tip.y - metrics.glyph_box.1)
                 }
-                Some(HandleKind::SelectionEnd) | Some(HandleKind::Cursor) => {
+                Some(HandleKind::SelectionEnd | HandleKind::Cursor) => {
                     (end_tip.x, end_tip.y - metrics.glyph_box.1)
                 }
                 None => (
@@ -1399,7 +1399,7 @@ mod tests {
                     target_tip_y,
                 );
             }
-        })
+        });
     }
 
     fn text_values(scene: &crate::renderer::RecordedRenderScene) -> Vec<String> {

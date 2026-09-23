@@ -22,8 +22,8 @@ fn main() {
             std::thread::sleep(Duration::from_millis(500));
 
             match robot.wait_for_idle() {
-                Ok(_) => println!("✓ App ready\n"),
-                Err(e) => println!("Note: {}\n", e),
+                Ok(()) => println!("✓ App ready\n"),
+                Err(e) => println!("Note: {e}\n"),
             }
 
             let mut all_passed = true;
@@ -60,7 +60,7 @@ fn main() {
             if let Some((x, y, w, h)) = find_button_in_semantics(&robot, "Lazy List") {
                 let cx = x + w / 2.0;
                 let cy = y + h / 2.0;
-                println!("  Found 'Lazy List' tab at ({:.1}, {:.1})", cx, cy);
+                println!("  Found 'Lazy List' tab at ({cx:.1}, {cy:.1})");
 
                 let _ = robot.click(cx, cy);
                 std::thread::sleep(Duration::from_millis(500));
@@ -74,7 +74,7 @@ fn main() {
             println!("--- Step 2: Verify initial item order ---");
 
             let initial_items = get_visible_items(&robot);
-            println!("  Initial visible items: {:?}", initial_items);
+            println!("  Initial visible items: {initial_items:?}");
 
             if !initial_items.is_empty() {
                 let mut is_sequential = true;
@@ -107,13 +107,10 @@ fn main() {
             }) {
                 let cx = x + w / 2.0;
                 let cy = y + h / 2.0;
-                println!(
-                    "  Found viewport at ({:.1}, {:.1}) size ({:.1}x{:.1})",
-                    x, y, w, h
-                );
+                println!("  Found viewport at ({x:.1}, {y:.1}) size ({w:.1}x{h:.1})");
 
                 for scroll_num in 1..=5 {
-                    println!("  Scroll #{}: wheel at ({:.1}, {:.1})", scroll_num, cx, cy);
+                    println!("  Scroll #{scroll_num}: wheel at ({cx:.1}, {cy:.1})");
 
                     let _ = robot.mouse_move(cx, cy);
                     std::thread::sleep(Duration::from_millis(50));
@@ -137,7 +134,7 @@ fn main() {
                     let cx = x + w / 2.0;
                     let cy = y + 100.0;
 
-                    println!("  Using item position for scroll at ({:.1}, {:.1})", cx, cy);
+                    println!("  Using item position for scroll at ({cx:.1}, {cy:.1})");
 
                     for _ in 0..5 {
                         let _ = robot.mouse_move(cx, cy);
@@ -158,7 +155,7 @@ fn main() {
             println!("--- Step 4: Verify item order after scroll ---");
 
             let scrolled_items = get_visible_items(&robot);
-            println!("  Visible items after scroll: {:?}", scrolled_items);
+            println!("  Visible items after scroll: {scrolled_items:?}");
 
             if scrolled_items.is_empty() {
                 println!("  ✗ FAIL: No items visible after scroll!\n");
@@ -195,7 +192,7 @@ fn main() {
                 } else {
                     println!("  ✗ FAIL: Item order is CORRUPTED!");
                     for issue in &order_issues {
-                        println!("    - {}", issue);
+                        println!("    - {issue}");
                     }
                     println!("    BUG CONFIRMED: LazyList shows items in wrong order.\n");
                     all_passed = false;

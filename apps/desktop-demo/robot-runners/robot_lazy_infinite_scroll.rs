@@ -25,8 +25,8 @@ fn main() {
              }
 
              let (_, y1, _, _) = find_text_in_semantics(&robot, "Item 1").expect("Item 1 missing");
-             println!("Item 1 y={:.1}", y1);
-             assert!((y1 - 64.2).abs() < 5.0, "Item 1 at y={:.1}, expected ~64.2", y1);
+             println!("Item 1 y={y1:.1}");
+             assert!((y1 - 64.2).abs() < 5.0, "Item 1 at y={y1:.1}, expected ~64.2");
 
              println!("--- Phase 2: Jump to 99,990 ---");
              let (bx, by, bw, bh) = find_button_in_semantics(&robot, "Jump 1M").expect("Jump button missing");
@@ -39,13 +39,11 @@ fn main() {
              }
 
              let (_, y_next, _, _) = find_text_in_semantics(&robot, "Item 99991").expect("Item 99991 missing");
-             println!("Item 99991 y={:.1}", y_next);
+             println!("Item 99991 y={y_next:.1}");
 
-             assert!((y_next - 64.2).abs() < 5.0, "Item 99991 at y={:.1}, expected ~64.2", y_next);
+             assert!((y_next - 64.2).abs() < 5.0, "Item 99991 at y={y_next:.1}, expected ~64.2");
 
-             if find_text_in_semantics(&robot, "Item 1").is_some() {
-                 panic!("Item 1 should be gone!");
-             }
+             assert!(!find_text_in_semantics(&robot, "Item 1").is_some(), "Item 1 should be gone!");
 
              robot.exit().ok();
         })
@@ -90,7 +88,7 @@ fn main() {
                                             .background(color),
                                         BoxSpec::new().content_alignment(Alignment::CENTER),
                                         move || {
-                                            Text(format!("Item {}", index), Modifier::default(), TextStyle::default());
+                                            Text(format!("Item {index}"), Modifier::default(), TextStyle::default());
                                         }
                                     );
                                 });

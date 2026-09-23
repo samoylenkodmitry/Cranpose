@@ -174,7 +174,7 @@ impl Harness {
                 .list_state
                 .borrow()
                 .as_ref()
-                .cloned()
+                .copied()
                 .expect("list state captured");
             self.shell
                 .debug_enter_app_context(|| state.dispatch_scroll_delta(scroll_delta));
@@ -196,7 +196,7 @@ impl Harness {
                 .list_state
                 .borrow()
                 .as_ref()
-                .cloned()
+                .copied()
                 .expect("list state captured");
             self.shell
                 .debug_enter_app_context(|| state.dispatch_scroll_delta(scroll_delta));
@@ -434,7 +434,7 @@ fn deferred_frame(
     let (_lock, renderer) = support::headless_renderer_parts().expect("headless renderer");
     let root_key = location_key(file!(), line!(), column!());
     let mut shell = AppShell::new(renderer, root_key, move || {
-        DeferredContentUnderGlass(overlap, span_both, strategy)
+        DeferredContentUnderGlass(overlap, span_both, strategy);
     });
     shell.set_viewport(FRAME_WIDTH as f32, FRAME_HEIGHT as f32);
     shell.set_buffer_size(FRAME_WIDTH, FRAME_HEIGHT);
@@ -638,7 +638,7 @@ fn scrolled_column_frame(shadowed: bool) -> (cranpose_render_wgpu::CapturedFrame
     let scroll = Rc::new(std::cell::Cell::new(0.0f32));
     let scroll_for_app = Rc::clone(&scroll);
     let mut shell = AppShell::new(renderer, root_key, move || {
-        ShadowedGlassColumn(shadowed, scroll_for_app.get())
+        ShadowedGlassColumn(shadowed, scroll_for_app.get());
     });
     shell.set_viewport(FRAME_WIDTH as f32, FRAME_HEIGHT as f32);
     shell.set_buffer_size(FRAME_WIDTH, FRAME_HEIGHT);

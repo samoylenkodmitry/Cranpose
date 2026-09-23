@@ -81,10 +81,7 @@ fn test_pointer_input_async_handler_is_present() {
         "Should have at least 2 nodes (Column and Text)"
     );
 
-    println!(
-        "✓ Pointer input composition created successfully with {} nodes",
-        node_count
-    );
+    println!("✓ Pointer input composition created successfully with {node_count} nodes");
 }
 
 #[composable]
@@ -154,10 +151,7 @@ fn test_button_with_draw_modifiers_is_clickable() {
         "Should have at least 3 nodes (Column, Text, Button)"
     );
 
-    println!(
-        "✓ Button with draw modifiers created successfully with {} nodes",
-        node_count
-    );
+    println!("✓ Button with draw modifiers created successfully with {node_count} nodes");
 }
 
 #[composable]

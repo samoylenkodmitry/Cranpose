@@ -917,7 +917,7 @@ fn a_page_torn_into_a_new_window_root_lays_out_below_that_windows_strip() {
                         Modifier::empty().window_root(Rc::clone(&first)),
                         BoxSpec::default(),
                         move || {
-                            cranpose_ui::widgets::PopupHost(move || TornWindowChrome(shown_first))
+                            cranpose_ui::widgets::PopupHost(move || TornWindowChrome(shown_first));
                         },
                     );
                     if is_torn.get() {

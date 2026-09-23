@@ -8,7 +8,7 @@ use std::{
     marker::PhantomData,
     ops::Deref,
     rc::{Rc, Weak as RcWeak},
-    sync::{Arc, Mutex, MutexGuard, Weak},
+    sync::{Arc, Mutex, MutexGuard, PoisonError, Weak},
 };
 
 use crate::{
@@ -155,11 +155,11 @@ impl StateRecord {
         &self,
         source: &StateRecord,
     ) -> Result<(), StateRecordValueError> {
-        let cloned_value = source.try_with_value(|value: &T| value.clone()).ok_or(
-            StateRecordValueError::MissingOrWrongType {
+        let cloned_value = source
+            .try_with_value(|value: &T| value.clone())
+            .ok_or_else(|| StateRecordValueError::MissingOrWrongType {
                 expected: std::any::type_name::<T>(),
-            },
-        )?;
+            })?;
         self.replace_value(cloned_value);
         Ok(())
     }
@@ -237,8 +237,7 @@ pub(crate) fn readable_record_for(
         if record_is_valid_for(&record, snapshot_id, invalid) {
             let replace = best
                 .as_ref()
-                .map(|current| current.snapshot_id() < record.snapshot_id())
-                .unwrap_or(true);
+                .is_none_or(|current| current.snapshot_id() < record.snapshot_id());
             if replace {
                 best = Some(Rc::clone(&record));
             }
@@ -273,9 +272,10 @@ pub(crate) fn used_locked(head: &Rc<StateRecord>) -> Option<Rc<StateRecord>> {
     let mut current = Some(Rc::clone(head));
     let mut valid_record: Option<Rc<StateRecord>> = None;
 
-    let reuse_limit = lowest_pinned_snapshot()
-        .map(|lowest| lowest.saturating_sub(1))
-        .unwrap_or_else(|| allocate_record_id().saturating_sub(1));
+    let reuse_limit = lowest_pinned_snapshot().map_or_else(
+        || allocate_record_id().saturating_sub(1),
+        |lowest| lowest.saturating_sub(1),
+    );
 
     let invalid = SnapshotIdSet::EMPTY;
 
@@ -617,26 +617,22 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
         new_value: &T,
     ) -> bool {
         self.readable_for(snapshot_id, invalid)
-            .map(|record| {
+            .is_some_and(|record| {
                 record.with_value(|current: &T| self.policy.equivalent(current, new_value))
             })
-            .unwrap_or(false)
     }
 
     fn writable_record(&self, snapshot_id: SnapshotId, invalid: &SnapshotIdSet) -> Rc<StateRecord> {
-        let readable = match self.readable_for(snapshot_id, invalid) {
-            Some(record) => record,
-            None => {
-                let current_head = self.head.clone_head();
-                let refreshed = readable_record_for(&current_head, snapshot_id, invalid);
-                let source = refreshed.unwrap_or_else(|| current_head.clone());
+        let Some(readable) = self.readable_for(snapshot_id, invalid) else {
+            let current_head = self.head.clone_head();
+            let refreshed = readable_record_for(&current_head, snapshot_id, invalid);
+            let source = refreshed.unwrap_or_else(|| current_head.clone());
 
-                let cloned_value = source.with_value(|value: &T| value.clone());
-                let new_head = StateRecord::new(snapshot_id, cloned_value, Some(current_head));
-                self.head.replace(new_head.clone());
-                self.assert_chain_integrity("writable_record(recover)", Some(snapshot_id));
-                return new_head;
-            }
+            let cloned_value = source.with_value(|value: &T| value.clone());
+            let new_head = StateRecord::new(snapshot_id, cloned_value, Some(current_head));
+            self.head.replace(new_head.clone());
+            self.assert_chain_integrity("writable_record(recover)", Some(snapshot_id));
+            return new_head;
         };
 
         if readable.snapshot_id() == snapshot_id {
@@ -775,19 +771,17 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
     fn lock_weak_self(&self) -> MutexGuard<'_, Option<Weak<Self>>> {
         self.weak_self
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .unwrap_or_else(PoisonError::into_inner)
     }
 
     fn lock_apply_observers(&self) -> MutexGuard<'_, Vec<Box<dyn Fn() + 'static>>> {
         self.apply_observers
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .unwrap_or_else(PoisonError::into_inner)
     }
 
     fn upgrade_self(&self) -> Option<Arc<Self>> {
-        self.lock_weak_self()
-            .as_ref()
-            .and_then(|weak| weak.upgrade())
+        self.lock_weak_self().as_ref().and_then(Weak::upgrade)
     }
 
     #[inline]
@@ -841,14 +835,13 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
                     return false;
                 }
 
-                if global.has_pending_children() {
-                    panic!(
-                        "SnapshotMutableState::set attempted global write while pending children {:?} exist (state {:?}, snapshot_id={})",
-                        global.pending_children(),
-                        self.id,
-                        snapshot_id
-                    );
-                }
+                assert!(
+                    !global.has_pending_children(),
+                    "SnapshotMutableState::set attempted global write while pending children {:?} exist (state {:?}, snapshot_id={})",
+                    global.pending_children(),
+                    self.id,
+                    snapshot_id
+                );
 
                 let mut written_state: Option<Arc<dyn StateObject>> = None;
                 if let Some(state) = self.upgrade_self() {
@@ -1285,7 +1278,7 @@ impl<T: Clone + 'static> Drop for MutableStateInner<T> {
 
 fn register_current_state_scope<T: Clone + 'static>(inner: &MutableStateInner<T>) {
     let Some(Some(scope)) =
-        with_current_composer_opt(|composer| composer.current_state_invalidation_scope())
+        with_current_composer_opt(super::composer::Composer::current_state_invalidation_scope)
     else {
         return;
     };
@@ -1446,7 +1439,7 @@ impl<T: Clone + 'static> State<T> {
         self.with_inner(|inner| {
             inner
                 .state
-                .subscriber_callback(callback, inner.has_subscribers())
+                .subscriber_callback(callback, inner.has_subscribers());
         });
     }
 
@@ -1765,7 +1758,7 @@ impl<T: Clone + 'static> SnapshotStateList<T> {
     }
 
     pub fn len(&self) -> usize {
-        self.state.with(|values| values.len())
+        self.state.with(Vec::len)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -1773,7 +1766,7 @@ impl<T: Clone + 'static> SnapshotStateList<T> {
     }
 
     pub fn to_vec(&self) -> Vec<T> {
-        self.state.with(|values| values.clone())
+        self.state.with(Clone::clone)
     }
 
     pub fn iter(&self) -> Vec<T> {
@@ -1821,7 +1814,7 @@ impl<T: Clone + 'static> SnapshotStateList<T> {
     }
 
     pub fn pop(&self) -> Option<T> {
-        self.state.update(|values| values.pop())
+        self.state.update(Vec::pop)
     }
 
     pub fn clear(&self) {
@@ -1886,11 +1879,11 @@ where
     }
 
     pub fn len(&self) -> usize {
-        self.state.with(|map| map.len())
+        self.state.with(std::collections::HashMap::len)
     }
 
     pub fn is_empty(&self) -> bool {
-        self.state.with(|map| map.is_empty())
+        self.state.with(std::collections::HashMap::is_empty)
     }
 
     pub fn contains_key(&self, key: &K) -> bool {
@@ -1902,7 +1895,7 @@ where
     }
 
     pub fn to_hash_map(&self) -> HashMap<K, V> {
-        self.state.with(|map| map.clone())
+        self.state.with(Clone::clone)
     }
 
     pub fn insert(&self, key: K, value: V) -> Option<V> {

@@ -56,7 +56,7 @@ impl Haptics for IosHaptics {
             .iter()
             .copied()
             .find(|level| *level > 0)
-            .or(Some(pattern.peak_amplitude()))
+            .or_else(|| Some(pattern.peak_amplitude()))
             .filter(|level| *level > 0)
         else {
             return;

@@ -106,7 +106,7 @@ fn progress_tab(
         ColumnSpec::default(),
         move || {
             Text(
-                format!("Progress {:.2}", progress_value),
+                format!("Progress {progress_value:.2}"),
                 Modifier::empty().padding(2.0),
                 TextStyle::default(),
             );
@@ -461,7 +461,7 @@ fn restored_wrapped_counter_tab_updates_after_mixed_tab_walk() {
                     active_tab,
                     Rc::clone(&restored_counter),
                     Rc::clone(&restored_pointer),
-                )
+                );
             }
         })
         .expect("initial render");
@@ -701,7 +701,7 @@ fn layout_two_child_stats(composition: &mut Composition<MemoryApplier>) -> (usiz
     let mut stats = Vec::new();
     let result = count(layout.root(), &mut stats);
     if cfg!(debug_assertions) {
-        eprintln!("layout stats: {:?}", stats);
+        eprintln!("layout stats: {stats:?}");
     }
     result
 }
@@ -1034,9 +1034,7 @@ fn tab_switching_node_vec_does_not_grow_unboundedly() {
     );
     assert!(
         final_slots <= baseline_slots + 10,
-        "slot count grew from {} to {} over 50 cycles - indicates unbounded slot growth",
-        baseline_slots,
-        final_slots,
+        "slot count grew from {baseline_slots} to {final_slots} over 50 cycles - indicates unbounded slot growth",
     );
 }
 

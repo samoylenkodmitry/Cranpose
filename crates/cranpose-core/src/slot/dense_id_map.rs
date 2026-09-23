@@ -76,7 +76,7 @@ impl<T> DenseIdMap<T> {
         let retained = self
             .entries
             .iter()
-            .rposition(|entry| entry.is_some())
+            .rposition(std::option::Option::is_some)
             .map_or(0, |index| index + 1);
         self.entries.truncate(retained);
     }

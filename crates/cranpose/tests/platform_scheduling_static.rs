@@ -4347,7 +4347,7 @@ fn a_test_audits_a_screen_and_a_robot_prints_what_a_reader_speaks() {
     }
     let demo_test = workspace_source("apps/desktop-demo/tests/accessibility_audit.rs");
     assert!(
-        demo_test.contains("for info in DEMO_TAB_INFO.iter()")
+        demo_test.contains("for info in &DEMO_TAB_INFO")
             && demo_test.contains("audit_accessibility(&placed)"),
         "every demo tab runs under the audit"
     );

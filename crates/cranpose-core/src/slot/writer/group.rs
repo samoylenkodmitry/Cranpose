@@ -137,8 +137,7 @@ impl SlotWriteSession<'_> {
         let siblings = self.table.direct_child_range(parent_anchor);
         let insert_index = siblings.start();
         log::error!(
-            "slot writer recovered malformed group start for key {:?}; rejected_anchor={rejected_anchor:?} parent={parent_anchor:?} fallback_child_index={insert_index}",
-            key
+            "slot writer recovered malformed group start for key {key:?}; rejected_anchor={rejected_anchor:?} parent={parent_anchor:?} fallback_child_index={insert_index}"
         );
         self.state.advance_parent_after_child(insert_index);
         let fallback_cursor = ChildCursor::new(parent_anchor, insert_index);
@@ -160,8 +159,7 @@ impl SlotWriteSession<'_> {
         }
 
         log::error!(
-            "slot writer could not recover malformed group start for key {:?}; returning inert group handle",
-            key
+            "slot writer could not recover malformed group start for key {key:?}; returning inert group handle"
         );
         GroupStart {
             group: ActiveGroupId::new(0, 0),
@@ -206,20 +204,18 @@ impl SlotWriteSession<'_> {
 
         let search_start = self
             .table
-            .repair_group_subtree_range_at_index(cursor.index(), "later sibling search start")
-            .map(|range| range.as_group_range().end())
-            .unwrap_or_else(|| {
+            .repair_group_subtree_range_at_index(cursor.index(), "later sibling search start").map_or_else(|| {
                 let fallback = cursor.index().saturating_add(1).min(self.table.group_count());
                 log::error!(
-                    "slot writer could not repair expected child subtree at cursor {:?} before keyed sibling search; using fallback search start {fallback}",
-                    cursor
+                    "slot writer could not repair expected child subtree at cursor {cursor:?} before keyed sibling search; using fallback search start {fallback}"
                 );
                 fallback
-            });
+            }, |range| range.as_group_range().end());
         self.state
             .find_later_sibling(self.table, cursor.parent(), key, search_start)
-            .map(|root| ActiveChildResolution::MoveLaterSibling { root })
-            .unwrap_or(ActiveChildResolution::InsertNew)
+            .map_or(ActiveChildResolution::InsertNew, |root| {
+                ActiveChildResolution::MoveLaterSibling { root }
+            })
     }
 
     #[inline(always)]
@@ -330,10 +326,7 @@ impl SlotWriteSession<'_> {
             return;
         };
         let Some(group_index) = self.table.active_group_index(group_anchor) else {
-            log::error!(
-                "slot writer skip_group ignored stale group frame anchor {:?}",
-                group_anchor
-            );
+            log::error!("slot writer skip_group ignored stale group frame anchor {group_anchor:?}");
             return;
         };
         let subtree_len = self.repaired_group_subtree_len(group_index, "group skip cursor advance");
@@ -354,26 +347,22 @@ impl SlotWriteSession<'_> {
 
     fn repaired_group_subtree_len(&mut self, group_index: usize, operation: &'static str) -> usize {
         self.table
-            .repair_group_subtree_range_at_index(group_index, operation)
-            .map(|range| range.len())
-            .unwrap_or_else(|| {
+            .repair_group_subtree_range_at_index(group_index, operation).map_or_else(|| {
                 log::error!(
                     "slot writer could not repair subtree length for group index {group_index} during {operation}; advancing by the root group only"
                 );
                 1
-            })
+            }, super::super::ranges::SubtreeRange::len)
     }
 
     fn repaired_group_subtree_end(&mut self, group_index: usize, operation: &'static str) -> usize {
         self.table
-            .repair_group_subtree_range_at_index(group_index, operation)
-            .map(|range| range.as_group_range().end())
-            .unwrap_or_else(|| {
+            .repair_group_subtree_range_at_index(group_index, operation).map_or_else(|| {
                 let fallback_end = group_index.saturating_add(1).min(self.table.group_count());
                 log::error!(
                     "slot writer could not repair subtree end for group index {group_index} during {operation}; using fallback end {fallback_end}"
                 );
                 fallback_end
-            })
+            }, |range| range.as_group_range().end())
     }
 }

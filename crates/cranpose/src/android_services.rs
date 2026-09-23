@@ -182,7 +182,7 @@ impl BundledAssets for AndroidBundledAssets {
                     jni_sig!("(Ljava/lang/String;)[B"),
                     &[JValue::Object(path_object)],
                 )
-                .and_then(|value| value.l())
+                .and_then(jni::JValueOwned::l)
                 .map_err(|error| {
                     clear_pending_android_jni_exception(env);
                     error.to_string()
@@ -271,7 +271,7 @@ fn call_android_activity_int(
 ) -> i32 {
     with_android_activity_env(app, |env, activity| {
         env.call_method(&activity, method, jni_sig!("()I"), &[])
-            .and_then(|value| value.i())
+            .and_then(jni::JValueOwned::i)
             .map_err(|error| {
                 clear_pending_android_jni_exception(env);
                 error.to_string()
@@ -287,7 +287,7 @@ fn call_android_activity_bool(
 ) -> bool {
     with_android_activity_env(app, |env, activity| {
         env.call_method(&activity, method, jni_sig!("()Z"), &[])
-            .and_then(|value| value.z())
+            .and_then(jni::JValueOwned::z)
             .map_err(|error| {
                 clear_pending_android_jni_exception(env);
                 error.to_string()
@@ -369,7 +369,7 @@ fn read_launch_arguments(app: &android_activity::AndroidApp) -> LaunchArgs {
                 jni_sig!("()Ljava/lang/String;"),
                 &[],
             )
-            .and_then(|value| value.l())
+            .and_then(jni::JValueOwned::l)
             .map_err(|error| {
                 clear_pending_android_jni_exception(env);
                 format!("failed to read the Android launch arguments: {error}")
@@ -871,7 +871,7 @@ impl cranpose_ui::clipboard_session::PlatformClipboard for AndroidClipboard {
                     jni_sig!("()Ljava/lang/String;"),
                     &[],
                 )
-                .and_then(|value| value.l())
+                .and_then(jni::JValueOwned::l)
                 .map_err(|error| {
                     clear_pending_android_jni_exception(env);
                     error.to_string()

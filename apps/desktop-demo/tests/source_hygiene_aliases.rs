@@ -70,7 +70,8 @@ fn bare_identifier_alias(line: &str) -> Option<(&str, &str)> {
     }
 
     let (lhs, rhs) = body.split_once('=')?;
-    let lhs = lhs.trim().strip_prefix("mut ").unwrap_or(lhs.trim());
+    let lhs = lhs.trim();
+    let lhs = lhs.strip_prefix("mut ").unwrap_or(lhs);
     let rhs = rhs.trim();
     if lhs.starts_with('_') || rhs.starts_with('_') {
         return None;

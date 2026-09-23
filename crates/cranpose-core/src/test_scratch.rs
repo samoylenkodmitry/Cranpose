@@ -26,10 +26,10 @@ pub fn test_scratch_dir(manifest_dir: &str, tag: &str) -> PathBuf {
     static COUNTER: AtomicU32 = AtomicU32::new(0);
     let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
     let manifest = PathBuf::from(manifest_dir);
-    let owner = manifest
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "workspace".to_string());
+    let owner = manifest.file_name().map_or_else(
+        || "workspace".to_string(),
+        |name| name.to_string_lossy().into_owned(),
+    );
     let path = workspace_root(&manifest)
         .join("target/test-output")
         .join(owner)

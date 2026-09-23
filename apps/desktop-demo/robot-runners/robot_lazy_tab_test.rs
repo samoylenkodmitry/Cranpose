@@ -19,7 +19,7 @@ fn main() {
                     return true;
                 }
                 if let Some((x, y, w, h)) = find_text_in_semantics(&robot, name) {
-                    println!("  Found text/button '{}' at ({:.1}, {:.1})", name, x, y);
+                    println!("  Found text/button '{name}' at ({x:.1}, {y:.1})");
                     robot.click(x + w / 2.0, y + h / 2.0).ok();
                     std::thread::sleep(Duration::from_millis(200));
                     return true;
@@ -34,7 +34,7 @@ fn main() {
             let find_visible_items = || -> Vec<usize> {
                 let mut items = Vec::new();
                 for i in 0..30 {
-                    let item_text = format!("Item #{}", i);
+                    let item_text = format!("Item #{i}");
                     if find_text(&item_text).is_some() {
                         items.push(i);
                     }
@@ -42,7 +42,7 @@ fn main() {
                 for offset in 0..20 {
                     let mid = usize::MAX / 2;
                     let idx = mid.saturating_sub(10).saturating_add(offset);
-                    let item_text = format!("Item #{}", idx);
+                    let item_text = format!("Item #{idx}");
                     if find_text(&item_text).is_some() {
                         items.push(idx);
                     }
@@ -52,9 +52,9 @@ fn main() {
 
             let get_item_count_text = || -> Option<String> {
                 for count in [100usize, 10, 1000] {
-                    let text = format!("Virtualized list with {} items", count);
+                    let text = format!("Virtualized list with {count} items");
                     if find_text(&text).is_some() {
-                        return Some(format!("{} items", count));
+                        return Some(format!("{count} items"));
                     }
                 }
                 let huge_text = format!("Virtualized list with {} items", usize::MAX);
@@ -84,13 +84,13 @@ fn main() {
             println!("\n=== PHASE 1: Initial State ===");
 
             if let Some(count_text) = get_item_count_text() {
-                println!("  Count text: {}", count_text);
+                println!("  Count text: {count_text}");
             } else {
                 println!("  ✗ Count text not found");
             }
 
             let initial_items = find_visible_items();
-            println!("  Visible items: {:?}", initial_items);
+            println!("  Visible items: {initial_items:?}");
             println!("  Total visible: {}", initial_items.len());
 
             println!("\n=== PHASE 2: Scroll List ===");
@@ -98,13 +98,13 @@ fn main() {
             if let Some((_, y, _, _)) = find_text("Item #0") {
                 let start_y = y + 100.0;
                 let end_y = y - 100.0;
-                println!("  Scrolling from y={:.0} to y={:.0}", start_y, end_y);
+                println!("  Scrolling from y={start_y:.0} to y={end_y:.0}");
                 robot.drag(400.0, start_y, 400.0, end_y).ok();
                 std::thread::sleep(Duration::from_millis(300));
             }
 
             let after_scroll_items = find_visible_items();
-            println!("  After scroll visible: {:?}", after_scroll_items);
+            println!("  After scroll visible: {after_scroll_items:?}");
 
             if after_scroll_items != initial_items {
                 println!("  ✓ Scroll changed visible items");
@@ -127,7 +127,7 @@ fn main() {
                 }
 
                 if let Some(count_text) = get_item_count_text() {
-                    println!("  Count text after MAX: {}", count_text);
+                    println!("  Count text after MAX: {count_text}");
                 }
 
                 let max_items = find_visible_items();
@@ -154,7 +154,7 @@ fn main() {
                 }
 
                 if let Some(count_text) = get_item_count_text() {
-                    println!("  Count text after jump: {}", count_text);
+                    println!("  Count text after jump: {count_text}");
                 }
 
                 let middle_items = find_visible_items();
@@ -169,7 +169,7 @@ fn main() {
                     }
                 }
                 if found_middle {
-                    println!("  ✓ Jumped to middle: visible near index {}", mid);
+                    println!("  ✓ Jumped to middle: visible near index {mid}");
                 } else if middle_items.is_empty() {
                     println!("  ⚠️ No items visible (may need to check semantics)");
                 } else {

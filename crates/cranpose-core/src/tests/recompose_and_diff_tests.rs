@@ -488,7 +488,7 @@ fn insert_and_remove_emit_expected_ops() {
 
     applier
         .with_node(parent_id, |node: &mut RecordingNode| {
-            node.operations.clear()
+            node.operations.clear();
         })
         .expect("clear operations");
 

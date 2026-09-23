@@ -83,10 +83,8 @@ impl GlassBackdropScrollRun<'_> {
             collect_receipt_subtitles(root, &mut receipts);
         }
         receipts.sort_by(|a, b| a.1.partial_cmp(&b.1).expect("finite y"));
-        let anchor_text = receipts
-            .get(RECEIPT_ANCHOR_SKIP_FROM_TOP)
-            .map(|(text, _)| text.clone())
-            .unwrap_or_else(|| {
+        let anchor_text = receipts.get(RECEIPT_ANCHOR_SKIP_FROM_TOP).map_or_else(
+            || {
                 robot_exit::fail(
                     robot,
                     &format!(
@@ -95,7 +93,9 @@ impl GlassBackdropScrollRun<'_> {
                         receipts.len()
                     ),
                 )
-            });
+            },
+            |(text, _)| text.clone(),
+        );
         println!(
             "tracking content anchor: {anchor_text:?} (of {} visible)",
             receipts.len()

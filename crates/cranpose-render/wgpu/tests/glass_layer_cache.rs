@@ -106,10 +106,12 @@ fn GlassScene(
                         LazyColumnSpec::new()
                             .vertical_arrangement(LinearArrangement::SpacedBy(ROW_SPACING)),
                         move |scope| {
-                            scope
-                                .items(LazyItems::new(40).key(|i: usize| i as u64), move |index| {
-                                    GlassRow(index, first_row_warm)
-                                });
+                            scope.items(
+                                LazyItems::new(40).key(|i: usize| i as u64),
+                                move |index| {
+                                    GlassRow(index, first_row_warm);
+                                },
+                            );
                         },
                     );
                     GlassOverlay(pulse, drift);

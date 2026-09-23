@@ -35,12 +35,12 @@ fn passthrough_wgsl() -> String {
     format!(
         "{}\n{}",
         RUNTIME_SHADER_PRELUDE_WGSL,
-        r#"@fragment
+        r"@fragment
 fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let texel = vec2<i32>(input.uv * vec2<f32>(textureDimensions(input_texture)));
     return textureLoad(input_texture, texel, 0);
 }
-"#
+"
     )
 }
 
@@ -568,12 +568,12 @@ fn tint_wgsl() -> String {
     format!(
         "{}\n{}",
         RUNTIME_SHADER_PRELUDE_WGSL,
-        r#"@fragment
+        r"@fragment
 fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let source = textureSample(input_texture, input_sampler, input.uv);
     return vec4<f32>(source.rgb * 0.5 + vec3<f32>(0.5, 0.0, 0.0), 1.0);
 }
-"#
+"
     )
 }
 

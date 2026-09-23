@@ -758,7 +758,7 @@ pub fn liquid_menu_trigger_input(
     on_open: impl Fn() + 'static,
 ) -> Modifier {
     let gate = remember(|| {
-        let runtime = cranpose_core::with_current_composer(|composer| composer.runtime_handle());
+        let runtime = cranpose_core::with_current_composer(cranpose_core::Composer::runtime_handle);
         Rc::new(RefCell::new(cranpose_animation::Animatable::new(
             0.0, runtime,
         )))
@@ -1398,7 +1398,8 @@ pub fn LiquidMenu(
 
                 let has_checks = items.iter().any(|item| item.checked);
                 let hovered = remember(|| mutableStateOf(Option::<usize>::None)).with(|s| *s);
-                let glow_row = gesture_hover.or(hovered.get());
+                let hovered_row = hovered.get();
+                let glow_row = gesture_hover.or(hovered_row);
                 glow_point.set(glow_row.map(|index| {
                     let rect = gesture.item_rect(index).get();
                     (rect.x + rect.width * 0.5, rect.y + rect.height * 0.5)
@@ -1829,7 +1830,7 @@ mod tests {
             scope.header("Section");
             scope.separator();
             scope.item(LiquidMenuItem::new("Open"), move || {
-                selected_by_action.set(true)
+                selected_by_action.set(true);
             });
         });
 

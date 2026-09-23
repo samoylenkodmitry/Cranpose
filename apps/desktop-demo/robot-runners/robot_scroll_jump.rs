@@ -24,7 +24,7 @@ fn main() {
             if let Some((x, y, w, h)) = find_button_in_semantics(&robot, "Lazy List") {
                 let cx = x + w / 2.0;
                 let cy = y + h / 2.0;
-                println!("  Clicking at ({:.0}, {:.0})", cx, cy);
+                println!("  Clicking at ({cx:.0}, {cy:.0})");
                 let _ = robot.mouse_move(cx, cy);
                 std::thread::sleep(Duration::from_millis(50));
                 let _ = robot.mouse_down();
@@ -39,7 +39,7 @@ fn main() {
             }
 
             fn find_item_y(robot: &Robot, item_num: i32) -> Option<f32> {
-                let text = format!("Item #{}", item_num);
+                let text = format!("Item #{item_num}");
                 find_in_semantics(robot, |elem| find_text(elem, &text))
                     .map(|(_, y, _, h)| y + h / 2.0)
             }
@@ -54,7 +54,7 @@ fn main() {
             }
 
             let (initial_item, initial_y) = find_first_visible(&robot).unwrap_or((0, 500.0));
-            println!("Initial: Item {} at Y={:.1}\n", initial_item, initial_y);
+            println!("Initial: Item {initial_item} at Y={initial_y:.1}\n");
 
             println!("=== STEP 2: Fast scroll (will trigger fling) ===");
 
@@ -80,10 +80,7 @@ fn main() {
             std::thread::sleep(Duration::from_millis(1000));
 
             let (after_fling_item, after_fling_y) = find_first_visible(&robot).unwrap_or((0, 0.0));
-            println!(
-                "  After fling: Item {} at Y={:.1}",
-                after_fling_item, after_fling_y
-            );
+            println!("  After fling: Item {after_fling_item} at Y={after_fling_y:.1}");
             println!("  Scrolled {} items", after_fling_item - initial_item);
 
             println!("\n=== STEP 4: Second scroll (CHECK FOR JUMP!) ===");
@@ -91,10 +88,7 @@ fn main() {
             let start_y_2 = 400.0;
 
             let (before_item, before_y) = find_first_visible(&robot).unwrap_or((0, 0.0));
-            println!(
-                "  BEFORE mouse down: Item {} at Y={:.1}",
-                before_item, before_y
-            );
+            println!("  BEFORE mouse down: Item {before_item} at Y={before_y:.1}");
 
             let _ = robot.mouse_move(start_x, start_y_2);
             std::thread::sleep(Duration::from_millis(50));
@@ -103,17 +97,11 @@ fn main() {
             std::thread::sleep(Duration::from_millis(50));
 
             let (after_down_item, after_down_y) = find_first_visible(&robot).unwrap_or((0, 0.0));
-            println!(
-                "  AFTER mouse down: Item {} at Y={:.1}",
-                after_down_item, after_down_y
-            );
+            println!("  AFTER mouse down: Item {after_down_item} at Y={after_down_y:.1}");
 
             let item_jump = (after_down_item - before_item).abs();
             if item_jump > 1 {
-                println!(
-                    "  ✗ JUMP DETECTED! Jumped {} items on mouse down!",
-                    item_jump
-                );
+                println!("  ✗ JUMP DETECTED! Jumped {item_jump} items on mouse down!");
             } else {
                 println!("  ✓ No significant jump");
             }
@@ -122,28 +110,22 @@ fn main() {
             std::thread::sleep(Duration::from_millis(50));
 
             let (after_drag_item, _) = find_first_visible(&robot).unwrap_or((0, 0.0));
-            println!("  AFTER drag: Item {}", after_drag_item);
+            println!("  AFTER drag: Item {after_drag_item}");
 
             let _ = robot.mouse_up();
 
             println!("\n=== VERDICT ===");
-            println!("Initial:       Item {}", initial_item);
+            println!("Initial:       Item {initial_item}");
             println!(
                 "After fling:   Item {} (scrolled {} items)",
                 after_fling_item,
                 after_fling_item - initial_item
             );
-            println!("Before 2nd:    Item {}", before_item);
-            println!(
-                "After 2nd down:Item {} (jumped {} items)",
-                after_down_item, item_jump
-            );
+            println!("Before 2nd:    Item {before_item}");
+            println!("After 2nd down:Item {after_down_item} (jumped {item_jump} items)");
 
             if item_jump > 1 {
-                println!(
-                    "\n✗ TEST FAILED: Content jumped {} items on second scroll!",
-                    item_jump
-                );
+                println!("\n✗ TEST FAILED: Content jumped {item_jump} items on second scroll!");
                 std::process::exit(1);
             } else if after_fling_item == initial_item {
                 println!("\n⚠ WARNING: Fling didn't scroll - velocity tracking issue?");

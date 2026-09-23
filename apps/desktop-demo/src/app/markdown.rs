@@ -424,8 +424,7 @@ fn split_large_text_block(annotated: &AnnotatedString, out: &mut Vec<MarkdownBlo
             end = text[start..]
                 .char_indices()
                 .nth(1)
-                .map(|(offset, _)| start + offset)
-                .unwrap_or(text.len());
+                .map_or(text.len(), |(offset, _)| start + offset);
         } else if end < text.len() {
             let split_window = &text[start..end];
             if let Some(rel_newline) = split_window.rfind('\n') {

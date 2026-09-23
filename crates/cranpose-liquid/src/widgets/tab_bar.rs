@@ -366,7 +366,7 @@ fn TabIcon(icon: LiquidTabIcon, style: LiquidTabIconStyle, color: Color, optical
         BoxSpec::default().content_alignment(Alignment::CENTER),
         move || match style {
             LiquidTabIconStyle::Plain => {
-                TabGlyph(icon.clone(), TAB_ICON_SIZE * optical_scale, color)
+                TabGlyph(icon.clone(), TAB_ICON_SIZE * optical_scale, color);
             }
             LiquidTabIconStyle::AppBadge => {
                 let icon = icon.clone();

@@ -183,7 +183,7 @@ impl ModelState {
         self.retired_payload_generations
             .entry(id)
             .and_modify(|generation| *generation = (*generation).max(anchor.generation()))
-            .or_insert(anchor.generation());
+            .or_insert_with(|| anchor.generation());
     }
 
     fn retire_payload_anchors(&mut self, anchors: impl IntoIterator<Item = PayloadAnchor>) {
@@ -393,22 +393,22 @@ fn model_failure_report(
     retained_subtrees: &BTreeMap<Key, DetachedSubtree>,
 ) -> String {
     let active_snapshot = panic::catch_unwind(AssertUnwindSafe(|| harness.table.debug_snapshot()))
-        .map(|snapshot| format!("{snapshot:#?}"))
-        .unwrap_or_else(|payload| {
-            format!(
-                "<active debug snapshot panicked: {}>",
-                panic_payload_message(payload.as_ref())
-            )
-        });
+        .map_or_else(
+            |payload| {
+                format!(
+                    "<active debug snapshot panicked: {}>",
+                    panic_payload_message(payload.as_ref())
+                )
+            },
+            |snapshot| format!("{snapshot:#?}"),
+        );
     let retained_summary = retained_subtree_summary(retained_subtrees);
     let seed = context
         .initial_seed
-        .map(|seed| format!("0x{seed:016x}"))
-        .unwrap_or_else(|| "scripted".to_owned());
+        .map_or_else(|| "scripted".to_owned(), |seed| format!("0x{seed:016x}"));
     let frame_seed = context
         .frame_seed
-        .map(|seed| format!("0x{seed:016x}"))
-        .unwrap_or_else(|| "scripted".to_owned());
+        .map_or_else(|| "scripted".to_owned(), |seed| format!("0x{seed:016x}"));
 
     format!(
         "slot model failure\n\
@@ -983,7 +983,7 @@ fn apply_model_operation(
                                     new_generation: node.generation,
                                 },
                                 "a generation bump must report explicit replacement for key {key}",
-                            )
+                            );
                         }
                         Some(_) if replacing_node => assert_eq!(
                             node_update,

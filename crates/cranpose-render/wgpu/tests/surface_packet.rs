@@ -52,8 +52,7 @@ fn surface_packet_root_renders_from_packet_source() {
         Ok(renderer) => renderer,
         Err(err) => {
             eprintln!(
-                "skipping surface packet render assertions because headless WGPU init failed: {}",
-                err
+                "skipping surface packet render assertions because headless WGPU init failed: {err}"
             );
             return;
         }
@@ -82,8 +81,7 @@ fn surface_packet_unchanged_root_reuses_its_cached_shadow() {
         Ok(renderer) => renderer,
         Err(err) => {
             eprintln!(
-                "skipping surface packet cache assertions because headless WGPU init failed: {}",
-                err
+                "skipping surface packet cache assertions because headless WGPU init failed: {err}"
             );
             return;
         }
@@ -122,8 +120,7 @@ fn dev_overlay_packet_renders_over_both_root_kinds() {
         Ok(renderer) => renderer,
         Err(err) => {
             eprintln!(
-                "skipping dev overlay packet assertions because headless WGPU init failed: {}",
-                err
+                "skipping dev overlay packet assertions because headless WGPU init failed: {err}"
             );
             return;
         }

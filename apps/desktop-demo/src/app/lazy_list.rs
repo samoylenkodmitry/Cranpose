@@ -79,7 +79,7 @@ fn LazyListStatsDisplay(list_state: cranpose_foundation::lazy::LazyListState) {
         RowSpec::new().horizontal_arrangement(LinearArrangement::SpacedBy(16.0)),
         move || {
             Text(
-                format!("Visible: {}", visible),
+                format!("Visible: {visible}"),
                 Modifier::empty()
                     .padding(8.0)
                     .background(Color(0.2, 0.5, 0.3, 0.8))
@@ -87,7 +87,7 @@ fn LazyListStatsDisplay(list_state: cranpose_foundation::lazy::LazyListState) {
                 TextStyle::default(),
             );
             Text(
-                format!("Cached: {}", cached),
+                format!("Cached: {cached}"),
                 Modifier::empty()
                     .padding(8.0)
                     .background(Color(0.5, 0.4, 0.2, 0.8))
@@ -102,7 +102,7 @@ fn LazyListStatsDisplay(list_state: cranpose_foundation::lazy::LazyListState) {
 fn FirstVisibleIndexDisplay(list_state: cranpose_foundation::lazy::LazyListState) {
     let first_index = list_state.first_visible_item_index();
     Text(
-        format!("FirstIndex: {}", first_index),
+        format!("FirstIndex: {first_index}"),
         Modifier::empty()
             .padding(8.0)
             .background(Color(0.4, 0.3, 0.5, 0.8))
@@ -147,8 +147,8 @@ fn LifecycleListItem(index: usize, stats: MutableState<LifecycleStats>) {
 
     let item_height = item_height(index);
     let bg_color = item_background(index);
-    let item_label = format!("Item #{}", index);
-    let item_label_for_semantics = format!("ItemRow #{}", index);
+    let item_label = format!("Item #{index}");
+    let item_label_for_semantics = format!("ItemRow #{index}");
 
     Row(
         Modifier::empty()
@@ -201,7 +201,7 @@ fn LifecycleListItem(index: usize, stats: MutableState<LifecycleStats>) {
             );
 
             Text(
-                format!("h: {:.0}px", item_height),
+                format!("h: {item_height:.0}px"),
                 Modifier::empty()
                     .padding(6.0)
                     .background(Color(0.3, 0.3, 0.5, 0.5))
@@ -257,7 +257,7 @@ pub fn lazy_list_example() {
                         ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(8.0)),
                         move || {
                             Text(
-                                format!("Virtualized list with {} items", count),
+                                format!("Virtualized list with {count} items"),
                                 Modifier::empty()
                                     .padding(8.0)
                                     .background(Color(0.2, 0.3, 0.4, 0.7))
@@ -389,7 +389,7 @@ pub fn lazy_list_example() {
                                 move |index| {
                                     LifecycleListItem(index, lifecycle_stats);
                                     Text(
-                                        format!("Hello #{}", index),
+                                        format!("Hello #{index}"),
                                         Modifier::empty()
                                             .padding(8.0)
                                             .background(Color(0.3, 0.3, 0.4, 0.4))

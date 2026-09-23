@@ -46,8 +46,7 @@ impl SlotWriteSessionState {
         );
         assert!(
             keys.insert_seen(key),
-            "duplicate sibling group key: {:?}",
-            key,
+            "duplicate sibling group key: {key:?}",
         );
     }
 }

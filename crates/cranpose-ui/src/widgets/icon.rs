@@ -100,7 +100,7 @@ pub fn IconWith(
                 match tint {
                     Some(tint) => scope.draw_vector_path(&scaled, Brush::solid(tint)),
                     None => {
-                        scope.draw_vector_path(&scaled, Brush::solid(Color(0.0, 0.0, 0.0, 1.0)))
+                        scope.draw_vector_path(&scaled, Brush::solid(Color(0.0, 0.0, 0.0, 1.0)));
                     }
                 }
             }

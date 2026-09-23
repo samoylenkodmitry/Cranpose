@@ -36,6 +36,10 @@ impl Composer {
             fn drop(&mut self) {
                 self.composer
                     .close_current_group_body_for_scope(&self.scope);
+                #[expect(
+                    clippy::redundant_closure_for_method_calls,
+                    reason = "the method path is not general over the session lifetime"
+                )]
                 self.composer
                     .with_slot_session_mut(|slots| slots.end_recompose());
                 log::trace!(

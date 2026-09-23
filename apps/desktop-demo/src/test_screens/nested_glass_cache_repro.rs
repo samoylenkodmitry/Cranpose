@@ -18,14 +18,14 @@ pub const NESTED_BUTTON_RECT: [f32; 4] = [400.0, 160.0, 40.0, 40.0];
 pub const BACKGROUND_A: Color = Color(0.10, 0.16, 0.40, 1.0);
 pub const BACKGROUND_B: Color = Color(0.55, 0.12, 0.10, 1.0);
 
-const FLAT_COLOR_FRAGMENT: &str = r#"
+const FLAT_COLOR_FRAGMENT: &str = r"
 @fragment
 fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let base = textureSample(input_texture, input_sampler, input.uv);
     let phase = u[0].x;
     return vec4<f32>(phase, 0.4, 1.0 - phase, 1.0) + base * 0.0;
 }
-"#;
+";
 
 pub fn shader_phase_color(phase: f32) -> [u8; 4] {
     let channel = |value: f32| (value.clamp(0.0, 1.0) * 255.0).round() as u8;

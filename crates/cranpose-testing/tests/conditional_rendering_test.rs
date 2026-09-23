@@ -64,8 +64,8 @@ fn test_conditional_inside_closure_works() {
     for i in 1..=3 {
         counter.set(i);
         rule.pump_until_idle()
-            .unwrap_or_else(|_| panic!("recompose to {}", i));
-        eprintln!("Counter changed to {}", i);
+            .unwrap_or_else(|_| panic!("recompose to {i}"));
+        eprintln!("Counter changed to {i}");
     }
 
     eprintln!("✓ Correct pattern works as expected\n");

@@ -108,17 +108,18 @@ impl SlotTable {
                 slot_storage_id: slot.storage_id(),
             });
         }
-        let (owner, payload_index) = self.payload_anchors.active_location(slot.anchor()).ok_or(
-            ValueSlotError::InactiveAnchor {
+        let (owner, payload_index) = self
+            .payload_anchors
+            .active_location(slot.anchor())
+            .ok_or_else(|| ValueSlotError::InactiveAnchor {
                 anchor: slot.anchor(),
-            },
-        )?;
-        let group_index = self
-            .active_group_index(owner)
-            .ok_or(ValueSlotError::InactiveOwner {
-                anchor: slot.anchor(),
-                owner,
             })?;
+        let group_index =
+            self.active_group_index(owner)
+                .ok_or_else(|| ValueSlotError::InactiveOwner {
+                    anchor: slot.anchor(),
+                    owner,
+                })?;
         let group = &self.groups[group_index];
         let payload_start = group.payload_start as usize;
         let payload_len = group.payload_len as usize;
@@ -169,7 +170,7 @@ impl SlotTable {
         record
             .value
             .downcast_ref::<T>()
-            .ok_or(ValueSlotError::TypeMismatch {
+            .ok_or_else(|| ValueSlotError::TypeMismatch {
                 anchor: slot.anchor(),
                 expected: std::any::type_name::<T>(),
                 actual: record.type_name,
@@ -190,7 +191,7 @@ impl SlotTable {
         record
             .value
             .downcast_mut::<T>()
-            .ok_or(ValueSlotError::TypeMismatch {
+            .ok_or_else(|| ValueSlotError::TypeMismatch {
                 anchor: slot.anchor(),
                 expected: std::any::type_name::<T>(),
                 actual: record.type_name,

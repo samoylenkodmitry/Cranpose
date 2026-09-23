@@ -547,7 +547,7 @@ fn ControlGridRow(kinds: &'static [ControlKind], dark: bool) {
         move || {
             for kind in kinds {
                 key(*kind, || {
-                    ControlCard(*kind, dark, Modifier::empty().weight(1.0))
+                    ControlCard(*kind, dark, Modifier::empty().weight(1.0));
                 });
             }
         },
@@ -592,7 +592,7 @@ fn apply_press(depth: &Owned<Animatable<f32>>, kind: PointerEventKind) {
     match press_response(kind) {
         PressResponse::Snap => depth.update(|animatable| animatable.snapTo(1.0)),
         PressResponse::Release => {
-            depth.update(|animatable| animatable.animateTo(0.0, press_release_animation()))
+            depth.update(|animatable| animatable.animateTo(0.0, press_release_animation()));
         }
         PressResponse::Hold => {}
     }
@@ -607,7 +607,7 @@ fn control_action(kind: ControlKind, state: MutableState<ControlState>) -> Modif
     let action = match kind {
         ControlKind::Checkmark | ControlKind::Toggle | ControlKind::LeverSwitch => {
             Modifier::empty().toggleable(current.on, None, kind.role(), move |next| {
-                state.set(state.get().toggled(next))
+                state.set(state.get().toggled(next));
             })
         }
         ControlKind::PushButton => Modifier::empty().clickable(move |_position| {

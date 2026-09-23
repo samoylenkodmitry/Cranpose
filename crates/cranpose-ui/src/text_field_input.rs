@@ -28,13 +28,13 @@ pub(crate) fn handle_key_event_impl(
         }
 
         KeyCode::Backspace => {
-            state.edit(|buffer| buffer.delete_before_cursor());
+            state.edit(cranpose_foundation::text::TextFieldBuffer::delete_before_cursor);
             state.set_desired_column(None);
             true
         }
 
         KeyCode::Delete => {
-            state.edit(|buffer| buffer.delete_after_cursor());
+            state.edit(cranpose_foundation::text::TextFieldBuffer::delete_after_cursor);
             state.set_desired_column(None);
             true
         }
@@ -46,7 +46,7 @@ pub(crate) fn handle_key_event_impl(
                 let target = find_word_start(&text, state.selection().start);
                 state.edit(|buffer| buffer.place_cursor_before_char(target));
             } else if event.modifiers.shift {
-                state.edit(|buffer| buffer.extend_selection_left());
+                state.edit(cranpose_foundation::text::TextFieldBuffer::extend_selection_left);
             } else {
                 let text = state.text();
                 let sel = state.selection();
@@ -56,8 +56,7 @@ pub(crate) fn handle_key_event_impl(
                     text[..sel.start]
                         .char_indices()
                         .last()
-                        .map(|(i, _)| i)
-                        .unwrap_or(0)
+                        .map_or(0, |(i, _)| i)
                 } else {
                     0
                 };
@@ -73,7 +72,7 @@ pub(crate) fn handle_key_event_impl(
                 let target = find_word_end(&text, state.selection().end);
                 state.edit(|buffer| buffer.place_cursor_before_char(target));
             } else if event.modifiers.shift {
-                state.edit(|buffer| buffer.extend_selection_right());
+                state.edit(cranpose_foundation::text::TextFieldBuffer::extend_selection_right);
             } else {
                 let text = state.text();
                 let sel = state.selection();
@@ -83,8 +82,7 @@ pub(crate) fn handle_key_event_impl(
                     text[sel.end..]
                         .char_indices()
                         .nth(1)
-                        .map(|(i, _)| sel.end + i)
-                        .unwrap_or(text.len())
+                        .map_or(text.len(), |(i, _)| sel.end + i)
                 } else {
                     text.len()
                 };
@@ -98,7 +96,7 @@ pub(crate) fn handle_key_event_impl(
             let sel = state.selection();
             let cursor = sel.end;
             let text_before = &text[..cursor.min(text.len())];
-            let line_start = text_before.rfind('\n').map(|i| i + 1).unwrap_or(0);
+            let line_start = text_before.rfind('\n').map_or(0, |i| i + 1);
             let col = cursor - line_start;
             let column = state.desired_column().unwrap_or_else(|| {
                 state.set_desired_column(Some(col));
@@ -109,7 +107,7 @@ pub(crate) fn handle_key_event_impl(
                 0
             } else {
                 let prev_end = line_start - 1;
-                let prev_start = text[..prev_end].rfind('\n').map(|i| i + 1).unwrap_or(0);
+                let prev_start = text[..prev_end].rfind('\n').map_or(0, |i| i + 1);
                 prev_start + column.min(prev_end - prev_start)
             };
             if event.modifiers.shift {
@@ -125,16 +123,13 @@ pub(crate) fn handle_key_event_impl(
             let sel = state.selection();
             let cursor = sel.end;
             let text_before = &text[..cursor.min(text.len())];
-            let line_start = text_before.rfind('\n').map(|i| i + 1).unwrap_or(0);
+            let line_start = text_before.rfind('\n').map_or(0, |i| i + 1);
             let col = cursor - line_start;
             let column = state.desired_column().unwrap_or_else(|| {
                 state.set_desired_column(Some(col));
                 col
             });
-            let line_end = text[cursor..]
-                .find('\n')
-                .map(|i| cursor + i)
-                .unwrap_or(text.len());
+            let line_end = text[cursor..].find('\n').map_or(text.len(), |i| cursor + i);
             let target = if line_end >= text.len() {
                 state.set_desired_column(None);
                 text.len()
@@ -142,8 +137,7 @@ pub(crate) fn handle_key_event_impl(
                 let next_start = line_end + 1;
                 let next_end = text[next_start..]
                     .find('\n')
-                    .map(|i| next_start + i)
-                    .unwrap_or(text.len());
+                    .map_or(text.len(), |i| next_start + i);
                 next_start + column.min(next_end - next_start)
             };
             if event.modifiers.shift {
@@ -157,14 +151,11 @@ pub(crate) fn handle_key_event_impl(
         KeyCode::Home => {
             state.set_desired_column(None);
             if event.modifiers.command_or_ctrl() {
-                state.edit(|buffer| buffer.place_cursor_at_start());
+                state.edit(cranpose_foundation::text::TextFieldBuffer::place_cursor_at_start);
             } else {
                 let text = state.text();
                 let pos = state.selection().start;
-                let line_start = text[..pos.min(text.len())]
-                    .rfind('\n')
-                    .map(|i| i + 1)
-                    .unwrap_or(0);
+                let line_start = text[..pos.min(text.len())].rfind('\n').map_or(0, |i| i + 1);
                 state.edit(|buffer| buffer.place_cursor_before_char(line_start));
             }
             true
@@ -173,21 +164,18 @@ pub(crate) fn handle_key_event_impl(
         KeyCode::End => {
             state.set_desired_column(None);
             if event.modifiers.command_or_ctrl() {
-                state.edit(|buffer| buffer.place_cursor_at_end());
+                state.edit(cranpose_foundation::text::TextFieldBuffer::place_cursor_at_end);
             } else {
                 let text = state.text();
                 let pos = state.selection().start;
-                let line_end = text[pos..]
-                    .find('\n')
-                    .map(|i| pos + i)
-                    .unwrap_or(text.len());
+                let line_end = text[pos..].find('\n').map_or(text.len(), |i| pos + i);
                 state.edit(|buffer| buffer.place_cursor_before_char(line_end));
             }
             true
         }
 
         KeyCode::A if event.modifiers.command_or_ctrl() => {
-            state.edit(|buffer| buffer.select_all());
+            state.edit(cranpose_foundation::text::TextFieldBuffer::select_all);
             true
         }
 

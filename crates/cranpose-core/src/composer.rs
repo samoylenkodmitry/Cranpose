@@ -636,8 +636,9 @@ impl CapturedCompositionContext {
         self.owner_scope
             .as_ref()
             .and_then(Weak::upgrade)
-            .map(|inner| crate::RecomposeScope { inner }.owner_chain_deactivation_epoch())
-            .unwrap_or(0)
+            .map_or(0, |inner| {
+                crate::RecomposeScope { inner }.owner_chain_deactivation_epoch()
+            })
     }
 }
 
@@ -829,7 +830,7 @@ impl Composer {
     pub(crate) fn observe_scope<R>(&self, scope: &RecomposeScope, block: impl FnOnce() -> R) -> R {
         let observer = self.observer();
         let scope_clone = scope.clone();
-        observer.observe_reads(scope_clone, move |scope_ref| scope_ref.invalidate(), block)
+        observer.observe_reads(scope_clone, super::RecomposeScope::invalidate, block)
     }
 
     pub fn active_slots_host(&self) -> Rc<SlotsHost> {
@@ -1388,6 +1389,10 @@ impl Composer {
                 self.composer
                     .close_current_group_body_for_scope(&self.scope);
                 self.scope.mark_recomposed();
+                #[expect(
+                    clippy::redundant_closure_for_method_calls,
+                    reason = "the method path is not general over the session lifetime"
+                )]
                 self.composer
                     .with_slot_session_mut(|slots| slots.end_group());
                 if let Err(err) = self.composer.flush_pending_commands_if_large() {
@@ -1458,7 +1463,7 @@ impl Composer {
             return;
         }
         self.with_slot_host_pass(host, crate::slot::SlotPassMode::Compose, |composer| {
-            composer.with_group_in_active_pass_dyn(key, f)
+            composer.with_group_in_active_pass_dyn(key, f);
         });
     }
 
@@ -1642,10 +1647,10 @@ impl Composer {
                 .unwrap_or_default();
             match retention_mode {
                 RetentionMode::DisposeWhenInactive => {
-                    self.dispose_detached_subtree_in_host(slots_host, subtree)?
+                    self.dispose_detached_subtree_in_host(slots_host, subtree)?;
                 }
                 RetentionMode::RetainWhenInactive => {
-                    self.retain_detached_subtree_in_host(slots_host, parent_scope, subtree)?
+                    self.retain_detached_subtree_in_host(slots_host, parent_scope, subtree)?;
                 }
             }
         }
@@ -1682,6 +1687,10 @@ impl Composer {
     }
 
     pub(crate) fn close_current_group_body_for_scope(&self, scope: &RecomposeScope) {
+        #[expect(
+            clippy::redundant_closure_for_method_calls,
+            reason = "the method path is not general over the session lifetime"
+        )]
         let result = self.with_slot_session_mut(|slots| slots.finish_group_body());
         self.handle_finished_group_result(Some(scope.id()), result);
         if let Some(popped) = self.scope_stack().pop() {
@@ -1730,10 +1739,7 @@ impl Composer {
     }
 
     #[track_caller]
-    pub fn use_value_slot<'pass, T: 'static>(
-        &'pass self,
-        init: impl FnOnce() -> T,
-    ) -> ValueSlotHandle<'pass, T> {
+    pub fn use_value_slot<T: 'static>(&self, init: impl FnOnce() -> T) -> ValueSlotHandle<'_, T> {
         let source = crate::caller_location_key();
         let slot = self.with_slot_session_mut(|slots| {
             slots.value_slot_with_kind(PayloadKind::Internal, source, init)
@@ -1743,10 +1749,7 @@ impl Composer {
 
     #[doc(hidden)]
     #[track_caller]
-    pub fn __use_param_slot<'pass, T: 'static>(
-        &'pass self,
-        init: impl FnOnce() -> T,
-    ) -> ValueSlotHandle<'pass, T> {
+    pub fn __use_param_slot<T: 'static>(&self, init: impl FnOnce() -> T) -> ValueSlotHandle<'_, T> {
         let source = crate::caller_location_key();
         let slot = self.with_slot_session_mut(|slots| {
             slots.value_slot_with_kind(PayloadKind::Param, source, init)
@@ -1756,10 +1759,10 @@ impl Composer {
 
     #[doc(hidden)]
     #[track_caller]
-    pub fn __use_return_slot<'pass, T: 'static>(
-        &'pass self,
+    pub fn __use_return_slot<T: 'static>(
+        &self,
         init: impl FnOnce() -> T,
-    ) -> ValueSlotHandle<'pass, T> {
+    ) -> ValueSlotHandle<'_, T> {
         let source = crate::caller_location_key();
         let slot = self.with_slot_session_mut(|slots| {
             slots.value_slot_with_kind(PayloadKind::Return, source, init)
@@ -1894,8 +1897,7 @@ impl Composer {
         match self.phase() {
             crate::Phase::Measure | crate::Phase::Layout => {}
             current => panic!(
-                "subcompose() may only be called during measure or layout; current phase: {:?}",
-                current
+                "subcompose() may only be called during measure or layout; current phase: {current:?}"
             ),
         }
 
@@ -2102,6 +2104,10 @@ impl Composer {
     }
 
     pub fn skip_current_group(&self) {
+        #[expect(
+            clippy::redundant_closure_for_method_calls,
+            reason = "the method path is not general over the session lifetime"
+        )]
         self.with_slot_session_mut(|slots| slots.skip_group());
     }
 
@@ -2126,7 +2132,7 @@ impl Composer {
                     let scope_instance = RecomposeScope { inner };
                     observer.observe_reads(
                         scope_instance.clone(),
-                        move |scope_ref| scope_ref.invalidate(),
+                        super::RecomposeScope::invalidate,
                         || {
                             callback(composer);
                         },

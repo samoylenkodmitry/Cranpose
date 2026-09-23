@@ -376,7 +376,7 @@ const MONASPACE_KRYPTON_TTF: &[u8] =
 static LEETCODEDAILY_APP_FONTS: &[&[u8]] =
     &[DEJAVU_SANS_TTF, MONASPACE_KRYPTON_TTF, DEJAVU_SANS_MONO_TTF];
 
-const KOTLIN_CODE: &str = r#"class Solution {
+const KOTLIN_CODE: &str = r"class Solution {
     fun countGood(nums: IntArray, k: Int): Long {
         var left = 0
         var pairs = 0L
@@ -400,9 +400,9 @@ const KOTLIN_CODE: &str = r#"class Solution {
 
         return answer
     }
-}"#;
+}";
 
-const RUST_CODE: &str = r#"impl Solution {
+const RUST_CODE: &str = r"impl Solution {
     pub fn count_good(nums: Vec<i32>, k: i32) -> i64 {
         let mut left = 0usize;
         let mut pairs = 0i64;
@@ -431,7 +431,7 @@ const RUST_CODE: &str = r#"impl Solution {
 
         answer
     }
-}"#;
+}";
 
 const ACTION_BUTTONS: [ActionButtonId; 14] = [
     ActionButtonId::CopyLeetcode,
@@ -805,7 +805,7 @@ impl Default for UiPreferences {
             "save.cranpose_webp",
         ]
         .iter()
-        .map(|key| key.to_string())
+        .map(ToString::to_string)
         .collect();
         Self {
             theme: ThemeMode::Light,
@@ -5067,8 +5067,9 @@ fn scroll_workspace_text_into_view_between(
             .mouse_move(anchor_x, anchor_y)
             .expect("move cursor to workspace");
         std::thread::sleep(Duration::from_millis(30));
-        let scroll_delta_y = workspace_text_bounds_exact(robot, text)
-            .map(|bounds| {
+        let scroll_delta_y = workspace_text_bounds_exact(robot, text).map_or(
+            -WORKSPACE_SEEK_MAX_SCROLL_DELTA_Y,
+            |bounds| {
                 let center_y = bounds.center_y();
                 if center_y < min_center_y {
                     (min_center_y - center_y).clamp(4.0, WORKSPACE_SEEK_MAX_SCROLL_DELTA_Y)
@@ -5077,8 +5078,8 @@ fn scroll_workspace_text_into_view_between(
                 } else {
                     0.0
                 }
-            })
-            .unwrap_or(-WORKSPACE_SEEK_MAX_SCROLL_DELTA_Y);
+            },
+        );
         robot
             .mouse_scroll(0.0, scroll_delta_y)
             .expect("scroll workspace to find text");
@@ -5450,8 +5451,7 @@ fn assert_rust_runtime_row_stable_under_micro_scroll(robot: &cranpose::Robot) {
             fail_with_robot(
                 robot,
                 &format!(
-                    "Rust Runtime row did not move by exact micro scroll at step {step}: expected {:.3}, got {actual_delta_y:.3}",
-                    ROW_MICRO_SCROLL_DELTA_Y
+                    "Rust Runtime row did not move by exact micro scroll at step {step}: expected {ROW_MICRO_SCROLL_DELTA_Y:.3}, got {actual_delta_y:.3}"
                 ),
             );
         }
@@ -5519,8 +5519,7 @@ fn assert_workspace_strip_stable_under_micro_scroll(robot: &cranpose::Robot, tar
             fail_with_robot(
                 robot,
             &format!(
-                "{target_text} workspace strip did not move by exact micro scroll at step {step}: expected {:.3}, got {actual_delta_y:.3}",
-                scroll_delta_y,
+                "{target_text} workspace strip did not move by exact micro scroll at step {step}: expected {scroll_delta_y:.3}, got {actual_delta_y:.3}",
             ),
         );
         }
@@ -5638,8 +5637,7 @@ fn assert_workspace_active_viewport_first_frame_matches_settled(
             fail_with_robot(
                 robot,
                 &format!(
-                    "{target_text} active viewport did not move by exact micro scroll at step {step}: expected {:.3}, got {actual_delta_y:.3}",
-                    scroll_delta_y,
+                    "{target_text} active viewport did not move by exact micro scroll at step {step}: expected {scroll_delta_y:.3}, got {actual_delta_y:.3}",
                 ),
             );
         }
@@ -5837,8 +5835,7 @@ fn assert_workspace_rigid_picture_stable_during_active_scroll(
             fail_with_robot(
                 robot,
                 &format!(
-                    "{target_text} workspace rigid active-scroll did not move by exact micro scroll at step {step}: expected {:.3}, got {actual_delta_y:.3}",
-                    WORKSPACE_RIGID_SCROLL_DELTA_Y,
+                    "{target_text} workspace rigid active-scroll did not move by exact micro scroll at step {step}: expected {WORKSPACE_RIGID_SCROLL_DELTA_Y:.3}, got {actual_delta_y:.3}",
                 ),
             );
         }
@@ -5915,8 +5912,7 @@ fn assert_workspace_top_band_stable_under_micro_scroll(robot: &cranpose::Robot, 
             fail_with_robot(
                 robot,
                 &format!(
-                    "{target_text} workspace top band did not move by exact micro scroll at step {step}: expected {:.3}, got {actual_delta_y:.3}",
-                    WORKSPACE_TOP_BAND_SCROLL_DELTA_Y,
+                    "{target_text} workspace top band did not move by exact micro scroll at step {step}: expected {WORKSPACE_TOP_BAND_SCROLL_DELTA_Y:.3}, got {actual_delta_y:.3}",
                 ),
             );
         }
@@ -5981,8 +5977,7 @@ fn assert_bottom_clear_button_stable_under_one_px_scroll(robot: &cranpose::Robot
             fail_with_robot(
                 robot,
                 &format!(
-                    "bottom Clear button did not move by exact 1px scroll at step {step}: expected {:.3}, got {actual_delta_y:.3}",
-                    BOTTOM_CLEAR_SCROLL_DELTA_Y
+                    "bottom Clear button did not move by exact 1px scroll at step {step}: expected {BOTTOM_CLEAR_SCROLL_DELTA_Y:.3}, got {actual_delta_y:.3}"
                 ),
             );
         }
@@ -7415,9 +7410,7 @@ fn assert_bottom_clear_screen_crop_stable(
         output_size.1,
     );
 
-    let current_fixed_crop = if let Some(crop) = current_following_crop {
-        crop
-    } else {
+    let Some(current_fixed_crop) = current_following_crop else {
         save_bottom_clear_failure(step, previous, current);
         fail_with_robot(
             robot,
@@ -8177,9 +8170,7 @@ fn capture_workspace_button_quality(
         crop.width,
         crop.height,
         crop_path
-            .as_ref()
-            .map(|path| path.display().to_string())
-            .unwrap_or_else(|| "none".to_string())
+            .as_ref().map_or_else(|| "none".to_string(), |path| path.display().to_string())
     );
     ButtonQualitySample {
         label,
@@ -8266,9 +8257,7 @@ fn capture_button_reference_sample(
         red_profile.bounds.count,
         red_profile.max_column_mass,
         crop_path
-            .as_ref()
-            .map(|path| path.display().to_string())
-            .unwrap_or_else(|| "none".to_string())
+            .as_ref().map_or_else(|| "none".to_string(), |path| path.display().to_string())
     );
     ButtonReferenceSample {
         tag,
@@ -8389,14 +8378,10 @@ fn assert_button_quality_matches_baseline(
             max_unique_rgb,
             baseline
                 .crop_path
-                .as_ref()
-                .map(|path| path.display().to_string())
-                .unwrap_or_else(|| "none".to_string()),
+                .as_ref().map_or_else(|| "none".to_string(), |path| path.display().to_string()),
             sample
                 .crop_path
-                .as_ref()
-                .map(|path| path.display().to_string())
-                .unwrap_or_else(|| "none".to_string()),
+                .as_ref().map_or_else(|| "none".to_string(), |path| path.display().to_string()),
             label = baseline.label,
         );
         std::process::exit(1);
@@ -8994,10 +8979,7 @@ fn run_leetcodedaily_perf_probe(robot: &cranpose::Robot) {
         end_stats.recompositions,
         end_stats.recomps_per_second,
     );
-    println!(
-        "PERF_SCENARIO_COMPLETE scenario={} iterations={}",
-        PERF_SCENARIO_NAME, iterations
-    );
+    println!("PERF_SCENARIO_COMPLETE scenario={PERF_SCENARIO_NAME} iterations={iterations}");
 
     if fps < min_fps {
         fail_with_robot(

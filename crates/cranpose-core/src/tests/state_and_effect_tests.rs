@@ -1,3 +1,5 @@
+use std::cell::Cell;
+
 use super::*;
 
 #[test]
@@ -1271,9 +1273,7 @@ fn launched_effect_async_keeps_frames_after_backward_forward_flip() {
             let frames_after = stats.value().frames;
             assert!(
                 frames_after > frames_before,
-                "frames should continue increasing after backward->forward flip (before {}, after {})",
-                frames_before,
-                frames_after
+                "frames should continue increasing after backward->forward flip (before {frames_before}, after {frames_after})"
             );
             break;
         }
@@ -1319,8 +1319,7 @@ fn stats_scope_survives_conditional_hide() {
                 composer.with_group(location_key(file!(), line!(), column!()), |composer| {
                     if progress_for_slot > 0.0 {
                         let id = composer.emit_node(|| TestDummyNode);
-                        log.borrow_mut()
-                            .push(format!("dummy {}", progress_for_slot));
+                        log.borrow_mut().push(format!("dummy {progress_for_slot}"));
                         composer
                             .with_node_mut(id, |_: &mut TestDummyNode| {})
                             .expect("dummy node exists");
@@ -1876,11 +1875,11 @@ fn removal_races_keyed_effect_rerun(flip_key_first: bool) {
 
     composition
         .render(location_key(file!(), line!(), column!()), move || {
-            host(shown, key)
+            host(shown, key);
         })
         .expect("initial composition");
-    assert_eq!(STARTS.with(|c| c.get()), 1);
-    assert_eq!(LIVE.with(|c| c.get()), 1);
+    assert_eq!(STARTS.with(Cell::get), 1);
+    assert_eq!(LIVE.with(Cell::get), 1);
 
     if flip_key_first {
         key.set_value(2);
@@ -1894,11 +1893,11 @@ fn removal_races_keyed_effect_rerun(flip_key_first: bool) {
         .expect("recompose the removal pass");
 
     assert_eq!(
-        LIVE.with(|c| c.get()),
+        LIVE.with(Cell::get),
         0,
         "a keyed effect whose host left in the same pass must release its \
          resource (starts={})",
-        STARTS.with(|c| c.get()),
+        STARTS.with(Cell::get),
     );
 }
 

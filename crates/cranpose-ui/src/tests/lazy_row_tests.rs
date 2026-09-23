@@ -91,7 +91,7 @@ fn GrowingLazyRow(
                         RowSpec::default(),
                         move || {
                             Text(
-                                format!("Item {}", index),
+                                format!("Item {index}"),
                                 Modifier::empty(),
                                 TextStyle::default(),
                             );
@@ -194,7 +194,7 @@ fn HorizontalScrollIndicatorLazyRow(captured_state: Rc<RefCell<Option<LazyListSt
             |scope| {
                 scope.items(80, |index| {
                     Text(
-                        format!("Item {}", index),
+                        format!("Item {index}"),
                         Modifier::empty().width(48.0),
                         TextStyle::default(),
                     );

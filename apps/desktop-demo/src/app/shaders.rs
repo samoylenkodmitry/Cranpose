@@ -40,7 +40,7 @@ impl ShaderSection {
     pub fn from_startup_name(name: &str) -> Option<Self> {
         let normalized = name
             .chars()
-            .filter(|ch| ch.is_ascii_alphanumeric())
+            .filter(char::is_ascii_alphanumeric)
             .map(|ch| ch.to_ascii_lowercase())
             .collect::<String>();
         match normalized.as_str() {

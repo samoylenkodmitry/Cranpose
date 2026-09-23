@@ -69,7 +69,7 @@ fn ReproItem(rank: usize) {
         RowSpec::new().vertical_alignment(VerticalAlignment::Top),
         move || {
             Text(
-                format!("{}.", rank),
+                format!("{rank}."),
                 Modifier::empty().padding(4.0),
                 TextStyle {
                     span_style: SpanStyle {
@@ -88,7 +88,7 @@ fn ReproItem(rank: usize) {
             Column(Modifier::empty().weight(1.0), ColumnSpec::default(), {
                 move || {
                     Text(
-                        format!("Fake Title for Item {}", rank),
+                        format!("Fake Title for Item {rank}"),
                         Modifier::empty().padding(2.0),
                         TextStyle {
                             span_style: SpanStyle {

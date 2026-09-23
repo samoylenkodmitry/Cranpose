@@ -67,7 +67,7 @@ impl CursorAnimationState {
 /// Starts the active context's cursor blink animation.
 /// Called when a text field gains focus.
 pub fn start_cursor_blink() {
-    if crate::render_state::with_cursor_animation(|state| state.start()) {
+    if crate::render_state::with_cursor_animation(CursorAnimationState::start) {
         invalidate_focused_caret();
     }
 }
@@ -75,7 +75,7 @@ pub fn start_cursor_blink() {
 /// Stops the active context's cursor blink animation.
 /// Called when no text field is focused.
 pub fn stop_cursor_blink() {
-    if crate::render_state::with_cursor_animation(|state| state.stop()) {
+    if crate::render_state::with_cursor_animation(CursorAnimationState::stop) {
         invalidate_focused_caret();
     }
 }
@@ -95,14 +95,14 @@ pub fn reset_cursor_blink() {
 }
 
 pub fn suspend_cursor_blink() {
-    if crate::render_state::with_cursor_animation(|state| state.stop()) {
+    if crate::render_state::with_cursor_animation(CursorAnimationState::stop) {
         invalidate_focused_caret();
     }
 }
 
 /// Returns whether the cursor should be visible right now.
 pub fn is_cursor_visible() -> bool {
-    crate::render_state::with_cursor_animation(|state| state.is_visible())
+    crate::render_state::with_cursor_animation(CursorAnimationState::is_visible)
 }
 
 /// Advances the cursor blink state if needed.
@@ -124,7 +124,7 @@ pub(crate) fn tick_cursor_blink_at(now: Instant) -> bool {
 /// Returns the next cursor blink transition time, if any.
 /// Use this for `WaitUntil` scheduling in the event loop.
 pub fn next_cursor_blink_time() -> Option<Instant> {
-    crate::render_state::with_cursor_animation(|state| state.next_blink_time())
+    crate::render_state::with_cursor_animation(CursorAnimationState::next_blink_time)
 }
 
 #[cfg(test)]

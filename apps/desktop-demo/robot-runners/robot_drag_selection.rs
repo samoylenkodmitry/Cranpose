@@ -45,7 +45,7 @@ fn main() {
                     find_in_semantics(robot, |elem| find_text(elem, "Type here..."))
                 })
             {
-                println!("✓ Found text field at ({:.0}, {:.0})\n", field_x, field_y);
+                println!("✓ Found text field at ({field_x:.0}, {field_y:.0})\n");
 
                 println!("--- Step 3: Add text ---");
                 for _ in 0..5 {
@@ -78,7 +78,7 @@ fn main() {
                 std::thread::sleep(Duration::from_millis(50));
 
                 let focused = robot.has_focused_text_field().unwrap_or(false);
-                println!("  • Field focused (has_focused_field): {}", focused);
+                println!("  • Field focused (has_focused_field): {focused}");
                 if !focused {
                     println!("    (Note: app-thread focus query returned false)");
                 }
@@ -96,8 +96,7 @@ fn main() {
 
                 let still_focused = robot.has_focused_text_field().unwrap_or(false);
                 println!(
-                    "  • Still focused after drag (has_focused_field): {}",
-                    still_focused
+                    "  • Still focused after drag (has_focused_field): {still_focused}"
                 );
                 if !still_focused {
                     println!("    (Note: app-thread focus query returned false)");
@@ -111,8 +110,7 @@ fn main() {
                 let (start_handle_pixels, end_handle_pixels) =
                     count_blue_handle_bands(&shot, selected_bounds);
                 println!(
-                    "  • Selection {:?}, start/end handle pixels: {}/{}",
-                    selection, start_handle_pixels, end_handle_pixels
+                    "  • Selection {selection:?}, start/end handle pixels: {start_handle_pixels}/{end_handle_pixels}"
                 );
                 assert!(
                     start_handle_pixels >= 8 && end_handle_pixels >= 8,

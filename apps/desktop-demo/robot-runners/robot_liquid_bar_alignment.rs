@@ -88,8 +88,7 @@ fn capture_scale() -> f32 {
     std::env::var("CRANPOSE_ROBOT_CAPTURE_SCALE")
         .ok()
         .and_then(|value| value.parse::<f32>().ok())
-        .map(|value| value.clamp(0.5, 4.0))
-        .unwrap_or(1.0)
+        .map_or(1.0, |value| value.clamp(0.5, 4.0))
 }
 
 fn capture(robot: &Robot) -> RobotScreenshot {

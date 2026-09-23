@@ -364,7 +364,7 @@ impl<'a> PendingGuard<'a> {
     }
 }
 
-impl<'a> Drop for PendingGuard<'a> {
+impl Drop for PendingGuard<'_> {
     fn drop(&mut self) {
         let mut current = self.counter.load(Ordering::SeqCst);
         loop {
@@ -598,8 +598,7 @@ impl RuntimeInner {
     fn has_task(&self, id: u64) -> bool {
         self.tasks
             .try_borrow()
-            .map(|tasks| tasks.contains_key(&id))
-            .unwrap_or(true)
+            .map_or(true, |tasks| tasks.contains_key(&id))
     }
 
     fn poll_async_tasks(&self) -> bool {
@@ -701,21 +700,17 @@ impl RuntimeInner {
         let local_pending = self
             .local_tasks
             .try_borrow()
-            .map(|tasks| !tasks.is_empty())
-            .unwrap_or(true);
+            .map_or(true, |tasks| !tasks.is_empty());
 
         local_pending || self.ui_dispatcher.has_pending() || self.has_runnable_tasks()
     }
 
     fn has_runnable_tasks(&self) -> bool {
-        self.tasks
-            .try_borrow()
-            .map(|tasks| {
-                tasks
-                    .values()
-                    .any(|task| task.runnable.load(Ordering::Acquire))
-            })
-            .unwrap_or(true)
+        self.tasks.try_borrow().map_or(true, |tasks| {
+            tasks
+                .values()
+                .any(|task| task.runnable.load(Ordering::Acquire))
+        })
     }
 
     fn register_ui_cont<T: 'static>(&self, f: impl FnOnce(T) + 'static) -> u64 {
@@ -1228,10 +1223,7 @@ impl RuntimeHandle {
 
     /// Whether the runtime still holds the spawned task `id`.
     pub fn has_task(&self, id: u64) -> bool {
-        self.inner
-            .upgrade()
-            .map(|inner| inner.has_task(id))
-            .unwrap_or(false)
+        self.inner.upgrade().is_some_and(|inner| inner.has_task(id))
     }
 
     /// Enqueues work from any thread to run on the UI thread.
@@ -1259,10 +1251,10 @@ impl RuntimeHandle {
     }
 
     pub fn has_pending_ui(&self) -> bool {
-        self.inner
-            .upgrade()
-            .map(|inner| inner.has_pending_ui())
-            .unwrap_or_else(|| self.dispatcher.has_pending())
+        self.inner.upgrade().map_or_else(
+            || self.dispatcher.has_pending(),
+            |inner| inner.has_pending_ui(),
+        )
     }
 
     pub fn register_frame_callback(
@@ -1324,8 +1316,7 @@ impl RuntimeHandle {
     pub fn has_updates(&self) -> bool {
         self.inner
             .upgrade()
-            .map(|inner| inner.has_updates())
-            .unwrap_or(false)
+            .is_some_and(|inner| inner.has_updates())
     }
 
     pub(crate) fn mark_scope_recomposed(&self, id: ScopeId) {
@@ -1387,8 +1378,7 @@ impl RuntimeHandle {
     pub fn has_invalid_scopes(&self) -> bool {
         self.inner
             .upgrade()
-            .map(|inner| inner.has_invalid_scopes())
-            .unwrap_or(false)
+            .is_some_and(|inner| inner.has_invalid_scopes())
     }
 
     pub(crate) fn increment_live_recompose_scope_count(&self) {
@@ -1421,15 +1411,13 @@ impl RuntimeHandle {
     pub fn has_frame_callbacks(&self) -> bool {
         self.inner
             .upgrade()
-            .map(|inner| inner.has_frame_callbacks())
-            .unwrap_or(false)
+            .is_some_and(|inner| inner.has_frame_callbacks())
     }
 
     pub fn has_transient_frame_callbacks(&self) -> bool {
         self.inner
             .upgrade()
-            .map(|inner| inner.has_transient_frame_callbacks())
-            .unwrap_or(false)
+            .is_some_and(|inner| inner.has_transient_frame_callbacks())
     }
 
     pub fn assert_ui_thread(&self) {

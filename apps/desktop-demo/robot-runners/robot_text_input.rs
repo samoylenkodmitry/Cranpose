@@ -21,8 +21,8 @@ fn main() {
             std::thread::sleep(Duration::from_millis(500));
 
             match robot.wait_for_idle() {
-                Ok(_) => println!("✓ App ready\n"),
-                Err(e) => println!("Note: {}\n", e),
+                Ok(()) => println!("✓ App ready\n"),
+                Err(e) => println!("Note: {e}\n"),
             }
 
             let mut all_passed = true;
@@ -32,7 +32,7 @@ fn main() {
             if let Some((x, y, w, h)) = find_button_in_semantics(&robot, "Text Input") {
                 let cx = x + w / 2.0;
                 let cy = y + h / 2.0;
-                println!("  Found 'Text Input' tab at ({:.1}, {:.1})", cx, cy);
+                println!("  Found 'Text Input' tab at ({cx:.1}, {cy:.1})");
 
                 let _ = robot.mouse_move(cx, cy);
                 std::thread::sleep(Duration::from_millis(50));
@@ -79,7 +79,7 @@ fn main() {
             {
                 let cx = x + w / 2.0;
                 let cy = y + h / 2.0;
-                println!("  Found 'Add !' button at ({:.1}, {:.1})", cx, cy);
+                println!("  Found 'Add !' button at ({cx:.1}, {cy:.1})");
 
                 let _ = robot.mouse_move(cx, cy);
                 std::thread::sleep(Duration::from_millis(50));
@@ -115,7 +115,7 @@ fn main() {
             {
                 let cx = x + w / 2.0;
                 let cy = y + h / 2.0;
-                println!("  Found 'Clear' button at ({:.1}, {:.1})", cx, cy);
+                println!("  Found 'Clear' button at ({cx:.1}, {cy:.1})");
 
                 let _ = robot.mouse_move(cx, cy);
                 std::thread::sleep(Duration::from_millis(50));
@@ -164,7 +164,7 @@ fn main() {
             {
                 let cx = x + w / 2.0;
                 let cy = y + h / 2.0;
-                println!("  Found 'Copy' button at ({:.1}, {:.1})", cx, cy);
+                println!("  Found 'Copy' button at ({cx:.1}, {cy:.1})");
 
                 let _ = robot.mouse_move(cx, cy);
                 std::thread::sleep(Duration::from_millis(50));
@@ -180,7 +180,7 @@ fn main() {
                 {
                     let cx = x + w / 2.0;
                     let cy = y + h / 2.0;
-                    println!("  Found 'Copy' text at ({:.1}, {:.1})", cx, cy);
+                    println!("  Found 'Copy' text at ({cx:.1}, {cy:.1})");
 
                     let _ = robot.mouse_move(cx, cy);
                     std::thread::sleep(Duration::from_millis(50));
@@ -233,7 +233,7 @@ fn main() {
             {
                 let cx = x + w - 2.0;
                 let cy = y + h / 2.0;
-                println!("  Found text field '!!' at ({:.1}, {:.1}) SIZE: w={:.1} h={:.1}", cx, cy, w, h);
+                println!("  Found text field '!!' at ({cx:.1}, {cy:.1}) SIZE: w={w:.1} h={h:.1}");
 
                 let _ = robot.mouse_move(cx, cy);
                 std::thread::sleep(Duration::from_millis(30));
@@ -244,9 +244,9 @@ fn main() {
                 println!("  Clicked at right edge to focus and position cursor at end");
 
                 match robot.type_text("abc") {
-                    Ok(_) => println!("  Typed 'abc'"),
+                    Ok(()) => println!("  Typed 'abc'"),
                     Err(e) => {
-                        println!("  ✗ FAIL: Could not type text: {}", e);
+                        println!("  ✗ FAIL: Could not type text: {e}");
                         all_passed = false;
                     }
                 }
@@ -254,7 +254,7 @@ fn main() {
                 let _ = robot.wait_for_idle();
 
                 if let Some((_x2, _y2, w2, h2)) = find_in_semantics(&robot, |elem| find_text(elem, "!!abc")) {
-                    println!("  After typing: '!!abc' SIZE: w={:.1} h={:.1} (was w={:.1} h={:.1})", w2, h2, w, h);
+                    println!("  After typing: '!!abc' SIZE: w={w2:.1} h={h2:.1} (was w={w:.1} h={h:.1})");
                     if (w2 - w).abs() > 1.0 {
                         println!("  → Width changed by {:.1}!", w2 - w);
                     } else {
@@ -316,7 +316,7 @@ fn main() {
             {
                 let cx1 = x1 + w1 / 2.0;
                 let cy1 = y1 + h1 / 2.0;
-                println!("  Found first field '!!' at ({:.1}, {:.1})", cx1, cy1);
+                println!("  Found first field '!!' at ({cx1:.1}, {cy1:.1})");
 
                 let _ = robot.mouse_move(cx1, cy1);
                 std::thread::sleep(Duration::from_millis(30));
@@ -342,7 +342,7 @@ fn main() {
                 {
                     let cx2 = x2 + w2 / 2.0;
                     let cy2 = y2 + h2 / 2.0;
-                    println!("  Found second field at ({:.1}, {:.1})", cx2, cy2);
+                    println!("  Found second field at ({cx2:.1}, {cy2:.1})");
 
                     let _ = robot.mouse_move(cx2, cy2);
                     std::thread::sleep(Duration::from_millis(30));
@@ -385,7 +385,7 @@ fn main() {
                 println!("  Focused text field for blink test");
 
                 let has_focus = robot.has_focused_text_field().unwrap_or(false);
-                println!("  has_focused_field() = {}", has_focus);
+                println!("  has_focused_field() = {has_focus}");
 
                 if has_focus {
                     println!("  Checking continuous rendering during 1.5 seconds...");
@@ -399,8 +399,8 @@ fn main() {
                     }
 
                     let still_focused = robot.has_focused_text_field().unwrap_or(false);
-                    println!("  After wait: has_focused_field() = {}", still_focused);
-                    println!("  Polled {} times over 1.5s", render_count);
+                    println!("  After wait: has_focused_field() = {still_focused}");
+                    println!("  Polled {render_count} times over 1.5s");
 
                     if still_focused {
                         println!("  ✓ PASS: Focus maintained for blink test duration");
@@ -439,14 +439,14 @@ fn main() {
             if let Some((x, y, w, h)) =
                 find_in_semantics(&robot, |elem| find_text(elem, "!!!!!"))
             {
-                println!("  Found text field with '!!!!!' at ({:.1}, {:.1}, {:.1}x{:.1})", x, y, w, h);
+                println!("  Found text field with '!!!!!' at ({x:.1}, {y:.1}, {w:.1}x{h:.1})");
 
                 let start_x = x + w - 10.0;
                 let center_y = y + h / 2.0;
 
                 let end_x = x + 10.0;
 
-                println!("  Drag from ({:.1}, {:.1}) to ({:.1}, {:.1})", start_x, center_y, end_x, center_y);
+                println!("  Drag from ({start_x:.1}, {center_y:.1}) to ({end_x:.1}, {center_y:.1})");
 
                 let _ = robot.mouse_move(start_x, center_y);
                 std::thread::sleep(Duration::from_millis(50));
@@ -456,7 +456,7 @@ fn main() {
                 std::thread::sleep(Duration::from_millis(100));
 
                 let sel_before = robot.has_focused_text_field().unwrap_or(false);
-                println!("  has_focused_field() after mouse down: {}", sel_before);
+                println!("  has_focused_field() after mouse down: {sel_before}");
 
                 let steps = 10;
                 for step in 1..=steps {
@@ -464,7 +464,7 @@ fn main() {
                     let drag_x = start_x + (end_x - start_x) * t;
                     let _ = robot.mouse_move(drag_x, center_y);
                     std::thread::sleep(Duration::from_millis(30));
-                    println!("  Drag step {}/{}: x={:.1}", step, steps, drag_x);
+                    println!("  Drag step {step}/{steps}: x={drag_x:.1}");
                 }
 
                 std::thread::sleep(Duration::from_millis(100));
@@ -479,7 +479,7 @@ fn main() {
                 std::thread::sleep(Duration::from_millis(200));
 
                 let focused_after = robot.has_focused_text_field().unwrap_or(false);
-                println!("  has_focused_field() after drag: {}", focused_after);
+                println!("  has_focused_field() after drag: {focused_after}");
 
                 if focused_after {
                     println!("  ✓ PASS: Click-drag completed, field still focused");
@@ -492,7 +492,7 @@ fn main() {
                 if let Some((x, y, _w, _h)) =
                     find_in_semantics(&robot, |elem| find_text(elem, ""))
                 {
-                    println!("  Found a text element at ({:.1}, {:.1})", x, y);
+                    println!("  Found a text element at ({x:.1}, {y:.1})");
                 } else {
                     println!("  ? Note: Could not find text field for drag test");
                 }
@@ -595,7 +595,7 @@ fn main() {
                         None
                     })
                 {
-                    println!("  Found text field at ({:.1}, {:.1}) with size ({:.1}x{:.1})", x, y, w, h);
+                    println!("  Found text field at ({x:.1}, {y:.1}) with size ({w:.1}x{h:.1})");
                     let _ = robot.mouse_move(x + w / 2.0, y + h / 2.0);
                     std::thread::sleep(Duration::from_millis(30));
                     let _ = robot.mouse_down();
@@ -610,7 +610,7 @@ fn main() {
                     if find_in_semantics(&robot, |elem| {
                         if let Some(ref text) = elem.text {
                             if text.contains("abc") {
-                                println!("  Found text containing 'abc': {}", text);
+                                println!("  Found text containing 'abc': {text}");
                                 return Some((elem.bounds.x, elem.bounds.y, elem.bounds.width, elem.bounds.height));
                             }
                         }

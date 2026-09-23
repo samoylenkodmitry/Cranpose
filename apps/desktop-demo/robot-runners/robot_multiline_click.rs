@@ -132,7 +132,7 @@ fn main() {
             if let Some(text) = &text_result {
                 println!("  Found multiline text: '{}'", text.replace('\n', "\\n"));
                 let lines: Vec<&str> = text.split('\n').collect();
-                println!("  Lines: {:?}", lines);
+                println!("  Lines: {lines:?}");
 
                 if lines.len() >= 2 && lines[1].contains('x') {
                     println!("✓ PASS: Marker 'x' correctly placed on line 2\n");
@@ -147,10 +147,7 @@ fn main() {
                     let _ = robot.exit();
                     return;
                 } else {
-                    println!(
-                        "✗ FAIL: Marker 'x' not found where expected. Lines: {:?}",
-                        lines
-                    );
+                    println!("✗ FAIL: Marker 'x' not found where expected. Lines: {lines:?}");
                     let _ = robot.exit();
                     return;
                 }
@@ -191,7 +188,7 @@ fn main() {
                     println!("=== ✓ ALL TESTS PASSED ===");
                     let _ = robot.exit();
                 } else {
-                    println!("✗ FAIL: Expected 'y' on line 3, but got lines: {:?}", lines);
+                    println!("✗ FAIL: Expected 'y' on line 3, but got lines: {lines:?}");
                     let _ = robot.exit();
                 }
             } else {

@@ -88,7 +88,7 @@ impl Harness {
             .list_state
             .borrow()
             .as_ref()
-            .cloned()
+            .copied()
             .expect("list state captured");
         let consumed = self
             .shell
