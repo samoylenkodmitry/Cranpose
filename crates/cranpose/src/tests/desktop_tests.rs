@@ -160,7 +160,7 @@ fn window_options() -> crate::native_window::NativeWindowOptions {
 #[test]
 fn a_window_that_must_not_take_focus_comes_up_inactive() {
     assert!(
-        !super::native_window_attributes(&window_options(), false, false).active,
+        !super::native_window_attributes(&window_options(), false, false, None).active,
         "a window that comes up key steals the press the focused window is \
          holding, and the gesture it was in the middle of is cancelled"
     );
@@ -168,7 +168,76 @@ fn a_window_that_must_not_take_focus_comes_up_inactive() {
 
 #[test]
 fn a_window_that_may_take_focus_comes_up_active() {
-    assert!(super::native_window_attributes(&window_options(), false, true).active);
+    assert!(super::native_window_attributes(&window_options(), false, true, None).active);
+}
+
+fn opaque_icon() -> cranpose_ui::ImageBitmap {
+    cranpose_ui::ImageBitmap::from_rgba8(2, 2, vec![200; 16]).expect("a 2x2 bitmap")
+}
+
+#[test]
+fn a_window_icon_becomes_a_winit_icon() {
+    assert!(super::winit_window_icon(&opaque_icon()).is_some());
+}
+
+#[test]
+fn every_native_window_carries_the_application_window_icon() {
+    let attributes =
+        super::native_window_attributes(&window_options(), false, true, Some(&opaque_icon()));
+
+    assert!(
+        attributes.window_icon.is_some(),
+        "a torn-out window with no icon shows the platform's blank one in the taskbar"
+    );
+}
+
+fn icon_pixels(attributes: &winit::window::WindowAttributes) -> *const u8 {
+    attributes
+        .window_icon
+        .as_ref()
+        .and_then(|icon| icon.cast_ref::<winit::icon::RgbaIcon>())
+        .expect("the window carries an RGBA icon")
+        .buffer()
+        .as_ptr()
+}
+
+#[test]
+fn no_two_windows_share_the_pixels_of_one_icon() {
+    let icon = opaque_icon();
+    let first = super::native_window_attributes(&window_options(), false, true, Some(&icon));
+    let second = super::native_window_attributes(&window_options(), false, true, Some(&icon));
+
+    assert_ne!(
+        icon_pixels(&first),
+        icon_pixels(&second),
+        "winit's Windows backend swaps an icon's red and blue in place when it makes the \
+         HICON, so a buffer used twice comes out with its colours reversed the second time"
+    );
+}
+
+#[test]
+fn the_primary_window_carries_the_application_icon_in_every_place_the_platform_draws_one() {
+    let attributes = super::with_application_icon(
+        winit::window::WindowAttributes::default(),
+        Some(&opaque_icon()),
+    );
+
+    assert!(attributes.window_icon.is_some());
+    #[cfg(target_os = "windows")]
+    assert!(
+        attributes.platform.is_some(),
+        "Windows draws the taskbar and Alt-Tab from ICON_BIG, which only the platform \
+         attributes set"
+    );
+}
+
+#[test]
+fn a_native_window_has_no_icon_when_the_application_names_none() {
+    assert!(
+        super::native_window_attributes(&window_options(), false, true, None)
+            .window_icon
+            .is_none()
+    );
 }
 
 #[test]

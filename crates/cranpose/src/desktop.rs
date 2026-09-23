@@ -22,6 +22,7 @@ use winit::{
     dpi::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize, Position},
     event::{ButtonSource, ElementState, MouseButton, WindowEvent},
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy},
+    icon::{Icon, RgbaIcon},
     window::{ResizeDirection, Window, WindowAttributes, WindowId as WinitWindowId, WindowLevel},
 };
 
@@ -1207,6 +1208,7 @@ impl App {
                 request,
                 self.settings.headless,
                 anything_focused,
+                self.settings.window_icon.as_ref(),
             ) {
                 Ok(shell) => native_window_shells.push(shell),
                 Err(error) => {
@@ -1488,6 +1490,7 @@ impl App {
         request: NativeWindowRequest,
         headless: bool,
         anything_focused: bool,
+        window_icon: Option<&cranpose_ui::ImageBitmap>,
     ) -> Result<NativeWindowShell, LaunchError> {
         let create_started = Instant::now();
         let options = &request.options;
@@ -1495,6 +1498,7 @@ impl App {
             options,
             headless,
             a_new_window_comes_up_key(headless, options.visible, anything_focused, options.focus),
+            window_icon,
         );
 
         let window: Arc<dyn Window> = event_loop
@@ -3581,10 +3585,37 @@ fn native_window_polling_drag_pointer(
     start_pointer_screen.or(global.map(|global| global.position))
 }
 
+fn winit_window_icon(bitmap: &cranpose_ui::ImageBitmap) -> Option<Icon> {
+    match RgbaIcon::new(bitmap.pixels().to_vec(), bitmap.width(), bitmap.height()) {
+        Ok(icon) => Some(icon.into()),
+        Err(error) => {
+            log::warn!("cranpose: the window icon is unusable: {error}");
+            None
+        }
+    }
+}
+
+fn with_application_icon(
+    attributes: WindowAttributes,
+    icon: Option<&cranpose_ui::ImageBitmap>,
+) -> WindowAttributes {
+    let attributes = attributes.with_window_icon(icon.and_then(winit_window_icon));
+    #[cfg(target_os = "windows")]
+    let attributes = {
+        use winit::platform::windows::WindowAttributesWindows;
+
+        attributes.with_platform_attributes(Box::new(
+            WindowAttributesWindows::default().with_taskbar_icon(icon.and_then(winit_window_icon)),
+        ))
+    };
+    attributes
+}
+
 fn native_window_attributes(
     options: &NativeWindowOptions,
     headless: bool,
     active: bool,
+    window_icon: Option<&cranpose_ui::ImageBitmap>,
 ) -> WindowAttributes {
     let mut attributes = WindowAttributes::default()
         .with_active(active)
@@ -3598,6 +3629,7 @@ fn native_window_attributes(
         .with_resizable(options.resizable)
         .with_visible(!headless && options.visible)
         .with_window_level(native_window_level(options.always_on_top));
+    attributes = with_application_icon(attributes, window_icon);
     attributes = with_native_window_shadow(attributes, options.shadow);
     if let (Some(width), Some(height)) = (options.min_width, options.min_height) {
         attributes = attributes.with_min_surface_size(LogicalSize::new(
@@ -5062,7 +5094,7 @@ impl ApplicationHandler for App {
         let initial_height = self.settings.initial_height;
         let headless = self.settings.headless;
 
-        let window: Arc<dyn Window> = match event_loop.create_window(
+        let window: Arc<dyn Window> = match event_loop.create_window(with_application_icon(
             WindowAttributes::default()
                 .with_title(self.settings.window_title.clone())
                 .with_surface_size(LogicalSize::new(
@@ -5070,7 +5102,8 @@ impl ApplicationHandler for App {
                     initial_height as f64,
                 ))
                 .with_visible(false),
-        ) {
+            self.settings.window_icon.as_ref(),
+        )) {
             Ok(window) => window.into(),
             Err(error) => {
                 self.abort_launch(event_loop, LaunchError::WindowCreate(error));

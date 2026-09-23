@@ -11,7 +11,10 @@ use cranpose_render_common::{
     },
     software_text_raster::SoftwareTextFontSet,
 };
-use cranpose_ui::text::{FontFamily, FontStyle, FontWeight};
+use cranpose_ui::{
+    ImageBitmap,
+    text::{FontFamily, FontStyle, FontWeight},
+};
 #[cfg(all(
     feature = "renderer-wgpu",
     any(feature = "desktop-shell", all(feature = "ios", target_os = "ios"))
@@ -52,6 +55,10 @@ impl AndroidGpuBackend {
 #[path = "tests/inspector_settings.rs"]
 mod inspector_settings_tests;
 
+#[cfg(test)]
+#[path = "tests/window_icon_settings.rs"]
+mod window_icon_settings_tests;
+
 /// Configuration for application settings.
 pub struct AppSettings {
     /// Window title (desktop) / app name (mobile)
@@ -68,6 +75,13 @@ pub struct AppSettings {
     /// The same declaration the platform builds read, so a service can answer
     /// on every platform without each one keeping its own list.
     pub capabilities: cranpose_capabilities::Capabilities<'static>,
+    /// Desktop only: the picture every window the application opens carries.
+    ///
+    /// Windows shows it in the title bar, the taskbar and the task switcher,
+    /// and Linux desktops show it in their panels and switchers. macOS,
+    /// Android, iOS and the web take the application's icon from what the
+    /// platform packaged and ignore this field.
+    pub window_icon: Option<ImageBitmap>,
     /// Initial window width in logical pixels.
     pub initial_width: u32,
     /// Initial window height in logical pixels.
@@ -152,6 +166,7 @@ impl Default for AppSettings {
             window_title: "Compose App".into(),
             application_id: None,
             capabilities: cranpose_capabilities::Capabilities::NONE,
+            window_icon: None,
             initial_width: 800,
             initial_height: 600,
             initial_size_explicit: false,
@@ -709,6 +724,17 @@ impl AppLauncher {
     /// initialises a platform logger of its own to get its name onto its lines.
     pub fn with_log_tag(mut self, tag: impl Into<String>) -> Self {
         self.settings.log_tag = Some(tag.into());
+        self
+    }
+
+    /// Desktop only: the picture every window the application opens carries,
+    /// in the title bar, taskbar and task switcher of Windows and Linux.
+    ///
+    /// macOS, Android, iOS and the web take the application's icon from what
+    /// the platform packaged and ignore it. A square picture of 64 to 256
+    /// pixels a side reads well at every size those desktops draw it.
+    pub fn with_window_icon(mut self, icon: ImageBitmap) -> Self {
+        self.settings.window_icon = Some(icon);
         self
     }
 
