@@ -448,7 +448,11 @@ pub mod prelude {
 ))]
 pub(crate) mod platform_env;
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(any(
+    all(feature = "desktop-shell", feature = "renderer-wgpu"),
+    all(feature = "android", target_os = "android"),
+    all(feature = "ios", target_os = "ios")
+))]
 mod pipeline_cache_file;
 
 #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]

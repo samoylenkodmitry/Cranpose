@@ -53,9 +53,12 @@ fmt-check:
 
 # --- lint ------------------------------------------------------------------
 
-# Lint the whole workspace, every target.
+# Lint the whole workspace, every target, then `cranpose` alone on its default
+# features. The workspace build unifies the desktop features other members
+# turn on, so it never compiles `cranpose` or its tests without them.
 clippy: _disk-guard
     cargo clippy --workspace --all-targets -- -D warnings
+    cargo clippy -p cranpose --all-targets -- -D warnings
 
 # A plain build does not catch `Arc<dyn Trait>` values that pay for
 # synchronisation the single-threaded wasm target cannot use; only clippy does.
@@ -80,11 +83,10 @@ clippy-ios:
 # off a Mac the Apple-only backends compile away and this only proves the
 # features still resolve.
 #
-# `robot` rides along because the desktop shell's screenshot helpers are only
-# called from robot code: without it those three functions are dead and the
-# recipe fails on them instead of on the backends above. `playbilling` rides
-# along too: it is Android-only and compiles away on every other target, so
-# there is no per-target recipe for it to join instead.
+# `robot` rides along because no default build turns it on, so this is the
+# only recipe that lints the desktop shell's robot driver and its tests.
+# `playbilling` rides along too: it is Android-only and compiles away on every
+# other target, so there is no per-target recipe for it to join instead.
 clippy-optional-backends:
     cargo clippy -p cranpose --no-default-features --features desktop,renderer-wgpu,camera-desktop,robot,audio-desktop,media,storekit,playbilling --all-targets -- -D warnings
 
@@ -236,12 +238,15 @@ test: _disk-guard
     cargo nextest run --cargo-profile ci --workspace --no-fail-fast
     cargo test --profile ci --workspace --exclude desktop-app-platform --doc
 
-# Feature permutations that the default build does not cover.
+# Feature permutations that the default build does not cover. The workspace
+# build turns on the desktop features of `cranpose`, so `cranpose` on its own
+# default features is one of them.
 test-features:
     cargo test --profile ci -p cranpose-core --features std-hash
     cargo test --profile ci -p cranpose-core --features internal
     cargo test --profile ci -p cranpose-ui --features svg
     cargo test --profile ci -p cranpose-render-common --features text-hyphenation-embedded
+    cargo test --profile ci -p cranpose
     cargo test --profile ci -p cranpose --no-default-features --features desktop,renderer-wgpu,camera-desktop,robot,audio-desktop,media,storekit,playbilling
 
 # The docs-only trigger filter that lets the heavy jobs skip a prose diff.

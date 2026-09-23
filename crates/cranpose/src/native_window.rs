@@ -1071,3 +1071,12 @@ pub(crate) fn unregister_native_window(key: NativeWindowKey, owner: NativeWindow
 #[cfg(test)]
 #[path = "tests/native_window_tests.rs"]
 mod tests;
+
+#[cfg(all(
+    test,
+    feature = "desktop-shell",
+    feature = "renderer-wgpu",
+    not(target_arch = "wasm32")
+))]
+#[path = "tests/native_window_desktop_tests.rs"]
+mod desktop_tests;
