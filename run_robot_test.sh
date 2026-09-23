@@ -981,6 +981,9 @@ run_test() {
 
     local example_env=()
     case "$example" in
+        robot_font_scale_first_frame)
+            example_env+=(CRANPOSE_FONT_SCALE=1.5)
+            ;;
         robot_liquid_scroll_exact_external_contract)
             example_env+=(WINIT_X11_SCALE_FACTOR=1.3541667)
             ;;

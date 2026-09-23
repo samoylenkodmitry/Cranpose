@@ -97,6 +97,7 @@ impl DesktopAccessibilityBridge {
         let initial_tree = Arc::new(Mutex::new(None));
         let actions = Arc::new(Mutex::new(Vec::new()));
         let reader_connected = Arc::new(AtomicBool::new(false));
+        let options_waker = waker.clone();
         let adapter = PlatformAdapter::new(
             window,
             InitialTree {
@@ -126,7 +127,10 @@ impl DesktopAccessibilityBridge {
             seen_revision: None,
             announcement: None,
             announcement_turn: false,
-            options: crate::desktop_accessibility_options::OptionsProbe::start(!robot_drives),
+            options: crate::desktop_accessibility_options::OptionsProbe::start(
+                !robot_drives,
+                move || options_waker.wake_up(),
+            ),
             scale_factor: window.scale_factor(),
             window_title: window.title(),
             geometry_changed: true,
@@ -143,6 +147,10 @@ impl DesktopAccessibilityBridge {
         }
     }
 
+    pub(crate) fn apply_platform_options(&mut self, shell: &mut AppShell<WgpuRenderer>) -> bool {
+        self.options.apply(shell)
+    }
+
     pub(crate) fn sync(&mut self, shell: &mut AppShell<WgpuRenderer>) {
         let reader_on = cranpose_services::AccessibilityState {
             screen_reader_on: self.reader_connected.load(Ordering::Relaxed),
@@ -150,7 +158,6 @@ impl DesktopAccessibilityBridge {
         if cranpose_services::set_platform_accessibility_state(reader_on) {
             shell.request_root_render();
         }
-        self.options.apply(shell);
         let mut announcements = accessibility::drain_app_announcements();
         let mut changed = std::mem::take(&mut self.geometry_changed);
         if let Some(elements) = accessibility::snapshot_if_changed(shell, &mut self.seen_revision)

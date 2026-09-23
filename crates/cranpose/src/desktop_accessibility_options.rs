@@ -28,7 +28,8 @@ const SWITCH_VARS: [(&str, SwitchField); 4] = [
     ("CRANPOSE_BOLD_TEXT", |options| &mut options.bold_text),
 ];
 
-/// Reads the system's options on a thread and hands them to the shell once.
+/// Reads the system's options on a thread and hands them to the shell once,
+/// calling `ready` so the event loop wakes to apply them.
 /// A run a robot drives reads only the environment, so a screenshot test
 /// does not follow the host's text scale or animation switch.
 pub(crate) struct OptionsProbe {
@@ -37,7 +38,7 @@ pub(crate) struct OptionsProbe {
 }
 
 impl OptionsProbe {
-    pub(crate) fn start(read_system: bool) -> Self {
+    pub(crate) fn start(read_system: bool, ready: impl FnOnce() + Send + 'static) -> Self {
         let slot = Arc::new(Mutex::new(None));
         let filled = Arc::clone(&slot);
         std::thread::Builder::new()
@@ -51,6 +52,7 @@ impl OptionsProbe {
                 if let Ok(mut slot) = filled.lock() {
                     *slot = Some(options);
                 }
+                ready();
             })
             .ok();
         Self {
@@ -60,22 +62,24 @@ impl OptionsProbe {
     }
 
     /// Installs the options once they are in, with the font scale and a root
-    /// render when they differ from the defaults.
-    pub(crate) fn apply<R>(&mut self, shell: &mut AppShell<R>)
+    /// render when they differ from the defaults. Returns whether they did.
+    pub(crate) fn apply<R>(&mut self, shell: &mut AppShell<R>) -> bool
     where
         R: Renderer,
         R::Error: std::fmt::Debug,
     {
         if self.applied {
-            return;
+            return false;
         }
         let Some(options) = self.slot.lock().ok().and_then(|mut slot| slot.take()) else {
-            return;
+            return false;
         };
         self.applied = true;
-        if crate::accessibility::apply_accessibility_options(shell, options) {
+        let changed = crate::accessibility::apply_accessibility_options(shell, options);
+        if changed {
             shell.set_font_scale(options.font_scale);
         }
+        changed
     }
 }
 

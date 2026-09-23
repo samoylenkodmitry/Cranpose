@@ -1069,6 +1069,33 @@ fn selective_measure_with_tree_hierarchy() -> Result<(), NodeError> {
 }
 
 #[test]
+fn a_global_cache_invalidation_remeasures_a_clean_child() -> Result<(), NodeError> {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let _guard = crate::render_state::render_state_test_guard();
+    crate::reset_render_state_for_tests();
+    let DirtyCleanLeaves {
+        mut applier,
+        root_id,
+        clean_calls,
+        ..
+    } = measured_dirty_clean_leaves()?;
+
+    super::invalidate_all_layout_caches();
+    applier.with_node::<LayoutNode, _>(root_id, |node| {
+        node.mark_needs_measure();
+        node.mark_needs_layout();
+    })?;
+    measure_layout(&mut applier, root_id, Size::new(100.0, 100.0))?;
+
+    assert_eq!(
+        clean_calls.get(),
+        2,
+        "a child measured before the invalidation must not be served from its cache"
+    );
+    Ok(())
+}
+
+#[test]
 fn scoped_layout_repass_remeasures_only_dirty_subtree() -> Result<(), NodeError> {
     let _app_context = crate::render_state::app_context_test_scope();
     let _guard = crate::render_state::render_state_test_guard();

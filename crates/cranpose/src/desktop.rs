@@ -5771,7 +5771,7 @@ impl ApplicationHandler for App {
             return;
         };
         if let Some(accessibility) = &mut self.accessibility {
-            let mut activated = false;
+            let mut activated = accessibility.apply_platform_options(app);
             for (node_id, canvas_key) in accessibility.drain_clicks() {
                 activated |= app.accessibility_activate(node_id, canvas_key);
             }

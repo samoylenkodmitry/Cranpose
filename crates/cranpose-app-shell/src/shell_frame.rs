@@ -348,8 +348,7 @@ where
             || cranpose_ui::has_pending_measure_repasses();
         let scoped_layout_nodes = pending_repass_nodes();
 
-        let invalidation_requested = take_layout_invalidation();
-        let global_layout_invalidation = invalidation_requested && !has_scoped_repasses;
+        let global_layout_invalidation = take_layout_invalidation();
         let force_layout_pass = self.app.force_layout_pass;
 
         if global_layout_invalidation {
@@ -358,7 +357,7 @@ where
                 mark_root_for_layout(&mut self.app.composition.applier_mut(), root);
             }
             self.app.request_forced_layout_pass();
-        } else if invalidation_requested || has_scoped_repasses {
+        } else if has_scoped_repasses {
             self.app.request_layout_pass();
         }
 

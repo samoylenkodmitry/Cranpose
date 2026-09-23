@@ -980,6 +980,7 @@ dependencies = [
  "cranpose-runtime-std",
  "cranpose-ui",
  "cranpose-ui-graphics",
+ "cranpose-ui-layout",
  "log",
  "web-time",
 ]

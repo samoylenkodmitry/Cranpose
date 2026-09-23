@@ -490,6 +490,8 @@ impl ShellApp {
             || peek_pointer_invalidation()
             || peek_focus_invalidation()
             || peek_layout_invalidation()
+            || cranpose_ui::has_pending_layout_repasses()
+            || cranpose_ui::has_pending_measure_repasses()
             || self.composition.should_render()
     }
 
@@ -572,8 +574,10 @@ where
         let app_content = Rc::new(std::cell::RefCell::new(content));
         let mut build: Box<dyn FnMut()> = Box::new(move || {
             let app_content = Rc::clone(&app_content);
-            cranpose_ui::widgets::PopupHost(move || {
-                (app_content.borrow_mut())();
+            cranpose_ui::density::ProvideDensity(cranpose_ui::Density::from_host(), move || {
+                cranpose_ui::widgets::PopupHost(move || {
+                    (app_content.borrow_mut())();
+                });
             });
         });
         renderer.attach_app_context_services(&app_context);
@@ -1053,8 +1057,7 @@ where
             previous != cranpose_ui::current_density().to_bits()
         });
         if changed {
-            self.app.request_forced_layout_pass();
-            self.mark_all_dirty();
+            self.request_root_render();
         }
     }
 
@@ -1086,8 +1089,7 @@ where
             previous != cranpose_ui::current_font_scale_curve()
         });
         if changed {
-            self.app.request_forced_layout_pass();
-            self.mark_all_dirty();
+            self.request_root_render();
         }
     }
 

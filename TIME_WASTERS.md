@@ -5,6 +5,7 @@
 - Put build, shell and CI details in [development troubleshooting](docs/development_troubleshooting.md).
 - Workspace dependency patches do not reach crates.io consumers; validate required upstream fixes against the published dependency graph before tagging.
 - Use a build cache from one compiler for compile-fail checks; newest-artifact lookup can otherwise select an incompatible proc macro.
+- On samarch-1, export `RUSTUP_TOOLCHAIN` from `rust-toolchain.toml` and use a fresh target directory for a new checkout or a patched consumer app; registry crates otherwise build with the host default and fail with E0514. `cargo update` the patched crates, or the lockfile keeps the published ones.
 - iOS keyboards can expose individual keys without a Keyboard container; verify editable focus, text entry and the saved value.
 - Verify that VoiceOver receives audit commands; app-directed automation can insert their text while VoiceOver is enabled.
 - Keep device evidence outside build caches; garbage collection must not erase the only speech transcript or regression result.

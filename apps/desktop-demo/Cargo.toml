@@ -680,6 +680,11 @@ path = "robot-runners/robot_composition_local_disappear.rs"
 required-features = ["robot-app"]
 
 [[example]]
+name = "robot_font_scale_first_frame"
+path = "robot-runners/robot_font_scale_first_frame.rs"
+required-features = ["robot-app"]
+
+[[example]]
 name = "robot_layout_validation"
 path = "robot-runners/robot_layout_validation.rs"
 required-features = ["robot-app"]

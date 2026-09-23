@@ -205,7 +205,10 @@ fn layout_invalidation_marks_flags_when_capability_present() {
     assert!(node.needs_measure());
     assert!(node.needs_layout());
     assert_eq!(crate::take_layout_repass_nodes(), vec![11]);
-    assert!(crate::take_layout_invalidation());
+    assert!(
+        !crate::take_layout_invalidation(),
+        "a scoped modifier invalidation must not invalidate the whole tree"
+    );
 }
 
 #[test]
