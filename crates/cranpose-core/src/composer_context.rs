@@ -28,6 +28,21 @@ pub fn enter(composer: &Composer) -> ComposerScopeGuard {
     ComposerScopeGuard
 }
 
+struct SuspendedComposers(Vec<Rc<ComposerCore>>);
+
+impl Drop for SuspendedComposers {
+    fn drop(&mut self) {
+        let suspended = std::mem::take(&mut self.0);
+        COMPOSER_STACK.with(|stack| *stack.borrow_mut() = suspended);
+    }
+}
+
+pub(crate) fn without_composer<R>(f: impl FnOnce() -> R) -> R {
+    let _suspended =
+        SuspendedComposers(COMPOSER_STACK.with(|stack| std::mem::take(&mut *stack.borrow_mut())));
+    f()
+}
+
 /// Access the current composer from the thread-local stack.
 ///
 /// # Panics

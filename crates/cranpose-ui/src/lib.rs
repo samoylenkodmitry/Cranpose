@@ -341,6 +341,10 @@ mod animated_visibility_tests;
 mod lazy_recycle_effect_tests;
 
 #[cfg(test)]
+#[path = "tests/measure_time_ui_task_tests.rs"]
+mod measure_time_ui_task_tests;
+
+#[cfg(test)]
 #[path = "tests/animation_frame_pump_tests.rs"]
 mod animation_frame_pump_tests;
 

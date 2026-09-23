@@ -142,6 +142,31 @@ fn apply_pending_commands_makes_subcomposed_nodes_available() {
 }
 
 #[test]
+fn apply_pending_commands_leaves_queued_ui_tasks_for_the_frame_loop() {
+    let (handle, _runtime) = runtime_handle();
+    let mut slots = SlotTable::default();
+    let mut applier = test_applier();
+    let ran = Rc::new(Cell::new(false));
+
+    let (composer, slots_host, applier_host) =
+        setup_composer(&mut slots, &mut applier, handle.clone(), None);
+    composer.set_phase(Phase::Measure);
+    let ran_in_task = Rc::clone(&ran);
+    handle.enqueue_ui_task(Box::new(move || ran_in_task.set(true)));
+
+    composer
+        .apply_pending_commands()
+        .expect("apply_pending_commands failed");
+    assert!(!ran.get(), "measure must not run queued UI tasks");
+
+    handle.drain_ui();
+    assert!(ran.get());
+
+    drop(composer);
+    teardown_composer(&mut slots, &mut applier, slots_host, applier_host);
+}
+
+#[test]
 fn subcompose_keeps_per_slot_compositions_with_v2_slot_tables() {
     let (handle, _runtime) = runtime_handle();
     let mut slots = SlotTable::default();
