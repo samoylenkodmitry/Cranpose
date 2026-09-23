@@ -42,8 +42,7 @@ fn main() {
     let instance = wgpu::Instance::new(instance_descriptor);
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::HighPerformance,
-        compatible_surface: None,
-        force_fallback_adapter: false,
+        ..wgpu::RequestAdapterOptions::default()
     }))
     .expect("an adapter is required to time passes");
     let info = adapter.get_info();

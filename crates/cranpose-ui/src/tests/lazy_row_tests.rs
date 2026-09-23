@@ -64,7 +64,6 @@ fn lazy_row_unbounded_width_matches_effective_viewport() {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn GrowingLazyRow(
     item_count: MutableState<usize>,
     captured_state: Rc<RefCell<Option<LazyListState>>>,
@@ -92,7 +91,7 @@ fn GrowingLazyRow(
                         RowSpec::default(),
                         move || {
                             Text(
-                                format!("Item {}", index),
+                                format!("Item {index}"),
                                 Modifier::empty(),
                                 TextStyle::default(),
                             );
@@ -109,7 +108,7 @@ fn lazy_row_updates_scroll_bounds_when_item_count_grows_without_scrolling() {
     let _app_context = crate::render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
-    let item_count = MutableState::with_runtime(2usize, runtime.clone());
+    let item_count = MutableState::with_runtime(2usize, runtime);
     let captured_state = Rc::new(RefCell::new(None));
     let call_count = Rc::new(Cell::new(0));
 
@@ -173,7 +172,6 @@ fn lazy_row_updates_scroll_bounds_when_item_count_grows_without_scrolling() {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn HorizontalScrollIndicatorLazyRow(captured_state: Rc<RefCell<Option<LazyListState>>>) {
     let list_state = rememberLazyListState();
     *captured_state.borrow_mut() = Some(list_state);
@@ -196,7 +194,7 @@ fn HorizontalScrollIndicatorLazyRow(captured_state: Rc<RefCell<Option<LazyListSt
             |scope| {
                 scope.items(80, |index| {
                     Text(
-                        format!("Item {}", index),
+                        format!("Item {index}"),
                         Modifier::empty().width(48.0),
                         TextStyle::default(),
                     );

@@ -213,9 +213,8 @@ fn draw_shape(
         return;
     }
 
-    let clip_bounds = match clip_rect_to_bounds(rect, clip, width, height) {
-        Some(bounds) => bounds,
-        None => return,
+    let Some(clip_bounds) = clip_rect_to_bounds(rect, clip, width, height) else {
+        return;
     };
     let Rect {
         width: rect_width,
@@ -229,7 +228,7 @@ fn draw_shape(
         arc
     });
     let stroke = draw.stroke;
-    let stroke_outset = stroke.map(|stroke| stroke.half_width()).unwrap_or(0.0);
+    let stroke_outset = stroke.map_or(0.0, |stroke| stroke.half_width());
     let resolved_shape = draw.shape.map(|shape| {
         shape.resolve(
             (rect_width - stroke_outset * 2.0).max(0.0),
@@ -306,9 +305,8 @@ fn draw_image(
         return;
     }
 
-    let clip_bounds = match clip_rect_to_bounds(rect, clip, width, height) {
-        Some(bounds) => bounds,
-        None => return,
+    let Some(clip_bounds) = clip_rect_to_bounds(rect, clip, width, height) else {
+        return;
     };
 
     let img_width = draw.image.width();
@@ -599,9 +597,8 @@ fn blit_rasterized_text_image(
     if rect.width <= 0.0 || rect.height <= 0.0 {
         return;
     }
-    let clip_bounds = match clip_rect_to_bounds(rect, clip, width, height) {
-        Some(bounds) => bounds,
-        None => return,
+    let Some(clip_bounds) = clip_rect_to_bounds(rect, clip, width, height) else {
+        return;
     };
 
     let img_width = image.width();

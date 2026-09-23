@@ -33,7 +33,6 @@ fn lens_dynamics() -> GlassDynamics {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn LensPage() {
     LiquidTheme(LiquidThemeSpec::default(), || {
         FramePage(

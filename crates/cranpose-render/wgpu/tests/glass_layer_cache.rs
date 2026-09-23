@@ -25,7 +25,6 @@ fn visible_rows() -> u32 {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn GlassRow(index: usize, first_row_warm: MutableState<bool>) {
     let tint = match index % 4 {
         0 if first_row_warm.get() && index == 0 => Color(0.92, 0.36, 0.12, 0.55),
@@ -54,7 +53,6 @@ fn GlassRow(index: usize, first_row_warm: MutableState<bool>) {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn GlassOverlay(pulse: MutableState<f32>, drift: MutableState<f32>) {
     let pulse_value = pulse.get();
     let drift_value = drift.get();
@@ -85,7 +83,6 @@ fn GlassOverlay(pulse: MutableState<f32>, drift: MutableState<f32>) {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn GlassScene(
     list_state: LazyListState,
     pulse: MutableState<f32>,
@@ -109,10 +106,12 @@ fn GlassScene(
                         LazyColumnSpec::new()
                             .vertical_arrangement(LinearArrangement::SpacedBy(ROW_SPACING)),
                         move |scope| {
-                            scope
-                                .items(LazyItems::new(40).key(|i: usize| i as u64), move |index| {
-                                    GlassRow(index, first_row_warm)
-                                });
+                            scope.items(
+                                LazyItems::new(40).key(|i: usize| i as u64),
+                                move |index| {
+                                    GlassRow(index, first_row_warm);
+                                },
+                            );
                         },
                     );
                     GlassOverlay(pulse, drift);

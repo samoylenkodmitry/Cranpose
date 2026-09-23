@@ -436,8 +436,7 @@ impl TextMeasurer for MonospacedTextMeasurer {
         let offset_in_line = line_text
             .char_indices()
             .nth(clamped_index)
-            .map(|(i, _)| i)
-            .unwrap_or(line_text.len());
+            .map_or(line_text.len(), |(i, _)| i);
 
         line_start_byte + offset_in_line
     }
@@ -717,8 +716,9 @@ pub fn glyph_line_box(style: &TextStyle, line_height: f32) -> (f32, f32) {
     crate::render_state::with_text_service(|service| {
         service.with_measurer(|m| m.glyph_line_box(&style))
     })
-    .map(|(off, h)| (off.min(line_height), h.min(line_height)))
-    .unwrap_or((0.0, line_height))
+    .map_or((0.0, line_height), |(off, h)| {
+        (off.min(line_height), h.min(line_height))
+    })
 }
 
 /// Distance from the top of a `style` line slot down to its baseline (see

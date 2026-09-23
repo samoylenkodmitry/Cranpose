@@ -1,5 +1,3 @@
-#![allow(non_snake_case)]
-
 use std::{cell::Cell, collections::HashMap, rc::Rc};
 
 use cranpose::{

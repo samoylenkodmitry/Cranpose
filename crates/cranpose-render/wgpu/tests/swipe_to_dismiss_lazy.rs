@@ -35,7 +35,6 @@ fn layout_texts(root: &LayoutBox) -> Vec<String> {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn SwipeRows() {
     let style = TextStyle::from_span_style(SpanStyle {
         color: Some(Color(1.0, 0.85, 0.4, 1.0)),
@@ -50,7 +49,6 @@ fn SwipeRows() {
         list_state,
         LazyColumnSpec::default(),
         move |scope| {
-            let style = style.clone();
             scope.items(5, move |index| {
                 let style = style.clone();
                 SwipeToDismiss(

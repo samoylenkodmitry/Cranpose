@@ -193,7 +193,6 @@ thread_local! {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn AppShellCaptureInitialDensity() {
     APP_SHELL_INITIAL_DENSITIES.with(|densities| {
         densities.borrow_mut().push(cranpose_ui::current_density());
@@ -201,7 +200,6 @@ fn AppShellCaptureInitialDensity() {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn AppShellScrollIndicatorLazyList() {
     let list_state = rememberLazyListState();
     APP_SHELL_LAZY_LIST_STATE.with(|slot| {
@@ -224,7 +222,7 @@ fn AppShellScrollIndicatorLazyList() {
                 |scope| {
                     scope.items(80, |index| {
                         Text(
-                            format!("Row {}", index),
+                            format!("Row {index}"),
                             Modifier::empty().height(48.0),
                             TextStyle::default(),
                         );
@@ -236,7 +234,6 @@ fn AppShellScrollIndicatorLazyList() {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn AppShellChildFirstVisible(list_state: LazyListState) {
     Text(
         format!(
@@ -249,7 +246,6 @@ fn AppShellChildFirstVisible(list_state: LazyListState) {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn AppShellChildStats(list_state: LazyListState) {
     let stats = list_state.stats();
     Text(
@@ -260,7 +256,6 @@ fn AppShellChildStats(list_state: LazyListState) {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn AppShellSiblingIndicatorsLazyList() {
     let list_state = rememberLazyListState();
     APP_SHELL_LAZY_LIST_STATE.with(|slot| {
@@ -280,7 +275,7 @@ fn AppShellSiblingIndicatorsLazyList() {
                 |scope| {
                     scope.items(80, |index| {
                         Text(
-                            format!("Row {}", index),
+                            format!("Row {index}"),
                             Modifier::empty().height(48.0),
                             TextStyle::default(),
                         );
@@ -292,7 +287,6 @@ fn AppShellSiblingIndicatorsLazyList() {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn AppShellVariableHeightSiblingIndicatorsLazyList() {
     let list_state = rememberLazyListState();
     APP_SHELL_LAZY_LIST_STATE.with(|slot| {
@@ -312,7 +306,7 @@ fn AppShellVariableHeightSiblingIndicatorsLazyList() {
                 |scope| {
                     scope.items(100, |index| {
                         Text(
-                            format!("Row {}", index),
+                            format!("Row {index}"),
                             Modifier::empty().height(48.0 + (index % 5) as f32 * 8.0),
                             TextStyle::default(),
                         );
@@ -324,7 +318,6 @@ fn AppShellVariableHeightSiblingIndicatorsLazyList() {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn AppShellLifecycleCountDisplay(count: MutableState<usize>) {
     Text(
         format!("Lifecycle count {}", count.get()),
@@ -334,7 +327,6 @@ fn AppShellLifecycleCountDisplay(count: MutableState<usize>) {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn AppShellLifecycleListItem(index: usize, count: MutableState<usize>) {
     cranpose_core::DisposableEffect(index, move |_| {
         count.update(|current| *current += 1);
@@ -342,14 +334,13 @@ fn AppShellLifecycleListItem(index: usize, count: MutableState<usize>) {
     });
 
     Text(
-        format!("Row {}", index),
+        format!("Row {index}"),
         Modifier::empty().height(48.0 + (index % 5) as f32 * 8.0),
         TextStyle::default(),
     );
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn AppShellLifecycleIndicatorsLazyList() {
     let list_state = rememberLazyListState();
     APP_SHELL_LAZY_LIST_STATE.with(|slot| {
@@ -390,7 +381,6 @@ thread_local! {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn AppShellKeyedSiblingIndicatorsRoot() {
     let active = cranpose_core::rememberMutableStateOf(|| 0i32);
     APP_SHELL_ACTIVE_TAB_STATE.with(|slot| {
@@ -414,7 +404,6 @@ fn AppShellKeyedSiblingIndicatorsRoot() {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn AppShellSwitchingKeyedLazyListRoot() {
     let active = cranpose_core::rememberMutableStateOf(|| 0i32);
     APP_SHELL_ACTIVE_TAB_STATE.with(|slot| {
@@ -476,7 +465,6 @@ fn callbackless_root_render_probe(render_count: Rc<Cell<usize>>) {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn AppShellAnimatedLazyItem() {
     let list_state = rememberLazyListState();
     LazyColumn(
@@ -2511,7 +2499,7 @@ fn layout_recovers_after_tab_switching_updates() {
     let _guard = test_guard();
     let root_key = location_key(file!(), line!(), column!());
     let mut shell = AppShell::new(TestRenderer::default(), root_key, || {
-        tabbed_progress_content()
+        tabbed_progress_content();
     });
     let mut baseline_live_slots = None;
     let mut peak_live_slots = 0usize;
@@ -3455,7 +3443,7 @@ fn pointer_scrolled_reaches_real_vertical_scroll_modifier() {
     shell.update();
 
     let scroll_state = APP_SHELL_WHEEL_SCROLL_STATE
-        .with(|slot| slot.borrow().as_ref().cloned())
+        .with(|slot| slot.borrow().as_ref().copied())
         .expect("wheel scroll probe should expose its scroll state");
     assert_eq!(scroll_state.value_non_reactive(), 0.0);
 
@@ -3543,7 +3531,7 @@ fn consumed_child_drag_does_not_scroll_parent_vertical_scroll() {
     shell.update();
 
     let scroll_state = APP_SHELL_WHEEL_SCROLL_STATE
-        .with(|slot| slot.borrow().as_ref().cloned())
+        .with(|slot| slot.borrow().as_ref().copied())
         .expect("drag scroll probe should expose its scroll state");
     assert_eq!(scroll_state.value_non_reactive(), 0.0);
 
@@ -3583,7 +3571,7 @@ fn android_style_consecutive_flings_keep_direction() {
     shell.update_at_frame_time_nanos(frame_ns);
 
     let scroll_state = APP_SHELL_WHEEL_SCROLL_STATE
-        .with(|slot| slot.borrow().as_ref().cloned())
+        .with(|slot| slot.borrow().as_ref().copied())
         .expect("fling probe should expose its scroll state");
     assert!(
         scroll_state.max_value() > 10_000.0,
@@ -3650,7 +3638,7 @@ fn two_finger_pinch_reaches_zoomable_state_through_shell() {
     shell.update();
 
     let zoom_state = APP_SHELL_ZOOM_STATE
-        .with(|slot| slot.borrow().as_ref().cloned())
+        .with(|slot| slot.borrow().as_ref().copied())
         .expect("zoomable probe should expose its zoom state");
     assert_eq!(zoom_state.scale_non_reactive(), 1.0);
 
@@ -3698,7 +3686,7 @@ fn pointer_zoomed_reaches_zoomable_state() {
     shell.update();
 
     let zoom_state = APP_SHELL_ZOOM_STATE
-        .with(|slot| slot.borrow().as_ref().cloned())
+        .with(|slot| slot.borrow().as_ref().copied())
         .expect("zoomable probe should expose its zoom state");
 
     assert!(shell.set_cursor(160.0, 320.0), "probe should be hoverable");
@@ -3731,7 +3719,7 @@ fn pointer_scrolled_reaches_horizontal_scroll_under_clickable_child() {
     shell.update();
 
     let scroll_state = APP_SHELL_WHEEL_SCROLL_STATE
-        .with(|slot| slot.borrow().as_ref().cloned())
+        .with(|slot| slot.borrow().as_ref().copied())
         .expect("horizontal wheel probe should expose its scroll state");
     assert_eq!(scroll_state.value_non_reactive(), 0.0);
 
@@ -3987,7 +3975,7 @@ fn draw_repass_updates_render_data_without_layout() {
     let width_state = state_holder
         .borrow()
         .as_ref()
-        .cloned()
+        .copied()
         .expect("width state should be captured");
     width_state.set(120.0);
 
@@ -4046,7 +4034,7 @@ fn draw_state_reads_schedule_draw_repass_without_composition_read() {
     let width_state = state_holder
         .borrow()
         .as_ref()
-        .cloned()
+        .copied()
         .expect("width state should be captured");
     width_state.set(120.0);
 
@@ -4106,7 +4094,7 @@ fn draw_only_repass_uses_scoped_renderer_update() {
     let width_state = state_holder
         .borrow()
         .as_ref()
-        .cloned()
+        .copied()
         .expect("width state should be captured");
     assert!(!shell.surfaces[0].retained_visual_nodes.is_empty());
     shell.surfaces[0].retained_visual_nodes.insert(usize::MAX);
@@ -4177,7 +4165,7 @@ fn draw_only_scene_dirty_repass_uses_visual_scoped_renderer_update() {
     let width_state = state_holder
         .borrow()
         .as_ref()
-        .cloned()
+        .copied()
         .expect("width state should be captured");
     width_state.set(120.0);
     shell.surfaces[0].scene_dirty = true;
@@ -4325,7 +4313,7 @@ fn keyed_subtree_swap_with_pending_scoped_repass_evicts_stale_layers() {
     let width_state = width_holder
         .borrow()
         .as_ref()
-        .cloned()
+        .copied()
         .expect("width state should be captured");
     width_state.set(120.0);
     shell.update();
@@ -4342,7 +4330,7 @@ fn keyed_subtree_swap_with_pending_scoped_repass_evicts_stale_layers() {
     let tab = tab_holder
         .borrow()
         .as_ref()
-        .cloned()
+        .copied()
         .expect("tab state should be captured");
     tab.set(1);
     let app_context = Rc::clone(shell.app_context());
@@ -4547,7 +4535,7 @@ fn graphics_layer_state_repass_does_not_recompose() {
     let offset_state = state_holder
         .borrow()
         .as_ref()
-        .cloned()
+        .copied()
         .expect("offset state should be captured");
     offset_state.set(48.0);
 
@@ -4613,7 +4601,7 @@ fn recomposed_graphics_layer_update_uses_scoped_renderer_update() {
     let offset_state = state_holder
         .borrow()
         .as_ref()
-        .cloned()
+        .copied()
         .expect("offset state should be captured");
     offset_state.set(48.0);
 
@@ -4681,12 +4669,12 @@ fn recomposed_shader_effect_layers_use_scoped_renderer_update() {
     let time_state = time_holder
         .borrow()
         .as_ref()
-        .cloned()
+        .copied()
         .expect("time state should be captured");
     let intensity_state = intensity_holder
         .borrow()
         .as_ref()
-        .cloned()
+        .copied()
         .expect("intensity state should be captured");
     time_state.set(0.25);
     intensity_state.set(1.5);
@@ -4755,12 +4743,12 @@ fn lazy_shader_effect_layers_use_draw_repass_without_recomposition() {
     let time_state = time_holder
         .borrow()
         .as_ref()
-        .cloned()
+        .copied()
         .expect("time state should be captured");
     let intensity_state = intensity_holder
         .borrow()
         .as_ref()
-        .cloned()
+        .copied()
         .expect("intensity state should be captured");
     time_state.set(0.25);
     intensity_state.set(1.5);
@@ -4830,7 +4818,7 @@ fn graphics_layer_point_state_repass_does_not_recompose() {
     let position_state = state_holder
         .borrow()
         .as_ref()
-        .cloned()
+        .copied()
         .expect("position state should be captured");
     position_state.set(Point { x: 48.0, y: 64.0 });
 
@@ -4948,7 +4936,6 @@ fn active_pointer_gesture_keeps_frame_schedule_until_release() {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn AbsoluteOffsetStackedTextRows(start: MutableState<i32>) {
     Box(
         Modifier::empty()
@@ -4986,7 +4973,6 @@ thread_local! {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn AppShellGrowingFirstRow() {
     let expanded = rememberMutableStateOf(|| false);
     APP_SHELL_EXPANSION_STATE.with(|slot| *slot.borrow_mut() = Some(expanded));
@@ -5036,7 +5022,6 @@ thread_local! {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn AppShellGrowerBox() {
     let grown = rememberMutableStateOf(|| false);
     APP_SHELL_GROWER_STATE.with(|slot| *slot.borrow_mut() = Some(grown));
@@ -5051,7 +5036,6 @@ fn AppShellGrowerBox() {
 const ORDINARY_SIBLING_COLOR: cranpose_ui::Color = cranpose_ui::Color(0.9, 0.05, 0.55, 1.0);
 
 #[composable]
-#[allow(non_snake_case)]
 fn AppShellOrdinaryColumnSiblings() {
     Column(
         Modifier::empty().fill_max_size(),
@@ -5070,7 +5054,6 @@ fn AppShellOrdinaryColumnSiblings() {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn AppShellSizeReactiveTopology() {
     let size = rememberMutableStateOf(cranpose_ui::Size::default);
     cranpose_ui::Box(
@@ -5146,7 +5129,6 @@ fn size_reactive_topology_switches_on_resize_and_settles() {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn AppShellSelfReferentialSize() {
     let size = rememberMutableStateOf(cranpose_ui::Size::default);
     let height = if size.get().height < 100.0 {
@@ -5393,7 +5375,7 @@ fn a_state_write_reaches_slot_content_without_any_concurrent_layout_dirt() {
     );
 
     let value = SLOT_STATE_HANDLE
-        .with(|slot| slot.borrow().as_ref().cloned())
+        .with(|slot| slot.borrow().as_ref().copied())
         .expect("probe must expose its state");
     value.set(2);
     assert!(
@@ -5605,7 +5587,7 @@ fn a_measure_computed_capture_reaches_slot_content_through_the_subcompose_key() 
     );
 
     let height = KEYED_HEIGHT_STATE
-        .with(|slot| slot.borrow().as_ref().cloned())
+        .with(|slot| slot.borrow().as_ref().copied())
         .expect("probe must expose its bar height state");
     height.set(72.0);
     for _ in 0..5 {
@@ -5857,7 +5839,6 @@ fn sibling_in_an_ordinary_column_moves_in_the_scene_when_a_row_grows() {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn AppShellGrowerAboveNestedLazy() {
     Column(
         Modifier::empty().fill_max_size(),
@@ -6090,7 +6071,7 @@ fn absolute_offset_text_rows_redraw_after_state_only_change() {
     let start = state_holder
         .borrow()
         .as_ref()
-        .cloned()
+        .copied()
         .expect("start state should be captured");
     start.set(30);
     shell.update();
@@ -6842,7 +6823,7 @@ fn draw_refresh_scope_only_contains_dirty_ancestors() {
     let right = node_id_at_path(layout_tree.root(), &[0, 1]);
     let right_leaf = node_id_at_path(layout_tree.root(), &[0, 1, 0]);
 
-    let dirty_nodes = HashSet::from([left_leaf]);
+    let dirty_nodes = HashSet::from_iter([left_leaf]);
     let refresh_scope = {
         let mut applier = shell.app.composition.applier_mut();
         build_draw_refresh_scope(&mut applier, &dirty_nodes)
@@ -7182,7 +7163,7 @@ fn app_shell_interactive_counter_test_tab(counter: MutableState<i32>) {
                                         match event.kind {
                                             PointerEventKind::Down => pointer_down.set(true),
                                             PointerEventKind::Up | PointerEventKind::Cancel => {
-                                                pointer_down.set(false)
+                                                pointer_down.set(false);
                                             }
                                             PointerEventKind::Move => {
                                                 pointer_position.set(event.position);
@@ -7257,7 +7238,7 @@ fn app_shell_effect_test_tab() {
                 if request_key == 0 {
                     return;
                 }
-                status.set_value(format!("Request {}", request_key));
+                status.set_value(format!("Request {request_key}"));
             })
         },
     );
@@ -7541,11 +7522,11 @@ fn app_shell_demo_like_counter_tab() {
                                                         await_scope.await_pointer_event().await;
                                                     match event.kind {
                                                         PointerEventKind::Down => {
-                                                            pointer_down.set(true)
+                                                            pointer_down.set(true);
                                                         }
                                                         PointerEventKind::Up
                                                         | PointerEventKind::Cancel => {
-                                                            pointer_down.set(false)
+                                                            pointer_down.set(false);
                                                         }
                                                         PointerEventKind::Move => {
                                                             pointer_position.set(event.position);
@@ -7795,7 +7776,7 @@ fn app_shell_actual_like_counter_tab() {
                                         match event.kind {
                                             PointerEventKind::Down => pointer_down.set(true),
                                             PointerEventKind::Up | PointerEventKind::Cancel => {
-                                                pointer_down.set(false)
+                                                pointer_down.set(false);
                                             }
                                             PointerEventKind::Move => {
                                                 pointer_position.set(Point {
@@ -8111,7 +8092,7 @@ fn app_shell_many_tabs_clickable_host() {
                             1 => app_shell_composition_local_test_tab(),
                             _ => {
                                 Text(
-                                    format!("Tab {}", active),
+                                    format!("Tab {active}"),
                                     Modifier::empty().padding(8.0),
                                     TextStyle::default(),
                                 );
@@ -8207,7 +8188,7 @@ fn app_shell_many_tabs_precise_render_active(active: i32) {
         1 => app_shell_composition_local_test_tab(),
         _ => {
             Text(
-                format!("Tab {}", active),
+                format!("Tab {active}"),
                 Modifier::empty().padding(8.0),
                 TextStyle::default(),
             );
@@ -8222,7 +8203,7 @@ fn app_shell_many_tabs_precise_tab_content(active_tab: MutableState<i32>, modifi
         cranpose_core::with_key(&active, || {
             if app_shell_many_tab_requires_scroll(active) {
                 app_shell_scrollable_wrapper(move || {
-                    app_shell_many_tabs_precise_render_active(active)
+                    app_shell_many_tabs_precise_render_active(active);
                 });
             } else {
                 app_shell_many_tabs_precise_render_active(active);
@@ -8970,7 +8951,7 @@ fn a_branch_switch_hands_the_gesture_to_the_branch_that_is_on_screen() {
 
     tap(&mut shell);
     assert_eq!(
-        APP_SHELL_ROUTER_MENU_DOWNS.with(|count| count.get()),
+        APP_SHELL_ROUTER_MENU_DOWNS.with(Cell::get),
         1,
         "the menu owns the gesture while the menu is what is on screen"
     );
@@ -8982,8 +8963,8 @@ fn a_branch_switch_hands_the_gesture_to_the_branch_that_is_on_screen() {
     shell.update();
 
     tap(&mut shell);
-    let menu = APP_SHELL_ROUTER_MENU_DOWNS.with(|count| count.get());
-    let arena = APP_SHELL_ROUTER_ARENA_DOWNS.with(|count| count.get());
+    let menu = APP_SHELL_ROUTER_MENU_DOWNS.with(Cell::get);
+    let arena = APP_SHELL_ROUTER_ARENA_DOWNS.with(Cell::get);
     assert_eq!(
         (menu, arena),
         (1, 1),
@@ -9906,7 +9887,7 @@ fn empty_rotary_events_are_dropped_before_dispatch() {
 fn window_level_rotary_handler_receives_unconsumed_events() {
     let _guard = test_guard();
     let events = Rc::new(RefCell::new(Vec::new()));
-    let scene = rotary_scene(vec![rotary_target(1, false, events.clone(), vec![1])]);
+    let scene = rotary_scene(vec![rotary_target(1, false, events, vec![1])]);
 
     let root_key = location_key(file!(), line!(), column!());
     let mut shell = AppShell::new(ScrollDispatchRenderer::new(scene), root_key, empty_content);
@@ -9947,7 +9928,7 @@ fn window_level_rotary_handler_runs_with_no_hit_targets() {
 fn window_level_rotary_handler_is_skipped_when_a_modifier_consumed() {
     let _guard = test_guard();
     let events = Rc::new(RefCell::new(Vec::new()));
-    let scene = rotary_scene(vec![rotary_target(1, true, events.clone(), vec![1])]);
+    let scene = rotary_scene(vec![rotary_target(1, true, events, vec![1])]);
 
     let root_key = location_key(file!(), line!(), column!());
     let mut shell = AppShell::new(ScrollDispatchRenderer::new(scene), root_key, empty_content);
@@ -10262,7 +10243,7 @@ fn a_live_semantics_recorder_is_stale_until_its_requester_says_otherwise() {
         slot.borrow()
             .as_ref()
             .expect("the requester is bound during composition")
-            .invalidate()
+            .invalidate();
     });
     shell.process_frame();
     assert_eq!(
@@ -10294,7 +10275,7 @@ fn a_pending_semantics_request_wakes_the_shell_without_dirtying_a_pixel() {
         slot.borrow()
             .as_ref()
             .expect("the requester is bound during composition")
-            .invalidate()
+            .invalidate();
     });
     assert!(
         shell.needs_update(),

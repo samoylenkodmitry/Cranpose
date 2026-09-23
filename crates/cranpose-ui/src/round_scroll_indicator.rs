@@ -375,7 +375,7 @@ pub fn scaling_list_items<I>(viewport: f32, density: f32, rows: I, out: &mut Vec
 where
     I: IntoIterator<Item = (f32, f32)>,
 {
-    scaling_list_items_with(ScalingParams::WEAR, viewport, density, rows, out)
+    scaling_list_items_with(ScalingParams::WEAR, viewport, density, rows, out);
 }
 
 /// [`scaling_list_items`] for a list whose ramp is not the default one.
@@ -715,7 +715,7 @@ mod tests {
 
     const VIEWPORT: f32 = 400.0;
 
-    fn list<'a>(visible: &'a [IndicatorItem]) -> ScalingList<'a> {
+    fn list(visible: &[IndicatorItem]) -> ScalingList<'_> {
         ScalingList {
             visible,
             total: 10,

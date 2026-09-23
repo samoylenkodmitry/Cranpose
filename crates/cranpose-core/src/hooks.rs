@@ -188,7 +188,7 @@ pub fn ownedMutableStateOfNeverEqual<T: Clone + 'static>(initial: T) -> OwnedMut
 }
 
 fn current_runtime(what: &str) -> runtime::RuntimeHandle {
-    composer_context::try_with_composer(|composer| composer.runtime_handle())
+    composer_context::try_with_composer(super::composer::Composer::runtime_handle)
         .or_else(runtime::current_runtime_handle)
         .unwrap_or_else(|| {
             panic!(
@@ -203,7 +203,7 @@ fn current_runtime(what: &str) -> runtime::RuntimeHandle {
 /// handle the case where the runtime isn't yet available.
 #[allow(non_snake_case)]
 pub fn try_mutableStateOf<T: Clone + PartialEq + 'static>(initial: T) -> Option<MutableState<T>> {
-    let runtime = composer_context::try_with_composer(|composer| composer.runtime_handle())
+    let runtime = composer_context::try_with_composer(super::composer::Composer::runtime_handle)
         .or_else(runtime::current_runtime_handle)?;
     Some(runtime.alloc_persistent_state_with_policy(initial, Arc::new(StructuralEqual)))
 }
@@ -280,7 +280,7 @@ pub fn rememberMutableStateOf<T: Clone + PartialEq + 'static>(
             .remember_at(source, || {
                 OwnedMutableState::with_runtime_structural_eq(init(), runtime)
             })
-            .with(|state| state.handle())
+            .with(super::state::OwnedMutableState::handle)
     })
 }
 
@@ -294,7 +294,7 @@ pub fn rememberMutableStateOfNeverEqual<T: Clone + 'static>(
         let runtime = composer.runtime_handle();
         composer
             .remember_at(source, || OwnedMutableState::with_runtime(init(), runtime))
-            .with(|state| state.handle())
+            .with(super::state::OwnedMutableState::handle)
     })
 }
 
@@ -306,8 +306,7 @@ pub fn derivedStateOf<T: 'static + Clone>(compute: impl Fn() -> T + 'static) -> 
         composer.with_group(source, |composer| {
             let should_recompute = composer
                 .current_recompose_scope()
-                .map(|scope| scope.should_recompose())
-                .unwrap_or(true);
+                .is_none_or(|scope| scope.should_recompose());
             let runtime = composer.runtime_handle();
             let compute_rc: Rc<dyn Fn() -> T> = Rc::new(compute);
             let derived = composer.remember_at(source, || {

@@ -26,7 +26,7 @@ pub fn clear_platform_system_theme() {
 }
 
 pub fn default_system_theme() -> SystemTheme {
-    if let Some(theme) = PLATFORM_SYSTEM_THEME.with(|cell| cell.get()) {
+    if let Some(theme) = PLATFORM_SYSTEM_THEME.with(Cell::get) {
         return theme;
     }
     detected_system_theme()
@@ -66,14 +66,13 @@ fn detect_system_theme_uncached() -> SystemTheme {
                     .ok()
                     .flatten()
             })
-            .map(|query| {
+            .map_or(SystemTheme::Light, |query| {
                 if query.matches() {
                     SystemTheme::Dark
                 } else {
                     SystemTheme::Light
                 }
             })
-            .unwrap_or(SystemTheme::Light)
     }
 
     #[cfg(any(
@@ -245,7 +244,6 @@ pub fn local_system_theme() -> CompositionLocal<SystemTheme> {
     })
 }
 
-#[allow(non_snake_case)]
 #[composable]
 pub fn ProvideSystemTheme(theme: SystemTheme, content: impl FnOnce()) {
     let local = local_system_theme();
@@ -254,7 +252,6 @@ pub fn ProvideSystemTheme(theme: SystemTheme, content: impl FnOnce()) {
     });
 }
 
-#[allow(non_snake_case)]
 #[composable]
 pub fn isSystemInDarkTheme() -> bool {
     matches!(local_system_theme().current(), SystemTheme::Dark)
@@ -295,14 +292,13 @@ mod tests {
         {
             let captured = Rc::clone(&captured);
             let local_for_provider = local.clone();
-            let local_for_read = local.clone();
             run_test_composition(move || {
                 let captured = Rc::clone(&captured);
-                let local_for_read = local_for_read.clone();
+                let local = local.clone();
                 CompositionLocalProvider(
                     vec![local_for_provider.provides(SystemTheme::Dark)],
                     move || {
-                        *captured.borrow_mut() = Some(local_for_read.current());
+                        *captured.borrow_mut() = Some(local.current());
                     },
                 );
             });
@@ -318,7 +314,6 @@ mod tests {
 
         {
             let captured = Rc::clone(&captured);
-            let local = local.clone();
             run_test_composition(move || {
                 let captured = Rc::clone(&captured);
                 let local = local.clone();

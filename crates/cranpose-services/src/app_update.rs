@@ -455,10 +455,10 @@ fn status_slot() -> &'static Mutex<AppUpdateStatus> {
 
 /// Returns the latest update state.
 pub fn app_update_status() -> AppUpdateStatus {
-    status_slot()
-        .lock()
-        .map(|status| status.clone())
-        .unwrap_or_else(|poisoned| poisoned.into_inner().clone())
+    status_slot().lock().map_or_else(
+        |poisoned| poisoned.into_inner().clone(),
+        |status| status.clone(),
+    )
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -519,7 +519,7 @@ pub fn observe_app_update_status(
     OBSERVERS.with(|observers| {
         observers
             .borrow_mut()
-            .push((id, std::rc::Rc::clone(&observer)))
+            .push((id, std::rc::Rc::clone(&observer)));
     });
     observer(app_update_status());
     AppUpdateObserver { id }
@@ -558,7 +558,7 @@ pub fn set_app_update_status(status: AppUpdateStatus) {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::AtomicUsize;
+    use std::sync::{PoisonError, atomic::AtomicUsize};
 
     use super::*;
 
@@ -578,7 +578,7 @@ mod tests {
         fn installs(&self) -> Vec<UpdatePackage> {
             self.installed
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
+                .unwrap_or_else(PoisonError::into_inner)
                 .clone()
         }
     }
@@ -599,7 +599,7 @@ mod tests {
         fn install(&self, package: &UpdatePackage) -> Result<(), AppUpdateError> {
             self.installed
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
+                .unwrap_or_else(PoisonError::into_inner)
                 .push(package.clone());
             Ok(())
         }
@@ -804,13 +804,13 @@ mod tests {
         let observer = observe_app_update_status(move |status| {
             captured
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
+                .unwrap_or_else(PoisonError::into_inner)
                 .push(status);
         });
         set_app_update_status(AppUpdateStatus::Verifying);
         set_app_update_status(AppUpdateStatus::Installing);
         assert_eq!(
-            *seen.lock().unwrap_or_else(|error| error.into_inner()),
+            *seen.lock().unwrap_or_else(PoisonError::into_inner),
             vec![
                 AppUpdateStatus::Idle,
                 AppUpdateStatus::Verifying,

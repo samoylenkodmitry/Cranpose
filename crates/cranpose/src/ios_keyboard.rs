@@ -189,8 +189,7 @@ fn byte_for_x(geom: &CaretGeom, text: &str, x: f32) -> usize {
     }
     text.char_indices()
         .nth(best_k)
-        .map(|(b, _)| b)
-        .unwrap_or(text.len())
+        .map_or(text.len(), |(b, _)| b)
 }
 
 pub(crate) enum ImeOp {
@@ -311,9 +310,7 @@ impl TextPosition {
         unsafe { msg_send![super(this), init] }
     }
     fn offset(pos: &UITextPosition) -> usize {
-        pos.downcast_ref::<TextPosition>()
-            .map(|p| *p.ivars())
-            .unwrap_or(0)
+        pos.downcast_ref::<TextPosition>().map_or(0, |p| *p.ivars())
     }
 }
 
@@ -360,8 +357,7 @@ impl TextRange {
     fn bounds(range: &UITextRange) -> (usize, usize) {
         range
             .downcast_ref::<TextRange>()
-            .map(|r| *r.ivars())
-            .unwrap_or((0, 0))
+            .map_or((0, 0), |r| *r.ivars())
     }
 }
 
@@ -469,7 +465,7 @@ define_class!(
 
         #[unsafe(method(setMarkedText:selectedRange:))]
         fn set_marked_text_selected_range(&self, marked: Option<&NSString>, _sel: NSRange) {
-            let text = marked.map(|t| t.to_string()).unwrap_or_default();
+            let text = marked.map(ToString::to_string).unwrap_or_default();
             let m = read_mirror();
             apply_replace(m.sel.0, m.sel.1, &text);
         }

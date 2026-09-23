@@ -212,10 +212,7 @@ impl Mixer {
             }
             let slot = self.voices[index].slot;
             let rate = self.voices[index].rate;
-            let clip_rate = self.clips[slot]
-                .as_ref()
-                .map(|clip| clip.sample_rate)
-                .unwrap_or(0);
+            let clip_rate = self.clips[slot].as_ref().map_or(0, |clip| clip.sample_rate);
             self.voices[index].step = step_for(rate, clip_rate, sample_rate);
         }
     }
@@ -263,7 +260,7 @@ impl Mixer {
 
         let mut sounding = 0usize;
         let clips = &self.clips;
-        for voice in self.voices.iter_mut() {
+        for voice in &mut self.voices {
             if voice.id == 0 {
                 continue;
             }
@@ -437,10 +434,7 @@ impl Mixer {
                         continue;
                     }
                     let slot = self.voices[index].slot;
-                    let clip_rate = self.clips[slot]
-                        .as_ref()
-                        .map(|clip| clip.sample_rate)
-                        .unwrap_or(0);
+                    let clip_rate = self.clips[slot].as_ref().map_or(0, |clip| clip.sample_rate);
                     self.voices[index].gain_left = gain_left;
                     self.voices[index].gain_right = gain_right;
                     self.voices[index].rate = rate;
@@ -448,7 +442,7 @@ impl Mixer {
                 }
             }
             Command::StopVoice { voice } => {
-                for slot in self.voices.iter_mut() {
+                for slot in &mut self.voices {
                     if slot.id == voice {
                         slot.id = 0;
                     }
@@ -458,7 +452,7 @@ impl Mixer {
                 self.silence_slot(slot as usize);
             }
             Command::StopAll => {
-                for voice in self.voices.iter_mut() {
+                for voice in &mut self.voices {
                     voice.id = 0;
                 }
             }
@@ -477,7 +471,7 @@ impl Mixer {
     }
 
     fn silence_slot(&mut self, slot: usize) {
-        for voice in self.voices.iter_mut() {
+        for voice in &mut self.voices {
             if voice.id != 0 && voice.slot == slot {
                 voice.id = 0;
             }
@@ -498,10 +492,7 @@ impl Mixer {
                 oldest_one_shot = Some((index, voice.id));
             }
         }
-        oldest_one_shot
-            .or(oldest_any)
-            .map(|(index, _)| index)
-            .unwrap_or(0)
+        oldest_one_shot.or(oldest_any).map_or(0, |(index, _)| index)
     }
 
     fn retire(&mut self, clip: ClipData) {

@@ -11,8 +11,6 @@
 //! sit" the same way. The drag is [`Modifier::draggable`], so pulling a thumb
 //! obeys the same touch slop and axis locking as scrolling the content itself.
 
-#![allow(non_snake_case)]
-
 use cranpose_core::NodeId;
 use cranpose_ui_graphics::{Brush, Color, CornerRadii, DrawScope, Point, Rect, Size};
 use cranpose_ui_layout::Axis;
@@ -188,9 +186,7 @@ pub fn Scrollbar(
 
         let drawn = dragged.clone();
         Canvas(
-            Modifier::empty()
-                .fill_max_size()
-                .draggable(axis, dragged.clone()),
+            Modifier::empty().fill_max_size().draggable(axis, dragged),
             move |scope: &mut dyn DrawScope| {
                 draw_scrollbar(scope, state, axis, spec, drawn.is_dragging());
             },

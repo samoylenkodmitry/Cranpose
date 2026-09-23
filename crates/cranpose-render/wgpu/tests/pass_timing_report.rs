@@ -11,7 +11,6 @@ const FRAME_WIDTH: u32 = 320;
 const FRAME_HEIGHT: u32 = 320;
 
 #[composable]
-#[allow(non_snake_case)]
 fn ShadowedCardScene() {
     Box(
         Modifier::empty()
@@ -58,14 +57,7 @@ impl Harness {
 
 fn adapter_can_time_passes() -> bool {
     let _lock = support::gpu_test_lock();
-    let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
-    instance_descriptor.backends = wgpu::Backends::all();
-    let instance = wgpu::Instance::new(instance_descriptor);
-    let Ok(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-        power_preference: wgpu::PowerPreference::LowPower,
-        compatible_surface: None,
-        force_fallback_adapter: false,
-    })) else {
+    let Ok(adapter) = support::device::headless_adapter(wgpu::Backends::all()) else {
         return false;
     };
     adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY)

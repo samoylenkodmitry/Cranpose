@@ -122,7 +122,7 @@ fn stats_watchers_survive_conditional_toggle() {
     let mut composition = test_composition();
     let runtime = composition.runtime_handle();
     let toggle = MutableState::with_runtime(true, runtime.clone());
-    let stats = MutableState::with_runtime(0i32, runtime.clone());
+    let stats = MutableState::with_runtime(0i32, runtime);
 
     let mut render = { move || anchor_progress_content(toggle, stats) };
 
@@ -173,17 +173,22 @@ fn state_write_prunes_dropped_watchers() {
     assert_eq!(state.watcher_count(), 0);
 }
 
+/// Registers a subscriber callback on `state` that counts its runs.
+fn counting_subscriber(state: MutableState<i32>) -> Rc<Cell<usize>> {
+    let notifications = Rc::new(Cell::new(0));
+    let notifications_for_callback = Rc::clone(&notifications);
+    state.as_state().on_subscriber(move || {
+        notifications_for_callback.set(notifications_for_callback.get() + 1);
+    });
+    notifications
+}
+
 #[test]
 fn state_subscriber_callback_tracks_first_live_scope() {
     let runtime = TestRuntime::new();
     let handle = runtime.handle();
-    let state = MutableState::with_runtime(0i32, handle.clone());
-    let notifications = Rc::new(Cell::new(0));
-    let notifications_for_callback = Rc::clone(&notifications);
-    let callback = Rc::new(move || {
-        notifications_for_callback.set(notifications_for_callback.get() + 1);
-    });
-    state.as_state().on_subscriber(callback.clone());
+    let state = MutableState::with_runtime(0i32, handle);
+    let notifications = counting_subscriber(state);
     let observer = SnapshotStateObserver::new(|callback| callback());
 
     observer.observe_reads(1usize, |_| {}, || state.get());
@@ -209,7 +214,7 @@ fn state_subscriber_callback_tracks_first_live_scope() {
 fn a_subscription_hold_keeps_an_unobserved_state_subscribed() {
     let runtime = TestRuntime::new();
     let handle = runtime.handle();
-    let state = MutableState::with_runtime(0i32, handle.clone());
+    let state = MutableState::with_runtime(0i32, handle);
     assert!(!state.as_state().has_subscribers());
 
     let hold = state.as_state().subscription_hold();
@@ -229,18 +234,12 @@ fn a_subscription_hold_keeps_an_unobserved_state_subscribed() {
 fn a_subscription_hold_fires_the_subscriber_callback() {
     let runtime = TestRuntime::new();
     let handle = runtime.handle();
-    let state = MutableState::with_runtime(0i32, handle.clone());
-    let notifications = Rc::new(Cell::new(0));
-    let notifications_for_callback = Rc::clone(&notifications);
-    let callback: Rc<dyn Fn()> = Rc::new(move || {
-        notifications_for_callback.set(notifications_for_callback.get() + 1);
-    });
-    state.as_state().on_subscriber(callback.clone());
+    let state = MutableState::with_runtime(0i32, handle);
+    let notifications = counting_subscriber(state);
 
     let hold = state.as_state().subscription_hold();
     assert_eq!(notifications.get(), 1);
     drop(hold);
-    drop(callback);
 }
 
 #[composable]
@@ -252,12 +251,7 @@ fn subscriber_callback_reader(state: MutableState<i32>) {
 fn state_subscriber_callback_fires_once_for_a_composition_read() {
     let mut composition = test_composition();
     let state = MutableState::with_runtime(0i32, composition.runtime_handle());
-    let notifications = Rc::new(Cell::new(0));
-    let notifications_for_callback = Rc::clone(&notifications);
-    let callback: Rc<dyn Fn()> = Rc::new(move || {
-        notifications_for_callback.set(notifications_for_callback.get() + 1);
-    });
-    state.as_state().on_subscriber(callback.clone());
+    let notifications = counting_subscriber(state);
 
     composition
         .render(location_key(file!(), line!(), column!()), move || {
@@ -278,12 +272,7 @@ fn state_subscriber_callback_fires_once_for_a_composition_read() {
 fn state_subscriber_callback_treats_scope_and_read_observers_as_one_subscription() {
     let runtime = TestRuntime::new();
     let state = MutableState::with_runtime(0i32, runtime.handle());
-    let notifications = Rc::new(Cell::new(0));
-    let notifications_for_callback = Rc::clone(&notifications);
-    let callback: Rc<dyn Fn()> = Rc::new(move || {
-        notifications_for_callback.set(notifications_for_callback.get() + 1);
-    });
-    state.as_state().on_subscriber(callback.clone());
+    let notifications = counting_subscriber(state);
 
     let observer = SnapshotStateObserver::new(|callback| callback());
     observer.observe_reads(1usize, |_| {}, || state.get());
@@ -296,48 +285,48 @@ fn state_subscriber_callback_treats_scope_and_read_observers_as_one_subscription
 }
 
 #[test]
-fn state_subscriber_callback_does_not_retain_dropped_callback() {
+fn a_subscriber_callback_fires_without_the_caller_keeping_it() {
     let runtime = TestRuntime::new();
-    let handle = runtime.handle();
-    let state = MutableState::with_runtime(0i32, handle.clone());
-    let callback = Rc::new(|| {});
-    let weak = Rc::downgrade(&callback);
-    state.as_state().on_subscriber(callback.clone());
-    drop(callback);
+    let state = MutableState::with_runtime(0i32, runtime.handle());
+    let notifications = counting_subscriber(state);
 
     let observer = SnapshotStateObserver::new(|callback| callback());
     observer.observe_reads(1usize, |_| {}, || state.get());
-    assert!(weak.upgrade().is_none());
+
+    assert_eq!(notifications.get(), 1);
+}
+
+#[test]
+fn a_released_state_drops_its_subscriber_callbacks() {
+    let runtime = TestRuntime::new();
+    let state = OwnedMutableState::with_runtime(0i32, runtime.handle());
+    let captured = Rc::new(());
+    let captured_weak = Rc::downgrade(&captured);
+    state.as_state().on_subscriber(move || {
+        let _ = &captured;
+    });
+    assert!(captured_weak.upgrade().is_some());
+
+    drop(state);
+
+    assert!(captured_weak.upgrade().is_none());
 }
 
 #[test]
 fn state_subscriber_callback_keeps_reentrant_registration() {
     let runtime = TestRuntime::new();
-    let handle = runtime.handle();
-    let state = MutableState::with_runtime(0i32, handle.clone());
+    let state = MutableState::with_runtime(0i32, runtime.handle());
     let nested_notifications = Rc::new(Cell::new(0));
-    let nested_callback: Rc<dyn Fn()> = {
-        let nested_notifications = Rc::clone(&nested_notifications);
-        Rc::new(move || nested_notifications.set(nested_notifications.get() + 1))
-    };
-    let nested_lifetime = Rc::new(RefCell::new(Some(Rc::clone(&nested_callback))));
-    let registered = Rc::new(Cell::new(false));
-    let callback: Rc<dyn Fn()> = {
-        let registered = Rc::clone(&registered);
-        let nested_lifetime = Rc::clone(&nested_lifetime);
-        Rc::new(move || {
-            if !registered.replace(true) {
-                state.as_state().on_subscriber(
-                    nested_lifetime
-                        .borrow()
-                        .as_ref()
-                        .expect("nested callback")
-                        .clone(),
-                );
-            }
-        })
-    };
-    state.as_state().on_subscriber(callback.clone());
+    let nested_for_callback = Rc::clone(&nested_notifications);
+    let registered = Cell::new(false);
+    state.as_state().on_subscriber(move || {
+        if !registered.replace(true) {
+            let nested = Rc::clone(&nested_for_callback);
+            state
+                .as_state()
+                .on_subscriber(move || nested.set(nested.get() + 1));
+        }
+    });
     let observer = SnapshotStateObserver::new(|callback| callback());
 
     observer.observe_reads(1usize, |_| {}, || state.get());
@@ -346,21 +335,6 @@ fn state_subscriber_callback_keeps_reentrant_registration() {
 
     observer.observe_reads(2usize, |_| {}, || state.get());
     assert_eq!(nested_notifications.get(), 2);
-}
-
-#[test]
-fn state_subscriber_callback_prunes_dead_registrations_while_subscribed() {
-    let runtime = TestRuntime::new();
-    let handle = runtime.handle();
-    let state = MutableState::with_runtime(0i32, handle.clone());
-    let observer = SnapshotStateObserver::new(|callback| callback());
-    observer.observe_reads(1usize, |_| {}, || state.get());
-
-    for _ in 0..256 {
-        state.as_state().on_subscriber(Rc::new(|| {}));
-    }
-
-    assert_eq!(state.subscriber_callback_count(), 0);
 }
 
 #[test]

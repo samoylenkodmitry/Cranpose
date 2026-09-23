@@ -15,7 +15,7 @@ pub(crate) fn click_button(robot: &Robot, label: &str) -> Result<(), String> {
     let (x, y, w, h) = find_button_in_semantics(robot, label)
         .ok_or_else(|| format!("button '{label}' not found"))?;
     robot.click(x + w * 0.5, y + h * 0.5)?;
-    robot.wait_for_idle().map_err(|err| err.to_string())?;
+    robot.wait_for_idle()?;
     Ok(())
 }
 

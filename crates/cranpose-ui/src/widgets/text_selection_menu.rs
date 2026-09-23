@@ -17,8 +17,6 @@
 //! moment a handle drag starts, and rematerializes in place ~250 ms after
 //! release with a ~140 ms fade (no scale, no slide).
 
-#![allow(non_snake_case)]
-
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,

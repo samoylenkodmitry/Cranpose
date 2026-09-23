@@ -19,12 +19,12 @@ fn main() {
 
             let click_button = |name: &str| -> bool {
                 if let Some((x, y, w, h)) = find_button_in_semantics(&robot, name) {
-                    println!("  Found button '{}' at ({:.1}, {:.1})", name, x, y);
+                    println!("  Found button '{name}' at ({x:.1}, {y:.1})");
                     robot.click(x + w / 2.0, y + h / 2.0).ok();
                     std::thread::sleep(Duration::from_millis(150));
                     true
                 } else {
-                    println!("  ✗ Button '{}' not found!", name);
+                    println!("  ✗ Button '{name}' not found!");
                     false
                 }
             };
@@ -33,7 +33,7 @@ fn main() {
                     return true;
                 }
                 if let Some((x, y, w, h)) = find_text_in_semantics(&robot, name) {
-                    println!("  Found text '{}' at ({:.1}, {:.1})", name, x, y);
+                    println!("  Found text '{name}' at ({x:.1}, {y:.1})");
                     robot.click(x + w / 2.0, y + h / 2.0).ok();
                     std::thread::sleep(Duration::from_millis(150));
                     return true;
@@ -101,7 +101,7 @@ fn main() {
                 println!("  ✗ Detected duplicate LazyList layout artifacts");
                 if !duplicates.is_empty() {
                     for (label, count) in &duplicates {
-                        println!("    Duplicate {} -> {} occurrences", label, count);
+                        println!("    Duplicate {label} -> {count} occurrences");
                     }
                 }
                 print_semantics_with_bounds(elements, 0);

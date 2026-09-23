@@ -25,14 +25,14 @@ fn wait_for_prefix(
 
 fn dump_semantics(robot: &Robot, label: &str) {
     if let Ok(semantics) = robot.get_semantics() {
-        println!("--- Semantics dump ({}) ---", label);
+        println!("--- Semantics dump ({label}) ---");
         cranpose::Robot::print_semantics(&semantics, 0);
     }
 }
 
 fn click_tab(robot: &Robot, label: &str) {
     let (x, y, w, h) = find_button_in_semantics(robot, label)
-        .unwrap_or_else(|| robot_exit::fail(robot, &format!("Tab '{}' not found", label)));
+        .unwrap_or_else(|| robot_exit::fail(robot, &format!("Tab '{label}' not found")));
     robot.click(x + w / 2.0, y + h / 2.0).ok();
     std::thread::sleep(Duration::from_millis(200));
     let _ = robot.wait_for_idle();
@@ -126,10 +126,7 @@ fn main() {
             let distance = (dx * dx + dy * dy).sqrt();
 
             if distance < 5.0 {
-                eprintln!(
-                    "✗ Pointer coordinates did not update: {:?} -> {:?}",
-                    coords_1, coords_2
-                );
+                eprintln!("✗ Pointer coordinates did not update: {coords_1:?} -> {coords_2:?}");
                 let _ = robot.exit();
                 std::process::exit(1);
             }

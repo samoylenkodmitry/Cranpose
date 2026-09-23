@@ -42,7 +42,6 @@ struct PumpProbe {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn PumpHost(probe: Rc<PumpProbe>) {
     probe.composes.set(probe.composes.get() + 1);
     probe.observed_gate.set(probe.gate.borrow().state().value());
@@ -55,7 +54,7 @@ fn frame_pump_survives_exact_boundary_completions() {
     let probe_for_host = Rc::clone(&probe_slot);
     let mut composition = run_test_composition(move || {
         let probe = cranpose_core::remember(|| {
-            let runtime = with_current_composer(|composer| composer.runtime_handle());
+            let runtime = with_current_composer(cranpose_core::Composer::runtime_handle);
             Rc::new(PumpProbe {
                 gate: RefCell::new(Animatable::new(0.0, runtime.clone())),
                 tail: RefCell::new(Animatable::new(0.0, runtime)),

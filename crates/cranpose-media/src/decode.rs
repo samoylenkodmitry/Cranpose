@@ -85,7 +85,7 @@ impl Decoder {
         let channels = params
             .channels
             .as_ref()
-            .map(|channels| channels.count())
+            .map(symphonia::core::audio::Channels::count)
             .and_then(|count| u16::try_from(count).ok())
             .and_then(ChannelCount::new)
             .ok_or_else(|| MediaError::Failed("the item states no channel layout".to_owned()))?;
@@ -276,8 +276,7 @@ fn open_media(uri: &str) -> Result<(Box<dyn MediaSource>, SourceCancel), MediaEr
         "cranpose-media: {uri} does not seek; spooling {} bytes",
         handle
             .len
-            .map(|len| len.to_string())
-            .unwrap_or_else(|| "an unstated number of".to_owned())
+            .map_or_else(|| "an unstated number of".to_owned(), |len| len.to_string())
     );
     let (spool, cancel) = Spool::start(Box::new(file), &spool_directory()?, handle.len)
         .map_err(|error| MediaError::Failed(format!("{uri}: no spool: {error}")))?;

@@ -42,8 +42,7 @@ fn main() {
             }
             let last_index = total_count - 1;
             println!(
-                "  Parsed total_count={} last_index={}",
-                total_count, last_index
+                "  Parsed total_count={total_count} last_index={last_index}"
             );
 
             println!("\n--- Step 3: Jump to end ---");
@@ -78,17 +77,16 @@ fn main() {
                 std::process::exit(1);
             };
             println!(
-                "  LazyListViewport bounds=({:.1},{:.1},{:.1},{:.1})",
-                list_x, list_y, list_w, list_h
+                "  LazyListViewport bounds=({list_x:.1},{list_y:.1},{list_w:.1},{list_h:.1})"
             );
 
-            let item_text = format!("ItemRow #{}", last_index);
+            let item_text = format!("ItemRow #{last_index}");
             let row_bounds = find_in_semantics(&robot, |elem| find_text_exact(elem, &item_text));
-            let hello_text = format!("Hello #{}", last_index);
+            let hello_text = format!("Hello #{last_index}");
             let hello_bounds = find_in_semantics(&robot, |elem| find_text_exact(elem, &hello_text));
 
             let Some(row_bounds) = row_bounds else {
-                println!("  ✗ {} not found in semantics after End", item_text);
+                println!("  ✗ {item_text} not found in semantics after End");
                 if let Some(list_elem) = find_element_by_text_exact(elements, "LazyListViewport") {
                     print_semantics_with_bounds(std::slice::from_ref(list_elem), 1);
                 }
@@ -113,8 +111,7 @@ fn main() {
             let item_bottom = group_bounds.1 + group_bounds.3;
             let gap = list_bottom - item_bottom;
             println!(
-                "  Bottom alignment: list_bottom={:.1} item_bottom={:.1} gap={:.1}",
-                list_bottom, item_bottom, gap
+                "  Bottom alignment: list_bottom={list_bottom:.1} item_bottom={item_bottom:.1} gap={gap:.1}"
             );
 
             let max_allowed_gap = 8.0;

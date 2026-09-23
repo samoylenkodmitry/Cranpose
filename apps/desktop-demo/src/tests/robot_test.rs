@@ -18,7 +18,7 @@ mod robot_tests {
         robot.dump_screen();
 
         let texts = robot.get_all_text();
-        println!("All text on screen: {:?}", texts);
+        println!("All text on screen: {texts:?}");
     }
 
     #[test]
@@ -126,12 +126,12 @@ mod robot_tests {
         for (x, y) in positions {
             let mut finder = robot.find_at_position(x, y);
             if finder.exists() {
-                println!("Found element at ({}, {})", x, y);
+                println!("Found element at ({x}, {y})");
                 if let Some(bounds) = finder.bounds() {
-                    println!("  Bounds: {:?}", bounds);
+                    println!("  Bounds: {bounds:?}");
                 }
             } else {
-                println!("No element at ({}, {})", x, y);
+                println!("No element at ({x}, {y})");
             }
         }
     }

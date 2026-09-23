@@ -125,7 +125,6 @@ fn main() {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn probe_app() {
     ROOT_COMPOSITIONS.fetch_add(1, Ordering::Relaxed);
     let mode = rememberMutableStateOf(|| ProbeMode::None);

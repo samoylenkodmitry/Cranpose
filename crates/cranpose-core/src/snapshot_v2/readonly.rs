@@ -152,7 +152,7 @@ mod tests {
         let invalid = SnapshotIdSet::new().set(5);
         let snapshot = ReadonlySnapshot::new(10, invalid, None);
 
-        let any_snapshot = AnySnapshot::Readonly(snapshot.clone());
+        let any_snapshot = AnySnapshot::Readonly(snapshot);
         assert!(any_snapshot.is_valid(1));
         assert!(any_snapshot.is_valid(10));
         assert!(!any_snapshot.is_valid(5));

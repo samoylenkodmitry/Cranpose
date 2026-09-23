@@ -359,7 +359,6 @@ fn app_badge_geometry(optical_scale: f32) -> AppBadgeGeometry {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn TabIcon(icon: LiquidTabIcon, style: LiquidTabIconStyle, color: Color, optical_scale: f32) {
     const FRAME_HEIGHT: f32 = 32.0;
     Box(
@@ -367,7 +366,7 @@ fn TabIcon(icon: LiquidTabIcon, style: LiquidTabIconStyle, color: Color, optical
         BoxSpec::default().content_alignment(Alignment::CENTER),
         move || match style {
             LiquidTabIconStyle::Plain => {
-                TabGlyph(icon.clone(), TAB_ICON_SIZE * optical_scale, color)
+                TabGlyph(icon.clone(), TAB_ICON_SIZE * optical_scale, color);
             }
             LiquidTabIconStyle::AppBadge => {
                 let icon = icon.clone();
@@ -458,7 +457,6 @@ struct TabCellsSpec {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn TabCells(
     modifier: Modifier,
     tabs: Rc<Vec<LiquidTab>>,
@@ -758,7 +756,6 @@ fn collect_tabs(content: impl FnOnce(&LiquidTabBarScope)) -> Vec<LiquidTab> {
 /// });
 /// ```
 #[composable]
-#[allow(non_snake_case)]
 pub fn LiquidTabBar(
     modifier: Modifier,
     spec: LiquidTabBarSpec,
@@ -779,7 +776,6 @@ pub fn LiquidTabBar(
 
 /// A floating glass tab bar with a detached accessory to its right.
 #[composable]
-#[allow(non_snake_case)]
 pub fn LiquidTabBarWithAccessory(
     modifier: Modifier,
     spec: LiquidTabBarSpec,
@@ -800,7 +796,6 @@ pub fn LiquidTabBarWithAccessory(
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn LiquidTabBarLayout(
     modifier: Modifier,
     spec: LiquidTabBarSpec,
@@ -1053,7 +1048,7 @@ fn LiquidTabBarLayout(
                     TabCells(
                         Modifier::empty(),
                         Rc::clone(&tabs),
-                        typography.clone(),
+                        typography,
                         cells,
                         TabCellsSpec {
                             base_color: tab_base_content_color(colors),
@@ -1098,7 +1093,6 @@ fn LiquidTabBarLayout(
 
 /// The standard detached accessory: a circular glass search button.
 #[composable]
-#[allow(non_snake_case)]
 pub fn LiquidTabBarSearchAccessory(on_click: impl Fn() + 'static) {
     crate::widgets::GlassIconButton(
         Modifier::empty().content_description("Search"),

@@ -50,10 +50,9 @@ fn env_u64(key: &str, default: u64) -> u64 {
 }
 
 fn env_bool(key: &str, default: bool) -> bool {
-    std::env::var(key)
-        .ok()
-        .map(|v| matches!(v.to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
-        .unwrap_or(default)
+    std::env::var(key).ok().map_or(default, |v| {
+        matches!(v.to_lowercase().as_str(), "1" | "true" | "yes" | "on")
+    })
 }
 
 fn env_string(key: &str, default: &str) -> String {
@@ -150,8 +149,8 @@ fn log_stage_render_stats(robot: &cranpose::Robot, stage: &str) {
                 );
             }
         }
-        Ok(None) => println!("VISUAL_RENDER stage={} unavailable", stage),
-        Err(err) => println!("VISUAL_RENDER stage={} error={}", stage, err),
+        Ok(None) => println!("VISUAL_RENDER stage={stage} unavailable"),
+        Err(err) => println!("VISUAL_RENDER stage={stage} error={err}"),
     }
 }
 
@@ -178,7 +177,7 @@ fn save_stage_screenshot(
             &format!("failed to capture screenshot for stage '{stage}'"),
         );
     };
-    let filename = format!("{}_{}.png", branch_label, stage);
+    let filename = format!("{branch_label}_{stage}.png");
     let path = output_dir.join(filename);
     if let Err(err) = save_png(&path, &screenshot) {
         fatal(
@@ -219,9 +218,10 @@ fn run_visual_compare(robot: &cranpose::Robot) {
         DEFAULT_VISUAL_SCROLL_DELAY_MS,
     );
     let branch_label = env_string("CRANPOSE_BRANCH_LABEL", "unknown");
-    let output_dir = std::env::var("CRANPOSE_VISUAL_OUTPUT_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| output_paths::diagnostic_path("cranpose_shaders_visual_compare"));
+    let output_dir = std::env::var("CRANPOSE_VISUAL_OUTPUT_DIR").map_or_else(
+        |_| output_paths::diagnostic_path("cranpose_shaders_visual_compare"),
+        PathBuf::from,
+    );
     if let Err(err) = fs::create_dir_all(&output_dir) {
         fatal(
             robot,
@@ -259,7 +259,7 @@ fn run_visual_compare(robot: &cranpose::Robot) {
     for step in 1..=scroll_steps {
         let _ = robot.drag(scroll_x, scroll_start_y, scroll_x, scroll_end_y);
         std::thread::sleep(Duration::from_millis(scroll_delay_ms));
-        let stage = format!("scroll_down_{}", step);
+        let stage = format!("scroll_down_{step}");
         wait_for_stage(robot, settle_ms, &stage);
     }
 
@@ -396,8 +396,7 @@ fn main() {
         default_profile_scroll_steps(headless),
     );
     println!(
-        "  mode={:?}, headless={}, duration={}s, scroll_steps={}",
-        mode, headless, duration_secs, scroll_steps
+        "  mode={mode:?}, headless={headless}, duration={duration_secs}s, scroll_steps={scroll_steps}"
     );
 
     AppLauncher::new()

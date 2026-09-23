@@ -259,14 +259,13 @@ fn verify_scroll_decoration_invariance(robot: &cranpose::Robot) {
             diffs.len(),
             if avg > 0.0 { max / avg } else { 0.0 },
         );
-        if avg > 0.0 && max / avg > spike_ratio_threshold {
-            panic!(
-                "FAIL: detected discrete rendering spikes (max/avg ratio {:.2} > {:.1}). \
-                 Smooth scrolling should produce consistent sub-pixel variation, not spikes.",
-                max / avg,
-                spike_ratio_threshold,
-            );
-        }
+        assert!(
+            !(avg > 0.0 && max / avg > spike_ratio_threshold),
+            "FAIL: detected discrete rendering spikes (max/avg ratio {:.2} > {:.1}). \
+             Smooth scrolling should produce consistent sub-pixel variation, not spikes.",
+            max / avg,
+            spike_ratio_threshold,
+        );
     }
 }
 

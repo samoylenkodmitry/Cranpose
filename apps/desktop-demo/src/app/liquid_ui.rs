@@ -1,5 +1,3 @@
-#![allow(non_snake_case)]
-
 use std::cell::RefCell;
 
 use cranpose::{
@@ -215,7 +213,7 @@ fn TouchedUpButtonGroup(
             .with_glue_radius(36.0),
         move |scope| {
             scope.action(icons::MORE_HORIZ, "More grouped action", move || {
-                more_confirmed.set(false)
+                more_confirmed.set(false);
             });
             if show_confirm {
                 scope.push(
@@ -983,17 +981,20 @@ fn SortFilterStage(suggestion_offset: f32) {
                                 )),
                                 {
                                     let anchor_sink = std::rc::Rc::clone(&anchor_sink);
-                                    let pill_gesture = column_gesture.clone();
                                     move || {
                                         let pill_open = pill_open;
                                         let pill_press = cranpose_animation::animateFloatAsState(
-                                            if pill_gesture.is_pressed() { 1.0 } else { 0.0 },
+                                            if column_gesture.is_pressed() {
+                                                1.0
+                                            } else {
+                                                0.0
+                                            },
                                             cranpose_animation::spring(1.0, 600.0),
                                             "sortfilter-pill-press",
                                         );
                                         let pill = liquid_menu_trigger_input(
                                             Modifier::empty(),
-                                            pill_gesture.clone(),
+                                            column_gesture.clone(),
                                             move || pill_open.set(true),
                                         )
                                         .graphics_layer(move || {
@@ -1028,7 +1029,7 @@ fn SortFilterStage(suggestion_offset: f32) {
                                                 .highlight(0.0)
                                                 .no_clip(),
                                             {
-                                                let glow_gesture = pill_gesture.clone();
+                                                let glow_gesture = column_gesture.clone();
                                                 let glow_rect = std::rc::Rc::clone(&anchor_sink);
                                                 move || {
                                                     let press = if glow_gesture.is_pressed() {
@@ -1163,7 +1164,7 @@ fn SortFilterStage(suggestion_offset: f32) {
                             dismiss_section.set(0);
                         },
                         move |scope| {
-                            sort_filter_menu_content(scope, section, sort_choice, filter_choice)
+                            sort_filter_menu_content(scope, section, sort_choice, filter_choice);
                         },
                     );
                 },
@@ -1995,7 +1996,7 @@ pub fn LiquidUiTab() {
                             SectionTitle("TOGGLE PRESS");
                             let reference_toggle = toggle_a;
                             TogglePressReferenceStage(reference_toggle.get(), move |value| {
-                                reference_toggle.set(value)
+                                reference_toggle.set(value);
                             });
                             Box(Modifier::empty().height(12.0), BoxSpec::default(), || {});
 

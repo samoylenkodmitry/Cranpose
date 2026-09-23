@@ -27,7 +27,7 @@ cranpose-animation = { workspace = true }
 cranpose-foundation = { workspace = true }
 cranpose-services = { workspace = true, default-features = false }
 log = "0.4"
-thiserror = "2.0.18"
+thiserror = "2.0.20"
 
 [dev-dependencies]
 # Path-only (no version): cargo strips path-only dev-deps from the published

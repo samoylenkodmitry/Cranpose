@@ -1,5 +1,3 @@
-#![allow(non_snake_case)]
-
 use cranpose::prelude::*;
 use cranpose_core::mutableStateListOf;
 use cranpose_foundation::text::TextFieldState;

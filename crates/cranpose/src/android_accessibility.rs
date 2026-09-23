@@ -1,7 +1,7 @@
 #![allow(unsafe_code)]
 
 use std::sync::{
-    Mutex, OnceLock,
+    Mutex, OnceLock, PoisonError,
     atomic::{AtomicBool, AtomicU8, Ordering},
 };
 
@@ -55,8 +55,8 @@ fn system_options() -> cranpose_services::AccessibilityOptions {
 fn accessibility_sync_override() -> Option<bool> {
     static OVERRIDE: OnceLock<Option<bool>> = OnceLock::new();
     *OVERRIDE.get_or_init(|| match std::env::var("CRANPOSE_A11Y_SYNC").as_deref() {
-        Ok("0") | Ok("false") | Ok("off") => Some(false),
-        Ok("1") | Ok("true") | Ok("on") => Some(true),
+        Ok("0" | "false" | "off") => Some(false),
+        Ok("1" | "true" | "on") => Some(true),
         _ => None,
     })
 }
@@ -72,15 +72,13 @@ fn screen_reader_running() -> bool {
 }
 
 pub(crate) fn set_waker(waker: android_activity::AndroidAppWaker) {
-    *LOOP_WAKER
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(waker);
+    *LOOP_WAKER.lock().unwrap_or_else(PoisonError::into_inner) = Some(waker);
 }
 
 fn wake_loop() {
     let waker = LOOP_WAKER
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .unwrap_or_else(PoisonError::into_inner)
         .clone();
     if let Some(waker) = waker {
         waker.wake();
@@ -121,7 +119,7 @@ pub(crate) fn drain_selection_requests() -> Vec<(i32, usize, usize)> {
     std::mem::take(
         &mut *selection_requests()
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            .unwrap_or_else(PoisonError::into_inner),
     )
 }
 
@@ -142,18 +140,14 @@ fn jump_requests() -> &'static Mutex<Vec<(i32, usize)>> {
 }
 
 pub(crate) fn drain_activations() -> Vec<i32> {
-    std::mem::take(
-        &mut *activations()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()),
-    )
+    std::mem::take(&mut *activations().lock().unwrap_or_else(PoisonError::into_inner))
 }
 
 pub(crate) fn drain_custom_actions() -> Vec<(i32, usize)> {
     std::mem::take(
         &mut *custom_actions()
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            .unwrap_or_else(PoisonError::into_inner),
     )
 }
 
@@ -162,7 +156,7 @@ pub(crate) fn drain_focus_requests() -> Vec<i32> {
     std::mem::take(
         &mut *focus_requests()
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            .unwrap_or_else(PoisonError::into_inner),
     )
 }
 
@@ -171,7 +165,7 @@ pub(crate) fn drain_value_requests() -> Vec<(i32, f32)> {
     std::mem::take(
         &mut *value_requests()
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            .unwrap_or_else(PoisonError::into_inner),
     )
 }
 
@@ -180,7 +174,7 @@ pub(crate) fn drain_text_requests() -> Vec<(i32, String)> {
     std::mem::take(
         &mut *text_requests()
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            .unwrap_or_else(PoisonError::into_inner),
     )
 }
 
@@ -189,7 +183,7 @@ pub(crate) fn drain_scroll_requests() -> Vec<(i32, bool)> {
     std::mem::take(
         &mut *scroll_requests()
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            .unwrap_or_else(PoisonError::into_inner),
     )
 }
 
@@ -198,7 +192,7 @@ pub(crate) fn drain_expand_requests() -> Vec<(i32, bool)> {
     std::mem::take(
         &mut *expand_requests()
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            .unwrap_or_else(PoisonError::into_inner),
     )
 }
 
@@ -207,7 +201,7 @@ pub(crate) fn drain_long_click_requests() -> Vec<i32> {
     std::mem::take(
         &mut *long_click_requests()
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            .unwrap_or_else(PoisonError::into_inner),
     )
 }
 
@@ -216,7 +210,7 @@ pub(crate) fn drain_dismiss_requests() -> Vec<i32> {
     std::mem::take(
         &mut *dismiss_requests()
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            .unwrap_or_else(PoisonError::into_inner),
     )
 }
 
@@ -226,7 +220,7 @@ pub(crate) fn drain_jump_requests() -> Vec<(i32, usize)> {
     std::mem::take(
         &mut *jump_requests()
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            .unwrap_or_else(PoisonError::into_inner),
     )
 }
 
@@ -340,7 +334,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccess
 ) {
     activations()
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .unwrap_or_else(PoisonError::into_inner)
         .push(virtual_id);
     wake_loop();
 }
@@ -401,7 +395,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccess
 ) {
     focus_requests()
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .unwrap_or_else(PoisonError::into_inner)
         .push(virtual_id);
     wake_loop();
 }
@@ -419,7 +413,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccess
     }
     custom_actions()
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .unwrap_or_else(PoisonError::into_inner)
         .push((virtual_id, action_index as usize));
     wake_loop();
 }
@@ -437,7 +431,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccess
 ) {
     value_requests()
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .unwrap_or_else(PoisonError::into_inner)
         .push((virtual_id, value));
     wake_loop();
 }
@@ -460,7 +454,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccess
     };
     text_requests()
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .unwrap_or_else(PoisonError::into_inner)
         .push((virtual_id, text));
     wake_loop();
 }
@@ -484,7 +478,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccess
     let end = usize::try_from(end).unwrap_or(end_of_text);
     selection_requests()
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .unwrap_or_else(PoisonError::into_inner)
         .push((virtual_id, start, end));
     wake_loop();
 }
@@ -501,7 +495,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccess
 ) {
     scroll_requests()
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .unwrap_or_else(PoisonError::into_inner)
         .push((virtual_id, forward));
     wake_loop();
 }
@@ -522,7 +516,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccess
     }
     jump_requests()
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .unwrap_or_else(PoisonError::into_inner)
         .push((virtual_id, index as usize));
     wake_loop();
 }
@@ -539,7 +533,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccess
 ) {
     expand_requests()
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .unwrap_or_else(PoisonError::into_inner)
         .push((virtual_id, open));
     wake_loop();
 }
@@ -555,7 +549,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccess
 ) {
     long_click_requests()
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .unwrap_or_else(PoisonError::into_inner)
         .push(virtual_id);
     wake_loop();
 }
@@ -571,7 +565,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccess
 ) {
     dismiss_requests()
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .unwrap_or_else(PoisonError::into_inner)
         .push(virtual_id);
     wake_loop();
 }

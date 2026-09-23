@@ -102,7 +102,7 @@ callback holder already performed.
 
 ## Dead end, measured: build-time SPIR-V cannot drop naga's WGSL frontend
 
-wgpu 29 hardwires `wgpu-core/wgsl` (and `renderdoc`) in its own dependency
+wgpu 29 and 30 hardwire `wgpu-core/wgsl` (and `renderdoc`) in their own dependency
 tables for native targets — the WGSL frontend is compiled in regardless of
 which `wgpu` features an application selects. A full precompile lever was
 built and measured (build.rs compiling all 14 framework shaders to SPIR-V,

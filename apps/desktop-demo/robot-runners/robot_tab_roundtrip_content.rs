@@ -45,14 +45,13 @@ fn main() {
             ];
 
             for (tab, marker) in tab_walk {
-                println!("--- Switching to '{}' ---", tab);
+                println!("--- Switching to '{tab}' ---");
                 if !click_tab(&robot, tab) {
-                    robot_exit::fail_without_shutdown(&format!("tab '{}' not found", tab));
+                    robot_exit::fail_without_shutdown(&format!("tab '{tab}' not found"));
                 }
                 if !wait_for_text(&robot, marker, 30, Duration::from_millis(100)) {
                     robot_exit::fail_without_shutdown(&format!(
-                        "marker '{}' did not appear after switching to '{}'",
-                        marker, tab
+                        "marker '{marker}' did not appear after switching to '{tab}'"
                     ));
                 }
             }

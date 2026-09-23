@@ -51,10 +51,7 @@ fn find_semantic_node_containing<'a>(
     node: &'a SemanticsNode,
     fragment: &str,
 ) -> Option<&'a SemanticsNode> {
-    if semantics_node_text(node)
-        .map(|text| text.contains(fragment))
-        .unwrap_or(false)
-    {
+    if semantics_node_text(node).is_some_and(|text| text.contains(fragment)) {
         return Some(node);
     }
 
@@ -476,7 +473,7 @@ fn animations_to_other_tabs_preserve_tab_content_markers() {
         assert_layout_contains_text(
             &mut robot,
             marker,
-            &format!("after switching from Animations to {:?}", tab),
+            &format!("after switching from Animations to {tab:?}"),
         );
     }
 }
@@ -507,15 +504,11 @@ fn animations_to_other_tabs_preserve_tab_content_markers_in_composition() {
 
     for (tab, marker) in tab_markers {
         set_active_tab(tab);
-        drain_all(&mut composition)
-            .unwrap_or_else(|_| panic!("switch to {:?} in composition", tab));
+        drain_all(&mut composition).unwrap_or_else(|_| panic!("switch to {tab:?} in composition"));
         assert_composition_contains_text(
             &mut composition,
             marker,
-            &format!(
-                "after switching from Animations to {:?} in direct composition",
-                tab
-            ),
+            &format!("after switching from Animations to {tab:?} in direct composition"),
         );
     }
 }
@@ -786,8 +779,7 @@ fn async_runtime_to_other_tabs_after_second_forward_pass_preserves_content() {
             &mut composition,
             marker,
             &format!(
-                "after switching away from Async Runtime during second forward pass to {:?}",
-                target_tab
+                "after switching away from Async Runtime during second forward pass to {target_tab:?}"
             ),
         );
     }

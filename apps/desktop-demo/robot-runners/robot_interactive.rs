@@ -27,7 +27,7 @@ fn main() {
             println!("--- Semantic Tree Structure ---");
             match robot.get_semantics() {
                 Ok(sem) => Robot::print_semantics(&sem, 0),
-                Err(e) => println!("Failed to get semantics: {}", e),
+                Err(e) => println!("Failed to get semantics: {e}"),
             }
             println!();
 
@@ -36,10 +36,10 @@ fn main() {
 
             println!("Finding and clicking 'Increment' button 3 times...");
             for i in 1..=3 {
-                println!("Click {}:", i);
+                println!("Click {i}:");
                 match robot.click_by_text("Increment") {
-                    Ok(_) => println!("  ✓ Clicked successfully"),
-                    Err(e) => println!("  Error: {}", e),
+                    Ok(()) => println!("  ✓ Clicked successfully"),
+                    Err(e) => println!("  Error: {e}"),
                 }
                 std::thread::sleep(Duration::from_millis(400));
             }
@@ -57,19 +57,19 @@ fn main() {
             ];
 
             for (tab_name, expected_content) in tabs {
-                println!("Switching to '{}' tab...", tab_name);
+                println!("Switching to '{tab_name}' tab...");
                 match robot.click_by_text(tab_name) {
-                    Ok(_) => {}
+                    Ok(()) => {}
                     Err(e) => {
-                        println!("  Error clicking tab: {}", e);
+                        println!("  Error clicking tab: {e}");
                         continue;
                     }
                 }
 
                 if wait_for_content(&robot, expected_content, 10, Duration::from_millis(200)) {
-                    println!("  ✓ Validated: found '{}'", expected_content);
+                    println!("  ✓ Validated: found '{expected_content}'");
                 } else {
-                    println!("  Warning: '{}' not found", expected_content);
+                    println!("  Warning: '{expected_content}' not found");
                 }
 
                 std::thread::sleep(Duration::from_millis(500));
@@ -81,7 +81,7 @@ fn main() {
             println!("Window will stay open for 1 seconds...\n");
 
             for remaining in (1..=1).rev() {
-                println!("Closing in {} seconds...", remaining);
+                println!("Closing in {remaining} seconds...");
                 std::thread::sleep(Duration::from_secs(1));
             }
 

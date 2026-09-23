@@ -335,15 +335,12 @@ impl SlotTable {
         &mut self,
         retention: Option<&mut RetentionManager>,
     ) {
-        let retained_group_count = retention
-            .as_ref()
-            .map(|retention| {
-                retention
-                    .subtrees()
-                    .map(DetachedSubtree::group_count)
-                    .sum::<usize>()
-            })
-            .unwrap_or(0);
+        let retained_group_count = retention.as_ref().map_or(0, |retention| {
+            retention
+                .subtrees()
+                .map(DetachedSubtree::group_count)
+                .sum::<usize>()
+        });
         let total_group_count = self.groups.len() + retained_group_count;
         if total_group_count == 0 {
             self.anchors.clear();

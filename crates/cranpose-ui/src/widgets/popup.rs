@@ -26,8 +26,6 @@
 //! popup recomposes its own layer, keeping nested popups from invalidating
 //! their parents as their content changes.
 
-#![allow(non_snake_case)]
-
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
@@ -489,7 +487,7 @@ fn popup_impl(
     let sync_registry = registry.clone();
     let sync_content = content.clone();
     SideEffect(move || {
-        sync_registry.upsert(id, position, sync_content.clone(), on_dismiss.clone())
+        sync_registry.upsert(id, position, sync_content.clone(), on_dismiss.clone());
     });
 
     let dispose_registry = registry;

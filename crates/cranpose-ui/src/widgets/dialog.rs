@@ -11,8 +11,6 @@
 //! centred inside the window insets so the system bars and the on-screen
 //! keyboard never cover them.
 
-#![allow(non_snake_case)]
-
 use std::rc::Rc;
 
 use cranpose_ui_graphics::{Color, Point, Rect, Size};

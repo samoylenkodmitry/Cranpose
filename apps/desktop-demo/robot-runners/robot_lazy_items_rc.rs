@@ -68,7 +68,7 @@ fn rc_item_content(item: &TestItem) {
             .vertical_alignment(VerticalAlignment::CenterVertically),
         move || {
             Text(
-                format!("RcItem #{}", id),
+                format!("RcItem #{id}"),
                 Modifier::empty().padding(4.0),
                 TextStyle::default(),
             );
@@ -98,12 +98,12 @@ fn indexed_rc_item_content(index: usize, item: &TestItem) {
             .vertical_alignment(VerticalAlignment::CenterVertically),
         move || {
             Text(
-                format!("IdxRcItem[{}]", index),
+                format!("IdxRcItem[{index}]"),
                 Modifier::empty().padding(4.0),
                 TextStyle::default(),
             );
             Text(
-                format!("#{} {}", id, name),
+                format!("#{id} {name}"),
                 Modifier::empty()
                     .padding(4.0)
                     .background(Color(0.3, 0.0, 0.3, 0.5))
@@ -120,7 +120,7 @@ fn rc_items_test_app() {
         (0..15)
             .map(|i| TestItem {
                 id: i,
-                name: format!("Item-{}", i),
+                name: format!("Item-{i}"),
             })
             .collect::<Vec<_>>(),
     );
@@ -184,53 +184,41 @@ fn main() {
             println!("\n--- Step 2: Verify items_slice_rc items ---");
             let mut rc_items_found = 0;
             for i in 0..10 {
-                let item_text = format!("RcItem #{}", i);
+                let item_text = format!("RcItem #{i}");
                 if find_text_in_semantics(&robot, &item_text).is_some() {
-                    println!("  ✓ Found '{}'", item_text);
+                    println!("  ✓ Found '{item_text}'");
                     rc_items_found += 1;
                 }
             }
             if rc_items_found < 3 {
                 errors.push("items_slice_rc: Not enough items visible");
-                println!(
-                    "  ✗ Only {} items found, expected at least 3",
-                    rc_items_found
-                );
+                println!("  ✗ Only {rc_items_found} items found, expected at least 3");
             } else {
-                println!(
-                    "  ✓ items_slice_rc rendered {} items correctly",
-                    rc_items_found
-                );
+                println!("  ✓ items_slice_rc rendered {rc_items_found} items correctly");
             }
 
             println!("\n--- Step 3: Verify items_indexed_rc items ---");
             let mut indexed_items_found = 0;
             for i in 0..10 {
-                let item_text = format!("IdxRcItem[{}]", i);
+                let item_text = format!("IdxRcItem[{i}]");
                 if find_text_in_semantics(&robot, &item_text).is_some() {
-                    println!("  ✓ Found '{}'", item_text);
+                    println!("  ✓ Found '{item_text}'");
                     indexed_items_found += 1;
                 }
             }
             if indexed_items_found < 3 {
                 errors.push("items_indexed_rc: Not enough items visible");
-                println!(
-                    "  ✗ Only {} items found, expected at least 3",
-                    indexed_items_found
-                );
+                println!("  ✗ Only {indexed_items_found} items found, expected at least 3");
             } else {
-                println!(
-                    "  ✓ items_indexed_rc rendered {} items correctly",
-                    indexed_items_found
-                );
+                println!("  ✓ items_indexed_rc rendered {indexed_items_found} items correctly");
             }
 
             println!("\n--- Step 4: Verify item data access ---");
             let mut name_found = false;
             for i in 0..5 {
-                let name_text = format!("Item-{}", i);
+                let name_text = format!("Item-{i}");
                 if find_text_in_semantics(&robot, &name_text).is_some() {
-                    println!("  ✓ Found item name '{}'", name_text);
+                    println!("  ✓ Found item name '{name_text}'");
                     name_found = true;
                     break;
                 }
@@ -255,9 +243,9 @@ fn main() {
 
                 let mut new_items_found = false;
                 for i in 5..10 {
-                    let item_text = format!("RcItem #{}", i);
+                    let item_text = format!("RcItem #{i}");
                     if find_text_in_semantics(&robot, &item_text).is_some() {
-                        println!("  ✓ After scroll: found '{}'", item_text);
+                        println!("  ✓ After scroll: found '{item_text}'");
                         new_items_found = true;
                         break;
                     }
@@ -272,16 +260,13 @@ fn main() {
             println!("\n=== SUMMARY ===");
             if errors.is_empty() {
                 println!("✓ All Rc-based item tests PASSED!");
-                println!("  - items_slice_rc: {} items rendered", rc_items_found);
-                println!(
-                    "  - items_indexed_rc: {} items rendered",
-                    indexed_items_found
-                );
+                println!("  - items_slice_rc: {rc_items_found} items rendered");
+                println!("  - items_indexed_rc: {indexed_items_found} items rendered");
                 robot.exit().ok();
             } else {
                 println!("✗ Tests FAILED:");
                 for err in &errors {
-                    println!("  - {}", err);
+                    println!("  - {err}");
                 }
                 robot.exit().ok();
                 std::process::exit(1);

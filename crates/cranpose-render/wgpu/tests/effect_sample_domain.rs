@@ -29,11 +29,11 @@ const BLUR: f32 = 6.0;
 
 fn support_mask_wgsl() -> String {
     format!(
-        r#"    let pos = input.uv * vec2<f32>(textureDimensions(input_texture));
+        r"    let pos = input.uv * vec2<f32>(textureDimensions(input_texture));
     if pos.x < {x} || pos.x >= {right} || pos.y < {y} || pos.y >= {bottom} {{
         return vec4<f32>(0.0);
     }}
-"#,
+",
         x = SUPPORT.x + BLUR,
         right = SUPPORT.x + SUPPORT.width + BLUR,
         y = SUPPORT.y + BLUR,
@@ -61,18 +61,18 @@ fn effect_fs_wgsl(body: &str) -> String {
 
 fn far_corner_wgsl() -> String {
     effect_fs_wgsl(
-        r#"    let corner = textureSample(input_texture, input_sampler, vec2<f32>(0.02, 0.02));
+        r"    let corner = textureSample(input_texture, input_sampler, vec2<f32>(0.02, 0.02));
     return vec4<f32>(corner.rgb, 1.0);
-"#,
+",
     )
 }
 
 fn nearby_wgsl(texels: f32) -> String {
     effect_fs_wgsl(&format!(
-        r#"    let step = vec2<f32>({texels}, {texels}) / vec2<f32>(textureDimensions(input_texture));
+        r"    let step = vec2<f32>({texels}, {texels}) / vec2<f32>(textureDimensions(input_texture));
     let near = textureSample(input_texture, input_sampler, input.uv + step);
     return vec4<f32>(near.rgb, 1.0);
-"#
+"
     ))
 }
 

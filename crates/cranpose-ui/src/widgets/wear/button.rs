@@ -17,8 +17,6 @@
 //!   and `TextButton` do morph, and a port that generalises from them adds
 //!   motion the platform does not have.
 
-#![allow(non_snake_case)]
-
 use cranpose_core::NodeId;
 use cranpose_ui_graphics::{DrawScope, Size};
 use cranpose_ui_layout::{

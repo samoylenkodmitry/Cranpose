@@ -1,5 +1,4 @@
 #![cfg(feature = "embedded-default-font")]
-#![allow(non_snake_case)]
 
 use std::{cell::RefCell, rc::Rc};
 
@@ -35,7 +34,6 @@ fn TrimmableList(dropped: MutableState<usize>) {
             .vertical_arrangement(LinearArrangement::spaced_by(12.0)),
         move |scope| {
             let bodies = visible.clone();
-            let keys = keys.clone();
             scope.item(|| {
                 Text(
                     "Header".to_string(),

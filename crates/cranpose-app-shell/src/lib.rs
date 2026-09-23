@@ -1,5 +1,6 @@
 #![allow(clippy::type_complexity)]
 
+use std::sync::PoisonError;
 mod focus_reveal;
 mod fps_monitor;
 mod hit_path_tracker;
@@ -355,7 +356,7 @@ impl FrameScheduler {
     fn lock_deadline(&self) -> MutexGuard<'_, Option<web_time::Instant>> {
         self.next_deadline
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .unwrap_or_else(PoisonError::into_inner)
     }
 
     pub fn record(&self, schedule: FrameSchedule) {
@@ -462,11 +463,7 @@ impl ShellApp {
         };
         let mut applier = self.composition.applier_mut();
         cranpose_ui::tree_needs_layout(&mut *applier, root).unwrap_or_else(|err| {
-            log::warn!(
-                "Cannot check layout dirty status for root #{}: {}",
-                root,
-                err
-            );
+            log::warn!("Cannot check layout dirty status for root #{root}: {err}");
             true
         })
     }
@@ -1284,7 +1281,7 @@ where
                 (true, changed)
             }
             Err(NodeError::Missing { id }) => {
-                log::debug!("Recomposition skipped: node {} no longer exists", id);
+                log::debug!("Recomposition skipped: node {id} no longer exists");
                 self.app.request_layout_pass();
                 request_render_invalidation();
                 (true, false)

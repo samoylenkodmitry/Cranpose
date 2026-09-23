@@ -199,7 +199,7 @@ define_class!(
                 .magic_tap
                 .get()
                 .then_some(self.ivars().element_id);
-            let Some(target) = own.or(self.ivars().requests.screen_action.get()) else {
+            let Some(target) = own.or_else(|| self.ivars().requests.screen_action.get()) else {
                 return Bool::NO;
             };
             self.ivars().requests.magic_taps.borrow_mut().push(target);

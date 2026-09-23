@@ -34,7 +34,6 @@ fn label_style() -> TextStyle {
     }
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn FramedParagraph(title: String, body: String) {
     Column(
@@ -65,7 +64,6 @@ fn FramedParagraph(title: String, body: String) {
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 pub fn TextWrapReproScreen() {
     Column(

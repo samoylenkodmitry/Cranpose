@@ -135,7 +135,7 @@ fn validate_progress_bar(elements: &[SemanticElement], percent: i32, issues: &mu
     }
 
     let Some(fill) = fill else {
-        issues.push(format!("Progress fill missing at {}%", percent));
+        issues.push(format!("Progress fill missing at {percent}%"));
         return;
     };
 
@@ -166,7 +166,7 @@ fn validate_progress_bar(elements: &[SemanticElement], percent: i32, issues: &mu
 fn main() {
     env_logger::init();
     println!("=== Async Runtime Progress Bar Layout Test ===");
-    println!("Window size: {}x{}", WINDOW_WIDTH, WINDOW_HEIGHT);
+    println!("Window size: {WINDOW_WIDTH}x{WINDOW_HEIGHT}");
 
     robot_launch::launch(
         "Async Progress Layout",
@@ -192,12 +192,12 @@ fn main() {
                 validate_progress_bar(&semantics, *percent, &mut issues);
 
                 if !issues.is_empty() {
-                    println!("\n--- Semantics Tree ({}%) ---", percent);
+                    println!("\n--- Semantics Tree ({percent}%) ---");
                     for elem in &semantics {
                         print_tree(elem, 0);
                     }
                 } else {
-                    println!("✓ Layout rects + progress sizing OK for {}%", percent);
+                    println!("✓ Layout rects + progress sizing OK for {percent}%");
                 }
             } else {
                 issues.push("Failed to fetch semantics".to_string());

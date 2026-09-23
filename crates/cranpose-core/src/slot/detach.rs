@@ -89,9 +89,7 @@ impl SlotTable {
         let restored_subtree_node_count_usize = root.subtree_node_count as usize;
         if restored_subtree_len_usize != restored_group_count {
             log::error!(
-                "slot table rejected detached subtree restore with root span {} over {} stored groups",
-                restored_subtree_len_usize,
-                restored_group_count
+                "slot table rejected detached subtree restore with root span {restored_subtree_len_usize} over {restored_group_count} stored groups"
             );
             return false;
         }

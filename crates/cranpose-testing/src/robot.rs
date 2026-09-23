@@ -290,7 +290,7 @@ where
     query: FinderQuery,
 }
 
-impl<'a, R> ElementFinder<'a, R>
+impl<R> ElementFinder<'_, R>
 where
     R: Renderer,
     R::Error: std::fmt::Debug,
@@ -415,7 +415,7 @@ fn extract_rects_from_layout(layout: &LayoutTree) -> Vec<(Rect, Option<String>)>
             .node_data
             .modifier_slices()
             .text_content()
-            .map(|s| s.to_string());
+            .map(ToString::to_string);
 
         let rect = Rect {
             x: node.rect.x,

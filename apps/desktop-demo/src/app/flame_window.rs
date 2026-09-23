@@ -1,5 +1,3 @@
-#![allow(non_snake_case)]
-
 use cranpose::{rememberWindowStateAt, WindowConfig, WindowModifierExt};
 use cranpose_animation::{
     animateFloatAsState, infiniteRepeatable, rememberInfiniteTransition, AnimationSpec,

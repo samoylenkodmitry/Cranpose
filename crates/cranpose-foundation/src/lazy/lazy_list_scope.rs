@@ -64,9 +64,7 @@ impl LazyLayoutKey {
             value
         } else {
             log::warn!(
-                "LazyList {} key {:#018x} exceeds 62 bits; mixing to 62 bits to avoid overflow",
-                kind,
-                value
+                "LazyList {kind} key {value:#018x} exceeds 62 bits; mixing to 62 bits to avoid overflow"
             );
             Self::mix_to_value_bits(value)
         }

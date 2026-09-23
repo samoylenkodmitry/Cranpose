@@ -85,7 +85,7 @@ pub fn set_pointer_icon(icon: PointerIcon) {
 /// the common case: a platform backend calls this after every batch of input
 /// and touches its window only when something comes back.
 pub fn take_pointer_icon_change() -> Option<PointerIcon> {
-    crate::render_state::with_pointer_icon_session(|state| state.take_change())
+    crate::render_state::with_pointer_icon_session(PointerIconState::take_change)
 }
 
 /// Offers the icon the session already holds to the platform again.
@@ -98,13 +98,13 @@ pub fn take_pointer_icon_change() -> Option<PointerIcon> {
 /// platform layer calls this at those moments so the next poll re-applies what
 /// the region already asked for.
 pub fn refresh_pointer_icon() {
-    crate::render_state::with_pointer_icon_session(|state| state.refresh());
+    crate::render_state::with_pointer_icon_session(PointerIconState::refresh);
 }
 
 /// The pointer icon currently requested, whether or not the platform has
 /// applied it yet.
 pub fn current_pointer_icon() -> PointerIcon {
-    crate::render_state::with_pointer_icon_session(|state| state.current())
+    crate::render_state::with_pointer_icon_session(PointerIconState::current)
 }
 
 #[cfg(test)]

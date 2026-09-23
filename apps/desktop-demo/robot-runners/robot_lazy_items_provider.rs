@@ -82,7 +82,7 @@ fn provider_item_content(item: ProviderItem) {
             .vertical_alignment(VerticalAlignment::CenterVertically),
         move || {
             Text(
-                format!("ProvItem #{}", id),
+                format!("ProvItem #{id}"),
                 Modifier::empty().padding(4.0),
                 TextStyle::default(),
             );
@@ -112,12 +112,12 @@ fn indexed_provider_item_content(index: usize, item: ProviderItem) {
             .vertical_alignment(VerticalAlignment::CenterVertically),
         move || {
             Text(
-                format!("IdxProv[{}]", index),
+                format!("IdxProv[{index}]"),
                 Modifier::empty().padding(4.0),
                 TextStyle::default(),
             );
             Text(
-                format!("#{} {}", id, label),
+                format!("#{id} {label}"),
                 Modifier::empty()
                     .padding(4.0)
                     .background(Color(0.4, 0.0, 0.4, 0.5))
@@ -134,7 +134,7 @@ fn provider_items_test_app() {
         (0..15)
             .map(|i| ProviderItem {
                 id: i,
-                label: format!("Label-{}", i),
+                label: format!("Label-{i}"),
             })
             .collect(),
     );
@@ -198,53 +198,43 @@ fn main() {
             println!("\n--- Step 2: Verify items_with_provider items ---");
             let mut prov_items_found = 0;
             for i in 0..10 {
-                let item_text = format!("ProvItem #{}", i);
+                let item_text = format!("ProvItem #{i}");
                 if find_text_in_semantics(&robot, &item_text).is_some() {
-                    println!("  ✓ Found '{}'", item_text);
+                    println!("  ✓ Found '{item_text}'");
                     prov_items_found += 1;
                 }
             }
             if prov_items_found < 3 {
                 errors.push("items_with_provider: Not enough items visible");
-                println!(
-                    "  ✗ Only {} items found, expected at least 3",
-                    prov_items_found
-                );
+                println!("  ✗ Only {prov_items_found} items found, expected at least 3");
             } else {
-                println!(
-                    "  ✓ items_with_provider rendered {} items correctly",
-                    prov_items_found
-                );
+                println!("  ✓ items_with_provider rendered {prov_items_found} items correctly");
             }
 
             println!("\n--- Step 3: Verify items_indexed_with_provider items ---");
             let mut indexed_items_found = 0;
             for i in 0..10 {
-                let item_text = format!("IdxProv[{}]", i);
+                let item_text = format!("IdxProv[{i}]");
                 if find_text_in_semantics(&robot, &item_text).is_some() {
-                    println!("  ✓ Found '{}'", item_text);
+                    println!("  ✓ Found '{item_text}'");
                     indexed_items_found += 1;
                 }
             }
             if indexed_items_found < 3 {
                 errors.push("items_indexed_with_provider: Not enough items visible");
-                println!(
-                    "  ✗ Only {} items found, expected at least 3",
-                    indexed_items_found
-                );
+                println!("  ✗ Only {indexed_items_found} items found, expected at least 3");
             } else {
                 println!(
-                    "  ✓ items_indexed_with_provider rendered {} items correctly",
-                    indexed_items_found
+                    "  ✓ items_indexed_with_provider rendered {indexed_items_found} items correctly"
                 );
             }
 
             println!("\n--- Step 4: Verify provider callback data access ---");
             let mut label_found = false;
             for i in 0..5 {
-                let label_text = format!("Label-{}", i);
+                let label_text = format!("Label-{i}");
                 if find_text_in_semantics(&robot, &label_text).is_some() {
-                    println!("  ✓ Found item label '{}'", label_text);
+                    println!("  ✓ Found item label '{label_text}'");
                     label_found = true;
                     break;
                 }
@@ -269,9 +259,9 @@ fn main() {
 
                 let mut new_items_found = false;
                 for i in 5..10 {
-                    let item_text = format!("ProvItem #{}", i);
+                    let item_text = format!("ProvItem #{i}");
                     if find_text_in_semantics(&robot, &item_text).is_some() {
-                        println!("  ✓ After scroll: found '{}'", item_text);
+                        println!("  ✓ After scroll: found '{item_text}'");
                         new_items_found = true;
                         break;
                     }
@@ -286,19 +276,13 @@ fn main() {
             println!("\n=== SUMMARY ===");
             if errors.is_empty() {
                 println!("✓ All provider-based item tests PASSED!");
-                println!(
-                    "  - items_with_provider: {} items rendered",
-                    prov_items_found
-                );
-                println!(
-                    "  - items_indexed_with_provider: {} items rendered",
-                    indexed_items_found
-                );
+                println!("  - items_with_provider: {prov_items_found} items rendered");
+                println!("  - items_indexed_with_provider: {indexed_items_found} items rendered");
                 robot.exit().ok();
             } else {
                 println!("✗ Tests FAILED:");
                 for err in &errors {
-                    println!("  - {}", err);
+                    println!("  - {err}");
                 }
                 robot.exit().ok();
                 std::process::exit(1);

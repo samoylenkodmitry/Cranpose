@@ -236,8 +236,7 @@ fn inspect_mismatched_slot_pass_host(
     let active_storage_key = active_host.storage_key();
     let rebound_to_other_state = active_host
         .runtime_state()
-        .map(|state| Rc::ptr_eq(&state, other_state))
-        .unwrap_or(false);
+        .is_some_and(|state| Rc::ptr_eq(&state, other_state));
     let registered_during_pass = other_state
         .host_for_storage_key(active_storage_key)
         .is_some();
@@ -271,8 +270,7 @@ fn assert_mismatched_slot_pass_uses_replacement(
         fixture
             .mismatched_host
             .runtime_state()
-            .map(|state| Rc::ptr_eq(&state, &fixture.owner_state))
-            .unwrap_or(false)
+            .is_some_and(|state| Rc::ptr_eq(&state, &fixture.owner_state))
     );
 }
 
@@ -477,7 +475,7 @@ fn emit_node_rejects_reuse_when_parent_did_not_own_child() {
     let parent_b = applier.create(Box::new(RecordingNode::default()));
 
     let (composer, slots_host, applier_host) =
-        setup_composer(&mut slots, &mut applier, handle.clone(), Some(parent_a));
+        setup_composer(&mut slots, &mut applier, handle, Some(parent_a));
 
     let (child_id, _) = composer.with_slot_host_pass(
         Rc::clone(&slots_host),
@@ -518,7 +516,7 @@ fn push_parent_uses_empty_previous_when_not_reused() {
     let parent_id = applier.create(Box::new(RecordingNode::default()));
 
     let (composer, slots_host, applier_host) =
-        setup_composer(&mut slots, &mut applier, handle.clone(), Some(parent_id));
+        setup_composer(&mut slots, &mut applier, handle, Some(parent_id));
 
     composer.core.last_node_reused.set(Some(false));
     composer.push_parent(parent_id);
@@ -546,7 +544,7 @@ fn new_parent_attaches_children_immediately_without_sync_children() {
     let parent_id = applier.create(Box::new(RecordingNode::default()));
 
     let (composer, slots_host, applier_host) =
-        setup_composer(&mut slots, &mut applier, handle.clone(), None);
+        setup_composer(&mut slots, &mut applier, handle, None);
 
     let (child_id, _) = composer.with_slot_host_pass(
         Rc::clone(&slots_host),
@@ -579,7 +577,7 @@ fn subcompose_in_compacts_applier_after_large_teardown() {
     let mut slots = SlotTable::default();
     let mut applier = test_applier();
     let (composer, slots_host, applier_host) =
-        setup_composer(&mut slots, &mut applier, handle.clone(), None);
+        setup_composer(&mut slots, &mut applier, handle, None);
     let subcompose_slots = Rc::new(SlotsHost::new(SlotTable::new()));
     const NODE_COUNT: usize = 17_000;
 
@@ -627,7 +625,7 @@ fn reused_parent_with_existing_children_still_defers_to_sync_children() {
         .expect("child exists");
 
     let (composer, slots_host, applier_host) =
-        setup_composer(&mut slots, &mut applier, handle.clone(), None);
+        setup_composer(&mut slots, &mut applier, handle, None);
 
     composer.core.last_node_reused.set(Some(true));
     composer.push_parent(parent_id);
@@ -669,7 +667,7 @@ fn non_reused_parent_with_existing_children_still_defers_to_sync_children() {
         .expect("stale child exists");
 
     let (composer, slots_host, applier_host) =
-        setup_composer(&mut slots, &mut applier, handle.clone(), None);
+        setup_composer(&mut slots, &mut applier, handle, None);
 
     composer.core.last_node_reused.set(Some(false));
     composer.push_parent(parent_id);
@@ -723,7 +721,7 @@ fn record_subcompose_child_deduplicates_large_deferred_sync_frames() {
         .collect();
 
     let (composer, slots_host, applier_host) =
-        setup_composer(&mut slots, &mut applier, handle.clone(), None);
+        setup_composer(&mut slots, &mut applier, handle, None);
 
     composer.core.last_node_reused.set(Some(true));
     composer.push_parent(parent_id);
@@ -925,7 +923,7 @@ fn emitted_node_replacement_removes_displaced_node() {
 
     let second_id = {
         let (composer, slots_host, applier_host) =
-            setup_composer(&mut slots, &mut applier, handle.clone(), None);
+            setup_composer(&mut slots, &mut applier, handle, None);
         let (id, _) = composer.with_slot_host_pass(
             Rc::clone(&slots_host),
             crate::slot::SlotPassMode::Compose,
@@ -1703,7 +1701,7 @@ fn push_parent_inherits_previous_when_reused() {
 
     {
         let (composer, slots_host, applier_host) =
-            setup_composer(&mut slots, &mut applier, handle.clone(), Some(parent_id));
+            setup_composer(&mut slots, &mut applier, handle, Some(parent_id));
 
         composer.core.last_node_reused.set(Some(true));
         composer.push_parent(parent_id);
@@ -1728,7 +1726,7 @@ fn push_parent_inherits_previous_when_reused() {
 fn emit_node_creates_nodes_when_parent_restored_after_conditional_removal() {
     let mut composition = test_composition();
     let runtime = composition.runtime_handle();
-    let toggle = MutableState::with_runtime(true, runtime.clone());
+    let toggle = MutableState::with_runtime(true, runtime);
 
     let key = location_key(file!(), line!(), column!());
 
@@ -1758,7 +1756,7 @@ fn emit_node_creates_nodes_when_parent_restored_after_conditional_removal() {
     }
 
     let first_child_id = child_ids.borrow()[0];
-    println!("First child ID: {}", first_child_id);
+    println!("First child ID: {first_child_id}");
     assert!(first_child_id > 0, "First child should be created");
 
     println!("=== Second render: parent hidden ===");
@@ -1779,14 +1777,14 @@ fn emit_node_creates_nodes_when_parent_restored_after_conditional_removal() {
                     with_current_composer(|composer| {
                         let _parent = composer.emit_node(|| TestDummyNode);
                         let reused = composer.core.last_node_reused.get();
-                        println!("Parent reused: {:?}", reused);
+                        println!("Parent reused: {reused:?}");
                         composer.push_parent(_parent);
 
                         let child = composer.emit_node(|| TestTextNode {
                             text: "Reusable Child".to_string(),
                         });
                         child_ids.borrow_mut().push(child);
-                        println!("Third render child ID: {}", child);
+                        println!("Third render child ID: {child}");
 
                         composer.pop_parent();
                     });
@@ -1796,7 +1794,7 @@ fn emit_node_creates_nodes_when_parent_restored_after_conditional_removal() {
     }
 
     let third_child_id = child_ids.borrow().last().copied().unwrap();
-    println!("Third child ID: {}", third_child_id);
+    println!("Third child ID: {third_child_id}");
 
     assert!(
         composition.applier_mut().get_mut(third_child_id).is_ok(),
@@ -1819,7 +1817,7 @@ fn emit_node_works_with_new_parent_having_empty_previous() {
     let parent_id = applier.create(Box::new(RecordingNode::default()));
 
     let (composer, slots_host, applier_host) =
-        setup_composer(&mut slots, &mut applier, handle.clone(), Some(parent_id));
+        setup_composer(&mut slots, &mut applier, handle, Some(parent_id));
 
     let (_child_id, _) = composer.with_slot_host_pass(
         Rc::clone(&slots_host),

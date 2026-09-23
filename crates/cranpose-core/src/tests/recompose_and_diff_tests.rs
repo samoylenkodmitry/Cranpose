@@ -92,7 +92,7 @@ fn returned_composable_state_change_recomposes_parent_consumer() {
 
     let mut composition = test_composition();
     let runtime = composition.runtime_handle();
-    let state = MutableState::with_runtime(0, runtime.clone());
+    let state = MutableState::with_runtime(0, runtime);
 
     composition
         .render(location_key(file!(), line!(), column!()), || parent(state))
@@ -152,7 +152,7 @@ fn recompose_does_not_use_stale_indices_when_prior_scope_changes_length() {
     let runtime = composition.runtime_handle();
     let state_a = MutableState::with_runtime(0i32, runtime.clone());
     let state_b = MutableState::with_runtime(0i32, runtime.clone());
-    let toggle_a = MutableState::with_runtime(false, runtime.clone());
+    let toggle_a = MutableState::with_runtime(false, runtime);
 
     let mut render = { move || logging_root(state_a, state_b, toggle_a) };
 
@@ -213,7 +213,7 @@ fn recompose_handles_removed_scopes_gracefully() {
     let mut composition = test_composition();
     let runtime = composition.runtime_handle();
     let state_a = MutableState::with_runtime(0i32, runtime.clone());
-    let toggle_group = MutableState::with_runtime(true, runtime.clone());
+    let toggle_group = MutableState::with_runtime(true, runtime);
 
     let mut render = {
         move || {
@@ -488,7 +488,7 @@ fn insert_and_remove_emit_expected_ops() {
 
     applier
         .with_node(parent_id, |node: &mut RecordingNode| {
-            node.operations.clear()
+            node.operations.clear();
         })
         .expect("clear operations");
 

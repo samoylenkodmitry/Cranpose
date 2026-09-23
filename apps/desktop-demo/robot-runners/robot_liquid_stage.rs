@@ -18,7 +18,6 @@ pub const LIGHT_STRIPE: Color = Color(0.92, 0.94, 0.99, 1.0);
 
 /// A themed window-sized page holding `content` over striped ground.
 #[composable]
-#[allow(non_snake_case)]
 pub fn LiquidStripedStage(width: u32, height: u32, content: impl FnMut() + 'static) {
     LiquidStage(width, height, move || {
         Stripes(width, height);
@@ -28,7 +27,6 @@ pub fn LiquidStripedStage(width: u32, height: u32, content: impl FnMut() + 'stat
 
 /// A themed window-sized page holding `content` over nothing.
 #[composable]
-#[allow(non_snake_case)]
 pub fn LiquidStage(width: u32, height: u32, content: impl FnMut() + 'static) {
     LiquidTheme(LiquidThemeSpec::default(), move || {
         CBox(
@@ -43,7 +41,6 @@ pub fn LiquidStage(width: u32, height: u32, content: impl FnMut() + 'static) {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn Stripes(width: u32, height: u32) {
     let count = (width as f32 / STRIPE_WIDTH).ceil() as usize;
     for index in 0..count {

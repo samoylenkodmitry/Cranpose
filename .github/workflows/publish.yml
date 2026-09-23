@@ -33,7 +33,7 @@ jobs:
     outputs:
       should_publish: ${{ steps.sync.outputs.should_publish }}
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
       - name: Provision the pinned Rust toolchain
@@ -132,7 +132,7 @@ jobs:
       #
       # What this job must publish is the tree the tag names. That is true
       # whatever main does next.
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
@@ -198,7 +198,7 @@ jobs:
       TAG_NAME: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
       DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
           ref: ${{ github.event.repository.default_branch }}

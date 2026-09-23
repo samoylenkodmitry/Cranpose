@@ -138,6 +138,8 @@ pub fn rememberMemoryPressure() -> EventStream<MemoryPressure> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::PoisonError;
+
     use super::*;
 
     fn recording_observer() -> (Observer, Arc<Mutex<Vec<MemoryPressure>>>) {
@@ -146,8 +148,8 @@ mod tests {
         let observer: Observer = Arc::new(move |pressure| {
             recorder
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .push(pressure)
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(pressure);
         });
         (observer, seen)
     }
@@ -186,7 +188,9 @@ mod tests {
 
         for seen in [first_seen, second_seen] {
             assert_eq!(
-                seen.lock().unwrap_or_else(|e| e.into_inner()).as_slice(),
+                seen.lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .as_slice(),
                 [MemoryPressure::Critical]
             );
         }
@@ -207,7 +211,9 @@ mod tests {
         }
 
         assert_eq!(
-            seen.lock().unwrap_or_else(|e| e.into_inner()).as_slice(),
+            seen.lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .as_slice(),
             [MemoryPressure::Low]
         );
     }

@@ -22,8 +22,8 @@ fn main() {
             std::thread::sleep(Duration::from_millis(500));
 
             match robot.wait_for_idle() {
-                Ok(_) => println!("✓ App ready\n"),
-                Err(e) => println!("Note: {}\n", e),
+                Ok(()) => println!("✓ App ready\n"),
+                Err(e) => println!("Note: {e}\n"),
             }
 
             let mut all_passed = true;
@@ -37,10 +37,7 @@ fn main() {
             if let Some((x, y, w, h)) = find_button_in_semantics(&robot, "CompositionLocal Test") {
                 let cx = x + w / 2.0;
                 let cy = y + h / 2.0;
-                println!(
-                    "  Found 'CompositionLocal Test' tab at ({:.1}, {:.1})",
-                    cx, cy
-                );
+                println!("  Found 'CompositionLocal Test' tab at ({cx:.1}, {cy:.1})");
 
                 let _ = robot.click(cx, cy);
                 std::thread::sleep(Duration::from_millis(500));
@@ -87,7 +84,7 @@ fn main() {
             {
                 let cx = x + w / 2.0;
                 let cy = y + h / 2.0;
-                println!("  Found 'Increment' button at ({:.1}, {:.1})", cx, cy);
+                println!("  Found 'Increment' button at ({cx:.1}, {cy:.1})");
 
                 let _ = robot.click(cx, cy);
                 std::thread::sleep(Duration::from_millis(500));
@@ -115,7 +112,7 @@ fn main() {
             {
                 let cx = x + w / 2.0;
                 let cy = y + h / 2.0;
-                println!("  Found 'Increment' button at ({:.1}, {:.1})", cx, cy);
+                println!("  Found 'Increment' button at ({cx:.1}, {cy:.1})");
 
                 let _ = robot.click(cx, cy);
                 std::thread::sleep(Duration::from_millis(500));

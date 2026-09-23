@@ -8,7 +8,7 @@ use std::{
     borrow::Borrow,
     hash::{Hash, Hasher},
     rc::Rc,
-    sync::{Mutex, MutexGuard},
+    sync::{Mutex, MutexGuard, PoisonError},
 };
 
 use cranpose_ui::{TextMeasurer, TextMetrics, text_layout_result::TextLayoutResult};
@@ -168,9 +168,7 @@ impl CachedFontTextMeasurer {
     }
 
     fn lock_cache(&self) -> MutexGuard<'_, TextMetricsCache> {
-        self.cache
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+        self.cache.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
@@ -331,7 +329,7 @@ mod tests {
             let _guard = measurer
                 .cache
                 .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
+                .unwrap_or_else(PoisonError::into_inner);
             panic!("poison software text metrics cache for recovery test");
         }));
 

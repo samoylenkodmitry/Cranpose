@@ -70,23 +70,20 @@ fn main() {
 
             let alpha_second = wait_for_text_change(&robot, &alpha_first, read_alpha_text)
                 .unwrap_or_else(|| {
-                    println!("FAIL: Alpha text did not change: '{}'", alpha_first);
+                    println!("FAIL: Alpha text did not change: '{alpha_first}'");
                     robot.exit().ok();
                     std::process::exit(1);
                 });
 
             let second =
                 wait_for_text_change(&robot, &first, read_lazy_pulse).unwrap_or_else(|| {
-                    println!("FAIL: Lazy Pulse did not change: '{}'", first);
+                    println!("FAIL: Lazy Pulse did not change: '{first}'");
                     robot.exit().ok();
                     std::process::exit(1);
                 });
 
-            println!(
-                "PASS: Alpha updated from '{}' to '{}'",
-                alpha_first, alpha_second
-            );
-            println!("PASS: Lazy Pulse updated from '{}' to '{}'", first, second);
+            println!("PASS: Alpha updated from '{alpha_first}' to '{alpha_second}'");
+            println!("PASS: Lazy Pulse updated from '{first}' to '{second}'");
             robot.exit().ok();
         })
         .run(app::combined_app);

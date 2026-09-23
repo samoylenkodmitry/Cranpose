@@ -108,15 +108,15 @@ impl RunDraw {
             command,
             segments,
             placement,
-            bounds: recorder
-                .bounds()
-                .map(|bounds| placement.translated_bounds(bounds))
-                .unwrap_or(Rect {
+            bounds: recorder.bounds().map_or(
+                Rect {
                     x: placement.offset.x,
                     y: placement.offset.y,
                     width: 0.0,
                     height: 0.0,
-                }),
+                },
+                |bounds| placement.translated_bounds(bounds),
+            ),
         }
     }
 

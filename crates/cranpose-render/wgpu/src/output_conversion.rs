@@ -4,7 +4,7 @@ use crate::{
     pipeline_compiler::{CompilerSend, PipelineCompiler},
 };
 
-const OUTPUT_CONVERSION_SHADER: &str = r#"
+const OUTPUT_CONVERSION_SHADER: &str = r"
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) uv: vec2<f32>,
@@ -37,7 +37,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let color = clamp(textureLoad(source_texture, position, 0), vec4<f32>(0.0), vec4<f32>(1.0));
     return floor(color * 255.0 + vec4<f32>(0.5)) / 255.0;
 }
-"#;
+";
 
 pub(crate) struct OutputConverter {
     bind_group_layout: wgpu::BindGroupLayout,

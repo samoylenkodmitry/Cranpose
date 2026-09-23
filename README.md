@@ -52,8 +52,6 @@ take a `Modifier`, a spec, and their content; state comes from `rememberMutableS
 read with `.value()`.
 
 ```rust
-#![allow(non_snake_case)] // #[composable] functions are CamelCase
-
 use cranpose::prelude::*;
 
 #[derive(Clone, PartialEq)]

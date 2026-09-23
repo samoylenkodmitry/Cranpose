@@ -257,7 +257,7 @@ fn join(
         widget_role: node.widget_role,
         label: node
             .accessibility_label()
-            .map(|label| label.into_owned())
+            .map(std::borrow::Cow::into_owned)
             .or_else(|| node.merges_accessibility_descendants().then(String::new)),
         state_description: node.state_description.clone(),
         clickable: node

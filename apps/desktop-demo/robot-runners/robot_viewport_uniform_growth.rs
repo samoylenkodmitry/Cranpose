@@ -57,7 +57,6 @@ fn main() {
         .run(UniformGrowthGrid);
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn UniformGrowthGrid() {
     let rows = rememberMutableStateOf(|| 1_u32);

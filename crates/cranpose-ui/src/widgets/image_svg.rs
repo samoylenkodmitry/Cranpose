@@ -811,7 +811,7 @@ impl<'a> PathDataParser<'a> {
         self.data[self.index..]
             .chars()
             .next()
-            .filter(|ch| ch.is_ascii_alphabetic())
+            .filter(char::is_ascii_alphabetic)
     }
 }
 

@@ -16,8 +16,8 @@ fn main() {
             std::thread::sleep(Duration::from_millis(500));
 
             match robot.wait_for_idle() {
-                Ok(_) => println!("✓ App ready\n"),
-                Err(e) => println!("Note: {}\n", e),
+                Ok(()) => println!("✓ App ready\n"),
+                Err(e) => println!("Note: {e}\n"),
             }
 
             let mut all_passed = true;
@@ -27,15 +27,14 @@ fn main() {
             let web_fetch_tab = find_button_in_semantics(&robot, "Web Fetch");
 
             let ref_tab_before = find_button_in_semantics(&robot, "Modifiers Showcase");
-            let ref_x_before = ref_tab_before.map(|(x, _, _, _)| x).unwrap_or(0.0);
+            let ref_x_before = ref_tab_before.map_or(0.0, |(x, _, _, _)| x);
             println!(
-                "  Reference tab ('Modifiers Showcase') initial x={:.1}",
-                ref_x_before
+                "  Reference tab ('Modifiers Showcase') initial x={ref_x_before:.1}"
             );
             if let Some((x, y, w, h)) = web_fetch_tab {
                 let cx = x + w / 2.0;
                 let cy = y + h / 2.0;
-                println!("  Found 'Web Fetch' tab at center ({:.1}, {:.1})", cx, cy);
+                println!("  Found 'Web Fetch' tab at center ({cx:.1}, {cy:.1})");
 
                 let _ = robot.mouse_move(cx, cy);
                 std::thread::sleep(Duration::from_millis(50));
@@ -53,18 +52,16 @@ fn main() {
                 std::thread::sleep(Duration::from_millis(200));
 
                 let ref_tab_after = find_button_in_semantics(&robot, "Modifiers Showcase");
-                let ref_x_after = ref_tab_after.map(|(x, _, _, _)| x).unwrap_or(0.0);
+                let ref_x_after = ref_tab_after.map_or(0.0, |(x, _, _, _)| x);
 
                 let scroll_delta = (ref_x_after - ref_x_before).abs();
                 println!(
-                    "  Reference tab after: x={:.1}, delta={:.1}px",
-                    ref_x_after, scroll_delta
+                    "  Reference tab after: x={ref_x_after:.1}, delta={scroll_delta:.1}px"
                 );
 
                 if scroll_delta > 5.0 {
                     println!(
-                        "  ✗ FAIL: Tab row scrolled by {:.1}px after click + cursor move!",
-                        scroll_delta
+                        "  ✗ FAIL: Tab row scrolled by {scroll_delta:.1}px after click + cursor move!"
                     );
                     println!("         BUG: Scroll following cursor after mouse up");
                     all_passed = false;
@@ -78,7 +75,7 @@ fn main() {
                 if let Some((x, y, w, h)) = counter_tab {
                     let cx = x + w / 2.0;
                     let cy = y + h / 2.0;
-                    println!("  Found 'Counter App' tab at center ({:.1}, {:.1})", cx, cy);
+                    println!("  Found 'Counter App' tab at center ({cx:.1}, {cy:.1})");
 
                     let _ = robot.mouse_move(cx, cy);
                     std::thread::sleep(Duration::from_millis(50));
@@ -96,16 +93,15 @@ fn main() {
                     std::thread::sleep(Duration::from_millis(200));
 
                     let ref_tab_after = find_button_in_semantics(&robot, "Modifiers Showcase");
-                    let ref_x_after = ref_tab_after.map(|(x, _, _, _)| x).unwrap_or(0.0);
+                    let ref_x_after = ref_tab_after.map_or(0.0, |(x, _, _, _)| x);
 
                     let scroll_delta = (ref_x_after - ref_x_before).abs();
                     println!(
-                        "  Reference tab after: x={:.1}, delta={:.1}px",
-                        ref_x_after, scroll_delta
+                        "  Reference tab after: x={ref_x_after:.1}, delta={scroll_delta:.1}px"
                     );
 
                     if scroll_delta > 5.0 {
-                        println!("  ✗ FAIL: Tab row scrolled by {:.1}px!", scroll_delta);
+                        println!("  ✗ FAIL: Tab row scrolled by {scroll_delta:.1}px!");
                         all_passed = false;
                     } else {
                         println!("  ✓ PASS: Tab row did NOT scroll");

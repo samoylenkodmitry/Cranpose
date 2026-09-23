@@ -1,6 +1,60 @@
-use std::path::Path;
+use std::{io, path::Path, sync::Arc};
 
 use cranpose_services::{IncomingContent, media::uri_for_path, publish_incoming_content};
+use winit::{
+    data_transfer::{DataTransferId, TypeHint, TypedData},
+    event::WindowEvent,
+    event_loop::{ActiveEventLoop, DndAction},
+};
+
+#[derive(Default)]
+pub(crate) struct FileDrops {
+    waiting: Vec<Arc<dyn TypedData>>,
+}
+
+impl FileDrops {
+    pub(crate) fn handle(&mut self, event_loop: &dyn ActiveEventLoop, event: &WindowEvent) {
+        match event {
+            WindowEvent::DragEntered { id, .. } => Self::offer(event_loop, *id),
+            WindowEvent::DragDropped { id, .. } => Self::request(event_loop, *id),
+            WindowEvent::DataTransferReceived { value, .. } => self.receive(Arc::clone(value)),
+            _ => {}
+        }
+    }
+
+    fn offer(event_loop: &dyn ActiveEventLoop, id: DataTransferId) {
+        let carries_files = event_loop
+            .data_transfer(id)
+            .is_ok_and(|transfer| transfer.has_type(&TypeHint::UriList));
+        if !carries_files {
+            return;
+        }
+        if let Err(error) = event_loop.set_valid_dnd_actions(id, &[DndAction::Copy]) {
+            log::debug!("file drag could not be accepted: {error}");
+        }
+    }
+
+    fn request(event_loop: &dyn ActiveEventLoop, id: DataTransferId) {
+        if let Err(error) = event_loop.fetch_data_transfer(id, &TypeHint::UriList) {
+            log::debug!("dropped files could not be requested: {error}");
+        }
+    }
+
+    fn receive(&mut self, value: Arc<dyn TypedData>) {
+        self.waiting.push(value);
+        self.waiting.retain(|data| match data.try_as_file_paths() {
+            Ok(paths) => {
+                paths.iter().for_each(|path| publish_file(path));
+                false
+            }
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => true,
+            Err(error) => {
+                log::debug!("dropped data is not a file list: {error}");
+                false
+            }
+        });
+    }
+}
 
 pub(crate) fn publish_file(path: &Path) {
     let mut content = IncomingContent::from_uri(uri_for_path(path));
@@ -29,37 +83,5 @@ where
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn an_option_is_not_a_document() {
-        let arguments = ["--headless".to_owned(), "-v".to_owned()];
-        assert!(launch_documents(arguments).is_empty());
-    }
-
-    #[test]
-    fn a_path_to_nothing_is_not_a_document() {
-        let arguments = ["/cranpose/no/such/file.txt".to_owned()];
-        assert!(launch_documents(arguments).is_empty());
-    }
-
-    #[test]
-    fn an_existing_file_named_on_the_command_line_is_a_document() {
-        let directory = crate::test_scratch_dir("launch-document");
-        let path = directory.join("cranpose-launch-document.txt");
-        std::fs::write(&path, b"opened").expect("write");
-        let found = launch_documents([path.to_string_lossy().into_owned()]);
-        let _ = std::fs::remove_dir_all(&directory);
-        assert_eq!(found, vec![path]);
-    }
-
-    #[test]
-    fn a_directory_is_not_a_document() {
-        let directory = crate::test_scratch_dir("launch-directory");
-        let arguments = [directory.to_string_lossy().into_owned()];
-        let found = launch_documents(arguments);
-        let _ = std::fs::remove_dir_all(&directory);
-        assert!(found.is_empty());
-    }
-}
+#[path = "tests/desktop_incoming_tests.rs"]
+mod tests;

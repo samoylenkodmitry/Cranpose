@@ -11,8 +11,6 @@
 //! caller's job (see `BasicTextField`); this widget only draws the lollipop
 //! and reports the window-space position of an in-progress drag.
 
-#![allow(non_snake_case)]
-
 use std::{cell::Cell, rc::Rc};
 
 use cranpose_core::remember;

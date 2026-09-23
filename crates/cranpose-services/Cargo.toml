@@ -25,7 +25,7 @@ directories = "6.0.0"
 log = "0.4"
 parking_lot = "0.12.5"
 sha2 = "0.11.0"
-thiserror = "2.0.18"
+thiserror = "2.0.20"
 web-time.workspace = true
 
 [features]
@@ -61,7 +61,7 @@ file-picker-web = [
 # crate's platform backends, which register into `set_platform_file_picker`.
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
-open = { version = "5.3.5", optional = true }
+open = { version = "5.4.4", optional = true }
 
 # Desktop file picker (Linux/macOS/Windows). xdg-portal exposes mounted
 # locations (GVFS/WebDAV) on Linux. iOS uses its own backend, so exclude it.
@@ -69,10 +69,10 @@ open = { version = "5.3.5", optional = true }
 rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"], optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-futures-util = { version = "0.3.32", optional = true }
-js-sys = { version = "0.3.98", optional = true }
+futures-util = { version = "0.3.34", optional = true }
+js-sys = { version = "0.3.105", optional = true }
 wasm-bindgen = { version = "0.2", optional = true }
-wasm-bindgen-futures = { version = "0.4.71", optional = true }
+wasm-bindgen-futures = { version = "0.4.78", optional = true }
 rfd = { version = "0.17.2", default-features = false, optional = true }
 web-sys = { version = "0.3", features = [
     "Blob",
@@ -99,23 +99,23 @@ web-sys = { version = "0.3", features = [
 pollster = "0.4.0"
 # Parses the GitHub release feed `GitHubAppUpdater` reads. Not built for wasm32:
 # that checker only ever registers on desktop and iOS.
-serde_json = "1.0.149"
+serde_json = "1.0.151"
 
 # Desktop and Android use rustls. iOS uses native-tls (Security.framework): the
 # rustls default crypto provider (aws-lc-sys) does not link for the device
 # `aarch64-apple-ios` target, and native-tls uses the system trust store.
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))'.dependencies]
-reqwest = { version = "0.13.3", default-features = false, features = ["blocking", "rustls"], optional = true }
+reqwest = { version = "0.13.5", default-features = false, features = ["blocking", "rustls"], optional = true }
 
 [target.'cfg(target_os = "ios")'.dependencies]
-reqwest = { version = "0.13.3", default-features = false, features = ["blocking", "native-tls"], optional = true }
+reqwest = { version = "0.13.5", default-features = false, features = ["blocking", "native-tls"], optional = true }
 
 [target.'cfg(target_os = "android")'.dependencies]
-webbrowser = { version = "1.2.1", optional = true }
-webpki-root-certs = { version = "1.0.7", optional = true }
+webbrowser = { version = "1.2.4", optional = true }
+webpki-root-certs = { version = "1.0.9", optional = true }
 
 [dev-dependencies]
 # Path-only dev-dep: stripped from the published manifest. Turns on the
 # workspace's shared test scratch directory for this crate's own tests.
 cranpose-core = { path = "../cranpose-core", features = ["test-helpers"] }
-webpki-root-certs = "1.0.7"
+webpki-root-certs = "1.0.9"

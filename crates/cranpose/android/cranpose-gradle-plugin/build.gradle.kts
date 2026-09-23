@@ -12,7 +12,7 @@ plugins {
 }
 
 dependencies {
-    compileOnly("com.android.tools.build:gradle:9.2.1")
+    compileOnly("com.android.tools.build:gradle:9.4.1")
 }
 
 // The plugin contributes the framework's Java sources, manifest fragments and

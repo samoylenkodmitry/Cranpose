@@ -102,8 +102,10 @@ impl TextLayoutResult {
             .char_to_byte
             .iter()
             .position(|&b| b > byte_offset)
-            .map(|i| i.saturating_sub(1))
-            .unwrap_or(self.char_to_byte.len().saturating_sub(1));
+            .map_or_else(
+                || self.char_to_byte.len().saturating_sub(1),
+                |i| i.saturating_sub(1),
+            );
 
         self.glyph_x_positions
             .get(char_idx)

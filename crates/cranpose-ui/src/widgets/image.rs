@@ -429,7 +429,7 @@ impl SvgPainter {
         self.inner
             .cache
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     #[cfg(feature = "svg")]
@@ -515,7 +515,7 @@ pub fn rememberSvg(bytes: &'static [u8]) -> Result<SvgPainter, SvgPainterError> 
         composer.with_key(&key, |composer| {
             composer
                 .remember(|| SvgPainter::from_bytes(bytes))
-                .with(|result| result.clone())
+                .with(Clone::clone)
         })
     })
 }
@@ -972,10 +972,9 @@ where
     let painter = painter.into();
     let intrinsic_dp = painter.intrinsic_size();
     let draw_alpha = alpha.clamp(0.0, 1.0);
-    let draw_painter = painter.clone();
 
     let semantics_modifier = Modifier::empty().semantics(move |config| {
-        config.content_description = content_description.clone();
+        config.content_description.clone_from(&content_description);
     });
 
     let image_modifier = semantics_modifier
@@ -998,7 +997,7 @@ where
             if container_size.width <= 0.0 || container_size.height <= 0.0 {
                 return;
             }
-            match &draw_painter.kind {
+            match &painter.kind {
                 PainterKind::Bitmap(bitmap) => draw_bitmap_painter(
                     scope,
                     bitmap.clone(),
@@ -1448,7 +1447,7 @@ mod tests {
                 .inner
                 .cache
                 .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             panic!("poison svg raster cache for recovery test");
         }));
 

@@ -321,7 +321,7 @@ where
     F: Fn(bool) + 'static,
 {
     SwitchButtonNode(modifier, spec, checked, label, secondary_label, move || {
-        on_checked_change(!checked)
+        on_checked_change(!checked);
     })
 }
 

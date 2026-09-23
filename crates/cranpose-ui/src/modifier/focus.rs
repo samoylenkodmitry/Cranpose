@@ -667,9 +667,7 @@ mod tests {
         let chain_b = attach_at(
             20,
             vec![
-                cranpose_foundation::modifier_element(FocusRequesterElement::new(
-                    requester_b.clone(),
-                )),
+                cranpose_foundation::modifier_element(FocusRequesterElement::new(requester_b)),
                 cranpose_foundation::modifier_element(FocusTargetElement::new()),
             ],
         );

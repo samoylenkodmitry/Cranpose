@@ -1,5 +1,3 @@
-#![allow(non_snake_case)]
-
 mod skin;
 pub(crate) mod sprites;
 
@@ -216,7 +214,7 @@ fn remember_winamp_skin() -> Result<WinampSkin, String> {
         let wsz = include_bytes!("../../../assets/winamp.wsz");
         load_skin(wsz).map_err(|err| format!("{err:#}"))
     })
-    .with(|result| result.clone())
+    .with(Clone::clone)
 }
 
 #[composable]
@@ -362,7 +360,7 @@ fn WinampNativeWindows(
                 scaled(PLAYLIST_HEIGHT, scale),
             ),
             {
-                let pledit = skin.pledit.clone();
+                let pledit = skin.pledit;
                 move || {
                     PlaylistWindow(pledit.clone(), state, WinampDragTarget::NativeGroup, scale);
                 }
@@ -451,7 +449,7 @@ pub fn WinampStandaloneApp() {
             .with_resizable(true)
             .with_min_size(PLAYLIST_WIDTH, PLAYLIST_HEIGHT),
             {
-                let pledit = skin.pledit.clone();
+                let pledit = skin.pledit;
                 move || {
                     PlaylistWindow(
                         pledit.clone(),
@@ -1248,8 +1246,7 @@ fn PressableSprite(
                                             {
                                                 if winamp_press_debug_enabled() {
                                                     eprintln!(
-                                                        "[WINAMP_PRESS_DEBUG] move-clears button ({:.1},{:.1})",
-                                                        x, y
+                                                        "[WINAMP_PRESS_DEBUG] move-clears button ({x:.1},{y:.1})"
                                                     );
                                                 }
                                                 is_pressed.set(false);
@@ -1271,8 +1268,7 @@ fn PressableSprite(
                                             if was_pressed && inside {
                                                 if winamp_press_debug_enabled() {
                                                     eprintln!(
-                                                        "[WINAMP_PRESS_DEBUG] click fired button ({:.1},{:.1})",
-                                                        x, y
+                                                        "[WINAMP_PRESS_DEBUG] click fired button ({x:.1},{y:.1})"
                                                     );
                                                 }
                                                 on_click();
@@ -1282,8 +1278,7 @@ fn PressableSprite(
                                         PointerEventKind::Cancel => {
                                             if winamp_press_debug_enabled() {
                                                 eprintln!(
-                                                    "[WINAMP_PRESS_DEBUG] cancel button ({:.1},{:.1})",
-                                                    x, y
+                                                    "[WINAMP_PRESS_DEBUG] cancel button ({x:.1},{y:.1})"
                                                 );
                                             }
                                             is_pressed.set(false);
@@ -1666,9 +1661,10 @@ fn winamp_window_config(placement: WinampWindowPlacement) -> WindowConfig {
 }
 
 pub(crate) fn playlist_window_size(window: Option<WindowState>) -> Size {
-    window
-        .map(WindowState::size)
-        .unwrap_or_else(|| Size::new(PLAYLIST_WIDTH, PLAYLIST_HEIGHT))
+    window.map_or_else(
+        || Size::new(PLAYLIST_WIDTH, PLAYLIST_HEIGHT),
+        WindowState::size,
+    )
 }
 
 #[composable]

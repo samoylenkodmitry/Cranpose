@@ -22,16 +22,17 @@ fn main() {
             println!("=== Phase 1: Initial state - Item 0 should be visible ===");
             match find_text_in_semantics(&robot, "Item 0") {
                 Some((x, y, w, h)) => {
-                    println!("✓ Item 0 found at ({:.1}, {:.1}, {:.1}x{:.1})", x, y, w, h);
+                    println!("✓ Item 0 found at ({x:.1}, {y:.1}, {w:.1}x{h:.1})");
                 }
                 None => {
                     panic!("FAIL: Item 0 not visible at startup!");
                 }
             }
 
-            if find_text_in_semantics(&robot, "Item 50").is_some() {
-                panic!("FAIL: Item 50 should NOT be visible at startup!");
-            }
+            assert!(
+                !find_text_in_semantics(&robot, "Item 50").is_some(),
+                "FAIL: Item 50 should NOT be visible at startup!"
+            );
             println!("✓ Item 50 correctly not visible at startup");
 
             println!("\n=== Phase 2: Click 'Jump to 50' button ===");
@@ -44,7 +45,7 @@ fn main() {
             println!("\n=== Phase 3: Item 50 MUST be visible immediately after button click ===");
             match find_text_in_semantics(&robot, "Item 50") {
                 Some((x, y, w, h)) => {
-                    println!("✓ Item 50 found at ({:.1}, {:.1}, {:.1}x{:.1})", x, y, w, h);
+                    println!("✓ Item 50 found at ({x:.1}, {y:.1}, {w:.1}x{h:.1})");
                     println!("✓ PASS: scroll_to_item triggered immediate redraw!");
                 }
                 None => {
@@ -119,7 +120,7 @@ fn main() {
                                             BoxSpec::new().content_alignment(Alignment::CENTER),
                                             move || {
                                                 Text(
-                                                    format!("Item {}", index),
+                                                    format!("Item {index}"),
                                                     Modifier::default(),
                                                     TextStyle::default(),
                                                 );

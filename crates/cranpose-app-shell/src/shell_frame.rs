@@ -376,11 +376,7 @@ where
 
         let tree_needs_layout_check = cranpose_ui::tree_needs_layout(&mut *applier, root)
             .unwrap_or_else(|err| {
-                log::warn!(
-                    "Cannot check layout dirty status for root #{}: {}",
-                    root,
-                    err
-                );
+                log::warn!("Cannot check layout dirty status for root #{root}: {err}");
                 true
             });
         let needs_layout =
@@ -517,10 +513,7 @@ where
                 true
             }
             Err(NodeError::Missing { id }) => {
-                log::debug!(
-                    "Post-layout recomposition skipped: node {} no longer exists",
-                    id
-                );
+                log::debug!("Post-layout recomposition skipped: node {id} no longer exists");
                 self.app.request_layout_pass();
                 request_render_invalidation();
                 true
@@ -544,15 +537,11 @@ where
                     DispatchInvalidationKind::Pointer,
                 ) {
                     Ok(true) => {
-                        log::trace!("Cleared pointer repass flag for node #{}", node_id);
+                        log::trace!("Cleared pointer repass flag for node #{node_id}");
                     }
                     Ok(false) => {}
                     Err(err) => {
-                        log::debug!(
-                            "Could not process pointer repass for node #{}: {}",
-                            node_id,
-                            err
-                        );
+                        log::debug!("Could not process pointer repass for node #{node_id}: {err}");
                     }
                 }
             });
@@ -567,14 +556,12 @@ where
                     DispatchInvalidationKind::Focus,
                 ) {
                     Ok(true) => {
-                        log::trace!("Cleared focus sync flag for node #{}", node_id);
+                        log::trace!("Cleared focus sync flag for node #{node_id}");
                     }
                     Ok(false) => {}
                     Err(err) => {
                         log::debug!(
-                            "Could not process focus invalidation for node #{}: {}",
-                            node_id,
-                            err
+                            "Could not process focus invalidation for node #{node_id}: {err}"
                         );
                     }
                 }
@@ -644,7 +631,7 @@ where
         };
 
         let mut result = FrameUpdateResult::default();
-        let mut retained_visual_nodes = HashSet::new();
+        let mut retained_visual_nodes = HashSet::default();
         let mut prune_observations = false;
         for ((surface, draw_dirty), structural) in
             self.surfaces.iter_mut().zip(draw_dirty).zip(structural)
@@ -851,11 +838,9 @@ impl<R: Renderer> RootSurface<R> {
             return true;
         }
 
-        self.dev_overlay_last_refresh
-            .map(|last| {
-                now.checked_duration_since(last).unwrap_or_default() >= DEV_OVERLAY_REFRESH_INTERVAL
-            })
-            .unwrap_or(true)
+        self.dev_overlay_last_refresh.is_none_or(|last| {
+            now.checked_duration_since(last).unwrap_or_default() >= DEV_OVERLAY_REFRESH_INTERVAL
+        })
     }
 
     fn build_dev_overlay_text(&mut self, app: &ShellApp, viewport_size: Size) -> String {
@@ -971,7 +956,8 @@ pub(crate) fn build_draw_refresh_scope(
     applier: &mut MemoryApplier,
     dirty_nodes: &HashSet<NodeId>,
 ) -> HashSet<NodeId> {
-    let mut refresh_scope = HashSet::with_capacity(dirty_nodes.len());
+    let mut refresh_scope =
+        HashSet::with_capacity_and_hasher(dirty_nodes.len(), Default::default());
     for &dirty_node in dirty_nodes {
         let mut current = Some(dirty_node);
         while let Some(node_id) = current {

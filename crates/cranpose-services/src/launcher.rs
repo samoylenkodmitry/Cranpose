@@ -254,7 +254,6 @@ impl OpenFileLauncher {
 }
 
 /// Remembers a single-file launcher under `request_key`.
-#[allow(non_snake_case)]
 #[composable]
 #[track_caller]
 pub fn rememberOpenFileLauncher(
@@ -304,7 +303,6 @@ impl OpenFilesLauncher {
 }
 
 /// Remembers a multi-file launcher under `request_key`.
-#[allow(non_snake_case)]
 #[composable]
 #[track_caller]
 pub fn rememberOpenFilesLauncher(
@@ -354,7 +352,6 @@ impl OpenFolderLauncher {
 }
 
 /// Remembers a folder launcher under `request_key`.
-#[allow(non_snake_case)]
 #[composable]
 #[track_caller]
 pub fn rememberOpenFolderLauncher(
@@ -403,7 +400,6 @@ impl SaveDocumentLauncher {
 }
 
 /// Remembers a save-document launcher under `request_key`.
-#[allow(non_snake_case)]
 #[composable]
 #[track_caller]
 pub fn rememberSaveDocumentLauncher(
@@ -450,7 +446,6 @@ impl WritableFolderLauncher {
 }
 
 /// Remembers a writable-folder launcher under `request_key`.
-#[allow(non_snake_case)]
 #[composable]
 #[track_caller]
 pub fn rememberWritableFolderLauncher(

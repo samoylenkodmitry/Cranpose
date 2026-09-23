@@ -217,10 +217,10 @@ fn ci_architecture_budget_runs_required_gates() {
         "Android CI should install only required SDK packages instead of running the broad setup-android action"
     );
     assert!(
-        heavy_workflow.contains("ANDROID_NDK_HOME=$sdk_root/ndk/27.0.12077973")
-            && heavy_workflow.contains("sdkmanager \"ndk;27.0.12077973\"")
+        heavy_workflow.contains("ANDROID_NDK_HOME=$sdk_root/ndk/30.0.16248370")
+            && heavy_workflow.contains("sdkmanager \"ndk;30.0.16248370\"")
             && heavy_workflow.contains("test -f \"$ANDROID_NDK_HOME/source.properties\"")
-            && release_workflow.contains("bash scripts/ci/install_android_ndk.sh 27.0.12077973"),
+            && release_workflow.contains("bash scripts/ci/install_android_ndk.sh 30.0.16248370"),
         "self-hosted Android CI and hosted release builds should provision and validate the pinned NDK"
     );
 }
@@ -680,12 +680,12 @@ fn web_first_frame_is_forced_through_surface_dirty() {
     );
     assert!(
         source.contains(
-            "let present_required = surface_present_required(\n            surface_dirty_for_loop.get(),\n            update_result.visual_changed,\n            app.borrow().needs_redraw(),\n        );"
+            "let present_required = surface_present_required(\n            surface_dirty.get(),\n            update_result.visual_changed,\n            app.borrow().needs_redraw(),\n        );"
         ),
         "web render loop must gate the present through the shared surface_present_required helper"
     );
     assert!(
-        source.contains("surface_dirty_for_loop.set(false);"),
+        source.contains("surface_dirty.set(false);"),
         "web surface_dirty must be cleared only after a successful present"
     );
 }
@@ -4347,7 +4347,7 @@ fn a_test_audits_a_screen_and_a_robot_prints_what_a_reader_speaks() {
     }
     let demo_test = workspace_source("apps/desktop-demo/tests/accessibility_audit.rs");
     assert!(
-        demo_test.contains("for info in DEMO_TAB_INFO.iter()")
+        demo_test.contains("for info in &DEMO_TAB_INFO")
             && demo_test.contains("audit_accessibility(&placed)"),
         "every demo tab runs under the audit"
     );

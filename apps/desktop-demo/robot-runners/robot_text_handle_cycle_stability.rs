@@ -223,7 +223,6 @@ fn main() {
         .run(HandleCycleFixture);
 }
 
-#[allow(non_snake_case)]
 #[cranpose::composable]
 fn HandleCycleFixture() {
     let state = cranpose_core::remember(|| {

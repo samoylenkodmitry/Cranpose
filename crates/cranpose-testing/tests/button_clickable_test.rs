@@ -45,7 +45,7 @@ fn test_button_creates_valid_composition() {
     let mut rule = ComposeTestRule::new();
     let runtime = rule.runtime_handle();
 
-    let clicked_count = MutableState::with_runtime(0, runtime.clone());
+    let clicked_count = MutableState::with_runtime(0, runtime);
 
     rule.set_content({
         let count = clicked_count;
@@ -135,7 +135,7 @@ fn test_multiple_buttons_in_composition() {
     let runtime = rule.runtime_handle();
 
     let button1_clicks = MutableState::with_runtime(0, runtime.clone());
-    let button2_clicks = MutableState::with_runtime(0, runtime.clone());
+    let button2_clicks = MutableState::with_runtime(0, runtime);
 
     rule.set_content({
         let clicks1 = button1_clicks;

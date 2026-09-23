@@ -90,8 +90,7 @@ pub async fn run_app(
             }
             None => {
                 log::warn!(
-                    "Ignoring unknown startup tab override '{}'; continuing with default tab",
-                    requested
+                    "Ignoring unknown startup tab override '{requested}'; continuing with default tab"
                 );
             }
         }
@@ -118,8 +117,7 @@ pub async fn run_app(
             }
             None => {
                 log::warn!(
-                    "Ignoring unknown startup shader section override '{}'; continuing with default shaders content",
-                    requested
+                    "Ignoring unknown startup shader section override '{requested}'; continuing with default shaders content"
                 );
             }
         }

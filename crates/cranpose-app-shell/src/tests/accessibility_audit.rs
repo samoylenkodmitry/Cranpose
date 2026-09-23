@@ -154,7 +154,7 @@ fn a_control_placed_above_the_one_before_it_is_out_of_order() {
         issues[0].to_string(),
         "OutOfOrder: button \"First\" sits above \"Second\""
     );
-    let mut on_purpose = root.clone();
+    let mut on_purpose = root;
     on_purpose.children[1].traversal_index = -1.0;
     assert!(audit_accessibility(&on_purpose).is_empty());
 }

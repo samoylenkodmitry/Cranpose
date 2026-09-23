@@ -44,8 +44,7 @@ fn select_present_mode_for_request(
             return mode;
         }
         log::warn!(
-            "CRANPOSE_PRESENT_MODE requested {:?}, but it is not supported; falling back to AutoNoVsync.",
-            mode
+            "CRANPOSE_PRESENT_MODE requested {mode:?}, but it is not supported; falling back to AutoNoVsync."
         );
     }
 

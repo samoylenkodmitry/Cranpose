@@ -27,7 +27,7 @@ fn cranpose_test_rule_reports_content_and_root() {
         assert!(rule.root_id().is_none());
 
         let runtime = rule.runtime_handle();
-        let state = MutableState::with_runtime(0, runtime.clone());
+        let state = MutableState::with_runtime(0, runtime);
         let recompositions = Rc::new(Cell::new(0));
 
         rule.set_content({

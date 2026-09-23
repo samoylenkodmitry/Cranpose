@@ -105,8 +105,7 @@ fn increase_depth(robot: &cranpose::Robot, target: usize) {
 fn assert_active_tab_content(robot: &cranpose::Robot, expected_text: &str, tab_label: &str) {
     robot.validate_content(expected_text).unwrap_or_else(|err| {
         panic!(
-            "{tab_label} did not become active after click; expected content {:?}: {err}",
-            expected_text
+            "{tab_label} did not become active after click; expected content {expected_text:?}: {err}"
         )
     });
 }
@@ -361,8 +360,7 @@ fn main() {
     env_logger::init();
     println!("=== Robot Memory Leak Test ===");
     println!(
-        "Scenario: depth 3→{} then switch tab without decreasing depth, {} cycle",
-        SPIKE_DEPTH, MEASURE_CYCLES,
+        "Scenario: depth 3→{SPIKE_DEPTH} then switch tab without decreasing depth, {MEASURE_CYCLES} cycle",
     );
 
     robot_launch::launch("Robot Memory Leak Test", WINDOW_WIDTH, WINDOW_HEIGHT).with_robot_app_hook(|name, argument| match name.as_str() {

@@ -38,8 +38,7 @@ impl TextMeasurer for ContractMeasurer {
         text.text
             .char_indices()
             .nth(char_idx)
-            .map(|(byte_idx, _)| byte_idx)
-            .unwrap_or(text.text.len())
+            .map_or(text.text.len(), |(byte_idx, _)| byte_idx)
     }
 
     fn get_cursor_x_for_offset(

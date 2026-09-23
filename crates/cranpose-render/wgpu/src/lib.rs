@@ -500,6 +500,19 @@ impl WgpuRenderer {
         self.render_frame(texture, view, width, height)
     }
 
+    /// Presents a surface image this renderer drew with
+    /// [`render_surface_texture`](Self::render_surface_texture), on the queue
+    /// that recorded it.
+    ///
+    /// Before [`init_gpu`](Self::init_gpu) there is no queue, and the image is
+    /// released without being shown.
+    pub fn present(&self, frame: wgpu::SurfaceTexture) {
+        match self.sync_gpu_renderer() {
+            Some(gpu_renderer) => gpu_renderer.queue.present(frame),
+            None => log::debug!("surface image released: the renderer has no GPU queue"),
+        }
+    }
+
     fn render_frame(
         &mut self,
         texture: &wgpu::Texture,
@@ -824,7 +837,7 @@ impl WgpuRenderer {
                 .status()
                 .last_frame_stats
                 .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
             PresentBackend::None => None,
         }
     }
@@ -848,15 +861,13 @@ impl WgpuRenderer {
             .scene
             .graph
             .as_ref()
-            .map(RenderGraph::node_count)
-            .unwrap_or(0);
+            .map_or(0, RenderGraph::node_count);
         stats.scene_graph_heap_bytes = self
             .frontend
             .scene
             .graph
             .as_ref()
-            .map(RenderGraph::heap_bytes)
-            .unwrap_or(0);
+            .map_or(0, RenderGraph::heap_bytes);
         stats.scene_hits_len = self.frontend.scene.hits.len();
         stats.scene_hits_cap = self.frontend.scene.hits.capacity();
         stats.scene_node_index_len = self.frontend.scene.node_index.len();
@@ -879,8 +890,7 @@ impl WgpuRenderer {
     #[doc(hidden)]
     pub fn device_error_count_for_tests(&self) -> u64 {
         self.sync_gpu_renderer()
-            .map(GpuRenderer::device_error_count)
-            .unwrap_or(0)
+            .map_or(0, GpuRenderer::device_error_count)
     }
 
     #[doc(hidden)]

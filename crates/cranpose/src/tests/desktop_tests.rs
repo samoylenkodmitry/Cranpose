@@ -1449,6 +1449,7 @@ fn only_the_primary_button_steps_a_held_press() {
         position,
         primary: true,
         button,
+        is_macos_activation_click: false,
     };
     assert_eq!(
         held_press_step(&button(

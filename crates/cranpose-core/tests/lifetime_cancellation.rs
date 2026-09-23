@@ -188,11 +188,11 @@ fn cancelling_a_continuation_can_cancel_another_during_cleanup() {
     let composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
     let child = runtime
-        .register_ui_cont(|_: ()| {})
+        .register_ui_cont(|(): ()| {})
         .expect("child registered");
     let cleanup = CancelContinuationOnDrop(runtime.clone(), child);
     let parent = runtime
-        .register_ui_cont(move |_: ()| {
+        .register_ui_cont(move |(): ()| {
             let _ = &cleanup;
         })
         .expect("parent registered");

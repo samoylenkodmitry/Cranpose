@@ -6,7 +6,7 @@ use cranpose_testing::{find_button_in_semantics, find_text_in_semantics};
 use desktop_app::{app, app::DemoTab};
 
 fn read_active_tab() -> Option<DemoTab> {
-    app::TEST_ACTIVE_TAB_STATE.with(|cell| cell.borrow().as_ref().map(|state| state.get()))
+    app::TEST_ACTIVE_TAB_STATE.with(|cell| cell.borrow().as_ref().map(cranpose::MutableState::get))
 }
 
 fn main() {
@@ -20,8 +20,8 @@ fn main() {
             std::thread::sleep(Duration::from_millis(500));
 
             match robot.wait_for_idle() {
-                Ok(_) => println!("✓ App ready\n"),
-                Err(e) => println!("Note: {}\n", e),
+                Ok(()) => println!("✓ App ready\n"),
+                Err(e) => println!("Note: {e}\n"),
             }
 
             let find_tab_center = |robot: &cranpose::Robot, name: &str| -> Option<(f32, f32)> {
@@ -57,10 +57,10 @@ fn main() {
 
             println!("\n--- Test 2: Click on Async Runtime Tab ---");
             if let Some((x, y)) = find_tab_center(&robot, "Async Runtime") {
-                println!("  Found 'Async Runtime' tab at center ({:.1}, {:.1})", x, y);
+                println!("  Found 'Async Runtime' tab at center ({x:.1}, {y:.1})");
                 match robot.click(x, y) {
-                    Ok(_) => println!("  ✓ Clicked 'Async Runtime' tab"),
-                    Err(e) => println!("  ✗ Click failed: {}", e),
+                    Ok(()) => println!("  ✓ Clicked 'Async Runtime' tab"),
+                    Err(e) => println!("  ✗ Click failed: {e}"),
                 }
             } else {
                 println!("  ✗ Could not find 'Async Runtime' tab");
@@ -68,7 +68,7 @@ fn main() {
 
             std::thread::sleep(Duration::from_millis(500));
             if let Some(active) = read_active_tab() {
-                println!("  Active tab state after click: {:?}", active);
+                println!("  Active tab state after click: {active:?}");
             }
 
             println!("\n--- Test 3: Verify Content Changed to Async Runtime ---");
@@ -94,13 +94,10 @@ fn main() {
 
             println!("\n--- Test 4: Click on Modifiers Showcase Tab ---");
             if let Some((x, y)) = find_tab_center(&robot, "Modifiers Showcase") {
-                println!(
-                    "  Found 'Modifiers Showcase' tab at center ({:.1}, {:.1})",
-                    x, y
-                );
+                println!("  Found 'Modifiers Showcase' tab at center ({x:.1}, {y:.1})");
                 match robot.click(x, y) {
-                    Ok(_) => println!("  ✓ Clicked 'Modifiers Showcase' tab"),
-                    Err(e) => println!("  ✗ Click failed: {}", e),
+                    Ok(()) => println!("  ✓ Clicked 'Modifiers Showcase' tab"),
+                    Err(e) => println!("  ✗ Click failed: {e}"),
                 }
             } else {
                 println!("  ✗ Could not find 'Modifiers Showcase' tab");
@@ -108,7 +105,7 @@ fn main() {
 
             std::thread::sleep(Duration::from_millis(500));
             if let Some(active) = read_active_tab() {
-                println!("  Active tab state after click: {:?}", active);
+                println!("  Active tab state after click: {active:?}");
             }
 
             println!("\n--- Test 5: Verify Content Changed to Modifiers Showcase ---");
@@ -128,10 +125,10 @@ fn main() {
 
             println!("\n--- Test 6: Click Back to Counter App Tab ---");
             if let Some((x, y)) = find_tab_center(&robot, "Counter App") {
-                println!("  Found 'Counter App' tab at center ({:.1}, {:.1})", x, y);
+                println!("  Found 'Counter App' tab at center ({x:.1}, {y:.1})");
                 match robot.click(x, y) {
-                    Ok(_) => println!("  ✓ Clicked 'Counter App' tab"),
-                    Err(e) => println!("  ✗ Click failed: {}", e),
+                    Ok(()) => println!("  ✓ Clicked 'Counter App' tab"),
+                    Err(e) => println!("  ✗ Click failed: {e}"),
                 }
             } else {
                 println!("  ✗ Could not find 'Counter App' tab");
@@ -139,7 +136,7 @@ fn main() {
 
             std::thread::sleep(Duration::from_millis(500));
             if let Some(active) = read_active_tab() {
-                println!("  Active tab state after click: {:?}", active);
+                println!("  Active tab state after click: {active:?}");
             }
 
             println!("\n--- Test 7: Verify Content Changed Back to Counter App ---");

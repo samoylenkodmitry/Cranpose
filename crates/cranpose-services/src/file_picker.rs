@@ -300,7 +300,6 @@ pub fn local_file_picker() -> CompositionLocal<FilePickerRef> {
 }
 
 /// Provides the default [`FilePicker`] to descendant composables.
-#[allow(non_snake_case)]
 #[composable]
 pub fn ProvideFilePicker(content: impl FnOnce()) {
     let picker = cranpose_core::remember(default_file_picker).with(|state| state.clone());

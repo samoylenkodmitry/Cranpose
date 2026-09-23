@@ -317,14 +317,13 @@ impl HeadlessRenderer {
         parent_offset: Point,
         operations: &mut Vec<RenderOp>,
     ) {
-        let node_data = match applier.with_node::<LayoutNode, _>(node_id, |node| {
+        let Ok(node_data) = applier.with_node::<LayoutNode, _>(node_id, |node| {
             let state = node.layout_state();
             let modifier_slices = node.modifier_slices_snapshot();
             let children: Vec<NodeId> = node.children.clone();
             (state, modifier_slices, children)
-        }) {
-            Ok(data) => data,
-            Err(_) => return,
+        }) else {
+            return;
         };
 
         let (layout_state, modifier_slices, children) = node_data;

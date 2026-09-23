@@ -60,10 +60,7 @@ fn main() {
             std::thread::sleep(Duration::from_millis(500));
 
             if let Some((x, y, w, h)) = find_text_in_semantics(&robot, "Persistent Child") {
-                println!(
-                    "✓ Child survived parent recreation! Bounds: {:.1},{:.1} {}x{}",
-                    x, y, w, h
-                );
+                println!("✓ Child survived parent recreation! Bounds: {x:.1},{y:.1} {w}x{h}");
                 if w <= 0.0 || h <= 0.0 {
                     println!("✗ Child has zero size - Layout broken!");
                     let _ = robot.exit();

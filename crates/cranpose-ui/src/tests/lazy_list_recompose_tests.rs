@@ -137,7 +137,6 @@ impl TextMeasurer for TallMultilineTextMeasurer {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn ScrollIndicatorLazyList(captured_state: Rc<RefCell<Option<LazyListState>>>) {
     let list_state = rememberLazyListState();
     *captured_state.borrow_mut() = Some(list_state);
@@ -160,7 +159,7 @@ fn ScrollIndicatorLazyList(captured_state: Rc<RefCell<Option<LazyListState>>>) {
             |scope| {
                 scope.items(80, |index| {
                     Text(
-                        format!("Row {}", index),
+                        format!("Row {index}"),
                         Modifier::empty().height(48.0),
                         TextStyle::default(),
                     );
@@ -192,7 +191,6 @@ fn render_scroll_indicator_lazy_list() -> (
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn ChildScrollIndicator(list_state: LazyListState) {
     Text(
         format!(
@@ -205,7 +203,6 @@ fn ChildScrollIndicator(list_state: LazyListState) {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn ChildScrollIndicatorLazyList(captured_state: Rc<RefCell<Option<LazyListState>>>) {
     let list_state = rememberLazyListState();
     *captured_state.borrow_mut() = Some(list_state);
@@ -219,7 +216,7 @@ fn ChildScrollIndicatorLazyList(captured_state: Rc<RefCell<Option<LazyListState>
             |scope| {
                 scope.items(80, |index| {
                     Text(
-                        format!("Row {}", index),
+                        format!("Row {index}"),
                         Modifier::empty().height(48.0),
                         TextStyle::default(),
                     );
@@ -230,7 +227,6 @@ fn ChildScrollIndicatorLazyList(captured_state: Rc<RefCell<Option<LazyListState>
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn ReactiveSiblingLazyList(
     item_invocations: Rc<Cell<usize>>,
     captured_state: Rc<RefCell<Option<LazyListState>>>,
@@ -256,7 +252,7 @@ fn ReactiveSiblingLazyList(
                         move |index| {
                             item_invocations.set(item_invocations.get() + 1);
                             Text(
-                                format!("Stable Row {}", index),
+                                format!("Stable Row {index}"),
                                 Modifier::empty().height(48.0),
                                 TextStyle::default(),
                             );
@@ -269,7 +265,6 @@ fn ReactiveSiblingLazyList(
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn StableKeyedCountingLazyList(
     item_invocations: Rc<Cell<usize>>,
     captured_state: Rc<RefCell<Option<LazyListState>>>,
@@ -289,7 +284,7 @@ fn StableKeyedCountingLazyList(
                     move |index| {
                         item_invocations.set(item_invocations.get() + 1);
                         Text(
-                            format!("Cached Row {}", index),
+                            format!("Cached Row {index}"),
                             Modifier::empty().height(48.0),
                             TextStyle::default(),
                         );
@@ -327,7 +322,6 @@ fn render_counting_lazy_list_composable(
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn StatefulCachedLazyList(
     item_invocations: Rc<Cell<usize>>,
     label_state: MutableState<usize>,
@@ -360,7 +354,6 @@ fn StatefulCachedLazyList(
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn VariableHeightCachedLazyList(
     short_body_state: MutableState<bool>,
     captured_state: Rc<RefCell<Option<LazyListState>>>,
@@ -404,7 +397,6 @@ fn VariableHeightCachedLazyList(
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn AnimatedLazyItemList() {
     let list_state = rememberLazyListState();
     LazyColumn(
@@ -436,7 +428,6 @@ fn AnimatedLazyItemList() {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn TallCachedLazyTextList(body: Rc<String>, captured_state: Rc<RefCell<Option<LazyListState>>>) {
     let list_state = rememberLazyListState();
     *captured_state.borrow_mut() = Some(list_state);
@@ -455,7 +446,6 @@ fn TallCachedLazyTextList(body: Rc<String>, captured_state: Rc<RefCell<Option<La
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn LazyItemWithScrollableRow(captured_row_scroll: Rc<RefCell<Option<ScrollState>>>) {
     let list_state = rememberLazyListState();
     let row_scroll = cranpose_core::remember(|| ScrollState::new(0.0)).with(ScrollState::clone);
@@ -630,7 +620,6 @@ fn assert_consecutive_rows(indices: &[usize], context: &str) {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn SelectableScrolledLazyList(
     selected_index: MutableState<usize>,
     captured_state: Rc<RefCell<Option<LazyListState>>>,
@@ -675,7 +664,7 @@ fn lazy_list_item_recomposes_on_state_change() {
     let _app_context = crate::render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
-    let label_state = MutableState::with_runtime(0u32, runtime.clone());
+    let label_state = MutableState::with_runtime(0u32, runtime);
 
     let key = location_key(file!(), line!(), column!());
     composition
@@ -720,7 +709,6 @@ fn lazy_list_item_recomposes_on_state_change() {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn ThemedLazyList(theme_state: MutableState<bool>) {
     let list_state = rememberLazyListState();
     let label = if theme_state.value() {
@@ -746,7 +734,7 @@ fn lazy_list_item_recomposes_when_composable_parent_capture_changes() {
     let _app_context = crate::render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
-    let theme_state = MutableState::with_runtime(false, runtime.clone());
+    let theme_state = MutableState::with_runtime(false, runtime);
 
     let key = location_key(file!(), line!(), column!());
     composition
@@ -789,7 +777,7 @@ fn scroll_state_recomposition_does_not_reprepare_stable_lazy_rows() {
             let item_invocations = Rc::clone(&item_invocations);
             let captured_state = Rc::clone(&captured_state);
             move || {
-                ReactiveSiblingLazyList(Rc::clone(&item_invocations), Rc::clone(&captured_state))
+                ReactiveSiblingLazyList(Rc::clone(&item_invocations), Rc::clone(&captured_state));
             }
         })
         .expect("initial render");
@@ -1036,7 +1024,7 @@ fn invalidated_cached_lazy_item_recomposes_instead_of_reusing_stale_content() {
                     Rc::clone(&item_invocations),
                     label_state,
                     Rc::clone(&captured_state),
-                )
+                );
             }
         })
         .expect("initial render");
@@ -1242,7 +1230,6 @@ fn scrolled_lazy_list_scoped_row_recompose_does_not_ghost_old_rows() {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn GrowingLazyList(
     item_count: MutableState<usize>,
     captured_state: Rc<RefCell<Option<LazyListState>>>,
@@ -1270,7 +1257,7 @@ fn GrowingLazyList(
                         ColumnSpec::default(),
                         move || {
                             Text(
-                                format!("Item {}", index),
+                                format!("Item {index}"),
                                 Modifier::empty(),
                                 TextStyle::default(),
                             );
@@ -1287,7 +1274,7 @@ fn lazy_list_updates_scroll_bounds_when_item_count_grows_without_scrolling() {
     let _app_context = crate::render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
-    let item_count = MutableState::with_runtime(2usize, runtime.clone());
+    let item_count = MutableState::with_runtime(2usize, runtime);
     let captured_state = Rc::new(RefCell::new(None));
     let call_count = Rc::new(Cell::new(0));
 
@@ -1450,7 +1437,6 @@ fn scroll_to_item_updates_child_indicator_scope() {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn GrowingRootChildLazyItemList(show_extra: MutableState<bool>) {
     let list_state = rememberLazyListState();
     LazyColumn(

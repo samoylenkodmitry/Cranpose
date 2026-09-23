@@ -38,8 +38,7 @@ pub(super) fn find_previous_record(
                 found_base = true;
                 let replace = best
                     .as_ref()
-                    .map(|current| current.snapshot_id() < id)
-                    .unwrap_or(true);
+                    .is_none_or(|current| current.snapshot_id() < id);
                 if replace {
                     best = Some(record.clone());
                 }
@@ -128,15 +127,11 @@ impl MutableSnapshot {
     }
 
     fn validate_not_applied(&self) {
-        if self.applied.get() {
-            panic!("Snapshot has already been applied");
-        }
+        assert!(!self.applied.get(), "Snapshot has already been applied");
     }
 
     fn validate_not_disposed(&self) {
-        if self.state.disposed.get() {
-            panic!("Snapshot has been disposed");
-        }
+        assert!(!self.state.disposed.get(), "Snapshot has been disposed");
     }
 
     pub fn snapshot_id(&self) -> SnapshotId {
@@ -276,9 +271,8 @@ impl MutableSnapshot {
 
         for (obj_id, state, writer_id) in &modified_objects {
             let head = state.first_record();
-            let applied = match find_record_by_id(&head, *writer_id) {
-                Some(record) => record,
-                None => return SnapshotApplyResult::Failure,
+            let Some(applied) = find_record_by_id(&head, *writer_id) else {
+                return SnapshotApplyResult::Failure;
             };
 
             let Some(current) =
@@ -286,9 +280,7 @@ impl MutableSnapshot {
                     .or_else(|| state.try_readable_record(parent_snapshot_id, &parent_invalid))
             else {
                 log::error!(
-                    "MutableSnapshot::apply missing parent readable record (object_id={:?}, parent_snapshot_id={})",
-                    obj_id,
-                    parent_snapshot_id
+                    "MutableSnapshot::apply missing parent readable record (object_id={obj_id:?}, parent_snapshot_id={parent_snapshot_id})"
                 );
                 return SnapshotApplyResult::Failure;
             };
@@ -450,7 +442,7 @@ impl MutableSnapshot {
         }
 
         let mut parent_mod = self.state.modified.borrow_mut();
-        for (key, value) in child_modified.iter() {
+        for (key, value) in child_modified {
             parent_mod.entry(*key).or_insert_with(|| value.clone());
         }
         Ok(())
@@ -669,7 +661,7 @@ mod tests {
         let mock_state = Arc::new(MockStateObject);
 
         snapshot.record_write(mock_state.clone());
-        snapshot.record_write(mock_state.clone());
+        snapshot.record_write(mock_state);
 
         assert_eq!(*write_count.lock().unwrap(), 1);
     }

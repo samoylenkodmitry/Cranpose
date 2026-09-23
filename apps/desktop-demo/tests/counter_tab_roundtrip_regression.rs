@@ -212,9 +212,7 @@ fn is_clickable(node: &SemanticsNode) -> bool {
 }
 
 fn subtree_contains_text(node: &SemanticsNode, text: &str) -> bool {
-    semantics_text(node)
-        .map(|value| value.contains(text))
-        .unwrap_or(false)
+    semantics_text(node).is_some_and(|value| value.contains(text))
         || node
             .children
             .iter()

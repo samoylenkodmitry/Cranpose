@@ -61,7 +61,7 @@ fn test_pointer_input_async_handler_lifecycle() {
     let runtime = rule.runtime_handle();
 
     let position = MutableState::with_runtime(Point { x: 0.0, y: 0.0 }, runtime.clone());
-    let event_count = MutableState::with_runtime(0, runtime.clone());
+    let event_count = MutableState::with_runtime(0, runtime);
 
     rule.set_content({
         let pos = position;
@@ -140,7 +140,7 @@ fn test_pause_button_with_dynamic_content() {
     let runtime = rule.runtime_handle();
 
     let is_running = MutableState::with_runtime(true, runtime.clone());
-    let click_count = MutableState::with_runtime(0, runtime.clone());
+    let click_count = MutableState::with_runtime(0, runtime);
 
     rule.set_content({
         let running = is_running;

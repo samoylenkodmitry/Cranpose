@@ -39,10 +39,9 @@ impl Modifier {
 
     /// Static shadow configuration variant mirroring Compose's `dropShadow(shape, shadow)`.
     pub fn drop_shadow_value(self, shape: LayerShape, shadow: Shadow) -> Self {
-        let shadow_value = shadow.clone();
         let draw = Rc::new(move |scope: &mut DrawScopeDefault| {
             let shadow =
-                shadow_value.to_scope(Density::from_scale(crate::render_state::current_density()));
+                shadow.to_scope(Density::from_scale(crate::render_state::current_density()));
             let primitive = build_drop_shadow_primitive(scope.size(), shape, &shadow);
             scope.push_recorded(primitive);
         });
@@ -82,10 +81,9 @@ impl Modifier {
 
     /// Static shadow configuration variant mirroring Compose's `innerShadow(shape, shadow)`.
     pub fn inner_shadow_value(self, shape: LayerShape, shadow: Shadow) -> Self {
-        let shadow_value = shadow.clone();
         let draw = Rc::new(move |scope: &mut DrawScopeDefault| {
             let shadow =
-                shadow_value.to_scope(Density::from_scale(crate::render_state::current_density()));
+                shadow.to_scope(Density::from_scale(crate::render_state::current_density()));
             let primitive = build_inner_shadow_primitive(scope.size(), shape, &shadow);
             scope.push_recorded(primitive);
         });

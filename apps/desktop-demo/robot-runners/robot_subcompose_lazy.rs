@@ -55,7 +55,7 @@ fn test_app() {
                             RowSpec::new().horizontal_arrangement(LinearArrangement::SpaceBetween),
                             move || {
                                 Text(
-                                    format!("TestItem{}", i),
+                                    format!("TestItem{i}"),
                                     Modifier::empty(),
                                     TextStyle::default(),
                                 );
@@ -108,18 +108,18 @@ fn main() {
             let mut visible_items: Vec<(usize, f32, f32, f32, f32)> = Vec::new();
 
             for i in 0..20 {
-                let item_text = format!("TestItem{}", i);
+                let item_text = format!("TestItem{i}");
                 if let Some((x, y, w, h)) = find_text(&item_text) {
                     visible_items.push((i, x, y, w, h));
-                    println!("  Item {}: pos=({:.0}, {:.0}) size=({:.0}x{:.0})", i, x, y, w, h);
+                    println!("  Item {i}: pos=({x:.0}, {y:.0}) size=({w:.0}x{h:.0})");
                 }
             }
 
             let visible_count = visible_items.len();
-            println!("\n  Visible items: {}", visible_count);
+            println!("\n  Visible items: {visible_count}");
 
             if visible_count < 20 {
-                println!("  ✓ Virtualization working: {} items visible (not all 20)", visible_count);
+                println!("  ✓ Virtualization working: {visible_count} items visible (not all 20)");
             } else {
                 println!("  ✗ Virtualization FAILED: all 20 items visible");
             }
@@ -134,19 +134,18 @@ fn main() {
                 let (idx_curr, _, y_curr, _, _) = visible_items[i];
 
                 if y_curr <= y_prev {
-                    println!("  ✗ Order violation: Item {} at y={:.0} should be after Item {} at y={:.0}",
-                        idx_curr, y_curr, idx_prev, y_prev);
+                    println!("  ✗ Order violation: Item {idx_curr} at y={y_curr:.0} should be after Item {idx_prev} at y={y_prev:.0}");
                     all_ordered = false;
                 }
 
                 let gap = y_curr - (y_prev + h_prev);
                 if gap < 0.0 {
-                    println!("  ✗ OVERLAP between Item {} and {}: gap={:.1}px", idx_prev, idx_curr, gap);
+                    println!("  ✗ OVERLAP between Item {idx_prev} and {idx_curr}: gap={gap:.1}px");
                     spacing_issues += 1;
                 } else if gap > 50.0 {
-                    println!("  ⚠️ Large gap between Item {} and {}: {:.1}px", idx_prev, idx_curr, gap);
+                    println!("  ⚠️ Large gap between Item {idx_prev} and {idx_curr}: {gap:.1}px");
                 } else {
-                    println!("  Gap {}->{}: {:.1}px (expected ~34px)", idx_prev, idx_curr, gap);
+                    println!("  Gap {idx_prev}->{idx_curr}: {gap:.1}px (expected ~34px)");
                 }
             }
 
@@ -160,27 +159,27 @@ fn main() {
             println!("\n=== PHASE 4: Scroll Behavior ===");
 
             let first_before = visible_items.first().map(|(i, _, _, _, _)| *i);
-            println!("  First visible before scroll: Item {:?}", first_before);
+            println!("  First visible before scroll: Item {first_before:?}");
 
-            let scroll_start_y = visible_items.first().map(|(_, _, y, _, _)| y + 100.0).unwrap_or(400.0);
+            let scroll_start_y = visible_items.first().map_or(400.0, |(_, _, y, _, _)| y + 100.0);
             robot.drag(400.0, scroll_start_y, 400.0, scroll_start_y - 200.0).ok();
             std::thread::sleep(Duration::from_millis(300));
             println!("  Performed scroll gesture (200px down)");
 
             let mut items_after: Vec<(usize, f32, f32, f32, f32)> = Vec::new();
             for i in 0..20 {
-                let item_text = format!("TestItem{}", i);
+                let item_text = format!("TestItem{i}");
                 if let Some((x, y, w, h)) = find_text(&item_text) {
                     items_after.push((i, x, y, w, h));
                 }
             }
 
             let first_after = items_after.first().map(|(i, _, _, _, _)| *i);
-            println!("  First visible after scroll: Item {:?}", first_after);
+            println!("  First visible after scroll: Item {first_after:?}");
 
             match (first_before, first_after) {
                 (Some(before), Some(after)) if after > before => {
-                    println!("  ✓ Scroll worked: first item changed from {} to {}", before, after);
+                    println!("  ✓ Scroll worked: first item changed from {before} to {after}");
                 }
                 (Some(_), Some(_)) => {
                     let pos_before = visible_items.first().map(|(_, _, y, _, _)| *y);
@@ -199,7 +198,7 @@ fn main() {
             println!("\n=== PHASE 5: Virtualization Stats ===");
 
             if let Some((_, y, _, _)) = find_text("Visible:") {
-                println!("  Stats found at y={:.0}", y);
+                println!("  Stats found at y={y:.0}");
             }
 
             let high_items_visible: Vec<_> = items_after.iter().filter(|(i, _, _, _, _)| *i >= 15).collect();
@@ -216,7 +215,7 @@ fn main() {
                 println!("✗ Some tests FAILED:");
                 if visible_count >= 20 { println!("  - Virtualization broken"); }
                 if !all_ordered { println!("  - Item ordering broken"); }
-                if spacing_issues > 0 { println!("  - {} overlapping items", spacing_issues); }
+                if spacing_issues > 0 { println!("  - {spacing_issues} overlapping items"); }
             }
 
             println!("\n=== Test Complete ===");

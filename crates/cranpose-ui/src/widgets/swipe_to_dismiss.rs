@@ -19,8 +19,6 @@
 //! - taps (no travel beyond the slop) consume nothing, so clickable rows
 //!   keep working.
 
-#![allow(non_snake_case)]
-
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,

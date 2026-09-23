@@ -225,7 +225,7 @@ pub(crate) fn caret_visual_line_for_offset(
         _ => {
             let before = &text[..offset];
             let line_index = before.matches('\n').count();
-            let line_start = before.rfind('\n').map(|i| i + 1).unwrap_or(0);
+            let line_start = before.rfind('\n').map_or(0, |i| i + 1);
             (line_index, line_start)
         }
     }
@@ -611,8 +611,7 @@ impl TextFieldModifierNode {
                     let elapsed_ms = refs
                         .last_click_time
                         .get()
-                        .map(|last| now.duration_since(last).as_millis())
-                        .unwrap_or(u128::MAX);
+                        .map_or(u128::MAX, |last| now.duration_since(last).as_millis());
                     let tap_count = classify_tap_count(
                         previous,
                         elapsed_ms,
@@ -625,15 +624,11 @@ impl TextFieldModifierNode {
                     let selection = state.selection();
                     let tap_in_selection =
                         !selection.collapsed() && pos >= selection.min() && pos <= selection.max();
-                    let repeat_in_place = refs
-                        .last_click_pos
-                        .get()
-                        .map(|(px, py)| {
-                            let dx = event.position.x - px;
-                            let dy = event.position.y - py;
-                            dx * dx + dy * dy <= MULTI_TAP_SLOP_PX * MULTI_TAP_SLOP_PX
-                        })
-                        .unwrap_or(false);
+                    let repeat_in_place = refs.last_click_pos.get().is_some_and(|(px, py)| {
+                        let dx = event.position.x - px;
+                        let dy = event.position.y - py;
+                        dx * dx + dy * dy <= MULTI_TAP_SLOP_PX * MULTI_TAP_SLOP_PX
+                    });
                     let effective_count = resolve_selection_tap_count(
                         tap_count,
                         refs.click_count.get(),
@@ -1405,7 +1400,7 @@ impl ModifierNodeElement for TextFieldElement {
         node.style = self.style.clone();
         node.cursor_brush = Brush::solid(self.cursor_color);
         node.line_limits = self.line_limits;
-        node.handle_controller = self.handle_controller.clone();
+        node.handle_controller.clone_from(&self.handle_controller);
         node.modal_depth = self.modal_depth;
         node.refs.modal_depth.set(self.modal_depth);
         node.rebuild_cached_closures();
@@ -1960,16 +1955,14 @@ mod tests {
                 crate::text::measure_text(&crate::text::AnnotatedString::from(""), &style).width;
             assert!(
                 empty_width.abs() < 0.1,
-                "Empty text should have 0 width, got {}",
-                empty_width
+                "Empty text should have 0 width, got {empty_width}"
             );
 
             let hi_width =
                 crate::text::measure_text(&crate::text::AnnotatedString::from("Hi"), &style).width;
             assert!(
                 hi_width > 0.0,
-                "Text 'Hi' should have positive width: {}",
-                hi_width
+                "Text 'Hi' should have positive width: {hi_width}"
             );
 
             let h_width =
@@ -1977,9 +1970,7 @@ mod tests {
             assert!(h_width > 0.0, "Text 'H' should have positive width");
             assert!(
                 h_width < hi_width,
-                "'H' width {} should be less than 'Hi' width {}",
-                h_width,
-                hi_width
+                "'H' width {h_width} should be less than 'Hi' width {hi_width}"
             );
 
             let state = TextFieldState::new("Hi");
@@ -2001,9 +1992,7 @@ mod tests {
             .width;
             assert!(
                 (cursor_x - hi_width).abs() < 0.1,
-                "Cursor x {} should equal 'Hi' width {}",
-                cursor_x,
-                hi_width
+                "Cursor x {cursor_x} should equal 'Hi' width {hi_width}"
             );
         });
     }

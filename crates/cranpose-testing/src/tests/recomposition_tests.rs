@@ -37,7 +37,6 @@ impl Node for TestTextNode {
     }
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn Column(content: impl FnOnce()) {
     let id =
@@ -47,7 +46,6 @@ fn Column(content: impl FnOnce()) {
     pop_parent();
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn Text(value: String) {
     let initial_content = value.clone();
@@ -63,7 +61,6 @@ fn Text(value: String) {
     .expect("update text node");
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn Parent(value: i32) {
     Column(|| {
@@ -71,17 +68,16 @@ fn Parent(value: i32) {
     });
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn Child(value: i32) {
-    Text(format!("value: {}", value));
+    Text(format!("value: {value}"));
 }
 
 #[test]
 fn test_child_recomposition_preserves_parent() {
     run_test_composition(|rule| {
         let runtime = rule.runtime_handle();
-        let text_state = MutableState::with_runtime("Hello".to_string(), runtime.clone());
+        let text_state = MutableState::with_runtime("Hello".to_string(), runtime);
 
         rule.set_content({
             move || {
@@ -111,7 +107,7 @@ fn test_child_recomposition_preserves_parent() {
 fn test_conditional_composable_preserves_siblings() {
     run_test_composition(|rule| {
         let runtime = rule.runtime_handle();
-        let show_middle = MutableState::with_runtime(true, runtime.clone());
+        let show_middle = MutableState::with_runtime(true, runtime);
 
         rule.set_content({
             move || {

@@ -13,11 +13,7 @@ fn test_lazy_column_reverse_layout() {
 
         LazyColumn(Modifier::empty(), state, spec, |scope| {
             scope.items(3, |i| {
-                Text(
-                    format!("Item {}", i),
-                    Modifier::empty(),
-                    TextStyle::default(),
-                );
+                Text(format!("Item {i}"), Modifier::empty(), TextStyle::default());
             });
         });
     });
@@ -42,9 +38,9 @@ fn test_lazy_column_reverse_layout() {
         finder.bounds().expect("Item 2 bounds missing")
     };
 
-    println!("Item 0: {:?}", rect0);
-    println!("Item 1: {:?}", rect1);
-    println!("Item 2: {:?}", rect2);
+    println!("Item 0: {rect0:?}");
+    println!("Item 1: {rect1:?}");
+    println!("Item 2: {rect2:?}");
 
     assert!(
         rect0.y > rect1.y,

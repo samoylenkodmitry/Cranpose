@@ -171,17 +171,23 @@ impl SpanStyle {
             font_weight: other.font_weight.or(self.font_weight),
             font_style: other.font_style.or(self.font_style),
             font_synthesis: other.font_synthesis.or(self.font_synthesis),
-            font_family: other.font_family.clone().or(self.font_family.clone()),
+            font_family: other
+                .font_family
+                .clone()
+                .or_else(|| self.font_family.clone()),
             font_feature_settings: other
                 .font_feature_settings
                 .clone()
-                .or(self.font_feature_settings.clone()),
+                .or_else(|| self.font_feature_settings.clone()),
             letter_spacing: merge_text_unit(self.letter_spacing, other.letter_spacing),
             baseline_shift: other.baseline_shift.or(self.baseline_shift),
             text_geometric_transform: other
                 .text_geometric_transform
                 .or(self.text_geometric_transform),
-            locale_list: other.locale_list.clone().or(self.locale_list.clone()),
+            locale_list: other
+                .locale_list
+                .clone()
+                .or_else(|| self.locale_list.clone()),
             background: other.background.or(self.background),
             text_decoration: other.text_decoration.or(self.text_decoration),
             shadow: other.shadow.or(self.shadow),

@@ -39,7 +39,6 @@ impl Default for LiquidSearchFieldSpec {
 
 /// A capsule search field: magnifier icon and editable text.
 #[composable]
-#[allow(non_snake_case)]
 pub fn LiquidSearchField(modifier: Modifier, state: TextFieldState, spec: LiquidSearchFieldSpec) {
     let colors = liquid_colors();
     let typography = liquid_typography();
@@ -68,7 +67,7 @@ pub fn LiquidSearchField(modifier: Modifier, state: TextFieldState, spec: Liquid
             })
     };
 
-    let placeholder = spec.placeholder.clone();
+    let placeholder = spec.placeholder;
     Box(
         base.then(modifier).padding_symmetric(14.0, 0.0),
         BoxSpec::default().content_alignment(Alignment::new(
@@ -165,7 +164,6 @@ mod tests {
 
 /// The themed search field with the conventional Compose name.
 #[composable]
-#[allow(non_snake_case)]
 pub fn SearchBar(modifier: Modifier, state: TextFieldState, placeholder: impl Into<String>) {
     LiquidSearchField(
         modifier,
@@ -179,7 +177,6 @@ pub fn SearchBar(modifier: Modifier, state: TextFieldState, placeholder: impl In
 
 /// Field-oriented name for [`SearchBar`].
 #[composable]
-#[allow(non_snake_case)]
 pub fn SearchField(modifier: Modifier, state: TextFieldState, placeholder: impl Into<String>) {
     SearchBar(modifier, state, placeholder);
 }

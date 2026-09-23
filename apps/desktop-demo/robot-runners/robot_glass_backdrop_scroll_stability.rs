@@ -41,7 +41,7 @@ fn main() {
             };
             GlassBackdropScrollRun {
                 robot: &robot,
-                output_dir: output_dir.clone(),
+                output_dir,
                 capture: &mut capture,
             }
             .run();

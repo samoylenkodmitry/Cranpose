@@ -46,7 +46,7 @@ fn query_font_scale(app: &android_activity::AndroidApp) -> Result<FontScaleCurve
                 jni_sig!("()Landroid/content/res/Resources;"),
                 &[],
             )
-            .and_then(|value| value.l())
+            .and_then(jni::JValueOwned::l)
             .map_err(|error| describe(env, "Activity.getResources", error))?;
         let configuration = env
             .call_method(
@@ -55,11 +55,11 @@ fn query_font_scale(app: &android_activity::AndroidApp) -> Result<FontScaleCurve
                 jni_sig!("()Landroid/content/res/Configuration;"),
                 &[],
             )
-            .and_then(|value| value.l())
+            .and_then(jni::JValueOwned::l)
             .map_err(|error| describe(env, "Resources.getConfiguration", error))?;
         let scale = env
             .get_field(&configuration, jni_str!("fontScale"), jni_sig!("F"))
-            .and_then(|value| value.f())
+            .and_then(jni::JValueOwned::f)
             .map_err(|error| describe(env, "Configuration.fontScale", error))?;
 
         let metrics = env
@@ -69,11 +69,11 @@ fn query_font_scale(app: &android_activity::AndroidApp) -> Result<FontScaleCurve
                 jni_sig!("()Landroid/util/DisplayMetrics;"),
                 &[],
             )
-            .and_then(|value| value.l())
+            .and_then(jni::JValueOwned::l)
             .map_err(|error| describe(env, "Resources.getDisplayMetrics", error))?;
         let density = env
             .get_field(&metrics, jni_str!("density"), jni_sig!("F"))
-            .and_then(|value| value.f())
+            .and_then(jni::JValueOwned::f)
             .map_err(|error| describe(env, "DisplayMetrics.density", error))?;
         if !density.is_finite() || density <= 0.0 {
             return Err(format!("DisplayMetrics.density was {density}"));
@@ -114,7 +114,7 @@ fn sample_curve(
                     jni::objects::JValue::Object(metrics),
                 ],
             )
-            .and_then(|value| value.f())
+            .and_then(jni::JValueOwned::f)
             .map_err(|error| {
                 crate::android_jni::clear_pending_android_jni_exception(env);
                 format!("TypedValue.applyDimension({sp}sp): {error}")

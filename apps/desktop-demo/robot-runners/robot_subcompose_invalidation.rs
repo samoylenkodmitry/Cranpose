@@ -39,7 +39,7 @@ fn test_app() {
                 _ => "Unknown",
             };
             Text(
-                format!("Current: {}", scheme_name),
+                format!("Current: {scheme_name}"),
                 Modifier::empty()
                     .padding(4.0)
                     .semantics(|c| c.content_description = Some(scheme_name.into())),
@@ -90,12 +90,12 @@ fn test_app() {
                                 .padding(10.0)
                                 .background(bg)
                                 .semantics(move |c| {
-                                    c.content_description = Some(format!("item{}", i));
+                                    c.content_description = Some(format!("item{i}"));
                                 }),
                             RowSpec::new(),
                             move || {
                                 Text(
-                                    format!("Item {} - Scheme {}", i, current_scheme),
+                                    format!("Item {i} - Scheme {current_scheme}"),
                                     Modifier::empty(),
                                     TextStyle::default(),
                                 );

@@ -246,13 +246,11 @@ impl NodeSlotMapping {
     }
 
     fn get_nodes(&self, slot: &SlotId) -> Option<&[NodeId]> {
-        self.slot_to_nodes.get(slot).map(|nodes| nodes.as_slice())
+        self.slot_to_nodes.get(slot).map(Vec::as_slice)
     }
 
     fn get_scopes(&self, slot: &SlotId) -> Option<&[RecomposeScope]> {
-        self.slot_to_scopes
-            .get(slot)
-            .map(|scopes| scopes.as_slice())
+        self.slot_to_scopes.get(slot).map(Vec::as_slice)
     }
 
     fn slot_has_invalid_scopes(&self, slot: SlotId) -> bool {
@@ -800,8 +798,7 @@ impl SubcomposeState {
         if self
             .reusable_by_type
             .get(&content_type)
-            .map(|pool| pool.is_empty())
-            .unwrap_or(false)
+            .is_some_and(std::collections::VecDeque::is_empty)
         {
             self.reusable_by_type.remove(&content_type);
         }
@@ -1080,7 +1077,7 @@ impl SubcomposeState {
     pub fn drain_inactive_precomposed(&mut self) -> Vec<NodeId> {
         let mut disposed = Vec::new();
         let mut empty_slots = Vec::new();
-        for (slot, nodes) in self.precomposed_nodes.iter_mut() {
+        for (slot, nodes) in &mut self.precomposed_nodes {
             if !self.current_pass_active_slots.contains(slot) {
                 disposed.extend(nodes.iter().copied());
                 empty_slots.push(*slot);

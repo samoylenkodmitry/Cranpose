@@ -990,9 +990,10 @@ fn brush_max_alpha(brush: &Brush) -> f32 {
         Brush::Solid(color) => color.a(),
         Brush::LinearGradient { colors, .. }
         | Brush::RadialGradient { colors, .. }
-        | Brush::SweepGradient { colors, .. } => {
-            colors.iter().map(|color| color.a()).fold(0.0f32, f32::max)
-        }
+        | Brush::SweepGradient { colors, .. } => colors
+            .iter()
+            .map(cranpose_ui_graphics::Color::a)
+            .fold(0.0f32, f32::max),
     }
 }
 
@@ -1780,10 +1781,12 @@ fn semantics_modifier_populates_inspector_metadata() {
 fn inspector_snapshot_includes_delegate_depth_and_capabilities() {
     let _app_context = crate::render_state::app_context_test_scope();
     let modifier = Modifier::empty().padding(4.0).then(
-        Modifier::with_element(TestDelegatingElement)
-            .with_inspector_metadata(inspector_metadata("delegating", |info| {
-                info.add_property("tag", "root")
-            })),
+        Modifier::with_element(TestDelegatingElement).with_inspector_metadata(inspector_metadata(
+            "delegating",
+            |info| {
+                info.add_property("tag", "root");
+            },
+        )),
     );
     let mut handle = ModifierChainHandle::new();
     let _ = handle.update(&modifier);
@@ -1796,8 +1799,7 @@ fn inspector_snapshot_includes_delegate_depth_and_capabilities() {
         .find(|node| {
             node.inspector
                 .as_ref()
-                .map(|record| record.name == "padding")
-                .unwrap_or(false)
+                .is_some_and(|record| record.name == "padding")
         })
         .expect("expected padding inspector entry");
     assert!(

@@ -156,9 +156,11 @@ fn cursor_x_position_matches_text_width() {
 
         assert!(!primitives.is_empty(), "Expected cursor primitive");
 
-        let cursor_rect = match &primitives[0] {
-            cranpose_ui_graphics::DrawPrimitive::Rect { rect, .. } => rect,
-            _ => panic!("Expected Rect primitive for cursor"),
+        let cranpose_ui_graphics::DrawPrimitive::Rect {
+            rect: cursor_rect, ..
+        } = &primitives[0]
+        else {
+            panic!("Expected Rect primitive for cursor");
         };
 
         let expected_x =
@@ -196,9 +198,11 @@ fn cursor_at_start_for_empty_text() {
             })
             .expect("Expected Overlay");
 
-        let cursor_rect = match &primitives[0] {
-            cranpose_ui_graphics::DrawPrimitive::Rect { rect, .. } => rect,
-            _ => panic!("Expected Rect"),
+        let cranpose_ui_graphics::DrawPrimitive::Rect {
+            rect: cursor_rect, ..
+        } = &primitives[0]
+        else {
+            panic!("Expected Rect");
         };
 
         assert!(
@@ -283,9 +287,11 @@ fn cursor_y_position_at_zero_without_padding() {
             return;
         }
 
-        let cursor_rect = match &primitives[0] {
-            cranpose_ui_graphics::DrawPrimitive::Rect { rect, .. } => rect,
-            _ => panic!("Expected Rect"),
+        let cranpose_ui_graphics::DrawPrimitive::Rect {
+            rect: cursor_rect, ..
+        } = &primitives[0]
+        else {
+            panic!("Expected Rect");
         };
 
         assert!(
@@ -558,7 +564,7 @@ fn single_line_field_pans_back_when_cursor_moves_to_start() {
             assert!(node.scroll_offset() > 0.0, "expected initial pan");
         }
 
-        state.edit(|buffer| buffer.place_cursor_at_start());
+        state.edit(cranpose_foundation::text::TextFieldBuffer::place_cursor_at_start);
         let primitives = run_field_draw(&chain, size);
 
         let cursor_rect = primitives

@@ -232,8 +232,7 @@ where
     };
     let mut offset_known_within_current_item = state
         .get_cached_size(first_index)
-        .map(|size| first_offset + 0.001 < item_extent_at(first_index, size))
-        .unwrap_or(false);
+        .is_some_and(|size| first_offset + 0.001 < item_extent_at(first_index, size));
 
     if !offset_known_within_current_item && first_offset > 0.0 && first_index < items_count {
         let item = measure_item(first_index);
@@ -391,7 +390,7 @@ where
                 let item_end = item_end_with_spacing(item);
                 item_end > viewport_start && item.offset < viewport_end
             })
-            .map(|i| i.to_item_info())
+            .map(super::lazy_list_measured_item::LazyListMeasuredItem::to_item_info)
             .collect(),
         total_items_count: items_count,
         raw_viewport_size,
@@ -451,10 +450,8 @@ where
     let realized_count = items_count.min(MAX_UNBOUNDED_REALIZED_ITEMS);
     if realized_count < items_count {
         log::warn!(
-            "LazyList: unbounded viewport with {} items; realizing only the first {}. \
-             Wrap the list in a constrained container to restore virtualization.",
-            items_count,
-            realized_count
+            "LazyList: unbounded viewport with {items_count} items; realizing only the first {realized_count}. \
+             Wrap the list in a constrained container to restore virtualization."
         );
     }
 
@@ -473,7 +470,10 @@ where
 
     state.update_scroll_position(0, 0.0);
     state.update_layout_info(LazyListLayoutInfo {
-        visible_items_info: visible_items.iter().map(|i| i.to_item_info()).collect(),
+        visible_items_info: visible_items
+            .iter()
+            .map(super::lazy_list_measured_item::LazyListMeasuredItem::to_item_info)
+            .collect(),
         total_items_count: items_count,
         raw_viewport_size,
         is_infinite_viewport: true,

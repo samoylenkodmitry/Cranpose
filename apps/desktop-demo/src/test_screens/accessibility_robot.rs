@@ -8,7 +8,6 @@ use cranpose_ui::{
     Modifier, Row, RowSpec, Text, TextStyle,
 };
 
-#[allow(non_snake_case)]
 #[composable]
 pub fn AccessibilityRobotScreen() {
     let count = rememberMutableStateOf(|| 0i32);
@@ -38,7 +37,7 @@ pub fn AccessibilityRobotScreen() {
                 RobotButton("Increase", true, move || count.set(count.get() + 1));
                 RobotButton("Decrease", true, move || count.set(count.get() - 1));
                 RobotButton("Disabled action", false, move || {
-                    count.set(count.get() + 100)
+                    count.set(count.get() + 100);
                 });
             });
             Text(
@@ -91,7 +90,6 @@ pub fn AccessibilityRobotScreen() {
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn RobotDialog(
     title: &'static str,
@@ -123,7 +121,6 @@ fn RobotDialog(
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn RobotOverlappingControls() {
     let count = rememberMutableStateOf(|| 0i32);
@@ -164,7 +161,6 @@ fn field_modifier(name: &str) -> Modifier {
         .content_description(name)
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn RobotButton(label: &'static str, enabled: bool, action: impl FnMut() + 'static) {
     Button(
@@ -183,7 +179,6 @@ fn RobotButton(label: &'static str, enabled: bool, action: impl FnMut() + 'stati
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn RobotNavigationControls() {
     let delivery = rememberMutableStateOf(|| 1usize);

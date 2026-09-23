@@ -57,7 +57,7 @@ fn test_app() {
                                 BoxSpec::new(),
                                 move || {
                                     Text(
-                                        format!("Item #{}", i),
+                                        format!("Item #{i}"),
                                         Modifier::empty(),
                                         TextStyle::default(),
                                     );
@@ -126,7 +126,7 @@ fn main() {
             let start = Instant::now();
             std::thread::sleep(Duration::from_millis(500));
             let initial_render_time = start.elapsed();
-            println!("  Initial render time: {:?}", initial_render_time);
+            println!("  Initial render time: {initial_render_time:?}");
 
             println!("\n=== PHASE 1: Verify Rendering ===");
 
@@ -140,7 +140,7 @@ fn main() {
 
             let mut visible_items = Vec::new();
             for i in 0..20 {
-                let item_text = format!("Item #{}", i);
+                let item_text = format!("Item #{i}");
                 if let Some((_, y, _, _)) = find_text(&item_text) {
                     visible_items.push((i, y));
                 }
@@ -169,7 +169,7 @@ fn main() {
                 robot.click(x + w / 2.0, y + h / 2.0).ok();
                 std::thread::sleep(Duration::from_millis(300));
                 let jump_time = jump_start.elapsed();
-                println!("  ✓ Button clicked, jump time: {:?}", jump_time);
+                println!("  ✓ Button clicked, jump time: {jump_time:?}");
 
                 if jump_time < Duration::from_millis(500) {
                     println!("  ✓ Jump < 500ms (O(1) scroll performance)");
@@ -184,35 +184,29 @@ fn main() {
             let mut found_middle_items = Vec::new();
             for offset in 0..20 {
                 let idx = search_start.saturating_add(offset);
-                let item_text = format!("Item #{}", idx);
+                let item_text = format!("Item #{idx}");
                 if find_text(&item_text).is_some() {
                     found_middle_items.push(idx);
                 }
             }
 
             if !found_middle_items.is_empty() {
-                println!("  ✓ Jumped to middle: found items {:?}", found_middle_items);
+                println!("  ✓ Jumped to middle: found items {found_middle_items:?}");
             } else {
                 let mut items_after = Vec::new();
                 for i in 0..50 {
-                    let item_text = format!("Item #{}", i);
+                    let item_text = format!("Item #{i}");
                     if find_text(&item_text).is_some() {
                         items_after.push(i);
                     }
                 }
-                let first_before = visible_items.first().map(|(i, _)| *i).unwrap_or(0);
+                let first_before = visible_items.first().map_or(0, |(i, _)| *i);
                 let first_after = items_after.first().copied().unwrap_or(0);
 
                 if first_after > first_before {
-                    println!(
-                        "  ✓ Scroll worked: first item {} -> {}",
-                        first_before, first_after
-                    );
+                    println!("  ✓ Scroll worked: first item {first_before} -> {first_after}");
                 } else {
-                    println!(
-                        "  ⚠️ Items near middle not found, visible: {:?}",
-                        items_after
-                    );
+                    println!("  ⚠️ Items near middle not found, visible: {items_after:?}");
                 }
             }
 
@@ -229,12 +223,9 @@ fn main() {
             }
 
             if initial_render_time < Duration::from_secs(2) {
-                println!(
-                    "  ✓ Initial render < 2s (actual: {:?})",
-                    initial_render_time
-                );
+                println!("  ✓ Initial render < 2s (actual: {initial_render_time:?})");
             } else {
-                println!("  ✗ Initial render too slow: {:?}", initial_render_time);
+                println!("  ✗ Initial render too slow: {initial_render_time:?}");
             }
 
             println!("\n=== SUMMARY ===");
@@ -248,7 +239,7 @@ fn main() {
                     "  - {} items visible (O(1) virtualization)",
                     visible_items.len()
                 );
-                println!("  - Initial render: {:?}", initial_render_time);
+                println!("  - Initial render: {initial_render_time:?}");
             } else {
                 println!("✗ Performance test FAILED");
             }

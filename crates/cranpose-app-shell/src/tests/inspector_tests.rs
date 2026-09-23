@@ -19,7 +19,7 @@ fn selection_follows_identity_and_disappears_with_the_node() {
     let mut inspector = DeveloperInspector::default();
     inspector.replace_nodes(vec![a.clone(), b.clone()]);
     inspector.apply(InspectorAction::Select(1));
-    inspector.replace_nodes(vec![b.clone(), a]);
+    inspector.replace_nodes(vec![b, a]);
     assert_eq!(inspector.state.selected, Some(0));
     inspector.replace_nodes(Vec::new());
     assert_eq!(inspector.state.selected, None);

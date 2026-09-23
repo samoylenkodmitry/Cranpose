@@ -1,5 +1,3 @@
-#![allow(non_snake_case)]
-
 mod capture;
 
 #[path = "../text_showcase_external_helpers.rs"]
@@ -143,13 +141,14 @@ impl Case {
 }
 
 pub fn run(case: Case) -> Result<()> {
-    let output = std::env::var_os("ROBOT_SHOT_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
+    let output = std::env::var_os("ROBOT_SHOT_DIR").map_or_else(
+        || {
             Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("../../target/liquid-cheatsheets")
                 .join(case.slug())
-        });
+        },
+        PathBuf::from,
+    );
     ensure_generated_output(&output, &case.fixture_dir())?;
 
     if case == Case::TextSelection {

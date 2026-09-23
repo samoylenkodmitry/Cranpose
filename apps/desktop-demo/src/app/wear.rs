@@ -168,12 +168,11 @@ pub fn wear_tab() {
         })
     });
 
-    let toggle_state = state.clone();
     CranposeBox(
         Modifier::empty().fill_max_size(),
         BoxSpec::default().content_alignment(Alignment::CENTER),
         move || {
-            let toggle_state = toggle_state.clone();
+            let state = state.clone();
             ScreenScaffold(
                 Modifier::empty()
                     .size(Size::new(WATCH, WATCH))
@@ -182,14 +181,13 @@ pub fn wear_tab() {
                 ScreenScaffoldSpec::default()
                     .indicator(ScrollIndicatorSpec::default().colors(colors())),
                 move || {
-                    let toggle_state = toggle_state.clone();
+                    let state = state.clone();
                     WearScalingLazyColumn(
                         Modifier::empty().fill_max_size(),
                         list,
                         WearScalingLazyColumnSpec::default().content_padding(SIDE, VERTICAL),
                         move |scope| {
                             let rows = rows();
-                            let toggle_state = toggle_state.clone();
                             let types = rows.iter().map(Row::content_type).collect::<Vec<_>>();
                             scope.items(
                                 LazyItems::new(rows.len())
@@ -197,7 +195,7 @@ pub fn wear_tab() {
                                     .content_type(move |index: usize| types[index]),
                                 move |index| {
                                     let row = rows[index].clone();
-                                    let toggle_state = toggle_state.clone();
+                                    let state = state.clone();
                                     match row {
                                         Row::Header(label) => {
                                             ListHeader(
@@ -207,8 +205,7 @@ pub fn wear_tab() {
                                             );
                                         }
                                         Row::Switch { label, index } => {
-                                            let checked = toggle_state.borrow().checked[index];
-                                            let sink = toggle_state.clone();
+                                            let checked = state.borrow().checked[index];
                                             SwitchButton(
                                                 Modifier::empty().fill_max_width(),
                                                 SwitchButtonSpec::default()
@@ -218,7 +215,7 @@ pub fn wear_tab() {
                                                 label.to_string(),
                                                 None,
                                                 move |next| {
-                                                    sink.borrow_mut().checked[index] = next;
+                                                    state.borrow_mut().checked[index] = next;
                                                 },
                                             );
                                         }

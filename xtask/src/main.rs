@@ -299,7 +299,7 @@ impl GateOptions {
             match args[index].as_str() {
                 "--base" => base = required_value(args, &mut index, "--base")?,
                 "--config" => {
-                    config = Some(PathBuf::from(required_value(args, &mut index, "--config")?))
+                    config = Some(PathBuf::from(required_value(args, &mut index, "--config")?));
                 }
                 other => return Err(format!("unknown {command_name} option `{other}`")),
             }
@@ -402,16 +402,24 @@ struct DuplicateDebt {
 
 const WORKSPACE_DUPLICATE_DEBT: &[DuplicateDebt] = &[
     DuplicateDebt {
+        family: "base64",
+        reason: "reqwest 0.13.5 moved to ^0.23 while hyper-util 0.1.20 (latest) is still on ^0.22",
+    },
+    DuplicateDebt {
         family: "hashbrown",
-        reason: "accesskit_consumer 0.39 and the macOS/Windows adapters require ^0.17; WGPU 29 and indexmap 2.13 require ^0.16; the accessibility fixes need this AccessKit release family",
+        reason: "gpu-allocator 0.28.0 (latest, and on upstream main) holds ^0.16 for wgpu-hal 30 while wgpu, AccessKit and indexmap are on ^0.17",
     },
     DuplicateDebt {
         family: "jni-sys",
         reason: "ndk 0.9.0 and ndk-sys 0.6.0 (latest) pin jni-sys ^0.3 while jni 0.22 is on ^0.4",
     },
     DuplicateDebt {
+        family: "miniz_oxide",
+        reason: "flate2 1.1.10 moved to ^0.9 while png 0.18.1 (latest) is still on ^0.8",
+    },
+    DuplicateDebt {
         family: "objc2",
-        reason: "accesskit_macos 0.27 holds objc2 0.5 while winit-appkit 0.31.0-beta.2 is on 0.6 (AccessKit/accesskit#616)",
+        reason: "accesskit_macos 0.27 holds objc2 0.5 while winit-appkit 0.31.0-beta.3 is on 0.6 (AccessKit/accesskit#616)",
     },
     DuplicateDebt {
         family: "objc2-app-kit",
@@ -420,6 +428,10 @@ const WORKSPACE_DUPLICATE_DEBT: &[DuplicateDebt] = &[
     DuplicateDebt {
         family: "objc2-foundation",
         reason: "follows the objc2 split via accesskit_macos 0.27",
+    },
+    DuplicateDebt {
+        family: "syn",
+        reason: "serde_derive, thiserror-impl 2, bytemuck_derive and wasm-bindgen-macro moved to syn 3 while async-recursion, jni-macros, num_enum_derive and zerocopy-derive (latest) are still on syn 2",
     },
     DuplicateDebt {
         family: "thiserror",
@@ -431,7 +443,7 @@ const WORKSPACE_DUPLICATE_DEBT: &[DuplicateDebt] = &[
     },
     DuplicateDebt {
         family: "windows-sys",
-        reason: "winit-win32 0.31.0-beta.2 pins ^0.59 and arboard 3.6.1 pins <0.61 while the rest of the graph is on 0.61",
+        reason: "tempfile 3.27 and rustls-platform-verifier 0.7 pin ^0.52 and arboard 3.6.1, dirs-sys 0.5 and socket2 0.6 pin ^0.60 while winit-win32 0.31.0-beta.3 and tokio are on 0.61",
     },
     DuplicateDebt {
         family: "windows-targets",
@@ -584,21 +596,21 @@ impl BinarySizeOptions {
         while index < args.len() {
             match args[index].as_str() {
                 "--package" => {
-                    options.binary.package = required_value(args, &mut index, "--package")?
+                    options.binary.package = required_value(args, &mut index, "--package")?;
                 }
                 "--bin" => options.binary.bin = required_value(args, &mut index, "--bin")?,
                 "--profile" => {
-                    options.binary.profile = required_value(args, &mut index, "--profile")?
+                    options.binary.profile = required_value(args, &mut index, "--profile")?;
                 }
                 "--target" => {
-                    options.binary.target = Some(required_value(args, &mut index, "--target")?)
+                    options.binary.target = Some(required_value(args, &mut index, "--target")?);
                 }
                 "--manifest-path" => {
                     options.binary.manifest_path = Some(PathBuf::from(required_value(
                         args,
                         &mut index,
                         "--manifest-path",
-                    )?))
+                    )?));
                 }
                 "--max-bytes" => {
                     let value = required_value(args, &mut index, "--max-bytes")?;
@@ -644,23 +656,23 @@ impl BundleMacosOptions {
                 "--profile" => options.profile = required_value(args, &mut index, "--profile")?,
                 "--app-name" => options.app_name = required_value(args, &mut index, "--app-name")?,
                 "--bundle-id" => {
-                    options.bundle_id = required_value(args, &mut index, "--bundle-id")?
+                    options.bundle_id = required_value(args, &mut index, "--bundle-id")?;
                 }
                 "--out-dir" => {
-                    options.out_dir = PathBuf::from(required_value(args, &mut index, "--out-dir")?)
+                    options.out_dir = PathBuf::from(required_value(args, &mut index, "--out-dir")?);
                 }
                 "--resources" => {
                     options.resources = Some(PathBuf::from(required_value(
                         args,
                         &mut index,
                         "--resources",
-                    )?))
+                    )?));
                 }
                 "--target" => options.target = Some(required_value(args, &mut index, "--target")?),
                 "--no-build" => options.build = false,
                 "--sign-identity" => {
                     options.sign_identity =
-                        Some(required_value(args, &mut index, "--sign-identity")?)
+                        Some(required_value(args, &mut index, "--sign-identity")?);
                 }
                 other => return Err(format!("unknown bundle-macos option `{other}`")),
             }
@@ -829,21 +841,21 @@ impl DistMinOptions {
         while index < args.len() {
             match args[index].as_str() {
                 "--package" => {
-                    options.binary.package = required_value(args, &mut index, "--package")?
+                    options.binary.package = required_value(args, &mut index, "--package")?;
                 }
                 "--bin" => options.binary.bin = required_value(args, &mut index, "--bin")?,
                 "--profile" => {
-                    options.binary.profile = required_value(args, &mut index, "--profile")?
+                    options.binary.profile = required_value(args, &mut index, "--profile")?;
                 }
                 "--target" => {
-                    options.binary.target = Some(required_value(args, &mut index, "--target")?)
+                    options.binary.target = Some(required_value(args, &mut index, "--target")?);
                 }
                 "--manifest-path" => {
                     options.binary.manifest_path = Some(PathBuf::from(required_value(
                         args,
                         &mut index,
                         "--manifest-path",
-                    )?))
+                    )?));
                 }
                 "--max-bytes" => {
                     let value = required_value(args, &mut index, "--max-bytes")?;
@@ -853,7 +865,7 @@ impl DistMinOptions {
                     options.binary.patch_workspace_cranpose = true;
                 }
                 "--features" => {
-                    options.features = Some(required_value(args, &mut index, "--features")?)
+                    options.features = Some(required_value(args, &mut index, "--features")?);
                 }
                 "--no-default-features" => options.no_default_features = true,
                 other => return Err(format!("unknown dist-min option `{other}`")),
@@ -1783,8 +1795,7 @@ fn root_duplicate_package_entry(line: &str) -> Option<DuplicatePackageRoot> {
     let version_start = version_index + 2;
     let version_end = line[version_start..]
         .find(char::is_whitespace)
-        .map(|offset| version_start + offset)
-        .unwrap_or(line.len());
+        .map_or(line.len(), |offset| version_start + offset);
     Some(DuplicatePackageRoot {
         name: line[..version_index].to_owned(),
         version: line[version_start..version_end].to_owned(),
@@ -2317,10 +2328,7 @@ static VERSION_KV_REPLACE_RE: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 fn leading_whitespace(line: &str) -> &str {
-    LEADING_WHITESPACE_RE
-        .find(line)
-        .map(|m| m.as_str())
-        .unwrap_or("")
+    LEADING_WHITESPACE_RE.find(line).map_or("", |m| m.as_str())
 }
 
 /// Inserts a `[workspace.package]` section (with the same defaults the
@@ -2812,12 +2820,9 @@ fn crate_published_command(args: &[String]) -> ExitCode {
         print_crate_published_usage();
         return ExitCode::SUCCESS;
     }
-    let (crate_name, version) = match args {
-        [crate_name, version] => (crate_name, version),
-        _ => {
-            eprintln!("usage: cargo xtask crate-published <crate> <version>");
-            return ExitCode::from(2);
-        }
+    let [crate_name, version] = args else {
+        eprintln!("usage: cargo xtask crate-published <crate> <version>");
+        return ExitCode::from(2);
     };
     let client = match crates_io_client() {
         Ok(client) => client,
@@ -3431,9 +3436,7 @@ mod gate_diff {
     }
 
     fn home_dir() -> PathBuf {
-        std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("/"))
+        std::env::var_os("HOME").map_or_else(|| PathBuf::from("/"), PathBuf::from)
     }
 
     fn expand_user(path: &Path, home: &Path) -> PathBuf {
@@ -3462,9 +3465,7 @@ mod gate_diff {
     fn is_executable_file(path: &Path) -> bool {
         use std::os::unix::fs::PermissionsExt;
         path.is_file()
-            && fs::metadata(path)
-                .map(|meta| meta.permissions().mode() & 0o111 != 0)
-                .unwrap_or(false)
+            && fs::metadata(path).is_ok_and(|meta| meta.permissions().mode() & 0o111 != 0)
     }
 
     #[cfg(not(unix))]
@@ -3704,12 +3705,12 @@ mod complexity_gate {
     ) -> Vec<String> {
         let mut violations = Vec::new();
         for (file, functions) in new_functions_by_file {
-            let file_ranges = ranges.get(file).map(Vec::as_slice).unwrap_or(&[]);
+            let file_ranges = ranges.get(file).map(Vec::as_slice).unwrap_or_default();
             let old_by_name = old_complexity_by_name(
                 old_functions_by_file
                     .get(file)
                     .map(Vec::as_slice)
-                    .unwrap_or(&[]),
+                    .unwrap_or_default(),
             );
             let mut cursor: BTreeMap<String, usize> = BTreeMap::new();
             for func in functions {
@@ -3981,10 +3982,16 @@ mod duplication_gate {
         let (first_file, first_span) = side_span(&dup.first_file);
         let (second_file, second_span) = side_span(&dup.second_file);
         gate_diff::any_intersect(
-            ranges.get(first_file).map(Vec::as_slice).unwrap_or(&[]),
+            ranges
+                .get(first_file)
+                .map(Vec::as_slice)
+                .unwrap_or_default(),
             first_span,
         ) || gate_diff::any_intersect(
-            ranges.get(second_file).map(Vec::as_slice).unwrap_or(&[]),
+            ranges
+                .get(second_file)
+                .map(Vec::as_slice)
+                .unwrap_or_default(),
             second_span,
         )
     }
@@ -4051,18 +4058,24 @@ mod duplication_gate {
             let comparable = old_by_pair
                 .get(&file_pair(dup))
                 .map(Vec::as_slice)
-                .unwrap_or(&[]);
+                .unwrap_or_default();
             if already_duplicated_before(dup, comparable) || text_existed_before(dup, old_sources) {
                 continue;
             }
             let (first_file, first_span) = side_span(&dup.first_file);
             let (second_file, second_span) = side_span(&dup.second_file);
             let first_hit = gate_diff::any_intersect(
-                ranges.get(first_file).map(Vec::as_slice).unwrap_or(&[]),
+                ranges
+                    .get(first_file)
+                    .map(Vec::as_slice)
+                    .unwrap_or_default(),
                 first_span,
             );
             let second_hit = gate_diff::any_intersect(
-                ranges.get(second_file).map(Vec::as_slice).unwrap_or(&[]),
+                ranges
+                    .get(second_file)
+                    .map(Vec::as_slice)
+                    .unwrap_or_default(),
                 second_span,
             );
             violations.push(format!(
@@ -5266,7 +5279,7 @@ tiny-skia v0.12.0 (*)
             families.sort_unstable();
             let mut deduped = families.clone();
             deduped.dedup();
-            assert_eq!(families, deduped, "duplicate debt entry for {:?}", scope);
+            assert_eq!(families, deduped, "duplicate debt entry for {scope:?}");
         }
     }
 

@@ -261,7 +261,7 @@ impl FrameIntervalStats {
         }
 
         let sorted = &mut sorted[..count];
-        sorted.sort_by(|a, b| a.total_cmp(b));
+        sorted.sort_by(f32::total_cmp);
 
         Self {
             count: count as u32,

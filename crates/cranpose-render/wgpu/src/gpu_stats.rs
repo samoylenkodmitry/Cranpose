@@ -610,14 +610,15 @@ impl FrameStats {
         }
         self.shadow_shape_cache_miss_log_count.set(count + 1);
 
-        let clip_text = clip
-            .map(|clip| {
+        let clip_text = clip.map_or_else(
+            || "none".to_string(),
+            |clip| {
                 format!(
                     "({:.1},{:.1},{:.1},{:.1})",
                     clip.x, clip.y, clip.width, clip.height
                 )
-            })
-            .unwrap_or_else(|| "none".to_string());
+            },
+        );
         eprintln!(
             "[shadow-cache-miss #{count}] size={}x{} content_hash={content_hash} blur={:.2} viewport_offset=({:.1},{:.1}) shapes={} clip={}",
             width,

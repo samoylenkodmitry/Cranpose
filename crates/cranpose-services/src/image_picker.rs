@@ -114,7 +114,6 @@ pub fn local_image_picker() -> CompositionLocal<ImagePickerRef> {
     })
 }
 
-#[allow(non_snake_case)]
 #[composable]
 pub fn ProvideImagePicker(content: impl FnOnce()) {
     let picker = cranpose_core::remember(default_image_picker).with(|state| state.clone());

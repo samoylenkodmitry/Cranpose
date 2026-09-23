@@ -49,7 +49,7 @@ jobs:
           || fromJSON('["self-hosted", "Linux", "cranpose-heavy"]') }}
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Provision the pinned toolchain and just
         run: |
@@ -105,7 +105,7 @@ jobs:
 
       - name: Upload robot artifacts
         if: always() && inputs.target == 'robot-example'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: robot-${{ inputs.example }}
           path: |
@@ -118,14 +118,14 @@ jobs:
     runs-on: windows-2025
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Provision just
         run: cargo install just --locked
       - name: Run native Windows accessibility and inspector robots
         run: just test-windows-accessibility
       - name: Keep Windows robot evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: windows-accessibility
           path: target/windows-accessibility

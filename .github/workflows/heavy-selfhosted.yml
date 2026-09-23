@@ -44,7 +44,7 @@ jobs:
       SCCACHE_CACHE_SIZE: 40G
       CARGO_INCREMENTAL: "0"
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           # Both parents of the merge commit, for the diff below.
           fetch-depth: 2
@@ -103,7 +103,7 @@ jobs:
     env:
       CARGO_INCREMENTAL: "0"
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           # Both parents of the merge commit, for the diff below.
           fetch-depth: 2
@@ -150,7 +150,7 @@ jobs:
       SCCACHE_CACHE_SIZE: 40G
       CARGO_INCREMENTAL: "0"
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           # Both parents of the merge commit, for the diff below.
           fetch-depth: 2
@@ -185,7 +185,7 @@ jobs:
           {
             echo "ANDROID_HOME=$sdk_root"
             echo "ANDROID_SDK_ROOT=$sdk_root"
-            echo "ANDROID_NDK_HOME=$sdk_root/ndk/27.0.12077973"
+            echo "ANDROID_NDK_HOME=$sdk_root/ndk/30.0.16248370"
             echo "SCCACHE_DIR=$cache_root/sccache"
             echo "CARGO_TARGET_DIR=$cache_root/target"
           } >> "$GITHUB_ENV"
@@ -208,7 +208,7 @@ jobs:
           command -v just >/dev/null || cargo install just --locked
           command -v cargo-ndk >/dev/null || cargo install cargo-ndk --locked
           if [[ ! -f "$ANDROID_NDK_HOME/source.properties" ]]; then
-            yes | sdkmanager "ndk;27.0.12077973"
+            yes | sdkmanager "ndk;30.0.16248370"
           fi
           cargo ndk --version
           scripts/ci/start_sccache.sh
@@ -251,7 +251,7 @@ jobs:
     runs-on: [self-hosted, Linux, cranpose-heavy]
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Provision toolchain
         id: provision
@@ -275,7 +275,7 @@ jobs:
     runs-on: [self-hosted, macOS, ARM64]
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Configure machine-local SDK and cache paths
         env:
@@ -294,7 +294,7 @@ jobs:
           {
             echo "ANDROID_HOME=$sdk_root"
             echo "ANDROID_SDK_ROOT=$sdk_root"
-            echo "ANDROID_NDK_HOME=$sdk_root/ndk/27.0.12077973"
+            echo "ANDROID_NDK_HOME=$sdk_root/ndk/30.0.16248370"
             echo "SCCACHE_DIR=$cache_root/sccache"
             echo "CARGO_TARGET_DIR=$cache_root/target"
           } >> "$GITHUB_ENV"

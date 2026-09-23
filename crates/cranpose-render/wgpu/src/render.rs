@@ -1,5 +1,6 @@
 use std::{
     borrow::Cow,
+    cell::Cell,
     collections::HashMap,
     hash::{Hash, Hasher},
     rc::Rc,
@@ -905,7 +906,7 @@ pub(crate) fn create_render_pipeline_logged<'a>(
         instant_ms(started, Instant::now()),
         std::thread::current().name().unwrap_or("unnamed thread"),
     );
-    if OFF_FRAME_BUILDS.with(std::cell::Cell::get) {
+    if OFF_FRAME_BUILDS.with(Cell::get) {
         PIPELINES_CREATED_OFF_FRAME.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     } else {
         PIPELINES_CREATED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -1076,7 +1077,7 @@ pub(crate) fn create_shape_pipeline(
         ("SHAPE_DISCARD", f64::from(u8::from(variant.ablation.fill))),
     ];
     let (vertex_entry, fragment_entry) = variant.entries();
-    let instance_layout = record_vertex_layouts();
+    let instance_layout = record_vertex_layouts().map(Some);
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("Shape Shader"),
         source: wgpu::ShaderSource::Wgsl(shape_shader_source(mode)),
@@ -1163,7 +1164,7 @@ fn create_image_pipeline(
                 module: &image_shader,
                 entry_point: Some("image_vs_main"),
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
-                buffers: &[Vertex::desc()],
+                buffers: &[Some(Vertex::desc())],
             },
             fragment: Some(wgpu::FragmentState {
                 module: &image_shader,
@@ -1221,7 +1222,7 @@ fn create_glyph_atlas_pipeline(
                 module: &shader,
                 entry_point: Some("glyph_atlas_vs_main"),
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
-                buffers: &[Vertex::desc()],
+                buffers: &[Some(Vertex::desc())],
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
@@ -2465,16 +2466,11 @@ impl GpuRenderer {
         self.frame_stats.offscreen_pool_bytes.set(
             (self.effect_renderer.retained_offscreen_bytes() as u64)
                 .saturating_add(self.frame_graph_executor.retained_texture_bytes())
-                .saturating_add(
-                    self.composition_target
-                        .as_ref()
-                        .map(|target| {
-                            u64::from(target.target.width)
-                                .saturating_mul(u64::from(target.target.height))
-                                .saturating_mul(composition_bytes_per_pixel())
-                        })
-                        .unwrap_or(0),
-                ),
+                .saturating_add(self.composition_target.as_ref().map_or(0, |target| {
+                    u64::from(target.target.width)
+                        .saturating_mul(u64::from(target.target.height))
+                        .saturating_mul(composition_bytes_per_pixel())
+                })),
         );
         self.frame_stats
             .text_pool_size
@@ -2673,7 +2669,9 @@ impl GpuRenderer {
             Err(err) => return Err(format!("Screenshot readback timed out: {err}")),
         }
 
-        let mapped = buffer_slice.get_mapped_range();
+        let mapped = buffer_slice
+            .get_mapped_range()
+            .map_err(|err| format!("Screenshot readback could not be read: {err}"))?;
         let mut pixels = vec![0u8; (width as usize) * (height as usize) * 4];
 
         let src_row_len = padded_bytes_per_row as usize;

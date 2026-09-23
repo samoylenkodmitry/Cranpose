@@ -170,7 +170,6 @@ fn read_interaction_scrollbar_model(
     (model, rail_height)
 }
 
-#[allow(non_snake_case)]
 #[composable]
 pub(crate) fn LazyScrollbarRail(
     list_state: cranpose_foundation::lazy::LazyListState,
@@ -331,7 +330,6 @@ pub(crate) fn LazyScrollbarRail(
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 pub(crate) fn LazyListWithScrollbar<F>(
     modifier: Modifier,
@@ -481,7 +479,7 @@ mod tests {
                         |scope| {
                             scope.items(40, |index| {
                                 Text(
-                                    format!("Item {}", index),
+                                    format!("Item {index}"),
                                     Modifier::empty(),
                                     TextStyle::default(),
                                 );
@@ -603,7 +601,7 @@ mod tests {
         let (_app_context, _app_context_scope) = app_context_scope();
         let mut composition = Composition::new(MemoryApplier::new());
         let runtime = composition.runtime_handle();
-        let show_thread = MutableState::with_runtime(false, runtime.clone());
+        let show_thread = MutableState::with_runtime(false, runtime);
 
         composition
             .render(location_key(file!(), line!(), column!()), || {
@@ -675,7 +673,7 @@ mod tests {
         let (_app_context, _app_context_scope) = app_context_scope();
         let mut composition = Composition::new(MemoryApplier::new());
         let runtime = composition.runtime_handle();
-        let show_thread = MutableState::with_runtime(false, runtime.clone());
+        let show_thread = MutableState::with_runtime(false, runtime);
 
         composition
             .render(location_key(file!(), line!(), column!()), || {
@@ -768,7 +766,7 @@ mod tests {
         let (_app_context, _app_context_scope) = app_context_scope();
         let mut composition = Composition::new(MemoryApplier::new());
         let runtime = composition.runtime_handle();
-        let show_thread = MutableState::with_runtime(false, runtime.clone());
+        let show_thread = MutableState::with_runtime(false, runtime);
 
         composition
             .render(location_key(file!(), line!(), column!()), || {
@@ -865,7 +863,7 @@ mod tests {
         let mut composition = Composition::new(MemoryApplier::new());
         let runtime = composition.runtime_handle();
         let show_thread = MutableState::with_runtime(false, runtime.clone());
-        let loaded_count = MutableState::with_runtime(20usize, runtime.clone());
+        let loaded_count = MutableState::with_runtime(20usize, runtime);
 
         CAPTURED_SCROLLBAR_LIST_STATE.with(|slot| *slot.borrow_mut() = None);
         CAPTURED_SCROLLBAR_LIST_NODE_ID.with(|slot| *slot.borrow_mut() = None);
@@ -937,7 +935,7 @@ mod tests {
         let mut composition = Composition::new(MemoryApplier::new());
         let runtime = composition.runtime_handle();
         let show_thread = MutableState::with_runtime(false, runtime.clone());
-        let loaded_count = MutableState::with_runtime(20usize, runtime.clone());
+        let loaded_count = MutableState::with_runtime(20usize, runtime);
 
         CAPTURED_SCROLLBAR_LIST_STATE.with(|slot| *slot.borrow_mut() = None);
         CAPTURED_SCROLLBAR_LIST_NODE_ID.with(|slot| *slot.borrow_mut() = None);

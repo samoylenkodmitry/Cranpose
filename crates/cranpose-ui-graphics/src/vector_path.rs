@@ -222,7 +222,7 @@ impl VectorPath {
 
                 let mut winding = 0i32;
                 let mut span_start = 0.0f32;
-                for &(x, direction) in crossings.iter() {
+                for &(x, direction) in &crossings {
                     let was_inside = match self.fill_rule {
                         PathFillRule::NonZero => winding != 0,
                         PathFillRule::EvenOdd => winding % 2 != 0,

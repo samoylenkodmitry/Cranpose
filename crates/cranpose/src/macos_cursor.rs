@@ -28,9 +28,9 @@ pub(crate) fn pointer_scale() -> f64 {
         NSUserDefaults::alloc(),
         Some(ns_string!("com.apple.universalaccess")),
     );
-    let scale = defaults
-        .map(|defaults| defaults.doubleForKey(ns_string!("mouseDriverCursorSize")))
-        .unwrap_or(1.0);
+    let scale = defaults.map_or(1.0, |defaults| {
+        defaults.doubleForKey(ns_string!("mouseDriverCursorSize"))
+    });
     crate::cursor_scale::usable_scale(scale)
 }
 

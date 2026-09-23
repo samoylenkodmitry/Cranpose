@@ -1110,7 +1110,7 @@ fn scrolled_list_under_a_composited_layer_keeps_the_hashes_a_full_walk_leaves() 
     let scroll_state = scroll_holder
         .borrow()
         .as_ref()
-        .cloned()
+        .copied()
         .expect("scroll state should be captured");
     assert!(
         scroll_state.dispatch_raw_delta(96.0) > 0.0,
@@ -1184,7 +1184,7 @@ fn update_graph_from_applier_refreshes_scroll_content_offset() {
     let scroll_state = scroll_holder
         .borrow()
         .as_ref()
-        .cloned()
+        .copied()
         .expect("scroll state should be captured");
     let consumed_scroll = scroll_state.dispatch_raw_delta(96.0);
     assert!(consumed_scroll > 0.0, "test scroll must be consumed");
@@ -1239,7 +1239,7 @@ fn an_overmarked_ancestor_chain_still_translates_instead_of_relowering() {
     let scroll_state = scroll_holder
         .borrow()
         .as_ref()
-        .cloned()
+        .copied()
         .expect("scroll state should be captured");
     let consumed_scroll = scroll_state.dispatch_raw_delta(96.0);
     assert!(consumed_scroll > 0.0, "test scroll must be consumed");
@@ -1308,7 +1308,7 @@ fn a_scrolled_container_translates_clean_children_instead_of_relowering() {
     let scroll_state = scroll_holder
         .borrow()
         .as_ref()
-        .cloned()
+        .copied()
         .expect("scroll state should be captured");
     let consumed_scroll = scroll_state.dispatch_raw_delta(96.0);
     assert!(consumed_scroll > 0.0, "test scroll must be consumed");
@@ -1415,7 +1415,7 @@ fn assert_shadowed_scroll_reuses_children(wrapped_root: bool) {
         if wrapped_root {
             modifier = modifier
                 .drop_shadow(cranpose_ui::LayerShape::Rectangle, |scope| {
-                    scope.radius = 4.0
+                    scope.radius = 4.0;
                 })
                 .graphics_layer(GraphicsLayer::default);
         }
@@ -1440,7 +1440,7 @@ fn assert_shadowed_scroll_reuses_children(wrapped_root: bool) {
     let scroll_state = scroll_holder
         .borrow()
         .as_ref()
-        .cloned()
+        .copied()
         .expect("scroll state should be captured");
     let consumed_scroll = scroll_state.dispatch_raw_delta(96.0);
     shadow_radius.set(11.0);
@@ -1824,7 +1824,7 @@ fn update_graph_from_applier_keeps_parent_content_offset_for_dirty_scroll_child(
     let scroll_state = scroll_holder
         .borrow()
         .as_ref()
-        .cloned()
+        .copied()
         .expect("scroll state should be captured");
     assert!(scroll_state.dispatch_raw_delta(36.0) > 0.0);
 
@@ -1977,7 +1977,7 @@ fn dirty_scrolled_overlay_graphics_layer_stays_aligned_with_underlay() {
     let scroll_state = scroll_holder
         .borrow()
         .as_ref()
-        .cloned()
+        .copied()
         .expect("scroll state should be captured");
     assert!(scroll_state.dispatch_raw_delta(96.0) > 0.0);
 
@@ -2869,10 +2869,7 @@ fn scrolled_lazy_column_item_text_keeps_unspecified_motion_at_rest() {
     assert_eq!(
         find_text_motion(&graph.root, &format!("LazyMotion {first_index}")),
         Some(None),
-        "graph labels after scroll: {:?}, active_children={:?}, child_debug={:?}",
-        labels,
-        active_children,
-        child_debug
+        "graph labels after scroll: {labels:?}, active_children={active_children:?}, child_debug={child_debug:?}"
     );
 }
 

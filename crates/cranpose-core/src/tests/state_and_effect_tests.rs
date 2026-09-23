@@ -1,3 +1,5 @@
+use std::cell::Cell;
+
 use super::*;
 
 #[test]
@@ -38,7 +40,7 @@ fn subcompose_reuses_nodes_across_calls() {
 
     {
         let (composer, slots_host, applier_host) =
-            setup_composer(&mut slots, &mut applier, handle.clone(), None);
+            setup_composer(&mut slots, &mut applier, handle, None);
         composer.set_phase(Phase::Measure);
         let (_, second_nodes) = composer.subcompose(&mut state, SlotId::new(7), content);
         assert_eq!(second_nodes.len(), 1);
@@ -329,7 +331,7 @@ fn mutable_state_reads_during_update_return_previous_value() {
 #[test]
 fn snapshot_state_list_basic_operations() {
     let (runtime_handle, _runtime) = runtime_handle();
-    let list = SnapshotStateList::with_runtime([1, 2], runtime_handle.clone());
+    let list = SnapshotStateList::with_runtime([1, 2], runtime_handle);
 
     assert_eq!(list.len(), 2);
     assert_eq!(list.first(), Some(1));
@@ -364,7 +366,7 @@ fn snapshot_state_list_basic_operations() {
 fn snapshot_state_list_commits_snapshot_mutations() {
     let _guard = reset_snapshot_runtime();
     let (runtime_handle, _runtime) = runtime_handle();
-    let list = SnapshotStateList::with_runtime([10], runtime_handle.clone());
+    let list = SnapshotStateList::with_runtime([10], runtime_handle);
 
     let snapshot = take_mutable_snapshot(None, None);
     snapshot.enter(|| {
@@ -379,7 +381,7 @@ fn snapshot_state_list_commits_snapshot_mutations() {
 #[test]
 fn snapshot_state_map_basic_operations() {
     let (runtime_handle, _runtime) = runtime_handle();
-    let map = SnapshotStateMap::with_runtime([(1, 10), (2, 20)], runtime_handle.clone());
+    let map = SnapshotStateMap::with_runtime([(1, 10), (2, 20)], runtime_handle);
 
     assert_eq!(map.len(), 2);
     assert!(map.contains_key(&1));
@@ -412,7 +414,7 @@ fn snapshot_state_map_basic_operations() {
 fn snapshot_state_map_commits_snapshot_mutations() {
     let _guard = reset_snapshot_runtime();
     let (runtime_handle, _runtime) = runtime_handle();
-    let map = SnapshotStateMap::with_runtime([(1, 1)], runtime_handle.clone());
+    let map = SnapshotStateMap::with_runtime([(1, 1)], runtime_handle);
 
     let snapshot = take_mutable_snapshot(None, None);
     snapshot.enter(|| {
@@ -651,7 +653,7 @@ fn disposable_effect_cleanup_can_update_use_state_during_group_removal() {
 fn launched_effect_runs_and_cancels() {
     let mut composition = test_composition();
     let runtime = composition.runtime_handle();
-    let state = MutableState::with_runtime(0i32, runtime.clone());
+    let state = MutableState::with_runtime(0i32, runtime);
     let runs = Arc::new(AtomicUsize::new(0));
     let captured_scopes: Rc<RefCell<Vec<LaunchedEffectScope>>> = Rc::new(RefCell::new(Vec::new()));
 
@@ -738,7 +740,7 @@ fn launched_effect_runs_side_effect_body() {
 fn launched_effect_background_updates_ui() {
     let mut composition = test_composition();
     let runtime = composition.runtime_handle();
-    let state = MutableState::with_runtime(0i32, runtime.clone());
+    let state = MutableState::with_runtime(0i32, runtime);
     let (tx, rx) = std::sync::mpsc::channel::<i32>();
     let receiver = Rc::new(RefCell::new(Some(rx)));
 
@@ -776,7 +778,7 @@ fn launched_effect_background_updates_ui() {
 fn launched_effect_background_async_updates_ui() {
     let mut composition = test_composition();
     let runtime = composition.runtime_handle();
-    let state = MutableState::with_runtime(0i32, runtime.clone());
+    let state = MutableState::with_runtime(0i32, runtime);
     let (tx, rx) = std::sync::mpsc::channel::<i32>();
     let receiver = Rc::new(RefCell::new(Some(rx)));
 
@@ -815,7 +817,7 @@ fn launched_effect_background_ignores_late_result_after_cancel() {
     let mut composition = test_composition();
     let runtime = composition.runtime_handle();
     let key_state = MutableState::with_runtime(0i32, runtime.clone());
-    let result_state = MutableState::with_runtime(0i32, runtime.clone());
+    let result_state = MutableState::with_runtime(0i32, runtime);
     let (tx, rx) = std::sync::mpsc::channel::<i32>();
     let receiver = Rc::new(RefCell::new(Some(rx)));
 
@@ -875,7 +877,7 @@ fn launched_effect_background_ignores_late_result_after_cancel() {
 fn launched_effect_relaunches_on_branch_change() {
     let mut composition = test_composition();
     let runtime = composition.runtime_handle();
-    let _state = MutableState::with_runtime(false, runtime.clone());
+    let _state = MutableState::with_runtime(false, runtime);
     let runs = Arc::new(AtomicUsize::new(0));
     let recorded_scopes: Rc<RefCell<Vec<(bool, LaunchedEffectScope)>>> =
         Rc::new(RefCell::new(Vec::new()));
@@ -943,7 +945,7 @@ fn launched_effect_relaunches_on_branch_change() {
 fn anchor_survives_conditional_removal() {
     let mut composition = test_composition();
     let runtime = composition.runtime_handle();
-    let toggle = MutableState::with_runtime(true, runtime.clone());
+    let toggle = MutableState::with_runtime(true, runtime);
     let runs = Arc::new(AtomicUsize::new(0));
     let captured_scope: Rc<RefCell<Option<LaunchedEffectScope>>> = Rc::new(RefCell::new(None));
 
@@ -1053,7 +1055,6 @@ fn launched_effect_async_survives_conditional_cycle() {
             let spawns = Arc::clone(&spawns);
             cranpose_core::LaunchedEffectAsync((), move |scope| {
                 spawns.fetch_add(1, Ordering::SeqCst);
-                let log = log.clone();
                 Box::pin(async move {
                     let clock = scope.runtime().frame_clock();
                     while scope.is_active() {
@@ -1271,9 +1272,7 @@ fn launched_effect_async_keeps_frames_after_backward_forward_flip() {
             let frames_after = stats.value().frames;
             assert!(
                 frames_after > frames_before,
-                "frames should continue increasing after backward->forward flip (before {}, after {})",
-                frames_before,
-                frames_after
+                "frames should continue increasing after backward->forward flip (before {frames_before}, after {frames_after})"
             );
             break;
         }
@@ -1301,7 +1300,7 @@ fn stats_scope_survives_conditional_hide() {
     let mut composition = test_composition();
     let runtime = composition.runtime_handle();
     let animation = MutableState::with_runtime(0.0f32, runtime.clone());
-    let stats = MutableState::with_runtime(SimpleStats::default(), runtime.clone());
+    let stats = MutableState::with_runtime(SimpleStats::default(), runtime);
     let log: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
 
     #[composable]
@@ -1319,8 +1318,7 @@ fn stats_scope_survives_conditional_hide() {
                 composer.with_group(location_key(file!(), line!(), column!()), |composer| {
                     if progress_for_slot > 0.0 {
                         let id = composer.emit_node(|| TestDummyNode);
-                        log.borrow_mut()
-                            .push(format!("dummy {}", progress_for_slot));
+                        log.borrow_mut().push(format!("dummy {progress_for_slot}"));
                         composer
                             .with_node_mut(id, |_: &mut TestDummyNode| {})
                             .expect("dummy node exists");
@@ -1475,7 +1473,6 @@ fn next_frame_future_resolves_after_callback() {
     let state = MutableState::with_runtime(0u64, handle.clone());
 
     {
-        let clock = clock.clone();
         handle
             .spawn_ui(async move {
                 let first = clock.next_frame().await;
@@ -1876,11 +1873,11 @@ fn removal_races_keyed_effect_rerun(flip_key_first: bool) {
 
     composition
         .render(location_key(file!(), line!(), column!()), move || {
-            host(shown, key)
+            host(shown, key);
         })
         .expect("initial composition");
-    assert_eq!(STARTS.with(|c| c.get()), 1);
-    assert_eq!(LIVE.with(|c| c.get()), 1);
+    assert_eq!(STARTS.with(Cell::get), 1);
+    assert_eq!(LIVE.with(Cell::get), 1);
 
     if flip_key_first {
         key.set_value(2);
@@ -1894,11 +1891,11 @@ fn removal_races_keyed_effect_rerun(flip_key_first: bool) {
         .expect("recompose the removal pass");
 
     assert_eq!(
-        LIVE.with(|c| c.get()),
+        LIVE.with(Cell::get),
         0,
         "a keyed effect whose host left in the same pass must release its \
          resource (starts={})",
-        STARTS.with(|c| c.get()),
+        STARTS.with(Cell::get),
     );
 }
 

@@ -20,13 +20,13 @@ fn main() {
 
             let click_button = |name: &str| -> bool {
                 if let Some((x, y, w, h)) = find_button_in_semantics(&robot, name) {
-                    println!("  Clicking button '{}'", name);
+                    println!("  Clicking button '{name}'");
                     robot.click(x + w / 2.0, y + h / 2.0).ok();
                     std::thread::sleep(Duration::from_millis(100));
                     let _ = robot.wait_for_idle();
                     true
                 } else {
-                    println!("  ✗ Button '{}' not found!", name);
+                    println!("  ✗ Button '{name}' not found!");
                     false
                 }
             };
@@ -60,7 +60,7 @@ fn main() {
 
             println!("\n=== Step 2: Record initial FirstIndex ===");
             let initial_index = read_first_index();
-            println!("  Initial FirstIndex: {:?}", initial_index);
+            println!("  Initial FirstIndex: {initial_index:?}");
 
             if initial_index != Some(0) {
                 println!("  ⚠️  Expected FirstIndex to be 0 initially");
@@ -87,14 +87,11 @@ fn main() {
 
             println!("\n=== Step 5: Verify FirstIndex updated (CRITICAL TEST) ===");
             let after_jump_index = read_first_index();
-            println!("  FirstIndex after Jump to Middle: {:?}", after_jump_index);
+            println!("  FirstIndex after Jump to Middle: {after_jump_index:?}");
 
             match after_jump_index {
                 Some(index) if index > 1000000 => {
-                    println!(
-                        "  ✓ PASS: FirstIndex updated to {} (middle of usize::MAX)",
-                        index
-                    );
+                    println!("  ✓ PASS: FirstIndex updated to {index} (middle of usize::MAX)");
                     println!("\n=== Bug is FIXED: LazyList redraws after Jump to Middle ===");
                 }
                 Some(0) => {
@@ -111,8 +108,7 @@ fn main() {
                 }
                 Some(index) => {
                     println!(
-                        "  ⚠️  Unexpected index value: {} (expected middle of usize::MAX)",
-                        index
+                        "  ⚠️  Unexpected index value: {index} (expected middle of usize::MAX)"
                     );
                     println!("  This may indicate partial fix or different issue");
                 }

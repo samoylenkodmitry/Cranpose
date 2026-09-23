@@ -153,16 +153,16 @@ impl<S: RegistryState> GenerationalRegistryStorage<S> {
     }
 
     fn adjust_state_counts(&mut self, previous: Option<S>, next: Option<S>) {
-        if previous.is_some_and(|state| state.is_active()) {
+        if previous.is_some_and(RegistryState::is_active) {
             self.active_count -= 1;
         }
-        if previous.is_some_and(|state| state.is_detached()) {
+        if previous.is_some_and(RegistryState::is_detached) {
             self.detached_count -= 1;
         }
-        if next.is_some_and(|state| state.is_active()) {
+        if next.is_some_and(RegistryState::is_active) {
             self.active_count += 1;
         }
-        if next.is_some_and(|state| state.is_detached()) {
+        if next.is_some_and(RegistryState::is_detached) {
             self.detached_count += 1;
         }
     }

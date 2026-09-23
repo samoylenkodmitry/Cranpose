@@ -75,15 +75,15 @@ impl ReferenceContent {
 
     fn active() -> &'static Self {
         CONTENT.get_or_init(|| {
-            let content = std::env::var("REFERENCE_CONTENT")
-                .ok()
-                .map(|json| serde_json::from_str::<Self>(&json).expect("valid reference content"))
-                .unwrap_or_else(|| Self {
+            let content = std::env::var("REFERENCE_CONTENT").ok().map_or_else(
+                || Self {
                     titles: TITLES.map(str::to_string),
                     icons: [0, 1, 2, 3],
                     accent: None,
                     palette: None,
-                });
+                },
+                |json| serde_json::from_str::<Self>(&json).expect("valid reference content"),
+            );
             content.validate().expect("valid reference content");
             content
         })
@@ -92,11 +92,10 @@ impl ReferenceContent {
     fn colors() -> &'static [Color] {
         static COLORS: std::sync::OnceLock<Vec<Color>> = std::sync::OnceLock::new();
         COLORS.get_or_init(|| {
-            Self::active()
-                .palette
-                .as_ref()
-                .map(|colors| colors.iter().copied().map(Self::color).collect())
-                .unwrap_or_else(|| RAINBOW.to_vec())
+            Self::active().palette.as_ref().map_or_else(
+                || RAINBOW.to_vec(),
+                |colors| colors.iter().copied().map(Self::color).collect(),
+            )
         })
     }
 
@@ -134,7 +133,6 @@ fn initial_tint_amount() -> GlassTintAmount {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn TintControls(amount: cranpose_core::MutableState<GlassTintAmount>, top: f32) {
     let style = TextStyle {
         span_style: SpanStyle {
@@ -173,7 +171,6 @@ fn TintControls(amount: cranpose_core::MutableState<GlassTintAmount>, top: f32) 
 }
 
 #[composable]
-#[allow(non_snake_case)]
 pub(crate) fn LiquidTabReference(checkerboard: bool, dark: bool) {
     let scheme = if dark {
         SchemeMode::Dark
@@ -353,7 +350,6 @@ async fn record_pointer(scope: PointerInputScope) {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn RecordingOverlay() {
     let pulse = rememberMutableStateOf(|| 0u64);
     cranpose_core::LaunchedEffectAsync((), move |scope| {

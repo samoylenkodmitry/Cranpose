@@ -71,7 +71,6 @@ fn compose_fixed_rows(
                 state,
                 spec,
                 move |scope| {
-                    let heights = heights.clone();
                     scope.items(
                         LazyItems::new(heights.len()).key(|index: usize| index as u64),
                         move |index| {

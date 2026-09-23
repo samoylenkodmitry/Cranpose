@@ -3,7 +3,7 @@
 use std::{
     collections::{HashMap, HashSet},
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, PoisonError,
         atomic::{AtomicBool, Ordering},
     },
 };
@@ -39,7 +39,7 @@ impl ActivationHandler for InitialTree {
         self.reader_connected.store(true, Ordering::Relaxed);
         self.tree
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .unwrap_or_else(PoisonError::into_inner)
             .clone()
     }
 }
@@ -54,7 +54,7 @@ impl ActionHandler for Actions {
     fn do_action(&mut self, request: ActionRequest) {
         self.queue
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .unwrap_or_else(PoisonError::into_inner)
             .push(request);
         self.waker.wake_up();
     }
@@ -191,17 +191,13 @@ impl DesktopAccessibilityBridge {
         *self
             .initial_tree
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(update.clone());
+            .unwrap_or_else(PoisonError::into_inner) = Some(update.clone());
         self.adapter.update_if_active(|| update);
     }
 
     pub(crate) fn drain_clicks(&mut self) -> Vec<(cranpose_core::NodeId, Option<u64>)> {
-        let requests = std::mem::take(
-            &mut *self
-                .actions
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner()),
-        );
+        let requests =
+            std::mem::take(&mut *self.actions.lock().unwrap_or_else(PoisonError::into_inner));
         requests
             .into_iter()
             .filter_map(|request| self.queue_request(request))
@@ -782,8 +778,7 @@ fn focused_node(ids: &[i32], elements: &[AccessibilityElement]) -> NodeId {
     ids.iter()
         .zip(elements)
         .find(|(_, element)| element.focused)
-        .map(|(id, _)| NodeId(*id as u64))
-        .unwrap_or(ROOT_ID)
+        .map_or(ROOT_ID, |(id, _)| NodeId(*id as u64))
 }
 
 #[cfg(target_os = "macos")]

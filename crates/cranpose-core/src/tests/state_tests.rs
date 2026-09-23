@@ -1,3 +1,5 @@
+use std::sync::PoisonError;
+
 use super::*;
 
 fn create_record_chain(ids: &[SnapshotId]) -> Rc<StateRecord> {
@@ -50,9 +52,7 @@ impl StateObject for ManualState {
 
 fn poison_mutex<T>(mutex: &Mutex<T>) {
     let poison_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let _guard = mutex
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _guard = mutex.lock().unwrap_or_else(PoisonError::into_inner);
         panic!("poison snapshot state mutex for recovery test");
     }));
 
@@ -205,7 +205,7 @@ fn snapshot_mutable_state_merge_wrong_record_type_returns_none() {
 fn test_used_locked_finds_invalid_snapshot() {
     let tail = StateRecord::new(PREEXISTING_SNAPSHOT_ID, 0i32, None);
     let invalid_rec = StateRecord::new(INVALID_SNAPSHOT_ID, 0i32, Some(tail));
-    let head = StateRecord::new(10, 0i32, Some(invalid_rec.clone()));
+    let head = StateRecord::new(10, 0i32, Some(invalid_rec));
 
     let result = used_locked(&head);
     assert!(result.is_some());
@@ -219,7 +219,7 @@ fn test_used_locked_finds_obscured_record() {
     let pin_handle = crate::snapshot_pinning::track_pinning(10, &SnapshotIdSet::EMPTY);
 
     let oldest = StateRecord::new(2, 0i32, None);
-    let newer = StateRecord::new(5, 0i32, Some(oldest.clone()));
+    let newer = StateRecord::new(5, 0i32, Some(oldest));
     let head = StateRecord::new(100, 0i32, Some(newer));
 
     let result = used_locked(&head);
@@ -468,10 +468,10 @@ fn test_overwrite_unused_records_clears_values() {
     crate::snapshot_pinning::reset_pinning_table();
 
     let tail = StateRecord::new(PREEXISTING_SNAPSHOT_ID, 0i32, None);
-    let old_rec1 = StateRecord::new(2, 999i32, Some(tail.clone()));
+    let old_rec1 = StateRecord::new(2, 999i32, Some(tail));
     let old_rec2 = StateRecord::new(3, 888i32, Some(old_rec1.clone()));
-    let head = StateRecord::new(150, 42i32, Some(old_rec2.clone()));
-    let state = ManualState::new(head.clone());
+    let head = StateRecord::new(150, 42i32, Some(old_rec2));
+    let state = ManualState::new(head);
 
     old_rec1.with_value(|val: &i32| {
         assert_eq!(*val, 999);
@@ -488,11 +488,11 @@ fn test_overwrite_unused_records_mixed_old_and_new() {
     crate::snapshot_pinning::reset_pinning_table();
 
     let preexisting = StateRecord::new(PREEXISTING_SNAPSHOT_ID, 0i32, None);
-    let rec2 = StateRecord::new(2, 100i32, Some(preexisting.clone()));
+    let rec2 = StateRecord::new(2, 100i32, Some(preexisting));
     let rec5 = StateRecord::new(5, 100i32, Some(rec2.clone()));
     let rec50 = StateRecord::new(50, 100i32, Some(rec5.clone()));
     let head = StateRecord::new(120, 100i32, Some(rec50.clone()));
-    let state = ManualState::new(head.clone());
+    let state = ManualState::new(head);
 
     let _pin = crate::snapshot_pinning::track_pinning(40, &SnapshotIdSet::EMPTY);
 

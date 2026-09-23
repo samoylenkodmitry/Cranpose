@@ -87,9 +87,9 @@ pub const DEFAULT_DURABLE_SAVE_DEADLINE: std::time::Duration = std::time::Durati
 
 /// How long the installed host will wait for durable saves.
 pub fn durable_save_deadline() -> std::time::Duration {
-    host_controller()
-        .map(|host| host.durable_save_deadline())
-        .unwrap_or(DEFAULT_DURABLE_SAVE_DEADLINE)
+    host_controller().map_or(DEFAULT_DURABLE_SAVE_DEADLINE, |host| {
+        host.durable_save_deadline()
+    })
 }
 
 pub type HostControllerRef = Arc<dyn HostController>;
@@ -360,7 +360,6 @@ pub fn rememberLifecycleEvents() -> cranpose_core::EventStream<LifecycleEvent> {
 ///
 /// The application shell wraps its content in this once; screens then read
 /// [`local_lifecycle_state`].
-#[allow(non_snake_case)]
 #[cranpose_macros::composable]
 pub fn ProvideLifecycle(content: impl FnOnce()) {
     let state = rememberLifecycleState();
@@ -509,11 +508,13 @@ pub fn run_durable_saves(deadline: std::time::Duration) -> DurableSaveOutcome {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::PoisonError;
+
     use super::*;
 
     fn test_lock() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: Mutex<()> = Mutex::new(());
-        LOCK.lock().unwrap_or_else(|error| error.into_inner())
+        LOCK.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     #[test]
@@ -660,7 +661,7 @@ mod tests {
         let _guard = test_lock();
         durable_saves()
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(PoisonError::into_inner)
             .clear();
         let ran: Arc<Mutex<Vec<&'static str>>> = Arc::new(Mutex::new(Vec::new()));
         let show_first = std::rc::Rc::new(std::cell::Cell::new(true));
@@ -670,14 +671,14 @@ mod tests {
                 let ran = Arc::clone(ran);
                 DurableSaveEffect((), move || {
                     ran.lock()
-                        .unwrap_or_else(|error| error.into_inner())
+                        .unwrap_or_else(PoisonError::into_inner)
                         .push("first");
                 });
             }
             let ran = Arc::clone(ran);
             DurableSaveEffect((), move || {
                 ran.lock()
-                    .unwrap_or_else(|error| error.into_inner())
+                    .unwrap_or_else(PoisonError::into_inner)
                     .push("tail");
             });
         }
@@ -702,7 +703,7 @@ mod tests {
         assert_eq!(outcome, DurableSaveOutcome::Completed);
         assert_eq!(
             ran.lock()
-                .unwrap_or_else(|error| error.into_inner())
+                .unwrap_or_else(PoisonError::into_inner)
                 .as_slice(),
             ["tail"],
             "the surviving effect must keep its own registration; adopting the \

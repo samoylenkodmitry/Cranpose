@@ -177,10 +177,7 @@ fn main() {
                 robot.exit().ok();
                 std::process::exit(1);
             };
-            println!(
-                "OK: Box 1 at ({:.1}, {:.1}, {:.1}x{:.1})",
-                box1_x, box1_y, box1_w, box1_h
-            );
+            println!("OK: Box 1 at ({box1_x:.1}, {box1_y:.1}, {box1_w:.1}x{box1_h:.1})");
 
             let center_x = box1_x + box1_w / 2.0;
             let center_y = box1_y + box1_h / 2.0;
@@ -240,10 +237,7 @@ fn main() {
                 robot.exit().ok();
                 std::process::exit(1);
             };
-            println!(
-                "OK: Fire box at ({:.1}, {:.1}, {:.1}x{:.1})",
-                fire_x, fire_y, fire_w, fire_h
-            );
+            println!("OK: Fire box at ({fire_x:.1}, {fire_y:.1}, {fire_w:.1}x{fire_h:.1})");
 
             let fire_cx = fire_x + fire_w / 2.0;
             let fire_cy = fire_y + fire_h / 2.0;

@@ -71,13 +71,13 @@ fn modal_registrations_belong_to_their_app_context() {
     let second_callback = Rc::clone(&second_count);
     let first_registration = first.enter(|| {
         register_modal(Rc::new(move || {
-            first_callback.set(first_callback.get() + 1)
+            first_callback.set(first_callback.get() + 1);
         }))
     });
     let second_registration = second.enter(|| {
         assert_eq!(modal_depth(), 0);
         register_modal(Rc::new(move || {
-            second_callback.set(second_callback.get() + 1)
+            second_callback.set(second_callback.get() + 1);
         }))
     });
     first.enter(|| {

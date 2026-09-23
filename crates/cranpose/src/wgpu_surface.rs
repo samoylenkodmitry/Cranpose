@@ -27,6 +27,7 @@ pub(crate) fn create_wgpu_surface_and_adapter(
         power_preference: wgpu::PowerPreference::HighPerformance,
         compatible_surface: Some(&surface),
         force_fallback_adapter: false,
+        apply_limit_buckets: false,
     }))
     .map_err(crate::app_launcher::LaunchError::NoAdapter)?;
 
@@ -91,7 +92,7 @@ pub(crate) fn present_initial_placeholder_frame_cleared_to(
         ..Default::default()
     });
     cranpose_render_wgpu::clear_to_background(device, queue, &view, clear);
-    frame.present();
+    queue.present(frame);
     true
 }
 

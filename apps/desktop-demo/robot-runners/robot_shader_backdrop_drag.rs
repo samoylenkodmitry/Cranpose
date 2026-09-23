@@ -70,9 +70,7 @@ fn shader_content_top(robot: &cranpose::Robot) -> f32 {
 }
 
 fn shader_content_bottom(robot: &cranpose::Robot) -> f32 {
-    root_bounds(robot)
-        .map(|(_, y, _, h)| y + h - 28.0)
-        .unwrap_or(f32::MAX)
+    root_bounds(robot).map_or(f32::MAX, |(_, y, _, h)| y + h - 28.0)
 }
 
 fn y_in_shader_content(robot: &cranpose::Robot, y: f32) -> bool {
@@ -191,8 +189,7 @@ fn log_nested_effect_probe(robot: &cranpose::Robot) {
     let parent_slider = find_text_by_prefix_in_semantics(robot, "nested_parent_blur");
     let child_slider = find_text_by_prefix_in_semantics(robot, "nested_child_backdrop_blur");
     println!(
-        "Nested probe: child_label={:?} parent_slider={:?} child_slider={:?}",
-        child_label, parent_slider, child_slider
+        "Nested probe: child_label={child_label:?} parent_slider={parent_slider:?} child_slider={child_slider:?}"
     );
 }
 
@@ -469,8 +466,7 @@ fn main() {
                 0.0,
             );
             println!(
-                "Nested sliders (off): parent={:?} child={:?}",
-                nested_parent, nested_child_off
+                "Nested sliders (off): parent={nested_parent:?} child={nested_child_off:?}"
             );
             if nested_parent.is_none_or(|value| value > 1.0)
                 || nested_child_off.is_none_or(|value| value > 1.0)
@@ -515,7 +511,7 @@ fn main() {
                 "nested_child_backdrop_blur",
                 1.0,
             );
-            println!("Nested child slider (on): {:?}", nested_child_on);
+            println!("Nested child slider (on): {nested_child_on:?}");
             if nested_child_on.is_none_or(|value| value < 16.0) {
                 println!("✗ Could not set nested_child_backdrop_blur to maximum value");
                 std::process::exit(1);
@@ -534,13 +530,11 @@ fn main() {
                 std::process::exit(1);
             };
             println!(
-                "Nested child backdrop diff: raw={} baseline={} net={}",
-                nested_raw, nested_baseline_noise, nested_net
+                "Nested child backdrop diff: raw={nested_raw} baseline={nested_baseline_noise} net={nested_net}"
             );
             if nested_net < NESTED_BACKDROP_MIN_CHANGED_PIXELS {
                 println!(
-                    "✗ nested_child_backdrop_blur did not produce visible changes (net={})",
-                    nested_net
+                    "✗ nested_child_backdrop_blur did not produce visible changes (net={nested_net})"
                 );
                 std::process::exit(1);
             }
@@ -714,14 +708,12 @@ fn main() {
                 changed_pixel_count_in_region(&tab_noise_after, &tab_after_shot, tab_strip_region, 10);
             let tab_strip_diff = raw_tab_strip_diff.saturating_sub(baseline_tab_strip_diff);
             println!(
-                "Clip check: tab_strip_changed_pixels={} (raw={} baseline={} region_bottom={:.1})",
-                tab_strip_diff, raw_tab_strip_diff, baseline_tab_strip_diff, tab_strip_bottom
+                "Clip check: tab_strip_changed_pixels={tab_strip_diff} (raw={raw_tab_strip_diff} baseline={baseline_tab_strip_diff} region_bottom={tab_strip_bottom:.1})"
             );
 
             if tab_strip_diff > 15_000 {
                 println!(
-                    "✗ Tab strip changed too much after dragging shader rect upward (delta={} raw={} baseline={})",
-                    tab_strip_diff, raw_tab_strip_diff, baseline_tab_strip_diff
+                    "✗ Tab strip changed too much after dragging shader rect upward (delta={tab_strip_diff} raw={raw_tab_strip_diff} baseline={baseline_tab_strip_diff})"
                 );
                 std::process::exit(1);
             }

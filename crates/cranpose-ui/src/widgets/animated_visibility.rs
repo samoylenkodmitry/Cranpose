@@ -5,8 +5,6 @@
 //! enter/exit transitions: `fade_in`/`fade_out` and
 //! `slide_in_vertically`/`slide_out_vertically`.
 
-#![allow(non_snake_case)]
-
 use cranpose_animation::AnimationType;
 
 use crate::{

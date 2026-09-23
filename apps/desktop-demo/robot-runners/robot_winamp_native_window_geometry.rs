@@ -289,13 +289,15 @@ fn visible_window_obstacles() -> Vec<WindowGeometry> {
             let title = title.as_deref();
             if matches!(
                 title,
-                Some("Desktop")
-                    | Some("xfdesktop")
-                    | Some("Xfwm4")
-                    | Some(WINDOW_TITLE)
-                    | Some("Winamp")
-                    | Some("Winamp Equalizer")
-                    | Some("Winamp Playlist")
+                Some(
+                    "Desktop"
+                        | "xfdesktop"
+                        | "Xfwm4"
+                        | WINDOW_TITLE
+                        | "Winamp"
+                        | "Winamp Equalizer"
+                        | "Winamp Playlist"
+                )
             ) {
                 return None;
             }
@@ -632,12 +634,12 @@ fn place_attached_chain(windows: WinampWindows, x: i32, y: i32) {
             },
         };
         if offsets_close(expected, last) {
-            println!("place attached chain: {:?}", last);
+            println!("place attached chain: {last:?}");
             return;
         }
     }
 
-    println!("place attached chain: {:?}", last);
+    println!("place attached chain: {last:?}");
 }
 
 fn place_overflight_layout(windows: WinampWindows, x: i32, y: i32) {
@@ -1123,11 +1125,9 @@ fn wait_for_one_pixel_drag_step(
         let playlist_dx = sample.geometries.playlist.x - previous.geometries.playlist.x;
         let playlist_dy = sample.geometries.playlist.y - previous.geometries.playlist.y;
 
-        if pointer_dx > 1 || pointer_dy != 0 {
-            panic!(
-                "{label} step {step}: robot pointer moved incorrectly previous={previous:?} sample={sample:?}"
-            );
-        }
+        assert!(!(pointer_dx > 1 || pointer_dy != 0),
+            "{label} step {step}: robot pointer moved incorrectly previous={previous:?} sample={sample:?}"
+        );
         if main_dx > 1
             || main_dy != 0
             || equalizer_dx > 1
@@ -1149,12 +1149,10 @@ fn wait_for_one_pixel_drag_step(
         {
             return sample;
         }
-        if sample.elapsed > PIXEL_TRACE_STALL_TIMEOUT {
-            panic!(
-                "{label} step {step}: one-pixel drag did not complete within {}ms previous={previous:?} last={sample:?}",
-                PIXEL_TRACE_STALL_TIMEOUT.as_millis()
-            );
-        }
+        assert!(sample.elapsed <= PIXEL_TRACE_STALL_TIMEOUT,
+            "{label} step {step}: one-pixel drag did not complete within {}ms previous={previous:?} last={sample:?}",
+            PIXEL_TRACE_STALL_TIMEOUT.as_millis()
+        );
 
         std::thread::sleep(Duration::from_millis(1));
     }
@@ -1228,8 +1226,7 @@ fn assert_pixel_drag_trace_continuity(
     let total_dx = last.x - first.x;
     assert_eq!(
         total_dx, PIXEL_TRACE_STEPS as i32,
-        "{label}: total main movement should match pointer pixels expected={} actual={total_dx} trace={trace:?}",
-        PIXEL_TRACE_STEPS
+        "{label}: total main movement should match pointer pixels expected={PIXEL_TRACE_STEPS} actual={total_dx} trace={trace:?}"
     );
 }
 
@@ -1284,8 +1281,7 @@ fn assert_long_drag_trace_sync(
             assert!(
                 drift_x <= LONG_DRAG_MAX_POINTER_WINDOW_DRIFT
                     && drift_y <= LONG_DRAG_MAX_POINTER_WINDOW_DRIFT,
-                "{label} sample {index}: pointer/window drift exceeded {}px drift=({drift_x},{drift_y}) max_so_far=({max_drift_x},{max_drift_y}) first={first:?} current={current:?}",
-                LONG_DRAG_MAX_POINTER_WINDOW_DRIFT
+                "{label} sample {index}: pointer/window drift exceeded {LONG_DRAG_MAX_POINTER_WINDOW_DRIFT}px drift=({drift_x},{drift_y}) max_so_far=({max_drift_x},{max_drift_y}) first={first:?} current={current:?}"
             );
         }
     }
@@ -1333,7 +1329,7 @@ fn drag_and_assert_offsets(
             std::thread::sleep(Duration::from_millis(45));
             windows.geometries()
         };
-        println!("{label} step {step}: {:?}", current);
+        println!("{label} step {step}: {current:?}");
         if moves_attached_group {
             assert_offsets_close(label, step, initial, current);
         } else {
@@ -1389,7 +1385,7 @@ fn move_main_with_window_manager_and_assert_offsets(
             && (current.main.y - (initial.main.y + dy)).abs() <= OFFSET_EPSILON
             && offsets_close(initial, current)
         {
-            println!("{label}: {:?}", current);
+            println!("{label}: {current:?}");
             assert_windows_stop_after_release(label, windows, current);
             return;
         }
@@ -1450,11 +1446,9 @@ fn assert_windows_stop_after_release(
         sample += 1;
         let current = windows.geometries();
         samples.push(current);
-        if current != expected {
-            panic!(
-                "{label} post-release sample {sample}: native windows kept moving after mouseup expected={expected:?} actual={current:?} samples={samples:?}"
-            );
-        }
+        assert!(current == expected,
+            "{label} post-release sample {sample}: native windows kept moving after mouseup expected={expected:?} actual={current:?} samples={samples:?}"
+        );
         std::thread::sleep(POST_RELEASE_STABILITY_POLL);
     }
 }
@@ -1533,7 +1527,7 @@ fn assert_geometry_close(
 }
 
 fn assert_attached_offsets(label: &str, geometries: WinampGeometries) -> WinampGeometries {
-    println!("{label}: {:?}", geometries);
+    println!("{label}: {geometries:?}");
     assert_pair_attached(label, geometries.main, geometries.equalizer);
     assert_pair_attached(label, geometries.equalizer, geometries.playlist);
     geometries

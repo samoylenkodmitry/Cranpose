@@ -66,8 +66,8 @@ fn main() {
             std::thread::sleep(Duration::from_millis(500));
 
             match robot.wait_for_idle() {
-                Ok(_) => println!("✓ App ready\n"),
-                Err(e) => println!("Note: {}\n", e),
+                Ok(()) => println!("✓ App ready\n"),
+                Err(e) => println!("Note: {e}\n"),
             }
 
             let find_button_center = |robot: &cranpose::Robot, name: &str| -> Option<(f32, f32)> {
@@ -81,13 +81,12 @@ fn main() {
             println!("--- Step 1: Verify Initial State ---");
             let initial_counter = counter_value(&robot)
                 .unwrap_or_else(|| robot_exit::fail_without_shutdown( "initial counter value not found"));
-            println!("  Initial counter value: {}", initial_counter);
+            println!("  Initial counter value: {initial_counter}");
 
             println!("\n--- Step 2: Click CompositionLocal Test Tab ---");
             if let Some((x, y)) = find_button_center(&robot, "CompositionLocal Test") {
                 println!(
-                    "  Found 'CompositionLocal Test' tab at ({:.1}, {:.1})",
-                    x, y
+                    "  Found 'CompositionLocal Test' tab at ({x:.1}, {y:.1})"
                 );
                 robot.click(x, y).unwrap_or_else(|err| {
                     robot_exit::fail_without_shutdown(
@@ -102,7 +101,7 @@ fn main() {
             println!("\n--- Step 3: Click Counter App Tab ---");
             let counter_app_pos = find_button_center(&robot, "Counter App");
             if let Some((x, y)) = counter_app_pos {
-                println!("  Found 'Counter App' tab at ({:.1}, {:.1})", x, y);
+                println!("  Found 'Counter App' tab at ({x:.1}, {y:.1})");
                 robot.click(x, y).unwrap_or_else(|err| {
                     robot_exit::fail_without_shutdown( &format!("failed to click 'Counter App': {err}"))
                 });
@@ -115,8 +114,7 @@ fn main() {
             println!("\n--- Step 4: Move Cursor Over Gradient Area ---");
             if let Some((tab_x, tab_y)) = counter_app_pos {
                 println!(
-                    "  Moving cursor from tab ({:.1}, {:.1}) through gradient area...",
-                    tab_x, tab_y
+                    "  Moving cursor from tab ({tab_x:.1}, {tab_y:.1}) through gradient area..."
                 );
 
                 let gradient_x = 80.0;
@@ -140,7 +138,7 @@ fn main() {
             println!("\n--- Step 5: Find and Click Increment Button ---");
             let increment_pos = find_button_center(&robot, "Increment");
             if let Some((x, y)) = increment_pos {
-                println!("  Found 'Increment' button at ({:.1}, {:.1})", x, y);
+                println!("  Found 'Increment' button at ({x:.1}, {y:.1})");
 
                 robot.mouse_move(x, y).unwrap_or_else(|err| {
                     robot_exit::fail_without_shutdown( &format!("failed to move mouse to Increment button: {err}"))
@@ -162,15 +160,14 @@ fn main() {
                 wait_for_counter_value(&robot, initial_counter + 1, 40, Duration::from_millis(50))
                     .unwrap_or(-1);
             let all_counters = counter_values(&robot);
-            println!("  Final counter value: {}", final_counter);
-            println!("  All counter texts: {:?}", all_counters);
+            println!("  Final counter value: {final_counter}");
+            println!("  All counter texts: {all_counters:?}");
 
             println!("\n=== Test Summary ===");
             if final_counter == initial_counter + 1 {
                 println!("✓ ALL TESTS PASSED");
                 println!(
-                    "  Counter incremented from {} to {}",
-                    initial_counter, final_counter
+                    "  Counter incremented from {initial_counter} to {final_counter}"
                 );
             } else {
                 robot_exit::fail_without_shutdown(

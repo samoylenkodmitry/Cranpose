@@ -12,11 +12,8 @@ pub(crate) fn log_software_renderer_budget(label: &str) {
 }
 
 fn env_flag(name: &str) -> bool {
-    std::env::var(name)
-        .ok()
-        .map(|value| {
-            let normalized = value.trim().to_ascii_lowercase();
-            matches!(normalized.as_str(), "1" | "true" | "yes" | "on")
-        })
-        .unwrap_or(false)
+    std::env::var(name).ok().is_some_and(|value| {
+        let normalized = value.trim().to_ascii_lowercase();
+        matches!(normalized.as_str(), "1" | "true" | "yes" | "on")
+    })
 }

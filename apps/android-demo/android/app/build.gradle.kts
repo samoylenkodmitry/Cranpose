@@ -32,7 +32,7 @@ cranpose {
 
 android {
     namespace = "com.compose_rs.demo"
-    compileSdk = 36
+    compileSdk = 37
     testBuildType = "release"
 
     defaultConfig {

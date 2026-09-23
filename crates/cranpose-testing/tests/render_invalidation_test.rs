@@ -21,7 +21,7 @@ fn test_render_invalidation_on_conditional_change() {
     let mut rule = ComposeTestRule::new();
     let runtime = rule.runtime_handle();
 
-    let counter = MutableState::with_runtime(0, runtime.clone());
+    let counter = MutableState::with_runtime(0, runtime);
 
     eprintln!("\n╔═══════════════════════════════════════════════════════════════╗");
     eprintln!("║           RENDER INVALIDATION BUG TEST                        ║");
@@ -39,10 +39,7 @@ fn test_render_invalidation_on_conditional_change() {
     rule.with_app_context(cranpose_ui::take_render_invalidation);
 
     let before_change = rule.with_app_context(cranpose_ui::peek_render_invalidation);
-    eprintln!(
-        "Before state change - render invalidated: {}",
-        before_change
-    );
+    eprintln!("Before state change - render invalidated: {before_change}");
     assert!(
         !before_change,
         "Should start with no pending render invalidation"
@@ -55,10 +52,7 @@ fn test_render_invalidation_on_conditional_change() {
     rule.pump_until_idle().expect("recompose");
 
     let after_change = rule.with_app_context(cranpose_ui::peek_render_invalidation);
-    eprintln!(
-        "\nAfter recomposition - render invalidated: {}",
-        after_change
-    );
+    eprintln!("\nAfter recomposition - render invalidated: {after_change}");
 
     assert!(
         after_change,

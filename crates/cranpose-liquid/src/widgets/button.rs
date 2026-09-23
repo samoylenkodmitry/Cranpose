@@ -336,7 +336,6 @@ fn icon_group_neighbor_shapes(
 /// A glass button. `content` composes the label (see [`GlassButton`] with
 /// [`Text`], or an [`crate::icons::Icon`] + text row).
 #[composable]
-#[allow(non_snake_case)]
 pub fn GlassButton(
     modifier: Modifier,
     spec: GlassButtonSpec,
@@ -410,7 +409,6 @@ pub fn GlassButton(
 
 /// Convenience text label styled for the enclosing button.
 #[composable]
-#[allow(non_snake_case)]
 pub fn GlassButtonLabel(text: impl Into<String>, spec: GlassButtonSpec) {
     let typography = liquid_typography();
     let color = spec.content_color(&liquid_colors());
@@ -419,13 +417,12 @@ pub fn GlassButtonLabel(text: impl Into<String>, spec: GlassButtonSpec) {
             color: Some(color),
             ..typography.headline.span_style.clone()
         },
-        ..typography.headline.clone()
+        ..typography.headline
     };
     Text(text.into(), Modifier::empty(), style);
 }
 
 #[composable]
-#[allow(non_snake_case)]
 pub(crate) fn GlassIconForeground(spec: GlassButtonSpec, diameter: f32, icon_path: &'static str) {
     let colors = liquid_colors();
     let icon_color = spec.icon_color(&colors);
@@ -461,7 +458,6 @@ pub(crate) fn GlassIconForeground(spec: GlassButtonSpec, diameter: f32, icon_pat
 
 /// A circular glass icon button (44dp target).
 #[composable]
-#[allow(non_snake_case)]
 pub fn GlassIconButton(
     modifier: Modifier,
     spec: GlassButtonSpec,
@@ -473,7 +469,6 @@ pub fn GlassIconButton(
 }
 
 #[composable]
-#[allow(non_snake_case)]
 pub(crate) fn GlassIconButtonWithForegroundAlpha(
     modifier: Modifier,
     spec: GlassButtonSpec,
@@ -536,7 +531,6 @@ pub(crate) fn GlassIconButtonWithForegroundAlpha(
 /// Each member keeps its own base material and foreground; one transparent,
 /// persistent interaction field supplies the shared refraction and neck.
 #[composable]
-#[allow(non_snake_case)]
 pub fn GlassIconButtonGroup(
     modifier: Modifier,
     spec: GlassIconButtonGroupSpec,
@@ -720,8 +714,7 @@ pub fn GlassIconButtonGroup(
                     .resolve_material(&colors, item.spec.icon_color(&colors))
             })
             .and_then(|material| material.tint)
-            .map(|tint| tint.with_alpha(0.85))
-            .unwrap_or(Color::WHITE.with_alpha(0.035));
+            .map_or(Color(1.0, 1.0, 1.0, 0.035), |tint| tint.with_alpha(0.85));
         let shared = Modifier::empty()
             .required_size(Size::new(node_width, node_height))
             .offset(-pad, (spec.diameter - node_height) * 0.5)

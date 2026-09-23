@@ -60,7 +60,7 @@ fn test_pointer_input_async_handler_is_present() {
     let runtime = rule.runtime_handle();
 
     let hover_position = MutableState::with_runtime(Point { x: 0.0, y: 0.0 }, runtime.clone());
-    let is_hovered = MutableState::with_runtime(false, runtime.clone());
+    let is_hovered = MutableState::with_runtime(false, runtime);
 
     rule.set_content({
         let pos = hover_position;
@@ -81,10 +81,7 @@ fn test_pointer_input_async_handler_is_present() {
         "Should have at least 2 nodes (Column and Text)"
     );
 
-    println!(
-        "✓ Pointer input composition created successfully with {} nodes",
-        node_count
-    );
+    println!("✓ Pointer input composition created successfully with {node_count} nodes");
 }
 
 #[composable]
@@ -136,7 +133,7 @@ fn test_button_with_draw_modifiers_is_clickable() {
     let mut rule = ComposeTestRule::new();
     let runtime = rule.runtime_handle();
 
-    let click_count = MutableState::with_runtime(0, runtime.clone());
+    let click_count = MutableState::with_runtime(0, runtime);
 
     rule.set_content({
         let count = click_count;
@@ -154,10 +151,7 @@ fn test_button_with_draw_modifiers_is_clickable() {
         "Should have at least 3 nodes (Column, Text, Button)"
     );
 
-    println!(
-        "✓ Button with draw modifiers created successfully with {} nodes",
-        node_count
-    );
+    println!("✓ Button with draw modifiers created successfully with {node_count} nodes");
 }
 
 #[composable]
@@ -204,7 +198,7 @@ fn test_button_with_dynamic_content_updates_correctly() {
     let runtime = rule.runtime_handle();
 
     let click_count = MutableState::with_runtime(0, runtime.clone());
-    let is_active = MutableState::with_runtime(false, runtime.clone());
+    let is_active = MutableState::with_runtime(false, runtime);
 
     rule.set_content({
         let count = click_count;

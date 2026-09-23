@@ -124,14 +124,14 @@ pub fn clipboard_write_text(text: &str) {
 
 /// Reads the clipboard's text, or `None` when empty/unavailable.
 pub fn clipboard_read_text() -> Option<String> {
-    crate::render_state::with_clipboard_session(|state| state.read())
+    crate::render_state::with_clipboard_session(ClipboardSessionState::read)
 }
 
 /// Whether a real OS clipboard is installed for the current app context (as
 /// opposed to the in-process fallback used in headless tests or on platforms
 /// with no clipboard backend registered).
 pub fn has_platform_clipboard() -> bool {
-    crate::render_state::with_clipboard_session(|state| state.has_platform())
+    crate::render_state::with_clipboard_session(ClipboardSessionState::has_platform)
 }
 
 /// Whether a Paste action should be offered.
@@ -153,7 +153,7 @@ pub fn clipboard_can_paste() -> bool {
 /// completes it through its own paste path once the clipboard promise resolves,
 /// which is why this is a command rather than a read.
 pub fn clipboard_paste_into_focus() {
-    if crate::render_state::with_clipboard_session(|state| state.request_paste()) {
+    if crate::render_state::with_clipboard_session(ClipboardSessionState::request_paste) {
         return;
     }
     if let Some(text) = clipboard_read_text() {

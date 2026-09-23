@@ -5,8 +5,6 @@
 //! together with inspector metadata while resolved state is computed directly
 //! from the modifier nodes.
 
-#![allow(non_snake_case)]
-
 use std::{
     fmt,
     hash::{Hash, Hasher},
@@ -1028,7 +1026,7 @@ impl Modifier {
     pub fn collect_inspector_records(&self) -> Vec<ModifierInspectorRecord> {
         self.inspector_metadata()
             .iter()
-            .map(|metadata| metadata.to_record())
+            .map(InspectorMetadata::to_record)
             .collect()
     }
 

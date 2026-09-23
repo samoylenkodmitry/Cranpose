@@ -85,7 +85,7 @@ pub(crate) fn resolve_url(base: &str, target: &str) -> String {
             normalize_path(target)
         );
     }
-    let directory = path.rsplit_once('/').map(|(head, _)| head).unwrap_or("");
+    let directory = path.rsplit_once('/').map_or("", |(head, _)| head);
     format!(
         "{scheme}://{host}{}",
         normalize_path(&format!("{directory}/{target}"))

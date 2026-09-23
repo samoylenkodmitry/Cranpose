@@ -25,9 +25,10 @@ fn center((x, y, w, h): Rect) -> (f32, f32) {
 }
 
 fn require_prefix(robot: &cranpose::Robot, prefix: &str) -> (Rect, String) {
-    find_text_by_prefix_in_semantics(robot, prefix)
-        .map(|(x, y, w, h, text)| ((x, y, w, h), text))
-        .unwrap_or_else(|| panic!("text prefix {prefix:?} not found"))
+    find_text_by_prefix_in_semantics(robot, prefix).map_or_else(
+        || panic!("text prefix {prefix:?} not found"),
+        |(x, y, w, h, text)| ((x, y, w, h), text),
+    )
 }
 
 fn assert_same_origin(label: &str, before: Rect, after: Rect, epsilon: f32) {
@@ -78,13 +79,14 @@ fn assert_animation_jitter(robot: &cranpose::Robot) {
 
     let window_id = find_window_id(WINDOW_TITLE);
     focus_x11_window(&window_id);
-    let alpha_bounds = find_text_by_prefix_in_semantics(robot, "Alpha ")
-        .map(|(x, y, w, h, _)| (x, y, w, h))
-        .unwrap_or_else(|| {
+    let alpha_bounds = find_text_by_prefix_in_semantics(robot, "Alpha ").map_or_else(
+        || {
             robot_exit::fail_without_shutdown(
                 "Alpha row label was not visible for visual stability",
             )
-        });
+        },
+        |(x, y, w, h, _)| (x, y, w, h),
+    );
     let alpha_crop = (
         (alpha_bounds.0 - 6.0).max(0.0) as u32,
         (alpha_bounds.1 - 6.0).max(0.0) as u32,

@@ -60,7 +60,6 @@ const SCALED_LABEL: &str = "Scaled label";
 const NEIGHBOUR_LABEL: &str = "Neighbour";
 
 #[composable]
-#[allow(non_snake_case)]
 fn LabelsBesideAGridWideBox(grid_box: Rc<Cell<Option<NodeId>>>) {
     Column(Modifier::empty(), ColumnSpec::default(), move || {
         Text(SCALED_LABEL, Modifier::empty(), TextStyle::default());

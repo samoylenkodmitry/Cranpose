@@ -97,7 +97,6 @@ fn collect_segments(content: impl FnOnce(&LiquidSegmentedControlScope)) -> Vec<L
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn SegmentLabel(label: String, selected: bool) {
     let colors = liquid_colors();
     let typography = liquid_typography();
@@ -112,7 +111,7 @@ fn SegmentLabel(label: String, selected: bool) {
             }),
             ..typography.subheadline.span_style.clone()
         },
-        ..typography.subheadline.clone()
+        ..typography.subheadline
     };
     Text(label, Modifier::empty(), style);
 }
@@ -131,7 +130,6 @@ fn SegmentLabel(label: String, selected: bool) {
 /// });
 /// ```
 #[composable]
-#[allow(non_snake_case)]
 pub fn LiquidSegmentedControl(
     modifier: Modifier,
     selected: usize,

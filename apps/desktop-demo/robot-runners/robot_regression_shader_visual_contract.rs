@@ -117,22 +117,19 @@ fn run_interactive_overlap() {
                 let right_edge = edge_energy_rgba(&right_half);
                 let blur_label_pixels =
                     feature_stats_rgba(image, glass_crop, is_bright_label_pixel)
-                        .map(|stats| stats.count)
-                        .unwrap_or(0);
+                        .map_or(0, |stats| stats.count);
                 let left_blue_blur_pixels = feature_stats_rgba(
                     image,
                     (glass_crop.0, glass_crop.1, 75, glass_crop.3),
                     is_blue_blur_pixel,
                 )
-                .map(|stats| stats.count)
-                .unwrap_or(0);
+                .map_or(0, |stats| stats.count);
                 let right_blue_blur_pixels = feature_stats_rgba(
                     image,
                     (glass_crop.0 + 75, glass_crop.1, glass_crop.2 - 75, glass_crop.3),
                     is_blue_blur_pixel,
                 )
-                .map(|stats| stats.count)
-                .unwrap_or(0);
+                .map_or(0, |stats| stats.count);
                 (
                     left_edge,
                     right_edge,
@@ -257,8 +254,7 @@ fn run_shadow_showcases() {
                 118.0,
             );
             let shadow_pixels = feature_stats_screenshot(&screenshot, probe, is_shadow_pixel)
-                .map(|stats| stats.count)
-                .unwrap_or(0);
+                .map_or(0, |stats| stats.count);
             println!(
                 "shadow_fields probe={probe:?} shadow_pixels={shadow_pixels} screenshot={}",
                 shadow_path.display()
@@ -293,8 +289,7 @@ fn run_shadow_showcases() {
                 compose_probe,
                 is_soft_shadow_pixel,
             )
-                .map(|stats| stats.count)
-                .unwrap_or(0);
+                .map_or(0, |stats| stats.count);
             println!(
                 "compose_shadow probe={compose_probe:?} shadow_pixels={compose_shadow_pixels} screenshot={}",
                 compose_path.display()

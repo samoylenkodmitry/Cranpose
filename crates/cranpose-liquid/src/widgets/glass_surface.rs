@@ -16,7 +16,6 @@ use crate::material::{Glass, LiquidModifierExt};
 /// });
 /// ```
 #[composable]
-#[allow(non_snake_case)]
 pub fn GlassSurface(modifier: Modifier, glass: Glass, content: impl FnMut() + 'static) {
     let modifier = Modifier::empty().glass_effect(glass).then(modifier);
     Box(

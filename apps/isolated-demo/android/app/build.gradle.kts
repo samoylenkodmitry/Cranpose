@@ -18,7 +18,7 @@ cranpose {
 
 android {
     namespace = "com.cranpose.isolated.demo"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "com.cranpose.isolated.demo"

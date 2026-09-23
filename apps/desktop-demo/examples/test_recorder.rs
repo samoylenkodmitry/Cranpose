@@ -7,7 +7,7 @@ fn main() {
     let recording_path = PathBuf::from("absent_gradient_area_recording.rs");
 
     println!("=== Recorder Test ===");
-    println!("Recording to: {:?}", recording_path);
+    println!("Recording to: {recording_path:?}");
     println!("Interact with the app, then close it.");
     println!("The recording will be saved automatically.\n");
 

@@ -81,9 +81,9 @@ pub fn find_word_boundaries(text: &str, pos: usize) -> (usize, usize) {
 
     let is_word_char = |c: char| c.is_alphanumeric() || c == '_';
 
-    if char_at_pos.map(|c| !is_word_char(c)).unwrap_or(true) {
+    if char_at_pos.is_none_or(|c| !is_word_char(c)) {
         let char_before = text[..pos].chars().last();
-        if char_before.map(|c| !is_word_char(c)).unwrap_or(true) {
+        if char_before.is_none_or(|c| !is_word_char(c)) {
             return (pos, pos);
         }
     }

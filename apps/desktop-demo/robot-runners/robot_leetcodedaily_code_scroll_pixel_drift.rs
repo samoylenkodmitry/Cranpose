@@ -39,7 +39,7 @@ const TARGET_MAX_CENTER_Y: f32 = 430.0;
 const CAPTURE_SCALE: f32 = 1.0;
 const RENDER_STATS_ENV: &str = "CRANPOSE_LEETCODEDAILY_CODE_SCROLL_RENDER_STATS";
 
-const KOTLIN_CODE: &str = r#"class Solution {
+const KOTLIN_CODE: &str = r"class Solution {
     fun countGood(nums: IntArray, k: Int): Long {
         var left = 0
         var pairs = 0L
@@ -63,9 +63,9 @@ const KOTLIN_CODE: &str = r#"class Solution {
 
         return answer
     }
-}"#;
+}";
 
-const RUST_CODE: &str = r#"impl Solution {
+const RUST_CODE: &str = r"impl Solution {
     pub fn count_good(nums: Vec<i32>, k: i32) -> i64 {
         let mut left = 0usize;
         let mut pairs = 0i64;
@@ -91,7 +91,7 @@ const RUST_CODE: &str = r#"impl Solution {
 
         answer
     }
-}"#;
+}";
 
 fn primary_text() -> Color {
     Color::from_rgb_u8(236, 242, 255)
@@ -197,7 +197,6 @@ enum CodeLanguage {
     Rust,
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn Pill(text: &'static str) {
     Text(
@@ -210,7 +209,6 @@ fn Pill(text: &'static str) {
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn ActionButton(label: &'static str) {
     Button(
@@ -228,7 +226,6 @@ fn ActionButton(label: &'static str) {
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn CodeField(
     label: &'static str,
@@ -335,7 +332,6 @@ fn CodeField(
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn SummaryCard() {
     ComposeBox(
@@ -373,7 +369,6 @@ fn SummaryCard() {
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn WriteupCard() {
     ComposeBox(
@@ -401,7 +396,6 @@ fn WriteupCard() {
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn CodeCard() {
     let kotlin_state =
@@ -434,7 +428,6 @@ fn CodeCard() {
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn LeetcodeDailyCodeScrollApp() {
     let scroll_state =

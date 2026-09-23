@@ -377,7 +377,7 @@ fn lazy_column_variable_height_reverse_scroll_keeps_rendered_items_ordered() {
                         ColumnSpec::default(),
                         move || {
                             Text(
-                                format!("Item {}", index),
+                                format!("Item {index}"),
                                 Modifier::empty(),
                                 TextStyle::default(),
                             );
@@ -447,7 +447,7 @@ fn lazy_column_content_type_reuse_reverse_scroll_keeps_rendered_items_ordered() 
                             ColumnSpec::default(),
                             move || {
                                 Text(
-                                    format!("Item {}", index),
+                                    format!("Item {index}"),
                                     Modifier::empty(),
                                     TextStyle::default(),
                                 );
@@ -521,7 +521,7 @@ fn lazy_column_variable_height_bursty_reverse_scroll_keeps_rendered_items_ordere
                             ColumnSpec::default(),
                             move || {
                                 Text(
-                                    format!("Item {}", index),
+                                    format!("Item {index}"),
                                     Modifier::empty(),
                                     TextStyle::default(),
                                 );
@@ -673,8 +673,7 @@ fn lazy_column_tall_text_item_keeps_rendered_height_in_sync_with_lazy_measuremen
     );
     assert!(
         (rendered_gap - 12.0).abs() < 1.0,
-        "expected only list spacing between first and second items, got gap {:.1}px",
-        rendered_gap
+        "expected only list spacing between first and second items, got gap {rendered_gap:.1}px"
     );
 }
 

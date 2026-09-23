@@ -15,10 +15,12 @@ impl Modifier {
         self.then(modifier)
     }
 
+    #[expect(non_snake_case)]
     pub fn columnWeight(self, weight: f32, fill: bool) -> Self {
         self.weight_with_fill(weight, fill)
     }
 
+    #[expect(non_snake_case)]
     pub fn rowWeight(self, weight: f32, fill: bool) -> Self {
         self.weight_with_fill(weight, fill)
     }

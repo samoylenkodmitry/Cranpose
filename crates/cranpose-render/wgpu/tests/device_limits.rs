@@ -15,15 +15,7 @@ use cranpose_ui_graphics::{Color, GraphicsLayer, Rect};
 use support::solid_rect;
 
 fn downlevel_uniform_renderer() -> Result<(WgpuRenderer, Arc<wgpu::Device>), String> {
-    let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
-    instance_descriptor.backends = wgpu::Backends::all();
-    let instance = wgpu::Instance::new(instance_descriptor);
-    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-        power_preference: wgpu::PowerPreference::LowPower,
-        compatible_surface: None,
-        force_fallback_adapter: false,
-    }))
-    .map_err(|err| format!("adapter request failed: {err:?}"))?;
+    let adapter = support::device::headless_adapter(wgpu::Backends::all())?;
     let required_limits = wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits());
     assert_eq!(
         required_limits.max_uniform_buffer_binding_size, 16384,

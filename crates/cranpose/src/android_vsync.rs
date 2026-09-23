@@ -3,7 +3,7 @@
 use std::{
     ffi::c_void,
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, PoisonError,
         atomic::{AtomicBool, Ordering},
     },
 };
@@ -17,16 +17,14 @@ static WAKER: Mutex<Option<Arc<dyn Fn() + Send + Sync>>> = Mutex::new(None);
 pub(crate) fn install_waker(waker: impl Fn() + Send + Sync + 'static) {
     CALLBACK_POSTED.store(false, Ordering::Release);
     UNAVAILABLE.store(false, Ordering::Release);
-    *WAKER
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(Arc::new(waker));
+    *WAKER.lock().unwrap_or_else(PoisonError::into_inner) = Some(Arc::new(waker));
 }
 
 pub(crate) fn request_wake_at_next_vsync() -> bool {
     if UNAVAILABLE.load(Ordering::Relaxed)
         || WAKER
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .unwrap_or_else(PoisonError::into_inner)
             .is_none()
     {
         return false;
@@ -65,10 +63,7 @@ unsafe extern "C" fn on_vsync(frame_time_ns: i64, _data: *mut c_void) {
             VSYNC_PERIOD_NS.store(delta, Ordering::Relaxed);
         }
     }
-    let waker = WAKER
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .clone();
+    let waker = WAKER.lock().unwrap_or_else(PoisonError::into_inner).clone();
     if let Some(waker) = waker {
         waker();
     }

@@ -182,7 +182,7 @@ fn lazy_edge_drag_updates_shared_effect() {
         let handle = composition.runtime_handle();
         {
             let mut applier = composition.applier_mut();
-            applier.set_runtime_handle(handle.clone());
+            applier.set_runtime_handle(handle);
             applier
                 .compute_layout(
                     root,
@@ -904,7 +904,7 @@ fn lazy_wheel_scroll_preserves_input_delta_after_viewport_measurement() {
             let handle = composition.runtime_handle();
             {
                 let mut applier = composition.applier_mut();
-                applier.set_runtime_handle(handle.clone());
+                applier.set_runtime_handle(handle);
                 let _ = applier
                     .compute_layout(
                         root,

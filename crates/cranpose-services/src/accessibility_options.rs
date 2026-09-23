@@ -84,7 +84,7 @@ pub fn set_platform_accessibility_options(options: AccessibilityOptions) -> bool
 
 /// What the platform last reported.
 pub fn platform_accessibility_options() -> AccessibilityOptions {
-    PLATFORM_ACCESSIBILITY_OPTIONS.with(|cell| cell.get())
+    PLATFORM_ACCESSIBILITY_OPTIONS.with(Cell::get)
 }
 
 /// The options a composable reads: what the platform reported, unless a
@@ -105,7 +105,6 @@ pub fn local_accessibility_options() -> CompositionLocal<AccessibilityOptions> {
 
 /// Gives the content below it fixed options, for a preview or a test that
 /// wants to see the app with larger text, no motion or more contrast.
-#[allow(non_snake_case)]
 #[composable]
 pub fn ProvideAccessibilityOptions(options: AccessibilityOptions, content: impl FnOnce()) {
     let provided = local_accessibility_options().provides(options.normalized());

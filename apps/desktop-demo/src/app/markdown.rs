@@ -424,8 +424,7 @@ fn split_large_text_block(annotated: &AnnotatedString, out: &mut Vec<MarkdownBlo
             end = text[start..]
                 .char_indices()
                 .nth(1)
-                .map(|(offset, _)| start + offset)
-                .unwrap_or(text.len());
+                .map_or(text.len(), |(offset, _)| start + offset);
         } else if end < text.len() {
             let split_window = &text[start..end];
             if let Some(rel_newline) = split_window.rfind('\n') {
@@ -462,7 +461,6 @@ async fn fetch_markdown(client: &HttpClientRef, url: &str) -> Result<String, Str
 const DEFAULT_URL: &str =
     "https://raw.githubusercontent.com/samoylenkodmitry/s-a--m.github.io/refs/heads/master/_leetcode_source/2023-07-14-leetcode_daily.md";
 
-#[allow(non_snake_case)]
 #[composable]
 pub fn markdown_viewer_tab() {
     let url_state = cranpose_core::remember(|| TextFieldState::new(DEFAULT_URL)).with(|s| *s);
@@ -632,7 +630,6 @@ pub fn markdown_viewer_tab() {
 pub const MARKDOWN_SCROLL_STABILITY_TARGET_TEXT: &str =
     "Stability paragraph 032 keeps glyphs, background cards, and links moving as one rigid surface.";
 
-#[allow(non_snake_case)]
 #[composable]
 pub fn MarkdownScrollStabilityFixtureTab() {
     let blocks = cranpose_core::remember(|| {
@@ -657,14 +654,12 @@ pub fn MarkdownScrollStabilityFixtureTab() {
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 pub fn MarkdownScrollStressFixtureTab() {
     let list_state = rememberLazyListState();
     MarkdownScrollStressFixtureTabWithState(list_state);
 }
 
-#[allow(non_snake_case)]
 #[composable]
 pub fn MarkdownScrollStressFixtureTabWithState(
     list_state: cranpose_foundation::lazy::LazyListState,
@@ -743,7 +738,6 @@ const MARKDOWN_SCROLLBAR_RAIL_WIDTH: f32 = 16.0;
 const MARKDOWN_SCROLLBAR_THUMB_WIDTH: f32 = 8.0;
 const MARKDOWN_SCROLLBAR_MIN_THUMB_HEIGHT: f32 = 32.0;
 
-#[allow(non_snake_case)]
 #[composable]
 fn MarkdownBlocksList(
     list_state: cranpose_foundation::lazy::LazyListState,
@@ -761,7 +755,7 @@ fn MarkdownBlocksList(
         spec,
         move |scope| {
             use cranpose_foundation::lazy::LazyListScopeExt;
-            scope.items_indexed_rc(blocks.clone(), |_index, block| match block {
+            scope.items_indexed_rc(blocks, |_index, block| match block {
                 MarkdownBlock::Text(annotated) => render_text_block(annotated.clone()),
                 MarkdownBlock::Image { url, alt } => {
                     MarkdownImage(url.clone(), alt.clone());
@@ -782,32 +776,28 @@ fn markdown_scrollbar_style() -> LazyScrollbarStyle {
     }
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn render_markdown_blocks(blocks: Rc<[MarkdownBlock]>) {
     let list_state = rememberLazyListState();
     render_markdown_blocks_with_state(blocks, list_state);
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn render_markdown_blocks_with_state(
     blocks: Rc<[MarkdownBlock]>,
     list_state: cranpose_foundation::lazy::LazyListState,
 ) {
-    let blocks_for_list = blocks.clone();
     LazyListWithScrollbar(
         Modifier::empty().fill_max_size(),
         list_state,
         "MarkdownScrollbarRail",
         markdown_scrollbar_style(),
         move || {
-            MarkdownBlocksList(list_state, blocks_for_list.clone());
+            MarkdownBlocksList(list_state, blocks.clone());
         },
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn render_text_block(annotated: Rc<AnnotatedString>) {
     let text_style = TextStyle {
@@ -907,7 +897,6 @@ enum ImageState {
 /// any explicit visibility test, is what makes the fetch lazy. The slot keeps
 /// a fixed height whether or not the bitmap has arrived, so a late image
 /// cannot shift the rows the reader is looking at.
-#[allow(non_snake_case)]
 #[composable]
 fn MarkdownImage(url: String, alt: String) {
     let cached = cached_image(&url);
@@ -918,7 +907,7 @@ fn MarkdownImage(url: String, alt: String) {
     let http_client = local_http_client().current();
 
     let effect_url = url.clone();
-    cranpose_core::LaunchedEffect(url.clone(), move |scope| {
+    cranpose_core::LaunchedEffect(url, move |scope| {
         if let Some(bitmap) = cached_image(&effect_url) {
             state.set(ImageState::Ready(bitmap));
             return;
@@ -1002,7 +991,6 @@ fn placeholder_text_style(color: Color) -> TextStyle {
     }
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn render_rule() {
     Spacer(Size {

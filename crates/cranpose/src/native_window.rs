@@ -389,7 +389,6 @@ impl WindowState {
 }
 
 /// Remembers native-window position and size across recompositions.
-#[allow(non_snake_case)]
 #[composable]
 #[track_caller]
 pub fn rememberWindowState(width: f32, height: f32) -> WindowState {
@@ -398,7 +397,6 @@ pub fn rememberWindowState(width: f32, height: f32) -> WindowState {
 
 /// Remembers native-window position and size across recompositions, with the
 /// window first placed at the given screen position.
-#[allow(non_snake_case)]
 #[composable]
 #[track_caller]
 pub fn rememberWindowStateAt(x: f32, y: f32, width: f32, height: f32) -> WindowState {

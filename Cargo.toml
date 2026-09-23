@@ -101,10 +101,31 @@ dbg_macro = "deny"
 clone_on_copy = "deny"
 redundant_locals = "deny"
 
-[patch.crates-io]
-# Upstream master moved on to hashbrown 0.17. Pin the 0.16 alignment commit so
-# WGPU 29 and gpu-descriptor share one hashbrown/foldhash version family.
-gpu-descriptor = { git = "https://github.com/zakarumych/gpu-descriptor", rev = "79804e422186805f1ff5ab3d8310c07c145a6731" }
+# Work the code asks for and then throws away: a clone nobody needed, a default
+# computed on the path that does not use it, a copy spelled as a clone, a fresh
+# allocation where the destination's could be reused. A clone is only ever
+# redundant here because no API keeps a caller's handle alive for it: whatever
+# a registry needs, it owns. `needless_collect` and `iter_with_drain` stay off:
+# a collect ends a RefCell borrow before re-entrant calls, and `drain(..)`
+# keeps a scratch buffer's capacity.
+redundant_clone = "warn"
+or_fun_call = "warn"
+cloned_instead_of_copied = "warn"
+assigning_clones = "warn"
+
+# One spelling for each shape, so a reader does not decode two forms of the
+# same thing. None of these changes a float result, so pictures stay exact.
+uninlined_format_args = "warn"
+redundant_closure_for_method_calls = "warn"
+map_unwrap_or = "warn"
+semicolon_if_nothing_returned = "warn"
+manual_let_else = "warn"
+unnested_or_patterns = "warn"
+explicit_iter_loop = "warn"
+ignored_unit_patterns = "warn"
+needless_raw_string_hashes = "warn"
+elidable_lifetime_names = "warn"
+manual_assert = "warn"
 
 # Faster local debug builds while preserving useful panic locations.
 [profile.dev]
@@ -113,8 +134,14 @@ debug = "line-tables-only"
 [profile.dev.package."*"]
 debug = false
 
+# Proc macros re-run over every composable each time the crate using them
+# rebuilds; they are not incremental. Optimising them (and build scripts)
+# halved an incremental `cargo check -p desktop-app` on samarch-1 (median
+# 6.2 s -> 3.1 s after touching desktop-demo or cranpose-ui), for a one-time
+# 15 s on a cold target directory while syn and friends build optimised.
 [profile.dev.build-override]
 debug = false
+opt-level = 3
 
 # A debug-mode graphics and decoding stack changes what a dev build feels like:
 # these are the crates that run per frame or per asset, not per build. They are

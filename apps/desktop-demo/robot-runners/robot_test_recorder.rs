@@ -10,7 +10,7 @@ fn main() {
     let recording_path = output_paths::diagnostic_path("robot_recording_test.rs");
 
     println!("=== Robot Recorder Test ===");
-    println!("Recording to: {:?}\n", recording_path);
+    println!("Recording to: {recording_path:?}\n");
 
     robot_launch::launch("Robot Recorder Test", 800, 600)
         .with_recording(&recording_path)
