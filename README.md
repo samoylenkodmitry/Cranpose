@@ -189,6 +189,19 @@ cargo xtask bundle-macos \
 Pass `--resources <dir>` to copy resources into `Contents/Resources`, and
 `--sign-identity <id>` to run the explicit codesign step.
 
+On Windows, a release build opens no terminal window when `main.rs` starts
+with the attribute the demos carry:
+
+```rust
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+```
+
+The attribute belongs to the binary, so the framework cannot set it for an
+application; a debug build keeps its terminal for the log. Helper programs the
+framework runs, such as the registry reads for the theme, start without a
+window of their own, and `cranpose_services::windowless_command` starts an
+application's own the same way.
+
 ### Android
 
 ```bash

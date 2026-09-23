@@ -19,6 +19,14 @@
 //! when no X display is reachable; `env -u DISPLAY` selects Wayland for a
 //! single run.
 //!
+//! On Windows a release build is a GUI program when its `main.rs` starts with
+//! `#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]`;
+//! without it Windows opens a terminal window beside the application. The
+//! attribute belongs to the binary, so the framework cannot set it. Helper
+//! programs the framework runs start without a window of their own, and
+//! `cranpose_services::windowless_command` starts an application's own the
+//! same way, so none flashes a terminal on screen.
+//!
 //! `renderer-wgpu-gles` adds a GL/GLES fallback for machines without a working
 //! Vulkan driver; Android enables it on its own. `renderer-pixels` is the
 //! software renderer.

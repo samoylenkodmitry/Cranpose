@@ -18,6 +18,8 @@ pub mod file_picker;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod github_release_updater;
 pub mod haptics;
+#[cfg(not(target_arch = "wasm32"))]
+mod helper_process;
 pub mod host;
 pub mod host_surface;
 pub mod http;
@@ -116,6 +118,8 @@ pub use haptics::{
     HapticEffect, HapticError, HapticFeedback, HapticPattern, Haptics, HapticsRef, ProvideHaptics,
     clear_platform_haptics, default_haptics, local_haptics, set_platform_haptics,
 };
+#[cfg(not(target_arch = "wasm32"))]
+pub use helper_process::windowless_command;
 pub use host::{
     DEFAULT_DURABLE_SAVE_DEADLINE, DurableSaveEffect, DurableSaveOutcome, DurableSaveRegistration,
     HostController, HostControllerRef, LifecycleEvent, LifecycleObserver, LifecycleState,

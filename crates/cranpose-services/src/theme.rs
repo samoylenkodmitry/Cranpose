@@ -1,11 +1,4 @@
 use std::cell::{Cell, RefCell};
-#[cfg(all(
-    not(target_arch = "wasm32"),
-    not(target_os = "android"),
-    not(target_os = "ios"),
-    feature = "system-theme"
-))]
-use std::process::Command;
 
 use cranpose_core::{CompositionLocal, CompositionLocalProvider, compositionLocalOf};
 use cranpose_macros::composable;
@@ -196,7 +189,10 @@ fn detect_platform_theme() -> Option<SystemTheme> {
     feature = "system-theme"
 ))]
 fn command_stdout(program: &str, args: &[&str]) -> Option<String> {
-    let output = Command::new(program).args(args).output().ok()?;
+    let output = crate::windowless_command(program)
+        .args(args)
+        .output()
+        .ok()?;
     if !output.status.success() {
         return None;
     }

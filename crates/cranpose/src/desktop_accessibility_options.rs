@@ -5,10 +5,7 @@
 //! environment variable sets any of them for a test or a desktop with none
 //! of the three.
 
-use std::{
-    process::Command,
-    sync::{Arc, Mutex},
-};
+use std::sync::{Arc, Mutex};
 
 use cranpose_app_shell::AppShell;
 use cranpose_render_common::Renderer;
@@ -125,7 +122,10 @@ pub(crate) fn number_in(value: &str) -> Option<f32> {
 /// The text a settings tool prints, or nothing when the tool is absent or
 /// the key unset.
 fn output_of(program: &str, args: &[&str]) -> Option<String> {
-    let output = Command::new(program).args(args).output().ok()?;
+    let output = cranpose_services::windowless_command(program)
+        .args(args)
+        .output()
+        .ok()?;
     output
         .status
         .success()
