@@ -160,7 +160,7 @@ fn window_options() -> crate::native_window::NativeWindowOptions {
 #[test]
 fn a_window_that_must_not_take_focus_comes_up_inactive() {
     assert!(
-        !super::native_window_attributes(&window_options(), false, false).active,
+        !super::native_window_attributes(&window_options(), false, false, None).active,
         "a window that comes up key steals the press the focused window is \
          holding, and the gesture it was in the middle of is cancelled"
     );
@@ -168,7 +168,36 @@ fn a_window_that_must_not_take_focus_comes_up_inactive() {
 
 #[test]
 fn a_window_that_may_take_focus_comes_up_active() {
-    assert!(super::native_window_attributes(&window_options(), false, true).active);
+    assert!(super::native_window_attributes(&window_options(), false, true, None).active);
+}
+
+fn opaque_icon() -> cranpose_ui::ImageBitmap {
+    cranpose_ui::ImageBitmap::from_rgba8(2, 2, vec![200; 16]).expect("a 2x2 bitmap")
+}
+
+#[test]
+fn a_window_icon_becomes_a_winit_icon() {
+    assert!(super::winit_window_icon(&opaque_icon()).is_some());
+}
+
+#[test]
+fn every_native_window_carries_the_application_window_icon() {
+    let icon = super::winit_window_icon(&opaque_icon()).expect("the bitmap converts");
+    let attributes = super::native_window_attributes(&window_options(), false, true, Some(&icon));
+
+    assert!(
+        attributes.window_icon.is_some(),
+        "a torn-out window with no icon shows the platform's blank one in the taskbar"
+    );
+}
+
+#[test]
+fn a_native_window_has_no_icon_when_the_application_names_none() {
+    assert!(
+        super::native_window_attributes(&window_options(), false, true, None)
+            .window_icon
+            .is_none()
+    );
 }
 
 #[test]

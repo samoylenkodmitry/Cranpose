@@ -22,6 +22,7 @@ use winit::{
     dpi::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize, Position},
     event::{ButtonSource, ElementState, MouseButton, WindowEvent},
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy},
+    icon::{Icon, RgbaIcon},
     window::{ResizeDirection, Window, WindowAttributes, WindowId as WinitWindowId, WindowLevel},
 };
 
@@ -600,6 +601,7 @@ fn native_surface<'a>(
 
 struct App {
     settings: AppSettings,
+    window_icon: Option<Icon>,
     platform_env: Rc<crate::platform_env::PlatformEnvironment>,
     content: Option<Box<dyn FnMut()>>,
     window: Option<Arc<dyn Window>>,
@@ -661,6 +663,7 @@ impl App {
         #[cfg(feature = "robot")]
         let robot_app_hook = settings.robot_app_hook.take();
         let applied_frame_pacing_mode = settings.frame_pacing_mode;
+        let window_icon = settings.window_icon.as_ref().and_then(winit_window_icon);
 
         let platform_env = crate::platform_env::PlatformEnvironment::new();
         let env_for_content = Rc::clone(&platform_env);
@@ -669,6 +672,7 @@ impl App {
 
         Self {
             settings,
+            window_icon,
             platform_env,
             content: Some(Box::new(content)),
             window: None,
@@ -1207,6 +1211,7 @@ impl App {
                 request,
                 self.settings.headless,
                 anything_focused,
+                self.window_icon.as_ref(),
             ) {
                 Ok(shell) => native_window_shells.push(shell),
                 Err(error) => {
@@ -1488,6 +1493,7 @@ impl App {
         request: NativeWindowRequest,
         headless: bool,
         anything_focused: bool,
+        window_icon: Option<&Icon>,
     ) -> Result<NativeWindowShell, LaunchError> {
         let create_started = Instant::now();
         let options = &request.options;
@@ -1495,6 +1501,7 @@ impl App {
             options,
             headless,
             a_new_window_comes_up_key(headless, options.visible, anything_focused, options.focus),
+            window_icon,
         );
 
         let window: Arc<dyn Window> = event_loop
@@ -3581,14 +3588,26 @@ fn native_window_polling_drag_pointer(
     start_pointer_screen.or(global.map(|global| global.position))
 }
 
+fn winit_window_icon(bitmap: &cranpose_ui::ImageBitmap) -> Option<Icon> {
+    match RgbaIcon::new(bitmap.pixels().to_vec(), bitmap.width(), bitmap.height()) {
+        Ok(icon) => Some(icon.into()),
+        Err(error) => {
+            log::warn!("cranpose: the window icon is unusable: {error}");
+            None
+        }
+    }
+}
+
 fn native_window_attributes(
     options: &NativeWindowOptions,
     headless: bool,
     active: bool,
+    window_icon: Option<&Icon>,
 ) -> WindowAttributes {
     let mut attributes = WindowAttributes::default()
         .with_active(active)
         .with_title(options.title.clone())
+        .with_window_icon(window_icon.cloned())
         .with_surface_size(LogicalSize::new(
             options.width.max(1.0) as f64,
             options.height.max(1.0) as f64,
@@ -5065,6 +5084,7 @@ impl ApplicationHandler for App {
         let window: Arc<dyn Window> = match event_loop.create_window(
             WindowAttributes::default()
                 .with_title(self.settings.window_title.clone())
+                .with_window_icon(self.window_icon.clone())
                 .with_surface_size(LogicalSize::new(
                     initial_width as f64,
                     initial_height as f64,
