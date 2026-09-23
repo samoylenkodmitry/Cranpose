@@ -488,7 +488,6 @@ struct TransitionAnimationState<T: Lerp + Clone + PartialEq + 'static> {
     start_on_next_frame: Cell<bool>,
     play_time_offset_nanos: Cell<u64>,
     subscriber_callback_installed: Cell<bool>,
-    subscriber_callback: RefCell<Option<Rc<dyn Fn()>>>,
 }
 
 impl<T: Lerp + Clone + PartialEq + 'static> TransitionAnimationState<T> {
@@ -509,7 +508,6 @@ impl<T: Lerp + Clone + PartialEq + 'static> TransitionAnimationState<T> {
             start_on_next_frame: Cell::new(true),
             play_time_offset_nanos: Cell::new(0),
             subscriber_callback_installed: Cell::new(false),
-            subscriber_callback: RefCell::new(None),
         }
     }
 
@@ -550,11 +548,8 @@ impl<T: Lerp + Clone + PartialEq + 'static> TransitionAnimationState<T> {
         compute_repeatable_value(local_play_time, &initial, &target, spec)
     }
 
-    fn install_subscriber_callback(&self, callback: Rc<dyn Fn()>) {
+    fn install_subscriber_callback(&self, callback: impl Fn() + 'static) {
         if !self.subscriber_callback_installed.replace(true) {
-            self.subscriber_callback
-                .borrow_mut()
-                .replace(callback.clone());
             self.value_state.as_state().on_subscriber(callback);
         }
     }
@@ -737,11 +732,11 @@ impl InfiniteTransition {
         let animation_any: Rc<dyn InfiniteTransitionAnimation> = animation_state.clone();
         let transition_inner = Rc::clone(&self.inner);
         let transition_for_subscriber = Rc::downgrade(&transition_inner);
-        animation_state.install_subscriber_callback(Rc::new(move || {
+        animation_state.install_subscriber_callback(move || {
             if let Some(transition) = transition_for_subscriber.upgrade() {
                 transition.request_restart();
             }
-        }));
+        });
         let animation_id = Rc::as_ptr(&animation_state) as usize;
         cranpose_core::__disposable_effect_impl(
             caller ^ cranpose_core::location_key(file!(), line!(), column!()),

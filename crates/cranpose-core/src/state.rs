@@ -502,7 +502,7 @@ pub(crate) struct SnapshotMutableState<T> {
     apply_observers: Mutex<Vec<Box<dyn Fn() + 'static>>>,
     read_observation_lease: Rc<()>,
     scope_observation_count: Cell<usize>,
-    subscriber_callbacks: RefCell<Vec<RcWeak<dyn Fn()>>>,
+    subscriber_callbacks: RefCell<Vec<Rc<dyn Fn()>>>,
 }
 
 impl<T> SnapshotMutableState<T> {
@@ -742,19 +742,12 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
     }
 
     fn subscriber_callback(&self, callback: Rc<dyn Fn()>, notify: bool) {
-        register_subscriber_callback(&self.subscriber_callbacks, &callback);
+        self.subscriber_callbacks
+            .borrow_mut()
+            .push(Rc::clone(&callback));
         if notify {
             callback();
         }
-        drop(callback);
-        self.subscriber_callbacks
-            .borrow_mut()
-            .retain(|callback| callback.upgrade().is_some());
-    }
-
-    #[cfg(test)]
-    fn subscriber_callback_count(&self) -> usize {
-        self.subscriber_callbacks.borrow().len()
     }
 
     fn notify_subscribers(&self) {
@@ -1119,41 +1112,13 @@ pub(crate) struct MutableStateInner<T: Clone + 'static> {
     state_id: Cell<Option<StateId>>,
 }
 
-fn notify_subscriber_callbacks(callbacks: &RefCell<Vec<RcWeak<dyn Fn()>>>) {
-    let callbacks_snapshot = std::mem::take(&mut *callbacks.borrow_mut());
-    let mut live = Vec::with_capacity(callbacks_snapshot.len());
-    for callback in callbacks_snapshot {
-        let Some(callback) = callback.upgrade() else {
-            continue;
-        };
-        callback();
-        live.push(callback);
-    }
-    let mut registered = callbacks.borrow_mut();
-    registered.retain(|callback| callback.upgrade().is_some());
-    for callback in live {
-        let callback = Rc::downgrade(&callback);
-        if !registered
-            .iter()
-            .any(|registered| registered.ptr_eq(&callback))
-        {
-            registered.push(callback);
+fn notify_subscriber_callbacks(callbacks: &RefCell<Vec<Rc<dyn Fn()>>>) {
+    let registered = callbacks.borrow().len();
+    for index in 0..registered {
+        let callback = callbacks.borrow().get(index).map(Rc::clone);
+        if let Some(callback) = callback {
+            callback();
         }
-    }
-}
-
-fn register_subscriber_callback(
-    callbacks: &RefCell<Vec<RcWeak<dyn Fn()>>>,
-    callback: &Rc<dyn Fn()>,
-) {
-    let callback_weak = Rc::downgrade(callback);
-    let mut callbacks = callbacks.borrow_mut();
-    callbacks.retain(|callback| callback.upgrade().is_some());
-    if !callbacks
-        .iter()
-        .any(|registered| registered.ptr_eq(&callback_weak))
-    {
-        callbacks.push(callback_weak);
     }
 }
 
@@ -1435,7 +1400,13 @@ impl<T: Clone + 'static> State<T> {
         self.with_inner(MutableStateInner::has_subscribers)
     }
 
-    pub fn on_subscriber(&self, callback: Rc<dyn Fn()>) {
+    /// Runs `callback` each time this state gains its first subscriber, and
+    /// right away when it already has one.
+    ///
+    /// The state owns `callback` for as long as the state lives, so nothing
+    /// has to be kept alive on the caller's side.
+    pub fn on_subscriber(&self, callback: impl Fn() + 'static) {
+        let callback: Rc<dyn Fn()> = Rc::new(callback);
         self.with_inner(|inner| {
             inner
                 .state
@@ -1639,11 +1610,6 @@ impl<T: Clone + 'static> MutableState<T> {
     #[cfg(test)]
     pub(crate) fn watcher_capacity(&self) -> usize {
         self.with_inner(|inner| inner.watchers.borrow().capacity())
-    }
-
-    #[cfg(test)]
-    pub(crate) fn subscriber_callback_count(&self) -> usize {
-        self.with_inner(|inner| inner.state.subscriber_callback_count())
     }
 
     #[cfg(test)]
