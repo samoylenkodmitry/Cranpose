@@ -35,9 +35,9 @@ cranpose-ui = { workspace = true }
 cranpose-core = { workspace = true }
 bytemuck = { workspace = true }
 log = "0.4"
-naga = { version = "29.0.3", features = ["wgsl-in"] }
+naga = { version = "29.0.4", features = ["wgsl-in"] }
 web-time = { workspace = true }
-smallvec = "1.15.1"
+smallvec = "1.16.1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # Substrate for the stage executor: vetted scoped parallelism so the frame
@@ -100,7 +100,7 @@ wgpu = { version = "29.0", default-features = false, features = [
 ] }
 # The WebGL fallback is always compiled on web, so runtime-shader GL
 # portability validation needs naga's GLSL writer there unconditionally.
-naga = { version = "29.0.3", features = ["wgsl-in", "glsl-out"] }
+naga = { version = "29.0.4", features = ["wgsl-in", "glsl-out"] }
 
 [dev-dependencies]
 # Path-only dev-deps: stripped from the published manifest (publish order ignores dev edges).
@@ -110,6 +110,6 @@ cranpose-macros = { path = "../../cranpose-macros" }
 # Unit tests exercise the embedded fallback font and GL portability validation
 # on every platform, independent of the production feature set.
 cranpose-render-common = { path = "../common", features = ["embedded-default-font"] }
-naga = { version = "29.0.3", features = ["wgsl-in", "glsl-out"] }
+naga = { version = "29.0.4", features = ["wgsl-in", "glsl-out"] }
 png = "0.18.1"
 pollster = "0.4.0"

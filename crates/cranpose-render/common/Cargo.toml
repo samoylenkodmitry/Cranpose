@@ -27,9 +27,9 @@ tiny-skia = { version = "0.11.4", default-features = false, features = ["std", "
 hyphenation = { version = "0.8.4", default-features = false, optional = true }
 ab_glyph = "0.2.32"
 log = "0.4"
-thiserror = "2.0.18"
+thiserror = "2.0.20"
 ttf-parser = "0.25.1"
-smallvec = "1.15.1"
+smallvec = "1.16.1"
 
 [features]
 default = ["embedded-default-font"]

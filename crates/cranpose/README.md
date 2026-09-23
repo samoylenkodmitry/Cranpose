@@ -71,7 +71,7 @@ cranpose {
 
 android {
     namespace = "com.example.myapp"
-    compileSdk = 36
+    compileSdk = 37
     defaultConfig {
         applicationId = "com.example.myapp"
         minSdk = 24

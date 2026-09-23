@@ -242,7 +242,7 @@ cranpose-capabilities = { workspace = true }
 cranpose-liquid = { workspace = true }
 cranpose-services = { workspace = true, default-features = false }
 cranpose-storekit = { workspace = true, default-features = false, optional = true }
-thiserror = "2.0.18"
+thiserror = "2.0.20"
 web-time = { workspace = true }
 cranpose-render-common.workspace = true
 raw-window-handle = "0.6"

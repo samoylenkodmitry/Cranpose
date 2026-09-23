@@ -217,10 +217,10 @@ fn ci_architecture_budget_runs_required_gates() {
         "Android CI should install only required SDK packages instead of running the broad setup-android action"
     );
     assert!(
-        heavy_workflow.contains("ANDROID_NDK_HOME=$sdk_root/ndk/27.0.12077973")
-            && heavy_workflow.contains("sdkmanager \"ndk;27.0.12077973\"")
+        heavy_workflow.contains("ANDROID_NDK_HOME=$sdk_root/ndk/30.0.16248370")
+            && heavy_workflow.contains("sdkmanager \"ndk;30.0.16248370\"")
             && heavy_workflow.contains("test -f \"$ANDROID_NDK_HOME/source.properties\"")
-            && release_workflow.contains("bash scripts/ci/install_android_ndk.sh 27.0.12077973"),
+            && release_workflow.contains("bash scripts/ci/install_android_ndk.sh 30.0.16248370"),
         "self-hosted Android CI and hosted release builds should provision and validate the pinned NDK"
     );
 }
