@@ -134,7 +134,6 @@ fn initial_tint_amount() -> GlassTintAmount {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn TintControls(amount: cranpose_core::MutableState<GlassTintAmount>, top: f32) {
     let style = TextStyle {
         span_style: SpanStyle {
@@ -173,7 +172,6 @@ fn TintControls(amount: cranpose_core::MutableState<GlassTintAmount>, top: f32) 
 }
 
 #[composable]
-#[allow(non_snake_case)]
 pub(crate) fn LiquidTabReference(checkerboard: bool, dark: bool) {
     let scheme = if dark {
         SchemeMode::Dark
@@ -353,7 +351,6 @@ async fn record_pointer(scope: PointerInputScope) {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn RecordingOverlay() {
     let pulse = rememberMutableStateOf(|| 0u64);
     cranpose_core::LaunchedEffectAsync((), move |scope| {

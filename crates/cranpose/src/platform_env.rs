@@ -56,7 +56,6 @@ impl PlatformEnvironment {
 /// reads the popup registry's revision; read from the root scope, every popup
 /// that opened would recompose the whole app, which registers the popup again
 /// and bumps the revision again, with no end.
-#[allow(non_snake_case)]
 #[composable]
 fn RootBackHandler() {
     let modal_open = cranpose_ui::modal_depth() > 0;

@@ -3,7 +3,6 @@ use cranpose::{
     TextStyle,
 };
 
-#[allow(non_snake_case)]
 #[composable]
 pub fn AccessibilityNavigationScreen() {
     let settings = rememberMutableStateOf(|| false);

@@ -38,7 +38,6 @@ fn chain_glass_effect(rect_width: f32, rect_height: f32, tint: Color) -> RenderE
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn ScrollRow(index: usize) {
     let fill = match index % 4 {
         0 => Color(0.85, 0.25, 0.25, 1.0),
@@ -58,7 +57,6 @@ fn ScrollRow(index: usize) {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn ShadowedScrollRow(index: usize) {
     let fill = match index % 4 {
         0 => Color(0.85, 0.25, 0.25, 1.0),
@@ -79,7 +77,6 @@ fn ShadowedScrollRow(index: usize) {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn FixedGlassScene(
     list_state: LazyListState,
     glass_count: usize,
@@ -373,7 +370,6 @@ fn an_overlapping_capture_still_sees_the_glass_below_it() {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn DeferredContentUnderGlass(overlap: bool, span_both: bool, strategy: CompositingStrategy) {
     Box(
         Modifier::empty()
@@ -518,7 +514,6 @@ fn a_capture_never_splits_the_frames_final_pass() {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn ShadowedGlassAfterAnotherGlass() {
     Box(
         Modifier::empty()
@@ -595,7 +590,6 @@ const SHADOWED_CARD_TOP: f32 = 40.0;
 const SHADOWED_CARD_HEIGHT: f32 = 100.0;
 
 #[composable]
-#[allow(non_snake_case)]
 fn ShadowedGlassColumn(shadowed: bool, scroll: f32) {
     Box(
         Modifier::empty()
@@ -707,7 +701,6 @@ enum SpreadBoxes {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn SpreadContentUnderGlass(boxes: SpreadBoxes) {
     Box(
         Modifier::empty()

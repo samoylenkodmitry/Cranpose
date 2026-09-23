@@ -1194,7 +1194,6 @@ impl UiIcon {
     }
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn LeetcodeDailyFullLayoutApp() {
     let scroll_state = remember(|| ScrollState::new(0.0)).with(|state| *state);
@@ -1428,7 +1427,6 @@ fn LeetcodeDailyFullLayoutApp() {
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn ButtonQualityReferenceFixture(
     tag: &'static str,
@@ -1473,7 +1471,6 @@ fn reference_fixture_background(theme: ThemeMode) -> Color {
     }
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn GuidedWorkspace(
     fields: EditorFields,
@@ -1533,7 +1530,6 @@ fn GuidedWorkspace(
     MarkdownCard(markdown_preview, theme);
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn ActionsCard(
     fields: EditorFields,
@@ -1688,7 +1684,6 @@ fn ActionsCard(
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn HeaderBar(
     autosave_destination: String,
@@ -1726,7 +1721,6 @@ fn HeaderBar(
     }
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn HeaderTitle(autosave_destination: String, theme: ThemeMode, compact: bool) {
     Row(
@@ -1763,7 +1757,6 @@ fn HeaderTitle(autosave_destination: String, theme: ThemeMode, compact: bool) {
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn QuickActionsPanel(
     fields: EditorFields,
@@ -1808,7 +1801,6 @@ fn QuickActionsPanel(
     });
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn StatusStrip(message: String, theme: ThemeMode) {
     glass_panel(
@@ -1838,7 +1830,6 @@ fn StatusStrip(message: String, theme: ThemeMode) {
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn NextWorkPanel(
     next_item: NextWorkItem,
@@ -1928,7 +1919,6 @@ fn NextWorkPanel(
     });
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn InteractiveQueuePanel(
     queue: Vec<String>,
@@ -2010,7 +2000,6 @@ fn InteractiveQueuePanel(
     });
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn QueueCurrentRow(
     active_key: Option<String>,
@@ -2040,7 +2029,6 @@ fn QueueCurrentRow(
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn QueueCurrentEditorField(
     field: EditorFieldId,
@@ -2108,7 +2096,6 @@ fn QueueCurrentEditorField(
     }
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn InteractiveQueueChip(
     item_key: String,
@@ -2172,7 +2159,6 @@ fn InteractiveQueueChip(
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn interactive_queue_content(
     icon: UiIcon,
@@ -2208,7 +2194,6 @@ fn interactive_queue_content(
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn ActionButtons(
     fields: EditorFields,
@@ -2269,7 +2254,6 @@ fn ActionButtons(
     });
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn ActionButton(
     action: ActionButtonId,
@@ -2304,7 +2288,6 @@ fn ActionButton(
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn focus_action_button(
     action: ActionButtonId,
@@ -2725,7 +2708,6 @@ fn ordered_fields(defaults: &[EditorFieldId], preferences: &UiPreferences) -> Ve
     fields
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn PreviewCard(
     preview_state: MutableState<PreviewState>,
@@ -2776,7 +2758,6 @@ fn PreviewCard(
     });
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn ComposePreviewCard(
     compose_preview_state: MutableState<PreviewState>,
@@ -2839,7 +2820,6 @@ fn ComposePreviewCard(
     });
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn MarkdownCard(markdown_preview: String, theme: ThemeMode) {
     section_card(theme, {
@@ -2879,7 +2859,6 @@ fn MarkdownCard(markdown_preview: String, theme: ThemeMode) {
     });
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn ProblemMetaCard(
     fields: EditorFields,
@@ -2974,7 +2953,6 @@ fn ProblemMetaCard(
     });
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn MetaFieldColumn(
     field_ids: Vec<EditorFieldId>,
@@ -3010,7 +2988,6 @@ fn MetaFieldColumn(
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn WriteupCard(
     fields: EditorFields,
@@ -3054,7 +3031,6 @@ fn WriteupCard(
     });
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn CodeCard(
     fields: EditorFields,
@@ -3098,7 +3074,6 @@ fn CodeCard(
     });
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn EditorField(
     field: EditorFieldId,
@@ -3346,7 +3321,6 @@ fn EditorField(
     }
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn ReferenceIcon(icon: UiIcon, size: Size, theme: ThemeMode, active: bool) {
     ComposeBox(
@@ -3365,7 +3339,6 @@ fn ReferenceIcon(icon: UiIcon, size: Size, theme: ThemeMode, active: bool) {
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn AppLogo() {
     ComposeBox(
@@ -3400,7 +3373,6 @@ fn AppLogo() {
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn SectionHeader(title: &'static str, icon: UiIcon, theme: ThemeMode) {
     Row(
@@ -3413,7 +3385,6 @@ fn SectionHeader(title: &'static str, icon: UiIcon, theme: ThemeMode) {
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn HeroTile(stage: WorkStage, theme: ThemeMode) {
     ComposeBox(
@@ -3445,7 +3416,6 @@ fn HeroTile(stage: WorkStage, theme: ThemeMode) {
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn FieldSuggestion(
     field: EditorFieldId,
@@ -3483,7 +3453,6 @@ fn FieldSuggestion(
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn StatusDot(ok: bool, theme: ThemeMode) {
     ComposeBox(
@@ -3510,7 +3479,6 @@ fn StatusDot(ok: bool, theme: ThemeMode) {
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn section_card(theme: ThemeMode, content: impl FnMut() + 'static) {
     let radius = 18.0;
@@ -3602,7 +3570,6 @@ fn draw_workspace_scroll_shadow(
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn glass_panel(
     modifier: Modifier,
@@ -3784,7 +3751,6 @@ fn glass_button_modifier_with_press(
         .rounded_corners(radius)
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn primary_button(
     icon: UiIcon,
@@ -3846,7 +3812,6 @@ fn primary_button(
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn subtle_button(
     label: String,
@@ -3886,7 +3851,6 @@ fn subtle_button(
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn theme_button(label: String, theme: ThemeMode, on_click: impl FnMut() + 'static) {
     Button(
@@ -3921,7 +3885,6 @@ fn theme_button(label: String, theme: ThemeMode, on_click: impl FnMut() + 'stati
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn button_content(
     icon: UiIcon,
@@ -3970,7 +3933,6 @@ fn button_content(
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn ButtonActivityIndicator(theme: ThemeMode, active: bool) {
     let indicator_width = if active {
@@ -4009,7 +3971,6 @@ fn ButtonActivityIndicator(theme: ThemeMode, active: bool) {
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn button_badge(count: u64, theme: ThemeMode) {
     ComposeBox(
@@ -4028,7 +3989,6 @@ fn button_badge(count: u64, theme: ThemeMode) {
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn labeled_field(
     label: &'static str,
@@ -4118,7 +4078,6 @@ fn labeled_field(
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn labeled_code_field(
     label: &'static str,
@@ -4207,7 +4166,6 @@ fn labeled_code_field(
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn field_action_buttons(
     label: &'static str,
@@ -4443,7 +4401,6 @@ fn draw_app_background<S: DrawScope + ?Sized>(scope: &mut S, theme: ThemeMode) {
     }
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn BottomListGapMask(theme: ThemeMode) {
     ComposeBox(

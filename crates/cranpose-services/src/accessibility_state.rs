@@ -55,7 +55,6 @@ pub fn local_accessibility_state() -> CompositionLocal<AccessibilityState> {
 
 /// Gives the content below it a fixed state, for a preview or a test that
 /// wants to see the app as a screen reader user does.
-#[allow(non_snake_case)]
 #[composable]
 pub fn ProvideAccessibilityState(state: AccessibilityState, content: impl FnOnce()) {
     let local = local_accessibility_state();

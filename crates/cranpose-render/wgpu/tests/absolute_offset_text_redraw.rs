@@ -14,7 +14,6 @@ const FRAME_WIDTH: u32 = 400;
 const FRAME_HEIGHT: u32 = 300;
 
 #[composable]
-#[allow(non_snake_case)]
 fn AbsoluteOffsetTextRedrawProbe(start: MutableState<i32>) {
     let style = TextStyle::from_span_style(SpanStyle {
         color: Some(Color(1.0, 0.78, 0.42, 1.0)),

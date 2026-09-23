@@ -26,8 +26,6 @@
 //! popup recomposes its own layer, keeping nested popups from invalidating
 //! their parents as their content changes.
 
-#![allow(non_snake_case)]
-
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,

@@ -16,7 +16,6 @@ const ROW_HEIGHT: f32 = 72.0;
 const ROW_GAP: f32 = 10.0;
 
 #[composable]
-#[allow(non_snake_case)]
 fn ColoredRow(index: usize) {
     let fill = match index % 4 {
         0 => Color(0.85, 0.25, 0.25, 1.0),

@@ -22,8 +22,6 @@
 //! finger covers the text line — dragging a handle by its dot below the line
 //! rises for every handle interaction (see [`loupe_target_for_drag`]).
 
-#![allow(non_snake_case)]
-
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,

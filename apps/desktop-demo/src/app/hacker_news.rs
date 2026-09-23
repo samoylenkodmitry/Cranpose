@@ -880,7 +880,6 @@ fn launch_load_more_comments(
     });
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn AutoLoadMore(
     list_state: cranpose_foundation::lazy::LazyListState,
@@ -915,7 +914,6 @@ fn AutoLoadMore(
     });
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn AutoLoadMoreComments(
     list_state: cranpose_foundation::lazy::LazyListState,
@@ -975,7 +973,6 @@ thread_local! {
 }
 
 #[cfg(test)]
-#[allow(non_snake_case)]
 #[composable]
 fn DebugScopeTag(name: &'static str) {
     cranpose_core::with_current_composer(|composer| {
@@ -987,7 +984,6 @@ fn DebugScopeTag(name: &'static str) {
     });
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn ActionButton<F>(label: String, background: Color, text_color: Color, on_click: F)
 where
@@ -1019,7 +1015,6 @@ fn hacker_news_scrollbar_style(palette: HackerNewsPalette) -> LazyScrollbarStyle
     }
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn StatusCard(
     modifier: Modifier,
@@ -1047,7 +1042,6 @@ fn StatusCard(
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn HackerNewsHeader<F1, F2, F3>(
     palette: HackerNewsPalette,
@@ -1172,7 +1166,6 @@ fn loading_skeleton_item(palette: HackerNewsPalette) {
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn StoryItem<F>(
     story: Story,
@@ -1307,7 +1300,6 @@ fn StoryItem<F>(
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn StoriesPane(
     modifier: Modifier,
@@ -1486,7 +1478,6 @@ fn StoriesPane(
     LAST_STORIES_PANE_NODE_ID.with(|slot| *slot.borrow_mut() = Some(_node_id));
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn StorySummaryCard(story: Story, palette: HackerNewsPalette) {
     let uri_handler = local_uri_handler().current();
@@ -1579,7 +1570,6 @@ fn StorySummaryCard(story: Story, palette: HackerNewsPalette) {
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn CommentRow(comment: CommentEntry, palette: HackerNewsPalette) {
     let indent = ((comment.depth as f32) * 18.0).min(90.0);
@@ -1632,7 +1622,6 @@ fn CommentRow(comment: CommentEntry, palette: HackerNewsPalette) {
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn CommentsFooter(
     data: CommentThreadData,
@@ -1686,7 +1675,6 @@ fn CommentsFooter(
     }
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn ThreadPane(
     modifier: Modifier,
@@ -1904,7 +1892,6 @@ fn ThreadPane(
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 pub fn HackerNewsTab() {
     #[cfg(test)]
@@ -2103,7 +2090,6 @@ pub fn HackerNewsTab() {
 
 pub const HACKER_NEWS_SCROLL_STABILITY_TARGET_TITLE: &str = "Robot HN Story 024";
 
-#[allow(non_snake_case)]
 #[composable]
 pub fn HackerNewsScrollStabilityFixtureTab() {
     let list_state = cranpose_foundation::lazy::rememberLazyListState();

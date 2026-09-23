@@ -64,7 +64,6 @@ fn lazy_row_unbounded_width_matches_effective_viewport() {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn GrowingLazyRow(
     item_count: MutableState<usize>,
     captured_state: Rc<RefCell<Option<LazyListState>>>,
@@ -173,7 +172,6 @@ fn lazy_row_updates_scroll_bounds_when_item_count_grows_without_scrolling() {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn HorizontalScrollIndicatorLazyRow(captured_state: Rc<RefCell<Option<LazyListState>>>) {
     let list_state = rememberLazyListState();
     *captured_state.borrow_mut() = Some(list_state);

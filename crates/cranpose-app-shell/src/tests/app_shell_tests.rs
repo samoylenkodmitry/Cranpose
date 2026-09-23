@@ -193,7 +193,6 @@ thread_local! {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn AppShellCaptureInitialDensity() {
     APP_SHELL_INITIAL_DENSITIES.with(|densities| {
         densities.borrow_mut().push(cranpose_ui::current_density());
@@ -201,7 +200,6 @@ fn AppShellCaptureInitialDensity() {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn AppShellScrollIndicatorLazyList() {
     let list_state = rememberLazyListState();
     APP_SHELL_LAZY_LIST_STATE.with(|slot| {
@@ -236,7 +234,6 @@ fn AppShellScrollIndicatorLazyList() {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn AppShellChildFirstVisible(list_state: LazyListState) {
     Text(
         format!(
@@ -249,7 +246,6 @@ fn AppShellChildFirstVisible(list_state: LazyListState) {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn AppShellChildStats(list_state: LazyListState) {
     let stats = list_state.stats();
     Text(
@@ -260,7 +256,6 @@ fn AppShellChildStats(list_state: LazyListState) {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn AppShellSiblingIndicatorsLazyList() {
     let list_state = rememberLazyListState();
     APP_SHELL_LAZY_LIST_STATE.with(|slot| {
@@ -292,7 +287,6 @@ fn AppShellSiblingIndicatorsLazyList() {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn AppShellVariableHeightSiblingIndicatorsLazyList() {
     let list_state = rememberLazyListState();
     APP_SHELL_LAZY_LIST_STATE.with(|slot| {
@@ -324,7 +318,6 @@ fn AppShellVariableHeightSiblingIndicatorsLazyList() {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn AppShellLifecycleCountDisplay(count: MutableState<usize>) {
     Text(
         format!("Lifecycle count {}", count.get()),
@@ -334,7 +327,6 @@ fn AppShellLifecycleCountDisplay(count: MutableState<usize>) {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn AppShellLifecycleListItem(index: usize, count: MutableState<usize>) {
     cranpose_core::DisposableEffect(index, move |_| {
         count.update(|current| *current += 1);
@@ -349,7 +341,6 @@ fn AppShellLifecycleListItem(index: usize, count: MutableState<usize>) {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn AppShellLifecycleIndicatorsLazyList() {
     let list_state = rememberLazyListState();
     APP_SHELL_LAZY_LIST_STATE.with(|slot| {
@@ -390,7 +381,6 @@ thread_local! {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn AppShellKeyedSiblingIndicatorsRoot() {
     let active = cranpose_core::rememberMutableStateOf(|| 0i32);
     APP_SHELL_ACTIVE_TAB_STATE.with(|slot| {
@@ -414,7 +404,6 @@ fn AppShellKeyedSiblingIndicatorsRoot() {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn AppShellSwitchingKeyedLazyListRoot() {
     let active = cranpose_core::rememberMutableStateOf(|| 0i32);
     APP_SHELL_ACTIVE_TAB_STATE.with(|slot| {
@@ -476,7 +465,6 @@ fn callbackless_root_render_probe(render_count: Rc<Cell<usize>>) {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn AppShellAnimatedLazyItem() {
     let list_state = rememberLazyListState();
     LazyColumn(
@@ -4948,7 +4936,6 @@ fn active_pointer_gesture_keeps_frame_schedule_until_release() {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn AbsoluteOffsetStackedTextRows(start: MutableState<i32>) {
     Box(
         Modifier::empty()
@@ -4986,7 +4973,6 @@ thread_local! {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn AppShellGrowingFirstRow() {
     let expanded = rememberMutableStateOf(|| false);
     APP_SHELL_EXPANSION_STATE.with(|slot| *slot.borrow_mut() = Some(expanded));
@@ -5036,7 +5022,6 @@ thread_local! {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn AppShellGrowerBox() {
     let grown = rememberMutableStateOf(|| false);
     APP_SHELL_GROWER_STATE.with(|slot| *slot.borrow_mut() = Some(grown));
@@ -5051,7 +5036,6 @@ fn AppShellGrowerBox() {
 const ORDINARY_SIBLING_COLOR: cranpose_ui::Color = cranpose_ui::Color(0.9, 0.05, 0.55, 1.0);
 
 #[composable]
-#[allow(non_snake_case)]
 fn AppShellOrdinaryColumnSiblings() {
     Column(
         Modifier::empty().fill_max_size(),
@@ -5070,7 +5054,6 @@ fn AppShellOrdinaryColumnSiblings() {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn AppShellSizeReactiveTopology() {
     let size = rememberMutableStateOf(cranpose_ui::Size::default);
     cranpose_ui::Box(
@@ -5146,7 +5129,6 @@ fn size_reactive_topology_switches_on_resize_and_settles() {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn AppShellSelfReferentialSize() {
     let size = rememberMutableStateOf(cranpose_ui::Size::default);
     let height = if size.get().height < 100.0 {
@@ -5857,7 +5839,6 @@ fn sibling_in_an_ordinary_column_moves_in_the_scene_when_a_row_grows() {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn AppShellGrowerAboveNestedLazy() {
     Column(
         Modifier::empty().fill_max_size(),

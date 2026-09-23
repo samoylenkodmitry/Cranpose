@@ -316,7 +316,6 @@ pub fn local_launch_args() -> CompositionLocal<LaunchArgsRef> {
 ///
 /// The platform drivers wrap the app root in this so a mid-session replacement
 /// (Android `onNewIntent`) is observed; tests use it to stand in for a launch.
-#[allow(non_snake_case)]
 #[composable]
 pub fn ProvideLaunchArgs(args: LaunchArgsRef, content: impl FnOnce()) {
     let local = local_launch_args();
@@ -326,7 +325,6 @@ pub fn ProvideLaunchArgs(args: LaunchArgsRef, content: impl FnOnce()) {
 }
 
 /// Whether the OS considers this build debuggable, read from composition.
-#[allow(non_snake_case)]
 #[composable]
 pub fn isDebuggable() -> bool {
     local_launch_args().current().is_debuggable()

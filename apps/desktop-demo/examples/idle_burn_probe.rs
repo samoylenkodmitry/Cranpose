@@ -55,7 +55,6 @@ fn main() {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn IdleScreen(mode: String) {
     Column(
         Modifier::empty().fill_max_size(),

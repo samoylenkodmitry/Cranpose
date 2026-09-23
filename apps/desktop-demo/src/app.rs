@@ -587,7 +587,6 @@ fn cached_current_depth_text(depth: usize) -> Rc<cranpose_ui::text::AnnotatedStr
     })
 }
 
-#[allow(non_snake_case)]
 #[composable]
 pub(crate) fn ScrollableTab(content: impl FnMut() + 'static) {
     let scroll_state = cranpose_core::remember(|| cranpose_ui::ScrollState::new(0.0)).with(|s| *s);
@@ -601,7 +600,6 @@ pub(crate) fn ScrollableTab(content: impl FnMut() + 'static) {
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn TabButton(tab: DemoTab, active_tab: cranpose_core::MutableState<DemoTab>, padding: f32) {
     let is_active = active_tab.get() == tab;
@@ -636,7 +634,6 @@ fn TabButton(tab: DemoTab, active_tab: cranpose_core::MutableState<DemoTab>, pad
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn TabBarHorizontal(active_tab: cranpose_core::MutableState<DemoTab>) {
     let tabs_scroll_state =
@@ -674,7 +671,6 @@ fn compact_tab_row_background(is_active: bool) -> Color {
     }
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn CompactAppBar(
     active_tab: cranpose_core::MutableState<DemoTab>,
@@ -730,7 +726,6 @@ fn CompactAppBar(
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn CompactTabPicker(
     active_tab: cranpose_core::MutableState<DemoTab>,
@@ -772,7 +767,6 @@ fn CompactTabPicker(
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn TabContent(
     active_tab: cranpose_core::MutableState<DemoTab>,
@@ -811,7 +805,6 @@ pub fn combined_app() {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 pub fn DesktopApp() {
     combined_app_with_initial_tab(Some(startup_tab_from_args(std::env::args().skip(1))));
 }
@@ -896,7 +889,6 @@ pub fn combined_app_with_startup(startup: StartupSelection) {
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 pub fn ControlsUiRobotApp() {
     cranpose_ui::Box(
@@ -908,31 +900,26 @@ pub fn ControlsUiRobotApp() {
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 pub fn MarkdownViewerRobotApp() {
     markdown_viewer_tab();
 }
 
-#[allow(non_snake_case)]
 #[composable]
 pub fn HackerNewsScrollStabilityRobotApp() {
     HackerNewsScrollStabilityFixtureTab();
 }
 
-#[allow(non_snake_case)]
 #[composable]
 pub fn MarkdownScrollStabilityRobotApp() {
     MarkdownScrollStabilityFixtureTab();
 }
 
-#[allow(non_snake_case)]
 #[composable]
 pub fn MarkdownScrollStressRobotApp() {
     MarkdownScrollStressFixtureTab();
 }
 
-#[allow(non_snake_case)]
 #[composable]
 pub fn MarkdownScrollStressRobotAppWithState(list_state: LazyListState) {
     MarkdownScrollStressFixtureTabWithState(list_state);
@@ -1800,7 +1787,6 @@ fn composition_local_content_inner() {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 pub fn AsyncRuntimeTabContent(
     animation: MutableState<AnimationState>,
     stats: MutableState<FrameStats>,
@@ -2009,7 +1995,6 @@ pub fn AsyncRuntimeTabContent(
 }
 
 #[composable]
-#[allow(non_snake_case)]
 pub(crate) fn AsyncRuntimeEngine(
     animation: MutableState<AnimationState>,
     stats: MutableState<FrameStats>,

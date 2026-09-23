@@ -277,7 +277,6 @@ pub fn local_notifier() -> CompositionLocal<NotifierRef> {
     })
 }
 
-#[allow(non_snake_case)]
 #[composable]
 pub fn ProvideNotifier(content: impl FnOnce()) {
     let notifier = cranpose_core::remember(default_notifier).with(|state| state.clone());

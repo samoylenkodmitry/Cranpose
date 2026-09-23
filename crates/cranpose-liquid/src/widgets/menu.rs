@@ -421,7 +421,6 @@ pub fn rememberLiquidMenuGesture() -> LiquidMenuGesture {
 /// A neighboring glass icon source that keeps its material mounted while an
 /// open menu owns and deforms its foreground.
 #[composable]
-#[allow(non_snake_case)]
 pub fn LiquidMenuAbsorbedIconButton(
     modifier: Modifier,
     spec: crate::widgets::GlassButtonSpec,
@@ -856,7 +855,6 @@ pub fn liquid_menu_trigger_input(
 /// slide over popup rows and release to fire one.
 #[allow(clippy::too_many_arguments)]
 #[composable]
-#[allow(non_snake_case)]
 pub fn LiquidMenuIconButton(
     modifier: Modifier,
     spec: crate::widgets::GlassButtonSpec,
@@ -1024,7 +1022,6 @@ pub fn LiquidMenuIconButton(
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn AbsorbedSourceVisual(
     source: LiquidMenuAbsorbedSource,
     node_origin: Point,
@@ -1081,7 +1078,6 @@ fn AbsorbedSourceVisual(
 /// column, then the label. Sections split with full-width hairlines; headers
 /// are gray non-interactive rows.
 #[composable]
-#[allow(non_snake_case)]
 pub fn LiquidMenu(
     expanded: bool,
     anchor: Rect,
@@ -1575,7 +1571,6 @@ pub fn LiquidMenu(
 /// Renders an anchor and positions a [`LiquidMenu`] from the anchor's measured
 /// window rectangle, without application-owned coordinate calculations.
 #[composable]
-#[allow(non_snake_case)]
 pub fn LiquidDropdownMenu<A>(
     modifier: Modifier,
     expanded: bool,

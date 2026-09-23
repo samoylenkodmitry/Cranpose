@@ -1,5 +1,3 @@
-#![allow(non_snake_case)]
-
 use cranpose::prelude::*;
 
 use crate::theme::{body_text_style, heading_text_style, Palette};

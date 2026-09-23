@@ -37,7 +37,6 @@ fn frame_size() -> Size {
 
 /// The page every scene sits on: a solid ground the size of the frame.
 #[composable]
-#[allow(non_snake_case)]
 fn Page(content: impl FnMut() + 'static) {
     Box(
         Modifier::empty()
@@ -49,7 +48,6 @@ fn Page(content: impl FnMut() + 'static) {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn FeedRow(index: usize) {
     Box(
         Modifier::empty()
@@ -69,7 +67,6 @@ fn row_color(index: usize) -> Color {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn GlassOverScrollingFeed(scroll_slot: Rc<RefCell<Option<ScrollState>>>) {
     let scroll = remember(|| ScrollState::new(0.0)).with(|state| *state);
     scroll_slot.borrow_mut().replace(scroll);
@@ -195,7 +192,6 @@ fn feed_glass() -> Glass {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn LiquidBarOverLazyFeed(list_slot: Rc<RefCell<Option<LazyListState>>>) {
     let list_state = rememberLazyListState();
     list_slot.borrow_mut().replace(list_state);

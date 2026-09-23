@@ -3975,7 +3975,6 @@ fn conditional_nested_child_recompose_keeps_parent_order() {
         static FIELD_ID: Cell<Option<NodeId>> = const { Cell::new(None) };
     }
 
-    #[allow(non_snake_case)]
     #[composable]
     fn Leaf(label: &'static str) -> NodeId {
         cranpose_core::with_current_composer(|composer| {
@@ -3986,7 +3985,6 @@ fn conditional_nested_child_recompose_keeps_parent_order() {
         })
     }
 
-    #[allow(non_snake_case)]
     #[composable]
     fn QueueRow() -> NodeId {
         let id = cranpose_core::with_current_composer(|composer| {
@@ -3999,7 +3997,6 @@ fn conditional_nested_child_recompose_keeps_parent_order() {
         id
     }
 
-    #[allow(non_snake_case)]
     #[composable]
     fn CurrentField(field_text: MutableState<&'static str>) -> NodeId {
         let _ = field_text.value();
@@ -4008,7 +4005,6 @@ fn conditional_nested_child_recompose_keeps_parent_order() {
         id
     }
 
-    #[allow(non_snake_case)]
     #[composable]
     fn CurrentRow(field_text: MutableState<&'static str>) -> NodeId {
         let id = cranpose_core::with_current_composer(|composer| {
@@ -4021,7 +4017,6 @@ fn conditional_nested_child_recompose_keeps_parent_order() {
         id
     }
 
-    #[allow(non_snake_case)]
     #[composable]
     fn StatusRow() -> NodeId {
         let id = cranpose_core::with_current_composer(|composer| {
@@ -4034,7 +4029,6 @@ fn conditional_nested_child_recompose_keeps_parent_order() {
         id
     }
 
-    #[allow(non_snake_case)]
     #[composable]
     fn Root(show_current: MutableState<bool>, field_text: MutableState<&'static str>) -> NodeId {
         let show_current = show_current.value();
@@ -4192,7 +4186,6 @@ fn scoped_recompose_after_root_replay_does_not_self_parent_root() {
         }
     }
 
-    #[allow(non_snake_case)]
     #[composable]
     fn Child(value: i32) -> NodeId {
         cranpose_core::with_current_composer(|composer| {
@@ -4203,7 +4196,6 @@ fn scoped_recompose_after_root_replay_does_not_self_parent_root() {
         })
     }
 
-    #[allow(non_snake_case)]
     #[composable]
     fn Root(value: MutableState<i32>) -> NodeId {
         let value = value.value();

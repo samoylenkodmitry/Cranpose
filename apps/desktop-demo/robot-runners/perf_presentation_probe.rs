@@ -36,7 +36,6 @@ pub(super) fn finish() -> Result<Option<String>, String> {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn PresentationProbe() {
     let transition = rememberInfiniteTransition("presentation_probe");
     let pulse = transition.animateFloat(

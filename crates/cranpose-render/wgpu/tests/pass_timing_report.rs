@@ -11,7 +11,6 @@ const FRAME_WIDTH: u32 = 320;
 const FRAME_HEIGHT: u32 = 320;
 
 #[composable]
-#[allow(non_snake_case)]
 fn ShadowedCardScene() {
     Box(
         Modifier::empty()

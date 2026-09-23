@@ -67,7 +67,6 @@ fn collect_visible_items(robot: &cranpose::Robot) -> Vec<(usize, f32)> {
     items
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn VariableHeightWheelReproScreen() {
     let list_state = rememberLazyListState();

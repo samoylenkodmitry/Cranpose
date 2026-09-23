@@ -1,7 +1,5 @@
 //! Spacer widget implementation
 
-#![allow(non_snake_case)]
-
 use cranpose_core::NodeId;
 
 use crate::{

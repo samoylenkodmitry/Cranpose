@@ -1,5 +1,3 @@
-#![allow(non_snake_case)]
-
 use cranpose::AppLauncher;
 use cranpose_core::rememberMutableStateOf;
 use cranpose_foundation::lazy::{rememberLazyListState, LazyItems, LazyListScope};

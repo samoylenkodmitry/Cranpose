@@ -22,7 +22,6 @@ fn measured_frames() -> usize {
 const SCROLL_DELTA_PER_FRAME: f32 = -30.0;
 
 #[composable]
-#[allow(non_snake_case)]
 fn CardRow(index: usize) {
     let fill = if index.is_multiple_of(2) {
         Color(0.98, 0.98, 0.99, 1.0)
@@ -76,7 +75,6 @@ fn chrome_glass_effect(rect_width: f32, rect_height: f32) -> RenderEffect {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn GlassBar(x: f32, y: f32, width: f32, height: f32) {
     Box(
         Modifier::empty()
@@ -103,7 +101,6 @@ fn GlassBar(x: f32, y: f32, width: f32, height: f32) {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn CardListScene(list_state: LazyListState) {
     Box(
         Modifier::empty()

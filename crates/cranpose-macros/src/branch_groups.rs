@@ -1,6 +1,6 @@
 use proc_macro2::{Span, TokenStream as TokenStream2};
 use syn::{
-    Block, Expr, Stmt,
+    Block, Expr, Pat, Stmt,
     spanned::Spanned,
     visit::Visit,
     visit_mut::{self, VisitMut},
@@ -341,8 +341,8 @@ impl BranchGroupInjector<'_> {
             Expr::Match(expr_match) => {
                 self.instrument_suspending_child(&mut expr_match.expr);
                 for arm in &mut expr_match.arms {
-                    if let Some((_, guard)) = &mut arm.guard {
-                        self.instrument_suspending_condition(guard);
+                    if let Pat::Guard(pat_guard) = &mut arm.pat {
+                        self.instrument_suspending_condition(&mut pat_guard.guard);
                     }
                     if expr_contains_await(&arm.body) {
                         self.instrument_suspending_expr(&mut arm.body);
@@ -520,8 +520,8 @@ impl VisitMut for BranchGroupInjector<'_> {
             Expr::Match(expr_match) => {
                 self.visit_expr_mut(&mut expr_match.expr);
                 for arm in &mut expr_match.arms {
-                    if let Some((_, guard)) = &mut arm.guard {
-                        self.wrap_condition(guard);
+                    if let Pat::Guard(pat_guard) = &mut arm.pat {
+                        self.wrap_condition(&mut pat_guard.guard);
                     }
                     self.wrap_arm_body(&mut arm.body);
                 }

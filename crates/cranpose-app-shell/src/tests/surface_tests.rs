@@ -862,7 +862,6 @@ fn movable_content_torn_into_a_fresh_column_lays_out_after_the_strip() {
 }
 
 #[cranpose_ui::composable]
-#[allow(non_snake_case)]
 fn TornStrip() {
     Box(
         Modifier::empty().size(Size::new(80.0, 36.0)),
@@ -872,7 +871,6 @@ fn TornStrip() {
 }
 
 #[cranpose_ui::composable]
-#[allow(non_snake_case)]
 fn TornBody(page: u64) {
     let _clicks = rememberMutableStateOf(|| 0u32);
     let _ = page;
@@ -884,7 +882,6 @@ fn TornBody(page: u64) {
 }
 
 #[cranpose_ui::composable]
-#[allow(non_snake_case)]
 fn TornWindowChrome(page: u64) {
     Column(Modifier::empty(), ColumnSpec::default(), move || {
         TornStrip();

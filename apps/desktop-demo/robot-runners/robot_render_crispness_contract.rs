@@ -148,7 +148,6 @@ fn draw_control_pattern(scope: &mut dyn DrawScope) {
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn CrispControlBlock(modifier: Modifier) {
     Text(
@@ -164,7 +163,6 @@ fn CrispControlBlock(modifier: Modifier) {
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn RenderCrispnessContractApp() {
     let atlas = cranpose_core::remember(atlas_bitmap).with(|bitmap| bitmap.clone());

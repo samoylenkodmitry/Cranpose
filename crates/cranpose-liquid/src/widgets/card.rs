@@ -19,7 +19,6 @@ const CARD_RADIUS: f32 = 20.0;
 
 /// Theme-aware surface container using the current Liquid color roles.
 #[composable]
-#[allow(non_snake_case)]
 pub fn Surface(modifier: Modifier, content: impl FnMut() + 'static) {
     let color = liquid_colors().surface;
     Box(
@@ -35,7 +34,6 @@ pub fn Surface(modifier: Modifier, content: impl FnMut() + 'static) {
 
 /// Theme-aware elevated card container.
 #[composable]
-#[allow(non_snake_case)]
 pub fn Card(modifier: Modifier, content: impl FnMut() + 'static) {
     LiquidCard(modifier, content);
 }
@@ -43,7 +41,6 @@ pub fn Card(modifier: Modifier, content: impl FnMut() + 'static) {
 /// An elevated glass pane with the grouped-inset card look: a resting pane
 /// that transmits its backdrop through the translucent surface wash.
 #[composable]
-#[allow(non_snake_case)]
 pub fn LiquidCard(modifier: Modifier, content: impl FnMut() + 'static) {
     let colors = liquid_colors();
     let surface_glass = colors.surface_glass;
@@ -60,7 +57,6 @@ pub fn LiquidCard(modifier: Modifier, content: impl FnMut() + 'static) {
 
 /// A titled group of rows on one card (iOS grouped list section).
 #[composable]
-#[allow(non_snake_case)]
 pub fn LiquidListSection(
     modifier: Modifier,
     header: impl Into<String>,
@@ -116,7 +112,6 @@ impl LiquidListRowSpec {
 /// One tappable row inside a [`LiquidCard`] / [`LiquidListSection`]: a press
 /// wash and an optional hairline separator; `content` lays out the row.
 #[composable]
-#[allow(non_snake_case)]
 pub fn LiquidListRow(
     modifier: Modifier,
     spec: LiquidListRowSpec,

@@ -1,5 +1,3 @@
-#![allow(non_snake_case)]
-
 use std::sync::{Arc, OnceLock};
 
 use cranpose::{liquid::prelude::*, rememberWindowStateAt, WindowConfig, WindowModifierExt};

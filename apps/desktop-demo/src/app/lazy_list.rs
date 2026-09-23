@@ -52,7 +52,6 @@ fn item_background(index: usize) -> Color {
     }
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn LifecycleStatsDisplay(stats: MutableState<LifecycleStats>) {
     let current = stats.get();
@@ -69,7 +68,6 @@ fn LifecycleStatsDisplay(stats: MutableState<LifecycleStats>) {
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn LazyListStatsDisplay(list_state: cranpose_foundation::lazy::LazyListState) {
     let stats = list_state.stats();
@@ -100,7 +98,6 @@ fn LazyListStatsDisplay(list_state: cranpose_foundation::lazy::LazyListState) {
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn FirstVisibleIndexDisplay(list_state: cranpose_foundation::lazy::LazyListState) {
     let first_index = list_state.first_visible_item_index();
@@ -114,7 +111,6 @@ fn FirstVisibleIndexDisplay(list_state: cranpose_foundation::lazy::LazyListState
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn DemoActionButton<F>(label: &'static str, background: Color, on_click: F)
 where
@@ -135,7 +131,6 @@ where
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn LifecycleListItem(index: usize, stats: MutableState<LifecycleStats>) {
     DisposableEffect(index, move |_key| {

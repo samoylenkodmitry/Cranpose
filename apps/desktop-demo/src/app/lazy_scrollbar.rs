@@ -170,7 +170,6 @@ fn read_interaction_scrollbar_model(
     (model, rail_height)
 }
 
-#[allow(non_snake_case)]
 #[composable]
 pub(crate) fn LazyScrollbarRail(
     list_state: cranpose_foundation::lazy::LazyListState,
@@ -331,7 +330,6 @@ pub(crate) fn LazyScrollbarRail(
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 pub(crate) fn LazyListWithScrollbar<F>(
     modifier: Modifier,

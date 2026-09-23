@@ -1,5 +1,3 @@
-#![allow(non_snake_case)]
-
 use cranpose::WindowModifierExt;
 use cranpose_core::{mutableStateOf, remember, MutableState};
 use cranpose_ui::{composable, Modifier, PointerEventKind, PointerInputScope};

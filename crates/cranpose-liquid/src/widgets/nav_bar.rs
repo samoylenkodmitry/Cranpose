@@ -51,7 +51,6 @@ const SCRIM_MIDDLE_ALPHA: f32 = 0.40;
 /// Place the bar *after* the scrolling content inside a `Box` so its blur
 /// reads the content sliding underneath.
 #[composable]
-#[allow(non_snake_case)]
 pub fn LiquidNavBar(
     modifier: Modifier,
     spec: LiquidNavBarSpec,

@@ -197,7 +197,6 @@ enum CodeLanguage {
     Rust,
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn Pill(text: &'static str) {
     Text(
@@ -210,7 +209,6 @@ fn Pill(text: &'static str) {
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn ActionButton(label: &'static str) {
     Button(
@@ -228,7 +226,6 @@ fn ActionButton(label: &'static str) {
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn CodeField(
     label: &'static str,
@@ -335,7 +332,6 @@ fn CodeField(
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn SummaryCard() {
     ComposeBox(
@@ -373,7 +369,6 @@ fn SummaryCard() {
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn WriteupCard() {
     ComposeBox(
@@ -401,7 +396,6 @@ fn WriteupCard() {
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn CodeCard() {
     let kotlin_state =
@@ -434,7 +428,6 @@ fn CodeCard() {
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn LeetcodeDailyCodeScrollApp() {
     let scroll_state =

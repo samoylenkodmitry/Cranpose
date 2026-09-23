@@ -11,8 +11,6 @@
 //! sit" the same way. The drag is [`Modifier::draggable`], so pulling a thumb
 //! obeys the same touch slop and axis locking as scrolling the content itself.
 
-#![allow(non_snake_case)]
-
 use cranpose_core::NodeId;
 use cranpose_ui_graphics::{Brush, Color, CornerRadii, DrawScope, Point, Rect, Size};
 use cranpose_ui_layout::Axis;

@@ -360,7 +360,6 @@ pub fn rememberLifecycleEvents() -> cranpose_core::EventStream<LifecycleEvent> {
 ///
 /// The application shell wraps its content in this once; screens then read
 /// [`local_lifecycle_state`].
-#[allow(non_snake_case)]
 #[cranpose_macros::composable]
 pub fn ProvideLifecycle(content: impl FnOnce()) {
     let state = rememberLifecycleState();

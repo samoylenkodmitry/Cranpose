@@ -762,6 +762,7 @@ fn exact_subcompose_activation_rejects_invalidated_slot_scopes() {
 }
 
 mod branch_group_tests;
+mod composable_macro_tests;
 mod composer_applier_tests;
 mod composition_and_recompose_scope_tests;
 mod internal_surface_tests;

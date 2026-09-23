@@ -16,7 +16,6 @@ fn navigation_label() {
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 pub fn SurfacePrefixReproScreen() {
     let scroll = remember(|| ScrollState::new(0.0)).with(|state| *state);

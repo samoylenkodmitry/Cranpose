@@ -102,7 +102,6 @@ fn rim_peak_at_angle(frame: &CapturedFrame, cx: f32, cy: f32, radius: f32, theta
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn TabBarScene() {
     LiquidTheme(
         LiquidThemeSpec {

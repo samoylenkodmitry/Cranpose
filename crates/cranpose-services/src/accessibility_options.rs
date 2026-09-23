@@ -105,7 +105,6 @@ pub fn local_accessibility_options() -> CompositionLocal<AccessibilityOptions> {
 
 /// Gives the content below it fixed options, for a preview or a test that
 /// wants to see the app with larger text, no motion or more contrast.
-#[allow(non_snake_case)]
 #[composable]
 pub fn ProvideAccessibilityOptions(options: AccessibilityOptions, content: impl FnOnce()) {
     let provided = local_accessibility_options().provides(options.normalized());

@@ -1,5 +1,3 @@
-#![allow(non_snake_case)]
-
 use cranpose_animation::{animateFloatAsState, spring, tween, Easing, Spring};
 use cranpose_ui::{
     composable, rememberMutableInteractionSource,

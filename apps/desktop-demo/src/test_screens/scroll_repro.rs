@@ -7,7 +7,6 @@ use cranpose_ui::{
     TextStyle, VerticalAlignment,
 };
 
-#[allow(non_snake_case)]
 #[composable]
 pub fn ScrollReproScreen() {
     let list_state = cranpose_foundation::lazy::rememberLazyListState();
@@ -59,7 +58,6 @@ pub fn ScrollReproScreen() {
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn ReproItem(rank: usize) {
     Row(

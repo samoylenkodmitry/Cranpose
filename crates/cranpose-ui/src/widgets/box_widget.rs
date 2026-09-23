@@ -1,7 +1,5 @@
 //! Box widget implementation
 
-#![allow(non_snake_case)]
-
 use cranpose_core::NodeId;
 use cranpose_ui_layout::Alignment;
 

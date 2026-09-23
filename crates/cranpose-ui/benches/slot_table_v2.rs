@@ -1,5 +1,3 @@
-#![allow(non_snake_case)]
-
 use std::{cell::Cell, hint::black_box, rc::Rc, sync::Arc, time::Duration};
 
 use cranpose_core::{

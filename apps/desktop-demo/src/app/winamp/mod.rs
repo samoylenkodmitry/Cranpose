@@ -1,5 +1,3 @@
-#![allow(non_snake_case)]
-
 mod skin;
 pub(crate) mod sprites;
 

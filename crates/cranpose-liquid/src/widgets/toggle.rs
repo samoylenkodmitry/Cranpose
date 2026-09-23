@@ -132,7 +132,6 @@ fn lens_ride_x(drag_progress: Option<f32>, thumb_x: f32) -> f32 {
 /// An on/off switch. `checked` is owned by the caller; `on_change` receives
 /// the requested new value. The thumb both taps and swipes.
 #[composable]
-#[allow(non_snake_case)]
 pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) + 'static) {
     let colors = liquid_colors();
 

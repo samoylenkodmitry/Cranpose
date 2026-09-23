@@ -43,7 +43,6 @@ fn counter_style() -> TextStyle {
     lab_style(12.0, Color(0.12, 0.45, 0.25, 1.0), false)
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn LabButton(label: &'static str, on_click: impl Fn() + 'static) {
     Button(
@@ -56,7 +55,6 @@ fn LabButton(label: &'static str, on_click: impl Fn() + 'static) {
     );
 }
 
-#[allow(non_snake_case)]
 #[composable(no_skip)]
 fn SectionCounter(name: &'static str) {
     let composed = cranpose_core::remember(|| Cell::new(0u32));
@@ -69,7 +67,6 @@ fn SectionCounter(name: &'static str) {
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn PhaseCard(phase: &'static str) {
     let instance = cranpose_core::remember(next_instance);
@@ -88,7 +85,6 @@ fn PhaseCard(phase: &'static str) {
     LabButton("Count in phase", move || clicks.set(clicks.get() + 1));
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn PhaseSection(phase: MutableState<bool>) {
     SectionCounter("phase section");
@@ -107,7 +103,6 @@ pub enum LabRoute {
     Settings,
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn RouteCard(name: &'static str, show_extra: bool) {
     let instance = cranpose_core::remember(next_instance);
@@ -126,7 +121,6 @@ fn RouteCard(name: &'static str, show_extra: bool) {
     }
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn RouteSection(route: MutableState<LabRoute>) {
     SectionCounter("route section");
@@ -146,7 +140,6 @@ fn RouteSection(route: MutableState<LabRoute>) {
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn KeyedRow(id: u64) {
     let instance = cranpose_core::remember(next_instance);
@@ -172,7 +165,6 @@ fn KeyedRow(id: u64) {
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn KeyedRowsSection(hide_first: MutableState<bool>) {
     SectionCounter("rows section");
@@ -184,7 +176,6 @@ fn KeyedRowsSection(hide_first: MutableState<bool>) {
     LabButton("Toggle row 1", move || hide_first.set(!hide_first.get()));
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn BracketedRowsSection(hide_first: MutableState<bool>) {
     SectionCounter("bracketed section");
@@ -201,7 +192,6 @@ fn BracketedRowsSection(hide_first: MutableState<bool>) {
     LabButton("Toggle row 5", move || hide_first.set(!hide_first.get()));
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn GaugeSection(show_gauge: MutableState<bool>, phase: MutableState<bool>) {
     SectionCounter("gauge section");
@@ -227,7 +217,6 @@ fn GaugeSection(show_gauge: MutableState<bool>, phase: MutableState<bool>) {
     LabButton("Toggle gauge", move || show_gauge.set(!show_gauge.get()));
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn LabFooter() {
     SectionCounter("footer");
@@ -238,7 +227,6 @@ fn LabFooter() {
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 pub fn RecompositionLabTab() {
     let phase = cranpose_core::rememberMutableStateOf(|| true);

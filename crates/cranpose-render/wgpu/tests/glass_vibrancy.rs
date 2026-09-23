@@ -488,7 +488,6 @@ fn wave_color(level: f32, channel: Option<usize>) -> Color {
 }
 
 #[cranpose_ui::composable]
-#[allow(non_snake_case)]
 fn VibrantTabScene(backdrop: TabBackdrop) {
     let selected =
         cranpose_core::remember(|| cranpose_core::mutableStateOf(0usize)).with(|state| *state);

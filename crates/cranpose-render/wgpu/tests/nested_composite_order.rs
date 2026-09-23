@@ -31,7 +31,6 @@ fn alpha_layer(alpha: f32) -> GraphicsLayer {
 /// a blur backdrop child sits between the green child and the blue rect: it
 /// reads the card, so everything queued before it has to land first.
 #[composable]
-#[allow(non_snake_case)]
 fn LayeredCardPage(with_blur_child: bool) {
     FramePage(FRAME_WIDTH, FRAME_HEIGHT, BACKGROUND, move || {
         Box(
@@ -75,13 +74,11 @@ fn LayeredCardPage(with_blur_child: bool) {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn PlainCardPage() {
     LayeredCardPage(false);
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn BlurCardPage() {
     LayeredCardPage(true);
 }

@@ -37,7 +37,6 @@ impl Node for TestTextNode {
     }
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn Column(content: impl FnOnce()) {
     let id =
@@ -47,7 +46,6 @@ fn Column(content: impl FnOnce()) {
     pop_parent();
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn Text(value: String) {
     let initial_content = value.clone();
@@ -63,7 +61,6 @@ fn Text(value: String) {
     .expect("update text node");
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn Parent(value: i32) {
     Column(|| {
@@ -71,7 +68,6 @@ fn Parent(value: i32) {
     });
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn Child(value: i32) {
     Text(format!("value: {}", value));

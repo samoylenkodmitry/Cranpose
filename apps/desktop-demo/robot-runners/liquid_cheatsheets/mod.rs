@@ -1,5 +1,3 @@
-#![allow(non_snake_case)]
-
 mod capture;
 
 #[path = "../text_showcase_external_helpers.rs"]

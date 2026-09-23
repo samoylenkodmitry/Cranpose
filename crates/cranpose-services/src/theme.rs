@@ -245,7 +245,6 @@ pub fn local_system_theme() -> CompositionLocal<SystemTheme> {
     })
 }
 
-#[allow(non_snake_case)]
 #[composable]
 pub fn ProvideSystemTheme(theme: SystemTheme, content: impl FnOnce()) {
     let local = local_system_theme();
@@ -254,7 +253,6 @@ pub fn ProvideSystemTheme(theme: SystemTheme, content: impl FnOnce()) {
     });
 }
 
-#[allow(non_snake_case)]
 #[composable]
 pub fn isSystemInDarkTheme() -> bool {
     matches!(local_system_theme().current(), SystemTheme::Dark)

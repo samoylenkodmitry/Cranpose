@@ -37,7 +37,6 @@ fn card_glass() -> Glass {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn GlassCardScene() {
     LiquidTheme(
         LiquidThemeSpec {

@@ -212,7 +212,6 @@ fn badge_text_style() -> TextStyle {
     })
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn BitmapIconTextRow(icon: ImageBitmap, modifier: Modifier) {
     let style = row_text_style();
@@ -251,7 +250,6 @@ fn BitmapIconTextRow(icon: ImageBitmap, modifier: Modifier) {
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn SourceIconTextRow(icon: ImageBitmap, modifier: Modifier) {
     let style = row_text_style();
@@ -307,7 +305,6 @@ fn SourceIconTextRow(icon: ImageBitmap, modifier: Modifier) {
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn CompactOverflowButton(icon: ImageBitmap, modifier: Modifier) {
     Row(
@@ -353,7 +350,6 @@ fn CompactOverflowButton(icon: ImageBitmap, modifier: Modifier) {
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn RendererMicroContractApp() {
     let board = cranpose_core::remember(|| generate_chessboard_bitmap(8, 4)).with(|b| b.clone());

@@ -1,7 +1,5 @@
 //! Generic vector icons and clickable icon buttons.
 
-#![allow(non_snake_case)]
-
 use cranpose_core::{NodeId, rememberKeyed};
 use cranpose_ui_graphics::{Brush, Color, VectorPath};
 use cranpose_ui_layout::Alignment;

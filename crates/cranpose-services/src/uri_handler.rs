@@ -137,7 +137,6 @@ pub fn local_uri_handler() -> CompositionLocal<UriHandlerRef> {
     })
 }
 
-#[allow(non_snake_case)]
 #[composable]
 pub fn ProvideUriHandler(content: impl FnOnce()) {
     let uri_handler = cranpose_core::remember(default_uri_handler).with(|state| state.clone());

@@ -2,8 +2,6 @@
 //!
 //! Matches Jetpack Compose's `Canvas(modifier) { onDraw }`.
 
-#![allow(non_snake_case)]
-
 use cranpose_core::NodeId;
 use cranpose_ui_graphics::{DrawScope, Size};
 

@@ -6,7 +6,6 @@ const FRAME_WIDTH: u32 = 320;
 const FRAME_HEIGHT: u32 = 240;
 
 #[composable]
-#[allow(non_snake_case)]
 fn CardsPage() {
     FramePage(
         FRAME_WIDTH,

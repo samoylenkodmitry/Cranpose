@@ -5,8 +5,6 @@
 //! together with inspector metadata while resolved state is computed directly
 //! from the modifier nodes.
 
-#![allow(non_snake_case)]
-
 use std::{
     fmt,
     hash::{Hash, Hasher},

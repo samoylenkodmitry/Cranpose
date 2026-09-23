@@ -1,7 +1,5 @@
 //! Foundation slider with caller-owned state and composable visual content.
 
-#![allow(non_snake_case)]
-
 use std::{cell::RefCell, rc::Rc};
 
 use cranpose_core::{NodeId, State, rememberMutableStateOf, rememberUpdatedState};

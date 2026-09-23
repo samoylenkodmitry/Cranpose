@@ -12,7 +12,6 @@ const CARD: [f32; 4] = [40.0, 40.0, 240.0, 96.0];
 static SHADOW: AtomicBool = AtomicBool::new(true);
 
 #[composable]
-#[allow(non_snake_case)]
 fn ClippedGlassCardPage() {
     LiquidTheme(LiquidThemeSpec::default(), || {
         FramePage(

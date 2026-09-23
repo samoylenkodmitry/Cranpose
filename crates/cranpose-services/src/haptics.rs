@@ -365,7 +365,6 @@ pub fn local_haptics() -> CompositionLocal<HapticsRef> {
     })
 }
 
-#[allow(non_snake_case)]
 #[composable]
 pub fn ProvideHaptics(content: impl FnOnce()) {
     let haptics = cranpose_core::remember(default_haptics).with(|state| state.clone());

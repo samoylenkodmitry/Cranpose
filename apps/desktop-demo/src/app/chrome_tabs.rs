@@ -1,5 +1,3 @@
-#![allow(non_snake_case)]
-
 use std::{cell::Cell, rc::Rc};
 
 use cranpose::{rememberWindowStateAt, WindowConfig, WindowModifierExt};

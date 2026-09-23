@@ -35,7 +35,6 @@ const BACKDROP: Color = Color(0.5, 0.5, 0.5, 1.0);
 const MARKER: Color = Color(1.0, 0.0, 1.0, 1.0);
 
 #[cranpose::composable]
-#[allow(non_snake_case)]
 fn ProbeApp() {
     LiquidTheme(LiquidThemeSpec::default(), || {
         CBox(

@@ -3,8 +3,6 @@
 //! Mirrors Jetpack Compose's `Crossfade` from
 //! `androidx.compose.animation.Crossfade`.
 
-#![allow(non_snake_case)]
-
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,

@@ -1,5 +1,3 @@
-#![allow(non_snake_case)]
-
 use cranpose_core::rememberMutableStateOf;
 use cranpose_ui::{
     composable, Button, ButtonSpec, Color, Column, ColumnSpec, LinearArrangement, Modifier, Row,

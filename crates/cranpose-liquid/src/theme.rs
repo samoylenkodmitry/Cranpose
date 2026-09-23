@@ -2,8 +2,6 @@
 //! provided to the subtree through composition locals — the analogue of
 //! `MaterialTheme`.
 
-#![allow(non_snake_case)]
-
 use std::cell::RefCell;
 
 use cranpose_core::{CompositionLocal, CompositionLocalProvider, compositionLocalOf};

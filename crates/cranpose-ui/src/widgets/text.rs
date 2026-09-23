@@ -5,8 +5,6 @@
 //! concerns: MeasurePolicy handles child layout, while TextModifierNode handles text content
 //! measurement, drawing, and semantics.
 
-#![allow(non_snake_case)]
-
 use std::rc::Rc;
 
 use cranpose_core::{MutableState, NodeId, State};

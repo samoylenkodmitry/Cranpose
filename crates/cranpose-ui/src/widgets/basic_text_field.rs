@@ -3,8 +3,6 @@
 //! This module provides the `BasicTextField` composable following Jetpack Compose's
 //! `BasicTextField` pattern from `compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/text/BasicTextField.kt`.
 
-#![allow(non_snake_case)]
-
 use std::{
     cell::{Cell, RefCell},
     rc::{Rc, Weak},

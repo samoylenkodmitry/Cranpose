@@ -1,5 +1,4 @@
 #![cfg(feature = "embedded-default-font")]
-#![allow(non_snake_case)]
 
 use std::{cell::RefCell, rc::Rc};
 

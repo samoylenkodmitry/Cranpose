@@ -1,5 +1,3 @@
-#![allow(non_snake_case)]
-
 use std::{
     f32::consts::{PI, TAU},
     sync::{Arc, OnceLock},
@@ -662,7 +660,6 @@ impl StageAnimation {
     }
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn animateStageAsState(
     kind: ControlKind,

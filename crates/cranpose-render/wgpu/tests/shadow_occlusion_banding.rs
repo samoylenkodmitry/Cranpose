@@ -16,7 +16,6 @@ const CARD_HEIGHT: f32 = 120.0;
 const CARD_ELEVATION: f32 = 6.0;
 
 #[composable]
-#[allow(non_snake_case)]
 fn OpaqueCard(index: usize) {
     let fill = if index.is_multiple_of(2) {
         Color(0.98, 0.98, 0.99, 1.0)
@@ -36,7 +35,6 @@ fn OpaqueCard(index: usize) {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn CardListScene(list_state: LazyListState) {
     Box(
         Modifier::empty()

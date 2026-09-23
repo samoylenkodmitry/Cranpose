@@ -21,7 +21,6 @@ fn scale() -> Option<f32> {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn PulsingGlassButtonPage() {
     LiquidTheme(LiquidThemeSpec::default(), || {
         FramePage(FRAME, FRAME, BACKGROUND, || {

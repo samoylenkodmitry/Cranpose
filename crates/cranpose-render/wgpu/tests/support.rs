@@ -859,7 +859,6 @@ pub fn rect_modifier(rect: [f32; 4]) -> Modifier {
 /// A page filling the whole frame with one background color, the root every
 /// parity scene composes its content into.
 #[composable]
-#[allow(non_snake_case)]
 pub fn FramePage(width: u32, height: u32, background: Color, content: impl Fn() + 'static) {
     Box(
         Modifier::empty()

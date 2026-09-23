@@ -20,11 +20,10 @@ General rules:
 ## The two things that surprise people first
 
 **Composables are CamelCase functions.** That is deliberate -- it matches
-Jetpack Compose, and it is why every Cranpose file starts with:
+Jetpack Compose. `#[composable]` allows the CamelCase name itself, so a file
+needs no lint allowance, only the prelude:
 
 ```rust
-#![allow(non_snake_case)] // #[composable] functions are CamelCase
-
 use cranpose::prelude::*;
 ```
 

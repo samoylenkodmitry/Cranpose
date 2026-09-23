@@ -42,7 +42,6 @@ struct PumpProbe {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn PumpHost(probe: Rc<PumpProbe>) {
     probe.composes.set(probe.composes.get() + 1);
     probe.observed_gate.set(probe.gate.borrow().state().value());

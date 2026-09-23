@@ -1,7 +1,5 @@
 //! Layout contracts & policies for Cranpose
 
-#![allow(non_snake_case)]
-
 mod alignment;
 mod arrangement;
 mod axis;

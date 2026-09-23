@@ -65,7 +65,6 @@ fn bright_pixels_below(frame: &CapturedFrame, min_y: u32) -> usize {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn Field(state: TextFieldState, style: TextStyle) {
     cranpose_ui::BasicTextField(
         state,

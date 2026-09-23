@@ -170,7 +170,6 @@ fn main() -> ExitCode {
 }
 
 #[cranpose::composable]
-#[allow(non_snake_case)]
 fn ProbeApp() {
     LiquidTheme(
         LiquidThemeSpec {
@@ -260,7 +259,6 @@ fn draw_stripes(scope: &mut dyn DrawScope, y: f32, height: f32) {
 }
 
 #[cranpose::composable]
-#[allow(non_snake_case)]
 fn glass_probe(y: f32, height: f32, label: &'static str) {
     CBox(
         Modifier::empty()
@@ -278,7 +276,6 @@ fn glass_probe(y: f32, height: f32, label: &'static str) {
 }
 
 #[cranpose::composable]
-#[allow(non_snake_case)]
 fn adaptive_glass_probe() {
     CBox(
         Modifier::empty()
@@ -296,7 +293,6 @@ fn adaptive_glass_probe() {
 }
 
 #[cranpose::composable]
-#[allow(non_snake_case)]
 fn probe_label(label: &'static str) {
     Text(
         label,

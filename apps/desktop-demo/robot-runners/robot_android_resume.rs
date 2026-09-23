@@ -96,7 +96,6 @@ fn main() {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn resume_probe() {
     let state = rememberMutableStateOf(|| ResumeState::Attached);
     RESUME_STATE.with(|slot| *slot.borrow_mut() = Some(state));
