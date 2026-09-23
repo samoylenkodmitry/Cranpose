@@ -11,10 +11,6 @@ use coroflow_demo::{
     presentation::notes_view_model::{NotesEvent, NotesViewModel},
 };
 
-fn ms(value: u64) -> Duration {
-    Duration::from_millis(value)
-}
-
 struct Harness {
     scheduler: TestScheduler,
     container: AppContainer,
@@ -30,11 +26,11 @@ impl Harness {
         };
         let config = AppConfig {
             disk_latency: Duration::ZERO,
-            network_latency: ms(900),
+            network_latency: Duration::from_millis(900),
             sync: SyncConfig {
-                work: ms(800),
-                period: ms(2_000),
-                stop_timeout: ms(5_000),
+                work: Duration::from_millis(800),
+                period: Duration::from_millis(2_000),
+                stop_timeout: Duration::from_millis(5_000),
             },
         };
         let container = AppContainer::new(dispatchers, config);
@@ -91,18 +87,24 @@ fn the_catalog_is_searched_only_for_settled_queries_and_stale_requests_are_cance
     harness.scheduler.run_current();
 
     harness.view_model.on_query_changed("fl".to_string());
-    harness.scheduler.advance_time_by(ms(100));
+    harness
+        .scheduler
+        .advance_time_by(Duration::from_millis(100));
     harness.view_model.on_query_changed("flow".to_string());
-    harness.scheduler.advance_time_by(ms(399));
+    harness
+        .scheduler
+        .advance_time_by(Duration::from_millis(399));
     assert_eq!(harness.catalog(), CatalogResults::Idle, "still debouncing");
-    harness.scheduler.advance_time_by(ms(1));
+    harness.scheduler.advance_time_by(Duration::from_millis(1));
     assert_eq!(
         harness.catalog(),
         CatalogResults::Loading {
             query: "flow".to_string()
         }
     );
-    harness.scheduler.advance_time_by(ms(900));
+    harness
+        .scheduler
+        .advance_time_by(Duration::from_millis(900));
     assert!(matches!(
         harness.catalog(),
         CatalogResults::Loaded { query, hits } if query == "flow"
@@ -120,11 +122,17 @@ fn the_catalog_is_searched_only_for_settled_queries_and_stale_requests_are_cance
     );
 
     harness.view_model.on_query_changed("st".to_string());
-    harness.scheduler.advance_time_by(ms(400));
+    harness
+        .scheduler
+        .advance_time_by(Duration::from_millis(400));
     assert!(matches!(harness.catalog(), CatalogResults::Loading { .. }));
-    harness.scheduler.advance_time_by(ms(300));
+    harness
+        .scheduler
+        .advance_time_by(Duration::from_millis(300));
     harness.view_model.on_query_changed("sta".to_string());
-    harness.scheduler.advance_time_by(ms(400 + 900));
+    harness
+        .scheduler
+        .advance_time_by(Duration::from_millis(400 + 900));
     assert!(matches!(
         harness.catalog(),
         CatalogResults::Loaded { query, .. } if query == "sta"
@@ -145,7 +153,9 @@ fn a_failing_catalog_is_reported_in_the_state() {
     let harness = Harness::new();
     let _screen = harness.view_model.ui_state().open();
     harness.view_model.on_query_changed("fail".to_string());
-    harness.scheduler.advance_time_by(ms(1_300));
+    harness
+        .scheduler
+        .advance_time_by(Duration::from_millis(1_300));
     assert_eq!(
         harness.catalog(),
         CatalogResults::Failed {
@@ -220,7 +230,9 @@ fn leaving_the_screen_stops_its_state_and_then_the_app_wide_sync() {
     let sync_starts = harness.container.sync_starts();
 
     let screen = harness.view_model.ui_state().open();
-    harness.scheduler.advance_time_by(ms(3_000));
+    harness
+        .scheduler
+        .advance_time_by(Duration::from_millis(3_000));
     assert!(ui_running.value() && sync_running.value());
     assert_eq!(
         harness.view_model.ui_state().value().sync,
@@ -228,15 +240,19 @@ fn leaving_the_screen_stops_its_state_and_then_the_app_wide_sync() {
     );
 
     drop(screen);
-    harness.scheduler.advance_time_by(ms(4_999));
+    harness
+        .scheduler
+        .advance_time_by(Duration::from_millis(4_999));
     assert!(ui_running.value(), "the view model keeps its state for 5 s");
-    harness.scheduler.advance_time_by(ms(1));
+    harness.scheduler.advance_time_by(Duration::from_millis(1));
     assert!(!ui_running.value(), "then stops computing it");
     assert!(
         sync_running.value(),
         "the sync has its own 5 s grace period"
     );
-    harness.scheduler.advance_time_by(ms(5_000));
+    harness
+        .scheduler
+        .advance_time_by(Duration::from_millis(5_000));
     assert!(
         !sync_running.value(),
         "with no collector left, the sync stops"
@@ -256,11 +272,17 @@ fn leaving_the_screen_stops_its_state_and_then_the_app_wide_sync() {
 fn returning_within_the_timeout_restarts_nothing() {
     let harness = Harness::new();
     let screen = harness.view_model.ui_state().open();
-    harness.scheduler.advance_time_by(ms(500));
+    harness
+        .scheduler
+        .advance_time_by(Duration::from_millis(500));
     drop(screen);
-    harness.scheduler.advance_time_by(ms(3_000));
+    harness
+        .scheduler
+        .advance_time_by(Duration::from_millis(3_000));
     let _back = harness.view_model.ui_state().open();
-    harness.scheduler.advance_time_by(ms(20_000));
+    harness
+        .scheduler
+        .advance_time_by(Duration::from_millis(20_000));
     assert_eq!(harness.container.sync_starts().value(), 1);
     assert!(harness.view_model.ui_upstream_running().value());
 }
@@ -279,7 +301,7 @@ fn dropping_the_view_model_cancels_its_work() {
     drop(screen);
     drop(view_model);
     scheduler.run_current();
-    scheduler.advance_time_by(ms(5_000));
+    scheduler.advance_time_by(Duration::from_millis(5_000));
     assert!(
         !sync_running.value(),
         "no view model left to keep the sync alive"

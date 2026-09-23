@@ -8,10 +8,6 @@ use std::{
 
 use coroflow::{CoroutineScope, Flow, FlowExt, Stream, TestScheduler, delay, flow, flow_of};
 
-fn ms(value: u64) -> Duration {
-    Duration::from_millis(value)
-}
-
 #[test]
 fn a_flow_block_emits_in_order_and_reruns_for_every_collection() {
     let runs = Arc::new(AtomicUsize::new(0));
@@ -110,14 +106,14 @@ fn debounce_emits_only_values_that_stay_quiet_for_the_timeout_on_virtual_time() 
     let scheduler = TestScheduler::new();
     let typed = flow(|emitter| async move {
         emitter.emit("r").await;
-        delay(ms(100)).await;
+        delay(Duration::from_millis(100)).await;
         emitter.emit("ru").await;
-        delay(ms(300)).await;
+        delay(Duration::from_millis(300)).await;
         emitter.emit("rust").await;
     });
-    let result = scheduler.block_on(typed.debounce(ms(200)).to_vec());
+    let result = scheduler.block_on(typed.debounce(Duration::from_millis(200)).to_vec());
     assert_eq!(result, Ok(vec!["ru", "rust"]));
-    assert_eq!(scheduler.now(), ms(400));
+    assert_eq!(scheduler.now(), Duration::from_millis(400));
 }
 
 #[test]
@@ -127,7 +123,7 @@ fn flat_map_latest_cancels_the_previous_inner_flow() {
     let finished = Arc::new(AtomicUsize::new(0));
     let queries = flow(|emitter| async move {
         emitter.emit(1).await;
-        delay(ms(50)).await;
+        delay(Duration::from_millis(50)).await;
         emitter.emit(2).await;
     });
     let (started_in, finished_in) = (Arc::clone(&started), Arc::clone(&finished));
@@ -137,7 +133,7 @@ fn flat_map_latest_cancels_the_previous_inner_flow() {
             let (started, finished) = (Arc::clone(&started), Arc::clone(&finished));
             async move {
                 started.fetch_add(1, Ordering::SeqCst);
-                delay(ms(100)).await;
+                delay(Duration::from_millis(100)).await;
                 emitter.emit(query * 10).await;
                 finished.fetch_add(1, Ordering::SeqCst);
             }
@@ -146,7 +142,7 @@ fn flat_map_latest_cancels_the_previous_inner_flow() {
     assert_eq!(scheduler.block_on(results.to_vec()), Ok(vec![20]));
     assert_eq!(started.load(Ordering::SeqCst), 2);
     assert_eq!(finished.load(Ordering::SeqCst), 1);
-    assert_eq!(scheduler.now(), ms(150));
+    assert_eq!(scheduler.now(), Duration::from_millis(150));
 }
 
 #[test]
@@ -154,13 +150,13 @@ fn combine_waits_for_both_sides_and_then_emits_on_every_change() {
     let scheduler = TestScheduler::new();
     let letters = flow(|emitter| async move {
         emitter.emit('a').await;
-        delay(ms(20)).await;
+        delay(Duration::from_millis(20)).await;
         emitter.emit('b').await;
     });
     let numbers = flow(|emitter| async move {
-        delay(ms(10)).await;
+        delay(Duration::from_millis(10)).await;
         emitter.emit(1).await;
-        delay(ms(20)).await;
+        delay(Duration::from_millis(20)).await;
         emitter.emit(2).await;
     });
     let combined = letters.combine(numbers, |letter, number| format!("{letter}{number}"));
@@ -205,14 +201,14 @@ fn dropping_a_flow_on_run_cancels_its_upstream_coroutine() {
         async move {
             let _guard = DropMarker(marker);
             loop {
-                delay(ms(10)).await;
+                delay(Duration::from_millis(10)).await;
                 emitter.emit(()).await;
             }
         }
     })
     .flow_on(scheduler.dispatcher());
     let run = ticks.open();
-    scheduler.advance_time_by(ms(35));
+    scheduler.advance_time_by(Duration::from_millis(35));
     drop(run);
     scheduler.run_current();
     assert_eq!(finished.load(Ordering::SeqCst), 1);
@@ -239,7 +235,7 @@ fn a_coroutine_scope_collects_a_flow_launched_into_it() {
     let sink = Arc::clone(&total);
     let ticks = flow(|emitter| async move {
         for value in 1..=3 {
-            delay(ms(10)).await;
+            delay(Duration::from_millis(10)).await;
             emitter.emit(value).await;
         }
     });
@@ -250,9 +246,9 @@ fn a_coroutine_scope_collects_a_flow_launched_into_it() {
             })
             .await;
     });
-    scheduler.advance_time_by(ms(25));
+    scheduler.advance_time_by(Duration::from_millis(25));
     assert_eq!(total.load(Ordering::SeqCst), 3);
-    scheduler.advance_time_by(ms(10));
+    scheduler.advance_time_by(Duration::from_millis(10));
     assert_eq!(total.load(Ordering::SeqCst), 6);
 }
 
@@ -292,7 +288,7 @@ fn on_start_and_on_completion_bracket_every_collection_including_cancelled_ones(
 fn start_with_emits_its_value_before_every_run_of_the_upstream() {
     let scheduler = TestScheduler::new();
     let slow = flow(|emitter| async move {
-        delay(ms(400)).await;
+        delay(Duration::from_millis(400)).await;
         emitter.emit(2).await;
     })
     .start_with(1);

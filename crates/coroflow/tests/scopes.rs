@@ -13,10 +13,6 @@ use coroflow::{
     with_context,
 };
 
-fn ms(value: u64) -> Duration {
-    Duration::from_millis(value)
-}
-
 struct DropMarker(Arc<AtomicUsize>);
 
 impl Drop for DropMarker {
@@ -30,14 +26,14 @@ fn a_launched_job_reports_completion_to_joiners() {
     let scheduler = TestScheduler::new();
     let scope = CoroutineScope::new(scheduler.dispatcher());
     let job = scope.launch(async {
-        delay(ms(10)).await;
+        delay(Duration::from_millis(10)).await;
     });
     assert!(job.is_active());
     assert_eq!(job.outcome(), None);
     assert_eq!(scheduler.block_on(job.join()), Ok(JobOutcome::Completed));
     assert!(!job.is_active());
     assert!(!job.is_cancelled());
-    assert_eq!(scheduler.now(), ms(10));
+    assert_eq!(scheduler.now(), Duration::from_millis(10));
 }
 
 #[test]
@@ -49,13 +45,13 @@ fn cancelling_a_job_drops_its_future_without_polling_it_again() {
     let (marker, after) = (Arc::clone(&dropped), Arc::clone(&resumed));
     let job = scope.launch(async move {
         let _guard = DropMarker(marker);
-        delay(ms(100)).await;
+        delay(Duration::from_millis(100)).await;
         after.fetch_add(1, Ordering::SeqCst);
     });
-    scheduler.advance_time_by(ms(10));
+    scheduler.advance_time_by(Duration::from_millis(10));
     job.cancel();
     assert!(job.is_cancelled());
-    scheduler.advance_time_by(ms(200));
+    scheduler.advance_time_by(Duration::from_millis(200));
     assert_eq!(dropped.load(Ordering::SeqCst), 1);
     assert_eq!(resumed.load(Ordering::SeqCst), 0);
     assert_eq!(job.outcome(), Some(JobOutcome::Cancelled));
@@ -117,14 +113,14 @@ fn a_main_scope_runs_futures_that_hold_thread_bound_state() {
     let counter = Rc::new(Cell::new(0));
     let shared = Rc::clone(&counter);
     let job = scope.launch(async move {
-        delay(ms(5)).await;
+        delay(Duration::from_millis(5)).await;
         shared.set(shared.get() + 1);
     });
-    scheduler.advance_time_by(ms(5));
+    scheduler.advance_time_by(Duration::from_millis(5));
     assert_eq!(counter.get(), 1);
     assert_eq!(job.outcome(), Some(JobOutcome::Completed));
     assert!(scope.is_active());
-    assert!(scope.dispatcher().dispatcher().clock().now() == ms(5));
+    assert!(scope.dispatcher().dispatcher().clock().now() == Duration::from_millis(5));
     scope.cancel();
     assert!(!scope.is_active());
 }
@@ -163,13 +159,13 @@ fn with_context_runs_work_elsewhere_and_returns_its_result() {
     let io = scheduler.dispatcher();
     let result = scheduler.block_on(async move {
         with_context(&io, async {
-            delay(ms(30)).await;
+            delay(Duration::from_millis(30)).await;
             21 * 2
         })
         .await
     });
     assert_eq!(result, Ok(Ok(42)));
-    assert_eq!(scheduler.now(), ms(30));
+    assert_eq!(scheduler.now(), Duration::from_millis(30));
 }
 
 #[test]
@@ -199,10 +195,10 @@ fn delay_on_the_system_clock_waits_real_time() {
     let started = std::time::Instant::now();
     let scope = CoroutineScope::new(Dispatchers::default_pool());
     let job = scope.launch(async {
-        delay(ms(20)).await;
+        delay(Duration::from_millis(20)).await;
     });
     assert_eq!(pollster::block_on(job.join()), JobOutcome::Completed);
-    assert!(started.elapsed() >= ms(15));
+    assert!(started.elapsed() >= Duration::from_millis(15));
 }
 
 #[test]

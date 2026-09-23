@@ -14,10 +14,6 @@ use coroflow::{
     delay, flow,
 };
 
-fn ms(value: u64) -> Duration {
-    Duration::from_millis(value)
-}
-
 struct Ticker {
     starts: Arc<AtomicUsize>,
     live: Arc<AtomicUsize>,
@@ -43,7 +39,7 @@ impl Ticker {
                 loop {
                     tick += 1;
                     emitter.emit(tick).await;
-                    delay(ms(100)).await;
+                    delay(Duration::from_millis(100)).await;
                 }
             }
         })
@@ -63,10 +59,12 @@ fn while_subscribed_starts_with_the_first_collector_and_stops_after_the_timeout(
     let scheduler = TestScheduler::new();
     let scope = CoroutineScope::new(scheduler.dispatcher());
     let ticker = Ticker::new();
-    let state = ticker
-        .flow()
-        .state_in(&scope, SharingStarted::while_subscribed(ms(5_000)), 0);
-    scheduler.advance_time_by(ms(1_000));
+    let state = ticker.flow().state_in(
+        &scope,
+        SharingStarted::while_subscribed(Duration::from_millis(5_000)),
+        0,
+    );
+    scheduler.advance_time_by(Duration::from_millis(1_000));
     assert_eq!(
         ticker.starts.load(Ordering::SeqCst),
         0,
@@ -75,29 +73,29 @@ fn while_subscribed_starts_with_the_first_collector_and_stops_after_the_timeout(
     assert_eq!(state.value(), 0);
 
     let run = state.open();
-    scheduler.advance_time_by(ms(250));
+    scheduler.advance_time_by(Duration::from_millis(250));
     assert_eq!(ticker.starts.load(Ordering::SeqCst), 1);
     assert_eq!(state.value(), 3);
 
     drop(run);
-    scheduler.advance_time_by(ms(4_900));
+    scheduler.advance_time_by(Duration::from_millis(4_900));
     assert_eq!(
         ticker.live.load(Ordering::SeqCst),
         1,
         "still inside the stop timeout"
     );
-    scheduler.advance_time_by(ms(200));
+    scheduler.advance_time_by(Duration::from_millis(200));
     assert_eq!(
         ticker.live.load(Ordering::SeqCst),
         0,
         "stopped after the timeout"
     );
     let last = state.value();
-    scheduler.advance_time_by(ms(1_000));
+    scheduler.advance_time_by(Duration::from_millis(1_000));
     assert_eq!(state.value(), last, "the last value is kept while stopped");
 
     let _again = state.open();
-    scheduler.advance_time_by(ms(10));
+    scheduler.advance_time_by(Duration::from_millis(10));
     assert_eq!(
         ticker.starts.load(Ordering::SeqCst),
         2,
@@ -110,15 +108,17 @@ fn a_collector_returning_within_the_timeout_keeps_the_same_upstream_run() {
     let scheduler = TestScheduler::new();
     let scope = CoroutineScope::new(scheduler.dispatcher());
     let ticker = Ticker::new();
-    let state = ticker
-        .flow()
-        .state_in(&scope, SharingStarted::while_subscribed(ms(5_000)), 0);
+    let state = ticker.flow().state_in(
+        &scope,
+        SharingStarted::while_subscribed(Duration::from_millis(5_000)),
+        0,
+    );
     let first = state.open();
-    scheduler.advance_time_by(ms(50));
+    scheduler.advance_time_by(Duration::from_millis(50));
     drop(first);
-    scheduler.advance_time_by(ms(3_000));
+    scheduler.advance_time_by(Duration::from_millis(3_000));
     let _second = state.open();
-    scheduler.advance_time_by(ms(10_000));
+    scheduler.advance_time_by(Duration::from_millis(10_000));
     assert_eq!(ticker.starts.load(Ordering::SeqCst), 1);
     assert_eq!(ticker.live.load(Ordering::SeqCst), 1);
 }
@@ -131,11 +131,11 @@ fn eagerly_starts_at_once_and_lazily_waits_for_the_first_collector() {
     let lazy = Ticker::new();
     let eager_state = eager.flow().state_in(&scope, SharingStarted::Eagerly, 0);
     let lazy_state = lazy.flow().state_in(&scope, SharingStarted::Lazily, 0);
-    scheduler.advance_time_by(ms(150));
+    scheduler.advance_time_by(Duration::from_millis(150));
     assert_eq!(eager_state.value(), 2);
     assert_eq!(lazy.starts.load(Ordering::SeqCst), 0);
     drop(lazy_state.open());
-    scheduler.advance_time_by(ms(10_000));
+    scheduler.advance_time_by(Duration::from_millis(10_000));
     assert_eq!(lazy.live.load(Ordering::SeqCst), 1, "lazily never stops");
     assert_eq!(eager.starts.load(Ordering::SeqCst), 1);
 }
@@ -146,7 +146,7 @@ fn cancelling_the_scope_stops_sharing_and_keeps_the_last_value() {
     let scope = CoroutineScope::new(scheduler.dispatcher());
     let ticker = Ticker::new();
     let state = ticker.flow().state_in(&scope, SharingStarted::Eagerly, 0);
-    scheduler.advance_time_by(ms(150));
+    scheduler.advance_time_by(Duration::from_millis(150));
     drop(scope);
     scheduler.run_current();
     assert_eq!(ticker.live.load(Ordering::SeqCst), 0);
@@ -163,11 +163,11 @@ fn a_main_scope_can_share_a_flow_that_captures_thread_bound_state() {
         .flow()
         .map(move |tick| tick * factor.get())
         .state_in(&scope, SharingStarted::Eagerly, 0);
-    scheduler.advance_time_by(ms(10));
+    scheduler.advance_time_by(Duration::from_millis(10));
     assert_eq!(state.value(), 10);
     let mut run = Turbine::of(&state);
     assert_eq!(run.next_now(), Poll::Ready(Some(10)));
     multiplier.set(100);
-    scheduler.advance_time_by(ms(100));
+    scheduler.advance_time_by(Duration::from_millis(100));
     assert_eq!(run.next_now(), Poll::Ready(Some(200)));
 }

@@ -860,7 +860,7 @@ dependencies = [
 
 [[package]]
 name = "coroflow"
-version = "0.1.154"
+version = "0.1.157"
 dependencies = [
  "futures-core",
  "log",
@@ -871,7 +871,7 @@ dependencies = [
 
 [[package]]
 name = "coroflow-demo"
-version = "0.1.154"
+version = "0.1.157"
 dependencies = [
  "coroflow",
  "cranpose",
@@ -1052,7 +1052,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-coroflow"
-version = "0.1.154"
+version = "0.1.157"
 dependencies = [
  "coroflow",
  "cranpose-core",
