@@ -3082,6 +3082,26 @@ fn the_android_camera_pushes_frames_rather_than_writing_them_to_files() {
 }
 
 #[test]
+fn android_reports_a_screen_reader_only_while_touch_exploration_runs() {
+    let activity =
+        workspace_source("crates/cranpose/android/java/dev/cranpose/android/CranposeActivity.java");
+    let bridge = crate_source("src/android_accessibility.rs");
+    assert!(
+        activity.contains("nativeOnScreenReaderStateChanged(manager.isTouchExplorationEnabled());")
+            && activity.contains("manager.addTouchExplorationStateChangeListener(")
+            && activity.contains("manager.removeTouchExplorationStateChangeListener("),
+        "a password manager or an automation service is not a screen reader"
+    );
+    assert!(
+        bridge.contains("screen_reader_on: screen_reader_running(),")
+            && bridge.contains(
+                "Java_dev_cranpose_android_CranposeActivity_nativeOnScreenReaderStateChanged"
+            ),
+        "the app's reader state follows touch exploration, while any service still gets the tree"
+    );
+}
+
+#[test]
 fn talkback_brings_any_element_it_lands_on_into_view() {
     let activity =
         workspace_source("crates/cranpose/android/java/dev/cranpose/android/CranposeActivity.java");

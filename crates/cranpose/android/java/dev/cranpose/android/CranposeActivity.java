@@ -738,11 +738,14 @@ public class CranposeActivity extends NativeActivity {
     private static native void nativeOnAccessibilityScrollToIndex(int virtualViewId, int index);
 
     private static native void nativeOnAccessibilityStateChanged(boolean enabled);
+    private static native void nativeOnScreenReaderStateChanged(boolean running);
     private static native void nativeOnAccessibilityOptions(
             boolean reduceMotion, boolean increaseContrast, boolean boldText);
 
     private AccessibilityManager.AccessibilityStateChangeListener
             cranposeAccessibilityStateListener;
+    private AccessibilityManager.TouchExplorationStateChangeListener
+            cranposeScreenReaderListener;
 
     /**
      * Mirrors {@link AccessibilityManager}'s state into the native frame loop,
@@ -759,6 +762,9 @@ public class CranposeActivity extends NativeActivity {
                 CranposeActivity::nativeOnAccessibilityStateChanged;
         manager.addAccessibilityStateChangeListener(cranposeAccessibilityStateListener);
         nativeOnAccessibilityStateChanged(manager.isEnabled());
+        cranposeScreenReaderListener = CranposeActivity::nativeOnScreenReaderStateChanged;
+        manager.addTouchExplorationStateChangeListener(cranposeScreenReaderListener);
+        nativeOnScreenReaderStateChanged(manager.isTouchExplorationEnabled());
     }
 
     /**
@@ -2743,8 +2749,10 @@ public class CranposeActivity extends NativeActivity {
             if (manager != null) {
                 manager.removeAccessibilityStateChangeListener(
                         cranposeAccessibilityStateListener);
+                manager.removeTouchExplorationStateChangeListener(cranposeScreenReaderListener);
             }
             cranposeAccessibilityStateListener = null;
+            cranposeScreenReaderListener = null;
         }
         try {
             unregisterReceiver(cranposeUpdateInstallReceiver);

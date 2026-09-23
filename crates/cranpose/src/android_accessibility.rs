@@ -33,6 +33,7 @@ static DISMISS_REQUESTS: OnceLock<Mutex<Vec<i32>>> = OnceLock::new();
 static JUMP_REQUESTS: OnceLock<Mutex<Vec<(i32, usize)>>> = OnceLock::new();
 static LOOP_WAKER: Mutex<Option<android_activity::AndroidAppWaker>> = Mutex::new(None);
 static PLATFORM_ACCESSIBILITY_ENABLED: AtomicBool = AtomicBool::new(false);
+static PLATFORM_SCREEN_READER_ON: AtomicBool = AtomicBool::new(false);
 static OPTION_BITS: AtomicU8 = AtomicU8::new(0);
 const REDUCE_MOTION_BIT: u8 = 1;
 const INCREASE_CONTRAST_BIT: u8 = 2;
@@ -63,6 +64,11 @@ fn accessibility_sync_override() -> Option<bool> {
 fn accessibility_bridge_enabled() -> bool {
     accessibility_sync_override()
         .unwrap_or_else(|| PLATFORM_ACCESSIBILITY_ENABLED.load(Ordering::Relaxed))
+}
+
+fn screen_reader_running() -> bool {
+    accessibility_sync_override()
+        .unwrap_or_else(|| PLATFORM_SCREEN_READER_ON.load(Ordering::Relaxed))
 }
 
 pub(crate) fn set_waker(waker: android_activity::AndroidAppWaker) {
@@ -272,7 +278,7 @@ pub(crate) fn sync(
         *seen_revision = None;
     }
     let reader_on = cranpose_services::AccessibilityState {
-        screen_reader_on: accessibility_bridge_enabled(),
+        screen_reader_on: screen_reader_running(),
     };
     if cranpose_services::set_platform_accessibility_state(reader_on) {
         shell.request_root_render();
@@ -348,6 +354,19 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccess
 ) {
     let previous = PLATFORM_ACCESSIBILITY_ENABLED.swap(enabled, Ordering::Relaxed);
     if previous != enabled {
+        wake_loop();
+    }
+}
+
+#[doc(hidden)]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnScreenReaderStateChanged(
+    _env: EnvUnowned<'_>,
+    _class: JClass<'_>,
+    running: jboolean,
+) {
+    let previous = PLATFORM_SCREEN_READER_ON.swap(running, Ordering::Relaxed);
+    if previous != running {
         wake_loop();
     }
 }

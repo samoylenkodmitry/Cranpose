@@ -495,7 +495,7 @@ composed again when it changes.
 | Platform | Says a reader is on when |
 | --- | --- |
 | iOS | `UIAccessibilityIsVoiceOverRunning()` answers yes, checked on every frame the bridge publishes |
-| Android | an accessibility service is enabled, the same signal that turns the node provider on |
+| Android | touch exploration is on, as TalkBack turns it on; any other enabled service still receives the node tree, but a password manager or an automation service is not a reader |
 | accesskit | a reader asked for the tree, until it lets go |
 | Web | never: a browser gives a page no such signal |
 
