@@ -123,12 +123,12 @@ pub use helper_process::windowless_command;
 pub use host::{
     DEFAULT_DURABLE_SAVE_DEADLINE, DurableSaveEffect, DurableSaveOutcome, DurableSaveRegistration,
     HostController, HostControllerRef, LifecycleEvent, LifecycleObserver, LifecycleState,
-    PlatformDirectories, PlatformDirectoryError, ProvideLifecycle, application_directories,
-    application_id, background_app, clear_application_id, clear_host_controller,
-    current_lifecycle_state, dispatch_lifecycle, dispatch_lifecycle_state, exit_app,
-    host_controller, local_lifecycle_state, observe_lifecycle, register_durable_save,
+    PlatformDirectories, PlatformDirectoryError, ProvideLifecycle, advance_lifecycle,
+    application_directories, application_id, background_app, clear_application_id,
+    clear_host_controller, current_lifecycle_state, dispatch_lifecycle, dispatch_lifecycle_state,
+    exit_app, host_controller, local_lifecycle_state, observe_lifecycle, register_durable_save,
     rememberLifecycleEvents, rememberLifecycleState, set_application_id, set_host_controller,
-    set_keep_screen_on,
+    set_keep_screen_on, window_lifecycle_state,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use host::{durable_save_deadline, run_durable_saves};

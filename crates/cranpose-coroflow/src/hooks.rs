@@ -132,7 +132,9 @@ pub trait StateFlowCollect<T: Clone + 'static> {
 
     /// Like [`collectAsState`](StateFlowCollect::collectAsState), but pauses
     /// collecting while the app is stopped — Android's
-    /// `collectAsStateWithLifecycle()`.
+    /// `collectAsStateWithLifecycle()`. Android and iOS stop an app in the
+    /// background, desktop hosts while its window is minimized or hidden, and
+    /// browsers while its tab is in the background.
     ///
     /// A paused collection is not a subscriber, so `WhileSubscribed` upstreams
     /// stop after their timeout while the app sits in the background, and the

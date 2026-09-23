@@ -860,7 +860,7 @@ dependencies = [
 
 [[package]]
 name = "coroflow"
-version = "0.1.157"
+version = "0.1.158"
 dependencies = [
  "futures-core",
  "log",
@@ -875,7 +875,7 @@ dependencies = [
 
 [[package]]
 name = "coroflow-demo"
-version = "0.1.157"
+version = "0.1.158"
 dependencies = [
  "coroflow",
  "cranpose",
@@ -892,7 +892,7 @@ dependencies = [
 
 [[package]]
 name = "coroflow-demo-web"
-version = "0.1.157"
+version = "0.1.158"
 dependencies = [
  "console_error_panic_hook",
  "coroflow-demo",
@@ -1071,7 +1071,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-coroflow"
-version = "0.1.157"
+version = "0.1.158"
 dependencies = [
  "coroflow",
  "cranpose-core",

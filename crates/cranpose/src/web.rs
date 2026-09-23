@@ -554,6 +554,7 @@ pub async fn run(
         closure.forget();
     }
     crate::web_accessibility_options::watch(&window, app.clone(), request_frame.clone());
+    crate::web_lifecycle::watch(&window, request_frame.clone());
 
     {
         let app = app.clone();

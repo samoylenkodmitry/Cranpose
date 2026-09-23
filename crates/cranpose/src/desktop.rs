@@ -626,6 +626,7 @@ struct App {
     current_modifiers: winit::keyboard::ModifiersState,
     last_cursor_position: Option<(f32, f32)>,
     primary_shown: Arc<std::sync::atomic::AtomicBool>,
+    primary_presence: Option<crate::desktop_lifecycle::WindowPresence>,
     #[cfg(feature = "robot")]
     robot_controller: Option<RobotController>,
     #[cfg(feature = "robot")]
@@ -698,6 +699,7 @@ impl App {
             current_modifiers: winit::keyboard::ModifiersState::empty(),
             last_cursor_position: None,
             primary_shown: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            primary_presence: None,
             #[cfg(feature = "robot")]
             robot_controller: None,
             #[cfg(feature = "robot")]
@@ -5122,6 +5124,24 @@ impl cranpose_app_shell::PlatformTextInputHandler for DesktopTextInput {
     }
 }
 
+impl App {
+    fn publish_primary_presence(&mut self, event: &WindowEvent) {
+        if let Some(state) = self
+            .primary_presence
+            .as_mut()
+            .and_then(|presence| presence.observe(event))
+        {
+            cranpose_services::advance_lifecycle(state);
+        }
+    }
+}
+
+impl Drop for App {
+    fn drop(&mut self) {
+        cranpose_services::advance_lifecycle(cranpose_services::LifecycleState::Destroyed);
+    }
+}
+
 impl ApplicationHandler for App {
     fn proxy_wake_up(&mut self, event_loop: &dyn ActiveEventLoop) {
         if self.exiting {
@@ -5321,6 +5341,9 @@ impl ApplicationHandler for App {
         self.app = Some(app);
         self.accessibility = Some(accessibility);
         self.platform = Some(platform);
+        cranpose_services::advance_lifecycle(cranpose_services::LifecycleState::Resumed);
+        self.primary_presence =
+            (!self.settings.headless).then(crate::desktop_lifecycle::WindowPresence::shown);
         self.gpu_context = Some(DesktopGpuContext {
             instance,
             adapter,
@@ -5351,6 +5374,7 @@ impl ApplicationHandler for App {
             return;
         }
         self.relay_primary_held_press(event_loop, &event);
+        self.publish_primary_presence(&event);
         let Some(window) = &self.window else {
             return;
         };

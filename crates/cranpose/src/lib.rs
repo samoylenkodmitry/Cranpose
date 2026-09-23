@@ -482,6 +482,8 @@ mod desktop_incoming;
 #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
 mod desktop_input;
 #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
+mod desktop_lifecycle;
+#[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
 mod desktop_power;
 #[cfg(any(
     all(feature = "desktop-shell", feature = "renderer-wgpu"),
@@ -647,6 +649,8 @@ mod web_wheel;
 mod web_accessibility;
 #[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]
 mod web_accessibility_options;
+#[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]
+mod web_lifecycle;
 
 #[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]
 mod web_clipboard;

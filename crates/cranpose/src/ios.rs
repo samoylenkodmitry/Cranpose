@@ -270,18 +270,11 @@ impl<F: FnMut() + 'static> IosApp<F> {
 
 impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
     fn resumed(&mut self, _event_loop: &dyn ActiveEventLoop) {
-        if matches!(
-            cranpose_services::current_lifecycle_state(),
-            cranpose_services::LifecycleState::Created | cranpose_services::LifecycleState::Stopped
-        ) {
-            cranpose_services::dispatch_lifecycle_state(cranpose_services::LifecycleState::Started);
-        }
-        cranpose_services::dispatch_lifecycle_state(cranpose_services::LifecycleState::Resumed);
+        cranpose_services::advance_lifecycle(cranpose_services::LifecycleState::Resumed);
     }
 
     fn suspended(&mut self, _event_loop: &dyn ActiveEventLoop) {
-        cranpose_services::dispatch_lifecycle_state(cranpose_services::LifecycleState::Paused);
-        cranpose_services::dispatch_lifecycle_state(cranpose_services::LifecycleState::Stopped);
+        cranpose_services::advance_lifecycle(cranpose_services::LifecycleState::Stopped);
     }
 
     fn proxy_wake_up(&mut self, _event_loop: &dyn ActiveEventLoop) {
@@ -551,7 +544,7 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
 
 impl<F: FnMut() + 'static> Drop for IosApp<F> {
     fn drop(&mut self) {
-        cranpose_services::dispatch_lifecycle_state(cranpose_services::LifecycleState::Destroyed);
+        cranpose_services::advance_lifecycle(cranpose_services::LifecycleState::Destroyed);
     }
 }
 
