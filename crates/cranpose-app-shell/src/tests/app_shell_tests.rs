@@ -34,6 +34,9 @@ mod inspector_shell_tests;
 #[path = "reader_activation_tests.rs"]
 mod reader_activation_tests;
 
+#[path = "unhandled_key_tests.rs"]
+mod unhandled_key_tests;
+
 fn reader_control_id<R: Renderer>(shell: &mut AppShell<R>, name: &str) -> NodeId
 where
     R::Error: Debug,

@@ -1237,13 +1237,12 @@ where
             return true;
         }
 
-        if !cranpose_ui::text_field_focus::has_focused_field() {
-            return false;
-        }
-
-        let handled =
+        let handled = if cranpose_ui::text_field_focus::has_focused_field() {
             run_in_mutable_snapshot(|| cranpose_ui::text_field_focus::dispatch_key_event(event))
-                .unwrap_or(false);
+        } else {
+            run_in_mutable_snapshot(|| cranpose_ui::dispatch_unhandled_key_event(event))
+        }
+        .unwrap_or(false);
 
         if handled {
             self.mark_dirty();
