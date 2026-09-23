@@ -195,6 +195,59 @@ fn reader_changes_a_switch_in_both_directions() {
     }
 }
 
+fn more_menu(
+    modifier: Modifier,
+    expanded: cranpose_core::MutableState<bool>,
+    content: impl Fn(&LiquidMenuScope) + 'static,
+) {
+    LiquidDropdownMenu(
+        modifier,
+        expanded.get(),
+        LiquidDropdownMenuSpec::default(),
+        move || expanded.set(false),
+        move || {
+            cranpose_ui::Text(
+                "More",
+                Modifier::empty()
+                    .size(cranpose_ui::Size::new(100.0, 48.0))
+                    .clickable(move |_| expanded.set(true)),
+                cranpose_ui::TextStyle::default(),
+            );
+        },
+        content,
+    );
+}
+
+#[test]
+fn an_open_menu_names_itself_to_a_screen_reader() {
+    let mut robot = create_headless_robot_test(400, 800, move || {
+        LiquidTheme(LiquidThemeSpec::default(), move || {
+            let expanded = rememberMutableStateOf(|| false);
+            more_menu(Modifier::empty().pane_title("Receipt"), expanded, |scope| {
+                scope.item(LiquidMenuItem::new("Export text"), || {});
+                scope.item(LiquidMenuItem::new("Copy text"), || {});
+            });
+        });
+    });
+    robot.shell_mut().set_semantics_enabled(true);
+    robot.wait_for_idle();
+    activate(&mut robot, "More");
+
+    let tree = placed_semantics_from_shell(robot.shell_mut()).expect("open menu");
+    let issues = cranpose_testing::audit_accessibility(&tree);
+    assert!(
+        !issues
+            .iter()
+            .any(|issue| issue.kind == cranpose_testing::AccessibilityIssueKind::NoPaneTitle),
+        "an open menu hides the screen behind it, so it must name itself: {issues:?}"
+    );
+    assert!(
+        tree.flatten()
+            .into_iter()
+            .any(|node| !node.hidden && node.pane_title.as_deref() == Some("Menu"))
+    );
+}
+
 #[test]
 fn reader_selects_a_menu_item_and_dismisses_the_popup() {
     for keyboard in [false, true] {
@@ -205,32 +258,17 @@ fn reader_selects_a_menu_item_and_dismisses_the_popup() {
             LiquidTheme(LiquidThemeSpec::default(), move || {
                 let expanded = rememberMutableStateOf(|| false);
                 let recorded = std::rc::Rc::clone(&recorded);
-                LiquidDropdownMenu(
-                    Modifier::empty(),
-                    expanded.get(),
-                    LiquidDropdownMenuSpec::default(),
-                    move || expanded.set(false),
-                    move || {
-                        cranpose_ui::Text(
-                            "More",
-                            Modifier::empty()
-                                .size(cranpose_ui::Size::new(100.0, 48.0))
-                                .clickable(move |_| expanded.set(true)),
-                            cranpose_ui::TextStyle::default(),
-                        );
-                    },
-                    move |scope| {
-                        scope.header("Document actions");
-                        let copied = std::rc::Rc::clone(&recorded);
-                        let recorded = std::rc::Rc::clone(&recorded);
-                        scope.item(LiquidMenuItem::new("Export text"), move || {
-                            recorded.set(recorded.get() + 1)
-                        });
-                        scope.item(LiquidMenuItem::new("Copy text"), move || {
-                            copied.set(copied.get() + 10)
-                        });
-                    },
-                );
+                more_menu(Modifier::empty(), expanded, move |scope| {
+                    scope.header("Document actions");
+                    let copied = std::rc::Rc::clone(&recorded);
+                    let recorded = std::rc::Rc::clone(&recorded);
+                    scope.item(LiquidMenuItem::new("Export text"), move || {
+                        recorded.set(recorded.get() + 1)
+                    });
+                    scope.item(LiquidMenuItem::new("Copy text"), move || {
+                        copied.set(copied.get() + 10)
+                    });
+                });
             });
         });
         robot.shell_mut().set_semantics_enabled(true);
