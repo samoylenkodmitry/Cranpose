@@ -27,6 +27,9 @@ members = [
     "crates/cranpose-services",
     "crates/cranpose-storekit",
     "xtask",
+    "crates/coroflow",
+    "crates/cranpose-coroflow",
+    "apps/coroflow-demo",
 ]
 resolver = "2"
 

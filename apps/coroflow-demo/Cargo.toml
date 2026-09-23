@@ -1,0 +1,46 @@
+[package]
+name = "coroflow-demo"
+description = "A Cranpose app layered like a large Android app: repositories, use cases and view models on coroflow."
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "coroflow-demo"
+path = "src/main.rs"
+required-features = ["desktop"]
+
+[features]
+default = ["renderer-wgpu", "desktop"]
+renderer-wgpu = ["cranpose/renderer-wgpu"]
+desktop = ["cranpose/desktop"]
+logging = ["dep:env_logger"]
+robot = ["desktop", "cranpose/robot"]
+
+[[example]]
+name = "robot_coroflow_notes"
+path = "robot-runners/robot_coroflow_notes.rs"
+required-features = ["robot"]
+
+[dependencies]
+coroflow = { path = "../../crates/coroflow" }
+cranpose = { workspace = true, features = ["embedded-default-font"] }
+cranpose-core = { workspace = true }
+cranpose-coroflow = { path = "../../crates/cranpose-coroflow" }
+cranpose-foundation = { workspace = true }
+cranpose-ui = { workspace = true }
+env_logger = { version = "0.11", optional = true }
+log = "0.4"
+thiserror = "2"
+
+[dev-dependencies]
+cranpose-testing = { path = "../../crates/cranpose-testing", features = ["desktop-robot"] }
+image = { version = "0.25.10", default-features = false, features = ["png"] }
