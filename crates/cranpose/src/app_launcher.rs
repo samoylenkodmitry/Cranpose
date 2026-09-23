@@ -59,6 +59,30 @@ mod inspector_settings_tests;
 #[path = "tests/window_icon_settings.rs"]
 mod window_icon_settings_tests;
 
+#[cfg(test)]
+#[path = "tests/custom_cursor_size_settings.rs"]
+mod custom_cursor_size_settings_tests;
+
+/// How big an app's own cursor images appear when the person has enlarged the
+/// system pointer.
+///
+/// macOS enlarges every cursor by its accessibility pointer size, an app's own
+/// images included, and a cursor drawn as pixel art at an exact size is
+/// stretched with it: at the largest setting a 32-pixel cursor covers 128
+/// points, every pixel a smeared block. Standard cursors follow the system
+/// whichever is chosen here. Other desktops show a custom cursor at the size
+/// it was drawn at already.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CustomCursorSize {
+    /// Custom cursors grow with the system pointer, as the standard ones do.
+    /// The default: the person enlarged the pointer to see it.
+    #[default]
+    FollowSystem,
+    /// Custom cursors keep the size they were drawn at, every pixel of the
+    /// image intact, however the system pointer is set.
+    AsDrawn,
+}
+
 /// Configuration for application settings.
 pub struct AppSettings {
     /// Window title (desktop) / app name (mobile)
@@ -99,6 +123,13 @@ pub struct AppSettings {
     /// in here and the canvas fills the dynamic viewport, tracking the browser
     /// window as it resizes; other platforms ignore this field.
     pub web_fill_viewport: bool,
+    /// Desktop only: how big an app's own cursor images appear when the person
+    /// has enlarged the system pointer.
+    ///
+    /// Left at [`CustomCursorSize::FollowSystem`], they grow with it, as the
+    /// standard cursors do. An app whose cursors are pixel art drawn at an exact
+    /// size can ask for [`CustomCursorSize::AsDrawn`] instead.
+    pub custom_cursor_size: CustomCursorSize,
     /// Fonts loaded for text rendering (ordered: primary first, fallbacks last).
     pub fonts: Option<&'static [&'static [u8]]>,
     /// App-supplied font families, already read and parsed.
@@ -172,6 +203,7 @@ impl Default for AppSettings {
             initial_size_explicit: false,
             primary_wraps_content: false,
             web_fill_viewport: false,
+            custom_cursor_size: CustomCursorSize::FollowSystem,
             fonts: None,
             font_registry: SoftwareTextFontRegistry::new(),
             android_use_system_fonts: false,
@@ -508,6 +540,13 @@ impl AppLauncher {
     /// platforms ignore this.
     pub fn with_web_fill_viewport(mut self, fill: bool) -> Self {
         self.settings.web_fill_viewport = fill;
+        self
+    }
+
+    /// Desktop only: how big the app's own cursor images appear when the
+    /// person has enlarged the system pointer. See [`CustomCursorSize`].
+    pub fn with_custom_cursor_size(mut self, size: CustomCursorSize) -> Self {
+        self.settings.custom_cursor_size = size;
         self
     }
 
