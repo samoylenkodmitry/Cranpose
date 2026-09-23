@@ -56,6 +56,9 @@ pub(super) fn save_document(
 ) -> PickerFuture<Result<Option<ContentSinkRef>, FilePickerError>> {
     Box::pin(async move {
         let mut dialog = rfd::AsyncFileDialog::new().set_file_name(&request.file_name);
+        if let Some((label, extension)) = save_filter(&request.file_name) {
+            dialog = dialog.add_filter(label, &[extension.as_str()]);
+        }
         if let Some(title) = &request.title {
             dialog = dialog.set_title(title);
         }
@@ -64,6 +67,14 @@ pub(super) fn save_document(
         };
         Ok(Some(FileSink::create(handle.path())?.handle()))
     })
+}
+
+fn save_filter(file_name: &str) -> Option<(String, String)> {
+    let extension = std::path::Path::new(file_name)
+        .extension()?
+        .to_str()
+        .filter(|extension| !extension.is_empty())?;
+    Some((extension.to_uppercase(), extension.to_string()))
 }
 
 pub(super) fn pick_writable_folder(
@@ -76,3 +87,7 @@ pub(super) fn pick_writable_folder(
             .map(|handle| handle.path().display().to_string()))
     })
 }
+
+#[cfg(test)]
+#[path = "tests/desktop.rs"]
+mod tests;
