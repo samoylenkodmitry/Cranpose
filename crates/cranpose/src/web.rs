@@ -26,6 +26,98 @@ type RenderLoop = Rc<RefCell<Option<Closure<dyn FnMut()>>>>;
 
 type ReshapeFn = Rc<dyn Fn(Option<(f32, f32)>)>;
 
+fn canvas_window(canvas: &HtmlCanvasElement, page: &web_sys::Window) -> web_sys::Window {
+    canvas
+        .owner_document()
+        .and_then(|document| document.default_view())
+        .unwrap_or_else(|| page.clone())
+}
+
+fn resize_floating_window(host: &web_sys::Window, width: f32, height: f32) -> bool {
+    let measure = |value: Result<JsValue, JsValue>| value.ok().and_then(|value| value.as_f64());
+    let (Some(outer_width), Some(outer_height), Some(inner_width), Some(inner_height)) = (
+        measure(host.outer_width()),
+        measure(host.outer_height()),
+        measure(host.inner_width()),
+        measure(host.inner_height()),
+    ) else {
+        return false;
+    };
+    let (window_width, window_height) = crate::web_floating_window::outer_size_for_inner(
+        (width, height),
+        (outer_width, outer_height),
+        (inner_width, inner_height),
+    );
+    match host.resize_to(window_width, window_height) {
+        Ok(()) => true,
+        Err(error) => {
+            log::debug!("the floating window waits for a gesture to resize: {error:?}");
+            false
+        }
+    }
+}
+
+fn is_floating(host: &web_sys::Window, page: &web_sys::Window) -> bool {
+    AsRef::<JsValue>::as_ref(host) != AsRef::<JsValue>::as_ref(page)
+}
+
+fn apply_requested_canvas_size(
+    canvas: &HtmlCanvasElement,
+    page: &web_sys::Window,
+    (width, height): (f32, f32),
+    owed: &Cell<Option<(f32, f32)>>,
+) {
+    if let Some(html_element) = canvas.dyn_ref::<web_sys::HtmlElement>() {
+        let style = html_element.style();
+        let _ = style.set_property("width", &format!("{width}px"));
+        let _ = style.set_property("height", &format!("{height}px"));
+    }
+    let host = canvas_window(canvas, page);
+    let resized = !is_floating(&host, page) || resize_floating_window(&host, width, height);
+    owed.set((!resized).then_some((width, height)));
+}
+
+fn resize_owed_floating_window(
+    canvas: &HtmlCanvasElement,
+    page: &web_sys::Window,
+    owed: &Cell<Option<(f32, f32)>>,
+) {
+    let Some((width, height)) = owed.get() else {
+        return;
+    };
+    let host = canvas_window(canvas, page);
+    if !is_floating(&host, page) || resize_floating_window(&host, width, height) {
+        owed.set(None);
+    }
+}
+
+fn follow_canvas_size(
+    canvas: &HtmlCanvasElement,
+    page: &web_sys::Window,
+    reshape: ReshapeFn,
+    owed: Rc<Cell<Option<(f32, f32)>>>,
+) -> Result<(), JsValue> {
+    let on_release = {
+        let canvas = canvas.clone();
+        let page = page.clone();
+        Closure::wrap(Box::new(move |_event: PointerEvent| {
+            resize_owed_floating_window(&canvas, &page, &owed)
+        }) as Box<dyn FnMut(PointerEvent)>)
+    };
+    canvas.add_event_listener_with_callback("pointerup", on_release.as_ref().unchecked_ref())?;
+    on_release.forget();
+
+    let on_resize = Closure::wrap(Box::new(
+        move |_entries: js_sys::Array, _observer: web_sys::ResizeObserver| reshape(None),
+    )
+        as Box<dyn FnMut(js_sys::Array, web_sys::ResizeObserver)>);
+    let observer = web_sys::ResizeObserver::new(on_resize.as_ref().unchecked_ref())?;
+    observer.observe(canvas);
+    on_resize.forget();
+    std::mem::forget(observer);
+    Ok(())
+}
+
 fn web_pointer_source(event: &PointerEvent) -> PointerSource {
     match event.pointer_type().as_str() {
         "touch" => PointerSource::Touch,
@@ -684,6 +776,8 @@ pub async fn run(
         closure.forget();
     }
 
+    let floating_size_owed: Rc<Cell<Option<(f32, f32)>>> = Rc::new(Cell::new(None));
+
     let reshape: ReshapeFn = {
         let canvas = canvas.clone();
         let window = window.clone();
@@ -693,16 +787,14 @@ pub async fn run(
         let surface_config = surface_config.clone();
         let surface_dirty = surface_dirty.clone();
         let request_frame = request_frame.clone();
+        let floating_size_owed = floating_size_owed.clone();
         Rc::new(move |requested: Option<(f32, f32)>| {
-            if let Some((requested_width, requested_height)) = requested
-                && let Some(html_element) = canvas.dyn_ref::<web_sys::HtmlElement>()
-            {
-                let style = html_element.style();
-                let _ = style.set_property("width", &format!("{requested_width}px"));
-                let _ = style.set_property("height", &format!("{requested_height}px"));
+            if let Some(size) = requested {
+                apply_requested_canvas_size(&canvas, &window, size, &floating_size_owed);
             }
+            let host = canvas_window(&canvas, &window);
 
-            let scale_factor = window.device_pixel_ratio();
+            let scale_factor = host.device_pixel_ratio();
             let width = canvas.client_width().max(1) as u32;
             let height = canvas.client_height().max(1) as u32;
             let (buffer_width, buffer_height) =
@@ -748,6 +840,8 @@ pub async fn run(
         window.add_event_listener_with_callback("resize", closure.as_ref().unchecked_ref())?;
         closure.forget();
     }
+
+    follow_canvas_size(&canvas, &window, reshape.clone(), floating_size_owed)?;
 
     {
         let reshape = reshape.clone();

@@ -619,6 +619,12 @@ mod web_surface_scale;
     all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"),
     test
 ))]
+mod web_floating_window;
+
+#[cfg(any(
+    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"),
+    test
+))]
 mod web_wheel;
 
 #[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]
