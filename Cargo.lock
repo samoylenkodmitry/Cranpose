@@ -922,6 +922,7 @@ dependencies = [
  "cranpose-render-common",
  "cranpose-render-pixels",
  "cranpose-render-wgpu",
+ "cranpose-runtime-std",
  "cranpose-services",
  "cranpose-storekit",
  "cranpose-ui",
