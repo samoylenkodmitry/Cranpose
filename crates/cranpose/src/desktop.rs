@@ -6924,7 +6924,7 @@ fn resolve_robot_screenshot_params(
     )
 }
 
-#[cfg(any(test, feature = "robot"))]
+#[cfg(feature = "robot")]
 fn robot_capture_scale_from_env() -> f32 {
     parse_robot_capture_scale(
         std::env::var("CRANPOSE_ROBOT_CAPTURE_SCALE")
@@ -6933,7 +6933,7 @@ fn robot_capture_scale_from_env() -> f32 {
     )
 }
 
-#[cfg(any(test, feature = "robot"))]
+#[cfg(feature = "robot")]
 fn parse_robot_capture_scale(value: Option<&str>) -> f32 {
     value
         .and_then(|value| value.parse::<f32>().ok())
@@ -6941,7 +6941,7 @@ fn parse_robot_capture_scale(value: Option<&str>) -> f32 {
         .unwrap_or(1.0)
 }
 
-#[cfg(any(test, feature = "robot"))]
+#[cfg(feature = "robot")]
 fn resolve_robot_screenshot_params_with_scale(
     buffer_size: (u32, u32),
     fallback_logical_size: Option<(f32, f32)>,

@@ -496,6 +496,7 @@ fn project_semantics(
     elements
 }
 
+#[cfg_attr(test, allow(dead_code))]
 pub(crate) fn install_inspector<R: Renderer>(shell: &mut AppShell<R>, enabled: Option<bool>)
 where
     R::Error: Debug,
@@ -507,6 +508,7 @@ where
     );
 }
 
+#[cfg_attr(test, allow(dead_code))]
 fn inspector_nodes(
     layout: &cranpose_ui::LayoutTree,
     semantics: &cranpose_ui::SemanticsTree,

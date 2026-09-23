@@ -30,6 +30,7 @@
 //! }
 //!
 //! fn main() {
+//! #   #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
 //!     AppLauncher::new()
 //!         .with_title("Hello")
 //!         .with_size(320, 200)
