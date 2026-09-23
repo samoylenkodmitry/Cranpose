@@ -17,6 +17,7 @@
 //! | `map`, `filter`, `mapNotNull`, `scan`, `drop`, `debounce`, `zip`, `combine`, `flowOn` | [`FlowExt`] |
 //! | `flatMapLatest`, `flatMapConcat`, `flatMapMerge`, `catch`, `retry`, `retryWhen` | [`FlowExt`] |
 //! | `merge(a, b)`, `combine(a, b, c)` | [`merge`], [`combine3`] |
+//! | `Mutex`, `Semaphore` | [`Mutex`], [`Semaphore`] |
 //! | `Channel`, `produce`, `receiveAsFlow` | [`channel`], [`produce`], [`Receiver`] |
 //! | `channelFlow`, `callbackFlow`, `awaitClose` | [`channel_flow`], [`callback_flow`], [`Producer::await_close`] |
 //! | `MutableStateFlow`, `MutableSharedFlow`, `BufferOverflow` | [`MutableStateFlow`], [`MutableSharedFlow`], [`BufferOverflow`] |
@@ -42,6 +43,7 @@ mod clock;
 mod combining;
 mod dispatcher;
 mod errors;
+mod exclusion;
 mod flattening;
 mod flow;
 mod job;
@@ -68,6 +70,7 @@ pub use dispatcher::{
     ConfinedDispatcher, Dispatch, Dispatcher, Dispatchers, IO_POOL_MIN_THREADS, Runnable,
 };
 pub use errors::{Catch, CatchRun, RetryRun, RetryWhen};
+pub use exclusion::{Mutex, MutexGuard, Permit, Semaphore};
 pub use flattening::{FlatMap, FlatMapRun};
 pub use flow::{BoxFlow, Flow, FlowExt, LocalBoxFlow, SendFlow};
 pub use futures_core::Stream;
