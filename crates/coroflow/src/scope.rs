@@ -11,7 +11,7 @@ use std::{
 use crate::{
     dispatcher::{ConfinedDispatcher, Dispatcher},
     job::{Job, JobOutcome},
-    sync::{OneshotReceiver, lock, oneshot},
+    sync::{OneshotReceiver, OneshotSender, lock, oneshot},
     task::{spawn_local, spawn_send},
 };
 
@@ -199,29 +199,32 @@ impl ScopeHandle {
 #[error("the coroutine ended without producing a result")]
 pub struct TaskFailed;
 
-/// Runs `future` on `dispatcher` and waits for its result — Kotlin's
-/// `withContext`.
+/// The result of a coroutine started with `async_` — Kotlin's `Deferred`.
 ///
-/// Dropping the returned future cancels the work.
-pub fn with_context<T, F>(dispatcher: &Dispatcher, future: F) -> WithContext<T>
-where
-    F: Future<Output = T> + Send + 'static,
-    T: Send + 'static,
-{
-    let (sender, receiver) = oneshot();
-    let job = spawn_send(dispatcher, async move {
-        sender.send(future.await);
-    });
-    WithContext { job, receiver }
-}
-
-/// The future returned by [`with_context`].
-pub struct WithContext<T> {
+/// Awaiting it yields the coroutine's output, or [`TaskFailed`] if the
+/// coroutine panicked or was cancelled first. Dropping it does not cancel the
+/// coroutine; its scope still owns it.
+pub struct Deferred<T> {
     job: Job,
     receiver: OneshotReceiver<T>,
 }
 
-impl<T> Future for WithContext<T> {
+impl<T> Deferred<T> {
+    fn spawn(spawn: impl FnOnce(OneshotSender<T>) -> Job) -> Self {
+        let (sender, receiver) = oneshot();
+        Self {
+            job: spawn(sender),
+            receiver,
+        }
+    }
+
+    /// The coroutine computing the value.
+    pub fn job(&self) -> &Job {
+        &self.job
+    }
+}
+
+impl<T> Future for Deferred<T> {
     type Output = Result<T, TaskFailed>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<T, TaskFailed>> {
@@ -232,8 +235,60 @@ impl<T> Future for WithContext<T> {
     }
 }
 
+impl Scope<Dispatcher> {
+    /// Starts computing `future` concurrently — Kotlin's `async`.
+    pub fn async_<T, F>(&self, future: F) -> Deferred<T>
+    where
+        F: Future<Output = T> + Send + 'static,
+        T: Send + 'static,
+    {
+        Deferred::spawn(|sender| self.launch(async move { sender.send(future.await) }))
+    }
+}
+
+impl Scope<ConfinedDispatcher> {
+    /// Starts computing `future` concurrently on the main thread — Kotlin's
+    /// `async`.
+    pub fn async_<T, F>(&self, future: F) -> Deferred<T>
+    where
+        F: Future<Output = T> + 'static,
+        T: 'static,
+    {
+        Deferred::spawn(|sender| self.launch(async move { sender.send(future.await) }))
+    }
+}
+
+/// Runs `future` on `dispatcher` and waits for its result — Kotlin's
+/// `withContext`.
+///
+/// Dropping the returned future cancels the work.
+pub fn with_context<T, F>(dispatcher: &Dispatcher, future: F) -> WithContext<T>
+where
+    F: Future<Output = T> + Send + 'static,
+    T: Send + 'static,
+{
+    WithContext {
+        deferred: Deferred::spawn(|sender| {
+            spawn_send(dispatcher, async move { sender.send(future.await) })
+        }),
+    }
+}
+
+/// The future returned by [`with_context`].
+pub struct WithContext<T> {
+    deferred: Deferred<T>,
+}
+
+impl<T> Future for WithContext<T> {
+    type Output = Result<T, TaskFailed>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<T, TaskFailed>> {
+        Pin::new(&mut self.get_mut().deferred).poll(cx)
+    }
+}
+
 impl<T> Drop for WithContext<T> {
     fn drop(&mut self) {
-        self.job.cancel();
+        self.deferred.job.cancel();
     }
 }

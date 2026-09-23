@@ -11,8 +11,12 @@ use futures_core::Stream;
 use crate::{
     clock::Timer,
     flow::Flow,
-    state::{StateFlow, StateShared},
+    state::{MutableSharedFlow, SharedFlow, StateFlow, StateShared, SubscriberCount},
 };
+
+/// How many values [`share_in`](crate::FlowExt::share_in) buffers beyond its
+/// replay for collectors that fall behind — Kotlin's default channel size.
+pub const SHARE_IN_BUFFER: usize = 64;
 
 /// When a shared flow runs its upstream — Kotlin's `SharingStarted`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -37,15 +41,17 @@ impl SharingStarted {
     }
 }
 
-/// The coroutine behind [`state_in`](crate::FlowExt::state_in): it watches the
-/// collector count and starts or stops the upstream.
-pub struct SharingTask<F: Flow> {
+/// The coroutine behind [`state_in`](crate::FlowExt::state_in) and
+/// [`share_in`](crate::FlowExt::share_in): it watches the collector count of
+/// `target` and starts or stops the upstream.
+pub struct SharingTask<F: Flow, S> {
     upstream: F,
     started: SharingStarted,
-    shared: Arc<StateShared<F::Item>>,
+    target: S,
+    subscribers: SubscriberCount,
     counter_key: usize,
     counter_seen: Option<u64>,
-    subscribers: usize,
+    current: usize,
     opened_seen: u64,
     newly_subscribed: bool,
     ever_subscribed: bool,
@@ -54,45 +60,36 @@ pub struct SharingTask<F: Flow> {
     stop_timer: Timer,
 }
 
-impl<F: Flow> Unpin for SharingTask<F> {}
+impl<F: Flow, S> Unpin for SharingTask<F, S> {}
 
-impl<F: Flow> SharingTask<F>
-where
-    F::Item: Clone + PartialEq,
-{
-    pub(crate) fn new(
-        upstream: F,
-        started: SharingStarted,
-        initial: F::Item,
-    ) -> (Self, StateFlow<F::Item>) {
-        let shared = StateShared::new(initial);
-        let state = StateFlow::from_shared(Arc::clone(&shared));
-        let counter_key = shared.subscribers.subscribe();
-        let task = Self {
+impl<F: Flow, S> SharingTask<F, S> {
+    fn new(upstream: F, started: SharingStarted, target: S, subscribers: SubscriberCount) -> Self {
+        let counter_key = subscribers.watch().subscribe();
+        Self {
             upstream,
             started,
-            shared,
+            target,
+            subscribers,
             counter_key,
             counter_seen: None,
-            subscribers: 0,
+            current: 0,
             opened_seen: 0,
             newly_subscribed: false,
             ever_subscribed: false,
             run: None,
             finished: false,
             stop_timer: Timer::default(),
-        };
-        (task, state)
+        }
     }
 
     fn observe_subscribers(&mut self, cx: &mut Context<'_>) {
-        while let Poll::Ready(subscribers) = self.shared.subscribers.poll_changed(
+        while let Poll::Ready(subscribers) = self.subscribers.watch().poll_changed(
             self.counter_key,
             &mut self.counter_seen,
             cx,
             |subscribers| *subscribers,
         ) {
-            self.subscribers = subscribers.current;
+            self.current = subscribers.current;
             if subscribers.opened > self.opened_seen {
                 self.opened_seen = subscribers.opened;
                 self.newly_subscribed = true;
@@ -109,7 +106,7 @@ where
                 self.ever_subscribed
             }
             SharingStarted::WhileSubscribed { stop_timeout } => {
-                if self.subscribers > 0 {
+                if self.current > 0 {
                     self.stop_timer.cancel();
                     return true;
                 }
@@ -123,32 +120,24 @@ where
             }
         }
     }
-}
 
-impl<F: Flow> Future for SharingTask<F>
-where
-    F::Item: Clone + PartialEq,
-{
-    type Output = ();
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
-        let this = self.get_mut();
-        this.observe_subscribers(cx);
-        if !this.wants_upstream(cx) {
-            this.run = None;
-            this.finished = false;
-            this.stop_timer.cancel();
+    fn poll_sharing(&mut self, cx: &mut Context<'_>, publish: impl Fn(&S, F::Item)) -> Poll<()> {
+        self.observe_subscribers(cx);
+        if !self.wants_upstream(cx) {
+            self.run = None;
+            self.finished = false;
+            self.stop_timer.cancel();
             return Poll::Pending;
         }
-        if this.run.is_none() && !this.finished {
-            this.run = Some(this.upstream.open());
+        if self.run.is_none() && !self.finished {
+            self.run = Some(self.upstream.open());
         }
-        while let Some(run) = this.run.as_mut() {
+        while let Some(run) = self.run.as_mut() {
             match Pin::new(run).poll_next(cx) {
-                Poll::Ready(Some(value)) => this.shared.set(value),
+                Poll::Ready(Some(value)) => publish(&self.target, value),
                 Poll::Ready(None) => {
-                    this.run = None;
-                    this.finished = true;
+                    self.run = None;
+                    self.finished = true;
                 }
                 Poll::Pending => break,
             }
@@ -157,8 +146,69 @@ where
     }
 }
 
-impl<F: Flow> Drop for SharingTask<F> {
+type StateSharing<F> = (
+    SharingTask<F, StateFlow<<F as Flow>::Item>>,
+    StateFlow<<F as Flow>::Item>,
+);
+
+type EventSharing<F> = (
+    SharingTask<F, MutableSharedFlow<<F as Flow>::Item>>,
+    SharedFlow<<F as Flow>::Item>,
+);
+
+pub(crate) fn state_sharing<F: Flow>(
+    upstream: F,
+    started: SharingStarted,
+    initial: F::Item,
+) -> StateSharing<F> {
+    let shared = StateShared::new(initial);
+    let subscribers = shared.subscribers.clone();
+    let state = StateFlow::from_shared(Arc::clone(&shared));
+    let task = SharingTask::new(upstream, started, state.clone(), subscribers);
+    (task, state)
+}
+
+pub(crate) fn shared_sharing<F: Flow>(
+    upstream: F,
+    started: SharingStarted,
+    replay: usize,
+) -> EventSharing<F>
+where
+    F::Item: Clone,
+{
+    let events = MutableSharedFlow::new(replay, SHARE_IN_BUFFER);
+    let subscribers = events.subscribers().clone();
+    let view = events.as_shared_flow();
+    let task = SharingTask::new(upstream, started, events, subscribers);
+    (task, view)
+}
+
+impl<F: Flow> Future for SharingTask<F, StateFlow<F::Item>>
+where
+    F::Item: Clone + PartialEq,
+{
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        self.get_mut()
+            .poll_sharing(cx, |state, value| state.publish(value))
+    }
+}
+
+impl<F: Flow> Future for SharingTask<F, MutableSharedFlow<F::Item>>
+where
+    F::Item: Clone,
+{
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        self.get_mut()
+            .poll_sharing(cx, |events, value| events.emit(value))
+    }
+}
+
+impl<F: Flow, S> Drop for SharingTask<F, S> {
     fn drop(&mut self) {
-        self.shared.subscribers.unsubscribe(self.counter_key);
+        self.subscribers.watch().unsubscribe(self.counter_key);
     }
 }

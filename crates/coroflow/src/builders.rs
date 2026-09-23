@@ -41,6 +41,15 @@ pub struct FlowBlock<T, F> {
     _item: PhantomData<fn() -> T>,
 }
 
+impl<T, F: Clone> Clone for FlowBlock<T, F> {
+    fn clone(&self) -> Self {
+        Self {
+            block: self.block.clone(),
+            _item: PhantomData,
+        }
+    }
+}
+
 /// The handle a [`flow`] block emits values through — Kotlin's
 /// `FlowCollector`.
 pub struct Emitter<T> {
@@ -146,6 +155,7 @@ pub fn flow_of<T: Clone>(items: Vec<T>) -> FlowOf<T> {
 }
 
 /// The flow returned by [`flow_of`].
+#[derive(Clone)]
 pub struct FlowOf<T> {
     items: Vec<T>,
 }

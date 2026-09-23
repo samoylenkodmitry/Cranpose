@@ -3,15 +3,19 @@ use std::{pin::Pin, rc::Rc, sync::Arc, time::Duration};
 use futures_core::Stream;
 
 use crate::{
+    combining::Zip,
     dispatcher::Dispatcher,
+    errors::{Catch, RetryWhen},
+    flattening::FlatMap,
     operators::{
-        Combine, Debounce, DistinctUntilChanged, Filter, FlatMapLatest, FlowOn, Map, OnCompletion,
-        OnEach, OnStart, StartWith, Take,
+        Combine, Debounce, DistinctUntilChanged, Filter, FlowOn, Map, OnCompletion, OnEach,
+        OnStart, StartWith, Take,
     },
     scope::Spawn,
-    sharing::{SharingStarted, SharingTask},
-    state::StateFlow,
+    sharing::{SharingStarted, SharingTask, shared_sharing, state_sharing},
+    state::{MutableSharedFlow, SharedFlow, StateFlow},
     terminal::{Collect, First, ToVec},
+    transforms::{FilterMap, Scan, Skip},
 };
 
 /// A cold, re-runnable asynchronous sequence — Kotlin's `Flow`.
@@ -173,6 +177,29 @@ pub trait FlowExt: Flow + Sized {
         StartWith::new(self, first)
     }
 
+    /// Accumulates values, emitting `initial` and then every intermediate
+    /// result — Kotlin's `scan` / `runningFold`.
+    fn scan<A, F>(self, initial: A, step: F) -> Scan<Self, A, F>
+    where
+        A: Clone,
+        F: Fn(&A, Self::Item) -> A + Clone,
+    {
+        Scan::new(self, initial, step)
+    }
+
+    /// Ignores the first `count` values — Kotlin's `drop`.
+    fn skip(self, count: usize) -> Skip<Self> {
+        Skip::new(self, count)
+    }
+
+    /// Transforms each value and drops the `None`s — Kotlin's `mapNotNull`.
+    fn filter_map<U, F>(self, transform: F) -> FilterMap<Self, F>
+    where
+        F: Fn(Self::Item) -> Option<U> + Clone,
+    {
+        FilterMap::new(self, transform)
+    }
+
     /// Emits the first `count` values, then stops and cancels the upstream.
     fn take(self, count: usize) -> Take<Self> {
         Take::new(self, count)
@@ -193,12 +220,42 @@ pub trait FlowExt: Flow + Sized {
 
     /// Maps each value to a flow and emits from the newest one, cancelling the
     /// run of the previous flow — Kotlin's `flatMapLatest`.
-    fn flat_map_latest<G, F>(self, transform: F) -> FlatMapLatest<Self, F>
+    fn flat_map_latest<G, F>(self, transform: F) -> FlatMap<Self, F>
     where
         G: Flow,
         F: Fn(Self::Item) -> G + Clone,
     {
-        FlatMapLatest::new(self, transform)
+        FlatMap::latest(self, transform)
+    }
+
+    /// Maps each value to a flow and emits all of it before taking the next
+    /// value — Kotlin's `flatMapConcat`.
+    fn flat_map_concat<G, F>(self, transform: F) -> FlatMap<Self, F>
+    where
+        G: Flow,
+        F: Fn(Self::Item) -> G + Clone,
+    {
+        FlatMap::concurrent(self, transform, 1)
+    }
+
+    /// Maps each value to a flow and runs up to `concurrency` of them at once,
+    /// emitting values as they arrive — Kotlin's `flatMapMerge`.
+    fn flat_map_merge<G, F>(self, concurrency: usize, transform: F) -> FlatMap<Self, F>
+    where
+        G: Flow,
+        F: Fn(Self::Item) -> G + Clone,
+    {
+        FlatMap::concurrent(self, transform, concurrency)
+    }
+
+    /// Pairs the n-th value of this flow with the n-th value of `other`,
+    /// completing when either completes — Kotlin's `zip`.
+    fn zip<O, U, F>(self, other: O, combiner: F) -> Zip<Self, O, F>
+    where
+        O: Flow,
+        F: Fn(Self::Item, O::Item) -> U + Clone,
+    {
+        Zip::new(self, other, combiner)
     }
 
     /// Combines the latest values of both flows once each has emitted.
@@ -208,6 +265,42 @@ pub trait FlowExt: Flow + Sized {
         F: Fn(&Self::Item, &O::Item) -> U + Clone,
     {
         Combine::new(self, other, combiner)
+    }
+
+    /// On the first `Err`, stops the upstream and continues with the flow
+    /// `handler` returns for the error — Kotlin's `catch`.
+    fn catch<T, E, G, H>(self, handler: H) -> Catch<Self, H>
+    where
+        Self: Flow<Item = Result<T, E>>,
+        G: Flow<Item = T>,
+        H: Fn(E) -> G + Clone,
+    {
+        Catch::new(self, handler)
+    }
+
+    /// Runs the upstream again after an `Err`, up to `attempts` more times,
+    /// and passes the last error on — Kotlin's `retry`.
+    fn retry<T, E>(
+        self,
+        attempts: u32,
+    ) -> RetryWhen<Self, impl Fn(&E, u32) -> Option<Duration> + Clone>
+    where
+        Self: Flow<Item = Result<T, E>> + Clone,
+    {
+        RetryWhen::new(self, move |_: &E, attempt: u32| {
+            (attempt < attempts).then_some(Duration::ZERO)
+        })
+    }
+
+    /// Runs the upstream again after an `Err` when `policy` returns a back-off
+    /// delay for that error and attempt, and passes the error on when it
+    /// returns `None` — Kotlin's `retryWhen`.
+    fn retry_when<T, E, P>(self, policy: P) -> RetryWhen<Self, P>
+    where
+        Self: Flow<Item = Result<T, E>> + Clone,
+        P: Fn(&E, u32) -> Option<Duration> + Clone,
+    {
+        RetryWhen::new(self, policy)
     }
 
     /// Runs this flow's upstream on `dispatcher` — Kotlin's `flowOn`.
@@ -241,12 +334,30 @@ pub trait FlowExt: Flow + Sized {
         initial: Self::Item,
     ) -> StateFlow<Self::Item>
     where
-        S: Spawn<SharingTask<Self>>,
+        S: Spawn<SharingTask<Self, StateFlow<Self::Item>>>,
         Self::Item: Clone + PartialEq,
     {
-        let (task, state) = SharingTask::new(self, started, initial);
+        let (task, state) = state_sharing(self, started, initial);
         scope.spawn(task);
         state
+    }
+
+    /// Shares this flow as a hot [`SharedFlow`] that runs in `scope` and
+    /// replays the last `replay` values to new collectors — Kotlin's
+    /// `shareIn`.
+    fn share_in<S>(
+        self,
+        scope: &S,
+        started: SharingStarted,
+        replay: usize,
+    ) -> SharedFlow<Self::Item>
+    where
+        S: Spawn<SharingTask<Self, MutableSharedFlow<Self::Item>>>,
+        Self::Item: Clone,
+    {
+        let (task, events) = shared_sharing(self, started, replay);
+        scope.spawn(task);
+        events
     }
 
     /// Erases the type so the flow can sit behind a trait or be stored.

@@ -16,11 +16,15 @@ use crate::{
     task::spawn_send,
 };
 
-fn poll_run<S: Stream + Unpin>(run: &mut S, cx: &mut Context<'_>) -> Poll<Option<S::Item>> {
+pub(crate) fn poll_run<S: Stream + Unpin>(
+    run: &mut S,
+    cx: &mut Context<'_>,
+) -> Poll<Option<S::Item>> {
     Pin::new(run).poll_next(cx)
 }
 
 /// The flow returned by [`map`](crate::FlowExt::map).
+#[derive(Clone)]
 pub struct Map<F, T> {
     upstream: F,
     transform: T,
@@ -73,6 +77,7 @@ where
 }
 
 /// The flow returned by [`filter`](crate::FlowExt::filter).
+#[derive(Clone)]
 pub struct Filter<F, P> {
     upstream: F,
     predicate: P,
@@ -130,6 +135,7 @@ where
 }
 
 /// The flow returned by [`on_each`](crate::FlowExt::on_each).
+#[derive(Clone)]
 pub struct OnEach<F, A> {
     upstream: F,
     action: A,
@@ -183,6 +189,7 @@ where
 }
 
 /// The flow returned by [`on_start`](crate::FlowExt::on_start).
+#[derive(Clone)]
 pub struct OnStart<F, A> {
     upstream: F,
     action: A,
@@ -209,6 +216,7 @@ where
 }
 
 /// The flow returned by [`on_completion`](crate::FlowExt::on_completion).
+#[derive(Clone)]
 pub struct OnCompletion<F, A> {
     upstream: F,
     action: A,
@@ -269,6 +277,7 @@ impl<S, A: Fn()> Drop for OnCompletionRun<S, A> {
 }
 
 /// The flow returned by [`start_with`](crate::FlowExt::start_with).
+#[derive(Clone)]
 pub struct StartWith<F: Flow> {
     upstream: F,
     first: F::Item,
@@ -317,6 +326,7 @@ impl<S: Stream + Unpin> Stream for StartWithRun<S> {
 }
 
 /// The flow returned by [`take`](crate::FlowExt::take).
+#[derive(Clone)]
 pub struct Take<F> {
     upstream: F,
     count: usize,
@@ -371,6 +381,7 @@ impl<S: Stream + Unpin> Stream for TakeRun<S> {
 
 /// The flow returned by
 /// [`distinct_until_changed`](crate::FlowExt::distinct_until_changed).
+#[derive(Clone)]
 pub struct DistinctUntilChanged<F> {
     upstream: F,
 }
@@ -431,6 +442,7 @@ where
 }
 
 /// The flow returned by [`debounce`](crate::FlowExt::debounce).
+#[derive(Clone)]
 pub struct Debounce<F> {
     upstream: F,
     timeout: Duration,
@@ -494,83 +506,8 @@ impl<S: Stream + Unpin> Stream for DebounceRun<S> {
     }
 }
 
-/// The flow returned by [`flat_map_latest`](crate::FlowExt::flat_map_latest).
-pub struct FlatMapLatest<F, T> {
-    upstream: F,
-    transform: T,
-}
-
-impl<F, T> FlatMapLatest<F, T> {
-    pub(crate) fn new(upstream: F, transform: T) -> Self {
-        Self {
-            upstream,
-            transform,
-        }
-    }
-}
-
-/// One run of a [`FlatMapLatest`].
-pub struct FlatMapLatestRun<S, T, G: Flow> {
-    upstream: Option<S>,
-    transform: T,
-    inner: Option<G::Run>,
-}
-
-impl<S, T, G: Flow> Unpin for FlatMapLatestRun<S, T, G> {}
-
-impl<F, T, G> Flow for FlatMapLatest<F, T>
-where
-    F: Flow,
-    G: Flow,
-    T: Fn(F::Item) -> G + Clone,
-{
-    type Item = G::Item;
-    type Run = FlatMapLatestRun<F::Run, T, G>;
-
-    fn open(&self) -> Self::Run {
-        FlatMapLatestRun {
-            upstream: Some(self.upstream.open()),
-            transform: self.transform.clone(),
-            inner: None,
-        }
-    }
-}
-
-impl<S, T, G> Stream for FlatMapLatestRun<S, T, G>
-where
-    S: Stream + Unpin,
-    G: Flow,
-    T: Fn(S::Item) -> G,
-{
-    type Item = G::Item;
-
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<G::Item>> {
-        let this = self.get_mut();
-        while let Some(upstream) = this.upstream.as_mut() {
-            match poll_run(upstream, cx) {
-                Poll::Ready(Some(value)) => {
-                    this.inner = None;
-                    this.inner = Some((this.transform)(value).open());
-                }
-                Poll::Ready(None) => this.upstream = None,
-                Poll::Pending => break,
-            }
-        }
-        if let Some(inner) = this.inner.as_mut() {
-            match poll_run(inner, cx) {
-                Poll::Ready(None) => this.inner = None,
-                other => return other,
-            }
-        }
-        if this.upstream.is_none() {
-            Poll::Ready(None)
-        } else {
-            Poll::Pending
-        }
-    }
-}
-
 /// The flow returned by [`combine`](crate::FlowExt::combine).
+#[derive(Clone)]
 pub struct Combine<A, B, F> {
     first: A,
     second: B,
@@ -589,10 +526,8 @@ impl<A, B, F> Combine<A, B, F> {
 
 /// One run of a [`Combine`].
 pub struct CombineRun<A: Stream, B: Stream, F> {
-    first: Option<A>,
-    second: Option<B>,
-    latest_first: Option<A::Item>,
-    latest_second: Option<B::Item>,
+    first: Latest<A>,
+    second: Latest<B>,
     combiner: F,
 }
 
@@ -609,32 +544,59 @@ where
 
     fn open(&self) -> Self::Run {
         CombineRun {
-            first: Some(self.first.open()),
-            second: Some(self.second.open()),
-            latest_first: None,
-            latest_second: None,
+            first: Latest::new(self.first.open()),
+            second: Latest::new(self.second.open()),
             combiner: self.combiner.clone(),
         }
     }
 }
 
-fn drain_latest<S: Stream + Unpin>(
-    run: &mut Option<S>,
-    latest: &mut Option<S::Item>,
-    cx: &mut Context<'_>,
-) -> bool {
-    let mut changed = false;
-    while let Some(active) = run.as_mut() {
-        match poll_run(active, cx) {
-            Poll::Ready(Some(value)) => {
-                *latest = Some(value);
-                changed = true;
-            }
-            Poll::Ready(None) => *run = None,
-            Poll::Pending => break,
+pub(crate) struct Latest<S: Stream> {
+    run: Option<S>,
+    value: Option<S::Item>,
+}
+
+impl<S: Stream + Unpin> Latest<S> {
+    pub(crate) fn new(run: S) -> Self {
+        Self {
+            run: Some(run),
+            value: None,
         }
     }
-    changed
+
+    pub(crate) fn drain(&mut self, cx: &mut Context<'_>) -> bool {
+        let mut changed = false;
+        while let Some(run) = self.run.as_mut() {
+            match poll_run(run, cx) {
+                Poll::Ready(Some(value)) => {
+                    self.value = Some(value);
+                    changed = true;
+                }
+                Poll::Ready(None) => self.run = None,
+                Poll::Pending => break,
+            }
+        }
+        changed
+    }
+
+    pub(crate) fn value(&self) -> Option<&S::Item> {
+        self.value.as_ref()
+    }
+
+    pub(crate) fn status(&self) -> (bool, bool) {
+        let done = self.run.is_none();
+        (done && self.value.is_none(), done)
+    }
+}
+
+pub(crate) fn latest_ended<T>(statuses: &[(bool, bool)]) -> Poll<Option<T>> {
+    let starved = statuses.iter().any(|(starved, _)| *starved);
+    let done = statuses.iter().all(|(_, done)| *done);
+    if starved || done {
+        Poll::Ready(None)
+    } else {
+        Poll::Pending
+    }
 }
 
 impl<A, B, F, U> Stream for CombineRun<A, B, F>
@@ -647,22 +609,11 @@ where
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<U>> {
         let this = self.get_mut();
-        let first_changed = drain_latest(&mut this.first, &mut this.latest_first, cx);
-        let second_changed = drain_latest(&mut this.second, &mut this.latest_second, cx);
-        if (first_changed || second_changed)
-            && let (Some(first), Some(second)) = (&this.latest_first, &this.latest_second)
-        {
+        let changed = this.first.drain(cx) | this.second.drain(cx);
+        if changed && let (Some(first), Some(second)) = (this.first.value(), this.second.value()) {
             return Poll::Ready(Some((this.combiner)(first, second)));
         }
-        let first_done = this.first.is_none();
-        let second_done = this.second.is_none();
-        let starved = (first_done && this.latest_first.is_none())
-            || (second_done && this.latest_second.is_none());
-        if starved || (first_done && second_done) {
-            Poll::Ready(None)
-        } else {
-            Poll::Pending
-        }
+        latest_ended(&[this.first.status(), this.second.status()])
     }
 }
 
@@ -671,6 +622,7 @@ where
 pub const FLOW_ON_BUFFER: usize = 64;
 
 /// The flow returned by [`flow_on`](crate::FlowExt::flow_on).
+#[derive(Clone)]
 pub struct FlowOn<F> {
     upstream: F,
     dispatcher: Dispatcher,

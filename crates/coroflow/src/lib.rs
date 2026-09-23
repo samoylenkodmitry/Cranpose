@@ -9,13 +9,15 @@
 //! | `Dispatchers.Default` / `IO` | [`Dispatchers::default_pool`] / [`Dispatchers::io`] |
 //! | `Dispatchers.Main`, `viewModelScope` | [`ConfinedDispatcher`], [`MainScope`] |
 //! | `CoroutineScope(SupervisorJob())` | [`CoroutineScope`] |
-//! | `launch`, `Job` | `scope.launch(..)`, [`Job`] |
-//! | `withContext`, `delay` | [`with_context`], [`delay`] |
+//! | `launch`, `async`, `Job`, `Deferred` | `scope.launch(..)`, `scope.async_(..)`, [`Job`], [`Deferred`] |
+//! | `withContext`, `delay`, `withTimeoutOrNull` | [`with_context`], [`delay`], [`with_timeout`] |
 //! | `Flow`, `flow { }`, `flowOf` | [`Flow`], [`flow`], [`flow_of`] |
 //! | `suspend fun` in an interface | a method returning [`BoxFuture`] |
-//! | `map`, `filter`, `debounce`, `flatMapLatest`, `combine`, `flowOn` | [`FlowExt`] |
+//! | `map`, `filter`, `mapNotNull`, `scan`, `drop`, `debounce`, `zip`, `combine`, `flowOn` | [`FlowExt`] |
+//! | `flatMapLatest`, `flatMapConcat`, `flatMapMerge`, `catch`, `retry`, `retryWhen` | [`FlowExt`] |
+//! | `merge(a, b)`, `combine(a, b, c)` | [`merge`], [`combine3`] |
 //! | `MutableStateFlow`, `MutableSharedFlow` | [`MutableStateFlow`], [`MutableSharedFlow`] |
-//! | `stateIn(scope, WhileSubscribed(5000), x)` | [`FlowExt::state_in`], [`SharingStarted`] |
+//! | `stateIn(scope, WhileSubscribed(5000), x)`, `shareIn` | [`FlowExt::state_in`], [`FlowExt::share_in`], [`SharingStarted`] |
 //! | `runTest`, `advanceTimeBy` | [`TestScheduler`] |
 //! | Turbine's `flow.test { awaitItem() }` | [`Turbine`] |
 //!
@@ -33,7 +35,10 @@
 
 mod builders;
 mod clock;
+mod combining;
 mod dispatcher;
+mod errors;
+mod flattening;
 mod flow;
 mod job;
 mod operators;
@@ -44,26 +49,30 @@ mod sync;
 mod task;
 mod terminal;
 mod testing;
+mod transforms;
 
 pub use builders::{Emit, Emitter, FlowBlock, FlowBlockRun, FlowOf, FlowOfRun, flow, flow_of};
-pub use clock::{Clock, Delay, SystemClock, delay};
+pub use clock::{Clock, Delay, SystemClock, TimedOut, WithTimeout, delay, with_timeout};
+pub use combining::{Combine3, Combine3Run, Merge, MergeRun, Zip, ZipRun, combine3, merge};
 pub use dispatcher::{
     ConfinedDispatcher, Dispatch, Dispatcher, Dispatchers, IO_POOL_MIN_THREADS, Runnable,
 };
+pub use errors::{Catch, CatchRun, RetryRun, RetryWhen};
+pub use flattening::{FlatMap, FlatMapRun};
 pub use flow::{BoxFlow, Flow, FlowExt, LocalBoxFlow, SendFlow};
 pub use futures_core::Stream;
 pub use job::{Job, JobOutcome, Join};
 pub use operators::{
     Combine, CombineRun, Debounce, DebounceRun, DistinctRun, DistinctUntilChanged, FLOW_ON_BUFFER,
-    Filter, FilterRun, FlatMapLatest, FlatMapLatestRun, FlowOn, FlowOnRun, Map, MapRun,
-    OnCompletion, OnCompletionRun, OnEach, OnEachRun, OnStart, StartWith, StartWithRun, Take,
-    TakeRun,
+    Filter, FilterRun, FlowOn, FlowOnRun, Map, MapRun, OnCompletion, OnCompletionRun, OnEach,
+    OnEachRun, OnStart, StartWith, StartWithRun, Take, TakeRun,
 };
 pub use scope::{
-    BoxFuture, CoroutineScope, MainScope, Scope, ScopeHandle, Spawn, TaskFailed, WithContext,
-    with_context,
+    BoxFuture, CoroutineScope, Deferred, MainScope, Scope, ScopeHandle, Spawn, TaskFailed,
+    WithContext, with_context,
 };
-pub use sharing::{SharingStarted, SharingTask};
+pub use sharing::{SHARE_IN_BUFFER, SharingStarted, SharingTask};
 pub use state::{MutableSharedFlow, MutableStateFlow, SharedFlow, SharedRun, StateFlow, StateRun};
 pub use terminal::{Collect, First, ToVec};
 pub use testing::{Stalled, TestScheduler, Turbine};
+pub use transforms::{FilterMap, FilterMapRun, Scan, ScanRun, Skip, SkipRun};

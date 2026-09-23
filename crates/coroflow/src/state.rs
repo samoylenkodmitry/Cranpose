@@ -19,21 +19,59 @@ pub(crate) struct Subscribers {
     pub(crate) opened: u64,
 }
 
+#[derive(Clone)]
+pub(crate) struct SubscriberCount {
+    watch: Arc<Watch<Subscribers>>,
+}
+
+impl Default for SubscriberCount {
+    fn default() -> Self {
+        Self {
+            watch: Arc::new(Watch::new(Subscribers::default())),
+        }
+    }
+}
+
+impl SubscriberCount {
+    fn opened(&self) {
+        self.watch.update(|subscribers| {
+            subscribers.current += 1;
+            subscribers.opened += 1;
+            true
+        });
+    }
+
+    fn closed(&self) {
+        self.watch.update(|subscribers| {
+            subscribers.current = subscribers.current.saturating_sub(1);
+            true
+        });
+    }
+
+    fn current(&self) -> usize {
+        self.watch.with(|subscribers| subscribers.current)
+    }
+
+    pub(crate) fn watch(&self) -> &Watch<Subscribers> {
+        &self.watch
+    }
+}
+
 pub(crate) struct StateShared<T> {
     pub(crate) value: Watch<T>,
-    pub(crate) subscribers: Watch<Subscribers>,
+    pub(crate) subscribers: SubscriberCount,
 }
 
 impl<T> StateShared<T> {
     pub(crate) fn new(value: T) -> Arc<Self> {
         Arc::new(Self {
             value: Watch::new(value),
-            subscribers: Watch::new(Subscribers::default()),
+            subscribers: SubscriberCount::default(),
         })
     }
 
     fn subscription_count(&self) -> usize {
-        self.subscribers.with(|subscribers| subscribers.current)
+        self.subscribers.current()
     }
 
     pub(crate) fn set(&self, value: T)
@@ -138,6 +176,13 @@ impl<T> StateFlow<T> {
         Self { shared }
     }
 
+    pub(crate) fn publish(&self, value: T)
+    where
+        T: PartialEq,
+    {
+        self.shared.set(value);
+    }
+
     /// Whether both handles observe the same state.
     pub fn same_as(&self, other: &StateFlow<T>) -> bool {
         Arc::ptr_eq(&self.shared, &other.shared)
@@ -164,11 +209,7 @@ pub struct StateRun<T> {
 }
 
 fn open_state<T>(shared: &Arc<StateShared<T>>) -> StateRun<T> {
-    shared.subscribers.update(|subscribers| {
-        subscribers.current += 1;
-        subscribers.opened += 1;
-        true
-    });
+    shared.subscribers.opened();
     StateRun {
         shared: Arc::clone(shared),
         key: shared.value.subscribe(),
@@ -211,10 +252,7 @@ impl<T: Clone> Stream for StateRun<T> {
 impl<T> Drop for StateRun<T> {
     fn drop(&mut self) {
         self.shared.value.unsubscribe(self.key);
-        self.shared.subscribers.update(|subscribers| {
-            subscribers.current = subscribers.current.saturating_sub(1);
-            true
-        });
+        self.shared.subscribers.closed();
     }
 }
 
@@ -222,11 +260,11 @@ struct SharedState<T> {
     buffer: VecDeque<T>,
     first_sequence: u64,
     wakers: WakerSet,
-    subscribers: usize,
 }
 
 struct SharedInner<T> {
     state: Mutex<SharedState<T>>,
+    subscribers: SubscriberCount,
     replay: usize,
     capacity: usize,
 }
@@ -238,14 +276,22 @@ struct SharedInner<T> {
 /// collector first receives the last `replay` of them; a collector that falls
 /// further behind than the buffer skips the values it missed.
 pub struct MutableSharedFlow<T> {
-    inner: Arc<SharedInner<T>>,
+    flow: SharedFlow<T>,
 }
 
 impl<T> Clone for MutableSharedFlow<T> {
     fn clone(&self) -> Self {
         Self {
-            inner: Arc::clone(&self.inner),
+            flow: self.flow.clone(),
         }
+    }
+}
+
+impl<T> Deref for MutableSharedFlow<T> {
+    type Target = SharedFlow<T>;
+
+    fn deref(&self) -> &SharedFlow<T> {
+        &self.flow
     }
 }
 
@@ -254,25 +300,27 @@ impl<T: Clone> MutableSharedFlow<T> {
     /// `extra_capacity` more for slow collectors.
     pub fn new(replay: usize, extra_capacity: usize) -> Self {
         let capacity = (replay + extra_capacity).max(1);
-        Self {
-            inner: Arc::new(SharedInner {
-                state: Mutex::new(SharedState {
-                    buffer: VecDeque::with_capacity(capacity),
-                    first_sequence: 0,
-                    wakers: WakerSet::default(),
-                    subscribers: 0,
-                }),
-                replay,
-                capacity,
+        let inner = Arc::new(SharedInner {
+            state: Mutex::new(SharedState {
+                buffer: VecDeque::with_capacity(capacity),
+                first_sequence: 0,
+                wakers: WakerSet::default(),
             }),
+            subscribers: SubscriberCount::default(),
+            replay,
+            capacity,
+        });
+        Self {
+            flow: SharedFlow { inner },
         }
     }
 
     /// Broadcasts `value`, dropping the oldest buffered value when full.
     pub fn emit(&self, value: T) {
+        let inner = &self.flow.inner;
         let (evicted, wakers) = {
-            let mut state = lock(&self.inner.state);
-            let evicted = if state.buffer.len() == self.inner.capacity {
+            let mut state = lock(&inner.state);
+            let evicted = if state.buffer.len() == inner.capacity {
                 state.first_sequence += 1;
                 state.buffer.pop_front()
             } else {
@@ -283,23 +331,19 @@ impl<T: Clone> MutableSharedFlow<T> {
         };
         drop(evicted);
         let emptied = wake_and_empty(wakers);
-        lock(&self.inner.state).wakers.recycle(emptied);
+        lock(&inner.state).wakers.recycle(emptied);
     }
 
     /// A read-only view — Kotlin's `asSharedFlow()`.
     pub fn as_shared_flow(&self) -> SharedFlow<T> {
-        SharedFlow {
-            inner: Arc::clone(&self.inner),
-        }
-    }
-
-    /// How many collectors are running right now.
-    pub fn subscription_count(&self) -> usize {
-        lock(&self.inner.state).subscribers
+        self.flow.clone()
     }
 }
 
 /// The read-only side of a [`MutableSharedFlow`] — Kotlin's `SharedFlow`.
+///
+/// A [`MutableSharedFlow`] dereferences to it, the way Kotlin's
+/// `MutableSharedFlow` extends `SharedFlow`.
 pub struct SharedFlow<T> {
     inner: Arc<SharedInner<T>>,
 }
@@ -312,6 +356,17 @@ impl<T> Clone for SharedFlow<T> {
     }
 }
 
+impl<T> SharedFlow<T> {
+    /// How many collectors are running right now.
+    pub fn subscription_count(&self) -> usize {
+        self.inner.subscribers.current()
+    }
+
+    pub(crate) fn subscribers(&self) -> &SubscriberCount {
+        &self.inner.subscribers
+    }
+}
+
 /// One subscription to a [`SharedFlow`]; dropping it unsubscribes.
 pub struct SharedRun<T> {
     inner: Arc<SharedInner<T>>,
@@ -320,8 +375,8 @@ pub struct SharedRun<T> {
 }
 
 fn open_shared<T>(inner: &Arc<SharedInner<T>>) -> SharedRun<T> {
+    inner.subscribers.opened();
     let mut state = lock(&inner.state);
-    state.subscribers += 1;
     let end = state.first_sequence + state.buffer.len() as u64;
     let replayed = state.buffer.len().min(inner.replay) as u64;
     let key = state.wakers.insert();
@@ -346,7 +401,7 @@ impl<T: Clone> Flow for MutableSharedFlow<T> {
     type Run = SharedRun<T>;
 
     fn open(&self) -> SharedRun<T> {
-        open_shared(&self.inner)
+        self.flow.open()
     }
 }
 
@@ -375,8 +430,7 @@ impl<T: Clone> Stream for SharedRun<T> {
 
 impl<T> Drop for SharedRun<T> {
     fn drop(&mut self) {
-        let mut state = lock(&self.inner.state);
-        state.subscribers = state.subscribers.saturating_sub(1);
-        state.wakers.remove(self.key);
+        lock(&self.inner.state).wakers.remove(self.key);
+        self.inner.subscribers.closed();
     }
 }

@@ -277,3 +277,45 @@ impl Future for Delay {
         this.timer.poll_elapsed(cx)
     }
 }
+
+/// The work given to [`with_timeout`] did not finish in time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("the work did not finish in time")]
+pub struct TimedOut;
+
+/// Runs `future`, giving up after `timeout` — Kotlin's `withTimeoutOrNull`.
+///
+/// The deadline is measured on the clock of the dispatcher running the
+/// caller; when it passes, `future` is dropped, which cancels it.
+pub fn with_timeout<F: Future>(timeout: Duration, future: F) -> WithTimeout<F> {
+    WithTimeout {
+        future: Box::pin(future),
+        timeout,
+        started: false,
+        timer: Timer::default(),
+    }
+}
+
+/// The future returned by [`with_timeout`].
+pub struct WithTimeout<F> {
+    future: Pin<Box<F>>,
+    timeout: Duration,
+    started: bool,
+    timer: Timer,
+}
+
+impl<F: Future> Future for WithTimeout<F> {
+    type Output = Result<F::Output, TimedOut>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        if !this.started {
+            this.started = true;
+            this.timer.start(this.timeout);
+        }
+        if let Poll::Ready(value) = this.future.as_mut().poll(cx) {
+            return Poll::Ready(Ok(value));
+        }
+        this.timer.poll_elapsed(cx).map(|()| Err(TimedOut))
+    }
+}
