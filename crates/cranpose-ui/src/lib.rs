@@ -53,6 +53,7 @@ pub mod text_input_session;
 pub mod text_layout_result;
 mod text_modifier_node;
 pub mod text_selection;
+mod unhandled_keys;
 pub mod widgets;
 mod word_boundaries;
 pub mod zoom;
@@ -219,6 +220,7 @@ pub use text_field_focus::{ImeEditorState, has_focused_field};
 pub use text_field_modifier_node::{TextFieldElement, TextFieldModifierNode, TextPanResolver};
 pub use text_input_session::PlatformTextInputHandler;
 pub use text_modifier_node::{TextModifierElement, TextModifierNode};
+pub use unhandled_keys::{UnhandledKeyEvents, dispatch_unhandled_key_event};
 pub use widgets::{
     clickable_text::ClickableText,
     lazy_list::{LazyColumn, LazyColumnSpec, LazyRow, LazyRowSpec},
