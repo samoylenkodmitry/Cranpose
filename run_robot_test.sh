@@ -429,6 +429,15 @@ robot_capability_skip_reason() {
         esac
     fi
 
+    if [ -z "${DISPLAY:-}" ]; then
+        case "$example" in
+            robot_xwayland_display_backend)
+                echo "requires an X display to choose over Wayland"
+                return 0
+                ;;
+        esac
+    fi
+
     if grep -q 'mod scroll_stability_external_helpers;' "$source" \
         && ! python3 -c 'from PIL import Image' >/dev/null 2>&1; then
         echo "requires Python Pillow for pixel comparison"

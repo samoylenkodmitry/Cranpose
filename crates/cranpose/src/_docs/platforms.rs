@@ -12,6 +12,13 @@
 //! | iOS | `ios`, `renderer-wgpu` |
 //! | Web | `web`, `renderer-wgpu`, with `default-features = false` |
 //!
+//! On Linux with both backends compiled, the application runs on the X
+//! display named by `DISPLAY` whenever it can reach one, including XWayland
+//! inside a Wayland session, because native windows are placed and dragged
+//! in global screen coordinates that only X11 exposes. It runs on Wayland
+//! when no X display is reachable; `env -u DISPLAY` selects Wayland for a
+//! single run.
+//!
 //! `renderer-wgpu-gles` adds a GL/GLES fallback for machines without a working
 //! Vulkan driver; Android enables it on its own. `renderer-pixels` is the
 //! software renderer.

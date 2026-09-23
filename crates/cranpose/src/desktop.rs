@@ -6649,10 +6649,28 @@ fn bound_park_for_robot(
     }
 }
 
+fn build_event_loop() -> Result<EventLoop, winit::error::EventLoopError> {
+    #[cfg(all(target_os = "linux", feature = "desktop-x11"))]
+    if std::env::var_os("DISPLAY").is_some_and(|display| !display.is_empty()) {
+        use winit::platform::x11::EventLoopBuilderExtX11;
+
+        match EventLoop::builder().with_x11().build() {
+            Ok(event_loop) => return Ok(event_loop),
+            Err(error) => log::warn!("cranpose: the X display is unavailable: {error}"),
+        }
+    }
+    EventLoop::builder().build()
+}
+
 /// Runs a desktop Compose application with wgpu rendering.
 ///
 /// Called by `AppLauncher::run_desktop()`. This is the framework-level
 /// entrypoint that manages the desktop event loop and rendering.
+///
+/// On Linux a build with the X11 backend runs on the X display named by
+/// `DISPLAY` whenever there is one, which in a Wayland session is XWayland:
+/// native windows need the global positions X11 reports and Wayland does not.
+/// With no reachable X display the application runs on Wayland.
 ///
 /// **Note:** Applications should use `AppLauncher` instead of calling this directly.
 #[allow(unused_mut)]
@@ -6662,9 +6680,7 @@ pub fn try_run(
 ) -> Result<(), LaunchError> {
     register_application_id(settings.application_id.as_deref());
 
-    let event_loop = EventLoop::builder()
-        .build()
-        .map_err(LaunchError::EventLoopCreate)?;
+    let event_loop = build_event_loop().map_err(LaunchError::EventLoopCreate)?;
     let event_proxy = event_loop.create_proxy();
     let launch_error = Rc::new(RefCell::new(None));
 
