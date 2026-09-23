@@ -601,7 +601,6 @@ fn native_surface<'a>(
 
 struct App {
     settings: AppSettings,
-    window_icon: Option<Icon>,
     platform_env: Rc<crate::platform_env::PlatformEnvironment>,
     content: Option<Box<dyn FnMut()>>,
     window: Option<Arc<dyn Window>>,
@@ -663,7 +662,6 @@ impl App {
         #[cfg(feature = "robot")]
         let robot_app_hook = settings.robot_app_hook.take();
         let applied_frame_pacing_mode = settings.frame_pacing_mode;
-        let window_icon = settings.window_icon.as_ref().and_then(winit_window_icon);
 
         let platform_env = crate::platform_env::PlatformEnvironment::new();
         let env_for_content = Rc::clone(&platform_env);
@@ -672,7 +670,6 @@ impl App {
 
         Self {
             settings,
-            window_icon,
             platform_env,
             content: Some(Box::new(content)),
             window: None,
@@ -1211,7 +1208,7 @@ impl App {
                 request,
                 self.settings.headless,
                 anything_focused,
-                self.window_icon.as_ref(),
+                self.settings.window_icon.as_ref(),
             ) {
                 Ok(shell) => native_window_shells.push(shell),
                 Err(error) => {
@@ -1493,7 +1490,7 @@ impl App {
         request: NativeWindowRequest,
         headless: bool,
         anything_focused: bool,
-        window_icon: Option<&Icon>,
+        window_icon: Option<&cranpose_ui::ImageBitmap>,
     ) -> Result<NativeWindowShell, LaunchError> {
         let create_started = Instant::now();
         let options = &request.options;
@@ -3598,14 +3595,17 @@ fn winit_window_icon(bitmap: &cranpose_ui::ImageBitmap) -> Option<Icon> {
     }
 }
 
-fn with_application_icon(attributes: WindowAttributes, icon: Option<&Icon>) -> WindowAttributes {
-    let attributes = attributes.with_window_icon(icon.cloned());
+fn with_application_icon(
+    attributes: WindowAttributes,
+    icon: Option<&cranpose_ui::ImageBitmap>,
+) -> WindowAttributes {
+    let attributes = attributes.with_window_icon(icon.and_then(winit_window_icon));
     #[cfg(target_os = "windows")]
     let attributes = {
         use winit::platform::windows::WindowAttributesWindows;
 
         attributes.with_platform_attributes(Box::new(
-            WindowAttributesWindows::default().with_taskbar_icon(icon.cloned()),
+            WindowAttributesWindows::default().with_taskbar_icon(icon.and_then(winit_window_icon)),
         ))
     };
     attributes
@@ -3615,7 +3615,7 @@ fn native_window_attributes(
     options: &NativeWindowOptions,
     headless: bool,
     active: bool,
-    window_icon: Option<&Icon>,
+    window_icon: Option<&cranpose_ui::ImageBitmap>,
 ) -> WindowAttributes {
     let mut attributes = WindowAttributes::default()
         .with_active(active)
@@ -5102,7 +5102,7 @@ impl ApplicationHandler for App {
                     initial_height as f64,
                 ))
                 .with_visible(false),
-            self.window_icon.as_ref(),
+            self.settings.window_icon.as_ref(),
         )) {
             Ok(window) => window.into(),
             Err(error) => {

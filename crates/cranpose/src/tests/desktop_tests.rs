@@ -182,8 +182,8 @@ fn a_window_icon_becomes_a_winit_icon() {
 
 #[test]
 fn every_native_window_carries_the_application_window_icon() {
-    let icon = super::winit_window_icon(&opaque_icon()).expect("the bitmap converts");
-    let attributes = super::native_window_attributes(&window_options(), false, true, Some(&icon));
+    let attributes =
+        super::native_window_attributes(&window_options(), false, true, Some(&opaque_icon()));
 
     assert!(
         attributes.window_icon.is_some(),
@@ -191,11 +191,36 @@ fn every_native_window_carries_the_application_window_icon() {
     );
 }
 
+fn icon_pixels(attributes: &winit::window::WindowAttributes) -> *const u8 {
+    attributes
+        .window_icon
+        .as_ref()
+        .and_then(|icon| icon.cast_ref::<winit::icon::RgbaIcon>())
+        .expect("the window carries an RGBA icon")
+        .buffer()
+        .as_ptr()
+}
+
+#[test]
+fn no_two_windows_share_the_pixels_of_one_icon() {
+    let icon = opaque_icon();
+    let first = super::native_window_attributes(&window_options(), false, true, Some(&icon));
+    let second = super::native_window_attributes(&window_options(), false, true, Some(&icon));
+
+    assert_ne!(
+        icon_pixels(&first),
+        icon_pixels(&second),
+        "winit's Windows backend swaps an icon's red and blue in place when it makes the \
+         HICON, so a buffer used twice comes out with its colours reversed the second time"
+    );
+}
+
 #[test]
 fn the_primary_window_carries_the_application_icon_in_every_place_the_platform_draws_one() {
-    let icon = super::winit_window_icon(&opaque_icon()).expect("the bitmap converts");
-    let attributes =
-        super::with_application_icon(winit::window::WindowAttributes::default(), Some(&icon));
+    let attributes = super::with_application_icon(
+        winit::window::WindowAttributes::default(),
+        Some(&opaque_icon()),
+    );
 
     assert!(attributes.window_icon.is_some());
     #[cfg(target_os = "windows")]
