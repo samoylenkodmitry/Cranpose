@@ -64,6 +64,7 @@ desktop-shell = [
     "cranpose-app-shell/clipboard-native",
     "dep:objc2",
     "dep:objc2-app-kit",
+    "dep:windows-sys",
     "cranpose-platform-desktop-winit",
     "dep:winit",
     "dep:accesskit",
@@ -291,6 +292,9 @@ wgpu = { version = "29.0", optional = true, default-features = false, features =
 
 [target.'cfg(target_os = "windows")'.dependencies]
 accesskit_windows = "0.35.0"
+# The pointer size the person chose (`windows_cursor`), which custom cursors
+# are scaled to. The version winit already resolves.
+windows-sys = { version = "0.59", optional = true, features = ["Win32_System_Registry"] }
 wgpu = { version = "29.0", optional = true, default-features = false, features = [
     "std",
     "parking_lot",

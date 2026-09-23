@@ -494,6 +494,12 @@ mod host_surface_resize;
     target_os = "macos"
 ))]
 mod macos_cursor;
+#[cfg(all(
+    feature = "desktop-shell",
+    feature = "renderer-wgpu",
+    target_os = "windows"
+))]
+mod windows_cursor;
 
 #[cfg(all(
     unix,

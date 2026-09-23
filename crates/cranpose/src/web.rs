@@ -867,7 +867,10 @@ pub async fn run(
     let request_frame_for_loop = request_frame.clone();
     let document_for_loop = document.clone();
     let accessibility_for_loop = accessibility.clone();
-    let cursors_for_loop = RefCell::new(crate::web_cursor::WebCursors::default());
+    let cursors_for_loop = RefCell::new(crate::web_cursor::WebCursors::new(
+        &canvas,
+        settings.custom_cursor_size,
+    ));
     let canvas_for_cursor = canvas.clone();
     let reshape_for_loop = reshape.clone();
 
