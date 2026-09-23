@@ -132,8 +132,14 @@ debug = "line-tables-only"
 [profile.dev.package."*"]
 debug = false
 
+# Proc macros re-run over every composable each time the crate using them
+# rebuilds; they are not incremental. Optimising them (and build scripts)
+# halved an incremental `cargo check -p desktop-app` on samarch-1 (median
+# 6.2 s -> 3.1 s after touching desktop-demo or cranpose-ui), for a one-time
+# 15 s on a cold target directory while syn and friends build optimised.
 [profile.dev.build-override]
 debug = false
+opt-level = 3
 
 # A debug-mode graphics and decoding stack changes what a dev build feels like:
 # these are the crates that run per frame or per asset, not per build. They are
