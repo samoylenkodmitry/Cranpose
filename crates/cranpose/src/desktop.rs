@@ -4545,8 +4545,30 @@ fn show_primary_when_it_has_content(
     }
 }
 
-fn primary_frame_waker_uses_event_proxy(primary_window_visible: bool, headless: bool) -> bool {
-    !primary_surface_redraw_drives_app(primary_window_visible, headless)
+fn primary_frame_waker_uses_event_proxy(
+    on_event_loop_thread: bool,
+    primary_window_visible: bool,
+    headless: bool,
+) -> bool {
+    !on_event_loop_thread || !primary_surface_redraw_drives_app(primary_window_visible, headless)
+}
+
+fn primary_frame_waker(
+    event_loop_thread: std::thread::ThreadId,
+    primary_shown: Arc<std::sync::atomic::AtomicBool>,
+    headless: bool,
+    request_redraw: impl Fn() + Send + Sync + 'static,
+    wake_event_loop: impl Fn() + Send + Sync + 'static,
+) -> impl Fn() + Send + Sync + 'static {
+    move || {
+        let on_event_loop_thread = std::thread::current().id() == event_loop_thread;
+        let shown = primary_shown.load(std::sync::atomic::Ordering::Relaxed);
+        if primary_frame_waker_uses_event_proxy(on_event_loop_thread, shown, headless) {
+            wake_event_loop();
+        } else {
+            request_redraw();
+        }
+    }
 }
 
 fn primary_launch_requires_initial_redraw(primary_window_visible: bool, headless: bool) -> bool {
@@ -5274,15 +5296,13 @@ impl ApplicationHandler for App {
 
         let frame_waker_window = window.clone();
         let frame_waker_event_proxy = self.event_proxy.clone();
-        let frame_waker_shown = Arc::clone(&self.primary_shown);
-        app.set_frame_waker(move || {
-            let shown = frame_waker_shown.load(std::sync::atomic::Ordering::Relaxed);
-            if primary_frame_waker_uses_event_proxy(shown, headless) {
-                frame_waker_event_proxy.wake_up();
-            } else {
-                frame_waker_window.request_redraw();
-            }
-        });
+        app.set_frame_waker(primary_frame_waker(
+            std::thread::current().id(),
+            Arc::clone(&self.primary_shown),
+            headless,
+            move || frame_waker_window.request_redraw(),
+            move || frame_waker_event_proxy.wake_up(),
+        ));
 
         let mut platform = DesktopWinitPlatform::default();
         platform.set_scale_factor(initial_scale);
