@@ -1,6 +1,10 @@
-use std::task::Poll;
+use std::{
+    future::Future,
+    pin::Pin,
+    task::{Context, Poll, Waker},
+};
 
-use coroflow::{Flow, MutableSharedFlow, MutableStateFlow, Turbine};
+use coroflow::{BufferOverflow, Flow, MutableSharedFlow, MutableStateFlow, Turbine};
 
 #[test]
 fn a_state_flow_emits_its_current_value_and_then_only_changes() {
@@ -52,8 +56,8 @@ fn state_flows_count_their_collectors_and_share_identity() {
 fn a_shared_flow_broadcasts_to_every_collector_and_replays_to_new_ones() {
     let events = MutableSharedFlow::new(1, 4);
     let mut early = Turbine::of(&events.as_shared_flow());
-    events.emit("saved");
-    events.emit("deleted");
+    assert!(events.try_emit("saved"));
+    assert!(events.try_emit("deleted"));
     assert_eq!(early.next_now(), Poll::Ready(Some("saved")));
     assert_eq!(early.next_now(), Poll::Ready(Some("deleted")));
     assert_eq!(early.next_now(), Poll::Pending);
@@ -66,21 +70,55 @@ fn a_shared_flow_broadcasts_to_every_collector_and_replays_to_new_ones() {
 }
 
 #[test]
-fn a_shared_flow_without_replay_does_not_deliver_past_events() {
-    let events = MutableSharedFlow::new(0, 0);
-    events.emit(1);
-    let mut run = Turbine::of(&events);
+fn a_shared_flow_without_collectors_keeps_only_its_replay() {
+    let silent = MutableSharedFlow::new(0, 1);
+    assert!(silent.try_emit(1));
+    let mut run = Turbine::of(&silent);
     assert_eq!(run.next_now(), Poll::Pending);
-    events.emit(2);
+    assert!(silent.try_emit(2));
     assert_eq!(run.next_now(), Poll::Ready(Some(2)));
+    let replaying = MutableSharedFlow::new(2, 0);
+    let accepted: Vec<bool> = (1..=5).map(|value| replaying.try_emit(value)).collect();
+    assert_eq!(accepted, vec![true; 5], "nobody to wait for");
+    let mut late = Turbine::of(&replaying);
+    assert_eq!(late.next_now(), Poll::Ready(Some(4)));
+    assert_eq!(late.next_now(), Poll::Ready(Some(5)));
+    assert_eq!(late.next_now(), Poll::Pending);
 }
 
 #[test]
-fn a_lagging_shared_collector_skips_values_that_fell_out_of_the_buffer() {
-    let events = MutableSharedFlow::new(0, 2);
+fn a_rendezvous_emit_waits_until_a_collector_takes_the_value_or_leaves() {
+    let events = MutableSharedFlow::new(0, 0);
+    let mut run = Turbine::of(&events);
+    assert!(!events.try_emit(1), "try_emit never waits");
+    let mut cx = Context::from_waker(Waker::noop());
+    let mut taken = events.emit(2);
+    assert_eq!(Pin::new(&mut taken).poll(&mut cx), Poll::Pending);
+    assert_eq!(run.next_now(), Poll::Ready(Some(2)));
+    assert_eq!(Pin::new(&mut taken).poll(&mut cx), Poll::Ready(()));
+    let mut abandoned = events.emit(3);
+    assert_eq!(Pin::new(&mut abandoned).poll(&mut cx), Poll::Pending);
+    drop(run);
+    assert_eq!(Pin::new(&mut abandoned).poll(&mut cx), Poll::Ready(()));
+}
+
+#[test]
+fn drop_latest_rejects_new_values_while_a_collector_lags() {
+    let events = MutableSharedFlow::with_overflow(0, 2, BufferOverflow::DropLatest);
+    let mut run = Turbine::of(&events);
+    let accepted: Vec<bool> = (1..=3).map(|value| events.try_emit(value)).collect();
+    assert_eq!(accepted, vec![true, true, false]);
+    assert_eq!(run.next_now(), Poll::Ready(Some(1)));
+    assert_eq!(run.next_now(), Poll::Ready(Some(2)));
+    assert_eq!(run.next_now(), Poll::Pending);
+}
+
+#[test]
+fn drop_oldest_lets_a_lagging_collector_skip_values_that_fell_out() {
+    let events = MutableSharedFlow::with_overflow(0, 2, BufferOverflow::DropOldest);
     let mut run = Turbine::of(&events);
     for value in 1..=5 {
-        events.emit(value);
+        assert!(events.try_emit(value));
     }
     assert_eq!(run.next_now(), Poll::Ready(Some(4)));
     assert_eq!(run.next_now(), Poll::Ready(Some(5)));

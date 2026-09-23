@@ -4,7 +4,9 @@ use std::{
     time::Duration,
 };
 
-use coroflow::{CoroutineScope, Flow, FlowExt, SendFlow, Stream, TestScheduler, delay, flow};
+use coroflow::{
+    CoroutineScope, Flow, FlowExt, MutableSharedFlow, SendFlow, Stream, TestScheduler, delay, flow,
+};
 
 type Log = Arc<Mutex<Vec<(u64, u32)>>>;
 
@@ -82,4 +84,31 @@ fn conflate_hands_a_slow_collector_only_the_newest_value() {
     let received = collect_slowly(&scheduler, ticks(&scheduler, &emitted).conflate());
     let got: Vec<u32> = values(&received).iter().map(|(_, value)| *value).collect();
     assert_eq!(got, vec![1, 5]);
+}
+
+#[test]
+fn a_suspending_shared_emit_waits_for_the_slowest_collector() {
+    let scheduler = TestScheduler::new();
+    let scope = CoroutineScope::new(scheduler.dispatcher());
+    let events = MutableSharedFlow::new(0, 1);
+    let emitted: Log = Arc::default();
+    let (emitter, log) = (events.clone(), Arc::clone(&emitted));
+    let clock = Arc::clone(scheduler.dispatcher().clock());
+    scope.launch(async move {
+        delay(Duration::from_millis(10)).await;
+        for value in 1..=5_u32 {
+            emitter.emit(value).await;
+            let at = clock.now().as_millis() as u64;
+            log.lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push((at, value));
+        }
+    });
+    let received = collect_slowly(&scheduler, events.as_shared_flow());
+    assert_eq!(
+        values(&emitted),
+        vec![(10, 1), (10, 2), (110, 3), (210, 4), (310, 5)]
+    );
+    let got: Vec<u32> = values(&received).iter().map(|(_, value)| *value).collect();
+    assert_eq!(got, vec![1, 2, 3, 4, 5], "nothing is lost");
 }

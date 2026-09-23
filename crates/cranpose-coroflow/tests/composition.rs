@@ -200,7 +200,7 @@ fn collect_flow_delivers_events_and_restarts_when_its_key_changes() {
     let start = render.clone();
     start(&mut composition);
     composition.runtime_handle().drain_ui();
-    events.emit(10);
+    assert!(events.try_emit(10));
     assert!(pump_until(&mut composition, render.clone(), || received
         .borrow()
         .len()
@@ -209,7 +209,7 @@ fn collect_flow_delivers_events_and_restarts_when_its_key_changes() {
     let rekey = render.clone();
     rekey(&mut composition);
     composition.runtime_handle().drain_ui();
-    events.emit(20);
+    assert!(events.try_emit(20));
     assert!(pump_until(&mut composition, render, || received
         .borrow()
         .len()

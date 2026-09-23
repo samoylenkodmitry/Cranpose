@@ -11,7 +11,8 @@ use futures_core::Stream;
 use crate::{
     clock::Timer,
     flow::Flow,
-    state::{MutableSharedFlow, SharedFlow, StateFlow, StateShared, SubscriberCount},
+    shared::{BufferOverflow, MutableSharedFlow, SharedFlow},
+    state::{StateFlow, StateShared, SubscriberCount},
 };
 
 /// How many values [`share_in`](crate::FlowExt::share_in) buffers beyond its
@@ -176,7 +177,8 @@ pub(crate) fn shared_sharing<F: Flow>(
 where
     F::Item: Clone,
 {
-    let events = MutableSharedFlow::new(replay, SHARE_IN_BUFFER);
+    let events =
+        MutableSharedFlow::with_overflow(replay, SHARE_IN_BUFFER, BufferOverflow::DropOldest);
     let subscribers = events.subscribers().clone();
     let view = events.as_shared_flow();
     let task = SharingTask::new(upstream, started, events, subscribers);
@@ -201,7 +203,9 @@ where
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
-        self.get_mut().poll_sharing(cx, MutableSharedFlow::emit)
+        self.get_mut().poll_sharing(cx, |events, value| {
+            events.try_emit(value);
+        })
     }
 }
 

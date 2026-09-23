@@ -118,7 +118,7 @@ fn a_background_event_never_blocks_a_main_thread_that_reads_the_same_flow() {
     let finished = finishes_within_patience(|| {
         let (dispatcher, runnables) = blocking_main_dispatcher();
         let scope = MainScope::new(dispatcher);
-        let events = MutableSharedFlow::new(0, VALUES as usize);
+        let events = MutableSharedFlow::new(0, 4);
         let last = std::rc::Rc::new(std::cell::Cell::new(0));
         let sink = std::rc::Rc::clone(&last);
         let observed = events.as_shared_flow();
@@ -131,7 +131,7 @@ fn a_background_event_never_blocks_a_main_thread_that_reads_the_same_flow() {
         thread::spawn(move || {
             go.wait();
             for value in 1..=VALUES {
-                emitter.emit(value);
+                pollster::block_on(emitter.emit(value));
             }
         });
         let mut released = false;

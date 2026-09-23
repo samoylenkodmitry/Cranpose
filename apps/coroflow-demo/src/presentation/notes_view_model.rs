@@ -176,7 +176,7 @@ impl NotesViewModel {
         let events = self.events.clone();
         self.scope.launch(async move {
             if let Some(event) = action.await {
-                events.emit(event);
+                events.emit(event).await;
             }
         });
     }

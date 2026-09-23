@@ -19,7 +19,7 @@
 //! | `merge(a, b)`, `combine(a, b, c)` | [`merge`], [`combine3`] |
 //! | `Channel`, `produce`, `receiveAsFlow` | [`channel`], [`produce`], [`Receiver`] |
 //! | `channelFlow`, `callbackFlow`, `awaitClose` | [`channel_flow`], [`callback_flow`], [`Producer::await_close`] |
-//! | `MutableStateFlow`, `MutableSharedFlow` | [`MutableStateFlow`], [`MutableSharedFlow`] |
+//! | `MutableStateFlow`, `MutableSharedFlow`, `BufferOverflow` | [`MutableStateFlow`], [`MutableSharedFlow`], [`BufferOverflow`] |
 //! | `stateIn(scope, WhileSubscribed(5000), x)`, `shareIn` | [`FlowExt::state_in`], [`FlowExt::share_in`], [`SharingStarted`] |
 //! | `runTest`, `advanceTimeBy` | [`TestScheduler`] |
 //! | Turbine's `flow.test { awaitItem() }` | [`Turbine`] |
@@ -48,6 +48,7 @@ mod job;
 mod operators;
 mod scope;
 mod select;
+mod shared;
 mod sharing;
 mod state;
 mod sync;
@@ -81,8 +82,9 @@ pub use scope::{
     TaskFailed, WithContext, coroutine_scope, supervisor_scope, with_context,
 };
 pub use select::{Either, Select, SelectAll, YieldNow, select, select_all, yield_now};
+pub use shared::{BufferOverflow, EmitShared, MutableSharedFlow, SharedFlow, SharedRun};
 pub use sharing::{SHARE_IN_BUFFER, SharingStarted, SharingTask};
-pub use state::{MutableSharedFlow, MutableStateFlow, SharedFlow, SharedRun, StateFlow, StateRun};
+pub use state::{MutableStateFlow, StateFlow, StateRun};
 pub use terminal::{Collect, First, ToVec};
 pub use testing::{Stalled, TestScheduler, Turbine};
 pub use transforms::{FilterMap, FilterMapRun, Scan, ScanRun, Skip, SkipRun};

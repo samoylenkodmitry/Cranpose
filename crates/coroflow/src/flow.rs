@@ -13,8 +13,9 @@ use crate::{
         OnCompletion, OnEach, OnStart, StartWith, Take,
     },
     scope::Spawn,
+    shared::{MutableSharedFlow, SharedFlow},
     sharing::{SharingStarted, SharingTask, shared_sharing, state_sharing},
-    state::{MutableSharedFlow, SharedFlow, StateFlow},
+    state::StateFlow,
     terminal::{Collect, First, ToVec},
     transforms::{FilterMap, Scan, Skip},
 };
@@ -358,7 +359,8 @@ pub trait FlowExt: Flow + Sized {
 
     /// Shares this flow as a hot [`SharedFlow`] that runs in `scope` and
     /// replays the last `replay` values to new collectors — Kotlin's
-    /// `shareIn`.
+    /// `shareIn`. The upstream never waits: a collector more than 64 values
+    /// behind skips the oldest ones.
     fn share_in<S>(
         self,
         scope: &S,
