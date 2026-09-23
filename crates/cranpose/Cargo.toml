@@ -188,8 +188,6 @@ web-sys = { version = "0.3", optional = true, features = [
     "WheelEvent",
     "KeyboardEvent",
     "CssStyleDeclaration",
-    # A canvas resized by its page or moved into a floating window
-    "ResizeObserver",
     # Clipboard support
     "Navigator",
     "Clipboard",
