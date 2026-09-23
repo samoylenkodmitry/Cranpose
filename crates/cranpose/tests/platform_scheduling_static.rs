@@ -3082,6 +3082,36 @@ fn the_android_camera_pushes_frames_rather_than_writing_them_to_files() {
 }
 
 #[test]
+fn the_android_camera_reports_a_denied_permission_and_survives_a_pause() {
+    let activity =
+        workspace_source("crates/cranpose/android/java/dev/cranpose/android/CranposeActivity.java");
+    let permission_result = group_contents_after(
+        &activity,
+        "int requestCode, String[] permissions, int[] grantResults) {",
+    )
+    .expect("CranposeActivity handles permission results");
+    assert!(
+        permission_result.contains("onCameraFailed("),
+        "a denied camera permission must reach the app as a camera failure, \
+         or the capture screen waits for frames that never come"
+    );
+    let start = group_contents_after(&activity, "public void cranposeCameraStart() {")
+        .expect("CranposeActivity starts the camera");
+    assert!(
+        start.contains("cranposeCameraPermissionPending"),
+        "a second start while the permission dialog is open must not stack a second dialog"
+    );
+    let pause = group_contents_after(&activity, "protected void onPause() {")
+        .expect("CranposeActivity pauses");
+    let resume = group_contents_after(&activity, "protected void onResume() {")
+        .expect("CranposeActivity resumes");
+    assert!(
+        pause.contains("cranposeCamera.stop()") && resume.contains("resumeCranposeCamera()"),
+        "the camera the app asked for stops with the activity and starts again when it returns"
+    );
+}
+
+#[test]
 fn the_camera_service_is_published_to_rather_than_polled() {
     let camera = workspace_source("crates/cranpose-services/src/camera.rs");
     assert!(

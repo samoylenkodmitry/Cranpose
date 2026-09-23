@@ -88,6 +88,7 @@ pub(crate) struct DesktopAccessibilityBridge {
     announcement_turn: bool,
     options: crate::desktop_accessibility_options::OptionsProbe,
     scale_factor: f64,
+    window_title: String,
     geometry_changed: bool,
 }
 
@@ -127,6 +128,7 @@ impl DesktopAccessibilityBridge {
             announcement_turn: false,
             options: crate::desktop_accessibility_options::OptionsProbe::start(!robot_drives),
             scale_factor: window.scale_factor(),
+            window_title: window.title(),
             geometry_changed: true,
         }
     }
@@ -177,6 +179,7 @@ impl DesktopAccessibilityBridge {
             self.announcement.as_ref(),
             self.announcement_turn,
             self.scale_factor,
+            &self.window_title,
         );
         *self
             .initial_tree
@@ -390,6 +393,7 @@ fn tree_update(
     announcement: Option<&Announcement>,
     announcement_turn: bool,
     scale_factor: f64,
+    window_title: &str,
 ) -> TreeUpdate {
     let elements = &snapshot.elements;
     let ids = &snapshot.ids;
@@ -402,7 +406,9 @@ fn tree_update(
     if scale_factor != 1.0 {
         root.set_transform(accesskit::Affine::scale(scale_factor));
     }
-    root.set_label("Cranpose application");
+    if !window_title.is_empty() {
+        root.set_label(window_title);
+    }
     root.set_children(children);
     let mut nodes = vec![(ROOT_ID, root)];
     for (id, element) in ids.iter().zip(elements) {
@@ -606,13 +612,10 @@ fn apply_state(node: &mut Node, element: &AccessibilityElement) {
         node.set_position_in_set(item.position.saturating_sub(1));
         node.set_size_of_set(item.count);
     }
-    if let Some(selected) = element
-        .selected
-        .filter(|_| element.role != AccessibilityRole::RadioButton)
-    {
+    if let Some(selected) = selected_state(element) {
         node.set_selected(selected);
     }
-    if let Some(toggled) = accessibility::checked_state(element) {
+    if let Some(toggled) = toggled_state(element) {
         node.set_toggled(if toggled {
             Toggled::True
         } else {
@@ -643,6 +646,27 @@ fn apply_state(node: &mut Node, element: &AccessibilityElement) {
         node.set_scroll_x(range.value as f64);
         node.set_scroll_x_min(0.0);
         node.set_scroll_x_max(range.max_value as f64);
+    }
+}
+
+fn reads_selection_as_pressed(role: AccessibilityRole) -> bool {
+    matches!(
+        role,
+        AccessibilityRole::Button | AccessibilityRole::ToggleButton
+    )
+}
+
+fn selected_state(element: &AccessibilityElement) -> Option<bool> {
+    element.selected.filter(|_| {
+        element.role != AccessibilityRole::RadioButton && !reads_selection_as_pressed(element.role)
+    })
+}
+
+fn toggled_state(element: &AccessibilityElement) -> Option<bool> {
+    if reads_selection_as_pressed(element.role) {
+        element.toggled.or(element.selected)
+    } else {
+        accessibility::checked_state(element)
     }
 }
 

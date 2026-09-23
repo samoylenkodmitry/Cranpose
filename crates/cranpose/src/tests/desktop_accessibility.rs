@@ -14,7 +14,7 @@ fn tree_update(
     announcement: Option<&Announcement>,
     turn: bool,
 ) -> TreeUpdate {
-    super::tree_update(&published(elements), announcement, turn, 1.0)
+    super::tree_update(&published(elements), announcement, turn, 1.0, "CranScan")
 }
 
 #[test]
@@ -28,7 +28,7 @@ fn desktop_tree_scales_logical_bounds_once_for_each_display_density() {
         ..Default::default()
     }]);
     for scale in [1.0, 1.25, 2.0, 3.0] {
-        let update = super::tree_update(&snapshot, None, false, scale);
+        let update = super::tree_update(&snapshot, None, false, scale, "CranScan");
         let root = &update
             .nodes
             .iter()
@@ -103,7 +103,7 @@ fn long_multiline_text_keeps_every_run_and_the_end_selection_accessible() {
     field.multiline = true;
     let elements = vec![field];
     let snapshot = published(&elements);
-    let update = super::tree_update(&snapshot, None, false, 1.0);
+    let update = super::tree_update(&snapshot, None, false, 1.0, "CranScan");
     let input = &update.nodes[1].1;
     assert_eq!(input.children().len(), text_runs(&value).len());
     let selection = input.text_selection().expect("selection at end");
@@ -176,6 +176,48 @@ fn radio_selection_is_a_native_checked_state() {
         assert_eq!(node.toggled(), Some(Toggled::from(selected)));
         assert_eq!(node.is_selected(), None);
     }
+}
+
+#[test]
+fn the_window_node_carries_the_window_title() {
+    let snapshot = published(&[]);
+    for (title, label) in [("CranScan", Some("CranScan")), ("", None)] {
+        let update = super::tree_update(&snapshot, None, false, 1.0, title);
+        let root = &update
+            .nodes
+            .iter()
+            .find(|(id, _)| *id == ROOT_ID)
+            .expect("root")
+            .1;
+        assert_eq!(root.role(), Role::Window);
+        assert_eq!(root.label(), label);
+    }
+}
+
+#[test]
+fn a_selected_button_reads_as_pressed_so_a_reader_can_still_press_it() {
+    for role in [AccessibilityRole::Button, AccessibilityRole::ToggleButton] {
+        for selected in [false, true] {
+            let element = AccessibilityElement {
+                role,
+                clickable: true,
+                selected: Some(selected),
+                ..AccessibilityElement::default()
+            };
+            let node = accesskit_node(&element);
+            assert_eq!(node.toggled(), Some(Toggled::from(selected)));
+            assert_eq!(node.is_selected(), None);
+            assert!(node.supports_action(accesskit::Action::Click));
+        }
+    }
+    let tab = accesskit_node(&AccessibilityElement {
+        role: AccessibilityRole::Tab,
+        clickable: true,
+        selected: Some(true),
+        ..AccessibilityElement::default()
+    });
+    assert_eq!(tab.is_selected(), Some(true));
+    assert_eq!(tab.toggled(), None);
 }
 #[test]
 fn the_tree_points_at_the_focused_control_and_offers_focus_on_the_others() {

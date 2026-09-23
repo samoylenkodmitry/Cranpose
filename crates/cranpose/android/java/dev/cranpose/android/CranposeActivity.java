@@ -531,6 +531,8 @@ public class CranposeActivity extends NativeActivity {
     private long pendingToken;
     private CranposeAccessibilityProvider cranposeAccessibilityProvider;
     private CranposeCamera cranposeCamera;
+    private boolean cranposeCameraRequested;
+    private boolean cranposeCameraPermissionPending;
     private volatile CranposeMedia cranposeMedia;
     /** How long a pause must last before the foreground service is asked for.
      * Launch-shaped pauses — a screen-off start that pauses without ever
@@ -611,12 +613,22 @@ public class CranposeActivity extends NativeActivity {
 
     public void cranposeCameraStart() {
         runOnUiThread(() -> {
+            cranposeCameraRequested = true;
             if (!cranposeCameraHasPermission()) {
-                requestPermissions(new String[] {android.Manifest.permission.CAMERA}, REQUEST_CAMERA);
+                if (!cranposeCameraPermissionPending) {
+                    cranposeCameraPermissionPending = true;
+                    requestPermissions(new String[] {android.Manifest.permission.CAMERA}, REQUEST_CAMERA);
+                }
                 return;
             }
-            cranposeCamera().start();
+            resumeCranposeCamera();
         });
+    }
+
+    private void resumeCranposeCamera() {
+        if (cranposeCameraRequested && !cranposePaused && cranposeCameraHasPermission()) {
+            cranposeCamera().start();
+        }
     }
 
     /** Asks for a still; it arrives through {@link #onCameraStill}. */
@@ -626,6 +638,7 @@ public class CranposeActivity extends NativeActivity {
 
     public void cranposeCameraStop() {
         runOnUiThread(() -> {
+            cranposeCameraRequested = false;
             if (cranposeCamera != null) {
                 cranposeCamera.stop();
             }
@@ -2660,6 +2673,7 @@ public class CranposeActivity extends NativeActivity {
         reportAccessibilityOptions();
         cranposePaused = false;
         cranposeEverResumed = true;
+        resumeCranposeCamera();
         cranposeBackgroundServiceHandler.removeCallbacks(cranposeBackgroundServiceAsk);
         CranposeBackgroundService.stop(this);
     }
@@ -2696,9 +2710,18 @@ public class CranposeActivity extends NativeActivity {
     public void onRequestPermissionsResult(
             int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        if (requestCode == REQUEST_CAMERA && grantResults.length > 0
+        if (requestCode != REQUEST_CAMERA) {
+            return;
+        }
+        cranposeCameraPermissionPending = false;
+        if (!cranposeCameraRequested) {
+            return;
+        }
+        if (grantResults.length > 0
                 && grantResults[0] == android.content.pm.PackageManager.PERMISSION_GRANTED) {
-            cranposeCamera().start();
+            resumeCranposeCamera();
+        } else {
+            onCameraFailed("Camera permission is denied. Allow Camera in this app's Android settings.");
         }
     }
 

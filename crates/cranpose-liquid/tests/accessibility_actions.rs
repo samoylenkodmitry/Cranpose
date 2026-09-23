@@ -105,6 +105,69 @@ fn assert_selected(robot: &mut RobotTestRule<TestRenderer>, label: &str) {
 }
 
 #[test]
+fn keyboard_moves_across_tabs_and_selects_the_focused_tab() {
+    for accessory in [false, true] {
+        let mut robot = create_headless_robot_test(400, 800, move || {
+            LiquidTheme(LiquidThemeSpec::default(), move || {
+                let selected = rememberMutableStateOf(|| 0usize);
+                let search =
+                    cranpose_core::remember(|| cranpose_foundation::text::TextFieldState::new(""))
+                        .with(|field| *field);
+                cranpose_ui::BasicTextField(
+                    search,
+                    Modifier::empty()
+                        .size(cranpose_ui::Size::new(200.0, 48.0))
+                        .content_description("Search receipts"),
+                    cranpose_ui::TextStyle::default(),
+                );
+                let tabs = |tabs: &LiquidTabBarScope| {
+                    tabs.tab(cranpose_liquid::icons::BOOKMARK, "Library");
+                    tabs.tab(cranpose_liquid::icons::SEARCH, "Scan");
+                    tabs.tab(cranpose_liquid::icons::STAR, "Settings");
+                };
+                if accessory {
+                    LiquidTabBarWithAccessory(
+                        Modifier::empty(),
+                        LiquidTabBarSpec::default(),
+                        selected.get(),
+                        move |index| selected.set(index),
+                        tabs,
+                        || LiquidTabBarSearchAccessory(|| {}),
+                    );
+                } else {
+                    LiquidTabBar(
+                        Modifier::empty(),
+                        LiquidTabBarSpec::default(),
+                        selected.get(),
+                        move |index| selected.set(index),
+                        tabs,
+                    );
+                }
+            });
+        });
+        robot.shell_mut().set_semantics_enabled(true);
+        robot.wait_for_idle();
+        press_key(&mut robot, cranpose_ui::KeyCode::Tab, "\t");
+        assert_focused(&mut robot, "Search receipts");
+        press_key(&mut robot, cranpose_ui::KeyCode::Tab, "\t");
+        assert_focused(&mut robot, "Library");
+        for (key, focused) in [
+            (cranpose_ui::KeyCode::ArrowRight, "Scan"),
+            (cranpose_ui::KeyCode::End, "Settings"),
+            (cranpose_ui::KeyCode::ArrowRight, "Library"),
+            (cranpose_ui::KeyCode::ArrowLeft, "Settings"),
+        ] {
+            press_key(&mut robot, key, "");
+            assert_focused(&mut robot, focused);
+            assert_selected(&mut robot, "Library");
+        }
+        press_key(&mut robot, cranpose_ui::KeyCode::Enter, "\r");
+        assert_selected(&mut robot, "Settings");
+        assert_focused(&mut robot, "Settings");
+    }
+}
+
+#[test]
 fn reader_selects_each_segment_and_receives_the_committed_value() {
     let mut robot = create_headless_robot_test(400, 800, || {
         LiquidTheme(LiquidThemeSpec::default(), || {
