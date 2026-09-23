@@ -192,6 +192,21 @@ fn every_native_window_carries_the_application_window_icon() {
 }
 
 #[test]
+fn the_primary_window_carries_the_application_icon_in_every_place_the_platform_draws_one() {
+    let icon = super::winit_window_icon(&opaque_icon()).expect("the bitmap converts");
+    let attributes =
+        super::with_application_icon(winit::window::WindowAttributes::default(), Some(&icon));
+
+    assert!(attributes.window_icon.is_some());
+    #[cfg(target_os = "windows")]
+    assert!(
+        attributes.platform.is_some(),
+        "Windows draws the taskbar and Alt-Tab from ICON_BIG, which only the platform \
+         attributes set"
+    );
+}
+
+#[test]
 fn a_native_window_has_no_icon_when_the_application_names_none() {
     assert!(
         super::native_window_attributes(&window_options(), false, true, None)

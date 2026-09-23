@@ -3598,6 +3598,19 @@ fn winit_window_icon(bitmap: &cranpose_ui::ImageBitmap) -> Option<Icon> {
     }
 }
 
+fn with_application_icon(attributes: WindowAttributes, icon: Option<&Icon>) -> WindowAttributes {
+    let attributes = attributes.with_window_icon(icon.cloned());
+    #[cfg(target_os = "windows")]
+    let attributes = {
+        use winit::platform::windows::WindowAttributesWindows;
+
+        attributes.with_platform_attributes(Box::new(
+            WindowAttributesWindows::default().with_taskbar_icon(icon.cloned()),
+        ))
+    };
+    attributes
+}
+
 fn native_window_attributes(
     options: &NativeWindowOptions,
     headless: bool,
@@ -3607,7 +3620,6 @@ fn native_window_attributes(
     let mut attributes = WindowAttributes::default()
         .with_active(active)
         .with_title(options.title.clone())
-        .with_window_icon(window_icon.cloned())
         .with_surface_size(LogicalSize::new(
             options.width.max(1.0) as f64,
             options.height.max(1.0) as f64,
@@ -3617,6 +3629,7 @@ fn native_window_attributes(
         .with_resizable(options.resizable)
         .with_visible(!headless && options.visible)
         .with_window_level(native_window_level(options.always_on_top));
+    attributes = with_application_icon(attributes, window_icon);
     attributes = with_native_window_shadow(attributes, options.shadow);
     if let (Some(width), Some(height)) = (options.min_width, options.min_height) {
         attributes = attributes.with_min_surface_size(LogicalSize::new(
@@ -5081,16 +5094,16 @@ impl ApplicationHandler for App {
         let initial_height = self.settings.initial_height;
         let headless = self.settings.headless;
 
-        let window: Arc<dyn Window> = match event_loop.create_window(
+        let window: Arc<dyn Window> = match event_loop.create_window(with_application_icon(
             WindowAttributes::default()
                 .with_title(self.settings.window_title.clone())
-                .with_window_icon(self.window_icon.clone())
                 .with_surface_size(LogicalSize::new(
                     initial_width as f64,
                     initial_height as f64,
                 ))
                 .with_visible(false),
-        ) {
+            self.window_icon.as_ref(),
+        )) {
             Ok(window) => window.into(),
             Err(error) => {
                 self.abort_launch(event_loop, LaunchError::WindowCreate(error));
