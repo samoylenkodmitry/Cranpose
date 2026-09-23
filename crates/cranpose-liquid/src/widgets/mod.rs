@@ -23,7 +23,7 @@ pub use button::{
     GlassIconButtonGroupSpec,
 };
 pub use card::{Card, LiquidCard, LiquidListRow, LiquidListRowSpec, LiquidListSection, Surface};
-pub use chip::LiquidChip;
+pub use chip::{LiquidActionChip, LiquidChip};
 pub use glass_surface::GlassSurface;
 pub use menu::{
     LiquidDropdownMenu, LiquidDropdownMenuSpec, LiquidMenu, LiquidMenuAbsorbedIconButton,

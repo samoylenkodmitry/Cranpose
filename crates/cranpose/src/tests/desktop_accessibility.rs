@@ -195,6 +195,25 @@ fn the_window_node_carries_the_window_title() {
 }
 
 #[test]
+fn a_titled_pane_is_a_named_region_with_no_value() {
+    let pane = accesskit_node(&AccessibilityElement {
+        role: AccessibilityRole::StaticText,
+        pane_title: Some("Settings".into()),
+        ..AccessibilityElement::default()
+    });
+    assert_eq!(pane.role(), Role::Region);
+    assert_eq!(pane.label(), Some("Settings"));
+    assert_eq!(pane.value(), None);
+    let text = accesskit_node(&AccessibilityElement {
+        role: AccessibilityRole::StaticText,
+        label: "On this device".into(),
+        ..AccessibilityElement::default()
+    });
+    assert_eq!(text.role(), Role::Label);
+    assert_eq!(text.value(), Some("On this device"));
+}
+
+#[test]
 fn a_selected_button_reads_as_pressed_so_a_reader_can_still_press_it() {
     for role in [AccessibilityRole::Button, AccessibilityRole::ToggleButton] {
         for selected in [false, true] {

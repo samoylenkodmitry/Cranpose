@@ -1345,6 +1345,9 @@ public class CranposeActivity extends NativeActivity {
                 info.setClickable(false);
                 info.setLongClickable(false);
             }
+            if (Build.VERSION.SDK_INT >= 23) {
+                info.addAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SHOW_ON_SCREEN);
+            }
             info.addAction(focusedId == element.id
                     ? AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS
                     : AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS);
@@ -1355,9 +1358,16 @@ public class CranposeActivity extends NativeActivity {
         public boolean performAction(int virtualViewId, int action, Bundle arguments) {
             CranposeAccessibilityElement element = find(virtualViewId);
             if (element == null) return false;
+            boolean showOnScreen = Build.VERSION.SDK_INT >= 23
+                    && action == AccessibilityNodeInfo.AccessibilityAction.ACTION_SHOW_ON_SCREEN.getId();
             if (!element.enabled
+                    && !showOnScreen
                     && action != AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS
                     && action != AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS) return false;
+            if (showOnScreen) {
+                nativeOnAccessibilityFocus(element.id);
+                return true;
+            }
             if (action == AccessibilityNodeInfo.ACTION_CLICK && element.clickable) {
                 nativeOnAccessibilityActivate(element.id);
                 sendEvent(element.id, AccessibilityEvent.TYPE_VIEW_CLICKED);
@@ -1394,9 +1404,7 @@ public class CranposeActivity extends NativeActivity {
                 focusedId = element.id;
                 cursors.clear();
                 sendEvent(element.id, AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUSED);
-                // The app moves its own focus to the control the reader landed
-                // on, so a later Tab carries on from there.
-                if (element.focusable) nativeOnAccessibilityFocus(element.id);
+                nativeOnAccessibilityFocus(element.id);
                 return true;
             }
             if (action == AccessibilityNodeInfo.ACTION_FOCUS && element.focusable) {

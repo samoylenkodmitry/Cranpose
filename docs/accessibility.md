@@ -768,6 +768,7 @@ An app gets this with no code of its own:
 | `selectable`, a tab or a radio row | the label, its role, whether it is picked | pick it |
 | `LiquidTabBar` | the tab, whether it is picked, and which of how many | pick it |
 | `LiquidToggle`, `LiquidSegmented`, `LiquidChip`, `LiquidMenu` rows, the liquid icon group | the switch and its state, the segment or the chip and whether it is picked, the row | flip or pick it, from a reader, Tab and Enter alike |
+| `LiquidActionChip` | the chip as a plain button; its raised look is not a state | press it |
 | `BasicTextField` | the name the app gave it, or the text it holds; an empty field is still a stop | type into it, hand it whole text, move the caret by character, word and line, and pick a stretch of text |
 | `Slider` | the value | move it |
 | `LiquidSlider` | the name the app gave it, and the value in percent | move it with a swipe up or down |

@@ -3082,6 +3082,32 @@ fn the_android_camera_pushes_frames_rather_than_writing_them_to_files() {
 }
 
 #[test]
+fn talkback_brings_any_element_it_lands_on_into_view() {
+    let activity =
+        workspace_source("crates/cranpose/android/java/dev/cranpose/android/CranposeActivity.java");
+    let reveal = crate_source("src/android.rs");
+    let perform = group_contents_after(
+        &activity,
+        "public boolean performAction(int virtualViewId, int action, Bundle arguments) {",
+    )
+    .expect("the provider performs reader actions");
+    assert!(
+        activity.contains(
+            "info.addAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SHOW_ON_SCREEN);"
+        ) && perform.contains("ACTION_SHOW_ON_SCREEN.getId()"),
+        "every element offers show on screen, so a service can scroll an off-screen row into view"
+    );
+    assert!(
+        !perform.contains("if (element.focusable) nativeOnAccessibilityFocus"),
+        "text the reader lands on scrolls into view as a control does"
+    );
+    assert!(
+        reveal.contains("shell.accessibility_reveal(node_id);"),
+        "the reader's target is revealed without taking keyboard focus"
+    );
+}
+
+#[test]
 fn the_android_camera_reports_a_denied_permission_and_survives_a_pause() {
     let activity =
         workspace_source("crates/cranpose/android/java/dev/cranpose/android/CranposeActivity.java");
@@ -4127,7 +4153,7 @@ fn no_platform_reads_a_password_out() {
         "the web mirror says the field is a password"
     );
     assert!(
-        crate_source("src/accessibility.rs").contains(".filter(|_| !node.password),"),
+        crate_source("src/accessibility.rs").contains(".filter(|_| !node.password)"),
         "the text never leaves the projection"
     );
 }

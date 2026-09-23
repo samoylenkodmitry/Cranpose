@@ -780,11 +780,18 @@ pub struct CollectionInfo {
 /// it reports the first visible item as the value and one more than that as
 /// the end while it can still scroll; a reader only needs to know whether it
 /// can page on.
+///
+/// `content_padding_start` and `content_padding_end` are the container's
+/// content padding at its top and bottom (or left and right) edges, in layout
+/// pixels. Content scrolls under that padding, where a bar may cover it, so a
+/// control a reader or the keyboard moves to is brought in past it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ScrollAxisRange {
     pub value: f32,
     pub max_value: f32,
     pub reverse: bool,
+    pub content_padding_start: f32,
+    pub content_padding_end: f32,
 }
 
 impl ScrollAxisRange {
@@ -793,6 +800,18 @@ impl ScrollAxisRange {
             value,
             max_value,
             reverse,
+            content_padding_start: 0.0,
+            content_padding_end: 0.0,
+        }
+    }
+
+    /// The same range with the container's content padding at its start and
+    /// end edges, in layout pixels.
+    pub fn with_content_padding(self, start: f32, end: f32) -> Self {
+        Self {
+            content_padding_start: start,
+            content_padding_end: end,
+            ..self
         }
     }
 

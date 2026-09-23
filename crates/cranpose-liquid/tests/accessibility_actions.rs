@@ -233,6 +233,42 @@ fn assert_focused(robot: &mut RobotTestRule<TestRenderer>, label: &str) {
 }
 
 #[test]
+fn an_action_chip_is_a_plain_button_whatever_its_look() {
+    let clicks = std::rc::Rc::new(std::cell::Cell::new(0));
+    let recorded = std::rc::Rc::clone(&clicks);
+    let mut robot = create_headless_robot_test(400, 300, move || {
+        let recorded = std::rc::Rc::clone(&recorded);
+        LiquidTheme(LiquidThemeSpec::default(), move || {
+            let save = std::rc::Rc::clone(&recorded);
+            LiquidActionChip(
+                Modifier::empty(),
+                true,
+                move || save.set(save.get() + 1),
+                "Save",
+            );
+            LiquidActionChip(Modifier::empty(), false, || {}, "Cancel");
+            LiquidChip(Modifier::empty(), false, || {}, "Receipts");
+        });
+    });
+    robot.shell_mut().set_semantics_enabled(true);
+    robot.wait_for_idle();
+    let tree = placed_semantics_from_shell(robot.shell_mut()).expect("placed chips");
+    let nodes = tree.flatten();
+    let state = |label: &str| {
+        nodes
+            .iter()
+            .find(|node| node.label.as_deref() == Some(label))
+            .map(|node| node.selected)
+            .expect("named chip")
+    };
+    assert_eq!(state("Save"), None);
+    assert_eq!(state("Cancel"), None);
+    assert_eq!(state("Receipts"), Some(false));
+    activate(&mut robot, "Save");
+    assert_eq!(clicks.get(), 1);
+}
+
+#[test]
 fn reader_changes_a_switch_in_both_directions() {
     let mut robot = create_headless_robot_test(400, 800, || {
         LiquidTheme(LiquidThemeSpec::default(), || {

@@ -486,8 +486,9 @@ fn accesskit_element_role(element: &AccessibilityElement) -> Role {
 }
 
 fn accesskit_node(element: &AccessibilityElement) -> Node {
-    let mut node = Node::new(accesskit_element_role(element));
-    if element.role == AccessibilityRole::StaticText {
+    let role = accesskit_element_role(element);
+    let mut node = Node::new(role);
+    if role == Role::Label {
         node.set_value(element.label.as_str());
     } else {
         node.set_label(element.label.as_str());

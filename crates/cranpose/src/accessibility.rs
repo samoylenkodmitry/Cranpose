@@ -862,7 +862,8 @@ fn element_for_node(
             .text
             .clone()
             .or_else(|| node.editable_text.then(|| label.clone()))
-            .filter(|_| !node.password),
+            .filter(|_| !node.password)
+            .filter(|value| node.editable_text || !value.is_empty()),
         label,
         state_description: node.state_description.clone(),
         click_label: node.on_click_label.clone(),

@@ -1880,3 +1880,21 @@ fn multiline_semantics_merge_independently_of_text() {
         assert!(config.multiline);
     }
 }
+
+#[test]
+fn a_scroll_range_carries_its_content_padding() {
+    let plain = ScrollAxisRange::new(2.0, 5.0, true);
+    assert_eq!(
+        (plain.content_padding_start, plain.content_padding_end),
+        (0.0, 0.0)
+    );
+    let padded = plain.with_content_padding(12.0, 96.0);
+    assert_eq!(
+        (padded.content_padding_start, padded.content_padding_end),
+        (12.0, 96.0)
+    );
+    assert_eq!(
+        (padded.value, padded.max_value, padded.reverse),
+        (2.0, 5.0, true)
+    );
+}
