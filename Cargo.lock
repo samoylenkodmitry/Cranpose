@@ -1075,6 +1075,7 @@ dependencies = [
  "coroflow",
  "cranpose-core",
  "cranpose-foundation",
+ "cranpose-services",
  "log",
 ]
 

@@ -2,6 +2,7 @@ use std::{cell::RefCell, rc::Rc};
 
 use coroflow::{Flow, FlowExt, MainScope, StateFlow};
 use cranpose_core::{OwnedMutableState, State, ownedMutableStateOf, remember};
+use cranpose_services::{LifecycleState, rememberLifecycleState};
 
 use crate::dispatcher::require_main_dispatcher;
 
@@ -23,7 +24,58 @@ pub fn rememberViewModel<VM: 'static>(factory: impl FnOnce(MainScope) -> VM) -> 
 struct StateCollection<T: Clone + 'static> {
     flow: StateFlow<T>,
     state: OwnedMutableState<T>,
-    _scope: MainScope,
+    scope: Option<MainScope>,
+}
+
+impl<T: Clone + PartialEq + 'static> StateCollection<T> {
+    fn new(flow: &StateFlow<T>) -> Self {
+        Self {
+            flow: flow.clone(),
+            state: ownedMutableStateOf(flow.value()),
+            scope: None,
+        }
+    }
+
+    fn set_active(&mut self, active: bool) {
+        if !active {
+            self.scope = None;
+            return;
+        }
+        if self.scope.is_some() {
+            return;
+        }
+        let scope = MainScope::new(require_main_dispatcher("collectAsState"));
+        let target = self.state.handle();
+        let flow = self.flow.clone();
+        scope.launch(async move {
+            flow.collect(move |value| target.set(value)).await;
+        });
+        self.scope = Some(scope);
+    }
+}
+
+#[track_caller]
+fn collect_state<T: Clone + PartialEq + 'static>(flow: &StateFlow<T>, active: bool) -> State<T> {
+    let holder = remember(|| RefCell::new(None::<StateCollection<T>>));
+    holder.with(|cell| {
+        let mut slot = cell.borrow_mut();
+        if slot
+            .as_ref()
+            .is_some_and(|collection| !collection.flow.same_as(flow))
+        {
+            *slot = None;
+        }
+        let collection = slot.get_or_insert_with(|| StateCollection::new(flow));
+        collection.set_active(active);
+        collection.state.as_state()
+    })
+}
+
+/// Whether a lifecycle-aware collection runs in `state`: everywhere except
+/// while the host reports it is stopped. Hosts that report no lifecycle stay
+/// in [`LifecycleState::Created`] and keep collecting.
+pub fn collects_in(state: LifecycleState) -> bool {
+    !matches!(state, LifecycleState::Stopped | LifecycleState::Destroyed)
 }
 
 /// Reads a [`StateFlow`] as Cranpose state.
@@ -35,33 +87,27 @@ pub trait StateFlowCollect<T: Clone + 'static> {
     /// placeholder frame. The collection counts as a subscriber, which is what
     /// keeps a `WhileSubscribed` upstream running.
     fn collectAsState(&self) -> State<T>;
+
+    /// Like [`collectAsState`](StateFlowCollect::collectAsState), but pauses
+    /// collecting while the app is stopped — Android's
+    /// `collectAsStateWithLifecycle()`.
+    ///
+    /// A paused collection is not a subscriber, so `WhileSubscribed` upstreams
+    /// stop after their timeout while the app sits in the background, and the
+    /// state keeps the last value until the app comes back.
+    fn collectAsStateWithLifecycle(&self) -> State<T>;
 }
 
 impl<T: Clone + PartialEq + 'static> StateFlowCollect<T> for StateFlow<T> {
     #[track_caller]
     fn collectAsState(&self) -> State<T> {
-        let holder = remember(|| RefCell::new(None::<StateCollection<T>>));
-        holder.with(|cell| {
-            let mut slot = cell.borrow_mut();
-            if let Some(active) = slot.as_ref().filter(|active| active.flow.same_as(self)) {
-                return active.state.as_state();
-            }
-            *slot = None;
-            let state = ownedMutableStateOf(self.value());
-            let target = state.handle();
-            let scope = MainScope::new(require_main_dispatcher("collectAsState"));
-            let flow = self.clone();
-            scope.launch(async move {
-                flow.collect(move |value| target.set(value)).await;
-            });
-            let result = state.as_state();
-            *slot = Some(StateCollection {
-                flow: self.clone(),
-                state,
-                _scope: scope,
-            });
-            result
-        })
+        collect_state(self, true)
+    }
+
+    #[track_caller]
+    fn collectAsStateWithLifecycle(&self) -> State<T> {
+        let lifecycle = rememberLifecycleState().get();
+        collect_state(self, collects_in(lifecycle))
     }
 }
 

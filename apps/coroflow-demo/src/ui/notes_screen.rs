@@ -23,7 +23,7 @@ pub const MAX_VISIBLE_HITS: usize = 4;
 /// The notes screen: search, catalog results, the note list and the sync bar.
 #[composable]
 pub fn NotesScreen(view_model: Handle<NotesViewModel>) {
-    let state = view_model.ui_state().collectAsState().get();
+    let state = view_model.ui_state().collectAsStateWithLifecycle().get();
     let search = remember(|| TextFieldState::new("")).with(|state| *state);
     let draft = remember(|| TextFieldState::new("")).with(|state| *state);
     let snackbar = rememberMutableStateOf(|| None::<String>);

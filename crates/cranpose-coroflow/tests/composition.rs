@@ -5,48 +5,17 @@ use std::{
         Arc,
         atomic::{AtomicUsize, Ordering},
     },
-    time::{Duration, Instant},
+    time::Duration,
 };
+
+mod support;
 
 use coroflow::{FlowExt, MainScope, MutableSharedFlow, MutableStateFlow, StateFlow};
 use cranpose_core::{Composition, MemoryApplier, mutableStateOf, remember};
 use cranpose_coroflow::{
     CollectFlow, StateFlowCollect, main_dispatcher, rememberViewModel, snapshotFlow,
 };
-
-const PATIENCE: Duration = Duration::from_secs(5);
-const QUIET_PERIOD: Duration = Duration::from_millis(200);
-
-fn composition() -> Composition<MemoryApplier> {
-    Composition::new(MemoryApplier::new())
-}
-
-fn pump_until(
-    composition: &mut Composition<MemoryApplier>,
-    render: impl FnMut(&mut Composition<MemoryApplier>),
-    done: impl FnMut() -> bool,
-) -> bool {
-    pump_for(PATIENCE, composition, render, done)
-}
-
-fn pump_for(
-    patience: Duration,
-    composition: &mut Composition<MemoryApplier>,
-    mut render: impl FnMut(&mut Composition<MemoryApplier>),
-    mut done: impl FnMut() -> bool,
-) -> bool {
-    let runtime = composition.runtime_handle();
-    let deadline = Instant::now() + patience;
-    while Instant::now() < deadline {
-        runtime.drain_ui();
-        render(composition);
-        if done() {
-            return true;
-        }
-        std::thread::sleep(Duration::from_millis(1));
-    }
-    false
-}
+use support::{PATIENCE, QUIET_PERIOD, composition, pump_for, pump_until};
 
 struct DropMarker(Arc<AtomicUsize>);
 

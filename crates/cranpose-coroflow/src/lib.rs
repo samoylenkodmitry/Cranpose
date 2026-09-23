@@ -8,6 +8,7 @@
 //! | `Dispatchers.Main` | [`main_dispatcher`] |
 //! | `viewModel { }` + `viewModelScope` | [`rememberViewModel`] |
 //! | `StateFlow.collectAsState()` | [`StateFlowCollect::collectAsState`] |
+//! | `collectAsStateWithLifecycle()` | [`StateFlowCollect::collectAsStateWithLifecycle`] |
 //! | `LaunchedEffect(key) { flow.collect { } }` | [`CollectFlow`] |
 //! | `snapshotFlow { }` | [`snapshotFlow`] |
 
@@ -18,5 +19,5 @@ mod hooks;
 mod snapshot_flow;
 
 pub use dispatcher::main_dispatcher;
-pub use hooks::{CollectFlow, StateFlowCollect, rememberViewModel};
+pub use hooks::{CollectFlow, StateFlowCollect, collects_in, rememberViewModel};
 pub use snapshot_flow::{SnapshotFlow, SnapshotRun, snapshotFlow};
