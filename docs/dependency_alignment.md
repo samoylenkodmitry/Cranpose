@@ -96,7 +96,7 @@ those are diagnostic-only and do not represent duplicate semver roots.
 
 Local direct dependency ownership:
 
-- Keep Cranpose-owned collection aliases on `foldhash`. Every key they hold is an internal identifier (`NodeId`, `SlotId`, `TypeId`, anchors), never untrusted input, so hash-flooding resistance buys nothing, and `foldhash` is faster than `ahash` for small integer keys on targets without AES instructions (Android, wasm). It is already in the graph through `hashbrown` and `winit-wayland`, and it seeds itself without `getrandom`, so a wasm application no longer needs a `getrandom` backend feature for Cranpose.
+- Keep Cranpose-owned collection aliases on `foldhash`. Every key they hold is an internal identifier (`NodeId`, `SlotId`, `TypeId`, anchors), never untrusted input, so hash-flooding resistance buys nothing, and `foldhash` is faster for these keys: under the exclusive host lock on samarch-1 (x86-64 baseline, where `ahash` takes its non-AES path as it does on Android and wasm), the `cranpose-ui` pipeline benchmark ran 4.4% faster end to end, composition 3.6-6.7% and recursive measure 6.4%, and swapping `ahash` back regressed the same benchmarks by 5-8%; layout and render, which do not touch these maps, did not move. It is already in the graph through `hashbrown` and `winit-wayland`, and it seeds itself without `getrandom`, so a wasm application no longer needs a `getrandom` backend feature for Cranpose.
 - Keep `tiny-skia 0.12.0` for Cranpose render/common code. The software text
   rasterizer compiles against the same tiny-skia line as the current
   `sctk-adwaita -> winit` platform stack, with PNG decoding disabled because it
