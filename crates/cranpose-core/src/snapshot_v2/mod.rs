@@ -470,7 +470,20 @@ pub(crate) fn take_transparent_observer_mutable_snapshot_reusing(
     let parent = current_snapshot();
     match parent {
         Some(AnySnapshot::TransparentMutable(transparent)) if transparent.can_reuse() => {
-            transparent
+            let (parent_read, parent_write) = transparent.observers();
+            if already_observes(&read_observer, &parent_read)
+                && already_observes(&write_observer, &parent_write)
+            {
+                return transparent;
+            }
+            TransparentObserverMutableSnapshot::new_reusing(
+                recycled,
+                transparent.snapshot_id(),
+                transparent.invalid(),
+                merge_read_observers(read_observer, parent_read),
+                merge_write_observers(write_observer, parent_write),
+                Some(Arc::downgrade(&transparent)),
+            )
         }
         _ => {
             let current = current_snapshot()
@@ -486,6 +499,14 @@ pub(crate) fn take_transparent_observer_mutable_snapshot_reusing(
                 None,
             )
         }
+    }
+}
+
+fn already_observes(requested: &Option<ReadObserver>, installed: &Option<ReadObserver>) -> bool {
+    match (requested, installed) {
+        (None, _) => true,
+        (Some(requested), Some(installed)) => Arc::ptr_eq(requested, installed),
+        (Some(_), None) => false,
     }
 }
 

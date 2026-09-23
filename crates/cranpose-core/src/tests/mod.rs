@@ -767,6 +767,7 @@ mod composition_and_recompose_scope_tests;
 mod internal_surface_tests;
 mod movable_tests;
 mod recompose_and_diff_tests;
+mod snapshot_observer_nesting_tests;
 mod snapshot_state_tests;
 mod state_and_effect_tests;
 mod state_holder_tests;
