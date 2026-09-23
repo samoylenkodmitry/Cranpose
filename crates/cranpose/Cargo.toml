@@ -62,6 +62,8 @@ desktop-wayland = [
 # features themselves.
 desktop-shell = [
     "cranpose-app-shell/clipboard-native",
+    "dep:objc2",
+    "dep:objc2-app-kit",
     "cranpose-platform-desktop-winit",
     "dep:winit",
     "dep:accesskit",
@@ -318,9 +320,24 @@ objc2-foundation = { version = "0.3", default-features = false, features = [
     "NSEnumerator",
     "NSError",
     "NSObject",
+    "NSGeometry",
     "NSProcessInfo",
     "NSString",
+    "NSUserDefaults",
     "NSValue",
+] }
+# Custom cursors that keep the size they were drawn at (`macos_cursor`), which
+# winit cannot build. The version winit already resolves.
+objc2-app-kit = { version = "0.3", default-features = false, optional = true, features = [
+    "std",
+    "NSBitmapImageRep",
+    "NSCursor",
+    "NSGraphics",
+    "NSImage",
+    "NSImageRep",
+    "NSResponder",
+    "NSView",
+    "NSWindow",
 ] }
 # The macOS half of the AVFoundation camera (`camera-desktop`). Same crates
 # and same versions the iOS backend takes, so a Mac build adds no dependency

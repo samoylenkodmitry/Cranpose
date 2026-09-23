@@ -662,6 +662,7 @@ impl App {
         #[cfg(feature = "robot")]
         let robot_app_hook = settings.robot_app_hook.take();
         let applied_frame_pacing_mode = settings.frame_pacing_mode;
+        let custom_cursor_size = settings.custom_cursor_size;
 
         let platform_env = crate::platform_env::PlatformEnvironment::new();
         let env_for_content = Rc::clone(&platform_env);
@@ -693,7 +694,7 @@ impl App {
             primary_held_press: None,
             handed_press: None,
             primary_wrap_size: None,
-            cursors: crate::desktop_cursor::DesktopCursors::default(),
+            cursors: crate::desktop_cursor::DesktopCursors::new(custom_cursor_size),
             current_modifiers: winit::keyboard::ModifiersState::empty(),
             last_cursor_position: None,
             primary_shown: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -980,6 +981,33 @@ impl App {
         surface.set_cursor(logical.x, logical.y)
     }
 
+    /// Tells the cursors where the pointer went: a window it left gives back
+    /// a cursor it was holding, and one it moved over may need it shown again.
+    fn track_pointer_for_cursors(&mut self, window_id: WinitWindowId, event: &WindowEvent) {
+        match event {
+            WindowEvent::PointerLeft { .. } => self.pointer_left_window(window_id),
+            WindowEvent::PointerMoved { .. } | WindowEvent::PointerEntered { .. } => {
+                self.cursors.pointer_moved(window_id)
+            }
+            _ => {}
+        }
+    }
+
+    /// Hands a cursor the window was holding back to the window, now that the
+    /// pointer is somewhere else.
+    fn pointer_left_window(&mut self, window_id: WinitWindowId) {
+        let window = if self.primary_window_id() == Some(window_id) {
+            self.window.clone()
+        } else {
+            self.native_windows
+                .get(&window_id)
+                .map(|native| native.window.clone())
+        };
+        if let Some(window) = window {
+            self.cursors.pointer_left(&window);
+        }
+    }
+
     fn sync_pointer_icons(&mut self, event_loop: &dyn ActiveEventLoop) {
         let Some(app) = self.app.as_mut() else {
             return;
@@ -996,6 +1024,7 @@ impl App {
                 self.cursors.apply(event_loop, &native.window, &icon);
             }
         }
+        self.cursors.keep_held();
     }
 
     fn let_the_first_window_take_focus(&self, native: &NativeWindowSurface) {
@@ -5293,6 +5322,7 @@ impl ApplicationHandler for App {
         event: WindowEvent,
     ) {
         self.sync_frame_pacing();
+        self.track_pointer_for_cursors(window_id, &event);
         if self.primary_window_id() != Some(window_id) {
             self.dispatch_native_window_event(event_loop, window_id, event);
             return;

@@ -134,7 +134,9 @@ pub use android_host_window::{
     any(feature = "desktop-shell", all(feature = "ios", target_os = "ios"))
 ))]
 pub use app_launcher::LaunchError;
-pub use app_launcher::{AndroidGpuBackend, AndroidOverlayWindowOptions, AppLauncher, AppSettings};
+pub use app_launcher::{
+    AndroidGpuBackend, AndroidOverlayWindowOptions, AppLauncher, AppSettings, CustomCursorSize,
+};
 /// Font registration vocabulary named by [`AppLauncher`]'s font methods:
 /// the platform font directory [`AppLauncher::with_system_font_family`] wants,
 /// the weight set it registers, and the registry and error
@@ -462,6 +464,8 @@ pub mod android;
 pub(crate) mod gpu_limits;
 
 #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
+mod cursor_scale;
+#[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
 pub mod desktop;
 #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
 mod desktop_accessibility;
@@ -484,6 +488,12 @@ mod desktop_power;
     all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
 ))]
 mod host_surface_resize;
+#[cfg(all(
+    feature = "desktop-shell",
+    feature = "renderer-wgpu",
+    target_os = "macos"
+))]
+mod macos_cursor;
 
 #[cfg(all(
     unix,

@@ -17,6 +17,8 @@ use winit::{
     window::{Window, WindowId},
 };
 
+use crate::CustomCursorSize;
+
 /// Whether re-offering `icon` would be dropped before it reaches the platform.
 ///
 /// A backend that already holds the cursor being set treats the call as a
@@ -41,12 +43,31 @@ fn a_cursor_that_is_not(icon: &PointerIcon) -> CursorIcon {
 /// keyed by [`CustomPointerIcon::id`].
 #[derive(Default)]
 pub(crate) struct DesktopCursors {
+    size: CustomCursorSize,
     uploaded: HashMap<u64, CustomCursor>,
     rejected: HashSet<u64>,
     applied: HashMap<WindowId, PointerIcon>,
+    /// Cursors built to keep their drawn size, by icon and the pointer size
+    /// they undo.
+    #[cfg(target_os = "macos")]
+    as_drawn: HashMap<(u64, u64), crate::macos_cursor::AsDrawnCursor>,
+    /// The window under the pointer showing one of those, with its cursor
+    /// rectangles held off, and which one it shows.
+    #[cfg(target_os = "macos")]
+    held: HashMap<WindowId, (u64, u64)>,
+    /// The pointer moved over a held window since the cursor was last shown.
+    #[cfg(target_os = "macos")]
+    moved_over_held: bool,
 }
 
 impl DesktopCursors {
+    pub(crate) fn new(size: CustomCursorSize) -> Self {
+        Self {
+            size,
+            ..Self::default()
+        }
+    }
+
     /// Sets `icon` as `window`'s cursor, uploading a custom image the first
     /// time it appears.
     pub(crate) fn apply(
@@ -56,6 +77,19 @@ impl DesktopCursors {
         icon: &PointerIcon,
     ) {
         let id = window.id();
+        #[cfg(target_os = "macos")]
+        {
+            if self.hold_as_drawn(window, icon) {
+                self.applied.insert(id, icon.clone());
+                return;
+            }
+            if self.held.remove(&id).is_some() {
+                crate::macos_cursor::release(window.as_ref());
+                // winit still holds the cursor it last set, which may be the
+                // one wanted now; offering another first makes it a change.
+                window.set_cursor(Cursor::Icon(a_cursor_that_is_not(icon)));
+            }
+        }
         if offering_the_same_icon_needs_a_nudge(self.applied.get(&id), icon) {
             window.set_cursor(Cursor::Icon(a_cursor_that_is_not(icon)));
         }
@@ -68,6 +102,74 @@ impl DesktopCursors {
             }
         }
         self.applied.insert(id, icon.clone());
+    }
+
+    /// Shows `icon` at the size it was drawn at, when it is a custom cursor
+    /// the app asked for that way and the system pointer is enlarged.
+    #[cfg(target_os = "macos")]
+    fn hold_as_drawn(&mut self, window: &Arc<dyn Window>, icon: &PointerIcon) -> bool {
+        let PointerIcon::Custom(custom) = icon else {
+            return false;
+        };
+        let scale = crate::macos_cursor::pointer_scale();
+        if !crate::cursor_scale::compensates(self.size, scale) {
+            return false;
+        }
+        let key = (custom.id(), scale.to_bits());
+        let cursor = match self.as_drawn.entry(key) {
+            std::collections::hash_map::Entry::Occupied(built) => built.into_mut(),
+            std::collections::hash_map::Entry::Vacant(slot) => {
+                let image = custom.image();
+                let Some(cursor) = crate::macos_cursor::as_drawn(
+                    image.pixels(),
+                    image.width(),
+                    image.height(),
+                    (custom.hotspot_x(), custom.hotspot_y()),
+                    scale,
+                ) else {
+                    return false;
+                };
+                slot.insert(cursor)
+            }
+        };
+        crate::macos_cursor::hold(window.as_ref(), cursor);
+        self.held.insert(window.id(), key);
+        true
+    }
+
+    /// The pointer moved over, or into, the window `id`.
+    pub(crate) fn pointer_moved(&mut self, id: WindowId) {
+        #[cfg(target_os = "macos")]
+        if self.held.contains_key(&id) {
+            self.moved_over_held = true;
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = id;
+    }
+
+    /// Shows the held cursor again after the pointer moved over its window,
+    /// when the window server may have put its own arrow over it. Called once
+    /// per pass of the event loop.
+    pub(crate) fn keep_held(&mut self) {
+        #[cfg(target_os = "macos")]
+        if std::mem::take(&mut self.moved_over_held) {
+            for key in self.held.values() {
+                if let Some(cursor) = self.as_drawn.get(key) {
+                    crate::macos_cursor::keep(cursor);
+                }
+            }
+        }
+    }
+
+    /// The pointer left `window`: a cursor it held goes back to the window's
+    /// own rectangles, so it is not kept over whatever the pointer is over now.
+    pub(crate) fn pointer_left(&mut self, window: &Arc<dyn Window>) {
+        #[cfg(target_os = "macos")]
+        if self.held.remove(&window.id()).is_some() {
+            crate::macos_cursor::release(window.as_ref());
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = window;
     }
 
     /// The uploaded cursor for `custom`, uploading it if this is the first time
