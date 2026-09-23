@@ -1138,6 +1138,7 @@ fn LazyColumnImpl(
     let scroll_modifier = modifier.clip_to_bounds().lazy_vertical_scroll_with_context(
         state,
         spec.reverse_layout,
+        (spec.content_padding_top, spec.content_padding_bottom),
         motion_context,
     );
 
@@ -1256,7 +1257,12 @@ fn LazyRowImpl(
 
     let scroll_modifier = modifier
         .clip_to_bounds()
-        .lazy_horizontal_scroll_with_context(state, spec.reverse_layout, motion_context);
+        .lazy_horizontal_scroll_with_context(
+            state,
+            spec.reverse_layout,
+            (spec.content_padding_start, spec.content_padding_end),
+            motion_context,
+        );
 
     let node_id = cranpose_core::with_current_composer(|composer| {
         composer.with_key(&(list_state_id, "LazyRowNode"), |composer| {

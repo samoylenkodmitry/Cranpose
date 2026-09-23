@@ -154,6 +154,7 @@ order like the existing widgets. Every visual constant comes from the theme.
 | `LiquidSlider(modifier, spec, value, on_change)` | capsule track, glass thumb, optional haptic detents |
 | `LiquidSegmentedControl(modifier, selected, on_select, content)` | sliding glass pill indicator with liquid stretch; `scope.segment(label)` or `scope.segment_content(description, content)` |
 | `LiquidChip(modifier, spec, selected, on_click, label)` | filter pill (cranscan Library "All / Receipts") |
+| `LiquidActionChip(modifier, prominent, on_click, label)` | action pill with the chip look and no selected state (Save, Cancel, Retry) |
 | `LiquidCard(modifier, content)` / `LiquidListSection(header, content)` / `LiquidListRow(spec, on_click, content)` | grouped-inset list look; rows get press wash + separators |
 | `LiquidTabBar(modifier, spec, selected, on_select, content)` / `LiquidTabBarWithAccessory(…, content, accessory)` | floating glass pill; destinations declared with `scope.tab(icon, label)`; **liquid selection blob** (leading/trailing edges on separate springs → droplet stretch); optional detached circular accessory (search) |
 | `LiquidNavBar(modifier, spec, scroll_offset)` | large-title → inline collapse; the showcase/cranscan crown: a top-to-bottom gradient blur (frosted at the top, sharp where content emerges) under a background scrim, both fading in as content scrolls under |

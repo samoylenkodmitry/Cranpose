@@ -335,6 +335,34 @@ fn a_blank_description_does_not_hide_descendant_text() {
     assert_eq!(project_test_tree(&tree)[0].label, "Save");
 }
 
+#[test]
+fn only_an_editable_field_publishes_an_empty_value() {
+    let pane = SemanticsNode {
+        node_id: 1,
+        text: Some(String::new()),
+        pane_title: Some("Settings".into()),
+        children: vec![SemanticsNode {
+            node_id: 2,
+            text: Some(String::new()),
+            editable_text: true,
+            focusable: true,
+            description: Some("Search".into()),
+            ..SemanticsNode::default()
+        }],
+        ..SemanticsNode::default()
+    };
+    let elements = project_test_tree(&pane);
+    let value = |node_id| {
+        elements
+            .iter()
+            .find(|element| element.node_id == node_id)
+            .map(|element| element.value.clone())
+            .expect("projected node")
+    };
+    assert_eq!(value(1), None);
+    assert_eq!(value(2), Some(String::new()));
+}
+
 fn action_test_node() -> SemanticsNode {
     SemanticsNode {
         node_id: 2,

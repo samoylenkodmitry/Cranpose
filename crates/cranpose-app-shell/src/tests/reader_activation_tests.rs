@@ -1161,3 +1161,76 @@ fn reader_activation_rejects_a_background_identity_after_a_modal_opens() {
     assert!(shell.accessibility_activate(node_id, None));
     assert_eq!(count.get(), 1);
 }
+
+#[test]
+fn a_weighted_row_child_keeps_its_place_in_reading_order() {
+    let _guard = test_guard();
+    let mut shell = AppShell::new(
+        HitGraphRenderer::default(),
+        location_key(file!(), line!(), column!()),
+        || {
+            Row(
+                Modifier::empty()
+                    .size(Size::new(300.0, 80.0))
+                    .graphics_layer(|| cranpose_ui_graphics::GraphicsLayer {
+                        alpha: 0.9,
+                        ..Default::default()
+                    })
+                    .padding(12.0),
+                RowSpec::new()
+                    .horizontal_arrangement(LinearArrangement::SpacedBy(12.0))
+                    .vertical_alignment(VerticalAlignment::CenterVertically),
+                || {
+                    Row(
+                        Modifier::empty().weight(1.0).clickable(|_| {}),
+                        RowSpec::new(),
+                        || {
+                            cranpose_ui::Column(
+                                Modifier::empty(),
+                                cranpose_ui::ColumnSpec::new(),
+                                || {
+                                    Text("Idea Marketi", Modifier::empty(), TextStyle::default());
+                                    Text("Jul 22", Modifier::empty(), TextStyle::default());
+                                },
+                            );
+                        },
+                    );
+                    cranpose_ui::Column(Modifier::empty(), cranpose_ui::ColumnSpec::new(), || {
+                        Text("6,000.00", Modifier::empty(), TextStyle::default());
+                        Text("Check", Modifier::empty(), TextStyle::default());
+                        Text("Weak", Modifier::empty(), TextStyle::default());
+                    });
+                    Box(
+                        Modifier::empty()
+                            .size(Size::new(48.0, 48.0))
+                            .content_description("Row actions")
+                            .clickable(|_| {}),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                },
+            );
+        },
+    );
+    shell.set_semantics_enabled(true);
+    shell.update();
+    let placed =
+        crate::placed_semantics::placed_semantics_from_shell(&mut shell).expect("placed row");
+    let order: Vec<_> = placed
+        .flatten()
+        .into_iter()
+        .filter_map(|node| node.label.as_deref())
+        .filter(|label| ["Idea Marketi, Jul 22", "6,000.00", "Row actions"].contains(label))
+        .collect();
+    assert_eq!(order, ["Idea Marketi, Jul 22", "6,000.00", "Row actions"]);
+    let amount = placed
+        .flatten()
+        .into_iter()
+        .find(|node| node.label.as_deref() == Some("6,000.00"))
+        .expect("amount text");
+    assert!(
+        amount.layout_bounds.width < 150.0,
+        "the amount keeps its own bounds: {:?}",
+        amount.layout_bounds
+    );
+}

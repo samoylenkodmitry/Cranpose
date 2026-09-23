@@ -132,7 +132,7 @@ pub fn LiquidSearchField(modifier: Modifier, state: TextFieldState, spec: Liquid
                                             if empty {
                                                 Text(
                                                     placeholder.clone(),
-                                                    Modifier::empty(),
+                                                    Modifier::empty().hide_from_accessibility(),
                                                     placeholder_style.clone(),
                                                 );
                                             }

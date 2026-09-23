@@ -3082,6 +3082,82 @@ fn the_android_camera_pushes_frames_rather_than_writing_them_to_files() {
 }
 
 #[test]
+fn android_reports_a_screen_reader_only_while_touch_exploration_runs() {
+    let activity =
+        workspace_source("crates/cranpose/android/java/dev/cranpose/android/CranposeActivity.java");
+    let bridge = crate_source("src/android_accessibility.rs");
+    assert!(
+        activity.contains("nativeOnScreenReaderStateChanged(manager.isTouchExplorationEnabled());")
+            && activity.contains("manager.addTouchExplorationStateChangeListener(")
+            && activity.contains("manager.removeTouchExplorationStateChangeListener("),
+        "a password manager or an automation service is not a screen reader"
+    );
+    assert!(
+        bridge.contains("screen_reader_on: screen_reader_running(),")
+            && bridge.contains(
+                "Java_dev_cranpose_android_CranposeActivity_nativeOnScreenReaderStateChanged"
+            ),
+        "the app's reader state follows touch exploration, while any service still gets the tree"
+    );
+}
+
+#[test]
+fn talkback_brings_any_element_it_lands_on_into_view() {
+    let activity =
+        workspace_source("crates/cranpose/android/java/dev/cranpose/android/CranposeActivity.java");
+    let reveal = crate_source("src/android.rs");
+    let perform = group_contents_after(
+        &activity,
+        "public boolean performAction(int virtualViewId, int action, Bundle arguments) {",
+    )
+    .expect("the provider performs reader actions");
+    assert!(
+        activity.contains(
+            "info.addAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SHOW_ON_SCREEN);"
+        ) && perform.contains("ACTION_SHOW_ON_SCREEN.getId()"),
+        "every element offers show on screen, so a service can scroll an off-screen row into view"
+    );
+    assert!(
+        !perform.contains("if (element.focusable) nativeOnAccessibilityFocus"),
+        "text the reader lands on scrolls into view as a control does"
+    );
+    assert!(
+        reveal.contains("shell.accessibility_reveal(node_id);"),
+        "the reader's target is revealed without taking keyboard focus"
+    );
+}
+
+#[test]
+fn the_android_camera_reports_a_denied_permission_and_survives_a_pause() {
+    let activity =
+        workspace_source("crates/cranpose/android/java/dev/cranpose/android/CranposeActivity.java");
+    let permission_result = group_contents_after(
+        &activity,
+        "int requestCode, String[] permissions, int[] grantResults) {",
+    )
+    .expect("CranposeActivity handles permission results");
+    assert!(
+        permission_result.contains("onCameraFailed("),
+        "a denied camera permission must reach the app as a camera failure, \
+         or the capture screen waits for frames that never come"
+    );
+    let start = group_contents_after(&activity, "public void cranposeCameraStart() {")
+        .expect("CranposeActivity starts the camera");
+    assert!(
+        start.contains("cranposeCameraPermissionPending"),
+        "a second start while the permission dialog is open must not stack a second dialog"
+    );
+    let pause = group_contents_after(&activity, "protected void onPause() {")
+        .expect("CranposeActivity pauses");
+    let resume = group_contents_after(&activity, "protected void onResume() {")
+        .expect("CranposeActivity resumes");
+    assert!(
+        pause.contains("cranposeCamera.stop()") && resume.contains("resumeCranposeCamera()"),
+        "the camera the app asked for stops with the activity and starts again when it returns"
+    );
+}
+
+#[test]
 fn the_camera_service_is_published_to_rather_than_polled() {
     let camera = workspace_source("crates/cranpose-services/src/camera.rs");
     assert!(
@@ -4097,7 +4173,7 @@ fn no_platform_reads_a_password_out() {
         "the web mirror says the field is a password"
     );
     assert!(
-        crate_source("src/accessibility.rs").contains(".filter(|_| !node.password),"),
+        crate_source("src/accessibility.rs").contains(".filter(|_| !node.password)"),
         "the text never leaves the projection"
     );
 }

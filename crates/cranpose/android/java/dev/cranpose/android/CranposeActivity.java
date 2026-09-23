@@ -531,6 +531,8 @@ public class CranposeActivity extends NativeActivity {
     private long pendingToken;
     private CranposeAccessibilityProvider cranposeAccessibilityProvider;
     private CranposeCamera cranposeCamera;
+    private boolean cranposeCameraRequested;
+    private boolean cranposeCameraPermissionPending;
     private volatile CranposeMedia cranposeMedia;
     /** How long a pause must last before the foreground service is asked for.
      * Launch-shaped pauses — a screen-off start that pauses without ever
@@ -611,12 +613,22 @@ public class CranposeActivity extends NativeActivity {
 
     public void cranposeCameraStart() {
         runOnUiThread(() -> {
+            cranposeCameraRequested = true;
             if (!cranposeCameraHasPermission()) {
-                requestPermissions(new String[] {android.Manifest.permission.CAMERA}, REQUEST_CAMERA);
+                if (!cranposeCameraPermissionPending) {
+                    cranposeCameraPermissionPending = true;
+                    requestPermissions(new String[] {android.Manifest.permission.CAMERA}, REQUEST_CAMERA);
+                }
                 return;
             }
-            cranposeCamera().start();
+            resumeCranposeCamera();
         });
+    }
+
+    private void resumeCranposeCamera() {
+        if (cranposeCameraRequested && !cranposePaused && cranposeCameraHasPermission()) {
+            cranposeCamera().start();
+        }
     }
 
     /** Asks for a still; it arrives through {@link #onCameraStill}. */
@@ -626,6 +638,7 @@ public class CranposeActivity extends NativeActivity {
 
     public void cranposeCameraStop() {
         runOnUiThread(() -> {
+            cranposeCameraRequested = false;
             if (cranposeCamera != null) {
                 cranposeCamera.stop();
             }
@@ -725,11 +738,14 @@ public class CranposeActivity extends NativeActivity {
     private static native void nativeOnAccessibilityScrollToIndex(int virtualViewId, int index);
 
     private static native void nativeOnAccessibilityStateChanged(boolean enabled);
+    private static native void nativeOnScreenReaderStateChanged(boolean running);
     private static native void nativeOnAccessibilityOptions(
             boolean reduceMotion, boolean increaseContrast, boolean boldText);
 
     private AccessibilityManager.AccessibilityStateChangeListener
             cranposeAccessibilityStateListener;
+    private AccessibilityManager.TouchExplorationStateChangeListener
+            cranposeScreenReaderListener;
 
     /**
      * Mirrors {@link AccessibilityManager}'s state into the native frame loop,
@@ -746,6 +762,9 @@ public class CranposeActivity extends NativeActivity {
                 CranposeActivity::nativeOnAccessibilityStateChanged;
         manager.addAccessibilityStateChangeListener(cranposeAccessibilityStateListener);
         nativeOnAccessibilityStateChanged(manager.isEnabled());
+        cranposeScreenReaderListener = CranposeActivity::nativeOnScreenReaderStateChanged;
+        manager.addTouchExplorationStateChangeListener(cranposeScreenReaderListener);
+        nativeOnScreenReaderStateChanged(manager.isTouchExplorationEnabled());
     }
 
     /**
@@ -1332,6 +1351,9 @@ public class CranposeActivity extends NativeActivity {
                 info.setClickable(false);
                 info.setLongClickable(false);
             }
+            if (Build.VERSION.SDK_INT >= 23) {
+                info.addAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SHOW_ON_SCREEN);
+            }
             info.addAction(focusedId == element.id
                     ? AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS
                     : AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS);
@@ -1342,9 +1364,16 @@ public class CranposeActivity extends NativeActivity {
         public boolean performAction(int virtualViewId, int action, Bundle arguments) {
             CranposeAccessibilityElement element = find(virtualViewId);
             if (element == null) return false;
+            boolean showOnScreen = Build.VERSION.SDK_INT >= 23
+                    && action == AccessibilityNodeInfo.AccessibilityAction.ACTION_SHOW_ON_SCREEN.getId();
             if (!element.enabled
+                    && !showOnScreen
                     && action != AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS
                     && action != AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS) return false;
+            if (showOnScreen) {
+                nativeOnAccessibilityFocus(element.id);
+                return true;
+            }
             if (action == AccessibilityNodeInfo.ACTION_CLICK && element.clickable) {
                 nativeOnAccessibilityActivate(element.id);
                 sendEvent(element.id, AccessibilityEvent.TYPE_VIEW_CLICKED);
@@ -1381,9 +1410,7 @@ public class CranposeActivity extends NativeActivity {
                 focusedId = element.id;
                 cursors.clear();
                 sendEvent(element.id, AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUSED);
-                // The app moves its own focus to the control the reader landed
-                // on, so a later Tab carries on from there.
-                if (element.focusable) nativeOnAccessibilityFocus(element.id);
+                nativeOnAccessibilityFocus(element.id);
                 return true;
             }
             if (action == AccessibilityNodeInfo.ACTION_FOCUS && element.focusable) {
@@ -2660,6 +2687,7 @@ public class CranposeActivity extends NativeActivity {
         reportAccessibilityOptions();
         cranposePaused = false;
         cranposeEverResumed = true;
+        resumeCranposeCamera();
         cranposeBackgroundServiceHandler.removeCallbacks(cranposeBackgroundServiceAsk);
         CranposeBackgroundService.stop(this);
     }
@@ -2696,9 +2724,18 @@ public class CranposeActivity extends NativeActivity {
     public void onRequestPermissionsResult(
             int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        if (requestCode == REQUEST_CAMERA && grantResults.length > 0
+        if (requestCode != REQUEST_CAMERA) {
+            return;
+        }
+        cranposeCameraPermissionPending = false;
+        if (!cranposeCameraRequested) {
+            return;
+        }
+        if (grantResults.length > 0
                 && grantResults[0] == android.content.pm.PackageManager.PERMISSION_GRANTED) {
-            cranposeCamera().start();
+            resumeCranposeCamera();
+        } else {
+            onCameraFailed("Camera permission is denied. Allow Camera in this app's Android settings.");
         }
     }
 
@@ -2712,8 +2749,10 @@ public class CranposeActivity extends NativeActivity {
             if (manager != null) {
                 manager.removeAccessibilityStateChangeListener(
                         cranposeAccessibilityStateListener);
+                manager.removeTouchExplorationStateChangeListener(cranposeScreenReaderListener);
             }
             cranposeAccessibilityStateListener = null;
+            cranposeScreenReaderListener = null;
         }
         try {
             unregisterReceiver(cranposeUpdateInstallReceiver);

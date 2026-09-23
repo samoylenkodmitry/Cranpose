@@ -36,6 +36,21 @@ fn reveal_uses_minimal_movement_on_either_axis() {
 }
 
 #[test]
+fn reveal_brings_a_target_out_from_under_the_content_padding() {
+    let padded = Some(ScrollAxisRange::new(100.0, 1000.0, false).with_content_padding(10.0, 30.0));
+    assert_eq!(axis_delta(70.0, 30.0, 0.0, 120.0, padded), 10.0);
+    assert_eq!(axis_delta(5.0, 30.0, 0.0, 120.0, padded), -5.0);
+    assert_eq!(axis_delta(20.0, 30.0, 0.0, 120.0, padded), 0.0);
+    assert_eq!(
+        axis_delta(110.0, 100.0, 0.0, 120.0, padded),
+        90.0,
+        "a target taller than the padded viewport falls back to the whole viewport"
+    );
+    let reversed = Some(ScrollAxisRange::new(100.0, 1000.0, true).with_content_padding(10.0, 30.0));
+    assert_eq!(axis_delta(70.0, 30.0, 0.0, 120.0, reversed), -10.0);
+}
+
+#[test]
 fn reveal_respects_reverse_scrolling_and_unavailable_directions() {
     let reversed = Some(ScrollAxisRange::new(100.0, 1000.0, true));
     assert_eq!(axis_delta(110.0, 40.0, 0.0, 120.0, reversed), -30.0);

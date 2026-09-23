@@ -155,6 +155,16 @@ fn axis_delta(
     {
         return 0.0;
     }
+    let inset_start = range.content_padding_start.max(0.0);
+    let inset_end = range.content_padding_end.max(0.0);
+    let (viewport_start, viewport_size) = if viewport_size - inset_start - inset_end >= size {
+        (
+            viewport_start + inset_start,
+            viewport_size - inset_start - inset_end,
+        )
+    } else {
+        (viewport_start, viewport_size)
+    };
     let visible_end = viewport_start + viewport_size;
     let delta = if start < viewport_start && start + size < visible_end {
         (start - viewport_start).max(start + size - visible_end)

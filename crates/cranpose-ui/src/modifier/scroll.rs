@@ -1568,19 +1568,21 @@ impl Modifier {
             is_vertical: true,
             reverse_scrolling,
         });
-        self.lazy_vertical_scroll_with_context(state, reverse_scrolling, motion_context)
+        self.lazy_vertical_scroll_with_context(state, reverse_scrolling, (0.0, 0.0), motion_context)
     }
 
     pub(crate) fn lazy_vertical_scroll_with_context(
         self,
         state: LazyListState,
         reverse_scrolling: bool,
+        content_padding: (f32, f32),
         motion_context: ScrollMotionContext,
     ) -> Self {
         self.then(lazy_scroll_impl(
             state,
             true,
             reverse_scrolling,
+            content_padding,
             motion_context,
         ))
     }
@@ -1589,12 +1591,14 @@ impl Modifier {
         self,
         state: LazyListState,
         reverse_scrolling: bool,
+        content_padding: (f32, f32),
         motion_context: ScrollMotionContext,
     ) -> Self {
         self.then(lazy_scroll_impl(
             state,
             false,
             reverse_scrolling,
+            content_padding,
             motion_context,
         ))
     }
@@ -1604,6 +1608,7 @@ fn lazy_scroll_impl(
     state: LazyListState,
     is_vertical: bool,
     reverse_scrolling: bool,
+    content_padding: (f32, f32),
     motion_context: ScrollMotionContext,
 ) -> Modifier {
     let list_state = state;
@@ -1636,6 +1641,7 @@ fn lazy_scroll_impl(
             list_state,
             is_vertical,
             reverse_scrolling,
+            content_padding,
         ))
 }
 
@@ -1648,6 +1654,7 @@ pub(crate) fn lazy_scroll_semantics(
     state: LazyListState,
     is_vertical: bool,
     reverse_scrolling: bool,
+    content_padding: (f32, f32),
 ) -> impl Fn(&mut cranpose_foundation::SemanticsConfiguration) + 'static {
     move |config| {
         let mut value = state.first_visible_item_index() as f32;
@@ -1659,7 +1666,8 @@ pub(crate) fn lazy_scroll_semantics(
         } else {
             value
         };
-        let range = cranpose_foundation::ScrollAxisRange::new(value, max_value, reverse_scrolling);
+        let range = cranpose_foundation::ScrollAxisRange::new(value, max_value, reverse_scrolling)
+            .with_content_padding(content_padding.0, content_padding.1);
         let count = state.total_items_count();
         config.collection = Some(cranpose_foundation::CollectionInfo {
             rows: if is_vertical { count } else { 1 },

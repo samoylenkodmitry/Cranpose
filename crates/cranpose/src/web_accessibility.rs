@@ -274,6 +274,9 @@ fn apply_aria_state(node: &HtmlElement, element: &AccessibilityElement) -> Resul
         let selected = if selected { "true" } else { "false" };
         match element.role {
             AccessibilityRole::RadioButton => node.set_attribute("aria-checked", selected)?,
+            AccessibilityRole::Button | AccessibilityRole::ToggleButton => {
+                node.set_attribute("aria-pressed", selected)?
+            }
             _ => node.set_attribute("aria-selected", selected)?,
         }
     }

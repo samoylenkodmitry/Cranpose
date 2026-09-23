@@ -28,6 +28,32 @@ pub fn LiquidChip(
     on_click: impl Fn() + 'static,
     label: impl Into<String>,
 ) {
+    ChipPane(modifier, selected, Some(selected), on_click, label.into());
+}
+
+/// An action pill with the look of [`LiquidChip`] and no selected state:
+/// Save, Cancel, Retry. `prominent` gives it the raised look of a selected
+/// chip, and a screen reader hears a plain button either way.
+#[composable]
+#[allow(non_snake_case)]
+pub fn LiquidActionChip(
+    modifier: Modifier,
+    prominent: bool,
+    on_click: impl Fn() + 'static,
+    label: impl Into<String>,
+) {
+    ChipPane(modifier, prominent, None, on_click, label.into());
+}
+
+#[composable]
+#[allow(non_snake_case)]
+fn ChipPane(
+    modifier: Modifier,
+    selected: bool,
+    selection: Option<bool>,
+    on_click: impl Fn() + 'static,
+    label: String,
+) {
     let colors = liquid_colors();
     let typography = liquid_typography();
     let interaction = rememberMutableInteractionSource();
@@ -62,14 +88,13 @@ pub fn LiquidChip(
     let on_click = Rc::new(RefCell::new(on_click));
     let base = base
         .press_interaction_source(interaction)
-        .semantics(chip_semantics(selected))
+        .semantics(chip_semantics(selection))
         .clickable(move |_point| {
             default_haptics().perform(HapticFeedback::Selection);
             (on_click.borrow_mut())();
         })
         .padding_symmetric(14.0, 7.0);
 
-    let label = label.into();
     let chip = base.then(modifier);
     Box(pressed_modifier, BoxSpec::default(), move || {
         let label = label.clone();
@@ -102,8 +127,8 @@ pub fn LiquidChip(
     });
 }
 
-fn chip_semantics(selected: bool) -> impl Fn(&mut cranpose_ui::SemanticsConfiguration) {
+fn chip_semantics(selection: Option<bool>) -> impl Fn(&mut cranpose_ui::SemanticsConfiguration) {
     move |config| {
-        config.selected = Some(selected);
+        config.selected = selection;
     }
 }
