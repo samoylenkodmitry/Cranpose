@@ -3,13 +3,14 @@ use std::{pin::Pin, rc::Rc, sync::Arc, time::Duration};
 use futures_core::Stream;
 
 use crate::{
+    channel::Capacity,
     combining::Zip,
     dispatcher::Dispatcher,
     errors::{Catch, RetryWhen},
     flattening::FlatMap,
     operators::{
-        Combine, Debounce, DistinctUntilChanged, Filter, FlowOn, Map, OnCompletion, OnEach,
-        OnStart, StartWith, Take,
+        Buffered, Combine, Debounce, DistinctUntilChanged, FLOW_ON_BUFFER, Filter, Map,
+        OnCompletion, OnEach, OnStart, StartWith, Take,
     },
     scope::Spawn,
     sharing::{SharingStarted, SharingTask, shared_sharing, state_sharing},
@@ -316,8 +317,21 @@ pub trait FlowExt: Flow + Sized {
     /// let flow = flow_of(vec![1]).map(move |value| value + *local);
     /// let _ = flow.flow_on(Dispatchers::default_pool()).open();
     /// ```
-    fn flow_on(self, dispatcher: Dispatcher) -> FlowOn<Self> {
-        FlowOn::new(self, dispatcher)
+    fn flow_on(self, dispatcher: Dispatcher) -> Buffered<Self> {
+        Buffered::new(self, Some(dispatcher), Capacity::Buffered(FLOW_ON_BUFFER))
+    }
+
+    /// Runs the upstream in its own coroutine on the collector's dispatcher,
+    /// letting it get up to `capacity` values ahead of a slow collector —
+    /// Kotlin's `buffer`.
+    fn buffer(self, capacity: usize) -> Buffered<Self> {
+        Buffered::new(self, None, Capacity::Buffered(capacity))
+    }
+
+    /// Runs the upstream in its own coroutine and hands a slow collector only
+    /// the newest value — Kotlin's `conflate`.
+    fn conflate(self) -> Buffered<Self> {
+        Buffered::new(self, None, Capacity::Conflated)
     }
 
     /// Shares this flow as a hot [`StateFlow`] that runs in `scope` —

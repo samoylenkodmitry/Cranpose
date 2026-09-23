@@ -190,6 +190,16 @@ impl TestScheduler {
         true
     }
 
+    /// Starts collecting `flow` as a coroutine on this scheduler would, so
+    /// work the flow starts, such as a [`channel_flow`](crate::channel_flow)
+    /// producer, runs on virtual time.
+    pub fn turbine<F: Flow>(&self, flow: &F) -> Turbine<F::Run> {
+        Turbine {
+            run: flow.open(),
+            context: Some(self.dispatcher.clone()),
+        }
+    }
+
     fn executor(&self) -> TestExecutor {
         TestExecutor {
             queue: Arc::clone(&self.queue),
@@ -203,17 +213,22 @@ impl TestScheduler {
 /// upstreams running, and dropping it cancels the collection.
 pub struct Turbine<S> {
     run: S,
+    context: Option<Dispatcher>,
 }
 
 impl<S: Stream + Unpin> Turbine<S> {
-    /// Starts collecting `flow`.
+    /// Starts collecting `flow` outside any dispatcher.
     pub fn of<F: Flow<Run = S>>(flow: &F) -> Self {
-        Self { run: flow.open() }
+        Self {
+            run: flow.open(),
+            context: None,
+        }
     }
 
     /// The next value if one is ready right now: `Ready(Some(value))`,
     /// `Ready(None)` once the flow completed, or `Pending`.
     pub fn next_now(&mut self) -> Poll<Option<S::Item>> {
+        let _entered = self.context.as_ref().map(enter);
         let mut cx = Context::from_waker(Waker::noop());
         Pin::new(&mut self.run).poll_next(&mut cx)
     }

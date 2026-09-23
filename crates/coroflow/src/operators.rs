@@ -8,11 +8,11 @@ use std::{
 use futures_core::Stream;
 
 use crate::{
+    channel::{Capacity, Receiver, Sender, channel},
     clock::Timer,
-    dispatcher::Dispatcher,
+    dispatcher::{Dispatcher, Dispatchers, current_dispatcher},
     flow::Flow,
     job::Job,
-    sync::{PipeReceiver, pipe},
     task::spawn_send,
 };
 
@@ -621,62 +621,89 @@ where
 /// upstream's dispatcher and the collector — Kotlin's default channel size.
 pub const FLOW_ON_BUFFER: usize = 64;
 
-/// The flow returned by [`flow_on`](crate::FlowExt::flow_on).
+/// The flow returned by [`flow_on`](crate::FlowExt::flow_on),
+/// [`buffer`](crate::FlowExt::buffer) and [`conflate`](crate::FlowExt::conflate):
+/// the upstream runs in its own coroutine and hands values over through a
+/// channel.
 #[derive(Clone)]
-pub struct FlowOn<F> {
+pub struct Buffered<F> {
     upstream: F,
-    dispatcher: Dispatcher,
+    dispatcher: Option<Dispatcher>,
+    capacity: Capacity,
 }
 
-impl<F> FlowOn<F> {
-    pub(crate) fn new(upstream: F, dispatcher: Dispatcher) -> Self {
+impl<F> Buffered<F> {
+    pub(crate) fn new(upstream: F, dispatcher: Option<Dispatcher>, capacity: Capacity) -> Self {
         Self {
             upstream,
             dispatcher,
+            capacity,
         }
     }
 }
 
-/// One run of a [`FlowOn`]; dropping it cancels the upstream.
-pub struct FlowOnRun<T> {
-    receiver: PipeReceiver<T>,
-    job: Job,
+/// One run of a [`Buffered`]; the upstream starts on the first poll and is
+/// cancelled when the run is dropped.
+pub struct BufferedRun<S: Stream> {
+    pending: Option<(S, Sender<S::Item>)>,
+    dispatcher: Option<Dispatcher>,
+    receiver: Receiver<S::Item>,
+    job: Option<Job>,
 }
 
-impl<F> Flow for FlowOn<F>
+impl<S: Stream> Unpin for BufferedRun<S> {}
+
+impl<F> Flow for Buffered<F>
 where
     F: Flow,
     F::Run: Send + 'static,
     F::Item: Send + 'static,
 {
     type Item = F::Item;
-    type Run = FlowOnRun<F::Item>;
+    type Run = BufferedRun<F::Run>;
 
     fn open(&self) -> Self::Run {
-        let (sender, receiver) = pipe(FLOW_ON_BUFFER);
-        let mut upstream = self.upstream.open();
-        let job = spawn_send(&self.dispatcher, async move {
-            while let Some(value) = poll_fn(|cx| poll_run(&mut upstream, cx)).await {
-                let mut slot = Some(value);
-                if !poll_fn(|cx| sender.poll_send(&mut slot, cx)).await {
-                    return;
+        let (sender, receiver) = channel(self.capacity);
+        BufferedRun {
+            pending: Some((self.upstream.open(), sender)),
+            dispatcher: self.dispatcher.clone(),
+            receiver,
+            job: None,
+        }
+    }
+}
+
+impl<S> Stream for BufferedRun<S>
+where
+    S: Stream + Unpin + Send + 'static,
+    S::Item: Send + 'static,
+{
+    type Item = S::Item;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<S::Item>> {
+        let this = self.get_mut();
+        if let Some((mut upstream, sender)) = this.pending.take() {
+            let dispatcher = this
+                .dispatcher
+                .take()
+                .or_else(current_dispatcher)
+                .unwrap_or_else(Dispatchers::default_pool);
+            this.job = Some(spawn_send(&dispatcher, async move {
+                while let Some(value) = poll_fn(|cx| poll_run(&mut upstream, cx)).await {
+                    if sender.send(value).await.is_err() {
+                        return;
+                    }
                 }
-            }
-        });
-        FlowOnRun { receiver, job }
+            }));
+        }
+        Pin::new(&mut this.receiver).poll_next(cx)
     }
 }
 
-impl<T> Stream for FlowOnRun<T> {
-    type Item = T;
-
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<T>> {
-        self.receiver.poll_recv(cx)
-    }
-}
-
-impl<T> Drop for FlowOnRun<T> {
+impl<S: Stream> Drop for BufferedRun<S> {
     fn drop(&mut self) {
-        self.job.cancel();
+        if let Some(job) = &self.job {
+            job.cancel();
+        }
     }
 }

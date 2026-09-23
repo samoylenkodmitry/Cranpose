@@ -1,5 +1,4 @@
 use std::{
-    collections::VecDeque,
     future::Future,
     pin::Pin,
     sync::{Arc, Mutex, MutexGuard, PoisonError},
@@ -213,102 +212,5 @@ impl<T> Future for OneshotReceiver<T> {
         }
         state.waker = Some(cx.waker().clone());
         Poll::Pending
-    }
-}
-
-struct PipeState<T> {
-    items: VecDeque<T>,
-    capacity: usize,
-    sender_gone: bool,
-    receiver_gone: bool,
-    receiver_waker: Option<Waker>,
-    sender_waker: Option<Waker>,
-}
-
-pub(crate) struct PipeSender<T> {
-    shared: Arc<Mutex<PipeState<T>>>,
-}
-
-pub(crate) struct PipeReceiver<T> {
-    shared: Arc<Mutex<PipeState<T>>>,
-}
-
-pub(crate) fn pipe<T>(capacity: usize) -> (PipeSender<T>, PipeReceiver<T>) {
-    let capacity = capacity.max(1);
-    let shared = Arc::new(Mutex::new(PipeState {
-        items: VecDeque::with_capacity(capacity),
-        capacity,
-        sender_gone: false,
-        receiver_gone: false,
-        receiver_waker: None,
-        sender_waker: None,
-    }));
-    (
-        PipeSender {
-            shared: Arc::clone(&shared),
-        },
-        PipeReceiver { shared },
-    )
-}
-
-impl<T> PipeSender<T> {
-    pub(crate) fn poll_send(&self, value: &mut Option<T>, cx: &mut Context<'_>) -> Poll<bool> {
-        let receiver = {
-            let mut state = lock(&self.shared);
-            if state.receiver_gone {
-                return Poll::Ready(false);
-            }
-            if state.items.len() >= state.capacity {
-                state.sender_waker = Some(cx.waker().clone());
-                return Poll::Pending;
-            }
-            if let Some(item) = value.take() {
-                state.items.push_back(item);
-            }
-            state.receiver_waker.take()
-        };
-        wake_optional(receiver);
-        Poll::Ready(true)
-    }
-}
-
-impl<T> Drop for PipeSender<T> {
-    fn drop(&mut self) {
-        let receiver = {
-            let mut state = lock(&self.shared);
-            state.sender_gone = true;
-            state.receiver_waker.take()
-        };
-        wake_optional(receiver);
-    }
-}
-
-impl<T> PipeReceiver<T> {
-    pub(crate) fn poll_recv(&self, cx: &mut Context<'_>) -> Poll<Option<T>> {
-        let (item, sender) = {
-            let mut state = lock(&self.shared);
-            match state.items.pop_front() {
-                Some(item) => (item, state.sender_waker.take()),
-                None if state.sender_gone => return Poll::Ready(None),
-                None => {
-                    state.receiver_waker = Some(cx.waker().clone());
-                    return Poll::Pending;
-                }
-            }
-        };
-        wake_optional(sender);
-        Poll::Ready(Some(item))
-    }
-}
-
-impl<T> Drop for PipeReceiver<T> {
-    fn drop(&mut self) {
-        let (items, sender) = {
-            let mut state = lock(&self.shared);
-            state.receiver_gone = true;
-            (std::mem::take(&mut state.items), state.sender_waker.take())
-        };
-        drop(items);
-        wake_optional(sender);
     }
 }

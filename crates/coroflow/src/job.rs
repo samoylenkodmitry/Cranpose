@@ -1,7 +1,7 @@
 use std::{
     future::Future,
     pin::Pin,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, Weak},
     task::{Context, Poll, Waker},
 };
 
@@ -27,12 +27,17 @@ pub struct Job {
     inner: Arc<Mutex<JobState>>,
 }
 
+pub(crate) trait JobParent: Send + Sync {
+    fn child_finished(&self, outcome: JobOutcome);
+}
+
 #[derive(Default)]
 struct JobState {
     outcome: Option<JobOutcome>,
     cancel_requested: bool,
     task_waker: Option<Waker>,
     joiners: Vec<Waker>,
+    parent: Option<Weak<dyn JobParent>>,
 }
 
 impl Job {
@@ -97,18 +102,34 @@ impl Job {
         }
     }
 
+    pub(crate) fn set_parent(&self, parent: Weak<dyn JobParent>) {
+        let finished = {
+            let mut state = lock(&self.inner);
+            if state.outcome.is_none() {
+                state.parent = Some(parent.clone());
+            }
+            state.outcome
+        };
+        if let (Some(outcome), Some(parent)) = (finished, parent.upgrade()) {
+            parent.child_finished(outcome);
+        }
+    }
+
     pub(crate) fn finish(&self, outcome: JobOutcome) {
-        let joiners = {
+        let (joiners, parent) = {
             let mut state = lock(&self.inner);
             if state.outcome.is_some() {
                 return;
             }
             state.outcome = Some(outcome);
             state.task_waker = None;
-            std::mem::take(&mut state.joiners)
+            (std::mem::take(&mut state.joiners), state.parent.take())
         };
         for waker in joiners {
             waker.wake();
+        }
+        if let Some(parent) = parent.and_then(|parent| parent.upgrade()) {
+            parent.child_finished(outcome);
         }
     }
 }

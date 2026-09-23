@@ -209,8 +209,18 @@ fn dropping_a_flow_on_run_cancels_its_upstream_coroutine() {
         }
     })
     .flow_on(scheduler.dispatcher());
-    let run = ticks.open();
+    let mut run = scheduler.turbine(&ticks);
+    assert_eq!(
+        run.next_now(),
+        std::task::Poll::Pending,
+        "collection starts"
+    );
     scheduler.advance_time_by(Duration::from_millis(35));
+    assert_eq!(
+        finished.load(Ordering::SeqCst),
+        0,
+        "the upstream is running"
+    );
     drop(run);
     scheduler.run_current();
     assert_eq!(finished.load(Ordering::SeqCst), 1);

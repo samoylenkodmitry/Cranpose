@@ -5,12 +5,13 @@ use std::{
         Arc, Mutex, Weak,
         atomic::{AtomicBool, Ordering},
     },
-    task::{Context, Poll},
+    task::{Context, Poll, Waker},
 };
 
 use crate::{
-    dispatcher::{ConfinedDispatcher, Dispatcher},
-    job::{Job, JobOutcome},
+    dispatcher::{ConfinedDispatcher, Dispatcher, Dispatchers, current_dispatcher},
+    job::{Job, JobOutcome, JobParent},
+    select::{Either, select},
     sync::{OneshotReceiver, OneshotSender, lock, oneshot},
     task::{spawn_local, spawn_send},
 };
@@ -31,19 +32,33 @@ pub trait Spawn<F: Future<Output = ()>> {
     fn spawn(&self, future: F) -> Job;
 }
 
-#[derive(Default)]
 struct ScopeCore {
     jobs: Mutex<Vec<Job>>,
     cancelled: AtomicBool,
+    supervisor: bool,
+    failed: AtomicBool,
+    waiters: Mutex<Vec<Waker>>,
 }
 
 impl ScopeCore {
-    fn track(&self, job: Job) -> Job {
+    fn new(supervisor: bool) -> Arc<Self> {
+        Arc::new(Self {
+            jobs: Mutex::default(),
+            cancelled: AtomicBool::new(false),
+            supervisor,
+            failed: AtomicBool::new(false),
+            waiters: Mutex::default(),
+        })
+    }
+
+    fn track(core: &Arc<Self>, job: Job) -> Job {
         {
-            let mut jobs = lock(&self.jobs);
-            if !self.cancelled.load(Ordering::Acquire) {
+            let mut jobs = lock(&core.jobs);
+            if !core.cancelled.load(Ordering::Acquire) {
                 jobs.retain(|tracked| tracked.outcome().is_none());
                 jobs.push(job.clone());
+                drop(jobs);
+                job.set_parent(Arc::downgrade(core) as Weak<dyn JobParent>);
                 return job;
             }
         }
@@ -61,6 +76,52 @@ impl ScopeCore {
 
     fn is_active(&self) -> bool {
         !self.cancelled.load(Ordering::Acquire)
+    }
+
+    fn has_failed(&self) -> bool {
+        self.failed.load(Ordering::Acquire)
+    }
+
+    fn watch(&self, cx: &mut Context<'_>) {
+        let mut waiters = lock(&self.waiters);
+        if !waiters.iter().any(|waiter| waiter.will_wake(cx.waker())) {
+            waiters.push(cx.waker().clone());
+        }
+    }
+
+    fn poll_failed(&self, cx: &mut Context<'_>) -> Poll<()> {
+        self.watch(cx);
+        if self.has_failed() {
+            Poll::Ready(())
+        } else {
+            Poll::Pending
+        }
+    }
+
+    fn poll_idle(&self, cx: &mut Context<'_>) -> Poll<()> {
+        self.watch(cx);
+        let mut jobs = lock(&self.jobs);
+        jobs.retain(|job| job.outcome().is_none());
+        if jobs.is_empty() {
+            Poll::Ready(())
+        } else {
+            Poll::Pending
+        }
+    }
+}
+
+impl JobParent for ScopeCore {
+    fn child_finished(&self, outcome: JobOutcome) {
+        if outcome == JobOutcome::Panicked
+            && !self.supervisor
+            && !self.failed.swap(true, Ordering::AcqRel)
+        {
+            self.cancel();
+        }
+        let waiters = std::mem::take(&mut *lock(&self.waiters));
+        for waiter in waiters {
+            waiter.wake();
+        }
     }
 }
 
@@ -94,10 +155,15 @@ pub type CoroutineScope = Scope<Dispatcher>;
 pub type MainScope = Scope<ConfinedDispatcher>;
 
 impl<D> Scope<D> {
-    /// A scope whose coroutines run on `dispatcher`.
+    /// A scope whose coroutines run on `dispatcher`. A failing coroutine does
+    /// not affect its siblings.
     pub fn new(dispatcher: D) -> Self {
+        Self::with_policy(dispatcher, true)
+    }
+
+    fn with_policy(dispatcher: D, supervisor: bool) -> Self {
         Self {
-            core: Arc::default(),
+            core: ScopeCore::new(supervisor),
             dispatcher,
         }
     }
@@ -121,7 +187,7 @@ impl<D> Scope<D> {
         if !self.core.is_active() {
             return Job::finished(JobOutcome::Cancelled);
         }
-        self.core.track(spawn(&self.dispatcher))
+        ScopeCore::track(&self.core, spawn(&self.dispatcher))
     }
 }
 
@@ -187,7 +253,9 @@ impl ScopeHandle {
         F: Future<Output = ()> + Send + 'static,
     {
         match self.core.upgrade() {
-            Some(core) if core.is_active() => core.track(spawn_send(&self.dispatcher, future)),
+            Some(core) if core.is_active() => {
+                ScopeCore::track(&core, spawn_send(&self.dispatcher, future))
+            }
             _ => Job::finished(JobOutcome::Cancelled),
         }
     }
@@ -290,5 +358,65 @@ impl<T> Future for WithContext<T> {
 impl<T> Drop for WithContext<T> {
     fn drop(&mut self) {
         self.deferred.job.cancel();
+    }
+}
+
+/// A child of a [`coroutine_scope`] panicked, so the scope cancelled its other
+/// work.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("a child coroutine failed")]
+pub struct ChildFailed;
+
+/// Runs `block` with a scope for child coroutines and returns once `block`
+/// and every child have finished — Kotlin's `coroutineScope`.
+///
+/// Children run on the dispatcher of the calling coroutine. If a child
+/// panics, `block` and the other children are cancelled and the result is
+/// [`ChildFailed`]. Dropping the returned future cancels everything.
+pub async fn coroutine_scope<T, F, Fut>(block: F) -> Result<T, ChildFailed>
+where
+    F: FnOnce(ScopeHandle) -> Fut,
+    Fut: Future<Output = T>,
+{
+    run_scope(block, false).await
+}
+
+/// Like [`coroutine_scope`], but a failing child does not cancel `block` or
+/// its siblings — Kotlin's `supervisorScope`.
+pub async fn supervisor_scope<T, F, Fut>(block: F) -> T
+where
+    F: FnOnce(ScopeHandle) -> Fut,
+    Fut: Future<Output = T>,
+{
+    let dispatcher = current_dispatcher().unwrap_or_else(Dispatchers::default_pool);
+    let scope = Scope::with_policy(dispatcher, true);
+    let value = block(scope.handle()).await;
+    std::future::poll_fn(|cx| scope.core.poll_idle(cx)).await;
+    value
+}
+
+async fn run_scope<T, F, Fut>(block: F, supervisor: bool) -> Result<T, ChildFailed>
+where
+    F: FnOnce(ScopeHandle) -> Fut,
+    Fut: Future<Output = T>,
+{
+    let dispatcher = current_dispatcher().unwrap_or_else(Dispatchers::default_pool);
+    let scope = Scope::with_policy(dispatcher, supervisor);
+    let failure = std::future::poll_fn(|cx| scope.core.poll_failed(cx));
+    let value = match select(block(scope.handle()), failure).await {
+        Either::Left(value) => value,
+        Either::Right(()) => return Err(ChildFailed),
+    };
+    std::future::poll_fn(|cx| {
+        if scope.core.has_failed() {
+            return Poll::Ready(Err(ChildFailed));
+        }
+        scope.core.poll_idle(cx).map(|()| Ok(()))
+    })
+    .await?;
+    if scope.core.has_failed() {
+        Err(ChildFailed)
+    } else {
+        Ok(value)
     }
 }
