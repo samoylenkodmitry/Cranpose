@@ -179,7 +179,7 @@ fn render_progress_tab_host(initial_progress: f32) -> ProgressTabHarness {
     let composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
     let active_tab = MutableState::with_runtime(0i32, runtime.clone());
-    let progress = MutableState::with_runtime(initial_progress, runtime.clone());
+    let progress = MutableState::with_runtime(initial_progress, runtime);
     let key = location_key(file!(), line!(), column!());
     let renders = Rc::new(Cell::new(0));
     let branch_calls = Rc::new(Cell::new(0));
@@ -821,7 +821,7 @@ fn recursive_layout_updates_keep_all_branches() {
     let _app_context = crate::render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
-    let depth_state = MutableState::with_runtime(2usize, runtime.clone());
+    let depth_state = MutableState::with_runtime(2usize, runtime);
     let key = location_key(file!(), line!(), column!());
 
     composition
@@ -865,7 +865,7 @@ fn tab_switching_recursive_layout_preserves_branches() {
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
     let active_tab = MutableState::with_runtime(RecursiveDemoTab::Counter, runtime.clone());
-    let depth_state = MutableState::with_runtime(3usize, runtime.clone());
+    let depth_state = MutableState::with_runtime(3usize, runtime);
     let key = location_key(file!(), line!(), column!());
 
     composition
@@ -923,7 +923,7 @@ fn recursive_layout_depth_decrease_then_increase_restores_branches() {
     let _app_context = crate::render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
-    let depth_state = MutableState::with_runtime(3usize, runtime.clone());
+    let depth_state = MutableState::with_runtime(3usize, runtime);
     let key = location_key(file!(), line!(), column!());
 
     composition

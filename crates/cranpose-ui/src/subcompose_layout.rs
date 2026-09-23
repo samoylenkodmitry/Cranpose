@@ -353,11 +353,10 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
 
         let slot_host = self.state.get_or_create_slots(slot_id);
         self.parent_handle.note_slot_host(&slot_host);
-        let holder_for_slot = content_holder.clone();
         let scopes = self
             .composer
             .subcompose_slot(&slot_host, Some(virtual_node_id), move |_| {
-                compose_subcompose_slot_content(holder_for_slot.clone());
+                compose_subcompose_slot_content(content_holder);
             })
             .map(|((), scopes)| scopes)
             .unwrap_or_default();

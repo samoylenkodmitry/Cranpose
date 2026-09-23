@@ -1065,9 +1065,8 @@ pub fn WearScalingItem<F>(
 where
     F: FnMut() + 'static,
 {
-    let layer_transform = transform.clone();
     let layered = modifier.graphics_layer(move || {
-        let value = layer_transform.get();
+        let value = transform.get();
         GraphicsLayer {
             alpha: value.alpha,
             scale: value.scale,
@@ -1237,8 +1236,6 @@ pub fn WearScalingLazyColumnNode(
     };
 
     let policy: Rc<SubcomposeMeasurePolicy> = remember({
-        let inputs = inputs.clone();
-        let transforms = transforms.clone();
         let inner = state.inner();
         let layout = Rc::clone(&inner.layout);
         let items = Rc::clone(&inner.items);

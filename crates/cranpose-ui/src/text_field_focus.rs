@@ -513,14 +513,14 @@ mod tests {
         let _ = crate::render_state::take_draw_repass_nodes();
 
         let first = Rc::new(RefCell::new(false));
-        request_focus(first.clone(), Rc::new(NodeBackedHandler(7)), 0);
+        request_focus(first, Rc::new(NodeBackedHandler(7)), 0);
         assert!(
             crate::render_state::take_draw_repass_nodes().contains(&7),
             "gaining focus must re-record the gaining field's draws"
         );
 
         let second = Rc::new(RefCell::new(false));
-        request_focus(second.clone(), Rc::new(NodeBackedHandler(9)), 0);
+        request_focus(second, Rc::new(NodeBackedHandler(9)), 0);
         let repasses = crate::render_state::take_draw_repass_nodes();
         assert!(
             repasses.contains(&7) && repasses.contains(&9),
@@ -538,7 +538,7 @@ mod tests {
     fn a_blink_transition_schedules_a_scoped_repass_on_the_focused_field() {
         let _app_context = crate::render_state::app_context_test_scope();
         let focus = Rc::new(RefCell::new(false));
-        request_focus(focus.clone(), Rc::new(NodeBackedHandler(21)), 0);
+        request_focus(focus, Rc::new(NodeBackedHandler(21)), 0);
         let _ = crate::render_state::take_draw_repass_nodes();
 
         let past_interval = web_time::Instant::now()

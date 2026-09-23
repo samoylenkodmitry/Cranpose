@@ -186,9 +186,7 @@ pub fn Scrollbar(
 
         let drawn = dragged.clone();
         Canvas(
-            Modifier::empty()
-                .fill_max_size()
-                .draggable(axis, dragged.clone()),
+            Modifier::empty().fill_max_size().draggable(axis, dragged),
             move |scope: &mut dyn DrawScope| {
                 draw_scrollbar(scope, state, axis, spec, drawn.is_dragging());
             },

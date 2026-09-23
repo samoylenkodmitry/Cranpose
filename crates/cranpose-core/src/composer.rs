@@ -1908,7 +1908,7 @@ impl Composer {
         };
 
         let slot_host = state.get_or_create_slots(slot_id);
-        let (result, _) = self.with_slot_override(slot_host.clone(), |composer| {
+        let (result, _) = self.with_slot_override(slot_host, |composer| {
             composer.with_group(slot_id.raw(), |composer| content(composer))
         });
 
@@ -2131,7 +2131,7 @@ impl Composer {
                 if let Some(inner) = scope_weak.upgrade() {
                     let scope_instance = RecomposeScope { inner };
                     observer.observe_reads(
-                        scope_instance.clone(),
+                        scope_instance,
                         super::RecomposeScope::invalidate,
                         || {
                             callback(composer);

@@ -518,12 +518,7 @@ fn SelectionHandles(
             selection.start,
             LineAffinity::Upstream,
         );
-        let on_drag = drag_caret_closure(
-            state,
-            style.clone(),
-            controller.clone(),
-            Rc::clone(&drag_bias),
-        );
+        let on_drag = drag_caret_closure(state, style.clone(), controller, Rc::clone(&drag_bias));
         let open_caret_menu = {
             let caret_menu_offset = Rc::clone(&caret_menu_offset);
             move || {
@@ -1147,7 +1142,6 @@ mod tests {
                     let scroll = remember(|| ScrollState::new(0.0)).with(ScrollState::clone);
                     *scroll_slot.borrow_mut() = Some(scroll);
                     let state = state;
-                    let controller = controller.clone();
                     Column(
                         Modifier::empty()
                             .size(Size {

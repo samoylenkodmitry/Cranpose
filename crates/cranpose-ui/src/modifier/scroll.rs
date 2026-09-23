@@ -759,7 +759,6 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
         let motion_context = self.motion_context.clone();
         let initial_value = scroll_target.current_offset();
         let scroll_target_for_fling = scroll_target.clone();
-        let scroll_target_for_end = scroll_target.clone();
         let detector_for_end = self.clone_for_watcher();
         let overscroll_for_fling = self.overscroll.clone();
 
@@ -774,7 +773,7 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
                 consumed
             },
             move || {
-                scroll_target_for_end.invalidate();
+                scroll_target.invalidate();
                 let settle_running = detector_for_end
                     .gesture_state
                     .borrow()
@@ -1504,8 +1503,7 @@ fn scroll_impl(
                 info.add_property("reverseScrolling", reverse_scrolling.to_string());
             },
         ));
-    let motion_modifier =
-        Modifier::with_element(MotionContextAnimatedElement::new(motion_context.clone()));
+    let motion_modifier = Modifier::with_element(MotionContextAnimatedElement::new(motion_context));
     let translated_content_modifier = Modifier::with_element(TranslatedContentContextElement::new(
         state.id() as usize,
         TranslatedContentOffsetSource::LayoutContentOffset,

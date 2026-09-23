@@ -186,7 +186,7 @@ fn main() {
             let drag_start_x = list_x + list_w * 0.5;
             let drag_start_y = list_y + list_h * 0.80;
             let drag_end_y = list_y + list_h * 0.25;
-            let mut scrolled_story_numbers = restored_story_numbers.clone();
+            let mut scrolled_story_numbers = restored_story_numbers;
             let mut story1_after_drag_y = story1_before_drag_y;
             let mut list_moved = false;
 

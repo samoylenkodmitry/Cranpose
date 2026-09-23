@@ -453,7 +453,7 @@ mod tests {
             id: crate::state::ObjectId(200),
         });
         parent.record_write(obj.clone());
-        child.record_write(obj.clone());
+        child.record_write(obj);
 
         let result = child.apply();
         assert!(result.is_failure());

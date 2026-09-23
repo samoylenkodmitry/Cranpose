@@ -21,7 +21,7 @@ fn test_render_invalidation_on_conditional_change() {
     let mut rule = ComposeTestRule::new();
     let runtime = rule.runtime_handle();
 
-    let counter = MutableState::with_runtime(0, runtime.clone());
+    let counter = MutableState::with_runtime(0, runtime);
 
     eprintln!("\n╔═══════════════════════════════════════════════════════════════╗");
     eprintln!("║           RENDER INVALIDATION BUG TEST                        ║");

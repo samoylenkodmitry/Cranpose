@@ -9887,7 +9887,7 @@ fn empty_rotary_events_are_dropped_before_dispatch() {
 fn window_level_rotary_handler_receives_unconsumed_events() {
     let _guard = test_guard();
     let events = Rc::new(RefCell::new(Vec::new()));
-    let scene = rotary_scene(vec![rotary_target(1, false, events.clone(), vec![1])]);
+    let scene = rotary_scene(vec![rotary_target(1, false, events, vec![1])]);
 
     let root_key = location_key(file!(), line!(), column!());
     let mut shell = AppShell::new(ScrollDispatchRenderer::new(scene), root_key, empty_content);
@@ -9928,7 +9928,7 @@ fn window_level_rotary_handler_runs_with_no_hit_targets() {
 fn window_level_rotary_handler_is_skipped_when_a_modifier_consumed() {
     let _guard = test_guard();
     let events = Rc::new(RefCell::new(Vec::new()));
-    let scene = rotary_scene(vec![rotary_target(1, true, events.clone(), vec![1])]);
+    let scene = rotary_scene(vec![rotary_target(1, true, events, vec![1])]);
 
     let root_key = location_key(file!(), line!(), column!());
     let mut shell = AppShell::new(ScrollDispatchRenderer::new(scene), root_key, empty_content);

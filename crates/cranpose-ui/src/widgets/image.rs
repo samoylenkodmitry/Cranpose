@@ -972,7 +972,6 @@ where
     let painter = painter.into();
     let intrinsic_dp = painter.intrinsic_size();
     let draw_alpha = alpha.clamp(0.0, 1.0);
-    let draw_painter = painter.clone();
 
     let semantics_modifier = Modifier::empty().semantics(move |config| {
         config.content_description.clone_from(&content_description);
@@ -998,7 +997,7 @@ where
             if container_size.width <= 0.0 || container_size.height <= 0.0 {
                 return;
             }
-            match &draw_painter.kind {
+            match &painter.kind {
                 PainterKind::Bitmap(bitmap) => draw_bitmap_painter(
                     scope,
                     bitmap.clone(),

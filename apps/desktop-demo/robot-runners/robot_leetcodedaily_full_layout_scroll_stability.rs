@@ -1235,12 +1235,6 @@ fn LeetcodeDailyFullLayoutApp() {
         }),
         BoxSpec::default(),
         {
-            let fields = fields.clone();
-            let markdown_preview = markdown_preview.clone();
-            let autosave_destination = autosave_destination.clone();
-            let saved_draft = saved_draft.clone();
-            let layout_preferences = layout_preferences.clone();
-            let startup_interactive_queue = startup_interactive_queue.clone();
             move || {
                 Column(Modifier::empty().fill_max_size(), ColumnSpec::default(), {
                     let fields = fields.clone();
@@ -1549,10 +1543,6 @@ fn ActionsCard(
         Modifier::empty().fill_max_width(),
         ColumnSpec::default().vertical_arrangement(LinearArrangement::spaced_by(14.0)),
         {
-            let fields = fields.clone();
-            let autosave_destination = autosave_destination.clone();
-            let layout_preferences = layout_preferences.clone();
-            let startup_interactive_queue = startup_interactive_queue.clone();
             move || {
                 HeaderBar(
                     autosave_destination.clone(),
@@ -1774,8 +1764,6 @@ fn QuickActionsPanel(
         Modifier::empty().weight(2.04)
     };
     glass_panel(modifier, theme, 18.0, 18.0, {
-        let fields = fields.clone();
-        let layout_preferences = layout_preferences.clone();
         move || {
             let layout_preferences_for_column = layout_preferences.clone();
             Column(
@@ -1850,8 +1838,6 @@ fn NextWorkPanel(
     };
     let title = title_override.unwrap_or_else(|| next_item.title());
     glass_panel(modifier, theme, 18.0, 18.0, {
-        let fields = fields.clone();
-        let title = title.clone();
         move || {
             Row(
                 Modifier::empty().fill_max_width(),
@@ -1936,8 +1922,6 @@ fn InteractiveQueuePanel(
 
     let scroll_state = remember(|| ScrollState::new(0.0)).with(|state| *state);
     glass_panel(Modifier::empty().fill_max_width(), theme, 14.0, 10.0, {
-        let fields = fields.clone();
-        let queue = queue.clone();
         move || {
             Column(
                 Modifier::empty().fill_max_width(),
@@ -2206,7 +2190,6 @@ fn ActionButtons(
 ) {
     let ordered_actions = ordered_action_buttons(&layout_preferences);
     BoxWithConstraints(Modifier::empty().fill_max_width(), {
-        let fields = fields.clone();
         move |scope| {
             let width = scope.max_width().0;
             let columns = if width >= 820.0 {
@@ -2823,7 +2806,6 @@ fn ComposePreviewCard(
 #[composable]
 fn MarkdownCard(markdown_preview: String, theme: ThemeMode) {
     section_card(theme, {
-        let markdown_preview = markdown_preview.clone();
         move || {
             let markdown_preview_for_column = markdown_preview.clone();
             Column(
@@ -2870,8 +2852,6 @@ fn ProblemMetaCard(
     compact: bool,
 ) {
     section_card(theme, {
-        let fields = fields.clone();
-        let saved_draft = saved_draft.clone();
         move || {
             Column(
                 Modifier::empty().fill_max_width(),
@@ -2999,9 +2979,6 @@ fn WriteupCard(
     theme: ThemeMode,
 ) {
     section_card(theme, {
-        let fields = fields.clone();
-        let saved_draft = saved_draft.clone();
-        let layout_preferences = layout_preferences.clone();
         move || {
             let ordered_fields = ordered_fields(&WRITEUP_FIELDS, &layout_preferences);
             let fields_for_column = fields.clone();
@@ -3042,9 +3019,6 @@ fn CodeCard(
     theme: ThemeMode,
 ) {
     section_card(theme, {
-        let fields = fields.clone();
-        let saved_draft = saved_draft.clone();
-        let layout_preferences = layout_preferences.clone();
         move || {
             let ordered_fields = ordered_fields(&CODE_FIELDS, &layout_preferences);
             let fields_for_column = fields.clone();
@@ -3090,7 +3064,7 @@ fn EditorField(
             field.label(),
             field.field_id(),
             fields.date,
-            saved_draft.date.clone(),
+            saved_draft.date,
             1,
             1,
             status,
@@ -3103,7 +3077,7 @@ fn EditorField(
             field.label(),
             field.field_id(),
             fields.problem_title,
-            saved_draft.problem_title.clone(),
+            saved_draft.problem_title,
             1,
             1,
             status,
@@ -3116,7 +3090,7 @@ fn EditorField(
             field.label(),
             field.field_id(),
             fields.problem_url,
-            saved_draft.problem_url.clone(),
+            saved_draft.problem_url,
             1,
             1,
             status,
@@ -3129,7 +3103,7 @@ fn EditorField(
             field.label(),
             field.field_id(),
             fields.difficulty,
-            saved_draft.difficulty.clone(),
+            saved_draft.difficulty,
             1,
             1,
             status,
@@ -3142,7 +3116,7 @@ fn EditorField(
             field.label(),
             field.field_id(),
             fields.blog_post_url,
-            saved_draft.blog_post_url.clone(),
+            saved_draft.blog_post_url,
             1,
             1,
             status,
@@ -3155,7 +3129,7 @@ fn EditorField(
             field.label(),
             field.field_id(),
             fields.substack_url,
-            saved_draft.substack_url.clone(),
+            saved_draft.substack_url,
             1,
             1,
             status,
@@ -3168,7 +3142,7 @@ fn EditorField(
             field.label(),
             field.field_id(),
             fields.youtube_url,
-            saved_draft.youtube_url.clone(),
+            saved_draft.youtube_url,
             1,
             1,
             status,
@@ -3181,7 +3155,7 @@ fn EditorField(
             field.label(),
             field.field_id(),
             fields.reference_url,
-            saved_draft.reference_url.clone(),
+            saved_draft.reference_url,
             1,
             1,
             status,
@@ -3194,7 +3168,7 @@ fn EditorField(
             field.label(),
             field.field_id(),
             fields.telegram_text,
-            saved_draft.telegram_text.clone(),
+            saved_draft.telegram_text,
             1,
             2,
             status,
@@ -3207,7 +3181,7 @@ fn EditorField(
             field.label(),
             field.field_id(),
             fields.problem_tldr,
-            saved_draft.problem_tldr.clone(),
+            saved_draft.problem_tldr,
             3,
             6,
             status,
@@ -3220,7 +3194,7 @@ fn EditorField(
             field.label(),
             field.field_id(),
             fields.intuition,
-            saved_draft.intuition.clone(),
+            saved_draft.intuition,
             6,
             14,
             status,
@@ -3233,7 +3207,7 @@ fn EditorField(
             field.label(),
             field.field_id(),
             fields.approach,
-            saved_draft.approach.clone(),
+            saved_draft.approach,
             6,
             14,
             status,
@@ -3246,7 +3220,7 @@ fn EditorField(
             field.label(),
             field.field_id(),
             fields.time_complexity,
-            saved_draft.time_complexity.clone(),
+            saved_draft.time_complexity,
             1,
             2,
             status,
@@ -3259,7 +3233,7 @@ fn EditorField(
             field.label(),
             field.field_id(),
             fields.space_complexity,
-            saved_draft.space_complexity.clone(),
+            saved_draft.space_complexity,
             1,
             2,
             status,
@@ -3272,7 +3246,7 @@ fn EditorField(
             field.label(),
             field.field_id(),
             fields.kotlin_runtime_ms,
-            saved_draft.kotlin_runtime_ms.clone(),
+            saved_draft.kotlin_runtime_ms,
             1,
             1,
             status,
@@ -3285,7 +3259,7 @@ fn EditorField(
             field.label(),
             field.field_id(),
             fields.kotlin_code,
-            saved_draft.kotlin_code.clone(),
+            saved_draft.kotlin_code,
             10,
             18,
             status,
@@ -3297,7 +3271,7 @@ fn EditorField(
             field.label(),
             field.field_id(),
             fields.rust_runtime_ms,
-            saved_draft.rust_runtime_ms.clone(),
+            saved_draft.rust_runtime_ms,
             1,
             1,
             status,
@@ -3310,7 +3284,7 @@ fn EditorField(
             field.label(),
             field.field_id(),
             fields.rust_code,
-            saved_draft.rust_code.clone(),
+            saved_draft.rust_code,
             10,
             18,
             status,

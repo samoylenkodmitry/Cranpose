@@ -67,7 +67,7 @@ pub fn LiquidSearchField(modifier: Modifier, state: TextFieldState, spec: Liquid
             })
     };
 
-    let placeholder = spec.placeholder.clone();
+    let placeholder = spec.placeholder;
     Box(
         base.then(modifier).padding_symmetric(14.0, 0.0),
         BoxSpec::default().content_alignment(Alignment::new(

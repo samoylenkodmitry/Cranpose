@@ -49,7 +49,7 @@ fn composition_local_provider_scopes_values() {
     let local_counter = compositionLocalOf(|| 0);
     let mut composition = test_composition();
     let runtime = composition.runtime_handle();
-    let provided_state = MutableState::with_runtime(1, runtime.clone());
+    let provided_state = MutableState::with_runtime(1, runtime);
 
     #[composable]
     fn child(local_counter: CompositionLocal<i32>) {
@@ -140,7 +140,7 @@ fn composition_local_simple_subscription_test() {
     let local_value = compositionLocalOf(|| 0);
     let mut composition = test_composition();
     let runtime = composition.runtime_handle();
-    let trigger = MutableState::with_runtime(10, runtime.clone());
+    let trigger = MutableState::with_runtime(10, runtime);
 
     #[composable]
     fn reader(local_value: CompositionLocal<i32>) {
@@ -272,7 +272,7 @@ fn composition_local_custom_policy_uses_equivalence_for_updates() {
     fn root(local_value: CompositionLocal<Arc<i32>>, provided_state: MutableState<Arc<i32>>) {
         ROOT_RECOMPOSITIONS.with(|c| c.set(c.get() + 1));
         let current = provided_state.value();
-        CompositionLocalProvider(vec![local_value.provides(current.clone())], || {
+        CompositionLocalProvider(vec![local_value.provides(current)], || {
             reader(local_value.clone());
         });
     }
@@ -285,7 +285,7 @@ fn composition_local_custom_policy_uses_equivalence_for_updates() {
     assert_eq!(READER_RECOMPOSITIONS.with(Cell::get), 1);
     assert_eq!(LAST_VALUE.with(Cell::get), 7);
 
-    provided_state.set_value(shared.clone());
+    provided_state.set_value(shared);
     let did_recompose = composition
         .process_invalid_scopes()
         .expect("process equivalent provider value");
@@ -336,7 +336,7 @@ fn composition_local_tracks_reads_and_recomposes_selectively() {
     let local_count = compositionLocalOf(|| 0);
     let mut composition = test_composition();
     let runtime = composition.runtime_handle();
-    let trigger = MutableState::with_runtime(0, runtime.clone());
+    let trigger = MutableState::with_runtime(0, runtime);
 
     #[composable]
     fn inside_inside() {
@@ -354,7 +354,7 @@ fn composition_local_tracks_reads_and_recomposes_selectively() {
             LAST_READ_VALUE.with(|v| v.set(count));
         }
 
-        reading_text(local_count.clone());
+        reading_text(local_count);
 
         #[composable]
         fn non_reading_text() {
@@ -512,7 +512,7 @@ fn cranpose_with_reuse_skips_then_recomposes() {
 
     let mut composition = test_composition();
     let runtime = composition.runtime_handle();
-    let state = MutableState::with_runtime(0, runtime.clone());
+    let state = MutableState::with_runtime(0, runtime);
     let root_key = location_key(file!(), line!(), column!());
     let slot_key = location_key(file!(), line!(), column!());
 
@@ -561,7 +561,7 @@ fn cranpose_with_reuse_forces_recomposition_when_requested() {
 
     let mut composition = test_composition();
     let runtime = composition.runtime_handle();
-    let state = MutableState::with_runtime(0, runtime.clone());
+    let state = MutableState::with_runtime(0, runtime);
     let root_key = location_key(file!(), line!(), column!());
     let slot_key = location_key(file!(), line!(), column!());
 
@@ -609,7 +609,7 @@ fn inactive_scopes_delay_invalidation_until_reactivated() {
 
     let mut composition = test_composition();
     let runtime = composition.runtime_handle();
-    let state = MutableState::with_runtime(0, runtime.clone());
+    let state = MutableState::with_runtime(0, runtime);
     let root_key = location_key(file!(), line!(), column!());
 
     #[composable]
@@ -1019,7 +1019,7 @@ fn callbackless_scope_promotes_via_parent_scope_metadata() {
 
     let mut composition = test_composition();
     let runtime = composition.runtime_handle();
-    let state = MutableState::with_runtime(0, runtime.clone());
+    let state = MutableState::with_runtime(0, runtime);
     let root_key = location_key(file!(), line!(), column!());
 
     PARENT_INVOCATIONS.with(|count| count.set(0));
@@ -1310,7 +1310,7 @@ fn process_invalid_scopes_preserves_later_fresh_subtree_when_earlier_scope_runs_
 
     let mut composition = test_composition();
     let runtime = composition.runtime_handle();
-    let show_late = MutableState::with_runtime(false, runtime.clone());
+    let show_late = MutableState::with_runtime(false, runtime);
     let root_key = location_key(file!(), line!(), column!());
 
     #[composable]
@@ -1410,7 +1410,7 @@ fn retained_scope_stays_inactive_until_restored() {
     let mut composition = test_composition();
     let runtime = composition.runtime_handle();
     let show_branch = MutableState::with_runtime(true, runtime.clone());
-    let observed = MutableState::with_runtime(0, runtime.clone());
+    let observed = MutableState::with_runtime(0, runtime);
     let root_key = location_key(file!(), line!(), column!());
     OBSERVED_VALUES.with(|values| values.borrow_mut().clear());
 
@@ -1588,7 +1588,7 @@ fn restored_retained_scope_processes_forced_recompose() {
 
     let mut composition = test_composition();
     let runtime = composition.runtime_handle();
-    let show_branch = MutableState::with_runtime(true, runtime.clone());
+    let show_branch = MutableState::with_runtime(true, runtime);
     let root_key = location_key(file!(), line!(), column!());
     CAPTURED_SCOPE.with(|slot| slot.replace(None));
     INVOCATIONS.with(|count| count.set(0));
@@ -1699,7 +1699,7 @@ fn remember_survives_normal_recomposition() {
 
     let mut composition = test_composition();
     let runtime = composition.runtime_handle();
-    let observed = MutableState::with_runtime(0, runtime.clone());
+    let observed = MutableState::with_runtime(0, runtime);
     let root_key = location_key(file!(), line!(), column!());
     let group_key = location_key(file!(), line!(), column!());
     let remembered = Rc::new(RefCell::new(None::<Owned<i32>>));
@@ -1746,7 +1746,7 @@ fn remember_survives_normal_recomposition() {
 fn conditional_branch_without_retention_resets_remembered_state() {
     let mut composition = test_composition();
     let runtime = composition.runtime_handle();
-    let show_branch = MutableState::with_runtime(true, runtime.clone());
+    let show_branch = MutableState::with_runtime(true, runtime);
     let root_key = location_key(file!(), line!(), column!());
     let branch_key = location_key(file!(), line!(), column!());
     let remembered = Rc::new(RefCell::new(None::<Owned<i32>>));
@@ -1799,7 +1799,7 @@ fn conditional_branch_without_retention_resets_remembered_state() {
 fn retained_conditional_branch_restores_remembered_state() {
     let mut composition = test_composition();
     let runtime = composition.runtime_handle();
-    let show_branch = MutableState::with_runtime(true, runtime.clone());
+    let show_branch = MutableState::with_runtime(true, runtime);
     let root_key = location_key(file!(), line!(), column!());
     let branch_key = location_key(file!(), line!(), column!());
     let remembered = Rc::new(RefCell::new(None::<Owned<i32>>));
@@ -2792,7 +2792,7 @@ fn subcompose_retained_root_slots_plateau_memory_and_anchors() {
     let mut slots = SlotTable::default();
     let mut applier = test_applier();
     let (composer, slots_host, applier_host) =
-        setup_composer(&mut slots, &mut applier, handle.clone(), None);
+        setup_composer(&mut slots, &mut applier, handle, None);
     let subcompose_slots = Rc::new(SlotsHost::new(SlotTable::new()));
     let captured: CapturedRetainedSlots = Rc::new(RefCell::new(Vec::new()));
 
@@ -2854,7 +2854,7 @@ fn subcompose_retained_root_slots_plateau_memory_and_anchors() {
 fn retained_branch_hides_without_running_disposable_effect_cleanup() {
     let mut composition = test_composition();
     let runtime = composition.runtime_handle();
-    let show_branch = MutableState::with_runtime(true, runtime.clone());
+    let show_branch = MutableState::with_runtime(true, runtime);
     let cleanup_calls = Rc::new(Cell::new(0usize));
     let root_key = location_key(file!(), line!(), column!());
     let branch_key = location_key(file!(), line!(), column!());
@@ -2910,7 +2910,7 @@ fn retained_branch_hides_without_running_disposable_effect_cleanup() {
 fn conditional_branch_without_retention_runs_disposable_effect_cleanup() {
     let mut composition = test_composition();
     let runtime = composition.runtime_handle();
-    let show_branch = MutableState::with_runtime(true, runtime.clone());
+    let show_branch = MutableState::with_runtime(true, runtime);
     let cleanup_calls = Rc::new(Cell::new(0usize));
     let root_key = location_key(file!(), line!(), column!());
     let branch_key = location_key(file!(), line!(), column!());
@@ -2963,7 +2963,7 @@ fn retained_branch_restores_the_same_node_id() {
 
     let mut composition = test_composition();
     let runtime = composition.runtime_handle();
-    let show_branch = MutableState::with_runtime(true, runtime.clone());
+    let show_branch = MutableState::with_runtime(true, runtime);
     let root_key = location_key(file!(), line!(), column!());
     let captured = Rc::new(RefCell::new(Vec::<NodeId>::new()));
 
@@ -3011,7 +3011,7 @@ fn retained_branch_detaches_child_from_parent_while_hidden_and_restores_same_nod
 
     let mut composition = test_composition();
     let runtime = composition.runtime_handle();
-    let show_branch = MutableState::with_runtime(true, runtime.clone());
+    let show_branch = MutableState::with_runtime(true, runtime);
     let root_key = location_key(file!(), line!(), column!());
     let parent_id = Rc::new(Cell::new(None::<NodeId>));
     let captured = Rc::new(RefCell::new(Vec::<NodeId>::new()));
@@ -3118,7 +3118,7 @@ fn disposed_branch_recreates_node_id_without_explicit_reuse() {
 
     let mut composition = test_composition();
     let runtime = composition.runtime_handle();
-    let show_branch = MutableState::with_runtime(true, runtime.clone());
+    let show_branch = MutableState::with_runtime(true, runtime);
     let root_key = location_key(file!(), line!(), column!());
     let captured = Rc::new(RefCell::new(Vec::<NodeId>::new()));
 
@@ -3168,7 +3168,7 @@ fn conditional_branch_without_retention_disposes_removed_node() {
 
     let mut composition = test_composition();
     let runtime = composition.runtime_handle();
-    let show_branch = MutableState::with_runtime(true, runtime.clone());
+    let show_branch = MutableState::with_runtime(true, runtime);
     let root_key = location_key(file!(), line!(), column!());
     let captured = Rc::new(RefCell::new(Vec::<NodeId>::new()));
 
@@ -3212,7 +3212,7 @@ fn switching_tabs_with_retention_preserves_each_tab_state() {
 
     let mut composition = test_composition();
     let runtime = composition.runtime_handle();
-    let active_tab = MutableState::with_runtime(0usize, runtime.clone());
+    let active_tab = MutableState::with_runtime(0usize, runtime);
     let root_key = location_key(file!(), line!(), column!());
     let tab_a = Rc::new(RefCell::new(None::<Owned<i32>>));
     let tab_b = Rc::new(RefCell::new(None::<Owned<i32>>));
@@ -3289,7 +3289,7 @@ fn switching_tabs_without_retention_resets_inactive_tab_state() {
 
     let mut composition = test_composition();
     let runtime = composition.runtime_handle();
-    let active_tab = MutableState::with_runtime(0usize, runtime.clone());
+    let active_tab = MutableState::with_runtime(0usize, runtime);
     let root_key = location_key(file!(), line!(), column!());
     let tab_a = Rc::new(RefCell::new(None::<Owned<i32>>));
     let tab_b = Rc::new(RefCell::new(None::<Owned<i32>>));
@@ -3474,7 +3474,7 @@ fn subcompose_in_retains_root_level_groups() {
     let mut slots = SlotTable::default();
     let mut applier = test_applier();
     let (composer, slots_host, applier_host) =
-        setup_composer(&mut slots, &mut applier, handle.clone(), None);
+        setup_composer(&mut slots, &mut applier, handle, None);
     let subcompose_slots = Rc::new(SlotsHost::new(SlotTable::new()));
     let remembered = Rc::new(RefCell::new(None::<Owned<i32>>));
     let group_key = location_key(file!(), line!(), column!());
@@ -3601,7 +3601,7 @@ fn subcompose_in_retained_root_level_nodes_stay_live_while_hidden_and_restore_sa
     let mut slots = SlotTable::default();
     let mut applier = test_applier();
     let (composer, slots_host, applier_host) =
-        setup_composer(&mut slots, &mut applier, handle.clone(), None);
+        setup_composer(&mut slots, &mut applier, handle, None);
     let subcompose_slots = Rc::new(SlotsHost::new(SlotTable::new()));
     let captured = Rc::new(RefCell::new(Vec::<NodeId>::new()));
     let group_key = location_key(file!(), line!(), column!());
@@ -3666,7 +3666,7 @@ fn dropping_subcompose_host_disposes_hidden_retained_nodes() {
     let mut slots = SlotTable::default();
     let mut applier = test_applier();
     let (composer, slots_host, applier_host) =
-        setup_composer(&mut slots, &mut applier, handle.clone(), None);
+        setup_composer(&mut slots, &mut applier, handle, None);
     let subcompose_slots = Rc::new(SlotsHost::new(SlotTable::new()));
     let captured = Rc::new(RefCell::new(Vec::<NodeId>::new()));
     let group_key = location_key(file!(), line!(), column!());
@@ -3734,7 +3734,7 @@ fn with_key_keeps_callsite_identity_when_user_key_repeats() {
 
     let mut composition = test_composition();
     let runtime = composition.runtime_handle();
-    let show_first = MutableState::with_runtime(true, runtime.clone());
+    let show_first = MutableState::with_runtime(true, runtime);
     let root_key = location_key(file!(), line!(), column!());
 
     #[composable]
@@ -3785,7 +3785,7 @@ fn retained_siblings_with_same_raw_key_keep_distinct_state() {
 
     let mut composition = test_composition();
     let runtime = composition.runtime_handle();
-    let show_children = MutableState::with_runtime(true, runtime.clone());
+    let show_children = MutableState::with_runtime(true, runtime);
     let root_key = location_key(file!(), line!(), column!());
 
     #[composable]
@@ -4337,7 +4337,7 @@ fn a_surviving_provider_keeps_its_entry_when_a_same_typed_neighbor_leaves() {
     let mut composition = test_composition();
     let runtime = composition.runtime_handle();
     let with_first = MutableState::with_runtime(true, runtime.clone());
-    let second_value = MutableState::with_runtime(20, runtime.clone());
+    let second_value = MutableState::with_runtime(20, runtime);
 
     #[composable]
     fn reader(second: CompositionLocal<i32>) {
@@ -4396,7 +4396,7 @@ fn a_surviving_same_local_provider_keeps_its_entry_when_the_leader_leaves() {
     let mut composition = test_composition();
     let runtime = composition.runtime_handle();
     let with_leading = MutableState::with_runtime(true, runtime.clone());
-    let survivor_value = MutableState::with_runtime(10, runtime.clone());
+    let survivor_value = MutableState::with_runtime(10, runtime);
 
     #[composable]
     fn reader(local: CompositionLocal<i32>) {
@@ -4478,7 +4478,7 @@ fn same_site_provider_rows(keyed: bool) {
     let mut composition = test_composition();
     let runtime = composition.runtime_handle();
     let with_leading = MutableState::with_runtime(true, runtime.clone());
-    let survivor_value = MutableState::with_runtime(10, runtime.clone());
+    let survivor_value = MutableState::with_runtime(10, runtime);
 
     #[composable]
     fn reader(local: CompositionLocal<i32>) {
@@ -4558,7 +4558,7 @@ fn sibling_provider_scopes_from_one_construction_site_stay_distinct() {
     let mut composition = test_composition();
     let runtime = composition.runtime_handle();
     let with_leading = MutableState::with_runtime(true, runtime.clone());
-    let survivor_value = MutableState::with_runtime(10, runtime.clone());
+    let survivor_value = MutableState::with_runtime(10, runtime);
 
     fn build(local: &CompositionLocal<i32>, value: i32) -> Vec<ProvidedValue> {
         vec![local.provides(value)]
@@ -4616,7 +4616,7 @@ fn key_preserves_state_when_unchanged_and_discards_when_key_changes() {
 
     let mut composition = test_composition();
     let runtime = composition.runtime_handle();
-    let variant = MutableState::with_runtime(1u32, runtime.clone());
+    let variant = MutableState::with_runtime(1u32, runtime);
     let root_key = location_key(file!(), line!(), column!());
 
     #[composable]
@@ -4667,7 +4667,7 @@ fn sibling_key_blocks_with_different_keys_do_not_share_state() {
 
     let mut composition = test_composition();
     let runtime = composition.runtime_handle();
-    let tick = MutableState::with_runtime(0u32, runtime.clone());
+    let tick = MutableState::with_runtime(0u32, runtime);
     let root_key = location_key(file!(), line!(), column!());
 
     #[composable]

@@ -1048,7 +1048,7 @@ fn LiquidTabBarLayout(
                     TabCells(
                         Modifier::empty(),
                         Rc::clone(&tabs),
-                        typography.clone(),
+                        typography,
                         cells,
                         TabCellsSpec {
                             base_color: tab_base_content_color(colors),

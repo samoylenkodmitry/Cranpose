@@ -664,7 +664,7 @@ fn lazy_list_item_recomposes_on_state_change() {
     let _app_context = crate::render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
-    let label_state = MutableState::with_runtime(0u32, runtime.clone());
+    let label_state = MutableState::with_runtime(0u32, runtime);
 
     let key = location_key(file!(), line!(), column!());
     composition
@@ -734,7 +734,7 @@ fn lazy_list_item_recomposes_when_composable_parent_capture_changes() {
     let _app_context = crate::render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
-    let theme_state = MutableState::with_runtime(false, runtime.clone());
+    let theme_state = MutableState::with_runtime(false, runtime);
 
     let key = location_key(file!(), line!(), column!());
     composition
@@ -1274,7 +1274,7 @@ fn lazy_list_updates_scroll_bounds_when_item_count_grows_without_scrolling() {
     let _app_context = crate::render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
-    let item_count = MutableState::with_runtime(2usize, runtime.clone());
+    let item_count = MutableState::with_runtime(2usize, runtime);
     let captured_state = Rc::new(RefCell::new(None));
     let call_count = Rc::new(Cell::new(0));
 

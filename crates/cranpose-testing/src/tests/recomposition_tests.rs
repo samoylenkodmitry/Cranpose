@@ -77,7 +77,7 @@ fn Child(value: i32) {
 fn test_child_recomposition_preserves_parent() {
     run_test_composition(|rule| {
         let runtime = rule.runtime_handle();
-        let text_state = MutableState::with_runtime("Hello".to_string(), runtime.clone());
+        let text_state = MutableState::with_runtime("Hello".to_string(), runtime);
 
         rule.set_content({
             move || {
@@ -107,7 +107,7 @@ fn test_child_recomposition_preserves_parent() {
 fn test_conditional_composable_preserves_siblings() {
     run_test_composition(|rule| {
         let runtime = rule.runtime_handle();
-        let show_middle = MutableState::with_runtime(true, runtime.clone());
+        let show_middle = MutableState::with_runtime(true, runtime);
 
         rule.set_content({
             move || {

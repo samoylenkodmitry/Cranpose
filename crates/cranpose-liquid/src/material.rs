@@ -3234,7 +3234,7 @@ mod tests {
         };
         let dynamics = GlassDynamics {
             activity: Some(1.0),
-            morph: Some(morph.clone()),
+            morph: Some(morph),
             ..Default::default()
         };
         let RenderEffect::Shader { shader } = resolved.backdrop_effect(2.0, dynamics) else {

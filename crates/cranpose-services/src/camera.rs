@@ -1301,7 +1301,7 @@ mod tests {
         assert_eq!(camera_lenses(), published);
         assert_eq!(
             *seen.lock().unwrap_or_else(PoisonError::into_inner),
-            vec![CameraLenses::default(), published.clone()],
+            vec![CameraLenses::default(), published],
             "the current list arrives at once, and a repeat is not re-delivered"
         );
 

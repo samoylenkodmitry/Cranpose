@@ -1090,7 +1090,7 @@ fn LazyColumnImpl(
         let mut current = config_cell.borrow_mut();
         let changed = *current != config;
         if changed {
-            *current = config.clone();
+            *current = config;
         }
         changed
     };
@@ -1104,12 +1104,11 @@ fn LazyColumnImpl(
     });
     let overscroll = motion_context.overscroll();
 
-    let content_for_policy = content_cell.clone();
     let measured_item_cache_for_policy = measured_item_cache.clone();
     let overscroll_for_policy = overscroll.clone();
     let policy: Rc<MeasurePolicy> = cranpose_core::remember(move || {
         let config_ref = config_cell.clone();
-        let content_ref = content_for_policy.clone();
+        let content_ref = content_cell.clone();
         let measured_item_cache = measured_item_cache_for_policy.clone();
         let overscroll = overscroll_for_policy.clone();
         let policy: Rc<MeasurePolicy> = Rc::new(
@@ -1210,7 +1209,7 @@ fn LazyRowImpl(
         let mut current = config_cell.borrow_mut();
         let changed = *current != config;
         if changed {
-            *current = config.clone();
+            *current = config;
         }
         changed
     };
@@ -1224,12 +1223,11 @@ fn LazyRowImpl(
     });
     let overscroll = motion_context.overscroll();
 
-    let content_for_policy = content_cell.clone();
     let measured_item_cache_for_policy = measured_item_cache.clone();
     let overscroll_for_policy = overscroll.clone();
     let policy: Rc<MeasurePolicy> = cranpose_core::remember(move || {
         let config_ref = config_cell.clone();
-        let content_ref = content_for_policy.clone();
+        let content_ref = content_cell.clone();
         let measured_item_cache = measured_item_cache_for_policy.clone();
         let overscroll = overscroll_for_policy.clone();
         let policy: Rc<MeasurePolicy> = Rc::new(

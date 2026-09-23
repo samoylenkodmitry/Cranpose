@@ -189,7 +189,7 @@ impl Default for MutableInteractionSource {
 #[composable]
 pub fn rememberMutableInteractionSource() -> MutableInteractionSource {
     let runtime = with_current_composer(|composer| composer.runtime_handle());
-    remember(move || MutableInteractionSource::with_runtime(runtime.clone())).with(|source| *source)
+    remember(move || MutableInteractionSource::with_runtime(runtime)).with(|source| *source)
 }
 
 /// Free-function form of

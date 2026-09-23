@@ -107,7 +107,6 @@ mod tests {
         let captured = Rc::new(RefCell::new(None));
         {
             let captured = Rc::clone(&captured);
-            let local = local.clone();
             run_test_composition(move || {
                 let captured = Rc::clone(&captured);
                 let local = local.clone();

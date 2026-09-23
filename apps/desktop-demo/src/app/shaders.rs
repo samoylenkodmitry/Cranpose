@@ -674,7 +674,6 @@ fn RotationAndTransformOriginCard(checkerboard: ImageBitmap, preview_w: f32, pre
             .padding(8.0),
         BoxSpec::default(),
         move || {
-            let panel_bitmap_outer = panel_bitmap.clone();
             let rotation_z_value = rotation_z.get();
             let origin_x_value = origin_x.get();
             let origin_y_value = origin_y.get();
@@ -685,7 +684,7 @@ fn RotationAndTransformOriginCard(checkerboard: ImageBitmap, preview_w: f32, pre
                 BoxSpec::default(),
                 {
                     let board = checkerboard.clone();
-                    let panel_bitmap = panel_bitmap_outer.clone();
+                    let panel_bitmap = panel_bitmap.clone();
                     move || {
                         Image(
                             board.clone(),
@@ -812,8 +811,6 @@ fn RotationAndCameraDistanceCard(checkerboard: ImageBitmap, preview_w: f32, prev
             .padding(8.0),
         BoxSpec::default(),
         move || {
-            let near_bitmap_outer = near_bitmap.clone();
-            let far_bitmap_outer = far_bitmap.clone();
             let near_distance_value = near_distance.get();
             let far_distance_value = far_distance.get();
             Box(
@@ -823,8 +820,8 @@ fn RotationAndCameraDistanceCard(checkerboard: ImageBitmap, preview_w: f32, prev
                 BoxSpec::default(),
                 {
                     let board = checkerboard.clone();
-                    let near_bitmap = near_bitmap_outer.clone();
-                    let far_bitmap = far_bitmap_outer.clone();
+                    let near_bitmap = near_bitmap.clone();
+                    let far_bitmap = far_bitmap.clone();
                     move || {
                         Image(
                             board.clone(),
@@ -971,8 +968,6 @@ fn ShapeAndClipCard(checkerboard: ImageBitmap, preview_w: f32, preview_h: f32) {
             .padding(8.0),
         BoxSpec::default(),
         move || {
-            let panel_bitmap_outer = panel_bitmap.clone();
-            let overflow_badge_outer = overflow_badge.clone();
             let corner_radius_value = corner_radius.get();
             let overflow_x_value = overflow_x.get();
             let overflow_y_value = overflow_y.get();
@@ -983,8 +978,8 @@ fn ShapeAndClipCard(checkerboard: ImageBitmap, preview_w: f32, preview_h: f32) {
                 BoxSpec::default(),
                 {
                     let board = checkerboard.clone();
-                    let panel_bitmap = panel_bitmap_outer.clone();
-                    let overflow_badge = overflow_badge_outer.clone();
+                    let panel_bitmap = panel_bitmap.clone();
+                    let overflow_badge = overflow_badge.clone();
                     move || {
                         Image(
                             board.clone(),
@@ -1184,7 +1179,6 @@ fn ShadowFieldsCard(checkerboard: ImageBitmap, preview_w: f32, preview_h: f32) {
             .padding(8.0),
         BoxSpec::default(),
         move || {
-            let panel_bitmap_outer = panel_bitmap.clone();
             let corner_radius_value = corner_radius.get();
             Box(
                 Modifier::empty()
@@ -1193,7 +1187,7 @@ fn ShadowFieldsCard(checkerboard: ImageBitmap, preview_w: f32, preview_h: f32) {
                 BoxSpec::default(),
                 {
                     let board = checkerboard.clone();
-                    let panel_bitmap = panel_bitmap_outer.clone();
+                    let panel_bitmap = panel_bitmap.clone();
                     move || {
                         Image(
                             board.clone(),
@@ -2147,10 +2141,9 @@ fn NestedLayerEventDemo(
             }),
         BoxSpec::default(),
         {
-            let board = checkerboard.clone();
             move || {
                 Image(
-                    board.clone(),
+                    checkerboard.clone(),
                     None,
                     Modifier::empty().size_points(area_w, area_h),
                     Alignment::CENTER,

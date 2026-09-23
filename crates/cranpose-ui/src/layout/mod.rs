@@ -1506,7 +1506,7 @@ impl LayoutBuilderState {
         let composer = Composer::new(
             Rc::clone(&slots_host),
             applier_host_dyn,
-            runtime_handle.clone(),
+            runtime_handle,
             observer,
             Some(node_id),
         );

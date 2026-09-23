@@ -360,7 +360,7 @@ fn WinampNativeWindows(
                 scaled(PLAYLIST_HEIGHT, scale),
             ),
             {
-                let pledit = skin.pledit.clone();
+                let pledit = skin.pledit;
                 move || {
                     PlaylistWindow(pledit.clone(), state, WinampDragTarget::NativeGroup, scale);
                 }
@@ -449,7 +449,7 @@ pub fn WinampStandaloneApp() {
             .with_resizable(true)
             .with_min_size(PLAYLIST_WIDTH, PLAYLIST_HEIGHT),
             {
-                let pledit = skin.pledit.clone();
+                let pledit = skin.pledit;
                 move || {
                     PlaylistWindow(
                         pledit.clone(),

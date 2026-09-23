@@ -49,7 +49,6 @@ fn SwipeRows() {
         list_state,
         LazyColumnSpec::default(),
         move |scope| {
-            let style = style.clone();
             scope.items(5, move |index| {
                 let style = style.clone();
                 SwipeToDismiss(

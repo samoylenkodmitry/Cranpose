@@ -160,7 +160,7 @@ fn test_switching_between_views_doesnt_duplicate_content() {
     let counter1 = MutableState::with_runtime(0, runtime.clone());
     let counter2 = MutableState::with_runtime(0, runtime.clone());
     let render_count1 = MutableState::with_runtime(0, runtime.clone());
-    let render_count2 = MutableState::with_runtime(0, runtime.clone());
+    let render_count2 = MutableState::with_runtime(0, runtime);
 
     rule.set_content({
         move || {
@@ -292,7 +292,7 @@ fn test_node_cleanup_on_view_switch() {
     let mut rule = ComposeTestRule::new();
     let runtime = rule.runtime_handle();
 
-    let show_first = MutableState::with_runtime(true, runtime.clone());
+    let show_first = MutableState::with_runtime(true, runtime);
 
     rule.set_content({
         move || {
@@ -359,7 +359,7 @@ fn test_multiple_switches_with_state_changes() {
 
     let show_view_a = MutableState::with_runtime(true, runtime.clone());
     let counter_a = MutableState::with_runtime(0, runtime.clone());
-    let counter_b = MutableState::with_runtime(0, runtime.clone());
+    let counter_b = MutableState::with_runtime(0, runtime);
 
     rule.set_content({
         move || {
@@ -474,7 +474,7 @@ fn test_deeply_nested_conditional_switching() {
     let runtime = rule.runtime_handle();
 
     let show_outer = MutableState::with_runtime(true, runtime.clone());
-    let show_inner = MutableState::with_runtime(true, runtime.clone());
+    let show_inner = MutableState::with_runtime(true, runtime);
 
     rule.set_content({
         move || {
@@ -530,7 +530,7 @@ fn test_switching_with_different_node_counts() {
     let mut rule = ComposeTestRule::new();
     let runtime = rule.runtime_handle();
 
-    let view_type = MutableState::with_runtime(0, runtime.clone());
+    let view_type = MutableState::with_runtime(0, runtime);
 
     rule.set_content({
         move || {
@@ -603,7 +603,7 @@ fn test_conditional_with_complex_button_structure() {
     let runtime = rule.runtime_handle();
 
     let show_first = MutableState::with_runtime(true, runtime.clone());
-    let counter = MutableState::with_runtime(0, runtime.clone());
+    let counter = MutableState::with_runtime(0, runtime);
 
     rule.set_content({
         move || {
@@ -695,7 +695,7 @@ fn test_clicking_same_switch_button_twice_no_duplication() {
     let mut rule = ComposeTestRule::new();
     let runtime = rule.runtime_handle();
 
-    let show_counter = MutableState::with_runtime(true, runtime.clone());
+    let show_counter = MutableState::with_runtime(true, runtime);
 
     rule.set_content({
         move || {
@@ -821,7 +821,7 @@ fn test_composition_local_content(local_holder: cranpose_core::CompositionLocal<
         height: 8.0,
     });
 
-    test_composition_local_content_inner(local_holder.clone());
+    test_composition_local_content_inner(local_holder);
 
     Spacer(Size {
         width: 0.0,
@@ -892,7 +892,7 @@ fn test_composition_local_demo(
             CompositionLocalProvider(vec![local_holder.provides(current_count)], {
                 let local_holder = local_holder.clone();
                 move || {
-                    test_composition_local_content(local_holder.clone());
+                    test_composition_local_content(local_holder);
                 }
             });
         },
@@ -907,11 +907,10 @@ fn composition_local_increment_keeps_node_count_stable() {
     let mut rule = ComposeTestRule::new();
     let runtime = rule.runtime_handle();
 
-    let counter = MutableState::with_runtime(0, runtime.clone());
+    let counter = MutableState::with_runtime(0, runtime);
     let local_holder = compositionLocalOf(|| 0);
 
     rule.set_content({
-        let local_holder = local_holder.clone();
         move || {
             test_composition_local_demo(counter, local_holder.clone());
         }

@@ -981,17 +981,20 @@ fn SortFilterStage(suggestion_offset: f32) {
                                 )),
                                 {
                                     let anchor_sink = std::rc::Rc::clone(&anchor_sink);
-                                    let pill_gesture = column_gesture.clone();
                                     move || {
                                         let pill_open = pill_open;
                                         let pill_press = cranpose_animation::animateFloatAsState(
-                                            if pill_gesture.is_pressed() { 1.0 } else { 0.0 },
+                                            if column_gesture.is_pressed() {
+                                                1.0
+                                            } else {
+                                                0.0
+                                            },
                                             cranpose_animation::spring(1.0, 600.0),
                                             "sortfilter-pill-press",
                                         );
                                         let pill = liquid_menu_trigger_input(
                                             Modifier::empty(),
-                                            pill_gesture.clone(),
+                                            column_gesture.clone(),
                                             move || pill_open.set(true),
                                         )
                                         .graphics_layer(move || {
@@ -1026,7 +1029,7 @@ fn SortFilterStage(suggestion_offset: f32) {
                                                 .highlight(0.0)
                                                 .no_clip(),
                                             {
-                                                let glow_gesture = pill_gesture.clone();
+                                                let glow_gesture = column_gesture.clone();
                                                 let glow_rect = std::rc::Rc::clone(&anchor_sink);
                                                 move || {
                                                     let press = if glow_gesture.is_pressed() {

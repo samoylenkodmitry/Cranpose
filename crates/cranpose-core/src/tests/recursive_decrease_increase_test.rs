@@ -28,7 +28,7 @@ fn count_groups(composition: &Composition<MemoryApplier>) -> usize {
 fn recursive_decrease_increase_preserves_structure() {
     let mut composition = test_composition();
     let runtime = composition.runtime_handle();
-    let depth_state = MutableState::with_runtime(3usize, runtime.clone());
+    let depth_state = MutableState::with_runtime(3usize, runtime);
 
     let key = location_key(file!(), line!(), column!());
 
@@ -118,7 +118,7 @@ fn recursive_decrease_increase_preserves_structure() {
 fn recursive_decrease_increase_multiple_cycles() {
     let mut composition = test_composition();
     let runtime = composition.runtime_handle();
-    let depth_state = MutableState::with_runtime(3usize, runtime.clone());
+    let depth_state = MutableState::with_runtime(3usize, runtime);
 
     let key = location_key(file!(), line!(), column!());
 

@@ -775,7 +775,6 @@ pub fn liquid_menu_trigger_input(
     }
 
     modifier.pointer_input(gesture.id(), {
-        let gesture = gesture.clone();
         let gate = Rc::clone(&gate);
         let on_open = Rc::clone(&on_open);
         move |scope: PointerInputScope| {
@@ -901,7 +900,6 @@ pub fn LiquidMenuIconButton(
     let input = Modifier::empty()
         .size(Size::new(diameter, diameter))
         .pointer_input(gesture.id(), {
-            let gesture = gesture.clone();
             let gate = Rc::clone(&gate);
             let on_open = Rc::clone(&on_open);
             move |scope: PointerInputScope| {
@@ -1237,13 +1235,9 @@ pub fn LiquidMenu(
         ),
         move || scrim_dismiss(),
         {
-            let absorbed = absorbed.clone();
-            let items = items.clone();
-            let typography = typography.clone();
             let on_item = Rc::clone(&on_item);
             let on_dismiss = Rc::clone(&on_dismiss);
             let node_size = Rc::clone(&node_size);
-            let gesture = gesture.clone();
             move || {
                 let anchor_center = (
                     menu_width - anchor.width * 0.5 + MENU_SHADOW_PAD,

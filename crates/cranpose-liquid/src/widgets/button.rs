@@ -417,7 +417,7 @@ pub fn GlassButtonLabel(text: impl Into<String>, spec: GlassButtonSpec) {
             color: Some(color),
             ..typography.headline.span_style.clone()
         },
-        ..typography.headline.clone()
+        ..typography.headline
     };
     Text(text.into(), Modifier::empty(), style);
 }

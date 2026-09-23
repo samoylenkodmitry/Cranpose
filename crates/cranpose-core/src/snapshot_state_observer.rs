@@ -1148,7 +1148,7 @@ mod tests {
 
         let scope = TestScope("scope");
         observer.observe_reads(
-            scope.clone(),
+            scope,
             move |_| {
                 observer_trigger.set(observer_trigger.get() + 1);
             },
@@ -1242,7 +1242,7 @@ mod tests {
 
         let scope = TestScope("scope");
         observer.observe_reads(
-            scope.clone(),
+            scope,
             move |_| {
                 observer_trigger.set(observer_trigger.get() + 1);
             },
@@ -1352,7 +1352,7 @@ mod tests {
         let outer_scope = TestScope("outer");
         let inner_scope = TestScope("inner");
         observer.observe_reads(
-            outer_scope.clone(),
+            outer_scope,
             {
                 let outer_triggered = Rc::clone(&outer_triggered);
                 move |_| outer_triggered.set(outer_triggered.get() + 1)
@@ -1454,7 +1454,7 @@ mod tests {
             },
         );
         observer.observe_reads(
-            second_scope.clone(),
+            second_scope,
             {
                 let second_triggered = Rc::clone(&second_triggered);
                 move |_| second_triggered.set(second_triggered.get() + 1)

@@ -101,12 +101,14 @@ dbg_macro = "deny"
 clone_on_copy = "deny"
 redundant_locals = "deny"
 
-# Work the code asks for and then throws away: a default computed on the path
-# that does not use it, a copy spelled as a clone, a fresh allocation where the
-# destination's could be reused. `redundant_clone`, `needless_collect` and
-# `iter_with_drain` stay off: here a clone's last use keeps a handle alive
-# that a subscriber registry holds only weakly, a collect ends a RefCell borrow
-# before re-entrant calls, and `drain(..)` keeps a scratch buffer's capacity.
+# Work the code asks for and then throws away: a clone nobody needed, a default
+# computed on the path that does not use it, a copy spelled as a clone, a fresh
+# allocation where the destination's could be reused. A clone is only ever
+# redundant here because no API keeps a caller's handle alive for it: whatever
+# a registry needs, it owns. `needless_collect` and `iter_with_drain` stay off:
+# a collect ends a RefCell borrow before re-entrant calls, and `drain(..)`
+# keeps a scratch buffer's capacity.
+redundant_clone = "warn"
 or_fun_call = "warn"
 cloned_instead_of_copied = "warn"
 assigning_clones = "warn"

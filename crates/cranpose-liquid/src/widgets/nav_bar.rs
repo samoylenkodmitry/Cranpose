@@ -70,7 +70,7 @@ pub fn LiquidNavBar(
     let scroll_offset = scroll.value();
 
     let progress = (scroll_offset / spec.collapse_range.max(1.0)).clamp(0.0, 1.0);
-    let title = spec.title.clone();
+    let title = spec.title;
 
     Box(modifier, BoxSpec::default(), move || {
         let large_alpha = (1.0 - progress * 1.6).clamp(0.0, 1.0);

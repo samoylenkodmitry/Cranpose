@@ -268,7 +268,7 @@ fn assert_box_with_constraints_branch_toggle<F>(
 {
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
-    let show_thread = cranpose_core::MutableState::with_runtime(false, runtime.clone());
+    let show_thread = cranpose_core::MutableState::with_runtime(false, runtime);
     let render_state = show_thread;
 
     composition
@@ -397,7 +397,6 @@ fn PrimitiveLazyColumnWithScrollIndicator(
     list_state: LazyListState,
     captures: CapturedLazyListSlot,
 ) {
-    let captures = captures.clone();
     Row(
         Modifier::empty().fill_max_width().weight(1.0),
         RowSpec::new().horizontal_arrangement(LinearArrangement::SpacedBy(8.0)),
@@ -1007,7 +1006,7 @@ fn box_with_constraints_restored_lazy_list_branch_keeps_host_generation_during_s
     let _app_context = crate::render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
-    let selected_story = cranpose_core::MutableState::with_runtime(None::<u64>, runtime.clone());
+    let selected_story = cranpose_core::MutableState::with_runtime(None::<u64>, runtime);
     let captures = CapturedLazyListSlot::new();
 
     composition
@@ -1029,10 +1028,7 @@ fn box_with_constraints_restored_lazy_list_branch_keeps_host_generation_during_s
                                         Modifier::empty().fill_max_width().weight(1.0),
                                     );
                                 } else {
-                                    PrimitiveScrollReactiveStoriesBranch(
-                                        list_state,
-                                        captures.clone(),
-                                    );
+                                    PrimitiveScrollReactiveStoriesBranch(list_state, captures);
                                 }
                             });
                         }
@@ -1077,7 +1073,7 @@ fn box_with_constraints_restored_weighted_lazy_list_branch_keeps_host_generation
     let _app_context = crate::render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
-    let selected_story = cranpose_core::MutableState::with_runtime(None::<u64>, runtime.clone());
+    let selected_story = cranpose_core::MutableState::with_runtime(None::<u64>, runtime);
     let captures = CapturedLazyListSlot::new();
 
     composition
@@ -1105,7 +1101,7 @@ fn box_with_constraints_restored_weighted_lazy_list_branch_keeps_host_generation
                                         PrimitiveStoriesPaneWithIndicator(
                                             Modifier::empty().fill_max_width().weight(1.0),
                                             list_state,
-                                            captures.clone(),
+                                            captures,
                                         );
                                     }
                                 });
@@ -1153,7 +1149,7 @@ fn box_with_constraints_restored_weighted_lazy_list_branch_keeps_host_during_sta
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
     let selected_story = cranpose_core::MutableState::with_runtime(None::<u64>, runtime.clone());
-    let loaded_count = cranpose_core::MutableState::with_runtime(20usize, runtime.clone());
+    let loaded_count = cranpose_core::MutableState::with_runtime(20usize, runtime);
     let captures = CapturedLazyListSlot::new();
 
     composition
@@ -1182,7 +1178,7 @@ fn box_with_constraints_restored_weighted_lazy_list_branch_keeps_host_during_sta
                                             Modifier::empty().fill_max_width().weight(1.0),
                                             list_state,
                                             loaded_count,
-                                            captures.clone(),
+                                            captures,
                                         );
                                     }
                                 });
@@ -1224,7 +1220,7 @@ fn box_with_constraints_restored_weighted_branch_after_header_toggle_keeps_host_
     let _app_context = crate::render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
-    let selected_story = cranpose_core::MutableState::with_runtime(None::<u64>, runtime.clone());
+    let selected_story = cranpose_core::MutableState::with_runtime(None::<u64>, runtime);
     let captures = CapturedLazyListSlot::new();
 
     composition
@@ -1252,7 +1248,7 @@ fn box_with_constraints_restored_weighted_branch_after_header_toggle_keeps_host_
                                         PrimitiveStoriesPaneWithIndicator(
                                             Modifier::empty().fill_max_width().weight(1.0),
                                             list_state,
-                                            captures.clone(),
+                                            captures,
                                         );
                                     }
                                 });

@@ -4603,7 +4603,7 @@ mod tests {
             stroke: None,
         };
         for primitive in [
-            backdrop.clone(),
+            backdrop,
             text_draw_primitive(
                 Rect {
                     x: 0.0,

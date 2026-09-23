@@ -34,7 +34,6 @@ fn TrimmableList(dropped: MutableState<usize>) {
             .vertical_arrangement(LinearArrangement::spaced_by(12.0)),
         move |scope| {
             let bodies = visible.clone();
-            let keys = keys.clone();
             scope.item(|| {
                 Text(
                     "Header".to_string(),

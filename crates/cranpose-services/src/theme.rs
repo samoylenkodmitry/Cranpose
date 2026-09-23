@@ -292,14 +292,13 @@ mod tests {
         {
             let captured = Rc::clone(&captured);
             let local_for_provider = local.clone();
-            let local_for_read = local.clone();
             run_test_composition(move || {
                 let captured = Rc::clone(&captured);
-                let local_for_read = local_for_read.clone();
+                let local = local.clone();
                 CompositionLocalProvider(
                     vec![local_for_provider.provides(SystemTheme::Dark)],
                     move || {
-                        *captured.borrow_mut() = Some(local_for_read.current());
+                        *captured.borrow_mut() = Some(local.current());
                     },
                 );
             });
@@ -315,7 +314,6 @@ mod tests {
 
         {
             let captured = Rc::clone(&captured);
-            let local = local.clone();
             run_test_composition(move || {
                 let captured = Rc::clone(&captured);
                 let local = local.clone();

@@ -31,7 +31,7 @@ fn remember_keyed_recomputes_on_key_change_only() {
     let runtime = rule.runtime_handle();
     let init_runs = Rc::new(Cell::new(0u32));
     let seen = Rc::new(Cell::new(0usize));
-    let key = MutableState::with_runtime("chevron", runtime.clone());
+    let key = MutableState::with_runtime("chevron", runtime);
 
     rule.set_content({
         let init_runs = Rc::clone(&init_runs);

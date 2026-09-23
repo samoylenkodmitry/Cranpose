@@ -301,7 +301,7 @@ mod tests {
         assert_eq!(plain.body, "3 of 12 pages");
         assert_eq!(plain.deeplink, None);
 
-        let ongoing = plain.clone().ongoing(true);
+        let ongoing = plain.ongoing(true);
         assert!(ongoing.ongoing);
         assert!(!ongoing.ongoing(false).ongoing);
     }

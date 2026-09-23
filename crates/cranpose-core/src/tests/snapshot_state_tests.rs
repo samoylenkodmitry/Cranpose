@@ -122,7 +122,7 @@ fn stats_watchers_survive_conditional_toggle() {
     let mut composition = test_composition();
     let runtime = composition.runtime_handle();
     let toggle = MutableState::with_runtime(true, runtime.clone());
-    let stats = MutableState::with_runtime(0i32, runtime.clone());
+    let stats = MutableState::with_runtime(0i32, runtime);
 
     let mut render = { move || anchor_progress_content(toggle, stats) };
 
@@ -214,7 +214,7 @@ fn state_subscriber_callback_tracks_first_live_scope() {
 fn a_subscription_hold_keeps_an_unobserved_state_subscribed() {
     let runtime = TestRuntime::new();
     let handle = runtime.handle();
-    let state = MutableState::with_runtime(0i32, handle.clone());
+    let state = MutableState::with_runtime(0i32, handle);
     assert!(!state.as_state().has_subscribers());
 
     let hold = state.as_state().subscription_hold();

@@ -139,7 +139,7 @@ impl StateArena {
             }
         };
         let id = StateId::new(slot, generation);
-        let inner = MutableStateInner::new_with_policy(value, runtime.clone(), policy);
+        let inner = MutableStateInner::new_with_policy(value, runtime, policy);
         inner.install_snapshot_observer(id);
         let typed_cell = Rc::new(TypedStateCell { inner });
         let cell: Rc<dyn Any> = typed_cell.clone();

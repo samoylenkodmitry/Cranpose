@@ -793,7 +793,6 @@ fn launch_comment_thread(
         state.set(ThreadState::Loading(story.clone()));
         let client = client.clone();
         let story_for_load = story.clone();
-        let story_for_error = story.clone();
 
         scope.launch_background(
             move |token| async move {
@@ -804,10 +803,7 @@ fn launch_comment_thread(
             },
             move |result| match result {
                 Ok(data) => state.set(ThreadState::Success(data)),
-                Err(message) => state.set(ThreadState::Error {
-                    story: story_for_error,
-                    message,
-                }),
+                Err(message) => state.set(ThreadState::Error { story, message }),
             },
         );
     });
@@ -828,7 +824,6 @@ fn launch_load_more_comments(
                 if data.is_loading_more || !data.has_more() {
                     return;
                 }
-                let data = data.clone();
                 state.set(ThreadState::Success(data.clone().with_loading_more(true)));
                 data
             }
@@ -838,14 +833,13 @@ fn launch_load_more_comments(
         let expected_story_id = data.story.id;
         let expected_loaded_count = data.loaded_count();
         let client = client.clone();
-        let data_for_load = data.clone();
 
         scope.launch_background(
             move |token| async move {
                 if token.is_cancelled() {
                     return Err("Cancelled".to_string());
                 }
-                load_comment_page(&client, data_for_load, COMMENT_PAGE_SIZE).await
+                load_comment_page(&client, data, COMMENT_PAGE_SIZE).await
             },
             move |result| match result {
                 Ok(updated) => {
@@ -1200,7 +1194,6 @@ fn StoryItem<F>(
             14.0,
         )
         .semantics({
-            let semantics_id = semantics_id.clone();
             move |config: &mut SemanticsConfiguration| {
                 config.content_description = Some(semantics_id.clone());
             }
@@ -1389,7 +1382,6 @@ fn StoriesPane(
                                 });
                             }
                             NewsState::Error(message) => {
-                                let message = message.clone();
                                 scope.item_keyed(Some(0), None, move || {
                                     StatusCard(
                                         Modifier::empty().fill_max_width(),
@@ -1436,7 +1428,6 @@ fn StoriesPane(
                                 );
 
                                 scope.item_keyed(Some(STORY_LIST_FOOTER_KEY), None, {
-                                    let data = data.clone();
                                     move || {
                                         if data.has_more() {
                                             if data.is_loading_more {
@@ -1577,7 +1568,7 @@ fn CommentRow(comment: CommentEntry, palette: HackerNewsPalette) {
     let body = if comment.body.is_empty() {
         "[empty comment]".to_string()
     } else {
-        comment.body.clone()
+        comment.body
     };
 
     Column(
@@ -1754,10 +1745,7 @@ fn ThreadPane(
                     }
                     ThreadState::Success(data) => {
                         let story_key = story.id;
-                        let story_for_list = story.clone();
                         cranpose_core::with_key(&story_key, {
-                            let data = data.clone();
-                            let story = story_for_list.clone();
                             move || {
                                 let comment_list_state =
                                     cranpose_foundation::lazy::rememberLazyListState();
@@ -1777,7 +1765,6 @@ fn ThreadPane(
                                         let data = data.clone();
                                         move || {
                                             let comments = Arc::new(data.comments.clone());
-                                            let data_for_items = data.clone();
                                             LazyColumn(
                                                 Modifier::empty().fill_max_size().semantics(
                                                     |config: &mut SemanticsConfiguration| {
@@ -1794,7 +1781,7 @@ fn ThreadPane(
                                                     .content_padding(4.0, 4.0),
                                                 {
                                                     let comments = Arc::clone(&comments);
-                                                    let data = data_for_items.clone();
+                                                    let data = data.clone();
                                                     let story = story.clone();
                                                     move |scope| {
                                                         scope.item_keyed(

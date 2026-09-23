@@ -226,7 +226,7 @@ mod tests {
 
         let mut assets = AssetManager::with_root(&first);
         assets.add_root(&second);
-        assert_eq!(assets.roots(), &[first.clone(), second.clone()]);
+        assert_eq!(assets.roots(), &[first, second.clone()]);
 
         assert_eq!(
             assets.load_bytes("shared.txt").expect("shared").as_ref(),

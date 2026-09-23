@@ -755,7 +755,7 @@ fn MarkdownBlocksList(
         spec,
         move |scope| {
             use cranpose_foundation::lazy::LazyListScopeExt;
-            scope.items_indexed_rc(blocks.clone(), |_index, block| match block {
+            scope.items_indexed_rc(blocks, |_index, block| match block {
                 MarkdownBlock::Text(annotated) => render_text_block(annotated.clone()),
                 MarkdownBlock::Image { url, alt } => {
                     MarkdownImage(url.clone(), alt.clone());
@@ -787,14 +787,13 @@ fn render_markdown_blocks_with_state(
     blocks: Rc<[MarkdownBlock]>,
     list_state: cranpose_foundation::lazy::LazyListState,
 ) {
-    let blocks_for_list = blocks.clone();
     LazyListWithScrollbar(
         Modifier::empty().fill_max_size(),
         list_state,
         "MarkdownScrollbarRail",
         markdown_scrollbar_style(),
         move || {
-            MarkdownBlocksList(list_state, blocks_for_list.clone());
+            MarkdownBlocksList(list_state, blocks.clone());
         },
     );
 }
@@ -908,7 +907,7 @@ fn MarkdownImage(url: String, alt: String) {
     let http_client = local_http_client().current();
 
     let effect_url = url.clone();
-    cranpose_core::LaunchedEffect(url.clone(), move |scope| {
+    cranpose_core::LaunchedEffect(url, move |scope| {
         if let Some(bitmap) = cached_image(&effect_url) {
             state.set(ImageState::Ready(bitmap));
             return;

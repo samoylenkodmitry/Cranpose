@@ -111,7 +111,7 @@ fn SegmentLabel(label: String, selected: bool) {
             }),
             ..typography.subheadline.span_style.clone()
         },
-        ..typography.subheadline.clone()
+        ..typography.subheadline
     };
     Text(label, Modifier::empty(), style);
 }

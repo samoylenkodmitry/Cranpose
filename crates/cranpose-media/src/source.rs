@@ -138,7 +138,7 @@ mod tests {
         });
 
         cancel.cancel();
-        cancel.clone().cancel();
+        cancel.cancel();
 
         assert_eq!(stopped.load(std::sync::atomic::Ordering::Relaxed), 2);
     }

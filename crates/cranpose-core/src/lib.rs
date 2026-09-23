@@ -1298,12 +1298,11 @@ where
                     state.run_cleanup();
                     state.set_key(key);
                 });
-                let state_for_effect = state.clone();
                 let mut effect_opt = Some(effect);
                 composer.register_side_effect(move || {
                     if let Some(effect) = effect_opt.take() {
                         let result = effect(DisposableEffectScope);
-                        state_for_effect.update(|state| state.set_cleanup(result.into_cleanup()));
+                        state.update(|state| state.set_cleanup(result.into_cleanup()));
                     }
                 });
             }

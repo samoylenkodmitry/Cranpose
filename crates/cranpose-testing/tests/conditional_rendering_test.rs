@@ -50,7 +50,7 @@ fn test_conditional_inside_closure_works() {
     let mut rule = ComposeTestRule::new();
     let runtime = rule.runtime_handle();
 
-    let counter = MutableState::with_runtime(0, runtime.clone());
+    let counter = MutableState::with_runtime(0, runtime);
 
     eprintln!("\n=== Testing CORRECT pattern (conditional inside closure) ===");
     rule.set_content({

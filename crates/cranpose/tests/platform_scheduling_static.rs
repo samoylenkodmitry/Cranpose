@@ -680,12 +680,12 @@ fn web_first_frame_is_forced_through_surface_dirty() {
     );
     assert!(
         source.contains(
-            "let present_required = surface_present_required(\n            surface_dirty_for_loop.get(),\n            update_result.visual_changed,\n            app.borrow().needs_redraw(),\n        );"
+            "let present_required = surface_present_required(\n            surface_dirty.get(),\n            update_result.visual_changed,\n            app.borrow().needs_redraw(),\n        );"
         ),
         "web render loop must gate the present through the shared surface_present_required helper"
     );
     assert!(
-        source.contains("surface_dirty_for_loop.set(false);"),
+        source.contains("surface_dirty.set(false);"),
         "web surface_dirty must be cleared only after a successful present"
     );
 }

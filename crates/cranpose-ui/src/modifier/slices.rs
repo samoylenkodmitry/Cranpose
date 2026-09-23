@@ -364,12 +364,9 @@ impl ModifierNodeSlices {
         self.graphics_layer = Some(next_snapshot);
         self.graphics_layer_resolver = match (existing_resolver, resolver) {
             (None, None) => None,
-            (Some(current_resolver), None) => {
-                let layer = layer.clone();
-                Some(Rc::new(move || {
-                    merge_graphics_layers(current_resolver(), layer.clone())
-                }))
-            }
+            (Some(current_resolver), None) => Some(Rc::new(move || {
+                merge_graphics_layers(current_resolver(), layer.clone())
+            })),
             (None, Some(next_resolver)) => {
                 let base = existing_snapshot.unwrap_or_default();
                 Some(Rc::new(move || {

@@ -65,7 +65,7 @@ fn test_manual_state_change_triggers_recomposition() {
     let mut rule = ComposeTestRule::new();
     let runtime = rule.runtime_handle();
 
-    let pointer_position = MutableState::with_runtime(Point { x: 0.0, y: 0.0 }, runtime.clone());
+    let pointer_position = MutableState::with_runtime(Point { x: 0.0, y: 0.0 }, runtime);
 
     eprintln!("\n=== Initial composition ===");
     rule.set_content({
@@ -148,7 +148,7 @@ fn test_correct_pattern_reads_state_at_draw_time() {
     let mut rule = ComposeTestRule::new();
     let runtime = rule.runtime_handle();
 
-    let pointer_position = MutableState::with_runtime(Point { x: 0.0, y: 0.0 }, runtime.clone());
+    let pointer_position = MutableState::with_runtime(Point { x: 0.0, y: 0.0 }, runtime);
 
     eprintln!("\n=== Initial composition (correct pattern) ===");
     rule.set_content({

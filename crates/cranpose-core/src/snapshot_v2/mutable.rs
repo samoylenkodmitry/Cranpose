@@ -661,7 +661,7 @@ mod tests {
         let mock_state = Arc::new(MockStateObject);
 
         snapshot.record_write(mock_state.clone());
-        snapshot.record_write(mock_state.clone());
+        snapshot.record_write(mock_state);
 
         assert_eq!(*write_count.lock().unwrap(), 1);
     }

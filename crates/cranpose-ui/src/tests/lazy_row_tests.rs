@@ -108,7 +108,7 @@ fn lazy_row_updates_scroll_bounds_when_item_count_grows_without_scrolling() {
     let _app_context = crate::render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
-    let item_count = MutableState::with_runtime(2usize, runtime.clone());
+    let item_count = MutableState::with_runtime(2usize, runtime);
     let captured_state = Rc::new(RefCell::new(None));
     let call_count = Rc::new(Cell::new(0));
 

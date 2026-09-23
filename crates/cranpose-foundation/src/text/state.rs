@@ -430,10 +430,10 @@ impl TextFieldState {
                     self.inner()
                         .borrow()
                         .pending_undo_snapshot
-                        .replace(Some(current.clone()));
+                        .replace(Some(current));
                 } else {
                     if inner.pending_undo_snapshot.borrow().is_none() {
-                        inner.pending_undo_snapshot.replace(Some(current.clone()));
+                        inner.pending_undo_snapshot.replace(Some(current));
                     }
                     drop(inner);
                     self.inner().borrow_mut().redo_stack.clear();

@@ -192,7 +192,7 @@ fn cached_measurement_node_ids_are_registered_in_one_batch() {
         Rc::clone(&policy),
     )));
     let (composer, slots_host, applier_host) =
-        setup_composer(&mut slots, &mut applier, handle.clone(), Some(node_id));
+        setup_composer(&mut slots, &mut applier, handle, Some(node_id));
     composer.enter_phase(Phase::Measure);
     let node_handle = {
         let mut applier_ref = applier_host.borrow_typed();
@@ -283,7 +283,7 @@ fn retained_measurements_skip_cached_batch_registration() {
         Rc::clone(&policy),
     )));
     let (composer, slots_host, applier_host) =
-        setup_composer(&mut slots, &mut applier, handle.clone(), Some(node_id));
+        setup_composer(&mut slots, &mut applier, handle, Some(node_id));
     composer.enter_phase(Phase::Measure);
     let node_handle = {
         let mut applier_ref = applier_host.borrow_typed();

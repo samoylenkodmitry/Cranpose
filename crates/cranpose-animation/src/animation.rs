@@ -714,7 +714,7 @@ impl InfiniteTransition {
                 initial_for_remember,
                 target_for_remember,
                 spec_for_remember,
-                runtime.clone(),
+                runtime,
             ))
         })
         .with(Rc::clone);
