@@ -40,6 +40,7 @@ pub struct AppContext {
     text: crate::text::measure::TextService,
     layout_frame_arena: RefCell<crate::layout::FrameLayoutArena>,
     layout_cache_epoch: AtomicU64,
+    layout_cache_floor: AtomicU64,
     last_fling_velocity_bits: AtomicU32,
     scroll_motion_contexts: crate::scroll::ScrollMotionContextStore,
     layout_node_registry: crate::widgets::nodes::layout_node::LayoutNodeRegistryState,
@@ -209,6 +210,7 @@ impl AppContext {
             text: crate::text::measure::TextService::new(),
             layout_frame_arena: RefCell::new(crate::layout::FrameLayoutArena::default()),
             layout_cache_epoch: AtomicU64::new(1),
+            layout_cache_floor: AtomicU64::new(0),
             last_fling_velocity_bits: AtomicU32::new(0.0f32.to_bits()),
             scroll_motion_contexts: crate::scroll::ScrollMotionContextStore::new(),
             layout_node_registry: crate::widgets::nodes::layout_node::LayoutNodeRegistryState::new(
@@ -270,9 +272,14 @@ impl AppContext {
 
     pub fn set_text_measurer_rc(&self, measurer: Rc<dyn crate::text::TextMeasurer>) {
         self.text.set_measurer(measurer);
-        self.layout_cache_epoch.fetch_add(1, Ordering::Relaxed);
+        self.invalidate_layout_caches();
         self.state.layout_invalidated.store(true, Ordering::Relaxed);
         self.state.render_invalidated.store(true, Ordering::Relaxed);
+    }
+
+    fn invalidate_layout_caches(&self) {
+        let floor = self.layout_cache_epoch.fetch_add(1, Ordering::Relaxed) + 1;
+        self.layout_cache_floor.store(floor, Ordering::Relaxed);
     }
 
     #[doc(hidden)]
@@ -444,8 +451,7 @@ pub(crate) fn replace_layout_frame_arena(arena: crate::layout::FrameLayoutArena)
 }
 
 pub(crate) fn invalidate_layout_cache_epoch() {
-    let context = require_current_app_context("layout cache epoch access");
-    context.layout_cache_epoch.fetch_add(1, Ordering::Relaxed);
+    require_current_app_context("layout cache epoch access").invalidate_layout_caches();
 }
 
 pub(crate) fn next_layout_cache_epoch() -> u64 {
@@ -456,6 +462,11 @@ pub(crate) fn next_layout_cache_epoch() -> u64 {
 pub(crate) fn current_layout_cache_epoch() -> u64 {
     let context = require_current_app_context("layout cache epoch access");
     context.layout_cache_epoch.load(Ordering::Relaxed)
+}
+
+pub(crate) fn layout_cache_floor() -> u64 {
+    let context = require_current_app_context("layout cache epoch access");
+    context.layout_cache_floor.load(Ordering::Relaxed)
 }
 
 pub(crate) fn record_last_fling_velocity(velocity: f32) {
@@ -708,12 +719,8 @@ fn lock_repass_manager<T>(manager: &Mutex<T>) -> MutexGuard<'_, T> {
 /// via `bubble_layout_dirty`. This gives you **O(subtree) performance** - only the affected
 /// subtree is remeasured, and layout caches for other parts of the app remain valid.
 ///
-/// # Implementation Note
-///
-/// This sets the `LAYOUT_INVALIDATED` flag to signal the app shell there's work to do,
-/// but the flag alone does NOT trigger global cache invalidation. The app shell checks
-/// `take_layout_repass_nodes()` first and processes scoped repasses. Global cache invalidation
-/// only happens if the flag is set AND there are no scoped repasses (a rare fallback case).
+/// A scoped repass never invalidates the whole tree, and it never cancels a global
+/// invalidation requested for the same frame.
 ///
 /// # For Global Invalidation
 ///
@@ -732,7 +739,6 @@ pub fn schedule_layout_repass(node_id: NodeId) {
     }
     with_render_state(|state| {
         lock_repass_manager(&state.layout_repasses).schedule_repass(node_id);
-        state.layout_invalidated.store(true, Ordering::Relaxed);
     });
     request_render_invalidation();
 }
@@ -833,7 +839,6 @@ pub fn take_layout_repass_nodes() -> Vec<NodeId> {
 pub fn schedule_measure_repass(node_id: NodeId) {
     with_render_state(|state| {
         lock_repass_manager(&state.measure_repasses).schedule_repass(node_id);
-        state.layout_invalidated.store(true, Ordering::Relaxed);
     });
     request_render_invalidation();
 }

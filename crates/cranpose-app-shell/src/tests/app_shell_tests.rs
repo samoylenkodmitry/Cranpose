@@ -28,6 +28,9 @@ use cranpose_ui_graphics::{
 
 use super::*;
 
+#[path = "global_layout_invalidation_tests.rs"]
+mod global_layout_invalidation_tests;
+
 #[path = "inspector_shell_tests.rs"]
 mod inspector_shell_tests;
 

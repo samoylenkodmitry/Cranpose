@@ -1255,6 +1255,7 @@ struct LayoutBuilderState {
     runtime_handle: Option<RuntimeHandle>,
     slots: Rc<RefCell<SlotTable>>,
     cache_epoch: u64,
+    cache_floor: u64,
     frame_arena: FrameLayoutArena,
 }
 
@@ -1288,6 +1289,7 @@ impl LayoutBuilderState {
             runtime_handle,
             slots,
             cache_epoch: epoch,
+            cache_floor: crate::render_state::layout_cache_floor(),
             frame_arena,
         }
     }
@@ -1854,9 +1856,9 @@ impl LayoutBuilderState {
         snapshot: LayoutNodeSnapshot,
         constraints: Constraints,
     ) -> Result<Rc<MeasuredNode>, NodeError> {
-        let cache_epoch = {
+        let (cache_epoch, cache_floor) = {
             let state = state_rc.borrow();
-            state.cache_epoch
+            (state.cache_epoch, state.cache_floor)
         };
         let LayoutNodeSnapshot {
             measure_policy,
@@ -1927,8 +1929,8 @@ impl LayoutBuilderState {
                     continue;
                 };
 
-                let child_is_dirty = data.needs_layout || data.needs_measure;
-                let child_cache_epoch = if child_is_dirty {
+                let child_is_stale = data.is_stale(cache_floor);
+                let child_cache_epoch = if child_is_stale {
                     cache_epoch
                 } else {
                     data.cache.epoch()
@@ -1941,7 +1943,7 @@ impl LayoutBuilderState {
                     runtime_handle: runtime_handle.clone(),
                     cache: data.cache,
                     cache_epoch: child_cache_epoch,
-                    force_remeasure: child_is_dirty,
+                    force_remeasure: child_is_stale,
                     measure_handle: Some(measure_handle.clone()),
                     layout_state: data.layout_state,
                 });
@@ -2041,6 +2043,12 @@ struct LayoutChildMeasureData {
     layout_state: Option<Rc<RefCell<LayoutState>>>,
     needs_layout: bool,
     needs_measure: bool,
+}
+
+impl LayoutChildMeasureData {
+    fn is_stale(&self, cache_floor: u64) -> bool {
+        self.needs_layout || self.needs_measure || self.cache.epoch() < cache_floor
+    }
 }
 
 struct LayoutNodeSnapshot {

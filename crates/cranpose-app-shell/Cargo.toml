@@ -37,6 +37,7 @@ web-time = { workspace = true }
 [dev-dependencies]
 # Path-only dev-dep: stripped from the published manifest (publish order ignores dev edges).
 cranpose-macros = { path = "../cranpose-macros" }
+cranpose-ui-layout = { workspace = true }
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android"), not(target_os = "ios")))'.dependencies]
 arboard = { version = "3.6", default-features = false, optional = true }

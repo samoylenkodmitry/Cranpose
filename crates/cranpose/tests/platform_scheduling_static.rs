@@ -4397,7 +4397,7 @@ fn every_platform_reports_the_display_options_and_the_framework_acts_on_them() {
             && desktop.contains("\"reg\"")
             && desktop.contains("CRANPOSE_REDUCE_MOTION")
             && crate_source("src/desktop_accessibility.rs")
-                .contains("OptionsProbe::start(!robot_drives)"),
+                .contains("OptionsProbe::start(\n                !robot_drives,"),
         "the desktop asks macOS, GNOME and Windows, takes an environment override, and leaves the host alone under a robot"
     );
     let animation = workspace_source("crates/cranpose-animation/src/animation.rs");

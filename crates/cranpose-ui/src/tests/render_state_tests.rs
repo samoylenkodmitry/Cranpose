@@ -112,6 +112,30 @@ fn the_font_scale_starts_at_one_and_invalidates_layout_when_it_moves() {
 }
 
 #[test]
+fn scoped_repasses_neither_request_nor_cancel_a_global_layout_invalidation() {
+    let context = AppContext::new();
+    context.enter(|| {
+        let _ = take_layout_invalidation();
+
+        schedule_layout_repass(3);
+        schedule_measure_repass(4);
+        assert!(
+            !peek_layout_invalidation(),
+            "a scoped repass must not re-measure the whole tree"
+        );
+        assert!(has_pending_layout_repasses());
+        assert!(has_pending_measure_repasses());
+
+        set_font_scale(1.5);
+        schedule_layout_repass(5);
+        assert!(
+            take_layout_invalidation(),
+            "a scoped repass must not swallow the font scale change"
+        );
+    });
+}
+
+#[test]
 fn a_font_scale_no_platform_reports_is_refused() {
     let context = AppContext::new();
     context.enter(|| {
