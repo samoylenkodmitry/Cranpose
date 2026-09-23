@@ -1,16 +1,19 @@
 use std::{
     cell::RefCell,
-    collections::VecDeque,
     marker::PhantomData,
     rc::Rc,
-    sync::{Arc, Condvar, Mutex, OnceLock},
+    sync::{Arc, OnceLock},
     thread::{self, ThreadId},
 };
-
-use crate::{
-    clock::{Clock, SystemClock},
-    sync::lock,
+#[cfg(not(target_arch = "wasm32"))]
+use std::{
+    collections::VecDeque,
+    sync::{Condvar, Mutex},
 };
+
+use crate::clock::{Clock, SystemClock};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::sync::lock;
 
 /// Runs scheduled coroutine steps somewhere: a thread pool, a UI event loop or
 /// a test queue.
@@ -121,41 +124,61 @@ impl ConfinedDispatcher {
 /// The shared dispatchers every application gets — Kotlin's `Dispatchers`.
 ///
 /// There is no `main` here: the UI framework owns the main thread and provides
-/// its [`ConfinedDispatcher`].
+/// its [`ConfinedDispatcher`]. In the browser there are no threads, so both
+/// pools run their coroutines as tasks on the page's event loop; blocking work
+/// dispatched to [`io`](Dispatchers::io) there blocks the page.
 pub struct Dispatchers;
 
 impl Dispatchers {
     /// A pool sized to the machine's parallelism, for CPU-bound work.
     pub fn default_pool() -> Dispatcher {
         static POOL: OnceLock<Dispatcher> = OnceLock::new();
-        POOL.get_or_init(|| {
-            let threads = thread::available_parallelism().map_or(4, |count| count.get());
-            ThreadPool::start("coroflow-default", threads)
-        })
-        .clone()
+        POOL.get_or_init(|| pool("coroflow-default", parallelism()))
+            .clone()
     }
 
     /// A larger pool for work that blocks on I/O.
     pub fn io() -> Dispatcher {
         static POOL: OnceLock<Dispatcher> = OnceLock::new();
-        POOL.get_or_init(|| {
-            let threads = thread::available_parallelism()
-                .map_or(4, |count| count.get())
-                .max(IO_POOL_MIN_THREADS);
-            ThreadPool::start("coroflow-io", threads)
-        })
-        .clone()
+        POOL.get_or_init(|| pool("coroflow-io", parallelism().max(IO_POOL_MIN_THREADS)))
+            .clone()
     }
 }
 
 /// The smallest number of threads [`Dispatchers::io`] starts with.
 pub const IO_POOL_MIN_THREADS: usize = 16;
 
+fn parallelism() -> usize {
+    thread::available_parallelism().map_or(1, |count| count.get())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn pool(name: &str, threads: usize) -> Dispatcher {
+    ThreadPool::start(name, threads)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn pool(_name: &str, _threads: usize) -> Dispatcher {
+    Dispatcher::new(EventLoopExecutor, SystemClock::shared())
+}
+
+#[cfg(target_arch = "wasm32")]
+struct EventLoopExecutor;
+
+#[cfg(target_arch = "wasm32")]
+impl Dispatch for EventLoopExecutor {
+    fn dispatch(&self, runnable: Runnable) {
+        wasm_bindgen_futures::spawn_local(async move { runnable.run() });
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 struct ThreadPool {
     queue: Mutex<VecDeque<Runnable>>,
     available: Condvar,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl ThreadPool {
     fn start(name: &str, threads: usize) -> Dispatcher {
         let pool = Arc::new(ThreadPool {
@@ -193,10 +216,12 @@ impl ThreadPool {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 struct PoolExecutor {
     pool: Arc<ThreadPool>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Dispatch for PoolExecutor {
     fn dispatch(&self, runnable: Runnable) {
         lock(&self.pool.queue).push_back(runnable);

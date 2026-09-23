@@ -1,14 +1,20 @@
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::{Condvar, Mutex};
 use std::{
     cmp::{Ordering, Reverse},
     collections::BinaryHeap,
     future::Future,
     pin::Pin,
-    sync::{Arc, Condvar, Mutex, OnceLock},
+    sync::{Arc, OnceLock},
     task::{Context, Poll, Waker},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
-use crate::{dispatcher::current_dispatcher, sync::lock};
+use web_time::Instant;
+
+use crate::dispatcher::current_dispatcher;
+#[cfg(not(target_arch = "wasm32"))]
+use crate::sync::lock;
 
 /// A monotonic time source that can wake a task at a deadline.
 ///
@@ -81,9 +87,11 @@ impl TimerHeap {
 
 /// The wall-clock [`Clock`] used by [`Dispatchers`](crate::Dispatchers).
 ///
-/// One background thread serves every deadline in the process.
+/// On native targets one background thread serves every deadline in the
+/// process; in the browser each deadline is a `setTimeout`.
 pub struct SystemClock {
     started: Instant,
+    #[cfg(not(target_arch = "wasm32"))]
     timers: Arc<(Mutex<TimerHeap>, Condvar)>,
 }
 
@@ -91,29 +99,36 @@ impl SystemClock {
     /// The process-wide system clock.
     pub fn shared() -> Arc<dyn Clock> {
         static SHARED: OnceLock<Arc<SystemClock>> = OnceLock::new();
-        let clock = SHARED.get_or_init(|| {
-            let clock = Arc::new(SystemClock {
-                started: Instant::now(),
-                timers: Arc::new((Mutex::new(TimerHeap::default()), Condvar::new())),
-            });
-            clock.start_thread();
-            clock
-        });
+        let clock = SHARED.get_or_init(|| Arc::new(SystemClock::start()));
         Arc::clone(clock) as Arc<dyn Clock>
     }
 
-    fn start_thread(&self) {
-        let timers = Arc::clone(&self.timers);
-        let started = self.started;
+    #[cfg(not(target_arch = "wasm32"))]
+    fn start() -> Self {
+        let clock = SystemClock {
+            started: Instant::now(),
+            timers: Arc::new((Mutex::new(TimerHeap::default()), Condvar::new())),
+        };
+        let timers = Arc::clone(&clock.timers);
+        let started = clock.started;
         let spawned = std::thread::Builder::new()
             .name("coroflow-timer".into())
             .spawn(move || run_timer_thread(&timers, started));
         if let Err(error) = spawned {
             log::error!("coroflow: the timer thread could not start: {error}");
         }
+        clock
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn start() -> Self {
+        SystemClock {
+            started: Instant::now(),
+        }
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn run_timer_thread(timers: &(Mutex<TimerHeap>, Condvar), started: Instant) {
     let (heap, changed) = timers;
     let mut due = Vec::new();
@@ -152,10 +167,33 @@ impl Clock for SystemClock {
         self.started.elapsed()
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn wake_at(&self, deadline: Duration, waker: &Waker) {
         let (heap, changed) = &*self.timers;
         lock(heap).push(deadline, waker);
         changed.notify_one();
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn wake_at(&self, deadline: Duration, waker: &Waker) {
+        use wasm_bindgen::JsCast;
+        let millis = deadline
+            .saturating_sub(self.now())
+            .as_millis()
+            .min(i32::MAX as u128) as i32;
+        let waker = waker.clone();
+        let callback = wasm_bindgen::closure::Closure::once_into_js(move || waker.wake());
+        let scheduled = web_sys::window().and_then(|window| {
+            window
+                .set_timeout_with_callback_and_timeout_and_arguments_0(
+                    callback.unchecked_ref(),
+                    millis,
+                )
+                .ok()
+        });
+        if scheduled.is_none() {
+            log::error!("coroflow: no browser timer is available; a delay will never end");
+        }
     }
 }
 

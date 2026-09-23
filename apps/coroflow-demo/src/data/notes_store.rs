@@ -1,6 +1,5 @@
 use std::{
     sync::atomic::{AtomicU64, Ordering},
-    thread,
     time::Duration,
 };
 
@@ -10,8 +9,9 @@ use crate::domain::model::{Note, NoteId, NotesError};
 
 /// An in-memory table standing in for a database.
 ///
-/// Every write blocks for `write_latency`, the way a disk write would, so the
-/// repository must call it from the I/O dispatcher.
+/// On native targets every write blocks for `write_latency`, the way a disk
+/// write would, so the repository must call it from the I/O dispatcher. A
+/// browser has no blocking storage, so there writes return at once.
 pub struct NotesStore {
     rows: MutableStateFlow<Vec<Note>>,
     next_id: AtomicU64,
@@ -29,6 +29,16 @@ impl NotesStore {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    fn wait_for_disk(&self) {
+        std::thread::sleep(self.write_latency);
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn wait_for_disk(&self) {
+        let _ = self.write_latency;
+    }
+
     /// The table's rows, updated after every write.
     pub fn observe(&self) -> StateFlow<Vec<Note>> {
         self.rows.as_state_flow()
@@ -36,7 +46,7 @@ impl NotesStore {
 
     /// Inserts a note, blocking for the write.
     pub fn insert(&self, title: String) -> Note {
-        thread::sleep(self.write_latency);
+        self.wait_for_disk();
         let note = Note {
             id: NoteId(self.next_id.fetch_add(1, Ordering::Relaxed)),
             title,
@@ -52,7 +62,7 @@ impl NotesStore {
 
     /// Pins or unpins a note, blocking for the write.
     pub fn set_pinned(&self, id: NoteId, pinned: bool) -> Result<(), NotesError> {
-        thread::sleep(self.write_latency);
+        self.wait_for_disk();
         let mut found = false;
         self.rows.update(|rows| {
             found = rows.iter().any(|note| note.id == id);
@@ -72,7 +82,7 @@ impl NotesStore {
 
     /// Deletes a note, blocking for the write.
     pub fn delete(&self, id: NoteId) -> Result<Note, NotesError> {
-        thread::sleep(self.write_latency);
+        self.wait_for_disk();
         let mut removed = None;
         self.rows.update(|rows| {
             let mut rows = rows.clone();

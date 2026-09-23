@@ -1,0 +1,34 @@
+[package]
+name = "coroflow-demo-web"
+description = "Browser entry point of the Coroflow Notes demo."
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false
+
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[features]
+default = ["web"]
+web = ["cranpose/web", "cranpose/renderer-wgpu", "coroflow-demo/renderer-wgpu"]
+
+[dependencies]
+coroflow-demo = { path = "..", default-features = false }
+cranpose = { workspace = true, features = ["embedded-default-font"] }
+log = "0.4"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+console_error_panic_hook = "0.1"
+getrandom = { version = "0.3.4", features = ["wasm_js"] }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4.71"
+wasm-logger = "0.2"

@@ -867,6 +867,10 @@ dependencies = [
  "pollster",
  "stats_alloc",
  "thiserror 2.0.18",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "web-time",
 ]
 
 [[package]]
@@ -884,6 +888,20 @@ dependencies = [
  "image",
  "log",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "coroflow-demo-web"
+version = "0.1.157"
+dependencies = [
+ "console_error_panic_hook",
+ "coroflow-demo",
+ "cranpose",
+ "getrandom 0.3.4",
+ "log",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "wasm-logger",
 ]
 
 [[package]]

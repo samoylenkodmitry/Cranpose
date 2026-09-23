@@ -30,6 +30,7 @@ members = [
     "crates/coroflow",
     "crates/cranpose-coroflow",
     "apps/coroflow-demo",
+    "apps/coroflow-demo/web",
 ]
 resolver = "2"
 

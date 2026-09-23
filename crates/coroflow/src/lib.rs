@@ -19,6 +19,11 @@
 //! | `runTest`, `advanceTimeBy` | [`TestScheduler`] |
 //! | Turbine's `flow.test { awaitItem() }` | [`Turbine`] |
 //!
+//! It needs no async runtime. On native targets [`Dispatchers`] are thread
+//! pools and [`SystemClock`] is one timer thread; in the browser both run on the
+//! page's event loop and timers are `setTimeout`s. Any other executor, such as
+//! tokio or a UI toolkit's main loop, plugs in by implementing [`Dispatch`].
+//!
 //! Three things differ on purpose. A coroutine is cancelled by dropping its
 //! future, so there is no `isActive` to check. Whether a flow or coroutine may
 //! cross threads is inferred by the compiler from what it captures: background
