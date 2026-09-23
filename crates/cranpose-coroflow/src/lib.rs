@@ -6,7 +6,7 @@
 //! | Android | Cranpose |
 //! |---|---|
 //! | `Dispatchers.Main` | [`main_dispatcher`] |
-//! | `viewModel { }` + `viewModelScope` | [`rememberViewModel`] |
+//! | `viewModel { }` + `viewModelScope` | [`rememberViewModel`], a `Copy` [`Handle`] |
 //! | `StateFlow.collectAsState()` | [`StateFlowCollect::collectAsState`] |
 //! | `collectAsStateWithLifecycle()` | [`StateFlowCollect::collectAsStateWithLifecycle`] |
 //! | `LaunchedEffect(key) { flow.collect { } }` | [`CollectFlow`] |
@@ -19,5 +19,7 @@ mod hooks;
 mod snapshot_flow;
 
 pub use dispatcher::main_dispatcher;
-pub use hooks::{CollectFlow, StateFlowCollect, collects_in, rememberViewModel};
+pub use hooks::{
+    CollectFlow, Handle, StateFlowCollect, collects_in, rememberHandle, rememberViewModel,
+};
 pub use snapshot_flow::{SnapshotFlow, SnapshotRun, snapshotFlow};

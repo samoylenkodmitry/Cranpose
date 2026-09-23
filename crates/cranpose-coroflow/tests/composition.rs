@@ -13,7 +13,7 @@ mod support;
 use coroflow::{FlowExt, MainScope, MutableSharedFlow, MutableStateFlow, StateFlow};
 use cranpose_core::{Composition, MemoryApplier, mutableStateOf, remember};
 use cranpose_coroflow::{
-    CollectFlow, StateFlowCollect, main_dispatcher, rememberViewModel, snapshotFlow,
+    CollectFlow, Handle, StateFlowCollect, main_dispatcher, rememberViewModel, snapshotFlow,
 };
 use support::{PATIENCE, QUIET_PERIOD, composition, pump_for, pump_until};
 
@@ -129,7 +129,7 @@ impl CounterViewModel {
 fn a_remembered_view_model_survives_recomposition_and_is_cleared_on_removal() {
     let mut composition = composition();
     let dropped = Arc::new(AtomicUsize::new(0));
-    let models: Rc<RefCell<Vec<Rc<CounterViewModel>>>> = Rc::default();
+    let models: Rc<RefCell<Vec<Handle<CounterViewModel>>>> = Rc::default();
     let seen = Rc::new(RefCell::new(Vec::new()));
     let render = {
         let (dropped, models, seen) = (Arc::clone(&dropped), Rc::clone(&models), Rc::clone(&seen));
@@ -141,7 +141,8 @@ fn a_remembered_view_model_survives_recomposition_and_is_cleared_on_removal() {
                     let dropped = Arc::clone(&dropped);
                     let model =
                         rememberViewModel(move |scope| CounterViewModel::new(scope, dropped));
-                    seen.borrow_mut().push(model.count().collectAsState().get());
+                    seen.borrow_mut()
+                        .push(model.get().count().collectAsState().get());
                     models.borrow_mut().push(model);
                 })
                 .expect("render");
@@ -153,11 +154,9 @@ fn a_remembered_view_model_survives_recomposition_and_is_cleared_on_removal() {
     second(&mut composition);
     {
         let models = models.borrow();
-        assert!(
-            Rc::ptr_eq(&models[0], &models[1]),
-            "one view model per position"
-        );
-        models[0].increment();
+        assert!(models[0] == models[1], "one view model per position");
+        assert!(Rc::ptr_eq(&models[0].get(), &models[1].get()));
+        models[0].get().increment();
     }
     assert!(pump_until(&mut composition, render, || seen
         .borrow()

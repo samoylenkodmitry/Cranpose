@@ -1,19 +1,21 @@
 use cranpose::prelude::*;
-use cranpose_coroflow::StateFlowCollect;
+use cranpose_coroflow::{Handle, StateFlowCollect};
 
-use super::{
-    Handle,
-    theme::{PALETTE, body, caption, heading},
-};
+use super::theme::{PALETTE, body, caption, heading};
 use crate::{di::AppContainer, presentation::notes_view_model::NotesViewModel};
 
 /// Live view of which upstreams are running, and why.
 #[composable]
 pub fn DiagnosticsScreen(container: Handle<AppContainer>, view_model: Handle<NotesViewModel>) {
-    let ui_running = view_model.ui_upstream_running().collectAsState().get();
-    let sync_running = container.sync_running().collectAsState().get();
-    let sync_starts = container.sync_starts().collectAsState().get();
-    let requests = container.catalog_stats().collectAsState().get();
+    let ui_running = view_model
+        .get()
+        .ui_upstream_running()
+        .collectAsState()
+        .get();
+    let graph = container.get();
+    let sync_running = graph.sync_running().collectAsState().get();
+    let sync_starts = graph.sync_starts().collectAsState().get();
+    let requests = graph.catalog_stats().collectAsState().get();
 
     Column(
         Modifier::empty().fill_max_size().padding(16.0),

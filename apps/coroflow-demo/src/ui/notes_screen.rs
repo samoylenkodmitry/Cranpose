@@ -2,13 +2,10 @@ use std::time::Duration;
 
 use coroflow::{FlowExt, flow};
 use cranpose::prelude::*;
-use cranpose_coroflow::{CollectFlow, StateFlowCollect, snapshotFlow};
+use cranpose_coroflow::{CollectFlow, Handle, StateFlowCollect, snapshotFlow};
 use cranpose_foundation::text::TextFieldState;
 
-use super::{
-    Handle,
-    theme::{PALETTE, body, caption},
-};
+use super::theme::{PALETTE, body, caption};
 use crate::{
     domain::model::{CatalogResults, Note, NotesList, SyncStatus},
     presentation::notes_view_model::{NotesEvent, NotesViewModel},
@@ -23,28 +20,34 @@ pub const MAX_VISIBLE_HITS: usize = 4;
 /// The notes screen: search, catalog results, the note list and the sync bar.
 #[composable]
 pub fn NotesScreen(view_model: Handle<NotesViewModel>) {
-    let state = view_model.ui_state().collectAsStateWithLifecycle().get();
+    let state = view_model
+        .get()
+        .ui_state()
+        .collectAsStateWithLifecycle()
+        .get();
     let search = remember(|| TextFieldState::new("")).with(|state| *state);
     let draft = remember(|| TextFieldState::new("")).with(|state| *state);
     let snackbar = rememberMutableStateOf(|| None::<String>);
 
-    let query_sink = view_model.clone();
     CollectFlow((), snapshotFlow(move || search.text()), move |text| {
-        query_sink.on_query_changed(text);
+        view_model.get().on_query_changed(text);
     });
     CollectFlow(
         (),
-        view_model.events().flat_map_latest(|event: NotesEvent| {
-            let message = event.message();
-            flow(move |emitter| {
-                let message = message.clone();
-                async move {
-                    emitter.emit(Some(message)).await;
-                    coroflow::delay(SNACKBAR_DURATION).await;
-                    emitter.emit(None).await;
-                }
-            })
-        }),
+        view_model
+            .get()
+            .events()
+            .flat_map_latest(|event: NotesEvent| {
+                let message = event.message();
+                flow(move |emitter| {
+                    let message = message.clone();
+                    async move {
+                        emitter.emit(Some(message)).await;
+                        coroflow::delay(SNACKBAR_DURATION).await;
+                        emitter.emit(None).await;
+                    }
+                })
+            }),
         move |message| snackbar.set(message),
     );
 
@@ -54,8 +57,8 @@ pub fn NotesScreen(view_model: Handle<NotesViewModel>) {
         move || {
             TextInput(search, "Search notes and the catalog…");
             CatalogPanel(state.catalog.clone());
-            NewNoteRow(draft, view_model.clone());
-            NotesColumn(state.notes.clone(), view_model.clone());
+            NewNoteRow(draft, view_model);
+            NotesColumn(state.notes.clone(), view_model);
             SyncBar(state.sync, state.notes.visible.len(), state.notes.total);
             if let Some(message) = snackbar.value() {
                 Snackbar(message);
@@ -162,9 +165,8 @@ fn NewNoteRow(draft: TextFieldState, view_model: Handle<NotesViewModel>) {
                     TextInput(draft, "New note…");
                 },
             );
-            let view_model = view_model.clone();
             ActionButton("Add", PALETTE.primary, move || {
-                view_model.on_add_note(draft.text());
+                view_model.get().on_add_note(draft.text());
                 draft.set_text("");
             });
         },
@@ -196,7 +198,7 @@ fn NotesColumn(notes: NotesList, view_model: Handle<NotesViewModel>) {
             let items = rows.clone();
             scope.items(
                 LazyItems::new(items.len()).key(move |index| keys[index].id.0),
-                move |index| NoteRow(items[index].clone(), view_model.clone()),
+                move |index| NoteRow(items[index].clone(), view_model),
             );
         },
     );
@@ -214,7 +216,6 @@ fn NoteRow(note: Note, view_model: Handle<NotesViewModel>) {
             .horizontal_arrangement(LinearArrangement::spaced_by(8.0))
             .vertical_alignment(VerticalAlignment::CenterVertically),
         move || {
-            let pin_target = view_model.clone();
             let pinned_note = note.clone();
             ActionButton(
                 if note.pinned { "Unpin" } else { "Pin" },
@@ -223,17 +224,16 @@ fn NoteRow(note: Note, view_model: Handle<NotesViewModel>) {
                 } else {
                     PALETTE.raised
                 },
-                move || pin_target.on_toggle_pinned(pinned_note.clone()),
+                move || view_model.get().on_toggle_pinned(pinned_note.clone()),
             );
             Text(
                 note.title.clone(),
                 Modifier::empty().weight(1.0),
                 body(PALETTE.text),
             );
-            let delete_target = view_model.clone();
             let id = note.id;
             ActionButton("Delete", PALETTE.danger, move || {
-                delete_target.on_delete(id);
+                view_model.get().on_delete(id);
             });
         },
     );

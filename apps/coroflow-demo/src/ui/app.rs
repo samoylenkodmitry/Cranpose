@@ -1,11 +1,8 @@
-use std::rc::Rc;
-
 use cranpose::prelude::*;
-use cranpose_coroflow::rememberViewModel;
+use cranpose_coroflow::{rememberHandle, rememberViewModel};
 use cranpose_ui::widgets::{PaddingValues, Scaffold};
 
 use super::{
-    Handle,
     diagnostics_screen::DiagnosticsScreen,
     notes_screen::{ActionButton, NotesScreen},
     theme::{PALETTE, caption, heading},
@@ -43,18 +40,11 @@ pub fn create_app() -> AppLauncher {
 /// for the whole window, and switches between the two screens.
 #[composable]
 pub fn CoroflowDemoApp() {
-    let container = remember(|| {
-        Rc::new(AppContainer::new(
-            AppDispatchers::standard(),
-            AppConfig::interactive(),
-        ))
-    })
-    .with(Rc::clone);
-    let graph = Rc::clone(&container);
-    let view_model = Handle(rememberViewModel(move |scope| {
-        NotesViewModel::new(scope, graph.notes_use_cases())
-    }));
-    let container = Handle(container);
+    let container =
+        rememberHandle(|| AppContainer::new(AppDispatchers::standard(), AppConfig::interactive()));
+    let view_model = rememberViewModel(move |scope| {
+        NotesViewModel::new(scope, container.get().notes_use_cases())
+    });
     let tab = rememberMutableStateOf(|| Tab::Notes);
 
     Scaffold(
@@ -64,13 +54,12 @@ pub fn CoroflowDemoApp() {
         || TopBar(),
         move || TabBar(tab),
         move |padding: PaddingValues| {
-            let (container, view_model) = (container.clone(), view_model.clone());
             Box(
                 padding.apply_to(Modifier::empty().fill_max_size()),
                 BoxSpec::default(),
                 move || match tab.value() {
-                    Tab::Notes => NotesScreen(view_model.clone()),
-                    Tab::Diagnostics => DiagnosticsScreen(container.clone(), view_model.clone()),
+                    Tab::Notes => NotesScreen(view_model),
+                    Tab::Diagnostics => DiagnosticsScreen(container, view_model),
                 },
             );
         },

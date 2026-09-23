@@ -1,10 +1,56 @@
 use std::{cell::RefCell, rc::Rc};
 
 use coroflow::{Flow, FlowExt, MainScope, StateFlow};
-use cranpose_core::{OwnedMutableState, State, ownedMutableStateOf, remember};
+use cranpose_core::{
+    MutableState, OwnedMutableState, State, ownedMutableStateOf, ownedMutableStateOfNeverEqual,
+    remember,
+};
 use cranpose_services::{LifecycleState, rememberLifecycleState};
 
 use crate::dispatcher::require_main_dispatcher;
+
+/// A `Copy` handle to a value remembered for one position in the
+/// composition, such as a view model.
+///
+/// Because it is `Copy`, it moves into any number of `move` closures without a
+/// `clone()`: `move || view_model.get().on_add()`. Two handles are equal when
+/// they refer to the same remembered value, so a composable taking one skips
+/// while the value stays the same. The value lives as long as the position
+/// that remembered it.
+pub struct Handle<T: 'static> {
+    state: MutableState<Rc<T>>,
+}
+
+impl<T: 'static> Clone for Handle<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T: 'static> Copy for Handle<T> {}
+
+impl<T: 'static> PartialEq for Handle<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.state == other.state
+    }
+}
+
+impl<T: 'static> Handle<T> {
+    /// The remembered value. Reading it never subscribes the caller to
+    /// recomposition.
+    pub fn get(&self) -> Rc<T> {
+        self.state.get_non_reactive()
+    }
+}
+
+/// Remembers the value `init` builds for this position in the composition and
+/// returns a [`Handle`] to it.
+#[track_caller]
+pub fn rememberHandle<T: 'static>(init: impl FnOnce() -> T) -> Handle<T> {
+    remember(|| ownedMutableStateOfNeverEqual(Rc::new(init()))).with(|owned| Handle {
+        state: owned.handle(),
+    })
+}
 
 /// Remembers a view model for this position in the composition — Android's
 /// `viewModel { }`.
@@ -13,12 +59,8 @@ use crate::dispatcher::require_main_dispatcher;
 /// When this position leaves the composition the view model is dropped, which
 /// cancels everything it launched.
 #[track_caller]
-pub fn rememberViewModel<VM: 'static>(factory: impl FnOnce(MainScope) -> VM) -> Rc<VM> {
-    remember(|| {
-        let scope = MainScope::new(require_main_dispatcher("rememberViewModel"));
-        Rc::new(factory(scope))
-    })
-    .with(Rc::clone)
+pub fn rememberViewModel<VM: 'static>(factory: impl FnOnce(MainScope) -> VM) -> Handle<VM> {
+    rememberHandle(|| factory(MainScope::new(require_main_dispatcher("rememberViewModel"))))
 }
 
 struct StateCollection<T: Clone + 'static> {
