@@ -11,9 +11,10 @@ use image::RgbaImage;
 const WATCHDOG: Duration = Duration::from_secs(90);
 
 fn main() {
-    let output = std::env::var_os("COROFLOW_ROBOT_OUT")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("target/robot/coroflow-notes"));
+    let output = std::env::var_os("COROFLOW_ROBOT_OUT").map_or_else(
+        || PathBuf::from("target/robot/coroflow-notes"),
+        PathBuf::from,
+    );
     if let Err(error) = std::fs::create_dir_all(&output) {
         eprintln!("cannot create {}: {error}", output.display());
         std::process::exit(1);

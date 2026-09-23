@@ -93,7 +93,7 @@ where
             let waker = Rc::clone(&this.waker);
             let value = observer.observe_reads(
                 (),
-                move |_| {
+                move |()| {
                     changed.set(true);
                     if let Some(waker) = waker.borrow().as_ref() {
                         waker.wake_by_ref();

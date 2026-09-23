@@ -178,7 +178,9 @@ fn flow_on_runs_the_upstream_on_the_given_dispatcher() {
     let record = Arc::clone(&upstream_thread);
     let numbers = flow_of(vec![1, 2, 3])
         .on_each(move |_| {
-            *record.lock().unwrap_or_else(|poison| poison.into_inner()) =
+            *record
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) =
                 Some(std::thread::current().id());
         })
         .flow_on(coroflow::Dispatchers::default_pool());
@@ -186,7 +188,7 @@ fn flow_on_runs_the_upstream_on_the_given_dispatcher() {
     assert_eq!(collected, vec![1, 2, 3]);
     let recorded = *upstream_thread
         .lock()
-        .unwrap_or_else(|poison| poison.into_inner());
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     assert_ne!(recorded, Some(std::thread::current().id()));
     assert!(recorded.is_some());
 }
@@ -224,7 +226,9 @@ fn boxed_flows_erase_types_and_stay_re_runnable() {
     let local_boxed = flow_of(vec![1])
         .map(move |value| value + *local)
         .boxed_local();
-    assert_eq!(pollster::block_on(local_boxed.clone().to_vec()), vec![6]);
+    let shared = local_boxed.clone();
+    assert_eq!(pollster::block_on(local_boxed.to_vec()), vec![6]);
+    assert_eq!(pollster::block_on(shared.to_vec()), vec![6]);
 }
 
 #[test]

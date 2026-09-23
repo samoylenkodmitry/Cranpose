@@ -190,8 +190,7 @@ where
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
-        self.get_mut()
-            .poll_sharing(cx, |state, value| state.publish(value))
+        self.get_mut().poll_sharing(cx, StateFlow::publish)
     }
 }
 
@@ -202,8 +201,7 @@ where
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
-        self.get_mut()
-            .poll_sharing(cx, |events, value| events.emit(value))
+        self.get_mut().poll_sharing(cx, MutableSharedFlow::emit)
     }
 }
 

@@ -149,7 +149,7 @@ impl Dispatchers {
 pub const IO_POOL_MIN_THREADS: usize = 16;
 
 fn parallelism() -> usize {
-    thread::available_parallelism().map_or(1, |count| count.get())
+    thread::available_parallelism().map_or(1, std::num::NonZero::get)
 }
 
 #[cfg(not(target_arch = "wasm32"))]

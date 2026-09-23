@@ -198,9 +198,9 @@ impl Clock for SystemClock {
 }
 
 pub(crate) fn current_clock() -> Arc<dyn Clock> {
-    current_dispatcher()
-        .map(|dispatcher| Arc::clone(dispatcher.clock()))
-        .unwrap_or_else(SystemClock::shared)
+    current_dispatcher().map_or_else(SystemClock::shared, |dispatcher| {
+        Arc::clone(dispatcher.clock())
+    })
 }
 
 #[derive(Default)]

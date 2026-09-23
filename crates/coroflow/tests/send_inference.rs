@@ -34,14 +34,13 @@ impl Repository for InMemory {
 fn a_chain_over_plain_data_is_send_without_any_annotation() {
     let query = MutableStateFlow::new(String::new());
     let rows = MutableStateFlow::new(vec![1_u32, 2, 3]);
-    let rows_for_search = rows.clone();
     let chain = query
         .as_state_flow()
         .debounce(Duration::from_millis(300))
         .distinct_until_changed()
         .flat_map_latest(move |needle: String| {
             let length = needle.len() as u32;
-            rows_for_search.as_state_flow().map(move |all| {
+            rows.as_state_flow().map(move |all| {
                 all.into_iter()
                     .filter(|row| *row > length)
                     .collect::<Vec<_>>()

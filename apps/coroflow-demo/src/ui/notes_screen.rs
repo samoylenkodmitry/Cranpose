@@ -30,7 +30,7 @@ pub fn NotesScreen(view_model: Handle<NotesViewModel>) {
 
     let query_sink = view_model.clone();
     CollectFlow((), snapshotFlow(move || search.text()), move |text| {
-        query_sink.on_query_changed(text)
+        query_sink.on_query_changed(text);
     });
     CollectFlow(
         (),
@@ -194,7 +194,6 @@ fn NotesColumn(notes: NotesList, view_model: Handle<NotesViewModel>) {
         move |scope| {
             let keys = rows.clone();
             let items = rows.clone();
-            let view_model = view_model.clone();
             scope.items(
                 LazyItems::new(items.len()).key(move |index| keys[index].id.0),
                 move |index| NoteRow(items[index].clone(), view_model.clone()),
@@ -234,7 +233,7 @@ fn NoteRow(note: Note, view_model: Handle<NotesViewModel>) {
             let delete_target = view_model.clone();
             let id = note.id;
             ActionButton("Delete", PALETTE.danger, move || {
-                delete_target.on_delete(id)
+                delete_target.on_delete(id);
             });
         },
     );
