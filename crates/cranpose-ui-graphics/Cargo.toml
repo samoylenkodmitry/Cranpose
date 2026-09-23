@@ -22,6 +22,7 @@ workspace = true
 arrayvec = "0.7.8"
 bytemuck = { workspace = true }
 cursor-icon = { workspace = true }
+foldhash = "0.2.0"
 thiserror = "2.0.20"
 
 [features]
