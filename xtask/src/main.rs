@@ -402,6 +402,10 @@ struct DuplicateDebt {
 
 const WORKSPACE_DUPLICATE_DEBT: &[DuplicateDebt] = &[
     DuplicateDebt {
+        family: "base64",
+        reason: "reqwest 0.13.5 moved to ^0.23 while hyper-util 0.1.20 (latest) is still on ^0.22",
+    },
+    DuplicateDebt {
         family: "hashbrown",
         reason: "accesskit_consumer 0.39 and the macOS/Windows adapters require ^0.17; WGPU 29 and indexmap 2.13 require ^0.16; the accessibility fixes need this AccessKit release family",
     },
@@ -410,8 +414,12 @@ const WORKSPACE_DUPLICATE_DEBT: &[DuplicateDebt] = &[
         reason: "ndk 0.9.0 and ndk-sys 0.6.0 (latest) pin jni-sys ^0.3 while jni 0.22 is on ^0.4",
     },
     DuplicateDebt {
+        family: "miniz_oxide",
+        reason: "flate2 1.1.10 moved to ^0.9 while png 0.18.1 (latest) is still on ^0.8",
+    },
+    DuplicateDebt {
         family: "objc2",
-        reason: "accesskit_macos 0.27 holds objc2 0.5 while winit-appkit 0.31.0-beta.2 is on 0.6 (AccessKit/accesskit#616)",
+        reason: "accesskit_macos 0.27 holds objc2 0.5 while winit-appkit 0.31.0-beta.3 is on 0.6 (AccessKit/accesskit#616)",
     },
     DuplicateDebt {
         family: "objc2-app-kit",
@@ -420,6 +428,10 @@ const WORKSPACE_DUPLICATE_DEBT: &[DuplicateDebt] = &[
     DuplicateDebt {
         family: "objc2-foundation",
         reason: "follows the objc2 split via accesskit_macos 0.27",
+    },
+    DuplicateDebt {
+        family: "syn",
+        reason: "serde_derive, thiserror-impl 2, bytemuck_derive and wasm-bindgen-macro moved to syn 3 while async-recursion, jni-macros, num_enum_derive and zerocopy-derive (latest) are still on syn 2",
     },
     DuplicateDebt {
         family: "thiserror",
@@ -431,7 +443,7 @@ const WORKSPACE_DUPLICATE_DEBT: &[DuplicateDebt] = &[
     },
     DuplicateDebt {
         family: "windows-sys",
-        reason: "winit-win32 0.31.0-beta.2 pins ^0.59 and arboard 3.6.1 pins <0.61 while the rest of the graph is on 0.61",
+        reason: "tempfile 3.27 and rustls-platform-verifier 0.7 pin ^0.52 and arboard 3.6.1, dirs-sys 0.5 and socket2 0.6 pin ^0.60 while winit-win32 0.31.0-beta.3 and tokio are on 0.61",
     },
     DuplicateDebt {
         family: "windows-targets",

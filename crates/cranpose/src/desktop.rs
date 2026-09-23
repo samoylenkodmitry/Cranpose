@@ -640,6 +640,7 @@ struct App {
     primary_initial_present_pending: bool,
     vsync_interval: Duration,
     exiting: bool,
+    file_drops: crate::desktop_incoming::FileDrops,
     #[cfg(feature = "robot")]
     presented_frame_generation: u64,
     #[cfg(feature = "robot")]
@@ -712,6 +713,7 @@ impl App {
             primary_initial_present_pending: false,
             vsync_interval: default_vsync_interval(),
             exiting: false,
+            file_drops: crate::desktop_incoming::FileDrops::default(),
             #[cfg(feature = "robot")]
             presented_frame_generation: 0,
             #[cfg(feature = "robot")]
@@ -4913,12 +4915,13 @@ fn dispatch_mouse_wheel(
         false
     };
 
-    let wheel = crate::winit_wheel::wheel_scroll_from_winit(
-        platform.scroll_delta(delta),
-        current_modifiers,
-        wheel_uptime_millis(),
-    );
-    let scroll_dirty = surface.wheel_scrolled(wheel);
+    let scroll_dirty = platform.scroll_delta(delta).is_some_and(|logical_delta| {
+        surface.wheel_scrolled(crate::winit_wheel::wheel_scroll_from_winit(
+            logical_delta,
+            current_modifiers,
+            wheel_uptime_millis(),
+        ))
+    });
     cursor_dirty || scroll_dirty
 }
 
@@ -5077,6 +5080,7 @@ fn dispatch_ime_event(surface: &mut SurfaceMut<'_, WgpuRenderer>, ime_event: win
         } => {
             let _ = surface.on_ime_delete_surrounding(before_bytes, after_bytes);
         }
+        _ => {}
     }
 }
 
@@ -5395,10 +5399,10 @@ impl ApplicationHandler for App {
                 self.exiting = true;
                 event_loop.exit();
             }
-            WindowEvent::DragDropped { ref paths, .. } => {
-                for path in paths {
-                    crate::desktop_incoming::publish_file(path);
-                }
+            ref drag @ (WindowEvent::DragEntered { .. }
+            | WindowEvent::DragDropped { .. }
+            | WindowEvent::DataTransferReceived { .. }) => {
+                self.file_drops.handle(event_loop, drag);
             }
             WindowEvent::SurfaceResized(new_size) => {
                 apply_primary_surface_resize(

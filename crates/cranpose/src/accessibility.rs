@@ -459,7 +459,7 @@ where
     if !shell.semantics_active() {
         return Vec::new();
     }
-    let mut bounds = HashMap::new();
+    let mut bounds = HashMap::default();
     let has_layout = shell.with_layout_tree(|layout_tree| match layout_tree {
         Some(layout_tree) => {
             collect_bounds(layout_tree.root(), &mut bounds);
@@ -511,7 +511,7 @@ fn inspector_nodes(
     layout: &cranpose_ui::LayoutTree,
     semantics: &cranpose_ui::SemanticsTree,
 ) -> Vec<cranpose_app_shell::inspector::InspectorNode> {
-    let mut bounds = HashMap::new();
+    let mut bounds = HashMap::default();
     collect_bounds(layout.root(), &mut bounds);
     project_semantics(semantics.root(), &bounds)
         .into_iter()

@@ -876,14 +876,14 @@ mod tests {
         root.node_id = Some(5);
 
         let mut graph = RenderGraph::new(root);
-        let mut nodes = HashSet::from([999]);
+        let mut nodes = HashSet::from_iter([999]);
         graph.collect_retained_visual_observation_nodes(&mut nodes);
-        assert_eq!(nodes, HashSet::from([5, 9, 13, 17]));
+        assert_eq!(nodes, HashSet::from_iter([5, 9, 13, 17]));
         let capacity = nodes.capacity();
         graph.root.children.clear();
         graph.root.node_id = Some(23);
         graph.collect_retained_visual_observation_nodes(&mut nodes);
-        assert_eq!(nodes, HashSet::from([23]));
+        assert_eq!(nodes, HashSet::from_iter([23]));
         assert_eq!(nodes.capacity(), capacity);
     }
 

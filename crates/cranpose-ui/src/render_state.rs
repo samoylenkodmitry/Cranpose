@@ -658,7 +658,7 @@ struct LayoutRepassManager {
 impl LayoutRepassManager {
     fn new() -> Self {
         Self {
-            dirty_nodes: HashSet::new(),
+            dirty_nodes: HashSet::default(),
         }
     }
 
@@ -688,7 +688,7 @@ struct DrawRepassManager {
 impl DrawRepassManager {
     fn new() -> Self {
         Self {
-            dirty_nodes: HashSet::new(),
+            dirty_nodes: HashSet::default(),
         }
     }
 

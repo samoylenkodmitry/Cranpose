@@ -644,7 +644,7 @@ where
         };
 
         let mut result = FrameUpdateResult::default();
-        let mut retained_visual_nodes = HashSet::new();
+        let mut retained_visual_nodes = HashSet::default();
         let mut prune_observations = false;
         for ((surface, draw_dirty), structural) in
             self.surfaces.iter_mut().zip(draw_dirty).zip(structural)
@@ -971,7 +971,8 @@ pub(crate) fn build_draw_refresh_scope(
     applier: &mut MemoryApplier,
     dirty_nodes: &HashSet<NodeId>,
 ) -> HashSet<NodeId> {
-    let mut refresh_scope = HashSet::with_capacity(dirty_nodes.len());
+    let mut refresh_scope =
+        HashSet::with_capacity_and_hasher(dirty_nodes.len(), Default::default());
     for &dirty_node in dirty_nodes {
         let mut current = Some(dirty_node);
         while let Some(node_id) = current {

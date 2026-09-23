@@ -38,7 +38,7 @@ carries at its latest published release, so no `cargo upgrade` collapses it:
   requirements converge. [Accessibility validation](accessibility_validation.md)
   records the native checks that require the upgrade.
 - `objc2`, `objc2-app-kit`, `objc2-foundation`: this workspace is on
-  `winit 0.31.0-beta.2`, whose `winit-appkit` is already on `objc2 0.6`, while
+  `winit 0.31.0-beta.3`, whose `winit-appkit` is already on `objc2 0.6`, while
   `accesskit_macos 0.27` holds `objc2 0.5`. AccessKit is
   holding the bump (AccessKit/accesskit#616) precisely so that projects with
   both winit and AccessKit do not carry two objc2 stacks, and will merge it
@@ -50,9 +50,18 @@ carries at its latest published release, so no `cargo upgrade` collapses it:
 - `thiserror`, `thiserror-impl`, `jni-sys`: `ndk 0.9.0` and `ndk-sys 0.6.0`
   pin `thiserror ^1` and `jni-sys ^0.3` while the workspace is on
   `thiserror 2` and `jni 0.22` is on `jni-sys ^0.4`.
-- `windows-sys`, `windows-targets`, `windows_x86_64_msvc`:
-  `winit-win32 0.31.0-beta.2` pins `^0.59` and `arboard 3.6.1` pins `<0.61`
-  while the rest of the graph is on `0.61`.
+- `windows-sys`, `windows-targets`, `windows_x86_64_msvc`: `tempfile 3.27`
+  and `rustls-platform-verifier 0.7` pin `^0.52`, and `arboard 3.6.1`,
+  `dirs-sys 0.5` and `socket2 0.6` pin `^0.60`, while `winit-win32
+  0.31.0-beta.3` and `tokio` are on `0.61`.
+- `syn`: `serde_derive`, `thiserror-impl 2`, `bytemuck_derive` and
+  `wasm-bindgen-macro` moved to `syn 3`, while `async-recursion`, `jni-macros`,
+  `num_enum_derive` and `zerocopy-derive` are still on `syn 2` at their latest
+  releases.
+- `base64`: `reqwest 0.13.5` moved to `^0.23` while `hyper-util 0.1.20` is on
+  `^0.22`.
+- `miniz_oxide`: `flate2 1.1.10` moved to `^0.9` while `png 0.18.1` is on
+  `^0.8`.
 - `env_filter` (all-features only): `android_logger 0.15.1` pins `^0.1` while
   `env_logger 0.11` is past `1.0`.
 
@@ -72,12 +81,12 @@ direct dependency problem:
 
 - Before the alignment patch, `hashbrown 0.15` and `foldhash 0.1` entered through `gpu-descriptor -> wgpu-hal`.
 - After the alignment patch, `gpu-descriptor`, WGPU internals, `gpu-allocator`, `indexmap 2.13`, and proc-macro tooling share `hashbrown 0.16` and `foldhash 0.2`.
-- Cranpose-owned crates no longer depend on `rustc-hash` directly; core collection aliases use the existing `ahash` dependency.
+- Cranpose-owned crates no longer depend on `rustc-hash` or `ahash` directly; core collection aliases use `foldhash 0.2`, the hasher `hashbrown` and `winit-wayland` already bring.
 
 `tiny-skia` and `tiny-skia-path` are aligned in normal workspace and
 all-features builds:
 
-- `tiny-skia 0.11` comes from `sctk-adwaita -> winit-wayland -> winit` and
+- `tiny-skia 0.12` comes from `sctk-adwaita -> winit-wayland -> winit` and
   Cranpose-owned rasterization code.
 
 The all-features-only duplicate-version additions have been removed. `serde`
@@ -88,8 +97,8 @@ those are diagnostic-only and do not represent duplicate semver roots.
 
 Local direct dependency ownership:
 
-- Keep Cranpose-owned collection aliases on `ahash`. Switching local code to WGPU-internal hashing does not remove the WGPU-owned `hashbrown`/`foldhash` split.
-- Keep `tiny-skia 0.11.4` for Cranpose render/common code. The software text
+- Keep Cranpose-owned collection aliases on `foldhash`. Every key they hold is an internal identifier (`NodeId`, `SlotId`, `TypeId`, anchors), never untrusted input, so hash-flooding resistance buys nothing, and `foldhash` is faster than `ahash` for small integer keys on targets without AES instructions (Android, wasm). It is already in the graph through `hashbrown` and `winit-wayland`, and it seeds itself without `getrandom`, so a wasm application no longer needs a `getrandom` backend feature for Cranpose.
+- Keep `tiny-skia 0.12.0` for Cranpose render/common code. The software text
   rasterizer compiles against the same tiny-skia line as the current
   `sctk-adwaita -> winit` platform stack, with PNG decoding disabled because it
   only rasterizes paths.
@@ -100,7 +109,7 @@ Local direct dependency ownership:
 - Keep the in-tree pixels renderer independent from the external `pixels` crate.
   `cranpose/renderer-pixels` now enables only `cranpose-render-pixels`; it does
   not pull `pixels -> wgpu` default features into all-features builds.
-- Keep SVG rasterization local to `cranpose-ui` and backed by the workspace-aligned `tiny-skia 0.11.4` line. The public `SvgPainter` behavior remains behind the `svg` feature, while the implementation no longer pulls `resvg/usvg/roxmltree` or a second tiny-skia line into all-features.
+- Keep SVG rasterization local to `cranpose-ui` and backed by the workspace-aligned `tiny-skia 0.12.0` line. The public `SvgPainter` behavior remains behind the `svg` feature, while the implementation no longer pulls `resvg/usvg/roxmltree` or a second tiny-skia line into all-features.
 - Keep native system-theme detection in `cranpose-services` dependency-free. It uses platform settings commands when `system-theme` is enabled and falls back to `Light`; this preserves the service API without pulling portal async stacks into all-features.
 - Keep Vulkan enabled for native WGPU. Disabling Vulkan clears the duplicate
   graph in a dependency probe, but `robot_renderer_micro_contract` fails on the
@@ -117,7 +126,6 @@ Local direct dependency ownership:
 
 Future version-change candidates:
 
-- Check whether a newer `winit`/`sctk-adwaita` stack aligns `tiny-skia` with the renderer stack.
 - Check whether a newer WGPU line or `gpu-descriptor` crates.io release aligns `hashbrown` or `foldhash` without the patch.
 - Leave `zip` unchanged for this slice. With `indexmap 2.13.0`, it shares the
   current `hashbrown 0.16` root instead of owning a separate `hashbrown 0.17`
@@ -149,7 +157,7 @@ the dependency budget keeps it that way.
 - **indexmap.** Pinned to `2.13.0`, which satisfies `naga` and `toml_edit`
   while sharing `hashbrown 0.16.1` instead of owning a `hashbrown 0.17` root.
 - **Desktop platform.** `cranpose-render-common` and optional SVG both use the
-  `tiny-skia 0.11.4` line that `sctk-adwaita -> winit-wayland -> winit` uses.
+  `tiny-skia 0.12.0` line that `sctk-adwaita -> winit-wayland -> winit` uses.
 - **Optional all-features.** `cranpose-services` does not depend on
   `dark-light`, and `cranpose-ui/svg` does not depend on `resvg`/`usvg`, so
   `async-channel`, `event-listener`, `getrandom`, `roxmltree`, and the second

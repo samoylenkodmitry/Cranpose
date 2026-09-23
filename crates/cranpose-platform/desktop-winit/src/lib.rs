@@ -33,16 +33,17 @@ impl DesktopWinitPlatform {
         PointerEvent::new(kind, logical, logical)
     }
 
-    pub fn scroll_delta(&self, delta: MouseScrollDelta) -> Point {
+    pub fn scroll_delta(&self, delta: MouseScrollDelta) -> Option<Point> {
         match delta {
-            MouseScrollDelta::LineDelta(x, y) => Point {
+            MouseScrollDelta::LineDelta(x, y) => Some(Point {
                 x: x * LINE_SCROLL_DELTA_PIXELS,
                 y: y * LINE_SCROLL_DELTA_PIXELS,
-            },
-            MouseScrollDelta::PixelDelta(delta) => Point {
+            }),
+            MouseScrollDelta::PixelDelta(delta) => Some(Point {
                 x: (delta.x / self.scale_factor) as f32,
                 y: (delta.y / self.scale_factor) as f32,
-            },
+            }),
+            _ => None,
         }
     }
 }
@@ -73,8 +74,7 @@ mod tests {
     fn line_scroll_delta_is_scaled_to_pixels() {
         let platform = DesktopWinitPlatform::new(1.0);
         let delta = platform.scroll_delta(MouseScrollDelta::LineDelta(1.0, -2.0));
-        assert_eq!(delta.x, 40.0);
-        assert_eq!(delta.y, -80.0);
+        assert_eq!(delta, Some(Point { x: 40.0, y: -80.0 }));
     }
 
     #[test]
@@ -84,7 +84,6 @@ mod tests {
             x: 24.0,
             y: -10.0,
         }));
-        assert_eq!(delta.x, 12.0);
-        assert_eq!(delta.y, -5.0);
+        assert_eq!(delta, Some(Point { x: 12.0, y: -5.0 }));
     }
 }

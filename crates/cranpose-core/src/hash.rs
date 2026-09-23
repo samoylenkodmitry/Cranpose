@@ -10,10 +10,12 @@ pub mod default {
 
 #[cfg(not(feature = "std-hash"))]
 pub mod default {
-    pub use ahash::AHasher as DefaultHasher;
+    use std::hash::BuildHasher;
+
+    pub type DefaultHasher = foldhash::fast::FoldHasher<'static>;
 
     #[inline]
     pub fn new() -> DefaultHasher {
-        DefaultHasher::default()
+        foldhash::fast::FixedState::default().build_hasher()
     }
 }

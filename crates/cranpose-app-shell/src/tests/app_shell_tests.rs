@@ -6842,7 +6842,7 @@ fn draw_refresh_scope_only_contains_dirty_ancestors() {
     let right = node_id_at_path(layout_tree.root(), &[0, 1]);
     let right_leaf = node_id_at_path(layout_tree.root(), &[0, 1, 0]);
 
-    let dirty_nodes = HashSet::from([left_leaf]);
+    let dirty_nodes = HashSet::from_iter([left_leaf]);
     let refresh_scope = {
         let mut applier = shell.app.composition.applier_mut();
         build_draw_refresh_scope(&mut applier, &dirty_nodes)

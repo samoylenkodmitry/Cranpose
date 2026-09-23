@@ -97,7 +97,7 @@ impl<R: Renderer> RootSurface<R> {
             frame_rate_preference: FrameRatePreference::default(),
             scene_dirty: true,
             scoped_layout_scene_nodes: Vec::new(),
-            retained_visual_nodes: HashSet::new(),
+            retained_visual_nodes: HashSet::default(),
             is_dirty: true,
             buttons_pressed: PointerButtons::NONE,
             pointer_source: PointerSource::Unknown,

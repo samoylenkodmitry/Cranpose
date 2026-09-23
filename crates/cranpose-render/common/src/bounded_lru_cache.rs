@@ -41,7 +41,7 @@ where
 {
     pub fn new(cap: NonZeroUsize) -> Self {
         Self {
-            index: HashMap::with_capacity(cap.get()),
+            index: HashMap::with_capacity_and_hasher(cap.get(), Default::default()),
             slots: Vec::with_capacity(cap.get()),
             free: Vec::new(),
             newest: None,
