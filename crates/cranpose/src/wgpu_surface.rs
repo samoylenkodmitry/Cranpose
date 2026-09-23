@@ -11,6 +11,12 @@ pub(crate) fn create_wgpu_surface_and_adapter(
 {
     let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
     instance_descriptor.backends = wgpu::Backends::all();
+    // Windows stretches the last frame of a swapchain made from the window
+    // itself to the window's new size until the next one arrives, so a window
+    // being resized wobbles. A DirectComposition swapchain is shown at its own
+    // size. `WGPU_DX12_PRESENTATION_SYSTEM=Hwnd` restores the old one.
+    instance_descriptor.backend_options.dx12.presentation_system =
+        wgpu::Dx12SwapchainKind::DxgiFromVisual.with_env();
     let instance = wgpu::Instance::new(instance_descriptor);
 
     let surface = instance
