@@ -84,7 +84,11 @@ on the laid-out rectangles.
 When focus changes, scroll containers reveal the target with the smallest
 necessary movement. This applies to keyboard and programmatic focus, horizontal
 and reverse scrolling, and focus traversal through lazy lists. Subsequent manual
-scrolling is preserved until focus changes again.
+scrolling is preserved until focus changes again. A lazy list keeps the target
+out of its content padding, where a floating bar may cover it; a target taller
+than the padded area uses the whole viewport. The same reveal runs when
+VoiceOver or TalkBack lands on any element, and for Android's show-on-screen
+action.
 
 Keyboard Tab enters a radio group or tab list at its selected control. Arrow
 keys wrap within the group, and Home/End reach its first/last enabled member.
@@ -766,6 +770,7 @@ An app gets this with no code of its own:
 | `Button`, `clickable` | the label, "button" | activate it |
 | `toggleable`, a switch or checkbox | the label, its state | flip it |
 | `selectable`, a tab or a radio row | the label, its role, whether it is picked | pick it |
+| a button with a selected state | on Android and iOS, the label and "selected"; on the desktop and the web, a toggle button and whether it is pressed | press it |
 | `LiquidTabBar` | the tab, whether it is picked, and which of how many | pick it |
 | `LiquidToggle`, `LiquidSegmented`, `LiquidChip`, `LiquidMenu` rows, the liquid icon group | the switch and its state, the segment or the chip and whether it is picked, the row | flip or pick it, from a reader, Tab and Enter alike |
 | `LiquidActionChip` | the chip as a plain button; its raised look is not a state | press it |
