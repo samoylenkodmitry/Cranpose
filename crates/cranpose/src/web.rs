@@ -67,14 +67,22 @@ fn apply_requested_canvas_size(
     (width, height): (f32, f32),
     owed: &Cell<Option<(f32, f32)>>,
 ) {
+    let host = canvas_window(canvas, page);
+    if is_floating(&host, page) {
+        // A floating window's canvas fills the window. The window takes the
+        // size, and the canvas follows it; a window that may not resize yet
+        // owes it, and the canvas goes on filling it meanwhile rather than
+        // shrinking inside it.
+        let resized = resize_floating_window(&host, width, height);
+        owed.set((!resized).then_some((width, height)));
+        return;
+    }
     if let Some(html_element) = canvas.dyn_ref::<web_sys::HtmlElement>() {
         let style = html_element.style();
         let _ = style.set_property("width", &format!("{width}px"));
         let _ = style.set_property("height", &format!("{height}px"));
     }
-    let host = canvas_window(canvas, page);
-    let resized = !is_floating(&host, page) || resize_floating_window(&host, width, height);
-    owed.set((!resized).then_some((width, height)));
+    owed.set(None);
 }
 
 fn resize_owed_floating_window(
@@ -91,10 +99,10 @@ fn resize_owed_floating_window(
     }
 }
 
-fn follow_canvas_size(
+/// Resizes a floating window that owes a size as soon as a gesture lets it.
+fn resize_owed_on_release(
     canvas: &HtmlCanvasElement,
     page: &web_sys::Window,
-    reshape: ReshapeFn,
     owed: Rc<Cell<Option<(f32, f32)>>>,
 ) -> Result<(), JsValue> {
     let on_release = {
@@ -106,16 +114,15 @@ fn follow_canvas_size(
     };
     canvas.add_event_listener_with_callback("pointerup", on_release.as_ref().unchecked_ref())?;
     on_release.forget();
-
-    let on_resize = Closure::wrap(Box::new(
-        move |_entries: js_sys::Array, _observer: web_sys::ResizeObserver| reshape(None),
-    )
-        as Box<dyn FnMut(js_sys::Array, web_sys::ResizeObserver)>);
-    let observer = web_sys::ResizeObserver::new(on_resize.as_ref().unchecked_ref())?;
-    observer.observe(canvas);
-    on_resize.forget();
-    std::mem::forget(observer);
     Ok(())
+}
+
+/// The canvas's CSS size as laid out, fractions included: at a device pixel
+/// ratio of 1.5 a canvas is seldom a whole number of CSS pixels, and the
+/// rounded `clientWidth` would size its buffer a pixel short.
+fn canvas_css_size(canvas: &HtmlCanvasElement) -> (f64, f64) {
+    let rect = canvas.get_bounding_client_rect();
+    (rect.width().max(1.0), rect.height().max(1.0))
 }
 
 fn web_pointer_source(event: &PointerEvent) -> PointerSource {
@@ -317,6 +324,7 @@ pub async fn run(
         .dyn_into::<HtmlCanvasElement>()?;
 
     let scale_factor = window.device_pixel_ratio();
+    crate::web_frame_host::follow(&canvas);
 
     if let Some(html_element) = canvas.dyn_ref::<web_sys::HtmlElement>() {
         let style = html_element.style();
@@ -326,8 +334,9 @@ pub async fn run(
             style.set_property(property, value)?;
         }
     }
-    let width = canvas.client_width().max(1) as u32;
-    let height = canvas.client_height().max(1) as u32;
+    let (css_width, css_height) = canvas_css_size(&canvas);
+    let width = css_width.round() as u32;
+    let height = css_height.round() as u32;
     let backend_preference = requested_web_backend(&window);
     let mut instance_desc =
         wgpu::InstanceDescriptor::new_with_display_handle(Box::new(BrowserDisplayHandle));
@@ -357,7 +366,7 @@ pub async fn run(
     let adapter_info = adapter.get_info();
     let render_scale = crate::web_surface_scale::web_canvas_buffer_scale(scale_factor);
     let (buffer_width, buffer_height) =
-        crate::web_surface_scale::web_canvas_buffer_dimensions(width, height, scale_factor);
+        crate::web_surface_scale::web_canvas_device_size(css_width, css_height, scale_factor, None);
     canvas.set_width(buffer_width);
     canvas.set_height(buffer_height);
     let adapter_limits = adapter.limits();
@@ -478,7 +487,7 @@ pub async fn run(
         default_root_key(),
         content,
         (actual_width, actual_height),
-        (width as f32, height as f32),
+        (css_width as f32, css_height as f32),
         effective_scale as f32,
     )));
     app.borrow_mut().set_semantics_enabled(true);
@@ -505,6 +514,7 @@ pub async fn run(
         let frame_timer = frame_timer.clone();
         Rc::new(move || request_web_frame(&frame_pending, &render_loop, Some(&frame_timer)))
     };
+    crate::web_host_surface::wake_with(request_frame.clone());
     app.borrow_mut().set_frame_waker({
         let request_frame = request_frame.clone();
         move || request_frame()
@@ -777,6 +787,7 @@ pub async fn run(
     }
 
     let floating_size_owed: Rc<Cell<Option<(f32, f32)>>> = Rc::new(Cell::new(None));
+    let device_size: Rc<Cell<Option<(u32, u32)>>> = Rc::new(Cell::new(None));
 
     let reshape: ReshapeFn = {
         let canvas = canvas.clone();
@@ -788,6 +799,7 @@ pub async fn run(
         let surface_dirty = surface_dirty.clone();
         let request_frame = request_frame.clone();
         let floating_size_owed = floating_size_owed.clone();
+        let device_size = device_size.clone();
         Rc::new(move |requested: Option<(f32, f32)>| {
             if let Some(size) = requested {
                 apply_requested_canvas_size(&canvas, &window, size, &floating_size_owed);
@@ -795,10 +807,13 @@ pub async fn run(
             let host = canvas_window(&canvas, &window);
 
             let scale_factor = host.device_pixel_ratio();
-            let width = canvas.client_width().max(1) as u32;
-            let height = canvas.client_height().max(1) as u32;
-            let (buffer_width, buffer_height) =
-                crate::web_surface_scale::web_canvas_buffer_dimensions(width, height, scale_factor);
+            let (width, height) = canvas_css_size(&canvas);
+            let (buffer_width, buffer_height) = crate::web_surface_scale::web_canvas_device_size(
+                width,
+                height,
+                scale_factor,
+                device_size.get(),
+            );
             let render_scale = crate::web_surface_scale::web_canvas_buffer_scale(scale_factor);
 
             let unchanged = {
@@ -832,32 +847,18 @@ pub async fn run(
         })
     };
 
-    crate::web_host_surface::publish(width as f32, height as f32, effective_scale as f32);
+    crate::web_host_surface::publish(css_width as f32, css_height as f32, effective_scale as f32);
 
-    {
-        let reshape = reshape.clone();
-        let closure = Closure::wrap(Box::new(move || reshape(None)) as Box<dyn FnMut()>);
-        window.add_event_listener_with_callback("resize", closure.as_ref().unchecked_ref())?;
-        closure.forget();
-    }
-
-    follow_canvas_size(&canvas, &window, reshape.clone(), floating_size_owed)?;
-
-    {
-        let reshape = reshape.clone();
-        let request_frame_for_requests = request_frame.clone();
-        let closure = Closure::wrap(Box::new(move || {
-            if let Some(size) = crate::web_host_surface::take_requested_size() {
-                reshape(Some(size));
-            }
-            request_frame_for_requests();
-        }) as Box<dyn FnMut()>);
-        window.set_interval_with_callback_and_timeout_and_arguments_0(
-            closure.as_ref().unchecked_ref(),
-            60,
-        )?;
-        closure.forget();
-    }
+    resize_owed_on_release(&canvas, &window, floating_size_owed)?;
+    let canvas_watch = Rc::new(crate::web_canvas_watch::CanvasWatch::new(
+        canvas.clone(),
+        {
+            let reshape = reshape.clone();
+            Rc::new(move || reshape(None))
+        },
+        device_size,
+    ));
+    canvas_watch.follow();
 
     let frame_pending_for_loop = frame_pending.clone();
     let frame_timer_for_loop = frame_timer.clone();
@@ -868,10 +869,18 @@ pub async fn run(
     let accessibility_for_loop = accessibility.clone();
     let cursors_for_loop = RefCell::new(crate::web_cursor::WebCursors::default());
     let canvas_for_cursor = canvas.clone();
+    let reshape_for_loop = reshape.clone();
 
     *render_loop.borrow_mut() = Some(Closure::wrap(Box::new(move || {
         frame_pending_for_loop.set(false);
+        canvas_watch.follow();
         let update_result = app.borrow_mut().update();
+        // A size the app asked for in this update is applied in the same
+        // frame, while the gesture that led to it still counts as one: a
+        // floating window only resizes itself in answer to one.
+        if let Some(size) = crate::web_host_surface::take_requested_size() {
+            reshape_for_loop(Some(size));
+        }
         crate::web_cursor::sync_pointer_icon(
             &cursors_for_loop,
             &document_for_loop,
@@ -950,12 +959,7 @@ pub async fn run(
     Ok(())
 }
 
-fn request_animation_frame(f: &Closure<dyn FnMut()>) -> bool {
-    let Some(window) = web_sys::window() else {
-        log::error!("requestAnimationFrame unavailable: browser window is not available");
-        return false;
-    };
-
+fn request_animation_frame(window: &web_sys::Window, f: &Closure<dyn FnMut()>) -> bool {
     match window.request_animation_frame(f.as_ref().unchecked_ref()) {
         Ok(_) => true,
         Err(error) => {
@@ -976,7 +980,11 @@ fn request_web_frame(
             .generation
             .set(timer.generation.get().saturating_add(1));
     }
-    if frame_pending.replace(true) {
+    let Some(host) = crate::web_frame_host::window() else {
+        log::error!("requestAnimationFrame unavailable: browser window is not available");
+        return;
+    };
+    if frame_pending.replace(true) && crate::web_frame_host::asked_of(&host) {
         return;
     }
     let render_loop = render_loop.borrow();
@@ -984,7 +992,9 @@ fn request_web_frame(
         frame_pending.set(false);
         return;
     };
-    if !request_animation_frame(render_loop) {
+    if request_animation_frame(&host, render_loop) {
+        crate::web_frame_host::note_asked(&host);
+    } else {
         frame_pending.set(false);
     }
 }
@@ -1020,7 +1030,7 @@ fn request_web_frame_at_deadline(
         );
     });
 
-    let Some(window) = web_sys::window() else {
+    let Some(window) = crate::web_frame_host::window() else {
         log::error!("setTimeout unavailable: browser window is not available");
         timer.pending.set(false);
         request_web_frame(frame_pending, render_loop, Some(timer));
