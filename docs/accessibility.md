@@ -727,6 +727,10 @@ carries the pane title of its node, on the web it is a region landmark with
 the title as its name, and accesskit sees a labeled region. The first
 publish stays quiet, so the first screen is not read twice.
 
+An open `LiquidMenu` hides the screen behind it from a reader, so its card
+carries the pane title "Menu": a reader hears that a menu opened, and the
+audit finds a title while the menu is up.
+
 ## 9. The system's display options
 
 A person sets these once, in the system's accessibility settings, and expects

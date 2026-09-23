@@ -1302,6 +1302,7 @@ pub fn LiquidMenu(
                 });
                 let card = Modifier::empty()
                     .role(SemanticsWidgetRole::Menu)
+                    .pane_title("Menu")
                     .report_size(Rc::clone(&node_size))
                     .glass_effect_with(glass, move || {
                         let glow_touch = glow_for_glass.get().map(|(x, y)| {
