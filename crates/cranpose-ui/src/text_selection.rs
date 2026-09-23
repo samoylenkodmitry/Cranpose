@@ -135,11 +135,8 @@ pub fn tap_selection_granularity(tap_count: u8) -> SelectionGranularity {
 /// boundaries because `\n` is a single-byte ASCII character.
 pub fn find_line_boundaries(text: &str, pos: usize) -> (usize, usize) {
     let pos = pos.min(text.len());
-    let start = text[..pos].rfind('\n').map(|i| i + 1).unwrap_or(0);
-    let end = text[pos..]
-        .find('\n')
-        .map(|i| pos + i)
-        .unwrap_or(text.len());
+    let start = text[..pos].rfind('\n').map_or(0, |i| i + 1);
+    let end = text[pos..].find('\n').map_or(text.len(), |i| pos + i);
     (start, end)
 }
 
@@ -153,20 +150,14 @@ pub fn find_line_boundaries(text: &str, pos: usize) -> (usize, usize) {
 /// whole.
 pub fn find_paragraph_boundaries(text: &str, pos: usize) -> (usize, usize) {
     let pos = pos.min(text.len());
-    let start = text[..pos]
-        .rfind("\n\n")
-        .map(|i| {
-            let mut s = i + 1;
-            while text[s..].starts_with('\n') {
-                s += 1;
-            }
-            s
-        })
-        .unwrap_or(0);
-    let end = text[pos..]
-        .find("\n\n")
-        .map(|i| pos + i)
-        .unwrap_or(text.len());
+    let start = text[..pos].rfind("\n\n").map_or(0, |i| {
+        let mut s = i + 1;
+        while text[s..].starts_with('\n') {
+            s += 1;
+        }
+        s
+    });
+    let end = text[pos..].find("\n\n").map_or(text.len(), |i| pos + i);
     (start.min(end), end)
 }
 

@@ -4,7 +4,7 @@ use std::{
     future::Future,
     pin::Pin,
     sync::{
-        Arc,
+        Arc, PoisonError,
         atomic::{AtomicBool, Ordering},
     },
 };
@@ -298,10 +298,7 @@ impl BytesBody {
 impl HttpBody for BytesBody {
     fn read_chunk(&self) -> HttpFuture<'_, Option<Vec<u8>>> {
         Box::pin(async move {
-            let mut offset = self
-                .offset
-                .lock()
-                .unwrap_or_else(|error| error.into_inner());
+            let mut offset = self.offset.lock().unwrap_or_else(PoisonError::into_inner);
             if *offset >= self.bytes.len() {
                 return Ok(None);
             }
@@ -483,9 +480,7 @@ async fn download_through<C: HttpClient + ?Sized>(
     if control.is_cancelled() {
         return Err(HttpError::Cancelled);
     }
-    let existing = std::fs::metadata(target)
-        .map(|metadata| metadata.len())
-        .unwrap_or(0);
+    let existing = std::fs::metadata(target).map_or(0, |metadata| metadata.len());
     let mut request = HttpRequest::get(url);
     if existing > 0 {
         request = request.resume_from(existing);
@@ -926,7 +921,7 @@ fn android_root_certificates() -> Result<Vec<reqwest::Certificate>, HttpError> {
     certificates_from_der_chain(
         webpki_root_certs::TLS_SERVER_ROOT_CERTS
             .iter()
-            .map(|certificate| certificate.as_ref()),
+            .map(AsRef::as_ref),
     )
 }
 
@@ -1434,9 +1429,10 @@ mod tests {
         let error = pollster::block_on(map_ordered_concurrent(&inputs, 1, move |_| {
             let should_panic = Arc::clone(&should_panic_for_task);
             async move {
-                if should_panic.load(std::sync::atomic::Ordering::SeqCst) {
-                    panic!("test worker panic");
-                }
+                assert!(
+                    !should_panic.load(std::sync::atomic::Ordering::SeqCst),
+                    "test worker panic"
+                );
                 1usize
             }
         }))
@@ -1503,7 +1499,7 @@ mod tests {
             webpki_root_certs::TLS_SERVER_ROOT_CERTS
                 .iter()
                 .take(3)
-                .map(|certificate| certificate.as_ref()),
+                .map(AsRef::as_ref),
         )
         .expect("root certificates should parse");
 
@@ -1627,7 +1623,7 @@ mod tests {
         let control = HttpControl::new().with_progress(move |progress| {
             recorder
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
+                .unwrap_or_else(PoisonError::into_inner)
                 .push(progress);
         });
 
@@ -1640,7 +1636,7 @@ mod tests {
         assert_eq!(received.len(), body.len());
         let reports = reports
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(PoisonError::into_inner)
             .clone();
         assert!(
             reports.len() > 1,

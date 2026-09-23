@@ -27,10 +27,9 @@ struct FixtureData {
 }
 
 fn parse_bool_env(name: &str, default: bool) -> bool {
-    std::env::var(name)
-        .ok()
-        .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
-        .unwrap_or(default)
+    std::env::var(name).ok().map_or(default, |v| {
+        matches!(v.as_str(), "1" | "true" | "TRUE" | "yes" | "YES")
+    })
 }
 
 fn parse_f32_env(name: &str, default: f32) -> f32 {
@@ -112,7 +111,7 @@ fn viewport_signature(robot: &cranpose::Robot, viewport_bounds: (f32, f32, f32, 
 
     let mut parts = Vec::new();
     for (y, text) in samples.into_iter().take(5) {
-        parts.push(format!("{:.0}:{}", y, text));
+        parts.push(format!("{y:.0}:{text}"));
     }
 
     if parts.is_empty() {
@@ -126,7 +125,7 @@ fn extract_markdown_line_number(text: &str) -> Option<u32> {
     let marker = text.find("Line ")?;
     let digits = text[marker + 5..]
         .chars()
-        .take_while(|ch| ch.is_ascii_digit())
+        .take_while(char::is_ascii_digit)
         .collect::<String>();
     if digits.is_empty() {
         return None;
@@ -240,10 +239,7 @@ fn force_absolute_bottom_with_scrollbar(
         last_probe_y = probe_y;
     }
 
-    eprintln!(
-        "NOTE: scrollbar bottom did not fully stabilize after {} passes",
-        scrollbar_max_passes
-    );
+    eprintln!("NOTE: scrollbar bottom did not fully stabilize after {scrollbar_max_passes} passes");
     last_probe_y
 }
 
@@ -320,7 +316,7 @@ fn select_bottom_probe(body: &str) -> String {
         if fallback.is_empty() {
             fallback = line.to_string();
         }
-        if line.chars().any(|c| c.is_alphanumeric()) {
+        if line.chars().any(char::is_alphanumeric) {
             fallback = line.to_string();
             break;
         }
@@ -431,8 +427,7 @@ fn main() {
                 && markdown_scroll_drag::wait_for_text_bounds(&robot, &top_sentinel, 10_000).is_none()
             {
                 eprintln!(
-                    "NOTE: top sentinel {:?} not found within timeout; continuing",
-                    top_sentinel
+                    "NOTE: top sentinel {top_sentinel:?} not found within timeout; continuing"
                 );
             }
 

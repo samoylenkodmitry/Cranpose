@@ -8,8 +8,6 @@
 //! rendered as a filled annular sector via [`VectorPath`] (there is no stroke
 //! primitive in the draw pipeline).
 
-#![allow(non_snake_case)]
-
 use cranpose_animation::{
     AnimationSpec, Easing, RepeatMode, StartOffset, infiniteRepeatable, rememberInfiniteTransition,
 };

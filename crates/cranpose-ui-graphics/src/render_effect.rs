@@ -3,7 +3,7 @@
 //! Matches the Jetpack Compose `RenderEffect` API with extensions for custom
 //! WGSL shaders (`RuntimeShader`).
 
-use std::sync::{Arc, Mutex, OnceLock, Weak};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError, Weak};
 
 use arrayvec::ArrayVec;
 
@@ -844,7 +844,7 @@ fn cached_shared_shader_source_hash(source: &Arc<str>) -> u64 {
     let mut cache = CACHE
         .get_or_init(|| Mutex::new(Vec::new()))
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+        .unwrap_or_else(PoisonError::into_inner);
 
     cache.retain(|entry| entry.source.strong_count() > 0);
     if let Some(entry) = cache.iter().find(|entry| {
@@ -881,7 +881,7 @@ fn cached_shader_source(
     let mut cache = CACHE
         .get_or_init(|| Mutex::new(Vec::new()))
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+        .unwrap_or_else(PoisonError::into_inner);
 
     if let Some(entry) = cache.iter_mut().find(|entry| entry.callsite == callsite) {
         if entry.source.as_ref() == source {
@@ -1074,6 +1074,8 @@ impl RenderEffect {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+
     use super::{RenderEffect, RuntimeShader};
 
     #[test]
@@ -1162,7 +1164,7 @@ mod tests {
             assert!(!copy.clear_override("ABSENT"));
             assert_eq!(copy.overrides_hash(), expected);
         }
-        assert_eq!(OVERRIDE_HASH_COMPUTATIONS.with(std::cell::Cell::get), 1);
+        assert_eq!(OVERRIDE_HASH_COMPUTATIONS.with(Cell::get), 1);
     }
 
     #[test]
@@ -1717,7 +1719,7 @@ mod tests {
         shader.set_override("VALUE", 1.0);
         let allocation = Arc::as_ptr(shader.specialization.as_ref().unwrap());
         cache.apply(&mut shader, (), |shader, ()| {
-            shader.set_override("VALUE", 2.0)
+            shader.set_override("VALUE", 2.0);
         });
         assert_eq!(shader.overrides(), &[("VALUE", 2.0)]);
         assert_eq!(

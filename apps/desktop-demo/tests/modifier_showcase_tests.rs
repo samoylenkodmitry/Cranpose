@@ -263,7 +263,7 @@ fn dynamic_modifiers_showcase(frame: i32) {
         });
 
         Text(
-            format!("Frame: {}, X: {:.1}", frame, x),
+            format!("Frame: {frame}, X: {x:.1}"),
             Modifier::empty()
                 .padding(8.0)
                 .then(Modifier::empty().background(Color(0.2, 0.2, 0.3, 0.6)))
@@ -501,7 +501,7 @@ fn test_long_list_performance() {
         .unwrap();
     let duration = start.elapsed();
 
-    println!("Long list (50 items) rendered in: {:?}", duration);
+    println!("Long list (50 items) rendered in: {duration:?}");
 
     let root = composition.root().expect("Should have root");
     let mut applier = composition.applier_mut();

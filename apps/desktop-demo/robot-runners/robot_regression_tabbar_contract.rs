@@ -59,7 +59,7 @@ fn wheel_tab_row_left(robot: &cranpose::Robot, start: Rect) {
 
 fn tab_row_y(tabs: &[(String, Rect)]) -> f32 {
     let mut ys = tabs.iter().map(|(_, (_, y, _, _))| *y).collect::<Vec<_>>();
-    ys.sort_by(|left, right| left.total_cmp(right));
+    ys.sort_by(f32::total_cmp);
     ys[ys.len() / 2]
 }
 

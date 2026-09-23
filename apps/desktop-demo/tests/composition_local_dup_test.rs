@@ -38,10 +38,7 @@ fn wait_for_counter_registration(rule: &mut ComposeTestRule) {
             .expect("pump while waiting for composition local counter registration");
     }
     let tree = rule.dump_tree();
-    panic!(
-        "composition local counter state not registered after retries. tree:\n{}",
-        tree
-    );
+    panic!("composition local counter state not registered after retries. tree:\n{tree}");
 }
 
 #[test]
@@ -66,16 +63,15 @@ fn composition_local_view_duplicates_regression() {
     for step in 1..=2 {
         increment_composition_local_counter();
         rule.pump_until_idle()
-            .unwrap_or_else(|_| panic!("pump after increment {}", step));
+            .unwrap_or_else(|_| panic!("pump after increment {step}"));
         rule.advance_frame(0)
-            .unwrap_or_else(|_| panic!("advance frame after increment {}", step));
+            .unwrap_or_else(|_| panic!("advance frame after increment {step}"));
         println!("tree after increment {}:\n{}", step, rule.dump_tree());
     }
 
     let after_nodes = rule.applier_mut().len();
     assert_eq!(
         after_nodes, baseline_nodes,
-        "node count changed after increments: before={}, after={}",
-        baseline_nodes, after_nodes
+        "node count changed after increments: before={baseline_nodes}, after={after_nodes}"
     );
 }

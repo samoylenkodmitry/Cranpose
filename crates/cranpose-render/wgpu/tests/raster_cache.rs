@@ -148,8 +148,7 @@ fn capture_frame_reuses_cached_child_layers_during_rigid_scroll() {
         Ok(renderer) => renderer,
         Err(err) => {
             eprintln!(
-                "skipping rigid scroll cache reuse assertion because headless WGPU init failed: {}",
-                err
+                "skipping rigid scroll cache reuse assertion because headless WGPU init failed: {err}"
             );
             return;
         }
@@ -191,8 +190,7 @@ fn static_text_glyph_atlas_reuses_raster_under_scroll_translation() {
         Ok(renderer) => renderer,
         Err(err) => {
             eprintln!(
-                "skipping static text glyph atlas assertion because headless WGPU init failed: {}",
-                err
+                "skipping static text glyph atlas assertion because headless WGPU init failed: {err}"
             );
             return;
         }
@@ -235,8 +233,7 @@ fn text_glyph_atlas_reuses_identical_content_across_node_ids() {
         Ok(renderer) => renderer,
         Err(err) => {
             eprintln!(
-                "skipping repeated text glyph atlas assertion because headless WGPU init failed: {}",
-                err
+                "skipping repeated text glyph atlas assertion because headless WGPU init failed: {err}"
             );
             return;
         }
@@ -266,11 +263,11 @@ fn animated_shader_wgsl() -> String {
     format!(
         "{}\n{}",
         cranpose_ui_graphics::RUNTIME_SHADER_PRELUDE_WGSL,
-        r#"@fragment
+        r"@fragment
 fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     return vec4<f32>(u[0][0], 0.0, 0.0, 1.0);
 }
-"#
+"
     )
 }
 
@@ -359,8 +356,7 @@ fn a_runtime_shader_layer_with_stable_uniforms_is_served_from_the_layer_cache() 
         Ok(renderer) => renderer,
         Err(err) => {
             eprintln!(
-                "skipping runtime-shader cache assertion because headless WGPU init failed: {}",
-                err
+                "skipping runtime-shader cache assertion because headless WGPU init failed: {err}"
             );
             return;
         }
@@ -414,8 +410,7 @@ fn an_animated_shader_keeps_animating_inside_a_cacheable_container() {
         Ok(renderer) => renderer,
         Err(err) => {
             eprintln!(
-                "skipping animated-shader cache assertion because headless WGPU init failed: {}",
-                err
+                "skipping animated-shader cache assertion because headless WGPU init failed: {err}"
             );
             return;
         }

@@ -18,8 +18,7 @@ impl Modifier {
     pub fn pointer_icon(self, icon: PointerIcon) -> Self {
         let name = icon
             .css_keyword()
-            .map(str::to_string)
-            .unwrap_or_else(|| "custom".to_string());
+            .map_or_else(|| "custom".to_string(), str::to_string);
         let modifier = Self::with_element(PointerIconElement::new(icon)).with_inspector_metadata(
             inspector_metadata("pointerIcon", move |info| {
                 info.add_property("pointerIcon", &name);

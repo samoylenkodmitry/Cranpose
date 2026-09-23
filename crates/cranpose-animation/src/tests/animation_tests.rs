@@ -231,7 +231,7 @@ fn infinite_transition_state_does_not_invalidate_for_equivalent_values() {
         (),
         {
             let invalidations = Rc::clone(&invalidations);
-            move |_| invalidations.set(invalidations.get() + 1)
+            move |()| invalidations.set(invalidations.get() + 1)
         },
         || animation.state().get(),
     );
@@ -252,7 +252,7 @@ fn animatable_state_does_not_invalidate_for_equivalent_values() {
         (),
         {
             let invalidations = Rc::clone(&invalidations);
-            move |_| invalidations.set(invalidations.get() + 1)
+            move |()| invalidations.set(invalidations.get() + 1)
         },
         || animation.state().get(),
     );
@@ -371,7 +371,7 @@ fn infinite_transition_animates_any_interpolable_value() {
     let observer = SnapshotStateObserver::new(|callback| callback());
     let initial = observer.observe_reads(
         (),
-        |_| {},
+        |()| {},
         || state_slot.borrow().as_ref().expect("state available").get(),
     );
     assert_eq!(initial, 10.0, "the animation starts at the value given");
@@ -429,7 +429,7 @@ fn infinite_transition_animates_float_over_time() {
     let observer = SnapshotStateObserver::new(|callback| callback());
     let initial = observer.observe_reads(
         (),
-        |_| {},
+        |()| {},
         || state_slot.borrow().as_ref().expect("state available").get(),
     );
     assert_eq!(initial, 0.0);
@@ -485,14 +485,9 @@ fn easing_bounds_are_correct() {
         let end = easing.transform(1.0);
         assert!(
             (start - 0.0).abs() < 0.01,
-            "Start should be ~0 for {:?}",
-            easing
+            "Start should be ~0 for {easing:?}"
         );
-        assert!(
-            (end - 1.0).abs() < 0.01,
-            "End should be ~1 for {:?}",
-            easing
-        );
+        assert!((end - 1.0).abs() < 0.01, "End should be ~1 for {easing:?}");
     }
 }
 

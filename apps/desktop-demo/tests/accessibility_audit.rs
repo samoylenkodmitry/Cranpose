@@ -51,7 +51,7 @@ fn issues_per_tab() -> Vec<(&'static str, Vec<AccessibilityIssue>)> {
     robot.shell_mut().set_semantics_enabled(true);
     wait_for_active_tab_registration_robot(&mut robot);
     let mut report = Vec::new();
-    for info in DEMO_TAB_INFO.iter() {
+    for info in &DEMO_TAB_INFO {
         set_active_tab(info.tab);
         robot.wait_for_idle();
         pump_shell_until_stable(robot.shell_mut());

@@ -24,10 +24,10 @@ fn io_error(path: &Path, error: std::io::Error) -> ContentError {
 }
 
 fn metadata_for(path: &Path) -> ContentMetadata {
-    let name = path
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| path.display().to_string());
+    let name = path.file_name().map_or_else(
+        || path.display().to_string(),
+        |name| name.to_string_lossy().into_owned(),
+    );
     let mut metadata = ContentMetadata {
         name,
         mime_type: None,
@@ -156,8 +156,7 @@ impl ContentFolder for FileFolder {
                 let child_path = child.path();
                 let is_dir = child
                     .file_type()
-                    .map(|kind| kind.is_dir())
-                    .unwrap_or_else(|_| child_path.is_dir());
+                    .map_or_else(|_| child_path.is_dir(), |kind| kind.is_dir());
                 if is_dir {
                     entries.push(ContentEntry::Folder(
                         Rc::new(FileFolder::new(child_path)) as ContentFolderRef
@@ -215,10 +214,10 @@ impl FileSink {
 }
 
 fn staging_path(destination: &Path) -> PathBuf {
-    let mut name = destination
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "content".to_string());
+    let mut name = destination.file_name().map_or_else(
+        || "content".to_string(),
+        |name| name.to_string_lossy().into_owned(),
+    );
     name.push_str(".partial");
     destination.with_file_name(name)
 }

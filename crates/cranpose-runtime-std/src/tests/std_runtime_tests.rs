@@ -54,7 +54,7 @@ fn std_runtime_requests_frame_and_recomposes_on_state_change() {
     let state = state_slot
         .borrow()
         .as_ref()
-        .cloned()
+        .copied()
         .expect("state captured during composition");
 
     state.set(1);

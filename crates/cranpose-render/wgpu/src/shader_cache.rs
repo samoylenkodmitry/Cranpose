@@ -736,11 +736,11 @@ mod tests {
         format!(
             "{}\n{}",
             cranpose_ui_graphics::RUNTIME_SHADER_PRELUDE_WGSL,
-            r#"@fragment
+            r"@fragment
 fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     return textureSample(input_texture, input_sampler, input.uv);
 }
-"#
+"
         )
     }
 
@@ -757,14 +757,14 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
 
     #[test]
     fn validator_rejects_missing_required_entry_points() {
-        let missing_effect_fs = r#"
+        let missing_effect_fs = r"
 @vertex
 fn fullscreen_vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
     let x = f32(i32(i & 1u) * 2 - 1);
     let y = f32(i32(i >> 1u) * 2 - 1);
     return vec4<f32>(x, y, 0.0, 1.0);
 }
-"#;
+";
         assert!(validate_runtime_shader_source(missing_effect_fs, wgpu::Backend::Vulkan).is_err());
     }
 
@@ -782,7 +782,7 @@ fn fullscreen_vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> 
             assert!(
                 result.is_ok(),
                 "{name} should remain GL-portable: {}",
-                result.err().map(|e| e.to_string()).unwrap_or_default()
+                result.err().unwrap_or_default()
             );
         }
     }

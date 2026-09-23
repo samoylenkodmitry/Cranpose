@@ -19,22 +19,22 @@ fn main() {
 
             let click_button = |name: &str| -> bool {
                 if let Some((x, y, w, h)) = find_button_in_semantics(&robot, name) {
-                    println!("  Found button '{}' at ({:.1}, {:.1})", name, x, y);
+                    println!("  Found button '{name}' at ({x:.1}, {y:.1})");
                     robot.click(x + w / 2.0, y + h / 2.0).ok();
                     std::thread::sleep(Duration::from_millis(100));
                     true
                 } else {
-                    println!("  ✗ Button '{}' not found!", name);
+                    println!("  ✗ Button '{name}' not found!");
                     false
                 }
             };
 
             let verify_text = |text: &str| -> bool {
                 if let Some((x, y, _, _)) = find_text_in_semantics(&robot, text) {
-                    println!("  ✓ Found text '{}' at ({:.1}, {:.1})", text, x, y);
+                    println!("  ✓ Found text '{text}' at ({x:.1}, {y:.1})");
                     true
                 } else {
-                    println!("  ✗ Text '{}' not found!", text);
+                    println!("  ✗ Text '{text}' not found!");
                     false
                 }
             };
@@ -42,12 +42,11 @@ fn main() {
             let verify_text_prefix = |prefix: &str| -> bool {
                 if let Some((x, y, _, _, text)) = find_text_by_prefix_in_semantics(&robot, prefix) {
                     println!(
-                        "  ✓ Found text '{}' (prefix '{}') at ({:.1}, {:.1})",
-                        text, prefix, x, y
+                        "  ✓ Found text '{text}' (prefix '{prefix}') at ({x:.1}, {y:.1})"
                     );
                     true
                 } else {
-                    println!("  ✗ Text with prefix '{}' not found!", prefix);
+                    println!("  ✗ Text with prefix '{prefix}' not found!");
                     false
                 }
             };
@@ -77,7 +76,7 @@ fn main() {
                 };
                 let mut items: Vec<VisibleItemBounds> = Vec::new();
                 for i in 0..100 {
-                    let item_text = format!("ItemRow #{}", i);
+                    let item_text = format!("ItemRow #{i}");
                     if let Some(row_elem) = find_element_by_text_exact(&semantics, &item_text) {
                         let row_bounds = (
                             row_elem.bounds.x,
@@ -85,7 +84,7 @@ fn main() {
                             row_elem.bounds.width,
                             row_elem.bounds.height,
                         );
-                        let hello_text = format!("Hello #{}", i);
+                        let hello_text = format!("Hello #{i}");
                         let hello_bounds =
                             find_element_by_text_exact(&semantics, &hello_text).map(|elem| {
                                 (
@@ -143,19 +142,17 @@ fn main() {
 
             if let Some((x, y, w, h)) = list_bounds {
                 println!(
-                    "  ✓ LazyListViewport bounds=({:.1},{:.1},{:.1},{:.1})",
-                    x, y, w, h
+                    "  ✓ LazyListViewport bounds=({x:.1},{y:.1},{w:.1},{h:.1})"
                 );
                 if h < 150.0 {
-                    println!("  ⚠️  LazyListViewport height is suspiciously small: {:.1}", h);
+                    println!("  ⚠️  LazyListViewport height is suspiciously small: {h:.1}");
                     has_issues = true;
                 }
                 if let Some((root_x, root_y, root_w, root_h)) = root_bounds(&robot) {
                     let min_expected_height = (root_h * 0.35).max(220.0);
                     if h < min_expected_height {
                         println!(
-                            "  ⚠️  LazyListViewport is too short for the window: {:.1} < {:.1}",
-                            h, min_expected_height
+                            "  ⚠️  LazyListViewport is too short for the window: {h:.1} < {min_expected_height:.1}"
                         );
                         has_issues = true;
                     }
@@ -196,14 +193,12 @@ fn main() {
                 let after_drag_index = read_stat("FirstIndex: ").unwrap_or(initial_first_index);
                 if after_drag_index <= initial_first_index {
                     println!(
-                        "  ⚠️  Drag did not advance first index: {} -> {}",
-                        initial_first_index, after_drag_index
+                        "  ⚠️  Drag did not advance first index: {initial_first_index} -> {after_drag_index}"
                     );
                     has_issues = true;
                 } else {
                     println!(
-                        "  ✓ Drag advanced first index: {} -> {}",
-                        initial_first_index, after_drag_index
+                        "  ✓ Drag advanced first index: {initial_first_index} -> {after_drag_index}"
                     );
                 }
             } else {
@@ -290,7 +285,7 @@ fn main() {
             }
 
             if overlap_count > 0 {
-                println!("  ✗ Found {} overlapping item pairs!", overlap_count);
+                println!("  ✗ Found {overlap_count} overlapping item pairs!");
                 has_issues = true;
             } else {
                 println!("  ✓ No overlapping items detected");
@@ -302,11 +297,11 @@ fn main() {
                 let (idx_curr, _row_curr, group_curr) = items[i];
                 let gap = group_curr.1 - (group_prev.1 + group_prev.3);
                 if gap < -1.0 {
-                    println!("  ⚠️  Negative gap ({:.1}px) between Item #{} and #{}", gap, idx_prev, idx_curr);
+                    println!("  ⚠️  Negative gap ({gap:.1}px) between Item #{idx_prev} and #{idx_curr}");
                 } else if gap > 50.0 {
-                    println!("  ⚠️  Large gap ({:.1}px) between Item #{} and #{}", gap, idx_prev, idx_curr);
+                    println!("  ⚠️  Large gap ({gap:.1}px) between Item #{idx_prev} and #{idx_curr}");
                 } else {
-                    println!("  Item #{} -> #{}: gap = {:.1}px", idx_prev, idx_curr, gap);
+                    println!("  Item #{idx_prev} -> #{idx_curr}: gap = {gap:.1}px");
                 }
             }
 
@@ -341,20 +336,19 @@ fn main() {
 
             if cached_value > max_cached {
                 println!(
-                    "  ✗ Cached count too high: {} (expected <= {})",
-                    cached_value, max_cached
+                    "  ✗ Cached count too high: {cached_value} (expected <= {max_cached})"
                 );
                 has_issues = true;
             } else {
-                println!("  ✓ Cached pool within cap: {}", cached_value);
+                println!("  ✓ Cached pool within cap: {cached_value}");
             }
 
             println!("\n=== SUMMARY ===");
             if has_issues || overlap_count > 0 || has_bounds_mismatch {
                 println!("✗ LazyColumn has rendering issues:");
-                println!("  - Overlaps: {}", overlap_count);
-                println!("  - Size issues: {}", has_issues);
-                println!("  - Bounds mismatch: {}", has_bounds_mismatch);
+                println!("  - Overlaps: {overlap_count}");
+                println!("  - Size issues: {has_issues}");
+                println!("  - Bounds mismatch: {has_bounds_mismatch}");
                 robot.exit().ok();
                 std::process::exit(1);
             } else {

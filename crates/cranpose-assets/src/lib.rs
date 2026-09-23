@@ -4,7 +4,7 @@ use std::{
     collections::HashMap,
     fmt,
     path::{Component, Path, PathBuf},
-    sync::{Arc, Mutex, MutexGuard},
+    sync::{Arc, Mutex, MutexGuard, PoisonError},
 };
 
 /// Error returned by [`AssetManager`] load operations.
@@ -163,9 +163,7 @@ impl AssetManager {
     }
 
     fn cache(&self) -> MutexGuard<'_, HashMap<PathBuf, Arc<[u8]>>> {
-        self.cache
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+        self.cache.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
@@ -228,7 +226,7 @@ mod tests {
 
         let mut assets = AssetManager::with_root(&first);
         assets.add_root(&second);
-        assert_eq!(assets.roots(), &[first.clone(), second.clone()]);
+        assert_eq!(assets.roots(), &[first, second.clone()]);
 
         assert_eq!(
             assets.load_bytes("shared.txt").expect("shared").as_ref(),

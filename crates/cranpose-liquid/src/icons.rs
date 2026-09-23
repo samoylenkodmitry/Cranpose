@@ -60,7 +60,6 @@ const ICON_VIEW_BOX: f32 = 24.0;
 /// module's constants or any compatible data); `size` is the rendered square
 /// in dp.
 #[composable]
-#[allow(non_snake_case)]
 pub fn Icon(path: &'static str, content_description: Option<String>, size: f32, color: Color) {
     let parsed = rememberKeyed(path, |path| VectorPath::parse(path).ok());
     let modifier = Modifier::empty()

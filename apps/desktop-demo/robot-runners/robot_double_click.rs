@@ -30,17 +30,16 @@ fn main() {
             }
 
             println!("--- Step 2: Find text field ---");
-            let (field_x, field_y, field_w, field_h) = if let Some(pos) =
+            let Some((field_x, field_y, field_w, field_h)) =
                 text_input_robot_helpers::wait_for_in_semantics(&robot, |robot| {
                     find_in_semantics(robot, |elem| find_text(elem, "Type here..."))
-                }) {
-                pos
-            } else {
+                })
+            else {
                 println!("✗ FAIL: Could not find text field");
                 let _ = robot.exit();
                 return;
             };
-            println!("✓ Found text field at ({:.0}, {:.0})\n", field_x, field_y);
+            println!("✓ Found text field at ({field_x:.0}, {field_y:.0})\n");
 
             println!("--- Step 3: Add text words ---");
             for i in 0..8 {
@@ -75,7 +74,7 @@ fn main() {
             std::thread::sleep(Duration::from_millis(50));
 
             let focused_after_click = robot.has_focused_text_field().unwrap_or(false);
-            println!("  • Focused after single click: {}", focused_after_click);
+            println!("  • Focused after single click: {focused_after_click}");
 
             let _ = robot.mouse_down();
             std::thread::sleep(Duration::from_millis(20));
@@ -85,7 +84,7 @@ fn main() {
             println!("  • Double-click performed");
 
             let focused_after_double = robot.has_focused_text_field().unwrap_or(false);
-            println!("  • Focused after double-click: {}", focused_after_double);
+            println!("  • Focused after double-click: {focused_after_double}");
 
             if !focused_after_double {
                 println!("  (Note: app-thread focus query returned false)");
@@ -114,7 +113,7 @@ fn main() {
             println!("  • Triple-click performed");
 
             let focused_after_triple = robot.has_focused_text_field().unwrap_or(false);
-            println!("  • Focused after triple-click: {}", focused_after_triple);
+            println!("  • Focused after triple-click: {focused_after_triple}");
 
             if !focused_after_triple {
                 println!("  (Note: app-thread focus query returned false)");

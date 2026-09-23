@@ -793,7 +793,6 @@ fn launch_comment_thread(
         state.set(ThreadState::Loading(story.clone()));
         let client = client.clone();
         let story_for_load = story.clone();
-        let story_for_error = story.clone();
 
         scope.launch_background(
             move |token| async move {
@@ -804,10 +803,7 @@ fn launch_comment_thread(
             },
             move |result| match result {
                 Ok(data) => state.set(ThreadState::Success(data)),
-                Err(message) => state.set(ThreadState::Error {
-                    story: story_for_error,
-                    message,
-                }),
+                Err(message) => state.set(ThreadState::Error { story, message }),
             },
         );
     });
@@ -828,7 +824,6 @@ fn launch_load_more_comments(
                 if data.is_loading_more || !data.has_more() {
                     return;
                 }
-                let data = data.clone();
                 state.set(ThreadState::Success(data.clone().with_loading_more(true)));
                 data
             }
@@ -838,14 +833,13 @@ fn launch_load_more_comments(
         let expected_story_id = data.story.id;
         let expected_loaded_count = data.loaded_count();
         let client = client.clone();
-        let data_for_load = data.clone();
 
         scope.launch_background(
             move |token| async move {
                 if token.is_cancelled() {
                     return Err("Cancelled".to_string());
                 }
-                load_comment_page(&client, data_for_load, COMMENT_PAGE_SIZE).await
+                load_comment_page(&client, data, COMMENT_PAGE_SIZE).await
             },
             move |result| match result {
                 Ok(updated) => {
@@ -880,7 +874,6 @@ fn launch_load_more_comments(
     });
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn AutoLoadMore(
     list_state: cranpose_foundation::lazy::LazyListState,
@@ -915,7 +908,6 @@ fn AutoLoadMore(
     });
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn AutoLoadMoreComments(
     list_state: cranpose_foundation::lazy::LazyListState,
@@ -957,8 +949,7 @@ fn discussion_status_detail(data: &CommentThreadData) -> String {
 
     if data.is_depth_truncated() {
         detail.push_str(&format!(
-            " Replies deeper than {} levels stay collapsed.",
-            MAX_COMMENT_DEPTH
+            " Replies deeper than {MAX_COMMENT_DEPTH} levels stay collapsed."
         ));
     }
 
@@ -975,7 +966,6 @@ thread_local! {
 }
 
 #[cfg(test)]
-#[allow(non_snake_case)]
 #[composable]
 fn DebugScopeTag(name: &'static str) {
     cranpose_core::with_current_composer(|composer| {
@@ -987,7 +977,6 @@ fn DebugScopeTag(name: &'static str) {
     });
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn ActionButton<F>(label: String, background: Color, text_color: Color, on_click: F)
 where
@@ -1019,7 +1008,6 @@ fn hacker_news_scrollbar_style(palette: HackerNewsPalette) -> LazyScrollbarStyle
     }
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn StatusCard(
     modifier: Modifier,
@@ -1047,7 +1035,6 @@ fn StatusCard(
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn HackerNewsHeader<F1, F2, F3>(
     palette: HackerNewsPalette,
@@ -1172,7 +1159,6 @@ fn loading_skeleton_item(palette: HackerNewsPalette) {
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn StoryItem<F>(
     story: Story,
@@ -1208,7 +1194,6 @@ fn StoryItem<F>(
             14.0,
         )
         .semantics({
-            let semantics_id = semantics_id.clone();
             move |config: &mut SemanticsConfiguration| {
                 config.content_description = Some(semantics_id.clone());
             }
@@ -1307,7 +1292,6 @@ fn StoryItem<F>(
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn StoriesPane(
     modifier: Modifier,
@@ -1398,7 +1382,6 @@ fn StoriesPane(
                                 });
                             }
                             NewsState::Error(message) => {
-                                let message = message.clone();
                                 scope.item_keyed(Some(0), None, move || {
                                     StatusCard(
                                         Modifier::empty().fill_max_width(),
@@ -1445,7 +1428,6 @@ fn StoriesPane(
                                 );
 
                                 scope.item_keyed(Some(STORY_LIST_FOOTER_KEY), None, {
-                                    let data = data.clone();
                                     move || {
                                         if data.has_more() {
                                             if data.is_loading_more {
@@ -1486,7 +1468,6 @@ fn StoriesPane(
     LAST_STORIES_PANE_NODE_ID.with(|slot| *slot.borrow_mut() = Some(_node_id));
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn StorySummaryCard(story: Story, palette: HackerNewsPalette) {
     let uri_handler = local_uri_handler().current();
@@ -1579,7 +1560,6 @@ fn StorySummaryCard(story: Story, palette: HackerNewsPalette) {
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn CommentRow(comment: CommentEntry, palette: HackerNewsPalette) {
     let indent = ((comment.depth as f32) * 18.0).min(90.0);
@@ -1588,7 +1568,7 @@ fn CommentRow(comment: CommentEntry, palette: HackerNewsPalette) {
     let body = if comment.body.is_empty() {
         "[empty comment]".to_string()
     } else {
-        comment.body.clone()
+        comment.body
     };
 
     Column(
@@ -1632,7 +1612,6 @@ fn CommentRow(comment: CommentEntry, palette: HackerNewsPalette) {
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn CommentsFooter(
     data: CommentThreadData,
@@ -1686,7 +1665,6 @@ fn CommentsFooter(
     }
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn ThreadPane(
     modifier: Modifier,
@@ -1767,10 +1745,7 @@ fn ThreadPane(
                     }
                     ThreadState::Success(data) => {
                         let story_key = story.id;
-                        let story_for_list = story.clone();
                         cranpose_core::with_key(&story_key, {
-                            let data = data.clone();
-                            let story = story_for_list.clone();
                             move || {
                                 let comment_list_state =
                                     cranpose_foundation::lazy::rememberLazyListState();
@@ -1790,7 +1765,6 @@ fn ThreadPane(
                                         let data = data.clone();
                                         move || {
                                             let comments = Arc::new(data.comments.clone());
-                                            let data_for_items = data.clone();
                                             LazyColumn(
                                                 Modifier::empty().fill_max_size().semantics(
                                                     |config: &mut SemanticsConfiguration| {
@@ -1807,7 +1781,7 @@ fn ThreadPane(
                                                     .content_padding(4.0, 4.0),
                                                 {
                                                     let comments = Arc::clone(&comments);
-                                                    let data = data_for_items.clone();
+                                                    let data = data.clone();
                                                     let story = story.clone();
                                                     move |scope| {
                                                         scope.item_keyed(
@@ -1904,7 +1878,6 @@ fn ThreadPane(
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 pub fn HackerNewsTab() {
     #[cfg(test)]
@@ -2103,7 +2076,6 @@ pub fn HackerNewsTab() {
 
 pub const HACKER_NEWS_SCROLL_STABILITY_TARGET_TITLE: &str = "Robot HN Story 024";
 
-#[allow(non_snake_case)]
 #[composable]
 pub fn HackerNewsScrollStabilityFixtureTab() {
     let list_state = cranpose_foundation::lazy::rememberLazyListState();
@@ -2158,10 +2130,11 @@ fn scroll_stability_news_data() -> NewsData {
 #[cfg(test)]
 mod tests {
     use std::{
+        cell::Cell,
         collections::HashMap,
         sync::{
             atomic::{AtomicUsize, Ordering},
-            Arc, Mutex, MutexGuard, OnceLock,
+            Arc, Mutex, MutexGuard, OnceLock, PoisonError,
         },
         time::Duration,
     };
@@ -2184,7 +2157,7 @@ mod tests {
         TEST_LOCK
             .get_or_init(|| Mutex::new(()))
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .unwrap_or_else(PoisonError::into_inner)
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -2759,8 +2732,8 @@ mod tests {
         panic!(
             "{context}; visible_texts={:?} stories_pane_calls={} thread_pane_calls={} stories_pane_node_id={stories_pane_node_id:?} stories_pane_bounds={stories_pane_bounds:?} stories_pane_child_count={stories_pane_child_count:?} stories_pane_layout={stories_pane_layout:?}",
             layout_texts(robot),
-            super::STORIES_PANE_CALLS.with(|count| count.get()),
-            super::THREAD_PANE_CALLS.with(|count| count.get()),
+            super::STORIES_PANE_CALLS.with(Cell::get),
+            super::THREAD_PANE_CALLS.with(Cell::get),
         );
     }
 
@@ -3359,8 +3332,8 @@ mod tests {
             unique_node_ids,
             vec![restored_list_node_id],
             "restored HackerNewsList host changed during drag; initial_list_node_id={initial_list_node_id} restored_list_node_id={restored_list_node_id} seen_node_ids={seen_node_ids:?} stories_pane_calls={} thread_pane_calls={} visible_texts={:?}",
-            super::STORIES_PANE_CALLS.with(|count| count.get()),
-            super::THREAD_PANE_CALLS.with(|count| count.get()),
+            super::STORIES_PANE_CALLS.with(Cell::get),
+            super::THREAD_PANE_CALLS.with(Cell::get),
             layout_texts(&mut robot),
         );
     }

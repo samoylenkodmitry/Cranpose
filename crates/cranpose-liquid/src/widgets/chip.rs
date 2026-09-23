@@ -21,7 +21,6 @@ use crate::{
 /// unselected chip rests as a fill-washed pane that still transmits its
 /// backdrop.
 #[composable]
-#[allow(non_snake_case)]
 pub fn LiquidChip(
     modifier: Modifier,
     selected: bool,
@@ -35,7 +34,6 @@ pub fn LiquidChip(
 /// Save, Cancel, Retry. `prominent` gives it the raised look of a selected
 /// chip, and a screen reader hears a plain button either way.
 #[composable]
-#[allow(non_snake_case)]
 pub fn LiquidActionChip(
     modifier: Modifier,
     prominent: bool,
@@ -46,7 +44,6 @@ pub fn LiquidActionChip(
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn ChipPane(
     modifier: Modifier,
     selected: bool,

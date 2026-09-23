@@ -23,7 +23,7 @@ pub struct RenderDiagnostics {
 impl RenderDiagnostics {
     pub fn new() -> Self {
         Self {
-            reported_warnings: RefCell::new(HashSet::new()),
+            reported_warnings: RefCell::new(HashSet::default()),
             live_modifier_slice_lookup_miss_count: Cell::new(0),
         }
     }
@@ -723,7 +723,7 @@ mod tests {
     #[test]
     fn collecting_observation_owners_clears_an_empty_scene() {
         let scene = Scene::new();
-        let mut nodes = HashSet::from([13, 17]);
+        let mut nodes = HashSet::from_iter([13, 17]);
         let capacity = nodes.capacity();
         assert!(scene.collect_retained_visual_observation_nodes(&mut nodes));
         assert!(nodes.is_empty());

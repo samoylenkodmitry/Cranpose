@@ -778,7 +778,7 @@ fn scan_preprocessor_line(code: &str, pos: usize) -> Option<(Token, usize)> {
     if code[pos..].chars().next()? != '#' {
         return None;
     }
-    let line_start = code[..pos].rfind('\n').map(|index| index + 1).unwrap_or(0);
+    let line_start = code[..pos].rfind('\n').map_or(0, |index| index + 1);
     if code[line_start..pos].chars().any(|c| !is_whitespace(c)) {
         return None;
     }
@@ -1162,7 +1162,7 @@ mod tests {
                     i,
                     token.end
                 );
-                assert!(token.start <= token.end, "Token {}: start > end", i);
+                assert!(token.start <= token.end, "Token {i}: start > end");
 
                 if i > 0 {
                     assert_eq!(
@@ -1180,9 +1180,7 @@ mod tests {
                         let _slice2 = &code[token2.start..token2.end];
                         assert!(
                             token.end <= token2.start || token2.end <= token.start,
-                            "Token {} and {} overlap",
-                            i,
-                            j
+                            "Token {i} and {j} overlap"
                         );
                     }
                 }
@@ -1205,8 +1203,7 @@ mod tests {
         let found = tokens.iter().find(|t| t.kind == expected_kind);
         assert!(
             found.is_some(),
-            "Expected {:?} token not found",
-            expected_kind
+            "Expected {expected_kind:?} token not found"
         );
     }
 
@@ -1362,10 +1359,7 @@ mod tests {
         let count = tokens.iter().filter(|t| t.kind == kind).count();
         assert!(
             count >= min_count,
-            "Expected at least {} {:?} tokens, found {}",
-            min_count,
-            kind,
-            count
+            "Expected at least {min_count} {kind:?} tokens, found {count}"
         );
     }
 

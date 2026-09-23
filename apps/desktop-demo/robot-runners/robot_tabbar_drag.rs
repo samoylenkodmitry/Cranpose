@@ -63,10 +63,7 @@ fn main() {
                 let start_x = x + w / 2.0;
                 let start_y = y + h / 2.0;
 
-                println!(
-                    "  Starting drag from 'Counter App' at ({:.1}, {:.1})",
-                    start_x, start_y
-                );
+                println!("  Starting drag from 'Counter App' at ({start_x:.1}, {start_y:.1})");
 
                 let _ = robot.mouse_move(start_x, start_y);
                 std::thread::sleep(Duration::from_millis(50));
@@ -129,11 +126,10 @@ fn main() {
                     (Some(before), Some(after)) => {
                         let delta = (after - before).abs();
                         if delta > 50.0 {
-                            println!("  ✓ PASS: Tab moved by {:.1}px", delta);
+                            println!("  ✓ PASS: Tab moved by {delta:.1}px");
                         } else {
                             println!(
-                                "  ✗ FAIL: Tab only moved {:.1}px - TABBAR SCROLL BROKEN!",
-                                delta
+                                "  ✗ FAIL: Tab only moved {delta:.1}px - TABBAR SCROLL BROKEN!"
                             );
                             println!("         Expected >50px movement from 200px drag");
                             std::process::exit(1);

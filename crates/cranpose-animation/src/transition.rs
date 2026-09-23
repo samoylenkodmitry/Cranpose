@@ -134,7 +134,7 @@ impl<S: Clone + 'static> Transition<S> {
                 }
             });
 
-            let animatable_clone = anim.with(|animatable| animatable.clone());
+            let animatable_clone = anim.with(Clone::clone);
             let identity = animatable_clone.identity();
             let transition_inner = Rc::clone(&self.inner);
             cranpose_core::__disposable_effect_impl(
@@ -150,7 +150,7 @@ impl<S: Clone + 'static> Transition<S> {
                 },
             );
 
-            anim.with(|animatable| animatable.state())
+            anim.with(super::animation::Animatable::state)
         })
     }
 
@@ -198,7 +198,7 @@ pub fn updateTransition<S: Clone + 'static>(target_state: S, label: &str) -> Tra
         let transition: Owned<Transition<S>> =
             composer.remember_at(caller, || Transition::new(target_state.clone()));
         transition.with(|transition| transition.set_target_state(target_state.clone()));
-        transition.with(|transition| transition.clone())
+        transition.with(Clone::clone)
     })
 }
 

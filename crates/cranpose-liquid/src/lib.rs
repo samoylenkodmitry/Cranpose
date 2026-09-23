@@ -16,8 +16,6 @@
 //! });
 //! ```
 
-#![allow(non_snake_case)]
-
 pub mod appearance;
 pub mod dynamics;
 pub mod icons;

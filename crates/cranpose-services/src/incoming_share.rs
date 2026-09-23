@@ -251,6 +251,8 @@ pub fn rememberIncomingContent() -> EventStream<IncomingContent> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::PoisonError;
+
     use super::*;
 
     fn recording_observer() -> (Observer, Arc<Mutex<Vec<String>>>) {
@@ -259,8 +261,8 @@ mod tests {
         let observer: Observer = Arc::new(move |item: IncomingContent| {
             recorder
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .push(item.display_name())
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(item.display_name());
         });
         (observer, seen)
     }
@@ -302,7 +304,9 @@ mod tests {
         }
 
         assert_eq!(
-            seen.lock().unwrap_or_else(|e| e.into_inner()).as_slice(),
+            seen.lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .as_slice(),
             ["scan.jpg"]
         );
     }

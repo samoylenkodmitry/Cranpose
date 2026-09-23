@@ -300,7 +300,7 @@ pub fn schedule_focus_invalidation(node_id: NodeId) {
 
 /// Returns true if any focus invalidations are pending.
 pub fn has_pending_focus_invalidations() -> bool {
-    crate::render_state::with_focus_dispatch(|state| state.has_pending_invalidation())
+    crate::render_state::with_focus_dispatch(FocusInvalidationState::has_pending_invalidation)
 }
 
 /// Sets the currently active focus target.
@@ -313,7 +313,7 @@ pub fn set_active_focus_target(node_id: Option<NodeId>) {
 
 /// Returns the currently active focus target, if any.
 pub fn active_focus_target() -> Option<NodeId> {
-    crate::render_state::with_focus_dispatch(|state| state.active_focus_target())
+    crate::render_state::with_focus_dispatch(FocusInvalidationState::active_focus_target)
 }
 
 pub(crate) fn register_focus_target(node_id: NodeId, handle: Rc<dyn FocusTargetHandle>) {
@@ -322,7 +322,7 @@ pub(crate) fn register_focus_target(node_id: NodeId, handle: Rc<dyn FocusTargetH
 
 pub(crate) fn unregister_focus_target(node_id: NodeId, handle: &Rc<dyn FocusTargetHandle>) {
     crate::render_state::with_focus_dispatch(|state| {
-        state.unregister_focus_target(node_id, handle)
+        state.unregister_focus_target(node_id, handle);
     });
 }
 
@@ -345,7 +345,7 @@ pub(crate) fn request_focus_in_context(node_id: NodeId) -> bool {
 
 /// Drops focus from the active target and answers whether one held it.
 pub(crate) fn clear_active_focus() -> bool {
-    crate::render_state::with_focus_dispatch(|state| state.clear_active_focus())
+    crate::render_state::with_focus_dispatch(FocusInvalidationState::clear_active_focus)
 }
 
 pub(crate) fn request_focus_for(
@@ -371,7 +371,7 @@ where
 
 /// Clears all pending focus invalidations without processing them.
 pub fn clear_focus_invalidations() {
-    crate::render_state::with_focus_dispatch(|state| state.clear());
+    crate::render_state::with_focus_dispatch(FocusInvalidationState::clear);
 }
 
 #[cfg(test)]
@@ -639,9 +639,10 @@ mod tests {
         struct PanicsOnActivate;
         impl FocusTargetHandle for PanicsOnActivate {
             fn set_focus_state(&self, state: FocusState) {
-                if state == FocusState::Active {
-                    panic!("focus target panicked while activating");
-                }
+                assert!(
+                    state != FocusState::Active,
+                    "focus target panicked while activating"
+                );
             }
         }
 
@@ -677,5 +678,5 @@ pub fn set_keyboard_focus_visible(visible: bool) -> bool {
 
 /// Whether the keyboard, and not a pointer, made the last focus move.
 pub fn keyboard_focus_visible() -> bool {
-    KEYBOARD_FOCUS_VISIBLE.with(|cell| cell.get())
+    KEYBOARD_FOCUS_VISIBLE.with(Cell::get)
 }

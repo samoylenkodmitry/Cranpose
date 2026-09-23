@@ -33,7 +33,6 @@ thread_local! {
 /// });
 /// ```
 #[composable]
-#[allow(non_snake_case)]
 pub fn UnhandledKeyEvents(handler: impl Fn(&KeyEvent) -> bool + 'static) {
     let latest: KeyHandler = remember(|| {
         let placeholder: Rc<dyn Fn(&KeyEvent) -> bool> = Rc::new(|_: &KeyEvent| false);

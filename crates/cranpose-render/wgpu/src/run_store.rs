@@ -7,6 +7,7 @@ use cranpose_ui_graphics::{
     ShapeRecordBody, ShapeRecordCurve, band_class_segments, strip_index_pattern, strip_indices,
 };
 use smallvec::SmallVec;
+use wgpu::util::DeviceExt;
 
 use crate::{
     frame_graph::{
@@ -456,18 +457,13 @@ impl StripIndexBuffer {
             return;
         }
         let indices: Vec<u32> = strip_index_pattern(segments).collect();
-        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Run Strip Indices"),
-            size: std::mem::size_of_val(indices.as_slice()) as u64,
-            usage: wgpu::BufferUsages::INDEX,
-            mapped_at_creation: true,
-        });
-        buffer
-            .slice(..)
-            .get_mapped_range_mut()
-            .copy_from_slice(bytemuck::cast_slice(&indices));
-        buffer.unmap();
-        self.buffer = Some(buffer);
+        self.buffer = Some(
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Run Strip Indices"),
+                contents: bytemuck::cast_slice(&indices),
+                usage: wgpu::BufferUsages::INDEX,
+            }),
+        );
     }
 }
 

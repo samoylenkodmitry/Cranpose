@@ -1,7 +1,5 @@
 //! Testing utilities and harness for Cranpose
 
-#![allow(non_snake_case)]
-
 pub use cranpose_app_shell::{accessibility_audit, placed_semantics};
 pub mod robot;
 pub mod robot_assertions;

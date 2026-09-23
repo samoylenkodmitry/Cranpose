@@ -1,5 +1,3 @@
-#![allow(non_snake_case)]
-
 use std::{cell::Cell, hint::black_box, rc::Rc, sync::Arc, time::Duration};
 
 use cranpose_core::{
@@ -84,10 +82,10 @@ fn TabPayload(seed: u64, groups: usize) {
 fn TabSwitchContent(active_tab: usize, first_tab_key: Key, second_tab_key: Key, groups: usize) {
     cranpose_core::withCurrentComposer(|composer| match active_tab {
         0 => composer.cranpose_with_reuse(first_tab_key, RecomposeOptions::default(), |_| {
-            TabPayload(10_000, groups)
+            TabPayload(10_000, groups);
         }),
         _ => composer.cranpose_with_reuse(second_tab_key, RecomposeOptions::default(), |_| {
-            TabPayload(20_000, groups)
+            TabPayload(20_000, groups);
         }),
     });
 }
@@ -289,7 +287,7 @@ impl ConditionalToggleFixture {
         let include_toggled = self.include_toggled;
         self.composition
             .render(self.root_key, || {
-                ConditionalToggleContent(item_count, toggle_index, include_toggled)
+                ConditionalToggleContent(item_count, toggle_index, include_toggled);
             })
             .expect("conditional toggle render");
     }
@@ -330,7 +328,7 @@ impl TabSwitchFixture {
         let groups = self.groups;
         self.composition
             .render(self.root_key, || {
-                TabSwitchContent(active_tab, first_tab_key, second_tab_key, groups)
+                TabSwitchContent(active_tab, first_tab_key, second_tab_key, groups);
             })
             .expect("tab switch render");
     }
@@ -385,7 +383,7 @@ impl LazyListScrollFixture {
         let state_capture = Rc::clone(&self.state_capture);
         self.composition
             .render(self.root_key, move || {
-                LazyListScrollContent(Rc::clone(&state_capture))
+                LazyListScrollContent(Rc::clone(&state_capture));
             })
             .expect("lazy list render");
     }
@@ -486,7 +484,7 @@ impl AnimationFrameFixture {
         let state_capture = Rc::clone(&self.state_capture);
         self.composition
             .render(self.root_key, move || {
-                AnimationFrameContent(Rc::clone(&state_capture))
+                AnimationFrameContent(Rc::clone(&state_capture));
             })
             .expect("animation frame render");
     }

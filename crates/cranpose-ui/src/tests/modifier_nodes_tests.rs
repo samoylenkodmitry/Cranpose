@@ -424,13 +424,12 @@ fn mixed_modifier_chain_tracks_all_capabilities() {
     let mut context = BasicModifierNodeContext::new();
 
     let clicked = Rc::new(Cell::new(false));
-    let clicked_clone = clicked.clone();
 
     let elements = vec![
         modifier_element(PaddingElement::new(EdgeInsets::uniform(10.0))),
         modifier_element(AlphaElement::new(0.8)),
         modifier_element(ClickableElement::new(move |_| {
-            clicked_clone.set(true);
+            clicked.set(true);
         })),
         modifier_element(BackgroundElement::new(Color(1.0, 0.0, 0.0, 1.0))),
     ];

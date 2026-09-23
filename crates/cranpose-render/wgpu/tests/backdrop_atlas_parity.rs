@@ -184,13 +184,13 @@ fn probe_shader() -> RenderEffect {
     let mut shader = RuntimeShader::new(&format!(
         "{}\n{}",
         RUNTIME_SHADER_PRELUDE_WGSL,
-        r#"@fragment
+        r"@fragment
 fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let logical = u[63u].xy;
     let region = u[59u];
     return vec4<f32>(logical.x / 255.0, logical.y / 255.0, region.w / 255.0, 1.0);
 }
-"#
+"
     ));
     shader.set_batched_source(true);
     RenderEffect::runtime_shader(shader)
@@ -204,7 +204,7 @@ fn pixel_at(frame: &CapturedFrame, x: f32, y: f32) -> [u8; 4] {
 fn split_name_probe(name: &'static str) -> RenderEffect {
     let mut shader = RuntimeShader::new(&format!(
         "{RUNTIME_SHADER_PRELUDE_WGSL}\n{}",
-        r#"
+        r"
 override FIRST: i32 = 0;
 override SECOND: i32 = 0;
 @fragment
@@ -215,7 +215,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     }
     return select(vec4<f32>(0.0, 0.0, 1.0, 1.0), vec4<f32>(1.0, 0.0, 0.0, 1.0), FIRST != 0);
 }
-"#
+"
     ));
     shader.set_batched_source(true);
     shader.set_draw_split(Some(name));
@@ -540,7 +540,7 @@ fn resized_mixed_blur_atlases_preserve_every_substrate_slot() {
                 specs.rotate_left(index);
                 let mut shader = RuntimeShader::new(&format!(
                     "{RUNTIME_SHADER_PRELUDE_WGSL}\n{}",
-                    r#"@fragment
+                    r"@fragment
 fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let slot = min(u32(input.uv.x * 3.0), 2u);
     let substrate = u[58u - slot];
@@ -548,7 +548,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let held = clamp(input.uv, 0.5 / substrate.zw, vec2<f32>(1.0) - 0.5 / substrate.zw);
     let uv = (substrate.xy + held * substrate.zw) / dims;
     return vec4<f32>(textureSampleLevel(input_texture, input_sampler, uv, 0.0).rgb, 1.0);
-}"#,
+}",
                 ));
                 shader.set_batched_source(true);
                 shader.set_substrates(&specs);
@@ -1095,13 +1095,13 @@ fn layout_probe() -> RenderEffect {
     let mut shader = RuntimeShader::new(&format!(
         "{}\n{}",
         RUNTIME_SHADER_PRELUDE_WGSL,
-        r#"@fragment
+        r"@fragment
 fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let region = u[59u];
     let dims = vec2<f32>(textureDimensions(input_texture));
     return vec4<f32>(region.x / 4096.0, region.y / 4096.0, dims.x / 4096.0, 1.0);
 }
-"#
+"
     ));
     shader.set_batched_source(true);
     RenderEffect::runtime_shader(shader)

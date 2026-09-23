@@ -30,7 +30,7 @@ pub(crate) fn is_primary_pointer_button(button: &ButtonSource) -> bool {
         ButtonSource::Mouse(button) => *button == MouseButton::Left,
         ButtonSource::Touch { .. } => true,
         ButtonSource::TabletTool { button, .. } => is_primary_tablet_button(*button),
-        ButtonSource::Unknown(_) => false,
+        _ => false,
     }
 }
 

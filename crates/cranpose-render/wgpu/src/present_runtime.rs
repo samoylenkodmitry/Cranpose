@@ -1,6 +1,6 @@
 use std::{
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, PoisonError,
         atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{
             Receiver, RecvTimeoutError, Sender, SyncSender, TryRecvError, TrySendError, channel,
@@ -309,12 +309,9 @@ impl PresentState {
     }
 
     fn render_to_surface(&mut self, packet: FramePacket, width: u32, height: u32) {
-        let frame = match self.acquire_with_one_retry() {
-            Some(frame) => frame,
-            None => {
-                self.cancel_packet(packet, CancelReason::SurfaceUnavailable);
-                return;
-            }
+        let Some(frame) = self.acquire_with_one_retry() else {
+            self.cancel_packet(packet, CancelReason::SurfaceUnavailable);
+            return;
         };
         let after_acquire_ns = self.now();
         if let Some(delay) = ENCODE_DELAY_MS.parse::<u64>() {
@@ -335,7 +332,7 @@ impl PresentState {
             &mut returns,
         );
         let after_render_ns = self.now();
-        frame.present();
+        self.gpu_renderer.queue.present(frame);
         returns.timings = PresentTimings {
             after_acquire_ns,
             after_render_ns,
@@ -362,7 +359,7 @@ impl PresentState {
                     &self.gpu_renderer.queue,
                     &view,
                 );
-                frame.present();
+                self.gpu_renderer.queue.present(frame);
                 self.status
                     .placeholder_frames
                     .fetch_add(1, Ordering::Relaxed);
@@ -482,8 +479,7 @@ impl PresentState {
             .status
             .last_frame_stats
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) =
-            self.gpu_renderer.last_frame_stats();
+            .unwrap_or_else(PoisonError::into_inner) = self.gpu_renderer.last_frame_stats();
         self.status
             .needs_frame_warmup
             .store(self.gpu_renderer.needs_frame_warmup(), Ordering::Relaxed);
@@ -505,7 +501,7 @@ impl PresentState {
     }
 
     fn now(&self) -> i64 {
-        self.clock.as_ref().map(|clock| clock()).unwrap_or(0)
+        self.clock.as_ref().map_or(0, |clock| clock())
     }
 }
 
@@ -605,12 +601,9 @@ impl PresentHandle {
         build: impl FnOnce(SyncSender<()>) -> PresentControl,
         what: &str,
     ) -> bool {
-        let ack_rx = match self.send_control_unacked(build) {
-            Some(ack_rx) => ack_rx,
-            None => {
-                log::error!("[present-runtime] {what}: runtime is gone");
-                return false;
-            }
+        let Some(ack_rx) = self.send_control_unacked(build) else {
+            log::error!("[present-runtime] {what}: runtime is gone");
+            return false;
         };
         match ack_rx.recv_timeout(CONTROL_ACK_TIMEOUT) {
             Ok(()) => true,
@@ -636,7 +629,7 @@ impl PresentHandle {
         self.msg_tx
             .send(PresentMsg::Control(build(ack_tx)))
             .ok()
-            .map(|_| ack_rx)
+            .map(|()| ack_rx)
     }
 
     pub(crate) fn shutdown(&mut self) {

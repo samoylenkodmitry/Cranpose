@@ -1,7 +1,7 @@
 use std::{
     hash::{Hash, Hasher},
     rc::Rc,
-    sync::{Arc, Mutex, MutexGuard},
+    sync::{Arc, Mutex, MutexGuard, PoisonError},
 };
 
 use ab_glyph::{
@@ -406,7 +406,7 @@ fn default_font_index(fonts: &[SoftwareTextFont]) -> usize {
             best = Some((index, score));
         }
     }
-    best.map(|(index, _)| index).unwrap_or(0)
+    best.map_or(0, |(index, _)| index)
 }
 
 #[derive(Clone, Copy)]
@@ -847,9 +847,7 @@ impl SoftwareTextMeasurer {
     }
 
     fn lock_cache(&self) -> MutexGuard<'_, SoftwareTextMetricsCache> {
-        self.cache
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+        self.cache.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     #[cfg(feature = "text-hyphenation")]
@@ -2977,16 +2975,14 @@ fn append_font_prefix_width_segment_cached(
         let separator = if index == 0 {
             0.0
         } else {
-            previous
-                .map(|previous_id| {
-                    weight_synthesis.apply_width(
-                        cache
-                            .glyph_metrics
-                            .kern(font, &scaled_font, previous_id, metrics.glyph_id)
-                            * h_scale,
-                    )
-                })
-                .unwrap_or(0.0)
+            previous.map_or(0.0, |previous_id| {
+                weight_synthesis.apply_width(
+                    cache
+                        .glyph_metrics
+                        .kern(font, &scaled_font, previous_id, metrics.glyph_id)
+                        * h_scale,
+                )
+            })
         };
         sink.separator_before.push(separator);
         sink.width += separator
@@ -3299,10 +3295,10 @@ fn max_line_height_for_annotated_text_with_resolver(
     font_size: f32,
     fonts: &SoftwareTextFontSet,
 ) -> f32 {
-    let base_line_height = fonts
-        .resolve(style)
-        .map(|font| line_height_for_style(style, font_size, font))
-        .unwrap_or_else(|| fallback_line_height(style, font_size));
+    let base_line_height = fonts.resolve(style).map_or_else(
+        || fallback_line_height(style, font_size),
+        |font| line_height_for_style(style, font_size, font),
+    );
     if text.span_styles.is_empty() {
         return base_line_height;
     }
@@ -3316,10 +3312,10 @@ fn max_line_height_for_annotated_text_with_resolver(
         }
         let segment_style = effective_style_for_range(&text.span_styles, style, start, end);
         let segment_font_size = resolve_font_size(&segment_style);
-        let segment_line_height = fonts
-            .resolve(&segment_style)
-            .map(|font| line_height_for_style(&segment_style, segment_font_size, font))
-            .unwrap_or_else(|| fallback_line_height(&segment_style, segment_font_size));
+        let segment_line_height = fonts.resolve(&segment_style).map_or_else(
+            || fallback_line_height(&segment_style, segment_font_size),
+            |font| line_height_for_style(&segment_style, segment_font_size, font),
+        );
         max_line_height = max_line_height.max(segment_line_height);
     }
     max_line_height
@@ -5801,7 +5797,7 @@ mod tests {
             let _guard = measurer
                 .cache
                 .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
+                .unwrap_or_else(PoisonError::into_inner);
             panic!("poison software text metrics cache for recovery test");
         }));
 
@@ -6390,7 +6386,10 @@ mod line_alignment_tests {
         .expect("start aligned run");
 
         let second_line_start = |glyphs: &[SoftwareGlyphAtlasRunGlyph]| {
-            let placements: Vec<_> = glyphs.iter().map(|glyph| glyph.placement()).collect();
+            let placements: Vec<_> = glyphs
+                .iter()
+                .map(super::SoftwareGlyphAtlasRunGlyph::placement)
+                .collect();
             let baseline = placements.iter().map(|p| p.y).max().expect("glyphs");
             placements
                 .iter()

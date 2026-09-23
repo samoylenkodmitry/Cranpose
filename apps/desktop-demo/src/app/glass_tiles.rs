@@ -1,5 +1,3 @@
-#![allow(non_snake_case)]
-
 use std::{cell::Cell, rc::Rc};
 
 use cranpose::{
@@ -602,7 +600,7 @@ pub fn GlassTilesTab() {
                             }
                         }
                     })
-                    .await
+                    .await;
             }),
         BoxSpec::default().content_alignment(Alignment::CENTER),
         move || Slab(clock, pointer, pressed_tile),
@@ -761,7 +759,7 @@ fn Tile(
                                 touch.on_event(&events.await_pointer_event().await);
                             }
                         })
-                        .await
+                        .await;
                 }
             }),
         BoxSpec::default(),

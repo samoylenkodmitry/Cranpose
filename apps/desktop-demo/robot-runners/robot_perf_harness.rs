@@ -173,7 +173,6 @@ enum PerfInputMethod {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn PerfHarnessApp(scenario: PerfScenario) {
     if scenario == PerfScenario::MarkdownViewerScroll {
         PERF_LAZY_LIST_STATE.with(|slot| {
@@ -237,7 +236,6 @@ fn PerfHarnessApp(scenario: PerfScenario) {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn ScenarioViewport(list_state: LazyListState, scenario: PerfScenario) {
     Box(
         Modifier::empty().fill_max_width().height(610.0),
@@ -274,7 +272,6 @@ fn ScenarioViewport(list_state: LazyListState, scenario: PerfScenario) {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn PerfScenarioList(list_state: LazyListState, scenario: PerfScenario) {
     LazyColumn(
         Modifier::empty().fill_max_size(),
@@ -295,7 +292,6 @@ fn populate_perf_items(scope: &mut impl LazyListScope, scenario: PerfScenario) {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn PerfScenarioItem(index: usize, scenario: PerfScenario) {
     match scenario {
         PerfScenario::LazyListScroll => CacheRow(index, scenario),
@@ -311,7 +307,6 @@ fn PerfScenarioItem(index: usize, scenario: PerfScenario) {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn ShadowedCardRow(index: usize) {
     let card = if index.is_multiple_of(2) {
         Color(0.98, 0.98, 0.99, 1.0)
@@ -329,7 +324,7 @@ fn ShadowedCardRow(index: usize) {
         BoxSpec::new(),
         move || {
             Text(
-                format!("Receipt {}", index),
+                format!("Receipt {index}"),
                 Modifier::empty(),
                 TextStyle::default(),
             );
@@ -338,7 +333,6 @@ fn ShadowedCardRow(index: usize) {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn CacheRow(index: usize, scenario: PerfScenario) {
     let card = if index.is_multiple_of(2) {
         Color(0.11, 0.13, 0.18, 1.0)
@@ -363,7 +357,7 @@ fn CacheRow(index: usize, scenario: PerfScenario) {
                         ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(4.0)),
                         move || {
                             Text(
-                                format!("Cache row {}", index),
+                                format!("Cache row {index}"),
                                 Modifier::empty(),
                                 TextStyle::default(),
                             );
@@ -382,7 +376,6 @@ fn CacheRow(index: usize, scenario: PerfScenario) {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn TextHeavyRow(index: usize, scenario: PerfScenario) {
     let card = if index.is_multiple_of(2) {
         Color(0.14, 0.11, 0.09, 1.0)
@@ -403,7 +396,7 @@ fn TextHeavyRow(index: usize, scenario: PerfScenario) {
                 ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(6.0)),
                 move || {
                     Text(
-                        format!("Paragraph card {}", index),
+                        format!("Paragraph card {index}"),
                         Modifier::empty(),
                         TextStyle::default(),
                     );
@@ -432,7 +425,6 @@ fn TextHeavyRow(index: usize, scenario: PerfScenario) {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn BackdropRow(index: usize) {
     let base = if index.is_multiple_of(3) {
         Color(0.18, 0.24, 0.32, 1.0)
@@ -455,7 +447,7 @@ fn BackdropRow(index: usize) {
                 ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(4.0)),
                 move || {
                     Text(
-                        format!("Backdrop band {}", index),
+                        format!("Backdrop band {index}"),
                         Modifier::empty(),
                         TextStyle::default(),
                     );
@@ -472,7 +464,6 @@ fn BackdropRow(index: usize) {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn OpaqueRow(index: usize) {
     let primary = if index.is_multiple_of(2) {
         Color(0.18, 0.2, 0.24, 1.0)
@@ -505,7 +496,6 @@ fn OpaqueRow(index: usize) {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn OpaqueBlock(color: Color) {
     Box(
         Modifier::empty()
@@ -519,7 +509,6 @@ fn OpaqueBlock(color: Color) {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn MarkdownViewerPerfApp() {
     let client = cranpose_core::remember(|| {
         Arc::new(MarkdownFixtureClient::from_body(
@@ -534,7 +523,6 @@ fn MarkdownViewerPerfApp() {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn MarkdownViewerDefaultFixturePerfApp() {
     let client = cranpose_core::remember(|| {
         Arc::new(MarkdownFixtureClient::default_leetcode_daily()) as HttpClientRef
@@ -547,7 +535,6 @@ fn MarkdownViewerDefaultFixturePerfApp() {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn PerfBadge(label: String, color: Color) {
     Box(
         Modifier::empty()
@@ -566,7 +553,6 @@ fn PerfBadge(label: String, color: Color) {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn BackdropOverlayCard() {
     Box(
         Modifier::empty()
@@ -602,7 +588,6 @@ fn BackdropOverlayCard() {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn GlassRow(index: usize) {
     let tint = match index % 4 {
         0 => Color(0.20, 0.26, 0.36, 0.55),
@@ -629,7 +614,7 @@ fn GlassRow(index: usize) {
                         ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(4.0)),
                         move || {
                             Text(
-                                format!("Glass row {}", index),
+                                format!("Glass row {index}"),
                                 Modifier::empty(),
                                 TextStyle::default(),
                             );
@@ -651,7 +636,6 @@ fn GlassRow(index: usize) {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn AnimatedGlassOverlay() {
     let transition = rememberInfiniteTransition("glass_overlay");
     let drift = transition.animateFloat(
@@ -740,12 +724,11 @@ fn frame_ms_budget_from(value: Option<&str>, default: f32) -> f32 {
 fn env_bool(key: &str, default: bool) -> bool {
     std::env::var(key)
         .ok()
-        .map(|value| match value.to_lowercase().as_str() {
+        .map_or(default, |value| match value.to_lowercase().as_str() {
             "1" | "true" | "yes" | "on" => true,
             "0" | "false" | "no" | "off" => false,
             _ => default,
         })
-        .unwrap_or(default)
 }
 
 fn timeout_slack_secs_from(value: Option<&str>) -> u64 {
@@ -1018,7 +1001,6 @@ fn verify_presentation_budget(
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn PresentedPerfHarness(scenario: PerfScenario, calibrate: bool) {
     if perf_presentation_probe::active(calibrate) {
         perf_presentation_probe::content();
@@ -1096,10 +1078,9 @@ fn main() {
 
     println!("=== Robot Perf Harness ===");
     println!("Scenario: {} ({})", scenario.name(), scenario.title());
-    println!("Duration: {}s (warmup {}s)", duration_secs, warmup_secs);
+    println!("Duration: {duration_secs}s (warmup {warmup_secs}s)");
     println!(
-        "Memory validation: {} (max growth {} KB, sample {} ms)",
-        validate_mem, max_growth_kb, sample_interval_ms
+        "Memory validation: {validate_mem} (max growth {max_growth_kb} KB, sample {sample_interval_ms} ms)"
     );
     println!("Wait idle after drag: {wait_idle_after_drag}");
     if min_fps > 0.0 {
@@ -1122,7 +1103,7 @@ fn main() {
             let timeout_secs = timeout_budget_secs(duration_secs, warmup_secs, timeout_slack_secs);
             std::thread::spawn(move || {
                 std::thread::sleep(Duration::from_secs(timeout_secs));
-                eprintln!("TIMEOUT: Perf harness exceeded {} seconds", timeout_secs);
+                eprintln!("TIMEOUT: Perf harness exceeded {timeout_secs} seconds");
                 std::process::exit(1);
             });
 
@@ -1252,7 +1233,7 @@ fn main() {
                             peak_rss_kb / 1024
                         );
                     }
-                    println!("Samples: {}", sample_count);
+                    println!("Samples: {sample_count}");
 
                     if growth > max_growth_kb {
                         fatal(

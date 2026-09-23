@@ -201,12 +201,12 @@ pub fn enter_event_handler_scope() -> EventHandlerScopeGuard {
 
 /// Returns true if currently in an event handler context.
 pub fn in_event_handler() -> bool {
-    IN_EVENT_HANDLER.with(|c| c.get())
+    IN_EVENT_HANDLER.with(Cell::get)
 }
 
 /// Returns true if currently in an applied snapshot context.
 pub fn in_applied_snapshot() -> bool {
-    IN_APPLIED_SNAPSHOT.with(|c| c.get())
+    IN_APPLIED_SNAPSHOT.with(Cell::get)
 }
 
 use std::{
@@ -1138,7 +1138,7 @@ pub fn movable<K: Hash>(key: K, content: impl FnOnce()) {
 #[allow(non_snake_case)]
 #[track_caller]
 pub fn rememberMovableContentOf(content: impl Fn() + 'static) -> MovableContent {
-    let runtime = with_current_composer(|composer| composer.runtime_handle());
+    let runtime = with_current_composer(composer::Composer::runtime_handle);
     let id = remember(|| runtime.next_movable_content_id()).with(|id| *id);
     MovableContent {
         id,
@@ -1210,7 +1210,7 @@ pub fn forget_movable<K: Hash>(key: K) {
 }
 
 fn forget_movable_id(id: Key) {
-    let runtime = composer_context::try_with_composer(|composer| composer.runtime_handle())
+    let runtime = composer_context::try_with_composer(composer::Composer::runtime_handle)
         .or_else(runtime::current_runtime_handle);
     match runtime {
         Some(runtime) => runtime.forget_movable(id),
@@ -1298,12 +1298,11 @@ where
                     state.run_cleanup();
                     state.set_key(key);
                 });
-                let state_for_effect = state.clone();
                 let mut effect_opt = Some(effect);
                 composer.register_side_effect(move || {
                     if let Some(effect) = effect_opt.take() {
                         let result = effect(DisposableEffectScope);
-                        state_for_effect.update(|state| state.set_cleanup(result.into_cleanup()));
+                        state.update(|state| state.set_cleanup(result.into_cleanup()));
                     }
                 });
             }
@@ -1354,7 +1353,7 @@ pub fn push_parent(id: NodeId) {
 }
 
 pub fn pop_parent() {
-    with_current_composer(|composer| composer.pop_parent());
+    with_current_composer(composer::Composer::pop_parent);
 }
 
 pub trait Node: Any {
@@ -2241,8 +2240,7 @@ impl CommandQueue {
         let needs_chunk = self
             .chunks
             .last()
-            .map(|chunk| chunk.len() == chunk.capacity())
-            .unwrap_or(true);
+            .is_none_or(|chunk| chunk.len() == chunk.capacity());
         if needs_chunk {
             self.chunks.push(Vec::with_capacity(COMMAND_CHUNK_CAPACITY));
         }
@@ -2654,7 +2652,7 @@ fn update_typed_node<N: Node + 'static>(node: &mut dyn Node, id: NodeId) -> Resu
     let typed = node
         .as_any_mut()
         .downcast_mut::<N>()
-        .ok_or(NodeError::TypeMismatch {
+        .ok_or_else(|| NodeError::TypeMismatch {
             id,
             expected: std::any::type_name::<N>(),
         })?;
@@ -3246,13 +3244,13 @@ impl MemoryApplier {
             .ok_or(NodeError::Missing { id })?
             .as_deref_mut()
             .ok_or(NodeError::Missing { id })?;
-        let typed = slot
-            .as_any_mut()
-            .downcast_mut::<N>()
-            .ok_or(NodeError::TypeMismatch {
-                id,
-                expected: std::any::type_name::<N>(),
-            })?;
+        let typed =
+            slot.as_any_mut()
+                .downcast_mut::<N>()
+                .ok_or_else(|| NodeError::TypeMismatch {
+                    id,
+                    expected: std::any::type_name::<N>(),
+                })?;
         Ok(f(typed))
     }
 
@@ -3278,17 +3276,9 @@ impl MemoryApplier {
 
     pub fn debug_recycled_node_count_for<N: Node + 'static>(&self) -> usize {
         let key = TypeId::of::<N>();
-        self.recycled_nodes.get(&key).map(Vec::len).unwrap_or(0)
-            + self
-                .returning_recycled_nodes
-                .get(&key)
-                .map(Vec::len)
-                .unwrap_or(0)
-            + self
-                .cold_recycled_nodes
-                .get(&key)
-                .map(Vec::len)
-                .unwrap_or(0)
+        self.recycled_nodes.get(&key).map_or(0, Vec::len)
+            + self.returning_recycled_nodes.get(&key).map_or(0, Vec::len)
+            + self.cold_recycled_nodes.get(&key).map_or(0, Vec::len)
     }
 
     pub fn debug_stats(&self) -> MemoryApplierDebugStats {
@@ -3414,7 +3404,7 @@ impl MemoryApplier {
     }
 
     fn warm_recycled_pool_len(&self, key: TypeId) -> usize {
-        self.recycled_nodes.get(&key).map(Vec::len).unwrap_or(0)
+        self.recycled_nodes.get(&key).map_or(0, Vec::len)
     }
 
     fn warm_recycled_node_target(&self, key: TypeId) -> usize {
@@ -3680,7 +3670,7 @@ impl MemoryApplier {
         if let Some(physical_id) = self.resolve_node_index(id) {
             if let Some(node) = self.nodes.get(physical_id).and_then(Option::as_ref) {
                 let type_name = std::any::type_name_of_val(&**node);
-                output.push_str(&format!("{}[{}] {}\n", indent, id, type_name));
+                output.push_str(&format!("{indent}[{id}] {type_name}\n"));
 
                 let children = node.children();
                 for child_id in children {
@@ -3688,12 +3678,11 @@ impl MemoryApplier {
                 }
             } else {
                 output.push_str(&format!(
-                    "{}[{}] (missing physical node {})\n",
-                    indent, id, physical_id
+                    "{indent}[{id}] (missing physical node {physical_id})\n"
                 ));
             }
         } else {
-            output.push_str(&format!("{}[{}] (missing)\n", indent, id));
+            output.push_str(&format!("{indent}[{id}] (missing)\n"));
         }
     }
 
@@ -3753,7 +3742,7 @@ impl MemoryApplier {
 
         self.high_id_nodes
             .get(&id)
-            .map(|node| node.as_ref())
+            .map(AsRef::as_ref)
             .ok_or(NodeError::Missing { id })
     }
 
@@ -3769,8 +3758,7 @@ impl MemoryApplier {
         self.get_ref(node_id)?.collect_owned_children_into(out);
         out.retain(|child_id| {
             self.node_parent(*child_id)
-                .map(|parent| parent == Some(node_id))
-                .unwrap_or(false)
+                .is_ok_and(|parent| parent == Some(node_id))
         });
         Ok(())
     }
@@ -3808,8 +3796,7 @@ impl MemoryApplier {
             let warm_origin = self
                 .physical_warm_recycled_origins
                 .get_mut(physical_id)
-                .map(std::mem::take)
-                .unwrap_or(false);
+                .is_some_and(std::mem::take);
             node.prepare_for_recycle();
             self.push_recycled_node(
                 key,
@@ -3931,7 +3918,7 @@ impl Applier for MemoryApplier {
         }
         self.high_id_nodes
             .get_mut(&id)
-            .map(|n| n.as_mut())
+            .map(std::convert::AsMut::as_mut)
             .ok_or(NodeError::Missing { id })
     }
 
@@ -4133,7 +4120,7 @@ impl<'a, A: Applier + 'static> ApplierGuard<'a, A> {
     }
 }
 
-impl<'a, A: Applier + 'static> Deref for ApplierGuard<'a, A> {
+impl<A: Applier + 'static> Deref for ApplierGuard<'_, A> {
     type Target = A;
 
     fn deref(&self) -> &Self::Target {
@@ -4141,7 +4128,7 @@ impl<'a, A: Applier + 'static> Deref for ApplierGuard<'a, A> {
     }
 }
 
-impl<'a, A: Applier + 'static> DerefMut for ApplierGuard<'a, A> {
+impl<A: Applier + 'static> DerefMut for ApplierGuard<'_, A> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.inner
     }

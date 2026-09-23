@@ -9,6 +9,6 @@
 # import rules are unstable, so formatting runs on the pinned nightly in
 # rust-toolchain-nightly.toml instead.
 [toolchain]
-channel = "1.98.0"
+channel = "1.98.1"
 profile = "minimal"
 components = ["clippy", "rustfmt", "rust-src"]

@@ -3,7 +3,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     ffi::{CStr, CString, c_char, c_void},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, PoisonError},
 };
 
 use cranpose_services::purchases::{
@@ -78,7 +78,7 @@ impl Shared {
 static SHARED: Mutex<Shared> = Mutex::new(Shared::new());
 
 fn shared() -> std::sync::MutexGuard<'static, Shared> {
-    SHARED.lock().unwrap_or_else(|e| e.into_inner())
+    SHARED.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 unsafe fn take(ptr: *const c_char) -> Option<String> {
@@ -183,7 +183,7 @@ impl Purchases for StoreKitPurchases {
     fn configure(&self, product_ids: &[&str]) {
         *STOREKIT_PRODUCT_IDS
             .lock()
-            .unwrap_or_else(|error| error.into_inner()) =
+            .unwrap_or_else(PoisonError::into_inner) =
             product_ids.iter().map(|id| (*id).to_owned()).collect();
         let joined = product_ids.join("\n");
         let Ok(joined) = CString::new(joined) else {
@@ -220,7 +220,7 @@ impl Purchases for StoreKitPurchases {
     fn reconnect(&self) {
         let ids = STOREKIT_PRODUCT_IDS
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(PoisonError::into_inner)
             .clone();
         let refs = ids.iter().map(String::as_str).collect::<Vec<_>>();
         self.configure(&refs);

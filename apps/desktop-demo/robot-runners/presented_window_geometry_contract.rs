@@ -220,7 +220,6 @@ fn draw_geometry_probe(scope: &mut dyn DrawScope) {
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn PresentedWindowGeometryApp() {
     Box(

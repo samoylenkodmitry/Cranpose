@@ -27,7 +27,10 @@ mod tests {
 
     fn wheel_for(delta: MouseScrollDelta, scale_factor: f64) -> WheelScroll {
         let platform = DesktopWinitPlatform::new(scale_factor);
-        wheel_scroll_from_winit(platform.scroll_delta(delta), ModifiersState::empty(), 0)
+        let logical_delta = platform
+            .scroll_delta(delta)
+            .expect("line and pixel deltas are both scroll kinds the platform converts");
+        wheel_scroll_from_winit(logical_delta, ModifiersState::empty(), 0)
     }
 
     fn rotary_for(delta: MouseScrollDelta, scale_factor: f64) -> RotaryScrollEvent {

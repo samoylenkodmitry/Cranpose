@@ -154,16 +154,18 @@ impl PassTimer {
         for slot in &self.slots {
             match slot.state.load(Ordering::Acquire) {
                 SLOT_MAPPED => {
-                    {
-                        let mapped = slot.buffer.slice(..).get_mapped_range();
-                        let span = accumulate_frame(
-                            &mut self.totals.borrow_mut(),
-                            &slot.passes.borrow(),
-                            &mapped,
-                            self.period_ns,
-                        );
-                        self.span_nanoseconds
-                            .set(self.span_nanoseconds.get().saturating_add(span));
+                    match slot.buffer.slice(..).get_mapped_range() {
+                        Ok(mapped) => {
+                            let span = accumulate_frame(
+                                &mut self.totals.borrow_mut(),
+                                &slot.passes.borrow(),
+                                &mapped,
+                                self.period_ns,
+                            );
+                            self.span_nanoseconds
+                                .set(self.span_nanoseconds.get().saturating_add(span));
+                        }
+                        Err(error) => log::debug!("pass timings could not be read: {error}"),
                     }
                     slot.buffer.unmap();
                     slot.passes.borrow_mut().clear();

@@ -725,7 +725,7 @@ fn extend_segment_in(tables: &mut RecordTables, extend: bool, opened: RecordSegm
         last.band_class = last.band_class.max(opened.band_class);
         return;
     }
-    tables.segments.push(opened)
+    tables.segments.push(opened);
 }
 
 impl ShapeRecorder {

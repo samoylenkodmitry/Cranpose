@@ -175,7 +175,7 @@ fn record_clean_slot_skip() {
 /// slot without a compose walk. Diagnostic surface for tests and telemetry;
 /// see [`SubcomposeMeasureScope::subcompose`] for when a slot may skip.
 pub fn clean_slot_skip_count() -> u64 {
-    CLEAN_SLOT_SKIPS.with(std::cell::Cell::get)
+    CLEAN_SLOT_SKIPS.with(Cell::get)
 }
 
 struct SubcomposeMeasureScopeInit<'a> {
@@ -245,7 +245,7 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
     fn record_error(&self, err: NodeError) {
         let mut slot = self.error.borrow_mut();
         if slot.is_none() {
-            eprintln!("[SubcomposeLayout] Error suppressed: {:?}", err);
+            eprintln!("[SubcomposeLayout] Error suppressed: {err:?}");
             *slot = Some(err);
         }
     }
@@ -256,8 +256,10 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
             .borrow()
             .captured_context
             .as_ref()
-            .map(cranpose_core::CapturedCompositionContext::owner_chain_deactivation_epoch)
-            .unwrap_or(0)
+            .map_or(
+                0,
+                cranpose_core::CapturedCompositionContext::owner_chain_deactivation_epoch,
+            )
     }
 
     fn ensure_pending_commands_applied(&mut self) -> bool {
@@ -298,10 +300,7 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
                     .composer
                     .register_virtual_node(id, Box::new(node.clone()))
                 {
-                    eprintln!(
-                        "[Subcompose] Failed to register virtual node {}: {:?}",
-                        id, e
-                    );
+                    eprintln!("[Subcompose] Failed to register virtual node {id}: {e:?}");
                 }
                 register_layout_node(id, &node);
 
@@ -354,13 +353,12 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
 
         let slot_host = self.state.get_or_create_slots(slot_id);
         self.parent_handle.note_slot_host(&slot_host);
-        let holder_for_slot = content_holder.clone();
         let scopes = self
             .composer
             .subcompose_slot(&slot_host, Some(virtual_node_id), move |_| {
-                compose_subcompose_slot_content(holder_for_slot.clone());
+                compose_subcompose_slot_content(content_holder);
             })
-            .map(|(_, scopes)| scopes)
+            .map(|((), scopes)| scopes)
             .unwrap_or_default();
         self.pending_commands_applied = false;
 
@@ -432,14 +430,11 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
         let composed = self.compose_into_slot(slot_id, virtual_node_ids[0], content);
         assert!(
             composed == skipped_children,
-            "clean-slot skip diverged for slot {:?}: recomposing produced root \
-             children {:?} but the retained slot held {:?}. The slot content \
+            "clean-slot skip diverged for slot {slot_id:?}: recomposing produced root \
+             children {composed:?} but the retained slot held {skipped_children:?}. The slot content \
              read a value that changed between measure passes without any \
              invalidation path — make that value reactive state, or part of \
              the subcompose capture key",
-            slot_id,
-            composed,
-            skipped_children,
         );
     }
 
@@ -527,7 +522,7 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
     }
 }
 
-impl<'a> SubcomposeLayoutScope for SubcomposeMeasureScopeImpl<'a> {
+impl SubcomposeLayoutScope for SubcomposeMeasureScopeImpl<'_> {
     fn constraints(&self) -> Constraints {
         self.constraints
     }
@@ -552,7 +547,7 @@ impl cranpose_ui_layout::MeasureScope for SubcomposeMeasureScopeImpl<'_> {
     }
 }
 
-impl<'a> SubcomposeMeasureScope for SubcomposeMeasureScopeImpl<'a> {
+impl SubcomposeMeasureScope for SubcomposeMeasureScopeImpl<'_> {
     fn subcompose<K, Content>(
         &mut self,
         slot_id: SlotId,
@@ -604,7 +599,7 @@ impl<'a> SubcomposeMeasureScope for SubcomposeMeasureScopeImpl<'a> {
     }
 }
 
-impl<'a> SubcomposeMeasureScopeImpl<'a> {
+impl SubcomposeMeasureScopeImpl<'_> {
     /// Returns the number of active slots in the subcompose state.
     ///
     /// Used by lazy layouts to report statistics about slot usage.
@@ -1424,12 +1419,12 @@ impl SubcomposeLayoutNodeHandle {
         )
     }
 
-    pub(crate) fn measure_with_cached_batch<'a>(
+    pub(crate) fn measure_with_cached_batch(
         &self,
         composer: &Composer,
         node_id: NodeId,
         constraints: Constraints,
-        callbacks: CachedBatchMeasureInputs<'a>,
+        callbacks: CachedBatchMeasureInputs<'_>,
     ) -> Result<MeasureResult, NodeError> {
         let CachedBatchMeasureInputs {
             measurer,

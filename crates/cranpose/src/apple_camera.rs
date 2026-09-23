@@ -88,7 +88,7 @@ struct AppleCamera;
 
 impl Camera for AppleCamera {
     fn start(&self) -> Result<(), CameraError> {
-        if session_slot().lock().map(|s| s.is_some()).unwrap_or(false) {
+        if session_slot().lock().is_ok_and(|s| s.is_some()) {
             cranpose_services::publish_camera_state(CameraState::Running {
                 device: "camera".to_string(),
             });
@@ -101,7 +101,7 @@ impl Camera for AppleCamera {
     }
 
     fn request_still(&self) -> Result<(), CameraError> {
-        if session_slot().lock().map(|s| s.is_none()).unwrap_or(true) {
+        if session_slot().lock().map_or(true, |s| s.is_none()) {
             return Err(CameraError::NotRunning);
         }
         std::thread::Builder::new()
@@ -162,7 +162,7 @@ impl Camera for AppleCamera {
         if !all_lenses().iter().any(|lens| lens.id == id) {
             return false;
         }
-        let running = session_slot().lock().map(|s| s.is_some()).unwrap_or(false);
+        let running = session_slot().lock().is_ok_and(|s| s.is_some());
         match lens_slot().lock() {
             Ok(mut slot) => *slot = Some(id.to_string()),
             Err(_) => return false,
@@ -194,8 +194,7 @@ impl Camera for AppleCamera {
         }
         back_lenses()
             .first()
-            .map(|device| unsafe { device.hasFlash() })
-            .unwrap_or(false)
+            .is_some_and(|device| unsafe { device.hasFlash() })
     }
 
     #[cfg(target_os = "macos")]
@@ -588,7 +587,7 @@ fn start_session() -> Result<String, CameraError> {
         {
             if unsafe { device.isAutoFocusRangeRestrictionSupported() } {
                 unsafe {
-                    device.setAutoFocusRangeRestriction(AVCaptureAutoFocusRangeRestriction::Near)
+                    device.setAutoFocusRangeRestriction(AVCaptureAutoFocusRangeRestriction::Near);
                 };
             }
             if unsafe { device.primaryConstituentDeviceSwitchingBehavior() }
@@ -598,7 +597,7 @@ fn start_session() -> Result<String, CameraError> {
                     device.setPrimaryConstituentDeviceSwitchingBehavior_restrictedSwitchingBehaviorConditions(
                         AVCapturePrimaryConstituentDeviceSwitchingBehavior::Auto,
                         AVCapturePrimaryConstituentDeviceRestrictedSwitchingBehaviorConditions(0),
-                    )
+                    );
                 };
             }
         }
@@ -634,8 +633,10 @@ fn start_session() -> Result<String, CameraError> {
     let delegate = FrameDelegate::new();
     let queue = DispatchQueue::new("com.cranpose.camera", None);
     unsafe {
-        output
-            .setSampleBufferDelegate_queue(Some(ProtocolObject::from_ref(&*delegate)), Some(&queue))
+        output.setSampleBufferDelegate_queue(
+            Some(ProtocolObject::from_ref(&*delegate)),
+            Some(&queue),
+        );
     };
     if !unsafe { session.canAddOutput(&output) } {
         return Err(CameraError::Failed("cannot add camera output".into()));

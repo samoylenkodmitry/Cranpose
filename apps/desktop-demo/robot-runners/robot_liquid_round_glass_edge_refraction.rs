@@ -111,7 +111,6 @@ fn probe_glass(shape: LiquidShape) -> Glass {
 }
 
 #[cranpose::composable]
-#[allow(non_snake_case)]
 fn ProbeApp() {
     LiquidTheme(LiquidThemeSpec::default(), || {
         CBox(

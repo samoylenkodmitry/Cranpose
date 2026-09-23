@@ -149,7 +149,7 @@ impl InputRecorder {
     /// Create a new recorder that will save to the given path
     pub fn new(output_path: impl Into<PathBuf>) -> Self {
         let path = output_path.into();
-        eprintln!("[Recorder] Recording started - will save to {:?}", path);
+        eprintln!("[Recorder] Recording started - will save to {path:?}");
         Self {
             start_time: Instant::now(),
             events: Vec::new(),
@@ -234,13 +234,13 @@ impl InputRecorder {
         writeln!(file, "const ACTIONS: &[RobotAction] = &[")?;
         for action in &actions {
             let action_str = match action {
-                RobotAction::Sleep(ms) => format!("    Sleep({}),", ms),
-                RobotAction::MouseMove(x, y) => format!("    MouseMove({:.1}, {:.1}),", x, y),
+                RobotAction::Sleep(ms) => format!("    Sleep({ms}),"),
+                RobotAction::MouseMove(x, y) => format!("    MouseMove({x:.1}, {y:.1}),"),
                 RobotAction::MouseDown => "    MouseDown,".to_string(),
                 RobotAction::MouseUp => "    MouseUp,".to_string(),
-                RobotAction::Key(key) => format!("    Key(\"{}\".into()),", key),
+                RobotAction::Key(key) => format!("    Key(\"{key}\".into()),"),
             };
-            writeln!(file, "{}", action_str)?;
+            writeln!(file, "{action_str}")?;
         }
         writeln!(file, "];")?;
         writeln!(file)?;
@@ -310,7 +310,7 @@ impl InputRecorder {
 impl Drop for InputRecorder {
     fn drop(&mut self) {
         if let Err(e) = self.finish() {
-            eprintln!("[Recorder] Failed to save recording: {}", e);
+            eprintln!("[Recorder] Failed to save recording: {e}");
         }
     }
 }

@@ -26,7 +26,7 @@ fn main() {
             }
 
             let at_start = find_text_in_semantics(&robot, "Item #0").is_some();
-            println!("  At start (Item #0 visible): {}", at_start);
+            println!("  At start (Item #0 visible): {at_start}");
 
             println!("\n--- Step 2: Jump to Middle ---");
             if let Some((x, y, w, h)) = find_text_in_semantics(&robot, "Jump to Middle") {
@@ -36,10 +36,7 @@ fn main() {
             }
 
             let still_at_start = find_text_in_semantics(&robot, "Item #0").is_some();
-            println!(
-                "  Item #0 still visible: {} (should be false)",
-                still_at_start
-            );
+            println!("  Item #0 still visible: {still_at_start} (should be false)");
 
             if !still_at_start {
                 println!("  ✓ Successfully jumped away from start");
@@ -53,20 +50,17 @@ fn main() {
             }
 
             let at_start_again = find_text_in_semantics(&robot, "Item #0").is_some();
-            println!(
-                "  Item #0 visible after End: {} (should be false)",
-                at_start_again
-            );
+            println!("  Item #0 visible after End: {at_start_again} (should be false)");
 
             if let Some((_, _, _, _, text)) =
                 cranpose_testing::find_text_by_prefix_in_semantics(&robot, "Item #184")
             {
-                println!("  ✓ Found item near end: {}", text);
+                println!("  ✓ Found item near end: {text}");
                 println!("\n✓ Jump to End SUCCESS!");
             } else if let Some((_, _, _, _, text)) =
                 cranpose_testing::find_text_by_prefix_in_semantics(&robot, "Item #922")
             {
-                println!("  ✗ Found item near middle: {}", text);
+                println!("  ✗ Found item near middle: {text}");
                 println!("\n✗ FAILED - Still at middle after Jump to End!");
             } else {
                 println!("  Could not find item text to verify position");

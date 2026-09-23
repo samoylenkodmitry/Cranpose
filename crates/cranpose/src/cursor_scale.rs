@@ -77,17 +77,14 @@ pub(crate) fn rescales(factor: f64) -> bool {
 pub(crate) fn xcursor_scale(xcursor_size: Option<&str>) -> f64 {
     xcursor_size
         .and_then(|size| size.trim().parse::<f64>().ok())
-        .map(|size| usable_scale(size / 24.0))
-        .unwrap_or(1.0)
+        .map_or(1.0, |size| usable_scale(size / 24.0))
 }
 
 /// The pointer scale Windows asks for: its `CursorBaseSize` over the 32
 /// pixels of the standard cursors.
 #[cfg(any(test, target_os = "windows"))]
 pub(crate) fn windows_cursor_scale(cursor_base_size: Option<u32>) -> f64 {
-    cursor_base_size
-        .map(|size| usable_scale(f64::from(size) / 32.0))
-        .unwrap_or(1.0)
+    cursor_base_size.map_or(1.0, |size| usable_scale(f64::from(size) / 32.0))
 }
 
 /// `pixels`, RGBA `width` by `height`, scaled by `factor` nearest-neighbour,

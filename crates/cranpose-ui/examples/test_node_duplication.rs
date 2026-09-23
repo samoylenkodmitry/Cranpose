@@ -27,20 +27,20 @@ fn main() {
 
     if let Some(root) = composition.root() {
         let mut applier = composition.applier_mut();
-        println!("Root node #{} children:", root);
+        println!("Root node #{root} children:");
         if let Ok(root_node) = applier.with_node(root, |node: &mut cranpose_ui::LayoutNode| {
             println!("  Children: {:?}", node.children);
             node.children.clone()
         }) {
             for child_id in root_node {
-                println!("  Child #{}", child_id);
+                println!("  Child #{child_id}");
                 if let Ok(child_children) = applier
                     .with_node(child_id, |node: &mut cranpose_ui::LayoutNode| {
                         node.children.clone()
                     })
                 {
                     for grandchild in child_children {
-                        println!("    Grandchild #{}", grandchild);
+                        println!("    Grandchild #{grandchild}");
                     }
                 }
             }

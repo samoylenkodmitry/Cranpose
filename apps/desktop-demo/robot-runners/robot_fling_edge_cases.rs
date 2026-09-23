@@ -79,7 +79,7 @@ fn main() {
 
             fn find_any_item(robot: &Robot) -> Option<(String, f32)> {
                 for i in 0..30 {
-                    let item_text = format!("Item #{}", i);
+                    let item_text = format!("Item #{i}");
                     if let Some(center_y) = find_item_center_y(robot, &item_text) {
                         return Some((item_text, center_y));
                     }

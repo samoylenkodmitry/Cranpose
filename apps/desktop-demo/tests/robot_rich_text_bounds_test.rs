@@ -34,7 +34,7 @@ fn test_rich_text_bounds() {
         .find_by_text("BIG small")
         .bounds()
         .expect("text bounds");
-    println!("Text bounds: {:?}", bounds);
+    println!("Text bounds: {bounds:?}");
 
     assert!(
         bounds.height >= 30.0,

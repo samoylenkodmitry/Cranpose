@@ -26,31 +26,26 @@ fn main() {
             let item_0 = find_text_in_semantics(&robot, "Item 0");
             assert!(item_0.is_some(), "Item 0 should be visible initially");
             let (_, y0, _, _) = item_0.unwrap();
-            println!("  Item 0 y={:.1}", y0);
+            println!("  Item 0 y={y0:.1}");
 
             let (_, header_y, _, header_h) =
                 find_button_in_semantics(&robot, "Jump 50").expect("Jump button should exist");
             let list_top = header_y + header_h;
-            println!("  List starts at y={:.1}", list_top);
+            println!("  List starts at y={list_top:.1}");
 
             let item_1 = find_text_in_semantics(&robot, "Item 1");
             assert!(item_1.is_some(), "Item 1 should be visible");
             let (_, y1, _, _) = item_1.unwrap();
             let spacing_0_1 = y1 - y0;
-            println!(
-                "  Item 1 y={:.1}, spacing from Item 0: {:.1}px",
-                y1, spacing_0_1
-            );
+            println!("  Item 1 y={y1:.1}, spacing from Item 0: {spacing_0_1:.1}px");
 
             let expected_spacing = 60.0;
             assert!(
                 (spacing_0_1 - expected_spacing).abs() < 5.0,
-                "Spacing between items should be ~60px (50 + 10 spacing), got {:.1}",
-                spacing_0_1
+                "Spacing between items should be ~60px (50 + 10 spacing), got {spacing_0_1:.1}"
             );
             println!(
-                "  ✓ Spacing is correct: {:.1}px (expected ~{:.1}px)",
-                spacing_0_1, expected_spacing
+                "  ✓ Spacing is correct: {spacing_0_1:.1}px (expected ~{expected_spacing:.1}px)"
             );
 
             println!("\n--- Test 2: Large scroll jump preserves spacing ---");
@@ -64,20 +59,16 @@ fn main() {
             let item_50 = find_text_in_semantics(&robot, "Item 50");
             assert!(item_50.is_some(), "Item 50 should be visible after jump");
             let (_, y50, _, _) = item_50.unwrap();
-            println!("  Item 50 y={:.1} after jump", y50);
+            println!("  Item 50 y={y50:.1} after jump");
 
             let item_51 = find_text_in_semantics(&robot, "Item 51");
             if let Some((_, y51, _, _)) = item_51 {
                 let spacing_50_51 = y51 - y50;
-                println!(
-                    "  Item 51 y={:.1}, spacing from Item 50: {:.1}px",
-                    y51, spacing_50_51
-                );
+                println!("  Item 51 y={y51:.1}, spacing from Item 50: {spacing_50_51:.1}px");
 
                 assert!(
                     (spacing_50_51 - expected_spacing).abs() < 5.0,
-                    "Spacing should be preserved after jump: expected ~60px, got {:.1}",
-                    spacing_50_51
+                    "Spacing should be preserved after jump: expected ~60px, got {spacing_50_51:.1}"
                 );
                 println!("  ✓ Spacing preserved after jump");
             }
@@ -98,16 +89,15 @@ fn main() {
 
             let item_95 = find_text_in_semantics(&robot, "Item 95");
             if let Some((_, y95, _, _)) = item_95 {
-                println!("  Item 95 y={:.1}", y95);
+                println!("  Item 95 y={y95:.1}");
 
                 let item_96 = find_text_in_semantics(&robot, "Item 96");
                 if let Some((_, y96, _, _)) = item_96 {
                     let spacing = y96 - y95;
-                    println!("  Item 96 y={:.1}, spacing: {:.1}px", y96, spacing);
+                    println!("  Item 96 y={y96:.1}, spacing: {spacing:.1}px");
                     assert!(
                         (spacing - expected_spacing).abs() < 5.0,
-                        "Spacing at end should be ~60px, got {:.1}",
-                        spacing
+                        "Spacing at end should be ~60px, got {spacing:.1}"
                     );
                     println!("  ✓ End items have correct spacing");
                 }
@@ -172,7 +162,7 @@ fn main() {
                                 BoxSpec::new().content_alignment(Alignment::CENTER),
                                 move || {
                                     Text(
-                                        format!("Item {}", index),
+                                        format!("Item {index}"),
                                         Modifier::default(),
                                         TextStyle::default(),
                                     );

@@ -75,17 +75,19 @@ impl TransparentObserverMutableSnapshot {
 
     /// Set the read observer (only allowed if reusable).
     pub fn set_read_observer(&self, observer: Option<ReadObserver>) {
-        if !self.can_reuse() {
-            panic!("Cannot change observers on non-reusable snapshot");
-        }
+        assert!(
+            self.can_reuse(),
+            "Cannot change observers on non-reusable snapshot"
+        );
         *self.state.read_observer.borrow_mut() = observer;
     }
 
     /// Set the write observer (only allowed if reusable).
     pub fn set_write_observer(&self, observer: Option<WriteObserver>) {
-        if !self.can_reuse() {
-            panic!("Cannot change observers on non-reusable snapshot");
-        }
+        assert!(
+            self.can_reuse(),
+            "Cannot change observers on non-reusable snapshot"
+        );
         *self.state.write_observer.borrow_mut() = observer;
     }
 
@@ -105,8 +107,7 @@ impl TransparentObserverMutableSnapshot {
         match &self.parent {
             Some(weak) => weak
                 .upgrade()
-                .map(|parent| parent.root_transparent_mutable())
-                .unwrap_or_else(|| self.clone()),
+                .map_or_else(|| self.clone(), |parent| parent.root_transparent_mutable()),
             None => self.clone(),
         }
     }
@@ -151,9 +152,7 @@ impl TransparentObserverMutableSnapshot {
     }
 
     pub fn record_write(&self, state: Arc<dyn StateObject>) {
-        if self.applied.get() {
-            panic!("Cannot write to an applied snapshot");
-        }
+        assert!(!self.applied.get(), "Cannot write to an applied snapshot");
         self.state.record_write(state, self.state.id.get());
     }
 
@@ -234,9 +233,10 @@ impl TransparentObserverSnapshot {
 
     /// Set the read observer (only allowed if reusable).
     pub fn set_read_observer(&self, observer: Option<ReadObserver>) {
-        if !self.can_reuse() {
-            panic!("Cannot change observers on non-reusable snapshot");
-        }
+        assert!(
+            self.can_reuse(),
+            "Cannot change observers on non-reusable snapshot"
+        );
         *self.state.read_observer.borrow_mut() = observer;
     }
 
@@ -256,8 +256,7 @@ impl TransparentObserverSnapshot {
         match &self.parent {
             Some(weak) => weak
                 .upgrade()
-                .map(|parent| parent.root_transparent_readonly())
-                .unwrap_or_else(|| self.clone()),
+                .map_or_else(|| self.clone(), |parent| parent.root_transparent_readonly()),
             None => self.clone(),
         }
     }

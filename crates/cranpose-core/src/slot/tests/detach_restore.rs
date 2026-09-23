@@ -750,7 +750,7 @@ fn removing_conditional_child_returns_detached_subtree() {
         vec![(41, super::NodeLifecycle::Active)]
     );
     assert_eq!(detached.scope_ids(), vec![CHILD_SCOPE]);
-    assert_eq!(detached.group_anchors().collect::<Vec<_>>().len(), 1);
+    assert_eq!(detached.group_anchors().count(), 1);
     assert_eq!(detached.groups[0].parent_anchor, AnchorId::INVALID);
     assert_eq!(detached.groups[0].depth, 0);
 }

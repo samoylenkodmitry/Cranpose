@@ -1,3 +1,5 @@
+use std::cell::Cell;
+
 use super::*;
 
 const MOVABLE_ID: &str = "movable-content";
@@ -486,14 +488,14 @@ fn movable_inner_scope_recomposes_under_the_new_parent_after_a_move() {
 
     render(&mut composition);
     let (first, second) = holders.ids();
-    let leaf_node = LEAF_NODE.with(|node| node.get()).expect("leaf node");
-    assert_eq!(LEAF_RUNS.with(|runs| runs.get()), 1);
+    let leaf_node = LEAF_NODE.with(Cell::get).expect("leaf node");
+    assert_eq!(LEAF_RUNS.with(Cell::get), 1);
     assert_eq!(parent_children(&mut composition, first), vec![leaf_node]);
 
     in_first.set_value(false);
     render(&mut composition);
     assert_eq!(
-        LEAF_RUNS.with(|runs| runs.get()),
+        LEAF_RUNS.with(Cell::get),
         1,
         "a skipped composable keeps the leaf composed as it was"
     );
@@ -506,18 +508,18 @@ fn movable_inner_scope_recomposes_under_the_new_parent_after_a_move() {
     {}
     assert_composition_valid(&composition);
     assert_eq!(
-        LEAF_RUNS.with(|runs| runs.get()),
+        LEAF_RUNS.with(Cell::get),
         2,
         "the leaf scope must be active again after the move"
     );
-    assert_eq!(LEAF_NODE.with(|node| node.get()), Some(leaf_node));
+    assert_eq!(LEAF_NODE.with(Cell::get), Some(leaf_node));
     let label = composition
         .applier_mut()
         .with_node::<TrackingChild, _>(leaf_node, |node| node.label.clone())
         .expect("leaf node");
     assert_eq!(label, "1");
     let extra = LEAF_EXTRA
-        .with(|node| node.get())
+        .with(Cell::get)
         .expect("the recomposed leaf emits a second node");
     assert_eq!(
         parent_children(&mut composition, second),

@@ -34,7 +34,7 @@ pub fn set_platform_accessibility_state(state: AccessibilityState) -> bool {
 
 /// What the platform last reported.
 pub fn platform_accessibility_state() -> AccessibilityState {
-    PLATFORM_ACCESSIBILITY_STATE.with(|cell| cell.get())
+    PLATFORM_ACCESSIBILITY_STATE.with(Cell::get)
 }
 
 /// The state a composable reads: what the platform reported, unless a
@@ -55,7 +55,6 @@ pub fn local_accessibility_state() -> CompositionLocal<AccessibilityState> {
 
 /// Gives the content below it a fixed state, for a preview or a test that
 /// wants to see the app as a screen reader user does.
-#[allow(non_snake_case)]
 #[composable]
 pub fn ProvideAccessibilityState(state: AccessibilityState, content: impl FnOnce()) {
     let local = local_accessibility_state();
@@ -108,7 +107,6 @@ mod tests {
         let captured = Rc::new(RefCell::new(None));
         {
             let captured = Rc::clone(&captured);
-            let local = local.clone();
             run_test_composition(move || {
                 let captured = Rc::clone(&captured);
                 let local = local.clone();

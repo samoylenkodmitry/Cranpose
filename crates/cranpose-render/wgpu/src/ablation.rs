@@ -39,7 +39,7 @@ pub(crate) struct Ablation {
 
 impl Ablation {
     pub(crate) fn current() -> Self {
-        ABLATE.with(|value| value.map_or(Self::default(), Self::parse))
+        ABLATE.with(|value| value.map_or_else(Self::default, Self::parse))
     }
 
     fn parse(list: &str) -> Self {

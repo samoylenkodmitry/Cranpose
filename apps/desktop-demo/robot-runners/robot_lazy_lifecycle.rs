@@ -92,23 +92,23 @@ fn lifecycle_test_app() {
 
 #[composable]
 fn lifecycle_item(index: usize, stats: MutableState<LifecycleStats>) {
-    println!("  [COMPOSE] Item {} composition", index);
+    println!("  [COMPOSE] Item {index} composition");
     let item_cranpose_count: MutableState<usize> = cranpose_core::remember(|| {
         stats.update(|s| s.total_composes += 1);
-        println!("  [COMPOSE] Item {} first composition", index);
+        println!("  [COMPOSE] Item {index} first composition");
         cranpose_core::mutableStateOf(1usize)
     })
     .with(|s| *s);
 
     DisposableEffect(index, move |_key| {
         stats.update(|s| s.total_effects += 1);
-        println!("  [EFFECT] Item {} effect started", index);
+        println!("  [EFFECT] Item {index} effect started");
 
         DisposableEffectResult::new(move || {
             if stats.is_alive() {
                 stats.update(|s| s.total_disposes += 1);
             }
-            println!("  [DISPOSE] Item {} disposed", index);
+            println!("  [DISPOSE] Item {index} disposed");
         })
     });
 
@@ -127,7 +127,7 @@ fn lifecycle_item(index: usize, stats: MutableState<LifecycleStats>) {
             .vertical_alignment(VerticalAlignment::CenterVertically),
         move || {
             Text(
-                format!("Item #{}", index),
+                format!("Item #{index}"),
                 Modifier::empty().padding(4.0),
                 TextStyle::default(),
             );
@@ -155,7 +155,7 @@ fn main() {
             let find_visible_items = || {
                 let mut items: Vec<usize> = Vec::new();
                 for i in 0..20 {
-                    let item_text = format!("Item #{}", i);
+                    let item_text = format!("Item #{i}");
                     if find_text_in_semantics(&robot, &item_text).is_some() {
                         items.push(i);
                     }
@@ -180,9 +180,9 @@ fn main() {
 
             println!("\n--- Step 1: Initial state ---");
             let initial_items = find_visible_items();
-            println!("  Visible items: {:?}", initial_items);
+            println!("  Visible items: {initial_items:?}");
             if let Some((c, e, d)) = read_stats() {
-                println!("  Stats: Composes={} Effects={} Disposes={}", c, e, d);
+                println!("  Stats: Composes={c} Effects={e} Disposes={d}");
             }
 
             println!("\n--- Step 2: Scroll down ---");
@@ -198,9 +198,9 @@ fn main() {
                 std::thread::sleep(Duration::from_millis(100));
             }
             let after_scroll = find_visible_items();
-            println!("  Visible after scroll: {:?}", after_scroll);
+            println!("  Visible after scroll: {after_scroll:?}");
             if let Some((c, e, d)) = read_stats() {
-                println!("  Stats: Composes={} Effects={} Disposes={}", c, e, d);
+                println!("  Stats: Composes={c} Effects={e} Disposes={d}");
             }
 
             println!("\n--- Step 3: Scroll back ---");
@@ -214,13 +214,13 @@ fn main() {
                 std::thread::sleep(Duration::from_millis(100));
             }
             let after_back = find_visible_items();
-            println!("  Visible after scroll back: {:?}", after_back);
+            println!("  Visible after scroll back: {after_back:?}");
 
             if let Some((c, e, d)) = read_stats() {
                 println!("\n=== FINAL STATS ===");
-                println!("  Total Composes: {}", c);
-                println!("  Total Effects: {}", e);
-                println!("  Total Disposes: {}", d);
+                println!("  Total Composes: {c}");
+                println!("  Total Effects: {e}");
+                println!("  Total Disposes: {d}");
                 if c > 0 && e > 0 {
                     println!("\n✓ Lifecycle tracking PASSED!");
                 }

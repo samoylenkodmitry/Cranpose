@@ -27,7 +27,7 @@ fn main() {
 
             println!("Clicking increment button 5 times...");
             for i in 1..=5 {
-                println!("  Click {}/5", i);
+                println!("  Click {i}/5");
                 robot.click(150.0, 560.0).expect("Failed to click");
                 std::thread::sleep(Duration::from_millis(300));
             }

@@ -232,7 +232,7 @@ fn call_folder_descriptor(tree: &str, name: &str, mode: Descriptor) -> Result<i3
                 &arguments,
             ),
         }
-        .and_then(|value| value.i())
+        .and_then(jni::JValueOwned::i)
         .map_err(string_err)
     })
 }
@@ -255,7 +255,7 @@ fn call_folder_commit(tree: &str, staging: &str, target: &str) -> Result<i32, St
                 JValue::Object(target_obj),
             ],
         )
-        .and_then(|value| value.i())
+        .and_then(jni::JValueOwned::i)
         .map_err(string_err)
     })
 }
@@ -278,7 +278,7 @@ fn call_folder_write(tree: &str, name: &str, contents: &[u8]) -> Result<i32, Str
                 JValue::Object(bytes_obj),
             ],
         )
-        .and_then(|value| value.i())
+        .and_then(jni::JValueOwned::i)
         .map_err(string_err)
     })
 }
@@ -296,7 +296,7 @@ fn call_folder_read(tree: &str, name: &str) -> Result<Option<Vec<u8>>, String> {
                 jni_sig!("(Ljava/lang/String;Ljava/lang/String;)[B"),
                 &[JValue::Object(tree_obj), JValue::Object(name_obj)],
             )
-            .and_then(|value| value.l())
+            .and_then(jni::JValueOwned::l)
             .map_err(string_err)?;
         if result.is_null() {
             return Ok(None);
@@ -317,7 +317,7 @@ fn call_folder_list(tree: &str) -> Result<Option<String>, String> {
                 jni_sig!("(Ljava/lang/String;)Ljava/lang/String;"),
                 &[JValue::Object(tree_obj)],
             )
-            .and_then(|value| value.l())
+            .and_then(jni::JValueOwned::l)
             .map_err(string_err)?;
         if result.is_null() {
             return Ok(None);
@@ -342,7 +342,7 @@ fn call_folder_remove(tree: &str, name: &str) -> Result<i32, String> {
             jni_sig!("(Ljava/lang/String;Ljava/lang/String;)I"),
             &[JValue::Object(tree_obj), JValue::Object(name_obj)],
         )
-        .and_then(|value| value.i())
+        .and_then(jni::JValueOwned::i)
         .map_err(string_err)
     })
 }
@@ -357,7 +357,7 @@ fn call_folder_writable(tree: &str) -> Result<bool, String> {
             jni_sig!("(Ljava/lang/String;)Z"),
             &[JValue::Object(tree_obj)],
         )
-        .and_then(|value| value.z())
+        .and_then(jni::JValueOwned::z)
         .map_err(string_err)
     })
 }

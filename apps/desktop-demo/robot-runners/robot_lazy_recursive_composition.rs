@@ -17,12 +17,12 @@ fn main() {
 
             let click_button = |name: &str| -> bool {
                 if let Some((x, y, w, h)) = find_button_in_semantics(&robot, name) {
-                    println!("  Found button '{}' at ({:.1}, {:.1})", name, x, y);
+                    println!("  Found button '{name}' at ({x:.1}, {y:.1})");
                     robot.click(x + w / 2.0, y + h / 2.0).ok();
                     std::thread::sleep(Duration::from_millis(200));
                     true
                 } else {
-                    println!("  ✗ Button '{}' not found!", name);
+                    println!("  ✗ Button '{name}' not found!");
                     false
                 }
             };
@@ -55,7 +55,7 @@ fn main() {
                 robot.exit().ok();
                 std::process::exit(1);
             };
-            println!("  ItemRow #0 bounds: ({:.1}, {:.1}, {:.1}, {:.1})", row_x, row_y, row_w, row_h);
+            println!("  ItemRow #0 bounds: ({row_x:.1}, {row_y:.1}, {row_w:.1}, {row_h:.1})");
 
             let text_bounds = find_in_semantics(&robot, |elem| find_text_exact(elem, "Item #0"));
             let Some((text_x, text_y, _text_w, _text_h)) = text_bounds else {
@@ -63,7 +63,7 @@ fn main() {
                 robot.exit().ok();
                 std::process::exit(1);
             };
-            println!("  'Item #0' text at: ({:.1}, {:.1})", text_x, text_y);
+            println!("  'Item #0' text at: ({text_x:.1}, {text_y:.1})");
 
             let text_inside_row = text_y >= row_y && text_y < row_y + row_h;
             if !text_inside_row {
@@ -78,16 +78,15 @@ fn main() {
 
 
             let direct_children_count = list_elem.children.len();
-            println!("  LazyListViewport has {} direct children", direct_children_count);
+            println!("  LazyListViewport has {direct_children_count} direct children");
 
             if direct_children_count > 50 {
-                println!("  ✗ BUG: Too many direct children ({})!", direct_children_count);
-                println!("    Expected ~10 root items, got {} - suggests nested children are placed separately",
-                         direct_children_count);
+                println!("  ✗ BUG: Too many direct children ({direct_children_count})!");
+                println!("    Expected ~10 root items, got {direct_children_count} - suggests nested children are placed separately");
                 robot.exit().ok();
                 std::process::exit(1);
             }
-            println!("  ✓ Direct children count ({}) is reasonable", direct_children_count);
+            println!("  ✓ Direct children count ({direct_children_count}) is reasonable");
 
             println!("\n✓ No recursive composition bug detected");
             println!("=== LazyList Recursive Composition Test PASSED ===");

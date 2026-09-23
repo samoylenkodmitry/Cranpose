@@ -103,9 +103,10 @@ fn set_tab_hook(name: String, argument: String) -> Result<Option<String>, String
 }
 
 fn shot_dir() -> PathBuf {
-    std::env::var_os(SHOT_DIR_ENV)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::temp_dir().join("cranpose-robot-shots"))
+    std::env::var_os(SHOT_DIR_ENV).map_or_else(
+        || std::env::temp_dir().join("cranpose-robot-shots"),
+        PathBuf::from,
+    )
 }
 
 fn headless() -> bool {
@@ -120,8 +121,7 @@ fn settle_ms() -> u64 {
 }
 
 fn env_bool(key: &str, default: bool) -> bool {
-    std::env::var(key)
-        .ok()
-        .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
-        .unwrap_or(default)
+    std::env::var(key).ok().map_or(default, |value| {
+        matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES")
+    })
 }

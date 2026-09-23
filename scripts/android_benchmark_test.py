@@ -298,7 +298,7 @@ class BenchmarkContracts(unittest.TestCase):
         output.mkdir()
         ndk = self.root / 'ndk'
         ndk.mkdir()
-        (ndk / 'source.properties').write_text('Pkg.Revision=27.0.12077973\n')
+        (ndk / 'source.properties').write_text('Pkg.Revision=30.0.16248370\n')
         args = SimpleNamespace(framework=framework, app=app, cache=self.root / 'cache',
                                target_dir=self.root / 'target', output=output, features='',
                                package='benchmark-app', platform=24, abi='arm64-v8a', timeout=30)

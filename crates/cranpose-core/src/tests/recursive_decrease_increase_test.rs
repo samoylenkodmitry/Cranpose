@@ -28,7 +28,7 @@ fn count_groups(composition: &Composition<MemoryApplier>) -> usize {
 fn recursive_decrease_increase_preserves_structure() {
     let mut composition = test_composition();
     let runtime = composition.runtime_handle();
-    let depth_state = MutableState::with_runtime(3usize, runtime.clone());
+    let depth_state = MutableState::with_runtime(3usize, runtime);
 
     let key = location_key(file!(), line!(), column!());
 
@@ -40,7 +40,7 @@ fn recursive_decrease_increase_preserves_structure() {
         .expect("initial render");
 
     let initial_groups = count_groups(&composition);
-    eprintln!("Groups: {}", initial_groups);
+    eprintln!("Groups: {initial_groups}");
     eprintln!(
         "Group keys: {:?}",
         composition
@@ -60,10 +60,10 @@ fn recursive_decrease_increase_preserves_structure() {
     {
         recomp_count += 1;
     }
-    eprintln!("Recomposed {} times", recomp_count);
+    eprintln!("Recomposed {recomp_count} times");
 
     let decreased_groups = count_groups(&composition);
-    eprintln!("Groups: {}", decreased_groups);
+    eprintln!("Groups: {decreased_groups}");
     eprintln!(
         "Group keys: {:?}",
         composition
@@ -90,7 +90,7 @@ fn recursive_decrease_increase_preserves_structure() {
     {}
 
     let restored_groups = count_groups(&composition);
-    eprintln!("Groups: {}", restored_groups);
+    eprintln!("Groups: {restored_groups}");
     eprintln!(
         "Group keys: {:?}",
         composition
@@ -105,13 +105,12 @@ fn recursive_decrease_increase_preserves_structure() {
     }
 
     eprintln!("\nComparison:");
-    eprintln!("  Initial groups: {}", initial_groups);
-    eprintln!("  Restored groups: {}", restored_groups);
+    eprintln!("  Initial groups: {initial_groups}");
+    eprintln!("  Restored groups: {restored_groups}");
 
     assert_eq!(
         restored_groups, initial_groups,
-        "After decrease-increase cycle, should restore exact same number of groups. Initial: {}, Restored: {}",
-        initial_groups, restored_groups
+        "After decrease-increase cycle, should restore exact same number of groups. Initial: {initial_groups}, Restored: {restored_groups}"
     );
 }
 
@@ -119,7 +118,7 @@ fn recursive_decrease_increase_preserves_structure() {
 fn recursive_decrease_increase_multiple_cycles() {
     let mut composition = test_composition();
     let runtime = composition.runtime_handle();
-    let depth_state = MutableState::with_runtime(3usize, runtime.clone());
+    let depth_state = MutableState::with_runtime(3usize, runtime);
 
     let key = location_key(file!(), line!(), column!());
 
@@ -135,10 +134,10 @@ fn recursive_decrease_increase_multiple_cycles() {
         .iter()
         .map(|(_idx, key, _, _)| *key)
         .collect();
-    eprintln!("Initial keys: {:?}", initial_keys);
+    eprintln!("Initial keys: {initial_keys:?}");
 
     for cycle in 0..3 {
-        eprintln!("\n=== Cycle {} ===", cycle);
+        eprintln!("\n=== Cycle {cycle} ===");
 
         depth_state.set(2);
         while composition.process_invalid_scopes().expect("recompose") {}
@@ -154,33 +153,29 @@ fn recursive_decrease_increase_multiple_cycles() {
             .iter()
             .map(|(_idx, key, _, _)| *key)
             .collect();
-        eprintln!(
-            "After cycle {}: {} groups (initial: {})",
-            cycle, groups, initial_groups
-        );
-        eprintln!("Current keys: {:?}", current_keys);
+        eprintln!("After cycle {cycle}: {groups} groups (initial: {initial_groups})");
+        eprintln!("Current keys: {current_keys:?}");
 
         let mut key_counts: crate::collections::map::HashMap<u64, i32> =
             crate::collections::map::HashMap::default();
         for k in &current_keys {
             *key_counts.entry(*k).or_insert(0) += 1;
         }
-        for (k, count) in key_counts.iter() {
+        for (k, count) in &key_counts {
             if *count > 1 {
-                eprintln!("DUPLICATE KEY FOUND: {:?} appears {} times", k, count);
+                eprintln!("DUPLICATE KEY FOUND: {k:?} appears {count} times");
             }
         }
 
         for k in &initial_keys {
             if !current_keys.contains(k) {
-                eprintln!("MISSING KEY: {:?}", k);
+                eprintln!("MISSING KEY: {k:?}");
             }
         }
 
         assert_eq!(
             groups, initial_groups,
-            "After cycle {}: groups should be exactly preserved. Initial: {}, Current: {}",
-            cycle, initial_groups, groups
+            "After cycle {cycle}: groups should be exactly preserved. Initial: {initial_groups}, Current: {groups}"
         );
     }
 }

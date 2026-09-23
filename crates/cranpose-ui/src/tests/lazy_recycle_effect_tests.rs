@@ -33,7 +33,6 @@ fn measure(composition: &mut TestComposition, root: NodeId) {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn ParkedRow(index: usize, nested: bool) {
     let body = move || {
         if index == 0 {
@@ -128,13 +127,11 @@ impl Drop for DropMark {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn MarkGroup(dropped: Rc<Cell<usize>>) {
     cranpose_core::remember(move || DropMark(dropped));
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn BusyRow(index: usize, state: cranpose_core::MutableState<bool>, dropped: Rc<Cell<usize>>) {
     let busy = state.get() && index == 0;
     if busy {
@@ -163,7 +160,6 @@ fn BusyRow(index: usize, state: cranpose_core::MutableState<bool>, dropped: Rc<C
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn BadgeRow(index: usize, state: cranpose_core::MutableState<bool>) {
     use cranpose_animation::{
         AnimationSpec, Easing, RepeatMode, StartOffset, infiniteRepeatable,
@@ -263,7 +259,6 @@ fn a_lazy_badge_that_leaves_the_screen_stops_its_loops() {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn CapturedBusyRow(index: usize, busy: bool) {
     if busy {
         cranpose_core::LaunchedEffectAsync(0u32, move |_scope| {
@@ -286,7 +281,6 @@ fn CapturedBusyRow(index: usize, busy: bool) {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn CapturedList(state: cranpose_core::MutableState<bool>) {
     let busy_now = state.get();
     let list_state = rememberLazyListState();
@@ -330,7 +324,6 @@ fn task_counts_across_captured_swap() -> Vec<usize> {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn CapturedBadgeRow(index: usize, busy: bool) {
     use cranpose_animation::{
         AnimationSpec, Easing, RepeatMode, StartOffset, infiniteRepeatable,
@@ -370,7 +363,6 @@ fn CapturedBadgeRow(index: usize, busy: bool) {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn CapturedBadgeItemList(state: cranpose_core::MutableState<bool>) {
     use cranpose_animation::{
         AnimationSpec, Easing, RepeatMode, StartOffset, infiniteRepeatable,
@@ -464,7 +456,6 @@ fn a_badge_in_a_lazy_header_item_stops_its_loops_when_it_goes() {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn ToastHost(state: cranpose_core::MutableState<bool>) {
     use cranpose_animation::{
         AnimationSpec, Easing, RepeatMode, StartOffset, infiniteRepeatable,
@@ -570,7 +561,6 @@ fn a_toast_that_fades_out_stops_the_loops_it_showed() {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn ShiftingBadgeList(state: cranpose_core::MutableState<bool>) {
     use cranpose_animation::{
         AnimationSpec, Easing, RepeatMode, StartOffset, infiniteRepeatable,
@@ -668,7 +658,6 @@ fn a_badge_keeps_one_pair_of_loops_while_items_shift_around_it() {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn CapturedBadgeList(state: cranpose_core::MutableState<bool>) {
     let busy_now = state.get();
     let list_state = rememberLazyListState();
@@ -838,7 +827,6 @@ fn a_lazy_row_that_swaps_its_content_frees_the_slots_it_dropped() {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn BadgeListScreen(state: cranpose_core::MutableState<bool>) {
     let list_state = rememberLazyListState();
     LazyColumn(
@@ -862,7 +850,6 @@ fn BadgeListScreen(state: cranpose_core::MutableState<bool>) {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn BadgeSwipeScreen(state: cranpose_core::MutableState<bool>) {
     SwipeToDismiss(
         Modifier::empty().fill_max_width(),
@@ -873,7 +860,6 @@ fn BadgeSwipeScreen(state: cranpose_core::MutableState<bool>) {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn BadgeConstraintsScreen(state: cranpose_core::MutableState<bool>) {
     crate::widgets::BoxWithConstraints(Modifier::empty().fill_max_width(), move |_scope| {
         BadgeRow(0, state);
@@ -881,7 +867,6 @@ fn BadgeConstraintsScreen(state: cranpose_core::MutableState<bool>) {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn BadgeTwoConstraintsScreen(state: cranpose_core::MutableState<bool>) {
     crate::widgets::BoxWithConstraints(Modifier::empty().fill_max_width(), move |_outer| {
         crate::widgets::BoxWithConstraints(Modifier::empty().fill_max_width(), move |_inner| {
@@ -891,7 +876,6 @@ fn BadgeTwoConstraintsScreen(state: cranpose_core::MutableState<bool>) {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn SwipeHost(
     on_row: cranpose_core::MutableState<bool>,
     busy: cranpose_core::MutableState<bool>,
@@ -972,7 +956,6 @@ fn two_nested_boxes_with_constraints_stop_the_loops_they_showed() {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn PlainScreen() {
     Text(
         "another screen".to_string(),
@@ -982,7 +965,6 @@ fn PlainScreen() {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn ScreenHost(on_list: cranpose_core::MutableState<bool>, busy: cranpose_core::MutableState<bool>) {
     let on_list_now = on_list.get();
     crate::widgets::Box(
@@ -1062,7 +1044,6 @@ fn a_lazy_list_that_comes_back_keeps_one_pair_of_loops() {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn EarlyReturnBanner(count: usize) {
     use cranpose_animation::{
         AnimationSpec, Easing, RepeatMode, StartOffset, infiniteRepeatable,
@@ -1096,7 +1077,6 @@ fn EarlyReturnBanner(count: usize) {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn BannerHost(state: cranpose_core::MutableState<usize>) {
     let count = state.get();
     Column(

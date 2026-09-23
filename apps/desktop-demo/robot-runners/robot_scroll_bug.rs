@@ -64,7 +64,7 @@ fn main() {
 
             let mut visible_ranks = Vec::new();
             for i in 1..=20 {
-                let label = format!("{}.", i);
+                let label = format!("{i}.");
                 if let Some(bounds) =
                     find_in_semantics(&robot, |elem| find_text_exact(elem, &label))
                 {
@@ -86,16 +86,15 @@ fn main() {
             );
 
             if let Some((first_rank, _)) = visible_ranks.first() {
-                println!("Top-most visible item rank: {}", first_rank);
+                println!("Top-most visible item rank: {first_rank}");
 
                 if *first_rank <= 3 {
                     println!(
-                        "BUG REPRODUCED: Scrolled down 400px but item {} is at top!",
-                        first_rank
+                        "BUG REPRODUCED: Scrolled down 400px but item {first_rank} is at top!"
                     );
-                    panic!("BUG REPRODUCED: Scroll jumped back to item {}", first_rank);
+                    panic!("BUG REPRODUCED: Scroll jumped back to item {first_rank}");
                 } else {
-                    println!("Scroll appears correct. Top item: {}", first_rank);
+                    println!("Scroll appears correct. Top item: {first_rank}");
                 }
             } else {
                 println!("No visible items found! Dumping semantic tree:");

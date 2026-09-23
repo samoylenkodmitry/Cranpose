@@ -184,13 +184,14 @@ fn command_stdout(program: &str, args: &[&str]) -> Option<String> {
 }
 
 fn diagnostic_dir(name: &str) -> PathBuf {
-    let root = std::env::var_os("CRANPOSE_ROBOT_OUTPUT_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
+    let root = std::env::var_os("CRANPOSE_ROBOT_OUTPUT_DIR").map_or_else(
+        || {
             std::env::current_dir()
                 .unwrap_or_else(|_| PathBuf::from("."))
                 .join(".cranpose-tmp")
-        });
+        },
+        PathBuf::from,
+    );
     let path = root.join(name);
     std::fs::create_dir_all(&path)
         .unwrap_or_else(|err| panic!("failed to create {}: {err}", path.display()));

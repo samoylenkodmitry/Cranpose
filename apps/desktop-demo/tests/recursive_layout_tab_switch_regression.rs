@@ -150,8 +150,6 @@ fn switching_away_from_deep_recursive_layout_releases_actual_app_tree() {
     );
     assert!(
         after_slot_table_heap <= baseline_slot_table_heap + 2 * 1024 * 1024,
-        "tab switch retained slot table heap: baseline={} after={}",
-        baseline_slot_table_heap,
-        after_slot_table_heap,
+        "tab switch retained slot table heap: baseline={baseline_slot_table_heap} after={after_slot_table_heap}",
     );
 }

@@ -471,7 +471,7 @@ fn encode_handle(handle: &str) -> String {
     for byte in handle.as_bytes() {
         match byte {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(*byte as char)
+                out.push(*byte as char);
             }
             other => out.push_str(&format!("%{other:02X}")),
         }

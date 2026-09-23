@@ -285,7 +285,7 @@ fn stats_state_invalidates_after_direction_flip() {
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
     let animation = MutableState::with_runtime(AnimationState::default(), runtime.clone());
-    let stats = MutableState::with_runtime(FrameStats::default(), runtime.clone());
+    let stats = MutableState::with_runtime(FrameStats::default(), runtime);
 
     animation.update(|anim| anim.progress = 0.5);
 

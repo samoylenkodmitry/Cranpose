@@ -146,7 +146,7 @@ impl DeveloperInspector {
             InspectorAction::Previous => self.select_relative(false),
             InspectorAction::Next => self.select_relative(true),
             InspectorAction::DetailsUp => {
-                self.state.detail_offset = self.state.detail_offset.saturating_sub(3)
+                self.state.detail_offset = self.state.detail_offset.saturating_sub(3);
             }
             InspectorAction::DetailsDown => {
                 let count = draw::detail_line_count(&self.state, self.viewport.unwrap_or_default());

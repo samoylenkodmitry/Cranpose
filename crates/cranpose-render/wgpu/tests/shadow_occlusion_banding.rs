@@ -16,7 +16,6 @@ const CARD_HEIGHT: f32 = 120.0;
 const CARD_ELEVATION: f32 = 6.0;
 
 #[composable]
-#[allow(non_snake_case)]
 fn OpaqueCard(index: usize) {
     let fill = if index.is_multiple_of(2) {
         Color(0.98, 0.98, 0.99, 1.0)
@@ -36,7 +35,6 @@ fn OpaqueCard(index: usize) {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn CardListScene(list_state: LazyListState) {
     Box(
         Modifier::empty()
@@ -83,7 +81,7 @@ impl Harness {
                 .list_state
                 .borrow()
                 .as_ref()
-                .cloned()
+                .copied()
                 .expect("list state captured");
             self.shell
                 .debug_enter_app_context(|| state.dispatch_scroll_delta(scroll_delta));
@@ -130,9 +128,10 @@ fn the_shadow_ring_survives_and_the_card_interior_stays_clean() {
     for _ in 0..4 {
         harness.frame(-12.0);
     }
-    if harness.frame(-12.0).shadow_shape_cache_hits == 0 {
-        panic!("fixture stopped exercising cached card shadows");
-    }
+    assert!(
+        harness.frame(-12.0).shadow_shape_cache_hits != 0,
+        "fixture stopped exercising cached card shadows"
+    );
     let frame = {
         self::Harness::frame(&mut harness, -12.0);
         harness

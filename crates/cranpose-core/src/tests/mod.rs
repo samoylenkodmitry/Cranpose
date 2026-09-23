@@ -346,7 +346,7 @@ pub(crate) fn assert_composition_valid(composition: &Composition<MemoryApplier>)
 
 pub(crate) fn test_slot_table() -> SlotTable {
     with_test_slot_lifecycle(|lifecycle| {
-        *lifecycle = crate::slot::SlotLifecycleCoordinator::default()
+        *lifecycle = crate::slot::SlotLifecycleCoordinator::default();
     });
     SlotTable::new()
 }
@@ -663,7 +663,7 @@ fn counted_text(value: i32) -> NodeId {
     INVOCATIONS.with(|calls| calls.set(calls.get() + 1));
     let id = cranpose_test_node(TestTextNode::default);
     with_node_mut(id, |node: &mut TestTextNode| {
-        node.text = format!("{}", value);
+        node.text = format!("{value}");
     })
     .expect("update text node");
     id
@@ -762,6 +762,7 @@ fn exact_subcompose_activation_rejects_invalidated_slot_scopes() {
 }
 
 mod branch_group_tests;
+mod composable_macro_tests;
 mod composer_applier_tests;
 mod composition_and_recompose_scope_tests;
 mod internal_surface_tests;

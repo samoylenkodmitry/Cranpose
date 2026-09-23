@@ -109,7 +109,7 @@ fn resize_owed_on_release(
         let canvas = canvas.clone();
         let page = page.clone();
         Closure::wrap(Box::new(move |_event: PointerEvent| {
-            resize_owed_floating_window(&canvas, &page, &owed)
+            resize_owed_floating_window(&canvas, &page, &owed);
         }) as Box<dyn FnMut(PointerEvent)>)
     };
     canvas.add_event_listener_with_callback("pointerup", on_release.as_ref().unchecked_ref())?;
@@ -320,7 +320,7 @@ pub async fn run(
 
     let canvas = document
         .get_element_by_id(canvas_id)
-        .ok_or_else(|| format!("canvas with id '{}' not found", canvas_id))?
+        .ok_or_else(|| format!("canvas with id '{canvas_id}' not found"))?
         .dyn_into::<HtmlCanvasElement>()?;
 
     let scale_factor = window.device_pixel_ratio();
@@ -352,16 +352,17 @@ pub async fn run(
 
     let surface = instance
         .create_surface(wgpu::SurfaceTarget::Canvas(canvas.clone()))
-        .map_err(|e| format!("failed to create surface: {:?}", e))?;
+        .map_err(|e| format!("failed to create surface: {e:?}"))?;
 
     let adapter = instance
         .request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
             compatible_surface: Some(&surface),
             force_fallback_adapter: false,
+            apply_limit_buckets: false,
         })
         .await
-        .map_err(|e| format!("failed to find suitable adapter: {:?}", e))?;
+        .map_err(|e| format!("failed to find suitable adapter: {e:?}"))?;
 
     let adapter_info = adapter.get_info();
     let render_scale = crate::web_surface_scale::web_canvas_buffer_scale(scale_factor);
@@ -389,7 +390,7 @@ pub async fn run(
             trace: wgpu::Trace::Off,
         })
         .await
-        .map_err(|e| format!("failed to create device: {:?}", e))?;
+        .map_err(|e| format!("failed to create device: {e:?}"))?;
 
     let surface_caps = surface.get_capabilities(&adapter);
     let surface_format =
@@ -409,6 +410,7 @@ pub async fn run(
         height: buffer_height,
         present_mode,
         alpha_mode,
+        color_space: wgpu::SurfaceColorSpace::Auto,
         view_formats: crate::surface_format::display_surface_view_formats(surface_format),
         desired_maximum_frame_latency: 2,
     };
@@ -445,7 +447,7 @@ pub async fn run(
                 ..Default::default()
             });
             cranpose_render_wgpu::clear_to_default_background(&device, &queue, &probe_view);
-            probe.present();
+            queue.present(probe);
             let effective_scale =
                 if actual_width < surface_config.width || actual_height < surface_config.height {
                     let fit_x = actual_width as f64 / width as f64;
@@ -460,13 +462,7 @@ pub async fn run(
             (actual_width, actual_height, effective_scale)
         };
     log::info!(
-        "Web canvas css={}x{}, buffer={}x{}, effective_scale={:.2}, device_scale={:.2}",
-        width,
-        height,
-        actual_width,
-        actual_height,
-        effective_scale,
-        scale_factor
+        "Web canvas css={width}x{height}, buffer={actual_width}x{actual_height}, effective_scale={effective_scale:.2}, device_scale={scale_factor:.2}"
     );
 
     let fonts = settings.resolve_font_set();
@@ -794,7 +790,6 @@ pub async fn run(
         let canvas = canvas.clone();
         let window = window.clone();
         let app = app.clone();
-        let platform = platform.clone();
         let surface = surface.clone();
         let surface_config = surface_config.clone();
         let surface_dirty = surface_dirty.clone();
@@ -861,13 +856,9 @@ pub async fn run(
     ));
     canvas_watch.follow();
 
-    let frame_pending_for_loop = frame_pending.clone();
-    let frame_timer_for_loop = frame_timer.clone();
     let render_loop_for_deadline = render_loop.clone();
-    let surface_dirty_for_loop = surface_dirty.clone();
     let request_frame_for_loop = request_frame.clone();
     let document_for_loop = document.clone();
-    let accessibility_for_loop = accessibility.clone();
     let cursors_for_loop = RefCell::new(crate::web_cursor::WebCursors::new(
         &canvas,
         settings.custom_cursor_size,
@@ -876,7 +867,7 @@ pub async fn run(
     let reshape_for_loop = reshape.clone();
 
     *render_loop.borrow_mut() = Some(Closure::wrap(Box::new(move || {
-        frame_pending_for_loop.set(false);
+        frame_pending.set(false);
         canvas_watch.follow();
         let update_result = app.borrow_mut().update();
         // A size the app asked for in this update is applied in the same
@@ -892,7 +883,7 @@ pub async fn run(
             app.borrow().take_pointer_icon_change(),
         );
         if let Ok(mut app_mut) = app.try_borrow_mut()
-            && let Err(error) = accessibility_for_loop
+            && let Err(error) = accessibility
                 .borrow_mut()
                 .sync(&document_for_loop, &mut app_mut)
         {
@@ -900,7 +891,7 @@ pub async fn run(
         }
 
         let present_required = surface_present_required(
-            surface_dirty_for_loop.get(),
+            surface_dirty.get(),
             update_result.visual_changed,
             app.borrow().needs_redraw(),
         );
@@ -925,12 +916,12 @@ pub async fn run(
                             render_width,
                             render_height,
                         ) {
-                            log::error!("render failed: {:?}", err);
+                            log::error!("render failed: {err:?}");
                         }
+                        app_mut.renderer().present(output);
                     }
 
-                    output.present();
-                    surface_dirty_for_loop.set(false);
+                    surface_dirty.set(false);
                 }
                 SurfaceFrame::Reconfigure => {
                     {
@@ -943,16 +934,16 @@ pub async fn run(
                             );
                         }
                     }
-                    surface_dirty_for_loop.set(true);
+                    surface_dirty.set(true);
                     request_frame_for_loop();
                 }
-                SurfaceFrame::Skip => surface_dirty_for_loop.set(true),
+                SurfaceFrame::Skip => surface_dirty.set(true),
             }
         }
 
         let frame_driver = WebPlatformFrameDriver {
-            frame_timer: &frame_timer_for_loop,
-            frame_pending: &frame_pending_for_loop,
+            frame_timer: &frame_timer,
+            frame_pending: &frame_pending,
             render_loop: &render_loop_for_deadline,
         };
         app.borrow().schedule_platform_frame(&frame_driver);

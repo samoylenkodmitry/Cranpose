@@ -3,7 +3,7 @@ use std::{
     io::{self, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     sync::{
-        Arc, Condvar, Mutex,
+        Arc, Condvar, Mutex, PoisonError,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
@@ -32,10 +32,7 @@ struct Shared {
 
 impl Shared {
     fn wait_for(&self, wanted: u64) -> io::Result<u64> {
-        let mut progress = self
-            .progress
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
+        let mut progress = self.progress.lock().unwrap_or_else(PoisonError::into_inner);
         loop {
             if let Some(error) = &progress.error {
                 return Err(io::Error::other(error.clone()));
@@ -50,7 +47,7 @@ impl Shared {
             let (guard, timeout) = self
                 .ready
                 .wait_timeout(progress, self.stall)
-                .unwrap_or_else(|error| error.into_inner());
+                .unwrap_or_else(PoisonError::into_inner);
             progress = guard;
             if timeout.timed_out() && progress.downloaded == landed {
                 return Err(io::Error::new(
@@ -66,10 +63,7 @@ impl Shared {
 
     fn fail(&self, message: String) {
         log::error!("cranpose-media spool: {message}");
-        let mut progress = self
-            .progress
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
+        let mut progress = self.progress.lock().unwrap_or_else(PoisonError::into_inner);
         progress.error = Some(message);
         progress.finished = true;
         self.ready.notify_all();
@@ -219,7 +213,7 @@ fn run_download(mut source: Box<dyn Read + Send>, mut writer: File, shared: Arc<
                 let mut progress = shared
                     .progress
                     .lock()
-                    .unwrap_or_else(|error| error.into_inner());
+                    .unwrap_or_else(PoisonError::into_inner);
                 progress.total = Some(progress.downloaded);
                 progress.finished = true;
                 shared.ready.notify_all();
@@ -233,7 +227,7 @@ fn run_download(mut source: Box<dyn Read + Send>, mut writer: File, shared: Arc<
                 let mut progress = shared
                     .progress
                     .lock()
-                    .unwrap_or_else(|error| error.into_inner());
+                    .unwrap_or_else(PoisonError::into_inner);
                 progress.downloaded += read as u64;
                 shared.ready.notify_all();
             }

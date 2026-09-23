@@ -547,7 +547,7 @@ impl DragAndDropTargetNode {
             return;
         };
         with_app_context_by_id(owner, |context| {
-            context.drag_and_drop().unregister_target(node)
+            context.drag_and_drop().unregister_target(node);
         });
     }
 }

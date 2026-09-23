@@ -191,13 +191,13 @@ fn two_event_streams_in_one_composable_each_deliver_exactly_once() {
                 let share_stream =
                     rememberEventStream((), move |sender| shares.observe(move |e| sender.send(e)));
                 CollectEvents(share_stream, (), move |event| {
-                    share_sink.borrow_mut().push(event)
+                    share_sink.borrow_mut().push(event);
                 });
                 let pressure_stream = rememberEventStream((), move |sender| {
                     pressure.observe(move |e| sender.send(e))
                 });
                 CollectEvents(pressure_stream, (), move |event| {
-                    pressure_sink.borrow_mut().push(event)
+                    pressure_sink.borrow_mut().push(event);
                 });
             })
             .expect("render succeeds");
@@ -285,7 +285,7 @@ fn a_stream_mounting_later_does_not_steal_an_existing_streams_identity() {
                         banner.observe(move |e| sender.send(e))
                     });
                     CollectEvents(stream, (), move |event| {
-                        banner_sink.borrow_mut().push(event)
+                        banner_sink.borrow_mut().push(event);
                     });
                 }
                 let shares = shares.clone();
@@ -293,7 +293,7 @@ fn a_stream_mounting_later_does_not_steal_an_existing_streams_identity() {
                 let share_stream =
                     rememberEventStream((), move |sender| shares.observe(move |e| sender.send(e)));
                 CollectEvents(share_stream, (), move |event| {
-                    share_sink.borrow_mut().push(event)
+                    share_sink.borrow_mut().push(event);
                 });
                 let pressure = pressure.clone();
                 let pressure_sink = Rc::clone(&pressure_sink);
@@ -301,7 +301,7 @@ fn a_stream_mounting_later_does_not_steal_an_existing_streams_identity() {
                     pressure.observe(move |e| sender.send(e))
                 });
                 CollectEvents(pressure_stream, (), move |event| {
-                    pressure_sink.borrow_mut().push(event)
+                    pressure_sink.borrow_mut().push(event);
                 });
             })
             .expect("render succeeds");
@@ -372,7 +372,7 @@ fn blocking_work_runs_off_the_ui_thread_and_reports_back_on_it() {
                     move |answer| ui_sink.set(answer),
                 );
             })
-            .with(|_| ());
+            .with(|()| ());
         })
         .expect("render succeeds");
 

@@ -1,7 +1,5 @@
 //! Foundation elements for Cranpose: modifiers, input, and core functionality
 
-#![allow(non_snake_case)]
-
 pub mod gesture_constants;
 pub mod lazy;
 pub mod modifier;

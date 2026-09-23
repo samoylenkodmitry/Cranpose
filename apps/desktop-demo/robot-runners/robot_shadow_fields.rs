@@ -216,13 +216,12 @@ fn main() {
             }
 
             let shadow_off = set_shadow_slider_fraction(&robot, 0.0);
-            println!("shadow_elevation after off scrub: {:?}", shadow_off);
+            println!("shadow_elevation after off scrub: {shadow_off:?}");
 
             let ambient_alpha = set_slider_fraction(&robot, "ambient_alpha", 1.0);
             let spot_alpha = set_slider_fraction(&robot, "spot_alpha", 1.0);
             println!(
-                "ambient_alpha={:?} spot_alpha={:?}",
-                ambient_alpha, spot_alpha
+                "ambient_alpha={ambient_alpha:?} spot_alpha={spot_alpha:?}"
             );
 
             let shadow_label_bounds =
@@ -267,7 +266,7 @@ fn main() {
             );
 
             let shadow_on = set_shadow_slider_fraction(&robot, 1.0);
-            println!("shadow_elevation after on scrub: {:?}", shadow_on);
+            println!("shadow_elevation after on scrub: {shadow_on:?}");
 
             let _ = robot.click(24.0, 24.0);
             std::thread::sleep(Duration::from_millis(100));
@@ -298,10 +297,10 @@ fn main() {
             let after_path = output_dir.join("shadow_after.png");
             let diff_path = output_dir.join("shadow_diff.png");
             if let Err(err) = save_png(&before_path, &base_b) {
-                println!("WARN: {}", err);
+                println!("WARN: {err}");
             }
             if let Err(err) = save_png(&after_path, &after_on) {
-                println!("WARN: {}", err);
+                println!("WARN: {err}");
             }
             if let Some(diff_img) = build_diff_image(&base_b, &after_on, shadow_rect) {
                 if let Err(err) = diff_img.save(&diff_path) {
@@ -310,14 +309,7 @@ fn main() {
             }
 
             println!(
-                "shadow pixel diff: full={} region(raw/baseline/net)={}/{}/{} ring(raw/baseline/net)={}/{}/{}",
-                full_changed,
-                raw_changed,
-                baseline_noise,
-                net_changed,
-                raw_ring_changed,
-                baseline_ring_noise,
-                net_ring_changed,
+                "shadow pixel diff: full={full_changed} region(raw/baseline/net)={raw_changed}/{baseline_noise}/{net_changed} ring(raw/baseline/net)={raw_ring_changed}/{baseline_ring_noise}/{net_ring_changed}",
             );
             println!(
                 "shadow rect=({:.1},{:.1},{:.1},{:.1}) pngs: {} {} {}",
@@ -332,8 +324,7 @@ fn main() {
 
             if net_ring_changed < SHADOW_RING_MIN_PIXELS {
                 println!(
-                    "FATAL: shadow field slider did not produce visible shadow pixels in ring (net_ring_changed={})",
-                    net_ring_changed
+                    "FATAL: shadow field slider did not produce visible shadow pixels in ring (net_ring_changed={net_ring_changed})"
                 );
                 let _ = robot.exit();
                 std::process::exit(1);

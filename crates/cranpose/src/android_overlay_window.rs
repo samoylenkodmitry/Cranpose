@@ -1,6 +1,6 @@
 use std::{
     collections::VecDeque,
-    sync::{Arc, Mutex, MutexGuard},
+    sync::{Arc, Mutex, MutexGuard, PoisonError},
 };
 
 use cranpose_ui::{Point, Size};
@@ -78,9 +78,7 @@ impl AndroidOverlayEventQueue {
     }
 
     fn lock_events(&self) -> MutexGuard<'_, VecDeque<AndroidOverlayWindowEvent>> {
-        self.events
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+        self.events.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
@@ -117,7 +115,7 @@ pub(crate) fn show_android_overlay_window(
                     JValue::Long(event_queue_handle.raw()),
                 ],
             )
-            .and_then(|value| value.i())
+            .and_then(jni::JValueOwned::i)
             .map_err(|error| {
                 clear_pending_android_jni_exception(env);
                 format!("failed to show Android overlay window: {error}")
@@ -166,7 +164,7 @@ pub(crate) fn update_android_overlay_window_bounds(
                     JValue::Int(bounds.y_px),
                 ],
             )
-            .and_then(|value| value.i())
+            .and_then(jni::JValueOwned::i)
             .map_err(|error| {
                 clear_pending_android_jni_exception(env);
                 format!("failed to update Android overlay window bounds: {error}")

@@ -39,7 +39,7 @@ pub fn set_glass_light_direction(direction: (f32, f32)) {
 
 /// The current ambient glass light return direction.
 pub fn glass_light_direction() -> (f32, f32) {
-    GLASS_LIGHT_RETURN.with(|cell| cell.get())
+    GLASS_LIGHT_RETURN.with(Cell::get)
 }
 
 const CAPSULE_CLIP_RADIUS: f32 = 1.0e6;
@@ -245,7 +245,7 @@ impl GlassDynamics {
         self.highlight_boost += 0.85 * press;
         self.saturation_boost += 0.45 * press;
         let (fx, fy) = finger.unwrap_or(center);
-        let carried = self.touch.map(|(_, _, i)| i).unwrap_or(0.0);
+        let carried = self.touch.map_or(0.0, |(_, _, i)| i);
         self.touch = Some((fx, fy, (carried + press).clamp(0.0, 1.0)));
         self
     }
@@ -1171,8 +1171,7 @@ impl ResolvedGlass {
         let zoom_anchor = dynamics
             .morph
             .as_ref()
-            .map(|morph| morph.zoom_anchor)
-            .unwrap_or((0.0, 0.0));
+            .map_or((0.0, 0.0), |morph| morph.zoom_anchor);
         shader.set_float2(
             GLASS_OPTICAL_ZOOM_ANCHOR_UNIFORM,
             zoom_anchor.0,
@@ -1181,8 +1180,9 @@ impl ResolvedGlass {
         shader.set_float(121, self.rim_reflection.max(0.001));
         let (ink_color, ink_strength) = self
             .ink_recolor
-            .map(|(color, strength)| (color, strength * activity))
-            .unwrap_or((Color::TRANSPARENT, 0.0));
+            .map_or((Color::TRANSPARENT, 0.0), |(color, strength)| {
+                (color, strength * activity)
+            });
         shader.set_float(124, ink_color.r());
         shader.set_float(125, ink_color.g());
         shader.set_float(126, ink_color.b());
@@ -1251,31 +1251,27 @@ impl ResolvedGlass {
         shader.set_float(103, self.shadow_radius);
         shader.set_float(104, self.shadow_offset_y);
         shader.set_float(105, self.shadow_spread);
-        let morph_pad = dynamics
-            .morph
-            .as_ref()
-            .map(|morph| {
-                let (px, py, pw, ph, _) = morph.primary;
-                let (left, top) = (px - pw * 0.5, py - ph * 0.5);
-                let (right, bottom) = (px + pw * 0.5, py + ph * 0.5);
-                let mut shape_reach = 0.0f32;
-                for (sx, sy, sw, sh, _) in &morph.shapes {
-                    let reach_x = ((sx + sw * 0.5) - right)
-                        .max(left - (sx - sw * 0.5))
-                        .max(0.0);
-                    let reach_y = ((sy + sh * 0.5) - bottom)
-                        .max(top - (sy - sh * 0.5))
-                        .max(0.0);
-                    shape_reach = shape_reach.max(reach_x.max(reach_y));
-                }
-                let glue_pad = if morph.shapes.is_empty() {
-                    0.0
-                } else {
-                    morph.glue * 2.0
-                };
-                morph.wobble_amplitude * 2.0 + morph.bulge_amplitude + shape_reach + glue_pad
-            })
-            .unwrap_or(0.0);
+        let morph_pad = dynamics.morph.as_ref().map_or(0.0, |morph| {
+            let (px, py, pw, ph, _) = morph.primary;
+            let (left, top) = (px - pw * 0.5, py - ph * 0.5);
+            let (right, bottom) = (px + pw * 0.5, py + ph * 0.5);
+            let mut shape_reach = 0.0f32;
+            for (sx, sy, sw, sh, _) in &morph.shapes {
+                let reach_x = ((sx + sw * 0.5) - right)
+                    .max(left - (sx - sw * 0.5))
+                    .max(0.0);
+                let reach_y = ((sy + sh * 0.5) - bottom)
+                    .max(top - (sy - sh * 0.5))
+                    .max(0.0);
+                shape_reach = shape_reach.max(reach_x.max(reach_y));
+            }
+            let glue_pad = if morph.shapes.is_empty() {
+                0.0
+            } else {
+                morph.glue * 2.0
+            };
+            morph.wobble_amplitude * 2.0 + morph.bulge_amplitude + shape_reach + glue_pad
+        });
         shader.set_input_padding(
             (self.input_padding()
                 + if refraction_mode >= 1.5 {
@@ -1881,7 +1877,7 @@ mod tests {
                         primary: (30.0, 15.0, 50.0, 20.0, 4.0),
                         shapes: vec![(10.0, 15.0, 8.0, 8.0, -1.0)],
                         ..Default::default()
-                    })
+                    });
                 }
                 11 => {
                     let morph = dynamics.morph.as_mut().unwrap();
@@ -3238,7 +3234,7 @@ mod tests {
         };
         let dynamics = GlassDynamics {
             activity: Some(1.0),
-            morph: Some(morph.clone()),
+            morph: Some(morph),
             ..Default::default()
         };
         let RenderEffect::Shader { shader } = resolved.backdrop_effect(2.0, dynamics) else {

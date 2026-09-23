@@ -48,7 +48,7 @@ fn main() {
             let mut expected_y = list_top;
 
             for (idx, height) in expected_heights.iter().take(5) {
-                let label = format!("Item {}", idx);
+                let label = format!("Item {idx}");
 
                 match find_text_in_semantics(&robot, &label) {
                     Some((_x, item_y, _w, _h)) => {
@@ -56,34 +56,26 @@ fn main() {
                         let expected_text_y = expected_y + (height - text_h) / 2.0;
 
                         println!(
-                            "{}: y={:.1}, expected~{:.1} (box starts at {:.1}, h={})",
-                            label, item_y, expected_text_y, expected_y, height
+                            "{label}: y={item_y:.1}, expected~{expected_text_y:.1} (box starts at {expected_y:.1}, h={height})"
                         );
 
                         assert!(
                             (item_y - expected_text_y).abs() < 20.0,
-                            "{} position mismatch: got {:.1}, expected ~{:.1}",
-                            label,
-                            item_y,
-                            expected_text_y
+                            "{label} position mismatch: got {item_y:.1}, expected ~{expected_text_y:.1}"
                         );
                     }
                     None => {
-                        println!("{}: NOT FOUND (may be scrolled out)", label);
+                        println!("{label}: NOT FOUND (may be scrolled out)");
                     }
                 }
 
                 expected_y += height;
             }
 
-            if find_text_in_semantics(&robot, "Item 0").is_some() {
-                panic!("Item 0 should be virtualized out at middle!");
-            }
+            assert!(!find_text_in_semantics(&robot, "Item 0").is_some(), "Item 0 should be virtualized out at middle!");
             println!("✓ Item 0 correctly virtualized out");
 
-            if find_text_in_semantics(&robot, "Item 100").is_some() {
-                panic!("Item 100 should be virtualized out!");
-            }
+            assert!(!find_text_in_semantics(&robot, "Item 100").is_some(), "Item 100 should be virtualized out!");
             println!("✓ Item 100 correctly virtualized out");
 
             println!("=== All Tests Passed ===");
@@ -166,7 +158,7 @@ fn main() {
                                                 BoxSpec::new().content_alignment(Alignment::CENTER),
                                                 move || {
                                                     Text(
-                                                        format!("Item {}", index),
+                                                        format!("Item {index}"),
                                                         Modifier::default(),
                                                         TextStyle::default(),
                                                     );

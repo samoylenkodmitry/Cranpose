@@ -28,7 +28,6 @@ fn slider_deformation(pose: crate::dynamics::LiquidPose) -> crate::material::Gla
 /// A 0..=1 slider. The caller owns `value`; `on_change` streams new values
 /// while dragging or on tap.
 #[composable]
-#[allow(non_snake_case)]
 pub fn LiquidSlider(modifier: Modifier, value: f32, on_change: impl Fn(f32) + 'static) {
     let colors = liquid_colors();
     let value = value.clamp(0.0, 1.0);

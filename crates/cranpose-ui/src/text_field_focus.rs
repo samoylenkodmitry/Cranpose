@@ -319,7 +319,7 @@ pub fn request_focus(
     let gaining_field = handler.node_id();
 
     crate::render_state::with_text_field_focus(|state| {
-        state.request_focus(is_focused, handler, modal_depth)
+        state.request_focus(is_focused, handler, modal_depth);
     });
 
     for node_id in [previous_field, gaining_field].into_iter().flatten() {
@@ -347,7 +347,7 @@ pub fn clear_focus() {
     if let Some(node_id) = previous {
         crate::schedule_draw_repass(node_id);
     }
-    crate::render_state::with_text_field_focus(|state| state.clear_focus());
+    crate::render_state::with_text_field_focus(TextFieldFocusState::clear_focus);
     if previous.is_some() && crate::focus_dispatch::active_focus_target() == previous {
         crate::focus_dispatch::clear_active_focus();
     }
@@ -372,7 +372,8 @@ pub fn focused_field_node() -> Option<cranpose_core::NodeId> {
 /// Returns true if any text field currently has focus.
 /// Checks weak ref liveness and clears stale focus state.
 pub fn has_focused_field() -> bool {
-    let has_focus = crate::render_state::with_text_field_focus(|state| state.has_focused_field());
+    let has_focus =
+        crate::render_state::with_text_field_focus(TextFieldFocusState::has_focused_field);
     if !has_focus {
         crate::text_input_session::notify_text_input_focus_lost();
     }
@@ -402,19 +403,19 @@ pub fn dispatch_delete_surrounding(before_bytes: usize, after_bytes: usize) -> b
 /// Copies selection from focused text field.
 /// O(1) operation using stored handler.
 pub fn dispatch_copy() -> Option<String> {
-    crate::render_state::with_text_field_focus(|state| state.dispatch_copy())
+    crate::render_state::with_text_field_focus(TextFieldFocusState::dispatch_copy)
 }
 
 /// Cuts selection from focused text field (copy + delete).
 /// O(1) operation using stored handler.
 pub fn dispatch_cut() -> Option<String> {
-    crate::render_state::with_text_field_focus(|state| state.dispatch_cut())
+    crate::render_state::with_text_field_focus(TextFieldFocusState::dispatch_cut)
 }
 
 /// Selects all the text in the focused text field (contextual-menu "Select
 /// all"). Returns true if a text field was focused.
 pub fn dispatch_select_all() -> bool {
-    crate::render_state::with_text_field_focus(|state| state.dispatch_select_all())
+    crate::render_state::with_text_field_focus(TextFieldFocusState::dispatch_select_all)
 }
 
 /// Dispatches IME preedit (composition) state to the focused text field.
@@ -428,7 +429,7 @@ pub fn dispatch_ime_preedit(text: &str, cursor: Option<(usize, usize)>) -> bool 
 /// composed text (Android `finishComposingText` semantics).
 /// Returns true if a text field was focused and received the event.
 pub fn dispatch_ime_finish_composing() -> bool {
-    crate::render_state::with_text_field_focus(|state| state.dispatch_ime_finish_composing())
+    crate::render_state::with_text_field_focus(TextFieldFocusState::dispatch_ime_finish_composing)
 }
 
 /// Marks existing text in the focused field as the composing region without
@@ -454,13 +455,13 @@ pub fn dispatch_ime_set_selection(start_bytes: usize, end_bytes: usize) -> bool 
 /// platform IMEs, or `None` when no field is focused (or the handler does
 /// not expose its state).
 pub fn focused_editor_state() -> Option<ImeEditorState> {
-    crate::render_state::with_text_field_focus(|state| state.focused_editor_state())
+    crate::render_state::with_text_field_focus(TextFieldFocusState::focused_editor_state)
 }
 
 /// Window-space caret geometry of the focused field (see [`ImeCaretGeometry`]),
 /// or `None` when no field is focused or it exposes no geometry.
 pub fn focused_caret_geometry() -> Option<ImeCaretGeometry> {
-    crate::render_state::with_text_field_focus(|state| state.focused_caret_geometry())
+    crate::render_state::with_text_field_focus(TextFieldFocusState::focused_caret_geometry)
 }
 
 #[cfg(test)]
@@ -512,14 +513,14 @@ mod tests {
         let _ = crate::render_state::take_draw_repass_nodes();
 
         let first = Rc::new(RefCell::new(false));
-        request_focus(first.clone(), Rc::new(NodeBackedHandler(7)), 0);
+        request_focus(first, Rc::new(NodeBackedHandler(7)), 0);
         assert!(
             crate::render_state::take_draw_repass_nodes().contains(&7),
             "gaining focus must re-record the gaining field's draws"
         );
 
         let second = Rc::new(RefCell::new(false));
-        request_focus(second.clone(), Rc::new(NodeBackedHandler(9)), 0);
+        request_focus(second, Rc::new(NodeBackedHandler(9)), 0);
         let repasses = crate::render_state::take_draw_repass_nodes();
         assert!(
             repasses.contains(&7) && repasses.contains(&9),
@@ -537,7 +538,7 @@ mod tests {
     fn a_blink_transition_schedules_a_scoped_repass_on_the_focused_field() {
         let _app_context = crate::render_state::app_context_test_scope();
         let focus = Rc::new(RefCell::new(false));
-        request_focus(focus.clone(), Rc::new(NodeBackedHandler(21)), 0);
+        request_focus(focus, Rc::new(NodeBackedHandler(21)), 0);
         let _ = crate::render_state::take_draw_repass_nodes();
 
         let past_interval = web_time::Instant::now()

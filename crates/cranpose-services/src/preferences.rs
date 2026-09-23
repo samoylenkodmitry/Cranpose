@@ -318,7 +318,7 @@ impl PreferencesStore for FilePreferences {
     }
 
     fn clear(&self) -> Result<(), PreferencesError> {
-        self.mutate(|entries| entries.clear())
+        self.mutate(std::collections::BTreeMap::clear)
     }
 }
 

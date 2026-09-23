@@ -27,7 +27,6 @@ fn sprite_sheet() -> ImageBitmap {
     ImageBitmap::from_rgba8(width, height, pixels).expect("valid sprite sheet bitmap")
 }
 
-#[allow(non_snake_case)]
 #[composable]
 pub fn PressedStateReproScreen() {
     let is_pressed = cranpose_core::rememberMutableStateOf(|| false);

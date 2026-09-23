@@ -601,8 +601,7 @@ fn snapshot<T: Clone>(slot: &'static Mutex<Vec<(u64, T)>>) -> Vec<T> {
 pub fn latest_camera_frame() -> Option<CameraFrame> {
     latest_frame_slot()
         .lock()
-        .map(|frame| frame.clone())
-        .unwrap_or(None)
+        .map_or(None, |frame| frame.clone())
 }
 
 /// What the session is doing.
@@ -864,6 +863,8 @@ pub async fn capture_camera_still() -> Result<CameraStill, CameraError> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::PoisonError;
+
     use super::*;
 
     struct FakeCamera {
@@ -1014,14 +1015,14 @@ mod tests {
         let observer = observe_camera_state(move |state| {
             recorder
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .push(state)
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(state);
         });
         set_platform_camera(FakeCamera::new());
         start_camera().expect("the session starts");
 
         assert_eq!(
-            *seen.lock().unwrap_or_else(|error| error.into_inner()),
+            *seen.lock().unwrap_or_else(PoisonError::into_inner),
             vec![
                 CameraState::Idle,
                 CameraState::Starting,
@@ -1084,15 +1085,15 @@ mod tests {
         let observer = observe_camera_frames(move |frame| {
             recorder
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .push(frame.sequence)
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(frame.sequence);
         });
         publish_camera_frame(rgba_frame(1));
         publish_camera_frame(rgba_frame(2));
         drop(observer);
         publish_camera_frame(rgba_frame(3));
         assert_eq!(
-            *seen.lock().unwrap_or_else(|error| error.into_inner()),
+            *seen.lock().unwrap_or_else(PoisonError::into_inner),
             vec![1, 2]
         );
         clear_platform_camera();
@@ -1130,14 +1131,14 @@ mod tests {
         let observer = observe_camera_stills(move |still| {
             recorder
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .push(still)
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(still);
         });
         start_camera().expect("the session starts");
         request_camera_still().expect("a still is asked for");
         assert_eq!(backend.stills.load(Ordering::Relaxed), 1);
         assert_eq!(
-            *seen.lock().unwrap_or_else(|error| error.into_inner()),
+            *seen.lock().unwrap_or_else(PoisonError::into_inner),
             vec![Ok(CameraStill {
                 jpeg: vec![0xff, 0xd8]
             })]
@@ -1283,8 +1284,8 @@ mod tests {
         let observer = observe_camera_lenses(move |lenses| {
             recorder
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .push(lenses)
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(lenses);
         });
 
         let published = CameraLenses {
@@ -1299,15 +1300,15 @@ mod tests {
         publish_camera_lenses(published.clone());
         assert_eq!(camera_lenses(), published);
         assert_eq!(
-            *seen.lock().unwrap_or_else(|error| error.into_inner()),
-            vec![CameraLenses::default(), published.clone()],
+            *seen.lock().unwrap_or_else(PoisonError::into_inner),
+            vec![CameraLenses::default(), published],
             "the current list arrives at once, and a repeat is not re-delivered"
         );
 
         drop(observer);
         publish_camera_lenses(CameraLenses::default());
         assert_eq!(
-            seen.lock().unwrap_or_else(|error| error.into_inner()).len(),
+            seen.lock().unwrap_or_else(PoisonError::into_inner).len(),
             2,
             "a dropped observer hears nothing more"
         );

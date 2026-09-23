@@ -101,7 +101,7 @@ fn every_row_of_a_scaling_list_reaches_the_scene_as_text() {
     painted_text(&root, &mut painted);
     assert_eq!(
         painted,
-        ROWS.iter().map(|row| row.to_string()).collect::<Vec<_>>(),
+        ROWS.iter().map(ToString::to_string).collect::<Vec<_>>(),
         "the scene the renderer is handed must carry every row's glyphs"
     );
 }

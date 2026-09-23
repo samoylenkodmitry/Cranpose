@@ -58,9 +58,9 @@ fn test_conditional_text_reactivity() {
     });
 
     let tree = composition.applier_mut().dump_tree(Some(0));
-    println!("\n=== Initial composition (counter=0) ===\n{}", tree);
+    println!("\n=== Initial composition (counter=0) ===\n{tree}");
     let initial_node_count = tree.lines().count();
-    println!("Initial node count: {}", initial_node_count);
+    println!("Initial node count: {initial_node_count}");
 
     let counter = TEST_COUNTER
         .with(|cell| *cell.borrow())
@@ -70,9 +70,9 @@ fn test_conditional_text_reactivity() {
     drain_all(&mut composition).expect("drain after increment to 1");
 
     let tree = composition.applier_mut().dump_tree(Some(0));
-    println!("\n=== After incrementing to 1 ===\n{}", tree);
+    println!("\n=== After incrementing to 1 ===\n{tree}");
     let after_1_node_count = tree.lines().count();
-    println!("After increment to 1, node count: {}", after_1_node_count);
+    println!("After increment to 1, node count: {after_1_node_count}");
 
     assert_eq!(
         initial_node_count, after_1_node_count,
@@ -83,9 +83,9 @@ fn test_conditional_text_reactivity() {
     drain_all(&mut composition).expect("drain after increment to 2");
 
     let tree = composition.applier_mut().dump_tree(Some(0));
-    println!("\n=== After incrementing to 2 ===\n{}", tree);
+    println!("\n=== After incrementing to 2 ===\n{tree}");
     let after_2_node_count = tree.lines().count();
-    println!("After increment to 2, node count: {}", after_2_node_count);
+    println!("After increment to 2, node count: {after_2_node_count}");
 
     assert_eq!(
         initial_node_count, after_2_node_count,

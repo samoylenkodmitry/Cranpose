@@ -205,12 +205,12 @@ fn present_open(kind: Kind, multiple: bool) -> PickerFuture<PickResult> {
 pub(crate) fn root_view_controller(mtm: MainThreadMarker) -> Option<Retained<UIViewController>> {
     let app = UIApplication::sharedApplication(mtm);
     let scenes = app.connectedScenes();
-    for scene in scenes.iter() {
+    for scene in &scenes {
         let Ok(window_scene) = scene.downcast::<UIWindowScene>() else {
             continue;
         };
         let windows = window_scene.windows();
-        for window in windows.iter() {
+        for window in &windows {
             if let Some(controller) = window.rootViewController() {
                 return Some(controller);
             }
@@ -260,10 +260,10 @@ fn scoped_file(url: Retained<NSURL>, path: PathBuf) -> ContentHandle {
 }
 
 fn metadata_for(scope: &SecurityScope, path: &Path) -> ContentMetadata {
-    let name = path
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| path.display().to_string());
+    let name = path.file_name().map_or_else(
+        || path.display().to_string(),
+        |name| name.to_string_lossy().into_owned(),
+    );
     let mut metadata = ContentMetadata::named(name).with_identifier(path.display().to_string());
     let stat = scope.enter(|| std::fs::metadata(path));
     if let Ok(stat) = stat {

@@ -99,7 +99,7 @@ impl<F: FnMut() + 'static> IosApp<F> {
         let pending_ui = self
             .shell
             .as_ref()
-            .is_some_and(|shell| shell.has_pending_ui());
+            .is_some_and(cranpose_app_shell::AppShell::has_pending_ui);
         let due = self
             .next_off_screen_render
             .is_some_and(|at| at <= Instant::now());
@@ -253,7 +253,7 @@ impl<F: FnMut() + 'static> IosApp<F> {
                 {
                     log::error!("iOS render error: {error:?}");
                 }
-                frame.present();
+                shell.renderer().present(frame);
                 gpu.surface_dirty = false;
             }
             SurfaceFrame::Reconfigure => {
@@ -581,6 +581,7 @@ fn ios_surface_config(
         height,
         present_mode,
         alpha_mode,
+        color_space: wgpu::SurfaceColorSpace::Auto,
         view_formats: crate::surface_format::display_surface_view_formats(format),
         desired_maximum_frame_latency: 2,
     })

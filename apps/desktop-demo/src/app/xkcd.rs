@@ -191,7 +191,7 @@ pub(crate) fn xkcd_tab() {
                                 .rounded_corners(10.0)
                                 .clickable(move |_| {
                                     if let Err(err) = uri_handler.open_uri(&url) {
-                                        log::error!("Failed to open xkcd link {}: {:#}", url, err);
+                                        log::error!("Failed to open xkcd link {url}: {err:#}");
                                     }
                                 }),
                             TextStyle::default(),

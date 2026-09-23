@@ -18,10 +18,10 @@ fn main() {
 
             let verify_text = |text: &str| -> bool {
                 if let Some((x, y, _, _)) = find_text_in_semantics(&robot, text) {
-                    println!("  ✓ Found text '{}' at ({:.1}, {:.1})", text, x, y);
+                    println!("  ✓ Found text '{text}' at ({x:.1}, {y:.1})");
                     return true;
                 }
-                println!("  ✗ Text '{}' not found in semantics!", text);
+                println!("  ✗ Text '{text}' not found in semantics!");
                 false
             };
 
@@ -80,14 +80,16 @@ fn main() {
             }
 
             println!("\n--- Returning to 'Counter App' ---");
-            if !click_button("Counter App") {
-                panic!("Failed to return to Counter App");
-            }
+            assert!(
+                click_button("Counter App"),
+                "Failed to return to Counter App"
+            );
             std::thread::sleep(Duration::from_millis(300));
 
-            if !verify_text("Cranpose Playground") {
-                panic!("Counter App content not found after return");
-            }
+            assert!(
+                verify_text("Cranpose Playground"),
+                "Counter App content not found after return"
+            );
 
             println!("\n--- Regression Check: Increment Button ---");
 

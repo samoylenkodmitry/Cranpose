@@ -14,7 +14,6 @@ const ICON_SVG: &[u8] = br##"
 fn svg_painter_renders_through_image_composable() {
     let painter = SvgPainter::from_bytes(ICON_SVG).expect("svg painter");
     let mut composition = cranpose_ui::run_test_composition({
-        let painter = painter.clone();
         move || {
             Image(
                 painter.clone(),

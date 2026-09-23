@@ -277,7 +277,6 @@ pub fn local_notifier() -> CompositionLocal<NotifierRef> {
     })
 }
 
-#[allow(non_snake_case)]
 #[composable]
 pub fn ProvideNotifier(content: impl FnOnce()) {
     let notifier = cranpose_core::remember(default_notifier).with(|state| state.clone());
@@ -302,7 +301,7 @@ mod tests {
         assert_eq!(plain.body, "3 of 12 pages");
         assert_eq!(plain.deeplink, None);
 
-        let ongoing = plain.clone().ongoing(true);
+        let ongoing = plain.ongoing(true);
         assert!(ongoing.ongoing);
         assert!(!ongoing.ongoing(false).ongoing);
     }

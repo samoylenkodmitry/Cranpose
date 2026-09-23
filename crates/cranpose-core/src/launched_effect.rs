@@ -402,11 +402,10 @@ where
             if state.with(|state| state.should_run(&key)) {
                 state.update(|state| state.set_key(key));
                 let runtime = composer.runtime_handle();
-                let state_for_effect = state.clone();
                 let mut effect_opt = Some(effect);
                 composer.register_side_effect(move || {
                     if let Some(effect) = effect_opt.take() {
-                        state_for_effect.update(|state| state.launch(runtime.clone(), effect));
+                        state.update(|state| state.launch(runtime.clone(), effect));
                     }
                 });
             }
@@ -446,11 +445,10 @@ where
                     state.set_site(site);
                 });
                 let runtime = composer.runtime_handle();
-                let state_for_effect = state.clone();
                 let mut mk_future_opt = Some(mk_future);
                 composer.register_side_effect(move || {
                     if let Some(mk_future) = mk_future_opt.take() {
-                        state_for_effect.update(|state| {
+                        state.update(|state| {
                             state.launch(runtime.clone(), mk_future);
                         });
                     }

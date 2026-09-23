@@ -69,7 +69,7 @@ fn document_info(uri: &str) -> Option<ContentMetadata> {
                 jni_sig!("(Ljava/lang/String;)Ljava/lang/String;"),
                 &[JValue::Object(argument_obj)],
             )
-            .and_then(|value| value.l())
+            .and_then(jni::JValueOwned::l)
             .map_err(|error| error.to_string())?;
         optional_jstring(env, value)
     })
@@ -507,7 +507,7 @@ impl AndroidSink {
                     jni_sig!("(Ljava/lang/String;)I"),
                     &[JValue::Object(uri_obj)],
                 )
-                .and_then(|value| value.i())
+                .and_then(jni::JValueOwned::i)
                 .map_err(|error| error.to_string())
             })
             .map_err(ContentError::Io)?;
@@ -571,7 +571,7 @@ impl AndroidFolder {
                     jni_sig!("(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;"),
                     &[JValue::Object(tree_obj), JValue::Object(document_obj)],
                 )
-                .and_then(|value| value.l())
+                .and_then(jni::JValueOwned::l)
                 .map_err(|error| error.to_string())?;
             optional_jstring(env, value)
         })
@@ -746,7 +746,7 @@ pub fn open_content_uri(uri: &str) -> io::Result<File> {
             jni_sig!("(Ljava/lang/String;)I"),
             &[JValue::Object(argument)],
         )
-        .and_then(|value| value.i())
+        .and_then(jni::JValueOwned::i)
         .map_err(|error| error.to_string())
     })
     .map_err(io::Error::other)?;

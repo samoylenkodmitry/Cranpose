@@ -46,7 +46,6 @@ fn main() {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn probe_app() {
     let state = rememberLazyListState();
     Column(

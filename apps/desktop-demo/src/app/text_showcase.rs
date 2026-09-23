@@ -1,5 +1,3 @@
-#![allow(non_snake_case)]
-
 use cranpose_ui::{
     composable,
     text::{

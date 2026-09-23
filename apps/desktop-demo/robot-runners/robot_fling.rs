@@ -25,8 +25,8 @@ fn main() {
             std::thread::sleep(Duration::from_millis(500));
 
             match robot.wait_for_idle() {
-                Ok(_) => println!("✓ App ready\n"),
-                Err(e) => println!("Note: {}\n", e),
+                Ok(()) => println!("✓ App ready\n"),
+                Err(e) => println!("Note: {e}\n"),
             }
 
             let mut all_passed = true;
@@ -36,7 +36,7 @@ fn main() {
             if let Some((x, y, w, h)) = find_button_in_semantics(&robot, "Lazy List") {
                 let cx = x + w / 2.0;
                 let cy = y + h / 2.0;
-                println!("  Found 'Lazy List' tab at ({:.1}, {:.1})", cx, cy);
+                println!("  Found 'Lazy List' tab at ({cx:.1}, {cy:.1})");
 
                 let _ = robot.mouse_move(cx, cy);
                 std::thread::sleep(Duration::from_millis(50));
@@ -67,22 +67,16 @@ fn main() {
             println!("--- Test 2: Quick Swipe (Fling Gesture) ---");
             println!("Performing fast downward swipe to trigger velocity detection...\n");
 
-            let list_bounds = match find_bounds_by_text(&robot, "LazyListViewport") {
-                Some(bounds) => bounds,
-                None => {
-                    println!("  ✗ Could not find LazyListViewport bounds");
-                    let _ = robot.exit();
-                    return;
-                }
+            let Some(list_bounds) = find_bounds_by_text(&robot, "LazyListViewport") else {
+                println!("  ✗ Could not find LazyListViewport bounds");
+                let _ = robot.exit();
+                return;
             };
 
-            let visible_bounds = match visible_bounds_in_viewport(&robot, list_bounds, 12.0) {
-                Some(bounds) => bounds,
-                None => {
-                    println!("  ✗ LazyListViewport is not visible in the viewport");
-                    let _ = robot.exit();
-                    return;
-                }
+            let Some(visible_bounds) = visible_bounds_in_viewport(&robot, list_bounds, 12.0) else {
+                println!("  ✗ LazyListViewport is not visible in the viewport");
+                let _ = robot.exit();
+                return;
             };
 
             let start_x = visible_bounds.0 + visible_bounds.2 * 0.5;
@@ -101,7 +95,7 @@ fn main() {
             let before_y = item_before.map(|(_, y, _, _)| y);
 
             if let Some(y) = before_y {
-                println!("  Item 5 before swipe at Y={:.1}", y);
+                println!("  Item 5 before swipe at Y={y:.1}");
             }
 
             let _ = robot.mouse_move(start_x, start_y);
@@ -116,7 +110,7 @@ fn main() {
                 std::thread::sleep(Duration::from_millis(step_delay_ms));
             }
 
-            println!("  Releasing after {:.0}px swipe...", swipe_distance);
+            println!("  Releasing after {swipe_distance:.0}px swipe...");
             let _ = robot.mouse_up();
 
             std::thread::sleep(Duration::from_millis(300));
@@ -128,12 +122,9 @@ fn main() {
                 (Some(by), Some(ay)) => {
                     let delta = ay - by;
                     if delta.abs() > 5.0 {
-                        println!(
-                            "  ✓ PASS: Item 5 moved by {:.1}px (scroll detected)\n",
-                            delta
-                        );
+                        println!("  ✓ PASS: Item 5 moved by {delta:.1}px (scroll detected)\n");
                     } else {
-                        println!("  ? Item 5 at same position (delta={:.1})\n", delta);
+                        println!("  ? Item 5 at same position (delta={delta:.1})\n");
                     }
                 }
                 (Some(_), None) => {
@@ -177,18 +168,12 @@ fn main() {
                     0.0
                 }
             };
-            println!("  Measured fling velocity: {:.1} px/sec", velocity);
+            println!("  Measured fling velocity: {velocity:.1} px/sec");
 
             if velocity.abs() > 50.0 {
-                println!(
-                    "  ✓ PASS: Velocity detected ({:.1} px/sec > 50 threshold)\n",
-                    velocity
-                );
+                println!("  ✓ PASS: Velocity detected ({velocity:.1} px/sec > 50 threshold)\n");
             } else {
-                println!(
-                    "  ✗ FAIL: Velocity too low ({:.1} px/sec, expected > 50)\n",
-                    velocity
-                );
+                println!("  ✗ FAIL: Velocity too low ({velocity:.1} px/sec, expected > 50)\n");
                 all_passed = false;
             }
 

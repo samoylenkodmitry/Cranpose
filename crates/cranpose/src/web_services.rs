@@ -79,8 +79,7 @@ impl ShareSheet for WebShareSheet {
     fn is_supported(&self) -> bool {
         navigator().is_some_and(|navigator| {
             js_sys::Reflect::get(navigator.as_ref(), &JsValue::from_str("share"))
-                .map(|value| value.is_function())
-                .unwrap_or(false)
+                .is_ok_and(|value| value.is_function())
         })
     }
 }

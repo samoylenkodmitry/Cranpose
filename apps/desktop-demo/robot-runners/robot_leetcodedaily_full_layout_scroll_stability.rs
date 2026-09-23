@@ -376,7 +376,7 @@ const MONASPACE_KRYPTON_TTF: &[u8] =
 static LEETCODEDAILY_APP_FONTS: &[&[u8]] =
     &[DEJAVU_SANS_TTF, MONASPACE_KRYPTON_TTF, DEJAVU_SANS_MONO_TTF];
 
-const KOTLIN_CODE: &str = r#"class Solution {
+const KOTLIN_CODE: &str = r"class Solution {
     fun countGood(nums: IntArray, k: Int): Long {
         var left = 0
         var pairs = 0L
@@ -400,9 +400,9 @@ const KOTLIN_CODE: &str = r#"class Solution {
 
         return answer
     }
-}"#;
+}";
 
-const RUST_CODE: &str = r#"impl Solution {
+const RUST_CODE: &str = r"impl Solution {
     pub fn count_good(nums: Vec<i32>, k: i32) -> i64 {
         let mut left = 0usize;
         let mut pairs = 0i64;
@@ -431,7 +431,7 @@ const RUST_CODE: &str = r#"impl Solution {
 
         answer
     }
-}"#;
+}";
 
 const ACTION_BUTTONS: [ActionButtonId; 14] = [
     ActionButtonId::CopyLeetcode,
@@ -805,7 +805,7 @@ impl Default for UiPreferences {
             "save.cranpose_webp",
         ]
         .iter()
-        .map(|key| key.to_string())
+        .map(ToString::to_string)
         .collect();
         Self {
             theme: ThemeMode::Light,
@@ -1194,7 +1194,6 @@ impl UiIcon {
     }
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn LeetcodeDailyFullLayoutApp() {
     let scroll_state = remember(|| ScrollState::new(0.0)).with(|state| *state);
@@ -1236,12 +1235,6 @@ fn LeetcodeDailyFullLayoutApp() {
         }),
         BoxSpec::default(),
         {
-            let fields = fields.clone();
-            let markdown_preview = markdown_preview.clone();
-            let autosave_destination = autosave_destination.clone();
-            let saved_draft = saved_draft.clone();
-            let layout_preferences = layout_preferences.clone();
-            let startup_interactive_queue = startup_interactive_queue.clone();
             move || {
                 Column(Modifier::empty().fill_max_size(), ColumnSpec::default(), {
                     let fields = fields.clone();
@@ -1428,7 +1421,6 @@ fn LeetcodeDailyFullLayoutApp() {
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn ButtonQualityReferenceFixture(
     tag: &'static str,
@@ -1473,7 +1465,6 @@ fn reference_fixture_background(theme: ThemeMode) -> Color {
     }
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn GuidedWorkspace(
     fields: EditorFields,
@@ -1533,7 +1524,6 @@ fn GuidedWorkspace(
     MarkdownCard(markdown_preview, theme);
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn ActionsCard(
     fields: EditorFields,
@@ -1553,10 +1543,6 @@ fn ActionsCard(
         Modifier::empty().fill_max_width(),
         ColumnSpec::default().vertical_arrangement(LinearArrangement::spaced_by(14.0)),
         {
-            let fields = fields.clone();
-            let autosave_destination = autosave_destination.clone();
-            let layout_preferences = layout_preferences.clone();
-            let startup_interactive_queue = startup_interactive_queue.clone();
             move || {
                 HeaderBar(
                     autosave_destination.clone(),
@@ -1688,7 +1674,6 @@ fn ActionsCard(
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn HeaderBar(
     autosave_destination: String,
@@ -1726,7 +1711,6 @@ fn HeaderBar(
     }
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn HeaderTitle(autosave_destination: String, theme: ThemeMode, compact: bool) {
     Row(
@@ -1763,7 +1747,6 @@ fn HeaderTitle(autosave_destination: String, theme: ThemeMode, compact: bool) {
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn QuickActionsPanel(
     fields: EditorFields,
@@ -1781,8 +1764,6 @@ fn QuickActionsPanel(
         Modifier::empty().weight(2.04)
     };
     glass_panel(modifier, theme, 18.0, 18.0, {
-        let fields = fields.clone();
-        let layout_preferences = layout_preferences.clone();
         move || {
             let layout_preferences_for_column = layout_preferences.clone();
             Column(
@@ -1808,7 +1789,6 @@ fn QuickActionsPanel(
     });
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn StatusStrip(message: String, theme: ThemeMode) {
     glass_panel(
@@ -1838,7 +1818,6 @@ fn StatusStrip(message: String, theme: ThemeMode) {
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn NextWorkPanel(
     next_item: NextWorkItem,
@@ -1859,8 +1838,6 @@ fn NextWorkPanel(
     };
     let title = title_override.unwrap_or_else(|| next_item.title());
     glass_panel(modifier, theme, 18.0, 18.0, {
-        let fields = fields.clone();
-        let title = title.clone();
         move || {
             Row(
                 Modifier::empty().fill_max_width(),
@@ -1928,7 +1905,6 @@ fn NextWorkPanel(
     });
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn InteractiveQueuePanel(
     queue: Vec<String>,
@@ -1946,8 +1922,6 @@ fn InteractiveQueuePanel(
 
     let scroll_state = remember(|| ScrollState::new(0.0)).with(|state| *state);
     glass_panel(Modifier::empty().fill_max_width(), theme, 14.0, 10.0, {
-        let fields = fields.clone();
-        let queue = queue.clone();
         move || {
             Column(
                 Modifier::empty().fill_max_width(),
@@ -2010,7 +1984,6 @@ fn InteractiveQueuePanel(
     });
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn QueueCurrentRow(
     active_key: Option<String>,
@@ -2040,7 +2013,6 @@ fn QueueCurrentRow(
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn QueueCurrentEditorField(
     field: EditorFieldId,
@@ -2108,7 +2080,6 @@ fn QueueCurrentEditorField(
     }
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn InteractiveQueueChip(
     item_key: String,
@@ -2172,7 +2143,6 @@ fn InteractiveQueueChip(
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn interactive_queue_content(
     icon: UiIcon,
@@ -2208,7 +2178,6 @@ fn interactive_queue_content(
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn ActionButtons(
     fields: EditorFields,
@@ -2221,7 +2190,6 @@ fn ActionButtons(
 ) {
     let ordered_actions = ordered_action_buttons(&layout_preferences);
     BoxWithConstraints(Modifier::empty().fill_max_width(), {
-        let fields = fields.clone();
         move |scope| {
             let width = scope.max_width().0;
             let columns = if width >= 820.0 {
@@ -2269,7 +2237,6 @@ fn ActionButtons(
     });
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn ActionButton(
     action: ActionButtonId,
@@ -2304,7 +2271,6 @@ fn ActionButton(
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn focus_action_button(
     action: ActionButtonId,
@@ -2725,7 +2691,6 @@ fn ordered_fields(defaults: &[EditorFieldId], preferences: &UiPreferences) -> Ve
     fields
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn PreviewCard(
     preview_state: MutableState<PreviewState>,
@@ -2776,7 +2741,6 @@ fn PreviewCard(
     });
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn ComposePreviewCard(
     compose_preview_state: MutableState<PreviewState>,
@@ -2839,11 +2803,9 @@ fn ComposePreviewCard(
     });
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn MarkdownCard(markdown_preview: String, theme: ThemeMode) {
     section_card(theme, {
-        let markdown_preview = markdown_preview.clone();
         move || {
             let markdown_preview_for_column = markdown_preview.clone();
             Column(
@@ -2879,7 +2841,6 @@ fn MarkdownCard(markdown_preview: String, theme: ThemeMode) {
     });
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn ProblemMetaCard(
     fields: EditorFields,
@@ -2891,8 +2852,6 @@ fn ProblemMetaCard(
     compact: bool,
 ) {
     section_card(theme, {
-        let fields = fields.clone();
-        let saved_draft = saved_draft.clone();
         move || {
             Column(
                 Modifier::empty().fill_max_width(),
@@ -2974,7 +2933,6 @@ fn ProblemMetaCard(
     });
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn MetaFieldColumn(
     field_ids: Vec<EditorFieldId>,
@@ -3010,7 +2968,6 @@ fn MetaFieldColumn(
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn WriteupCard(
     fields: EditorFields,
@@ -3022,9 +2979,6 @@ fn WriteupCard(
     theme: ThemeMode,
 ) {
     section_card(theme, {
-        let fields = fields.clone();
-        let saved_draft = saved_draft.clone();
-        let layout_preferences = layout_preferences.clone();
         move || {
             let ordered_fields = ordered_fields(&WRITEUP_FIELDS, &layout_preferences);
             let fields_for_column = fields.clone();
@@ -3054,7 +3008,6 @@ fn WriteupCard(
     });
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn CodeCard(
     fields: EditorFields,
@@ -3066,9 +3019,6 @@ fn CodeCard(
     theme: ThemeMode,
 ) {
     section_card(theme, {
-        let fields = fields.clone();
-        let saved_draft = saved_draft.clone();
-        let layout_preferences = layout_preferences.clone();
         move || {
             let ordered_fields = ordered_fields(&CODE_FIELDS, &layout_preferences);
             let fields_for_column = fields.clone();
@@ -3098,7 +3048,6 @@ fn CodeCard(
     });
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn EditorField(
     field: EditorFieldId,
@@ -3115,7 +3064,7 @@ fn EditorField(
             field.label(),
             field.field_id(),
             fields.date,
-            saved_draft.date.clone(),
+            saved_draft.date,
             1,
             1,
             status,
@@ -3128,7 +3077,7 @@ fn EditorField(
             field.label(),
             field.field_id(),
             fields.problem_title,
-            saved_draft.problem_title.clone(),
+            saved_draft.problem_title,
             1,
             1,
             status,
@@ -3141,7 +3090,7 @@ fn EditorField(
             field.label(),
             field.field_id(),
             fields.problem_url,
-            saved_draft.problem_url.clone(),
+            saved_draft.problem_url,
             1,
             1,
             status,
@@ -3154,7 +3103,7 @@ fn EditorField(
             field.label(),
             field.field_id(),
             fields.difficulty,
-            saved_draft.difficulty.clone(),
+            saved_draft.difficulty,
             1,
             1,
             status,
@@ -3167,7 +3116,7 @@ fn EditorField(
             field.label(),
             field.field_id(),
             fields.blog_post_url,
-            saved_draft.blog_post_url.clone(),
+            saved_draft.blog_post_url,
             1,
             1,
             status,
@@ -3180,7 +3129,7 @@ fn EditorField(
             field.label(),
             field.field_id(),
             fields.substack_url,
-            saved_draft.substack_url.clone(),
+            saved_draft.substack_url,
             1,
             1,
             status,
@@ -3193,7 +3142,7 @@ fn EditorField(
             field.label(),
             field.field_id(),
             fields.youtube_url,
-            saved_draft.youtube_url.clone(),
+            saved_draft.youtube_url,
             1,
             1,
             status,
@@ -3206,7 +3155,7 @@ fn EditorField(
             field.label(),
             field.field_id(),
             fields.reference_url,
-            saved_draft.reference_url.clone(),
+            saved_draft.reference_url,
             1,
             1,
             status,
@@ -3219,7 +3168,7 @@ fn EditorField(
             field.label(),
             field.field_id(),
             fields.telegram_text,
-            saved_draft.telegram_text.clone(),
+            saved_draft.telegram_text,
             1,
             2,
             status,
@@ -3232,7 +3181,7 @@ fn EditorField(
             field.label(),
             field.field_id(),
             fields.problem_tldr,
-            saved_draft.problem_tldr.clone(),
+            saved_draft.problem_tldr,
             3,
             6,
             status,
@@ -3245,7 +3194,7 @@ fn EditorField(
             field.label(),
             field.field_id(),
             fields.intuition,
-            saved_draft.intuition.clone(),
+            saved_draft.intuition,
             6,
             14,
             status,
@@ -3258,7 +3207,7 @@ fn EditorField(
             field.label(),
             field.field_id(),
             fields.approach,
-            saved_draft.approach.clone(),
+            saved_draft.approach,
             6,
             14,
             status,
@@ -3271,7 +3220,7 @@ fn EditorField(
             field.label(),
             field.field_id(),
             fields.time_complexity,
-            saved_draft.time_complexity.clone(),
+            saved_draft.time_complexity,
             1,
             2,
             status,
@@ -3284,7 +3233,7 @@ fn EditorField(
             field.label(),
             field.field_id(),
             fields.space_complexity,
-            saved_draft.space_complexity.clone(),
+            saved_draft.space_complexity,
             1,
             2,
             status,
@@ -3297,7 +3246,7 @@ fn EditorField(
             field.label(),
             field.field_id(),
             fields.kotlin_runtime_ms,
-            saved_draft.kotlin_runtime_ms.clone(),
+            saved_draft.kotlin_runtime_ms,
             1,
             1,
             status,
@@ -3310,7 +3259,7 @@ fn EditorField(
             field.label(),
             field.field_id(),
             fields.kotlin_code,
-            saved_draft.kotlin_code.clone(),
+            saved_draft.kotlin_code,
             10,
             18,
             status,
@@ -3322,7 +3271,7 @@ fn EditorField(
             field.label(),
             field.field_id(),
             fields.rust_runtime_ms,
-            saved_draft.rust_runtime_ms.clone(),
+            saved_draft.rust_runtime_ms,
             1,
             1,
             status,
@@ -3335,7 +3284,7 @@ fn EditorField(
             field.label(),
             field.field_id(),
             fields.rust_code,
-            saved_draft.rust_code.clone(),
+            saved_draft.rust_code,
             10,
             18,
             status,
@@ -3346,7 +3295,6 @@ fn EditorField(
     }
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn ReferenceIcon(icon: UiIcon, size: Size, theme: ThemeMode, active: bool) {
     ComposeBox(
@@ -3365,7 +3313,6 @@ fn ReferenceIcon(icon: UiIcon, size: Size, theme: ThemeMode, active: bool) {
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn AppLogo() {
     ComposeBox(
@@ -3400,7 +3347,6 @@ fn AppLogo() {
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn SectionHeader(title: &'static str, icon: UiIcon, theme: ThemeMode) {
     Row(
@@ -3413,7 +3359,6 @@ fn SectionHeader(title: &'static str, icon: UiIcon, theme: ThemeMode) {
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn HeroTile(stage: WorkStage, theme: ThemeMode) {
     ComposeBox(
@@ -3445,7 +3390,6 @@ fn HeroTile(stage: WorkStage, theme: ThemeMode) {
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn FieldSuggestion(
     field: EditorFieldId,
@@ -3483,7 +3427,6 @@ fn FieldSuggestion(
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn StatusDot(ok: bool, theme: ThemeMode) {
     ComposeBox(
@@ -3510,7 +3453,6 @@ fn StatusDot(ok: bool, theme: ThemeMode) {
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn section_card(theme: ThemeMode, content: impl FnMut() + 'static) {
     let radius = 18.0;
@@ -3602,7 +3544,6 @@ fn draw_workspace_scroll_shadow(
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn glass_panel(
     modifier: Modifier,
@@ -3784,7 +3725,6 @@ fn glass_button_modifier_with_press(
         .rounded_corners(radius)
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn primary_button(
     icon: UiIcon,
@@ -3846,7 +3786,6 @@ fn primary_button(
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn subtle_button(
     label: String,
@@ -3886,7 +3825,6 @@ fn subtle_button(
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn theme_button(label: String, theme: ThemeMode, on_click: impl FnMut() + 'static) {
     Button(
@@ -3921,7 +3859,6 @@ fn theme_button(label: String, theme: ThemeMode, on_click: impl FnMut() + 'stati
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn button_content(
     icon: UiIcon,
@@ -3970,7 +3907,6 @@ fn button_content(
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn ButtonActivityIndicator(theme: ThemeMode, active: bool) {
     let indicator_width = if active {
@@ -4009,7 +3945,6 @@ fn ButtonActivityIndicator(theme: ThemeMode, active: bool) {
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn button_badge(count: u64, theme: ThemeMode) {
     ComposeBox(
@@ -4028,7 +3963,6 @@ fn button_badge(count: u64, theme: ThemeMode) {
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn labeled_field(
     label: &'static str,
@@ -4118,7 +4052,6 @@ fn labeled_field(
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn labeled_code_field(
     label: &'static str,
@@ -4207,7 +4140,6 @@ fn labeled_code_field(
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn field_action_buttons(
     label: &'static str,
@@ -4443,7 +4375,6 @@ fn draw_app_background<S: DrawScope + ?Sized>(scope: &mut S, theme: ThemeMode) {
     }
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn BottomListGapMask(theme: ThemeMode) {
     ComposeBox(
@@ -5110,8 +5041,9 @@ fn scroll_workspace_text_into_view_between(
             .mouse_move(anchor_x, anchor_y)
             .expect("move cursor to workspace");
         std::thread::sleep(Duration::from_millis(30));
-        let scroll_delta_y = workspace_text_bounds_exact(robot, text)
-            .map(|bounds| {
+        let scroll_delta_y = workspace_text_bounds_exact(robot, text).map_or(
+            -WORKSPACE_SEEK_MAX_SCROLL_DELTA_Y,
+            |bounds| {
                 let center_y = bounds.center_y();
                 if center_y < min_center_y {
                     (min_center_y - center_y).clamp(4.0, WORKSPACE_SEEK_MAX_SCROLL_DELTA_Y)
@@ -5120,8 +5052,8 @@ fn scroll_workspace_text_into_view_between(
                 } else {
                     0.0
                 }
-            })
-            .unwrap_or(-WORKSPACE_SEEK_MAX_SCROLL_DELTA_Y);
+            },
+        );
         robot
             .mouse_scroll(0.0, scroll_delta_y)
             .expect("scroll workspace to find text");
@@ -5493,8 +5425,7 @@ fn assert_rust_runtime_row_stable_under_micro_scroll(robot: &cranpose::Robot) {
             fail_with_robot(
                 robot,
                 &format!(
-                    "Rust Runtime row did not move by exact micro scroll at step {step}: expected {:.3}, got {actual_delta_y:.3}",
-                    ROW_MICRO_SCROLL_DELTA_Y
+                    "Rust Runtime row did not move by exact micro scroll at step {step}: expected {ROW_MICRO_SCROLL_DELTA_Y:.3}, got {actual_delta_y:.3}"
                 ),
             );
         }
@@ -5562,8 +5493,7 @@ fn assert_workspace_strip_stable_under_micro_scroll(robot: &cranpose::Robot, tar
             fail_with_robot(
                 robot,
             &format!(
-                "{target_text} workspace strip did not move by exact micro scroll at step {step}: expected {:.3}, got {actual_delta_y:.3}",
-                scroll_delta_y,
+                "{target_text} workspace strip did not move by exact micro scroll at step {step}: expected {scroll_delta_y:.3}, got {actual_delta_y:.3}",
             ),
         );
         }
@@ -5681,8 +5611,7 @@ fn assert_workspace_active_viewport_first_frame_matches_settled(
             fail_with_robot(
                 robot,
                 &format!(
-                    "{target_text} active viewport did not move by exact micro scroll at step {step}: expected {:.3}, got {actual_delta_y:.3}",
-                    scroll_delta_y,
+                    "{target_text} active viewport did not move by exact micro scroll at step {step}: expected {scroll_delta_y:.3}, got {actual_delta_y:.3}",
                 ),
             );
         }
@@ -5880,8 +5809,7 @@ fn assert_workspace_rigid_picture_stable_during_active_scroll(
             fail_with_robot(
                 robot,
                 &format!(
-                    "{target_text} workspace rigid active-scroll did not move by exact micro scroll at step {step}: expected {:.3}, got {actual_delta_y:.3}",
-                    WORKSPACE_RIGID_SCROLL_DELTA_Y,
+                    "{target_text} workspace rigid active-scroll did not move by exact micro scroll at step {step}: expected {WORKSPACE_RIGID_SCROLL_DELTA_Y:.3}, got {actual_delta_y:.3}",
                 ),
             );
         }
@@ -5958,8 +5886,7 @@ fn assert_workspace_top_band_stable_under_micro_scroll(robot: &cranpose::Robot, 
             fail_with_robot(
                 robot,
                 &format!(
-                    "{target_text} workspace top band did not move by exact micro scroll at step {step}: expected {:.3}, got {actual_delta_y:.3}",
-                    WORKSPACE_TOP_BAND_SCROLL_DELTA_Y,
+                    "{target_text} workspace top band did not move by exact micro scroll at step {step}: expected {WORKSPACE_TOP_BAND_SCROLL_DELTA_Y:.3}, got {actual_delta_y:.3}",
                 ),
             );
         }
@@ -6024,8 +5951,7 @@ fn assert_bottom_clear_button_stable_under_one_px_scroll(robot: &cranpose::Robot
             fail_with_robot(
                 robot,
                 &format!(
-                    "bottom Clear button did not move by exact 1px scroll at step {step}: expected {:.3}, got {actual_delta_y:.3}",
-                    BOTTOM_CLEAR_SCROLL_DELTA_Y
+                    "bottom Clear button did not move by exact 1px scroll at step {step}: expected {BOTTOM_CLEAR_SCROLL_DELTA_Y:.3}, got {actual_delta_y:.3}"
                 ),
             );
         }
@@ -7458,9 +7384,7 @@ fn assert_bottom_clear_screen_crop_stable(
         output_size.1,
     );
 
-    let current_fixed_crop = if let Some(crop) = current_following_crop {
-        crop
-    } else {
+    let Some(current_fixed_crop) = current_following_crop else {
         save_bottom_clear_failure(step, previous, current);
         fail_with_robot(
             robot,
@@ -8220,9 +8144,7 @@ fn capture_workspace_button_quality(
         crop.width,
         crop.height,
         crop_path
-            .as_ref()
-            .map(|path| path.display().to_string())
-            .unwrap_or_else(|| "none".to_string())
+            .as_ref().map_or_else(|| "none".to_string(), |path| path.display().to_string())
     );
     ButtonQualitySample {
         label,
@@ -8309,9 +8231,7 @@ fn capture_button_reference_sample(
         red_profile.bounds.count,
         red_profile.max_column_mass,
         crop_path
-            .as_ref()
-            .map(|path| path.display().to_string())
-            .unwrap_or_else(|| "none".to_string())
+            .as_ref().map_or_else(|| "none".to_string(), |path| path.display().to_string())
     );
     ButtonReferenceSample {
         tag,
@@ -8432,14 +8352,10 @@ fn assert_button_quality_matches_baseline(
             max_unique_rgb,
             baseline
                 .crop_path
-                .as_ref()
-                .map(|path| path.display().to_string())
-                .unwrap_or_else(|| "none".to_string()),
+                .as_ref().map_or_else(|| "none".to_string(), |path| path.display().to_string()),
             sample
                 .crop_path
-                .as_ref()
-                .map(|path| path.display().to_string())
-                .unwrap_or_else(|| "none".to_string()),
+                .as_ref().map_or_else(|| "none".to_string(), |path| path.display().to_string()),
             label = baseline.label,
         );
         std::process::exit(1);
@@ -9037,10 +8953,7 @@ fn run_leetcodedaily_perf_probe(robot: &cranpose::Robot) {
         end_stats.recompositions,
         end_stats.recomps_per_second,
     );
-    println!(
-        "PERF_SCENARIO_COMPLETE scenario={} iterations={}",
-        PERF_SCENARIO_NAME, iterations
-    );
+    println!("PERF_SCENARIO_COMPLETE scenario={PERF_SCENARIO_NAME} iterations={iterations}");
 
     if fps < min_fps {
         fail_with_robot(

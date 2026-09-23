@@ -117,8 +117,7 @@ fn main() {
             }
 
             println!(
-                "PASS: Async Runtime progress advanced after Animations -> Async switch ({}% -> {}%)",
-                initial_progress, last_progress
+                "PASS: Async Runtime progress advanced after Animations -> Async switch ({initial_progress}% -> {last_progress}%)"
             );
             exit_with_timeout(&robot, Duration::from_secs(2));
         })

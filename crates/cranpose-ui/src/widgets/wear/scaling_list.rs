@@ -1065,9 +1065,8 @@ pub fn WearScalingItem<F>(
 where
     F: FnMut() + 'static,
 {
-    let layer_transform = transform.clone();
     let layered = modifier.graphics_layer(move || {
-        let value = layer_transform.get();
+        let value = transform.get();
         GraphicsLayer {
             alpha: value.alpha,
             scale: value.scale,
@@ -1237,8 +1236,6 @@ pub fn WearScalingLazyColumnNode(
     };
 
     let policy: Rc<SubcomposeMeasurePolicy> = remember({
-        let inputs = inputs.clone();
-        let transforms = transforms.clone();
         let inner = state.inner();
         let layout = Rc::clone(&inner.layout);
         let items = Rc::clone(&inner.items);
@@ -1385,8 +1382,7 @@ fn measure_wear_scaling_list(
             ..WearScalingLayoutInfo::default()
         });
         indicator.borrow_mut().clear();
-        return scope
-            .layout_with_placement_builder(width, viewport, |placements| placements.clear());
+        return scope.layout_with_placement_builder(width, viewport, std::vec::Vec::clear);
     }
 
     scope.set_reusable_pool_limits(REUSABLE_SLOTS, REUSABLE_SLOTS);
@@ -1604,7 +1600,7 @@ fn compose_and_measure_item(
         let content = Rc::clone(&content);
         crate::lazy_item::ProvideLazyItemKey(identity, || {
             WearScalingItem(Modifier::empty(), transform.clone(), strategy, move || {
-                content()
+                content();
             });
         });
     });

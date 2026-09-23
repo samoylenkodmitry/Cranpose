@@ -2821,7 +2821,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 if !placements[index].is_some_and(|placement| placement.atlas == atlas_index) {
                     continue;
                 }
-                if let Some(blur) = items[index].batched.and_then(|batched| batched.blur()) {
+                if let Some(blur) = items[index].batched.and_then(BatchedEffect::blur) {
                     let (width, height) = items[index].capture_rect.pixel_size();
                     let size = blur_scratch_size(blur.radius_x, blur.radius_y, width, height);
                     requests.push((size, &mut slots.blur));
@@ -4074,9 +4074,8 @@ pub(crate) fn scene_bounds(layer: &LayerScene, scale: f32) -> Option<Rect> {
         bounds = union_rect(bounds, clipped(backdrop.rect, backdrop.clip));
     }
     for child in &layer.children {
-        let child_bounds = child_surface_rect(child, scale)
-            .map(|rect| quad_bounds(child.transform.map_rect(rect)))
-            .unwrap_or(quad_bounds(child.transform.map_rect(child.local_bounds)));
+        let surface_rect = child_surface_rect(child, scale).unwrap_or(child.local_bounds);
+        let child_bounds = quad_bounds(child.transform.map_rect(surface_rect));
         bounds = union_rect(bounds, clipped(child_bounds, child.clip));
     }
     bounds

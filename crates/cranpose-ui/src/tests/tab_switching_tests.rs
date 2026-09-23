@@ -106,7 +106,7 @@ fn progress_tab(
         ColumnSpec::default(),
         move || {
             Text(
-                format!("Progress {:.2}", progress_value),
+                format!("Progress {progress_value:.2}"),
                 Modifier::empty().padding(2.0),
                 TextStyle::default(),
             );
@@ -179,7 +179,7 @@ fn render_progress_tab_host(initial_progress: f32) -> ProgressTabHarness {
     let composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
     let active_tab = MutableState::with_runtime(0i32, runtime.clone());
-    let progress = MutableState::with_runtime(initial_progress, runtime.clone());
+    let progress = MutableState::with_runtime(initial_progress, runtime);
     let key = location_key(file!(), line!(), column!());
     let renders = Rc::new(Cell::new(0));
     let branch_calls = Rc::new(Cell::new(0));
@@ -461,7 +461,7 @@ fn restored_wrapped_counter_tab_updates_after_mixed_tab_walk() {
                     active_tab,
                     Rc::clone(&restored_counter),
                     Rc::clone(&restored_pointer),
-                )
+                );
             }
         })
         .expect("initial render");
@@ -701,7 +701,7 @@ fn layout_two_child_stats(composition: &mut Composition<MemoryApplier>) -> (usiz
     let mut stats = Vec::new();
     let result = count(layout.root(), &mut stats);
     if cfg!(debug_assertions) {
-        eprintln!("layout stats: {:?}", stats);
+        eprintln!("layout stats: {stats:?}");
     }
     result
 }
@@ -821,7 +821,7 @@ fn recursive_layout_updates_keep_all_branches() {
     let _app_context = crate::render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
-    let depth_state = MutableState::with_runtime(2usize, runtime.clone());
+    let depth_state = MutableState::with_runtime(2usize, runtime);
     let key = location_key(file!(), line!(), column!());
 
     composition
@@ -865,7 +865,7 @@ fn tab_switching_recursive_layout_preserves_branches() {
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
     let active_tab = MutableState::with_runtime(RecursiveDemoTab::Counter, runtime.clone());
-    let depth_state = MutableState::with_runtime(3usize, runtime.clone());
+    let depth_state = MutableState::with_runtime(3usize, runtime);
     let key = location_key(file!(), line!(), column!());
 
     composition
@@ -923,7 +923,7 @@ fn recursive_layout_depth_decrease_then_increase_restores_branches() {
     let _app_context = crate::render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
-    let depth_state = MutableState::with_runtime(3usize, runtime.clone());
+    let depth_state = MutableState::with_runtime(3usize, runtime);
     let key = location_key(file!(), line!(), column!());
 
     composition
@@ -1034,9 +1034,7 @@ fn tab_switching_node_vec_does_not_grow_unboundedly() {
     );
     assert!(
         final_slots <= baseline_slots + 10,
-        "slot count grew from {} to {} over 50 cycles - indicates unbounded slot growth",
-        baseline_slots,
-        final_slots,
+        "slot count grew from {baseline_slots} to {final_slots} over 50 cycles - indicates unbounded slot growth",
     );
 }
 

@@ -273,7 +273,7 @@ fn artwork_url(metadata: &MediaMetadata) -> Option<String> {
         if let Some(previous) = browser.artwork_url.take() {
             let _ = web_sys::Url::revoke_object_url(&previous);
         }
-        browser.artwork_url = url.clone();
+        browser.artwork_url.clone_from(&url);
     });
     url
 }
@@ -495,7 +495,7 @@ impl MediaPlayer for WebMediaPlayer {
         with_browser(|browser| {
             browser
                 .element
-                .set_playback_rate(speed.clamp(0.25, 4.0) as f64)
+                .set_playback_rate(speed.clamp(0.25, 4.0) as f64);
         })
         .is_some()
     }

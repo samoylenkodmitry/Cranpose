@@ -24,8 +24,8 @@ fn main() {
             std::thread::sleep(Duration::from_millis(500));
 
             match robot.wait_for_idle() {
-                Ok(_) => println!("✓ App ready\n"),
-                Err(e) => println!("Note: {}\n", e),
+                Ok(()) => println!("✓ App ready\n"),
+                Err(e) => println!("Note: {e}\n"),
             }
 
             let mut all_passed = true;
@@ -35,7 +35,7 @@ fn main() {
             if let Some((x, y, w, h)) = find_button_in_semantics(&robot, "Text Input") {
                 let cx = x + w / 2.0;
                 let cy = y + h / 2.0;
-                println!("  Found 'Text Input' tab at ({:.1}, {:.1})", cx, cy);
+                println!("  Found 'Text Input' tab at ({cx:.1}, {cy:.1})");
 
                 if text_input_robot_helpers::open_text_input_tab(&robot) {
                     println!("  ✓ Switched to Text Input tab\n");
@@ -53,7 +53,7 @@ fn main() {
             let current_value_before =
                 find_in_semantics(&robot, |elem| find_text(elem, "Current value:"));
             if let Some((x, y, _, _)) = current_value_before {
-                println!("  Found 'Current value:' at ({:.1}, {:.1})", x, y);
+                println!("  Found 'Current value:' at ({x:.1}, {y:.1})");
             }
 
             if current_value_before.is_some() {
@@ -72,7 +72,7 @@ fn main() {
             {
                 let cx = x + w / 2.0;
                 let cy = y + h / 2.0;
-                println!("  Found input field at ({:.1}, {:.1})", cx, cy);
+                println!("  Found input field at ({cx:.1}, {cy:.1})");
 
                 let _ = robot.click(cx, cy);
                 std::thread::sleep(Duration::from_millis(500));
@@ -88,7 +88,7 @@ fn main() {
             let current_value_after =
                 find_in_semantics(&robot, |elem| find_text(elem, "Current value:"));
             if let Some((x, y, _, _)) = current_value_after {
-                println!("  Found 'Current value:' at ({:.1}, {:.1})", x, y);
+                println!("  Found 'Current value:' at ({x:.1}, {y:.1})");
             }
 
             if current_value_after.is_some() {

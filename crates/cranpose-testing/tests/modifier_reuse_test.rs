@@ -219,8 +219,7 @@ fn test_complex_modifier_chain_updates() {
 
         assert!(
             composition.root().is_some(),
-            "Step {}: should have root",
-            step
+            "Step {step}: should have root"
         );
     }
 }

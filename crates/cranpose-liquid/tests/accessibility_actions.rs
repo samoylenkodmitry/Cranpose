@@ -362,10 +362,10 @@ fn reader_selects_a_menu_item_and_dismisses_the_popup() {
                     let copied = std::rc::Rc::clone(&recorded);
                     let recorded = std::rc::Rc::clone(&recorded);
                     scope.item(LiquidMenuItem::new("Export text"), move || {
-                        recorded.set(recorded.get() + 1)
+                        recorded.set(recorded.get() + 1);
                     });
                     scope.item(LiquidMenuItem::new("Copy text"), move || {
-                        copied.set(copied.get() + 10)
+                        copied.set(copied.get() + 10);
                     });
                 });
             });

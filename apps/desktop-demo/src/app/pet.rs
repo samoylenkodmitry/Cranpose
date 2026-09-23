@@ -1,5 +1,3 @@
-#![allow(non_snake_case)]
-
 use std::sync::{Arc, OnceLock};
 
 use cranpose::{liquid::prelude::*, rememberWindowStateAt, WindowConfig, WindowModifierExt};
@@ -193,7 +191,7 @@ fn pet_wgsl() -> Arc<str> {
 const CLOCK_PERIOD_MS: u64 = 120_000;
 const CAPTION_BOTTOM: f32 = 14.0;
 
-const PET_FRAGMENT_WGSL: &str = r#"
+const PET_FRAGMENT_WGSL: &str = r"
 
 const BODY_SCALE: f32 = 1.55;
 const FLAME_THICKNESS: f32 = 0.014;
@@ -364,7 +362,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let out_rgb = base.rgb + rgb * (1.0 - base.a);
     return vec4<f32>(out_rgb, out_a);
 }
-"#;
+";
 
 #[cfg(test)]
 #[path = "tests/pet_tests.rs"]

@@ -39,11 +39,10 @@ fn layout_invalidation_dispatch_diag() -> LayoutInvalidationDispatchDiag {
         if value == "all" {
             return LayoutInvalidationDispatchDiag::All;
         }
-        value
-            .to_string_lossy()
-            .parse::<NodeId>()
-            .map(LayoutInvalidationDispatchDiag::Node)
-            .unwrap_or(LayoutInvalidationDispatchDiag::Disabled)
+        value.to_string_lossy().parse::<NodeId>().map_or(
+            LayoutInvalidationDispatchDiag::Disabled,
+            LayoutInvalidationDispatchDiag::Node,
+        )
     })
 }
 
@@ -61,12 +60,7 @@ fn log_layout_invalidation_dispatch(
     };
     if enabled {
         log::warn!(
-            "[layout-invalidation-dispatch] node={} invalidation={:?} curr_caps={:?} prev_caps={:?} modifier={}",
-            id,
-            invalidation,
-            curr_caps,
-            prev_caps,
-            modifier
+            "[layout-invalidation-dispatch] node={id} invalidation={invalidation:?} curr_caps={curr_caps:?} prev_caps={prev_caps:?} modifier={modifier}"
         );
     }
 }
@@ -1173,8 +1167,7 @@ impl LayoutNodeRegistryState {
         self.entries
             .borrow()
             .get(&id)
-            .map(|entry| entry.is_virtual)
-            .unwrap_or(false)
+            .is_some_and(|entry| entry.is_virtual)
     }
 
     fn allocate_virtual_node_id(&self) -> NodeId {
@@ -1247,7 +1240,7 @@ pub(crate) fn unregister_layout_node(
 
 #[cfg(test)]
 fn layout_node_registry_stats() -> LayoutNodeRegistryDebugStats {
-    crate::render_state::with_layout_node_registry(|registry| registry.stats())
+    crate::render_state::with_layout_node_registry(LayoutNodeRegistryState::stats)
 }
 
 pub(crate) fn is_virtual_node(id: NodeId) -> bool {
@@ -1255,7 +1248,9 @@ pub(crate) fn is_virtual_node(id: NodeId) -> bool {
 }
 
 pub(crate) fn allocate_virtual_node_id() -> NodeId {
-    crate::render_state::with_layout_node_registry(|registry| registry.allocate_virtual_node_id())
+    crate::render_state::with_layout_node_registry(
+        LayoutNodeRegistryState::allocate_virtual_node_id,
+    )
 }
 
 fn resolve_modifier_local_from_parent_chain(

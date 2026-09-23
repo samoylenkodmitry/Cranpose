@@ -66,7 +66,6 @@ web-sys = { version = "0.3", features = [
 ] }
 
 [target.wasm32-unknown-unknown.dependencies]
-getrandom = { version = "0.3.4", features = ["wasm_js"] }
 wasm-bindgen-futures = "0.4.71"
 
 [workspace]

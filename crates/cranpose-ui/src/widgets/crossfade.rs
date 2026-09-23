@@ -3,8 +3,6 @@
 //! Mirrors Jetpack Compose's `Crossfade` from
 //! `androidx.compose.animation.Crossfade`.
 
-#![allow(non_snake_case)]
-
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
@@ -150,9 +148,8 @@ where
         });
     }
 
-    let state_for_items = state.clone();
     Box(Modifier::empty(), BoxSpec::new(), move || {
-        let items: Vec<(u64, T, bool)> = state_for_items
+        let items: Vec<(u64, T, bool)> = state
             .inner
             .entries
             .borrow()
@@ -161,7 +158,7 @@ where
             .collect();
         for (id, value, fade_in) in items {
             let is_target = value == target_state;
-            let state_for_item = state_for_items.clone();
+            let state_for_item = state.clone();
             cranpose_core::with_key(&id, || {
                 let alpha_target = if is_target { 1.0 } else { 0.0 };
                 let initial_alpha = if fade_in { 0.0 } else { alpha_target };

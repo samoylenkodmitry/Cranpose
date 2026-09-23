@@ -50,7 +50,7 @@ fn test_conditional_inside_closure_works() {
     let mut rule = ComposeTestRule::new();
     let runtime = rule.runtime_handle();
 
-    let counter = MutableState::with_runtime(0, runtime.clone());
+    let counter = MutableState::with_runtime(0, runtime);
 
     eprintln!("\n=== Testing CORRECT pattern (conditional inside closure) ===");
     rule.set_content({
@@ -64,8 +64,8 @@ fn test_conditional_inside_closure_works() {
     for i in 1..=3 {
         counter.set(i);
         rule.pump_until_idle()
-            .unwrap_or_else(|_| panic!("recompose to {}", i));
-        eprintln!("Counter changed to {}", i);
+            .unwrap_or_else(|_| panic!("recompose to {i}"));
+        eprintln!("Counter changed to {i}");
     }
 
     eprintln!("✓ Correct pattern works as expected\n");

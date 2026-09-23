@@ -142,9 +142,7 @@ fn run_external_drag_driver(records: Arc<Mutex<Vec<FrameTelemetryRecord>>>) {
         }
     }
 
-    if !failures.is_empty() {
-        panic!("FAIL: {}", failures.join("; "));
-    }
+    assert!(failures.is_empty(), "FAIL: {}", failures.join("; "));
 }
 
 fn changed_pixel_count(before: &RgbaImage, after: &RgbaImage, threshold: u8) -> usize {

@@ -18,14 +18,14 @@ pub const NESTED_BUTTON_RECT: [f32; 4] = [400.0, 160.0, 40.0, 40.0];
 pub const BACKGROUND_A: Color = Color(0.10, 0.16, 0.40, 1.0);
 pub const BACKGROUND_B: Color = Color(0.55, 0.12, 0.10, 1.0);
 
-const FLAT_COLOR_FRAGMENT: &str = r#"
+const FLAT_COLOR_FRAGMENT: &str = r"
 @fragment
 fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let base = textureSample(input_texture, input_sampler, input.uv);
     let phase = u[0].x;
     return vec4<f32>(phase, 0.4, 1.0 - phase, 1.0) + base * 0.0;
 }
-"#;
+";
 
 pub fn shader_phase_color(phase: f32) -> [u8; 4] {
     let channel = |value: f32| (value.clamp(0.0, 1.0) * 255.0).round() as u8;
@@ -58,7 +58,6 @@ fn tick_color(tick: u32) -> Color {
 /// A glass card holding a runtime-shader child and a nested glass button
 /// over a switchable backdrop, with a tick strip that forces one presented
 /// frame per click without touching the card.
-#[allow(non_snake_case)]
 #[composable]
 pub fn NestedGlassCacheReproScreen() {
     let shader_phase = cranpose_core::rememberMutableStateOf(|| 0.2f32);
@@ -68,7 +67,6 @@ pub fn NestedGlassCacheReproScreen() {
 /// The same card, but the shader phase runs on the frame clock so the
 /// runtime shader's uniforms change through draw repasses alone, with no
 /// pointer event in between.
-#[allow(non_snake_case)]
 #[composable]
 pub fn NestedGlassAnimatedReproScreen() {
     let infinite = cranpose_animation::prelude::rememberInfiniteTransition("nested-glass-phase");
@@ -85,7 +83,6 @@ pub fn NestedGlassAnimatedReproScreen() {
     NestedGlassScreen(shader_phase, None);
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn NestedGlassScreen(shader_phase: State<f32>, toggled_phase: Option<MutableState<f32>>) {
     let tick = cranpose_core::rememberMutableStateOf(|| 0u32);

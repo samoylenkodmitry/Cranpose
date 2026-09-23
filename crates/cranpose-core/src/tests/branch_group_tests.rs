@@ -109,6 +109,44 @@ fn match_arms_do_not_share_remembered_state() {
 }
 
 #[composable]
+fn guarded_arm_remember_probe(route: u8, limit: u8) {
+    match route {
+        small if small < limit => {
+            let value = remember_branch_marker(40);
+            BRANCH_SEEN.with(|seen| seen.set(value));
+        }
+        _ => {
+            let value = remember_branch_marker(50);
+            BRANCH_SEEN.with(|seen| seen.set(value));
+        }
+    }
+}
+
+#[test]
+fn a_guarded_arm_owns_its_remembered_state() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+
+    for (route, limit, marker, inits) in [
+        (0u8, 1u8, 40, 1),
+        (0, 1, 40, 1),
+        (5, 1, 50, 2),
+        (5, 9, 40, 3),
+        (0, 0, 50, 4),
+    ] {
+        composition
+            .render(4, || guarded_arm_remember_probe(route, limit))
+            .expect("compose the guarded arm");
+        assert_eq!(
+            (branch_inits(), branch_seen()),
+            (inits, marker),
+            "route {route} under limit {limit} must keep its arm's remember slot"
+        );
+    }
+    assert_composition_valid(&composition);
+}
+
+#[composable]
 fn stateful_child(marker: i32) {
     let state = rememberMutableStateOf(|| marker);
     BRANCH_SEEN.with(|seen| seen.set(state.value()));
@@ -479,7 +517,6 @@ fn conditionals_inside_plain_closures_are_left_alone() {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn BranchChild(marker: i32) {
     let state = rememberMutableStateOf(|| {
         BRANCH_INITS.with(|count| count.set(count.get() + 1));
@@ -1516,16 +1553,13 @@ fn a_materialized_shell_reuses_its_node_across_passes() {
     composition
         .render(46, deferred_shell_nodes::probe)
         .expect("initial composition");
-    assert_eq!(
-        deferred_shell_nodes::NODE_BUILDS.with(std::cell::Cell::get),
-        1
-    );
+    assert_eq!(deferred_shell_nodes::NODE_BUILDS.with(Cell::get), 1);
 
     composition
         .render(46, deferred_shell_nodes::probe)
         .expect("recompose the same shape");
     assert_eq!(
-        deferred_shell_nodes::NODE_BUILDS.with(std::cell::Cell::get),
+        deferred_shell_nodes::NODE_BUILDS.with(Cell::get),
         1,
         "the node inside a materialized shell must be reused, not rebuilt every pass"
     );
@@ -2021,7 +2055,7 @@ fn stateful_holder() -> StatefulHolder {
         "row".to_string()
     });
     StatefulHolder {
-        item: Some(value.with(std::clone::Clone::clone)),
+        item: Some(value.with(Clone::clone)),
     }
 }
 
@@ -2752,7 +2786,7 @@ fn branch_entry_probe(enabled: bool) {
     });
     BRANCH_LOG.with(|log| {
         log.borrow_mut()
-            .push(format!("tail {}", tail.with(|value| *value)))
+            .push(format!("tail {}", tail.with(|value| *value)));
     });
 }
 
@@ -2928,14 +2962,12 @@ fn a_composing_unary_in_a_condition_stays_inside_its_fold() {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn PageA() {
     let value = remember_branch_marker(61);
     BRANCH_SEEN.with(|seen| seen.set(value));
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn PageB() {
     let value = remember_branch_marker(62);
     BRANCH_SEEN.with(|seen| seen.set(value));
@@ -3216,14 +3248,12 @@ fn an_async_closure_future_stays_send() {
 macro_rules! make_template_pages {
     ($a:ident: $ma:expr, $b:ident: $mb:expr) => {
         #[composable]
-        #[allow(non_snake_case)]
         fn $a() {
             let value = remember_branch_marker($ma);
             BRANCH_SEEN.with(|seen| seen.set(value));
         }
 
         #[composable]
-        #[allow(non_snake_case)]
         fn $b() {
             let value = remember_branch_marker($mb);
             BRANCH_SEEN.with(|seen| seen.set(value));
@@ -3240,7 +3270,6 @@ fn template_page_probe(first: bool) {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn CountingPage(tag: i32) {
     let _ = tag;
     let value = remember_branch_marker(BRANCH_INITS.with(|inits| inits.get()) as i32 + 71);
@@ -3996,7 +4025,7 @@ macro_rules! maybe_lead_page {
 fn braced_macro_statement_probe(enabled: bool) {
     let page: fn(i32) = CountingPage;
     maybe_lead_page! { enabled, page }
-    page(1)
+    page(1);
 }
 
 #[test]
@@ -4056,7 +4085,6 @@ fn erased_calls_beside_an_await_share_position_by_construction() {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 extern "C" fn ExternEntryProbe() {
     let value = remember_branch_marker(701);
     BRANCH_SEEN.with(|seen| seen.set(value));
@@ -4074,7 +4102,6 @@ fn an_extern_abi_composable_still_compiles() {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 extern "Rust" fn ExternRustProbe(marker: i32) {
     let value = remember_branch_marker(marker);
     BRANCH_SEEN.with(|seen| seen.set(value));
@@ -4113,10 +4140,10 @@ fn suspending_tail_probe(flag: bool) {
         let page: fn(i32) = CountingPage;
         if flag {
             std::future::ready(()).await;
-            page(1)
+            page(1);
         } else {
             std::future::ready(()).await;
-            page(2)
+            page(2);
         }
     });
 }

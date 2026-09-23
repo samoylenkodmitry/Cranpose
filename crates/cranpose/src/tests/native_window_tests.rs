@@ -66,7 +66,6 @@ fn request_count(registry: &NativeWindowRegistry) -> usize {
     not(target_arch = "wasm32")
 ))]
 #[composable]
-#[allow(non_snake_case)]
 fn WindowBox(config: WindowConfig) -> cranpose_core::NodeId {
     cranpose_ui::Box(
         Modifier::empty().window(config),
@@ -187,7 +186,6 @@ fn request_test_composition() -> RequestTestComposition {
     not(target_arch = "wasm32")
 ))]
 #[composable]
-#[allow(non_snake_case)]
 fn RequestCounterText(counter: cranpose_core::MutableState<i32>) {
     cranpose_ui::Text(
         format!("Counter {}", counter.get()),
@@ -202,7 +200,6 @@ fn RequestCounterText(counter: cranpose_core::MutableState<i32>) {
     not(target_arch = "wasm32")
 ))]
 #[composable]
-#[allow(non_snake_case)]
 fn PersistentRequestRoot(counter: cranpose_core::MutableState<i32>) {
     RequestCounterText(counter);
     WindowBox(WindowConfig::new("Persistent request", 100.0, 50.0));
@@ -214,7 +211,6 @@ fn PersistentRequestRoot(counter: cranpose_core::MutableState<i32>) {
     not(target_arch = "wasm32")
 ))]
 #[composable]
-#[allow(non_snake_case)]
 fn ConditionalRequestRoot(show: cranpose_core::MutableState<bool>) {
     if show.get() {
         WindowBox(WindowConfig::new("Conditional request", 100.0, 50.0));
@@ -227,7 +223,6 @@ fn ConditionalRequestRoot(show: cranpose_core::MutableState<bool>) {
     not(target_arch = "wasm32")
 ))]
 #[composable]
-#[allow(non_snake_case)]
 fn KeyedReplacementRequestRoot(show: cranpose_core::MutableState<bool>) {
     let active = show.get();
     cranpose_core::with_key(&active, || {
@@ -882,7 +877,6 @@ fn clear_does_not_reuse_same_content_revision() {
     not(target_arch = "wasm32")
 ))]
 #[composable(no_skip)]
-#[allow(non_snake_case)]
 fn TornPageRoot(
     torn: cranpose_core::MutableState<bool>,
     title: cranpose_core::MutableState<&'static str>,
@@ -939,7 +933,7 @@ impl TornPage {
         page.test.with_registry(|composition| {
             composition
                 .render_stable(root_key, move || {
-                    TornPageRoot(torn, title, Rc::clone(&node))
+                    TornPageRoot(torn, title, Rc::clone(&node));
                 })
                 .expect("the torn page renders");
         });
@@ -952,7 +946,7 @@ impl TornPage {
         self.test.with_registry(|composition| {
             composition
                 .reconcile(root_key, move || {
-                    TornPageRoot(torn, title, Rc::clone(&node))
+                    TornPageRoot(torn, title, Rc::clone(&node));
                 })
                 .expect("the torn page recomposes");
         });
@@ -1032,7 +1026,6 @@ fn a_changed_config_reaches_the_request_with_a_new_revision() {
     not(target_arch = "wasm32")
 ))]
 #[composable(no_skip)]
-#[allow(non_snake_case)]
 fn LocalWindowStateRoot(
     torn: cranpose_core::MutableState<bool>,
     declared: Rc<Cell<Option<WindowState>>>,
@@ -1110,7 +1103,7 @@ impl LocalWindowStatePage {
                 Rc::clone(&declared),
                 Rc::clone(&inside),
                 Rc::clone(&beside),
-            )
+            );
         }
     }
 

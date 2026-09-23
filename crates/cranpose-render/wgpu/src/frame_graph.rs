@@ -811,11 +811,10 @@ pub(crate) fn note_render_pass(descriptor: &wgpu::RenderPassDescriptor<'_>) {
         .iter()
         .flatten()
         .next()
-        .map(|attachment| {
+        .map_or(0, |attachment| {
             let texture = attachment.view.texture();
             u64::from(texture.width()) * u64::from(texture.height())
-        })
-        .unwrap_or(0);
+        });
     RENDER_PASS_PIXELS.with(|total| total.set(total.get().saturating_add(pixels)));
     if frame_graph_pass_telemetry_threshold_ms().is_none() {
         return;
@@ -1720,7 +1719,7 @@ pub(crate) fn read_uploaded_bytes(
     submission: wgpu::SubmissionIndex,
 ) -> Vec<u8> {
     readback.map_async(wgpu::MapMode::Read, .., |result| {
-        result.expect("readback map")
+        result.expect("readback map");
     });
     device
         .poll(wgpu::PollType::Wait {
@@ -1728,7 +1727,10 @@ pub(crate) fn read_uploaded_bytes(
             timeout: None,
         })
         .expect("copy completion");
-    let bytes = readback.get_mapped_range(..).to_vec();
+    let bytes = readback
+        .get_mapped_range(..)
+        .expect("mapped readback")
+        .to_vec();
     readback.unmap();
     bytes
 }

@@ -48,7 +48,7 @@ fn main() {
             });
 
             let Some((x, y, w, h)) = target_before else {
-                eprintln!("✗ Could not locate '{}' tab", target_label);
+                eprintln!("✗ Could not locate '{target_label}' tab");
                 std::process::exit(1);
             };
 
@@ -108,31 +108,27 @@ fn main() {
                     let velocity_delta = measured_velocity.abs();
                     if drag_delta < 8.0 {
                         eprintln!(
-                            "✗ Drag did not move '{}' (delta {:.1}px)",
-                            target_label, drag_delta
+                            "✗ Drag did not move '{target_label}' (delta {drag_delta:.1}px)"
                         );
                         std::process::exit(1);
                     }
                     if fling_delta >= 6.0 {
                         println!(
-                            "✓ PASS: fling momentum moved '{}' by {:.1}px after release",
-                            target_label, fling_delta
+                            "✓ PASS: fling momentum moved '{target_label}' by {fling_delta:.1}px after release"
                         );
                     } else if velocity_delta > 50.0 {
                         println!(
-                            "✓ PASS: fling release velocity detected for '{}' ({:.1}px/s); momentum animation remains runtime-limited in this path",
-                            target_label, velocity_delta
+                            "✓ PASS: fling release velocity detected for '{target_label}' ({velocity_delta:.1}px/s); momentum animation remains runtime-limited in this path"
                         );
                     } else {
                         eprintln!(
-                            "✗ No fling after drag: '{}' moved {:.1}px and reported only {:.1}px/s release velocity",
-                            target_label, fling_delta, velocity_delta
+                            "✗ No fling after drag: '{target_label}' moved {fling_delta:.1}px and reported only {velocity_delta:.1}px/s release velocity"
                         );
                         std::process::exit(1);
                     }
                 }
                 _ => {
-                    eprintln!("✗ Could not locate '{}' tab for fling assert", target_label);
+                    eprintln!("✗ Could not locate '{target_label}' tab for fling assert");
                     std::process::exit(1);
                 }
             }

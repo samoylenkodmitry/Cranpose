@@ -11,8 +11,6 @@
 //!   that does not want one passes `timeText = null`, which is the case this
 //!   reproduces. Adding one would put a clock on every screen built with this.
 
-#![allow(non_snake_case)]
-
 use cranpose_core::NodeId;
 use cranpose_ui_layout::Alignment;
 

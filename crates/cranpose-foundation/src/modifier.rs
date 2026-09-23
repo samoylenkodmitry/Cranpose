@@ -2076,8 +2076,7 @@ where
         other
             .as_any()
             .downcast_ref::<Self>()
-            .map(|typed| typed.element == self.element)
-            .unwrap_or(false)
+            .is_some_and(|typed| typed.element == self.element)
     }
 
     fn inspector_name(&self) -> &'static str {
@@ -2191,8 +2190,8 @@ impl<'a> Iterator for ModifierChainIter<'a> {
     }
 }
 
-impl<'a> ExactSizeIterator for ModifierChainIter<'a> {}
-impl<'a> std::iter::FusedIterator for ModifierChainIter<'a> {}
+impl ExactSizeIterator for ModifierChainIter<'_> {}
+impl std::iter::FusedIterator for ModifierChainIter<'_> {}
 
 #[derive(Debug)]
 struct ModifierNodeEntry {
@@ -3245,14 +3244,14 @@ impl<'a> ModifierChainNodeRef<'a> {
     /// Returns the parent reference, including sentinel head when applicable.
     #[inline]
     pub fn parent(&self) -> Option<Self> {
-        self.with_state(|state| state.parent_link())
+        self.with_state(NodeState::parent_link)
             .map(|link| self.chain.make_node_ref(link))
     }
 
     /// Returns the child reference, including sentinel tail for the last entry.
     #[inline]
     pub fn child(&self) -> Option<Self> {
-        self.with_state(|state| state.child_link())
+        self.with_state(NodeState::child_link)
             .map(|link| self.chain.make_node_ref(link))
     }
 
@@ -3264,7 +3263,7 @@ impl<'a> ModifierChainNodeRef<'a> {
         }
         match &self.link {
             NodeLink::Head | NodeLink::Tail => NodeCapabilities::empty(),
-            NodeLink::Entry(_) => self.with_state(|state| state.capabilities()),
+            NodeLink::Entry(_) => self.with_state(NodeState::capabilities),
         }
     }
 
@@ -3293,7 +3292,7 @@ impl<'a> ModifierChainNodeRef<'a> {
         if self.is_tail() {
             NodeCapabilities::empty()
         } else {
-            self.with_state(|state| state.aggregate_child_capabilities())
+            self.with_state(NodeState::aggregate_child_capabilities)
         }
     }
 

@@ -41,7 +41,6 @@ fn settle(composition: &mut TestComposition, frame_time: &mut u64) {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn CrossfadeHost(target: MutableState<u32>, alive: Rc<RefCell<Vec<u32>>>) {
     let current = target.value();
     let alive_for_content = Rc::clone(&alive);
@@ -174,7 +173,6 @@ struct Shell {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn ShellRows(rows: MutableState<usize>) {
     let count = rows.get();
     for index in 0..count {
@@ -189,7 +187,6 @@ fn ShellRows(rows: MutableState<usize>) {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn ShellFooter(revision: usize) {
     Text(
         format!("Footer {revision}"),
@@ -201,14 +198,12 @@ fn ShellFooter(revision: usize) {
 /// A whole crossfade entry in one skippable composable: one half reads shared
 /// state and one half only ever sees what it was passed.
 #[composable]
-#[allow(non_snake_case)]
 fn ShellPane(shell: Shell) {
     ShellRows(shell.rows);
     ShellFooter(shell.revision);
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn ShellHost(rows: MutableState<usize>) {
     let shell = Shell {
         rows,

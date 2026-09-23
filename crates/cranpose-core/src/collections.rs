@@ -7,5 +7,5 @@ pub mod map {
 pub mod map {
     pub use std::collections::hash_map::Entry;
 
-    pub use ahash::{AHashMap as HashMap, AHashSet as HashSet};
+    pub use foldhash::{HashMap, HashSet};
 }

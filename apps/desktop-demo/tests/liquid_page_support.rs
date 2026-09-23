@@ -47,7 +47,7 @@ impl LiquidPage {
                 app::combined_app_with_startup(StartupSelection {
                     initial_tab: Some(DemoTab::Liquid),
                     initial_shader_section: None,
-                })
+                });
             },
             (physical(logical.0, density), physical(logical.1, density)),
             (logical.0 as f32, logical.1 as f32),

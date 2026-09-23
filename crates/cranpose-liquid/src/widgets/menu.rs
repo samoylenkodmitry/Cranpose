@@ -421,7 +421,6 @@ pub fn rememberLiquidMenuGesture() -> LiquidMenuGesture {
 /// A neighboring glass icon source that keeps its material mounted while an
 /// open menu owns and deforms its foreground.
 #[composable]
-#[allow(non_snake_case)]
 pub fn LiquidMenuAbsorbedIconButton(
     modifier: Modifier,
     spec: crate::widgets::GlassButtonSpec,
@@ -759,7 +758,7 @@ pub fn liquid_menu_trigger_input(
     on_open: impl Fn() + 'static,
 ) -> Modifier {
     let gate = remember(|| {
-        let runtime = cranpose_core::with_current_composer(|composer| composer.runtime_handle());
+        let runtime = cranpose_core::with_current_composer(cranpose_core::Composer::runtime_handle);
         Rc::new(RefCell::new(cranpose_animation::Animatable::new(
             0.0, runtime,
         )))
@@ -776,7 +775,6 @@ pub fn liquid_menu_trigger_input(
     }
 
     modifier.pointer_input(gesture.id(), {
-        let gesture = gesture.clone();
         let gate = Rc::clone(&gate);
         let on_open = Rc::clone(&on_open);
         move |scope: PointerInputScope| {
@@ -856,7 +854,6 @@ pub fn liquid_menu_trigger_input(
 /// slide over popup rows and release to fire one.
 #[allow(clippy::too_many_arguments)]
 #[composable]
-#[allow(non_snake_case)]
 pub fn LiquidMenuIconButton(
     modifier: Modifier,
     spec: crate::widgets::GlassButtonSpec,
@@ -903,7 +900,6 @@ pub fn LiquidMenuIconButton(
     let input = Modifier::empty()
         .size(Size::new(diameter, diameter))
         .pointer_input(gesture.id(), {
-            let gesture = gesture.clone();
             let gate = Rc::clone(&gate);
             let on_open = Rc::clone(&on_open);
             move |scope: PointerInputScope| {
@@ -1024,7 +1020,6 @@ pub fn LiquidMenuIconButton(
 }
 
 #[composable]
-#[allow(non_snake_case)]
 fn AbsorbedSourceVisual(
     source: LiquidMenuAbsorbedSource,
     node_origin: Point,
@@ -1081,7 +1076,6 @@ fn AbsorbedSourceVisual(
 /// column, then the label. Sections split with full-width hairlines; headers
 /// are gray non-interactive rows.
 #[composable]
-#[allow(non_snake_case)]
 pub fn LiquidMenu(
     expanded: bool,
     anchor: Rect,
@@ -1241,13 +1235,9 @@ pub fn LiquidMenu(
         ),
         move || scrim_dismiss(),
         {
-            let absorbed = absorbed.clone();
-            let items = items.clone();
-            let typography = typography.clone();
             let on_item = Rc::clone(&on_item);
             let on_dismiss = Rc::clone(&on_dismiss);
             let node_size = Rc::clone(&node_size);
-            let gesture = gesture.clone();
             move || {
                 let anchor_center = (
                     menu_width - anchor.width * 0.5 + MENU_SHADOW_PAD,
@@ -1402,7 +1392,8 @@ pub fn LiquidMenu(
 
                 let has_checks = items.iter().any(|item| item.checked);
                 let hovered = remember(|| mutableStateOf(Option::<usize>::None)).with(|s| *s);
-                let glow_row = gesture_hover.or(hovered.get());
+                let hovered_row = hovered.get();
+                let glow_row = gesture_hover.or(hovered_row);
                 glow_point.set(glow_row.map(|index| {
                     let rect = gesture.item_rect(index).get();
                     (rect.x + rect.width * 0.5, rect.y + rect.height * 0.5)
@@ -1575,7 +1566,6 @@ pub fn LiquidMenu(
 /// Renders an anchor and positions a [`LiquidMenu`] from the anchor's measured
 /// window rectangle, without application-owned coordinate calculations.
 #[composable]
-#[allow(non_snake_case)]
 pub fn LiquidDropdownMenu<A>(
     modifier: Modifier,
     expanded: bool,
@@ -1834,7 +1824,7 @@ mod tests {
             scope.header("Section");
             scope.separator();
             scope.item(LiquidMenuItem::new("Open"), move || {
-                selected_by_action.set(true)
+                selected_by_action.set(true);
             });
         });
 

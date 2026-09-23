@@ -9,7 +9,7 @@
 //! flag.
 
 #[cfg(not(target_arch = "wasm32"))]
-use std::sync::{Condvar, Mutex};
+use std::sync::{Condvar, Mutex, PoisonError};
 use std::{
     cell::{Cell, RefCell},
     future::Future,
@@ -216,10 +216,7 @@ impl Timer {
     }
 
     fn run(&self) {
-        let mut alarms = self
-            .alarms
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
+        let mut alarms = self.alarms.lock().unwrap_or_else(PoisonError::into_inner);
         loop {
             let now = Instant::now();
             let mut due = Vec::new();
@@ -241,10 +238,7 @@ impl Timer {
                     fired.store(true, Ordering::Release);
                     waker.wake();
                 }
-                alarms = self
-                    .alarms
-                    .lock()
-                    .unwrap_or_else(|error| error.into_inner());
+                alarms = self.alarms.lock().unwrap_or_else(PoisonError::into_inner);
                 continue;
             }
 
@@ -252,22 +246,19 @@ impl Timer {
                 Some(timeout) => {
                     self.wake
                         .wait_timeout(alarms, timeout)
-                        .unwrap_or_else(|error| error.into_inner())
+                        .unwrap_or_else(PoisonError::into_inner)
                         .0
                 }
                 None => self
                     .wake
                     .wait(alarms)
-                    .unwrap_or_else(|error| error.into_inner()),
+                    .unwrap_or_else(PoisonError::into_inner),
             };
         }
     }
 
     fn arm(&self, deadline: Instant, waker: Waker, fired: Arc<AtomicBool>) {
-        let mut alarms = self
-            .alarms
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
+        let mut alarms = self.alarms.lock().unwrap_or_else(PoisonError::into_inner);
         alarms.push(Alarm {
             deadline,
             waker,
@@ -630,13 +621,11 @@ where
         let worker_wakers = Arc::clone(&wakers);
         BlockingPool::get().submit(Box::new(move || {
             let value = work();
-            *worker_slot
-                .lock()
-                .unwrap_or_else(|error| error.into_inner()) = Some(value);
+            *worker_slot.lock().unwrap_or_else(PoisonError::into_inner) = Some(value);
             worker_done.store(true, Ordering::Release);
             for waker in worker_wakers
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
+                .unwrap_or_else(PoisonError::into_inner)
                 .drain(..)
             {
                 waker.wake();
@@ -740,7 +729,7 @@ impl BlockingPool {
     }
 
     fn take_slot(&self) -> bool {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         state.outstanding += 1;
         let grow = state.alive < state.outstanding && state.alive < MAX_BLOCKING_WORKERS;
         if grow {
@@ -750,7 +739,7 @@ impl BlockingPool {
     }
 
     fn release_slot(&self) {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         state.outstanding = state.outstanding.saturating_sub(1);
     }
 
@@ -762,19 +751,19 @@ impl BlockingPool {
             .spawn(move || {
                 loop {
                     let job = {
-                        let queue = receiver.lock().unwrap_or_else(|error| error.into_inner());
+                        let queue = receiver.lock().unwrap_or_else(PoisonError::into_inner);
                         queue.recv()
                     };
                     let Ok(job) = job else {
                         break;
                     };
                     job();
-                    let mut counters = counters.lock().unwrap_or_else(|error| error.into_inner());
+                    let mut counters = counters.lock().unwrap_or_else(PoisonError::into_inner);
                     counters.outstanding = counters.outstanding.saturating_sub(1);
                 }
             });
         if started.is_err() {
-            let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+            let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
             state.alive -= 1;
         }
     }
@@ -796,20 +785,20 @@ impl<T> Future for BlockingWork<T> {
             && let Some(value) = self
                 .slot
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
+                .unwrap_or_else(PoisonError::into_inner)
                 .take()
         {
             return Poll::Ready(value);
         }
         self.wakers
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(PoisonError::into_inner)
             .push(context.waker().clone());
         if self.done.load(Ordering::Acquire)
             && let Some(value) = self
                 .slot
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
+                .unwrap_or_else(PoisonError::into_inner)
                 .take()
         {
             return Poll::Ready(value);
@@ -982,15 +971,15 @@ mod timer_race_tests {
             pool.submit(Box::new(move || {
                 let _ = sender.send(std::thread::current().id());
                 let (lock, signal) = &*done;
-                *lock.lock().unwrap_or_else(|error| error.into_inner()) = true;
+                *lock.lock().unwrap_or_else(PoisonError::into_inner) = true;
                 signal.notify_all();
             }));
             let (lock, signal) = &*waiter;
-            let mut finished = lock.lock().unwrap_or_else(|error| error.into_inner());
+            let mut finished = lock.lock().unwrap_or_else(PoisonError::into_inner);
             while !*finished {
                 finished = signal
                     .wait(finished)
-                    .unwrap_or_else(|error| error.into_inner());
+                    .unwrap_or_else(PoisonError::into_inner);
             }
         }
         drop(sender);
@@ -1016,28 +1005,26 @@ mod timer_race_tests {
             pool.submit(Box::new(move || {
                 {
                     let (count, signal) = &*started;
-                    *count.lock().unwrap_or_else(|error| error.into_inner()) += 1;
+                    *count.lock().unwrap_or_else(PoisonError::into_inner) += 1;
                     signal.notify_all();
                 }
                 let (held, signal) = &*release;
-                let mut go = held.lock().unwrap_or_else(|error| error.into_inner());
+                let mut go = held.lock().unwrap_or_else(PoisonError::into_inner);
                 while !*go {
-                    go = signal.wait(go).unwrap_or_else(|error| error.into_inner());
+                    go = signal.wait(go).unwrap_or_else(PoisonError::into_inner);
                 }
             }));
         }
 
         let (count, signal) = &*started;
-        let mut running = count.lock().unwrap_or_else(|error| error.into_inner());
+        let mut running = count.lock().unwrap_or_else(PoisonError::into_inner);
         while *running < 4 {
-            running = signal
-                .wait(running)
-                .unwrap_or_else(|error| error.into_inner());
+            running = signal.wait(running).unwrap_or_else(PoisonError::into_inner);
         }
         drop(running);
 
         let (held, signal) = &*release;
-        *held.lock().unwrap_or_else(|error| error.into_inner()) = true;
+        *held.lock().unwrap_or_else(PoisonError::into_inner) = true;
         signal.notify_all();
     }
 }

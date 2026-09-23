@@ -1,5 +1,5 @@
 use std::{
-    sync::{Mutex, MutexGuard},
+    sync::{Mutex, MutexGuard, PoisonError},
     time::Duration,
 };
 
@@ -15,7 +15,7 @@ use cranpose_services::{
 
 fn one_registry_at_a_time() -> MutexGuard<'static, ()> {
     static REGISTRY: Mutex<()> = Mutex::new(());
-    REGISTRY.lock().unwrap_or_else(|error| error.into_inner())
+    REGISTRY.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 #[test]

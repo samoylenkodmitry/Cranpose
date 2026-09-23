@@ -1,5 +1,3 @@
-#![allow(non_snake_case)]
-
 use cranpose::AppLauncher;
 use cranpose_animation::{
     infiniteRepeatable, rememberInfiniteTransition, AnimationSpec, Easing, RepeatMode, StartOffset,

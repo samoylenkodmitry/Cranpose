@@ -21,11 +21,11 @@ fn main() {
 
             println!("--- Phase 1: Initial Layout ---");
             let (_, y, _, _) = find_text_in_semantics(&robot, "Item 0").expect("Item 0 missing");
-            println!("Item 0: y={:.1}", y);
+            println!("Item 0: y={y:.1}");
             assert!((y - 65.2).abs() < 5.0, "Item 0 should be at ~65.2");
 
             let (_, y, _, _) = find_text_in_semantics(&robot, "Item 1").expect("Item 1 missing");
-            println!("Item 1: y={:.1}", y);
+            println!("Item 1: y={y:.1}");
             assert!((y - 140.2).abs() < 5.0, "Item 1 should be at ~140.2");
 
             println!("--- Phase 2: Jump to 50 ---");
@@ -36,11 +36,12 @@ fn main() {
 
             let (_, y, _, _) = find_text_in_semantics(&robot, "Item 50")
                 .expect("Item 50 should be visible after jump");
-            println!("Item 50 found at y={:.1}", y);
+            println!("Item 50 found at y={y:.1}");
 
-            if find_text_in_semantics(&robot, "Item 0").is_some() {
-                panic!("Item 0 should be recycled/virtualized out!");
-            }
+            assert!(
+                !find_text_in_semantics(&robot, "Item 0").is_some(),
+                "Item 0 should be recycled/virtualized out!"
+            );
 
             robot.exit().ok();
         })
@@ -92,7 +93,7 @@ fn main() {
                                 BoxSpec::new().content_alignment(Alignment::CENTER),
                                 move || {
                                     Text(
-                                        format!("Item {}", index),
+                                        format!("Item {index}"),
                                         Modifier::default(),
                                         TextStyle::default(),
                                     );

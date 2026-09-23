@@ -34,11 +34,11 @@ fn main() {
             println!("\n--- Step 1: Initial state ---");
             let initial_stats = read_stats();
             if let Some((c, e, d)) = initial_stats {
-                println!("  Initial: Composes={} Effects={} Disposes={}", c, e, d);
+                println!("  Initial: Composes={c} Effects={e} Disposes={d}");
                 assert_eq!(c, e, "Composes should equal effects");
                 assert_eq!(d, 0, "No disposes initially");
             }
-            let initial_composes = initial_stats.map(|(c, _, _)| c).unwrap_or(0);
+            let initial_composes = initial_stats.map_or(0, |(c, _, _)| c);
 
             println!("\n--- Step 2: Extended scroll (triggers content-type reuse) ---");
 
@@ -56,24 +56,21 @@ fn main() {
                 let scroll_time = start.elapsed();
                 std::thread::sleep(Duration::from_millis(100));
 
-                println!("  Scroll time: {:?}", scroll_time);
+                println!("  Scroll time: {scroll_time:?}");
             }
 
             let after_scroll = read_stats();
             if let Some((c, e, d)) = after_scroll {
                 println!(
-                    "  After extended scroll: Composes={} Effects={} Disposes={}",
-                    c, e, d
+                    "  After extended scroll: Composes={c} Effects={e} Disposes={d}"
                 );
 
                 let new_composes = c - initial_composes;
-                println!("  New composes during scroll: {}", new_composes);
+                println!("  New composes during scroll: {new_composes}");
 
                 assert!(
                     new_composes < MAX_NEW_COMPOSES_DURING_SCROLL,
-                    "Too many composes during scroll: {} (expected <{})",
-                    new_composes,
-                    MAX_NEW_COMPOSES_DURING_SCROLL,
+                    "Too many composes during scroll: {new_composes} (expected <{MAX_NEW_COMPOSES_DURING_SCROLL})",
                 );
                 assert_eq!(c, e, "Composes should equal effects");
             }
@@ -95,16 +92,16 @@ fn main() {
             let final_stats = read_stats();
             if let Some((c, e, d)) = final_stats {
                 println!("\n=== FINAL RESULTS ===");
-                println!("  Total composes: {}", c);
-                println!("  Total effects: {}", e);
-                println!("  Total disposes: {}", d);
+                println!("  Total composes: {c}");
+                println!("  Total effects: {e}");
+                println!("  Total disposes: {d}");
 
                 assert_eq!(c, e, "Composes should equal effects after round trip");
 
                 let retained_slots = c.saturating_sub(d);
                 if d > 0 {
                     let reuse_ratio = retained_slots as f64 / c as f64 * 100.0;
-                    println!("  Slot retention rate: {:.1}%", reuse_ratio);
+                    println!("  Slot retention rate: {reuse_ratio:.1}%");
                 } else {
                     println!("  No disposes observed (all items retained in pool). 100% retention.");
                 }

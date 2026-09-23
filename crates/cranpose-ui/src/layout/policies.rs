@@ -463,12 +463,10 @@ impl MeasurePolicy for FlexMeasurePolicy {
             let cross_axis_alignment = match self.axis {
                 Axis::Horizontal => parent_data[idx]
                     .row_alignment
-                    .map(Into::into)
-                    .unwrap_or(self.cross_axis_alignment),
+                    .map_or(self.cross_axis_alignment, Into::into),
                 Axis::Vertical => parent_data[idx]
                     .column_alignment
-                    .map(Into::into)
-                    .unwrap_or(self.cross_axis_alignment),
+                    .map_or(self.cross_axis_alignment, Into::into),
             };
             let cross_pos = cross_axis_alignment.align(container_cross, child_cross);
 

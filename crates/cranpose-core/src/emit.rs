@@ -41,7 +41,7 @@ impl Composer {
                 OwnedMutableState::with_runtime(init(), runtime.clone())
             })
         });
-        state.with(|state| state.handle())
+        state.with(super::state::OwnedMutableState::handle)
     }
 
     fn emit_node_box<N: Node + 'static>(
@@ -78,10 +78,9 @@ impl Composer {
         };
 
         if let Some((id, slot_gen)) = adopted {
-            let scope_debug = self
-                .current_recompose_scope()
-                .map(|scope| (scope.id(), debug_scope_label(scope.id())))
-                .unwrap_or((0, None));
+            let scope_debug = self.current_recompose_scope().map_or((0, None), |scope| {
+                (scope.id(), debug_scope_label(scope.id()))
+            });
             log::trace!(
                 target: "cranpose::compose::emit",
                 "reusing node #{id} as {} [scope_id={} scope_label={:?}]",
@@ -146,10 +145,9 @@ impl Composer {
             let generation = applier.node_generation(id);
             (id, generation)
         };
-        let scope_debug = self
-            .current_recompose_scope()
-            .map(|scope| (scope.id(), debug_scope_label(scope.id())))
-            .unwrap_or((0, None));
+        let scope_debug = self.current_recompose_scope().map_or((0, None), |scope| {
+            (scope.id(), debug_scope_label(scope.id()))
+        });
         log::trace!(
             target: "cranpose::compose::emit",
             "creating node #{} (gen={}) as {} [scope_id={} scope_label={:?}]",
@@ -293,8 +291,7 @@ impl Composer {
                 let mut applier = self.borrow_applier();
                 applier
                     .get_mut(id)
-                    .map(|node| node.parent().is_some())
-                    .unwrap_or(false)
+                    .is_ok_and(|node| node.parent().is_some())
             };
 
             if !has_parent {
@@ -316,10 +313,7 @@ impl Composer {
             }
             let parent_status = {
                 let mut applier = self.borrow_applier();
-                applier
-                    .get_mut(id)
-                    .map(|node| node.parent())
-                    .unwrap_or(None)
+                applier.get_mut(id).map_or(None, |node| node.parent())
             };
             match parent_status {
                 Some(existing) if existing == parent_hint => {
@@ -343,8 +337,7 @@ impl Composer {
             let mut applier = self.borrow_applier();
             applier
                 .get_mut(id)
-                .map(|node| node.parent().is_some())
-                .unwrap_or(false)
+                .is_ok_and(|node| node.parent().is_some())
         };
         if has_parent {
             return;
@@ -360,13 +353,13 @@ impl Composer {
     ) -> Result<R, NodeError> {
         let mut applier = self.borrow_applier();
         let node = applier.get_mut(id)?;
-        let typed = node
-            .as_any_mut()
-            .downcast_mut::<N>()
-            .ok_or(NodeError::TypeMismatch {
-                id,
-                expected: std::any::type_name::<N>(),
-            })?;
+        let typed =
+            node.as_any_mut()
+                .downcast_mut::<N>()
+                .ok_or_else(|| NodeError::TypeMismatch {
+                    id,
+                    expected: std::any::type_name::<N>(),
+                })?;
         Ok(f(typed))
     }
 
@@ -414,16 +407,14 @@ impl Composer {
                 synthetic_root: _synthetic_root,
             } = frame;
 
-            log::trace!(target: "cranpose::compose::parent", "pop_parent: node #{}", id);
+            log::trace!(target: "cranpose::compose::parent", "pop_parent: node #{id}");
             log::trace!(
                 target: "cranpose::compose::parent",
-                "previous children: {:?}",
-                previous
+                "previous children: {previous:?}"
             );
             log::trace!(
                 target: "cranpose::compose::parent",
-                "new children: {:?}",
-                new_children
+                "new children: {new_children:?}"
             );
             if matches!(attach_mode, ParentAttachMode::DeferredSync) {
                 let _ = previous;

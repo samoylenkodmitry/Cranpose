@@ -64,7 +64,7 @@ impl UriHandler for PlatformUriHandler {
             feature = "uri-native"
         ))]
         {
-            open::that(uri).map_err(|err| UriHandlerError::OpenFailed(format!("{:?}", err)))?;
+            open::that(uri).map_err(|err| UriHandlerError::OpenFailed(format!("{err:?}")))?;
             Ok(())
         }
 
@@ -73,7 +73,7 @@ impl UriHandler for PlatformUriHandler {
             let window = web_sys::window().ok_or(UriHandlerError::NoWindow)?;
             let opened = window
                 .open_with_url_and_target(uri, "_blank")
-                .map_err(|err| UriHandlerError::OpenFailed(format!("{:?}", err)))?;
+                .map_err(|err| UriHandlerError::OpenFailed(format!("{err:?}")))?;
             if opened.is_none() {
                 Err(UriHandlerError::PopupBlocked(uri.to_string()))
             } else {
@@ -137,7 +137,6 @@ pub fn local_uri_handler() -> CompositionLocal<UriHandlerRef> {
     })
 }
 
-#[allow(non_snake_case)]
 #[composable]
 pub fn ProvideUriHandler(content: impl FnOnce()) {
     let uri_handler = cranpose_core::remember(default_uri_handler).with(|state| state.clone());

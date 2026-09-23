@@ -328,7 +328,7 @@ pub fn mineswapper2_tab() {
                             move || {
                                 let preset = preset_state.get();
                                 game_state
-                                    .set(MineswapperGame::new_from_preset(preset, random_seed()))
+                                    .set(MineswapperGame::new_from_preset(preset, random_seed()));
                             }
                         },
                         || {

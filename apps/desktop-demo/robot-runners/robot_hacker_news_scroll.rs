@@ -182,12 +182,11 @@ fn main() {
             println!("  ✓ Restored visible stories: {restored_story_numbers:?}");
             let max_story_before_drag = restored_story_numbers.iter().copied().max().unwrap_or(0);
             let story1_before_drag_y = semantics_bounds(&robot, "HackerNewsStory 1000000")
-                .map(|(_, y, _, _)| y)
-                .unwrap_or(list_y);
+                .map_or(list_y, |(_, y, _, _)| y);
             let drag_start_x = list_x + list_w * 0.5;
             let drag_start_y = list_y + list_h * 0.80;
             let drag_end_y = list_y + list_h * 0.25;
-            let mut scrolled_story_numbers = restored_story_numbers.clone();
+            let mut scrolled_story_numbers = restored_story_numbers;
             let mut story1_after_drag_y = story1_before_drag_y;
             let mut list_moved = false;
 
@@ -212,8 +211,7 @@ fn main() {
                 let max_story_after_drag =
                     scrolled_story_numbers.iter().copied().max().unwrap_or(0);
                 story1_after_drag_y = semantics_bounds(&robot, "HackerNewsStory 1000000")
-                    .map(|(_, y, _, _)| y)
-                    .unwrap_or(list_y - 100.0);
+                    .map_or(list_y - 100.0, |(_, y, _, _)| y);
                 println!(
                     "  • After restored-list drag #{} visible stories: {:?} story1_y={:.1}",
                     drag_index + 1,
@@ -231,11 +229,7 @@ fn main() {
                 fail(
                     &robot,
                     format!(
-                        "Restored story list did not move after drag; before_max={} after={:?} story1_before_y={:.1} story1_after_y={:.1}",
-                        max_story_before_drag,
-                        scrolled_story_numbers,
-                        story1_before_drag_y,
-                        story1_after_drag_y
+                        "Restored story list did not move after drag; before_max={max_story_before_drag} after={scrolled_story_numbers:?} story1_before_y={story1_before_drag_y:.1} story1_after_y={story1_after_drag_y:.1}"
                     ),
                 );
             }
@@ -303,9 +297,7 @@ fn main() {
                 previous_min_story = next_min_story;
                 previous_max_story = next_max_story;
                 max_story_after_wheel = max_story_after_wheel.max(next_max_story);
-                let story1_display = next_story1_y
-                    .map(|y| format!("{y:.1}"))
-                    .unwrap_or_else(|| "offscreen".to_string());
+                let story1_display = next_story1_y.map_or_else(|| "offscreen".to_string(), |y| format!("{y:.1}"));
                 println!(
                     "  • After wheel scroll #{} story1_y={} visible={:?} stalled={} max_story={}",
                     wheel_idx + 1,
@@ -319,8 +311,7 @@ fn main() {
                     fail(
                         &robot,
                         format!(
-                            "Mouse wheel stopped advancing before reaching deeper items; stalled_scrolls={} max_story={}",
-                            stalled_scrolls, max_story_after_wheel
+                            "Mouse wheel stopped advancing before reaching deeper items; stalled_scrolls={stalled_scrolls} max_story={max_story_after_wheel}"
                         ),
                     );
                 }
@@ -330,10 +321,7 @@ fn main() {
                 fail(
                     &robot,
                     format!(
-                        "Mouse wheel stopped advancing the list; story1_before_y={:?} story1_after_y={:?} wheel_moves={}",
-                        story1_before_wheel_y,
-                        story1_after_wheel_y,
-                        wheel_moves
+                        "Mouse wheel stopped advancing the list; story1_before_y={story1_before_wheel_y:?} story1_after_y={story1_after_wheel_y:?} wheel_moves={wheel_moves}"
                     ),
                 );
             }

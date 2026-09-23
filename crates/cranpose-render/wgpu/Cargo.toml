@@ -35,9 +35,9 @@ cranpose-ui = { workspace = true }
 cranpose-core = { workspace = true }
 bytemuck = { workspace = true }
 log = "0.4"
-naga = { version = "29.0.3", features = ["wgsl-in"] }
+naga = { version = "30.0.1", features = ["wgsl-in"] }
 web-time = { workspace = true }
-smallvec = "1.15.1"
+smallvec = "1.16.1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # Substrate for the stage executor: vetted scoped parallelism so the frame
@@ -47,7 +47,7 @@ smallvec = "1.15.1"
 rayon = "1.12"
 
 [target.'cfg(all(target_os = "linux", not(target_arch = "wasm32")))'.dependencies]
-wgpu = { version = "29.0", default-features = false, features = [
+wgpu = { version = "30.0", default-features = false, features = [
     "std",
     "parking_lot",
     "vulkan",
@@ -60,7 +60,7 @@ wgpu = { version = "29.0", default-features = false, features = [
 rustix = { version = "1.1", features = ["thread"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-wgpu = { version = "29.0", default-features = false, features = [
+wgpu = { version = "30.0", default-features = false, features = [
     "std",
     "parking_lot",
     "dx12",
@@ -68,7 +68,7 @@ wgpu = { version = "29.0", default-features = false, features = [
 ] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-wgpu = { version = "29.0", default-features = false, features = [
+wgpu = { version = "30.0", default-features = false, features = [
     "std",
     "parking_lot",
     "metal",
@@ -76,7 +76,7 @@ wgpu = { version = "29.0", default-features = false, features = [
 ] }
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android"), not(target_os = "linux"), not(target_os = "windows"), not(target_os = "macos")))'.dependencies]
-wgpu = { version = "29.0", default-features = false, features = [
+wgpu = { version = "30.0", default-features = false, features = [
     "std",
     "parking_lot",
     "vulkan",
@@ -84,7 +84,7 @@ wgpu = { version = "29.0", default-features = false, features = [
 ] }
 
 [target.'cfg(target_os = "android")'.dependencies]
-wgpu = { version = "29.0", default-features = false, features = [
+wgpu = { version = "30.0", default-features = false, features = [
     "std",
     "parking_lot",
     "vulkan",
@@ -92,7 +92,7 @@ wgpu = { version = "29.0", default-features = false, features = [
 ] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-wgpu = { version = "29.0", default-features = false, features = [
+wgpu = { version = "30.0", default-features = false, features = [
     "std",
     "webgpu",
     "webgl",
@@ -100,7 +100,7 @@ wgpu = { version = "29.0", default-features = false, features = [
 ] }
 # The WebGL fallback is always compiled on web, so runtime-shader GL
 # portability validation needs naga's GLSL writer there unconditionally.
-naga = { version = "29.0.3", features = ["wgsl-in", "glsl-out"] }
+naga = { version = "30.0.1", features = ["wgsl-in", "glsl-out"] }
 
 [dev-dependencies]
 # Path-only dev-deps: stripped from the published manifest (publish order ignores dev edges).
@@ -110,6 +110,6 @@ cranpose-macros = { path = "../../cranpose-macros" }
 # Unit tests exercise the embedded fallback font and GL portability validation
 # on every platform, independent of the production feature set.
 cranpose-render-common = { path = "../common", features = ["embedded-default-font"] }
-naga = { version = "29.0.3", features = ["wgsl-in", "glsl-out"] }
+naga = { version = "30.0.1", features = ["wgsl-in", "glsl-out"] }
 png = "0.18.1"
 pollster = "0.4.0"

@@ -129,8 +129,7 @@ fn subtree_alpha_capture_preserves_group_opacity_and_uses_bounded_surface() {
         Ok(renderer) => renderer,
         Err(err) => {
             eprintln!(
-                "skipping subtree alpha capture assertions because headless WGPU init failed: {}",
-                err
+                "skipping subtree alpha capture assertions because headless WGPU init failed: {err}"
             );
             return;
         }
@@ -175,8 +174,7 @@ fn offscreen_alpha_layer_preserves_dstout_cutout_over_underlay() {
         Ok(renderer) => renderer,
         Err(err) => {
             eprintln!(
-                "skipping DstOut alpha isolation assertions because headless WGPU init failed: {}",
-                err
+                "skipping DstOut alpha isolation assertions because headless WGPU init failed: {err}"
             );
             return;
         }
@@ -213,8 +211,7 @@ fn repeated_gradient_dstout_alpha_layer_reveals_underlay() {
         Ok(renderer) => renderer,
         Err(err) => {
             eprintln!(
-                "skipping gradient DstOut alpha isolation assertions because headless WGPU init failed: {}",
-                err
+                "skipping gradient DstOut alpha isolation assertions because headless WGPU init failed: {err}"
             );
             return;
         }
@@ -251,8 +248,7 @@ fn root_composite_respects_root_scale_on_presented_surface() {
         Ok(renderer) => renderer,
         Err(err) => {
             eprintln!(
-                "skipping root-scale capture assertions because headless WGPU init failed: {}",
-                err
+                "skipping root-scale capture assertions because headless WGPU init failed: {err}"
             );
             return;
         }
@@ -279,8 +275,7 @@ fn full_logical_root_capture_respects_explicit_root_scale() {
         Ok(renderer) => renderer,
         Err(err) => {
             eprintln!(
-                "skipping full logical root-scale assertions because headless WGPU init failed: {}",
-                err
+                "skipping full logical root-scale assertions because headless WGPU init failed: {err}"
             );
             return;
         }
@@ -312,8 +307,7 @@ fn translation_only_layers_render_without_nested_offscreens() {
         Ok(renderer) => renderer,
         Err(err) => {
             eprintln!(
-                "skipping translation-only isolation assertions because headless WGPU init failed: {}",
-                err
+                "skipping translation-only isolation assertions because headless WGPU init failed: {err}"
             );
             return;
         }
@@ -351,8 +345,7 @@ fn translation_only_wrapper_with_text_collapses_into_root_target() {
         Ok(renderer) => renderer,
         Err(err) => {
             eprintln!(
-                "skipping wrapper-collapse isolation assertions because headless WGPU init failed: {}",
-                err
+                "skipping wrapper-collapse isolation assertions because headless WGPU init failed: {err}"
             );
             return;
         }
@@ -393,8 +386,7 @@ fn translated_text_wrapper_with_text_stays_on_direct_path_under_fractional_motio
         Ok(renderer) => renderer,
         Err(err) => {
             eprintln!(
-                "skipping translated text-wrapper assertions because headless WGPU init failed: {}",
-                err
+                "skipping translated text-wrapper assertions because headless WGPU init failed: {err}"
             );
             return;
         }
@@ -463,8 +455,7 @@ fn translated_text_wrapper_moves_its_raster_by_whole_pixels_under_fractional_mot
         Ok(renderer) => renderer,
         Err(err) => {
             eprintln!(
-                "skipping translated text local-picture assertions because headless WGPU init failed: {}",
-                err
+                "skipping translated text local-picture assertions because headless WGPU init failed: {err}"
             );
             return;
         }
@@ -524,8 +515,7 @@ fn translated_thin_shape_wrapper_stays_rigid_on_the_direct_path_under_fractional
         Ok(renderer) => renderer,
         Err(err) => {
             eprintln!(
-                "skipping translated thin-shape assertions because headless WGPU init failed: {}",
-                err
+                "skipping translated thin-shape assertions because headless WGPU init failed: {err}"
             );
             return;
         }
@@ -607,8 +597,7 @@ fn translated_gradient_wrapper_keeps_its_dither_under_fractional_motion() {
         Ok(renderer) => renderer,
         Err(err) => {
             eprintln!(
-                "skipping translated gradient assertions because headless WGPU init failed: {}",
-                err
+                "skipping translated gradient assertions because headless WGPU init failed: {err}"
             );
             return;
         }
@@ -662,8 +651,7 @@ fn a_scaled_isolated_child_rasterizes_on_the_parent_pixel_grid() {
         Ok(renderer) => renderer,
         Err(err) => {
             eprintln!(
-                "skipping scaled child raster assertions because headless WGPU init failed: {}",
-                err
+                "skipping scaled child raster assertions because headless WGPU init failed: {err}"
             );
             return;
         }
@@ -681,8 +669,7 @@ fn a_cached_scaled_child_is_not_reused_at_another_device_phase() {
         Ok(renderer) => renderer,
         Err(err) => {
             eprintln!(
-                "skipping scaled child cache assertions because headless WGPU init failed: {}",
-                err
+                "skipping scaled child cache assertions because headless WGPU init failed: {err}"
             );
             return;
         }
@@ -826,8 +813,7 @@ fn translation_only_wrapper_with_underlined_text_stays_on_direct_path() {
         Ok(renderer) => renderer,
         Err(err) => {
             eprintln!(
-                "skipping underlined text-wrapper assertions because headless WGPU init failed: {}",
-                err
+                "skipping underlined text-wrapper assertions because headless WGPU init failed: {err}"
             );
             return;
         }
@@ -892,8 +878,7 @@ fn translated_content_wrapper_with_decorated_shadow_text_stays_on_the_direct_pat
         Ok(renderer) => renderer,
         Err(err) => {
             eprintln!(
-                "skipping decorated text-wrapper assertions because headless WGPU init failed: {}",
-                err
+                "skipping decorated text-wrapper assertions because headless WGPU init failed: {err}"
             );
             return;
         }
@@ -975,8 +960,7 @@ fn repeated_translated_drop_shadow_layers_stay_on_direct_path() {
         Ok(renderer) => renderer,
         Err(err) => {
             eprintln!(
-                "skipping repeated drop-shadow batching assertions because headless WGPU init failed: {}",
-                err
+                "skipping repeated drop-shadow batching assertions because headless WGPU init failed: {err}"
             );
             return;
         }
@@ -1028,8 +1012,7 @@ fn shadow_blur_composite_render_submits_one_frame_command_buffer() {
         Ok(renderer) => renderer,
         Err(err) => {
             eprintln!(
-                "skipping shadow frame-submit assertions because headless WGPU init failed: {}",
-                err
+                "skipping shadow frame-submit assertions because headless WGPU init failed: {err}"
             );
             return;
         }
@@ -1060,8 +1043,7 @@ fn translated_multispan_showcase_text_stays_exact_at_fractional_root_scale() {
         Ok(renderer) => renderer,
         Err(err) => {
             eprintln!(
-                "skipping fractional root-scale multispan text assertions because headless WGPU init failed: {}",
-                err
+                "skipping fractional root-scale multispan text assertions because headless WGPU init failed: {err}"
             );
             return;
         }
@@ -1121,8 +1103,7 @@ fn translated_showcase_card_surface_stays_exact_at_fractional_root_scale() {
         Ok(renderer) => renderer,
         Err(err) => {
             eprintln!(
-                "skipping fractional root-scale showcase card assertions because headless WGPU init failed: {}",
-                err
+                "skipping fractional root-scale showcase card assertions because headless WGPU init failed: {err}"
             );
             return;
         }
@@ -1184,8 +1165,7 @@ fn static_alpha_surface_keeps_nested_text_and_icon_crisp_at_fractional_offset() 
         Ok(renderer) => renderer,
         Err(err) => {
             eprintln!(
-                "skipping static alpha surface crispness assertions because headless WGPU init failed: {}",
-                err
+                "skipping static alpha surface crispness assertions because headless WGPU init failed: {err}"
             );
             return;
         }
@@ -1228,8 +1208,7 @@ fn translated_multispan_showcase_text_with_padding_stays_exact_at_fractional_roo
         Ok(renderer) => renderer,
         Err(err) => {
             eprintln!(
-                "skipping fractional root-scale padded multispan text assertions because headless WGPU init failed: {}",
-                err
+                "skipping fractional root-scale padded multispan text assertions because headless WGPU init failed: {err}"
             );
             return;
         }
@@ -1297,8 +1276,7 @@ fn bounded_blur_capture_stays_inside_layer_bounds() {
         Ok(renderer) => renderer,
         Err(err) => {
             eprintln!(
-                "skipping bounded blur capture assertions because headless WGPU init failed: {}",
-                err
+                "skipping bounded blur capture assertions because headless WGPU init failed: {err}"
             );
             return;
         }
@@ -1351,8 +1329,7 @@ fn bounded_backdrop_capture_only_filters_local_snapshot() {
         Ok(renderer) => renderer,
         Err(err) => {
             eprintln!(
-                "skipping bounded backdrop capture assertions because headless WGPU init failed: {}",
-                err
+                "skipping bounded backdrop capture assertions because headless WGPU init failed: {err}"
             );
             return;
         }
@@ -1397,8 +1374,7 @@ fn a_magnifying_layers_backdrop_stays_registered_with_the_world_behind_it() {
         Ok(renderer) => renderer,
         Err(err) => {
             eprintln!(
-                "skipping magnifying backdrop registration assertions because headless WGPU init failed: {}",
-                err
+                "skipping magnifying backdrop registration assertions because headless WGPU init failed: {err}"
             );
             return;
         }
@@ -1498,8 +1474,7 @@ fn scaled_sibling_backdrop_sees_prior_backdrop_output() {
         Ok(renderer) => renderer,
         Err(err) => {
             eprintln!(
-                "skipping scaled sibling backdrop assertions because headless WGPU init failed: {}",
-                err
+                "skipping scaled sibling backdrop assertions because headless WGPU init failed: {err}"
             );
             return;
         }
@@ -1595,8 +1570,7 @@ fn nested_backdrop_blur_radius_changes_rendered_pixels() {
         Ok(renderer) => renderer,
         Err(err) => {
             eprintln!(
-                "skipping nested backdrop radius assertions because headless WGPU init failed: {}",
-                err
+                "skipping nested backdrop radius assertions because headless WGPU init failed: {err}"
             );
             return;
         }
@@ -1668,8 +1642,7 @@ fn static_glass_stays_intact_when_non_overlapping_content_animates() {
         Ok(renderer) => renderer,
         Err(err) => {
             eprintln!(
-                "skipping spatial backdrop cache assertion because headless WGPU init failed: {}",
-                err
+                "skipping spatial backdrop cache assertion because headless WGPU init failed: {err}"
             );
             return;
         }
@@ -1741,8 +1714,7 @@ fn translated_backdrop_capture_preserves_local_picture_under_rigid_motion() {
         Ok(renderer) => renderer,
         Err(err) => {
             eprintln!(
-                "skipping translated backdrop capture assertions because headless WGPU init failed: {}",
-                err
+                "skipping translated backdrop capture assertions because headless WGPU init failed: {err}"
             );
             return;
         }
@@ -2306,8 +2278,7 @@ fn a_resting_glass_pane_washes_its_backdrop_with_the_resting_tint() {
         Ok(renderer) => renderer,
         Err(err) => {
             eprintln!(
-                "skipping resting glass tint assertions because headless WGPU init failed: {}",
-                err
+                "skipping resting glass tint assertions because headless WGPU init failed: {err}"
             );
             return;
         }
@@ -2391,8 +2362,7 @@ fn a_resting_glass_pane_transmits_the_blurred_backdrop() {
         Ok(renderer) => renderer,
         Err(err) => {
             eprintln!(
-                "skipping resting glass transmission assertions because headless WGPU init failed: {}",
-                err
+                "skipping resting glass transmission assertions because headless WGPU init failed: {err}"
             );
             return;
         }
@@ -2480,8 +2450,7 @@ fn a_cutout_drop_shadow_keeps_its_penumbra_outside_and_none_inside() {
         Ok(renderer) => renderer,
         Err(err) => {
             eprintln!(
-                "skipping cutout drop shadow assertions because headless WGPU init failed: {}",
-                err
+                "skipping cutout drop shadow assertions because headless WGPU init failed: {err}"
             );
             return;
         }
@@ -3546,8 +3515,7 @@ fn gradient_stroke_text_effect_renders_colored_material() {
         Ok(renderer) => renderer,
         Err(err) => {
             eprintln!(
-                "skipping gradient stroke effect assertions because headless WGPU init failed: {}",
-                err
+                "skipping gradient stroke effect assertions because headless WGPU init failed: {err}"
             );
             return;
         }

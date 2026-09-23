@@ -218,7 +218,7 @@ fn async_runtime_tab_content_renders_static_states() {
             stats_state,
             is_running_state,
             reset_signal_state,
-        )
+        );
     };
 
     composition
@@ -518,7 +518,7 @@ fn the_wear_tab_lays_out_a_watch_screen_of_real_widgets() {
         placed.len()
     );
     for pair in placed.windows(2) {
-        assert!(pair[1].y > pair[0].y, "{:?}", placed);
+        assert!(pair[1].y > pair[0].y, "{placed:?}");
     }
     assert!(placed
         .iter()

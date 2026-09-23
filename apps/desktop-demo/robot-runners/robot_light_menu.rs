@@ -62,7 +62,7 @@ fn main() -> ExitCode {
             std::thread::sleep(Duration::from_millis(700));
 
             let shot = robot.screenshot_with_scale(3.0).expect("menu");
-            let img = RgbaImage::from_raw(shot.width, shot.height, shot.pixels.clone())
+            let img = RgbaImage::from_raw(shot.width, shot.height, shot.pixels)
                 .expect("screenshot buffer");
             let path = shot_dir.join("light-menu.png");
             img.save(&path).expect("save");

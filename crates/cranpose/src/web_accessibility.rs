@@ -218,7 +218,7 @@ fn apply_role_extras(node: &HtmlElement, element: &AccessibilityElement) -> Resu
     match element.role {
         AccessibilityRole::StaticText => node.set_text_content(Some(&element.label)),
         AccessibilityRole::TextField | AccessibilityRole::SearchField => {
-            node.set_text_content(element.value.as_deref())
+            node.set_text_content(element.value.as_deref());
         }
         AccessibilityRole::Header => {
             node.set_attribute("aria-level", "2")?;
@@ -275,7 +275,7 @@ fn apply_aria_state(node: &HtmlElement, element: &AccessibilityElement) -> Resul
         match element.role {
             AccessibilityRole::RadioButton => node.set_attribute("aria-checked", selected)?,
             AccessibilityRole::Button | AccessibilityRole::ToggleButton => {
-                node.set_attribute("aria-pressed", selected)?
+                node.set_attribute("aria-pressed", selected)?;
             }
             _ => node.set_attribute("aria-selected", selected)?,
         }
@@ -888,7 +888,8 @@ fn attach_composition_listener(
                     shell.on_ime_finish_composing();
                 }
             } else {
-                let start = composition_range(&target).map_or(anchor.min(focus), |range| range.0);
+                let start =
+                    composition_range(&target).map_or_else(|| anchor.min(focus), |range| range.0);
                 let end = start + event.data().unwrap_or_default().encode_utf16().count();
                 let _ =
                     target.set_attribute("data-cranpose-composition", &format!("{start}:{end}"));

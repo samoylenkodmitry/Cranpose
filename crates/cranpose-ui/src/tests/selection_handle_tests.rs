@@ -493,7 +493,6 @@ thread_local! {
 }
 
 #[cranpose_macros::composable]
-#[allow(non_snake_case)]
 fn HandleConsumer(
     controller: crate::text_field_modifier_node::TextFieldHandleController,
     follow_position: bool,

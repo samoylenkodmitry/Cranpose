@@ -12,7 +12,6 @@ const LENS_W: f32 = 58.0;
 const LENS_H: f32 = 109.0 / 3.0;
 
 #[cranpose::composable]
-#[allow(non_snake_case)]
 fn ProbeApp() {
     LiquidTheme(LiquidThemeSpec::default(), || {
         CBox(

@@ -13,8 +13,6 @@
 //! same fraction**, so a segment leaving the screen dwindles to a dot instead
 //! of stopping at one round cap's width.
 
-#![allow(non_snake_case)]
-
 use cranpose_core::NodeId;
 use cranpose_ui_graphics::{DrawScope, Stroke, StrokeCap};
 

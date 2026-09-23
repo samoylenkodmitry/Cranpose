@@ -36,7 +36,7 @@ cranpose = { path = "../../crates/cranpose", default-features = false }
 desktop_demo = { package = "desktop-app", path = "../desktop-demo", default-features = false }
 log = "0.4"
 wasm-bindgen = { version = "0.2", optional = true }
-wasm-bindgen-futures = { version = "0.4.71", optional = true }
+wasm-bindgen-futures = { version = "0.4.78", optional = true }
 wasm-logger = { version = "0.2", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

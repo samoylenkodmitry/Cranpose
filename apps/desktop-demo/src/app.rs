@@ -382,7 +382,7 @@ impl DemoTab {
     pub fn from_startup_name(name: &str) -> Option<Self> {
         let normalized = name
             .chars()
-            .filter(|ch| ch.is_ascii_alphanumeric())
+            .filter(char::is_ascii_alphanumeric)
             .map(|ch| ch.to_ascii_lowercase())
             .collect::<String>();
         DEMO_TAB_INFO
@@ -587,7 +587,6 @@ fn cached_current_depth_text(depth: usize) -> Rc<cranpose_ui::text::AnnotatedStr
     })
 }
 
-#[allow(non_snake_case)]
 #[composable]
 pub(crate) fn ScrollableTab(content: impl FnMut() + 'static) {
     let scroll_state = cranpose_core::remember(|| cranpose_ui::ScrollState::new(0.0)).with(|s| *s);
@@ -601,7 +600,6 @@ pub(crate) fn ScrollableTab(content: impl FnMut() + 'static) {
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn TabButton(tab: DemoTab, active_tab: cranpose_core::MutableState<DemoTab>, padding: f32) {
     let is_active = active_tab.get() == tab;
@@ -636,7 +634,6 @@ fn TabButton(tab: DemoTab, active_tab: cranpose_core::MutableState<DemoTab>, pad
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn TabBarHorizontal(active_tab: cranpose_core::MutableState<DemoTab>) {
     let tabs_scroll_state =
@@ -674,7 +671,6 @@ fn compact_tab_row_background(is_active: bool) -> Color {
     }
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn CompactAppBar(
     active_tab: cranpose_core::MutableState<DemoTab>,
@@ -730,7 +726,6 @@ fn CompactAppBar(
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn CompactTabPicker(
     active_tab: cranpose_core::MutableState<DemoTab>,
@@ -772,7 +767,6 @@ fn CompactTabPicker(
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn TabContent(
     active_tab: cranpose_core::MutableState<DemoTab>,
@@ -811,7 +805,6 @@ pub fn combined_app() {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 pub fn DesktopApp() {
     combined_app_with_initial_tab(Some(startup_tab_from_args(std::env::args().skip(1))));
 }
@@ -896,7 +889,6 @@ pub fn combined_app_with_startup(startup: StartupSelection) {
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 pub fn ControlsUiRobotApp() {
     cranpose_ui::Box(
@@ -908,31 +900,26 @@ pub fn ControlsUiRobotApp() {
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 pub fn MarkdownViewerRobotApp() {
     markdown_viewer_tab();
 }
 
-#[allow(non_snake_case)]
 #[composable]
 pub fn HackerNewsScrollStabilityRobotApp() {
     HackerNewsScrollStabilityFixtureTab();
 }
 
-#[allow(non_snake_case)]
 #[composable]
 pub fn MarkdownScrollStabilityRobotApp() {
     MarkdownScrollStabilityFixtureTab();
 }
 
-#[allow(non_snake_case)]
 #[composable]
 pub fn MarkdownScrollStressRobotApp() {
     MarkdownScrollStressFixtureTab();
 }
 
-#[allow(non_snake_case)]
 #[composable]
 pub fn MarkdownScrollStressRobotAppWithState(list_state: LazyListState) {
     MarkdownScrollStressFixtureTabWithState(list_state);
@@ -1101,24 +1088,24 @@ fn file_picker_tab() {
             );
             let open_file = open_file.clone();
             picker_button("Pick a file", move || {
-                open_file.launch(cranpose::FilePickerOptions::default().with_title("Pick a file"))
+                open_file.launch(cranpose::FilePickerOptions::default().with_title("Pick a file"));
             });
             let open_files = open_files.clone();
             picker_button("Pick several files", move || {
                 open_files
-                    .launch(cranpose::FilePickerOptions::default().with_title("Pick some files"))
+                    .launch(cranpose::FilePickerOptions::default().with_title("Pick some files"));
             });
             let open_folder = open_folder.clone();
             picker_button("Pick a folder", move || {
                 open_folder
-                    .launch(cranpose::FilePickerOptions::default().with_title("Pick a folder"))
+                    .launch(cranpose::FilePickerOptions::default().with_title("Pick a folder"));
             });
             let save_document = save_document.clone();
             picker_button("Save a document", move || {
                 save_document.launch(
                     cranpose::SaveDocumentRequest::new("cranpose-demo.txt", "text/plain")
                         .with_title("Save the demo document"),
-                )
+                );
             });
             Text(
                 status.get(),
@@ -1208,7 +1195,7 @@ fn text_input_example() {
             {
                 let current_text = text_state1.text();
                 Text(
-                    format!("Current value: \"{}\"", current_text),
+                    format!("Current value: \"{current_text}\""),
                     Modifier::empty()
                         .padding(8.0)
                         .background(Color(0.12, 0.16, 0.28, 0.8))
@@ -1248,7 +1235,7 @@ fn text_input_example() {
             {
                 let field2_text = text_state2.text();
                 Text(
-                    format!("Field 2 value: \"{}\"", field2_text),
+                    format!("Field 2 value: \"{field2_text}\""),
                     Modifier::empty()
                         .padding(8.0)
                         .background(Color(0.12, 0.16, 0.28, 0.8))
@@ -1800,7 +1787,6 @@ fn composition_local_content_inner() {
 }
 
 #[composable]
-#[allow(non_snake_case)]
 pub fn AsyncRuntimeTabContent(
     animation: MutableState<AnimationState>,
     stats: MutableState<FrameStats>,
@@ -2009,7 +1995,6 @@ pub fn AsyncRuntimeTabContent(
 }
 
 #[composable]
-#[allow(non_snake_case)]
 pub(crate) fn AsyncRuntimeEngine(
     animation: MutableState<AnimationState>,
     stats: MutableState<FrameStats>,
@@ -2436,7 +2421,7 @@ fn counter_app() {
                                     ButtonSpec::default(),
                                     move || {
                                         println!("Incrementing counter to {}", counter.get() + 1);
-                                        counter.set(counter.get() + 1)
+                                        counter.set(counter.get() + 1);
                                     },
                                     || {
                                         Text(
@@ -3091,7 +3076,7 @@ pub fn dynamic_modifiers_showcase() {
         });
 
         Text(
-            format!("Frame: {}, X: {:.1}", current_frame, x),
+            format!("Frame: {current_frame}, X: {x:.1}"),
             Modifier::empty()
                 .padding(8.0)
                 .background(Color(0.2, 0.2, 0.3, 0.6))

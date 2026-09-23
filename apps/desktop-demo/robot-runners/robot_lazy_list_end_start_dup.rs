@@ -19,12 +19,12 @@ fn main() {
 
             let click_button = |name: &str| -> bool {
                 if let Some((x, y, w, h)) = find_button_in_semantics(&robot, name) {
-                    println!("  Found button '{}' at ({:.1}, {:.1})", name, x, y);
+                    println!("  Found button '{name}' at ({x:.1}, {y:.1})");
                     robot.click(x + w / 2.0, y + h / 2.0).ok();
                     std::thread::sleep(Duration::from_millis(200));
                     true
                 } else {
-                    println!("  ✗ Button '{}' not found!", name);
+                    println!("  ✗ Button '{name}' not found!");
                     false
                 }
             };
@@ -70,10 +70,7 @@ fn main() {
             print_semantics_with_bounds(std::slice::from_ref(item_row), 1);
             let height_label = "h: 48px";
             let height_count = count_text_in_tree(std::slice::from_ref(item_row), height_label);
-            println!(
-                "  Found '{}' occurrences under ItemRow #0: {}",
-                height_label, height_count
-            );
+            println!("  Found '{height_label}' occurrences under ItemRow #0: {height_count}");
 
             if height_count != 1 {
                 println!("  ✗ Height label duplicated (expected 1)");

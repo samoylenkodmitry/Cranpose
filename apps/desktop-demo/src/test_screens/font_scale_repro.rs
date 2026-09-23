@@ -12,7 +12,6 @@ pub fn font_scale_readout(font_scale: f32) -> String {
     format!("Font scale {font_scale}")
 }
 
-#[allow(non_snake_case)]
 #[composable]
 pub fn FontScaleReproScreen() {
     let copies = rememberMutableStateOf(|| 0u32);

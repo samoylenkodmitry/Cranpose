@@ -72,7 +72,6 @@ fn highlighted_lines(path: &str, body: &str) -> Rc<Vec<Rc<AnnotatedString>>> {
     )
 }
 
-#[allow(non_snake_case)]
 #[composable]
 pub(crate) fn SourceToggleButton(showing: MutableState<bool>, modifier: Modifier, compact: bool) {
     let label = if showing.get() {
@@ -106,7 +105,6 @@ pub(crate) fn SourceToggleButton(showing: MutableState<bool>, modifier: Modifier
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 pub(crate) fn SourcePanel(tab: DemoTab) {
     let state = rememberMutableStateOf(|| SourceState::Loading);
@@ -178,7 +176,6 @@ pub(crate) fn SourcePanel(tab: DemoTab) {
     );
 }
 
-#[allow(non_snake_case)]
 #[composable]
 fn SourceLine(number: usize, line: Rc<AnnotatedString>) {
     Row(

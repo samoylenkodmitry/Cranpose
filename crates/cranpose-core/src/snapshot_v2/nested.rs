@@ -210,12 +210,11 @@ impl NestedMutableSnapshot {
     }
 
     pub fn record_write(&self, state: Arc<dyn StateObject>) {
-        if self.applied.get() {
-            panic!("Cannot write to an applied snapshot");
-        }
-        if self.state.disposed.get() {
-            panic!("Cannot write to a disposed snapshot");
-        }
+        assert!(!self.applied.get(), "Cannot write to an applied snapshot");
+        assert!(
+            !self.state.disposed.get(),
+            "Cannot write to a disposed snapshot"
+        );
         self.state.record_write(state, self.state.id.get());
     }
 
@@ -454,7 +453,7 @@ mod tests {
             id: crate::state::ObjectId(200),
         });
         parent.record_write(obj.clone());
-        child.record_write(obj.clone());
+        child.record_write(obj);
 
         let result = child.apply();
         assert!(result.is_failure());

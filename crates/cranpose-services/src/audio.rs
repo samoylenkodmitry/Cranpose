@@ -644,7 +644,6 @@ pub fn local_audio() -> CompositionLocal<AudioPlayerRef> {
 }
 
 /// Provides the installed audio player to `content`.
-#[allow(non_snake_case)]
 #[composable]
 pub fn ProvideAudio(content: impl FnOnce()) {
     let player = cranpose_core::remember(default_audio).with(|state| state.clone());
@@ -807,8 +806,7 @@ impl SoundBank {
         self.inner
             .entries
             .get(index)
-            .map(|entry| entry.id)
-            .unwrap_or(SoundId::NONE)
+            .map_or(SoundId::NONE, |entry| entry.id)
     }
 
     /// The handle for `name`, if the bank holds it.
@@ -892,8 +890,7 @@ impl Index<usize> for SoundBank {
         self.inner
             .entries
             .get(index)
-            .map(|entry| &entry.id)
-            .unwrap_or(&NONE)
+            .map_or(&NONE, |entry| &entry.id)
     }
 }
 
@@ -902,7 +899,6 @@ impl Index<usize> for SoundBank {
 /// The bank is rebuilt only when the spec list changes shape (its length or
 /// the set of names), which is the `remember(key)` contract applied to a
 /// resource that costs a decode.
-#[allow(non_snake_case)]
 #[composable(no_skip)]
 #[track_caller]
 pub fn rememberSoundBank(specs: &[SoundSpec<'_>]) -> SoundBank {

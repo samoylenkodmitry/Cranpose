@@ -63,7 +63,7 @@ where
     F: Fn(PointerInputScope) -> Fut + 'static,
     Fut: Future<Output = ()> + 'static,
 {
-    Rc::new(move |scope| Box::pin(handler(scope.clone())))
+    Rc::new(move |scope| Box::pin(handler(scope)))
 }
 
 type PointerInputFuture = Pin<Box<dyn Future<Output = ()>>>;

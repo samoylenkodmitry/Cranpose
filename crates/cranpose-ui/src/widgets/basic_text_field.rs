@@ -3,8 +3,6 @@
 //! This module provides the `BasicTextField` composable following Jetpack Compose's
 //! `BasicTextField` pattern from `compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/text/BasicTextField.kt`.
 
-#![allow(non_snake_case)]
-
 use std::{
     cell::{Cell, RefCell},
     rc::{Rc, Weak},
@@ -520,12 +518,7 @@ fn SelectionHandles(
             selection.start,
             LineAffinity::Upstream,
         );
-        let on_drag = drag_caret_closure(
-            state,
-            style.clone(),
-            controller.clone(),
-            Rc::clone(&drag_bias),
-        );
+        let on_drag = drag_caret_closure(state, style.clone(), controller, Rc::clone(&drag_bias));
         let open_caret_menu = {
             let caret_menu_offset = Rc::clone(&caret_menu_offset);
             move || {
@@ -684,7 +677,7 @@ fn SelectionHandles(
                 Some(HandleKind::SelectionStart) => {
                     (start_tip.x, start_tip.y - metrics.glyph_box.1)
                 }
-                Some(HandleKind::SelectionEnd) | Some(HandleKind::Cursor) => {
+                Some(HandleKind::SelectionEnd | HandleKind::Cursor) => {
                     (end_tip.x, end_tip.y - metrics.glyph_box.1)
                 }
                 None => (
@@ -1149,7 +1142,6 @@ mod tests {
                     let scroll = remember(|| ScrollState::new(0.0)).with(ScrollState::clone);
                     *scroll_slot.borrow_mut() = Some(scroll);
                     let state = state;
-                    let controller = controller.clone();
                     Column(
                         Modifier::empty()
                             .size(Size {
@@ -1401,7 +1393,7 @@ mod tests {
                     target_tip_y,
                 );
             }
-        })
+        });
     }
 
     fn text_values(scene: &crate::renderer::RecordedRenderScene) -> Vec<String> {

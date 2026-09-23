@@ -73,7 +73,7 @@ fn main() {
                 std::thread::sleep(Duration::from_millis(20));
                 for _ in 0..2 {
                     if let Err(err) = robot.click(click_x, click_y) {
-                        eprintln!("  Click failed: {}", err);
+                        eprintln!("  Click failed: {err}");
                         break;
                     }
                     std::thread::sleep(Duration::from_millis(20));

@@ -1,7 +1,5 @@
 //! Button widget implementation
 
-#![allow(non_snake_case)]
-
 use std::{cell::RefCell, rc::Rc};
 
 use cranpose_core::NodeId;

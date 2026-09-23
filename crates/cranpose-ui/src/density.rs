@@ -241,7 +241,6 @@ mod tests {
         let seen = Rc::new(Cell::new(0.0_f32));
 
         #[cranpose_macros::composable]
-        #[allow(non_snake_case)]
         fn Reader(seen: Rc<Cell<f32>>) {
             seen.set(density().density());
         }
@@ -254,7 +253,6 @@ mod tests {
         }
 
         #[cranpose_macros::composable]
-        #[allow(non_snake_case)]
         fn Panel(
             with_leading: MutableState<bool>,
             survivor: MutableState<f32>,

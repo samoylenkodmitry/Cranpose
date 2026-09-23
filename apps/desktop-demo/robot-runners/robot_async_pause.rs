@@ -30,7 +30,7 @@ fn main() {
                 .find_map(|root| find_text_center(root, "Async Runtime"));
 
             if let Some((x, y)) = async_tab_pos {
-                println!("Found Async Runtime tab at ({:.1}, {:.1})", x, y);
+                println!("Found Async Runtime tab at ({x:.1}, {y:.1})");
                 let _ = robot.mouse_move(x, y);
                 let _ = robot.mouse_down();
                 std::thread::sleep(Duration::from_millis(50));
@@ -63,7 +63,7 @@ fn main() {
                 .find_map(|root| find_text_center(root, "Pause animation"));
 
             if let Some((x, y)) = pause_pos {
-                println!("Found Pause animation button at ({:.1}, {:.1})", x, y);
+                println!("Found Pause animation button at ({x:.1}, {y:.1})");
                 let _ = robot.mouse_move(x, y);
                 std::thread::sleep(Duration::from_millis(50));
                 let _ = robot.mouse_down();
@@ -75,7 +75,7 @@ fn main() {
             } else {
                 println!("✗ Failed to find Pause animation button");
                 println!("Available text elements:");
-                for root in semantics.iter() {
+                for root in &semantics {
                     print_all_texts(root, 0);
                 }
                 let _ = robot.exit();
@@ -104,7 +104,7 @@ fn main() {
                 } else {
                     println!("✗ Could not find either button state");
                     println!("Available text elements:");
-                    for root in semantics.iter() {
+                    for root in &semantics {
                         print_all_texts(root, 0);
                     }
                 }
@@ -117,7 +117,7 @@ fn main() {
 fn print_all_texts(element: &cranpose::SemanticElement, depth: usize) {
     let indent = "  ".repeat(depth);
     if let Some(text) = &element.text {
-        println!("{}Text: '{}'", indent, text);
+        println!("{indent}Text: '{text}'");
     }
     for child in &element.children {
         print_all_texts(child, depth + 1);

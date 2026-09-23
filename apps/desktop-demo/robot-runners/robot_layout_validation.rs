@@ -118,8 +118,7 @@ fn validate_bounds(
         };
 
         println!(
-            "{}[{}] \"{}\" @ ({:.1}, {:.1}) size ({:.1} x {:.1}){}",
-            indent, role, text_display, x, y, w, h, marker_str
+            "{indent}[{role}] \"{text_display}\" @ ({x:.1}, {y:.1}) size ({w:.1} x {h:.1}){marker_str}"
         );
 
         let bounds = (*x, *y, *w, *h);
@@ -137,7 +136,7 @@ fn validate_bounds(
             issues.push(LayoutIssue {
                 element_text: text.clone(),
                 element_role: role.clone(),
-                issue: format!("ZERO WIDTH on content element: width={:.1}", w),
+                issue: format!("ZERO WIDTH on content element: width={w:.1}"),
                 bounds,
             });
         }
@@ -146,7 +145,7 @@ fn validate_bounds(
             issues.push(LayoutIssue {
                 element_text: text.clone(),
                 element_role: role.clone(),
-                issue: format!("ZERO HEIGHT on content element: height={:.1}", h),
+                issue: format!("ZERO HEIGHT on content element: height={h:.1}"),
                 bounds,
             });
         }
@@ -156,8 +155,7 @@ fn validate_bounds(
                 element_text: text.clone(),
                 element_role: role.clone(),
                 issue: format!(
-                    "OUTSIDE VIEWPORT: y={:.1} + h={:.1} = {:.1} exceeds window height {:.0}",
-                    y, h, bottom, vh
+                    "OUTSIDE VIEWPORT: y={y:.1} + h={h:.1} = {bottom:.1} exceeds window height {vh:.0}"
                 ),
                 bounds,
             });
@@ -165,12 +163,9 @@ fn validate_bounds(
 
         if !skip_overflow_checks && *h > vh && *w > 10.0 {
             issues.push(LayoutIssue {
-                element_text: format!("Container at depth {}", depth),
+                element_text: format!("Container at depth {depth}"),
                 element_role: role.clone(),
-                issue: format!(
-                    "CONTAINER OVERFLOW: height {:.1} exceeds window height {:.0}",
-                    h, vh
-                ),
+                issue: format!("CONTAINER OVERFLOW: height {h:.1} exceeds window height {vh:.0}"),
                 bounds,
             });
         }
@@ -179,17 +174,17 @@ fn validate_bounds(
             issues.push(LayoutIssue {
                 element_text: text.clone(),
                 element_role: role.clone(),
-                issue: format!("NEGATIVE POSITION: ({:.1}, {:.1})", x, y),
+                issue: format!("NEGATIVE POSITION: ({x:.1}, {y:.1})"),
                 bounds,
             });
         }
     }
 
-    println!("\n--- {} Statistics ---", tab_name);
+    println!("\n--- {tab_name} Statistics ---");
     println!("  Total elements: {}", all_bounds.len());
-    println!("  Zero-width elements: {}", zero_width_count);
-    println!("  Zero-height elements: {}", zero_height_count);
-    println!("  Elements outside viewport: {}", outside_viewport_count);
+    println!("  Zero-width elements: {zero_width_count}");
+    println!("  Zero-height elements: {zero_height_count}");
+    println!("  Elements outside viewport: {outside_viewport_count}");
 
     issues
 }
@@ -197,7 +192,7 @@ fn validate_bounds(
 fn main() {
     env_logger::init();
     println!("=== Comprehensive Layout Validation Robot Test ===");
-    println!("Window size: {}x{}", WINDOW_WIDTH, WINDOW_HEIGHT);
+    println!("Window size: {WINDOW_WIDTH}x{WINDOW_HEIGHT}");
 
     robot_launch::launch(
         "Layout Validation Test",

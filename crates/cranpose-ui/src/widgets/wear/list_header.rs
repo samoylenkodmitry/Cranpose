@@ -21,8 +21,6 @@
 //! `ORBIT` and Compose puts that line at x 147, while a block-only centring
 //! puts it at x 121, 25 px to the left of the `BREAKER` under it.
 
-#![allow(non_snake_case)]
-
 use cranpose_core::NodeId;
 use cranpose_ui_graphics::Size;
 use cranpose_ui_layout::{

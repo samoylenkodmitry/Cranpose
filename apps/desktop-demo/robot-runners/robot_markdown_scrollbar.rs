@@ -104,8 +104,7 @@ fn main() {
     println!("=== Markdown Scrollbar Robot Test ===");
     let headless = std::env::var("CRANPOSE_HEADLESS")
         .ok()
-        .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
-        .unwrap_or(false);
+        .is_some_and(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"));
     let drag_loops = std::env::var("CRANPOSE_MARKDOWN_SCROLL_LOOPS")
         .ok()
         .and_then(|v| v.parse::<u32>().ok())
@@ -122,8 +121,7 @@ fn main() {
         .unwrap_or_else(|| DEFAULT_DEEP_SENTINEL.to_string());
     let wait_for_idle_after_drag = std::env::var("CRANPOSE_MARKDOWN_WAIT_IDLE_AFTER_DRAG")
         .ok()
-        .map(|v| !matches!(v.as_str(), "0" | "false" | "FALSE" | "no" | "NO"))
-        .unwrap_or(true);
+        .is_none_or(|v| !matches!(v.as_str(), "0" | "false" | "FALSE" | "no" | "NO"));
     let viewport_drag_down_loops = std::env::var("CRANPOSE_MARKDOWN_VIEWPORT_DRAG_DOWN_LOOPS")
         .ok()
         .and_then(|v| v.parse::<u32>().ok())
@@ -142,8 +140,7 @@ fn main() {
         .unwrap_or(0.20);
     let viewport_drag_stop_on_deep = std::env::var("CRANPOSE_MARKDOWN_STOP_ON_DEEP")
         .ok()
-        .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
-        .unwrap_or(false);
+        .is_some_and(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"));
     let return_sentinel = std::env::var("CRANPOSE_MARKDOWN_RETURN_SENTINEL")
         .ok()
         .unwrap_or_else(|| top_sentinel.clone());
@@ -165,8 +162,7 @@ fn main() {
                 && markdown_scroll_drag::wait_for_text_bounds(&robot, &top_sentinel, 10_000).is_none()
             {
                 eprintln!(
-                    "WARN: top sentinel {:?} not found within timeout; continuing",
-                    top_sentinel
+                    "WARN: top sentinel {top_sentinel:?} not found within timeout; continuing"
                 );
             }
 
@@ -303,7 +299,7 @@ fn main() {
 
             println!("✓ PASS: Markdown scrollbar interaction completed");
             if hold_secs > 0 {
-                println!("holding for {}s to collect perf samples...", hold_secs);
+                println!("holding for {hold_secs}s to collect perf samples...");
                 std::thread::sleep(Duration::from_secs(hold_secs));
             }
             let stats = robot.fps_stats().expect("read robot FPS stats");

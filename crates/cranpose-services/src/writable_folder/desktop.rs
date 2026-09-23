@@ -54,11 +54,7 @@ impl WritableFolderStore for DesktopWritableFolder {
         };
         let mut listing = Vec::new();
         for entry in entries.flatten() {
-            if !entry
-                .file_type()
-                .map(|kind| kind.is_file())
-                .unwrap_or(false)
-            {
+            if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
                 continue;
             }
             let Some(name) = entry.file_name().to_str().map(str::to_string) else {
@@ -195,7 +191,7 @@ fn map_err(error: std::io::Error) -> FolderError {
         return FolderError::ReadOnly;
     }
     #[cfg(unix)]
-    if matches!(error.raw_os_error(), Some(13) | Some(30)) {
+    if matches!(error.raw_os_error(), Some(13 | 30)) {
         return FolderError::ReadOnly;
     }
     FolderError::Io(error.to_string())
@@ -214,8 +210,7 @@ mod tests {
         static COUNTER: AtomicU32 = AtomicU32::new(0);
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
+            .map_or(0, |d| d.as_nanos());
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../target/test-output/cranpose-wfolder");

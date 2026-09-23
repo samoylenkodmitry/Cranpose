@@ -2,7 +2,7 @@
 
 use std::{
     sync::{
-        Arc, Mutex, OnceLock,
+        Arc, Mutex, OnceLock, PoisonError,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
@@ -86,11 +86,11 @@ fn on_main<R: Send>(action: impl FnOnce(MainThreadMarker) -> R + Send) -> R {
 }
 
 fn volume() -> f32 {
-    *VOLUME.lock().unwrap_or_else(|error| error.into_inner())
+    *VOLUME.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 fn speed() -> f32 {
-    *SPEED.lock().unwrap_or_else(|error| error.into_inner())
+    *SPEED.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 fn configure_audio_session() {
@@ -136,11 +136,10 @@ define_class!(
                 return;
             }
             let resume = number_for_key(&info, unsafe { AVAudioSessionInterruptionOptionKey })
-                .map(|options| {
+                .is_some_and(|options| {
                     AVAudioSessionInterruptionOptions(options.unsignedLongValue() as usize)
                         .contains(AVAudioSessionInterruptionOptions::ShouldResume)
-                })
-                .unwrap_or(false);
+                });
             if resume {
                 activate_audio_session(true);
                 publish_audio_focus(AudioFocus::Gained);
@@ -240,8 +239,7 @@ fn publish_now_playing(metadata: &MediaMetadata, position: Duration, rate: f32) 
         let duration = NSNumber::new_f64(
             metadata
                 .duration
-                .map(|duration| duration.as_secs_f64())
-                .unwrap_or(0.0),
+                .map_or(0.0, |duration| duration.as_secs_f64()),
         );
         let elapsed = NSNumber::new_f64(position.as_secs_f64());
         let rate = NSNumber::new_f32(rate);
@@ -422,11 +420,10 @@ fn item_failure(holder: &PlayerHolder) -> Option<String> {
     if unsafe { holder.item.status() } != AVPlayerItemStatus::Failed {
         return None;
     }
-    Some(
-        unsafe { holder.item.error() }
-            .map(|error| error.localizedDescription().to_string())
-            .unwrap_or_else(|| "the item could not be played".to_string()),
-    )
+    Some(unsafe { holder.item.error() }.map_or_else(
+        || "the item could not be played".to_string(),
+        |error| error.localizedDescription().to_string(),
+    ))
 }
 
 fn position_of(holder: &PlayerHolder) -> Duration {
@@ -440,9 +437,7 @@ fn position_of(holder: &PlayerHolder) -> Duration {
 
 fn with_holder<R: Send>(action: impl FnOnce(&PlayerHolder) -> R + Send) -> Option<R> {
     on_main(move |_mtm| {
-        let slot = player_slot()
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
+        let slot = player_slot().lock().unwrap_or_else(PoisonError::into_inner);
         slot.as_ref().map(action)
     })
 }
@@ -480,9 +475,7 @@ fn open_item(
         }
     };
     let duration = duration_of(&holder);
-    *player_slot()
-        .lock()
-        .unwrap_or_else(|error| error.into_inner()) = Some(holder);
+    *player_slot().lock().unwrap_or_else(PoisonError::into_inner) = Some(holder);
     Ok(duration)
 }
 
@@ -490,7 +483,7 @@ fn close_item() {
     on_main(|_mtm| {
         let taken = player_slot()
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(PoisonError::into_inner)
             .take();
         if let Some(holder) = taken {
             unsafe {
@@ -584,13 +577,13 @@ impl MediaPlayer for IosMediaPlayer {
 
     fn set_volume(&self, volume: f32) {
         let volume = volume.clamp(0.0, 1.0);
-        *VOLUME.lock().unwrap_or_else(|error| error.into_inner()) = volume;
+        *VOLUME.lock().unwrap_or_else(PoisonError::into_inner) = volume;
         with_holder(|holder| unsafe { holder.player.setVolume(volume) });
     }
 
     fn set_speed(&self, speed: f32) -> bool {
         let speed = speed.clamp(0.25, 4.0);
-        *SPEED.lock().unwrap_or_else(|error| error.into_inner()) = speed;
+        *SPEED.lock().unwrap_or_else(PoisonError::into_inner) = speed;
         with_holder(|holder| unsafe {
             if holder.player.rate() != 0.0 {
                 holder.player.setRate(speed);

@@ -133,8 +133,9 @@ impl GlobalSnapshot {
     ) -> Arc<MutableSnapshot> {
         let base_parent_id = self.state.id.get();
 
-        let (new_id, child_invalid, new_global_invalid) =
-            super::runtime::with_runtime(|runtime| runtime.take_new_snapshot_advancing_global());
+        let (new_id, child_invalid, new_global_invalid) = super::runtime::with_runtime(
+            super::runtime::SnapshotRuntime::take_new_snapshot_advancing_global,
+        );
 
         let new_global_id = super::runtime::with_runtime(|runtime| runtime.global_snapshot_id());
         self.state.id.set(new_global_id);

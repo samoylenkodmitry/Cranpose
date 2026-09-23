@@ -38,7 +38,7 @@ impl AndroidCamera {
     fn call_bool(&self, name: &'static jni::strings::JNIStr) -> bool {
         with_android_activity_env(&self.app, |env, activity| {
             env.call_method(&activity, name, jni_sig!("()Z"), &[])
-                .and_then(|value| value.z())
+                .and_then(jni::JValueOwned::z)
                 .map_err(|error| {
                     clear_pending_android_jni_exception(env);
                     error.to_string()
@@ -51,7 +51,7 @@ impl AndroidCamera {
         with_android_activity_env(&self.app, |env, activity| {
             let value = env
                 .call_method(&activity, name, jni_sig!("()Ljava/lang/String;"), &[])
-                .and_then(|value| value.l())
+                .and_then(jni::JValueOwned::l)
                 .map_err(|error| {
                     clear_pending_android_jni_exception(env);
                     error.to_string()
@@ -103,7 +103,7 @@ impl Camera for AndroidCamera {
                 jni_sig!("(Ljava/lang/String;)Z"),
                 &[JValue::Object(id)],
             )
-            .and_then(|value| value.z())
+            .and_then(jni::JValueOwned::z)
             .map_err(|error| error.to_string())
         })
         .unwrap_or(false)
@@ -126,7 +126,7 @@ impl Camera for AndroidCamera {
                 jni_sig!("(I)Z"),
                 &[JValue::Int(mode)],
             )
-            .and_then(|value| value.z())
+            .and_then(jni::JValueOwned::z)
             .map_err(|error| error.to_string())
         })
         .unwrap_or(false)

@@ -40,7 +40,7 @@ fn is_fn_like_type(ty: &Type) -> bool {
             }
             false
         }
-        Type::BareFn(_) => true,
+        Type::FnPtr(_) => true,
         _ => false,
     }
 }
@@ -217,6 +217,13 @@ fn definition_key_stmt(core_path: &TokenStream2, caller_key_ident: &Ident) -> To
     }
 }
 
+/// Turns a function into a composable: its body runs inside a group keyed by
+/// the call site, and recomposition skips it while its arguments are
+/// unchanged. `#[composable(no_skip)]` always re-runs the body.
+///
+/// Composables are named in CamelCase, as in Jetpack Compose, so the
+/// generated function carries `#[allow(non_snake_case)]` and callers need no
+/// lint allowance of their own.
 #[proc_macro_attribute]
 pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
     let attr_tokens = TokenStream2::from(attr);
@@ -277,7 +284,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                     });
                 } else {
                     param_info.push(ParamInfo {
-                        ident: Ident::new(&format!("__arg{}", index), Span::mixed_site()),
+                        ident: Ident::new(&format!("__arg{index}"), Span::mixed_site()),
                         pat: original_pat,
                         ty: ty.as_ref().clone(),
                         pat_is_mut,
@@ -285,7 +292,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                     });
                 }
             } else {
-                let ident = Ident::new(&format!("__arg{}", index), Span::mixed_site());
+                let ident = Ident::new(&format!("__arg{index}"), Span::mixed_site());
                 let original_pat: Box<Pat> = pat.clone();
                 **pat = syn::parse_quote! { #ident };
                 param_info.push(ParamInfo {
@@ -307,6 +314,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
     if has_rust_abi {
         func.attrs.push(syn::parse_quote!(#[track_caller]));
     }
+    func.attrs.push(syn::parse_quote!(#[allow(non_snake_case)]));
 
     let scope_label_ident = func.sig.ident.clone();
     let original_block = func.block.clone();
@@ -405,7 +413,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                     syn::GenericParam::Type(type_param) => {
                         if !strippable.contains(&type_param.ident.to_string()) {
                             used_elsewhere.push(type_param.bounds.to_token_stream());
-                            if let Some(default) = &type_param.default {
+                            if let Some((_, default)) = &type_param.default {
                                 used_elsewhere.push(default.to_token_stream());
                             }
                         }
@@ -460,7 +468,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
             .collect();
 
         let param_state_slots: Vec<Ident> = (0..param_info.len())
-            .map(|index| Ident::new(&format!("__param_state_slot{}", index), Span::mixed_site()))
+            .map(|index| Ident::new(&format!("__param_state_slot{index}"), Span::mixed_site()))
             .collect();
 
         let param_setup: Vec<TokenStream2> = param_info
