@@ -209,7 +209,7 @@ pub fn resolve_primitive_clip(
 /// builder over borrowed fields. The parallel shape-run collect calls these
 /// directly from worker threads — a `&DrawPrimitive` cannot cross (the text
 /// variant carries `Rc`), but the shape variants' fields can.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub fn rect_shape_params(
     local_rect: Rect,
     brush: &Brush,
@@ -239,7 +239,7 @@ pub fn rect_shape_params(
 
 /// The [`DrawPrimitive::RoundRect`] arm of [`emit_draw_primitive`]; see
 /// [`rect_shape_params`].
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub fn round_rect_shape_params(
     local_rect: Rect,
     brush: &Brush,
@@ -272,7 +272,7 @@ pub fn round_rect_shape_params(
 
 /// The [`DrawPrimitive::Arc`] arm of [`emit_draw_primitive`]; see
 /// [`rect_shape_params`].
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub fn arc_shape_params(
     local_rect: Rect,
     brush: &Brush,

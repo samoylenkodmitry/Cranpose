@@ -1101,7 +1101,7 @@ fn layer_pixel_rect(child: &ChildLayer, surface_rect: DeviceRect, scale: f32) ->
 
 /// A runtime shader drawn in the final pass over `source`, the child's
 /// content, at `dest`.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn shader_tail_composite(
     child: &ChildLayer,
     shader: &Arc<RuntimeShader>,
@@ -3543,7 +3543,6 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
     /// grown by what its glasses read past it (`backdrop_reach`): a card
     /// wider than the screen costs the screen, and every capture inside it
     /// follows.
-    #[allow(clippy::too_many_arguments)]
     fn render_child_surface(
         &mut self,
         pass: &mut LayerPass<'_>,

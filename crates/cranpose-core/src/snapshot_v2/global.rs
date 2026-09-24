@@ -9,7 +9,6 @@ use super::*;
 /// Contains `Cell<T>` which is not `Send`/`Sync`. This is safe because snapshots
 /// are stored in thread-local storage and never shared across threads. The `Arc`
 /// is used for cheap cloning within a single thread, not for cross-thread sharing.
-#[allow(clippy::arc_with_non_send_sync)]
 pub struct GlobalSnapshot {
     state: SnapshotState,
     nested_count: Cell<usize>,

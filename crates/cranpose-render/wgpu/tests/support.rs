@@ -1,4 +1,4 @@
-#![allow(dead_code)]
+#![expect(dead_code)]
 
 use std::sync::PoisonError;
 #[path = "support/device.rs"]
@@ -285,7 +285,6 @@ fn create_headless_renderer_configured(
 /// and updated twice so caches are warm, or `None` when no GPU is available.
 /// Everything a composable page test imports: the page widgets and the
 /// frame helpers below.
-#[allow(unused_imports)]
 pub mod page {
     pub use cranpose_ui::{
         Color, Modifier, RenderEffect, TextStyle, composable,
@@ -297,7 +296,7 @@ pub mod page {
 
 /// Everything a raw render-graph test imports: the graph node types and the
 /// drawing primitives that fill a draw run.
-#[allow(unused_imports)]
+#[expect(unused_imports)]
 pub mod graph {
     pub use cranpose_render_common::{
         Renderer,

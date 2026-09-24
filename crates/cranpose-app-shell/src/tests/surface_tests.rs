@@ -574,8 +574,8 @@ fn a_draw_change_in_a_window_updates_only_that_windows_scene() {
     let primary = RendererCounts::default();
     let window_counts = RendererCounts::default();
     let window = test_window(200.0, 100.0);
-    let offsets: Rc<RefCell<Option<(MutableState<f32>, MutableState<f32>)>>> =
-        Rc::new(RefCell::new(None));
+    type ScrollOffsets = (MutableState<f32>, MutableState<f32>);
+    let offsets: Rc<RefCell<Option<ScrollOffsets>>> = Rc::new(RefCell::new(None));
     let mut shell = AppShell::new(
         primary.renderer(),
         location_key(file!(), line!(), column!()),

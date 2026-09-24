@@ -586,7 +586,7 @@ pub fn LiquidTextMenu(
 /// `visible` is false while a handle drag is in flight. `can_paste` hides the
 /// Paste item when the clipboard is empty. Each action runs against the
 /// focused field; the caller is expected to dismiss the menu.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 #[composable]
 pub fn TextSelectionMenu(
     center_x: f32,
@@ -616,7 +616,7 @@ pub fn TextSelectionMenu(
 ///
 /// `can_paste` hides Paste when the clipboard is empty; `can_undo`/`can_redo`
 /// hide those items when the field's history has nothing to undo/redo.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 #[composable]
 pub fn CaretActionMenu(
     center_x: f32,

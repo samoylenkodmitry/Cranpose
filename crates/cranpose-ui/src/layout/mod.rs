@@ -2127,7 +2127,7 @@ impl VecPools {
         }
     }
 
-    #[allow(clippy::type_complexity)]
+    #[expect(clippy::type_complexity)]
     fn parts(
         &mut self,
     ) -> (

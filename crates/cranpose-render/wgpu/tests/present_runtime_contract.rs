@@ -75,7 +75,7 @@ fn surface_config(width: u32, height: u32) -> wgpu::SurfaceConfiguration {
     }
 }
 
-#[allow(clippy::type_complexity)]
+#[expect(clippy::type_complexity)]
 fn threaded_parts() -> Result<
     (
         MutexGuard<'static, ()>,

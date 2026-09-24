@@ -1,4 +1,4 @@
-#![allow(unsafe_code)]
+#![expect(unsafe_code)]
 
 use std::{
     sync::{Arc, Mutex, OnceLock, mpsc},
@@ -453,7 +453,7 @@ fn capture_photo() -> Option<CameraStill> {
         let settings = unsafe { AVCapturePhotoSettings::photoSettingsWithFormat(Some(&format)) };
         #[cfg(target_os = "ios")]
         {
-            #[allow(deprecated)]
+            #[expect(deprecated)]
             unsafe {
                 settings.setHighResolutionPhotoEnabled(true);
             }
@@ -649,7 +649,7 @@ fn start_session() -> Result<String, CameraError> {
     }
     unsafe { session.addOutput(&photo_output) };
     #[cfg(target_os = "ios")]
-    #[allow(deprecated)]
+    #[expect(deprecated)]
     unsafe {
         photo_output.setHighResolutionCaptureEnabled(true);
     }

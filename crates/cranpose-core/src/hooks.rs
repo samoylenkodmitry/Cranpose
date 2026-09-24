@@ -23,7 +23,7 @@ pub fn remember<T: 'static>(init: impl FnOnce() -> T) -> Owned<T> {
 /// whose path prop changes), the stale value survives. `rememberKeyed`
 /// stores the key beside the value and re-runs `init` on mismatch — the JC
 /// `remember(key1) { ... }` contract.
-#[allow(non_snake_case)]
+#[expect(non_snake_case)]
 #[track_caller]
 pub fn rememberKeyed<K, T>(key: K, init: impl FnOnce(&K) -> T) -> T
 where
@@ -71,7 +71,7 @@ where
 /// fun <T> rememberUpdatedState(newValue: T): State<T> =
 ///     remember { mutableStateOf(newValue) }.apply { value = newValue }
 /// ```
-#[allow(non_snake_case)]
+#[expect(non_snake_case)]
 #[track_caller]
 pub fn rememberUpdatedState<T: Clone + 'static>(value: T) -> MutableState<T> {
     let source = crate::caller_location_key();
@@ -88,7 +88,7 @@ pub fn rememberUpdatedState<T: Clone + 'static>(value: T) -> MutableState<T> {
 }
 
 #[cfg(feature = "internal")]
-#[allow(non_snake_case)]
+#[expect(non_snake_case)]
 pub fn withFrameNanos(
     callback: impl FnOnce(u64) + 'static,
 ) -> crate::internal::FrameCallbackRegistration {
@@ -101,7 +101,7 @@ pub fn withFrameNanos(
 }
 
 #[cfg(feature = "internal")]
-#[allow(non_snake_case)]
+#[expect(non_snake_case)]
 pub fn withFrameMillis(
     callback: impl FnOnce(u64) + 'static,
 ) -> crate::internal::FrameCallbackRegistration {
@@ -160,7 +160,7 @@ pub fn withFrameMillis(
 /// remembered whole. Made anywhere else it is owned by the runtime and lives
 /// as long as the runtime does; to tie that to a Rust owner instead, store an
 /// [`OwnedMutableState`] or call [`MutableState::retain`] on the handle.
-#[allow(non_snake_case)]
+#[expect(non_snake_case)]
 pub fn mutableStateOf<T: Clone + PartialEq + 'static>(initial: T) -> MutableState<T> {
     current_runtime("mutableStateOf")
         .alloc_persistent_state_with_policy(initial, Arc::new(StructuralEqual))
@@ -171,18 +171,18 @@ pub fn mutableStateOf<T: Clone + PartialEq + 'static>(initial: T) -> MutableStat
 ///
 /// This is Jetpack Compose's `neverEqualPolicy()`, and the non-remembered form
 /// of [`rememberMutableStateOfNeverEqual`].
-#[allow(non_snake_case)]
+#[expect(non_snake_case)]
 pub fn mutableStateOfNeverEqual<T: Clone + 'static>(initial: T) -> MutableState<T> {
     current_runtime("mutableStateOfNeverEqual").alloc_persistent_state(initial)
 }
 
-#[allow(non_snake_case)]
+#[expect(non_snake_case)]
 pub fn ownedMutableStateOf<T: Clone + PartialEq + 'static>(initial: T) -> OwnedMutableState<T> {
     OwnedMutableState::with_runtime_structural_eq(initial, current_runtime("ownedMutableStateOf"))
 }
 
 /// Like [`ownedMutableStateOf`], for a value that cannot be compared.
-#[allow(non_snake_case)]
+#[expect(non_snake_case)]
 pub fn ownedMutableStateOfNeverEqual<T: Clone + 'static>(initial: T) -> OwnedMutableState<T> {
     OwnedMutableState::with_runtime(initial, current_runtime("ownedMutableStateOfNeverEqual"))
 }
@@ -201,14 +201,14 @@ fn current_runtime(what: &str) -> runtime::RuntimeHandle {
 ///
 /// Use this when you want to lazily initialize reactive state and gracefully
 /// handle the case where the runtime isn't yet available.
-#[allow(non_snake_case)]
+#[expect(non_snake_case)]
 pub fn try_mutableStateOf<T: Clone + PartialEq + 'static>(initial: T) -> Option<MutableState<T>> {
     let runtime = composer_context::try_with_composer(super::composer::Composer::runtime_handle)
         .or_else(runtime::current_runtime_handle)?;
     Some(runtime.alloc_persistent_state_with_policy(initial, Arc::new(StructuralEqual)))
 }
 
-#[allow(non_snake_case)]
+#[expect(non_snake_case)]
 pub fn mutableStateListOf<T, I>(values: I) -> SnapshotStateList<T>
 where
     T: Clone + 'static,
@@ -217,12 +217,12 @@ where
     composer_context::with_composer(move |composer| composer.mutable_state_list_of(values))
 }
 
-#[allow(non_snake_case)]
+#[expect(non_snake_case)]
 pub fn mutableStateList<T: Clone + 'static>() -> SnapshotStateList<T> {
     mutableStateListOf(std::iter::empty::<T>())
 }
 
-#[allow(non_snake_case)]
+#[expect(non_snake_case)]
 pub fn mutableStateMapOf<K, V, I>(pairs: I) -> SnapshotStateMap<K, V>
 where
     K: Clone + Eq + Hash + 'static,
@@ -232,7 +232,7 @@ where
     composer_context::with_composer(move |composer| composer.mutable_state_map_of(pairs))
 }
 
-#[allow(non_snake_case)]
+#[expect(non_snake_case)]
 pub fn mutableStateMap<K, V>() -> SnapshotStateMap<K, V>
 where
     K: Clone + Eq + Hash + 'static,
@@ -268,7 +268,7 @@ where
 ///     );
 /// }
 /// ```
-#[allow(non_snake_case)]
+#[expect(non_snake_case)]
 #[track_caller]
 pub fn rememberMutableStateOf<T: Clone + PartialEq + 'static>(
     init: impl FnOnce() -> T,
@@ -284,7 +284,7 @@ pub fn rememberMutableStateOf<T: Clone + PartialEq + 'static>(
     })
 }
 
-#[allow(non_snake_case)]
+#[expect(non_snake_case)]
 #[track_caller]
 pub fn rememberMutableStateOfNeverEqual<T: Clone + 'static>(
     init: impl FnOnce() -> T,
@@ -298,7 +298,7 @@ pub fn rememberMutableStateOfNeverEqual<T: Clone + 'static>(
     })
 }
 
-#[allow(non_snake_case)]
+#[expect(non_snake_case)]
 #[track_caller]
 pub fn derivedStateOf<T: 'static + Clone>(compute: impl Fn() -> T + 'static) -> State<T> {
     let source = crate::caller_location_key();

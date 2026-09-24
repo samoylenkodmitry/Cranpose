@@ -15,7 +15,7 @@
 //!   it overlaps the light track — but it still occludes the track, so it
 //!   cannot be optimised away.
 
-#![allow(non_snake_case)]
+#![expect(non_snake_case)]
 
 use cranpose_core::NodeId;
 use cranpose_foundation::SemanticsWidgetRole;

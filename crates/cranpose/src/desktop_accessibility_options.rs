@@ -100,7 +100,6 @@ fn with_environment(mut options: AccessibilityOptions) -> AccessibilityOptions {
 
 /// Whether a setting's text says on: `1`, `true`, `on` or `yes`, in any case,
 /// with the quotes a shell prints around it.
-#[cfg_attr(target_os = "windows", allow(dead_code))]
 pub(crate) fn flag_is_on(value: &str) -> bool {
     matches!(
         value

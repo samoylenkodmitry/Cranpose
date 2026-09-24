@@ -629,7 +629,7 @@ impl ModifierLocalManager {
         Self::default()
     }
 
-    #[allow(private_interfaces)]
+    #[expect(private_interfaces)]
     pub fn sync(
         &mut self,
         chain: &ModifierNodeChain,

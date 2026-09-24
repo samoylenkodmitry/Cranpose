@@ -231,7 +231,7 @@ pub(crate) fn caret_visual_line_for_offset(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub(crate) fn range_visual_line_rects(
     text: &str,
     style: &TextStyle,

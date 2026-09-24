@@ -11,7 +11,7 @@ fn provider_entry_source(key: &LocalKey, caller: crate::Key) -> crate::Key {
 
 pub struct ProvidedValue {
     key: LocalKey,
-    #[allow(clippy::type_complexity)]
+    #[expect(clippy::type_complexity)]
     apply: Box<dyn Fn(&Composer, crate::Key) -> Rc<dyn Any>>,
 }
 
@@ -31,7 +31,7 @@ impl ProvidedValue {
     }
 }
 
-#[allow(non_snake_case)]
+#[expect(non_snake_case)]
 #[track_caller]
 pub fn CompositionLocalProvider(
     values: impl IntoIterator<Item = ProvidedValue>,
@@ -164,14 +164,14 @@ pub(crate) fn malformed_composition_local_for_test<T: Clone + 'static>(
     malformed_provided_value_for_test(local.key.clone(), entry)
 }
 
-#[allow(non_snake_case)]
+#[expect(non_snake_case)]
 pub fn compositionLocalOf<T: Clone + PartialEq + 'static>(
     default: impl Fn() -> T + 'static,
 ) -> CompositionLocal<T> {
     compositionLocalOfWithPolicy(default, |current, next| current == next)
 }
 
-#[allow(non_snake_case)]
+#[expect(non_snake_case)]
 pub fn compositionLocalOfWithPolicy<T: Clone + 'static>(
     default: impl Fn() -> T + 'static,
     equivalent: impl Fn(&T, &T) -> bool + Send + Sync + 'static,
@@ -241,7 +241,7 @@ pub(crate) fn malformed_static_composition_local_for_test<T: Clone + 'static>(
     malformed_provided_value_for_test(local.key.clone(), entry)
 }
 
-#[allow(non_snake_case)]
+#[expect(non_snake_case)]
 pub fn staticCompositionLocalOf<T: Clone + 'static>(
     default: impl Fn() -> T + 'static,
 ) -> StaticCompositionLocal<T> {

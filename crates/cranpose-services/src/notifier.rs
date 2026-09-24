@@ -199,7 +199,6 @@ mod desktop {
     impl Notifier for DesktopNotifier {
         fn request_permission(&self) {}
 
-        #[allow(unused_variables)]
         fn notify(&self, request: NotifyRequest) {
             #[cfg(target_os = "linux")]
             {

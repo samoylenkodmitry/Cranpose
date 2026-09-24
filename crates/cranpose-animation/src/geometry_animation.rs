@@ -8,7 +8,7 @@
 //! Note: This module uses camelCase for function names to maintain 1:1 API
 //! parity with Jetpack Compose.
 
-#![allow(non_snake_case)]
+#![expect(non_snake_case)]
 
 use cranpose_core::State;
 use cranpose_ui_graphics::{Point, Rect, Size};
