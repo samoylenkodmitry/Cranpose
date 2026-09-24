@@ -769,6 +769,26 @@ fn tween_to_spring_transition_discards_the_stale_spring_clock() {
 }
 
 #[test]
+fn an_animation_that_starts_at_its_target_with_its_own_spec_stays_idle() {
+    let mut composition = Composition::new(MemoryApplier::new());
+    let runtime = composition.runtime_handle();
+    let root_key = location_key(file!(), line!(), column!());
+    let mut render = || {
+        animate_float_as_state_with_initial(
+            1.0,
+            1.0,
+            AnimationType::Tween(AnimationSpec::linear(700)),
+            "settled",
+        );
+    };
+    composition.render(root_key, &mut render).expect("render");
+    assert!(
+        !runtime.has_frame_callbacks(),
+        "a value that starts at its target has nothing to animate, whatever its spec"
+    );
+}
+
+#[test]
 fn an_animatable_reports_the_spec_currently_driving_it() {
     let composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();

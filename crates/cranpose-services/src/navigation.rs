@@ -145,6 +145,52 @@ pub fn back_interception_enabled() -> bool {
     BACK_INTERCEPTION.load(Ordering::SeqCst)
 }
 
+static ACTIVE_BACK_HANDLERS: AtomicUsize = AtomicUsize::new(0);
+
+/// Handles platform back requests on the UI thread while `enabled` is true.
+/// Nested handlers follow stack order: the innermost active handler receives
+/// the request and dropping it restores the handler beneath it.
+#[expect(non_snake_case)]
+#[track_caller]
+pub fn BackHandler(enabled: bool, mut on_back: impl FnMut() + 'static) {
+    let requests = cranpose_core::rememberEventStream(enabled, move |sender| {
+        if !enabled {
+            return None;
+        }
+        if ACTIVE_BACK_HANDLERS.fetch_add(1, Ordering::AcqRel) == 0 {
+            set_back_interception(true);
+        }
+        let registration = observe_back_requests(move || {
+            let count = take_back_requests();
+            if count > 0 {
+                sender.send(count);
+            }
+        });
+        Some(BackInterception {
+            _registration: registration,
+        })
+    });
+    if enabled {
+        cranpose_core::CollectEvents(requests, enabled, move |count: usize| {
+            for _ in 0..count {
+                on_back();
+            }
+        });
+    }
+}
+
+struct BackInterception {
+    _registration: BackRequestObserver,
+}
+
+impl Drop for BackInterception {
+    fn drop(&mut self) {
+        if ACTIVE_BACK_HANDLERS.fetch_sub(1, Ordering::AcqRel) == 1 {
+            set_back_interception(false);
+        }
+    }
+}
+
 /// Ask the platform to close the app.
 ///
 /// The counterpart to [`set_back_interception`]`(false)`: interception says

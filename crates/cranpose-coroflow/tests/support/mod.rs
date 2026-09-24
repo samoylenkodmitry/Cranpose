@@ -1,8 +1,24 @@
 #![allow(dead_code)]
 
-use std::time::{Duration, Instant};
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::{Duration, Instant},
+};
 
 use cranpose_core::{Composition, MemoryApplier};
+
+/// Counts its own drops, so a test can see when the future or value that
+/// holds it is dropped.
+pub struct DropMarker(pub Arc<AtomicUsize>);
+
+impl Drop for DropMarker {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
 
 pub const PATIENCE: Duration = Duration::from_secs(5);
 pub const QUIET_PERIOD: Duration = Duration::from_millis(200);

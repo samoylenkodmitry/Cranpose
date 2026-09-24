@@ -192,8 +192,9 @@ pub use memory_pressure::{
     rememberMemoryPressure,
 };
 pub use navigation::{
-    BackRequestObserver, back_interception_enabled, exit_requested, observe_back_requests,
-    push_back_request, request_exit, set_back_interception, take_back_requests, take_exit_request,
+    BackHandler, BackRequestObserver, back_interception_enabled, exit_requested,
+    observe_back_requests, push_back_request, request_exit, set_back_interception,
+    take_back_requests, take_exit_request,
 };
 pub use network_status::{
     NetworkMonitor, NetworkMonitorRef, NetworkStatus, clear_platform_network_monitor,

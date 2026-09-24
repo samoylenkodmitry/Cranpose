@@ -1,6 +1,6 @@
 [package]
-name = "cranpose-coroflow"
-description = "Runs coroflow coroutines, flows and view models inside Cranpose compositions"
+name = "cranpose-navigation"
+description = "NavHost, a typed back stack and per-screen view models for Cranpose"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,15 +11,17 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-coroflow = { workspace = true }
+cranpose-animation = { workspace = true }
 cranpose-core = { workspace = true }
+cranpose-coroflow = { workspace = true }
 cranpose-services = { workspace = true }
-log = "0.4"
+cranpose-ui = { workspace = true }
 
 [lints]
 workspace = true
 
 [dev-dependencies]
+coroflow = { workspace = true }
 cranpose-core = { workspace = true, features = ["internal"] }
-cranpose-foundation = { workspace = true }
-pollster = "0.4"
+# Path-only dev-deps: stripped from the published manifest.
+cranpose-testing = { path = "../cranpose-testing" }

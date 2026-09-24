@@ -300,53 +300,6 @@ pub fn LifecycleEffect<K: PartialEq + 'static>(
     cranpose_core::CollectEvents(transitions, keys, observer);
 }
 
-static ACTIVE_BACK_HANDLERS: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
-
-/// Handles platform back requests on the UI thread while `enabled` is true.
-/// Nested handlers follow stack order: the innermost active handler receives
-/// the request and dropping it restores the handler beneath it.
-#[expect(non_snake_case)]
-#[track_caller]
-pub fn BackHandler(enabled: bool, mut on_back: impl FnMut() + 'static) {
-    let requests = cranpose_core::rememberEventStream(enabled, move |sender| {
-        if !enabled {
-            return None;
-        }
-        if ACTIVE_BACK_HANDLERS.fetch_add(1, std::sync::atomic::Ordering::AcqRel) == 0 {
-            cranpose_services::set_back_interception(true);
-        }
-        let registration = cranpose_services::observe_back_requests(move || {
-            let count = cranpose_services::take_back_requests();
-            if count > 0 {
-                sender.send(count);
-            }
-        });
-        Some(BackInterception {
-            _registration: registration,
-        })
-    });
-    if enabled {
-        cranpose_core::CollectEvents(requests, enabled, move |count: usize| {
-            for _ in 0..count {
-                on_back();
-            }
-        });
-    }
-}
-
-struct BackInterception {
-    _registration: cranpose_services::BackRequestObserver,
-}
-
-impl Drop for BackInterception {
-    fn drop(&mut self) {
-        if ACTIVE_BACK_HANDLERS.fetch_sub(1, std::sync::atomic::Ordering::AcqRel) == 1 {
-            cranpose_services::set_back_interception(false);
-        }
-    }
-}
-
 /// Remembers observable application update state for the current composition.
 #[expect(non_snake_case)]
 #[track_caller]

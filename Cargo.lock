@@ -896,6 +896,7 @@ dependencies = [
  "cranpose-core",
  "cranpose-coroflow",
  "cranpose-foundation",
+ "cranpose-navigation",
  "cranpose-testing",
  "cranpose-ui",
  "env_logger",
@@ -1155,6 +1156,19 @@ dependencies = [
  "parking_lot",
  "pollster",
  "symphonia",
+]
+
+[[package]]
+name = "cranpose-navigation"
+version = "0.1.162"
+dependencies = [
+ "coroflow",
+ "cranpose-animation",
+ "cranpose-core",
+ "cranpose-coroflow",
+ "cranpose-services",
+ "cranpose-testing",
+ "cranpose-ui",
 ]
 
 [[package]]

@@ -42,6 +42,27 @@ impl ObserveNotes {
     }
 }
 
+/// Follows one note.
+#[derive(Clone)]
+pub struct ObserveNote {
+    repository: Arc<dyn NotesRepository>,
+}
+
+impl ObserveNote {
+    /// Reads through `repository`.
+    pub fn new(repository: Arc<dyn NotesRepository>) -> Self {
+        Self { repository }
+    }
+
+    /// The note `id` after every change to it, and `None` once it is deleted.
+    pub fn invoke(&self, id: NoteId) -> impl SendFlow<Item = Option<Note>> {
+        self.repository
+            .observe_notes()
+            .map(move |notes| notes.into_iter().find(|note| note.id == id))
+            .distinct_until_changed()
+    }
+}
+
 /// Selects the notes whose title contains `query`, pinned first, newest first.
 pub fn filter_notes(query: &str, notes: &[Note]) -> NotesList {
     let needle = query.trim().to_lowercase();

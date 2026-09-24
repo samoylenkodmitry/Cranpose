@@ -110,3 +110,25 @@ fn the_publish_order_leaves_out_crates_that_are_not_published() {
         vec!["cranpose-core".to_owned(), "cranpose".to_owned()]
     );
 }
+
+#[test]
+fn coroflow_is_published_before_the_crates_that_use_it() {
+    let metadata = r#"{
+        "workspace_members": ["cranpose-coroflow 0.1.0", "coroflow 0.1.0", "coroflow-demo 0.1.0"],
+        "packages": [
+            {"id": "cranpose-coroflow 0.1.0", "name": "cranpose-coroflow",
+             "dependencies": [{"name": "coroflow", "kind": null}]},
+            {"id": "coroflow 0.1.0", "name": "coroflow", "dependencies": []},
+            {"id": "coroflow-demo 0.1.0", "name": "coroflow-demo",
+             "dependencies": [{"name": "cranpose-coroflow", "kind": null}]}
+        ]
+    }"#;
+
+    let order = resolve_publish_order(metadata).expect("the order resolves");
+
+    assert_eq!(
+        order,
+        vec!["coroflow".to_owned(), "cranpose-coroflow".to_owned()],
+        "coroflow is released with Cranpose; other crates are not"
+    );
+}

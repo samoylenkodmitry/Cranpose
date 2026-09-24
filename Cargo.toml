@@ -29,6 +29,7 @@ members = [
     "xtask",
     "crates/coroflow",
     "crates/cranpose-coroflow",
+    "crates/cranpose-navigation",
     "apps/coroflow-demo",
     "apps/coroflow-demo/android",
     "apps/coroflow-demo/web",
@@ -57,6 +58,9 @@ cranpose = { path = "crates/cranpose", version = "0.1.162", default-features = f
 cranpose-app-shell = { path = "crates/cranpose-app-shell", version = "0.1.162" }
 cranpose-audio = { path = "crates/cranpose-audio", version = "0.1.162", default-features = false }
 cranpose-core = { path = "crates/cranpose-core", version = "0.1.162" }
+coroflow = { path = "crates/coroflow", version = "0.1.162" }
+cranpose-coroflow = { path = "crates/cranpose-coroflow", version = "0.1.162" }
+cranpose-navigation = { path = "crates/cranpose-navigation", version = "0.1.162" }
 cranpose-foundation = { path = "crates/cranpose-foundation", version = "0.1.162" }
 cranpose-macros = { path = "crates/cranpose-macros", version = "0.1.162" }
 cranpose-media = { path = "crates/cranpose-media", version = "0.1.162" }
