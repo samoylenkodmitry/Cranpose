@@ -368,31 +368,8 @@ fn resolve_text_measure_width_expands_for_multiline_clip_text() {
         right: 4.0,
         bottom: 0.0,
     };
-    let width =
-        resolve_text_measure_width(130.0, padding, Some(180.0), TextLayoutOptions::default());
+    let width = resolve_text_measure_width(130.0, padding, Some(180.0));
     assert!((width - 172.0).abs() < f32::EPSILON);
-}
-
-#[test]
-fn resolve_text_measure_width_caps_single_line_measurements() {
-    let padding = EdgeInsets {
-        left: 4.0,
-        top: 0.0,
-        right: 4.0,
-        bottom: 0.0,
-    };
-    let width = resolve_text_measure_width(
-        130.0,
-        padding,
-        Some(180.0),
-        TextLayoutOptions {
-            overflow: TextOverflow::Ellipsis,
-            soft_wrap: false,
-            max_lines: 1,
-            min_lines: 1,
-        },
-    );
-    assert!((width - 130.0).abs() < f32::EPSILON);
 }
 
 #[test]
@@ -403,8 +380,7 @@ fn resolve_text_measure_width_respects_tighter_measurement_constraint() {
         right: 4.0,
         bottom: 0.0,
     };
-    let width =
-        resolve_text_measure_width(130.0, padding, Some(100.0), TextLayoutOptions::default());
+    let width = resolve_text_measure_width(130.0, padding, Some(100.0));
     assert!((width - 92.0).abs() < f32::EPSILON);
 }
 
@@ -416,23 +392,7 @@ fn resolve_text_measure_width_falls_back_to_content_width_without_constraint() {
         right: 4.0,
         bottom: 0.0,
     };
-    let width = resolve_text_measure_width(130.0, padding, None, TextLayoutOptions::default());
-    assert!((width - 130.0).abs() < f32::EPSILON);
-}
-
-#[test]
-fn resolve_text_measure_width_keeps_content_width_for_finite_max_lines() {
-    let padding = EdgeInsets {
-        left: 4.0,
-        top: 0.0,
-        right: 4.0,
-        bottom: 0.0,
-    };
-    let options = TextLayoutOptions {
-        max_lines: 4,
-        ..TextLayoutOptions::default()
-    };
-    let width = resolve_text_measure_width(130.0, padding, Some(180.0), options);
+    let width = resolve_text_measure_width(130.0, padding, None);
     assert!((width - 130.0).abs() < f32::EPSILON);
 }
 
@@ -502,7 +462,7 @@ fn measurement_constraint_width_prevents_spurious_wrap() {
         "control check expected wrapping at content width: {wrapped_by_content:?}"
     );
 
-    let measure_width = resolve_text_measure_width(content_width, padding, Some(180.0), options);
+    let measure_width = resolve_text_measure_width(content_width, padding, Some(180.0));
     let prepared = prepare_text_layout_for_test(
         &cranpose_ui::text::AnnotatedString::from(text),
         &style,
@@ -512,37 +472,6 @@ fn measurement_constraint_width_prevents_spurious_wrap() {
     assert!(
         !prepared.text.text.contains('\n'),
         "measurement width should prevent synthetic wrap: {:?}",
-        prepared.text
-    );
-}
-
-#[test]
-fn finite_max_lines_keeps_wrap_points_under_content_width() {
-    let padding = EdgeInsets {
-        left: 4.0,
-        top: 0.0,
-        right: 4.0,
-        bottom: 0.0,
-    };
-    let text = "This paragraph demonstrates textIndent lineHeight lineBreak";
-    let style = cranpose_ui::TextStyle::default();
-    let options = cranpose_ui::TextLayoutOptions {
-        overflow: TextOverflow::Clip,
-        soft_wrap: true,
-        max_lines: 4,
-        min_lines: 1,
-    };
-    let content_width = 130.0;
-    let measure_width = resolve_text_measure_width(content_width, padding, Some(180.0), options);
-    let prepared = prepare_text_layout_for_test(
-        &cranpose_ui::text::AnnotatedString::from(text),
-        &style,
-        options,
-        Some(measure_width),
-    );
-    assert!(
-        prepared.text.text.contains('\n'),
-        "finite max_lines should keep constrained wrapping: {:?}",
         prepared.text
     );
 }
@@ -2396,7 +2325,7 @@ fn push_text_style_draws_gradient_keeps_mask_and_effect_bounds_in_scene_space() 
 }
 
 #[test]
-fn single_line_overflow_keeps_content_width_for_ellipsis() {
+fn single_line_overflow_ellipsizes_at_the_measurement_width() {
     let padding = EdgeInsets {
         left: 4.0,
         top: 0.0,
@@ -2412,7 +2341,7 @@ fn single_line_overflow_keeps_content_width_for_ellipsis() {
         min_lines: 1,
     };
     let content_width = 130.0;
-    let measure_width = resolve_text_measure_width(content_width, padding, Some(180.0), options);
+    let measure_width = resolve_text_measure_width(content_width, padding, Some(180.0));
     let prepared = prepare_text_layout_for_test(
         &cranpose_ui::text::AnnotatedString::from(text),
         &style,

@@ -300,8 +300,11 @@ fn prepared_layout_cache_reuses_node_snapshot() {
             context.set_node_id(Some(88));
             node.on_attach(&mut context);
 
-            let measured = node.measure_text_content(Some(120.0));
-            let prepared = node.prepared_layout_handle().prepare(Some(120.0));
+            let measured = node.layout.measure_layout(Some(120.0));
+            let prepared = node
+                .prepared_layout_handle()
+                .measured_layout()
+                .expect("measured node exposes its layout");
             tx.send((
                 recorded.borrow().clone(),
                 measured.width,

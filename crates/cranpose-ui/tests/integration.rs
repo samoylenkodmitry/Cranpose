@@ -10,7 +10,10 @@ mod round_scroll_indicator_integration;
 mod shadow_api_integration;
 #[cfg(feature = "svg")]
 mod svg_painter_integration;
+mod text_contract_measurer;
 mod text_hyphenation_contract_integration;
+mod text_measured_layout_integration;
 mod text_options_contract_integration;
+mod text_overflow_ellipsis_integration;
 mod wear_list_and_painters;
 mod widget_composition;

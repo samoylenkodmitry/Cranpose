@@ -43,6 +43,7 @@ struct TextPreparedLayoutOwner {
     style: TextStyle,
     options: TextLayoutOptions,
     node_id: Cell<Option<cranpose_core::NodeId>>,
+    measured_max_width: Cell<Option<Option<f32>>>,
     cache: RefCell<Vec<TextPreparedLayoutCacheEntry>>,
 }
 
@@ -57,12 +58,14 @@ impl TextPreparedLayoutOwner {
         style: TextStyle,
         options: TextLayoutOptions,
         node_id: Option<cranpose_core::NodeId>,
+        measured_max_width: Option<Option<f32>>,
     ) -> Self {
         Self {
             text,
             style,
             options: options.normalized(),
             node_id: Cell::new(node_id),
+            measured_max_width: Cell::new(measured_max_width),
             cache: RefCell::new(Vec::new()),
         }
     }
@@ -146,6 +149,17 @@ impl TextPreparedLayoutOwner {
             height: prepared.metrics.height,
         }
     }
+
+    fn measure_layout(&self, max_width: Option<f32>) -> Size {
+        self.measured_max_width.set(Some(max_width));
+        self.measure_text_content(max_width)
+    }
+
+    fn measured_layout(&self) -> Option<crate::text::PreparedTextLayout> {
+        self.measured_max_width
+            .get()
+            .map(|max_width| self.prepare(max_width))
+    }
 }
 
 impl TextPreparedLayoutHandle {
@@ -153,15 +167,17 @@ impl TextPreparedLayoutHandle {
         Self { owner }
     }
 
-    pub(crate) fn prepare(&self, max_width: Option<f32>) -> crate::text::PreparedTextLayout {
-        self.owner.prepare(max_width)
+    pub(crate) fn measured_layout(&self) -> Option<crate::text::PreparedTextLayout> {
+        self.owner.measured_layout()
     }
 }
 
 impl TextModifierNode {
     pub fn new(text: Rc<AnnotatedString>, style: TextStyle, options: TextLayoutOptions) -> Self {
         Self {
-            layout: Rc::new(TextPreparedLayoutOwner::new(text, style, options, None)),
+            layout: Rc::new(TextPreparedLayoutOwner::new(
+                text, style, options, None, None,
+            )),
             state: NodeState::new(),
         }
     }
@@ -249,7 +265,7 @@ impl LayoutModifierNode for TextModifierNode {
             .max_width
             .is_finite()
             .then_some(constraints.max_width);
-        let text_size = self.measure_text_content(max_width);
+        let text_size = self.layout.measure_layout(max_width);
 
         let width = text_size
             .width
@@ -341,6 +357,7 @@ impl ModifierNodeElement for TextModifierElement {
                 self.style.clone(),
                 self.options,
                 current.node_id(),
+                current.measured_max_width.get(),
             ));
         }
     }

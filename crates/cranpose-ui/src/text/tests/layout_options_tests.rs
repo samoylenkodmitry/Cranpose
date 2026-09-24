@@ -27,6 +27,51 @@ fn normalized_ensures_max_not_smaller_than_min() {
 }
 
 #[test]
+fn normalized_limits_unwrapped_ellipsis_text_to_one_line() {
+    for overflow in [
+        TextOverflow::Ellipsis,
+        TextOverflow::StartEllipsis,
+        TextOverflow::MiddleEllipsis,
+    ] {
+        let options = TextLayoutOptions {
+            overflow,
+            soft_wrap: false,
+            max_lines: 4,
+            min_lines: 2,
+        }
+        .normalized();
+
+        assert_eq!(options.max_lines, 1, "{overflow:?}");
+        assert_eq!(options.min_lines, 2, "{overflow:?}");
+    }
+}
+
+#[test]
+fn normalized_keeps_max_lines_of_wrapped_or_non_ellipsis_text() {
+    for (overflow, soft_wrap) in [
+        (TextOverflow::Ellipsis, true),
+        (TextOverflow::Clip, false),
+        (TextOverflow::Visible, false),
+        (
+            TextOverflow::ScaleDown {
+                min_font_size_sp: 9.0,
+            },
+            false,
+        ),
+    ] {
+        let options = TextLayoutOptions {
+            overflow,
+            soft_wrap,
+            max_lines: 4,
+            min_lines: 1,
+        }
+        .normalized();
+
+        assert_eq!(options.max_lines, 4, "{overflow:?} soft_wrap={soft_wrap}");
+    }
+}
+
+#[test]
 fn normalized_sanitizes_scale_down_min_font_size() {
     let options = TextLayoutOptions {
         overflow: TextOverflow::ScaleDown {

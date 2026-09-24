@@ -4,7 +4,7 @@ use cranpose_foundation::lazy::{LazyListScope, LazyListState, rememberLazyListSt
 use cranpose_ui::{
     Color, Column, ColumnSpec, DrawCommand, LayoutEngine, LazyColumn, LazyColumnSpec,
     LinearArrangement, Modifier, Point, Rect, RoundedCornerShape, ScrollState, Size, Spacer, Text,
-    TextStyle,
+    TextOptions, TextOverflow, TextStyle, TextWithOptions,
     text::{AnnotatedString, BaselineShift, SpanStyle, TextAlign, TextDirection, TextMotion},
 };
 use cranpose_ui_graphics::{
@@ -3034,18 +3034,44 @@ fn explicit_static_text_motion_is_preserved_under_scrolling_context() {
     );
 }
 
+const WRAPPING_BODY: &str = "fed back картица scored fp32 износ once paper fed Vision dropped \
+     fed widest the strip mask prompt mask threshold Vision on датум instance mask износ Apple";
+
+fn find_text_box<'a>(node: &'a LayoutBox, value: &str) -> Option<&'a LayoutBox> {
+    if node
+        .node_data
+        .modifier_slices()
+        .text_content()
+        .is_some_and(|text| text == value)
+    {
+        return Some(node);
+    }
+    node.children
+        .iter()
+        .find_map(|child| find_text_box(child, value))
+}
+
+fn find_text_primitive(
+    layer: &LayerNode,
+    matches: &impl Fn(&TextPrimitiveNode) -> bool,
+) -> Option<TextPrimitiveNode> {
+    layer.children.iter().find_map(|child| match child {
+        RenderNode::Primitive(primitive) => match &primitive.node {
+            PrimitiveNode::Text(text) if matches(text) => Some(text.as_ref().clone()),
+            _ => None,
+        },
+        RenderNode::Layer(child_layer) => find_text_primitive(child_layer, matches),
+        RenderNode::DrawRun(_) => None,
+    })
+}
+
 #[test]
 fn wrapped_paragraph_paints_the_height_it_measured() {
-    const BODY: &str = "fed back картица scored fp32 износ once paper fed Vision dropped \
-         fed widest the strip mask prompt mask threshold Vision on датум instance mask \
-         износ Apple";
+    const BODY: &str = WRAPPING_BODY;
     const FOLLOWING: &str = "FOLLOWING SIBLING";
 
     let app_context = cranpose_ui::AppContext::new();
     app_context.enter(|| {
-        cranpose_ui::text::set_text_measurer(
-            crate::software_text_raster::SoftwareTextMeasurer::from_fonts_or_default(&[], 8192),
-        );
         let mut composition = cranpose_ui::run_test_composition(move || {
             Column(
                 Modifier::empty().fill_max_width(),
@@ -3060,6 +3086,9 @@ fn wrapped_paragraph_paints_the_height_it_measured() {
                 },
             );
         });
+        cranpose_ui::text::set_text_measurer(
+            crate::software_text_raster::SoftwareTextMeasurer::from_fonts_or_default(&[], 8192),
+        );
 
         let root = composition.root().expect("composition root");
         let handle = composition.runtime_handle();
@@ -3075,21 +3104,8 @@ fn wrapped_paragraph_paints_the_height_it_measured() {
             )
             .expect("layout");
 
-        fn find_box<'a>(node: &'a LayoutBox, value: &str) -> Option<&'a LayoutBox> {
-            if node
-                .node_data
-                .modifier_slices()
-                .text_content()
-                .is_some_and(|text| text == value)
-            {
-                return Some(node);
-            }
-            node.children
-                .iter()
-                .find_map(|child| find_box(child, value))
-        }
-        let body_box = find_box(layout.root(), BODY).expect("measured paragraph box");
-        let following_box = find_box(layout.root(), FOLLOWING).expect("measured sibling box");
+        let body_box = find_text_box(layout.root(), BODY).expect("measured paragraph box");
+        let following_box = find_text_box(layout.root(), FOLLOWING).expect("measured sibling box");
         let measured_height = body_box.rect.height;
         let following_top = following_box.rect.y;
         assert!(
@@ -3109,27 +3125,10 @@ fn wrapped_paragraph_paints_the_height_it_measured() {
         fn squashed(value: &str) -> String {
             value.chars().filter(|c| !c.is_whitespace()).collect()
         }
-        fn find_text<'a>(layer: &'a LayerNode, value: &str) -> Option<&'a TextPrimitiveNode> {
-            for child in &layer.children {
-                match child {
-                    RenderNode::Primitive(primitive) => {
-                        if let PrimitiveNode::Text(text) = &primitive.node
-                            && squashed(&text.text.text) == squashed(value)
-                        {
-                            return Some(text);
-                        }
-                    }
-                    RenderNode::Layer(child_layer) => {
-                        if let Some(found) = find_text(child_layer, value) {
-                            return Some(found);
-                        }
-                    }
-                    RenderNode::DrawRun(_) => {}
-                }
-            }
-            None
-        }
-        let painted = find_text(&graph.root, BODY).expect("painted paragraph");
+        let painted = find_text_primitive(&graph.root, &|text| {
+            squashed(&text.text.text) == squashed(BODY)
+        })
+        .expect("painted paragraph");
 
         assert!(
             (painted.rect.height - measured_height).abs() < 0.5,
@@ -3147,6 +3146,144 @@ fn wrapped_paragraph_paints_the_height_it_measured() {
             following_top
         );
     });
+}
+
+struct PaintedParagraph {
+    available_width: f32,
+    node_width: f32,
+    measured: String,
+    rewrapped_at_node_width: String,
+    painted_from_applier: String,
+    painted_from_layout_tree: String,
+}
+
+impl PaintedParagraph {
+    fn assert_paints_measured_lines(&self, context: &str) {
+        let measured = self.measured.lines().collect::<Vec<_>>();
+        for (graph, painted) in [
+            ("applier graph", &self.painted_from_applier),
+            ("layout tree graph", &self.painted_from_layout_tree),
+        ] {
+            assert_eq!(
+                painted.lines().collect::<Vec<_>>(),
+                measured,
+                "{context}: the {graph} must paint the lines layout measured"
+            );
+        }
+    }
+}
+
+fn paint_paragraph(modifier: Modifier, options: TextOptions, text_width: f32) -> PaintedParagraph {
+    const AVAILABLE_WIDTH: f32 = 245.0;
+
+    let mut composition = cranpose_ui::run_test_composition(move || {
+        let modifier = modifier.clone();
+        Column(
+            Modifier::empty().fill_max_width(),
+            ColumnSpec::default(),
+            move || {
+                TextWithOptions(
+                    WRAPPING_BODY.to_string(),
+                    modifier.clone(),
+                    TextStyle::default(),
+                    options,
+                );
+            },
+        );
+    });
+    cranpose_ui::text::set_text_measurer(
+        crate::software_text_raster::SoftwareTextMeasurer::from_fonts_or_default(&[], 8192),
+    );
+
+    let root = composition.root().expect("composition root");
+    let handle = composition.runtime_handle();
+    let mut applier = composition.applier_mut();
+    applier.set_runtime_handle(handle);
+    let layout = applier
+        .compute_layout(
+            root,
+            Size {
+                width: AVAILABLE_WIDTH,
+                height: 900.0,
+            },
+        )
+        .expect("layout");
+    let body_box = find_text_box(layout.root(), WRAPPING_BODY).expect("measured paragraph box");
+    let body_id = body_box.node_id;
+    let node_width = body_box.rect.width;
+    let painted_text = |graph: &RenderGraph| {
+        find_text_primitive(&graph.root, &|text| text.node_id == body_id)
+            .expect("painted paragraph")
+            .text
+            .text
+            .clone()
+    };
+    let painted_from_layout_tree = painted_text(&build_graph_from_layout_tree(layout.root(), 1.0));
+
+    let graph = build_graph_from_applier(&mut applier, root, 1.0).expect("render graph");
+    applier.clear_runtime_handle();
+    let prepare_at = |width: f32| {
+        cranpose_ui::text::prepare_text_layout(
+            &AnnotatedString::from(WRAPPING_BODY),
+            &TextStyle::default(),
+            options.into(),
+            Some(width),
+        )
+        .text
+        .text
+        .clone()
+    };
+
+    PaintedParagraph {
+        available_width: AVAILABLE_WIDTH,
+        node_width,
+        measured: prepare_at(text_width),
+        rewrapped_at_node_width: prepare_at(node_width),
+        painted_from_applier: painted_text(&graph),
+        painted_from_layout_tree,
+    }
+}
+
+#[test]
+fn shrink_wrapped_ellipsis_paragraph_under_its_line_limit_paints_the_lines_it_measured() {
+    let options = TextOptions {
+        overflow: TextOverflow::Ellipsis,
+        max_lines: Some(8),
+        ..TextOptions::default()
+    };
+    let paragraph = paint_paragraph(Modifier::empty(), options, 245.0);
+
+    assert!(
+        paragraph.node_width < paragraph.available_width,
+        "test setup expects the node at its own measured width, got {}",
+        paragraph.node_width
+    );
+    assert!(
+        !paragraph.measured.contains('\u{2026}'),
+        "test setup expects the paragraph to stay under its line limit: {:?}",
+        paragraph.measured
+    );
+    assert_ne!(
+        paragraph.rewrapped_at_node_width, paragraph.measured,
+        "test setup expects re-wrapping at the node's own width to move a word"
+    );
+    paragraph.assert_paints_measured_lines("ellipsis, max_lines 8");
+}
+
+#[test]
+fn width_limited_paragraph_paints_the_lines_it_measured() {
+    for options in [
+        TextOptions::default(),
+        TextOptions {
+            overflow: TextOverflow::Ellipsis,
+            max_lines: Some(4),
+            ..TextOptions::default()
+        },
+    ] {
+        let paragraph = paint_paragraph(Modifier::empty().width(150.0), options, 150.0);
+
+        paragraph.assert_paints_measured_lines(&format!("width(150), {options:?}"));
+    }
 }
 
 struct TestWindow(Size);
