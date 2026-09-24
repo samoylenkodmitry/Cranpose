@@ -2346,8 +2346,9 @@ static WORKSPACE_VERSION_DOTTED_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\s*version\.").expect("WORKSPACE_VERSION_DOTTED_RE is valid"));
 static LEADING_WHITESPACE_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\s*").expect("LEADING_WHITESPACE_RE is valid"));
-static CRANPOSE_DEP_TABLE_LINE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^\s*cranpose[\w-]*\s*=\s*\{").expect("CRANPOSE_DEP_TABLE_LINE_RE is valid")
+static RELEASE_DEP_TABLE_LINE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(&format!(r"^\s*{RELEASE_CRATE_PATTERN}\s*=\s*\{{"))
+        .expect("RELEASE_DEP_TABLE_LINE_RE is valid")
 });
 static VERSION_KV_PRESENT_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"version\s*=\s*"[^"]+""#).expect("VERSION_KV_PRESENT_RE is valid")
@@ -2421,8 +2422,8 @@ fn update_workspace_package_section(lines: &mut Vec<String>, version: &str) -> R
     Ok(())
 }
 
-/// Rewrites every `cranpose[-foo] = { ... version = "x" ... }` line in
-/// `[workspace.dependencies]` to `version`, leaving the rest of each line
+/// Rewrites every `{release crate} = { ... version = "x" ... }` line in
+/// `[workspace.dependencies]` ([`is_release_crate`]) to `version`, leaving the rest of each line
 /// (path, default-features, ...) untouched. A dependency table with no
 /// `version` key at all is left alone and reported as a mismatch, matching
 /// the release script this replaces -- a workspace dependency published to
@@ -2438,7 +2439,7 @@ fn update_workspace_dependencies_section(
 
     let mut mismatches = Vec::new();
     for line in &mut lines[start..end] {
-        if !CRANPOSE_DEP_TABLE_LINE_RE.is_match(line) {
+        if !RELEASE_DEP_TABLE_LINE_RE.is_match(line) {
             continue;
         }
         if !VERSION_KV_PRESENT_RE.is_match(line) {
