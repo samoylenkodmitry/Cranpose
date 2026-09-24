@@ -182,7 +182,7 @@ fn share_in_multicasts_one_upstream_and_replays_to_late_collectors() {
     );
     drop((first, second, late));
     scheduler.run_current();
-    assert_eq!(ticks.subscription_count(), 0);
+    assert_eq!(ticks.subscription_count().value(), 0);
 }
 
 #[test]

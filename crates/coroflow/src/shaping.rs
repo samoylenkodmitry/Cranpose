@@ -190,11 +190,12 @@ impl<S: Stream + Unpin> Stream for ChunkedRun<S> {
     }
 }
 
-/// The step of [`on_empty`](crate::FlowExt::on_empty): its action gets only
-/// an [`Emitter`].
-pub struct Fallback<U>(PhantomData<fn() -> U>);
+/// The step whose action gets only an [`Emitter`]: the fallback of
+/// [`on_empty`](crate::FlowExt::on_empty) and the prelude of
+/// [`on_subscription`](crate::SharedFlow::on_subscription).
+pub struct EmitterAction<U>(PhantomData<fn() -> U>);
 
-impl<U, F, Fut> Step<(), F> for Fallback<U>
+impl<U, F, Fut> Step<(), F> for EmitterAction<U>
 where
     F: FnOnce(Emitter<U>) -> Fut,
     Fut: Future<Output = ()>,
@@ -228,14 +229,14 @@ impl<F, A> OnEmpty<F, A> {
 /// One run of an [`OnEmpty`].
 pub struct OnEmptyRun<S: Stream, A>
 where
-    Fallback<S::Item>: Step<(), A>,
+    EmitterAction<S::Item>: Step<(), A>,
 {
     upstream: Option<S>,
     emitted: bool,
-    fallback: Actions<(), A, Fallback<S::Item>>,
+    fallback: Actions<(), A, EmitterAction<S::Item>>,
 }
 
-impl<S: Stream, A> Unpin for OnEmptyRun<S, A> where Fallback<S::Item>: Step<(), A> {}
+impl<S: Stream, A> Unpin for OnEmptyRun<S, A> where EmitterAction<S::Item>: Step<(), A> {}
 
 impl<F, A, Fut> Flow for OnEmpty<F, A>
 where

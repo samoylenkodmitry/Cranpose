@@ -1,7 +1,10 @@
 use std::{
     ops::Deref,
     pin::Pin,
-    sync::Arc,
+    sync::{
+        Arc, OnceLock,
+        atomic::{AtomicU64, Ordering},
+    },
     task::{Context, Poll},
 };
 
@@ -9,47 +12,47 @@ use futures_core::Stream;
 
 use crate::{flow::Flow, sync::Watch};
 
-#[derive(Clone, Copy, Default)]
-pub(crate) struct Subscribers {
-    pub(crate) current: usize,
-    pub(crate) opened: u64,
+#[derive(Default)]
+struct CountInner {
+    count: OnceLock<Arc<StateShared<usize>>>,
+    opened: AtomicU64,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub(crate) struct SubscriberCount {
-    watch: Arc<Watch<Subscribers>>,
-}
-
-impl Default for SubscriberCount {
-    fn default() -> Self {
-        Self {
-            watch: Arc::new(Watch::new(Subscribers::default())),
-        }
-    }
+    inner: Arc<CountInner>,
 }
 
 impl SubscriberCount {
+    fn shared(&self) -> &Arc<StateShared<usize>> {
+        self.inner.count.get_or_init(|| StateShared::new(0))
+    }
+
     pub(crate) fn opened(&self) {
-        self.watch.update(|subscribers| {
-            subscribers.current += 1;
-            subscribers.opened += 1;
+        self.inner.opened.fetch_add(1, Ordering::AcqRel);
+        self.shared().value.update(|count| {
+            *count += 1;
             true
         });
     }
 
     pub(crate) fn closed(&self) {
-        self.watch.update(|subscribers| {
-            subscribers.current = subscribers.current.saturating_sub(1);
+        self.shared().value.update(|count| {
+            *count = count.saturating_sub(1);
             true
         });
     }
 
-    pub(crate) fn current(&self) -> usize {
-        self.watch.with(|subscribers| subscribers.current)
+    pub(crate) fn opened_total(&self) -> u64 {
+        self.inner.opened.load(Ordering::Acquire)
     }
 
-    pub(crate) fn watch(&self) -> &Watch<Subscribers> {
-        &self.watch
+    pub(crate) fn watch(&self) -> &Watch<usize> {
+        &self.shared().value
+    }
+
+    pub(crate) fn as_flow(&self) -> StateFlow<usize> {
+        StateFlow::from_shared(Arc::clone(self.shared()))
     }
 }
 
@@ -64,10 +67,6 @@ impl<T> StateShared<T> {
             value: Watch::new(value),
             subscribers: SubscriberCount::default(),
         })
-    }
-
-    fn subscription_count(&self) -> usize {
-        self.subscribers.current()
     }
 
     pub(crate) fn set(&self, value: T)
@@ -127,11 +126,50 @@ impl<T: Clone + PartialEq> MutableStateFlow<T> {
     ///
     /// `transform` runs without holding the flow's lock, so it may read this
     /// flow; if another write lands first it runs again on the newer value.
-    pub fn update(&self, mut transform: impl FnMut(&T) -> T) {
+    pub fn update(&self, transform: impl FnMut(&T) -> T) {
+        self.update_reporting(transform, |_, _| ());
+    }
+
+    /// Like [`update`](MutableStateFlow::update), returning the new value —
+    /// Kotlin's `updateAndGet`.
+    pub fn update_and_get(&self, transform: impl FnMut(&T) -> T) -> T {
+        self.update_reporting(transform, |_, next| next.clone())
+    }
+
+    /// Like [`update`](MutableStateFlow::update), returning the value it
+    /// replaced — Kotlin's `getAndUpdate`.
+    pub fn get_and_update(&self, transform: impl FnMut(&T) -> T) -> T {
+        self.update_reporting(transform, |previous, _| previous.clone())
+    }
+
+    /// Sets the value to `update` if it currently equals `expect`, and reports
+    /// whether it did — Kotlin's `compareAndSet`.
+    pub fn compare_and_set(&self, expect: &T, update: T) -> bool {
+        let mut matched = false;
+        self.state.shared.value.update(|current| {
+            if current != expect {
+                return false;
+            }
+            matched = true;
+            if *current == update {
+                return false;
+            }
+            *current = update;
+            true
+        });
+        matched
+    }
+
+    fn update_reporting<R>(
+        &self,
+        mut transform: impl FnMut(&T) -> T,
+        report: impl Fn(&T, &T) -> R,
+    ) -> R {
         let watch = &self.state.shared.value;
         loop {
             let (current, version) = watch.read_versioned();
             let next = transform(&current);
+            let reported = report(&current, &next);
             let committed = watch.update_at(version, |value| {
                 if *value == next {
                     return false;
@@ -140,7 +178,7 @@ impl<T: Clone + PartialEq> MutableStateFlow<T> {
                 true
             });
             if committed {
-                return;
+                return reported;
             }
         }
     }
@@ -191,9 +229,10 @@ impl<T: Clone> StateFlow<T> {
         self.shared.value.with(T::clone)
     }
 
-    /// How many collectors are running right now.
-    pub fn subscription_count(&self) -> usize {
-        self.shared.subscription_count()
+    /// How many collectors are running, as a state flow of its own — Kotlin's
+    /// `subscriptionCount`.
+    pub fn subscription_count(&self) -> StateFlow<usize> {
+        self.shared.subscribers.as_flow()
     }
 }
 

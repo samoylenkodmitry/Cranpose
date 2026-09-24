@@ -25,7 +25,7 @@
 //! | `Channel`, `produce`, `receiveAsFlow` | [`channel`], [`produce`], [`Receiver`] |
 //! | `channelFlow`, `callbackFlow`, `awaitClose` | [`channel_flow`], [`callback_flow`], [`Producer::await_close`] |
 //! | `MutableStateFlow`, `MutableSharedFlow`, `BufferOverflow` | [`MutableStateFlow`], [`MutableSharedFlow`], [`BufferOverflow`] |
-//! | `stateIn(scope, WhileSubscribed(5000), x)`, `shareIn` | [`FlowExt::state_in`], [`FlowExt::share_in`], [`SharingStarted`] |
+//! | `stateIn(scope, WhileSubscribed(5000), x)`, `shareIn`, suspending `stateIn(scope)` | [`FlowExt::state_in`], [`FlowExt::share_in`], [`FlowExt::state_in_first`], [`SharingStarted`], [`SharingCommand`] |
 //! | `runTest`, `advanceTimeBy` | [`TestScheduler`] |
 //! | Turbine's `flow.test { awaitItem() }` | [`Turbine`] |
 //!
@@ -101,11 +101,17 @@ pub use scope::{
 };
 pub use select::{Either, Select, SelectAll, YieldNow, select, select_all, yield_now};
 pub use shaping::{
-    Chunked, ChunkedRun, Fallback, OnEmpty, OnEmptyRun, RunningReduce, RunningReduceRun, WithIndex,
-    WithIndexRun,
+    Chunked, ChunkedRun, EmitterAction, OnEmpty, OnEmptyRun, RunningReduce, RunningReduceRun,
+    WithIndex, WithIndexRun,
 };
-pub use shared::{BufferOverflow, EmitShared, MutableSharedFlow, SharedFlow, SharedRun};
-pub use sharing::{SHARE_IN_BUFFER, SharingStarted, SharingTask};
+pub use shared::{
+    BufferOverflow, EmitShared, MutableSharedFlow, OnSubscription, OnSubscriptionRun, SharedFlow,
+    SharedRun,
+};
+pub use sharing::{
+    CustomSharing, FirstState, SHARE_IN_BUFFER, SharingCommand, SharingStarted, SharingTask,
+    StateInFirst,
+};
 pub use state::{MutableStateFlow, StateFlow, StateRun};
 pub use suspending::{
     CollectAsync, CollectLatest, Emitting, FilterMapping, Filtering, Finish, InOrder, Inspecting,

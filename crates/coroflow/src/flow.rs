@@ -17,7 +17,9 @@ use crate::{
     scope::Spawn,
     shaping::{Chunked, OnEmpty, RunningReduce, WithIndex},
     shared::{MutableSharedFlow, SharedFlow},
-    sharing::{SharingStarted, SharingTask, shared_sharing, state_sharing},
+    sharing::{
+        FirstState, SharingStarted, SharingTask, StateInFirst, shared_sharing, state_sharing,
+    },
     state::StateFlow,
     suspending::{
         CollectAsync, CollectLatest, FilterMapping, Filtering, InOrder, Inspecting, LatestOnly,
@@ -577,10 +579,24 @@ pub trait FlowExt: Flow + Sized {
         state
     }
 
+    /// Starts this flow in `scope` at once and waits for its first value,
+    /// then returns a [`StateFlow`] that starts from it — Kotlin's suspending
+    /// `stateIn(scope)`. `None` if the flow completes without emitting.
+    fn state_in_first<S>(self, scope: &S) -> StateInFirst<Self::Item>
+    where
+        S: Spawn<FirstState<Self::Run>>,
+        Self::Item: Clone + PartialEq,
+    {
+        let (task, state) = FirstState::start(self.open());
+        scope.spawn(task);
+        state
+    }
+
     /// Shares this flow as a hot [`SharedFlow`] that runs in `scope` and
     /// replays the last `replay` values to new collectors — Kotlin's
-    /// `shareIn`. The upstream never waits: a collector more than 64 values
-    /// behind skips the oldest ones.
+    /// `shareIn`. Collectors may fall up to
+    /// [`SHARE_IN_BUFFER`](crate::SHARE_IN_BUFFER) values or `replay`,
+    /// whichever is larger, behind; beyond that the upstream waits for them.
     fn share_in<S>(
         self,
         scope: &S,

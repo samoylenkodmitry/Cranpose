@@ -43,13 +43,13 @@ with the same behavior. Items are ticked as they land.
 
 ## C. Hot flows
 
-- [ ] `StateFlow`: `compare_and_set`, `update_and_get` and `get_and_update`
-- [ ] `subscription_count()` returns a `StateFlow<usize>` on both `StateFlow` and `SharedFlow`
-- [ ] `SharedFlow`: `replay_cache`, `reset_replay_cache` and `on_subscription`
-- [ ] A suspending `state_in_first(&scope)` that waits for the first value: Kotlin's `stateIn(scope)`
-- [ ] Custom `SharingStarted` strategies
-- [ ] A suspended `emit` that is cancelled withdraws its value, as in Kotlin
-- [ ] `share_in` suspends its upstream once its 64-value buffer is full, instead of dropping the oldest
+- [x] `StateFlow`: `compare_and_set`, `update_and_get` and `get_and_update`
+- [x] `subscription_count()` returns a `StateFlow<usize>` on both `StateFlow` and `SharedFlow`
+- [x] `SharedFlow`: `replay_cache`, `reset_replay_cache` and `on_subscription`
+- [x] A suspending `state_in_first(&scope)` that waits for the first value: Kotlin's `stateIn(scope)`
+- [x] Custom `SharingStarted` strategies
+- [x] A suspended `emit` that is cancelled withdraws its value, as in Kotlin
+- [x] `share_in` suspends its upstream once its 64-value buffer is full, instead of dropping the oldest
 
 ## D. Jobs and dispatchers
 
