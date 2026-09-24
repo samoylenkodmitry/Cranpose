@@ -117,7 +117,7 @@ mod ios_host;
 mod native_window;
 mod window_local;
 #[cfg(all(
-    feature = "desktop-shell",
+    feature = "native-windows",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
@@ -426,7 +426,11 @@ mod embed_frame;
 #[cfg(feature = "embed")]
 mod embed_input;
 #[cfg(feature = "embed")]
+mod embed_overlay;
+#[cfg(feature = "embed")]
 mod embed_protocol;
+#[cfg(feature = "embed")]
+mod embed_surfaces;
 
 #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
 pub mod android;

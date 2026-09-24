@@ -1,17 +1,17 @@
 #[cfg(all(
-    feature = "desktop-shell",
+    feature = "native-windows",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
 use std::cell::Cell;
 #[cfg(all(
-    feature = "desktop-shell",
+    feature = "native-windows",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
 use std::collections::HashMap;
 #[cfg(all(
-    feature = "desktop-shell",
+    feature = "native-windows",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
@@ -22,7 +22,7 @@ use cranpose_core::MutableState;
 use cranpose_ui::{Modifier, Point, PointerEventKind, PointerInputScope, Size, composable};
 
 #[cfg(all(
-    feature = "desktop-shell",
+    feature = "native-windows",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
@@ -30,7 +30,7 @@ use cranpose_ui::{Modifier, Point, PointerEventKind, PointerInputScope, Size, co
 pub(crate) struct WindowId(u64);
 
 #[cfg(all(
-    feature = "desktop-shell",
+    feature = "native-windows",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
@@ -53,7 +53,7 @@ impl WindowId {
 }
 
 #[cfg(all(
-    feature = "desktop-shell",
+    feature = "native-windows",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
@@ -106,7 +106,7 @@ pub struct NativeWindowOptions {
 }
 
 #[cfg(all(
-    feature = "desktop-shell",
+    feature = "native-windows",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
@@ -573,7 +573,7 @@ impl WindowConfig {
     }
 
     #[cfg(all(
-        feature = "desktop-shell",
+        feature = "native-windows",
         feature = "renderer-wgpu",
         not(target_arch = "wasm32")
     ))]
@@ -582,7 +582,7 @@ impl WindowConfig {
     }
 
     #[cfg(all(
-        feature = "desktop-shell",
+        feature = "native-windows",
         feature = "renderer-wgpu",
         not(target_arch = "wasm32")
     ))]
@@ -656,7 +656,7 @@ impl WindowModifierExt for Modifier {
         let modifier = crate::window_local::with_window_state_local(self, config.state());
 
         #[cfg(all(
-            feature = "desktop-shell",
+            feature = "native-windows",
             feature = "renderer-wgpu",
             not(target_arch = "wasm32")
         ))]
@@ -665,7 +665,7 @@ impl WindowModifierExt for Modifier {
         }
 
         #[cfg(not(all(
-            feature = "desktop-shell",
+            feature = "native-windows",
             feature = "renderer-wgpu",
             not(target_arch = "wasm32")
         )))]
@@ -743,7 +743,7 @@ impl WindowModifierExt for Modifier {
 }
 
 #[cfg(all(
-    feature = "desktop-shell",
+    feature = "native-windows",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
@@ -752,7 +752,7 @@ pub(crate) struct NativeWindowRoot {
 }
 
 #[cfg(all(
-    feature = "desktop-shell",
+    feature = "native-windows",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
@@ -769,7 +769,7 @@ impl NativeWindowRoot {
 }
 
 #[cfg(all(
-    feature = "desktop-shell",
+    feature = "native-windows",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
@@ -784,14 +784,14 @@ impl cranpose_ui::WindowRootDescriptor for NativeWindowRoot {
 }
 
 #[cfg(all(
-    feature = "desktop-shell",
+    feature = "native-windows",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
 pub(crate) type NativeWindowRootHandle = Rc<NativeWindowRoot>;
 
 #[cfg(all(
-    feature = "desktop-shell",
+    feature = "native-windows",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
@@ -807,7 +807,7 @@ struct NativeWindowDispatchContext {
 }
 
 #[cfg(all(
-    feature = "desktop-shell",
+    feature = "native-windows",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
@@ -823,7 +823,7 @@ pub(crate) struct NativeWindowRequest {
 }
 
 #[cfg(all(
-    feature = "desktop-shell",
+    feature = "native-windows",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
@@ -837,7 +837,7 @@ struct NativeWindowRegistration {
 }
 
 #[cfg(all(
-    feature = "desktop-shell",
+    feature = "native-windows",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
@@ -848,7 +848,7 @@ pub(crate) struct NativeWindowRegistry {
 }
 
 #[cfg(all(
-    feature = "desktop-shell",
+    feature = "native-windows",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
@@ -901,7 +901,7 @@ impl NativeWindowRegistry {
 }
 
 #[cfg(all(
-    feature = "desktop-shell",
+    feature = "native-windows",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
@@ -930,7 +930,7 @@ fn request_native_window_resize(direction: WindowResizeDirection) -> bool {
 }
 
 #[cfg(all(
-    feature = "desktop-shell",
+    feature = "native-windows",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
@@ -942,7 +942,7 @@ pub(crate) fn with_native_window_registry<R>(
 }
 
 #[cfg(all(
-    feature = "desktop-shell",
+    feature = "native-windows",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
@@ -951,7 +951,7 @@ fn current_native_window_registry() -> Option<Rc<NativeWindowRegistry>> {
 }
 
 #[cfg(all(
-    feature = "desktop-shell",
+    feature = "native-windows",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
@@ -960,7 +960,7 @@ pub(crate) fn native_window_requests(registry: &NativeWindowRegistry) -> Vec<Nat
 }
 
 #[cfg(all(
-    feature = "desktop-shell",
+    feature = "native-windows",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
@@ -970,7 +970,7 @@ pub(crate) fn has_native_window_requests(registry: &NativeWindowRegistry) -> boo
 
 #[cfg(all(
     test,
-    feature = "desktop-shell",
+    feature = "native-windows",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
@@ -983,7 +983,7 @@ fn current_native_window_dispatch_context() -> Option<NativeWindowDispatchContex
 }
 
 #[cfg(all(
-    feature = "desktop-shell",
+    feature = "native-windows",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
@@ -1009,7 +1009,7 @@ fn with_native_window_dispatch_context<R>(
 }
 
 #[cfg(all(
-    feature = "desktop-shell",
+    feature = "native-windows",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
@@ -1025,7 +1025,7 @@ pub(crate) fn with_native_window_drag_handler<R>(
 }
 
 #[cfg(all(
-    feature = "desktop-shell",
+    feature = "native-windows",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
@@ -1054,7 +1054,7 @@ pub(crate) fn register_native_window(
 }
 
 #[cfg(all(
-    feature = "desktop-shell",
+    feature = "native-windows",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
@@ -1074,7 +1074,7 @@ mod tests;
 
 #[cfg(all(
     test,
-    feature = "desktop-shell",
+    feature = "native-windows",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
