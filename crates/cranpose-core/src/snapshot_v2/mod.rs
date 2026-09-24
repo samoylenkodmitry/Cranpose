@@ -43,6 +43,7 @@ mod runtime;
 mod transparent;
 
 #[cfg(test)]
+#[path = "tests/integration_tests.rs"]
 mod integration_tests;
 
 pub use global::{GlobalSnapshot, advance_global_snapshot};

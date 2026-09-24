@@ -1952,7 +1952,7 @@ enum EllipsisPlacement {
 
 impl EllipsisPlacement {
     fn for_options(options: TextLayoutOptions) -> Option<Self> {
-        let single_line = options.max_lines == 1 || !options.soft_wrap;
+        let single_line = options.max_lines == 1;
         match options.overflow {
             TextOverflow::Ellipsis => Some(Self::End),
             TextOverflow::StartEllipsis if single_line => Some(Self::Start),
