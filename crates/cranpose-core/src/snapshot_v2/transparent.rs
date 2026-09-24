@@ -66,6 +66,13 @@ impl TransparentObserverMutableSnapshot {
         self.reusable.get()
     }
 
+    pub(crate) fn observers(&self) -> (Option<ReadObserver>, Option<WriteObserver>) {
+        (
+            self.state.read_observer.borrow().clone(),
+            self.state.write_observer.borrow().clone(),
+        )
+    }
+
     /// Set the read observer (only allowed if reusable).
     pub fn set_read_observer(&self, observer: Option<ReadObserver>) {
         assert!(

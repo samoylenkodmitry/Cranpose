@@ -626,6 +626,7 @@ struct App {
     current_modifiers: winit::keyboard::ModifiersState,
     last_cursor_position: Option<(f32, f32)>,
     primary_shown: Arc<std::sync::atomic::AtomicBool>,
+    primary_presence: Option<crate::desktop_lifecycle::WindowPresence>,
     #[cfg(feature = "robot")]
     robot_controller: Option<RobotController>,
     #[cfg(feature = "robot")]
@@ -699,6 +700,7 @@ impl App {
             current_modifiers: winit::keyboard::ModifiersState::empty(),
             last_cursor_position: None,
             primary_shown: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            primary_presence: None,
             #[cfg(feature = "robot")]
             robot_controller: None,
             #[cfg(feature = "robot")]
@@ -5137,6 +5139,30 @@ impl cranpose_app_shell::PlatformTextInputHandler for DesktopTextInput {
     }
 }
 
+impl App {
+    fn observe_presence(&mut self, window_id: WinitWindowId, event: &WindowEvent) {
+        if let Some(presence) = &mut self.primary_presence {
+            presence.observe(window_id, event);
+        }
+    }
+
+    fn publish_settled_presence(&mut self) {
+        if let Some(state) = self
+            .primary_presence
+            .as_mut()
+            .and_then(crate::desktop_lifecycle::WindowPresence::settled)
+        {
+            cranpose_services::advance_lifecycle(state);
+        }
+    }
+}
+
+impl Drop for App {
+    fn drop(&mut self) {
+        cranpose_services::advance_lifecycle(cranpose_services::LifecycleState::Destroyed);
+    }
+}
+
 impl ApplicationHandler for App {
     fn proxy_wake_up(&mut self, event_loop: &dyn ActiveEventLoop) {
         if self.exiting {
@@ -5336,6 +5362,11 @@ impl ApplicationHandler for App {
         self.app = Some(app);
         self.accessibility = Some(accessibility);
         self.platform = Some(platform);
+        cranpose_services::advance_lifecycle(cranpose_services::LifecycleState::Resumed);
+        self.primary_presence = self
+            .primary_window_id()
+            .filter(|_| !self.settings.headless)
+            .map(crate::desktop_lifecycle::WindowPresence::shown);
         self.gpu_context = Some(DesktopGpuContext {
             instance,
             adapter,
@@ -5361,6 +5392,7 @@ impl ApplicationHandler for App {
     ) {
         self.sync_frame_pacing();
         self.track_pointer_for_cursors(window_id, &event);
+        self.observe_presence(window_id, &event);
         if self.primary_window_id() != Some(window_id) {
             self.dispatch_native_window_event(event_loop, window_id, event);
             return;
@@ -5801,6 +5833,7 @@ impl ApplicationHandler for App {
     }
 
     fn about_to_wait(&mut self, event_loop: &dyn ActiveEventLoop) {
+        self.publish_settled_presence();
         if cranpose_services::take_exit_request() {
             self.exiting = true;
             event_loop.exit();

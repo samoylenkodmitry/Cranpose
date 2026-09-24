@@ -314,6 +314,57 @@ pub fn dispatch_lifecycle_state(to: LifecycleState) {
     dispatch_lifecycle(LifecycleEvent { from, to });
 }
 
+/// The lifecycle state of a window or browser page that is `visible` and
+/// has keyboard `focused`, mapped the way Compose Multiplatform maps desktop
+/// windows: resumed while focused, paused while only visible, and stopped
+/// while minimized, hidden or in a background tab.
+pub fn window_lifecycle_state(visible: bool, focused: bool) -> LifecycleState {
+    match (visible, focused) {
+        (false, _) => LifecycleState::Stopped,
+        (true, true) => LifecycleState::Resumed,
+        (true, false) => LifecycleState::Paused,
+    }
+}
+
+fn lifecycle_level(state: LifecycleState) -> u8 {
+    match state {
+        LifecycleState::Destroyed => 0,
+        LifecycleState::Created | LifecycleState::Stopped => 1,
+        LifecycleState::Started | LifecycleState::Paused => 2,
+        LifecycleState::Resumed => 3,
+    }
+}
+
+fn next_lifecycle_step(from: LifecycleState, to: LifecycleState) -> Option<LifecycleState> {
+    let rising = match lifecycle_level(from).cmp(&lifecycle_level(to)) {
+        std::cmp::Ordering::Equal => return None,
+        std::cmp::Ordering::Less => true,
+        std::cmp::Ordering::Greater => false,
+    };
+    match (from, rising) {
+        (LifecycleState::Destroyed, _) => None,
+        (LifecycleState::Created | LifecycleState::Stopped, true) => Some(LifecycleState::Started),
+        (LifecycleState::Started | LifecycleState::Paused, true) => Some(LifecycleState::Resumed),
+        (LifecycleState::Resumed, _) => Some(LifecycleState::Paused),
+        (LifecycleState::Started | LifecycleState::Paused, false) => Some(LifecycleState::Stopped),
+        (LifecycleState::Created | LifecycleState::Stopped, false) => {
+            Some(LifecycleState::Destroyed)
+        }
+    }
+}
+
+/// Moves the host lifecycle to `target` through every state in between, in
+/// Android's order: a stopped app starts before it resumes, and a resumed one
+/// pauses before it stops, so leaving the foreground always runs the durable
+/// saves. Paused and started count as the same place, as do created and
+/// stopped. Hosts whose platform reports only visibility and focus use this
+/// instead of dispatching each transition themselves.
+pub fn advance_lifecycle(target: LifecycleState) {
+    while let Some(next) = next_lifecycle_step(current_lifecycle_state(), target) {
+        dispatch_lifecycle_state(next);
+    }
+}
+
 /// The `CompositionLocal` carrying the host's current lifecycle state.
 ///
 /// [`ProvideLifecycle`] installs it; descendants read it and recompose on every

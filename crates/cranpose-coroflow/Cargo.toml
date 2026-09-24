@@ -1,0 +1,25 @@
+[package]
+name = "cranpose-coroflow"
+description = "Runs coroflow coroutines, flows and view models inside Cranpose compositions"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+coroflow = { path = "../coroflow" }
+cranpose-core = { workspace = true }
+cranpose-services = { workspace = true }
+log = "0.4"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+cranpose-core = { workspace = true, features = ["internal"] }
+cranpose-foundation = { workspace = true }
