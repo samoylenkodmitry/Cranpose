@@ -1,7 +1,4 @@
-mod output_paths;
-mod robot_exit;
-mod text_showcase_external_helpers;
-mod visual_contract_metrics;
+use crate::{output_paths, robot_exit, text_showcase_external_helpers, visual_contract_metrics};
 
 use std::time::Duration;
 
@@ -290,7 +287,7 @@ fn row_top_edge_y(image: &image::RgbaImage, region: (u32, u32, u32, u32)) -> Opt
     Some(edge_ys[edge_ys.len() / 2] as f64)
 }
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Robot Layout Jitter Regression Contract ===");
 

@@ -1,4 +1,4 @@
-mod robot_exit;
+use crate::robot_exit;
 
 use std::{
     path::{Path, PathBuf},
@@ -26,7 +26,7 @@ fn chrome_bottom(robot: &cranpose::Robot) -> f32 {
     measured
 }
 
-fn main() {
+pub(crate) fn main() {
     let _ = env_logger::try_init();
     let shot_dir = PathBuf::from(
         std::env::var("ROBOT_SHOT_DIR").unwrap_or_else(|_| "target/culling-probe".to_string()),

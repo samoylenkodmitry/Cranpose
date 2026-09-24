@@ -1,20 +1,76 @@
 use std::path::{Path, PathBuf};
 
+const ROBOT_RUNNERS: &str = "apps/desktop-demo/robot-runners";
+
 pub(crate) fn run_at(root: &Path) -> Result<(), String> {
-    let unlinked = unlinked_integration_tests(root)?;
-    if unlinked.is_empty() {
-        println!("test-layout: every integration test file is linked");
+    let mut problems: Vec<String> = unlinked_integration_tests(root)?
+        .iter()
+        .map(|path| {
+            format!(
+                "  {} is not a module of its crate's tests/integration.rs",
+                path.display()
+            )
+        })
+        .collect();
+    problems.extend(unlisted_robot_runners(root)?.iter().map(|path| {
+        format!(
+            "  {} is not in the runners! table of {ROBOT_RUNNERS}/main.rs",
+            path.display()
+        )
+    }));
+    if problems.is_empty() {
+        println!("test-layout: every integration test file and robot runner is linked");
         return Ok(());
     }
-    let listed: Vec<String> = unlinked
-        .iter()
-        .map(|path| format!("  {}", path.display()))
-        .collect();
     Err(format!(
-        "test-layout: these test files are compiled by nothing; add them as modules of their \
-         crate's tests/integration.rs:\n{}",
-        listed.join("\n")
+        "test-layout: these tests are compiled by nothing:\n{}",
+        problems.join("\n")
     ))
+}
+
+pub(crate) fn unlisted_robot_runners(root: &Path) -> Result<Vec<PathBuf>, String> {
+    let dir = root.join(ROBOT_RUNNERS);
+    let Ok(table) = std::fs::read_to_string(dir.join("main.rs")) else {
+        return Ok(Vec::new());
+    };
+    let listed = runner_table(&table);
+    let entries =
+        std::fs::read_dir(&dir).map_err(|error| format!("read {}: {error}", dir.display()))?;
+    let mut unlisted = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
+            continue;
+        };
+        if !stem.starts_with("robot_") || path.extension().is_none_or(|extension| extension != "rs")
+        {
+            continue;
+        }
+        let source = std::fs::read_to_string(&path)
+            .map_err(|error| format!("read {}: {error}", path.display()))?;
+        let is_runner = source
+            .lines()
+            .any(|line| line.starts_with("pub(crate) fn main("));
+        if is_runner && !listed.iter().any(|name| name == stem) {
+            unlisted.push(path);
+        }
+    }
+    unlisted.sort();
+    Ok(unlisted)
+}
+
+fn runner_table(source: &str) -> Vec<String> {
+    source
+        .split_once("runners! {")
+        .and_then(|(_, rest)| rest.split_once('}'))
+        .map(|(body, _)| {
+            body.split(',')
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 pub(crate) fn unlinked_integration_tests(root: &Path) -> Result<Vec<PathBuf>, String> {

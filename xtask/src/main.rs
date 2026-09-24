@@ -187,7 +187,7 @@ fn print_usage() {
            complexity-gate       Diff-scoped cyclomatic complexity ceiling\n\
            duplication-gate      Diff-scoped copy-paste budget\n\
            ci-gate-reachability  Every `just` recipe CI runs must be reachable from `ci`/`ci-full`\n\
-           test-layout          Every tests/*.rs of a one-binary crate must be a module of tests/integration.rs\n\
+           test-layout          Every integration test file and robot runner must be linked into its binary\n\
          \n\
          bundle-macos options:\n\
            --package <name>       Cargo package to build [desktop-app]\n\

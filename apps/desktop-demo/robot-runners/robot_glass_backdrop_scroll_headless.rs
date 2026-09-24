@@ -1,15 +1,10 @@
-mod glass_backdrop_scroll_helpers;
-mod output_paths;
-mod robot_exit;
-mod robot_launch;
-mod scroll_stability_external_helpers;
-mod text_showcase_external_helpers;
+use crate::{glass_backdrop_scroll_helpers, output_paths, robot_exit, robot_launch};
 
 use cranpose_testing::capture_screenshot;
 use desktop_app::app;
 use glass_backdrop_scroll_helpers::{GlassBackdropScrollRun, WINDOW_HEIGHT, WINDOW_WIDTH};
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Robot Glass Backdrop Scroll (headless) ===");
     let output_dir = output_paths::diagnostic_path(&format!(

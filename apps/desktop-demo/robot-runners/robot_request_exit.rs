@@ -6,7 +6,7 @@ const WINDOW_WIDTH: u32 = 700;
 const WINDOW_HEIGHT: u32 = 500;
 const GRACE: Duration = Duration::from_secs(3);
 
-fn main() {
+pub(crate) fn main() {
     AppLauncher::new()
         .with_title("request_exit")
         .with_size(WINDOW_WIDTH, WINDOW_HEIGHT)

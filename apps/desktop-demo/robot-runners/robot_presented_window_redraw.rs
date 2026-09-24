@@ -1,5 +1,4 @@
-mod output_paths;
-mod text_showcase_external_helpers;
+use crate::{output_paths, text_showcase_external_helpers};
 
 use std::{path::PathBuf, time::Duration};
 
@@ -110,7 +109,7 @@ fn wait_for_presented_change(window_id: &str, before: &WindowCapture) -> WindowC
     after
 }
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Robot Presented Window Redraw ===");
 

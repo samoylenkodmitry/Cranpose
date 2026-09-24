@@ -20,7 +20,7 @@ fn wait_for_condition(
     panic!("timed out waiting for {description}");
 }
 
-fn main() {
+pub(crate) fn main() {
     AppLauncher::new()
         .with_title("Robot: Modifier Render Test")
         .with_size(1200, 900)

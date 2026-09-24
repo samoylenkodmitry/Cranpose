@@ -105,8 +105,8 @@ clippy-hyphenation:
 # Lint the robot runners, which `just clippy` cannot reach.
 #
 # `cargo clippy --workspace --all-targets` silently SKIPS a target whose
-# `required-features` are not enabled, and all ~165 `[[example]]` entries in
-# apps/desktop-demo carry `required-features = ["robot-app"]`. Skipping is not
+# `required-features` are not enabled, and the `robot` example that holds every
+# runner requires `robot-app`. Skipping is not
 # an error, so the omission never surfaced: `cargo check -p desktop-app
 # --examples` finishes in a fraction of a second having compiled nothing. The
 # runners went unlinted from the day the feature gate was added until #575.
@@ -305,8 +305,10 @@ test-robot-suite-partition:
 test-ci-gate-reachability:
     cargo xtask ci-gate-reachability
 
-# Each crate links its integration tests into one binary; a test file left out
-# of its tests/integration.rs would compile and run nothing.
+# Each crate links its integration tests into one binary, and every robot runner
+# is a module of the one `robot` binary; a test file left out of its
+# tests/integration.rs, or a runner left out of the runners! table, would
+# compile and run nothing.
 test-layout:
     cargo xtask test-layout
 
@@ -457,7 +459,7 @@ robot-accessibility-windows binary output:
     python scripts/a11y/desktop_robot.py --binary {{quote(binary)}} --output {{quote(output)}}
 
 test-windows-accessibility:
-    cargo build --locked --profile ci -p desktop-app --features robot-app --bin desktop-app --example robot_developer_inspector
+    cargo build --locked --profile ci -p desktop-app --features robot-app --bin desktop-app --example robot
     python scripts/a11y/windows_suite.py
 
 # `--no-daemon` keeps a shared Gradle daemon on the self-hosted boxes from

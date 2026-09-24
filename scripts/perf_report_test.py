@@ -20,9 +20,10 @@ class PerfReportContracts(unittest.TestCase):
             metadata = shlex.quote(json.dumps({'target_directory': str(root / 'configured artifacts')}))
             runner.write_text('#!/bin/sh\nif [ "$1" = metadata ]; then printf \'%s\\n\' ' + metadata + '; fi\n')
             runner.chmod(0o755)
-            binary = root / 'configured artifacts/ci/examples/robot_perf_harness'
+            binary = root / 'configured artifacts/ci/examples/robot'
             binary.parent.mkdir(parents=True)
             binary.write_text('''#!/bin/sh
+[ "$1" = robot_perf_harness ] || exit 97
 printf '%s\\n' 'PERF_PRESENTATION_SUMMARY configuration_unpaced=true'
 printf '%s\\n' 'PERF_PRESENTATION_CALIBRATION headroom=false'
 exit "$FIXTURE_EXIT"

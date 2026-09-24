@@ -1,5 +1,3 @@
-#![expect(dead_code)]
-
 use cranpose::RobotScreenshot;
 use image::RgbaImage;
 
@@ -15,14 +13,6 @@ pub(crate) struct FeatureStats {
 }
 
 impl FeatureStats {
-    pub(crate) fn centroid_x(self) -> f64 {
-        self.sum_x / self.count.max(1) as f64
-    }
-
-    pub(crate) fn centroid_y(self) -> f64 {
-        self.sum_y / self.count.max(1) as f64
-    }
-
     pub(crate) fn bounds_center_y(self) -> f64 {
         (self.min_y + self.max_y) as f64 / 2.0
     }

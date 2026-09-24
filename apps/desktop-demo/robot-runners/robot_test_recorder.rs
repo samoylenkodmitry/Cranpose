@@ -1,12 +1,10 @@
-mod robot_launch;
-
-mod output_paths;
+use crate::{output_paths, robot_launch};
 
 use std::time::Duration;
 
 use desktop_app::app;
 
-fn main() {
+pub(crate) fn main() {
     let recording_path = output_paths::diagnostic_path("robot_recording_test.rs");
 
     println!("=== Robot Recorder Test ===");

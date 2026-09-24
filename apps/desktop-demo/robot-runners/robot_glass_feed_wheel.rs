@@ -1,5 +1,4 @@
-mod robot_exit;
-mod robot_launch;
+use crate::{robot_exit, robot_launch};
 
 use cranpose::{Robot, SemanticElement};
 use cranpose_testing::{changed_pixel_count_in_region, find_element_by_text_exact};
@@ -80,7 +79,7 @@ fn check_scroll(robot: &Robot) {
     }
 }
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     robot_exit::arm_timeout(90);
     robot_launch::launch("Glass Feed Wheel", 800, 800)

@@ -1,4 +1,4 @@
-mod robot_launch;
+use crate::robot_launch;
 
 use std::time::Duration;
 
@@ -18,7 +18,7 @@ fn within_tolerance(actual: [u8; 3], expected: [u8; 3], tolerance: u8) -> bool {
         && (actual[2] as i16 - expected[2] as i16).abs() <= tolerance
 }
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Robot Image Chessboard Screenshot Test ===");
 

@@ -7,7 +7,7 @@ const ABSENT_WAYLAND_SOCKET: &str = "cranpose-robot-absent-wayland-socket";
 const CHILD_PASS: &str = "PASS: launched on the X display";
 const GRACE: Duration = Duration::from_secs(3);
 
-fn main() {
+pub(crate) fn main() {
     if std::env::var_os(CHILD_VAR).is_some() {
         launch_and_exit();
         return;
@@ -15,6 +15,7 @@ fn main() {
 
     let binary = std::env::current_exe().expect("locate this robot binary");
     let output = Command::new(binary)
+        .args(std::env::args_os().skip(1))
         .env(CHILD_VAR, "1")
         .env("WAYLAND_DISPLAY", ABSENT_WAYLAND_SOCKET)
         .output()

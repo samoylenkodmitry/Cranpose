@@ -1,4 +1,4 @@
-mod robot_launch;
+use crate::robot_launch;
 
 use std::time::Duration;
 
@@ -163,7 +163,7 @@ fn validate_progress_bar(elements: &[SemanticElement], percent: i32, issues: &mu
     }
 }
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Async Runtime Progress Bar Layout Test ===");
     println!("Window size: {WINDOW_WIDTH}x{WINDOW_HEIGHT}");

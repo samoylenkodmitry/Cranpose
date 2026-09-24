@@ -1,6 +1,4 @@
-mod robot_launch;
-
-mod robot_exit;
+use crate::{robot_exit, robot_launch};
 
 use std::time::Duration;
 
@@ -108,7 +106,7 @@ fn test_app() {
     );
 }
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== SubcomposeLayout Invalidation Routing Test ===");
     println!("Testing that modifier changes in LazyColumn items trigger re-renders\n");

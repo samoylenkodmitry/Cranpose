@@ -9,7 +9,6 @@ pub(crate) struct MarkdownFixtureClient {
 }
 
 impl MarkdownFixtureClient {
-    #[allow(dead_code)]
     pub(crate) fn from_body(body: String) -> Self {
         Self { body }
     }

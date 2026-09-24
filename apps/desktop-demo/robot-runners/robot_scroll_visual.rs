@@ -1,4 +1,4 @@
-mod robot_launch;
+use crate::robot_launch;
 
 use std::time::Duration;
 
@@ -17,7 +17,7 @@ fn read_first_index(robot: &cranpose::Robot) -> Option<usize> {
     parse_first_index(&text)
 }
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Robot Scroll Visual Test ===");
     println!("Verifying that scroll actually moves content visually\n");

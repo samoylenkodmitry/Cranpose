@@ -3,6 +3,7 @@ use std::{
     time::Instant,
 };
 
+use cranpose::AppLauncher;
 use log::{LevelFilter, Log, Metadata, Record};
 
 static TELEMETRY_RECORDS: OnceLock<Arc<Mutex<Vec<FrameTelemetryRecord>>>> = OnceLock::new();
@@ -89,7 +90,20 @@ fn should_forward_renderer_telemetry(message: &str) -> bool {
     message.contains("[wgpu-render-stage:") || message.contains("[frame-stage-telemetry]")
 }
 
-pub(crate) fn install_primary_frame_telemetry_logger() -> Arc<Mutex<Vec<FrameTelemetryRecord>>> {
+pub(crate) fn telemetry_window(
+    title: &str,
+    width: u32,
+    height: u32,
+) -> (AppLauncher, Arc<Mutex<Vec<FrameTelemetryRecord>>>) {
+    let records = install_primary_frame_telemetry_logger();
+    let launcher = AppLauncher::new()
+        .with_title(title)
+        .with_size(width, height)
+        .with_headless(false);
+    (launcher, records)
+}
+
+fn install_primary_frame_telemetry_logger() -> Arc<Mutex<Vec<FrameTelemetryRecord>>> {
     std::env::set_var("CRANPOSE_DESKTOP_FRAME_TELEMETRY_MS", "0");
     let records = Arc::new(Mutex::new(Vec::new()));
     let _ = TELEMETRY_RECORDS.set(Arc::clone(&records));

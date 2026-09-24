@@ -45,7 +45,7 @@ fn fail(message: String) -> ! {
     std::process::exit(1);
 }
 
-fn main() {
+pub(crate) fn main() {
     let _ = env_logger::try_init();
 
     AppLauncher::new()

@@ -4,7 +4,7 @@ use cranpose::AppLauncher;
 use cranpose_testing::{bounds_span, collect_tab_bounds, detect_tab_axis, root_bounds, TabAxis};
 use desktop_app::app;
 
-fn main() {
+pub(crate) fn main() {
     AppLauncher::new()
         .with_headless(true)
         .with_test_driver(|robot| {

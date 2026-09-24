@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use cranpose::AppLauncher;
 
 pub fn launch(title: &str, width: u32, height: u32) -> AppLauncher {

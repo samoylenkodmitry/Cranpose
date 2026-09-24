@@ -1,13 +1,11 @@
-mod robot_launch;
-
-mod robot_exit;
+use crate::{robot_exit, robot_launch};
 
 use std::time::Duration;
 
 use cranpose_testing::{find_button, find_button_in_semantics, find_in_semantics, find_text};
 use desktop_app::app;
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Robot Advance Frame Bug Test ===");
     println!("Testing: 'Advance Frame' button should increment frame counter\n");

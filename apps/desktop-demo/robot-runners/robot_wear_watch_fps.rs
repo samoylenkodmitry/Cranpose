@@ -58,7 +58,7 @@ fn click_tab(robot: &Robot, label: &str) {
         .unwrap_or_else(|err| panic!("settle tab {label:?}: {err}"));
 }
 
-fn main() -> ExitCode {
+pub(crate) fn main() -> ExitCode {
     let _ = env_logger::try_init();
 
     AppLauncher::new()

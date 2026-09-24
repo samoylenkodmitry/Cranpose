@@ -1,4 +1,4 @@
-mod robot_launch;
+use crate::robot_launch;
 
 use std::time::Duration;
 
@@ -36,7 +36,7 @@ fn print_semantics_with_bounds(elements: &[SemanticElement], indent: usize) {
     }
 }
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Positioned Boxes After LazyList (dup check) ===");
 
