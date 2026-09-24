@@ -1300,7 +1300,7 @@ fn scale_finite_dimension(value: f32, factor: f32) -> f32 {
 #[derive(Clone, Debug)]
 enum DisplayLineText {
     Source,
-    Remapped(crate::text::AnnotatedString),
+    Ellipsized(crate::text::AnnotatedString),
 }
 
 #[derive(Clone, Debug)]
@@ -1332,7 +1332,7 @@ impl DisplayLine {
     fn display_text<'a>(&'a self, source: &'a crate::text::AnnotatedString) -> &'a str {
         match &self.text {
             DisplayLineText::Source => &source.text[self.source_range.clone()],
-            DisplayLineText::Remapped(annotated) => annotated.text.as_str(),
+            DisplayLineText::Ellipsized(annotated) => annotated.text.as_str(),
         }
     }
 
@@ -1343,30 +1343,16 @@ impl DisplayLine {
         source: &crate::text::AnnotatedString,
         style: &TextStyle,
     ) -> f32 {
-        match &self.text {
-            DisplayLineText::Source => self.measured_width.unwrap_or_else(|| {
+        self.measured_width.unwrap_or_else(|| match &self.text {
+            DisplayLineText::Source => {
                 measurer
                     .measure_subsequence_for_node(node_id, source, self.source_range.clone(), style)
                     .width
-            }),
-            DisplayLineText::Remapped(annotated) => {
+            }
+            DisplayLineText::Ellipsized(annotated) => {
                 measurer.measure_for_node(node_id, annotated, style).width
             }
-        }
-    }
-
-    fn apply_display_text(&mut self, source: &crate::text::AnnotatedString, display_text: String) {
-        let source_text = &source.text[self.source_range.clone()];
-        self.measured_width = None;
-        self.text = if source_text == display_text {
-            DisplayLineText::Source
-        } else {
-            DisplayLineText::Remapped(remap_annotated_subsequence_for_display(
-                source,
-                self.source_range.clone(),
-                display_text.as_str(),
-            ))
-        };
+        })
     }
 
     fn extend_to_paragraph_end(&mut self, source: &crate::text::AnnotatedString) {
@@ -1382,19 +1368,21 @@ impl DisplayLine {
     fn ellipsize<M: TextMeasurer + ?Sized>(
         &mut self,
         measurer: &M,
+        node_id: Option<NodeId>,
         source: &crate::text::AnnotatedString,
         style: &TextStyle,
         max_width: Option<f32>,
         placement: EllipsisPlacement,
     ) {
-        let ellipsized = fit_ellipsis(
+        *self = fit_ellipsis(
             measurer,
-            self.display_text(source),
+            node_id,
+            source,
+            self.source_range.clone(),
             style,
             max_width,
             placement,
         );
-        self.apply_display_text(source, ellipsized);
     }
 }
 
@@ -1429,7 +1417,7 @@ fn build_display_annotated(
             DisplayLineText::Source => {
                 builder.append_annotated_subsequence(source, line.source_range.clone())
             }
-            DisplayLineText::Remapped(annotated) => builder.append_annotated(annotated),
+            DisplayLineText::Ellipsized(annotated) => builder.append_annotated(annotated),
         };
         if idx + 1 < lines.len() {
             builder = builder.append("\n");
@@ -1461,129 +1449,6 @@ fn trim_segment_end_whitespace(line: &str, start: usize, mut end: usize) -> usiz
         }
     }
     end
-}
-
-fn remap_annotated_subsequence_for_display(
-    source: &crate::text::AnnotatedString,
-    source_range: Range<usize>,
-    display_text: &str,
-) -> crate::text::AnnotatedString {
-    let source_text = &source.text[source_range.clone()];
-    if source_text == display_text {
-        return source.subsequence(source_range);
-    }
-
-    let display_chars = map_display_chars_to_source(source_text, display_text);
-    crate::text::AnnotatedString {
-        text: display_text.to_string(),
-        span_styles: remap_subsequence_range_styles(
-            &source.span_styles,
-            source_range.clone(),
-            &display_chars,
-        ),
-        paragraph_styles: remap_subsequence_range_styles(
-            &source.paragraph_styles,
-            source_range.clone(),
-            &display_chars,
-        ),
-        string_annotations: remap_subsequence_range_styles(
-            &source.string_annotations,
-            source_range.clone(),
-            &display_chars,
-        ),
-        link_annotations: remap_subsequence_range_styles(
-            &source.link_annotations,
-            source_range,
-            &display_chars,
-        ),
-    }
-}
-
-#[derive(Clone, Copy)]
-struct DisplayCharMap {
-    display_start: usize,
-    display_end: usize,
-    source_start: Option<usize>,
-}
-
-fn map_display_chars_to_source(source: &str, display: &str) -> Vec<DisplayCharMap> {
-    let source_chars: Vec<(usize, char)> = source.char_indices().collect();
-    let mut source_index = 0usize;
-    let mut maps = Vec::with_capacity(display.chars().count());
-
-    for (display_start, display_char) in display.char_indices() {
-        let display_end = display_start + display_char.len_utf8();
-        let mut source_start = None;
-        while source_index < source_chars.len() {
-            let (candidate_start, candidate_char) = source_chars[source_index];
-            source_index += 1;
-            if candidate_char == display_char {
-                source_start = Some(candidate_start);
-                break;
-            }
-        }
-        maps.push(DisplayCharMap {
-            display_start,
-            display_end,
-            source_start,
-        });
-    }
-
-    maps
-}
-
-fn remap_subsequence_range_styles<T: Clone>(
-    styles: &[crate::text::RangeStyle<T>],
-    source_range: Range<usize>,
-    display_chars: &[DisplayCharMap],
-) -> Vec<crate::text::RangeStyle<T>> {
-    let mut remapped = Vec::new();
-
-    for style in styles {
-        let overlap_start = style.range.start.max(source_range.start);
-        let overlap_end = style.range.end.min(source_range.end);
-        if overlap_start >= overlap_end {
-            continue;
-        }
-        let local_source_range =
-            (overlap_start - source_range.start)..(overlap_end - source_range.start);
-        let mut range_start = None;
-        let mut range_end = 0usize;
-
-        for map in display_chars {
-            let in_range = map.source_start.is_some_and(|source_start| {
-                source_start >= local_source_range.start && source_start < local_source_range.end
-            });
-
-            if in_range {
-                if range_start.is_none() {
-                    range_start = Some(map.display_start);
-                }
-                range_end = map.display_end;
-                continue;
-            }
-
-            if let Some(start) = range_start.take()
-                && start < range_end
-            {
-                remapped.push(crate::text::RangeStyle {
-                    item: style.item.clone(),
-                    range: start..range_end,
-                });
-            }
-        }
-
-        if let Some(start) = range_start.take()
-            && start < range_end
-        {
-            remapped.push(crate::text::RangeStyle {
-                item: style.item.clone(),
-                range: start..range_end,
-            });
-        }
-    }
-
-    remapped
 }
 
 fn normalize_max_width(max_width: Option<f32>) -> Option<f32> {
@@ -2037,12 +1902,6 @@ fn skip_leading_whitespace(line: &str, boundaries: &[usize], mut idx: usize) -> 
     idx
 }
 
-fn measured_width<M: TextMeasurer + ?Sized>(measurer: &M, text: &str, style: &TextStyle) -> f32 {
-    measurer
-        .measure(&crate::text::AnnotatedString::from(text), style)
-        .width
-}
-
 fn apply_overflow<M: TextMeasurer + ?Sized>(
     measurer: &M,
     node_id: Option<NodeId>,
@@ -2062,7 +1921,7 @@ fn apply_overflow<M: TextMeasurer + ?Sized>(
         visible_lines.truncate(options.max_lines);
         if let (Some(placement), Some(last_line)) = (ellipsis, visible_lines.last_mut()) {
             last_line.extend_to_paragraph_end(text);
-            last_line.ellipsize(measurer, text, style, max_width, placement);
+            last_line.ellipsize(measurer, node_id, text, style, max_width, placement);
         }
     }
 
@@ -2078,7 +1937,7 @@ fn apply_overflow<M: TextMeasurer + ?Sized>(
         if line_index + 1 == visible_len
             && let Some(placement) = ellipsis
         {
-            line.ellipsize(measurer, text, style, max_width, placement);
+            line.ellipsize(measurer, node_id, text, style, max_width, placement);
         }
     }
     did_overflow
@@ -2106,49 +1965,85 @@ impl EllipsisPlacement {
         }
     }
 
-    fn elide(self, line: &str, boundaries: &[usize], kept_chars: usize) -> String {
+    fn elide(
+        self,
+        source: &crate::text::AnnotatedString,
+        source_range: Range<usize>,
+        boundaries: &[usize],
+        kept_chars: usize,
+    ) -> crate::text::AnnotatedString {
         let char_count = boundaries.len() - 1;
-        match self {
-            Self::End => format!("{}{ELLIPSIS}", &line[..boundaries[kept_chars]]),
-            Self::Start => format!("{ELLIPSIS}{}", &line[boundaries[char_count - kept_chars]..]),
-            Self::Middle => format!(
-                "{}{ELLIPSIS}{}",
-                &line[..boundaries[kept_chars.div_ceil(2)]],
-                &line[boundaries[char_count - kept_chars / 2]..]
-            ),
-        }
+        let (head_chars, tail_chars) = match self {
+            Self::End => (kept_chars, 0),
+            Self::Start => (0, kept_chars),
+            Self::Middle => (kept_chars.div_ceil(2), kept_chars / 2),
+        };
+        let head_end = source_range.start + boundaries[head_chars];
+        let tail_start = source_range.start + boundaries[char_count - tail_chars];
+        crate::text::AnnotatedString::builder()
+            .append_annotated_subsequence(source, source_range.start..head_end)
+            .append(ELLIPSIS)
+            .append_annotated_subsequence(source, tail_start..source_range.end)
+            .to_annotated_string()
     }
 }
 
 fn fit_ellipsis<M: TextMeasurer + ?Sized>(
     measurer: &M,
-    line: &str,
+    node_id: Option<NodeId>,
+    source: &crate::text::AnnotatedString,
+    source_range: Range<usize>,
     style: &TextStyle,
     max_width: Option<f32>,
     placement: EllipsisPlacement,
-) -> String {
+) -> DisplayLine {
     let width_limit = max_width.unwrap_or(f32::INFINITY);
-    let fits =
-        |candidate: &str| measured_width(measurer, candidate, style) <= width_limit + WRAP_EPSILON;
-    if placement != EllipsisPlacement::End && fits(line) {
-        return line.to_string();
-    }
-    if !fits(ELLIPSIS) {
-        return String::new();
+    let fitting_line = |text: DisplayLineText| {
+        let mut line = DisplayLine {
+            source_range: source_range.clone(),
+            text,
+            measured_width: None,
+        };
+        let width = line.measure_width(measurer, node_id, source, style);
+        line.measured_width = Some(width);
+        (width <= width_limit + WRAP_EPSILON).then_some(line)
+    };
+    if placement != EllipsisPlacement::End
+        && let Some(line) = fitting_line(DisplayLineText::Source)
+    {
+        return line;
     }
 
-    let boundaries = char_boundaries(line);
+    let boundaries = char_boundaries(&source.text[source_range.clone()]);
+    let elided_line = |kept_chars: usize| {
+        fitting_line(DisplayLineText::Ellipsized(placement.elide(
+            source,
+            source_range.clone(),
+            &boundaries,
+            kept_chars,
+        )))
+    };
+    let Some(mut best) = elided_line(0) else {
+        return DisplayLine {
+            source_range: source_range.clone(),
+            text: DisplayLineText::Ellipsized(crate::text::AnnotatedString::default()),
+            measured_width: None,
+        };
+    };
+
     let mut fitting = 0usize;
     let mut overflowing = boundaries.len();
     while fitting + 1 < overflowing {
         let kept_chars = fitting + (overflowing - fitting) / 2;
-        if fits(&placement.elide(line, &boundaries, kept_chars)) {
-            fitting = kept_chars;
-        } else {
-            overflowing = kept_chars;
+        match elided_line(kept_chars) {
+            Some(line) => {
+                fitting = kept_chars;
+                best = line;
+            }
+            None => overflowing = kept_chars,
         }
     }
-    placement.elide(line, &boundaries, fitting)
+    best
 }
 
 fn char_boundaries(text: &str) -> Vec<usize> {
