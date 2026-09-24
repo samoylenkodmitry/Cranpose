@@ -1,8 +1,5 @@
 mod capture;
 
-#[path = "../text_showcase_external_helpers.rs"]
-mod x11_helpers;
-
 use std::{
     fmt::Display,
     path::{Path, PathBuf},
@@ -21,6 +18,8 @@ use cranpose::{
 use cranpose_foundation::text::TextFieldState;
 use cranpose_ui::text::{AnnotatedString, TextStyle, TextUnit};
 use desktop_app::app;
+
+use crate::text_showcase_external_helpers as x11_helpers;
 
 const LIQUID_WINDOW_SIZE: (f32, f32) = (900.0, 800.0);
 const TEXT_WINDOW_SIZE: (f32, f32) = (460.0, 340.0);
@@ -51,7 +50,6 @@ impl<T> RobotResultContext<T> for std::result::Result<T, String> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[expect(dead_code)]
 pub enum Case {
     TogglePress,
     MenuOpen,

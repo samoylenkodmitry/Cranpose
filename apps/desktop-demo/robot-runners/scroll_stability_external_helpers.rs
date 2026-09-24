@@ -47,7 +47,6 @@ pub(crate) struct ScrollStabilityConfig {
 }
 
 #[derive(Clone, Copy, Debug)]
-#[allow(dead_code)]
 pub(crate) struct ExactScrollStepConfig {
     pub target_text: &'static str,
     pub window_width: u32,
@@ -77,7 +76,6 @@ impl ScrollStabilityConfig {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ScrollStepDriver<'a> {
     PointerWheel,
-    #[allow(dead_code)]
     AppHook(&'a str),
 }
 
@@ -91,13 +89,11 @@ pub(crate) struct CompareCrop {
 }
 
 #[derive(Debug)]
-#[allow(dead_code)]
 pub(crate) struct InternalDiagnostic {
     pub output_dir: PathBuf,
     pub capture_scale: f32,
 }
 
-#[allow(dead_code)]
 pub(crate) fn run_scroll_stability_capture(
     robot: &cranpose::Robot,
     config: ScrollStabilityConfig,
@@ -111,7 +107,6 @@ pub(crate) fn run_scroll_stability_capture(
     )
 }
 
-#[allow(dead_code)]
 pub(crate) fn run_scroll_stability_capture_with_app_hook(
     robot: &cranpose::Robot,
     config: ScrollStabilityConfig,
@@ -130,7 +125,6 @@ pub(crate) fn run_scroll_stability_capture_with_app_hook(
     )
 }
 
-#[allow(dead_code)]
 pub(crate) fn run_presented_scroll_probe_with_app_hook(
     robot: &cranpose::Robot,
     config: ScrollStabilityConfig,
@@ -175,7 +169,6 @@ pub(crate) fn run_presented_scroll_probe_with_app_hook(
     passed
 }
 
-#[allow(dead_code)]
 pub(crate) fn semantics_bounds_for_exact_text(
     robot: &cranpose::Robot,
     text: &str,
@@ -184,7 +177,6 @@ pub(crate) fn semantics_bounds_for_exact_text(
         .unwrap_or_else(|| fail_with_semantics(robot, "semantic bounds must be visible"))
 }
 
-#[allow(dead_code)]
 pub(crate) fn advance_scroll_with_app_hook(
     robot: &cranpose::Robot,
     config: ExactScrollStepConfig,
@@ -315,7 +307,6 @@ fn run_scroll_stability_capture_with_driver(
     compare_ok
 }
 
-#[allow(dead_code)]
 pub(crate) fn run_internal_scroll_stability_capture(
     robot: &cranpose::Robot,
     config: ScrollStabilityConfig,
@@ -702,7 +693,6 @@ fn capture_x11_window_screenshot(
     }
 }
 
-#[allow(dead_code)]
 pub(crate) fn prepare_internal_diagnostic(
     enable_env: &str,
     scale_env: &str,

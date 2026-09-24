@@ -1,4 +1,4 @@
-mod perf_contract;
+use crate::perf_contract;
 
 use std::time::Duration;
 
@@ -147,7 +147,7 @@ fn click_tab(robot: &cranpose::Robot, label: &str) {
     let _ = robot.wait_for_idle();
 }
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Robot Shader Rect Test ===");
 

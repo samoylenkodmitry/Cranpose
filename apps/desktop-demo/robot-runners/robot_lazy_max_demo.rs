@@ -1,4 +1,4 @@
-mod robot_launch;
+use crate::robot_launch;
 
 use std::time::Duration;
 
@@ -7,7 +7,7 @@ use cranpose_testing::{
 };
 use desktop_app::app::lazy_list::lazy_list_example;
 
-fn main() {
+pub(crate) fn main() {
     println!("=== LazyColumn usize::MAX Demo Test (ACTUAL APP) ===\n");
 
     robot_launch::launch("LazyMax Test", 800, 600)

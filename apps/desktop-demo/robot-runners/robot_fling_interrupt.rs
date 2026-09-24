@@ -1,11 +1,11 @@
-mod robot_launch;
+use crate::robot_launch;
 
 use std::time::Duration;
 
 use cranpose_testing::{exit_with_timeout, find_button_in_semantics, find_text_in_semantics};
 use desktop_app::app;
 
-fn main() {
+pub(crate) fn main() {
     println!("=== Robot Fling Interrupt Test ===\n");
 
     robot_launch::launch("Robot Fling Interrupt Test", 800, 600)

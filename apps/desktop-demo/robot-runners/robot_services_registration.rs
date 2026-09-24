@@ -195,7 +195,7 @@ fn register_services() {
     cranpose_services::set_platform_image_picker(std::sync::Arc::new(RegisteredImagePicker(7)));
 }
 
-fn main() {
+pub(crate) fn main() {
     AppLauncher::new()
         .with_title("services_registration")
         .with_size(400, 300)

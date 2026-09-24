@@ -1,7 +1,4 @@
-mod robot_launch;
-
-mod robot_exit;
-mod robot_pixels;
+use crate::{robot_exit, robot_launch, robot_pixels};
 
 use std::time::Duration;
 
@@ -31,7 +28,7 @@ fn wait_for_sprite_color(robot: &Robot, x: f32, y: f32, expected: [u8; 4]) -> Re
     Err(last)
 }
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Robot Pressed State Test ===");
 

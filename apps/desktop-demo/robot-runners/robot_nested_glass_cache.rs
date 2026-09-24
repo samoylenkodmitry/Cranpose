@@ -1,6 +1,4 @@
-mod robot_exit;
-mod robot_launch;
-mod robot_pixels;
+use crate::{robot_exit, robot_launch, robot_pixels};
 
 use std::time::Duration;
 
@@ -100,7 +98,7 @@ fn expect_card_rerender(robot: &Robot, stage: &str, max_passes: u32) -> RobotScr
     screenshot
 }
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Robot Nested Glass Cache Test ===");
     robot_launch::launch(

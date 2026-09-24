@@ -1,4 +1,4 @@
-mod robot_launch;
+use crate::robot_launch;
 
 use std::time::Duration;
 
@@ -30,7 +30,7 @@ fn find_exact_text(elements: &[SemanticElement], text: &str) -> Option<(f32, f32
     None
 }
 
-fn main() {
+pub(crate) fn main() {
     println!("Robot Offset Test - Combined App");
     println!("=================================\n");
 

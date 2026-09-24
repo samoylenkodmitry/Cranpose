@@ -1,18 +1,15 @@
-mod external_x11_frame_telemetry;
-mod output_paths;
-mod perf_contract;
-mod text_showcase_external_helpers;
+use crate::{external_x11_frame_telemetry, output_paths, perf_contract, text_showcase_external_helpers};
 
 use std::{
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
-use cranpose::{AppLauncher, Robot};
+use cranpose::Robot;
 use cranpose_testing::find_button_exact_in_semantics;
 use desktop_app::app::{self, DemoTab};
 use external_x11_frame_telemetry::{
-    clear_records, install_primary_frame_telemetry_logger, summarize_records, FrameTelemetryRecord,
+    clear_records, telemetry_window, summarize_records, FrameTelemetryRecord,
 };
 use image::RgbaImage;
 use text_showcase_external_helpers::{capture_x11_window, find_window_id, focus_x11_window};
@@ -26,14 +23,11 @@ const MIN_PRESENTED_FRAMES: usize = 96;
 const MIN_PRESENTED_FPS: f64 = 120.0;
 const MAX_P95_TOTAL_MS: f64 = 8.33;
 
-fn main() {
-    let records = install_primary_frame_telemetry_logger();
+pub(crate) fn main() {
+    let (launcher, records) = telemetry_window(WINDOW_TITLE, WINDOW_WIDTH, WINDOW_HEIGHT);
     let driver_records = Arc::clone(&records);
 
-    AppLauncher::new()
-        .with_title(WINDOW_TITLE)
-        .with_size(WINDOW_WIDTH, WINDOW_HEIGHT)
-        .with_headless(false)
+    launcher
         .with_test_driver(move |robot| {
             run_external_animation_driver(robot, driver_records);
         })

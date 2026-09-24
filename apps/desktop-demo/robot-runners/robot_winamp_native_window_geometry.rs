@@ -1,4 +1,4 @@
-mod output_paths;
+use crate::output_paths;
 
 use std::{
     cell::RefCell,
@@ -106,7 +106,7 @@ impl WinampWindows {
     }
 }
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Robot Winamp Native Window Geometry ===");
 

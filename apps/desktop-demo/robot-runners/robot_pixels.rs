@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use cranpose::RobotScreenshot;
 
 /// The RGBA bytes under a logical-pixel position, using the screenshot's

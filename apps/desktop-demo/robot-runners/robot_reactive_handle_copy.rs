@@ -1,4 +1,4 @@
-mod robot_launch;
+use crate::robot_launch;
 
 use cranpose_core::remember;
 use cranpose_foundation::text::TextFieldState;
@@ -57,7 +57,7 @@ fn reactive_handle_copy_screen() {
     });
 }
 
-fn main() {
+pub(crate) fn main() {
     robot_launch::launch("Reactive Handle Copy", 640, 240)
         .with_test_driver(|robot| {
             std::thread::sleep(std::time::Duration::from_millis(500));

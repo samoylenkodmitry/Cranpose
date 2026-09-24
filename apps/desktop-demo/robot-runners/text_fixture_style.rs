@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use cranpose::Color;
 use cranpose_ui::text::{TextStyle, TextUnit};
 

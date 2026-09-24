@@ -23,7 +23,7 @@ const NONDETERMINISTIC_TABS: [DemoTab; 7] = [
     DemoTab::Wear,
 ];
 
-fn main() {
+pub(crate) fn main() {
     let _ = env_logger::try_init();
     println!("=== Robot Tab Screenshot Dump ===");
 

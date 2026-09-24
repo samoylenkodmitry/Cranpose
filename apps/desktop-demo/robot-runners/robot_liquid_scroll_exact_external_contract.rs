@@ -1,6 +1,4 @@
-mod output_paths;
-mod scroll_stability_external_helpers;
-mod text_showcase_external_helpers;
+use crate::{scroll_stability_external_helpers, text_showcase_external_helpers};
 
 use std::{path::Path, time::Duration};
 
@@ -71,7 +69,7 @@ const SCENES: [LiquidScrollScene; 6] = [
     },
 ];
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Robot Liquid Scroll Exact External ===");
 

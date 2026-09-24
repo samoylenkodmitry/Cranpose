@@ -1,4 +1,4 @@
-mod robot_launch;
+use crate::robot_launch;
 
 use std::time::Duration;
 
@@ -15,7 +15,7 @@ fn wait_for_content(robot: &Robot, expected: &str, attempts: usize, delay: Durat
     false
 }
 
-fn main() {
+pub(crate) fn main() {
     println!("Launching app with robot control...");
 
     robot_launch::launch("Robot Demo", 800, 600)

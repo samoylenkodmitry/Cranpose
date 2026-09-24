@@ -1,4 +1,4 @@
-mod robot_launch;
+use crate::robot_launch;
 
 use std::time::Duration;
 
@@ -189,7 +189,7 @@ fn validate_bounds(
     issues
 }
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Comprehensive Layout Validation Robot Test ===");
     println!("Window size: {WINDOW_WIDTH}x{WINDOW_HEIGHT}");

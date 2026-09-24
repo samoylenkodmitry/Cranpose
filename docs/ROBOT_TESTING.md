@@ -9,17 +9,24 @@ Robot testing provides automated UI testing capabilities for Cranpose applicatio
 `Robot` and `AppLauncher::with_test_driver` live in the `cranpose` crate behind
 the `robot` feature (which also needs `desktop-shell` and `renderer-wgpu`).
 `apps/desktop-demo` wires this up through its own `robot-app` feature in
-`Cargo.toml`, which every robot-runner example requires:
+`Cargo.toml`. Every robot runner is a module of one example binary, `robot`,
+which takes the runner's name as its argument:
 
 ```toml
 [features]
 robot-app = ["logging", "cranpose-ui/test-helpers"]
 
 [[example]]
-name = "robot_interactive"
-path = "robot-runners/robot_interactive.rs"
-required-features = ["robot-app"]
+name = "robot"
+path = "robot-runners/main.rs"
+required-features = ["desktop", "renderer-wgpu", "robot-app"]
 ```
+
+A runner is a file `robot-runners/robot_<name>.rs` whose entry point is
+`pub(crate) fn main`, listed in the `runners!` table of
+`robot-runners/main.rs`. It reaches the shared helpers declared there through
+`use crate::<helper>;`. `cargo xtask test-layout` fails when a runner is
+missing from the table.
 
 For the separate headless end-to-end harness that drives full example
 binaries via `run_robot_test.sh`, see
@@ -309,10 +316,13 @@ Robot::print_semantics(&semantics, 0);
 
 ```bash
 # Run a specific robot test
-cargo run --package desktop-app --example robot_interactive --features robot-app
+cargo run --package desktop-app --example robot --features robot-app -- robot_interactive
 
 # Run with full logging
-RUST_LOG=debug cargo run --package desktop-app --example robot_interactive --features robot-app
+RUST_LOG=debug cargo run --package desktop-app --example robot --features robot-app -- robot_interactive
+
+# List every runner
+cargo run --package desktop-app --example robot --features robot-app -- --list
 ```
 
 ## Troubleshooting

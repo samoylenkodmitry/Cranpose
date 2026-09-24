@@ -1,15 +1,11 @@
-mod robot_launch;
-
-mod robot_exit;
+use crate::{robot_exit, robot_launch, text_input_robot_helpers};
 
 use std::time::Duration;
 
 use cranpose_testing::{find_button_in_semantics, find_in_semantics, find_text};
 use desktop_app::app;
 
-mod text_input_robot_helpers;
-
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Robot Text Input Value Disappear Bug Test ===");
     println!("Testing: 'Current value:' should remain visible after clicking input\n");

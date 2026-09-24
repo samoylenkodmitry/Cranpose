@@ -4,8 +4,7 @@
 //! both over saturated lazy-list rows, with black gaps that make an oversized
 //! structural rim especially visible.
 
-mod robot_exit;
-mod robot_shot;
+use crate::{robot_exit, robot_shot};
 
 use std::{path::PathBuf, process::ExitCode, sync::atomic::AtomicBool, time::Duration};
 
@@ -54,7 +53,7 @@ fn probe_glass() -> Glass {
         .transmission_refraction(1.0)
 }
 
-fn main() -> ExitCode {
+pub(crate) fn main() -> ExitCode {
     let _ = env_logger::try_init();
     let shot_dir = PathBuf::from(
         std::env::var("ROBOT_SHOT_DIR")

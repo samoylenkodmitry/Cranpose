@@ -1,6 +1,4 @@
-mod robot_launch;
-
-mod robot_exit;
+use crate::{robot_exit, robot_launch};
 
 use std::time::Duration;
 
@@ -41,7 +39,7 @@ fn fetch_list_viewport(robot: &Robot) -> Option<ListViewport> {
     })
 }
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Fling Edge Case Tests ===\n");
 

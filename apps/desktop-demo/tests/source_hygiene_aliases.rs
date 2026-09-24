@@ -414,7 +414,7 @@ fn external_visual_contracts_cover_text_tab_after_tab_walk() {
         .to_path_buf();
 
     let visual_runner =
-        fs::read_to_string(root.join("examples/robot_tab_walk_text_visual_contract.rs"))
+        fs::read_to_string(root.join("robot-runners/robot_tab_walk_text_visual_contract.rs"))
             .expect("failed to read tab-walk visual runner");
     assert!(
         visual_runner.contains("TEST_ACTIVE_TAB_STATE")

@@ -1,7 +1,4 @@
-mod liquid_page;
-mod robot_exit;
-mod robot_shot;
-mod robot_tab_fixture;
+use crate::{liquid_page, robot_exit, robot_shot, robot_tab_fixture};
 
 use std::{path::PathBuf, process::ExitCode, time::Duration};
 
@@ -35,7 +32,7 @@ const TABS: [(&str, &str); 4] = [
 
 type Bounds = (f32, f32, f32, f32);
 
-fn main() -> ExitCode {
+pub(crate) fn main() -> ExitCode {
     let _ = env_logger::try_init();
     let shot_dir = PathBuf::from(
         std::env::var("ROBOT_SHOT_DIR").unwrap_or_else(|_| "target/touched-shadow".into()),

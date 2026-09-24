@@ -1,6 +1,4 @@
-mod robot_launch;
-
-mod robot_exit;
+use crate::{robot_exit, robot_launch};
 
 use std::time::Duration;
 
@@ -56,7 +54,7 @@ fn wait_for_counter_value(
     counter_value(robot)
 }
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Robot Increment Button Bug Test ===");
     println!("Testing if Increment button works after tab switch + cursor movement\n");

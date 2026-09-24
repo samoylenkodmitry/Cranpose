@@ -1,15 +1,11 @@
-mod robot_launch;
-
-mod robot_exit;
+use crate::{robot_exit, robot_launch, text_input_robot_helpers};
 
 use std::time::Duration;
 
 use cranpose_testing::{find_button, find_in_semantics, find_text};
 use desktop_app::app;
 
-mod text_input_robot_helpers;
-
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Double-Click / Triple-Click Selection Test ===\n");
 

@@ -161,6 +161,7 @@ history behind the current architecture is
 | Android / Wear OS | Vulkan/GLES via wgpu | Release APK build is checked in CI |
 | iOS | UIKit/CAMetalLayer via `winit-uikit` | Simulator and device builds are checked in CI |
 | Web (WASM) | WebGL2 (WebGPU opt-in via `?backend=webgpu`) | Demo build and Pages deploy are checked in CI |
+| Inside another program (IntelliJ-platform IDEs) | Off-screen wgpu in a child process, streamed to the host (`embed` feature) | Experimental; [plugin template](https://github.com/samoylenkodmitry/cranpose-intellij-plugin-template) |
 
 Release binaries for the desktop platforms are attached to each
 [release](https://github.com/samoylenkodmitry/Cranpose/releases).
@@ -234,6 +235,14 @@ python3 -m http.server 8080
 
 Open `http://localhost:8080`. WebGL2 is the default backend; append
 `?backend=webgpu` to the URL to force WebGPU when the browser supports it.
+
+### Inside an IDE (IntelliJ plugin)
+
+The `embed` feature runs an app inside another program's window: frames are
+drawn off screen and streamed to the host, which sends input, theme and
+messages back. The
+[IntelliJ plugin template](https://github.com/samoylenkodmitry/cranpose-intellij-plugin-template)
+uses it to write tool windows in Rust with Cranpose, shaders included.
 
 ## Binary size
 

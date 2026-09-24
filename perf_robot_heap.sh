@@ -234,7 +234,7 @@ fi
 finalize_perf_scenarios
 
 PROFILE_DIR="debug"
-BUILD_ARGS=(--package desktop-app --example "$EXAMPLE" --features robot-app)
+BUILD_ARGS=(--package desktop-app --example robot --features robot-app)
 
 if [[ "$PROFILE" == "release" ]]; then
     PROFILE_DIR="release"
@@ -252,7 +252,7 @@ fi
 
 "${CARGO_RUNNER[@]}" build "${BUILD_ARGS[@]}"
 
-BIN="target/${PROFILE_DIR}/examples/${EXAMPLE}"
+BIN="target/${PROFILE_DIR}/examples/robot"
 if [[ ! -x "$BIN" ]]; then
     echo "Binary not found: $BIN"
     exit 1
@@ -281,7 +281,7 @@ for scenario in "${PERF_SCENARIOS[@]}"; do
         OUTPUT_FILE="${OUTPUT_PREFIX}_${scenario}.data"
         REPORT_FILE="${OUTPUT_PREFIX}_${scenario}_report.txt"
         CRANPOSE_PERF_SCENARIO="$scenario" \
-            run_target heaptrack --output "$OUTPUT_FILE" "$BIN" 2>&1 | tee "$LOG_FILE"
+            run_target heaptrack --output "$OUTPUT_FILE" "$BIN" "$EXAMPLE" 2>&1 | tee "$LOG_FILE"
         heaptrack_print "$OUTPUT_FILE" | tee "$REPORT_FILE"
 
         append_perf_summary_block "$SUMMARY_REPORT" "$scenario" "$LOG_FILE"
@@ -309,7 +309,7 @@ for scenario in "${PERF_SCENARIOS[@]}"; do
             --stacks=no \
             --xtree-memory=full \
             --xtree-memory-file="$XTREE_OUT" \
-            "$BIN" \
+            "$BIN" "$EXAMPLE" \
             2>&1 | tee "$LOG_FILE"
 
     ms_print "$MASSIF_OUT" | tee "$MASSIF_REPORT"

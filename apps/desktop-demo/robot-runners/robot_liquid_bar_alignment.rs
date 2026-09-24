@@ -1,4 +1,4 @@
-mod robot_exit;
+use crate::robot_exit;
 
 use std::{
     path::{Path, PathBuf},
@@ -16,7 +16,7 @@ const SETTLE_MS: u64 = 900;
 const COLUMN_CHANGE_FLOOR: usize = 6;
 const ALIGNMENT_BUDGET_DP: f32 = 5.0;
 
-fn main() -> ExitCode {
+pub(crate) fn main() -> ExitCode {
     let _ = env_logger::try_init();
     let shot_dir = PathBuf::from(
         std::env::var("ROBOT_SHOT_DIR").unwrap_or_else(|_| "target/liquid-bar-alignment".into()),

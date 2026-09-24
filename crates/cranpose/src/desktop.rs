@@ -6806,7 +6806,7 @@ pub fn try_run(
     mut settings: AppSettings,
     content: impl FnMut() + 'static,
 ) -> Result<(), LaunchError> {
-    register_application_id(settings.application_id.as_deref());
+    crate::application_id::register(settings.application_id.as_deref());
 
     let event_loop = build_event_loop().map_err(LaunchError::EventLoopCreate)?;
     let event_proxy = event_loop.create_proxy();
@@ -6865,28 +6865,6 @@ pub fn try_run(
     }
 
     run_result.map_err(LaunchError::EventLoopRun)
-}
-
-fn register_application_id(configured: Option<&str>) {
-    let derived;
-    let application_id = match configured {
-        Some(application_id) => application_id,
-        None => {
-            derived = std::env::current_exe()
-                .ok()
-                .and_then(|path| {
-                    path.file_stem()
-                        .map(|stem| stem.to_string_lossy().into_owned())
-                })
-                .unwrap_or_else(|| "cranpose-app".to_string());
-            derived.as_str()
-        }
-    };
-    if let Err(error) = cranpose_services::set_application_id(application_id) {
-        log::warn!("cranpose: `{application_id}` is not a usable application id: {error}");
-        return;
-    }
-    crate::pipeline_cache_file::publish();
 }
 
 /// Runs a desktop application and exits the process on success.

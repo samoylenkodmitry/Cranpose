@@ -1,4 +1,4 @@
-mod output_paths;
+use crate::output_paths;
 
 use std::{
     fs,
@@ -379,7 +379,7 @@ fn run_profile(robot: &cranpose::Robot, duration: Duration, scroll_steps: usize,
     robot.exit().expect("Failed to exit");
 }
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Shaders Performance Profiling Robot ===");
 

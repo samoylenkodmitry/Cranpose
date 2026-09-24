@@ -1,5 +1,4 @@
-mod robot_exit;
-mod text_fixture_style;
+use crate::{robot_exit, text_fixture_style};
 
 use std::{
     path::{Path, PathBuf},
@@ -24,7 +23,7 @@ const TEXT: &str =
 
 static FAILED: AtomicBool = AtomicBool::new(false);
 
-fn main() -> ExitCode {
+pub(crate) fn main() -> ExitCode {
     let _ = env_logger::try_init();
     let shot_dir = PathBuf::from(
         std::env::var("ROBOT_SHOT_DIR").unwrap_or_else(|_| "target/text-loupe".to_string()),

@@ -1,4 +1,4 @@
-mod robot_launch;
+use crate::robot_launch;
 
 use std::time::Duration;
 
@@ -7,7 +7,7 @@ use cranpose_testing::find_text_in_semantics;
 const MAX_NEW_COMPOSES_DURING_SCROLL: usize = 200;
 const MIN_RETAINED_SLOTS_AFTER_ROUNDTRIP: usize = 1;
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Content-Type Reuse Robot Test ===");
 

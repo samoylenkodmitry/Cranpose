@@ -1,10 +1,10 @@
-mod robot_launch;
+use crate::robot_launch;
 
 use std::time::Duration;
 
 use cranpose_testing::find_text_in_semantics;
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== LazyList Extreme Navigation Robot Test ===");
     println!("Tests: Set usize::MAX → Jump Mid → Jump End");

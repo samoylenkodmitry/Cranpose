@@ -1,5 +1,3 @@
-#![expect(dead_code)]
-
 use std::time::Duration;
 
 use cranpose::Robot;

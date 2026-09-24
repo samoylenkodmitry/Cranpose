@@ -1,6 +1,4 @@
-mod robot_launch;
-
-mod regression_robot_support;
+use crate::{regression_robot_support, robot_launch};
 
 use std::time::Duration;
 
@@ -51,7 +49,7 @@ fn average_luminance(
     Ok(total / samples.max(1.0))
 }
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Robot Counter Conditional Text Top Test ===");
 

@@ -1,8 +1,4 @@
-mod glass_backdrop_scroll_helpers;
-mod output_paths;
-mod robot_exit;
-mod scroll_stability_external_helpers;
-mod text_showcase_external_helpers;
+use crate::{glass_backdrop_scroll_helpers, output_paths, text_showcase_external_helpers};
 
 use cranpose::AppLauncher;
 use desktop_app::app;
@@ -11,7 +7,7 @@ use text_showcase_external_helpers::{capture_x11_window_screenshot, find_window_
 
 const WINDOW_TITLE: &str = "Robot Glass Backdrop Scroll Stability";
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Robot Glass Backdrop Scroll Stability ===");
     let output_dir = output_paths::diagnostic_path(&format!(

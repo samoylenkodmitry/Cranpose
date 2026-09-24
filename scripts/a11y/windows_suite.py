@@ -15,7 +15,7 @@ def main():
     ], check=True, timeout=180)
     environment = dict(os.environ, CRANPOSE_INSPECTOR_ARTIFACTS=str(output / 'inspector'))
     with (output / 'inspector.log').open('w') as log:
-        subprocess.run(['target/ci/examples/robot_developer_inspector.exe'],
+        subprocess.run(['target/ci/examples/robot.exe', 'robot_developer_inspector'],
                        env=environment, stdout=log, stderr=subprocess.STDOUT,
                        check=True, timeout=120)
     if 'PASS: floating inspector' not in (output / 'inspector.log').read_text():

@@ -1,4 +1,4 @@
-mod markdown_scroll_drag;
+use crate::markdown_scroll_drag;
 
 use std::{cmp::Ordering, fs, sync::Arc, time::Duration};
 
@@ -356,7 +356,7 @@ fn load_fixture() -> FixtureData {
     FixtureData { body, bottom_probe }
 }
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Markdown End Reverse-Drag Robot Test ===");
 

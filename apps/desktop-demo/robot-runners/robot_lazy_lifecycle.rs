@@ -1,4 +1,4 @@
-mod robot_launch;
+use crate::robot_launch;
 
 use std::time::Duration;
 
@@ -143,7 +143,7 @@ fn lifecycle_item(index: usize, stats: MutableState<LifecycleStats>) {
     );
 }
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== LazyList Lifecycle Robot Test ===");
 

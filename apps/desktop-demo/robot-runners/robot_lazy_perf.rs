@@ -1,4 +1,4 @@
-mod robot_launch;
+use crate::robot_launch;
 
 use std::time::{Duration, Instant};
 
@@ -111,7 +111,7 @@ fn format_large_number(n: usize) -> String {
     result.chars().rev().collect()
 }
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== LazyColumn Performance Test (usize::MAX items) ===\n");
     println!(
