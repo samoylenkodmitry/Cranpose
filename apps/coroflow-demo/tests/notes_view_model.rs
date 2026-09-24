@@ -225,7 +225,7 @@ fn the_screen_and_its_rows_report_through_one_message_bus() {
             "pinning moves it to the top"
         );
 
-        row.on_delete(note.clone());
+        row.on_delete(note);
         harness.scheduler.run_current();
         assert_eq!(
             events.next_now(),
