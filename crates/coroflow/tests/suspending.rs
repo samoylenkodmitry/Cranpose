@@ -6,10 +6,9 @@ use std::{
     time::Duration,
 };
 
-mod support;
-
 use coroflow::{Flow, FlowExt, TestScheduler, delay, flow_of};
-use support::{DropMarker, endless, timed};
+
+use crate::support::{DropMarker, endless, timed};
 
 fn timeline<F: Flow>(scheduler: &TestScheduler, flow: &F) -> Vec<(u64, F::Item)> {
     let mut seen = Vec::new();

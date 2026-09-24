@@ -7,13 +7,12 @@ use std::{
     time::Duration,
 };
 
-mod support;
-
 use coroflow::{
     CoroutineScope, Flow, FlowExt, JobOutcome, MutableStateFlow, SendFlow, TestScheduler, TimedOut,
     Turbine, combine_all, combine4, combine5, delay, flow, flow_of,
 };
-use support::{endless, timed};
+
+use crate::support::{endless, timed};
 
 fn every_110ms() -> impl SendFlow<Item = u32> + Clone {
     flow(|emitter| async move {

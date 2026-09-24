@@ -1,12 +1,16 @@
-mod allocations;
 mod blocking_dispatch;
 mod buffering;
 mod channels;
 mod exclusion;
 mod hot_flows;
+mod jobs;
+mod kotlin_operators;
 mod more_operators;
 mod operators;
 mod scopes;
 mod send_inference;
 mod sharing;
 mod structured;
+mod support;
+mod suspending;
+mod testing_tools;

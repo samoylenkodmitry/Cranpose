@@ -40,3 +40,7 @@ harness = false
 [[test]]
 name = "integration"
 path = "tests/integration.rs"
+
+[[test]]
+name = "allocations"
+path = "tests/allocations/main.rs"
