@@ -7,6 +7,9 @@ set -euo pipefail
 # A git hook exports these for the repository it runs in; left set, they
 # would point every git command below at that repository, not the fixture.
 unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE GIT_PREFIX GIT_OBJECT_DIRECTORY
+# Nor may the host's own git configuration reach the fixture: a runner that
+# signs every commit would make each fixture commit wait for a passphrase.
+export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 subject="$script_dir/tree_memo.sh"

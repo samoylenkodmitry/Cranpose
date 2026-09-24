@@ -51,4 +51,12 @@ if [[ "$(uname -s)" == Linux && -z "${SCCACHE_DIR:-}" && -d "$real_home/ci-cache
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# `just fmt` and `just fmt-check` run the pinned nightly's formatter. A host
+# can carry that toolchain without its rustfmt component, and then every
+# formatting check fails with "'cargo-fmt' is not installed".
+nightly_channel="$(sed -n 's/^channel = "\(.*\)"/\1/p' "$SCRIPT_DIR/../../rust-toolchain-nightly.toml")"
+rustup toolchain install --no-self-update "$nightly_channel" --profile minimal >/dev/null
+rustup component add --toolchain "$nightly_channel" rustfmt >/dev/null
+
 "$SCRIPT_DIR/start_sccache.sh"
