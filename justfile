@@ -87,8 +87,10 @@ clippy-ios:
 # only recipe that lints the desktop shell's robot driver and its tests.
 # `playbilling` rides along too: it is Android-only and compiles away on every
 # other target, so there is no per-target recipe for it to join instead.
+# `embed` rides along because no workspace member turns it on; the host that
+# uses it, the IntelliJ plugin template, lives in its own repository.
 clippy-optional-backends:
-    cargo clippy -p cranpose --no-default-features --features desktop,renderer-wgpu,camera-desktop,robot,audio-desktop,media,storekit,playbilling --all-targets -- -D warnings
+    cargo clippy -p cranpose --no-default-features --features desktop,renderer-wgpu,camera-desktop,robot,audio-desktop,media,storekit,playbilling,embed --all-targets -- -D warnings
 
 # Lint the SVG image painter. `svg` is off by default and no crate in the
 # workspace ever turns it on, so `just clippy` never builds `image_svg.rs`
@@ -248,6 +250,7 @@ test-features:
     cargo test --profile ci -p cranpose-ui --features svg
     cargo test --profile ci -p cranpose-render-common --features text-hyphenation-embedded
     cargo test --profile ci -p cranpose
+    cargo test --profile ci -p cranpose --no-default-features --features embed
     cargo test --profile ci -p cranpose --no-default-features --features desktop,renderer-wgpu,camera-desktop,robot,audio-desktop,media,storekit,playbilling
 
 # The docs-only trigger filter that lets the heavy jobs skip a prose diff.

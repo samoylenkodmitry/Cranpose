@@ -1096,6 +1096,40 @@ impl AppLauncher {
         std::process::exit(0)
     }
 
+    /// Run the application inside the host program that started it.
+    ///
+    /// Connects to `endpoint`, then draws every frame off screen and streams
+    /// it to the host, which sends size, input and theme events back. The call
+    /// returns when the host closes the connection. See [`crate::embed`].
+    #[cfg(feature = "embed")]
+    pub fn try_run_embedded(
+        self,
+        endpoint: crate::embed::EmbedEndpoint,
+        content: impl FnMut() + 'static,
+    ) -> Result<(), crate::embed::EmbedError> {
+        crate::embed::try_run(self.settings, endpoint, content)
+    }
+
+    /// Run the application inside the host program that started it, and exit
+    /// the process when the host closes it.
+    ///
+    /// Use [`AppLauncher::try_run_embedded`] when the caller needs a typed
+    /// failure.
+    #[cfg(feature = "embed")]
+    pub fn run_embedded(
+        self,
+        endpoint: crate::embed::EmbedEndpoint,
+        content: impl FnMut() + 'static,
+    ) -> ! {
+        match self.try_run_embedded(endpoint, content) {
+            Ok(()) => std::process::exit(0),
+            Err(error) => {
+                eprintln!("embedded launch failed: {error}");
+                std::process::exit(1)
+            }
+        }
+    }
+
     /// Run the application (iOS platform).
     ///
     /// Drives winit's UIKit event loop and blocks for the lifetime of the app.

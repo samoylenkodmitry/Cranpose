@@ -1,34 +1,11 @@
-use std::{
-    cell::RefCell,
-    rc::Rc,
-    sync::{Mutex, MutexGuard, OnceLock, PoisonError},
-    time::{Duration, Instant},
-};
+use std::{cell::RefCell, rc::Rc};
 
 use cranpose_core::{CollectEvents, Composition, MemoryApplier, location_key};
 use cranpose_services::{
     IncomingContent, clear_incoming_content, publish_incoming_content, rememberIncomingContent,
 };
 
-fn serial() -> MutexGuard<'static, ()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-}
-
-fn pump_until(composition: &mut Composition<MemoryApplier>, done: impl Fn() -> bool) -> bool {
-    let runtime = composition.runtime_handle();
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while Instant::now() < deadline {
-        runtime.drain_ui();
-        if done() {
-            return true;
-        }
-        std::thread::yield_now();
-    }
-    done()
-}
+use crate::composition_support::{pump_until, serial};
 
 fn item(name: &str) -> IncomingContent {
     IncomingContent::from_bytes(vec![1, 2, 3]).with_name(name)
