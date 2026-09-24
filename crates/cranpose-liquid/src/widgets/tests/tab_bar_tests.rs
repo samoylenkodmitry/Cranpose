@@ -377,7 +377,7 @@ fn contact_growth_follows_the_native_presentation_clock() {
             );
             let mut error = 0.0;
             let mut count = 0;
-            for line in include_str!("../../tests/fixtures/native_tab_contact.csv")
+            for line in include_str!("../../../tests/fixtures/native_tab_contact.csv")
                 .lines()
                 .skip(1)
             {

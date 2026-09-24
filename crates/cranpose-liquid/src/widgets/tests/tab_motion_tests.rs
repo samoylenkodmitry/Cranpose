@@ -29,7 +29,7 @@ fn contact_light_tracks_native_onset_and_keeps_the_dimmed_release() {
     let mut route = usize::MAX;
     let mut error = 0.0;
     let mut samples = 0;
-    for row in include_str!("../../tests/fixtures/native_tab_glow.csv")
+    for row in include_str!("../../../tests/fixtures/native_tab_glow.csv")
         .lines()
         .skip(1)
     {
@@ -127,7 +127,7 @@ fn shape_response_tracks_native_reversal_microframes() {
     let mut extrema = [0.0f32; 2];
     let mut route = usize::MAX;
     let mut output = String::from("route,time,x,native_width,native_height,width,height\n");
-    for line in include_str!("../../tests/fixtures/native_tab_shape.csv")
+    for line in include_str!("../../../tests/fixtures/native_tab_shape.csv")
         .lines()
         .skip(1)
     {
