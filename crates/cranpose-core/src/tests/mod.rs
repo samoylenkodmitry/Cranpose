@@ -765,6 +765,8 @@ mod branch_group_tests;
 mod composable_macro_tests;
 mod composer_applier_tests;
 mod composition_and_recompose_scope_tests;
+#[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+mod debug_trace_tests;
 mod internal_surface_tests;
 mod movable_tests;
 mod recompose_and_diff_tests;

@@ -17,18 +17,17 @@ fn debug_scope_tracking_enabled() -> bool {
         || log::log_enabled!(target: "cranpose::compose::parent", log::Level::Trace)
 }
 
-#[cfg(any(not(debug_assertions), target_arch = "wasm32"))]
+#[cfg(all(debug_assertions, target_arch = "wasm32"))]
 fn debug_scope_tracking_enabled() -> bool {
     false
 }
 
+#[cfg(debug_assertions)]
 #[doc(hidden)]
 pub fn debug_label_current_scope(name: &'static str) {
     if !debug_scope_tracking_enabled() {
-        let _ = name;
         return;
     }
-    #[cfg(debug_assertions)]
     with_current_composer(|composer| {
         if let Some(scope) = composer.current_recompose_scope() {
             DEBUG_SCOPE_LABELS.with(|labels| {
@@ -38,68 +37,74 @@ pub fn debug_label_current_scope(name: &'static str) {
     });
 }
 
-pub(crate) fn debug_record_scope_invalidation<T: 'static>(
+#[cfg(debug_assertions)]
+pub(crate) fn debug_record_scope_invalidation(
     scope_id: usize,
     state_id: Option<StateId>,
+    value_type: &'static str,
 ) {
     if !debug_scope_tracking_enabled() {
-        let _ = scope_id;
-        let _ = state_id;
         return;
     }
-    #[cfg(debug_assertions)]
-    {
-        let source = match state_id {
-            Some(id) => format!(
-                "slot={} gen={} {}",
-                id.slot(),
-                id.generation(),
-                std::any::type_name::<T>()
-            ),
-            None => std::any::type_name::<T>().to_string(),
-        };
-        DEBUG_SCOPE_INVALIDATION_SOURCES.with(|sources| {
-            sources
-                .borrow_mut()
-                .entry(scope_id)
-                .or_default()
-                .insert(source);
-        });
-    }
+    let source = match state_id {
+        Some(id) => format!("slot={} gen={} {value_type}", id.slot(), id.generation()),
+        None => value_type.to_string(),
+    };
+    DEBUG_SCOPE_INVALIDATION_SOURCES.with(|sources| {
+        sources
+            .borrow_mut()
+            .entry(scope_id)
+            .or_default()
+            .insert(source);
+    });
 }
 
+#[cfg(debug_assertions)]
 #[doc(hidden)]
 pub fn debug_scope_label(scope_id: usize) -> Option<&'static str> {
     if !debug_scope_tracking_enabled() {
-        let _ = scope_id;
         return None;
     }
-    #[cfg(debug_assertions)]
-    {
-        return DEBUG_SCOPE_LABELS.with(|labels| labels.borrow().get(&scope_id).copied());
-    }
-    #[expect(unreachable_code)]
-    None
+    DEBUG_SCOPE_LABELS.with(|labels| labels.borrow().get(&scope_id).copied())
 }
 
+#[cfg(debug_assertions)]
 #[doc(hidden)]
 pub fn debug_scope_invalidation_sources(scope_id: usize) -> Vec<String> {
     if !debug_scope_tracking_enabled() {
-        let _ = scope_id;
         return Vec::new();
     }
-    #[cfg(debug_assertions)]
-    {
-        return DEBUG_SCOPE_INVALIDATION_SOURCES.with(|sources| {
-            let Some(entries) = sources.borrow().get(&scope_id).cloned() else {
-                return Vec::new();
-            };
-            let mut entries: Vec<_> = entries.into_iter().collect();
-            entries.sort();
-            entries
-        });
-    }
-    #[expect(unreachable_code)]
+    DEBUG_SCOPE_INVALIDATION_SOURCES.with(|sources| {
+        let Some(entries) = sources.borrow().get(&scope_id).cloned() else {
+            return Vec::new();
+        };
+        let mut entries: Vec<_> = entries.into_iter().collect();
+        entries.sort();
+        entries
+    })
+}
+
+#[cfg(not(debug_assertions))]
+#[doc(hidden)]
+pub fn debug_label_current_scope(_name: &'static str) {}
+
+#[cfg(not(debug_assertions))]
+pub(crate) fn debug_record_scope_invalidation(
+    _scope_id: usize,
+    _state_id: Option<StateId>,
+    _value_type: &'static str,
+) {
+}
+
+#[cfg(not(debug_assertions))]
+#[doc(hidden)]
+pub fn debug_scope_label(_scope_id: usize) -> Option<&'static str> {
+    None
+}
+
+#[cfg(not(debug_assertions))]
+#[doc(hidden)]
+pub fn debug_scope_invalidation_sources(_scope_id: usize) -> Vec<String> {
     Vec::new()
 }
 
