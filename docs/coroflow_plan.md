@@ -67,13 +67,14 @@ with the same behavior. Items are ticked as they land.
 
 ## F. Cranpose
 
-- [ ] `collectAsState(initial)` and `collectAsStateWithLifecycle(initial)` for any `Flow`
-- [ ] `rememberCoroutineScope()` returning a coroflow `MainScope`
-- [ ] Coroflow code that runs inside Cranpose's own `LaunchedEffect`, `produceState` and
+- [x] `collectAsState(initial)` and `collectAsStateWithLifecycle(initial)` for any `Flow`
+- [x] `rememberCoroutineScope()` returning a coroflow `MainScope`
+- [x] Coroflow code that runs inside Cranpose's own `LaunchedEffect`, `produceState` and
       UI tasks finds the main dispatcher, so `channel_flow`, `buffer` and `launch` work there
-- [ ] Lifecycle as a `StateFlow`, `flow_with_lifecycle` and `repeat_on_lifecycle`
-- [ ] `SavedStateHandle` for view models, backed by `rememberSaveable`
-- [ ] The demo uses the new operators where they read better
+- [x] Lifecycle as a `StateFlow`, `flow_with_lifecycle` and `repeat_on_lifecycle`
+- [x] `SavedStateHandle` for view models, backed by `rememberSaveable`
+- [x] `flow`, `channel_flow` and `callback_flow` take plain async closures, so their captures need no cloning
+- [x] The demo uses the new operators where they read better
 
 ## G. Verification
 

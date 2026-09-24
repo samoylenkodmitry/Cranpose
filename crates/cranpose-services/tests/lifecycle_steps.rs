@@ -53,3 +53,13 @@ fn advancing_the_lifecycle_passes_through_every_state_in_between() {
         ]
     );
 }
+
+#[test]
+fn is_at_least_orders_states_like_android() {
+    assert!(LifecycleState::Resumed.is_at_least(LifecycleState::Started));
+    assert!(LifecycleState::Paused.is_at_least(LifecycleState::Started));
+    assert!(!LifecycleState::Paused.is_at_least(LifecycleState::Resumed));
+    assert!(LifecycleState::Stopped.is_at_least(LifecycleState::Created));
+    assert!(!LifecycleState::Stopped.is_at_least(LifecycleState::Started));
+    assert!(!LifecycleState::Destroyed.is_at_least(LifecycleState::Created));
+}

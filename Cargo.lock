@@ -1089,6 +1089,7 @@ dependencies = [
  "cranpose-foundation",
  "cranpose-services",
  "log",
+ "pollster",
 ]
 
 [[package]]

@@ -17,13 +17,10 @@ impl Drop for DropMarker {
 }
 
 pub fn timed(steps: Vec<(u64, u32)>) -> impl SendFlow<Item = u32> + Clone {
-    flow(move |emitter| {
-        let steps = steps.clone();
-        async move {
-            for (wait, value) in steps {
-                delay(Duration::from_millis(wait)).await;
-                emitter.emit(value).await;
-            }
+    flow(async move |emitter| {
+        for (wait, value) in steps {
+            delay(Duration::from_millis(wait)).await;
+            emitter.emit(value).await;
         }
     })
 }

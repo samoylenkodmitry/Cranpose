@@ -48,24 +48,20 @@ impl NotesRepository for DefaultNotesRepository {
 
     fn search_catalog(&self, query: String) -> BoxFlow<CatalogResults> {
         let catalog = Arc::clone(&self.catalog);
-        flow(move |emitter| {
-            let catalog = Arc::clone(&catalog);
-            let query = query.clone();
-            async move {
-                emitter
-                    .emit(CatalogResults::Loading {
-                        query: query.clone(),
-                    })
-                    .await;
-                let outcome = match catalog.search(&query).await {
-                    Ok(hits) => CatalogResults::Loaded { query, hits },
-                    Err(error) => CatalogResults::Failed {
-                        query,
-                        message: error.to_string(),
-                    },
-                };
-                emitter.emit(outcome).await;
-            }
+        flow(async move |emitter| {
+            emitter
+                .emit(CatalogResults::Loading {
+                    query: query.clone(),
+                })
+                .await;
+            let outcome = match catalog.search(&query).await {
+                Ok(hits) => CatalogResults::Loaded { query, hits },
+                Err(error) => CatalogResults::Failed {
+                    query,
+                    message: error.to_string(),
+                },
+            };
+            emitter.emit(outcome).await;
         })
         .flow_on(self.io.clone())
         .boxed()

@@ -563,7 +563,7 @@ impl<F: FnOnce()> Drop for OnDrop<F> {
 /// cancels them all.
 pub fn channel_flow<T, F, Fut>(block: F) -> ChannelFlow<T, F>
 where
-    F: Fn(Producer<T>) -> Fut + Clone,
+    F: FnOnce(Producer<T>) -> Fut + Clone,
     Fut: Future<Output = ()> + Send + 'static,
     T: Send + 'static,
 {
@@ -605,7 +605,7 @@ impl<T, F> Unpin for ChannelFlowRun<T, F> {}
 
 impl<T, F, Fut> Flow for ChannelFlow<T, F>
 where
-    F: Fn(Producer<T>) -> Fut + Clone,
+    F: FnOnce(Producer<T>) -> Fut + Clone,
     Fut: Future<Output = ()> + Send + 'static,
     T: Send + 'static,
 {
@@ -625,7 +625,7 @@ where
 
 impl<T, F, Fut> Stream for ChannelFlowRun<T, F>
 where
-    F: Fn(Producer<T>) -> Fut,
+    F: FnOnce(Producer<T>) -> Fut,
     Fut: Future<Output = ()> + Send + 'static,
     T: Send + 'static,
 {

@@ -7,7 +7,7 @@ use cranpose_core::{
 };
 use cranpose_services::{LifecycleState, rememberLifecycleState};
 
-use crate::dispatcher::require_main_dispatcher;
+use crate::{dispatcher::require_main_dispatcher, lifecycle::is_active_for};
 
 /// A `Copy` handle to a value remembered for one position in the
 /// composition, such as a view model.
@@ -63,17 +63,31 @@ pub fn rememberViewModel<VM: 'static>(factory: impl FnOnce(MainScope) -> VM) -> 
     rememberHandle(|| factory(MainScope::new(require_main_dispatcher("rememberViewModel"))))
 }
 
-struct StateCollection<T: Clone + 'static> {
-    flow: StateFlow<T>,
-    state: OwnedMutableState<T>,
+/// Remembers a [`MainScope`] for this position in the composition —
+/// Compose's `rememberCoroutineScope()`.
+///
+/// Coroutines launched through it, typically from event handlers, are
+/// cancelled when this position leaves the composition.
+#[track_caller]
+pub fn rememberCoroutineScope() -> Handle<MainScope> {
+    rememberHandle(|| MainScope::new(require_main_dispatcher("rememberCoroutineScope")))
+}
+
+struct StateCollection<F: Flow<Item: Clone + 'static>> {
+    flow: F,
+    state: OwnedMutableState<F::Item>,
     scope: Option<MainScope>,
 }
 
-impl<T: Clone + PartialEq + 'static> StateCollection<T> {
-    fn new(flow: &StateFlow<T>) -> Self {
+impl<F> StateCollection<F>
+where
+    F: Flow + Clone + 'static,
+    F::Item: Clone + PartialEq + 'static,
+{
+    fn new(flow: &F, initial: F::Item) -> Self {
         Self {
             flow: flow.clone(),
-            state: ownedMutableStateOf(flow.value()),
+            state: ownedMutableStateOf(initial),
             scope: None,
         }
     }
@@ -97,27 +111,36 @@ impl<T: Clone + PartialEq + 'static> StateCollection<T> {
 }
 
 #[track_caller]
-fn collect_state<T: Clone + PartialEq + 'static>(flow: &StateFlow<T>, active: bool) -> State<T> {
-    let holder = remember(|| RefCell::new(None::<StateCollection<T>>));
+fn collect_state<F>(
+    flow: &F,
+    initial: impl FnOnce() -> F::Item,
+    active: bool,
+    same: impl Fn(&F, &F) -> bool,
+) -> State<F::Item>
+where
+    F: Flow + Clone + 'static,
+    F::Item: Clone + PartialEq + 'static,
+{
+    let holder = remember(|| RefCell::new(None::<StateCollection<F>>));
     holder.with(|cell| {
         let mut slot = cell.borrow_mut();
         if slot
             .as_ref()
-            .is_some_and(|collection| !collection.flow.same_as(flow))
+            .is_some_and(|collection| !same(&collection.flow, flow))
         {
             *slot = None;
         }
-        let collection = slot.get_or_insert_with(|| StateCollection::new(flow));
+        let collection = slot.get_or_insert_with(|| StateCollection::new(flow, initial()));
         collection.set_active(active);
         collection.state.as_state()
     })
 }
 
-/// Whether a lifecycle-aware collection runs in `state`: everywhere except
-/// while the host reports it is stopped. Hosts that report no lifecycle stay
-/// in [`LifecycleState::Created`] and keep collecting.
+/// Whether a lifecycle-aware collection runs in `state`: while the host is at
+/// least started. Hosts that report no lifecycle stay in
+/// [`LifecycleState::Created`] and keep collecting.
 pub fn collects_in(state: LifecycleState) -> bool {
-    !matches!(state, LifecycleState::Stopped | LifecycleState::Destroyed)
+    is_active_for(state, LifecycleState::Started)
 }
 
 /// Reads a [`StateFlow`] as Cranpose state.
@@ -145,13 +168,53 @@ pub trait StateFlowCollect<T: Clone + 'static> {
 impl<T: Clone + PartialEq + 'static> StateFlowCollect<T> for StateFlow<T> {
     #[track_caller]
     fn collectAsState(&self) -> State<T> {
-        collect_state(self, true)
+        collect_state(self, || self.value(), true, StateFlow::same_as)
     }
 
     #[track_caller]
     fn collectAsStateWithLifecycle(&self) -> State<T> {
         let lifecycle = rememberLifecycleState().get();
-        collect_state(self, collects_in(lifecycle))
+        collect_state(
+            self,
+            || self.value(),
+            collects_in(lifecycle),
+            StateFlow::same_as,
+        )
+    }
+}
+
+/// Reads any [`Flow`] as Cranpose state, starting from a given value.
+///
+/// Unlike a [`StateFlow`], an arbitrary flow has no current value and no
+/// identity, so the state starts at `initial`, and the flow this position
+/// first collected keeps running until the position leaves the composition;
+/// wrap the call in a `key` to switch flows.
+pub trait FlowCollect: Flow<Item: Clone + PartialEq + 'static> {
+    /// Collects the flow while this position stays in the composition and
+    /// returns its latest value, `initial` until the first one arrives —
+    /// Compose's `Flow.collectAsState(initial)`.
+    fn collectAsState(&self, initial: Self::Item) -> State<Self::Item>;
+
+    /// Like [`collectAsState`](FlowCollect::collectAsState), but collects only
+    /// while the app is not stopped, starting the flow again when it comes
+    /// back — Android's `collectAsStateWithLifecycle(initialValue)`.
+    fn collectAsStateWithLifecycle(&self, initial: Self::Item) -> State<Self::Item>;
+}
+
+impl<F> FlowCollect for F
+where
+    F: Flow + Clone + 'static,
+    F::Item: Clone + PartialEq + 'static,
+{
+    #[track_caller]
+    fn collectAsState(&self, initial: F::Item) -> State<F::Item> {
+        collect_state(self, || initial, true, |_, _| true)
+    }
+
+    #[track_caller]
+    fn collectAsStateWithLifecycle(&self, initial: F::Item) -> State<F::Item> {
+        let lifecycle = rememberLifecycleState().get();
+        collect_state(self, || initial, collects_in(lifecycle), |_, _| true)
     }
 }
 

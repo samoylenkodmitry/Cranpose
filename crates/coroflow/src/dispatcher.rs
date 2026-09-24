@@ -263,6 +263,23 @@ impl Dispatchers {
             .clone()
     }
 
+    /// The main-thread dispatcher the UI framework registered with
+    /// [`set_main`](Dispatchers::set_main) — Kotlin's `Dispatchers.Main`, for
+    /// `with_context(&main, ..)` from background code. `None` until one is
+    /// registered.
+    pub fn main() -> Option<Dispatcher> {
+        lock(&MAIN)
+            .as_ref()
+            .map(|(dispatcher, _)| dispatcher.clone())
+    }
+
+    /// Registers `dispatcher` as [`Dispatchers::main`]. Code on its thread
+    /// that runs outside any coroutine, such as a task of the UI framework's
+    /// own, then launches onto it the way a Kotlin coroutine inherits Main.
+    pub fn set_main(dispatcher: &ConfinedDispatcher) {
+        *lock(&MAIN) = Some((dispatcher.dispatcher().clone(), dispatcher.thread()));
+    }
+
     /// A dispatcher with one thread of its own, named `name` — Kotlin's
     /// `newSingleThreadContext`. The thread ends once nothing uses the
     /// dispatcher any more. In the browser it is the page's event loop.
@@ -401,6 +418,15 @@ impl Drop for EnterGuard {
     }
 }
 
+static MAIN: Mutex<Option<(Dispatcher, ThreadId)>> = Mutex::new(None);
+
 pub(crate) fn current_dispatcher() -> Option<Dispatcher> {
-    CURRENT.with(|current| current.borrow().clone())
+    CURRENT
+        .with(|current| current.borrow().clone())
+        .or_else(|| {
+            let main = lock(&MAIN);
+            main.as_ref()
+                .filter(|(_, thread)| *thread == thread::current().id())
+                .map(|(dispatcher, _)| dispatcher.clone())
+        })
 }
