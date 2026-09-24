@@ -313,15 +313,8 @@ fn word_bounds(line: &str, boundaries: &[usize], anchor: usize) -> (usize, usize
 }
 
 #[cfg(all(test, not(feature = "text-hyphenation")))]
-mod disabled_tests {
-    use super::*;
-
-    #[test]
-    fn auto_hyphenation_without_dictionary_feature_returns_none() {
-        let break_idx = choose_auto_hyphen_break("Transformation", &TextStyle::default(), 8, 12);
-        assert_eq!(break_idx, None);
-    }
-}
+#[path = "tests/text_hyphenation_disabled_tests.rs"]
+mod disabled_tests;
 
 #[cfg(all(test, feature = "text-hyphenation-embedded"))]
 #[path = "tests/text_hyphenation_tests.rs"]
