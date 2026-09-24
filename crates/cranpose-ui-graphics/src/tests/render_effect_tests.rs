@@ -421,10 +421,14 @@ fn runtime_shader_from_shared_source_reuses_shared_source() {
     assert_eq!(s1.source_hash(), s2.source_hash());
 }
 
+// forwards on purpose: creates one fixed call site so the test can verify that
+// RuntimeShader::new reuses the cached Arc<ShaderSource> when called from the same site with the same source.
 fn runtime_shader_from_reuse_callsite(source: &str) -> RuntimeShader {
     RuntimeShader::new(source)
 }
 
+// forwards on purpose: creates a distinct call site so the test can verify that
+// RuntimeShader::new allocates new Arcs for different sources even when called from the same function.
 fn runtime_shader_from_replacement_callsite(source: &str) -> RuntimeShader {
     RuntimeShader::new(source)
 }
