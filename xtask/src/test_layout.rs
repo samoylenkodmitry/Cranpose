@@ -102,7 +102,7 @@ pub(crate) fn unlinked_integration_tests(root: &Path) -> Result<Vec<PathBuf>, St
     Ok(unlinked)
 }
 
-fn workspace_members(root: &Path) -> Result<Vec<String>, String> {
+pub(crate) fn workspace_members(root: &Path) -> Result<Vec<String>, String> {
     let manifest = read_toml(&root.join("Cargo.toml"))?;
     let members = manifest
         .get("workspace")
