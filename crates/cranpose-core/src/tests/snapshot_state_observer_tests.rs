@@ -2,7 +2,7 @@ use std::cell::Cell;
 
 use super::*;
 use crate::{
-    snapshot_v2::{TestRuntimeGuard, reset_runtime_for_tests, take_mutable_snapshot},
+    snapshot_v2::{reset_runtime_for_tests, take_mutable_snapshot},
     state::{NeverEqual, SnapshotMutableState},
 };
 

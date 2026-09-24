@@ -1,10 +1,7 @@
 use std::sync::Arc;
 
 use super::*;
-use crate::{
-    snapshot_v2::runtime::TestRuntimeGuard,
-    state::{NeverEqual, SnapshotMutableState, StateObject},
-};
+use crate::state::{NeverEqual, SnapshotMutableState, StateObject};
 
 fn new_state(initial: i32) -> Arc<SnapshotMutableState<i32>> {
     SnapshotMutableState::new_in_arc(initial, Arc::new(NeverEqual))
