@@ -1,0 +1,75 @@
+use super::*;
+
+const PAGE: WebWheelPage = WebWheelPage {
+    width: 800.0,
+    height: 600.0,
+};
+
+fn dom(delta_x: f32, delta_y: f32, delta_mode: u32) -> WheelScroll {
+    wheel_scroll_from_dom(delta_x, delta_y, delta_mode, PAGE, Modifiers::NONE, 0)
+}
+
+#[test]
+fn a_wheel_turned_down_in_the_browser_scrolls_the_same_way_it_does_on_the_desktop() {
+    let down = dom(0.0, 100.0, DOM_DELTA_PIXEL);
+    let up = dom(0.0, -100.0, DOM_DELTA_PIXEL);
+
+    assert_eq!(down.delta.y, -100.0);
+    assert_eq!(up.delta.y, 100.0);
+}
+
+#[test]
+fn the_horizontal_axis_is_negated_with_the_vertical_one() {
+    let right = dom(75.0, 0.0, DOM_DELTA_PIXEL);
+
+    assert_eq!(right.delta.x, -75.0);
+    assert_eq!(right.delta.y, 0.0);
+}
+
+#[test]
+fn line_and_page_modes_are_converted_to_pixels() {
+    assert_eq!(dom(0.0, 3.0, DOM_DELTA_LINE).delta.y, -120.0);
+    assert_eq!(dom(2.0, 0.0, DOM_DELTA_LINE).delta.x, -80.0);
+    assert_eq!(dom(0.0, 1.0, DOM_DELTA_PAGE).delta.y, -PAGE.height);
+    assert_eq!(dom(1.0, 0.0, DOM_DELTA_PAGE).delta.x, -PAGE.width);
+}
+
+#[test]
+fn a_degenerate_page_size_still_scrolls() {
+    let sample = wheel_scroll_from_dom(
+        0.0,
+        1.0,
+        DOM_DELTA_PAGE,
+        WebWheelPage {
+            width: 0.0,
+            height: 0.0,
+        },
+        Modifiers::NONE,
+        0,
+    );
+
+    assert_eq!(sample.delta.y, -1.0);
+}
+
+#[test]
+fn an_unknown_delta_mode_is_read_as_pixels_rather_than_dropped() {
+    assert_eq!(dom(0.0, 12.0, 99).delta.y, -12.0);
+}
+
+#[test]
+fn a_browser_pinch_arrives_as_the_zoom_gesture_and_zooms_in_when_spread() {
+    let spread = wheel_scroll_from_dom(
+        0.0,
+        -40.0,
+        DOM_DELTA_PIXEL,
+        PAGE,
+        Modifiers {
+            ctrl: true,
+            ..Modifiers::NONE
+        },
+        0,
+    );
+
+    assert!(spread.is_zoom());
+    assert!(spread.zoom_factor() > 1.0);
+}
