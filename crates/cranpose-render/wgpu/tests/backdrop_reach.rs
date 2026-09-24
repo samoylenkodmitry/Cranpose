@@ -1,7 +1,7 @@
-mod support;
-
 use cranpose_render_common::graph::{ProjectiveTransform, RenderGraph, RenderNode};
 use cranpose_ui_graphics::{Color, GraphicsLayer, Rect, RenderEffect};
+
+use crate::support;
 
 const FRAME: u32 = 200;
 /// The list's band: the frame below this row, clipped.

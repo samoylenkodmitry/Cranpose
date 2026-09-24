@@ -1,5 +1,10 @@
 use super::*;
 
+#[cfg(any(test, feature = "test-support"))]
+type SubcomposeScopeIds = Vec<(NodeId, Vec<(u64, Vec<usize>)>)>;
+#[cfg(any(test, feature = "test-support"))]
+type SlotGroupEntry = (usize, Key, Option<usize>, usize);
+
 impl<R> AppShell<R>
 where
     R: Renderer,
@@ -133,7 +138,7 @@ where
 
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
-    pub fn debug_live_subcompose_scope_ids(&mut self) -> Vec<(NodeId, Vec<(u64, Vec<usize>)>)> {
+    pub fn debug_live_subcompose_scope_ids(&mut self) -> SubcomposeScopeIds {
         fn collect_node_ids(layout: &LayoutBox, out: &mut Vec<NodeId>) {
             out.push(layout.node_id);
             for child in &layout.children {
@@ -180,7 +185,7 @@ where
         &mut self,
         node_id: NodeId,
         slot_id: u64,
-    ) -> Option<Vec<(usize, Key, Option<usize>, usize)>> {
+    ) -> Option<Vec<SlotGroupEntry>> {
         let mut applier = self.app.composition.applier_mut();
         applier
             .with_node::<SubcomposeLayoutNode, _>(node_id, |node| {

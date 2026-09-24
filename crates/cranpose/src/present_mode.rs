@@ -1,7 +1,7 @@
 #[cfg(any(test, feature = "desktop-shell"))]
 use cranpose_app_shell::FramePacingMode;
 
-#[cfg_attr(target_os = "android", allow(dead_code))]
+#[cfg_attr(target_os = "android", expect(dead_code))]
 pub(crate) fn select_present_mode(caps: &wgpu::SurfaceCapabilities) -> wgpu::PresentMode {
     let requested = std::env::var("CRANPOSE_PRESENT_MODE")
         .ok()
@@ -17,7 +17,7 @@ pub(crate) fn select_android_present_mode(caps: &wgpu::SurfaceCapabilities) -> w
     select_android_present_mode_for_request(caps, requested)
 }
 
-#[cfg_attr(not(any(test, target_os = "android")), allow(dead_code))]
+#[cfg_attr(not(any(test, target_os = "android")), expect(dead_code))]
 fn select_android_present_mode_for_request(
     caps: &wgpu::SurfaceCapabilities,
     requested: Option<wgpu::PresentMode>,

@@ -38,8 +38,13 @@ fn allocations_to_collect(emissions: u64) -> (u64, usize) {
             emitter.emit(value).await;
         }
     });
+    let offset = std::sync::Arc::new(1_u64);
     let region = Region::new(GLOBAL);
-    let mut run = Turbine::of(&numbers.map(|value| value + 1));
+    let chain = numbers
+        .map(|value| value + 1)
+        .map_async(async move |value| value + *offset)
+        .transform(async |value, emitter| emitter.emit(value).await);
+    let mut run = Turbine::of(&chain);
     let mut count = 0;
     while let Poll::Ready(Some(_)) = run.next_now() {
         count += 1;
@@ -53,7 +58,7 @@ fn flow_block_allocations() {
     assert_eq!((few, many), (10, EMISSIONS));
     assert_eq!(few_allocations, many_allocations);
     assert!(
-        few_allocations <= 3,
+        few_allocations <= 7,
         "a collection allocated {few_allocations} times"
     );
 }

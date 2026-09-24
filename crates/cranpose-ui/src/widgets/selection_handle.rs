@@ -176,7 +176,7 @@ fn glide_clock_nanos() -> u64 {
 /// * `on_tap` — invoked when the finger lifts after a quick press that did not
 ///   drag the handle beyond `HANDLE_TAP_SLOP_PX` (and was not a long-press),
 ///   so the collapsed cursor handle can open its action popup.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 #[composable]
 pub fn SelectionHandle(
     kind: HandleKind,

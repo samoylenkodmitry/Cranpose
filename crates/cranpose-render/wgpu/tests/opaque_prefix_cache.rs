@@ -1,8 +1,3 @@
-mod support;
-
-#[path = "../src/test_support.rs"]
-mod shared_test_support;
-
 use cranpose_render_common::{
     Renderer,
     graph::{
@@ -15,6 +10,8 @@ use cranpose_ui_graphics::{
     Brush, Color, CornerRadii, DrawScope, DrawScopeDefault, GraphicsLayer, Point, Rect,
     RenderEffect, Size, Stroke, TileMode,
 };
+
+use crate::{shared_test_support, support};
 
 const FRAME_WIDTH: u32 = 240;
 const FRAME_HEIGHT: u32 = 160;

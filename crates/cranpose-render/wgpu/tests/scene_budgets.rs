@@ -1,8 +1,3 @@
-mod support;
-
-#[path = "../src/test_support.rs"]
-mod shared_test_support;
-
 use cranpose_render_common::{
     Renderer,
     graph::{
@@ -15,6 +10,8 @@ use cranpose_ui_graphics::{
     Brush, Color, CornerRadii, DrawPrimitive, GraphicsLayer, Point, Rect, Stroke, StrokeCap,
     StrokeJoin,
 };
+
+use crate::{shared_test_support, support};
 
 const ARENA: u32 = 900;
 const RINGS: usize = 20;

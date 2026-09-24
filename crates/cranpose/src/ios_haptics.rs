@@ -38,7 +38,7 @@ impl Haptics for IosHaptics {
         let Some(mtm) = MainThreadMarker::new() else {
             return;
         };
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let generator = UIImpactFeedbackGenerator::initWithStyle(
             UIImpactFeedbackGenerator::alloc(mtm),
             UIImpactFeedbackStyle::Medium,
@@ -83,7 +83,7 @@ impl Haptics for IosHaptics {
 }
 
 fn impact(mtm: MainThreadMarker, style: UIImpactFeedbackStyle) {
-    #[allow(deprecated)]
+    #[expect(deprecated)]
     let generator =
         UIImpactFeedbackGenerator::initWithStyle(UIImpactFeedbackGenerator::alloc(mtm), style);
     generator.impactOccurred();

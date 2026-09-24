@@ -1,8 +1,3 @@
-mod support;
-
-#[path = "../src/test_support.rs"]
-mod shared_test_support;
-
 use cranpose_render_common::{
     Renderer,
     graph::{ProjectiveTransform, RenderGraph, RenderNode},
@@ -10,6 +5,8 @@ use cranpose_render_common::{
 use cranpose_ui_graphics::{
     Color, GraphicsLayer, Rect, RenderEffect, RuntimeShader, liquid_glass_runtime_effect,
 };
+
+use crate::{shared_test_support, support};
 
 struct NativeSpectralSample {
     pixel: usize,

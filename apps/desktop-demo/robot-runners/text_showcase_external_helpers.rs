@@ -66,7 +66,7 @@ pub(crate) fn focus_x11_window(window_id: &str) {
     std::thread::sleep(Duration::from_millis(80));
 }
 
-#[allow(dead_code)]
+#[expect(dead_code)]
 pub(crate) fn move_x11_mouse(x: f32, y: f32) {
     let x = x.round().to_string();
     let y = y.round().to_string();

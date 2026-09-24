@@ -404,7 +404,7 @@ fn resolve_text_color_without_gradient_fallback(text_style: &TextStyle, default:
     color
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn push_text_style_draws(
     scene: &mut RasterScene,
     node_id: NodeId,
@@ -510,7 +510,7 @@ fn push_text_style_draws(
     );
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn push_text_decorations(
     scene: &mut RasterScene,
     rect: Rect,

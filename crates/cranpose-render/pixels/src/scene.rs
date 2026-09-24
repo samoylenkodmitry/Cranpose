@@ -116,7 +116,7 @@ impl RasterScene {
         });
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn push_shape_with_stroke_and_arc(
         &mut self,
         rect: Rect,
@@ -143,7 +143,7 @@ impl RasterScene {
         });
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn push_image_with_geometry(
         &mut self,
         rect: Rect,
@@ -173,7 +173,7 @@ impl RasterScene {
         });
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn push_text(
         &mut self,
         node_id: NodeId,

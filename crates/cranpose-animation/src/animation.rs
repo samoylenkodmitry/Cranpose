@@ -5,8 +5,8 @@
 //! Note: This module uses camelCase for method names (animateTo, snapTo) to maintain
 //! 1:1 API parity with Jetpack Compose.
 
-#![allow(non_snake_case)]
-#![allow(non_upper_case_globals)]
+#![expect(non_snake_case)]
+#![expect(non_upper_case_globals)]
 
 use std::{
     cell::{Cell, RefCell},
@@ -683,7 +683,7 @@ impl InfiniteTransition {
         );
     }
 
-    #[allow(non_snake_case)]
+    #[expect(non_snake_case)]
     #[track_caller]
     pub fn animateFloat(
         &self,
@@ -696,7 +696,7 @@ impl InfiniteTransition {
         self.animateValue(initial_value, target_value, animation_spec)
     }
 
-    #[allow(non_snake_case)]
+    #[expect(non_snake_case)]
     #[track_caller]
     pub fn animateValue<T: Lerp + Clone + PartialEq + 'static>(
         &self,
@@ -825,7 +825,7 @@ impl InfiniteTransitionInner {
     }
 }
 
-#[allow(non_snake_case)]
+#[expect(non_snake_case)]
 #[track_caller]
 pub fn rememberInfiniteTransition(label: &str) -> InfiniteTransition {
     let runtime = with_current_composer(cranpose_core::Composer::runtime_handle);
@@ -1237,7 +1237,7 @@ pub fn animateValueAsState<T: SpringScalar + PartialEq + 'static>(
     })
 }
 
-#[allow(non_snake_case)]
+#[expect(non_snake_case)]
 #[track_caller]
 pub fn animateFloatAsState(target: f32, animation: AnimationType, label: &str) -> State<f32> {
     animateValueAsState(target, animation, label)

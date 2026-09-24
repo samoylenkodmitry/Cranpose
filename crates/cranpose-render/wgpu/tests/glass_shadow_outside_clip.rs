@@ -1,9 +1,9 @@
-mod support;
-
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use cranpose_liquid::{Glass, GlassSurface, LiquidShape, LiquidTheme, LiquidThemeSpec};
 use support::page::*;
+
+use crate::support;
 
 const FRAME_WIDTH: u32 = 320;
 const FRAME_HEIGHT: u32 = 200;

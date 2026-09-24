@@ -110,7 +110,7 @@ impl CoroutineScope {
 }
 
 /// Remembers a [`CoroutineScope`] bound to this position in the composition.
-#[allow(non_snake_case)]
+#[expect(non_snake_case)]
 #[track_caller]
 pub fn rememberCoroutineScope() -> CoroutineScope {
     remember(|| {
@@ -440,7 +440,7 @@ impl<T: 'static> Future for EventStreamNext<T> {
 ///
 /// `key` re-starts the collection when it changes, exactly like
 /// `LaunchedEffect`.
-#[allow(non_snake_case)]
+#[expect(non_snake_case)]
 #[track_caller]
 pub fn CollectEvents<T, K>(stream: EventStream<T>, key: K, on_event: impl FnMut(T) + 'static)
 where
@@ -466,7 +466,7 @@ where
 ///
 /// The composition reads the latest value the stream produced, and recomposes
 /// when a new one arrives.
-#[allow(non_snake_case)]
+#[expect(non_snake_case)]
 #[track_caller]
 pub fn collectAsState<T, K>(stream: EventStream<T>, key: K, initial: T) -> State<T>
 where
@@ -566,7 +566,7 @@ impl<T: Send + 'static> Drop for Bridge<T> {
 /// the service — when `key` changes or the composition leaves. This is the one
 /// place the framework bridges "a service publishes from another thread" to
 /// "a composition collects".
-#[allow(non_snake_case)]
+#[expect(non_snake_case)]
 #[track_caller]
 pub fn rememberEventStream<T, K, R, S>(key: K, subscribe: S) -> EventStream<T>
 where
@@ -604,7 +604,7 @@ where
 /// a synchronous provider call — that must not stall composition. On the web
 /// there is one thread, so `work` runs inline; callers keep the unit of work
 /// small enough that this is honest on every target.
-#[allow(non_snake_case)]
+#[expect(non_snake_case)]
 pub async fn withBlocking<T, F>(work: F) -> T
 where
     T: Send + 'static,
@@ -658,7 +658,7 @@ where
 ///     move |bytes| document.set(bytes.ok()),
 /// );
 /// ```
-#[allow(non_snake_case)]
+#[expect(non_snake_case)]
 pub fn launchBlocking<T>(work: impl FnOnce() -> T + Send + 'static, on_ui: impl FnOnce(T) + 'static)
 where
     T: Send + 'static,
@@ -812,7 +812,7 @@ impl<T> Future for BlockingWork<T> {
 /// The Compose `produceState` contract: the producer receives a handle it uses
 /// to publish values, and is cancelled when the key changes or the composition
 /// leaves.
-#[allow(non_snake_case)]
+#[expect(non_snake_case)]
 #[track_caller]
 pub fn produceState<T, K, F>(initial: T, key: K, producer: F) -> State<T>
 where

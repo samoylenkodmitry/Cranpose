@@ -19,7 +19,7 @@
 //!
 //! The crate root denies unsafe code and this module opts back in by name; it
 //! is the one place in the engine that reaches past the borrow checker.
-#![allow(unsafe_code)]
+#![expect(unsafe_code)]
 
 use std::{
     cell::UnsafeCell,

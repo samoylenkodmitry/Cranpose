@@ -14,7 +14,7 @@ use std::{
 
 use crate::{
     dispatcher::{ConfinedDispatcher, Dispatcher, Runnable, Schedule, enter},
-    job::{Job, JobOutcome},
+    job::{Job, JobOutcome, Launch},
     sync::lock,
 };
 
@@ -22,7 +22,26 @@ type LocalFuture = Pin<Box<dyn Future<Output = ()>>>;
 
 enum Step {
     Pending,
-    Finished(JobOutcome),
+    Completed,
+    Panicked(String),
+}
+
+impl Step {
+    fn conclude(self, job: &Job) {
+        match self {
+            Self::Pending => {}
+            Self::Completed => job.finish(JobOutcome::Completed),
+            Self::Panicked(message) => job.fail(&message),
+        }
+    }
+}
+
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+    payload
+        .downcast_ref::<&str>()
+        .map(|message| (*message).to_owned())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "a coroutine panicked".to_owned())
 }
 
 fn poll_step<F: Future<Output = ()> + ?Sized>(
@@ -34,10 +53,11 @@ fn poll_step<F: Future<Output = ()> + ?Sized>(
     let mut cx = Context::from_waker(waker);
     match catch_unwind(AssertUnwindSafe(|| future.poll(&mut cx))) {
         Ok(Poll::Pending) => Step::Pending,
-        Ok(Poll::Ready(())) => Step::Finished(JobOutcome::Completed),
-        Err(_) => {
-            log::error!("coroflow: a coroutine panicked");
-            Step::Finished(JobOutcome::Panicked)
+        Ok(Poll::Ready(())) => Step::Completed,
+        Err(payload) => {
+            let message = panic_message(payload.as_ref());
+            log::error!("coroflow: a coroutine panicked: {message}");
+            Step::Panicked(message)
         }
     }
 }
@@ -49,11 +69,11 @@ struct SendTask<F> {
     job: Job,
 }
 
-pub(crate) fn spawn_send<F>(dispatcher: &Dispatcher, future: F) -> Job
+pub(crate) fn spawn_send<F>(dispatcher: &Dispatcher, future: F, launch: Launch) -> Job
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    let job = Job::new();
+    let job = Job::new(launch);
     let task = Arc::new(SendTask {
         future: Mutex::new(Some(Box::pin(future))),
         scheduled: AtomicBool::new(false),
@@ -61,7 +81,9 @@ where
         job: job.clone(),
     });
     job.set_task_waker(Waker::from(Arc::clone(&task)));
-    task.schedule();
+    if !launch.lazy {
+        task.schedule();
+    }
     job
 }
 
@@ -98,10 +120,11 @@ impl<F: Future<Output = ()> + Send + 'static> Schedule for SendTask<F> {
             return;
         }
         let waker = Waker::from(Arc::clone(&self));
-        if let Step::Finished(outcome) = poll_step(future.as_mut(), &self.dispatcher, &waker) {
+        let step = poll_step(future.as_mut(), &self.dispatcher, &waker);
+        if !matches!(step, Step::Pending) {
             *slot = None;
             drop(slot);
-            self.job.finish(outcome);
+            step.conclude(&self.job);
         }
     }
 }
@@ -120,11 +143,11 @@ struct LocalHandle {
     job: Job,
 }
 
-pub(crate) fn spawn_local<F>(dispatcher: &ConfinedDispatcher, future: F) -> Job
+pub(crate) fn spawn_local<F>(dispatcher: &ConfinedDispatcher, future: F, launch: Launch) -> Job
 where
     F: Future<Output = ()> + 'static,
 {
-    let job = Job::new();
+    let job = Job::new(launch);
     let id = NEXT_LOCAL_TASK.fetch_add(1, Ordering::Relaxed);
     LOCAL_TASKS.with(|tasks| {
         tasks
@@ -139,7 +162,9 @@ where
         job: job.clone(),
     });
     job.set_task_waker(Waker::from(Arc::clone(&handle)));
-    handle.schedule();
+    if !launch.lazy {
+        handle.schedule();
+    }
     job
 }
 
@@ -182,9 +207,9 @@ impl Schedule for LocalHandle {
             Step::Pending => {
                 LOCAL_TASKS.with(|tasks| tasks.borrow_mut().insert(self.id, future));
             }
-            Step::Finished(outcome) => {
+            step => {
                 drop(future);
-                self.job.finish(outcome);
+                step.conclude(&self.job);
             }
         }
     }

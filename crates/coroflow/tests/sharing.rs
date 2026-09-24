@@ -10,8 +10,8 @@ use std::{
 };
 
 use coroflow::{
-    CoroutineScope, Flow, FlowExt, MainScope, SendFlow, SharingStarted, TestScheduler, Turbine,
-    delay, flow,
+    CoroutineScope, Flow, FlowExt, MainScope, SendFlow, SharingCommand, SharingStarted,
+    TestScheduler, Turbine, delay, flow, flow_of,
 };
 
 struct Ticker {
@@ -170,4 +170,103 @@ fn a_main_scope_can_share_a_flow_that_captures_thread_bound_state() {
     multiplier.set(100);
     scheduler.advance_time_by(Duration::from_millis(100));
     assert_eq!(run.next_now(), Poll::Ready(Some(200)));
+}
+
+#[test]
+fn state_in_first_waits_for_the_first_value_and_keeps_following_the_upstream() {
+    let scheduler = TestScheduler::new();
+    let scope = CoroutineScope::new(scheduler.dispatcher());
+    let ticker = Ticker::new();
+    let state = scheduler.block_on(ticker.flow().state_in_first(&scope));
+    let Ok(Some(state)) = state else {
+        panic!("the upstream emitted, so there is a state");
+    };
+    assert_eq!(state.value(), 1);
+    scheduler.advance_time_by(Duration::from_millis(250));
+    assert_eq!(state.value(), 3, "it keeps collecting eagerly");
+    let empty = scheduler.block_on(flow_of(Vec::<u32>::new()).state_in_first(&scope));
+    assert!(matches!(empty, Ok(None)), "an empty upstream has no state");
+}
+
+#[test]
+fn a_custom_strategy_follows_its_commands_and_can_reset_the_state() {
+    let scheduler = TestScheduler::new();
+    let scope = CoroutineScope::new(scheduler.dispatcher());
+    let ticker = Ticker::new();
+    let started = SharingStarted::custom(|count| {
+        count
+            .map(|collectors| {
+                if collectors > 0 {
+                    SharingCommand::Start
+                } else {
+                    SharingCommand::StopAndResetReplayCache
+                }
+            })
+            .boxed()
+    });
+    let state = ticker.flow().state_in(&scope, started, 0);
+    scheduler.advance_time_by(Duration::from_millis(100));
+    assert_eq!(ticker.starts.load(Ordering::SeqCst), 0);
+    let run = state.open();
+    scheduler.advance_time_by(Duration::from_millis(250));
+    assert_eq!(state.value(), 3);
+    drop(run);
+    scheduler.run_current();
+    assert_eq!(ticker.live.load(Ordering::SeqCst), 0, "stopped at once");
+    assert_eq!(state.value(), 0, "reset to the initial value");
+}
+
+#[test]
+fn replay_expiration_resets_a_stopped_state_once_it_expires() {
+    let scheduler = TestScheduler::new();
+    let scope = CoroutineScope::new(scheduler.dispatcher());
+    let ticker = Ticker::new();
+    let started = SharingStarted::while_subscribed(Duration::from_millis(100))
+        .replay_expiration(Duration::from_millis(1_000));
+    let state = ticker.flow().state_in(&scope, started, 0);
+    let run = state.open();
+    scheduler.advance_time_by(Duration::from_millis(250));
+    drop(run);
+    scheduler.advance_time_by(Duration::from_millis(500));
+    assert_eq!(state.value(), 4, "stopped at 350 ms, but not expired yet");
+    scheduler.advance_time_by(Duration::from_millis(700));
+    assert_eq!(state.value(), 0, "expired back to the initial value");
+}
+
+#[test]
+fn share_in_makes_its_upstream_wait_for_a_collector_that_falls_behind() {
+    let scheduler = TestScheduler::new();
+    let scope = CoroutineScope::new(scheduler.dispatcher());
+    let produced = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&produced);
+    let fast = flow(move |emitter| {
+        let counter = Arc::clone(&counter);
+        async move {
+            for value in 1..=100_u32 {
+                counter.fetch_add(1, Ordering::SeqCst);
+                emitter.emit(value).await;
+            }
+        }
+    });
+    let shared = fast.share_in(&scope, SharingStarted::Eagerly, 0);
+    let mut run = Turbine::of(&shared);
+    scheduler.run_current();
+    assert_eq!(
+        produced.load(Ordering::SeqCst),
+        65,
+        "64 buffered and one waiting to be emitted"
+    );
+    let mut received = Vec::new();
+    loop {
+        scheduler.run_current();
+        match run.next_now() {
+            Poll::Ready(Some(value)) => received.push(value),
+            _ => break,
+        }
+    }
+    assert_eq!(
+        received,
+        (1..=100).collect::<Vec<_>>(),
+        "nothing was dropped"
+    );
 }

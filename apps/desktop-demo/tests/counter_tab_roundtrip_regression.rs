@@ -1,5 +1,3 @@
-pub mod tab_switch_regression_support;
-
 use std::time::Duration;
 
 use cranpose_animation::{animateFloatAsState, tween, Easing};
@@ -22,6 +20,8 @@ use desktop_app::app::{
     TEST_LAZY_LIST_STATE, TEST_RECURSIVE_LAYOUT_DEPTH_STATE,
 };
 use tab_switch_regression_support::{active_tab_state, pump_shell_until_stable};
+
+use crate::tab_switch_regression_support;
 
 #[derive(Default)]
 struct HitGraphRenderer {

@@ -860,7 +860,7 @@ type FixedPipelineJob = Box<dyn FnOnce() -> wgpu::RenderPipeline + Send + 'stati
 #[cfg(target_arch = "wasm32")]
 type FixedPipelineJob = Box<dyn FnOnce() -> wgpu::RenderPipeline + 'static>;
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn fullscreen_pipeline_job(
     device: &wgpu::Device,
     cache: Option<&wgpu::PipelineCache>,
@@ -1583,7 +1583,7 @@ impl EffectRenderer {
         targets
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn encode_blur_pass<C: FrameCommandRecorder>(
         &mut self,
         recorder: &mut C,
@@ -1693,7 +1693,7 @@ impl EffectRenderer {
     /// and runs its horizontal pass over that, so no source texel is skipped;
     /// the vertical pass reads the scratch and writes `dest`, at the
     /// source's size or the scratch's. Returns the passes encoded.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub(crate) fn encode_blur_scissored_ping_pong_passes<C: FrameCommandRecorder>(
         &mut self,
         recorder: &mut C,
@@ -1850,7 +1850,7 @@ impl EffectRenderer {
     /// The means of a side atlas with no blur passes to ride in: the row
     /// means into `scratch`, then each column into its texel at `dest` in
     /// `output`, cleared first unless the output is the atlas.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn encode_mean_substrates<C: FrameCommandRecorder>(
         &mut self,
         recorder: &mut C,
@@ -2133,7 +2133,6 @@ impl EffectRenderer {
         self.record_blur_pass();
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn encode_offset<C: FrameCommandRecorder>(
         &mut self,
         recorder: &mut C,
@@ -2173,7 +2172,7 @@ impl EffectRenderer {
         pass.draw(0..4, 0..1);
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub(crate) fn encode_shader<C: FrameCommandRecorder>(
         &mut self,
         recorder: &mut C,
@@ -2335,7 +2334,7 @@ impl EffectRenderer {
         pass.set_scissor_rect(0, 0, viewport.0, viewport.1);
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn encode_shader_pass<C: FrameCommandRecorder>(
         &mut self,
         recorder: &mut C,
@@ -2395,7 +2394,7 @@ impl EffectRenderer {
         true
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn encode_chained_substrates<'scratch, C: FrameCommandRecorder>(
         &mut self,
         recorder: &mut C,
@@ -2474,7 +2473,7 @@ impl EffectRenderer {
         Ok(layout.passes() + 1 + u32::from(!copied))
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub(crate) fn encode_effect<'scratch, C: FrameCommandRecorder>(
         &mut self,
         recorder: &mut C,
@@ -2650,7 +2649,6 @@ impl EffectRenderer {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     /// Writes `source` into `dest_view` whole and bilinearly, every fetch
     /// held to `source`'s texel centres: a downscaled result brought to
     /// `dest_view`'s size.

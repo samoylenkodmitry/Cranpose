@@ -46,13 +46,13 @@ pub fn collect_focus_order(tree: &LayoutTree) -> Vec<FocusEntry> {
 }
 
 fn collect_from_box(layout_box: &LayoutBox, entries: &mut Vec<FocusEntry>) {
-    let config = crate::modifier::collect_semantics_from_modifier(&layout_box.node_data.modifier);
-    if config.as_ref().is_some_and(|config| config.hidden) {
+    let config = layout_box.node_data.semantics();
+    if config.is_some_and(|config| config.hidden) {
         return;
     }
     if crate::focus_dispatch::has_focus_target(layout_box.node_id)
         && takes_space(layout_box.rect)
-        && config.as_ref().is_none_or(|config| config.enabled)
+        && config.is_none_or(|config| config.enabled)
     {
         entries.push(FocusEntry {
             node_id: layout_box.node_id,
@@ -94,8 +94,8 @@ pub(crate) fn focus_root(root: &LayoutBox) -> &LayoutBox {
 }
 
 fn top_modal(layout_box: &LayoutBox) -> Option<&LayoutBox> {
-    let config = crate::modifier::collect_semantics_from_modifier(&layout_box.node_data.modifier);
-    if config.as_ref().is_some_and(|config| config.hidden) {
+    let config = layout_box.node_data.semantics();
+    if config.is_some_and(|config| config.hidden) {
         return None;
     }
     layout_box
@@ -125,8 +125,9 @@ fn group_above(layout_box: &LayoutBox, node_id: NodeId, group: Option<NodeId>) -
 }
 
 fn declares_selectable_group(layout_box: &LayoutBox) -> bool {
-    crate::modifier::collect_semantics_from_modifier(&layout_box.node_data.modifier)
-        .as_ref()
+    layout_box
+        .node_data
+        .semantics()
         .is_some_and(is_selectable_group)
 }
 

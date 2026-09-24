@@ -28,29 +28,112 @@ pub struct Job {
 }
 
 pub(crate) trait JobParent: Send + Sync {
-    fn child_finished(&self, outcome: JobOutcome);
+    fn child_finished(&self, outcome: JobOutcome, failure: Option<&str>);
 }
 
-#[derive(Default)]
+/// How a coroutine is launched: whether it waits for `start()` — Kotlin's
+/// `CoroutineStart.LAZY` — and whether its panic reaches the scope's failure
+/// handler, which `async` coroutines leave to their `Deferred`.
+#[derive(Clone, Copy)]
+pub(crate) struct Launch {
+    pub(crate) lazy: bool,
+    pub(crate) reports_failure: bool,
+}
+
+impl Launch {
+    pub(crate) const EAGER: Self = Self {
+        lazy: false,
+        reports_failure: true,
+    };
+    pub(crate) const LAZY: Self = Self {
+        lazy: true,
+        reports_failure: true,
+    };
+    pub(crate) const DEFERRED: Self = Self {
+        lazy: false,
+        reports_failure: false,
+    };
+    pub(crate) const LAZY_DEFERRED: Self = Self {
+        lazy: true,
+        reports_failure: false,
+    };
+}
+
+type CompletionHandler = Box<dyn FnOnce(JobOutcome) + Send>;
+
 struct JobState {
     outcome: Option<JobOutcome>,
     cancel_requested: bool,
+    started: bool,
+    reports_failure: bool,
     task_waker: Option<Waker>,
     joiners: Vec<Waker>,
+    completion: Vec<CompletionHandler>,
     parent: Option<Weak<dyn JobParent>>,
+    unreported_failure: Option<String>,
 }
 
 impl Job {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(launch: Launch) -> Self {
         Self {
-            inner: Arc::new(Mutex::new(JobState::default())),
+            inner: Arc::new(Mutex::new(JobState {
+                outcome: None,
+                cancel_requested: false,
+                started: !launch.lazy,
+                reports_failure: launch.reports_failure,
+                task_waker: None,
+                joiners: Vec::new(),
+                completion: Vec::new(),
+                parent: None,
+                unreported_failure: None,
+            })),
         }
     }
 
     pub(crate) fn finished(outcome: JobOutcome) -> Self {
-        let job = Self::new();
+        let job = Self::new(Launch::EAGER);
         job.finish(outcome);
         job
+    }
+
+    /// Starts a coroutine launched lazily and reports whether this call
+    /// started it — Kotlin's `start()`. Joining or awaiting starts it too.
+    pub fn start(&self) -> bool {
+        let waker = {
+            let mut state = lock(&self.inner);
+            if state.started || state.outcome.is_some() {
+                return false;
+            }
+            state.started = true;
+            state.task_waker.clone()
+        };
+        if let Some(waker) = waker {
+            waker.wake();
+        }
+        true
+    }
+
+    /// Runs `handler` with the outcome once the coroutine finishes, or at once
+    /// if it already has — Kotlin's `invokeOnCompletion`.
+    pub fn invoke_on_completion(&self, handler: impl FnOnce(JobOutcome) + Send + 'static) {
+        let outcome = {
+            let mut state = lock(&self.inner);
+            if state.outcome.is_none() {
+                state.completion.push(Box::new(handler));
+                return;
+            }
+            state.outcome
+        };
+        if let Some(outcome) = outcome {
+            handler(outcome);
+        }
+    }
+
+    /// Cancels the coroutine and waits until it has ended — Kotlin's
+    /// `cancelAndJoin`.
+    pub fn cancel_and_join(&self) -> Join {
+        self.cancel();
+        self.join()
     }
 
     /// Requests cancellation. The future is dropped the next time its
@@ -103,33 +186,53 @@ impl Job {
     }
 
     pub(crate) fn set_parent(&self, parent: Weak<dyn JobParent>) {
-        let finished = {
+        let (finished, failure) = {
             let mut state = lock(&self.inner);
             if state.outcome.is_none() {
                 state.parent = Some(parent.clone());
             }
-            state.outcome
+            (state.outcome, state.unreported_failure.take())
         };
         if let (Some(outcome), Some(parent)) = (finished, parent.upgrade()) {
-            parent.child_finished(outcome);
+            parent.child_finished(outcome, failure.as_deref());
         }
     }
 
     pub(crate) fn finish(&self, outcome: JobOutcome) {
-        let (joiners, parent) = {
+        self.end(outcome, None);
+    }
+
+    pub(crate) fn fail(&self, message: &str) {
+        self.end(JobOutcome::Panicked, Some(message));
+    }
+
+    fn end(&self, outcome: JobOutcome, failure: Option<&str>) {
+        let (joiners, completion, parent, reported) = {
             let mut state = lock(&self.inner);
             if state.outcome.is_some() {
                 return;
             }
             state.outcome = Some(outcome);
             state.task_waker = None;
-            (std::mem::take(&mut state.joiners), state.parent.take())
+            let failure = failure.filter(|_| state.reports_failure);
+            if state.parent.is_none() {
+                state.unreported_failure = failure.map(str::to_owned);
+            }
+            (
+                std::mem::take(&mut state.joiners),
+                std::mem::take(&mut state.completion),
+                state.parent.take(),
+                failure,
+            )
         };
         for waker in joiners {
             waker.wake();
         }
+        for handler in completion {
+            handler(outcome);
+        }
         if let Some(parent) = parent.and_then(|parent| parent.upgrade()) {
-            parent.child_finished(outcome);
+            parent.child_finished(outcome, reported);
         }
     }
 }
@@ -143,6 +246,7 @@ impl Future for Join {
     type Output = JobOutcome;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<JobOutcome> {
+        self.job.start();
         let mut state = lock(&self.job.inner);
         if let Some(outcome) = state.outcome {
             return Poll::Ready(outcome);

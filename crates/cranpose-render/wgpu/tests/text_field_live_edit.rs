@@ -1,5 +1,3 @@
-mod support;
-
 use cranpose_core::location_key;
 use cranpose_foundation::{
     lazy::{LazyListScope, rememberLazyListState},
@@ -12,6 +10,8 @@ use cranpose_ui::{
     text::{SpanStyle, TextUnit},
     text_field_focus::{clear_focus, dispatch_ime_preedit},
 };
+
+use crate::support;
 
 const FRAME_WIDTH: u32 = 400;
 const FRAME_HEIGHT: u32 = 500;

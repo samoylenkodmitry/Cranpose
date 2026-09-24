@@ -102,7 +102,7 @@ pub struct RenderString {
 
 const _: () = {
     fn assert_send<T: Send + Sync>() {}
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     fn assert_render_string_is_send_sync() {
         assert_send::<RenderString>();
     }

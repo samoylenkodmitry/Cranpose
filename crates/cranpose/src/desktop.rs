@@ -3096,7 +3096,7 @@ fn robot_finish_without_wait(
 }
 
 #[cfg(feature = "robot")]
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn robot_present_or_update(
     controller: &mut RobotController,
     window: &Arc<dyn Window>,
@@ -3393,7 +3393,7 @@ fn wrap_primary_window_to_content(
     Some((width, height))
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn wrap_primary_window_for_frame(
     app: &mut AppShell<WgpuRenderer>,
     surface: &wgpu::Surface<'static>,
@@ -4866,7 +4866,7 @@ fn viewport_for_surface_size(
     requested_viewport.unwrap_or_else(|| surface_logical_viewport_size(width, height, scale_factor))
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn apply_primary_surface_resize(
     app: &mut AppShell<WgpuRenderer>,
     surface: &wgpu::Surface<'static>,
@@ -5682,7 +5682,7 @@ impl ApplicationHandler for App {
                 let robot_surface_dirty_before_update = false;
                 let primary_surface_dirty_before_update = self.primary_surface_dirty;
                 app.set_density(window.scale_factor() as f32);
-                #[cfg_attr(not(feature = "robot"), allow(unused_variables))]
+                #[cfg_attr(not(feature = "robot"), expect(unused_variables))]
                 let update_result = update_app_with_native_window_registry(app, &registry);
                 wrap_primary_window_for_frame(
                     app,
@@ -6892,7 +6892,6 @@ fn register_application_id(configured: Option<&str>) {
 /// Runs a desktop application and exits the process on success.
 ///
 /// Use [`try_run`] when the caller needs to handle launch failures explicitly.
-#[allow(unused_mut)]
 pub fn run(settings: AppSettings, content: impl FnMut() + 'static) -> ! {
     try_run(settings, content).unwrap_or_else(|error| {
         crate::app_launcher::exit_after_launch_error("desktop launch failed", error)

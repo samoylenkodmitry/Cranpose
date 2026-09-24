@@ -85,12 +85,12 @@ fn collect_as_state_follows_a_state_flow_set_from_another_thread() {
         .borrow()
         .last()
         == Some(&7)));
-    assert_eq!(source.subscription_count(), 1);
+    assert_eq!(source.subscription_count().value(), 1);
 
     composition.render(1, || {}).expect("remove");
     composition.runtime_handle().drain_ui();
     assert_eq!(
-        source.subscription_count(),
+        source.subscription_count().value(),
         0,
         "leaving the composition unsubscribes"
     );
@@ -216,7 +216,7 @@ fn collect_flow_delivers_events_and_restarts_when_its_key_changes() {
         == 2));
     assert_eq!(*received.borrow(), vec![(1, 10), (2, 20)]);
     assert_eq!(
-        events.subscription_count(),
+        events.subscription_count().value(),
         1,
         "the old collection was cancelled"
     );

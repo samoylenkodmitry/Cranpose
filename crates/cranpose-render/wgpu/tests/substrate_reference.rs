@@ -1,14 +1,11 @@
-mod support;
-
-#[path = "../src/test_support.rs"]
-mod shared_test_support;
-
 use cranpose_render_common::graph::{ProjectiveTransform, RenderGraph, RenderNode};
 use cranpose_render_wgpu::CapturedFrame;
 use cranpose_ui_graphics::{
     GradientBlurDirection, GraphicsLayer, Rect, RenderEffect, SubstrateSpec, gradient_blur_effect,
 };
 use support::{ReferenceEdge, SubstrateProbeRead, region_pixels};
+
+use crate::{shared_test_support, support};
 
 const FRAME_WIDTH: u32 = 240;
 const FRAME_HEIGHT: u32 = 120;

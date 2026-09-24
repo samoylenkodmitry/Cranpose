@@ -326,73 +326,9 @@ pub fn LiquidTheme(spec: LiquidThemeSpec, content: impl FnOnce()) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn palettes_differ_and_share_accent() {
-        let accent = Color::from_rgb_u8(0, 122, 255);
-        let light = LiquidColors::light(accent);
-        let dark = LiquidColors::dark(accent);
-        assert!(!light.is_dark);
-        assert!(dark.is_dark);
-        assert_eq!(light.accent, dark.accent);
-        assert_ne!(light.background, dark.background);
-        assert_ne!(light.glass_tint, dark.glass_tint);
-        assert_eq!(light.toggle_on, accent);
-        assert_eq!(dark.toggle_on, accent);
-        assert_ne!(light.toggle_off, dark.toggle_off);
-    }
-
-    #[test]
-    fn type_ramp_is_descending() {
-        let t = LiquidTypography::default();
-        let sizes = [
-            &t.large_title,
-            &t.title1,
-            &t.title2,
-            &t.title3,
-            &t.body,
-            &t.footnote,
-            &t.caption2,
-        ];
-        let values: Vec<f32> = sizes
-            .iter()
-            .map(|style| style.span_style.font_size.value())
-            .collect();
-        assert!(values.windows(2).all(|pair| pair[0] >= pair[1]));
-    }
-}
+#[path = "tests/theme_tests.rs"]
+mod tests;
 
 #[cfg(test)]
-mod option_tests {
-    use super::*;
-
-    #[test]
-    fn more_contrast_lifts_the_quiet_colors_toward_the_label() {
-        let plain = LiquidColors::light(Color::from_rgb_u8(0, 122, 255));
-        let strong = plain.with_more_contrast();
-        assert!(strong.secondary_label.a() > plain.secondary_label.a());
-        assert!(strong.separator.a() > plain.separator.a());
-        assert_eq!(strong.label, plain.label);
-        assert_eq!(strong.accent, plain.accent);
-    }
-
-    #[test]
-    fn bold_text_adds_a_weight_step_and_stops_at_the_top() {
-        let ramp = LiquidTypography::default().bolder();
-        assert_eq!(
-            ramp.body.span_style.font_weight,
-            Some(FontWeight::SEMI_BOLD)
-        );
-        assert_eq!(
-            ramp.headline.span_style.font_weight,
-            Some(FontWeight::EXTRA_BOLD)
-        );
-        assert_eq!(
-            ramp.large_title.span_style.font_weight,
-            Some(FontWeight(900))
-        );
-        assert_eq!(ramp.body.span_style.font_size, TextUnit::Sp(17.0));
-    }
-}
+#[path = "tests/theme_option_tests.rs"]
+mod option_tests;

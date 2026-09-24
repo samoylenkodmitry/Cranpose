@@ -1,5 +1,6 @@
 use std::{
     future::Future,
+    ops::Deref,
     pin::Pin,
     sync::{
         Arc, Mutex, Weak,
@@ -10,7 +11,7 @@ use std::{
 
 use crate::{
     dispatcher::{ConfinedDispatcher, Dispatcher, Dispatchers, current_dispatcher},
-    job::{Job, JobOutcome, JobParent},
+    job::{Job, JobOutcome, JobParent, Launch},
     select::{Either, select},
     sync::{OneshotReceiver, OneshotSender, lock, oneshot},
     task::{spawn_local, spawn_send},
@@ -32,12 +33,15 @@ pub trait Spawn<F: Future<Output = ()>> {
     fn spawn(&self, future: F) -> Job;
 }
 
+type FailureHandler = Arc<dyn Fn(&str) + Send + Sync>;
+
 struct ScopeCore {
     jobs: Mutex<Vec<Job>>,
     cancelled: AtomicBool,
     supervisor: bool,
     failed: AtomicBool,
     waiters: Mutex<Vec<Waker>>,
+    handler: Mutex<Option<FailureHandler>>,
 }
 
 impl ScopeCore {
@@ -48,7 +52,14 @@ impl ScopeCore {
             supervisor,
             failed: AtomicBool::new(false),
             waiters: Mutex::default(),
+            handler: Mutex::default(),
         })
+    }
+
+    fn children(&self) -> Vec<Job> {
+        let mut jobs = lock(&self.jobs);
+        jobs.retain(|job| job.outcome().is_none());
+        jobs.clone()
     }
 
     fn track(core: &Arc<Self>, job: Job) -> Job {
@@ -111,7 +122,13 @@ impl ScopeCore {
 }
 
 impl JobParent for ScopeCore {
-    fn child_finished(&self, outcome: JobOutcome) {
+    fn child_finished(&self, outcome: JobOutcome, failure: Option<&str>) {
+        if let Some(message) = failure {
+            let handler = lock(&self.handler).clone();
+            if let Some(handler) = handler {
+                handler(message);
+            }
+        }
         if outcome == JobOutcome::Panicked
             && !self.supervisor
             && !self.failed.swap(true, Ordering::AcqRel)
@@ -183,6 +200,21 @@ impl<D> Scope<D> {
         &self.dispatcher
     }
 
+    /// The coroutines launched here that are still running — Kotlin's
+    /// `coroutineContext.job.children`.
+    pub fn children(&self) -> Vec<Job> {
+        self.core.children()
+    }
+
+    /// Calls `handler` with the panic message of every coroutine launched here
+    /// that panics — Kotlin's `CoroutineExceptionHandler`. A coroutine started
+    /// with `async_` reports through its [`Deferred`] instead.
+    #[must_use]
+    pub fn with_exception_handler(self, handler: impl Fn(&str) + Send + Sync + 'static) -> Self {
+        *lock(&self.core.handler) = Some(Arc::new(handler));
+        self
+    }
+
     fn launch_with(&self, spawn: impl FnOnce(&D) -> Job) -> Job {
         if !self.core.is_active() {
             return Job::finished(JobOutcome::Cancelled);
@@ -203,7 +235,23 @@ impl Scope<Dispatcher> {
     where
         F: Future<Output = ()> + Send + 'static,
     {
-        self.launch_with(|dispatcher| spawn_send(dispatcher, future))
+        self.start(future, Launch::EAGER)
+    }
+
+    /// Launches `future` without running it until [`Job::start`] or
+    /// [`Job::join`] — Kotlin's `launch(start = CoroutineStart.LAZY)`.
+    pub fn launch_lazy<F>(&self, future: F) -> Job
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        self.start(future, Launch::LAZY)
+    }
+
+    fn start<F>(&self, future: F, launch: Launch) -> Job
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        self.launch_with(|dispatcher| spawn_send(dispatcher, future, launch))
     }
 
     /// A weak, cloneable handle for launching from inside the scope's own
@@ -222,7 +270,24 @@ impl Scope<ConfinedDispatcher> {
     where
         F: Future<Output = ()> + 'static,
     {
-        self.launch_with(|dispatcher| spawn_local(dispatcher, future))
+        self.start(future, Launch::EAGER)
+    }
+
+    /// Launches `future` on the main thread without running it until
+    /// [`Job::start`] or [`Job::join`] — Kotlin's
+    /// `launch(start = CoroutineStart.LAZY)`.
+    pub fn launch_lazy<F>(&self, future: F) -> Job
+    where
+        F: Future<Output = ()> + 'static,
+    {
+        self.start(future, Launch::LAZY)
+    }
+
+    fn start<F>(&self, future: F, launch: Launch) -> Job
+    where
+        F: Future<Output = ()> + 'static,
+    {
+        self.launch_with(|dispatcher| spawn_local(dispatcher, future, launch))
     }
 }
 
@@ -254,7 +319,7 @@ impl ScopeHandle {
     {
         match self.core.upgrade() {
             Some(core) if core.is_active() => {
-                ScopeCore::track(&core, spawn_send(&self.dispatcher, future))
+                ScopeCore::track(&core, spawn_send(&self.dispatcher, future, Launch::EAGER))
             }
             _ => Job::finished(JobOutcome::Cancelled),
         }
@@ -270,8 +335,10 @@ pub struct TaskFailed;
 /// The result of a coroutine started with `async_` — Kotlin's `Deferred`.
 ///
 /// Awaiting it yields the coroutine's output, or [`TaskFailed`] if the
-/// coroutine panicked or was cancelled first. Dropping it does not cancel the
-/// coroutine; its scope still owns it.
+/// coroutine panicked or was cancelled first. Awaiting a lazily started one
+/// starts it. It dereferences to its [`Job`], the way Kotlin's `Deferred`
+/// extends `Job`. Dropping it does not cancel the coroutine; its scope still
+/// owns it.
 pub struct Deferred<T> {
     job: Job,
     receiver: OneshotReceiver<T>,
@@ -285,9 +352,12 @@ impl<T> Deferred<T> {
             receiver,
         }
     }
+}
 
-    /// The coroutine computing the value.
-    pub fn job(&self) -> &Job {
+impl<T> Deref for Deferred<T> {
+    type Target = Job;
+
+    fn deref(&self) -> &Job {
         &self.job
     }
 }
@@ -297,6 +367,7 @@ impl<T> Future for Deferred<T> {
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<T, TaskFailed>> {
         let this = self.get_mut();
+        this.job.start();
         Pin::new(&mut this.receiver)
             .poll(cx)
             .map(|value| value.ok_or(TaskFailed))
@@ -310,7 +381,24 @@ impl Scope<Dispatcher> {
         F: Future<Output = T> + Send + 'static,
         T: Send + 'static,
     {
-        Deferred::spawn(|sender| self.launch(async move { sender.send(future.await) }))
+        Deferred::spawn(|sender| {
+            self.start(async move { sender.send(future.await) }, Launch::DEFERRED)
+        })
+    }
+
+    /// Like [`async_`](Scope::async_), but starts only when awaited or
+    /// started — Kotlin's `async(start = CoroutineStart.LAZY)`.
+    pub fn async_lazy<T, F>(&self, future: F) -> Deferred<T>
+    where
+        F: Future<Output = T> + Send + 'static,
+        T: Send + 'static,
+    {
+        Deferred::spawn(|sender| {
+            self.start(
+                async move { sender.send(future.await) },
+                Launch::LAZY_DEFERRED,
+            )
+        })
     }
 }
 
@@ -322,7 +410,73 @@ impl Scope<ConfinedDispatcher> {
         F: Future<Output = T> + 'static,
         T: 'static,
     {
-        Deferred::spawn(|sender| self.launch(async move { sender.send(future.await) }))
+        Deferred::spawn(|sender| {
+            self.start(async move { sender.send(future.await) }, Launch::DEFERRED)
+        })
+    }
+
+    /// Like [`async_`](Scope::async_), but starts only when awaited or
+    /// started on the main thread — Kotlin's
+    /// `async(start = CoroutineStart.LAZY)`.
+    pub fn async_lazy<T, F>(&self, future: F) -> Deferred<T>
+    where
+        F: Future<Output = T> + 'static,
+        T: 'static,
+    {
+        Deferred::spawn(|sender| {
+            self.start(
+                async move { sender.send(future.await) },
+                Launch::LAZY_DEFERRED,
+            )
+        })
+    }
+}
+
+/// Waits until every job in `jobs` has finished — Kotlin's `joinAll`.
+pub async fn join_all(jobs: impl IntoIterator<Item = Job>) {
+    for job in jobs {
+        job.join().await;
+    }
+}
+
+/// Waits for every deferred value and returns them in order, or the first
+/// failure as soon as it happens — Kotlin's `awaitAll`.
+pub fn await_all<T>(deferreds: Vec<Deferred<T>>) -> AwaitAll<T> {
+    let results = deferreds.iter().map(|_| None).collect();
+    AwaitAll { deferreds, results }
+}
+
+/// The future returned by [`await_all`].
+pub struct AwaitAll<T> {
+    deferreds: Vec<Deferred<T>>,
+    results: Vec<Option<T>>,
+}
+
+impl<T> Unpin for AwaitAll<T> {}
+
+impl<T> Future for AwaitAll<T> {
+    type Output = Result<Vec<T>, TaskFailed>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        let mut waiting = false;
+        for (deferred, result) in this.deferreds.iter_mut().zip(this.results.iter_mut()) {
+            if result.is_some() {
+                continue;
+            }
+            match Pin::new(deferred).poll(cx) {
+                Poll::Ready(Ok(value)) => *result = Some(value),
+                Poll::Ready(Err(failed)) => return Poll::Ready(Err(failed)),
+                Poll::Pending => waiting = true,
+            }
+        }
+        if waiting {
+            return Poll::Pending;
+        }
+        Poll::Ready(Ok(std::mem::take(&mut this.results)
+            .into_iter()
+            .flatten()
+            .collect()))
     }
 }
 
@@ -337,7 +491,11 @@ where
 {
     WithContext {
         deferred: Deferred::spawn(|sender| {
-            spawn_send(dispatcher, async move { sender.send(future.await) })
+            spawn_send(
+                dispatcher,
+                async move { sender.send(future.await) },
+                Launch::DEFERRED,
+            )
         }),
     }
 }

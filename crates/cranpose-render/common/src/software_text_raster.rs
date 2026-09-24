@@ -1399,7 +1399,7 @@ pub fn rasterize_text_to_image(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub fn rasterize_text_to_image_with_glyph_cache(
     text: &str,
     rect: Rect,
@@ -1627,7 +1627,7 @@ fn text_segment_supports_solid_atlas(style: &TextStyle) -> bool {
             == TextMotion::Static
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub fn rasterize_annotated_text_to_image_with_glyph_cache<'a>(
     text: impl Into<StyledTextRef<'a>>,
     rect: Rect,
@@ -1742,7 +1742,7 @@ pub fn rasterize_annotated_text_to_image_with_glyph_cache<'a>(
     ImageBitmap::from_rgba8(width, height, canvas).ok()
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn walk_solid_text_atlas_segments<'a, T>(
     text: impl Into<StyledTextRef<'a>>,
     rect: Rect,
@@ -1847,7 +1847,7 @@ fn walk_solid_text_atlas_segments<'a, T>(
     Some(())
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub fn collect_solid_text_atlas_glyphs(
     text: &AnnotatedString,
     rect: Rect,
@@ -1873,7 +1873,7 @@ pub fn collect_solid_text_atlas_glyphs(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub fn collect_cached_solid_text_atlas_placements(
     text: &AnnotatedString,
     rect: Rect,
@@ -1899,7 +1899,7 @@ pub fn collect_cached_solid_text_atlas_placements(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub fn collect_solid_text_atlas_run<'a>(
     text: impl Into<StyledTextRef<'a>>,
     rect: Rect,
@@ -2399,7 +2399,7 @@ fn style_can_atlas_solid_fill(style: &TextStyle) -> bool {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn draw_text_segment_solid_to_rgba(
     canvas: &mut [u8],
     canvas_width: u32,
@@ -2462,7 +2462,7 @@ fn draw_text_segment_solid_to_rgba(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn collect_text_segment_solid_atlas_glyphs(
     text: &str,
     local_rect: Rect,
@@ -2527,7 +2527,7 @@ fn collect_text_segment_solid_atlas_glyphs(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn collect_text_segment_cached_solid_atlas_placements(
     text: &str,
     local_rect: Rect,
@@ -2581,7 +2581,7 @@ fn collect_text_segment_cached_solid_atlas_placements(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn collect_text_segment_solid_atlas_run(
     text: &str,
     local_rect: Rect,
@@ -3496,7 +3496,7 @@ fn line_offset(offsets: &Option<Vec<f32>>, line_idx: usize) -> f32 {
         .unwrap_or(0.0)
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn visit_text_glyph_masks(
     text: &str,
     font: &impl Font,
@@ -3566,7 +3566,7 @@ fn visit_text_glyph_masks(
     max_advance
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn visit_text_glyph_masks_with_key(
     text: &str,
     font: &impl Font,
@@ -3630,7 +3630,7 @@ fn visit_text_glyph_masks_with_key(
     max_advance
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn visit_cached_text_glyph_atlas_placements(
     text: &str,
     font: &impl Font,
@@ -3695,7 +3695,7 @@ fn visit_cached_text_glyph_atlas_placements(
     max_advance
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn visit_text_glyph_atlas_run(
     text: &str,
     font: &impl Font,

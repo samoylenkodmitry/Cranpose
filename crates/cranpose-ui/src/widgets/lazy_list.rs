@@ -3,8 +3,7 @@
 //! Provides virtualized scrolling lists that only compose visible items,
 //! matching Jetpack Compose's `LazyColumn` and `LazyRow` APIs.
 
-#![allow(non_snake_case)]
-#![allow(dead_code)]
+#![expect(non_snake_case)]
 
 use std::{
     cell::{Cell, RefCell},

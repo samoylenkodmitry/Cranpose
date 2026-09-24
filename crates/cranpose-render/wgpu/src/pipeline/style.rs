@@ -22,7 +22,6 @@ use cranpose_ui_graphics::{BlendMode, CornerRadii, DrawPrimitive, GraphicsLayer,
 use crate::scene::CompositorScene;
 
 #[cfg(test)]
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn apply_draw_commands(
     commands: &[DrawCommand],
     placement: DrawPlacement,

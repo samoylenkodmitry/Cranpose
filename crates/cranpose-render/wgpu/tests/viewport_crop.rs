@@ -1,8 +1,3 @@
-mod support;
-
-#[path = "../src/test_support.rs"]
-mod shared_test_support;
-
 use cranpose_render_common::{
     graph::{ProjectiveTransform, RenderGraph, RenderNode},
     image_compare::image_difference_stats,
@@ -11,6 +6,8 @@ use cranpose_ui_graphics::{
     Color, GraphicsLayer, LayerShape, Point, Rect, RenderEffect, RoundedCornerShape, TileMode,
 };
 use support::{capture_graph, page_graph, region_pixels, solid_rect};
+
+use crate::{shared_test_support, support};
 
 const FRAME: u32 = 200;
 const CARD_WIDTH: f32 = 400.0;

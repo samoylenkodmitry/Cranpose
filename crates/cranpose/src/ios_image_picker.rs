@@ -1,4 +1,4 @@
-#![allow(unsafe_code)]
+#![expect(unsafe_code)]
 
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
@@ -111,7 +111,7 @@ fn dismiss(picker: &UIImagePickerController) {
     picker.dismissViewControllerAnimated_completion(true, None);
 }
 
-#[allow(deprecated)]
+#[expect(deprecated)]
 fn present(source: ImageSource, mtm: MainThreadMarker) -> Result<PickFuture, ImagePickerError> {
     let root = crate::ios_file_picker::root_view_controller(mtm).ok_or_else(|| {
         ImagePickerError::Failed("no root view controller to present from".into())

@@ -1,5 +1,3 @@
-mod support;
-
 use cranpose_render_common::{
     Renderer,
     geometry::blur_reach_px,
@@ -10,6 +8,8 @@ use cranpose_render_common::{
 use cranpose_render_wgpu::CapturedFrame;
 use cranpose_ui_graphics::{BlendMode, Brush, Color, DrawPrimitive, Rect, ShadowPrimitive};
 use support::{ReferenceEdge, region_pixels, solid_rect};
+
+use crate::support;
 
 const FRAME: u32 = 160;
 const WIDE_RADIUS: f32 = 20.0;

@@ -1,8 +1,3 @@
-mod support;
-
-#[path = "../src/test_support.rs"]
-mod shared_test_support;
-
 use cranpose_app_shell::AppShell;
 use cranpose_core::location_key;
 use cranpose_liquid::prelude::*;
@@ -18,6 +13,8 @@ use cranpose_ui::{
 };
 use cranpose_ui_graphics::{Color, GraphicsLayer, Rect, RenderEffect, RuntimeShader};
 use support::solid_rect;
+
+use crate::{shared_test_support, support};
 
 const FRAME_WIDTH: u32 = 128;
 const FRAME_HEIGHT: u32 = 96;

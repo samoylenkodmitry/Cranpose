@@ -20,6 +20,7 @@ Read only the sections required by the current operation. These are project requ
 - Use `anyhow` in applications and `thiserror` in libraries.
 - Use specific `Result<T, E>` errors for failure and `Option<T>` for absence.
 - Use idiomatic Rust names; composable functions use CamelCase.
+- Suppress a lint with `#[expect]`, which fails once nothing needs it; use `#[allow]` only where the lint fires in some build configurations and not in others.
 - Prefer `async`/`await` and Tokio for asynchronous work.
 - Document every public API reachable from a published crate root; all other code comments are forbidden (`scripts/dev/strip_private_docs.py <file>...` removes the rest).
 - Write unit tests for all public functions and methods; put integration tests in `tests/`.

@@ -1,8 +1,8 @@
-mod support;
-
 use cranpose_render_common::graph::RenderGraph;
 use cranpose_ui_graphics::{DrawScopeDefault, Size};
 use support::{LockedRenderer, SIZE, record_mixed_scene};
+
+use crate::support;
 
 const TOGGLE: &str = "CRANPOSE_ABLATE";
 

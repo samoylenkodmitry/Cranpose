@@ -9,7 +9,6 @@ use super::*;
 /// Contains `Cell<T>` and `RefCell<T>` which are not `Send`/`Sync`. This is safe because
 /// snapshots are stored in thread-local storage and never shared across threads. The `Arc`
 /// is used for cheap cloning within a single thread, not for cross-thread sharing.
-#[allow(clippy::arc_with_non_send_sync)]
 pub struct NestedReadonlySnapshot {
     state: SnapshotState,
     parent: Weak<NestedReadonlySnapshot>,
@@ -109,7 +108,6 @@ impl NestedReadonlySnapshot {
 /// Contains `Cell<T>` and `RefCell<T>` which are not `Send`/`Sync`. This is safe because
 /// snapshots are stored in thread-local storage and never shared across threads. The `Arc`
 /// is used for cheap cloning within a single thread, not for cross-thread sharing.
-#[allow(clippy::arc_with_non_send_sync)]
 pub struct NestedMutableSnapshot {
     state: SnapshotState,
     parent: Weak<MutableSnapshot>,

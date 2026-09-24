@@ -1,5 +1,3 @@
-#![allow(clippy::type_complexity)]
-
 use std::{
     any::{Any, TypeId},
     cell::{Cell, RefCell},

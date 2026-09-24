@@ -1,6 +1,6 @@
 //! Compose-like window scaffold with framework-owned system insets.
 
-#![allow(non_snake_case)]
+#![expect(non_snake_case)]
 
 use std::rc::Rc;
 

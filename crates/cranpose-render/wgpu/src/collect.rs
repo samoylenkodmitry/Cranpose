@@ -744,7 +744,7 @@ fn assign_snap_anchor_since(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn push_primitive(
     out: &mut LayerScene,
     text_layout: &mut impl TextLayoutResolver,

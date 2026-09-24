@@ -1,5 +1,3 @@
-mod support;
-
 use cranpose_render_common::{
     Renderer,
     graph::{
@@ -8,6 +6,8 @@ use cranpose_render_common::{
 };
 use cranpose_render_wgpu::{CancelReason, PresentOutcome};
 use cranpose_ui_graphics::{Brush, Color, Rect};
+
+use crate::support;
 
 const WIDTH: u32 = 128;
 const HEIGHT: u32 = 96;

@@ -1,11 +1,11 @@
-mod support;
-
 use cranpose_render_common::{
     Renderer,
     graph::{CachePolicy, ProjectiveTransform, RenderGraph},
 };
 use cranpose_render_wgpu::CapturedFrame;
 use cranpose_ui_graphics::{Color, Rect, Size};
+
+use crate::support;
 
 const FRAME_WIDTH: u32 = 128;
 const FRAME_HEIGHT: u32 = 96;

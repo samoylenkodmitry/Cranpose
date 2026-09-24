@@ -5,7 +5,7 @@
 //! `HKCU\Control Panel\Cursors`. Windows draws its own cursors at that size and
 //! an app's custom images at theirs, so a custom cursor that follows the
 //! system has to be scaled by the app.
-#![allow(unsafe_code)]
+#![expect(unsafe_code)]
 
 use windows_sys::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW};
 

@@ -687,7 +687,7 @@ impl WgpuFrameGraphExecutor {
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn encode_pass_node(
         &mut self,
         device: &wgpu::Device,

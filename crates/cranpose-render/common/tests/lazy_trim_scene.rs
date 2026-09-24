@@ -11,10 +11,9 @@ use cranpose_ui::{
     LayoutEngine, LinearArrangement, Modifier, Size, Text, TextStyle,
     widgets::{LazyColumn, LazyColumnSpec},
 };
-
-mod scene_probe;
-
 use scene_probe::painted_text;
+
+use crate::scene_probe;
 
 const VIEWPORT: Size = Size {
     width: 320.0,

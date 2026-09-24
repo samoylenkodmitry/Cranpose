@@ -840,7 +840,7 @@ fn shape_shader_source(mode: RunBufferMode) -> Cow<'static, str> {
 /// A pipeline that draws one full-screen triangle strip from `fullscreen_vs`
 /// into a single color target, the shape every effect and composite pass
 /// shares; `constants` fixes the shader's override constants.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub(crate) fn create_fullscreen_strip_pipeline(
     device: &wgpu::Device,
     cache: Option<&wgpu::PipelineCache>,
@@ -2378,7 +2378,7 @@ fn update_frame_warmup_budget(pending_frames: &mut u8, snapshot: &gpu_stats::Fra
 }
 
 impl GpuRenderer {
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn render(
         &mut self,
         texture: &wgpu::Texture,
@@ -2401,7 +2401,7 @@ impl GpuRenderer {
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn render_internal(
         &mut self,
         width: u32,
@@ -2799,7 +2799,7 @@ impl GpuRenderer {
     /// Records the frame: the root and overlay layer scenes into the frame's
     /// target, the output conversion when the target is not the presented
     /// image, and the viewport uniforms the recorded passes claimed.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn encode_frame<C: FrameCommandRecorder>(
         &mut self,
         recorder: &mut C,
@@ -2858,7 +2858,6 @@ impl GpuRenderer {
     /// cutouts; the source is then blitted in bands around the occluder.
     /// Shape-only shadows live in the shadow cache, keyed by their content
     /// and device placement, so a scrolling card re-blits its cached blur.
-    #[allow(clippy::too_many_arguments)]
     /// The blurred shadow texture and whether the cache held it: a
     /// shape-only shadow is cached by content and placement, a shadow with
     /// text renders every frame.
@@ -2912,7 +2911,7 @@ impl GpuRenderer {
         Some((source, false, content))
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub(crate) fn resolve_blurred_shadow<C: FrameCommandRecorder>(
         &mut self,
         recorder: &mut C,
@@ -3048,7 +3047,7 @@ impl GpuRenderer {
     /// result feeds the shadow cache; a transient one is registered with
     /// the frame's transients and released with them. `None` when the
     /// shadow draws nothing.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn render_shadow_source<C: FrameCommandRecorder>(
         &mut self,
         recorder: &mut C,
@@ -3749,7 +3748,7 @@ impl GpuRenderer {
         Ok(quads)
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn append_text_glyph_quad_run(
         &mut self,
         source_raster_rect: Rect,
@@ -4102,7 +4101,7 @@ impl GpuRenderer {
         Ok(true)
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn append_image_bitmap_draw_cmd(
         &mut self,
         image: &ImageBitmap,
@@ -4204,7 +4203,6 @@ impl GpuRenderer {
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn append_text_image_draw_cmds<'a, I>(
         &mut self,
         layer_texts: I,

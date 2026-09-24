@@ -1,8 +1,3 @@
-mod support;
-
-#[path = "../src/test_support.rs"]
-mod shared_test_support;
-
 use cranpose_render_common::{
     Renderer,
     graph::{IsolationReasons, ProjectiveTransform, RenderGraph, RenderNode},
@@ -11,6 +6,8 @@ use cranpose_ui_graphics::{
     BlendMode, Color, CompositingStrategy, GraphicsLayer, RUNTIME_SHADER_PRELUDE_WGSL, Rect,
     RenderEffect, RuntimeShader,
 };
+
+use crate::{shared_test_support, support};
 
 fn effect(mask: bool, selected: bool, dark: bool) -> RenderEffect {
     let mut shader = RuntimeShader::new(&format!(

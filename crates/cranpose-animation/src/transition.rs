@@ -18,7 +18,7 @@
 //! Note: This module uses camelCase for function/method names to maintain
 //! 1:1 API parity with Jetpack Compose.
 
-#![allow(non_snake_case)]
+#![expect(non_snake_case)]
 
 use std::{cell::RefCell, rc::Rc};
 

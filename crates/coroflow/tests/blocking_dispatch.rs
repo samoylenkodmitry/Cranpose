@@ -136,11 +136,11 @@ fn a_background_event_never_blocks_a_main_thread_that_reads_the_same_flow() {
         });
         let mut released = false;
         run_main_loop(&runnables, || {
-            if !released && events.subscription_count() == 1 {
+            if !released && events.subscription_count().value() == 1 {
                 started.wait();
                 released = true;
             }
-            let _ = events.subscription_count();
+            let _ = events.subscription_count().value();
             last.get() == VALUES
         });
     });

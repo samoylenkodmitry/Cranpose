@@ -74,7 +74,6 @@ impl HeadlessRenderer {
         RecordedRenderScene::new(operations)
     }
 
-    #[allow(clippy::only_used_in_recursion)]
     fn render_box(&self, layout: &LayoutBox, operations: &mut Vec<RenderOp>) {
         let rect = layout.rect;
         let (mut behind, mut overlay) = evaluate_modifier(layout.node_id, &layout.node_data, rect);
@@ -309,7 +308,6 @@ impl HeadlessRenderer {
         RecordedRenderScene::new(operations)
     }
 
-    #[allow(clippy::only_used_in_recursion)]
     fn render_node_from_applier(
         &self,
         applier: &mut MemoryApplier,

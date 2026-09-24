@@ -1,6 +1,6 @@
-mod support;
-
 use support::{page::*, read_texture};
+
+use crate::support;
 
 const FRAME_WIDTH: u32 = 320;
 const FRAME_HEIGHT: u32 = 240;

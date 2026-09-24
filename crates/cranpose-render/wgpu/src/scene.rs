@@ -501,7 +501,7 @@ impl CompositorScene {
         });
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn push_image_with_geometry(
         &mut self,
         rect: Rect,
@@ -541,7 +541,7 @@ impl CompositorScene {
         });
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn push_text(
         &mut self,
         node_id: NodeId,
@@ -593,7 +593,7 @@ impl CompositorScene {
         });
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn push_effect_layer(
         &mut self,
         rect: Rect,
