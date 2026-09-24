@@ -28,7 +28,7 @@ const PALETTE: [Color; 4] = [
 ];
 
 #[composable]
-fn Tile(index: usize, seconds: MutableState<f32>) {
+fn Tile(index: usize, seconds: MutableState<f32>, opaque: bool) {
     let phase = index as f32;
     Box(
         Modifier::empty()
@@ -40,7 +40,9 @@ fn Tile(index: usize, seconds: MutableState<f32>) {
                 let scale = 0.85 + 0.15 * (t * 3.0 + phase * 0.4).sin();
                 layer.scale_x = scale;
                 layer.scale_y = scale;
-                layer.alpha = 0.65 + 0.35 * (0.5 + 0.5 * (t * 2.0 + phase * 0.7).sin());
+                if !opaque {
+                    layer.alpha = 0.65 + 0.35 * (0.5 + 0.5 * (t * 2.0 + phase * 0.7).sin());
+                }
             })
             .background(PALETTE[index % PALETTE.len()])
             .rounded_corners(12.0),
@@ -52,7 +54,7 @@ fn Tile(index: usize, seconds: MutableState<f32>) {
 }
 
 #[composable]
-fn Tiles(seconds: MutableState<f32>) {
+fn Tiles(seconds: MutableState<f32>, opaque: bool) {
     Column(
         Modifier::empty().fill_max_size().padding(4.0),
         ColumnSpec::new().vertical_arrangement(LinearArrangement::spaced_by(8.0)),
@@ -63,7 +65,7 @@ fn Tiles(seconds: MutableState<f32>) {
                     RowSpec::new().horizontal_arrangement(LinearArrangement::spaced_by(8.0)),
                     move || {
                         for column in 0..COLUMNS {
-                            Tile(row * COLUMNS + column, seconds);
+                            Tile(row * COLUMNS + column, seconds, opaque);
                         }
                     },
                 );
@@ -78,14 +80,14 @@ struct TileHarness {
 }
 
 impl TileHarness {
-    fn new(renderer: WgpuRenderer) -> Self {
+    fn new(renderer: WgpuRenderer, opaque: bool) -> Self {
         let root_key = location_key(file!(), line!(), column!());
         let seconds: Rc<RefCell<Option<MutableState<f32>>>> = Rc::new(RefCell::new(None));
         let seconds_for_app = Rc::clone(&seconds);
         let mut shell = AppShell::new(renderer, root_key, move || {
             let state = cranpose_core::rememberMutableStateOf(|| 0.0f32);
             *seconds_for_app.borrow_mut() = Some(state);
-            Tiles(state);
+            Tiles(state, opaque);
         });
         shell.set_viewport(FRAME_WIDTH as f32, FRAME_HEIGHT as f32);
         shell.set_buffer_size(FRAME_WIDTH, FRAME_HEIGHT);
@@ -124,9 +126,9 @@ fn frame_seconds(frame: usize) -> f32 {
     frame as f32 / 60.0
 }
 
-fn harness() -> Option<(std::sync::MutexGuard<'static, ()>, TileHarness)> {
+fn harness(opaque: bool) -> Option<(std::sync::MutexGuard<'static, ()>, TileHarness)> {
     match support::headless_renderer_parts() {
-        Ok((lock, renderer)) => Some((lock, TileHarness::new(renderer))),
+        Ok((lock, renderer)) => Some((lock, TileHarness::new(renderer, opaque))),
         Err(err) => {
             eprintln!("skipping (headless WGPU init failed): {err}");
             None
@@ -135,7 +137,10 @@ fn harness() -> Option<(std::sync::MutexGuard<'static, ()>, TileHarness)> {
 }
 
 fn fresh_harness() -> TileHarness {
-    TileHarness::new(support::headless_renderer_beside_locked().expect("reference renderer"))
+    TileHarness::new(
+        support::headless_renderer_beside_locked().expect("reference renderer"),
+        false,
+    )
 }
 
 fn second_period_stats(harness: &mut TileHarness) -> Vec<RenderStatsSnapshot> {
@@ -147,23 +152,21 @@ fn second_period_stats(harness: &mut TileHarness) -> Vec<RenderStatsSnapshot> {
         .collect()
 }
 
-#[test]
-fn an_animated_layer_transform_allocates_no_texture_once_its_scales_were_seen() {
-    let Some((_lock, mut harness)) = harness() else {
+fn assert_no_texture_once_scales_were_seen(opaque: bool) {
+    let Some((_lock, mut harness)) = harness(opaque) else {
         return;
     };
     let stats = second_period_stats(&mut harness);
     let news: Vec<u32> = stats.iter().map(|stats| stats.offscreen_news).collect();
     assert!(
         news.iter().all(|news| *news == 0),
-        "tiles whose rotation, scale and alpha keep changing over unchanged content must \
+        "tiles (opaque: {opaque}) whose transform keeps changing over unchanged content must \
          reuse what an earlier period drew, not create textures every frame: {news:?}"
     );
 }
 
-#[test]
-fn an_animated_layer_transform_redraws_almost_no_surface_and_bounds_the_cache() {
-    let Some((_lock, mut harness)) = harness() else {
+fn assert_almost_no_surface_redrawn(opaque: bool) {
+    let Some((_lock, mut harness)) = harness(opaque) else {
         return;
     };
     let stats = second_period_stats(&mut harness);
@@ -171,8 +174,8 @@ fn an_animated_layer_transform_redraws_almost_no_surface_and_bounds_the_cache() 
     assert!(
         renders <= TILES,
         "a period after every scale step was drawn, {MEASURED_FRAMES} frames of {TILES} \
-         animated tiles redrew {renders} surfaces; before the fix they redrew every tile \
-         every frame"
+         animated tiles (opaque: {opaque}) redrew {renders} surfaces; before the fix they \
+         redrew every tile every frame"
     );
     let sizes: Vec<u32> = stats.iter().map(|stats| stats.layer_cache_size).collect();
     assert!(
@@ -182,8 +185,28 @@ fn an_animated_layer_transform_redraws_almost_no_surface_and_bounds_the_cache() 
 }
 
 #[test]
+fn an_animated_layer_transform_allocates_no_texture_once_its_scales_were_seen() {
+    assert_no_texture_once_scales_were_seen(false);
+}
+
+#[test]
+fn an_animated_opaque_layer_transform_allocates_no_texture_once_its_scales_were_seen() {
+    assert_no_texture_once_scales_were_seen(true);
+}
+
+#[test]
+fn an_animated_layer_transform_redraws_almost_no_surface_and_bounds_the_cache() {
+    assert_almost_no_surface_redrawn(false);
+}
+
+#[test]
+fn an_animated_opaque_layer_transform_redraws_almost_no_surface_and_bounds_the_cache() {
+    assert_almost_no_surface_redrawn(true);
+}
+
+#[test]
 fn a_layer_that_stops_scaling_draws_what_a_fresh_renderer_draws() {
-    let Some((_lock, mut animated)) = harness() else {
+    let Some((_lock, mut animated)) = harness(false) else {
         return;
     };
     for frame in 0..WARMUP_FRAMES {
@@ -211,7 +234,7 @@ fn a_layer_that_stops_scaling_draws_what_a_fresh_renderer_draws() {
 
 #[test]
 fn an_animated_frame_draws_what_a_fresh_renderer_given_the_same_motion_draws() {
-    let Some((_lock, mut animated)) = harness() else {
+    let Some((_lock, mut animated)) = harness(false) else {
         return;
     };
     for frame in 0..WARMUP_FRAMES {

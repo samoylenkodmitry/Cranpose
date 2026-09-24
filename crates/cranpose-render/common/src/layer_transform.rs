@@ -63,6 +63,10 @@ fn layer_rotation_pivot(layer_bounds: Rect, layer: &GraphicsLayer) -> (f32, f32)
     )
 }
 
+pub(crate) fn layer_scales_or_rotates(layer: &GraphicsLayer) -> bool {
+    layer_scale_x(layer) != 1.0 || layer_scale_y(layer) != 1.0 || layer_has_rotation(layer)
+}
+
 fn layer_has_rotation(layer: &GraphicsLayer) -> bool {
     layer.rotation_x.abs() > f32::EPSILON
         || layer.rotation_y.abs() > f32::EPSILON

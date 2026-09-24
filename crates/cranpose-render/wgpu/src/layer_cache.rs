@@ -9,7 +9,7 @@ use crate::{
     geometry::offscreen_byte_size, offscreen::OffscreenTarget,
 };
 
-const MAX_ENTRIES: usize = 256;
+const MAX_ENTRIES: usize = 4096;
 const MAX_BYTES: u64 = 96 * 1024 * 1024;
 
 #[derive(Clone)]

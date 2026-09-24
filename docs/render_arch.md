@@ -78,7 +78,10 @@ composites the resolved textures.
   (`RasterScale`): a raster drawn at one scale never serves another. A
   child's source surface is kept on first sight; after a kept surface
   nothing read back, the next one is kept only once its key repeats
-  (`AdmissionGate::rendered`). Contract `animated_layer_transform.rs`.
+  (`AdmissionGate::rendered`). A layer isolated only by its scale or
+  rotation is as cacheable as one isolated for alpha or a clip
+  (`layer_cache_policy`). Contract `animated_layer_transform.rs`, opaque
+  and translucent.
 - **Stages** (`ResolveStages`, `run_stages`): the page is drawn in strata
   and backdrops resolve in batches; an effect joins the stage after every
   effect below it under its capture; blockers are every backdrop still
@@ -130,7 +133,8 @@ composites the resolved textures.
   `shape_variant_parity.rs` (zero bytes; a wrong varying or fixed brush
   fails by 10^5 bytes).
 - **Caches** (`LayerCache`, 96 MB LRU, bytes per texture through an
-  `AllocationLedger`): retained child layers (`raster_cache.rs`), blurred
+  `AllocationLedger`; the byte budget bounds it, the 4096-entry cap only
+  guards the index): retained child layers (`raster_cache.rs`), blurred
   shadows composited as bands, backdrops keyed by node, effect, capture
   size, layout signature and a hash of everything the capture reads
   (`capture_hash.rs`). A backdrop is pinned the first frame its key is seen
