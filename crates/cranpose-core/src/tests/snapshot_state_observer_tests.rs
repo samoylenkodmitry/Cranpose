@@ -6,10 +6,6 @@ use crate::{
     state::{NeverEqual, SnapshotMutableState},
 };
 
-fn reset_runtime() -> TestRuntimeGuard {
-    reset_runtime_for_tests()
-}
-
 #[derive(Clone, Eq, Hash, PartialEq)]
 struct TestScope(&'static str);
 
@@ -53,7 +49,7 @@ fn scope_update_reuses_storage_and_replaces_payload_and_callback() {
 
 #[test]
 fn reobservation_refreshes_captures_and_preserves_shared_callbacks() {
-    let _guard = reset_runtime();
+    let _guard = reset_runtime_for_tests();
     let state = SnapshotMutableState::new_in_arc(0, Arc::new(NeverEqual));
     let delivered = Rc::new(RefCell::new(Vec::new()));
     let callback = |generation| {
@@ -101,7 +97,7 @@ fn reobservation_refreshes_captures_and_preserves_shared_callbacks() {
 
 #[test]
 fn reobservation_across_storage_thresholds_replaces_dependencies_and_callbacks() {
-    let _guard = reset_runtime();
+    let _guard = reset_runtime_for_tests();
     let states: Vec<_> = (0..MAX_OBSERVED_STATES + 2)
         .map(|_| SnapshotMutableState::new_in_arc(0, Arc::new(NeverEqual)))
         .collect();
@@ -144,7 +140,7 @@ fn reobservation_across_storage_thresholds_replaces_dependencies_and_callbacks()
 
 #[test]
 fn reobservation_preserves_notifications_when_dependencies_repeat_or_change() {
-    let _guard = reset_runtime();
+    let _guard = reset_runtime_for_tests();
     let states: Vec<_> = (0..3)
         .map(|_| SnapshotMutableState::new_in_arc(0, Arc::new(NeverEqual)))
         .collect();
@@ -192,7 +188,7 @@ fn reobservation_preserves_notifications_when_dependencies_repeat_or_change() {
 
 #[test]
 fn stateless_scope_can_start_observing_and_replace_its_callback_before_the_block() {
-    let _guard = reset_runtime();
+    let _guard = reset_runtime_for_tests();
     let observer = SnapshotStateObserver::new(|callback| callback());
     let state = SnapshotMutableState::new_in_arc(0, Arc::new(NeverEqual));
     let observed: Arc<dyn StateObject> = state.clone();
@@ -225,7 +221,7 @@ fn stateless_scope_can_start_observing_and_replace_its_callback_before_the_block
 
 #[test]
 fn callback_captures_are_released_on_replacement_and_clear() {
-    let _guard = reset_runtime();
+    let _guard = reset_runtime_for_tests();
     let state = SnapshotMutableState::new_in_arc(0, Arc::new(NeverEqual));
     let observer = SnapshotStateObserver::new(|callback| callback());
     let owners = [Rc::new(Cell::new(0)), Rc::new(Cell::new(0))];
@@ -247,7 +243,7 @@ fn callback_captures_are_released_on_replacement_and_clear() {
 
 #[test]
 fn notifies_scope_when_state_changes() {
-    let _guard = reset_runtime();
+    let _guard = reset_runtime_for_tests();
 
     let state = SnapshotMutableState::new_in_arc(0, Arc::new(NeverEqual));
     let triggered = Rc::new(Cell::new(0));
@@ -279,7 +275,7 @@ fn notifies_scope_when_state_changes() {
 
 #[test]
 fn clear_removes_scope_observation() {
-    let _guard = reset_runtime();
+    let _guard = reset_runtime_for_tests();
 
     let state = SnapshotMutableState::new_in_arc(0, Arc::new(NeverEqual));
     let triggered = Rc::new(Cell::new(0));
@@ -313,7 +309,7 @@ fn clear_removes_scope_observation() {
 
 #[test]
 fn repeated_owned_scope_observations_reuse_the_same_entry() {
-    let _guard = reset_runtime();
+    let _guard = reset_runtime_for_tests();
 
     let state = SnapshotMutableState::new_in_arc(0, Arc::new(NeverEqual));
     let observer = SnapshotStateObserver::new(|callback| callback());
@@ -341,7 +337,7 @@ fn repeated_owned_scope_observations_reuse_the_same_entry() {
 
 #[test]
 fn with_no_observations_skips_reads() {
-    let _guard = reset_runtime();
+    let _guard = reset_runtime_for_tests();
 
     let state = SnapshotMutableState::new_in_arc(0, Arc::new(NeverEqual));
     let triggered = Rc::new(Cell::new(0));
@@ -375,7 +371,7 @@ fn with_no_observations_skips_reads() {
 
 #[test]
 fn recycled_observation_refreshes_snapshot_state() {
-    let _guard = reset_runtime();
+    let _guard = reset_runtime_for_tests();
     let state = SnapshotMutableState::new_in_arc(0, Arc::new(NeverEqual));
     let observer = SnapshotStateObserver::new(|callback| callback());
     let mut allocation = None;
@@ -405,7 +401,7 @@ fn recycled_observation_refreshes_snapshot_state() {
 
 #[test]
 fn recycled_observation_preserves_escaped_snapshots() {
-    let _guard = reset_runtime();
+    let _guard = reset_runtime_for_tests();
     let observer = SnapshotStateObserver::new(|callback| callback());
     let escaped = observer
         .inner
@@ -436,7 +432,7 @@ fn recycled_observation_preserves_escaped_snapshots() {
 
 #[test]
 fn recycled_observation_does_not_retain_written_state() {
-    let _guard = reset_runtime();
+    let _guard = reset_runtime_for_tests();
     let observer = SnapshotStateObserver::new(|callback| callback());
     let state = SnapshotMutableState::new_in_arc(0, Arc::new(NeverEqual));
     let owners = Arc::strong_count(&state);
@@ -449,7 +445,7 @@ fn recycled_observation_does_not_retain_written_state() {
 
 #[test]
 fn nested_observe_reads_attributes_state_to_innermost_scope_only() {
-    let _guard = reset_runtime();
+    let _guard = reset_runtime_for_tests();
 
     let state = SnapshotMutableState::new_in_arc(0, Arc::new(NeverEqual));
     let outer_state = SnapshotMutableState::new_in_arc(0, Arc::new(NeverEqual));
@@ -500,7 +496,7 @@ fn nested_observe_reads_attributes_state_to_innermost_scope_only() {
 
 #[test]
 fn unwound_observation_does_not_leak_reads_into_reused_storage() {
-    let _guard = reset_runtime();
+    let _guard = reset_runtime_for_tests();
     let abandoned = SnapshotMutableState::new_in_arc(0, Arc::new(NeverEqual));
     let live = SnapshotMutableState::new_in_arc(0, Arc::new(NeverEqual));
     let triggered = Rc::new(Cell::new(0));
@@ -542,7 +538,7 @@ fn unwound_observation_does_not_leak_reads_into_reused_storage() {
 
 #[test]
 fn clearing_one_scope_keeps_shared_state_registered_for_other_scope() {
-    let _guard = reset_runtime();
+    let _guard = reset_runtime_for_tests();
 
     let state = SnapshotMutableState::new_in_arc(0, Arc::new(NeverEqual));
     let first_triggered = Rc::new(Cell::new(0));
@@ -589,7 +585,7 @@ fn clearing_one_scope_keeps_shared_state_registered_for_other_scope() {
 
 #[test]
 fn shared_state_notifies_scopes_in_registration_order() {
-    let _guard = reset_runtime();
+    let _guard = reset_runtime_for_tests();
 
     let state = SnapshotMutableState::new_in_arc(0, Arc::new(NeverEqual));
     let notifications = Rc::new(RefCell::new(Vec::new()));
@@ -630,7 +626,7 @@ fn shared_state_notifies_scopes_in_registration_order() {
 
 #[test]
 fn stateless_recompose_scope_does_not_retain_observer_entry() {
-    let _guard = reset_runtime();
+    let _guard = reset_runtime_for_tests();
 
     let observer = SnapshotStateObserver::new(|callback| callback());
     let runtime = crate::TestRuntime::new();
@@ -646,7 +642,7 @@ fn stateless_recompose_scope_does_not_retain_observer_entry() {
 
 #[test]
 fn scope_that_stops_reading_state_is_removed_immediately() {
-    let _guard = reset_runtime();
+    let _guard = reset_runtime_for_tests();
 
     let state = SnapshotMutableState::new_in_arc(0, Arc::new(NeverEqual));
     let observer = SnapshotStateObserver::new(|callback| callback());
@@ -684,7 +680,7 @@ fn scope_that_stops_reading_state_is_removed_immediately() {
 
 #[test]
 fn begin_frame_prunes_dropped_recompose_scope_entries() {
-    let _guard = reset_runtime();
+    let _guard = reset_runtime_for_tests();
 
     let state = SnapshotMutableState::new_in_arc(0, Arc::new(NeverEqual));
     let observer = SnapshotStateObserver::new(|callback| callback());

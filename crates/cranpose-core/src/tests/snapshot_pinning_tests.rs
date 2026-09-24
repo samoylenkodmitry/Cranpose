@@ -1,9 +1,5 @@
 use super::*;
 
-fn setup() {
-    reset_pinning_table();
-}
-
 #[test]
 fn test_invalid_handle() {
     let handle = PinHandle::INVALID;
@@ -13,7 +9,7 @@ fn test_invalid_handle() {
 
 #[test]
 fn test_valid_handle() {
-    setup();
+    reset_pinning_table();
     let invalid = SnapshotIdSet::new().set(10);
     let handle = track_pinning(20, &invalid);
     assert!(handle.is_valid());
@@ -22,7 +18,7 @@ fn test_valid_handle() {
 
 #[test]
 fn test_track_and_release() {
-    setup();
+    reset_pinning_table();
 
     let invalid = SnapshotIdSet::new().set(10);
     let handle = track_pinning(20, &invalid);
@@ -37,7 +33,7 @@ fn test_track_and_release() {
 
 #[test]
 fn test_multiple_pins() {
-    setup();
+    reset_pinning_table();
 
     let invalid1 = SnapshotIdSet::new().set(10);
     let handle1 = track_pinning(20, &invalid1);
@@ -59,7 +55,7 @@ fn test_multiple_pins() {
 
 #[test]
 fn test_duplicate_pins() {
-    setup();
+    reset_pinning_table();
 
     let invalid = SnapshotIdSet::new().set(10);
     let handle1 = track_pinning(20, &invalid);
@@ -79,7 +75,7 @@ fn test_duplicate_pins() {
 
 #[test]
 fn test_pin_ordering() {
-    setup();
+    reset_pinning_table();
 
     let invalid1 = SnapshotIdSet::new().set(30);
     let _handle1 = track_pinning(40, &invalid1);
@@ -95,7 +91,7 @@ fn test_pin_ordering() {
 
 #[test]
 fn test_release_invalid_handle() {
-    setup();
+    reset_pinning_table();
 
     release_pinning(PinHandle::INVALID);
     assert_eq!(pin_count(), 0);
@@ -103,7 +99,7 @@ fn test_release_invalid_handle() {
 
 #[test]
 fn test_empty_invalid_set() {
-    setup();
+    reset_pinning_table();
 
     let invalid = SnapshotIdSet::new();
     let handle = track_pinning(100, &invalid);
@@ -116,7 +112,7 @@ fn test_empty_invalid_set() {
 
 #[test]
 fn test_lowest_from_invalid_set() {
-    setup();
+    reset_pinning_table();
 
     let invalid = SnapshotIdSet::new().set(5).set(10).set(15).set(20);
     let handle = track_pinning(25, &invalid);
@@ -128,7 +124,7 @@ fn test_lowest_from_invalid_set() {
 
 #[test]
 fn test_concurrent_snapshots() {
-    setup();
+    reset_pinning_table();
 
     let handles: Vec<_> = (0..10)
         .map(|i| {
@@ -150,7 +146,7 @@ fn test_concurrent_snapshots() {
 
 #[test]
 fn test_heap_handle_based_removal() {
-    setup();
+    reset_pinning_table();
 
     let invalid1 = SnapshotIdSet::new().set(42);
     let invalid2 = SnapshotIdSet::new().set(17);

@@ -6,10 +6,6 @@ use crate::{
     state::{ObjectId, PREEXISTING_SNAPSHOT_ID, StateObject, StateRecord},
 };
 
-fn reset_runtime() -> TestRuntimeGuard {
-    reset_runtime_for_tests()
-}
-
 fn mock_state_record() -> Rc<StateRecord> {
     StateRecord::new(PREEXISTING_SNAPSHOT_ID, (), None)
 }
@@ -54,7 +50,7 @@ impl StateObject for MockState {
 
 #[test]
 fn test_transparent_observer_mutable_snapshot() {
-    let _guard = reset_runtime();
+    let _guard = reset_runtime_for_tests();
     let snapshot =
         TransparentObserverMutableSnapshot::new(1, SnapshotIdSet::new(), None, None, None);
 
@@ -65,7 +61,7 @@ fn test_transparent_observer_mutable_snapshot() {
 
 #[test]
 fn test_transparent_observer_mutable_apply() {
-    let _guard = reset_runtime();
+    let _guard = reset_runtime_for_tests();
     let snapshot =
         TransparentObserverMutableSnapshot::new(1, SnapshotIdSet::new(), None, None, None);
 
@@ -75,7 +71,7 @@ fn test_transparent_observer_mutable_apply() {
 
 #[test]
 fn test_transparent_observer_snapshot() {
-    let _guard = reset_runtime();
+    let _guard = reset_runtime_for_tests();
     let snapshot = TransparentObserverSnapshot::new(1, SnapshotIdSet::new(), None, None);
 
     assert_eq!(snapshot.snapshot_id(), 1);
@@ -86,7 +82,7 @@ fn test_transparent_observer_snapshot() {
 #[test]
 #[should_panic(expected = "Cannot write to a read-only snapshot")]
 fn test_transparent_observer_snapshot_write_panics() {
-    let _guard = reset_runtime();
+    let _guard = reset_runtime_for_tests();
 
     let snapshot = TransparentObserverSnapshot::new(1, SnapshotIdSet::new(), None, None);
 
@@ -96,7 +92,7 @@ fn test_transparent_observer_snapshot_write_panics() {
 
 #[test]
 fn transparent_mutable_set_read_observer_replaces_observer() {
-    let _guard = reset_runtime();
+    let _guard = reset_runtime_for_tests();
     let initial_reads = Rc::new(Cell::new(0));
     let replacement_reads = Rc::new(Cell::new(0));
     let snapshot = TransparentObserverMutableSnapshot::new(
@@ -122,7 +118,7 @@ fn transparent_mutable_set_read_observer_replaces_observer() {
 
 #[test]
 fn transparent_mutable_set_write_observer_replaces_observer() {
-    let _guard = reset_runtime();
+    let _guard = reset_runtime_for_tests();
     let initial_writes = Rc::new(Cell::new(0));
     let replacement_writes = Rc::new(Cell::new(0));
     let snapshot = TransparentObserverMutableSnapshot::new(
@@ -148,7 +144,7 @@ fn transparent_mutable_set_write_observer_replaces_observer() {
 
 #[test]
 fn transparent_mutable_nested_snapshot_inherits_replaced_observers() {
-    let _guard = reset_runtime();
+    let _guard = reset_runtime_for_tests();
     let parent_reads = Rc::new(Cell::new(0));
     let parent_writes = Rc::new(Cell::new(0));
     let snapshot =
@@ -172,7 +168,7 @@ fn transparent_mutable_nested_snapshot_inherits_replaced_observers() {
 
 #[test]
 fn transparent_readonly_set_read_observer_replaces_observer() {
-    let _guard = reset_runtime();
+    let _guard = reset_runtime_for_tests();
     let initial_reads = Rc::new(Cell::new(0));
     let replacement_reads = Rc::new(Cell::new(0));
     let snapshot = TransparentObserverSnapshot::new(
@@ -197,7 +193,7 @@ fn transparent_readonly_set_read_observer_replaces_observer() {
 
 #[test]
 fn test_transparent_observer_mutable_nested() {
-    let _guard = reset_runtime();
+    let _guard = reset_runtime_for_tests();
     let parent = TransparentObserverMutableSnapshot::new(1, SnapshotIdSet::new(), None, None, None);
 
     let nested = parent.take_nested_mutable_snapshot(None, None);
@@ -206,7 +202,7 @@ fn test_transparent_observer_mutable_nested() {
 
 #[test]
 fn test_transparent_observer_snapshot_nested() {
-    let _guard = reset_runtime();
+    let _guard = reset_runtime_for_tests();
     let parent = TransparentObserverSnapshot::new(1, SnapshotIdSet::new(), None, None);
 
     let nested = parent.take_nested_snapshot(None);

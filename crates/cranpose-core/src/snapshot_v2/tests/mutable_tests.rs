@@ -6,10 +6,6 @@ use crate::{
     state::{NeverEqual, SnapshotMutableState, StateObject},
 };
 
-fn reset_runtime() -> TestRuntimeGuard {
-    reset_runtime_for_tests()
-}
-
 fn new_state(initial: i32) -> Arc<SnapshotMutableState<i32>> {
     SnapshotMutableState::new_in_arc(initial, Arc::new(NeverEqual))
 }
@@ -108,7 +104,7 @@ impl StateObject for MissingParentReadableStateObject {
 
 #[test]
 fn test_mutable_snapshot_creation() {
-    let _guard = reset_runtime();
+    let _guard = reset_runtime_for_tests();
     let snapshot = MutableSnapshot::new(1, SnapshotIdSet::new(), None, None, 0);
     assert_eq!(snapshot.snapshot_id(), 1);
     assert!(!snapshot.read_only());
@@ -118,14 +114,14 @@ fn test_mutable_snapshot_creation() {
 
 #[test]
 fn test_mutable_snapshot_no_pending_changes_initially() {
-    let _guard = reset_runtime();
+    let _guard = reset_runtime_for_tests();
     let snapshot = MutableSnapshot::new(1, SnapshotIdSet::new(), None, None, 0);
     assert!(!snapshot.has_pending_changes());
 }
 
 #[test]
 fn test_mutable_snapshot_enter() {
-    let _guard = reset_runtime();
+    let _guard = reset_runtime_for_tests();
     let snapshot = MutableSnapshot::new(1, SnapshotIdSet::new(), None, None, 0);
 
     set_current_snapshot(None);
@@ -142,7 +138,7 @@ fn test_mutable_snapshot_enter() {
 
 #[test]
 fn test_mutable_snapshot_read_observer() {
-    let _guard = reset_runtime();
+    let _guard = reset_runtime_for_tests();
     use std::sync::{Arc as StdArc, Mutex};
 
     let read_count = StdArc::new(Mutex::new(0));
@@ -163,7 +159,7 @@ fn test_mutable_snapshot_read_observer() {
 
 #[test]
 fn test_mutable_snapshot_write_observer() {
-    let _guard = reset_runtime();
+    let _guard = reset_runtime_for_tests();
     use std::sync::{Arc as StdArc, Mutex};
 
     let write_count = StdArc::new(Mutex::new(0));
@@ -184,7 +180,7 @@ fn test_mutable_snapshot_write_observer() {
 
 #[test]
 fn test_mutable_snapshot_apply_empty() {
-    let _guard = reset_runtime();
+    let _guard = reset_runtime_for_tests();
     let snapshot = MutableSnapshot::new(1, SnapshotIdSet::new(), None, None, 0);
     let result = snapshot.apply();
     assert!(result.is_success());
@@ -193,7 +189,7 @@ fn test_mutable_snapshot_apply_empty() {
 
 #[test]
 fn mutable_apply_returns_failure_when_parent_readable_record_is_missing() {
-    let _guard = reset_runtime();
+    let _guard = reset_runtime_for_tests();
     let snapshot = MutableSnapshot::new(7, SnapshotIdSet::new(), None, None, 1);
     let state = Arc::new(MissingParentReadableStateObject::new(
         snapshot.snapshot_id(),
@@ -208,7 +204,7 @@ fn mutable_apply_returns_failure_when_parent_readable_record_is_missing() {
 
 #[test]
 fn test_mutable_snapshot_apply_twice_fails() {
-    let _guard = reset_runtime();
+    let _guard = reset_runtime_for_tests();
     let snapshot = MutableSnapshot::new(1, SnapshotIdSet::new(), None, None, 0);
     snapshot.apply().check();
 
@@ -218,7 +214,7 @@ fn test_mutable_snapshot_apply_twice_fails() {
 
 #[test]
 fn test_mutable_snapshot_nested_readonly() {
-    let _guard = reset_runtime();
+    let _guard = reset_runtime_for_tests();
     let parent = MutableSnapshot::new(1, SnapshotIdSet::new(), None, None, 0);
     let nested = parent.take_nested_snapshot(None);
 
@@ -229,7 +225,7 @@ fn test_mutable_snapshot_nested_readonly() {
 
 #[test]
 fn test_mutable_snapshot_nested_mutable() {
-    let _guard = reset_runtime();
+    let _guard = reset_runtime_for_tests();
     let parent = MutableSnapshot::new(1, SnapshotIdSet::new(), None, None, 0);
     let nested = parent.take_nested_mutable_snapshot(None, None);
 
@@ -240,7 +236,7 @@ fn test_mutable_snapshot_nested_mutable() {
 
 #[test]
 fn test_mutable_snapshot_nested_mutable_dispose_clears_invalid() {
-    let _guard = reset_runtime();
+    let _guard = reset_runtime_for_tests();
     let parent = MutableSnapshot::new(1, SnapshotIdSet::new(), None, None, 0);
     let nested = parent.take_nested_mutable_snapshot(None, None);
 
@@ -255,7 +251,7 @@ fn test_mutable_snapshot_nested_mutable_dispose_clears_invalid() {
 
 #[test]
 fn test_mutable_snapshot_nested_dispose() {
-    let _guard = reset_runtime();
+    let _guard = reset_runtime_for_tests();
     let parent = MutableSnapshot::new(1, SnapshotIdSet::new(), None, None, 0);
     let nested = parent.take_nested_snapshot(None);
 
@@ -268,7 +264,7 @@ fn test_mutable_snapshot_nested_dispose() {
 #[test]
 #[should_panic(expected = "Snapshot has already been applied")]
 fn test_mutable_snapshot_write_after_apply_panics() {
-    let _guard = reset_runtime();
+    let _guard = reset_runtime_for_tests();
     let snapshot = MutableSnapshot::new(1, SnapshotIdSet::new(), None, None, 0);
     snapshot.apply().check();
 
@@ -279,7 +275,7 @@ fn test_mutable_snapshot_write_after_apply_panics() {
 #[test]
 #[should_panic(expected = "Snapshot has been disposed")]
 fn test_mutable_snapshot_write_after_dispose_panics() {
-    let _guard = reset_runtime();
+    let _guard = reset_runtime_for_tests();
     let snapshot = MutableSnapshot::new(1, SnapshotIdSet::new(), None, None, 0);
     snapshot.dispose();
 
@@ -289,7 +285,7 @@ fn test_mutable_snapshot_write_after_dispose_panics() {
 
 #[test]
 fn test_mutable_snapshot_dispose() {
-    let _guard = reset_runtime();
+    let _guard = reset_runtime_for_tests();
     let snapshot = MutableSnapshot::new(1, SnapshotIdSet::new(), None, None, 0);
     assert!(!snapshot.is_disposed());
 
@@ -299,7 +295,7 @@ fn test_mutable_snapshot_dispose() {
 
 #[test]
 fn test_mutable_snapshot_apply_observer() {
-    let _guard = reset_runtime();
+    let _guard = reset_runtime_for_tests();
     use std::sync::{Arc as StdArc, Mutex};
 
     let applied_count = StdArc::new(Mutex::new(0));
@@ -324,7 +320,7 @@ fn test_mutable_snapshot_apply_observer() {
 
 #[test]
 fn test_mutable_conflict_detection_same_object() {
-    let _guard = reset_runtime();
+    let _guard = reset_runtime_for_tests();
     let global = GlobalSnapshot::get_or_create();
     let state = new_state(0);
 
@@ -340,7 +336,7 @@ fn test_mutable_conflict_detection_same_object() {
 
 #[test]
 fn test_mutable_no_conflict_different_objects() {
-    let _guard = reset_runtime();
+    let _guard = reset_runtime_for_tests();
     let global = GlobalSnapshot::get_or_create();
     let state1 = new_state(0);
     let state2 = new_state(0);
