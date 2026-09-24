@@ -1,4 +1,18 @@
 #!/bin/sh
+# `just hooks` points core.hooksPath at this folder, which hides the hooks a
+# developer set up globally, so a machine-wide commit-msg that rewrites or
+# refuses a message never saw this repository's commits. It runs first here,
+# and a refusal from it stops the commit.
+global_hooks=$(git config --global --get core.hooksPath 2>/dev/null) || global_hooks=
+case "$global_hooks" in
+    "~/"*) global_hooks="$HOME/${global_hooks#"~/"}" ;;
+esac
+here=$(cd "$(dirname "$0")" && pwd -P)
+if [ -n "$global_hooks" ] && [ -x "$global_hooks/commit-msg" ] &&
+    [ "$(cd "$global_hooks" && pwd -P)" != "$here" ]; then
+    "$global_hooks/commit-msg" "$@" || exit $?
+fi
+
 # `release: vX.Y.Z` is publish.yml's own commit, not a person's. The workflow
 # writes it with `[skip ci]` so no run ever sees the tree where the workspace
 # already carries the new version and `apps/isolated-demo` still pins the
