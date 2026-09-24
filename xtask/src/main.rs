@@ -4052,16 +4052,28 @@ mod duplication_gate {
         )
     }
 
-    /// Code with its comment lines and all its whitespace dropped, so code
-    /// that moved out of a module, reformatted one level shallower and
-    /// without its comments, still reads the same.
+    /// Code with its comment lines, all its whitespace and its trailing
+    /// commas dropped, so code that moved out of a module, reformatted one
+    /// level shallower and without its comments, still reads the same.
+    /// rustfmt drops a trailing comma when the shallower indent lets it join
+    /// a list onto one line, and a clone can end on one whose list closes
+    /// past the clone.
     pub(crate) fn clone_text(source: &str) -> String {
-        source
+        let joined: String = source
             .lines()
             .map(str::trim)
             .filter(|line| !line.starts_with("//"))
             .flat_map(str::split_whitespace)
-            .collect()
+            .collect();
+        let mut text = String::with_capacity(joined.len());
+        let mut chars = joined.chars().peekable();
+        while let Some(ch) = chars.next() {
+            if ch == ',' && matches!(chars.peek(), None | Some(')' | ']' | '}' | '>')) {
+                continue;
+            }
+            text.push(ch);
+        }
+        text
     }
 
     /// A clone whose text was in the tree before the diff, at any path:
@@ -7921,6 +7933,39 @@ version = \"0.1.0\"
         assert_eq!(
             duplication_gate::find_violations(&[moved], &[], &[other], &ranges).len(),
             1
+        );
+    }
+
+    #[test]
+    fn duplication_find_violations_clone_rustfmt_rejoined_after_moving_passes() {
+        let ranges = BTreeMap::from([("src/tests/a_tests.rs".to_owned(), vec![(1, 40)])]);
+        let moved = duplicate_of(
+            ("src/tests/a_tests.rs", 1, 12),
+            ("src/tests/a_tests.rs", 20, 31),
+            12,
+            "fn layout(&self, text: &Text) -> Layout {\n    panic!(\"unused\");\n}\n",
+        );
+        let old_source = duplication_gate::clone_text(
+            "    fn layout(\n        &self,\n        text: &Text,\n    ) -> Layout {\n        panic!(\"unused\");\n    }\n",
+        );
+        assert_eq!(
+            duplication_gate::find_violations(
+                std::slice::from_ref(&moved),
+                &[],
+                std::slice::from_ref(&old_source),
+                &ranges
+            ),
+            Vec::<String>::new()
+        );
+        let cut_inside_a_list = duplicate_of(
+            ("src/tests/a_tests.rs", 1, 12),
+            ("src/tests/a_tests.rs", 20, 31),
+            12,
+            "fn layout(\n    &self,\n    text: &Text,\n",
+        );
+        assert_eq!(
+            duplication_gate::find_violations(&[cut_inside_a_list], &[], &[old_source], &ranges),
+            Vec::<String>::new()
         );
     }
 
