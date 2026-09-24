@@ -9,7 +9,11 @@ use crate::{
 #[derive(Clone, Eq, Hash, PartialEq)]
 struct TestScope(&'static str);
 
-fn setup_observer_test() -> (Arc<SnapshotMutableState<i32>>, Rc<Cell<i32>>, SnapshotStateObserver) {
+fn setup_observer_test() -> (
+    Arc<SnapshotMutableState<i32>>,
+    Rc<Cell<i32>>,
+    SnapshotStateObserver,
+) {
     let state = SnapshotMutableState::new_in_arc(0, Arc::new(NeverEqual));
     let triggered = Rc::new(Cell::new(0));
     let observer = SnapshotStateObserver::new(|callback| callback());
@@ -17,19 +21,14 @@ fn setup_observer_test() -> (Arc<SnapshotMutableState<i32>>, Rc<Cell<i32>>, Snap
     (state, triggered, observer)
 }
 
-macro_rules! observe_with_trigger_setup {
-    ($observer:expr, $scope:expr, $triggered:expr, $read_fn:expr) => {
-        {
-            let observer_trigger = $triggered.clone();
-            $observer.observe_reads(
-                $scope,
-                move |_| {
-                    observer_trigger.set(observer_trigger.get() + 1);
-                },
-                $read_fn,
-            );
-        }
-    };
+fn observe_counting(
+    observer: &SnapshotStateObserver,
+    scope: TestScope,
+    triggered: &Rc<Cell<i32>>,
+    read: impl FnOnce(),
+) {
+    let trigger = Rc::clone(triggered);
+    observer.observe_reads(scope, move |_| trigger.set(trigger.get() + 1), read);
 }
 
 #[test]
@@ -270,7 +269,7 @@ fn notifies_scope_when_state_changes() {
 
     let (state, triggered, observer) = setup_observer_test();
     let scope = TestScope("scope");
-    observe_with_trigger_setup!(&observer, scope, &triggered, || {
+    observe_counting(&observer, scope, &triggered, || {
         let _ = state.get();
     });
 
@@ -290,7 +289,7 @@ fn clear_removes_scope_observation() {
 
     let (state, triggered, observer) = setup_observer_test();
     let scope = TestScope("scope");
-    observe_with_trigger_setup!(&observer, scope.clone(), &triggered, || {
+    observe_counting(&observer, scope.clone(), &triggered, || {
         let _ = state.get();
     });
 
@@ -340,7 +339,7 @@ fn with_no_observations_skips_reads() {
 
     let (state, triggered, observer) = setup_observer_test();
     let scope = TestScope("scope");
-    observe_with_trigger_setup!(&observer, scope, &triggered, || {
+    observe_counting(&observer, scope, &triggered, || {
         observer.with_no_observations(|| {
             let _ = state.get();
         });
