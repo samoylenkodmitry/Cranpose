@@ -2459,7 +2459,7 @@ fn update_workspace_dependencies_section(
         Ok(())
     } else {
         Err(format!(
-            "Some cranpose workspace dependencies were not updated:\n{}",
+            "Some release workspace dependencies were not updated:\n{}",
             mismatches.join("\n")
         ))
     }
@@ -6429,7 +6429,7 @@ cranpose v0.1.0
             .expect_err("a dependency with no version key must be reported, not silently kept");
 
         assert!(
-            error.contains("Some cranpose workspace dependencies were not updated"),
+            error.contains("Some release workspace dependencies were not updated"),
             "{error}"
         );
         let unchanged = fs::read_to_string(root.join("Cargo.toml")).expect("read manifest");
