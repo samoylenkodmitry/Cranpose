@@ -18,7 +18,7 @@ use crate::{
         PaddingNode, PointerIconNode, WindowRectReporterNode,
     },
     text::{TextLayoutOptions, TextStyle},
-    text_field_modifier_node::{TextFieldModifierNode, TextPanResolver},
+    text_field_modifier_node::{TextFieldLayoutHandle, TextFieldModifierNode, TextPanResolver},
     text_modifier_node::{TextModifierNode, TextPreparedLayoutHandle},
 };
 
@@ -39,7 +39,7 @@ pub struct ModifierNodeSlices {
     text_content: Option<Rc<crate::text::AnnotatedString>>,
     text_style: Option<TextStyle>,
     text_layout_options: Option<TextLayoutOptions>,
-    prepared_text_layout: Option<TextPreparedLayoutHandle>,
+    prepared_text_layout: Option<MeasuredTextLayoutSource>,
     text_pan: Option<TextPanResolver>,
     text_field_window_origin: Option<Rc<std::cell::Cell<Point>>>,
     viewport_window_rect: Option<Rc<dyn crate::modifier_nodes::WindowRectSink>>,
@@ -51,6 +51,12 @@ pub struct ModifierNodeSlices {
 
 struct ChainGuard {
     _handle: ModifierChainHandle,
+}
+
+#[derive(Clone)]
+enum MeasuredTextLayoutSource {
+    Text(TextPreparedLayoutHandle),
+    TextField(TextFieldLayoutHandle),
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -281,10 +287,6 @@ impl ModifierNodeSlices {
         self.text_content.as_deref()
     }
 
-    pub fn annotated_string(&self) -> Option<crate::text::AnnotatedString> {
-        self.annotated_text().cloned()
-    }
-
     pub fn text_style(&self) -> Option<&TextStyle> {
         self.text_style.as_ref()
     }
@@ -319,14 +321,19 @@ impl ModifierNodeSlices {
         self.viewport_window_rect.clone()
     }
 
-    /// Returns the text layout this node's `Text` produced when layout last
-    /// measured it, laid out at the same width.
+    /// Returns the text layout this node's `Text` or text field produced when
+    /// layout last measured it, laid out at the same width.
     ///
-    /// `None` when the node carries no `Text` or has not been measured yet.
+    /// A text field's layout is its current text wrapped at the width its
+    /// caret and selection are placed on. `None` when the node carries no text,
+    /// or carries a `Text` that has not been measured yet.
     pub fn measured_text_layout(&self) -> Option<crate::text::PreparedTextLayout> {
-        self.prepared_text_layout
-            .as_ref()
-            .and_then(TextPreparedLayoutHandle::measured_layout)
+        match self.prepared_text_layout.as_ref()? {
+            MeasuredTextLayoutSource::Text(handle) => handle.measured_layout(),
+            MeasuredTextLayoutSource::TextField(handle) => {
+                Some(handle.measured_layout(self.text_style.as_ref()?))
+            }
+        }
     }
 
     pub fn graphics_layer(&self) -> Option<GraphicsLayer> {
@@ -608,7 +615,9 @@ pub fn collect_modifier_slices_into(chain: &ModifierNodeChain, slices: &mut Modi
                     slices.text_content = Some(text_node.annotated_text());
                     slices.text_style = Some(text_node.style().clone());
                     slices.text_layout_options = Some(text_node.options());
-                    slices.prepared_text_layout = Some(text_node.prepared_layout_handle());
+                    slices.prepared_text_layout = Some(MeasuredTextLayoutSource::Text(
+                        text_node.prepared_layout_handle(),
+                    ));
                 }
 
                 if let Some(text_field_node) = any.downcast_ref::<TextFieldModifierNode>() {
@@ -616,7 +625,9 @@ pub fn collect_modifier_slices_into(chain: &ModifierNodeChain, slices: &mut Modi
                     slices.text_content = Some(Rc::new(crate::text::AnnotatedString::from(text)));
                     slices.text_style = Some(text_field_node.style().clone());
                     slices.text_layout_options = Some(TextLayoutOptions::default());
-                    slices.prepared_text_layout = None;
+                    slices.prepared_text_layout = Some(MeasuredTextLayoutSource::TextField(
+                        text_field_node.layout_handle(),
+                    ));
                     slices.text_pan = text_field_node.text_pan_resolver();
                     slices.text_field_window_origin = Some(text_field_node.window_origin_sink());
 

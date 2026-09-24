@@ -201,6 +201,25 @@ pub(crate) fn intersect_rect(
 /// text field given the current content viewport width in px.
 pub type TextPanResolver = Rc<dyn Fn(f32) -> f32>;
 
+#[derive(Clone)]
+pub(crate) struct TextFieldLayoutHandle {
+    state: TextFieldState,
+    node_id: Rc<Cell<Option<cranpose_core::NodeId>>>,
+    wrap_width: Rc<Cell<Option<f32>>>,
+}
+
+impl TextFieldLayoutHandle {
+    pub(crate) fn measured_layout(&self, style: &TextStyle) -> crate::text::PreparedTextLayout {
+        crate::text::prepare_text_layout_for_node(
+            self.node_id.get(),
+            &crate::text::AnnotatedString::from(self.state.text()),
+            style,
+            crate::text::TextLayoutOptions::default(),
+            self.wrap_width.get(),
+        )
+    }
+}
+
 pub(crate) fn caret_visual_line_for_offset(
     text: &str,
     style: &TextStyle,
@@ -760,6 +779,14 @@ impl TextFieldModifierNode {
 
     pub(crate) fn window_origin_sink(&self) -> Rc<Cell<Point>> {
         self.refs.node_origin.clone()
+    }
+
+    pub(crate) fn layout_handle(&self) -> TextFieldLayoutHandle {
+        TextFieldLayoutHandle {
+            state: self.state,
+            node_id: self.refs.node_id.clone(),
+            wrap_width: self.measured_wrap_width.clone(),
+        }
     }
 
     /// Returns the current text.
