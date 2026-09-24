@@ -1458,7 +1458,6 @@ impl LayoutBuilderState {
         if let Some(layout_state) = data.layout_state {
             let mut layout_state = layout_state.borrow_mut();
             layout_state.set_size(measured.size);
-            layout_state.measurement_constraints = constraints;
         } else {
             let _ = applier.with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
                 node.set_measured_size(measured.size);
@@ -2953,7 +2952,6 @@ impl Measurable for LayoutChildMeasurable {
         if let Some(layout_state) = state.layout_state() {
             let mut layout_state = layout_state.borrow_mut();
             layout_state.set_size(measured_size);
-            layout_state.measurement_constraints = constraints;
         } else if let Some(applier) = state.applier() {
             let Ok(mut applier) = applier.try_borrow_typed() else {
                 return Placeable::value(
@@ -2964,7 +2962,6 @@ impl Measurable for LayoutChildMeasurable {
             };
             let _ = applier.with_node::<LayoutNode, _>(state.node_id(), |node| {
                 node.set_measured_size(measured_size);
-                node.set_measurement_constraints(constraints);
             });
         }
 

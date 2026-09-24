@@ -2432,12 +2432,33 @@ fn stored_effect_hash_tracks_local_effect_only() {
     assert_ne!(base_graph.effect_hash(), effected_graph.effect_hash());
 }
 
+fn measured_text(
+    text: &str,
+    style: &TextStyle,
+    options: TextLayoutOptions,
+    max_width: Option<f32>,
+) -> Option<PreparedTextLayout> {
+    let app_context = cranpose_ui::AppContext::new();
+    Some(app_context.enter(|| {
+        cranpose_ui::text::prepare_text_layout(
+            &AnnotatedString::from(text),
+            style,
+            options,
+            max_width,
+        )
+    }))
+}
+
 #[test]
 fn text_node_preserves_rtl_alignment_clip_and_baseline_shift() {
     let mut text_style = TextStyle::default();
     text_style.paragraph_style.text_align = TextAlign::Start;
     text_style.paragraph_style.text_direction = TextDirection::Rtl;
     text_style.span_style.baseline_shift = Some(BaselineShift::SUPERSCRIPT);
+    let options = TextLayoutOptions {
+        overflow: TextOverflow::Clip,
+        ..Default::default()
+    };
 
     let snapshot = BuildNodeSnapshot {
         node_id: 1,
@@ -2445,13 +2466,9 @@ fn text_node_preserves_rtl_alignment_clip_and_baseline_shift() {
             width: 180.0,
             height: 48.0,
         },
-        measured_max_width: Some(180.0),
-        annotated_text: Some(AnnotatedString::from("rtl")),
+        measured_text_layout: measured_text("rtl", &text_style, options, Some(180.0)),
         text_style: Some(text_style),
-        text_layout_options: Some(cranpose_ui::TextLayoutOptions {
-            overflow: cranpose_ui::TextOverflow::Clip,
-            ..Default::default()
-        }),
+        text_layout_options: Some(options),
         ..Default::default()
     };
 
@@ -2482,19 +2499,19 @@ fn text_node_preserves_rtl_alignment_clip_and_baseline_shift() {
 
 #[test]
 fn clipped_text_node_raster_bounds_use_measured_text_width_not_full_box() {
+    let options = TextLayoutOptions {
+        overflow: TextOverflow::Clip,
+        ..Default::default()
+    };
     let snapshot = BuildNodeSnapshot {
         node_id: 1,
         size: Size {
             width: 320.0,
             height: 48.0,
         },
-        measured_max_width: Some(320.0),
-        annotated_text: Some(AnnotatedString::from("short")),
+        measured_text_layout: measured_text("short", &TextStyle::default(), options, Some(320.0)),
         text_style: Some(TextStyle::default()),
-        text_layout_options: Some(cranpose_ui::TextLayoutOptions {
-            overflow: cranpose_ui::TextOverflow::Clip,
-            ..Default::default()
-        }),
+        text_layout_options: Some(options),
         ..Default::default()
     };
 
@@ -2529,12 +2546,14 @@ fn text_field_pan_shifts_glyphs_and_clips_to_field_bounds() {
             width: field_width,
             height: 24.0,
         },
-        measured_max_width: Some(field_width),
-        annotated_text: Some(AnnotatedString::from(
+        measured_text_layout: measured_text(
             "a very long single line of text that cannot fit",
-        )),
+            &TextStyle::default(),
+            TextLayoutOptions::default(),
+            text_pan.is_none().then_some(field_width),
+        ),
         text_style: Some(TextStyle::default()),
-        text_layout_options: Some(cranpose_ui::TextLayoutOptions::default()),
+        text_layout_options: Some(TextLayoutOptions::default()),
         text_pan,
         ..Default::default()
     };
@@ -2567,16 +2586,13 @@ fn text_field_pan_shifts_glyphs_and_clips_to_field_bounds() {
     );
     assert!(
         panned.rect.width > field_width,
-        "panned single-line text must be laid out unconstrained, got {}",
+        "panned single-line text must draw its whole line, not the field's width, got {}",
         panned.rect.width
     );
     assert!(
-        panned.rect.width >= unpanned.rect.width,
-        "unconstrained layout must not be narrower than wrapped layout"
-    );
-    assert!(
-        panned.rect.height <= unpanned.rect.height,
-        "single-line layout must not wrap onto extra lines"
+        unpanned.rect.width <= field_width,
+        "text that does not pan draws within the field, got {}",
+        unpanned.rect.width
     );
     let clip = panned
         .clip
@@ -2596,8 +2612,12 @@ fn translated_content_context_preserves_descendant_text_motion_when_unspecified(
             width: 120.0,
             height: 32.0,
         },
-        measured_max_width: Some(120.0),
-        annotated_text: Some(AnnotatedString::from("scrolling")),
+        measured_text_layout: measured_text(
+            "scrolling",
+            &TextStyle::default(),
+            TextLayoutOptions::default(),
+            Some(120.0),
+        ),
         text_style: Some(TextStyle::default()),
         ..Default::default()
     };
@@ -2637,8 +2657,12 @@ fn content_offset_without_translated_context_keeps_descendant_text_unspecified()
             width: 120.0,
             height: 32.0,
         },
-        measured_max_width: Some(120.0),
-        annotated_text: Some(AnnotatedString::from("scrolling")),
+        measured_text_layout: measured_text(
+            "scrolling",
+            &TextStyle::default(),
+            TextLayoutOptions::default(),
+            Some(120.0),
+        ),
         text_style: Some(TextStyle::default()),
         ..Default::default()
     };
@@ -2673,6 +2697,14 @@ fn content_offset_without_translated_context_keeps_descendant_text_unspecified()
 
 #[test]
 fn translated_content_context_preserves_effectful_text_motion_when_unspecified() {
+    let shadow_style = TextStyle::from_span_style(SpanStyle {
+        shadow: Some(cranpose_ui::text::Shadow {
+            color: Color::BLACK,
+            offset: Point::new(1.0, 2.0),
+            blur_radius: 3.0,
+        }),
+        ..SpanStyle::default()
+    });
     let child = BuildNodeSnapshot {
         node_id: 2,
         placement: Point { x: 11.0, y: 7.0 },
@@ -2680,16 +2712,13 @@ fn translated_content_context_preserves_effectful_text_motion_when_unspecified()
             width: 120.0,
             height: 32.0,
         },
-        measured_max_width: Some(120.0),
-        annotated_text: Some(AnnotatedString::from("shadow")),
-        text_style: Some(TextStyle::from_span_style(SpanStyle {
-            shadow: Some(cranpose_ui::text::Shadow {
-                color: Color::BLACK,
-                offset: Point::new(1.0, 2.0),
-                blur_radius: 3.0,
-            }),
-            ..SpanStyle::default()
-        })),
+        measured_text_layout: measured_text(
+            "shadow",
+            &shadow_style,
+            TextLayoutOptions::default(),
+            Some(120.0),
+        ),
+        text_style: Some(shadow_style),
         ..Default::default()
     };
     let parent = BuildNodeSnapshot {
@@ -2727,8 +2756,12 @@ fn animated_motion_marker_preserves_descendant_text_motion_when_unspecified() {
             width: 120.0,
             height: 32.0,
         },
-        measured_max_width: Some(120.0),
-        annotated_text: Some(AnnotatedString::from("lazy")),
+        measured_text_layout: measured_text(
+            "lazy",
+            &TextStyle::default(),
+            TextLayoutOptions::default(),
+            Some(120.0),
+        ),
         text_style: Some(TextStyle::default()),
         ..Default::default()
     };
@@ -2987,6 +3020,10 @@ fn scrolled_lazy_column_uses_visible_item_offset_as_snap_anchor_offset() {
 
 #[test]
 fn explicit_static_text_motion_is_preserved_under_scrolling_context() {
+    let static_style = TextStyle::from_paragraph_style(cranpose_ui::text::ParagraphStyle {
+        text_motion: Some(TextMotion::Static),
+        ..Default::default()
+    });
     let child = BuildNodeSnapshot {
         node_id: 2,
         placement: Point { x: 11.0, y: 7.0 },
@@ -2994,14 +3031,13 @@ fn explicit_static_text_motion_is_preserved_under_scrolling_context() {
             width: 120.0,
             height: 32.0,
         },
-        measured_max_width: Some(120.0),
-        annotated_text: Some(AnnotatedString::from("static")),
-        text_style: Some(TextStyle::from_paragraph_style(
-            cranpose_ui::text::ParagraphStyle {
-                text_motion: Some(TextMotion::Static),
-                ..Default::default()
-            },
-        )),
+        measured_text_layout: measured_text(
+            "static",
+            &static_style,
+            TextLayoutOptions::default(),
+            Some(120.0),
+        ),
+        text_style: Some(static_style),
         ..Default::default()
     };
     let parent = BuildNodeSnapshot {
@@ -3153,6 +3189,7 @@ struct PaintedParagraph {
     node_width: f32,
     measured: String,
     rewrapped_at_node_width: String,
+    rewrapped_at_available_width: String,
     painted_from_applier: String,
     painted_from_layout_tree: String,
 }
@@ -3174,21 +3211,38 @@ impl PaintedParagraph {
 }
 
 fn paint_paragraph(modifier: Modifier, options: TextOptions, text_width: f32) -> PaintedParagraph {
+    paint_body(options.into(), text_width, move || {
+        TextWithOptions(
+            WRAPPING_BODY.to_string(),
+            modifier.clone(),
+            TextStyle::default(),
+            options,
+        );
+    })
+}
+
+fn paint_text_field(modifier: Modifier, wrap_width: f32) -> PaintedParagraph {
+    paint_body(TextLayoutOptions::default(), wrap_width, move || {
+        let state = cranpose_core::remember(|| cranpose_ui::TextFieldState::new(WRAPPING_BODY))
+            .with(|state| *state);
+        cranpose_ui::BasicTextField(state, modifier.clone(), TextStyle::default());
+    })
+}
+
+fn paint_body(
+    options: TextLayoutOptions,
+    text_width: f32,
+    body: impl Fn() + 'static,
+) -> PaintedParagraph {
     const AVAILABLE_WIDTH: f32 = 245.0;
 
+    let body: Rc<dyn Fn()> = Rc::new(body);
     let mut composition = cranpose_ui::run_test_composition(move || {
-        let modifier = modifier.clone();
+        let body = Rc::clone(&body);
         Column(
             Modifier::empty().fill_max_width(),
             ColumnSpec::default(),
-            move || {
-                TextWithOptions(
-                    WRAPPING_BODY.to_string(),
-                    modifier.clone(),
-                    TextStyle::default(),
-                    options,
-                );
-            },
+            move || body(),
         );
     });
     cranpose_ui::text::set_text_measurer(
@@ -3226,7 +3280,7 @@ fn paint_paragraph(modifier: Modifier, options: TextOptions, text_width: f32) ->
         cranpose_ui::text::prepare_text_layout(
             &AnnotatedString::from(WRAPPING_BODY),
             &TextStyle::default(),
-            options.into(),
+            options,
             Some(width),
         )
         .text
@@ -3239,6 +3293,7 @@ fn paint_paragraph(modifier: Modifier, options: TextOptions, text_width: f32) ->
         node_width,
         measured: prepare_at(text_width),
         rewrapped_at_node_width: prepare_at(node_width),
+        rewrapped_at_available_width: prepare_at(AVAILABLE_WIDTH),
         painted_from_applier: painted_text(&graph),
         painted_from_layout_tree,
     }
@@ -3284,6 +3339,33 @@ fn width_limited_paragraph_paints_the_lines_it_measured() {
 
         paragraph.assert_paints_measured_lines(&format!("width(150), {options:?}"));
     }
+}
+
+#[test]
+fn width_limited_text_field_paints_the_lines_it_measured() {
+    let field = paint_text_field(Modifier::empty().width(150.0), 150.0);
+
+    assert_ne!(
+        field.rewrapped_at_available_width, field.measured,
+        "test setup expects the column's width to wrap the field differently"
+    );
+    field.assert_paints_measured_lines("text field, width(150)");
+}
+
+#[test]
+fn shrink_wrapped_text_field_paints_the_lines_it_measured() {
+    let field = paint_text_field(Modifier::empty(), 245.0);
+
+    assert!(
+        field.node_width < field.available_width,
+        "test setup expects the field at its own measured width, got {}",
+        field.node_width
+    );
+    assert_ne!(
+        field.rewrapped_at_node_width, field.measured,
+        "test setup expects re-wrapping at the field's own width to move a word"
+    );
+    field.assert_paints_measured_lines("text field, shrink-wrapped");
 }
 
 struct TestWindow(Size);
