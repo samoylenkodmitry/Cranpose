@@ -657,6 +657,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a6ef517f0926dd24a1582492c791b6a4818a4d94e789a334894aa15b0d12f55c"
 
 [[package]]
+name = "coroflow"
+version = "0.1.163"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "02a9b17601483a0d39aedb94aa966bc0764a35b924e33eec63438cac442abe5a"
+dependencies = [
+ "futures-core",
+ "log",
+ "thiserror 2.0.20",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "web-time",
+]
+
+[[package]]
 name = "cpufeatures"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -769,6 +784,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "cranpose-coroflow"
+version = "0.1.163"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1497982bbf5a72781a3f2b75b21fd6e111f531221e812204bd1d8bad787037e8"
+dependencies = [
+ "coroflow",
+ "cranpose-core",
+ "cranpose-services",
+ "log",
+]
+
+[[package]]
 name = "cranpose-foundation"
 version = "0.1.163"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -811,6 +838,19 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.6",
+]
+
+[[package]]
+name = "cranpose-navigation"
+version = "0.1.163"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ce03c16aca59b9bb8f436ccd5684d8f5c7998ba5e7c65fcab0562b3905e7c35f"
+dependencies = [
+ "cranpose-animation",
+ "cranpose-core",
+ "cranpose-coroflow",
+ "cranpose-services",
+ "cranpose-ui",
 ]
 
 [[package]]
@@ -1590,9 +1630,12 @@ name = "isolated-demo"
 version = "0.1.0"
 dependencies = [
  "console_error_panic_hook",
+ "coroflow",
  "cranpose",
  "cranpose-core",
+ "cranpose-coroflow",
  "cranpose-foundation",
+ "cranpose-navigation",
  "cranpose-ui",
  "env_logger",
  "js-sys",

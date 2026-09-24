@@ -2,8 +2,10 @@
 
 #[cfg(any(target_os = "android", all(feature = "web", target_arch = "wasm32")))]
 mod app;
+pub mod data;
 #[cfg(any(target_os = "android", all(feature = "web", target_arch = "wasm32")))]
 mod fonts;
+pub mod presentation;
 #[cfg(any(target_os = "android", all(feature = "web", target_arch = "wasm32")))]
 mod screens;
 #[cfg(any(target_os = "android", all(feature = "web", target_arch = "wasm32")))]

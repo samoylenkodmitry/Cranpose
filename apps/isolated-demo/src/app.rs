@@ -1,14 +1,19 @@
 use cranpose::prelude::*;
 use cranpose_core::rememberMutableStateOf;
+use cranpose_coroflow::rememberHandle;
+use cranpose_navigation::{rememberNavController, NavController, NavHost, NavOptions};
 use cranpose_ui::widgets::{PaddingValues, Scaffold};
 
 use crate::{
-    screens::{rememberTasksState, HomeScreen, SettingsScreen, TasksScreen},
+    data::tasks::TasksRepository,
+    screens::{HomeScreen, SettingsScreen, TasksScreen},
     theme::{body_text_style, heading_text_style, Palette},
 };
 
 const TITLE: &str = "Cranpose Isolated Demo";
 
+/// Where the app can go. `NavHost` gives each screen its own view model
+/// store; add a variant, with fields for its arguments, for every new screen.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Screen {
     Home,
@@ -38,26 +43,28 @@ pub(crate) fn create_app() -> AppLauncher {
 
 #[composable]
 pub(crate) fn IsolatedDemoApp() {
-    let screen = rememberMutableStateOf(|| Screen::Home);
+    let nav = rememberNavController(Screen::Home);
     let dark_mode = rememberMutableStateOf(|| false);
-    let tasks = rememberTasksState();
+    let tasks = rememberHandle(TasksRepository::default);
     let palette = Palette::for_mode(dark_mode.value());
+    let current = nav.current_route().unwrap_or(Screen::Home);
 
     Scaffold(
         Modifier::empty()
             .fill_max_size()
             .background(palette.background),
-        move || TopBar(palette, screen.value().label()),
-        move || BottomNav(palette, screen),
+        move || TopBar(palette, current.label()),
+        move || BottomNav(palette, nav, current),
         move |padding: PaddingValues| {
-            let tasks_for_screen = tasks.clone();
             Box(
                 padding.apply_to(Modifier::empty().fill_max_size()),
                 BoxSpec::default(),
-                move || match screen.value() {
-                    Screen::Home => HomeScreen(palette),
-                    Screen::Tasks => TasksScreen(palette, tasks_for_screen.clone()),
-                    Screen::Settings => SettingsScreen(palette, dark_mode),
+                move || {
+                    NavHost(nav, move |screen| match screen {
+                        Screen::Home => HomeScreen(palette),
+                        Screen::Tasks => TasksScreen(palette, tasks),
+                        Screen::Settings => SettingsScreen(palette, dark_mode),
+                    });
                 },
             );
         },
@@ -88,7 +95,7 @@ fn TopBar(palette: Palette, active_label: &'static str) {
 }
 
 #[composable]
-fn BottomNav(palette: Palette, screen: MutableState<Screen>) {
+fn BottomNav(palette: Palette, nav: NavController<Screen>, current: Screen) {
     Row(
         Modifier::empty()
             .fill_max_width()
@@ -97,15 +104,22 @@ fn BottomNav(palette: Palette, screen: MutableState<Screen>) {
         RowSpec::default().horizontal_arrangement(LinearArrangement::SpaceEvenly),
         move || {
             for candidate in Screen::ALL {
-                NavButton(palette, candidate, screen);
+                NavButton(palette, candidate, candidate == current, move || {
+                    // Tabs replace each other above Home instead of stacking.
+                    nav.navigate_with(
+                        candidate,
+                        NavOptions::new()
+                            .pop_up_to(Screen::Home, false)
+                            .launch_single_top(),
+                    );
+                });
             }
         },
     );
 }
 
 #[composable]
-fn NavButton(palette: Palette, candidate: Screen, screen: MutableState<Screen>) {
-    let active = screen.value() == candidate;
+fn NavButton(palette: Palette, candidate: Screen, active: bool, on_click: impl Fn() + 'static) {
     let background = if active {
         palette.primary
     } else {
@@ -123,7 +137,7 @@ fn NavButton(palette: Palette, candidate: Screen, screen: MutableState<Screen>) 
             .background(background)
             .rounded_corners(8.0),
         ButtonSpec::default(),
-        move || screen.set(candidate),
+        on_click,
         move || {
             Text(
                 candidate.label(),
