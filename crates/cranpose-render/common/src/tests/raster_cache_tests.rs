@@ -1,0 +1,184 @@
+use super::*;
+
+#[test]
+fn scale_bucket_normalizes_invalid_values() {
+    assert_eq!(
+        ScaleBucket::from_scale(0.0).raw(),
+        ScaleBucket::from_scale(1.0).raw()
+    );
+    assert_eq!(
+        ScaleBucket::from_scale(-3.0).raw(),
+        ScaleBucket::from_scale(1.0).raw()
+    );
+    assert_eq!(
+        ScaleBucket::from_scale(f32::NAN).raw(),
+        ScaleBucket::from_scale(1.0).raw()
+    );
+}
+
+#[test]
+fn scale_bucket_quantizes_small_fractional_changes() {
+    let a = ScaleBucket::from_scale(1.0);
+    let b = ScaleBucket::from_scale(1.001);
+    let c = ScaleBucket::from_scale(1.01);
+    assert_eq!(a, b);
+    assert_ne!(a, c);
+}
+
+#[test]
+fn layer_raster_cache_key_captures_bounds_and_pixel_size() {
+    let rect = Rect {
+        x: 1.0,
+        y: 2.0,
+        width: 30.0,
+        height: 40.0,
+    };
+    let base = LayerRasterCacheKey::source_content(
+        Some(7),
+        11,
+        rect,
+        (30, 40),
+        ScaleBucket::from_scale(1.0),
+        Point::default(),
+    );
+    let moved = LayerRasterCacheKey::source_content(
+        Some(7),
+        11,
+        Rect { x: 2.0, ..rect },
+        (30, 40),
+        ScaleBucket::from_scale(1.0),
+        Point::default(),
+    );
+    let resized = LayerRasterCacheKey::source_content(
+        Some(7),
+        11,
+        rect,
+        (60, 80),
+        ScaleBucket::from_scale(2.0),
+        Point::default(),
+    );
+
+    assert_ne!(base, moved);
+    assert_ne!(base, resized);
+    assert_eq!(base.stable_id(), Some(7));
+    assert_eq!(base.pixel_size(), (30, 40));
+}
+
+#[test]
+fn layer_raster_cache_key_captures_the_device_phase() {
+    let rect = Rect {
+        x: 1.0,
+        y: 2.0,
+        width: 30.0,
+        height: 40.0,
+    };
+    let key = |phase: Point| {
+        LayerRasterCacheKey::source_content(
+            Some(7),
+            11,
+            rect,
+            (30, 40),
+            ScaleBucket::from_scale(1.0),
+            phase,
+        )
+    };
+    assert_ne!(key(Point::default()), key(Point::new(0.5, 0.0)));
+    assert_eq!(key(Point::new(0.5, 0.25)), key(Point::new(1.5, -0.75)));
+    assert_eq!(key(Point::new(0.01, 0.0)), key(Point::default()));
+}
+
+#[test]
+fn source_content_keys_separate_by_content_hash() {
+    let rect = Rect {
+        x: 1.0,
+        y: 2.0,
+        width: 30.0,
+        height: 40.0,
+    };
+    let scale = ScaleBucket::from_scale(1.0);
+    let source =
+        LayerRasterCacheKey::source_content(Some(7), 11, rect, (30, 40), scale, Point::default());
+    let other =
+        LayerRasterCacheKey::source_content(Some(7), 12, rect, (30, 40), scale, Point::default());
+
+    assert_ne!(source, other);
+    assert_eq!(source.identity(), other.identity());
+}
+
+#[test]
+fn backdrop_effect_keys_do_not_collide_with_layer_surface_keys() {
+    let rect = Rect {
+        x: 1.0,
+        y: 2.0,
+        width: 30.0,
+        height: 40.0,
+    };
+    let scale = ScaleBucket::from_scale(1.0);
+    let backdrop = LayerRasterCacheKey::backdrop_effect(Some(7), 11, 13, rect, (30, 40), scale);
+    let source =
+        LayerRasterCacheKey::source_content(Some(7), 11, rect, (30, 40), scale, Point::default());
+
+    assert_ne!(backdrop, source);
+    assert_ne!(backdrop.identity(), source.identity());
+}
+
+#[test]
+fn layer_effect_keys_do_not_collide_with_backdrop_effect_keys() {
+    let rect = Rect {
+        x: 1.0,
+        y: 2.0,
+        width: 30.0,
+        height: 40.0,
+    };
+    let scale = ScaleBucket::from_scale(1.0);
+    let effect = LayerRasterCacheKey::layer_effect(Some(7), 11, 13, rect, (30, 40), scale);
+    let backdrop = LayerRasterCacheKey::backdrop_effect(Some(7), 11, 13, rect, (30, 40), scale);
+    let other_effect = LayerRasterCacheKey::layer_effect(Some(7), 11, 17, rect, (30, 40), scale);
+    let other_input = LayerRasterCacheKey::layer_effect(Some(7), 12, 13, rect, (30, 40), scale);
+
+    assert_ne!(effect, backdrop);
+    assert_ne!(effect.identity(), backdrop.identity());
+    assert_ne!(effect, other_effect);
+    assert_ne!(effect, other_input);
+    assert_eq!(effect.kind_slot(), LAYER_RASTER_CACHE_KIND_COUNT - 1);
+    assert_eq!(LAYER_RASTER_CACHE_KIND_LABELS[effect.kind_slot()], "effect");
+    assert!(!effect.is_source_content());
+    assert!(!effect.is_scene_range());
+}
+
+#[test]
+fn prefix_snapshot_keys_share_the_scene_range_partition_but_never_a_key() {
+    let rect = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 320.0,
+        height: 240.0,
+    };
+    let scale = ScaleBucket::from_scale(1.0);
+    let prefix = LayerRasterCacheKey::prefix_snapshot(11, 7, rect, (320, 240), scale);
+    let range = LayerRasterCacheKey::scene_range(11, rect, (320, 240), scale);
+    let longer = LayerRasterCacheKey::prefix_snapshot(11, 8, rect, (320, 240), scale);
+
+    assert!(prefix.is_scene_range());
+    assert_ne!(prefix, range);
+    assert_ne!(prefix, longer);
+    assert_eq!(prefix.identity(), None);
+    assert_eq!(prefix.pixel_size(), (320, 240));
+}
+
+#[test]
+fn scene_range_keys_do_not_collide_with_layer_surface_keys() {
+    let rect = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 320.0,
+        height: 240.0,
+    };
+    let scale = ScaleBucket::from_scale(1.0);
+    let range = LayerRasterCacheKey::scene_range(11, rect, (320, 240), scale);
+    let source =
+        LayerRasterCacheKey::source_content(None, 11, rect, (320, 240), scale, Point::default());
+
+    assert_ne!(range, source);
+    assert_eq!(range.identity(), None);
+}
