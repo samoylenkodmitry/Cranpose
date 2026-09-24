@@ -25,6 +25,7 @@ fn write_workspace(root: &Path, version: &str, lock_version: &str) {
              version = \"{version}\"\n\
              \n\
              [workspace.dependencies]\n\
+             coroflow = {{ path = \"crates/coroflow\", version = \"{version}\" }}\n\
              log = \"0.4\"\n"
         ),
     )
@@ -60,6 +61,11 @@ fn a_release_bumps_every_member_that_inherits_the_workspace_version() {
 
     bump_release_version_at(&root, "v0.1.105").expect("bump must succeed");
 
+    let manifest = fs::read_to_string(root.join("Cargo.toml")).expect("read manifest");
+    assert!(
+        manifest.contains("coroflow = { path = \"crates/coroflow\", version = \"0.1.105\" }"),
+        "coroflow's workspace dependency is released with Cranpose: {manifest}"
+    );
     let lock = fs::read_to_string(root.join("Cargo.lock")).expect("read lock");
     assert!(
         lock.contains("name = \"coroflow\"\nversion = \"0.1.105\""),
