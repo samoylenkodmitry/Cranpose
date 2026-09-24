@@ -1,6 +1,6 @@
 use std::{fs, path::Path};
 
-use super::{unlinked_integration_tests, unlisted_robot_runners};
+use super::{inline_test_modules, unlinked_integration_tests, unlisted_robot_runners};
 
 fn write(path: &Path, contents: &str) {
     if let Some(parent) = path.parent() {
@@ -150,4 +150,83 @@ fn a_workspace_without_robot_runners_has_nothing_to_list() {
     let unlisted = unlisted_robot_runners(root.path()).expect("scan the fixture");
 
     assert!(unlisted.is_empty(), "{unlisted:?}");
+}
+
+fn workspace_with_source(path: &str, source: &str) -> tempfile::TempDir {
+    let root = workspace_with_crate(None);
+    write(&root.path().join("crates/probe").join(path), source);
+    root
+}
+
+fn inline_lines(root: &tempfile::TempDir) -> Vec<(String, usize)> {
+    inline_test_modules(root.path())
+        .expect("scan the fixture")
+        .into_iter()
+        .map(|(path, line)| {
+            let relative = path
+                .strip_prefix(root.path())
+                .expect("a path inside the fixture");
+            (relative.display().to_string(), line)
+        })
+        .collect()
+}
+
+#[test]
+fn the_real_workspace_keeps_no_test_module_inline() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .canonicalize()
+        .expect("resolve the workspace root");
+
+    let inline = inline_test_modules(&root).expect("scan the workspace");
+
+    assert!(
+        inline.is_empty(),
+        "these test modules are inline; move each into a tests/ folder beside its file \
+         with scripts/dev/move_inline_tests.py:\n{inline:#?}"
+    );
+}
+
+#[test]
+fn an_inline_test_module_is_reported_at_its_line() {
+    let root = workspace_with_source(
+        "src/lib.rs",
+        "pub fn answer() -> u8 {\n    42\n}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn answers() {}\n}\n",
+    );
+
+    assert_eq!(
+        inline_lines(&root),
+        vec![("crates/probe/src/lib.rs".to_owned(), 6)]
+    );
+}
+
+#[test]
+fn gated_nested_and_multi_line_gated_test_modules_are_reported() {
+    let root = workspace_with_source(
+        "src/lib.rs",
+        "#[cfg(all(test, feature = \"extra\"))]\nmod extra_tests {\n}\n\nmod outer {\n    #[cfg(test)]\n    pub(crate) mod tests {\n    }\n}\n\n#[cfg(all(\n    test,\n    not(feature = \"extra\")\n))]\n/// Runs without the extra feature.\nmod plain_tests {\n}\n",
+    );
+
+    assert_eq!(
+        inline_lines(&root),
+        vec![
+            ("crates/probe/src/lib.rs".to_owned(), 2),
+            ("crates/probe/src/lib.rs".to_owned(), 7),
+            ("crates/probe/src/lib.rs".to_owned(), 16),
+        ]
+    );
+}
+
+#[test]
+fn declared_modules_other_gates_and_test_folders_pass() {
+    let root = workspace_with_source(
+        "src/lib.rs",
+        "#[cfg(test)]\n#[path = \"tests/lib_tests.rs\"]\nmod tests;\n\nmod plain {\n}\n\n#[cfg(feature = \"latest\")]\nmod contest {\n}\n\n#[cfg_attr(test, allow(dead_code))]\nmod helpers {\n}\n\n#[cfg(not(test))]\nmod production {\n}\n\n#[cfg(any(test, feature = \"robot\"))]\nmod shared {\n}\n",
+    );
+    write(
+        &root.path().join("crates/probe/src/tests/lib_tests.rs"),
+        "#[cfg(test)]\nmod nested {\n}\n",
+    );
+
+    assert!(inline_lines(&root).is_empty(), "{:?}", inline_lines(&root));
 }
