@@ -74,6 +74,14 @@ desktop-shell = [
     "cranpose-services/system-theme",
     "cranpose-services/notifier-native",
 ]
+# Runs the application inside another program's window (an IDE tool window,
+# an editor panel): frames are drawn off screen and streamed to the host over
+# a loopback socket, and the host sends input back. See `cranpose::embed`.
+embed = [
+    "renderer-wgpu",
+    "cranpose-app-shell/clipboard-native",
+    "cranpose-services/uri-native",
+]
 ios = [
     "cranpose-platform-desktop-winit",
     "dep:winit",

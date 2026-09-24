@@ -3675,8 +3675,10 @@ fn every_platform_lets_a_reader_leave_a_dialog() {
     );
 
     let web_source = crate_source("src/web.rs");
+    let key_codes = workspace_source("crates/cranpose-ui/src/key_event.rs");
     assert!(
-        web_source.contains("(\"Escape\", KeyCode::Escape)")
+        key_codes.contains("(\"Escape\", KeyCode::Escape)")
+            && web_source.contains("KeyCode::from_dom_code(&event.code())")
             && web_source.contains("document.add_event_listener_with_callback(\"keydown\""),
         "Escape reaches the shell from the mirror too, because the key listener sits on the document"
     );

@@ -1,7 +1,9 @@
 mod app_info_integration;
 mod audio_haptics_integration;
 mod capability_state_integration;
+mod composition_support;
 mod hook_caller_identity;
+mod host_messages_delivery;
 mod http_client_integration;
 mod incoming_share_delivery;
 mod launch_args_integration;
