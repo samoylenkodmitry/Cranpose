@@ -1,27 +1,30 @@
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::{
+    Condvar,
+    atomic::{AtomicBool, Ordering},
+};
 use std::{
     cell::RefCell,
+    collections::VecDeque,
     marker::PhantomData,
     rc::Rc,
-    sync::{Arc, OnceLock},
+    sync::{Arc, Mutex, OnceLock},
     thread::{self, ThreadId},
 };
-#[cfg(not(target_arch = "wasm32"))]
-use std::{
-    collections::VecDeque,
-    sync::{Condvar, Mutex},
-};
 
-use crate::clock::{Clock, SystemClock};
-#[cfg(not(target_arch = "wasm32"))]
-use crate::sync::lock;
+use crate::{
+    clock::{Clock, SystemClock},
+    sync::lock,
+};
 
 /// Runs scheduled coroutine steps somewhere: a thread pool, a UI event loop or
 /// a test queue.
 ///
-/// This is Kotlin's `CoroutineDispatcher.dispatch`. An implementation must not
-/// run the [`Runnable`] before `dispatch` returns. It may block, for instance
-/// until a UI thread accepts the work, so coroflow never wakes a coroutine
-/// while holding one of its own locks.
+/// This is Kotlin's `CoroutineDispatcher.dispatch`. An implementation usually
+/// queues the [`Runnable`]; it may also run it before returning, as
+/// [`Dispatchers::unconfined`] does, or block until, for instance, a UI thread
+/// accepts the work. Either is safe because coroflow never dispatches or wakes
+/// a coroutine while holding one of its own locks.
 pub trait Dispatch: Send + Sync + 'static {
     /// Queues `runnable` to run later.
     fn dispatch(&self, runnable: Runnable);
@@ -81,6 +84,122 @@ impl Dispatcher {
 
     pub(crate) fn dispatch(&self, runnable: Runnable) {
         self.inner.executor.dispatch(runnable);
+    }
+
+    /// A view of this dispatcher that runs at most `parallelism` coroutine
+    /// steps at once, in the order they were dispatched — Kotlin's
+    /// `limitedParallelism`. Views share the underlying threads. A
+    /// `parallelism` of zero counts as one.
+    pub fn limited_parallelism(&self, parallelism: usize) -> Dispatcher {
+        let limited = Arc::new(Limited {
+            target: self.clone(),
+            limit: parallelism.max(1),
+            state: Mutex::new(LimitedState {
+                queue: VecDeque::new(),
+                workers: 0,
+            }),
+        });
+        Dispatcher::new(LimitedExecutor { limited }, Arc::clone(self.clock()))
+    }
+}
+
+const LIMITED_BATCH: usize = 16;
+
+struct Limited {
+    target: Dispatcher,
+    limit: usize,
+    state: Mutex<LimitedState>,
+}
+
+struct LimitedState {
+    queue: VecDeque<Runnable>,
+    workers: usize,
+}
+
+struct LimitedExecutor {
+    limited: Arc<Limited>,
+}
+
+impl Dispatch for LimitedExecutor {
+    fn dispatch(&self, runnable: Runnable) {
+        let start_worker = {
+            let mut state = lock(&self.limited.state);
+            state.queue.push_back(runnable);
+            let start = state.workers < self.limited.limit;
+            if start {
+                state.workers += 1;
+            }
+            start
+        };
+        if start_worker {
+            let worker = LimitedWorker {
+                limited: Arc::clone(&self.limited),
+            };
+            self.limited
+                .target
+                .dispatch(Runnable::new(Arc::new(worker)));
+        }
+    }
+}
+
+struct LimitedWorker {
+    limited: Arc<Limited>,
+}
+
+impl Schedule for LimitedWorker {
+    fn run(self: Arc<Self>) {
+        for _ in 0..LIMITED_BATCH {
+            let next = {
+                let mut state = lock(&self.limited.state);
+                let next = state.queue.pop_front();
+                if next.is_none() {
+                    state.workers -= 1;
+                }
+                next
+            };
+            let Some(runnable) = next else {
+                return;
+            };
+            runnable.run();
+        }
+        let target = self.limited.target.clone();
+        target.dispatch(Runnable::new(self));
+    }
+}
+
+thread_local! {
+    static UNCONFINED: RefCell<Option<VecDeque<Runnable>>> = const { RefCell::new(None) };
+}
+
+struct UnconfinedExecutor;
+
+impl Dispatch for UnconfinedExecutor {
+    fn dispatch(&self, runnable: Runnable) {
+        let first = UNCONFINED.with(|slot| {
+            let mut slot = slot.borrow_mut();
+            match slot.as_mut() {
+                Some(queue) => {
+                    queue.push_back(runnable);
+                    None
+                }
+                None => {
+                    *slot = Some(VecDeque::new());
+                    Some(runnable)
+                }
+            }
+        });
+        let mut next = first;
+        while let Some(runnable) = next {
+            runnable.run();
+            next = UNCONFINED.with(|slot| {
+                let mut slot = slot.borrow_mut();
+                let popped = slot.as_mut().and_then(VecDeque::pop_front);
+                if popped.is_none() {
+                    *slot = None;
+                }
+                popped
+            });
+        }
     }
 }
 
@@ -143,6 +262,23 @@ impl Dispatchers {
         POOL.get_or_init(|| pool("coroflow-io", parallelism().max(IO_POOL_MIN_THREADS)))
             .clone()
     }
+
+    /// A dispatcher with one thread of its own, named `name` — Kotlin's
+    /// `newSingleThreadContext`. The thread ends once nothing uses the
+    /// dispatcher any more. In the browser it is the page's event loop.
+    pub fn single_thread(name: &str) -> Dispatcher {
+        pool(name, 1)
+    }
+
+    /// Runs a coroutine step at once on whichever thread resumes it —
+    /// Kotlin's `Dispatchers.Unconfined`. Steps resumed from inside an
+    /// unconfined step queue up behind it instead of nesting.
+    pub fn unconfined() -> Dispatcher {
+        static UNCONFINED_DISPATCHER: OnceLock<Dispatcher> = OnceLock::new();
+        UNCONFINED_DISPATCHER
+            .get_or_init(|| Dispatcher::new(UnconfinedExecutor, SystemClock::shared()))
+            .clone()
+    }
 }
 
 /// The smallest number of threads [`Dispatchers::io`] starts with.
@@ -176,6 +312,7 @@ impl Dispatch for EventLoopExecutor {
 struct ThreadPool {
     queue: Mutex<VecDeque<Runnable>>,
     available: Condvar,
+    closed: AtomicBool,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -184,6 +321,7 @@ impl ThreadPool {
         let pool = Arc::new(ThreadPool {
             queue: Mutex::new(VecDeque::new()),
             available: Condvar::new(),
+            closed: AtomicBool::new(false),
         });
         for index in 0..threads {
             let worker = Arc::clone(&pool);
@@ -204,6 +342,9 @@ impl ThreadPool {
                 loop {
                     if let Some(runnable) = queue.pop_front() {
                         break runnable;
+                    }
+                    if self.closed.load(Ordering::Acquire) {
+                        return;
                     }
                     queue = match self.available.wait(queue) {
                         Ok(queue) => queue,
@@ -226,6 +367,15 @@ impl Dispatch for PoolExecutor {
     fn dispatch(&self, runnable: Runnable) {
         lock(&self.pool.queue).push_back(runnable);
         self.pool.available.notify_one();
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Drop for PoolExecutor {
+    fn drop(&mut self) {
+        let _queue = lock(&self.pool.queue);
+        self.pool.closed.store(true, Ordering::Release);
+        self.pool.available.notify_all();
     }
 }
 

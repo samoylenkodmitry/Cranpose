@@ -12,7 +12,7 @@ use crate::{
     clock::Timer,
     dispatcher::{Dispatcher, Dispatchers, current_dispatcher},
     flow::Flow,
-    job::Job,
+    job::{Job, Launch},
     task::spawn_send,
 };
 
@@ -732,13 +732,17 @@ where
                 .take()
                 .or_else(current_dispatcher)
                 .unwrap_or_else(Dispatchers::default_pool);
-            this.job = Some(spawn_send(&dispatcher, async move {
-                while let Some(value) = poll_fn(|cx| poll_run(&mut upstream, cx)).await {
-                    if sender.send(value).await.is_err() {
-                        return;
+            this.job = Some(spawn_send(
+                &dispatcher,
+                async move {
+                    while let Some(value) = poll_fn(|cx| poll_run(&mut upstream, cx)).await {
+                        if sender.send(value).await.is_err() {
+                            return;
+                        }
                     }
-                }
-            }));
+                },
+                Launch::EAGER,
+            ));
         }
         Pin::new(&mut this.receiver).poll_next(cx)
     }

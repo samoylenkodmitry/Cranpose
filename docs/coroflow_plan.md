@@ -53,11 +53,11 @@ with the same behavior. Items are ticked as they land.
 
 ## D. Jobs and dispatchers
 
-- [ ] `Job::invoke_on_completion`, `Job::children` and `Job::cancel_and_join`
-- [ ] `join_all` and `await_all`
-- [ ] Lazy start: `launch_lazy` and `async_lazy`, then `start()` or `join()`
-- [ ] Failure handler: Kotlin's `CoroutineExceptionHandler`
-- [ ] `Dispatcher::limited_parallelism`, `Dispatchers::single_thread` and `Dispatchers::unconfined`
+- [x] `Job::invoke_on_completion` and `Job::cancel_and_join`; `Scope::children` (a coroutine's children are the ones launched in the scope it opens)
+- [x] `join_all` and `await_all`
+- [x] Lazy start: `launch_lazy` and `async_lazy`, then `start()`, `join()` or `.await`; `Deferred` dereferences to its `Job`
+- [x] Failure handler: Kotlin's `CoroutineExceptionHandler`
+- [x] `Dispatcher::limited_parallelism`, `Dispatchers::single_thread` and `Dispatchers::unconfined`
 
 ## E. Testing
 

@@ -10,6 +10,7 @@
 //! | `Dispatchers.Main`, `viewModelScope` | [`ConfinedDispatcher`], [`MainScope`] |
 //! | `CoroutineScope(SupervisorJob())` | [`CoroutineScope`] |
 //! | `launch`, `async`, `Job`, `Deferred` | `scope.launch(..)`, `scope.async_(..)`, [`Job`], [`Deferred`] |
+//! | `CoroutineStart.LAZY`, `invokeOnCompletion`, `cancelAndJoin`, `joinAll`, `awaitAll`, `CoroutineExceptionHandler` | `launch_lazy`, `async_lazy`, [`Job::invoke_on_completion`], [`Job::cancel_and_join`], [`join_all`], [`await_all`], [`Scope::with_exception_handler`] |
 //! | `withContext`, `delay`, `withTimeoutOrNull`, `yield` | [`with_context`], [`delay`], [`with_timeout`], [`yield_now`] |
 //! | `coroutineScope`, `supervisorScope`, `select` | [`coroutine_scope`], [`supervisor_scope`], [`select`] |
 //! | `Flow`, `flow { }`, `flowOf` | [`Flow`], [`flow`], [`flow_of`] |
@@ -96,8 +97,9 @@ pub use operators::{
     WholeValue,
 };
 pub use scope::{
-    BoxFuture, ChildFailed, CoroutineScope, Deferred, MainScope, Scope, ScopeHandle, Spawn,
-    TaskFailed, WithContext, coroutine_scope, supervisor_scope, with_context,
+    AwaitAll, BoxFuture, ChildFailed, CoroutineScope, Deferred, MainScope, Scope, ScopeHandle,
+    Spawn, TaskFailed, WithContext, await_all, coroutine_scope, join_all, supervisor_scope,
+    with_context,
 };
 pub use select::{Either, Select, SelectAll, YieldNow, select, select_all, yield_now};
 pub use shaping::{

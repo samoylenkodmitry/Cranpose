@@ -228,7 +228,7 @@ fn async_runs_children_concurrently_and_reports_failure() {
         delay(Duration::from_secs(1)).await;
         0
     });
-    assert!(doomed.job().is_active());
+    assert!(doomed.is_active());
     scope.cancel();
     assert_eq!(scheduler.block_on(doomed), Ok(Err(TaskFailed)));
 }
