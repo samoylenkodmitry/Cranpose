@@ -278,6 +278,7 @@ test-shell-helpers: _benchmark-python ci-contract-gates
     scripts/wait_until_quiet_test.sh
     scripts/dev/target_gc_test.sh
     python3 scripts/dev/move_inline_tests_test.py
+    scripts/ci/commit_msg_hook_test.sh
     {{benchmark_python}} scripts/android_benchmark_test.py
     {{benchmark_python}} scripts/android_visual_contract_test.py
     python3 scripts/perf_report_test.py
