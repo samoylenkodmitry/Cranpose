@@ -5,7 +5,7 @@ use web_time::Instant;
 
 use crate::{
     TextSystemState,
-    collect::{collect_overlay, collect_root},
+    collect::{LayerMotion, collect_overlay, collect_root},
     frame_packet::{FramePacket, RenderReturns},
     render::{frame_clear_color, instant_ms, should_log_wgpu_render_stage},
     scene::{Scene, SceneCapacityHint},
@@ -31,6 +31,7 @@ pub(crate) struct RendererFrontend {
     pub(crate) fps_overlay_graph: Option<RenderGraph>,
     pub(crate) inspector_overlay_graph: Option<RenderGraph>,
     pub(crate) root_scene_capacity: SceneCapacityHint,
+    pub(crate) layer_motion: LayerMotion,
     pub(crate) frame_sequence: u64,
     pub(crate) changed_nodes: Vec<cranpose_core::NodeId>,
     pub(crate) shader_warm_ups: Vec<cranpose_ui_graphics::ShaderWarmUp>,
@@ -71,6 +72,7 @@ impl RendererFrontend {
             fps_overlay_graph: None,
             inspector_overlay_graph: None,
             root_scene_capacity: SceneCapacityHint::default(),
+            layer_motion: LayerMotion::default(),
             frame_sequence: 0,
             changed_nodes: Vec::new(),
             shader_warm_ups: Vec::new(),
@@ -134,7 +136,12 @@ impl RendererFrontend {
     ) -> Option<FramePacket> {
         let build_start = Instant::now();
         let graph = self.scene.graph.as_ref()?;
-        let root = collect_root(&graph.root, &mut self.text_state, self.root_scene_capacity);
+        let root = collect_root(
+            &graph.root,
+            &mut self.text_state,
+            &mut self.layer_motion,
+            self.root_scene_capacity,
+        );
         self.root_scene_capacity = root.scene.capacity_hint();
         let after_root_collect = Instant::now();
         let overlay = self

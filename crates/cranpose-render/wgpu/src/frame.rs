@@ -10,7 +10,7 @@ use std::{
 use cranpose_core::NodeId;
 use cranpose_render_common::{
     graph::{CachePolicy, ProjectiveTransform, quad_bounds},
-    raster_cache::{LayerRasterCacheKey, ScaleBucket},
+    raster_cache::{LayerRasterCacheKey, RasterScale},
 };
 use cranpose_ui_graphics::{
     BlendMode, MAX_SUBSTRATES, Point, Rect, RenderEffect, RenderHash, RuntimeShader, SubstrateSpec,
@@ -1877,7 +1877,7 @@ const MAX_ADMISSION_PATIENCE: u32 = 16;
 
 enum AdmissionCost {
     Pin,
-    Copy { patience: u32 },
+    Copy { patience: u32, floor: u32 },
 }
 
 pub(crate) struct AdmissionGate {
@@ -1895,7 +1895,23 @@ impl AdmissionGate {
     }
 
     fn copied(key: LayerRasterCacheKey) -> Self {
-        Self::with_cost(key, AdmissionCost::Copy { patience: 1 })
+        Self::with_cost(
+            key,
+            AdmissionCost::Copy {
+                patience: 1,
+                floor: 1,
+            },
+        )
+    }
+
+    fn rendered(key: LayerRasterCacheKey) -> Self {
+        Self::with_cost(
+            key,
+            AdmissionCost::Copy {
+                patience: 0,
+                floor: 0,
+            },
+        )
     }
 
     fn with_cost(key: LayerRasterCacheKey, cost: AdmissionCost) -> Self {
@@ -1915,8 +1931,8 @@ impl AdmissionGate {
             self.run = self.run.saturating_add(1);
             return None;
         }
-        if let (true, AdmissionCost::Copy { patience }) = (self.unread, &mut self.cost) {
-            *patience = (*patience * 2).min(MAX_ADMISSION_PATIENCE);
+        if let (true, AdmissionCost::Copy { patience, .. }) = (self.unread, &mut self.cost) {
+            *patience = (*patience * 2).clamp(1, MAX_ADMISSION_PATIENCE);
         }
         let dead = self.dead_entry();
         self.admitted = false;
@@ -1937,7 +1953,7 @@ impl AdmissionGate {
     fn admits(&self) -> bool {
         match self.cost {
             AdmissionCost::Pin => true,
-            AdmissionCost::Copy { patience } => self.run > patience,
+            AdmissionCost::Copy { patience, .. } => self.run > patience,
         }
     }
 
@@ -1948,8 +1964,8 @@ impl AdmissionGate {
 
     fn hit(&mut self, key: LayerRasterCacheKey) {
         self.observe(key);
-        if let AdmissionCost::Copy { patience } = &mut self.cost {
-            *patience = 1;
+        if let AdmissionCost::Copy { patience, floor } = &mut self.cost {
+            *patience = *floor;
         }
         self.unread = false;
     }
@@ -2533,7 +2549,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 height,
             },
             item.capture_rect.pixel_size(),
-            ScaleBucket::from_scale(scale),
+            RasterScale::from_scale(scale),
         ))
     }
 
@@ -3421,7 +3437,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                     height: h,
                 },
                 (width, height),
-                ScaleBucket::from_scale(surface.scale),
+                RasterScale::from_scale(surface.scale),
             );
             if let Some(cached) = self.renderer.layer_cache.get(&key) {
                 self.renderer
@@ -3554,7 +3570,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         let scale = pass.scale;
         let surface_scale = scale * child.surface_scale;
         let translated = (child.surface_scale - 1.0).abs() <= 1e-4;
-        let Some(surface_logical) = child_surface_rect(child, surface_scale) else {
+        let Some(surface_logical) = child_surface_rect(child, scale) else {
             return Ok(None);
         };
         let child_rect = DeviceRect::from_logical(surface_logical, surface_scale).snap_out();
@@ -3600,19 +3616,16 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 child.content_hash,
                 surface_logical,
                 (width, height),
-                ScaleBucket::from_scale(surface_scale),
+                RasterScale::from_scale(surface_scale),
                 device_phase,
             )
         });
         if let Some(key) = cache_key
-            && let Some(retained) = self.renderer.layer_cache.get(&key)
+            && let Some(texture) = self.cached_source(child.node_id, key, width, height)
         {
-            self.renderer
-                .frame_stats
-                .record_layer_cache_hit(&key, width, height);
             return Ok(Some(SurfaceRender {
                 source: CompositeSource {
-                    texture: retained.texture,
+                    texture,
                     content: SourceContent::retained(&key),
                 },
                 rect: surface_rect,
@@ -3620,7 +3633,8 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 grid_dest,
             }));
         }
-        let cache_key = cache_key.filter(|_| self.renderer.layer_cache.fits(width, height));
+        let cache_key =
+            cache_key.filter(|key| self.admits_source(child.node_id, *key, width, height));
         let texture = if cache_key.is_some() {
             Rc::new(self.renderer.acquire_retained_surface(width, height))
         } else {
@@ -3653,14 +3667,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
             &child_beneath,
         )?;
-        let retained = cache_key.filter(|key| {
-            self.renderer
-                .frame_stats
-                .record_layer_cache_miss(key, width, height);
-            self.renderer
-                .layer_cache
-                .insert(*key, Retained::surface(Rc::clone(&texture)), None)
-        });
+        let retained = cache_key.filter(|key| self.retain_source(child.node_id, *key, &texture));
         Ok(Some(SurfaceRender {
             source: CompositeSource {
                 texture,
@@ -3672,6 +3679,68 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             scale: surface_scale,
             grid_dest,
         }))
+    }
+
+    fn cached_source(
+        &mut self,
+        node_id: Option<NodeId>,
+        key: LayerRasterCacheKey,
+        width: u32,
+        height: u32,
+    ) -> Option<Rc<OffscreenTarget>> {
+        let retained = self.renderer.layer_cache.get(&key)?;
+        self.renderer
+            .frame_stats
+            .record_layer_cache_hit(&key, width, height);
+        if let Some(gate) = self.source_gate(node_id) {
+            gate.hit(key);
+        }
+        Some(retained.texture)
+    }
+
+    fn retain_source(
+        &mut self,
+        node_id: Option<NodeId>,
+        key: LayerRasterCacheKey,
+        texture: &Rc<OffscreenTarget>,
+    ) -> bool {
+        self.renderer
+            .frame_stats
+            .record_layer_cache_miss(&key, texture.width, texture.height);
+        let inserted =
+            self.renderer
+                .layer_cache
+                .insert(key, Retained::surface(Rc::clone(texture)), None);
+        if inserted && let Some(gate) = self.source_gate(node_id) {
+            gate.admitted();
+        }
+        inserted
+    }
+
+    fn source_gate(&mut self, node_id: Option<NodeId>) -> Option<&mut AdmissionGate> {
+        node_id.and_then(|node_id| self.renderer.source_gates.get_mut(&node_id))
+    }
+
+    fn admits_source(
+        &mut self,
+        node_id: Option<NodeId>,
+        key: LayerRasterCacheKey,
+        width: u32,
+        height: u32,
+    ) -> bool {
+        let admits = match node_id {
+            None => true,
+            Some(node_id) => match self.renderer.source_gates.entry(node_id) {
+                Entry::Occupied(mut gate) => {
+                    if let Some(dead) = gate.get_mut().observe(key) {
+                        self.renderer.layer_cache.remove(&dead);
+                    }
+                    gate.get().admits()
+                }
+                Entry::Vacant(slot) => slot.insert(AdmissionGate::rendered(key)).admits(),
+            },
+        };
+        admits && self.renderer.layer_cache.fits(width, height)
     }
 }
 
@@ -3939,9 +4008,10 @@ fn pending_draw_ops<'a>(
 /// The logical rect a child's surface covers: everything its content draws,
 /// clipped to its bounds when it clips, expanded for its effect's reach.
 fn child_surface_rect(child: &ChildLayer, scale: f32) -> Option<Rect> {
+    let surface_scale = scale * child.surface_scale;
     let mut bounds = union_rect(
         Some(child.local_bounds),
-        scene_bounds(&child.content, scale * child.surface_scale),
+        scene_bounds(&child.content, surface_scale),
     );
     if child.rounded_clip.is_some() || child.content.scene.draw_ops.is_empty() {
         bounds = Some(child.local_bounds);
@@ -3951,7 +4021,11 @@ fn child_surface_rect(child: &ChildLayer, scale: f32) -> Option<Rect> {
         effect.input_padding() + effect.output_padding()
     });
     let rect = expand_rect(bounds, padding);
-    let rect = surface_within_budget(rect, expand_rect(child.local_bounds, padding), scale);
+    let rect = surface_within_budget(
+        rect,
+        expand_rect(child.local_bounds, padding),
+        surface_scale,
+    );
     (rect.width > 0.0 && rect.height > 0.0).then_some(rect)
 }
 

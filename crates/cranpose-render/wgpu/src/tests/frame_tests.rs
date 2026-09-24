@@ -427,8 +427,34 @@ fn a_pin_lives_exactly_as_long_as_its_key_and_a_copy_only_dies_unread() {
 fn patience(gate: &AdmissionGate) -> u32 {
     match gate.cost {
         AdmissionCost::Pin => 0,
-        AdmissionCost::Copy { patience } => patience,
+        AdmissionCost::Copy { patience, .. } => patience,
     }
+}
+
+#[test]
+fn a_rendered_gate_admits_a_first_sight_and_waits_after_an_unread_admission() {
+    let mut gate = AdmissionGate::rendered(gate_key(0));
+    assert!(
+        gate.admits(),
+        "a surface seen for the first time is kept, as still content reads it back next frame"
+    );
+    assert_eq!(
+        admissions_over(&mut gate, std::iter::repeat_n(1, 40)),
+        1,
+        "a surface that changes every frame is kept once, then drawn without being stored"
+    );
+    assert_eq!(patience(&gate), 1);
+    assert_eq!(
+        admissions_over(&mut gate, [3]),
+        1,
+        "a surface that settles is kept on its second frame"
+    );
+    assert_eq!(
+        patience(&gate),
+        0,
+        "a kept surface read back restores first-sight admission"
+    );
+    assert!(gate_frame(&mut gate, gate_key(100)));
 }
 
 #[test]
@@ -454,7 +480,7 @@ fn gate_key(content: u64) -> LayerRasterCacheKey {
             height: 1.0,
         },
         (1, 1),
-        ScaleBucket::from_scale(1.0),
+        RasterScale::from_scale(1.0),
     )
 }
 

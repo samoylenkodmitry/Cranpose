@@ -1,28 +1,55 @@
 use super::*;
 
 #[test]
-fn scale_bucket_normalizes_invalid_values() {
+fn raster_scale_normalizes_invalid_values() {
     assert_eq!(
-        ScaleBucket::from_scale(0.0).raw(),
-        ScaleBucket::from_scale(1.0).raw()
+        RasterScale::from_scale(0.0).raw(),
+        RasterScale::from_scale(1.0).raw()
     );
     assert_eq!(
-        ScaleBucket::from_scale(-3.0).raw(),
-        ScaleBucket::from_scale(1.0).raw()
+        RasterScale::from_scale(-3.0).raw(),
+        RasterScale::from_scale(1.0).raw()
     );
     assert_eq!(
-        ScaleBucket::from_scale(f32::NAN).raw(),
-        ScaleBucket::from_scale(1.0).raw()
+        RasterScale::from_scale(f32::NAN).raw(),
+        RasterScale::from_scale(1.0).raw()
     );
 }
 
 #[test]
-fn scale_bucket_quantizes_small_fractional_changes() {
-    let a = ScaleBucket::from_scale(1.0);
-    let b = ScaleBucket::from_scale(1.001);
-    let c = ScaleBucket::from_scale(1.01);
-    assert_eq!(a, b);
-    assert_ne!(a, c);
+fn raster_scale_tells_apart_scales_a_thousandth_apart() {
+    assert_ne!(
+        RasterScale::from_scale(1.0),
+        RasterScale::from_scale(1.001),
+        "a raster drawn at 1.001 is a pixel wider than one drawn at 1.0 across 1000 pixels"
+    );
+    assert_eq!(RasterScale::from_scale(0.875).raw(), 0.875f32.to_bits());
+}
+
+#[test]
+fn source_content_keys_at_nearby_scales_are_distinct() {
+    let bounds = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 52.0,
+        height: 52.0,
+    };
+    let key = |scale: f32| {
+        LayerRasterCacheKey::source_content(
+            Some(7),
+            42,
+            bounds,
+            (156, 156),
+            RasterScale::from_scale(scale),
+            Point::default(),
+        )
+    };
+    assert_ne!(
+        key(2.7),
+        key(2.701),
+        "a tile animating its scale must not be served the raster of a neighbouring frame"
+    );
+    assert_eq!(key(2.7).raster_scale(), RasterScale::from_scale(2.7));
 }
 
 #[test]
@@ -38,7 +65,7 @@ fn layer_raster_cache_key_captures_bounds_and_pixel_size() {
         11,
         rect,
         (30, 40),
-        ScaleBucket::from_scale(1.0),
+        RasterScale::from_scale(1.0),
         Point::default(),
     );
     let moved = LayerRasterCacheKey::source_content(
@@ -46,7 +73,7 @@ fn layer_raster_cache_key_captures_bounds_and_pixel_size() {
         11,
         Rect { x: 2.0, ..rect },
         (30, 40),
-        ScaleBucket::from_scale(1.0),
+        RasterScale::from_scale(1.0),
         Point::default(),
     );
     let resized = LayerRasterCacheKey::source_content(
@@ -54,7 +81,7 @@ fn layer_raster_cache_key_captures_bounds_and_pixel_size() {
         11,
         rect,
         (60, 80),
-        ScaleBucket::from_scale(2.0),
+        RasterScale::from_scale(2.0),
         Point::default(),
     );
 
@@ -78,7 +105,7 @@ fn layer_raster_cache_key_captures_the_device_phase() {
             11,
             rect,
             (30, 40),
-            ScaleBucket::from_scale(1.0),
+            RasterScale::from_scale(1.0),
             phase,
         )
     };
@@ -95,7 +122,7 @@ fn source_content_keys_separate_by_content_hash() {
         width: 30.0,
         height: 40.0,
     };
-    let scale = ScaleBucket::from_scale(1.0);
+    let scale = RasterScale::from_scale(1.0);
     let source =
         LayerRasterCacheKey::source_content(Some(7), 11, rect, (30, 40), scale, Point::default());
     let other =
@@ -113,7 +140,7 @@ fn backdrop_effect_keys_do_not_collide_with_layer_surface_keys() {
         width: 30.0,
         height: 40.0,
     };
-    let scale = ScaleBucket::from_scale(1.0);
+    let scale = RasterScale::from_scale(1.0);
     let backdrop = LayerRasterCacheKey::backdrop_effect(Some(7), 11, 13, rect, (30, 40), scale);
     let source =
         LayerRasterCacheKey::source_content(Some(7), 11, rect, (30, 40), scale, Point::default());
@@ -130,7 +157,7 @@ fn layer_effect_keys_do_not_collide_with_backdrop_effect_keys() {
         width: 30.0,
         height: 40.0,
     };
-    let scale = ScaleBucket::from_scale(1.0);
+    let scale = RasterScale::from_scale(1.0);
     let effect = LayerRasterCacheKey::layer_effect(Some(7), 11, 13, rect, (30, 40), scale);
     let backdrop = LayerRasterCacheKey::backdrop_effect(Some(7), 11, 13, rect, (30, 40), scale);
     let other_effect = LayerRasterCacheKey::layer_effect(Some(7), 11, 17, rect, (30, 40), scale);
@@ -154,7 +181,7 @@ fn prefix_snapshot_keys_share_the_scene_range_partition_but_never_a_key() {
         width: 320.0,
         height: 240.0,
     };
-    let scale = ScaleBucket::from_scale(1.0);
+    let scale = RasterScale::from_scale(1.0);
     let prefix = LayerRasterCacheKey::prefix_snapshot(11, 7, rect, (320, 240), scale);
     let range = LayerRasterCacheKey::scene_range(11, rect, (320, 240), scale);
     let longer = LayerRasterCacheKey::prefix_snapshot(11, 8, rect, (320, 240), scale);
@@ -174,7 +201,7 @@ fn scene_range_keys_do_not_collide_with_layer_surface_keys() {
         width: 320.0,
         height: 240.0,
     };
-    let scale = ScaleBucket::from_scale(1.0);
+    let scale = RasterScale::from_scale(1.0);
     let range = LayerRasterCacheKey::scene_range(11, rect, (320, 240), scale);
     let source =
         LayerRasterCacheKey::source_content(None, 11, rect, (320, 240), scale, Point::default());

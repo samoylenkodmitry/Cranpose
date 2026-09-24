@@ -1,7 +1,7 @@
 use cranpose_render_common::{
     image_compare::pixel_difference,
     layer_transform::apply_layer_affine_to_point,
-    raster_cache::ScaleBucket,
+    raster_cache::RasterScale,
     style_shared::{ResolvedBrush, resolve_layer_brush},
 };
 use cranpose_ui_graphics::{Brush, Color, GraphicsLayer, Point, Rect};
@@ -93,23 +93,23 @@ fn identical_pixels_differ_by_nothing_and_opposites_differ_by_everything() {
 }
 
 #[test]
-fn a_scale_bucket_normalises_a_scale_that_cannot_be_rastered_at() {
-    let unit = ScaleBucket::from_scale(1.0);
+fn a_raster_scale_normalises_a_scale_that_cannot_be_rastered_at() {
+    let unit = RasterScale::from_scale(1.0);
     for impossible in [0.0, -3.0, f32::NAN] {
         assert_eq!(
-            ScaleBucket::from_scale(impossible).raw(),
+            RasterScale::from_scale(impossible).raw(),
             unit.raw(),
-            "a scale of {impossible} was given a bucket of its own"
+            "a scale of {impossible} was given a raster scale of its own"
         );
     }
 }
 
 #[test]
-fn two_different_scales_do_not_share_one_raster_bucket() {
+fn two_different_scales_do_not_share_one_raster_scale() {
     assert_ne!(
-        ScaleBucket::from_scale(1.0).raw(),
-        ScaleBucket::from_scale(2.0).raw(),
-        "1x and 2x sharing a bucket would serve a blurry raster to one of them"
+        RasterScale::from_scale(1.0).raw(),
+        RasterScale::from_scale(2.0).raw(),
+        "1x and 2x sharing a raster scale would serve a blurry raster to one of them"
     );
 }
 

@@ -199,17 +199,8 @@ impl GlassHarness {
             drift_state.set(input.drift);
             warm_state.set(input.first_row_warm);
         });
-        self.shell.update();
-        let frame = self
-            .shell
-            .renderer()
-            .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
-            .expect("frame capture should succeed");
-        let stats = self
-            .shell
-            .renderer()
-            .last_frame_stats()
-            .expect("frame stats");
+        let (stats, frame) =
+            support::update_and_capture(&mut self.shell, FRAME_WIDTH, FRAME_HEIGHT);
         (
             FrameCacheStats {
                 hits: stats.layer_cache_hits,

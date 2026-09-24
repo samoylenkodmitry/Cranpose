@@ -2,7 +2,7 @@ use std::hash::{Hash, Hasher};
 
 use cranpose_render_common::{
     graph::DrawCommandId,
-    raster_cache::{LayerRasterCacheKey, ScaleBucket},
+    raster_cache::{LayerRasterCacheKey, RasterScale},
 };
 use cranpose_ui_graphics::{
     BRUSH_KIND_LINEAR, BRUSH_KIND_RADIAL, BRUSH_KIND_SWEEP, BlendMode, BrushRecord,
@@ -287,7 +287,7 @@ pub(crate) fn opaque_prefix(context: &PrefixContext<'_>, ops: &[DrawOp]) -> Opti
                 height,
             },
             (width as u32, height as u32),
-            ScaleBucket::from_scale(scale),
+            RasterScale::from_scale(scale),
         ),
         command: candidate.command,
         z_index: op.z_index,
