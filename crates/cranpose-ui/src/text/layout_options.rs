@@ -101,10 +101,14 @@ impl Default for TextLayoutOptions {
 }
 
 impl TextLayoutOptions {
+    /// Returns these options with `min_lines` at least 1 and `max_lines` at
+    /// least `min_lines`.
+    ///
+    /// Ellipsized text that does not soft wrap lays out one line, as Compose's
+    /// `finalMaxLines` does, since each unwrapped line cannot end in its own
+    /// ellipsis. `min_lines` still sets its height.
     pub fn normalized(self) -> Self {
         let min_lines = self.min_lines.max(1);
-        // Compose's `finalMaxLines`: text that does not wrap cannot put an ellipsis on
-        // every line, so it lays out only its first line.
         let max_lines = if !self.soft_wrap && self.overflow.is_ellipsis() {
             1
         } else {
