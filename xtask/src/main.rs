@@ -1906,7 +1906,7 @@ fn display_version(version: &Option<String>) -> &str {
     version.as_deref().unwrap_or("None")
 }
 
-/// One `[[package]]` entry from a Cargo.lock, filtered to cranpose crates.
+/// One `[[package]]` entry from a Cargo.lock.
 struct LockPackage {
     name: String,
     version: Option<String>,
@@ -1914,7 +1914,7 @@ struct LockPackage {
     checksum: Option<String>,
 }
 
-fn cranpose_lock_packages(lockfile: &toml::Value) -> Vec<LockPackage> {
+fn lock_packages(lockfile: &toml::Value, keep: impl Fn(&str) -> bool) -> Vec<LockPackage> {
     let Some(packages) = lockfile.get("package").and_then(toml::Value::as_array) else {
         return Vec::new();
     };
@@ -1924,7 +1924,7 @@ fn cranpose_lock_packages(lockfile: &toml::Value) -> Vec<LockPackage> {
         .filter_map(toml::Value::as_table)
         .filter_map(|package| {
             let name = package.get("name")?.as_str()?;
-            if !name.starts_with("cranpose") {
+            if !keep(name) {
                 return None;
             }
             Some(LockPackage {
@@ -2002,7 +2002,7 @@ fn check_published_lock(
     failures: &mut Vec<String>,
 ) -> Result<(), String> {
     let lockfile = load_toml(path)?;
-    let packages = cranpose_lock_packages(&lockfile);
+    let packages = lock_packages(&lockfile, |name| name.starts_with("cranpose"));
     if packages.is_empty() {
         failures.push(format!("{relative} locks no cranpose packages"));
         return Ok(());
@@ -2122,7 +2122,10 @@ fn check_root_lock_versions(
     failures: &mut Vec<String>,
 ) -> Result<(), String> {
     let root_lock = load_toml(&root.join("Cargo.lock"))?;
-    let root_versions = lock_versions(&cranpose_lock_packages(&root_lock));
+    let versioned = workspace_versioned_packages(root);
+    let root_versions = lock_versions(&lock_packages(&root_lock, |name| {
+        follows_workspace_version(name, &versioned)
+    }));
     let root_lock_names: BTreeSet<String> = root_versions.keys().cloned().collect();
     for name in expected_package_names.difference(&root_lock_names) {
         failures.push(format!("Cargo.lock is missing workspace package {name}"));
@@ -2469,11 +2472,44 @@ fn bump_cargo_toml_version(path: &Path, version: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Bumps every `[[package]]` in `path` (a `Cargo.lock`) whose `name` starts
-/// with `cranpose` to `version`, leaving `source`, `checksum` and
-/// `dependencies` lines alone. Always rewrites the file (matching the
+/// The workspace members whose manifest says `version.workspace = true`.
+/// A member whose manifest cannot be read is left out.
+fn workspace_versioned_packages(root: &Path) -> BTreeSet<String> {
+    test_layout::workspace_members(root)
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|member| load_toml(&root.join(member).join("Cargo.toml")).ok())
+        .filter_map(|manifest| {
+            let package = manifest.get("package")?.as_table()?;
+            let inherits = package
+                .get("version")
+                .and_then(toml::Value::as_table)
+                .and_then(|version| version.get("workspace"))
+                .and_then(toml::Value::as_bool)
+                == Some(true);
+            inherits
+                .then(|| package.get("name").and_then(toml::Value::as_str))
+                .flatten()
+                .map(str::to_owned)
+        })
+        .collect()
+}
+
+/// Whether the root `Cargo.lock` records `name` at the workspace version: a
+/// cranpose crate, or a member that inherits the workspace version.
+fn follows_workspace_version(name: &str, versioned: &BTreeSet<String>) -> bool {
+    name.starts_with("cranpose") || versioned.contains(name)
+}
+
+/// Bumps every `[[package]]` in `path` (a `Cargo.lock`) that
+/// [`follows_workspace_version`] to `version`, leaving `source`, `checksum`
+/// and `dependencies` lines alone. Always rewrites the file (matching the
 /// release script this replaces), even when no line actually changed.
-fn bump_cargo_lock_version(path: &Path, version: &str) -> Result<(), String> {
+fn bump_cargo_lock_version(
+    path: &Path,
+    version: &str,
+    versioned: &BTreeSet<String>,
+) -> Result<(), String> {
     if !path.exists() {
         return Err("Cargo.lock not found".to_owned());
     }
@@ -2497,7 +2533,7 @@ fn bump_cargo_lock_version(path: &Path, version: &str) -> Result<(), String> {
         }
         if in_package && stripped.starts_with("name = ") {
             let name = stripped["name = ".len()..].trim().trim_matches('"');
-            update_version = name.starts_with("cranpose");
+            update_version = follows_workspace_version(name, versioned);
             continue;
         }
         if in_package && update_version && stripped.starts_with("version = ") {
@@ -2543,7 +2579,8 @@ fn release_version_from_tag(tag: &str) -> Result<&str, String> {
 fn bump_release_version_at(root: &Path, tag: &str) -> Result<(), String> {
     let version = release_version_from_tag(tag)?;
     bump_cargo_toml_version(&root.join("Cargo.toml"), version)?;
-    bump_cargo_lock_version(&root.join("Cargo.lock"), version)?;
+    let versioned = workspace_versioned_packages(root);
+    bump_cargo_lock_version(&root.join("Cargo.lock"), version, &versioned)?;
     Ok(())
 }
 
@@ -2723,7 +2760,11 @@ fn cranpose_package_entry(
         .get("name")
         .and_then(serde_json::Value::as_str)
         .ok_or_else(|| "cargo metadata package is missing a name".to_owned())?;
-    if !name.starts_with("cranpose") {
+    let unpublished = package
+        .get("publish")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(Vec::is_empty);
+    if !name.starts_with("cranpose") || unpublished {
         return Ok(None);
     }
 
@@ -4011,16 +4052,28 @@ mod duplication_gate {
         )
     }
 
-    /// Code with its comment lines and all its whitespace dropped, so code
-    /// that moved out of a module, reformatted one level shallower and
-    /// without its comments, still reads the same.
+    /// Code with its comment lines, all its whitespace and its trailing
+    /// commas dropped, so code that moved out of a module, reformatted one
+    /// level shallower and without its comments, still reads the same.
+    /// rustfmt drops a trailing comma when the shallower indent lets it join
+    /// a list onto one line, and a clone can end on one whose list closes
+    /// past the clone.
     pub(crate) fn clone_text(source: &str) -> String {
-        source
+        let joined: String = source
             .lines()
             .map(str::trim)
             .filter(|line| !line.starts_with("//"))
             .flat_map(str::split_whitespace)
-            .collect()
+            .collect();
+        let mut text = String::with_capacity(joined.len());
+        let mut chars = joined.chars().peekable();
+        while let Some(ch) = chars.next() {
+            if ch == ',' && matches!(chars.peek(), None | Some(')' | ']' | '}' | '>')) {
+                continue;
+            }
+            text.push(ch);
+        }
+        text
     }
 
     /// A clone whose text was in the tree before the diff, at any path:
@@ -6058,7 +6111,7 @@ cranpose v0.1.0
         )
         .expect("parse lockfile");
 
-        let versions = lock_versions(&cranpose_lock_packages(&lock));
+        let versions = lock_versions(&lock_packages(&lock, |name| name.starts_with("cranpose")));
 
         assert_eq!(versions.len(), 1, "only cranpose-prefixed packages count");
         assert_eq!(
@@ -7884,6 +7937,39 @@ version = \"0.1.0\"
     }
 
     #[test]
+    fn duplication_find_violations_clone_rustfmt_rejoined_after_moving_passes() {
+        let ranges = BTreeMap::from([("src/tests/a_tests.rs".to_owned(), vec![(1, 40)])]);
+        let moved = duplicate_of(
+            ("src/tests/a_tests.rs", 1, 12),
+            ("src/tests/a_tests.rs", 20, 31),
+            12,
+            "fn layout(&self, text: &Text) -> Layout {\n    panic!(\"unused\");\n}\n",
+        );
+        let old_source = duplication_gate::clone_text(
+            "    fn layout(\n        &self,\n        text: &Text,\n    ) -> Layout {\n        panic!(\"unused\");\n    }\n",
+        );
+        assert_eq!(
+            duplication_gate::find_violations(
+                std::slice::from_ref(&moved),
+                &[],
+                std::slice::from_ref(&old_source),
+                &ranges
+            ),
+            Vec::<String>::new()
+        );
+        let cut_inside_a_list = duplicate_of(
+            ("src/tests/a_tests.rs", 1, 12),
+            ("src/tests/a_tests.rs", 20, 31),
+            12,
+            "fn layout(\n    &self,\n    text: &Text,\n",
+        );
+        assert_eq!(
+            duplication_gate::find_violations(&[cut_inside_a_list], &[], &[old_source], &ranges),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
     fn duplication_find_violations_new_code_duplicating_old_code_fails() {
         let ranges = BTreeMap::from([("src/new.rs".to_owned(), vec![(1, 20)])]);
         let dup = duplicate(("src/new.rs", 5, 16), ("src/old.rs", 100, 111), 12);
@@ -8122,6 +8208,9 @@ version = \"0.1.0\"
             "complexity-gate: 2 function(s) over the limit:\n  a.rs:1-2 f is new at 21 (limit 20)\n  b.rs:3-4 g is new at 30 (limit 20)"
         );
     }
+
+    #[path = "release_tests.rs"]
+    mod release;
 
     fn unique_temp_dir() -> PathBuf {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../target/test-output/xtask");

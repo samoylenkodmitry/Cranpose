@@ -32,6 +32,11 @@ is the whole point. It is a comment rather than an attribute because this is
 not a rustc lint, and `#[allow(..)]` of a lint the compiler has never heard
 of is an error in its own right.
 
+A `#[test]` function is exempt too. The harness finds it by its attribute,
+the way the platform finds `fn main` by its name, and nothing calls it by
+name, so a test whose whole body is the one call it checks is not a second
+name for that call.
+
 Prints one line per finding and exits 1 when it finds any.
 
 With `--base`, only functions the diff adds are reported, the way
@@ -55,6 +60,7 @@ BODY_KEYWORD = re.compile(r"^\s*(let|if|match|for|while|loop|return|unsafe|\}|//
 FORWARDING = re.compile(r"^(?P<callee>[A-Za-z_][\w:.]*)\((?P<args>[^()]*)\);?$")
 OPERATORS = re.compile(r"[+\-*/%<>!&|^?]|==|\bas\b")
 EXEMPT = "forwards on purpose:"
+TEST_ATTRIBUTE = "#[test]"
 
 
 def balanced_end(lines, start):
@@ -138,15 +144,15 @@ def only_forwards(signature, body):
 
 
 def exempted(lines, start):
-    """Whether the attributes above the function carry the opt-out. It may sit
-    anywhere in the run of attributes and comments, not only on the line
-    immediately above."""
+    """Whether the attributes above the function carry the opt-out or mark it
+    as a test. Either may sit anywhere in the run of attributes and comments,
+    not only on the line immediately above."""
     index = start - 1
     while index >= 0:
         line = lines[index].strip()
         if not (line.startswith("#[") or line.startswith("//") or not line):
             return False
-        if EXEMPT in line:
+        if EXEMPT in line or line == TEST_ATTRIBUTE:
             return True
         index -= 1
     return False
