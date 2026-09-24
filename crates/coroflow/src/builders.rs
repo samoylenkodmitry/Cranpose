@@ -65,6 +65,16 @@ impl<T> Clone for Emitter<T> {
 }
 
 impl<T> Emitter<T> {
+    pub(crate) fn new() -> Self {
+        Self {
+            slot: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    pub(crate) fn take_emitted(&self) -> Option<T> {
+        lock(&self.slot).take()
+    }
+
     /// Hands `value` to the collector and resumes once it was taken.
     pub fn emit(&self, value: T) -> Emit<'_, T> {
         Emit {

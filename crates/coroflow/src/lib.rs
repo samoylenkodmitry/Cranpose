@@ -16,6 +16,8 @@
 //! | `suspend fun` in an interface | a method returning [`BoxFuture`] |
 //! | `map`, `filter`, `mapNotNull`, `scan`, `drop`, `debounce`, `zip`, `combine`, `flowOn` | [`FlowExt`] |
 //! | `flatMapLatest`, `flatMapConcat`, `flatMapMerge`, `catch`, `retry`, `retryWhen` | [`FlowExt`] |
+//! | `transform`, `transformWhile`, `transformLatest`, `mapLatest`, `collectLatest`, `takeWhile`, `dropWhile` | [`FlowExt`] |
+//! | a `suspend` lambda in `map`, `filter`, `mapNotNull`, `onEach`, `collect` | [`FlowExt::map_async`], [`FlowExt::filter_async`], [`FlowExt::filter_map_async`], [`FlowExt::on_each_async`], [`FlowExt::collect_async`] |
 //! | `merge(a, b)`, `combine(a, b, c)` | [`merge`], [`combine3`] |
 //! | `Mutex`, `Semaphore` | [`Mutex`], [`Semaphore`] |
 //! | `Channel`, `produce`, `receiveAsFlow` | [`channel`], [`produce`], [`Receiver`] |
@@ -53,6 +55,7 @@ mod select;
 mod shared;
 mod sharing;
 mod state;
+mod suspending;
 mod sync;
 mod task;
 mod terminal;
@@ -88,6 +91,13 @@ pub use select::{Either, Select, SelectAll, YieldNow, select, select_all, yield_
 pub use shared::{BufferOverflow, EmitShared, MutableSharedFlow, SharedFlow, SharedRun};
 pub use sharing::{SHARE_IN_BUFFER, SharingStarted, SharingTask};
 pub use state::{MutableStateFlow, StateFlow, StateRun};
+pub use suspending::{
+    CollectAsync, CollectLatest, Emitting, FilterMapping, Filtering, Finish, InOrder, Inspecting,
+    LatestOnly, Mapping, Order, Passing, Step, Suspending, SuspendingRun, Transforming,
+    TransformingWhile, Verdict,
+};
 pub use terminal::{Collect, First, ToVec};
 pub use testing::{Stalled, TestScheduler, Turbine};
-pub use transforms::{FilterMap, FilterMapRun, Scan, ScanRun, Skip, SkipRun};
+pub use transforms::{
+    FilterMap, FilterMapRun, Scan, ScanRun, Skip, SkipRun, Skipping, Taking, While, WhileRun,
+};
