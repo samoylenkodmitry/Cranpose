@@ -250,8 +250,6 @@ impl TextMeasurer for CountingTextMeasurer {
         self.measure_calls.set(self.measure_calls.get() + 1);
         monospaced_measure(text, style)
     }
-
-    // forwards on purpose: standard trait methods for test helper
     fn get_offset_for_position(
         &self,
         text: &crate::text::AnnotatedString,
@@ -300,8 +298,6 @@ impl PrefixWidthCountingMeasurer {
         }
     }
 }
-
-// forwards on purpose: test helper with distinct counting instrumentation
 impl TextMeasurer for PrefixWidthCountingMeasurer {
     fn measure(&self, text: &crate::text::AnnotatedString, style: &TextStyle) -> TextMetrics {
         monospaced_measure(text, style)
@@ -326,8 +322,6 @@ impl TextMeasurer for PrefixWidthCountingMeasurer {
         self.prefix_calls.set(self.prefix_calls.get() + 1);
         MonospacedTextMeasurer.measure_line_prefix_widths(text, line_range, style)
     }
-
-    // forwards on purpose: standard trait methods for test helper
     fn get_offset_for_position(
         &self,
         text: &crate::text::AnnotatedString,
@@ -379,8 +373,6 @@ impl LineHeightCountingMeasurer {
         }
     }
 }
-
-// forwards on purpose: test helper with distinct counting instrumentation
 impl TextMeasurer for LineHeightCountingMeasurer {
     fn measure(&self, text: &crate::text::AnnotatedString, style: &TextStyle) -> TextMetrics {
         self.measure_calls.set(self.measure_calls.get() + 1);
@@ -400,8 +392,6 @@ impl TextMeasurer for LineHeightCountingMeasurer {
         self.line_height_calls.set(self.line_height_calls.get() + 1);
         MonospacedTextMeasurer.line_height(text, style)
     }
-
-    // forwards on purpose: standard trait methods for test helper
     fn get_offset_for_position(
         &self,
         text: &crate::text::AnnotatedString,
@@ -425,8 +415,6 @@ impl TextMeasurer for LineHeightCountingMeasurer {
         monospaced_layout(text, style)
     }
 }
-
-// forwards on purpose: test helper with distinct counting instrumentation
 impl TextMeasurer for FitProbeCountingMeasurer {
     fn measure(&self, text: &crate::text::AnnotatedString, style: &TextStyle) -> TextMetrics {
         monospaced_measure(text, style)
@@ -451,8 +439,6 @@ impl TextMeasurer for FitProbeCountingMeasurer {
         self.prefix_calls.set(self.prefix_calls.get() + 1);
         MonospacedTextMeasurer.measure_line_prefix_widths(text, line_range, style)
     }
-
-    // forwards on purpose: standard trait methods for test helper
     fn get_offset_for_position(
         &self,
         text: &crate::text::AnnotatedString,
@@ -476,8 +462,6 @@ impl TextMeasurer for FitProbeCountingMeasurer {
         monospaced_layout(text, style)
     }
 }
-
-// forwards on purpose: test helper with distinct counting instrumentation
 impl TextMeasurer for CountingPreparedTextMeasurer {
     fn measure(&self, text: &crate::text::AnnotatedString, style: &TextStyle) -> TextMetrics {
         monospaced_measure(text, style)
@@ -494,8 +478,6 @@ impl TextMeasurer for CountingPreparedTextMeasurer {
         self.prepare_calls.set(self.prepare_calls.get() + 1);
         MonospacedTextMeasurer.prepare_with_options(text, style, options, max_width)
     }
-
-    // forwards on purpose: standard trait methods for test helper
     fn get_offset_for_position(
         &self,
         text: &crate::text::AnnotatedString,

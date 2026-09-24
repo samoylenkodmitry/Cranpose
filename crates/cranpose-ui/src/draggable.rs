@@ -133,5 +133,5 @@ pub fn rememberDraggableState(on_delta: impl Fn(f32) + 'static) -> DraggableStat
 mod draggable_tests;
 
 #[cfg(test)]
-#[path = "tests/draggable_tests.rs"]
+#[path = "tests/draggable_drag_state_tests.rs"]
 mod tests;

@@ -52,7 +52,6 @@ impl crate::text::TextMeasurer for RecordingPreparedLayoutMeasurer {
         }
     }
 
-    // forwards on purpose: standard trait methods for test helper
     fn get_offset_for_position(
         &self,
         _text: &crate::text::AnnotatedString,
@@ -86,7 +85,6 @@ struct FontSizePreparedLayoutMeasurer {
     recorded: Rc<RefCell<Vec<f32>>>,
 }
 
-// forwards on purpose: different test measurer with a distinct trait impl, not a redirect
 impl crate::text::TextMeasurer for FontSizePreparedLayoutMeasurer {
     fn measure(
         &self,
@@ -149,7 +147,6 @@ impl crate::text::TextMeasurer for FontSizePreparedLayoutMeasurer {
     }
 }
 
-// forwards on purpose: different test measurer with a distinct trait impl, not a redirect
 impl crate::text::TextMeasurer for FixedPreparedLayoutMeasurer {
     fn measure(
         &self,
