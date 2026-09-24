@@ -1,12 +1,55 @@
 use cranpose_ui::{
-    AppContext, TextLayoutOptions, TextOverflow, TextStyle, prepare_text_layout, set_text_measurer,
-    text::AnnotatedString,
+    AppContext, PreparedTextLayout, SpanStyle, TextLayoutOptions, TextMeasurer, TextOverflow,
+    TextStyle, prepare_text_layout, set_text_measurer,
+    text::{AnnotatedString, TextUnit},
 };
 
-use crate::text_contract_measurer::{CHAR_WIDTH, ContractMeasurer};
+use crate::text_contract_measurer::{BASE_FONT_SIZE_SP, CHAR_WIDTH, ContractMeasurer};
 
 const TWELVE_CHARS_WIDE: f32 = 12.0 * CHAR_WIDTH;
 const THREE_LINE_PARAGRAPH: &str = "aaaa bbbb cccc dddd eeee ffff";
+const THREE_SHORT_PARAGRAPHS: &str = "aaa\nbbb\nccc";
+const ELLIPSES: [TextOverflow; 3] = [
+    TextOverflow::Ellipsis,
+    TextOverflow::StartEllipsis,
+    TextOverflow::MiddleEllipsis,
+];
+const DOUBLE_WIDTH_SP: f32 = 2.0 * BASE_FONT_SIZE_SP;
+const HALF_WIDTH_SP: f32 = 0.5 * BASE_FONT_SIZE_SP;
+
+fn prepare(
+    text: impl Into<AnnotatedString>,
+    options: TextLayoutOptions,
+    max_width: f32,
+) -> PreparedTextLayout {
+    let text = text.into();
+    let app_context = AppContext::new();
+    app_context.enter(|| {
+        set_text_measurer(ContractMeasurer);
+        prepare_text_layout(&text, &TextStyle::default(), options, Some(max_width))
+    })
+}
+
+fn display_lines(prepared: &PreparedTextLayout) -> Vec<String> {
+    prepared.text.text.lines().map(str::to_string).collect()
+}
+
+fn wrapped(overflow: TextOverflow, max_lines: usize) -> TextLayoutOptions {
+    TextLayoutOptions {
+        overflow,
+        soft_wrap: true,
+        max_lines,
+        min_lines: 1,
+    }
+}
+
+fn unwrapped(overflow: TextOverflow) -> TextLayoutOptions {
+    TextLayoutOptions {
+        overflow,
+        soft_wrap: false,
+        ..TextLayoutOptions::default()
+    }
+}
 
 fn prepared_lines(
     text: &str,
@@ -14,25 +57,37 @@ fn prepared_lines(
     max_lines: usize,
     max_width: f32,
 ) -> (Vec<String>, bool) {
-    let app_context = AppContext::new();
-    let prepared = app_context.enter(|| {
-        set_text_measurer(ContractMeasurer);
-        prepare_text_layout(
-            &AnnotatedString::from(text),
-            &TextStyle::default(),
-            TextLayoutOptions {
-                overflow,
-                soft_wrap: true,
-                max_lines,
-                min_lines: 1,
-            },
-            Some(max_width),
-        )
-    });
-    (
-        prepared.text.text.lines().map(str::to_string).collect(),
-        prepared.did_overflow,
-    )
+    let prepared = prepare(text, wrapped(overflow, max_lines), max_width);
+    (display_lines(&prepared), prepared.did_overflow)
+}
+
+fn sized_span_text(before: &str, font_size_sp: f32, sized: &str, after: &str) -> AnnotatedString {
+    AnnotatedString::builder()
+        .append(before)
+        .push_style(SpanStyle {
+            font_size: TextUnit::Sp(font_size_sp),
+            ..Default::default()
+        })
+        .append(sized)
+        .pop()
+        .append(after)
+        .to_annotated_string()
+}
+
+fn sized_span_text_of(prepared: &PreparedTextLayout, font_size_sp: f32) -> Vec<&str> {
+    prepared
+        .text
+        .span_styles
+        .iter()
+        .filter(|span| span.item.font_size == TextUnit::Sp(font_size_sp))
+        .map(|span| &prepared.text.text[span.range.clone()])
+        .collect()
+}
+
+fn painted_width(prepared: &PreparedTextLayout) -> f32 {
+    ContractMeasurer
+        .measure(&prepared.text, &TextStyle::default())
+        .width
 }
 
 #[test]
@@ -133,4 +188,122 @@ fn start_and_middle_ellipsis_leave_a_fitting_single_line_intact() {
         assert_eq!(lines, ["aaaa bbbb"], "{overflow:?}");
         assert!(did_overflow, "{overflow:?}");
     }
+}
+
+#[test]
+fn end_ellipsis_fits_a_larger_span_on_the_last_line_within_the_width() {
+    let text = sized_span_text("aa ", DOUBLE_WIDTH_SP, "BBBB", " cc dd");
+
+    let prepared = prepare(text, wrapped(TextOverflow::Ellipsis, 1), TWELVE_CHARS_WIDE);
+
+    assert_eq!(prepared.text.text, "aa BBBB\u{2026}");
+    assert_eq!(sized_span_text_of(&prepared, DOUBLE_WIDTH_SP), ["BBBB"]);
+    assert!(painted_width(&prepared) <= TWELVE_CHARS_WIDE);
+    assert!(prepared.did_overflow);
+}
+
+#[test]
+fn end_ellipsis_keeps_as_much_of_a_smaller_span_as_fits() {
+    let text = sized_span_text("aa ", HALF_WIDTH_SP, "bbbbbbbbbbbbbbbb", " cc dd");
+
+    let prepared = prepare(text, wrapped(TextOverflow::Ellipsis, 1), TWELVE_CHARS_WIDE);
+
+    assert_eq!(prepared.text.text, "aa bbbbbbbbbbbbbbbb\u{2026}");
+    assert_eq!(
+        sized_span_text_of(&prepared, HALF_WIDTH_SP),
+        ["bbbbbbbbbbbbbbbb"]
+    );
+    assert_eq!(painted_width(&prepared), TWELVE_CHARS_WIDE);
+    assert!(prepared.did_overflow);
+}
+
+#[test]
+fn start_ellipsis_keeps_the_span_styles_after_the_ellipsis() {
+    let text = sized_span_text("aaaa bbbb cccc ", DOUBLE_WIDTH_SP, "DD", "");
+
+    let prepared = prepare(
+        text,
+        wrapped(TextOverflow::StartEllipsis, 1),
+        TWELVE_CHARS_WIDE,
+    );
+
+    assert_eq!(prepared.text.text, "\u{2026}b cccc DD");
+    assert_eq!(sized_span_text_of(&prepared, DOUBLE_WIDTH_SP), ["DD"]);
+    assert!(painted_width(&prepared) <= TWELVE_CHARS_WIDE);
+    assert!(prepared.did_overflow);
+}
+
+#[test]
+fn middle_ellipsis_keeps_the_span_styles_on_both_sides() {
+    let text = sized_span_text("", HALF_WIDTH_SP, "aaaaaaaaaaaa bbbbbbbbbbbb", "");
+
+    let prepared = prepare(
+        text,
+        wrapped(TextOverflow::MiddleEllipsis, 1),
+        TWELVE_CHARS_WIDE,
+    );
+
+    assert_eq!(prepared.text.text, "aaaaaaaaaaa\u{2026}bbbbbbbbbbb");
+    assert_eq!(
+        sized_span_text_of(&prepared, HALF_WIDTH_SP),
+        ["aaaaaaaaaaa", "bbbbbbbbbbb"]
+    );
+    assert_eq!(painted_width(&prepared), TWELVE_CHARS_WIDE);
+    assert!(prepared.did_overflow);
+}
+
+#[test]
+fn ellipsis_without_soft_wrap_lays_out_only_the_first_line() {
+    for (overflow, expected) in ELLIPSES.into_iter().zip(["aaa\u{2026}", "aaa", "aaa"]) {
+        let prepared = prepare(
+            THREE_SHORT_PARAGRAPHS,
+            unwrapped(overflow),
+            TWELVE_CHARS_WIDE,
+        );
+
+        assert_eq!(display_lines(&prepared), [expected], "{overflow:?}");
+        assert_eq!(prepared.metrics.line_count, 1, "{overflow:?}");
+        assert!(prepared.did_overflow, "{overflow:?}");
+    }
+}
+
+#[test]
+fn start_and_middle_ellipsis_without_soft_wrap_elide_the_first_line() {
+    let text = "aaaa bbbb cccc dddd\neeee";
+    for (overflow, expected) in [
+        (TextOverflow::StartEllipsis, "\u{2026}b cccc dddd"),
+        (TextOverflow::MiddleEllipsis, "aaaa b\u{2026} dddd"),
+    ] {
+        let prepared = prepare(text, unwrapped(overflow), TWELVE_CHARS_WIDE);
+
+        assert_eq!(display_lines(&prepared), [expected], "{overflow:?}");
+        assert!(prepared.did_overflow, "{overflow:?}");
+    }
+}
+
+#[test]
+fn ellipsis_without_soft_wrap_keeps_the_min_lines_height() {
+    let prepared = prepare(
+        THREE_SHORT_PARAGRAPHS,
+        TextLayoutOptions {
+            min_lines: 3,
+            ..unwrapped(TextOverflow::Ellipsis)
+        },
+        TWELVE_CHARS_WIDE,
+    );
+
+    assert_eq!(display_lines(&prepared), ["aaa\u{2026}"]);
+    assert_eq!(prepared.metrics.line_count, 3);
+}
+
+#[test]
+fn clip_without_soft_wrap_keeps_every_line() {
+    let prepared = prepare(
+        THREE_SHORT_PARAGRAPHS,
+        unwrapped(TextOverflow::Clip),
+        TWELVE_CHARS_WIDE,
+    );
+
+    assert_eq!(display_lines(&prepared), ["aaa", "bbb", "ccc"]);
+    assert!(!prepared.did_overflow);
 }

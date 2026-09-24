@@ -32,6 +32,13 @@ impl TextOverflow {
             _ => None,
         }
     }
+
+    fn is_ellipsis(self) -> bool {
+        matches!(
+            self,
+            Self::Ellipsis | Self::StartEllipsis | Self::MiddleEllipsis
+        )
+    }
 }
 
 impl PartialEq for TextOverflow {
@@ -94,9 +101,19 @@ impl Default for TextLayoutOptions {
 }
 
 impl TextLayoutOptions {
+    /// Returns these options with `min_lines` at least 1 and `max_lines` at
+    /// least `min_lines`.
+    ///
+    /// Ellipsized text that does not soft wrap lays out one line, as Compose's
+    /// `finalMaxLines` does, since each unwrapped line cannot end in its own
+    /// ellipsis. `min_lines` still sets its height.
     pub fn normalized(self) -> Self {
         let min_lines = self.min_lines.max(1);
-        let max_lines = self.max_lines.max(min_lines);
+        let max_lines = if !self.soft_wrap && self.overflow.is_ellipsis() {
+            1
+        } else {
+            self.max_lines.max(min_lines)
+        };
         Self {
             overflow: self.overflow.normalized(),
             soft_wrap: self.soft_wrap,

@@ -18,14 +18,147 @@ pub(crate) fn run_at(root: &Path) -> Result<(), String> {
             path.display()
         )
     }));
-    if problems.is_empty() {
-        println!("test-layout: every integration test file and robot runner is linked");
+    let mut sections = Vec::new();
+    if !problems.is_empty() {
+        sections.push(format!(
+            "these tests are compiled by nothing:\n{}",
+            problems.join("\n")
+        ));
+    }
+    let inline: Vec<String> = inline_test_modules(root)?
+        .iter()
+        .map(|(path, line)| format!("  {}:{line}", path.display()))
+        .collect();
+    if !inline.is_empty() {
+        sections.push(format!(
+            "these test modules are inline; move each into a tests/ folder beside its file \
+             with scripts/dev/move_inline_tests.py:\n{}",
+            inline.join("\n")
+        ));
+    }
+    if sections.is_empty() {
+        println!(
+            "test-layout: every integration test file and robot runner is linked, and no test \
+             module is inline"
+        );
         return Ok(());
     }
-    Err(format!(
-        "test-layout: these tests are compiled by nothing:\n{}",
-        problems.join("\n")
-    ))
+    Err(format!("test-layout: {}", sections.join("\ntest-layout: ")))
+}
+
+pub(crate) fn inline_test_modules(root: &Path) -> Result<Vec<(PathBuf, usize)>, String> {
+    let mut inline = Vec::new();
+    for member in workspace_members(root)? {
+        let mut sources = Vec::new();
+        collect_sources(&root.join(&member).join("src"), &mut sources);
+        for path in sources {
+            let source = std::fs::read_to_string(&path)
+                .map_err(|error| format!("read {}: {error}", path.display()))?;
+            inline.extend(
+                inline_test_module_lines(&source)
+                    .into_iter()
+                    .map(|line| (path.clone(), line)),
+            );
+        }
+    }
+    inline.sort();
+    Ok(inline)
+}
+
+fn collect_sources(dir: &Path, sources: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if path
+                .file_name()
+                .is_some_and(|name| name != "tests" && name != "test")
+            {
+                collect_sources(&path, sources);
+            }
+        } else if path.extension().is_some_and(|extension| extension == "rs") {
+            sources.push(path);
+        }
+    }
+}
+
+fn inline_test_module_lines(source: &str) -> Vec<usize> {
+    let mut found = Vec::new();
+    let mut attributes = String::new();
+    let mut depth = 0_i64;
+    for (index, line) in source.lines().enumerate() {
+        let trimmed = line.trim();
+        if depth > 0 || trimmed.starts_with("#[") {
+            attributes.push_str(trimmed);
+            attributes.push(' ');
+            depth += bracket_balance(trimmed);
+            continue;
+        }
+        if trimmed.is_empty() || trimmed.starts_with("//") {
+            continue;
+        }
+        if opens_inline_module(trimmed) && gated_on_test(&attributes) {
+            found.push(index + 1);
+        }
+        attributes.clear();
+    }
+    found
+}
+
+fn bracket_balance(line: &str) -> i64 {
+    line.chars().fold(0, |balance, ch| match ch {
+        '[' => balance + 1,
+        ']' => balance - 1,
+        _ => balance,
+    })
+}
+
+fn opens_inline_module(line: &str) -> bool {
+    let item = ["pub(crate) ", "pub(super) ", "pub "]
+        .iter()
+        .find_map(|visibility| line.strip_prefix(visibility))
+        .unwrap_or(line);
+    item.starts_with("mod ") && item.ends_with('{')
+}
+
+fn gated_on_test(attributes: &str) -> bool {
+    let compact: String = attributes
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect();
+    compact.split("#[").any(|attribute| {
+        attribute
+            .strip_prefix("cfg(")
+            .and_then(|rest| rest.strip_suffix(")]"))
+            .is_some_and(|predicate| {
+                predicate == "test"
+                    || predicate
+                        .strip_prefix("all(")
+                        .and_then(|rest| rest.strip_suffix(')'))
+                        .is_some_and(|arguments| top_level_arguments(arguments).contains(&"test"))
+            })
+    })
+}
+
+fn top_level_arguments(list: &str) -> Vec<&str> {
+    let mut arguments = Vec::new();
+    let mut depth = 0_i64;
+    let mut start = 0;
+    for (index, ch) in list.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => depth -= 1,
+            ',' if depth == 0 => {
+                arguments.push(&list[start..index]);
+                start = index + 1;
+            }
+            _ => {}
+        }
+    }
+    arguments.push(&list[start..]);
+    arguments
 }
 
 pub(crate) fn unlisted_robot_runners(root: &Path) -> Result<Vec<PathBuf>, String> {
