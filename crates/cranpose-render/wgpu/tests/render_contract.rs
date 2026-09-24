@@ -1,11 +1,11 @@
-mod support;
-
 use std::path::{Path, PathBuf};
 
 use cranpose_render_common::{
     Renderer,
     render_contract::{ALL_SHARED_RENDER_CASES, RenderedFrame},
 };
+
+use crate::support;
 
 fn collect_rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     for entry in std::fs::read_dir(dir).expect("failed to read source directory") {

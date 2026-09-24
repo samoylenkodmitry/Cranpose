@@ -383,7 +383,7 @@ pub fn local_lifecycle_state() -> cranpose_core::CompositionLocal<LifecycleState
 }
 
 /// The host's lifecycle state as observable state.
-#[allow(non_snake_case)]
+#[expect(non_snake_case)]
 #[track_caller]
 pub fn rememberLifecycleState() -> cranpose_core::State<LifecycleState> {
     let transitions = rememberLifecycleEvents();
@@ -399,7 +399,7 @@ pub fn rememberLifecycleState() -> cranpose_core::State<LifecycleState> {
 }
 
 /// Host lifecycle transitions as a composition-scoped stream.
-#[allow(non_snake_case)]
+#[expect(non_snake_case)]
 #[track_caller]
 pub fn rememberLifecycleEvents() -> cranpose_core::EventStream<LifecycleEvent> {
     cranpose_core::rememberEventStream((), |sender| {
@@ -469,7 +469,7 @@ pub fn register_durable_save(save: impl Fn() + Send + Sync + 'static) -> Durable
 /// The host runs it when the app is about to be suspended, off the UI thread
 /// and under a background-work lease, so a slow write does not stall the
 /// lifecycle callback the platform is waiting on.
-#[allow(non_snake_case)]
+#[expect(non_snake_case)]
 #[track_caller]
 pub fn DurableSaveEffect<K: PartialEq + 'static>(keys: K, save: impl Fn() + Send + Sync + 'static) {
     cranpose_core::__disposable_effect_impl(

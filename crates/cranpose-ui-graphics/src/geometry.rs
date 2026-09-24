@@ -750,7 +750,6 @@ pub trait DrawScope {
         radii: CornerRadii,
         stroke: Stroke,
     );
-    #[allow(clippy::too_many_arguments)]
     fn draw_round_rect_at_stroked_blend(
         &mut self,
         rect: Rect,
@@ -783,7 +782,6 @@ pub trait DrawScope {
     /// `radius ± width/2`. [`StrokeCap`](crate::StrokeCap) shapes the two ends.
     /// Nothing is drawn for a zero sweep, a non-positive width, or non-finite
     /// input.
-    #[allow(clippy::too_many_arguments)]
     fn draw_arc(
         &mut self,
         brush: Brush,
@@ -793,7 +791,7 @@ pub trait DrawScope {
         sweep_angle: f32,
         stroke: Stroke,
     );
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn draw_arc_blend(
         &mut self,
         brush: Brush,
@@ -813,7 +811,6 @@ pub trait DrawScope {
     /// wedge. Angle convention is identical to [`draw_arc`](Self::draw_arc).
     /// Nothing is drawn when `inner_radius >= outer_radius`, the sweep is zero,
     /// or any input is non-finite.
-    #[allow(clippy::too_many_arguments)]
     fn draw_annular_sector(
         &mut self,
         brush: Brush,
@@ -823,7 +820,7 @@ pub trait DrawScope {
         start_angle: f32,
         sweep_angle: f32,
     );
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn draw_annular_sector_blend(
         &mut self,
         brush: Brush,
@@ -1076,7 +1073,7 @@ impl DrawScopeDefault {
         self.recording.push_other(primitive);
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     #[inline]
     fn push_arc(
         &mut self,

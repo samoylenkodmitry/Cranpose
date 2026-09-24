@@ -27,7 +27,7 @@ macro_rules! android_main {
         // and it is defined here rather than by hand in each of them.
         #[cfg(target_os = "android")]
         #[doc(hidden)]
-        #[allow(unsafe_code)]
+        #[expect(unsafe_code)]
         #[unsafe(no_mangle)]
         pub fn android_main(app: $crate::AndroidApp) {
             $crate::AppLauncher::run($launcher, app, $content);

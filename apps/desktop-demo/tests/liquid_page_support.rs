@@ -5,8 +5,7 @@ use cranpose_render_wgpu::{CapturedFrame, RenderStatsSnapshot, WgpuRenderer};
 use cranpose_ui::{AppContext, ScrollState};
 use desktop_app::app::{self, DemoTab, StartupSelection, TEST_LIQUID_SCROLL_STATE};
 
-#[path = "../../../crates/cranpose-render/wgpu/tests/support/device.rs"]
-mod gpu_test_device;
+use crate::gpu_test_device;
 
 /// The demo showing its Liquid tab headless, at a logical size and density,
 /// with its list's scroll state in hand.

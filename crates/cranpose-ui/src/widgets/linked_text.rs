@@ -3,7 +3,7 @@
 //! Mirrors the behaviour of Jetpack Compose `BasicText` / `Text` when the
 //! annotated string contains `LinkAnnotation.Url` or `LinkAnnotation.Clickable`.
 
-#![allow(non_snake_case)]
+#![expect(non_snake_case)]
 
 use std::rc::Rc;
 
@@ -63,7 +63,6 @@ use crate::{
 ///
 /// Equivalent to `Text(buildAnnotatedString { withLink(LinkAnnotation.Url(…)) { … } })`.
 /// The `open_url` parameter corresponds to the platform-provided `LocalUriHandler`.
-#[allow(clippy::needless_pass_by_value)]
 pub fn LinkedText(
     text: AnnotatedString,
     modifier: Modifier,

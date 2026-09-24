@@ -1,7 +1,7 @@
-pub mod liquid_page_support;
-
 use cranpose_render_wgpu::RenderStatsSnapshot;
 use liquid_page_support::LiquidPage;
+
+use crate::liquid_page_support;
 
 const LOGICAL: (u32, u32) = (393, 816);
 const DENSITY: f32 = 2.75;

@@ -14,14 +14,14 @@ impl PlatformEnvironment {
         Rc::new(Self::default())
     }
 
-    #[cfg_attr(not(any(target_os = "android", target_os = "ios")), allow(dead_code))]
+    #[cfg_attr(not(any(target_os = "android", target_os = "ios")), expect(dead_code))]
     pub(crate) fn set_safe_area(&self, insets: EdgeInsets) -> bool {
         let changed = self.safe_area.get() != insets;
         self.safe_area.set(insets);
         changed
     }
 
-    #[cfg_attr(not(any(target_os = "android", target_os = "ios")), allow(dead_code))]
+    #[cfg_attr(not(any(target_os = "android", target_os = "ios")), expect(dead_code))]
     pub(crate) fn set_ime_insets(&self, insets: EdgeInsets) -> bool {
         let changed = self.ime_insets.get() != insets;
         self.ime_insets.set(insets);

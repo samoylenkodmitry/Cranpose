@@ -6,7 +6,7 @@ pub fn is_blue_handle(r: u8, g: u8, b: u8) -> bool {
     b > 170 && b.saturating_sub(r) > 55 && b.saturating_sub(g) > 25
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub fn lower_band_center(
     shot: &RobotScreenshot,
     sx: f32,
@@ -46,7 +46,7 @@ pub fn lower_band_center(
     })
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub fn count_upper_lower_bands(
     shot: &RobotScreenshot,
     left: usize,

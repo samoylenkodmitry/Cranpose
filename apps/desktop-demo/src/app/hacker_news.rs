@@ -2673,9 +2673,10 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     fn layout_subtree_summary(layout: &LayoutBox) -> Vec<String> {
         fn walk(layout: &LayoutBox, depth: usize, lines: &mut Vec<String>) {
-            let semantics =
-                cranpose_ui::collect_semantics_from_modifier(&layout.node_data.modifier)
-                    .and_then(|config| config.content_description);
+            let semantics = layout
+                .node_data
+                .semantics()
+                .and_then(|config| config.content_description.clone());
             let slices = layout.node_data.modifier_slices();
             lines.push(format!(
                 "{:indent$}node={} kind={:?} translated={} pointer_inputs={} semantics={:?}",

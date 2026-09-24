@@ -12,7 +12,7 @@
 //! | `LaunchedEffect(key) { flow.collect { } }` | [`CollectFlow`] |
 //! | `snapshotFlow { }` | [`snapshotFlow`] |
 
-#![allow(non_snake_case)]
+#![expect(non_snake_case)]
 
 mod dispatcher;
 mod hooks;

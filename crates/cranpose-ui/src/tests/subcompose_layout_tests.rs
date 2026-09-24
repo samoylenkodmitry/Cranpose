@@ -687,3 +687,23 @@ fn subcompose_modifier_slices_cache_reuses_unique_snapshot_allocation() {
     let updated = node.modifier_slices_snapshot();
     assert_eq!(Rc::as_ptr(&updated), snapshot_ptr);
 }
+
+#[test]
+fn semantics_configuration_reads_the_live_modifier_chain() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let policy: Rc<MeasurePolicy> = Rc::new(|scope, _| scope.layout(0.0, 0.0, Vec::new()));
+    let node = SubcomposeLayoutNode::new(crate::modifier::Modifier::empty(), Rc::clone(&policy));
+    assert_eq!(node.semantics_configuration(), None);
+
+    let described = SubcomposeLayoutNode::new(
+        crate::modifier::Modifier::empty().content_description("Feed"),
+        policy,
+    );
+    assert_eq!(
+        described
+            .semantics_configuration()
+            .and_then(|config| config.content_description)
+            .as_deref(),
+        Some("Feed")
+    );
+}

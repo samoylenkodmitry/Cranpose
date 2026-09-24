@@ -919,7 +919,7 @@ impl ModifierNodeElement for MaskOnlyElement {
 }
 
 #[derive(Debug)]
-#[allow(dead_code)]
+#[expect(dead_code)]
 struct DelegatedDrawNode {
     id: &'static str,
     state: NodeState,
@@ -956,7 +956,7 @@ impl ModifierNode for DelegatedDrawNode {
 impl DrawModifierNode for DelegatedDrawNode {}
 
 #[derive(Debug)]
-#[allow(dead_code)]
+#[expect(dead_code)]
 struct DelegatingHostNode {
     id: &'static str,
     state: NodeState,
@@ -1109,7 +1109,7 @@ impl ModifierNodeElement for SemanticsDelegatingElement {
 }
 
 #[derive(Debug)]
-#[allow(dead_code)]
+#[expect(dead_code)]
 struct DelegatedPointerNode {
     label: &'static str,
     state: NodeState,

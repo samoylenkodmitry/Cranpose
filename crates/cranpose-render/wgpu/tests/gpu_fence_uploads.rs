@@ -1,22 +1,24 @@
-mod support;
-
-#[path = "../src/test_support.rs"]
-mod shared_test_support;
-
 use cranpose_render_common::graph::{ProjectiveTransform, RenderNode};
 use cranpose_ui_graphics::{Color, GraphicsLayer, Rect, RenderEffect};
+
+use crate::{shared_test_support, support};
 
 #[test]
 fn profiled_frames_keep_current_uniforms_and_geometry() {
     if std::env::var_os("CRANPOSE_FENCE_TEST_CHILD").is_none() {
+        let test_path = concat!(
+            module_path!(),
+            "::profiled_frames_keep_current_uniforms_and_geometry"
+        );
+        let test_name = test_path
+            .split_once("::")
+            .map_or(test_path, |(_, name)| name);
         for mode in ["off", "frame", "1"] {
-            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+            let mut command = std::process::Command::new(
+                std::env::current_exe().expect("resolve the running test binary"),
+            );
             command
-                .args([
-                    "--exact",
-                    "profiled_frames_keep_current_uniforms_and_geometry",
-                    "--nocapture",
-                ])
+                .args(["--exact", test_name, "--nocapture"])
                 .env("CRANPOSE_FENCE_TEST_CHILD", mode);
             if mode == "off" {
                 command.env_remove("CRANPOSE_GPU_FENCE_PROFILE");
@@ -24,10 +26,10 @@ fn profiled_frames_keep_current_uniforms_and_geometry() {
                 command.env("CRANPOSE_GPU_FENCE_PROFILE", mode);
             }
             let result = command.output().expect("run isolated fence mode");
+            let stdout = String::from_utf8_lossy(&result.stdout);
             assert!(
-                result.status.success(),
-                "mode {mode}:\n{}\n{}",
-                String::from_utf8_lossy(&result.stdout),
+                result.status.success() && stdout.contains("1 passed"),
+                "mode {mode} must run the test once and pass:\n{stdout}\n{}",
                 String::from_utf8_lossy(&result.stderr)
             );
         }

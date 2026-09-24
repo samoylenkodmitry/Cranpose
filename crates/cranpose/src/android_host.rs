@@ -1,4 +1,4 @@
-#![allow(unsafe_code)]
+#![expect(unsafe_code)]
 use std::sync::Arc;
 
 use cranpose_services::{

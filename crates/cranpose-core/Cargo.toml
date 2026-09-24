@@ -10,6 +10,7 @@ keywords.workspace = true
 categories.workspace = true
 readme = "README.md"
 description = "Core runtime for a Jetpack Compose inspired UI framework in Rust"
+autotests = false
 
 [package.metadata.docs.rs]
 all-features = true
@@ -43,3 +44,7 @@ wasm-bindgen-futures = "0.4"
 # `delay` hands its deadline to the browser's own timer rather than spinning a
 # frame loop, so an idle wait costs nothing.
 web-sys = { version = "0.3", features = ["Window"] }
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"

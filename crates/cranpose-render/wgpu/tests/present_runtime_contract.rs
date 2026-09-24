@@ -1,5 +1,3 @@
-mod support;
-
 use std::{
     sync::{Arc, MutexGuard},
     time::{Duration, Instant},
@@ -12,6 +10,8 @@ use cranpose_render_common::{
 };
 use cranpose_render_wgpu::{CancelReason, PresentOutcome, PublishOutcome, WgpuRenderer};
 use cranpose_ui_graphics::{Color, Rect};
+
+use crate::support;
 
 const WIDTH: u32 = 128;
 const HEIGHT: u32 = 96;
@@ -75,7 +75,7 @@ fn surface_config(width: u32, height: u32) -> wgpu::SurfaceConfiguration {
     }
 }
 
-#[allow(clippy::type_complexity)]
+#[expect(clippy::type_complexity)]
 fn threaded_parts() -> Result<
     (
         MutexGuard<'static, ()>,

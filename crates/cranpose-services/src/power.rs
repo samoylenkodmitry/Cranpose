@@ -249,7 +249,7 @@ pub fn publish_power_state(state: PowerState) {
 
 /// The device's power state, observed for as long as this call stays in the
 /// composition.
-#[allow(non_snake_case)]
+#[expect(non_snake_case)]
 #[track_caller]
 pub fn rememberPowerState() -> State<PowerState> {
     let updates = rememberEventStream((), |sender| {

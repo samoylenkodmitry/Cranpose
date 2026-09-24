@@ -1,13 +1,10 @@
-mod support;
-
-#[path = "../src/record_columns.rs"]
-mod record_columns;
-
 use cranpose_ui_graphics::{
     Brush, Color, CommandRecording, DrawScope, DrawScopeDefault, Point, Rect, Size, Stroke,
     StrokeCap, framework_shaders::SHAPE_WGSL, strip_index_pattern,
 };
 use wgpu::util::DeviceExt;
+
+use crate::{record_columns, support};
 
 const SIDE: u32 = 160;
 

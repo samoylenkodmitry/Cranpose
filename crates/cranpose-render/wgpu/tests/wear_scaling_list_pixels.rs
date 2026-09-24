@@ -1,5 +1,3 @@
-mod support;
-
 use cranpose_app_shell::AppShell;
 use cranpose_core::location_key;
 use cranpose_foundation::lazy::LazyItems;
@@ -12,6 +10,8 @@ use cranpose_ui::{
         WearTextStyle, rememberWearScalingListState,
     },
 };
+
+use crate::support;
 
 const SIZE: u32 = 454;
 

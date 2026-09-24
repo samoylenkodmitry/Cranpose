@@ -1,5 +1,3 @@
-mod support;
-
 use std::rc::Rc;
 
 use cranpose_render_common::{
@@ -10,6 +8,8 @@ use cranpose_ui_graphics::{
     ArcRecordArgs, BlendMode, Brush, Color, CommandRecorder, CommandRecording, DrawScope,
     DrawScopeDefault, Point, Rect, Size, normalized_band,
 };
+
+use crate::support;
 
 const SIDE: u32 = 256;
 const COLUMNS: usize = 16;

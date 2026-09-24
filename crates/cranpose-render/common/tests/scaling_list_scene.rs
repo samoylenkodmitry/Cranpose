@@ -21,10 +21,9 @@ use cranpose_ui::{
         },
     },
 };
-
-mod scene_probe;
-
 use scene_probe::painted_text;
+
+use crate::scene_probe;
 
 const WATCH: f32 = 454.0;
 

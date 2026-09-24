@@ -852,7 +852,6 @@ pub fn liquid_menu_trigger_input(
 /// A glass icon trigger that owns one continuous menu gesture. A short click
 /// opens normally; a hold opens while still pressed, then the same pointer can
 /// slide over popup rows and release to fire one.
-#[allow(clippy::too_many_arguments)]
 #[composable]
 pub fn LiquidMenuIconButton(
     modifier: Modifier,
@@ -1656,8 +1655,7 @@ fn menu_row_semantics(label: String, has_checks: bool, checked: bool) -> Semanti
     }
 }
 
-#[allow(non_snake_case)]
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn menu_item_row(
     index: usize,
     item: &LiquidMenuItem,

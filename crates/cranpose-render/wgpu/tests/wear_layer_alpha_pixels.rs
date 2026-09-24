@@ -1,5 +1,3 @@
-mod support;
-
 use std::cell::Cell;
 
 use cranpose_app_shell::AppShell;
@@ -17,6 +15,8 @@ use cranpose_ui::{
         },
     },
 };
+
+use crate::support;
 
 const SIZE: u32 = 454;
 const ROW: f32 = 52.0;

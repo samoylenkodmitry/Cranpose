@@ -89,7 +89,7 @@
 //! estimate into a pixel: a spacer counts only while the row at its own end of
 //! the list is on screen, and a row on screen has been measured.
 
-#![allow(non_snake_case)]
+#![expect(non_snake_case)]
 
 use std::{
     cell::{Cell, RefCell},

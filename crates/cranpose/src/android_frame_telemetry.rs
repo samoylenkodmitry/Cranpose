@@ -1,4 +1,4 @@
-#![allow(unsafe_code)]
+#![expect(unsafe_code)]
 
 use std::{
     ffi::{CString, c_void},

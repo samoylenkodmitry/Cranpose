@@ -40,7 +40,7 @@ impl Default for FrameStats {
 }
 
 #[derive(Default)]
-#[allow(dead_code)]
+#[expect(dead_code)]
 struct DummyNode;
 
 impl Node for DummyNode {}

@@ -1,7 +1,7 @@
-mod support;
-
 use cranpose_ui_graphics::{Color, GraphicsLayer, Point};
 use support::clip_band::{self, CHILD, FRAME};
+
+use crate::support;
 
 /// Where the child sits in the band: 60 of its 120 rows above the band's top.
 const PLACEMENT: Point = Point { x: 40.0, y: -60.0 };

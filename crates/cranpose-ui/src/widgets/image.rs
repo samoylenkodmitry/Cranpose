@@ -1,7 +1,7 @@
 //! Image composable and painter primitives.
 
-#![allow(non_snake_case)]
-#![allow(clippy::too_many_arguments)]
+#![expect(non_snake_case)]
+#![expect(clippy::too_many_arguments)]
 
 #[cfg(feature = "svg")]
 use std::sync::{Mutex, MutexGuard};
@@ -863,7 +863,7 @@ fn draw_bitmap_tiled_painter(
 ///
 /// Like tiling, this fills its bounds by construction, so content scale and
 /// alignment have nothing left to decide.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn draw_nine_patch_painter(
     scope: &mut dyn DrawScope,
     bitmap: ImageBitmap,

@@ -20,6 +20,7 @@ fn test_count_nodes() {
             Modifier::empty(),
             ResolvedModifiers::default(),
             Rc::default(),
+            None,
             LayoutNodeKind::Unknown,
         )
     };

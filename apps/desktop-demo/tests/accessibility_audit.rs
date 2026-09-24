@@ -1,5 +1,3 @@
-pub mod tab_switch_regression_support;
-
 use cranpose_testing::{
     audit_accessibility, placed_semantics_from_shell,
     robot::{RobotTestRule, TestRenderer},
@@ -9,6 +7,8 @@ use desktop_app::app::{combined_app, DEMO_TAB_INFO};
 use tab_switch_regression_support::{
     pump_shell_until_stable, set_active_tab, wait_for_active_tab_registration_robot,
 };
+
+use crate::tab_switch_regression_support;
 
 /// The issues a tab still has, each with the reason it stays. A new issue
 /// on any tab fails the test, and so does a listed one that went away: the

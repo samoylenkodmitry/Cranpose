@@ -2410,6 +2410,8 @@ fn pointer_driven_graphics_layer_point_app(position_state: cranpose_core::Mutabl
     );
 }
 
+type Preedit = (String, Option<(usize, usize)>);
+
 #[derive(Default)]
 pub(super) struct TextFieldDispatchProbe {
     pasted_text: RefCell<Option<String>>,
@@ -2417,7 +2419,7 @@ pub(super) struct TextFieldDispatchProbe {
     cut_in_applied_snapshot: Cell<bool>,
     paste_in_event_handler: Cell<bool>,
     paste_in_applied_snapshot: Cell<bool>,
-    preedit_text: RefCell<Option<(String, Option<(usize, usize)>)>>,
+    preedit_text: RefCell<Option<Preedit>>,
     preedit_in_event_handler: Cell<bool>,
     preedit_in_applied_snapshot: Cell<bool>,
     last_delete: Cell<Option<(usize, usize)>>,

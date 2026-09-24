@@ -52,7 +52,10 @@ mod android_frame_telemetry;
 mod android_haptics_queue;
 #[cfg(all(feature = "android", target_os = "android"))]
 mod android_host;
-#[cfg_attr(not(all(feature = "android", target_os = "android")), allow(dead_code))]
+#[cfg_attr(
+    not(all(feature = "android", target_os = "android")),
+    expect(dead_code)
+)]
 mod android_host_window;
 mod android_input;
 #[cfg(all(feature = "android", target_os = "android"))]
@@ -234,7 +237,7 @@ static KEEP_SCREEN_ON_EFFECTS: std::sync::atomic::AtomicUsize =
 
 /// Keeps the platform display awake while this call remains in composition and
 /// `enabled` is true. Multiple active callers are reference-counted.
-#[allow(non_snake_case)]
+#[expect(non_snake_case)]
 #[track_caller]
 pub fn KeepScreenOn(enabled: bool) {
     cranpose_core::__disposable_effect_impl(
@@ -260,7 +263,7 @@ pub fn KeepScreenOn(enabled: bool) {
 /// Installs a declared bundled-asset set on a worker and returns the outcome
 /// on the UI runtime. Work is cancelled with the owning composition.
 #[cfg(not(target_arch = "wasm32"))]
-#[allow(non_snake_case)]
+#[expect(non_snake_case)]
 #[track_caller]
 pub fn BundledAssetInstallEffect<K: PartialEq + 'static>(
     keys: K,
@@ -287,7 +290,7 @@ pub fn BundledAssetInstallEffect<K: PartialEq + 'static>(
 /// Screens that only need the current state read
 /// [`cranpose_services::local_lifecycle_state`] instead; this is for work that
 /// must react to a *transition*.
-#[allow(non_snake_case)]
+#[expect(non_snake_case)]
 #[track_caller]
 pub fn LifecycleEffect<K: PartialEq + 'static>(
     keys: K,
@@ -303,7 +306,7 @@ static ACTIVE_BACK_HANDLERS: std::sync::atomic::AtomicUsize =
 /// Handles platform back requests on the UI thread while `enabled` is true.
 /// Nested handlers follow stack order: the innermost active handler receives
 /// the request and dropping it restores the handler beneath it.
-#[allow(non_snake_case)]
+#[expect(non_snake_case)]
 #[track_caller]
 pub fn BackHandler(enabled: bool, mut on_back: impl FnMut() + 'static) {
     let requests = cranpose_core::rememberEventStream(enabled, move |sender| {
@@ -345,7 +348,7 @@ impl Drop for BackInterception {
 }
 
 /// Remembers observable application update state for the current composition.
-#[allow(non_snake_case)]
+#[expect(non_snake_case)]
 #[track_caller]
 pub fn rememberAppUpdateState() -> cranpose_core::State<cranpose_services::AppUpdateStatus> {
     let updates = cranpose_core::rememberEventStream((), |sender| {
@@ -361,7 +364,7 @@ pub fn rememberAppUpdateState() -> cranpose_core::State<cranpose_services::AppUp
 /// simulation flag, "the window is visible", "a gesture is in progress" — and
 /// the loop starts and stops with it. There is no wake handle to hold and no
 /// scheduler to poke: stopping is a state change like any other.
-#[allow(non_snake_case)]
+#[expect(non_snake_case)]
 #[track_caller]
 pub fn FrameEffect<K: PartialEq + 'static>(
     keys: K,
@@ -397,9 +400,9 @@ pub fn FrameEffect<K: PartialEq + 'static>(
 #[doc(hidden)]
 pub use cranpose_core::{
     __branch_group_scope_deferred, CallbackHolder, Composer, Key, ParamState, ReturnSlot,
-    branch_location_key, cached_branch_location_key, cached_composable_definition_key,
-    caller_location_key, composable_definition_key, composable_identity_key,
-    debug_label_current_scope, location_key, with_current_composer,
+    ValueSlotHandle, branch_location_key, cached_branch_location_key,
+    cached_composable_definition_key, caller_location_key, composable_definition_key,
+    composable_identity_key, debug_label_current_scope, location_key, with_current_composer,
 };
 
 #[cfg(all(
@@ -528,7 +531,7 @@ mod winit_pointer;
     all(feature = "desktop-shell", feature = "renderer-wgpu"),
     all(feature = "ios", feature = "renderer-wgpu", target_os = "ios")
 ))]
-#[cfg_attr(not(all(feature = "ios", target_os = "ios")), allow(dead_code))]
+#[cfg_attr(not(all(feature = "ios", target_os = "ios")), expect(dead_code))]
 mod winit_touch;
 
 #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]

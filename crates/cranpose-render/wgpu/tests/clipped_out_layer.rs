@@ -1,9 +1,9 @@
-mod support;
-
 use cranpose_ui_graphics::{
     GraphicsLayer, Point, RUNTIME_SHADER_PRELUDE_WGSL, RenderEffect, RuntimeShader,
 };
 use support::clip_band::{self, FRAME};
+
+use crate::support;
 
 /// Where a child sits when it is on show: inside the band.
 const SHOWN: Point = Point { x: 40.0, y: 10.0 };
