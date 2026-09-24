@@ -34,13 +34,8 @@ elif [ "$PROFILE" != "debug" ]; then
     exit 2
 fi
 
-build_args=(cargo build -p desktop-app --features desktop,robot-app)
-build_args+=("${profile_args[@]}")
-for case in "${cases[@]}"; do
-    build_args+=(--example "robot_liquid_${case}_cheatsheet")
-done
-echo "== build ${#cases[@]} Liquid cheatsheet example(s) ($PROFILE) =="
-"${build_args[@]}"
+echo "== build the robot binary for ${#cases[@]} Liquid cheatsheet(s) ($PROFILE) =="
+cargo build -p desktop-app --features desktop,robot-app ${profile_args[@]+"${profile_args[@]}"} --example robot
 
 target_dir="${CARGO_TARGET_DIR:-$ROOT/target}"
 if [[ "$target_dir" != /* ]]; then
@@ -50,7 +45,7 @@ fi
 for case in "${cases[@]}"; do
     example="robot_liquid_${case}_cheatsheet"
     echo "== $case: visible X11 capture ($PROFILE) =="
-    ROBOT_SHOT_DIR="$OUT/$case" "$target_dir/$PROFILE/examples/$example"
+    ROBOT_SHOT_DIR="$OUT/$case" "$target_dir/$PROFILE/examples/robot" "$example"
 done
 
 overview_inputs=()

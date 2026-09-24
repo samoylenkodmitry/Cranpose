@@ -1,4 +1,4 @@
-mod robot_launch;
+use crate::robot_launch;
 
 use std::{cell::RefCell, path::Path};
 
@@ -68,7 +68,7 @@ fn android_resume_contract_is_fixed() {
     );
 }
 
-fn main() {
+pub(crate) fn main() {
     robot_launch::launch("Android Resume", 640, 480)
         .with_robot_app_hook(lifecycle_hook)
         .with_test_driver(|robot| {

@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::time::Duration;
 
 use cranpose_testing::{
@@ -47,7 +45,6 @@ pub fn click_button(robot: &cranpose::Robot, label: &str, settle_ms: u64) {
     let _ = robot.wait_for_idle();
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn drag_scrollbar(
     robot: &cranpose::Robot,
     rail_bounds: (f32, f32, f32, f32),

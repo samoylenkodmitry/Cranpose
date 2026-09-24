@@ -1,12 +1,8 @@
-mod robot_exit;
-mod robot_shot;
-
-#[path = "../src/test_screens/liquid_tab_reference.rs"]
-mod liquid_tab_reference;
+use crate::{liquid_tab_reference, robot_exit, robot_shot};
 
 use cranpose::{AppLauncher, RobotScreenshot};
 
-fn main() -> anyhow::Result<()> {
+pub(crate) fn main() -> anyhow::Result<()> {
     let output = std::path::PathBuf::from(
         std::env::var("CRANPOSE_ROBOT_OUTPUT_DIR")
             .unwrap_or_else(|_| "target/liquid-tab-settled-blur".to_string()),

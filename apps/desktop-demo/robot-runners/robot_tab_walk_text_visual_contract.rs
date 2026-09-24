@@ -34,7 +34,7 @@ impl InkMetrics {
     }
 }
 
-fn main() {
+pub(crate) fn main() {
     let _ = env_logger::try_init();
     println!("=== Robot Tab Walk Text Visual Contract ===");
 

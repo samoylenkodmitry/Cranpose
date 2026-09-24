@@ -115,7 +115,7 @@ fn assert_swatch_drawn_at_semantic_bounds(
     }
 }
 
-fn main() {
+pub(crate) fn main() {
     AppLauncher::new()
         .with_title("lazy expansion reflow")
         .with_size(520, 700)

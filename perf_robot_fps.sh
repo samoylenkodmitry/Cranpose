@@ -113,7 +113,7 @@ done
 finalize_perf_scenarios
 
 PROFILE_DIR="debug"
-BUILD_ARGS=(--package desktop-app --example "$EXAMPLE" --features robot-app)
+BUILD_ARGS=(--package desktop-app --example robot --features robot-app)
 
 if [[ "$PROFILE" == "release" ]]; then
     PROFILE_DIR="release"
@@ -126,7 +126,7 @@ fi
 "${CARGO_RUNNER[@]}" build "${BUILD_ARGS[@]}"
 
 TARGET_DIR="$("${CARGO_RUNNER[@]}" metadata --no-deps --format-version 1 | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')"
-BIN="${TARGET_DIR}/${PROFILE_DIR}/examples/${EXAMPLE}"
+BIN="${TARGET_DIR}/${PROFILE_DIR}/examples/robot"
 if [[ ! -x "$BIN" ]]; then
     echo "Binary not found: $BIN"
     exit 1
@@ -180,7 +180,7 @@ for scenario in "${PERF_SCENARIOS[@]}"; do
     CRANPOSE_PRESENT_MODE="$PRESENT_MODE" \
     CRANPOSE_HEADLESS="$HEADLESS" \
     CRANPOSE_PERF_WAIT_IDLE_AFTER_DRAG="$WAIT_IDLE_AFTER_DRAG" \
-    "$BIN" 2>&1 | tee "$LOG_FILE" || scenario_status=$?
+    "$BIN" "$EXAMPLE" 2>&1 | tee "$LOG_FILE" || scenario_status=$?
 
     append_perf_summary_block "$OUTPUT" "$scenario" "$LOG_FILE"
     {

@@ -1,4 +1,4 @@
-mod robot_handle_probe;
+use crate::robot_handle_probe;
 
 use std::{
     path::{Path, PathBuf},
@@ -33,7 +33,7 @@ fn text_style() -> TextStyle {
     style
 }
 
-fn main() -> ExitCode {
+pub(crate) fn main() -> ExitCode {
     let _ = env_logger::try_init();
     let shot_dir = PathBuf::from(
         std::env::var("ROBOT_SHOT_DIR")

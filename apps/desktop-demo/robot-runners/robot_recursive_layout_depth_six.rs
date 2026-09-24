@@ -1,6 +1,4 @@
-mod robot_launch;
-
-mod regression_robot_support;
+use crate::{regression_robot_support, robot_launch};
 
 use std::time::Duration;
 
@@ -9,7 +7,7 @@ use regression_robot_support::{
     click_button, semantics_dump, spawn_timeout, wait_for_text, wait_for_text_prefix,
 };
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Robot Recursive Layout Depth Six Test ===");
 

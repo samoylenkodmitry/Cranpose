@@ -1,4 +1,4 @@
-mod robot_launch;
+use crate::robot_launch;
 
 use std::{
     sync::atomic::{AtomicUsize, Ordering},
@@ -17,7 +17,7 @@ use cranpose_ui::{
 
 static ROOT_COMPOSITIONS: AtomicUsize = AtomicUsize::new(0);
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     robot_launch::launch("Draw-only Transition Work", 800, 600)
         .with_test_driver(|robot| {

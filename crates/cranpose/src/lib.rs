@@ -447,16 +447,33 @@ pub mod prelude {
     all(feature = "desktop-shell", feature = "renderer-wgpu"),
     all(feature = "android", feature = "renderer-wgpu", target_os = "android"),
     all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"),
-    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
+    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"),
+    feature = "embed"
 ))]
 pub(crate) mod platform_env;
 
 #[cfg(any(
     all(feature = "desktop-shell", feature = "renderer-wgpu"),
     all(feature = "android", target_os = "android"),
-    all(feature = "ios", target_os = "ios")
+    all(feature = "ios", target_os = "ios"),
+    feature = "embed"
 ))]
 mod pipeline_cache_file;
+
+#[cfg(any(
+    all(feature = "desktop-shell", feature = "renderer-wgpu"),
+    feature = "embed"
+))]
+mod application_id;
+
+#[cfg(feature = "embed")]
+pub mod embed;
+#[cfg(feature = "embed")]
+mod embed_frame;
+#[cfg(feature = "embed")]
+mod embed_input;
+#[cfg(feature = "embed")]
+mod embed_protocol;
 
 #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
 pub mod android;

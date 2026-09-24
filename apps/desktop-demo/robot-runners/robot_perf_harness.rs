@@ -1,6 +1,4 @@
-mod markdown_fixture_client;
-mod perf_presentation_probe;
-mod perf_robot_stats;
+use crate::{markdown_fixture_client, perf_presentation_probe, perf_robot_stats};
 
 use std::{
     cell::RefCell,
@@ -1044,7 +1042,7 @@ fn initialize_perf_scenario(
     prepare_perf_scenario(robot, scenario);
 }
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     let scenario = PerfScenario::from_env();
     let duration_secs = env_u64("CRANPOSE_PERF_DURATION_SECS", DEFAULT_DURATION_SECS);

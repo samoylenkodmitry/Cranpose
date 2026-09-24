@@ -1,4 +1,4 @@
-mod robot_exit;
+use crate::robot_exit;
 
 use std::{process::ExitCode, sync::atomic::AtomicBool, time::Duration};
 
@@ -12,7 +12,7 @@ const MAX_LATER_BRIGHTENING: f32 = 18.0;
 
 static FAILED: AtomicBool = AtomicBool::new(false);
 
-fn main() -> ExitCode {
+pub(crate) fn main() -> ExitCode {
     let _ = env_logger::try_init();
     AppLauncher::new()
         .with_title("Liquid Backdrop Feedback Contract")

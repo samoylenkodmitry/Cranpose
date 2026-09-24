@@ -1,7 +1,4 @@
-mod markdown_fixture_client;
-mod output_paths;
-mod perf_contract;
-mod text_showcase_external_helpers;
+use crate::{markdown_fixture_client, output_paths, perf_contract, text_showcase_external_helpers};
 
 use std::{path::Path, sync::Arc, time::Duration};
 
@@ -48,7 +45,7 @@ struct ViewportInkMetrics {
 type Bounds = (f32, f32, f32, f32);
 type VisibleTextNode = (Bounds, String);
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Robot Markdown Default Visual Contract ===");
 

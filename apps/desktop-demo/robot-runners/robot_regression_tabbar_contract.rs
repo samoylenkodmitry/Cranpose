@@ -1,5 +1,4 @@
-mod output_paths;
-mod robot_exit;
+use crate::{output_paths, robot_exit};
 
 use std::{path::Path, time::Duration};
 
@@ -77,7 +76,7 @@ fn save_screenshot(path: &Path, screenshot: &cranpose::RobotScreenshot) {
         .unwrap_or_else(|err| panic!("failed to save {}: {err}", path.display()));
 }
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Robot Tabbar Regression Contract ===");
 

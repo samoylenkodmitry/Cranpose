@@ -1,4 +1,4 @@
-mod robot_launch;
+use crate::robot_launch;
 
 use std::time::Duration;
 
@@ -117,7 +117,7 @@ fn overscroll_reproduction() {
     );
 }
 
-fn main() {
+pub(crate) fn main() {
     robot_launch::launch("Overscroll Bounce Reproduction", 600, 600).with_test_driver(|robot| {
             std::thread::sleep(Duration::from_millis(500));
             let _ = robot.wait_for_idle();

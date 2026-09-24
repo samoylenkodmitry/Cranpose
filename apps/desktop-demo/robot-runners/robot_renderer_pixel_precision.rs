@@ -1,4 +1,4 @@
-mod robot_launch;
+use crate::robot_launch;
 
 use cranpose::{
     widgets::{Box, BoxSpec, Row, RowSpec},
@@ -23,7 +23,7 @@ fn pixel(screenshot: &cranpose::RobotScreenshot, x: f32, y: f32) -> [u8; 3] {
     [rgba[0], rgba[1], rgba[2]]
 }
 
-fn main() {
+pub(crate) fn main() {
     robot_launch::launch("Renderer Pixel Precision", WIDTH, HEIGHT)
         .with_test_driver(|robot| {
             std::thread::sleep(std::time::Duration::from_millis(900));

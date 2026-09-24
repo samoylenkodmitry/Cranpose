@@ -1,6 +1,4 @@
-mod output_paths;
-mod robot_exit;
-mod text_showcase_external_helpers;
+use crate::{output_paths, robot_exit, text_showcase_external_helpers};
 
 use std::{path::Path, time::Duration};
 
@@ -38,7 +36,7 @@ impl UnderlineMetrics {
     }
 }
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Robot Underline Screenshot ===");
     let output_dir = output_paths::diagnostic_path("cranpose_underline_screenshots");

@@ -1,6 +1,4 @@
-mod output_paths;
-mod scroll_stability_external_helpers;
-mod text_showcase_external_helpers;
+use crate::{output_paths, scroll_stability_external_helpers, text_showcase_external_helpers};
 
 use std::time::Duration;
 
@@ -28,7 +26,7 @@ const INTERNAL_DIAGNOSTIC_ENV: &str = "CRANPOSE_TEXT_SCROLL_INTERNAL_DIAGNOSTIC"
 const INTERNAL_DIAGNOSTIC_SCALE_ENV: &str = "CRANPOSE_TEXT_SCROLL_INTERNAL_DIAGNOSTIC_SCALE";
 const RENDER_STATS_ENV: &str = "CRANPOSE_TEXT_SCROLL_RENDER_STATS";
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Robot Text Scroll Exact External ===");
     let internal_diagnostic = prepare_internal_diagnostic(

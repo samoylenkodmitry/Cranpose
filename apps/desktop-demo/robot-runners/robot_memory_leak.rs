@@ -1,4 +1,4 @@
-mod robot_launch;
+use crate::robot_launch;
 
 #[cfg(target_os = "linux")]
 use std::collections::HashMap;
@@ -356,7 +356,7 @@ fn log_smaps_top(phase: &str) {
     }
 }
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Robot Memory Leak Test ===");
     println!(

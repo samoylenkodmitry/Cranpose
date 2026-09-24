@@ -1,7 +1,4 @@
-mod robot_launch;
-
-mod output_paths;
-mod text_showcase_external_helpers;
+use crate::{output_paths, robot_launch, text_showcase_external_helpers};
 
 use std::{path::Path, time::Duration};
 
@@ -31,7 +28,7 @@ const DECORATED_TEXT_PAD_RIGHT: f32 = 8.0;
 const DECORATED_TEXT_TOP_INSET: f32 = 4.0;
 const DECORATED_TEXT_BOTTOM_PAD: f32 = 2.0;
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Robot Render Translation Contract ===");
 

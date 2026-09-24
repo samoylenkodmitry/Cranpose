@@ -1,6 +1,4 @@
-mod output_paths;
-mod robot_exit;
-mod robot_shot;
+use crate::{output_paths, robot_exit, robot_shot};
 
 use std::time::Duration;
 
@@ -226,7 +224,7 @@ fn RenderCrispnessContractApp() {
     );
 }
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Robot Render Crispness Contract ===");
 

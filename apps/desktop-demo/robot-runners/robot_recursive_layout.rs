@@ -1,4 +1,4 @@
-mod robot_launch;
+use crate::robot_launch;
 
 use std::time::Duration;
 
@@ -141,7 +141,7 @@ fn validate_recursive_layout(robot: &cranpose::Robot, label: &str) -> Vec<String
     issues
 }
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Recursive Layout Robot Test (rect validation) ===");
 

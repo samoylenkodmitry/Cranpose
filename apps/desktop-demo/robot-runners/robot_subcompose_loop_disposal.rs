@@ -73,7 +73,7 @@ fn SubcomposeLoopDisposalScreen() {
     );
 }
 
-fn main() {
+pub(crate) fn main() {
     AppLauncher::new()
         .with_title("subcompose loop disposal")
         .with_size(640, 480)

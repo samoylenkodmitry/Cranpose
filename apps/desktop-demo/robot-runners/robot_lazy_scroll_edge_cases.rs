@@ -1,4 +1,4 @@
-mod robot_launch;
+use crate::robot_launch;
 
 use std::time::Duration;
 
@@ -12,7 +12,7 @@ use cranpose_ui::{
     Alignment, Color, LinearArrangement, Modifier, Size, TextStyle,
 };
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Lazy Scroll Edge Cases Robot Test ===");
 

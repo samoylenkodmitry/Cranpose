@@ -1,6 +1,4 @@
-mod output_paths;
-mod robot_exit;
-mod text_showcase_external_helpers;
+use crate::{output_paths, robot_exit, text_showcase_external_helpers};
 
 use std::{path::Path, time::Duration};
 
@@ -27,7 +25,7 @@ struct StrikeoutMetrics {
     max_dark_gap: u32,
 }
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Robot Text Strikeout Presented ===");
 

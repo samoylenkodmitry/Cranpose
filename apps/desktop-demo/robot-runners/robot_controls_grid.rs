@@ -1,4 +1,4 @@
-mod robot_exit;
+use crate::robot_exit;
 
 use std::time::Duration;
 
@@ -64,7 +64,7 @@ fn expect_reading(robot: &Robot, title: &str, want: &str, why: &str) {
     }
 }
 
-fn main() {
+pub(crate) fn main() {
     let _ = env_logger::try_init();
 
     AppLauncher::new()

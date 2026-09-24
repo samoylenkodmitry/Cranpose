@@ -1,5 +1,4 @@
-mod robot_exit;
-mod robot_launch;
+use crate::{robot_exit, robot_launch};
 
 use std::time::Duration;
 
@@ -54,7 +53,7 @@ fn label_widths_once_scaled(robot: &Robot) -> Option<(f32, f32)> {
     }
 }
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Robot Font Scale First Frame Test ===");
 

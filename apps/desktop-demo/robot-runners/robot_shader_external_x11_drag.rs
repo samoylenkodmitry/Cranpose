@@ -1,17 +1,13 @@
-mod external_x11_frame_telemetry;
-mod output_paths;
-mod perf_contract;
-mod text_showcase_external_helpers;
+use crate::{external_x11_frame_telemetry, output_paths, perf_contract, text_showcase_external_helpers};
 
 use std::{
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
-use cranpose::AppLauncher;
 use desktop_app::app::{self, DemoTab, ShaderSection, StartupSelection};
 use external_x11_frame_telemetry::{
-    clear_records, install_primary_frame_telemetry_logger, summarize_records, FrameTelemetryRecord,
+    clear_records, telemetry_window, summarize_records, FrameTelemetryRecord,
 };
 use image::RgbaImage;
 use text_showcase_external_helpers::{
@@ -34,13 +30,10 @@ const MIN_PRESENTED_FPS: f64 = 150.0;
 const MAX_P95_TOTAL_MS: f64 = 6.67;
 const MAX_STALL_MS: f64 = 50.0;
 
-fn main() {
-    let records = install_primary_frame_telemetry_logger();
+pub(crate) fn main() {
+    let (launcher, records) = telemetry_window(WINDOW_TITLE, WINDOW_WIDTH, WINDOW_HEIGHT);
 
-    AppLauncher::new()
-        .with_title(WINDOW_TITLE)
-        .with_size(WINDOW_WIDTH, WINDOW_HEIGHT)
-        .with_headless(false)
+    launcher
         .with_test_driver(move |robot| {
             run_external_drag_driver(Arc::clone(&records));
             robot.exit().expect("exit external shader drag app");

@@ -1,4 +1,4 @@
-mod markdown_scroll_drag;
+use crate::markdown_scroll_drag;
 
 use std::{fs, sync::Arc, time::Duration};
 
@@ -99,7 +99,7 @@ fn visible_markdown_line_range(
     Some((first, last))
 }
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Markdown Scrollbar Robot Test ===");
     let headless = std::env::var("CRANPOSE_HEADLESS")

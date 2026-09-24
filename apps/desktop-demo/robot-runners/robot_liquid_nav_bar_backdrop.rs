@@ -1,6 +1,4 @@
-mod liquid_page;
-mod robot_exit;
-mod robot_shot;
+use crate::{liquid_page, robot_exit, robot_shot};
 
 use std::{path::PathBuf, process::ExitCode, time::Duration};
 
@@ -26,7 +24,7 @@ const END_TOLERANCE: f32 = 12.0;
 
 type Bounds = (f32, f32, f32, f32);
 
-fn main() -> ExitCode {
+pub(crate) fn main() -> ExitCode {
     let _ = env_logger::try_init();
     let shot_dir = PathBuf::from(
         std::env::var("ROBOT_SHOT_DIR")

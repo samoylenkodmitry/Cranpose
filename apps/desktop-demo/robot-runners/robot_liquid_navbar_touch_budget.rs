@@ -1,7 +1,4 @@
-mod robot_exit;
-mod robot_liquid_stage;
-mod robot_shot;
-mod robot_tab_fixture;
+use crate::{robot_exit, robot_liquid_stage, robot_shot, robot_tab_fixture};
 
 use std::{path::PathBuf, process::ExitCode, sync::atomic::AtomicBool, time::Duration};
 
@@ -46,7 +43,7 @@ const TABS: [(&str, &str); TAB_COUNT] = [
     (cranpose::liquid::icons::SEARCH, "Search"),
 ];
 
-fn main() -> ExitCode {
+pub(crate) fn main() -> ExitCode {
     let _ = env_logger::try_init();
     let shot_dir = PathBuf::from(
         std::env::var("ROBOT_SHOT_DIR")

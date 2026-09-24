@@ -1,4 +1,4 @@
-mod robot_exit;
+use crate::robot_exit;
 
 use std::{path::PathBuf, process::ExitCode, sync::atomic::AtomicBool, time::Duration};
 
@@ -20,7 +20,7 @@ const PLAIN_Y: f32 = 180.0;
 
 static FAILED: AtomicBool = AtomicBool::new(false);
 
-fn main() -> ExitCode {
+pub(crate) fn main() -> ExitCode {
     let _ = env_logger::try_init();
     if std::env::var("CRANPOSE_ROBOT_SOFTWARE_RENDERER").as_deref() == Ok("1") {
         println!("PASS: adaptive frost contract (skipped on software renderer)");
