@@ -4,16 +4,18 @@ use futures_core::Stream;
 
 use crate::{
     builders::Emitter,
-    channel::Capacity,
+    channel::{Capacity, ProduceIn, Receiver, channel},
     combining::Zip,
     dispatcher::Dispatcher,
     errors::{Catch, RetryWhen},
-    flattening::FlatMap,
+    flattening::{FlatMap, Flatten},
+    job::Job,
     operators::{
         Buffered, Combine, Debounce, DistinctUntilChanged, FLOW_ON_BUFFER, Filter, Map,
-        OnCompletion, OnEach, OnStart, StartWith, Take,
+        OnCompletion, OnEach, OnStart, StartWith, Take, WholeValue,
     },
     scope::Spawn,
+    shaping::{Chunked, OnEmpty, RunningReduce, WithIndex},
     shared::{MutableSharedFlow, SharedFlow},
     sharing::{SharingStarted, SharingTask, shared_sharing, state_sharing},
     state::StateFlow,
@@ -21,7 +23,8 @@ use crate::{
         CollectAsync, CollectLatest, FilterMapping, Filtering, InOrder, Inspecting, LatestOnly,
         Mapping, Suspending, SuspendingRun, Transforming, TransformingWhile,
     },
-    terminal::{Collect, First, ToVec},
+    terminal::{Collect, Count, First, Fold, Last, Reduce, Single, ToVec},
+    timing::{Sample, Timeout},
     transforms::{FilterMap, Scan, Skip, Skipping, Taking, While},
 };
 
@@ -352,11 +355,66 @@ pub trait FlowExt: Flow + Sized {
     }
 
     /// Drops values equal to the one emitted just before.
-    fn distinct_until_changed(self) -> DistinctUntilChanged<Self>
+    fn distinct_until_changed(self) -> DistinctUntilChanged<Self, WholeValue>
     where
         Self::Item: PartialEq + Clone,
     {
-        DistinctUntilChanged::new(self)
+        DistinctUntilChanged::new(self, WholeValue)
+    }
+
+    /// Drops values whose `key` equals the key of the value emitted just
+    /// before — Kotlin's `distinctUntilChangedBy`.
+    fn distinct_until_changed_by<K, F>(self, key: F) -> DistinctUntilChanged<Self, F>
+    where
+        K: PartialEq,
+        F: Fn(&Self::Item) -> K + Clone,
+    {
+        DistinctUntilChanged::new(self, key)
+    }
+
+    /// Pairs every value with its position, counting from zero — Kotlin's
+    /// `withIndex`.
+    fn with_index(self) -> WithIndex<Self> {
+        WithIndex::new(self)
+    }
+
+    /// Emits the first value, then each value folded into the one emitted
+    /// before — Kotlin's `runningReduce`.
+    fn running_reduce<R>(self, reducer: R) -> RunningReduce<Self, R>
+    where
+        Self::Item: Clone,
+        R: Fn(&Self::Item, Self::Item) -> Self::Item + Clone,
+    {
+        RunningReduce::new(self, reducer)
+    }
+
+    /// Groups values into vectors of `size`; the last one may be shorter —
+    /// Kotlin's `chunked`. A `size` of zero counts as one.
+    fn chunked(self, size: usize) -> Chunked<Self> {
+        Chunked::new(self, size)
+    }
+
+    /// Emits the latest value once per `period`, skipping periods without a
+    /// new value — Kotlin's `sample`. A value still waiting when the
+    /// upstream completes is dropped.
+    fn sample(self, period: Duration) -> Sample<Self> {
+        Sample::new(self, period)
+    }
+
+    /// Wraps values in `Ok`, and emits `Err(TimedOut)` and completes if the
+    /// upstream goes `limit` without emitting — Kotlin's `timeout`.
+    fn timeout(self, limit: Duration) -> Timeout<Self> {
+        Timeout::new(self, limit)
+    }
+
+    /// Runs the suspending `action` if the flow completes without emitting,
+    /// so it can emit a fallback — Kotlin's `onEmpty`.
+    fn on_empty<F, Fut>(self, action: F) -> OnEmpty<Self, F>
+    where
+        F: FnOnce(Emitter<Self::Item>) -> Fut + Clone,
+        Fut: Future<Output = ()>,
+    {
+        OnEmpty::new(self, action)
     }
 
     /// Emits a value only after `timeout` passes without a newer one.
@@ -382,6 +440,24 @@ pub trait FlowExt: Flow + Sized {
         F: Fn(Self::Item) -> G + Clone,
     {
         FlatMap::concurrent(self, transform, 1)
+    }
+
+    /// Collects each inner flow in turn — Kotlin's `flattenConcat`.
+    fn flatten_concat(self) -> Flatten<Self>
+    where
+        Self::Item: Flow,
+    {
+        FlatMap::concurrent(self, std::convert::identity, 1)
+    }
+
+    /// Collects up to `concurrency` inner flows at once, emitting their
+    /// values as they arrive — Kotlin's `flattenMerge`; Kotlin's default
+    /// concurrency is [`DEFAULT_CONCURRENCY`](crate::DEFAULT_CONCURRENCY).
+    fn flatten_merge(self, concurrency: usize) -> Flatten<Self>
+    where
+        Self::Item: Flow,
+    {
+        FlatMap::concurrent(self, std::convert::identity, concurrency)
     }
 
     /// Maps each value to a flow and runs up to `concurrency` of them at once,
@@ -560,6 +636,61 @@ pub trait FlowExt: Flow + Sized {
         Fut: Future<Output = ()>,
     {
         Collect::new(SuspendingRun::new(self.open(), action), drop)
+    }
+
+    /// Collects the flow in `scope`, ignoring its values — Kotlin's
+    /// `launchIn`, usually after [`on_each`](FlowExt::on_each).
+    fn launch_in<S>(&self, scope: &S) -> Job
+    where
+        S: Spawn<Collect<Self::Run, fn(Self::Item)>>,
+    {
+        scope.spawn(Collect::new(self.open(), drop))
+    }
+
+    /// Collects the flow in `scope` into a buffered channel and returns its
+    /// receiving end — Kotlin's `produceIn`. Dropping every receiver cancels
+    /// the collection.
+    fn produce_in<S>(&self, scope: &S) -> Receiver<Self::Item>
+    where
+        S: Spawn<ProduceIn<Self::Run>>,
+    {
+        let (sender, receiver) = channel(Capacity::BUFFERED);
+        scope.spawn(ProduceIn::new(self.open(), sender));
+        receiver
+    }
+
+    /// Runs the flow, folding every value into an accumulator that starts at
+    /// `initial` — Kotlin's `fold`.
+    fn fold<A, F>(&self, initial: A, step: F) -> Fold<Self::Run, A, F>
+    where
+        F: FnMut(A, Self::Item) -> A,
+    {
+        Fold::new(self.open(), initial, step)
+    }
+
+    /// Runs the flow, folding every value into the first one; `None` for an
+    /// empty flow — Kotlin's `reduceOrNull`.
+    fn reduce<F>(&self, reducer: F) -> Reduce<Self::Run, F>
+    where
+        F: FnMut(Self::Item, Self::Item) -> Self::Item,
+    {
+        Reduce::new(self.open(), reducer)
+    }
+
+    /// Runs the flow and counts its values — Kotlin's `count`.
+    fn count(&self) -> Count<Self::Run, Self::Item> {
+        Fold::new(self.open(), 0, |count, _| count + 1)
+    }
+
+    /// Runs the flow and returns its last value — Kotlin's `lastOrNull`.
+    fn last(&self) -> Last<Self::Run, Self::Item> {
+        Fold::new(self.open(), None, |_, value| Some(value))
+    }
+
+    /// Returns the flow's only value, or `None` once it turns out to have
+    /// none or more than one — Kotlin's `singleOrNull`.
+    fn single(&self) -> Single<Self::Run> {
+        Single::new(self.open())
     }
 
     /// Runs the flow, calling `action` for every value, until it completes.

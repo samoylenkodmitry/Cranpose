@@ -34,12 +34,12 @@ with the same behavior. Items are ticked as they land.
 
 ## B. Operators and terminals
 
-- [ ] `sample`, `timeout` (emits `Err(TimedOut)` and completes), `on_empty`
-- [ ] `with_index`, `distinct_until_changed_by`, `running_reduce`, `chunked`
-- [ ] `flatten_concat` and `flatten_merge`
-- [ ] `Emitter::emit_all`, `launch_in(&scope)` and `produce_in(&scope)`
-- [ ] `combine_all(flows, transform)`, plus `combine4` and `combine5`
-- [ ] Terminals: `fold`, `reduce`, `count`, `last` and `single`
+- [x] `sample`, `timeout` (emits `Err(TimedOut)` and completes), `on_empty`
+- [x] `with_index`, `distinct_until_changed_by`, `running_reduce`, `chunked`
+- [x] `flatten_concat` and `flatten_merge`
+- [x] `Emitter::emit_all`, `launch_in(&scope)` and `produce_in(&scope)`
+- [x] `combine_all(flows, transform)`, plus `combine4` and `combine5`
+- [x] Terminals: `fold`, `reduce`, `count`, `last` and `single`
 
 ## C. Hot flows
 

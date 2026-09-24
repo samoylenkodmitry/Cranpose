@@ -75,6 +75,14 @@ impl<T> Emitter<T> {
         lock(&self.slot).take()
     }
 
+    /// Emits every value of `flow` in turn — Kotlin's `emitAll`.
+    pub async fn emit_all<F: Flow<Item = T>>(&self, flow: F) {
+        let mut run = flow.open();
+        while let Some(value) = std::future::poll_fn(|cx| Pin::new(&mut run).poll_next(cx)).await {
+            self.emit(value).await;
+        }
+    }
+
     /// Hands `value` to the collector and resumes once it was taken.
     pub fn emit(&self, value: T) -> Emit<'_, T> {
         Emit {

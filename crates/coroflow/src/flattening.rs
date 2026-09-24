@@ -13,6 +13,10 @@ enum Switching {
     Concurrent(usize),
 }
 
+/// The flow returned by [`flatten_concat`](crate::FlowExt::flatten_concat)
+/// and [`flatten_merge`](crate::FlowExt::flatten_merge).
+pub type Flatten<F> = FlatMap<F, fn(<F as Flow>::Item) -> <F as Flow>::Item>;
+
 /// The flow returned by [`flat_map_latest`](crate::FlowExt::flat_map_latest),
 /// [`flat_map_merge`](crate::FlowExt::flat_map_merge) and
 /// [`flat_map_concat`](crate::FlowExt::flat_map_concat).

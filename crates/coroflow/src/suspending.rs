@@ -233,7 +233,7 @@ impl<Fut: Future> Running<Fut> {
     }
 }
 
-struct Actions<T, F, M: Step<T, F>> {
+pub(crate) struct Actions<T, F, M: Step<T, F>> {
     action: F,
     running: Running<M::Action>,
     held: Option<M::Held>,
@@ -242,7 +242,7 @@ struct Actions<T, F, M: Step<T, F>> {
 }
 
 impl<T, F: Clone, M: Step<T, F>> Actions<T, F, M> {
-    fn new(action: F) -> Self {
+    pub(crate) fn new(action: F) -> Self {
         Self {
             action,
             running: Running { slot: None },
@@ -252,13 +252,13 @@ impl<T, F: Clone, M: Step<T, F>> Actions<T, F, M> {
         }
     }
 
-    fn start(&mut self, value: T) {
+    pub(crate) fn start(&mut self, value: T) {
         let (action, held) = M::start(self.action.clone(), value, &mut self.emitter);
         self.running.start(action);
         self.held = Some(held);
     }
 
-    fn poll(&mut self, cx: &mut Context<'_>) -> Poll<Option<Finish<M::Item>>> {
+    pub(crate) fn poll(&mut self, cx: &mut Context<'_>) -> Poll<Option<Finish<M::Item>>> {
         let polled = self.running.poll(cx);
         let running = polled.is_pending();
         if let Poll::Ready(Some(output)) = polled

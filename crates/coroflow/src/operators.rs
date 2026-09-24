@@ -379,47 +379,98 @@ impl<S: Stream + Unpin> Stream for TakeRun<S> {
     }
 }
 
-/// The flow returned by
-/// [`distinct_until_changed`](crate::FlowExt::distinct_until_changed).
-#[derive(Clone)]
-pub struct DistinctUntilChanged<F> {
-    upstream: F,
+/// How [`DistinctUntilChanged`] decides that a value changed: by the whole
+/// value ([`WholeValue`]) or by a key closure `Fn(&T) -> K`.
+pub trait ChangeKey<T> {
+    /// What is compared between consecutive values.
+    type Key: PartialEq;
+
+    /// Remembers the key of `value` in `last` and reports whether it differs
+    /// from the key remembered before.
+    fn changed(&self, last: &mut Option<Self::Key>, value: &T) -> bool;
 }
 
-impl<F> DistinctUntilChanged<F> {
-    pub(crate) fn new(upstream: F) -> Self {
-        Self { upstream }
+/// Compares whole values — plain
+/// [`distinct_until_changed`](crate::FlowExt::distinct_until_changed).
+#[derive(Clone, Copy)]
+pub struct WholeValue;
+
+impl<T: PartialEq + Clone> ChangeKey<T> for WholeValue {
+    type Key = T;
+
+    fn changed(&self, last: &mut Option<T>, value: &T) -> bool {
+        match last {
+            Some(previous) if previous == value => false,
+            Some(previous) => {
+                previous.clone_from(value);
+                true
+            }
+            None => {
+                *last = Some(value.clone());
+                true
+            }
+        }
+    }
+}
+
+impl<T, K: PartialEq, F: Fn(&T) -> K> ChangeKey<T> for F {
+    type Key = K;
+
+    fn changed(&self, last: &mut Option<K>, value: &T) -> bool {
+        let key = self(value);
+        if last.as_ref() == Some(&key) {
+            return false;
+        }
+        *last = Some(key);
+        true
+    }
+}
+
+/// The flow returned by
+/// [`distinct_until_changed`](crate::FlowExt::distinct_until_changed) and
+/// [`distinct_until_changed_by`](crate::FlowExt::distinct_until_changed_by).
+#[derive(Clone)]
+pub struct DistinctUntilChanged<F, K> {
+    upstream: F,
+    key: K,
+}
+
+impl<F, K> DistinctUntilChanged<F, K> {
+    pub(crate) fn new(upstream: F, key: K) -> Self {
+        Self { upstream, key }
     }
 }
 
 /// One run of a [`DistinctUntilChanged`].
-pub struct DistinctRun<S: Stream> {
+pub struct DistinctRun<S: Stream, K: ChangeKey<S::Item>> {
     upstream: S,
-    last: Option<S::Item>,
+    key: K,
+    last: Option<K::Key>,
 }
 
-impl<S: Stream> Unpin for DistinctRun<S> {}
+impl<S: Stream, K: ChangeKey<S::Item>> Unpin for DistinctRun<S, K> {}
 
-impl<F> Flow for DistinctUntilChanged<F>
+impl<F, K> Flow for DistinctUntilChanged<F, K>
 where
     F: Flow,
-    F::Item: PartialEq + Clone,
+    K: ChangeKey<F::Item> + Clone,
 {
     type Item = F::Item;
-    type Run = DistinctRun<F::Run>;
+    type Run = DistinctRun<F::Run, K>;
 
     fn open(&self) -> Self::Run {
         DistinctRun {
             upstream: self.upstream.open(),
+            key: self.key.clone(),
             last: None,
         }
     }
 }
 
-impl<S> Stream for DistinctRun<S>
+impl<S, K> Stream for DistinctRun<S, K>
 where
     S: Stream + Unpin,
-    S::Item: PartialEq + Clone,
+    K: ChangeKey<S::Item>,
 {
     type Item = S::Item;
 
@@ -427,14 +478,7 @@ where
         let this = self.get_mut();
         loop {
             match poll_run(&mut this.upstream, cx) {
-                Poll::Ready(Some(value)) if this.last.as_ref() == Some(&value) => continue,
-                Poll::Ready(Some(value)) => {
-                    match &mut this.last {
-                        Some(last) => last.clone_from(&value),
-                        None => this.last = Some(value.clone()),
-                    }
-                    return Poll::Ready(Some(value));
-                }
+                Poll::Ready(Some(value)) if !this.key.changed(&mut this.last, &value) => {}
                 other => return other,
             }
         }

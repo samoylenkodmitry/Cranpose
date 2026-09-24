@@ -6,27 +6,10 @@ use std::{
     time::Duration,
 };
 
-use coroflow::{Flow, FlowExt, SendFlow, TestScheduler, delay, flow, flow_of};
+mod support;
 
-struct DropMarker(Arc<AtomicUsize>);
-
-impl Drop for DropMarker {
-    fn drop(&mut self) {
-        self.0.fetch_add(1, Ordering::SeqCst);
-    }
-}
-
-fn timed(steps: Vec<(u64, u32)>) -> impl SendFlow<Item = u32> + Clone {
-    flow(move |emitter| {
-        let steps = steps.clone();
-        async move {
-            for (wait, value) in steps {
-                delay(Duration::from_millis(wait)).await;
-                emitter.emit(value).await;
-            }
-        }
-    })
-}
+use coroflow::{Flow, FlowExt, TestScheduler, delay, flow_of};
+use support::{DropMarker, endless, timed};
 
 fn timeline<F: Flow>(scheduler: &TestScheduler, flow: &F) -> Vec<(u64, F::Item)> {
     let mut seen = Vec::new();
@@ -124,17 +107,7 @@ fn transform_may_emit_any_number_of_values_and_suspend_between_them() {
 fn transform_while_completes_and_cancels_the_upstream_once_it_returns_false() {
     let scheduler = TestScheduler::new();
     let dropped = Arc::new(AtomicUsize::new(0));
-    let marker = Arc::clone(&dropped);
-    let endless = flow(move |emitter| {
-        let marker = Arc::clone(&marker);
-        async move {
-            let _upstream = DropMarker(marker);
-            for value in 1..=u32::MAX {
-                delay(Duration::from_millis(10)).await;
-                emitter.emit(value).await;
-            }
-        }
-    });
+    let endless = endless(&dropped);
     let bounded = endless.transform_while(async |value: u32, emitter| {
         emitter.emit(value).await;
         value < 3
