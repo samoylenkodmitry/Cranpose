@@ -2140,6 +2140,54 @@ fn semantics_tree_derives_roles_from_configuration() -> Result<(), NodeError> {
 }
 
 #[test]
+fn reading_semantics_snapshots_keeps_the_live_requester_bound() -> Result<(), NodeError> {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let requester = crate::modifier::SemanticsRequester::new();
+    let mut applier = MemoryApplier::new();
+    let node_id = applier.create(Box::new(LayoutNode::new(
+        Modifier::empty(),
+        Rc::new(MaxSizePolicy),
+    )));
+    applier.with_node::<LayoutNode, _>(node_id, |node| {
+        node.set_node_id(node_id);
+        node.set_modifier(
+            Modifier::empty()
+                .semantics_requester(&requester)
+                .content_description("Clock"),
+        );
+    })?;
+    measure_layout_with_options(
+        &mut applier,
+        node_id,
+        Size::new(100.0, 100.0),
+        MeasureLayoutOptions {
+            collect_semantics: false,
+            build_layout_tree: false,
+        },
+    )?;
+    assert_eq!(requester.node_id(), Some(node_id), "attaching");
+    let measurements = measure_layout(&mut applier, node_id, Size::new(100.0, 100.0))?;
+    assert_eq!(requester.node_id(), Some(node_id), "measuring");
+
+    let layout = measurements.layout_tree().expect("measured layout");
+    assert_eq!(
+        build_semantics_tree_from_layout_tree(&layout)
+            .root()
+            .description
+            .as_deref(),
+        Some("Clock")
+    );
+    assert_eq!(requester.node_id(), Some(node_id), "semantics snapshot");
+    crate::focus_order::collect_focus_order(&layout);
+    assert_eq!(requester.node_id(), Some(node_id), "focus order");
+    crate::focus_navigation::keyboard_focus_target(&layout, None, crate::KeyCode::Tab, false);
+    assert_eq!(requester.node_id(), Some(node_id), "keyboard navigation");
+    build_semantics_tree_from_applier(&mut applier, node_id)?;
+    assert_eq!(requester.node_id(), Some(node_id), "retained semantics");
+    Ok(())
+}
+
+#[test]
 fn recycled_node_generation_reaches_every_semantics_snapshot() -> Result<(), NodeError> {
     let _app_context = crate::render_state::app_context_test_scope();
     let make_node = || {

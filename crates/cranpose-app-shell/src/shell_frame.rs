@@ -1026,29 +1026,32 @@ fn refresh_layout_box_data(
     }
 
     if dirty_nodes.contains(&layout.node_id) {
-        if let Ok((modifier, resolved_modifiers, slices)) =
-            applier.with_node::<LayoutNode, _>(layout.node_id, |node| {
+        let refreshed = applier
+            .with_node::<LayoutNode, _>(layout.node_id, |node| {
                 node.clear_needs_redraw();
                 (
                     node.modifier.clone(),
                     node.resolved_modifiers(),
                     node.modifier_slices_snapshot(),
+                    node.semantics_configuration(),
                 )
             })
-        {
+            .or_else(|_| {
+                applier.with_node::<SubcomposeLayoutNode, _>(layout.node_id, |node| {
+                    node.clear_needs_redraw();
+                    (
+                        node.modifier(),
+                        node.resolved_modifiers(),
+                        node.modifier_slices_snapshot(),
+                        node.semantics_configuration(),
+                    )
+                })
+            });
+        if let Ok((modifier, resolved_modifiers, slices, semantics)) = refreshed {
             layout.node_data.modifier = modifier;
             layout.node_data.resolved_modifiers = resolved_modifiers;
             layout.node_data.modifier_slices = slices;
-        } else if let Ok((modifier, resolved_modifiers)) = applier
-            .with_node::<SubcomposeLayoutNode, _>(layout.node_id, |node| {
-                node.clear_needs_redraw();
-                (node.modifier(), node.resolved_modifiers())
-            })
-        {
-            layout.node_data.modifier = modifier.clone();
-            layout.node_data.resolved_modifiers = resolved_modifiers;
-            layout.node_data.modifier_slices =
-                std::rc::Rc::new(cranpose_ui::collect_slices_from_modifier(&modifier));
+            layout.node_data.semantics = semantics.map(std::rc::Rc::new);
         }
     }
 

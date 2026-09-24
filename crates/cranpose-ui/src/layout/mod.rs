@@ -31,7 +31,6 @@ use crate::{
     modifier::{
         DimensionConstraint, EdgeInsets, Modifier, ModifierNodeSlices,
         ModifierNodeSlicesDebugStats, Point, Rect as GeometryRect, ResolvedModifiers, Size,
-        collect_semantics_from_modifier,
     },
     subcompose_layout::{CachedBatchMeasureInputs, SubcomposeLayoutNode},
     widgets::nodes::{IntrinsicKind, LayoutNode, LayoutNodeCacheHandles, LayoutState},
@@ -651,6 +650,7 @@ pub struct LayoutNodeData {
     pub modifier: Modifier,
     pub resolved_modifiers: ResolvedModifiers,
     pub modifier_slices: Rc<ModifierNodeSlices>,
+    pub semantics: Option<Rc<SemanticsConfiguration>>,
     pub kind: LayoutNodeKind,
 }
 
@@ -659,14 +659,22 @@ impl LayoutNodeData {
         modifier: Modifier,
         resolved_modifiers: ResolvedModifiers,
         modifier_slices: Rc<ModifierNodeSlices>,
+        semantics: Option<Rc<SemanticsConfiguration>>,
         kind: LayoutNodeKind,
     ) -> Self {
         Self {
             modifier,
             resolved_modifiers,
             modifier_slices,
+            semantics,
             kind,
         }
+    }
+
+    /// Semantics the node's live modifier chain reported when the snapshot
+    /// was taken.
+    pub fn semantics(&self) -> Option<&SemanticsConfiguration> {
+        self.semantics.as_deref()
     }
 
     pub fn resolved_modifiers(&self) -> ResolvedModifiers {
@@ -830,6 +838,43 @@ fn layout_snapshot(
     }
 }
 
+fn snapshot_node_data(
+    applier: &mut MemoryApplier,
+    node_id: NodeId,
+    top_left: Point,
+    size: Size,
+    parent_layer_translation: Point,
+) -> Result<(LayoutNodeData, Point), NodeError> {
+    let info = runtime_metadata_for(applier, node_id)?;
+    let kind = layout_kind_from_metadata(node_id, &info);
+    let RuntimeNodeMetadata {
+        modifier,
+        resolved_modifiers,
+        modifier_slices,
+        semantics,
+        ..
+    } = info;
+
+    let layer_translation = match modifier_slices.graphics_layer() {
+        Some(layer) => Point {
+            x: parent_layer_translation.x + layer.translation_x,
+            y: parent_layer_translation.y + layer.translation_y,
+        },
+        None => parent_layer_translation,
+    };
+
+    publish_window_geometry(&modifier_slices, top_left, layer_translation, size);
+
+    let data = LayoutNodeData::new(
+        modifier,
+        resolved_modifiers,
+        modifier_slices,
+        semantics,
+        kind,
+    );
+    Ok((data, layer_translation))
+}
+
 fn place_layout_box(
     applier: &mut MemoryApplier,
     node_id: NodeId,
@@ -853,26 +898,13 @@ fn place_layout_box(
         width: state.size().width,
         height: state.size().height,
     };
-    let info = runtime_metadata_for(applier, node_id)?;
-    let kind = layout_kind_from_metadata(node_id, &info);
-    let RuntimeNodeMetadata {
-        modifier,
-        resolved_modifiers,
-        modifier_slices,
-        ..
-    } = info;
-
-    let layer_translation = match modifier_slices.graphics_layer() {
-        Some(layer) => Point {
-            x: parent_layer_translation.x + layer.translation_x,
-            y: parent_layer_translation.y + layer.translation_y,
-        },
-        None => parent_layer_translation,
-    };
-
-    publish_window_geometry(&modifier_slices, top_left, layer_translation, state.size());
-
-    let data = LayoutNodeData::new(modifier, resolved_modifiers, modifier_slices, kind);
+    let (data, layer_translation) = snapshot_node_data(
+        applier,
+        node_id,
+        top_left,
+        state.size(),
+        parent_layer_translation,
+    )?;
     let child_origin = Point {
         x: top_left.x + state.content_offset.x,
         y: top_left.y + state.content_offset.y,
@@ -944,7 +976,7 @@ pub fn build_semantics_tree_from_applier(
             if !state.is_placed() {
                 return None;
             }
-            let config = collect_semantics_from_modifier(&subcompose.modifier());
+            let config = subcompose.semantics_configuration();
             let children = subcompose.active_children();
             subcompose.clear_needs_semantics();
             Some((config, children, state.size()))
@@ -3104,6 +3136,7 @@ struct RuntimeNodeMetadata {
     modifier: Modifier,
     resolved_modifiers: ResolvedModifiers,
     modifier_slices: Rc<ModifierNodeSlices>,
+    semantics: Option<Rc<SemanticsConfiguration>>,
     role: SemanticsRole,
     button_handler: Option<Rc<RefCell<dyn FnMut()>>>,
 }
@@ -3114,6 +3147,7 @@ impl Default for RuntimeNodeMetadata {
             modifier: Modifier::empty(),
             resolved_modifiers: ResolvedModifiers::default(),
             modifier_slices: Rc::default(),
+            semantics: None,
             role: SemanticsRole::Unknown,
             button_handler: None,
         }
@@ -3142,6 +3176,7 @@ fn runtime_metadata_for(
             modifier,
             resolved_modifiers,
             modifier_slices,
+            semantics: layout.semantics_configuration().map(Rc::new),
             role,
             button_handler: None,
         }
@@ -3149,12 +3184,13 @@ fn runtime_metadata_for(
         return Ok(meta);
     }
 
-    if let Ok((modifier, resolved_modifiers, modifier_slices)) = applier
-        .with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
+    if let Ok((modifier, resolved_modifiers, modifier_slices, semantics)) =
+        applier.with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
             (
                 node.modifier(),
                 node.resolved_modifiers(),
                 node.modifier_slices_snapshot(),
+                node.semantics_configuration().map(Rc::new),
             )
         })
     {
@@ -3162,6 +3198,7 @@ fn runtime_metadata_for(
             modifier,
             resolved_modifiers,
             modifier_slices,
+            semantics,
             role: SemanticsRole::Subcompose,
             button_handler: None,
         });
@@ -3304,7 +3341,7 @@ fn build_semantics_node_from_live_nodes(
                 subcompose.clear_needs_semantics();
                 (
                     SemanticsRole::Subcompose,
-                    collect_semantics_from_modifier(&subcompose.modifier()),
+                    subcompose.semantics_configuration(),
                 )
             }) {
                 Ok(data) => data,
@@ -3391,26 +3428,13 @@ fn build_layout_tree(
             width: node.size.width,
             height: node.size.height,
         };
-        let info = runtime_metadata_for(applier, node.node_id)?;
-        let kind = layout_kind_from_metadata(node.node_id, &info);
-        let RuntimeNodeMetadata {
-            modifier,
-            resolved_modifiers,
-            modifier_slices,
-            ..
-        } = info;
-
-        let layer_translation = match modifier_slices.graphics_layer() {
-            Some(layer) => Point {
-                x: parent_layer_translation.x + layer.translation_x,
-                y: parent_layer_translation.y + layer.translation_y,
-            },
-            None => parent_layer_translation,
-        };
-
-        publish_window_geometry(&modifier_slices, top_left, layer_translation, node.size);
-
-        let data = LayoutNodeData::new(modifier, resolved_modifiers, modifier_slices, kind);
+        let (data, layer_translation) = snapshot_node_data(
+            applier,
+            node.node_id,
+            top_left,
+            node.size,
+            parent_layer_translation,
+        )?;
         let mut children = Vec::with_capacity(node.children.len());
         for child in &node.children {
             if crate::modifier::is_window_root(applier, child.node.node_id) {
@@ -3468,7 +3492,7 @@ fn build_semantics_node_from_layout_box(layout_box: &LayoutBox) -> SemanticsNode
         layout_box.node_id,
         layout_box.node_generation,
         semantics_role_from_layout_box(layout_box),
-        collect_semantics_from_modifier(&layout_box.node_data.modifier),
+        layout_box.node_data.semantics().cloned(),
         children,
         Size::new(layout_box.rect.width, layout_box.rect.height),
     )
