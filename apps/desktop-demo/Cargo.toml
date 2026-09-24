@@ -6,6 +6,7 @@ edition = "2021"
 description = "Cranpose desktop demo application."
 repository = "https://github.com/samoylenkodmitry/cranpose"
 license = "Apache-2.0"
+autotests = false
 
 [lints]
 workspace = true
@@ -1038,3 +1039,7 @@ required-features = ["desktop", "robot-app"]
 name = "robot_glass_feed_wheel"
 path = "robot-runners/robot_glass_feed_wheel.rs"
 required-features = ["robot-app"]
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"

@@ -1,5 +1,3 @@
-pub mod tab_switch_regression_support;
-
 use cranpose_core::{
     debug_recompose_scope_registry_stats, snapshot_pinning::debug_snapshot_pinning_stats,
     snapshot_v2::debug_snapshot_v2_stats,
@@ -11,6 +9,8 @@ use desktop_app::app::{
 use tab_switch_regression_support::{
     set_active_tab, set_recursive_depth, wait_for_recursive_depth_registration,
 };
+
+use crate::tab_switch_regression_support;
 
 #[derive(Clone, Copy, Debug)]
 struct RuntimeLeakDebugStats {

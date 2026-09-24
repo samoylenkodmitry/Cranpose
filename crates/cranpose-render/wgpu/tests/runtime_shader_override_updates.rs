@@ -1,12 +1,9 @@
-mod support;
-
-#[path = "../src/test_support.rs"]
-mod shared_test_support;
-
 use cranpose_render_common::graph::{ProjectiveTransform, RenderNode};
 use cranpose_ui_graphics::{
     Color, GraphicsLayer, RUNTIME_SHADER_PRELUDE_WGSL, Rect, RenderEffect, RuntimeShader,
 };
+
+use crate::{shared_test_support, support};
 
 #[test]
 fn changing_cloned_overrides_replaces_the_pipeline_without_changing_the_original() {

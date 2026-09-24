@@ -10,6 +10,7 @@ keywords.workspace = true
 categories.workspace = true
 readme = "README.md"
 description = "UI primitives for Cranpose"
+autotests = false
 
 [package.metadata.docs.rs]
 all-features = true
@@ -56,5 +57,5 @@ name = "slot_table_v2"
 harness = false
 
 [[test]]
-name = "svg_painter_integration"
-required-features = ["svg"]
+name = "integration"
+path = "tests/integration.rs"

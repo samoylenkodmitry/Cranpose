@@ -1,7 +1,5 @@
 #![cfg(any(target_os = "linux", target_os = "android"))]
 
-mod support;
-
 use std::{
     rc::Rc,
     time::{Duration, Instant},
@@ -16,6 +14,8 @@ use cranpose_render_common::{
 };
 use cranpose_ui_graphics::{BlendMode, Brush, Color, DrawScope, DrawScopeDefault, Rect, Size};
 use support::SIZE;
+
+use crate::support;
 
 fn graph(stored: bool, phase: f32) -> RenderGraph {
     let bounds = Rect {

@@ -1,8 +1,3 @@
-mod support;
-
-#[path = "../src/test_support.rs"]
-mod shared_test_support;
-
 use cranpose_render_common::graph::{ProjectiveTransform, RenderGraph, RenderNode};
 use cranpose_render_wgpu::CapturedFrame;
 use cranpose_ui_graphics::{
@@ -10,14 +5,11 @@ use cranpose_ui_graphics::{
 };
 use support::solid_rect;
 
-const FRAME_WIDTH: u32 = 240;
-const FRAME_HEIGHT: u32 = 120;
-const GLASS: Rect = Rect {
-    x: 80.0,
-    y: 30.0,
-    width: 96.0,
-    height: 60.0,
+use crate::{
+    shared_test_support, support,
+    support::glass_scene::{FRAME_HEIGHT, FRAME_WIDTH, GLASS},
 };
+
 const SUPPORT: Rect = Rect {
     x: 60.0,
     y: 24.0,

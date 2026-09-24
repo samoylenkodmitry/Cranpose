@@ -1,5 +1,3 @@
-mod support;
-
 use std::{cell::RefCell, rc::Rc};
 
 use cranpose_app_shell::AppShell;
@@ -13,6 +11,8 @@ use cranpose_ui_graphics::{
     CompositingStrategy, GraphicsLayer, LiquidGlassRect, LiquidGlassSpec, TileMode,
     liquid_glass_effect,
 };
+
+use crate::support;
 
 const FRAME_WIDTH: u32 = 640;
 const FRAME_HEIGHT: u32 = 640;

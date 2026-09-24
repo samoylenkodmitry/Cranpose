@@ -1344,3 +1344,32 @@ pub mod glass_page {
         )
     }
 }
+
+/// The frame and glass pane the effect-domain and capture-culling tests
+/// share.
+pub mod glass_scene {
+    use cranpose_ui_graphics::Rect;
+
+    pub const FRAME_WIDTH: u32 = 240;
+    pub const FRAME_HEIGHT: u32 = 120;
+    pub const GLASS: Rect = Rect {
+        x: 80.0,
+        y: 30.0,
+        width: 96.0,
+        height: 60.0,
+    };
+}
+
+/// The frame and bar the layer-cache and shader-identity tests share.
+pub mod bar_scene {
+    use cranpose_ui_graphics::Rect;
+
+    pub const WIDTH: u32 = 160;
+    pub const HEIGHT: u32 = 96;
+    pub const BAR: Rect = Rect {
+        x: 20.0,
+        y: 24.0,
+        width: 120.0,
+        height: 48.0,
+    };
+}

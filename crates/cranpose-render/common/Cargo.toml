@@ -10,6 +10,7 @@ keywords.workspace = true
 categories.workspace = true
 readme = "README.md"
 description = "Common rendering contracts for Cranpose"
+autotests = false
 
 [package.metadata.docs.rs]
 all-features = true
@@ -38,3 +39,7 @@ default = ["embedded-default-font"]
 embedded-default-font = []
 text-hyphenation = ["dep:hyphenation"]
 text-hyphenation-embedded = ["text-hyphenation", "hyphenation/embed_all"]
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"

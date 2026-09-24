@@ -10,6 +10,7 @@ homepage.workspace = true
 authors.workspace = true
 keywords.workspace = true
 categories.workspace = true
+autotests = false
 
 [dependencies]
 futures-core = "0.3.32"
@@ -28,3 +29,7 @@ workspace = true
 [dev-dependencies]
 pollster = "0.4"
 stats_alloc = "0.1.10"
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"

@@ -1,5 +1,3 @@
-mod support;
-
 use std::{cell::RefCell, rc::Rc};
 
 use cranpose_app_shell::AppShell;
@@ -11,6 +9,8 @@ use cranpose_ui::{
     widgets::{Box, BoxSpec, Column, ColumnSpec, LazyColumn, LazyColumnSpec, Text},
 };
 use support::max_channel_delta;
+
+use crate::support;
 
 const FRAME_WIDTH: u32 = 640;
 const FRAME_HEIGHT: u32 = 640;

@@ -1,5 +1,3 @@
-pub mod tab_switch_regression_support;
-
 use cranpose_core::{location_key, Composition, MemoryApplier, NodeError};
 use cranpose_testing::robot::{create_headless_robot_test, RobotTestRule, TestRenderer};
 use cranpose_ui::{
@@ -11,6 +9,8 @@ use desktop_app::app::{
     combined_app, DemoTab, TEST_ACTIVE_TAB_STATE, TEST_COMPOSITION_LOCAL_COUNTER,
 };
 use tab_switch_regression_support::{set_active_tab, wait_for_active_tab_registration_robot};
+
+use crate::tab_switch_regression_support;
 
 fn drain_all(composition: &mut Composition<MemoryApplier>) -> Result<(), NodeError> {
     loop {

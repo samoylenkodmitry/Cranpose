@@ -1,6 +1,4 @@
-#[path = "../src/test_screens/liquid_tab_reference.rs"]
-#[allow(dead_code)]
-mod reference;
+use crate::reference;
 
 #[test]
 fn reference_configuration_rejects_invalid_values_and_cannot_change_after_initialization() {

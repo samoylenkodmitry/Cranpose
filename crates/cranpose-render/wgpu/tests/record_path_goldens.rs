@@ -1,8 +1,3 @@
-mod support;
-
-#[path = "../src/test_support.rs"]
-mod shared_test_support;
-
 use std::path::PathBuf;
 
 use cranpose_render_common::{
@@ -17,6 +12,8 @@ use cranpose_ui_graphics::{
     DrawScope, DrawScopeDefault, GraphicsLayer, Point, Rect, ShadowPrimitive, Size, Stroke,
 };
 use support::{SIZE, record_mixed_scene, record_solid_scene};
+
+use crate::{shared_test_support, support};
 
 const WRITE_ENV: &str = "CRANPOSE_WRITE_GOLDENS";
 const MAX_SMALL_DIFF_FRACTION: f64 = 0.005;

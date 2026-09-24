@@ -1,18 +1,9 @@
-mod support;
-
-#[path = "../src/test_support.rs"]
-mod shared_test_support;
-
 use cranpose_render_common::graph::{ProjectiveTransform, RenderNode};
-use cranpose_ui_graphics::{GraphicsLayer, Rect, RenderEffect, RuntimeShader};
+use cranpose_ui_graphics::{GraphicsLayer, RenderEffect, RuntimeShader};
 
-const WIDTH: u32 = 160;
-const HEIGHT: u32 = 96;
-const BAR: Rect = Rect {
-    x: 20.0,
-    y: 24.0,
-    width: 120.0,
-    height: 48.0,
+use crate::{
+    shared_test_support, support,
+    support::bar_scene::{BAR, HEIGHT, WIDTH},
 };
 
 /// The liquid tab bar's lighting shader, the way the bar registers it for

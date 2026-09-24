@@ -1,5 +1,3 @@
-mod support;
-
 use cranpose_render_common::{
     Renderer,
     graph::{DrawRunNode, PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode},
@@ -7,6 +5,8 @@ use cranpose_render_common::{
 use cranpose_ui_graphics::{
     Brush, Color, CompositingStrategy, DrawScope, DrawScopeDefault, GraphicsLayer, Size,
 };
+
+use crate::support;
 
 const COLUMNS: u32 = 16;
 const ROWS: u32 = 20;

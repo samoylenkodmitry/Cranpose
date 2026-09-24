@@ -1,7 +1,7 @@
-mod support;
-
 use cranpose_render_common::{Renderer, graph::RenderGraph};
 use cranpose_ui_graphics::{Color, Rect};
+
+use crate::support;
 
 const WIDTH: u32 = 128;
 const HEIGHT: u32 = 96;

@@ -1,11 +1,11 @@
-mod support;
-
 use cranpose_liquid::{
     Glass, GlassDynamics, LiquidModifierExt, LiquidShape, LiquidTheme, LiquidThemeSpec,
 };
 use cranpose_render_wgpu::{CapturedFrame, RenderStatsSnapshot};
 use cranpose_ui_graphics::{Brush, Point, Rect, TileMode};
 use support::page::*;
+
+use crate::support;
 
 const FRAME_WIDTH: u32 = 360;
 const FRAME_HEIGHT: u32 = 240;

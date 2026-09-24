@@ -1,7 +1,7 @@
-mod support;
-
 use cranpose_render_wgpu::{clear_to_default_background, offscreen_render_target_for_tests};
 use support::read_texture;
+
+use crate::support;
 
 fn headless_device() -> Option<(wgpu::Device, wgpu::Queue)> {
     let adapter = support::device::headless_adapter(wgpu::Backends::all()).ok()?;
