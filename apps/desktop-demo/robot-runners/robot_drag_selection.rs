@@ -1,4 +1,4 @@
-mod robot_launch;
+use crate::{robot_exit, robot_handle_probe, robot_launch, text_input_robot_helpers};
 
 use std::{
     path::{Path, PathBuf},
@@ -10,13 +10,9 @@ use cranpose_testing::{find_button, find_in_semantics, find_text};
 use desktop_app::app;
 use image::RgbaImage;
 
-mod robot_exit;
-mod robot_handle_probe;
-mod text_input_robot_helpers;
-
 type SelectedEditable = ((f32, f32, f32, f32), (usize, usize));
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Click-Drag Selection Test ===\n");
     let shot_dir = PathBuf::from(

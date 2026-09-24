@@ -1,6 +1,4 @@
-mod robot_launch;
-
-mod robot_exit;
+use crate::{robot_exit, robot_launch};
 
 use std::time::Duration;
 
@@ -27,7 +25,7 @@ fn click_tab(robot: &cranpose::Robot, label: &str) -> bool {
     true
 }
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Robot Tab Roundtrip Content Test ===");
 

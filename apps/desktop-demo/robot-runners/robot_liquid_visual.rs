@@ -28,7 +28,7 @@ struct PixelCrop {
     height: u32,
 }
 
-fn main() {
+pub(crate) fn main() {
     let _ = env_logger::try_init();
     let shot_dir = PathBuf::from(
         std::env::var("CRANPOSE_LIQUID_SHOT_DIR")

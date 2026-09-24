@@ -1,11 +1,11 @@
-mod robot_launch;
+use crate::robot_launch;
 
 use std::time::Duration;
 
 use cranpose_testing::{click_button_in_semantics, find_text_in_semantics};
 use desktop_app::app;
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Comprehensive LazyList Tab Robot Test ===\n");
 

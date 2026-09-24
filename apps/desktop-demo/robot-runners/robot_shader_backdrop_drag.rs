@@ -1,5 +1,4 @@
-mod output_paths;
-mod perf_contract;
+use crate::{output_paths, perf_contract};
 
 use std::{path::Path, time::Duration};
 
@@ -390,7 +389,7 @@ fn assert_effect_drag_performance(
     }
 }
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Robot Shader Backdrop Drag Test ===");
 

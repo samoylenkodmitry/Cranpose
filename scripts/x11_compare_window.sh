@@ -661,7 +661,12 @@ run_and_capture() {
     if [ -n "$cargo_features" ]; then
         cargo_build_args+=(--features "$cargo_features")
     fi
-    if [ -n "$example" ]; then
+    local binary_args=()
+    if [ -n "$example" ] && grep -qE "^    $example,$" "$root/apps/desktop-demo/robot-runners/main.rs" 2>/dev/null; then
+        cargo_build_args+=(--example robot)
+        binary="$target_dir/$profile_dir/examples/robot"
+        binary_args=("$example")
+    elif [ -n "$example" ]; then
         cargo_build_args+=(--example "$example")
         binary="$target_dir/$profile_dir/examples/$example"
     else
@@ -718,12 +723,12 @@ run_and_capture() {
             XDG_CACHE_HOME="$app_home/.cache" \
             XAUTHORITY="$app_xauthority" \
             "${app_env_vars[@]}" \
-            "$binary" >> "$log" 2>&1 &
+            "$binary" ${binary_args[@]+"${binary_args[@]}"} >> "$log" 2>&1 &
     else
         if [ "${#app_env_vars[@]}" -gt 0 ]; then
-            env "${app_env_vars[@]}" "$binary" >> "$log" 2>&1 &
+            env "${app_env_vars[@]}" "$binary" ${binary_args[@]+"${binary_args[@]}"} >> "$log" 2>&1 &
         else
-            "$binary" >> "$log" 2>&1 &
+            "$binary" ${binary_args[@]+"${binary_args[@]}"} >> "$log" 2>&1 &
         fi
     fi
     local app_pid=$!

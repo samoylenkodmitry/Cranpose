@@ -2,19 +2,18 @@
 # Regression test for run_robot_test.sh's robot example discovery.
 #
 # A robot test is a file matching robot_*.rs under apps/desktop-demo/
-# robot-runners/ or apps/desktop-demo/examples/ that defines `fn main`.
-# Everything else matching that glob is a module the runners share, and
-# cargo builds no binary for it. Before this predicate existed, discovery
-# hardcoded a single excluded filename; a second shared module named
-# robot_exit.rs was not on that list, cargo built no binary for it, and the
-# suite asked for one anyway and reported FAIL:missing_binary across the
-# whole board the day a release was being cut. This file pins the predicate
-# that replaced the hardcoded name, so a future shared module cannot repeat
-# that outage.
+# robot-runners/ that defines the runner entry point, `pub(crate) fn main`.
+# Everything else matching that glob is a module the runners share, and the
+# `robot` binary has no runner by that name. Before this predicate existed,
+# discovery hardcoded a single excluded filename; a second shared module
+# named robot_exit.rs was not on that list, and the suite asked for it anyway
+# and reported a failure across the whole board the day a release was being
+# cut. This file pins the predicate that replaced the hardcoded name, so a
+# future shared module cannot repeat that outage.
 #
 # The predicate has two independent halves -- the robot_*.rs glob and the
-# `fn main` grep -- and either one failing open reopens a different way to
-# break the suite. Asserting "not discovered" proves nothing by itself: a
+# `pub(crate) fn main` grep -- and either one failing open reopens a
+# different way to break the suite. Asserting "not discovered" proves nothing by itself: a
 # discovery loop that finds nothing at all would pass every negative
 # trivially. So every negative case here is replayed against a mutant with
 # the relevant half of the predicate inverted, and must flip to "discovered".
@@ -42,28 +41,21 @@ failures=0
 
 # --- fixtures ----------------------------------------------------------
 
-# Every combination the predicate has to tell apart, in both directories it
-# reads: right prefix with `fn main` (discovered), right prefix without it
-# (the robot_exit.rs shape), and wrong prefix with and without `fn main`
-# (never discovered, regardless of content).
+# Every combination the predicate has to tell apart: right prefix with the
+# entry point (discovered), right prefix without it (the robot_exit.rs
+# shape), and wrong prefix with and without it (never discovered, regardless
+# of content).
 mkdir -p "$fixture/apps/desktop-demo/robot-runners" \
-         "$fixture/apps/desktop-demo/examples" \
          "$fixture/scripts"
-
 runners="$fixture/apps/desktop-demo/robot-runners"
-examples="$fixture/apps/desktop-demo/examples"
-
-printf 'fn main() {}\n' > "$runners/robot_alpha_fixture.rs"
+printf 'pub(crate) fn main() {}\n' > "$runners/robot_alpha_fixture.rs"
+printf 'pub(crate) fn main() {}\n' > "$runners/robot_beta_fixture.rs"
 printf 'pub fn helper() {}\n' > "$runners/robot_exit_fixture.rs"
-printf 'fn main() {}\n' > "$runners/not_robot_launcher_fixture.rs"
+printf 'pub(crate) fn main() {}\n' > "$runners/not_robot_launcher_fixture.rs"
 printf 'pub fn helper() {}\n' > "$runners/not_robot_helper_fixture.rs"
 
-printf 'fn main() {}\n' > "$examples/robot_beta_fixture.rs"
-printf 'pub fn helper() {}\n' > "$examples/robot_helper_fixture.rs"
-
 # Stands in for a real `cargo build`. It echoes what it was asked to build,
-# so a selection down to a single example is verifiable by name and not
-# just by count.
+# so the one `robot` binary is verifiable by name.
 cat > "$fixture/cargo-dev.sh" <<'STUB'
 #!/usr/bin/env bash
 echo "STUB_BUILD_ARGS: $*"
@@ -78,7 +70,7 @@ ln -s "$dev_build_common" "$fixture/scripts/dev_build_common.sh"
 
 # A fresh copy of the subject, taken new on every run, so this test always
 # exercises whatever run_robot_test.sh currently does. It resolves
-# ROBOT_DIR/ROBOT_EXAMPLES_DIR relative to the working directory and its own
+# ROBOT_DIR relative to the working directory and its own
 # script directory relative to its invocation path, so it must be invoked
 # with the fixture as both cwd and its own directory for those to line up
 # with the stub cargo-dev.sh and the symlinked helper library above.
@@ -115,52 +107,46 @@ check() {
 echo "-- discovery --"
 
 run "$fixture/run_robot_test.sh" --example robot_alpha_fixture
-check "robot_*.rs with fn main is discovered (robot-runners/)" 0 "--example robot_alpha_fixture"
-
-run "$fixture/run_robot_test.sh" --example robot_beta_fixture
-check "robot_*.rs with fn main is discovered (examples/)" 0 "--example robot_beta_fixture"
+check "robot_*.rs with the entry point is discovered" 0 "completed for 1 runner(s)."
+check "the build asks for the one robot binary" 0 "--example robot"
 
 run "$fixture/run_robot_test.sh" --example robot_exit_fixture
-check "robot_*.rs without fn main is NOT discovered (robot-runners/, the robot_exit.rs shape)" \
+check "robot_*.rs without the entry point is NOT discovered (the robot_exit.rs shape)" \
     1 "Unknown robot example: robot_exit_fixture"
 
-run "$fixture/run_robot_test.sh" --example robot_helper_fixture
-check "robot_*.rs without fn main is NOT discovered (examples/)" \
-    1 "Unknown robot example: robot_helper_fixture"
-
 run "$fixture/run_robot_test.sh" --example not_robot_launcher_fixture
-check "non-robot_-prefixed file with fn main is NOT discovered" \
+check "non-robot_-prefixed file with the entry point is NOT discovered" \
     1 "Unknown robot example: not_robot_launcher_fixture"
 
 run "$fixture/run_robot_test.sh" --example not_robot_helper_fixture
-check "non-robot_-prefixed file without fn main is NOT discovered either" \
+check "non-robot_-prefixed file without the entry point is NOT discovered either" \
     1 "Unknown robot example: not_robot_helper_fixture"
 
 run "$fixture/run_robot_test.sh"
-check "default discovery spans both directories (2 valid of 4 robot_*.rs candidates)" \
-    0 "Build-only robot gate completed for 2 examples."
+check "default discovery finds 2 valid of 3 robot_*.rs candidates" \
+    0 "completed for 2 runner(s)."
 
 run "$fixture/run_robot_test.sh" --skip robot_alpha_fixture
 check "--skip excludes the named example" 0 "Skipping robot example: robot_alpha_fixture"
-check "--skip leaves the rest selected for build" 0 "--example robot_beta_fixture"
+check "--skip leaves the rest selected" 0 "completed for 1 runner(s)."
 
 # --- pass 2: the predicate halves must each be load-bearing -----------------
 #
-# mutant_a inverts the fn-main check alone: files without `fn main` are kept
+# mutant_a inverts the entry-point check alone: files without it are kept
 # and files with it are dropped. mutant_b broadens the glob alone: every
 # .rs file in the directory is considered, not just robot_*.rs. mutant_c
 # applies both, which is the only way to also flip the double negative --
-# wrong prefix and no `fn main` -- since inverting either half alone still
+# wrong prefix and no entry point -- since inverting either half alone still
 # leaves the other excluding it.
 mutant_a="$fixture/run_robot_test.mutant_a.sh"
 sed -E 's/^([[:space:]]*)if ! grep -qE/\1if grep -qE/' "$fixture/run_robot_test.sh" > "$mutant_a"
 if cmp -s "$fixture/run_robot_test.sh" "$mutant_a"; then
-    echo "FAIL  mutant_a did not apply -- the fn-main check moved, update this test" >&2
+    echo "FAIL  mutant_a did not apply -- the entry-point check moved, update this test" >&2
     exit 1
 fi
 
 mutant_b="$fixture/run_robot_test.mutant_b.sh"
-sed 's|"\$robot_source_dir"/robot_\*\.rs|"$robot_source_dir"/*.rs|' "$fixture/run_robot_test.sh" > "$mutant_b"
+sed 's|"\$ROBOT_DIR"/robot_\*\.rs|"$ROBOT_DIR"/*.rs|' "$fixture/run_robot_test.sh" > "$mutant_b"
 if cmp -s "$fixture/run_robot_test.sh" "$mutant_b"; then
     echo "FAIL  mutant_b did not apply -- the robot_*.rs glob moved, update this test" >&2
     exit 1
@@ -188,10 +174,8 @@ mutation_check() {
     fi
 }
 
-mutation_check "robot_exit_fixture flips when the fn-main check is inverted" \
+mutation_check "robot_exit_fixture flips when the entry-point check is inverted" \
     "$mutant_a" --example robot_exit_fixture
-mutation_check "robot_helper_fixture flips when the fn-main check is inverted" \
-    "$mutant_a" --example robot_helper_fixture
 mutation_check "not_robot_launcher_fixture flips when the robot_*.rs glob is broadened" \
     "$mutant_b" --example not_robot_launcher_fixture
 mutation_check "not_robot_helper_fixture flips only once both halves are broadened" \

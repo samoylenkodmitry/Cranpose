@@ -1,4 +1,4 @@
-mod robot_launch;
+use crate::robot_launch;
 
 use std::time::Duration;
 
@@ -30,7 +30,7 @@ fn wait_for_text_change(
     None
 }
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Robot Animation Showcase Test ===");
 

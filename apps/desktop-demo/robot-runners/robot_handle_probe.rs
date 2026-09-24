@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use cranpose::RobotScreenshot;
 
 pub fn is_blue_handle(r: u8, g: u8, b: u8) -> bool {

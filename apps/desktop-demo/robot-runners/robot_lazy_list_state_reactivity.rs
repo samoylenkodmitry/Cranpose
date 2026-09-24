@@ -1,13 +1,11 @@
-mod robot_launch;
-
-mod robot_exit;
+use crate::{robot_exit, robot_launch};
 
 use std::time::Duration;
 
 use cranpose_testing::{find_button_in_semantics, find_text_by_prefix_in_semantics};
 use desktop_app::app;
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== LazyListState Reactivity Test ===");
     println!("Testing that first_visible_item_index() triggers recomposition\n");

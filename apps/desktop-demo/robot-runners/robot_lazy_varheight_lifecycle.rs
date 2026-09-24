@@ -1,4 +1,4 @@
-mod robot_launch;
+use crate::robot_launch;
 
 use std::time::Duration;
 
@@ -148,7 +148,7 @@ fn variable_height_item(index: usize, stats: MutableState<LifecycleStats>) {
     );
 }
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Variable Height Lifecycle Robot Test ===");
 

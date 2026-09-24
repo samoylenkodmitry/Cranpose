@@ -1,4 +1,4 @@
-mod robot_launch;
+use crate::robot_launch;
 
 use std::{cmp::Ordering, time::Duration};
 
@@ -147,7 +147,7 @@ fn VariableHeightWheelReproScreen() {
     );
 }
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Lazy Wheel Backtrack Test ===");
 

@@ -6,7 +6,6 @@ use cranpose_testing::{
 };
 use image::RgbaImage;
 
-#[allow(dead_code)]
 pub(crate) fn find_window_id(title: &str) -> String {
     let process_id = std::process::id().to_string();
     for _ in 0..20 {
@@ -18,7 +17,6 @@ pub(crate) fn find_window_id(title: &str) -> String {
     panic!("window '{title}' not found via xdotool");
 }
 
-#[allow(dead_code)]
 pub(crate) fn take_x11_screenshot(window_id: &str, path: &str) {
     if let Some(parent) = Path::new(path).parent() {
         let _ = std::fs::create_dir_all(parent);
@@ -46,7 +44,6 @@ pub(crate) fn take_x11_screenshot(window_id: &str, path: &str) {
     );
 }
 
-#[allow(dead_code)]
 pub(crate) fn capture_x11_window(window_id: &str, path: &Path) -> RgbaImage {
     let path_text = path.to_string_lossy().into_owned();
     take_x11_screenshot(window_id, &path_text);
@@ -55,7 +52,6 @@ pub(crate) fn capture_x11_window(window_id: &str, path: &Path) -> RgbaImage {
         .to_rgba8()
 }
 
-#[allow(dead_code)]
 pub(crate) fn focus_x11_window(window_id: &str) {
     let _ = Command::new("xdotool")
         .args(["windowactivate", "--sync", window_id])
@@ -77,7 +73,6 @@ pub(crate) fn move_x11_mouse(x: f32, y: f32) {
     assert!(status.success(), "xdotool mousemove failed");
 }
 
-#[allow(dead_code)]
 pub(crate) fn move_x11_mouse_in_window(window_id: &str, x: f32, y: f32) {
     let x = x.round().to_string();
     let y = y.round().to_string();
@@ -91,7 +86,6 @@ pub(crate) fn move_x11_mouse_in_window(window_id: &str, x: f32, y: f32) {
     );
 }
 
-#[allow(dead_code)]
 pub(crate) fn click_x11_button(button: &str) {
     let status = Command::new("xdotool")
         .args(["click", button])
@@ -100,7 +94,6 @@ pub(crate) fn click_x11_button(button: &str) {
     assert!(status.success(), "xdotool click {button} failed");
 }
 
-#[allow(dead_code)]
 pub(crate) fn mouse_down_x11_button(button: &str) {
     let status = Command::new("xdotool")
         .args(["mousedown", button])
@@ -109,7 +102,6 @@ pub(crate) fn mouse_down_x11_button(button: &str) {
     assert!(status.success(), "xdotool mousedown {button} failed");
 }
 
-#[allow(dead_code)]
 pub(crate) fn mouse_up_x11_button(button: &str) {
     let status = Command::new("xdotool")
         .args(["mouseup", button])
@@ -118,7 +110,6 @@ pub(crate) fn mouse_up_x11_button(button: &str) {
     assert!(status.success(), "xdotool mouseup {button} failed");
 }
 
-#[allow(dead_code)]
 pub(crate) fn click_x11_button_repeated(button: &str, count: usize) {
     let count = count.to_string();
     let status = Command::new("xdotool")
@@ -131,7 +122,6 @@ pub(crate) fn click_x11_button_repeated(button: &str, count: usize) {
     );
 }
 
-#[allow(dead_code)]
 pub(crate) fn capture_x11_window_screenshot(
     window_id: &str,
     path: &Path,
@@ -253,7 +243,6 @@ fn command_stdout(program: &str, args: &[&str]) -> Option<String> {
     }
 }
 
-#[allow(dead_code)]
 pub(crate) fn open_text_tab(robot: &cranpose::Robot) {
     for _ in 0..3 {
         if let Some((x, y, w, h)) = wait_for_button_in_semantics(robot, "Shaders", 10) {
@@ -281,7 +270,6 @@ pub(crate) fn open_text_tab(robot: &cranpose::Robot) {
     panic!("Text showcase heading not found after tab switch");
 }
 
-#[allow(dead_code)]
 pub(crate) fn wait_for_text_showcase_heading(robot: &cranpose::Robot) {
     assert!(
         wait_for_text_in_semantics(robot, "Text Rendering Feature Showcase", 30),
@@ -337,7 +325,6 @@ pub fn wait_for_text_in_semantics(robot: &cranpose::Robot, text: &str, attempts:
     false
 }
 
-#[allow(dead_code)]
 pub(crate) fn scroll_text_into_view(
     robot: &cranpose::Robot,
     text: &str,

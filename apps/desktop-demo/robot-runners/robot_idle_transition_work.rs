@@ -1,4 +1,4 @@
-mod robot_launch;
+use crate::robot_launch;
 
 use std::{
     sync::atomic::{AtomicUsize, Ordering},
@@ -33,7 +33,7 @@ fn click_mode(robot: &cranpose::Robot, label: &str) {
     std::thread::sleep(Duration::from_millis(350));
 }
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     robot_launch::launch("Idle Transition Work", 800, 600).with_test_driver(|robot| {
             std::thread::sleep(Duration::from_millis(500));

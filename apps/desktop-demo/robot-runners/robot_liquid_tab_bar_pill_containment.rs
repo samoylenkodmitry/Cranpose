@@ -1,6 +1,4 @@
-mod robot_exit;
-mod robot_shot;
-mod robot_tab_fixture;
+use crate::{robot_exit, robot_shot, robot_tab_fixture};
 
 use std::{path::PathBuf, process::ExitCode, sync::atomic::AtomicBool, time::Duration};
 
@@ -29,7 +27,7 @@ const SETTLE_MS: u64 = 900;
 
 static FAILED: AtomicBool = AtomicBool::new(false);
 
-fn main() -> ExitCode {
+pub(crate) fn main() -> ExitCode {
     let _ = env_logger::try_init();
     let shot_dir = PathBuf::from(
         std::env::var("ROBOT_SHOT_DIR")

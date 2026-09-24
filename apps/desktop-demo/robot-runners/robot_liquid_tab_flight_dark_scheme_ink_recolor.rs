@@ -24,9 +24,7 @@
 //! cargo run --package desktop-app --example robot_liquid_tab_flight_dark_scheme_ink_recolor --features desktop,robot-app
 //! ```
 
-mod robot_exit;
-mod robot_shot;
-mod robot_tab_fixture;
+use crate::{robot_exit, robot_shot, robot_tab_fixture};
 
 use std::{path::PathBuf, process::ExitCode, sync::atomic::AtomicBool, time::Duration};
 
@@ -61,7 +59,7 @@ const ACCENT: Color = Color(0.0, 0.48, 1.0, 1.0);
 
 static FAILED: AtomicBool = AtomicBool::new(false);
 
-fn main() -> ExitCode {
+pub(crate) fn main() -> ExitCode {
     let _ = env_logger::try_init();
     let shot_dir = PathBuf::from(
         std::env::var("ROBOT_SHOT_DIR")

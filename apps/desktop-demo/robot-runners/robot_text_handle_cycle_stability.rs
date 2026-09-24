@@ -1,7 +1,4 @@
-mod robot_launch;
-
-mod robot_exit;
-mod robot_handle_probe;
+use crate::{robot_exit, robot_handle_probe, robot_launch};
 
 use std::time::Duration;
 
@@ -54,7 +51,7 @@ struct CycleSample {
     state_cells_len: usize,
 }
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Text Handle Cycle Stability ===\n");
 

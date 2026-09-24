@@ -95,15 +95,15 @@ Key JC behavior to match (sources above):
 Robot tests (run independently):
 
 ```
-cargo run --package desktop-app --example robot_lazy_list --features robot-app
-cargo run --package desktop-app --example robot_lazy_lifecycle --features robot-app
-cargo run --package desktop-app --example robot_lazy_perf_validation --features robot-app
-cargo run --package desktop-app --example robot_lazy_complex_scroll --features robot-app
-cargo run --package desktop-app --example robot_lazy_list_after_modifiers --features robot-app
-cargo run --package desktop-app --example robot_lazy_list_end_start_dup --features robot-app
-cargo run --package desktop-app --example robot_lazy_list_end_alignment --features robot-app
-cargo run --package desktop-app --example robot_positioned_boxes_after_lazy_list --features robot-app
-cargo run --package desktop-app --example robot_recursive_layout --features robot-app
+cargo run --package desktop-app --example robot --features robot-app -- robot_lazy_list
+cargo run --package desktop-app --example robot --features robot-app -- robot_lazy_lifecycle
+cargo run --package desktop-app --example robot --features robot-app -- robot_lazy_perf_validation
+cargo run --package desktop-app --example robot --features robot-app -- robot_lazy_complex_scroll
+cargo run --package desktop-app --example robot --features robot-app -- robot_lazy_list_after_modifiers
+cargo run --package desktop-app --example robot --features robot-app -- robot_lazy_list_end_start_dup
+cargo run --package desktop-app --example robot --features robot-app -- robot_lazy_list_end_alignment
+cargo run --package desktop-app --example robot --features robot-app -- robot_positioned_boxes_after_lazy_list
+cargo run --package desktop-app --example robot --features robot-app -- robot_recursive_layout
 ```
 
 Workspace verification:

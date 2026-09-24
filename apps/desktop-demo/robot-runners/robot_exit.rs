@@ -1,5 +1,3 @@
-#![expect(dead_code)]
-
 use std::{
     process::ExitCode,
     sync::atomic::{AtomicBool, Ordering},

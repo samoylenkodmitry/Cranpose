@@ -1,4 +1,4 @@
-mod robot_launch;
+use crate::robot_launch;
 
 use std::time::Duration;
 
@@ -35,7 +35,7 @@ fn reproduction_app() {
     });
 }
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Robot UI Breakage Reproduction ===");
 

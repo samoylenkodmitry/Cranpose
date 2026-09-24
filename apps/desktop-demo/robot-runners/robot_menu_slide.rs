@@ -1,5 +1,4 @@
-mod robot_exit;
-mod text_fixture_style;
+use crate::{robot_exit, text_fixture_style};
 
 use std::{process::ExitCode, sync::atomic::AtomicBool, time::Duration};
 
@@ -18,7 +17,7 @@ const TEXT: &str = "Silence. Melody. Then beats.";
 
 static FAILED: AtomicBool = AtomicBool::new(false);
 
-fn main() -> ExitCode {
+pub(crate) fn main() -> ExitCode {
     let _ = env_logger::try_init();
 
     AppLauncher::new()

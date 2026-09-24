@@ -1,14 +1,10 @@
-mod robot_exit;
-mod robot_shot;
-
-#[path = "../src/test_screens/liquid_tab_reference.rs"]
-mod liquid_tab_reference;
+use crate::{liquid_tab_reference, robot_exit, robot_shot};
 
 use std::{path::PathBuf, time::Duration};
 
 use cranpose::{AppLauncher, RobotScreenshot};
 
-fn main() -> anyhow::Result<()> {
+pub(crate) fn main() -> anyhow::Result<()> {
     let directory = PathBuf::from(
         std::env::var("CRANPOSE_ROBOT_OUTPUT_DIR")
             .unwrap_or_else(|_| "target/liquid-tab-press-preview".to_string()),

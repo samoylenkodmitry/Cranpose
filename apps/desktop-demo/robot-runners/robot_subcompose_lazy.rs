@@ -1,4 +1,4 @@
-mod robot_launch;
+use crate::robot_launch;
 
 use std::time::Duration;
 
@@ -83,7 +83,7 @@ fn test_app() {
     );
 }
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== SubcomposeLayout & LazyColumn Comprehensive Test ===\n");
 

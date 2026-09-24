@@ -1,6 +1,4 @@
-mod output_paths;
-mod robot_exit;
-mod text_showcase_external_helpers;
+use crate::{output_paths, robot_exit, text_showcase_external_helpers};
 
 use std::{path::PathBuf, time::Duration};
 
@@ -22,7 +20,7 @@ const MIN_PRESSED_BRIGHTENING: f32 = 1.6;
 const MAX_RELEASED_DRIFT: f32 = 1.1;
 const MAX_RELEASED_TO_PRESSED_RATIO: f32 = 0.45;
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Robot Counter Button Release External Visual ===");
 

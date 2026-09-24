@@ -34,9 +34,9 @@ class_of() {
 
 discovered=$(
     cd "$REPO_ROOT"
-    for file in apps/desktop-demo/robot-runners/robot_*.rs apps/desktop-demo/examples/robot_*.rs; do
+    for file in apps/desktop-demo/robot-runners/robot_*.rs; do
         [ -f "$file" ] || continue
-        grep -qE '^fn main\(' "$file" && basename "$file" .rs
+        grep -qE '^pub\(crate\) fn main\(' "$file" && basename "$file" .rs
     done | sort -u | grep -c ''
 )
 classified=$(grep -c '' "$classes_file")
@@ -76,7 +76,7 @@ done
 # which is the shape a shared helper makes easy to write by accident.
 fixture="$(mktemp -d)"
 trap 'rm -f "$classes_file"; rm -r -- "$fixture"' EXIT
-mkdir -p "$fixture/apps/desktop-demo/robot-runners" "$fixture/apps/desktop-demo/examples"
+mkdir -p "$fixture/apps/desktop-demo/robot-runners"
 cat > "$fixture/apps/desktop-demo/robot-runners/frame_stats.rs" <<'RS'
 pub(crate) fn sample() -> f32 {
     let started = std::time::Instant::now();
@@ -87,20 +87,26 @@ RS
 # only the module it pulls in does. An example spelled this way is exactly
 # what a classifier that reads one file at a time files as parallel.
 cat > "$fixture/apps/desktop-demo/robot-runners/robot_via_module.rs" <<'RS'
-mod frame_stats;
+use crate::frame_stats;
 
-fn main() {
+pub(crate) fn main() {
+    let _ = frame_stats::sample();
+}
+RS
+# The same reach through a `use crate::{...}` list that rustfmt wrapped over
+# several lines, which a line-at-a-time reading misses.
+cat > "$fixture/apps/desktop-demo/robot-runners/robot_via_wrapped_import.rs" <<'RS'
+use crate::{
+    frame_stats::{self},
+};
+
+pub(crate) fn main() {
     let _ = frame_stats::sample();
 }
 RS
 cat > "$fixture/apps/desktop-demo/robot-runners/robot_plain.rs" <<'RS'
-fn main() {
+pub(crate) fn main() {
     println!("pixels only");
-}
-RS
-cat > "$fixture/apps/desktop-demo/robot-runners/robot_plain_two.rs" <<'RS'
-fn main() {
-    println!("pixels only, again");
 }
 RS
 
@@ -122,15 +128,16 @@ check "and does not call it a pass" \
 fixture_classes="$(cd "$fixture" && "$RUNNER" --list-classes 2>/dev/null | grep -E '^(parallel|serial) ')"
 check "an example that measures only through a module is serial" \
     grep -qx "serial robot_via_module" <<< "$fixture_classes"
+check "an example that reaches the module through a wrapped import list is serial" \
+    grep -qx "serial robot_via_wrapped_import" <<< "$fixture_classes"
 check "a fixture example with no measurement is parallel" \
     grep -qx "parallel robot_plain" <<< "$fixture_classes"
 check "a module without a main is not itself an example" \
     bash -c '! grep -q " frame_stats$" <<< "$1"' _ "$fixture_classes"
 
-# The class the suite runs is the class it builds. Every example is its own
-# crate and codegens its own copy of what it instantiates, so the 78 examples a
-# pull request never runs were 44% of a build that took 10m12s. A stub cargo
-# records what the runner actually asked for.
+# Every runner is a module of one binary, so the build does not depend on the
+# class: whatever runs, cargo is asked for `robot` and nothing else. A stub
+# cargo records what the runner actually asked for.
 stub_dir="$fixture/bin"
 mkdir -p "$stub_dir"
 cargo_args_file="$fixture/cargo-args"
@@ -152,25 +159,14 @@ build_selection() {
     cat "$cargo_args_file"
 }
 
-parallel_build="$(build_selection parallel)"
-check "the parallel build really reached cargo, so the next checks read something" \
-    grep -qx -- "--profile" <<< "$parallel_build"
-check "a parallel run builds the parallel examples" \
-    bash -c 'grep -qx "robot_plain" <<< "$1" && grep -qx "robot_plain_two" <<< "$1"' _ "$parallel_build"
-check "a parallel run does not build the serial example it will not run" \
-    bash -c '! grep -qx "robot_via_module" <<< "$1"' _ "$parallel_build"
-check "a parallel run never falls back to building every example" \
-    bash -c '! grep -qx -- "--examples" <<< "$1"' _ "$parallel_build"
-
-serial_build="$(build_selection serial)"
-check "a serial run builds the serial example" \
-    grep -qx "robot_via_module" <<< "$serial_build"
-check "a serial run does not build the parallel examples it will not run" \
-    bash -c '! grep -qx "robot_plain" <<< "$1" && ! grep -qx "robot_plain_two" <<< "$1"' _ "$serial_build"
-
-all_build="$(build_selection all)"
-check "an unfiltered run still builds every example in one cargo invocation" \
-    grep -qx -- "--examples" <<< "$all_build"
+for class in parallel serial all; do
+    build="$(build_selection "$class")"
+    check "building the $class class reaches cargo, so the next checks read something" \
+        grep -qx -- "--profile" <<< "$build"
+    check "building the $class class asks for the robot binary and nothing else" \
+        bash -c '[ "$(grep -A1 -x -- "--example" <<< "$1" | grep -vx -- "--example")" = robot ] \
+            && ! grep -qx -- "--examples" <<< "$1"' _ "$build"
+done
 
 if [ "$failures" -ne 0 ]; then
     echo "$failures robot scheduling-class check(s) failed" >&2

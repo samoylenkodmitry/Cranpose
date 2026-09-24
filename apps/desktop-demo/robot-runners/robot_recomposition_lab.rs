@@ -1,6 +1,4 @@
-mod robot_launch;
-
-mod regression_robot_support;
+use crate::{regression_robot_support, robot_launch};
 
 use std::time::Duration;
 
@@ -43,7 +41,7 @@ fn click(robot: &cranpose::Robot, label: &str) {
     let _ = robot.wait_for_idle();
 }
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Robot Recomposition Lab Test ===");
 

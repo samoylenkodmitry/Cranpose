@@ -88,7 +88,7 @@ fi
 finalize_perf_scenarios
 
 PROFILE_DIR="debug"
-BUILD_ARGS=(--package desktop-app --example "$EXAMPLE" --features robot-app)
+BUILD_ARGS=(--package desktop-app --example robot --features robot-app)
 
 if [[ "$PROFILE" == "release" ]]; then
     PROFILE_DIR="release"
@@ -106,7 +106,7 @@ fi
 
 "${CARGO_RUNNER[@]}" build "${BUILD_ARGS[@]}"
 
-BIN="target/${PROFILE_DIR}/examples/${EXAMPLE}"
+BIN="target/${PROFILE_DIR}/examples/robot"
 if [[ ! -x "$BIN" ]]; then
     echo "Binary not found: $BIN"
     exit 1
@@ -139,7 +139,7 @@ for scenario in "${PERF_SCENARIOS[@]}"; do
     CRANPOSE_MEM_VALIDATE="$MEM_VALIDATE" \
     CRANPOSE_PRESENT_MODE="$PRESENT_MODE" \
     CRANPOSE_HEADLESS="$HEADLESS" \
-    perf record -F 997 -g --call-graph fp -o "$DATA_FILE" -- "$BIN" \
+    perf record -F 997 -g --call-graph fp -o "$DATA_FILE" -- "$BIN" "$EXAMPLE" \
         2>&1 | tee "$LOG_FILE"
 
     perf report --stdio --percent-limit 1 --sort symbol,dso -i "$DATA_FILE" > "$REPORT_FILE"

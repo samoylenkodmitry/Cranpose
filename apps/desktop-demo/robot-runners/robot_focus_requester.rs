@@ -1,8 +1,4 @@
-mod robot_launch;
-
-mod robot_exit;
-
-mod text_input_robot_helpers;
+use crate::{robot_exit, robot_launch, text_input_robot_helpers};
 
 use std::time::Duration;
 
@@ -14,7 +10,7 @@ use desktop_app::app;
 /// the keystrokes typed right after land in that field. If the field never
 /// received real focus, `text_field_focus` would have nothing to dispatch the
 /// keys to and this would fail.
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Robot Focus Requester Test ===");
     println!("Testing Modifier::focus_requester() moving keyboard focus without a tap\n");

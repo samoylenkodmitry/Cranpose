@@ -1,6 +1,4 @@
-mod output_paths;
-mod scroll_stability_external_helpers;
-mod text_showcase_external_helpers;
+use crate::{scroll_stability_external_helpers, text_showcase_external_helpers};
 
 use std::time::Duration;
 
@@ -26,7 +24,7 @@ const TARGET_MAX_CENTER_Y: f32 = 320.0;
 const RENDER_STATS_ENV: &str = "CRANPOSE_SCROLL_STABILITY_RENDER_STATS";
 const ACTIVE_FRAME_MIN_IMPROVEMENT_RATIO: f32 = 0.05;
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Robot Markdown Scroll Exact External ===");
 

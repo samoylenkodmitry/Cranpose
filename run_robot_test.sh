@@ -12,12 +12,8 @@
 #   --example NAME  Run only the named robot example (repeatable)
 #   --skip NAME     Exclude the named robot example (repeatable)
 #   --shard N/M     Run the deterministic shard N of M
-#   --build-only    Build matching robot examples and exit
-#   --skip-build    Reuse existing robot example binaries
-#   --stage-artifacts DIR
-#                   Write per-shard robot binary tarballs after building
-#   --stage-artifact-shards N
-#                   Number of staged artifact shards (default: 16)
+#   --build-only    Build the robot binary and exit
+#   --skip-build    Reuse the existing robot binary
 #   CRANPOSE_ROBOT_KEEP_FAILURE_RESULTS=0
 #                   Remove per-example result artifacts even when the suite fails
 #   CRANPOSE_ROBOT_TIMEOUT_RETRY_ATTEMPTS=N
@@ -31,7 +27,6 @@
 LOG_FILE="${CRANPOSE_ROBOT_LOG_FILE:-robot_test.log}"
 SUMMARY_FILE="${CRANPOSE_ROBOT_SUMMARY_FILE:-robot_test_summary.txt}"
 ROBOT_DIR="apps/desktop-demo/robot-runners"
-ROBOT_EXAMPLES_DIR="apps/desktop-demo/examples"
 ROBOT_PROFILE="${CRANPOSE_ROBOT_PROFILE:-robot}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CARGO_RUNNER=("$SCRIPT_DIR/cargo-dev.sh")
@@ -74,8 +69,6 @@ BUILD_ONLY=0
 SKIP_BUILD=0
 LIST_CLASSES=0
 RUN_CLASSES=all
-STAGE_ARTIFACT_DIR=""
-STAGE_ARTIFACT_SHARDS=16
 
 profile_output_dir() {
     case "$1" in
@@ -102,6 +95,9 @@ if [ -n "${CARGO_BUILD_TARGET:-}" ]; then
 else
     EXAMPLE_BIN_DIR="$CARGO_OUT_DIR/$PROFILE_DIR/examples"
 fi
+# Every runner is a module of one example binary, `robot`, which takes the
+# runner's name as its argument.
+ROBOT_BIN="$EXAMPLE_BIN_DIR/robot"
 
 if ! [[ "$ROBOT_FAILURE_LOG_LINES" =~ ^[1-9][0-9]*$ ]]; then
     ROBOT_FAILURE_LOG_LINES=220
@@ -176,14 +172,6 @@ while [[ $# -gt 0 ]]; do
             SKIP_BUILD=1
             shift
             ;;
-        --stage-artifacts)
-            STAGE_ARTIFACT_DIR="$2"
-            shift 2
-            ;;
-        --stage-artifact-shards)
-            STAGE_ARTIFACT_SHARDS="$2"
-            shift 2
-            ;;
         --help)
             echo "Usage: $0 [--parallel N] [--sequential] [--example robot_name] [--skip robot_name] [--shard INDEX/TOTAL] [--build-only] [--skip-build] [--list-classes]"
             echo ""
@@ -193,14 +181,10 @@ while [[ $# -gt 0 ]]; do
             echo "  --example NAME  Run only the named robot example (repeatable)"
             echo "  --skip NAME     Exclude the named robot example (repeatable)"
             echo "  --shard N/M     Run the deterministic shard N of M"
-            echo "  --build-only    Build matching robot examples and exit"
+            echo "  --build-only    Build the robot binary and exit"
             echo "  --list-classes  Print each example's scheduling class and exit"
             echo "  --classes C     Run only class C: all (default), parallel or serial"
-            echo "  --skip-build    Reuse existing robot example binaries"
-            echo "  --stage-artifacts DIR"
-            echo "                  Write per-shard robot binary tarballs after building"
-            echo "  --stage-artifact-shards N"
-            echo "                  Number of staged artifact shards (default: 16)"
+            echo "  --skip-build    Reuse the existing robot binary"
             echo "  CRANPOSE_ROBOT_KEEP_FAILURE_RESULTS=0"
             echo "                  Remove per-example result artifacts even when the suite fails"
             echo "  CRANPOSE_ROBOT_TIMEOUT_RETRY_ATTEMPTS=N"
@@ -267,47 +251,67 @@ else
     echo "  set CRANPOSE_ROBOT_FORCE_HARDWARE_PERF_CONTRACTS=1 to enforce them"
 fi
 
-if ! [[ "$STAGE_ARTIFACT_SHARDS" =~ ^[1-9][0-9]*$ ]]; then
-    echo "--stage-artifact-shards must be a positive integer"
-    exit 1
-fi
-
 mkdir -p "$(dirname "$LOG_FILE")" "$(dirname "$SUMMARY_FILE")"
 
 # Clean previous logs
 rm -f "$LOG_FILE" "$SUMMARY_FILE"
 
 echo "Cleaning up..."
-# A robot test is a file with a `fn main`. Anything else under robot_*.rs is a
-# module the runners share, and cargo builds no binary for it -- asking for one
-# reports FAIL:missing_binary, which is what a shared module named robot_exit.rs
-# did to the whole suite. The previous predicate was a single hardcoded name,
-# so every future shared module had to be added to it or break the suite.
+# A robot test is a robot_*.rs file that defines the runner entry point,
+# `pub(crate) fn main`. Anything else under robot_*.rs is a module the runners
+# share. `cargo xtask test-layout` holds robot-runners/main.rs to the same
+# predicate, so every file found here is a runner the `robot` binary knows.
 EXAMPLES=()
 RUN_EXAMPLES=()
 CAPABILITY_SKIPPED_EXAMPLES=()
-for robot_source_dir in "$ROBOT_DIR" "$ROBOT_EXAMPLES_DIR"; do
-    for file in "$robot_source_dir"/robot_*.rs; do
-        if [ ! -f "$file" ]; then
-            continue
-        fi
-        if ! grep -qE '^fn main\(' "$file"; then
-            continue
-        fi
-        EXAMPLES+=("$(basename "$file" .rs)")
-    done
+for file in "$ROBOT_DIR"/robot_*.rs; do
+    if [ ! -f "$file" ]; then
+        continue
+    fi
+    if ! grep -qE '^pub\(crate\) fn main\(' "$file"; then
+        continue
+    fi
+    EXAMPLES+=("$(basename "$file" .rs)")
 done
 
 robot_source_path() {
-    local example="$1"
-    local candidate
-    for candidate in "$ROBOT_DIR/$example.rs" "$ROBOT_EXAMPLES_DIR/$example.rs"; do
-        if [ -f "$candidate" ]; then
-            echo "$candidate"
-            return 0
-        fi
+    local candidate="$ROBOT_DIR/$1.rs"
+    [ -f "$candidate" ] || return 1
+    echo "$candidate"
+}
+
+# The crate-level modules a source file names: `crate::name` and every name in
+# a `use crate::{a, b}` list, however rustfmt wrapped it.
+robot_source_modules() {
+    tr '\n' ' ' < "$1" \
+        | grep -oE 'crate::(\{[^}]*\}|[a-z0-9_]+)' \
+        | sed -E 's/^crate:://; s/[{} ]//g' \
+        | tr ',' '\n' \
+        | sed -E 's/::.*//' \
+        | grep -E '^[a-z0-9_]+$' \
+        | sort -u
+}
+
+# Every source unit an example reaches: itself and, transitively, each shared
+# module it names through `crate::`.
+robot_example_units() {
+    local pending=("$1")
+    local seen=" "
+    local unit source
+
+    while [ ${#pending[@]} -gt 0 ]; do
+        unit="${pending[0]}"
+        pending=("${pending[@]:1}")
+        case "$seen" in
+            *" $unit "*) continue ;;
+        esac
+        source="$(robot_source_path "$unit")" || continue
+        seen="$seen$unit "
+        echo "$unit"
+        while IFS= read -r dependency; do
+            pending+=("$dependency")
+        done < <(robot_source_modules "$source")
     done
-    return 1
 }
 
 # The tokens that make an example's result depend on how busy the machine is.
@@ -329,33 +333,17 @@ robot_source_path() {
 # and a neighbour on another core cannot change its answer.
 ROBOT_TIMING_SURFACE='Instant::now|\.elapsed\(|work_avg_ms|work_p95_ms|avg_ms|p95_ms|fps|frame_time|settle\(|wait_for_text|wait_for_no_text|scroll_until_'
 
-# Whether an example measures time, following the `mod` declarations that pull
-# in the shared runner modules: a runner that reads its frame statistics
-# through perf_robot_stats is load-sensitive whether or not it spells the
-# field names itself.
+# Whether an example measures time, following the shared runner modules it
+# reaches: a runner that reads its frame statistics through perf_robot_stats
+# is load-sensitive whether or not it spells the field names itself.
 robot_example_is_serial() {
-    local example="$1"
-    local pending=("$example")
-    local seen=""
     local unit source
-
-    while [ ${#pending[@]} -gt 0 ]; do
-        unit="${pending[0]}"
-        pending=("${pending[@]:1}")
-        case " $seen " in
-            *" $unit "*) continue ;;
-        esac
-        seen="$seen $unit"
-
+    while IFS= read -r unit; do
         source="$(robot_source_path "$unit")" || continue
         if grep -qE "$ROBOT_TIMING_SURFACE" "$source"; then
             return 0
         fi
-        while IFS= read -r dependency; do
-            pending+=("$dependency")
-        done < <(sed -n 's/^mod \([a-z0-9_]*\);.*/\1/p' "$source")
-    done
-
+    done < <(robot_example_units "$1")
     return 1
 }
 
@@ -408,8 +396,7 @@ robot_display_can_present() {
 
 robot_capability_skip_reason() {
     local example="$1"
-    local source
-    source=$(robot_source_path "$example") || return 1
+    robot_source_path "$example" >/dev/null || return 1
 
     if ! command -v xdotool >/dev/null 2>&1; then
         case "$example" in
@@ -438,7 +425,7 @@ robot_capability_skip_reason() {
         esac
     fi
 
-    if grep -q 'mod scroll_stability_external_helpers;' "$source" \
+    if robot_example_units "$example" | grep -qx scroll_stability_external_helpers \
         && ! python3 -c 'from PIL import Image' >/dev/null 2>&1; then
         echo "requires Python Pillow for pixel comparison"
         return 0
@@ -605,23 +592,12 @@ if [ ${#EXAMPLES[@]} -eq 0 ]; then
     exit 0
 fi
 
-BUILD_ARGS=(--profile "$ROBOT_PROFILE" --package desktop-app --features robot-app)
-if [ ${#EXAMPLES[@]} -eq 1 ]; then
-    BUILD_ARGS+=(--example "${EXAMPLES[0]}")
-elif [ ${#SELECTED_EXAMPLES[@]} -gt 0 ] || [ ${#SKIPPED_EXAMPLES[@]} -gt 0 ] \
-    || [ -n "$SHARD_INDEX" ] || [ ${#CAPABILITY_SKIPPED_EXAMPLES[@]} -gt 0 ] \
-    || [ "$RUN_CLASSES" != "all" ]; then
-    for example in "${EXAMPLES[@]}"; do
-        BUILD_ARGS+=(--example "$example")
-    done
-else
-    BUILD_ARGS+=(--examples)
-fi
+BUILD_ARGS=(--profile "$ROBOT_PROFILE" --package desktop-app --features robot-app --example robot)
 
 if [ "$SKIP_BUILD" = "1" ]; then
-    echo "Skipping robot example build; reusing profile '$ROBOT_PROFILE' binaries." | tee -a "$LOG_FILE"
+    echo "Skipping the robot build; reusing the profile '$ROBOT_PROFILE' robot binary." | tee -a "$LOG_FILE"
 else
-    echo "Building desktop-app examples with profile '$ROBOT_PROFILE'..."
+    echo "Building the robot binary with profile '$ROBOT_PROFILE'..."
     enable_fast_linker
     if ! wait_for_host_capacity "robot build"; then
         echo "Host was not ready for robot build." | tee -a "$LOG_FILE"
@@ -639,57 +615,12 @@ else
     fi
 fi
 
-stage_robot_artifacts() {
-    local output_dir="$1"
-    local shard_count="$2"
-    local stage_root="$output_dir/stage"
-
-    if [ -e "$stage_root" ]; then
-        rm -r -- "$stage_root"
-    fi
-    mkdir -p "$stage_root"
-
-    for shard in $(seq 1 "$shard_count"); do
-        mkdir -p "$stage_root/$shard"
-    done
-
-    for example_index in "${!EXAMPLES[@]}"; do
-        local example="${EXAMPLES[$example_index]}"
-        local shard=$((example_index % shard_count + 1))
-        local example_bin="$EXAMPLE_BIN_DIR/$example"
-
-        if [ ! -x "$example_bin" ] && [ -x "${example_bin}.exe" ]; then
-            example_bin="${example_bin}.exe"
-        fi
-
-        if [ ! -x "$example_bin" ]; then
-            echo "Cannot stage missing robot binary: $example_bin" | tee -a "$LOG_FILE"
-            exit 1
-        fi
-
-        if ! ln "$example_bin" "$stage_root/$shard/$example" 2>/dev/null; then
-            cp "$example_bin" "$stage_root/$shard/$example"
-        fi
-    done
-
-    mkdir -p "$output_dir"
-    for shard in $(seq 1 "$shard_count"); do
-        local archive="$output_dir/robot-examples-$shard.tar.gz"
-        if ! tar -C "$stage_root/$shard" -I "gzip -1" -cf "$archive" .; then
-            echo "Cannot stage robot artifact: $archive" | tee -a "$LOG_FILE"
-            exit 1
-        fi
-    done
-    rm -r -- "$stage_root"
-}
-
-if [ -n "$STAGE_ARTIFACT_DIR" ]; then
-    echo "Staging robot artifacts into $STAGE_ARTIFACT_DIR..."
-    stage_robot_artifacts "$STAGE_ARTIFACT_DIR" "$STAGE_ARTIFACT_SHARDS"
+if [ ! -x "$ROBOT_BIN" ] && [ -x "$ROBOT_BIN.exe" ]; then
+    ROBOT_BIN="$ROBOT_BIN.exe"
 fi
 
 if [ "$BUILD_ONLY" = "1" ]; then
-    echo "Build-only robot gate completed for ${#EXAMPLES[@]} examples." | tee -a "$LOG_FILE"
+    echo "Build-only robot gate completed for ${#EXAMPLES[@]} runner(s)." | tee -a "$LOG_FILE"
     exit 0
 fi
 
@@ -820,17 +751,12 @@ run_test() {
     local example="$1"
     local result_file="$RESULTS_DIR/$example.result"
     local output_file="$RESULTS_DIR/$example.output"
-    local example_bin="$EXAMPLE_BIN_DIR/$example"
 
-    if [ ! -x "$example_bin" ] && [ -x "${example_bin}.exe" ]; then
-        example_bin="${example_bin}.exe"
-    fi
-
-    if [ ! -x "$example_bin" ]; then
+    if [ ! -x "$ROBOT_BIN" ]; then
         echo "FAIL:missing_binary" > "$result_file"
         {
             echo "Expected robot binary not found:"
-            echo "  $example_bin"
+            echo "  $ROBOT_BIN"
         } > "$output_file"
         return
     fi
@@ -1025,10 +951,10 @@ run_test() {
         # A windowed example gets a server of its own so that it can run
         # beside its neighbours; inside the timeout, so that killing the
         # example takes the server with it.
-        local launch=("$example_bin")
+        local launch=("$ROBOT_BIN" "$example")
         if robot_private_display_available && robot_example_needs_real_window "$example"; then
             launch=("$SCRIPT_DIR/scripts/ci/with_private_display.sh" \
-                "$ROBOT_PRIVATE_DISPLAY_SCREEN" "$example_bin")
+                "$ROBOT_PRIVATE_DISPLAY_SCREEN" "$ROBOT_BIN" "$example")
         fi
 
         if command -v timeout >/dev/null 2>&1; then
@@ -1093,7 +1019,7 @@ robot_process_env() {
 
     while IFS='=' read -r name value; do
         case "$name" in
-            BASH_FUNC_*|RESULTS_DIR|EXAMPLE_BIN_DIR|ROBOT_TEST_TIMEOUT_CAP_SECS|ROBOT_TIMEOUT_RETRY_ATTEMPTS)
+            BASH_FUNC_*|RESULTS_DIR|ROBOT_BIN|ROBOT_TEST_TIMEOUT_CAP_SECS|ROBOT_TIMEOUT_RETRY_ATTEMPTS)
                 ;;
             PATH|HOME|USER|LOGNAME|SHELL|DISPLAY|XAUTHORITY|WAYLAND_DISPLAY|XDG_RUNTIME_DIR|LD_LIBRARY_PATH|LIBGL_ALWAYS_SOFTWARE|LIBGL_DRIVERS_PATH|VK_ICD_FILENAMES|VK_LAYER_PATH|MESA_LOADER_DRIVER_OVERRIDE|MESA_VK_DEVICE_SELECT|RUST_BACKTRACE|RUST_LOG|ROBOT_SHOT_DIR|WINIT_*|WGPU_*|CRANPOSE_*|TMPDIR|REFERENCE_CONTENT|REFERENCE_MATERIAL_PROFILE|REFERENCE_INITIAL_DESTINATION)
                 env_args+=("$name=$value")
@@ -1122,7 +1048,7 @@ export SCRIPT_DIR
 export ROBOT_COMMON_SH="$SCRIPT_DIR/scripts/dev_build_common.sh"
 export RESULTS_DIR
 export ROBOT_PHASE
-export EXAMPLE_BIN_DIR
+export ROBOT_BIN
 export ROBOT_TEST_TIMEOUT_CAP_SECS
 export ROBOT_TIMEOUT_RETRY_ATTEMPTS
 

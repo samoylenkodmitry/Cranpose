@@ -1,4 +1,4 @@
-mod robot_launch;
+use crate::robot_launch;
 
 use std::time::Duration;
 
@@ -16,7 +16,7 @@ fn wait_for_content(robot: &Robot, expected: &str, attempts: usize, delay: Durat
     false
 }
 
-fn main() {
+pub(crate) fn main() {
     println!("Launching app with robot control for Scroll Bug Reproduction...");
 
     robot_launch::launch("Scroll Bug Reproduction", 1024, 768)

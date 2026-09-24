@@ -1,4 +1,4 @@
-mod robot_exit;
+use crate::robot_exit;
 
 use std::{process::ExitCode, sync::atomic::AtomicBool, time::Duration};
 
@@ -20,7 +20,7 @@ const SETTLE_MS: u64 = 800;
 
 static FAILED: AtomicBool = AtomicBool::new(false);
 
-fn main() -> ExitCode {
+pub(crate) fn main() -> ExitCode {
     let _ = env_logger::try_init();
 
     AppLauncher::new()

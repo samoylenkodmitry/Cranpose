@@ -3,10 +3,7 @@
     reason = "full-layout robot fixture keeps application call shapes intact"
 )]
 
-mod output_paths;
-mod perf_robot_stats;
-mod scroll_stability_external_helpers;
-mod text_showcase_external_helpers;
+use crate::{output_paths, perf_robot_stats, scroll_stability_external_helpers, text_showcase_external_helpers};
 
 use std::{
     cell::RefCell,
@@ -8963,7 +8960,7 @@ fn run_leetcodedaily_perf_probe(robot: &cranpose::Robot) {
     }
 }
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     let (window_width, window_height) = app_window_size();
     let strip_only_target =

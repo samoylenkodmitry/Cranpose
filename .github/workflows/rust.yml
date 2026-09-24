@@ -80,6 +80,11 @@ jobs:
         # before the heavy job ever spends a build on it.
         run: just test-robot-discovery
 
+      - name: Check every test file and robot runner is linked into its binary
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
+        # A file left out would compile and run nothing, and no test fails.
+        run: just test-layout
+
       - name: Check the robot suite's two halves still partition it
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
         run: just test-robot-suite-partition

@@ -15,6 +15,7 @@
 //! ```
 
 #[path = "../robot-runners/robot_shot.rs"]
+#[expect(dead_code)]
 mod robot_shot;
 
 use std::path::PathBuf;
