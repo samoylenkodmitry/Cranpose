@@ -1,0 +1,6 @@
+results/
+**/target/
+**/build/
+**/.gradle/
+**/.kotlin/
+**/local.properties

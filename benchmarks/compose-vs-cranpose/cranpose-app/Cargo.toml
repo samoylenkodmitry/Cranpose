@@ -1,0 +1,42 @@
+[package]
+name = "perf-compare-cranpose"
+version = "0.1.0"
+edition = "2024"
+description = "Cranpose half of the Cranpose versus Jetpack Compose device comparison"
+license = "Apache-2.0"
+publish = false
+
+[lib]
+name = "perf_compare"
+crate-type = ["cdylib", "rlib"]
+path = "src/lib.rs"
+
+[[bin]]
+name = "perf-compare"
+path = "src/main.rs"
+required-features = ["desktop"]
+
+[features]
+default = ["renderer-wgpu", "desktop"]
+renderer-wgpu = ["cranpose/renderer-wgpu"]
+desktop = ["cranpose/desktop"]
+android = ["cranpose/android"]
+
+[dependencies]
+cranpose = { path = "../../../crates/cranpose" }
+cranpose-core = { path = "../../../crates/cranpose-core" }
+cranpose-ui = { path = "../../../crates/cranpose-ui" }
+cranpose-foundation = { path = "../../../crates/cranpose-foundation" }
+log = "0.4"
+
+# Its own workspace, like a real application: the release profile below is
+# what the device runs, not the framework repository's.
+[workspace]
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+debug = 0
