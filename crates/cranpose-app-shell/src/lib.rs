@@ -1,5 +1,3 @@
-#![allow(clippy::type_complexity)]
-
 use std::sync::PoisonError;
 mod focus_reveal;
 mod fps_monitor;

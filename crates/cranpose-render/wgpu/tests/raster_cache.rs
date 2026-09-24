@@ -1,5 +1,3 @@
-mod support;
-
 use cranpose_core::NodeId;
 use cranpose_render_common::{
     Renderer,
@@ -13,6 +11,8 @@ use cranpose_ui::{
     text::{AnnotatedString, SpanStyle},
 };
 use cranpose_ui_graphics::{Brush, Color, Rect};
+
+use crate::support;
 
 fn card_layer(node_id: NodeId, y: f32) -> LayerNode {
     let local_bounds = Rect {

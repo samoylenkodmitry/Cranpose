@@ -1,4 +1,4 @@
-#![allow(dead_code)]
+#![expect(dead_code)]
 
 use std::sync::PoisonError;
 #[path = "support/device.rs"]
@@ -285,7 +285,6 @@ fn create_headless_renderer_configured(
 /// and updated twice so caches are warm, or `None` when no GPU is available.
 /// Everything a composable page test imports: the page widgets and the
 /// frame helpers below.
-#[allow(unused_imports)]
 pub mod page {
     pub use cranpose_ui::{
         Color, Modifier, RenderEffect, TextStyle, composable,
@@ -297,7 +296,7 @@ pub mod page {
 
 /// Everything a raw render-graph test imports: the graph node types and the
 /// drawing primitives that fill a draw run.
-#[allow(unused_imports)]
+#[expect(unused_imports)]
 pub mod graph {
     pub use cranpose_render_common::{
         Renderer,
@@ -1343,4 +1342,33 @@ pub mod glass_page {
             GLASS_HEIGHT,
         )
     }
+}
+
+/// The frame and glass pane the effect-domain and capture-culling tests
+/// share.
+pub mod glass_scene {
+    use cranpose_ui_graphics::Rect;
+
+    pub const FRAME_WIDTH: u32 = 240;
+    pub const FRAME_HEIGHT: u32 = 120;
+    pub const GLASS: Rect = Rect {
+        x: 80.0,
+        y: 30.0,
+        width: 96.0,
+        height: 60.0,
+    };
+}
+
+/// The frame and bar the layer-cache and shader-identity tests share.
+pub mod bar_scene {
+    use cranpose_ui_graphics::Rect;
+
+    pub const WIDTH: u32 = 160;
+    pub const HEIGHT: u32 = 96;
+    pub const BAR: Rect = Rect {
+        x: 20.0,
+        y: 24.0,
+        width: 120.0,
+        height: 48.0,
+    };
 }

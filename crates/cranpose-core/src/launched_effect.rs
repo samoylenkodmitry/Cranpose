@@ -418,7 +418,7 @@ where
 ///
 /// `keys` may be a tuple to depend on more than one value, matching Jetpack
 /// Compose's `LaunchedEffect(vararg keys)`.
-#[allow(non_snake_case)]
+#[expect(non_snake_case)]
 #[track_caller]
 pub fn LaunchedEffect<K, F>(keys: K, effect: F)
 where
@@ -460,7 +460,7 @@ where
 
 /// Like [`LaunchedEffect`], but `mk_future` builds the future to drive rather
 /// than receiving a scope to call back into synchronously.
-#[allow(non_snake_case)]
+#[expect(non_snake_case)]
 #[track_caller]
 pub fn LaunchedEffectAsync<K, F>(keys: K, mk_future: F)
 where

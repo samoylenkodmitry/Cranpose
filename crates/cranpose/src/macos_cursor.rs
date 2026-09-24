@@ -11,7 +11,7 @@
 //! cursor rectangles on its own schedule -- entering the window, activating it,
 //! resizing it -- and those rectangles carry winit's cursor, so they are held
 //! off while such a cursor is up and handed back as soon as it is not.
-#![allow(unsafe_code)]
+#![expect(unsafe_code)]
 
 use std::ffi::c_uchar;
 

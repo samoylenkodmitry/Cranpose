@@ -30,13 +30,13 @@ fn targets(tree: &LayoutTree) -> Vec<Target> {
 }
 
 fn collect_targets(node: &crate::LayoutBox, group: Option<NodeId>, output: &mut Vec<Target>) {
-    let config = crate::modifier::collect_semantics_from_modifier(&node.node_data.modifier);
-    if config.as_ref().is_some_and(|config| config.hidden) {
+    let config = node.node_data.semantics();
+    if config.is_some_and(|config| config.hidden) {
         return;
     }
     if focus_dispatch::has_focus_target(node.node_id)
         && crate::focus_order::takes_space(node.rect)
-        && config.as_ref().is_none_or(|config| config.enabled)
+        && config.is_none_or(|config| config.enabled)
     {
         output.push(Target {
             entry: FocusEntry {
@@ -44,16 +44,11 @@ fn collect_targets(node: &crate::LayoutBox, group: Option<NodeId>, output: &mut 
                 rect: node.rect,
             },
             group,
-            role: config.as_ref().and_then(|config| config.role),
-            selected: config
-                .as_ref()
-                .is_some_and(|config| config.selected == Some(true)),
+            role: config.and_then(|config| config.role),
+            selected: config.is_some_and(|config| config.selected == Some(true)),
         });
     }
-    let group = if config
-        .as_ref()
-        .is_some_and(crate::focus_order::is_selectable_group)
-    {
+    let group = if config.is_some_and(crate::focus_order::is_selectable_group) {
         Some(node.node_id)
     } else {
         group
@@ -195,6 +190,7 @@ mod tests {
         if children.is_empty() {
             focus_dispatch::register_focus_target(id, Rc::new(Handle));
         }
+        let semantics = crate::modifier::collect_semantics_from_modifier(&modifier).map(Rc::new);
         LayoutBox::new(
             id,
             Rect {
@@ -208,6 +204,7 @@ mod tests {
                 modifier,
                 Default::default(),
                 Rc::default(),
+                semantics,
                 LayoutNodeKind::Layout,
             ),
             children,

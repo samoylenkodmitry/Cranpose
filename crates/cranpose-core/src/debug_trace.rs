@@ -78,7 +78,7 @@ pub fn debug_scope_label(scope_id: usize) -> Option<&'static str> {
     {
         return DEBUG_SCOPE_LABELS.with(|labels| labels.borrow().get(&scope_id).copied());
     }
-    #[allow(unreachable_code)]
+    #[expect(unreachable_code)]
     None
 }
 
@@ -99,7 +99,7 @@ pub fn debug_scope_invalidation_sources(scope_id: usize) -> Vec<String> {
             entries
         });
     }
-    #[allow(unreachable_code)]
+    #[expect(unreachable_code)]
     Vec::new()
 }
 

@@ -10,7 +10,7 @@ pub mod velocity_tracker;
 
 pub use gesture_constants::{DRAG_THRESHOLD, MAX_FLING_VELOCITY, MINIMUM_TOUCH_TARGET_SIZE};
 pub use modifier::*;
-#[allow(unused_imports)]
+#[expect(unused_imports)]
 pub use modifier_helpers::*;
 pub use nodes::input::{
     DEFAULT_ROTARY_SCROLL_FACTOR_DP, Modifiers, PointerButton, PointerButtons, PointerEvent,
@@ -20,7 +20,7 @@ pub use nodes::input::{
 pub use velocity_tracker::VelocityTracker1D;
 
 pub mod prelude {
-    #[allow(unused_imports)]
+    #[expect(unused_imports)]
     pub use crate::modifier_helpers::*;
     pub use crate::{
         impl_draw_node, impl_focus_node, impl_modifier_node, impl_pointer_input_node,

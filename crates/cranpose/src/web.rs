@@ -468,7 +468,7 @@ pub async fn run(
     let fonts = settings.resolve_font_set();
     let mut renderer = WgpuRenderer::with_font_set(fonts);
     renderer.warm_shaders(cranpose_liquid::shader_warm_ups());
-    #[allow(clippy::arc_with_non_send_sync)]
+    #[expect(clippy::arc_with_non_send_sync)]
     renderer.init_gpu(
         Arc::new(device),
         Arc::new(queue),

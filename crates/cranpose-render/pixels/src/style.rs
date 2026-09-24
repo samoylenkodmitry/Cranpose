@@ -23,7 +23,6 @@ use cranpose_ui_graphics::{CornerRadii, Rect};
 use crate::scene::RasterScene;
 
 #[cfg(test)]
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn apply_draw_commands(
     commands: &[DrawCommand],
     placement: DrawPlacement,

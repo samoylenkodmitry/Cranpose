@@ -667,7 +667,7 @@ trait TextStyleDrawSink {
         anchor: Option<SnapAnchor>,
     );
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn push_text(
         &mut self,
         node_id: NodeId,
@@ -681,7 +681,7 @@ trait TextStyleDrawSink {
         clip: Option<Rect>,
     );
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn push_shadow_text(
         &mut self,
         node_id: NodeId,
@@ -696,7 +696,7 @@ trait TextStyleDrawSink {
         clip: Option<Rect>,
     );
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn push_effect_layer(
         &mut self,
         rect: Rect,
@@ -708,7 +708,7 @@ trait TextStyleDrawSink {
         z_end: usize,
     );
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn push_effect_layer_with_surface(
         &mut self,
         rect: Rect,
@@ -929,7 +929,7 @@ impl TextStyleDrawSink for TextBoundsCollector {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn push_span_gpu_text_material_draws<S: TextStyleDrawSink>(
     sink: &mut S,
     node_id: NodeId,
@@ -997,7 +997,7 @@ fn push_span_gpu_text_material_draws<S: TextStyleDrawSink>(
     true
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn emit_text_style_draws<S: TextStyleDrawSink>(
     sink: &mut S,
     text_layout: &mut impl TextLayoutResolver,
@@ -1207,7 +1207,7 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
     );
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn push_text_draw<S: TextStyleDrawSink>(
     sink: &mut S,
     node_id: NodeId,
@@ -1233,7 +1233,7 @@ fn push_text_draw<S: TextStyleDrawSink>(
     );
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub(crate) fn push_text_style_draws(
     scene: &mut CompositorScene,
     text_layout: &mut impl TextLayoutResolver,
@@ -1265,7 +1265,7 @@ pub(crate) fn push_text_style_draws(
 }
 
 #[cfg(test)]
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub(crate) fn estimate_text_style_draw_bounds(
     node_id: NodeId,
     rect: Rect,
@@ -1297,7 +1297,7 @@ pub(crate) fn estimate_text_style_draw_bounds(
     collector.bounds
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn push_text_decorations<S: TextStyleDrawSink>(
     sink: &mut S,
     text_layout: &mut impl TextLayoutResolver,
@@ -1902,7 +1902,7 @@ fn blended(primitive: DrawPrimitive, blend_mode: Option<BlendMode>) -> DrawPrimi
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub(crate) fn push_draw_primitive(
     primitive: &DrawPrimitive,
     layer_bounds: Rect,
@@ -2191,7 +2191,7 @@ mod tests {
         with_test_app_context(|| measure_text(text, style))
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn push_text_style_draws_for_test(
         scene: &mut Scene,
         node_id: NodeId,

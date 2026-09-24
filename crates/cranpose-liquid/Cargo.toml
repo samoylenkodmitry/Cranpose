@@ -9,6 +9,7 @@ authors.workspace = true
 keywords.workspace = true
 categories.workspace = true
 description = "Liquid UI — cranpose's first-party glass component library (iOS-26-style materials, spring motion)"
+autotests = false
 
 [package.metadata.docs.rs]
 all-features = true
@@ -33,3 +34,7 @@ thiserror = "2.0.20"
 # Path-only (no version): cargo strips path-only dev-deps from the published
 # manifest, breaking the liquid -> testing -> cranpose -> liquid publish cycle.
 cranpose-testing = { path = "../cranpose-testing" }
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"

@@ -20,7 +20,7 @@
 //! Deltas arrive in the same logical pixels layout uses, positive along the
 //! axis (right for `Axis::Horizontal`, down for `Axis::Vertical`).
 
-#![allow(non_snake_case)]
+#![expect(non_snake_case)]
 
 use std::{
     cell::{Cell, RefCell},

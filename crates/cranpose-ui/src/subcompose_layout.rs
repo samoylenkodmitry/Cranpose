@@ -7,7 +7,9 @@ use std::{
 use cranpose_core::{
     Composer, NodeError, NodeId, Phase, SlotId, SlotTable, SlotsHost, SubcomposeState,
 };
-use cranpose_foundation::{InvalidationKind, ModifierInvalidation, NodeCapabilities};
+use cranpose_foundation::{
+    InvalidationKind, ModifierInvalidation, NodeCapabilities, SemanticsConfiguration,
+};
 pub use cranpose_ui_layout::{Constraints, MeasureResult, Placement};
 use smallvec::SmallVec;
 use web_time::Instant;
@@ -968,6 +970,11 @@ impl SubcomposeLayoutNode {
     /// Clears the is_placed flag. Called at the start of a layout pass.
     pub fn clear_placed(&self) {
         self.layout_state.borrow_mut().clear_placed();
+    }
+
+    /// Semantics reported by this node's live modifier chain.
+    pub fn semantics_configuration(&self) -> Option<SemanticsConfiguration> {
+        crate::modifier::collect_semantics_from_chain(self.inner.borrow().modifier_chain.chain())
     }
 
     /// Returns the modifier slices snapshot for rendering.

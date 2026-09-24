@@ -1,6 +1,6 @@
-pub mod liquid_page_support;
-
 use liquid_page_support::LiquidPage;
+
+use crate::liquid_page_support;
 
 const LOGICAL: (u32, u32) = (800, 600);
 const DENSITY: f32 = 130.0 / 96.0;

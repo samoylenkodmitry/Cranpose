@@ -273,7 +273,7 @@ fn dynamic_modifiers_showcase(frame: i32) {
     });
 }
 
-#[allow(dead_code)]
+#[expect(dead_code)]
 fn count_children(applier: &mut MemoryApplier, node_id: usize) -> Option<usize> {
     applier
         .with_node(node_id, |node: &mut cranpose_ui::LayoutNode| {

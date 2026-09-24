@@ -218,7 +218,7 @@ pub fn density() -> Density {
 /// Compose's `CompositionLocalProvider(LocalDensity provides ...)`. A preview, a
 /// scaled container or a golden that must not depend on the machine it runs on
 /// states its grid here instead of moving the whole shell onto it.
-#[allow(non_snake_case)]
+#[expect(non_snake_case)]
 #[track_caller]
 pub fn ProvideDensity(density: Density, content: impl FnOnce()) {
     CompositionLocalProvider(vec![local_density().provides(density)], content);

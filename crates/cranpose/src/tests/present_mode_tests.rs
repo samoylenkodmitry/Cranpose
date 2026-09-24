@@ -1,0 +1,165 @@
+use cranpose_app_shell::FramePacingMode;
+use wgpu::{PresentMode, SurfaceCapabilities, TextureFormat};
+
+use super::{
+    parse_present_mode, select_android_present_mode_for_request,
+    select_present_mode_for_frame_pacing, select_present_mode_for_request,
+};
+
+#[test]
+fn automatic_presentation_reports_the_backend_fallback() {
+    for (requested, supported, resolved) in [
+        (PresentMode::AutoNoVsync, vec![PresentMode::Fifo], PresentMode::Fifo),
+        (PresentMode::AutoNoVsync, vec![PresentMode::Fifo, PresentMode::Mailbox], PresentMode::Mailbox),
+        (PresentMode::AutoNoVsync, vec![PresentMode::Mailbox, PresentMode::Immediate], PresentMode::Immediate),
+        (PresentMode::AutoVsync, vec![PresentMode::Fifo, PresentMode::FifoRelaxed], PresentMode::FifoRelaxed),
+        (PresentMode::Immediate, vec![PresentMode::Fifo, PresentMode::Immediate], PresentMode::Immediate),
+    ] {
+        assert_eq!(super::resolved_present_mode(requested, &caps(&supported)), resolved);
+    }
+}
+
+fn caps(present_modes: &[PresentMode]) -> SurfaceCapabilities {
+    SurfaceCapabilities {
+        formats: vec![TextureFormat::Bgra8UnormSrgb],
+        present_modes: present_modes.to_vec(),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn default_prefers_no_vsync_even_when_fifo_is_available() {
+    let caps = caps(&[PresentMode::Fifo]);
+
+    assert_eq!(
+        select_present_mode_for_request(&caps, None),
+        PresentMode::AutoNoVsync
+    );
+}
+
+#[test]
+fn explicit_supported_present_mode_is_honored() {
+    let caps = caps(&[PresentMode::Fifo, PresentMode::Immediate]);
+
+    assert_eq!(
+        select_present_mode_for_request(&caps, Some(PresentMode::Fifo)),
+        PresentMode::Fifo
+    );
+    assert_eq!(
+        select_present_mode_for_request(&caps, Some(PresentMode::Immediate)),
+        PresentMode::Immediate
+    );
+}
+
+#[test]
+fn explicit_auto_modes_do_not_need_surface_capability_entries() {
+    let caps = caps(&[PresentMode::Fifo]);
+
+    assert_eq!(
+        select_present_mode_for_request(&caps, Some(PresentMode::AutoNoVsync)),
+        PresentMode::AutoNoVsync
+    );
+    assert_eq!(
+        select_present_mode_for_request(&caps, Some(PresentMode::AutoVsync)),
+        PresentMode::AutoVsync
+    );
+}
+
+#[test]
+fn unsupported_explicit_mode_falls_back_to_no_vsync() {
+    let caps = caps(&[PresentMode::Fifo]);
+
+    assert_eq!(
+        select_present_mode_for_request(&caps, Some(PresentMode::Immediate)),
+        PresentMode::AutoNoVsync
+    );
+}
+
+#[test]
+fn android_defaults_to_fifo_rather_than_the_free_running_auto_no_vsync() {
+    let caps = caps(&[PresentMode::Mailbox, PresentMode::Fifo]);
+
+    assert_eq!(
+        select_android_present_mode_for_request(&caps, None),
+        PresentMode::Fifo
+    );
+}
+
+#[test]
+fn android_falls_back_to_auto_vsync_when_fifo_is_unavailable() {
+    let caps = caps(&[PresentMode::Mailbox]);
+
+    assert_eq!(
+        select_android_present_mode_for_request(&caps, None),
+        PresentMode::AutoVsync
+    );
+}
+
+#[test]
+fn android_honors_an_explicit_present_mode_request() {
+    let caps = caps(&[PresentMode::Mailbox, PresentMode::Fifo]);
+
+    assert_eq!(
+        select_android_present_mode_for_request(&caps, Some(PresentMode::Mailbox)),
+        PresentMode::Mailbox
+    );
+    assert_eq!(
+        select_android_present_mode_for_request(&caps, Some(PresentMode::AutoNoVsync)),
+        PresentMode::AutoNoVsync
+    );
+}
+
+#[test]
+fn parses_present_mode_aliases() {
+    assert_eq!(
+        parse_present_mode("no_vsync"),
+        Some(PresentMode::AutoNoVsync)
+    );
+    assert_eq!(
+        parse_present_mode("auto_vsync"),
+        Some(PresentMode::AutoVsync)
+    );
+    assert_eq!(parse_present_mode("vsync"), Some(PresentMode::Fifo));
+    assert_eq!(parse_present_mode("mailbox"), Some(PresentMode::Mailbox));
+    assert_eq!(
+        parse_present_mode("immediate"),
+        Some(PresentMode::Immediate)
+    );
+    assert_eq!(parse_present_mode("unknown"), None);
+}
+
+#[test]
+fn frame_pacing_maps_vsync_and_no_vsync_to_surface_modes() {
+    let caps = caps(&[PresentMode::Fifo, PresentMode::Immediate]);
+
+    assert_eq!(
+        select_present_mode_for_frame_pacing(&caps, FramePacingMode::Vsync),
+        PresentMode::Fifo
+    );
+    assert_eq!(
+        select_present_mode_for_frame_pacing(&caps, FramePacingMode::NoVsync),
+        PresentMode::Immediate
+    );
+    assert_eq!(
+        select_present_mode_for_frame_pacing(&caps, FramePacingMode::Hard60),
+        PresentMode::Immediate
+    );
+    assert_eq!(
+        select_present_mode_for_frame_pacing(&caps, FramePacingMode::Hard120),
+        PresentMode::Immediate
+    );
+}
+
+#[test]
+fn frame_pacing_falls_back_to_auto_modes_when_explicit_modes_are_unavailable() {
+    let caps = caps(&[]);
+
+    assert_eq!(
+        select_present_mode_for_frame_pacing(&caps, FramePacingMode::Vsync),
+        PresentMode::AutoVsync
+    );
+    assert_eq!(
+        select_present_mode_for_frame_pacing(&caps, FramePacingMode::NoVsync),
+        PresentMode::AutoNoVsync
+    );
+}

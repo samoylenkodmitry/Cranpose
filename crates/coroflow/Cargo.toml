@@ -10,6 +10,7 @@ homepage.workspace = true
 authors.workspace = true
 keywords.workspace = true
 categories.workspace = true
+autotests = false
 
 [dependencies]
 futures-core = "0.3.32"
@@ -35,3 +36,7 @@ tokio = { version = "1.53.1", features = ["rt", "sync"] }
 [[bench]]
 name = "comparisons"
 harness = false
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"

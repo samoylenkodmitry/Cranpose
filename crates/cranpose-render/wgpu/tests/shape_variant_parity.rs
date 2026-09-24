@@ -1,11 +1,11 @@
-mod support;
-
 use cranpose_render_common::graph::{
     DrawPrimitiveNode, DrawRunNode, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase,
     RenderGraph, RenderNode,
 };
 use cranpose_ui_graphics::{DrawScope, DrawScopeDefault, Rect};
 use support::{SIZE, record_gradient_fill_scene, record_mixed_scene, record_solid_scene};
+
+use crate::support;
 
 fn graph_for(record: fn(&mut DrawScopeDefault), clip: Option<Rect>) -> RenderGraph {
     let mut scope =

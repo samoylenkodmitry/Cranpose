@@ -10,6 +10,7 @@ keywords.workspace = true
 categories.workspace = true
 readme = "README.md"
 description = "Multiplatform system services for Cranpose (HTTP, URI, and OS integrations)"
+autotests = false
 
 [package.metadata.docs.rs]
 all-features = true
@@ -119,3 +120,7 @@ webpki-root-certs = { version = "1.0.9", optional = true }
 # workspace's shared test scratch directory for this crate's own tests.
 cranpose-core = { path = "../cranpose-core", features = ["test-helpers"] }
 webpki-root-certs = "1.0.9"
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"

@@ -1,5 +1,3 @@
-#![allow(clippy::arc_with_non_send_sync)]
-
 use std::{
     any::Any,
     cell::{Cell, RefCell},

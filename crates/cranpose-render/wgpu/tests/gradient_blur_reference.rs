@@ -1,13 +1,10 @@
-mod support;
-
-#[path = "../src/test_support.rs"]
-mod shared_test_support;
-
 use cranpose_render_common::graph::{ProjectiveTransform, RenderGraph, RenderNode};
 use cranpose_ui_graphics::{
     GradientBlurDirection, GraphicsLayer, LayerShape, Rect, RenderEffect, RoundedCornerShape,
     RuntimeShader, gradient_blur_effect,
 };
+
+use crate::{shared_test_support, support};
 
 const FRAME: u32 = 192;
 const REFERENCE: &str = include_str!("fixtures/gradient_blur_reference.wgsl");

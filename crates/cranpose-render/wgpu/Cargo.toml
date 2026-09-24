@@ -10,6 +10,7 @@ keywords.workspace = true
 categories.workspace = true
 readme = "README.md"
 description = "WGPU renderer backend for Cranpose"
+autotests = false
 
 [package.metadata.docs.rs]
 all-features = true
@@ -113,3 +114,7 @@ cranpose-render-common = { path = "../common", features = ["embedded-default-fon
 naga = { version = "30.0.1", features = ["wgsl-in", "glsl-out"] }
 png = "0.18.1"
 pollster = "0.4.0"
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"

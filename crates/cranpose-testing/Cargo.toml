@@ -10,6 +10,7 @@ keywords.workspace = true
 categories.workspace = true
 readme = "README.md"
 description = "Testing utilities and harness for Cranpose"
+autotests = false
 
 [package.metadata.docs.rs]
 all-features = true
@@ -42,3 +43,7 @@ cranpose-macros = { path = "../cranpose-macros" }
 cranpose-ui-layout = { path = "../cranpose-ui-layout" }
 
  
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"

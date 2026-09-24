@@ -5,6 +5,7 @@
 ## Harness and capture
 
 - Start from [robot testing](ROBOT_TESTING.md); run placement-sensitive runners through `run_robot_test.sh`.
+- A failing suite prints only the first `CRANPOSE_ROBOT_FAILURE_LOG_LINES` (220) lines of each example; the full output stays on the host in the `cranpose-robot-results.*` directory the run names, under `~/.cache/cranpose/tmp` on samarch-1.
 - Linux robot event loops require DISPLAY even headlessly. Over SSH, run both `just robot-gpu` and `just robot-captures`; those CI recipes provide Xvfb. Bare `just robot` requires a display supplied by the caller. Measure FPS on a physical display.
 - Set explicit Xvfb screen dimensions and test fractional scale separately; scale-1 assertions do not cover Xft.dpi-derived density.
 - macOS windowed tests need an awake compositor; distinguish present waits from unsettled composition using the diagnostic fields.

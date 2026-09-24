@@ -1,11 +1,11 @@
-mod support;
-
 use cranpose_app_shell::AppShell;
 use cranpose_core::location_key;
 use cranpose_ui::{
     Color, Modifier,
     widgets::{Box, BoxSpec},
 };
+
+use crate::support;
 
 const FRAME_SIZE: u32 = 400;
 const RECT_WIDTH: f32 = 200.0;

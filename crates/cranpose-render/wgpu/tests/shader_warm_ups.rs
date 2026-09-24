@@ -1,14 +1,11 @@
-mod support;
-
-#[path = "../src/test_support.rs"]
-mod shared_test_support;
-
 use cranpose_render_common::graph::{ProjectiveTransform, RenderGraph, RenderNode};
 use cranpose_render_wgpu::pipelines_created;
 use cranpose_ui_graphics::{
     BlendMode, Color, GraphicsLayer, RUNTIME_SHADER_PRELUDE_WGSL, Rect, RenderEffect,
     RuntimeShader, ShaderTarget, ShaderWarmUp,
 };
+
+use crate::{shared_test_support, support};
 
 const WIDTH: u32 = 32;
 const HEIGHT: u32 = 24;

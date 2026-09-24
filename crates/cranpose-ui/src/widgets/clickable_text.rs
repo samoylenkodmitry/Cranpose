@@ -3,7 +3,7 @@
 //! Mirrors Jetpack Compose's `ClickableText` from:
 //! `compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/text/ClickableText.kt`
 
-#![allow(non_snake_case)]
+#![expect(non_snake_case)]
 
 use std::rc::Rc;
 
@@ -61,7 +61,6 @@ impl IntoSharedAnnotatedString for Rc<AnnotatedString> {
 ///     onClick: (Int) -> Unit,
 /// )
 /// ```
-#[allow(clippy::needless_pass_by_value)]
 pub fn ClickableText<T>(
     text: T,
     modifier: Modifier,

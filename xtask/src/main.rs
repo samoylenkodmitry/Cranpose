@@ -135,6 +135,16 @@ const COMMANDS: &[XtaskCommand] = &[
         },
         print_usage: print_ci_gate_reachability_usage,
     },
+    XtaskCommand {
+        name: "test-layout",
+        run: |args| {
+            if let Some(extra) = args.first() {
+                return Err(format!("unknown test-layout option `{extra}`"));
+            }
+            test_layout::run_at(&workspace_root()?)
+        },
+        print_usage: print_test_layout_usage,
+    },
 ];
 
 fn run(args: Vec<String>) -> Result<(), String> {
@@ -177,6 +187,7 @@ fn print_usage() {
            complexity-gate       Diff-scoped cyclomatic complexity ceiling\n\
            duplication-gate      Diff-scoped copy-paste budget\n\
            ci-gate-reachability  Every `just` recipe CI runs must be reachable from `ci`/`ci-full`\n\
+           test-layout          Every tests/*.rs of a one-binary crate must be a module of tests/integration.rs\n\
          \n\
          bundle-macos options:\n\
            --package <name>       Cargo package to build [desktop-app]\n\
@@ -365,6 +376,16 @@ fn print_robot_suite_partition_usage() {
          runs, and the reverse. CI splits the suite across those two halves;\n\
          an example dropped from one and not added to the other stops running\n\
          anywhere, in silence.\n"
+    );
+}
+
+fn print_test_layout_usage() {
+    eprintln!(
+        "usage: cargo xtask test-layout\n\
+         \n\
+         Fails if a crate that links its integration tests into one binary\n\
+         (`autotests = false`) has a `tests/*.rs` file that is not a module of\n\
+         its `tests/integration.rs`: cargo would compile and run nothing for it."
     );
 }
 
@@ -2879,6 +2900,8 @@ fn wait_for_crates_io(tag_or_version: &str) -> Result<(), String> {
     }
     Ok(())
 }
+
+mod test_layout;
 
 mod gate_diff {
     use std::{

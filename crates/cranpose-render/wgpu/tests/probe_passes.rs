@@ -1,6 +1,6 @@
-mod support;
-
 use support::{SIZE, record_mixed_scene};
+
+use crate::support;
 
 fn probed_against_plain(
     toggle: &'static str,

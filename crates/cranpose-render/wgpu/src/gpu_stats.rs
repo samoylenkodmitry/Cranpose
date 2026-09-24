@@ -589,7 +589,7 @@ impl FrameStats {
         );
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn maybe_print_shadow_shape_cache_miss(
         &self,
         width: u32,

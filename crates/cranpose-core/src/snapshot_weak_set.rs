@@ -115,7 +115,7 @@ impl Default for SnapshotWeakSet {
 }
 
 #[cfg(test)]
-#[allow(clippy::arc_with_non_send_sync)]
+#[expect(clippy::arc_with_non_send_sync)]
 mod tests {
     use std::{cell::Cell, rc::Rc, sync::RwLock};
 

@@ -1,5 +1,3 @@
-mod support;
-
 use cranpose_app_shell::AppShell;
 use cranpose_core::location_key;
 use cranpose_liquid::prelude::*;
@@ -13,6 +11,8 @@ use cranpose_ui::{
 use cranpose_ui_graphics::{
     Brush, Color, LIQUID_GLASS_SPECIALIZATIONS, Point, RenderEffect, TileMode,
 };
+
+use crate::support;
 
 const VIEW_WIDTH: f32 = 360.0;
 const VIEW_HEIGHT: f32 = 240.0;

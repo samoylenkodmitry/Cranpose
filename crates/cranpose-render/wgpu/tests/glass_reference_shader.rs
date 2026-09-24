@@ -1,8 +1,3 @@
-mod support;
-
-#[path = "../src/test_support.rs"]
-mod shared_test_support;
-
 use cranpose_liquid::{Glass, GlassDynamics, GlassMorph, LiquidColors, LiquidShape};
 use cranpose_render_common::graph::{ProjectiveTransform, RenderGraph, RenderNode};
 use cranpose_render_wgpu::CapturedFrame;
@@ -12,6 +7,8 @@ use cranpose_ui_graphics::{
     RuntimeShader, SubstrateSpec, TileMode, specialize_liquid_glass,
 };
 use support::{brush_rect, solid_rect};
+
+use crate::{shared_test_support, support};
 
 const REFERENCE_WGSL: &str = include_str!("fixtures/liquid_glass_reference.wgsl");
 const FRAME_WIDTH: u32 = 360;

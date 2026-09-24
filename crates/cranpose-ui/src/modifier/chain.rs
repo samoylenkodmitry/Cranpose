@@ -1,9 +1,9 @@
-#![allow(private_interfaces)]
+#![expect(private_interfaces)]
 
 use std::{any::type_name_of_val, cell::RefCell, rc::Rc};
 
 use cranpose_core::NodeId;
-#[allow(unused_imports)]
+#[expect(unused_imports)]
 use cranpose_foundation::InvalidationKind;
 use cranpose_foundation::{
     BasicModifierNodeContext, ModifierInvalidation, ModifierNodeChain, ModifierNodeContext,

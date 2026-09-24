@@ -10,6 +10,7 @@ keywords.workspace = true
 categories.workspace = true
 readme = "README.md"
 description = "Cranpose runtime and UI facade"
+autotests = false
 
 [package.metadata.docs.rs]
 # docs.rs builds on Linux, where the android/ios/web features cannot compile.
@@ -547,3 +548,7 @@ wgpu = { version = "30.0", optional = true, default-features = false, features =
 # workspace's shared test scratch directory for this crate's own tests.
 cranpose-core = { path = "../cranpose-core", features = ["test-helpers"] }
 cranpose-runtime-std = { path = "../cranpose-runtime-std" }
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"

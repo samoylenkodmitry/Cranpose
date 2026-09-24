@@ -418,3 +418,65 @@ fn popup_inside_lazy_column_item_is_removed_when_no_longer_composed() {
          (regression: selection handles persisted after the editor closed)"
     );
 }
+
+#[test]
+fn closed_popup_releases_its_scopes_and_states() {
+    use cranpose_core::{mutableStateOf, ownedMutableStateOf, remember};
+
+    let _app_context = crate::render_state::app_context_test_scope();
+    let mut composition = Composition::new(MemoryApplier::new());
+    let key = location_key(file!(), line!(), column!());
+
+    let show = mutableStateOf(true);
+    let x = mutableStateOf(0.0f32);
+    let mut content = move || {
+        PopupHost(move || {
+            if show.value() {
+                let tint = remember(|| ownedMutableStateOf(MARKER)).with(Clone::clone);
+                Popup(
+                    Rect {
+                        x: x.value(),
+                        y: 60.0,
+                        width: 0.0,
+                        height: 0.0,
+                    },
+                    Point { x: 0.0, y: 0.0 },
+                    move || {
+                        Column(
+                            Modifier::empty()
+                                .size(Size {
+                                    width: 10.0,
+                                    height: 10.0,
+                                })
+                                .background(tint.get()),
+                            ColumnSpec::default(),
+                            || {},
+                        );
+                    },
+                );
+            }
+        });
+    };
+
+    composition.render(key, &mut content).expect("render");
+    settle(&mut composition, key, &mut content);
+    let runtime = composition.runtime_handle();
+    let mut samples = Vec::new();
+    for cycle in 0..6u8 {
+        show.set(true);
+        settle(&mut composition, key, &mut content);
+        x.set(f32::from(cycle) + 1.0);
+        settle(&mut composition, key, &mut content);
+        show.set(false);
+        settle(&mut composition, key, &mut content);
+        samples.push((
+            runtime.state_arena_debug_stats().cells_len,
+            cranpose_core::debug_live_recompose_scope_count(),
+        ));
+    }
+
+    assert!(
+        samples.iter().all(|sample| *sample == samples[0]),
+        "a moved popup kept its (state cells, recompose scopes) after it closed: {samples:?}"
+    );
+}

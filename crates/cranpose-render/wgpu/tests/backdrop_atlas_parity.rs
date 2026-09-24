@@ -1,8 +1,3 @@
-mod support;
-
-#[path = "../src/test_support.rs"]
-mod shared_test_support;
-
 use cranpose_render_common::{
     Renderer,
     graph::{ProjectiveTransform, RenderGraph, RenderNode},
@@ -22,6 +17,8 @@ use support::{
     },
     region_pixels, solid_rect,
 };
+
+use crate::{shared_test_support, support};
 
 fn rect(x: f32, y: f32, width: f32, height: f32) -> Rect {
     Rect {

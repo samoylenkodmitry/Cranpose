@@ -41,14 +41,13 @@ mod toggleable;
 mod weight;
 mod window_root;
 
-#[allow(unused_imports)]
 pub use chain::{ModifierChainHandle, ModifierChainInspectorNode, ModifierLocalsHandle};
 pub use cranpose_foundation::{
     AnyModifierElement, DynModifierElement, FocusState, PointerEvent, PointerEventKind,
     PointerSource, RotaryScrollEvent, SemanticsConfiguration, modifier_element,
 };
 use cranpose_foundation::{ModifierNodeElement, NodeCapabilities, ProgressBarRangeInfo};
-#[allow(unused_imports)]
+#[expect(unused_imports)]
 pub use cranpose_ui_graphics::{
     BlendMode, BlurredEdgeTreatment, Brush, Color, ColorFilter, CompositingStrategy, CornerRadii,
     CursorIcon, CustomPointerIcon, CutDirection, Dp, DpOffset, EdgeInsets, GradientCutMaskSpec,
@@ -62,16 +61,14 @@ pub use drag_and_drop::{
     DragAndDropTargetElement, DragAndDropTargetNode,
 };
 use focus::FocusTargetElement;
-#[allow(unused_imports)]
 pub use focus::{FocusDirection, FocusRequestError, FocusRequester, FocusRequesterElement};
 pub use graphics_layer::GlassMaterial;
 pub(crate) use local::{
     ModifierLocalAncestorResolver, ModifierLocalSource, ModifierLocalToken, ResolvedModifierLocal,
 };
 use local::{ModifierLocalConsumerElement, ModifierLocalProviderElement};
-#[allow(unused_imports)]
 pub use local::{ModifierLocalKey, ModifierLocalReadScope};
-#[allow(unused_imports)]
+#[expect(unused_imports)]
 pub use pointer_input::{AwaitPointerEventScope, PointerInputScope};
 pub use rotary_input::RotaryInputModifierNode;
 #[cfg(test)]

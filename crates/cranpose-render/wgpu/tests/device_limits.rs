@@ -1,8 +1,3 @@
-mod support;
-
-#[path = "../src/test_support.rs"]
-mod shared_test_support;
-
 use std::sync::Arc;
 
 use cranpose_render_common::{
@@ -13,6 +8,8 @@ use cranpose_render_wgpu::WgpuRenderer;
 use cranpose_ui::AppContext;
 use cranpose_ui_graphics::{Color, GraphicsLayer, Rect};
 use support::solid_rect;
+
+use crate::{shared_test_support, support};
 
 fn downlevel_uniform_renderer() -> Result<(WgpuRenderer, Arc<wgpu::Device>), String> {
     let adapter = support::device::headless_adapter(wgpu::Backends::all())?;

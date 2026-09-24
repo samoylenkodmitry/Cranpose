@@ -2260,7 +2260,7 @@ fn NestedLayerEventDemo(
 }
 
 #[composable]
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn DraggableOverlay(
     pos: cranpose_core::MutableState<Point>,
     backdrop_effect: RenderEffect,

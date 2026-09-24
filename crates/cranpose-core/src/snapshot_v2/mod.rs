@@ -18,7 +18,7 @@
 //! The current snapshot is stored in thread-local storage and automatically
 //! managed by the snapshot system.
 
-#![allow(clippy::arc_with_non_send_sync)]
+#![expect(clippy::arc_with_non_send_sync)]
 
 use std::{
     cell::{Cell, RefCell},
@@ -740,7 +740,7 @@ pub(crate) fn optimistic_merges(
     result
 }
 
-#[allow(clippy::arc_with_non_send_sync)]
+#[expect(clippy::arc_with_non_send_sync)]
 fn merge_observers(a: Option<ReadObserver>, b: Option<ReadObserver>) -> Option<ReadObserver> {
     match (a, b) {
         (None, None) => None,
@@ -784,7 +784,7 @@ pub(crate) struct SnapshotState {
     pub(crate) disposed: Cell<bool>,
     pub(crate) read_observer: RefCell<Option<ReadObserver>>,
     pub(crate) write_observer: RefCell<Option<WriteObserver>>,
-    #[allow(clippy::type_complexity)]
+    #[expect(clippy::type_complexity)]
     pub(crate) modified: RefCell<HashMap<StateObjectId, (Arc<dyn StateObject>, SnapshotId)>>,
     on_dispose: RefCell<Option<Box<dyn FnOnce()>>>,
     runtime_tracked: bool,

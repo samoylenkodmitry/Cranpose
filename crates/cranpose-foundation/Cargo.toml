@@ -10,6 +10,7 @@ keywords.workspace = true
 categories.workspace = true
 readme = "README.md"
 description = "Modifiers, nodes, and foundation elements for Cranpose"
+autotests = false
 
 [package.metadata.docs.rs]
 all-features = true
@@ -29,3 +30,7 @@ log = "0.4"
 
 [features]
 default = []
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"

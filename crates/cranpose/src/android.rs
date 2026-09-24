@@ -987,7 +987,7 @@ fn drop_android_surface(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn initialize_android_rendering<F>(
     instance: &wgpu::Instance,
     existing_resources: Option<GpuResources>,
@@ -1128,7 +1128,7 @@ where
     Ok((setup.resources, actual_size))
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn initialize_android_rendering_with_backend_fallback<F>(
     wgpu_context: &mut AndroidWgpuContext,
     existing_resources: Option<GpuResources>,

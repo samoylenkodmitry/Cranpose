@@ -227,13 +227,14 @@ hooks:
 
 # The workspace test suite.
 #
-# `--no-fail-fast` because cargo otherwise stops at the first test binary that
-# fails, and the ~129 remaining binaries report nothing. On samarch-1 that is
-# not hypothetical: `cranpose-render-wgpu --test pass_timing_report` segfaults
-# from an environmental GPU fault, and every crate after it in the run
-# silently never executes while the gate reports one failure. The same shape
-# as a step that stops its job -- one problem hides the rest, and the fix
-# costs a full second run to find the second one.
+# `--no-fail-fast` because nextest otherwise stops at the first failing test,
+# and everything after it reports nothing. On samarch-1 that is not
+# hypothetical: `cranpose-render-wgpu`'s `pass_timing_report` tests can segfault
+# from an environmental GPU fault; nextest runs every test in its own process,
+# so the crash fails that test alone, but without this flag the rest of the run
+# silently never executes while the gate reports one failure. The same shape as
+# a step that stops its job -- one problem hides the rest, and the fix costs a
+# full second run to find the second one.
 test: _disk-guard
     cargo nextest run --cargo-profile ci --workspace --no-fail-fast
     cargo test --profile ci --workspace --exclude desktop-app-platform --doc
@@ -303,6 +304,11 @@ test-robot-suite-partition:
 
 test-ci-gate-reachability:
     cargo xtask ci-gate-reachability
+
+# Each crate links its integration tests into one binary; a test file left out
+# of its tests/integration.rs would compile and run nothing.
+test-layout:
+    cargo xtask test-layout
 
 # The deterministic slot-table model check, at the frame count CI uses.
 test-property:
@@ -546,22 +552,22 @@ test-liquid-graphics:
     cargo test --profile ci -p cranpose-ui-graphics
 
 test-liquid-vibrancy filter="":
-    cargo test --profile ci -p cranpose-render-wgpu --test glass_vibrancy '{{filter}}' -- --test-threads=1
+    cargo nextest run --cargo-profile ci -p cranpose-render-wgpu --test-threads 1 -E 'test(/^glass_vibrancy::/)' '{{filter}}'
 
 audit-liquid-native-parity:
-    cargo test --profile ci -p cranpose-render-wgpu --test glass_vibrancy -- --ignored --test-threads=1
+    cargo nextest run --cargo-profile ci -p cranpose-render-wgpu --test-threads 1 --run-ignored only -E 'test(/^glass_vibrancy::/)'
 
 test-liquid-surface filter="":
-    cargo test --profile ci -p cranpose-render-wgpu --test glass_surface_refraction '{{filter}}' -- --test-threads=1
+    cargo nextest run --cargo-profile ci -p cranpose-render-wgpu --test-threads 1 -E 'test(/^glass_surface_refraction::/)' '{{filter}}'
 
 test-render-composition:
-    cargo test --profile ci -p cranpose-render-wgpu --test effect_semantics --test backdrop_atlas_parity -- --test-threads=1
+    cargo nextest run --cargo-profile ci -p cranpose-render-wgpu --test-threads 1 -E 'test(/^effect_semantics::/) or test(/^backdrop_atlas_parity::/)'
 
 test-render-contract:
-    cargo test --profile ci -p cranpose-render-wgpu --lib --test render_contract --test glass_reference_shader --no-fail-fast -- --test-threads=1
+    cargo nextest run --cargo-profile ci -p cranpose-render-wgpu --test-threads 1 --no-fail-fast -E 'kind(lib) or test(/^render_contract::/) or test(/^glass_reference_shader::/)'
 
 test-substrates filter="":
-    cargo test --profile ci -p cranpose-render-wgpu --test substrate_reference '{{filter}}' -- --test-threads=1
+    cargo nextest run --cargo-profile ci -p cranpose-render-wgpu --test-threads 1 -E 'test(/^substrate_reference::/)' '{{filter}}'
 
 # --- robot end-to-end ------------------------------------------------------
 
@@ -737,7 +743,7 @@ _disk-guard:
 # all seven on every pull request.
 
 # What a pull request is gated on. Run this before pushing.
-ci: fmt-check typos versions test clippy clippy-optional-backends clippy-svg clippy-hyphenation clippy-robot clippy-wasm doc budgets complexity-gate duplication-gate state-holder-gate test-robot-discovery test-shell-helpers test-host-lock test-ci-filters test-features test-property bench-smoke test-ci-gate-reachability test-robot-suite-partition test-android-accessibility-contract
+ci: fmt-check typos versions test clippy clippy-optional-backends clippy-svg clippy-hyphenation clippy-robot clippy-wasm doc budgets complexity-gate duplication-gate state-holder-gate test-robot-discovery test-shell-helpers test-host-lock test-ci-filters test-features test-property bench-smoke test-ci-gate-reachability test-layout test-robot-suite-partition test-android-accessibility-contract
 
 # Needs a Linux box with the X11 stack, an Android SDK and (on macOS) Xcode.
 

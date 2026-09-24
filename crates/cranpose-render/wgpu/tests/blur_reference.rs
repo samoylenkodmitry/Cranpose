@@ -1,11 +1,8 @@
-mod support;
-
-#[path = "../src/test_support.rs"]
-mod shared_test_support;
-
 use cranpose_render_common::graph::{ProjectiveTransform, RenderGraph, RenderNode};
 use cranpose_ui_graphics::{Color, GraphicsLayer, Rect, RenderEffect};
 use support::{ReferenceEdge, region_pixels, solid_rect};
+
+use crate::{shared_test_support, support};
 
 const FRAME: u32 = 160;
 const RADIUS: f32 = 4.0;

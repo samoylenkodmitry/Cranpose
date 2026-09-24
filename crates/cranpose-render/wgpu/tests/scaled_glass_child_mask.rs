@@ -1,9 +1,9 @@
-mod support;
-
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use cranpose_liquid::{Glass, LiquidModifierExt, LiquidShape, LiquidTheme, LiquidThemeSpec};
 use support::page::*;
+
+use crate::support;
 
 const FRAME: u32 = 200;
 const BUTTON: [f32; 4] = [80.0, 80.0, 40.0, 40.0];

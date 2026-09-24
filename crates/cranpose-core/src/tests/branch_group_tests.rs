@@ -691,7 +691,7 @@ fn a_user_binding_named_like_the_guard_is_not_shadowed() {
     assert_composition_valid(&composition);
 }
 
-#[allow(non_snake_case)]
+#[expect(non_snake_case)]
 fn PlainCamelHelper(value: i32) -> i32 {
     value
 }
@@ -4169,7 +4169,6 @@ fn an_await_free_tail_of_a_suspending_block_keeps_branch_identity() {
     assert_composition_valid(&composition);
 }
 
-#[allow(dead_code, non_snake_case)]
 mod hygiene_shadow_probe {
     use super::*;
 

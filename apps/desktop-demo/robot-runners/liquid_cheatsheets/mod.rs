@@ -51,7 +51,7 @@ impl<T> RobotResultContext<T> for std::result::Result<T, String> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[allow(dead_code)]
+#[expect(dead_code)]
 pub enum Case {
     TogglePress,
     MenuOpen,
