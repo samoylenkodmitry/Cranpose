@@ -5,7 +5,8 @@ use std::{
 
 mod support;
 
-use cranpose_navigation::{NavController, NavHost, NavOptions, rememberNavController};
+use cranpose_animation::{Easing, tween};
+use cranpose_navigation::{NavController, NavHost, NavHostWith, NavOptions, rememberNavController};
 use support::{Host, Probe, Screen, screens};
 
 fn controller(nav: &Rc<Cell<Option<NavController<Screen>>>>) -> NavController<Screen> {
@@ -107,6 +108,29 @@ fn the_host_shows_the_top_screen_and_crossfades_to_the_next() {
     );
     host.settle();
     assert_eq!(probe.live(), [Screen::Detail(1)]);
+}
+
+#[test]
+fn a_host_with_its_own_transition_fades_for_that_long() {
+    let (probe, nav) = (Probe::default(), Rc::new(Cell::new(None)));
+    let (sink, screens) = (Rc::clone(&nav), probe.clone());
+    let mut host = Host::new(move || {
+        let controller = rememberNavController(Screen::Home);
+        sink.set(Some(controller));
+        let screens = screens.clone();
+        NavHostWith(
+            controller,
+            tween(100, Easing::LinearEasing),
+            move |screen| screens.screen(screen),
+        );
+    });
+    controller(&nav).navigate(Screen::Settings);
+    host.run_frames(12);
+    assert_eq!(
+        probe.live(),
+        [Screen::Settings],
+        "a 100 ms fade is over after 200 ms, well before the default 700 ms"
+    );
 }
 
 #[test]

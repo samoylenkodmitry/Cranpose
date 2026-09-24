@@ -102,7 +102,12 @@ impl Host {
     /// Delivers queued UI work, such as back requests, and runs frames until
     /// every transition has finished.
     pub fn settle(&mut self) {
-        for _ in 0..SETTLE_FRAMES {
+        self.run_frames(SETTLE_FRAMES);
+    }
+
+    /// Delivers queued UI work and runs `count` frames.
+    pub fn run_frames(&mut self, count: u64) {
+        for _ in 0..count {
             self.rule.runtime_handle().drain_ui();
             self.now += FRAME_NANOS;
             self.rule.advance_frame(self.now).expect("frame");
