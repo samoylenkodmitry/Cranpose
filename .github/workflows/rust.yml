@@ -192,6 +192,10 @@ jobs:
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
         run: just clippy
 
+      - name: Run clippy in the release profile
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
+        run: just clippy-release
+
       - name: Run clippy on the optional desktop backends
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
         run: just clippy-optional-backends
