@@ -443,15 +443,7 @@ const WORKSPACE_DUPLICATE_DEBT: &[DuplicateDebt] = &[
     },
     DuplicateDebt {
         family: "windows-sys",
-        reason: "tempfile 3.27 and rustls-platform-verifier 0.7 pin ^0.52 and arboard 3.6.1, dirs-sys 0.5 and socket2 0.6 pin ^0.60 while winit-win32 0.31.0-beta.3 and tokio are on 0.61",
-    },
-    DuplicateDebt {
-        family: "windows-targets",
-        reason: "follows the windows-sys split",
-    },
-    DuplicateDebt {
-        family: "windows_x86_64_msvc",
-        reason: "follows the windows-targets split",
+        reason: "arboard 3.6.1 pins ^0.60 while winit-win32 0.31.0-beta.3, tokio and the rest of the graph are on 0.61",
     },
 ];
 

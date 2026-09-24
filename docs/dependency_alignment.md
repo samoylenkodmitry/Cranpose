@@ -48,10 +48,8 @@ carries at its latest published release, so no `cargo upgrade` collapses it:
 - `thiserror`, `thiserror-impl`, `jni-sys`: `ndk 0.9.0` and `ndk-sys 0.6.0`
   pin `thiserror ^1` and `jni-sys ^0.3` while the workspace is on
   `thiserror 2` and `jni 0.22` is on `jni-sys ^0.4`.
-- `windows-sys`, `windows-targets`, `windows_x86_64_msvc`: `tempfile 3.27`
-  and `rustls-platform-verifier 0.7` pin `^0.52`, and `arboard 3.6.1`,
-  `dirs-sys 0.5` and `socket2 0.6` pin `^0.60`, while `winit-win32
-  0.31.0-beta.3` and `tokio` are on `0.61`.
+- `windows-sys`: `arboard 3.6.1` pins `^0.60` while `winit-win32
+  0.31.0-beta.3`, `tokio` and the rest of the graph are on `0.61`.
 - `syn`: `serde_derive`, `thiserror-impl 2`, `bytemuck_derive` and
   `wasm-bindgen-macro` moved to `syn 3`, while `async-recursion`, `jni-macros`,
   `num_enum_derive` and `zerocopy-derive` are still on `syn 2` at their latest
