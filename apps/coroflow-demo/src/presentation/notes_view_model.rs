@@ -50,8 +50,9 @@ pub struct NotesUseCases {
 /// The notes screen's view model.
 ///
 /// It lives on the main thread in its [`MainScope`] and knows nothing about
-/// Cranpose: the screen reads [`ui_state`](Self::ui_state) and
-/// [`events`](Self::events) and calls the `on_*` methods.
+/// Cranpose: the screen reads [`ui_state`](Self::ui_state) and calls the
+/// `on_*` methods, and the view model reports through the screen's
+/// [`NotesMessages`].
 pub struct NotesViewModel {
     scope: MainScope,
     query: MutableStateFlow<String>,
