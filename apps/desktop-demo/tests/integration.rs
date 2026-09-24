@@ -1,11 +1,7 @@
-//! Every integration test of this crate, linked as one binary: one link
-//! instead of one per file, while nextest still runs each test in its own
-//! process.
-
 #[path = "../../../crates/cranpose-render/wgpu/tests/support/device.rs"]
 mod gpu_test_device;
 #[path = "../src/test_screens/liquid_tab_reference.rs"]
-#[allow(dead_code)]
+#[expect(dead_code)]
 mod reference;
 
 mod accessibility_audit;

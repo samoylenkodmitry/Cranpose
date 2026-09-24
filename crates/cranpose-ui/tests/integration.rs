@@ -1,7 +1,3 @@
-//! Every integration test of this crate, linked as one binary: one link
-//! instead of one per file, while nextest still runs each test in its own
-//! process.
-
 mod api_surface;
 mod basic_text_field_style_integration;
 mod debug_and_draw_scopes;

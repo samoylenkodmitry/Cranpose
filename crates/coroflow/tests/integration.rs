@@ -1,7 +1,3 @@
-//! Every integration test of this crate, linked as one binary: one link
-//! instead of one per file, while nextest still runs each test in its own
-//! process.
-
 mod allocations;
 mod blocking_dispatch;
 mod buffering;

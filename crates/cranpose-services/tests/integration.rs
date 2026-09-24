@@ -1,7 +1,3 @@
-//! Every integration test of this crate, linked as one binary: one link
-//! instead of one per file, while nextest still runs each test in its own
-//! process.
-
 mod app_info_integration;
 mod audio_haptics_integration;
 mod capability_state_integration;
