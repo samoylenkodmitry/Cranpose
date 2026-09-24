@@ -647,6 +647,26 @@ fn event_loop_writes_keep_the_record_chain_bounded() {
 }
 
 #[test]
+fn global_writes_keep_the_state_arena_flat() {
+    let runtime = runtime::TestRuntime::new();
+    let handle = runtime.handle();
+
+    let mut cells = Vec::new();
+    for cycle in 0..8usize {
+        let held = OwnedMutableState::with_runtime(cycle, handle.clone());
+        let holder = OwnedMutableState::with_runtime(None, handle.clone());
+        holder.set(Some(held));
+        drop(holder);
+        cells.push(handle.state_arena_debug_stats().cells_len);
+    }
+
+    assert!(
+        cells.iter().all(|len| *len == cells[0]),
+        "a state written from the global snapshot kept its value alive after its owner dropped it: {cells:?}"
+    );
+}
+
+#[test]
 fn test_assign_value_with_vec() {
     let source = StateRecord::new(10, vec![1, 2, 3, 4, 5], None);
     let target = StateRecord::new(20, Vec::<i32>::new(), None);
