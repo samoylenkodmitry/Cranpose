@@ -319,22 +319,14 @@ impl ModifierNodeSlices {
         self.viewport_window_rect.clone()
     }
 
-    pub fn prepare_text_layout(
-        &self,
-        max_width: Option<f32>,
-    ) -> Option<crate::text::PreparedTextLayout> {
-        if let Some(handle) = &self.prepared_text_layout {
-            return Some(handle.prepare(max_width));
-        }
-
-        let text = self.annotated_text()?;
-        let style = self.text_style.clone().unwrap_or_default();
-        Some(crate::text::prepare_text_layout(
-            text,
-            &style,
-            self.text_layout_options.unwrap_or_default(),
-            max_width,
-        ))
+    /// Returns the text layout this node's `Text` produced when layout last
+    /// measured it, laid out at the same width.
+    ///
+    /// `None` when the node carries no `Text` or has not been measured yet.
+    pub fn measured_text_layout(&self) -> Option<crate::text::PreparedTextLayout> {
+        self.prepared_text_layout
+            .as_ref()
+            .and_then(TextPreparedLayoutHandle::measured_layout)
     }
 
     pub fn graphics_layer(&self) -> Option<GraphicsLayer> {

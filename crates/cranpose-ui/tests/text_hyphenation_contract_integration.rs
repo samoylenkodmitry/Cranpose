@@ -1,73 +1,10 @@
 use cranpose_ui::{
-    AppContext, ParagraphStyle, SpanStyle, TextLayoutOptions, TextMeasurer, TextMetrics,
-    TextOverflow, TextStyle, prepare_text_layout, set_text_measurer,
+    AppContext, ParagraphStyle, SpanStyle, TextLayoutOptions, TextOverflow, TextStyle,
+    prepare_text_layout, set_text_measurer,
     text::{Hyphens, TextUnit},
-    text_layout_result::TextLayoutResult,
 };
 
-struct ContractMeasurer;
-
-impl TextMeasurer for ContractMeasurer {
-    fn measure(
-        &self,
-        text: &cranpose_ui::text::AnnotatedString,
-        _style: &TextStyle,
-    ) -> TextMetrics {
-        let line_count = text.text.split('\n').count().max(1);
-        let width = text
-            .text
-            .split('\n')
-            .map(|line| line.chars().count() as f32 * 6.0)
-            .fold(0.0_f32, f32::max);
-        TextMetrics {
-            width,
-            height: line_count as f32 * 10.0,
-            line_height: 10.0,
-            line_count,
-        }
-    }
-
-    fn get_offset_for_position(
-        &self,
-        text: &cranpose_ui::text::AnnotatedString,
-        _style: &TextStyle,
-        x: f32,
-        _y: f32,
-    ) -> usize {
-        let char_idx = (x / 6.0).round().max(0.0) as usize;
-        text.text
-            .char_indices()
-            .nth(char_idx)
-            .map_or(text.text.len(), |(byte_idx, _)| byte_idx)
-    }
-
-    fn get_cursor_x_for_offset(
-        &self,
-        text: &cranpose_ui::text::AnnotatedString,
-        _style: &TextStyle,
-        offset: usize,
-    ) -> f32 {
-        text.text[..offset.min(text.text.len())].chars().count() as f32 * 6.0
-    }
-
-    fn layout(
-        &self,
-        text: &cranpose_ui::text::AnnotatedString,
-        _style: &TextStyle,
-    ) -> TextLayoutResult {
-        TextLayoutResult::monospaced(&text.text, 6.0, 10.0)
-    }
-
-    fn choose_auto_hyphen_break(
-        &self,
-        _line: &str,
-        _style: &TextStyle,
-        _segment_start_char: usize,
-        measured_break_char: usize,
-    ) -> Option<usize> {
-        measured_break_char.checked_sub(1)
-    }
-}
+use crate::text_contract_measurer::ContractMeasurer;
 
 #[test]
 fn prepare_text_layout_uses_measurer_hyphen_contract() {

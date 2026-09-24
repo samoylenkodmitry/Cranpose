@@ -2,8 +2,9 @@ use std::{cell::Cell, rc::Rc};
 
 use cranpose_core::{MemoryApplier, Node, NodeId, collections::map::HashSet};
 use cranpose_ui::{
-    DrawCommand, LayoutBox, LayoutNode, ModifierNodeSlices, Point, Rect, ResolvedModifiers, Size,
-    SubcomposeLayoutNode, TextLayoutOptions, TextOverflow, TextPanResolver, prepare_text_layout,
+    DrawCommand, LayoutBox, LayoutNode, ModifierNodeSlices, Point, PreparedTextLayout, Rect,
+    ResolvedModifiers, Size, SubcomposeLayoutNode, TextLayoutOptions, TextOverflow,
+    TextPanResolver, prepare_text_layout,
     text::{AnnotatedString, TextAlign, TextStyle, resolve_text_direction},
 };
 use cranpose_ui_graphics::{
@@ -36,6 +37,7 @@ struct BuildNodeSnapshot {
     translated_content_context: bool,
     has_own_origin_sinks: bool,
     measured_max_width: Option<f32>,
+    measured_text_layout: Option<PreparedTextLayout>,
     resolved_modifiers: ResolvedModifiers,
     draw_commands: Vec<DrawCommand>,
     outer_draw_command_count: usize,
@@ -1084,6 +1086,7 @@ fn build_layer_node_internal(
         translated_content_context,
         has_own_origin_sinks,
         measured_max_width,
+        measured_text_layout,
         resolved_modifiers,
         draw_commands,
         outer_draw_command_count,
@@ -1153,7 +1156,7 @@ fn build_layer_node_internal(
         text_style: text_style.as_ref(),
         text_layout_options,
         text_pan,
-        modifier_slices: None,
+        measured_layout: measured_text_layout,
     }) {
         children.push(RenderNode::Primitive(PrimitiveEntry {
             phase: PrimitivePhase::BeforeChildren,
@@ -1474,7 +1477,7 @@ fn build_layer_node_from_data(
         text_style: modifier_slices.text_style(),
         text_layout_options: modifier_slices.text_layout_options(),
         text_pan: modifier_slices.text_pan_resolver(),
-        modifier_slices: Some(modifier_slices.as_ref()),
+        measured_layout: modifier_slices.measured_text_layout(),
     }) {
         render_children.push(RenderNode::Primitive(PrimitiveEntry {
             phase: PrimitivePhase::BeforeChildren,
@@ -1812,7 +1815,7 @@ struct TextNodeParts<'a> {
     text_style: Option<&'a TextStyle>,
     text_layout_options: Option<TextLayoutOptions>,
     text_pan: Option<TextPanResolver>,
-    modifier_slices: Option<&'a ModifierNodeSlices>,
+    measured_layout: Option<PreparedTextLayout>,
 }
 
 fn text_node_from_parts(parts: TextNodeParts<'_>) -> Option<TextPrimitiveNode> {
@@ -1825,7 +1828,7 @@ fn text_node_from_parts(parts: TextNodeParts<'_>) -> Option<TextPrimitiveNode> {
         text_style,
         text_layout_options,
         text_pan,
-        modifier_slices,
+        measured_layout,
     } = parts;
     let value = annotated_text?;
     let default_text_style = TextStyle::default();
@@ -1842,16 +1845,19 @@ fn text_node_from_parts(parts: TextNodeParts<'_>) -> Option<TextPrimitiveNode> {
         .map_or(0.0, |resolve| resolve(content_width));
     let pans_horizontally = text_pan.is_some();
 
-    let max_width = if pans_horizontally {
-        None
-    } else {
-        let measure_width =
-            resolve_text_measure_width(content_width, padding, measured_max_width, options);
-        Some(measure_width).filter(|width| width.is_finite() && *width > 0.0)
-    };
-    let prepared = modifier_slices
-        .and_then(|slices| slices.prepare_text_layout(max_width))
-        .unwrap_or_else(|| prepare_text_layout(value, &text_style, options, max_width));
+    let prepared = measured_layout.unwrap_or_else(|| {
+        let max_width = if pans_horizontally {
+            None
+        } else {
+            Some(resolve_text_measure_width(
+                content_width,
+                padding,
+                measured_max_width,
+            ))
+            .filter(|width| width.is_finite() && *width > 0.0)
+        };
+        prepare_text_layout(value, &text_style, options, max_width)
+    });
     let visual_style = prepared.visual_style.clone();
     let measured_draw_width = prepared.metrics.width.max(0.0);
     let draw_width = if options.overflow == TextOverflow::Visible || pans_horizontally {
@@ -1935,6 +1941,7 @@ fn layout_box_to_snapshot(node: &LayoutBox, parent: Option<&LayoutBox>) -> Build
         translated_content_context: node.node_data.modifier_slices.translated_content_context(),
         has_own_origin_sinks: modifier_slices_have_origin_sinks(&node.node_data.modifier_slices),
         measured_max_width: None,
+        measured_text_layout: node.node_data.modifier_slices.measured_text_layout(),
         resolved_modifiers: node.node_data.resolved_modifiers,
         draw_commands: node.node_data.modifier_slices.draw_commands().to_vec(),
         outer_draw_command_count: node.node_data.modifier_slices.outer_draw_command_count(),
@@ -2044,53 +2051,25 @@ pub fn expand_text_bounds_for_baseline_shift(
     }
 }
 
-/// The width the paint pass must lay this paragraph out at.
+/// The width the paint pass lays text out at when no `Text` node measured it,
+/// as for text fields.
 ///
-/// **It is the width LAYOUT wrapped at, not the width the node ended up.** A
-/// `Text` without `fill_max_width` is placed at its own `metrics.width` — the
-/// widest line it produced — which is by construction NARROWER than the
-/// constraint it wrapped under. Re-wrapping at that narrower width is not the
-/// no-op it looks like: the widest line is the one that exactly fills the
-/// limit, so measuring it against itself puts its last word over the edge and
-/// the paragraph gains a line. Measured against the real font backend
-/// (`SoftwareTextMeasurer`, the one the wgpu renderer installs), that fires on
-/// 46% of multi-line paragraphs — the block then paints a line taller than the
-/// box layout reserved for it, its last line is clipped away, and every
-/// following sibling has been placed as if that line did not exist.
-///
-/// So an unlimited soft-wrapping clip paragraph keeps the measurement width
-/// even when the node came out narrower — `may_expand_to_avoid_synthetic_wrap`.
-/// The modes that deliberately re-fit (no soft wrap, a finite `max_lines`, or
-/// an ellipsis budget) still take the node's own width, because for those the
-/// node width IS the fitting constraint.
-///
-/// This is the shared implementation. It exists because the wgpu and pixels
-/// pipelines each grew a private copy WITH this rule and its contract tests,
-/// while the scene builder — the copy that the retained render graph actually
-/// runs — kept a plain `available.min(content_width)`. The two private copies
-/// were reachable only from their own tests. One function now, so the tests
-/// guard the code that runs.
+/// It is the width layout measured under, less padding, not the width the node
+/// ended up. A node is placed at its widest line, and re-wrapping a paragraph
+/// at the width of its own widest line can push that line's last word over the
+/// edge and add a line. The node's content width is used only when layout
+/// recorded no constraint.
 pub fn resolve_text_measure_width(
     content_width: f32,
     padding: cranpose_ui::EdgeInsets,
     measured_max_width: Option<f32>,
-    options: TextLayoutOptions,
 ) -> f32 {
-    let width = content_width.max(0.0);
-    if let Some(max_width) = measured_max_width.filter(|w| w.is_finite() && *w > 0.0) {
-        let measured_content_width = (max_width - padding.left - padding.right).max(0.0);
-        if measured_content_width <= width {
-            return measured_content_width;
-        }
-
-        let may_expand_to_avoid_synthetic_wrap = options.soft_wrap
-            && options.max_lines == usize::MAX
-            && options.overflow == TextOverflow::Clip;
-        if may_expand_to_avoid_synthetic_wrap {
-            return measured_content_width;
-        }
-    }
-    width
+    measured_max_width
+        .filter(|width| width.is_finite() && *width > 0.0)
+        .map_or_else(
+            || content_width.max(0.0),
+            |max_width| (max_width - padding.left - padding.right).max(0.0),
+        )
 }
 
 /// How much of the slack a `TextAlign` puts *before* the text: 0 at the start
