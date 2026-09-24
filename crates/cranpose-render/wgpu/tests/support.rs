@@ -440,6 +440,20 @@ pub fn app_shell_for(
     Some((lock, shell))
 }
 
+pub fn update_and_capture(
+    shell: &mut AppShell<WgpuRenderer>,
+    width: u32,
+    height: u32,
+) -> (RenderStatsSnapshot, CapturedFrame) {
+    shell.update();
+    let frame = shell
+        .renderer()
+        .capture_frame(width, height)
+        .expect("frame capture should succeed");
+    let stats = shell.renderer().last_frame_stats().expect("frame stats");
+    (stats, frame)
+}
+
 /// The dynamics of a lens morphing inside a node: one primary shape with
 /// wobble, bulge, ellipse blend and an incompressible strain along x.
 pub fn morphing_lens_dynamics(node: Rect, primary: (f32, f32, f32, f32, f32)) -> GlassDynamics {

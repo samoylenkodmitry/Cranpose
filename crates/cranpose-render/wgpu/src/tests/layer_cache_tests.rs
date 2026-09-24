@@ -1,4 +1,4 @@
-use cranpose_render_common::raster_cache::ScaleBucket;
+use cranpose_render_common::raster_cache::RasterScale;
 use cranpose_ui_graphics::{BlendMode, Rect};
 
 use super::*;
@@ -19,7 +19,7 @@ fn key(index: u64) -> LayerRasterCacheKey {
             height: 1.0,
         },
         (1, 1),
-        ScaleBucket::from_scale(1.0),
+        RasterScale::from_scale(1.0),
     )
 }
 

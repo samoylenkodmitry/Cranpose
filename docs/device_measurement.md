@@ -42,6 +42,7 @@
 - Measure complete recording, upload and GPU consumption; cache hit rates, smaller code and compressed records are not throughput results.
 - Huawei shell wgpu probes may lack the APK's adapter access; validate its shaders through an APK.
 - Check simpleperf event support on the actual build; place `-f` before `-e` and verify recorded sampling attributes.
+- Cranpose's Android library carries no GNU build ID, so simpleperf reports raw offsets; symbolize them with `llvm-symbolizer` against the unstripped library the build kept.
 - Use unique simpleperf output paths, reject repeated summaries, group ratio events and check counter running coverage.
 - Capture temperatures and SurfaceFlinger results before profiler finalization; label profiled timings as diagnostics.
 - Android worker tests must call the API directly on a worker; `ActivityScenario.onActivity` always dispatches onto the UI thread.

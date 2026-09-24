@@ -1740,6 +1740,7 @@ pub struct GpuRenderer {
     pub(crate) backdrop_gates: HashMap<NodeId, AdmissionGate>,
     pub(crate) fill_gates: HashMap<DrawCommandId, AdmissionGate>,
     pub(crate) effect_gates: HashMap<NodeId, AdmissionGate>,
+    pub(crate) source_gates: HashMap<NodeId, AdmissionGate>,
     transparent_sources: HashMap<(u32, u32), Rc<OffscreenTarget>>,
     shadow_surface_cache: BoundedLruCache<ShadowSurfaceCacheKey, CachedShadowSurface>,
     shadow_surface_cache_bytes: u64,
@@ -1966,6 +1967,7 @@ impl GpuRenderer {
             backdrop_gates: HashMap::new(),
             fill_gates: HashMap::new(),
             effect_gates: HashMap::new(),
+            source_gates: HashMap::new(),
             transparent_sources: HashMap::new(),
             shadow_surface_cache: BoundedLruCache::with_capacity_at_least_one(
                 MAX_SHADOW_SURFACE_CACHE_ITEMS,
@@ -2283,6 +2285,7 @@ impl GpuRenderer {
         self.backdrop_gates.retain(|_, gate| retire(gate));
         self.fill_gates.retain(|_, gate| retire(gate));
         self.effect_gates.retain(|_, gate| retire(gate));
+        self.source_gates.retain(|_, gate| retire(gate));
         for target in self.deferred_offscreen_releases.drain(..) {
             self.effect_renderer.release_offscreen(target);
         }

@@ -5,6 +5,7 @@ mod shared_test_support;
 mod support;
 
 mod absolute_offset_text_redraw;
+mod animated_layer_transform;
 mod arc_tessellation;
 mod backdrop_atlas_parity;
 mod backdrop_pass_batching;

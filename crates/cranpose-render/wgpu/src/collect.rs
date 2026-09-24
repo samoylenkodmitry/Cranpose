@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use cranpose_core::NodeId;
 use cranpose_render_common::{
     graph::{
@@ -23,6 +25,49 @@ use crate::{
 
 const AFFINE_TOLERANCE: f32 = 1e-4;
 const ROUNDED_CLIP_AA_MARGIN: f32 = 1.0;
+const ANIMATED_RASTER_STEPS_PER_OCTAVE: f32 = 8.0;
+
+#[derive(Default)]
+pub(crate) struct LayerMotion {
+    previous: HashMap<NodeId, (u32, u64)>,
+    current: HashMap<NodeId, (u32, u64)>,
+}
+
+impl LayerMotion {
+    pub(crate) fn raster_scale(
+        &mut self,
+        node_id: Option<NodeId>,
+        scale: f32,
+        content_hash: u64,
+        cacheable: bool,
+    ) -> f32 {
+        let Some(node_id) = node_id else {
+            return scale;
+        };
+        let seen = (scale.to_bits(), content_hash);
+        self.current.insert(node_id, seen);
+        let scaling = self
+            .previous
+            .get(&node_id)
+            .is_some_and(|(bits, hash)| *bits != seen.0 && *hash == content_hash);
+        if cacheable && scaling && scale.is_finite() && scale > 0.0 {
+            animated_raster_scale(scale)
+        } else {
+            scale
+        }
+    }
+
+    pub(crate) fn end_frame(&mut self) {
+        std::mem::swap(&mut self.previous, &mut self.current);
+        self.current.clear();
+    }
+}
+
+pub(crate) fn animated_raster_scale(scale: f32) -> f32 {
+    let step =
+        (scale.log2() * ANIMATED_RASTER_STEPS_PER_OCTAVE).ceil() / ANIMATED_RASTER_STEPS_PER_OCTAVE;
+    step.exp2().max(scale)
+}
 
 /// One isolated layer's content in that layer's own coordinate space: the flat
 /// z-ordered ops, the isolated children composited at their z, and the
@@ -373,6 +418,7 @@ fn child_placement(layer: &LayerNode) -> Placement {
 pub(crate) fn collect_root(
     root: &LayerNode,
     text_layout: &mut impl TextLayoutResolver,
+    motion: &mut LayerMotion,
     capacity: SceneCapacityHint,
 ) -> LayerScene {
     let mut out = LayerScene {
@@ -385,8 +431,9 @@ pub(crate) fn collect_root(
         snap_anchor: None,
         translated: false,
     };
-    collect_child(root, text_layout, context, &mut out);
+    collect_child(root, text_layout, motion, context, &mut out);
     out.scene.flush_loose();
+    motion.end_frame();
     out
 }
 
@@ -394,7 +441,12 @@ pub(crate) fn collect_overlay(
     root: &LayerNode,
     text_layout: &mut impl TextLayoutResolver,
 ) -> LayerScene {
-    collect_root(root, text_layout, SceneCapacityHint::default())
+    collect_root(
+        root,
+        text_layout,
+        &mut LayerMotion::default(),
+        SceneCapacityHint::default(),
+    )
 }
 
 fn push_backdrop_layer(
@@ -435,6 +487,7 @@ fn push_backdrop_layer(
 fn isolated_child(
     layer: &LayerNode,
     text_layout: &mut impl TextLayoutResolver,
+    motion: &mut LayerMotion,
     context: WalkContext,
     parent_scene: &mut CompositorScene,
 ) -> ChildLayer {
@@ -449,7 +502,7 @@ fn isolated_child(
         scene: CompositorScene::new(),
         children: Vec::new(),
     };
-    collect_into(layer, text_layout, content_context, &mut content);
+    collect_into(layer, text_layout, motion, content_context, &mut content);
     content.scene.flush_loose();
     let transform = layer
         .transform_to_parent
@@ -471,6 +524,16 @@ fn isolated_child(
     } else {
         GraphicsLayer::composite_alpha_8bit(layer.graphics_layer.alpha)
     };
+    let content_hash = layer.target_content_hash();
+    let cacheable = layer.cache_policy == CachePolicy::Auto
+        && layer.backdrop().is_none()
+        && !content.contains_backdrop();
+    let surface_scale = motion.raster_scale(
+        layer.node_id,
+        layer_uniform_scale(&layer.graphics_layer),
+        content_hash,
+        cacheable,
+    );
     ChildLayer {
         z_index: parent_scene.next_z(),
         node_id: layer.node_id,
@@ -483,8 +546,8 @@ fn isolated_child(
         effect: layer.effect().cloned(),
         backdrop: layer.backdrop().cloned(),
         snap_anchor,
-        surface_scale: layer_uniform_scale(&layer.graphics_layer),
-        content_hash: layer.target_content_hash(),
+        surface_scale,
+        content_hash,
         cache_policy: layer.cache_policy,
         content,
     }
@@ -493,6 +556,7 @@ fn isolated_child(
 fn collect_into(
     layer: &LayerNode,
     text_layout: &mut impl TextLayoutResolver,
+    motion: &mut LayerMotion,
     context: WalkContext,
     out: &mut LayerScene,
 ) {
@@ -545,7 +609,7 @@ fn collect_into(
                     snap_anchor: translated_anchor,
                     translated,
                 };
-                collect_child(child_layer, text_layout, child_context, out);
+                collect_child(child_layer, text_layout, motion, child_context, out);
             }
             _ if content_phase(child) == PrimitivePhase::AfterChildren => deferred.push(child),
             _ => push_content(out, text_layout, child, &content),
@@ -609,6 +673,7 @@ fn push_content(
 fn collect_child(
     child: &LayerNode,
     text_layout: &mut impl TextLayoutResolver,
+    motion: &mut LayerMotion,
     context: WalkContext,
     out: &mut LayerScene,
 ) {
@@ -650,7 +715,7 @@ fn collect_child(
             if child.backdrop().is_some() {
                 push_backdrop_layer(child, child_offset, child_context, &mut out.scene);
             }
-            collect_into(child, text_layout, child_context, out);
+            collect_into(child, text_layout, motion, child_context, out);
         }
         Placement::Isolated => {
             let transform = child
@@ -674,7 +739,7 @@ fn collect_child(
                 child_bounds,
                 shadow_clip,
             );
-            let isolated = isolated_child(child, text_layout, context, &mut out.scene);
+            let isolated = isolated_child(child, text_layout, motion, context, &mut out.scene);
             assign_shadow_anchor(&mut out.scene, shadows_before, isolated.snap_anchor);
             out.children.push(isolated);
             out.scene.next_z += 1;

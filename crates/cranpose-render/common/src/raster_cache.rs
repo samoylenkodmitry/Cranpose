@@ -1,21 +1,25 @@
 use cranpose_core::NodeId;
 use cranpose_ui_graphics::{Point, Rect};
 
-const SCALE_BUCKET_STEPS: f32 = 256.0;
-
+/// The device scale a layer raster is drawn at, compared exactly: a raster
+/// drawn at one scale places its edges and glyphs where no other scale does,
+/// so it serves only that scale.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct ScaleBucket(u32);
+pub struct RasterScale(u32);
 
-impl ScaleBucket {
+impl RasterScale {
+    /// The raster scale of `scale`; a scale no raster can be drawn at (zero,
+    /// negative or not finite) is the unit scale.
     pub fn from_scale(scale: f32) -> Self {
         let normalized = if scale.is_finite() && scale > 0.0 {
             scale
         } else {
             1.0
         };
-        Self((normalized * SCALE_BUCKET_STEPS).round().max(1.0) as u32)
+        Self(normalized.to_bits())
     }
 
+    /// The scale's bit pattern.
     pub fn raw(self) -> u32 {
         self.0
     }
@@ -70,7 +74,7 @@ pub struct LayerRasterCacheKey {
     effect_hash: u64,
     local_bounds_bits: [u32; 4],
     pixel_size: [u32; 2],
-    scale_bucket: ScaleBucket,
+    raster_scale: RasterScale,
     device_phase_steps: [u32; 2],
 }
 
@@ -98,7 +102,7 @@ impl LayerRasterCacheKey {
         content_hash: u64,
         local_bounds: Rect,
         pixel_size: (u32, u32),
-        scale_bucket: ScaleBucket,
+        raster_scale: RasterScale,
         device_phase: Point,
     ) -> Self {
         Self {
@@ -108,7 +112,7 @@ impl LayerRasterCacheKey {
             effect_hash: 0,
             local_bounds_bits: local_bounds_bits(local_bounds),
             pixel_size: [pixel_size.0, pixel_size.1],
-            scale_bucket,
+            raster_scale,
             device_phase_steps: device_phase_steps(device_phase),
         }
     }
@@ -119,7 +123,7 @@ impl LayerRasterCacheKey {
         effect_hash: u64,
         local_bounds: Rect,
         pixel_size: (u32, u32),
-        scale_bucket: ScaleBucket,
+        raster_scale: RasterScale,
     ) -> Self {
         Self::effect(
             LayerRasterCacheKind::BackdropEffect,
@@ -128,7 +132,7 @@ impl LayerRasterCacheKey {
             effect_hash,
             local_bounds,
             pixel_size,
-            scale_bucket,
+            raster_scale,
         )
     }
 
@@ -141,7 +145,7 @@ impl LayerRasterCacheKey {
         effect_hash: u64,
         local_bounds: Rect,
         pixel_size: (u32, u32),
-        scale_bucket: ScaleBucket,
+        raster_scale: RasterScale,
     ) -> Self {
         Self::effect(
             LayerRasterCacheKind::LayerEffect,
@@ -150,7 +154,7 @@ impl LayerRasterCacheKey {
             effect_hash,
             local_bounds,
             pixel_size,
-            scale_bucket,
+            raster_scale,
         )
     }
 
@@ -161,7 +165,7 @@ impl LayerRasterCacheKey {
         effect_hash: u64,
         local_bounds: Rect,
         pixel_size: (u32, u32),
-        scale_bucket: ScaleBucket,
+        raster_scale: RasterScale,
     ) -> Self {
         Self {
             kind,
@@ -170,7 +174,7 @@ impl LayerRasterCacheKey {
             effect_hash,
             local_bounds_bits: local_bounds_bits(local_bounds),
             pixel_size: [pixel_size.0, pixel_size.1],
-            scale_bucket,
+            raster_scale,
             device_phase_steps: [0; 2],
         }
     }
@@ -179,7 +183,7 @@ impl LayerRasterCacheKey {
         content_hash: u64,
         local_bounds: Rect,
         pixel_size: (u32, u32),
-        scale_bucket: ScaleBucket,
+        raster_scale: RasterScale,
     ) -> Self {
         Self {
             kind: LayerRasterCacheKind::SceneRange,
@@ -188,7 +192,7 @@ impl LayerRasterCacheKey {
             effect_hash: 0,
             local_bounds_bits: local_bounds_bits(local_bounds),
             pixel_size: [pixel_size.0, pixel_size.1],
-            scale_bucket,
+            raster_scale,
             device_phase_steps: [0; 2],
         }
     }
@@ -203,7 +207,7 @@ impl LayerRasterCacheKey {
         prefix_len: u64,
         local_bounds: Rect,
         pixel_size: (u32, u32),
-        scale_bucket: ScaleBucket,
+        raster_scale: RasterScale,
     ) -> Self {
         Self {
             kind: LayerRasterCacheKind::PrefixSnapshot,
@@ -212,7 +216,7 @@ impl LayerRasterCacheKey {
             effect_hash: prefix_len,
             local_bounds_bits: local_bounds_bits(local_bounds),
             pixel_size: [pixel_size.0, pixel_size.1],
-            scale_bucket,
+            raster_scale,
             device_phase_steps: [0; 2],
         }
     }
@@ -255,8 +259,8 @@ impl LayerRasterCacheKey {
         self.local_bounds_bits
     }
 
-    pub fn scale_bucket(self) -> ScaleBucket {
-        self.scale_bucket
+    pub fn raster_scale(self) -> RasterScale {
+        self.raster_scale
     }
 }
 

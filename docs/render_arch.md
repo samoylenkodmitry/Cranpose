@@ -68,6 +68,17 @@ composites the resolved textures.
   quads translate, a gradient's dither is keyed on the position relative to
   the anchor (`ShapeData.dither_origin`). No supersampled capture. Contract
   `effect_semantics.rs` (byte identity after undoing the translation).
+- **Animated scale** (`LayerMotion`, `animated_raster_scale`): an isolated,
+  cacheable child whose scale changed since the previous frame over the same
+  content rasterizes at the next 2^(1/8) step at or above its scale, and
+  its composite applies the rest of the transform. A scale animation then
+  redraws a surface only when it crosses a step. The first frame the scale
+  holds redraws it at its exact scale, so a still frame is byte-identical
+  to a fresh renderer's. Raster scales key the cache exactly
+  (`RasterScale`): a raster drawn at one scale never serves another. A
+  child's source surface is kept on first sight; after a kept surface
+  nothing read back, the next one is kept only once its key repeats
+  (`AdmissionGate::rendered`). Contract `animated_layer_transform.rs`.
 - **Stages** (`ResolveStages`, `run_stages`): the page is drawn in strata
   and backdrops resolve in batches; an effect joins the stage after every
   effect below it under its capture; blockers are every backdrop still
