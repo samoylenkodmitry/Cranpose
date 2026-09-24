@@ -15,6 +15,8 @@ use cranpose_render_common::{
     },
 };
 #[cfg(test)]
+use cranpose_ui::TextOverflow;
+#[cfg(test)]
 use cranpose_ui::layout_text;
 #[cfg(test)]
 use cranpose_ui::measure_text;
@@ -22,8 +24,6 @@ use cranpose_ui::measure_text;
 use cranpose_ui::prepare_text_layout;
 #[cfg(test)]
 use cranpose_ui::text::{ResolvedTextDirection, TextAlign, resolve_text_direction};
-#[cfg(test)]
-use cranpose_ui::{EdgeInsets, TextOverflow};
 use cranpose_ui::{
     LayoutBox, TextLayoutOptions,
     text::{TextDecoration, TextDrawStyle, TextStyle},
@@ -1721,9 +1721,7 @@ fn decoration_brush_for_span(
 }
 
 #[cfg(test)]
-use cranpose_render_common::scene_builder::{
-    expand_text_bounds_for_baseline_shift, resolve_text_measure_width,
-};
+use cranpose_render_common::scene_builder::expand_text_bounds_for_baseline_shift;
 
 #[cfg(test)]
 fn resolve_text_horizontal_offset(

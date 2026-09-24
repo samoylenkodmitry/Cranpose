@@ -4,8 +4,8 @@ use cranpose_core::{MemoryApplier, Node, NodeId, collections::map::HashSet};
 use cranpose_ui::{
     DrawCommand, LayoutBox, LayoutNode, ModifierNodeSlices, Point, PreparedTextLayout, Rect,
     ResolvedModifiers, Size, SubcomposeLayoutNode, TextLayoutOptions, TextOverflow,
-    TextPanResolver, prepare_text_layout,
-    text::{AnnotatedString, TextAlign, TextStyle, resolve_text_direction},
+    TextPanResolver,
+    text::{TextAlign, TextStyle, resolve_text_direction},
 };
 use cranpose_ui_graphics::{
     CommandRecording, CompositingStrategy, GraphicsLayer, LayerShape, PointerIcon,
@@ -36,7 +36,6 @@ struct BuildNodeSnapshot {
     motion_context_animated: bool,
     translated_content_context: bool,
     has_own_origin_sinks: bool,
-    measured_max_width: Option<f32>,
     measured_text_layout: Option<PreparedTextLayout>,
     resolved_modifiers: ResolvedModifiers,
     draw_commands: Vec<DrawCommand>,
@@ -45,7 +44,6 @@ struct BuildNodeSnapshot {
     pointer_inputs: Vec<Rc<dyn Fn(cranpose_foundation::PointerEvent)>>,
     pointer_icon: Option<PointerIcon>,
     clip_to_bounds: bool,
-    annotated_text: Option<AnnotatedString>,
     text_style: Option<TextStyle>,
     text_layout_options: Option<TextLayoutOptions>,
     text_pan: Option<TextPanResolver>,
@@ -1085,7 +1083,6 @@ fn build_layer_node_internal(
         motion_context_animated,
         translated_content_context,
         has_own_origin_sinks,
-        measured_max_width,
         measured_text_layout,
         resolved_modifiers,
         draw_commands,
@@ -1094,7 +1091,6 @@ fn build_layer_node_internal(
         pointer_inputs,
         pointer_icon,
         clip_to_bounds,
-        annotated_text,
         text_style,
         text_layout_options,
         text_pan,
@@ -1136,7 +1132,7 @@ fn build_layer_node_internal(
     let mut children = Vec::with_capacity(layer_node_capacity(
         layer_draw_commands,
         child_snapshots.len(),
-        annotated_text.is_some(),
+        measured_text_layout.is_some(),
     ));
     append_draw_nodes(
         &mut children,
@@ -1150,9 +1146,7 @@ fn build_layer_node_internal(
     if let Some(text) = text_node_from_parts(TextNodeParts {
         node_id,
         local_bounds,
-        measured_max_width,
         resolved_modifiers: &resolved_modifiers,
-        annotated_text: annotated_text.as_ref(),
         text_style: text_style.as_ref(),
         text_layout_options,
         text_pan,
@@ -1467,13 +1461,7 @@ fn build_layer_node_from_data(
     if let Some(text) = text_node_from_parts(TextNodeParts {
         node_id,
         local_bounds,
-        measured_max_width: layout_state
-            .measurement_constraints
-            .max_width
-            .is_finite()
-            .then_some(layout_state.measurement_constraints.max_width),
         resolved_modifiers: &resolved_modifiers,
-        annotated_text: modifier_slices.annotated_text(),
         text_style: modifier_slices.text_style(),
         text_layout_options: modifier_slices.text_layout_options(),
         text_pan: modifier_slices.text_pan_resolver(),
@@ -1809,9 +1797,7 @@ fn layer_identity(layer: &LayerNode) -> Option<NodeId> {
 struct TextNodeParts<'a> {
     node_id: NodeId,
     local_bounds: Rect,
-    measured_max_width: Option<f32>,
     resolved_modifiers: &'a ResolvedModifiers,
-    annotated_text: Option<&'a AnnotatedString>,
     text_style: Option<&'a TextStyle>,
     text_layout_options: Option<TextLayoutOptions>,
     text_pan: Option<TextPanResolver>,
@@ -1822,15 +1808,13 @@ fn text_node_from_parts(parts: TextNodeParts<'_>) -> Option<TextPrimitiveNode> {
     let TextNodeParts {
         node_id,
         local_bounds,
-        measured_max_width,
         resolved_modifiers,
-        annotated_text,
         text_style,
         text_layout_options,
         text_pan,
         measured_layout,
     } = parts;
-    let value = annotated_text?;
+    let prepared = measured_layout?;
     let default_text_style = TextStyle::default();
     let text_style = text_style.cloned().unwrap_or(default_text_style);
     let options = text_layout_options.unwrap_or_default().normalized();
@@ -1845,19 +1829,6 @@ fn text_node_from_parts(parts: TextNodeParts<'_>) -> Option<TextPrimitiveNode> {
         .map_or(0.0, |resolve| resolve(content_width));
     let pans_horizontally = text_pan.is_some();
 
-    let prepared = measured_layout.unwrap_or_else(|| {
-        let max_width = if pans_horizontally {
-            None
-        } else {
-            Some(resolve_text_measure_width(
-                content_width,
-                padding,
-                measured_max_width,
-            ))
-            .filter(|width| width.is_finite() && *width > 0.0)
-        };
-        prepare_text_layout(value, &text_style, options, max_width)
-    });
     let visual_style = prepared.visual_style.clone();
     let measured_draw_width = prepared.metrics.width.max(0.0);
     let draw_width = if options.overflow == TextOverflow::Visible || pans_horizontally {
@@ -1940,7 +1911,6 @@ fn layout_box_to_snapshot(node: &LayoutBox, parent: Option<&LayoutBox>) -> Build
         motion_context_animated: node.node_data.modifier_slices.motion_context_animated(),
         translated_content_context: node.node_data.modifier_slices.translated_content_context(),
         has_own_origin_sinks: modifier_slices_have_origin_sinks(&node.node_data.modifier_slices),
-        measured_max_width: None,
         measured_text_layout: node.node_data.modifier_slices.measured_text_layout(),
         resolved_modifiers: node.node_data.resolved_modifiers,
         draw_commands: node.node_data.modifier_slices.draw_commands().to_vec(),
@@ -1949,7 +1919,6 @@ fn layout_box_to_snapshot(node: &LayoutBox, parent: Option<&LayoutBox>) -> Build
         pointer_inputs: node.node_data.modifier_slices.pointer_inputs().to_vec(),
         pointer_icon: node.node_data.modifier_slices.pointer_icon().cloned(),
         clip_to_bounds: node.node_data.modifier_slices.clip_to_bounds(),
-        annotated_text: node.node_data.modifier_slices.annotated_string(),
         text_style: node.node_data.modifier_slices.text_style().cloned(),
         text_layout_options: node.node_data.modifier_slices.text_layout_options(),
         text_pan: node.node_data.modifier_slices.text_pan_resolver(),
@@ -2049,27 +2018,6 @@ pub fn expand_text_bounds_for_baseline_shift(
             height: (text_bounds.height + baseline_shift_px).max(0.0),
         }
     }
-}
-
-/// The width the paint pass lays text out at when no `Text` node measured it,
-/// as for text fields.
-///
-/// It is the width layout measured under, less padding, not the width the node
-/// ended up. A node is placed at its widest line, and re-wrapping a paragraph
-/// at the width of its own widest line can push that line's last word over the
-/// edge and add a line. The node's content width is used only when layout
-/// recorded no constraint.
-pub fn resolve_text_measure_width(
-    content_width: f32,
-    padding: cranpose_ui::EdgeInsets,
-    measured_max_width: Option<f32>,
-) -> f32 {
-    measured_max_width
-        .filter(|width| width.is_finite() && *width > 0.0)
-        .map_or_else(
-            || content_width.max(0.0),
-            |max_width| (max_width - padding.left - padding.right).max(0.0),
-        )
 }
 
 /// How much of the slack a `TextAlign` puts *before* the text: 0 at the start

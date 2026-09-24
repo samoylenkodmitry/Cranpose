@@ -361,42 +361,6 @@ fn expand_text_bounds_for_baseline_shift_superscript_extends_top() {
 }
 
 #[test]
-fn resolve_text_measure_width_expands_for_multiline_clip_text() {
-    let padding = EdgeInsets {
-        left: 4.0,
-        top: 0.0,
-        right: 4.0,
-        bottom: 0.0,
-    };
-    let width = resolve_text_measure_width(130.0, padding, Some(180.0));
-    assert!((width - 172.0).abs() < f32::EPSILON);
-}
-
-#[test]
-fn resolve_text_measure_width_respects_tighter_measurement_constraint() {
-    let padding = EdgeInsets {
-        left: 4.0,
-        top: 0.0,
-        right: 4.0,
-        bottom: 0.0,
-    };
-    let width = resolve_text_measure_width(130.0, padding, Some(100.0));
-    assert!((width - 92.0).abs() < f32::EPSILON);
-}
-
-#[test]
-fn resolve_text_measure_width_falls_back_to_content_width_without_constraint() {
-    let padding = EdgeInsets {
-        left: 4.0,
-        top: 0.0,
-        right: 4.0,
-        bottom: 0.0,
-    };
-    let width = resolve_text_measure_width(130.0, padding, None);
-    assert!((width - 130.0).abs() < f32::EPSILON);
-}
-
-#[test]
 fn resolve_text_horizontal_offset_centers_text() {
     let style = cranpose_ui::TextStyle {
         paragraph_style: cranpose_ui::ParagraphStyle {
@@ -435,45 +399,6 @@ fn resolve_text_horizontal_offset_uses_start_for_unspecified_align() {
     };
     let offset = resolve_text_horizontal_offset(&style, "hello", 120.0, 80.0);
     assert!((offset - 40.0).abs() < f32::EPSILON);
-}
-
-#[test]
-fn measurement_constraint_width_prevents_spurious_wrap() {
-    let padding = EdgeInsets {
-        left: 4.0,
-        top: 0.0,
-        right: 4.0,
-        bottom: 0.0,
-    };
-    let text = "Dynamic Modifiers";
-    let style = cranpose_ui::TextStyle::default();
-    let options = cranpose_ui::TextLayoutOptions::default();
-    let content_width = 130.0;
-
-    let wrapped_by_content = prepare_text_layout_for_test(
-        &cranpose_ui::text::AnnotatedString::from(text),
-        &style,
-        options,
-        Some(content_width),
-    )
-    .text;
-    assert!(
-        wrapped_by_content.text.contains('\n'),
-        "control check expected wrapping at content width: {wrapped_by_content:?}"
-    );
-
-    let measure_width = resolve_text_measure_width(content_width, padding, Some(180.0));
-    let prepared = prepare_text_layout_for_test(
-        &cranpose_ui::text::AnnotatedString::from(text),
-        &style,
-        options,
-        Some(measure_width),
-    );
-    assert!(
-        !prepared.text.text.contains('\n'),
-        "measurement width should prevent synthetic wrap: {:?}",
-        prepared.text
-    );
 }
 
 #[test]
@@ -2322,37 +2247,6 @@ fn push_text_style_draws_gradient_keeps_mask_and_effect_bounds_in_scene_space() 
     let Some(RenderEffect::Shader { .. }) = effect_layer.effect.as_ref() else {
         panic!("gradient text should use runtime shader effect");
     };
-}
-
-#[test]
-fn single_line_overflow_ellipsizes_at_the_measurement_width() {
-    let padding = EdgeInsets {
-        left: 4.0,
-        top: 0.0,
-        right: 4.0,
-        bottom: 0.0,
-    };
-    let text = "Overflow sample: Supercalifragilisticexpialidocious";
-    let style = cranpose_ui::TextStyle::default();
-    let options = TextLayoutOptions {
-        overflow: TextOverflow::Ellipsis,
-        soft_wrap: false,
-        max_lines: 1,
-        min_lines: 1,
-    };
-    let content_width = 130.0;
-    let measure_width = resolve_text_measure_width(content_width, padding, Some(180.0));
-    let prepared = prepare_text_layout_for_test(
-        &cranpose_ui::text::AnnotatedString::from(text),
-        &style,
-        options,
-        Some(measure_width),
-    );
-    assert!(
-        prepared.text.text.contains('\u{2026}'),
-        "ellipsis should remain active: {:?}",
-        prepared.text
-    );
 }
 
 fn text_draw_primitive(rect: Rect, text: &str) -> DrawPrimitive {

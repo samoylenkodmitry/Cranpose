@@ -69,34 +69,14 @@ fn log_layout_invalidation_dispatch(
 /// This mirrors Jetpack Compose's approach where each node stores its own
 /// measured size and placed position, eliminating the need for per-frame
 /// LayoutTree reconstruction.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct LayoutState {
     size: Size,
     position: Point,
     is_placed: bool,
     node_id: Option<NodeId>,
-    /// The constraints used for the last measurement.
-    pub measurement_constraints: Constraints,
     /// Offset of the content box relative to the node origin (e.g. due to padding).
     pub content_offset: Point,
-}
-
-impl Default for LayoutState {
-    fn default() -> Self {
-        Self {
-            size: Size::default(),
-            position: Point::default(),
-            is_placed: false,
-            node_id: None,
-            measurement_constraints: Constraints {
-                min_width: 0.0,
-                max_width: f32::INFINITY,
-                min_height: 0.0,
-                max_height: f32::INFINITY,
-            },
-            content_offset: Point::default(),
-        }
-    }
 }
 
 impl LayoutState {
@@ -805,11 +785,6 @@ impl LayoutNode {
     /// [`LayoutState::place`] self-reports actual moves to the scene phase.
     pub fn set_position(&self, position: Point) {
         self.layout_state.borrow_mut().place(position);
-    }
-
-    /// Records the constraints used for measurement. Used for relayout optimization.
-    pub fn set_measurement_constraints(&self, constraints: Constraints) {
-        self.layout_state.borrow_mut().measurement_constraints = constraints;
     }
 
     /// Records the content offset (e.g. from padding).
