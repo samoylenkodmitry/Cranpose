@@ -217,6 +217,7 @@ ci-contract-gates:
     scripts/ci/terminate_descendants_test.sh
     scripts/ci/cancel_pr_runs_test.sh
     scripts/ci/nightly_should_run_test.sh
+    scripts/ci/tree_memo_test.sh
 
 # Point git at the repository's hooks. Once per clone.
 hooks:
@@ -674,8 +675,11 @@ cheatsheets:
 # --- performance -----------------------------------------------------------
 
 # Criterion sanity pass: run each benchmark body once, measure nothing.
+# Criterion's test mode on the `ci` profile and workspace feature set that
+# `just test` already built; `cargo bench` compiled the whole graph again
+# under the bench profile's fat LTO first, 73 of the tests job's seconds.
 bench-smoke:
-    cargo bench --package cranpose-ui --bench slot_table_v2 -- --test
+    cargo test --profile ci --workspace --bench slot_table_v2
 
 # The slot-table Criterion suite with stable measurement settings.
 bench-slot *args:

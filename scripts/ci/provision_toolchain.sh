@@ -38,5 +38,17 @@ command -v just >/dev/null || cargo install just --locked
 command -v cargo-nextest >/dev/null \
     || cargo install cargo-nextest --locked --version 0.9.145
 
+# One sccache server serves every job on a host, and it keeps the cache
+# directory of whichever job started it. The robot and Android jobs name the
+# Linux host's shared cache; a job that started the server without naming it
+# would open a second 40G cache beside the first on a disk that is already
+# nearly full.
+if [[ "$(uname -s)" == Linux && -z "${SCCACHE_DIR:-}" && -d "$real_home/ci-cache/cranpose" ]]; then
+    export SCCACHE_DIR="$real_home/ci-cache/cranpose/sccache"
+    if [[ -n "${GITHUB_ENV:-}" ]]; then
+        echo "SCCACHE_DIR=$SCCACHE_DIR" >> "$GITHUB_ENV"
+    fi
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 "$SCRIPT_DIR/start_sccache.sh"
