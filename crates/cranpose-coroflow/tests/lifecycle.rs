@@ -46,7 +46,7 @@ fn a_lifecycle_aware_collection_lets_go_while_the_app_is_stopped() {
     dispatch_lifecycle_state(LifecycleState::Resumed);
     let collecting = source.clone();
     assert!(pump_until(&mut composition, render.clone(), move || {
-        collecting.subscription_count() == 1
+        collecting.subscription_count().value() == 1
     }));
 
     dispatch_lifecycle_state(LifecycleState::Paused);
@@ -54,7 +54,7 @@ fn a_lifecycle_aware_collection_lets_go_while_the_app_is_stopped() {
     let released = source.clone();
     assert!(
         pump_until(&mut composition, render.clone(), move || {
-            released.subscription_count() == 0
+            released.subscription_count().value() == 0
         }),
         "a stopped app is not a subscriber"
     );
@@ -71,5 +71,5 @@ fn a_lifecycle_aware_collection_lets_go_while_the_app_is_stopped() {
     assert!(pump_until(&mut composition, render, move || {
         back.borrow().last() == Some(&5)
     }));
-    assert_eq!(source.subscription_count(), 1);
+    assert_eq!(source.subscription_count().value(), 1);
 }

@@ -171,84 +171,177 @@ where
     }
 }
 
-/// Combines the latest values of three flows once each has emitted —
-/// Kotlin's `combine(a, b, c)`.
-pub fn combine3<A, B, C, F, U>(first: A, second: B, third: C, combiner: F) -> Combine3<A, B, C, F>
+macro_rules! combine_n {
+    ($function:ident, $name:ident, $run:ident, $count:literal, $($flow:ident $field:ident),+) => {
+        #[doc = concat!(
+            "Combines the latest values of ", $count,
+            " flows once each has emitted — Kotlin's `combine`."
+        )]
+        pub fn $function<$($flow,)+ F, U>($($field: $flow,)+ combiner: F) -> $name<$($flow,)+ F>
+        where
+            $($flow: Flow,)+
+            F: Fn($(&$flow::Item),+) -> U + Clone,
+        {
+            $name {
+                $($field,)+
+                combiner,
+            }
+        }
+
+        #[doc = concat!("The flow returned by [`", stringify!($function), "`].")]
+        #[derive(Clone)]
+        pub struct $name<$($flow,)+ F> {
+            $($field: $flow,)+
+            combiner: F,
+        }
+
+        #[doc = concat!("One run of a [`", stringify!($name), "`].")]
+        pub struct $run<$($flow: Stream,)+ F> {
+            $($field: Latest<$flow>,)+
+            combiner: F,
+        }
+
+        impl<$($flow: Stream,)+ F> Unpin for $run<$($flow,)+ F> {}
+
+        impl<$($flow,)+ F, U> Flow for $name<$($flow,)+ F>
+        where
+            $($flow: Flow,)+
+            F: Fn($(&$flow::Item),+) -> U + Clone,
+        {
+            type Item = U;
+            type Run = $run<$($flow::Run,)+ F>;
+
+            fn open(&self) -> Self::Run {
+                $run {
+                    $($field: Latest::new(self.$field.open()),)+
+                    combiner: self.combiner.clone(),
+                }
+            }
+        }
+
+        impl<$($flow,)+ F, U> Stream for $run<$($flow,)+ F>
+        where
+            $($flow: Stream + Unpin,)+
+            F: Fn($(&$flow::Item),+) -> U,
+        {
+            type Item = U;
+
+            fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<U>> {
+                let this = self.get_mut();
+                let changed = [$(this.$field.drain(cx)),+].contains(&true);
+                if changed && let ($(Some($field),)+) = ($(this.$field.value(),)+) {
+                    return Poll::Ready(Some((this.combiner)($($field),+)));
+                }
+                latest_ended(&[$(this.$field.status()),+])
+            }
+        }
+    };
+}
+
+combine_n!(combine3, Combine3, Combine3Run, "three", A first, B second, C third);
+combine_n!(combine4, Combine4, Combine4Run, "four", A first, B second, C third, D fourth);
+combine_n!(
+    combine5,
+    Combine5,
+    Combine5Run,
+    "five",
+    A first,
+    B second,
+    C third,
+    D fourth,
+    E fifth
+);
+
+/// Combines the latest values of every flow in `flows` once each has
+/// emitted, handing them to `combiner` in order — Kotlin's
+/// `combine(flows) { values -> }`.
+pub fn combine_all<F, C, U>(flows: Vec<F>, combiner: C) -> CombineAll<F, C>
 where
-    A: Flow,
-    B: Flow,
-    C: Flow,
-    F: Fn(&A::Item, &B::Item, &C::Item) -> U + Clone,
+    F: Flow,
+    C: Fn(&[F::Item]) -> U + Clone,
 {
-    Combine3 {
-        first,
-        second,
-        third,
-        combiner,
-    }
+    CombineAll { flows, combiner }
 }
 
-/// The flow returned by [`combine3`].
+/// The flow returned by [`combine_all`].
 #[derive(Clone)]
-pub struct Combine3<A, B, C, F> {
-    first: A,
-    second: B,
-    third: C,
-    combiner: F,
+pub struct CombineAll<F, C> {
+    flows: Vec<F>,
+    combiner: C,
 }
 
-/// One run of a [`Combine3`].
-pub struct Combine3Run<A: Stream, B: Stream, C: Stream, F> {
-    first: Latest<A>,
-    second: Latest<B>,
-    third: Latest<C>,
-    combiner: F,
+/// One run of a [`CombineAll`].
+pub struct CombineAllRun<S: Stream, C> {
+    runs: Vec<Option<S>>,
+    first_values: Vec<Option<S::Item>>,
+    values: Vec<S::Item>,
+    combiner: C,
 }
 
-impl<A: Stream, B: Stream, C: Stream, F> Unpin for Combine3Run<A, B, C, F> {}
+impl<S: Stream, C> Unpin for CombineAllRun<S, C> {}
 
-impl<A, B, C, F, U> Flow for Combine3<A, B, C, F>
+impl<F, C, U> Flow for CombineAll<F, C>
 where
-    A: Flow,
-    B: Flow,
-    C: Flow,
-    F: Fn(&A::Item, &B::Item, &C::Item) -> U + Clone,
+    F: Flow,
+    C: Fn(&[F::Item]) -> U + Clone,
 {
     type Item = U;
-    type Run = Combine3Run<A::Run, B::Run, C::Run, F>;
+    type Run = CombineAllRun<F::Run, C>;
 
     fn open(&self) -> Self::Run {
-        Combine3Run {
-            first: Latest::new(self.first.open()),
-            second: Latest::new(self.second.open()),
-            third: Latest::new(self.third.open()),
+        CombineAllRun {
+            runs: self.flows.iter().map(|flow| Some(flow.open())).collect(),
+            first_values: self.flows.iter().map(|_| None).collect(),
+            values: Vec::new(),
             combiner: self.combiner.clone(),
         }
     }
 }
 
-impl<A, B, C, F, U> Stream for Combine3Run<A, B, C, F>
+impl<S, C, U> Stream for CombineAllRun<S, C>
 where
-    A: Stream + Unpin,
-    B: Stream + Unpin,
-    C: Stream + Unpin,
-    F: Fn(&A::Item, &B::Item, &C::Item) -> U,
+    S: Stream + Unpin,
+    C: Fn(&[S::Item]) -> U,
 {
     type Item = U;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<U>> {
         let this = self.get_mut();
-        let changed = this.first.drain(cx) | this.second.drain(cx) | this.third.drain(cx);
-        if changed
-            && let (Some(first), Some(second), Some(third)) =
-                (this.first.value(), this.second.value(), this.third.value())
-        {
-            return Poll::Ready(Some((this.combiner)(first, second, third)));
+        let mut changed = false;
+        for (index, slot) in this.runs.iter_mut().enumerate() {
+            while let Some(run) = slot.as_mut() {
+                match poll_run(run, cx) {
+                    Poll::Ready(Some(value)) => {
+                        changed = true;
+                        if let Some(current) = this.values.get_mut(index) {
+                            *current = value;
+                        } else if let Some(first) = this.first_values.get_mut(index) {
+                            *first = Some(value);
+                        }
+                    }
+                    Poll::Ready(None) => *slot = None,
+                    Poll::Pending => break,
+                }
+            }
         }
-        latest_ended(&[
-            this.first.status(),
-            this.second.status(),
-            this.third.status(),
-        ])
+        if this.values.is_empty()
+            && !this.first_values.is_empty()
+            && this.first_values.iter().all(Option::is_some)
+        {
+            this.values = this.first_values.drain(..).flatten().collect();
+        }
+        if changed && !this.values.is_empty() {
+            return Poll::Ready(Some((this.combiner)(&this.values)));
+        }
+        let starved = this
+            .runs
+            .iter()
+            .zip(&this.first_values)
+            .any(|(run, first)| run.is_none() && first.is_none());
+        if this.runs.iter().all(Option::is_none) || starved {
+            Poll::Ready(None)
+        } else {
+            Poll::Pending
+        }
     }
 }

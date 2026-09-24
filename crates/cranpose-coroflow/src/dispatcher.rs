@@ -1,4 +1,4 @@
-use coroflow::{ConfinedDispatcher, Dispatch, Runnable, SystemClock};
+use coroflow::{ConfinedDispatcher, Dispatch, Dispatchers, Runnable, SystemClock};
 use cranpose_core::current_runtime_handle;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -36,6 +36,10 @@ impl Dispatch for UiExecutor {
 /// next frame. In the browser, where there is one thread and one runtime per
 /// page, steps go to the page's runtime. Returns `None` when this thread has
 /// no runtime.
+///
+/// It also becomes coroflow's [`Dispatchers::main`], so background code can
+/// switch to it with `with_context`, and coroflow code running in Cranpose's
+/// own `LaunchedEffect` or UI tasks launches onto it.
 pub fn main_dispatcher() -> Option<ConfinedDispatcher> {
     let runtime = current_runtime_handle()?;
     #[cfg(not(target_arch = "wasm32"))]
@@ -47,10 +51,9 @@ pub fn main_dispatcher() -> Option<ConfinedDispatcher> {
         drop(runtime);
         UiExecutor
     };
-    Some(ConfinedDispatcher::for_current_thread(
-        executor,
-        SystemClock::shared(),
-    ))
+    let dispatcher = ConfinedDispatcher::for_current_thread(executor, SystemClock::shared());
+    Dispatchers::set_main(&dispatcher);
+    Some(dispatcher)
 }
 
 pub(crate) fn require_main_dispatcher(caller: &str) -> ConfinedDispatcher {

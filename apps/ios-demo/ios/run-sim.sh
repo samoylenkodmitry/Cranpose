@@ -4,11 +4,12 @@
 # Usage:
 #   ./run-sim.sh
 #   SIMULATOR_DEVICE="iPhone 17 Pro" ./run-sim.sh
+#   BUNDLE_ID=... plus build-app.sh's PACKAGE, BIN, APP_NAME, INFO_PLIST for another app
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEVICE="${SIMULATOR_DEVICE:-iPhone 17 Pro}"
-BUNDLE_ID="io.cranpose.demo"
+BUNDLE_ID="${BUNDLE_ID:-io.cranpose.demo}"
 
 APP="$("$SCRIPT_DIR/build-app.sh" aarch64-apple-ios-sim)"
 

@@ -182,7 +182,7 @@ fn share_in_multicasts_one_upstream_and_replays_to_late_collectors() {
     );
     drop((first, second, late));
     scheduler.run_current();
-    assert_eq!(ticks.subscription_count(), 0);
+    assert_eq!(ticks.subscription_count().value(), 0);
 }
 
 #[test]
@@ -228,7 +228,7 @@ fn async_runs_children_concurrently_and_reports_failure() {
         delay(Duration::from_secs(1)).await;
         0
     });
-    assert!(doomed.job().is_active());
+    assert!(doomed.is_active());
     scope.cancel();
     assert_eq!(scheduler.block_on(doomed), Ok(Err(TaskFailed)));
 }

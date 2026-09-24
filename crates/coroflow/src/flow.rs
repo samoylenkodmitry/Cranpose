@@ -1,23 +1,33 @@
-use std::{pin::Pin, rc::Rc, sync::Arc, time::Duration};
+use std::{future::Future, pin::Pin, rc::Rc, sync::Arc, time::Duration};
 
 use futures_core::Stream;
 
 use crate::{
-    channel::Capacity,
+    builders::Emitter,
+    channel::{Capacity, ProduceIn, Receiver, channel},
     combining::Zip,
     dispatcher::Dispatcher,
     errors::{Catch, RetryWhen},
-    flattening::FlatMap,
+    flattening::{FlatMap, Flatten},
+    job::Job,
     operators::{
         Buffered, Combine, Debounce, DistinctUntilChanged, FLOW_ON_BUFFER, Filter, Map,
-        OnCompletion, OnEach, OnStart, StartWith, Take,
+        OnCompletion, OnEach, OnStart, StartWith, Take, WholeValue,
     },
     scope::Spawn,
+    shaping::{Chunked, OnEmpty, RunningReduce, WithIndex},
     shared::{MutableSharedFlow, SharedFlow},
-    sharing::{SharingStarted, SharingTask, shared_sharing, state_sharing},
+    sharing::{
+        FirstState, SharingStarted, SharingTask, StateInFirst, shared_sharing, state_sharing,
+    },
     state::StateFlow,
-    terminal::{Collect, First, ToVec},
-    transforms::{FilterMap, Scan, Skip},
+    suspending::{
+        CollectAsync, CollectLatest, FilterMapping, Filtering, InOrder, Inspecting, LatestOnly,
+        Mapping, Suspending, SuspendingRun, Transforming, TransformingWhile,
+    },
+    terminal::{Collect, Count, First, Fold, Last, Reduce, Single, ToVec},
+    timing::{Sample, Timeout},
+    transforms::{FilterMap, Scan, Skip, Skipping, Taking, While},
 };
 
 /// A cold, re-runnable asynchronous sequence — Kotlin's `Flow`.
@@ -207,12 +217,206 @@ pub trait FlowExt: Flow + Sized {
         Take::new(self, count)
     }
 
+    /// Emits values while `predicate` holds, then completes and cancels the
+    /// upstream — Kotlin's `takeWhile`.
+    fn take_while<P>(self, predicate: P) -> While<Self, P, Taking>
+    where
+        P: Fn(&Self::Item) -> bool + Clone,
+    {
+        While::new(self, predicate)
+    }
+
+    /// Ignores values while `predicate` holds, then emits every value —
+    /// Kotlin's `dropWhile`.
+    fn skip_while<P>(self, predicate: P) -> While<Self, P, Skipping>
+    where
+        P: Fn(&Self::Item) -> bool + Clone,
+    {
+        While::new(self, predicate)
+    }
+
+    /// Emits whatever the suspending `action` emits for each value — Kotlin's
+    /// `transform`.
+    ///
+    /// ```
+    /// use coroflow::{FlowExt, flow_of};
+    /// let doubled = flow_of(vec![1, 2]).transform(async |value, emitter| {
+    ///     emitter.emit(value).await;
+    ///     emitter.emit(value * 10).await;
+    /// });
+    /// assert_eq!(pollster::block_on(doubled.to_vec()), vec![1, 10, 2, 20]);
+    /// ```
+    fn transform<U, F, Fut>(self, action: F) -> Suspending<Self, F, Transforming<U>, InOrder>
+    where
+        F: FnOnce(Self::Item, Emitter<U>) -> Fut + Clone,
+        Fut: Future<Output = ()>,
+    {
+        Suspending::new(self, action)
+    }
+
+    /// Like [`transform`](FlowExt::transform), but completes and cancels the
+    /// upstream as soon as `action` returns `false` — Kotlin's
+    /// `transformWhile`.
+    fn transform_while<U, F, Fut>(
+        self,
+        action: F,
+    ) -> Suspending<Self, F, TransformingWhile<U>, InOrder>
+    where
+        F: FnOnce(Self::Item, Emitter<U>) -> Fut + Clone,
+        Fut: Future<Output = bool>,
+    {
+        Suspending::new(self, action)
+    }
+
+    /// Like [`transform`](FlowExt::transform), but a newer value cancels the
+    /// `action` still running for the previous one — Kotlin's
+    /// `transformLatest`.
+    fn transform_latest<U, F, Fut>(
+        self,
+        action: F,
+    ) -> Suspending<Self, F, Transforming<U>, LatestOnly>
+    where
+        F: FnOnce(Self::Item, Emitter<U>) -> Fut + Clone,
+        Fut: Future<Output = ()>,
+    {
+        Suspending::new(self, action)
+    }
+
+    /// Transforms each value with a suspending `transform`, one value at a
+    /// time — Kotlin's `map` with a `suspend` lambda.
+    ///
+    /// The closure is cloned for every value, so capture shared state as an
+    /// `Arc` or `Rc` and write it without any `clone()`:
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    ///
+    /// use coroflow::{FlowExt, flow_of};
+    /// struct Repository;
+    /// impl Repository {
+    ///     async fn load(&self, id: u32) -> String {
+    ///         format!("note {id}")
+    ///     }
+    /// }
+    /// let repository = Arc::new(Repository);
+    /// let notes = flow_of(vec![1, 2]).map_async(async move |id| repository.load(id).await);
+    /// assert_eq!(pollster::block_on(notes.to_vec()), vec!["note 1", "note 2"]);
+    /// ```
+    fn map_async<F, Fut>(self, transform: F) -> Suspending<Self, F, Mapping, InOrder>
+    where
+        F: FnOnce(Self::Item) -> Fut + Clone,
+        Fut: Future,
+    {
+        Suspending::new(self, transform)
+    }
+
+    /// Like [`map_async`](FlowExt::map_async), but a newer value cancels the
+    /// transformation still running for the previous one — Kotlin's
+    /// `mapLatest`.
+    fn map_latest<F, Fut>(self, transform: F) -> Suspending<Self, F, Mapping, LatestOnly>
+    where
+        F: FnOnce(Self::Item) -> Fut + Clone,
+        Fut: Future,
+    {
+        Suspending::new(self, transform)
+    }
+
+    /// Keeps the values a suspending `predicate` accepts — Kotlin's `filter`
+    /// with a `suspend` lambda. The predicate gets a clone of each value.
+    fn filter_async<F, Fut>(self, predicate: F) -> Suspending<Self, F, Filtering, InOrder>
+    where
+        Self::Item: Clone,
+        F: FnOnce(Self::Item) -> Fut + Clone,
+        Fut: Future<Output = bool>,
+    {
+        Suspending::new(self, predicate)
+    }
+
+    /// Transforms each value with a suspending `transform` and drops the
+    /// `None`s — Kotlin's `mapNotNull` with a `suspend` lambda.
+    fn filter_map_async<U, F, Fut>(
+        self,
+        transform: F,
+    ) -> Suspending<Self, F, FilterMapping, InOrder>
+    where
+        F: FnOnce(Self::Item) -> Fut + Clone,
+        Fut: Future<Output = Option<U>>,
+    {
+        Suspending::new(self, transform)
+    }
+
+    /// Runs a suspending `action` on a clone of each value before emitting it
+    /// — Kotlin's `onEach` with a `suspend` lambda.
+    fn on_each_async<F, Fut>(self, action: F) -> Suspending<Self, F, Inspecting, InOrder>
+    where
+        Self::Item: Clone,
+        F: FnOnce(Self::Item) -> Fut + Clone,
+        Fut: Future<Output = ()>,
+    {
+        Suspending::new(self, action)
+    }
+
     /// Drops values equal to the one emitted just before.
-    fn distinct_until_changed(self) -> DistinctUntilChanged<Self>
+    fn distinct_until_changed(self) -> DistinctUntilChanged<Self, WholeValue>
     where
         Self::Item: PartialEq + Clone,
     {
-        DistinctUntilChanged::new(self)
+        DistinctUntilChanged::new(self, WholeValue)
+    }
+
+    /// Drops values whose `key` equals the key of the value emitted just
+    /// before — Kotlin's `distinctUntilChangedBy`.
+    fn distinct_until_changed_by<K, F>(self, key: F) -> DistinctUntilChanged<Self, F>
+    where
+        K: PartialEq,
+        F: Fn(&Self::Item) -> K + Clone,
+    {
+        DistinctUntilChanged::new(self, key)
+    }
+
+    /// Pairs every value with its position, counting from zero — Kotlin's
+    /// `withIndex`.
+    fn with_index(self) -> WithIndex<Self> {
+        WithIndex::new(self)
+    }
+
+    /// Emits the first value, then each value folded into the one emitted
+    /// before — Kotlin's `runningReduce`.
+    fn running_reduce<R>(self, reducer: R) -> RunningReduce<Self, R>
+    where
+        Self::Item: Clone,
+        R: Fn(&Self::Item, Self::Item) -> Self::Item + Clone,
+    {
+        RunningReduce::new(self, reducer)
+    }
+
+    /// Groups values into vectors of `size`; the last one may be shorter —
+    /// Kotlin's `chunked`. A `size` of zero counts as one.
+    fn chunked(self, size: usize) -> Chunked<Self> {
+        Chunked::new(self, size)
+    }
+
+    /// Emits the latest value once per `period`, skipping periods without a
+    /// new value — Kotlin's `sample`. A value still waiting when the
+    /// upstream completes is dropped.
+    fn sample(self, period: Duration) -> Sample<Self> {
+        Sample::new(self, period)
+    }
+
+    /// Wraps values in `Ok`, and emits `Err(TimedOut)` and completes if the
+    /// upstream goes `limit` without emitting — Kotlin's `timeout`.
+    fn timeout(self, limit: Duration) -> Timeout<Self> {
+        Timeout::new(self, limit)
+    }
+
+    /// Runs the suspending `action` if the flow completes without emitting,
+    /// so it can emit a fallback — Kotlin's `onEmpty`.
+    fn on_empty<F, Fut>(self, action: F) -> OnEmpty<Self, F>
+    where
+        F: FnOnce(Emitter<Self::Item>) -> Fut + Clone,
+        Fut: Future<Output = ()>,
+    {
+        OnEmpty::new(self, action)
     }
 
     /// Emits a value only after `timeout` passes without a newer one.
@@ -238,6 +442,24 @@ pub trait FlowExt: Flow + Sized {
         F: Fn(Self::Item) -> G + Clone,
     {
         FlatMap::concurrent(self, transform, 1)
+    }
+
+    /// Collects each inner flow in turn — Kotlin's `flattenConcat`.
+    fn flatten_concat(self) -> Flatten<Self>
+    where
+        Self::Item: Flow,
+    {
+        FlatMap::concurrent(self, std::convert::identity, 1)
+    }
+
+    /// Collects up to `concurrency` inner flows at once, emitting their
+    /// values as they arrive — Kotlin's `flattenMerge`; Kotlin's default
+    /// concurrency is [`DEFAULT_CONCURRENCY`](crate::DEFAULT_CONCURRENCY).
+    fn flatten_merge(self, concurrency: usize) -> Flatten<Self>
+    where
+        Self::Item: Flow,
+    {
+        FlatMap::concurrent(self, std::convert::identity, concurrency)
     }
 
     /// Maps each value to a flow and runs up to `concurrency` of them at once,
@@ -357,10 +579,24 @@ pub trait FlowExt: Flow + Sized {
         state
     }
 
+    /// Starts this flow in `scope` at once and waits for its first value,
+    /// then returns a [`StateFlow`] that starts from it — Kotlin's suspending
+    /// `stateIn(scope)`. `None` if the flow completes without emitting.
+    fn state_in_first<S>(self, scope: &S) -> StateInFirst<Self::Item>
+    where
+        S: Spawn<FirstState<Self::Run>>,
+        Self::Item: Clone + PartialEq,
+    {
+        let (task, state) = FirstState::start(self.open());
+        scope.spawn(task);
+        state
+    }
+
     /// Shares this flow as a hot [`SharedFlow`] that runs in `scope` and
     /// replays the last `replay` values to new collectors — Kotlin's
-    /// `shareIn`. The upstream never waits: a collector more than 64 values
-    /// behind skips the oldest ones.
+    /// `shareIn`. Collectors may fall up to
+    /// [`SHARE_IN_BUFFER`](crate::SHARE_IN_BUFFER) values or `replay`,
+    /// whichever is larger, behind; beyond that the upstream waits for them.
     fn share_in<S>(
         self,
         scope: &S,
@@ -396,6 +632,81 @@ pub trait FlowExt: Flow + Sized {
         LocalBoxFlow {
             inner: Rc::new(self),
         }
+    }
+
+    /// Runs the flow, awaiting a suspending `action` for every value in turn,
+    /// until it completes — Kotlin's `collect` with a `suspend` lambda.
+    fn collect_async<F, Fut>(&self, action: F) -> CollectAsync<Self::Run, F>
+    where
+        F: FnOnce(Self::Item) -> Fut + Clone,
+        Fut: Future<Output = ()>,
+    {
+        Collect::new(SuspendingRun::new(self.open(), action), drop)
+    }
+
+    /// Runs the flow, cancelling the `action` still running for a value as
+    /// soon as a newer value arrives — Kotlin's `collectLatest`.
+    fn collect_latest<F, Fut>(&self, action: F) -> CollectLatest<Self::Run, F>
+    where
+        F: FnOnce(Self::Item) -> Fut + Clone,
+        Fut: Future<Output = ()>,
+    {
+        Collect::new(SuspendingRun::new(self.open(), action), drop)
+    }
+
+    /// Collects the flow in `scope`, ignoring its values — Kotlin's
+    /// `launchIn`, usually after [`on_each`](FlowExt::on_each).
+    fn launch_in<S>(&self, scope: &S) -> Job
+    where
+        S: Spawn<Collect<Self::Run, fn(Self::Item)>>,
+    {
+        scope.spawn(Collect::new(self.open(), drop))
+    }
+
+    /// Collects the flow in `scope` into a buffered channel and returns its
+    /// receiving end — Kotlin's `produceIn`. Dropping every receiver cancels
+    /// the collection.
+    fn produce_in<S>(&self, scope: &S) -> Receiver<Self::Item>
+    where
+        S: Spawn<ProduceIn<Self::Run>>,
+    {
+        let (sender, receiver) = channel(Capacity::BUFFERED);
+        scope.spawn(ProduceIn::new(self.open(), sender));
+        receiver
+    }
+
+    /// Runs the flow, folding every value into an accumulator that starts at
+    /// `initial` — Kotlin's `fold`.
+    fn fold<A, F>(&self, initial: A, step: F) -> Fold<Self::Run, A, F>
+    where
+        F: FnMut(A, Self::Item) -> A,
+    {
+        Fold::new(self.open(), initial, step)
+    }
+
+    /// Runs the flow, folding every value into the first one; `None` for an
+    /// empty flow — Kotlin's `reduceOrNull`.
+    fn reduce<F>(&self, reducer: F) -> Reduce<Self::Run, F>
+    where
+        F: FnMut(Self::Item, Self::Item) -> Self::Item,
+    {
+        Reduce::new(self.open(), reducer)
+    }
+
+    /// Runs the flow and counts its values — Kotlin's `count`.
+    fn count(&self) -> Count<Self::Run, Self::Item> {
+        Fold::new(self.open(), 0, |count, _| count + 1)
+    }
+
+    /// Runs the flow and returns its last value — Kotlin's `lastOrNull`.
+    fn last(&self) -> Last<Self::Run, Self::Item> {
+        Fold::new(self.open(), None, |_, value| Some(value))
+    }
+
+    /// Returns the flow's only value, or `None` once it turns out to have
+    /// none or more than one — Kotlin's `singleOrNull`.
+    fn single(&self) -> Single<Self::Run> {
+        Single::new(self.open())
     }
 
     /// Runs the flow, calling `action` for every value, until it completes.

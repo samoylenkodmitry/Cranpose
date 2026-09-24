@@ -12,13 +12,17 @@ use crate::{flow::Flow, sync::lock};
 
 /// Builds a cold flow from an async block — Kotlin's `flow { emit(x) }`.
 ///
-/// `block` runs again for every collection. Each run allocates once; emitting
-/// allocates nothing.
+/// `block` is a plain async closure; each collection runs a fresh clone of
+/// it, so what it captures needs no cloning at the call site. Each run
+/// allocates once; emitting allocates nothing.
 ///
 /// ```
+/// use std::sync::Arc;
+///
 /// use coroflow::{FlowExt, flow};
-/// let numbers = flow(|emitter| async move {
-///     for value in 1..=3 {
+/// let limit = Arc::new(3);
+/// let numbers = flow(async move |emitter| {
+///     for value in 1..=*limit {
 ///         emitter.emit(value).await;
 ///     }
 /// });
@@ -26,7 +30,7 @@ use crate::{flow::Flow, sync::lock};
 /// ```
 pub fn flow<T, F, Fut>(block: F) -> FlowBlock<T, F>
 where
-    F: Fn(Emitter<T>) -> Fut,
+    F: FnOnce(Emitter<T>) -> Fut + Clone,
     Fut: Future<Output = ()>,
 {
     FlowBlock {
@@ -65,6 +69,24 @@ impl<T> Clone for Emitter<T> {
 }
 
 impl<T> Emitter<T> {
+    pub(crate) fn new() -> Self {
+        Self {
+            slot: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    pub(crate) fn take_emitted(&self) -> Option<T> {
+        lock(&self.slot).take()
+    }
+
+    /// Emits every value of `flow` in turn — Kotlin's `emitAll`.
+    pub async fn emit_all<F: Flow<Item = T>>(&self, flow: F) {
+        let mut run = flow.open();
+        while let Some(value) = std::future::poll_fn(|cx| Pin::new(&mut run).poll_next(cx)).await {
+            self.emit(value).await;
+        }
+    }
+
     /// Hands `value` to the collector and resumes once it was taken.
     pub fn emit(&self, value: T) -> Emit<'_, T> {
         Emit {
@@ -108,7 +130,7 @@ pub struct FlowBlockRun<T, Fut> {
 
 impl<T, F, Fut> Flow for FlowBlock<T, F>
 where
-    F: Fn(Emitter<T>) -> Fut,
+    F: FnOnce(Emitter<T>) -> Fut + Clone,
     Fut: Future<Output = ()>,
 {
     type Item = T;
@@ -120,7 +142,7 @@ where
             slot: Arc::clone(&slot),
         };
         FlowBlockRun {
-            future: Some(Box::pin((self.block)(emitter))),
+            future: Some(Box::pin((self.block.clone())(emitter))),
             slot,
         }
     }

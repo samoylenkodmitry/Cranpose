@@ -476,6 +476,14 @@ android: _disk-guard
     cd apps/android-demo/android && ../../../scripts/ci/with_host_lock.sh --shared \
       ./gradlew --no-daemon :app:assembleRelease
 
+# Build the coroflow demo for Android through the same Gradle project.
+android-coroflow: _disk-guard
+    cd apps/android-demo/android && ../../../scripts/ci/with_host_lock.sh --shared \
+      ./gradlew --no-daemon :app:assembleRelease \
+      -PcranposeCargoPackage=coroflow-demo-android -PcranposeLibraryName=coroflow_notes \
+      -PcranposeLabel="Coroflow Notes" -PcranposeApplicationId=io.cranpose.coroflow \
+      -PcranposeServices=
+
 # Build the shippable Android release artifact: every architecture it carries.
 # `android` above builds the one a development device runs, because each extra
 # architecture is another full native build of the workspace, run in turn.
@@ -499,6 +507,12 @@ ios-device:
 # Boot a simulator and run the iOS demo on it.
 ios-run:
     apps/ios-demo/ios/run-sim.sh
+
+# Boot a simulator and run the coroflow demo on it.
+ios-run-coroflow:
+    PACKAGE=coroflow-demo BIN=coroflow-ios APP_NAME=CoroflowNotes \
+      INFO_PLIST=apps/coroflow-demo/ios/Info.plist BUNDLE_ID=io.cranpose.coroflow \
+      apps/ios-demo/ios/run-sim.sh
 
 robot-accessibility-ios app device output:
     python3 scripts/a11y/ios_robot.py --app {{quote(app)}} --device {{quote(device)}} --output {{quote(output)}}

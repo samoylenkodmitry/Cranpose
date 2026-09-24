@@ -16,6 +16,7 @@ use crate::{
     clock::{Clock, TimerHeap},
     dispatcher::{ConfinedDispatcher, Dispatch, Dispatcher, Runnable, enter},
     flow::Flow,
+    scope::{CoroutineScope, join_all},
     sync::lock,
 };
 
@@ -140,6 +141,16 @@ impl TestScheduler {
         self.run_current();
     }
 
+    /// Runs queued work and fires every timer in deadline order until nothing
+    /// is left — Kotlin's `advanceUntilIdle`. Like Kotlin's, it never returns
+    /// while a coroutine keeps scheduling timers, such as a ticker.
+    pub fn advance_until_idle(&self) {
+        self.run_current();
+        while self.fire_next_timer(None) {
+            self.run_current();
+        }
+    }
+
     /// Drives `future` to completion, advancing virtual time whenever nothing
     /// else can run — Kotlin's `runTest`.
     ///
@@ -193,10 +204,14 @@ impl TestScheduler {
     /// Starts collecting `flow` as a coroutine on this scheduler would, so
     /// work the flow starts, such as a [`channel_flow`](crate::channel_flow)
     /// producer, runs on virtual time.
-    pub fn turbine<F: Flow>(&self, flow: &F) -> Turbine<F::Run> {
+    ///
+    /// Its awaiting assertions, such as [`Turbine::await_item`], run this
+    /// scheduler and advance virtual time until the flow answers.
+    pub fn turbine<F: Flow>(&self, flow: &F) -> Turbine<'_, F::Run> {
+        let _entered = enter(&self.dispatcher);
         Turbine {
-            run: flow.open(),
-            context: Some(self.dispatcher.clone()),
+            run: Some(flow.open()),
+            driver: Some(self),
         }
     }
 
@@ -210,26 +225,178 @@ impl TestScheduler {
 /// Steps through a flow by hand in a test — Kotlin's Turbine.
 ///
 /// Holding a `Turbine` counts as a collector, so it keeps `WhileSubscribed`
-/// upstreams running, and dropping it cancels the collection.
-pub struct Turbine<S> {
-    run: S,
-    context: Option<Dispatcher>,
+/// upstreams running, and dropping it cancels the collection. One made by
+/// [`TestScheduler::turbine`] drives that scheduler while it waits; one made by
+/// [`Turbine::of`] only looks at what is ready. The awaiting assertions panic
+/// with a message when the flow does something else, as Turbine's do.
+pub struct Turbine<'a, S> {
+    run: Option<S>,
+    driver: Option<&'a TestScheduler>,
 }
 
-impl<S: Stream + Unpin> Turbine<S> {
+impl<S: Stream + Unpin> Turbine<'static, S> {
     /// Starts collecting `flow` outside any dispatcher.
     pub fn of<F: Flow<Run = S>>(flow: &F) -> Self {
         Self {
-            run: flow.open(),
-            context: None,
+            run: Some(flow.open()),
+            driver: None,
         }
     }
+}
 
+impl<S: Stream + Unpin> Turbine<'_, S> {
     /// The next value if one is ready right now: `Ready(Some(value))`,
     /// `Ready(None)` once the flow completed, or `Pending`.
     pub fn next_now(&mut self) -> Poll<Option<S::Item>> {
-        let _entered = self.context.as_ref().map(enter);
+        let Some(run) = self.run.as_mut() else {
+            return Poll::Ready(None);
+        };
+        let _entered = self.driver.map(|driver| enter(&driver.dispatcher));
         let mut cx = Context::from_waker(Waker::noop());
-        Pin::new(&mut self.run).poll_next(&mut cx)
+        Pin::new(run).poll_next(&mut cx)
     }
+
+    fn next_event(&mut self) -> Poll<Option<S::Item>> {
+        loop {
+            if let Poll::Ready(event) = self.next_now() {
+                return Poll::Ready(event);
+            }
+            let Some(driver) = self.driver else {
+                return Poll::Pending;
+            };
+            driver.run_current();
+            if let Poll::Ready(event) = self.next_now() {
+                return Poll::Ready(event);
+            }
+            if !driver.fire_next_timer(None) {
+                return Poll::Pending;
+            }
+        }
+    }
+
+    /// Waits for the next value and returns it — Turbine's `awaitItem`.
+    ///
+    /// # Panics
+    ///
+    /// When the flow completes or can make no more progress first.
+    pub fn await_item(&mut self) -> S::Item {
+        match self.next_event() {
+            Poll::Ready(Some(value)) => value,
+            Poll::Ready(None) => panic!("expected an item, but the flow completed"),
+            Poll::Pending => panic!("expected an item, but none arrived"),
+        }
+    }
+
+    /// Waits for the flow to complete — Turbine's `awaitComplete`.
+    ///
+    /// # Panics
+    ///
+    /// When the flow emits or can make no more progress first.
+    pub fn await_complete(&mut self) {
+        match self.next_event() {
+            Poll::Ready(None) => self.run = None,
+            Poll::Ready(Some(_)) => panic!("expected the flow to complete, but it emitted"),
+            Poll::Pending => panic!("expected the flow to complete, but it is still running"),
+        }
+    }
+
+    /// Checks that nothing is ready without advancing time — Turbine's
+    /// `expectNoEvents`.
+    ///
+    /// # Panics
+    ///
+    /// When the flow has a value ready or has completed.
+    pub fn expect_no_events(&mut self) {
+        if let Some(driver) = self.driver {
+            driver.run_current();
+        }
+        match self.next_now() {
+            Poll::Pending => {}
+            Poll::Ready(Some(_)) => panic!("expected no events, but the flow emitted"),
+            Poll::Ready(None) => panic!("expected no events, but the flow completed"),
+        }
+    }
+
+    /// Waits for and discards `count` values — Turbine's `skipItems`.
+    ///
+    /// # Panics
+    ///
+    /// When fewer than `count` values arrive.
+    pub fn skip_items(&mut self, count: usize) {
+        for _ in 0..count {
+            self.await_item();
+        }
+    }
+
+    /// Stops collecting and ignores whatever the flow would still do —
+    /// Turbine's `cancelAndIgnoreRemainingEvents`.
+    pub fn cancel_and_ignore_remaining_events(self) {}
+}
+
+/// What [`run_test`] hands its body — Kotlin's `TestScope`.
+///
+/// It dereferences to a [`CoroutineScope`] on the test's virtual time, whose
+/// coroutines the test waits for before it ends.
+pub struct TestScope {
+    scheduler: TestScheduler,
+    scope: CoroutineScope,
+    background: CoroutineScope,
+}
+
+impl TestScope {
+    /// The scheduler whose virtual time the test runs on — Kotlin's
+    /// `testScheduler`.
+    pub fn scheduler(&self) -> &TestScheduler {
+        &self.scheduler
+    }
+
+    /// A scope for coroutines that run for the whole test and are cancelled
+    /// when it ends — Kotlin's `backgroundScope`.
+    pub fn background_scope(&self) -> &CoroutineScope {
+        &self.background
+    }
+}
+
+impl std::ops::Deref for TestScope {
+    type Target = CoroutineScope;
+
+    fn deref(&self) -> &CoroutineScope {
+        &self.scope
+    }
+}
+
+/// Runs a test body on virtual time and returns its result — Kotlin's
+/// `runTest`.
+///
+/// Delays in `body` skip ahead instantly. Once `body` returns, the test waits
+/// for the coroutines launched in its [`TestScope`], then cancels its
+/// [`background_scope`](TestScope::background_scope). It is [`Stalled`] if
+/// the body or those coroutines can never finish.
+///
+/// ```
+/// use std::time::Duration;
+///
+/// use coroflow::{delay, run_test};
+/// let finished_at = run_test(async |test| {
+///     test.launch(async { delay(Duration::from_secs(5)).await });
+///     delay(Duration::from_secs(1)).await;
+///     test.scheduler().now()
+/// });
+/// assert_eq!(finished_at, Ok(Duration::from_secs(1)));
+/// ```
+pub fn run_test<T>(body: impl AsyncFnOnce(&TestScope) -> T) -> Result<T, Stalled> {
+    let scheduler = TestScheduler::new();
+    let test = TestScope {
+        scope: CoroutineScope::new(scheduler.dispatcher()),
+        background: CoroutineScope::new(scheduler.dispatcher()),
+        scheduler,
+    };
+    let result = test.scheduler.block_on(async {
+        let value = body(&test).await;
+        join_all(test.scope.children()).await;
+        value
+    });
+    test.background.cancel();
+    test.scheduler.run_current();
+    result
 }

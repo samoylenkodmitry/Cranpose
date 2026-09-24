@@ -5,10 +5,14 @@
 //!
 //! | Android | Cranpose |
 //! |---|---|
-//! | `Dispatchers.Main` | [`main_dispatcher`] |
+//! | `Dispatchers.Main` | [`main_dispatcher`], then `coroflow::Dispatchers::main()` |
 //! | `viewModel { }` + `viewModelScope` | [`rememberViewModel`], a `Copy` [`Handle`] |
+//! | `SavedStateHandle` | [`SavedStateHandle`] |
+//! | `rememberCoroutineScope()` | [`rememberCoroutineScope`] |
 //! | `StateFlow.collectAsState()` | [`StateFlowCollect::collectAsState`] |
-//! | `collectAsStateWithLifecycle()` | [`StateFlowCollect::collectAsStateWithLifecycle`] |
+//! | `Flow.collectAsState(initial)` | [`FlowCollect::collectAsState`] |
+//! | `collectAsStateWithLifecycle()` | [`StateFlowCollect::collectAsStateWithLifecycle`], [`FlowCollect::collectAsStateWithLifecycle`] |
+//! | `lifecycle.currentStateFlow`, `flowWithLifecycle`, `repeatOnLifecycle` | [`lifecycle_state_flow`], [`LifecycleFlowExt::flow_with_lifecycle`], [`repeat_on_lifecycle`] |
 //! | `LaunchedEffect(key) { flow.collect { } }` | [`CollectFlow`] |
 //! | `snapshotFlow { }` | [`snapshotFlow`] |
 
@@ -16,10 +20,15 @@
 
 mod dispatcher;
 mod hooks;
+mod lifecycle;
+mod saved_state;
 mod snapshot_flow;
 
 pub use dispatcher::main_dispatcher;
 pub use hooks::{
-    CollectFlow, Handle, StateFlowCollect, collects_in, rememberHandle, rememberViewModel,
+    CollectFlow, FlowCollect, Handle, StateFlowCollect, collects_in, rememberCoroutineScope,
+    rememberHandle, rememberViewModel,
 };
+pub use lifecycle::{LifecycleFlowExt, is_active_for, lifecycle_state_flow, repeat_on_lifecycle};
+pub use saved_state::SavedStateHandle;
 pub use snapshot_flow::{SnapshotFlow, SnapshotRun, snapshotFlow};

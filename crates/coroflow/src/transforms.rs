@@ -1,4 +1,5 @@
 use std::{
+    marker::PhantomData,
     pin::Pin,
     task::{Context, Poll},
 };
@@ -180,6 +181,115 @@ where
                 }
                 Poll::Ready(None) => return Poll::Ready(None),
                 Poll::Pending => return Poll::Pending,
+            }
+        }
+    }
+}
+
+/// Emits values while the predicate holds, then completes — the
+/// [`take_while`](crate::FlowExt::take_while) kind of [`While`].
+pub struct Taking;
+
+/// Ignores values while the predicate holds, then emits everything — the
+/// [`skip_while`](crate::FlowExt::skip_while) kind of [`While`].
+pub struct Skipping;
+
+/// The flow returned by [`take_while`](crate::FlowExt::take_while) and
+/// [`skip_while`](crate::FlowExt::skip_while).
+pub struct While<F, P, K> {
+    upstream: F,
+    predicate: P,
+    _kind: PhantomData<fn() -> K>,
+}
+
+impl<F, P, K> While<F, P, K> {
+    pub(crate) fn new(upstream: F, predicate: P) -> Self {
+        Self {
+            upstream,
+            predicate,
+            _kind: PhantomData,
+        }
+    }
+}
+
+impl<F: Clone, P: Clone, K> Clone for While<F, P, K> {
+    fn clone(&self) -> Self {
+        Self::new(self.upstream.clone(), self.predicate.clone())
+    }
+}
+
+/// One run of a [`While`].
+pub struct WhileRun<S, P, K> {
+    upstream: Option<S>,
+    predicate: P,
+    deciding: bool,
+    _kind: PhantomData<fn() -> K>,
+}
+
+impl<S, P, K> Unpin for WhileRun<S, P, K> {}
+
+impl<F, P, K> Flow for While<F, P, K>
+where
+    F: Flow,
+    P: Fn(&F::Item) -> bool + Clone,
+    WhileRun<F::Run, P, K>: Stream<Item = F::Item>,
+{
+    type Item = F::Item;
+    type Run = WhileRun<F::Run, P, K>;
+
+    fn open(&self) -> Self::Run {
+        WhileRun {
+            upstream: Some(self.upstream.open()),
+            predicate: self.predicate.clone(),
+            deciding: true,
+            _kind: PhantomData,
+        }
+    }
+}
+
+impl<S, P> Stream for WhileRun<S, P, Taking>
+where
+    S: Stream + Unpin,
+    P: Fn(&S::Item) -> bool,
+{
+    type Item = S::Item;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<S::Item>> {
+        let this = self.get_mut();
+        let Some(upstream) = this.upstream.as_mut() else {
+            return Poll::Ready(None);
+        };
+        match poll_run(upstream, cx) {
+            Poll::Ready(Some(value)) if (this.predicate)(&value) => Poll::Ready(Some(value)),
+            Poll::Ready(_) => {
+                this.upstream = None;
+                Poll::Ready(None)
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+impl<S, P> Stream for WhileRun<S, P, Skipping>
+where
+    S: Stream + Unpin,
+    P: Fn(&S::Item) -> bool,
+{
+    type Item = S::Item;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<S::Item>> {
+        let this = self.get_mut();
+        let Some(upstream) = this.upstream.as_mut() else {
+            return Poll::Ready(None);
+        };
+        loop {
+            match poll_run(upstream, cx) {
+                Poll::Ready(Some(value)) if this.deciding && (this.predicate)(&value) => {}
+                Poll::Ready(Some(value)) => {
+                    this.deciding = false;
+                    return Poll::Ready(Some(value));
+                }
+                other => return other,
             }
         }
     }

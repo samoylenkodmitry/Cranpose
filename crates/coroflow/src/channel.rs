@@ -201,8 +201,7 @@ impl<T> Sender<T> {
     pub fn send(&self, value: T) -> SendFuture<'_, T> {
         SendFuture {
             sender: self,
-            value: Some(value),
-            handed_over: None,
+            sending: Sending::new(value),
         }
     }
 
@@ -257,22 +256,26 @@ impl<T> Sender<T> {
     }
 }
 
-/// The future returned by [`Sender::send`].
-pub struct SendFuture<'a, T> {
-    sender: &'a Sender<T>,
+pub(crate) struct Sending<T> {
     value: Option<T>,
     handed_over: Option<u64>,
 }
 
-impl<T> Unpin for SendFuture<'_, T> {}
+impl<T> Sending<T> {
+    pub(crate) fn new(value: T) -> Self {
+        Self {
+            value: Some(value),
+            handed_over: None,
+        }
+    }
 
-impl<T> Future for SendFuture<'_, T> {
-    type Output = Result<(), SendError<T>>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.get_mut();
-        let mut state = lock(&this.sender.shared);
-        if let Some(sequence) = this.handed_over {
+    pub(crate) fn poll(
+        &mut self,
+        sender: &Sender<T>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<(), SendError<T>>> {
+        let mut state = lock(&sender.shared);
+        if let Some(sequence) = self.handed_over {
             if state.received > sequence {
                 return Poll::Ready(Ok(()));
             }
@@ -284,14 +287,14 @@ impl<T> Future for SendFuture<'_, T> {
             wait_on(&mut state.send_waiters, cx);
             return Poll::Pending;
         }
-        let Some(value) = this.value.take() else {
+        let Some(value) = self.value.take() else {
             return Poll::Ready(Ok(()));
         };
         if !state.is_open() {
             return Poll::Ready(Err(SendError(value)));
         }
         if !state.room() {
-            this.value = Some(value);
+            self.value = Some(value);
             wait_on(&mut state.send_waiters, cx);
             return Poll::Pending;
         }
@@ -302,7 +305,7 @@ impl<T> Future for SendFuture<'_, T> {
         let (sequence, receivers) = state.push(value);
         let rendezvous = state.capacity == Capacity::Rendezvous;
         if rendezvous {
-            this.handed_over = Some(sequence);
+            self.handed_over = Some(sequence);
             wait_on(&mut state.send_waiters, cx);
         }
         drop(state);
@@ -312,6 +315,66 @@ impl<T> Future for SendFuture<'_, T> {
             Poll::Pending
         } else {
             Poll::Ready(Ok(()))
+        }
+    }
+}
+
+/// The future returned by [`Sender::send`].
+pub struct SendFuture<'a, T> {
+    sender: &'a Sender<T>,
+    sending: Sending<T>,
+}
+
+impl<T> Unpin for SendFuture<'_, T> {}
+
+impl<T> Future for SendFuture<'_, T> {
+    type Output = Result<(), SendError<T>>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        this.sending.poll(this.sender, cx)
+    }
+}
+
+/// The coroutine [`produce_in`](crate::FlowExt::produce_in) launches: it
+/// collects a flow into a channel until the flow ends or every receiver is
+/// gone.
+pub struct ProduceIn<S: Stream> {
+    run: S,
+    sender: Sender<S::Item>,
+    sending: Option<Sending<S::Item>>,
+}
+
+impl<S: Stream> ProduceIn<S> {
+    pub(crate) fn new(run: S, sender: Sender<S::Item>) -> Self {
+        Self {
+            run,
+            sender,
+            sending: None,
+        }
+    }
+}
+
+impl<S: Stream> Unpin for ProduceIn<S> {}
+
+impl<S: Stream + Unpin> Future for ProduceIn<S> {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        let this = self.get_mut();
+        loop {
+            if let Some(sending) = this.sending.as_mut() {
+                match sending.poll(&this.sender, cx) {
+                    Poll::Ready(Ok(())) => this.sending = None,
+                    Poll::Ready(Err(_)) => return Poll::Ready(()),
+                    Poll::Pending => return Poll::Pending,
+                }
+            }
+            match Pin::new(&mut this.run).poll_next(cx) {
+                Poll::Ready(Some(value)) => this.sending = Some(Sending::new(value)),
+                Poll::Ready(None) => return Poll::Ready(()),
+                Poll::Pending => return Poll::Pending,
+            }
         }
     }
 }
@@ -500,7 +563,7 @@ impl<F: FnOnce()> Drop for OnDrop<F> {
 /// cancels them all.
 pub fn channel_flow<T, F, Fut>(block: F) -> ChannelFlow<T, F>
 where
-    F: Fn(Producer<T>) -> Fut + Clone,
+    F: FnOnce(Producer<T>) -> Fut + Clone,
     Fut: Future<Output = ()> + Send + 'static,
     T: Send + 'static,
 {
@@ -542,7 +605,7 @@ impl<T, F> Unpin for ChannelFlowRun<T, F> {}
 
 impl<T, F, Fut> Flow for ChannelFlow<T, F>
 where
-    F: Fn(Producer<T>) -> Fut + Clone,
+    F: FnOnce(Producer<T>) -> Fut + Clone,
     Fut: Future<Output = ()> + Send + 'static,
     T: Send + 'static,
 {
@@ -562,7 +625,7 @@ where
 
 impl<T, F, Fut> Stream for ChannelFlowRun<T, F>
 where
-    F: Fn(Producer<T>) -> Fut,
+    F: FnOnce(Producer<T>) -> Fut,
     Fut: Future<Output = ()> + Send + 'static,
     T: Send + 'static,
 {

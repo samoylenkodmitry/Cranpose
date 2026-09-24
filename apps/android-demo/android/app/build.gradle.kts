@@ -9,13 +9,20 @@ plugins {
     id("dev.cranpose.android")
 }
 
+// The same project builds another demo when these properties name it, as
+// `just android-coroflow` does.
+fun demoProperty(name: String, default: String): String =
+    providers.gradleProperty(name).getOrElse(default)
+
 cranpose {
-    cargoPackage.set("desktop-app-platform")
-    libraryName.set("desktop_app")
-    label.set("Compose Demo")
+    cargoPackage.set(demoProperty("cranposeCargoPackage", "desktop-app-platform"))
+    libraryName.set(demoProperty("cranposeLibraryName", "desktop_app"))
+    label.set(demoProperty("cranposeLabel", "Compose Demo"))
     // The demo draws an overlay window and plays designed haptics, and nothing
     // else optional. It posts no notifications, so it does not ask to.
-    services.addAll("haptics", "overlay")
+    services.addAll(
+        demoProperty("cranposeServices", "haptics,overlay").split(",").filter { it.isNotBlank() }
+    )
     // This repository declares `release-fast` in its own Cargo.toml, so its
     // demos may ask for it: a local release check builds quicker and keeps the
     // symbols a device profile or crash report needs. Continuous integration
@@ -36,7 +43,7 @@ android {
     testBuildType = "release"
 
     defaultConfig {
-        applicationId = "com.compose_rs.demo"
+        applicationId = demoProperty("cranposeApplicationId", "com.compose_rs.demo")
         minSdk = 24
         targetSdk = 36
         versionCode = 1

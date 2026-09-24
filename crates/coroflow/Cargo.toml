@@ -27,8 +27,15 @@ web-sys = { version = "0.3", features = ["Window"] }
 workspace = true
 
 [dev-dependencies]
+criterion = "0.8.2"
+futures-util = "0.3.34"
 pollster = "0.4"
 stats_alloc = "0.1.10"
+tokio = { version = "1.53.1", features = ["rt", "sync"] }
+
+[[bench]]
+name = "comparisons"
+harness = false
 
 [[test]]
 name = "integration"

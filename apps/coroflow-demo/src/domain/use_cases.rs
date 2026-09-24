@@ -1,6 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
-use coroflow::{Dispatcher, FlowExt, SendFlow, StateFlow, flow_of};
+use coroflow::{Dispatcher, FlowExt, SendFlow, StateFlow};
 
 use super::{
     model::{CatalogResults, Note, NoteId, NotesError, NotesList, SyncStatus},
@@ -81,11 +81,11 @@ impl SearchCatalog {
             .map(|query| query.trim().to_string())
             .debounce(CATALOG_SEARCH_DEBOUNCE)
             .distinct_until_changed()
-            .flat_map_latest(move |query| {
+            .transform_latest(async move |query, emitter| {
                 if query.chars().count() < MIN_CATALOG_QUERY {
-                    flow_of(vec![CatalogResults::Idle]).boxed()
+                    emitter.emit(CatalogResults::Idle).await;
                 } else {
-                    repository.search_catalog(query)
+                    emitter.emit_all(repository.search_catalog(query)).await;
                 }
             })
             .start_with(CatalogResults::Idle)

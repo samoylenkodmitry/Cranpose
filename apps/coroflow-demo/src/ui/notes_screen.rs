@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use coroflow::{FlowExt, flow};
+use coroflow::FlowExt;
 use cranpose::prelude::*;
 use cranpose_coroflow::{CollectFlow, Handle, StateFlowCollect, snapshotFlow};
 use cranpose_foundation::text::TextFieldState;
@@ -37,16 +37,10 @@ pub fn NotesScreen(view_model: Handle<NotesViewModel>) {
         view_model
             .get()
             .events()
-            .flat_map_latest(|event: NotesEvent| {
-                let message = event.message();
-                flow(move |emitter| {
-                    let message = message.clone();
-                    async move {
-                        emitter.emit(Some(message)).await;
-                        coroflow::delay(SNACKBAR_DURATION).await;
-                        emitter.emit(None).await;
-                    }
-                })
+            .transform_latest(async |event: NotesEvent, emitter| {
+                emitter.emit(Some(event.message())).await;
+                coroflow::delay(SNACKBAR_DURATION).await;
+                emitter.emit(None).await;
             }),
         move |message| snackbar.set(message),
     );
