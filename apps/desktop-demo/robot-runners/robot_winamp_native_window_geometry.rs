@@ -13,10 +13,18 @@ use desktop_app::app::{self, DemoTab, TEST_ACTIVE_TAB_STATE};
 use image::RgbaImage;
 
 const WINDOW_TITLE: &str = "Robot Winamp Native Geometry";
+const MAIN_TITLE: &str = "Winamp";
+const EQUALIZER_TITLE: &str = "Winamp Equalizer";
+const PLAYLIST_TITLE: &str = "Winamp Playlist";
+const WINAMP_TITLES: [&str; 3] = [MAIN_TITLE, EQUALIZER_TITLE, PLAYLIST_TITLE];
 const MOVE_STEPS: usize = 12;
+const MOVE_DX: i32 = 13;
+const MOVE_DY: i32 = 7;
 const FAST_MOVE_STEPS: usize = 8;
 const FAST_MOVE_DX: i32 = 24;
 const FAST_MOVE_DY: i32 = 11;
+const OVERFLIGHT_STEPS: usize = 12;
+const OVERFLIGHT_DX: i32 = 24;
 const PIXEL_TRACE_STEPS: usize = 48;
 const LONG_DRAG_TRACE_STEPS: usize = 128;
 const LONG_DRAG_DX: i32 = 3;
@@ -24,9 +32,23 @@ const LONG_DRAG_DY: i32 = 1;
 const LONG_DRAG_STEP_DELAY: Duration = Duration::from_millis(5);
 const LONG_DRAG_MAX_POINTER_WINDOW_DRIFT: i32 = 12;
 const LONG_DRAG_MAX_WINDOW_STEP: i32 = 18;
-const LONG_DRAG_MAX_PAIR_LAG: i32 = 8;
+const TEAR_STEPS: usize = 8;
+const TEAR_DX: i32 = 24;
+const TEAR_DY: i32 = 11;
+const SHORT_OF_TEAR_DX: i32 = 4;
+const SHORT_OF_TEAR_DY: i32 = 3;
+const DOCK_STEPS: usize = 8;
+const STRETCH_STEPS: usize = 4;
+const PLAYLIST_STRETCH: (f32, f32) = (25.0, 29.0);
+const PLAYLIST_CORNER_INSET: i32 = 8;
+const TORN_PANE_GAP: i32 = 80;
+const TORN_PANE_ROW_GAP: i32 = 40;
+const MAIN_GRIP: (i32, i32) = (120, 8);
+const PANE_GRIP: (i32, i32) = (120, 6);
 const PIXEL_TRACE_STALL_TIMEOUT: Duration = Duration::from_millis(90);
-const GROUP_MOVE_STEP_TIMEOUT: Duration = Duration::from_millis(500);
+const FOLLOW_STEP_TIMEOUT: Duration = Duration::from_millis(500);
+const TORN_WINDOW_TIMEOUT: Duration = Duration::from_millis(2_000);
+const DOCK_TIMEOUT: Duration = Duration::from_millis(1_500);
 const POST_RELEASE_STABILITY_TIMEOUT: Duration = Duration::from_millis(800);
 const POST_RELEASE_STABILITY_POLL: Duration = Duration::from_millis(16);
 const OFFSET_EPSILON: i32 = 3;
@@ -36,6 +58,10 @@ const SETUP_POSITION_TIMEOUT: Duration = Duration::from_millis(1200);
 const CACHED_RESTORE_TIMEOUT: Duration = Duration::from_millis(1_000);
 const TRANSPORT_CLICK_SETTLE: Duration = Duration::from_millis(160);
 const WINAMP_MAIN_SKIN_WIDTH: f32 = 275.0;
+const MAIN_SKIN_HEIGHT: f32 = 116.0;
+const EQUALIZER_SKIN_HEIGHT: f32 = 116.0;
+const PLAYLIST_SKIN_HEIGHT: f32 = 203.0;
+const DOCKED_PANE_MAX_CHANGED_FRACTION: f32 = 0.02;
 const TRANSPORT_Y: f32 = 88.0;
 const TRANSPORT_BUTTON_WIDTH: f32 = 23.0;
 const TRANSPORT_BUTTON_HEIGHT: f32 = 18.0;
@@ -57,6 +83,20 @@ struct WindowGeometry {
     height: i32,
 }
 
+impl WindowGeometry {
+    fn origin(self) -> (i32, i32) {
+        (self.x, self.y)
+    }
+
+    fn right(self) -> i32 {
+        self.x + self.width
+    }
+
+    fn bottom(self) -> i32 {
+        self.y + self.height
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct PointerLocation {
     x: i32,
@@ -64,45 +104,68 @@ struct PointerLocation {
     window: u64,
 }
 
-impl WindowGeometry {
-    fn offset_from(self, other: Self) -> (i32, i32) {
-        (self.x - other.x, self.y - other.y)
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Pane {
+    Equalizer,
+    Playlist,
+}
+
+impl Pane {
+    fn title(self) -> &'static str {
+        match self {
+            Self::Equalizer => EQUALIZER_TITLE,
+            Self::Playlist => PLAYLIST_TITLE,
+        }
+    }
+
+    fn skin_height(self) -> f32 {
+        match self {
+            Self::Equalizer => EQUALIZER_SKIN_HEIGHT,
+            Self::Playlist => PLAYLIST_SKIN_HEIGHT,
+        }
     }
 }
 
 #[derive(Clone, Copy, Debug)]
-struct WinampWindows {
-    main: u64,
-    equalizer: u64,
-    playlist: u64,
+struct Winamp {
+    pid: u32,
+    stack: u64,
+    scale: f32,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct WinampGeometries {
-    main: WindowGeometry,
-    equalizer: WindowGeometry,
-    playlist: WindowGeometry,
+#[derive(Clone, Copy, Debug)]
+struct TornPane {
+    pane: Pane,
+    window: u64,
 }
 
 #[derive(Clone, Copy, Debug)]
 struct DragTraceSample {
     pointer: PointerLocation,
-    geometries: WinampGeometries,
+    stack: WindowGeometry,
     elapsed: Duration,
 }
 
-impl WinampWindows {
-    fn geometries(self) -> WinampGeometries {
-        let geometries = window_geometries(self.window_ids());
-        WinampGeometries {
-            main: geometry_from_snapshot(&geometries, self.main),
-            equalizer: geometry_from_snapshot(&geometries, self.equalizer),
-            playlist: geometry_from_snapshot(&geometries, self.playlist),
-        }
+impl Winamp {
+    fn px(self, skin: f32) -> i32 {
+        (skin * self.scale).round() as i32
     }
 
-    fn window_ids(self) -> [u64; 3] {
-        [self.main, self.equalizer, self.playlist]
+    fn stack_height(self, docked: &[Pane]) -> i32 {
+        self.px(MAIN_SKIN_HEIGHT + docked.iter().map(|pane| pane.skin_height()).sum::<f32>())
+    }
+
+    fn pane_offset(self, pane: Pane, docked: &[Pane]) -> i32 {
+        let above: f32 = docked
+            .iter()
+            .take_while(|held| **held != pane)
+            .map(|held| held.skin_height())
+            .sum();
+        self.px(MAIN_SKIN_HEIGHT + above)
+    }
+
+    fn pane_window(self, pane: Pane) -> Option<u64> {
+        find_window_ids(self.pid, pane.title()).into_iter().next()
     }
 }
 
@@ -136,70 +199,102 @@ pub(crate) fn main() {
 
             let appeared_at = Instant::now();
             click_button_now(&robot, "Winamp");
-            let windows = find_winamp_windows(pid);
+            let stack = find_visible_window(pid, MAIN_TITLE);
             let appearance_elapsed = appeared_at.elapsed();
             robot.wait_for_idle().expect("initial Winamp idle");
             std::thread::sleep(Duration::from_millis(500));
             robot
                 .wait_for_idle()
                 .expect("initial native windows settled");
+            let appeared = window_geometry(stack);
             println!(
-                "native windows appeared in {}ms: {:?}",
-                appearance_elapsed.as_millis(),
-                windows
+                "the stack window appeared in {}ms: id={stack} {appeared:?}",
+                appearance_elapsed.as_millis()
             );
-            println!("appeared: {:?}", windows.geometries());
-            let origin = arrange_origin(windows);
+            let winamp = Winamp {
+                pid,
+                stack,
+                scale: appeared.width as f32 / WINAMP_MAIN_SKIN_WIDTH,
+            };
+            let all_docked = [Pane::Equalizer, Pane::Playlist];
+            assert_stack_holds("appeared", winamp, &all_docked);
+            assert_panes_not_torn("appeared", winamp, &all_docked);
 
-            place_attached_chain(windows, origin.x, origin.y);
-            assert_attached_offsets("arranged", windows.geometries());
+            let origin = arrange_origin(winamp);
+            place_window_for_setup("place-stack", stack, origin.x, origin.y);
+            drag_stack_and_assert_it_follows(
+                "drag-main",
+                winamp,
+                &all_docked,
+                (MOVE_STEPS, MOVE_DX, MOVE_DY),
+            );
+            place_window_for_setup("place-stack", stack, origin.x + 10, origin.y + 5);
+            drag_main_one_pixel_trace_and_assert_continuity("drag-main-pixel-trace", winamp);
+            place_window_for_setup("place-stack", stack, origin.x + 20, origin.y + 10);
+            drag_stack_and_assert_it_follows(
+                "drag-main-fast",
+                winamp,
+                &all_docked,
+                (FAST_MOVE_STEPS, FAST_MOVE_DX, FAST_MOVE_DY),
+            );
+            place_window_for_setup("place-stack", stack, origin.x + 30, origin.y + 15);
+            drag_main_long_continuous_trace_and_assert_sync(
+                "drag-main-long-trace",
+                winamp,
+                &all_docked,
+            );
 
-            drag_main_and_assert_offsets("drag-main", windows);
-            place_attached_chain(windows, origin.x + 10, origin.y + 5);
-            drag_main_one_pixel_trace_and_assert_continuity("drag-main-pixel-trace", windows);
-            place_attached_chain(windows, origin.x + 20, origin.y + 10);
-            drag_main_fast_and_assert_offsets("drag-main-fast", windows);
-            place_attached_chain(windows, origin.x + 30, origin.y + 15);
-            drag_main_long_continuous_trace_and_assert_sync("drag-main-long-trace", windows);
-            place_attached_chain(windows, origin.x + 40, origin.y + 20);
-            drag_and_assert_only_dragged("drag-playlist", windows, windows.playlist);
-            place_attached_chain(windows, origin.x + 80, origin.y + 40);
-            drag_and_assert_only_dragged("drag-equalizer", windows, windows.equalizer);
-            place_attached_chain(windows, origin.x + 100, origin.y + 50);
-            place_overflight_layout(windows, origin.x + 120, origin.y + 60);
-            drag_main_over_peer_and_assert_peers_static("drag-main-over-peer", windows);
-            place_attached_chain(windows, origin.x + 100, origin.y + 50);
-            move_main_with_window_manager_and_assert_offsets("wm-move-main", windows, 31, 19);
-            hold_transport_button_and_assert_pressed_until_release(
-                "transport-button-hold",
-                windows,
+            place_window_for_setup("place-stack", stack, origin.x, origin.y);
+            let equalizer = tear_pane("tear-equalizer", winamp, Pane::Equalizer, &all_docked);
+            place_torn_panes(winamp, &[equalizer]);
+            let equalizer_picture = capture_x11_window_image(
+                equalizer.window,
+                &diagnostic_png("tear-equalizer", "torn"),
             );
-            click_transport_buttons_and_assert_windows_remain("transport-buttons", windows);
-            drag_volume_to_zero_and_assert_windows_remain("volume-zero", windows);
+            let playlist = tear_pane("tear-playlist", winamp, Pane::Playlist, &[Pane::Playlist]);
+            let torn = [equalizer, playlist];
 
-            click_button(&robot, "Dock");
-            assert_windows_absent(pid, "after Dock");
+            place_torn_panes(winamp, &torn);
+            drag_main_over_torn_panes_and_assert_they_stay("drag-main-over-torn", winamp, &torn);
+            place_window_for_setup("place-stack", stack, origin.x, origin.y);
+            place_torn_panes(winamp, &torn);
+            drag_torn_pane_alone("drag-equalizer", winamp, equalizer, &torn);
+            place_torn_panes(winamp, &torn);
+            drag_torn_pane_alone("drag-playlist", winamp, playlist, &torn);
+            place_torn_panes(winamp, &torn);
+            move_stack_with_window_manager_and_assert_panes_stay("wm-move-main", winamp, &torn);
+            place_torn_panes(winamp, &torn);
+            stretch_playlist_and_back("stretch-torn-playlist", winamp, playlist.window);
 
-            let restore_started = Instant::now();
-            click_button_now(&robot, "Undock");
-            let restored_windows = find_winamp_windows(pid);
-            let restore_elapsed = restore_started.elapsed();
-            println!(
-                "native windows restored after Undock in {}ms: {:?}",
-                restore_elapsed.as_millis(),
-                restored_windows
+            place_window_for_setup("place-stack", stack, origin.x, origin.y);
+            place_torn_panes(winamp, &torn);
+            dock_pane("dock-equalizer", winamp, equalizer, &[], &[Pane::Equalizer]);
+            assert_docked_pane_draws_in_its_slot(
+                "dock-equalizer",
+                winamp,
+                Pane::Equalizer,
+                &[Pane::Equalizer],
+                &equalizer_picture,
             );
-            assert_eq!(
-                windows.window_ids(),
-                restored_windows.window_ids(),
-                "Undock recreated native windows instead of restoring cached OS windows"
+
+            dock_and_undock_and_assert_windows_restored(&robot, winamp, playlist);
+
+            place_window_for_setup("place-stack", stack, origin.x, origin.y);
+            place_torn_panes(winamp, &[playlist]);
+            dock_pane(
+                "dock-playlist",
+                winamp,
+                playlist,
+                &[Pane::Equalizer],
+                &all_docked,
             );
-            assert!(
-                restore_elapsed <= CACHED_RESTORE_TIMEOUT,
-                "Undock restore took {}ms, expected cached native windows to return within {}ms",
-                restore_elapsed.as_millis(),
-                CACHED_RESTORE_TIMEOUT.as_millis()
-            );
+            assert_panes_not_torn("docked-again", winamp, &all_docked);
+            stretch_playlist_and_back("stretch-docked-playlist", winamp, stack);
+
+            hold_transport_button_and_assert_pressed_until_release("transport-button-hold", winamp);
+            click_transport_buttons_and_assert_stack_remains("transport-buttons", winamp);
+            drag_volume_to_zero_and_assert_stack_remains("volume-zero", winamp);
+
             robot
                 .invoke_app_hook("set-tab", "xkcd")
                 .expect("switch to XKCD tab");
@@ -211,14 +306,13 @@ pub(crate) fn main() {
         .run(|| app::combined_app_with_initial_tab(Some(DemoTab::Counter)));
 }
 
-fn arrange_origin(windows: WinampWindows) -> WindowGeometry {
-    let geometries = windows.geometries();
+fn arrange_origin(winamp: Winamp) -> WindowGeometry {
+    let stack = window_geometry(winamp.stack);
     let long_drag_travel_x = (LONG_DRAG_DX * LONG_DRAG_TRACE_STEPS as i32).max(0);
     let long_drag_travel_y = (LONG_DRAG_DY * LONG_DRAG_TRACE_STEPS as i32).max(0);
-    let total_width = geometries.main.width + geometries.playlist.width + long_drag_travel_x;
-    let total_height = geometries.main.height
-        + geometries.equalizer.height.max(geometries.playlist.height)
-        + long_drag_travel_y;
+    let torn_panes_width = TORN_PANE_GAP + stack.width;
+    let total_width = stack.width + long_drag_travel_x.max(torn_panes_width);
+    let total_height = stack.height + long_drag_travel_y;
     let monitor = native_window_monitor();
     let desired_margin_x = 120.max(total_width / 2);
     let desired_margin_y = 120.max(total_height / 2);
@@ -229,8 +323,8 @@ fn arrange_origin(windows: WinampWindows) -> WindowGeometry {
     let fallback = WindowGeometry {
         x: (monitor.x + margin_x).min(max_x.max(monitor.x)),
         y: (monitor.y + margin_y).min(max_y.max(monitor.y)),
-        width: geometries.main.width,
-        height: geometries.main.height,
+        width: stack.width,
+        height: stack.height,
     };
     unobstructed_origin(monitor, total_width, total_height, fallback)
 }
@@ -289,16 +383,9 @@ fn visible_window_obstacles() -> Vec<WindowGeometry> {
             let title = title.as_deref();
             if matches!(
                 title,
-                Some(
-                    "Desktop"
-                        | "xfdesktop"
-                        | "Xfwm4"
-                        | WINDOW_TITLE
-                        | "Winamp"
-                        | "Winamp Equalizer"
-                        | "Winamp Playlist"
-                )
-            ) {
+                Some("Desktop" | "xfdesktop" | "Xfwm4" | WINDOW_TITLE)
+            ) || title.is_some_and(|title| WINAMP_TITLES.contains(&title))
+            {
                 return None;
             }
             geometry.filter(|geometry| geometry.width > 1 && geometry.height > 1)
@@ -368,55 +455,18 @@ fn find_app_window(pid: u32) -> u64 {
     );
 }
 
-fn find_winamp_windows(pid: u32) -> WinampWindows {
+fn find_visible_window(pid: u32, title: &str) -> u64 {
     let deadline = Instant::now() + FIND_WINDOW_TIMEOUT;
     while Instant::now() < deadline {
-        let ids = find_window_ids_by_title(pid);
-        if let (Some(main), Some(equalizer), Some(playlist)) = (
-            ids.get("Winamp").copied(),
-            ids.get("Winamp Equalizer").copied(),
-            ids.get("Winamp Playlist").copied(),
-        ) {
-            return WinampWindows {
-                main,
-                equalizer,
-                playlist,
-            };
-        }
-        if let Some(windows) = find_winamp_windows_from_visible_summary() {
-            return windows;
+        if let Some(id) = find_window_ids(pid, title).into_iter().next() {
+            return id;
         }
         std::thread::sleep(FIND_WINDOW_POLL);
     }
-
     panic!(
-        "Winamp native windows for pid {pid} not found; visible windows: {:?}",
+        "native window {title:?} for pid {pid} not found; visible windows: {:?}",
         visible_windows_summary()
     );
-}
-
-fn find_winamp_windows_from_visible_summary() -> Option<WinampWindows> {
-    let mut ids = HashMap::new();
-    for (id, title, geometry) in visible_windows_summary() {
-        let Some(title) = title else {
-            continue;
-        };
-        if !matches!(
-            title.as_str(),
-            "Winamp" | "Winamp Equalizer" | "Winamp Playlist"
-        ) {
-            continue;
-        }
-        if geometry.is_some() {
-            ids.insert(title, id);
-        }
-    }
-
-    Some(WinampWindows {
-        main: ids.get("Winamp").copied()?,
-        equalizer: ids.get("Winamp Equalizer").copied()?,
-        playlist: ids.get("Winamp Playlist").copied()?,
-    })
 }
 
 fn find_window_id_by_exact_title(pid: u32, title: &str) -> Option<u64> {
@@ -426,41 +476,7 @@ fn find_window_id_by_exact_title(pid: u32, title: &str) -> Option<u64> {
         }
     }
 
-    find_window_ids_by_exact_title(pid, title)
-        .into_iter()
-        .next()
-}
-
-fn find_window_ids(pid: u32, title: &str) -> Vec<u64> {
-    find_window_ids_by_exact_title(pid, title)
-}
-
-fn find_window_ids_by_title(pid: u32) -> HashMap<String, u64> {
-    if let Some(windows) = wmctrl_window_ids_by_title(pid) {
-        let windows: HashMap<_, _> = windows
-            .into_iter()
-            .filter(|(title, id)| {
-                matches!(
-                    title.as_str(),
-                    "Winamp" | "Winamp Equalizer" | "Winamp Playlist"
-                ) && window_geometries([*id]).contains_key(id)
-            })
-            .collect();
-        if !windows.is_empty() {
-            return windows;
-        }
-    }
-
-    let mut windows = HashMap::new();
-    for title in ["Winamp", "Winamp Equalizer", "Winamp Playlist"] {
-        if let Some(id) = find_window_ids_by_exact_title(pid, title)
-            .into_iter()
-            .next()
-        {
-            windows.insert(title.to_string(), id);
-        }
-    }
-    windows
+    find_window_ids(pid, title).into_iter().next()
 }
 
 fn wmctrl_window_ids_by_title(pid: u32) -> Option<HashMap<String, u64>> {
@@ -483,7 +499,7 @@ fn wmctrl_window_ids_by_title(pid: u32) -> Option<HashMap<String, u64>> {
     (!windows.is_empty()).then_some(windows)
 }
 
-fn find_window_ids_by_exact_title(pid: u32, title: &str) -> Vec<u64> {
+fn find_window_ids(pid: u32, title: &str) -> Vec<u64> {
     let pid = pid.to_string();
     let pid_matches = xdotool_search_title(
         ["search", "--onlyvisible", "--pid", &pid, "--name", title],
@@ -587,79 +603,76 @@ fn parse_monitor_rect(line: &str) -> Option<WindowGeometry> {
 
 fn assert_windows_absent(pid: u32, label: &str) {
     for _ in 0..20 {
-        let ids = [
-            find_window_ids(pid, "Winamp"),
-            find_window_ids(pid, "Winamp Equalizer"),
-            find_window_ids(pid, "Winamp Playlist"),
-        ];
-        if ids.iter().all(Vec::is_empty) {
+        if WINAMP_TITLES
+            .iter()
+            .all(|title| find_window_ids(pid, title).is_empty())
+        {
             println!("{label}: native windows absent");
             return;
         }
         std::thread::sleep(Duration::from_millis(100));
     }
 
-    let windows = find_window_ids_by_title(pid);
-    let geometries: Vec<_> = windows
+    let visible: Vec<_> = WINAMP_TITLES
         .iter()
-        .map(|(title, id)| (title.clone(), *id, window_geometry(*id)))
+        .flat_map(|title| {
+            find_window_ids(pid, title)
+                .into_iter()
+                .map(move |id| (*title, id, window_geometry(id)))
+        })
         .collect();
-    panic!("{label}: native Winamp windows are still visible for pid {pid}: {geometries:?}");
+    panic!("{label}: native Winamp windows are still visible for pid {pid}: {visible:?}");
 }
 
-fn place_attached_chain(windows: WinampWindows, x: i32, y: i32) {
-    let _ = place_window_for_setup("place-chain-main", windows.main, x, y);
-    let deadline = Instant::now() + SETUP_POSITION_TIMEOUT;
-    let mut last = windows.geometries();
-
+fn assert_stack_holds(label: &str, winamp: Winamp, docked: &[Pane]) -> WindowGeometry {
+    let expected_width = winamp.px(WINAMP_MAIN_SKIN_WIDTH);
+    let expected_height = winamp.stack_height(docked);
+    let deadline = Instant::now() + DOCK_TIMEOUT;
+    let mut stack = window_geometry(winamp.stack);
     while Instant::now() < deadline {
-        let main = window_geometry(windows.main);
-        move_window(windows.equalizer, main.x, main.y + main.height);
-        let equalizer = window_geometry(windows.equalizer);
-        move_window(windows.playlist, equalizer.x + equalizer.width, equalizer.y);
-        std::thread::sleep(Duration::from_millis(120));
-
-        last = windows.geometries();
-        let expected = WinampGeometries {
-            main: last.main,
-            equalizer: WindowGeometry {
-                x: last.main.x,
-                y: last.main.y + last.main.height,
-                ..last.equalizer
-            },
-            playlist: WindowGeometry {
-                x: last.equalizer.x + last.equalizer.width,
-                y: last.equalizer.y,
-                ..last.playlist
-            },
-        };
-        if offsets_close(expected, last) {
-            println!("place attached chain: {last:?}");
-            return;
+        stack = window_geometry(winamp.stack);
+        if (stack.width - expected_width).abs() <= 1 && (stack.height - expected_height).abs() <= 1
+        {
+            println!("{label}: the stack holds {docked:?} at {stack:?}");
+            return stack;
         }
+        std::thread::sleep(Duration::from_millis(8));
     }
-
-    println!("place attached chain: {last:?}");
+    panic!(
+        "{label}: the stack is not the size of the main window with {docked:?} docked under it \
+         expected={expected_width}x{expected_height} actual={stack:?}"
+    );
 }
 
-fn place_overflight_layout(windows: WinampWindows, x: i32, y: i32) {
-    let sizes = windows.geometries();
-    let main = place_window_for_setup("place-overflight-main", windows.main, x, y);
-    let peer_x = main.x + sizes.main.width + 80;
-    place_window_for_setup(
-        "place-overflight-equalizer",
-        windows.equalizer,
-        peer_x,
-        main.y,
+fn assert_panes_not_torn(label: &str, winamp: Winamp, docked: &[Pane]) {
+    for pane in docked {
+        assert_eq!(
+            winamp.pane_window(*pane),
+            None,
+            "{label}: the docked {pane:?} has a window of its own"
+        );
+    }
+}
+
+fn place_torn_panes(winamp: Winamp, torn: &[TornPane]) {
+    let stack = window_geometry(winamp.stack);
+    let x = stack.right() + TORN_PANE_GAP;
+    let mut y = stack.y;
+    for torn_pane in torn {
+        let placed = place_window_for_setup(
+            &format!("place-torn-{:?}", torn_pane.pane),
+            torn_pane.window,
+            x,
+            y,
+        );
+        y = placed.bottom() + TORN_PANE_ROW_GAP;
+    }
+    println!(
+        "place torn panes: stack={stack:?} torn={:?}",
+        torn.iter()
+            .map(|torn_pane| (torn_pane.pane, window_geometry(torn_pane.window)))
+            .collect::<Vec<_>>()
     );
-    place_window_for_setup(
-        "place-overflight-playlist",
-        windows.playlist,
-        peer_x,
-        main.y + sizes.equalizer.height + 40,
-    );
-    std::thread::sleep(Duration::from_millis(220));
-    println!("place overflight layout: {:?}", windows.geometries());
 }
 
 fn place_window_for_setup(label: &str, window_id: u64, x: i32, y: i32) -> WindowGeometry {
@@ -692,87 +705,214 @@ fn place_window_for_setup(label: &str, window_id: u64, x: i32, y: i32) -> Window
     last_geometry
 }
 
-fn drag_main_and_assert_offsets(label: &str, windows: WinampWindows) {
-    drag_and_assert_offsets(label, windows, windows.main, true);
-}
-
-fn begin_main_drag(label: &str, windows: WinampWindows) -> WinampGeometries {
-    let initial = assert_attached_offsets(label, windows.geometries());
-    let (start_x, start_y) = drag_start_for_window(windows, windows.main);
-
-    activate_window(windows.main);
-    mousemove_in_window_exact(label, windows.main, start_x, start_y);
+fn press_in_window(label: &str, window_id: u64, grip: (i32, i32)) -> PointerLocation {
+    activate_window(window_id);
+    mousemove_in_window_exact(label, window_id, grip.0, grip.1);
     std::thread::sleep(Duration::from_millis(100));
     xdotool(["mousedown", "1"]);
     std::thread::sleep(Duration::from_millis(60));
-
-    initial
+    pointer_location()
 }
 
-fn drag_main_one_pixel_trace_and_assert_continuity(label: &str, windows: WinampWindows) {
-    let initial = begin_main_drag(label, windows);
+fn release_pointer(settle: Duration) {
+    xdotool(["mouseup", "1"]);
+    std::thread::sleep(settle);
+}
+
+fn drag_stack_and_assert_it_follows(
+    label: &str,
+    winamp: Winamp,
+    docked: &[Pane],
+    (steps, dx, dy): (usize, i32, i32),
+) {
+    let initial = assert_stack_holds(label, winamp, docked);
+    let pressed = press_in_window(label, winamp.stack, MAIN_GRIP);
+
+    for step in 1..=steps {
+        let moved_at = Instant::now();
+        drag_pointer_by(dx, dy);
+        let current = wait_for_window_under_pointer(
+            label,
+            step,
+            winamp.stack,
+            (pressed.x - initial.x, pressed.y - initial.y),
+        );
+        assert_eq!(
+            (current.width, current.height),
+            (initial.width, initial.height),
+            "{label} step {step}: the stack changed size while it was dragged, so a docked pane \
+             left it"
+        );
+        println!(
+            "{label} step {step}: followed in {}ms {current:?}",
+            moved_at.elapsed().as_millis()
+        );
+    }
+
+    release_pointer(Duration::from_millis(120));
+    let final_stack = window_geometry(winamp.stack);
+    assert_window_moved(label, initial, final_stack);
+    assert_windows_stop_after_release(label, &[winamp.stack]);
+}
+
+fn wait_for_window_under_pointer(
+    label: &str,
+    step: usize,
+    window_id: u64,
+    grab: (i32, i32),
+) -> WindowGeometry {
+    let deadline = Instant::now() + FOLLOW_STEP_TIMEOUT;
+    let pointer = pointer_location();
+    let expected = (pointer.x - grab.0, pointer.y - grab.1);
+    let mut current = window_geometry(window_id);
+    while Instant::now() < deadline {
+        current = window_geometry(window_id);
+        if origin_close(current.origin(), expected) {
+            return current;
+        }
+        std::thread::sleep(Duration::from_millis(4));
+    }
+    panic!(
+        "{label} step {step}: the window did not stay under the pointer expected_origin={expected:?} \
+         actual={current:?} pointer={pointer:?}"
+    );
+}
+
+fn origin_close(actual: (i32, i32), expected: (i32, i32)) -> bool {
+    (actual.0 - expected.0).abs() <= OFFSET_EPSILON
+        && (actual.1 - expected.1).abs() <= OFFSET_EPSILON
+}
+
+fn drag_main_one_pixel_trace_and_assert_continuity(label: &str, winamp: Winamp) {
+    press_in_window(label, winamp.stack, MAIN_GRIP);
 
     let mut trace = Vec::with_capacity(PIXEL_TRACE_STEPS + 1);
     trace.push(DragTraceSample {
         pointer: pointer_location(),
-        geometries: windows.geometries(),
+        stack: window_geometry(winamp.stack),
         elapsed: Duration::ZERO,
     });
 
     for step in 1..=PIXEL_TRACE_STEPS {
         let previous = *trace.last().expect("previous trace sample");
         mousemove_absolute(previous.pointer.x + 1, previous.pointer.y);
-        trace.push(wait_for_one_pixel_drag_step(label, step, windows, previous));
+        trace.push(wait_for_one_pixel_drag_step(label, step, winamp, previous));
         std::thread::sleep(Duration::from_millis(8));
     }
 
-    xdotool(["mouseup", "1"]);
-    std::thread::sleep(Duration::from_millis(120));
+    release_pointer(Duration::from_millis(120));
     print_drag_trace(label, &trace);
-    assert_pixel_drag_trace_continuity(label, initial, &trace);
-    assert_windows_stop_after_release(label, windows, windows.geometries());
+    assert_pixel_drag_trace_continuity(label, &trace);
+    assert_windows_stop_after_release(label, &[winamp.stack]);
 }
 
-fn drag_main_fast_and_assert_offsets(label: &str, windows: WinampWindows) {
-    let initial = begin_main_drag(label, windows);
+fn wait_for_one_pixel_drag_step(
+    label: &str,
+    step: usize,
+    winamp: Winamp,
+    previous: DragTraceSample,
+) -> DragTraceSample {
+    let started = Instant::now();
+    loop {
+        let sample = DragTraceSample {
+            pointer: pointer_location(),
+            stack: window_geometry(winamp.stack),
+            elapsed: started.elapsed(),
+        };
+        let pointer_dx = sample.pointer.x - previous.pointer.x;
+        let pointer_dy = sample.pointer.y - previous.pointer.y;
+        let stack_dx = sample.stack.x - previous.stack.x;
+        let stack_dy = sample.stack.y - previous.stack.y;
 
-    let mut previous_main = initial.main;
-    for step in 1..=FAST_MOVE_STEPS {
-        let moved_at = Instant::now();
-        drag_pointer_by(FAST_MOVE_DX, FAST_MOVE_DY);
-        let current = wait_for_group_offset(
-            label,
-            step,
-            windows,
-            initial,
-            previous_main,
-            GROUP_MOVE_STEP_TIMEOUT,
+        assert!(
+            !(pointer_dx > 1 || pointer_dy != 0),
+            "{label} step {step}: robot pointer moved incorrectly previous={previous:?} sample={sample:?}"
         );
-        previous_main = current.main;
+        assert!(
+            !(stack_dx > 1 || stack_dy != 0),
+            "{label} step {step}: staircase jump detected previous={previous:?} sample={sample:?}"
+        );
+        assert_eq!(
+            (sample.stack.width, sample.stack.height),
+            (previous.stack.width, previous.stack.height),
+            "{label} step {step}: the stack changed size while it was dragged"
+        );
+        if pointer_dx == 1 && stack_dx == 1 && stack_dy == 0 {
+            return sample;
+        }
+        assert!(
+            sample.elapsed <= PIXEL_TRACE_STALL_TIMEOUT,
+            "{label} step {step}: one-pixel drag did not complete within {}ms previous={previous:?} last={sample:?}",
+            PIXEL_TRACE_STALL_TIMEOUT.as_millis()
+        );
+
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+fn print_drag_trace(label: &str, trace: &[DragTraceSample]) {
+    for (index, sample) in trace.iter().enumerate() {
         println!(
-            "{label} step {step}: followed in {}ms {:?}",
-            moved_at.elapsed().as_millis(),
-            current
+            "{label} trace {index:02}: dt={}ms pointer=({}, {}) stack=({}, {}) {}x{}",
+            sample.elapsed.as_millis(),
+            sample.pointer.x,
+            sample.pointer.y,
+            sample.stack.x,
+            sample.stack.y,
+            sample.stack.width,
+            sample.stack.height,
+        );
+    }
+}
+
+fn assert_pixel_drag_trace_continuity(label: &str, trace: &[DragTraceSample]) {
+    assert!(
+        trace.len() == PIXEL_TRACE_STEPS + 1,
+        "{label}: expected {} trace samples, got {}",
+        PIXEL_TRACE_STEPS + 1,
+        trace.len()
+    );
+
+    for index in 1..trace.len() {
+        let previous = trace[index - 1];
+        let current = trace[index];
+        assert_eq!(
+            (
+                current.pointer.x - previous.pointer.x,
+                current.pointer.y - previous.pointer.y
+            ),
+            (1, 0),
+            "{label} sample {index}: robot pointer did not advance by exactly one pixel trace={trace:?}"
+        );
+        assert_eq!(
+            (
+                current.stack.x - previous.stack.x,
+                current.stack.y - previous.stack.y
+            ),
+            (1, 0),
+            "{label} sample {index}: the stack did not follow the one-pixel pointer step exactly"
         );
     }
 
-    xdotool(["mouseup", "1"]);
-    std::thread::sleep(Duration::from_millis(120));
-    let final_geometries = windows.geometries();
-    assert_offsets_close(label, FAST_MOVE_STEPS + 1, initial, final_geometries);
-    assert_window_moved(label, initial.main, final_geometries.main);
-    assert_windows_stop_after_release(label, windows, final_geometries);
+    let first = trace.first().expect("first trace sample").stack;
+    let last = trace.last().expect("last trace sample").stack;
+    let total_dx = last.x - first.x;
+    assert_eq!(
+        total_dx, PIXEL_TRACE_STEPS as i32,
+        "{label}: total stack movement should match pointer pixels expected={PIXEL_TRACE_STEPS} actual={total_dx} trace={trace:?}"
+    );
 }
 
-fn drag_main_long_continuous_trace_and_assert_sync(label: &str, windows: WinampWindows) {
-    let initial = begin_main_drag(label, windows);
+fn drag_main_long_continuous_trace_and_assert_sync(label: &str, winamp: Winamp, docked: &[Pane]) {
+    let initial = assert_stack_holds(label, winamp, docked);
+    press_in_window(label, winamp.stack, MAIN_GRIP);
 
     let origin_pointer = pointer_location();
     let started = Instant::now();
-    let mut trace = Vec::with_capacity(LONG_DRAG_TRACE_STEPS + 1);
+    let mut trace = Vec::with_capacity(LONG_DRAG_TRACE_STEPS + 2);
     trace.push(DragTraceSample {
         pointer: origin_pointer,
-        geometries: windows.geometries(),
+        stack: window_geometry(winamp.stack),
         elapsed: Duration::ZERO,
     });
 
@@ -784,7 +924,7 @@ fn drag_main_long_continuous_trace_and_assert_sync(label: &str, windows: WinampW
         std::thread::sleep(LONG_DRAG_STEP_DELAY);
         trace.push(DragTraceSample {
             pointer: pointer_location(),
-            geometries: windows.geometries(),
+            stack: window_geometry(winamp.stack),
             elapsed: started.elapsed(),
         });
     }
@@ -792,101 +932,478 @@ fn drag_main_long_continuous_trace_and_assert_sync(label: &str, windows: WinampW
     std::thread::sleep(Duration::from_millis(80));
     trace.push(DragTraceSample {
         pointer: pointer_location(),
-        geometries: windows.geometries(),
+        stack: window_geometry(winamp.stack),
         elapsed: started.elapsed(),
     });
-    xdotool(["mouseup", "1"]);
-    std::thread::sleep(Duration::from_millis(160));
+    release_pointer(Duration::from_millis(160));
 
     assert_long_drag_trace_sync(label, initial, &trace);
-    assert_windows_stop_after_release(label, windows, windows.geometries());
+    assert_windows_stop_after_release(label, &[winamp.stack]);
 }
 
-fn drag_main_over_peer_and_assert_peers_static(label: &str, windows: WinampWindows) {
-    let initial = windows.geometries();
-    let (start_x, start_y) = drag_start_for_window(windows, windows.main);
+fn assert_long_drag_trace_sync(label: &str, initial: WindowGeometry, trace: &[DragTraceSample]) {
+    assert!(
+        trace.len() >= LONG_DRAG_TRACE_STEPS,
+        "{label}: expected a long drag trace, got {} samples",
+        trace.len()
+    );
+    let first = trace.first().expect("first long trace sample");
+    let mut max_drift_x = 0;
+    let mut max_drift_y = 0;
 
-    activate_window(windows.main);
-    mousemove_in_window_exact(label, windows.main, start_x, start_y);
-    std::thread::sleep(Duration::from_millis(100));
-    xdotool(["mousedown", "1"]);
-    std::thread::sleep(Duration::from_millis(60));
+    for index in 1..trace.len() {
+        let previous = &trace[index - 1];
+        let current = &trace[index];
+        let pointer_dx = current.pointer.x - first.pointer.x;
+        let pointer_dy = current.pointer.y - first.pointer.y;
+        let stack_dx = current.stack.x - first.stack.x;
+        let stack_dy = current.stack.y - first.stack.y;
+        let step_dx = current.stack.x - previous.stack.x;
+        let step_dy = current.stack.y - previous.stack.y;
+        let drift_x = (pointer_dx - stack_dx).abs();
+        let drift_y = (pointer_dy - stack_dy).abs();
+        max_drift_x = max_drift_x.max(drift_x);
+        max_drift_y = max_drift_y.max(drift_y);
 
-    for step in 1..=12 {
-        drag_pointer_by(24, 0);
-        std::thread::sleep(Duration::from_millis(35));
-        let current = windows.geometries();
         assert_eq!(
-            initial.equalizer, current.equalizer,
-            "{label} step {step}: equalizer moved while main passed over it"
+            (current.stack.width, current.stack.height),
+            (initial.width, initial.height),
+            "{label} sample {index}: the stack changed size while it was dragged current={current:?}"
         );
-        assert_eq!(
-            initial.playlist, current.playlist,
-            "{label} step {step}: playlist moved while main passed over it"
+        assert!(
+            current.stack.x + 1 >= previous.stack.x,
+            "{label} sample {index}: the stack reversed on a monotonic drag previous={previous:?} current={current:?}"
         );
+        assert!(
+            current.stack.y + 1 >= previous.stack.y,
+            "{label} sample {index}: the stack reversed vertically on a monotonic drag previous={previous:?} current={current:?}"
+        );
+        assert!(
+            step_dx <= LONG_DRAG_MAX_WINDOW_STEP && step_dy <= LONG_DRAG_MAX_WINDOW_STEP,
+            "{label} sample {index}: the stack jumped too far in one sample step=({step_dx},{step_dy}) previous={previous:?} current={current:?}"
+        );
+        if index > 8 {
+            assert!(
+                drift_x <= LONG_DRAG_MAX_POINTER_WINDOW_DRIFT
+                    && drift_y <= LONG_DRAG_MAX_POINTER_WINDOW_DRIFT,
+                "{label} sample {index}: pointer/window drift exceeded {LONG_DRAG_MAX_POINTER_WINDOW_DRIFT}px drift=({drift_x},{drift_y}) max_so_far=({max_drift_x},{max_drift_y}) first={first:?} current={current:?}"
+            );
+        }
     }
 
-    xdotool(["mouseup", "1"]);
-    std::thread::sleep(Duration::from_millis(160));
-    let final_geometries = windows.geometries();
-    assert_eq!(
-        initial.equalizer, final_geometries.equalizer,
-        "{label}: equalizer moved after release"
-    );
-    assert_eq!(
-        initial.playlist, final_geometries.playlist,
-        "{label}: playlist moved after release"
-    );
-    assert_window_moved(label, initial.main, final_geometries.main);
-    assert_windows_stop_after_release(label, windows, final_geometries);
+    let last = trace.last().expect("last long trace sample");
+    assert_window_moved(label, first.stack, last.stack);
+    println!("{label}: max pointer/window drift=({max_drift_x},{max_drift_y})");
 }
 
-fn drag_volume_to_zero_and_assert_windows_remain(label: &str, windows: WinampWindows) {
-    let initial = windows.geometries();
-    let scale = initial.main.width as f32 / 275.0;
-    let start_x = initial.main.x + ((107.0 + 54.0) * scale).round() as i32;
-    let end_x = initial.main.x + (107.0 * scale).round() as i32;
-    let y = initial.main.y + ((57.0 + 5.0) * scale).round() as i32;
+fn tear_pane(label: &str, winamp: Winamp, pane: Pane, docked: &[Pane]) -> TornPane {
+    let before = assert_stack_holds(label, winamp, docked);
+    let offset = winamp.pane_offset(pane, docked);
+    let pressed = press_in_window(label, winamp.stack, (PANE_GRIP.0, offset + PANE_GRIP.1));
+    let grab = (pressed.x - before.x, pressed.y - (before.y + offset));
 
-    activate_window(windows.main);
-    xdotool([
-        "mousemove",
-        "--sync",
-        "--",
-        &start_x.to_string(),
-        &y.to_string(),
-    ]);
+    drag_pointer_by(SHORT_OF_TEAR_DX, SHORT_OF_TEAR_DY);
+    std::thread::sleep(Duration::from_millis(160));
+    assert_eq!(
+        winamp.pane_window(pane),
+        None,
+        "{label}: a press that wandered ({SHORT_OF_TEAR_DX},{SHORT_OF_TEAR_DY}) tore the {pane:?} off"
+    );
+    assert_eq!(
+        window_geometry(winamp.stack),
+        before,
+        "{label}: a press on a docked pane's title moved or resized the stack"
+    );
+
+    let mut window = None;
+    for step in 1..=TEAR_STEPS {
+        drag_pointer_by(TEAR_DX, TEAR_DY);
+        let torn = match window {
+            Some(torn) => torn,
+            None => wait_for_torn_window(label, winamp, pane),
+        };
+        window = Some(torn);
+        let current = wait_for_window_under_pointer(label, step, torn, grab);
+        println!("{label} step {step}: the torn {pane:?} is under the pointer at {current:?}");
+    }
+    release_pointer(Duration::from_millis(160));
+
+    let window = window.expect("the pane tore off");
+    let remaining: Vec<Pane> = docked
+        .iter()
+        .copied()
+        .filter(|held| *held != pane)
+        .collect();
+    let after = assert_stack_holds(label, winamp, &remaining);
+    assert_eq!(
+        after.origin(),
+        before.origin(),
+        "{label}: tearing a pane off moved the stack"
+    );
+    assert_windows_stop_after_release(label, &[winamp.stack, window]);
+    TornPane { pane, window }
+}
+
+fn wait_for_torn_window(label: &str, winamp: Winamp, pane: Pane) -> u64 {
+    let deadline = Instant::now() + TORN_WINDOW_TIMEOUT;
+    while Instant::now() < deadline {
+        if let Some(window) = winamp.pane_window(pane) {
+            return window;
+        }
+        std::thread::sleep(FIND_WINDOW_POLL);
+    }
+    panic!(
+        "{label}: the {pane:?} carried past the tear reach did not come out into a window of its own; \
+         visible windows: {:?}",
+        visible_windows_summary()
+    );
+}
+
+fn drag_main_over_torn_panes_and_assert_they_stay(label: &str, winamp: Winamp, torn: &[TornPane]) {
+    let initial = window_geometry(winamp.stack);
+    let panes: Vec<_> = torn
+        .iter()
+        .map(|torn_pane| window_geometry(torn_pane.window))
+        .collect();
+    let pressed = press_in_window(label, winamp.stack, MAIN_GRIP);
+    let grab = (pressed.x - initial.x, pressed.y - initial.y);
+
+    for step in 1..=OVERFLIGHT_STEPS {
+        drag_pointer_by(OVERFLIGHT_DX, 0);
+        let current = wait_for_window_under_pointer(label, step, winamp.stack, grab);
+        println!("{label} step {step}: {current:?}");
+        assert_torn_panes_unmoved(label, step, torn, &panes);
+    }
+
+    release_pointer(Duration::from_millis(160));
+    assert_torn_panes_unmoved(label, OVERFLIGHT_STEPS + 1, torn, &panes);
+    assert_window_moved(label, initial, window_geometry(winamp.stack));
+    let mut windows = vec![winamp.stack];
+    windows.extend(torn.iter().map(|torn_pane| torn_pane.window));
+    assert_windows_stop_after_release(label, &windows);
+}
+
+fn assert_torn_panes_unmoved(
+    label: &str,
+    step: usize,
+    torn: &[TornPane],
+    expected: &[WindowGeometry],
+) {
+    for (torn_pane, expected) in torn.iter().zip(expected) {
+        assert_eq!(
+            window_geometry(torn_pane.window),
+            *expected,
+            "{label} step {step}: the torn {:?} moved with the main window",
+            torn_pane.pane
+        );
+    }
+}
+
+fn drag_torn_pane_alone(label: &str, winamp: Winamp, dragged: TornPane, torn: &[TornPane]) {
+    let initial = window_geometry(dragged.window);
+    let stack = window_geometry(winamp.stack);
+    let others: Vec<TornPane> = torn
+        .iter()
+        .copied()
+        .filter(|torn_pane| torn_pane.window != dragged.window)
+        .collect();
+    let other_geometries: Vec<_> = others
+        .iter()
+        .map(|torn_pane| window_geometry(torn_pane.window))
+        .collect();
+    let pressed = press_in_window(label, dragged.window, PANE_GRIP);
+    let grab = (pressed.x - initial.x, pressed.y - initial.y);
+
+    for step in 1..=MOVE_STEPS {
+        drag_pointer_by(MOVE_DX, MOVE_DY);
+        let current = wait_for_window_under_pointer(label, step, dragged.window, grab);
+        println!("{label} step {step}: {current:?}");
+        assert_eq!(
+            window_geometry(winamp.stack),
+            stack,
+            "{label} step {step}: the stack moved with a torn pane"
+        );
+        assert_torn_panes_unmoved(label, step, &others, &other_geometries);
+    }
+
+    release_pointer(Duration::from_millis(160));
+    let released = window_geometry(dragged.window);
+    assert_window_moved(label, initial, released);
+    assert_eq!(
+        winamp.pane_window(dragged.pane),
+        Some(dragged.window),
+        "{label}: a torn pane let go away from the stack went back into it"
+    );
+    let mut windows = vec![winamp.stack];
+    windows.extend(torn.iter().map(|torn_pane| torn_pane.window));
+    assert_windows_stop_after_release(label, &windows);
+}
+
+fn move_stack_with_window_manager_and_assert_panes_stay(
+    label: &str,
+    winamp: Winamp,
+    torn: &[TornPane],
+) {
+    if !window_manager_supports_net_active_window() {
+        println!("{label}: skipping external window-manager move; _NET_ACTIVE_WINDOW unsupported");
+        return;
+    }
+
+    let initial = window_geometry(winamp.stack);
+    let panes: Vec<_> = torn
+        .iter()
+        .map(|torn_pane| window_geometry(torn_pane.window))
+        .collect();
+    let target = (initial.x + 31, initial.y + 19);
+    move_window(winamp.stack, target.0, target.1);
+
+    let deadline = Instant::now() + SETUP_POSITION_TIMEOUT;
+    let mut current = window_geometry(winamp.stack);
+    while Instant::now() < deadline && !origin_close(current.origin(), target) {
+        std::thread::sleep(Duration::from_millis(8));
+        current = window_geometry(winamp.stack);
+    }
+    println!("{label}: {current:?}");
+    assert!(
+        origin_close(current.origin(), target),
+        "{label}: the window manager did not move the stack target={target:?} actual={current:?}"
+    );
+    assert_torn_panes_unmoved(label, 1, torn, &panes);
+    let mut windows = vec![winamp.stack];
+    windows.extend(torn.iter().map(|torn_pane| torn_pane.window));
+    assert_windows_stop_after_release(label, &windows);
+}
+
+fn window_manager_supports_net_active_window() -> bool {
+    let Some(output) = Command::new("xprop")
+        .args(["-root", "_NET_SUPPORTED"])
+        .output()
+        .ok()
+    else {
+        return true;
+    };
+    if !output.status.success() {
+        return true;
+    }
+    String::from_utf8_lossy(&output.stdout).contains("_NET_ACTIVE_WINDOW")
+}
+
+fn dock_pane(
+    label: &str,
+    winamp: Winamp,
+    torn: TornPane,
+    docked_before: &[Pane],
+    docked_after: &[Pane],
+) {
+    let stack = assert_stack_holds(label, winamp, docked_before);
+    let initial = window_geometry(torn.window);
+    let pressed = press_in_window(label, torn.window, PANE_GRIP);
+    let grab = (pressed.x - initial.x, pressed.y - initial.y);
+    let target = (stack.x + grab.0, stack.bottom() + grab.1);
+
+    for step in 1..=DOCK_STEPS {
+        let fraction = step as f32 / DOCK_STEPS as f32;
+        mousemove_absolute(
+            pressed.x + ((target.0 - pressed.x) as f32 * fraction).round() as i32,
+            pressed.y + ((target.1 - pressed.y) as f32 * fraction).round() as i32,
+        );
+        let current = wait_for_window_under_pointer(label, step, torn.window, grab);
+        println!("{label} step {step}: {current:?}");
+    }
+    std::thread::sleep(Duration::from_millis(120));
+    let let_go_at = window_geometry(torn.window);
+    println!(
+        "{label}: letting the {:?} go at {let_go_at:?} on the stack's bottom edge {stack:?}",
+        torn.pane
+    );
+    release_pointer(Duration::from_millis(60));
+
+    let deadline = Instant::now() + DOCK_TIMEOUT;
+    while Instant::now() < deadline && winamp.pane_window(torn.pane).is_some() {
+        std::thread::sleep(Duration::from_millis(8));
+    }
+    assert_eq!(
+        winamp.pane_window(torn.pane),
+        None,
+        "{label}: the {:?} let go on the stack's bottom edge kept its own window",
+        torn.pane
+    );
+    let after = assert_stack_holds(label, winamp, docked_after);
+    assert_eq!(
+        after.origin(),
+        stack.origin(),
+        "{label}: docking a pane moved the stack"
+    );
+    assert_windows_stop_after_release(label, &[winamp.stack]);
+}
+
+fn assert_docked_pane_draws_in_its_slot(
+    label: &str,
+    winamp: Winamp,
+    pane: Pane,
+    docked: &[Pane],
+    torn_picture: &RgbaImage,
+) {
+    activate_window(winamp.stack);
+    std::thread::sleep(Duration::from_millis(120));
+    let stack = capture_x11_window_image(winamp.stack, &diagnostic_png(label, "stack"));
+    let offset = u32::try_from(winamp.pane_offset(pane, docked)).expect("pane offset");
+    assert!(
+        stack.width() >= torn_picture.width() && stack.height() >= offset + torn_picture.height(),
+        "{label}: the stack {}x{} has no room for the {pane:?} at {offset}",
+        stack.width(),
+        stack.height()
+    );
+    let slot = image::imageops::crop_imm(
+        &stack,
+        0,
+        offset,
+        torn_picture.width(),
+        torn_picture.height(),
+    )
+    .to_image();
+    let changed = image_changed_pixels(torn_picture, &slot, 8);
+    let allowed =
+        (torn_picture.width() * torn_picture.height()) as f32 * DOCKED_PANE_MAX_CHANGED_FRACTION;
+    println!("{label}: the docked {pane:?} differs from its torn window in {changed} pixels");
+    assert!(
+        changed as f32 <= allowed,
+        "{label}: the stack does not draw the docked {pane:?} in its slot at {offset}: \
+         {changed} pixels differ from the pane's own window"
+    );
+}
+
+fn stretch_playlist_and_back(label: &str, winamp: Winamp, window_id: u64) {
+    let initial = window_geometry(window_id);
+    let stretch = (winamp.px(PLAYLIST_STRETCH.0), winamp.px(PLAYLIST_STRETCH.1));
+    drag_playlist_corner(label, window_id, stretch);
+    let stretched = wait_for_window_size(
+        label,
+        window_id,
+        (initial.width + stretch.0, initial.height + stretch.1),
+    );
+    assert_eq!(
+        stretched.origin(),
+        initial.origin(),
+        "{label}: stretching the playlist moved the window it is in"
+    );
+    drag_playlist_corner(label, window_id, (-stretch.0, -stretch.1));
+    let restored = wait_for_window_size(label, window_id, (initial.width, initial.height));
+    assert_eq!(
+        restored.origin(),
+        initial.origin(),
+        "{label}: shrinking the playlist moved the window it is in"
+    );
+    assert_windows_stop_after_release(label, &[window_id]);
+}
+
+fn drag_playlist_corner(label: &str, window_id: u64, (dx, dy): (i32, i32)) {
+    let geometry = window_geometry(window_id);
+    let pressed = press_in_window(
+        label,
+        window_id,
+        (
+            geometry.width - PLAYLIST_CORNER_INSET,
+            geometry.height - PLAYLIST_CORNER_INSET,
+        ),
+    );
+    for step in 1..=STRETCH_STEPS {
+        let fraction = step as f32 / STRETCH_STEPS as f32;
+        mousemove_absolute(
+            pressed.x + (dx as f32 * fraction).round() as i32,
+            pressed.y + (dy as f32 * fraction).round() as i32,
+        );
+        std::thread::sleep(Duration::from_millis(40));
+    }
+    std::thread::sleep(Duration::from_millis(80));
+    release_pointer(Duration::from_millis(120));
+}
+
+fn wait_for_window_size(label: &str, window_id: u64, size: (i32, i32)) -> WindowGeometry {
+    let deadline = Instant::now() + DOCK_TIMEOUT;
+    let mut current = window_geometry(window_id);
+    while Instant::now() < deadline {
+        current = window_geometry(window_id);
+        if (current.width - size.0).abs() <= 1 && (current.height - size.1).abs() <= 1 {
+            println!("{label}: {current:?}");
+            return current;
+        }
+        std::thread::sleep(Duration::from_millis(8));
+    }
+    panic!("{label}: the playlist's corner did not size its window to {size:?}: {current:?}");
+}
+
+fn dock_and_undock_and_assert_windows_restored(
+    robot: &cranpose::Robot,
+    winamp: Winamp,
+    playlist: TornPane,
+) {
+    let label = "dock-undock";
+    let docked = [Pane::Equalizer];
+    let stack = assert_stack_holds(label, winamp, &docked);
+    let torn = window_geometry(playlist.window);
+
+    click_button(robot, "Dock");
+    assert_windows_absent(winamp.pid, "after Dock");
+
+    let restore_started = Instant::now();
+    click_button_now(robot, "Undock");
+    let restored_stack = find_visible_window(winamp.pid, MAIN_TITLE);
+    let restored_playlist = find_visible_window(winamp.pid, PLAYLIST_TITLE);
+    let restore_elapsed = restore_started.elapsed();
+    println!(
+        "{label}: native windows restored after Undock in {}ms: stack={restored_stack} playlist={restored_playlist}",
+        restore_elapsed.as_millis()
+    );
+    assert_eq!(
+        (restored_stack, restored_playlist),
+        (winamp.stack, playlist.window),
+        "{label}: Undock made new native windows instead of showing the ones Dock put away"
+    );
+    assert!(
+        restore_elapsed <= CACHED_RESTORE_TIMEOUT,
+        "{label}: Undock restore took {}ms, expected the windows Dock put away back within {}ms",
+        restore_elapsed.as_millis(),
+        CACHED_RESTORE_TIMEOUT.as_millis()
+    );
+    robot.wait_for_idle().expect("Undock idle");
+    let restored = assert_stack_holds(label, winamp, &docked);
+    assert!(
+        origin_close(restored.origin(), stack.origin()),
+        "{label}: the stack came back somewhere else before={stack:?} after={restored:?}"
+    );
+    let restored_torn = window_geometry(playlist.window);
+    assert!(
+        origin_close(restored_torn.origin(), torn.origin()),
+        "{label}: the torn playlist came back somewhere else before={torn:?} after={restored_torn:?}"
+    );
+    assert_panes_not_torn(label, winamp, &docked);
+}
+
+fn drag_volume_to_zero_and_assert_stack_remains(label: &str, winamp: Winamp) {
+    let initial = window_geometry(winamp.stack);
+    let start_x = initial.x + winamp.px(107.0 + 54.0);
+    let end_x = initial.x + winamp.px(107.0);
+    let y = initial.y + winamp.px(57.0 + 5.0);
+
+    activate_window(winamp.stack);
+    mousemove_absolute(start_x, y);
     std::thread::sleep(Duration::from_millis(80));
     xdotool(["mousedown", "1"]);
     std::thread::sleep(Duration::from_millis(80));
-    xdotool([
-        "mousemove",
-        "--sync",
-        "--",
-        &end_x.to_string(),
-        &y.to_string(),
-    ]);
+    mousemove_absolute(end_x, y);
     std::thread::sleep(Duration::from_millis(120));
-    xdotool(["mouseup", "1"]);
-    std::thread::sleep(Duration::from_millis(180));
+    release_pointer(Duration::from_millis(180));
 
-    let after = windows.geometries();
     assert_eq!(
-        initial.main, after.main,
-        "{label}: volume drag moved or hid the main window"
-    );
-    assert_eq!(
-        initial.equalizer, after.equalizer,
-        "{label}: volume drag moved or hid the equalizer window"
-    );
-    assert_eq!(
-        initial.playlist, after.playlist,
-        "{label}: volume drag moved or hid the playlist window"
+        window_geometry(winamp.stack),
+        initial,
+        "{label}: volume drag moved, resized or hid the stack"
     );
 }
 
-fn click_transport_buttons_and_assert_windows_remain(label: &str, windows: WinampWindows) {
-    let initial = windows.geometries();
+fn click_transport_buttons_and_assert_stack_remains(label: &str, winamp: Winamp) {
+    let initial = window_geometry(winamp.stack);
     let sequence = [
         ("play", PLAY_X),
         ("pause", PAUSE_X),
@@ -898,54 +1415,39 @@ fn click_transport_buttons_and_assert_windows_remain(label: &str, windows: Winam
         ("stop", STOP_X),
     ];
 
-    activate_window(windows.main);
+    activate_window(winamp.stack);
     for (index, (button, x)) in sequence.into_iter().enumerate() {
-        click_winamp_main_button(label, windows.main, button, x, TRANSPORT_Y);
+        click_winamp_main_button(label, winamp, button, x, TRANSPORT_Y);
         std::thread::sleep(TRANSPORT_CLICK_SETTLE);
-        let current = windows.geometries();
         assert_eq!(
-            initial.main, current.main,
-            "{label} click {index} ({button}): main window moved or disappeared"
-        );
-        assert_eq!(
-            initial.equalizer, current.equalizer,
-            "{label} click {index} ({button}): equalizer window moved or disappeared"
-        );
-        assert_eq!(
-            initial.playlist, current.playlist,
-            "{label} click {index} ({button}): playlist window moved or disappeared"
+            window_geometry(winamp.stack),
+            initial,
+            "{label} click {index} ({button}): the stack moved, resized or disappeared"
         );
     }
 }
 
-fn hold_transport_button_and_assert_pressed_until_release(label: &str, windows: WinampWindows) {
-    let initial = windows.geometries();
-    activate_window(windows.main);
+fn hold_transport_button_and_assert_pressed_until_release(label: &str, winamp: Winamp) {
+    let initial = window_geometry(winamp.stack);
+    activate_window(winamp.stack);
 
-    let baseline = capture_winamp_button_crop(label, windows.main, "baseline", PLAY_X, TRANSPORT_Y);
-    let (screen_x, screen_y) = winamp_button_center(windows.main, PLAY_X, TRANSPORT_Y);
+    let baseline = capture_winamp_button_crop(label, winamp, "baseline", PLAY_X, TRANSPORT_Y);
+    let (screen_x, screen_y) = winamp_button_center(winamp, PLAY_X, TRANSPORT_Y);
     println!(
         "{label}: hold play window={} screen=({screen_x},{screen_y})",
-        windows.main
+        winamp.stack
     );
-    xdotool([
-        "mousemove",
-        "--sync",
-        "--",
-        &screen_x.to_string(),
-        &screen_y.to_string(),
-    ]);
+    mousemove_absolute(screen_x, screen_y);
     std::thread::sleep(Duration::from_millis(60));
     xdotool(["mousedown", "1"]);
     std::thread::sleep(BUTTON_HOLD_SETTLE);
-    let pressed = capture_winamp_button_crop(label, windows.main, "pressed", PLAY_X, TRANSPORT_Y);
+    let pressed = capture_winamp_button_crop(label, winamp, "pressed", PLAY_X, TRANSPORT_Y);
 
     mousemove_absolute(screen_x + 1, screen_y);
     std::thread::sleep(BUTTON_HOLD_SAMPLE_DELAY);
-    let held = capture_winamp_button_crop(label, windows.main, "held", PLAY_X, TRANSPORT_Y);
-    xdotool(["mouseup", "1"]);
-    std::thread::sleep(Duration::from_millis(180));
-    let released = capture_winamp_button_crop(label, windows.main, "released", PLAY_X, TRANSPORT_Y);
+    let held = capture_winamp_button_crop(label, winamp, "held", PLAY_X, TRANSPORT_Y);
+    release_pointer(Duration::from_millis(180));
+    let released = capture_winamp_button_crop(label, winamp, "released", PLAY_X, TRANSPORT_Y);
 
     let press_delta = image_changed_pixels(&baseline, &pressed, 8);
     let held_from_baseline = image_changed_pixels(&baseline, &held, 8);
@@ -972,57 +1474,48 @@ fn hold_transport_button_and_assert_pressed_until_release(label: &str, windows: 
         "{label}: play button stayed visually pressed after mouseup; press_delta={press_delta} released_from_baseline={released_from_baseline}"
     );
 
-    let current = windows.geometries();
-    assert_eq!(initial.main, current.main, "{label}: main window moved");
     assert_eq!(
-        initial.equalizer, current.equalizer,
-        "{label}: equalizer window moved"
-    );
-    assert_eq!(
-        initial.playlist, current.playlist,
-        "{label}: playlist window moved"
+        window_geometry(winamp.stack),
+        initial,
+        "{label}: the stack moved or resized"
     );
 }
 
-fn click_winamp_main_button(label: &str, window_id: u64, button: &str, x: f32, y: f32) {
-    let geometry = window_geometry(window_id);
-    let (screen_x, screen_y) = winamp_button_center(window_id, x, y);
+fn click_winamp_main_button(label: &str, winamp: Winamp, button: &str, x: f32, y: f32) {
+    let (screen_x, screen_y) = winamp_button_center(winamp, x, y);
     println!(
-        "{label}: click {button} window={window_id} geometry={geometry:?} screen=({screen_x},{screen_y})"
+        "{label}: click {button} window={} screen=({screen_x},{screen_y})",
+        winamp.stack
     );
-    xdotool([
-        "mousemove",
-        "--sync",
-        "--",
-        &screen_x.to_string(),
-        &screen_y.to_string(),
-    ]);
+    mousemove_absolute(screen_x, screen_y);
     std::thread::sleep(Duration::from_millis(40));
     xdotool(["click", "1"]);
 }
 
-fn winamp_button_center(window_id: u64, x: f32, y: f32) -> (i32, i32) {
-    let geometry = window_geometry(window_id);
-    let scale = geometry.width as f32 / WINAMP_MAIN_SKIN_WIDTH;
+fn winamp_button_center(winamp: Winamp, x: f32, y: f32) -> (i32, i32) {
+    let geometry = window_geometry(winamp.stack);
     (
-        geometry.x + ((x + TRANSPORT_BUTTON_WIDTH * 0.5) * scale).round() as i32,
-        geometry.y + ((y + TRANSPORT_BUTTON_HEIGHT * 0.5) * scale).round() as i32,
+        geometry.x + winamp.px(x + TRANSPORT_BUTTON_WIDTH * 0.5),
+        geometry.y + winamp.px(y + TRANSPORT_BUTTON_HEIGHT * 0.5),
     )
+}
+
+fn diagnostic_png(label: &str, phase: &str) -> std::path::PathBuf {
+    output_paths::diagnostic_path(&format!(
+        "cranpose-winamp-{label}-{phase}-{}.png",
+        std::process::id()
+    ))
 }
 
 fn capture_winamp_button_crop(
     label: &str,
-    window_id: u64,
+    winamp: Winamp,
     phase: &str,
     x: f32,
     y: f32,
 ) -> RgbaImage {
-    let path = output_paths::diagnostic_path(&format!(
-        "cranpose-winamp-{label}-{phase}-{}.png",
-        std::process::id()
-    ));
-    let image = capture_x11_window_image(window_id, &path);
-    crop_winamp_button(&image, x, y)
+    let image = capture_x11_window_image(winamp.stack, &diagnostic_png(label, phase));
+    crop_winamp_button(&image, winamp, x, y)
 }
 
 fn capture_x11_window_image(window_id: u64, path: &std::path::Path) -> RgbaImage {
@@ -1046,12 +1539,11 @@ fn capture_x11_window_image(window_id: u64, path: &std::path::Path) -> RgbaImage
         .to_rgba8()
 }
 
-fn crop_winamp_button(image: &RgbaImage, x: f32, y: f32) -> RgbaImage {
-    let scale = image.width() as f32 / WINAMP_MAIN_SKIN_WIDTH;
-    let crop_x = (x * scale).floor().max(0.0) as u32;
-    let crop_y = (y * scale).floor().max(0.0) as u32;
-    let crop_w = (TRANSPORT_BUTTON_WIDTH * scale).ceil().max(1.0) as u32;
-    let crop_h = (TRANSPORT_BUTTON_HEIGHT * scale).ceil().max(1.0) as u32;
+fn crop_winamp_button(image: &RgbaImage, winamp: Winamp, x: f32, y: f32) -> RgbaImage {
+    let crop_x = (x * winamp.scale).floor().max(0.0) as u32;
+    let crop_y = (y * winamp.scale).floor().max(0.0) as u32;
+    let crop_w = (TRANSPORT_BUTTON_WIDTH * winamp.scale).ceil().max(1.0) as u32;
+    let crop_h = (TRANSPORT_BUTTON_HEIGHT * winamp.scale).ceil().max(1.0) as u32;
     let crop_w = crop_w.min(image.width().saturating_sub(crop_x));
     let crop_h = crop_h.min(image.height().saturating_sub(crop_y));
     assert!(
@@ -1086,394 +1578,18 @@ fn image_changed_pixels(before: &RgbaImage, after: &RgbaImage, tolerance: u8) ->
         .count()
 }
 
-fn print_drag_trace(label: &str, trace: &[DragTraceSample]) {
-    for (index, sample) in trace.iter().enumerate() {
-        println!(
-            "{label} trace {index:02}: dt={}ms pointer=({}, {}) main=({}, {}) eq=({}, {}) pl=({}, {})",
-            sample.elapsed.as_millis(),
-            sample.pointer.x,
-            sample.pointer.y,
-            sample.geometries.main.x,
-            sample.geometries.main.y,
-            sample.geometries.equalizer.x,
-            sample.geometries.equalizer.y,
-            sample.geometries.playlist.x,
-            sample.geometries.playlist.y,
-        );
-    }
-}
-
-fn wait_for_one_pixel_drag_step(
-    label: &str,
-    step: usize,
-    windows: WinampWindows,
-    previous: DragTraceSample,
-) -> DragTraceSample {
-    let started = Instant::now();
-    loop {
-        let sample = DragTraceSample {
-            pointer: pointer_location(),
-            geometries: windows.geometries(),
-            elapsed: started.elapsed(),
-        };
-        let pointer_dx = sample.pointer.x - previous.pointer.x;
-        let pointer_dy = sample.pointer.y - previous.pointer.y;
-        let main_dx = sample.geometries.main.x - previous.geometries.main.x;
-        let main_dy = sample.geometries.main.y - previous.geometries.main.y;
-        let equalizer_dx = sample.geometries.equalizer.x - previous.geometries.equalizer.x;
-        let equalizer_dy = sample.geometries.equalizer.y - previous.geometries.equalizer.y;
-        let playlist_dx = sample.geometries.playlist.x - previous.geometries.playlist.x;
-        let playlist_dy = sample.geometries.playlist.y - previous.geometries.playlist.y;
-
-        assert!(!(pointer_dx > 1 || pointer_dy != 0),
-            "{label} step {step}: robot pointer moved incorrectly previous={previous:?} sample={sample:?}"
-        );
-        if main_dx > 1
-            || main_dy != 0
-            || equalizer_dx > 1
-            || equalizer_dy != 0
-            || playlist_dx > 1
-            || playlist_dy != 0
-        {
-            panic!(
-                "{label} step {step}: staircase jump detected previous={previous:?} sample={sample:?}"
-            );
-        }
-        if pointer_dx == 1
-            && main_dx == 1
-            && equalizer_dx == 1
-            && playlist_dx == 1
-            && main_dy == 0
-            && equalizer_dy == 0
-            && playlist_dy == 0
-        {
-            return sample;
-        }
-        assert!(sample.elapsed <= PIXEL_TRACE_STALL_TIMEOUT,
-            "{label} step {step}: one-pixel drag did not complete within {}ms previous={previous:?} last={sample:?}",
-            PIXEL_TRACE_STALL_TIMEOUT.as_millis()
-        );
-
-        std::thread::sleep(Duration::from_millis(1));
-    }
-}
-
-fn assert_one_pixel_window_step(
-    label: &str,
-    index: usize,
-    window: &str,
-    previous: WindowGeometry,
-    current: WindowGeometry,
-) {
-    let dx = current.x - previous.x;
-    let dy = current.y - previous.y;
-    assert_eq!(
-        dx, 1,
-        "{label} sample {index}: {window} did not follow the one-pixel pointer step exactly"
-    );
-    assert_eq!(
-        dy, 0,
-        "{label} sample {index}: {window} moved vertically during horizontal trace"
-    );
-}
-
-fn assert_pixel_drag_trace_continuity(
-    label: &str,
-    expected_offsets: WinampGeometries,
-    trace: &[DragTraceSample],
-) {
-    assert!(
-        trace.len() == PIXEL_TRACE_STEPS + 1,
-        "{label}: expected {} trace samples, got {}",
-        PIXEL_TRACE_STEPS + 1,
-        trace.len()
-    );
-
-    for index in 1..trace.len() {
-        let previous = trace[index - 1].geometries;
-        let current = trace[index].geometries;
-        let pointer_dx = trace[index].pointer.x - trace[index - 1].pointer.x;
-        let pointer_dy = trace[index].pointer.y - trace[index - 1].pointer.y;
-
-        assert_eq!(
-            pointer_dx, 1,
-            "{label} sample {index}: robot pointer did not advance by exactly one pixel trace={trace:?}"
-        );
-        assert_eq!(
-            pointer_dy, 0,
-            "{label} sample {index}: robot pointer moved vertically during horizontal trace trace={trace:?}"
-        );
-        assert_offsets_close(label, index, expected_offsets, current);
-        assert_one_pixel_window_step(label, index, "main", previous.main, current.main);
-        assert_one_pixel_window_step(
-            label,
-            index,
-            "equalizer",
-            previous.equalizer,
-            current.equalizer,
-        );
-        assert_one_pixel_window_step(
-            label,
-            index,
-            "playlist",
-            previous.playlist,
-            current.playlist,
-        );
-    }
-
-    let first = trace.first().expect("first trace sample").geometries.main;
-    let last = trace.last().expect("last trace sample").geometries.main;
-    let total_dx = last.x - first.x;
-    assert_eq!(
-        total_dx, PIXEL_TRACE_STEPS as i32,
-        "{label}: total main movement should match pointer pixels expected={PIXEL_TRACE_STEPS} actual={total_dx} trace={trace:?}"
-    );
-}
-
-fn assert_long_drag_trace_sync(
-    label: &str,
-    expected_offsets: WinampGeometries,
-    trace: &[DragTraceSample],
-) {
-    assert!(
-        trace.len() >= LONG_DRAG_TRACE_STEPS,
-        "{label}: expected a long drag trace, got {} samples",
-        trace.len()
-    );
-    let first = trace.first().expect("first long trace sample");
-    let mut max_drift_x = 0;
-    let mut max_drift_y = 0;
-
-    for index in 1..trace.len() {
-        let previous = &trace[index - 1];
-        let current = &trace[index];
-        let pointer_dx = current.pointer.x - first.pointer.x;
-        let pointer_dy = current.pointer.y - first.pointer.y;
-        let main_dx = current.geometries.main.x - first.geometries.main.x;
-        let main_dy = current.geometries.main.y - first.geometries.main.y;
-        let step_main_dx = current.geometries.main.x - previous.geometries.main.x;
-        let step_main_dy = current.geometries.main.y - previous.geometries.main.y;
-        let drift_x = (pointer_dx - main_dx).abs();
-        let drift_y = (pointer_dy - main_dy).abs();
-        max_drift_x = max_drift_x.max(drift_x);
-        max_drift_y = max_drift_y.max(drift_y);
-
-        assert_offsets_close_with_epsilon(
-            label,
-            index,
-            expected_offsets,
-            current.geometries,
-            LONG_DRAG_MAX_PAIR_LAG,
-        );
-        assert!(
-            current.geometries.main.x + 1 >= previous.geometries.main.x,
-            "{label} sample {index}: main window reversed on a monotonic drag previous={previous:?} current={current:?}"
-        );
-        assert!(
-            current.geometries.main.y + 1 >= previous.geometries.main.y,
-            "{label} sample {index}: main window reversed vertically on a monotonic drag previous={previous:?} current={current:?}"
-        );
-        assert!(
-            step_main_dx <= LONG_DRAG_MAX_WINDOW_STEP && step_main_dy <= LONG_DRAG_MAX_WINDOW_STEP,
-            "{label} sample {index}: main window jumped too far in one sample step=({step_main_dx},{step_main_dy}) previous={previous:?} current={current:?}"
-        );
-        if index > 8 {
-            assert!(
-                drift_x <= LONG_DRAG_MAX_POINTER_WINDOW_DRIFT
-                    && drift_y <= LONG_DRAG_MAX_POINTER_WINDOW_DRIFT,
-                "{label} sample {index}: pointer/window drift exceeded {LONG_DRAG_MAX_POINTER_WINDOW_DRIFT}px drift=({drift_x},{drift_y}) max_so_far=({max_drift_x},{max_drift_y}) first={first:?} current={current:?}"
-            );
-        }
-    }
-
-    let last = trace.last().expect("last long trace sample");
-    assert_window_moved(label, first.geometries.main, last.geometries.main);
-    println!("{label}: max pointer/window drift=({max_drift_x},{max_drift_y})");
-}
-
-fn drag_and_assert_only_dragged(label: &str, windows: WinampWindows, dragged_window: u64) {
-    drag_and_assert_offsets(label, windows, dragged_window, false);
-}
-
-fn drag_and_assert_offsets(
-    label: &str,
-    windows: WinampWindows,
-    dragged_window: u64,
-    moves_attached_group: bool,
-) {
-    let initial = assert_attached_offsets(label, windows.geometries());
-    let initial_dragged = geometry_for_window(windows, dragged_window, initial);
-    let (start_x, start_y) = drag_start_for_window(windows, dragged_window);
-
-    activate_window(dragged_window);
-    mousemove_in_window_exact(label, dragged_window, start_x, start_y);
-    std::thread::sleep(Duration::from_millis(100));
-    xdotool(["mousedown", "1"]);
-    std::thread::sleep(Duration::from_millis(60));
-
-    let mut previous_group_main = initial.main;
-    for step in 1..=MOVE_STEPS {
-        drag_pointer_by(13, 7);
-        let current = if moves_attached_group {
-            let current = wait_for_group_offset(
-                label,
-                step,
-                windows,
-                initial,
-                previous_group_main,
-                GROUP_MOVE_STEP_TIMEOUT,
-            );
-            previous_group_main = current.main;
-            current
-        } else {
-            std::thread::sleep(Duration::from_millis(45));
-            windows.geometries()
-        };
-        println!("{label} step {step}: {current:?}");
-        if moves_attached_group {
-            assert_offsets_close(label, step, initial, current);
-        } else {
-            assert_only_dragged_window_changed(
-                label,
-                step,
-                windows,
-                dragged_window,
-                initial,
-                current,
-            );
-        }
-    }
-
-    xdotool(["mouseup", "1"]);
-    std::thread::sleep(Duration::from_millis(120));
-    let final_geometries = windows.geometries();
-    if moves_attached_group {
-        assert_offsets_close(label, MOVE_STEPS + 1, initial, final_geometries);
-    } else {
-        assert_only_dragged_window_changed(
-            label,
-            MOVE_STEPS + 1,
-            windows,
-            dragged_window,
-            initial,
-            final_geometries,
-        );
-    }
-    let final_dragged = geometry_for_window(windows, dragged_window, final_geometries);
-    assert_window_moved(label, initial_dragged, final_dragged);
-    assert_windows_stop_after_release(label, windows, final_geometries);
-}
-
-fn move_main_with_window_manager_and_assert_offsets(
-    label: &str,
-    windows: WinampWindows,
-    dx: i32,
-    dy: i32,
-) {
-    if !window_manager_supports_net_active_window() {
-        println!("{label}: skipping external window-manager move; _NET_ACTIVE_WINDOW unsupported");
-        return;
-    }
-
-    let initial = assert_attached_offsets(label, windows.geometries());
-    move_window(windows.main, initial.main.x + dx, initial.main.y + dy);
-
-    let deadline = Instant::now() + SETUP_POSITION_TIMEOUT;
-    while Instant::now() < deadline {
-        let current = windows.geometries();
-        if (current.main.x - (initial.main.x + dx)).abs() <= OFFSET_EPSILON
-            && (current.main.y - (initial.main.y + dy)).abs() <= OFFSET_EPSILON
-            && offsets_close(initial, current)
-        {
-            println!("{label}: {current:?}");
-            assert_windows_stop_after_release(label, windows, current);
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(8));
-    }
-
-    let current = windows.geometries();
-    assert_offsets_close(label, 1, initial, current);
-    assert_window_moved(label, initial.main, current.main);
-    assert_windows_stop_after_release(label, windows, current);
-}
-
-fn window_manager_supports_net_active_window() -> bool {
-    let Some(output) = Command::new("xprop")
-        .args(["-root", "_NET_SUPPORTED"])
-        .output()
-        .ok()
-    else {
-        return true;
-    };
-    if !output.status.success() {
-        return true;
-    }
-    String::from_utf8_lossy(&output.stdout).contains("_NET_ACTIVE_WINDOW")
-}
-
-fn wait_for_group_offset(
-    label: &str,
-    step: usize,
-    windows: WinampWindows,
-    expected: WinampGeometries,
-    previous_main: WindowGeometry,
-    timeout: Duration,
-) -> WinampGeometries {
-    let deadline = Instant::now() + timeout;
-    let mut current = windows.geometries();
-    while Instant::now() < deadline {
-        current = windows.geometries();
-        if offsets_close(expected, current) && current.main != previous_main {
-            return current;
-        }
-        std::thread::sleep(Duration::from_millis(4));
-    }
-    assert_offsets_close(label, step, expected, current);
-    assert_window_moved(label, previous_main, current.main);
-    current
-}
-
-fn assert_windows_stop_after_release(
-    label: &str,
-    windows: WinampWindows,
-    expected: WinampGeometries,
-) {
+fn assert_windows_stop_after_release(label: &str, windows: &[u64]) {
+    let expected: Vec<_> = windows.iter().map(|id| window_geometry(*id)).collect();
     let deadline = Instant::now() + POST_RELEASE_STABILITY_TIMEOUT;
     let mut sample = 0;
-    let mut samples = Vec::new();
     while Instant::now() < deadline {
         sample += 1;
-        let current = windows.geometries();
-        samples.push(current);
-        assert!(current == expected,
-            "{label} post-release sample {sample}: native windows kept moving after mouseup expected={expected:?} actual={current:?} samples={samples:?}"
+        let current: Vec<_> = windows.iter().map(|id| window_geometry(*id)).collect();
+        assert!(
+            current == expected,
+            "{label} post-release sample {sample}: native windows kept moving after mouseup expected={expected:?} actual={current:?}"
         );
         std::thread::sleep(POST_RELEASE_STABILITY_POLL);
-    }
-}
-
-fn drag_start_for_window(windows: WinampWindows, window_id: u64) -> (i32, i32) {
-    if window_id == windows.main {
-        (120, 8)
-    } else {
-        (32, 12)
-    }
-}
-
-fn geometry_for_window(
-    windows: WinampWindows,
-    window_id: u64,
-    geometries: WinampGeometries,
-) -> WindowGeometry {
-    if window_id == windows.main {
-        geometries.main
-    } else if window_id == windows.equalizer {
-        geometries.equalizer
-    } else if window_id == windows.playlist {
-        geometries.playlist
-    } else {
-        panic!("unknown Winamp window id {window_id}");
     }
 }
 
@@ -1486,195 +1602,33 @@ fn assert_window_moved(label: &str, initial: WindowGeometry, final_geometry: Win
     );
 }
 
-fn assert_only_dragged_window_changed(
-    label: &str,
-    step: usize,
-    windows: WinampWindows,
-    dragged_window: u64,
-    expected: WinampGeometries,
-    actual: WinampGeometries,
-) {
-    if dragged_window != windows.main {
-        assert_geometry_close(label, step, "main", expected.main, actual.main);
-    }
-    if dragged_window != windows.equalizer {
-        assert_geometry_close(
-            label,
-            step,
-            "equalizer",
-            expected.equalizer,
-            actual.equalizer,
-        );
-    }
-    if dragged_window != windows.playlist {
-        assert_geometry_close(label, step, "playlist", expected.playlist, actual.playlist);
-    }
-}
-
-fn assert_geometry_close(
-    label: &str,
-    step: usize,
-    window: &str,
-    expected: WindowGeometry,
-    actual: WindowGeometry,
-) {
-    let dx = (actual.x - expected.x).abs();
-    let dy = (actual.y - expected.y).abs();
-    assert!(
-        dx <= OFFSET_EPSILON && dy <= OFFSET_EPSILON,
-        "{label} step {step}: {window} moved while dragging another window expected={expected:?} actual={actual:?} delta=({dx},{dy})"
-    );
-}
-
-fn assert_attached_offsets(label: &str, geometries: WinampGeometries) -> WinampGeometries {
-    println!("{label}: {geometries:?}");
-    assert_pair_attached(label, geometries.main, geometries.equalizer);
-    assert_pair_attached(label, geometries.equalizer, geometries.playlist);
-    geometries
-}
-
-fn assert_offsets_close(
-    label: &str,
-    step: usize,
-    expected: WinampGeometries,
-    actual: WinampGeometries,
-) {
-    assert_offsets_close_with_epsilon(label, step, expected, actual, OFFSET_EPSILON);
-}
-
-fn assert_offsets_close_with_epsilon(
-    label: &str,
-    step: usize,
-    expected: WinampGeometries,
-    actual: WinampGeometries,
-    epsilon: i32,
-) {
-    assert_offset_close_with_epsilon(
-        label,
-        step,
-        "equalizer-main",
-        expected.equalizer.offset_from(expected.main),
-        actual.equalizer.offset_from(actual.main),
-        epsilon,
-    );
-    assert_offset_close_with_epsilon(
-        label,
-        step,
-        "playlist-equalizer",
-        expected.playlist.offset_from(expected.equalizer),
-        actual.playlist.offset_from(actual.equalizer),
-        epsilon,
-    );
-}
-
-fn offsets_close(expected: WinampGeometries, actual: WinampGeometries) -> bool {
-    offset_close(
-        expected.equalizer.offset_from(expected.main),
-        actual.equalizer.offset_from(actual.main),
-    ) && offset_close(
-        expected.playlist.offset_from(expected.equalizer),
-        actual.playlist.offset_from(actual.equalizer),
-    )
-}
-
-fn offset_close(expected: (i32, i32), actual: (i32, i32)) -> bool {
-    let dx = (actual.0 - expected.0).abs();
-    let dy = (actual.1 - expected.1).abs();
-    dx <= OFFSET_EPSILON && dy <= OFFSET_EPSILON
-}
-
-fn assert_offset_close_with_epsilon(
-    label: &str,
-    step: usize,
-    edge: &str,
-    expected: (i32, i32),
-    actual: (i32, i32),
-    epsilon: i32,
-) {
-    let dx = (actual.0 - expected.0).abs();
-    let dy = (actual.1 - expected.1).abs();
-    assert!(
-        dx <= epsilon && dy <= epsilon,
-        "{label} step {step}: {edge} offset stretched expected={expected:?} actual={actual:?} delta=({dx},{dy})"
-    );
-}
-
-fn assert_pair_attached(label: &str, first: WindowGeometry, second: WindowGeometry) {
-    let first_right = first.x + first.width;
-    let first_bottom = first.y + first.height;
-    let second_right = second.x + second.width;
-    let second_bottom = second.y + second.height;
-
-    let touches_horizontal = (first_right - second.x).abs() <= OFFSET_EPSILON
-        || (second_right - first.x).abs() <= OFFSET_EPSILON;
-    let overlaps_vertical =
-        first.y <= second_bottom + OFFSET_EPSILON && second.y <= first_bottom + OFFSET_EPSILON;
-    let touches_vertical = (first_bottom - second.y).abs() <= OFFSET_EPSILON
-        || (second_bottom - first.y).abs() <= OFFSET_EPSILON;
-    let overlaps_horizontal =
-        first.x <= second_right + OFFSET_EPSILON && second.x <= first_right + OFFSET_EPSILON;
-
-    assert!(
-        touches_horizontal && overlaps_vertical || touches_vertical && overlaps_horizontal,
-        "{label}: windows are not attached first={first:?} second={second:?}"
-    );
-}
-
 fn window_geometry(window_id: u64) -> WindowGeometry {
-    let mut geometries = window_geometries([window_id]);
-    geometries
-        .remove(&window_id)
+    wmctrl_window_geometry(window_id)
+        .or_else(|| xdotool_window_geometry(window_id))
         .unwrap_or_else(|| panic!("window manager geometry for window {window_id} not found"))
 }
 
-fn window_geometries<const N: usize>(window_ids: [u64; N]) -> HashMap<u64, WindowGeometry> {
-    let wmctrl = wmctrl_window_geometries(window_ids);
-    if wmctrl.len() == window_ids.len() {
-        return wmctrl;
-    }
-
-    let mut geometries = HashMap::new();
-    for id in window_ids {
-        if let Some(geometry) = xdotool_window_geometry(id) {
-            geometries.insert(id, geometry);
-        }
-    }
-    geometries
-}
-
-fn wmctrl_window_geometries<const N: usize>(window_ids: [u64; N]) -> HashMap<u64, WindowGeometry> {
-    let Some(output) = Command::new("wmctrl").arg("-lG").output().ok() else {
-        return HashMap::new();
-    };
+fn wmctrl_window_geometry(window_id: u64) -> Option<WindowGeometry> {
+    let output = Command::new("wmctrl").arg("-lG").output().ok()?;
     if !output.status.success() {
-        return HashMap::new();
+        return None;
     }
 
-    let mut geometries = HashMap::new();
-    for line in String::from_utf8_lossy(&output.stdout).lines() {
-        let parts: Vec<_> = line.split_whitespace().collect();
-        if parts.len() < 6 {
-            continue;
-        }
-        let Some(id) = parts
-            .first()
-            .and_then(|part| u64::from_str_radix(part.trim_start_matches("0x"), 16).ok())
-        else {
-            continue;
-        };
-        if window_ids.contains(&id) {
-            geometries.insert(
-                id,
-                WindowGeometry {
-                    x: parts[2].parse().expect("wmctrl X"),
-                    y: parts[3].parse().expect("wmctrl Y"),
-                    width: parts[4].parse().expect("wmctrl WIDTH"),
-                    height: parts[5].parse().expect("wmctrl HEIGHT"),
-                },
-            );
-        }
-    }
-    geometries
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .find_map(|line| {
+            let parts: Vec<_> = line.split_whitespace().collect();
+            if parts.len() < 6 {
+                return None;
+            }
+            let id = u64::from_str_radix(parts[0].trim_start_matches("0x"), 16).ok()?;
+            (id == window_id).then(|| WindowGeometry {
+                x: parts[2].parse().expect("wmctrl X"),
+                y: parts[3].parse().expect("wmctrl Y"),
+                width: parts[4].parse().expect("wmctrl WIDTH"),
+                height: parts[5].parse().expect("wmctrl HEIGHT"),
+            })
+        })
 }
 
 fn xdotool_window_geometry(window_id: u64) -> Option<WindowGeometry> {
@@ -1705,15 +1659,6 @@ fn xdotool_window_geometry(window_id: u64) -> Option<WindowGeometry> {
         }
     }
     (geometry.width > 0 && geometry.height > 0).then_some(geometry)
-}
-
-fn geometry_from_snapshot(
-    geometries: &HashMap<u64, WindowGeometry>,
-    window_id: u64,
-) -> WindowGeometry {
-    *geometries
-        .get(&window_id)
-        .unwrap_or_else(|| panic!("window manager geometry for window {window_id} not found"))
 }
 
 fn window_title(window_id: u64) -> Option<String> {
@@ -1792,59 +1737,30 @@ fn activate_window(window_id: u64) {
 
 fn mousemove_in_window_exact(label: &str, window_id: u64, x: i32, y: i32) {
     let geometry = window_geometry(window_id);
-    for (candidate_index, (local_x, local_y)) in drag_input_candidates(x, y, geometry) {
-        let screen_x = geometry.x + local_x;
-        let screen_y = geometry.y + local_y;
-        for attempt in 0..3 {
-            xdotool([
-                "mousemove",
-                "--sync",
-                "--",
-                &screen_x.to_string(),
-                &screen_y.to_string(),
-            ]);
-            std::thread::sleep(Duration::from_millis(15));
-            let pointer = pointer_location();
-            let dx = pointer.x - screen_x;
-            let dy = pointer.y - screen_y;
-            println!(
-                "{label}: mouse target window={window_id} title={:?} geometry={geometry:?} desired_screen=({screen_x},{screen_y}) local=({local_x},{local_y}) candidate={} attempt={} actual={pointer:?} actual_title={:?} error=({dx},{dy})",
-                window_title(window_id),
-                candidate_index + 1,
-                attempt + 1,
-                window_title(pointer.window),
-            );
-            if dx.abs() <= 1 && dy.abs() <= 1 && pointer.window == window_id {
-                return;
-            }
+    let screen_x = geometry.x + x;
+    let screen_y = geometry.y + y;
+    for attempt in 0..3 {
+        mousemove_absolute(screen_x, screen_y);
+        std::thread::sleep(Duration::from_millis(15));
+        let pointer = pointer_location();
+        let dx = pointer.x - screen_x;
+        let dy = pointer.y - screen_y;
+        println!(
+            "{label}: mouse target window={window_id} title={:?} geometry={geometry:?} desired_screen=({screen_x},{screen_y}) local=({x},{y}) attempt={} actual={pointer:?} actual_title={:?} error=({dx},{dy})",
+            window_title(window_id),
+            attempt + 1,
+            window_title(pointer.window),
+        );
+        if dx.abs() <= 1 && dy.abs() <= 1 && pointer.window == window_id {
+            return;
         }
     }
 
     panic!(
-        "{label}: no draggable input point found for window={window_id} title={:?} geometry={geometry:?} preferred_local=({x},{y}) visible_windows={:?}",
+        "{label}: the pointer is not over window={window_id} title={:?} geometry={geometry:?} at local=({x},{y}) visible_windows={:?}",
         window_title(window_id),
         visible_windows_summary(),
     );
-}
-
-fn drag_input_candidates(
-    preferred_x: i32,
-    preferred_y: i32,
-    geometry: WindowGeometry,
-) -> impl Iterator<Item = (usize, (i32, i32))> {
-    [
-        (preferred_x, preferred_y),
-        (preferred_x, preferred_y + 6),
-        (preferred_x, preferred_y + 12),
-        (preferred_x, preferred_y + 18),
-        (preferred_x + 24, preferred_y + 8),
-        (preferred_x - 24, preferred_y + 8),
-        (geometry.width / 2, preferred_y + 8),
-        (geometry.width / 2, preferred_y + 16),
-    ]
-    .into_iter()
-    .filter(move |(x, y)| *x >= 0 && *y >= 0 && *x < geometry.width && *y < geometry.height)
-    .enumerate()
 }
 
 fn drag_pointer_by(dx: i32, dy: i32) {

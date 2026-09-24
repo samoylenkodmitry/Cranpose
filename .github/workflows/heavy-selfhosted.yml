@@ -49,13 +49,20 @@ jobs:
           # Both parents of the merge commit, for the diff below.
           fetch-depth: 2
 
+      - name: Skip work this exact tree already passed
+        id: memo
+        # A re-run is someone asking for the work again, so only a first
+        # attempt may skip it.
+        if: github.run_attempt == 1
+        run: scripts/ci/tree_memo.sh check "${{ github.workflow }}/${{ github.job }}"
+
       - name: Detect a docs-only change
         id: changes
         # Why a short-circuit and not paths-ignore: see the header.
         run: scripts/ci/docs_only_change.sh
 
       - name: Configure machine-local knobs
-        if: steps.changes.outputs.docs_only != 'true'
+        if: steps.changes.outputs.docs_only != 'true' && steps.memo.outputs.passed != 'true'
         env:
           RUNNER_NAME: ${{ runner.name }}
         run: |
@@ -77,13 +84,13 @@ jobs:
           echo "$(eval echo "~$(id -un)")/.cargo/bin" >> "$GITHUB_PATH"
 
       - name: Start sccache
-        if: steps.changes.outputs.docs_only != 'true'
+        if: steps.changes.outputs.docs_only != 'true' && steps.memo.outputs.passed != 'true'
         run: |
           command -v just >/dev/null || cargo install just --locked
           scripts/ci/start_sccache.sh
 
       - name: Run the robot suite
-        if: steps.changes.outputs.docs_only != 'true'
+        if: steps.changes.outputs.docs_only != 'true' && steps.memo.outputs.passed != 'true'
         # The examples that assert on pixels and structure, all at once.
         # The load-sensitive half lives in nightly.yml: it runs one at a time
         # on a machine the exclusive host lock has emptied, and on a box
@@ -93,8 +100,12 @@ jobs:
         run: just robot-linux-fast
 
       - name: sccache stats
-        if: always() && steps.changes.outputs.docs_only != 'true'
+        if: always() && steps.changes.outputs.docs_only != 'true' && steps.memo.outputs.passed != 'true'
         run: '"$RUSTC_WRAPPER" --show-stats || true'
+
+      - name: Remember that this tree passed
+        if: ${{ success() && steps.memo.outputs.passed != 'true' }}
+        run: scripts/ci/tree_memo.sh record "${{ github.workflow }}/${{ github.job }}"
 
   ios-build:
     name: iOS build (self-hosted)
@@ -108,6 +119,13 @@ jobs:
           # Both parents of the merge commit, for the diff below.
           fetch-depth: 2
 
+      - name: Skip work this exact tree already passed
+        id: memo
+        # A re-run is someone asking for the work again, so only a first
+        # attempt may skip it.
+        if: github.run_attempt == 1
+        run: scripts/ci/tree_memo.sh check "${{ github.workflow }}/${{ github.job }}"
+
       - name: Detect a docs-only change
         id: changes
         # Why a short-circuit and not paths-ignore: see the header.
@@ -115,7 +133,7 @@ jobs:
 
       - name: Provision iOS Rust targets
         id: provision
-        if: steps.changes.outputs.docs_only != 'true'
+        if: steps.changes.outputs.docs_only != 'true' && steps.memo.outputs.passed != 'true'
         run: |
           scripts/ci/provision_toolchain.sh
           # No toolchain action here: rust-toolchain.toml owns the version and
@@ -128,16 +146,20 @@ jobs:
             aarch64-apple-ios
 
       - name: Clippy iOS simulator
-        if: ${{ !cancelled() && steps.provision.conclusion == 'success' && steps.changes.outputs.docs_only != 'true' }}
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' && steps.changes.outputs.docs_only != 'true' && steps.memo.outputs.passed != 'true' }}
         run: just clippy-ios
 
       - name: Build iOS device binary
-        if: ${{ !cancelled() && steps.provision.conclusion == 'success' && steps.changes.outputs.docs_only != 'true' }}
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' && steps.changes.outputs.docs_only != 'true' && steps.memo.outputs.passed != 'true' }}
         run: just ios-device
 
       - name: Assemble simulator app bundle
-        if: ${{ !cancelled() && steps.provision.conclusion == 'success' && steps.changes.outputs.docs_only != 'true' }}
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' && steps.changes.outputs.docs_only != 'true' && steps.memo.outputs.passed != 'true' }}
         run: just ios-sim
+
+      - name: Remember that this tree passed
+        if: ${{ success() && steps.memo.outputs.passed != 'true' }}
+        run: scripts/ci/tree_memo.sh record "${{ github.workflow }}/${{ github.job }}"
 
   android-release:
     name: Android release build (self-hosted)
@@ -155,13 +177,20 @@ jobs:
           # Both parents of the merge commit, for the diff below.
           fetch-depth: 2
 
+      - name: Skip work this exact tree already passed
+        id: memo
+        # A re-run is someone asking for the work again, so only a first
+        # attempt may skip it.
+        if: github.run_attempt == 1
+        run: scripts/ci/tree_memo.sh check "${{ github.workflow }}/${{ github.job }}"
+
       - name: Detect a docs-only change
         id: changes
         # Why a short-circuit and not paths-ignore: see the header.
         run: scripts/ci/docs_only_change.sh
 
       - name: Configure machine-local SDK and cache paths
-        if: steps.changes.outputs.docs_only != 'true'
+        if: steps.changes.outputs.docs_only != 'true' && steps.memo.outputs.passed != 'true'
         env:
           RUNNER_NAME: ${{ runner.name }}
           RUNNER_OS: ${{ runner.os }}
@@ -196,7 +225,7 @@ jobs:
 
       - name: Provision toolchains and start sccache
         id: provision
-        if: steps.changes.outputs.docs_only != 'true'
+        if: steps.changes.outputs.docs_only != 'true' && steps.memo.outputs.passed != 'true'
         run: |
           # rust-toolchain.toml owns the version; the targets land on it.
           rustc --version
@@ -216,14 +245,14 @@ jobs:
           test -f "$ANDROID_NDK_HOME/source.properties"
 
       - name: Clippy Android ABIs
-        if: ${{ !cancelled() && steps.provision.conclusion == 'success' && steps.changes.outputs.docs_only != 'true' }}
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' && steps.changes.outputs.docs_only != 'true' && steps.memo.outputs.passed != 'true' }}
         # Gradle does not deny warnings, so the APK build below cannot be the
         # zero-warning gate for this target. Runs first: a lint failure should
         # not wait behind a full release APK.
         run: just clippy-android
 
       - name: Type-check the Cranpose Gradle plugin
-        if: ${{ !cancelled() && steps.provision.conclusion == 'success' && steps.changes.outputs.docs_only != 'true' }}
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' && steps.changes.outputs.docs_only != 'true' && steps.memo.outputs.passed != 'true' }}
         # Runs on pull requests too, unlike the APK below. Assembling the APK
         # is what used to compile this plugin's Kotlin, and moving that to
         # main took the only compile of it off pull requests -- a plugin with
@@ -231,7 +260,7 @@ jobs:
         run: just android-plugin-check
 
       - name: sccache stats
-        if: always() && steps.changes.outputs.docs_only != 'true'
+        if: always() && steps.changes.outputs.docs_only != 'true' && steps.memo.outputs.passed != 'true'
         run: '"$RUSTC_WRAPPER" --show-stats || true'
 
   # Both of these ran on the nightly board. They are short and they answer
@@ -244,6 +273,11 @@ jobs:
   # gets slower; what changes is that a push to main now holds BOTH Linux
   # slots, the robot suite and the budgets, so a pull request landing right
   # behind a merge can queue for the length of the budgets run.
+
+      - name: Remember that this tree passed
+        if: ${{ success() && steps.memo.outputs.passed != 'true' }}
+        run: scripts/ci/tree_memo.sh record "${{ github.workflow }}/${{ github.job }}"
+
   architecture-budget:
     name: architecture budgets (linux)
     if: github.event_name != 'pull_request'
@@ -253,8 +287,16 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
+      - name: Skip work this exact tree already passed
+        id: memo
+        # A re-run is someone asking for the work again, so only a first
+        # attempt may skip it.
+        if: github.run_attempt == 1
+        run: scripts/ci/tree_memo.sh check "${{ github.workflow }}/${{ github.job }}"
+
       - name: Provision toolchain
         id: provision
+        if: steps.memo.outputs.passed != 'true'
         run: scripts/ci/provision_toolchain.sh
 
       - name: Run the host capacity lock suite
@@ -269,6 +311,10 @@ jobs:
         # the duplicate-dependency budgets and the desktop binary-size ceiling.
         run: just budgets
 
+      - name: Remember that this tree passed
+        if: ${{ success() && steps.memo.outputs.passed != 'true' }}
+        run: scripts/ci/tree_memo.sh record "${{ github.workflow }}/${{ github.job }}"
+
   android-apk:
     name: Android release APK (macOS)
     if: github.event_name != 'pull_request'
@@ -276,6 +322,13 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Skip work this exact tree already passed
+        id: memo
+        # A re-run is someone asking for the work again, so only a first
+        # attempt may skip it.
+        if: github.run_attempt == 1
+        run: scripts/ci/tree_memo.sh check "${{ github.workflow }}/${{ github.job }}"
 
       - name: Configure machine-local SDK and cache paths
         env:
@@ -304,6 +357,7 @@ jobs:
 
       - name: Provision toolchains and start sccache
         id: provision
+        if: steps.memo.outputs.passed != 'true'
         run: |
           scripts/ci/provision_toolchain.sh
           rustup target add \
@@ -320,3 +374,7 @@ jobs:
         # is the one step that proves the Gradle and packaging side, and
         # nothing about that answer depends on the branch.
         run: just android
+
+      - name: Remember that this tree passed
+        if: ${{ success() && steps.memo.outputs.passed != 'true' }}
+        run: scripts/ci/tree_memo.sh record "${{ github.workflow }}/${{ github.job }}"

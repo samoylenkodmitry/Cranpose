@@ -58,7 +58,7 @@ cranpose = { path = "crates/cranpose", version = "0.1.163", default-features = f
 cranpose-app-shell = { path = "crates/cranpose-app-shell", version = "0.1.163" }
 cranpose-audio = { path = "crates/cranpose-audio", version = "0.1.163", default-features = false }
 cranpose-core = { path = "crates/cranpose-core", version = "0.1.163" }
-coroflow = { path = "crates/coroflow", version = "0.1.162" }
+coroflow = { path = "crates/coroflow", version = "0.1.163" }
 cranpose-coroflow = { path = "crates/cranpose-coroflow", version = "0.1.163" }
 cranpose-navigation = { path = "crates/cranpose-navigation", version = "0.1.163" }
 cranpose-foundation = { path = "crates/cranpose-foundation", version = "0.1.163" }

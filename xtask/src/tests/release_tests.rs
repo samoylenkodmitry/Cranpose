@@ -25,6 +25,8 @@ fn write_workspace(root: &Path, version: &str, lock_version: &str) {
              version = \"{version}\"\n\
              \n\
              [workspace.dependencies]\n\
+             coroflow = {{ path = \"crates/coroflow\", version = \"{version}\" }}\n\
+             cranpose-coroflow = {{ path = \"crates/cranpose-coroflow\", version = \"{version}\" }}\n\
              log = \"0.4\"\n"
         ),
     )
@@ -72,6 +74,29 @@ fn a_release_bumps_every_member_that_inherits_the_workspace_version() {
     assert!(
         lock.contains("name = \"log\"\nversion = \"0.4.0\""),
         "a dependency is left alone: {lock}"
+    );
+}
+
+#[test]
+fn a_release_bumps_every_release_crate_in_workspace_dependencies() {
+    let root = unique_temp_dir();
+    write_workspace(&root, "0.1.104", "0.1.104");
+
+    bump_release_version_at(&root, "v0.1.105").expect("bump must succeed");
+
+    let manifest = fs::read_to_string(root.join("Cargo.toml")).expect("read root manifest");
+    for entry in [
+        r#"coroflow = { path = "crates/coroflow", version = "0.1.105" }"#,
+        r#"cranpose-coroflow = { path = "crates/cranpose-coroflow", version = "0.1.105" }"#,
+    ] {
+        assert!(
+            manifest.contains(entry),
+            "missing `{entry}` in:\n{manifest}"
+        );
+    }
+    assert!(
+        manifest.contains("log = \"0.4\""),
+        "a third-party dependency is left alone: {manifest}"
     );
 }
 
