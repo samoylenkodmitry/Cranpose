@@ -1,6 +1,4 @@
-mod output_paths;
-mod scroll_stability_external_helpers;
-mod text_showcase_external_helpers;
+use crate::{scroll_stability_external_helpers, text_showcase_external_helpers};
 
 use std::time::Duration;
 
@@ -23,7 +21,7 @@ const TARGET_MIN_CENTER_Y: f32 = 240.0;
 const TARGET_MAX_CENTER_Y: f32 = 440.0;
 const RENDER_STATS_ENV: &str = "CRANPOSE_SCROLL_STABILITY_RENDER_STATS";
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Robot Hacker News Scroll Exact External ===");
 

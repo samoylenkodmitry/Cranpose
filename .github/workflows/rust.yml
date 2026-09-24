@@ -5,12 +5,24 @@ name: Rust
 # heads before allocating a runner; same-repository pull requests remain safe.
 # The robot suite lives in heavy-selfhosted.yml where it runs on the real GPU.
 #
-# The mac work is three jobs, cheapest first. `lint` answers in about a
-# minute and is what a typo, a stale version or an unformatted file comes
-# back as; `tests` and `clippy` are the long ones. Splitting them is what
-# makes a single failure re-runnable on its own -- GitHub re-runs jobs, not
-# steps, so one job carrying every gate meant a one-line fix at the end
-# re-ran everything before it.
+# Four jobs, cheapest first. `lint` answers in about a minute and is what a
+# typo, a stale version or an unformatted file comes back as; `tests` and
+# `clippy` are the long ones. Splitting them is what makes a single failure
+# re-runnable on its own -- GitHub re-runs jobs, not steps, so one job
+# carrying every gate meant a one-line fix at the end re-ran everything
+# before it.
+#
+# Only `tests` and `clippy` need macOS: they are what compiles the macOS
+# code paths. `lint` and `wasm build` answer the same question on any host,
+# so they run on the Linux pool. Both macOS runners are one M3, and every
+# pull request asked it for six jobs against Linux's one; on 2026-09-24 a
+# macOS job waited 26 minutes at p90 for a runner while a Linux slot sat
+# idle. Linux jobs hold the host lock's shared side for every step, so they
+# never run beside a measurement that has emptied that machine.
+#
+# Every job starts by asking tree_memo.sh whether this exact source tree
+# already passed it on this host -- most often the pull request's own run,
+# when the merge that lands it changes nothing -- and skips its work if so.
 #
 # `architecture budgets` and `wasm build` both draw on the heavy pool, so they
 # short-circuit on a prose-only diff the same way the heavy workflow's jobs do.
@@ -37,15 +49,26 @@ env:
 
 jobs:
   lint:
-    name: lint + gates (mac)
+    name: lint + gates
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, macOS, ARM64]
+    runs-on: [self-hosted, Linux, cranpose-heavy]
     timeout-minutes: 20
+    defaults:
+      run:
+        shell: ${{ github.workspace }}/scripts/ci/with_host_lock.sh --shared bash --noprofile --norc -eo pipefail {0}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
+      - name: Skip work this exact tree already passed
+        id: memo
+        # A re-run is someone asking for the work again, so only a first
+        # attempt may skip it.
+        if: github.run_attempt == 1
+        run: scripts/ci/tree_memo.sh check "${{ github.workflow }}/${{ github.job }}"
+
       - name: Provision toolchain
         id: provision
+        if: steps.memo.outputs.passed != 'true'
         run: scripts/ci/provision_toolchain.sh
 
       - name: Check formatting
@@ -80,6 +103,11 @@ jobs:
         # before the heavy job ever spends a build on it.
         run: just test-robot-discovery
 
+      - name: Check every test file and robot runner is linked into its binary
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
+        # A file left out would compile and run nothing, and no test fails.
+        run: just test-layout
+
       - name: Check the robot suite's two halves still partition it
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
         run: just test-robot-suite-partition
@@ -96,6 +124,10 @@ jobs:
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
         run: just test-ci-gate-reachability
 
+      - name: Remember that this tree passed
+        if: ${{ success() && steps.memo.outputs.passed != 'true' }}
+        run: scripts/ci/tree_memo.sh record "${{ github.workflow }}/${{ github.job }}"
+
   tests:
     name: tests (mac)
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
@@ -104,8 +136,16 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
+      - name: Skip work this exact tree already passed
+        id: memo
+        # A re-run is someone asking for the work again, so only a first
+        # attempt may skip it.
+        if: github.run_attempt == 1
+        run: scripts/ci/tree_memo.sh check "${{ github.workflow }}/${{ github.job }}"
+
       - name: Provision toolchain
         id: provision
+        if: steps.memo.outputs.passed != 'true'
         run: scripts/ci/provision_toolchain.sh
 
       - name: Run workspace tests
@@ -124,6 +164,10 @@ jobs:
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
         run: just bench-smoke
 
+      - name: Remember that this tree passed
+        if: ${{ success() && steps.memo.outputs.passed != 'true' }}
+        run: scripts/ci/tree_memo.sh record "${{ github.workflow }}/${{ github.job }}"
+
   clippy:
     name: clippy + docs (mac)
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
@@ -132,8 +176,16 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
+      - name: Skip work this exact tree already passed
+        id: memo
+        # A re-run is someone asking for the work again, so only a first
+        # attempt may skip it.
+        if: github.run_attempt == 1
+        run: scripts/ci/tree_memo.sh check "${{ github.workflow }}/${{ github.job }}"
+
       - name: Provision toolchain
         id: provision
+        if: steps.memo.outputs.passed != 'true'
         run: scripts/ci/provision_toolchain.sh
 
       - name: Run workspace clippy
@@ -161,24 +213,36 @@ jobs:
         # A broken intra-doc link is a broken published page.
         run: just doc
 
+      - name: Remember that this tree passed
+        if: ${{ success() && steps.memo.outputs.passed != 'true' }}
+        run: scripts/ci/tree_memo.sh record "${{ github.workflow }}/${{ github.job }}"
+
   wasm-build:
     name: wasm build
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    # A wasm32 build and lint do not depend on the host, so this runs where
-    # the fleet has room rather than where the work is stuck. Pinning it to
-    # Linux was the original mistake: that machine also carries the X11 robot
-    # suite and the binary-size budget, the two jobs that genuinely cannot
-    # move, and it has two slots against the macOS pool's three. Leaving it
-    # on the shared `cranpose-heavy` label was only half a fix -- a free
-    # Linux slot still won the job, and every wasm build that took one made
-    # the robot suite wait.
-    runs-on: [self-hosted, macOS, ARM64]
+    # A wasm32 build and lint do not depend on the host. It once ran on Linux
+    # and moved to macOS when the robot suite took 10-13 minutes of one of
+    # two Linux slots and macOS had three runners. Both changed: the robot
+    # suite builds one binary and finishes in about five minutes, and the
+    # third macOS runner is the signing Mac, which stays offline. See the
+    # header for the queue this moves off macOS.
+    runs-on: [self-hosted, Linux, cranpose-heavy]
+    defaults:
+      run:
+        shell: ${{ github.workspace }}/scripts/ci/with_host_lock.sh --shared bash --noprofile --norc -eo pipefail {0}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           # Both parents of the merge commit, for the diff below.
           fetch-depth: 2
+
+      - name: Skip work this exact tree already passed
+        id: memo
+        # A re-run is someone asking for the work again, so only a first
+        # attempt may skip it.
+        if: github.run_attempt == 1
+        run: scripts/ci/tree_memo.sh check "${{ github.workflow }}/${{ github.job }}"
 
       - name: Detect a docs-only change
         id: changes
@@ -187,7 +251,7 @@ jobs:
 
       - name: Provision toolchain
         id: provision
-        if: steps.changes.outputs.docs_only != 'true'
+        if: steps.changes.outputs.docs_only != 'true' && steps.memo.outputs.passed != 'true'
         run: |
           scripts/ci/provision_toolchain.sh
           rustup target add wasm32-unknown-unknown
@@ -197,7 +261,7 @@ jobs:
           wasm-opt --version || echo "no system binaryen; wasm-pack supplies its own"
 
       - name: Run wasm clippy
-        if: ${{ !cancelled() && steps.provision.conclusion == 'success' && steps.changes.outputs.docs_only != 'true' }}
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' && steps.changes.outputs.docs_only != 'true' && steps.memo.outputs.passed != 'true' }}
         # A build alone (below) does not lint: `Arc<dyn Trait>` values that are
         # not `Send + Sync` on the single-threaded wasm target compile fine but
         # pay for synchronisation the target cannot use. Only clippy catches
@@ -205,15 +269,19 @@ jobs:
         run: just clippy-wasm
 
       - name: Build web demo
-        if: ${{ !cancelled() && steps.provision.conclusion == 'success' && steps.changes.outputs.docs_only != 'true' }}
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' && steps.changes.outputs.docs_only != 'true' && steps.memo.outputs.passed != 'true' }}
         run: just web
       - name: Package the web demo for a check in a browser
-        if: ${{ !cancelled() && steps.provision.conclusion == 'success' && steps.changes.outputs.docs_only != 'true' }}
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' && steps.changes.outputs.docs_only != 'true' && steps.memo.outputs.passed != 'true' }}
         run: apps/desktop-demo/package-web.sh "$RUNNER_TEMP/web-demo"
       - name: Keep the web demo three days
-        if: ${{ !cancelled() && steps.provision.conclusion == 'success' && steps.changes.outputs.docs_only != 'true' }}
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' && steps.changes.outputs.docs_only != 'true' && steps.memo.outputs.passed != 'true' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: web-demo
           path: ${{ runner.temp }}/web-demo
           retention-days: 3
+
+      - name: Remember that this tree passed
+        if: ${{ success() && steps.memo.outputs.passed != 'true' }}
+        run: scripts/ci/tree_memo.sh record "${{ github.workflow }}/${{ github.job }}"

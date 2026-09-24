@@ -1,6 +1,4 @@
-mod robot_exit;
-mod robot_launch;
-mod robot_pixels;
+use crate::{robot_exit, robot_launch, robot_pixels};
 
 use std::time::Duration;
 
@@ -25,7 +23,7 @@ fn shader_pixel(robot: &Robot) -> [u8; 4] {
     pixel_at_logical(&shot, x, y)
 }
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Robot Nested Glass Animated Shader Test ===");
     robot_launch::launch(

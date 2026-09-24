@@ -1,7 +1,4 @@
-mod output_paths;
-mod robot_exit;
-mod text_showcase_external_helpers;
-mod visual_contract_metrics;
+use crate::{output_paths, robot_exit, text_showcase_external_helpers, visual_contract_metrics};
 
 use std::{path::Path, time::Duration};
 
@@ -48,7 +45,7 @@ fn save_robot_screenshot(path: &Path, screenshot: &cranpose::RobotScreenshot) {
     }
 }
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     let mode = std::env::var("CRANPOSE_SHADER_VISUAL_MODE")
         .ok()

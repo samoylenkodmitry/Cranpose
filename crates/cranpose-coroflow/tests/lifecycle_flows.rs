@@ -3,17 +3,12 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
+mod support;
+
 use coroflow::{CoroutineScope, JobOutcome, MutableStateFlow, TestScheduler};
 use cranpose_coroflow::{LifecycleFlowExt, lifecycle_state_flow, repeat_on_lifecycle};
 use cranpose_services::{LifecycleState, dispatch_lifecycle_state};
-
-struct DropMarker(Arc<AtomicUsize>);
-
-impl Drop for DropMarker {
-    fn drop(&mut self) {
-        self.0.fetch_add(1, Ordering::SeqCst);
-    }
-}
+use support::DropMarker;
 
 #[test]
 fn lifecycle_flows_follow_the_host() {

@@ -1,6 +1,4 @@
-mod robot_launch;
-
-mod output_paths;
+use crate::{output_paths, robot_launch};
 
 use std::{fs, path::Path, time::Duration};
 
@@ -180,7 +178,7 @@ fn shadow_preview_region(shadow_label_bounds: (f32, f32, f32, f32)) -> (f32, f32
     ((x - 36.0).max(0.0), (y - 34.0).max(0.0), w + 70.0, h + 68.0)
 }
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Robot Shadow Fields Visual Test ===");
 

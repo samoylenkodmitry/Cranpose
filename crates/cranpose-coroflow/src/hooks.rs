@@ -47,20 +47,14 @@ impl<T: 'static> Handle<T> {
 /// returns a [`Handle`] to it.
 #[track_caller]
 pub fn rememberHandle<T: 'static>(init: impl FnOnce() -> T) -> Handle<T> {
-    remember(|| ownedMutableStateOfNeverEqual(Rc::new(init()))).with(|owned| Handle {
-        state: owned.handle(),
-    })
+    remember_shared(|| Rc::new(init()))
 }
 
-/// Remembers a view model for this position in the composition — Android's
-/// `viewModel { }`.
-///
-/// `factory` receives the view model's [`MainScope`] (its `viewModelScope`).
-/// When this position leaves the composition the view model is dropped, which
-/// cancels everything it launched.
 #[track_caller]
-pub fn rememberViewModel<VM: 'static>(factory: impl FnOnce(MainScope) -> VM) -> Handle<VM> {
-    rememberHandle(|| factory(MainScope::new(require_main_dispatcher("rememberViewModel"))))
+pub(crate) fn remember_shared<T: 'static>(init: impl FnOnce() -> Rc<T>) -> Handle<T> {
+    remember(|| ownedMutableStateOfNeverEqual(init())).with(|owned| Handle {
+        state: owned.handle(),
+    })
 }
 
 /// Remembers a [`MainScope`] for this position in the composition —

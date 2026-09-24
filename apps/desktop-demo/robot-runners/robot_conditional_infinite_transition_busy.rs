@@ -1,6 +1,4 @@
-mod robot_launch;
-
-mod robot_exit;
+use crate::{robot_exit, robot_launch};
 
 use std::time::{Duration, Instant};
 
@@ -119,7 +117,7 @@ fn busy_indicator() {
     );
 }
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Conditional Infinite Transition Busy Robot Test ===");
 

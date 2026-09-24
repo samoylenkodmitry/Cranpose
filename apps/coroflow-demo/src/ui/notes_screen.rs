@@ -2,13 +2,22 @@ use std::time::Duration;
 
 use coroflow::FlowExt;
 use cranpose::prelude::*;
-use cranpose_coroflow::{CollectFlow, Handle, StateFlowCollect, snapshotFlow};
+use cranpose_coroflow::{CollectFlow, Handle, StateFlowCollect, snapshotFlow, viewModel};
 use cranpose_foundation::text::TextFieldState;
+use cranpose_navigation::NavController;
 
-use super::theme::{PALETTE, body, caption};
+use super::{
+    app::Screen,
+    theme::{PALETTE, body, caption},
+};
 use crate::{
+    di::AppContainer,
     domain::model::{CatalogResults, Note, NotesList, SyncStatus},
-    presentation::notes_view_model::{NotesEvent, NotesViewModel},
+    presentation::{
+        note_row_view_model::NoteRowViewModel,
+        notes_messages::{NotesEvent, NotesMessages},
+        notes_view_model::NotesViewModel,
+    },
 };
 
 /// How long a snackbar message stays up.
@@ -19,13 +28,19 @@ pub const MAX_VISIBLE_HITS: usize = 4;
 
 /// The notes screen: search, catalog results, the note list and the sync bar.
 #[composable]
-pub fn NotesScreen(view_model: Handle<NotesViewModel>) {
+pub fn NotesScreen(container: Handle<AppContainer>, nav: NavController<Screen>) {
+    let messages = viewModel((), |_| NotesMessages::default());
+    let view_model = viewModel((), move |scope| {
+        NotesViewModel::new(scope, container.get().notes_use_cases(), messages.get())
+    });
     let state = view_model
         .get()
         .ui_state()
         .collectAsStateWithLifecycle()
         .get();
-    let search = remember(|| TextFieldState::new("")).with(|state| *state);
+    // The view model outlives this screen while another covers it; the
+    // search box starts from its query so coming back shows the same list.
+    let search = remember(|| TextFieldState::new(view_model.get().query())).with(|state| *state);
     let draft = remember(|| TextFieldState::new("")).with(|state| *state);
     let snackbar = rememberMutableStateOf(|| None::<String>);
 
@@ -34,7 +49,7 @@ pub fn NotesScreen(view_model: Handle<NotesViewModel>) {
     });
     CollectFlow(
         (),
-        view_model
+        messages
             .get()
             .events()
             .transform_latest(async |event: NotesEvent, emitter| {
@@ -52,7 +67,7 @@ pub fn NotesScreen(view_model: Handle<NotesViewModel>) {
             TextInput(search, "Search notes and the catalog…");
             CatalogPanel(state.catalog.clone());
             NewNoteRow(draft, view_model);
-            NotesColumn(state.notes.clone(), view_model);
+            NotesColumn(state.notes.clone(), container, messages, nav);
             SyncBar(state.sync, state.notes.visible.len(), state.notes.total);
             if let Some(message) = snackbar.value() {
                 Snackbar(message);
@@ -168,7 +183,12 @@ fn NewNoteRow(draft: TextFieldState, view_model: Handle<NotesViewModel>) {
 }
 
 #[composable]
-fn NotesColumn(notes: NotesList, view_model: Handle<NotesViewModel>) {
+fn NotesColumn(
+    notes: NotesList,
+    container: Handle<AppContainer>,
+    messages: Handle<NotesMessages>,
+    nav: NavController<Screen>,
+) {
     if notes.visible.is_empty() {
         Text(
             if notes.query.trim().is_empty() {
@@ -192,14 +212,26 @@ fn NotesColumn(notes: NotesList, view_model: Handle<NotesViewModel>) {
             let items = rows.clone();
             scope.items(
                 LazyItems::new(items.len()).key(move |index| keys[index].id.0),
-                move |index| NoteRow(items[index].clone(), view_model),
+                move |index| NoteRow(items[index].clone(), container, messages, nav),
             );
         },
     );
 }
 
+/// One note. The row asks for its own view model, keyed by the note, so the
+/// list above it only hands it the note and knows nothing about pinning or
+/// deleting.
 #[composable]
-fn NoteRow(note: Note, view_model: Handle<NotesViewModel>) {
+fn NoteRow(
+    note: Note,
+    container: Handle<AppContainer>,
+    messages: Handle<NotesMessages>,
+    nav: NavController<Screen>,
+) {
+    let row = viewModel(note.id, move |scope| {
+        NoteRowViewModel::new(scope, container.get().notes_use_cases(), messages.get())
+    });
+    let busy = row.get().busy().collectAsState().get();
     Row(
         Modifier::empty()
             .fill_max_width()
@@ -218,16 +250,23 @@ fn NoteRow(note: Note, view_model: Handle<NotesViewModel>) {
                 } else {
                     PALETTE.raised
                 },
-                move || view_model.get().on_toggle_pinned(pinned_note.clone()),
-            );
-            Text(
-                note.title.clone(),
-                Modifier::empty().weight(1.0),
-                body(PALETTE.text),
+                move || row.get().on_toggle_pinned(pinned_note.clone()),
             );
             let id = note.id;
+            Text(
+                if busy {
+                    format!("{}…", note.title)
+                } else {
+                    note.title.clone()
+                },
+                Modifier::empty()
+                    .weight(1.0)
+                    .clickable(move |_| nav.navigate(Screen::Note(id))),
+                body(PALETTE.text),
+            );
+            let deleted_note = note.clone();
             ActionButton("Delete", PALETTE.danger, move || {
-                view_model.get().on_delete(id);
+                row.get().on_delete(deleted_note.clone());
             });
         },
     );

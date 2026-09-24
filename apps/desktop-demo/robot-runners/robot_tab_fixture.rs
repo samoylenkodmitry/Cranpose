@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use cranpose::{
     liquid::prelude::{LiquidTabBar, LiquidTabBarScope, LiquidTabBarSpec},
     rememberMutableStateOf, Modifier,

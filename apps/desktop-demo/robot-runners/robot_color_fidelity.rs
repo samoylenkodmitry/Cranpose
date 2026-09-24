@@ -1,4 +1,4 @@
-mod robot_exit;
+use crate::robot_exit;
 
 use std::time::Duration;
 
@@ -22,7 +22,7 @@ const GRADIENT_SAME_PROBE: (f32, f32) = (225.0, 90.0);
 const GRADIENT_MIX_START_PROBE: (f32, f32) = (308.0, 90.0);
 const TEXT_REGION: (f32, f32, f32, f32) = (20.0, 190.0, 300.0, 250.0);
 
-fn main() {
+pub(crate) fn main() {
     let _ = env_logger::try_init();
     AppLauncher::new()
         .with_title("Robot Color Fidelity")

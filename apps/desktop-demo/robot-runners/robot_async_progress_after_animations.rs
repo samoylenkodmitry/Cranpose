@@ -1,6 +1,4 @@
-mod robot_launch;
-
-mod robot_exit;
+use crate::{robot_exit, robot_launch};
 
 use std::time::Duration;
 
@@ -69,7 +67,7 @@ fn wait_for_text(robot: &cranpose::Robot, text: &str, timeout: Duration) {
     );
 }
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Robot Async Progress After Animations Test ===");
 

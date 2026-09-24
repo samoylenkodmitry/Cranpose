@@ -1,12 +1,8 @@
-mod robot_exit;
-mod robot_shot;
-
-#[path = "../src/test_screens/liquid_tab_reference.rs"]
-mod liquid_tab_reference;
+use crate::{liquid_tab_reference, robot_exit, robot_shot};
 
 use cranpose::{AppLauncher, RobotScreenshot};
 
-fn main() -> anyhow::Result<()> {
+pub(crate) fn main() -> anyhow::Result<()> {
     let json = std::env::var("REFERENCE_CONTENT").unwrap_or_else(|_| {
         r#"{"titles":["Inbox","WWW","II","Settings"],"icons":[1,3,2,0],"accent":[0.2,0.65,0.1]}"#.to_string()
     });

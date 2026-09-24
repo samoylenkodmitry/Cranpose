@@ -1,6 +1,4 @@
-mod robot_launch;
-
-mod robot_exit;
+use crate::{robot_exit, robot_launch};
 
 use std::time::Duration;
 
@@ -24,7 +22,7 @@ fn changed_pixels(
     changed_pixel_count_in_region(before, after, region, 6)
 }
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Robot Interactive Anim Test ===");
 

@@ -18,8 +18,7 @@
 //! cargo run --package desktop-app --example robot_liquid_round_glass_edge_refraction --features desktop,robot-app
 //! ```
 
-mod robot_exit;
-mod robot_shot;
+use crate::{robot_exit, robot_shot};
 
 use std::{
     f32::consts::TAU,
@@ -155,7 +154,7 @@ fn ProbeApp() {
     });
 }
 
-fn main() -> ExitCode {
+pub(crate) fn main() -> ExitCode {
     let _ = env_logger::try_init();
     let shot_dir = PathBuf::from(
         std::env::var("ROBOT_SHOT_DIR")

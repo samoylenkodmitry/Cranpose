@@ -87,8 +87,10 @@ clippy-ios:
 # only recipe that lints the desktop shell's robot driver and its tests.
 # `playbilling` rides along too: it is Android-only and compiles away on every
 # other target, so there is no per-target recipe for it to join instead.
+# `embed` rides along because no workspace member turns it on; the host that
+# uses it, the IntelliJ plugin template, lives in its own repository.
 clippy-optional-backends:
-    cargo clippy -p cranpose --no-default-features --features desktop,renderer-wgpu,camera-desktop,robot,audio-desktop,media,storekit,playbilling --all-targets -- -D warnings
+    cargo clippy -p cranpose --no-default-features --features desktop,renderer-wgpu,camera-desktop,robot,audio-desktop,media,storekit,playbilling,embed --all-targets -- -D warnings
 
 # Lint the SVG image painter. `svg` is off by default and no crate in the
 # workspace ever turns it on, so `just clippy` never builds `image_svg.rs`
@@ -105,8 +107,8 @@ clippy-hyphenation:
 # Lint the robot runners, which `just clippy` cannot reach.
 #
 # `cargo clippy --workspace --all-targets` silently SKIPS a target whose
-# `required-features` are not enabled, and all ~165 `[[example]]` entries in
-# apps/desktop-demo carry `required-features = ["robot-app"]`. Skipping is not
+# `required-features` are not enabled, and the `robot` example that holds every
+# runner requires `robot-app`. Skipping is not
 # an error, so the omission never surfaced: `cargo check -p desktop-app
 # --examples` finishes in a fraction of a second having compiled nothing. The
 # runners went unlinted from the day the feature gate was added until #575.
@@ -215,6 +217,7 @@ ci-contract-gates:
     scripts/ci/terminate_descendants_test.sh
     scripts/ci/cancel_pr_runs_test.sh
     scripts/ci/nightly_should_run_test.sh
+    scripts/ci/tree_memo_test.sh
 
 # Point git at the repository's hooks. Once per clone.
 hooks:
@@ -248,6 +251,7 @@ test-features:
     cargo test --profile ci -p cranpose-ui --features svg
     cargo test --profile ci -p cranpose-render-common --features text-hyphenation-embedded
     cargo test --profile ci -p cranpose
+    cargo test --profile ci -p cranpose --no-default-features --features embed
     cargo test --profile ci -p cranpose --no-default-features --features desktop,renderer-wgpu,camera-desktop,robot,audio-desktop,media,storekit,playbilling
 
 # The docs-only trigger filter that lets the heavy jobs skip a prose diff.
@@ -305,8 +309,10 @@ test-robot-suite-partition:
 test-ci-gate-reachability:
     cargo xtask ci-gate-reachability
 
-# Each crate links its integration tests into one binary; a test file left out
-# of its tests/integration.rs would compile and run nothing.
+# Each crate links its integration tests into one binary, and every robot runner
+# is a module of the one `robot` binary; a test file left out of its
+# tests/integration.rs, or a runner left out of the runners! table, would
+# compile and run nothing.
 test-layout:
     cargo xtask test-layout
 
@@ -457,7 +463,7 @@ robot-accessibility-windows binary output:
     python scripts/a11y/desktop_robot.py --binary {{quote(binary)}} --output {{quote(output)}}
 
 test-windows-accessibility:
-    cargo build --locked --profile ci -p desktop-app --features robot-app --bin desktop-app --example robot_developer_inspector
+    cargo build --locked --profile ci -p desktop-app --features robot-app --bin desktop-app --example robot
     python scripts/a11y/windows_suite.py
 
 # `--no-daemon` keeps a shared Gradle daemon on the self-hosted boxes from
@@ -669,8 +675,11 @@ cheatsheets:
 # --- performance -----------------------------------------------------------
 
 # Criterion sanity pass: run each benchmark body once, measure nothing.
+# Criterion's test mode on the `ci` profile and workspace feature set that
+# `just test` already built; `cargo bench` compiled the whole graph again
+# under the bench profile's fat LTO first, 73 of the tests job's seconds.
 bench-smoke:
-    cargo bench --package cranpose-ui --bench slot_table_v2 -- --test
+    cargo test --profile ci --workspace --bench slot_table_v2
 
 # The slot-table Criterion suite with stable measurement settings.
 bench-slot *args:

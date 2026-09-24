@@ -1,4 +1,4 @@
-mod robot_launch;
+use crate::robot_launch;
 
 use std::time::Duration;
 
@@ -6,7 +6,7 @@ use cranpose::SemanticElement;
 use cranpose_testing::find_button_in_semantics;
 use desktop_app::app;
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Lazy Duplication Bug Reproduction Test ===");
 

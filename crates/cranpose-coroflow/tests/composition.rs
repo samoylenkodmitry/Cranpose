@@ -1,29 +1,11 @@
-use std::{
-    cell::RefCell,
-    rc::Rc,
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
-    time::Duration,
-};
+use std::{cell::RefCell, rc::Rc, time::Duration};
 
 mod support;
 
-use coroflow::{FlowExt, MainScope, MutableSharedFlow, MutableStateFlow, StateFlow};
+use coroflow::{FlowExt, MainScope, MutableSharedFlow, MutableStateFlow};
 use cranpose_core::{Composition, MemoryApplier, mutableStateOf, remember};
-use cranpose_coroflow::{
-    CollectFlow, Handle, StateFlowCollect, main_dispatcher, rememberViewModel, snapshotFlow,
-};
+use cranpose_coroflow::{CollectFlow, StateFlowCollect, main_dispatcher, snapshotFlow};
 use support::{PATIENCE, QUIET_PERIOD, composition, pump_for, pump_until};
-
-struct DropMarker(Arc<AtomicUsize>);
-
-impl Drop for DropMarker {
-    fn drop(&mut self) {
-        self.0.fetch_add(1, Ordering::SeqCst);
-    }
-}
 
 #[test]
 fn the_main_dispatcher_runs_coroutines_on_the_ui_queue() {
@@ -93,83 +75,6 @@ fn collect_as_state_follows_a_state_flow_set_from_another_thread() {
         source.subscription_count().value(),
         0,
         "leaving the composition unsubscribes"
-    );
-}
-
-struct CounterViewModel {
-    scope: MainScope,
-    count: MutableStateFlow<u32>,
-}
-
-impl CounterViewModel {
-    fn new(scope: MainScope, dropped: Arc<AtomicUsize>) -> Self {
-        scope.launch(async move {
-            let _marker = DropMarker(dropped);
-            std::future::pending::<()>().await;
-        });
-        Self {
-            scope,
-            count: MutableStateFlow::new(0),
-        }
-    }
-
-    fn count(&self) -> StateFlow<u32> {
-        self.count.as_state_flow()
-    }
-
-    fn increment(&self) {
-        let count = self.count.clone();
-        self.scope.launch(async move {
-            count.update(|value| value + 1);
-        });
-    }
-}
-
-#[test]
-fn a_remembered_view_model_survives_recomposition_and_is_cleared_on_removal() {
-    let mut composition = composition();
-    let dropped = Arc::new(AtomicUsize::new(0));
-    let models: Rc<RefCell<Vec<Handle<CounterViewModel>>>> = Rc::default();
-    let seen = Rc::new(RefCell::new(Vec::new()));
-    let render = {
-        let (dropped, models, seen) = (Arc::clone(&dropped), Rc::clone(&models), Rc::clone(&seen));
-        move |composition: &mut Composition<MemoryApplier>| {
-            let (dropped, models, seen) =
-                (Arc::clone(&dropped), Rc::clone(&models), Rc::clone(&seen));
-            composition
-                .render(1, move || {
-                    let dropped = Arc::clone(&dropped);
-                    let model =
-                        rememberViewModel(move |scope| CounterViewModel::new(scope, dropped));
-                    seen.borrow_mut()
-                        .push(model.get().count().collectAsState().get());
-                    models.borrow_mut().push(model);
-                })
-                .expect("render");
-        }
-    };
-    let first = render.clone();
-    first(&mut composition);
-    let second = render.clone();
-    second(&mut composition);
-    {
-        let models = models.borrow();
-        assert!(models[0] == models[1], "one view model per position");
-        assert!(Rc::ptr_eq(&models[0].get(), &models[1].get()));
-        models[0].get().increment();
-    }
-    assert!(pump_until(&mut composition, render, || seen
-        .borrow()
-        .last()
-        == Some(&1)));
-    models.borrow_mut().clear();
-
-    composition.render(1, || {}).expect("remove");
-    composition.runtime_handle().drain_ui();
-    assert_eq!(
-        dropped.load(Ordering::SeqCst),
-        1,
-        "clearing the view model cancels its scope"
     );
 }
 

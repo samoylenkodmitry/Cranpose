@@ -25,6 +25,7 @@ fn write_workspace(root: &Path, version: &str, lock_version: &str) {
              version = \"{version}\"\n\
              \n\
              [workspace.dependencies]\n\
+             coroflow = {{ path = \"crates/coroflow\", version = \"{version}\" }}\n\
              log = \"0.4\"\n"
         ),
     )
@@ -60,6 +61,11 @@ fn a_release_bumps_every_member_that_inherits_the_workspace_version() {
 
     bump_release_version_at(&root, "v0.1.105").expect("bump must succeed");
 
+    let manifest = fs::read_to_string(root.join("Cargo.toml")).expect("read manifest");
+    assert!(
+        manifest.contains("coroflow = { path = \"crates/coroflow\", version = \"0.1.105\" }"),
+        "coroflow's workspace dependency is released with Cranpose: {manifest}"
+    );
     let lock = fs::read_to_string(root.join("Cargo.lock")).expect("read lock");
     assert!(
         lock.contains("name = \"coroflow\"\nversion = \"0.1.105\""),
@@ -72,6 +78,41 @@ fn a_release_bumps_every_member_that_inherits_the_workspace_version() {
     assert!(
         lock.contains("name = \"log\"\nversion = \"0.4.0\""),
         "a dependency is left alone: {lock}"
+    );
+}
+
+#[test]
+fn a_release_bumps_every_release_crate_in_workspace_dependencies() {
+    let root = unique_temp_dir();
+    write_workspace(&root, "0.1.104", "0.1.104");
+    let manifest = root.join("Cargo.toml");
+    let text = fs::read_to_string(&manifest).expect("read root manifest");
+    fs::write(
+        &manifest,
+        text.replace(
+            "log = \"0.4\"\n",
+            "log = \"0.4\"\n\
+             coroflow = { path = \"crates/coroflow\", version = \"0.1.104\" }\n\
+             cranpose-coroflow = { path = \"crates/cranpose-coroflow\", version = \"0.1.104\" }\n",
+        ),
+    )
+    .expect("write root manifest");
+
+    bump_release_version_at(&root, "v0.1.105").expect("bump must succeed");
+
+    let manifest = fs::read_to_string(&manifest).expect("read root manifest");
+    for entry in [
+        r#"coroflow = { path = "crates/coroflow", version = "0.1.105" }"#,
+        r#"cranpose-coroflow = { path = "crates/cranpose-coroflow", version = "0.1.105" }"#,
+    ] {
+        assert!(
+            manifest.contains(entry),
+            "missing `{entry}` in:\n{manifest}"
+        );
+    }
+    assert!(
+        manifest.contains("log = \"0.4\""),
+        "a third-party dependency is left alone: {manifest}"
     );
 }
 
@@ -108,5 +149,27 @@ fn the_publish_order_leaves_out_crates_that_are_not_published() {
     assert_eq!(
         order,
         vec!["cranpose-core".to_owned(), "cranpose".to_owned()]
+    );
+}
+
+#[test]
+fn coroflow_is_published_before_the_crates_that_use_it() {
+    let metadata = r#"{
+        "workspace_members": ["cranpose-coroflow 0.1.0", "coroflow 0.1.0", "coroflow-demo 0.1.0"],
+        "packages": [
+            {"id": "cranpose-coroflow 0.1.0", "name": "cranpose-coroflow",
+             "dependencies": [{"name": "coroflow", "kind": null}]},
+            {"id": "coroflow 0.1.0", "name": "coroflow", "dependencies": []},
+            {"id": "coroflow-demo 0.1.0", "name": "coroflow-demo",
+             "dependencies": [{"name": "cranpose-coroflow", "kind": null}]}
+        ]
+    }"#;
+
+    let order = resolve_publish_order(metadata).expect("the order resolves");
+
+    assert_eq!(
+        order,
+        vec!["coroflow".to_owned(), "cranpose-coroflow".to_owned()],
+        "coroflow is released with Cranpose; other crates are not"
     );
 }

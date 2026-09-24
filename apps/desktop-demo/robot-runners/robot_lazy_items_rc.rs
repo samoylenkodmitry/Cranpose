@@ -1,4 +1,4 @@
-mod robot_launch;
+use crate::robot_launch;
 
 use std::{rc::Rc, time::Duration};
 
@@ -161,7 +161,7 @@ fn rc_items_test_app() {
     );
 }
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== LazyList Rc Items Robot Test ===");
 

@@ -187,7 +187,7 @@ fn print_usage() {
            complexity-gate       Diff-scoped cyclomatic complexity ceiling\n\
            duplication-gate      Diff-scoped copy-paste budget\n\
            ci-gate-reachability  Every `just` recipe CI runs must be reachable from `ci`/`ci-full`\n\
-           test-layout          Every tests/*.rs of a one-binary crate must be a module of tests/integration.rs\n\
+           test-layout          Every integration test file and robot runner must be linked into its binary\n\
          \n\
          bundle-macos options:\n\
            --package <name>       Cargo package to build [desktop-app]\n\
@@ -1978,10 +1978,21 @@ fn dependency_tables(manifest: &toml::Value) -> Vec<&toml::Table> {
     tables
 }
 
-fn sorted_cranpose_dependencies(table: &toml::Table) -> Vec<(&String, &toml::Value)> {
+/// Whether `name` is released in lockstep with Cranpose: every `cranpose*`
+/// crate, and `coroflow`, the runtime-independent coroutine library that
+/// `cranpose-coroflow` adapts. [`RELEASE_CRATE_PATTERN`] matches the same
+/// names inside a manifest.
+fn is_release_crate(name: &str) -> bool {
+    name.starts_with("cranpose") || name == "coroflow"
+}
+
+/// The names [`is_release_crate`] accepts, as a regex fragment.
+const RELEASE_CRATE_PATTERN: &str = r"(?:cranpose[\w-]*|coroflow)";
+
+fn sorted_release_dependencies(table: &toml::Table) -> Vec<(&String, &toml::Value)> {
     let mut entries = table
         .iter()
-        .filter(|(name, _)| name.starts_with("cranpose"))
+        .filter(|(name, _)| is_release_crate(name))
         .collect::<Vec<_>>();
     entries.sort_by_key(|(name, _)| name.as_str());
     entries
@@ -2002,7 +2013,7 @@ fn check_published_lock(
     failures: &mut Vec<String>,
 ) -> Result<(), String> {
     let lockfile = load_toml(path)?;
-    let packages = lock_packages(&lockfile, |name| name.starts_with("cranpose"));
+    let packages = lock_packages(&lockfile, is_release_crate);
     if packages.is_empty() {
         failures.push(format!("{relative} locks no cranpose packages"));
         return Ok(());
@@ -2100,7 +2111,7 @@ fn check_workspace_dependency_versions(
     else {
         return expected_package_names;
     };
-    for (name, spec) in sorted_cranpose_dependencies(dependencies) {
+    for (name, spec) in sorted_release_dependencies(dependencies) {
         expected_package_names.insert(name.clone());
         let version = dependency_version(spec);
         if version.as_deref() != Some(workspace_version) {
@@ -2151,7 +2162,7 @@ fn check_isolated_demo_manifest_versions(
 ) -> Result<(), String> {
     let isolated_manifest = load_toml(&root.join("apps/isolated-demo/Cargo.toml"))?;
     for table in dependency_tables(&isolated_manifest) {
-        for (name, spec) in sorted_cranpose_dependencies(table) {
+        for (name, spec) in sorted_release_dependencies(table) {
             let version = dependency_version(spec);
             if version.as_deref() != Some(workspace_version) {
                 failures.push(format!(
@@ -2188,16 +2199,18 @@ impl SyncIsolatedDemoOptions {
 /// `cranpose[-foo] = { ..., version = "x", ... }` (inline table) in
 /// `[dependencies]` or any `[target.'cfg(..)'.dependencies]`.
 static INLINE_TABLE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r#"(?m)(?P<head>^[ \t]*cranpose[\w-]*[ \t]*=[ \t]*\{[^}\n]*?version[ \t]*=[ \t]*")(?P<version>[^"]+)(?P<tail>")"#,
-    )
-        .expect("INLINE_TABLE_RE is a valid pattern")
+    Regex::new(&format!(
+        r#"(?m)(?P<head>^[ \t]*{RELEASE_CRATE_PATTERN}[ \t]*=[ \t]*\{{[^}}\n]*?version[ \t]*=[ \t]*")(?P<version>[^"]+)(?P<tail>")"#,
+    ))
+    .expect("INLINE_TABLE_RE is a valid pattern")
 });
 
 /// `cranpose[-foo] = "x"` (bare string) in the same places.
 static BARE_STRING_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?m)(?P<head>^[ \t]*cranpose[\w-]*[ \t]*=[ \t]*")(?P<version>[^"]+)(?P<tail>")"#)
-        .expect("BARE_STRING_RE is a valid pattern")
+    Regex::new(&format!(
+        r#"(?m)(?P<head>^[ \t]*{RELEASE_CRATE_PATTERN}[ \t]*=[ \t]*")(?P<version>[^"]+)(?P<tail>")"#
+    ))
+    .expect("BARE_STRING_RE is a valid pattern")
 });
 
 static SEMVER_RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -2333,8 +2346,9 @@ static WORKSPACE_VERSION_DOTTED_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\s*version\.").expect("WORKSPACE_VERSION_DOTTED_RE is valid"));
 static LEADING_WHITESPACE_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\s*").expect("LEADING_WHITESPACE_RE is valid"));
-static CRANPOSE_DEP_TABLE_LINE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^\s*cranpose[\w-]*\s*=\s*\{").expect("CRANPOSE_DEP_TABLE_LINE_RE is valid")
+static RELEASE_DEP_TABLE_LINE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(&format!(r"^\s*{RELEASE_CRATE_PATTERN}\s*=\s*\{{"))
+        .expect("RELEASE_DEP_TABLE_LINE_RE is valid")
 });
 static VERSION_KV_PRESENT_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"version\s*=\s*"[^"]+""#).expect("VERSION_KV_PRESENT_RE is valid")
@@ -2408,8 +2422,8 @@ fn update_workspace_package_section(lines: &mut Vec<String>, version: &str) -> R
     Ok(())
 }
 
-/// Rewrites every `cranpose[-foo] = { ... version = "x" ... }` line in
-/// `[workspace.dependencies]` to `version`, leaving the rest of each line
+/// Rewrites every `{release crate} = { ... version = "x" ... }` line in
+/// `[workspace.dependencies]` ([`is_release_crate`]) to `version`, leaving the rest of each line
 /// (path, default-features, ...) untouched. A dependency table with no
 /// `version` key at all is left alone and reported as a mismatch, matching
 /// the release script this replaces -- a workspace dependency published to
@@ -2425,7 +2439,7 @@ fn update_workspace_dependencies_section(
 
     let mut mismatches = Vec::new();
     for line in &mut lines[start..end] {
-        if !CRANPOSE_DEP_TABLE_LINE_RE.is_match(line) {
+        if !RELEASE_DEP_TABLE_LINE_RE.is_match(line) {
             continue;
         }
         if !VERSION_KV_PRESENT_RE.is_match(line) {
@@ -2445,7 +2459,7 @@ fn update_workspace_dependencies_section(
         Ok(())
     } else {
         Err(format!(
-            "Some cranpose workspace dependencies were not updated:\n{}",
+            "Some release workspace dependencies were not updated:\n{}",
             mismatches.join("\n")
         ))
     }
@@ -2498,7 +2512,7 @@ fn workspace_versioned_packages(root: &Path) -> BTreeSet<String> {
 /// Whether the root `Cargo.lock` records `name` at the workspace version: a
 /// cranpose crate, or a member that inherits the workspace version.
 fn follows_workspace_version(name: &str, versioned: &BTreeSet<String>) -> bool {
-    name.starts_with("cranpose") || versioned.contains(name)
+    is_release_crate(name) || versioned.contains(name)
 }
 
 /// Bumps every `[[package]]` in `path` (a `Cargo.lock`) that
@@ -2622,7 +2636,7 @@ fn verify_tag_at(root: &Path, tag: &str) -> Result<(), String> {
         .get("dependencies")
         .and_then(toml::Value::as_table)
     {
-        for (name, spec) in sorted_cranpose_dependencies(dependencies) {
+        for (name, spec) in sorted_release_dependencies(dependencies) {
             let dep_version = dependency_version(spec);
             if dep_version.as_deref() != Some(workspace_version) {
                 mismatches.push(format!("{name} => {}", display_version(&dep_version)));
@@ -2764,7 +2778,7 @@ fn cranpose_package_entry(
         .get("publish")
         .and_then(serde_json::Value::as_array)
         .is_some_and(Vec::is_empty);
-    if !name.starts_with("cranpose") || unpublished {
+    if !is_release_crate(name) || unpublished {
         return Ok(None);
     }
 
@@ -4052,16 +4066,28 @@ mod duplication_gate {
         )
     }
 
-    /// Code with its comment lines and all its whitespace dropped, so code
-    /// that moved out of a module, reformatted one level shallower and
-    /// without its comments, still reads the same.
+    /// Code with its comment lines, all its whitespace and its trailing
+    /// commas dropped, so code that moved out of a module, reformatted one
+    /// level shallower and without its comments, still reads the same.
+    /// rustfmt drops a trailing comma when the shallower indent lets it join
+    /// a list onto one line, and a clone can end on one whose list closes
+    /// past the clone.
     pub(crate) fn clone_text(source: &str) -> String {
-        source
+        let joined: String = source
             .lines()
             .map(str::trim)
             .filter(|line| !line.starts_with("//"))
             .flat_map(str::split_whitespace)
-            .collect()
+            .collect();
+        let mut text = String::with_capacity(joined.len());
+        let mut chars = joined.chars().peekable();
+        while let Some(ch) = chars.next() {
+            if ch == ',' && matches!(chars.peek(), None | Some(')' | ']' | '}' | '>')) {
+                continue;
+            }
+            text.push(ch);
+        }
+        text
     }
 
     /// A clone whose text was in the tree before the diff, at any path:
@@ -6129,6 +6155,7 @@ cranpose v0.1.0
             "[dependencies]\n\
              cranpose = { version = \"0.1.104\" }\n\
              cranpose-core = \"0.1.104\"\n\
+             coroflow = \"0.1.104\"\n\
              log = \"0.4\"\n\
              \n\
              [target.'cfg(target_arch = \"wasm32\")'.dependencies]\n\
@@ -6144,6 +6171,10 @@ cranpose v0.1.0
             "{updated}"
         );
         assert!(updated.contains("cranpose-core = \"0.1.105\""), "{updated}");
+        assert!(
+            updated.contains("coroflow = \"0.1.105\""),
+            "coroflow is released with Cranpose: {updated}"
+        );
         assert!(
             updated.contains("cranpose-platform-web = \"0.1.105\""),
             "target-cfg dependencies must be rewritten too: {updated}"
@@ -6398,7 +6429,7 @@ cranpose v0.1.0
             .expect_err("a dependency with no version key must be reported, not silently kept");
 
         assert!(
-            error.contains("Some cranpose workspace dependencies were not updated"),
+            error.contains("Some release workspace dependencies were not updated"),
             "{error}"
         );
         let unchanged = fs::read_to_string(root.join("Cargo.toml")).expect("read manifest");
@@ -7921,6 +7952,39 @@ version = \"0.1.0\"
         assert_eq!(
             duplication_gate::find_violations(&[moved], &[], &[other], &ranges).len(),
             1
+        );
+    }
+
+    #[test]
+    fn duplication_find_violations_clone_rustfmt_rejoined_after_moving_passes() {
+        let ranges = BTreeMap::from([("src/tests/a_tests.rs".to_owned(), vec![(1, 40)])]);
+        let moved = duplicate_of(
+            ("src/tests/a_tests.rs", 1, 12),
+            ("src/tests/a_tests.rs", 20, 31),
+            12,
+            "fn layout(&self, text: &Text) -> Layout {\n    panic!(\"unused\");\n}\n",
+        );
+        let old_source = duplication_gate::clone_text(
+            "    fn layout(\n        &self,\n        text: &Text,\n    ) -> Layout {\n        panic!(\"unused\");\n    }\n",
+        );
+        assert_eq!(
+            duplication_gate::find_violations(
+                std::slice::from_ref(&moved),
+                &[],
+                std::slice::from_ref(&old_source),
+                &ranges
+            ),
+            Vec::<String>::new()
+        );
+        let cut_inside_a_list = duplicate_of(
+            ("src/tests/a_tests.rs", 1, 12),
+            ("src/tests/a_tests.rs", 20, 31),
+            12,
+            "fn layout(\n    &self,\n    text: &Text,\n",
+        );
+        assert_eq!(
+            duplication_gate::find_violations(&[cut_inside_a_list], &[], &[old_source], &ranges),
+            Vec::<String>::new()
         );
     }
 

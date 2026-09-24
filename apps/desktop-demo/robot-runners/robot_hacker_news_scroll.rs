@@ -1,6 +1,4 @@
-mod robot_launch;
-
-pub mod hacker_news_robot_support;
+use crate::{hacker_news_robot_support, robot_launch};
 
 use std::time::Duration;
 
@@ -82,7 +80,7 @@ fn assert_long_comment_bottom_gap(robot: &Robot, comments_list_bounds: Bounds) {
     }
 }
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Hacker News Single Pane Scroll Robot Test ===");
 

@@ -1,0 +1,27 @@
+[package]
+name = "cranpose-navigation"
+description = "NavHost, a typed back stack and per-screen view models for Cranpose"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+cranpose-animation = { workspace = true }
+cranpose-core = { workspace = true }
+cranpose-coroflow = { workspace = true }
+cranpose-services = { workspace = true }
+cranpose-ui = { workspace = true }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+coroflow = { workspace = true }
+cranpose-core = { workspace = true, features = ["internal"] }
+# Path-only dev-deps: stripped from the published manifest.
+cranpose-testing = { path = "../cranpose-testing" }

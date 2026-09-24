@@ -1,6 +1,4 @@
-mod robot_launch;
-
-mod output_paths;
+use crate::{output_paths, robot_launch};
 
 use std::{path::Path, time::Duration};
 
@@ -23,7 +21,7 @@ const UNDERLINE_LOCAL_Y_SPREAD: f32 = 0.5;
 const UNDERLINE_LOCAL_Y_TREND: f32 = 0.25;
 const MIN_NORMALIZED_TEXT_INK_PIXELS: usize = 500;
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Robot Scroll Decoration Invariance ===");
 

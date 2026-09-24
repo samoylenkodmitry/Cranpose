@@ -1,6 +1,4 @@
-mod robot_launch;
-
-pub mod hacker_news_robot_support;
+use crate::{hacker_news_robot_support, robot_launch};
 
 use std::time::Duration;
 
@@ -150,7 +148,7 @@ fn rewind_story_list_to_top(robot: &cranpose::Robot, list_bounds: (f32, f32, f32
     }
 }
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Hacker News Back Drag Scroll Robot Test ===");
     robot_launch::launch("Hacker News Back Drag Scroll Robot Test", 390, 844).with_test_driver(|robot| {

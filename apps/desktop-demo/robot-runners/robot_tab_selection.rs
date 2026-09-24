@@ -1,4 +1,4 @@
-mod robot_launch;
+use crate::robot_launch;
 
 use std::time::Duration;
 
@@ -9,7 +9,7 @@ fn read_active_tab() -> Option<DemoTab> {
     app::TEST_ACTIVE_TAB_STATE.with(|cell| cell.borrow().as_ref().map(cranpose::MutableState::get))
 }
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Robot Tab Selection Test ===");
     println!("Testing that tab selection state visually changes\n");

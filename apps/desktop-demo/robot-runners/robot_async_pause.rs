@@ -1,13 +1,11 @@
-mod robot_launch;
-
-mod robot_exit;
+use crate::{robot_exit, robot_launch};
 
 use std::time::Duration;
 
 use cranpose_testing::find_text_center;
 use desktop_app::app;
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Robot Async Pause Button Test ===");
     println!("Testing if pause button works after switching to Async Runtime tab");

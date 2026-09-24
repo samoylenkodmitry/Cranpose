@@ -1,4 +1,4 @@
-mod perf_contract;
+use crate::perf_contract;
 
 use std::time::Duration;
 
@@ -8,7 +8,7 @@ use desktop_app::app;
 
 const WINDOW_TITLE: &str = "Robot Idle FPS After Tab Walk";
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Robot Idle FPS After Tab Walk ===");
 

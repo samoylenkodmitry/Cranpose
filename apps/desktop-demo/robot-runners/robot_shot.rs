@@ -1,5 +1,3 @@
-#![expect(dead_code)]
-
 use std::{path::Path, time::Duration};
 
 use cranpose::{Color, Robot, RobotScreenshot};

@@ -1,6 +1,4 @@
-mod robot_launch;
-
-mod robot_exit;
+use crate::{robot_exit, robot_launch};
 
 use std::time::Duration;
 
@@ -48,7 +46,7 @@ fn parse_pointer_text(text: &str) -> Option<(f32, f32)> {
     Some((x, y))
 }
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Robot Gradient Tab Switch ===");
 

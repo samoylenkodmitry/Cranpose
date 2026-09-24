@@ -1,8 +1,4 @@
-mod markdown_fixture_client;
-mod output_paths;
-mod robot_exit;
-mod text_showcase_external_helpers;
-mod visual_contract_metrics;
+use crate::{markdown_fixture_client, output_paths, robot_exit, text_showcase_external_helpers, visual_contract_metrics};
 
 use std::{sync::Arc, time::Duration};
 
@@ -36,7 +32,7 @@ fn wait_for_text(robot: &cranpose::Robot, text: &str) {
     robot_exit::fail_without_shutdown(&format!("text {text:?} did not appear"));
 }
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     let mode = std::env::var("CRANPOSE_VISUAL_CONTRACT_MODE")
         .ok()

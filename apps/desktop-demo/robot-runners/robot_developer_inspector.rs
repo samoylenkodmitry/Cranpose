@@ -1,4 +1,4 @@
-mod robot_launch;
+use crate::robot_launch;
 
 use cranpose::{InspectorAction, InspectorMode, Robot};
 
@@ -35,7 +35,7 @@ fn press(robot: &Robot, action: InspectorAction) {
     robot.wait_for_idle().expect("inspector settles");
 }
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     robot_launch::launch("Developer inspector robot", 900, 700)
         .with_developer_inspector(true)

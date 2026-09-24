@@ -1,7 +1,4 @@
-mod robot_launch;
-
-mod robot_exit;
-mod robot_handle_probe;
+use crate::{robot_exit, robot_handle_probe, robot_launch};
 
 use std::time::Duration;
 
@@ -21,7 +18,7 @@ fn matches_accent(r: u8, g: u8, b: u8, target: (i16, i16, i16)) -> bool {
 const HANDLE_BLUE: (i16, i16, i16) = (0, 122, 255);
 const HANDLE_PINK: (i16, i16, i16) = (246, 53, 142);
 
-fn main() {
+pub(crate) fn main() {
     env_logger::init();
     println!("=== Text Handle Survives Tab Switch ===\n");
 

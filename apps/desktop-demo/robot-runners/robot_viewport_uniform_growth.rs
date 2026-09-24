@@ -1,4 +1,4 @@
-mod output_paths;
+use crate::output_paths;
 
 use std::cell::Cell;
 
@@ -20,7 +20,7 @@ thread_local! {
     static ROW_COUNT: Cell<Option<MutableState<u32>>> = const { Cell::new(None) };
 }
 
-fn main() {
+pub(crate) fn main() {
     let _ = env_logger::try_init();
     AppLauncher::new()
         .with_title(TITLE)

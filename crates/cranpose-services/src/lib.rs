@@ -21,6 +21,7 @@ pub mod haptics;
 #[cfg(not(target_arch = "wasm32"))]
 mod helper_process;
 pub mod host;
+pub mod host_messages;
 pub mod host_surface;
 pub mod http;
 pub mod image_picker;
@@ -132,6 +133,10 @@ pub use host::{
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use host::{durable_save_deadline, run_durable_saves};
+pub use host_messages::{
+    HostMessage, HostMessageObserver, clear_host_messages, clear_host_outbox, install_host_outbox,
+    observe_host_messages, publish_host_message, rememberHostMessages, send_to_host,
+};
 pub use host_surface::{
     HostSurface, HostSurfaceObserver, HostSurfaceRef, HostSurfaceSize, ResizeRefused,
     clear_platform_host_surface, host_surface, host_surface_size, observe_host_surface_size,
@@ -187,8 +192,9 @@ pub use memory_pressure::{
     rememberMemoryPressure,
 };
 pub use navigation::{
-    BackRequestObserver, back_interception_enabled, exit_requested, observe_back_requests,
-    push_back_request, request_exit, set_back_interception, take_back_requests, take_exit_request,
+    BackHandler, BackRequestObserver, back_interception_enabled, exit_requested,
+    observe_back_requests, push_back_request, request_exit, set_back_interception,
+    take_back_requests, take_exit_request,
 };
 pub use network_status::{
     NetworkMonitor, NetworkMonitorRef, NetworkStatus, clear_platform_network_monitor,
