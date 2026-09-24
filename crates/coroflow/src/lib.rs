@@ -27,8 +27,8 @@
 //! | `channelFlow`, `callbackFlow`, `awaitClose` | [`channel_flow`], [`callback_flow`], [`Producer::await_close`] |
 //! | `MutableStateFlow`, `MutableSharedFlow`, `BufferOverflow` | [`MutableStateFlow`], [`MutableSharedFlow`], [`BufferOverflow`] |
 //! | `stateIn(scope, WhileSubscribed(5000), x)`, `shareIn`, suspending `stateIn(scope)` | [`FlowExt::state_in`], [`FlowExt::share_in`], [`FlowExt::state_in_first`], [`SharingStarted`], [`SharingCommand`] |
-//! | `runTest`, `advanceTimeBy` | [`TestScheduler`] |
-//! | Turbine's `flow.test { awaitItem() }` | [`Turbine`] |
+//! | `runTest`, `backgroundScope`, `advanceTimeBy`, `advanceUntilIdle` | [`run_test`], [`TestScope`], [`TestScheduler`] |
+//! | Turbine's `awaitItem`, `awaitComplete`, `expectNoEvents`, `skipItems` | [`TestScheduler::turbine`], [`Turbine`] |
 //!
 //! It needs no async runtime. On native targets [`Dispatchers`] are thread
 //! pools and [`SystemClock`] is one timer thread; in the browser both run on the
@@ -121,7 +121,7 @@ pub use suspending::{
     TransformingWhile, Verdict,
 };
 pub use terminal::{Collect, Count, First, Fold, Last, Reduce, Single, ToVec};
-pub use testing::{Stalled, TestScheduler, Turbine};
+pub use testing::{Stalled, TestScheduler, TestScope, Turbine, run_test};
 pub use timing::{Sample, SampleRun, Timeout, TimeoutRun};
 pub use transforms::{
     FilterMap, FilterMapRun, Scan, ScanRun, Skip, SkipRun, Skipping, Taking, While, WhileRun,

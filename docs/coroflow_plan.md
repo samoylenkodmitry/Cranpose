@@ -61,9 +61,9 @@ with the same behavior. Items are ticked as they land.
 
 ## E. Testing
 
-- [ ] `TestScheduler::advance_until_idle`
-- [ ] `run_test` with a `background_scope` that is cancelled when the test ends
-- [ ] Turbine: `await_item`, `await_complete`, `expect_no_events`, `skip_items` and `cancel_and_ignore_remaining_events`
+- [x] `TestScheduler::advance_until_idle`
+- [x] `run_test` with a `background_scope` that is cancelled when the test ends
+- [x] Turbine: `await_item`, `await_complete`, `expect_no_events`, `skip_items` and `cancel_and_ignore_remaining_events`
 
 ## F. Cranpose
 
