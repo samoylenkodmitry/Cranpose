@@ -2346,8 +2346,9 @@ static WORKSPACE_VERSION_DOTTED_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\s*version\.").expect("WORKSPACE_VERSION_DOTTED_RE is valid"));
 static LEADING_WHITESPACE_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\s*").expect("LEADING_WHITESPACE_RE is valid"));
-static CRANPOSE_DEP_TABLE_LINE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^\s*cranpose[\w-]*\s*=\s*\{").expect("CRANPOSE_DEP_TABLE_LINE_RE is valid")
+static RELEASE_DEP_TABLE_LINE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(&format!(r"^\s*{RELEASE_CRATE_PATTERN}\s*=\s*\{{"))
+        .expect("RELEASE_DEP_TABLE_LINE_RE is valid")
 });
 static VERSION_KV_PRESENT_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"version\s*=\s*"[^"]+""#).expect("VERSION_KV_PRESENT_RE is valid")
@@ -2438,7 +2439,7 @@ fn update_workspace_dependencies_section(
 
     let mut mismatches = Vec::new();
     for line in &mut lines[start..end] {
-        if !CRANPOSE_DEP_TABLE_LINE_RE.is_match(line) {
+        if !RELEASE_DEP_TABLE_LINE_RE.is_match(line) {
             continue;
         }
         if !VERSION_KV_PRESENT_RE.is_match(line) {
@@ -2458,7 +2459,7 @@ fn update_workspace_dependencies_section(
         Ok(())
     } else {
         Err(format!(
-            "Some cranpose workspace dependencies were not updated:\n{}",
+            "Some release workspace dependencies were not updated:\n{}",
             mismatches.join("\n")
         ))
     }
@@ -6428,7 +6429,7 @@ cranpose v0.1.0
             .expect_err("a dependency with no version key must be reported, not silently kept");
 
         assert!(
-            error.contains("Some cranpose workspace dependencies were not updated"),
+            error.contains("Some release workspace dependencies were not updated"),
             "{error}"
         );
         let unchanged = fs::read_to_string(root.join("Cargo.toml")).expect("read manifest");
