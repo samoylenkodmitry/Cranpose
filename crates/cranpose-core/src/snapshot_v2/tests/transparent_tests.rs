@@ -1,10 +1,7 @@
 use std::rc::Rc;
 
 use super::*;
-use crate::{
-    snapshot_v2::runtime::TestRuntimeGuard,
-    state::{ObjectId, PREEXISTING_SNAPSHOT_ID, StateObject, StateRecord},
-};
+use crate::state::{ObjectId, PREEXISTING_SNAPSHOT_ID, StateObject, StateRecord};
 
 fn mock_state_record() -> Rc<StateRecord> {
     StateRecord::new(PREEXISTING_SNAPSHOT_ID, (), None)

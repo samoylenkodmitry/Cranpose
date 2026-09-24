@@ -1,10 +1,52 @@
 use std::rc::Rc;
 
 use super::*;
-use crate::snapshot_v2::runtime::TestRuntimeGuard;
 
 fn mock_state_record() -> Rc<crate::state::StateRecord> {
     crate::state::StateRecord::new(crate::state::PREEXISTING_SNAPSHOT_ID, (), None)
+}
+
+struct TestObj {
+    id: crate::state::ObjectId,
+}
+
+impl StateObject for TestObj {
+    fn object_id(&self) -> crate::state::ObjectId {
+        self.id
+    }
+
+    fn first_record(&self) -> Rc<crate::state::StateRecord> {
+        mock_state_record()
+    }
+
+    fn try_readable_record(
+        &self,
+        snapshot_id: crate::snapshot_id_set::SnapshotId,
+        invalid: &SnapshotIdSet,
+    ) -> Option<Rc<crate::state::StateRecord>> {
+        Some(self.readable_record(snapshot_id, invalid))
+    }
+
+    fn readable_record(
+        &self,
+        _snapshot_id: crate::snapshot_id_set::SnapshotId,
+        _invalid: &SnapshotIdSet,
+    ) -> Rc<crate::state::StateRecord> {
+        mock_state_record()
+    }
+
+    fn prepend_state_record(&self, _record: Rc<crate::state::StateRecord>) {}
+
+    fn promote_record(
+        &self,
+        _child_id: crate::snapshot_id_set::SnapshotId,
+    ) -> Result<(), &'static str> {
+        Ok(())
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 #[test]
@@ -75,43 +117,6 @@ fn test_nested_mutable_apply() {
 #[test]
 fn test_nested_merge_sets_parent_pending_changes() {
     let _guard = reset_runtime_for_tests();
-    struct TestObj {
-        id: crate::state::ObjectId,
-    }
-    impl StateObject for TestObj {
-        fn object_id(&self) -> crate::state::ObjectId {
-            self.id
-        }
-        fn first_record(&self) -> Rc<crate::state::StateRecord> {
-            mock_state_record()
-        }
-        fn try_readable_record(
-            &self,
-            snapshot_id: crate::snapshot_id_set::SnapshotId,
-            invalid: &SnapshotIdSet,
-        ) -> Option<Rc<crate::state::StateRecord>> {
-            Some(self.readable_record(snapshot_id, invalid))
-        }
-        fn readable_record(
-            &self,
-            _snapshot_id: crate::snapshot_id_set::SnapshotId,
-            _invalid: &SnapshotIdSet,
-        ) -> Rc<crate::state::StateRecord> {
-            mock_state_record()
-        }
-        fn prepend_state_record(&self, _record: Rc<crate::state::StateRecord>) {}
-        fn promote_record(
-            &self,
-            _child_id: crate::snapshot_id_set::SnapshotId,
-        ) -> Result<(), &'static str> {
-            Ok(())
-        }
-
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-    }
-
     let parent = MutableSnapshot::new(1, SnapshotIdSet::new(), None, None, 0);
     let child = parent.take_nested_mutable_snapshot(None, None);
 
@@ -127,43 +132,6 @@ fn test_nested_merge_sets_parent_pending_changes() {
 #[test]
 fn test_nested_conflict_with_parent_same_object() {
     let _guard = reset_runtime_for_tests();
-    struct TestObj {
-        id: crate::state::ObjectId,
-    }
-    impl StateObject for TestObj {
-        fn object_id(&self) -> crate::state::ObjectId {
-            self.id
-        }
-        fn first_record(&self) -> Rc<crate::state::StateRecord> {
-            mock_state_record()
-        }
-        fn try_readable_record(
-            &self,
-            snapshot_id: crate::snapshot_id_set::SnapshotId,
-            invalid: &SnapshotIdSet,
-        ) -> Option<Rc<crate::state::StateRecord>> {
-            Some(self.readable_record(snapshot_id, invalid))
-        }
-        fn readable_record(
-            &self,
-            _snapshot_id: crate::snapshot_id_set::SnapshotId,
-            _invalid: &SnapshotIdSet,
-        ) -> Rc<crate::state::StateRecord> {
-            mock_state_record()
-        }
-        fn prepend_state_record(&self, _record: Rc<crate::state::StateRecord>) {}
-        fn promote_record(
-            &self,
-            _child_id: crate::snapshot_id_set::SnapshotId,
-        ) -> Result<(), &'static str> {
-            Ok(())
-        }
-
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-    }
-
     let parent = MutableSnapshot::new(1, SnapshotIdSet::new(), None, None, 0);
     let child = parent.take_nested_mutable_snapshot(None, None);
 

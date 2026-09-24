@@ -9,6 +9,29 @@ use crate::{
 #[derive(Clone, Eq, Hash, PartialEq)]
 struct TestScope(&'static str);
 
+fn setup_observer_test() -> (Arc<SnapshotMutableState<i32>>, Rc<Cell<i32>>, SnapshotStateObserver) {
+    let state = SnapshotMutableState::new_in_arc(0, Arc::new(NeverEqual));
+    let triggered = Rc::new(Cell::new(0));
+    let observer = SnapshotStateObserver::new(|callback| callback());
+    observer.start();
+    (state, triggered, observer)
+}
+
+macro_rules! observe_with_trigger_setup {
+    ($observer:expr, $scope:expr, $triggered:expr, $read_fn:expr) => {
+        {
+            let observer_trigger = $triggered.clone();
+            $observer.observe_reads(
+                $scope,
+                move |_| {
+                    observer_trigger.set(observer_trigger.get() + 1);
+                },
+                $read_fn,
+            );
+        }
+    };
+}
+
 #[test]
 fn scope_update_reuses_storage_and_replaces_payload_and_callback() {
     let first = Rc::new(String::from("first"));
@@ -245,23 +268,11 @@ fn callback_captures_are_released_on_replacement_and_clear() {
 fn notifies_scope_when_state_changes() {
     let _guard = reset_runtime_for_tests();
 
-    let state = SnapshotMutableState::new_in_arc(0, Arc::new(NeverEqual));
-    let triggered = Rc::new(Cell::new(0));
-    let observer_trigger = triggered.clone();
-
-    let observer = SnapshotStateObserver::new(|callback| callback());
-    observer.start();
-
+    let (state, triggered, observer) = setup_observer_test();
     let scope = TestScope("scope");
-    observer.observe_reads(
-        scope,
-        move |_| {
-            observer_trigger.set(observer_trigger.get() + 1);
-        },
-        || {
-            let _ = state.get();
-        },
-    );
+    observe_with_trigger_setup!(&observer, scope, &triggered, || {
+        let _ = state.get();
+    });
 
     let snapshot = take_mutable_snapshot(None, None);
     snapshot.enter(|| {
@@ -277,23 +288,11 @@ fn notifies_scope_when_state_changes() {
 fn clear_removes_scope_observation() {
     let _guard = reset_runtime_for_tests();
 
-    let state = SnapshotMutableState::new_in_arc(0, Arc::new(NeverEqual));
-    let triggered = Rc::new(Cell::new(0));
-    let observer_trigger = triggered.clone();
-
-    let observer = SnapshotStateObserver::new(|callback| callback());
-    observer.start();
-
+    let (state, triggered, observer) = setup_observer_test();
     let scope = TestScope("scope");
-    observer.observe_reads(
-        scope.clone(),
-        move |_| {
-            observer_trigger.set(observer_trigger.get() + 1);
-        },
-        || {
-            let _ = state.get();
-        },
-    );
+    observe_with_trigger_setup!(&observer, scope.clone(), &triggered, || {
+        let _ = state.get();
+    });
 
     observer.clear(&scope);
 
@@ -339,25 +338,13 @@ fn repeated_owned_scope_observations_reuse_the_same_entry() {
 fn with_no_observations_skips_reads() {
     let _guard = reset_runtime_for_tests();
 
-    let state = SnapshotMutableState::new_in_arc(0, Arc::new(NeverEqual));
-    let triggered = Rc::new(Cell::new(0));
-    let observer_trigger = triggered.clone();
-
-    let observer = SnapshotStateObserver::new(|callback| callback());
-    observer.start();
-
+    let (state, triggered, observer) = setup_observer_test();
     let scope = TestScope("scope");
-    observer.observe_reads(
-        scope,
-        move |_| {
-            observer_trigger.set(observer_trigger.get() + 1);
-        },
-        || {
-            observer.with_no_observations(|| {
-                let _ = state.get();
-            });
-        },
-    );
+    observe_with_trigger_setup!(&observer, scope, &triggered, || {
+        observer.with_no_observations(|| {
+            let _ = state.get();
+        });
+    });
 
     let snapshot = take_mutable_snapshot(None, None);
     snapshot.enter(|| {
