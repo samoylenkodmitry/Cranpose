@@ -55,7 +55,7 @@ jobs:
     timeout-minutes: 20
     defaults:
       run:
-        shell: scripts/ci/with_host_lock.sh --shared bash --noprofile --norc -eo pipefail {0}
+        shell: ${{ github.workspace }}/scripts/ci/with_host_lock.sh --shared bash --noprofile --norc -eo pipefail {0}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -229,7 +229,7 @@ jobs:
     runs-on: [self-hosted, Linux, cranpose-heavy]
     defaults:
       run:
-        shell: scripts/ci/with_host_lock.sh --shared bash --noprofile --norc -eo pipefail {0}
+        shell: ${{ github.workspace }}/scripts/ci/with_host_lock.sh --shared bash --noprofile --norc -eo pipefail {0}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
