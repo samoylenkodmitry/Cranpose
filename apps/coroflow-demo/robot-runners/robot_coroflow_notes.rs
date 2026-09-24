@@ -94,6 +94,21 @@ fn drive(robot: &Robot, output: &Path) -> usize {
         "adding a note shows a one-shot snackbar",
     );
 
+    click_text(robot, "Try coroflow in a real app");
+    settle(robot, 900);
+    capture(robot, output, "05b-note");
+    check(
+        has_text(robot, "Note #4"),
+        "tapping a note opens its own screen",
+    );
+    click_button(robot, "Back");
+    settle(robot, 900);
+    capture(robot, output, "05c-back-to-list");
+    check(
+        has_text(robot, "2 of 5 notes"),
+        "going back shows the list as it was left",
+    );
+
     click_button(robot, "Diagnostics");
     settle(robot, 500);
     capture(robot, output, "06-diagnostics-running");

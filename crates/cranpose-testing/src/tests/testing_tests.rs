@@ -127,6 +127,28 @@ fn cranpose_test_rule_replays_root_render_requests_before_returning() {
 }
 
 #[test]
+fn cranpose_test_rule_is_idle_while_a_frame_callback_waits_for_the_next_frame() {
+    run_test_composition(|rule| {
+        rule.set_content(|| {}).expect("initial render");
+        let fired = Rc::new(Cell::new(false));
+        let flag = Rc::clone(&fired);
+        let _registration = rule
+            .runtime_handle()
+            .frame_clock()
+            .with_frame_nanos(move |_| flag.set(true));
+
+        assert_eq!(
+            rule.pump_until_idle(),
+            Ok(()),
+            "a running animation owes the next frame, not another recomposition"
+        );
+        assert!(!fired.get(), "pumping does not advance time");
+        rule.advance_frame(16_666_667).expect("frame");
+        assert!(fired.get());
+    });
+}
+
+#[test]
 fn cranpose_test_rule_reports_idle_replay_limit_without_panicking() {
     run_test_composition(|rule| {
         rule.composition().request_root_render();

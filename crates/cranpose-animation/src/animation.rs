@@ -1192,8 +1192,9 @@ pub fn animate_float_as_state_with_initial(
     let caller = cranpose_core::caller_location_key();
     with_current_composer(|composer| {
         let runtime = composer.runtime_handle();
-        let anim: Owned<Animatable<f32>> =
-            composer.remember_at(caller, || Animatable::new(initial, runtime));
+        let anim: Owned<Animatable<f32>> = composer.remember_at(caller, || {
+            Animatable::new_with_animation(initial, animation, runtime)
+        });
         anim.update(|animatable| {
             let is_new_target = (animatable.target() - target).abs() > f32::EPSILON;
             let is_new_animation = animatable.animation_type() != animation;

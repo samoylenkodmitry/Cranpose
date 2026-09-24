@@ -6,7 +6,10 @@
 //! | Android | Cranpose |
 //! |---|---|
 //! | `Dispatchers.Main` | [`main_dispatcher`], then `coroflow::Dispatchers::main()` |
-//! | `viewModel { }` + `viewModelScope` | [`rememberViewModel`], a `Copy` [`Handle`] |
+//! | `viewModel(key) { }` + `viewModelScope` | [`viewModel`], a `Copy` [`Handle`] |
+//! | `ViewModelStore`, `LocalViewModelStoreOwner provides` | [`ViewModelStore`], [`ProvideViewModelStore`] |
+//! | A nested scope for a self-contained part of the UI | [`ViewModelStoreOwner`] |
+//! | `LifecycleStartEffect`, `LifecycleResumeEffect` | [`LifecycleStartEffect`], [`LifecycleResumeEffect`] |
 //! | `SavedStateHandle` | [`SavedStateHandle`] |
 //! | `rememberCoroutineScope()` | [`rememberCoroutineScope`] |
 //! | `StateFlow.collectAsState()` | [`StateFlowCollect::collectAsState`] |
@@ -21,14 +24,21 @@
 mod dispatcher;
 mod hooks;
 mod lifecycle;
+mod lifecycle_effects;
 mod saved_state;
 mod snapshot_flow;
+mod view_model;
 
 pub use dispatcher::main_dispatcher;
 pub use hooks::{
     CollectFlow, FlowCollect, Handle, StateFlowCollect, collects_in, rememberCoroutineScope,
-    rememberHandle, rememberViewModel,
+    rememberHandle,
 };
 pub use lifecycle::{LifecycleFlowExt, is_active_for, lifecycle_state_flow, repeat_on_lifecycle};
+pub use lifecycle_effects::{
+    LifecyclePauseOrDisposeEffectResult, LifecycleResumeEffect, LifecycleResumePauseEffectScope,
+    LifecycleStartEffect, LifecycleStartStopEffectScope, LifecycleStopOrDisposeEffectResult,
+};
 pub use saved_state::SavedStateHandle;
 pub use snapshot_flow::{SnapshotFlow, SnapshotRun, snapshotFlow};
+pub use view_model::{ProvideViewModelStore, ViewModelStore, ViewModelStoreOwner, viewModel};

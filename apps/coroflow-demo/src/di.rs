@@ -5,7 +5,7 @@
 
 use std::{sync::Arc, time::Duration};
 
-use coroflow::{Dispatcher, Dispatchers, StateFlow};
+use coroflow::{Dispatcher, Dispatchers, MutableStateFlow, StateFlow};
 
 use crate::{
     data::{
@@ -16,7 +16,10 @@ use crate::{
     },
     domain::{
         repository::{NotesRepository, SyncRepository},
-        use_cases::{AddNote, DeleteNote, ObserveNotes, ObserveSync, SearchCatalog, TogglePinned},
+        use_cases::{
+            AddNote, DeleteNote, ObserveNote, ObserveNotes, ObserveSync, SearchCatalog,
+            TogglePinned,
+        },
     },
     presentation::notes_view_model::NotesUseCases,
 };
@@ -72,6 +75,7 @@ pub struct AppContainer {
     catalog: Arc<CatalogApi>,
     sync: Arc<SyncService>,
     dispatchers: AppDispatchers,
+    notes_state_running: MutableStateFlow<bool>,
 }
 
 impl AppContainer {
@@ -90,6 +94,7 @@ impl AppContainer {
             catalog,
             sync,
             dispatchers,
+            notes_state_running: MutableStateFlow::new(false),
         }
     }
 
@@ -101,12 +106,19 @@ impl AppContainer {
                 Arc::clone(repository),
                 self.dispatchers.compute.clone(),
             ),
+            observe_note: ObserveNote::new(Arc::clone(repository)),
             search_catalog: SearchCatalog::new(Arc::clone(repository)),
             add_note: AddNote::new(Arc::clone(repository)),
             toggle_pinned: TogglePinned::new(Arc::clone(repository)),
             delete_note: DeleteNote::new(Arc::clone(repository)),
             observe_sync: ObserveSync::new(Arc::clone(&self.sync) as Arc<dyn SyncRepository>),
+            state_running: self.notes_state_running.clone(),
         }
+    }
+
+    /// Whether the notes screen state is being computed.
+    pub fn notes_state_running(&self) -> StateFlow<bool> {
+        self.notes_state_running.as_state_flow()
     }
 
     /// How catalog requests have ended.

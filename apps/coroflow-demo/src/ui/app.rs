@@ -1,51 +1,50 @@
 use cranpose::prelude::*;
-use cranpose_coroflow::{rememberHandle, rememberViewModel};
+use cranpose_coroflow::rememberHandle;
+use cranpose_navigation::{NavController, NavHost, NavOptions, rememberNavController};
 use cranpose_ui::widgets::{PaddingValues, Scaffold};
 
 use super::{
     diagnostics_screen::DiagnosticsScreen,
+    note_screen::NoteScreen,
     notes_screen::{ActionButton, NotesScreen},
     theme::{PALETTE, caption, heading},
 };
 use crate::{
     di::{AppConfig, AppContainer, AppDispatchers},
-    presentation::notes_view_model::NotesViewModel,
+    domain::model::NoteId,
 };
 
 const TITLE: &str = "Coroflow Notes";
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Tab {
+/// Where the demo can go. Each screen gets its own view model store from the
+/// `NavHost`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Screen {
+    /// The notes list, the start destination.
     Notes,
+    /// One note.
+    Note(NoteId),
+    /// Which upstreams are running.
     Diagnostics,
 }
 
-impl Tab {
-    const ALL: [Tab; 2] = [Tab::Notes, Tab::Diagnostics];
-
-    fn label(self) -> &'static str {
-        match self {
-            Tab::Notes => "Notes",
-            Tab::Diagnostics => "Diagnostics",
-        }
-    }
-}
+const TABS: [(Screen, &str); 2] = [
+    (Screen::Notes, "Notes"),
+    (Screen::Diagnostics, "Diagnostics"),
+];
 
 /// The window this demo opens.
 pub fn create_app() -> AppLauncher {
     AppLauncher::new().with_title(TITLE).with_size(760, 720)
 }
 
-/// The root composable: builds the object graph once, keeps one view model
-/// for the whole window, and switches between the two screens.
+/// The root composable: builds the object graph once and navigates between
+/// the screens.
 #[composable]
 pub fn CoroflowDemoApp() {
     let container =
         rememberHandle(|| AppContainer::new(AppDispatchers::standard(), AppConfig::interactive()));
-    let view_model = rememberViewModel(move |scope| {
-        NotesViewModel::new(scope, container.get().notes_use_cases())
-    });
-    let tab = rememberMutableStateOf(|| Tab::Notes);
+    let nav = rememberNavController(Screen::Notes);
 
     Scaffold(
         Modifier::empty()
@@ -53,14 +52,17 @@ pub fn CoroflowDemoApp() {
             .background(PALETTE.background)
             .safe_area_padding(),
         || TopBar(),
-        move || TabBar(tab),
+        move || TabBar(nav),
         move |padding: PaddingValues| {
             Box(
                 padding.apply_to(Modifier::empty().fill_max_size()),
                 BoxSpec::default(),
-                move || match tab.value() {
-                    Tab::Notes => NotesScreen(view_model),
-                    Tab::Diagnostics => DiagnosticsScreen(container, view_model),
+                move || {
+                    NavHost(nav, move |screen| match screen {
+                        Screen::Notes => NotesScreen(container, nav),
+                        Screen::Note(id) => NoteScreen(container, id, nav),
+                        Screen::Diagnostics => DiagnosticsScreen(container),
+                    });
                 },
             );
         },
@@ -87,7 +89,8 @@ fn TopBar() {
 }
 
 #[composable]
-fn TabBar(tab: MutableState<Tab>) {
+fn TabBar(nav: NavController<Screen>) {
+    let current = nav.current_route();
     Row(
         Modifier::empty()
             .fill_max_width()
@@ -95,13 +98,20 @@ fn TabBar(tab: MutableState<Tab>) {
             .background(PALETTE.surface),
         RowSpec::default().horizontal_arrangement(LinearArrangement::SpaceEvenly),
         move || {
-            for candidate in Tab::ALL {
-                let color = if tab.value() == candidate {
+            for (tab, label) in TABS {
+                let color = if current == Some(tab) {
                     PALETTE.primary
                 } else {
                     PALETTE.raised
                 };
-                ActionButton(candidate.label(), color, move || tab.set(candidate));
+                ActionButton(label, color, move || {
+                    nav.navigate_with(
+                        tab,
+                        NavOptions::new()
+                            .pop_up_to(Screen::Notes, false)
+                            .launch_single_top(),
+                    );
+                });
             }
         },
     );

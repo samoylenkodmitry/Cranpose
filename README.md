@@ -135,6 +135,9 @@ A list that only composes what is on screen uses `LazyColumn` with
 | `cranpose-animation` | Springs, tweens, transitions, `animate*AsState` |
 | `cranpose-liquid` | Glass component library: iOS-26-style materials, spring motion |
 | `cranpose-services` | HTTP, clipboard, share, notifications, file picker, haptics, purchases, camera, theme |
+| `coroflow` | Kotlin-style coroutines and Flow, independent of any async runtime ([plan](docs/coroflow_plan.md)) |
+| `cranpose-coroflow` | Coroflow inside compositions: view models and their stores, `collectAsState`, lifecycle effects |
+| `cranpose-navigation` | `NavHost`, a typed back stack and a view model store per screen ([plan](docs/navigation_plan.md)) |
 | `cranpose-audio` | Real-time audio (AAudio on Android/Wear OS, cpal on desktop) |
 | `cranpose-media` | In-process media playback backing `cranpose_services::media` (symphonia, on the audio engine's device) |
 | `cranpose-storekit` | StoreKit 2 in-app purchases (iOS/macOS) |

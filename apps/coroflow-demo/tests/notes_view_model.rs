@@ -1,4 +1,4 @@
-use std::{task::Poll, time::Duration};
+use std::{rc::Rc, task::Poll, time::Duration};
 
 use coroflow::{Flow, MainScope, TestScheduler, Turbine};
 use coroflow_demo::{
@@ -8,12 +8,18 @@ use coroflow_demo::{
         model::{CatalogResults, Note, NoteId, SyncStatus},
         use_cases::filter_notes,
     },
-    presentation::notes_view_model::{NotesEvent, NotesViewModel},
+    presentation::{
+        note_row_view_model::NoteRowViewModel,
+        note_view_model::NoteViewModel,
+        notes_messages::{NotesEvent, NotesMessages},
+        notes_view_model::NotesViewModel,
+    },
 };
 
 struct Harness {
     scheduler: TestScheduler,
     container: AppContainer,
+    messages: Rc<NotesMessages>,
     view_model: NotesViewModel,
 }
 
@@ -34,15 +40,26 @@ impl Harness {
             },
         };
         let container = AppContainer::new(dispatchers, config);
+        let messages = Rc::new(NotesMessages::default());
         let view_model = NotesViewModel::new(
             MainScope::new(scheduler.main_dispatcher()),
             container.notes_use_cases(),
+            Rc::clone(&messages),
         );
         Self {
             scheduler,
             container,
+            messages,
             view_model,
         }
+    }
+
+    fn row(&self) -> NoteRowViewModel {
+        NoteRowViewModel::new(
+            MainScope::new(self.scheduler.main_dispatcher()),
+            self.container.notes_use_cases(),
+            Rc::clone(&self.messages),
+        )
     }
 
     fn catalog(&self) -> CatalogResults {
@@ -73,6 +90,7 @@ fn local_filtering_follows_every_keystroke() {
     let harness = Harness::new();
     let _screen = harness.view_model.ui_state().open();
     harness.view_model.on_query_changed("KEEP".to_string());
+    assert_eq!(harness.view_model.query(), "KEEP");
     harness.scheduler.run_current();
     let notes = harness.view_model.ui_state().value().notes;
     assert_eq!(notes.query, "KEEP");
@@ -166,10 +184,11 @@ fn a_failing_catalog_is_reported_in_the_state() {
 }
 
 #[test]
-fn intents_update_storage_and_emit_one_shot_events() {
+fn the_screen_and_its_rows_report_through_one_message_bus() {
     let harness = Harness::new();
     let _screen = harness.view_model.ui_state().open();
-    let mut events = Turbine::of(&harness.view_model.events());
+    let mut events = Turbine::of(&harness.messages.events());
+    let row = harness.row();
     harness.scheduler.run_current();
 
     harness.view_model.on_add_note("  Buy milk  ".to_string());
@@ -195,8 +214,10 @@ fn intents_update_storage_and_emit_one_shot_events() {
     );
 
     if let Some(note) = added {
-        harness.view_model.on_toggle_pinned(note.clone());
+        row.on_toggle_pinned(note.clone());
+        assert!(row.busy().value(), "the row shows its pin is running");
         harness.scheduler.run_current();
+        assert!(!row.busy().value());
         let first = harness.view_model.ui_state().value().notes.visible[0].clone();
         assert_eq!(
             (first.id, first.pinned),
@@ -204,14 +225,18 @@ fn intents_update_storage_and_emit_one_shot_events() {
             "pinning moves it to the top"
         );
 
-        harness.view_model.on_delete(note.id);
+        row.on_delete(note.clone());
         harness.scheduler.run_current();
         assert_eq!(
             events.next_now(),
             Poll::Ready(Some(NotesEvent::Deleted("Buy milk".to_string())))
         );
     }
-    harness.view_model.on_delete(NoteId(999));
+    row.on_delete(Note {
+        id: NoteId(999),
+        title: "gone".to_string(),
+        pinned: false,
+    });
     harness.scheduler.run_current();
     assert_eq!(
         events.next_now(),
@@ -220,6 +245,47 @@ fn intents_update_storage_and_emit_one_shot_events() {
         )))
     );
     assert_eq!(harness.view_model.ui_state().value().notes.total, 4);
+}
+
+#[test]
+fn the_note_screen_follows_its_note_until_it_is_deleted() {
+    let harness = Harness::new();
+    let _screen = harness.view_model.ui_state().open();
+    harness.scheduler.run_current();
+    let target = harness
+        .view_model
+        .ui_state()
+        .value()
+        .notes
+        .visible
+        .first()
+        .cloned()
+        .expect("the starter notes are listed");
+    let note = NoteViewModel::new(
+        MainScope::new(harness.scheduler.main_dispatcher()),
+        target.id,
+        harness.container.notes_use_cases(),
+    );
+    let _open = note.note().open();
+    harness.scheduler.run_current();
+    assert_eq!(note.note().value(), Some(target.clone()));
+
+    note.on_toggle_pinned();
+    harness.scheduler.run_current();
+    assert_eq!(
+        note.note().value().map(|note| note.pinned),
+        Some(!target.pinned),
+        "the screen follows the stored note"
+    );
+
+    assert!(!note.deleted().value());
+    note.on_delete();
+    harness.scheduler.run_current();
+    assert!(
+        note.deleted().value(),
+        "the screen closes once the note is gone"
+    );
+    assert_eq!(note.note().value(), None);
 }
 
 #[test]
@@ -297,6 +363,7 @@ fn dropping_the_view_model_cancels_its_work() {
         scheduler,
         container,
         view_model,
+        ..
     } = harness;
     drop(screen);
     drop(view_model);

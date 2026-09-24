@@ -100,4 +100,5 @@ finds the slowest collector again under the flow's lock.
 - Cancellation drops the coroutine's future, so there is no `isActive`,
   `ensureActive` or `NonCancellable`. Cleanup runs in `Drop` and cannot suspend.
 - `Send` is inferred from what a flow or coroutine captures, not declared.
-- View models cannot be scoped to a navigation entry until Cranpose has navigation.
+- View model stores, `NavHost` and screen-scoped view models are planned in
+  [navigation_plan.md](navigation_plan.md).

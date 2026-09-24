@@ -1,7 +1,6 @@
 [package]
 name = "coroflow"
 description = "Kotlin-style coroutines and Flow for Rust, independent of any async runtime"
-publish = false
 version.workspace = true
 edition.workspace = true
 license.workspace = true

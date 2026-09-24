@@ -12,15 +12,7 @@ mod support;
 use coroflow::{FlowExt, MainScope, MutableSharedFlow};
 use cranpose_core::{Composition, MemoryApplier};
 use cranpose_coroflow::{FlowCollect, Handle, rememberCoroutineScope};
-use support::{composition, pump_until};
-
-struct DropMarker(Arc<AtomicUsize>);
-
-impl Drop for DropMarker {
-    fn drop(&mut self) {
-        self.0.fetch_add(1, Ordering::SeqCst);
-    }
-}
+use support::{DropMarker, composition, pump_until};
 
 #[test]
 fn any_flow_collects_into_state_from_an_initial_value() {

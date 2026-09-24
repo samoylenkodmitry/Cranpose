@@ -38,10 +38,11 @@ path = "robot-runners/robot_coroflow_notes.rs"
 required-features = ["robot"]
 
 [dependencies]
-coroflow = { path = "../../crates/coroflow" }
+coroflow = { workspace = true }
 cranpose = { workspace = true, features = ["embedded-default-font"] }
 cranpose-core = { workspace = true }
-cranpose-coroflow = { path = "../../crates/cranpose-coroflow" }
+cranpose-coroflow = { workspace = true }
+cranpose-navigation = { workspace = true }
 cranpose-foundation = { workspace = true }
 cranpose-ui = { workspace = true }
 env_logger = { version = "0.11", optional = true }

@@ -89,7 +89,7 @@ impl ComposeTestRule {
                 });
             }
 
-            if self.composition.should_render() {
+            if self.composition.should_recompose() {
                 self.render()?;
                 progressed = true;
             }
