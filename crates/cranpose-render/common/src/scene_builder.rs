@@ -19,7 +19,7 @@ use crate::{
         PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform, RenderGraph,
         RenderNode, TextPrimitiveNode,
     },
-    layer_transform::layer_transform_to_parent,
+    layer_transform::{layer_scales_or_rotates, layer_transform_to_parent},
     raster_cache::LayerRasterCacheHashes,
     style_shared::{DrawPlacement, recording_for_placement_reusing},
 };
@@ -1108,11 +1108,7 @@ fn build_layer_node_internal(
     let graphics_layer = graphics_layer.unwrap_or_default();
     let transform_to_parent = layer_transform_to_parent(local_bounds, placement, &graphics_layer);
     let isolation = isolation_reasons(&graphics_layer);
-    let cache_policy = if isolation.has_any() {
-        CachePolicy::Auto
-    } else {
-        CachePolicy::None
-    };
+    let cache_policy = layer_cache_policy(&graphics_layer, isolation);
     let shadow_clip = clip_to_bounds.then_some(local_bounds);
     let hit_test = (!click_actions.is_empty()
         || !pointer_inputs.is_empty()
@@ -1377,11 +1373,7 @@ fn build_layer_node_from_data(
     let transform_to_parent =
         layer_transform_to_parent(local_bounds, layout_state.position(), &graphics_layer);
     let isolation = isolation_reasons(&graphics_layer);
-    let cache_policy = if isolation.has_any() {
-        CachePolicy::Auto
-    } else {
-        CachePolicy::None
-    };
+    let cache_policy = layer_cache_policy(&graphics_layer, isolation);
     let shadow_clip = clip_to_bounds.then_some(local_bounds);
     let hit_test = hit_test_from_slices(
         &modifier_slices,
@@ -1966,6 +1958,14 @@ fn graphics_layer_with_shaped_clip(
         graphics_layer.clip = true;
     }
     graphics_layer
+}
+
+fn layer_cache_policy(layer: &GraphicsLayer, isolation: IsolationReasons) -> CachePolicy {
+    if isolation.has_any() || layer_scales_or_rotates(layer) {
+        CachePolicy::Auto
+    } else {
+        CachePolicy::None
+    }
 }
 
 fn isolation_reasons(layer: &GraphicsLayer) -> IsolationReasons {

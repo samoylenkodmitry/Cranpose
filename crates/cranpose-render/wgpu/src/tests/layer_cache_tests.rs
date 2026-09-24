@@ -195,3 +195,20 @@ fn a_texture_retained_again_while_pending_retirement_is_pending_no_more() {
     assert_eq!(released[0].0, Some(descriptor(64)));
     assert!(cache.take_released().is_empty());
 }
+
+#[test]
+fn many_small_surfaces_stay_cached_within_the_byte_budget() {
+    let (_lock, device, _queue) = upload_test_device();
+    let mut cache = LayerCache::new();
+    let surfaces = 1000;
+    for index in 0..surfaces {
+        assert!(cache.insert(key(index), Retained::surface(texture(&device, 1)), None));
+    }
+    assert_eq!(
+        cache.len(),
+        surfaces as usize,
+        "a screen of more isolated layers than an entry count allows would evict each \
+         surface just before the frame that reads it, every frame"
+    );
+    assert!(cache.get(&key(0)).is_some());
+}
