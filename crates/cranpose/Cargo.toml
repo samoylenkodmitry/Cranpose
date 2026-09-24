@@ -62,6 +62,7 @@ desktop-wayland = [
 # theme) so apps get working services without re-listing cranpose-services
 # features themselves.
 desktop-shell = [
+    "native-windows",
     "cranpose-app-shell/clipboard-native",
     "dep:objc2",
     "dep:objc2-app-kit",
@@ -79,9 +80,14 @@ desktop-shell = [
 # a loopback socket, and the host sends input back. See `cranpose::embed`.
 embed = [
     "renderer-wgpu",
+    "native-windows",
     "cranpose-app-shell/clipboard-native",
     "cranpose-services/uri-native",
 ]
+# Internal: the registry behind `Modifier::window`, serviced by the desktop
+# shell (winit windows) and by `embed` (windows the host creates). Use
+# `desktop` or `embed` instead of enabling this directly.
+native-windows = []
 ios = [
     "cranpose-platform-desktop-winit",
     "dep:winit",

@@ -1,6 +1,6 @@
 use std::cell::{Cell, RefCell};
 
-use cranpose_app_shell::Modifiers;
+use cranpose_app_shell::{AppShell, Modifiers};
 use cranpose_core::{location_key, remember};
 use cranpose_ui::{
     BasicTextField, Box, BoxSpec, Column, ColumnSpec, Modifier, ScrollState, Size, Spacer,
@@ -60,10 +60,14 @@ fn probe_shell() -> AppShell<WgpuRenderer> {
     shell
 }
 
+fn send(input: &EmbedInput, shell: &mut AppShell<WgpuRenderer>, event: SurfaceEvent) -> bool {
+    input.dispatch(&mut shell.primary(), &event)
+}
+
 fn click(input: &EmbedInput, shell: &mut AppShell<WgpuRenderer>, x: f32, y: f32) {
-    input.dispatch(shell, HostEvent::PointerMove { x, y });
-    input.dispatch(shell, HostEvent::PointerDown { x, y });
-    input.dispatch(shell, HostEvent::PointerUp { x, y });
+    send(input, shell, SurfaceEvent::PointerMove { x, y });
+    send(input, shell, SurfaceEvent::PointerDown { x, y });
+    send(input, shell, SurfaceEvent::PointerUp { x, y });
     shell.update();
 }
 
@@ -97,8 +101,12 @@ fn leaving_the_surface_is_not_a_click() {
     let input = EmbedInput::new();
     let mut shell = probe_shell();
 
-    input.dispatch(&mut shell, HostEvent::PointerMove { x: 50.0, y: 25.0 });
-    input.dispatch(&mut shell, HostEvent::PointerLeave);
+    send(
+        &input,
+        &mut shell,
+        SurfaceEvent::PointerMove { x: 50.0, y: 25.0 },
+    );
+    send(&input, &mut shell, SurfaceEvent::PointerLeave);
     shell.update();
 
     assert_eq!(CLICKS.with(Cell::get), 0);
@@ -109,9 +117,10 @@ fn a_wheel_down_scrolls_the_content_under_the_pointer() {
     let input = EmbedInput::new();
     let mut shell = probe_shell();
 
-    input.dispatch(
+    send(
+        &input,
         &mut shell,
-        HostEvent::Scroll {
+        SurfaceEvent::Scroll {
             x: 150.0,
             y: 150.0,
             delta_x: 0.0,
@@ -134,21 +143,23 @@ fn typed_text_and_keys_edit_the_focused_field() {
     let mut shell = probe_shell();
     click(&input, &mut shell, 100.0, 70.0);
 
-    input.dispatch(&mut shell, HostEvent::Text("hi".to_string()));
+    send(&input, &mut shell, SurfaceEvent::Text("hi".to_string()));
     shell.update();
     assert_eq!(field_text(), "hi");
 
-    input.dispatch(
+    send(
+        &input,
         &mut shell,
-        HostEvent::Key {
+        SurfaceEvent::Key {
             down: true,
             modifiers: Modifiers::NONE,
             code: "Backspace".to_string(),
         },
     );
-    input.dispatch(
+    send(
+        &input,
         &mut shell,
-        HostEvent::Key {
+        SurfaceEvent::Key {
             down: false,
             modifiers: Modifiers::NONE,
             code: "Backspace".to_string(),
@@ -159,11 +170,16 @@ fn typed_text_and_keys_edit_the_focused_field() {
 }
 
 #[test]
-fn surface_and_message_events_are_not_input() {
+fn surface_bookkeeping_events_are_not_input() {
     let input = EmbedInput::new();
     let mut shell = probe_shell();
 
-    assert!(!input.dispatch(&mut shell, HostEvent::Theme { dark: true }));
-    assert!(!input.dispatch(&mut shell, HostEvent::FrameAck(1)));
-    assert!(!input.dispatch(&mut shell, HostEvent::Close));
+    assert!(!send(&input, &mut shell, SurfaceEvent::FrameAck(1)));
+    assert!(!send(&input, &mut shell, SurfaceEvent::Visibility(false)));
+    assert!(!send(
+        &input,
+        &mut shell,
+        SurfaceEvent::Moved { x: 1.0, y: 2.0 }
+    ));
+    assert!(!send(&input, &mut shell, SurfaceEvent::CloseRequested));
 }

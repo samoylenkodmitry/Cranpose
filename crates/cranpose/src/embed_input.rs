@@ -1,9 +1,9 @@
-use cranpose_app_shell::{AppShell, KeyCode, KeyEvent, KeyEventType, PointerSource, WheelScroll};
+use cranpose_app_shell::{KeyCode, KeyEvent, KeyEventType, PointerSource, SurfaceMut, WheelScroll};
 use cranpose_render_wgpu::WgpuRenderer;
 use cranpose_ui::Point;
 use web_time::Instant;
 
-use crate::embed_protocol::HostEvent;
+use crate::embed_protocol::SurfaceEvent;
 
 const OUTSIDE_SURFACE: (f32, f32) = (-1.0, -1.0);
 
@@ -18,34 +18,38 @@ impl EmbedInput {
         }
     }
 
-    pub(crate) fn dispatch(&self, shell: &mut AppShell<WgpuRenderer>, event: HostEvent) -> bool {
-        match event {
-            HostEvent::PointerMove { x, y } => {
-                shell.set_pointer_source(PointerSource::Mouse);
-                shell.set_cursor(x, y)
+    pub(crate) fn dispatch(
+        &self,
+        surface: &mut SurfaceMut<'_, WgpuRenderer>,
+        event: &SurfaceEvent,
+    ) -> bool {
+        match *event {
+            SurfaceEvent::PointerMove { x, y } => {
+                surface.set_pointer_source(PointerSource::Mouse);
+                surface.set_cursor(x, y)
             }
-            HostEvent::PointerDown { x, y } => {
-                shell.set_pointer_source(PointerSource::Mouse);
-                let moved = shell.set_cursor(x, y);
-                shell.pointer_pressed() || moved
+            SurfaceEvent::PointerDown { x, y } => {
+                surface.set_pointer_source(PointerSource::Mouse);
+                let moved = surface.set_cursor(x, y);
+                surface.pointer_pressed() || moved
             }
-            HostEvent::PointerUp { x, y } => {
-                shell.set_pointer_source(PointerSource::Mouse);
-                shell.pointer_released_at_position(x, y)
+            SurfaceEvent::PointerUp { x, y } => {
+                surface.set_pointer_source(PointerSource::Mouse);
+                surface.pointer_released_at_position(x, y)
             }
-            HostEvent::PointerLeave => {
-                !shell.has_active_pointer_gesture()
-                    && shell.set_cursor(OUTSIDE_SURFACE.0, OUTSIDE_SURFACE.1)
+            SurfaceEvent::PointerLeave => {
+                !surface.has_active_pointer_gesture()
+                    && surface.set_cursor(OUTSIDE_SURFACE.0, OUTSIDE_SURFACE.1)
             }
-            HostEvent::Scroll {
+            SurfaceEvent::Scroll {
                 x,
                 y,
                 delta_x,
                 delta_y,
                 modifiers,
             } => {
-                shell.set_modifiers(modifiers);
-                let moved = shell.set_cursor(x, y);
+                surface.shell().set_modifiers(modifiers);
+                let moved = surface.set_cursor(x, y);
                 let scroll = WheelScroll::new(
                     Point {
                         x: delta_x,
@@ -54,33 +58,32 @@ impl EmbedInput {
                     self.uptime_millis(),
                 )
                 .with_modifiers(modifiers);
-                shell.wheel_scrolled(scroll) || moved
+                surface.wheel_scrolled(scroll) || moved
             }
-            HostEvent::Key {
+            SurfaceEvent::Key {
                 down,
                 modifiers,
-                code,
+                ref code,
             } => {
-                shell.set_modifiers(modifiers);
+                surface.shell().set_modifiers(modifiers);
                 let event_type = if down {
                     KeyEventType::KeyDown
                 } else {
                     KeyEventType::KeyUp
                 };
-                shell.on_key_event(&KeyEvent::new(
-                    KeyCode::from_dom_code(&code),
+                surface.on_key_event(&KeyEvent::new(
+                    KeyCode::from_dom_code(code),
                     "",
                     modifiers,
                     event_type,
                 ))
             }
-            HostEvent::Text(text) => shell.on_paste(&text),
-            HostEvent::Resize { .. }
-            | HostEvent::Theme { .. }
-            | HostEvent::Message { .. }
-            | HostEvent::FrameAck(_)
-            | HostEvent::Close
-            | HostEvent::Visibility(_) => false,
+            SurfaceEvent::Text(ref text) => surface.on_paste(text),
+            SurfaceEvent::Resize { .. }
+            | SurfaceEvent::FrameAck(_)
+            | SurfaceEvent::Visibility(_)
+            | SurfaceEvent::Moved { .. }
+            | SurfaceEvent::CloseRequested => false,
         }
     }
 
