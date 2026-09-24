@@ -6,12 +6,11 @@ use std::{
     time::Duration,
 };
 
-mod support;
-
 use coroflow::{
     Capacity, CoroutineScope, JobOutcome, Stalled, TestScheduler, channel, delay, flow_of, run_test,
 };
-use support::{DropMarker, endless, timed};
+
+use crate::support::{DropMarker, endless, timed};
 
 #[test]
 fn advance_until_idle_runs_every_timer_in_order() {
