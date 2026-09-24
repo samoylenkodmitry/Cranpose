@@ -31,7 +31,7 @@ impl Tab {
     }
 }
 
-/// The desktop window this demo opens.
+/// The window this demo opens.
 pub fn create_app() -> AppLauncher {
     AppLauncher::new().with_title(TITLE).with_size(760, 720)
 }
@@ -50,7 +50,8 @@ pub fn CoroflowDemoApp() {
     Scaffold(
         Modifier::empty()
             .fill_max_size()
-            .background(PALETTE.background),
+            .background(PALETTE.background)
+            .safe_area_padding(),
         || TopBar(),
         move || TabBar(tab),
         move |padding: PaddingValues| {

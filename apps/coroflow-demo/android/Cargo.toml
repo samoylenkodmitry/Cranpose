@@ -1,0 +1,27 @@
+[package]
+name = "coroflow-demo-android"
+description = "Android entry point of the Coroflow Notes demo."
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+name = "coroflow_notes"
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[features]
+android = ["cranpose/android", "coroflow-demo/android"]
+renderer-wgpu = ["cranpose/renderer-wgpu", "coroflow-demo/renderer-wgpu"]
+
+[dependencies]
+coroflow-demo = { path = "..", default-features = false }
+cranpose = { workspace = true, features = ["embedded-default-font"] }
+
+[build-dependencies]
+cranpose-capabilities = { path = "../../../crates/cranpose-capabilities" }

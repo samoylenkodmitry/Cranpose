@@ -78,8 +78,22 @@ with the same behavior. Items are ticked as they land.
 
 ## G. Verification
 
-- [ ] The coroflow demo runs on the Android emulator and the iOS simulator
-- [ ] Benchmarks: `launch`, `emit`, and a five-operator chain, against `futures` and `tokio`
+- [x] The coroflow demo runs on the Android emulator (`just android-coroflow`) and the iOS simulator (`just ios-run-coroflow`)
+- [x] Benchmarks: `launch`, `emit`, and a five-operator chain, against `futures` and `tokio` (`cargo bench -p coroflow --bench comparisons`)
+
+### Measured
+
+Apple M5, Rust 1.98.1, criterion medians:
+
+| Work | coroflow | Comparison |
+| --- | --- | --- |
+| Launch a coroutine and wait for it | 188 ns | tokio `current_thread`: 204 ns |
+| Set a state and read the change | 15.7 ns | tokio `watch`: 70 ns |
+| Broadcast an event to one collector | 24.2 ns | tokio `broadcast`: 18.6 ns |
+| 10,000 values through five operators | 9.4 µs | `futures` stream: 13.6 µs |
+
+The shared flow round trip is the one slower case: each emit and each read
+finds the slowest collector again under the flow's lock.
 
 ## Deliberate differences
 

@@ -873,11 +873,14 @@ dependencies = [
 name = "coroflow"
 version = "0.1.160"
 dependencies = [
+ "criterion",
  "futures-core",
+ "futures-util",
  "log",
  "pollster",
  "stats_alloc",
  "thiserror 2.0.20",
+ "tokio",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
@@ -899,6 +902,15 @@ dependencies = [
  "image",
  "log",
  "thiserror 2.0.20",
+]
+
+[[package]]
+name = "coroflow-demo-android"
+version = "0.1.160"
+dependencies = [
+ "coroflow-demo",
+ "cranpose",
+ "cranpose-capabilities",
 ]
 
 [[package]]

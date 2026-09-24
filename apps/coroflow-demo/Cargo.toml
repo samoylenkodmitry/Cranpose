@@ -18,10 +18,17 @@ name = "coroflow-demo"
 path = "src/main.rs"
 required-features = ["desktop"]
 
+[[bin]]
+name = "coroflow-ios"
+path = "src/ios_main.rs"
+required-features = ["ios"]
+
 [features]
 default = ["renderer-wgpu", "desktop"]
 renderer-wgpu = ["cranpose/renderer-wgpu"]
 desktop = ["cranpose/desktop"]
+ios = ["renderer-wgpu", "cranpose/ios"]
+android = ["renderer-wgpu", "cranpose/android"]
 logging = ["dep:env_logger"]
 robot = ["desktop", "cranpose/robot"]
 
