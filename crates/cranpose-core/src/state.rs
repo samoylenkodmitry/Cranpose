@@ -1222,7 +1222,11 @@ impl<T: Clone + 'static> MutableStateInner<T> {
         self.state.remove_scope_observers(removed_count);
 
         for watcher in watchers {
-            debug_record_scope_invalidation::<T>(watcher.id(), self.state_id.get());
+            debug_record_scope_invalidation(
+                watcher.id(),
+                self.state_id.get(),
+                std::any::type_name::<T>(),
+            );
             if let Some(state_id) = self.state_id.get() {
                 watcher.invalidate_from_state(state_id);
             } else {

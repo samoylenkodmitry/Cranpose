@@ -73,6 +73,9 @@ clippy-wasm:
 clippy-ios:
     cargo clippy -p desktop-app --bin cranpose-ios --bin cranpose-liquid-reference --target aarch64-apple-ios-sim --no-default-features --features ios -- -D warnings
 
+# The feature set `clippy-optional-backends` and `clippy-release` both lint.
+optional_backend_features := "desktop,renderer-wgpu,camera-desktop,robot,audio-desktop,media,storekit,playbilling,embed"
+
 # Lint the desktop-only backends that ship off by default: the macOS camera
 # capture path, the cpal audio output device, the in-process media backend
 # and the StoreKit purchase bridge.
@@ -90,7 +93,17 @@ clippy-ios:
 # `embed` rides along because no workspace member turns it on; the host that
 # uses it, the IntelliJ plugin template, lives in its own repository.
 clippy-optional-backends:
-    cargo clippy -p cranpose --no-default-features --features desktop,renderer-wgpu,camera-desktop,robot,audio-desktop,media,storekit,playbilling,embed --all-targets -- -D warnings
+    cargo clippy -p cranpose --no-default-features --features {{optional_backend_features}} --all-targets -- -D warnings
+
+# Lint the workspace and the optional backends in the release profile, which
+# every shipped binary builds with. Every other gate builds with
+# `debug_assertions` on, so code whose shape changes under
+# `cfg(debug_assertions)` -- a `#[cfg(debug_assertions)]` block that was the
+# only thing after an early `return`, or an `#[expect]` only the debug branch
+# fulfils -- warned in every release build and in no gate.
+clippy-release: _disk-guard
+    cargo clippy --workspace --all-targets --release -- -D warnings
+    cargo clippy -p cranpose --no-default-features --features {{optional_backend_features}} --all-targets --release -- -D warnings
 
 # Lint the SVG image painter. `svg` is off by default and no crate in the
 # workspace ever turns it on, so `just clippy` never builds `image_svg.rs`
@@ -754,7 +767,7 @@ _disk-guard:
 # all seven on every pull request.
 
 # What a pull request is gated on. Run this before pushing.
-ci: fmt-check typos versions test clippy clippy-optional-backends clippy-svg clippy-hyphenation clippy-robot clippy-wasm doc budgets complexity-gate duplication-gate state-holder-gate test-robot-discovery test-shell-helpers test-host-lock test-ci-filters test-features test-property bench-smoke test-ci-gate-reachability test-layout test-robot-suite-partition test-android-accessibility-contract
+ci: fmt-check typos versions test clippy clippy-release clippy-optional-backends clippy-svg clippy-hyphenation clippy-robot clippy-wasm doc budgets complexity-gate duplication-gate state-holder-gate test-robot-discovery test-shell-helpers test-host-lock test-ci-filters test-features test-property bench-smoke test-ci-gate-reachability test-layout test-robot-suite-partition test-android-accessibility-contract
 
 # Needs a Linux box with the X11 stack, an Android SDK and (on macOS) Xcode.
 
