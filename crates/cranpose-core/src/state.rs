@@ -1157,21 +1157,35 @@ impl<T: Clone + 'static> MutableStateInner<T> {
         }));
     }
 
+    /// Adds `scope` to the state's watchers, saying whether it was new and
+    /// whether the state thereby gained its first subscriber.
+    ///
+    /// Dead watchers still count as subscribers until pruned. They are
+    /// pruned whenever no live one is left, so a reader arriving after every
+    /// earlier one died still makes the state newly subscribed, and
+    /// otherwise only when the map is full, before the insert would grow
+    /// it: a state read by thousands of scopes, such as the density, must
+    /// not scan them all for every new reader.
     fn register_scope(&self, scope: &RecomposeScope) -> (bool, bool) {
         let mut watchers = self.watchers.borrow_mut();
-        let before = watchers.len();
-        watchers.retain(|_, existing| existing.upgrade().is_some());
-        self.state.remove_scope_observers(before - watchers.len());
-        let registered = match watchers.get(&scope.id()) {
-            Some(_) => false,
-            _ => {
-                watchers.insert(scope.id(), scope.downgrade());
-                true
+        let id = scope.id();
+        match watchers.get(&id) {
+            Some(existing) if existing.strong_count() > 0 => return (false, false),
+            Some(_) => {
+                watchers.remove(&id);
+                self.state.remove_scope_observers(1);
             }
-        };
+            None => {}
+        }
+        let any_live = watchers.values().any(|watcher| watcher.strong_count() > 0);
+        if !any_live || watchers.len() >= watchers.capacity() {
+            let before = watchers.len();
+            watchers.retain(|_, watcher| watcher.strong_count() > 0);
+            self.state.remove_scope_observers(before - watchers.len());
+        }
+        watchers.insert(id, scope.downgrade());
         drop(watchers);
-        let became_subscribed = registered && self.state.add_scope_observer();
-        (registered, became_subscribed)
+        (true, self.state.add_scope_observer())
     }
 
     fn has_subscribers(&self) -> bool {
