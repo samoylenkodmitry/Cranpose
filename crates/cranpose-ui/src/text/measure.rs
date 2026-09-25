@@ -1,7 +1,7 @@
 use std::{
     borrow::Cow,
     cell::{Cell, RefCell},
-    collections::{HashMap, VecDeque, hash_map::Entry},
+    collections::{VecDeque, hash_map::Entry},
     hash::Hash,
     ops::Range,
     rc::Rc,
@@ -486,7 +486,7 @@ struct TextPreparedCacheKey {
 
 struct BoundedTextCache<K, V> {
     capacity: usize,
-    entries: HashMap<K, V>,
+    entries: cranpose_core::collections::map::HashMap<K, V>,
     order: VecDeque<K>,
 }
 
@@ -498,7 +498,7 @@ where
     fn new(capacity: usize) -> Self {
         Self {
             capacity,
-            entries: HashMap::new(),
+            entries: cranpose_core::collections::map::HashMap::default(),
             order: VecDeque::new(),
         }
     }
@@ -537,7 +537,7 @@ pub(crate) struct TextService {
     measurer: RefCell<Rc<dyn TextMeasurer>>,
     metrics_cache: RefCell<BoundedTextCache<TextBaseCacheKey, TextMetrics>>,
     options_metrics_cache: RefCell<BoundedTextCache<TextOptionsCacheKey, TextMetrics>>,
-    prepared_cache: RefCell<BoundedTextCache<TextPreparedCacheKey, PreparedTextLayout>>,
+    prepared_cache: RefCell<BoundedTextCache<TextPreparedCacheKey, Rc<PreparedTextLayout>>>,
     layout_cache: RefCell<BoundedTextCache<TextBaseCacheKey, TextLayoutResult>>,
 }
 
@@ -609,6 +609,9 @@ impl TextService {
         metrics
     }
 
+    /// The layout of `text` at `max_width`, shared with the cache: a layout
+    /// animated through widths misses on every frame, and copying each one
+    /// into and out of the cache cost more than laying it out.
     pub(crate) fn prepare_with_options(
         &self,
         node_id: Option<NodeId>,
@@ -616,7 +619,7 @@ impl TextService {
         style: &TextStyle,
         options: TextLayoutOptions,
         max_width: Option<f32>,
-    ) -> PreparedTextLayout {
+    ) -> Rc<PreparedTextLayout> {
         let metrics_key = text_options_cache_key(text, style, options.normalized(), max_width);
         let key = TextPreparedCacheKey {
             base: metrics_key,
@@ -625,12 +628,12 @@ impl TextService {
         if let Some(prepared) = self.prepared_cache.borrow().get(&key) {
             return prepared;
         }
-        let prepared = self.with_measurer(|m| {
+        let prepared = Rc::new(self.with_measurer(|m| {
             m.prepare_with_options_for_node(node_id, text, style, options.normalized(), max_width)
-        });
+        }));
         self.prepared_cache
             .borrow_mut()
-            .insert(key, prepared.clone());
+            .insert(key, Rc::clone(&prepared));
         self.options_metrics_cache
             .borrow_mut()
             .insert(metrics_key, prepared.metrics);
@@ -779,11 +782,9 @@ pub fn prepare_text_layout(
     options: TextLayoutOptions,
     max_width: Option<f32>,
 ) -> PreparedTextLayout {
-    with_system_font_scale(text, style, |text, style| {
-        crate::render_state::with_text_service(|service| {
-            service.prepare_with_options(None, text, style, options.normalized(), max_width)
-        })
-    })
+    Rc::unwrap_or_clone(prepare_text_layout_for_node(
+        None, text, style, options, max_width,
+    ))
 }
 
 pub fn prepare_text_layout_for_node(
@@ -792,7 +793,7 @@ pub fn prepare_text_layout_for_node(
     style: &TextStyle,
     options: TextLayoutOptions,
     max_width: Option<f32>,
-) -> PreparedTextLayout {
+) -> Rc<PreparedTextLayout> {
     with_system_font_scale(text, style, |text, style| {
         crate::render_state::with_text_service(|service| {
             service.prepare_with_options(node_id, text, style, options.normalized(), max_width)

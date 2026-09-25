@@ -592,7 +592,8 @@ fn prepared_text_sharing_preserves_width_variants_and_owned_edits() {
         ..Default::default()
     };
     let wide = service.prepare_with_options(None, &text, &style, options, Some(1000.0));
-    let mut narrow = service.prepare_with_options(None, &text, &style, options, Some(50.0));
+    let mut narrow =
+        Rc::unwrap_or_clone(service.prepare_with_options(None, &text, &style, options, Some(50.0)));
     let retained = narrow.clone();
     let cached = service.prepare_with_options(None, &text, &style, options, Some(50.0));
 
@@ -609,8 +610,8 @@ fn prepared_text_sharing_preserves_width_variants_and_owned_edits() {
     edited.string_annotations.clear();
     let reloaded = service.prepare_with_options(None, &text, &style, options, Some(50.0));
 
-    assert_eq!(reloaded, retained);
-    assert_eq!(cached, retained);
+    assert_eq!(*reloaded, retained);
+    assert_eq!(*cached, retained);
     assert_ne!(narrow.text, retained.text);
     assert_eq!(wide.text.as_ref(), &text);
 }
