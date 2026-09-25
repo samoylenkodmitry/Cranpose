@@ -1019,56 +1019,76 @@ pub fn top_modal_from_applier(
     applier: &mut MemoryApplier,
     root: NodeId,
 ) -> Result<Option<NodeId>, NodeError> {
-    type Parts = (cranpose_foundation::SemanticsReach, Vec<NodeId>, Size);
-
-    fn parts(applier: &mut MemoryApplier, node_id: NodeId) -> Result<Option<Parts>, NodeError> {
-        match applier.with_node::<LayoutNode, _>(node_id, |layout| {
-            let state = layout.layout_state();
-            state.is_placed().then(|| {
-                (
-                    layout.semantics_reach(),
-                    layout.children.clone(),
-                    state.size(),
-                )
-            })
-        }) {
-            Err(NodeError::TypeMismatch { .. } | NodeError::Missing { .. }) => {}
-            other => return other,
-        }
-        match applier.with_node::<SubcomposeLayoutNode, _>(node_id, |subcompose| {
-            let state = subcompose.layout_state();
-            state.is_placed().then(|| {
-                (
-                    subcompose.semantics_reach(),
-                    subcompose.active_children(),
-                    state.size(),
-                )
-            })
-        }) {
-            Err(NodeError::TypeMismatch { .. } | NodeError::Missing { .. }) => Ok(None),
-            other => other,
-        }
+    // One depth-first walk on a shared stack, last child first, with a
+    // modal's own step below its children's: the first modal step popped is
+    // the modal drawn on top. It runs every frame, so no node's children are
+    // copied and each node is looked up once.
+    enum Step {
+        Enter { node: NodeId, child: bool },
+        Modal(NodeId),
     }
 
-    fn visit(applier: &mut MemoryApplier, node_id: NodeId) -> Result<Option<NodeId>, NodeError> {
-        let Some((reach, child_ids, size)) = parts(applier, node_id)? else {
-            return Ok(None);
-        };
+    fn push_placed(
+        steps: &mut Vec<Step>,
+        node: NodeId,
+        reach: cranpose_foundation::SemanticsReach,
+        size: Size,
+        children: impl IntoIterator<Item = NodeId>,
+    ) {
         if reach.hidden {
-            return Ok(None);
+            return;
         }
-        for child in children_in_this_window(applier, child_ids)
-            .into_iter()
-            .rev()
-        {
-            if let Some(modal) = visit(applier, child)? {
-                return Ok(Some(modal));
+        if reach.is_modal && modal_takes_space(size) {
+            steps.push(Step::Modal(node));
+        }
+        steps.extend(
+            children
+                .into_iter()
+                .map(|node| Step::Enter { node, child: true }),
+        );
+    }
+
+    let mut steps = vec![Step::Enter {
+        node: root,
+        child: false,
+    }];
+    while let Some(step) = steps.pop() {
+        let (node_id, child) = match step {
+            Step::Modal(node) => return Ok(Some(node)),
+            Step::Enter { node, child } => (node, child),
+        };
+        let node = match applier.get_mut(node_id) {
+            Ok(node) => node.as_any_mut(),
+            Err(NodeError::Missing { .. }) => continue,
+            Err(error) => return Err(error),
+        };
+        if let Some(layout) = node.downcast_mut::<LayoutNode>() {
+            let state = layout.layout_state();
+            if state.is_placed() && !(child && layout.is_window_root()) {
+                let children = layout.children.iter().copied();
+                push_placed(
+                    &mut steps,
+                    node_id,
+                    layout.semantics_reach(),
+                    state.size(),
+                    children,
+                );
+            }
+        } else if let Some(subcompose) = node.downcast_mut::<SubcomposeLayoutNode>() {
+            let state = subcompose.layout_state();
+            if state.is_placed() {
+                let children = subcompose.active_children();
+                push_placed(
+                    &mut steps,
+                    node_id,
+                    subcompose.semantics_reach(),
+                    state.size(),
+                    children,
+                );
             }
         }
-        Ok((reach.is_modal && modal_takes_space(size)).then_some(node_id))
     }
-
-    visit(applier, root)
+    Ok(None)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
