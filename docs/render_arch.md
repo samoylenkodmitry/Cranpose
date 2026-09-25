@@ -96,9 +96,10 @@ composites the resolved textures.
   such children composed in. It does whenever its surface is neither cached
   nor admitted this frame (`draws_in_place`), and its source gate
   (`AdmissionGate::drawn_in_place`) admits a surface only once the content
-  repeats: content that holds still composites its cached surface from its
-  third frame, which costs the GPU less than drawing it again, and content
-  that changes every frame never renders a surface at all. The viewport uniform carries the transform; only shape pipelines
+  has held still for `IN_PLACE_PATIENCE` frames: content that holds still
+  then composites its cached surface, which costs the GPU less than drawing
+  it again, while content that changes, or only pauses at the turn of its
+  motion, never renders a surface at all. The viewport uniform carries the transform; only shape pipelines
   built `SHAPE_TRANSFORMED` read it, growing each quad half a pixel so a
   turned edge anti-aliases on both sides and mapping each fragment back to
   evaluate its distance field, so untransformed pipelines compile the

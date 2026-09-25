@@ -19,6 +19,9 @@ const INK: Color = Color(0.1, 0.2, 0.8, 1.0);
 const WIDTH: f32 = 200.0;
 /// Where the layer cache counts its hits on isolated layers' surfaces.
 const SOURCE_KIND: usize = 0;
+/// The frames content that can draw in place holds still before its surface
+/// is kept.
+const IN_PLACE_PATIENCE: usize = 16;
 
 /// What the page turns about its centre, sized by its width state `w`.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -322,26 +325,32 @@ fn a_turned_layer_whose_content_holds_still_is_composited_from_the_cache() {
     let Some((_lock, mut harness)) = turned_box() else {
         return;
     };
-    let (first, _) = harness.frame(WIDTH);
+    for frame in 0..IN_PLACE_PATIENCE {
+        let (stats, _) = harness.frame(WIDTH);
+        assert_eq!(
+            (
+                stats.isolated_layer_renders,
+                stats.layer_cache_hits_by_kind[SOURCE_KIND]
+            ),
+            (0, 0),
+            "frame {frame}: content that has not held still for long draws in place: {stats:?}"
+        );
+    }
+    let (kept, _) = harness.frame(WIDTH);
     assert_eq!(
-        first.isolated_layer_renders, 0,
-        "content seen once draws in place: {first:?}"
+        kept.isolated_layer_renders, 1,
+        "content that held still renders the surface it keeps: {kept:?}"
     );
-    let (second, _) = harness.frame(WIDTH);
-    assert_eq!(
-        second.isolated_layer_renders, 1,
-        "content that repeats renders the surface it keeps: {second:?}"
-    );
-    for frame in 2..6 {
+    for frame in 0..4 {
         let (stats, _) = harness.frame(WIDTH);
         assert_eq!(
             stats.isolated_layer_renders, 0,
-            "frame {frame}: still content renders its surface once: {stats:?}"
+            "still content renders its surface once: {stats:?}"
         );
         assert!(
             stats.layer_cache_hits_by_kind[SOURCE_KIND] > 0,
-            "frame {frame}: still content costs less composited from its cached surface than \
-             drawn again: {stats:?}"
+            "frame {frame} after: still content costs less composited from its cached \
+             surface than drawn again: {stats:?}"
         );
     }
 }

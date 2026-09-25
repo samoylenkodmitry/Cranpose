@@ -1919,6 +1919,9 @@ pub(crate) struct FrameExecutor<'r, 'c, C: FrameCommandRecorder> {
 }
 
 const MAX_ADMISSION_PATIENCE: u32 = 16;
+/// The frames a layer that can draw in place holds its content still before
+/// its surface is kept.
+const IN_PLACE_PATIENCE: u32 = MAX_ADMISSION_PATIENCE;
 
 enum AdmissionCost {
     Pin,
@@ -1960,14 +1963,16 @@ impl AdmissionGate {
     }
 
     /// A gate for a surface its layer can do without by drawing in place:
-    /// the surface is kept only once its content repeats, since drawing in
-    /// place the first time costs nothing a kept surface would save.
+    /// the surface is kept only once its content has held still for
+    /// `IN_PLACE_PATIENCE` frames. Drawing in place meanwhile costs nothing
+    /// a surface would save, and a shorter hold -- a relayout pausing at the
+    /// turn of its motion -- would keep surfaces read for a frame or two.
     fn drawn_in_place(key: LayerRasterCacheKey) -> Self {
         Self::with_cost(
             key,
             AdmissionCost::Copy {
-                patience: 1,
-                floor: 1,
+                patience: IN_PLACE_PATIENCE,
+                floor: IN_PLACE_PATIENCE,
             },
         )
     }
