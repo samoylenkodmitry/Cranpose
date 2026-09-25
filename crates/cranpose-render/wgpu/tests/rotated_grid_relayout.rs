@@ -117,6 +117,9 @@ const WARMUP_FRAMES: usize = 3;
 const MEASURED_FRAMES: usize = 6;
 const MAX_PASSES: u32 = 6;
 const IN_PLACE_MAX_PASSES: u32 = 3;
+/// The frames content that can draw in place holds still before its surface
+/// is kept.
+const IN_PLACE_PATIENCE: usize = 16;
 const EXTREMUM_SPAN: usize = 100;
 
 fn harness(offscreen: bool) -> Option<(std::sync::MutexGuard<'static, ()>, GridHarness)> {
@@ -272,5 +275,36 @@ fn offscreen_rotated_cells_that_hold_still_for_a_moment_are_kept_by_copy_and_one
         kept > CELLS / 2,
         "the width must hold still long enough near its turn for the cache to keep the cells, \
          or this proves nothing: kept at most {kept}"
+    );
+}
+
+#[test]
+fn rotated_cells_kept_once_they_hold_still_render_their_surfaces_together() {
+    let Some((_lock, mut harness)) = harness(false) else {
+        return;
+    };
+    let held = width_fraction(0);
+    for frame in 0..IN_PLACE_PATIENCE {
+        let (stats, _) = harness.frame(held);
+        assert_eq!(
+            stats.isolated_layer_renders, 0,
+            "frame {frame}: cells draw in place until they have held still: {stats:?}"
+        );
+    }
+    let (kept, _) = harness.frame(held);
+    assert!(
+        kept.isolated_layer_renders > CELLS / 2,
+        "cells that held still keep their surfaces: {kept:?}"
+    );
+    assert!(
+        kept.pass_count <= MAX_PASSES,
+        "{} cells kept at once render together, not in {} passes: {kept:?}",
+        kept.isolated_layer_renders,
+        kept.pass_count
+    );
+    let (still, _) = harness.frame(held);
+    assert_eq!(
+        still.isolated_layer_renders, 0,
+        "the kept surfaces serve the next frame: {still:?}"
     );
 }

@@ -414,7 +414,7 @@ struct LayerPass<'a> {
     drawn_z: usize,
     load_op: Option<wgpu::LoadOp<wgpu::Color>>,
     segments: usize,
-    surfaces: Vec<Option<Option<SurfaceRender>>>,
+    resolved: Vec<Option<Resolved>>,
     in_place_allowed: bool,
     in_place: Vec<usize>,
 }
@@ -556,13 +556,22 @@ impl LayerPass<'_> {
         self.in_place.drain(..end).collect()
     }
 
-    /// Hands `resolve_child` the child's surface, resolved ahead of its z.
-    fn resolved_surface(&mut self, index: usize, surface: SurfaceRender) {
-        if self.surfaces.len() <= index {
-            self.surfaces
+    /// Records how the child at `index` draws, resolved ahead of its z.
+    fn resolve(&mut self, index: usize, resolved: Resolved) {
+        if self.resolved.len() <= index {
+            self.resolved
                 .resize_with(self.layer.children.len(), || None);
         }
-        self.surfaces[index] = Some(Some(surface));
+        self.resolved[index] = Some(resolved);
+    }
+
+    /// Whether the child at `index` was resolved ahead of its z to draw in
+    /// place, or to a surface; `None` when it was not resolved ahead.
+    fn resolved_in_place(&self, index: usize) -> Option<bool> {
+        self.resolved
+            .get(index)
+            .and_then(Option::as_ref)
+            .map(|resolved| matches!(resolved, Resolved::InPlace))
     }
 
     /// The ops between the page's drawn z and `z` outside the excluded
@@ -2369,6 +2378,13 @@ impl SurfacePlan {
     }
 }
 
+/// How a child resolved ahead of its z draws: in place, or through a
+/// surface, none when it has nothing to show.
+enum Resolved {
+    InPlace,
+    Surface(Option<SurfaceRender>),
+}
+
 enum SourceDecision {
     Cached(SurfaceRender),
     Render(Option<LayerRasterCacheKey>),
@@ -2606,7 +2622,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             drawn_z: 0,
             load_op: Some(load_op),
             segments: 0,
-            surfaces: Vec::new(),
+            resolved: Vec::new(),
             in_place_allowed: !layer.contains_backdrop() && scene.effect_layers.is_empty(),
             in_place: Vec::new(),
         };
@@ -2661,7 +2677,11 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
     ) -> Result<(), String> {
         let layer = pass.layer;
         let child = &layer.children[index];
-        if pass.can_draw_in_place(child) && self.draws_in_place(pass, index, child)? {
+        let in_place = match pass.resolved_in_place(index) {
+            Some(in_place) => in_place,
+            None => pass.can_draw_in_place(child) && self.draws_in_place(pass, index, child)?,
+        };
+        if in_place {
             pass.in_place.push(index);
             return Ok(());
         }
@@ -3845,9 +3865,11 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             return Ok(());
         }
         let shown = child_surface_bound(child, snap, scale, pass.target_rect()).unwrap_or(visible);
-        let resolved = match pass.surfaces.get_mut(index).and_then(Option::take) {
-            Some(resolved) => resolved,
-            None => self.render_child_surface(pass, child, z, grid, shown)?,
+        let resolved = match pass.resolved.get_mut(index).and_then(Option::take) {
+            Some(Resolved::Surface(resolved)) => resolved,
+            Some(Resolved::InPlace) | None => {
+                self.render_child_surface(pass, child, z, grid, shown)?
+            }
         };
         let Some(surface) = resolved else {
             return Ok(());
@@ -4157,24 +4179,27 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 self.render_planned_surface(child, &plan, retain, &cleared)?
             }
         };
-        pass.resolved_surface(index, surface);
+        pass.resolve(index, Resolved::Surface(Some(surface)));
         Ok(false)
     }
 
+    /// Resolves every flat child ahead of its z: from the cache, drawn in
+    /// place, or rendered with the others into atlases, so a frame that
+    /// renders many flat surfaces -- a grid laid out again, or one whose cells
+    /// just held still long enough to be kept -- renders them in a few passes.
     fn resolve_flat_children(&mut self, pass: &mut LayerPass<'_>) -> Result<(), String> {
         let layer = pass.layer;
-        let batched = |child: &ChildLayer| renders_flat(child) && !pass.can_draw_in_place(child);
-        if !layer.children.iter().any(batched) {
+        if !layer.children.iter().any(renders_flat) {
             return Ok(());
         }
         let scale = pass.scale;
         let target = pass.target_rect();
-        let mut surfaces: Vec<Option<Option<SurfaceRender>>> = std::iter::repeat_with(|| None)
+        let mut resolved: Vec<Option<Resolved>> = std::iter::repeat_with(|| None)
             .take(layer.children.len())
             .collect();
         let mut batch: Vec<BatchMember> = Vec::new();
         for (index, child) in layer.children.iter().enumerate() {
-            if !batched(child) {
+            if !renders_flat(child) {
                 continue;
             }
             let frame = ChildFrame::of(child, scale, target);
@@ -4184,13 +4209,24 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             if composites_nothing(child) {
                 continue;
             }
+            let in_place = pass.can_draw_in_place(child);
             let shown = child_surface_bound(child, frame.snap, scale, target).unwrap_or(visible);
             let Some(plan) = SurfacePlan::of(child, scale, frame.grid, shown) else {
-                surfaces[index] = Some(None);
+                resolved[index] = Some(if in_place {
+                    Resolved::InPlace
+                } else {
+                    Resolved::Surface(None)
+                });
                 continue;
             };
-            surfaces[index] = match self.source_decision(child, &plan, AdmissionGate::rendered) {
-                SourceDecision::Cached(surface) => Some(Some(surface)),
+            let gate = if in_place {
+                AdmissionGate::drawn_in_place
+            } else {
+                AdmissionGate::rendered
+            };
+            resolved[index] = match self.source_decision(child, &plan, gate) {
+                SourceDecision::Cached(surface) => Some(Resolved::Surface(Some(surface))),
+                SourceDecision::Render(None) if in_place => Some(Resolved::InPlace),
                 SourceDecision::Render(retain) => {
                     batch.push(BatchMember {
                         index,
@@ -4202,9 +4238,9 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             };
         }
         for (index, surface) in self.render_surface_batch(layer, batch)? {
-            surfaces[index] = Some(Some(surface));
+            resolved[index] = Some(Resolved::Surface(Some(surface)));
         }
-        pass.surfaces = surfaces;
+        pass.resolved = resolved;
         Ok(())
     }
 
