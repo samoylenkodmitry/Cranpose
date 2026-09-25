@@ -849,13 +849,19 @@ pub fn distinct_colors(pixels: &[u8]) -> usize {
 /// Asserts two RGBA frames of `width` pixels per row are identical, naming
 /// the first differing pixel otherwise.
 pub fn assert_same_bytes(label: &str, width: u32, a: &[u8], b: &[u8]) {
+    assert_bytes_within(label, width, a, b, 0);
+}
+
+/// Asserts that no byte of `a` and `b` differs by more than `tolerance`,
+/// naming the count, the largest difference and the first pixel beyond it.
+pub fn assert_bytes_within(label: &str, width: u32, a: &[u8], b: &[u8], tolerance: u8) {
     assert_eq!(a.len(), b.len(), "{label}: capture sizes differ");
     let mut differing = 0usize;
     let mut worst = 0u8;
     let mut first = None;
     for (index, (x, y)) in a.iter().zip(b).enumerate() {
         let diff = x.abs_diff(*y);
-        if diff > 0 {
+        if diff > tolerance {
             differing += 1;
             worst = worst.max(diff);
             first.get_or_insert((index / 4 % width as usize, index / 4 / width as usize));

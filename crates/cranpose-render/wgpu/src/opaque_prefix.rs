@@ -248,19 +248,10 @@ fn prefix_hash(
     hasher.finish()
 }
 
-pub(crate) fn opaque_prefix(context: &PrefixContext<'_>, ops: &[DrawOp]) -> Option<OpaquePrefix> {
-    let op = ops.first()?;
-    let candidate = candidate(context.scene, op)?;
-    // A solid fill draws for less than copying it back from a cached texture
-    // costs, and the cache would hold a page-sized texture for it: on a
-    // Pixel 9 Pro caching the benchmarks' solid backgrounds cost 13 to 27 MB
-    // of PSS and saved no GPU clock. Only gradients, whose per-pixel stop
-    // lookups the copy saves, are cached.
-    if candidate.brush.is_none() || !is_opaque(&candidate) {
-        return None;
-    }
+/// The candidate's device edges and snap, when its placement puts it on
+/// whole pixels and no clip cuts into it.
+fn placed_edges(candidate: &Candidate<'_>, scale: f32) -> Option<(Edges, Point)> {
     let placement = &candidate.run.placement;
-    let scale = context.scale;
     let snap = placement
         .snap_anchor
         .map(|anchor| snap_delta_for_anchor(anchor, scale))
@@ -277,6 +268,77 @@ pub(crate) fn opaque_prefix(context: &PrefixContext<'_>, ops: &[DrawOp]) -> Opti
     {
         return None;
     }
+    Some((edges, snap))
+}
+
+/// The color a flush's first op paints its whole page with, and that op's
+/// z, when the op starts with one solid opaque rectangle covering the page:
+/// the pass clears to the color instead of shading and blending every pixel
+/// of the page, which a tiled GPU does for free.
+pub(crate) fn page_fill_color(
+    context: &PrefixContext<'_>,
+    ops: &[DrawOp],
+) -> Option<(wgpu::Color, usize)> {
+    let op = ops.first()?;
+    let candidate = candidate(context.scene, op)?;
+    if candidate.brush.is_some() || !is_opaque(&candidate) {
+        return None;
+    }
+    let (edges, _) = placed_edges(&candidate, context.scale)?;
+    let [page_x, page_y] = context.page_offset;
+    let covers = edges.left <= page_x
+        && edges.top <= page_y
+        && edges.right >= page_x + context.page_size.0 as f32
+        && edges.bottom >= page_y + context.page_size.1 as f32;
+    let stored = |channel: f32| match context.format {
+        wgpu::TextureFormat::Rgba16Float => nearest_half(channel),
+        _ => Some(channel),
+    };
+    let [r, g, b, a] = candidate.record.color;
+    let [r, g, b, a] = [stored(r)?, stored(g)?, stored(b)?, stored(a)?].map(f64::from);
+    covers.then_some((wgpu::Color { r, g, b, a }, op.z_index))
+}
+
+/// `value` rounded to the nearest half float, ties to even, as a shader's
+/// write to a half-float target stores it: a clear value is converted by
+/// the driver, which may round otherwise. `None` below the half floats'
+/// normal range, where the rounding differs, unless it is zero.
+fn nearest_half(value: f32) -> Option<f32> {
+    const DROPPED_BITS: u32 = 13;
+    const SMALLEST_NORMAL_HALF: f32 = 6.103_515_6e-5;
+    if value == 0.0 {
+        return Some(value);
+    }
+    if !value.is_finite() || value.abs() < SMALLEST_NORMAL_HALF {
+        return None;
+    }
+    let bits = value.to_bits();
+    let mask = (1u32 << DROPPED_BITS) - 1;
+    let halfway = 1u32 << (DROPPED_BITS - 1);
+    let dropped = bits & mask;
+    let kept = bits & !mask;
+    let odd = (kept >> DROPPED_BITS) & 1 == 1;
+    let rounded = if dropped > halfway || (dropped == halfway && odd) {
+        kept + (1 << DROPPED_BITS)
+    } else {
+        kept
+    };
+    Some(f32::from_bits(rounded))
+}
+
+pub(crate) fn opaque_prefix(context: &PrefixContext<'_>, ops: &[DrawOp]) -> Option<OpaquePrefix> {
+    let op = ops.first()?;
+    let candidate = candidate(context.scene, op)?;
+    // A solid fill draws for less than copying it back from a cached texture
+    // costs, and the cache would hold a page-sized texture for it: on a
+    // Pixel 9 Pro caching the benchmarks' solid backgrounds cost 13 to 27 MB
+    // of PSS and saved no GPU clock. Only gradients, whose per-pixel stop
+    // lookups the copy saves, are cached.
+    if candidate.brush.is_none() || !is_opaque(&candidate) {
+        return None;
+    }
+    let scale = context.scale;
+    let (edges, snap) = placed_edges(&candidate, scale)?;
     let edges = clamp_to_page(edges, context)?;
     let hash = prefix_hash(&candidate, snap, context, &edges);
     let width = edges.right - edges.left;

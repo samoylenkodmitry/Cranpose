@@ -38,7 +38,7 @@ use crate::{
     geometry::{SegmentTransform, snap_delta_for_anchor},
     layer_cache::{Retained, RetainedContent},
     offscreen::{OffscreenTarget, composition_format},
-    opaque_prefix::{OpaquePrefix, PrefixContext, opaque_prefix},
+    opaque_prefix::{OpaquePrefix, PrefixContext, opaque_prefix, page_fill_color},
     render::GpuRenderer,
     scene::{BackdropLayer, CompositorScene, DrawOp, DrawOpKind, EffectLayer, LayerRoundedClip},
 };
@@ -1217,6 +1217,23 @@ fn capture_window(rect: DeviceRect) -> CaptureWindow {
         width: rect.width,
         height: rect.height,
     }
+}
+
+/// Whether a composite or a child drawn in place lies at or below `z`.
+fn drawn_beneath(z: usize, composites: &[ResolvedComposite], first_in_place_z: usize) -> bool {
+    first_in_place_z <= z || composites.iter().any(|composite| composite.z_index <= z)
+}
+
+/// The clear that replaces the flush's first op when it fills the whole
+/// page with a solid color and nothing lies beneath it.
+fn page_fill_clear(
+    context: &PrefixContext<'_>,
+    ops: &[DrawOp],
+    composites: &[ResolvedComposite],
+    first_in_place_z: usize,
+) -> Option<wgpu::LoadOp<wgpu::Color>> {
+    let (color, z) = page_fill_color(context, ops)?;
+    (!drawn_beneath(z, composites, first_in_place_z)).then_some(wgpu::LoadOp::Clear(color))
 }
 
 fn hash_base<H: Hasher>(base: wgpu::LoadOp<wgpu::Color>, state: &mut H) {
@@ -2788,8 +2805,10 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             .map(drop)
     }
 
-    /// Replays the flush's opaque first op from the layer cache, or admits
-    /// it there, when nothing composited or drawn in place lies beneath it.
+    /// Clears the pass to the flush's first op when it is a solid fill of
+    /// the whole page, or else replays that opaque op from the layer cache
+    /// or admits it there, when nothing composited or drawn in place lies
+    /// beneath it.
     fn reuse_opaque_prefix(
         &mut self,
         pass: &mut LayerPass<'_>,
@@ -2811,14 +2830,14 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             scale: pass.scale,
             format: composition_format(),
         };
+        if let Some(clear) = page_fill_clear(&context, ops, composites, first_in_place_z) {
+            *load_op = Some(clear);
+            return Ok(Some(1..u32::MAX));
+        }
         let Some(prefix) = opaque_prefix(&context, ops) else {
             return Ok(None);
         };
-        if first_in_place_z <= prefix.z_index
-            || composites
-                .iter()
-                .any(|composite| composite.z_index <= prefix.z_index)
-        {
+        if drawn_beneath(prefix.z_index, composites, first_in_place_z) {
             return Ok(None);
         }
         let (x, y, width, height) = prefix.device_rect;
