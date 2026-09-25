@@ -466,15 +466,15 @@ fn desktop_robot_queries_schedule_presentation_for_drained_visual_updates() {
     assert!(robot_query_visual_dirty(
         FrameUpdateResult {
             visual_changed: true,
-            structure_changed: false,
+            ..FrameUpdateResult::default()
         },
         false,
     ));
     assert!(robot_query_visual_dirty(FrameUpdateResult::default(), true,));
     assert!(!robot_query_visual_dirty(
         FrameUpdateResult {
-            visual_changed: false,
             structure_changed: true,
+            ..FrameUpdateResult::default()
         },
         false,
     ));
