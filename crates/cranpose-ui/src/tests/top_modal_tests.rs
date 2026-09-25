@@ -94,6 +94,66 @@ fn the_walk_finds_the_modal_the_semantics_tree_is_rooted_at() {
     );
 }
 
+/// The top modal of `composition` after laying it out again.
+fn walk(composition: &mut crate::TestComposition) -> Option<NodeId> {
+    let root = composition.root().expect("root");
+    let handle = composition.runtime_handle();
+    let mut applier = composition.applier_mut();
+    applier.set_runtime_handle(handle);
+    measure_layout(
+        &mut applier,
+        root,
+        ViewportSize {
+            width: 320.0,
+            height: 480.0,
+        },
+    )
+    .expect("layout");
+    let walked = crate::top_modal_from_applier(&mut applier, root).expect("walk");
+    applier.clear_runtime_handle();
+    walked
+}
+
+/// A box that carries a modal semantics modifier while `modal` is true.
+#[composable]
+fn TogglingModalBox(modal: cranpose_core::MutableState<bool>, dialog: Rc<Cell<Option<NodeId>>>) {
+    let sized = Modifier::empty().size_points(40.0, 40.0);
+    let modifier = if modal.get() {
+        sized.semantics(|config| config.is_modal = true)
+    } else {
+        sized
+    };
+    dialog.set(Some(Box(modifier, BoxSpec::default(), || {})));
+}
+
+#[test]
+fn a_modal_modifier_a_recomposition_adds_or_drops_reaches_the_walk() {
+    let modal_state = Rc::new(std::cell::RefCell::new(None));
+    let dialog = Rc::new(Cell::new(None));
+    let (state_slot, dialog_slot) = (Rc::clone(&modal_state), Rc::clone(&dialog));
+    let mut composition = run_test_composition(move || {
+        let modal = cranpose_core::rememberMutableStateOf(|| true);
+        *state_slot.borrow_mut() = Some(modal);
+        TogglingModalBox(modal, Rc::clone(&dialog_slot));
+    });
+    assert_eq!(walk(&mut composition), dialog.get());
+    let modal = modal_state.borrow().expect("state remembered");
+    modal.set_value(false);
+    composition
+        .process_invalid_scopes()
+        .expect("recompose without the modal modifier");
+    assert_eq!(
+        walk(&mut composition),
+        None,
+        "a cached flag must not outlive the chain"
+    );
+    modal.set_value(true);
+    composition
+        .process_invalid_scopes()
+        .expect("recompose with the modal modifier");
+    assert_eq!(walk(&mut composition), dialog.get());
+}
+
 #[test]
 fn without_a_modal_the_walk_finds_nothing() {
     let (walked, tree_root, _) = walk_and_tree(|| {
