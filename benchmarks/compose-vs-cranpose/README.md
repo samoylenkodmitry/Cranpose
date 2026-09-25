@@ -68,9 +68,13 @@ Knobs:
 inside it. It reads:
 
 - **Presented frames:** `dumpsys SurfaceFlinger --latency <app layer>`, polled
-  every second and merged. It keeps 128 frames, and 60 frames arrive per
-  second. Per-layer timestats are not available on this Huawei build. Present
-  times are in SurfaceFlinger's monotonic clock, which is calibrated against
+  every sample and merged. SurfaceFlinger keeps 128 frames on Android 10 and
+  64 on Android 17, half a second at 120 Hz, so pass `--interval 0.25` on a
+  120 Hz display. The report counts polls that fail to overlap the previous
+  one (`latency_poll_gaps`). Each poll starts with the display's refresh
+  period, which sets `vsync_ms` for the jank and missed-vsync counts.
+  Per-layer timestats are not available on this Huawei build. Present times
+  are in SurfaceFlinger's monotonic clock, which is calibrated against
   `/proc/uptime` from each poll's newest present, to within about one frame.
   The report keeps frames per second of the window and counts seconds with no
   present, so a ramp or a stall cannot hide in the mean.
@@ -83,7 +87,8 @@ inside it. It reads:
 - **CPU:** process and per-thread `utime + stime` from `/proc`.
 - **Clocks:** the GPU, DDR and three CPU-cluster clocks every 0.5 s. Mali-G76
   has no GPU timestamp queries, so the GPU clock that DVFS chooses is the proxy
-  for GPU load.
+  for GPU load. The clock files are the Kirin 980's; other devices report no
+  clocks.
 - **Also:** `dumpsys meminfo` after the window, and `gfxinfo` for Compose only
   (HWUI does not see Cranpose's Vulkan surface).
 
@@ -96,6 +101,19 @@ and a 15 s window. Failed runs are kept in the report.
 (cd compose-app && ./gradlew :app:assembleRelease)
 python3 measure.py --serial SERIAL --output results/RUN --install --reps 2 --screenshots
 python3 summarize.py results/RUN/report.json
+```
+
+### At 120 Hz without a phone
+
+An emulator gives a 120 Hz display. The AVD needs `hw.lcd.vsync=120` and
+`hw.gpu.mode=host` in its `config.ini`, and a system image with a 120 Hz mode.
+The goldfish image's default refresh rate of 60 caps every layer vote,
+Cranpose's and HWUI's alike. Forcing the peak rate, as the developer option
+does, gives both apps the same 120 Hz:
+
+```bash
+adb -s emulator-5680 shell settings put system min_refresh_rate 120.0
+python3 measure.py --serial emulator-5680 --output results/RUN --reps 2 --interval 0.25
 ```
 
 ## Findings

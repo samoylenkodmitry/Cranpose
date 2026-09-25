@@ -28,6 +28,13 @@ METRICS = [
 ]
 
 
+def metric(runs, key, fmt):
+    """The median of `key` over the runs that report it: a device without the
+    Kirin clock files reports no clocks."""
+    values = [run[key] for run in runs if key in run]
+    return fmt.format(median(values)) if values else 'n/a'
+
+
 def thermal_fields(run):
     """Flattens the per-window thermal summary; runs without one read as NaN."""
     heat = run.get('thermal', {})
@@ -66,7 +73,7 @@ def main():
         lines += [f'### {scenario} ({len(cranpose)} Cranpose / {len(compose)} Compose runs)', '',
                   '| Metric | Cranpose | Compose |', '| --- | ---: | ---: |']
         for key, label, fmt in METRICS:
-            values = [fmt.format(median([run[key] for run in runs])) for runs in (cranpose, compose)]
+            values = [metric(runs, key, fmt) for runs in (cranpose, compose)]
             lines.append(f'| {label} | {values[0]} | {values[1]} |')
         throttled = [sum(bool(run.get('throttled')) for run in runs) for runs in (cranpose, compose)]
         lines.append(f'| Throttled runs | {throttled[0]} of {len(cranpose)} | {throttled[1]} of {len(compose)} |')
