@@ -277,6 +277,14 @@ def heat_note(run):
     return note
 
 
+def mali_clock_summary(freqs, mali_khz):
+    """The mean Mali GPU clock from the kernel's node, on a device whose
+    clocks are not on the Kirin line."""
+    if freqs or not mali_khz:
+        return {}
+    return {'gpu_mhz': statistics.mean(mali_khz) / 1e3}
+
+
 def clock_summary(freqs):
     """Mean clocks over the window, and the lowest cap seen as a share of each
     domain's hardware maximum: below 100 means thermal management throttled
@@ -330,6 +338,8 @@ def measure_run(device, app, scenario, args, destination):
     # line comes back short and the clocks go unreported.
     freqs = [list(map(int, line.split()[1:])) for line in lines if line.startswith('F ')]
     freqs = [sample for sample in freqs if len(sample) == 5 + len(HARDWARE_MAX)]
+    mali_khz = [int(fields[1]) for fields in (line.split() for line in lines if line.startswith('G '))
+                if len(fields) == 2 and fields[1].isdigit()]
     ticks_per_s = args.clock_ticks
     cpu_s = (last_proc - first_proc) / ticks_per_s
     threads = []
@@ -349,6 +359,7 @@ def measure_run(device, app, scenario, args, destination):
         cpu_ms_per_frame=1000.0 * cpu_s / stats['frames'],
         top_threads=threads[:6],
         **clock_summary(freqs),
+        **mali_clock_summary(freqs, mali_khz),
         thermal=thermal_summary(thermal_series(output)),
         memory=meminfo(device, package),
     )
