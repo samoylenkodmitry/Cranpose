@@ -111,6 +111,7 @@ pub(crate) enum ResolvedCompositeKind {
         alpha: f32,
         blend_mode: BlendMode,
         sample_mode: CompositeSampleMode,
+        source_region: Option<(f32, f32, f32, f32)>,
     },
 }
 
@@ -915,9 +916,11 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
                 alpha,
                 blend_mode,
                 sample_mode,
+                source_region,
             } => {
                 let item = ProjectiveCompositeItem {
                     source: composite.source.as_ref(),
+                    source_region: *source_region,
                     viewport: self.target_size(),
                     dest_quad: dest_quad.map(|[x, y]| [x - offset[0], y - offset[1]]),
                     inverse: translate_inverse(*inverse, offset),

@@ -312,6 +312,7 @@ fn hash_composite_kind<H: Hasher>(
             dest_quad,
             alpha,
             blend_mode,
+            source_region,
             ..
         } => {
             2u8.hash(state);
@@ -321,6 +322,7 @@ fn hash_composite_kind<H: Hasher>(
             }
             hash_f32_for_cache(*alpha, state);
             blend_mode.hash(state);
+            hash_optional_tuple(*source_region, SOURCE_SPACE, state);
         }
     }
 }

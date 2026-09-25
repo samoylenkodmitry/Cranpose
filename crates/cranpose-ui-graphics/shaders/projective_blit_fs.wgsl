@@ -16,6 +16,7 @@ struct ProjectiveBlitUniforms {
     inverse_row2: vec4<f32>,
     alpha: vec4<f32>,
     sampling: vec4<f32>,
+    source_region: vec4<f32>,
 }
 
 @group(0) @binding(0) var input_texture: texture_2d<f32>;

@@ -317,6 +317,7 @@ struct ProjectiveBlitUniforms {
     inverse_row2: [f32; 4],
     alpha: [f32; 4],
     sampling: [f32; 4],
+    source_region: [f32; 4],
 }
 
 #[repr(C)]
@@ -815,6 +816,7 @@ fn shader_draw_variants(shader: &RuntimeShader) -> &'static [ShaderDrawVariant] 
 
 pub(crate) struct ProjectiveCompositeItem<'a> {
     pub source: &'a OffscreenTarget,
+    pub source_region: Option<(f32, f32, f32, f32)>,
     pub viewport: (u32, u32),
     pub dest_quad: [[f32; 2]; 4],
     pub inverse: [[f32; 3]; 3],
@@ -2824,6 +2826,9 @@ impl EffectRenderer {
                 0.0,
                 0.0,
             ],
+            source_region: item
+                .source_region
+                .map_or([0.0; 4], |(x, y, width, height)| [x, y, width, height]),
         };
         let sampler = &self.effect_linear_sampler;
         let texture_bind_group = item.source.get_or_create_bind_group(

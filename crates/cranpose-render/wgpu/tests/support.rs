@@ -786,10 +786,17 @@ pub fn capture_settled(
     renderer: &mut LockedRenderer,
     mut capture: impl FnMut(&mut LockedRenderer) -> CapturedFrame,
 ) -> CapturedFrame {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    loop {
+    settle(|| {
         let captured = capture(renderer);
         let stats = renderer.last_frame_stats().expect("frame statistics");
+        (stats, captured)
+    })
+}
+
+pub fn settle<T>(mut frame: impl FnMut() -> (RenderStatsSnapshot, T)) -> T {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        let (stats, captured) = frame();
         if pipelines_settled(&stats) {
             return captured;
         }
