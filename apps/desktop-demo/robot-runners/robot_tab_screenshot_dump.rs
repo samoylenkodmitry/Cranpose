@@ -1,3 +1,5 @@
+use crate::output_paths;
+
 use std::{
     path::{Path, PathBuf},
     time::Duration,
@@ -104,7 +106,7 @@ fn set_tab_hook(name: String, argument: String) -> Result<Option<String>, String
 
 fn shot_dir() -> PathBuf {
     std::env::var_os(SHOT_DIR_ENV).map_or_else(
-        || std::env::temp_dir().join("cranpose-robot-shots"),
+        || output_paths::diagnostic_path("cranpose-robot-shots"),
         PathBuf::from,
     )
 }

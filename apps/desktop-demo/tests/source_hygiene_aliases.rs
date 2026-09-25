@@ -462,10 +462,25 @@ fn external_visual_contracts_cover_text_tab_after_tab_walk() {
         "underline screenshot runner must assert presented X11 underline continuity and thickness instead of only dumping screenshots"
     );
 
+    // run_robot_test.sh discovers a runner as a robot-runners/robot_*.rs file
+    // that defines the entry point, and the one `robot` binary runs it only
+    // when main.rs lists it in the runners! table.
     let run_robot = fs::read_to_string(workspace_root.join("run_robot_test.sh"))
         .expect("failed to read robot runner");
+    let runner_table = fs::read_to_string(root.join("robot-runners/main.rs"))
+        .expect("failed to read robot runner table");
+    let is_runner = |source: &str| {
+        source
+            .lines()
+            .any(|line| line.starts_with("pub(crate) fn main("))
+    };
     assert!(
-        run_robot.contains("ROBOT_EXAMPLES_DIR=\"apps/desktop-demo/examples\"")
+        run_robot.contains("ROBOT_DIR=\"apps/desktop-demo/robot-runners\"")
+            && run_robot.contains("--example robot)")
+            && is_runner(&visual_runner)
+            && is_runner(&underline_runner)
+            && runner_table.contains("\n    robot_tab_walk_text_visual_contract,\n")
+            && runner_table.contains("\n    robot_underline_screenshot,\n")
             && run_robot.contains("robot_tab_walk_text_visual_contract")
             && run_robot.contains("robot_underline_screenshot")
             && run_robot.contains("CRANPOSE_HEADLESS=0"),
