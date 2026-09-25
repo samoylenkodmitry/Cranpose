@@ -1720,8 +1720,7 @@ pub fn run(
     let android_frame_driver = AndroidFrameDriver::new(app.create_waker());
     let mut frame_rate_voter = crate::android_frame_rate::FrameRateVoter::default();
     let mut frame_work_hints = crate::android_perf_hint::FrameWorkHints::default();
-    const FRAME_RATE_BOOST_HOLD_OFF: Duration = Duration::from_secs(3);
-    let mut last_interaction: Option<Instant> = None;
+    let mut frame_rate_boost = crate::android_frame_rate::FrameRateBoost::default();
     crate::android_vsync::install_waker(android_frame_driver.vsync_waker());
     crate::android_accessibility::set_waker(app.create_waker());
     let host_window_registry = Rc::new(android_host_window::AndroidHostWindowRegistry::default());
@@ -1834,17 +1833,16 @@ pub fn run(
         if let Some(shell) = app_shell.as_ref() {
             let preference = shell.frame_rate_preference();
             let producing_frames = android_frame_driver.frame_requested();
-            let interacting =
-                last_interaction.is_some_and(|at| at.elapsed() < FRAME_RATE_BOOST_HOLD_OFF);
+            let boosted = frame_rate_boost.active();
             let panel_max = match preference {
-                cranpose_app_shell::FrameRatePreference::Auto if interacting => {
+                cranpose_app_shell::FrameRatePreference::Auto if boosted => {
                     crate::android_frame_rate::panel_max_refresh_rate(&app)
                 }
                 _ => None,
             };
             frame_rate_voter.apply(
                 &app,
-                preference.desired_rate_hz(producing_frames, interacting, panel_max),
+                preference.desired_rate_hz(producing_frames, boosted, panel_max),
             );
         }
 
@@ -2320,48 +2318,48 @@ pub fn run(
             &mut app_shell,
         );
 
-        if !pending_inputs.is_empty() {
-            last_interaction = Some(Instant::now());
-            if let Some(shell) = &mut app_shell {
-                for input in pending_inputs.drain(..) {
-                    match input {
-                        PendingInput::PointerDown(x, y, time_ms, source) => {
-                            shell.set_pointer_source(source);
-                            let event_time = shell.realtime_pointer_event_time(time_ms);
-                            shell.set_cursor_at_event_time(x, y, event_time);
-                            shell.pointer_pressed_at_event_time(event_time);
-                        }
-                        PendingInput::PointerUp(x, y, time_ms, source) => {
-                            shell.set_pointer_source(source);
-                            let event_time = shell.realtime_pointer_event_time(time_ms);
-                            shell.pointer_released_at_position_event_time(x, y, event_time);
-                        }
-                        PendingInput::PointerMove(x, y, time_ms, source) => {
-                            shell.set_pointer_source(source);
-                            let event_time = shell.realtime_pointer_event_time(time_ms);
-                            shell.set_cursor_at_event_time(x, y, event_time);
-                        }
-                        PendingInput::PointerCancel => {
-                            shell.cancel_gesture();
-                        }
-                        PendingInput::Key(event) => {
-                            shell.on_key_event(&event);
-                        }
-                        PendingInput::SecondaryPointerDown(id, x, y, time_ms) => {
-                            shell.set_pointer_source(PointerSource::Touch);
-                            shell.secondary_pointer_pressed(id, x, y, time_ms);
-                        }
-                        PendingInput::SecondaryPointerUp(id, x, y, time_ms) => {
-                            shell.set_pointer_source(PointerSource::Touch);
-                            shell.secondary_pointer_released(id, x, y, time_ms);
-                        }
-                        PendingInput::SecondaryPointerMove(id, x, y, time_ms) => {
-                            shell.set_pointer_source(PointerSource::Touch);
-                            shell.secondary_pointer_moved(id, x, y, time_ms);
-                        }
-                        PendingInput::RotaryScroll(detents, uptime_ms) => {
-                            shell.rotary_scrolled_by_detents(detents, uptime_ms);
-                        }
+        frame_rate_boost.note(!pending_inputs.is_empty());
+        if !pending_inputs.is_empty()
+            && let Some(shell) = &mut app_shell
+        {
+            for input in pending_inputs.drain(..) {
+                match input {
+                    PendingInput::PointerDown(x, y, time_ms, source) => {
+                        shell.set_pointer_source(source);
+                        let event_time = shell.realtime_pointer_event_time(time_ms);
+                        shell.set_cursor_at_event_time(x, y, event_time);
+                        shell.pointer_pressed_at_event_time(event_time);
+                    }
+                    PendingInput::PointerUp(x, y, time_ms, source) => {
+                        shell.set_pointer_source(source);
+                        let event_time = shell.realtime_pointer_event_time(time_ms);
+                        shell.pointer_released_at_position_event_time(x, y, event_time);
+                    }
+                    PendingInput::PointerMove(x, y, time_ms, source) => {
+                        shell.set_pointer_source(source);
+                        let event_time = shell.realtime_pointer_event_time(time_ms);
+                        shell.set_cursor_at_event_time(x, y, event_time);
+                    }
+                    PendingInput::PointerCancel => {
+                        shell.cancel_gesture();
+                    }
+                    PendingInput::Key(event) => {
+                        shell.on_key_event(&event);
+                    }
+                    PendingInput::SecondaryPointerDown(id, x, y, time_ms) => {
+                        shell.set_pointer_source(PointerSource::Touch);
+                        shell.secondary_pointer_pressed(id, x, y, time_ms);
+                    }
+                    PendingInput::SecondaryPointerUp(id, x, y, time_ms) => {
+                        shell.set_pointer_source(PointerSource::Touch);
+                        shell.secondary_pointer_released(id, x, y, time_ms);
+                    }
+                    PendingInput::SecondaryPointerMove(id, x, y, time_ms) => {
+                        shell.set_pointer_source(PointerSource::Touch);
+                        shell.secondary_pointer_moved(id, x, y, time_ms);
+                    }
+                    PendingInput::RotaryScroll(detents, uptime_ms) => {
+                        shell.rotary_scrolled_by_detents(detents, uptime_ms);
                     }
                 }
             }
@@ -2439,6 +2437,7 @@ pub fn run(
                     &host_window_registry,
                     || shell.update(),
                 );
+                frame_rate_boost.note(update_result.content_moved);
                 frame_timings.after_update_ns = frame_telemetry.now();
                 if let Err(error) = crate::android_accessibility::sync(
                     &app,

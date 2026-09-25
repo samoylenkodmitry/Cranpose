@@ -13,6 +13,9 @@ LAYER=$3
 SAMPLES=$4
 INTERVAL=$5
 GFX=$6
+# The Mali GPU clock where the kernel exposes it (kHz on the Pixel 9 Pro);
+# the Kirin 980 reports its clocks on the F line instead.
+MALI_CLOCK=/sys/class/misc/mali0/device/cur_freq
 LATENCY_LOG=/data/local/tmp/perf_window_latency.$$
 STOP=/data/local/tmp/perf_window_stop.$$
 
@@ -51,6 +54,7 @@ while [ $i -lt $SAMPLES ]; do
   sleep $INTERVAL
   # Current clocks, then the caps thermal management applies to them.
   echo "F $(cat /sys/class/devfreq/gpufreq/cur_freq) $(cat /sys/class/devfreq/ddrfreq/cur_freq) $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq) $(cat /sys/devices/system/cpu/cpu4/cpufreq/scaling_cur_freq) $(cat /sys/devices/system/cpu/cpu6/cpufreq/scaling_cur_freq) $(cat /sys/class/devfreq/gpufreq/max_freq) $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq) $(cat /sys/devices/system/cpu/cpu4/cpufreq/scaling_max_freq) $(cat /sys/devices/system/cpu/cpu6/cpufreq/scaling_max_freq)"
+  if [ -r "$MALI_CLOCK" ]; then echo "G $(cat $MALI_CLOCK)"; fi
   i=$((i+1))
   if [ $((i % 4)) = 0 ]; then thermal; fi
 done

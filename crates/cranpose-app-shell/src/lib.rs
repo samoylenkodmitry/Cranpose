@@ -104,17 +104,18 @@ pub mod placed_semantics;
 /// How the platform should vote the display's frame rate on behalf of the app.
 ///
 /// Compose apps get 120 Hz gameplay on a 120 Hz panel not by presenting faster
-/// but because HWUI votes a rate on the window while animations and gestures
-/// run, and clears it when they stop. A window that never votes is pinned by
+/// but because HWUI votes a rate on the window while gestures run and content
+/// moves, and clears it when they stop. A window that never votes is pinned by
 /// SurfaceFlinger's cadence inference instead — which also throttles the app's
 /// choreographer, so the inference reinforces itself. `Auto` reproduces the
 /// HWUI behaviour; the platform backends read it every frame and vote through
 /// the native window when the desired rate changes.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum FrameRatePreference {
-    /// Ask for the panel's fastest rate while frames are being produced, no
-    /// preference when the scene is still. This is the default, matching what
-    /// Compose/HWUI do for every app without the app's involvement.
+    /// Ask for the panel's fastest rate while input arrives or content moves,
+    /// a quiet rate while other animations run, no preference when the scene
+    /// is still. This is the default, matching what Compose/HWUI do for every
+    /// app without the app's involvement.
     #[default]
     Auto,
     /// Never vote; the OS infers a rate from presentation cadence.
@@ -125,9 +126,9 @@ pub enum FrameRatePreference {
 }
 
 impl FrameRatePreference {
-    /// The baseline `Auto` votes while animating without interaction — the
-    /// same rate HWUI's NORMAL frame-rate category resolves to on phone
-    /// panels. The quiet vote cannot simply be "no vote": SurfaceFlinger
+    /// The baseline `Auto` votes while animating with neither input nor
+    /// moving content — the same rate HWUI's NORMAL frame-rate category
+    /// resolves to on phone panels. The quiet vote cannot simply be "no vote": SurfaceFlinger
     /// infers a non-voting window's rate from whatever cadence it last
     /// observed and pins it, so an app that ever ran the panel's fast rate
     /// would stay there forever (measured on a Pixel 9 Pro, both directions).
@@ -135,11 +136,12 @@ impl FrameRatePreference {
 
     /// The rate the platform should vote right now, in Hz, where `0.0` means
     /// "clear the vote". `producing_frames` is whether the frame loop has a
-    /// frame scheduled, `interacting` whether input arrived within the
-    /// platform's boost hold-off, and `panel_max_hz` the display's fastest
-    /// supported rate when the platform knows it.
+    /// frame scheduled, `boosted` whether input arrived or content moved
+    /// ([`FrameUpdateResult::content_moved`]) within the platform's boost
+    /// hold-off, and `panel_max_hz` the display's fastest supported rate when
+    /// the platform knows it.
     ///
-    /// While interacting, `Auto` holds the boost even through moments with no
+    /// While boosted, `Auto` holds the boost even through moments with no
     /// frame scheduled: a gesture sequence crosses still screens (a tap lands,
     /// the old scene stops animating, the new one hasn't started), and letting
     /// each of those instantly clear the vote flapped the display between the
@@ -149,12 +151,12 @@ impl FrameRatePreference {
     pub fn desired_rate_hz(
         self,
         producing_frames: bool,
-        interacting: bool,
+        boosted: bool,
         panel_max_hz: Option<f32>,
     ) -> f32 {
         match self {
             FrameRatePreference::Auto => {
-                if interacting {
+                if boosted {
                     panel_max_hz
                         .filter(|rate| *rate > 0.0)
                         .unwrap_or(Self::AUTO_QUIET_RATE_HZ)
@@ -182,6 +184,7 @@ pub(crate) struct ShellApp {
     pub(crate) semantics_snapshot_revision: u64,
     pub(crate) revealed_focus: Option<NodeId>,
     pub(crate) layout_requested: bool,
+    pub(crate) content_moved: bool,
     pub(crate) force_layout_pass: bool,
     pub(crate) modifiers: Option<Modifiers>,
     pub(crate) rotary_scroll_factor: f32,
@@ -325,6 +328,11 @@ pub struct FrameSchedule {
 pub struct FrameUpdateResult {
     pub visual_changed: bool,
     pub structure_changed: bool,
+    /// Whether this frame's layout moved or resized a node: content in
+    /// motion, such as a scroll or a size animation. Compose votes its high
+    /// frame-rate category on exactly these changes, so the platforms boost
+    /// the display rate on them the way they do for input.
+    pub content_moved: bool,
 }
 
 pub trait PlatformFrameDriver {
@@ -606,6 +614,7 @@ where
             semantics_snapshot_revision: 0,
             revealed_focus: None,
             layout_requested: true,
+            content_moved: false,
             force_layout_pass: true,
             modifiers: None,
             rotary_scroll_factor: DEFAULT_ROTARY_SCROLL_FACTOR_DP,
