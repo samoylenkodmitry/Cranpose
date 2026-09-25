@@ -541,7 +541,13 @@ fn empty_local_stack() -> LocalStackSnapshot {
 
 enum RecomposeCallback {
     Static(fn(&Composer)),
-    Dynamic(Box<dyn FnMut(&Composer) + 'static>),
+    /// A composable's body, rerun with `observer` watching its reads for
+    /// the scope. The scope passes itself when it runs, so the callback
+    /// needs neither a second box nor a reference back to its scope.
+    Observed {
+        observer: SnapshotStateObserver,
+        body: Box<dyn FnMut(&Composer) + 'static>,
+    },
 }
 
 pub(crate) struct RecomposeScopeInner {
@@ -769,12 +775,16 @@ impl RecomposeScope {
         }
     }
 
-    fn set_recompose(&self, callback: Box<dyn FnMut(&Composer) + 'static>) {
-        *self.inner.recompose.borrow_mut() = Some(RecomposeCallback::Dynamic(callback));
-    }
-
     fn set_recompose_fn(&self, callback: fn(&Composer)) {
         *self.inner.recompose.borrow_mut() = Some(RecomposeCallback::Static(callback));
+    }
+
+    fn set_observed_recompose(
+        &self,
+        observer: SnapshotStateObserver,
+        body: Box<dyn FnMut(&Composer) + 'static>,
+    ) {
+        *self.inner.recompose.borrow_mut() = Some(RecomposeCallback::Observed { observer, body });
     }
 
     fn run_recompose(&self, composer: &Composer) -> bool {
@@ -785,9 +795,11 @@ impl RecomposeScope {
                     callback(composer);
                     RecomposeCallback::Static(callback)
                 }
-                RecomposeCallback::Dynamic(mut callback) => {
-                    callback(composer);
-                    RecomposeCallback::Dynamic(callback)
+                RecomposeCallback::Observed { observer, mut body } => {
+                    observer.observe_reads(self.clone(), RecomposeScope::invalidate, || {
+                        body(composer);
+                    });
+                    RecomposeCallback::Observed { observer, body }
                 }
             };
             let mut slot = self.inner.recompose.borrow_mut();
