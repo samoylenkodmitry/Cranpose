@@ -411,14 +411,23 @@ pub fn location_key(file: &str, line: u32, column: u32) -> Key {
 
 fn registered_location_key(file_hash: u64, file: &str, line: u32, column: u32) -> Key {
     let key = avalanche_location_key(position_location_hash(file_hash, line, column));
+    note_location_key(key, file, line, column);
+    key
+}
+
+/// Records where `key` came from, for collision diagnostics in debug builds.
+#[cfg(any(test, debug_assertions))]
+fn note_location_key(key: Key, file: &str, line: u32, column: u32) {
     #[cfg(test)]
     register_location_key_debug_info(key, file, line, column);
     #[cfg(all(debug_assertions, not(test)))]
     if location_key_diagnostics_enabled() {
         register_location_key_debug_info(key, file, line, column);
     }
-    key
 }
+
+#[cfg(not(any(test, debug_assertions)))]
+fn note_location_key(_key: Key, _file: &str, _line: u32, _column: u32) {}
 
 #[doc(hidden)]
 pub fn __branch_group_scope_deferred(key: Key) -> Option<BranchGroupGuard> {
@@ -431,12 +440,7 @@ pub fn branch_location_key(file: &str, line: u32, column: u32, branch: u32) -> K
     hash = fnv1a_location_key_bytes(hash, &[0xfd]);
     hash = fnv1a_location_key_bytes(hash, &branch.to_le_bytes());
     let key = avalanche_location_key(hash);
-    #[cfg(test)]
-    register_location_key_debug_info(key, file, line, column);
-    #[cfg(all(debug_assertions, not(test)))]
-    if location_key_diagnostics_enabled() {
-        register_location_key_debug_info(key, file, line, column);
-    }
+    note_location_key(key, file, line, column);
     key
 }
 
