@@ -115,6 +115,12 @@ where
         self.push(key, value).map(|(_, value)| value)
     }
 
+    /// The least recently used entry, without touching its recency.
+    pub fn peek_lru(&self) -> Option<(&K, &V)> {
+        let entry = self.slot(self.oldest?);
+        Some((&entry.key, &entry.value))
+    }
+
     pub fn pop_lru(&mut self) -> Option<(K, V)> {
         let slot = self.oldest?;
         self.unlink(slot);

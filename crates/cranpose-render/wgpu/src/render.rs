@@ -79,6 +79,9 @@ const MAX_TEXT_GLYPH_MASK_CACHE_ITEMS: usize = 8192;
 const MAX_TEXT_GLYPH_ATLAS_ITEMS: usize = 8192;
 const MAX_TEXT_GLYPH_RUN_CACHE_ITEMS: usize = 1024;
 const MAX_TEXT_GLYPH_GPU_RUN_CACHE_ITEMS: usize = 1024;
+/// Frames a retained text run may go undrawn before its quads are freed,
+/// the idle span the shape store keeps retained runs for.
+const RETAINED_TEXT_GLYPH_RUN_IDLE_FRAMES: u64 = 120;
 /// Text runs with at least this many glyphs keep their quads in retained GPU
 /// buffers and draw on their own; shorter ones are written into the frame's
 /// shared quads each frame, where consecutive runs share a draw.
@@ -310,6 +313,9 @@ struct CachedTextGlyphRun {
 struct CachedGpuTextGlyphRun {
     span: GlyphRunSpan,
     atlas_generation: u64,
+    /// The frame the run last drew in; a run idle for
+    /// [`RETAINED_TEXT_GLYPH_RUN_IDLE_FRAMES`] gives its quads back.
+    last_frame: Cell<u64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -1939,6 +1945,7 @@ pub struct GpuRenderer {
     text_glyph_run_cache: BoundedLruCache<TextGlyphRunCacheKey, CachedTextGlyphRun>,
     text_glyph_gpu_run_cache: BoundedLruCache<TextGlyphRunCacheKey, Rc<CachedGpuTextGlyphRun>>,
     text_glyph_run_arena: GlyphRunArena,
+    text_glyph_run_frame: u64,
     text_glyph_mask_cache: SoftwareGlyphRasterCache,
     text_line_index_cache: TextLineIndexCache,
     pub(crate) scratch_image_vertices: Vec<Vertex>,
@@ -2169,6 +2176,7 @@ impl GpuRenderer {
                 MAX_TEXT_GLYPH_GPU_RUN_CACHE_ITEMS,
             ),
             text_glyph_run_arena: GlyphRunArena::default(),
+            text_glyph_run_frame: 0,
             text_glyph_mask_cache: SoftwareGlyphRasterCache::with_capacity_at_least_one(
                 MAX_TEXT_GLYPH_MASK_CACHE_ITEMS,
             ),
@@ -2616,7 +2624,7 @@ impl GpuRenderer {
         self.shape_pipelines.begin_frame();
         self.viewport_uniforms.begin_frame();
         self.run_store.begin_frame(gpu_stats_enabled());
-        self.text_glyph_run_arena.begin_frame();
+        self.begin_text_glyph_run_frame();
 
         let text_cache_len = packet.text_cache_len;
         let frame_root = self.frame_root(output_mode, output_view, output_texture, (width, height));
@@ -4026,10 +4034,30 @@ impl GpuRenderer {
         cache_key: TextGlyphRunCacheKey,
     ) -> Option<Rc<CachedGpuTextGlyphRun>> {
         let atlas_generation = self.text_glyph_atlas.generation();
+        let frame = self.text_glyph_run_frame;
         self.text_glyph_gpu_run_cache
             .get(&cache_key)
             .filter(|cached| cached.atlas_generation == atlas_generation)
+            .inspect(|cached| cached.last_frame.set(frame))
             .cloned()
+    }
+
+    /// Opens a frame for retained text runs: runs no frame drew for
+    /// [`RETAINED_TEXT_GLYPH_RUN_IDLE_FRAMES`] leave the cache, and the
+    /// arena takes back the quads dropped runs held.
+    fn begin_text_glyph_run_frame(&mut self) {
+        self.text_glyph_run_frame += 1;
+        let frame = self.text_glyph_run_frame;
+        while self
+            .text_glyph_gpu_run_cache
+            .peek_lru()
+            .is_some_and(|(_, run)| {
+                frame - run.last_frame.get() > RETAINED_TEXT_GLYPH_RUN_IDLE_FRAMES
+            })
+        {
+            self.text_glyph_gpu_run_cache.pop_lru();
+        }
+        self.text_glyph_run_arena.begin_frame();
     }
 
     fn emit_retained_text_glyph_run_if_ready(
@@ -4096,6 +4124,7 @@ impl GpuRenderer {
             Rc::new(CachedGpuTextGlyphRun {
                 span,
                 atlas_generation,
+                last_frame: Cell::new(self.text_glyph_run_frame),
             }),
         );
         true
