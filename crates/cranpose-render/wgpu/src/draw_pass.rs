@@ -107,9 +107,9 @@ pub(crate) enum ResolvedCompositeKind {
 /// One scene's contribution to a pass: its ops in z order, the composites
 /// resolved for it, where its device space origin sits in the target's
 /// scene space, the target pixels it may touch (the whole target when
-/// `None`), and the transform its device space is drawn under: the
-/// identity, except for a layer drawn in place, whose segments carry no
-/// composites.
+/// `None`), the transform its device space is drawn under: the identity,
+/// except for a layer drawn in place, whose segments carry no composites,
+/// and the scale from its scene's logical space to device pixels.
 pub(crate) struct PassSegment<'a> {
     pub(crate) scene: &'a CompositorScene,
     pub(crate) ops: &'a [DrawOp],
@@ -118,6 +118,7 @@ pub(crate) struct PassSegment<'a> {
     pub(crate) scissor: Option<(u32, u32, u32, u32)>,
     pub(crate) first_run_window: Option<std::ops::Range<u32>>,
     pub(crate) transform: SegmentTransform,
+    pub(crate) scale: f32,
 }
 
 enum Item<'a> {
@@ -250,7 +251,6 @@ impl GpuRenderer {
         target: PassTarget<'_>,
         segments: &'s [PassSegment<'s>],
         load_op: wgpu::LoadOp<wgpu::Color>,
-        root_scale: f32,
         label: &'static str,
     ) -> Result<bool, String> {
         let mut scratch = self.take_pass_scratch();
@@ -259,7 +259,6 @@ impl GpuRenderer {
             recorder,
             device: &device,
             target,
-            root_scale,
             load_op,
             batches: Vec::new(),
             chunk: None,
@@ -463,11 +462,7 @@ pub(crate) fn op_is_visible_in_rect(
 /// The logical rect a segment's draws are judged against: its scissor
 /// within the target, or the whole target, at the segment's offset, mapped
 /// back through the segment's transform.
-fn segment_viewport_rect(
-    target: PassTarget<'_>,
-    segment: &PassSegment<'_>,
-    root_scale: f32,
-) -> Rect {
+fn segment_viewport_rect(target: PassTarget<'_>, segment: &PassSegment<'_>) -> Rect {
     let (x, y, width, height) = segment
         .scissor
         .unwrap_or((0, 0, target.width, target.height));
@@ -479,28 +474,18 @@ fn segment_viewport_rect(
             width: width as f32,
             height: height as f32,
         },
-        root_scale,
+        segment.scale,
     )
 }
 
 /// Whether drawing `segment` into `target` touches any pixel: some op or
 /// composite of it reaches into its scissor, by the same test the pass
 /// applies when it draws.
-pub(crate) fn segment_draws_anything(
-    target: PassTarget<'_>,
-    segment: &PassSegment<'_>,
-    root_scale: f32,
-) -> bool {
-    let viewport_rect = segment_viewport_rect(target, segment, root_scale);
-    merge_items(
-        segment,
-        viewport_rect,
-        root_scale,
-        (target.width, target.height),
-        false,
-    )
-    .next()
-    .is_some()
+pub(crate) fn segment_draws_anything(target: PassTarget<'_>, segment: &PassSegment<'_>) -> bool {
+    let viewport_rect = segment_viewport_rect(target, segment);
+    merge_items(segment, viewport_rect, (target.width, target.height), false)
+        .next()
+        .is_some()
 }
 
 /// Re-bases an inverse (target pixel -> source pixel) matrix onto a target
@@ -538,11 +523,11 @@ fn unshadowed_item<'a>(
 fn merge_items<'a>(
     segment: &PassSegment<'a>,
     viewport_rect: Rect,
-    root_scale: f32,
     target_size: (u32, u32),
     skip_text: bool,
 ) -> impl Iterator<Item = Item<'a>> + use<'a> {
     let scene = segment.scene;
+    let root_scale = segment.scale;
     let mut ops = segment.ops.iter().enumerate().peekable();
     let mut composites = segment.composites.iter().peekable();
     let mut shadow_texts: std::slice::Iter<'a, TextDraw> = [].iter();
@@ -678,7 +663,6 @@ struct PassPrep<'a, 's, C> {
     recorder: &'a mut C,
     device: &'a wgpu::Device,
     target: PassTarget<'a>,
-    root_scale: f32,
     load_op: wgpu::LoadOp<wgpu::Color>,
     batches: Vec<Batch<'s>>,
     /// The arena chunk shapes are being appended to, kept open across held
@@ -709,12 +693,11 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
             transform: segment.transform,
             origin: [0.0; 2],
         };
-        let viewport_rect = segment_viewport_rect(self.target, segment, self.root_scale);
+        let viewport_rect = segment_viewport_rect(self.target, segment);
         let uniform_slot = renderer.claim_uniform_slot(viewport);
         let mut items = merge_items(
             segment,
             viewport_rect,
-            self.root_scale,
             self.target_size(),
             renderer.ablation.text,
         )
@@ -789,8 +772,8 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
     /// The target pixels a shape run can touch, a pixel wider on each side
     /// for its antialiased edge.
     fn run_target_bounds(&self, draw: &RunDraw, run: &SegmentRun<'s, '_>) -> Option<TargetRect> {
-        let bounds = run_draw_bounds(draw, self.root_scale)?;
-        let pixel = 1.0 / self.root_scale;
+        let bounds = run_draw_bounds(draw, run.segment.scale)?;
+        let pixel = 1.0 / run.segment.scale;
         scissor_rect_for_rect(
             Rect {
                 x: bounds.x - pixel,
@@ -798,7 +781,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
                 width: bounds.width + 2.0 * pixel,
                 height: bounds.height + 2.0 * pixel,
             },
-            self.root_scale,
+            run.segment.scale,
             run.viewport,
         )
     }
@@ -825,7 +808,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
                     self.recorder,
                     draw,
                     run.viewport,
-                    self.root_scale,
+                    run.segment.scale,
                     &window,
                 );
                 self.batches.push(Batch::StoreRun {
@@ -847,7 +830,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
                         open,
                         draw,
                         from..total,
-                        self.root_scale,
+                        run.segment.scale,
                         !run.viewport.transform.is_identity(),
                     );
                     if taken == 0 {
@@ -880,7 +863,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
             renderer.append_image_draw_cmd(
                 image,
                 run.viewport,
-                self.root_scale,
+                run.segment.scale,
                 &mut scratch.image_vertices,
                 &mut scratch.image_indices,
                 &mut scratch.image_cmds,
@@ -911,7 +894,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
         let drew_glyphs = renderer.append_text_glyph_draws(
             std::iter::once(text),
             run.viewport,
-            self.root_scale,
+            run.segment.scale,
             &mut scratch.image_vertices,
             &mut scratch.image_indices,
             &mut scratch.glyph_cmds,
@@ -936,7 +919,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
         renderer.append_text_image_draw_cmds(
             std::iter::once(text),
             run.viewport,
-            self.root_scale,
+            run.segment.scale,
             &mut scratch.image_vertices,
             &mut scratch.image_indices,
             &mut scratch.image_cmds,

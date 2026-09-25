@@ -501,6 +501,7 @@ fn draw_scene(renderer: &mut GpuRenderer, scene: &CompositorScene) -> (Vec<u8>, 
         scissor: None,
         first_run_window: None,
         transform: SegmentTransform::IDENTITY,
+        scale: 1.0,
     }];
     let (device, queue) = (Arc::clone(&renderer.device), Arc::clone(&renderer.queue));
     let mut graph = WgpuFrameGraph::new(None);
@@ -514,7 +515,6 @@ fn draw_scene(renderer: &mut GpuRenderer, scene: &CompositorScene) -> (Vec<u8>, 
             },
             &segments,
             wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-            1.0,
             "Batched text test",
         )?;
         renderer.flush_frame_uploads();

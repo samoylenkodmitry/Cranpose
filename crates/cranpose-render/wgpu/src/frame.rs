@@ -2194,6 +2194,7 @@ fn flush_segments<'a>(
     parts: &[FlushPart<'a>],
     flush: &Flush<'a>,
     offset: [f32; 2],
+    scale: f32,
 ) -> Vec<PassSegment<'a>> {
     parts
         .iter()
@@ -2208,6 +2209,7 @@ fn flush_segments<'a>(
                     .then(|| flush.first_run_window.clone())
                     .flatten(),
                 transform: SegmentTransform::IDENTITY,
+                scale,
             },
             FlushPart::InPlace {
                 scene,
@@ -2222,6 +2224,7 @@ fn flush_segments<'a>(
                 scissor: *scissor,
                 first_run_window: None,
                 transform: *transform,
+                scale,
             },
         })
         .collect()
@@ -2535,6 +2538,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             scissor: None,
             first_run_window: None,
             transform: SegmentTransform::IDENTITY,
+            scale: root_scale,
         };
         for _ in 0..count {
             self.renderer.encode_pass(
@@ -2542,7 +2546,6 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 page.pass_target(),
                 std::slice::from_ref(&segment),
                 wgpu::LoadOp::Load,
-                root_scale,
                 "Probe Draw Pass",
             )?;
         }
@@ -2797,11 +2800,11 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         if !complete {
             self.report_nesting_overflow();
         }
-        let segments = flush_segments(&pass.layer.scene, &parts, &flush, place.offset);
+        let segments = flush_segments(&pass.layer.scene, &parts, &flush, place.offset, pass.scale);
         let label = LAYER_PASS_LABELS[pass.segments.min(LAYER_PASS_LABELS.len() - 1)];
         pass.segments += 1;
         self.renderer
-            .encode_pass(self.recorder, target, &segments, load_op, pass.scale, label)
+            .encode_pass(self.recorder, target, &segments, load_op, label)
             .map(drop)
     }
 
@@ -2883,13 +2886,13 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             scissor: None,
             first_run_window: Some(0..1),
             transform: SegmentTransform::IDENTITY,
+            scale: pass.scale,
         };
         self.renderer.encode_pass(
             self.recorder,
             pass.page.pass_target(),
             std::slice::from_ref(&segment),
             base,
-            pass.scale,
             "Layer Pass Prefix",
         )?;
         let texture = Rc::new(
@@ -3631,6 +3634,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                     scissor,
                     first_run_window: None,
                     transform: SegmentTransform::IDENTITY,
+                    scale,
                 });
             }
             let own_end = pass
@@ -3644,8 +3648,9 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 scissor,
                 first_run_window: None,
                 transform: SegmentTransform::IDENTITY,
+                scale,
             };
-            if !copied || segment_draws_anything(target, &segment, scale) {
+            if !copied || segment_draws_anything(target, &segment) {
                 segments.push(segment);
             }
         }
@@ -3658,7 +3663,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
         };
         self.renderer
-            .encode_pass(self.recorder, target, &segments, load_op, scale, label)?;
+            .encode_pass(self.recorder, target, &segments, load_op, label)?;
         if copied {
             self.renderer.frame_stats.record_capture_fixup_pass();
         }
@@ -3734,6 +3739,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             scissor: None,
             first_run_window: None,
             transform: SegmentTransform::IDENTITY,
+            scale,
         };
         let target = PassTarget {
             view: &texture.view,
@@ -3745,7 +3751,6 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             target,
             std::slice::from_ref(&segment),
             wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-            scale,
             "Effect Range Pass",
         )?;
         let layer_rect_device = DeviceRect::from_logical(rect, scale);
@@ -4266,18 +4271,13 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
     fn render_surface_batch(
         &mut self,
         layer: &LayerScene,
-        mut batch: Vec<BatchMember>,
+        batch: Vec<BatchMember>,
     ) -> Result<Vec<(usize, SurfaceRender)>, String> {
-        batch.sort_by_key(|member| (member.plan.surface_scale.to_bits(), member.index));
         let mut surfaces = Vec::with_capacity(batch.len());
-        for group in
-            batch.chunk_by(|a, b| a.plan.surface_scale.to_bits() == b.plan.surface_scale.to_bits())
-        {
-            if let [member] = group {
-                surfaces.push((member.index, self.render_member_alone(layer, member)?));
-                continue;
-            }
-            self.render_surface_atlas(layer, group, &mut surfaces)?;
+        match batch.as_slice() {
+            [] => {}
+            [member] => surfaces.push((member.index, self.render_member_alone(layer, member)?)),
+            group => self.render_surface_atlas(layer, group, &mut surfaces)?,
         }
         Ok(surfaces)
     }
@@ -4321,9 +4321,6 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             .iter()
             .map(|member| z_ordered_ops(&layer.children[member.index].content.scene.draw_ops))
             .collect();
-        let scale = group
-            .first()
-            .map_or(1.0, |member| member.plan.surface_scale);
         for (atlas_index, atlas) in atlases.iter().enumerate() {
             let segments: Vec<PassSegment<'_>> = group
                 .iter()
@@ -4343,6 +4340,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                         scissor: Some((placement.x, placement.y, plan.width, plan.height)),
                         first_run_window: None,
                         transform: SegmentTransform::IDENTITY,
+                        scale: plan.surface_scale,
                     })
                 })
                 .collect();
@@ -4356,7 +4354,6 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 target,
                 &segments,
                 wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                scale,
                 "Layer Surface Atlas Pass",
             )?;
         }
