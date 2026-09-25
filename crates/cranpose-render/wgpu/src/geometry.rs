@@ -1,3 +1,4 @@
+use cranpose_render_common::graph::quad_bounds;
 use cranpose_ui_graphics::{Point, Rect};
 
 use crate::{offscreen::composition_bytes_per_pixel, scene::SnapAnchor};
@@ -195,6 +196,105 @@ pub(crate) fn axis_aligned_quad_rect(dest_quad: [[f32; 2]; 4]) -> Option<Rect> {
         width: max_x - min_x,
         height: max_y - min_y,
     })
+}
+
+/// Where a segment's device space lands in the device space of the target
+/// it draws into: an invertible affine map, with the inverse the shape stage
+/// maps fragments back through. Only a layer drawn in place under its rigid
+/// transform moves its segments; every other segment keeps the identity,
+/// and every consumer takes its untransformed arithmetic for that.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct SegmentTransform {
+    linear: [f32; 4],
+    translation: [f32; 2],
+    inverse: [f32; 4],
+}
+
+impl SegmentTransform {
+    pub(crate) const IDENTITY: Self = Self {
+        linear: [1.0, 0.0, 0.0, 1.0],
+        translation: [0.0, 0.0],
+        inverse: [1.0, 0.0, 0.0, 1.0],
+    };
+
+    /// The map `p -> linear * p + translation`, `linear` row-major; `None`
+    /// when `linear` is singular.
+    pub(crate) fn affine(linear: [f32; 4], translation: [f32; 2]) -> Option<Self> {
+        let [a, b, c, d] = linear;
+        let determinant = a * d - b * c;
+        if !determinant.is_finite() || determinant.abs() <= f32::EPSILON {
+            return None;
+        }
+        let reciprocal = 1.0 / determinant;
+        Some(Self {
+            linear,
+            translation,
+            inverse: [
+                d * reciprocal,
+                -b * reciprocal,
+                -c * reciprocal,
+                a * reciprocal,
+            ],
+        })
+    }
+
+    pub(crate) fn is_identity(self) -> bool {
+        self == Self::IDENTITY
+    }
+
+    /// `self` applied first, then `outer`.
+    pub(crate) fn then(self, outer: Self) -> Self {
+        Self {
+            linear: multiply_linear(outer.linear, self.linear),
+            translation: outer.map(self.translation),
+            inverse: multiply_linear(self.inverse, outer.inverse),
+        }
+    }
+
+    fn map(self, [x, y]: [f32; 2]) -> [f32; 2] {
+        let [a, b, c, d] = self.linear;
+        [
+            a * x + b * y + self.translation[0],
+            c * x + d * y + self.translation[1],
+        ]
+    }
+
+    fn unmap(self, [x, y]: [f32; 2]) -> [f32; 2] {
+        let [a, b, c, d] = self.inverse;
+        let (x, y) = (x - self.translation[0], y - self.translation[1]);
+        [a * x + b * y, c * x + d * y]
+    }
+
+    /// The target-space bounds of a rect of the segment's device space.
+    pub(crate) fn target_bounds(self, rect: Rect) -> Rect {
+        corner_bounds(rect, |corner| self.map(corner))
+    }
+
+    /// The segment-space bounds of a rect of the target's device space.
+    pub(crate) fn segment_bounds(self, rect: Rect) -> Rect {
+        corner_bounds(rect, |corner| self.unmap(corner))
+    }
+
+    /// The linear part (row-major) and translation of the map, and the
+    /// linear part of its inverse, as the viewport uniform carries them.
+    pub(crate) fn uniform_parts(self) -> ([f32; 4], [f32; 2], [f32; 4]) {
+        (self.linear, self.translation, self.inverse)
+    }
+}
+
+fn multiply_linear([a, b, c, d]: [f32; 4], [e, f, g, h]: [f32; 4]) -> [f32; 4] {
+    [a * e + b * g, a * f + b * h, c * e + d * g, c * f + d * h]
+}
+
+fn corner_bounds(rect: Rect, map: impl Fn([f32; 2]) -> [f32; 2]) -> Rect {
+    let right = rect.x + rect.width;
+    let bottom = rect.y + rect.height;
+    quad_bounds([
+        map([rect.x, rect.y]),
+        map([right, rect.y]),
+        map([rect.x, bottom]),
+        map([right, bottom]),
+    ])
 }
 
 #[cfg(test)]

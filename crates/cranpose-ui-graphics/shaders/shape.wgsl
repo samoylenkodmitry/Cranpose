@@ -150,9 +150,21 @@ struct Placement {
     color_offset: vec4<f32>,
 }
 
+// `transform` (row-major 2x2) and `translation` carry a segment's device
+// space into its target's; `inverse` is the 2x2 that maps back. Only a
+// pipeline built with `SHAPE_TRANSFORMED` reads them: every segment but a
+// layer drawn in place keeps the identity, and its pipelines compile the
+// untransformed arithmetic alone. `origin` is the glyph stage's; shapes
+// always draw with it zero.
 struct Uniforms {
     viewport: vec2<f32>,
     viewport_offset: vec2<f32>,
+    transform: vec4<f32>,
+    translation: vec2<f32>,
+    reserved: vec2<f32>,
+    inverse: vec4<f32>,
+    origin: vec2<f32>,
+    origin_reserved: vec2<f32>,
     placement: Placement,
 }
 
@@ -231,6 +243,11 @@ override TIER_ARENA: bool = false;
 // Whether banded arcs draw as strips on this tier; false on the uniform
 // floor, which draws every record as its quad.
 override SHAPE_BANDS: bool = true;
+// Whether the pipeline draws a segment under a transform: a layer drawn in
+// place, turned. Its quads grow by `BAND_QUAD_MARGIN`, so the pixels a
+// turned edge crosses outside the rect are shaded too, and its fragments
+// map back through the inverse to evaluate their distance fields.
+override SHAPE_TRANSFORMED: bool = false;
 fn record_placement(record: ShapeRecord) -> Placement {
     if (TIER_ARENA) {
         return placements[record.placement];
@@ -434,14 +451,39 @@ fn record_vertex(record: ShapeRecord, local: u32) -> VertexOutput {
         return pinned(geometry.rect.xy + geometry.rect.zw);
     }
     let uv = vec2<f32>(f32(local >> 1u), f32(local & 1u));
+    if (SHAPE_TRANSFORMED) {
+        let margin = BAND_QUAD_MARGIN;
+        let grown = geometry.rect.xy - margin + uv * (geometry.rect.zw + 2.0 * margin);
+        return shape_output(record, placement, geometry, grown);
+    }
     let position = geometry.rect.xy + uv * geometry.rect.zw;
     return shape_output(record, placement, geometry, position);
 }
 
-fn clip_position(position: vec2<f32>) -> vec4<f32> {
+fn clip_position(drawn: vec2<f32>) -> vec4<f32> {
+    var position = drawn;
+    if (SHAPE_TRANSFORMED) {
+        position = vec2<f32>(
+            uniforms.transform.x * position.x + uniforms.transform.y * position.y,
+            uniforms.transform.z * position.x + uniforms.transform.w * position.y,
+        ) + uniforms.translation;
+    }
     let x = ((position.x - uniforms.viewport_offset.x) / uniforms.viewport.x) * 2.0 - 1.0;
     let y = 1.0 - ((position.y - uniforms.viewport_offset.y) / uniforms.viewport.y) * 2.0;
     return vec4<f32>(x, y, 0.0, 1.0);
+}
+
+// The segment device position a fragment shades: its target position, mapped
+// back through the segment's transform when it has one.
+fn segment_position(fragment_position: vec2<f32>) -> vec2<f32> {
+    if (!SHAPE_TRANSFORMED) {
+        return fragment_position + uniforms.viewport_offset;
+    }
+    let placed = fragment_position + uniforms.viewport_offset - uniforms.translation;
+    return vec2<f32>(
+        uniforms.inverse.x * placed.x + uniforms.inverse.y * placed.y,
+        uniforms.inverse.z * placed.x + uniforms.inverse.w * placed.y,
+    );
 }
 
 // A vertex past the record's own, at the device position of its last
@@ -850,7 +892,7 @@ fn shape_coverage_alpha(input: VertexOutput) -> f32 {
         discard;
     }
     let world_pos = input.world_pos.xy;
-    let rect_pos = input.clip_position.xy + uniforms.viewport_offset;
+    let rect_pos = segment_position(input.clip_position.xy);
 
     // Apply clipping: if clip_rect has non-zero size, clip to it
     let clip_w = input.clip_rect.z;
@@ -870,7 +912,7 @@ fn shape_coverage_alpha(input: VertexOutput) -> f32 {
         return 1.0;
     }
 
-    if (SHAPE_BANDS) {
+    if (SHAPE_BANDS && !SHAPE_TRANSFORMED) {
         if (rect_pos.x < input.rect.x || rect_pos.x > input.rect.x + input.rect.z ||
             rect_pos.y < input.rect.y || rect_pos.y > input.rect.y + input.rect.w) {
             discard;
@@ -962,7 +1004,7 @@ fn fragment(input: VertexOutput) -> vec4<f32> {
     // Re-derived rather than threaded out of the coverage pass: both are pure
     // functions of `input`, so the compiler folds them back together.
     let world_pos = input.world_pos.xy;
-    let rect_pos = input.clip_position.xy + uniforms.viewport_offset;
+    let rect_pos = segment_position(input.clip_position.xy);
 
     var color = input.color;
     var is_gradient = false;

@@ -14,6 +14,7 @@ const FRAME_WIDTH: u32 = 360;
 const FRAME_HEIGHT: u32 = 1200;
 const CHIPS: usize = 6;
 const DEPTH_PAST_LIMIT: usize = 132;
+const IN_PLACE_MAX_PASSES: u32 = 3;
 const INNERMOST: Color = Color(0.95, 0.10, 0.45, 1.0);
 
 const LEVEL_BACKGROUND: [Color; 2] = [
@@ -147,6 +148,34 @@ fn forty_nested_rotated_levels_draw_down_to_the_innermost() {
         assert!(
             innermost_pixels(&captured) > 200,
             "frame {frame}: the innermost of forty nested rotated levels must reach the frame"
+        );
+    }
+}
+
+#[test]
+fn forty_nested_rotated_levels_that_relayout_draw_in_place() {
+    let Ok((_lock, renderer)) = support::headless_renderer_parts() else {
+        return;
+    };
+    let mut harness = DeepHarness::new(renderer, 40);
+    for frame in 0..5 {
+        harness
+            .frame(frame)
+            .unwrap_or_else(|error| panic!("frame {frame} of forty nested layers failed: {error}"));
+        let stats = harness
+            .shell
+            .renderer()
+            .last_frame_stats()
+            .expect("frame stats");
+        assert_eq!(
+            stats.isolated_layer_renders, 0,
+            "frame {frame}: levels that only turn draw straight into the page, not each into a \
+             surface of its own that the next frame's relayout throws away: {stats:?}"
+        );
+        assert!(
+            stats.pass_count <= IN_PLACE_MAX_PASSES,
+            "frame {frame} drew forty levels in {} passes: {stats:?}",
+            stats.pass_count
         );
     }
 }

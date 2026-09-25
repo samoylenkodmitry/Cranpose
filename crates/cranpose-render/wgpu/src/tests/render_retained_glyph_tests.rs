@@ -38,7 +38,9 @@ fn queue_glyph(renderer: &mut GpuRenderer, key: u64, x: f32, commands: &mut Vec<
         ViewportUniformParams {
             width: 8,
             height: 8,
-            offset: [0.0, 0.0]
+            offset: [0.0, 0.0],
+            transform: SegmentTransform::IDENTITY,
+            origin: [0.0; 2],
         },
         Rect {
             x,
@@ -101,7 +103,10 @@ fn queued_glyph_draw_keeps_its_atlas_after_growth() {
     renderer.text_glyph_atlas.reset(
         &renderer.device,
         &renderer.image_bind_group_layout,
-        &renderer.image_nearest_sampler,
+        GlyphSamplers {
+            nearest: &renderer.image_nearest_sampler,
+            linear: &renderer.image_linear_sampler,
+        },
     );
     assert_eq!(renderer.text_glyph_atlas.size(), size * 2);
     queue_glyph(&mut renderer, 2, 4.0, &mut commands);
@@ -143,4 +148,132 @@ fn queued_glyph_draw_keeps_buffers_after_cache_eviction() {
             .is_none()
     );
     draw_queued(&mut renderer, &commands);
+}
+
+fn quarter_turn() -> SegmentTransform {
+    SegmentTransform::affine([0.0, -1.0, 1.0, 0.0], [100.0, 0.0]).expect("a turn is invertible")
+}
+
+fn viewport(transform: SegmentTransform) -> ViewportUniformParams {
+    ViewportUniformParams {
+        width: 100,
+        height: 50,
+        offset: [10.0, 20.0],
+        transform,
+        origin: [0.0; 2],
+    }
+}
+
+#[test]
+fn the_viewport_uniform_lays_out_as_the_shaders_declare_it() {
+    assert_eq!(std::mem::offset_of!(Uniforms, transform), 16);
+    assert_eq!(std::mem::offset_of!(Uniforms, inverse), 48);
+    assert_eq!(std::mem::offset_of!(Uniforms, origin), 64);
+    assert_eq!(std::mem::offset_of!(Uniforms, placement), 80);
+    let identity = Uniforms::of(
+        viewport(SegmentTransform::IDENTITY),
+        PlacementData::zeroed(),
+    );
+    assert_eq!(identity.transform, [1.0, 0.0, 0.0, 1.0]);
+    assert_eq!(identity.translation, [0.0, 0.0]);
+    let turned = Uniforms::of(viewport(quarter_turn()), PlacementData::zeroed());
+    assert_eq!(turned.transform, [0.0, -1.0, 1.0, 0.0]);
+    assert_eq!(turned.translation, [100.0, 0.0]);
+    assert_eq!(turned.inverse, [0.0, 1.0, -1.0, 0.0]);
+}
+
+#[test]
+fn a_turned_viewport_shows_and_scissors_the_bounds_its_turn_maps() {
+    let identity = viewport(SegmentTransform::IDENTITY);
+    assert_eq!(
+        identity.scene_rect(2.0),
+        Rect {
+            x: 5.0,
+            y: 10.0,
+            width: 50.0,
+            height: 25.0
+        }
+    );
+    let turned = viewport(quarter_turn());
+    assert_eq!(
+        turned.scene_rect(2.0),
+        Rect {
+            x: 10.0,
+            y: -5.0,
+            width: 25.0,
+            height: 50.0
+        }
+    );
+    let drawn = Rect {
+        x: 5.0,
+        y: 10.0,
+        width: 10.0,
+        height: 5.0,
+    };
+    assert_eq!(
+        scissor_rect_for_rect(drawn, 2.0, identity),
+        Some((0, 0, 20, 10))
+    );
+    assert_eq!(
+        scissor_rect_for_rect(drawn, 2.0, turned),
+        Some((60, 0, 10, 10))
+    );
+}
+
+#[test]
+fn a_retained_glyph_run_under_a_turn_adds_its_raster_origin_before_the_turn() {
+    let raster = Rect {
+        x: 7.0,
+        y: 3.0,
+        width: 8.0,
+        height: 8.0,
+    };
+    let untransformed =
+        GpuRenderer::retained_glyph_viewport(viewport(SegmentTransform::IDENTITY), raster);
+    assert_eq!(untransformed.offset, [3.0, 17.0]);
+    assert_eq!(untransformed.origin, [0.0, 0.0]);
+    let turned = GpuRenderer::retained_glyph_viewport(viewport(quarter_turn()), raster);
+    assert_eq!(turned.offset, [10.0, 20.0]);
+    assert_eq!(turned.transform, quarter_turn());
+    assert_eq!(turned.origin, [7.0, 3.0]);
+}
+
+#[test]
+fn the_glyph_atlas_filters_only_glyphs_a_transform_turns() {
+    let (_lock, renderer) = test_renderer();
+    let atlas = &renderer.text_glyph_atlas;
+    assert!(Rc::ptr_eq(
+        &atlas.bind_group(SegmentTransform::IDENTITY),
+        &atlas.texel_bind_group
+    ));
+    assert!(Rc::ptr_eq(
+        &atlas.bind_group(quarter_turn()),
+        &atlas.filtered_bind_group
+    ));
+}
+
+#[test]
+fn a_draw_samples_as_it_asks_on_the_pixel_grid_and_filtered_off_it() {
+    for sampling in [ImageSampling::Nearest, ImageSampling::Linear] {
+        assert_eq!(
+            sampling_under(sampling, SegmentTransform::IDENTITY),
+            sampling
+        );
+        assert_eq!(
+            sampling_under(sampling, quarter_turn()),
+            ImageSampling::Linear
+        );
+    }
+}
+
+#[test]
+fn a_transformed_shape_pipeline_falls_back_to_a_transformed_general_one() {
+    let untransformed = ShapePipelineKey::general_for(BlendMode::SrcOver, RunTier::Arena);
+    let transformed = ShapePipelineKey {
+        transformed: true,
+        ..untransformed
+    };
+    assert_ne!(transformed, untransformed);
+    assert!(transformed.general().transformed);
+    assert!(!untransformed.general().transformed);
 }

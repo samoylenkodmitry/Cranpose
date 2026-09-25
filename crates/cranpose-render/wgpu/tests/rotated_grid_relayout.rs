@@ -4,7 +4,7 @@ use cranpose_app_shell::AppShell;
 use cranpose_core::{MutableState, location_key};
 use cranpose_render_wgpu::{CapturedFrame, RenderStatsSnapshot, WgpuRenderer};
 use cranpose_ui::{
-    Alignment, Color, GraphicsLayer, Modifier, TextStyle, composable,
+    Alignment, Color, CompositingStrategy, GraphicsLayer, Modifier, TextStyle, composable,
     widgets::{Box, BoxSpec, Column, ColumnSpec, Row, RowSpec, Text},
 };
 
@@ -22,8 +22,10 @@ const PALETTE: [Color; 3] = [
     Color(0.25, 0.70, 0.40, 1.0),
 ];
 
+/// One cell of the grid, turned by a few degrees. An offscreen cell asks for a
+/// surface of its own; any other draws in place, straight into the page.
 #[composable]
-fn Cell(index: usize) {
+fn Cell(index: usize, offscreen: bool) {
     Box(
         Modifier::empty()
             .weight(1.0)
@@ -31,6 +33,11 @@ fn Cell(index: usize) {
             .padding(1.0)
             .graphics_layer_value(GraphicsLayer {
                 rotation_z: ((index % 7) as f32 - 3.0) * 2.0,
+                compositing_strategy: if offscreen {
+                    CompositingStrategy::Offscreen
+                } else {
+                    CompositingStrategy::Auto
+                },
                 ..Default::default()
             })
             .background(PALETTE[index % PALETTE.len()])
@@ -47,7 +54,7 @@ fn Cell(index: usize) {
 }
 
 #[composable]
-fn Grid(width: MutableState<f32>) {
+fn Grid(width: MutableState<f32>, offscreen: bool) {
     Column(
         Modifier::empty()
             .fill_max_width_fraction(width.get())
@@ -60,7 +67,7 @@ fn Grid(width: MutableState<f32>) {
                     RowSpec::default(),
                     move || {
                         for column in 0..COLUMNS {
-                            Cell(row * COLUMNS + column);
+                            Cell(row * COLUMNS + column, offscreen);
                         }
                     },
                 );
@@ -75,14 +82,14 @@ struct GridHarness {
 }
 
 impl GridHarness {
-    fn new(renderer: WgpuRenderer) -> Self {
+    fn new(renderer: WgpuRenderer, offscreen: bool) -> Self {
         let root_key = location_key(file!(), line!(), column!());
         let width: Rc<RefCell<Option<MutableState<f32>>>> = Rc::new(RefCell::new(None));
         let width_for_app = Rc::clone(&width);
         let mut shell = AppShell::new(renderer, root_key, move || {
             let state = cranpose_core::rememberMutableStateOf(|| 1.0f32);
             *width_for_app.borrow_mut() = Some(state);
-            Grid(state);
+            Grid(state, offscreen);
         });
         shell.set_viewport(FRAME_WIDTH as f32, FRAME_HEIGHT as f32);
         shell.set_buffer_size(FRAME_WIDTH, FRAME_HEIGHT);
@@ -109,11 +116,15 @@ fn width_fraction(frame: usize) -> f32 {
 const WARMUP_FRAMES: usize = 3;
 const MEASURED_FRAMES: usize = 6;
 const MAX_PASSES: u32 = 6;
+const IN_PLACE_MAX_PASSES: u32 = 3;
+/// The frames content that can draw in place holds still before its surface
+/// is kept.
+const IN_PLACE_PATIENCE: usize = 16;
 const EXTREMUM_SPAN: usize = 100;
 
-fn harness() -> Option<(std::sync::MutexGuard<'static, ()>, GridHarness)> {
+fn harness(offscreen: bool) -> Option<(std::sync::MutexGuard<'static, ()>, GridHarness)> {
     match support::headless_renderer_parts() {
-        Ok((lock, renderer)) => Some((lock, GridHarness::new(renderer))),
+        Ok((lock, renderer)) => Some((lock, GridHarness::new(renderer, offscreen))),
         Err(err) => {
             eprintln!("skipping (headless WGPU init failed): {err}");
             None
@@ -121,8 +132,11 @@ fn harness() -> Option<(std::sync::MutexGuard<'static, ()>, GridHarness)> {
     }
 }
 
-fn fresh_harness() -> GridHarness {
-    GridHarness::new(support::headless_renderer_beside_locked().expect("reference renderer"))
+fn fresh_harness(offscreen: bool) -> GridHarness {
+    GridHarness::new(
+        support::headless_renderer_beside_locked().expect("reference renderer"),
+        offscreen,
+    )
 }
 
 fn settled(harness: &mut GridHarness, frame: usize) -> CapturedFrame {
@@ -130,8 +144,8 @@ fn settled(harness: &mut GridHarness, frame: usize) -> CapturedFrame {
 }
 
 #[test]
-fn a_relayout_under_rotated_cells_draws_them_in_a_few_passes() {
-    let Some((_lock, mut harness)) = harness() else {
+fn a_relayout_under_offscreen_rotated_cells_draws_them_in_a_few_passes() {
+    let Some((_lock, mut harness)) = harness(true) else {
         return;
     };
     for frame in 0..WARMUP_FRAMES {
@@ -154,8 +168,8 @@ fn a_relayout_under_rotated_cells_draws_them_in_a_few_passes() {
 }
 
 #[test]
-fn rotated_cells_drawn_together_draw_what_each_drawn_alone_draws() {
-    let Some((_lock, mut moving)) = harness() else {
+fn offscreen_rotated_cells_drawn_together_draw_what_each_drawn_alone_draws() {
+    let Some((_lock, mut moving)) = harness(true) else {
         return;
     };
     for frame in 0..WARMUP_FRAMES {
@@ -175,7 +189,7 @@ fn rotated_cells_drawn_together_draw_what_each_drawn_alone_draws() {
             stats.pass_count <= MAX_PASSES,
             "frame {frame} must draw its cells together for this to compare anything: {stats:?}"
         );
-        let expected = settled(&mut fresh_harness(), frame);
+        let expected = settled(&mut fresh_harness(true), frame);
         support::assert_same_bytes(
             &format!("frame {frame}"),
             FRAME_WIDTH,
@@ -185,9 +199,8 @@ fn rotated_cells_drawn_together_draw_what_each_drawn_alone_draws() {
     }
 }
 
-#[test]
-fn a_rotated_grid_that_stops_moving_draws_what_a_fresh_renderer_draws() {
-    let Some((_lock, mut moving)) = harness() else {
+fn assert_still_frame_matches_a_fresh_renderer(offscreen: bool) {
+    let Some((_lock, mut moving)) = harness(offscreen) else {
         return;
     };
     for frame in 0..WARMUP_FRAMES + MEASURED_FRAMES {
@@ -197,13 +210,48 @@ fn a_rotated_grid_that_stops_moving_draws_what_a_fresh_renderer_draws() {
     let held = WARMUP_FRAMES + MEASURED_FRAMES;
     moving.frame(width_fraction(held));
     let still = settled(&mut moving, held);
-    let expected = settled(&mut fresh_harness(), held);
+    let mut fresh = fresh_harness(offscreen);
+    fresh.frame(width_fraction(held));
+    let expected = settled(&mut fresh, held);
     support::assert_same_bytes("still frame", FRAME_WIDTH, &expected.pixels, &still.pixels);
 }
 
 #[test]
-fn rotated_cells_that_hold_still_for_a_moment_are_kept_by_copy_and_one_each() {
-    let Some((_lock, mut harness)) = harness() else {
+fn an_offscreen_rotated_grid_that_stops_moving_draws_what_a_fresh_renderer_draws() {
+    assert_still_frame_matches_a_fresh_renderer(true);
+}
+
+#[test]
+fn a_rotated_grid_drawn_in_place_that_stops_moving_draws_what_a_fresh_renderer_draws() {
+    assert_still_frame_matches_a_fresh_renderer(false);
+}
+
+#[test]
+fn a_relayout_under_rotated_cells_draws_them_in_place_without_surfaces() {
+    let Some((_lock, mut harness)) = harness(false) else {
+        return;
+    };
+    for frame in 0..WARMUP_FRAMES + MEASURED_FRAMES {
+        let (stats, _) = harness.frame(width_fraction(frame));
+        assert_eq!(
+            stats.isolated_layer_renders, 0,
+            "frame {frame}: a cell that only turns draws straight into the page: {stats:?}"
+        );
+        assert_eq!(
+            stats.layer_cache_size, 0,
+            "frame {frame}: cells drawn in place keep no surfaces: {stats:?}"
+        );
+        assert!(
+            stats.pass_count <= IN_PLACE_MAX_PASSES,
+            "frame {frame} drew the grid in {} passes: {stats:?}",
+            stats.pass_count
+        );
+    }
+}
+
+#[test]
+fn offscreen_rotated_cells_that_hold_still_for_a_moment_are_kept_by_copy_and_one_each() {
+    let Some((_lock, mut harness)) = harness(true) else {
         return;
     };
     harness.frame(width_fraction(0));
@@ -227,5 +275,36 @@ fn rotated_cells_that_hold_still_for_a_moment_are_kept_by_copy_and_one_each() {
         kept > CELLS / 2,
         "the width must hold still long enough near its turn for the cache to keep the cells, \
          or this proves nothing: kept at most {kept}"
+    );
+}
+
+#[test]
+fn rotated_cells_kept_once_they_hold_still_render_their_surfaces_together() {
+    let Some((_lock, mut harness)) = harness(false) else {
+        return;
+    };
+    let held = width_fraction(0);
+    for frame in 0..IN_PLACE_PATIENCE {
+        let (stats, _) = harness.frame(held);
+        assert_eq!(
+            stats.isolated_layer_renders, 0,
+            "frame {frame}: cells draw in place until they have held still: {stats:?}"
+        );
+    }
+    let (kept, _) = harness.frame(held);
+    assert!(
+        kept.isolated_layer_renders > CELLS / 2,
+        "cells that held still keep their surfaces: {kept:?}"
+    );
+    assert!(
+        kept.pass_count <= MAX_PASSES,
+        "{} cells kept at once render together, not in {} passes: {kept:?}",
+        kept.isolated_layer_renders,
+        kept.pass_count
+    );
+    let (still, _) = harness.frame(held);
+    assert_eq!(
+        still.isolated_layer_renders, 0,
+        "the kept surfaces serve the next frame: {still:?}"
     );
 }

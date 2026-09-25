@@ -13,9 +13,14 @@ struct VertexOutput {
     @location(2) uv_bounds: vec4<f32>,
 }
 
+// The prefix of the viewport uniform the shape stage documents: the
+// segment's transform into its target, the identity unless a layer is
+// drawn in place.
 struct Uniforms {
     viewport: vec2<f32>,
     viewport_offset: vec2<f32>,
+    transform: vec4<f32>,
+    translation: vec2<f32>,
 }
 
 @group(0) @binding(0)
@@ -30,8 +35,12 @@ var image_sampler: sampler;
 @vertex
 fn image_vs_main(input: VertexInput) -> VertexOutput {
     var output: VertexOutput;
-    let x = ((input.position.x - uniforms.viewport_offset.x) / uniforms.viewport.x) * 2.0 - 1.0;
-    let y = 1.0 - ((input.position.y - uniforms.viewport_offset.y) / uniforms.viewport.y) * 2.0;
+    let placed = vec2<f32>(
+        uniforms.transform.x * input.position.x + uniforms.transform.y * input.position.y,
+        uniforms.transform.z * input.position.x + uniforms.transform.w * input.position.y,
+    ) + uniforms.translation;
+    let x = ((placed.x - uniforms.viewport_offset.x) / uniforms.viewport.x) * 2.0 - 1.0;
+    let y = 1.0 - ((placed.y - uniforms.viewport_offset.y) / uniforms.viewport.y) * 2.0;
     output.clip_position = vec4<f32>(x, y, 0.0, 1.0);
     output.color = input.color;
     output.uv = input.uv;

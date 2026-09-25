@@ -1,8 +1,9 @@
 use cranpose_ui_graphics::Rect;
 
 use super::{
-    axis_aligned_quad_rect, canonicalize_device_coordinate, canonicalized_scaled_quad,
-    canonicalized_scaled_rect, translation_stable_anchored_device_pixel_bounds,
+    SegmentTransform, axis_aligned_quad_rect, canonicalize_device_coordinate,
+    canonicalized_scaled_quad, canonicalized_scaled_rect,
+    translation_stable_anchored_device_pixel_bounds,
 };
 use crate::rect_to_quad;
 
@@ -162,4 +163,63 @@ fn axis_aligned_quad_rect_rejects_skewed_quad() {
     let quad = [[12.0, 9.0], [20.0, 9.5], [12.0, 19.0], [20.0, 19.0]];
 
     assert_eq!(axis_aligned_quad_rect(quad), None);
+}
+
+fn quarter_turn_then_move() -> SegmentTransform {
+    SegmentTransform::affine([0.0, -1.0, 1.0, 0.0], [10.0, 20.0]).expect("a turn is invertible")
+}
+
+fn rect(x: f32, y: f32, width: f32, height: f32) -> Rect {
+    Rect {
+        x,
+        y,
+        width,
+        height,
+    }
+}
+
+#[test]
+fn the_identity_segment_transform_leaves_rects_and_the_uniform_as_they_are() {
+    let identity = SegmentTransform::IDENTITY;
+    let area = rect(-3.5, 2.25, 10.0, 4.0);
+    assert!(identity.is_identity());
+    assert_eq!(identity.target_bounds(area), area);
+    assert_eq!(identity.segment_bounds(area), area);
+    assert_eq!(
+        identity.uniform_parts(),
+        ([1.0, 0.0, 0.0, 1.0], [0.0, 0.0], [1.0, 0.0, 0.0, 1.0])
+    );
+    assert!(
+        SegmentTransform::affine([1.0, 0.0, 0.0, 1.0], [0.0, 0.0])
+            .expect("the identity is invertible")
+            .is_identity()
+    );
+}
+
+#[test]
+fn a_turned_segment_maps_rects_to_their_turned_bounds_and_back() {
+    let turn = quarter_turn_then_move();
+    assert!(!turn.is_identity());
+    let turned = turn.target_bounds(rect(0.0, 0.0, 4.0, 2.0));
+    assert_eq!(turned, rect(8.0, 20.0, 2.0, 4.0));
+    assert_eq!(turn.segment_bounds(turned), rect(0.0, 0.0, 4.0, 2.0));
+    assert_eq!(
+        turn.uniform_parts(),
+        ([0.0, -1.0, 1.0, 0.0], [10.0, 20.0], [0.0, 1.0, -1.0, 0.0])
+    );
+}
+
+#[test]
+fn a_singular_linear_part_is_no_segment_transform() {
+    assert!(SegmentTransform::affine([1.0, 2.0, 2.0, 4.0], [0.0, 0.0]).is_none());
+    assert!(SegmentTransform::affine([f32::NAN, 0.0, 0.0, 1.0], [0.0, 0.0]).is_none());
+}
+
+#[test]
+fn composed_segment_transforms_apply_the_inner_one_first() {
+    let shift = SegmentTransform::affine([1.0, 0.0, 0.0, 1.0], [5.0, 0.0]).expect("a move");
+    let composed = shift.then(quarter_turn_then_move());
+    let unit = rect(0.0, 0.0, 1.0, 1.0);
+    assert_eq!(composed.target_bounds(unit), rect(9.0, 25.0, 1.0, 1.0));
+    assert_eq!(composed.segment_bounds(rect(9.0, 25.0, 1.0, 1.0)), unit);
 }

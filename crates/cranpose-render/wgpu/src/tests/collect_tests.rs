@@ -127,3 +127,199 @@ fn layer_motion_steps_a_scale_only_while_it_changes_over_the_same_content() {
         "a layer missing from the last frame starts over"
     );
 }
+
+fn turn(degrees: f32) -> ProjectiveTransform {
+    let (sin, cos) = degrees.to_radians().sin_cos();
+    ProjectiveTransform::from_rect_to_quad(
+        rect(0.0, 0.0, 1.0, 1.0),
+        [[0.0, 0.0], [cos, sin], [-sin, cos], [cos - sin, sin + cos]],
+    )
+}
+
+fn solid(primitive_rect: Rect) -> DrawPrimitive {
+    DrawPrimitive::Rect {
+        rect: primitive_rect,
+        brush: cranpose_ui_graphics::Brush::solid(cranpose_ui_graphics::Color::WHITE),
+        stroke: None,
+    }
+}
+
+fn run(primitives: Vec<DrawPrimitive>) -> RenderNode {
+    RenderNode::DrawRun(DrawRunNode::new(PrimitivePhase::BeforeChildren, primitives))
+}
+
+fn turned_layer(
+    transform: ProjectiveTransform,
+    graphics_layer: GraphicsLayer,
+    children: Vec<RenderNode>,
+) -> LayerNode {
+    LayerNode {
+        local_bounds: rect(0.0, 0.0, 60.0, 40.0),
+        transform_to_parent: transform,
+        graphics_layer,
+        children,
+        ..Default::default()
+    }
+}
+
+/// The isolated child `layer` collects into under an unturned root.
+fn collected(layer: LayerNode) -> ChildLayer {
+    let root = LayerNode {
+        local_bounds: rect(0.0, 0.0, 200.0, 200.0),
+        children: vec![RenderNode::Layer(Box::new(layer))],
+        ..Default::default()
+    };
+    let mut scene = collect_root(
+        &root,
+        &mut crate::pipeline::UiTextLayoutResolver,
+        &mut LayerMotion::default(),
+        SceneCapacityHint::default(),
+    );
+    scene.children.pop().expect("a turned layer isolates")
+}
+
+#[test]
+fn a_transform_that_only_turns_and_moves_is_rigid() {
+    assert!(is_rigid(turn(33.0)));
+    assert!(is_rigid(
+        turn(-7.5).then(ProjectiveTransform::translation(12.0, -3.0))
+    ));
+    assert!(!is_rigid(ProjectiveTransform::uniform_scale(1.5)));
+    assert!(!is_rigid(
+        turn(20.0).then(ProjectiveTransform::uniform_scale(0.5))
+    ));
+    assert!(!is_rigid(ProjectiveTransform::from_rect_to_quad(
+        rect(0.0, 0.0, 1.0, 1.0),
+        [[0.0, 0.0], [1.0, 0.1], [0.0, 1.0], [0.8, 1.3]],
+    )));
+}
+
+#[test]
+fn a_layer_that_only_turns_draws_in_place() {
+    let child = collected(turned_layer(
+        turn(20.0),
+        GraphicsLayer::default(),
+        vec![run(vec![
+            solid(rect(0.0, 0.0, 60.0, 40.0)),
+            solid(rect(4.0, 4.0, 8.0, 8.0)),
+        ])],
+    ));
+    assert!(child.in_place);
+}
+
+#[test]
+fn a_turned_layer_that_needs_a_surface_for_more_than_its_turn_keeps_it() {
+    let content = || vec![run(vec![solid(rect(0.0, 0.0, 60.0, 40.0))])];
+    for graphics_layer in [
+        GraphicsLayer {
+            alpha: 0.5,
+            ..Default::default()
+        },
+        GraphicsLayer {
+            compositing_strategy: CompositingStrategy::Offscreen,
+            ..Default::default()
+        },
+        GraphicsLayer {
+            blend_mode: BlendMode::Multiply,
+            ..Default::default()
+        },
+        GraphicsLayer {
+            clip: true,
+            shape: LayerShape::Rounded(RoundedCornerShape::uniform(8.0)),
+            ..Default::default()
+        },
+    ] {
+        let child = collected(turned_layer(turn(20.0), graphics_layer.clone(), content()));
+        assert!(!child.in_place, "{graphics_layer:?} needs a surface");
+    }
+    let scaled = collected(turned_layer(
+        turn(20.0).then(ProjectiveTransform::uniform_scale(1.5)),
+        GraphicsLayer::default(),
+        content(),
+    ));
+    assert!(
+        !scaled.in_place,
+        "a scaled layer would resample what it draws"
+    );
+}
+
+#[test]
+fn content_that_blends_through_to_the_page_keeps_its_surface() {
+    let child = collected(turned_layer(
+        turn(20.0),
+        GraphicsLayer::default(),
+        vec![run(vec![
+            solid(rect(0.0, 0.0, 60.0, 40.0)),
+            DrawPrimitive::Blend {
+                primitive: Box::new(solid(rect(10.0, 10.0, 20.0, 20.0))),
+                blend_mode: BlendMode::DstOut,
+            },
+        ])],
+    ));
+    assert!(
+        !child.in_place,
+        "a hole punched in place would reach the pixels beneath the layer"
+    );
+}
+
+#[test]
+fn a_turned_layer_whose_clip_would_cut_a_turned_child_keeps_its_surface() {
+    let inner = turned_layer(
+        turn(30.0),
+        GraphicsLayer::default(),
+        vec![run(vec![solid(rect(0.0, 0.0, 60.0, 40.0))])],
+    );
+    let clipping = collected(turned_layer(
+        turn(-10.0),
+        GraphicsLayer {
+            clip: true,
+            ..Default::default()
+        },
+        vec![RenderNode::Layer(Box::new(inner.clone()))],
+    ));
+    assert!(
+        clipping.content.children[0].in_place,
+        "the inner layer only turns"
+    );
+    assert!(
+        !clipping.in_place,
+        "a clip turned off the pixel grid is no scissor for the child it cuts"
+    );
+    let open = collected(turned_layer(
+        turn(-10.0),
+        GraphicsLayer::default(),
+        vec![
+            run(vec![solid(rect(0.0, 0.0, 60.0, 40.0))]),
+            RenderNode::Layer(Box::new(inner)),
+        ],
+    ));
+    assert!(open.in_place);
+}
+
+#[test]
+fn a_turned_layer_with_an_image_keeps_its_surface() {
+    let image = RenderNode::Primitive(PrimitiveEntry {
+        phase: PrimitivePhase::BeforeChildren,
+        node: PrimitiveNode::Draw(cranpose_render_common::graph::DrawPrimitiveNode {
+            primitive: DrawPrimitive::Image {
+                rect: rect(0.0, 0.0, 60.0, 40.0),
+                image: cranpose_ui_graphics::ImageBitmap::from_rgba8(1, 1, vec![255; 4])
+                    .expect("a one-pixel bitmap"),
+                alpha: 1.0,
+                color_filter: None,
+                sampling: cranpose_ui_graphics::ImageSampling::Nearest,
+                src_rect: None,
+            },
+            clip: None,
+        }),
+    });
+    let child = collected(turned_layer(
+        turn(20.0),
+        GraphicsLayer::default(),
+        vec![image],
+    ));
+    assert!(
+        !child.in_place,
+        "an image drawn turned in place would have hard edges its filtered surface does not"
+    );
+}

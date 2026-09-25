@@ -46,6 +46,7 @@ fn shadow_run_items_preserve_geometry_culling_and_first_run_window() {
         offset: [0.0, 0.0],
         scissor: None,
         first_run_window: Some(1..2),
+        transform: SegmentTransform::IDENTITY,
     };
     let items = merge_items(
         &segment,
