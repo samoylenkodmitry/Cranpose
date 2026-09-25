@@ -146,3 +146,23 @@ fn a_cache_reserves_room_only_for_the_entries_it_holds() {
     assert!(cache.slots.capacity() < 64, "{}", cache.slots.capacity());
     assert_eq!(cache.cap().get(), 8192);
 }
+
+#[test]
+fn peek_lru_reads_the_oldest_entry_without_refreshing_it() {
+    let mut cache = BoundedLruCache::with_capacity_at_least_one(3);
+    cache.put(1, "one");
+    cache.put(2, "two");
+    cache.put(3, "three");
+    assert_eq!(cache.peek_lru(), Some((&1, &"one")));
+    assert_eq!(
+        cache.peek_lru(),
+        Some((&1, &"one")),
+        "peeking keeps it oldest"
+    );
+    assert_eq!(cache.get(&1), Some(&"one"));
+    assert_eq!(cache.peek_lru(), Some((&2, &"two")));
+    assert_eq!(
+        BoundedLruCache::<u32, u32>::with_capacity_at_least_one(1).peek_lru(),
+        None
+    );
+}
