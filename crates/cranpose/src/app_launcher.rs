@@ -534,6 +534,18 @@ impl<Fonts: LauncherFonts> AppLauncher<Fonts> {
         }
     }
 
+    #[cfg(any(
+        test,
+        feature = "embed",
+        all(
+            feature = "desktop-shell",
+            feature = "renderer-wgpu",
+            not(target_os = "android")
+        ),
+        all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"),
+        all(feature = "android", feature = "renderer-wgpu", target_os = "android"),
+        all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"),
+    ))]
     fn into_settings(self) -> AppSettings {
         AppSettings {
             default_face: Fonts::default_face,
