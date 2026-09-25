@@ -14,10 +14,11 @@ struct HintApi {
     close_session: CloseSessionFn,
 }
 
-pub(crate) struct PerfHintSession {
+struct PerfHintSession {
     session: *mut c_void,
     api: HintApi,
     target_ns: i64,
+    present_thread: Option<i32>,
 }
 
 // SAFETY: the session pointer is used and closed only from the frame-loop
@@ -44,15 +45,43 @@ unsafe fn resolve(name: &std::ffi::CStr) -> *mut c_void {
     }
 }
 
+/// Tells the scheduler how long each presented frame's work took, against
+/// the display's refresh period, for the frame loop's thread and the thread
+/// that presents. The session opens at the first report, and again when the
+/// present thread changes.
+#[derive(Default)]
+pub(crate) struct FrameWorkHints {
+    session: Option<PerfHintSession>,
+    unavailable: bool,
+}
+
+impl FrameWorkHints {
+    pub(crate) fn report(&mut self, work_ns: i64, target_ns: i64, present_thread: Option<i32>) {
+        if self
+            .session
+            .as_ref()
+            .is_some_and(|session| session.present_thread != present_thread)
+        {
+            self.session = None;
+        }
+        if self.session.is_none() && !self.unavailable {
+            self.session = PerfHintSession::open(target_ns, present_thread);
+            self.unavailable = self.session.is_none();
+        }
+        if let Some(session) = self.session.as_mut() {
+            session.report(work_ns, target_ns);
+        }
+    }
+}
+
 impl PerfHintSession {
-    pub(crate) fn open(target_ns: i64) -> Option<Self> {
+    fn open(target_ns: i64, present_thread: Option<i32>) -> Option<Self> {
         if !enabled() || target_ns <= 0 {
             return None;
         }
         // SAFETY: symbols come from libandroid.so and the transmutes target
         // the NDK-documented APerformanceHint signatures; null checks gate
-        // every call; gettid names the calling thread, which is the thread
-        // the session is created for.
+        // every call; the thread list outlives the create call that reads it.
         unsafe {
             let get_manager = resolve(c"APerformanceHint_getManager");
             let create_session = resolve(c"APerformanceHint_createSession");
@@ -76,14 +105,16 @@ impl PerfHintSession {
                 log::info!("[perf-hint] no hint manager on this device");
                 return None;
             }
-            let tid = libc::gettid();
-            let session = create_session(manager, &tid, 1, target_ns);
+            let threads: Vec<i32> = std::iter::once(libc::gettid())
+                .chain(present_thread)
+                .collect();
+            let session = create_session(manager, threads.as_ptr(), threads.len(), target_ns);
             if session.is_null() {
                 log::info!("[perf-hint] session refused");
                 return None;
             }
             log::info!(
-                "[perf-hint] session open, target {:.2} ms",
+                "[perf-hint] session open for threads {threads:?}, target {:.2} ms",
                 target_ns as f64 / 1e6
             );
             Some(Self {
@@ -100,11 +131,12 @@ impl PerfHintSession {
                     ),
                 },
                 target_ns,
+                present_thread,
             })
         }
     }
 
-    pub(crate) fn report(&mut self, actual_ns: i64, target_ns: i64) {
+    fn report(&mut self, actual_ns: i64, target_ns: i64) {
         if actual_ns <= 0 {
             return;
         }

@@ -1,7 +1,7 @@
 use std::{
     sync::{
         Arc, Mutex, PoisonError,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering},
         mpsc::{
             Receiver, RecvTimeoutError, Sender, SyncSender, TryRecvError, TrySendError, channel,
             sync_channel,
@@ -80,6 +80,8 @@ pub(crate) struct PresentStatus {
     pub(crate) placeholder_frames: AtomicU64,
     pub(crate) last_present_outcome: AtomicU64,
     pub(crate) last_error_frame: AtomicU64,
+    /// The present thread's OS id once it has started, `0` before.
+    pub(crate) thread_id: AtomicI32,
 }
 
 pub(crate) fn encode_present_outcome(outcome: PresentOutcome, frame_id: u64) -> u64 {
@@ -562,6 +564,9 @@ impl PresentHandle {
             .stack_size(PRESENT_THREAD_STACK_BYTES)
             .spawn(move || {
                 crate::fast_cores::pin_current_thread_to_fast_cores("present");
+                if let Some(id) = crate::fast_cores::current_thread_id() {
+                    thread_status.thread_id.store(id, Ordering::Relaxed);
+                }
                 PresentState::new(init, returns_tx, thread_status, waker).run(msg_rx);
             })
             .map_err(|error| format!("failed to spawn present thread: {error}"))?;
