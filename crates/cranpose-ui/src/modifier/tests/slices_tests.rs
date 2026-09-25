@@ -63,7 +63,7 @@ fn recorded(command: &DrawCommand, size: Size) -> Vec<DrawPrimitive> {
     let mut scope = crate::draw::command_draw_scope(size);
     match command {
         DrawCommand::Behind(draw) | DrawCommand::WithContent(draw) | DrawCommand::Overlay(draw) => {
-            draw(&mut scope)
+            draw(&mut scope);
         }
     }
     scope.into_primitives()
