@@ -10006,6 +10006,52 @@ fn rotary_scroll_factor_rejects_unusable_values() {
     assert_eq!(shell.rotary_scroll_factor(), 12.0);
 }
 
+thread_local! {
+    static MOVING_LABEL_GAP: RefCell<Option<MutableState<f32>>> = const { RefCell::new(None) };
+}
+
+#[composable]
+fn AppShellMovingLabel() {
+    let gap = rememberMutableStateOf(|| 0.0f32);
+    MOVING_LABEL_GAP.with(|slot| *slot.borrow_mut() = Some(gap));
+    Column(Modifier::empty(), ColumnSpec::default(), move || {
+        Spacer(Size {
+            width: 1.0,
+            height: gap.get(),
+        });
+        Text("Moving", Modifier::empty(), TextStyle::default());
+    });
+}
+
+#[test]
+fn a_frame_reports_content_moved_only_when_its_layout_moved_a_node() {
+    let mut shell = AppShell::new(
+        TestRenderer::default(),
+        location_key(file!(), line!(), column!()),
+        AppShellMovingLabel,
+    );
+    shell.set_viewport(320.0, 240.0);
+    shell.update();
+    while shell.frame_schedule().needs_update {
+        shell.update();
+    }
+    shell.debug_enter_app_context(cranpose_ui::request_render_invalidation);
+    assert!(
+        !shell.update().content_moved,
+        "a frame that only redraws moves nothing"
+    );
+
+    let gap = MOVING_LABEL_GAP
+        .with(|slot| *slot.borrow())
+        .expect("the label's gap is composed");
+    gap.set(24.0);
+    let mut moved = false;
+    while shell.frame_schedule().needs_update {
+        moved |= shell.update().content_moved;
+    }
+    assert!(moved, "pushing the label down moves it");
+}
+
 #[test]
 fn the_default_frame_rate_preference_boosts_on_interaction_and_holds_the_quiet_baseline() {
     use crate::FrameRatePreference;
@@ -10016,7 +10062,8 @@ fn the_default_frame_rate_preference_boosts_on_interaction_and_holds_the_quiet_b
     assert_eq!(
         auto.desired_rate_hz(true, false, Some(120.0)),
         FrameRatePreference::AUTO_QUIET_RATE_HZ,
-        "an untouched animation votes the quiet baseline, not the panel max"
+        "an animation with neither input nor moving content votes the quiet \
+         baseline, not the panel max"
     );
     assert_eq!(
         auto.desired_rate_hz(false, true, Some(120.0)),
@@ -10027,7 +10074,7 @@ fn the_default_frame_rate_preference_boosts_on_interaction_and_holds_the_quiet_b
     assert_eq!(
         auto.desired_rate_hz(false, false, Some(120.0)),
         0.0,
-        "an idle scene with no recent interaction clears the vote"
+        "an idle scene with no recent input or motion clears the vote"
     );
     assert_eq!(
         auto.desired_rate_hz(true, true, None),
