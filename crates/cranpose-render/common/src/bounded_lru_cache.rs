@@ -26,6 +26,10 @@ struct CacheSlot<K, V> {
 /// can find the index entry to remove without searching for it. The keys these
 /// caches use are small `Copy` structs, and the duplicate is what keeps the
 /// links free of raw pointers.
+///
+/// The index and slots grow with the entries rather than reserving the bound:
+/// most caches of a process never come near it, and a table sized for
+/// thousands of entries each is megabytes a small screen never touches.
 pub struct BoundedLruCache<K, V> {
     index: HashMap<K, usize>,
     slots: Vec<Option<CacheSlot<K, V>>>,
@@ -41,8 +45,8 @@ where
 {
     pub fn new(cap: NonZeroUsize) -> Self {
         Self {
-            index: HashMap::with_capacity_and_hasher(cap.get(), Default::default()),
-            slots: Vec::with_capacity(cap.get()),
+            index: HashMap::default(),
+            slots: Vec::new(),
             free: Vec::new(),
             newest: None,
             oldest: None,
