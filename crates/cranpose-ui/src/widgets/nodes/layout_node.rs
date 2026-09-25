@@ -277,6 +277,10 @@ pub struct LayoutNode {
     needs_measure: Cell<bool>,
     needs_layout: Cell<bool>,
     needs_semantics: Cell<bool>,
+    /// The chain's modal and hidden flags, read every frame by the modal
+    /// walk: dropped whenever the chain syncs or semantics are invalidated,
+    /// the two ways its semantics change.
+    semantics_reach: Cell<Option<cranpose_foundation::SemanticsReach>>,
     needs_redraw: Cell<bool>,
     needs_pointer_pass: Cell<bool>,
     needs_focus_sync: Cell<bool>,
@@ -358,6 +362,7 @@ impl LayoutNode {
             needs_measure: Cell::new(true),
             needs_layout: Cell::new(true),
             needs_semantics: Cell::new(true),
+            semantics_reach: Cell::new(None),
             needs_redraw: Cell::new(true),
             needs_pointer_pass: Cell::new(false),
             needs_focus_sync: Cell::new(false),
@@ -402,6 +407,7 @@ impl LayoutNode {
         self.resolved_modifiers = self.modifier_chain.resolved_modifiers();
         self.modifier_capabilities = self.modifier_chain.capabilities();
         self.modifier_child_capabilities = self.modifier_chain.aggregate_child_capabilities();
+        self.semantics_reach.set(None);
 
         self.update_modifier_slices_cache();
 
@@ -551,6 +557,7 @@ impl LayoutNode {
     /// Mark this node as needing semantics recomputation.
     pub fn mark_needs_semantics(&self) {
         self.needs_semantics.set(true);
+        self.semantics_reach.set(None);
     }
 
     pub(crate) fn clear_needs_semantics(&self) {
@@ -803,7 +810,12 @@ impl LayoutNode {
 
     /// Whether this node's modifiers make it modal or hidden.
     pub fn semantics_reach(&self) -> cranpose_foundation::SemanticsReach {
-        crate::modifier::semantics_reach_of_chain(self.modifier_chain.chain())
+        if let Some(reach) = self.semantics_reach.get() {
+            return reach;
+        }
+        let reach = crate::modifier::semantics_reach_of_chain(self.modifier_chain.chain());
+        self.semantics_reach.set(Some(reach));
+        reach
     }
 
     pub(crate) fn modifier_chain(&self) -> &ModifierChainHandle {
@@ -851,6 +863,7 @@ impl Clone for LayoutNode {
             needs_measure: Cell::new(self.needs_measure.get()),
             needs_layout: Cell::new(self.needs_layout.get()),
             needs_semantics: Cell::new(self.needs_semantics.get()),
+            semantics_reach: Cell::new(None),
             needs_redraw: Cell::new(self.needs_redraw.get()),
             needs_pointer_pass: Cell::new(self.needs_pointer_pass.get()),
             needs_focus_sync: Cell::new(self.needs_focus_sync.get()),
@@ -975,6 +988,7 @@ impl Node for LayoutNode {
 
     fn mark_needs_semantics(&self) {
         self.needs_semantics.set(true);
+        self.semantics_reach.set(None);
     }
 
     fn needs_semantics(&self) -> bool {
