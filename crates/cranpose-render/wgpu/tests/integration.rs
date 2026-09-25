@@ -60,6 +60,7 @@ mod shape_ablation;
 mod shape_pipeline_readiness;
 mod shape_variant_parity;
 mod substrate_reference;
+mod surface_atlas;
 mod surface_packet;
 mod swipe_to_dismiss_lazy;
 mod tab_lighting_rest_identity;

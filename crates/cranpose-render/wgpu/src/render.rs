@@ -3294,13 +3294,13 @@ impl GpuRenderer {
             scissor: None,
             first_run_window: None,
             transform: SegmentTransform::IDENTITY,
+            scale: root_scale,
         };
         let drew = self.encode_pass(
             recorder,
             target,
             std::slice::from_ref(&segment),
             wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-            root_scale,
             "Shadow Source Pass",
         );
         match drew {
@@ -3370,13 +3370,13 @@ impl GpuRenderer {
                 scissor: None,
                 first_run_window: None,
                 transform: SegmentTransform::IDENTITY,
+                scale: root_scale,
             };
             if let Err(error) = self.encode_pass(
                 recorder,
                 target,
                 std::slice::from_ref(&segment),
                 wgpu::LoadOp::Load,
-                root_scale,
                 "Shadow Cutout Pass",
             ) {
                 log::error!("shadow cutout pass failed: {error}");

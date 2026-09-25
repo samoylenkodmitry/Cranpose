@@ -47,6 +47,7 @@ fn shadow_run_items_preserve_geometry_culling_and_first_run_window() {
         scissor: None,
         first_run_window: Some(1..2),
         transform: SegmentTransform::IDENTITY,
+        scale: 1.0,
     };
     let items = merge_items(
         &segment,
@@ -56,7 +57,6 @@ fn shadow_run_items_preserve_geometry_culling_and_first_run_window() {
             width: 64.0,
             height: 64.0,
         },
-        1.0,
         (64, 64),
         false,
     )
@@ -85,7 +85,6 @@ fn shadow_run_items_preserve_geometry_culling_and_first_run_window() {
                 width: 8.0,
                 height: 16.0,
             },
-            1.0,
             (64, 64),
             false,
         );
