@@ -161,10 +161,10 @@ impl TextPreparedLayoutOwner {
         self.measure_text_content(max_width)
     }
 
-    fn measured_layout(&self) -> Option<crate::text::PreparedTextLayout> {
+    fn measured_layout(&self) -> Option<Rc<crate::text::PreparedTextLayout>> {
         self.measured_max_width
             .get()
-            .map(|max_width| (*self.prepare(max_width)).clone())
+            .map(|max_width| self.prepare(max_width))
     }
 }
 
@@ -173,7 +173,7 @@ impl TextPreparedLayoutHandle {
         Self { owner }
     }
 
-    pub(crate) fn measured_layout(&self) -> Option<crate::text::PreparedTextLayout> {
+    pub(crate) fn measured_layout(&self) -> Option<Rc<crate::text::PreparedTextLayout>> {
         self.owner.measured_layout()
     }
 }
