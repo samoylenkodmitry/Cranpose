@@ -56,7 +56,8 @@ class Device:
         result = subprocess.run(['adb', '-s', self.serial, *args], capture_output=True,
                                 text=True, timeout=timeout)
         if check and result.returncode != 0:
-            raise RuntimeError(f'adb {" ".join(args)} failed: {result.stderr.strip()}')
+            raise RuntimeError(f'adb {" ".join(args)} failed (exit {result.returncode}): '
+                               f'{result.stderr.strip()} | stdout tail: {result.stdout[-400:]!r}')
         return result.stdout
 
     def shell(self, *args, timeout=120, check=True):
@@ -133,27 +134,44 @@ def parse_snap(lines):
 
 
 PENDING = 9223372036854775807
-VSYNC_MS = 1000.0 / 60.0
+LAYER_STATE = 'RequestedLayerState{'
 
 
 def app_layer(device, package):
-    """The app window's buffer layer: `package/activity#N`, without a handle prefix."""
-    names = [line.strip() for line in device.shell('dumpsys', 'SurfaceFlinger', '--list').splitlines()]
-    layers = [name for name in names if name.startswith(package + '/') and ' ' not in name]
+    """The app window's buffer layer: `package/activity#N`, without a handle
+    prefix. Newer Android lists each layer as `RequestedLayerState{name ...}`
+    and gives the window's buffers to its `VRI-package/activity#N` layer."""
+    layers = []
+    for line in device.shell('dumpsys', 'SurfaceFlinger', '--list').splitlines():
+        name = line.strip()
+        if name.startswith(LAYER_STATE):
+            name = name[len(LAYER_STATE):].split(' parentId=')[0]
+        if ' ' not in name and (name.startswith(package + '/') or name.startswith(f'VRI-{package}/')):
+            layers.append(name)
     if len(layers) != 1:
         raise ValueError(f'expected one buffer layer for {package}: {layers}')
     return layers[0]
 
 
 def presents(output):
-    """Merges every latency poll into unique frames and the clock calibration."""
+    """Merges every latency poll into unique frames, the clock calibration, the
+    display's refresh period in milliseconds, which each poll starts with, and
+    how many polls began after the previous one's newest frame plus a vsync,
+    so frames between them may be missing."""
     frames = {}
     calibration = []
+    vsync_ms = 1000.0 / 60.0
+    previous_newest = 0
+    poll_gaps = 0
     for block in output.split('LAT_BEGIN ')[1:]:
         header, _, body = block.partition('\n')
         uptime = float(header.split()[0])
         newest = 0
-        for line in body.split('LAT_END')[0].splitlines()[1:]:
+        lines = body.split('LAT_END')[0].splitlines()
+        if lines and lines[0].strip().isdigit() and int(lines[0]) > 0:
+            vsync_ms = int(lines[0]) / 1e6
+        oldest = 0
+        for line in lines[1:]:
             fields = line.split()
             if len(fields) != 3:
                 continue
@@ -162,9 +180,13 @@ def presents(output):
                 continue
             frames[actual] = (desired, ready)
             newest = max(newest, actual)
+            oldest = min(oldest, actual) if oldest else actual
+        if previous_newest and oldest > previous_newest + vsync_ms * 1.5e6:
+            poll_gaps += 1
         if newest:
             calibration.append(uptime - newest / 1e9)
-    return frames, calibration
+            previous_newest = newest
+    return frames, calibration, vsync_ms, poll_gaps
 
 
 def percentile(values, fraction):
@@ -172,7 +194,7 @@ def percentile(values, fraction):
     return ordered[min(len(ordered) - 1, int(fraction * len(ordered)))] if ordered else None
 
 
-def frame_stats(frames, t0, t1):
+def frame_stats(frames, t0, t1, vsync_ms):
     times = sorted(time for time in frames if t0 * 1e9 <= time <= t1 * 1e9)
     if len(times) < 2:
         raise ValueError('the layer presented no frames in the window')
@@ -198,8 +220,9 @@ def frame_stats(frames, t0, t1):
         'interval_p99_ms': percentile(intervals, 0.99),
         'interval_max_ms': max(intervals),
         # A present more than 1.5 vsyncs after the previous one repeated a frame.
-        'janky_pct': 100.0 * sum(interval > 1.5 * VSYNC_MS for interval in intervals) / len(intervals),
-        'missed_vsyncs': sum(max(0, round(interval / VSYNC_MS) - 1) for interval in intervals),
+        'vsync_ms': vsync_ms,
+        'janky_pct': 100.0 * sum(interval > 1.5 * vsync_ms for interval in intervals) / len(intervals),
+        'missed_vsyncs': sum(max(0, round(interval / vsync_ms) - 1) for interval in intervals),
         'queue_to_present_p50_ms': percentile(queue_to_present, 0.50),
         'queue_to_gpu_done_p50_ms': percentile(queue_to_ready, 0.50),
     }
@@ -243,6 +266,34 @@ def launch(device, app, scenario, extra=()):
     return times, device.pid(APPS[app]['package'])
 
 
+def heat_note(run):
+    """GPU clock and temperatures for the progress line, where the device
+    reports them."""
+    note = f'gpu={run["gpu_mhz"]:.0f}MHz ' if 'gpu_mhz' in run else ''
+    for label, zone in (('big', 'cluster1'), ('gpuT', 'gpu')):
+        reading = run['thermal'].get(zone)
+        if reading:
+            note += f'{label}={reading["start"]:.0f}->{reading["end"]:.0f}C '
+    return note
+
+
+def clock_summary(freqs):
+    """Mean clocks over the window, and the lowest cap seen as a share of each
+    domain's hardware maximum: below 100 means thermal management throttled
+    that domain. Empty when the device has no clock samples."""
+    if not freqs:
+        return {'cap_pct': {}}
+    return {
+        'gpu_mhz': statistics.mean(f[0] for f in freqs) / 1e6,
+        'ddr_mhz': statistics.mean(f[1] for f in freqs) / 1e6,
+        'cpu_little_mhz': statistics.mean(f[2] for f in freqs) / 1e3,
+        'cpu_mid_mhz': statistics.mean(f[3] for f in freqs) / 1e3,
+        'cpu_big_mhz': statistics.mean(f[4] for f in freqs) / 1e3,
+        'cap_pct': {domain: 100.0 * min(f[5 + index] for f in freqs) / HARDWARE_MAX[domain]
+                    for index, domain in enumerate(HARDWARE_MAX)},
+    }
+
+
 def measure_run(device, app, scenario, args, destination):
     package = APPS[app]['package']
     run = {'app': app, 'scenario': scenario, 'temperature_before': device.temperatures()}
@@ -269,13 +320,16 @@ def measure_run(device, app, scenario, args, destination):
     if device.shell('pidof', package, check=False).strip() != str(pid):
         raise RuntimeError(f'{package} restarted or died during the window')
     elapsed = t1 - t0
-    frames, calibration = presents(output)
+    frames, calibration, vsync_ms, poll_gaps = presents(output)
     # /proc/uptime counts suspended time and SurfaceFlinger's monotonic clock
     # does not. A poll's newest present can only precede the poll, so the
     # smallest gap is the clock offset to within about one frame.
     offset = min(calibration)
-    stats = frame_stats(frames, t0 - offset, t1 - offset)
+    stats = frame_stats(frames, t0 - offset, t1 - offset, vsync_ms)
+    # The sampler reads the Kirin 980's clock files; on another SoC the
+    # line comes back short and the clocks go unreported.
     freqs = [list(map(int, line.split()[1:])) for line in lines if line.startswith('F ')]
+    freqs = [sample for sample in freqs if len(sample) == 5 + len(HARDWARE_MAX)]
     ticks_per_s = args.clock_ticks
     cpu_s = (last_proc - first_proc) / ticks_per_s
     threads = []
@@ -289,23 +343,16 @@ def measure_run(device, app, scenario, args, destination):
         layer=layer,
         clock_offset_s=offset,
         clock_offset_spread_s=max(calibration) - offset,
+        latency_poll_gaps=poll_gaps,
         **stats,
         cpu_pct=100.0 * cpu_s / elapsed,
         cpu_ms_per_frame=1000.0 * cpu_s / stats['frames'],
         top_threads=threads[:6],
-        gpu_mhz=statistics.mean(f[0] for f in freqs) / 1e6,
-        ddr_mhz=statistics.mean(f[1] for f in freqs) / 1e6,
-        cpu_little_mhz=statistics.mean(f[2] for f in freqs) / 1e3,
-        cpu_mid_mhz=statistics.mean(f[3] for f in freqs) / 1e3,
-        cpu_big_mhz=statistics.mean(f[4] for f in freqs) / 1e3,
-        # Lowest cap seen, as a share of the domain's hardware maximum; below
-        # 100 means thermal management throttled that domain in the window.
-        cap_pct={domain: 100.0 * min(f[5 + index] for f in freqs) / HARDWARE_MAX[domain]
-                 for index, domain in enumerate(HARDWARE_MAX)},
+        **clock_summary(freqs),
         thermal=thermal_summary(thermal_series(output)),
         memory=meminfo(device, package),
     )
-    run['throttled'] = (min(run['cap_pct'].values()) < 100.0
+    run['throttled'] = (min(run['cap_pct'].values(), default=100.0) < 100.0
                         or any(value['max'] > 0 for name, value in run['thermal'].items()
                                if name.startswith('cooling_')))
     if app == 'compose':
@@ -382,13 +429,10 @@ def main():
                     run = measure_run(device, app, scenario, args, args.output)
                     run['block'] = block
                     report['runs'].append(run)
-                    heat = run['thermal']
                     print(f'{scenario:10} {app:8} fps={run["fps"]:5.1f} jank={run["janky_pct"]:4.1f}% '
                           f'stalled={run["stalled_seconds"]}s '
                           f'p99={run["interval_p99_ms"]:.1f}ms '
-                          f'cpu={run["cpu_pct"]:5.1f}% gpu={run["gpu_mhz"]:.0f}MHz '
-                          f'big={heat["cluster1"]["start"]:.0f}->{heat["cluster1"]["end"]:.0f}C '
-                          f'gpuT={heat["gpu"]["start"]:.0f}->{heat["gpu"]["end"]:.0f}C '
+                          f'cpu={run["cpu_pct"]:5.1f}% {heat_note(run)}'
                           f'throttled={run["throttled"]}', flush=True)
                 except Exception as error:  # retain the failure, keep measuring
                     report['failures'].append({'app': app, 'scenario': scenario, 'error': str(error)})
