@@ -25,6 +25,11 @@ const AUTO_HYPHEN_MIN_SEGMENT_CHARS: usize = 2;
 const AUTO_HYPHEN_MIN_TRAILING_CHARS: usize = 3;
 const AUTO_HYPHEN_PREFERRED_TRAILING_CHARS: usize = 4;
 const TEXT_SERVICE_CACHE_CAPACITY: usize = 8192;
+/// Prepared layouts kept across nodes. Each node keeps its own, so this
+/// serves the items a list composes again, a few screens of them; an entry
+/// holds a whole visual style, and a screen laid out again at a new width
+/// every frame fills every entry with widths it never asks for again.
+const TEXT_PREPARED_CACHE_CAPACITY: usize = 1024;
 const TEXT_LAYOUT_TELEMETRY_ENV: &str = "CRANPOSE_TEXT_LAYOUT_TELEMETRY";
 
 fn text_layout_telemetry_enabled() -> bool {
@@ -547,7 +552,7 @@ impl TextService {
             measurer: RefCell::new(measurer),
             metrics_cache: RefCell::new(BoundedTextCache::new(TEXT_SERVICE_CACHE_CAPACITY)),
             options_metrics_cache: RefCell::new(BoundedTextCache::new(TEXT_SERVICE_CACHE_CAPACITY)),
-            prepared_cache: RefCell::new(BoundedTextCache::new(TEXT_SERVICE_CACHE_CAPACITY)),
+            prepared_cache: RefCell::new(BoundedTextCache::new(TEXT_PREPARED_CACHE_CAPACITY)),
             layout_cache: RefCell::new(BoundedTextCache::new(TEXT_SERVICE_CACHE_CAPACITY)),
         }
     }
