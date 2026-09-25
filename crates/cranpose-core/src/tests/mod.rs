@@ -48,6 +48,22 @@ fn cached_key_helpers_agree_with_the_uncached_derivation() {
     );
 }
 
+#[track_caller]
+fn caller_key_and_site() -> (Key, &'static std::panic::Location<'static>) {
+    (caller_location_key(), std::panic::Location::caller())
+}
+
+#[test]
+fn a_caller_key_is_the_location_key_of_its_call_site_every_time() {
+    for _ in 0..2 {
+        let (key, site) = caller_key_and_site();
+        assert_eq!(key, location_key(site.file(), site.line(), site.column()));
+    }
+    let (first, _) = caller_key_and_site();
+    let (second, _) = caller_key_and_site();
+    assert_ne!(first, second, "two call sites on different lines differ");
+}
+
 #[test]
 fn cached_key_helpers_latch_the_first_value() {
     struct Marker;

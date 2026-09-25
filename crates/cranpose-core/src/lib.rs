@@ -307,13 +307,38 @@ pub(crate) fn slot_validation_diagnostics_enabled() -> bool {
     crate::env_flag!("CRANPOSE_VALIDATE_SLOTS")
 }
 
-fn source_location_key(file: &str, line: u32, column: u32) -> Key {
-    avalanche_location_key(source_location_hash(file, line, column))
+fn source_location_hash(file: &str, line: u32, column: u32) -> u64 {
+    position_location_hash(file_location_hash(file), line, column)
 }
 
-fn source_location_hash(file: &str, line: u32, column: u32) -> u64 {
-    let mut hash = 0xcbf2_9ce4_8422_2325u64;
-    hash = fnv1a_location_key_bytes(hash, file.as_bytes());
+fn file_location_hash(file: &str) -> u64 {
+    fnv1a_location_key_bytes(0xcbf2_9ce4_8422_2325u64, file.as_bytes())
+}
+
+/// [`file_location_hash`] of a caller's source path, remembered by the
+/// path's address: a `&'static str` keeps its bytes for the whole run, and
+/// hashing the path on every composable call cost an eighth of composing a
+/// feed item.
+fn static_file_location_hash(file: &'static str) -> u64 {
+    const SLOTS: usize = 64;
+    thread_local! {
+        static HASHES: [Cell<(usize, usize, u64)>; SLOTS] =
+            const { [const { Cell::new((0, 0, 0)) }; SLOTS] };
+    }
+    let address = file.as_ptr() as usize;
+    let slot = (address >> 4) % SLOTS;
+    HASHES.with(|hashes| {
+        let (cached_address, cached_len, hash) = hashes[slot].get();
+        if cached_address == address && cached_len == file.len() {
+            return hash;
+        }
+        let hash = file_location_hash(file);
+        hashes[slot].set((address, file.len(), hash));
+        hash
+    })
+}
+
+fn position_location_hash(mut hash: u64, line: u32, column: u32) -> u64 {
     hash = fnv1a_location_key_bytes(hash, &[0xff]);
     hash = fnv1a_location_key_bytes(hash, &line.to_le_bytes());
     hash = fnv1a_location_key_bytes(hash, &[0xfe]);
@@ -341,7 +366,13 @@ fn avalanche_location_key(mut value: u64) -> u64 {
 #[track_caller]
 pub fn caller_location_key() -> Key {
     let caller = std::panic::Location::caller();
-    location_key(caller.file(), caller.line(), caller.column())
+    let file = caller.file();
+    registered_location_key(
+        static_file_location_hash(file),
+        file,
+        caller.line(),
+        caller.column(),
+    )
 }
 
 #[doc(hidden)]
@@ -375,7 +406,11 @@ pub fn cached_composable_definition_key(
 }
 
 pub fn location_key(file: &str, line: u32, column: u32) -> Key {
-    let key = source_location_key(file, line, column);
+    registered_location_key(file_location_hash(file), file, line, column)
+}
+
+fn registered_location_key(file_hash: u64, file: &str, line: u32, column: u32) -> Key {
+    let key = avalanche_location_key(position_location_hash(file_hash, line, column));
     #[cfg(test)]
     register_location_key_debug_info(key, file, line, column);
     #[cfg(all(debug_assertions, not(test)))]
