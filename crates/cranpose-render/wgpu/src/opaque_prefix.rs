@@ -251,7 +251,12 @@ fn prefix_hash(
 pub(crate) fn opaque_prefix(context: &PrefixContext<'_>, ops: &[DrawOp]) -> Option<OpaquePrefix> {
     let op = ops.first()?;
     let candidate = candidate(context.scene, op)?;
-    if !is_opaque(&candidate) {
+    // A solid fill draws for less than copying it back from a cached texture
+    // costs, and the cache would hold a page-sized texture for it: on a
+    // Pixel 9 Pro caching the benchmarks' solid backgrounds cost 13 to 27 MB
+    // of PSS and saved no GPU clock. Only gradients, whose per-pixel stop
+    // lookups the copy saves, are cached.
+    if candidate.brush.is_none() || !is_opaque(&candidate) {
         return None;
     }
     let placement = &candidate.run.placement;
