@@ -1456,6 +1456,61 @@ fn trim_segment_end_whitespace(line: &str, start: usize, mut end: usize) -> usiz
     end
 }
 
+/// The max widths a prepared layout comes out the same for, so a node whose
+/// width moves can keep one layout instead of preparing it again.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum PreparedWidths {
+    /// Only the width it was prepared at; `None` is unconstrained.
+    Exact(Option<u32>),
+    /// No line wrapped or overflowed: unconstrained, and every width from
+    /// its measured width up. A narrower width may wrap, so it is not held.
+    AtLeast(f32),
+}
+
+impl PreparedWidths {
+    /// The widths `prepared`, made from `text` at `max_width`, holds for.
+    pub(crate) fn of(
+        text: &crate::text::AnnotatedString,
+        options: TextLayoutOptions,
+        max_width: Option<f32>,
+        prepared: &PreparedTextLayout,
+    ) -> Self {
+        let max_width = normalize_max_width(max_width);
+        let exact = Self::Exact(max_width.map(f32::to_bits));
+        let wrapped = prepared.text.text.matches('\n').count() != text.text.matches('\n').count();
+        // A line's trailing spaces count when it is fitted but not in the
+        // width it reports, so such a line may wrap at its own width.
+        let trailing_space = text
+            .text
+            .split('\n')
+            .any(|line| line.ends_with(char::is_whitespace));
+        if options
+            .normalized()
+            .overflow
+            .scale_down_min_font_size_sp()
+            .is_some()
+            || prepared.did_overflow
+            || wrapped
+            || trailing_space
+        {
+            return exact;
+        }
+        match max_width {
+            Some(width) if prepared.metrics.width >= width => exact,
+            _ => Self::AtLeast(prepared.metrics.width),
+        }
+    }
+
+    /// Whether preparing at `max_width` gives the same layout.
+    pub(crate) fn hold(self, max_width: Option<f32>) -> bool {
+        let max_width = normalize_max_width(max_width);
+        match self {
+            Self::Exact(bits) => max_width.map(f32::to_bits) == bits,
+            Self::AtLeast(min) => max_width.is_none_or(|width| width >= min),
+        }
+    }
+}
+
 fn normalize_max_width(max_width: Option<f32>) -> Option<f32> {
     match max_width {
         Some(width) if width.is_finite() && width > 0.0 => Some(width),

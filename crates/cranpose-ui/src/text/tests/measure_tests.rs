@@ -1370,3 +1370,128 @@ fn mixed_font_size_segments_wrap_without_truncation() {
     assert!(prepared.text.text.contains("mid-sentence!"));
     assert!(!prepared.did_overflow);
 }
+
+fn prepared_as(display: &str, width: f32, did_overflow: bool) -> PreparedTextLayout {
+    PreparedTextLayout {
+        text: Rc::new(crate::text::AnnotatedString::from(display)),
+        visual_style: TextStyle::default(),
+        metrics: TextMetrics {
+            width,
+            height: 10.0,
+            line_height: 10.0,
+            line_count: display.split('\n').count(),
+        },
+        did_overflow,
+    }
+}
+
+fn widths_of(
+    source: &str,
+    max_width: Option<f32>,
+    prepared: &PreparedTextLayout,
+) -> PreparedWidths {
+    PreparedWidths::of(
+        &crate::text::AnnotatedString::from(source),
+        TextLayoutOptions::default(),
+        max_width,
+        prepared,
+    )
+}
+
+#[test]
+fn a_layout_that_wrapped_nothing_holds_from_its_width_up() {
+    let widths = widths_of(
+        "two\nlines",
+        Some(120.0),
+        &prepared_as("two\nlines", 40.0, false),
+    );
+    assert_eq!(widths, PreparedWidths::AtLeast(40.0));
+    for held in [
+        None,
+        Some(40.0),
+        Some(41.5),
+        Some(10_000.0),
+        Some(f32::INFINITY),
+    ] {
+        assert!(widths.hold(held), "{held:?} lays out the same");
+    }
+    assert!(!widths.hold(Some(39.5)), "a narrower width may wrap");
+    let unconstrained = widths_of("label", None, &prepared_as("label", 40.0, false));
+    assert_eq!(unconstrained, PreparedWidths::AtLeast(40.0));
+}
+
+#[test]
+fn a_layout_that_wrapped_overflowed_or_filled_its_width_holds_only_that_width() {
+    let exact = PreparedWidths::Exact(Some(120.0f32.to_bits()));
+    assert_eq!(
+        widths_of("a b", Some(120.0), &prepared_as("a\nb", 30.0, false)),
+        exact,
+        "wrapped"
+    );
+    assert_eq!(
+        widths_of("label", Some(120.0), &prepared_as("lab…", 30.0, true)),
+        exact,
+        "overflowed"
+    );
+    assert_eq!(
+        widths_of("label", Some(120.0), &prepared_as("label", 120.0, false)),
+        exact,
+        "clamped to the width it was given"
+    );
+    assert_eq!(
+        widths_of("label ", Some(120.0), &prepared_as("label ", 30.0, false)),
+        exact,
+        "a trailing space counts when fitting"
+    );
+    let scaled = PreparedWidths::of(
+        &crate::text::AnnotatedString::from("label"),
+        TextLayoutOptions {
+            overflow: TextOverflow::ScaleDown {
+                min_font_size_sp: 8.0,
+            },
+            ..TextLayoutOptions::default()
+        },
+        Some(120.0),
+        &prepared_as("label", 30.0, false),
+    );
+    assert_eq!(scaled, exact, "scale-down sizes the font to the width");
+    assert!(exact.hold(Some(120.0)));
+    assert!(!exact.hold(Some(121.0)));
+    assert!(!exact.hold(None));
+    assert!(
+        PreparedWidths::Exact(None).hold(Some(-1.0)),
+        "no usable width is unconstrained"
+    );
+}
+
+#[test]
+fn a_held_width_prepares_the_layout_the_held_one_is() {
+    let measurer = MonospacedTextMeasurer;
+    let prepare = |text: &crate::text::AnnotatedString, max_width| {
+        prepare_text_layout_with_measurer_for_node(
+            &measurer,
+            None,
+            text,
+            &TextStyle::default(),
+            TextLayoutOptions::default(),
+            max_width,
+        )
+    };
+    for source in ["label", "two words", "first line\nsecond one"] {
+        let text = crate::text::AnnotatedString::from(source);
+        let held = prepare(&text, Some(1000.0));
+        let widths = PreparedWidths::of(&text, TextLayoutOptions::default(), Some(1000.0), &held);
+        let PreparedWidths::AtLeast(min) = widths else {
+            panic!("{source:?} wraps nothing at 1000");
+        };
+        for width in [Some(min), Some(min + 0.25), Some(min * 3.0), None] {
+            assert!(widths.hold(width));
+            assert_eq!(prepare(&text, width), held, "{source:?} at {width:?}");
+        }
+        assert_ne!(
+            prepare(&text, Some(min - 20.0)).text.text,
+            held.text.text,
+            "{source:?} wraps below its width"
+        );
+    }
+}
