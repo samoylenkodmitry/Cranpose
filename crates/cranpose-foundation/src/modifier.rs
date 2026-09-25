@@ -597,6 +597,38 @@ pub trait PointerInputNode: ModifierNode {
 pub trait SemanticsNode: ModifierNode {
     /// Merges semantic properties into the provided configuration.
     fn merge_semantics(&self, _config: &mut SemanticsConfiguration) {}
+
+    /// Whether this node makes its subtree modal or hides it. The default
+    /// merges into a fresh configuration and reads the two flags; a node
+    /// that can declare neither overrides it to skip that work.
+    fn reach(&self) -> SemanticsReach {
+        let mut config = SemanticsConfiguration::default();
+        self.merge_semantics(&mut config);
+        SemanticsReach {
+            is_modal: config.is_modal,
+            hidden: config.hidden,
+        }
+    }
+}
+
+/// The two semantics flags that decide which part of a window is live:
+/// [`SemanticsConfiguration::is_modal`] and [`SemanticsConfiguration::hidden`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SemanticsReach {
+    /// The subtree takes over the screen.
+    pub is_modal: bool,
+    /// The subtree is skipped by readers.
+    pub hidden: bool,
+}
+
+impl SemanticsReach {
+    /// Both flags of `self` and `other`.
+    pub fn union(self, other: Self) -> Self {
+        Self {
+            is_modal: self.is_modal || other.is_modal,
+            hidden: self.hidden || other.hidden,
+        }
+    }
 }
 
 /// Focus state of a focus target node.

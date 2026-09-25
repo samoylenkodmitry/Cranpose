@@ -801,6 +801,11 @@ impl LayoutNode {
         crate::modifier::collect_semantics_from_chain(self.modifier_chain.chain())
     }
 
+    /// Whether this node's modifiers make it modal or hidden.
+    pub fn semantics_reach(&self) -> cranpose_foundation::SemanticsReach {
+        crate::modifier::semantics_reach_of_chain(self.modifier_chain.chain())
+    }
+
     pub(crate) fn modifier_chain(&self) -> &ModifierChainHandle {
         &self.modifier_chain
     }
