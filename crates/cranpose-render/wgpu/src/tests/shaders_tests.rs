@@ -258,13 +258,13 @@ fn shape_fragment_inputs_fit_the_gles_varying_floor() {
     }
     assert_eq!(
         fragment_input_locations(super::SHADER, "fs_solid").len(),
-        7,
-        "a solid batch carries the coverage vectors and nothing of the brush"
+        8,
+        "a solid batch carries the coverage vectors, the interior and nothing of the brush"
     );
     assert_eq!(
         fragment_input_locations(super::SHADER, "fs_gradient_fill").len(),
-        11,
-        "a gradient fill batch carries no colour, stroke or arc vectors"
+        12,
+        "a gradient fill batch carries its interior and no colour, stroke or arc vectors"
     );
 }
 

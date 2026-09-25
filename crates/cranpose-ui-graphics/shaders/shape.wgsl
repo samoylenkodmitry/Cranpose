@@ -25,6 +25,7 @@ struct VertexOutput {
     @location(12) @interpolate(flat) stop_color1: vec4<f32>,
     @location(13) @interpolate(flat) stop_color2: vec4<f32>,
     @location(14) @interpolate(flat) stop_color3: vec4<f32>,
+    @location(1) @interpolate(flat) interior: vec4<f32>,
 }
 
 // What a solid batch's fragments need: `VertexOutput` without the brush
@@ -40,6 +41,7 @@ struct SolidOutput {
     @location(5) @interpolate(flat) clip_rect: vec4<f32>,
     @location(6) @interpolate(flat) stroke_params: vec4<f32>,
     @location(7) @interpolate(flat) arc_params: vec4<f32>,
+    @location(8) @interpolate(flat) interior: vec4<f32>,
 }
 
 fn solid_output(full: VertexOutput) -> SolidOutput {
@@ -52,6 +54,7 @@ fn solid_output(full: VertexOutput) -> SolidOutput {
     output.clip_rect = full.clip_rect;
     output.stroke_params = full.stroke_params;
     output.arc_params = full.arc_params;
+    output.interior = full.interior;
     return output;
 }
 
@@ -72,6 +75,7 @@ fn full_output(solid: SolidOutput) -> VertexOutput {
     output.stop_color1 = vec4<f32>(0.0);
     output.stop_color2 = vec4<f32>(0.0);
     output.stop_color3 = vec4<f32>(0.0);
+    output.interior = solid.interior;
     return output;
 }
 
@@ -88,6 +92,7 @@ struct GradientFillOutput {
     @location(8) @interpolate(flat) stop_color1: vec4<f32>,
     @location(9) @interpolate(flat) stop_color2: vec4<f32>,
     @location(10) @interpolate(flat) stop_color3: vec4<f32>,
+    @location(11) @interpolate(flat) interior: vec4<f32>,
 }
 
 fn gradient_fill_output(full: VertexOutput) -> GradientFillOutput {
@@ -104,6 +109,7 @@ fn gradient_fill_output(full: VertexOutput) -> GradientFillOutput {
     output.stop_color1 = full.stop_color1;
     output.stop_color2 = full.stop_color2;
     output.stop_color3 = full.stop_color3;
+    output.interior = full.interior;
     return output;
 }
 
@@ -124,6 +130,7 @@ fn full_from_gradient_fill(fill: GradientFillOutput) -> VertexOutput {
     output.stop_color1 = fill.stop_color1;
     output.stop_color2 = fill.stop_color2;
     output.stop_color3 = fill.stop_color3;
+    output.interior = fill.interior;
     return output;
 }
 
@@ -336,6 +343,7 @@ fn shape_output(
     var output: VertexOutput;
     output.clip_position = clip_position(position);
     output.color = paint(record.color, placement);
+    output.interior = vec4<f32>(1.0, 1.0, 0.0, 0.0);
     output.world_pos = vec4<f32>(position, position - placement.dither_origin);
     output.rect = geometry.rect;
     let scale = geometry.scale;
@@ -376,6 +384,17 @@ fn shape_output(
             output.stroke_params = vec4<f32>(0.0);
         }
         output.arc_params = vec4<f32>(0.0);
+        if (!stroked) {
+            let corner = max(max(output.radii.x, output.radii.y), max(output.radii.z, output.radii.w));
+            let inset = corner + 0.5;
+            let rect = geometry.rect;
+            output.interior = vec4<f32>(
+                rect.x + inset,
+                rect.y + inset,
+                rect.x + rect.z - inset,
+                rect.y + rect.w - inset,
+            );
+        }
     }
 
     if (SHAPE_CLIPPED && (placement.flags & PLACEMENT_CLIPPED) != 0u) {
@@ -909,6 +928,10 @@ fn shape_coverage_alpha(input: VertexOutput) -> f32 {
         }
     }
     if (SHAPE_FLAT) {
+        return 1.0;
+    }
+    if (rect_pos.x >= input.interior.x && rect_pos.x <= input.interior.z &&
+        rect_pos.y >= input.interior.y && rect_pos.y <= input.interior.w) {
         return 1.0;
     }
 
