@@ -333,3 +333,41 @@ fn a_transformed_shape_pipeline_falls_back_to_a_transformed_general_one() {
     assert!(transformed.general().transformed);
     assert!(!untransformed.general().transformed);
 }
+
+#[test]
+fn consecutive_shared_glyph_quads_draw_as_one_until_a_state_changes() {
+    let (_lock, mut renderer) = test_renderer();
+    let texel = Rc::clone(&renderer.text_glyph_atlas.texel_bind_group);
+    let filtered = Rc::clone(&renderer.text_glyph_atlas.filtered_bind_group);
+    let full = (0, 0, 8, 8);
+    let half = (0, 0, 4, 8);
+    let mut cmds = vec![
+        GlyphDrawCmd::shared(0, 6, full, Rc::clone(&texel)),
+        GlyphDrawCmd::shared(6, 12, full, Rc::clone(&texel)),
+        GlyphDrawCmd::shared(18, 6, half, Rc::clone(&texel)),
+        GlyphDrawCmd::shared(24, 6, half, Rc::clone(&filtered)),
+        GlyphDrawCmd::shared(36, 6, half, Rc::clone(&filtered)),
+    ];
+    queue_glyph(&mut renderer, 1, 0.0, &mut cmds);
+    cmds.push(GlyphDrawCmd::shared(42, 6, half, Rc::clone(&filtered)));
+
+    let draws: Vec<_> = GlyphDraws::new(&cmds)
+        .map(|draw| match draw.step {
+            GlyphDrawStep::Shared(indices) => (Some(indices), draw.scissor),
+            GlyphDrawStep::Retained { .. } => (None, draw.scissor),
+        })
+        .collect();
+
+    assert_eq!(
+        draws,
+        vec![
+            (Some(0..18), full),
+            (Some(18..24), half),
+            (Some(24..30), half),
+            (Some(36..42), half),
+            (None, (0, 0, 8, 8)),
+            (Some(42..48), half),
+        ],
+        "a new scissor, a new atlas, a gap in the quads and a retained run each start a draw"
+    );
+}

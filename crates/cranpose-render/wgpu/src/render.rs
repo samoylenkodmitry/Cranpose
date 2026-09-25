@@ -79,6 +79,10 @@ const MAX_TEXT_GLYPH_MASK_CACHE_ITEMS: usize = 8192;
 const MAX_TEXT_GLYPH_ATLAS_ITEMS: usize = 8192;
 const MAX_TEXT_GLYPH_RUN_CACHE_ITEMS: usize = 1024;
 const MAX_TEXT_GLYPH_GPU_RUN_CACHE_ITEMS: usize = 1024;
+/// Text runs with at least this many glyphs keep their quads in retained GPU
+/// buffers and draw on their own; shorter ones are written into the frame's
+/// shared quads each frame, where consecutive runs share a draw.
+const RETAINED_TEXT_GLYPH_RUN_MIN_QUADS: usize = 64;
 
 const TEXT_GLYPH_ATLAS_MIN_SIZE: u32 = 512;
 const TEXT_GLYPH_ATLAS_MAX_SIZE: u32 = 4096;
@@ -1541,6 +1545,76 @@ pub(crate) struct GlyphDrawCmd {
     atlas: Rc<wgpu::BindGroup>,
     source: GlyphDrawSource,
     scissor: (u32, u32, u32, u32),
+}
+
+/// One draw of a glyph batch: a stretch of shared quads, or a retained run.
+struct GlyphDraw<'a> {
+    atlas: &'a Rc<wgpu::BindGroup>,
+    scissor: (u32, u32, u32, u32),
+    step: GlyphDrawStep<'a>,
+}
+
+enum GlyphDrawStep<'a> {
+    Shared(std::ops::Range<u32>),
+    Retained {
+        run: &'a CachedGpuTextGlyphRun,
+        uniform_slot: usize,
+    },
+}
+
+/// The draws a batch's glyph commands take: consecutive shared commands with
+/// one atlas and one scissor whose quads follow each other in the frame's
+/// shared buffer draw as one.
+struct GlyphDraws<'a> {
+    cmds: &'a [GlyphDrawCmd],
+}
+
+impl<'a> GlyphDraws<'a> {
+    fn new(cmds: &'a [GlyphDrawCmd]) -> Self {
+        Self { cmds }
+    }
+}
+
+impl<'a> Iterator for GlyphDraws<'a> {
+    type Item = GlyphDraw<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let (first, rest) = self.cmds.split_first()?;
+        self.cmds = rest;
+        let step = match &first.source {
+            GlyphDrawSource::Retained { run, uniform_slot } => GlyphDrawStep::Retained {
+                run,
+                uniform_slot: *uniform_slot,
+            },
+            GlyphDrawSource::Shared {
+                index_start,
+                index_count,
+            } => {
+                let mut end = index_start + index_count;
+                while let Some((next, rest)) = self.cmds.split_first() {
+                    match next.source {
+                        GlyphDrawSource::Shared {
+                            index_start,
+                            index_count,
+                        } if index_start == end
+                            && next.scissor == first.scissor
+                            && Rc::ptr_eq(&next.atlas, &first.atlas) =>
+                        {
+                            end += index_count;
+                            self.cmds = rest;
+                        }
+                        _ => break,
+                    }
+                }
+                GlyphDrawStep::Shared(*index_start..end)
+            }
+        };
+        Some(GlyphDraw {
+            atlas: &first.atlas,
+            scissor: first.scissor,
+            step,
+        })
+    }
 }
 
 impl GlyphDrawCmd {
@@ -3546,26 +3620,24 @@ impl GpuRenderer {
             return Ok(());
         }
         self.frame_stats.bump_text();
-        self.frame_stats.add_draw_calls(cmds.len() as u32);
         pass.set_pipeline(self.glyph_atlas_pipeline());
         let mut bound_atlas = None;
         let mut shared_bound = false;
         let mut retained_indices_bound = false;
         let mut bound_run_vertices: Option<&wgpu::Buffer> = None;
-        for cmd in cmds {
-            let Some((x, y, width, height)) = bounded_scissor(cmd.scissor, bound) else {
+        let mut draws = 0u32;
+        for draw in GlyphDraws::new(cmds) {
+            let Some((x, y, width, height)) = bounded_scissor(draw.scissor, bound) else {
                 continue;
             };
             pass.set_scissor_rect(x, y, width, height);
-            if !bound_atlas.is_some_and(|atlas| Rc::ptr_eq(atlas, &cmd.atlas)) {
-                pass.set_bind_group(1, cmd.atlas.as_ref(), &[]);
-                bound_atlas = Some(&cmd.atlas);
+            if !bound_atlas.is_some_and(|atlas| Rc::ptr_eq(atlas, draw.atlas)) {
+                pass.set_bind_group(1, draw.atlas.as_ref(), &[]);
+                bound_atlas = Some(draw.atlas);
             }
-            match &cmd.source {
-                GlyphDrawSource::Shared {
-                    index_start,
-                    index_count,
-                } => {
+            draws += 1;
+            match draw.step {
+                GlyphDrawStep::Shared(indices) => {
                     if !shared_bound {
                         let slot = image_slot
                             .ok_or_else(|| "shared glyph draw without an image slot".to_string())?;
@@ -3576,14 +3648,14 @@ impl GpuRenderer {
                         retained_indices_bound = false;
                         bound_run_vertices = None;
                     }
-                    pass.draw_indexed(*index_start..(*index_start + *index_count), 0, 0..1);
+                    pass.draw_indexed(indices, 0, 0..1);
                 }
-                GlyphDrawSource::Retained {
+                GlyphDrawStep::Retained {
                     run,
                     uniform_slot: retained_slot,
                 } => {
                     shared_bound = false;
-                    self.viewport_uniforms.bind(pass, *retained_slot)?;
+                    self.viewport_uniforms.bind(pass, retained_slot)?;
                     if !retained_indices_bound {
                         let indices =
                             self.text_glyph_run_arena.index_buffer().ok_or_else(|| {
@@ -3601,6 +3673,7 @@ impl GpuRenderer {
                 }
             }
         }
+        self.frame_stats.add_draw_calls(draws);
         Ok(())
     }
     pub(crate) fn append_image_draw_cmd(
@@ -4094,6 +4167,7 @@ impl GpuRenderer {
             };
 
             if let Some(quad_run) = cached_quad_run.as_ref()
+                && quad_run.len() >= RETAINED_TEXT_GLYPH_RUN_MIN_QUADS
                 && self.emit_retained_text_glyph_run_if_ready(
                     run_key,
                     quad_run.as_ref(),
