@@ -188,111 +188,11 @@ fn collect_primitives_from_commands(
             ops.push(RenderOp::Primitive {
                 node_id,
                 layer,
-                primitive: translate_primitive(primitive, rect.x, rect.y),
+                primitive: primitive.translate(rect.x, rect.y),
             });
         }
     }
     ops
-}
-
-fn translate_primitive(primitive: DrawPrimitive, dx: f32, dy: f32) -> DrawPrimitive {
-    match primitive {
-        DrawPrimitive::Content => DrawPrimitive::Content,
-        DrawPrimitive::Blend {
-            primitive,
-            blend_mode,
-        } => DrawPrimitive::Blend {
-            primitive: Box::new(translate_primitive(*primitive, dx, dy)),
-            blend_mode,
-        },
-        DrawPrimitive::Rect {
-            rect,
-            brush,
-            stroke,
-        } => DrawPrimitive::Rect {
-            rect: rect.translate(dx, dy),
-            brush,
-            stroke,
-        },
-        DrawPrimitive::RoundRect {
-            rect,
-            brush,
-            radii,
-            stroke,
-        } => DrawPrimitive::RoundRect {
-            rect: rect.translate(dx, dy),
-            brush,
-            radii,
-            stroke,
-        },
-        DrawPrimitive::Arc {
-            rect,
-            brush,
-            center,
-            radius,
-            start_angle,
-            sweep_angle,
-            stroke,
-            inner_radius,
-        } => DrawPrimitive::Arc {
-            rect: rect.translate(dx, dy),
-            brush,
-            center: Point::new(center.x + dx, center.y + dy),
-            radius,
-            start_angle,
-            sweep_angle,
-            stroke,
-            inner_radius,
-        },
-        DrawPrimitive::Image {
-            rect,
-            image,
-            alpha,
-            color_filter,
-            sampling,
-            src_rect,
-        } => DrawPrimitive::Image {
-            rect: rect.translate(dx, dy),
-            image,
-            alpha,
-            color_filter,
-            sampling,
-            src_rect,
-        },
-        DrawPrimitive::Text(mut text) => {
-            text.rect = text.rect.translate(dx, dy);
-            DrawPrimitive::Text(text)
-        }
-        DrawPrimitive::Shadow(shadow) => {
-            use cranpose_ui_graphics::ShadowPrimitive;
-            DrawPrimitive::Shadow(match shadow {
-                ShadowPrimitive::Drop {
-                    shape,
-                    cutout,
-                    blur_radius,
-                    blend_mode,
-                } => ShadowPrimitive::Drop {
-                    shape: Box::new(translate_primitive(*shape, dx, dy)),
-                    cutout: cutout.map(|cutout| Box::new(translate_primitive(*cutout, dx, dy))),
-                    blur_radius,
-                    blend_mode,
-                },
-                ShadowPrimitive::Inner {
-                    fill,
-                    cutout,
-                    blur_radius,
-                    blend_mode,
-                    clip_rect,
-                } => ShadowPrimitive::Inner {
-                    fill: Box::new(translate_primitive(*fill, dx, dy)),
-                    cutout: Box::new(translate_primitive(*cutout, dx, dy)),
-                    blur_radius,
-                    blend_mode,
-                    clip_rect: clip_rect.translate(dx, dy),
-                },
-            })
-        }
-    }
 }
 
 impl HeadlessRenderer {

@@ -277,6 +277,17 @@ impl EdgeInsets {
     pub fn vertical_sum(&self) -> f32 {
         self.top + self.bottom
     }
+
+    /// The part of a `size` rect these insets leave, at the leading insets;
+    /// it never shrinks below zero.
+    pub fn inset_rect(&self, size: Size) -> Rect {
+        Rect {
+            x: self.left,
+            y: self.top,
+            width: (size.width - self.horizontal_sum()).max(0.0),
+            height: (size.height - self.vertical_sum()).max(0.0),
+        }
+    }
 }
 
 impl AddAssign for EdgeInsets {
@@ -678,6 +689,105 @@ fn shared_text_str(text: &str) -> Rc<str> {
 }
 
 /// Describes a shadow to be rendered. Each renderer chooses how to blur.
+impl DrawPrimitive {
+    /// The primitive moved by `dx`, `dy`. Brush geometry is relative to the
+    /// primitive's rect, so it moves along.
+    pub fn translate(self, dx: f32, dy: f32) -> Self {
+        match self {
+            DrawPrimitive::Content => DrawPrimitive::Content,
+            DrawPrimitive::Blend {
+                primitive,
+                blend_mode,
+            } => DrawPrimitive::Blend {
+                primitive: Box::new(primitive.translate(dx, dy)),
+                blend_mode,
+            },
+            DrawPrimitive::Rect {
+                rect,
+                brush,
+                stroke,
+            } => DrawPrimitive::Rect {
+                rect: rect.translate(dx, dy),
+                brush,
+                stroke,
+            },
+            DrawPrimitive::RoundRect {
+                rect,
+                brush,
+                radii,
+                stroke,
+            } => DrawPrimitive::RoundRect {
+                rect: rect.translate(dx, dy),
+                brush,
+                radii,
+                stroke,
+            },
+            DrawPrimitive::Arc {
+                rect,
+                brush,
+                center,
+                radius,
+                start_angle,
+                sweep_angle,
+                stroke,
+                inner_radius,
+            } => DrawPrimitive::Arc {
+                rect: rect.translate(dx, dy),
+                brush,
+                center: Point::new(center.x + dx, center.y + dy),
+                radius,
+                start_angle,
+                sweep_angle,
+                stroke,
+                inner_radius,
+            },
+            DrawPrimitive::Image {
+                rect,
+                image,
+                alpha,
+                color_filter,
+                sampling,
+                src_rect,
+            } => DrawPrimitive::Image {
+                rect: rect.translate(dx, dy),
+                image,
+                alpha,
+                color_filter,
+                sampling,
+                src_rect,
+            },
+            DrawPrimitive::Text(mut text) => {
+                text.rect = text.rect.translate(dx, dy);
+                DrawPrimitive::Text(text)
+            }
+            DrawPrimitive::Shadow(ShadowPrimitive::Drop {
+                shape,
+                cutout,
+                blur_radius,
+                blend_mode,
+            }) => DrawPrimitive::Shadow(ShadowPrimitive::Drop {
+                shape: Box::new(shape.translate(dx, dy)),
+                cutout: cutout.map(|cutout| Box::new(cutout.translate(dx, dy))),
+                blur_radius,
+                blend_mode,
+            }),
+            DrawPrimitive::Shadow(ShadowPrimitive::Inner {
+                fill,
+                cutout,
+                blur_radius,
+                blend_mode,
+                clip_rect,
+            }) => DrawPrimitive::Shadow(ShadowPrimitive::Inner {
+                fill: Box::new(fill.translate(dx, dy)),
+                cutout: Box::new(cutout.translate(dx, dy)),
+                blur_radius,
+                blend_mode,
+                clip_rect: clip_rect.translate(dx, dy),
+            }),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum ShadowPrimitive {
     /// Drop shadow: render shape behind content, blurred. `cutout` knocks
@@ -1046,6 +1156,28 @@ impl DrawScopeDefault {
     /// How many `draw_content` markers this scope has recorded.
     pub fn content_marker_count(&self) -> u32 {
         self.recording.content_markers()
+    }
+
+    /// Runs `draw` in this scope's rect shrunk by `insets`, where a draw
+    /// modifier placed after layout padding draws: `draw` sees the inner
+    /// size, and what it records lands offset by the leading insets.
+    pub fn inset(&mut self, insets: EdgeInsets, draw: impl FnOnce(&mut DrawScopeDefault)) {
+        let inner = insets.inset_rect(self.size);
+        let mut scope = Self::with_storage(
+            Size {
+                width: inner.width,
+                height: inner.height,
+            },
+            self.text_measurer.clone(),
+            CommandRecording::default(),
+        );
+        draw(&mut scope);
+        let primitives = scope.into_primitives();
+        self.push_recorded(
+            primitives
+                .into_iter()
+                .map(|primitive| primitive.translate(inner.x, inner.y)),
+        );
     }
 
     /// Records primitives already built, as if each had been drawn here.
