@@ -31,7 +31,7 @@ const PREPARED_LAYOUT_CACHE_CAPACITY: usize = 4;
 
 #[derive(Clone, Debug)]
 struct TextPreparedLayoutCacheEntry {
-    max_width_bits: Option<u32>,
+    widths: crate::text::measure::PreparedWidths,
     text_generation: u64,
     font_scale_fingerprint: u32,
     layout: crate::text::PreparedTextLayout,
@@ -102,14 +102,13 @@ impl TextPreparedLayoutOwner {
 
     fn prepare(&self, max_width: Option<f32>) -> crate::text::PreparedTextLayout {
         let normalized_max_width = max_width.filter(|width| width.is_finite() && *width > 0.0);
-        let max_width_bits = normalized_max_width.map(f32::to_bits);
         let text_generation = crate::text::measure::current_text_generation();
         let font_scale_fingerprint = crate::current_font_scale_curve().fingerprint();
 
         {
             let mut cache = self.cache.borrow_mut();
             if let Some(index) = cache.iter().position(|entry| {
-                entry.max_width_bits == max_width_bits
+                entry.widths.hold(normalized_max_width)
                     && entry.text_generation == text_generation
                     && entry.font_scale_fingerprint == font_scale_fingerprint
             }) {
@@ -132,7 +131,12 @@ impl TextPreparedLayoutOwner {
         cache.insert(
             0,
             TextPreparedLayoutCacheEntry {
-                max_width_bits,
+                widths: crate::text::measure::PreparedWidths::of(
+                    self.text.as_ref(),
+                    self.options,
+                    normalized_max_width,
+                    &prepared,
+                ),
                 text_generation,
                 font_scale_fingerprint,
                 layout: prepared.clone(),

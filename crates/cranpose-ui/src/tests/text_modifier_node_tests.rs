@@ -417,3 +417,36 @@ fn semantics_uses_source_text_for_scaled_overflow() {
         Some("Save Cranpose WebP")
     );
 }
+
+#[test]
+fn a_text_that_wraps_nothing_keeps_its_layout_while_its_width_grows() {
+    let (tx, rx) = mpsc::channel();
+
+    std::thread::spawn(move || {
+        let recorded = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let app_context = crate::AppContext::new();
+        app_context.enter(|| {
+            crate::text::set_text_measurer(RecordingPreparedLayoutMeasurer {
+                recorded: recorded.clone(),
+            });
+            let node = TextModifierNode::new(
+                Rc::new(AnnotatedString::from("label")),
+                TextStyle::default(),
+                TextLayoutOptions::default(),
+            );
+            let mut prepares = Vec::new();
+            for width in [Some(120.0), Some(200.0), None, Some(12.0), Some(10.0)] {
+                let measured = node.layout.measure_layout(width);
+                prepares.push((recorded.borrow().len(), measured.width));
+            }
+            tx.send(prepares).expect("send prepare counts");
+        });
+    });
+
+    let prepares = rx.recv().expect("receive prepare counts");
+    assert_eq!(
+        prepares,
+        vec![(1, 12.0), (1, 12.0), (1, 12.0), (1, 12.0), (2, 12.0)],
+        "widths from 12 up reuse the first layout; a narrower one prepares again"
+    );
+}
