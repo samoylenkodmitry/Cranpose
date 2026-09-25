@@ -1287,6 +1287,10 @@ impl SemanticsNode for TextFieldModifierNode {
         ));
         config.text_selection = Some(self.state.selection());
     }
+
+    fn reach(&self) -> cranpose_foundation::SemanticsReach {
+        cranpose_foundation::SemanticsReach::default()
+    }
 }
 
 fn floor_char_boundary(text: &str, index: usize) -> usize {

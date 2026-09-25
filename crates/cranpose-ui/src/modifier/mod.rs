@@ -78,7 +78,7 @@ pub use scroll::{last_fling_velocity, reset_last_fling_velocity};
 use semantics::SemanticsElement;
 pub use semantics::{
     SemanticsRequester, SemanticsRequesterElement, collect_semantics_from_chain,
-    collect_semantics_from_modifier,
+    collect_semantics_from_modifier, semantics_reach_of_chain,
 };
 pub use slices::{
     ModifierNodeSlices, ModifierNodeSlicesDebugStats, collect_modifier_slices,

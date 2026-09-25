@@ -450,3 +450,14 @@ fn a_text_that_wraps_nothing_keeps_its_layout_while_its_width_grows() {
         "widths from 12 up reuse the first layout; a narrower one prepares again"
     );
 }
+
+#[test]
+fn a_text_node_never_makes_its_subtree_modal_or_hidden() {
+    use cranpose_foundation::SemanticsNode as _;
+    let node = TextModifierNode::new(
+        Rc::new(AnnotatedString::from("Label")),
+        TextStyle::default(),
+        TextLayoutOptions::default(),
+    );
+    assert_eq!(node.reach(), cranpose_foundation::SemanticsReach::default());
+}
