@@ -47,23 +47,20 @@ fn projective_blit_fs(input: VertexOutput) -> @location(0) vec4<f32> {
 
     let source_x = dot(blit.inverse_row0.xyz, p) / denom;
     let source_y = dot(blit.inverse_row1.xyz, p) / denom;
-    let in_region = blit.source_region.z > 0.0 && blit.source_region.w > 0.0;
-    let extent = select(blit.source_size, blit.source_region.zw, in_region);
-    if (source_x < 0.0 || source_y < 0.0 || source_x > extent.x || source_y > extent.y) {
+    if (PROJECTIVE_TEXELS) {
+        let in_region = blit.source_region.z > 0.0 && blit.source_region.w > 0.0;
+        let extent = select(blit.source_size, blit.source_region.zw, in_region);
+        if (source_x < 0.0 || source_y < 0.0 || source_x > extent.x || source_y > extent.y) {
+            discard;
+        }
+        let origin = vec2<i32>(select(vec2<f32>(0.0), blit.source_region.xy, in_region));
+        return projective_texels(vec2<f32>(source_x, source_y), origin, extent) * blit.alpha.x;
+    }
+    if (source_x < 0.0 || source_y < 0.0 || source_x > blit.source_size.x || source_y > blit.source_size.y) {
         discard;
     }
 
-    let local = vec2<f32>(source_x, source_y);
-    if (blit.sampling.x > 1.5) {
-        let origin = vec2<i32>(select(vec2<f32>(0.0), blit.source_region.xy, in_region));
-        return projective_texels(local, origin, extent) * blit.alpha.x;
-    }
-    var source_pos = local;
-    if (in_region) {
-        let half_texel = vec2<f32>(0.5);
-        source_pos = blit.source_region.xy
-            + clamp(source_pos, half_texel, blit.source_region.zw - half_texel);
-    }
+    let source_pos = vec2<f32>(source_x, source_y);
     return composite_sample(source_pos, blit.source_size, blit.sampling.x)
         * blit.alpha.x;
 }

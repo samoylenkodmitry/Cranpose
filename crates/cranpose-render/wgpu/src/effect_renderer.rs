@@ -122,9 +122,9 @@ pub(crate) struct EffectRenderer {
     blit_uniform_bind_group_layout: wgpu::BindGroupLayout,
     projective_blit_shader: wgpu::ShaderModule,
     projective_blit_pipeline_layout: wgpu::PipelineLayout,
-    projective_blit_pipeline: LazyGpuResource<wgpu::RenderPipeline>,
-    projective_blit_pipeline_src: LazyGpuResource<wgpu::RenderPipeline>,
-    projective_blit_pipeline_dst_out: LazyGpuResource<wgpu::RenderPipeline>,
+    projective_blit_pipeline: [LazyGpuResource<wgpu::RenderPipeline>; 2],
+    projective_blit_pipeline_src: [LazyGpuResource<wgpu::RenderPipeline>; 2],
+    projective_blit_pipeline_dst_out: [LazyGpuResource<wgpu::RenderPipeline>; 2],
 
     pub effect_texture_bind_group_layout: wgpu::BindGroupLayout,
     pub effect_uniform_bind_group_layout: wgpu::BindGroupLayout,
@@ -834,6 +834,7 @@ pub(crate) struct PreparedProjectiveComposite<'a> {
     uniform: UniformUpload,
     vertices: BufferUpload,
     blend_mode: BlendMode,
+    texels: bool,
     scissor: Option<(u32, u32, u32, u32)>,
 }
 
@@ -899,6 +900,7 @@ fn fullscreen_pipeline_job(
     })
 }
 
+#[expect(clippy::too_many_arguments)]
 fn projective_pipeline_job(
     device: &wgpu::Device,
     cache: Option<&wgpu::PipelineCache>,
@@ -907,11 +909,13 @@ fn projective_pipeline_job(
     shader: &wgpu::ShaderModule,
     surface_format: wgpu::TextureFormat,
     blend: wgpu::BlendState,
+    texels: bool,
 ) -> FixedPipelineJob {
     let device = device.clone();
     let cache = cache.cloned();
     let layout = layout.clone();
     let shader = shader.clone();
+    let constants = [("PROJECTIVE_TEXELS", if texels { 1.0 } else { 0.0 })];
     Box::new(move || {
         crate::render::create_render_pipeline_logged(
             &device,
@@ -932,7 +936,10 @@ fn projective_pipeline_job(
                             format: wgpu::VertexFormat::Float32x2,
                         }],
                     })],
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    compilation_options: wgpu::PipelineCompilationOptions {
+                        constants: &constants,
+                        ..wgpu::PipelineCompilationOptions::default()
+                    },
                 },
                 fragment: Some(wgpu::FragmentState {
                     module: &shader,
@@ -942,7 +949,10 @@ fn projective_pipeline_job(
                         blend: Some(blend),
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    compilation_options: wgpu::PipelineCompilationOptions {
+                        constants: &constants,
+                        ..wgpu::PipelineCompilationOptions::default()
+                    },
                 }),
                 primitive: wgpu::PrimitiveState {
                     topology: wgpu::PrimitiveTopology::TriangleStrip,
@@ -1116,9 +1126,18 @@ impl EffectRenderer {
                 ],
                 immediate_size: 0,
             });
-        let projective_blit_pipeline = LazyGpuResource::new("effect/projective-src-over");
-        let projective_blit_pipeline_src = LazyGpuResource::new("effect/projective-src");
-        let projective_blit_pipeline_dst_out = LazyGpuResource::new("effect/projective-dst-out");
+        let projective_blit_pipeline = [
+            LazyGpuResource::new("effect/projective-src-over"),
+            LazyGpuResource::new("effect/projective-src-over-texels"),
+        ];
+        let projective_blit_pipeline_src = [
+            LazyGpuResource::new("effect/projective-src"),
+            LazyGpuResource::new("effect/projective-src-texels"),
+        ];
+        let projective_blit_pipeline_dst_out = [
+            LazyGpuResource::new("effect/projective-dst-out"),
+            LazyGpuResource::new("effect/projective-dst-out-texels"),
+        ];
 
         let effect_linear_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("Effect Linear Sampler"),
@@ -1215,12 +1234,14 @@ impl EffectRenderer {
             }
         }
         for blend_mode in [BlendMode::SrcOver, BlendMode::Src, BlendMode::DstOut] {
-            let (resource, _, _) = self.projective_pipeline_target(blend_mode);
-            resource.warm(
-                &self.compiler,
-                backend,
-                self.projective_pipeline_job(device, blend_mode),
-            );
+            for texels in [false, true] {
+                let (resource, _, _) = self.projective_pipeline_target(blend_mode, texels);
+                resource.warm(
+                    &self.compiler,
+                    backend,
+                    self.projective_pipeline_job(device, blend_mode, texels),
+                );
+            }
         }
         self.offset_pipeline
             .warm(&self.compiler, backend, self.offset_pipeline_job(device));
@@ -1416,6 +1437,7 @@ impl EffectRenderer {
     fn projective_pipeline_target(
         &self,
         blend_mode: BlendMode,
+        texels: bool,
     ) -> (
         &LazyGpuResource<wgpu::RenderPipeline>,
         &'static str,
@@ -1423,17 +1445,17 @@ impl EffectRenderer {
     ) {
         match blend_mode {
             BlendMode::Src => (
-                &self.projective_blit_pipeline_src,
+                &self.projective_blit_pipeline_src[usize::from(texels)],
                 "Projective Blit Pipeline Src",
                 wgpu::BlendState::REPLACE,
             ),
             BlendMode::DstOut => (
-                &self.projective_blit_pipeline_dst_out,
+                &self.projective_blit_pipeline_dst_out[usize::from(texels)],
                 "Projective Blit Pipeline DstOut",
                 dst_out_blend_state(),
             ),
             _ => (
-                &self.projective_blit_pipeline,
+                &self.projective_blit_pipeline[usize::from(texels)],
                 "Projective Blit Pipeline",
                 wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
             ),
@@ -1444,8 +1466,9 @@ impl EffectRenderer {
         &self,
         device: &wgpu::Device,
         blend_mode: BlendMode,
+        texels: bool,
     ) -> FixedPipelineJob {
-        let (_, label, blend) = self.projective_pipeline_target(blend_mode);
+        let (_, label, blend) = self.projective_pipeline_target(blend_mode, texels);
         projective_pipeline_job(
             device,
             self.pipeline_cache.as_ref(),
@@ -1454,6 +1477,7 @@ impl EffectRenderer {
             &self.projective_blit_shader,
             self.surface_format,
             blend,
+            texels,
         )
     }
 
@@ -1461,15 +1485,20 @@ impl EffectRenderer {
         &self,
         device: &wgpu::Device,
         blend_mode: BlendMode,
+        texels: bool,
     ) -> &wgpu::RenderPipeline {
-        let (resource, _, _) = self.projective_pipeline_target(blend_mode);
+        let (resource, _, _) = self.projective_pipeline_target(blend_mode, texels);
         resource.get_or_init(self.adapter_backend, || {
-            self.projective_pipeline_job(device, blend_mode)()
+            self.projective_pipeline_job(device, blend_mode, texels)()
         })
     }
 
-    fn initialized_projective_blit_pipeline(&self, blend_mode: BlendMode) -> &wgpu::RenderPipeline {
-        self.projective_pipeline_target(blend_mode)
+    fn initialized_projective_blit_pipeline(
+        &self,
+        blend_mode: BlendMode,
+        texels: bool,
+    ) -> &wgpu::RenderPipeline {
+        self.projective_pipeline_target(blend_mode, texels)
             .0
             .get()
             .expect("prepared projective composite must initialize its pipeline")
@@ -2784,7 +2813,8 @@ impl EffectRenderer {
         device: &wgpu::Device,
         item: &ProjectiveCompositeItem<'a>,
     ) -> PreparedProjectiveComposite<'a> {
-        self.projective_blit_pipeline(device, item.blend_mode);
+        let texels = item.sample_mode == CompositeSampleMode::Texels;
+        self.projective_blit_pipeline(device, item.blend_mode, texels);
         let vertices = [
             ProjectiveBlitVertex {
                 position: item.dest_quad[0],
@@ -2854,6 +2884,7 @@ impl EffectRenderer {
             uniform,
             vertices,
             blend_mode: item.blend_mode,
+            texels,
             scissor: item.scissor,
         }
     }
@@ -2864,7 +2895,7 @@ impl EffectRenderer {
         viewport: (u32, u32),
         draw: &PreparedProjectiveComposite<'_>,
     ) {
-        pass.set_pipeline(self.initialized_projective_blit_pipeline(draw.blend_mode));
+        pass.set_pipeline(self.initialized_projective_blit_pipeline(draw.blend_mode, draw.texels));
         pass.set_bind_group(0, draw.texture_bind_group, &[]);
         pass.set_bind_group(1, &draw.uniform.bind_group, &[draw.uniform.offset]);
         pass.set_vertex_buffer(0, draw.vertices.slice());

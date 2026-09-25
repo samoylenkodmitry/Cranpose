@@ -1,3 +1,4 @@
+override PROJECTIVE_TEXELS: bool = false;
 
 struct VertexInput {
     @location(0) position: vec2<f32>,
