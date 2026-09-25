@@ -637,6 +637,7 @@ where
             surface.frame_owed |= frame.result.visual_changed;
             result.visual_changed |= frame.result.visual_changed;
             result.structure_changed |= frame.result.structure_changed;
+            result.content_redrawn |= frame.rebuilt;
             if frame.rebuilt
                 && surface
                     .renderer

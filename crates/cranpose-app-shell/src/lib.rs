@@ -1,6 +1,7 @@
 use std::sync::PoisonError;
 mod focus_reveal;
 mod fps_monitor;
+mod frame_rate_boost;
 mod hit_path_tracker;
 pub mod inspector;
 mod modal_focus;
@@ -44,6 +45,7 @@ use cranpose_ui::{
 pub use cranpose_ui::{KeyCode, KeyEvent, KeyEventType};
 use cranpose_ui_graphics::{Point, PointerIcon, Rect, Size};
 pub use fps_monitor::FpsStats;
+pub use frame_rate_boost::FrameRateBoost;
 use hit_path_tracker::PointerId;
 #[cfg(test)]
 use shell_frame::build_draw_refresh_scope;
@@ -104,17 +106,17 @@ pub mod placed_semantics;
 /// How the platform should vote the display's frame rate on behalf of the app.
 ///
 /// Compose apps get 120 Hz gameplay on a 120 Hz panel not by presenting faster
-/// but because HWUI votes a rate on the window while gestures run and content
-/// moves, and clears it when they stop. A window that never votes is pinned by
+/// but because HWUI votes a rate on the window while gestures run, content
+/// moves or the window redraws continuously, and clears it when they stop. A window that never votes is pinned by
 /// SurfaceFlinger's cadence inference instead — which also throttles the app's
 /// choreographer, so the inference reinforces itself. `Auto` reproduces the
 /// HWUI behaviour; the platform backends read it every frame and vote through
 /// the native window when the desired rate changes.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum FrameRatePreference {
-    /// Ask for the panel's fastest rate while input arrives or content moves,
-    /// a quiet rate while other animations run, no preference when the scene
-    /// is still. This is the default, matching what Compose/HWUI do for every
+    /// Ask for the panel's fastest rate while [`FrameRateBoost`] holds, a
+    /// quiet rate while frames arrive only intermittently, no preference
+    /// when the scene is still. This is the default, matching what Compose/HWUI do for every
     /// app without the app's involvement.
     #[default]
     Auto,
@@ -126,9 +128,9 @@ pub enum FrameRatePreference {
 }
 
 impl FrameRatePreference {
-    /// The baseline `Auto` votes while animating with neither input nor
-    /// moving content — the same rate HWUI's NORMAL frame-rate category
-    /// resolves to on phone panels. The quiet vote cannot simply be "no vote": SurfaceFlinger
+    /// The baseline `Auto` votes while frames arrive without a boost — the
+    /// same rate HWUI's NORMAL frame-rate category resolves to on phone
+    /// panels. The quiet vote cannot simply be "no vote": SurfaceFlinger
     /// infers a non-voting window's rate from whatever cadence it last
     /// observed and pins it, so an app that ever ran the panel's fast rate
     /// would stay there forever (measured on a Pixel 9 Pro, both directions).
@@ -136,10 +138,9 @@ impl FrameRatePreference {
 
     /// The rate the platform should vote right now, in Hz, where `0.0` means
     /// "clear the vote". `producing_frames` is whether the frame loop has a
-    /// frame scheduled, `boosted` whether input arrived or content moved
-    /// ([`FrameUpdateResult::content_moved`]) within the platform's boost
-    /// hold-off, and `panel_max_hz` the display's fastest supported rate when
-    /// the platform knows it.
+    /// frame scheduled, `boosted` what [`FrameRateBoost::boosted`] says, and
+    /// `panel_max_hz` the display's fastest supported rate when the platform
+    /// knows it.
     ///
     /// While boosted, `Auto` holds the boost even through moments with no
     /// frame scheduled: a gesture sequence crosses still screens (a tap lands,
@@ -333,6 +334,9 @@ pub struct FrameUpdateResult {
     /// frame-rate category on exactly these changes, so the platforms boost
     /// the display rate on them the way they do for input.
     pub content_moved: bool,
+    /// Whether this frame drew new content rather than presenting the scene
+    /// it had: something drew, moved or changed, so the scene was rebuilt.
+    pub content_redrawn: bool,
 }
 
 pub trait PlatformFrameDriver {
