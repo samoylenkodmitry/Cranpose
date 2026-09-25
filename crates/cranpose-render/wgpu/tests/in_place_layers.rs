@@ -30,12 +30,23 @@ enum Scene {
     /// An 80x40 box of ink turned by 40 degrees inside a clear box turned
     /// by -15.
     Nested,
+    /// The nested boxes with the outer one always drawn offscreen, so the
+    /// inner one draws in place into a surface at an offset of its own.
+    InSurface,
     /// A 160x40 box of ink turned by 30 degrees, clipped by the unturned
     /// 100x100 box it sits in.
     Clipped,
     /// Many small rects of ink in a box turned by 11 degrees, as wide as the
     /// page's width state.
     Many,
+}
+
+impl Scene {
+    /// The surfaces the scene renders when its turned layers may draw in
+    /// place.
+    fn surfaces_in_place(self) -> u32 {
+        u32::from(self == Scene::InSurface)
+    }
 }
 
 fn turned(degrees: f32, offscreen: bool) -> Modifier {
@@ -82,10 +93,10 @@ fn TurnedPage(scene: Scene, offscreen: bool, width: MutableState<f32>) {
                         }),
                     );
                 }),
-                Scene::Nested => Box(
+                Scene::Nested | Scene::InSurface => Box(
                     Modifier::empty()
                         .size_points(160.0, 100.0)
-                        .then(turned(-15.0, offscreen)),
+                        .then(turned(-15.0, offscreen || scene == Scene::InSurface)),
                     centred(),
                     move || {
                         Box(
@@ -224,11 +235,12 @@ fn in_place_and_offscreen(scene: Scene) -> Option<(Coverage, Coverage)> {
     let (offscreen_stats, offscreen) =
         TurnedHarness::new(offscreen_renderer, scene, true).settled();
     assert_eq!(
-        in_place_stats.isolated_layer_renders, 0,
+        in_place_stats.isolated_layer_renders,
+        scene.surfaces_in_place(),
         "{scene:?}: a layer that only turns draws in place: {in_place_stats:?}"
     );
     assert!(
-        offscreen_stats.isolated_layer_renders > 0,
+        offscreen_stats.isolated_layer_renders > scene.surfaces_in_place(),
         "{scene:?}: an offscreen layer draws through its surface: {offscreen_stats:?}"
     );
     Some((coverage(&in_place), coverage(&offscreen)))
@@ -297,6 +309,14 @@ fn nested_turns_drawn_in_place_compose_like_nested_surfaces() {
         drawn.area
     );
     assert_centred(Scene::Nested, &drawn, 0.05);
+}
+
+#[test]
+fn a_child_drawn_in_place_into_its_parent_s_surface_lands_where_its_own_surface_does() {
+    let Some(drawn) = assert_lands_alike(Scene::InSurface, 0.005, 0.05) else {
+        return;
+    };
+    assert_centred(Scene::InSurface, &drawn, 0.05);
 }
 
 #[test]
