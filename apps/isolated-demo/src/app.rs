@@ -33,7 +33,7 @@ impl Screen {
     }
 }
 
-pub(crate) fn create_app() -> AppLauncher {
+pub(crate) fn create_app() -> AppLauncher<AppFonts> {
     AppLauncher::new()
         .with_title(TITLE)
         .with_size(900, 600)

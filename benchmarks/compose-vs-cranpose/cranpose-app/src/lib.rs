@@ -52,8 +52,8 @@ impl Scenario {
 
 /// The device's Roboto faces, read from the same two files the Compose app
 /// loads, so both frameworks shape and measure identical fonts. Read once and
-/// kept for the life of the process; off Android the list is empty and the
-/// embedded default face is used.
+/// kept for the life of the process.
+#[cfg(target_os = "android")]
 fn system_roboto() -> &'static [&'static [u8]] {
     let faces: Vec<&'static [u8]> = [
         "/system/fonts/Roboto-Regular.ttf",
@@ -71,12 +71,25 @@ fn system_roboto() -> &'static [&'static [u8]] {
     Box::leak(faces.into_boxed_slice())
 }
 
+/// On Android the app draws in the device's Roboto, so the APK carries no
+/// font of its own, as the Compose APK does not.
+#[cfg(target_os = "android")]
+pub fn create_app() -> AppLauncher<AppFonts> {
+    launcher().with_fonts(system_roboto())
+}
+
+/// Off Android there is no Roboto to match, so text draws in the embedded
+/// face.
+#[cfg(not(target_os = "android"))]
 pub fn create_app() -> AppLauncher {
+    launcher()
+}
+
+fn launcher() -> AppLauncher {
     AppLauncher::new()
         .with_title("Perf Compare")
         .with_size(360, 748)
         .with_log_tag("PerfCompare")
-        .with_fonts(system_roboto())
 }
 
 /// What `am start` asked for: the scenario and its knobs.

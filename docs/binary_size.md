@@ -88,9 +88,10 @@ callback holder already performed.
 ## Landed levers (0.1.28)
 
 - `embedded-default-font` — 1.3 MiB NotoSansMerged is opt-in (on in `cranpose`
-  default features; apps with `default-features = false` + `with_fonts` drop
-  it). Also removed the double-embedding in the demo binaries (app copy +
-  framework copy).
+  default features). Also removed the double-embedding in the demo binaries
+  (app copy + framework copy). Since then an app that supplies fonts through
+  any `AppLauncher` font method leaves the face out on its own: the launcher
+  becomes `AppLauncher<AppFonts>`, which never references it.
 - `backend-gles` / `renderer-wgpu-gles` — GLES fallback and naga's GLSL writer
   are opt-in on desktop; Android keeps GLES via the `android` feature; web
   keeps WebGL.

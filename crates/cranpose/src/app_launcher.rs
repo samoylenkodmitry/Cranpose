@@ -1,6 +1,6 @@
-use std::path::Path;
 #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
 use std::path::PathBuf;
+use std::{marker::PhantomData, path::Path};
 
 #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
 use cranpose_app_shell::FramePacingMode;
@@ -9,7 +9,7 @@ use cranpose_render_common::{
         ANDROID_SYSTEM_FONT_DIR, DEFAULT_SYSTEM_FAMILY_WEIGHTS, FontLoadError,
         SoftwareTextFontRegistry,
     },
-    software_text_raster::SoftwareTextFontSet,
+    software_text_raster::{SoftwareTextFont, SoftwareTextFontSet, default_software_text_font},
 };
 use cranpose_ui::{
     ImageBitmap,
@@ -142,8 +142,13 @@ pub struct AppSettings {
     /// `FontFamily` an app names them by, so a `TextStyle` asking for that
     /// family resolves to them for both measurement and drawing.
     pub font_registry: SoftwareTextFontRegistry,
-    /// Whether to load system fonts on Android (default: false)
-    pub android_use_system_fonts: bool,
+    /// Whether to register the platform's generic families on Android
+    /// (default: false).
+    pub android_system_fonts: bool,
+    /// The face text draws in when the app supplied none. Only a launcher
+    /// the app gave no fonts sets it, so an app that did has no reference to
+    /// the embedded face and its binary leaves the bytes out.
+    pub(crate) default_face: fn() -> Option<SoftwareTextFont>,
     /// Graphics API selected for the Android WGPU renderer.
     pub android_gpu_backend: AndroidGpuBackend,
     /// The tag this application's log lines carry.
@@ -209,7 +214,8 @@ impl Default for AppSettings {
             custom_cursor_size: CustomCursorSize::FollowSystem,
             fonts: None,
             font_registry: SoftwareTextFontRegistry::new(),
-            android_use_system_fonts: false,
+            android_system_fonts: false,
+            default_face: || None,
             android_gpu_backend: AndroidGpuBackend::default(),
             log_tag: None,
             android_overlay_window: None,
@@ -244,11 +250,11 @@ impl AppSettings {
     ///
     /// One definition so the platforms cannot drift, and so the measurer and
     /// the rasterizer are built from the same faces: app-registered families
-    /// first, then the static `with_fonts()` slices as unnamed fallbacks, then
-    /// the embedded default face if nothing else loaded.
+    /// first, then the static `with_fonts()` slices as unnamed fallbacks. A
+    /// launcher the app gave no fonts serves the embedded default face.
     pub fn resolve_font_set(&self) -> SoftwareTextFontSet {
         let mut registry = self.font_registry.clone();
-        if cfg!(target_os = "android") && self.android_use_system_fonts {
+        if cfg!(target_os = "android") && self.android_system_fonts {
             for family in [
                 FontFamily::SansSerif,
                 FontFamily::Serif,
@@ -263,7 +269,13 @@ impl AppSettings {
                 }
             }
         }
-        let fonts = registry.into_font_set_or_default(self.fonts.unwrap_or(&[]));
+        let mut fonts = registry.into_font_set(self.fonts.unwrap_or(&[]));
+        if fonts.faces().is_empty() {
+            match (self.default_face)() {
+                Some(face) => fonts = SoftwareTextFontSet::from_font(face),
+                None => log::error!("no text font loaded; text will not draw"),
+            }
+        }
         log::info!(
             "Text fonts: {} face(s) [{}]",
             fonts.faces().len(),
@@ -388,8 +400,43 @@ pub(crate) fn exit_after_launch_error(context: &str, error: LaunchError) -> ! {
     std::process::exit(1)
 }
 
-/// Platform-agnostic application launcher.
+/// Where an [`AppLauncher`]'s text faces come from.
 ///
+/// A launcher starts as [`DefaultFont`] and becomes [`AppFonts`] as soon as a
+/// font method runs. The state is a type rather than a flag because only a
+/// type keeps the embedded face out of the binary: a flag checked at run time
+/// still references the bytes, and the linker keeps what is referenced.
+pub trait LauncherFonts: launcher_fonts::Sealed {
+    /// The face text draws in when the app supplied none.
+    fn default_face() -> Option<SoftwareTextFont>;
+}
+
+mod launcher_fonts {
+    pub trait Sealed {}
+    impl Sealed for super::DefaultFont {}
+    impl Sealed for super::AppFonts {}
+}
+
+/// The app has supplied no fonts, so text draws in the framework's embedded
+/// face (the `embedded-default-font` feature, on by default).
+pub struct DefaultFont;
+
+impl LauncherFonts for DefaultFont {
+    fn default_face() -> Option<SoftwareTextFont> {
+        default_software_text_font()
+    }
+}
+
+/// The app supplied its own fonts. Text draws only in them, and the embedded
+/// face is left out of the binary.
+pub struct AppFonts;
+
+impl LauncherFonts for AppFonts {
+    fn default_face() -> Option<SoftwareTextFont> {
+        None
+    }
+}
+
 /// Platform-agnostic application launcher.
 ///
 /// This builder provides a unified API for launching Compose applications
@@ -445,8 +492,28 @@ pub(crate) fn exit_after_launch_error(context: &str, error: LaunchError) -> ! {
 /// )))]
 /// fn main() {}
 /// ```
-pub struct AppLauncher {
+///
+/// # Fonts
+///
+/// A new launcher draws text in the framework's embedded face. Once any font
+/// method runs, [`with_fonts`](Self::with_fonts), a family, face bytes, an asset
+/// or system fonts, the launcher's type becomes `AppLauncher<AppFonts>`. Text
+/// then draws only in the app's faces and the embedded 1.3 MiB face is not
+/// linked into the binary. A function returning a launcher with fonts names
+/// that type:
+///
+/// ```no_run
+/// use cranpose::{AppFonts, AppLauncher};
+///
+/// static FONTS: &[&[u8]] = &[];
+///
+/// fn launcher() -> AppLauncher<AppFonts> {
+///     AppLauncher::new().with_title("My App").with_fonts(FONTS)
+/// }
+/// ```
+pub struct AppLauncher<Fonts: LauncherFonts = DefaultFont> {
     settings: AppSettings,
+    fonts: PhantomData<Fonts>,
 }
 
 impl AppLauncher {
@@ -454,6 +521,23 @@ impl AppLauncher {
     pub fn new() -> Self {
         Self {
             settings: AppSettings::default(),
+            fonts: PhantomData,
+        }
+    }
+}
+
+impl<Fonts: LauncherFonts> AppLauncher<Fonts> {
+    fn supplying_fonts(self) -> AppLauncher<AppFonts> {
+        AppLauncher {
+            settings: self.settings,
+            fonts: PhantomData,
+        }
+    }
+
+    fn into_settings(self) -> AppSettings {
+        AppSettings {
+            default_face: Fonts::default_face,
+            ..self.settings
         }
     }
 
@@ -553,7 +637,7 @@ impl AppLauncher {
         self
     }
 
-    /// Set fonts to use for text rendering.
+    /// Set fonts to use for text rendering, in place of the embedded face.
     ///
     /// # Arguments
     ///
@@ -571,9 +655,10 @@ impl AppLauncher {
     ///
     /// AppLauncher::new().with_fonts(FONTS);
     /// ```
-    pub fn with_fonts(mut self, fonts: &'static [&'static [u8]]) -> Self {
-        self.settings.fonts = Some(fonts);
-        self
+    pub fn with_fonts(self, fonts: &'static [&'static [u8]]) -> AppLauncher<AppFonts> {
+        let mut launcher = self.supplying_fonts();
+        launcher.settings.fonts = Some(fonts);
+        launcher
     }
 
     /// Register a font family from files on disk.
@@ -584,7 +669,8 @@ impl AppLauncher {
     /// runs — nothing re-reads them per frame or per string.
     ///
     /// A family whose files cannot be read is reported and skipped; text asking
-    /// for it falls back to the default face rather than disappearing.
+    /// for it draws in another of the app's faces. The embedded face is not
+    /// there to catch it, so an app whose fonts all fail to load draws no text.
     ///
     /// # Example
     ///
@@ -603,11 +689,12 @@ impl AppLauncher {
     ///
     /// let launcher = AppLauncher::new().with_font_family(&roboto);
     /// ```
-    pub fn with_font_family(mut self, family: &FontFamily) -> Self {
-        if let Err(error) = self.settings.font_registry.register_family(family) {
+    pub fn with_font_family(self, family: &FontFamily) -> AppLauncher<AppFonts> {
+        let mut launcher = self.supplying_fonts();
+        if let Err(error) = launcher.settings.font_registry.register_family(family) {
             log::warn!("font family could not be loaded: {error}");
         }
-        self
+        launcher
     }
 
     /// Register a font family from bytes the app already holds.
@@ -634,20 +721,21 @@ impl AppLauncher {
     /// # }
     /// ```
     pub fn with_font_face_bytes(
-        mut self,
+        self,
         family: &FontFamily,
         weight: FontWeight,
         style: FontStyle,
         bytes: impl Into<Vec<u8>>,
-    ) -> Self {
-        if let Err(error) = self
+    ) -> AppLauncher<AppFonts> {
+        let mut launcher = self.supplying_fonts();
+        if let Err(error) = launcher
             .settings
             .font_registry
             .register_face_bytes(family, weight, style, bytes)
         {
             log::warn!("font face could not be loaded: {error}");
         }
-        self
+        launcher
     }
 
     /// Register a font face shipped in the APK's `assets/` directory.
@@ -675,56 +763,58 @@ impl AppLauncher {
     /// ```
     #[cfg(all(feature = "android", target_os = "android"))]
     pub fn with_android_asset_font(
-        mut self,
+        self,
         app: &android_activity::AndroidApp,
         family: &FontFamily,
         weight: FontWeight,
         style: FontStyle,
         asset_path: &str,
-    ) -> Self {
+    ) -> AppLauncher<AppFonts> {
+        let mut launcher = self.supplying_fonts();
         let Ok(asset_name) = std::ffi::CString::new(asset_path) else {
             log::warn!("asset font path is not a valid C string: {asset_path}");
-            return self;
+            return launcher;
         };
         let Some(mut asset) = app.asset_manager().open(&asset_name) else {
             log::warn!("no font asset at {asset_path}");
-            return self;
+            return launcher;
         };
-        if let Err(error) = self
+        if let Err(error) = launcher
             .settings
             .font_registry
             .register_face_reader(family, weight, style, &mut asset)
         {
             log::warn!("font asset {asset_path} could not be loaded: {error}");
         }
-        self
+        launcher
     }
 
     /// Bind a generic family (`FontFamily::SansSerif`, `Serif`, `Monospace`,
     /// `Cursive`) to the platform's own typeface for it, at Regular, Medium and
     /// Bold.
     ///
-    /// Styles keep naming the generic family; they simply stop resolving to the
-    /// framework's bundled fallback. On Android this is how an app matches what
-    /// Jetpack Compose draws for `FontFamily.SansSerif`, because the platform
-    /// backs that alias with its own Roboto.
+    /// Styles keep naming the generic family and draw in the platform's
+    /// typeface for it. On Android this is how an app matches what Jetpack
+    /// Compose draws for `FontFamily.SansSerif`, because the platform backs
+    /// that alias with its own Roboto.
     ///
     /// `directory` is the platform's font directory —
     /// [`ANDROID_SYSTEM_FONT_DIR`] on Android. If nothing there backs the
-    /// family, the failure is reported and the bundled fallback keeps serving.
+    /// family, the failure is reported and text draws in the app's other faces.
     pub fn with_system_font_family(
-        mut self,
+        self,
         directory: impl AsRef<Path>,
         family: &FontFamily,
-    ) -> Self {
-        if let Err(error) = self.settings.font_registry.register_system_family(
+    ) -> AppLauncher<AppFonts> {
+        let mut launcher = self.supplying_fonts();
+        if let Err(error) = launcher.settings.font_registry.register_system_family(
             directory,
             family,
             DEFAULT_SYSTEM_FAMILY_WEIGHTS,
         ) {
             log::warn!("system font family could not be loaded: {error}");
         }
-        self
+        launcher
     }
 
     /// Registers a family from the fonts this platform ships, without the
@@ -739,24 +829,30 @@ impl AppLauncher {
     ///
     /// Platforms with no readable font directory — the browser, which has no
     /// filesystem and draws with the fonts the page already has — register
-    /// nothing and leave the app on its own faces.
-    pub fn with_system_fonts(mut self, family: &FontFamily, weights: &[FontWeight]) -> Self {
+    /// nothing and leave the app on its own faces, so a web build needs faces
+    /// of its own.
+    pub fn with_system_fonts(
+        self,
+        family: &FontFamily,
+        weights: &[FontWeight],
+    ) -> AppLauncher<AppFonts> {
+        let mut launcher = self.supplying_fonts();
         let Some(directory) = crate::system_font_directory() else {
-            return self;
+            return launcher;
         };
         let weights = if weights.is_empty() {
             DEFAULT_SYSTEM_FAMILY_WEIGHTS
         } else {
             weights
         };
-        if let Err(error) = self
+        if let Err(error) = launcher
             .settings
             .font_registry
             .register_system_family(directory, family, weights)
         {
             log::warn!("system font family could not be loaded: {error}");
         }
-        self
+        launcher
     }
 
     /// The tag this application's log lines carry.
@@ -793,22 +889,20 @@ impl AppLauncher {
     /// Register fonts through the registry directly, for apps that want the
     /// per-face `Result` rather than a logged warning.
     pub fn with_fonts_from(
-        mut self,
+        self,
         register: impl FnOnce(&mut SoftwareTextFontRegistry) -> Result<(), FontLoadError>,
-    ) -> Self {
-        if let Err(error) = register(&mut self.settings.font_registry) {
+    ) -> AppLauncher<AppFonts> {
+        let mut launcher = self.supplying_fonts();
+        if let Err(error) = register(&mut launcher.settings.font_registry) {
             log::warn!("app font registration failed: {error}");
         }
-        self
+        launcher
     }
 
-    /// Enable system font loading on Android (default: false).
-    ///
-    /// When false, only fonts provided via `with_fonts()`, `with_font_family()`
-    /// and friends are used. When true, the platform's `sans-serif`, `serif`
-    /// and `monospace` faces are registered from
-    /// [`ANDROID_SYSTEM_FONT_DIR`] in addition, so styles naming those generic
-    /// families draw in the system typeface.
+    /// Android only: register the platform's `sans-serif`, `serif` and
+    /// `monospace` faces from [`ANDROID_SYSTEM_FONT_DIR`], so styles naming
+    /// those generic families draw in the system typeface. Other targets
+    /// register nothing here and need faces of their own.
     ///
     /// Android backs those aliases with variable fonts on modern builds; the
     /// registry instances them per weight on their `wght` axis rather than
@@ -819,9 +913,10 @@ impl AppLauncher {
     /// same thing Compose does, where `FontFamily.Default` is `sans-serif` on
     /// Android. An app that wants its own bundled font for unnamed text should
     /// leave this off and register its family by name instead.
-    pub fn with_android_use_system_fonts(mut self, use_system_fonts: bool) -> Self {
-        self.settings.android_use_system_fonts = use_system_fonts;
-        self
+    pub fn with_android_system_fonts(self) -> AppLauncher<AppFonts> {
+        let mut launcher = self.supplying_fonts();
+        launcher.settings.android_system_fonts = true;
+        launcher
     }
 
     /// Selects the Android graphics API. Other platforms ignore this setting.
@@ -1079,7 +1174,7 @@ impl AppLauncher {
         not(target_os = "android")
     ))]
     pub fn try_run(self, content: impl FnMut() + 'static) -> Result<(), LaunchError> {
-        crate::desktop::try_run(self.settings, content)
+        crate::desktop::try_run(self.into_settings(), content)
     }
 
     /// Run the application (Desktop platform).
@@ -1107,7 +1202,7 @@ impl AppLauncher {
         endpoint: crate::embed::EmbedEndpoint,
         content: impl FnMut() + 'static,
     ) -> Result<(), crate::embed::EmbedError> {
-        crate::embed::try_run(self.settings, endpoint, content)
+        crate::embed::try_run(self.into_settings(), endpoint, content)
     }
 
     /// Run the application inside the host program that started it, and exit
@@ -1141,7 +1236,7 @@ impl AppLauncher {
     /// * `content` - The root composable function of your application.
     #[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
     pub fn try_run(self, content: impl FnMut() + 'static) -> Result<(), LaunchError> {
-        crate::ios::try_run(self.settings, content)
+        crate::ios::try_run(self.into_settings(), content)
     }
 
     /// Run the application (iOS platform).
@@ -1162,7 +1257,7 @@ impl AppLauncher {
     /// * `content` - The root composable function of your application.
     #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
     pub fn run(self, app: android_activity::AndroidApp, content: impl FnMut() + 'static) {
-        crate::android::run(app, self.settings, content);
+        crate::android::run(app, self.into_settings(), content);
     }
 
     /// Run the application (Web platform).
@@ -1183,7 +1278,7 @@ impl AppLauncher {
         canvas_id: &str,
         content: impl FnMut() + 'static,
     ) -> Result<(), wasm_bindgen::JsValue> {
-        crate::web::run(canvas_id, self.settings, content).await
+        crate::web::run(canvas_id, self.into_settings(), content).await
     }
 }
 

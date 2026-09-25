@@ -267,9 +267,11 @@ panic = "abort"
 out-of-the-box behaviour over size:
 
 - `embedded-default-font` (default): embeds the ~1.3 MiB NotoSansMerged
-  fallback so text renders even when the app provides no fonts. Apps that
-  bundle fonts through `AppLauncher::with_fonts` should build with
-  `default-features = false` to drop it.
+  face that text draws in when the app supplies no fonts. An app that
+  supplies fonts through any `AppLauncher` font method (`with_fonts`,
+  `with_font_family`, system or asset fonts) leaves it out of its binary
+  without touching the feature; the launcher's type becomes
+  `AppLauncher<AppFonts>`.
 - `renderer-wgpu-gles` (off by default): the GL/GLES fallback for desktop
   machines without a working Vulkan driver. Leaving it off removes the GLES
   half of wgpu and naga's GLSL writer. Android always compiles the GLES
