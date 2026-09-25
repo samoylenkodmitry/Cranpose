@@ -327,7 +327,7 @@ impl ModifierNodeSlices {
     /// A text field's layout is its current text wrapped at the width its
     /// caret and selection are placed on. `None` when the node carries no text,
     /// or carries a `Text` that has not been measured yet.
-    pub fn measured_text_layout(&self) -> Option<crate::text::PreparedTextLayout> {
+    pub fn measured_text_layout(&self) -> Option<Rc<crate::text::PreparedTextLayout>> {
         match self.prepared_text_layout.as_ref()? {
             MeasuredTextLayoutSource::Text(handle) => handle.measured_layout(),
             MeasuredTextLayoutSource::TextField(handle) => {

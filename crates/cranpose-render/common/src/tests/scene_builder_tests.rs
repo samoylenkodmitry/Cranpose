@@ -2437,16 +2437,16 @@ fn measured_text(
     style: &TextStyle,
     options: TextLayoutOptions,
     max_width: Option<f32>,
-) -> Option<PreparedTextLayout> {
+) -> Option<Rc<PreparedTextLayout>> {
     let app_context = cranpose_ui::AppContext::new();
-    Some(app_context.enter(|| {
+    Some(Rc::new(app_context.enter(|| {
         cranpose_ui::text::prepare_text_layout(
             &AnnotatedString::from(text),
             style,
             options,
             max_width,
         )
-    }))
+    })))
 }
 
 #[test]

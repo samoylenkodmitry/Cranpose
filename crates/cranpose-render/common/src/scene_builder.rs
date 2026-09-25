@@ -36,7 +36,7 @@ struct BuildNodeSnapshot {
     motion_context_animated: bool,
     translated_content_context: bool,
     has_own_origin_sinks: bool,
-    measured_text_layout: Option<PreparedTextLayout>,
+    measured_text_layout: Option<Rc<PreparedTextLayout>>,
     resolved_modifiers: ResolvedModifiers,
     draw_commands: Vec<DrawCommand>,
     outer_draw_command_count: usize,
@@ -1793,7 +1793,7 @@ struct TextNodeParts<'a> {
     text_style: Option<&'a TextStyle>,
     text_layout_options: Option<TextLayoutOptions>,
     text_pan: Option<TextPanResolver>,
-    measured_layout: Option<PreparedTextLayout>,
+    measured_layout: Option<Rc<PreparedTextLayout>>,
 }
 
 fn text_node_from_parts(parts: TextNodeParts<'_>) -> Option<TextPrimitiveNode> {
@@ -1858,7 +1858,7 @@ fn text_node_from_parts(parts: TextNodeParts<'_>) -> Option<TextPrimitiveNode> {
     Some(TextPrimitiveNode {
         node_id,
         rect,
-        text: prepared.text,
+        text: Rc::clone(&prepared.text),
         text_style: visual_style,
         font_size,
         layout_options: options,
