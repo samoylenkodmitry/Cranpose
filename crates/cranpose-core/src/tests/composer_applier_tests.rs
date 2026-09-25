@@ -2210,3 +2210,58 @@ fn reattaching_a_clean_child_bubbles_nothing() {
         );
     }
 }
+
+#[test]
+fn a_batch_of_scene_nodes_resolves_like_one_node_at_a_time() {
+    let mut applier = test_applier();
+    let root = applier.create(Box::new(RecordingNode::default()));
+    let branch = applier.create(Box::new(RecordingNode::default()));
+    let leaf = applier.create(Box::new(RecordingNode::default()));
+    let sibling = applier.create(Box::new(RecordingNode::default()));
+    let detached = applier.create(Box::new(RecordingNode::default()));
+    let under_detached = applier.create(Box::new(RecordingNode::default()));
+    let virtual_id = 1_000_000;
+    applier
+        .insert_with_id(virtual_id, Box::new(RecordingNode::default()))
+        .expect("a virtual node");
+    for (parent, child) in [
+        (root, branch),
+        (branch, leaf),
+        (root, sibling),
+        (detached, under_detached),
+        (leaf, virtual_id),
+    ] {
+        assert!(insert_child_with_reparenting(&mut applier, parent, child));
+    }
+    let nodes = [
+        leaf,
+        under_detached,
+        sibling,
+        virtual_id,
+        root,
+        detached,
+        leaf,
+        999_999,
+    ];
+
+    let batch = applier.scene_nodes_attached_to(nodes, root);
+    let one_by_one: Vec<_> = nodes
+        .iter()
+        .map(|node| applier.scene_node_attached_to(*node, root))
+        .collect();
+
+    assert_eq!(batch, one_by_one);
+    assert_eq!(
+        batch,
+        [
+            Some(leaf),
+            None,
+            Some(sibling),
+            Some(leaf),
+            Some(root),
+            None,
+            Some(leaf),
+            None
+        ]
+    );
+}

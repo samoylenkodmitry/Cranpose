@@ -454,14 +454,7 @@ where
         } else {
             Vec::new()
         };
-        if let Some(root) = self.app.composition.root() {
-            let mut applier = self.app.composition.applier_mut();
-            for node in cranpose_ui::take_geometry_scene_nodes() {
-                if let Some(node) = applier.scene_node_attached_to(node, root) {
-                    nodes.push(node);
-                }
-            }
-        }
+        nodes.extend(cranpose_ui::take_geometry_scene_nodes());
         let buckets = partition_nodes_by_surface(&mut self.app, &self.surfaces, nodes);
         let mut any_named = false;
         for (surface, bucket) in self.surfaces.iter_mut().zip(buckets) {

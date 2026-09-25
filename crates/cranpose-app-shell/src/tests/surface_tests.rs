@@ -1098,3 +1098,53 @@ fn a_window_root_lays_out_from_its_own_origin_wherever_its_node_sits() {
         );
     });
 }
+
+fn every_node(shell: &mut AppShell<HitGraphRenderer>) -> Vec<NodeId> {
+    let root = shell.app.composition.root().expect("a root");
+    let mut applier = shell.app.composition.applier_mut();
+    let mut nodes = Vec::new();
+    let mut pending = vec![root];
+    while let Some(node) = pending.pop() {
+        nodes.push(node);
+        if let Ok(node) = cranpose_core::Applier::get_mut(&mut *applier, node) {
+            pending.extend(node.children());
+        }
+    }
+    nodes
+}
+
+#[test]
+fn nodes_partition_to_the_surface_of_their_nearest_window_root() {
+    let _guard = test_guard();
+    let (mut shell, _torn) = shell_with_a_tearable_pane(true, |is_torn, window| {
+        let window = Rc::clone(window);
+        Column(Modifier::empty(), ColumnSpec::default(), move || {
+            Box(Modifier::empty(), BoxSpec::default(), || {});
+            Box(tear_modifier(is_torn, &window), BoxSpec::default(), || {
+                Box(Modifier::empty(), BoxSpec::default(), || {
+                    Box(Modifier::empty(), BoxSpec::default(), || {});
+                });
+            });
+        });
+    });
+    let window_id = attach_first_window(&mut shell, HitGraphRenderer::default());
+    let nodes = every_node(&mut shell);
+    let owners = {
+        let mut applier = shell.app.composition.applier_mut();
+        let batch = cranpose_ui::nearest_window_roots(&mut applier, &nodes);
+        let one_by_one: Vec<_> = nodes
+            .iter()
+            .map(|node| cranpose_ui::nearest_window_root(&mut applier, *node))
+            .collect();
+        assert_eq!(batch, one_by_one);
+        batch
+    };
+    let in_window = owners.iter().filter(|owner| owner.is_some()).count();
+    assert_eq!(in_window, 3, "the window root and the two boxes under it");
+
+    let buckets = partition_nodes_by_surface(&mut shell.app, &shell.surfaces, nodes.clone());
+    assert_eq!(buckets.len(), 2);
+    assert_eq!(buckets[0].len(), nodes.len() - in_window);
+    assert_eq!(buckets[1].len(), in_window);
+    assert!(buckets[1].contains(&(window_id as NodeId)));
+}

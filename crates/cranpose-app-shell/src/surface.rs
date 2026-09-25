@@ -374,11 +374,13 @@ pub(crate) fn partition_nodes_by_surface<R: Renderer>(
         return buckets;
     };
     let mut applier = app.composition.applier_mut();
-    for node in nodes {
-        let Some(node) = applier.scene_node_attached_to(node, primary_root) else {
-            continue;
-        };
-        let owner = cranpose_ui::nearest_window_root(&mut applier, node);
+    let attached: Vec<NodeId> = applier
+        .scene_nodes_attached_to(nodes, primary_root)
+        .into_iter()
+        .flatten()
+        .collect();
+    let owners = cranpose_ui::nearest_window_roots(&mut applier, &attached);
+    for (node, owner) in attached.into_iter().zip(owners) {
         if let Some(index) = surfaces
             .iter()
             .position(|surface| surface.owns_nodes_under(owner))
