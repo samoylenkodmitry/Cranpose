@@ -54,7 +54,7 @@ fn queue_glyph(renderer: &mut GpuRenderer, key: u64, x: f32, commands: &mut Vec<
 }
 
 fn draw_queued(renderer: &mut GpuRenderer, commands: &[GlyphDrawCmd]) -> wgpu::Texture {
-    renderer.viewport_uniforms.flush(&renderer.queue);
+    renderer.flush_frame_uploads();
     let target = crate::offscreen::create_2d_texture(
         &renderer.device,
         composition_format(),
@@ -79,9 +79,7 @@ fn draw_queued(renderer: &mut GpuRenderer, commands: &[GlyphDrawCmd]) -> wgpu::T
     target
 }
 
-#[test]
-fn queued_glyph_draw_keeps_its_atlas_after_growth() {
-    let (_lock, mut renderer) = test_renderer();
+fn whiten_atlas(renderer: &GpuRenderer) {
     let size = renderer.text_glyph_atlas.size();
     WgpuFrameGraphExecutor::new().upload_texture(
         &renderer.queue,
@@ -98,6 +96,41 @@ fn queued_glyph_draw_keeps_its_atlas_after_growth() {
             depth_or_array_layers: 1,
         },
     );
+}
+
+/// Asserts the glyph rows of `target` are white in the columns `is_white`
+/// accepts and clear elsewhere.
+fn assert_white_columns(
+    renderer: &GpuRenderer,
+    target: &wgpu::Texture,
+    is_white: impl Fn(usize) -> bool,
+    message: &str,
+) {
+    let pixels = crate::frame_graph::read_test_texture(&renderer.device, &renderer.queue, target);
+    assert_eq!(renderer.device_error_count(), 0);
+    let white: &[u8] = if composition_format() == wgpu::TextureFormat::Rgba8Unorm {
+        &[255; 4]
+    } else {
+        &[0, 60, 0, 60, 0, 60, 0, 60]
+    };
+    for y in 0..2 {
+        for x in 0..8 {
+            let offset = (y * 8 + x) * white.len();
+            let pixel = &pixels[offset..offset + white.len()];
+            if is_white(x) {
+                assert_eq!(pixel, white, "{message}");
+            } else {
+                assert!(pixel.iter().all(|byte| *byte == 0), "{message}");
+            }
+        }
+    }
+}
+
+#[test]
+fn queued_glyph_draw_keeps_its_atlas_after_growth() {
+    let (_lock, mut renderer) = test_renderer();
+    let size = renderer.text_glyph_atlas.size();
+    whiten_atlas(&renderer);
     let mut commands = Vec::new();
     queue_glyph(&mut renderer, 1, 0.0, &mut commands);
     renderer.text_glyph_atlas.reset(
@@ -111,43 +144,66 @@ fn queued_glyph_draw_keeps_its_atlas_after_growth() {
     assert_eq!(renderer.text_glyph_atlas.size(), size * 2);
     queue_glyph(&mut renderer, 2, 4.0, &mut commands);
     let target = draw_queued(&mut renderer, &commands);
-    let pixels = crate::frame_graph::read_test_texture(&renderer.device, &renderer.queue, &target);
-    assert_eq!(renderer.device_error_count(), 0);
-    let white: &[u8] = if composition_format() == wgpu::TextureFormat::Rgba8Unorm {
-        &[255; 4]
-    } else {
-        &[0, 60, 0, 60, 0, 60, 0, 60]
-    };
-    for y in 0..2 {
-        for x in 0..8 {
-            let offset = (y * 8 + x) * white.len();
-            let pixel = &pixels[offset..offset + white.len()];
-            if x < 2 {
-                assert_eq!(pixel, white, "queued glyph must retain its original atlas");
-            } else {
-                assert!(
-                    pixel.iter().all(|byte| *byte == 0),
-                    "new draws must use the new atlas"
-                );
-            }
-        }
-    }
+    assert_white_columns(
+        &renderer,
+        &target,
+        |x| x < 2,
+        "the queued glyph keeps its original atlas; new draws use the new one",
+    );
 }
 
 #[test]
-fn queued_glyph_draw_keeps_buffers_after_cache_eviction() {
+fn queued_glyph_draw_keeps_its_quads_after_cache_eviction() {
     let (_lock, mut renderer) = test_renderer();
+    whiten_atlas(&renderer);
     renderer.text_glyph_gpu_run_cache = BoundedLruCache::with_capacity_at_least_one(1);
     let mut commands = Vec::new();
     queue_glyph(&mut renderer, 1, 0.0, &mut commands);
-    assert!(renderer.ensure_retained_text_glyph_run(TextGlyphRunCacheKey(2), &test_quads()));
+    let mut moved = test_quads();
+    moved[0].x = 4;
+    assert!(renderer.ensure_retained_text_glyph_run(TextGlyphRunCacheKey(2), &moved));
     assert!(
         renderer
             .text_glyph_gpu_run_cache
             .peek(&TextGlyphRunCacheKey(1))
             .is_none()
     );
-    draw_queued(&mut renderer, &commands);
+    let target = draw_queued(&mut renderer, &commands);
+    assert_white_columns(
+        &renderer,
+        &target,
+        |x| x < 2,
+        "the evicted run's quads stay its own for the frame",
+    );
+}
+
+#[test]
+fn retained_glyph_runs_of_a_frame_draw_from_one_upload() {
+    let (_lock, mut renderer) = test_renderer();
+    whiten_atlas(&renderer);
+    let mut commands = Vec::new();
+    queue_glyph(&mut renderer, 1, 0.0, &mut commands);
+    queue_glyph(&mut renderer, 2, 4.0, &mut commands);
+    crate::frame_graph::take_upload_write_calls();
+    renderer.text_glyph_run_arena.flush(&renderer.queue);
+    assert_eq!(crate::frame_graph::take_upload_write_calls(), 1);
+    let target = draw_queued(&mut renderer, &commands);
+    assert_white_columns(
+        &renderer,
+        &target,
+        |x| x < 2 || (4..6).contains(&x),
+        "both runs",
+    );
+    renderer.text_glyph_run_arena.begin_frame();
+    let mut second = Vec::new();
+    queue_glyph(&mut renderer, 2, 4.0, &mut second);
+    let target = draw_queued(&mut renderer, &second);
+    assert_white_columns(
+        &renderer,
+        &target,
+        |x| (4..6).contains(&x),
+        "a cached run draws again",
+    );
 }
 
 fn quarter_turn() -> SegmentTransform {
