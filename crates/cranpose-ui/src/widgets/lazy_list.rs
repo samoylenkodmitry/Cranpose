@@ -381,9 +381,13 @@ fn measure_lazy_list_children(
     item
 }
 
+/// Recycles the active slots of items before `first_measured_index`, found
+/// among the items `near` the viewport, where every slot a forward scroll
+/// skips was active.
 fn recycle_forward_skipped_active_slots(
     scope: &mut SubcomposeMeasureScopeImpl<'_>,
     content: &LazyListIntervalContent,
+    near: &std::ops::Range<usize>,
     first_measured_index: usize,
     scroll_delta: f32,
 ) -> bool {
@@ -393,7 +397,7 @@ fn recycle_forward_skipped_active_slots(
 
     scope.recycle_active_slots_where(|slot_id| {
         content
-            .get_index_by_slot_id(slot_id.raw())
+            .get_index_by_slot_id_in_range(slot_id.raw(), near.clone())
             .is_some_and(|index| index < first_measured_index)
     });
     true
@@ -435,12 +439,10 @@ fn measure_lazy_list_internal(
     measured_item_cache
         .borrow_mut()
         .retain_constraint_scope(is_vertical, cross_axis_size);
+    let near = state.nearest_range();
     if items_count > 0 {
-        let range = state.nearest_range();
         state.update_scroll_position_if_item_moved(items_count, |slot_id| {
-            content
-                .get_index_by_slot_id_in_range(slot_id, range.clone())
-                .or_else(|| content.get_index_by_slot_id(slot_id))
+            content.get_index_by_slot_id_in_range(slot_id, near.clone())
         });
     }
 
@@ -463,6 +465,7 @@ fn measure_lazy_list_internal(
             && recycle_forward_skipped_active_slots(
                 scope,
                 content,
+                &near,
                 index,
                 scroll_delta_for_direction,
             )
@@ -619,11 +622,23 @@ fn measure_focused_lazy_item(
     inputs: &LazyListItemMeasureInputs<'_>,
     retained_measurement_batch: &mut Vec<Rc<MeasuredNode>>,
 ) -> Option<LazyListMeasuredItem> {
-    let slot = scope.focused_slot()?;
-    let Some(index) = inputs.content.get_index_by_slot_id(slot.raw()) else {
+    let slot = scope.focused_slot()?.raw();
+    let content = inputs.content;
+    let last_measured = inputs.measured_item_cache.borrow().focused_index(slot);
+    let found = last_measured
+        .filter(|&index| {
+            index < content.item_count() && content.get_key(index).to_slot_id() == slot
+        })
+        .or_else(|| content.get_index_by_slot_id_in_range(slot, inputs.state.nearest_range()))
+        .or_else(|| content.get_index_by_slot_id(slot));
+    let Some(index) = found else {
         let _ = cranpose_core::run_in_mutable_snapshot(|| crate::FocusManager.clear_focus());
         return None;
     };
+    inputs
+        .measured_item_cache
+        .borrow_mut()
+        .remember_focused(slot, index);
     Some(measure_lazy_list_item(
         scope,
         index,
@@ -755,6 +770,7 @@ struct LazyMeasuredItemCache {
     telemetry: LazyCacheTelemetry,
     entries: HashMap<usize, CachedLazyMeasuredItem>,
     order: VecDeque<usize>,
+    focused: Option<(u64, usize)>,
 }
 
 #[derive(Clone)]
@@ -785,6 +801,19 @@ impl LazyCacheTelemetry {
 }
 
 impl LazyMeasuredItemCache {
+    /// The index the item in `slot` was last measured at while focused, the
+    /// first place to look for it: a focused item scrolled far from the
+    /// viewport is found there without scanning the list.
+    fn focused_index(&self, slot: u64) -> Option<usize> {
+        self.focused
+            .filter(|(focused, _)| *focused == slot)
+            .map(|(_, index)| index)
+    }
+
+    fn remember_focused(&mut self, slot: u64, index: usize) {
+        self.focused = Some((slot, index));
+    }
+
     fn retain_constraint_scope(&mut self, is_vertical: bool, cross_axis_size: f32) {
         let cross_axis_bits = normalized_axis_bits(cross_axis_size);
         if self.entries.is_empty() {

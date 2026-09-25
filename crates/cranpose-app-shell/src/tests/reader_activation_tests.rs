@@ -596,6 +596,14 @@ struct LazyEditorFixture {
 }
 
 fn lazy_editor_fixture(horizontal: bool, reverse: bool) -> LazyEditorFixture {
+    lazy_editor_fixture_with_rows(horizontal, reverse, 20)
+}
+
+fn lazy_editor_fixture_with_rows(
+    horizontal: bool,
+    reverse: bool,
+    rows: usize,
+) -> LazyEditorFixture {
     let captured = Rc::new(RefCell::new(None));
     let state = Rc::clone(&captured);
     let active_effects = Rc::new(Cell::new(0usize));
@@ -631,7 +639,7 @@ fn lazy_editor_fixture(horizontal: bool, reverse: bool) -> LazyEditorFixture {
                         );
                     });
                 }
-                scope.items(20, |index| {
+                scope.items(rows, |index| {
                     Text(
                         format!("Row {index}"),
                         Modifier::empty().size(Size::new(
@@ -742,6 +750,37 @@ fn lazy_list_keeps_the_active_editor_when_the_reader_scrolls_away() {
             );
         }
     }
+}
+
+#[test]
+fn lazy_list_keeps_the_active_editor_scrolled_far_past_the_items_it_maps_keys_for() {
+    let _guard = test_guard();
+    let mut fixture = lazy_editor_fixture_with_rows(false, false, 3_000);
+    fixture
+        .shell
+        .app_context()
+        .enter(|| fixture.list.scroll_to_item(1_500, 0.0));
+    fixture.shell.update();
+    assert!(
+        fixture.list.first_visible_item_index() >= 1_500,
+        "first={}",
+        fixture.list.first_visible_item_index()
+    );
+    assert_eq!(fixture.active_effects.get(), 1);
+    assert_eq!(
+        fixture
+            .shell
+            .ime_editor_state()
+            .expect("an editor a thousand rows away stays active")
+            .text,
+        "Receipt"
+    );
+    fixture.shell.update();
+    assert_eq!(
+        fixture.active_effects.get(),
+        1,
+        "the next frame finds the far editor where it last measured it"
+    );
 }
 
 #[test]

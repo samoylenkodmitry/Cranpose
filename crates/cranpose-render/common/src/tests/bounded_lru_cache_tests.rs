@@ -130,3 +130,19 @@ fn iter_reports_mru_to_lru_entries() {
     let entries: Vec<_> = cache.iter().map(|(key, value)| (*key, *value)).collect();
     assert_eq!(entries, vec![("a", 1), ("b", 2)]);
 }
+
+#[test]
+fn a_cache_reserves_room_only_for_the_entries_it_holds() {
+    let mut cache: BoundedLruCache<u64, [u8; 64]> =
+        BoundedLruCache::with_capacity_at_least_one(8192);
+    assert_eq!(
+        (cache.index.capacity(), cache.slots.capacity()),
+        (0, 0),
+        "a cache no text reaches must not hold room for its whole bound"
+    );
+    for key in 0..10 {
+        cache.put(key, [0; 64]);
+    }
+    assert!(cache.slots.capacity() < 64, "{}", cache.slots.capacity());
+    assert_eq!(cache.cap().get(), 8192);
+}
