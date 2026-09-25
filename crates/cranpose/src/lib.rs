@@ -36,6 +36,8 @@ mod android_accessibility_wire;
 mod android_app_info;
 #[cfg(all(feature = "android", target_os = "android"))]
 mod android_camera;
+#[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
+mod android_display_timing;
 mod android_entry;
 #[cfg(all(feature = "android", target_os = "android"))]
 mod android_finish;
@@ -436,6 +438,11 @@ mod embed_surfaces;
 
 #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
 pub mod android;
+#[cfg(any(
+    test,
+    all(feature = "android", feature = "renderer-wgpu", target_os = "android")
+))]
+mod frame_pacer;
 #[cfg(feature = "renderer-wgpu")]
 #[cfg_attr(
     not(any(
@@ -445,6 +452,8 @@ pub mod android;
     allow(dead_code)
 )]
 pub(crate) mod gpu_limits;
+#[cfg(any(test, all(feature = "android", target_os = "android")))]
+mod vsync_period;
 
 #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
 mod cursor_scale;

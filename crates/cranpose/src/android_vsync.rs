@@ -58,10 +58,11 @@ unsafe extern "C" fn on_vsync(frame_time_ns: i64, _data: *mut c_void) {
     CALLBACK_POSTED.store(false, Ordering::Release);
     let previous = LAST_VSYNC_NS.swap(frame_time_ns, Ordering::Relaxed);
     if previous != 0 {
-        let delta = frame_time_ns - previous;
-        if (4_000_000..50_000_000).contains(&delta) {
-            VSYNC_PERIOD_NS.store(delta, Ordering::Relaxed);
-        }
+        let period = VSYNC_PERIOD_NS.load(Ordering::Relaxed);
+        VSYNC_PERIOD_NS.store(
+            crate::vsync_period::refine_vsync_period(period, frame_time_ns - previous),
+            Ordering::Relaxed,
+        );
     }
     let waker = WAKER.lock().unwrap_or_else(PoisonError::into_inner).clone();
     if let Some(waker) = waker {
@@ -73,6 +74,11 @@ use std::sync::atomic::AtomicI64;
 
 static LAST_VSYNC_NS: AtomicI64 = AtomicI64::new(0);
 static VSYNC_PERIOD_NS: AtomicI64 = AtomicI64::new(0);
+
+/// The latest vsync callback's frame time, `0` before the first.
+pub(crate) fn last_vsync_ns() -> i64 {
+    LAST_VSYNC_NS.load(Ordering::Relaxed)
+}
 
 pub(crate) fn observed_vsync_period_ns() -> Option<i64> {
     match VSYNC_PERIOD_NS.load(Ordering::Relaxed) {

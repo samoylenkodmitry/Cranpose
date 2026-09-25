@@ -149,7 +149,7 @@ camera-desktop = [
 # use their platform stack, and there the backend compiles away.
 media = ["dep:cranpose-media"]
 renderer-pixels = ["cranpose-render-pixels"]
-renderer-wgpu = ["cranpose-render-wgpu", "dep:wgpu", "dep:pollster"]
+renderer-wgpu = ["cranpose-render-wgpu", "dep:wgpu", "dep:pollster", "dep:ash"]
 # App-defined WGSL RuntimeShaders on the slim renderer (naga at runtime,
 # ~0.7 MiB). On by default; drop via `default-features = false` if the app
 # uses only framework effects.
@@ -278,6 +278,10 @@ libc = "0.2"
 
 [target.'cfg(target_os = "android")'.dependencies]
 android-activity = { workspace = true }
+# `VK_GOOGLE_display_timing`'s loader, for `android_display_timing`: wgpu
+# enables the extension but does not read its records. The version is
+# wgpu-hal's own, so the two share one build.
+ash = { version = "0.38", optional = true }
 android_logger = "0.15"
 jni = "0.22.4"
 ndk = "0.9.0"
