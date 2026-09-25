@@ -173,6 +173,47 @@ fn state_write_prunes_dropped_watchers() {
     assert_eq!(state.watcher_count(), 0);
 }
 
+#[test]
+fn dead_watchers_never_outnumber_live_ones_by_much() {
+    let runtime = TestRuntime::new();
+    let handle = runtime.handle();
+    let state = MutableState::with_runtime(0i32, handle.clone());
+    let live: Vec<RecomposeScope> = (0..40)
+        .map(|_| RecomposeScope::new_for_test(handle.clone()))
+        .collect();
+    for scope in &live {
+        state.subscribe_scope_for_test(scope);
+    }
+    for _ in 0..1_000 {
+        let passing = RecomposeScope::new_for_test(handle.clone());
+        state.subscribe_scope_for_test(&passing);
+    }
+    assert!(
+        state.watcher_count() <= 2 * live.len() + 1,
+        "{} watchers for {} live readers",
+        state.watcher_count(),
+        live.len()
+    );
+    assert!(state.as_state().has_subscribers());
+}
+
+#[test]
+fn a_reader_after_every_reader_died_subscribes_the_state_again() {
+    let runtime = TestRuntime::new();
+    let handle = runtime.handle();
+    let state = MutableState::with_runtime(0i32, handle.clone());
+    let notifications = counting_subscriber(state);
+    let first = RecomposeScope::new_for_test(handle.clone());
+    state.subscribe_scope_for_test(&first);
+    assert_eq!(notifications.get(), 1);
+    drop(first);
+
+    let second = RecomposeScope::new_for_test(handle);
+    state.subscribe_scope_for_test(&second);
+    assert_eq!(notifications.get(), 2);
+    assert_eq!(state.watcher_count(), 1);
+}
+
 /// Registers a subscriber callback on `state` that counts its runs.
 fn counting_subscriber(state: MutableState<i32>) -> Rc<Cell<usize>> {
     let notifications = Rc::new(Cell::new(0));
