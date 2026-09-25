@@ -79,9 +79,11 @@ const MAX_TEXT_GLYPH_MASK_CACHE_ITEMS: usize = 8192;
 const MAX_TEXT_GLYPH_ATLAS_ITEMS: usize = 8192;
 const MAX_TEXT_GLYPH_RUN_CACHE_ITEMS: usize = 1024;
 const MAX_TEXT_GLYPH_GPU_RUN_CACHE_ITEMS: usize = 1024;
-/// Frames a retained text run may go undrawn before its quads are freed,
-/// the idle span the shape store keeps retained runs for.
-const RETAINED_TEXT_GLYPH_RUN_IDLE_FRAMES: u64 = 120;
+/// Frames a retained text run may go undrawn before its quads are freed.
+/// Shorter than the shape store's span: a glyph quad holds 192 bytes, and a
+/// list scrolling at speed leaves several screens of text behind each second,
+/// which at 120 frames held 12 to 19 MB of quads on a scrolling feed.
+const RETAINED_TEXT_GLYPH_RUN_IDLE_FRAMES: u64 = 30;
 /// Text runs with at least this many glyphs keep their quads in retained GPU
 /// buffers and draw on their own; shorter ones are written into the frame's
 /// shared quads each frame, where consecutive runs share a draw.
