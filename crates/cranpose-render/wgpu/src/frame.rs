@@ -44,7 +44,7 @@ use crate::{
 };
 
 const MAX_SURFACE_PIXELS: u64 = 16 * 1024 * 1024;
-const MAX_RESOLVE_DEPTH: usize = 24;
+const MAX_RESOLVE_DEPTH: usize = 128;
 
 /// Device-space rectangle: origin and size in pixels of some scene's device
 /// space.
@@ -2325,7 +2325,18 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         beneath: &Beneath<'_>,
     ) -> Result<(), String> {
         if self.depth >= MAX_RESOLVE_DEPTH {
-            return Err("layer nesting exceeds the resolve depth limit".to_string());
+            if !self.renderer.nesting_overflow_reported {
+                self.renderer.nesting_overflow_reported = true;
+                log::error!(
+                    "[layer] isolated layers nest deeper than {MAX_RESOLVE_DEPTH}: the layers \
+                     below that depth draw nothing"
+                );
+            }
+            if matches!(load_op, wgpu::LoadOp::Clear(_)) {
+                self.renderer
+                    .clear_target(self.recorder, &page.texture.view, load_op);
+            }
+            return Ok(());
         }
         self.depth += 1;
         let result = self.render_layer_inner(layer, page, scale, load_op, beneath);

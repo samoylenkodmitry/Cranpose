@@ -63,6 +63,11 @@ composites the resolved textures.
   silhouette and relies on the mask to cut it, so a scaled glass button
   without one shows the band up to its scissor as a square. Contract
   `scaled_glass_child_mask.rs`.
+- **Nesting** (`MAX_RESOLVE_DEPTH`, 128): every isolated layer resolves its
+  children recursively, about 4.5 KB of stack per level in release and 12 KB
+  in debug; the present thread runs on 8 MiB. A layer nested deeper than the
+  limit draws nothing and is reported once; the rest of the frame draws.
+  Contract `nested_rotated_relayout.rs`.
 - **Rigid motion**: a translated context carries one `SnapAnchor`, one
   device-pixel delta per frame; text re-rasterizes only on a phase change,
   quads translate, a gradient's dither is keyed on the position relative to

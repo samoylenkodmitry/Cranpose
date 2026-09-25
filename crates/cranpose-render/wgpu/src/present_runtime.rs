@@ -519,6 +519,8 @@ pub(crate) struct PresentHandle {
     outstanding: u32,
 }
 
+const PRESENT_THREAD_STACK_BYTES: usize = 8 * 1024 * 1024;
+
 impl PresentHandle {
     pub(crate) fn spawn(init: PresentRuntimeInit, waker: PresentWaker) -> Result<Self, String> {
         let (msg_tx, msg_rx) = channel::<PresentMsg>();
@@ -527,6 +529,7 @@ impl PresentHandle {
         let thread_status = Arc::clone(&status);
         let thread = std::thread::Builder::new()
             .name("cranpose-present".to_string())
+            .stack_size(PRESENT_THREAD_STACK_BYTES)
             .spawn(move || {
                 crate::fast_cores::pin_current_thread_to_fast_cores("present");
                 PresentState::new(init, returns_tx, thread_status, waker).run(msg_rx);
