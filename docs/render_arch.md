@@ -94,11 +94,11 @@ composites the resolved textures.
   source-over -- may draw its content straight into its parent's pass as
   segments under its transform, between the parent's ops at its z, its own
   such children composed in. It does whenever its surface is neither cached
-  nor admitted this frame (`draws_in_place`): content that holds still
-  composites its cached surface, which costs the GPU less than drawing it
-  again, and content that changes every frame, whose surface the source gate
-  stops keeping, draws in place instead of into a surface it would throw
-  away. The viewport uniform carries the transform; only shape pipelines
+  nor admitted this frame (`draws_in_place`), and its source gate
+  (`AdmissionGate::drawn_in_place`) admits a surface only once the content
+  repeats: content that holds still composites its cached surface from its
+  third frame, which costs the GPU less than drawing it again, and content
+  that changes every frame never renders a surface at all. The viewport uniform carries the transform; only shape pipelines
   built `SHAPE_TRANSFORMED` read it, growing each quad half a pixel so a
   turned edge anti-aliases on both sides and mapping each fragment back to
   evaluate its distance field, so untransformed pipelines compile the

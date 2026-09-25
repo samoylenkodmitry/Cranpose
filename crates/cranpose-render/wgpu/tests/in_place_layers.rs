@@ -322,11 +322,18 @@ fn a_turned_layer_whose_content_holds_still_is_composited_from_the_cache() {
     let Some((_lock, mut harness)) = turned_box() else {
         return;
     };
-    for frame in 0..6 {
+    let (first, _) = harness.frame(WIDTH);
+    assert_eq!(
+        first.isolated_layer_renders, 0,
+        "content seen once draws in place: {first:?}"
+    );
+    let (second, _) = harness.frame(WIDTH);
+    assert_eq!(
+        second.isolated_layer_renders, 1,
+        "content that repeats renders the surface it keeps: {second:?}"
+    );
+    for frame in 2..6 {
         let (stats, _) = harness.frame(WIDTH);
-        if frame == 0 {
-            continue;
-        }
         assert_eq!(
             stats.isolated_layer_renders, 0,
             "frame {frame}: still content renders its surface once: {stats:?}"
@@ -346,9 +353,6 @@ fn a_turned_layer_whose_content_changes_draws_in_place() {
     };
     for frame in 0..6 {
         let (stats, _) = harness.frame(WIDTH - frame as f32 * 7.0);
-        if frame == 0 {
-            continue;
-        }
         assert_eq!(
             stats.isolated_layer_renders, 0,
             "frame {frame}: content that changes every frame draws in place, not into a surface \

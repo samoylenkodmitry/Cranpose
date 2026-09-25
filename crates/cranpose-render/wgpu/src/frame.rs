@@ -1959,6 +1959,19 @@ impl AdmissionGate {
         )
     }
 
+    /// A gate for a surface its layer can do without by drawing in place:
+    /// the surface is kept only once its content repeats, since drawing in
+    /// place the first time costs nothing a kept surface would save.
+    fn drawn_in_place(key: LayerRasterCacheKey) -> Self {
+        Self::with_cost(
+            key,
+            AdmissionCost::Copy {
+                patience: 1,
+                floor: 1,
+            },
+        )
+    }
+
     fn with_cost(key: LayerRasterCacheKey, cost: AdmissionCost) -> Self {
         Self {
             key,
@@ -4024,7 +4037,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         let Some(plan) = SurfacePlan::of(child, pass.scale, grid, shown) else {
             return Ok(None);
         };
-        let retain = match self.source_decision(child, &plan) {
+        let retain = match self.source_decision(child, &plan, AdmissionGate::rendered) {
             SourceDecision::Cached(surface) => return Ok(Some(surface)),
             SourceDecision::Render(retain) => retain,
         };
@@ -4038,7 +4051,14 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             .map(Some)
     }
 
-    fn source_decision(&mut self, child: &ChildLayer, plan: &SurfacePlan) -> SourceDecision {
+    /// Whether the child's surface comes from the cache or is rendered, and
+    /// whether a rendered one is kept; `gate` makes a new node's source gate.
+    fn source_decision(
+        &mut self,
+        child: &ChildLayer,
+        plan: &SurfacePlan,
+        gate: fn(LayerRasterCacheKey) -> AdmissionGate,
+    ) -> SourceDecision {
         let key = plan.cache_key(child);
         if let Some(key) = key
             && let Some(texture) = self.cached_source(child.node_id, key, plan.width, plan.height)
@@ -4052,7 +4072,9 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             ));
         }
         SourceDecision::Render(
-            key.filter(|key| self.admits_source(child.node_id, *key, plan.width, plan.height)),
+            key.filter(|key| {
+                self.admits_source(child.node_id, *key, (plan.width, plan.height), gate)
+            }),
         )
     }
 
@@ -4122,7 +4144,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         let Some(plan) = SurfacePlan::of(child, scale, frame.grid, shown) else {
             return Ok(true);
         };
-        let surface = match self.source_decision(child, &plan) {
+        let surface = match self.source_decision(child, &plan, AdmissionGate::drawn_in_place) {
             SourceDecision::Cached(surface) => surface,
             SourceDecision::Render(None) => return Ok(true),
             SourceDecision::Render(retain) => {
@@ -4162,7 +4184,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 surfaces[index] = Some(None);
                 continue;
             };
-            surfaces[index] = match self.source_decision(child, &plan) {
+            surfaces[index] = match self.source_decision(child, &plan, AdmissionGate::rendered) {
                 SourceDecision::Cached(surface) => Some(Some(surface)),
                 SourceDecision::Render(retain) => {
                     batch.push(BatchMember {
@@ -4400,8 +4422,8 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         &mut self,
         node_id: Option<NodeId>,
         key: LayerRasterCacheKey,
-        width: u32,
-        height: u32,
+        (width, height): (u32, u32),
+        gate: fn(LayerRasterCacheKey) -> AdmissionGate,
     ) -> bool {
         self.supersede_source(node_id, key);
         let admits = match node_id {
@@ -4413,7 +4435,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                     }
                     gate.get().admits()
                 }
-                Entry::Vacant(slot) => slot.insert(AdmissionGate::rendered(key)).admits(),
+                Entry::Vacant(slot) => slot.insert(gate(key)).admits(),
             },
         };
         admits && self.renderer.layer_cache.fits(width, height)

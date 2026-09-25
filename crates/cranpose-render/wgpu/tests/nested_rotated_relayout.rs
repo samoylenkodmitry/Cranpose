@@ -162,9 +162,6 @@ fn forty_nested_rotated_levels_that_relayout_draw_in_place() {
         harness
             .frame(frame)
             .unwrap_or_else(|error| panic!("frame {frame} of forty nested layers failed: {error}"));
-        if frame == 0 {
-            continue;
-        }
         let stats = harness
             .shell
             .renderer()

@@ -207,7 +207,9 @@ fn assert_still_frame_matches_a_fresh_renderer(offscreen: bool) {
     let held = WARMUP_FRAMES + MEASURED_FRAMES;
     moving.frame(width_fraction(held));
     let still = settled(&mut moving, held);
-    let expected = settled(&mut fresh_harness(offscreen), held);
+    let mut fresh = fresh_harness(offscreen);
+    fresh.frame(width_fraction(held));
+    let expected = settled(&mut fresh, held);
     support::assert_same_bytes("still frame", FRAME_WIDTH, &expected.pixels, &still.pixels);
 }
 
@@ -226,8 +228,7 @@ fn a_relayout_under_rotated_cells_draws_them_in_place_without_surfaces() {
     let Some((_lock, mut harness)) = harness(false) else {
         return;
     };
-    harness.frame(width_fraction(0));
-    for frame in 1..WARMUP_FRAMES + MEASURED_FRAMES {
+    for frame in 0..WARMUP_FRAMES + MEASURED_FRAMES {
         let (stats, _) = harness.frame(width_fraction(frame));
         assert_eq!(
             stats.isolated_layer_renders, 0,
