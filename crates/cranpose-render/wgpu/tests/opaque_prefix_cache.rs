@@ -406,7 +406,7 @@ fn a_prefix_covering_the_page_is_composited_at_every_scale() {
 }
 
 #[test]
-fn five_stop_and_solid_fills_are_reused_too() {
+fn five_stop_fills_are_reused_too() {
     let Some(mut pair) = Pair::new() else {
         return;
     };
@@ -416,7 +416,14 @@ fn five_stop_and_solid_fills_are_reused_too() {
         Spec::of(First::RadialFiveStops),
         1.0,
     );
-    assert_cold_then_warm(&mut pair, "solid", Spec::of(First::Solid), 1.0);
+}
+
+#[test]
+fn a_solid_fill_is_drawn_rather_than_cached() {
+    let Some(mut pair) = Pair::new() else {
+        return;
+    };
+    assert_never_admitted(&mut pair, "solid", Spec::of(First::Solid), 1.0);
 }
 
 #[test]
