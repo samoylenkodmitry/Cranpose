@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 const ROBOT_RUNNERS: &str = "apps/desktop-demo/robot-runners";
+const INTEGRATION_ROOT: &str = "tests/integration.rs";
 
 pub(crate) fn run_at(root: &Path) -> Result<(), String> {
     let mut problems: Vec<String> = unlinked_integration_tests(root)?
@@ -12,6 +13,12 @@ pub(crate) fn run_at(root: &Path) -> Result<(), String> {
             )
         })
         .collect();
+    problems.extend(undeclared_integration_roots(root)?.iter().map(|path| {
+        format!(
+            "  {} is not a [[test]] target of its crate's Cargo.toml, which sets autotests = false",
+            path.display()
+        )
+    }));
     problems.extend(unlisted_robot_runners(root)?.iter().map(|path| {
         format!(
             "  {} is not in the runners! table of {ROBOT_RUNNERS}/main.rs",
@@ -210,10 +217,10 @@ pub(crate) fn unlinked_integration_tests(root: &Path) -> Result<Vec<PathBuf>, St
     let mut unlinked = Vec::new();
     for member in workspace_members(root)? {
         let crate_dir = root.join(&member);
-        if !opts_out_of_autotests(&crate_dir)? {
+        if !opts_out_of_autotests(&read_toml(&crate_dir.join("Cargo.toml"))?) {
             continue;
         }
-        let integration = crate_dir.join("tests").join("integration.rs");
+        let integration = crate_dir.join(INTEGRATION_ROOT);
         let Ok(source) = std::fs::read_to_string(&integration) else {
             continue;
         };
@@ -249,13 +256,44 @@ pub(crate) fn workspace_members(root: &Path) -> Result<Vec<String>, String> {
         .collect())
 }
 
-fn opts_out_of_autotests(crate_dir: &Path) -> Result<bool, String> {
-    let manifest = read_toml(&crate_dir.join("Cargo.toml"))?;
-    Ok(manifest
+pub(crate) fn undeclared_integration_roots(root: &Path) -> Result<Vec<PathBuf>, String> {
+    let mut undeclared = Vec::new();
+    for member in workspace_members(root)? {
+        let crate_dir = root.join(&member);
+        let integration = crate_dir.join(INTEGRATION_ROOT);
+        if !integration.is_file() {
+            continue;
+        }
+        let manifest = read_toml(&crate_dir.join("Cargo.toml"))?;
+        if opts_out_of_autotests(&manifest) && !declares_integration_target(&manifest) {
+            undeclared.push(integration);
+        }
+    }
+    undeclared.sort();
+    Ok(undeclared)
+}
+
+fn opts_out_of_autotests(manifest: &toml::Value) -> bool {
+    manifest
         .get("package")
         .and_then(|package| package.get("autotests"))
         .and_then(toml::Value::as_bool)
-        == Some(false))
+        == Some(false)
+}
+
+/// A `[[test]]` without a `path` is found by cargo at `tests/<name>.rs`.
+fn declares_integration_target(manifest: &toml::Value) -> bool {
+    manifest
+        .get("test")
+        .and_then(toml::Value::as_array)
+        .is_some_and(|targets| {
+            targets.iter().any(
+                |target| match target.get("path").and_then(toml::Value::as_str) {
+                    Some(path) => Path::new(path) == Path::new(INTEGRATION_ROOT),
+                    None => target.get("name").and_then(toml::Value::as_str) == Some("integration"),
+                },
+            )
+        })
 }
 
 fn read_toml(path: &Path) -> Result<toml::Value, String> {
