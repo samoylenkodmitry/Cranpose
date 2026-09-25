@@ -124,29 +124,6 @@ fn query_panel_max_refresh_rate(app: &android_activity::AndroidApp) -> Result<f3
     })
 }
 
-/// How long input or moving content keeps the display at its fastest rate.
-const BOOST_HOLD_OFF: std::time::Duration = std::time::Duration::from_secs(3);
-
-/// When input last arrived or content last moved, for the vote's boost.
-#[derive(Default)]
-pub(crate) struct FrameRateBoost {
-    last: Option<std::time::Instant>,
-}
-
-impl FrameRateBoost {
-    /// Starts the hold-off again when `happened`.
-    pub(crate) fn note(&mut self, happened: bool) {
-        if happened {
-            self.last = Some(std::time::Instant::now());
-        }
-    }
-
-    /// Whether the hold-off since the last input or motion still runs.
-    pub(crate) fn active(&self) -> bool {
-        self.last.is_some_and(|at| at.elapsed() < BOOST_HOLD_OFF)
-    }
-}
-
 #[derive(Default)]
 pub(crate) struct FrameRateVoter {
     last: Option<(usize, u32)>,
