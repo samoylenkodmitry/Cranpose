@@ -499,10 +499,7 @@ pub fn collect_modifier_slices_into(chain: &ModifierNodeChain, slices: &mut Modi
         return;
     }
 
-    let mut background_color = None;
-    let mut background_insert_index = None::<usize>;
-    let mut background_precedes_layer = false;
-    let mut corner_shape = None;
+    let mut background = BackgroundSlot::default();
     let mut padding = EdgeInsets::default();
 
     for node_ref in chain.head_to_tail() {
@@ -525,63 +522,7 @@ pub fn collect_modifier_slices_into(chain: &ModifierNodeChain, slices: &mut Modi
             }
 
             if has_draw && node_caps.intersects(NodeCapabilities::DRAW) {
-                if let Some(bg_node) = any.downcast_ref::<BackgroundNode>() {
-                    background_color = Some(bg_node.color());
-                    background_insert_index = Some(slices.draw_commands.len());
-                    background_precedes_layer = slices.layer_draw_boundary.is_none();
-                    if bg_node.shape().is_some() {
-                        corner_shape = bg_node.shape();
-                    }
-                }
-
-                if let Some(shape_node) = any.downcast_ref::<CornerShapeNode>() {
-                    corner_shape = Some(shape_node.shape());
-                }
-
-                if let Some(commands) = any.downcast_ref::<DrawCommandNode>() {
-                    slices.draw_commands.extend(commands.observed_commands());
-                }
-
-                if let Some(draw_node) = node.as_draw_node() {
-                    if let Some(closure) = draw_node.create_behind_draw_closure() {
-                        slices.draw_commands.push(DrawCommand::Behind(closure));
-                    }
-                    if let Some(closure) = draw_node.create_draw_closure() {
-                        slices.draw_commands.push(DrawCommand::Overlay(closure));
-                    } else {
-                        use cranpose_ui_graphics::{DrawScope as _, DrawScopeDefault};
-                        let mut scope = DrawScopeDefault::with_text_measurer(
-                            crate::modifier::Size {
-                                width: 0.0,
-                                height: 0.0,
-                            },
-                            crate::text::AppContextTextMeasurer::shared(),
-                        );
-                        draw_node.draw(&mut scope);
-                        let primitives = scope.into_primitives();
-                        if !primitives.is_empty() {
-                            let draw_cmd = Rc::new(
-                                move |scope: &mut cranpose_ui_graphics::DrawScopeDefault| {
-                                    scope.push_recorded(primitives.clone());
-                                },
-                            );
-                            slices.draw_commands.push(DrawCommand::Overlay(draw_cmd));
-                        }
-                    }
-                }
-
-                if let Some(layer_node) = any.downcast_ref::<GraphicsLayerNode>() {
-                    slices.mark_layer_draw_boundary();
-                    slices.push_graphics_layer(
-                        layer_node.layer_snapshot(),
-                        layer_node.layer_resolver(),
-                    );
-                }
-
-                if any.is::<ClipToBoundsNode>() {
-                    slices.mark_layer_draw_boundary();
-                    slices.clip_to_bounds = true;
-                }
+                collect_draw_node(node, padding, slices, &mut background);
             }
 
             if has_layout && node_caps.intersects(NodeCapabilities::LAYOUT) {
@@ -638,29 +579,151 @@ pub fn collect_modifier_slices_into(chain: &ModifierNodeChain, slices: &mut Modi
         });
     }
 
-    slices.corner_shape = corner_shape;
+    background.insert_into(slices);
+}
 
-    if let Some(color) = background_color {
+/// The chain's background as the walk finds it: the last background wins,
+/// drawn at its place in the draw order, inside the padding declared before
+/// it, in the latest corner shape.
+#[derive(Default)]
+struct BackgroundSlot {
+    color: Option<crate::modifier::Color>,
+    inset: EdgeInsets,
+    insert_index: Option<usize>,
+    precedes_layer: bool,
+    corner_shape: Option<RoundedCornerShape>,
+}
+
+impl BackgroundSlot {
+    fn insert_into(self, slices: &mut ModifierNodeSlices) {
+        slices.corner_shape = self.corner_shape;
+        let Some(color) = self.color else {
+            return;
+        };
+        let (inset, corner_shape) = (self.inset, self.corner_shape);
         let draw_cmd = Rc::new(move |scope: &mut cranpose_ui_graphics::DrawScopeDefault| {
             use cranpose_ui_graphics::{CornerRadii, DrawScope as _};
 
             use crate::modifier::Brush;
 
-            let size = scope.size();
+            let rect = inset.inset_rect(scope.size());
             let brush = Brush::solid(color);
             if let Some(shape) = corner_shape {
-                let radii: CornerRadii = shape.resolve(size.width, size.height);
-                scope.draw_round_rect(brush, radii);
+                let radii: CornerRadii = shape.resolve(rect.width, rect.height);
+                scope.draw_round_rect_at(rect, brush, radii);
             } else {
-                scope.draw_rect(brush);
+                scope.draw_rect_at(rect, brush);
             }
         });
-
         slices.insert_background_draw(
-            background_insert_index,
-            background_precedes_layer,
+            self.insert_index,
+            self.precedes_layer,
             DrawCommand::Behind(draw_cmd),
         );
+    }
+}
+
+/// Collects what a draw-capable node contributes, drawn inside `padding`, the
+/// layout padding declared before it.
+fn collect_draw_node(
+    node: &dyn cranpose_foundation::ModifierNode,
+    padding: EdgeInsets,
+    slices: &mut ModifierNodeSlices,
+    background: &mut BackgroundSlot,
+) {
+    let any = node.as_any();
+    if let Some(bg_node) = any.downcast_ref::<BackgroundNode>() {
+        background.color = Some(bg_node.color());
+        background.inset = padding;
+        background.insert_index = Some(slices.draw_commands.len());
+        background.precedes_layer = slices.layer_draw_boundary.is_none();
+        if bg_node.shape().is_some() {
+            background.corner_shape = bg_node.shape();
+        }
+    }
+
+    if let Some(shape_node) = any.downcast_ref::<CornerShapeNode>() {
+        background.corner_shape = Some(shape_node.shape());
+    }
+
+    if let Some(commands) = any.downcast_ref::<DrawCommandNode>() {
+        slices.draw_commands.extend(
+            commands
+                .observed_commands()
+                .into_iter()
+                .map(|command| inset_draw_command(command, padding)),
+        );
+    }
+
+    if let Some(draw_node) = node.as_draw_node() {
+        collect_draw_closures(draw_node, padding, slices);
+    }
+
+    if let Some(layer_node) = any.downcast_ref::<GraphicsLayerNode>() {
+        slices.mark_layer_draw_boundary();
+        slices.push_graphics_layer(layer_node.layer_snapshot(), layer_node.layer_resolver());
+    }
+
+    if any.is::<ClipToBoundsNode>() {
+        slices.mark_layer_draw_boundary();
+        slices.clip_to_bounds = true;
+    }
+}
+
+/// A draw node's behind and overlay closures, or what its `draw` records
+/// when it has no overlay closure.
+fn collect_draw_closures(
+    draw_node: &dyn cranpose_foundation::DrawModifierNode,
+    padding: EdgeInsets,
+    slices: &mut ModifierNodeSlices,
+) {
+    if let Some(closure) = draw_node.create_behind_draw_closure() {
+        slices
+            .draw_commands
+            .push(inset_draw_command(DrawCommand::Behind(closure), padding));
+    }
+    if let Some(closure) = draw_node.create_draw_closure() {
+        slices
+            .draw_commands
+            .push(inset_draw_command(DrawCommand::Overlay(closure), padding));
+        return;
+    }
+    use cranpose_ui_graphics::{DrawScope as _, DrawScopeDefault};
+    let mut scope = DrawScopeDefault::with_text_measurer(
+        crate::modifier::Size {
+            width: 0.0,
+            height: 0.0,
+        },
+        crate::text::AppContextTextMeasurer::shared(),
+    );
+    draw_node.draw(&mut scope);
+    let primitives = scope.into_primitives();
+    if primitives.is_empty() {
+        return;
+    }
+    let draw_cmd = Rc::new(move |scope: &mut DrawScopeDefault| {
+        scope.push_recorded(primitives.clone());
+    });
+    slices
+        .draw_commands
+        .push(inset_draw_command(DrawCommand::Overlay(draw_cmd), padding));
+}
+
+/// `command` drawn where a draw modifier after `padding` draws: in the node's
+/// rect shrunk by that padding, as Compose places it.
+fn inset_draw_command(command: DrawCommand, padding: EdgeInsets) -> DrawCommand {
+    if padding.is_zero() {
+        return command;
+    }
+    let inset = |draw: crate::draw::DrawCommandFn| -> crate::draw::DrawCommandFn {
+        Rc::new(move |scope: &mut cranpose_ui_graphics::DrawScopeDefault| {
+            scope.inset(padding, |inner| draw(inner));
+        })
+    };
+    match command {
+        DrawCommand::Behind(draw) => DrawCommand::Behind(inset(draw)),
+        DrawCommand::WithContent(draw) => DrawCommand::WithContent(inset(draw)),
+        DrawCommand::Overlay(draw) => DrawCommand::Overlay(inset(draw)),
     }
 }
 

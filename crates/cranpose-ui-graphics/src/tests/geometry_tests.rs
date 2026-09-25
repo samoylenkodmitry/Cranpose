@@ -1386,3 +1386,141 @@ fn a_layers_composite_alpha_is_a_truncated_byte() {
     assert_eq!(GraphicsLayer::composite_alpha_8bit(-3.0), 0.0);
     assert_eq!(GraphicsLayer::composite_alpha_8bit(7.0), 1.0);
 }
+
+#[test]
+fn inset_rect_keeps_the_padded_part_and_never_goes_negative() {
+    let insets = EdgeInsets::from_components(1.0, 2.0, 3.0, 4.0);
+    assert_eq!(
+        insets.inset_rect(Size::new(10.0, 10.0)),
+        Rect {
+            x: 1.0,
+            y: 2.0,
+            width: 6.0,
+            height: 4.0,
+        }
+    );
+    assert_eq!(
+        insets.inset_rect(Size::new(2.0, 2.0)),
+        Rect {
+            x: 1.0,
+            y: 2.0,
+            width: 0.0,
+            height: 0.0,
+        }
+    );
+}
+
+#[test]
+fn a_translated_primitive_moves_every_position_it_carries() {
+    let rect = Rect::from_size(Size::new(4.0, 4.0));
+    let moved = rect.translate(2.0, 3.0);
+    let fill = DrawPrimitive::Rect {
+        rect,
+        brush: Brush::solid(Color::RED),
+        stroke: None,
+    };
+    let arc = DrawPrimitive::Arc {
+        rect,
+        brush: Brush::solid(Color::RED),
+        center: Point::new(2.0, 2.0),
+        radius: 2.0,
+        start_angle: 0.0,
+        sweep_angle: 1.0,
+        stroke: None,
+        inner_radius: 0.0,
+    };
+    assert_eq!(
+        DrawPrimitive::Blend {
+            primitive: Box::new(fill.clone()),
+            blend_mode: BlendMode::Multiply,
+        }
+        .translate(2.0, 3.0),
+        DrawPrimitive::Blend {
+            primitive: Box::new(DrawPrimitive::Rect {
+                rect: moved,
+                brush: Brush::solid(Color::RED),
+                stroke: None,
+            }),
+            blend_mode: BlendMode::Multiply,
+        }
+    );
+    let DrawPrimitive::Arc {
+        rect: arc_rect,
+        center,
+        ..
+    } = arc.translate(2.0, 3.0)
+    else {
+        panic!("an arc stays an arc");
+    };
+    assert_eq!((arc_rect, center), (moved, Point::new(4.0, 5.0)));
+    let DrawPrimitive::Shadow(ShadowPrimitive::Inner {
+        fill: inner,
+        cutout,
+        clip_rect,
+        ..
+    }) = DrawPrimitive::Shadow(ShadowPrimitive::Inner {
+        fill: Box::new(fill.clone()),
+        cutout: Box::new(fill.clone()),
+        blur_radius: 1.0,
+        blend_mode: BlendMode::SrcOver,
+        clip_rect: rect,
+    })
+    .translate(2.0, 3.0)
+    else {
+        panic!("an inner shadow stays an inner shadow");
+    };
+    assert_eq!(clip_rect, moved);
+    for shape in [*inner, *cutout] {
+        assert!(matches!(shape, DrawPrimitive::Rect { rect, .. } if rect == moved));
+    }
+    let DrawPrimitive::Shadow(ShadowPrimitive::Drop { shape, cutout, .. }) =
+        DrawPrimitive::Shadow(ShadowPrimitive::Drop {
+            shape: Box::new(fill.clone()),
+            cutout: Some(Box::new(fill)),
+            blur_radius: 1.0,
+            blend_mode: BlendMode::SrcOver,
+        })
+        .translate(2.0, 3.0)
+    else {
+        panic!("a drop shadow stays a drop shadow");
+    };
+    assert!(matches!(*shape, DrawPrimitive::Rect { rect, .. } if rect == moved));
+    assert!(matches!(cutout.as_deref(), Some(DrawPrimitive::Rect { rect, .. }) if *rect == moved));
+    let image = ImageBitmap::from_rgba8(1, 1, vec![255; 4]).expect("image");
+    assert!(matches!(
+        DrawPrimitive::Image {
+            rect,
+            image,
+            alpha: 1.0,
+            color_filter: None,
+            sampling: ImageSampling::Linear,
+            src_rect: Some(rect),
+        }
+        .translate(2.0, 3.0),
+        DrawPrimitive::Image { rect: image_rect, src_rect: Some(source), .. }
+            if image_rect == moved && source == rect
+    ));
+    assert_eq!(
+        DrawPrimitive::Content.translate(2.0, 3.0),
+        DrawPrimitive::Content
+    );
+}
+
+#[test]
+fn an_inset_scope_draws_inside_the_insets_and_keeps_content_markers() {
+    let mut scope = DrawScopeDefault::new(Size::new(20.0, 10.0));
+    let mut seen = None;
+    scope.inset(EdgeInsets::from_components(1.0, 2.0, 3.0, 4.0), |inner| {
+        seen = Some(inner.size());
+        inner.draw_content();
+        inner.draw_round_rect(Brush::solid(Color::RED), CornerRadii::uniform(2.0));
+    });
+    assert_eq!(seen, Some(Size::new(16.0, 4.0)));
+    assert_eq!(scope.content_marker_count(), 1);
+    let primitives = scope.into_primitives();
+    assert_eq!(primitives[0], DrawPrimitive::Content);
+    assert!(matches!(
+        primitives[1],
+        DrawPrimitive::RoundRect { rect, .. } if rect == Rect { x: 1.0, y: 2.0, width: 16.0, height: 4.0 }
+    ));
+}
