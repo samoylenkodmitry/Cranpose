@@ -11,6 +11,10 @@ use crate::{
 
 const MAX_ENTRIES: usize = 4096;
 const MAX_BYTES: u64 = 96 * 1024 * 1024;
+/// The frames a raster may go unread before it is released: rasters a layer
+/// has moved past -- another scale, content it no longer shows -- would
+/// otherwise hold their memory until the byte budget fills.
+const IDLE_FRAMES: u64 = 120;
 
 #[derive(Clone)]
 pub(crate) enum RetainedContent {
@@ -81,11 +85,17 @@ fn texture_id(texture: &Rc<OffscreenTarget>) -> usize {
     Rc::as_ptr(texture) as usize
 }
 
+struct Entry {
+    retained: Retained,
+    used: u64,
+}
+
 pub(crate) struct LayerCache {
-    entries: BoundedLruCache<LayerRasterCacheKey, Retained>,
+    entries: BoundedLruCache<LayerRasterCacheKey, Entry>,
     ledger: AllocationLedger,
     retired: Vec<(Option<FrameTextureDescriptor>, Rc<OffscreenTarget>)>,
     max_bytes: u64,
+    frame: u64,
 }
 
 impl LayerCache {
@@ -99,11 +109,16 @@ impl LayerCache {
             ledger: AllocationLedger::default(),
             retired: Vec::new(),
             max_bytes,
+            frame: 0,
         }
     }
 
     pub(crate) fn get(&mut self, key: &LayerRasterCacheKey) -> Option<Retained> {
-        self.entries.get(key).cloned()
+        let frame = self.frame;
+        self.entries.get_mut(key).map(|entry| {
+            entry.used = frame;
+            entry.retained.clone()
+        })
     }
 
     pub(crate) fn fits(&self, width: u32, height: u32) -> bool {
@@ -133,12 +148,30 @@ impl LayerCache {
             let Some((_, evicted)) = self.entries.pop_lru() else {
                 break;
             };
-            self.release(evicted);
+            self.release(evicted.retained);
         }
-        if let Some((_, replaced)) = self.entries.push(key, retained) {
-            self.release(replaced);
+        let used = self.frame;
+        if let Some((_, replaced)) = self.entries.push(key, Entry { retained, used }) {
+            self.release(replaced.retained);
         }
         true
+    }
+
+    /// Ends a frame, releasing every raster no frame has read for
+    /// [`IDLE_FRAMES`].
+    pub(crate) fn end_frame(&mut self) {
+        self.frame += 1;
+        let oldest_kept = self.frame.saturating_sub(IDLE_FRAMES);
+        while self
+            .entries
+            .peek_lru()
+            .is_some_and(|(_, entry)| entry.used < oldest_kept)
+        {
+            let Some((_, idle)) = self.entries.pop_lru() else {
+                break;
+            };
+            self.release(idle.retained);
+        }
     }
 
     fn release(&mut self, entry: Retained) {
@@ -149,7 +182,7 @@ impl LayerCache {
 
     pub(crate) fn remove(&mut self, key: &LayerRasterCacheKey) {
         if let Some(entry) = self.entries.pop(key) {
-            self.release(entry);
+            self.release(entry.retained);
         }
     }
 

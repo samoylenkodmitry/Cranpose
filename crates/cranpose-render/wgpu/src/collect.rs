@@ -29,8 +29,15 @@ const ANIMATED_RASTER_STEPS_PER_OCTAVE: f32 = 8.0;
 
 #[derive(Default)]
 pub(crate) struct LayerMotion {
-    previous: HashMap<NodeId, (u32, u64)>,
-    current: HashMap<NodeId, (u32, u64)>,
+    previous: HashMap<NodeId, Motion>,
+    current: HashMap<NodeId, Motion>,
+}
+
+#[derive(Clone, Copy)]
+struct Motion {
+    scale_bits: u32,
+    content_hash: u64,
+    raster: f32,
 }
 
 impl LayerMotion {
@@ -44,22 +51,40 @@ impl LayerMotion {
         let Some(node_id) = node_id else {
             return scale;
         };
-        let seen = (scale.to_bits(), content_hash);
-        self.current.insert(node_id, seen);
-        let scaling = self
-            .previous
-            .get(&node_id)
-            .is_some_and(|(bits, hash)| *bits != seen.0 && *hash == content_hash);
-        if cacheable && scaling && scale.is_finite() && scale > 0.0 {
-            animated_raster_scale(scale)
-        } else {
-            scale
-        }
+        let scaling = self.previous.get(&node_id).filter(|previous| {
+            previous.scale_bits != scale.to_bits() && previous.content_hash == content_hash
+        });
+        let raster = match scaling {
+            Some(previous) if cacheable && scale.is_finite() && scale > 0.0 => {
+                held_raster_scale(previous.raster, scale)
+            }
+            _ => scale,
+        };
+        self.current.insert(
+            node_id,
+            Motion {
+                scale_bits: scale.to_bits(),
+                content_hash,
+                raster,
+            },
+        );
+        raster
     }
 
     pub(crate) fn end_frame(&mut self) {
         std::mem::swap(&mut self.previous, &mut self.current);
         self.current.clear();
+    }
+}
+
+/// The raster scale a layer scaling to `scale` draws at: the raster it drew at
+/// last frame while that still covers `scale` within an octave, so a layer
+/// pulsing inside its octave keeps one raster, else `scale` stepped up.
+fn held_raster_scale(held: f32, scale: f32) -> f32 {
+    if held >= scale && held <= scale * 2.0 {
+        held
+    } else {
+        animated_raster_scale(scale)
     }
 }
 

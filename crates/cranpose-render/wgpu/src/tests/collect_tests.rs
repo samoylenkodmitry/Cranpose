@@ -128,6 +128,34 @@ fn layer_motion_steps_a_scale_only_while_it_changes_over_the_same_content() {
     );
 }
 
+#[test]
+fn a_scaling_layer_keeps_its_raster_while_it_covers_the_scale_within_an_octave() {
+    let mut motion = LayerMotion::default();
+    let mut frame = |scale: f32| {
+        let raster = motion.raster_scale(Some(1), scale, 7, true);
+        motion.end_frame();
+        raster
+    };
+    assert_eq!(frame(1.0), 1.0);
+    for scale in [0.95, 0.8, 0.6, 0.51, 0.7, 0.99] {
+        assert_eq!(frame(scale), 1.0, "{scale} draws from the raster at 1.0");
+    }
+    let shrunk = frame(0.45);
+    assert_eq!(
+        shrunk,
+        animated_raster_scale(0.45),
+        "past an octave down the raster steps down"
+    );
+    assert_eq!(frame(0.3), shrunk);
+    let grown = frame(0.5);
+    assert_eq!(
+        grown,
+        animated_raster_scale(0.5),
+        "a scale the raster no longer covers steps up"
+    );
+    assert!(grown > shrunk);
+}
+
 fn turn(degrees: f32) -> ProjectiveTransform {
     let (sin, cos) = degrees.to_radians().sin_cos();
     ProjectiveTransform::from_rect_to_quad(

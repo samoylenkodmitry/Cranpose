@@ -160,6 +160,32 @@ fn the_budget_evicts_the_least_recently_used_entry_and_returns_its_surface() {
 }
 
 #[test]
+fn a_raster_no_frame_reads_for_the_idle_frames_is_released() {
+    let (_lock, device, _queue) = upload_test_device();
+    let mut cache = LayerCache::new();
+    cache.insert(key(1), Retained::surface(texture(&device, 8)), None);
+    cache.insert(key(2), Retained::surface(texture(&device, 8)), None);
+    for _ in 0..IDLE_FRAMES {
+        assert!(cache.get(&key(1)).is_some());
+        cache.end_frame();
+    }
+    assert_eq!(cache.len(), 2, "a raster unread for the idle frames stays");
+    assert!(cache.take_released().is_empty());
+    assert!(cache.get(&key(1)).is_some());
+    cache.end_frame();
+    assert_eq!(cache.len(), 1, "one frame more releases it");
+    assert!(cache.get(&key(2)).is_none());
+    assert!(
+        cache.get(&key(1)).is_some(),
+        "a raster read every frame stays"
+    );
+    assert_eq!(cache.bytes(), offscreen_byte_size(8, 1));
+    let released = cache.take_released();
+    assert_eq!(released.len(), 1);
+    assert_eq!(released[0].0, None);
+}
+
+#[test]
 fn a_texture_over_the_budget_is_refused_without_evicting_anything() {
     let (_lock, device, _queue) = upload_test_device();
     let bytes = offscreen_byte_size(64, 1);
