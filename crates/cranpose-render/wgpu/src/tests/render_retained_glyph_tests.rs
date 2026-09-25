@@ -333,3 +333,38 @@ fn a_transformed_shape_pipeline_falls_back_to_a_transformed_general_one() {
     assert!(transformed.general().transformed);
     assert!(!untransformed.general().transformed);
 }
+
+#[test]
+fn a_retained_run_no_frame_draws_gives_its_quads_back() {
+    let (_lock, mut renderer) = test_renderer();
+    assert!(renderer.ensure_retained_text_glyph_run(TextGlyphRunCacheKey(1), &test_quads()));
+    assert!(renderer.ensure_retained_text_glyph_run(TextGlyphRunCacheKey(2), &test_quads()));
+    for _ in 0..RETAINED_TEXT_GLYPH_RUN_IDLE_FRAMES {
+        renderer.begin_text_glyph_run_frame();
+        assert!(
+            renderer
+                .retained_text_glyph_run(TextGlyphRunCacheKey(2))
+                .is_some()
+        );
+    }
+    assert!(
+        renderer
+            .text_glyph_gpu_run_cache
+            .peek(&TextGlyphRunCacheKey(1))
+            .is_some()
+    );
+    renderer.begin_text_glyph_run_frame();
+    assert!(
+        renderer
+            .text_glyph_gpu_run_cache
+            .peek(&TextGlyphRunCacheKey(1))
+            .is_none(),
+        "an idle run leaves after its idle frames"
+    );
+    assert!(
+        renderer
+            .text_glyph_gpu_run_cache
+            .peek(&TextGlyphRunCacheKey(2))
+            .is_some()
+    );
+}
