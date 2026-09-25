@@ -1706,7 +1706,7 @@ pub fn run(
     let android_frame_driver = AndroidFrameDriver::new(app.create_waker());
     let mut frame_rate_voter = crate::android_frame_rate::FrameRateVoter::default();
     let mut perf_hint: Option<Option<crate::android_perf_hint::PerfHintSession>> = None;
-    let mut frame_rate_boost = crate::android_frame_rate::FrameRateBoost::default();
+    let mut frame_rate_boost = cranpose_app_shell::FrameRateBoost::default();
     crate::android_vsync::install_waker(android_frame_driver.vsync_waker());
     crate::android_accessibility::set_waker(app.create_waker());
     let host_window_registry = Rc::new(android_host_window::AndroidHostWindowRegistry::default());
@@ -1819,7 +1819,7 @@ pub fn run(
         if let Some(shell) = app_shell.as_ref() {
             let preference = shell.frame_rate_preference();
             let producing_frames = android_frame_driver.frame_requested();
-            let boosted = frame_rate_boost.active();
+            let boosted = frame_rate_boost.boosted(Instant::now());
             let panel_max = match preference {
                 cranpose_app_shell::FrameRatePreference::Auto if boosted => {
                     crate::android_frame_rate::panel_max_refresh_rate(&app)
@@ -2304,10 +2304,10 @@ pub fn run(
             &mut app_shell,
         );
 
-        frame_rate_boost.note(!pending_inputs.is_empty());
         if !pending_inputs.is_empty()
             && let Some(shell) = &mut app_shell
         {
+            frame_rate_boost.note_input(Instant::now());
             for input in pending_inputs.drain(..) {
                 match input {
                     PendingInput::PointerDown(x, y, time_ms, source) => {
@@ -2423,7 +2423,7 @@ pub fn run(
                     &host_window_registry,
                     || shell.update(),
                 );
-                frame_rate_boost.note(update_result.content_moved);
+                frame_rate_boost.note_frame(update_result, Instant::now());
                 frame_timings.after_update_ns = frame_telemetry.now();
                 if let Err(error) = crate::android_accessibility::sync(
                     &app,
