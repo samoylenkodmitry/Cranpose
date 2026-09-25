@@ -24,6 +24,7 @@ use cranpose_ui::{Point, Size};
 use ndk::native_window::NativeWindow;
 
 use crate::{
+    android_display_timing::{DisplayTimingObserver, DisplayedFrame},
     android_host_window,
     android_jni::{clear_pending_android_jni_exception, with_android_activity_env},
     android_keyboard::{self, AndroidKeyTranslator, AndroidSoftKeyboard, is_system_key},
@@ -31,6 +32,7 @@ use crate::{
     android_surface::{AndroidSurfaceError, create_android_wgpu_surface},
     android_text_input::{self, AndroidImeEvent},
     app_launcher::{AndroidGpuBackend, AndroidOverlayWindowOptions, AppSettings},
+    frame_pacer::FramePacer,
     wgpu_surface::{
         SurfaceFrame, current_surface_texture, present_initial_placeholder_frame,
         surface_present_required,
@@ -619,15 +621,38 @@ struct AndroidFrameDriver {
     app_waker: android_activity::AndroidAppWaker,
     loop_thread: std::thread::ThreadId,
     next_deadline: Cell<Option<web_time::Instant>>,
+    displayed_tx: std::sync::mpsc::Sender<DisplayedFrame>,
+    displayed_rx: std::sync::mpsc::Receiver<DisplayedFrame>,
 }
 
 impl AndroidFrameDriver {
     fn new(app_waker: android_activity::AndroidAppWaker) -> Self {
+        let (displayed_tx, displayed_rx) = std::sync::mpsc::channel();
         Self {
             need_frame: Arc::new(AtomicBool::new(false)),
             app_waker,
             loop_thread: std::thread::current().id(),
             next_deadline: Cell::new(None),
+            displayed_tx,
+            displayed_rx,
+        }
+    }
+
+    /// Watches the presents `device` makes and reports when frames reached
+    /// the screen, if the device can say.
+    fn display_timing_observer(
+        &self,
+        device: &Arc<wgpu::Device>,
+    ) -> Option<Box<dyn cranpose_render_wgpu::PresentObserver>> {
+        let observer = DisplayTimingObserver::new(Arc::clone(device), self.displayed_tx.clone())?;
+        Some(Box::new(observer))
+    }
+
+    /// Hands every frame the display has reported since the last call to
+    /// `pacer`.
+    fn pace_displayed_frames(&self, pacer: &mut FramePacer) {
+        for frame in self.displayed_rx.try_iter() {
+            pacer.record_shown(frame.shown_ns, frame.queued_behind, vsync_period_ns());
         }
     }
 
@@ -960,6 +985,7 @@ fn init_gpu_threaded_for_android(
             resources.adapter.get_downlevel_capabilities().flags,
             Arc::new(frame_driver.frame_waker()),
             Some(Arc::new(crate::android_frame_telemetry::monotonic_nanos)),
+            frame_driver.display_timing_observer(&resources.device),
         )
         .map_err(|error| AndroidSurfaceError::PresentRuntime(format!("{error:?}")))
 }
@@ -1274,7 +1300,10 @@ fn create_android_gpu_resources(
 
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("Android Device"),
-        required_features: cranpose_render_wgpu::optional_device_features(&adapter),
+        // Display timing lets the frame pacer see when frames reach the
+        // screen; see `android_display_timing`.
+        required_features: cranpose_render_wgpu::optional_device_features(&adapter)
+            | (adapter.features() & wgpu::Features::VULKAN_GOOGLE_DISPLAY_TIMING),
         required_limits: crate::gpu_limits::mobile_device_limits(adapter.limits()),
         experimental_features: wgpu::ExperimentalFeatures::disabled(),
         memory_hints: crate::gpu_limits::mobile_memory_hints(),
@@ -1332,6 +1361,15 @@ fn create_android_gpu_resources_for_existing_device(
         surface: Some(surface),
         renderer_needs_init,
     })
+}
+
+/// The display's refresh period: what the display reports, else what the
+/// vsync callbacks have measured, else 60 Hz.
+fn vsync_period_ns() -> i64 {
+    match crate::android_frame_telemetry::vsync_period_ns() {
+        reported if reported > 0 => reported,
+        _ => crate::android_vsync::observed_vsync_period_ns().unwrap_or(16_666_667),
+    }
 }
 
 fn android_frame_latency(requested: Option<&str>) -> u32 {
@@ -1720,13 +1758,8 @@ pub fn run(
     const MAX_EXIT_ATTEMPTS: u32 = 3;
     let mut exit_attempts = 0u32;
 
-    let catchup_pacing = !matches!(std::env::var("CRANPOSE_CATCHUP_PACING").as_deref(), Ok("0"));
-    if catchup_pacing {
-        log::info!("[pacing] catch-up pacing enabled");
-    }
-    let mut last_present_at: Option<web_time::Instant> = None;
-    let mut behind_deadline = false;
-    let mut catchup_coasts = 0u32;
+    let mut frame_pacer = FramePacer::default();
+    let mut frame_waits_for_vsync = false;
 
     let mut pending_present_timings =
         Vec::<(u64, crate::android_frame_telemetry::FrameTimings)>::with_capacity(2);
@@ -1746,6 +1779,7 @@ pub fn run(
             ),
             None => None,
         };
+        android_frame_driver.pace_displayed_frames(&mut frame_pacer);
 
         let pending_confirmation_timeout = pending_host_window_confirmation.map(|pending| {
             android_host_window::HOST_WINDOW_CONFIRMATION_TIMEOUT
@@ -1807,8 +1841,15 @@ pub fn run(
                 true => Some(Duration::ZERO),
                 false => idle_timeout,
             }
-        } else if android_frame_driver.frame_requested() {
-            if behind_deadline {
+        } else if android_frame_driver.frame_requested() || frame_waits_for_vsync {
+            let late_frame_can_start = frame_pacer.slot_open(
+                crate::android_frame_telemetry::monotonic_nanos(),
+                crate::android_vsync::last_vsync_ns(),
+                vsync_period_ns(),
+            ) && app_shell
+                .as_mut()
+                .is_some_and(|shell| shell.renderer().has_frame_credit());
+            if late_frame_can_start {
                 Some(Duration::ZERO)
             } else if crate::android_vsync::request_wake_at_next_vsync() {
                 idle_timeout
@@ -2366,11 +2407,19 @@ pub fn run(
 
         let mut adpf_work_started: Option<web_time::Instant> = None;
         let mut adpf_sync_presented = false;
+        frame_waits_for_vsync = false;
         if let (Some(resources), Some(shell)) = (&mut gpu_resources, &mut app_shell) {
-            if resources.has_surface()
+            let frame_due = resources.has_surface()
                 && shell.needs_update()
-                && shell.renderer().has_frame_credit()
-            {
+                && shell.renderer().has_frame_credit();
+            let frame_starts = frame_due
+                && frame_pacer.begin_frame(
+                    crate::android_frame_telemetry::monotonic_nanos(),
+                    crate::android_vsync::last_vsync_ns(),
+                    vsync_period_ns(),
+                );
+            frame_waits_for_vsync = frame_due && !frame_starts;
+            if frame_starts {
                 adpf_work_started = Some(web_time::Instant::now());
                 let update_result = android_host_window::with_android_host_window_registry(
                     &host_window_registry,
@@ -2452,12 +2501,7 @@ pub fn run(
             drained_present_interval
         };
         if adpf_sync_presented && let Some(started) = adpf_work_started {
-            let reported = crate::android_frame_telemetry::vsync_period_ns();
-            let period = if reported > 0 {
-                reported
-            } else {
-                crate::android_vsync::observed_vsync_period_ns().unwrap_or(16_666_667)
-            };
+            let period = vsync_period_ns();
             let session = perf_hint
                 .get_or_insert_with(|| crate::android_perf_hint::PerfHintSession::open(period));
             if let Some(session) = session.as_mut() {
@@ -2466,24 +2510,6 @@ pub fn run(
         }
         if let Some((frame_started_at, frame_finished_at)) = presented_interval {
             record_presented_frame(app_shell.as_mut(), frame_started_at, frame_finished_at);
-            behind_deadline = catchup_pacing
-                && last_present_at.is_some_and(|previous| {
-                    let reported = crate::android_frame_telemetry::vsync_period_ns();
-                    let period = if reported > 0 {
-                        reported
-                    } else {
-                        crate::android_vsync::observed_vsync_period_ns().unwrap_or(16_666_667)
-                    };
-                    frame_finished_at.duration_since(previous).as_nanos() as i64
-                        > period + period / 16
-                });
-            catchup_coasts = 0;
-            last_present_at = Some(frame_finished_at);
-        } else if behind_deadline {
-            catchup_coasts += 1;
-            if catchup_coasts >= 3 {
-                behind_deadline = false;
-            }
         }
     }
 

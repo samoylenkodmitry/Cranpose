@@ -440,6 +440,7 @@ fn real_thread_runtime_smoke() {
                 let _ = wake_tx.send(());
             }),
             None,
+            None,
         )
         .expect("present thread must spawn");
     renderer.scene_mut().graph = Some(direct_graph());
@@ -490,6 +491,69 @@ fn real_thread_runtime_smoke() {
         !renderer.needs_frame_warmup(),
         "after shutdown the renderer reads as uninitialized"
     );
+}
+
+/// Counts the presents it sees, and says when the runtime lets it go.
+struct CountingObserver {
+    presents: Arc<std::sync::atomic::AtomicUsize>,
+    dropped: std::sync::mpsc::Sender<()>,
+}
+
+impl cranpose_render_wgpu::PresentObserver for CountingObserver {
+    fn before_present(&mut self, _surface: &wgpu::Surface<'static>) {
+        self.presents
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    fn after_present(&mut self, _surface: &wgpu::Surface<'static>) {}
+}
+
+impl Drop for CountingObserver {
+    fn drop(&mut self) {
+        let _ = self.dropped.send(());
+    }
+}
+
+#[test]
+fn a_present_observer_sees_only_surface_presents_and_leaves_with_the_runtime() {
+    let (_lock, mut renderer, device, queue, backend, downlevel) =
+        inline_runtime_or_skip!("present observer");
+    let presents = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let (dropped_tx, dropped_rx) = std::sync::mpsc::channel::<()>();
+    renderer
+        .init_gpu_threaded(
+            device,
+            queue,
+            wgpu::TextureFormat::Bgra8UnormSrgb,
+            backend,
+            downlevel,
+            Arc::new(|| {}),
+            None,
+            Some(Box::new(CountingObserver {
+                presents: Arc::clone(&presents),
+                dropped: dropped_tx,
+            })),
+        )
+        .expect("present thread must spawn");
+    renderer.scene_mut().graph = Some(direct_graph());
+    assert!(renderer.present_attach_offscreen_for_tests(WIDTH, HEIGHT));
+    assert_eq!(
+        renderer.publish_frame(WIDTH, HEIGHT),
+        PublishOutcome::Published
+    );
+    assert_eq!(
+        drain_with_timeout(&mut renderer, 1),
+        vec![(1, PresentOutcome::Presented)]
+    );
+    assert_eq!(
+        presents.load(std::sync::atomic::Ordering::Relaxed),
+        0,
+        "a frame drawn off screen is no present for the platform to watch"
+    );
+    renderer.shutdown_present_runtime();
+    dropped_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("shutting the runtime down must release its observer");
 }
 
 fn drain_with_timeout(renderer: &mut WgpuRenderer, count: usize) -> Vec<(u64, PresentOutcome)> {

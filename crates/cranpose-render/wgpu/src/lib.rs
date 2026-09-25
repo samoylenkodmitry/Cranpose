@@ -60,6 +60,21 @@ use cranpose_render_common::{
 use cranpose_ui::{LayoutTree, TextMeasurer};
 use cranpose_ui_graphics::{Rect, ShaderWarmUp, Size};
 pub use frame_packet::PresentTimings;
+
+/// Platform code the present thread runs around every present to a surface,
+/// for what only the platform can do with its swapchain, such as asking the
+/// display when earlier frames reached the screen.
+#[cfg(not(target_arch = "wasm32"))]
+pub trait PresentObserver: Send {
+    /// Runs just before `surface` presents a frame.
+    fn before_present(&mut self, surface: &wgpu::Surface<'static>);
+    /// Runs just after `surface` presented it.
+    fn after_present(&mut self, surface: &wgpu::Surface<'static>);
+
+    /// Runs before `surface` is configured anew, while its current swapchain
+    /// still stands. Does nothing unless the platform needs it to.
+    fn before_reconfigure(&mut self, _surface: &wgpu::Surface<'static>) {}
+}
 use frame_packet::RenderReturns;
 #[doc(hidden)]
 pub use frame_packet::{CancelReason, PresentOutcome};
@@ -384,6 +399,8 @@ impl WgpuRenderer {
     /// * `clock` — producer's monotonic nanosecond clock, so present-side
     ///   [`PresentTimings`] share the producer telemetry's clock domain;
     ///   `None` leaves timings at zero.
+    /// * `observer` — runs on the present thread around every present to the
+    ///   surface.
     #[cfg(not(target_arch = "wasm32"))]
     #[expect(clippy::too_many_arguments)]
     pub fn init_gpu_threaded(
@@ -395,6 +412,7 @@ impl WgpuRenderer {
         adapter_downlevel: wgpu::DownlevelFlags,
         waker: Arc<dyn Fn() + Send + Sync>,
         clock: Option<Arc<dyn Fn() -> i64 + Send + Sync>>,
+        observer: Option<Box<dyn PresentObserver>>,
     ) -> Result<(), WgpuRendererError> {
         self.retire_live_backend();
         self.renderer_epoch = self.renderer_epoch.wrapping_add(1);
@@ -408,6 +426,7 @@ impl WgpuRenderer {
             renderer_epoch: self.renderer_epoch,
             shader_warm_ups: self.frontend.shader_warm_ups.clone(),
             clock,
+            observer,
         };
         let handle = PresentHandle::spawn(init, waker).map_err(WgpuRendererError::Wgpu)?;
         self.backend = PresentBackend::Threaded(handle);
@@ -436,6 +455,7 @@ impl WgpuRenderer {
             renderer_epoch: self.renderer_epoch,
             shader_warm_ups: self.frontend.shader_warm_ups.clone(),
             clock: None,
+            observer: None,
         };
         let (handle, state, msg_rx) = PresentHandle::new_inline(init, Arc::new(|| {}));
         self.backend = PresentBackend::Threaded(handle);

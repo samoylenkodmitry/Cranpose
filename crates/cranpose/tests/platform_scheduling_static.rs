@@ -1885,6 +1885,7 @@ fn unsafe_code_stays_in_reviewed_platform_boundary_modules() {
     let source_dir = crate_dir.join("src");
     let allowed = [
         "android_display.rs",
+        "android_display_timing.rs",
         "android_entry.rs",
         "android_frame_rate.rs",
         "android_perf_hint.rs",
@@ -2081,6 +2082,7 @@ fn workspace_ffi_boundaries_are_explicit() {
     let source_roots = ["crates", "apps", "xtask"];
     let allowed = [
         "crates/cranpose/src/android_display.rs",
+        "crates/cranpose/src/android_display_timing.rs",
         "crates/cranpose/src/android_entry.rs",
         "crates/cranpose/src/android_frame_rate.rs",
         "crates/cranpose/src/android_perf_hint.rs",

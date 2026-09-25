@@ -977,6 +977,7 @@ dependencies = [
  "accesskit_windows",
  "android-activity",
  "android_logger",
+ "ash",
  "block2 0.6.2",
  "console_error_panic_hook",
  "cranpose-app-shell",

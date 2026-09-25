@@ -25,6 +25,8 @@ pub(crate) type PresentWaker = Arc<dyn Fn() + Send + Sync>;
 
 pub(crate) type PresentClock = Arc<dyn Fn() -> i64 + Send + Sync>;
 
+pub(crate) type BoxedPresentObserver = Box<dyn crate::PresentObserver>;
+
 pub(crate) const CONTROL_ACK_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(crate) struct PresentRuntimeInit {
@@ -36,6 +38,7 @@ pub(crate) struct PresentRuntimeInit {
     pub(crate) text_fonts: SoftwareTextFontSet,
     pub(crate) renderer_epoch: u64,
     pub(crate) clock: Option<PresentClock>,
+    pub(crate) observer: Option<BoxedPresentObserver>,
     pub(crate) shader_warm_ups: Vec<cranpose_ui_graphics::ShaderWarmUp>,
 }
 
@@ -105,6 +108,7 @@ pub(crate) struct PresentState {
     status: Arc<PresentStatus>,
     waker: PresentWaker,
     clock: Option<PresentClock>,
+    observer: Option<BoxedPresentObserver>,
 }
 
 impl PresentState {
@@ -123,6 +127,7 @@ impl PresentState {
             text_fonts,
             renderer_epoch,
             clock,
+            observer,
             shader_warm_ups,
         } = init;
         let mut gpu_renderer = GpuRenderer::new(
@@ -148,6 +153,7 @@ impl PresentState {
             status,
             waker,
             clock,
+            observer,
         }
     }
 
@@ -224,9 +230,7 @@ impl PresentState {
             } => {
                 self.surface_epoch = surface_epoch;
                 self.cancel_waiting(CancelReason::SurfaceEpoch);
-                if let Some(surface) = self.surface.as_ref() {
-                    surface.configure(&self.device, &config);
-                }
+                self.reconfigure(&config);
                 if self.offscreen_target.is_some() {
                     self.offscreen_target = Some((config.width, config.height));
                 }
@@ -332,7 +336,7 @@ impl PresentState {
             &mut returns,
         );
         let after_render_ns = self.now();
-        self.gpu_renderer.queue.present(frame);
+        self.present(frame);
         returns.timings = PresentTimings {
             after_acquire_ns,
             after_render_ns,
@@ -397,8 +401,9 @@ impl PresentState {
             AcquireOutcome::Ready(frame) => Some(frame),
             AcquireOutcome::Skip => None,
             AcquireOutcome::Reconfigure => {
-                let config = self.config.as_ref()?;
-                surface.configure(&self.device, config);
+                let config = self.config.clone()?;
+                self.reconfigure(&config);
+                let surface = self.surface.as_ref()?;
                 match Self::acquire(surface) {
                     AcquireOutcome::Ready(frame) => Some(frame),
                     _ => None,
@@ -498,6 +503,31 @@ impl PresentState {
             Err(TrySendError::Disconnected(_)) => {}
         }
         (self.waker)();
+    }
+
+    /// Gives the current surface a new configuration, letting the platform's
+    /// observer act on the swapchain it replaces first.
+    fn reconfigure(&mut self, config: &wgpu::SurfaceConfiguration) {
+        let Some(surface) = self.surface.as_ref() else {
+            return;
+        };
+        if let Some(observer) = self.observer.as_mut() {
+            observer.before_reconfigure(surface);
+        }
+        surface.configure(&self.device, config);
+    }
+
+    /// Presents `frame` on the current surface, with the platform's
+    /// observer on either side of it.
+    fn present(&mut self, frame: wgpu::SurfaceTexture) {
+        let observed = self.observer.as_mut().zip(self.surface.as_ref());
+        if let Some((observer, surface)) = observed {
+            observer.before_present(surface);
+            self.gpu_renderer.queue.present(frame);
+            observer.after_present(surface);
+        } else {
+            self.gpu_renderer.queue.present(frame);
+        }
     }
 
     fn now(&self) -> i64 {

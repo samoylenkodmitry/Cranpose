@@ -75,7 +75,6 @@ const PROPERTY_BACKED_ENV_VARS: &[(&str, &str)] = &[
         "debug.cranpose.async_shape_pipelines",
         "CRANPOSE_ASYNC_SHAPE_PIPELINES",
     ),
-    ("debug.cranpose.catchup_pacing", "CRANPOSE_CATCHUP_PACING"),
     (
         "debug.cranpose.update_stage_ms",
         "CRANPOSE_UPDATE_STAGE_TELEMETRY_MS",
