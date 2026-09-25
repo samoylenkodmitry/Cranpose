@@ -44,10 +44,6 @@ use crate::{
 };
 
 const MAX_SURFACE_PIXELS: u64 = 16 * 1024 * 1024;
-/// The most shape records, texts and images a child draws in place every
-/// frame whatever its content does. Past it, a child draws in place only
-/// while its surface is neither cached nor retained.
-const IN_PLACE_DRAWS: u32 = 256;
 const MAX_RESOLVE_DEPTH: usize = 128;
 
 /// Device-space rectangle: origin and size in pixels of some scene's device
@@ -4104,20 +4100,18 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         ))
     }
 
-    /// Whether a child that can draw in place does this frame. A small one
-    /// always does. A large one does unless its surface is cached or retained
-    /// this frame, which it then resolves into the pass for `resolve_child`:
-    /// content that holds still costs less to composite than to draw again,
-    /// and content that changes would be drawn afresh into a surface anyway.
+    /// Whether a child that can draw in place does this frame: unless its
+    /// surface is cached or retained this frame, which it then resolves into
+    /// the pass for `resolve_child`. Content that holds still costs less to
+    /// composite from its cached surface than to draw again, and content that
+    /// changes every frame, whose surface the cache stops keeping, would be
+    /// drawn afresh into a surface it throws away.
     fn draws_in_place(
         &mut self,
         pass: &mut LayerPass<'_>,
         index: usize,
         child: &ChildLayer,
     ) -> Result<bool, String> {
-        if child.draws <= IN_PLACE_DRAWS {
-            return Ok(true);
-        }
         let scale = pass.scale;
         let target = pass.target_rect();
         let frame = ChildFrame::of(child, scale, target);

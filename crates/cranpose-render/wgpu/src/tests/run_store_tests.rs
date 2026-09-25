@@ -18,6 +18,7 @@ fn shared_pipelines_preserve_each_draws_strip_index_count() {
         blend_mode: segment.blend,
         tier: crate::render::RunTier::Arena,
         variant: crate::render::ShapeVariant::of_segment(&segment, false, Default::default()),
+        transformed: false,
     };
     let mut staging = ArenaStaging::default();
     for (record, class) in [0, 0, 3, 3, 0].into_iter().enumerate() {

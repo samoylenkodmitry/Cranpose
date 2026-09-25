@@ -975,11 +975,15 @@ fn shape_variants_enabled() -> bool {
     !SHAPE_VARIANTS.equals("0")
 }
 
+/// A shape pipeline: its blend, tier and variant, and whether it draws a
+/// segment under a transform. Falling back to the general variant keeps the
+/// blend, tier and transform.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct ShapePipelineKey {
     pub(crate) blend_mode: BlendMode,
     pub(crate) tier: RunTier,
     pub(crate) variant: ShapeVariant,
+    pub(crate) transformed: bool,
 }
 
 impl ShapePipelineKey {
@@ -988,6 +992,7 @@ impl ShapePipelineKey {
             blend_mode,
             tier,
             variant: ShapeVariant::GENERAL,
+            transformed: false,
         }
     }
 
@@ -1016,6 +1021,7 @@ pub(crate) fn create_shape_pipeline(
         blend_mode,
         tier,
         variant,
+        transformed,
     } = key;
     let constants = [
         ("SHAPE_KIND_FIXED", variant.kind.map_or(-1.0, f64::from)),
@@ -1026,6 +1032,7 @@ pub(crate) fn create_shape_pipeline(
         ("SHAPE_BANDS", f64::from(u8::from(mode.storage))),
         ("SHAPE_FLAT", f64::from(u8::from(variant.ablation.material))),
         ("SHAPE_DISCARD", f64::from(u8::from(variant.ablation.fill))),
+        ("SHAPE_TRANSFORMED", f64::from(u8::from(transformed))),
     ];
     let (vertex_entry, fragment_entry) = variant.entries();
     let instance_layout = record_vertex_layouts().map(Some);
@@ -1043,7 +1050,9 @@ pub(crate) fn create_shape_pipeline(
     create_render_pipeline_logged(
         device,
         cache,
-        &format!("shape blend={blend_mode:?} tier={tier:?} variant={variant:?}"),
+        &format!(
+            "shape blend={blend_mode:?} tier={tier:?} variant={variant:?} transformed={transformed}"
+        ),
         wgpu::RenderPipelineDescriptor {
             label: Some("Shape Pipeline"),
             layout: Some(&pipeline_layout),
@@ -1228,12 +1237,6 @@ impl Vertex {
     }
 }
 
-/// How far a shape's quad reaches past its rect under a segment transform,
-/// in device pixels: a rotated edge crosses pixels whose centres lie
-/// outside the rect, and their coverage is only shaded if the quad covers
-/// them. The shape stage's banded quads keep the same slack.
-const TRANSFORMED_QUAD_MARGIN: f32 = 0.5 + 1.0 / 16.0;
-
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 struct Uniforms {
@@ -1241,8 +1244,7 @@ struct Uniforms {
     viewport_offset: [f32; 2],
     transform: [f32; 4],
     translation: [f32; 2],
-    quad_margin: f32,
-    reserved: f32,
+    reserved: [f32; 2],
     inverse: [f32; 4],
     origin: [f32; 2],
     origin_reserved: [f32; 2],
@@ -1257,12 +1259,7 @@ impl Uniforms {
             viewport_offset: params.offset,
             transform,
             translation,
-            quad_margin: if params.transform.is_identity() {
-                0.0
-            } else {
-                TRANSFORMED_QUAD_MARGIN
-            },
-            reserved: 0.0,
+            reserved: [0.0; 2],
             inverse,
             origin: params.origin,
             origin_reserved: [0.0; 2],
@@ -3271,11 +3268,13 @@ impl GpuRenderer {
         clipped: bool,
         tier: RunTier,
         ablation: ShapeAblation,
+        transformed: bool,
     ) -> ShapePipelineKey {
         ShapePipelineKey {
             blend_mode: supported_blend_mode(segment.blend),
             tier,
             variant: ShapeVariant::of_segment(segment, clipped, ablation),
+            transformed,
         }
     }
 
@@ -3292,11 +3291,14 @@ impl GpuRenderer {
         let command = run.command.expect("a stored run has a command");
         let clipped = run.placement.clip.is_some();
         let ablation = self.ablation.shape;
+        let transformed = !viewport.transform.is_identity();
         let mut draws = SmallVec::new();
         self.run_store.stored_run_draws(
             &self.device,
             run,
-            &mut |segment| Self::run_pipeline_key(segment, clipped, RunTier::Store, ablation),
+            &mut |segment| {
+                Self::run_pipeline_key(segment, clipped, RunTier::Store, ablation, transformed)
+            },
             &mut draws,
         );
         window_draws(&mut draws, window);
@@ -3337,12 +3339,15 @@ impl GpuRenderer {
         self.run_store.arena_accepts(chunk, run)
     }
 
+    /// Appends `window` of `run`'s records to the open arena chunk, keyed
+    /// for pipelines that draw under a transform when `transformed`.
     pub(crate) fn append_arena_run(
         &mut self,
         chunk: usize,
         run: &RunDraw,
         window: std::ops::Range<u32>,
         root_scale: f32,
+        transformed: bool,
     ) -> u32 {
         let clipped = run.placement.clip.is_some();
         let ablation = self.ablation.shape;
@@ -3350,7 +3355,8 @@ impl GpuRenderer {
         let taken = self
             .run_store
             .append_arena(chunk, run, window, root_scale, &mut |segment| {
-                let key = Self::run_pipeline_key(segment, clipped, RunTier::Arena, ablation);
+                let key =
+                    Self::run_pipeline_key(segment, clipped, RunTier::Arena, ablation, transformed);
                 if !keys.contains(&key) {
                     keys.push(key);
                 }

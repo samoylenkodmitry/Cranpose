@@ -90,9 +90,8 @@ impl LayerScene {
 /// An isolated child composited into its parent at `z_index`: its content is
 /// rendered into its own texture, then drawn with `transform`, `alpha`,
 /// `blend_mode` and the optional rounded mask. A child `in_place` can do
-/// without the texture: its content, `draws` shape records, texts and images
-/// with its children's, can draw straight into its parent's pass under its
-/// rigid transform.
+/// without the texture: its content can draw straight into its parent's pass
+/// under its rigid transform.
 pub(crate) struct ChildLayer {
     pub(crate) z_index: usize,
     pub(crate) node_id: Option<NodeId>,
@@ -109,7 +108,6 @@ pub(crate) struct ChildLayer {
     pub(crate) content_hash: u64,
     pub(crate) cache_policy: CachePolicy,
     pub(crate) in_place: bool,
-    pub(crate) draws: u32,
     pub(crate) content: LayerScene,
 }
 
@@ -428,13 +426,6 @@ fn can_draw_in_place(
         && content_draws_in_place(content)
 }
 
-/// The shape records, texts and images a scene draws.
-fn scene_draws(scene: &CompositorScene) -> u32 {
-    let records: u32 = scene.runs.iter().map(RunDraw::record_count).sum();
-    let others = scene.texts.len() + scene.images.len();
-    records.saturating_add(u32::try_from(others).unwrap_or(u32::MAX))
-}
-
 /// Whether every part of a layer's content draws the same straight into a
 /// transformed pass as into a surface of its own: no backdrop, effect range
 /// or shadow that resolves into a texture, nothing that blends other than
@@ -604,12 +595,6 @@ fn isolated_child(
         content_hash,
         cacheable,
     );
-    let draws = content
-        .children
-        .iter()
-        .fold(scene_draws(&content.scene), |total, child| {
-            total.saturating_add(child.draws)
-        });
     let in_place = can_draw_in_place(layer, transform, &content);
     ChildLayer {
         z_index: parent_scene.next_z(),
@@ -627,7 +612,6 @@ fn isolated_child(
         content_hash,
         cache_policy: layer.cache_policy,
         in_place,
-        draws,
         content,
     }
 }

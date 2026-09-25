@@ -226,7 +226,8 @@ fn a_relayout_under_rotated_cells_draws_them_in_place_without_surfaces() {
     let Some((_lock, mut harness)) = harness(false) else {
         return;
     };
-    for frame in 0..WARMUP_FRAMES + MEASURED_FRAMES {
+    harness.frame(width_fraction(0));
+    for frame in 1..WARMUP_FRAMES + MEASURED_FRAMES {
         let (stats, _) = harness.frame(width_fraction(frame));
         assert_eq!(
             stats.isolated_layer_renders, 0,

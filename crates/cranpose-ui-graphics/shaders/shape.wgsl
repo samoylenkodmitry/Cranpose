@@ -151,19 +151,17 @@ struct Placement {
 }
 
 // `transform` (row-major 2x2) and `translation` carry a segment's device
-// space into its target's; `inverse` is the 2x2 that maps back. Every
-// segment but a layer drawn in place keeps the identity, under which every
-// use below reproduces the untransformed arithmetic bit for bit. A
-// transformed segment grows each quad by `quad_margin`, so the pixels a
-// turned edge crosses outside the rect are shaded too. `origin` is the glyph
-// stage's alone; shapes always draw with it zero.
+// space into its target's; `inverse` is the 2x2 that maps back. Only a
+// pipeline built with `SHAPE_TRANSFORMED` reads them: every segment but a
+// layer drawn in place keeps the identity, and its pipelines compile the
+// untransformed arithmetic alone. `origin` is the glyph stage's; shapes
+// always draw with it zero.
 struct Uniforms {
     viewport: vec2<f32>,
     viewport_offset: vec2<f32>,
     transform: vec4<f32>,
     translation: vec2<f32>,
-    quad_margin: f32,
-    reserved: f32,
+    reserved: vec2<f32>,
     inverse: vec4<f32>,
     origin: vec2<f32>,
     origin_reserved: vec2<f32>,
@@ -245,6 +243,11 @@ override TIER_ARENA: bool = false;
 // Whether banded arcs draw as strips on this tier; false on the uniform
 // floor, which draws every record as its quad.
 override SHAPE_BANDS: bool = true;
+// Whether the pipeline draws a segment under a transform: a layer drawn in
+// place, turned. Its quads grow by `BAND_QUAD_MARGIN`, so the pixels a
+// turned edge crosses outside the rect are shaded too, and its fragments
+// map back through the inverse to evaluate their distance fields.
+override SHAPE_TRANSFORMED: bool = false;
 fn record_placement(record: ShapeRecord) -> Placement {
     if (TIER_ARENA) {
         return placements[record.placement];
@@ -448,24 +451,34 @@ fn record_vertex(record: ShapeRecord, local: u32) -> VertexOutput {
         return pinned(geometry.rect.xy + geometry.rect.zw);
     }
     let uv = vec2<f32>(f32(local >> 1u), f32(local & 1u));
-    let margin = uniforms.quad_margin;
-    let position = geometry.rect.xy - margin + uv * (geometry.rect.zw + 2.0 * margin);
+    if (SHAPE_TRANSFORMED) {
+        let margin = BAND_QUAD_MARGIN;
+        let grown = geometry.rect.xy - margin + uv * (geometry.rect.zw + 2.0 * margin);
+        return shape_output(record, placement, geometry, grown);
+    }
+    let position = geometry.rect.xy + uv * geometry.rect.zw;
     return shape_output(record, placement, geometry, position);
 }
 
-fn clip_position(position: vec2<f32>) -> vec4<f32> {
-    let placed = vec2<f32>(
-        uniforms.transform.x * position.x + uniforms.transform.y * position.y,
-        uniforms.transform.z * position.x + uniforms.transform.w * position.y,
-    ) + uniforms.translation;
-    let x = ((placed.x - uniforms.viewport_offset.x) / uniforms.viewport.x) * 2.0 - 1.0;
-    let y = 1.0 - ((placed.y - uniforms.viewport_offset.y) / uniforms.viewport.y) * 2.0;
+fn clip_position(drawn: vec2<f32>) -> vec4<f32> {
+    var position = drawn;
+    if (SHAPE_TRANSFORMED) {
+        position = vec2<f32>(
+            uniforms.transform.x * position.x + uniforms.transform.y * position.y,
+            uniforms.transform.z * position.x + uniforms.transform.w * position.y,
+        ) + uniforms.translation;
+    }
+    let x = ((position.x - uniforms.viewport_offset.x) / uniforms.viewport.x) * 2.0 - 1.0;
+    let y = 1.0 - ((position.y - uniforms.viewport_offset.y) / uniforms.viewport.y) * 2.0;
     return vec4<f32>(x, y, 0.0, 1.0);
 }
 
-// The segment device position a fragment shades: its target position mapped
-// back through the segment's transform.
+// The segment device position a fragment shades: its target position, mapped
+// back through the segment's transform when it has one.
 fn segment_position(fragment_position: vec2<f32>) -> vec2<f32> {
+    if (!SHAPE_TRANSFORMED) {
+        return fragment_position + uniforms.viewport_offset;
+    }
     let placed = fragment_position + uniforms.viewport_offset - uniforms.translation;
     return vec2<f32>(
         uniforms.inverse.x * placed.x + uniforms.inverse.y * placed.y,
@@ -899,10 +912,9 @@ fn shape_coverage_alpha(input: VertexOutput) -> f32 {
         return 1.0;
     }
 
-    if (SHAPE_BANDS) {
-        let margin = uniforms.quad_margin;
-        if (rect_pos.x < input.rect.x - margin || rect_pos.x > input.rect.x + input.rect.z + margin ||
-            rect_pos.y < input.rect.y - margin || rect_pos.y > input.rect.y + input.rect.w + margin) {
+    if (SHAPE_BANDS && !SHAPE_TRANSFORMED) {
+        if (rect_pos.x < input.rect.x || rect_pos.x > input.rect.x + input.rect.z ||
+            rect_pos.y < input.rect.y || rect_pos.y > input.rect.y + input.rect.w) {
             discard;
         }
     }

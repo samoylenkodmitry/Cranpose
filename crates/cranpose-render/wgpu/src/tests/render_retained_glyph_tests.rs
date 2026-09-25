@@ -174,10 +174,10 @@ fn the_viewport_uniform_lays_out_as_the_shaders_declare_it() {
         viewport(SegmentTransform::IDENTITY),
         PlacementData::zeroed(),
     );
-    assert_eq!(identity.quad_margin, 0.0);
     assert_eq!(identity.transform, [1.0, 0.0, 0.0, 1.0]);
+    assert_eq!(identity.translation, [0.0, 0.0]);
     let turned = Uniforms::of(viewport(quarter_turn()), PlacementData::zeroed());
-    assert_eq!(turned.quad_margin, TRANSFORMED_QUAD_MARGIN);
+    assert_eq!(turned.transform, [0.0, -1.0, 1.0, 0.0]);
     assert_eq!(turned.translation, [100.0, 0.0]);
     assert_eq!(turned.inverse, [0.0, 1.0, -1.0, 0.0]);
 }
@@ -264,4 +264,16 @@ fn a_draw_samples_as_it_asks_on_the_pixel_grid_and_filtered_off_it() {
             ImageSampling::Linear
         );
     }
+}
+
+#[test]
+fn a_transformed_shape_pipeline_falls_back_to_a_transformed_general_one() {
+    let untransformed = ShapePipelineKey::general_for(BlendMode::SrcOver, RunTier::Arena);
+    let transformed = ShapePipelineKey {
+        transformed: true,
+        ..untransformed
+    };
+    assert_ne!(transformed, untransformed);
+    assert!(transformed.general().transformed);
+    assert!(!untransformed.general().transformed);
 }

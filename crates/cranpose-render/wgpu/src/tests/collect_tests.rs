@@ -195,7 +195,7 @@ fn a_transform_that_only_turns_and_moves_is_rigid() {
 }
 
 #[test]
-fn a_layer_that_only_turns_draws_in_place_and_counts_its_draws() {
+fn a_layer_that_only_turns_draws_in_place() {
     let child = collected(turned_layer(
         turn(20.0),
         GraphicsLayer::default(),
@@ -205,7 +205,6 @@ fn a_layer_that_only_turns_draws_in_place_and_counts_its_draws() {
         ])],
     ));
     assert!(child.in_place);
-    assert_eq!(child.draws, 2);
 }
 
 #[test]
@@ -295,7 +294,6 @@ fn a_turned_layer_whose_clip_would_cut_a_turned_child_keeps_its_surface() {
         ],
     ));
     assert!(open.in_place);
-    assert_eq!(open.draws, 2, "a layer counts its children's draws");
 }
 
 #[test]

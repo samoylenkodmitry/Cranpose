@@ -22,8 +22,7 @@ struct Uniforms {
     viewport_offset: vec2<f32>,
     transform: vec4<f32>,
     translation: vec2<f32>,
-    quad_margin: f32,
-    reserved: f32,
+    reserved: vec2<f32>,
     inverse: vec4<f32>,
     origin: vec2<f32>,
 }

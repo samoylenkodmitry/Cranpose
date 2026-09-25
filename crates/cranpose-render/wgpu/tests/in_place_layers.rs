@@ -4,8 +4,8 @@ use cranpose_app_shell::AppShell;
 use cranpose_core::{MutableState, location_key};
 use cranpose_render_wgpu::{CapturedFrame, RenderStatsSnapshot, WgpuRenderer};
 use cranpose_ui::{
-    Alignment, Box, BoxSpec, Brush, Color, CompositingStrategy, GraphicsLayer, Modifier, Rect,
-    Text, TextStyle, composable,
+    Alignment, Box, BoxSpec, Color, CompositingStrategy, GraphicsLayer, Modifier, Text, TextStyle,
+    composable,
     text::{SpanStyle, TextUnit},
 };
 
@@ -14,31 +14,29 @@ use crate::support;
 const FRAME: u32 = 240;
 const PAGE: Color = Color(1.0, 1.0, 1.0, 1.0);
 const INK: Color = Color(0.1, 0.2, 0.8, 1.0);
-/// Enough rects that a layer of them is past what draws in place every
-/// frame whatever its content does.
-const MANY_RECTS: usize = 300;
+/// The page's width state in the compared frames; the frame before each
+/// holds another, so the turned content changes and draws in place.
+const WIDTH: f32 = 200.0;
 /// Where the layer cache counts its hits on isolated layers' surfaces.
 const SOURCE_KIND: usize = 0;
 
-/// What the page turns about its centre.
+/// What the page turns about its centre, sized by its width state `w`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Scene {
-    /// A 120x60 box of ink turned by 23 degrees.
+    /// A 0.6w x 60 box of ink turned by 23 degrees.
     Box,
-    /// A line of ink text turned by -17 degrees.
+    /// A line of ink text naming `w`, turned by -17 degrees.
     Text,
-    /// An 80x40 box of ink turned by 40 degrees inside a clear box turned
+    /// A 0.4w x 40 box of ink turned by 40 degrees inside a clear box turned
     /// by -15.
     Nested,
     /// The nested boxes with the outer one always drawn offscreen, so the
     /// inner one draws in place into a surface at an offset of its own.
     InSurface,
-    /// A 160x40 box of ink turned by 30 degrees, clipped by the unturned
-    /// 100x100 box it sits in.
+    /// A 160 x 0.2w box of ink turned by 30 degrees, clipped by the unturned
+    /// 100x100 box it sits in; the clip cuts both its ends, so only its
+    /// height changes what it shows.
     Clipped,
-    /// Many small rects of ink in a box turned by 11 degrees, as wide as the
-    /// page's width state.
-    Many,
 }
 
 impl Scene {
@@ -66,6 +64,18 @@ fn centred() -> BoxSpec {
 }
 
 #[composable]
+fn InkBox(width: f32, height: f32, degrees: f32, offscreen: bool) {
+    Box(
+        Modifier::empty()
+            .size_points(width, height)
+            .then(turned(degrees, offscreen))
+            .background(INK),
+        BoxSpec::default(),
+        || {},
+    );
+}
+
+#[composable]
 fn TurnedPage(scene: Scene, offscreen: bool, width: MutableState<f32>) {
     Box(
         Modifier::empty()
@@ -73,79 +83,39 @@ fn TurnedPage(scene: Scene, offscreen: bool, width: MutableState<f32>) {
             .background(PAGE),
         centred(),
         move || {
+            let w = width.get();
             match scene {
-                Scene::Box => Box(
-                    Modifier::empty()
-                        .size_points(120.0, 60.0)
-                        .then(turned(23.0, offscreen))
-                        .background(INK),
-                    BoxSpec::default(),
-                    || {},
-                ),
-                Scene::Text => Box(turned(-17.0, offscreen), BoxSpec::default(), || {
-                    Text(
-                        "Turned in place 0123",
-                        Modifier::empty(),
-                        TextStyle::from_span_style(SpanStyle {
-                            color: Some(INK),
-                            font_size: TextUnit::Sp(18.0),
-                            ..Default::default()
-                        }),
+                Scene::Box => InkBox(w * 0.6, 60.0, 23.0, offscreen),
+                Scene::Text => {
+                    Box(turned(-17.0, offscreen), BoxSpec::default(), move || {
+                        Text(
+                            format!("Turned in place {w}"),
+                            Modifier::empty(),
+                            TextStyle::from_span_style(SpanStyle {
+                                color: Some(INK),
+                                font_size: TextUnit::Sp(18.0),
+                                ..Default::default()
+                            }),
+                        );
+                    });
+                }
+                Scene::Nested | Scene::InSurface => {
+                    Box(
+                        Modifier::empty()
+                            .size_points(160.0, 100.0)
+                            .then(turned(-15.0, offscreen || scene == Scene::InSurface)),
+                        centred(),
+                        move || InkBox(w * 0.4, 40.0, 40.0, offscreen),
                     );
-                }),
-                Scene::Nested | Scene::InSurface => Box(
-                    Modifier::empty()
-                        .size_points(160.0, 100.0)
-                        .then(turned(-15.0, offscreen || scene == Scene::InSurface)),
-                    centred(),
-                    move || {
-                        Box(
-                            Modifier::empty()
-                                .size_points(80.0, 40.0)
-                                .then(turned(40.0, offscreen))
-                                .background(INK),
-                            BoxSpec::default(),
-                            || {},
-                        );
-                    },
-                ),
-                Scene::Clipped => Box(
-                    Modifier::empty().size_points(100.0, 100.0).clip_to_bounds(),
-                    centred(),
-                    move || {
-                        Box(
-                            Modifier::empty()
-                                .size_points(160.0, 40.0)
-                                .then(turned(30.0, offscreen))
-                                .background(INK),
-                            BoxSpec::default(),
-                            || {},
-                        );
-                    },
-                ),
-                Scene::Many => Box(
-                    Modifier::empty()
-                        .size_points(width.get(), 100.0)
-                        .then(turned(11.0, offscreen))
-                        .draw_behind(|scope| {
-                            let size = scope.size();
-                            let step = size.width / MANY_RECTS as f32;
-                            for index in 0..MANY_RECTS {
-                                scope.draw_rect_at(
-                                    Rect {
-                                        x: index as f32 * step,
-                                        y: (index % 10) as f32 * 9.0,
-                                        width: step * 0.5,
-                                        height: 6.0,
-                                    },
-                                    Brush::solid(INK),
-                                );
-                            }
-                        }),
-                    BoxSpec::default(),
-                    || {},
-                ),
-            };
+                }
+                Scene::Clipped => {
+                    Box(
+                        Modifier::empty().size_points(100.0, 100.0).clip_to_bounds(),
+                        centred(),
+                        move || InkBox(160.0, w * 0.2, 30.0, offscreen),
+                    );
+                }
+            }
         },
     );
 }
@@ -161,7 +131,7 @@ impl TurnedHarness {
         let width: Rc<RefCell<Option<MutableState<f32>>>> = Rc::new(RefCell::new(None));
         let width_for_app = Rc::clone(&width);
         let mut shell = AppShell::new(renderer, root_key, move || {
-            let state = cranpose_core::rememberMutableStateOf(|| 200.0f32);
+            let state = cranpose_core::rememberMutableStateOf(|| WIDTH);
             *width_for_app.borrow_mut() = Some(state);
             TurnedPage(scene, offscreen, state);
         });
@@ -182,14 +152,15 @@ impl TurnedHarness {
         support::update_and_capture(&mut self.shell, FRAME, FRAME)
     }
 
-    fn settled(&mut self) -> (RenderStatsSnapshot, CapturedFrame) {
-        let mut stats = None;
-        let frame = support::settle(|| {
-            let (frame_stats, frame) = self.frame(200.0);
-            stats = Some(frame_stats);
-            (frame_stats, frame)
-        });
-        (stats.expect("settle draws a frame"), frame)
+    fn settled(&mut self) -> CapturedFrame {
+        support::settle(|| self.frame(WIDTH))
+    }
+
+    /// A frame whose turned content changed since the frame before: the
+    /// content a layer draws in place.
+    fn changed(&mut self) -> (RenderStatsSnapshot, CapturedFrame) {
+        self.frame(WIDTH + 10.0);
+        self.frame(WIDTH)
     }
 }
 
@@ -219,8 +190,8 @@ fn coverage(frame: &CapturedFrame) -> Coverage {
     }
 }
 
-/// Draws `scene` in place and through surfaces of its own and returns the
-/// ink of each, having checked each took the path it names.
+/// Draws `scene` in place, as it changes, and through surfaces of its own,
+/// and returns the ink of each, having checked each took the path it names.
 fn in_place_and_offscreen(scene: Scene) -> Option<(Coverage, Coverage)> {
     let (_lock, renderer) = match support::headless_renderer_parts() {
         Ok(parts) => parts,
@@ -229,15 +200,20 @@ fn in_place_and_offscreen(scene: Scene) -> Option<(Coverage, Coverage)> {
             return None;
         }
     };
-    let (in_place_stats, in_place) = TurnedHarness::new(renderer, scene, false).settled();
+    let (in_place_stats, in_place) = TurnedHarness::new(renderer, scene, false).changed();
     let offscreen_renderer =
         support::headless_renderer_beside_locked().expect("reference renderer");
-    let (offscreen_stats, offscreen) =
-        TurnedHarness::new(offscreen_renderer, scene, true).settled();
+    let mut offscreen_harness = TurnedHarness::new(offscreen_renderer, scene, true);
+    let (offscreen_stats, _) = offscreen_harness.changed();
+    let offscreen = offscreen_harness.settled();
     assert_eq!(
         in_place_stats.isolated_layer_renders,
         scene.surfaces_in_place(),
-        "{scene:?}: a layer that only turns draws in place: {in_place_stats:?}"
+        "{scene:?}: a changing layer that only turns draws in place: {in_place_stats:?}"
+    );
+    assert_eq!(
+        in_place_stats.layer_cache_hits_by_kind[SOURCE_KIND], 0,
+        "{scene:?}: nor is it composited from a cached surface: {in_place_stats:?}"
     );
     assert!(
         offscreen_stats.isolated_layer_renders > scene.surfaces_in_place(),
@@ -280,16 +256,20 @@ fn assert_centred(scene: Scene, coverage: &Coverage, tolerance: f32) {
     );
 }
 
+fn assert_area(scene: Scene, coverage: &Coverage, expected: f32) {
+    assert!(
+        (coverage.area - expected).abs() <= expected * 0.005,
+        "{scene:?}: a {expected} px box keeps its area when turned, not {}",
+        coverage.area
+    );
+}
+
 #[test]
 fn a_turned_box_drawn_in_place_covers_what_its_surface_covers() {
     let Some(drawn) = assert_lands_alike(Scene::Box, 0.005, 0.05) else {
         return;
     };
-    assert!(
-        (drawn.area - 120.0 * 60.0).abs() <= 120.0 * 60.0 * 0.005,
-        "a 120x60 box keeps its area when turned, not {}",
-        drawn.area
-    );
+    assert_area(Scene::Box, &drawn, WIDTH * 0.6 * 60.0);
     assert_centred(Scene::Box, &drawn, 0.05);
 }
 
@@ -303,11 +283,7 @@ fn nested_turns_drawn_in_place_compose_like_nested_surfaces() {
     let Some(drawn) = assert_lands_alike(Scene::Nested, 0.005, 0.05) else {
         return;
     };
-    assert!(
-        (drawn.area - 80.0 * 40.0).abs() <= 80.0 * 40.0 * 0.005,
-        "an 80x40 box keeps its area under two turns, not {}",
-        drawn.area
-    );
+    assert_area(Scene::Nested, &drawn, WIDTH * 0.4 * 40.0);
     assert_centred(Scene::Nested, &drawn, 0.05);
 }
 
@@ -325,15 +301,15 @@ fn a_clip_around_a_child_drawn_in_place_cuts_it_like_its_surface() {
         return;
     };
     assert!(
-        drawn.area < 160.0 * 40.0 * 0.9,
+        drawn.area < 160.0 * WIDTH * 0.2 * 0.9,
         "the unturned clip must cut the turned box's ends, leaving {}",
         drawn.area
     );
 }
 
-fn many_rects() -> Option<(std::sync::MutexGuard<'static, ()>, TurnedHarness)> {
+fn turned_box() -> Option<(std::sync::MutexGuard<'static, ()>, TurnedHarness)> {
     match support::headless_renderer_parts() {
-        Ok((lock, renderer)) => Some((lock, TurnedHarness::new(renderer, Scene::Many, false))),
+        Ok((lock, renderer)) => Some((lock, TurnedHarness::new(renderer, Scene::Box, false))),
         Err(err) => {
             eprintln!("skipping (headless WGPU init failed): {err}");
             None
@@ -342,13 +318,13 @@ fn many_rects() -> Option<(std::sync::MutexGuard<'static, ()>, TurnedHarness)> {
 }
 
 #[test]
-fn a_large_turned_layer_whose_content_holds_still_is_composited_from_the_cache() {
-    let Some((_lock, mut harness)) = many_rects() else {
+fn a_turned_layer_whose_content_holds_still_is_composited_from_the_cache() {
+    let Some((_lock, mut harness)) = turned_box() else {
         return;
     };
     for frame in 0..6 {
-        let (stats, _) = harness.frame(200.0);
-        if frame < 2 {
+        let (stats, _) = harness.frame(WIDTH);
+        if frame == 0 {
             continue;
         }
         assert_eq!(
@@ -357,26 +333,26 @@ fn a_large_turned_layer_whose_content_holds_still_is_composited_from_the_cache()
         );
         assert!(
             stats.layer_cache_hits_by_kind[SOURCE_KIND] > 0,
-            "frame {frame}: {MANY_RECTS} still rects cost less composited from their cached \
-             surface than drawn again: {stats:?}"
+            "frame {frame}: still content costs less composited from its cached surface than \
+             drawn again: {stats:?}"
         );
     }
 }
 
 #[test]
-fn a_large_turned_layer_whose_content_changes_draws_in_place() {
-    let Some((_lock, mut harness)) = many_rects() else {
+fn a_turned_layer_whose_content_changes_draws_in_place() {
+    let Some((_lock, mut harness)) = turned_box() else {
         return;
     };
     for frame in 0..6 {
-        let (stats, _) = harness.frame(150.0 + frame as f32 * 7.0);
-        if frame < 1 {
+        let (stats, _) = harness.frame(WIDTH - frame as f32 * 7.0);
+        if frame == 0 {
             continue;
         }
         assert_eq!(
             stats.isolated_layer_renders, 0,
-            "frame {frame}: content that changes every frame draws in place, not into a \
-             surface it would render afresh: {stats:?}"
+            "frame {frame}: content that changes every frame draws in place, not into a surface \
+             it would render afresh: {stats:?}"
         );
         assert_eq!(
             stats.layer_cache_hits_by_kind[SOURCE_KIND], 0,

@@ -717,7 +717,13 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
                         close(renderer, &mut chunk, &mut self.batches);
                     }
                     let open = *chunk.get_or_insert_with(|| renderer.open_arena());
-                    let taken = renderer.append_arena_run(open, draw, from..total, self.root_scale);
+                    let taken = renderer.append_arena_run(
+                        open,
+                        draw,
+                        from..total,
+                        self.root_scale,
+                        !run.viewport.transform.is_identity(),
+                    );
                     if taken == 0 {
                         close(renderer, &mut chunk, &mut self.batches);
                         continue;
