@@ -2,6 +2,12 @@ use super::*;
 
 const VSYNC: i64 = 16_666_667;
 
+/// [`SHALLOW_MISSES_TO_RISE`] as a count of misses to run.
+const SHALLOW_MISSES: i64 = SHALLOW_MISSES_TO_RISE as i64;
+
+/// [`BUFFERED_MISSES_TO_RISE`] as a count of misses to run.
+const BUFFERED_MISSES: i64 = BUFFERED_MISSES_TO_RISE as i64;
+
 /// When a pacer from [`buffered`] came down to two frames queued, after
 /// the display showed its unpaced queue full.
 const STUFFED: i64 = FULL_HISTORY as i64 * VSYNC;
@@ -213,11 +219,17 @@ fn slots_are_given_up_at_least_half_a_second_apart() {
 }
 
 #[test]
-fn a_shallow_queue_buffers_a_frame_at_its_first_missed_vsync() {
+fn a_shallow_queue_holds_through_a_few_missed_vsyncs_then_buffers_a_frame() {
     let mut pacer = shallow();
     let now = shown_run(&mut pacer, SETTLED + VSYNC, 30, 1);
     assert_eq!(level(&mut pacer, now), Some(Level::Shallow));
-    let now = missed_run(&mut pacer, now, 1);
+    let now = missed_run(&mut pacer, now, SHALLOW_MISSES - 1);
+    assert_eq!(
+        level(&mut pacer, now),
+        Some(Level::Shallow),
+        "a few late frames are held through"
+    );
+    let now = missed_run(&mut pacer, now + VSYNC, 1);
     assert_eq!(level(&mut pacer, now), Some(Level::Buffered));
 }
 
@@ -245,13 +257,13 @@ fn a_buffered_queue_starts_an_extra_frame_while_it_holds_fewer_than_two() {
 #[test]
 fn a_buffered_queue_that_keeps_missing_vsyncs_goes_unpaced() {
     let mut pacer = shallow();
-    let now = missed_run(&mut pacer, SETTLED + VSYNC, 1);
+    let now = missed_run(&mut pacer, SETTLED + VSYNC, SHALLOW_MISSES);
     assert_eq!(level(&mut pacer, now), Some(Level::Buffered));
-    let now = missed_run(&mut pacer, now + VSYNC, 2);
+    let now = missed_run(&mut pacer, now + VSYNC, BUFFERED_MISSES - 1);
     assert_eq!(
         level(&mut pacer, now),
         Some(Level::Buffered),
-        "two misses are not enough"
+        "a loop that keeps up misses a few"
     );
     let now = missed_run(&mut pacer, now + VSYNC, 1);
     assert_eq!(level(&mut pacer, now), Some(Level::Unpaced));
@@ -261,12 +273,29 @@ fn a_buffered_queue_that_keeps_missing_vsyncs_goes_unpaced() {
 }
 
 #[test]
+fn a_retried_buffered_queue_holds_through_the_misses_a_loop_that_keeps_up_makes() {
+    let mut pacer = shallow();
+    let now = missed_run(&mut pacer, SETTLED + VSYNC, SHALLOW_MISSES);
+    let now = missed_run(&mut pacer, now + VSYNC, BUFFERED_MISSES);
+    assert_eq!(level(&mut pacer, now), Some(Level::Unpaced));
+    let now = shown_run(&mut pacer, now + VSYNC, FULL_HISTORY as i64, 3);
+    let back = now + FIRST_HOLD_NS;
+    assert_eq!(level(&mut pacer, back), Some(Level::Buffered));
+    let now = missed_run(&mut pacer, back, 2);
+    assert_eq!(
+        level(&mut pacer, now),
+        Some(Level::Buffered),
+        "a try again at two frames queued is not given up at its first miss"
+    );
+}
+
+#[test]
 fn the_level_below_is_tried_after_the_hold() {
     let mut pacer = buffered();
     let back = STUFFED + FIRST_HOLD_NS;
     assert_eq!(level(&mut pacer, back - 1), Some(Level::Buffered));
     assert_eq!(level(&mut pacer, back), Some(Level::Shallow));
-    let failed = missed_run(&mut pacer, back, 1);
+    let failed = missed_run(&mut pacer, back, SHALLOW_MISSES);
     assert_eq!(level(&mut pacer, failed), Some(Level::Buffered));
     assert_eq!(
         level(&mut pacer, failed + FIRST_HOLD_NS),
@@ -276,14 +305,14 @@ fn the_level_below_is_tried_after_the_hold() {
 }
 
 #[test]
-fn a_retry_gives_up_at_its_first_miss_and_waits_four_times_as_long_for_the_next() {
+fn a_retry_that_fails_soon_waits_four_times_as_long_for_the_next() {
     let mut pacer = buffered();
     let back = STUFFED + FIRST_HOLD_NS;
     assert_eq!(level(&mut pacer, back), Some(Level::Shallow));
-    let failed = missed_run(&mut pacer, back, 2);
+    let failed = missed_run(&mut pacer, back, SHALLOW_MISSES);
     let retry = failed + FIRST_HOLD_NS;
     assert_eq!(level(&mut pacer, retry), Some(Level::Shallow));
-    let failed_again = missed_run(&mut pacer, retry, 1);
+    let failed_again = missed_run(&mut pacer, retry, SHALLOW_MISSES);
     assert_eq!(level(&mut pacer, failed_again), Some(Level::Buffered));
     assert_eq!(
         level(&mut pacer, failed_again + 4 * FIRST_HOLD_NS - 1),
@@ -298,7 +327,7 @@ fn a_retry_gives_up_at_its_first_miss_and_waits_four_times_as_long_for_the_next(
 #[test]
 fn a_level_that_held_for_a_while_waits_the_first_hold_again() {
     let mut pacer = shallow();
-    let failed = missed_run(&mut pacer, SETTLED + VSYNC, 2);
+    let failed = missed_run(&mut pacer, SETTLED + VSYNC, SHALLOW_MISSES);
     assert_eq!(
         level(&mut pacer, failed + FIRST_HOLD_NS),
         Some(Level::Shallow)
@@ -308,8 +337,8 @@ fn a_level_that_held_for_a_while_waits_the_first_hold_again() {
 #[test]
 fn an_unpaced_loop_comes_down_only_once_its_hold_is_over_and_the_queue_is_full() {
     let mut pacer = shallow();
-    let now = missed_run(&mut pacer, SETTLED + VSYNC, 2);
-    let now = missed_run(&mut pacer, now + VSYNC, 3);
+    let now = missed_run(&mut pacer, SETTLED + VSYNC, SHALLOW_MISSES);
+    let now = missed_run(&mut pacer, now + VSYNC, BUFFERED_MISSES);
     assert_eq!(level(&mut pacer, now), Some(Level::Unpaced));
     let now = shown_run(&mut pacer, now + VSYNC, FULL_HISTORY as i64, 3);
     assert_eq!(
