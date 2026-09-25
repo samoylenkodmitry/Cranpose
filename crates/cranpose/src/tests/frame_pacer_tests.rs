@@ -61,13 +61,10 @@ fn frames_start_unpaced_until_the_display_reports_one() {
     assert!(pacer.slot_open(VSYNC + 100_000, VSYNC, VSYNC));
     assert!(begin_at(&mut pacer, VSYNC));
     assert!(
-        !pacer.slot_open(VSYNC + VSYNC / 2, VSYNC, VSYNC),
-        "the loop waits for the next vsync rather than spin"
+        pacer.slot_open(VSYNC + VSYNC / 2, VSYNC, VSYNC),
+        "an unpaced loop starts each frame as soon as the renderer can take it"
     );
-    assert!(
-        pacer.begin_frame(VSYNC + VSYNC / 2, VSYNC, VSYNC),
-        "but a frame that comes due before it still starts"
-    );
+    assert!(pacer.begin_frame(VSYNC + VSYNC / 2, VSYNC, VSYNC));
     pacer.record_shown(VSYNC, 2, VSYNC);
     assert_eq!(level(&mut pacer, VSYNC), Some(Level::Unpaced));
     assert!(begin_at(&mut pacer, 2 * VSYNC));
@@ -209,22 +206,18 @@ fn slots_are_given_up_at_least_half_a_second_apart() {
     let mut pacer = shallow();
     let now = shown_run(&mut pacer, SETTLED + VSYNC, 3, 2);
     assert!(!begin_at(&mut pacer, now));
-    let soon = shown_run(&mut pacer, now + VSYNC, 3, 2);
+    let soon = shown_run(&mut pacer, now, 3, 2);
     assert!(begin_at(&mut pacer, soon));
     let later = shown_run(&mut pacer, now + SKIP_SPACING_NS, 3, 2);
     assert!(!begin_at(&mut pacer, later));
 }
 
 #[test]
-fn a_settled_shallow_queue_that_misses_vsyncs_buffers_a_frame() {
+fn a_shallow_queue_buffers_a_frame_at_its_first_missed_vsync() {
     let mut pacer = shallow();
-    let now = missed_run(&mut pacer, SETTLED + VSYNC, 1);
-    assert_eq!(
-        level(&mut pacer, now),
-        Some(Level::Shallow),
-        "one miss is not enough"
-    );
-    let now = missed_run(&mut pacer, now + VSYNC, 1);
+    let now = shown_run(&mut pacer, SETTLED + VSYNC, 30, 1);
+    assert_eq!(level(&mut pacer, now), Some(Level::Shallow));
+    let now = missed_run(&mut pacer, now, 1);
     assert_eq!(level(&mut pacer, now), Some(Level::Buffered));
 }
 
@@ -252,19 +245,19 @@ fn a_buffered_queue_starts_an_extra_frame_while_it_holds_fewer_than_two() {
 #[test]
 fn a_buffered_queue_that_keeps_missing_vsyncs_goes_unpaced() {
     let mut pacer = shallow();
-    let now = missed_run(&mut pacer, SETTLED + VSYNC, 2);
+    let now = missed_run(&mut pacer, SETTLED + VSYNC, 1);
     assert_eq!(level(&mut pacer, now), Some(Level::Buffered));
-    let now = missed_run(&mut pacer, now + VSYNC, 5);
+    let now = missed_run(&mut pacer, now + VSYNC, 2);
     assert_eq!(
         level(&mut pacer, now),
         Some(Level::Buffered),
-        "five misses are not enough"
+        "two misses are not enough"
     );
     let now = missed_run(&mut pacer, now + VSYNC, 1);
     assert_eq!(level(&mut pacer, now), Some(Level::Unpaced));
     assert!(pacer.begin_frame(now + VSYNC, now, VSYNC));
     assert!(pacer.begin_frame(now + VSYNC + 1, now, VSYNC));
-    assert!(!pacer.slot_open(now + VSYNC + 2, now, VSYNC));
+    assert!(pacer.slot_open(now + VSYNC + 2, now, VSYNC));
 }
 
 #[test]
@@ -273,13 +266,7 @@ fn the_level_below_is_tried_after_the_hold() {
     let back = STUFFED + FIRST_HOLD_NS;
     assert_eq!(level(&mut pacer, back - 1), Some(Level::Buffered));
     assert_eq!(level(&mut pacer, back), Some(Level::Shallow));
-    let now = missed_run(&mut pacer, back, 1);
-    assert_eq!(
-        level(&mut pacer, now),
-        Some(Level::Shallow),
-        "a first try needs two misses like any settled level"
-    );
-    let failed = missed_run(&mut pacer, now + VSYNC, 1);
+    let failed = missed_run(&mut pacer, back, 1);
     assert_eq!(level(&mut pacer, failed), Some(Level::Buffered));
     assert_eq!(
         level(&mut pacer, failed + FIRST_HOLD_NS),
@@ -322,7 +309,7 @@ fn a_level_that_held_for_a_while_waits_the_first_hold_again() {
 fn an_unpaced_loop_comes_down_only_once_its_hold_is_over_and_the_queue_is_full() {
     let mut pacer = shallow();
     let now = missed_run(&mut pacer, SETTLED + VSYNC, 2);
-    let now = missed_run(&mut pacer, now + VSYNC, 6);
+    let now = missed_run(&mut pacer, now + VSYNC, 3);
     assert_eq!(level(&mut pacer, now), Some(Level::Unpaced));
     let now = shown_run(&mut pacer, now + VSYNC, FULL_HISTORY as i64, 3);
     assert_eq!(

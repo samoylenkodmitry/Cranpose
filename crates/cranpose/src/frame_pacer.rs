@@ -124,11 +124,12 @@ impl Level {
     }
 
     /// Missed vsyncs within the window that move the loop up from here: the
+    /// first one at one frame queued, which has no frame to spare, and the
     /// first one while the loop is trying again a level that failed.
     fn misses_to_rise(self, retrying: bool) -> Option<usize> {
         let settled = match self {
-            Self::Shallow => 2,
-            Self::Buffered => 6,
+            Self::Shallow => 1,
+            Self::Buffered => 3,
             Self::Unpaced => return None,
         };
         Some(if retrying { 1 } else { settled })
@@ -330,11 +331,13 @@ impl FramePacer {
         !self.give_up_slot(depth, now_ns, vsync_period_ns)
     }
 
-    /// Whether the current vsync slot has no frame started in it yet, so a
-    /// frame that is due should start now rather than wait for the next
-    /// vsync.
+    /// Whether a frame that is due should start now rather than wait for
+    /// the next vsync: always while unpaced, so a loop slower than the
+    /// display overlaps each frame with the one the renderer is still
+    /// drawing, and otherwise while the current slot has no frame yet.
     pub(crate) fn slot_open(&self, now_ns: i64, vsync_ns: i64, vsync_period_ns: i64) -> bool {
-        self.open_slot(now_ns, vsync_ns, vsync_period_ns).is_some()
+        let unpaced = self.stage.is_none_or(|stage| stage.level == Level::Unpaced);
+        unpaced || self.open_slot(now_ns, vsync_ns, vsync_period_ns).is_some()
     }
 
     /// The current slot's vsync, unless a frame already started in it or no
