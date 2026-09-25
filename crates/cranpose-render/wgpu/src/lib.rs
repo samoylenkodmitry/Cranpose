@@ -820,6 +820,23 @@ impl WgpuRenderer {
         handle.send_control_unacked(|ack| PresentControl::DropSurface { ack })
     }
 
+    /// The OS id of the thread that presents frames, once that thread has
+    /// started, on systems whose scheduler hints name threads by one.
+    /// `None` when frames present on the calling thread.
+    pub fn present_thread_id(&self) -> Option<i32> {
+        match &self.backend {
+            #[cfg(not(target_arch = "wasm32"))]
+            PresentBackend::Threaded(handle) => {
+                let id = handle
+                    .status()
+                    .thread_id
+                    .load(std::sync::atomic::Ordering::Relaxed);
+                (id != 0).then_some(id)
+            }
+            _ => None,
+        }
+    }
+
     /// The producer's monotone packet sequence: the `frame_id` stamped on
     /// the most recently lowered packet. After a `Published` outcome this
     /// is the published frame's id (the Android loop keys its telemetry on

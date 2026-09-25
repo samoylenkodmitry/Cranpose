@@ -5,6 +5,12 @@ pub fn pin_current_thread_to_fast_cores(role: &str) {
     imp::pin(role);
 }
 
+/// The calling thread's id in the OS scheduler, where scheduler hints
+/// name threads by one.
+pub(crate) fn current_thread_id() -> Option<i32> {
+    imp::thread_id()
+}
+
 #[cfg(any(target_os = "android", target_os = "linux"))]
 mod imp {
     use std::path::Path;
@@ -34,6 +40,10 @@ mod imp {
             Ok(()) => log::info!("[core-pin] {role}: eligible cpus {fast:?}"),
             Err(error) => log::warn!("[core-pin] {role}: sched_setaffinity failed: {error}"),
         }
+    }
+
+    pub(super) fn thread_id() -> Option<i32> {
+        Some(rustix::thread::gettid().as_raw_nonzero().get())
     }
 
     pub(super) fn read_cpu_capacities(base: &Path) -> Vec<(usize, u64)> {
@@ -80,6 +90,10 @@ mod imp {
 #[cfg(not(any(target_os = "android", target_os = "linux")))]
 mod imp {
     pub(super) fn pin(_role: &str) {}
+
+    pub(super) fn thread_id() -> Option<i32> {
+        None
+    }
 }
 
 #[cfg(all(test, any(target_os = "android", target_os = "linux")))]

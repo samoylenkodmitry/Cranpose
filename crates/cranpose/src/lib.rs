@@ -51,6 +51,11 @@ mod android_frame_telemetry;
     test,
     all(feature = "android", feature = "renderer-wgpu", target_os = "android")
 ))]
+mod android_frame_work;
+#[cfg(any(
+    test,
+    all(feature = "android", feature = "renderer-wgpu", target_os = "android")
+))]
 mod android_haptics_queue;
 #[cfg(all(feature = "android", target_os = "android"))]
 mod android_host;
