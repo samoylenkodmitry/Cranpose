@@ -259,6 +259,17 @@ impl Pair {
         phase: u32,
         scale: f32,
     ) -> (RenderStatsSnapshot, RenderStatsSnapshot) {
+        self.frame_within(label, spec, phase, scale, 0)
+    }
+
+    fn frame_within(
+        &mut self,
+        label: &str,
+        spec: Spec,
+        phase: u32,
+        scale: f32,
+        tolerance: u8,
+    ) -> (RenderStatsSnapshot, RenderStatsSnapshot) {
         let cached = support::capture_graph_with_scale(
             &mut self.cached,
             graph(spec, phase),
@@ -275,11 +286,12 @@ impl Pair {
             .expect("reference capture");
         cranpose_render_wgpu::set_debug_toggle(NO_FILL_CACHE, None);
         let reference_stats = self.reference.last_frame_stats().expect("stats");
-        support::assert_same_bytes(
+        support::assert_bytes_within(
             &format!("{label}, frame {phase}"),
             FRAME_WIDTH,
             &cached.pixels,
             &reference.pixels,
+            tolerance,
         );
         (cached_stats, reference_stats)
     }
@@ -424,6 +436,30 @@ fn a_solid_fill_is_drawn_rather_than_cached() {
         return;
     };
     assert_never_admitted(&mut pair, "solid", Spec::of(First::Solid), 1.0);
+}
+
+#[test]
+fn a_solid_fill_over_the_whole_page_is_cleared_to_instead_of_drawn() {
+    let Some(mut pair) = Pair::new() else {
+        return;
+    };
+    let page = u64::from(FRAME_WIDTH) * u64::from(FRAME_HEIGHT);
+    let spec = Spec::of(First::Solid).covering_page();
+    for scale in [1.0, 1.5] {
+        for phase in 0..2 {
+            // The shapes after the fill batch without it, which can pick
+            // another shader specialization: a unit apart in the half-float
+            // composition, byte for byte in the 8-bit one Android uses.
+            let (cleared, reference) = pair.frame_within("page fill", spec, phase, scale, 1);
+            assert!(
+                cleared.shape_fill_pixels + page / 2 < reference.shape_fill_pixels,
+                "at {scale}x the page fill must not be shaded: {} against {}",
+                cleared.shape_fill_pixels,
+                reference.shape_fill_pixels
+            );
+            assert_eq!(cleared.prefix_admissions, 0, "a clear caches nothing");
+        }
+    }
 }
 
 #[test]
