@@ -10024,7 +10024,7 @@ fn AppShellMovingLabel() {
 }
 
 #[test]
-fn a_frame_reports_content_moved_only_when_its_layout_moved_a_node() {
+fn a_frame_reports_moved_and_redrawn_content_only_when_it_changed() {
     let mut shell = AppShell::new(
         TestRenderer::default(),
         location_key(file!(), line!(), column!()),
@@ -10036,20 +10036,26 @@ fn a_frame_reports_content_moved_only_when_its_layout_moved_a_node() {
         shell.update();
     }
     shell.debug_enter_app_context(cranpose_ui::request_render_invalidation);
+    shell.update();
+    shell.debug_enter_app_context(cranpose_ui::request_render_invalidation);
+    let presented = shell.update();
     assert!(
-        !shell.update().content_moved,
-        "a frame that only redraws moves nothing"
+        !presented.content_moved && !presented.content_redrawn,
+        "a frame that presents the scene it had neither moves nor redraws"
     );
 
     let gap = MOVING_LABEL_GAP
         .with(|slot| *slot.borrow())
         .expect("the label's gap is composed");
     gap.set(24.0);
-    let mut moved = false;
+    let (mut moved, mut redrawn) = (false, false);
     while shell.frame_schedule().needs_update {
-        moved |= shell.update().content_moved;
+        let result = shell.update();
+        moved |= result.content_moved;
+        redrawn |= result.content_redrawn;
     }
     assert!(moved, "pushing the label down moves it");
+    assert!(redrawn, "and draws the scene again");
 }
 
 #[test]
