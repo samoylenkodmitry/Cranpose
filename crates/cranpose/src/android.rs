@@ -921,15 +921,15 @@ fn drain_present_returns_into_loop(
                 now
             }
         };
-        let finished_at = instant_at(presented_at_ns);
-        let started_at = if frame_started_at_ns > 0 {
-            instant_at(frame_started_at_ns).min(finished_at)
+        let frame_finished_at = instant_at(presented_at_ns);
+        let frame_started_at = if frame_started_at_ns > 0 {
+            instant_at(frame_started_at_ns).min(frame_finished_at)
         } else {
-            finished_at
+            frame_finished_at
         };
         PresentedFrame {
-            started_at,
-            finished_at,
+            started_at: frame_started_at,
+            finished_at: frame_finished_at,
             work_ns,
         }
     })
