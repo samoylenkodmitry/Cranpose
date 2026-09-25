@@ -841,6 +841,7 @@ pub(crate) struct PreparedProjectiveComposite<'a> {
 pub(crate) enum CompositeSampleMode {
     Linear,
     Nearest,
+    Texels,
 }
 
 fn dst_out_blend_state() -> wgpu::BlendState {
@@ -2889,6 +2890,7 @@ fn composite_sampling_mode_value(sample_mode: CompositeSampleMode) -> f32 {
     match sample_mode {
         CompositeSampleMode::Linear => 0.0,
         CompositeSampleMode::Nearest => 1.0,
+        CompositeSampleMode::Texels => 2.0,
     }
 }
 

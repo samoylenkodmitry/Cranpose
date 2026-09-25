@@ -66,6 +66,7 @@ pub fn blit_shader() -> String {
 
 pub fn projective_blit_shader() -> String {
     let mut shader = cranpose_ui_graphics::framework_shaders::PROJECTIVE_BLIT_FS_WGSL.to_string();
+    shader.push_str(COMPOSITE_SAMPLE_FN);
     shader.push_str(cranpose_ui_graphics::framework_shaders::PROJECTIVE_BLIT_MAIN_WGSL);
     shader
 }

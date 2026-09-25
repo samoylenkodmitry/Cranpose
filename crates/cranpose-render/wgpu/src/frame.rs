@@ -1303,7 +1303,11 @@ fn projected_child_composite(
             inverse: inverse.matrix(),
             alpha: child.alpha,
             blend_mode: child.blend_mode,
-            sample_mode: CompositeSampleMode::Linear,
+            sample_mode: if renders_flat(child) {
+                CompositeSampleMode::Texels
+            } else {
+                CompositeSampleMode::Linear
+            },
             source_region: surface.region.map(DeviceRect::tuple),
         },
     })
@@ -4065,7 +4069,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         let Some(previous) = self.source_gate(node_id).map(|gate| gate.key) else {
             return;
         };
-        if previous.differs_beyond_phase(key) {
+        if previous.draws_other_content(key) {
             self.renderer.layer_cache.remove(&previous);
         }
     }
