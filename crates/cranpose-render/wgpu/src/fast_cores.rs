@@ -7,6 +7,7 @@ pub fn pin_current_thread_to_fast_cores(role: &str) {
 
 /// The calling thread's id in the OS scheduler, where scheduler hints
 /// name threads by one.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn current_thread_id() -> Option<i32> {
     imp::thread_id()
 }
@@ -91,6 +92,7 @@ mod imp {
 mod imp {
     pub(super) fn pin(_role: &str) {}
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn thread_id() -> Option<i32> {
         None
     }
