@@ -487,36 +487,245 @@ fn gate_key(content: u64) -> LayerRasterCacheKey {
 use super::*;
 use crate::scene::DrawOpKind;
 
-fn rounded_child(transform: ProjectiveTransform, surface_scale: f32) -> ChildLayer {
-    let local_bounds = Rect {
-        x: 0.0,
-        y: 0.0,
-        width: 40.0,
-        height: 40.0,
-    };
+const CHILD_BOUNDS: Rect = Rect {
+    x: 0.0,
+    y: 0.0,
+    width: 40.0,
+    height: 40.0,
+};
+
+fn child_layer(transform: ProjectiveTransform, content: LayerScene) -> ChildLayer {
     ChildLayer {
         z_index: 0,
         node_id: None,
-        local_bounds,
+        local_bounds: CHILD_BOUNDS,
         transform,
         clip: None,
-        rounded_clip: Some(LayerRoundedClip {
-            rect: local_bounds,
-            radii: [20.0; 4],
-        }),
+        rounded_clip: None,
         alpha: 1.0,
         blend_mode: BlendMode::SrcOver,
         effect: None,
         backdrop: None,
         snap_anchor: None,
-        surface_scale,
+        surface_scale: 1.0,
         content_hash: 0,
         cache_policy: CachePolicy::None,
-        content: LayerScene {
-            scene: CompositorScene::new(),
-            children: Vec::new(),
-        },
+        in_place: false,
+        draws: 0,
+        content,
     }
+}
+
+fn scene_of(ops: &[usize], children: Vec<ChildLayer>) -> LayerScene {
+    let mut scene = CompositorScene::new();
+    scene.draw_ops = ops.iter().map(|&z| op(z)).collect();
+    LayerScene { scene, children }
+}
+
+fn rounded_child(transform: ProjectiveTransform, surface_scale: f32) -> ChildLayer {
+    ChildLayer {
+        rounded_clip: Some(LayerRoundedClip {
+            rect: CHILD_BOUNDS,
+            radii: [20.0; 4],
+        }),
+        surface_scale,
+        ..child_layer(transform, scene_of(&[], Vec::new()))
+    }
+}
+
+fn in_place_child(
+    z_index: usize,
+    transform: ProjectiveTransform,
+    ops: &[usize],
+    children: Vec<ChildLayer>,
+) -> ChildLayer {
+    ChildLayer {
+        z_index,
+        in_place: true,
+        ..child_layer(transform, scene_of(ops, children))
+    }
+}
+
+fn page_target() -> InPlaceTarget {
+    InPlaceTarget {
+        scale: 2.0,
+        rect: DeviceRect {
+            x: 0.0,
+            y: 0.0,
+            width: 100.0,
+            height: 100.0,
+        },
+        size: (100, 100),
+        offset: [0.0, 0.0],
+    }
+}
+
+/// Each part of a flush: a page part by its op range, a part drawn in place
+/// by its ops' depths, its translation and its scissor.
+#[derive(Debug, PartialEq)]
+enum Part {
+    Page(Range<usize>),
+    InPlace(Vec<usize>, [f32; 2], Option<(u32, u32, u32, u32)>),
+}
+
+fn described(parts: &[FlushPart<'_>]) -> Vec<Part> {
+    parts
+        .iter()
+        .map(|part| match part {
+            FlushPart::Page { ops, .. } => Part::Page(ops.clone()),
+            FlushPart::InPlace {
+                ops,
+                transform,
+                scissor,
+                ..
+            } => Part::InPlace(
+                ops.iter().map(|op| op.z_index).collect(),
+                transform.uniform_parts().1,
+                *scissor,
+            ),
+        })
+        .collect()
+}
+
+#[test]
+fn a_flush_draws_its_children_in_place_between_its_ops_at_their_z() {
+    let layer = scene_of(
+        &[0, 2, 5],
+        vec![
+            in_place_child(
+                1,
+                ProjectiveTransform::translation(10.0, 0.0),
+                &[0, 1],
+                Vec::new(),
+            ),
+            in_place_child(
+                4,
+                ProjectiveTransform::translation(0.0, 3.0),
+                &[0],
+                Vec::new(),
+            ),
+        ],
+    );
+    let (parts, complete) = flush_parts(
+        &layer,
+        &layer.scene.draw_ops,
+        &[],
+        &[0, 1],
+        &page_target(),
+        0,
+    );
+    assert!(complete);
+    assert_eq!(
+        described(&parts),
+        [
+            Part::Page(0..1),
+            Part::InPlace(vec![0, 1], [20.0, 0.0], None),
+            Part::Page(1..2),
+            Part::InPlace(vec![0], [0.0, 6.0], None),
+            Part::Page(2..3),
+        ]
+    );
+}
+
+#[test]
+fn a_child_drawn_in_place_draws_its_children_at_their_z_under_composed_transforms() {
+    let grandchild = in_place_child(
+        2,
+        ProjectiveTransform::translation(0.0, 7.0),
+        &[0],
+        Vec::new(),
+    );
+    let child = in_place_child(
+        1,
+        ProjectiveTransform::translation(5.0, 0.0),
+        &[0, 3],
+        vec![grandchild],
+    );
+    let mut parts = Vec::new();
+    assert!(push_in_place(
+        &mut parts,
+        &child,
+        SegmentTransform::IDENTITY,
+        2.0,
+        Some((1, 2, 3, 4)),
+        0,
+    ));
+    assert_eq!(
+        described(&parts),
+        [
+            Part::InPlace(vec![0], [10.0, 0.0], Some((1, 2, 3, 4))),
+            Part::InPlace(vec![0], [10.0, 14.0], Some((1, 2, 3, 4))),
+            Part::InPlace(vec![3], [10.0, 0.0], Some((1, 2, 3, 4))),
+        ]
+    );
+}
+
+#[test]
+fn a_clipped_child_draws_in_place_under_its_clip_and_not_at_all_when_clipped_away() {
+    let clipped = |clip: Rect| ChildLayer {
+        clip: Some(clip),
+        ..in_place_child(1, ProjectiveTransform::identity(), &[0], Vec::new())
+    };
+    let layer = scene_of(
+        &[],
+        vec![
+            clipped(Rect {
+                x: 10.0,
+                y: 10.0,
+                width: 20.0,
+                height: 20.0,
+            }),
+            clipped(Rect {
+                x: 80.0,
+                y: 0.0,
+                width: 10.0,
+                height: 10.0,
+            }),
+        ],
+    );
+    let (parts, _) = flush_parts(&layer, &[], &[], &[0, 1], &page_target(), 0);
+    assert_eq!(
+        described(&parts),
+        [Part::InPlace(vec![0], [0.0, 0.0], Some((20, 20, 40, 40)))]
+    );
+}
+
+#[test]
+fn layers_drawn_in_place_past_the_resolve_depth_are_left_out() {
+    let mut nested = in_place_child(1, ProjectiveTransform::identity(), &[0], Vec::new());
+    for _ in 0..MAX_RESOLVE_DEPTH + 1 {
+        nested = in_place_child(1, ProjectiveTransform::identity(), &[0], vec![nested]);
+    }
+    let mut parts = Vec::new();
+    assert!(!push_in_place(
+        &mut parts,
+        &nested,
+        SegmentTransform::IDENTITY,
+        1.0,
+        None,
+        0,
+    ));
+    assert_eq!(parts.len(), MAX_RESOLVE_DEPTH);
+}
+
+#[test]
+fn a_child_drawn_in_place_turns_and_moves_by_its_transform_at_the_page_scale() {
+    let quarter_turn = ProjectiveTransform::from_rect_to_quad(
+        CHILD_BOUNDS,
+        [[40.0, 0.0], [40.0, 40.0], [0.0, 0.0], [0.0, 40.0]],
+    )
+    .then(ProjectiveTransform::translation(3.0, 4.0));
+    let child = child_layer(quarter_turn, scene_of(&[], Vec::new()));
+    let (linear, translation, inverse) = in_place_transform(&child, 2.0)
+        .expect("a turn is invertible")
+        .uniform_parts();
+    let near = |a: [f32; 4], b: [f32; 4]| a.iter().zip(b).all(|(a, b)| (a - b).abs() < 1e-5);
+    assert!(near(linear, [0.0, -1.0, 1.0, 0.0]), "{linear:?}");
+    assert!(near(inverse, [0.0, 1.0, -1.0, 0.0]), "{inverse:?}");
+    assert!(
+        (translation[0] - 86.0).abs() < 1e-4 && (translation[1] - 8.0).abs() < 1e-4,
+        "{translation:?}"
+    );
 }
 
 #[test]

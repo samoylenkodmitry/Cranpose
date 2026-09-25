@@ -7,6 +7,7 @@ use wgpu::util::DeviceExt;
 use crate::{record_columns, support};
 
 const SIDE: u32 = 160;
+const UNIFORM_FLOATS: usize = 52;
 
 fn arcs() -> CommandRecording {
     let mut scope = DrawScopeDefault::new(Size::new(SIDE as f32, SIDE as f32));
@@ -133,7 +134,7 @@ impl ArcRaster {
             wgpu::BufferUsages::VERTEX,
         );
         let uniforms = buffer(
-            &[0; 144],
+            &[0; UNIFORM_FLOATS * 4],
             wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         );
         let empty_tables = buffer(&vec![0; 12_288], wgpu::BufferUsages::UNIFORM);
@@ -161,7 +162,7 @@ impl ArcRaster {
         &self,
         pipeline: &wgpu::RenderPipeline,
         segments: u32,
-        values: &[f32; 36],
+        values: &[f32; UNIFORM_FLOATS],
     ) -> Vec<u8> {
         self.queue
             .write_buffer(&self.uniforms, 0, bytemuck::cast_slice(values));
@@ -220,7 +221,7 @@ impl ArcRaster {
         reference: &wgpu::RenderPipeline,
         current: &wgpu::RenderPipeline,
         segments: u32,
-        values: &[f32; 36],
+        values: &[f32; UNIFORM_FLOATS],
     ) {
         let expected = self.capture(reference, segments, values);
         let actual = self.capture(current, segments, values);
@@ -236,17 +237,22 @@ impl ArcRaster {
     }
 }
 
-fn placement(scale: f32, offset: [f32; 2], clipped: bool) -> [f32; 36] {
-    let mut values = [0.0f32; 36];
+/// The viewport uniform: the viewport and its offset, the identity segment
+/// transform (forward, translation, quad margin, inverse, vertex origin),
+/// then the placement.
+fn placement(scale: f32, offset: [f32; 2], clipped: bool) -> [f32; UNIFORM_FLOATS] {
+    let mut values = [0.0f32; UNIFORM_FLOATS];
     values[..4].copy_from_slice(&[SIDE as f32, SIDE as f32, 4.125, 7.75]);
-    values[4..8].copy_from_slice(&[
+    values[4..8].copy_from_slice(&[1.0, 0.0, 0.0, 1.0]);
+    values[12..16].copy_from_slice(&[1.0, 0.0, 0.0, 1.0]);
+    values[20..24].copy_from_slice(&[
         offset[0],
         offset[1],
         scale,
         f32::from_bits(if clipped { 2 } else { 0 }),
     ]);
-    values[8..12].copy_from_slice(&[17.25, 12.375, 125.0, 121.0]);
-    values[14] = 1.0;
+    values[24..28].copy_from_slice(&[17.25, 12.375, 125.0, 121.0]);
+    values[30] = 1.0;
     values
 }
 

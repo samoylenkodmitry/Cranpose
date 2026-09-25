@@ -44,7 +44,7 @@ use crate::{
     },
     frame_packet::{CancelReason, FramePacket, PresentOutcome, RenderReturns},
     geometry::{
-        DevicePixelBounds, anchored_device_rect, axis_aligned_quad_rect,
+        DevicePixelBounds, SegmentTransform, anchored_device_rect, axis_aligned_quad_rect,
         canonicalize_device_coordinate, canonicalized_scaled_quad, offscreen_byte_size,
         scaled_quad, snap_delta_for_anchor, translate_quad,
         translation_stable_anchored_device_pixel_bounds,
@@ -486,13 +486,7 @@ fn draw_rect_is_visible_in_viewport(
     if !root_scale.is_finite() || root_scale <= 0.0 {
         return false;
     }
-    let viewport_rect = Rect {
-        x: viewport.offset[0] / root_scale,
-        y: viewport.offset[1] / root_scale,
-        width: viewport.width as f32 / root_scale,
-        height: viewport.height as f32 / root_scale,
-    };
-    rect_is_visible_in_rect(rect, clip, viewport_rect)
+    rect_is_visible_in_rect(rect, clip, viewport.scene_rect(root_scale))
 }
 
 fn rect_is_visible_in_rect(rect: Rect, clip: Option<Rect>, viewport_rect: Rect) -> bool {
@@ -1234,12 +1228,47 @@ impl Vertex {
     }
 }
 
+/// How far a shape's quad reaches past its rect under a segment transform,
+/// in device pixels: a rotated edge crosses pixels whose centres lie
+/// outside the rect, and their coverage is only shaded if the quad covers
+/// them. The shape stage's banded quads keep the same slack.
+const TRANSFORMED_QUAD_MARGIN: f32 = 0.5 + 1.0 / 16.0;
+
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 struct Uniforms {
     viewport: [f32; 2],
     viewport_offset: [f32; 2],
+    transform: [f32; 4],
+    translation: [f32; 2],
+    quad_margin: f32,
+    reserved: f32,
+    inverse: [f32; 4],
+    origin: [f32; 2],
+    origin_reserved: [f32; 2],
     placement: PlacementData,
+}
+
+impl Uniforms {
+    fn of(params: ViewportUniformParams, placement: PlacementData) -> Self {
+        let (transform, translation, inverse) = params.transform.uniform_parts();
+        Self {
+            viewport: [params.width as f32, params.height as f32],
+            viewport_offset: params.offset,
+            transform,
+            translation,
+            quad_margin: if params.transform.is_identity() {
+                0.0
+            } else {
+                TRANSFORMED_QUAD_MARGIN
+            },
+            reserved: 0.0,
+            inverse,
+            origin: params.origin,
+            origin_reserved: [0.0; 2],
+            placement,
+        }
+    }
 }
 
 static SURVIVE_GPU_ERRORS: DebugToggle = DebugToggle::new("CRANPOSE_SURVIVE_GPU_ERRORS");
@@ -1277,10 +1306,19 @@ fn next_glyph_atlas_size(current: u32, max: u32) -> u32 {
     current.saturating_mul(2).clamp(1, max.max(1))
 }
 
+/// The samplers the glyph atlas binds: nearest for glyphs on the pixel grid,
+/// linear for glyphs a segment transform turns.
+#[derive(Clone, Copy)]
+struct GlyphSamplers<'a> {
+    nearest: &'a wgpu::Sampler,
+    linear: &'a wgpu::Sampler,
+}
+
 struct TextGlyphAtlas {
     texture: wgpu::Texture,
     _view: wgpu::TextureView,
-    bind_group: Rc<wgpu::BindGroup>,
+    texel_bind_group: Rc<wgpu::BindGroup>,
+    filtered_bind_group: Rc<wgpu::BindGroup>,
     entries: BoundedLruCache<SoftwareGlyphAtlasKey, GlyphAtlasEntry>,
     generation: u64,
     size: u32,
@@ -1295,31 +1333,36 @@ impl TextGlyphAtlas {
     fn new(
         device: &wgpu::Device,
         image_layout: &wgpu::BindGroupLayout,
-        sampler: &wgpu::Sampler,
+        samplers: GlyphSamplers<'_>,
         size: u32,
     ) -> Self {
         let max_size = TEXT_GLYPH_ATLAS_MAX_SIZE.min(device.limits().max_texture_dimension_2d);
         let size = size.clamp(TEXT_GLYPH_ATLAS_MIN_SIZE.min(max_size), max_size);
         let texture = Self::create_texture(device, size);
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Text Glyph Atlas Bind Group"),
-            layout: image_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(sampler),
-                },
-            ],
-        });
+        let bind = |label: &'static str, sampler: &wgpu::Sampler| {
+            Rc::new(device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(label),
+                layout: image_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(sampler),
+                    },
+                ],
+            }))
+        };
+        let texel_bind_group = bind("Text Glyph Atlas Bind Group", samplers.nearest);
+        let filtered_bind_group = bind("Filtered Text Glyph Atlas Bind Group", samplers.linear);
         Self {
             texture,
             _view: view,
-            bind_group: Rc::new(bind_group),
+            texel_bind_group,
+            filtered_bind_group,
             entries: BoundedLruCache::with_capacity_at_least_one(MAX_TEXT_GLYPH_ATLAS_ITEMS),
             generation: 0,
             size,
@@ -1352,13 +1395,24 @@ impl TextGlyphAtlas {
         &mut self,
         device: &wgpu::Device,
         image_layout: &wgpu::BindGroupLayout,
-        sampler: &wgpu::Sampler,
+        samplers: GlyphSamplers<'_>,
     ) {
         let generation = self.generation.wrapping_add(1);
         let grown = next_glyph_atlas_size(self.size, self.max_size);
-        let mut next = Self::new(device, image_layout, sampler, grown);
+        let mut next = Self::new(device, image_layout, samplers, grown);
         next.generation = generation;
         *self = next;
+    }
+
+    /// The atlas bound for glyphs drawn under `transform`: texel for texel
+    /// on the pixel grid, filtered once a transform turns the glyph quads
+    /// off it.
+    fn bind_group(&self, transform: SegmentTransform) -> Rc<wgpu::BindGroup> {
+        Rc::clone(if transform.is_identity() {
+            &self.texel_bind_group
+        } else {
+            &self.filtered_bind_group
+        })
     }
 
     fn generation(&self) -> u64 {
@@ -1603,6 +1657,49 @@ pub(crate) struct ViewportUniformParams {
     pub(crate) width: u32,
     pub(crate) height: u32,
     pub(crate) offset: [f32; 2],
+    pub(crate) transform: SegmentTransform,
+    /// Where the drawn vertices' origin sits in the segment's device space,
+    /// added before the transform: zero, except for a retained glyph run
+    /// drawn under a transform, whose vertices sit at its raster origin. The
+    /// sum is the one the shared path writes, so both draw the same pixels.
+    pub(crate) origin: [f32; 2],
+}
+
+impl ViewportUniformParams {
+    /// The logical rect of the drawn scene that the target shows.
+    pub(crate) fn scene_rect(self, root_scale: f32) -> Rect {
+        segment_scene_rect(
+            self.transform,
+            Rect {
+                x: self.offset[0],
+                y: self.offset[1],
+                width: self.width as f32,
+                height: self.height as f32,
+            },
+            root_scale,
+        )
+    }
+}
+
+/// The logical rect of a scene drawn under `transform` that the device rect
+/// `device` of the target's scene space shows: the rect itself when the
+/// scene is not transformed, else the bounds it maps back to.
+pub(crate) fn segment_scene_rect(
+    transform: SegmentTransform,
+    device: Rect,
+    root_scale: f32,
+) -> Rect {
+    let device = if transform.is_identity() {
+        device
+    } else {
+        transform.segment_bounds(device)
+    };
+    Rect {
+        x: device.x / root_scale,
+        y: device.y / root_scale,
+        width: device.width / root_scale,
+        height: device.height / root_scale,
+    }
 }
 
 /// A stored run's draws for one pass: its tables by command, the uniform
@@ -1852,7 +1949,10 @@ impl GpuRenderer {
         let text_glyph_atlas = TextGlyphAtlas::new(
             &device,
             &image_bind_group_layout,
-            &image_nearest_sampler,
+            GlyphSamplers {
+                nearest: &image_nearest_sampler,
+                linear: &image_linear_sampler,
+            },
             TEXT_GLYPH_ATLAS_MIN_SIZE,
         );
         let viewport_uniforms = ViewportUniforms::default();
@@ -2799,17 +2899,9 @@ impl GpuRenderer {
         self.frame_stats.record_command_stats(upload);
         Ok(())
     }
-    fn viewport_uniforms(params: ViewportUniformParams) -> Uniforms {
-        Uniforms {
-            viewport: [params.width as f32, params.height as f32],
-            viewport_offset: params.offset,
-            placement: PlacementData::zeroed(),
-        }
-    }
-
     /// Claims this frame's next viewport uniform slot for `params`.
     pub(crate) fn claim_uniform_slot(&mut self, params: ViewportUniformParams) -> usize {
-        let uniforms = Self::viewport_uniforms(params);
+        let uniforms = Uniforms::of(params, PlacementData::zeroed());
         self.viewport_uniforms
             .claim(&self.device, &self.uniform_bind_group_layout, &uniforms)
     }
@@ -3052,7 +3144,6 @@ impl GpuRenderer {
             view: &source.view,
             width,
             height,
-            offset,
         };
         let scene = shadow_scene(shadow.shapes.as_ref(), &shadow.texts);
         let segment = PassSegment {
@@ -3062,6 +3153,7 @@ impl GpuRenderer {
             offset,
             scissor: None,
             first_run_window: None,
+            transform: SegmentTransform::IDENTITY,
         };
         let drew = self.encode_pass(
             recorder,
@@ -3137,6 +3229,7 @@ impl GpuRenderer {
                 offset,
                 scissor: None,
                 first_run_window: None,
+                transform: SegmentTransform::IDENTITY,
             };
             if let Err(error) = self.encode_pass(
                 recorder,
@@ -3222,11 +3315,7 @@ impl GpuRenderer {
         if let Some(fill) = fill {
             self.frame_stats.add_shape_fill(fill);
         }
-        let uniforms = Uniforms {
-            viewport: [viewport.width as f32, viewport.height as f32],
-            viewport_offset: viewport.offset,
-            placement: PlacementData::of(&run.placement, root_scale),
-        };
+        let uniforms = Uniforms::of(viewport, PlacementData::of(&run.placement, root_scale));
         let uniform_slot =
             self.viewport_uniforms
                 .claim(&self.device, &self.uniform_bind_group_layout, &uniforms);
@@ -3591,7 +3680,7 @@ impl GpuRenderer {
             index_start,
             scissor,
             image_id: prepared_image.id(),
-            sampling: image_draw.sampling,
+            sampling: adjusted_image.sampling,
         });
         Ok(())
     }
@@ -3633,7 +3722,10 @@ impl GpuRenderer {
         self.text_glyph_atlas.reset(
             &self.device,
             &self.image_bind_group_layout,
-            &self.image_nearest_sampler,
+            GlyphSamplers {
+                nearest: &self.image_nearest_sampler,
+                linear: &self.image_linear_sampler,
+            },
         );
         Err("text glyph atlas filled and was reset".to_string())
     }
@@ -3748,17 +3840,26 @@ impl GpuRenderer {
         appended
     }
 
+    /// The viewport a retained glyph run draws under: its vertices sit at
+    /// its raster rect's origin, so an untransformed target moves its offset
+    /// back by that origin, and a transformed one adds the origin to each
+    /// vertex before its transform, as the shared path's vertices hold it.
     fn retained_glyph_viewport(
         viewport: ViewportUniformParams,
         source_raster_rect: Rect,
     ) -> ViewportUniformParams {
+        if !viewport.transform.is_identity() {
+            return ViewportUniformParams {
+                origin: [source_raster_rect.x, source_raster_rect.y],
+                ..viewport
+            };
+        }
         ViewportUniformParams {
-            width: viewport.width,
-            height: viewport.height,
             offset: [
                 viewport.offset[0] - source_raster_rect.x,
                 viewport.offset[1] - source_raster_rect.y,
             ],
+            ..viewport
         }
     }
 
@@ -3799,7 +3900,7 @@ impl GpuRenderer {
             run,
             uniform_slot,
             scissor,
-            Rc::clone(&self.text_glyph_atlas.bind_group),
+            self.text_glyph_atlas.bind_group(viewport.transform),
         ));
         true
     }
@@ -4035,7 +4136,7 @@ impl GpuRenderer {
                     index_start,
                     index_count,
                     scissor,
-                    Rc::clone(&self.text_glyph_atlas.bind_group),
+                    self.text_glyph_atlas.bind_group(viewport.transform),
                 ));
             }
         }
@@ -4252,7 +4353,7 @@ impl GpuRenderer {
                 &image,
                 draw_rect,
                 clip,
-                ImageSampling::Nearest,
+                sampling_under(ImageSampling::Nearest, viewport.transform),
                 viewport,
                 root_scale,
                 image_vertices,
@@ -4663,20 +4764,24 @@ pub(crate) fn scissor_rect_for_rect(
 ) -> Option<(u32, u32, u32, u32)> {
     let width = viewport.width as f32;
     let height = viewport.height as f32;
-    let left = (canonicalize_device_coordinate(rect.x * root_scale) - viewport.offset[0])
-        .clamp(0.0, width)
-        .floor();
-    let top = (canonicalize_device_coordinate(rect.y * root_scale) - viewport.offset[1])
-        .clamp(0.0, height)
-        .floor();
-    let right = (canonicalize_device_coordinate((rect.x + rect.width) * root_scale)
-        - viewport.offset[0])
-        .clamp(0.0, width)
-        .ceil();
-    let bottom = (canonicalize_device_coordinate((rect.y + rect.height) * root_scale)
-        - viewport.offset[1])
-        .clamp(0.0, height)
-        .ceil();
+    let mut left = canonicalize_device_coordinate(rect.x * root_scale);
+    let mut top = canonicalize_device_coordinate(rect.y * root_scale);
+    let mut right = canonicalize_device_coordinate((rect.x + rect.width) * root_scale);
+    let mut bottom = canonicalize_device_coordinate((rect.y + rect.height) * root_scale);
+    if !viewport.transform.is_identity() {
+        let bounds = viewport.transform.target_bounds(Rect {
+            x: left,
+            y: top,
+            width: right - left,
+            height: bottom - top,
+        });
+        (left, top) = (bounds.x, bounds.y);
+        (right, bottom) = (bounds.x + bounds.width, bounds.y + bounds.height);
+    }
+    let left = (left - viewport.offset[0]).clamp(0.0, width).floor();
+    let top = (top - viewport.offset[1]).clamp(0.0, height).floor();
+    let right = (right - viewport.offset[0]).clamp(0.0, width).ceil();
+    let bottom = (bottom - viewport.offset[1]).clamp(0.0, height).ceil();
     if right <= left || bottom <= top {
         return None;
     }
@@ -4870,6 +4975,17 @@ fn apply_filter_to_bitmap(image: &ImageBitmap, filter: ColorFilter) -> Result<Im
     }
     ImageBitmap::from_rgba8(image.width(), image.height(), filtered)
         .map_err(|error| format!("failed to build filtered bitmap: {error}"))
+}
+
+/// How a text raster samples its texels under a segment transform: as it
+/// asks on the pixel grid, and filtered once a transform turns it off the
+/// grid, where no texel lands on a pixel for nearest sampling to keep.
+fn sampling_under(sampling: ImageSampling, transform: SegmentTransform) -> ImageSampling {
+    if transform.is_identity() {
+        sampling
+    } else {
+        ImageSampling::Linear
+    }
 }
 
 fn scissor_rect_for_image(

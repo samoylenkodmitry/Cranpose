@@ -25,7 +25,7 @@ use crate::{
     debug_toggles::DebugToggle,
     draw_pass::{
         PassSegment, PassTarget, ResolvedComposite, ResolvedCompositeKind, SourceContent,
-        op_draw_bounds, segment_draws_anything,
+        op_draw_bounds, scissor_in_target, segment_draws_anything,
     },
     effect_renderer::{
         AtlasSideWork, BlurRegion, CompositeSampleMode, EffectReads, EffectScratchTargetProvider,
@@ -35,7 +35,7 @@ use crate::{
     frame_graph::{
         FrameCommandRecorder, FrameTextureDescriptor, TextureRegionCopy, copy_compatible,
     },
-    geometry::snap_delta_for_anchor,
+    geometry::{SegmentTransform, snap_delta_for_anchor},
     layer_cache::{Retained, RetainedContent},
     offscreen::{OffscreenTarget, composition_format},
     opaque_prefix::{OpaquePrefix, PrefixContext, opaque_prefix},
@@ -44,6 +44,10 @@ use crate::{
 };
 
 const MAX_SURFACE_PIXELS: u64 = 16 * 1024 * 1024;
+/// The most shape records, texts and images a child draws in place every
+/// frame whatever its content does. Past it, a child draws in place only
+/// while its surface is neither cached nor retained.
+const IN_PLACE_DRAWS: u32 = 256;
 const MAX_RESOLVE_DEPTH: usize = 128;
 
 /// Device-space rectangle: origin and size in pixels of some scene's device
@@ -324,7 +328,6 @@ impl Page {
             view: &self.texture.view,
             width: self.texture.width,
             height: self.texture.height,
-            offset: self.offset,
         }
     }
 
@@ -396,8 +399,11 @@ fn grid_copy<'a>(
 /// drawn (every op below `drawn_z` except the deferred ones, and every
 /// composite in `drawn`), the composites still to draw, the ops held back
 /// behind a captured glass, the glasses of the running stage whose
-/// composites are not on the page yet, and the backdrops waiting for their
-/// stage.
+/// composites are not on the page yet, the backdrops waiting for their
+/// stage, and the children waiting to draw in place at their z. Children
+/// draw in place only in a layer nothing reads back and no effect range
+/// renders apart: what they draw is on no composite a capture or effect
+/// could account for.
 struct LayerPass<'a> {
     layer: &'a LayerScene,
     page: Page,
@@ -413,6 +419,8 @@ struct LayerPass<'a> {
     load_op: Option<wgpu::LoadOp<wgpu::Color>>,
     segments: usize,
     surfaces: Vec<Option<Option<SurfaceRender>>>,
+    in_place_allowed: bool,
+    in_place: Vec<usize>,
 }
 
 const LAYER_PASS_LABELS: [&str; 6] = [
@@ -537,6 +545,28 @@ fn ensure_sorted_by_key<T, K: Ord>(values: &mut [T], key: impl Fn(&T) -> K) {
 impl LayerPass<'_> {
     fn target_rect(&self) -> DeviceRect {
         self.page.rect()
+    }
+
+    fn can_draw_in_place(&self, child: &ChildLayer) -> bool {
+        self.in_place_allowed && child.in_place
+    }
+
+    /// The children left to draw in place below `z`, in z order.
+    fn take_in_place_below(&mut self, z: usize) -> Vec<usize> {
+        let children = &self.layer.children;
+        let end = self
+            .in_place
+            .partition_point(|&index| children[index].z_index < z);
+        self.in_place.drain(..end).collect()
+    }
+
+    /// Hands `resolve_child` the child's surface, resolved ahead of its z.
+    fn resolved_surface(&mut self, index: usize, surface: SurfaceRender) {
+        if self.surfaces.len() <= index {
+            self.surfaces
+                .resize_with(self.layer.children.len(), || None);
+        }
+        self.surfaces[index] = Some(Some(surface));
     }
 
     /// The ops between the page's drawn z and `z` outside the excluded
@@ -2024,12 +2054,202 @@ struct ChildFrame {
     visible: Option<DeviceRect>,
 }
 
+/// The logical delta that lands a child on its snap anchor at `scale`.
+fn child_snap(child: &ChildLayer, scale: f32) -> Point {
+    child
+        .snap_anchor
+        .map(|anchor| snap_delta_for_anchor(anchor, scale))
+        .unwrap_or_default()
+}
+
+/// Where a flush draws the children it draws in place: its page's scale,
+/// device rect, size in pixels and offset.
+struct InPlaceTarget {
+    scale: f32,
+    rect: DeviceRect,
+    size: (u32, u32),
+    offset: [f32; 2],
+}
+
+/// A stretch of a flush drawn as one segment: the page's own ops and
+/// composites in a z range, or ops of a child drawn in place, under the
+/// transform composed down to it and its clip's scissor.
+enum FlushPart<'s> {
+    Page {
+        ops: Range<usize>,
+        composites: Range<usize>,
+    },
+    InPlace {
+        scene: &'s CompositorScene,
+        ops: &'s [DrawOp],
+        transform: SegmentTransform,
+        scissor: Option<(u32, u32, u32, u32)>,
+    },
+}
+
+/// The parts of a flush of `ops` and `composites` with the children at
+/// `in_place` drawn between them at their z, and whether every nested child
+/// was within the resolve depth.
+fn flush_parts<'s>(
+    layer: &'s LayerScene,
+    ops: &[DrawOp],
+    composites: &[ResolvedComposite],
+    in_place: &[usize],
+    target: &InPlaceTarget,
+    depth: usize,
+) -> (Vec<FlushPart<'s>>, bool) {
+    let mut parts = Vec::with_capacity(in_place.len() * 2 + 1);
+    let mut complete = true;
+    let (mut op_start, mut composite_start) = (0, 0);
+    for &index in in_place {
+        let child = &layer.children[index];
+        let op_end = ops
+            .partition_point(|op| op.z_index < child.z_index)
+            .max(op_start);
+        let composite_end = composites
+            .partition_point(|composite| composite.z_index < child.z_index)
+            .max(composite_start);
+        push_page_part(&mut parts, op_start..op_end, composite_start..composite_end);
+        (op_start, composite_start) = (op_end, composite_end);
+        let snap = child_snap(child, target.scale);
+        let Some(shown) = child_surface_bound(child, snap, target.scale, target.rect) else {
+            continue;
+        };
+        let scissor = match child.clip {
+            Some(_) => match scissor_in_target(shown.tuple(), target.size, target.offset) {
+                Some(scissor) => Some(scissor),
+                None => continue,
+            },
+            None => None,
+        };
+        complete &= push_in_place(
+            &mut parts,
+            child,
+            SegmentTransform::IDENTITY,
+            target.scale,
+            scissor,
+            depth,
+        );
+    }
+    push_page_part(
+        &mut parts,
+        op_start..ops.len(),
+        composite_start..composites.len(),
+    );
+    (parts, complete)
+}
+
+/// What one flush draws: the page's ops and composites, the children it
+/// draws in place, and the window of the first run a replayed prefix left.
+struct Flush<'a> {
+    ops: &'a [DrawOp],
+    composites: &'a [ResolvedComposite],
+    in_place: &'a [usize],
+    first_run_window: Option<Range<u32>>,
+}
+
+/// The segments a flush's parts draw as, in order, at the page's offset.
+fn flush_segments<'a>(
+    scene: &'a CompositorScene,
+    parts: &[FlushPart<'a>],
+    flush: &Flush<'a>,
+    offset: [f32; 2],
+) -> Vec<PassSegment<'a>> {
+    parts
+        .iter()
+        .map(|part| match part {
+            FlushPart::Page { ops, composites } => PassSegment {
+                scene,
+                ops: &flush.ops[ops.clone()],
+                composites: &flush.composites[composites.clone()],
+                offset,
+                scissor: None,
+                first_run_window: (ops.start == 0)
+                    .then(|| flush.first_run_window.clone())
+                    .flatten(),
+                transform: SegmentTransform::IDENTITY,
+            },
+            FlushPart::InPlace {
+                scene,
+                ops,
+                transform,
+                scissor,
+            } => PassSegment {
+                scene,
+                ops,
+                composites: &[],
+                offset,
+                scissor: *scissor,
+                first_run_window: None,
+                transform: *transform,
+            },
+        })
+        .collect()
+}
+
+fn push_page_part(parts: &mut Vec<FlushPart<'_>>, ops: Range<usize>, composites: Range<usize>) {
+    if !ops.is_empty() || !composites.is_empty() {
+        parts.push(FlushPart::Page { ops, composites });
+    }
+}
+
+/// Adds a child drawn in place to a flush: its ops, split around its
+/// children (which draw in place too), under its transform composed onto
+/// `outer`. `false` when the nesting passes the resolve depth and the
+/// layers below it are left out.
+fn push_in_place<'s>(
+    parts: &mut Vec<FlushPart<'s>>,
+    child: &'s ChildLayer,
+    outer: SegmentTransform,
+    scale: f32,
+    scissor: Option<(u32, u32, u32, u32)>,
+    depth: usize,
+) -> bool {
+    if depth >= MAX_RESOLVE_DEPTH {
+        return false;
+    }
+    let Some(transform) = in_place_transform(child, scale) else {
+        return true;
+    };
+    let transform = transform.then(outer);
+    let scene = &child.content.scene;
+    let ops = scene.draw_ops.as_slice();
+    let push_ops = |parts: &mut Vec<FlushPart<'s>>, ops: &'s [DrawOp]| {
+        if !ops.is_empty() {
+            parts.push(FlushPart::InPlace {
+                scene,
+                ops,
+                transform,
+                scissor,
+            });
+        }
+    };
+    let mut complete = true;
+    let mut start = 0;
+    for grandchild in &child.content.children {
+        let end = ops
+            .partition_point(|op| op.z_index < grandchild.z_index)
+            .max(start);
+        push_ops(parts, &ops[start..end]);
+        complete &= push_in_place(parts, grandchild, transform, scale, scissor, depth + 1);
+        start = end;
+    }
+    push_ops(parts, &ops[start..]);
+    complete
+}
+
+/// The map from a child's device space into its parent's that it draws in
+/// place under: the one a projective composite of its surface applies, less
+/// the perspective row a child drawn in place carries only as rounding.
+fn in_place_transform(child: &ChildLayer, scale: f32) -> Option<SegmentTransform> {
+    let snap = child_snap(child, scale);
+    let [[a, b, x], [c, d, y], _] = child.transform.matrix();
+    SegmentTransform::affine([a, b, c, d], [(x + snap.x) * scale, (y + snap.y) * scale])
+}
+
 impl ChildFrame {
     fn of(child: &ChildLayer, scale: f32, target: DeviceRect) -> Self {
-        let snap = child
-            .snap_anchor
-            .map(|anchor| snap_delta_for_anchor(anchor, scale))
-            .unwrap_or_default();
+        let snap = child_snap(child, scale);
         let grid = uniform_scale_translation(child.transform)
             .filter(|(uniform, _)| (uniform - child.surface_scale).abs() <= 1e-4)
             .map(|(_, translation)| Point::new(translation.x + snap.x, translation.y + snap.y));
@@ -2267,6 +2487,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             offset: page.offset,
             scissor: None,
             first_run_window: None,
+            transform: SegmentTransform::IDENTITY,
         };
         for _ in 0..count {
             self.renderer.encode_pass(
@@ -2325,13 +2546,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         beneath: &Beneath<'_>,
     ) -> Result<(), String> {
         if self.depth >= MAX_RESOLVE_DEPTH {
-            if !self.renderer.nesting_overflow_reported {
-                self.renderer.nesting_overflow_reported = true;
-                log::error!(
-                    "[layer] isolated layers nest deeper than {MAX_RESOLVE_DEPTH}: the layers \
-                     below that depth draw nothing"
-                );
-            }
+            self.report_nesting_overflow();
             if matches!(load_op, wgpu::LoadOp::Clear(_)) {
                 self.renderer
                     .clear_target(self.recorder, &page.texture.view, load_op);
@@ -2342,6 +2557,16 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         let result = self.render_layer_inner(layer, page, scale, load_op, beneath);
         self.depth -= 1;
         result
+    }
+
+    fn report_nesting_overflow(&mut self) {
+        if !self.renderer.nesting_overflow_reported {
+            self.renderer.nesting_overflow_reported = true;
+            log::error!(
+                "[layer] isolated layers nest deeper than {MAX_RESOLVE_DEPTH}: the layers below \
+                 that depth draw nothing"
+            );
+        }
     }
 
     fn render_layer_inner(
@@ -2368,6 +2593,8 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             load_op: Some(load_op),
             segments: 0,
             surfaces: Vec::new(),
+            in_place_allowed: !layer.contains_backdrop() && scene.effect_layers.is_empty(),
+            in_place: Vec::new(),
         };
         let target_rect = pass.target_rect();
         self.resolve_flat_children(&mut pass)?;
@@ -2402,18 +2629,33 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                         pass.pending.push(composite);
                     }
                 }
-                Event::Child(index) => {
-                    let child = &layer.children[index];
-                    if child.reads_backdrop() {
-                        self.run_stages(&mut pass)?;
-                        self.flush_page(&mut pass, z + 1)?;
-                    }
-                    self.resolve_child(&mut pass, index, child)?;
-                }
+                Event::Child(index) => self.child_event(&mut pass, index, z)?,
             }
         }
         self.run_stages(&mut pass)?;
         self.flush_page(&mut pass, usize::MAX)
+    }
+
+    /// A child at its z: left to draw in place with the flush that reaches
+    /// it, or resolved into a composite now, once the page beneath a child
+    /// that reads it back is drawn.
+    fn child_event(
+        &mut self,
+        pass: &mut LayerPass<'_>,
+        index: usize,
+        z: usize,
+    ) -> Result<(), String> {
+        let layer = pass.layer;
+        let child = &layer.children[index];
+        if pass.can_draw_in_place(child) && self.draws_in_place(pass, index, child)? {
+            pass.in_place.push(index);
+            return Ok(());
+        }
+        if child.reads_backdrop() {
+            self.run_stages(pass)?;
+            self.flush_page(pass, z + 1)?;
+        }
+        self.resolve_child(pass, index, child)
     }
 
     /// Applies the page's pending clear, so a child reading the page through
@@ -2438,8 +2680,9 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             .partition_point(|composite| composite.z_index < z);
         let composites: Vec<ResolvedComposite> = pass.pending.drain(..end).collect();
         let (ops, mut composites) = pass.release(ops, composites);
+        let in_place = pass.take_in_place_below(z);
         let mut load_op = pass.load_op.take();
-        if ops.is_empty() && composites.is_empty() {
+        if ops.is_empty() && composites.is_empty() && in_place.is_empty() {
             if load_op.is_none() {
                 pass.drawn_z = pass.drawn_z.max(z);
                 return Ok(());
@@ -2450,36 +2693,69 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 return Ok(());
             }
         }
+        let first_in_place_z = in_place
+            .first()
+            .map_or(usize::MAX, |&index| pass.layer.children[index].z_index);
         let first_run_window = match load_op {
-            Some(base) => {
-                self.reuse_opaque_prefix(pass, &ops, base, &mut composites, &mut load_op)?
-            }
+            Some(base) => self.reuse_opaque_prefix(
+                pass,
+                &ops,
+                base,
+                &mut composites,
+                &mut load_op,
+                first_in_place_z,
+            )?,
             None => None,
         };
-        let segment = PassSegment {
-            scene: &pass.layer.scene,
+        let flush = Flush {
             ops: &ops,
             composites: &composites,
-            offset: pass.page.offset,
-            scissor: None,
+            in_place: &in_place,
             first_run_window,
         };
-        let label = LAYER_PASS_LABELS[pass.segments.min(LAYER_PASS_LABELS.len() - 1)];
-        pass.segments += 1;
-        self.renderer.encode_pass(
-            self.recorder,
-            pass.page.pass_target(),
-            std::slice::from_ref(&segment),
-            load_op.unwrap_or(wgpu::LoadOp::Load),
-            pass.scale,
-            label,
-        )?;
+        self.encode_flush(pass, flush, load_op.unwrap_or(wgpu::LoadOp::Load))?;
         pass.drawn.extend(composites);
         ensure_sorted_by_key(&mut pass.drawn, |composite| composite.z_index);
         pass.drawn_z = pass.drawn_z.max(z);
         Ok(())
     }
 
+    /// Encodes one flush as one pass: the page's ops and composites, with the
+    /// children drawn in place between them at their z.
+    fn encode_flush(
+        &mut self,
+        pass: &mut LayerPass<'_>,
+        flush: Flush<'_>,
+        load_op: wgpu::LoadOp<wgpu::Color>,
+    ) -> Result<(), String> {
+        let target = pass.page.pass_target();
+        let place = InPlaceTarget {
+            scale: pass.scale,
+            rect: pass.target_rect(),
+            size: (target.width, target.height),
+            offset: pass.page.offset,
+        };
+        let (parts, complete) = flush_parts(
+            pass.layer,
+            flush.ops,
+            flush.composites,
+            flush.in_place,
+            &place,
+            self.depth,
+        );
+        if !complete {
+            self.report_nesting_overflow();
+        }
+        let segments = flush_segments(&pass.layer.scene, &parts, &flush, place.offset);
+        let label = LAYER_PASS_LABELS[pass.segments.min(LAYER_PASS_LABELS.len() - 1)];
+        pass.segments += 1;
+        self.renderer
+            .encode_pass(self.recorder, target, &segments, load_op, pass.scale, label)
+            .map(drop)
+    }
+
+    /// Replays the flush's opaque first op from the layer cache, or admits
+    /// it there, when nothing composited or drawn in place lies beneath it.
     fn reuse_opaque_prefix(
         &mut self,
         pass: &mut LayerPass<'_>,
@@ -2487,6 +2763,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         base: wgpu::LoadOp<wgpu::Color>,
         composites: &mut Vec<ResolvedComposite>,
         load_op: &mut Option<wgpu::LoadOp<wgpu::Color>>,
+        first_in_place_z: usize,
     ) -> Result<Option<Range<u32>>, String> {
         if NO_FILL_CACHE.flag() {
             return Ok(None);
@@ -2503,9 +2780,10 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         let Some(prefix) = opaque_prefix(&context, ops) else {
             return Ok(None);
         };
-        if composites
-            .iter()
-            .any(|composite| composite.z_index <= prefix.z_index)
+        if first_in_place_z <= prefix.z_index
+            || composites
+                .iter()
+                .any(|composite| composite.z_index <= prefix.z_index)
         {
             return Ok(None);
         }
@@ -2551,6 +2829,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             offset: pass.page.offset,
             scissor: None,
             first_run_window: Some(0..1),
+            transform: SegmentTransform::IDENTITY,
         };
         self.renderer.encode_pass(
             self.recorder,
@@ -3276,7 +3555,6 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             view: &texture.view,
             width: texture.width,
             height: texture.height,
-            offset: [0.0, 0.0],
         };
         let mut segments: Vec<PassSegment<'_>> = Vec::with_capacity(regions.len() * 2);
         for ((region, base), fixup) in regions.iter().zip(&bases).zip(&fixups) {
@@ -3299,6 +3577,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                     offset,
                     scissor,
                     first_run_window: None,
+                    transform: SegmentTransform::IDENTITY,
                 });
             }
             let own_end = pass
@@ -3311,6 +3590,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 offset,
                 scissor,
                 first_run_window: None,
+                transform: SegmentTransform::IDENTITY,
             };
             if !copied || segment_draws_anything(target, &segment, scale) {
                 segments.push(segment);
@@ -3400,12 +3680,12 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             offset: [source_rect.x, source_rect.y],
             scissor: None,
             first_run_window: None,
+            transform: SegmentTransform::IDENTITY,
         };
         let target = PassTarget {
             view: &texture.view,
             width,
             height,
-            offset: [source_rect.x, source_rect.y],
         };
         self.renderer.encode_pass(
             self.recorder,
@@ -3824,9 +4104,46 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         ))
     }
 
+    /// Whether a child that can draw in place does this frame. A small one
+    /// always does. A large one does unless its surface is cached or retained
+    /// this frame, which it then resolves into the pass for `resolve_child`:
+    /// content that holds still costs less to composite than to draw again,
+    /// and content that changes would be drawn afresh into a surface anyway.
+    fn draws_in_place(
+        &mut self,
+        pass: &mut LayerPass<'_>,
+        index: usize,
+        child: &ChildLayer,
+    ) -> Result<bool, String> {
+        if child.draws <= IN_PLACE_DRAWS {
+            return Ok(true);
+        }
+        let scale = pass.scale;
+        let target = pass.target_rect();
+        let frame = ChildFrame::of(child, scale, target);
+        let Some(visible) = frame.visible else {
+            return Ok(true);
+        };
+        let shown = child_surface_bound(child, frame.snap, scale, target).unwrap_or(visible);
+        let Some(plan) = SurfacePlan::of(child, scale, frame.grid, shown) else {
+            return Ok(true);
+        };
+        let surface = match self.source_decision(child, &plan) {
+            SourceDecision::Cached(surface) => surface,
+            SourceDecision::Render(None) => return Ok(true),
+            SourceDecision::Render(retain) => {
+                let cleared = Beneath::over(wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT));
+                self.render_planned_surface(child, &plan, retain, &cleared)?
+            }
+        };
+        pass.resolved_surface(index, surface);
+        Ok(false)
+    }
+
     fn resolve_flat_children(&mut self, pass: &mut LayerPass<'_>) -> Result<(), String> {
         let layer = pass.layer;
-        if !layer.children.iter().any(renders_flat) {
+        let batched = |child: &ChildLayer| renders_flat(child) && !pass.can_draw_in_place(child);
+        if !layer.children.iter().any(batched) {
             return Ok(());
         }
         let scale = pass.scale;
@@ -3836,7 +4153,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             .collect();
         let mut batch: Vec<BatchMember> = Vec::new();
         for (index, child) in layer.children.iter().enumerate() {
-            if !renders_flat(child) {
+            if !batched(child) {
                 continue;
             }
             let frame = ChildFrame::of(child, scale, target);
@@ -3949,6 +4266,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                         ],
                         scissor: Some((placement.x, placement.y, plan.width, plan.height)),
                         first_run_window: None,
+                        transform: SegmentTransform::IDENTITY,
                     })
                 })
                 .collect();
@@ -3956,7 +4274,6 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 view: &atlas.view,
                 width: atlas.width,
                 height: atlas.height,
-                offset: [0.0, 0.0],
             };
             self.renderer.encode_pass(
                 self.recorder,

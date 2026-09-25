@@ -87,6 +87,27 @@ composites the resolved textures.
   rotation is as cacheable as one isolated for alpha or a clip
   (`layer_cache_policy`). Contract `animated_layer_transform.rs`, opaque
   and translucent.
+- **Drawn in place** (`ChildLayer::in_place`, `flush_parts`,
+  `SegmentTransform`): an isolated layer that only turns and moves -- no
+  alpha, blend, effect, backdrop, rounded clip, offscreen strategy, image,
+  clip that would cut a text or a child, or content that blends other than
+  source-over -- draws its content straight into its parent's pass as
+  segments under its transform, between the parent's ops at its z, its own
+  such children composed in. The viewport uniform carries the transform:
+  the vertex stages map through it, the shape stage maps each fragment back
+  to evaluate its distance field, a transformed quad grows by
+  `TRANSFORMED_QUAD_MARGIN` so a turned edge anti-aliases on both sides,
+  glyphs sample the atlas filtered, and a scissor is the bounds of what it
+  cuts. Under the identity every stage keeps its untransformed arithmetic
+  bit for bit; a retained glyph run adds its raster origin on the GPU, as
+  the shared path adds it on the CPU, so the two draw one picture. A layer
+  of at most `IN_PLACE_DRAWS` shape records, texts and images always draws
+  in place; a larger one does unless its surface is cached or admitted
+  this frame, so content that holds still composites its cached surface and
+  content that changes draws in place instead of into a surface it would
+  throw away. A layer nesting forty turned levels that relayout every frame
+  draws in one pass with no surface. Contracts `in_place_layers.rs`,
+  `nested_rotated_relayout.rs`, `rotated_grid_relayout.rs`.
 - **Surfaces drawn together** (`resolve_flat_children`,
   `render_surface_atlas`): before a layer draws, every child surface it must
   draw this frame whose content is flat (no nested surface, backdrop,

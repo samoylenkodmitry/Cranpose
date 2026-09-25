@@ -89,7 +89,10 @@ impl LayerScene {
 
 /// An isolated child composited into its parent at `z_index`: its content is
 /// rendered into its own texture, then drawn with `transform`, `alpha`,
-/// `blend_mode` and the optional rounded mask.
+/// `blend_mode` and the optional rounded mask. A child `in_place` can do
+/// without the texture: its content, `draws` shape records, texts and images
+/// with its children's, can draw straight into its parent's pass under its
+/// rigid transform.
 pub(crate) struct ChildLayer {
     pub(crate) z_index: usize,
     pub(crate) node_id: Option<NodeId>,
@@ -105,6 +108,8 @@ pub(crate) struct ChildLayer {
     pub(crate) surface_scale: f32,
     pub(crate) content_hash: u64,
     pub(crate) cache_policy: CachePolicy,
+    pub(crate) in_place: bool,
+    pub(crate) draws: u32,
     pub(crate) content: LayerScene,
 }
 
@@ -395,6 +400,71 @@ fn child_needs_surface(layer: &LayerNode) -> bool {
         || layer_requires_isolation(graphics)
 }
 
+/// Whether `transform` only turns and moves: affine, with an orthonormal
+/// linear part, so drawing under it resamples nothing.
+fn is_rigid(transform: ProjectiveTransform) -> bool {
+    let [[a, b, _], [c, d, _], perspective] = transform.matrix();
+    let near = |value: f32, target: f32| (value - target).abs() <= AFFINE_TOLERANCE;
+    near(perspective[0], 0.0)
+        && near(perspective[1], 0.0)
+        && near(perspective[2], 1.0)
+        && near(a * a + c * c, 1.0)
+        && near(b * b + d * d, 1.0)
+        && near(a * b + c * d, 0.0)
+}
+
+/// Whether an isolated layer can draw its content straight into its parent's
+/// pass: its transform only turns and moves it, nothing else about it needs
+/// a surface, and its content draws the same under a transform.
+fn can_draw_in_place(
+    layer: &LayerNode,
+    transform: ProjectiveTransform,
+    content: &LayerScene,
+) -> bool {
+    is_rigid(transform)
+        && !child_needs_surface(layer)
+        && layer.backdrop().is_none()
+        && rounded_clip_for_layer(layer).is_none()
+        && content_draws_in_place(content)
+}
+
+/// The shape records, texts and images a scene draws.
+fn scene_draws(scene: &CompositorScene) -> u32 {
+    let records: u32 = scene.runs.iter().map(RunDraw::record_count).sum();
+    let others = scene.texts.len() + scene.images.len();
+    records.saturating_add(u32::try_from(others).unwrap_or(u32::MAX))
+}
+
+/// Whether every part of a layer's content draws the same straight into a
+/// transformed pass as into a surface of its own: no backdrop, effect range
+/// or shadow that resolves into a texture, nothing that blends other than
+/// source-over (it would reach the pixels beneath the layer), no image (its
+/// quad's edges are not anti-aliased, where a turned surface filters them),
+/// texts their clips leave whole (a clip turned off the pixel grid is no
+/// scissor), and children that draw in place unclipped.
+fn content_draws_in_place(content: &LayerScene) -> bool {
+    let scene = &content.scene;
+    let whole =
+        |rect: Rect, clip: Option<Rect>| clip.is_none_or(|clip| clip.intersect(rect) == Some(rect));
+    let source_over = |run: &RunDraw| {
+        run.segment_records()
+            .all(|segment| segment.blend == BlendMode::SrcOver)
+    };
+    scene.backdrop_layers.is_empty()
+        && scene.effect_layers.is_empty()
+        && scene.runs.iter().all(source_over)
+        && scene.shadow_draws.iter().all(|shadow| {
+            !shadow.requires_surface()
+                && shadow.texts.iter().all(|text| whole(text.rect, text.clip))
+        })
+        && scene.texts.iter().all(|text| whole(text.rect, text.clip))
+        && scene.images.is_empty()
+        && content
+            .children
+            .iter()
+            .all(|child| child.in_place && child.clip.is_none())
+}
+
 enum Placement {
     Direct(Point),
     Isolated,
@@ -534,6 +604,13 @@ fn isolated_child(
         content_hash,
         cacheable,
     );
+    let draws = content
+        .children
+        .iter()
+        .fold(scene_draws(&content.scene), |total, child| {
+            total.saturating_add(child.draws)
+        });
+    let in_place = can_draw_in_place(layer, transform, &content);
     ChildLayer {
         z_index: parent_scene.next_z(),
         node_id: layer.node_id,
@@ -549,6 +626,8 @@ fn isolated_child(
         surface_scale,
         content_hash,
         cache_policy: layer.cache_policy,
+        in_place,
+        draws,
         content,
     }
 }

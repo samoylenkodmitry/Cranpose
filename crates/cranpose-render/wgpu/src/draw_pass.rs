@@ -9,34 +9,23 @@ use crate::{
         RoundedCompositeMask, ShaderCompositeBatchItem, SubstrateRegions,
     },
     frame_graph::FrameCommandRecorder,
+    geometry::SegmentTransform,
     offscreen::OffscreenTarget,
     render::{
         GpuRenderer, StoreRunBatch, ViewportUniformParams, image_draw_bounds, run_draw_bounds,
-        run_draw_is_visible_in_rect, supported_blend_mode, text_draw_bounds,
+        run_draw_is_visible_in_rect, segment_scene_rect, supported_blend_mode, text_draw_bounds,
         text_draw_is_visible_in_rect,
     },
     run_store::{RunDrawCall, run_has_shapes},
     scene::{CompositorScene, DrawOp, DrawOpKind, RunDraw, TextDraw},
 };
 
-/// A render target and where its origin sits in the scene's device space.
+/// A render target and its size in pixels.
 #[derive(Clone, Copy)]
 pub(crate) struct PassTarget<'a> {
     pub(crate) view: &'a wgpu::TextureView,
     pub(crate) width: u32,
     pub(crate) height: u32,
-    pub(crate) offset: [f32; 2],
-}
-
-impl PassTarget<'_> {
-    pub(crate) fn logical_rect(&self, root_scale: f32) -> Rect {
-        Rect {
-            x: self.offset[0] / root_scale,
-            y: self.offset[1] / root_scale,
-            width: self.width as f32 / root_scale,
-            height: self.height as f32 / root_scale,
-        }
-    }
 }
 
 /// What a composite's texture holds beyond this frame: a retained texture
@@ -117,8 +106,10 @@ pub(crate) enum ResolvedCompositeKind {
 
 /// One scene's contribution to a pass: its ops in z order, the composites
 /// resolved for it, where its device space origin sits in the target's
-/// scene space, and the target pixels it may touch (the whole target when
-/// `None`).
+/// scene space, the target pixels it may touch (the whole target when
+/// `None`), and the transform its device space is drawn under: the
+/// identity, except for a layer drawn in place, whose segments carry no
+/// composites.
 pub(crate) struct PassSegment<'a> {
     pub(crate) scene: &'a CompositorScene,
     pub(crate) ops: &'a [DrawOp],
@@ -126,6 +117,7 @@ pub(crate) struct PassSegment<'a> {
     pub(crate) offset: [f32; 2],
     pub(crate) scissor: Option<(u32, u32, u32, u32)>,
     pub(crate) first_run_window: Option<std::ops::Range<u32>>,
+    pub(crate) transform: SegmentTransform,
 }
 
 enum Item<'a> {
@@ -466,25 +458,26 @@ pub(crate) fn op_is_visible_in_rect(
 }
 
 /// The logical rect a segment's draws are judged against: its scissor
-/// within the target, or the whole target, at the segment's offset.
+/// within the target, or the whole target, at the segment's offset, mapped
+/// back through the segment's transform.
 fn segment_viewport_rect(
     target: PassTarget<'_>,
     segment: &PassSegment<'_>,
     root_scale: f32,
 ) -> Rect {
-    match segment.scissor {
-        Some((x, y, width, height)) => PassTarget {
-            offset: [segment.offset[0] + x as f32, segment.offset[1] + y as f32],
-            width,
-            height,
-            ..target
+    let (x, y, width, height) = segment
+        .scissor
+        .unwrap_or((0, 0, target.width, target.height));
+    segment_scene_rect(
+        segment.transform,
+        Rect {
+            x: segment.offset[0] + x as f32,
+            y: segment.offset[1] + y as f32,
+            width: width as f32,
+            height: height as f32,
         },
-        None => PassTarget {
-            offset: segment.offset,
-            ..target
-        },
-    }
-    .logical_rect(root_scale)
+        root_scale,
+    )
 }
 
 /// Whether drawing `segment` into `target` touches any pixel: some op or
@@ -633,10 +626,16 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
         segment: &PassSegment<'s>,
         scratch: &mut PassScratch,
     ) -> Result<(), String> {
+        debug_assert!(
+            segment.transform.is_identity() || segment.composites.is_empty(),
+            "a transformed segment places its composites nowhere"
+        );
         let viewport = ViewportUniformParams {
             width: self.target.width,
             height: self.target.height,
             offset: segment.offset,
+            transform: segment.transform,
+            origin: [0.0; 2],
         };
         let viewport_rect = segment_viewport_rect(self.target, segment, self.root_scale);
         let uniform_slot = renderer.claim_uniform_slot(viewport);
