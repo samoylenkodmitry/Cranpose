@@ -82,6 +82,22 @@ composites the resolved textures.
   rotation is as cacheable as one isolated for alpha or a clip
   (`layer_cache_policy`). Contract `animated_layer_transform.rs`, opaque
   and translucent.
+- **Surfaces drawn together** (`resolve_flat_children`,
+  `render_surface_atlas`): before a layer draws, every child surface it must
+  draw this frame whose content is flat (no nested surface, backdrop,
+  effect or blurred shadow) and that the cache does not keep is drawn into
+  one shelf-packed atlas per raster scale, in one pass, each child
+  scissored to its region; a grid of cells laid out again every frame costs
+  one pass, not one per cell. A flat child the cache admits is copied out of
+  the atlas into its retained texture, never drawn in a pass of its own, and
+  a node's new source surface supersedes its old one when it draws other
+  content (`draws_other_content`): a cell laid out again replaces its
+  surface, while a tile animating its scale keeps its rasters of the scale
+  steps it passes through. A projective composite filters in its shader
+  (`projective_blit_main.wgsl`) with weights from the position within the
+  surface and taps held to the surface's texels, so a surface in an atlas
+  composites byte for byte as one in a texture of its own. Contract
+  `rotated_grid_relayout.rs`.
 - **Stages** (`ResolveStages`, `run_stages`): the page is drawn in strata
   and backdrops resolve in batches; an effect joins the stage after every
   effect below it under its capture; blockers are every backdrop still

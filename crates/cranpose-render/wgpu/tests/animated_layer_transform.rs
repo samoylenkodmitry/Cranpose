@@ -107,18 +107,7 @@ impl TileHarness {
     }
 
     fn settled_frame(&mut self, seconds: f32) -> CapturedFrame {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-        loop {
-            let (stats, frame) = self.frame(seconds);
-            if support::pipelines_settled(&stats) {
-                return frame;
-            }
-            assert!(
-                std::time::Instant::now() < deadline,
-                "specialization did not finish"
-            );
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
+        support::settle(|| self.frame(seconds))
     }
 }
 

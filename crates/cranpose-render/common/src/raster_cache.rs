@@ -262,6 +262,18 @@ impl LayerRasterCacheKey {
     pub fn raster_scale(self) -> RasterScale {
         self.raster_scale
     }
+
+    /// Whether `other` rasterizes other content than this key: another
+    /// kind, node, content, effect or bounds. Keys that differ only in the
+    /// scale or the sub-pixel phase they are drawn at hold the same content.
+    pub fn draws_other_content(self, other: Self) -> bool {
+        Self {
+            pixel_size: other.pixel_size,
+            raster_scale: other.raster_scale,
+            device_phase_steps: other.device_phase_steps,
+            ..self
+        } != other
+    }
 }
 
 #[cfg(test)]

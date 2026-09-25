@@ -174,6 +174,16 @@ struct Beneath<'a> {
     described: Vec<BeneathSegment<'a>>,
 }
 
+impl Beneath<'_> {
+    fn over(base: wgpu::LoadOp<wgpu::Color>) -> Self {
+        Self {
+            base,
+            page: None,
+            described: Vec::new(),
+        }
+    }
+}
+
 /// One ancestor scene's content beneath a layer, as the backdrop result
 /// cache hashes it: the ops below `z_end` outside `excluded`, the composites
 /// already drawn and still pending below it, and where the scene's device
@@ -246,6 +256,7 @@ impl PageBase {
                     alpha: 1.0,
                     blend_mode: BlendMode::SrcOver,
                     sample_mode: CompositeSampleMode::Linear,
+                    source_region: None,
                 },
             }),
         }
@@ -401,6 +412,7 @@ struct LayerPass<'a> {
     drawn_z: usize,
     load_op: Option<wgpu::LoadOp<wgpu::Color>>,
     segments: usize,
+    surfaces: Vec<Option<Option<SurfaceRender>>>,
 }
 
 const LAYER_PASS_LABELS: [&str; 6] = [
@@ -1234,10 +1246,12 @@ fn backdrop_blit(item: &PendingBackdrop<'_>, source: CompositeSource) -> Resolve
 
 /// A child whose surface lies on the parent's pixel grid, blitted one to one
 /// at `dest`.
+#[expect(clippy::too_many_arguments)]
 fn grid_child_composite(
     child: &ChildLayer,
     z: usize,
     source: CompositeSource,
+    region: Option<DeviceRect>,
     dest: DeviceRect,
     snap: Point,
     scale: f32,
@@ -1254,7 +1268,7 @@ fn grid_child_composite(
             blend_mode: child.blend_mode,
             rounded_mask: grid_rounded_mask(child, snap, scale),
             sample_mode: CompositeSampleMode::Nearest,
-            source_viewport: None,
+            source_viewport: region.map(DeviceRect::tuple),
         },
     }
 }
@@ -1289,7 +1303,12 @@ fn projected_child_composite(
             inverse: inverse.matrix(),
             alpha: child.alpha,
             blend_mode: child.blend_mode,
-            sample_mode: CompositeSampleMode::Linear,
+            sample_mode: if renders_flat(child) {
+                CompositeSampleMode::Texels
+            } else {
+                CompositeSampleMode::Linear
+            },
+            source_region: surface.region.map(DeviceRect::tuple),
         },
     })
 }
@@ -1993,6 +2012,157 @@ struct SurfaceRender {
     rect: DeviceRect,
     scale: f32,
     grid_dest: Option<DeviceRect>,
+    region: Option<DeviceRect>,
+}
+
+#[derive(Clone, Copy)]
+struct ChildFrame {
+    snap: Point,
+    grid: Option<Point>,
+    translation: Option<Point>,
+    dest: DeviceRect,
+    visible: Option<DeviceRect>,
+}
+
+impl ChildFrame {
+    fn of(child: &ChildLayer, scale: f32, target: DeviceRect) -> Self {
+        let snap = child
+            .snap_anchor
+            .map(|anchor| snap_delta_for_anchor(anchor, scale))
+            .unwrap_or_default();
+        let grid = uniform_scale_translation(child.transform)
+            .filter(|(uniform, _)| (uniform - child.surface_scale).abs() <= 1e-4)
+            .map(|(_, translation)| Point::new(translation.x + snap.x, translation.y + snap.y));
+        let translation = grid.filter(|_| (child.surface_scale - 1.0).abs() <= 1e-4);
+        let (dest, visible) = child_device_placement(child, snap, scale, target);
+        Self {
+            snap,
+            grid,
+            translation,
+            dest,
+            visible,
+        }
+    }
+}
+
+struct SurfacePlan {
+    surface_logical: Rect,
+    surface_rect: DeviceRect,
+    grid_dest: Option<DeviceRect>,
+    grid_offset: Option<Point>,
+    device_phase: Point,
+    surface_scale: f32,
+    translated: bool,
+    width: u32,
+    height: u32,
+}
+
+impl SurfacePlan {
+    fn of(child: &ChildLayer, scale: f32, grid: Option<Point>, shown: DeviceRect) -> Option<Self> {
+        let surface_scale = scale * child.surface_scale;
+        let translated = (child.surface_scale - 1.0).abs() <= 1e-4;
+        let surface_logical = child_surface_rect(child, scale)?;
+        let child_rect = DeviceRect::from_logical(surface_logical, surface_scale).snap_out();
+        let grid_offset = grid.map(|grid| {
+            let offset = Point::new(grid.x * scale, grid.y * scale);
+            if translated {
+                Point::new(offset.x.round(), offset.y.round())
+            } else {
+                offset
+            }
+        });
+        let (surface_rect, grid_dest, device_phase) = match grid_offset {
+            Some(offset) => {
+                let whole = child_rect.translated(offset).snap_out();
+                let dest = if child.reads_backdrop() && child.effect.is_none() {
+                    let reach = (backdrop_reach(&child.content) * surface_scale).ceil() + 1.0;
+                    rendered_surface(whole, shown, reach)
+                } else {
+                    whole
+                };
+                (
+                    dest.translated(Point::new(-offset.x, -offset.y)),
+                    Some(dest),
+                    Point::new(offset.x - offset.x.floor(), offset.y - offset.y.floor()),
+                )
+            }
+            None => (child_rect, None, Point::default()),
+        };
+        let (width, height) = surface_rect.pixel_size();
+        if u64::from(width) * u64::from(height) > MAX_SURFACE_PIXELS {
+            log::error!(
+                "[layer] dropping a layer whole: {width}x{height} is past the {MAX_SURFACE_PIXELS} pixel budget, \
+                 and its own {:.0}x{:.0} box does not fit either. Nothing it draws reaches the frame.",
+                child.local_bounds.width,
+                child.local_bounds.height,
+            );
+            return None;
+        }
+        Some(Self {
+            surface_logical,
+            surface_rect,
+            grid_dest,
+            grid_offset,
+            device_phase,
+            surface_scale,
+            translated,
+            width,
+            height,
+        })
+    }
+
+    fn cache_key(&self, child: &ChildLayer) -> Option<LayerRasterCacheKey> {
+        (!child.reads_backdrop() && child.cache_policy == CachePolicy::Auto).then(|| {
+            LayerRasterCacheKey::source_content(
+                child.node_id,
+                child.content_hash,
+                self.surface_logical,
+                (self.width, self.height),
+                RasterScale::from_scale(self.surface_scale),
+                self.device_phase,
+            )
+        })
+    }
+
+    fn surface(&self, source: CompositeSource, region: Option<DeviceRect>) -> SurfaceRender {
+        SurfaceRender {
+            source,
+            rect: self.surface_rect,
+            scale: self.surface_scale,
+            grid_dest: self.grid_dest,
+            region,
+        }
+    }
+}
+
+enum SourceDecision {
+    Cached(SurfaceRender),
+    Render(Option<LayerRasterCacheKey>),
+}
+
+struct BatchMember {
+    index: usize,
+    plan: SurfacePlan,
+    retain: Option<LayerRasterCacheKey>,
+}
+
+fn renders_flat(child: &ChildLayer) -> bool {
+    child.effect.is_none()
+        && !child.reads_backdrop()
+        && child.content.children.is_empty()
+        && child.content.scene.backdrop_layers.is_empty()
+        && child.content.scene.effect_layers.is_empty()
+        && child.content.scene.shadow_draws.is_empty()
+}
+
+fn z_ordered_ops(ops: &[DrawOp]) -> Cow<'_, [DrawOp]> {
+    let ops = filtered_ops(ops, usize::MAX, &[]);
+    if ops.is_sorted_by_key(|op| op.z_index) {
+        return ops;
+    }
+    let mut ops = ops.into_owned();
+    ensure_sorted_by_key(&mut ops, |op| op.z_index);
+    Cow::Owned(ops)
 }
 
 enum Event {
@@ -2047,18 +2217,10 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             texture: page,
             offset: [0.0, 0.0],
         };
-        let beneath = Beneath {
-            base: load_op,
-            page: None,
-            described: Vec::new(),
-        };
+        let beneath = Beneath::over(load_op);
         self.render_layer(root, page.clone(), root_scale, load_op, &beneath)?;
         if let Some(overlay) = overlay {
-            let beneath = Beneath {
-                base: wgpu::LoadOp::Load,
-                page: None,
-                described: Vec::new(),
-            };
+            let beneath = Beneath::over(wgpu::LoadOp::Load);
             self.render_layer(
                 overlay,
                 page.clone(),
@@ -2194,8 +2356,10 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             drawn_z: 0,
             load_op: Some(load_op),
             segments: 0,
+            surfaces: Vec::new(),
         };
         let target_rect = pass.target_rect();
+        self.resolve_flat_children(&mut pass)?;
 
         for (z, event) in layer_events(layer) {
             match event {
@@ -2233,7 +2397,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                         self.run_stages(&mut pass)?;
                         self.flush_page(&mut pass, z + 1)?;
                     }
-                    self.resolve_child(&mut pass, child)?;
+                    self.resolve_child(&mut pass, index, child)?;
                 }
             }
         }
@@ -3334,19 +3498,18 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
     fn resolve_child(
         &mut self,
         pass: &mut LayerPass<'_>,
+        index: usize,
         child: &ChildLayer,
     ) -> Result<(), String> {
         let scale = pass.scale;
         let z = child.z_index;
-        let snap = child
-            .snap_anchor
-            .map(|anchor| snap_delta_for_anchor(anchor, scale))
-            .unwrap_or_default();
-        let grid = uniform_scale_translation(child.transform)
-            .filter(|(uniform, _)| (uniform - child.surface_scale).abs() <= 1e-4)
-            .map(|(_, translation)| Point::new(translation.x + snap.x, translation.y + snap.y));
-        let translation = grid.filter(|_| (child.surface_scale - 1.0).abs() <= 1e-4);
-        let (dest, visible_device) = child_device_placement(child, snap, scale, pass.target_rect());
+        let ChildFrame {
+            snap,
+            grid,
+            translation,
+            dest,
+            visible: visible_device,
+        } = ChildFrame::of(child, scale, pass.target_rect());
 
         if !self.renderer.ablation.stages
             && let Some(backdrop) = &child.backdrop
@@ -3377,7 +3540,11 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             return Ok(());
         }
         let shown = child_surface_bound(child, snap, scale, pass.target_rect()).unwrap_or(visible);
-        let Some(surface) = self.render_child_surface(pass, child, z, grid, shown)? else {
+        let resolved = match pass.surfaces.get_mut(index).and_then(Option::take) {
+            Some(resolved) => resolved,
+            None => self.render_child_surface(pass, child, z, grid, shown)?,
+        };
+        let Some(surface) = resolved else {
             return Ok(());
         };
         if let Some(composite) =
@@ -3393,7 +3560,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         let composite = match surface.grid_dest {
             Some(dest) => {
                 let visible = dest.intersect(shown).unwrap_or(visible);
-                grid_child_composite(child, z, source, dest, snap, scale, visible)
+                grid_child_composite(child, z, source, surface.region, dest, snap, scale, visible)
             }
             None => {
                 let Some(composite) =
@@ -3567,118 +3734,294 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         grid: Option<Point>,
         shown: DeviceRect,
     ) -> Result<Option<SurfaceRender>, String> {
-        let scale = pass.scale;
-        let surface_scale = scale * child.surface_scale;
-        let translated = (child.surface_scale - 1.0).abs() <= 1e-4;
-        let Some(surface_logical) = child_surface_rect(child, scale) else {
+        let Some(plan) = SurfacePlan::of(child, pass.scale, grid, shown) else {
             return Ok(None);
         };
-        let child_rect = DeviceRect::from_logical(surface_logical, surface_scale).snap_out();
-        let grid_offset = grid.map(|grid| {
-            let offset = Point::new(grid.x * scale, grid.y * scale);
-            if translated {
-                Point::new(offset.x.round(), offset.y.round())
-            } else {
-                offset
-            }
-        });
-        let reads_backdrop = child.reads_backdrop();
-        let (surface_rect, grid_dest, device_phase) = match grid_offset {
-            Some(offset) => {
-                let whole = child_rect.translated(offset).snap_out();
-                let dest = if reads_backdrop && child.effect.is_none() {
-                    let reach = (backdrop_reach(&child.content) * surface_scale).ceil() + 1.0;
-                    rendered_surface(whole, shown, reach)
-                } else {
-                    whole
-                };
-                (
-                    dest.translated(Point::new(-offset.x, -offset.y)),
-                    Some(dest),
-                    Point::new(offset.x - offset.x.floor(), offset.y - offset.y.floor()),
-                )
-            }
-            None => (child_rect, None, Point::default()),
+        let retain = match self.source_decision(child, &plan) {
+            SourceDecision::Cached(surface) => return Ok(Some(surface)),
+            SourceDecision::Render(retain) => retain,
         };
-        let (width, height) = surface_rect.pixel_size();
-        if u64::from(width) * u64::from(height) > MAX_SURFACE_PIXELS {
-            log::error!(
-                "[layer] dropping a layer whole: {width}x{height} is past the {MAX_SURFACE_PIXELS} pixel budget, \
-                 and its own {:.0}x{:.0} box does not fit either. Nothing it draws reaches the frame.",
-                child.local_bounds.width,
-                child.local_bounds.height,
-            );
-            return Ok(None);
-        }
-        let cache_key = (!reads_backdrop && child.cache_policy == CachePolicy::Auto).then(|| {
-            LayerRasterCacheKey::source_content(
-                child.node_id,
-                child.content_hash,
-                surface_logical,
-                (width, height),
-                RasterScale::from_scale(surface_scale),
-                device_phase,
-            )
-        });
-        if let Some(key) = cache_key
-            && let Some(texture) = self.cached_source(child.node_id, key, width, height)
+        let beneath = if child.reads_backdrop() {
+            self.start_page(pass);
+            beneath_for_child(pass, child, z, plan.grid_offset.filter(|_| plan.translated))?
+        } else {
+            Beneath::over(wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT))
+        };
+        self.render_planned_surface(child, &plan, retain, &beneath)
+            .map(Some)
+    }
+
+    fn source_decision(&mut self, child: &ChildLayer, plan: &SurfacePlan) -> SourceDecision {
+        let key = plan.cache_key(child);
+        if let Some(key) = key
+            && let Some(texture) = self.cached_source(child.node_id, key, plan.width, plan.height)
         {
-            return Ok(Some(SurfaceRender {
-                source: CompositeSource {
+            return SourceDecision::Cached(plan.surface(
+                CompositeSource {
                     texture,
                     content: SourceContent::retained(&key),
                 },
-                rect: surface_rect,
-                scale: surface_scale,
-                grid_dest,
-            }));
+                None,
+            ));
         }
-        let cache_key =
-            cache_key.filter(|key| self.admits_source(child.node_id, *key, width, height));
-        let texture = if cache_key.is_some() {
-            Rc::new(self.renderer.acquire_retained_surface(width, height))
+        SourceDecision::Render(
+            key.filter(|key| self.admits_source(child.node_id, *key, plan.width, plan.height)),
+        )
+    }
+
+    fn render_planned_surface(
+        &mut self,
+        child: &ChildLayer,
+        plan: &SurfacePlan,
+        retain: Option<LayerRasterCacheKey>,
+        beneath: &Beneath<'_>,
+    ) -> Result<SurfaceRender, String> {
+        let texture = if retain.is_some() {
+            Rc::new(
+                self.renderer
+                    .acquire_retained_surface(plan.width, plan.height),
+            )
         } else {
-            self.acquire_transient("Layer Surface", width, height)
+            self.acquire_transient("Layer Surface", plan.width, plan.height)
         };
         let child_page = Page {
             texture: Rc::clone(&texture),
-            offset: [surface_rect.x, surface_rect.y],
-        };
-        let child_beneath = if reads_backdrop {
-            self.start_page(pass);
-            beneath_for_child(pass, child, z, grid_offset.filter(|_| translated))?
-        } else {
-            Beneath {
-                base: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                page: None,
-                described: Vec::new(),
-            }
+            offset: [plan.surface_rect.x, plan.surface_rect.y],
         };
         self.renderer.frame_stats.record_isolated_layer_render(
-            width,
-            height,
+            plan.width,
+            plan.height,
             child.node_id,
-            surface_logical,
+            plan.surface_logical,
         );
         self.render_layer(
             &child.content,
             child_page,
-            surface_scale,
+            plan.surface_scale,
             wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-            &child_beneath,
+            beneath,
         )?;
-        let retained = cache_key.filter(|key| self.retain_source(child.node_id, *key, &texture));
-        Ok(Some(SurfaceRender {
-            source: CompositeSource {
+        let retained = retain.filter(|key| self.retain_source(child.node_id, *key, &texture));
+        Ok(plan.surface(
+            CompositeSource {
                 texture,
                 content: retained.map_or(SourceContent::Transient, |key| {
                     SourceContent::retained(&key)
                 }),
             },
-            rect: surface_rect,
-            scale: surface_scale,
-            grid_dest,
-        }))
+            None,
+        ))
+    }
+
+    fn resolve_flat_children(&mut self, pass: &mut LayerPass<'_>) -> Result<(), String> {
+        let layer = pass.layer;
+        if !layer.children.iter().any(renders_flat) {
+            return Ok(());
+        }
+        let scale = pass.scale;
+        let target = pass.target_rect();
+        let mut surfaces: Vec<Option<Option<SurfaceRender>>> = std::iter::repeat_with(|| None)
+            .take(layer.children.len())
+            .collect();
+        let mut batch: Vec<BatchMember> = Vec::new();
+        for (index, child) in layer.children.iter().enumerate() {
+            if !renders_flat(child) {
+                continue;
+            }
+            let frame = ChildFrame::of(child, scale, target);
+            let Some(visible) = frame.visible else {
+                continue;
+            };
+            if composites_nothing(child) {
+                continue;
+            }
+            let shown = child_surface_bound(child, frame.snap, scale, target).unwrap_or(visible);
+            let Some(plan) = SurfacePlan::of(child, scale, frame.grid, shown) else {
+                surfaces[index] = Some(None);
+                continue;
+            };
+            surfaces[index] = match self.source_decision(child, &plan) {
+                SourceDecision::Cached(surface) => Some(Some(surface)),
+                SourceDecision::Render(retain) => {
+                    batch.push(BatchMember {
+                        index,
+                        plan,
+                        retain,
+                    });
+                    None
+                }
+            };
+        }
+        for (index, surface) in self.render_surface_batch(layer, batch)? {
+            surfaces[index] = Some(Some(surface));
+        }
+        pass.surfaces = surfaces;
+        Ok(())
+    }
+
+    fn render_surface_batch(
+        &mut self,
+        layer: &LayerScene,
+        mut batch: Vec<BatchMember>,
+    ) -> Result<Vec<(usize, SurfaceRender)>, String> {
+        batch.sort_by_key(|member| (member.plan.surface_scale.to_bits(), member.index));
+        let mut surfaces = Vec::with_capacity(batch.len());
+        for group in
+            batch.chunk_by(|a, b| a.plan.surface_scale.to_bits() == b.plan.surface_scale.to_bits())
+        {
+            if let [member] = group {
+                surfaces.push((member.index, self.render_member_alone(layer, member)?));
+                continue;
+            }
+            self.render_surface_atlas(layer, group, &mut surfaces)?;
+        }
+        Ok(surfaces)
+    }
+
+    fn render_member_alone(
+        &mut self,
+        layer: &LayerScene,
+        member: &BatchMember,
+    ) -> Result<SurfaceRender, String> {
+        let cleared = Beneath::over(wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT));
+        self.render_planned_surface(
+            &layer.children[member.index],
+            &member.plan,
+            member.retain,
+            &cleared,
+        )
+    }
+
+    fn render_surface_atlas(
+        &mut self,
+        layer: &LayerScene,
+        group: &[BatchMember],
+        surfaces: &mut Vec<(usize, SurfaceRender)>,
+    ) -> Result<(), String> {
+        let limit = self.renderer.max_texture_dim();
+        let mut packer = AtlasPacker::new(limit);
+        let placements: Vec<Option<AtlasPlacement>> = group
+            .iter()
+            .map(|member| packer.place(member.plan.width, member.plan.height))
+            .collect();
+        let sizes: Vec<(u32, u32)> = packer
+            .atlases
+            .iter()
+            .map(|atlas| atlas.padded_size(limit))
+            .collect();
+        let atlases: Vec<Rc<OffscreenTarget>> = sizes
+            .into_iter()
+            .map(|(width, height)| self.acquire_transient("Layer Surface Atlas", width, height))
+            .collect();
+        let ops: Vec<Cow<'_, [DrawOp]>> = group
+            .iter()
+            .map(|member| z_ordered_ops(&layer.children[member.index].content.scene.draw_ops))
+            .collect();
+        let scale = group
+            .first()
+            .map_or(1.0, |member| member.plan.surface_scale);
+        for (atlas_index, atlas) in atlases.iter().enumerate() {
+            let segments: Vec<PassSegment<'_>> = group
+                .iter()
+                .zip(&placements)
+                .zip(&ops)
+                .filter_map(|((member, placement), ops)| {
+                    let placement = placement.filter(|placement| placement.atlas == atlas_index)?;
+                    let plan = &member.plan;
+                    Some(PassSegment {
+                        scene: &layer.children[member.index].content.scene,
+                        ops,
+                        composites: &[],
+                        offset: [
+                            plan.surface_rect.x - placement.x as f32,
+                            plan.surface_rect.y - placement.y as f32,
+                        ],
+                        scissor: Some((placement.x, placement.y, plan.width, plan.height)),
+                        first_run_window: None,
+                    })
+                })
+                .collect();
+            let target = PassTarget {
+                view: &atlas.view,
+                width: atlas.width,
+                height: atlas.height,
+                offset: [0.0, 0.0],
+            };
+            self.renderer.encode_pass(
+                self.recorder,
+                target,
+                &segments,
+                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                scale,
+                "Layer Surface Atlas Pass",
+            )?;
+        }
+        for (member, placement) in group.iter().zip(placements) {
+            let child = &layer.children[member.index];
+            let surface = match placement {
+                Some(placement) => {
+                    self.renderer.frame_stats.record_isolated_layer_render(
+                        member.plan.width,
+                        member.plan.height,
+                        child.node_id,
+                        member.plan.surface_logical,
+                    );
+                    self.retain_from_atlas(child, member, &atlases[placement.atlas], placement)
+                }
+                None => self.render_member_alone(layer, member)?,
+            };
+            surfaces.push((member.index, surface));
+        }
+        Ok(())
+    }
+
+    fn retain_from_atlas(
+        &mut self,
+        child: &ChildLayer,
+        member: &BatchMember,
+        atlas: &Rc<OffscreenTarget>,
+        placement: AtlasPlacement,
+    ) -> SurfaceRender {
+        let plan = &member.plan;
+        let in_atlas = plan.surface(
+            CompositeSource {
+                texture: Rc::clone(atlas),
+                content: SourceContent::Transient,
+            },
+            Some(DeviceRect {
+                x: placement.x as f32,
+                y: placement.y as f32,
+                width: plan.width as f32,
+                height: plan.height as f32,
+            }),
+        );
+        let Some(key) = member.retain else {
+            return in_atlas;
+        };
+        let retained = Rc::new(
+            self.renderer
+                .acquire_retained_surface(plan.width, plan.height),
+        );
+        if !copy_compatible(atlas, &retained) {
+            return in_atlas;
+        }
+        self.recorder.copy_texture_region(TextureRegionCopy {
+            source: atlas,
+            source_origin: [placement.x, placement.y],
+            dest: &retained,
+            dest_origin: [0, 0],
+            size: [plan.width, plan.height],
+        });
+        if !self.retain_source(child.node_id, key, &retained) {
+            return in_atlas;
+        }
+        plan.surface(
+            CompositeSource {
+                texture: retained,
+                content: SourceContent::retained(&key),
+            },
+            None,
+        )
     }
 
     fn cached_source(
@@ -3692,6 +4035,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         self.renderer
             .frame_stats
             .record_layer_cache_hit(&key, width, height);
+        self.supersede_source(node_id, key);
         if let Some(gate) = self.source_gate(node_id) {
             gate.hit(key);
         }
@@ -3721,6 +4065,15 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         node_id.and_then(|node_id| self.renderer.source_gates.get_mut(&node_id))
     }
 
+    fn supersede_source(&mut self, node_id: Option<NodeId>, key: LayerRasterCacheKey) {
+        let Some(previous) = self.source_gate(node_id).map(|gate| gate.key) else {
+            return;
+        };
+        if previous.draws_other_content(key) {
+            self.renderer.layer_cache.remove(&previous);
+        }
+    }
+
     fn admits_source(
         &mut self,
         node_id: Option<NodeId>,
@@ -3728,6 +4081,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         width: u32,
         height: u32,
     ) -> bool {
+        self.supersede_source(node_id, key);
         let admits = match node_id {
             None => true,
             Some(node_id) => match self.renderer.source_gates.entry(node_id) {

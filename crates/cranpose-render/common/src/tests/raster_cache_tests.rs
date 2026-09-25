@@ -27,6 +27,31 @@ fn raster_scale_tells_apart_scales_a_thousandth_apart() {
 }
 
 #[test]
+fn keys_that_differ_only_in_scale_or_phase_draw_the_same_content() {
+    let key = |content: u64, width: f32, scale: f32, phase: f32| {
+        let pixels = (width * scale).ceil() as u32;
+        LayerRasterCacheKey::source_content(
+            Some(7),
+            content,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width,
+                height: 52.0,
+            },
+            (pixels, pixels),
+            RasterScale::from_scale(scale),
+            Point::new(phase, 0.0),
+        )
+    };
+    let base = key(1, 52.0, 3.0, 0.0);
+    assert!(!base.draws_other_content(key(1, 52.0, 3.0, 0.5)));
+    assert!(!base.draws_other_content(key(1, 52.0, 2.5, 0.0)));
+    assert!(base.draws_other_content(key(2, 52.0, 3.0, 0.0)));
+    assert!(base.draws_other_content(key(1, 48.0, 3.0, 0.0)));
+}
+
+#[test]
 fn source_content_keys_at_nearby_scales_are_distinct() {
     let bounds = Rect {
         x: 0.0,
