@@ -461,6 +461,11 @@ fn real_thread_runtime_smoke() {
         )],
         "a surfaceless runtime must refuse the packet, not drop it"
     );
+    assert_eq!(
+        renderer.present_thread_id().is_some(),
+        cfg!(any(target_os = "linux", target_os = "android")),
+        "a started present thread names itself where scheduler hints take thread ids"
+    );
 
     renderer.note_surface_reconfigured();
     assert!(
@@ -491,6 +496,7 @@ fn real_thread_runtime_smoke() {
         !renderer.needs_frame_warmup(),
         "after shutdown the renderer reads as uninitialized"
     );
+    assert_eq!(renderer.present_thread_id(), None);
 }
 
 /// Counts the presents it sees, and says when the runtime lets it go.
