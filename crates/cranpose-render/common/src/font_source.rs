@@ -27,7 +27,6 @@ use cranpose_ui::text::{FontFamily, FontFile, FontStyle, FontWeight};
 
 use crate::software_text_raster::{
     FontFamilyKey, SoftwareTextFont, SoftwareTextFontError, SoftwareTextFontSet,
-    default_software_text_font,
 };
 
 /// Directory Android keeps its system font files in.
@@ -73,7 +72,7 @@ pub enum FontLoadError {
 /// Parsed app-supplied faces, on their way to a [`SoftwareTextFontSet`].
 ///
 /// Register everything an app needs once at startup, then call
-/// [`SoftwareTextFontRegistry::into_font_set_or_default`]. Registration is
+/// [`SoftwareTextFontRegistry::into_font_set`]. Registration is
 /// where files are read and faces parsed; nothing after it touches the disk.
 #[derive(Clone, Default)]
 pub struct SoftwareTextFontRegistry {
@@ -344,20 +343,16 @@ impl SoftwareTextFontRegistry {
     }
 
     /// Finish, folding in the static byte slices from `AppLauncher::with_fonts`
-    /// as unregistered fallbacks and the embedded default face when nothing
-    /// else loaded.
+    /// as unregistered fallbacks.
     ///
     /// Registered faces come first, so when a request names no family and the
     /// scores tie, a face the app declared wins over one it merely handed over
-    /// as bytes.
-    pub fn into_font_set_or_default(mut self, fonts: &[&[u8]]) -> SoftwareTextFontSet {
+    /// as bytes. The set holds only what the app supplied; whether the
+    /// embedded face serves an app that supplied nothing is the launcher's
+    /// decision, made where the binary can leave the face out.
+    pub fn into_font_set(mut self, fonts: &[&[u8]]) -> SoftwareTextFontSet {
         for bytes in fonts {
             let _ = self.register_fallback_bytes((*bytes).to_vec());
-        }
-        if self.faces.is_empty()
-            && let Some(default_font) = default_software_text_font()
-        {
-            self.faces.push(default_font);
         }
         SoftwareTextFontSet::from_faces(self.faces)
     }

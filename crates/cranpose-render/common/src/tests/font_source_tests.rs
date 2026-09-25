@@ -60,7 +60,7 @@ fn register_family_picks_the_face_matching_the_requested_weight() {
 
     let mut registry = SoftwareTextFontRegistry::new();
     registry.register_family(&family).expect("family loads");
-    let fonts = registry.into_font_set_or_default(&[]);
+    let fonts = registry.into_font_set(&[]);
 
     let resolved_regular = fonts
         .resolve(&style_for(&family, FontWeight::NORMAL))
@@ -89,7 +89,7 @@ fn register_family_honours_a_declared_weight_over_the_face_header() {
 
     let mut registry = SoftwareTextFontRegistry::new();
     registry.register_family(&family).expect("family loads");
-    let fonts = registry.into_font_set_or_default(&[]);
+    let fonts = registry.into_font_set(&[]);
 
     let resolved = fonts
         .resolve(&style_for(&family, FontWeight::MEDIUM))
@@ -129,8 +129,7 @@ fn register_family_reports_a_corrupt_file_without_panicking() {
 }
 
 #[test]
-#[cfg(feature = "embedded-default-font")]
-fn a_family_that_failed_to_load_falls_back_to_the_default_face() {
+fn a_family_that_failed_to_load_falls_back_to_another_app_face() {
     let dir = ScratchDir::new("fallback");
     let family = FontFamily::file_backed(vec![FontFile::new(
         dir.path().join("Absent.ttf").to_string_lossy().into_owned(),
@@ -139,7 +138,7 @@ fn a_family_that_failed_to_load_falls_back_to_the_default_face() {
 
     let mut registry = SoftwareTextFontRegistry::new();
     let _ = registry.register_family(&family);
-    let fonts = registry.into_font_set_or_default(&[]);
+    let fonts = registry.into_font_set(&[REGULAR]);
 
     let resolved = fonts
         .resolve(&style_for(&family, FontWeight::NORMAL))
@@ -181,7 +180,7 @@ fn register_face_reader_accepts_a_font_that_is_not_a_file() {
         )
         .expect("streamed face loads");
 
-    let fonts = registry.into_font_set_or_default(&[]);
+    let fonts = registry.into_font_set(&[]);
     let resolved = fonts
         .resolve(&style_for(&family, FontWeight::NORMAL))
         .expect("streamed face");
@@ -200,18 +199,13 @@ fn register_face_reader_accepts_a_font_that_is_not_a_file() {
 }
 
 #[test]
-#[cfg(feature = "embedded-default-font")]
-fn an_empty_registry_falls_back_to_the_embedded_default_face() {
-    let fonts = SoftwareTextFontRegistry::new().into_font_set_or_default(&[]);
+fn an_empty_registry_leaves_the_embedded_face_to_the_launcher() {
+    let fonts = SoftwareTextFontRegistry::new().into_font_set(&[]);
     assert!(
-        fonts.default_font().is_some(),
-        "the embedded default font must still serve apps that supply nothing"
+        fonts.faces().is_empty(),
+        "a registry must not reference the embedded face, or no binary can drop it"
     );
-    assert!(
-        fonts
-            .resolve(&TextStyle::default())
-            .is_some_and(|font| font.registered_family().is_none())
-    );
+    assert!(fonts.resolve(&TextStyle::default()).is_none());
 }
 
 #[test]
@@ -283,7 +277,7 @@ fn register_system_family_binds_the_generic_alias_to_the_platform_face() {
             DEFAULT_SYSTEM_FAMILY_WEIGHTS,
         )
         .expect("system family loads");
-    let fonts = registry.into_font_set_or_default(&[]);
+    let fonts = registry.into_font_set(&[]);
 
     assert!(fonts.has_registered_family(&FontFamily::SansSerif));
     let bold = fonts
@@ -440,7 +434,7 @@ fn register_system_face_registers_the_declared_weight_not_the_requested_one() {
             FontStyle::Normal,
         )
         .expect("system face loads");
-    let fonts = registry.into_font_set_or_default(&[]);
+    let fonts = registry.into_font_set(&[]);
 
     let resolved = fonts
         .resolve(&style_for(&FontFamily::SansSerif, FontWeight(450)))
@@ -460,7 +454,7 @@ fn register_system_face_registers_the_declared_weight_not_the_requested_one() {
             FontStyle::Normal,
         )
         .expect("system face loads");
-    let declared = declared.into_font_set_or_default(&[]);
+    let declared = declared.into_font_set(&[]);
     assert_eq!(
         resolved.content_hash(),
         declared
@@ -506,7 +500,7 @@ fn an_app_registered_face_keeps_the_weight_it_declares() {
 
     let mut registry = SoftwareTextFontRegistry::new();
     registry.register_family(&family).expect("family loads");
-    let fonts = registry.into_font_set_or_default(&[]);
+    let fonts = registry.into_font_set(&[]);
 
     assert_eq!(
         fonts
@@ -534,7 +528,7 @@ fn loaded_typeface_families_register_their_single_file() {
 
     let mut registry = SoftwareTextFontRegistry::new();
     registry.register_family(&family).expect("typeface loads");
-    let fonts = registry.into_font_set_or_default(&[]);
+    let fonts = registry.into_font_set(&[]);
 
     assert!(fonts.has_registered_family(&family));
     assert!(

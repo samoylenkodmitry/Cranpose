@@ -45,15 +45,81 @@ fn a_launcher_records_the_application_id_it_is_given() {
 #[test]
 fn a_launcher_records_the_android_system_font_choice() {
     assert!(
-        !AppLauncher::new().settings.android_use_system_fonts,
+        !AppLauncher::new().settings.android_system_fonts,
         "system fonts must be opt-in: loading them costs a scan of /system/fonts"
     );
     assert!(
         AppLauncher::new()
-            .with_android_use_system_fonts(true)
+            .with_android_system_fonts()
             .settings
-            .android_use_system_fonts
+            .android_system_fonts
     );
+}
+
+#[test]
+#[cfg(feature = "embedded-default-font")]
+fn a_launcher_given_no_fonts_draws_in_the_embedded_face() {
+    let fonts = AppLauncher::new()
+        .with_title("no fonts")
+        .into_settings()
+        .resolve_font_set();
+    let embedded = default_software_text_font().expect("the embedded face parses");
+    assert_eq!(fonts.faces().len(), 1);
+    assert_eq!(fonts.faces()[0].content_hash(), embedded.content_hash());
+}
+
+/// Accepts only a launcher whose type says the app supplied its fonts.
+fn supplied(launcher: AppLauncher<AppFonts>) -> SoftwareTextFontSet {
+    launcher
+        .with_title("app fonts")
+        .into_settings()
+        .resolve_font_set()
+}
+
+#[test]
+fn every_font_method_leaves_the_embedded_face_out() {
+    static NO_FONTS: &[&[u8]] = &[];
+    let family = FontFamily::named("Nothing Registered");
+    let unreadable = FontFamily::file_backed(vec![cranpose_ui::text::FontFile::new(
+        "/nonexistent/cranpose/Absent.ttf",
+    )])
+    .expect("a family needs at least one file");
+    let launchers = [
+        AppLauncher::new().with_fonts(NO_FONTS),
+        AppLauncher::new().with_font_family(&unreadable),
+        AppLauncher::new().with_font_face_bytes(
+            &family,
+            FontWeight::NORMAL,
+            FontStyle::Normal,
+            b"not a font".to_vec(),
+        ),
+        AppLauncher::new().with_system_font_family("/nonexistent/cranpose", &family),
+        AppLauncher::new().with_fonts_from(|_registry| Ok(())),
+    ];
+    for launcher in launchers {
+        let fonts = supplied(launcher);
+        assert!(
+            fonts.faces().is_empty(),
+            "an app that supplied fonts must never be served the embedded face"
+        );
+    }
+    if cfg!(not(target_os = "android")) {
+        assert!(
+            supplied(AppLauncher::new().with_android_system_fonts())
+                .faces()
+                .is_empty()
+        );
+    }
+}
+
+#[test]
+fn supplied_fonts_are_what_the_launcher_serves() {
+    static APP_FONTS: &[&[u8]] = &[include_bytes!(
+        "../../../cranpose-render/common/assets/NotoSansBold.ttf"
+    )];
+    let fonts = supplied(AppLauncher::new().with_fonts(APP_FONTS));
+    assert_eq!(fonts.faces().len(), 1);
+    assert_eq!(fonts.faces()[0].weight(), FontWeight::BOLD);
 }
 
 #[test]

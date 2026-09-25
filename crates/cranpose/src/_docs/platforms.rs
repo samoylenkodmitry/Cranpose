@@ -31,9 +31,10 @@
 //! Vulkan driver; Android enables it on its own. `renderer-pixels` is the
 //! software renderer.
 //!
-//! The default feature set embeds a fallback font of about 1.3 MiB. An
-//! application that ships its own fonts through `AppLauncher::with_fonts`
-//! should build with `default-features = false` to drop it.
+//! The default feature set embeds a font of about 1.3 MiB that text draws in
+//! when the application supplies none. An application that supplies fonts
+//! through any `AppLauncher` font method leaves it out of its binary without
+//! touching the feature.
 //!
 //! `CRANPOSE_PRESENT_MODE` selects the swapchain present mode at runtime
 //! (`fifo`, `mailbox`, `immediate`, `auto_vsync`, `auto_no_vsync`), which is

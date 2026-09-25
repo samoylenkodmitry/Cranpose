@@ -49,7 +49,7 @@ fn font_set(family: &FontFamily) -> SoftwareTextFontSet {
     registry
         .register_family(family)
         .expect("the demo's variable font must load");
-    registry.into_font_set_or_default(&[])
+    registry.into_font_set(&[])
 }
 
 fn ink_area(fonts: &SoftwareTextFontSet, text: &str, style: &TextStyle) -> usize {
@@ -144,7 +144,7 @@ fn system_font_set(dir: &SystemFontDir, weight: FontWeight) -> SoftwareTextFontS
     registry
         .register_system_face(&dir.0, &FontFamily::SansSerif, weight, FontStyle::Normal)
         .expect("the system face must load");
-    registry.into_font_set_or_default(&[])
+    registry.into_font_set(&[])
 }
 
 #[test]

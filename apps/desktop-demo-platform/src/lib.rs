@@ -2,7 +2,7 @@
     all(feature = "android", target_os = "android", feature = "renderer-wgpu"),
     all(feature = "web", target_arch = "wasm32", feature = "renderer-wgpu")
 ))]
-use cranpose::AppLauncher;
+use cranpose::{AppFonts, AppLauncher};
 
 cranpose::app_capabilities!();
 
@@ -10,7 +10,7 @@ cranpose::app_capabilities!();
     all(feature = "android", target_os = "android", feature = "renderer-wgpu"),
     all(feature = "web", target_arch = "wasm32", feature = "renderer-wgpu")
 ))]
-fn create_app() -> AppLauncher {
+fn create_app() -> AppLauncher<AppFonts> {
     let dev_controls = cranpose::launch_args().string("test_screen").is_none();
     AppLauncher::new()
         .with_capabilities(&CAPABILITIES)
