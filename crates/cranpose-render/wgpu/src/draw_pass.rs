@@ -12,9 +12,9 @@ use crate::{
     geometry::SegmentTransform,
     offscreen::OffscreenTarget,
     render::{
-        GpuRenderer, StoreRunBatch, ViewportUniformParams, image_draw_bounds, run_draw_bounds,
-        run_draw_is_visible_in_rect, segment_scene_rect, supported_blend_mode, text_draw_bounds,
-        text_draw_is_visible_in_rect,
+        GpuRenderer, StoreRunBatch, TargetRect, ViewportUniformParams, image_draw_bounds,
+        run_draw_bounds, run_draw_is_visible_in_rect, scissor_rect_for_rect, segment_scene_rect,
+        supported_blend_mode, text_draw_bounds, text_draw_is_visible_in_rect,
     },
     run_store::{RunDrawCall, run_has_shapes},
     scene::{CompositorScene, DrawOp, DrawOpKind, RunDraw, TextDraw},
@@ -262,6 +262,8 @@ impl GpuRenderer {
             root_scale,
             load_op,
             batches: Vec::new(),
+            chunk: None,
+            pending_glyphs: PendingGlyphs::default(),
         };
         let prepared = segments
             .iter()
@@ -383,6 +385,7 @@ impl GpuRenderer {
                         *uniform_slot,
                         &glyph_cmds[cmds.clone()],
                         *scissor,
+                        target_size,
                     )?;
                 }
                 Batch::Composite(prepared) => {
@@ -605,6 +608,71 @@ struct PassScratch {
     glyph_cmds: Vec<crate::render::GlyphDrawCmd>,
 }
 
+/// Most glyph draws held back at once; past this they draw, so a long
+/// stretch of shapes checks each against a bounded list.
+const MAX_PENDING_GLYPHS: usize = 256;
+
+fn target_rects_overlap(a: TargetRect, b: TargetRect) -> bool {
+    a.0 < b.0 + b.2 && b.0 < a.0 + a.2 && a.1 < b.1 + b.3 && b.1 < a.1 + a.3
+}
+
+fn target_rect_union(a: TargetRect, b: TargetRect) -> TargetRect {
+    let left = a.0.min(b.0);
+    let top = a.1.min(b.1);
+    let right = (a.0 + a.2).max(b.0 + b.2);
+    let bottom = (a.1 + a.3).max(b.1 + b.3);
+    (left, top, right - left, bottom - top)
+}
+
+/// Glyph draws held back so the shapes after them keep filling one arena
+/// chunk: the text of a card no longer splits the backgrounds around it
+/// into draws of their own. A shape that overlaps a held draw, or any draw
+/// of another kind, draws them first, so nothing is reordered past a pixel
+/// it shares.
+#[derive(Default)]
+struct PendingGlyphs {
+    cmds: Option<std::ops::Range<usize>>,
+    bounds: Vec<TargetRect>,
+    union: Option<TargetRect>,
+}
+
+impl PendingGlyphs {
+    /// Holds the glyph commands at `cmds`, which touch `bounds`.
+    fn hold(&mut self, cmds: std::ops::Range<usize>, bounds: impl IntoIterator<Item = TargetRect>) {
+        self.cmds = Some(match self.cmds.take() {
+            Some(held) => held.start..cmds.end,
+            None => cmds,
+        });
+        for rect in bounds {
+            self.union = Some(
+                self.union
+                    .map_or(rect, |union| target_rect_union(union, rect)),
+            );
+            self.bounds.push(rect);
+        }
+    }
+
+    /// Whether a draw touching `rect` would cover a held glyph draw.
+    fn overlaps(&self, rect: TargetRect) -> bool {
+        self.union
+            .is_some_and(|union| target_rects_overlap(union, rect))
+            && self
+                .bounds
+                .iter()
+                .any(|held| target_rects_overlap(*held, rect))
+    }
+
+    fn full(&self) -> bool {
+        self.bounds.len() >= MAX_PENDING_GLYPHS
+    }
+
+    fn take(&mut self) -> Option<std::ops::Range<usize>> {
+        self.bounds.clear();
+        self.union = None;
+        self.cmds.take()
+    }
+}
+
 /// Turns the segments of one pass into batches, one item run at a time.
 struct PassPrep<'a, 's, C> {
     recorder: &'a mut C,
@@ -613,6 +681,10 @@ struct PassPrep<'a, 's, C> {
     root_scale: f32,
     load_op: wgpu::LoadOp<wgpu::Color>,
     batches: Vec<Batch<'s>>,
+    /// The arena chunk shapes are being appended to, kept open across held
+    /// glyph draws.
+    chunk: Option<usize>,
+    pending_glyphs: PendingGlyphs,
 }
 
 impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
@@ -659,15 +731,76 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
                     continue;
                 }
                 Item::Image(_) => {
+                    self.flush(renderer, &run);
                     self.image_run(renderer, &mut items, &run, scratch)?;
                     continue;
                 }
                 Item::Text(text) => self.text_item(renderer, text, &run, scratch)?,
-                Item::Composite(composite) => self.composite_item(renderer, composite, &run)?,
+                Item::Composite(composite) => {
+                    self.flush(renderer, &run);
+                    self.composite_item(renderer, composite, &run)?;
+                }
             }
             items.next();
         }
+        self.flush(renderer, &run);
         Ok(())
+    }
+
+    /// Closes the open arena chunk into a batch.
+    fn close_chunk(&mut self, renderer: &mut GpuRenderer, run: &SegmentRun<'s, '_>) {
+        let Some(open) = self.chunk.take() else {
+            return;
+        };
+        let draws = renderer.close_arena(open);
+        if !draws.is_empty() {
+            self.batches.push(Batch::Arena {
+                chunk: open,
+                uniform_slot: run.uniform_slot,
+                draws,
+                scissor: run.segment.scissor,
+            });
+        }
+    }
+
+    /// Draws everything held: the open chunk's shapes, then the held glyphs
+    /// above them.
+    fn flush(&mut self, renderer: &mut GpuRenderer, run: &SegmentRun<'s, '_>) {
+        self.close_chunk(renderer, run);
+        let Some(cmds) = self.pending_glyphs.take() else {
+            return;
+        };
+        match self.batches.last_mut() {
+            Some(Batch::Glyphs {
+                cmds: last,
+                uniform_slot: slot,
+                ..
+            }) if last.end == cmds.start && *slot == run.uniform_slot => {
+                last.end = cmds.end;
+            }
+            _ => self.batches.push(Batch::Glyphs {
+                cmds,
+                uniform_slot: run.uniform_slot,
+                scissor: run.segment.scissor,
+            }),
+        }
+    }
+
+    /// The target pixels a shape run can touch, a pixel wider on each side
+    /// for its antialiased edge.
+    fn run_target_bounds(&self, draw: &RunDraw, run: &SegmentRun<'s, '_>) -> Option<TargetRect> {
+        let bounds = run_draw_bounds(draw, self.root_scale)?;
+        let pixel = 1.0 / self.root_scale;
+        scissor_rect_for_rect(
+            Rect {
+                x: bounds.x - pixel,
+                y: bounds.y - pixel,
+                width: bounds.width + 2.0 * pixel,
+                height: bounds.height + 2.0 * pixel,
+            },
+            self.root_scale,
+            run.viewport,
+        )
     }
 
     fn run_items(
@@ -676,28 +809,18 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
         items: &mut Peekable<impl Iterator<Item = Item<'s>>>,
         run: &SegmentRun<'s, '_>,
     ) {
-        let mut chunk: Option<usize> = None;
-        let close = |renderer: &mut GpuRenderer,
-                     chunk: &mut Option<usize>,
-                     batches: &mut Vec<Batch<'s>>| {
-            if let Some(open) = chunk.take() {
-                let draws = renderer.close_arena(open);
-                if !draws.is_empty() {
-                    batches.push(Batch::Arena {
-                        chunk: open,
-                        uniform_slot: run.uniform_slot,
-                        draws,
-                        scissor: run.segment.scissor,
-                    });
-                }
-            }
-        };
         while let Some(Item::Run(draw, window)) =
             items.next_if(|item| matches!(item, Item::Run(..)))
         {
+            if self
+                .run_target_bounds(draw, run)
+                .is_some_and(|bounds| self.pending_glyphs.overlaps(bounds))
+            {
+                self.flush(renderer, run);
+            }
             let window = window.unwrap_or(0..u32::MAX);
             if renderer.run_is_stored(draw) {
-                close(renderer, &mut chunk, &mut self.batches);
+                self.close_chunk(renderer, run);
                 let batch = renderer.prepare_store_run(
                     self.recorder,
                     draw,
@@ -713,10 +836,13 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
                 let total = draw.record_count().min(window.end);
                 let mut from = window.start;
                 while from < total {
-                    if chunk.is_some_and(|open| !renderer.arena_accepts(open, draw)) {
-                        close(renderer, &mut chunk, &mut self.batches);
+                    if self
+                        .chunk
+                        .is_some_and(|open| !renderer.arena_accepts(open, draw))
+                    {
+                        self.close_chunk(renderer, run);
                     }
-                    let open = *chunk.get_or_insert_with(|| renderer.open_arena());
+                    let open = *self.chunk.get_or_insert_with(|| renderer.open_arena());
                     let taken = renderer.append_arena_run(
                         open,
                         draw,
@@ -725,14 +851,13 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
                         !run.viewport.transform.is_identity(),
                     );
                     if taken == 0 {
-                        close(renderer, &mut chunk, &mut self.batches);
+                        self.close_chunk(renderer, run);
                         continue;
                     }
                     from += taken;
                 }
             }
         }
-        close(renderer, &mut chunk, &mut self.batches);
     }
 
     fn image_run(
@@ -792,24 +917,21 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
             &mut scratch.glyph_cmds,
         )?;
         if drew_glyphs {
-            if glyph_start < scratch.glyph_cmds.len() {
-                match self.batches.last_mut() {
-                    Some(Batch::Glyphs {
-                        cmds,
-                        uniform_slot: slot,
-                        ..
-                    }) if cmds.end == glyph_start && *slot == run.uniform_slot => {
-                        cmds.end = scratch.glyph_cmds.len();
-                    }
-                    _ => self.batches.push(Batch::Glyphs {
-                        cmds: glyph_start..scratch.glyph_cmds.len(),
-                        uniform_slot: run.uniform_slot,
-                        scissor: run.segment.scissor,
-                    }),
+            let glyph_end = scratch.glyph_cmds.len();
+            if glyph_start < glyph_end {
+                if self.pending_glyphs.full() {
+                    self.flush(renderer, run);
                 }
+                self.pending_glyphs.hold(
+                    glyph_start..glyph_end,
+                    scratch.glyph_cmds[glyph_start..glyph_end]
+                        .iter()
+                        .map(crate::render::GlyphDrawCmd::bounds),
+                );
             }
             return Ok(());
         }
+        self.flush(renderer, run);
         let cmd_start = scratch.image_cmds.len();
         renderer.append_text_image_draw_cmds(
             std::iter::once(text),

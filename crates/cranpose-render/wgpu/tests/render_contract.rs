@@ -380,7 +380,7 @@ fn cached_visible_text_glyph_runs_promote_large_runs_to_retained_buffers() {
         .find("let Ok(quad_run) = self.prepare_text_glyph_quads(")
         .expect("visible miss glyph preparation branch exists");
     let miss_branch_end = render_source[miss_branch_start..]
-        .find("let index_count = image_indices.len() as u32 - index_start;")
+        .find("let index_end = image_indices.len() as u32;")
         .map(|offset| miss_branch_start + offset)
         .expect("visible miss glyph preparation branch boundary exists");
     assert!(
