@@ -25,9 +25,9 @@
 //! when a frame runs late, which the display reports as a vsync no new frame
 //! reached. Missed vsyncs move the loop up a level: a few of them from one
 //! frame queued, which Compose's own renderer holds through far more, and
-//! the first from two. After a while the loop tries the level below again,
-//! gives a try at two frames up at its first missed vsync, and waits four
-//! times as long before the next try when that happens soon.
+//! many from two, which only a loop that cannot keep up misses. After a
+//! while the loop tries the level below again, and waits four times as long
+//! before the next try when that try fails soon.
 //!
 //! Until the display has reported a frame, and on a swapchain that never
 //! does, frames start as soon as the renderer takes them.
@@ -66,6 +66,15 @@ const MISS_WINDOW: usize = 64;
 /// Cranpose's grid at two frames queued and 27 ms behind the display, where
 /// this many gave 19.5 ms at 2.1% of vsyncs missed.
 const SHALLOW_MISSES_TO_RISE: usize = 6;
+
+/// Missed vsyncs in [`MISS_WINDOW`] at two frames queued that show a loop
+/// cannot keep up with the display, and runs unpaced to overlap its frames.
+/// A loop that can keep up misses a few: the benchmark's feed, composing a
+/// row of cards now and then, misses about 2% of vsyncs there. One that
+/// cannot misses far more: its particles missed 40%, and ran at 68 fps
+/// paced against 117 unpaced. Rising at three misses, or at one while
+/// retrying, sent the feed unpaced for up to a minute at a time.
+const BUFFERED_MISSES_TO_RISE: usize = 8;
 
 /// How long the loop first stays a level up before trying the level below,
 /// and the longest that grows to when the level below keeps failing soon.
@@ -136,12 +145,12 @@ impl Level {
     /// Missed vsyncs within the window that move the loop up from here. One
     /// frame queued has no frame to spare, so every late frame shows as a
     /// missed vsync; it holds through [`SHALLOW_MISSES_TO_RISE`] of them.
-    /// Two frames queued rise at the third, or at the first while the loop
-    /// is trying the level again after it failed.
-    fn misses_to_rise(self, retrying: bool) -> Option<usize> {
+    /// Two frames queued leaves pacing only for a loop that cannot keep up,
+    /// at [`BUFFERED_MISSES_TO_RISE`].
+    fn misses_to_rise(self) -> Option<usize> {
         match self {
             Self::Shallow => Some(SHALLOW_MISSES_TO_RISE),
-            Self::Buffered => Some(if retrying { 1 } else { 3 }),
+            Self::Buffered => Some(BUFFERED_MISSES_TO_RISE),
             Self::Unpaced => None,
         }
     }
@@ -234,7 +243,7 @@ impl FramePacer {
         let missed = self.misses.iter().filter(|missed| **missed).count();
         if stage
             .level
-            .misses_to_rise(self.retrying(stage, shown_ns))
+            .misses_to_rise()
             .is_some_and(|threshold| missed >= threshold)
         {
             self.rise(stage, shown_ns);
