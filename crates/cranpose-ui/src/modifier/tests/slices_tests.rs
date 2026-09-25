@@ -1,5 +1,7 @@
 use std::cell::RefCell;
 
+use cranpose_ui_graphics::{Brush, Color, DrawPrimitive, Rect, Size};
+
 use super::*;
 
 #[test]
@@ -54,4 +56,124 @@ fn local_pointer_dispatch_calls_click_handlers_only_for_an_unconsumed_press() {
     consumed.consume();
     slices.dispatch_pointer_event(consumed);
     assert_eq!(*clicks.borrow(), [local]);
+}
+
+fn recorded(command: &DrawCommand, size: Size) -> Vec<DrawPrimitive> {
+    use cranpose_ui_graphics::DrawScope as _;
+    let mut scope = crate::draw::command_draw_scope(size);
+    match command {
+        DrawCommand::Behind(draw) | DrawCommand::WithContent(draw) | DrawCommand::Overlay(draw) => {
+            draw(&mut scope);
+        }
+    }
+    scope.into_primitives()
+}
+
+fn drawn_rects(modifier: Modifier) -> Vec<Rect> {
+    let size = Size {
+        width: 20.0,
+        height: 10.0,
+    };
+    collect_slices_from_modifier(&modifier)
+        .draw_commands()
+        .iter()
+        .flat_map(|command| recorded(command, size))
+        .filter_map(|primitive| match primitive {
+            DrawPrimitive::Rect { rect, .. } | DrawPrimitive::RoundRect { rect, .. } => Some(rect),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_background_after_padding_fills_only_the_padded_rect() {
+    let rects = drawn_rects(
+        Modifier::empty()
+            .padding(1.0)
+            .background(Color::WHITE)
+            .rounded_corners(3.0),
+    );
+    assert_eq!(
+        rects,
+        [Rect {
+            x: 1.0,
+            y: 1.0,
+            width: 18.0,
+            height: 8.0,
+        }]
+    );
+}
+
+#[test]
+fn a_background_before_padding_fills_the_node() {
+    let rects = drawn_rects(Modifier::empty().background(Color::WHITE).padding(1.0));
+    assert_eq!(
+        rects,
+        [Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 20.0,
+            height: 10.0,
+        }]
+    );
+}
+
+#[test]
+fn a_draw_after_padding_sees_and_fills_the_padded_rect() {
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let sizes = Rc::clone(&seen);
+    let rects = drawn_rects(
+        Modifier::empty()
+            .padding_symmetric(2.0, 1.0)
+            .padding(1.0)
+            .draw_behind(move |scope| {
+                sizes.borrow_mut().push(scope.size());
+                scope.draw_rect(Brush::solid(Color::WHITE));
+            }),
+    );
+    assert_eq!(
+        *seen.borrow(),
+        [Size {
+            width: 14.0,
+            height: 6.0,
+        }]
+    );
+    assert_eq!(
+        rects,
+        [Rect {
+            x: 3.0,
+            y: 2.0,
+            width: 14.0,
+            height: 6.0,
+        }]
+    );
+}
+
+#[test]
+fn a_draw_with_content_after_padding_keeps_its_content_marker() {
+    let modifier = Modifier::empty().padding(2.0).draw_with_content(|scope| {
+        scope.draw_content();
+        scope.draw_rect(Brush::solid(Color::WHITE));
+    });
+    let slices = collect_slices_from_modifier(&modifier);
+    let primitives = recorded(
+        &slices.draw_commands()[0],
+        Size {
+            width: 20.0,
+            height: 10.0,
+        },
+    );
+    assert!(matches!(primitives[0], DrawPrimitive::Content));
+    assert!(matches!(
+        primitives[1],
+        DrawPrimitive::Rect {
+            rect: Rect {
+                x: 2.0,
+                y: 2.0,
+                width: 16.0,
+                height: 6.0,
+            },
+            ..
+        }
+    ));
 }
