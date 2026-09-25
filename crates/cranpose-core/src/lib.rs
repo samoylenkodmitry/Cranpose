@@ -3185,6 +3185,41 @@ impl MemoryApplier {
         self.is_attached_to(resolved, root).then_some(resolved)
     }
 
+    /// [`Self::scene_node_attached_to`] for each of `nodes`, in order, with
+    /// every ancestor looked up at most once: a batch costs the distinct
+    /// ancestors of its nodes, not each node's depth.
+    pub fn scene_nodes_attached_to(
+        &mut self,
+        nodes: impl IntoIterator<Item = NodeId>,
+        root: NodeId,
+    ) -> Vec<Option<NodeId>> {
+        let mut attached: HashMap<NodeId, bool> = HashMap::default();
+        attached.insert(root, true);
+        let mut path = Vec::new();
+        nodes
+            .into_iter()
+            .map(|node_id| {
+                let resolved = self.first_non_virtual_ancestor(node_id)?;
+                let mut current = resolved;
+                path.clear();
+                let answer = loop {
+                    if let Some(known) = attached.get(&current) {
+                        break *known;
+                    }
+                    path.push(current);
+                    match self.get_mut(current).ok().and_then(|node| node.parent()) {
+                        Some(parent) if path.len() < 100_000 => current = parent,
+                        _ => break false,
+                    }
+                };
+                for visited in path.drain(..) {
+                    attached.insert(visited, answer);
+                }
+                answer.then_some(resolved)
+            })
+            .collect()
+    }
+
     pub fn take_structural_change_parents_attached_to(&mut self, root: NodeId) -> Vec<NodeId> {
         let recorded = std::mem::take(&mut self.structural_change_parents);
         let mut attached = Vec::with_capacity(recorded.len());

@@ -68,10 +68,13 @@ Knobs:
 inside it. It reads:
 
 - **Presented frames:** `dumpsys SurfaceFlinger --latency <app layer>`, polled
-  every sample and merged. SurfaceFlinger keeps 128 frames on Android 10 and
-  64 on Android 17, half a second at 120 Hz, so pass `--interval 0.25` on a
-  120 Hz display. The report counts polls that fail to overlap the previous
-  one (`latency_poll_gaps`). Each poll starts with the display's refresh
+  every `--interval` by a loop of its own and merged. SurfaceFlinger keeps 128
+  frames on Android 10 and 64 on Android 17, half a second at 120 Hz, so pass
+  `--interval 0.25` on a 120 Hz display. The clock and thermal samples run
+  beside the poller: in the same loop, a slow `dumpsys thermalservice` made
+  every fourth poll miss frames, and the busier app lost more of them. The
+  report counts polls that fail to overlap the previous one
+  (`latency_poll_gaps`); it should be 0. Each poll starts with the display's refresh
   period, which sets `vsync_ms` for the jank and missed-vsync counts.
   Per-layer timestats are not available on this Huawei build. Present times
   are in SurfaceFlinger's monotonic clock, which is calibrated against

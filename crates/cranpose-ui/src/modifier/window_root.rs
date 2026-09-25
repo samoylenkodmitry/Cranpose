@@ -12,6 +12,7 @@
 use std::{
     any::Any,
     cell::{Cell, RefCell},
+    collections::HashMap,
     fmt,
     hash::{Hash, Hasher},
     rc::Rc,
@@ -127,15 +128,43 @@ pub fn is_window_root(applier: &mut MemoryApplier, node: NodeId) -> bool {
 pub fn nearest_window_root(applier: &mut MemoryApplier, node: NodeId) -> Option<NodeId> {
     let mut current = node;
     for _ in 0..100_000 {
-        let is_root = applier
-            .with_node::<LayoutNode, _>(current, |layout_node| layout_node.is_window_root())
-            .unwrap_or(false);
-        if is_root {
+        if is_window_root(applier, current) {
             return Some(current);
         }
         current = applier.get_mut(current).ok()?.parent()?;
     }
     None
+}
+
+/// [`nearest_window_root`] for each of `nodes`, in order, with every
+/// ancestor looked up at most once.
+pub fn nearest_window_roots(applier: &mut MemoryApplier, nodes: &[NodeId]) -> Vec<Option<NodeId>> {
+    let mut owners: HashMap<NodeId, Option<NodeId>> = HashMap::new();
+    let mut path = Vec::new();
+    nodes
+        .iter()
+        .map(|&node| {
+            let mut current = node;
+            path.clear();
+            let owner = loop {
+                if let Some(known) = owners.get(&current) {
+                    break *known;
+                }
+                path.push(current);
+                if is_window_root(applier, current) {
+                    break Some(current);
+                }
+                match applier.get_mut(current).ok().and_then(|node| node.parent()) {
+                    Some(parent) if path.len() < 100_000 => current = parent,
+                    _ => break None,
+                }
+            };
+            for visited in path.drain(..) {
+                owners.insert(visited, owner);
+            }
+            owner
+        })
+        .collect()
 }
 
 /// Node that lays its content out into the window's size. That size is the
