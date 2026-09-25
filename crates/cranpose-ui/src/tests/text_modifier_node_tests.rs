@@ -417,3 +417,14 @@ fn semantics_uses_source_text_for_scaled_overflow() {
         Some("Save Cranpose WebP")
     );
 }
+
+#[test]
+fn a_text_node_never_makes_its_subtree_modal_or_hidden() {
+    use cranpose_foundation::SemanticsNode as _;
+    let node = TextModifierNode::new(
+        Rc::new(AnnotatedString::from("Label")),
+        TextStyle::default(),
+        TextLayoutOptions::default(),
+    );
+    assert_eq!(node.reach(), cranpose_foundation::SemanticsReach::default());
+}

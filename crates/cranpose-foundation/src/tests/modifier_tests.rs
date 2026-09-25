@@ -1898,3 +1898,64 @@ fn a_scroll_range_carries_its_content_padding() {
         (2.0, 5.0, true)
     );
 }
+
+#[derive(Debug)]
+struct ModalDeclaringNode {
+    state: NodeState,
+    hidden: bool,
+}
+
+impl DelegatableNode for ModalDeclaringNode {
+    fn node_state(&self) -> &NodeState {
+        &self.state
+    }
+}
+
+impl ModifierNode for ModalDeclaringNode {}
+
+impl SemanticsNode for ModalDeclaringNode {
+    fn merge_semantics(&self, config: &mut SemanticsConfiguration) {
+        config.is_modal = true;
+        config.hidden = self.hidden;
+        config.content_description = Some("dialog".to_string());
+    }
+}
+
+#[test]
+fn a_semantics_nodes_reach_reads_the_flags_it_merges() {
+    let modal = ModalDeclaringNode {
+        state: NodeState::new(),
+        hidden: false,
+    };
+    assert_eq!(
+        modal.reach(),
+        SemanticsReach {
+            is_modal: true,
+            hidden: false,
+        }
+    );
+    assert_eq!(
+        DelegatedSemanticsNode::new("label").reach(),
+        SemanticsReach::default()
+    );
+}
+
+#[test]
+fn semantics_reaches_union_flag_by_flag() {
+    let modal = SemanticsReach {
+        is_modal: true,
+        hidden: false,
+    };
+    let hidden = SemanticsReach {
+        is_modal: false,
+        hidden: true,
+    };
+    assert_eq!(
+        modal.union(hidden),
+        SemanticsReach {
+            is_modal: true,
+            hidden: true,
+        }
+    );
+    assert_eq!(SemanticsReach::default().union(modal), modal);
+}

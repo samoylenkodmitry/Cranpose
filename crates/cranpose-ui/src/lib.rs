@@ -123,7 +123,8 @@ pub use layout::{
         Alignment, Arrangement, HorizontalAlignment, LinearArrangement, Measurable, Placeable,
         VerticalAlignment,
     },
-    measure_layout, measure_layout_with_options, tree_needs_layout, tree_needs_semantics,
+    measure_layout, measure_layout_with_options, top_modal_from_applier, tree_needs_layout,
+    tree_needs_semantics,
 };
 pub use layout_direction::{
     LayoutDirection, ProvideLayoutDirection, layout_direction, local_layout_direction,
@@ -379,6 +380,10 @@ mod lazy_list_viewport_tests;
 #[cfg(test)]
 #[path = "tests/swipe_to_dismiss_lazy_tests.rs"]
 mod swipe_to_dismiss_lazy_tests;
+
+#[cfg(test)]
+#[path = "tests/top_modal_tests.rs"]
+mod top_modal_tests;
 
 #[cfg(test)]
 #[path = "tests/swipe_to_dismiss_render_tests.rs"]

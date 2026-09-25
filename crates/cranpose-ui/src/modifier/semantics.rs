@@ -311,6 +311,30 @@ pub fn collect_semantics_from_chain(chain: &ModifierNodeChain) -> Option<Semanti
     if merged { Some(config) } else { None }
 }
 
+fn reach_of_node(node: &dyn ModifierNode) -> cranpose_foundation::SemanticsReach {
+    let mut reach = node
+        .as_semantics_node()
+        .map(cranpose_foundation::SemanticsNode::reach)
+        .unwrap_or_default();
+    node.for_each_delegate(&mut |delegate| {
+        reach = reach.union(reach_of_node(delegate));
+    });
+    reach
+}
+
+/// Whether a reconciled modifier chain makes its node modal or hidden,
+/// without collecting the rest of its semantics.
+pub fn semantics_reach_of_chain(chain: &ModifierNodeChain) -> cranpose_foundation::SemanticsReach {
+    let mut reach = cranpose_foundation::SemanticsReach::default();
+    if !chain.has_capability(NodeCapabilities::SEMANTICS) {
+        return reach;
+    }
+    chain.for_each_node_with_capability(NodeCapabilities::SEMANTICS, |_ref, node| {
+        reach = reach.union(reach_of_node(node));
+    });
+    reach
+}
+
 /// Collects semantics by instantiating a temporary modifier chain from a [`Modifier`].
 pub fn collect_semantics_from_modifier(modifier: &Modifier) -> Option<SemanticsConfiguration> {
     let mut handle = ModifierChainHandle::new();

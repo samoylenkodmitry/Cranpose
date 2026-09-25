@@ -304,6 +304,10 @@ impl SemanticsNode for TextModifierNode {
     fn merge_semantics(&self, config: &mut SemanticsConfiguration) {
         config.content_description = Some(self.text().to_string());
     }
+
+    fn reach(&self) -> cranpose_foundation::SemanticsReach {
+        cranpose_foundation::SemanticsReach::default()
+    }
 }
 
 /// Element that creates and updates TextModifierNode instances.

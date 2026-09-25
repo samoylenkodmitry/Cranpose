@@ -18,9 +18,7 @@ where
             return;
         }
         for surface in &mut self.surfaces {
-            let modal = surface
-                .semantics_tree_for_input(&mut self.app)
-                .and_then(|tree| tree.root().is_modal.then_some(tree.root().node_id));
+            let modal = surface.top_modal(&mut self.app);
             if modal == surface.modal_focus.last().map(|entry| entry.0) {
                 continue;
             }
