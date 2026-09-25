@@ -210,13 +210,13 @@ pub(crate) struct TextFieldLayoutHandle {
 
 impl TextFieldLayoutHandle {
     pub(crate) fn measured_layout(&self, style: &TextStyle) -> crate::text::PreparedTextLayout {
-        crate::text::prepare_text_layout_for_node(
+        std::rc::Rc::unwrap_or_clone(crate::text::prepare_text_layout_for_node(
             self.node_id.get(),
             &crate::text::AnnotatedString::from(self.state.text()),
             style,
             crate::text::TextLayoutOptions::default(),
             self.wrap_width.get(),
-        )
+        ))
     }
 }
 

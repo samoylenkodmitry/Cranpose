@@ -34,7 +34,7 @@ struct TextPreparedLayoutCacheEntry {
     widths: crate::text::measure::PreparedWidths,
     text_generation: u64,
     font_scale_fingerprint: u32,
-    layout: crate::text::PreparedTextLayout,
+    layout: Rc<crate::text::PreparedTextLayout>,
 }
 
 #[derive(Debug)]
@@ -100,7 +100,10 @@ impl TextPreparedLayoutOwner {
         }
     }
 
-    fn prepare(&self, max_width: Option<f32>) -> crate::text::PreparedTextLayout {
+    /// The layout at `max_width`, shared with the cache: measuring reads only
+    /// its size, and copying the whole layout on every measure cost a grid of
+    /// wrapping labels more than wrapping them.
+    fn prepare(&self, max_width: Option<f32>) -> Rc<crate::text::PreparedTextLayout> {
         let normalized_max_width = max_width.filter(|width| width.is_finite() && *width > 0.0);
         let text_generation = crate::text::measure::current_text_generation();
         let font_scale_fingerprint = crate::current_font_scale_curve().fingerprint();
@@ -112,9 +115,8 @@ impl TextPreparedLayoutOwner {
                     && entry.text_generation == text_generation
                     && entry.font_scale_fingerprint == font_scale_fingerprint
             }) {
-                let entry = cache.remove(index);
-                let prepared = entry.layout.clone();
-                cache.insert(0, entry);
+                let prepared = Rc::clone(&cache[index].layout);
+                cache[..=index].rotate_right(1);
                 return prepared;
             }
         }
@@ -139,7 +141,7 @@ impl TextPreparedLayoutOwner {
                 ),
                 text_generation,
                 font_scale_fingerprint,
-                layout: prepared.clone(),
+                layout: Rc::clone(&prepared),
             },
         );
         cache.truncate(PREPARED_LAYOUT_CACHE_CAPACITY);
@@ -162,7 +164,7 @@ impl TextPreparedLayoutOwner {
     fn measured_layout(&self) -> Option<crate::text::PreparedTextLayout> {
         self.measured_max_width
             .get()
-            .map(|max_width| self.prepare(max_width))
+            .map(|max_width| (*self.prepare(max_width)).clone())
     }
 }
 
