@@ -789,7 +789,7 @@ fn note_upload_write() {
     UPLOAD_WRITE_CALLS.with(|calls| calls.set(calls.get().saturating_add(1)));
 }
 
-fn take_upload_write_calls() -> u32 {
+pub(crate) fn take_upload_write_calls() -> u32 {
     UPLOAD_WRITE_CALLS.with(|calls| calls.replace(0))
 }
 

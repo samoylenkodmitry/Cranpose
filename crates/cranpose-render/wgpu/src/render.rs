@@ -40,7 +40,7 @@ use crate::{
     frame_graph::{
         BufferUpload, FrameCommandRecorder, FrameCommandStats, FrameTextureDescriptor,
         FrameUploadAllocators, UniformUpload, UploadAllocatorId, UploadAllocatorSpec,
-        WgpuFrameGraph, WgpuFrameGraphExecutor, write_buffer,
+        WgpuFrameGraph, WgpuFrameGraphExecutor,
     },
     frame_packet::{CancelReason, FramePacket, PresentOutcome, RenderReturns},
     geometry::{
@@ -49,6 +49,7 @@ use crate::{
         scaled_quad, snap_delta_for_anchor, translate_quad,
         translation_stable_anchored_device_pixel_bounds,
     },
+    glyph_run_arena::{GlyphRunArena, GlyphRunSpan},
     gpu_stats::{self, gpu_stats_enabled},
     layer_cache::LayerCache,
     lazy_resource::LazyGpuResource,
@@ -261,9 +262,7 @@ struct CachedTextGlyphRun {
 }
 
 struct CachedGpuTextGlyphRun {
-    vertex_buffer: wgpu::Buffer,
-    index_buffer: wgpu::Buffer,
-    index_count: u32,
+    span: GlyphRunSpan,
     atlas_generation: u64,
 }
 
@@ -580,10 +579,9 @@ fn append_cached_text_glyph_quad(
     image_vertices: &mut Vec<Vertex>,
     image_indices: &mut Vec<u32>,
 ) -> bool {
-    if quad.width == 0 || quad.height == 0 || quad.color.3 <= 0.0 {
+    let Some(vertices) = cached_text_glyph_quad_vertices(source_raster_rect, quad) else {
         return false;
-    }
-
+    };
     let base_vertex = image_vertices.len() as u32;
     image_indices.extend_from_slice(&[
         base_vertex,
@@ -593,40 +591,37 @@ fn append_cached_text_glyph_quad(
         base_vertex + 1,
         base_vertex + 3,
     ]);
+    image_vertices.extend_from_slice(&vertices);
+    true
+}
 
+/// The corners of `quad` at `source_raster_rect`'s origin: top-left,
+/// top-right, bottom-left, bottom-right. `None` for a quad that draws
+/// nothing.
+fn cached_text_glyph_quad_vertices(
+    source_raster_rect: Rect,
+    quad: &CachedTextGlyphQuad,
+) -> Option<[Vertex; 4]> {
+    if quad.width == 0 || quad.height == 0 || quad.color.3 <= 0.0 {
+        return None;
+    }
     let x0 = source_raster_rect.x + quad.x as f32;
     let y0 = source_raster_rect.y + quad.y as f32;
     let x1 = x0 + quad.width as f32;
     let y1 = y0 + quad.height as f32;
     let color = [quad.color.0, quad.color.1, quad.color.2, quad.color.3];
-
-    image_vertices.extend_from_slice(&[
-        Vertex {
-            position: [x0, y0],
-            color,
-            uv: [quad.uv.min[0], quad.uv.min[1]],
-            uv_bounds: quad.uv.sample_bounds,
-        },
-        Vertex {
-            position: [x1, y0],
-            color,
-            uv: [quad.uv.max[0], quad.uv.min[1]],
-            uv_bounds: quad.uv.sample_bounds,
-        },
-        Vertex {
-            position: [x0, y1],
-            color,
-            uv: [quad.uv.min[0], quad.uv.max[1]],
-            uv_bounds: quad.uv.sample_bounds,
-        },
-        Vertex {
-            position: [x1, y1],
-            color,
-            uv: [quad.uv.max[0], quad.uv.max[1]],
-            uv_bounds: quad.uv.sample_bounds,
-        },
-    ]);
-    true
+    let corner = |position: [f32; 2], uv: [f32; 2]| Vertex {
+        position,
+        color,
+        uv,
+        uv_bounds: quad.uv.sample_bounds,
+    };
+    Some([
+        corner([x0, y0], [quad.uv.min[0], quad.uv.min[1]]),
+        corner([x1, y0], [quad.uv.max[0], quad.uv.min[1]]),
+        corner([x0, y1], [quad.uv.min[0], quad.uv.max[1]]),
+        corner([x1, y1], [quad.uv.max[0], quad.uv.max[1]]),
+    ])
 }
 
 fn cached_text_glyph_quad_logical_rect(
@@ -1816,6 +1811,7 @@ pub struct GpuRenderer {
     text_glyph_atlas: TextGlyphAtlas,
     text_glyph_run_cache: BoundedLruCache<TextGlyphRunCacheKey, CachedTextGlyphRun>,
     text_glyph_gpu_run_cache: BoundedLruCache<TextGlyphRunCacheKey, Rc<CachedGpuTextGlyphRun>>,
+    text_glyph_run_arena: GlyphRunArena,
     text_glyph_mask_cache: SoftwareGlyphRasterCache,
     text_line_index_cache: TextLineIndexCache,
     pub(crate) scratch_image_vertices: Vec<Vertex>,
@@ -2045,6 +2041,7 @@ impl GpuRenderer {
             text_glyph_gpu_run_cache: BoundedLruCache::with_capacity_at_least_one(
                 MAX_TEXT_GLYPH_GPU_RUN_CACHE_ITEMS,
             ),
+            text_glyph_run_arena: GlyphRunArena::default(),
             text_glyph_mask_cache: SoftwareGlyphRasterCache::with_capacity_at_least_one(
                 MAX_TEXT_GLYPH_MASK_CACHE_ITEMS,
             ),
@@ -2492,6 +2489,7 @@ impl GpuRenderer {
         self.shape_pipelines.begin_frame();
         self.viewport_uniforms.begin_frame();
         self.run_store.begin_frame(gpu_stats_enabled());
+        self.text_glyph_run_arena.begin_frame();
 
         let text_cache_len = packet.text_cache_len;
         let frame_root = self.frame_root(output_mode, output_view, output_texture, (width, height));
@@ -2891,10 +2889,17 @@ impl GpuRenderer {
             );
             recorder.record_pass();
         }
+        self.flush_frame_uploads();
+        Ok(())
+    }
+
+    /// Writes what the frame's draws read from buffers the renderer keeps:
+    /// viewport uniforms, arena run tables and new retained glyph runs.
+    pub(crate) fn flush_frame_uploads(&mut self) {
         let mut upload = self.viewport_uniforms.flush(&self.queue);
         upload += self.run_store.flush(&self.queue);
+        upload += self.text_glyph_run_arena.flush(&self.queue);
         self.frame_stats.record_command_stats(upload);
-        Ok(())
     }
     /// Claims this frame's next viewport uniform slot for `params`.
     pub(crate) fn claim_uniform_slot(&mut self, params: ViewportUniformParams) -> usize {
@@ -3545,6 +3550,8 @@ impl GpuRenderer {
         pass.set_pipeline(self.glyph_atlas_pipeline());
         let mut bound_atlas = None;
         let mut shared_bound = false;
+        let mut retained_indices_bound = false;
+        let mut bound_run_vertices: Option<&wgpu::Buffer> = None;
         for cmd in cmds {
             let Some((x, y, width, height)) = bounded_scissor(cmd.scissor, bound) else {
                 continue;
@@ -3566,6 +3573,8 @@ impl GpuRenderer {
                         pass.set_index_buffer(slot.indices.slice(), wgpu::IndexFormat::Uint32);
                         pass.set_vertex_buffer(0, slot.vertices.slice());
                         shared_bound = true;
+                        retained_indices_bound = false;
+                        bound_run_vertices = None;
                     }
                     pass.draw_indexed(*index_start..(*index_start + *index_count), 0, 0..1);
                 }
@@ -3575,9 +3584,20 @@ impl GpuRenderer {
                 } => {
                     shared_bound = false;
                     self.viewport_uniforms.bind(pass, *retained_slot)?;
-                    pass.set_index_buffer(run.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-                    pass.set_vertex_buffer(0, run.vertex_buffer.slice(..));
-                    pass.draw_indexed(0..run.index_count, 0, 0..1);
+                    if !retained_indices_bound {
+                        let indices =
+                            self.text_glyph_run_arena.index_buffer().ok_or_else(|| {
+                                "retained glyph draw without quad indices".to_string()
+                            })?;
+                        pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
+                        retained_indices_bound = true;
+                    }
+                    let vertices = run.span.vertex_buffer();
+                    if bound_run_vertices != Some(vertices) {
+                        pass.set_vertex_buffer(0, vertices.slice(..));
+                        bound_run_vertices = Some(vertices);
+                    }
+                    pass.draw_indexed(run.span.indices(), 0, 0..1);
                 }
             }
         }
@@ -3925,46 +3945,24 @@ impl GpuRenderer {
             return true;
         }
 
-        let mut vertices = Vec::with_capacity(quads.len().saturating_mul(4));
-        let mut indices = Vec::with_capacity(quads.len().saturating_mul(6));
         let origin = Rect {
             x: 0.0,
             y: 0.0,
             width: 0.0,
             height: 0.0,
         };
-        for quad in quads {
-            append_cached_text_glyph_quad(origin, quad, &mut vertices, &mut indices);
-        }
-        if indices.is_empty() {
+        let Some(span) = self.text_glyph_run_arena.insert(
+            &self.device,
+            quads
+                .iter()
+                .filter_map(|quad| cached_text_glyph_quad_vertices(origin, quad)),
+        ) else {
             return false;
-        }
-
-        let vertex_bytes = bytemuck::cast_slice(&vertices);
-        let index_bytes = bytemuck::cast_slice(&indices);
-        let vertex_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Retained Text Glyph Vertex Buffer"),
-            size: vertex_bytes.len() as u64,
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let index_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Retained Text Glyph Index Buffer"),
-            size: index_bytes.len() as u64,
-            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let mut upload = write_buffer(&self.queue, &vertex_buffer, 0, vertex_bytes);
-        upload.upload_bytes +=
-            write_buffer(&self.queue, &index_buffer, 0, index_bytes).upload_bytes;
-        self.frame_stats.record_command_stats(upload);
-
+        };
         self.text_glyph_gpu_run_cache.put(
             cache_key,
             Rc::new(CachedGpuTextGlyphRun {
-                vertex_buffer,
-                index_buffer,
-                index_count: indices.len() as u32,
+                span,
                 atlas_generation,
             }),
         );
