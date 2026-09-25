@@ -2123,22 +2123,9 @@ impl Composer {
     }
 
     #[inline(never)]
-    fn set_recompose_callback_boxed(&self, mut callback: Box<dyn FnMut(&Composer)>) {
+    fn set_recompose_callback_boxed(&self, callback: Box<dyn FnMut(&Composer)>) {
         if let Some(scope) = self.current_recompose_scope() {
-            let observer = self.observer();
-            let scope_weak = scope.downgrade();
-            scope.set_recompose(Box::new(move |composer: &Composer| {
-                if let Some(inner) = scope_weak.upgrade() {
-                    let scope_instance = RecomposeScope { inner };
-                    observer.observe_reads(
-                        scope_instance,
-                        super::RecomposeScope::invalidate,
-                        || {
-                            callback(composer);
-                        },
-                    );
-                }
-            }));
+            scope.set_observed_recompose(self.observer(), callback);
         }
     }
 
