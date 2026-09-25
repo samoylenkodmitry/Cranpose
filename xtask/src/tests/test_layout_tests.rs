@@ -1,6 +1,9 @@
 use std::{fs, path::Path};
 
-use super::{inline_test_modules, unlinked_integration_tests, unlisted_robot_runners};
+use super::{
+    inline_test_modules, undeclared_integration_roots, unlinked_integration_tests,
+    unlisted_robot_runners,
+};
 
 fn write(path: &Path, contents: &str) {
     if let Some(parent) = path.parent() {
@@ -84,6 +87,78 @@ fn a_crate_that_discovers_its_own_tests_is_not_checked() {
     let unlinked = unlinked_integration_tests(root.path()).expect("scan the fixture");
 
     assert!(unlinked.is_empty(), "{unlinked:?}");
+}
+
+fn workspace_with_test_targets(targets: &str) -> tempfile::TempDir {
+    let root = workspace_with_crate(Some(false));
+    write(
+        &root.path().join("crates/probe/Cargo.toml"),
+        &format!("[package]\nname = \"probe\"\nautotests = false\n\n{targets}"),
+    );
+    root
+}
+
+#[test]
+fn the_real_workspace_declares_every_integration_root() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .canonicalize()
+        .expect("resolve the workspace root");
+
+    let undeclared = undeclared_integration_roots(&root).expect("scan the workspace");
+
+    assert!(
+        undeclared.is_empty(),
+        "these integration roots are compiled by nothing; declare each as a [[test]] target \
+         of its crate's Cargo.toml:\n{undeclared:#?}"
+    );
+}
+
+#[test]
+fn an_integration_root_without_its_test_target_is_reported() {
+    for targets in [
+        "",
+        "[[test]]\nname = \"allocations\"\npath = \"tests/allocations/main.rs\"\n",
+        "[[test]]\nname = \"integration\"\npath = \"tests/other.rs\"\n",
+    ] {
+        let root = workspace_with_test_targets(targets);
+
+        let undeclared = undeclared_integration_roots(root.path()).expect("scan the fixture");
+
+        assert_eq!(
+            undeclared,
+            vec![root.path().join("crates/probe/tests/integration.rs")],
+            "with targets:\n{targets}"
+        );
+    }
+}
+
+#[test]
+fn a_declared_integration_root_passes() {
+    for targets in [
+        "[[test]]\nname = \"integration\"\npath = \"tests/integration.rs\"\n",
+        "[[test]]\nname = \"integration\"\n",
+        "[[test]]\nname = \"allocations\"\npath = \"tests/allocations/main.rs\"\n\n\
+         [[test]]\nname = \"everything\"\npath = \"tests/integration.rs\"\n",
+    ] {
+        let root = workspace_with_test_targets(targets);
+
+        let undeclared = undeclared_integration_roots(root.path()).expect("scan the fixture");
+
+        assert!(
+            undeclared.is_empty(),
+            "with targets:\n{targets}\n{undeclared:?}"
+        );
+    }
+}
+
+#[test]
+fn a_crate_that_discovers_its_own_tests_needs_no_integration_target() {
+    let root = workspace_with_crate(None);
+
+    let undeclared = undeclared_integration_roots(root.path()).expect("scan the fixture");
+
+    assert!(undeclared.is_empty(), "{undeclared:?}");
 }
 
 fn workspace_with_robot_runners(table: &str) -> tempfile::TempDir {

@@ -155,3 +155,6 @@ name = "idle_burn_probe"
 path = "examples/idle_burn_probe.rs"
 required-features = ["desktop", "robot-app"]
 
+[[test]]
+name = "integration"
+path = "tests/integration.rs"

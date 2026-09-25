@@ -6,7 +6,7 @@ use cranpose_render_common::{
     font_source::SoftwareTextFontRegistry,
     software_text_raster::{
         SoftwareGlyphAtlasRunGlyph, SoftwareGlyphRasterCache, SoftwareTextFontSet,
-        SoftwareTextMeasurer, collect_solid_text_atlas_run,
+        SoftwareTextMeasurer, collect_solid_text_atlas_run, default_software_text_font,
     },
 };
 use cranpose_ui::text::{
@@ -43,9 +43,14 @@ fn app_family(dir: &Path) -> FontFamily {
 }
 
 fn font_set(family: &FontFamily) -> SoftwareTextFontSet {
+    font_set_beside(family, &[])
+}
+
+/// `family` registered beside faces the app handed over as bytes.
+fn font_set_beside(family: &FontFamily, bytes: &[&[u8]]) -> SoftwareTextFontSet {
     let mut registry = SoftwareTextFontRegistry::new();
     let _ = registry.register_family(family);
-    registry.into_font_set_or_default(&[])
+    registry.into_font_set(bytes)
 }
 
 fn style_for(family: &FontFamily, weight: FontWeight) -> TextStyle {
@@ -234,13 +239,13 @@ fn the_two_weights_of_one_family_keep_separate_glyph_cache_entries() {
 }
 
 #[test]
-fn a_family_whose_files_are_missing_still_draws_in_the_fallback_face() {
+fn a_family_whose_files_are_missing_still_draws_in_another_app_face() {
     let dir = font_dir("missing");
     let family = FontFamily::file_backed(vec![FontFile::new(
         dir.join("Absent.ttf").to_string_lossy().into_owned(),
     )])
     .expect("a family needs at least one file");
-    let fonts = font_set(&family);
+    let fonts = font_set_beside(&family, &[REGULAR]);
     let style = style_for(&family, FontWeight::NORMAL);
 
     let rect = measured_block(&fonts, "Fallback", &style);
@@ -256,7 +261,7 @@ fn a_family_whose_files_are_missing_still_draws_in_the_fallback_face() {
 }
 
 #[test]
-fn a_corrupt_font_file_leaves_the_family_on_the_fallback_face() {
+fn a_corrupt_font_file_leaves_the_family_on_another_app_face() {
     let dir = font_dir("corrupt");
     let family = FontFamily::file_backed(vec![FontFile::new(write_font(
         &dir,
@@ -264,7 +269,7 @@ fn a_corrupt_font_file_leaves_the_family_on_the_fallback_face() {
         b"this is not a font",
     ))])
     .expect("a family needs at least one file");
-    let fonts = font_set(&family);
+    let fonts = font_set_beside(&family, &[REGULAR]);
     let style = style_for(&family, FontWeight::NORMAL);
 
     let rect = measured_block(&fonts, "Corrupt", &style);
@@ -293,8 +298,10 @@ fn characters_the_app_face_cannot_draw_measure_and_collect_without_panicking() {
 }
 
 #[test]
-fn an_app_that_supplies_nothing_keeps_the_embedded_fallback() {
-    let fonts = SoftwareTextFontRegistry::new().into_font_set_or_default(&[]);
+fn the_embedded_face_measures_and_draws_on_its_own() {
+    let fonts = SoftwareTextFontSet::from_font(
+        default_software_text_font().expect("the embedded face parses"),
+    );
     let style = TextStyle {
         span_style: SpanStyle {
             font_size: TextUnit::Sp(FONT_SIZE),

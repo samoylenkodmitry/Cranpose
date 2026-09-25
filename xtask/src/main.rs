@@ -385,7 +385,9 @@ fn print_test_layout_usage() {
          \n\
          Fails if a crate that links its integration tests into one binary\n\
          (`autotests = false`) has a `tests/*.rs` file that is not a module of\n\
-         its `tests/integration.rs`: cargo would compile and run nothing for it."
+         its `tests/integration.rs`, or a `tests/integration.rs` that is not a\n\
+         `[[test]]` target of its Cargo.toml: cargo would compile and run\n\
+         nothing for it."
     );
 }
 

@@ -13,7 +13,7 @@ pub mod test_screens;
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
-use cranpose::AppLauncher;
+use cranpose::{AppFonts, AppLauncher};
 
 #[cfg(all(
     feature = "desktop",
@@ -31,7 +31,7 @@ use crate::fonts::DEMO_FONTS;
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
-fn create_app() -> AppLauncher {
+fn create_app() -> AppLauncher<AppFonts> {
     let dev_controls = cranpose::launch_args().string("test_screen").is_none();
     AppLauncher::new()
         .with_title("Cranpose Demo")

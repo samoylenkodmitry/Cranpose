@@ -140,7 +140,8 @@ pub use android_host_window::{
 ))]
 pub use app_launcher::LaunchError;
 pub use app_launcher::{
-    AndroidGpuBackend, AndroidOverlayWindowOptions, AppLauncher, AppSettings, CustomCursorSize,
+    AndroidGpuBackend, AndroidOverlayWindowOptions, AppFonts, AppLauncher, AppSettings,
+    CustomCursorSize, DefaultFont, LauncherFonts,
 };
 /// Font registration vocabulary named by [`AppLauncher`]'s font methods:
 /// the platform font directory [`AppLauncher::with_system_font_family`] wants,
@@ -393,8 +394,9 @@ pub mod prelude {
         AndroidHostWindowState, rememberAndroidHostWindowState,
     };
     pub use crate::{
-        AndroidOverlayWindowOptions, AppLauncher, AppSettings, WindowConfig, WindowModifierExt,
-        WindowResizeDirection, WindowState, rememberWindowState, rememberWindowStateAt,
+        AndroidOverlayWindowOptions, AppFonts, AppLauncher, AppSettings, WindowConfig,
+        WindowModifierExt, WindowResizeDirection, WindowState, rememberWindowState,
+        rememberWindowStateAt,
     };
 }
 
