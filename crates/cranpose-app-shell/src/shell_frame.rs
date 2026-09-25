@@ -441,12 +441,13 @@ where
         has_scoped_repasses: bool,
         scoped_layout_nodes: Vec<NodeId>,
     ) {
+        let moved = cranpose_ui::take_geometry_scene_nodes();
+        self.app.content_moved |= !moved.is_empty();
         if global {
             for surface in &mut self.surfaces {
                 surface.scoped_layout_scene_nodes.clear();
                 surface.scene_dirty = true;
             }
-            let _ = cranpose_ui::take_geometry_scene_nodes();
             return;
         }
         let mut nodes = if has_scoped_repasses {
@@ -454,7 +455,7 @@ where
         } else {
             Vec::new()
         };
-        nodes.extend(cranpose_ui::take_geometry_scene_nodes());
+        nodes.extend(moved);
         let buckets = partition_nodes_by_surface(&mut self.app, &self.surfaces, nodes);
         let mut any_named = false;
         for (surface, bucket) in self.surfaces.iter_mut().zip(buckets) {
@@ -649,6 +650,7 @@ where
         if prune_observations {
             cranpose_ui::prune_draw_observations_to_nodes(&retained_visual_nodes);
         }
+        result.content_moved = std::mem::take(&mut self.app.content_moved);
         result
     }
 }
@@ -697,7 +699,7 @@ where
         return SurfaceFrame {
             result: FrameUpdateResult {
                 visual_changed: dirt.render_only_dirty,
-                structure_changed: false,
+                ..FrameUpdateResult::default()
             },
             rebuilt: false,
         };
@@ -713,6 +715,7 @@ where
         result: FrameUpdateResult {
             visual_changed: true,
             structure_changed,
+            ..FrameUpdateResult::default()
         },
         rebuilt: true,
     }

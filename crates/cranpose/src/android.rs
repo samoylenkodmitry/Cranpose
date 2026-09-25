@@ -821,7 +821,7 @@ fn render_once(
     };
     match current_surface_texture(surface, "android") {
         SurfaceFrame::Ready(frame) => {
-            timings.after_acquire_ns = telemetry.now();
+            timings.after_acquire_ns = crate::android_frame_telemetry::monotonic_nanos();
             let view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
                 format: Some(crate::surface_format::display_surface_view_format(
                     resources.config.format,
@@ -840,7 +840,7 @@ fn render_once(
 
             timings.after_render_ns = telemetry.now();
             shell.renderer().present(frame);
-            timings.after_present_ns = telemetry.now();
+            timings.after_present_ns = crate::android_frame_telemetry::monotonic_nanos();
             telemetry.record_frame(timings);
             resources.surface_dirty = false;
             false
@@ -868,11 +868,12 @@ fn drain_present_returns_into_loop(
     gpu_resources: &mut Option<GpuResources>,
     telemetry: &mut crate::android_frame_telemetry::AndroidFrameTelemetry,
     pending_present_timings: &mut Vec<(u64, crate::android_frame_telemetry::FrameTimings)>,
-) -> Option<(web_time::Instant, web_time::Instant)> {
+) -> Option<PresentedFrame> {
     let mut presented = false;
     let mut refused = false;
     let mut frame_started_at_ns = 0i64;
     let mut presented_at_ns = 0i64;
+    let mut work_ns = None;
     shell
         .renderer()
         .drain_present_returns_with(&mut |frame_id, outcome, timings| {
@@ -890,6 +891,7 @@ fn drain_present_returns_into_loop(
                         frame_timings.after_render_ns = timings.after_render_ns;
                         frame_timings.after_present_ns = timings.after_present_ns;
                         telemetry.record_frame(&frame_timings);
+                        work_ns = frame_timings.work_ns();
                     }
                 }
                 PresentOutcome::Cancelled(_) | PresentOutcome::NotRun => {
@@ -925,8 +927,20 @@ fn drain_present_returns_into_loop(
         } else {
             frame_finished_at
         };
-        (frame_started_at, frame_finished_at)
+        PresentedFrame {
+            started_at: frame_started_at,
+            finished_at: frame_finished_at,
+            work_ns,
+        }
     })
+}
+
+/// A frame that reached the display: when the loop started it, when its
+/// present returned, and its work for the scheduler's performance hints.
+struct PresentedFrame {
+    started_at: web_time::Instant,
+    finished_at: web_time::Instant,
+    work_ns: Option<i64>,
 }
 
 fn record_presented_frame(
@@ -1705,9 +1719,8 @@ pub fn run(
 
     let android_frame_driver = AndroidFrameDriver::new(app.create_waker());
     let mut frame_rate_voter = crate::android_frame_rate::FrameRateVoter::default();
-    let mut perf_hint: Option<Option<crate::android_perf_hint::PerfHintSession>> = None;
-    const FRAME_RATE_BOOST_HOLD_OFF: Duration = Duration::from_secs(3);
-    let mut last_interaction: Option<Instant> = None;
+    let mut frame_work_hints = crate::android_perf_hint::FrameWorkHints::default();
+    let mut frame_rate_boost = crate::android_frame_rate::FrameRateBoost::default();
     crate::android_vsync::install_waker(android_frame_driver.vsync_waker());
     crate::android_accessibility::set_waker(app.create_waker());
     let host_window_registry = Rc::new(android_host_window::AndroidHostWindowRegistry::default());
@@ -1770,7 +1783,7 @@ pub fn run(
             ..Default::default()
         };
 
-        let drained_present_interval = match app_shell.as_mut() {
+        let drained_presented = match app_shell.as_mut() {
             Some(shell) => drain_present_returns_into_loop(
                 shell,
                 &mut gpu_resources,
@@ -1820,17 +1833,16 @@ pub fn run(
         if let Some(shell) = app_shell.as_ref() {
             let preference = shell.frame_rate_preference();
             let producing_frames = android_frame_driver.frame_requested();
-            let interacting =
-                last_interaction.is_some_and(|at| at.elapsed() < FRAME_RATE_BOOST_HOLD_OFF);
+            let boosted = frame_rate_boost.active();
             let panel_max = match preference {
-                cranpose_app_shell::FrameRatePreference::Auto if interacting => {
+                cranpose_app_shell::FrameRatePreference::Auto if boosted => {
                     crate::android_frame_rate::panel_max_refresh_rate(&app)
                 }
                 _ => None,
             };
             frame_rate_voter.apply(
                 &app,
-                preference.desired_rate_hz(producing_frames, interacting, panel_max),
+                preference.desired_rate_hz(producing_frames, boosted, panel_max),
             );
         }
 
@@ -2306,48 +2318,48 @@ pub fn run(
             &mut app_shell,
         );
 
-        if !pending_inputs.is_empty() {
-            last_interaction = Some(Instant::now());
-            if let Some(shell) = &mut app_shell {
-                for input in pending_inputs.drain(..) {
-                    match input {
-                        PendingInput::PointerDown(x, y, time_ms, source) => {
-                            shell.set_pointer_source(source);
-                            let event_time = shell.realtime_pointer_event_time(time_ms);
-                            shell.set_cursor_at_event_time(x, y, event_time);
-                            shell.pointer_pressed_at_event_time(event_time);
-                        }
-                        PendingInput::PointerUp(x, y, time_ms, source) => {
-                            shell.set_pointer_source(source);
-                            let event_time = shell.realtime_pointer_event_time(time_ms);
-                            shell.pointer_released_at_position_event_time(x, y, event_time);
-                        }
-                        PendingInput::PointerMove(x, y, time_ms, source) => {
-                            shell.set_pointer_source(source);
-                            let event_time = shell.realtime_pointer_event_time(time_ms);
-                            shell.set_cursor_at_event_time(x, y, event_time);
-                        }
-                        PendingInput::PointerCancel => {
-                            shell.cancel_gesture();
-                        }
-                        PendingInput::Key(event) => {
-                            shell.on_key_event(&event);
-                        }
-                        PendingInput::SecondaryPointerDown(id, x, y, time_ms) => {
-                            shell.set_pointer_source(PointerSource::Touch);
-                            shell.secondary_pointer_pressed(id, x, y, time_ms);
-                        }
-                        PendingInput::SecondaryPointerUp(id, x, y, time_ms) => {
-                            shell.set_pointer_source(PointerSource::Touch);
-                            shell.secondary_pointer_released(id, x, y, time_ms);
-                        }
-                        PendingInput::SecondaryPointerMove(id, x, y, time_ms) => {
-                            shell.set_pointer_source(PointerSource::Touch);
-                            shell.secondary_pointer_moved(id, x, y, time_ms);
-                        }
-                        PendingInput::RotaryScroll(detents, uptime_ms) => {
-                            shell.rotary_scrolled_by_detents(detents, uptime_ms);
-                        }
+        frame_rate_boost.note(!pending_inputs.is_empty());
+        if !pending_inputs.is_empty()
+            && let Some(shell) = &mut app_shell
+        {
+            for input in pending_inputs.drain(..) {
+                match input {
+                    PendingInput::PointerDown(x, y, time_ms, source) => {
+                        shell.set_pointer_source(source);
+                        let event_time = shell.realtime_pointer_event_time(time_ms);
+                        shell.set_cursor_at_event_time(x, y, event_time);
+                        shell.pointer_pressed_at_event_time(event_time);
+                    }
+                    PendingInput::PointerUp(x, y, time_ms, source) => {
+                        shell.set_pointer_source(source);
+                        let event_time = shell.realtime_pointer_event_time(time_ms);
+                        shell.pointer_released_at_position_event_time(x, y, event_time);
+                    }
+                    PendingInput::PointerMove(x, y, time_ms, source) => {
+                        shell.set_pointer_source(source);
+                        let event_time = shell.realtime_pointer_event_time(time_ms);
+                        shell.set_cursor_at_event_time(x, y, event_time);
+                    }
+                    PendingInput::PointerCancel => {
+                        shell.cancel_gesture();
+                    }
+                    PendingInput::Key(event) => {
+                        shell.on_key_event(&event);
+                    }
+                    PendingInput::SecondaryPointerDown(id, x, y, time_ms) => {
+                        shell.set_pointer_source(PointerSource::Touch);
+                        shell.secondary_pointer_pressed(id, x, y, time_ms);
+                    }
+                    PendingInput::SecondaryPointerUp(id, x, y, time_ms) => {
+                        shell.set_pointer_source(PointerSource::Touch);
+                        shell.secondary_pointer_released(id, x, y, time_ms);
+                    }
+                    PendingInput::SecondaryPointerMove(id, x, y, time_ms) => {
+                        shell.set_pointer_source(PointerSource::Touch);
+                        shell.secondary_pointer_moved(id, x, y, time_ms);
+                    }
+                    PendingInput::RotaryScroll(detents, uptime_ms) => {
+                        shell.rotary_scrolled_by_detents(detents, uptime_ms);
                     }
                 }
             }
@@ -2405,8 +2417,7 @@ pub fn run(
             };
         }
 
-        let mut adpf_work_started: Option<web_time::Instant> = None;
-        let mut adpf_sync_presented = false;
+        let mut frame_started_at: Option<web_time::Instant> = None;
         frame_waits_for_vsync = false;
         if let (Some(resources), Some(shell)) = (&mut gpu_resources, &mut app_shell) {
             let frame_due = resources.has_surface()
@@ -2420,11 +2431,13 @@ pub fn run(
                 );
             frame_waits_for_vsync = frame_due && !frame_starts;
             if frame_starts {
-                adpf_work_started = Some(web_time::Instant::now());
+                frame_started_at = Some(web_time::Instant::now());
+                frame_timings.work_start_ns = crate::android_frame_telemetry::monotonic_nanos();
                 let update_result = android_host_window::with_android_host_window_registry(
                     &host_window_registry,
                     || shell.update(),
                 );
+                frame_rate_boost.note(update_result.content_moved);
                 frame_timings.after_update_ns = frame_telemetry.now();
                 if let Err(error) = crate::android_accessibility::sync(
                     &app,
@@ -2454,6 +2467,8 @@ pub fn run(
                         let (width, height) = shell.buffer_size();
                         match shell.renderer().publish_frame(width, height) {
                             PublishOutcome::Published => {
+                                frame_timings.handed_off_ns =
+                                    crate::android_frame_telemetry::monotonic_nanos();
                                 pending_present_timings.push((
                                     shell.renderer().last_published_frame_id(),
                                     frame_timings,
@@ -2463,15 +2478,12 @@ pub fn run(
                                 frame_telemetry.note_idle_iteration();
                             }
                         }
-                    } else if render_once(
-                        resources,
-                        shell,
-                        &mut frame_telemetry,
-                        &mut frame_timings,
-                    ) {
-                        break;
                     } else {
-                        adpf_sync_presented = !resources.surface_dirty;
+                        frame_timings.handed_off_ns =
+                            crate::android_frame_telemetry::monotonic_nanos();
+                        if render_once(resources, shell, &mut frame_telemetry, &mut frame_timings) {
+                            break;
+                        }
                     }
                 } else {
                     frame_telemetry.note_idle_iteration();
@@ -2493,23 +2505,24 @@ pub fn run(
             frame_telemetry.note_idle_iteration();
         }
 
-        let presented_interval = if frame_timings.after_present_ns != 0 {
-            let frame_finished_at = web_time::Instant::now();
-            let frame_started_at = adpf_work_started.unwrap_or(frame_finished_at);
-            Some((frame_started_at, frame_finished_at))
+        let presented = if frame_timings.after_present_ns != 0 {
+            let finished_at = web_time::Instant::now();
+            Some(PresentedFrame {
+                started_at: frame_started_at.unwrap_or(finished_at),
+                finished_at,
+                work_ns: frame_timings.work_ns(),
+            })
         } else {
-            drained_present_interval
+            drained_presented
         };
-        if adpf_sync_presented && let Some(started) = adpf_work_started {
-            let period = vsync_period_ns();
-            let session = perf_hint
-                .get_or_insert_with(|| crate::android_perf_hint::PerfHintSession::open(period));
-            if let Some(session) = session.as_mut() {
-                session.report(started.elapsed().as_nanos() as i64, period);
+        if let Some(frame) = presented {
+            if let Some(work_ns) = frame.work_ns {
+                let present_thread = app_shell
+                    .as_mut()
+                    .and_then(|shell| shell.renderer().present_thread_id());
+                frame_work_hints.report(work_ns, vsync_period_ns(), present_thread);
             }
-        }
-        if let Some((frame_started_at, frame_finished_at)) = presented_interval {
-            record_presented_frame(app_shell.as_mut(), frame_started_at, frame_finished_at);
+            record_presented_frame(app_shell.as_mut(), frame.started_at, frame.finished_at);
         }
     }
 

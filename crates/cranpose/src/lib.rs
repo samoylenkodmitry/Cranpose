@@ -47,6 +47,8 @@ mod android_font_scale;
 mod android_frame_rate;
 #[cfg(all(feature = "android", target_os = "android"))]
 mod android_frame_telemetry;
+#[cfg(any(test, all(feature = "android", target_os = "android")))]
+mod android_frame_work;
 #[cfg(any(
     test,
     all(feature = "android", feature = "renderer-wgpu", target_os = "android")

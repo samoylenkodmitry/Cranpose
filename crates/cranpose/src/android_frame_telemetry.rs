@@ -293,15 +293,33 @@ fn post_vsync_callback() {
     }
 }
 
+/// When a frame reached each stage, in monotonic nanoseconds. The frame's
+/// start, its hand-off, the acquire and the present are stamped whether or
+/// not telemetry is on, since the scheduler's hints need them; the other
+/// stages read `0` without telemetry.
 #[derive(Clone, Copy, Default)]
 pub(crate) struct FrameTimings {
     pub(crate) iteration_start_ns: i64,
     pub(crate) after_poll_ns: i64,
     pub(crate) after_update_ns: i64,
     pub(crate) after_sync_ns: i64,
+    pub(crate) work_start_ns: i64,
+    pub(crate) handed_off_ns: i64,
     pub(crate) after_acquire_ns: i64,
     pub(crate) after_render_ns: i64,
     pub(crate) after_present_ns: i64,
+}
+
+impl FrameTimings {
+    /// The frame's work on the threads that make it, once it presented.
+    pub(crate) fn work_ns(&self) -> Option<i64> {
+        crate::android_frame_work::frame_work_ns(
+            self.work_start_ns,
+            self.handed_off_ns,
+            self.after_acquire_ns,
+            self.after_present_ns,
+        )
+    }
 }
 
 #[derive(Clone, Copy)]
