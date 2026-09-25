@@ -1,3 +1,6 @@
+use cranpose_ui::text::{TextLayoutOptions, TextStyle};
+use cranpose_ui_graphics::Color;
+
 use super::*;
 use crate::offscreen::composition_format;
 
@@ -71,7 +74,7 @@ fn draw_queued(renderer: &mut GpuRenderer, commands: &[GlyphDrawCmd]) -> wgpu::T
             &view,
             wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
         );
-        renderer.draw_glyph_cmds(&mut pass, None, 0, commands, None)
+        renderer.draw_glyph_cmds(&mut pass, None, 0, commands, None, (8, 8))
     });
     WgpuFrameGraphExecutor::new()
         .execute_recorded_graph(&renderer.device, &renderer.queue, graph)
@@ -332,4 +335,256 @@ fn a_transformed_shape_pipeline_falls_back_to_a_transformed_general_one() {
     assert_ne!(transformed, untransformed);
     assert!(transformed.general().transformed);
     assert!(!untransformed.general().transformed);
+}
+
+#[test]
+fn a_retained_run_no_frame_draws_gives_its_quads_back() {
+    let (_lock, mut renderer) = test_renderer();
+    assert!(renderer.ensure_retained_text_glyph_run(TextGlyphRunCacheKey(1), &test_quads()));
+    assert!(renderer.ensure_retained_text_glyph_run(TextGlyphRunCacheKey(2), &test_quads()));
+    for _ in 0..RETAINED_TEXT_GLYPH_RUN_IDLE_FRAMES {
+        renderer.begin_text_glyph_run_frame();
+        assert!(
+            renderer
+                .retained_text_glyph_run(TextGlyphRunCacheKey(2))
+                .is_some()
+        );
+    }
+    assert!(
+        renderer
+            .text_glyph_gpu_run_cache
+            .peek(&TextGlyphRunCacheKey(1))
+            .is_some()
+    );
+    renderer.begin_text_glyph_run_frame();
+    assert!(
+        renderer
+            .text_glyph_gpu_run_cache
+            .peek(&TextGlyphRunCacheKey(1))
+            .is_none(),
+        "an idle run leaves after its idle frames"
+    );
+    assert!(
+        renderer
+            .text_glyph_gpu_run_cache
+            .peek(&TextGlyphRunCacheKey(2))
+            .is_some()
+    );
+}
+
+#[test]
+fn consecutive_shared_glyph_quads_draw_as_one_until_a_state_changes() {
+    let (_lock, mut renderer) = test_renderer();
+    let texel = Rc::clone(&renderer.text_glyph_atlas.texel_bind_group);
+    let filtered = Rc::clone(&renderer.text_glyph_atlas.filtered_bind_group);
+    let full = (0, 0, 8, 8);
+    let half = (0, 0, 4, 8);
+    let mut cmds = vec![
+        GlyphDrawCmd::shared(0..6, Some(full), full, Rc::clone(&texel)),
+        GlyphDrawCmd::shared(6..18, Some(full), full, Rc::clone(&texel)),
+        GlyphDrawCmd::shared(18..24, Some(half), half, Rc::clone(&texel)),
+        GlyphDrawCmd::shared(24..30, Some(half), half, Rc::clone(&filtered)),
+        GlyphDrawCmd::shared(36..42, Some(half), half, Rc::clone(&filtered)),
+    ];
+    queue_glyph(&mut renderer, 1, 0.0, &mut cmds);
+    cmds.push(GlyphDrawCmd::shared(
+        42..48,
+        Some(half),
+        half,
+        Rc::clone(&filtered),
+    ));
+
+    let draws: Vec<_> = GlyphDraws::new(&cmds)
+        .map(|draw| match draw.step {
+            GlyphDrawStep::Shared(indices) => (Some(indices), draw.scissor),
+            GlyphDrawStep::Retained { .. } => (None, draw.scissor),
+        })
+        .collect();
+
+    assert_eq!(
+        draws,
+        vec![
+            (Some(0..18), Some(full)),
+            (Some(18..24), Some(half)),
+            (Some(24..30), Some(half)),
+            (Some(36..42), Some(half)),
+            (None, Some((0, 0, 8, 8))),
+            (Some(42..48), Some(half)),
+        ],
+        "a new scissor, a new atlas, a gap in the quads and a retained run each start a draw"
+    );
+}
+
+fn fonted_renderer() -> (std::sync::MutexGuard<'static, ()>, GpuRenderer) {
+    let (lock, device, queue) = crate::frame_graph::upload_test_device();
+    let backend = device.adapter_info().backend;
+    let font = cranpose_render_common::software_text_raster::default_software_text_font()
+        .expect("the embedded default font");
+    let renderer = GpuRenderer::new(
+        Arc::new(device),
+        Arc::new(queue),
+        composition_format(),
+        backend,
+        wgpu::DownlevelFlags::empty(),
+        SoftwareTextFontSet::from_font(font),
+        0,
+    );
+    (lock, renderer)
+}
+
+fn filled_run(x: f32, width: f32, color: Color) -> RunDraw {
+    let mut recorder = cranpose_ui_graphics::ShapeRecorder::default();
+    recorder.push_primitive(cranpose_ui_graphics::DrawPrimitive::Rect {
+        rect: Rect {
+            x,
+            y: 0.0,
+            width,
+            height: 32.0,
+        },
+        brush: cranpose_ui_graphics::Brush::solid(color),
+        stroke: None,
+    });
+    RunDraw::whole(
+        Arc::new(recorder),
+        crate::scene::Placement::at(Point::default(), None, None),
+    )
+    .expect("a run with a rect")
+}
+
+fn push_label(scene: &mut CompositorScene, x: f32, color: Color) {
+    let style = TextStyle {
+        paragraph_style: cranpose_ui::text::ParagraphStyle {
+            text_motion: Some(cranpose_ui::text::TextMotion::Static),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    scene.push_text(
+        1,
+        Rect {
+            x,
+            y: 4.0,
+            width: 30.0,
+            height: 24.0,
+        },
+        Rc::new(cranpose_ui::text::AnnotatedString::from("MM")),
+        color,
+        style,
+        18.0,
+        1.0,
+        TextLayoutOptions::default(),
+        None,
+    );
+}
+
+/// Draws `scene` into a 128×32 target; the target's pixels and the draws
+/// the pass issued.
+fn draw_scene(renderer: &mut GpuRenderer, scene: &CompositorScene) -> (Vec<u8>, u32) {
+    let target = crate::offscreen::create_2d_texture(
+        &renderer.device,
+        composition_format(),
+        128,
+        32,
+        wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        Some("Batched text test"),
+    );
+    let view = target.create_view(&Default::default());
+    renderer.viewport_uniforms.begin_frame();
+    renderer.run_store.begin_frame(false);
+    renderer.text_glyph_run_arena.begin_frame();
+    renderer.frame_stats.draw_calls.set(0);
+    let segments = [crate::draw_pass::PassSegment {
+        scene,
+        ops: &scene.draw_ops,
+        composites: &[],
+        offset: [0.0, 0.0],
+        scissor: None,
+        first_run_window: None,
+        transform: SegmentTransform::IDENTITY,
+    }];
+    let (device, queue) = (Arc::clone(&renderer.device), Arc::clone(&renderer.queue));
+    let mut graph = WgpuFrameGraph::new(None);
+    graph.add_fallible_command_pass(None, &[], &[], |recorder| {
+        renderer.encode_pass(
+            recorder,
+            crate::draw_pass::PassTarget {
+                view: &view,
+                width: 128,
+                height: 32,
+            },
+            &segments,
+            wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+            1.0,
+            "Batched text test",
+        )?;
+        renderer.flush_frame_uploads();
+        Ok(())
+    });
+    WgpuFrameGraphExecutor::new()
+        .execute_recorded_graph(&device, &queue, graph)
+        .expect("draw the scene");
+    let pixels = crate::frame_graph::read_test_texture(&renderer.device, &renderer.queue, &target);
+    assert_eq!(renderer.device_error_count(), 0);
+    (pixels, renderer.frame_stats.draw_calls.get())
+}
+
+fn pixel_at(pixels: &[u8], x: usize, y: usize) -> &[u8] {
+    let bytes = composition_format()
+        .block_copy_size(None)
+        .expect("a sized format") as usize;
+    let offset = (y * 128 + x) * bytes;
+    &pixels[offset..offset + bytes]
+}
+
+fn has_text_pixels(pixels: &[u8], columns: std::ops::Range<usize>, background: &[u8]) -> bool {
+    columns
+        .flat_map(|x| (0..32).map(move |y| (x, y)))
+        .any(|(x, y)| pixel_at(pixels, x, y) != background)
+}
+
+#[test]
+fn labels_between_shapes_they_do_not_touch_draw_in_one_batch() {
+    let (_lock, mut renderer) = fonted_renderer();
+    let red = Color(1.0, 0.0, 0.0, 1.0);
+    let mut scene = CompositorScene::new();
+    for x in [0.0, 64.0] {
+        scene.push_run(filled_run(x, 40.0, red));
+        push_label(&mut scene, x + 4.0, Color::WHITE);
+    }
+    let (pixels, draws) = draw_scene(&mut renderer, &scene);
+    let background = pixel_at(&pixels, 2, 2).to_vec();
+    assert!(
+        has_text_pixels(&pixels, 4..34, &background),
+        "the first label shows over its card"
+    );
+    assert!(
+        has_text_pixels(&pixels, 68..98, &background),
+        "the second label shows over its card"
+    );
+    assert_eq!(
+        draws, 3,
+        "one shape draw and one glyph draw for both cards, plus the clear"
+    );
+}
+
+#[test]
+fn a_shape_over_a_label_still_draws_over_it() {
+    let (_lock, mut renderer) = fonted_renderer();
+    let red = Color(1.0, 0.0, 0.0, 1.0);
+    let blue = Color(0.0, 0.0, 1.0, 1.0);
+    let mut scene = CompositorScene::new();
+    scene.push_run(filled_run(0.0, 40.0, red));
+    push_label(&mut scene, 4.0, Color::WHITE);
+    scene.push_run(filled_run(0.0, 128.0, blue));
+    let (pixels, _) = draw_scene(&mut renderer, &scene);
+    let covered = pixel_at(&pixels, 20, 16).to_vec();
+    for x in 0..128 {
+        for y in 0..32 {
+            assert_eq!(
+                pixel_at(&pixels, x, y),
+                covered.as_slice(),
+                "the blue shape covers the label at {x},{y}"
+            );
+        }
+    }
 }

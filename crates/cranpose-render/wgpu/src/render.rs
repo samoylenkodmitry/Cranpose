@@ -79,6 +79,13 @@ const MAX_TEXT_GLYPH_MASK_CACHE_ITEMS: usize = 8192;
 const MAX_TEXT_GLYPH_ATLAS_ITEMS: usize = 8192;
 const MAX_TEXT_GLYPH_RUN_CACHE_ITEMS: usize = 1024;
 const MAX_TEXT_GLYPH_GPU_RUN_CACHE_ITEMS: usize = 1024;
+/// Frames a retained text run may go undrawn before its quads are freed,
+/// the idle span the shape store keeps retained runs for.
+const RETAINED_TEXT_GLYPH_RUN_IDLE_FRAMES: u64 = 120;
+/// Text runs with at least this many glyphs keep their quads in retained GPU
+/// buffers and draw on their own; shorter ones are written into the frame's
+/// shared quads each frame, where consecutive runs share a draw.
+const RETAINED_TEXT_GLYPH_RUN_MIN_QUADS: usize = 64;
 
 const TEXT_GLYPH_ATLAS_MIN_SIZE: u32 = 512;
 const TEXT_GLYPH_ATLAS_MAX_SIZE: u32 = 4096;
@@ -147,6 +154,8 @@ struct CachedShadowSurface {
 }
 
 type DeviceRect4 = (f32, f32, f32, f32);
+/// A rect of whole target pixels: x, y, width, height.
+pub(crate) type TargetRect = (u32, u32, u32, u32);
 
 /// A draw's scissor cut down to the pixels its pass segment may touch;
 /// `None` when nothing of it remains.
@@ -163,6 +172,46 @@ pub(crate) fn bounded_scissor(
     let right = (x + width).min(bx + bw);
     let bottom = (y + height).min(by + bh);
     (right > left && bottom > top).then(|| (left, top, right - left, bottom - top))
+}
+
+/// The scissor a shared glyph run needs and the target pixels it touches.
+/// A run whose quads all lie inside `scissor` needs none of its own, which
+/// lets it share a draw with its neighbours; a turned viewport keeps it.
+fn shared_glyph_clip(
+    vertices: &[Vertex],
+    scissor: TargetRect,
+    viewport: ViewportUniformParams,
+) -> (Option<TargetRect>, TargetRect) {
+    if !viewport.transform.is_identity() || vertices.is_empty() {
+        return (Some(scissor), scissor);
+    }
+    let (mut left, mut top) = (f32::INFINITY, f32::INFINITY);
+    let (mut right, mut bottom) = (f32::NEG_INFINITY, f32::NEG_INFINITY);
+    for vertex in vertices {
+        left = left.min(vertex.position[0]);
+        top = top.min(vertex.position[1]);
+        right = right.max(vertex.position[0]);
+        bottom = bottom.max(vertex.position[1]);
+    }
+    let left = (left - viewport.offset[0]).floor().max(0.0);
+    let top = (top - viewport.offset[1]).floor().max(0.0);
+    let right = (right - viewport.offset[0]).ceil();
+    let bottom = (bottom - viewport.offset[1]).ceil();
+    let (x, y, width, height) = scissor;
+    let inside = left >= x as f32
+        && top >= y as f32
+        && right <= (x + width) as f32
+        && bottom <= (y + height) as f32;
+    if !inside || right <= left || bottom <= top {
+        return (Some(scissor), scissor);
+    }
+    let bounds = (
+        left as u32,
+        top as u32,
+        (right - left) as u32,
+        (bottom - top) as u32,
+    );
+    (None, bounds)
 }
 
 fn intersect_device_rects(a: DeviceRect4, b: DeviceRect4) -> Option<DeviceRect4> {
@@ -264,6 +313,9 @@ struct CachedTextGlyphRun {
 struct CachedGpuTextGlyphRun {
     span: GlyphRunSpan,
     atlas_generation: u64,
+    /// The frame the run last drew in; a run idle for
+    /// [`RETAINED_TEXT_GLYPH_RUN_IDLE_FRAMES`] gives its quads back.
+    last_frame: Cell<u64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -1540,23 +1592,98 @@ enum GlyphDrawSource {
 pub(crate) struct GlyphDrawCmd {
     atlas: Rc<wgpu::BindGroup>,
     source: GlyphDrawSource,
-    scissor: (u32, u32, u32, u32),
+    /// The scissor the text's own clip needs, `None` when its quads lie
+    /// inside that clip anyway and only the batch's bound applies.
+    scissor: Option<(u32, u32, u32, u32)>,
+    /// Target pixels the draw can touch, for ordering it against others.
+    bounds: (u32, u32, u32, u32),
+}
+
+/// One draw of a glyph batch: a stretch of shared quads, or a retained run.
+struct GlyphDraw<'a> {
+    atlas: &'a Rc<wgpu::BindGroup>,
+    scissor: Option<(u32, u32, u32, u32)>,
+    step: GlyphDrawStep<'a>,
+}
+
+enum GlyphDrawStep<'a> {
+    Shared(std::ops::Range<u32>),
+    Retained {
+        run: &'a CachedGpuTextGlyphRun,
+        uniform_slot: usize,
+    },
+}
+
+/// The draws a batch's glyph commands take: consecutive shared commands with
+/// one atlas and one scissor whose quads follow each other in the frame's
+/// shared buffer draw as one.
+struct GlyphDraws<'a> {
+    cmds: &'a [GlyphDrawCmd],
+}
+
+impl<'a> GlyphDraws<'a> {
+    fn new(cmds: &'a [GlyphDrawCmd]) -> Self {
+        Self { cmds }
+    }
+}
+
+impl<'a> Iterator for GlyphDraws<'a> {
+    type Item = GlyphDraw<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let (first, rest) = self.cmds.split_first()?;
+        self.cmds = rest;
+        let step = match &first.source {
+            GlyphDrawSource::Retained { run, uniform_slot } => GlyphDrawStep::Retained {
+                run,
+                uniform_slot: *uniform_slot,
+            },
+            GlyphDrawSource::Shared {
+                index_start,
+                index_count,
+            } => {
+                let mut end = index_start + index_count;
+                while let Some((next, rest)) = self.cmds.split_first() {
+                    match next.source {
+                        GlyphDrawSource::Shared {
+                            index_start,
+                            index_count,
+                        } if index_start == end
+                            && next.scissor == first.scissor
+                            && Rc::ptr_eq(&next.atlas, &first.atlas) =>
+                        {
+                            end += index_count;
+                            self.cmds = rest;
+                        }
+                        _ => break,
+                    }
+                }
+                GlyphDrawStep::Shared(*index_start..end)
+            }
+        };
+        Some(GlyphDraw {
+            atlas: &first.atlas,
+            scissor: first.scissor,
+            step,
+        })
+    }
 }
 
 impl GlyphDrawCmd {
     fn shared(
-        index_start: u32,
-        index_count: u32,
-        scissor: (u32, u32, u32, u32),
+        indices: std::ops::Range<u32>,
+        scissor: Option<(u32, u32, u32, u32)>,
+        bounds: (u32, u32, u32, u32),
         atlas: Rc<wgpu::BindGroup>,
     ) -> Self {
         Self {
             atlas,
             source: GlyphDrawSource::Shared {
-                index_start,
-                index_count,
+                index_start: indices.start,
+                index_count: indices.end - indices.start,
             },
             scissor,
+            bounds,
         }
     }
 
@@ -1569,8 +1696,14 @@ impl GlyphDrawCmd {
         Self {
             atlas,
             source: GlyphDrawSource::Retained { run, uniform_slot },
-            scissor,
+            scissor: Some(scissor),
+            bounds: scissor,
         }
+    }
+
+    /// Target pixels the draw can touch.
+    pub(crate) fn bounds(&self) -> (u32, u32, u32, u32) {
+        self.bounds
     }
 }
 
@@ -1812,6 +1945,7 @@ pub struct GpuRenderer {
     text_glyph_run_cache: BoundedLruCache<TextGlyphRunCacheKey, CachedTextGlyphRun>,
     text_glyph_gpu_run_cache: BoundedLruCache<TextGlyphRunCacheKey, Rc<CachedGpuTextGlyphRun>>,
     text_glyph_run_arena: GlyphRunArena,
+    text_glyph_run_frame: u64,
     text_glyph_mask_cache: SoftwareGlyphRasterCache,
     text_line_index_cache: TextLineIndexCache,
     pub(crate) scratch_image_vertices: Vec<Vertex>,
@@ -2042,6 +2176,7 @@ impl GpuRenderer {
                 MAX_TEXT_GLYPH_GPU_RUN_CACHE_ITEMS,
             ),
             text_glyph_run_arena: GlyphRunArena::default(),
+            text_glyph_run_frame: 0,
             text_glyph_mask_cache: SoftwareGlyphRasterCache::with_capacity_at_least_one(
                 MAX_TEXT_GLYPH_MASK_CACHE_ITEMS,
             ),
@@ -2489,7 +2624,7 @@ impl GpuRenderer {
         self.shape_pipelines.begin_frame();
         self.viewport_uniforms.begin_frame();
         self.run_store.begin_frame(gpu_stats_enabled());
-        self.text_glyph_run_arena.begin_frame();
+        self.begin_text_glyph_run_frame();
 
         let text_cache_len = packet.text_cache_len;
         let frame_root = self.frame_root(output_mode, output_view, output_texture, (width, height));
@@ -3541,31 +3676,35 @@ impl GpuRenderer {
         uniform_slot: usize,
         cmds: &[GlyphDrawCmd],
         bound: Option<(u32, u32, u32, u32)>,
+        target_size: (u32, u32),
     ) -> Result<(), String> {
         if cmds.is_empty() {
             return Ok(());
         }
+        let whole_target = bound.unwrap_or((0, 0, target_size.0, target_size.1));
         self.frame_stats.bump_text();
-        self.frame_stats.add_draw_calls(cmds.len() as u32);
         pass.set_pipeline(self.glyph_atlas_pipeline());
         let mut bound_atlas = None;
         let mut shared_bound = false;
         let mut retained_indices_bound = false;
         let mut bound_run_vertices: Option<&wgpu::Buffer> = None;
-        for cmd in cmds {
-            let Some((x, y, width, height)) = bounded_scissor(cmd.scissor, bound) else {
+        let mut draws = 0u32;
+        for draw in GlyphDraws::new(cmds) {
+            let scissor = match draw.scissor {
+                Some(scissor) => bounded_scissor(scissor, bound),
+                None => Some(whole_target),
+            };
+            let Some((x, y, width, height)) = scissor else {
                 continue;
             };
             pass.set_scissor_rect(x, y, width, height);
-            if !bound_atlas.is_some_and(|atlas| Rc::ptr_eq(atlas, &cmd.atlas)) {
-                pass.set_bind_group(1, cmd.atlas.as_ref(), &[]);
-                bound_atlas = Some(&cmd.atlas);
+            if !bound_atlas.is_some_and(|atlas| Rc::ptr_eq(atlas, draw.atlas)) {
+                pass.set_bind_group(1, draw.atlas.as_ref(), &[]);
+                bound_atlas = Some(draw.atlas);
             }
-            match &cmd.source {
-                GlyphDrawSource::Shared {
-                    index_start,
-                    index_count,
-                } => {
+            draws += 1;
+            match draw.step {
+                GlyphDrawStep::Shared(indices) => {
                     if !shared_bound {
                         let slot = image_slot
                             .ok_or_else(|| "shared glyph draw without an image slot".to_string())?;
@@ -3576,14 +3715,14 @@ impl GpuRenderer {
                         retained_indices_bound = false;
                         bound_run_vertices = None;
                     }
-                    pass.draw_indexed(*index_start..(*index_start + *index_count), 0, 0..1);
+                    pass.draw_indexed(indices, 0, 0..1);
                 }
-                GlyphDrawSource::Retained {
+                GlyphDrawStep::Retained {
                     run,
                     uniform_slot: retained_slot,
                 } => {
                     shared_bound = false;
-                    self.viewport_uniforms.bind(pass, *retained_slot)?;
+                    self.viewport_uniforms.bind(pass, retained_slot)?;
                     if !retained_indices_bound {
                         let indices =
                             self.text_glyph_run_arena.index_buffer().ok_or_else(|| {
@@ -3601,6 +3740,7 @@ impl GpuRenderer {
                 }
             }
         }
+        self.frame_stats.add_draw_calls(draws);
         Ok(())
     }
     pub(crate) fn append_image_draw_cmd(
@@ -3894,10 +4034,30 @@ impl GpuRenderer {
         cache_key: TextGlyphRunCacheKey,
     ) -> Option<Rc<CachedGpuTextGlyphRun>> {
         let atlas_generation = self.text_glyph_atlas.generation();
+        let frame = self.text_glyph_run_frame;
         self.text_glyph_gpu_run_cache
             .get(&cache_key)
             .filter(|cached| cached.atlas_generation == atlas_generation)
+            .inspect(|cached| cached.last_frame.set(frame))
             .cloned()
+    }
+
+    /// Opens a frame for retained text runs: runs no frame drew for
+    /// [`RETAINED_TEXT_GLYPH_RUN_IDLE_FRAMES`] leave the cache, and the
+    /// arena takes back the quads dropped runs held.
+    fn begin_text_glyph_run_frame(&mut self) {
+        self.text_glyph_run_frame += 1;
+        let frame = self.text_glyph_run_frame;
+        while self
+            .text_glyph_gpu_run_cache
+            .peek_lru()
+            .is_some_and(|(_, run)| {
+                frame - run.last_frame.get() > RETAINED_TEXT_GLYPH_RUN_IDLE_FRAMES
+            })
+        {
+            self.text_glyph_gpu_run_cache.pop_lru();
+        }
+        self.text_glyph_run_arena.begin_frame();
     }
 
     fn emit_retained_text_glyph_run_if_ready(
@@ -3964,6 +4124,7 @@ impl GpuRenderer {
             Rc::new(CachedGpuTextGlyphRun {
                 span,
                 atlas_generation,
+                last_frame: Cell::new(self.text_glyph_run_frame),
             }),
         );
         true
@@ -4094,6 +4255,7 @@ impl GpuRenderer {
             };
 
             if let Some(quad_run) = cached_quad_run.as_ref()
+                && quad_run.len() >= RETAINED_TEXT_GLYPH_RUN_MIN_QUADS
                 && self.emit_retained_text_glyph_run_if_ready(
                     run_key,
                     quad_run.as_ref(),
@@ -4108,6 +4270,7 @@ impl GpuRenderer {
             }
 
             let index_start = image_indices.len() as u32;
+            let vertex_start = image_vertices.len();
             let (quad_run, cached) = match cached_quad_run {
                 Some(quad_run) => (quad_run, true),
                 None => {
@@ -4134,12 +4297,14 @@ impl GpuRenderer {
                 image_indices,
                 cached,
             ));
-            let index_count = image_indices.len() as u32 - index_start;
-            if index_count > 0 {
+            let index_end = image_indices.len() as u32;
+            if index_end > index_start {
+                let (clip, bounds) =
+                    shared_glyph_clip(&image_vertices[vertex_start..], scissor, viewport);
                 glyph_cmds.push(GlyphDrawCmd::shared(
-                    index_start,
-                    index_count,
-                    scissor,
+                    index_start..index_end,
+                    clip,
+                    bounds,
                     self.text_glyph_atlas.bind_group(viewport.transform),
                 ));
             }
