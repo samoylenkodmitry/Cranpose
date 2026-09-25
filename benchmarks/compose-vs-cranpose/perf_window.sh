@@ -3,15 +3,18 @@
 # Usage: perf_window.sh PID PACKAGE LAYER SAMPLES INTERVAL_S GFXINFO(0|1)
 #
 # SurfaceFlinger keeps only the last frames of a layer: 128 on Android 10, 64
-# on Android 17, which is half a second at 120 Hz. The layer is polled every
-# sample, so pick INTERVAL_S below that span; the host merges the polls and
-# counts any two that fail to overlap.
+# on Android 17, which is half a second at 120 Hz. A poller of its own reads
+# the layer every INTERVAL_S, so pick it below that span; the slower clock and
+# thermal samples run beside it and never delay a poll. The host merges the
+# polls and counts any two that fail to overlap.
 PID=$1
 PKG=$2
 LAYER=$3
 SAMPLES=$4
 INTERVAL=$5
 GFX=$6
+LATENCY_LOG=/data/local/tmp/perf_window_latency.$$
+STOP=/data/local/tmp/perf_window_stop.$$
 
 snap() {
   echo "STAT $(cat /proc/$PID/stat)"
@@ -36,19 +39,28 @@ if [ "$GFX" = 1 ]; then dumpsys gfxinfo $PKG reset > /dev/null; fi
 thermal
 echo "T0 $(cat /proc/uptime)"
 snap
-latency
+(
+  while [ ! -e "$STOP" ]; do
+    latency
+    sleep "$INTERVAL"
+  done
+) > "$LATENCY_LOG" &
+POLLER=$!
 i=0
 while [ $i -lt $SAMPLES ]; do
   sleep $INTERVAL
   # Current clocks, then the caps thermal management applies to them.
   echo "F $(cat /sys/class/devfreq/gpufreq/cur_freq) $(cat /sys/class/devfreq/ddrfreq/cur_freq) $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq) $(cat /sys/devices/system/cpu/cpu4/cpufreq/scaling_cur_freq) $(cat /sys/devices/system/cpu/cpu6/cpufreq/scaling_cur_freq) $(cat /sys/class/devfreq/gpufreq/max_freq) $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq) $(cat /sys/devices/system/cpu/cpu4/cpufreq/scaling_max_freq) $(cat /sys/devices/system/cpu/cpu6/cpufreq/scaling_max_freq)"
   i=$((i+1))
-  latency
   if [ $((i % 4)) = 0 ]; then thermal; fi
 done
 echo "T1 $(cat /proc/uptime)"
 snap
-latency
+touch "$STOP"
+wait "$POLLER"
+latency >> "$LATENCY_LOG"
+cat "$LATENCY_LOG"
+rm -f "$LATENCY_LOG" "$STOP"
 thermal
 if [ "$GFX" = 1 ]; then
   echo GFX_BEGIN
