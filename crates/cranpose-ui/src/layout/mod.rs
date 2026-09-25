@@ -519,6 +519,11 @@ impl SemanticsTree {
     }
 }
 
+/// Whether a modal of `size` takes space; a zero-sized modal hides nothing.
+fn modal_takes_space(size: Size) -> bool {
+    size.width > 0.0 && size.height > 0.0 && size.width.is_finite() && size.height.is_finite()
+}
+
 fn take_top_modal(node: &mut SemanticsNode) -> Option<SemanticsNode> {
     if node.hidden {
         return None;
@@ -1004,6 +1009,66 @@ pub fn build_semantics_tree_from_applier(
     }
 
     node(applier, root).map(|root| root.map(SemanticsTree::new))
+}
+
+/// The modal the semantics tree of `root` would be rooted at, found without
+/// building the tree: the topmost placed, visible modal that takes space,
+/// or `None` when no modal is open. Unlike a tree build, it leaves the
+/// nodes' semantics dirty flags alone.
+pub fn top_modal_from_applier(
+    applier: &mut MemoryApplier,
+    root: NodeId,
+) -> Result<Option<NodeId>, NodeError> {
+    type Parts = (cranpose_foundation::SemanticsReach, Vec<NodeId>, Size);
+
+    fn parts(applier: &mut MemoryApplier, node_id: NodeId) -> Result<Option<Parts>, NodeError> {
+        match applier.with_node::<LayoutNode, _>(node_id, |layout| {
+            let state = layout.layout_state();
+            state.is_placed().then(|| {
+                (
+                    layout.semantics_reach(),
+                    layout.children.clone(),
+                    state.size(),
+                )
+            })
+        }) {
+            Err(NodeError::TypeMismatch { .. } | NodeError::Missing { .. }) => {}
+            other => return other,
+        }
+        match applier.with_node::<SubcomposeLayoutNode, _>(node_id, |subcompose| {
+            let state = subcompose.layout_state();
+            state.is_placed().then(|| {
+                (
+                    subcompose.semantics_reach(),
+                    subcompose.active_children(),
+                    state.size(),
+                )
+            })
+        }) {
+            Err(NodeError::TypeMismatch { .. } | NodeError::Missing { .. }) => Ok(None),
+            other => other,
+        }
+    }
+
+    fn visit(applier: &mut MemoryApplier, node_id: NodeId) -> Result<Option<NodeId>, NodeError> {
+        let Some((reach, child_ids, size)) = parts(applier, node_id)? else {
+            return Ok(None);
+        };
+        if reach.hidden {
+            return Ok(None);
+        }
+        for child in children_in_this_window(applier, child_ids)
+            .into_iter()
+            .rev()
+        {
+            if let Some(modal) = visit(applier, child)? {
+                return Ok(Some(modal));
+            }
+        }
+        Ok((reach.is_modal && modal_takes_space(size)).then_some(node_id))
+    }
+
+    visit(applier, root)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -3287,11 +3352,7 @@ fn semantics_node_from_parts(
         node.editable_text = config.is_editable_text;
         node.multiline = config.multiline;
         node.hidden = config.hidden;
-        node.is_modal = config.is_modal
-            && size.width > 0.0
-            && size.height > 0.0
-            && size.width.is_finite()
-            && size.height.is_finite();
+        node.is_modal = config.is_modal && modal_takes_space(size);
         node.merge_descendants = config.merge_descendants;
         node.selectable_group = config.selectable_group;
         node.pane_title = config.pane_title;

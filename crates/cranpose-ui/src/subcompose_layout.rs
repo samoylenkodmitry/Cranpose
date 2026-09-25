@@ -977,6 +977,11 @@ impl SubcomposeLayoutNode {
         crate::modifier::collect_semantics_from_chain(self.inner.borrow().modifier_chain.chain())
     }
 
+    /// Whether this node's modifiers make it modal or hidden.
+    pub fn semantics_reach(&self) -> cranpose_foundation::SemanticsReach {
+        crate::modifier::semantics_reach_of_chain(self.inner.borrow().modifier_chain.chain())
+    }
+
     /// Returns the modifier slices snapshot for rendering.
     pub fn modifier_slices_snapshot(&self) -> Rc<ModifierNodeSlices> {
         if self.modifier_slices_dirty.get() {

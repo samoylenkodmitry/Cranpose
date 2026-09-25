@@ -243,6 +243,17 @@ impl<R: Renderer> RootSurface<R> {
         self.layout_tree.as_ref()
     }
 
+    /// The node an open modal takes this surface over with, the root its
+    /// semantics tree would have, found without building the tree.
+    pub(crate) fn top_modal(&self, app: &mut ShellApp) -> Option<NodeId> {
+        let root = self.root_node(app)?;
+        let mut applier = app.composition.applier_mut();
+        cranpose_ui::top_modal_from_applier(&mut applier, root).unwrap_or_else(|err| {
+            log::debug!("failed to find the top modal under root #{root}: {err}");
+            None
+        })
+    }
+
     pub(crate) fn semantics_tree_in_context(
         &mut self,
         app: &mut ShellApp,
