@@ -90,8 +90,9 @@ inside it. It reads:
 - **CPU:** process and per-thread `utime + stime` from `/proc`.
 - **Clocks:** the GPU, DDR and three CPU-cluster clocks every 0.5 s. Mali-G76
   has no GPU timestamp queries, so the GPU clock that DVFS chooses is the proxy
-  for GPU load. The clock files are the Kirin 980's; other devices report no
-  clocks.
+  for GPU load. The clock files are the Kirin 980's. Elsewhere only the GPU
+  clock is read, from the Mali node `/sys/class/misc/mali0/device/cur_freq`
+  (the Pixel 9 Pro's, in kHz), each sample.
 - **Also:** `dumpsys meminfo` after the window, and `gfxinfo` for Compose only
   (HWUI does not see Cranpose's Vulkan surface).
 
