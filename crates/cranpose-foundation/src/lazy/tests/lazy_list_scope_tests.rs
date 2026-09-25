@@ -356,3 +356,34 @@ fn test_large_list_cache_works() {
     let found_mid = content.get_index_by_slot_id(slot_id_mid);
     assert_eq!(found_mid, Some(10000));
 }
+
+#[test]
+fn a_lookup_near_the_viewport_of_a_huge_list_maps_only_that_range() {
+    let mut content = LazyListIntervalContent::new();
+    content.items(LazyItems::new(1_000_000).key(|i| i as u64), |_| {});
+    let near = 499_900..500_130;
+    let slot = content.get_key(500_000).to_slot_id();
+    assert_eq!(
+        content.get_index_by_slot_id_in_range(slot, near.clone()),
+        Some(500_000)
+    );
+    assert_eq!(
+        content.get_index_by_slot_id_in_range(content.get_key(10).to_slot_id(), near.clone()),
+        None,
+        "a key outside the range is not found in it"
+    );
+    assert!(
+        content.mapped_keys() <= near.len(),
+        "a lookup near the viewport maps {} keys, not the list's million",
+        content.mapped_keys()
+    );
+    assert_eq!(
+        content.get_index_by_slot_id(content.get_key(999_999).to_slot_id()),
+        Some(999_999)
+    );
+    assert!(
+        content.mapped_keys() <= near.len(),
+        "a lookup across the whole list scans it rather than map a million keys: {}",
+        content.mapped_keys()
+    );
+}
