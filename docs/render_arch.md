@@ -88,7 +88,11 @@ composites the resolved textures.
   effect or blurred shadow) and that the cache does not keep is drawn into
   one shelf-packed atlas per raster scale, in one pass, each child
   scissored to its region; a grid of cells laid out again every frame costs
-  one pass, not one per cell. A projective composite filters in its shader
+  one pass, not one per cell. A flat child the cache admits is copied out of
+  the atlas into its retained texture, never drawn in a pass of its own, and
+  a node's new source surface supersedes its old one unless the two differ
+  only in phase (`differs_beyond_phase`), so the cache holds about one
+  surface per node. A projective composite filters in its shader
   (`projective_blit_main.wgsl`) with weights from the position within the
   surface and taps held to the surface's texels, so a surface in an atlas
   composites byte for byte as one in a texture of its own. Contract

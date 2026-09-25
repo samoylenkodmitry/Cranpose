@@ -262,6 +262,17 @@ impl LayerRasterCacheKey {
     pub fn raster_scale(self) -> RasterScale {
         self.raster_scale
     }
+
+    /// Whether `other` holds a different raster than this key: other
+    /// content, bounds, pixel size or scale. Keys that differ only in their
+    /// sub-pixel phase hold the same raster placed at another fraction of a
+    /// pixel.
+    pub fn differs_beyond_phase(self, other: Self) -> bool {
+        Self {
+            device_phase_steps: other.device_phase_steps,
+            ..self
+        } != other
+    }
 }
 
 #[cfg(test)]

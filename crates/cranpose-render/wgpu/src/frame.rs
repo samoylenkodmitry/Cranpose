@@ -2136,6 +2136,12 @@ enum SourceDecision {
     Render(Option<LayerRasterCacheKey>),
 }
 
+struct BatchMember {
+    index: usize,
+    plan: SurfacePlan,
+    retain: Option<LayerRasterCacheKey>,
+}
+
 fn renders_flat(child: &ChildLayer) -> bool {
     child.effect.is_none()
         && !child.reads_backdrop()
@@ -3813,7 +3819,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         let mut surfaces: Vec<Option<Option<SurfaceRender>>> = std::iter::repeat_with(|| None)
             .take(layer.children.len())
             .collect();
-        let mut batch: Vec<(usize, SurfacePlan)> = Vec::new();
+        let mut batch: Vec<BatchMember> = Vec::new();
         for (index, child) in layer.children.iter().enumerate() {
             if !renders_flat(child) {
                 continue;
@@ -3830,17 +3836,14 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 surfaces[index] = Some(None);
                 continue;
             };
-            let cleared = Beneath::over(wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT));
             surfaces[index] = match self.source_decision(child, &plan) {
                 SourceDecision::Cached(surface) => Some(Some(surface)),
-                SourceDecision::Render(Some(key)) => Some(Some(self.render_planned_surface(
-                    child,
-                    &plan,
-                    Some(key),
-                    &cleared,
-                )?)),
-                SourceDecision::Render(None) => {
-                    batch.push((index, plan));
+                SourceDecision::Render(retain) => {
+                    batch.push(BatchMember {
+                        index,
+                        plan,
+                        retain,
+                    });
                     None
                 }
             };
@@ -3855,20 +3858,15 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
     fn render_surface_batch(
         &mut self,
         layer: &LayerScene,
-        mut batch: Vec<(usize, SurfacePlan)>,
+        mut batch: Vec<BatchMember>,
     ) -> Result<Vec<(usize, SurfaceRender)>, String> {
-        batch.sort_by_key(|(index, plan)| (plan.surface_scale.to_bits(), *index));
+        batch.sort_by_key(|member| (member.plan.surface_scale.to_bits(), member.index));
         let mut surfaces = Vec::with_capacity(batch.len());
         for group in
-            batch.chunk_by(|(_, a), (_, b)| a.surface_scale.to_bits() == b.surface_scale.to_bits())
+            batch.chunk_by(|a, b| a.plan.surface_scale.to_bits() == b.plan.surface_scale.to_bits())
         {
-            if let [(index, plan)] = group {
-                let child = &layer.children[*index];
-                let cleared = Beneath::over(wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT));
-                surfaces.push((
-                    *index,
-                    self.render_planned_surface(child, plan, None, &cleared)?,
-                ));
+            if let [member] = group {
+                surfaces.push((member.index, self.render_member_alone(layer, member)?));
                 continue;
             }
             self.render_surface_atlas(layer, group, &mut surfaces)?;
@@ -3876,17 +3874,31 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         Ok(surfaces)
     }
 
+    fn render_member_alone(
+        &mut self,
+        layer: &LayerScene,
+        member: &BatchMember,
+    ) -> Result<SurfaceRender, String> {
+        let cleared = Beneath::over(wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT));
+        self.render_planned_surface(
+            &layer.children[member.index],
+            &member.plan,
+            member.retain,
+            &cleared,
+        )
+    }
+
     fn render_surface_atlas(
         &mut self,
         layer: &LayerScene,
-        group: &[(usize, SurfacePlan)],
+        group: &[BatchMember],
         surfaces: &mut Vec<(usize, SurfaceRender)>,
     ) -> Result<(), String> {
         let limit = self.renderer.max_texture_dim();
         let mut packer = AtlasPacker::new(limit);
         let placements: Vec<Option<AtlasPlacement>> = group
             .iter()
-            .map(|(_, plan)| packer.place(plan.width, plan.height))
+            .map(|member| packer.place(member.plan.width, member.plan.height))
             .collect();
         let sizes: Vec<(u32, u32)> = packer
             .atlases
@@ -3899,18 +3911,21 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             .collect();
         let ops: Vec<Cow<'_, [DrawOp]>> = group
             .iter()
-            .map(|(index, _)| z_ordered_ops(&layer.children[*index].content.scene.draw_ops))
+            .map(|member| z_ordered_ops(&layer.children[member.index].content.scene.draw_ops))
             .collect();
-        let scale = group.first().map_or(1.0, |(_, plan)| plan.surface_scale);
+        let scale = group
+            .first()
+            .map_or(1.0, |member| member.plan.surface_scale);
         for (atlas_index, atlas) in atlases.iter().enumerate() {
             let segments: Vec<PassSegment<'_>> = group
                 .iter()
                 .zip(&placements)
                 .zip(&ops)
-                .filter_map(|(((index, plan), placement), ops)| {
+                .filter_map(|((member, placement), ops)| {
                     let placement = placement.filter(|placement| placement.atlas == atlas_index)?;
+                    let plan = &member.plan;
                     Some(PassSegment {
-                        scene: &layer.children[*index].content.scene,
+                        scene: &layer.children[member.index].content.scene,
                         ops,
                         composites: &[],
                         offset: [
@@ -3937,37 +3952,72 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 "Layer Surface Atlas Pass",
             )?;
         }
-        for ((index, plan), placement) in group.iter().zip(placements) {
-            let child = &layer.children[*index];
+        for (member, placement) in group.iter().zip(placements) {
+            let child = &layer.children[member.index];
             let surface = match placement {
                 Some(placement) => {
                     self.renderer.frame_stats.record_isolated_layer_render(
-                        plan.width,
-                        plan.height,
+                        member.plan.width,
+                        member.plan.height,
                         child.node_id,
-                        plan.surface_logical,
+                        member.plan.surface_logical,
                     );
-                    plan.surface(
-                        CompositeSource {
-                            texture: Rc::clone(&atlases[placement.atlas]),
-                            content: SourceContent::Transient,
-                        },
-                        Some(DeviceRect {
-                            x: placement.x as f32,
-                            y: placement.y as f32,
-                            width: plan.width as f32,
-                            height: plan.height as f32,
-                        }),
-                    )
+                    self.retain_from_atlas(child, member, &atlases[placement.atlas], placement)
                 }
-                None => {
-                    let cleared = Beneath::over(wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT));
-                    self.render_planned_surface(child, plan, None, &cleared)?
-                }
+                None => self.render_member_alone(layer, member)?,
             };
-            surfaces.push((*index, surface));
+            surfaces.push((member.index, surface));
         }
         Ok(())
+    }
+
+    fn retain_from_atlas(
+        &mut self,
+        child: &ChildLayer,
+        member: &BatchMember,
+        atlas: &Rc<OffscreenTarget>,
+        placement: AtlasPlacement,
+    ) -> SurfaceRender {
+        let plan = &member.plan;
+        let in_atlas = plan.surface(
+            CompositeSource {
+                texture: Rc::clone(atlas),
+                content: SourceContent::Transient,
+            },
+            Some(DeviceRect {
+                x: placement.x as f32,
+                y: placement.y as f32,
+                width: plan.width as f32,
+                height: plan.height as f32,
+            }),
+        );
+        let Some(key) = member.retain else {
+            return in_atlas;
+        };
+        let retained = Rc::new(
+            self.renderer
+                .acquire_retained_surface(plan.width, plan.height),
+        );
+        if !copy_compatible(atlas, &retained) {
+            return in_atlas;
+        }
+        self.recorder.copy_texture_region(TextureRegionCopy {
+            source: atlas,
+            source_origin: [placement.x, placement.y],
+            dest: &retained,
+            dest_origin: [0, 0],
+            size: [plan.width, plan.height],
+        });
+        if !self.retain_source(child.node_id, key, &retained) {
+            return in_atlas;
+        }
+        plan.surface(
+            CompositeSource {
+                texture: retained,
+                content: SourceContent::retained(&key),
+            },
+            None,
+        )
     }
 
     fn cached_source(
@@ -3981,6 +4031,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         self.renderer
             .frame_stats
             .record_layer_cache_hit(&key, width, height);
+        self.supersede_source(node_id, key);
         if let Some(gate) = self.source_gate(node_id) {
             gate.hit(key);
         }
@@ -4010,6 +4061,15 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         node_id.and_then(|node_id| self.renderer.source_gates.get_mut(&node_id))
     }
 
+    fn supersede_source(&mut self, node_id: Option<NodeId>, key: LayerRasterCacheKey) {
+        let Some(previous) = self.source_gate(node_id).map(|gate| gate.key) else {
+            return;
+        };
+        if previous.differs_beyond_phase(key) {
+            self.renderer.layer_cache.remove(&previous);
+        }
+    }
+
     fn admits_source(
         &mut self,
         node_id: Option<NodeId>,
@@ -4017,6 +4077,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         width: u32,
         height: u32,
     ) -> bool {
+        self.supersede_source(node_id, key);
         let admits = match node_id {
             None => true,
             Some(node_id) => match self.renderer.source_gates.entry(node_id) {

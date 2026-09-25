@@ -109,6 +109,7 @@ fn width_fraction(frame: usize) -> f32 {
 const WARMUP_FRAMES: usize = 3;
 const MEASURED_FRAMES: usize = 6;
 const MAX_PASSES: u32 = 6;
+const EXTREMUM_SPAN: usize = 100;
 
 fn harness() -> Option<(std::sync::MutexGuard<'static, ()>, GridHarness)> {
     match support::headless_renderer_parts() {
@@ -198,4 +199,33 @@ fn a_rotated_grid_that_stops_moving_draws_what_a_fresh_renderer_draws() {
     let still = settled(&mut moving, held);
     let expected = settled(&mut fresh_harness(), held);
     support::assert_same_bytes("still frame", FRAME_WIDTH, &expected.pixels, &still.pixels);
+}
+
+#[test]
+fn rotated_cells_that_hold_still_for_a_moment_are_kept_by_copy_and_one_each() {
+    let Some((_lock, mut harness)) = harness() else {
+        return;
+    };
+    harness.frame(width_fraction(0));
+    let mut kept = 0;
+    for frame in 1..EXTREMUM_SPAN {
+        let (stats, _) = harness.frame(width_fraction(frame));
+        kept = kept.max(stats.layer_cache_size);
+        assert!(
+            stats.pass_count <= MAX_PASSES,
+            "frame {frame}: cells the cache keeps are copied out of the shared pass, not \
+             drawn in passes of their own: {stats:?}"
+        );
+        assert!(
+            stats.layer_cache_size <= CELLS,
+            "frame {frame}: a cell's new surface replaces its old one, so the cache holds \
+             at most one surface per cell, not {}: {stats:?}",
+            stats.layer_cache_size
+        );
+    }
+    assert!(
+        kept > CELLS / 2,
+        "the width must hold still long enough near its turn for the cache to keep the cells, \
+         or this proves nothing: kept at most {kept}"
+    );
 }
