@@ -1106,16 +1106,9 @@ impl<T: Clone + 'static> StateObject for SnapshotMutableState<T> {
 pub(crate) struct MutableStateInner<T: Clone + 'static> {
     pub(crate) state: Arc<SnapshotMutableState<T>>,
     pub(crate) watchers: RefCell<HashMap<ScopeId, RcWeak<RecomposeScopeInner>>>,
-    /// The watcher count at which a new reader prunes dead watchers: twice
-    /// the live count the last prune left, so pruning stays amortized
-    /// constant time per reader however many scopes read the state.
-    prune_watchers_at: Cell<usize>,
     runtime: RuntimeHandle,
     state_id: Cell<Option<StateId>>,
 }
-
-/// The fewest watchers a state holds before a new reader prunes dead ones.
-const MIN_WATCHER_PRUNE: usize = 16;
 
 fn notify_subscriber_callbacks(callbacks: &RefCell<Vec<Rc<dyn Fn()>>>) {
     let registered = callbacks.borrow().len();
@@ -1144,7 +1137,6 @@ impl<T: Clone + 'static> MutableStateInner<T> {
         Self {
             state: SnapshotMutableState::new_in_arc(value, policy),
             watchers: RefCell::new(HashMap::default()),
-            prune_watchers_at: Cell::new(MIN_WATCHER_PRUNE),
             runtime,
             state_id: Cell::new(None),
         }
@@ -1171,9 +1163,9 @@ impl<T: Clone + 'static> MutableStateInner<T> {
     /// Dead watchers still count as subscribers until pruned. They are
     /// pruned whenever no live one is left, so a reader arriving after every
     /// earlier one died still makes the state newly subscribed, and
-    /// otherwise only once they could outnumber the live ones: a state read
-    /// by thousands of scopes, such as the density, must not scan them all
-    /// for every new reader.
+    /// otherwise only when the map is full, before the insert would grow
+    /// it: a state read by thousands of scopes, such as the density, must
+    /// not scan them all for every new reader.
     fn register_scope(&self, scope: &RecomposeScope) -> (bool, bool) {
         let mut watchers = self.watchers.borrow_mut();
         let id = scope.id();
@@ -1186,12 +1178,10 @@ impl<T: Clone + 'static> MutableStateInner<T> {
             None => {}
         }
         let any_live = watchers.values().any(|watcher| watcher.strong_count() > 0);
-        if !any_live || watchers.len() >= self.prune_watchers_at.get() {
+        if !any_live || watchers.len() >= watchers.capacity() {
             let before = watchers.len();
             watchers.retain(|_, watcher| watcher.strong_count() > 0);
             self.state.remove_scope_observers(before - watchers.len());
-            self.prune_watchers_at
-                .set(watchers.len().saturating_mul(2).max(MIN_WATCHER_PRUNE));
         }
         watchers.insert(id, scope.downgrade());
         drop(watchers);
