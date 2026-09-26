@@ -17,6 +17,7 @@ mod effect_renderer;
 mod fast_cores;
 mod frame;
 mod geometry;
+mod idle_pool;
 mod layer_cache;
 pub use fast_cores::pin_current_thread_to_fast_cores;
 mod frame_graph;

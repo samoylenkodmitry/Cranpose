@@ -7,6 +7,7 @@ use web_time::Instant;
 
 use crate::{
     debug_toggles::DebugToggle,
+    idle_pool::IdlePool,
     offscreen::OffscreenTarget,
     pass_timing::{GpuPassTimingReport, PassTimer},
 };
@@ -348,7 +349,7 @@ impl FrameTextureDescriptor {
 
 #[derive(Default)]
 pub(crate) struct TransientTexturePool {
-    available: Vec<PooledTransientTexture>,
+    available: IdlePool<PooledTransientTexture>,
     acquires: u32,
     news: u32,
 }
@@ -369,12 +370,11 @@ impl TransientTexturePool {
         descriptor: FrameTextureDescriptor,
     ) -> OffscreenTarget {
         self.acquires = self.acquires.saturating_add(1);
-        if let Some(index) = self
+        if let Some(entry) = self
             .available
-            .iter()
-            .position(|entry| entry.descriptor.is_pool_compatible_with(descriptor))
+            .take(|entry| entry.descriptor.is_pool_compatible_with(descriptor))
         {
-            return self.available.remove(index).target;
+            return entry.target;
         }
 
         self.news = self.news.saturating_add(1);
@@ -388,14 +388,12 @@ impl TransientTexturePool {
     }
 
     fn release(&mut self, descriptor: FrameTextureDescriptor, target: OffscreenTarget) {
-        self.available
-            .push(PooledTransientTexture { descriptor, target });
-        let mut bytes = self.estimated_bytes();
-        while self.available.len() > MAX_RETAINED_TRANSIENT_TEXTURES
-            || (bytes > MAX_RETAINED_TRANSIENT_BYTES && self.available.len() > 1)
-        {
-            bytes = bytes.saturating_sub(self.available.remove(0).descriptor.estimated_bytes());
-        }
+        self.available.put(
+            PooledTransientTexture { descriptor, target },
+            MAX_RETAINED_TRANSIENT_TEXTURES,
+            MAX_RETAINED_TRANSIENT_BYTES,
+            |entry| entry.descriptor.estimated_bytes(),
+        );
     }
 
     fn take_counts(&mut self) -> (u32, u32) {
@@ -530,6 +528,12 @@ impl WgpuFrameGraphExecutor {
 
     pub(crate) fn retained_texture_count(&self) -> usize {
         self.transient_textures.len()
+    }
+
+    /// Ends a frame, dropping the transient textures no frame has reused for
+    /// [`crate::idle_pool::IDLE_FRAMES`].
+    pub(crate) fn end_transient_frame(&mut self) {
+        self.transient_textures.available.end_frame();
     }
 
     pub(crate) fn release_transient(

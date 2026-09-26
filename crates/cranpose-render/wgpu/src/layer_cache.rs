@@ -6,15 +6,11 @@ use cranpose_render_common::{
 
 use crate::{
     draw_pass::ResolvedCompositeKind, frame_graph::FrameTextureDescriptor,
-    geometry::offscreen_byte_size, offscreen::OffscreenTarget,
+    geometry::offscreen_byte_size, idle_pool::IDLE_FRAMES, offscreen::OffscreenTarget,
 };
 
 const MAX_ENTRIES: usize = 4096;
 const MAX_BYTES: u64 = 96 * 1024 * 1024;
-/// The frames a raster may go unread before it is released: rasters a layer
-/// has moved past -- another scale, content it no longer shows -- would
-/// otherwise hold their memory until the byte budget fills.
-const IDLE_FRAMES: u64 = 120;
 
 #[derive(Clone)]
 pub(crate) enum RetainedContent {

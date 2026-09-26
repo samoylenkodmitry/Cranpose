@@ -80,7 +80,6 @@ fn the_byte_budget_bounds_full_screen_float_surfaces() {
 #[test]
 fn pool_starts_empty() {
     let pool = OffscreenPool::new_with_limit(wgpu::TextureFormat::Bgra8Unorm, 8192);
-    assert!(pool.available.is_empty());
     assert_eq!(pool.pool_size(), 0);
 }
 
@@ -91,4 +90,22 @@ fn max_texture_dimension_stored() {
 
     let pool = OffscreenPool::new_with_limit(wgpu::TextureFormat::Bgra8Unorm, 4096);
     assert_eq!(pool.max_texture_dim, 4096);
+}
+
+#[test]
+fn a_pooled_target_no_frame_reuses_is_dropped_after_the_idle_frames() {
+    let (_lock, device, _queue) = crate::frame_graph::upload_test_device();
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let mut pool = OffscreenPool::new_with_limit(format, 4096);
+    pool.release(OffscreenTarget::new(&device, format, 8, 8));
+    pool.release(OffscreenTarget::new(&device, format, 4, 4));
+    for _ in 0..crate::idle_pool::IDLE_FRAMES {
+        let reused = pool.acquire(&device, 4, 4, None);
+        pool.release(reused);
+        pool.end_frame();
+    }
+    assert_eq!(pool.pool_size(), 2);
+    pool.end_frame();
+    assert_eq!(pool.pool_size(), 1, "the target reused every frame stays");
+    assert_eq!(pool.estimated_bytes(), 4 * 4 * 4);
 }

@@ -1,7 +1,24 @@
 use super::{
     FrameTextureDescriptor, MIN_UPLOAD_BUFFER_BYTES, UploadPlacement, WgpuFrameGraph,
-    build_pass_schedule, place_upload, ring_outlives_frame,
+    WgpuFrameGraphExecutor, build_pass_schedule, place_upload, ring_outlives_frame,
 };
+use crate::{idle_pool::IDLE_FRAMES, offscreen::OffscreenTarget};
+
+#[test]
+fn a_transient_texture_no_frame_reuses_is_dropped_after_the_idle_frames() {
+    let (_lock, device, _queue) = super::upload_test_device();
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let descriptor = FrameTextureDescriptor::render_attachment("idle test", 8, 8, format);
+    let mut executor = WgpuFrameGraphExecutor::default();
+    executor.release_transient(descriptor, OffscreenTarget::new(&device, format, 8, 8));
+    for _ in 0..IDLE_FRAMES {
+        executor.end_transient_frame();
+    }
+    assert_eq!(executor.retained_texture_count(), 1);
+    executor.end_transient_frame();
+    assert_eq!(executor.retained_texture_count(), 0);
+    assert_eq!(executor.retained_texture_bytes(), 0);
+}
 
 #[test]
 fn a_ring_outlives_the_frames_that_fill_a_quarter_of_it() {
