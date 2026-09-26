@@ -128,11 +128,10 @@ pub trait LayoutModifierNode: ModifierNode {
 **DrawModifierNode**:
 ```rust
 pub trait DrawModifierNode: ModifierNode {
-    fn draw(
-        &mut self,
-        context: &mut dyn ModifierNodeContext,
-        draw_scope: &mut dyn DrawScope
-    );
+    /// Drawn over the node's content, at render time, at the node's size.
+    fn create_draw_closure(&self) -> Option<NodeDrawClosure> { None }
+    /// Drawn behind the node's content.
+    fn create_behind_draw_closure(&self) -> Option<NodeDrawClosure> { None }
 }
 ```
 
@@ -785,8 +784,9 @@ impl LayoutModifierNode for MyModifierNode {
 }
 
 impl DrawModifierNode for MyModifierNode {
-    fn draw(&self, draw_scope: &mut dyn DrawScope) {
-        // Implementation
+    fn create_draw_closure(&self) -> Option<NodeDrawClosure> {
+        // Capture what the drawing reads (Rc handles) and record at render time
+        None
     }
 }
 

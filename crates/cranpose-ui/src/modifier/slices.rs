@@ -707,27 +707,7 @@ fn collect_draw_closures(
         slices
             .draw_commands
             .push(inset_draw_command(DrawCommand::Overlay(closure), padding));
-        return;
     }
-    use cranpose_ui_graphics::{DrawScope as _, DrawScopeDefault};
-    let mut scope = DrawScopeDefault::with_text_measurer(
-        crate::modifier::Size {
-            width: 0.0,
-            height: 0.0,
-        },
-        crate::text::AppContextTextMeasurer::shared(),
-    );
-    draw_node.draw(&mut scope);
-    let primitives = scope.into_primitives();
-    if primitives.is_empty() {
-        return;
-    }
-    let draw_cmd = Rc::new(move |scope: &mut DrawScopeDefault| {
-        scope.push_recorded(primitives.clone());
-    });
-    slices
-        .draw_commands
-        .push(inset_draw_command(DrawCommand::Overlay(draw_cmd), padding));
 }
 
 /// `command` drawn where a draw modifier after `padding` draws: in the node's

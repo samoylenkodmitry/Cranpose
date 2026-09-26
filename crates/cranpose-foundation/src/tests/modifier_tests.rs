@@ -834,19 +834,9 @@ impl ModifierNodeElement for TestLayoutElement {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct TestDrawNode {
-    draw_count: Cell<usize>,
     state: NodeState,
-}
-
-impl Default for TestDrawNode {
-    fn default() -> Self {
-        Self {
-            draw_count: Cell::new(0),
-            state: NodeState::new(),
-        }
-    }
 }
 
 impl DelegatableNode for TestDrawNode {
@@ -865,11 +855,7 @@ impl ModifierNode for TestDrawNode {
     }
 }
 
-impl DrawModifierNode for TestDrawNode {
-    fn draw(&self, _draw_scope: &mut dyn DrawScope) {
-        self.draw_count.set(self.draw_count.get() + 1);
-    }
-}
+impl DrawModifierNode for TestDrawNode {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct TestDrawElement;

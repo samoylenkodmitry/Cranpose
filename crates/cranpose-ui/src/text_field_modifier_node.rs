@@ -6,7 +6,7 @@ use std::{
 
 use cranpose_core::{MutableState, mutableStateOf};
 use cranpose_foundation::{
-    Constraints, DelegatableNode, DrawModifierNode, DrawScope, FocusState, InvalidationKind,
+    Constraints, DelegatableNode, DrawModifierNode, FocusState, InvalidationKind,
     LayoutModifierNode, Measurable, ModifierNode, ModifierNodeContext, ModifierNodeElement,
     NodeCapabilities, NodeState, PointerEvent, PointerEventKind, PointerInputNode,
     SemanticsConfiguration, SemanticsNode, Size,
@@ -1009,8 +1009,6 @@ fn content_viewport(
 }
 
 impl DrawModifierNode for TextFieldModifierNode {
-    fn draw(&self, _draw_scope: &mut dyn DrawScope) {}
-
     fn create_draw_closure(
         &self,
     ) -> Option<Rc<dyn Fn(&mut cranpose_ui_graphics::DrawScopeDefault)>> {
