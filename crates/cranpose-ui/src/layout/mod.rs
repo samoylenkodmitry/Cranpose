@@ -351,6 +351,9 @@ pub enum SemanticsRole {
 #[derive(Clone, Debug, PartialEq)]
 pub struct SemanticsNode {
     pub node_id: NodeId,
+    /// Where the node lies in the root's coordinates: its layout rect,
+    /// before graphics-layer transforms, as [`LayoutBox::rect`] holds it.
+    pub bounds: GeometryRect,
     /// Incarnation of the runtime node, incremented when its storage is recycled.
     pub node_generation: u32,
     /// Where this node sits in the tree (layout, text, subcomposition …).
@@ -448,6 +451,7 @@ impl Default for SemanticsNode {
     fn default() -> Self {
         Self {
             node_id: 0,
+            bounds: GeometryRect::EMPTY,
             node_generation: 0,
             role: SemanticsRole::Unknown,
             widget_role: None,
@@ -943,6 +947,28 @@ fn place_layout_box(
     }))
 }
 
+/// A semantics node's rect from its placement under a parent whose content
+/// starts at `origin`, and where its own content starts: the rule
+/// [`build_layout_tree_from_applier`] places boxes by, with the root at the
+/// origin.
+fn semantics_placement(
+    state: &crate::widgets::nodes::layout_node::LayoutState,
+    origin: Option<Point>,
+) -> (GeometryRect, Point) {
+    let top_left = origin.map_or_else(Point::default, |origin| Point {
+        x: origin.x + state.position().x,
+        y: origin.y + state.position().y,
+    });
+    let content = Point {
+        x: top_left.x + state.content_offset.x,
+        y: top_left.y + state.content_offset.y,
+    };
+    (
+        GeometryRect::from_origin_size(top_left, state.size()),
+        content,
+    )
+}
+
 /// Builds a semantics snapshot from retained layout state in the live applier tree.
 ///
 /// This is the on-demand counterpart to [`build_layout_tree_from_applier`].
@@ -955,6 +981,7 @@ pub fn build_semantics_tree_from_applier(
     fn node(
         applier: &mut MemoryApplier,
         node_id: NodeId,
+        origin: Option<Point>,
     ) -> Result<Option<SemanticsNode>, NodeError> {
         match applier.with_node::<LayoutNode, _>(node_id, |layout| {
             let state = layout.layout_state();
@@ -965,13 +992,13 @@ pub fn build_semantics_tree_from_applier(
             let config = layout.semantics_configuration();
             let children = layout.children.clone();
             layout.clear_needs_semantics();
-            Some((role, config, children, state.size()))
+            Some((role, config, children, semantics_placement(&state, origin)))
         }) {
-            Ok(Some((role, config, child_ids, size))) => {
+            Ok(Some((role, config, child_ids, (bounds, content)))) => {
                 let child_ids = children_in_this_window(applier, child_ids);
                 let mut children = Vec::with_capacity(child_ids.len());
                 for child_id in child_ids {
-                    if let Some(child) = node(applier, child_id)? {
+                    if let Some(child) = node(applier, child_id, Some(content))? {
                         children.push(child);
                     }
                 }
@@ -981,7 +1008,7 @@ pub fn build_semantics_tree_from_applier(
                     role,
                     config,
                     children,
-                    size,
+                    bounds,
                 )));
             }
             Ok(None) => return Ok(None),
@@ -997,13 +1024,13 @@ pub fn build_semantics_tree_from_applier(
             let config = subcompose.semantics_configuration();
             let children = subcompose.active_children();
             subcompose.clear_needs_semantics();
-            Some((config, children, state.size()))
+            Some((config, children, semantics_placement(&state, origin)))
         }) {
-            Ok(Some((config, child_ids, size))) => {
+            Ok(Some((config, child_ids, (bounds, content)))) => {
                 let child_ids = children_in_this_window(applier, child_ids);
                 let mut children = Vec::with_capacity(child_ids.len());
                 for child_id in child_ids {
-                    if let Some(child) = node(applier, child_id)? {
+                    if let Some(child) = node(applier, child_id, Some(content))? {
                         children.push(child);
                     }
                 }
@@ -1013,7 +1040,7 @@ pub fn build_semantics_tree_from_applier(
                     SemanticsRole::Subcompose,
                     config,
                     children,
-                    size,
+                    bounds,
                 )))
             }
             Ok(None) | Err(NodeError::TypeMismatch { .. } | NodeError::Missing { .. }) => Ok(None),
@@ -1021,7 +1048,7 @@ pub fn build_semantics_tree_from_applier(
         }
     }
 
-    node(applier, root).map(|root| root.map(SemanticsTree::new))
+    node(applier, root, None).map(|root| root.map(SemanticsTree::new))
 }
 
 /// The modal the semantics tree of `root` would be rooted at, found without
@@ -3333,7 +3360,7 @@ fn build_semantics_tree_from_live_nodes(
     node: &MeasuredNode,
 ) -> Result<SemanticsTree, NodeError> {
     Ok(SemanticsTree::new(build_semantics_node_from_live_nodes(
-        applier, node,
+        applier, node, None,
     )?))
 }
 
@@ -3343,10 +3370,11 @@ fn semantics_node_from_parts(
     mut role: SemanticsRole,
     config: Option<SemanticsConfiguration>,
     children: Vec<SemanticsNode>,
-    size: Size,
+    bounds: GeometryRect,
 ) -> SemanticsNode {
     let mut node = SemanticsNode {
         node_id,
+        bounds,
         node_generation,
         children,
         ..SemanticsNode::default()
@@ -3385,7 +3413,11 @@ fn semantics_node_from_parts(
         node.editable_text = config.is_editable_text;
         node.multiline = config.multiline;
         node.hidden = config.hidden;
-        node.is_modal = config.is_modal && modal_takes_space(size);
+        node.is_modal = config.is_modal
+            && modal_takes_space(Size {
+                width: bounds.width,
+                height: bounds.height,
+            });
         node.merge_descendants = config.merge_descendants;
         node.selectable_group = config.selectable_group;
         node.pane_title = config.pane_title;
@@ -3419,35 +3451,54 @@ fn semantics_node_from_parts(
 fn build_semantics_node_from_live_nodes(
     applier: &mut MemoryApplier,
     node: &MeasuredNode,
+    origin: Option<Point>,
 ) -> Result<SemanticsNode, NodeError> {
-    let (role, config) = match applier.with_node::<LayoutNode, _>(node.node_id, |layout| {
-        let role = role_from_modifier_slices(&layout.modifier_slices_snapshot());
-        let config = layout.semantics_configuration();
-        layout.clear_needs_semantics();
-        (role, config)
-    }) {
-        Ok(data) => data,
-        Err(NodeError::TypeMismatch { .. } | NodeError::Missing { .. }) => {
-            match applier.with_node::<SubcomposeLayoutNode, _>(node.node_id, |subcompose| {
-                subcompose.clear_needs_semantics();
-                (
-                    SemanticsRole::Subcompose,
-                    subcompose.semantics_configuration(),
-                )
-            }) {
-                Ok(data) => data,
-                Err(NodeError::TypeMismatch { .. } | NodeError::Missing { .. }) => {
-                    (SemanticsRole::Unknown, None)
+    let (role, config, (bounds, content)) =
+        match applier.with_node::<LayoutNode, _>(node.node_id, |layout| {
+            let role = role_from_modifier_slices(&layout.modifier_slices_snapshot());
+            let config = layout.semantics_configuration();
+            layout.clear_needs_semantics();
+            (
+                role,
+                config,
+                semantics_placement(&layout.layout_state(), origin),
+            )
+        }) {
+            Ok(data) => data,
+            Err(NodeError::TypeMismatch { .. } | NodeError::Missing { .. }) => {
+                match applier.with_node::<SubcomposeLayoutNode, _>(node.node_id, |subcompose| {
+                    subcompose.clear_needs_semantics();
+                    (
+                        SemanticsRole::Subcompose,
+                        subcompose.semantics_configuration(),
+                        semantics_placement(&subcompose.layout_state(), origin),
+                    )
+                }) {
+                    Ok(data) => data,
+                    Err(NodeError::TypeMismatch { .. } | NodeError::Missing { .. }) => {
+                        let top_left = origin.unwrap_or_default();
+                        (
+                            SemanticsRole::Unknown,
+                            None,
+                            (
+                                GeometryRect::from_origin_size(top_left, node.size),
+                                top_left,
+                            ),
+                        )
+                    }
+                    Err(err) => return Err(err),
                 }
-                Err(err) => return Err(err),
             }
-        }
-        Err(err) => return Err(err),
-    };
+            Err(err) => return Err(err),
+        };
 
     let mut children = Vec::with_capacity(node.children.len());
     for child in &node.children {
-        children.push(build_semantics_node_from_live_nodes(applier, &child.node)?);
+        children.push(build_semantics_node_from_live_nodes(
+            applier,
+            &child.node,
+            Some(content),
+        )?);
     }
 
     Ok(semantics_node_from_parts(
@@ -3456,7 +3507,7 @@ fn build_semantics_node_from_live_nodes(
         role,
         config,
         children,
-        node.size,
+        bounds,
     ))
 }
 
@@ -3585,7 +3636,7 @@ fn build_semantics_node_from_layout_box(layout_box: &LayoutBox) -> SemanticsNode
         semantics_role_from_layout_box(layout_box),
         layout_box.node_data.semantics().cloned(),
         children,
-        Size::new(layout_box.rect.width, layout_box.rect.height),
+        layout_box.rect,
     )
 }
 

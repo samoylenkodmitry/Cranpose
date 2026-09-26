@@ -1,11 +1,11 @@
 use super::*;
 use crate::inspector::{InspectorAction, InspectorNode};
 
-fn project(layout: &LayoutTree, _semantics: &cranpose_ui::SemanticsTree) -> Vec<InspectorNode> {
+fn project(semantics: &cranpose_ui::SemanticsTree) -> Vec<InspectorNode> {
     vec![InspectorNode {
-        node_id: layout.root().node_id,
+        node_id: semantics.root().node_id,
         canvas_key: None,
-        bounds: layout.root().rect,
+        bounds: semantics.root().bounds,
         label: "App".into(),
         details: "Application element".into(),
         focused: false,
