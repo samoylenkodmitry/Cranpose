@@ -229,7 +229,7 @@ pub(crate) fn modifier_debug_enabled() -> bool {
 }
 
 fn inspector_metadata_enabled() -> bool {
-    cfg!(test) || modifier_debug_enabled()
+    cfg!(any(test, feature = "inspection")) || modifier_debug_enabled()
 }
 
 #[derive(Clone)]

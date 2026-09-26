@@ -121,6 +121,9 @@ impl EmbedEndpoint {
 /// Why an embedded application stopped before its host closed it.
 #[derive(Debug, thiserror::Error)]
 pub enum EmbedError {
+    /// The requested component preview was not registered in this executable.
+    #[error("{0}")]
+    Preview(String),
     /// The host was not listening at the endpoint's address.
     #[error("could not connect to the embedding host at {address}: {source}")]
     Connect {
@@ -803,6 +806,22 @@ fn apply_batch(
                     },
                 )?;
             }
+            LoopEvent::Host(HostEvent::Message { channel, payload })
+                if channel == crate::inspection::REQUEST_CHANNEL =>
+            {
+                let request_id = payload.parse().unwrap_or_default();
+                let snapshot =
+                    crate::inspection::snapshot(host.shell.layout_tree(), request_id, 10_000);
+                let payload = serde_json::to_string(&snapshot)
+                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+                write_app_event(
+                    writer,
+                    &AppEvent::Message {
+                        channel: crate::inspection::SNAPSHOT_CHANNEL,
+                        payload: &payload,
+                    },
+                )?;
+            }
             LoopEvent::Host(event) => host.handle(event),
             LoopEvent::Outgoing(message) => write_app_event(
                 writer,
@@ -897,6 +916,23 @@ fn spawn_reader(stream: TcpStream, sender: Sender<LoopEvent>) -> io::Result<()> 
         .map(drop)
 }
 
+#[cfg(feature = "preview")]
+fn preview_root(mut content: impl FnMut() + 'static) -> Result<impl FnMut() + 'static, EmbedError> {
+    let selected = std::env::var("CRANPOSE_PREVIEW")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .map(|value| crate::preview::find(&value))
+        .transpose()
+        .map_err(|error| EmbedError::Preview(error.to_string()))?;
+    Ok(move || {
+        if let Some(preview) = selected {
+            (preview.render)();
+            return;
+        }
+        content();
+    })
+}
+
 pub(crate) fn try_run(
     settings: AppSettings,
     endpoint: EmbedEndpoint,
@@ -917,7 +953,23 @@ pub(crate) fn try_run(
     )?;
     writer.flush()?;
 
+    #[cfg(feature = "preview")]
+    {
+        let payload = serde_json::to_string(&crate::preview::registered())
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        write_app_event(
+            &mut writer,
+            &AppEvent::Message {
+                channel: "cranpose.previews.v1",
+                payload: &payload,
+            },
+        )?;
+        writer.flush()?;
+    }
+
     let (sender, events) = mpsc::channel();
+    #[cfg(feature = "preview")]
+    let content = preview_root(content)?;
     spawn_reader(stream, sender.clone())?;
     let gpu = HeadlessGpu::request()?;
     let platform_env = PlatformEnvironment::new();

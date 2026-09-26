@@ -76,6 +76,8 @@ desktop-shell = [
 # an editor panel): frames are drawn off screen and streamed to the host over
 # a loopback socket, and the host sends input back. See `cranpose::embed`.
 embed = [
+    "dep:serde",
+    "dep:serde_json",
     "renderer-wgpu",
     "native-windows",
     "cranpose-app-shell/clipboard-native",
@@ -166,6 +168,7 @@ storekit = ["dep:cranpose-storekit"]
 # sells nothing should not carry. Harmless to enable on other targets — the
 # whole backend is Android-only and compiles away.
 playbilling = []
+preview = ["embed", "dep:inventory", "cranpose-ui/inspection"]
 
 [dependencies]
 cranpose-app-shell = { workspace = true }
@@ -259,6 +262,10 @@ web-time = { workspace = true }
 cranpose-render-common.workspace = true
 raw-window-handle = "0.6"
 accesskit = { version = "0.25.1", optional = true }
+serde = { version = "1.0.229", features = ["derive"], optional = true }
+serde_json = { version = "1.0.151", optional = true }
+inventory = { version = "0.3.24", optional = true }
+cranpose-macros = { version = "0.1.164", path = "../cranpose-macros" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 console_error_panic_hook = "0.1"

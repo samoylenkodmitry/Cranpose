@@ -29,7 +29,10 @@ pub mod snapshot_pinning;
 pub mod snapshot_state_observer;
 pub mod snapshot_v2;
 mod snapshot_weak_set;
+pub mod source_trace;
 mod state;
+#[doc(hidden)]
+pub use source_trace::__source_scope;
 pub mod subcompose;
 
 #[cfg(feature = "internal")]
