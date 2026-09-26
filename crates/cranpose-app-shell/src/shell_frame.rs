@@ -625,8 +625,6 @@ where
         };
 
         let mut result = FrameUpdateResult::default();
-        let mut retained_visual_nodes = HashSet::default();
-        let mut prune_observations = false;
         for ((surface, draw_dirty), structural) in
             self.surfaces.iter_mut().zip(draw_dirty).zip(structural)
         {
@@ -638,23 +636,43 @@ where
             result.visual_changed |= frame.result.visual_changed;
             result.structure_changed |= frame.result.structure_changed;
             result.content_redrawn |= frame.rebuilt;
-            if frame.rebuilt
-                && surface
-                    .renderer
-                    .scene()
-                    .collect_retained_visual_observation_nodes(&mut surface.retained_visual_nodes)
-            {
-                prune_observations = true;
-            }
-            retained_visual_nodes.extend(surface.retained_visual_nodes.iter().copied());
         }
-        if prune_observations {
-            cranpose_ui::prune_draw_observations_to_nodes(&retained_visual_nodes);
+        if result.content_redrawn {
+            self.prune_stale_draw_observations();
         }
         result.content_moved = std::mem::take(&mut self.app.content_moved);
         result
     }
+
+    /// Drops the draw observations of nodes no surface's render graph holds
+    /// any more, once every [`OBSERVATION_PRUNE_INTERVAL`] rebuilt frames:
+    /// finding them walks every node of every graph, and an observation
+    /// left behind in between costs no more than a redraw request for a
+    /// node nothing draws.
+    fn prune_stale_draw_observations(&mut self) {
+        self.app.rebuilt_frames_since_observation_prune += 1;
+        if self.app.rebuilt_frames_since_observation_prune < OBSERVATION_PRUNE_INTERVAL {
+            return;
+        }
+        self.app.rebuilt_frames_since_observation_prune = 0;
+        let mut retained_visual_nodes = HashSet::default();
+        let mut any_graph = false;
+        for surface in &mut self.surfaces {
+            any_graph |= surface
+                .renderer
+                .scene()
+                .collect_retained_visual_observation_nodes(&mut surface.retained_visual_nodes);
+            retained_visual_nodes.extend(surface.retained_visual_nodes.iter().copied());
+        }
+        if any_graph {
+            cranpose_ui::prune_draw_observations_to_nodes(&retained_visual_nodes);
+        }
+    }
 }
+
+/// Rebuilt frames between prunes of stale draw observations: once a second
+/// at 60 Hz.
+pub(crate) const OBSERVATION_PRUNE_INTERVAL: u32 = 60;
 
 fn render_surface<R>(
     app: &mut ShellApp,
