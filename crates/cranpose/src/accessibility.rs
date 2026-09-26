@@ -10,7 +10,12 @@ use cranpose_ui::{
 
 #[path = "accessibility_identity.rs"]
 mod identity;
-pub(crate) use identity::{AccessibilityIdentityError, AccessibilitySnapshot, ReplacedSnapshot};
+#[cfg(any(
+    test,
+    all(feature = "android", feature = "renderer-wgpu", target_os = "android")
+))]
+pub(crate) use identity::AccessibilityIdentityError;
+pub(crate) use identity::AccessibilitySnapshot;
 
 #[cfg(any(
     test,

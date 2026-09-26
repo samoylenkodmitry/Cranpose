@@ -3,7 +3,7 @@ use cranpose_core::collections::map::HashMap;
 use crate::{
     accessibility::{
         AccessibilityElement, AccessibilityIdentityError, AccessibilityRect, AccessibilitySnapshot,
-        CollectionItem, ReplacedSnapshot, checked_state, utf16_offset,
+        CollectionItem, checked_state, utf16_offset,
     },
     android_wire_escape::escape_wire_field,
 };
@@ -53,10 +53,7 @@ impl AccessibilityWire {
         density: f32,
     ) -> Result<AccessibilityUpdate, AccessibilityIdentityError> {
         let density = density.max(f32::EPSILON);
-        let ReplacedSnapshot {
-            elements: mut previous,
-            ids: previous_ids,
-        } = snapshot.update(elements)?;
+        let (mut previous, previous_ids) = snapshot.update(elements)?;
         let parents = scroll_parent_ids(&snapshot.elements, &snapshot.ids);
         let known = self.density == Some(density.to_bits());
         let previous_index: HashMap<i32, usize> = match known {

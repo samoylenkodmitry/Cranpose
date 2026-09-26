@@ -10,12 +10,6 @@ pub(crate) enum AccessibilityIdentityError {
     Duplicate(NodeId, Option<u64>),
 }
 
-/// The elements and ids a snapshot held before an update replaced them.
-pub(crate) struct ReplacedSnapshot {
-    pub(crate) elements: Vec<AccessibilityElement>,
-    pub(crate) ids: Vec<i32>,
-}
-
 #[derive(Default)]
 pub(crate) struct AccessibilitySnapshot {
     pub(crate) elements: Vec<AccessibilityElement>,
@@ -25,10 +19,12 @@ pub(crate) struct AccessibilitySnapshot {
 }
 
 impl AccessibilitySnapshot {
+    /// Moves on to `elements`, keeping the ids of controls it already held,
+    /// and hands back the elements and ids it replaced.
     pub(crate) fn update(
         &mut self,
         elements: Vec<AccessibilityElement>,
-    ) -> Result<ReplacedSnapshot, AccessibilityIdentityError> {
+    ) -> Result<(Vec<AccessibilityElement>, Vec<i32>), AccessibilityIdentityError> {
         let mut previous: HashMap<_, _> = self
             .elements
             .iter()
@@ -60,10 +56,10 @@ impl AccessibilitySnapshot {
         }
         self.indices = indices;
         self.last_id = last_id;
-        Ok(ReplacedSnapshot {
-            elements: std::mem::replace(&mut self.elements, elements),
-            ids: std::mem::replace(&mut self.ids, ids),
-        })
+        Ok((
+            std::mem::replace(&mut self.elements, elements),
+            std::mem::replace(&mut self.ids, ids),
+        ))
     }
 
     pub(crate) fn element(&self, id: i32) -> Option<&AccessibilityElement> {

@@ -173,10 +173,10 @@ fn an_update_hands_back_the_snapshot_it_replaced() {
         .update(vec![element_with(7, None)])
         .expect("unique identity");
     let first = snapshot.ids.clone();
-    let replaced = snapshot
+    let (elements, ids) = snapshot
         .update(vec![element_with(8, None)])
         .expect("unique identity");
-    assert_eq!(replaced.ids, first);
-    assert_eq!(replaced.elements, vec![element_with(7, None)]);
+    assert_eq!(ids, first);
+    assert_eq!(elements, vec![element_with(7, None)]);
     assert_ne!(snapshot.ids, first);
 }
