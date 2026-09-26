@@ -12,10 +12,6 @@ use crate::{
 
 const ACTION_SEPARATOR: char = '\u{1f}';
 
-/// The fields in one record, as `CranposeActivity.ACCESSIBILITY_FIELDS`
-/// parses them.
-const RECORD_FIELDS: usize = 41;
-
 /// What the host needs to show a new snapshot: every virtual id in order,
 /// full records for the controls it does not hold as they are now, and new
 /// pixel bounds for the controls that only moved, as `id, left, top, right,

@@ -1036,7 +1036,8 @@ fn android_play_billing_reaches_the_purchase_registry() {
 
 #[test]
 fn android_accessibility_record_width_agrees_across_the_jni_boundary() {
-    let wire_source = crate_source("src/android_accessibility_wire.rs");
+    // The encoder's tests pin the width it writes to this constant.
+    let wire_source = crate_source("src/tests/android_accessibility_wire.rs");
     let java_source =
         workspace_source("crates/cranpose/android/java/dev/cranpose/android/CranposeActivity.java");
 
@@ -1044,7 +1045,7 @@ fn android_accessibility_record_width_agrees_across_the_jni_boundary() {
         .lines()
         .find_map(|line| line.trim().strip_prefix("const RECORD_FIELDS: usize = "))
         .and_then(|value| value.trim_end_matches(';').parse::<usize>().ok())
-        .expect("the accessibility wire should declare its record width");
+        .expect("the accessibility wire tests should declare the record width");
     let java_fields = java_source
         .lines()
         .find(|line| line.contains("ACCESSIBILITY_FIELDS ="))

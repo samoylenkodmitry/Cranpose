@@ -1,5 +1,9 @@
 use super::*;
 
+/// The fields in one record, as `CranposeActivity.ACCESSIBILITY_FIELDS`
+/// parses them.
+const RECORD_FIELDS: usize = 41;
+
 fn encode_elements(elements: &[AccessibilityElement], changed: &[bool], density: f32) -> String {
     let mut snapshot = AccessibilitySnapshot::default();
     AccessibilityWire::default()
