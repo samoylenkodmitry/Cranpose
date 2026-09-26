@@ -95,3 +95,39 @@ fn a_widget_that_is_one_layout_composes_as_few_groups_as_a_bare_layout() {
          observation and its snapshot on every recomposition"
     );
 }
+
+#[composable]
+fn ReportsCallerModifierChange(revision: MutableState<u32>, seen: Rc<RefCell<Vec<bool>>>) {
+    let padded = Modifier::empty().padding(4.0);
+    let modifier = if revision.value() < 2 {
+        padded
+    } else {
+        padded.semantics(|_| {})
+    };
+    seen.borrow_mut().push(caller_modifier_changed(&modifier));
+}
+
+#[test]
+fn a_caller_modifier_changes_only_when_it_is_not_strictly_equal() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let mut composition = Composition::new(MemoryApplier::new());
+    let revision = MutableState::with_runtime(0_u32, composition.runtime_handle());
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    composition
+        .render(location_key(file!(), line!(), column!()), {
+            let seen = Rc::clone(&seen);
+            move || ReportsCallerModifierChange(revision, Rc::clone(&seen))
+        })
+        .expect("initial render");
+    for next in 1..=3 {
+        revision.set_value(next);
+        composition
+            .process_invalid_scopes()
+            .expect("recompose with the next modifier");
+    }
+    assert_eq!(
+        *seen.borrow(),
+        [false, false, true, true],
+        "a rebuilt equal modifier is unchanged; a new closure is a change"
+    );
+}

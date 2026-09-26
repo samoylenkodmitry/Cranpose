@@ -126,32 +126,38 @@ fn TogglingModalBox(modal: cranpose_core::MutableState<bool>, dialog: Rc<Cell<Op
     dialog.set(Some(Box(modifier, BoxSpec::default(), || {})));
 }
 
-#[test]
-fn a_modal_modifier_a_recomposition_adds_or_drops_reaches_the_walk() {
+type ModalWidget = fn(cranpose_core::MutableState<bool>, Rc<Cell<Option<NodeId>>>);
+
+fn assert_toggled_modal_reaches_the_walk(widget: ModalWidget) {
     let modal_state = Rc::new(std::cell::RefCell::new(None));
     let dialog = Rc::new(Cell::new(None));
     let (state_slot, dialog_slot) = (Rc::clone(&modal_state), Rc::clone(&dialog));
     let mut composition = run_test_composition(move || {
         let modal = cranpose_core::rememberMutableStateOf(|| true);
         *state_slot.borrow_mut() = Some(modal);
-        TogglingModalBox(modal, Rc::clone(&dialog_slot));
+        widget(modal, Rc::clone(&dialog_slot));
     });
     assert_eq!(walk(&mut composition), dialog.get());
     let modal = modal_state.borrow().expect("state remembered");
     modal.set_value(false);
     composition
         .process_invalid_scopes()
-        .expect("recompose without the modal modifier");
+        .expect("recompose without the modal");
     assert_eq!(
         walk(&mut composition),
         None,
-        "a cached flag must not outlive the chain"
+        "the recomposed modifier's semantics must replace the old"
     );
     modal.set_value(true);
     composition
         .process_invalid_scopes()
-        .expect("recompose with the modal modifier");
+        .expect("recompose with the modal");
     assert_eq!(walk(&mut composition), dialog.get());
+}
+
+#[test]
+fn a_modal_modifier_a_recomposition_adds_or_drops_reaches_the_walk() {
+    assert_toggled_modal_reaches_the_walk(TogglingModalBox);
 }
 
 #[test]
@@ -192,5 +198,112 @@ fn a_chains_reach_joins_every_semantics_modifier_in_it() {
     assert_eq!(
         chain_reach(&Modifier::empty().padding(2.0)),
         cranpose_foundation::SemanticsReach::default()
+    );
+}
+
+fn captured_modal(modal: cranpose_core::MutableState<bool>) -> Modifier {
+    let is_modal = modal.get();
+    Modifier::empty()
+        .size_points(40.0, 40.0)
+        .semantics(move |config| config.is_modal = is_modal)
+}
+
+#[composable]
+fn CapturedModalBox(modal: cranpose_core::MutableState<bool>, dialog: Rc<Cell<Option<NodeId>>>) {
+    dialog.set(Some(Box(captured_modal(modal), BoxSpec::default(), || {})));
+}
+
+#[composable]
+fn CapturedModalLazyColumn(
+    modal: cranpose_core::MutableState<bool>,
+    dialog: Rc<Cell<Option<NodeId>>>,
+) {
+    let state = cranpose_foundation::lazy::rememberLazyListState();
+    dialog.set(Some(LazyColumn(
+        captured_modal(modal),
+        state,
+        LazyColumnSpec::default(),
+        |_| {},
+    )));
+}
+
+#[composable]
+fn CapturedModalScalingList(
+    modal: cranpose_core::MutableState<bool>,
+    dialog: Rc<Cell<Option<NodeId>>>,
+) {
+    let state = crate::widgets::wear::rememberWearScalingListState(
+        crate::round_scaling_list::CentreAnchor::default(),
+    );
+    dialog.set(Some(crate::widgets::wear::WearScalingLazyColumn(
+        captured_modal(modal),
+        state,
+        crate::widgets::wear::WearScalingLazyColumnSpec::default(),
+        |_| {},
+    )));
+}
+
+#[test]
+fn a_semantics_closure_a_recomposition_replaces_reaches_the_walk_through_a_box() {
+    assert_toggled_modal_reaches_the_walk(CapturedModalBox);
+}
+
+#[test]
+fn a_lazy_columns_semantics_closure_a_recomposition_replaces_reaches_the_walk() {
+    assert_toggled_modal_reaches_the_walk(CapturedModalLazyColumn);
+}
+
+#[test]
+fn a_scaling_lists_semantics_closure_a_recomposition_replaces_reaches_the_walk() {
+    assert_toggled_modal_reaches_the_walk(CapturedModalScalingList);
+}
+
+#[composable]
+fn ScrollModalLazyColumn(
+    list: Rc<std::cell::RefCell<Option<cranpose_foundation::lazy::LazyListState>>>,
+    dialog: Rc<Cell<Option<NodeId>>>,
+) {
+    let state = cranpose_foundation::lazy::rememberLazyListState();
+    *list.borrow_mut() = Some(state);
+    Column(Modifier::empty(), ColumnSpec::default(), move || {
+        let at_top = state.first_visible_item_index() == 0;
+        dialog.set(Some(LazyColumn(
+            Modifier::empty()
+                .size_points(40.0, 240.0)
+                .semantics(move |config| config.is_modal = at_top),
+            state,
+            LazyColumnSpec::default(),
+            |scope| {
+                scope.items(cranpose_foundation::lazy::LazyItems::new(50), |_| {
+                    Spacer(Size {
+                        width: 40.0,
+                        height: 48.0,
+                    });
+                });
+            },
+        )));
+    });
+}
+
+#[test]
+fn a_lazy_columns_semantics_closure_its_own_scroll_replaces_reaches_the_walk() {
+    let list = Rc::new(std::cell::RefCell::new(None));
+    let dialog = Rc::new(Cell::new(None));
+    let (list_slot, dialog_slot) = (Rc::clone(&list), Rc::clone(&dialog));
+    let mut composition = run_test_composition(move || {
+        ScrollModalLazyColumn(Rc::clone(&list_slot), Rc::clone(&dialog_slot));
+    });
+    assert_eq!(walk(&mut composition), dialog.get());
+    let state = list.borrow().expect("state remembered");
+    state.dispatch_scroll_delta(-160.0);
+    let _ = walk(&mut composition);
+    assert!(state.first_visible_item_index() > 0, "the list scrolled");
+    composition
+        .process_invalid_scopes()
+        .expect("recompose the list's caller after the scroll");
+    assert_eq!(
+        walk(&mut composition),
+        None,
+        "a closure rebuilt by a list-state recomposition must replace the old"
     );
 }
