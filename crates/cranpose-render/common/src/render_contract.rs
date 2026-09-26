@@ -509,7 +509,7 @@ fn with_background(bounds: Rect, mut children: Vec<RenderNode>) -> Vec<RenderNod
 fn draw_node(primitive: DrawPrimitive, clip: Option<Rect>) -> RenderNode {
     RenderNode::Primitive(PrimitiveEntry {
         phase: PrimitivePhase::BeforeChildren,
-        node: PrimitiveNode::Draw(DrawPrimitiveNode { primitive, clip }),
+        node: PrimitiveNode::Draw(Box::new(DrawPrimitiveNode { primitive, clip })),
     })
 }
 

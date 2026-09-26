@@ -19,8 +19,8 @@ fn frame_graph(index: usize) -> RenderGraph {
         WIDTH as f32,
         HEIGHT as f32,
         vec![
-            support::rect_primitive(bounds, Color::BLACK),
-            support::rect_primitive(
+            support::solid_rect(bounds, Color::BLACK),
+            support::solid_rect(
                 Rect {
                     x: 8.0 + index as f32 * 9.0,
                     y: 16.0,

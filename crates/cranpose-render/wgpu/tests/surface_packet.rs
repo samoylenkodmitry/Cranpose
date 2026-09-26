@@ -22,7 +22,7 @@ fn shadowed_root_graph(cache_policy: CachePolicy) -> RenderGraph {
         cache_policy,
         bounds,
         ProjectiveTransform::identity(),
-        vec![support::rect_primitive(
+        vec![support::solid_rect(
             Rect {
                 x: 24.0,
                 y: 20.0,
@@ -141,7 +141,7 @@ fn dev_overlay_packet_renders_over_both_root_kinds() {
                 height: FRAME_HEIGHT as f32,
             },
             ProjectiveTransform::identity(),
-            vec![support::rect_primitive(
+            vec![support::solid_rect(
                 Rect {
                     x: 0.0,
                     y: 0.0,

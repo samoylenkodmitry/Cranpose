@@ -2,10 +2,7 @@ use std::path::PathBuf;
 
 use cranpose_render_common::{
     Renderer,
-    graph::{
-        DrawPrimitiveNode, DrawRunNode, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase,
-        ProjectiveTransform, RenderGraph, RenderNode,
-    },
+    graph::{DrawRunNode, LayerNode, PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode},
 };
 use cranpose_ui_graphics::{
     BlendMode, Brush, Color, ColorFilter, CompositingStrategy, CornerRadii, DrawPrimitive,
@@ -62,13 +59,6 @@ fn run_node(primitives: Vec<DrawPrimitive>) -> RenderNode {
     RenderNode::DrawRun(DrawRunNode::new(PrimitivePhase::BeforeChildren, primitives))
 }
 
-fn draw_node(primitive: DrawPrimitive, clip: Option<Rect>) -> RenderNode {
-    RenderNode::Primitive(PrimitiveEntry {
-        phase: PrimitivePhase::BeforeChildren,
-        node: PrimitiveNode::Draw(DrawPrimitiveNode { primitive, clip }),
-    })
-}
-
 fn root(size: u32, children: Vec<RenderNode>) -> RenderGraph {
     RenderGraph::new(LayerNode {
         local_bounds: bounds(size),
@@ -109,7 +99,7 @@ fn clipped_primitives() -> RenderGraph {
     let children = scope
         .into_primitives()
         .into_iter()
-        .map(|primitive| draw_node(primitive, clip))
+        .map(|primitive| support::draw_node(primitive, clip))
         .collect();
     root(SIZE, children)
 }
@@ -370,7 +360,7 @@ fn shadows() -> RenderGraph {
         SIZE,
         vec![
             support::solid_rect(bounds(SIZE), Color(0.92, 0.92, 0.95, 1.0)),
-            draw_node(drop, None),
+            support::draw_node(drop, None),
             support::solid_rect(
                 Rect {
                     x: 30.0,
@@ -380,7 +370,7 @@ fn shadows() -> RenderGraph {
                 },
                 Color::WHITE,
             ),
-            draw_node(inner, None),
+            support::draw_node(inner, None),
         ],
     )
 }

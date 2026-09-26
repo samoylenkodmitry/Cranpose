@@ -34,7 +34,7 @@ fn test_layer(node_id: Option<NodeId>, children: Vec<RenderNode>) -> LayerNode {
 fn direct_graph() -> RenderGraph {
     RenderGraph::new(test_layer(
         Some(7_700),
-        vec![support::rect_primitive(
+        vec![support::solid_rect(
             Rect {
                 x: 16.0,
                 y: 12.0,
@@ -626,7 +626,7 @@ fn queued_packets_keep_complete_pixels_while_the_producer_changes_the_scene() {
             producer.scene_mut().graph = Some(RenderGraph::new(test_layer(
                 Some(7_703),
                 vec![
-                    support::rect_primitive(
+                    support::solid_rect(
                         Rect {
                             x: 0.0,
                             y: 0.0,
@@ -635,7 +635,7 @@ fn queued_packets_keep_complete_pixels_while_the_producer_changes_the_scene() {
                         },
                         Color::BLACK,
                     ),
-                    support::rect_primitive(
+                    support::solid_rect(
                         Rect {
                             x: 8.0 + index as f32 * 5.0,
                             y: 12.0,

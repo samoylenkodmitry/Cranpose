@@ -1,9 +1,6 @@
 use cranpose_render_common::{
     Renderer,
-    graph::{
-        CachePolicy, DrawPrimitiveNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase,
-        ProjectiveTransform, RenderGraph, RenderNode,
-    },
+    graph::{CachePolicy, ProjectiveTransform, RenderGraph, RenderNode},
 };
 use cranpose_render_wgpu::RenderStatsSnapshot;
 use cranpose_ui_graphics::{
@@ -34,28 +31,21 @@ fn rect(x: f32, y: f32, width: f32, height: f32) -> Rect {
     }
 }
 
-fn primitive(primitive: DrawPrimitive) -> RenderNode {
-    RenderNode::Primitive(PrimitiveEntry {
-        phase: PrimitivePhase::BeforeChildren,
-        node: PrimitiveNode::Draw(DrawPrimitiveNode {
-            primitive,
-            clip: None,
-        }),
-    })
-}
-
 fn circle(center: Point, radius: f32, color: Color, stroke: Option<Stroke>) -> RenderNode {
-    primitive(DrawPrimitive::RoundRect {
-        rect: rect(
-            center.x - radius,
-            center.y - radius,
-            2.0 * radius,
-            2.0 * radius,
-        ),
-        brush: Brush::solid(color),
-        radii: CornerRadii::uniform(radius),
-        stroke,
-    })
+    support::draw_node(
+        DrawPrimitive::RoundRect {
+            rect: rect(
+                center.x - radius,
+                center.y - radius,
+                2.0 * radius,
+                2.0 * radius,
+            ),
+            brush: Brush::solid(color),
+            radii: CornerRadii::uniform(radius),
+            stroke,
+        },
+        None,
+    )
 }
 
 /// One spinning ring of the arena: a stroked rim, arc bricks and dot chains
@@ -78,21 +68,24 @@ fn ring(index: usize, angle: f32) -> RenderNode {
     )];
     for brick in 0..BRICKS_PER_RING {
         let start = brick as f32 * std::f32::consts::TAU / BRICKS_PER_RING as f32;
-        children.push(primitive(DrawPrimitive::Arc {
-            rect: rect(
-                center.x - radius,
-                center.y - radius,
-                2.0 * radius,
-                2.0 * radius,
-            ),
-            brush: Brush::solid(Color::from_rgb_u8(90, 200, 240)),
-            center,
-            radius: radius - 2.0,
-            start_angle: start,
-            sweep_angle: 0.08,
-            stroke: None,
-            inner_radius: radius - 14.0,
-        }));
+        children.push(support::draw_node(
+            DrawPrimitive::Arc {
+                rect: rect(
+                    center.x - radius,
+                    center.y - radius,
+                    2.0 * radius,
+                    2.0 * radius,
+                ),
+                brush: Brush::solid(Color::from_rgb_u8(90, 200, 240)),
+                center,
+                radius: radius - 2.0,
+                start_angle: start,
+                sweep_angle: 0.08,
+                stroke: None,
+                inner_radius: radius - 14.0,
+            },
+            None,
+        ));
     }
     for dot in 0..DOTS_PER_RING {
         let theta = dot as f32 * std::f32::consts::TAU / DOTS_PER_RING as f32;
@@ -141,11 +134,14 @@ fn ring(index: usize, angle: f32) -> RenderNode {
 }
 
 fn arena(frame: usize) -> RenderGraph {
-    let mut children = vec![primitive(DrawPrimitive::Rect {
-        rect: rect(0.0, 0.0, ARENA as f32, ARENA as f32),
-        brush: Brush::solid(Color::from_rgb_u8(8, 8, 16)),
-        stroke: None,
-    })];
+    let mut children = vec![support::draw_node(
+        DrawPrimitive::Rect {
+            rect: rect(0.0, 0.0, ARENA as f32, ARENA as f32),
+            brush: Brush::solid(Color::from_rgb_u8(8, 8, 16)),
+            stroke: None,
+        },
+        None,
+    )];
     for index in 0..RINGS {
         let speed = if index % 2 == 0 { 0.01 } else { -0.008 };
         children.push(ring(index, frame as f32 * speed * (index + 1) as f32));
