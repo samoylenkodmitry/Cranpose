@@ -1950,7 +1950,6 @@ pub struct GpuRenderer {
     pub(crate) scratch_image_cmds: Vec<ImageDrawCmd>,
     pub(crate) scratch_glyph_cmds: Vec<GlyphDrawCmd>,
     scratch_text_glyph_run: Vec<SoftwareGlyphAtlasRunGlyph>,
-    scratch_text_glyph_placements: Vec<SoftwareGlyphAtlasPlacement>,
     scratch_text_glyph_quads: Vec<CachedTextGlyphQuad>,
     frame_graph_executor: WgpuFrameGraphExecutor,
     deferred_offscreen_releases: Vec<OffscreenTarget>,
@@ -2184,7 +2183,6 @@ impl GpuRenderer {
             scratch_image_cmds: Vec::new(),
             scratch_glyph_cmds: Vec::new(),
             scratch_text_glyph_run: Vec::new(),
-            scratch_text_glyph_placements: Vec::new(),
             scratch_text_glyph_quads: Vec::new(),
             frame_graph_executor,
             deferred_offscreen_releases: Vec::new(),
@@ -3947,7 +3945,7 @@ impl GpuRenderer {
             }
         }
 
-        let quads: Rc<[CachedTextGlyphQuad]> = Rc::from(generated_quads.clone().into_boxed_slice());
+        let quads: Rc<[CachedTextGlyphQuad]> = Rc::from(generated_quads.as_slice());
         if let Some(cached) = self.text_glyph_run_cache.get_mut(&run_key) {
             cached.quads = Some(Rc::clone(&quads));
             cached.atlas_generation = atlas_generation;
@@ -4137,7 +4135,6 @@ impl GpuRenderer {
         let initial_index_len = image_indices.len();
         let initial_cmd_len = glyph_cmds.len();
         let mut collected_run = std::mem::take(&mut self.scratch_text_glyph_run);
-        let mut collected_placements = std::mem::take(&mut self.scratch_text_glyph_placements);
         let mut generated_quads = std::mem::take(&mut self.scratch_text_glyph_quads);
         generated_quads.clear();
         let mut visited = 0usize;
@@ -4210,14 +4207,10 @@ impl GpuRenderer {
                     fallback = true;
                     break;
                 }
-                collected_placements.clear();
-                collected_placements.extend(
-                    collected_run
-                        .iter()
-                        .map(SoftwareGlyphAtlasRunGlyph::placement),
-                );
-                let glyphs: Rc<[SoftwareGlyphAtlasPlacement]> =
-                    Rc::from(collected_placements.clone().into_boxed_slice());
+                let glyphs: Rc<[SoftwareGlyphAtlasPlacement]> = collected_run
+                    .iter()
+                    .map(SoftwareGlyphAtlasRunGlyph::placement)
+                    .collect();
                 self.text_glyph_run_cache.put(
                     run_key,
                     CachedTextGlyphRun {
@@ -4298,7 +4291,6 @@ impl GpuRenderer {
         }
 
         self.scratch_text_glyph_run = collected_run;
-        self.scratch_text_glyph_placements = collected_placements;
         self.scratch_text_glyph_quads = generated_quads;
         if fallback {
             image_vertices.truncate(initial_vertex_len);
