@@ -67,6 +67,14 @@ use crate::{
 const DEFAULT_REFRESH_HZ: f32 = 60.0;
 const WRITE_BUFFER_BYTES: usize = 1 << 20;
 
+/// Host → application: request an on-demand layout and runtime report. The payload is empty.
+pub const INSPECT_REQUEST_CHANNEL: &str = "cranpose.inspector.v1.request";
+/// Application → host: a UTF-8 layout and runtime report for the primary surface.
+///
+/// Reports are produced only on request, never on each rendered frame. They may
+/// include visible text from the application. Hosts should keep them local.
+pub const INSPECT_SNAPSHOT_CHANNEL: &str = "cranpose.inspector.v1.snapshot";
+
 /// Where an embedded application finds its host, and the secret it proves
 /// itself with.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -783,6 +791,18 @@ fn apply_batch(
     for event in batch {
         match event {
             LoopEvent::Host(HostEvent::Close) | LoopEvent::Disconnected => return Ok(false),
+            LoopEvent::Host(HostEvent::Message { channel, .. })
+                if channel == INSPECT_REQUEST_CHANNEL =>
+            {
+                let report = host.shell.debug_info_report();
+                write_app_event(
+                    writer,
+                    &AppEvent::Message {
+                        channel: INSPECT_SNAPSHOT_CHANNEL,
+                        payload: &report,
+                    },
+                )?;
+            }
             LoopEvent::Host(event) => host.handle(event),
             LoopEvent::Outgoing(message) => write_app_event(
                 writer,
