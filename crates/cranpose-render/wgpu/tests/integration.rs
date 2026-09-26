@@ -20,6 +20,7 @@ mod device_limits;
 mod direct_surface_root_parity;
 mod effect_sample_domain;
 mod effect_semantics;
+mod frame_driven_layer;
 mod glass_layer_cache;
 mod glass_output_support;
 mod glass_reference_shader;
