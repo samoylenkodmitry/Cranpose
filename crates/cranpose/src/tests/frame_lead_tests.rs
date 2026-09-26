@@ -53,21 +53,27 @@ fn a_trial_that_shows_frames_sooner_keeps_its_lead() {
 }
 
 #[test]
-fn a_failed_trial_reverts_and_the_next_trial_tries_another_lead() {
+fn a_failed_trial_reverts_and_doubles_the_hold_before_another_lead() {
     let mut lead = in_trial(20_000_000);
     run_trial(&mut lead, 20_000_000 - MARGIN_NS / 2, 1);
     assert_eq!(lead.lead_ns(PERIOD), 0, "less than the margin is noise");
     run_trial(&mut lead, 20_000_000, 1 + FIRST_HOLD_NS);
-    assert_eq!(lead.lead_ns(PERIOD), lead_at(2));
+    assert_eq!(lead.lead_ns(PERIOD), 0, "the failure doubled the hold");
+    run(&mut lead, WINDOW, 20_000_000, 1 + 2 * FIRST_HOLD_NS);
+    assert_eq!(
+        lead.lead_ns(PERIOD),
+        lead_at(2),
+        "the next trial takes the next lead"
+    );
 }
 
 #[test]
 fn a_longer_lead_is_found_past_a_shorter_one_that_does_not_help() {
     let mut lead = in_trial(33_000_000);
     run_trial(&mut lead, 34_000_000, 1);
-    run_trial(&mut lead, 33_000_000, 1 + FIRST_HOLD_NS);
+    run_trial(&mut lead, 33_000_000, 1 + 2 * FIRST_HOLD_NS);
     assert_eq!(lead.lead_ns(PERIOD), lead_at(2));
-    run_trial(&mut lead, 22_000_000, 2 + FIRST_HOLD_NS);
+    run_trial(&mut lead, 22_000_000, 2 + 2 * FIRST_HOLD_NS);
     assert_eq!(
         lead.lead_ns(PERIOD),
         lead_at(2),
@@ -76,28 +82,17 @@ fn a_longer_lead_is_found_past_a_shorter_one_that_does_not_help() {
 }
 
 #[test]
-fn the_hold_doubles_once_every_other_lead_has_failed_in_turn() {
+fn trials_take_every_other_lead_in_turn() {
     let mut lead = in_trial(20_000_000);
     let mut now = 1;
-    for next in [2, 3] {
+    let mut hold = FIRST_HOLD_NS;
+    for next in [2, 3, 1] {
         run_trial(&mut lead, 21_000_000, now);
-        now += FIRST_HOLD_NS;
+        hold *= 2;
+        now += hold;
         run_trial(&mut lead, 20_000_000, now);
-        assert_eq!(
-            lead.lead_ns(PERIOD),
-            lead_at(next),
-            "a failure within the round waits only the first hold"
-        );
+        assert_eq!(lead.lead_ns(PERIOD), lead_at(next));
     }
-    run_trial(&mut lead, 21_000_000, now);
-    run_trial(&mut lead, 20_000_000, now + FIRST_HOLD_NS);
-    assert_eq!(lead.lead_ns(PERIOD), 0, "the failed round doubled the hold");
-    run(&mut lead, WINDOW, 20_000_000, now + 2 * FIRST_HOLD_NS);
-    assert_eq!(
-        lead.lead_ns(PERIOD),
-        lead_at(1),
-        "the next round starts again at the first other lead"
-    );
 }
 
 #[test]

@@ -30,7 +30,7 @@ const MARGIN_NS: i64 = 1_000_000;
 const LEADS_TENTHS: [i64; 4] = [0, 3, 5, 7];
 
 /// How long the kept lead runs before another is tried, and the longest
-/// that grows to while a whole round of trials keeps failing.
+/// that grows to while trials keep failing.
 const FIRST_HOLD_NS: i64 = 2_000_000_000;
 const LONGEST_HOLD_NS: i64 = 32_000_000_000;
 
@@ -41,9 +41,6 @@ pub(crate) struct FrameLead {
     trial: Option<usize>,
     /// The lead tried last, so trials take the other leads in turn.
     last_tried: usize,
-    /// Trials that failed since the kept lead last changed or a round of
-    /// trials last ended.
-    failed_trials: usize,
     settle: u32,
     sum_ns: i64,
     count: i64,
@@ -58,7 +55,6 @@ impl Default for FrameLead {
             kept: 0,
             trial: None,
             last_tried: 0,
-            failed_trials: 0,
             settle: 0,
             sum_ns: 0,
             count: 0,
@@ -105,8 +101,9 @@ impl FrameLead {
     }
 
     /// Keeps `trial`'s lead when its window's mean beat the kept lead's by
-    /// the margin. A failed trial waits the hold before the next; once every
-    /// other lead has failed in turn, the hold doubles.
+    /// the margin. Every failed trial doubles the hold before the next: a
+    /// trial of a worse lead costs its window's frames, and a scene that has
+    /// settled on its lead should not keep paying for trials.
     fn end_trial(&mut self, trial: usize, mean_ns: i64, now_ns: i64) {
         if self
             .baseline_ns
@@ -114,15 +111,10 @@ impl FrameLead {
         {
             self.kept = trial;
             self.baseline_ns = Some(mean_ns);
-            self.failed_trials = 0;
             self.hold_ns = FIRST_HOLD_NS;
         } else {
             self.settle = SETTLE;
-            self.failed_trials += 1;
-            if self.failed_trials >= LEADS_TENTHS.len() - 1 {
-                self.failed_trials = 0;
-                self.hold_ns = (self.hold_ns * 2).min(LONGEST_HOLD_NS);
-            }
+            self.hold_ns = (self.hold_ns * 2).min(LONGEST_HOLD_NS);
         }
         self.next_trial_ns = Some(now_ns + self.hold_ns);
     }
