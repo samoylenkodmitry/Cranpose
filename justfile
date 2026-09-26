@@ -472,7 +472,7 @@ robot-accessibility-macos binary output:
     target/a11y-python/bin/python scripts/a11y/desktop_robot.py --binary {{quote(binary)}} --output {{quote(output)}}
 
 robot-accessibility-linux binary output:
-    scripts/ci/with_host_lock.sh --exclusive dbus-run-session -- xvfb-run -a python3 scripts/a11y/desktop_robot.py --binary {{quote(binary)}} --output {{quote(output)}} --allow-linux-disabled-state-bug
+    scripts/ci/with_host_lock.sh --exclusive dbus-run-session -- xvfb-run -a python3 scripts/a11y/desktop_robot.py --binary {{quote(binary)}} --output {{quote(output)}}
 
 robot-accessibility-windows binary output:
     python scripts/a11y/desktop_robot.py --binary {{quote(binary)}} --output {{quote(output)}}

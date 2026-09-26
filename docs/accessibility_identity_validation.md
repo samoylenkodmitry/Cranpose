@@ -23,7 +23,7 @@ IDs reject the update without changing the published snapshot.
 | Target | Recipe or runner | Result |
 | --- | --- | --- |
 | macOS 27.0 AX | `just robot-accessibility-macos` | 7 groups passed |
-| Linux AT-SPI on samarch-1 | `just robot-accessibility-linux` | 7 groups passed; existing disabled-state limitation below |
+| Linux AT-SPI on samarch-1 | `just robot-accessibility-linux` | 7 groups passed with strict disabled-state checking (AccessKit AT-SPI 0.21) |
 | Physical Android 10, arm64 | `android_accessibility_robot.py --connected-only` | 9 tests passed, including Accessibility Test Framework audit |
 | iOS 26.5 simulator, iPhone 17 Pro | `just robot-accessibility-ios` | 3 XCTest cases passed, none skipped |
 | Packaged release browser | `web_robot.py` | 27 checks passed |
@@ -59,10 +59,8 @@ and prerequisites are in [accessibility validation](accessibility_validation.md)
 
 ## Remaining verification
 
-Linux still has the published AccessKit AT-SPI disabled-state bit limitation
-recorded in the platform guide. The native robot verifies the accessible
-Disabled description and that activation is rejected; it does not count the
-incorrect state bit as repaired.
+The Windows UIA robot needs an interactive Windows desktop, so the AccessKit
+upgrade to 0.35.1 there is checked by `just clippy-windows` alone.
 
 The physical Android run kept existing accessibility services connected and did
 not run the service reconnect test. The iOS run used a simulator. Native tree
