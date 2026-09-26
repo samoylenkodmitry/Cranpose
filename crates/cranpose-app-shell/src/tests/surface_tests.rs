@@ -1104,10 +1104,13 @@ fn every_node(shell: &mut AppShell<HitGraphRenderer>) -> Vec<NodeId> {
     let mut applier = shell.app.composition.applier_mut();
     let mut nodes = Vec::new();
     let mut pending = vec![root];
+    // The scratch buffer's type comes from `collect_children_into`.
+    let mut children = Default::default();
     while let Some(node) = pending.pop() {
         nodes.push(node);
         if let Ok(node) = cranpose_core::Applier::get_mut(&mut *applier, node) {
-            pending.extend(node.children());
+            node.collect_children_into(&mut children);
+            pending.extend_from_slice(&children);
         }
     }
     nodes

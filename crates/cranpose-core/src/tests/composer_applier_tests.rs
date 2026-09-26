@@ -1605,8 +1605,10 @@ fn remove_balanced_tree_uses_depth_bounded_traversal_stack() {
             self.children.len() < before
         }
 
-        fn children(&self) -> Vec<NodeId> {
-            self.children.clone()
+        fn collect_children_into(&self, out: &mut smallvec::SmallVec<[NodeId; 8]>) {
+            out.clear();
+
+            out.extend_from_slice(&self.children);
         }
 
         fn on_attached_to_parent(&mut self, parent: NodeId) {
@@ -2075,8 +2077,10 @@ impl Node for DirtyFlagNode {
         self.children.len() < before
     }
 
-    fn children(&self) -> Vec<NodeId> {
-        self.children.clone()
+    fn collect_children_into(&self, out: &mut smallvec::SmallVec<[NodeId; 8]>) {
+        out.clear();
+
+        out.extend_from_slice(&self.children);
     }
 
     fn on_attached_to_parent(&mut self, parent: NodeId) {

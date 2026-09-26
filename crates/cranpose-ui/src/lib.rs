@@ -118,7 +118,7 @@ pub use key_event::{KeyCode, KeyEvent, KeyEventType, Modifiers};
 pub use layout::{
     LayoutAllocationDebugStats, LayoutBox, LayoutEngine, LayoutMeasurements, LayoutNodeData,
     LayoutNodeKind, LayoutTree, MeasureLayoutOptions, SemanticsAction, SemanticsCallback,
-    SemanticsNode, SemanticsRole, SemanticsTree, build_layout_tree_from_applier,
+    SemanticsNode, SemanticsRole, SemanticsText, SemanticsTree, build_layout_tree_from_applier,
     build_semantics_tree_from_applier, build_semantics_tree_from_layout_tree,
     core::{
         Alignment, Arrangement, HorizontalAlignment, LinearArrangement, Measurable, Placeable,

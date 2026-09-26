@@ -303,7 +303,7 @@ fn sample_semantics_and_layout() -> (SemanticsNode, LayoutBox) {
     let button_label = sample_semantics_node(
         3,
         SemanticsRole::Text {
-            value: "Increase depth".to_string(),
+            value: "Increase depth".into(),
         },
         false,
         None,
@@ -312,7 +312,7 @@ fn sample_semantics_and_layout() -> (SemanticsNode, LayoutBox) {
     let depth_label = sample_semantics_node(
         4,
         SemanticsRole::Text {
-            value: "Current depth: 15".to_string(),
+            value: "Current depth: 15".into(),
         },
         false,
         None,

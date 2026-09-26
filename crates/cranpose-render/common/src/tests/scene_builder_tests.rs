@@ -2925,7 +2925,7 @@ fn scrolled_lazy_column_item_text_keeps_unspecified_motion_at_rest() {
                     format!(
                         "subcompose#{child_id} placed={} active_children={:?}",
                         node.layout_state().is_placed(),
-                        node.active_children()
+                        node.with_active_children(<[NodeId]>::to_vec)
                     )
                 })
             {
@@ -3643,7 +3643,9 @@ fn lay_out_lazy_column(applier: &mut MemoryApplier, root: NodeId) -> Vec<NodeId>
         )
         .expect("lazy column layout");
     applier
-        .with_node::<SubcomposeLayoutNode, _>(root, |node| node.active_children())
+        .with_node::<SubcomposeLayoutNode, _>(root, |node| {
+            node.with_active_children(<[NodeId]>::to_vec)
+        })
         .expect("lazy column should be subcompose")
 }
 

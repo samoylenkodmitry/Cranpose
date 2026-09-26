@@ -85,7 +85,7 @@ fn the_words_inside_a_control_are_its_name() {
     let mut send = button(None, rect(0.0, 0.0, 120.0, 48.0));
     send.children.push(PlacedSemanticsNode {
         role: SemanticsRole::Text {
-            value: "Send".to_string(),
+            value: "Send".into(),
         },
         ..node(Some("Send"), rect(8.0, 8.0, 40.0, 20.0))
     });

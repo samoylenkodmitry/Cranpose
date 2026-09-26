@@ -1460,14 +1460,11 @@ pub trait Node: Any {
     }
     fn move_child(&mut self, _from: usize, _to: usize) {}
     fn update_children(&mut self, _children: &[NodeId]) {}
-    fn children(&self) -> Vec<NodeId> {
-        Vec::new()
-    }
     /// Copies child IDs into the provided scratch buffer without allocating a
-    /// fresh container for every traversal.
+    /// fresh container for every traversal. A node without children leaves
+    /// the buffer empty.
     fn collect_children_into(&self, out: &mut SmallVec<[NodeId; 8]>) {
         out.clear();
-        out.extend(self.children());
     }
     fn collect_owned_children_into(&self, out: &mut SmallVec<[NodeId; 8]>) {
         self.collect_children_into(out);
@@ -3790,7 +3787,8 @@ impl MemoryApplier {
                 let type_name = std::any::type_name_of_val(&**node);
                 output.push_str(&format!("{indent}[{id}] {type_name}\n"));
 
-                let children = node.children();
+                let mut children = SmallVec::<[NodeId; 8]>::new();
+                node.collect_children_into(&mut children);
                 for child_id in children {
                     self.dump_node(output, child_id, depth + 1);
                 }

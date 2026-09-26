@@ -77,7 +77,9 @@ impl SemanticsNode {
             .as_deref()
             .filter(|label| !label.trim().is_empty())
             .or_else(|| match &self.role {
-                SemanticsRole::Text { value } if !value.trim().is_empty() => Some(value.as_str()),
+                SemanticsRole::Text { value } if !value.as_str().trim().is_empty() => {
+                    Some(value.as_str())
+                }
                 _ => None,
             });
         if self.password {

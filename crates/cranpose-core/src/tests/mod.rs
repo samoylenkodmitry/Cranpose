@@ -559,8 +559,10 @@ impl Node for RecordingNode {
         self.parent = None;
     }
 
-    fn children(&self) -> Vec<NodeId> {
-        self.children.clone()
+    fn collect_children_into(&self, out: &mut smallvec::SmallVec<[NodeId; 8]>) {
+        out.clear();
+
+        out.extend_from_slice(&self.children);
     }
 
     fn insert_child(&mut self, child: NodeId) -> bool {
@@ -657,8 +659,10 @@ impl Node for UnmountTrackingNode {
         self.children.len() < before
     }
 
-    fn children(&self) -> Vec<NodeId> {
-        self.children.clone()
+    fn collect_children_into(&self, out: &mut smallvec::SmallVec<[NodeId; 8]>) {
+        out.clear();
+
+        out.extend_from_slice(&self.children);
     }
 
     fn on_attached_to_parent(&mut self, parent: NodeId) {
