@@ -648,3 +648,26 @@ fn typed_reusable_pool_removal_tolerates_missing_slot_count() {
     assert!(state.reusable_by_type.is_empty());
     assert_eq!(state.reusable_count, 0);
 }
+
+#[test]
+fn a_slot_is_retained_while_active_or_in_the_reuse_pool() {
+    let mut pooled = SubcomposeState::default();
+    let slot = SlotId::new(1);
+    assert!(!pooled.slot_is_retained(slot));
+    pooled.register_active(slot, &[10], &[]);
+    assert!(pooled.slot_is_retained(slot), "an active slot is retained");
+    assert!(pooled.dispose_or_reuse_starting_from_index(0).is_empty());
+    assert!(
+        pooled.slot_is_retained(slot),
+        "a slot in the reuse pool can be reactivated"
+    );
+
+    let mut unpooled = SubcomposeState::default();
+    unpooled.set_reusable_pool_limits(0, 0);
+    unpooled.register_active(slot, &[10], &[]);
+    assert_eq!(unpooled.dispose_or_reuse_starting_from_index(0), vec![10]);
+    assert!(
+        !unpooled.slot_is_retained(slot),
+        "a disposed slot is not retained"
+    );
+}

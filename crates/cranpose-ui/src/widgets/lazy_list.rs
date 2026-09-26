@@ -7,7 +7,7 @@
 
 use std::{
     cell::{Cell, RefCell},
-    collections::{HashMap, VecDeque},
+    collections::HashMap,
     rc::Rc,
 };
 
@@ -438,7 +438,7 @@ fn measure_lazy_list_internal(
     scope.set_reusable_pool_limits(retained_reusable_slots, retained_reusable_slots);
     measured_item_cache
         .borrow_mut()
-        .retain_constraint_scope(is_vertical, cross_axis_size);
+        .begin_pass(scope, is_vertical, cross_axis_size);
     let near = state.nearest_range();
     if items_count > 0 {
         state.update_scroll_position_if_item_moved(items_count, |slot_id| {
@@ -761,15 +761,12 @@ impl PartialEq for LazyListContentHandle {
     }
 }
 
-const MEASURED_ITEM_CACHE_CAPACITY: usize = 4096;
-
 #[derive(Default)]
 struct LazyMeasuredItemCache {
     is_vertical: bool,
     cross_axis_bits: u32,
     telemetry: LazyCacheTelemetry,
     entries: HashMap<usize, CachedLazyMeasuredItem>,
-    order: VecDeque<usize>,
     focused: Option<(u64, usize)>,
 }
 
@@ -830,7 +827,28 @@ impl LazyMeasuredItemCache {
 
     fn clear(&mut self) {
         self.entries.clear();
-        self.order.clear();
+    }
+
+    /// Drops what a new measure pass cannot reuse: everything, when the
+    /// list's axis or cross size changed, and otherwise the items whose slots
+    /// `scope` no longer holds.
+    fn begin_pass(
+        &mut self,
+        scope: &SubcomposeMeasureScopeImpl<'_>,
+        is_vertical: bool,
+        cross_axis_size: f32,
+    ) {
+        self.retain_constraint_scope(is_vertical, cross_axis_size);
+        self.retain_retained_slots(|slot_id| scope.slot_is_retained(slot_id));
+    }
+
+    /// Keeps only the items whose slots the subcompose state still holds.
+    /// An item whose composition was disposed can never be reused, and its
+    /// entry would keep the item's whole measured tree alive: an endless list
+    /// scrolled past thousands of items kept them all.
+    fn retain_retained_slots(&mut self, is_retained: impl Fn(SlotId) -> bool) {
+        self.entries
+            .retain(|_, cached| is_retained(SlotId(cached.item.key)));
     }
 
     fn get(
@@ -891,15 +909,7 @@ impl LazyMeasuredItemCache {
             item,
             retained_children,
         };
-        if self.entries.insert(index, cached).is_none() {
-            self.order.push_back(index);
-        }
-        while self.entries.len() > MEASURED_ITEM_CACHE_CAPACITY {
-            let Some(evicted) = self.order.pop_front() else {
-                break;
-            };
-            self.entries.remove(&evicted);
-        }
+        self.entries.insert(index, cached);
     }
 
     fn record_candidate_hit(&mut self) {
