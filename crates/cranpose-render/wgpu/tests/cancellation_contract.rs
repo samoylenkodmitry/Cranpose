@@ -29,7 +29,7 @@ fn test_layer(node_id: Option<NodeId>, children: Vec<RenderNode>) -> LayerNode {
 fn direct_graph() -> RenderGraph {
     RenderGraph::new(test_layer(
         Some(7_100),
-        vec![support::rect_primitive(
+        vec![support::solid_rect(
             Rect {
                 x: 16.0,
                 y: 12.0,

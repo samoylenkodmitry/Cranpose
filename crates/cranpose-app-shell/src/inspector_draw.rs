@@ -66,7 +66,7 @@ impl Canvas {
     fn rectangle(&mut self, rect: Rect, color: Color, stroke: Option<Stroke>) {
         self.children.push(RenderNode::Primitive(PrimitiveEntry {
             phase: PrimitivePhase::AfterChildren,
-            node: PrimitiveNode::Draw(DrawPrimitiveNode {
+            node: PrimitiveNode::Draw(Box::new(DrawPrimitiveNode {
                 primitive: DrawPrimitive::RoundRect {
                     rect,
                     brush: Brush::Solid(color),
@@ -74,7 +74,7 @@ impl Canvas {
                     stroke,
                 },
                 clip: None,
-            }),
+            })),
         }));
     }
 

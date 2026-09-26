@@ -87,10 +87,10 @@ fn changing_shadow_casters_and_cutouts_preserves_the_painted_region() {
                         background(),
                         RenderNode::Primitive(PrimitiveEntry {
                             phase: PrimitivePhase::BeforeChildren,
-                            node: PrimitiveNode::Draw(DrawPrimitiveNode {
+                            node: PrimitiveNode::Draw(Box::new(DrawPrimitiveNode {
                                 primitive: DrawPrimitive::Shadow(shadow),
                                 clip: None,
-                            }),
+                            })),
                         }),
                     ],
                 ),
@@ -146,7 +146,7 @@ fn page(radius: Option<f32>, cutout: bool) -> RenderGraph {
     if let Some(blur_radius) = radius {
         children.push(RenderNode::Primitive(PrimitiveEntry {
             phase: PrimitivePhase::BeforeChildren,
-            node: PrimitiveNode::Draw(DrawPrimitiveNode {
+            node: PrimitiveNode::Draw(Box::new(DrawPrimitiveNode {
                 primitive: DrawPrimitive::Shadow(ShadowPrimitive::Drop {
                     shape: Box::new(caster()),
                     cutout: cutout.then(|| Box::new(caster())),
@@ -154,7 +154,7 @@ fn page(radius: Option<f32>, cutout: bool) -> RenderGraph {
                     blend_mode: BlendMode::SrcOver,
                 }),
                 clip: None,
-            }),
+            })),
         }));
     }
     support::page_graph(FRAME, FRAME, children)

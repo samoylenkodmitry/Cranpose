@@ -12,17 +12,17 @@ use crate::support;
 const WIDTH: u32 = 128;
 const HEIGHT: u32 = 96;
 
-fn rect_primitive(rect: Rect, color: Color) -> RenderNode {
+fn solid_rect(rect: Rect, color: Color) -> RenderNode {
     RenderNode::Primitive(PrimitiveEntry {
         phase: PrimitivePhase::BeforeChildren,
-        node: PrimitiveNode::Draw(DrawPrimitiveNode {
+        node: PrimitiveNode::Draw(Box::new(DrawPrimitiveNode {
             primitive: cranpose_ui_graphics::DrawPrimitive::Rect {
                 rect,
                 brush: Brush::solid(color),
                 stroke: None,
             },
             clip: None,
-        }),
+        })),
     })
 }
 
@@ -31,7 +31,7 @@ fn direct_graph() -> RenderGraph {
         Some(9_400),
         WIDTH as f32,
         HEIGHT as f32,
-        vec![rect_primitive(
+        vec![solid_rect(
             Rect {
                 x: 16.0,
                 y: 12.0,

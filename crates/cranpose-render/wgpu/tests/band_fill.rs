@@ -1,9 +1,6 @@
 use cranpose_render_common::{
     Renderer,
-    graph::{
-        DrawPrimitiveNode, DrawRunNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase,
-        ProjectiveTransform, RenderGraph, RenderNode,
-    },
+    graph::{DrawRunNode, PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode},
     image_compare::image_difference_stats,
 };
 use cranpose_render_wgpu::CapturedFrame;
@@ -32,13 +29,6 @@ fn rect(x: f32, y: f32, width: f32, height: f32) -> Rect {
     }
 }
 
-fn primitive(primitive: DrawPrimitive, clip: Option<Rect>) -> RenderNode {
-    RenderNode::Primitive(PrimitiveEntry {
-        phase: PrimitivePhase::BeforeChildren,
-        node: PrimitiveNode::Draw(DrawPrimitiveNode { primitive, clip }),
-    })
-}
-
 fn stroke() -> Stroke {
     Stroke {
         width: STROKE,
@@ -48,7 +38,7 @@ fn stroke() -> Stroke {
 }
 
 fn ring(clip: Option<Rect>) -> RenderNode {
-    primitive(
+    support::draw_node(
         DrawPrimitive::RoundRect {
             rect: rect(CENTER - RADIUS, CENTER - RADIUS, 2.0 * RADIUS, 2.0 * RADIUS),
             brush: Brush::solid(Color::from_rgb_u8(240, 200, 80)),
@@ -60,7 +50,7 @@ fn ring(clip: Option<Rect>) -> RenderNode {
 }
 
 fn arc_band() -> RenderNode {
-    primitive(
+    support::draw_node(
         DrawPrimitive::Arc {
             rect: rect(CENTER - RADIUS, CENTER - RADIUS, 2.0 * RADIUS, 2.0 * RADIUS),
             brush: Brush::solid(Color::from_rgb_u8(80, 200, 240)),
@@ -76,7 +66,7 @@ fn arc_band() -> RenderNode {
 }
 
 fn frame_of(children: Vec<RenderNode>) -> RenderGraph {
-    let mut nodes = vec![primitive(
+    let mut nodes = vec![support::draw_node(
         DrawPrimitive::Rect {
             rect: rect(0.0, 0.0, FRAME as f32, FRAME as f32),
             brush: Brush::solid(Color::from_rgb_u8(20, 24, 40)),
@@ -196,7 +186,7 @@ fn a_translucent_quad_sharing_a_draw_with_a_wide_ring_blends_once() {
         }
     };
     let veil = || {
-        primitive(
+        support::draw_node(
             DrawPrimitive::Rect {
                 rect: rect(20.0, 20.0, 120.0, 90.0),
                 brush: Brush::solid(Color(0.9, 0.3, 0.2, 0.5)),
@@ -315,7 +305,7 @@ fn a_rect_recorded_after_a_banded_ring_covers_it() {
             return;
         }
     };
-    let cover = primitive(
+    let cover = support::draw_node(
         DrawPrimitive::Rect {
             rect: rect(CENTER + RADIUS - 40.0, CENTER - 40.0, 80.0, 80.0),
             brush: Brush::solid(Color::from_rgb_u8(200, 40, 40)),

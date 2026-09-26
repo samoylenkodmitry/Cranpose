@@ -328,7 +328,7 @@ fn a_turned_layer_whose_clip_would_cut_a_turned_child_keeps_its_surface() {
 fn a_turned_layer_with_an_image_keeps_its_surface() {
     let image = RenderNode::Primitive(PrimitiveEntry {
         phase: PrimitivePhase::BeforeChildren,
-        node: PrimitiveNode::Draw(cranpose_render_common::graph::DrawPrimitiveNode {
+        node: PrimitiveNode::Draw(Box::new(cranpose_render_common::graph::DrawPrimitiveNode {
             primitive: DrawPrimitive::Image {
                 rect: rect(0.0, 0.0, 60.0, 40.0),
                 image: cranpose_ui_graphics::ImageBitmap::from_rgba8(1, 1, vec![255; 4])
@@ -339,7 +339,7 @@ fn a_turned_layer_with_an_image_keeps_its_surface() {
                 src_rect: None,
             },
             clip: None,
-        }),
+        })),
     });
     let child = collected(turned_layer(
         turn(20.0),

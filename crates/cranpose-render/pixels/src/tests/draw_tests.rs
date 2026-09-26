@@ -285,7 +285,7 @@ fn draw_scene_renders_graph_backed_scene_without_flat_primitives() {
         cache_hashes_valid: false,
         children: vec![RenderNode::Primitive(PrimitiveEntry {
             phase: PrimitivePhase::BeforeChildren,
-            node: PrimitiveNode::Draw(DrawPrimitiveNode {
+            node: PrimitiveNode::Draw(Box::new(DrawPrimitiveNode {
                 primitive: cranpose_ui_graphics::DrawPrimitive::Rect {
                     rect: Rect {
                         x: 2.0,
@@ -297,7 +297,7 @@ fn draw_scene_renders_graph_backed_scene_without_flat_primitives() {
                     stroke: None,
                 },
                 clip: None,
-            }),
+            })),
         })],
     }));
 

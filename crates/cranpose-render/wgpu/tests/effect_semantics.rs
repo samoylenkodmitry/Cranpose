@@ -792,7 +792,7 @@ fn scaled_reference_fixture(translation: Point) -> RenderGraph {
 fn round_rect(rect: Rect, color: Color, radius: f32) -> RenderNode {
     RenderNode::Primitive(PrimitiveEntry {
         phase: PrimitivePhase::BeforeChildren,
-        node: PrimitiveNode::Draw(DrawPrimitiveNode {
+        node: PrimitiveNode::Draw(Box::new(DrawPrimitiveNode {
             primitive: DrawPrimitive::RoundRect {
                 rect,
                 brush: Brush::solid(color),
@@ -800,7 +800,7 @@ fn round_rect(rect: Rect, color: Color, radius: f32) -> RenderNode {
                 stroke: None,
             },
             clip: None,
-        }),
+        })),
     })
 }
 
@@ -2468,7 +2468,7 @@ fn a_cutout_drop_shadow_keeps_its_penumbra_outside_and_none_inside() {
     let radii = cranpose_ui_graphics::CornerRadii::uniform(10.0);
     let shadow = RenderNode::Primitive(PrimitiveEntry {
         phase: PrimitivePhase::BeforeChildren,
-        node: PrimitiveNode::Draw(DrawPrimitiveNode {
+        node: PrimitiveNode::Draw(Box::new(DrawPrimitiveNode {
             primitive: DrawPrimitive::Shadow(ShadowPrimitive::Drop {
                 shape: Box::new(DrawPrimitive::RoundRect {
                     rect: shadow_shape,
@@ -2486,7 +2486,7 @@ fn a_cutout_drop_shadow_keeps_its_penumbra_outside_and_none_inside() {
                 blend_mode: BlendMode::SrcOver,
             }),
             clip: None,
-        }),
+        })),
     });
 
     renderer.scene_mut().graph = Some(graph(vec![solid_rect(frame_rect(), Color::WHITE), shadow]));
@@ -3006,7 +3006,7 @@ fn shadowed_card_layer(
         vec![
             RenderNode::Primitive(PrimitiveEntry {
                 phase: PrimitivePhase::BeforeChildren,
-                node: PrimitiveNode::Draw(DrawPrimitiveNode {
+                node: PrimitiveNode::Draw(Box::new(DrawPrimitiveNode {
                     primitive: DrawPrimitive::Shadow(ShadowPrimitive::Drop {
                         shape: Box::new(DrawPrimitive::Rect {
                             rect: shadow_rect,
@@ -3018,7 +3018,7 @@ fn shadowed_card_layer(
                         blend_mode: BlendMode::SrcOver,
                     }),
                     clip: None,
-                }),
+                })),
             }),
             solid_rect(card_rect, Color(shade, 0.78, 0.94, 1.0)),
         ],
@@ -3187,7 +3187,7 @@ fn showcase_card_wrapper(wrapper_translation: Point) -> cranpose_render_common::
         vec![
             RenderNode::Primitive(PrimitiveEntry {
                 phase: PrimitivePhase::BeforeChildren,
-                node: PrimitiveNode::Draw(DrawPrimitiveNode {
+                node: PrimitiveNode::Draw(Box::new(DrawPrimitiveNode {
                     primitive: DrawPrimitive::RoundRect {
                         rect: Rect {
                             x: 0.0,
@@ -3200,7 +3200,7 @@ fn showcase_card_wrapper(wrapper_translation: Point) -> cranpose_render_common::
                         stroke: None,
                     },
                     clip: None,
-                }),
+                })),
             }),
             RenderNode::Primitive(PrimitiveEntry {
                 phase: PrimitivePhase::BeforeChildren,
@@ -3395,7 +3395,7 @@ fn alpha_icon_text_surface_fixture(translation: Point) -> RenderGraph {
         GraphicsLayer::default(),
         vec![RenderNode::Primitive(PrimitiveEntry {
             phase: PrimitivePhase::BeforeChildren,
-            node: PrimitiveNode::Draw(DrawPrimitiveNode {
+            node: PrimitiveNode::Draw(Box::new(DrawPrimitiveNode {
                 primitive: DrawPrimitive::Image {
                     rect: Rect {
                         x: 0.0,
@@ -3410,7 +3410,7 @@ fn alpha_icon_text_surface_fixture(translation: Point) -> RenderGraph {
                     src_rect: None,
                 },
                 clip: None,
-            }),
+            })),
         })],
     );
     let text_leaf = layer(
@@ -3455,7 +3455,7 @@ fn alpha_icon_text_surface_fixture(translation: Point) -> RenderGraph {
         vec![
             RenderNode::Primitive(PrimitiveEntry {
                 phase: PrimitivePhase::BeforeChildren,
-                node: PrimitiveNode::Draw(DrawPrimitiveNode {
+                node: PrimitiveNode::Draw(Box::new(DrawPrimitiveNode {
                     primitive: DrawPrimitive::RoundRect {
                         rect: Rect {
                             x: 0.0,
@@ -3468,7 +3468,7 @@ fn alpha_icon_text_surface_fixture(translation: Point) -> RenderGraph {
                         stroke: None,
                     },
                     clip: None,
-                }),
+                })),
             }),
             RenderNode::Layer(Box::new(icon_leaf)),
             RenderNode::Layer(Box::new(text_leaf)),
@@ -3487,7 +3487,7 @@ fn alpha_icon_text_surface_fixture(translation: Point) -> RenderGraph {
         vec![
             RenderNode::Primitive(PrimitiveEntry {
                 phase: PrimitivePhase::BeforeChildren,
-                node: PrimitiveNode::Draw(DrawPrimitiveNode {
+                node: PrimitiveNode::Draw(Box::new(DrawPrimitiveNode {
                     primitive: DrawPrimitive::Rect {
                         rect: Rect {
                             x: 0.0,
@@ -3499,7 +3499,7 @@ fn alpha_icon_text_surface_fixture(translation: Point) -> RenderGraph {
                         stroke: None,
                     },
                     clip: None,
-                }),
+                })),
             }),
             RenderNode::Layer(Box::new(alpha_surface)),
         ],
@@ -3580,7 +3580,7 @@ fn layer(
 fn dstout_rect(rect: Rect) -> RenderNode {
     RenderNode::Primitive(PrimitiveEntry {
         phase: PrimitivePhase::BeforeChildren,
-        node: PrimitiveNode::Draw(DrawPrimitiveNode {
+        node: PrimitiveNode::Draw(Box::new(DrawPrimitiveNode {
             primitive: DrawPrimitive::Blend {
                 primitive: Box::new(DrawPrimitive::Rect {
                     rect,
@@ -3590,14 +3590,14 @@ fn dstout_rect(rect: Rect) -> RenderNode {
                 blend_mode: BlendMode::DstOut,
             },
             clip: None,
-        }),
+        })),
     })
 }
 
 fn gradient_dstout_rect(rect: Rect, start_y: f32, end_y: f32) -> RenderNode {
     RenderNode::Primitive(PrimitiveEntry {
         phase: PrimitivePhase::BeforeChildren,
-        node: PrimitiveNode::Draw(DrawPrimitiveNode {
+        node: PrimitiveNode::Draw(Box::new(DrawPrimitiveNode {
             primitive: DrawPrimitive::Blend {
                 primitive: Box::new(DrawPrimitive::Rect {
                     rect,
@@ -3611,7 +3611,7 @@ fn gradient_dstout_rect(rect: Rect, start_y: f32, end_y: f32) -> RenderNode {
                 blend_mode: BlendMode::DstOut,
             },
             clip: None,
-        }),
+        })),
     })
 }
 

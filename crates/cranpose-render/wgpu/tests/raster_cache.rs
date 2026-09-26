@@ -23,14 +23,14 @@ fn card_layer(node_id: NodeId, y: f32) -> LayerNode {
     };
     let primitive = PrimitiveEntry {
         phase: PrimitivePhase::BeforeChildren,
-        node: PrimitiveNode::Draw(DrawPrimitiveNode {
+        node: PrimitiveNode::Draw(Box::new(DrawPrimitiveNode {
             primitive: cranpose_ui_graphics::DrawPrimitive::Rect {
                 rect: local_bounds,
                 brush: Brush::solid(Color(0.15, 0.35, 0.85, 1.0)),
                 stroke: None,
             },
             clip: None,
-        }),
+        })),
     };
     let mut layer = support::contract_layer(
         Some(node_id),
@@ -287,14 +287,14 @@ fn shaded_runtime_shader_layer(node_id: NodeId, time: f32) -> LayerNode {
         ProjectiveTransform::translation(8.0, 8.0),
         vec![RenderNode::Primitive(PrimitiveEntry {
             phase: PrimitivePhase::BeforeChildren,
-            node: PrimitiveNode::Draw(DrawPrimitiveNode {
+            node: PrimitiveNode::Draw(Box::new(DrawPrimitiveNode {
                 primitive: cranpose_ui_graphics::DrawPrimitive::Rect {
                     rect: shaded_bounds,
                     brush: Brush::solid(Color(0.0, 0.0, 0.0, 1.0)),
                     stroke: None,
                 },
                 clip: None,
-            }),
+            })),
         })],
     );
     shaded.graphics_layer.render_effect =
