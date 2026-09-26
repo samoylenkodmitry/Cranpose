@@ -1,8 +1,8 @@
 use super::*;
 use crate::frame_graph::{take_upload_write_calls, upload_test_device};
 
-fn quads(count: usize) -> Vec<[Vertex; VERTICES_PER_QUAD]> {
-    vec![[bytemuck::Zeroable::zeroed(); VERTICES_PER_QUAD]; count]
+fn quads(count: usize) -> Vec<GlyphInstance> {
+    vec![bytemuck::Zeroable::zeroed(); count]
 }
 
 #[test]
@@ -48,26 +48,20 @@ fn a_span_allocator_ignores_empty_and_foreign_spans() {
 }
 
 #[test]
-fn quad_indices_draw_two_triangles_over_four_corners() {
-    assert_eq!(quad_indices(0), [0, 1, 2, 2, 1, 3]);
-    assert_eq!(quad_indices(3), [12, 13, 14, 14, 13, 15]);
-}
-
-#[test]
 fn a_frames_runs_reach_the_gpu_in_one_write() {
     let (_lock, device, queue) = upload_test_device();
     let mut arena = GlyphRunArena::default();
     let first = arena.insert(&device, quads(3)).expect("a run of quads");
     let second = arena.insert(&device, quads(5)).expect("a run of quads");
-    assert_eq!(first.indices(), 0..18);
-    assert_eq!(second.indices(), 18..48);
-    assert!(first.vertex_buffer() == second.vertex_buffer());
-    assert!(arena.index_buffer().is_some());
+    assert_eq!(first.instances(), 0..3);
+    assert_eq!(second.instances(), 3..8);
+    assert!(first.instance_buffer() == second.instance_buffer());
 
     take_upload_write_calls();
     let stats = arena.flush(&queue);
     assert_eq!(take_upload_write_calls(), 1);
-    assert_eq!(stats.upload_bytes, vertex_offset(8));
+    assert_eq!(stats.upload_bytes, instance_offset(8));
+    assert_eq!(instance_offset(8), 8 * 64, "a glyph instance is 64 bytes");
     assert_eq!(arena.flush(&queue).upload_bytes, 0, "a flush writes once");
 }
 
@@ -76,8 +70,8 @@ fn an_arena_takes_no_run_without_quads() {
     let (_lock, device, _queue) = upload_test_device();
     let mut arena = GlyphRunArena::default();
     assert!(arena.insert(&device, quads(0)).is_none());
-    assert!(arena.index_buffer().is_none());
-    assert!(arena.staged_vertices.is_empty());
+    assert!(arena.chunks.is_empty());
+    assert!(arena.staged_instances.is_empty());
 }
 
 #[test]
@@ -86,20 +80,20 @@ fn a_dropped_runs_quads_stay_taken_until_the_next_frame() {
     let mut arena = GlyphRunArena::default();
     let dropped = arena.insert(&device, quads(1)).expect("a run");
     let kept = arena.insert(&device, quads(1)).expect("a run");
-    assert_eq!(dropped.indices(), 0..6);
+    assert_eq!(dropped.instances(), 0..1);
     drop(dropped);
     let same_frame = arena.insert(&device, quads(1)).expect("a run");
     assert_eq!(
-        same_frame.indices(),
-        12..18,
+        same_frame.instances(),
+        2..3,
         "a draw recorded this frame may still read the dropped quads"
     );
 
     arena.begin_frame();
     let next_frame = arena.insert(&device, quads(1)).expect("a run");
-    assert_eq!(next_frame.indices(), 0..6);
+    assert_eq!(next_frame.instances(), 0..1);
     assert_eq!(arena.chunks.len(), 1);
-    assert_eq!(kept.indices(), 6..12);
+    assert_eq!(kept.instances(), 1..2);
 }
 
 #[test]
@@ -112,13 +106,12 @@ fn chunks_double_and_empty_ones_are_released() {
     let next = arena.insert(&device, quads(1)).expect("a run");
     let capacities: Vec<u32> = arena.chunks.iter().map(|c| c.spans.capacity()).collect();
     assert_eq!(capacities, [MIN_CHUNK_QUADS, MIN_CHUNK_QUADS * 2]);
-    assert!(arena.index_quads >= MIN_CHUNK_QUADS * 2);
 
     let huge = arena
         .insert(&device, quads(MAX_CHUNK_QUADS as usize + 1))
         .expect("a run");
     assert_eq!(arena.chunks.len(), 3);
-    assert_eq!(huge.indices().end, (MAX_CHUNK_QUADS + 1) * INDICES_PER_QUAD);
+    assert_eq!(huge.instances(), 0..MAX_CHUNK_QUADS + 1);
 
     drop(small);
     drop(huge);

@@ -380,15 +380,15 @@ fn consecutive_shared_glyph_quads_draw_as_one_until_a_state_changes() {
     let full = (0, 0, 8, 8);
     let half = (0, 0, 4, 8);
     let mut cmds = vec![
-        GlyphDrawCmd::shared(0..6, Some(full), full, Rc::clone(&texel)),
-        GlyphDrawCmd::shared(6..18, Some(full), full, Rc::clone(&texel)),
-        GlyphDrawCmd::shared(18..24, Some(half), half, Rc::clone(&texel)),
-        GlyphDrawCmd::shared(24..30, Some(half), half, Rc::clone(&filtered)),
-        GlyphDrawCmd::shared(36..42, Some(half), half, Rc::clone(&filtered)),
+        GlyphDrawCmd::shared(0..1, Some(full), full, Rc::clone(&texel)),
+        GlyphDrawCmd::shared(1..3, Some(full), full, Rc::clone(&texel)),
+        GlyphDrawCmd::shared(3..4, Some(half), half, Rc::clone(&texel)),
+        GlyphDrawCmd::shared(4..5, Some(half), half, Rc::clone(&filtered)),
+        GlyphDrawCmd::shared(6..7, Some(half), half, Rc::clone(&filtered)),
     ];
     queue_glyph(&mut renderer, 1, 0.0, &mut cmds);
     cmds.push(GlyphDrawCmd::shared(
-        42..48,
+        7..8,
         Some(half),
         half,
         Rc::clone(&filtered),
@@ -396,7 +396,7 @@ fn consecutive_shared_glyph_quads_draw_as_one_until_a_state_changes() {
 
     let draws: Vec<_> = GlyphDraws::new(&cmds)
         .map(|draw| match draw.step {
-            GlyphDrawStep::Shared(indices) => (Some(indices), draw.scissor),
+            GlyphDrawStep::Shared(instances) => (Some(instances), draw.scissor),
             GlyphDrawStep::Retained { .. } => (None, draw.scissor),
         })
         .collect();
@@ -404,12 +404,12 @@ fn consecutive_shared_glyph_quads_draw_as_one_until_a_state_changes() {
     assert_eq!(
         draws,
         vec![
-            (Some(0..18), Some(full)),
-            (Some(18..24), Some(half)),
-            (Some(24..30), Some(half)),
-            (Some(36..42), Some(half)),
+            (Some(0..3), Some(full)),
+            (Some(3..4), Some(half)),
+            (Some(4..5), Some(half)),
+            (Some(6..7), Some(half)),
             (None, Some((0, 0, 8, 8))),
-            (Some(42..48), Some(half)),
+            (Some(7..8), Some(half)),
         ],
         "a new scissor, a new atlas, a gap in the quads and a retained run each start a draw"
     );
@@ -587,4 +587,63 @@ fn a_shape_over_a_label_still_draws_over_it() {
             );
         }
     }
+}
+
+#[test]
+fn a_glyph_quad_becomes_one_instance_at_its_raster_origin() {
+    let [quad] = test_quads();
+    let origin = Rect {
+        x: 3.0,
+        y: 5.0,
+        width: 8.0,
+        height: 8.0,
+    };
+    assert_eq!(
+        cached_text_glyph_instance(origin, &quad),
+        Some(GlyphInstance {
+            rect: [3.0, 5.0, 5.0, 7.0],
+            uv: [0.0, 0.0, 1.0, 1.0],
+            uv_bounds: [0.0, 0.0, 1.0, 1.0],
+            color: [1.0, 1.0, 1.0, 1.0],
+        })
+    );
+    let clear = CachedTextGlyphQuad {
+        color: (1.0, 1.0, 1.0, 0.0),
+        ..quad
+    };
+    assert_eq!(cached_text_glyph_instance(origin, &clear), None);
+}
+
+#[test]
+fn shared_glyphs_inside_their_scissor_draw_unclipped_within_their_bounds() {
+    let [quad] = test_quads();
+    let glyphs = [
+        Rect {
+            x: 1.0,
+            y: 1.0,
+            width: 0.0,
+            height: 0.0,
+        },
+        Rect {
+            x: 4.5,
+            y: 2.0,
+            width: 0.0,
+            height: 0.0,
+        },
+    ]
+    .map(|origin| cached_text_glyph_instance(origin, &quad).expect("a drawn quad"));
+    let identity = ViewportUniformParams {
+        offset: [0.0, 0.0],
+        ..viewport(SegmentTransform::IDENTITY)
+    };
+    assert_eq!(
+        shared_glyph_clip(&glyphs, (0, 0, 8, 8), identity),
+        (None, (1, 1, 6, 3)),
+        "glyphs inside the scissor need none, and draw within their own bounds"
+    );
+    assert_eq!(
+        shared_glyph_clip(&glyphs, (2, 0, 6, 8), identity),
+        (Some((2, 0, 6, 8)), (2, 0, 6, 8)),
+        "a glyph past the scissor keeps it"
+    );
 }
