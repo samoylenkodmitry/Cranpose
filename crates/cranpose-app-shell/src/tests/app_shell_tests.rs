@@ -28,6 +28,9 @@ use cranpose_ui_graphics::{
 
 use super::*;
 
+#[path = "disposal_state_tests.rs"]
+mod disposal_state_tests;
+
 #[path = "global_layout_invalidation_tests.rs"]
 mod global_layout_invalidation_tests;
 

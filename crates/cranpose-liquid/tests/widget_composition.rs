@@ -603,3 +603,22 @@ fn glass_modifier_evaluates_live_dynamics_after_reusing_a_layer() {
     boost.set(0.0);
     assert_eq!(read_layer(), first);
 }
+
+#[test]
+fn the_scheme_tells_the_selection_menu_which_ink_its_surface_needs() {
+    for (scheme, on_light) in [(SchemeMode::Light, true), (SchemeMode::Dark, false)] {
+        let seen = Rc::new(Cell::new(None));
+        let sink = Rc::clone(&seen);
+        let mut content = move || sink.set(Some(cranpose_ui::local_on_light_surface().current()));
+        run_test_composition(move || {
+            LiquidTheme(
+                LiquidThemeSpec {
+                    scheme,
+                    ..Default::default()
+                },
+                &mut content,
+            );
+        });
+        assert_eq!(seen.get(), Some(on_light), "{scheme:?}");
+    }
+}
