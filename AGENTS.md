@@ -2,6 +2,7 @@
 
 - No unsafe code or `unwrap()`. Keep KISS, DRY and SOLID; duplicated code of ten or more lines needs a shared abstraction.
 - Fix root causes and audit every consumer of a wrong value. Leave no partial fixes, deprecated paths or compatibility layers in this pre-alpha repo. Review architecture, correctness and maintainability before completion.
+- Always make performance optimizations. Never write absurd, wasteful code, and remove any you spot in the codebase as soon as you spot it.
 - For implementation, read [Rust/API conventions](docs/agent-workflows.md#rust-and-api-conventions) and the [performance coding guide](docs/performance_coding_guide.md). Test every public function/method; all test bodies belong under `/test*/`, never beside implementation. Document public APIs only.
 - Use RustRover MCP for code search, understanding, analysis, refactoring and edits; pass `projectPath`. Prefer IDE tools over Bash/grep/rg for code discovery. Run build/test/git and other shell commands directly through the shell tool; RustRover's MCP terminal is not required. Read [code tools](docs/agent-workflows.md#code-tools).
 - Check branch/status at start and completion and after relevant git operations; isolate concurrent work. Never use `git reset`. Preserve unrelated and uncommitted work.
