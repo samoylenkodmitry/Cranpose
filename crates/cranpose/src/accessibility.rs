@@ -10,7 +10,7 @@ use cranpose_ui::{
 
 #[path = "accessibility_identity.rs"]
 mod identity;
-pub(crate) use identity::AccessibilitySnapshot;
+pub(crate) use identity::{AccessibilityIdentityError, AccessibilitySnapshot, ReplacedSnapshot};
 
 #[cfg(any(
     test,
@@ -1674,7 +1674,11 @@ pub(crate) fn state_with_error(element: &AccessibilityElement) -> Option<String>
     all(feature = "android", feature = "renderer-wgpu", target_os = "android")
 ))]
 fn speaks_the_same(was: &AccessibilityElement, now: &AccessibilityElement) -> bool {
-    spoken_text(was) == spoken_text(now)
+    let same_sources = was.label == now.label
+        && was.value == now.value
+        && was.state_description == now.state_description
+        && was.error == now.error;
+    (same_sources || spoken_text(was) == spoken_text(now))
         && was.toggled == now.toggled
         && was.selected == now.selected
         && was.progress == now.progress
@@ -1692,12 +1696,15 @@ pub(crate) fn spoken_changes(
     previous: &[AccessibilityElement],
     current: &[AccessibilityElement],
 ) -> Vec<bool> {
+    let mut published: HashMap<_, &AccessibilityElement> = HashMap::default();
+    for element in previous {
+        published.entry(element.identity_key()).or_insert(element);
+    }
     current
         .iter()
         .map(|element| {
-            previous
-                .iter()
-                .find(|other| other.identity_key() == element.identity_key())
+            published
+                .get(&element.identity_key())
                 .is_some_and(|was| !speaks_the_same(was, element))
         })
         .collect()

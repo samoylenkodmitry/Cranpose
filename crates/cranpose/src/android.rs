@@ -1725,6 +1725,7 @@ pub fn run(
 
     let mut app_shell: Option<AppShell<WgpuRenderer>> = None;
     let mut accessibility_elements = crate::accessibility::AccessibilitySnapshot::default();
+    let mut accessibility_wire = crate::android_accessibility_wire::AccessibilityWire::default();
     let mut accessibility_revision = None;
     let mut accessibility_policy =
         crate::accessibility_publish_policy::AccessibilityPublishPolicy::new();
@@ -2458,6 +2459,7 @@ pub fn run(
                     shell,
                     android_platform.scale_factor(),
                     &mut accessibility_elements,
+                    &mut accessibility_wire,
                     &mut accessibility_revision,
                     &mut accessibility_policy,
                 ) {
@@ -2509,6 +2511,7 @@ pub fn run(
                     shell,
                     android_platform.scale_factor(),
                     &mut accessibility_elements,
+                    &mut accessibility_wire,
                     &mut accessibility_revision,
                     &mut accessibility_policy,
                 ) {

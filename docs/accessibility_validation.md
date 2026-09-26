@@ -205,7 +205,7 @@ For an x86_64 emulator, build with
 The APK must contain the emulator's native ABI; see
 [build troubleshooting](development_troubleshooting.md#builds-and-ci).
 
-The ten instrumentation tests include Google's Accessibility Test Framework,
+The twelve instrumentation tests include Google's Accessibility Test Framework,
 tree parsing, live navigation, reconnect, and actions on the shared screen.
 They target the release robot APK and Android's real `UiAutomation` node tree.
 The runner locks and wakes the selected device, records both APK hashes, and
@@ -213,7 +213,7 @@ retains instrumentation output. Use an explicitly selected, dedicated emulator
 for reconnect: another accessibility service keeps the application connected.
 
 On a shared physical device whose accessibility service must remain active,
-run `just robot-android-accessibility-connected SERIAL OUTPUT`. This runs nine
+run `just robot-android-accessibility-connected SERIAL OUTPUT`. This runs eleven
 tests and explicitly records reconnect as not requested. Both modes reject
 skipped tests, runner failures, missing results, and unexpected test counts.
 
