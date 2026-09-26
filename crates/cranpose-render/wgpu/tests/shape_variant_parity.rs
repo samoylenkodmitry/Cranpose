@@ -24,10 +24,10 @@ fn graph_for(record: fn(&mut DrawScopeDefault), clip: Option<Rect>) -> RenderGra
             .map(|primitive| {
                 RenderNode::Primitive(PrimitiveEntry {
                     phase: PrimitivePhase::BeforeChildren,
-                    node: PrimitiveNode::Draw(DrawPrimitiveNode {
+                    node: PrimitiveNode::Draw(Box::new(DrawPrimitiveNode {
                         primitive,
                         clip: Some(clip),
-                    }),
+                    })),
                 })
             })
             .collect(),

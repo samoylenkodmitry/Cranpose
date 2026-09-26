@@ -1,7 +1,7 @@
 use cranpose_render_common::{
     graph::{
-        DrawPrimitiveNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform,
-        RenderGraph, RenderNode, TextPrimitiveNode,
+        PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform, RenderGraph,
+        RenderNode, TextPrimitiveNode,
     },
     image_compare::image_difference_stats,
 };
@@ -62,16 +62,6 @@ fn checker_icon() -> ImageBitmap {
     ImageBitmap::from_rgba8(ICON_SIZE, ICON_SIZE, pixels).expect("valid icon")
 }
 
-fn primitive(primitive: DrawPrimitive) -> RenderNode {
-    RenderNode::Primitive(PrimitiveEntry {
-        phase: PrimitivePhase::BeforeChildren,
-        node: PrimitiveNode::Draw(DrawPrimitiveNode {
-            primitive,
-            clip: None,
-        }),
-    })
-}
-
 /// A text across the glass's left edge, an image across its top edge and an
 /// isolated child across its right edge: each is drawn partly inside the
 /// capture and would be dropped by a cull that judges by the wrong rect.
@@ -98,19 +88,22 @@ fn straddling_page() -> Vec<RenderNode> {
                 clip: None,
             })),
         }),
-        primitive(DrawPrimitive::Image {
-            rect: rect(
-                GLASS.x + 20.0,
-                GLASS.y - 16.0,
-                ICON_SIZE as f32,
-                ICON_SIZE as f32,
-            ),
-            image: checker_icon(),
-            alpha: 1.0,
-            color_filter: None,
-            sampling: ImageSampling::Nearest,
-            src_rect: None,
-        }),
+        support::draw_node(
+            DrawPrimitive::Image {
+                rect: rect(
+                    GLASS.x + 20.0,
+                    GLASS.y - 16.0,
+                    ICON_SIZE as f32,
+                    ICON_SIZE as f32,
+                ),
+                image: checker_icon(),
+                alpha: 1.0,
+                color_filter: None,
+                sampling: ImageSampling::Nearest,
+                src_rect: None,
+            },
+            None,
+        ),
         RenderNode::Layer(Box::new(shared_test_support::layer_node(
             rect(0.0, 0.0, 40.0, 40.0),
             ProjectiveTransform::translation(GLASS.x + GLASS.width - 20.0, GLASS.y + 12.0),
@@ -147,17 +140,20 @@ fn draw_batches_keep_images_blend_changes_and_composites_in_order() {
     let mut renderer = support::headless_renderer().expect("headless WGPU init failed");
     for color in [[0, 255, 0, 255], [255, 0, 255, 255], [0, 255, 0, 255]] {
         let image = |x, width, rgba: [u8; 4], blend_mode| {
-            primitive(DrawPrimitive::Blend {
-                primitive: Box::new(DrawPrimitive::Image {
-                    rect: rect(x, 0.0, width, FRAME_HEIGHT as f32),
-                    image: ImageBitmap::from_rgba8(1, 1, rgba.to_vec()).unwrap(),
-                    alpha: 1.0,
-                    color_filter: None,
-                    sampling: ImageSampling::Nearest,
-                    src_rect: None,
-                }),
-                blend_mode,
-            })
+            support::draw_node(
+                DrawPrimitive::Blend {
+                    primitive: Box::new(DrawPrimitive::Image {
+                        rect: rect(x, 0.0, width, FRAME_HEIGHT as f32),
+                        image: ImageBitmap::from_rgba8(1, 1, rgba.to_vec()).unwrap(),
+                        alpha: 1.0,
+                        color_filter: None,
+                        sampling: ImageSampling::Nearest,
+                        src_rect: None,
+                    }),
+                    blend_mode,
+                },
+                None,
+            )
         };
         let children = vec![
             solid_rect(rect(0.0, 0.0, 240.0, 120.0), Color::RED),
@@ -586,16 +582,19 @@ fn tint_glass_at(bounds: Rect) -> RenderNode {
 }
 
 fn drop_shadow(shape: Rect, alpha: f32, blur_radius: f32) -> RenderNode {
-    primitive(DrawPrimitive::Shadow(ShadowPrimitive::Drop {
-        shape: Box::new(DrawPrimitive::Rect {
-            rect: shape,
-            brush: Brush::solid(Color(0.0, 0.0, 0.0, alpha)),
-            stroke: None,
+    support::draw_node(
+        DrawPrimitive::Shadow(ShadowPrimitive::Drop {
+            shape: Box::new(DrawPrimitive::Rect {
+                rect: shape,
+                brush: Brush::solid(Color(0.0, 0.0, 0.0, alpha)),
+                stroke: None,
+            }),
+            cutout: None,
+            blur_radius,
+            blend_mode: BlendMode::SrcOver,
         }),
-        cutout: None,
-        blur_radius,
-        blend_mode: BlendMode::SrcOver,
-    }))
+        None,
+    )
 }
 
 /// A blurred shadow drawn in z between two glasses of one stage, lying under

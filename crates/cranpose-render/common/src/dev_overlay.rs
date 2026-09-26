@@ -55,7 +55,7 @@ pub fn build_dev_overlay_graph(
         children: vec![
             RenderNode::Primitive(PrimitiveEntry {
                 phase: PrimitivePhase::BeforeChildren,
-                node: PrimitiveNode::Draw(DrawPrimitiveNode {
+                node: PrimitiveNode::Draw(Box::new(DrawPrimitiveNode {
                     primitive: DrawPrimitive::RoundRect {
                         rect: Rect {
                             x: 0.0,
@@ -68,7 +68,7 @@ pub fn build_dev_overlay_graph(
                         stroke: None,
                     },
                     clip: None,
-                }),
+                })),
             }),
             RenderNode::Primitive(PrimitiveEntry {
                 phase: PrimitivePhase::AfterChildren,

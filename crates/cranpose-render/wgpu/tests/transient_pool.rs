@@ -51,7 +51,7 @@ fn glass_layer(index: usize) -> RenderNode {
 fn drop_shadow(caster: Rect, blur_radius: f32) -> RenderNode {
     RenderNode::Primitive(PrimitiveEntry {
         phase: PrimitivePhase::BeforeChildren,
-        node: PrimitiveNode::Draw(DrawPrimitiveNode {
+        node: PrimitiveNode::Draw(Box::new(DrawPrimitiveNode {
             primitive: DrawPrimitive::Shadow(ShadowPrimitive::Drop {
                 shape: Box::new(DrawPrimitive::Rect {
                     rect: caster,
@@ -63,7 +63,7 @@ fn drop_shadow(caster: Rect, blur_radius: f32) -> RenderNode {
                 blend_mode: BlendMode::SrcOver,
             }),
             clip: None,
-        }),
+        })),
     })
 }
 
