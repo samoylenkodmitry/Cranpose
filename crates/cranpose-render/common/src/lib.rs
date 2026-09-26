@@ -3,6 +3,7 @@
 pub mod bounded_lru_cache;
 pub mod debug_toggles;
 pub mod dev_overlay;
+mod direct_mapped_cache;
 
 /// The frame background every renderer clears to (linear values; sRGB
 /// surfaces display this as rgb(75, 75, 86)). One definition so backends

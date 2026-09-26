@@ -27,6 +27,7 @@ use crate::{
     Brush,
     bounded_lru_cache::BoundedLruCache,
     brush_sampling::{color_to_rgba, sample_brush_rgba},
+    direct_mapped_cache::DirectMappedCache,
     font_layout::{
         GlyphPixelBounds, align_glyph_to_pixel_grid, line_advance_width,
         pixel_bounds_from_outlined, vertical_metrics,
@@ -41,8 +42,11 @@ const COMPOSE_STROKE_MITER_LIMIT: f32 = 4.0;
 const SHADOW_SIGMA_SCALE: f32 = 0.57735;
 const SHADOW_SIGMA_BIAS: f32 = 0.5;
 const MAX_GAUSSIAN_KERNEL_HALF: i32 = 128;
-const SOFTWARE_TEXT_GLYPH_METRICS_CACHE_CAPACITY: usize = 8_192;
-const SOFTWARE_TEXT_KERN_METRICS_CACHE_CAPACITY: usize = 16_384;
+/// Slots of the per-character glyph metrics cache, as a power of two: text
+/// rarely uses more than a few hundred characters per font.
+const SOFTWARE_TEXT_GLYPH_METRICS_SLOTS_LOG2: u32 = 11;
+/// Slots of the per-pair kerning cache, as a power of two.
+const SOFTWARE_TEXT_KERN_METRICS_SLOTS_LOG2: u32 = 13;
 const SOFTWARE_TEXT_PREFIX_WIDTH_CACHE_CAPACITY: usize = 512;
 #[cfg(feature = "embedded-default-font")]
 #[doc(hidden)]
@@ -699,20 +703,16 @@ struct SoftwareTextGlyphMetricsStats {
 }
 
 struct SoftwareTextGlyphMetricsCache {
-    glyphs: BoundedLruCache<GlyphMetricsKey, CachedGlyphMetrics>,
-    kerns: BoundedLruCache<KernMetricsKey, f32>,
+    glyphs: DirectMappedCache<GlyphMetricsKey, CachedGlyphMetrics>,
+    kerns: DirectMappedCache<KernMetricsKey, f32>,
     stats: SoftwareTextGlyphMetricsStats,
 }
 
 impl SoftwareTextGlyphMetricsCache {
     fn new() -> Self {
         Self {
-            glyphs: BoundedLruCache::with_capacity_at_least_one(
-                SOFTWARE_TEXT_GLYPH_METRICS_CACHE_CAPACITY,
-            ),
-            kerns: BoundedLruCache::with_capacity_at_least_one(
-                SOFTWARE_TEXT_KERN_METRICS_CACHE_CAPACITY,
-            ),
+            glyphs: DirectMappedCache::with_slots_log2(SOFTWARE_TEXT_GLYPH_METRICS_SLOTS_LOG2),
+            kerns: DirectMappedCache::with_slots_log2(SOFTWARE_TEXT_KERN_METRICS_SLOTS_LOG2),
             stats: SoftwareTextGlyphMetricsStats::default(),
         }
     }
@@ -736,7 +736,7 @@ impl SoftwareTextGlyphMetricsCache {
             font_hash: font.content_hash(),
             ch,
         };
-        if let Some(metrics) = self.glyphs.get(&key).copied() {
+        if let Some(metrics) = self.glyphs.get(&key) {
             self.stats.glyph_hits = self.stats.glyph_hits.saturating_add(1);
             return metrics;
         }
@@ -746,7 +746,7 @@ impl SoftwareTextGlyphMetricsCache {
             glyph_id,
             advance_unscaled: scaled_font.font().h_advance_unscaled(glyph_id).max(0.0),
         };
-        self.glyphs.put(key, metrics);
+        self.glyphs.insert(key, metrics);
         self.stats.glyph_misses = self.stats.glyph_misses.saturating_add(1);
         metrics
     }
@@ -767,13 +767,13 @@ impl SoftwareTextGlyphMetricsCache {
             previous_id: previous_id.0.into(),
             glyph_id: glyph_id.0.into(),
         };
-        if let Some(kern) = self.kerns.get(&key).copied() {
+        if let Some(kern) = self.kerns.get(&key) {
             self.stats.kern_hits = self.stats.kern_hits.saturating_add(1);
             return kern;
         }
 
         let kern = scaled_font.font().kern_unscaled(previous_id, glyph_id);
-        self.kerns.put(key, kern);
+        self.kerns.insert(key, kern);
         self.stats.kern_misses = self.stats.kern_misses.saturating_add(1);
         kern
     }
