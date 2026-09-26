@@ -707,8 +707,15 @@ impl SubcomposeState {
         self.reusable_count = self.reusable_count.saturating_sub(1);
     }
 
+    /// Whether `slot_id` still has a composition here: active, or kept in the
+    /// reuse pool where it can be reactivated. A slot that is neither has
+    /// been disposed, and nothing measured for it can be used again.
+    pub fn slot_is_retained(&self, slot_id: SlotId) -> bool {
+        self.live_slots.contains(&slot_id) || self.reusable_node_counts.contains_key(&slot_id)
+    }
+
     fn prune_slot_if_unused(&mut self, slot_id: SlotId) {
-        if self.live_slots.contains(&slot_id) || self.reusable_node_counts.contains_key(&slot_id) {
+        if self.slot_is_retained(slot_id) {
             return;
         }
 

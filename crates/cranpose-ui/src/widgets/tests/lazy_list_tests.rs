@@ -206,3 +206,24 @@ fn lazy_list_state_identity_is_stable_for_copied_state() {
         lazy_list_state_identity(&copied_state)
     );
 }
+
+#[test]
+fn measured_item_cache_keeps_only_items_whose_slots_are_retained() {
+    let mut cache = LazyMeasuredItemCache::default();
+    for key in 1..=6u64 {
+        cache.insert(
+            LazyListMeasuredItem::new(key as usize, key, None, 10.0, 10.0),
+            SmallVec::new(),
+        );
+    }
+
+    cache.retain_retained_slots(|slot| slot.raw() % 2 == 0);
+
+    let mut kept: Vec<u64> = cache
+        .entries
+        .values()
+        .map(|cached| cached.item.key)
+        .collect();
+    kept.sort_unstable();
+    assert_eq!(kept, [2, 4, 6], "disposed items' measurements are dropped");
+}

@@ -613,6 +613,11 @@ impl SubcomposeMeasureScopeImpl<'_> {
         self.state.reusable_slots_count()
     }
 
+    /// Whether `slot_id` still has a composition: active or in the reuse pool.
+    pub(crate) fn slot_is_retained(&self, slot_id: SlotId) -> bool {
+        self.state.slot_is_retained(slot_id)
+    }
+
     /// Registers the content type for a slot.
     ///
     /// Call this before `subcompose()` to enable content-type-aware slot reuse.
