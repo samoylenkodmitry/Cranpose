@@ -381,7 +381,7 @@ pub(crate) struct TextFieldRefs {
     pub is_focused: Rc<RefCell<bool>>,
     pub content_offset: Rc<Cell<f32>>,
     pub content_y_offset: Rc<Cell<f32>>,
-    pub drag_anchor: Rc<Cell<Option<usize>>>,
+    pub drag_anchor: Rc<Cell<Option<crate::text_selection::SelectionAnchor>>>,
     pub last_click_time: Rc<Cell<Option<web_time::Instant>>>,
     pub last_click_pos: Rc<Cell<Option<(f32, f32)>>>,
     pub click_count: Rc<Cell<u8>>,
@@ -408,7 +408,7 @@ impl TextFieldRefs {
             is_focused: Rc::new(RefCell::new(false)),
             content_offset: Rc::new(Cell::new(0.0_f32)),
             content_y_offset: Rc::new(Cell::new(0.0_f32)),
-            drag_anchor: Rc::new(Cell::new(None::<usize>)),
+            drag_anchor: Rc::new(Cell::new(None)),
             last_click_time: Rc::new(Cell::new(None::<web_time::Instant>)),
             last_click_pos: Rc::new(Cell::new(None::<(f32, f32)>)),
             click_count: Rc::new(Cell::new(0_u8)),
@@ -584,13 +584,9 @@ impl TextFieldModifierNode {
         style: TextStyle,
         modal_depth: usize,
     ) -> Rc<dyn Fn(PointerEvent)> {
-        use crate::{
-            text_selection::{
-                MULTI_TAP_SLOP_PX, MULTI_TAP_TIMEOUT_MS, SelectionGranularity, classify_tap_count,
-                find_line_boundaries, find_paragraph_boundaries, resolve_selection_tap_count,
-                tap_selection_granularity,
-            },
-            word_boundaries::find_word_boundaries,
+        use crate::text_selection::{
+            MULTI_TAP_SLOP_PX, MULTI_TAP_TIMEOUT_MS, SelectionAnchor, SelectionGranularity,
+            classify_tap_count, resolve_selection_tap_count, tap_selection_granularity,
         };
 
         Rc::new(move |event: PointerEvent| {
@@ -658,35 +654,13 @@ impl TextFieldModifierNode {
                         repeat_in_place,
                     );
 
-                    match tap_selection_granularity(effective_count) {
-                        SelectionGranularity::Paragraph => {
-                            let (start, end) = find_paragraph_boundaries(&text, pos);
-                            state.edit(|buffer| {
-                                buffer.select(TextRange::new(start, end));
-                            });
-                            refs.drag_anchor.set(Some(start));
-                        }
-                        SelectionGranularity::Line => {
-                            let (line_start, line_end) = find_line_boundaries(&text, pos);
-                            state.edit(|buffer| {
-                                buffer.select(TextRange::new(line_start, line_end));
-                            });
-                            refs.drag_anchor.set(Some(line_start));
-                        }
-                        SelectionGranularity::Word => {
-                            let (word_start, word_end) = find_word_boundaries(&text, pos);
-                            state.edit(|buffer| {
-                                buffer.select(TextRange::new(word_start, word_end));
-                            });
-                            refs.drag_anchor.set(Some(word_start));
-                        }
-                        SelectionGranularity::Caret => {
-                            refs.drag_anchor.set(Some(pos));
-                            state.edit(|buffer| {
-                                buffer.place_cursor_before_char(pos);
-                            });
-                        }
-                    }
+                    let granularity = tap_selection_granularity(effective_count);
+                    let anchor = SelectionAnchor::at(&text, pos, granularity);
+                    refs.drag_anchor.set(Some(anchor));
+                    state.edit(|buffer| match granularity {
+                        SelectionGranularity::Caret => buffer.place_cursor_before_char(pos),
+                        _ => buffer.select(TextRange::new(anchor.start, anchor.end)),
+                    });
 
                     refs.click_count.set(effective_count);
                     refs.last_click_time.set(Some(now));
@@ -721,7 +695,7 @@ impl TextFieldModifierNode {
                             click_y,
                         );
 
-                        state.set_selection(TextRange::new(anchor, current_pos));
+                        state.set_selection(anchor.dragged_to(&text, current_pos));
 
                         crate::request_render_invalidation();
 

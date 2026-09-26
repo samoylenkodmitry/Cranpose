@@ -76,8 +76,7 @@ pub(crate) fn main() -> ExitCode {
                 selected_editable(&robot.get_semantics().expect("initial selection semantics"))
                     .expect("double tap must create a range selection");
             let initial = normalized(initial);
-            assert_eq!(initial.0, 6, "fixture selection start");
-            assert!((7..=11).contains(&initial.1), "fixture selection end");
+            assert_eq!(initial, (6, 11), "a double tap selects the whole word");
             let fixed_start = initial.0;
             let initial_shot = robot.screenshot().expect("initial handle frame");
             save(&initial_shot, &shot_dir, "00-initial");
@@ -94,10 +93,10 @@ pub(crate) fn main() -> ExitCode {
             let full_y = end_dot.1 + 64.0;
             let strict_y = full_y + 24.0;
             let phases = [
-                ("01-direct", direct_y, 8usize, 0.0f32, 8.0f32),
-                ("02-drift", drift_y, 20usize, 24.0f32, 16.0f32),
-                ("03-full-view", full_y, 32usize, 48.0f32, 16.0f32),
-                ("04-strict-follow", strict_y, 44usize, 72.0f32, 16.0f32),
+                ("01-direct", direct_y, 11usize, 0.0f32, 8.0f32),
+                ("02-drift", drift_y, 23usize, 24.0f32, 16.0f32),
+                ("03-full-view", full_y, 35usize, 48.0f32, 16.0f32),
+                ("04-strict-follow", strict_y, 47usize, 72.0f32, 16.0f32),
             ];
             for (name, finger_y, expected_end, line_advance, finger_clearance) in phases {
                 robot
