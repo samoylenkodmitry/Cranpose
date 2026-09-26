@@ -86,6 +86,26 @@ fn modifier_slices_cache_preserves_live_snapshot_isolation() {
 }
 
 #[test]
+fn a_changed_modifier_collects_its_slices_once_when_they_are_read() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let mut node = fresh_node();
+    node.set_node_id(allocate_virtual_node_id());
+    node.set_modifier(Modifier::empty().background(crate::modifier::Color::WHITE));
+    assert!(
+        node.modifier_slices_dirty.get(),
+        "composition leaves the slices to the first reader"
+    );
+
+    let slices = node.modifier_slices_snapshot();
+    assert_eq!(slices.draw_commands().len(), 1);
+    assert!(!node.modifier_slices_dirty.get());
+    assert!(
+        Rc::ptr_eq(&slices, &node.modifier_slices_snapshot()),
+        "a second read reuses the collected slices"
+    );
+}
+
+#[test]
 fn an_equal_modifier_leaves_the_chain_and_its_slices_as_they_were() {
     let _app_context = crate::render_state::app_context_test_scope();
     let mut node = fresh_node();

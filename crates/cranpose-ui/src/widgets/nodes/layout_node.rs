@@ -430,8 +430,7 @@ impl LayoutNode {
         self.modifier_capabilities = self.modifier_chain.capabilities();
         self.modifier_child_capabilities = self.modifier_chain.aggregate_child_capabilities();
         self.semantics_reach.set(None);
-
-        self.update_modifier_slices_cache();
+        self.modifier_slices_dirty.set(true);
 
         let mut invalidations = self.modifier_chain.take_invalidations();
         invalidations.extend(modifier_local_invalidations);
@@ -440,10 +439,11 @@ impl LayoutNode {
     }
 
     fn update_modifier_slices_cache(&self) {
-        use crate::modifier::collect_modifier_slices_into;
-
         let mut snapshot = self.modifier_slices_snapshot.borrow_mut();
-        collect_modifier_slices_into(self.modifier_chain.chain(), Rc::make_mut(&mut snapshot));
+        crate::modifier::collect_modifier_slices_into_shared(
+            self.modifier_chain.chain(),
+            &mut snapshot,
+        );
         self.modifier_slices_dirty.set(false);
     }
 
@@ -664,7 +664,8 @@ impl LayoutNode {
         self.modifier_chain.set_node_id(Some(id));
         let invalidations = self.modifier_chain.take_invalidations();
         self.dispatch_modifier_invalidations_with_prev(&invalidations, NodeCapabilities::empty());
-        self.update_modifier_slices_cache();
+        // The slices carry the node's id; they are collected again when next read.
+        self.modifier_slices_dirty.set(true);
     }
 
     /// Get this node's ID.

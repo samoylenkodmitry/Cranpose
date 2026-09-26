@@ -491,7 +491,22 @@ pub fn collect_modifier_slices(chain: &ModifierNodeChain) -> ModifierNodeSlices 
 ///
 /// Single-pass: iterates the chain once instead of 4 separate capability-filtered
 /// traversals, reducing per-node `RefCell::borrow()` overhead.
-pub fn collect_modifier_slices_into(chain: &ModifierNodeChain, slices: &mut ModifierNodeSlices) {
+/// Collects `chain`'s slices into the node's shared snapshot. The snapshot's
+/// storage is reused when nothing else holds it; one the render graph still
+/// shares is left to the graph and replaced, not cloned only to be cleared.
+pub(crate) fn collect_modifier_slices_into_shared(
+    chain: &ModifierNodeChain,
+    slices: &mut Rc<ModifierNodeSlices>,
+) {
+    if Rc::get_mut(slices).is_none() {
+        *slices = Rc::default();
+    }
+    if let Some(slices) = Rc::get_mut(slices) {
+        collect_modifier_slices_into(chain, slices);
+    }
+}
+
+fn collect_modifier_slices_into(chain: &ModifierNodeChain, slices: &mut ModifierNodeSlices) {
     slices.clear();
 
     let caps = chain.capabilities();
