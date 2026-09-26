@@ -16,6 +16,16 @@ use crate::{
     },
 };
 
+pub(crate) fn caller_modifier_changed(modifier: &Modifier) -> bool {
+    cranpose_core::remember(|| RefCell::new(modifier.clone())).with(|last| {
+        let changed = *last.borrow() != *modifier;
+        if changed {
+            last.replace(modifier.clone());
+        }
+        changed
+    })
+}
+
 struct RetainedMeasurePolicy<P> {
     value: P,
     policy: Rc<dyn MeasurePolicy>,

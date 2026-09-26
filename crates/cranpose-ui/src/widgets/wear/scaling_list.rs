@@ -1260,6 +1260,7 @@ pub fn WearScalingLazyColumnNode(
     })
     .with(|policy| policy.clone());
 
+    let caller_modifier_changed = crate::widgets::layout::caller_modifier_changed(&modifier);
     let modifier = wear_scaling_list_input(modifier, state, fling).clip_to_bounds();
     let list_id = state.id();
     let node_id = cranpose_core::with_current_composer(|composer| {
@@ -1275,7 +1276,7 @@ pub fn WearScalingLazyColumnNode(
         cranpose_core::with_current_composer(|composer| composer.capture_composition_context());
     let composed_density = crate::density::density();
     if let Err(err) = cranpose_core::with_node_mut(node_id, |node: &mut SubcomposeLayoutNode| {
-        if !node.modifier().structural_eq(&modifier) {
+        if caller_modifier_changed {
             node.set_modifier(modifier.clone());
         }
         node.set_measure_policy(Rc::clone(&policy));

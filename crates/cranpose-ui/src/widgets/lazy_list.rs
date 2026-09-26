@@ -1101,6 +1101,7 @@ fn LazyColumnImpl(
     if refresh_content {
         *content_cell.borrow_mut() = content;
     }
+    let caller_modifier_changed = super::layout::caller_modifier_changed(&modifier);
 
     let config = LazyListMeasureConfig {
         is_vertical: true,
@@ -1182,14 +1183,15 @@ fn LazyColumnImpl(
         cranpose_core::with_current_composer(cranpose_core::Composer::capture_composition_context);
     let composed_density = crate::density::density();
     if let Err(err) = cranpose_core::with_node_mut(node_id, |node: &mut SubcomposeLayoutNode| {
-        let modifier_changed = !node.modifier().structural_eq(&scroll_modifier);
-        if refresh_content || config_changed || modifier_changed {
+        let inputs_changed =
+            refresh_content || config_changed || !node.modifier().structural_eq(&scroll_modifier);
+        if inputs_changed || caller_modifier_changed {
             node.set_modifier(scroll_modifier.clone());
         }
         node.set_measure_policy(Rc::clone(&policy));
         node.set_captured_context(captured_context);
         node.set_density(composed_density);
-        if refresh_content || config_changed || modifier_changed {
+        if inputs_changed {
             measured_item_cache.borrow_mut().clear();
             node.invalidate_subcomposition();
         }
@@ -1220,6 +1222,7 @@ fn LazyRowImpl(
     if refresh_content {
         *content_cell.borrow_mut() = content;
     }
+    let caller_modifier_changed = super::layout::caller_modifier_changed(&modifier);
 
     let config = LazyListMeasureConfig {
         is_vertical: false,
@@ -1303,14 +1306,15 @@ fn LazyRowImpl(
         cranpose_core::with_current_composer(cranpose_core::Composer::capture_composition_context);
     let composed_density = crate::density::density();
     if let Err(err) = cranpose_core::with_node_mut(node_id, |node: &mut SubcomposeLayoutNode| {
-        let modifier_changed = !node.modifier().structural_eq(&scroll_modifier);
-        if refresh_content || config_changed || modifier_changed {
+        let inputs_changed =
+            refresh_content || config_changed || !node.modifier().structural_eq(&scroll_modifier);
+        if inputs_changed || caller_modifier_changed {
             node.set_modifier(scroll_modifier.clone());
         }
         node.set_measure_policy(Rc::clone(&policy));
         node.set_captured_context(captured_context);
         node.set_density(composed_density);
-        if refresh_content || config_changed || modifier_changed {
+        if inputs_changed {
             measured_item_cache.borrow_mut().clear();
             node.invalidate_subcomposition();
         }
