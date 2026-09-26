@@ -70,9 +70,25 @@ pub fn advance_spring(
     stiffness: f32,
     dt: f32,
 ) -> (f32, f32) {
+    let (displacement, velocity) =
+        advance_spring_displacement(value - target, velocity, damping_ratio, stiffness, dt);
+    (target + displacement, velocity)
+}
+
+/// Advances a spring held as its displacement from the target, returning the
+/// new `(displacement, velocity)`. A caller that carries the displacement
+/// from frame to frame keeps the precision a value near a large target
+/// cannot hold, so the spring still comes to rest when a frame moves it by
+/// less than the value's resolution.
+pub fn advance_spring_displacement(
+    displacement: f32,
+    velocity: f32,
+    damping_ratio: f32,
+    stiffness: f32,
+    dt: f32,
+) -> (f32, f32) {
     let omega = stiffness.max(f32::EPSILON).sqrt();
     let zeta = damping_ratio.max(0.0);
-    let displacement = value - target;
 
     if (zeta - 1.0).abs() < 1e-4 {
         let c1 = displacement;
@@ -80,7 +96,7 @@ pub fn advance_spring(
         let decay = (-omega * dt).exp();
         let next_displacement = (c1 + c2 * dt) * decay;
         let next_velocity = (c2 - omega * (c1 + c2 * dt)) * decay;
-        (target + next_displacement, next_velocity)
+        (next_displacement, next_velocity)
     } else if zeta < 1.0 {
         let omega_d = omega * (1.0 - zeta * zeta).sqrt();
         let decay = (-zeta * omega * dt).exp();
@@ -90,7 +106,7 @@ pub fn advance_spring(
         let next_displacement = decay * (a * cos + b * sin);
         let next_velocity = decay
             * ((b * omega_d - a * zeta * omega) * cos - (a * omega_d + b * zeta * omega) * sin);
-        (target + next_displacement, next_velocity)
+        (next_displacement, next_velocity)
     } else {
         let root = (zeta * zeta - 1.0).sqrt();
         let r1 = -omega * (zeta - root);
@@ -99,7 +115,7 @@ pub fn advance_spring(
         let c1 = displacement - c2;
         let e1 = (r1 * dt).exp();
         let e2 = (r2 * dt).exp();
-        (target + c1 * e1 + c2 * e2, c1 * r1 * e1 + c2 * r2 * e2)
+        (c1 * e1 + c2 * e2, c1 * r1 * e1 + c2 * r2 * e2)
     }
 }
 
@@ -846,6 +862,10 @@ struct AnimatableInner<T: SpringScalar + 'static> {
     runtime: RuntimeHandle,
     current: T,
     velocity: [f32; SPRING_MAX_DIMENSIONS],
+    /// The spring's distance from its target as the last frame left it,
+    /// finer than `current` can hold near a large target. It stands only
+    /// while the target plus it still gives `current`.
+    displacement: [f32; SPRING_MAX_DIMENSIONS],
     start: T,
     target: T,
     animation_type: AnimationType,
@@ -883,6 +903,7 @@ impl<T: SpringScalar + 'static> Animatable<T> {
             runtime,
             current: initial.clone(),
             velocity: [0.0; SPRING_MAX_DIMENSIONS],
+            displacement: [0.0; SPRING_MAX_DIMENSIONS],
             start: initial.clone(),
             target: initial,
             animation_type: animation,
@@ -1036,24 +1057,20 @@ impl<T: SpringScalar + 'static> Animatable<T> {
         if let Some(registration) = inner.registration.take() {
             registration.cancel();
         }
-        inner.current = target.clone();
-        inner.start = target.clone();
-        inner.target = target.clone();
-        inner.start_time_nanos = None;
-        inner.last_frame_nanos = None;
-        inner.velocity = [0.0; SPRING_MAX_DIMENSIONS];
-        inner.state.set_value(target);
+        inner.target = target;
+        Self::settle_at_target(&mut inner);
     }
 
-    /// Ends the animation on its first frame, for a person who asked the
-    /// system for less motion: the value is the target at once, nothing is
-    /// scheduled, and a reader of the state sees one change.
+    /// Brings the value to rest on its target: a snap, a spring that came to
+    /// rest, or an animation a person who asked the system for less motion
+    /// ends on its first frame. A reader of the state sees one change.
     fn settle_at_target(inner: &mut AnimatableInner<T>) {
         inner.current = inner.target.clone();
         inner.start = inner.target.clone();
         inner.start_time_nanos = None;
         inner.last_frame_nanos = None;
         inner.velocity = [0.0; SPRING_MAX_DIMENSIONS];
+        inner.displacement = [0.0; SPRING_MAX_DIMENSIONS];
         inner.state.set_value(inner.target.clone());
     }
 
@@ -1137,15 +1154,21 @@ impl<T: SpringScalar + 'static> Animatable<T> {
                         for (index, slot) in position.iter_mut().enumerate().take(dimensions) {
                             let value = inner.current.dimension(index);
                             let target = inner.target.dimension(index);
-                            let (next_value, next_velocity) = advance_spring(
-                                value,
+                            let carried = inner.displacement[index];
+                            let displacement = if target + carried == value {
+                                carried
+                            } else {
+                                value - target
+                            };
+                            let (next_displacement, next_velocity) = advance_spring_displacement(
+                                displacement,
                                 inner.velocity[index],
-                                target,
                                 spec.damping_ratio,
                                 spec.stiffness,
                                 dt,
                             );
-                            *slot = next_value;
+                            *slot = target + next_displacement;
+                            inner.displacement[index] = next_displacement;
                             inner.velocity[index] = next_velocity;
                         }
 
@@ -1154,17 +1177,11 @@ impl<T: SpringScalar + 'static> Animatable<T> {
 
                         let settled = (0..dimensions).all(|index| {
                             inner.velocity[index].abs() < spec.velocity_threshold
-                                && (position[index] - inner.target.dimension(index)).abs()
-                                    < spec.position_threshold
+                                && inner.displacement[index].abs() < spec.position_threshold
                         });
 
                         if settled {
-                            inner.current = inner.target.clone();
-                            inner.start = inner.target.clone();
-                            inner.start_time_nanos = None;
-                            inner.last_frame_nanos = None;
-                            inner.velocity = [0.0; SPRING_MAX_DIMENSIONS];
-                            inner.state.set_value(inner.target.clone());
+                            Self::settle_at_target(inner);
                         } else {
                             schedule_next = true;
                         }
