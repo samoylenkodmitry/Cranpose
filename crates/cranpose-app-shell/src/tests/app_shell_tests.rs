@@ -11232,3 +11232,49 @@ fn a_finger_beside_a_small_control_in_a_scroll_container_presses_it_unless_a_sib
     );
     assert_eq!(small_presses.get(), 1);
 }
+
+#[test]
+fn a_fast_lazy_scroll_composes_ahead_between_frames() {
+    let _guard = test_guard();
+    APP_SHELL_LAZY_LIST_STATE.with(|slot| slot.borrow_mut().take());
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(
+        TestRenderer::default(),
+        root_key,
+        AppShellScrollIndicatorLazyList,
+    );
+    shell.set_buffer_size(320, 240);
+    shell.set_viewport(320.0, 240.0);
+    shell.update();
+    let list_state = APP_SHELL_LAZY_LIST_STATE
+        .with(|slot| *slot.borrow())
+        .expect("the lazy list exposes its state");
+    let app_context = Rc::clone(&shell.app.app_context);
+
+    let mut deferred = false;
+    for _ in 0..6 {
+        assert!(list_state.dispatch_scroll_delta(-112.0) < 0.0);
+        shell.update();
+        deferred = app_context.enter(cranpose_ui::has_lazy_prefetch_requests);
+        if deferred {
+            break;
+        }
+    }
+    assert!(
+        deferred,
+        "a fast scroll with items ready ahead leaves the next one for later"
+    );
+
+    assert!(
+        !shell.run_idle_prefetch(Instant::now()),
+        "a wait with no room left composes nothing"
+    );
+    assert!(app_context.enter(cranpose_ui::has_lazy_prefetch_requests));
+
+    let composed = list_state.stats().total_composed;
+    assert!(shell.run_idle_prefetch(Instant::now() + Duration::from_secs(5)));
+    assert!(
+        list_state.stats().total_composed > composed,
+        "the wait before the next frame composes the items the frame left"
+    );
+}

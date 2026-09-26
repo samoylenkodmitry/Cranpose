@@ -193,6 +193,10 @@ struct SubcomposeMeasureScopeInit<'a> {
 }
 
 impl<'a> SubcomposeMeasureScopeImpl<'a> {
+    pub(crate) fn root_id(&self) -> NodeId {
+        self.root_id
+    }
+
     fn new(init: SubcomposeMeasureScopeInit<'a>) -> Self {
         Self {
             composer: init.composer,

@@ -28,6 +28,7 @@ mod key_event;
 pub mod layout;
 pub mod layout_direction;
 pub mod lazy_item;
+mod lazy_prefetch;
 pub mod modal;
 mod modifier;
 mod modifier_nodes;
@@ -131,6 +132,10 @@ pub use layout_direction::{
     LayoutDirection, ProvideLayoutDirection, layout_direction, local_layout_direction,
 };
 pub use lazy_item::{ProvideLazyItemKey, lazy_item_key, local_lazy_item_key};
+pub use lazy_prefetch::{
+    has_lazy_prefetch_requests, lazy_prefetch_item_cost, take_lazy_prefetch_requests,
+    with_lazy_prefetch_pass,
+};
 pub use modal::{
     ModalRegistration, clear_modals, dispatch_modal_back, local_modal_depth, modal_depth,
 };
