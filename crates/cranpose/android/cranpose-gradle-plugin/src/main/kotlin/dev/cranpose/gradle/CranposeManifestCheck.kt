@@ -69,7 +69,14 @@ internal data class FeatureLine(val name: String, val required: Boolean)
  * What an application's build script declared in Rust: the permissions its
  * services need, and the hardware it cannot run without.
  */
-internal data class RustDeclaration(val permissions: List<String>, val demands: List<String>)
+internal data class RustDeclaration(
+    val permissions: List<String>,
+    val demands: List<String>,
+    val opens: List<String>,
+)
+
+/** The activity every Cranpose application runs in, as the base manifest declares it. */
+private const val CRANPOSE_ACTIVITY = "dev.cranpose.android.CranposeActivity"
 
 /**
  * What the merged manifest says about features, and what should be done to it.
@@ -219,12 +226,57 @@ abstract class CranposeManifestCheck : DefaultTask() {
      */
     private fun rustDeclaration(): RustDeclaration {
         val file = declaration.files.firstOrNull { candidate -> candidate.isFile }
-            ?: return RustDeclaration(emptyList(), emptyList())
+            ?: return RustDeclaration(emptyList(), emptyList(), emptyList())
         val parsed = JsonSlurper().parse(file) as? Map<*, *>
             ?: throw GradleException("${file.path} is not the declaration cranpose wrote")
         return RustDeclaration(
             permissions = names(parsed["permissions"]),
             demands = names(parsed["demands"]),
+            opens = names(parsed["opens"]),
+        )
+    }
+
+    /**
+     * Offers the application for the files it opens: one filter for a share
+     * sent to it and one for "Open with", each naming every declared type,
+     * so the platform lists the application for those files and the activity
+     * receives them.
+     */
+    private fun offerOpening(document: org.w3c.dom.Document, opens: List<String>) {
+        if (opens.isEmpty()) {
+            return
+        }
+        val activity = document.getElementsByTagName("activity")
+            .let { nodes -> (0 until nodes.length).mapNotNull { at -> nodes.item(at) as? Element } }
+            .firstOrNull { element ->
+                element.getAttributeNS(ANDROID_NAMESPACE, "name") == CRANPOSE_ACTIVITY
+            }
+            ?: throw GradleException(
+                "the merged manifest has no $CRANPOSE_ACTIVITY to offer for ${opens.joinToString()}"
+            )
+        val filters = listOf(
+            listOf("android.intent.action.SEND", "android.intent.action.SEND_MULTIPLE"),
+            listOf("android.intent.action.VIEW"),
+        )
+        for (actions in filters) {
+            val filter = document.createElement("intent-filter")
+            for (action in actions) {
+                filter.appendChild(document.createElement("action").apply {
+                    setAttributeNS(ANDROID_NAMESPACE, "android:name", action)
+                })
+            }
+            filter.appendChild(document.createElement("category").apply {
+                setAttributeNS(ANDROID_NAMESPACE, "android:name", "android.intent.category.DEFAULT")
+            })
+            for (type in opens) {
+                filter.appendChild(document.createElement("data").apply {
+                    setAttributeNS(ANDROID_NAMESPACE, "android:mimeType", type)
+                })
+            }
+            activity.appendChild(filter)
+        }
+        logger.lifecycle(
+            "cranpose: offered for ${opens.joinToString(", ")} from this application's own declaration"
         )
     }
 
@@ -293,6 +345,8 @@ abstract class CranposeManifestCheck : DefaultTask() {
                     "for ${plan.reasons[line.name] ?: "this application's declaration"}"
             )
         }
+
+        offerOpening(document, rust.opens)
 
         val writer = TransformerFactory.newInstance().newTransformer()
         writer.setOutputProperty(OutputKeys.INDENT, "yes")

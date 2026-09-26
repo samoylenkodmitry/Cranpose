@@ -169,7 +169,6 @@ fn RobotButton(label: &'static str, enabled: bool, action: impl FnMut() + 'stati
             .padding_horizontal(8.0)
             .semantics(move |config| {
                 config.enabled = enabled;
-                config.state_description = (!enabled).then(|| "Disabled".to_owned());
             }),
         ButtonSpec::default(),
         action,

@@ -961,6 +961,7 @@ pub(crate) struct ShapeVariant {
     brush: Option<u8>,
     solid: bool,
     clipped: bool,
+    interior: bool,
     ablation: ShapeAblation,
 }
 
@@ -970,6 +971,7 @@ impl ShapeVariant {
         brush: None,
         solid: false,
         clipped: true,
+        interior: true,
         ablation: ShapeAblation {
             material: false,
             fill: false,
@@ -996,6 +998,7 @@ impl ShapeVariant {
                 .map(|brush| brush as u8),
             solid: !segment.gradient,
             clipped,
+            interior: segment.interiors,
             ablation,
         }
     }
@@ -1077,6 +1080,7 @@ pub(crate) fn create_shape_pipeline(
         ("BRUSH_KIND_FIXED", variant.brush.map_or(-1.0, f64::from)),
         ("SHAPE_SOLID", f64::from(u8::from(variant.solid))),
         ("SHAPE_CLIPPED", f64::from(u8::from(variant.clipped))),
+        ("SHAPE_INTERIOR", f64::from(u8::from(variant.interior))),
         ("TIER_ARENA", f64::from(u8::from(tier == RunTier::Arena))),
         ("SHAPE_BANDS", f64::from(u8::from(mode.storage))),
         ("SHAPE_FLAT", f64::from(u8::from(variant.ablation.material))),

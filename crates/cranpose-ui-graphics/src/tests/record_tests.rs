@@ -710,3 +710,90 @@ fn the_record_is_seven_rows() {
     assert_eq!(std::mem::size_of::<BrushRecord>(), 48);
     assert_eq!(std::mem::size_of::<GradientStopRecord>(), 32);
 }
+
+fn only_segment_interiors(record: impl FnOnce(&mut ShapeRecorder)) -> bool {
+    let mut recorder = ShapeRecorder::default();
+    record(&mut recorder);
+    let segments = &recorder.tables().segments;
+    assert_eq!(segments.len(), 1, "one segment: {segments:?}");
+    segments[0].interiors
+}
+
+#[test]
+fn a_card_with_a_large_interior_marks_its_segment() {
+    assert!(only_segment_interiors(|recorder| {
+        recorder.push_round_rect(
+            rect(0.0, 0.0, 300.0, 200.0),
+            &solid(),
+            CornerRadii::uniform(16.0),
+            None,
+            BlendMode::SrcOver,
+        );
+    }));
+}
+
+#[test]
+fn circles_plain_rects_and_strokes_leave_the_segment_unmarked() {
+    assert!(!only_segment_interiors(|recorder| {
+        recorder.push_round_rect(
+            rect(0.0, 0.0, 40.0, 40.0),
+            &solid(),
+            CornerRadii::uniform(20.0),
+            None,
+            BlendMode::SrcOver,
+        );
+    }));
+    assert!(!only_segment_interiors(|recorder| {
+        recorder.push_rect(
+            rect(0.0, 0.0, 300.0, 200.0),
+            &solid(),
+            None,
+            BlendMode::SrcOver,
+        );
+    }));
+    assert!(!only_segment_interiors(|recorder| {
+        recorder.push_round_rect(
+            rect(0.0, 0.0, 300.0, 200.0),
+            &solid(),
+            CornerRadii::uniform(16.0),
+            Some(Stroke {
+                width: 2.0,
+                ..Default::default()
+            }),
+            BlendMode::SrcOver,
+        );
+    }));
+}
+
+#[test]
+fn a_chip_whose_corners_take_most_of_it_leaves_the_segment_unmarked() {
+    assert!(!only_segment_interiors(|recorder| {
+        recorder.push_round_rect(
+            rect(0.0, 0.0, 60.0, 24.0),
+            &solid(),
+            CornerRadii::uniform(8.0),
+            None,
+            BlendMode::SrcOver,
+        );
+    }));
+}
+
+#[test]
+fn one_large_interior_marks_the_segment_the_small_shapes_share() {
+    assert!(only_segment_interiors(|recorder| {
+        recorder.push_round_rect(
+            rect(0.0, 0.0, 40.0, 40.0),
+            &solid(),
+            CornerRadii::uniform(20.0),
+            None,
+            BlendMode::SrcOver,
+        );
+        recorder.push_round_rect(
+            rect(0.0, 0.0, 300.0, 200.0),
+            &solid(),
+            CornerRadii::uniform(16.0),
+            None,
+            BlendMode::SrcOver,
+        );
+    }));
+}
