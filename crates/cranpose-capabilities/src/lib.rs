@@ -9,12 +9,14 @@
 //!     Use::camera("Reads a receipt with the camera. Nothing leaves this device."),
 //!     Use::notifications(),
 //! ])
+//! .opening(&["image/*", "application/pdf"])
 //! .emit();
 //! ```
 //!
 //! From that one list the build writes the Android permissions and feature
-//! declarations, the Apple usage descriptions, and a constant the application
-//! itself reads at run time. A service is a function, so a name cannot be
+//! declarations, the Android intent filters that offer the application for
+//! the files it opens, the Apple usage descriptions, and a constant the
+//! application itself reads at run time. A service is a function, so a name cannot be
 //! misspelled, and a service Apple wants a sentence for takes that sentence as
 //! an argument, so it cannot be forgotten.
 
@@ -303,6 +305,11 @@ pub struct Capabilities<'a> {
     pub uses: &'a [Use],
     /// The hardware the application cannot run without.
     pub demands: &'a [Demand],
+    /// The media types of the files the application opens, such as
+    /// `"audio/*"` or `"application/pdf"`: the platform then offers it for
+    /// those files, in a share sheet and in "Open with", and hands what the
+    /// person picks to `cranpose_services::incoming_share`.
+    pub opens: &'a [&'a str],
 }
 
 impl Capabilities<'_> {
@@ -310,6 +317,7 @@ impl Capabilities<'_> {
     pub const NONE: Capabilities<'static> = Capabilities {
         uses: &[],
         demands: &[],
+        opens: &[],
     };
 
     /// Whether the application declared this service.
@@ -336,7 +344,11 @@ pub struct Declaration<'a> {
 /// Starts a declaration with the services an application uses.
 pub const fn declare(uses: &[Use]) -> Declaration<'_> {
     Declaration {
-        capabilities: Capabilities { uses, demands: &[] },
+        capabilities: Capabilities {
+            uses,
+            demands: &[],
+            opens: &[],
+        },
     }
 }
 
@@ -345,8 +357,19 @@ impl<'a> Declaration<'a> {
     pub const fn demanding(self, demands: &'a [Demand]) -> Declaration<'a> {
         Declaration {
             capabilities: Capabilities {
-                uses: self.capabilities.uses,
                 demands,
+                ..self.capabilities
+            },
+        }
+    }
+
+    /// Adds the media types of the files the application opens, such as
+    /// `"audio/*"`, so the platform offers it for them.
+    pub const fn opening(self, opens: &'a [&'a str]) -> Declaration<'a> {
+        Declaration {
+            capabilities: Capabilities {
+                opens,
+                ..self.capabilities
             },
         }
     }
@@ -476,6 +499,10 @@ fn rust_source(capabilities: &Capabilities<'_>) -> String {
             "            cranpose_capabilities::Demand::{demand:?},"
         );
     }
+    text.push_str("        ],\n        opens: &[\n");
+    for media_type in capabilities.opens {
+        let _ = writeln!(text, "            \"{}\",", escape(media_type));
+    }
     text.push_str("        ],\n    };\n");
     text
 }
@@ -528,6 +555,15 @@ pub fn json(capabilities: &Capabilities<'_>) -> String {
         };
         let _ = writeln!(text, "    \"{}\"{comma}", demand.android_feature());
     }
+    text.push_str("  ],\n  \"opens\": [\n");
+    for (at, media_type) in capabilities.opens.iter().enumerate() {
+        let comma = if at + 1 == capabilities.opens.len() {
+            ""
+        } else {
+            ","
+        };
+        let _ = writeln!(text, "    \"{}\"{comma}", escape_json(media_type));
+    }
     text.push_str("  ]\n}\n");
     text
 }
@@ -567,7 +603,44 @@ pub fn android_manifest(capabilities: &Capabilities<'_>) -> String {
             demand.android_feature()
         );
     }
+    if !capabilities.opens.is_empty() {
+        text.push_str(&android_opening_activity(capabilities.opens));
+    }
     text.push_str("</manifest>\n");
+    text
+}
+
+/// The activity entry that offers the application for `opens`: sending a file
+/// to it and opening one with it.
+fn android_opening_activity(opens: &[&str]) -> String {
+    let mut text = String::from(
+        "    <application>\n        \
+         <activity android:name=\"dev.cranpose.android.CranposeActivity\">\n",
+    );
+    for actions in [
+        &[
+            "android.intent.action.SEND",
+            "android.intent.action.SEND_MULTIPLE",
+        ][..],
+        &["android.intent.action.VIEW"][..],
+    ] {
+        text.push_str("            <intent-filter>\n");
+        for action in actions {
+            let _ = writeln!(text, "                <action android:name=\"{action}\" />");
+        }
+        text.push_str(
+            "                <category android:name=\"android.intent.category.DEFAULT\" />\n",
+        );
+        for media_type in opens {
+            let _ = writeln!(
+                text,
+                "                <data android:mimeType=\"{}\" />",
+                escape_xml(media_type)
+            );
+        }
+        text.push_str("            </intent-filter>\n");
+    }
+    text.push_str("        </activity>\n    </application>\n");
     text
 }
 

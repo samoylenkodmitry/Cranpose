@@ -172,12 +172,15 @@ composites the resolved textures.
   evicted by age, pinned ones skipped until the cache retires them. Shape
   pipelines are one per (blend mode, vertex stage, `ShapeVariant`): a
   variant fixes the shape kind and brush kind of its batch and picks
-  `fs_solid` (8 locations), `fs_gradient_fill` (12) or `fs_main` (15);
+  `fs_solid` (7 locations), `fs_gradient_fill` (11) or `fs_main` (14);
   every entry ends in the one `fragment` function. A fill's vertices carry
   its interior, the rect inset by its largest corner radius and half a
-  pixel, as one flat vector: a pixel inside it is fully covered, and it
-  returns that before reading the rect, radii or distance field, which on
-  the Mali cut deep's GPU clock by a fifth. Contract
+  pixel, in the arc vector only arcs otherwise use: a pixel inside it is
+  fully covered, and it returns that before the distance field, which on
+  the Mali cut deep's GPU clock by a fifth. Only a batch with a rounded
+  fill whose interior covers half its rect runs that test
+  (`SHAPE_INTERIOR`); a batch of small circles and plain rects folds it
+  out, since there it only costs, as it did the watch's Megaboss. Contract
   `shape_variant_parity.rs` (zero bytes; a wrong varying or fixed brush
   fails by 10^5 bytes).
 - **Caches** (`LayerCache`, 96 MB LRU, bytes per texture through an
