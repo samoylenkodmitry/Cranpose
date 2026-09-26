@@ -5,6 +5,7 @@ const READS: &str = "Reads a receipt with the camera.";
 const SCANNER: Capabilities<'static> = Capabilities {
     uses: &[Use::camera(READS), Use::notifications(), Use::billing()],
     demands: &[],
+    opens: &[],
 };
 
 #[test]
@@ -26,6 +27,7 @@ fn android_permissions_come_from_the_services_without_repeats() {
     let both = Capabilities {
         uses: &BOTH_SERVICES,
         demands: &[],
+        opens: &[],
     };
     assert_eq!(
         android_permissions(&both),
@@ -42,6 +44,7 @@ fn the_manifest_names_the_permissions_and_the_demanded_hardware() {
     let watch = Capabilities {
         uses: &ONE_HAPTIC,
         demands: &WATCH,
+        opens: &[],
     };
     let text = android_manifest(&watch);
     assert!(text.contains("<uses-permission android:name=\"android.permission.VIBRATE\" />"));
@@ -83,6 +86,7 @@ fn the_json_lists_services_permissions_and_demands() {
     let text = json(&Capabilities {
         uses: &ONE_CAMERA,
         demands: &CAMERA_HARDWARE,
+        opens: &[],
     });
     assert!(text.contains("\"name\": \"camera\""));
     assert!(text.contains("\"android.permission.CAMERA\""));
@@ -187,4 +191,61 @@ fn emit_writes_the_shared_files_only_through_the_named_list() {
             && emit.contains("rerun_directives(&outputs)"),
         "emit must write and announce the same list of files"
     );
+}
+
+const AUDIO: [&str; 2] = ["audio/*", "application/ogg"];
+
+const PLAYER: Capabilities<'static> = Capabilities {
+    uses: &[],
+    demands: &[],
+    opens: &AUDIO,
+};
+
+#[test]
+fn an_application_that_opens_files_offers_the_activity_for_them() {
+    let text = android_manifest(&PLAYER);
+    assert!(text.contains("<activity android:name=\"dev.cranpose.android.CranposeActivity\">"));
+    for action in [
+        "android.intent.action.SEND",
+        "android.intent.action.SEND_MULTIPLE",
+        "android.intent.action.VIEW",
+    ] {
+        assert!(
+            text.contains(&format!("<action android:name=\"{action}\" />")),
+            "{action}: {text}"
+        );
+    }
+    assert_eq!(
+        text.matches("<data android:mimeType=\"audio/*\" />")
+            .count(),
+        2
+    );
+    assert_eq!(
+        text.matches("<category android:name=\"android.intent.category.DEFAULT\" />")
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn an_application_that_opens_nothing_adds_no_activity_entry() {
+    assert!(!android_manifest(&SCANNER).contains("<activity"));
+}
+
+#[test]
+fn the_json_and_the_generated_rust_carry_what_the_application_opens() {
+    let text = json(&PLAYER);
+    assert!(text.contains("\"opens\": [\n    \"audio/*\",\n    \"application/ogg\"\n  ]"));
+    let rust = rust_source(&PLAYER);
+    assert!(rust.contains(
+        "opens: &[\n            \"audio/*\",\n            \"application/ogg\",\n        ],"
+    ));
+}
+
+#[test]
+fn opening_keeps_what_the_declaration_already_used_and_demanded() {
+    let declaration = declare(&ONE_HAPTIC).demanding(&WATCH).opening(&AUDIO);
+    assert_eq!(declaration.capabilities.uses, &ONE_HAPTIC);
+    assert_eq!(declaration.capabilities.demands, &WATCH);
+    assert_eq!(declaration.capabilities.opens, &AUDIO);
 }
