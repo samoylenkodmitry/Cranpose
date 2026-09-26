@@ -159,12 +159,14 @@ pub trait TextMeasurer: 'static {
         self.measure_subsequence(text, range, style)
     }
 
+    /// The widths of every prefix of one line, shared with the measurer's
+    /// cache rather than copied out of it.
     fn measure_line_prefix_widths(
         &self,
         text: &crate::text::AnnotatedString,
         line_range: Range<usize>,
         style: &TextStyle,
-    ) -> Option<TextLinePrefixWidths> {
+    ) -> Option<Rc<TextLinePrefixWidths>> {
         let _ = text;
         let _ = line_range;
         let _ = style;
@@ -383,7 +385,7 @@ impl TextMeasurer for MonospacedTextMeasurer {
         text: &crate::text::AnnotatedString,
         line_range: Range<usize>,
         style: &TextStyle,
-    ) -> Option<TextLinePrefixWidths> {
+    ) -> Option<Rc<TextLinePrefixWidths>> {
         let font_size = style.resolve_font_size(Self::DEFAULT_SIZE);
         let letter_spacing = style.resolve_letter_spacing(Self::DEFAULT_SIZE);
         TextLinePrefixWidths::monospaced(
@@ -391,6 +393,7 @@ impl TextMeasurer for MonospacedTextMeasurer {
             font_size * Self::CHAR_WIDTH_RATIO,
             letter_spacing,
         )
+        .map(Rc::new)
     }
 
     fn measure_line_width(
@@ -1546,7 +1549,7 @@ struct LineMeasureContext<'a, M: TextMeasurer + ?Sized> {
     text: &'a crate::text::AnnotatedString,
     style: &'a TextStyle,
     line_start: usize,
-    prefix_widths: Option<TextLinePrefixWidths>,
+    prefix_widths: Option<Rc<TextLinePrefixWidths>>,
 }
 
 impl<'a, M: TextMeasurer + ?Sized> LineMeasureContext<'a, M> {

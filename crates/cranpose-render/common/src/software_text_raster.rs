@@ -33,6 +33,7 @@ use crate::{
     },
     font_tracking::FontTracking,
     gpos_kerning::KernedFont,
+    text_cache_key::{TextCacheKey, TextProbe},
     text_hyphenation::HyphenationDictionaryStore,
 };
 
@@ -549,37 +550,20 @@ fn software_text_font_metadata(bytes: &[u8]) -> SoftwareTextFontMetadata {
     }
 }
 
-#[derive(Clone)]
-struct TextMetricsKey {
-    text: Rc<str>,
-    font_size_bits: u32,
-    style_hash: u64,
-    span_styles_hash: u64,
-}
+/// A text metrics lookup's parameters besides the text: font size bits,
+/// style hash and span styles hash.
+type TextMetricsParams = (u32, u64, u64);
 
-impl PartialEq for TextMetricsKey {
-    fn eq(&self, other: &Self) -> bool {
-        (Rc::ptr_eq(&self.text, &other.text) || *self.text == *other.text)
-            && self.font_size_bits == other.font_size_bits
-            && self.style_hash == other.style_hash
-            && self.span_styles_hash == other.span_styles_hash
-    }
-}
-
-impl Eq for TextMetricsKey {}
-
-impl Hash for TextMetricsKey {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.text.hash(state);
-        self.font_size_bits.hash(state);
-        self.style_hash.hash(state);
-        self.span_styles_hash.hash(state);
-    }
-}
+/// A line prefix widths lookup's parameters besides the line's own text: the
+/// line's range in its paragraph, the style hash and the paragraph's span
+/// styles hash. The widths depend only on the line's characters and the spans
+/// over them, so the key holds the line, not the whole paragraph.
+type LinePrefixWidthsParams = (usize, usize, u64, u64);
 
 struct SoftwareTextMetricsCache {
-    map: BoundedLruCache<TextMetricsKey, TextMetrics>,
-    line_prefix_widths: BoundedLruCache<LinePrefixWidthsKey, TextLinePrefixWidths>,
+    map: BoundedLruCache<TextCacheKey<TextMetricsParams>, TextMetrics>,
+    line_prefix_widths:
+        BoundedLruCache<TextCacheKey<LinePrefixWidthsParams>, Rc<TextLinePrefixWidths>>,
     glyph_metrics: SoftwareTextGlyphMetricsCache,
 }
 
@@ -601,19 +585,21 @@ impl SoftwareTextMetricsCache {
         style: &TextStyle,
     ) -> TextMetrics {
         let font_size = resolve_font_size(style);
-        let key = TextMetricsKey {
-            text: Rc::from(text.text.as_str()),
-            font_size_bits: font_size.to_bits(),
-            style_hash: style.measurement_hash(),
-            span_styles_hash: text.span_styles_hash(),
-        };
-        if let Some(metrics) = self.map.get(&key).copied() {
+        let probe = TextProbe::new(
+            text.text.as_str(),
+            (
+                font_size.to_bits(),
+                style.measurement_hash(),
+                text.span_styles_hash(),
+            ),
+        );
+        if let Some(metrics) = self.map.get(probe.key()).copied() {
             return metrics;
         }
 
         let metrics =
             measure_annotated_text_with_font_set_cached(text, style, font_size, fonts, self);
-        self.map.put(key, metrics);
+        self.map.put(probe.to_owned_key(), metrics);
         metrics
     }
 
@@ -623,16 +609,17 @@ impl SoftwareTextMetricsCache {
         text: &AnnotatedString,
         line_range: std::ops::Range<usize>,
         style: &TextStyle,
-    ) -> Option<TextLinePrefixWidths> {
-        let key = line_prefix_widths_key(text, line_range.clone(), style)?;
-        if let Some(widths) = self.line_prefix_widths.get(&key) {
-            return Some(widths.clone());
+    ) -> Option<Rc<TextLinePrefixWidths>> {
+        let probe = line_prefix_widths_probe(text, line_range.clone(), style)?;
+        if let Some(widths) = self.line_prefix_widths.get(probe.key()) {
+            return Some(Rc::clone(widths));
         }
 
-        let widths = annotated_line_prefix_widths_with_font_set_cached(
+        let widths = Rc::new(annotated_line_prefix_widths_with_font_set_cached(
             text, line_range, style, fonts, self,
-        )?;
-        self.line_prefix_widths.put(key, widths.clone());
+        )?);
+        self.line_prefix_widths
+            .put(probe.to_owned_key(), Rc::clone(&widths));
         Some(widths)
     }
 
@@ -643,8 +630,8 @@ impl SoftwareTextMetricsCache {
         line_range: std::ops::Range<usize>,
         style: &TextStyle,
     ) -> Option<f32> {
-        let key = line_prefix_widths_key(text, line_range.clone(), style)?;
-        if let Some(widths) = self.line_prefix_widths.get(&key) {
+        let probe = line_prefix_widths_probe(text, line_range.clone(), style)?;
+        if let Some(widths) = self.line_prefix_widths.get(probe.key()) {
             return widths.width_for_char_range(0, widths.char_count());
         }
 
@@ -652,47 +639,17 @@ impl SoftwareTextMetricsCache {
             text, line_range, style, fonts, self,
         )?;
         let width = widths.width_for_char_range(0, widths.char_count());
-        self.line_prefix_widths.put(key, widths);
+        self.line_prefix_widths
+            .put(probe.to_owned_key(), Rc::new(widths));
         width
     }
 }
 
-#[derive(Clone)]
-struct LinePrefixWidthsKey {
-    text: Rc<str>,
-    start: usize,
-    end: usize,
-    style_hash: u64,
-    span_styles_hash: u64,
-}
-
-impl PartialEq for LinePrefixWidthsKey {
-    fn eq(&self, other: &Self) -> bool {
-        (Rc::ptr_eq(&self.text, &other.text) || *self.text == *other.text)
-            && self.start == other.start
-            && self.end == other.end
-            && self.style_hash == other.style_hash
-            && self.span_styles_hash == other.span_styles_hash
-    }
-}
-
-impl Eq for LinePrefixWidthsKey {}
-
-impl Hash for LinePrefixWidthsKey {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.text.hash(state);
-        self.start.hash(state);
-        self.end.hash(state);
-        self.style_hash.hash(state);
-        self.span_styles_hash.hash(state);
-    }
-}
-
-fn line_prefix_widths_key(
-    text: &AnnotatedString,
+fn line_prefix_widths_probe<'a>(
+    text: &'a AnnotatedString,
     line_range: std::ops::Range<usize>,
     style: &TextStyle,
-) -> Option<LinePrefixWidthsKey> {
+) -> Option<TextProbe<'a, LinePrefixWidthsParams>> {
     if !style_allows_prefix_widths(style)
         || line_range.start > line_range.end
         || line_range.end > text.text.len()
@@ -703,13 +660,15 @@ fn line_prefix_widths_key(
         return None;
     }
 
-    Some(LinePrefixWidthsKey {
-        text: Rc::from(text.text.as_str()),
-        start: line_range.start,
-        end: line_range.end,
-        style_hash: style.measurement_hash(),
-        span_styles_hash: text.span_styles_hash(),
-    })
+    Some(TextProbe::new(
+        &text.text[line_range.clone()],
+        (
+            line_range.start,
+            line_range.end,
+            style.measurement_hash(),
+            text.span_styles_hash(),
+        ),
+    ))
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -889,7 +848,7 @@ impl TextMeasurer for SoftwareTextMeasurer {
         text: &cranpose_ui::text::AnnotatedString,
         line_range: std::ops::Range<usize>,
         style: &TextStyle,
-    ) -> Option<TextLinePrefixWidths> {
+    ) -> Option<Rc<TextLinePrefixWidths>> {
         self.lock_cache()
             .get_or_measure_line_prefix_widths(&self.fonts, text, line_range, style)
     }
