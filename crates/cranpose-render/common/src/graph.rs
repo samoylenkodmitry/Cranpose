@@ -3,7 +3,8 @@ use std::{mem::size_of, ops::Range, rc::Rc};
 use cranpose_core::{NodeId, collections::map::HashSet};
 use cranpose_ui::{
     GraphicsLayer, ModifierNodeSlices, Point, Rect, RenderEffect, RoundedCornerShape,
-    TextLayoutOptions, TextStyle, text::AnnotatedString,
+    TextLayoutOptions, TextStyle,
+    text::{AnnotatedString, RenderString},
 };
 use cranpose_ui_graphics::{
     BlendMode, ColorFilter, CommandRecording, DrawPrimitive, RecordingSummary, ShadowPrimitive,
@@ -254,6 +255,9 @@ pub struct TextPrimitiveNode {
     /// Shared so the renderer can hand the same allocation to every draw it
     /// emits for this node instead of deep-copying the string once per emit.
     pub text: Rc<AnnotatedString>,
+    /// `text` as the renderer's draws carry it across threads, shared with
+    /// the prepared layout it came from so no frame converts it again.
+    pub render_text: std::sync::Arc<RenderString>,
     pub text_style: TextStyle,
     pub font_size: f32,
     pub layout_options: TextLayoutOptions,

@@ -1,7 +1,7 @@
 use cranpose_core::NodeId;
 use cranpose_ui::{
     TextLayoutOptions, TextStyle,
-    text::{AnnotatedString, Shadow, SpanStyle, TextDecoration},
+    text::{Shadow, SpanStyle, TextDecoration},
 };
 use cranpose_ui_graphics::{Brush, Color, CornerRadii, DrawPrimitive, Point, Rect, Stroke};
 
@@ -538,7 +538,8 @@ fn text_node_with_style(
         node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
             node_id,
             rect,
-            text: std::rc::Rc::new(AnnotatedString::from(text)),
+            text: cranpose_ui::text::shared_plain_annotated_string(text),
+            render_text: cranpose_ui::text::shared_plain_render_string(text),
             text_style,
             font_size: 14.0,
             layout_options: TextLayoutOptions::default(),

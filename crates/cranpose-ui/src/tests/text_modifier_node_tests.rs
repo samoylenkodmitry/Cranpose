@@ -49,6 +49,7 @@ impl crate::text::TextMeasurer for RecordingPreparedLayoutMeasurer {
                 line_count: 1,
             },
             did_overflow: false,
+            render_text: Default::default(),
         }
     }
 
@@ -120,6 +121,7 @@ impl crate::text::TextMeasurer for FontSizePreparedLayoutMeasurer {
                 line_count: 1,
             },
             did_overflow: false,
+            render_text: Default::default(),
         }
     }
 
@@ -179,6 +181,7 @@ impl crate::text::TextMeasurer for FixedPreparedLayoutMeasurer {
                 line_count: (self.height / self.line_height).round().max(1.0) as usize,
             },
             did_overflow: false,
+            render_text: Default::default(),
         }
     }
 

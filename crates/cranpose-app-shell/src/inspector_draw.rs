@@ -1,11 +1,9 @@
-use std::rc::Rc;
-
 use cranpose_core::NodeId;
 use cranpose_render_common::graph::{
     DrawPrimitiveNode, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, RenderGraph,
     RenderNode, TextPrimitiveNode,
 };
-use cranpose_ui::{TextLayoutOptions, TextStyle, text::AnnotatedString};
+use cranpose_ui::{TextLayoutOptions, TextStyle};
 use cranpose_ui_graphics::{Brush, Color, CornerRadii, DrawPrimitive, Point, Rect, Size, Stroke};
 
 use super::{InspectorAction, InspectorControl, InspectorMode, InspectorState};
@@ -87,7 +85,8 @@ impl Canvas {
             node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
                 node_id: id,
                 rect,
-                text: Rc::new(AnnotatedString::from(text)),
+                text: cranpose_ui::text::shared_plain_annotated_string(text),
+                render_text: cranpose_ui::text::shared_plain_render_string(text),
                 text_style: style,
                 font_size,
                 layout_options: TextLayoutOptions::default(),
