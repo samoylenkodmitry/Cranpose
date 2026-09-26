@@ -3927,7 +3927,7 @@ fn every_platform_speaks_a_control_that_changed_under_the_cursor() {
 fn every_platform_says_which_tab_of_how_many() {
     let tab_bar = workspace_source("crates/cranpose-liquid/src/widgets/tab_bar.rs");
     assert!(
-        tab_bar.contains("                    .selectable_group()"),
+        tab_bar.contains(".selectable_group()"),
         "the liquid tab bar declares its tabs as one group"
     );
 

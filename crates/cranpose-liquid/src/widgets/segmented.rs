@@ -36,6 +36,33 @@ fn segment_lens_left(pointer_x: f32, segment_width: f32, count: usize) -> f32 {
     (pointer_x - segment_width * 0.5).clamp(0.0, segment_width * (count.saturating_sub(1)) as f32)
 }
 
+/// The segment the lens is over, and whether the lens is still gliding home
+/// after a release.
+fn segmented_lens_reading(
+    lens_axis: &crate::motion::LiquidDragAxis,
+    pressed: bool,
+    selected: usize,
+    segment_width: f32,
+    count: usize,
+) -> (usize, bool) {
+    let selected_x = segment_width * selected as f32;
+    let lens_x = lens_axis.value();
+    let visual_index = crate::motion::liquid_visual_index(
+        selected,
+        lens_x,
+        segment_width,
+        count,
+        crate::motion::liquid_axis_owns_visual_selection(
+            pressed,
+            lens_x,
+            selected_x,
+            segment_width,
+        ),
+    );
+    let settling = !lens_axis.is_dragging() && (lens_x - selected_x).abs() > 1.0;
+    (visual_index, settling)
+}
+
 fn segmented_lens_base_size(segment_width: f32, progress: f32) -> Size {
     let progress = progress.clamp(0.0, 1.2);
     let rest_h = SEGMENT_HEIGHT + TRACK_PADDING * 2.0 + MARKER_POKE_TOP + MARKER_POKE_BOTTOM;
@@ -185,21 +212,19 @@ pub fn LiquidSegmentedControl(
             if !pressed.get() {
                 lens_axis.settle_to(selected_x, LiquidMotion::glide());
             }
-            let lens_x = lens_axis.value();
-            let visual_index = crate::motion::liquid_visual_index(
-                selected,
-                lens_x,
-                segment_width,
-                count,
-                crate::motion::liquid_axis_owns_visual_selection(
-                    pressed.get(),
-                    lens_x,
-                    selected_x,
-                    segment_width,
-                ),
-            );
-
-            let lens_settling = !lens_axis.is_dragging() && (lens_x - selected_x).abs() > 1.0;
+            let (visual_index, lens_settling) = {
+                let lens_axis = Rc::clone(&lens_axis);
+                cranpose_core::derivedStateOf(move || {
+                    segmented_lens_reading(
+                        &lens_axis,
+                        pressed.get(),
+                        selected,
+                        segment_width,
+                        count,
+                    )
+                })
+                .get()
+            };
             let lens_target = if pressed.get() || lens_settling {
                 1.0
             } else {
@@ -284,6 +309,7 @@ pub fn LiquidSegmentedControl(
                 + crate::dynamics::BULGE_MAX
                 + LENS_PAD * 2.0;
             let lens_for_layer = lens_progress;
+            let layer_axis = Rc::clone(&lens_axis);
             let physics_axis = Rc::clone(&lens_axis);
             let lens = Modifier::empty()
                 .required_size(Size::new(node_w, node_h))
@@ -292,7 +318,7 @@ pub fn LiquidSegmentedControl(
                     (SEGMENT_HEIGHT - node_h) * 0.5,
                 )
                 .graphics_layer(move || GraphicsLayer {
-                    translation_x: lens_x,
+                    translation_x: layer_axis.value(),
                     alpha: 1.0,
                     ..Default::default()
                 })

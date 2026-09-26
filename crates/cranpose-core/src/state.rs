@@ -1920,17 +1920,17 @@ where
     }
 }
 
-pub(crate) struct DerivedState<T: Clone + 'static> {
+pub(crate) struct DerivedState<T: Clone + PartialEq + 'static> {
     compute: Rc<dyn Fn() -> T>,
     pub(crate) state: OwnedMutableState<T>,
 }
 
-impl<T: Clone + 'static> DerivedState<T> {
+impl<T: Clone + PartialEq + 'static> DerivedState<T> {
     pub(crate) fn new(runtime: RuntimeHandle, compute: Rc<dyn Fn() -> T>) -> Self {
         let initial = compute();
         Self {
             compute,
-            state: OwnedMutableState::with_runtime(initial, runtime),
+            state: OwnedMutableState::with_runtime_structural_eq(initial, runtime),
         }
     }
 
