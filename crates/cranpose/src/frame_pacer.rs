@@ -141,7 +141,7 @@ pub(crate) struct ShownPresent {
 
 /// How far ahead of the display frames run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Level {
+pub(crate) enum Level {
     /// One frame queued behind the shown one.
     Shallow,
     /// Two, so one late frame leaves another to show.
@@ -385,6 +385,12 @@ impl FramePacer {
     /// the queue. Either way the next frame waits for the next vsync, unless
     /// the queue is meant to hold two and holds fewer. An unpaced loop starts
     /// every frame that is due and only notes the slot.
+    /// The level frames run at, or `None` before the display has reported
+    /// a frame.
+    pub(crate) fn current_level(&self) -> Option<Level> {
+        self.stage.map(|stage| stage.level)
+    }
+
     pub(crate) fn begin_frame(&mut self, now_ns: i64, vsync_ns: i64, vsync_period_ns: i64) -> bool {
         let depth = self.level(now_ns).and_then(Level::depth);
         let slot_ns = self.open_slot(now_ns, vsync_ns, vsync_period_ns);

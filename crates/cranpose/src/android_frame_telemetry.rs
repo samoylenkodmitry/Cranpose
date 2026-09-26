@@ -308,6 +308,8 @@ pub(crate) struct FrameTimings {
     pub(crate) after_acquire_ns: i64,
     pub(crate) after_render_ns: i64,
     pub(crate) after_present_ns: i64,
+    /// The pacing level the frame started at.
+    pub(crate) pacing: Option<crate::frame_pacer::Level>,
 }
 
 impl FrameTimings {
@@ -332,6 +334,7 @@ struct Sample {
     render_us: i32,
     present_us: i32,
     vsync_offset_us: i32,
+    pacing: Option<crate::frame_pacer::Level>,
 }
 
 pub(crate) struct AndroidFrameTelemetry {
@@ -399,6 +402,7 @@ impl AndroidFrameTelemetry {
             render_us: us(timings.after_render_ns - timings.after_acquire_ns),
             present_us: us(timings.after_present_ns - timings.after_render_ns),
             vsync_offset_us: vsync_offset_ns(timings.iteration_start_ns).map_or(-1, us),
+            pacing: timings.pacing,
         });
         if self.samples.len() >= self.window_frames {
             self.flush();
@@ -429,7 +433,24 @@ impl AndroidFrameTelemetry {
             sample.update_us + sample.sync_us + sample.render_us + sample.present_us
         });
         self.report_vsync_phase();
+        self.report_pacing();
         self.reset();
+    }
+
+    fn report_pacing(&self) {
+        let count = |level: Option<crate::frame_pacer::Level>| {
+            self.samples
+                .iter()
+                .filter(|sample| sample.pacing == level)
+                .count()
+        };
+        log::warn!(
+            "[android-frame]   pacing shallow={} buffered={} unpaced={} unreported={}",
+            count(Some(crate::frame_pacer::Level::Shallow)),
+            count(Some(crate::frame_pacer::Level::Buffered)),
+            count(Some(crate::frame_pacer::Level::Unpaced)),
+            count(None),
+        );
     }
 
     fn report_vsync_phase(&self) {

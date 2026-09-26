@@ -2445,6 +2445,7 @@ pub fn run(
                 );
             frame_waits_for_vsync = frame_due && !frame_starts;
             if frame_starts {
+                frame_timings.pacing = frame_pacer.current_level();
                 frame_started_at = Some(web_time::Instant::now());
                 frame_timings.work_start_ns = crate::android_frame_telemetry::monotonic_nanos();
                 let update_result = android_host_window::with_android_host_window_registry(
