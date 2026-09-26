@@ -37,11 +37,20 @@ pub(crate) fn main() {
     env_logger::init();
     robot_launch::launch("Idle Transition Work", 800, 600).with_test_driver(|robot| {
             std::thread::sleep(Duration::from_millis(500));
+            // The page's first frame writes every text into the frame's
+            // shared quads; from the next, the long static line draws from
+            // retained quads of its own. A consumed frame is compared with a
+            // still frame in that same state, not with the first.
+            robot.screenshot().expect("capture first frame");
             robot.screenshot().expect("capture baseline frame");
             let baseline_render = robot
                 .get_render_stats()
                 .expect("read baseline render stats")
                 .expect("baseline render stats available");
+            println!(
+                "IDLE-TRANSITION mode=still draws={} uploads={}",
+                baseline_render.draw_calls, baseline_render.upload_bytes,
+            );
             click_mode(&robot, "Unread transition");
             robot.reset_fps_stats().expect("reset unread FPS stats");
             std::thread::sleep(Duration::from_millis(350));
