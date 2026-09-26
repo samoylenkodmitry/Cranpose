@@ -9,6 +9,8 @@
 //! Keeping these as free functions makes the touch behavior testable without a
 //! renderer and keeps `TextFieldModifierNode` focused on wiring.
 
+use cranpose_foundation::text::TextRange;
+
 /// Maximum time between taps that still counts as a multi-tap, in milliseconds.
 pub const MULTI_TAP_TIMEOUT_MS: u128 = 500;
 
@@ -125,6 +127,58 @@ pub fn tap_selection_granularity(tap_count: u8) -> SelectionGranularity {
             1 => SelectionGranularity::Line,
             _ => SelectionGranularity::Paragraph,
         },
+    }
+}
+
+/// The unit of text at `pos` that `granularity` selects, as a byte range
+/// `[start, end)`; a caret is the empty range at `pos`.
+pub fn granularity_boundaries(
+    text: &str,
+    pos: usize,
+    granularity: SelectionGranularity,
+) -> (usize, usize) {
+    match granularity {
+        SelectionGranularity::Caret => (pos, pos),
+        SelectionGranularity::Word => crate::word_boundaries::find_word_boundaries(text, pos),
+        SelectionGranularity::Line => find_line_boundaries(text, pos),
+        SelectionGranularity::Paragraph => find_paragraph_boundaries(text, pos),
+    }
+}
+
+/// What a press selected, kept while the pointer stays down so a drag grows
+/// the selection in the same unit: a double click then drag selects whole
+/// words, a triple click whole lines.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SelectionAnchor {
+    /// The unit the press selected.
+    pub granularity: SelectionGranularity,
+    /// Byte offset where the pressed unit starts.
+    pub start: usize,
+    /// Byte offset where the pressed unit ends.
+    pub end: usize,
+}
+
+impl SelectionAnchor {
+    /// The unit at `pos` that `granularity` selects, as a press there selects it.
+    pub fn at(text: &str, pos: usize, granularity: SelectionGranularity) -> Self {
+        let (start, end) = granularity_boundaries(text, pos, granularity);
+        Self {
+            granularity,
+            start,
+            end,
+        }
+    }
+
+    /// The selection a drag from this press to `pos` makes: the pressed unit
+    /// together with the unit under `pos`, anchored at the far side of the
+    /// pressed unit so the selection grows the way the pointer moves.
+    pub fn dragged_to(self, text: &str, pos: usize) -> TextRange {
+        let (unit_start, unit_end) = granularity_boundaries(text, pos, self.granularity);
+        if unit_start < self.start {
+            TextRange::new(self.end, unit_start)
+        } else {
+            TextRange::new(self.start, unit_end.max(self.end))
+        }
     }
 }
 

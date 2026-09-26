@@ -336,3 +336,62 @@ fn handle_drag_keeps_edges_from_crossing() {
         (9, 9)
     );
 }
+
+#[test]
+fn granularity_boundaries_select_the_unit_a_press_selects() {
+    let text = "one two\nthree four\n\nfive";
+    assert_eq!(
+        granularity_boundaries(text, 5, SelectionGranularity::Caret),
+        (5, 5)
+    );
+    assert_eq!(
+        granularity_boundaries(text, 5, SelectionGranularity::Word),
+        (4, 7)
+    );
+    assert_eq!(
+        granularity_boundaries(text, 10, SelectionGranularity::Line),
+        (8, 18)
+    );
+    assert_eq!(
+        granularity_boundaries(text, 10, SelectionGranularity::Paragraph),
+        (0, 18)
+    );
+}
+
+#[test]
+fn a_word_press_dragged_within_its_word_keeps_the_whole_word() {
+    let text = "hello world";
+    let anchor = SelectionAnchor::at(text, 7, SelectionGranularity::Word);
+    assert_eq!((anchor.start, anchor.end), (6, 11));
+    assert_eq!(anchor.dragged_to(text, 8), TextRange::new(6, 11));
+    assert_eq!(anchor.dragged_to(text, 6), TextRange::new(6, 11));
+}
+
+#[test]
+fn a_word_press_dragged_forward_grows_by_whole_words() {
+    let text = "one two three";
+    let anchor = SelectionAnchor::at(text, 1, SelectionGranularity::Word);
+    assert_eq!(anchor.dragged_to(text, 9), TextRange::new(0, 13));
+}
+
+#[test]
+fn a_word_press_dragged_backward_keeps_its_word_and_reaches_back_by_words() {
+    let text = "one two three";
+    let anchor = SelectionAnchor::at(text, 10, SelectionGranularity::Word);
+    assert_eq!(anchor.dragged_to(text, 5), TextRange::new(13, 4));
+}
+
+#[test]
+fn a_line_press_dragged_to_the_next_line_selects_both_lines() {
+    let text = "first line\nsecond line";
+    let anchor = SelectionAnchor::at(text, 3, SelectionGranularity::Line);
+    assert_eq!(anchor.dragged_to(text, 15), TextRange::new(0, 22));
+}
+
+#[test]
+fn a_caret_press_dragged_selects_from_the_press_to_the_pointer() {
+    let text = "hello world";
+    let anchor = SelectionAnchor::at(text, 4, SelectionGranularity::Caret);
+    assert_eq!(anchor.dragged_to(text, 8), TextRange::new(4, 8));
+    assert_eq!(anchor.dragged_to(text, 1), TextRange::new(4, 1));
+}

@@ -412,6 +412,19 @@ impl ShapeRecord {
     }
 }
 
+/// Whether a record is a rounded fill whose interior -- its rect inset by
+/// its largest corner radius -- covers at least half of the rect.
+fn interior_repays(body: &ShapeRecordBody, curve: &ShapeRecordCurve) -> bool {
+    let corner = curve.radii.iter().copied().fold(0.0, f32::max);
+    let [_, _, width, height] = body.rect;
+    let area = width * height;
+    let interior = (width - 2.0 * corner).max(0.0) * (height - 2.0 * corner).max(0.0);
+    fragment_kind(body.flags) == FRAGMENT_KIND_FILL
+        && corner > 0.0
+        && area > 0.0
+        && interior * 2.0 >= area
+}
+
 fn fragment_kind(flags: u32) -> u32 {
     if (flags >> KIND_SHIFT) & TWO_BITS == RECORD_KIND_ARC {
         FRAGMENT_KIND_ARC
@@ -505,6 +518,10 @@ pub struct RecordSegment {
     /// into [`ARC_BUCKET_SEGMENTS`] of the strip each record is instanced
     /// over, so one draw covers the segment in record order.
     pub band_class: u8,
+    /// Whether a rounded fill in the segment has an interior, where coverage
+    /// is 1 without its distance field, covering at least half of its rect:
+    /// the only records that repay shading their interior apart.
+    pub interiors: bool,
 }
 
 impl RecordSegment {
@@ -723,6 +740,7 @@ fn extend_segment_in(tables: &mut RecordTables, extend: bool, opened: RecordSegm
         last.brushes |= opened.brushes;
         last.kinds |= opened.kinds;
         last.band_class = last.band_class.max(opened.band_class);
+        last.interiors |= opened.interiors;
         return;
     }
     tables.segments.push(opened);
@@ -848,6 +866,7 @@ impl ShapeRecorder {
             brushes: 0,
             kinds: 0,
             band_class: 0,
+            interiors: false,
         });
     }
 
@@ -1031,6 +1050,7 @@ impl ShapeRecorder {
                 index => self.tables.brushes[index as usize - 1].kind,
             };
         let kind_bit = 1u8 << fragment_kind(body.flags);
+        let interiors = interior_repays(&body, &curve);
         let band_class = band_bucket.unwrap_or(0) as u8;
         body.flags |= u32::from(band_class) << BAND_CLASS_SHIFT;
         let extend = self.note_segment_key(RecordLane::Shapes, blend, gradient)
@@ -1052,6 +1072,7 @@ impl ShapeRecorder {
                 brushes: brush_bit,
                 kinds: kind_bit,
                 band_class,
+                interiors,
             },
         );
         coverage
@@ -1081,6 +1102,7 @@ impl ShapeRecorder {
                 brushes: 0,
                 kinds: kind_bit,
                 band_class: 0,
+                interiors: false,
             },
         );
     }

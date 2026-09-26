@@ -695,3 +695,42 @@ fn two_text_fields_hand_off_keyboard_focus_via_their_requesters() {
         );
     });
 }
+
+#[test]
+fn a_mouse_double_click_keeps_the_word_through_its_release_and_a_jitter() {
+    use cranpose_foundation::{PointerEvent, PointerEventKind, PointerSource};
+    use cranpose_ui_graphics::Point;
+
+    let _app_context = crate::render_state::app_context_test_scope();
+    with_test_runtime(|| {
+        let state = TextFieldState::new("hello world");
+        let node = TextFieldModifierNode::new(state, TextStyle::default());
+        node.measured_size.set(Size {
+            width: 200.0,
+            height: 20.0,
+        });
+        let handler = node
+            .pointer_input_handler()
+            .expect("field exposes a pointer handler");
+        let event = |kind, x: f32| {
+            let at = Point { x, y: 8.0 };
+            PointerEvent::new(kind, at, at).with_source(PointerSource::Mouse)
+        };
+
+        handler(event(PointerEventKind::Down, 60.0));
+        handler(event(PointerEventKind::Up, 60.0));
+        handler(event(PointerEventKind::Down, 60.0));
+        handler(event(PointerEventKind::Move, 60.0));
+        handler(event(PointerEventKind::Move, 61.0));
+        handler(event(PointerEventKind::Up, 61.0));
+
+        let selection = state.selection();
+        assert_eq!(
+            &state.text()[selection.min()..selection.max()],
+            "world",
+            "a double click selects the word under the pointer, got {selection:?}"
+        );
+
+        crate::text_field_focus::clear_focus();
+    });
+}
