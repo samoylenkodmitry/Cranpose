@@ -276,7 +276,11 @@ fn every_encoded_record_carries_the_fields_java_parses() {
     let records: Vec<_> = payload.split('\n').collect();
     assert_eq!(records.len(), 2);
     for record in &records {
-        assert_eq!(record.split('\t').count(), 41, "record: {record}");
+        assert_eq!(
+            record.split('\t').count(),
+            RECORD_FIELDS,
+            "record: {record}"
+        );
     }
 
     let fields: Vec<_> = records[0].split('\t').collect();

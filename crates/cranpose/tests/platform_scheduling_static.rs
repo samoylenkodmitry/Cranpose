@@ -1042,9 +1042,9 @@ fn android_accessibility_record_width_agrees_across_the_jni_boundary() {
 
     let rust_fields = wire_source
         .lines()
-        .find(|line| line.trim_start().starts_with("\"{}\\t"))
-        .map(|line| line.matches("{}").count())
-        .expect("the accessibility record format string should be one line");
+        .find_map(|line| line.trim().strip_prefix("const RECORD_FIELDS: usize = "))
+        .and_then(|value| value.trim_end_matches(';').parse::<usize>().ok())
+        .expect("the accessibility wire should declare its record width");
     let java_fields = java_source
         .lines()
         .find(|line| line.contains("ACCESSIBILITY_FIELDS ="))
@@ -3849,7 +3849,7 @@ fn every_platform_takes_a_reader_to_a_row_by_number() {
             )
             && rust_shell_source
                 .contains("drain_accessibility_jumps(shell, &accessibility_elements);")
-            && wire_source.contains("i32::from(element.scroll_to_index),"),
+            && wire_source.contains("i32::from(element.scroll_to_index)"),
         "TalkBack names a row through Android's own scroll-to-position action"
     );
 
