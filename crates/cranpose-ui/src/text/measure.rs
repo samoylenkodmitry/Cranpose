@@ -46,13 +46,39 @@ pub struct TextMetrics {
     pub line_count: usize,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct PreparedTextLayout {
     /// Shared display text after wrapping and overflow have been resolved.
     pub text: Rc<crate::text::AnnotatedString>,
     pub visual_style: TextStyle,
     pub metrics: TextMetrics,
     pub did_overflow: bool,
+    /// `text` as a renderer draws it, converted on first use: see
+    /// [`PreparedTextLayout::render_text`].
+    pub render_text: std::cell::OnceCell<std::sync::Arc<crate::text::RenderString>>,
+}
+
+impl PreparedTextLayout {
+    /// The display text as a renderer draws it. Converted once for the layout
+    /// and shared after, so every frame and scene rebuild drawing this layout
+    /// hands over the same allocation.
+    pub fn render_text(&self) -> std::sync::Arc<crate::text::RenderString> {
+        if let Some(converted) = self.render_text.get() {
+            return std::sync::Arc::clone(converted);
+        }
+        let converted = std::sync::Arc::new(self.text.render_string());
+        let _ = self.render_text.set(std::sync::Arc::clone(&converted));
+        converted
+    }
+}
+
+impl PartialEq for PreparedTextLayout {
+    fn eq(&self, other: &Self) -> bool {
+        self.text == other.text
+            && self.visual_style == other.visual_style
+            && self.metrics == other.metrics
+            && self.did_overflow == other.did_overflow
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1074,6 +1100,7 @@ pub fn prepare_text_layout_with_measurer_for_node<M: TextMeasurer + ?Sized>(
             line_count: layout_line_count,
         },
         did_overflow,
+        render_text: Default::default(),
     };
 
     if let Some(start) = total_start {

@@ -1,6 +1,6 @@
 //! Scene structures for GPU rendering
 
-use std::{ops::Range, rc::Rc, sync::Arc};
+use std::{ops::Range, sync::Arc};
 
 use cranpose_core::NodeId;
 use cranpose_render_common::graph::DrawCommandId;
@@ -165,50 +165,6 @@ pub(crate) struct TextDraw {
     pub scale: f32,
     pub layout_options: TextLayoutOptions,
     pub clip: Option<Rect>,
-}
-
-const RENDER_STRING_MEMO_CAPACITY: usize = 2048;
-
-thread_local! {
-    static RENDER_STRING_MEMO: std::cell::RefCell<
-        cranpose_core::collections::map::HashMap<usize, RenderStringMemoEntry>,
-    > = std::cell::RefCell::new(cranpose_core::collections::map::HashMap::default());
-}
-
-struct RenderStringMemoEntry {
-    text: std::rc::Weak<cranpose_ui::text::AnnotatedString>,
-    render: std::sync::Arc<cranpose_ui::text::RenderString>,
-}
-
-pub(crate) fn render_string_for(
-    text: &Rc<cranpose_ui::text::AnnotatedString>,
-) -> std::sync::Arc<cranpose_ui::text::RenderString> {
-    RENDER_STRING_MEMO.with(|memo| {
-        let mut memo = memo.borrow_mut();
-        let key = Rc::as_ptr(text) as usize;
-        if let Some(entry) = memo.get(&key)
-            && entry.text.strong_count() > 0
-            && entry.text.as_ptr() == Rc::as_ptr(text)
-        {
-            return std::sync::Arc::clone(&entry.render);
-        }
-
-        let render = std::sync::Arc::new(text.render_string());
-        if memo.len() >= RENDER_STRING_MEMO_CAPACITY {
-            memo.retain(|_, entry| entry.text.strong_count() > 0);
-            if memo.len() >= RENDER_STRING_MEMO_CAPACITY {
-                memo.clear();
-            }
-        }
-        memo.insert(
-            key,
-            RenderStringMemoEntry {
-                text: Rc::downgrade(text),
-                render: std::sync::Arc::clone(&render),
-            },
-        );
-        render
-    })
 }
 
 #[derive(Clone)]
@@ -546,7 +502,7 @@ impl CompositorScene {
         &mut self,
         node_id: NodeId,
         rect: Rect,
-        text: Rc<cranpose_ui::text::AnnotatedString>,
+        text: Arc<cranpose_ui::text::RenderString>,
         color: Color,
         text_style: TextStyle,
         font_size: f32,
@@ -562,7 +518,7 @@ impl CompositorScene {
             node_id,
             rect,
             snap_anchor: None,
-            text: render_string_for(&text),
+            text,
             color,
             text_style,
             font_size,
