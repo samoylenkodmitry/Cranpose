@@ -40,7 +40,9 @@ pub mod subcompose;
 pub mod internal {
     pub use crate::frame_clock::{FrameCallbackRegistration, FrameClock};
 }
-pub use callbacks::{CallbackHolder, CallbackHolder1, ParamSlot, ParamState, ReturnSlot};
+pub use callbacks::{
+    CallbackHolder, CallbackHolder1, ParamSlot, ParamState, ReturnSlot, SharedParam,
+};
 pub use composer::{BranchGroupGuard, CapturedCompositionContext, Composer, ValueSlotHandle};
 pub(crate) use composer::{ComposerCore, EmittedNode, ParentAttachMode, ParentFrame};
 pub use composition::{Composition, ROOT_RENDER_REPLAY_LIMIT};
