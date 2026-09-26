@@ -1127,7 +1127,7 @@ fn publish_window_geometry(
         x: top_left.x + layer_translation.x,
         y: top_left.y + layer_translation.y,
     };
-    if let Some(sink) = modifier_slices.text_field_window_origin() {
+    if let Some(sink) = modifier_slices.text_window_origin() {
         sink.set(origin);
     }
     if let Some(sink) = modifier_slices.viewport_window_rect() {

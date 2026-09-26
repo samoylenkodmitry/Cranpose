@@ -339,20 +339,44 @@ struct MenuMotion {
     slide_live: Rc<Cell<bool>>,
 }
 
+/// Where a text edit menu belongs, in window coordinates: centred on
+/// `center_x`, over the line that runs from `line_top` to `line_bottom`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MenuAnchor {
+    /// The selection's or the caret's centre.
+    pub center_x: f32,
+    /// The top of the selection's first line, or the caret's line.
+    pub line_top: f32,
+    /// The bottom of that line.
+    pub line_bottom: f32,
+}
+
+impl MenuAnchor {
+    /// The menu's top edge: its bottom rides `MENU_GAP_ABOVE_LINE` above the
+    /// line, or, when that would cross the window's top margin, its top rides
+    /// the same gap below the line.
+    pub fn menu_top(self) -> f32 {
+        let above = self.line_top - MENU_GAP_ABOVE_LINE - MENU_HEIGHT;
+        if above >= MENU_SCREEN_MARGIN {
+            above
+        } else {
+            self.line_bottom + MENU_GAP_ABOVE_LINE
+        }
+    }
+}
+
 /// The liquid-glass text edit menu.
 ///
-/// * `center_x` — window-space x to center the capsule on (the selection /
-///   caret center); clamped to the screen margin.
-/// * `line_top_y` — window-space top of the selection's first line; the
-///   capsule bottom rides `MENU_GAP_ABOVE_LINE` above it.
+/// * `anchor` — the line it belongs over; the capsule is centred on it,
+///   clamped to the screen margin, and sits above it where the window has
+///   room and below it where it does not.
 /// * `visible` — false while a handle drag is in flight; the menu dissolves
 ///   and rematerializes per the measured timings (it stays mounted while
 ///   fading).
 /// * `items` — the actions.
 #[composable]
 pub fn LiquidTextMenu(
-    center_x: f32,
-    line_top_y: f32,
+    anchor: MenuAnchor,
     visible: bool,
     live_point: Option<cranpose_ui_graphics::Point>,
     items: Vec<TextMenuItem>,
@@ -416,12 +440,12 @@ pub fn LiquidTextMenu(
         width += MENU_HEIGHT;
     }
 
-    let mut x = center_x - width * 0.5;
+    let mut x = anchor.center_x - width * 0.5;
     if viewport.width > 0.0 {
         x = x.min(viewport.width - MENU_SCREEN_MARGIN - width);
     }
     x = x.max(MENU_SCREEN_MARGIN);
-    let y = line_top_y - MENU_GAP_ABOVE_LINE - MENU_HEIGHT;
+    let y = anchor.menu_top();
 
     let anchor = Rect {
         x,
@@ -582,15 +606,14 @@ pub fn LiquidTextMenu(
 }
 
 /// A floating Copy / Cut / Paste / Select-all menu shown just above the text
-/// selection. `center_x` / `line_top_y` anchor it over the selection;
+/// selection. `anchor` places it over the selection;
 /// `visible` is false while a handle drag is in flight. `can_paste` hides the
 /// Paste item when the clipboard is empty. Each action runs against the
 /// focused field; the caller is expected to dismiss the menu.
 #[expect(clippy::too_many_arguments)]
 #[composable]
 pub fn TextSelectionMenu(
-    center_x: f32,
-    line_top_y: f32,
+    anchor: MenuAnchor,
     visible: bool,
     live_point: Option<cranpose_ui_graphics::Point>,
     can_paste: bool,
@@ -607,7 +630,7 @@ pub fn TextSelectionMenu(
         items.push(TextMenuItem::new("Paste", on_paste));
     }
     items.push(TextMenuItem::new("Select all", on_select_all));
-    LiquidTextMenu(center_x, line_top_y, visible, live_point, items);
+    LiquidTextMenu(anchor, visible, live_point, items);
 }
 
 /// A floating Paste / Select all / Undo / Redo menu shown near the collapsed
@@ -619,8 +642,7 @@ pub fn TextSelectionMenu(
 #[expect(clippy::too_many_arguments)]
 #[composable]
 pub fn CaretActionMenu(
-    center_x: f32,
-    line_top_y: f32,
+    anchor: MenuAnchor,
     visible: bool,
     can_paste: bool,
     can_undo: bool,
@@ -641,7 +663,7 @@ pub fn CaretActionMenu(
     if can_redo {
         items.push(TextMenuItem::new("Redo", on_redo));
     }
-    LiquidTextMenu(center_x, line_top_y, visible, None, items);
+    LiquidTextMenu(anchor, visible, None, items);
 }
 
 #[cfg(test)]

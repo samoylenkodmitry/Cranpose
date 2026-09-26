@@ -140,6 +140,15 @@ fn compose_basic_text_group(
 
     let options = options.normalized();
 
+    let modifier = match crate::widgets::local_selection_registrar().current() {
+        Some(registrar) => modifier.then(crate::widgets::selection_container::selectable_text(
+            registrar,
+            Rc::clone(&current),
+            style.clone(),
+            options,
+        )),
+        None => modifier,
+    };
     let text_element = modifier_element(TextModifierElement::new(current, style, options));
     let final_modifier = Modifier::from_parts(vec![text_element]);
     let combined_modifier = modifier.then(final_modifier);

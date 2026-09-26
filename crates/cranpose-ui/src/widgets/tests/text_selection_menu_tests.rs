@@ -122,3 +122,27 @@ fn pagination_reserves_the_disc_only_when_overflowing() {
     let all: Vec<usize> = narrow.iter().flatten().copied().collect();
     assert_eq!(all, vec![0, 1, 2, 3], "pages cover every item in order");
 }
+
+#[test]
+fn a_menu_sits_above_its_line_unless_the_window_top_is_in_the_way() {
+    let high = MenuAnchor {
+        center_x: 100.0,
+        line_top: 200.0,
+        line_bottom: 220.0,
+    };
+    assert_eq!(
+        high.menu_top(),
+        200.0 - MENU_GAP_ABOVE_LINE - MENU_HEIGHT,
+        "with room above, the menu's bottom rides the gap above the line"
+    );
+    let near_top = MenuAnchor {
+        center_x: 100.0,
+        line_top: 30.0,
+        line_bottom: 50.0,
+    };
+    assert_eq!(
+        near_top.menu_top(),
+        50.0 + MENU_GAP_ABOVE_LINE,
+        "without room above, the menu's top rides the gap below the line"
+    );
+}

@@ -4,8 +4,7 @@ use cranpose_core::{MemoryApplier, Node, NodeId, collections::map::HashSet};
 use cranpose_ui::{
     DrawCommand, LayoutBox, LayoutNode, ModifierNodeSlices, Point, PreparedTextLayout, Rect,
     ResolvedModifiers, Size, SubcomposeLayoutNode, TextLayoutOptions, TextOverflow,
-    TextPanResolver,
-    text::{TextAlign, TextStyle, resolve_text_direction},
+    TextPanResolver, text::TextStyle,
 };
 use cranpose_ui_graphics::{
     CommandRecording, CompositingStrategy, GraphicsLayer, LayerShape, PointerIcon,
@@ -793,7 +792,7 @@ fn apply_translated_container_state(
             .translated_content_offset()
             .unwrap_or(geometry.content_offset);
     }
-    if let Some(sink) = modifier_slices.text_field_window_origin() {
+    if let Some(sink) = modifier_slices.text_window_origin() {
         sink.set(geometry.window_origin);
     }
     if let Some(sink) = modifier_slices.viewport_window_rect() {
@@ -1408,7 +1407,7 @@ fn build_layer_node_from_data(
             x: top_left.x + layer_translation.x,
             y: top_left.y + layer_translation.y,
         };
-        if let Some(sink) = modifier_slices.text_field_window_origin() {
+        if let Some(sink) = modifier_slices.text_window_origin() {
             sink.set(window_origin);
         }
         if let Some(sink) = modifier_slices.viewport_window_rect() {
@@ -1920,7 +1919,7 @@ fn layout_box_to_snapshot(node: &LayoutBox, parent: Option<&LayoutBox>) -> Build
 }
 
 fn modifier_slices_have_origin_sinks(slices: &ModifierNodeSlices) -> bool {
-    slices.text_field_window_origin().is_some() || slices.viewport_window_rect().is_some()
+    slices.text_window_origin().is_some() || slices.viewport_window_rect().is_some()
 }
 
 fn graphics_layer_with_shaped_clip(
@@ -2020,35 +2019,6 @@ pub fn expand_text_bounds_for_baseline_shift(
     }
 }
 
-/// How much of the slack a `TextAlign` puts *before* the text: 0 at the start
-/// edge, 0.5 centred, 1 at the end edge.
-///
-/// Split out because the same fraction has to be applied twice and by two
-/// different pieces of code. Compose aligns a paragraph **line by line** —
-/// `TextAlign.Center` centres each line in the paragraph's width, it does not
-/// centre the paragraph's box in its parent — so the block offset computed
-/// here and the per-line offset the rasteriser applies inside the block are
-/// two halves of one rule. They telescope: block at `(box - block) * f`, line
-/// at `(block - line) * f`, which sums to `(box - line) * f`, exactly the
-/// offset Compose gives that line. Getting one without the other leaves every
-/// wrapped continuation line start-aligned under a centred first line.
-pub fn text_align_fraction(text_style: &TextStyle, text: &str) -> f32 {
-    let paragraph_style = &text_style.paragraph_style;
-    let direction = resolve_text_direction(text, Some(paragraph_style.text_direction));
-    let rtl = direction == cranpose_ui::text::ResolvedTextDirection::Rtl;
-    match paragraph_style.text_align {
-        TextAlign::Center => 0.5,
-        TextAlign::End | TextAlign::Right => 1.0,
-        TextAlign::Start | TextAlign::Left | TextAlign::Justify | TextAlign::Unspecified => {
-            if rtl {
-                1.0
-            } else {
-                0.0
-            }
-        }
-    }
-}
-
 fn resolve_text_horizontal_offset(
     text_style: &TextStyle,
     text: &str,
@@ -2056,7 +2026,7 @@ fn resolve_text_horizontal_offset(
     measured_width: f32,
 ) -> f32 {
     let remaining = (content_width - measured_width).max(0.0);
-    remaining * text_align_fraction(text_style, text)
+    remaining * cranpose_ui::text::text_align_fraction(text_style, text)
 }
 
 #[cfg(test)]

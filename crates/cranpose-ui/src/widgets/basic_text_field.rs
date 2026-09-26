@@ -31,7 +31,7 @@ use crate::{
         HANDLE_RADIUS, HandleGrabOffset, HandleKind, LineAffinity, selection_after_handle_drag,
     },
     widgets::{
-        CaretActionMenu, Layout, SelectionHandle, SelectionLoupe, TextSelectionMenu,
+        CaretActionMenu, Layout, MenuAnchor, SelectionHandle, SelectionLoupe, TextSelectionMenu,
         loupe_target_for_drag,
     },
 };
@@ -544,8 +544,11 @@ fn SelectionHandles(
             let undo_state = state;
             let redo_state = state;
             CaretActionMenu(
-                tip.x,
-                tip.y - metrics.glyph_box.1,
+                MenuAnchor {
+                    center_x: tip.x,
+                    line_top: tip.y - metrics.glyph_box.1,
+                    line_bottom: tip.y,
+                },
                 drag_pos.value().is_none(),
                 can_paste,
                 can_undo,
@@ -658,21 +661,17 @@ fn SelectionHandles(
             } else {
                 None
             };
-            let (menu_x, menu_top) = match last_dragged.get() {
-                Some(HandleKind::SelectionStart) => {
-                    (start_tip.x, start_tip.y - metrics.glyph_box.1)
-                }
-                Some(HandleKind::SelectionEnd | HandleKind::Cursor) => {
-                    (end_tip.x, end_tip.y - metrics.glyph_box.1)
-                }
-                None => (
-                    (start_tip.x + end_tip.x) * 0.5,
-                    start_tip.y - metrics.glyph_box.1,
-                ),
+            let (center_x, line_bottom) = match last_dragged.get() {
+                Some(HandleKind::SelectionStart) => (start_tip.x, start_tip.y),
+                Some(HandleKind::SelectionEnd | HandleKind::Cursor) => (end_tip.x, end_tip.y),
+                None => ((start_tip.x + end_tip.x) * 0.5, start_tip.y),
             };
             TextSelectionMenu(
-                menu_x,
-                menu_top,
+                MenuAnchor {
+                    center_x,
+                    line_top: line_bottom - metrics.glyph_box.1,
+                    line_bottom,
+                },
                 drag_pos.value().is_none(),
                 slide_point,
                 can_paste,

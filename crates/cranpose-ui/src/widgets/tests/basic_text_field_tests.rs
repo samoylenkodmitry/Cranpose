@@ -378,7 +378,7 @@ fn field_window_origin_follows_vertical_scroll() {
         if node
             .node_data
             .modifier_slices()
-            .text_field_window_origin()
+            .text_window_origin()
             .is_some()
         {
             return Some(node.rect);
@@ -627,8 +627,11 @@ fn render_caret_action_menu(
     let mut content = move || {
         PopupHost(move || {
             CaretActionMenu(
-                40.0,
-                60.0,
+                MenuAnchor {
+                    center_x: 40.0,
+                    line_top: 60.0,
+                    line_bottom: 80.0,
+                },
                 true,
                 can_paste,
                 can_undo,

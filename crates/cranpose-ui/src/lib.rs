@@ -42,6 +42,7 @@ pub mod round_scroll_indicator;
 pub mod safe_area;
 pub mod scroll;
 pub mod scrollbar;
+pub mod selection_container;
 mod semantics_dispatch;
 mod subcompose_layout;
 pub mod text;

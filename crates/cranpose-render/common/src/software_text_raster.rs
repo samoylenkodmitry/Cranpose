@@ -1480,7 +1480,7 @@ fn annotated_line_alignment_offsets(
     scale: f32,
     fonts: &SoftwareTextFontSet,
 ) -> Option<Vec<f32>> {
-    let align_fraction = crate::scene_builder::text_align_fraction(style, text.text);
+    let align_fraction = cranpose_ui::text::text_align_fraction(style, text.text);
     if align_fraction == 0.0 || !text.text.contains('\n') {
         return None;
     }
@@ -1597,7 +1597,7 @@ fn text_segment_metrics(
 ) -> TextSegmentMetrics {
     let font_px_size = font.ab_glyph_px_size(font_size) * scale;
     let letter_spacing = font.metadata.tracking.resolve(style, font_size) * scale;
-    let align_fraction = crate::scene_builder::text_align_fraction(style, text);
+    let align_fraction = cranpose_ui::text::text_align_fraction(style, text);
     let weight_synthesis = TextWeightSynthesis::for_style(style, font.weight(), font_size, scale);
     let style_synthesis = TextStyleSynthesis::for_style(style, font.style(), font_size, scale);
     let metrics = vertical_metrics(&font.font, font_px_size);
@@ -2272,7 +2272,7 @@ fn rasterize_text_to_image_impl(
     let font = font_ref.font;
     let font_px_size = font_size * scale * font_ref.ab_glyph_scale_factor;
     let letter_spacing = font_ref.tracking.resolve(style, font_size) * scale;
-    let align_fraction = crate::scene_builder::text_align_fraction(style, text);
+    let align_fraction = cranpose_ui::text::text_align_fraction(style, text);
     let weight_synthesis = TextWeightSynthesis::for_style(style, font_ref.weight, font_size, scale);
     let style_synthesis = TextStyleSynthesis::for_style(style, font_ref.style, font_size, scale);
     let metrics = vertical_metrics(font, font_px_size);

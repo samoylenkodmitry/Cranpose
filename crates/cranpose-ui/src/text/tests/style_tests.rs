@@ -327,3 +327,21 @@ fn text_style_render_hash_includes_visual_attributes() {
 
     assert_ne!(base.render_hash(), tinted.render_hash());
 }
+
+#[test]
+fn text_align_fraction_puts_the_slack_before_the_text_by_alignment_and_direction() {
+    let aligned = |text_align| {
+        let mut style = TextStyle::default();
+        style.paragraph_style.text_align = text_align;
+        style
+    };
+    assert_eq!(text_align_fraction(&aligned(TextAlign::Start), "abc"), 0.0);
+    assert_eq!(text_align_fraction(&aligned(TextAlign::Center), "abc"), 0.5);
+    assert_eq!(text_align_fraction(&aligned(TextAlign::End), "abc"), 1.0);
+    assert_eq!(text_align_fraction(&aligned(TextAlign::Right), "abc"), 1.0);
+    assert_eq!(
+        text_align_fraction(&aligned(TextAlign::Start), "שלום"),
+        1.0,
+        "a right-to-left paragraph starts at the right edge"
+    );
+}
