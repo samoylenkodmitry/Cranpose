@@ -7,8 +7,8 @@ use cranpose_ui::{
     TextPanResolver, text::TextStyle,
 };
 use cranpose_ui_graphics::{
-    CommandRecording, CompositingStrategy, GraphicsLayer, LayerShape, PointerIcon,
-    RoundedCornerShape, rounded_corner_alpha_mask_effect,
+    CommandRecording, CompositingStrategy, GraphicsLayer, LayerShape, RoundedCornerShape,
+    rounded_corner_alpha_mask_effect,
 };
 use smallvec::SmallVec;
 
@@ -32,20 +32,10 @@ struct BuildNodeSnapshot {
     placement: Point,
     size: Size,
     content_offset: Point,
-    motion_context_animated: bool,
-    translated_content_context: bool,
-    has_own_origin_sinks: bool,
-    measured_text_layout: Option<Rc<PreparedTextLayout>>,
     resolved_modifiers: ResolvedModifiers,
-    draw_commands: Vec<DrawCommand>,
-    outer_draw_command_count: usize,
-    click_actions: Vec<Rc<dyn Fn(Point)>>,
-    pointer_inputs: Vec<Rc<dyn Fn(cranpose_foundation::PointerEvent)>>,
-    pointer_icon: Option<PointerIcon>,
-    clip_to_bounds: bool,
-    text_style: Option<TextStyle>,
-    text_layout_options: Option<TextLayoutOptions>,
-    text_pan: Option<TextPanResolver>,
+    /// The node's modifier slices, shared: its draw commands, handlers and
+    /// text are read from them rather than copied out.
+    slices: Rc<ModifierNodeSlices>,
     graphics_layer: Option<GraphicsLayer>,
     children: Vec<Self>,
 }
@@ -1079,24 +1069,22 @@ fn build_layer_node_internal(
         placement,
         size,
         content_offset,
-        motion_context_animated,
-        translated_content_context,
-        has_own_origin_sinks,
-        measured_text_layout,
         resolved_modifiers,
-        draw_commands,
-        outer_draw_command_count,
-        click_actions,
-        pointer_inputs,
-        pointer_icon,
-        clip_to_bounds,
-        text_style,
-        text_layout_options,
-        text_pan,
+        slices,
         graphics_layer,
         children: child_snapshots,
     } = snapshot;
-    let outer = outer_draws(node_id, &draw_commands, outer_draw_command_count, size);
+    let motion_context_animated = slices.motion_context_animated();
+    let translated_content_context = slices.translated_content_context();
+    let has_own_origin_sinks = modifier_slices_have_origin_sinks(&slices);
+    let measured_text_layout = slices.measured_text_layout();
+    let draw_commands = slices.draw_commands();
+    let outer_draw_command_count = slices.outer_draw_command_count();
+    let clip_to_bounds = slices.clip_to_bounds();
+    let text_style = slices.text_style();
+    let text_layout_options = slices.text_layout_options();
+    let text_pan = slices.text_pan_resolver();
+    let outer = outer_draws(node_id, draw_commands, outer_draw_command_count, size);
     let layer_draw_commands = &draw_commands[outer_draw_command_count..];
     let local_bounds = Rect {
         x: 0.0,
@@ -1109,14 +1097,9 @@ fn build_layer_node_internal(
     let isolation = isolation_reasons(&graphics_layer);
     let cache_policy = layer_cache_policy(&graphics_layer, isolation);
     let shadow_clip = clip_to_bounds.then_some(local_bounds);
-    let hit_test = (!click_actions.is_empty()
-        || !pointer_inputs.is_empty()
-        || pointer_icon.is_some())
-    .then(|| HitTestNode {
+    let hit_test = slices_hit_something(&slices).then(|| HitTestNode {
         shape: None,
-        click_actions,
-        pointer_inputs,
-        pointer_icon,
+        handlers: Rc::clone(&slices),
         clip: (clip_to_bounds || graphics_layer.clip).then_some(local_bounds),
     });
 
@@ -1142,7 +1125,7 @@ fn build_layer_node_internal(
         node_id,
         local_bounds,
         resolved_modifiers: &resolved_modifiers,
-        text_style: text_style.as_ref(),
+        text_style,
         text_layout_options,
         text_pan,
         measured_layout: measured_text_layout,
@@ -1309,22 +1292,21 @@ fn build_layer_node_from_applier_internal(
 }
 
 fn hit_test_from_slices(
-    slices: &ModifierNodeSlices,
+    slices: &Rc<ModifierNodeSlices>,
     bounds: Rect,
     clip: bool,
 ) -> Option<HitTestNode> {
-    let click_actions = slices.click_handlers();
-    let pointer_inputs = slices.pointer_inputs();
-    let pointer_icon = slices.pointer_icon();
-    (!click_actions.is_empty() || !pointer_inputs.is_empty() || pointer_icon.is_some()).then(|| {
-        HitTestNode {
-            shape: None,
-            click_actions: click_actions.to_vec(),
-            pointer_inputs: pointer_inputs.to_vec(),
-            pointer_icon: pointer_icon.cloned(),
-            clip: clip.then_some(bounds),
-        }
+    slices_hit_something(slices).then(|| HitTestNode {
+        shape: None,
+        handlers: Rc::clone(slices),
+        clip: clip.then_some(bounds),
     })
+}
+
+/// Whether a node's slices make it a hit target: a pointer input or a
+/// pointer icon.
+fn slices_hit_something(slices: &ModifierNodeSlices) -> bool {
+    !slices.pointer_inputs().is_empty() || slices.pointer_icon().is_some()
 }
 
 fn build_layer_node_from_data(
@@ -1899,20 +1881,8 @@ fn layout_box_to_snapshot(node: &LayoutBox, parent: Option<&LayoutBox>) -> Build
             height: node.rect.height,
         },
         content_offset: node.content_offset,
-        motion_context_animated: node.node_data.modifier_slices.motion_context_animated(),
-        translated_content_context: node.node_data.modifier_slices.translated_content_context(),
-        has_own_origin_sinks: modifier_slices_have_origin_sinks(&node.node_data.modifier_slices),
-        measured_text_layout: node.node_data.modifier_slices.measured_text_layout(),
         resolved_modifiers: node.node_data.resolved_modifiers,
-        draw_commands: node.node_data.modifier_slices.draw_commands().to_vec(),
-        outer_draw_command_count: node.node_data.modifier_slices.outer_draw_command_count(),
-        click_actions: node.node_data.modifier_slices.click_handlers().to_vec(),
-        pointer_inputs: node.node_data.modifier_slices.pointer_inputs().to_vec(),
-        pointer_icon: node.node_data.modifier_slices.pointer_icon().cloned(),
-        clip_to_bounds: node.node_data.modifier_slices.clip_to_bounds(),
-        text_style: node.node_data.modifier_slices.text_style().cloned(),
-        text_layout_options: node.node_data.modifier_slices.text_layout_options(),
-        text_pan: node.node_data.modifier_slices.text_pan_resolver(),
+        slices: Rc::clone(&node.node_data.modifier_slices),
         graphics_layer: has_graphics_layer.then_some(graphics_layer),
         children,
     }

@@ -29,7 +29,6 @@ pub struct ModifierNodeSlices {
     layer_draw_boundary: Option<usize>,
     pointer_inputs: Vec<Rc<dyn Fn(PointerEvent)>>,
     pointer_input_sizes: Vec<Rc<std::cell::Cell<cranpose_ui_graphics::Size>>>,
-    click_handlers: Vec<Rc<dyn Fn(Point)>>,
     pointer_icon: Option<PointerIcon>,
     clip_to_bounds: bool,
     motion_context_animated: bool,
@@ -65,8 +64,6 @@ pub struct ModifierNodeSlicesDebugStats {
     pub draw_command_capacity: usize,
     pub pointer_input_count: usize,
     pub pointer_input_capacity: usize,
-    pub click_handler_count: usize,
-    pub click_handler_capacity: usize,
     pub has_text_content: bool,
     pub has_text_style: bool,
     pub has_text_layout_options: bool,
@@ -83,7 +80,6 @@ impl Clone for ModifierNodeSlices {
             layer_draw_boundary: self.layer_draw_boundary,
             pointer_inputs: self.pointer_inputs.clone(),
             pointer_input_sizes: self.pointer_input_sizes.clone(),
-            click_handlers: self.click_handlers.clone(),
             pointer_icon: self.pointer_icon.clone(),
             clip_to_bounds: self.clip_to_bounds,
             motion_context_animated: self.motion_context_animated,
@@ -237,11 +233,6 @@ impl ModifierNodeSlices {
             }
             handler(event.clone());
         }
-        if event.kind == PointerEventKind::Down && !event.is_consumed() {
-            for handler in &self.click_handlers {
-                handler(event.position);
-            }
-        }
     }
 
     /// The write targets for this node's resolved size, one per pointer-input
@@ -266,10 +257,6 @@ impl ModifierNodeSlices {
         for sink in &self.pointer_input_sizes {
             sink.set(size);
         }
-    }
-
-    pub fn click_handlers(&self) -> &[Rc<dyn Fn(Point)>] {
-        &self.click_handlers
     }
 
     /// The pointer's appearance over this node, when a `pointer_icon`
@@ -409,21 +396,18 @@ impl ModifierNodeSlices {
         let draw_command_bytes = self.draw_commands.capacity() * size_of::<DrawCommand>();
         let pointer_input_bytes =
             self.pointer_inputs.capacity() * size_of::<Rc<dyn Fn(PointerEvent)>>();
-        let click_handler_bytes = self.click_handlers.capacity() * size_of::<Rc<dyn Fn(Point)>>();
         ModifierNodeSlicesDebugStats {
             draw_command_count: self.draw_commands.len(),
             draw_command_capacity: self.draw_commands.capacity(),
             pointer_input_count: self.pointer_inputs.len(),
             pointer_input_capacity: self.pointer_inputs.capacity(),
-            click_handler_count: self.click_handlers.len(),
-            click_handler_capacity: self.click_handlers.capacity(),
             has_text_content: self.text_content.is_some(),
             has_text_style: self.text_style.is_some(),
             has_text_layout_options: self.text_layout_options.is_some(),
             has_prepared_text_layout: self.prepared_text_layout.is_some(),
             has_graphics_layer: self.graphics_layer.is_some(),
             has_graphics_layer_resolver: self.graphics_layer_resolver.is_some(),
-            heap_bytes: draw_command_bytes + pointer_input_bytes + click_handler_bytes,
+            heap_bytes: draw_command_bytes + pointer_input_bytes,
         }
     }
 
@@ -433,7 +417,6 @@ impl ModifierNodeSlices {
         self.layer_draw_boundary = None;
         self.pointer_inputs.clear();
         self.pointer_input_sizes.clear();
-        self.click_handlers.clear();
         self.pointer_icon = None;
         self.clip_to_bounds = false;
         self.motion_context_animated = false;
@@ -457,7 +440,6 @@ impl fmt::Debug for ModifierNodeSlices {
         f.debug_struct("ModifierNodeSlices")
             .field("draw_commands", &self.draw_commands.len())
             .field("pointer_inputs", &self.pointer_inputs.len())
-            .field("click_handlers", &self.click_handlers.len())
             .field("pointer_icon", &self.pointer_icon)
             .field("clip_to_bounds", &self.clip_to_bounds)
             .field("motion_context_animated", &self.motion_context_animated)

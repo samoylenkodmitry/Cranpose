@@ -310,9 +310,9 @@ fn collect_hits_from_graph_only_populates_hit_regions() {
         shadow_clip: None,
         hit_test: Some(cranpose_render_common::graph::HitTestNode {
             shape: None,
-            click_actions: vec![Rc::new(|_point| {})],
-            pointer_inputs: vec![],
-            pointer_icon: None,
+            handlers: Rc::new(cranpose_ui::collect_slices_from_modifier(
+                &cranpose_ui::Modifier::empty().clickable(|_point| {}),
+            )),
             clip: None,
         }),
         has_hit_targets: true,

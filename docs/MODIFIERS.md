@@ -962,87 +962,25 @@ invokes `LayoutModifierNode::measure()` on the live node during measurement.
 
 **Purpose**: Pre-collect capabilities for rendering/input without traversing chain repeatedly during hot paths.
 
-```rust
-pub struct ModifierNodeSlices {
-    pub draw_commands: Vec<DrawCommand>,
-    pub pointer_inputs: Vec<Rc<dyn Fn(PointerEvent)>>,
-    pub click_handlers: Vec<Rc<dyn Fn(Point)>>,
-    pub clip_to_bounds: bool,
-    pub text_content: Option<String>,
-    pub graphics_layer: Option<GraphicsLayer>,
-}
+`collect_modifier_slices` walks the chain once, head to tail, and gathers what
+the renderer and pointer dispatch need:
 
-pub fn collect_modifier_slices(chain: &ModifierNodeChain) -> ModifierNodeSlices {
-    let mut slices = ModifierNodeSlices::default();
+- draw commands, with the background and its corner shape folded in at their
+  place in the draw order;
+- pointer inputs, one per pointer-input node, in chain order. `clickable` is a
+  pointer-input node, so a click is dispatched as a pointer event like any
+  other gesture;
+- the pointer icon, clip-to-bounds, graphics layer and corner shape;
+- text: the annotated string, style, layout options and the measured layout,
+  plus a text field's pan resolver;
+- motion and translated-content markers for scroll containers.
 
-    let mut background_color: Option<Color> = None;
-    let mut corner_shape: Option<RoundedCornerShape> = None;
-
-    // Single traversal collects all capabilities
-    chain.for_each_node(|node_ref| {
-        let node = node_ref.borrow();
-
-        // Collect background
-        if let Some(bg) = node.downcast_ref::<BackgroundNode>() {
-            background_color = Some(bg.color);
-        }
-
-        // Collect shape
-        if let Some(shape) = node.downcast_ref::<CornerShapeNode>() {
-            corner_shape = Some(shape.shape);
-        }
-
-        // Collect draw nodes
-        if let Some(draw_node) = node.as_draw_node() {
-            // Custom draw commands...
-        }
-
-        // Collect pointer input
-        if let Some(clickable) = node.downcast_ref::<ClickableNode>() {
-            slices.click_handlers.push(clickable.on_click.clone());
-        }
-    });
-
-    // Combine background + shape into single draw primitive
-    if let (Some(color), Some(shape)) = (background_color, corner_shape) {
-        slices.draw_commands.push(DrawCommand::RoundRect {
-            color,
-            corner_radius: shape.top_left,
-            // ... other corners
-        });
-    } else if let Some(color) = background_color {
-        slices.draw_commands.push(DrawCommand::Rect { color });
-    }
-
-    slices
-}
-```
-
-**Usage in Rendering**:
-```rust
-// Layout node stores slices
-pub struct LayoutNode {
-    modifier_slices: ModifierNodeSlices,
-    // ...
-}
-
-// During draw phase:
-impl LayoutNode {
-    fn draw(&self, canvas: &mut Canvas) {
-        // Execute all draw commands without chain traversal
-        for command in &self.modifier_slices.draw_commands {
-            match command {
-                DrawCommand::Rect { color } => {
-                    canvas.draw_rect(self.bounds, *color);
-                }
-                DrawCommand::RoundRect { color, corner_radius } => {
-                    canvas.draw_rounded_rect(self.bounds, *corner_radius, *color);
-                }
-            }
-        }
-    }
-}
-```
+**Sharing**: a layout node holds its slices as `Rc<ModifierNodeSlices>`. The
+render graph shares that `Rc` instead of copying out of it: a layer's
+`HitTestNode::handlers` and the scene's `HitRegion::handlers` point at the
+node's slices, and dispatch goes through
+`ModifierNodeSlices::dispatch_pointer_event`. The layout-tree scene builder
+reads draw commands and text from the same shared slices.
 
 ---
 

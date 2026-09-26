@@ -7,9 +7,7 @@ use cranpose_ui::{
     TextOptions, TextOverflow, TextStyle, TextWithOptions,
     text::{AnnotatedString, BaselineShift, SpanStyle, TextAlign, TextDirection, TextMotion},
 };
-use cranpose_ui_graphics::{
-    Brush, DrawPrimitive, DrawScope as _, DrawScopeDefault, GraphicsLayer, RenderEffect,
-};
+use cranpose_ui_graphics::{Brush, DrawPrimitive, DrawScopeDefault, GraphicsLayer, RenderEffect};
 
 use super::*;
 
@@ -178,26 +176,109 @@ fn graph_has_runtime_shader_effect(layer: &LayerNode) -> bool {
 fn build_layer_node_for_test(
     snapshot: BuildNodeSnapshot,
     scale: f32,
-    has_external_backdrop_input: bool,
+    inherited_motion_context_animated: bool,
 ) -> LayerNode {
     let app_context = cranpose_ui::AppContext::new();
-    app_context.enter(|| build_layer_node(snapshot, scale, has_external_backdrop_input))
+    app_context.enter(|| build_layer_node(snapshot, scale, inherited_motion_context_animated))
 }
 
-fn snapshot_with_translation(tx: f32) -> BuildNodeSnapshot {
-    let child_command = DrawCommand::Behind(Rc::new(|scope: &mut DrawScopeDefault| {
-        scope.push_recorded(vec![DrawPrimitive::Rect {
-            rect: Rect {
+/// The slices a modifier resolves to, shared the way a laid-out node shares
+/// its own.
+fn slices_of(modifier: Modifier) -> Rc<ModifierNodeSlices> {
+    Rc::new(cranpose_ui::collect_slices_from_modifier(&modifier))
+}
+
+/// Slices that draw a white rect behind the node's content.
+fn draws_a_rect() -> Rc<ModifierNodeSlices> {
+    slices_of(Modifier::empty().draw_behind(|scope| {
+        scope.draw_rect_at(
+            Rect {
                 x: 3.0,
                 y: 4.0,
                 width: 20.0,
                 height: 8.0,
             },
-            brush: Brush::solid(Color::WHITE),
-            stroke: None,
-        }]);
-    }));
+            Brush::solid(Color::WHITE),
+        );
+    }))
+}
 
+/// Lays `content` out and returns the slices of the first node `is_target`
+/// picks, with the composition that owns the node's state.
+fn laid_out_slices(
+    content: impl Fn() + 'static,
+    is_target: impl Fn(&ModifierNodeSlices) -> bool,
+) -> (cranpose_ui::TestComposition, Rc<ModifierNodeSlices>) {
+    fn find(
+        node: &LayoutBox,
+        is_target: &dyn Fn(&ModifierNodeSlices) -> bool,
+    ) -> Option<Rc<ModifierNodeSlices>> {
+        if is_target(&node.node_data.modifier_slices) {
+            return Some(Rc::clone(&node.node_data.modifier_slices));
+        }
+        node.children
+            .iter()
+            .find_map(|child| find(child, is_target))
+    }
+
+    let mut composition = cranpose_ui::run_test_composition(content);
+    let root = composition.root().expect("composition root");
+    let handle = composition.runtime_handle();
+    let slices = {
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        let layout = applier
+            .compute_layout(
+                root,
+                Size {
+                    width: 400.0,
+                    height: 400.0,
+                },
+            )
+            .expect("layout");
+        applier.clear_runtime_handle();
+        find(layout.root(), &is_target).expect("a laid-out node the test targets")
+    };
+    (composition, slices)
+}
+
+/// Slices of a laid-out text node showing `text` measured at `width`.
+fn text_slices(
+    text: &'static str,
+    style: TextStyle,
+    options: TextLayoutOptions,
+    width: f32,
+) -> (cranpose_ui::TestComposition, Rc<ModifierNodeSlices>) {
+    laid_out_slices(
+        move || {
+            cranpose_ui::BasicTextWithOptions(
+                text,
+                Modifier::empty().width(width),
+                style.clone(),
+                options,
+            );
+        },
+        move |slices| slices.text_content() == Some(text),
+    )
+}
+
+/// Slices of a laid-out vertical scroll container, which puts its content in
+/// a translated-content context.
+fn scroll_container_slices() -> (cranpose_ui::TestComposition, Rc<ModifierNodeSlices>) {
+    laid_out_slices(
+        || {
+            let state = cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| *state);
+            Column(
+                Modifier::empty().vertical_scroll(state, false),
+                ColumnSpec::default(),
+                || {},
+            );
+        },
+        ModifierNodeSlices::translated_content_context,
+    )
+}
+
+fn snapshot_with_translation(tx: f32) -> BuildNodeSnapshot {
     let child = BuildNodeSnapshot {
         node_id: 2,
         placement: Point { x: 11.0, y: 7.0 },
@@ -205,7 +286,7 @@ fn snapshot_with_translation(tx: f32) -> BuildNodeSnapshot {
             width: 40.0,
             height: 20.0,
         },
-        draw_commands: vec![child_command],
+        slices: draws_a_rect(),
         ..Default::default()
     };
 
@@ -300,20 +381,7 @@ fn parent_content_offset_is_encoded_in_child_transform() {
 
 #[test]
 fn translated_content_offset_changes_visual_position_and_full_surface_hash() {
-    fn parent_with_offset(offset: Point, motion_context_animated: bool) -> BuildNodeSnapshot {
-        let child_command = DrawCommand::Behind(Rc::new(|scope: &mut DrawScopeDefault| {
-            scope.push_recorded(vec![DrawPrimitive::Rect {
-                rect: Rect {
-                    x: 3.0,
-                    y: 4.0,
-                    width: 20.0,
-                    height: 8.0,
-                },
-                brush: Brush::solid(Color::WHITE),
-                stroke: None,
-            }]);
-        }));
-
+    fn parent_with_offset(offset: Point, scroll: &Rc<ModifierNodeSlices>) -> BuildNodeSnapshot {
         let child = BuildNodeSnapshot {
             node_id: 2,
             placement: Point { x: 11.0, y: 7.0 },
@@ -321,7 +389,7 @@ fn translated_content_offset_changes_visual_position_and_full_surface_hash() {
                 width: 40.0,
                 height: 20.0,
             },
-            draw_commands: vec![child_command],
+            slices: draws_a_rect(),
             ..Default::default()
         };
 
@@ -332,25 +400,25 @@ fn translated_content_offset_changes_visual_position_and_full_surface_hash() {
                 height: 50.0,
             },
             content_offset: offset,
-            motion_context_animated,
-            translated_content_context: true,
+            slices: Rc::clone(scroll),
             children: vec![child],
             ..Default::default()
         }
     }
 
+    let (_composition, scroll) = scroll_container_slices();
     let base = build_layer_node_for_test(
-        parent_with_offset(Point { x: 0.0, y: -18.0 }, true),
+        parent_with_offset(Point { x: 0.0, y: -18.0 }, &scroll),
         1.0,
-        false,
+        true,
     );
     let moved = build_layer_node_for_test(
-        parent_with_offset(Point { x: 0.0, y: -32.0 }, true),
+        parent_with_offset(Point { x: 0.0, y: -32.0 }, &scroll),
         1.0,
-        false,
+        true,
     );
     let rested = build_layer_node_for_test(
-        parent_with_offset(Point { x: 0.0, y: -18.0 }, false),
+        parent_with_offset(Point { x: 0.0, y: -18.0 }, &scroll),
         1.0,
         false,
     );
@@ -1512,13 +1580,13 @@ fn assert_shadowed_scroll_reuses_children(wrapped_root: bool) {
     for row in row_ids {
         let layer = find_layer_by_node_id(&graph.root, row).expect("clickable row");
         let hit = layer.hit_test.as_ref().expect("row hit target");
-        assert_eq!(hit.pointer_inputs.len(), 1);
+        assert_eq!(hit.handlers.pointer_inputs().len(), 1);
         for kind in [
             cranpose_foundation::PointerEventKind::Down,
             cranpose_foundation::PointerEventKind::Up,
         ] {
             let position = Point { x: 10.0, y: 10.0 };
-            hit.pointer_inputs[0](
+            hit.handlers.pointer_inputs()[0](
                 cranpose_foundation::PointerEvent::new(kind, position, position).with_buttons(
                     cranpose_foundation::PointerButtons::new()
                         .with(cranpose_foundation::PointerButton::Primary),
@@ -2255,29 +2323,26 @@ fn overlay_draw_commands_are_tagged_after_children() {
         },
         ..Default::default()
     };
-    let behind = DrawCommand::Behind(Rc::new(|scope: &mut DrawScopeDefault| {
-        scope.push_recorded(vec![cranpose_ui_graphics::DrawPrimitive::Rect {
-            rect: Rect {
+    let draws = slices_of(Modifier::empty().draw_with_content(|scope| {
+        scope.draw_rect_at(
+            Rect {
                 x: 1.0,
                 y: 2.0,
                 width: 8.0,
                 height: 6.0,
             },
-            brush: Brush::solid(Color::WHITE),
-            stroke: None,
-        }]);
-    }));
-    let overlay = DrawCommand::Overlay(Rc::new(|scope: &mut DrawScopeDefault| {
-        scope.push_recorded(vec![cranpose_ui_graphics::DrawPrimitive::Rect {
-            rect: Rect {
+            Brush::solid(Color::WHITE),
+        );
+        scope.draw_content();
+        scope.draw_rect_at(
+            Rect {
                 x: 3.0,
                 y: 1.0,
                 width: 5.0,
                 height: 4.0,
             },
-            brush: Brush::solid(Color::BLACK),
-            stroke: None,
-        }]);
+            Brush::solid(Color::BLACK),
+        );
     }));
 
     let parent = BuildNodeSnapshot {
@@ -2286,7 +2351,7 @@ fn overlay_draw_commands_are_tagged_after_children() {
             width: 80.0,
             height: 50.0,
         },
-        draw_commands: vec![behind, overlay],
+        slices: draws,
         children: vec![child],
         ..Default::default()
     };
@@ -2308,25 +2373,14 @@ fn overlay_draw_commands_are_tagged_after_children() {
 
 #[test]
 fn command_recordings_reuse_buffers_across_rebuilds() {
+    let draws = draws_a_rect();
     let snapshot = || BuildNodeSnapshot {
         node_id: 7001,
         size: Size {
             width: 40.0,
             height: 20.0,
         },
-        draw_commands: vec![DrawCommand::Behind(Rc::new(
-            |scope: &mut DrawScopeDefault| {
-                scope.draw_rect_at(
-                    Rect {
-                        x: 1.0,
-                        y: 2.0,
-                        width: 8.0,
-                        height: 6.0,
-                    },
-                    Brush::solid(Color::WHITE),
-                );
-            },
-        ))],
+        slices: Rc::clone(&draws),
         ..Default::default()
     };
     fn run_of(layer: &LayerNode) -> &DrawRunNode {
@@ -2432,23 +2486,6 @@ fn stored_effect_hash_tracks_local_effect_only() {
     assert_ne!(base_graph.effect_hash(), effected_graph.effect_hash());
 }
 
-fn measured_text(
-    text: &str,
-    style: &TextStyle,
-    options: TextLayoutOptions,
-    max_width: Option<f32>,
-) -> Option<Rc<PreparedTextLayout>> {
-    let app_context = cranpose_ui::AppContext::new();
-    Some(Rc::new(app_context.enter(|| {
-        cranpose_ui::text::prepare_text_layout(
-            &AnnotatedString::from(text),
-            style,
-            options,
-            max_width,
-        )
-    })))
-}
-
 #[test]
 fn text_node_preserves_rtl_alignment_clip_and_baseline_shift() {
     let mut text_style = TextStyle::default();
@@ -2460,15 +2497,14 @@ fn text_node_preserves_rtl_alignment_clip_and_baseline_shift() {
         ..Default::default()
     };
 
+    let (_composition, text) = text_slices("rtl", text_style, options, 180.0);
     let snapshot = BuildNodeSnapshot {
         node_id: 1,
         size: Size {
             width: 180.0,
             height: 48.0,
         },
-        measured_text_layout: measured_text("rtl", &text_style, options, Some(180.0)),
-        text_style: Some(text_style),
-        text_layout_options: Some(options),
+        slices: text,
         ..Default::default()
     };
 
@@ -2503,15 +2539,14 @@ fn clipped_text_node_raster_bounds_use_measured_text_width_not_full_box() {
         overflow: TextOverflow::Clip,
         ..Default::default()
     };
+    let (_composition, text) = text_slices("short", TextStyle::default(), options, 320.0);
     let snapshot = BuildNodeSnapshot {
         node_id: 1,
         size: Size {
             width: 320.0,
             height: 48.0,
         },
-        measured_text_layout: measured_text("short", &TextStyle::default(), options, Some(320.0)),
-        text_style: Some(TextStyle::default()),
-        text_layout_options: Some(options),
+        slices: text,
         ..Default::default()
     };
 
@@ -2536,49 +2571,62 @@ fn clipped_text_node_raster_bounds_use_measured_text_width_not_full_box() {
 
 #[test]
 fn text_field_pan_shifts_glyphs_and_clips_to_field_bounds() {
-    let pan_offset = 25.0_f32;
+    const LINE: &str = "a very long single line of text that cannot fit";
     let field_width = 80.0_f32;
-    let resolved_viewports = Rc::new(std::cell::RefCell::new(Vec::new()));
-    let viewports = resolved_viewports.clone();
-    let make_snapshot = |text_pan: Option<cranpose_ui::TextPanResolver>| BuildNodeSnapshot {
+    let (_text_composition, text) = text_slices(
+        LINE,
+        TextStyle::default(),
+        TextLayoutOptions::default(),
+        field_width,
+    );
+    let (_field_composition, field) = laid_out_slices(
+        move || {
+            let state = cranpose_core::remember(|| cranpose_ui::TextFieldState::new(LINE))
+                .with(|state| *state);
+            cranpose_ui::BasicTextFieldWithOptions(
+                state,
+                Modifier::empty().width(field_width),
+                cranpose_ui::BasicTextFieldOptions {
+                    line_limits: cranpose_foundation::text::TextFieldLineLimits::SingleLine,
+                    ..cranpose_ui::BasicTextFieldOptions::default()
+                },
+            );
+        },
+        |slices| slices.text_pan_resolver().is_some(),
+    );
+    let make_snapshot = |slices: Rc<ModifierNodeSlices>| BuildNodeSnapshot {
         node_id: 1,
         size: Size {
             width: field_width,
             height: 24.0,
         },
-        measured_text_layout: measured_text(
-            "a very long single line of text that cannot fit",
-            &TextStyle::default(),
-            TextLayoutOptions::default(),
-            text_pan.is_none().then_some(field_width),
-        ),
-        text_style: Some(TextStyle::default()),
-        text_layout_options: Some(TextLayoutOptions::default()),
-        text_pan,
+        slices,
         ..Default::default()
     };
 
+    // A field draws its caret and selection around its text.
     let text_node = |snapshot: BuildNodeSnapshot| {
         let graph = build_layer_node_for_test(snapshot, 1.0, false);
-        let RenderNode::Primitive(text_primitive) = &graph.children[0] else {
-            panic!("expected text primitive");
-        };
-        let PrimitiveNode::Text(text) = &text_primitive.node else {
-            panic!("expected text primitive");
-        };
-        (**text).clone()
+        graph
+            .children
+            .iter()
+            .find_map(|child| match child {
+                RenderNode::Primitive(PrimitiveEntry {
+                    node: PrimitiveNode::Text(text),
+                    ..
+                }) => Some((**text).clone()),
+                _ => None,
+            })
+            .expect("a text primitive")
     };
 
-    let unpanned = text_node(make_snapshot(None));
-    let panned = text_node(make_snapshot(Some(Rc::new(move |viewport| {
-        viewports.borrow_mut().push(viewport);
-        pan_offset
-    }))));
+    let unpanned = text_node(make_snapshot(text));
+    let panned = text_node(make_snapshot(Rc::clone(&field)));
+    let pan_offset = field.text_pan_resolver().expect("a single-line field pans")(field_width);
 
-    assert_eq!(
-        resolved_viewports.borrow().as_slice(),
-        &[field_width],
-        "the pan resolver must receive the content viewport width"
+    assert!(
+        pan_offset > 0.0,
+        "a caret at the end of a line longer than the field pans it"
     );
     assert_eq!(
         panned.rect.x, -pan_offset,
@@ -2605,6 +2653,12 @@ fn text_field_pan_shifts_glyphs_and_clips_to_field_bounds() {
 
 #[test]
 fn translated_content_context_preserves_descendant_text_motion_when_unspecified() {
+    let (_text_composition, text) = text_slices(
+        "scrolling",
+        TextStyle::default(),
+        TextLayoutOptions::default(),
+        120.0,
+    );
     let child = BuildNodeSnapshot {
         node_id: 2,
         placement: Point { x: 11.0, y: 7.0 },
@@ -2612,15 +2666,10 @@ fn translated_content_context_preserves_descendant_text_motion_when_unspecified(
             width: 120.0,
             height: 32.0,
         },
-        measured_text_layout: measured_text(
-            "scrolling",
-            &TextStyle::default(),
-            TextLayoutOptions::default(),
-            Some(120.0),
-        ),
-        text_style: Some(TextStyle::default()),
+        slices: text,
         ..Default::default()
     };
+    let (_scroll_composition, scroll) = scroll_container_slices();
     let parent = BuildNodeSnapshot {
         node_id: 1,
         size: Size {
@@ -2628,7 +2677,7 @@ fn translated_content_context_preserves_descendant_text_motion_when_unspecified(
             height: 64.0,
         },
         content_offset: Point { x: 0.0, y: -18.5 },
-        translated_content_context: true,
+        slices: scroll,
         children: vec![child],
         ..Default::default()
     };
@@ -2650,6 +2699,12 @@ fn translated_content_context_preserves_descendant_text_motion_when_unspecified(
 
 #[test]
 fn content_offset_without_translated_context_keeps_descendant_text_unspecified() {
+    let (_text_composition, text) = text_slices(
+        "scrolling",
+        TextStyle::default(),
+        TextLayoutOptions::default(),
+        120.0,
+    );
     let child = BuildNodeSnapshot {
         node_id: 2,
         placement: Point { x: 11.0, y: 7.0 },
@@ -2657,13 +2712,7 @@ fn content_offset_without_translated_context_keeps_descendant_text_unspecified()
             width: 120.0,
             height: 32.0,
         },
-        measured_text_layout: measured_text(
-            "scrolling",
-            &TextStyle::default(),
-            TextLayoutOptions::default(),
-            Some(120.0),
-        ),
-        text_style: Some(TextStyle::default()),
+        slices: text,
         ..Default::default()
     };
     let parent = BuildNodeSnapshot {
@@ -2705,6 +2754,8 @@ fn translated_content_context_preserves_effectful_text_motion_when_unspecified()
         }),
         ..SpanStyle::default()
     });
+    let (_text_composition, text) =
+        text_slices("shadow", shadow_style, TextLayoutOptions::default(), 120.0);
     let child = BuildNodeSnapshot {
         node_id: 2,
         placement: Point { x: 11.0, y: 7.0 },
@@ -2712,15 +2763,10 @@ fn translated_content_context_preserves_effectful_text_motion_when_unspecified()
             width: 120.0,
             height: 32.0,
         },
-        measured_text_layout: measured_text(
-            "shadow",
-            &shadow_style,
-            TextLayoutOptions::default(),
-            Some(120.0),
-        ),
-        text_style: Some(shadow_style),
+        slices: text,
         ..Default::default()
     };
+    let (_scroll_composition, scroll) = scroll_container_slices();
     let parent = BuildNodeSnapshot {
         node_id: 1,
         size: Size {
@@ -2728,7 +2774,7 @@ fn translated_content_context_preserves_effectful_text_motion_when_unspecified()
             height: 64.0,
         },
         content_offset: Point { x: 0.0, y: -18.5 },
-        translated_content_context: true,
+        slices: scroll,
         children: vec![child],
         ..Default::default()
     };
@@ -2749,6 +2795,12 @@ fn translated_content_context_preserves_effectful_text_motion_when_unspecified()
 
 #[test]
 fn animated_motion_marker_preserves_descendant_text_motion_when_unspecified() {
+    let (_text_composition, text) = text_slices(
+        "lazy",
+        TextStyle::default(),
+        TextLayoutOptions::default(),
+        120.0,
+    );
     let child = BuildNodeSnapshot {
         node_id: 2,
         placement: Point { x: 11.0, y: 7.0 },
@@ -2756,13 +2808,7 @@ fn animated_motion_marker_preserves_descendant_text_motion_when_unspecified() {
             width: 120.0,
             height: 32.0,
         },
-        measured_text_layout: measured_text(
-            "lazy",
-            &TextStyle::default(),
-            TextLayoutOptions::default(),
-            Some(120.0),
-        ),
-        text_style: Some(TextStyle::default()),
+        slices: text,
         ..Default::default()
     };
     let parent = BuildNodeSnapshot {
@@ -2771,12 +2817,11 @@ fn animated_motion_marker_preserves_descendant_text_motion_when_unspecified() {
             width: 160.0,
             height: 64.0,
         },
-        motion_context_animated: true,
         children: vec![child],
         ..Default::default()
     };
 
-    let graph = build_layer_node_for_test(parent, 1.0, false);
+    let graph = build_layer_node_for_test(parent, 1.0, true);
     let RenderNode::Layer(child_layer) = &graph.children[0] else {
         panic!("expected child layer");
     };
@@ -3024,6 +3069,8 @@ fn explicit_static_text_motion_is_preserved_under_scrolling_context() {
         text_motion: Some(TextMotion::Static),
         ..Default::default()
     });
+    let (_text_composition, text) =
+        text_slices("static", static_style, TextLayoutOptions::default(), 120.0);
     let child = BuildNodeSnapshot {
         node_id: 2,
         placement: Point { x: 11.0, y: 7.0 },
@@ -3031,15 +3078,10 @@ fn explicit_static_text_motion_is_preserved_under_scrolling_context() {
             width: 120.0,
             height: 32.0,
         },
-        measured_text_layout: measured_text(
-            "static",
-            &static_style,
-            TextLayoutOptions::default(),
-            Some(120.0),
-        ),
-        text_style: Some(static_style),
+        slices: text,
         ..Default::default()
     };
+    let (_scroll_composition, scroll) = scroll_container_slices();
     let parent = BuildNodeSnapshot {
         node_id: 1,
         size: Size {
@@ -3047,7 +3089,7 @@ fn explicit_static_text_motion_is_preserved_under_scrolling_context() {
             height: 64.0,
         },
         content_offset: Point { x: 0.0, y: -18.5 },
-        translated_content_context: true,
+        slices: scroll,
         children: vec![child],
         ..Default::default()
     };

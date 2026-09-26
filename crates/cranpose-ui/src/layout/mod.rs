@@ -552,8 +552,6 @@ pub struct LayoutAllocationDebugStats {
     pub modifier_draw_command_capacity: usize,
     pub modifier_pointer_input_count: usize,
     pub modifier_pointer_input_capacity: usize,
-    pub modifier_click_handler_count: usize,
-    pub modifier_click_handler_capacity: usize,
     pub modifier_text_content_count: usize,
     pub modifier_text_style_count: usize,
     pub modifier_text_layout_options_count: usize,
@@ -579,8 +577,6 @@ impl LayoutAllocationDebugStats {
         self.modifier_draw_command_capacity += stats.draw_command_capacity;
         self.modifier_pointer_input_count += stats.pointer_input_count;
         self.modifier_pointer_input_capacity += stats.pointer_input_capacity;
-        self.modifier_click_handler_count += stats.click_handler_count;
-        self.modifier_click_handler_capacity += stats.click_handler_capacity;
         self.modifier_text_content_count += usize::from(stats.has_text_content);
         self.modifier_text_style_count += usize::from(stats.has_text_style);
         self.modifier_text_layout_options_count += usize::from(stats.has_text_layout_options);

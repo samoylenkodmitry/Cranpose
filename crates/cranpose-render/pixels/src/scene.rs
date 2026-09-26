@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use cranpose_core::NodeId;
-pub use cranpose_render_common::graph_scene::{ClickAction, HitRegion, Scene};
+pub use cranpose_render_common::graph_scene::{HitRegion, Scene};
 use cranpose_ui::{TextLayoutOptions, TextStyle};
 use cranpose_ui_graphics::{
     ArcGeometry, BlendMode, Brush, Color, ColorFilter, ImageBitmap, ImageSampling, Point, Rect,

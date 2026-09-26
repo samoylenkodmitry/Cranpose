@@ -51,21 +51,6 @@ impl Default for RenderDiagnostics {
     }
 }
 
-#[derive(Clone)]
-pub enum ClickAction {
-    Simple(Rc<RefCell<dyn FnMut()>>),
-    WithPoint(Rc<dyn Fn(Point)>),
-}
-
-impl ClickAction {
-    fn invoke(&self, local_position: Point) {
-        match self {
-            ClickAction::Simple(handler) => (handler.borrow_mut())(),
-            ClickAction::WithPoint(handler) => handler(local_position),
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct HitClip {
     pub quad: [[f32; 2]; 4],
@@ -83,18 +68,15 @@ pub struct HitGeometry<'a> {
     pub hit_clips: &'a [HitClip],
 }
 
-/// What a hit target answers with: the shape that narrows its bounds, the
-/// handlers it dispatches to, and the pointer icon it asks for while hovered.
-pub struct HitTargetSpec<'a, I> {
+/// What a hit target answers with: the shape that narrows its bounds, and the
+/// node's modifier slices, which hold the pointer handlers it dispatches to
+/// and the pointer icon it asks for while hovered.
+pub struct HitTargetSpec<'a> {
     /// Narrows the target's rectangle to a rounded shape, so a point in a
     /// corner cutout misses it.
     pub shape: Option<RoundedCornerShape>,
-    /// Click handlers, invoked on an unconsumed press inside the target.
-    pub click_actions: I,
-    /// Raw pointer handlers, invoked for every event the target receives.
-    pub pointer_inputs: &'a [Rc<dyn Fn(PointerEvent)>],
-    /// The pointer's appearance while it hovers this target.
-    pub pointer_icon: Option<&'a PointerIcon>,
+    /// The node's slices, shared by the target rather than copied.
+    pub handlers: &'a Rc<ModifierNodeSlices>,
 }
 
 #[derive(Clone)]
@@ -106,9 +88,9 @@ pub struct HitRegion {
     pub local_bounds: Rect,
     pub world_to_local: ProjectiveTransform,
     pub shape: Option<RoundedCornerShape>,
-    pub click_actions: Vec<ClickAction>,
-    pub pointer_inputs: Vec<Rc<dyn Fn(PointerEvent)>>,
-    pub pointer_icon: Option<PointerIcon>,
+    /// The node's modifier slices, shared with the render graph: its pointer
+    /// handlers and pointer icon.
+    pub handlers: Rc<ModifierNodeSlices>,
     pub z_index: usize,
     pub hit_clip_bounds: Option<Rect>,
     pub hit_clips: Vec<HitClip>,
@@ -121,9 +103,7 @@ struct HitRegionInit<'a> {
     geometry: HitGeometry<'a>,
     clip_buffer: Vec<HitClip>,
     shape: Option<RoundedCornerShape>,
-    click_actions: Vec<ClickAction>,
-    pointer_inputs: Vec<Rc<dyn Fn(PointerEvent)>>,
-    pointer_icon: Option<PointerIcon>,
+    handlers: Rc<ModifierNodeSlices>,
     z_index: usize,
     diagnostics: Rc<RenderDiagnostics>,
 }
@@ -153,9 +133,7 @@ impl Default for HitRegionInit<'_> {
             },
             clip_buffer: Vec::new(),
             shape: None,
-            click_actions: Vec::new(),
-            pointer_inputs: Vec::new(),
-            pointer_icon: None,
+            handlers: Rc::default(),
             z_index: 0,
             diagnostics: Rc::new(RenderDiagnostics::new()),
         }
@@ -170,9 +148,7 @@ impl HitRegion {
             geometry,
             clip_buffer: mut hit_clips,
             shape,
-            click_actions,
-            pointer_inputs,
-            pointer_icon,
+            handlers,
             z_index,
             diagnostics,
         } = init;
@@ -193,9 +169,7 @@ impl HitRegion {
             local_bounds,
             world_to_local,
             shape,
-            click_actions,
-            pointer_inputs,
-            pointer_icon,
+            handlers,
             z_index,
             hit_clip_bounds,
             hit_clips,
@@ -238,7 +212,7 @@ impl HitRegion {
     /// input. None when the target is large enough on its own, when the point
     /// is outside its reach, or when a clip cuts the point off.
     fn reach_distance(&self, x: f32, y: f32) -> Option<f32> {
-        if self.click_actions.is_empty() && self.pointer_inputs.is_empty() {
+        if self.handlers.pointer_inputs().is_empty() {
             return None;
         }
         if let Some(clip_bounds) = self.hit_clip_bounds
@@ -265,34 +239,12 @@ impl HitRegion {
         Some(dx * dx + dy * dy)
     }
 
-    fn localize_event(&self, event: &PointerEvent) -> (PointerEvent, Point) {
+    fn localize_event(&self, event: &PointerEvent) -> PointerEvent {
         let local = self.world_to_local.map_point(event.global_position);
-        let local_position = Point {
+        event.copy_with_local_position(Point {
             x: local.x - self.local_bounds.x,
             y: local.y - self.local_bounds.y,
-        };
-        (
-            event.copy_with_local_position(local_position),
-            local_position,
-        )
-    }
-
-    fn dispatch_pointer_inputs(
-        pointer_inputs: &[Rc<dyn Fn(PointerEvent)>],
-        local_event: &PointerEvent,
-    ) {
-        for handler in pointer_inputs {
-            if local_event.is_consumed() && !is_terminal_pointer_event(local_event.kind) {
-                break;
-            }
-            handler(local_event.clone());
-        }
-    }
-
-    fn dispatch_click_actions(&self, local_position: Point) {
-        for action in &self.click_actions {
-            action.invoke(local_position);
-        }
+        })
     }
 
     fn dispatch_modifier_slices(&self, modifier_slices: &ModifierNodeSlices, event: PointerEvent) {
@@ -300,21 +252,7 @@ impl HitRegion {
             return;
         }
 
-        let (local_event, _) = self.localize_event(&event);
-        modifier_slices.dispatch_pointer_event(local_event);
-    }
-
-    fn dispatch_cached_handlers(&self, event: PointerEvent) {
-        if should_skip_consumed_event(&event) {
-            return;
-        }
-
-        let (local_event, local_position) = self.localize_event(&event);
-        Self::dispatch_pointer_inputs(&self.pointer_inputs, &local_event);
-
-        if event.kind == PointerEventKind::Down && !local_event.is_consumed() {
-            self.dispatch_click_actions(local_position);
-        }
+        modifier_slices.dispatch_pointer_event(self.localize_event(&event));
     }
 
     fn live_modifier_slices(&self, applier: &mut MemoryApplier) -> Option<Rc<ModifierNodeSlices>> {
@@ -346,7 +284,7 @@ impl HitTestTarget for HitRegion {
     }
 
     fn pointer_icon(&self) -> Option<PointerIcon> {
-        self.pointer_icon.clone()
+        self.handlers.pointer_icon().cloned()
     }
 
     fn capture_path(&self) -> Vec<NodeId> {
@@ -354,7 +292,7 @@ impl HitTestTarget for HitRegion {
     }
 
     fn dispatch(&self, event: PointerEvent) {
-        self.dispatch_cached_handlers(event);
+        self.dispatch_modifier_slices(&self.handlers, event);
     }
 
     fn dispatch_with_applier(&self, applier: &mut MemoryApplier, event: PointerEvent) {
@@ -364,7 +302,7 @@ impl HitTestTarget for HitRegion {
         }
 
         self.diagnostics.record_live_modifier_slice_lookup_miss();
-        self.dispatch_cached_handlers(event);
+        self.dispatch_modifier_slices(&self.handlers, event);
     }
 }
 
@@ -372,8 +310,6 @@ impl HitTestTarget for HitRegion {
 struct HitBuffers {
     hit_clips: Vec<HitClip>,
     capture_path: Vec<NodeId>,
-    click_actions: Vec<ClickAction>,
-    pointer_inputs: Vec<Rc<dyn Fn(PointerEvent)>>,
 }
 
 pub struct Scene {
@@ -403,29 +339,19 @@ impl Scene {
 
     /// Adds an interactive target in draw order, ignoring targets that neither
     /// handle a pointer nor name a pointer icon.
-    pub fn push_hit<I>(
+    pub fn push_hit(
         &mut self,
         node_id: NodeId,
         capture_path: &[NodeId],
         geometry: HitGeometry<'_>,
-        target: HitTargetSpec<'_, I>,
-    ) where
-        I: IntoIterator<Item = ClickAction>,
-    {
-        let HitTargetSpec {
-            shape,
-            click_actions,
-            pointer_inputs,
-            pointer_icon,
-        } = target;
-        let mut click_actions = click_actions.into_iter().peekable();
-        if click_actions.peek().is_none() && pointer_inputs.is_empty() && pointer_icon.is_none() {
+        target: HitTargetSpec<'_>,
+    ) {
+        let HitTargetSpec { shape, handlers } = target;
+        if handlers.pointer_inputs().is_empty() && handlers.pointer_icon().is_none() {
             return;
         }
         let mut buffers = self.hit_buffers.pop().unwrap_or_default();
         buffers.capture_path.extend_from_slice(capture_path);
-        buffers.click_actions.extend(click_actions);
-        buffers.pointer_inputs.extend_from_slice(pointer_inputs);
 
         let z_index = self.next_hit_z;
         self.next_hit_z += 1;
@@ -436,9 +362,7 @@ impl Scene {
             geometry,
             clip_buffer: buffers.hit_clips,
             shape,
-            click_actions: buffers.click_actions,
-            pointer_inputs: buffers.pointer_inputs,
-            pointer_icon: pointer_icon.cloned(),
+            handlers: Rc::clone(handlers),
             z_index,
             diagnostics: Rc::clone(&self.diagnostics),
         }));
@@ -452,13 +376,9 @@ impl Scene {
             let mut buffers = HitBuffers {
                 hit_clips: hit.hit_clips,
                 capture_path: hit.capture_path,
-                click_actions: hit.click_actions,
-                pointer_inputs: hit.pointer_inputs,
             };
             buffers.hit_clips.clear();
             buffers.capture_path.clear();
-            buffers.click_actions.clear();
-            buffers.pointer_inputs.clear();
             self.hit_buffers.push(buffers);
         }
         self.node_index.clear();

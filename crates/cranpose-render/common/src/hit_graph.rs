@@ -4,7 +4,7 @@ use smallvec::SmallVec;
 
 use crate::{
     graph::{HitTestNode, LayerNode, ProjectiveTransform, RenderNode, quad_bounds},
-    graph_scene::{ClickAction, HitClip, HitGeometry, HitTargetSpec, Scene},
+    graph_scene::{HitClip, HitGeometry, HitTargetSpec, Scene},
     primitive_emit::resolve_clip,
 };
 
@@ -33,13 +33,7 @@ impl HitGraphSink for Scene {
             geometry,
             HitTargetSpec {
                 shape: hit.shape,
-                click_actions: hit
-                    .click_actions
-                    .iter()
-                    .cloned()
-                    .map(ClickAction::WithPoint),
-                pointer_inputs: &hit.pointer_inputs,
-                pointer_icon: hit.pointer_icon.as_ref(),
+                handlers: &hit.handlers,
             },
         );
     }
@@ -131,7 +125,7 @@ fn collect_hits_from_graph_inner<S: HitGraphSink>(
     let pointer_input_ancestor = layer
         .hit_test
         .as_ref()
-        .filter(|hit| !hit.pointer_inputs.is_empty())
+        .filter(|hit| !hit.handlers.pointer_inputs().is_empty())
         .and(layer.node_id);
     if let Some(node_id) = pointer_input_ancestor {
         pointer_input_ancestors.push(node_id);
