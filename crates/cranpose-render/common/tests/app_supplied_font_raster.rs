@@ -47,7 +47,7 @@ fn font_set(family: &FontFamily) -> SoftwareTextFontSet {
 }
 
 /// `family` registered beside faces the app handed over as bytes.
-fn font_set_beside(family: &FontFamily, bytes: &[&[u8]]) -> SoftwareTextFontSet {
+fn font_set_beside(family: &FontFamily, bytes: &[&'static [u8]]) -> SoftwareTextFontSet {
     let mut registry = SoftwareTextFontRegistry::new();
     let _ = registry.register_family(family);
     registry.into_font_set(bytes)

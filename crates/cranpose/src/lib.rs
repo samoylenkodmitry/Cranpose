@@ -153,11 +153,13 @@ pub use app_launcher::{
 };
 /// Font registration vocabulary named by [`AppLauncher`]'s font methods:
 /// the platform font directory [`AppLauncher::with_system_font_family`] wants,
-/// the weight set it registers, and the registry and error
-/// [`AppLauncher::with_fonts_from`] hands out.
+/// the weight set it registers, the registry and error
+/// [`AppLauncher::with_fonts_from`] hands out, and the bytes
+/// [`AppLauncher::with_font_face_bytes`] takes.
 pub use cranpose_render_common::font_source::{
     ANDROID_SYSTEM_FONT_DIR, DEFAULT_SYSTEM_FAMILY_WEIGHTS, FontLoadError, SoftwareTextFontRegistry,
 };
+pub use cranpose_render_common::software_text_raster::FontBytes;
 pub use host_environment::{host_density, system_font_directory};
 pub use native_window::{
     WindowConfig, WindowFocus, WindowModifierExt, WindowResizeDirection, WindowState,

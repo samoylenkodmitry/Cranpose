@@ -577,8 +577,7 @@ fn test_font() -> ab_glyph::FontRef<'static> {
 }
 
 fn test_software_font() -> SoftwareTextFont {
-    SoftwareTextFont::from_bytes(include_bytes!("../../assets/NotoSansMerged.ttf").to_vec())
-        .expect("font")
+    SoftwareTextFont::from_bytes(include_bytes!("../../assets/NotoSansMerged.ttf")).expect("font")
 }
 
 #[test]
@@ -919,9 +918,8 @@ fn rasterized_default_text_fills_expected_visual_height() {
 
 #[test]
 fn software_text_font_selection_preserves_first_complete_default_face() {
-    let regular =
-        SoftwareTextFont::from_bytes(include_bytes!("../../assets/NotoSansMerged.ttf").to_vec())
-            .expect("regular test font should load");
+    let regular = SoftwareTextFont::from_bytes(include_bytes!("../../assets/NotoSansMerged.ttf"))
+        .expect("regular test font should load");
     let font = software_text_font_from_fonts_or_default(&[
         include_bytes!("../../assets/NotoSansMerged.ttf"),
         include_bytes!("../../assets/NotoSansBold.ttf"),
@@ -1029,7 +1027,7 @@ fn style_naming(family: &FontFamily) -> TextStyle {
 }
 
 fn unregistered_face() -> SoftwareTextFont {
-    SoftwareTextFont::from_bytes(include_bytes!("../../assets/NotoSansBold.ttf").to_vec())
+    SoftwareTextFont::from_bytes(include_bytes!("../../assets/NotoSansBold.ttf"))
         .expect("unregistered test face")
 }
 
@@ -1054,9 +1052,8 @@ fn a_named_family_resolves_the_face_registered_under_it() {
 fn a_file_backed_family_never_resolves_a_face_filed_under_another_one() {
     let mine = FontFamily::loaded_typeface_path("/fonts/Mine.ttf");
     let theirs = FontFamily::loaded_typeface_path("/fonts/Theirs.ttf");
-    let fallback =
-        SoftwareTextFont::from_bytes(include_bytes!("../../assets/NotoSansMerged.ttf").to_vec())
-            .expect("fallback test face");
+    let fallback = SoftwareTextFont::from_bytes(include_bytes!("../../assets/NotoSansMerged.ttf"))
+        .expect("fallback test face");
     let theirs_face = SoftwareTextFont::from_registered_bytes(
         &theirs,
         FontWeight::BOLD,
@@ -1108,7 +1105,7 @@ fn a_generic_family_only_constrains_the_set_once_a_face_is_registered_for_it() {
     );
 
     let claimed = SoftwareTextFontSet::from_faces(vec![
-        SoftwareTextFont::from_bytes(include_bytes!("../../assets/NotoSansBold.ttf").to_vec())
+        SoftwareTextFont::from_bytes(include_bytes!("../../assets/NotoSansBold.ttf"))
             .expect("bold test face"),
         registered_face(&FontFamily::SansSerif, FontWeight::NORMAL),
     ]);
@@ -1796,4 +1793,42 @@ fn raster_kerning_is_cached_and_matches_the_font() {
             .any(|&(previous, glyph)| kerned.kern_unscaled(previous, glyph) != 0.0),
         "the bundled font kerns at least one of the pairs, so the check means something"
     );
+}
+
+static STATIC_FACE_BYTES: &[u8] = include_bytes!("../../assets/NotoSansBold.ttf");
+
+#[test]
+fn a_face_from_static_bytes_reads_them_in_place() {
+    let face = SoftwareTextFont::from_bytes(STATIC_FACE_BYTES).expect("the bold face parses");
+    assert_eq!(
+        face.font.font_data().as_ptr(),
+        STATIC_FACE_BYTES.as_ptr(),
+        "a static face must not copy its bytes"
+    );
+    let registered = SoftwareTextFont::from_registered_bytes(
+        &FontFamily::named("Noto"),
+        FontWeight::BOLD,
+        FontStyle::Normal,
+        STATIC_FACE_BYTES,
+    )
+    .expect("the bold face registers");
+    assert_eq!(
+        registered.font.font_data().as_ptr(),
+        STATIC_FACE_BYTES.as_ptr()
+    );
+    assert_eq!(registered.weight(), FontWeight::BOLD);
+}
+
+#[test]
+fn font_bytes_keep_the_bytes_they_were_given() {
+    let borrowed = FontBytes::from(STATIC_FACE_BYTES);
+    assert!(matches!(borrowed, FontBytes::Static(_)));
+    assert_eq!(borrowed.as_slice().as_ptr(), STATIC_FACE_BYTES.as_ptr());
+    assert!(matches!(
+        FontBytes::from(b"ttf!"),
+        FontBytes::Static(b"ttf!")
+    ));
+    let owned = FontBytes::from(vec![1, 2, 3]);
+    assert!(matches!(owned, FontBytes::Owned(_)));
+    assert_eq!(owned.as_slice(), &[1, 2, 3]);
 }
