@@ -206,7 +206,7 @@ pub struct WgpuTextSystem {
 }
 
 impl WgpuTextSystem {
-    pub fn from_fonts(fonts: &[&[u8]]) -> Self {
+    pub fn from_fonts(fonts: &[&'static [u8]]) -> Self {
         Self {
             software_fonts: software_text_font_set_from_fonts_or_default(fonts),
         }
@@ -234,7 +234,7 @@ pub fn headless_text_measurer() -> Rc<dyn TextMeasurer> {
 }
 
 /// Create an accurate WGPU text measurer for headless tests with explicit fonts.
-pub fn headless_text_measurer_with_fonts(fonts: &[&[u8]]) -> Rc<dyn TextMeasurer> {
+pub fn headless_text_measurer_with_fonts(fonts: &[&'static [u8]]) -> Rc<dyn TextMeasurer> {
     Rc::new(SoftwareTextMeasurer::from_fonts_or_default(fonts, 8192))
 }
 
@@ -299,7 +299,7 @@ impl WgpuRenderer {
     ///   Pass `&[]` to load no fonts; text will not render until fonts are provided.
     ///
     /// Call [`init_gpu`][Self::init_gpu] before rendering.
-    pub fn new(fonts: &[&[u8]]) -> Self {
+    pub fn new(fonts: &[&'static [u8]]) -> Self {
         Self::with_text_system(WgpuTextSystem::from_fonts(fonts))
     }
 

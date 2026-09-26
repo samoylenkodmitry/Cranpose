@@ -5,7 +5,8 @@ use std::{
 };
 
 use ab_glyph::{
-    Font, FontArc, FontVec, Glyph, GlyphId, OutlinedGlyph, PxScale, ScaleFont, VariableFont, point,
+    Font, FontArc, FontRef, FontVec, Glyph, GlyphId, InvalidFont, OutlinedGlyph, PxScale,
+    ScaleFont, VariableFont, point,
 };
 use cranpose_core::hash::default as default_hash;
 use cranpose_ui::{
@@ -102,15 +103,68 @@ impl FontFamilyKey {
     }
 }
 
+/// The bytes a face is parsed from.
+pub enum FontBytes {
+    /// Bytes that live as long as the process, such as an embedded font or a
+    /// font file read once: the face reads them in place.
+    Static(&'static [u8]),
+    /// Bytes the face takes over.
+    Owned(Vec<u8>),
+}
+
+impl FontBytes {
+    /// The font file's bytes.
+    pub fn as_slice(&self) -> &[u8] {
+        match self {
+            Self::Static(bytes) => bytes,
+            Self::Owned(bytes) => bytes,
+        }
+    }
+
+    fn into_font(self) -> Result<FontArc, InvalidFont> {
+        match self {
+            Self::Static(bytes) => FontArc::try_from_slice(bytes),
+            Self::Owned(bytes) => FontArc::try_from_vec(bytes),
+        }
+    }
+}
+
+impl From<&'static [u8]> for FontBytes {
+    fn from(bytes: &'static [u8]) -> Self {
+        Self::Static(bytes)
+    }
+}
+
+impl<const N: usize> From<&'static [u8; N]> for FontBytes {
+    fn from(bytes: &'static [u8; N]) -> Self {
+        Self::Static(bytes)
+    }
+}
+
+impl From<Vec<u8>> for FontBytes {
+    fn from(bytes: Vec<u8>) -> Self {
+        Self::Owned(bytes)
+    }
+}
+
+/// A face instanced at its declared and explicit axis positions.
+struct InstancedFace {
+    font: FontArc,
+    kerning: Option<Arc<crate::gpos_kerning::GposKerning>>,
+    variations: Vec<([u8; 4], f32)>,
+}
+
 impl SoftwareTextFont {
-    pub fn from_bytes(bytes: impl Into<Vec<u8>>) -> Result<Self, SoftwareTextFontError> {
+    pub fn from_bytes(bytes: impl Into<FontBytes>) -> Result<Self, SoftwareTextFontError> {
         let bytes = bytes.into();
         let mut hasher = default_hash::new();
-        bytes.hash(&mut hasher);
+        bytes.as_slice().hash(&mut hasher);
         let content_hash = hasher.finish();
         let metadata = software_text_font_metadata(bytes.as_slice());
         let kerning = KernedFont::read_kerning(bytes.as_slice(), &[]);
-        let font = FontArc::try_from_vec(bytes).map_err(|_| SoftwareTextFontError::InvalidFont)?;
+        let font = bytes
+            .into_font()
+            .map_err(|_| SoftwareTextFontError::InvalidFont)?;
         let score = text_font_score_from_parts(&font, &metadata);
         Ok(Self {
             font: KernedFont::new(font, kerning),
@@ -133,7 +187,7 @@ impl SoftwareTextFont {
         family: &FontFamily,
         weight: FontWeight,
         style: FontStyle,
-        bytes: impl Into<Vec<u8>>,
+        bytes: impl Into<FontBytes>,
     ) -> Result<Self, SoftwareTextFontError> {
         Self::from_registered_bytes_with_variations(family, weight, style, bytes, &[])
     }
@@ -145,42 +199,42 @@ impl SoftwareTextFont {
         family: &FontFamily,
         weight: FontWeight,
         style: FontStyle,
-        bytes: impl Into<Vec<u8>>,
+        bytes: impl Into<FontBytes>,
         variations: &[([u8; 4], f32)],
     ) -> Result<Self, SoftwareTextFontError> {
         let bytes = bytes.into();
         let mut hasher = default_hash::new();
-        bytes.hash(&mut hasher);
+        bytes.as_slice().hash(&mut hasher);
         let mut metadata = software_text_font_metadata(bytes.as_slice());
         metadata.registered_family = Some(FontFamilyKey::of(family));
         metadata.weight = weight;
         metadata.style = style;
 
-        let mut font =
-            FontVec::try_from_vec(bytes).map_err(|_| SoftwareTextFontError::InvalidFont)?;
-        let mut applied = apply_declared_variations(&mut font, weight, style);
-        for &(tag, value) in variations {
-            let valid = value.is_finite()
-                && font.variations().iter().any(|axis| {
-                    axis.tag == tag && (axis.min_value..=axis.max_value).contains(&value)
-                });
-            if !valid || !font.set_variation(&tag, value) {
-                return Err(SoftwareTextFontError::InvalidVariation { tag });
-            }
-            applied.retain(|(existing, _)| *existing != tag);
-            applied.push((tag, value));
-        }
-        applied.sort_unstable_by_key(|(tag, _)| *tag);
-        let variations = applied;
+        let invalid = |_| SoftwareTextFontError::InvalidFont;
+        let InstancedFace {
+            font,
+            kerning,
+            variations,
+        } = match bytes {
+            FontBytes::Static(bytes) => instance_face(
+                FontRef::try_from_slice(bytes).map_err(invalid)?,
+                weight,
+                style,
+                variations,
+            ),
+            FontBytes::Owned(bytes) => instance_face(
+                FontVec::try_from_vec(bytes).map_err(invalid)?,
+                weight,
+                style,
+                variations,
+            ),
+        }?;
         for (tag, value) in &variations {
             tag.hash(&mut hasher);
             value.to_bits().hash(&mut hasher);
         }
         let content_hash = hasher.finish();
 
-        let kerning = KernedFont::read_kerning(font.font_data(), &variations);
-
-        let font = FontArc::from(font);
         let score = text_font_score_from_parts(&font, &metadata);
         Ok(Self {
             font: KernedFont::new(font, kerning),
@@ -231,7 +285,7 @@ impl SoftwareTextFont {
 pub fn try_default_software_text_font() -> Result<SoftwareTextFont, SoftwareTextFontError> {
     #[cfg(feature = "embedded-default-font")]
     {
-        SoftwareTextFont::from_bytes(DEFAULT_SOFTWARE_TEXT_FONT_BYTES.to_vec())
+        SoftwareTextFont::from_bytes(DEFAULT_SOFTWARE_TEXT_FONT_BYTES)
     }
     #[cfg(not(feature = "embedded-default-font"))]
     {
@@ -276,10 +330,10 @@ impl SoftwareTextFontSet {
         }
     }
 
-    pub fn from_fonts_or_default(fonts: &[&[u8]]) -> Self {
+    pub fn from_fonts_or_default(fonts: &[&'static [u8]]) -> Self {
         let mut parsed = Vec::with_capacity(fonts.len().max(1));
         for font in fonts {
-            if let Ok(candidate) = SoftwareTextFont::from_bytes((*font).to_vec()) {
+            if let Ok(candidate) = SoftwareTextFont::from_bytes(*font) {
                 parsed.push(candidate);
             }
         }
@@ -330,13 +384,17 @@ impl SoftwareTextFontSet {
     }
 }
 
-pub fn software_text_font_from_fonts_or_default(fonts: &[&[u8]]) -> Option<SoftwareTextFont> {
+pub fn software_text_font_from_fonts_or_default(
+    fonts: &[&'static [u8]],
+) -> Option<SoftwareTextFont> {
     SoftwareTextFontSet::from_fonts_or_default(fonts)
         .default_font()
         .cloned()
 }
 
-pub fn software_text_font_set_from_fonts_or_default(fonts: &[&[u8]]) -> SoftwareTextFontSet {
+pub fn software_text_font_set_from_fonts_or_default(
+    fonts: &[&'static [u8]],
+) -> SoftwareTextFontSet {
     SoftwareTextFontSet::from_fonts_or_default(fonts)
 }
 
@@ -481,8 +539,38 @@ fn font_family_matches(font: &SoftwareTextFont, requested: &str) -> bool {
         .any(|family| family.eq_ignore_ascii_case(requested))
 }
 
+/// Instances `font` at the axis positions `weight` and `style` declare, then
+/// at the explicit `variations`, which win over them.
+fn instance_face<F: Font + VariableFont + Send + Sync + 'static>(
+    mut font: F,
+    weight: FontWeight,
+    style: FontStyle,
+    variations: &[([u8; 4], f32)],
+) -> Result<InstancedFace, SoftwareTextFontError> {
+    let mut applied = apply_declared_variations(&mut font, weight, style);
+    for &(tag, value) in variations {
+        let valid = value.is_finite()
+            && font
+                .variations()
+                .iter()
+                .any(|axis| axis.tag == tag && (axis.min_value..=axis.max_value).contains(&value));
+        if !valid || !font.set_variation(&tag, value) {
+            return Err(SoftwareTextFontError::InvalidVariation { tag });
+        }
+        applied.retain(|(existing, _)| *existing != tag);
+        applied.push((tag, value));
+    }
+    applied.sort_unstable_by_key(|(tag, _)| *tag);
+    let kerning = KernedFont::read_kerning(font.font_data(), &applied);
+    Ok(InstancedFace {
+        font: FontArc::new(font),
+        kerning,
+        variations: applied,
+    })
+}
+
 fn apply_declared_variations(
-    font: &mut FontVec,
+    font: &mut impl VariableFont,
     weight: FontWeight,
     style: FontStyle,
 ) -> Vec<([u8; 4], f32)> {
@@ -798,7 +886,7 @@ impl SoftwareTextMeasurer {
         }
     }
 
-    pub fn from_fonts_or_default(fonts: &[&[u8]], cache_capacity: usize) -> Self {
+    pub fn from_fonts_or_default(fonts: &[&'static [u8]], cache_capacity: usize) -> Self {
         Self::from_font_set(
             software_text_font_set_from_fonts_or_default(fonts),
             cache_capacity,
