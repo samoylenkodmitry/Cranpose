@@ -86,6 +86,26 @@ fn modifier_slices_cache_preserves_live_snapshot_isolation() {
 }
 
 #[test]
+fn an_equal_modifier_leaves_the_chain_and_its_slices_as_they_were() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let mut node = fresh_node();
+    node.set_modifier(Modifier::empty().padding(4.0));
+    let held = node.modifier_slices_snapshot();
+
+    node.set_modifier(Modifier::empty().padding(4.0));
+    assert!(
+        Rc::ptr_eq(&held, &node.modifier_slices_snapshot()),
+        "an equal modifier is not synced or collected again"
+    );
+
+    node.set_modifier(Modifier::empty().padding(5.0));
+    assert!(
+        !Rc::ptr_eq(&held, &node.modifier_slices_snapshot()),
+        "a changed modifier is"
+    );
+}
+
+#[test]
 fn layout_node_registry_retains_warm_capacity_after_large_cleanup() {
     let _app_context = crate::render_state::app_context_test_scope();
     let app_context = crate::render_state::AppContext::new_with_density(1.0);
