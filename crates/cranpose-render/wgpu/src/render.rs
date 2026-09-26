@@ -180,20 +180,20 @@ pub(crate) fn bounded_scissor(
 /// A run whose quads all lie inside `scissor` needs none of its own, which
 /// lets it share a draw with its neighbours; a turned viewport keeps it.
 fn shared_glyph_clip(
-    vertices: &[Vertex],
+    glyphs: &[GlyphInstance],
     scissor: TargetRect,
     viewport: ViewportUniformParams,
 ) -> (Option<TargetRect>, TargetRect) {
-    if !viewport.transform.is_identity() || vertices.is_empty() {
+    if !viewport.transform.is_identity() || glyphs.is_empty() {
         return (Some(scissor), scissor);
     }
     let (mut left, mut top) = (f32::INFINITY, f32::INFINITY);
     let (mut right, mut bottom) = (f32::NEG_INFINITY, f32::NEG_INFINITY);
-    for vertex in vertices {
-        left = left.min(vertex.position[0]);
-        top = top.min(vertex.position[1]);
-        right = right.max(vertex.position[0]);
-        bottom = bottom.max(vertex.position[1]);
+    for glyph in glyphs {
+        left = left.min(glyph.rect[0]);
+        top = top.min(glyph.rect[1]);
+        right = right.max(glyph.rect[2]);
+        bottom = bottom.max(glyph.rect[3]);
     }
     let left = (left - viewport.offset[0]).floor().max(0.0);
     let top = (top - viewport.offset[1]).floor().max(0.0);
@@ -618,55 +618,28 @@ fn cached_text_glyph_quad(
     }
 }
 
-fn append_cached_text_glyph_quad(
-    source_raster_rect: Rect,
-    quad: &CachedTextGlyphQuad,
-    image_vertices: &mut Vec<Vertex>,
-    image_indices: &mut Vec<u32>,
-) -> bool {
-    let Some(vertices) = cached_text_glyph_quad_vertices(source_raster_rect, quad) else {
-        return false;
-    };
-    let base_vertex = image_vertices.len() as u32;
-    image_indices.extend_from_slice(&[
-        base_vertex,
-        base_vertex + 1,
-        base_vertex + 2,
-        base_vertex + 2,
-        base_vertex + 1,
-        base_vertex + 3,
-    ]);
-    image_vertices.extend_from_slice(&vertices);
-    true
-}
-
-/// The corners of `quad` at `source_raster_rect`'s origin: top-left,
-/// top-right, bottom-left, bottom-right. `None` for a quad that draws
+/// `quad` at `source_raster_rect`'s origin. `None` for a quad that draws
 /// nothing.
-fn cached_text_glyph_quad_vertices(
+fn cached_text_glyph_instance(
     source_raster_rect: Rect,
     quad: &CachedTextGlyphQuad,
-) -> Option<[Vertex; 4]> {
+) -> Option<GlyphInstance> {
     if quad.width == 0 || quad.height == 0 || quad.color.3 <= 0.0 {
         return None;
     }
     let x0 = source_raster_rect.x + quad.x as f32;
     let y0 = source_raster_rect.y + quad.y as f32;
-    let x1 = x0 + quad.width as f32;
-    let y1 = y0 + quad.height as f32;
-    let color = [quad.color.0, quad.color.1, quad.color.2, quad.color.3];
-    let corner = |position: [f32; 2], uv: [f32; 2]| Vertex {
-        position,
-        color,
-        uv,
+    Some(GlyphInstance {
+        rect: [x0, y0, x0 + quad.width as f32, y0 + quad.height as f32],
+        uv: [
+            quad.uv.min[0],
+            quad.uv.min[1],
+            quad.uv.max[0],
+            quad.uv.max[1],
+        ],
         uv_bounds: quad.uv.sample_bounds,
-    };
-    Some([
-        corner([x0, y0], [quad.uv.min[0], quad.uv.min[1]]),
-        corner([x1, y0], [quad.uv.max[0], quad.uv.min[1]]),
-        corner([x0, y1], [quad.uv.min[0], quad.uv.max[1]]),
-        corner([x1, y1], [quad.uv.max[0], quad.uv.max[1]]),
-    ])
+        color: [quad.color.0, quad.color.1, quad.color.2, quad.color.3],
+    })
 }
 
 fn cached_text_glyph_quad_logical_rect(
@@ -1227,7 +1200,7 @@ fn create_glyph_atlas_pipeline(
                 module: &shader,
                 entry_point: Some("glyph_atlas_vs_main"),
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
-                buffers: &[Some(Vertex::desc())],
+                buffers: &[Some(GlyphInstance::desc())],
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
@@ -1240,7 +1213,7 @@ fn create_glyph_atlas_pipeline(
                 })],
             }),
             primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
+                topology: wgpu::PrimitiveTopology::TriangleStrip,
                 strip_index_format: None,
                 front_face: wgpu::FrontFace::Ccw,
                 cull_mode: None,
@@ -1277,6 +1250,38 @@ impl Vertex {
         wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &Self::ATTRIBS,
+        }
+    }
+}
+
+/// The corners a glyph instance draws as a triangle strip: top-left,
+/// top-right, bottom-left, bottom-right.
+const GLYPH_QUAD_CORNERS: u32 = 4;
+
+/// One glyph quad as the glyph pipeline draws it: an instance whose four
+/// corners the vertex stage picks from `rect` and `uv`.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, PartialEq, Pod, Zeroable)]
+pub(crate) struct GlyphInstance {
+    rect: [f32; 4],
+    uv: [f32; 4],
+    uv_bounds: [f32; 4],
+    color: [f32; 4],
+}
+
+impl GlyphInstance {
+    const ATTRIBS: [wgpu::VertexAttribute; 4] = wgpu::vertex_attr_array![
+        0 => Float32x4,
+        1 => Float32x4,
+        2 => Float32x4,
+        3 => Float32x4
+    ];
+
+    fn desc() -> wgpu::VertexBufferLayout<'static> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<GlyphInstance>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Instance,
             attributes: &Self::ATTRIBS,
         }
     }
@@ -1577,8 +1582,8 @@ pub(crate) struct ImageDrawCmd {
 #[derive(Clone)]
 enum GlyphDrawSource {
     Shared {
-        index_start: u32,
-        index_count: u32,
+        instance_start: u32,
+        instance_count: u32,
     },
     Retained {
         run: Rc<CachedGpuTextGlyphRun>,
@@ -1637,26 +1642,26 @@ impl<'a> Iterator for GlyphDraws<'a> {
                 uniform_slot: *uniform_slot,
             },
             GlyphDrawSource::Shared {
-                index_start,
-                index_count,
+                instance_start,
+                instance_count,
             } => {
-                let mut end = index_start + index_count;
+                let mut end = instance_start + instance_count;
                 while let Some((next, rest)) = self.cmds.split_first() {
                     match next.source {
                         GlyphDrawSource::Shared {
-                            index_start,
-                            index_count,
-                        } if index_start == end
+                            instance_start,
+                            instance_count,
+                        } if instance_start == end
                             && next.scissor == first.scissor
                             && Rc::ptr_eq(&next.atlas, &first.atlas) =>
                         {
-                            end += index_count;
+                            end += instance_count;
                             self.cmds = rest;
                         }
                         _ => break,
                     }
                 }
-                GlyphDrawStep::Shared(*index_start..end)
+                GlyphDrawStep::Shared(*instance_start..end)
             }
         };
         Some(GlyphDraw {
@@ -1669,16 +1674,18 @@ impl<'a> Iterator for GlyphDraws<'a> {
 
 impl GlyphDrawCmd {
     fn shared(
-        indices: std::ops::Range<u32>,
+        instances: std::ops::Range<usize>,
         scissor: Option<(u32, u32, u32, u32)>,
         bounds: (u32, u32, u32, u32),
         atlas: Rc<wgpu::BindGroup>,
     ) -> Self {
+        let start = u32::try_from(instances.start).unwrap_or(u32::MAX);
+        let end = u32::try_from(instances.end).unwrap_or(u32::MAX);
         Self {
             atlas,
             source: GlyphDrawSource::Shared {
-                index_start: indices.start,
-                index_count: indices.end - indices.start,
+                instance_start: start,
+                instance_count: end.saturating_sub(start),
             },
             scissor,
             bounds,
@@ -1726,6 +1733,13 @@ fn image_vertex_spec() -> UploadAllocatorSpec {
 
 fn image_index_spec() -> UploadAllocatorSpec {
     UploadAllocatorSpec::index("Image Index Buffer", std::mem::size_of::<u32>() as u64)
+}
+
+fn glyph_instance_spec() -> UploadAllocatorSpec {
+    UploadAllocatorSpec::vertex(
+        "Glyph Instance Buffer",
+        std::mem::size_of::<GlyphInstance>() as u64,
+    )
 }
 
 #[derive(Default)]
@@ -1947,6 +1961,7 @@ pub struct GpuRenderer {
     text_line_index_cache: TextLineIndexCache,
     pub(crate) scratch_image_vertices: Vec<Vertex>,
     pub(crate) scratch_image_indices: Vec<u32>,
+    pub(crate) scratch_glyph_instances: Vec<GlyphInstance>,
     pub(crate) scratch_image_cmds: Vec<ImageDrawCmd>,
     pub(crate) scratch_glyph_cmds: Vec<GlyphDrawCmd>,
     scratch_text_glyph_run: Vec<SoftwareGlyphAtlasRunGlyph>,
@@ -2180,6 +2195,7 @@ impl GpuRenderer {
             text_line_index_cache: TextLineIndexCache::new(MAX_TEXT_LINE_INDEX_CACHE_ITEMS),
             scratch_image_vertices: Vec::new(),
             scratch_image_indices: Vec::new(),
+            scratch_glyph_instances: Vec::new(),
             scratch_image_cmds: Vec::new(),
             scratch_glyph_cmds: Vec::new(),
             scratch_text_glyph_run: Vec::new(),
@@ -2741,6 +2757,7 @@ impl GpuRenderer {
             scratch_image_vertices_cap: self.scratch_image_vertices.capacity(),
             scratch_image_indices_cap: self.scratch_image_indices.capacity(),
             scratch_image_cmds_cap: self.scratch_image_cmds.capacity(),
+            scratch_glyph_instances_cap: self.scratch_glyph_instances.capacity(),
             layer_cache_len: self.layer_cache.len(),
             layer_cache_bytes: self.layer_cache.bytes(),
         }
@@ -3657,7 +3674,7 @@ impl GpuRenderer {
     pub(crate) fn draw_glyph_cmds(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
-        image_slot: Option<&ImageSlot>,
+        glyph_slot: Option<&BufferUpload>,
         uniform_slot: usize,
         cmds: &[GlyphDrawCmd],
         bound: Option<(u32, u32, u32, u32)>,
@@ -3671,8 +3688,7 @@ impl GpuRenderer {
         pass.set_pipeline(self.glyph_atlas_pipeline());
         let mut bound_atlas = None;
         let mut shared_bound = false;
-        let mut retained_indices_bound = false;
-        let mut bound_run_vertices: Option<&wgpu::Buffer> = None;
+        let mut bound_run_instances: Option<&wgpu::Buffer> = None;
         let mut draws = 0u32;
         for draw in GlyphDraws::new(cmds) {
             let scissor = match draw.scissor {
@@ -3689,18 +3705,17 @@ impl GpuRenderer {
             }
             draws += 1;
             match draw.step {
-                GlyphDrawStep::Shared(indices) => {
+                GlyphDrawStep::Shared(instances) => {
                     if !shared_bound {
-                        let slot = image_slot
-                            .ok_or_else(|| "shared glyph draw without an image slot".to_string())?;
+                        let slot = glyph_slot.ok_or_else(|| {
+                            "shared glyph draw without glyph instances".to_string()
+                        })?;
                         self.viewport_uniforms.bind(pass, uniform_slot)?;
-                        pass.set_index_buffer(slot.indices.slice(), wgpu::IndexFormat::Uint32);
-                        pass.set_vertex_buffer(0, slot.vertices.slice());
+                        pass.set_vertex_buffer(0, slot.slice());
                         shared_bound = true;
-                        retained_indices_bound = false;
-                        bound_run_vertices = None;
+                        bound_run_instances = None;
                     }
-                    pass.draw_indexed(indices, 0, 0..1);
+                    pass.draw(0..GLYPH_QUAD_CORNERS, instances);
                 }
                 GlyphDrawStep::Retained {
                     run,
@@ -3708,20 +3723,12 @@ impl GpuRenderer {
                 } => {
                     shared_bound = false;
                     self.viewport_uniforms.bind(pass, retained_slot)?;
-                    if !retained_indices_bound {
-                        let indices =
-                            self.text_glyph_run_arena.index_buffer().ok_or_else(|| {
-                                "retained glyph draw without quad indices".to_string()
-                            })?;
-                        pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
-                        retained_indices_bound = true;
+                    let instances = run.span.instance_buffer();
+                    if bound_run_instances != Some(instances) {
+                        pass.set_vertex_buffer(0, instances.slice(..));
+                        bound_run_instances = Some(instances);
                     }
-                    let vertices = run.span.vertex_buffer();
-                    if bound_run_vertices != Some(vertices) {
-                        pass.set_vertex_buffer(0, vertices.slice(..));
-                        bound_run_vertices = Some(vertices);
-                    }
-                    pass.draw_indexed(run.span.indices(), 0, 0..1);
+                    pass.draw(0..GLYPH_QUAD_CORNERS, run.span.instances());
                 }
             }
         }
@@ -3856,6 +3863,19 @@ impl GpuRenderer {
             ),
         }
     }
+
+    pub(crate) fn upload_glyph_instances<C: FrameCommandRecorder>(
+        &self,
+        recorder: &mut C,
+        instances: &[GlyphInstance],
+    ) -> BufferUpload {
+        recorder.upload_buffer(
+            glyph_instance_spec(),
+            &self.device,
+            bytemuck::cast_slice(instances),
+        )
+    }
+
     fn glyph_atlas_entry_for(
         &mut self,
         glyph: &SoftwareGlyphAtlasGlyph,
@@ -3961,32 +3981,28 @@ impl GpuRenderer {
         clip: Option<Rect>,
         viewport: ViewportUniformParams,
         root_scale: f32,
-        image_vertices: &mut Vec<Vertex>,
-        image_indices: &mut Vec<u32>,
+        glyph_instances: &mut Vec<GlyphInstance>,
         record_cached_hits: bool,
     ) -> usize {
-        let mut appended = 0usize;
-        for quad in quads {
-            if !cached_text_glyph_quad_is_visible_in_viewport(
-                source_raster_rect,
-                quad,
-                clip,
-                viewport,
-                root_scale,
-            ) {
-                continue;
-            }
-            if append_cached_text_glyph_quad(
-                source_raster_rect,
-                quad,
-                image_vertices,
-                image_indices,
-            ) {
-                if record_cached_hits {
-                    self.frame_stats.record_text_glyph_atlas_hits(1);
-                }
-                appended = appended.saturating_add(1);
-            }
+        let start = glyph_instances.len();
+        glyph_instances.extend(
+            quads
+                .iter()
+                .filter(|quad| {
+                    cached_text_glyph_quad_is_visible_in_viewport(
+                        source_raster_rect,
+                        quad,
+                        clip,
+                        viewport,
+                        root_scale,
+                    )
+                })
+                .filter_map(|quad| cached_text_glyph_instance(source_raster_rect, quad)),
+        );
+        let appended = glyph_instances.len() - start;
+        if record_cached_hits {
+            self.frame_stats
+                .record_text_glyph_atlas_hits(u32::try_from(appended).unwrap_or(u32::MAX));
         }
         appended
     }
@@ -4100,7 +4116,7 @@ impl GpuRenderer {
             &self.device,
             quads
                 .iter()
-                .filter_map(|quad| cached_text_glyph_quad_vertices(origin, quad)),
+                .filter_map(|quad| cached_text_glyph_instance(origin, quad)),
         ) else {
             return false;
         };
@@ -4123,16 +4139,14 @@ impl GpuRenderer {
         layer_texts: I,
         viewport: ViewportUniformParams,
         root_scale: f32,
-        image_vertices: &mut Vec<Vertex>,
-        image_indices: &mut Vec<u32>,
+        glyph_instances: &mut Vec<GlyphInstance>,
         glyph_cmds: &mut Vec<GlyphDrawCmd>,
     ) -> Result<bool, String>
     where
         I: IntoIterator<Item = &'a TextDraw>,
     {
         let append_start = Instant::now();
-        let initial_vertex_len = image_vertices.len();
-        let initial_index_len = image_indices.len();
+        let initial_instance_len = glyph_instances.len();
         let initial_cmd_len = glyph_cmds.len();
         let mut collected_run = std::mem::take(&mut self.scratch_text_glyph_run);
         let mut generated_quads = std::mem::take(&mut self.scratch_text_glyph_quads);
@@ -4249,8 +4263,7 @@ impl GpuRenderer {
                 continue;
             }
 
-            let index_start = image_indices.len() as u32;
-            let vertex_start = image_vertices.len();
+            let instance_start = glyph_instances.len();
             let (quad_run, cached) = match cached_quad_run {
                 Some(quad_run) => (quad_run, true),
                 None => {
@@ -4273,16 +4286,14 @@ impl GpuRenderer {
                 source_draw.clip,
                 viewport,
                 root_scale,
-                image_vertices,
-                image_indices,
+                glyph_instances,
                 cached,
             ));
-            let index_end = image_indices.len() as u32;
-            if index_end > index_start {
+            if glyph_instances.len() > instance_start {
                 let (clip, bounds) =
-                    shared_glyph_clip(&image_vertices[vertex_start..], scissor, viewport);
+                    shared_glyph_clip(&glyph_instances[instance_start..], scissor, viewport);
                 glyph_cmds.push(GlyphDrawCmd::shared(
-                    index_start..index_end,
+                    instance_start..glyph_instances.len(),
                     clip,
                     bounds,
                     self.text_glyph_atlas.bind_group(viewport.transform),
@@ -4293,8 +4304,7 @@ impl GpuRenderer {
         self.scratch_text_glyph_run = collected_run;
         self.scratch_text_glyph_quads = generated_quads;
         if fallback {
-            image_vertices.truncate(initial_vertex_len);
-            image_indices.truncate(initial_index_len);
+            glyph_instances.truncate(initial_instance_len);
             glyph_cmds.truncate(initial_cmd_len);
             return Ok(false);
         }

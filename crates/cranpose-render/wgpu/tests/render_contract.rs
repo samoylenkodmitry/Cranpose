@@ -368,7 +368,7 @@ fn cached_visible_text_glyph_runs_promote_large_runs_to_retained_buffers() {
         .find("if let Some(quad_run) = cached_quad_run.as_ref()")
         .expect("cached visible glyph branch exists");
     let cached_branch_end = render_source[cached_branch_start..]
-        .find("let index_start = image_indices.len() as u32;")
+        .find("let instance_start = glyph_instances.len();")
         .map(|offset| cached_branch_start + offset)
         .expect("cached visible glyph branch boundary exists");
     assert!(
@@ -380,7 +380,7 @@ fn cached_visible_text_glyph_runs_promote_large_runs_to_retained_buffers() {
         .find("let Ok(quad_run) = self.prepare_text_glyph_quads(")
         .expect("visible miss glyph preparation branch exists");
     let miss_branch_end = render_source[miss_branch_start..]
-        .find("let index_end = image_indices.len() as u32;")
+        .find("if glyph_instances.len() > instance_start {")
         .map(|offset| miss_branch_start + offset)
         .expect("visible miss glyph preparation branch boundary exists");
     assert!(

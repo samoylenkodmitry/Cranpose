@@ -268,13 +268,21 @@ impl GpuRenderer {
             .iter()
             .try_for_each(|segment| prep.segment(self, segment, &mut scratch));
         let batches = prep.batches;
-        let image_slot = match &prepared {
-            Ok(()) if !scratch.image_indices.is_empty() => Some(self.upload_image_slot(
-                recorder,
-                &scratch.image_vertices,
-                &scratch.image_indices,
-            )),
-            _ => None,
+        let buffers = PassBuffers {
+            images: match &prepared {
+                Ok(()) if !scratch.image_indices.is_empty() => Some(self.upload_image_slot(
+                    recorder,
+                    &scratch.image_vertices,
+                    &scratch.image_indices,
+                )),
+                _ => None,
+            },
+            glyphs: match &prepared {
+                Ok(()) if !scratch.glyph_instances.is_empty() => {
+                    Some(self.upload_glyph_instances(recorder, &scratch.glyph_instances))
+                }
+                _ => None,
+            },
         };
         let result = match prepared {
             Err(error) => Err(error),
@@ -301,7 +309,7 @@ impl GpuRenderer {
                         &batches,
                         &scratch.image_cmds,
                         &scratch.glyph_cmds,
-                        image_slot.as_ref(),
+                        &buffers,
                     )
                 };
                 recorder.record_pass();
@@ -318,11 +326,13 @@ impl GpuRenderer {
             image_vertices: std::mem::take(&mut self.scratch_image_vertices),
             image_indices: std::mem::take(&mut self.scratch_image_indices),
             image_cmds: std::mem::take(&mut self.scratch_image_cmds),
+            glyph_instances: std::mem::take(&mut self.scratch_glyph_instances),
             glyph_cmds: std::mem::take(&mut self.scratch_glyph_cmds),
         };
         scratch.image_vertices.clear();
         scratch.image_indices.clear();
         scratch.image_cmds.clear();
+        scratch.glyph_instances.clear();
         scratch.glyph_cmds.clear();
         scratch
     }
@@ -331,6 +341,7 @@ impl GpuRenderer {
         self.scratch_image_vertices = scratch.image_vertices;
         self.scratch_image_indices = scratch.image_indices;
         self.scratch_image_cmds = scratch.image_cmds;
+        self.scratch_glyph_instances = scratch.glyph_instances;
         self.scratch_glyph_cmds = scratch.glyph_cmds;
     }
 
@@ -341,7 +352,7 @@ impl GpuRenderer {
         batches: &[Batch<'_>],
         image_cmds: &[crate::render::ImageDrawCmd],
         glyph_cmds: &[crate::render::GlyphDrawCmd],
-        image_slot: Option<&crate::render::ImageSlot>,
+        buffers: &PassBuffers,
     ) -> Result<(), String> {
         for batch in batches {
             match batch {
@@ -362,7 +373,9 @@ impl GpuRenderer {
                     uniform_slot,
                     scissor,
                 } => {
-                    let slot = image_slot
+                    let slot = buffers
+                        .images
+                        .as_ref()
                         .ok_or_else(|| "image batch without an image slot".to_string())?;
                     self.draw_image_cmds(
                         pass,
@@ -380,7 +393,7 @@ impl GpuRenderer {
                 } => {
                     self.draw_glyph_cmds(
                         pass,
-                        image_slot,
+                        buffers.glyphs.as_ref(),
                         *uniform_slot,
                         &glyph_cmds[cmds.clone()],
                         *scissor,
@@ -586,10 +599,18 @@ fn unblurred_shadow_run(
 
 /// The per-frame vectors a pass fills: image and glyph geometry and draw
 /// commands, kept on the renderer between frames so they never reallocate.
+/// The quads a pass drew from its scratch, uploaded for its draws: image
+/// vertices and indices, and glyph instances.
+struct PassBuffers {
+    images: Option<crate::render::ImageSlot>,
+    glyphs: Option<crate::frame_graph::BufferUpload>,
+}
+
 struct PassScratch {
     image_vertices: Vec<crate::render::Vertex>,
     image_indices: Vec<u32>,
     image_cmds: Vec<crate::render::ImageDrawCmd>,
+    glyph_instances: Vec<crate::render::GlyphInstance>,
     glyph_cmds: Vec<crate::render::GlyphDrawCmd>,
 }
 
@@ -895,8 +916,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
             std::iter::once(text),
             run.viewport,
             run.segment.scale,
-            &mut scratch.image_vertices,
-            &mut scratch.image_indices,
+            &mut scratch.glyph_instances,
             &mut scratch.glyph_cmds,
         )?;
         if drew_glyphs {
