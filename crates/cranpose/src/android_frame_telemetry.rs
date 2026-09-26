@@ -466,15 +466,18 @@ impl AndroidFrameTelemetry {
         };
         let mut leads: Vec<(i32, usize)> = Vec::new();
         for sample in &self.samples {
-            match leads.iter_mut().find(|(lead, _)| *lead == sample.lead_us) {
+            // Whole milliseconds: the observed vsync period, and the lead
+            // taken from it, move by a few tenths of one.
+            let lead_ms = (sample.lead_us + 500) / 1000;
+            match leads.iter_mut().find(|(lead, _)| *lead == lead_ms) {
                 Some((_, frames)) => *frames += 1,
-                None => leads.push((sample.lead_us, 1)),
+                None => leads.push((lead_ms, 1)),
             }
         }
         leads.sort_unstable();
         let leads = leads
             .iter()
-            .map(|(lead, frames)| format!("{:.1}ms:{frames}", ms(*lead)))
+            .map(|(lead, frames)| format!("{lead}ms:{frames}"))
             .collect::<Vec<_>>()
             .join(" ");
         log::warn!(

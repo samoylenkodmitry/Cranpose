@@ -13,11 +13,11 @@
 //! sooner after being queued is kept.
 
 /// Shown frames whose queue-to-screen times are averaged per window.
-const WINDOW: i64 = 90;
+pub(crate) const WINDOW: i64 = 90;
 
 /// Frames shown after the lead changes that started before it did, left out
 /// of the next window.
-const SETTLE: u32 = 6;
+pub(crate) const SETTLE: u32 = 6;
 
 /// How much sooner, on average, a trial's frames must reach the screen for
 /// its lead to be kept: less is noise.
@@ -25,9 +25,9 @@ const MARGIN_NS: i64 = 1_000_000;
 
 /// The leads a frame may start at, in tenths of the refresh period. A short
 /// frame on the Pixel 9 Pro needs 0.3; on the Mate 20 X a ticker frame
-/// needs 0.3 too, while grid and feed frames, whose GPU work runs 6 to 9 ms
-/// past their queueing, gain nothing from it.
-const LEADS_TENTHS: [i64; 4] = [0, 3, 5, 7];
+/// needs 0.3 too, while grid frames, whose GPU work runs 6 ms past their
+/// queueing, need 0.5. Longer leads left feed missing vsyncs.
+const LEADS_TENTHS: [i64; 3] = [0, 3, 5];
 
 /// How long the kept lead runs before another is tried, and the longest
 /// that grows to while trials keep failing.
@@ -127,6 +127,16 @@ impl FrameLead {
         }
         self.last_tried = next;
         next
+    }
+
+    /// Goes back to starting frames on their slot and forgets the window in
+    /// progress and any trial. A lead the frames cannot keep up with shows as
+    /// missed vsyncs, and missed vsyncs are what make the pacer rise a level.
+    pub(crate) fn fall_back(&mut self) {
+        self.kept = 0;
+        self.hold_ns = FIRST_HOLD_NS;
+        self.next_trial_ns = None;
+        self.reset();
     }
 
     /// Forgets the window in progress and any trial, keeping the lead

@@ -86,7 +86,7 @@ fn trials_take_every_other_lead_in_turn() {
     let mut lead = in_trial(20_000_000);
     let mut now = 1;
     let mut hold = FIRST_HOLD_NS;
-    for next in [2, 3, 1] {
+    for next in [2, 1, 2] {
         run_trial(&mut lead, 21_000_000, now);
         hold *= 2;
         now += hold;
@@ -104,4 +104,19 @@ fn reset_abandons_a_trial_and_its_window() {
     assert_eq!(lead.lead_ns(PERIOD), 0, "the settle and window start over");
     lead.record(20_000_000, 0);
     assert_eq!(lead.lead_ns(PERIOD), lead_at(2));
+}
+
+#[test]
+fn falling_back_starts_frames_on_their_slot_again() {
+    let mut lead = in_trial(20_000_000);
+    run_trial(&mut lead, 12_000_000, 1);
+    assert_eq!(lead.lead_ns(PERIOD), lead_at(1));
+    lead.fall_back();
+    assert_eq!(lead.lead_ns(PERIOD), 0);
+    run(&mut lead, i64::from(SETTLE) + WINDOW, 20_000_000, 2);
+    assert_eq!(
+        lead.lead_ns(PERIOD),
+        lead_at(2),
+        "the next window is followed by a trial straight away"
+    );
 }
