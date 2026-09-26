@@ -700,7 +700,7 @@ fn text_node(node_id: NodeId, label: &str) -> SemanticsNode {
     node(
         node_id,
         SemanticsRole::Text {
-            value: label.to_owned(),
+            value: label.into(),
         },
         Vec::new(),
         None,

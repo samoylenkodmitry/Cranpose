@@ -204,31 +204,41 @@ impl HeadlessRenderer {
         root: NodeId,
     ) -> RecordedRenderScene {
         let mut operations = Vec::new();
-        self.render_node_from_applier(applier, root, Point::default(), &mut operations);
+        let mut child_stack = Vec::new();
+        self.render_node_from_applier(
+            applier,
+            root,
+            Point::default(),
+            &mut operations,
+            &mut child_stack,
+        );
         RecordedRenderScene::new(operations)
     }
 
+    /// Records `node_id` and its subtree. `child_stack` is shared by the whole
+    /// walk: a node pushes its children, visits them while its descendants
+    /// push and pop above them, and pops them, so no child list is copied out
+    /// of the applier.
     fn render_node_from_applier(
         &self,
         applier: &mut MemoryApplier,
         node_id: NodeId,
         parent_offset: Point,
         operations: &mut Vec<RenderOp>,
+        child_stack: &mut Vec<NodeId>,
     ) {
-        let Ok(node_data) = applier.with_node::<LayoutNode, _>(node_id, |node| {
-            let state = node.layout_state();
-            let modifier_slices = node.modifier_slices_snapshot();
-            let children: Vec<NodeId> = node.children.clone();
-            (state, modifier_slices, children)
-        }) else {
+        let first_child = child_stack.len();
+        let Ok(Some((layout_state, modifier_slices))) =
+            applier.with_node::<LayoutNode, _>(node_id, |node| {
+                let state = node.layout_state();
+                state.is_placed().then(|| {
+                    child_stack.extend_from_slice(&node.children);
+                    (state, node.modifier_slices_snapshot())
+                })
+            })
+        else {
             return;
         };
-
-        let (layout_state, modifier_slices, children) = node_data;
-
-        if !layout_state.is_placed() {
-            return;
-        }
 
         let abs_x = parent_offset.x + layout_state.position().x;
         let abs_y = parent_offset.y + layout_state.position().y;
@@ -245,24 +255,13 @@ impl HeadlessRenderer {
             height: rect.height,
         };
 
-        let mut behind = Vec::new();
-        let mut overlay = Vec::new();
-        behind.extend(collect_primitives_from_commands(
+        operations.extend(collect_primitives_from_commands(
             node_id,
             rect,
             size,
             modifier_slices.draw_commands(),
             PaintLayer::Behind,
         ));
-        overlay.extend(collect_primitives_from_commands(
-            node_id,
-            rect,
-            size,
-            modifier_slices.draw_commands(),
-            PaintLayer::Overlay,
-        ));
-
-        operations.append(&mut behind);
 
         if let Some(text) = modifier_slices.text_content() {
             operations.push(RenderOp::Text {
@@ -277,11 +276,19 @@ impl HeadlessRenderer {
             y: abs_y + layout_state.content_offset.y,
         };
 
-        for child_id in children {
-            self.render_node_from_applier(applier, child_id, child_offset, operations);
+        for index in first_child..child_stack.len() {
+            let child_id = child_stack[index];
+            self.render_node_from_applier(applier, child_id, child_offset, operations, child_stack);
         }
+        child_stack.truncate(first_child);
 
-        operations.append(&mut overlay);
+        operations.extend(collect_primitives_from_commands(
+            node_id,
+            rect,
+            size,
+            modifier_slices.draw_commands(),
+            PaintLayer::Overlay,
+        ));
     }
 }
 

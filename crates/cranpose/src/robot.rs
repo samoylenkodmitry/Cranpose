@@ -1434,7 +1434,7 @@ where
     .to_string();
 
     let text = match &sem_node.role {
-        SemanticsRole::Text { value } => Some(value.clone()),
+        SemanticsRole::Text { value } => Some(value.as_str().to_owned()),
         _ => sem_node.description.clone(),
     };
 

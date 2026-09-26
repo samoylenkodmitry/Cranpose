@@ -4178,8 +4178,10 @@ fn scoped_recompose_after_root_replay_does_not_self_parent_root() {
             self.children.len() < before
         }
 
-        fn children(&self) -> Vec<NodeId> {
-            self.children.clone()
+        fn collect_children_into(&self, out: &mut smallvec::SmallVec<[NodeId; 8]>) {
+            out.clear();
+
+            out.extend_from_slice(&self.children);
         }
     }
 

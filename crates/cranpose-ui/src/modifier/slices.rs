@@ -291,8 +291,8 @@ impl ModifierNodeSlices {
         self.text_content.as_ref().map(|a| a.text.as_str())
     }
 
-    pub fn annotated_text(&self) -> Option<&crate::text::AnnotatedString> {
-        self.text_content.as_deref()
+    pub fn annotated_text(&self) -> Option<&Rc<crate::text::AnnotatedString>> {
+        self.text_content.as_ref()
     }
 
     pub fn text_style(&self) -> Option<&TextStyle> {

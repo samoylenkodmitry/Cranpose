@@ -324,6 +324,32 @@ pub enum SemanticsAction {
     Click { handler: SemanticsCallback },
 }
 
+/// A text node's text in the semantics tree, shared with the node's modifier
+/// slices rather than copied out of them.
+#[derive(Clone, Debug)]
+pub struct SemanticsText(Rc<crate::text::AnnotatedString>);
+
+impl SemanticsText {
+    /// The text the node shows.
+    pub fn as_str(&self) -> &str {
+        &self.0.text
+    }
+}
+
+impl PartialEq for SemanticsText {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+
+impl Eq for SemanticsText {}
+
+impl From<&str> for SemanticsText {
+    fn from(text: &str) -> Self {
+        Self(Rc::new(crate::text::AnnotatedString::from(text)))
+    }
+}
+
 /// Semantic role describing how a node should participate in accessibility and hit testing.
 /// Roles are now derived from SemanticsConfiguration rather than widget types.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -333,7 +359,7 @@ pub enum SemanticsRole {
     /// Subcomposition boundary
     Subcompose,
     /// Text content derived from the text node semantics payload.
-    Text { value: String },
+    Text { value: SemanticsText },
     /// Spacer (non-interactive)
     Spacer,
     /// Button (derived from the semantics `role`)
@@ -565,7 +591,6 @@ pub struct LayoutAllocationDebugStats {
     pub semantics_child_capacity: usize,
     pub semantics_description_count: usize,
     pub semantics_description_bytes: usize,
-    pub semantics_text_role_bytes: usize,
     pub semantics_heap_bytes: usize,
 }
 
@@ -810,14 +835,14 @@ pub fn build_layout_tree_from_applier(
     applier: &mut MemoryApplier,
     root: NodeId,
 ) -> Result<Option<LayoutTree>, NodeError> {
-    let origin = layout_tree_origin(layout_snapshot(applier, root)?);
-    place_layout_box(applier, root, origin, Point::default()).map(|root| root.map(LayoutTree::new))
+    let origin = layout_tree_origin(read_layout_node(applier, root, |state, _| state)?);
+    let mut child_stack = Vec::new();
+    place_layout_box(applier, root, origin, Point::default(), &mut child_stack)
+        .map(|root| root.map(LayoutTree::new))
 }
 
-type LayoutSnapshot = (crate::widgets::nodes::layout_node::LayoutState, Vec<NodeId>);
-
-fn layout_tree_origin(root: Option<LayoutSnapshot>) -> Point {
-    let Some((state, _)) = root else {
+fn layout_tree_origin(root: Option<LayoutState>) -> Point {
+    let Some(state) = root else {
         return Point::default();
     };
     let position = state.position();
@@ -827,22 +852,26 @@ fn layout_tree_origin(root: Option<LayoutSnapshot>) -> Point {
     }
 }
 
-fn layout_snapshot(
+/// Reads a layout or subcompose node's layout state and the children it
+/// places, borrowed in place. `None` when the node is neither.
+fn read_layout_node<R>(
     applier: &mut MemoryApplier,
     node_id: NodeId,
-) -> Result<Option<LayoutSnapshot>, NodeError> {
+    mut read: impl FnMut(LayoutState, &[NodeId]) -> R,
+) -> Result<Option<R>, NodeError> {
     match applier
-        .with_node::<LayoutNode, _>(node_id, |node| (node.layout_state(), node.children.clone()))
+        .with_node::<LayoutNode, _>(node_id, |node| read(node.layout_state(), &node.children))
     {
-        Ok(snapshot) => return Ok(Some(snapshot)),
+        Ok(value) => return Ok(Some(value)),
         Err(NodeError::TypeMismatch { .. } | NodeError::Missing { .. }) => {}
         Err(err) => return Err(err),
     }
 
     match applier.with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
-        (node.layout_state(), node.active_children())
+        let state = node.layout_state();
+        node.with_active_children(|children| read(state, children))
     }) {
-        Ok(snapshot) => Ok(Some(snapshot)),
+        Ok(value) => Ok(Some(value)),
         Err(NodeError::TypeMismatch { .. } | NodeError::Missing { .. }) => Ok(None),
         Err(err) => Err(err),
     }
@@ -893,13 +922,25 @@ fn snapshot_node_data(
     Ok((data, layer_translation))
 }
 
+/// Places `node_id`'s box and its subtree. `child_stack` is shared by the
+/// whole walk: each node pushes its children above its parent's, reads them
+/// from there while its descendants push and pop above them, and pops them
+/// when done, so no node's child list is copied out of the applier.
 fn place_layout_box(
     applier: &mut MemoryApplier,
     node_id: NodeId,
     parent_content_origin: Point,
     parent_layer_translation: Point,
+    child_stack: &mut Vec<NodeId>,
 ) -> Result<Option<LayoutBox>, NodeError> {
-    let Some((state, child_ids)) = layout_snapshot(applier, node_id)? else {
+    let first_child = child_stack.len();
+    let Some(state) = read_layout_node(applier, node_id, |state, children| {
+        if state.is_placed() {
+            child_stack.extend_from_slice(children);
+        }
+        state
+    })?
+    else {
         return Ok(None);
     };
     if !state.is_placed() {
@@ -927,15 +968,24 @@ fn place_layout_box(
         x: top_left.x + state.content_offset.x,
         y: top_left.y + state.content_offset.y,
     };
-    let mut children = Vec::with_capacity(child_ids.len());
-    for child_id in child_ids {
+    let end = child_stack.len();
+    let mut children = Vec::with_capacity(end - first_child);
+    for index in first_child..end {
+        let child_id = child_stack[index];
         if crate::modifier::is_window_root(applier, child_id) {
             continue;
         }
-        if let Some(child) = place_layout_box(applier, child_id, child_origin, layer_translation)? {
+        if let Some(child) = place_layout_box(
+            applier,
+            child_id,
+            child_origin,
+            layer_translation,
+            child_stack,
+        )? {
             children.push(child);
         }
     }
+    child_stack.truncate(first_child);
 
     Ok(Some(LayoutBox {
         node_generation: applier.node_generation(node_id),
@@ -974,77 +1024,97 @@ pub fn build_semantics_tree_from_applier(
     applier: &mut MemoryApplier,
     root: NodeId,
 ) -> Result<Option<SemanticsTree>, NodeError> {
-    fn node(
-        applier: &mut MemoryApplier,
-        node_id: NodeId,
-        origin: Option<Point>,
-    ) -> Result<Option<SemanticsNode>, NodeError> {
-        match applier.with_node::<LayoutNode, _>(node_id, |layout| {
-            let state = layout.layout_state();
-            if !state.is_placed() {
-                return None;
-            }
-            let role = role_from_modifier_slices(&layout.modifier_slices_snapshot());
-            let config = layout.semantics_configuration();
-            let children = layout.children.clone();
-            layout.clear_needs_semantics();
-            Some((role, config, children, semantics_placement(&state, origin)))
-        }) {
-            Ok(Some((role, config, child_ids, (bounds, content)))) => {
-                let child_ids = children_in_this_window(applier, child_ids);
-                let mut children = Vec::with_capacity(child_ids.len());
-                for child_id in child_ids {
-                    if let Some(child) = node(applier, child_id, Some(content))? {
-                        children.push(child);
-                    }
-                }
-                return Ok(Some(semantics_node_from_parts(
-                    node_id,
-                    applier.node_generation(node_id),
-                    role,
-                    config,
-                    children,
-                    bounds,
-                )));
-            }
-            Ok(None) => return Ok(None),
-            Err(NodeError::TypeMismatch { .. } | NodeError::Missing { .. }) => {}
-            Err(err) => return Err(err),
-        }
+    let mut child_stack = Vec::new();
+    semantics_node_from_applier(applier, root, None, &mut child_stack)
+        .map(|root| root.map(SemanticsTree::new))
+}
 
-        match applier.with_node::<SubcomposeLayoutNode, _>(node_id, |subcompose| {
-            let state = subcompose.layout_state();
-            if !state.is_placed() {
-                return None;
-            }
-            let config = subcompose.semantics_configuration();
-            let children = subcompose.active_children();
-            subcompose.clear_needs_semantics();
-            Some((config, children, semantics_placement(&state, origin)))
-        }) {
-            Ok(Some((config, child_ids, (bounds, content)))) => {
-                let child_ids = children_in_this_window(applier, child_ids);
-                let mut children = Vec::with_capacity(child_ids.len());
-                for child_id in child_ids {
-                    if let Some(child) = node(applier, child_id, Some(content))? {
-                        children.push(child);
-                    }
-                }
-                Ok(Some(semantics_node_from_parts(
-                    node_id,
-                    applier.node_generation(node_id),
-                    SemanticsRole::Subcompose,
-                    config,
-                    children,
-                    bounds,
-                )))
-            }
-            Ok(None) | Err(NodeError::TypeMismatch { .. } | NodeError::Missing { .. }) => Ok(None),
-            Err(err) => Err(err),
+/// Builds the semantics nodes of the children a node pushed onto
+/// `child_stack` above `first_child`, then pops them. The stack is shared
+/// by the whole walk, so no node's child list is copied out of the applier.
+fn semantics_children_from_applier(
+    applier: &mut MemoryApplier,
+    child_stack: &mut Vec<NodeId>,
+    first_child: usize,
+    content: Point,
+) -> Result<Vec<SemanticsNode>, NodeError> {
+    let end = child_stack.len();
+    let mut children = Vec::with_capacity(end - first_child);
+    for index in first_child..end {
+        let child_id = child_stack[index];
+        if crate::modifier::is_window_root(applier, child_id) {
+            continue;
+        }
+        if let Some(child) =
+            semantics_node_from_applier(applier, child_id, Some(content), child_stack)?
+        {
+            children.push(child);
         }
     }
+    child_stack.truncate(first_child);
+    Ok(children)
+}
 
-    node(applier, root, None).map(|root| root.map(SemanticsTree::new))
+fn semantics_node_from_applier(
+    applier: &mut MemoryApplier,
+    node_id: NodeId,
+    origin: Option<Point>,
+    child_stack: &mut Vec<NodeId>,
+) -> Result<Option<SemanticsNode>, NodeError> {
+    let first_child = child_stack.len();
+    match applier.with_node::<LayoutNode, _>(node_id, |layout| {
+        let state = layout.layout_state();
+        if !state.is_placed() {
+            return None;
+        }
+        let role = role_from_modifier_slices(&layout.modifier_slices_snapshot());
+        let config = layout.semantics_configuration();
+        child_stack.extend_from_slice(&layout.children);
+        layout.clear_needs_semantics();
+        Some((role, config, semantics_placement(&state, origin)))
+    }) {
+        Ok(Some((role, config, (bounds, content)))) => {
+            let children =
+                semantics_children_from_applier(applier, child_stack, first_child, content)?;
+            return Ok(Some(semantics_node_from_parts(
+                node_id,
+                applier.node_generation(node_id),
+                role,
+                config,
+                children,
+                bounds,
+            )));
+        }
+        Ok(None) => return Ok(None),
+        Err(NodeError::TypeMismatch { .. } | NodeError::Missing { .. }) => {}
+        Err(err) => return Err(err),
+    }
+
+    match applier.with_node::<SubcomposeLayoutNode, _>(node_id, |subcompose| {
+        let state = subcompose.layout_state();
+        if !state.is_placed() {
+            return None;
+        }
+        let config = subcompose.semantics_configuration();
+        subcompose.with_active_children(|children| child_stack.extend_from_slice(children));
+        subcompose.clear_needs_semantics();
+        Some((config, semantics_placement(&state, origin)))
+    }) {
+        Ok(Some((config, (bounds, content)))) => {
+            let children =
+                semantics_children_from_applier(applier, child_stack, first_child, content)?;
+            Ok(Some(semantics_node_from_parts(
+                node_id,
+                applier.node_generation(node_id),
+                SemanticsRole::Subcompose,
+                config,
+                children,
+                bounds,
+            )))
+        }
+        Ok(None) | Err(NodeError::TypeMismatch { .. } | NodeError::Missing { .. }) => Ok(None),
+        Err(err) => Err(err),
+    }
 }
 
 /// The modal the semantics tree of `root` would be rooted at, found without
@@ -1113,14 +1183,16 @@ pub fn top_modal_from_applier(
         } else if let Some(subcompose) = node.downcast_mut::<SubcomposeLayoutNode>() {
             let state = subcompose.layout_state();
             if state.is_placed() {
-                let children = subcompose.active_children();
-                push_placed(
-                    &mut steps,
-                    node_id,
-                    subcompose.semantics_reach(),
-                    state.size(),
-                    children,
-                );
+                let reach = subcompose.semantics_reach();
+                subcompose.with_active_children(|children| {
+                    push_placed(
+                        &mut steps,
+                        node_id,
+                        reach,
+                        state.size(),
+                        children.iter().copied(),
+                    );
+                });
             }
         }
     }
@@ -1175,13 +1247,6 @@ fn publish_window_geometry(
         });
     }
     modifier_slices.publish_pointer_input_size(size);
-}
-
-fn children_in_this_window(applier: &mut MemoryApplier, children: Vec<NodeId>) -> Vec<NodeId> {
-    children
-        .into_iter()
-        .filter(|child| !crate::modifier::is_window_root(applier, *child))
-        .collect()
 }
 
 /// Check if the root semantics snapshot is dirty.
@@ -3274,9 +3339,9 @@ impl Default for RuntimeNodeMetadata {
 
 fn role_from_modifier_slices(modifier_slices: &ModifierNodeSlices) -> SemanticsRole {
     modifier_slices
-        .text_content()
+        .annotated_text()
         .map_or(SemanticsRole::Layout, |text| SemanticsRole::Text {
-            value: text.to_string(),
+            value: SemanticsText(Rc::clone(text)),
         })
 }
 
@@ -3521,10 +3586,6 @@ fn record_semantics_allocation_stats(node: &SemanticsNode, stats: &mut LayoutAll
         stats.semantics_description_bytes += description.capacity();
         stats.semantics_heap_bytes += description.capacity();
     }
-    if let SemanticsRole::Text { value } = &node.role {
-        stats.semantics_text_role_bytes += value.capacity();
-        stats.semantics_heap_bytes += value.capacity();
-    }
 
     for child in &node.children {
         record_semantics_allocation_stats(child, stats);
@@ -3609,13 +3670,7 @@ fn semantics_role_from_layout_box(layout_box: &LayoutBox) -> SemanticsRole {
         LayoutNodeKind::Spacer => SemanticsRole::Spacer,
         LayoutNodeKind::Unknown => SemanticsRole::Unknown,
         LayoutNodeKind::Button { .. } => SemanticsRole::Button,
-        LayoutNodeKind::Layout => layout_box
-            .node_data
-            .modifier_slices()
-            .text_content()
-            .map_or(SemanticsRole::Layout, |text| SemanticsRole::Text {
-                value: text.to_string(),
-            }),
+        LayoutNodeKind::Layout => role_from_modifier_slices(layout_box.node_data.modifier_slices()),
     }
 }
 

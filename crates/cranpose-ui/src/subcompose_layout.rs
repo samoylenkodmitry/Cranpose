@@ -1013,8 +1013,10 @@ impl SubcomposeLayoutNode {
         }
     }
 
-    pub fn active_children(&self) -> Vec<NodeId> {
-        current_subcompose_children(&self.inner.borrow())
+    /// Calls `f` with the children this node placed in its last layout, in
+    /// placement order, without copying them.
+    pub fn with_active_children<R>(&self, f: impl FnOnce(&[NodeId]) -> R) -> R {
+        f(&self.inner.borrow().last_placements)
     }
 
     /// Mark this node as needing measure. Also marks it as needing layout.
@@ -1254,18 +1256,14 @@ impl cranpose_core::Node for SubcomposeLayoutNode {
         inner.children.extend_from_slice(children);
     }
 
-    fn children(&self) -> Vec<NodeId> {
-        current_subcompose_children(&self.inner.borrow())
-    }
-
     fn collect_children_into(&self, out: &mut SmallVec<[NodeId; 8]>) {
         out.clear();
-        out.extend(self.inner.borrow().last_placements.iter().copied());
+        self.with_active_children(|children| out.extend_from_slice(children));
     }
 
     fn collect_owned_children_into(&self, out: &mut SmallVec<[NodeId; 8]>) {
         out.clear();
-        out.extend(self.inner.borrow().children.iter().copied());
+        out.extend_from_slice(&self.inner.borrow().children);
     }
 
     fn set_node_id(&mut self, id: NodeId) {
@@ -1534,10 +1532,6 @@ impl SubcomposeLayoutNodeHandle {
     {
         self.inner.borrow_mut().replace_placed_children(children);
     }
-}
-
-fn current_subcompose_children(inner: &SubcomposeLayoutNodeInner) -> Vec<NodeId> {
-    inner.last_placements.clone()
 }
 
 struct SubcomposeLayoutNodeInner {

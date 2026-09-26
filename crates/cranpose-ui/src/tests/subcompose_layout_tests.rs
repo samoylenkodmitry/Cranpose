@@ -592,14 +592,13 @@ fn active_children_follow_last_rendered_placements() {
     }
 
     let expected: Vec<_> = (33..45).collect();
-    assert_eq!(node.active_children(), expected);
-    assert_eq!(cranpose_core::Node::children(&node), expected);
+    node.with_active_children(|active| assert_eq!(active, expected.as_slice()));
     let mut active = SmallVec::<[NodeId; 8]>::from_slice(&[99]);
     cranpose_core::Node::collect_children_into(&node, &mut active);
     assert_eq!(active.as_slice(), expected.as_slice());
 
     node.handle().set_active_children(Vec::<NodeId>::new());
-    assert!(node.active_children().is_empty());
+    node.with_active_children(|active| assert!(active.is_empty()));
     cranpose_core::Node::collect_children_into(&node, &mut active);
     assert!(active.is_empty());
 

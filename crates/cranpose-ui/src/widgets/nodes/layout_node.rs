@@ -972,13 +972,9 @@ impl Node for LayoutNode {
         self.mark_needs_measure();
     }
 
-    fn children(&self) -> Vec<NodeId> {
-        self.children.clone()
-    }
-
     fn collect_children_into(&self, out: &mut smallvec::SmallVec<[NodeId; 8]>) {
         out.clear();
-        out.extend(self.children.iter().copied());
+        out.extend_from_slice(&self.children);
     }
 
     fn on_attached_to_parent(&mut self, parent: NodeId) {

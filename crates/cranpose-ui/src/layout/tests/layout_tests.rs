@@ -3276,3 +3276,59 @@ fn semantics_bounds_are_the_layout_rects_on_every_path() -> Result<(), NodeError
     }
     Ok(())
 }
+
+#[test]
+fn semantics_text_is_shared_with_the_text_nodes_slices() -> Result<(), NodeError> {
+    fn text_role(node: &SemanticsNode) -> Option<&SemanticsText> {
+        match &node.role {
+            SemanticsRole::Text { value } => Some(value),
+            _ => node.children.iter().find_map(text_role),
+        }
+    }
+    fn text_box(layout_box: &LayoutBox) -> Option<&LayoutBox> {
+        if layout_box
+            .node_data
+            .modifier_slices()
+            .annotated_text()
+            .is_some()
+        {
+            return Some(layout_box);
+        }
+        layout_box.children.iter().find_map(text_box)
+    }
+
+    let mut composition = crate::run_test_composition(|| {
+        crate::Text("shared", Modifier::empty(), crate::TextStyle::default());
+    });
+    let root = composition.root().expect("a root");
+    let handle = composition.runtime_handle();
+    let mut applier = composition.applier_mut();
+    applier.set_runtime_handle(handle);
+    let layout = applier.compute_layout(root, Size::new(200.0, 100.0))?;
+    let semantics =
+        build_semantics_tree_from_applier(&mut applier, root)?.expect("semantics from the applier");
+    applier.clear_runtime_handle();
+
+    let slices_text = text_box(layout.root())
+        .and_then(|text| text.node_data.modifier_slices().annotated_text())
+        .expect("a laid-out text node");
+    for (path, tree) in [
+        ("applier", &semantics),
+        (
+            "layout tree",
+            &build_semantics_tree_from_layout_tree(&layout),
+        ),
+    ] {
+        let value = text_role(tree.root()).expect("a text role");
+        assert_eq!(value.as_str(), "shared", "{path}");
+        assert!(
+            Rc::ptr_eq(&value.0, slices_text),
+            "the {path} semantics share the slices' text instead of copying it"
+        );
+    }
+    assert_eq!(
+        SemanticsText::from("shared"),
+        *text_role(semantics.root()).expect("a text role")
+    );
+    Ok(())
+}
