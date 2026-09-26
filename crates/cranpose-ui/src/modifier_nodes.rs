@@ -6,9 +6,9 @@ use std::{
 
 use cranpose_core::NodeId;
 use cranpose_foundation::{
-    Constraints, DelegatableNode, DrawModifierNode, DrawScope, InvalidationKind,
-    LayoutModifierNode, Measurable, ModifierNode, ModifierNodeContext, ModifierNodeElement,
-    NodeCapabilities, NodeState, PointerEvent, PointerEventKind, PointerInputNode, Size,
+    Constraints, DelegatableNode, DrawModifierNode, InvalidationKind, LayoutModifierNode,
+    Measurable, ModifierNode, ModifierNodeContext, ModifierNodeElement, NodeCapabilities,
+    NodeState, PointerEvent, PointerEventKind, PointerInputNode, Size,
 };
 use cranpose_ui_graphics::PointerIcon;
 use cranpose_ui_layout::{Alignment, HorizontalAlignment, IntrinsicSize, VerticalAlignment};
@@ -205,9 +205,7 @@ macro_rules! impl_draw_modifier_node {
             }
         }
 
-        impl DrawModifierNode for $ty {
-            fn draw(&self, _draw_scope: &mut dyn DrawScope) {}
-        }
+        impl DrawModifierNode for $ty {}
     };
 }
 
@@ -1848,9 +1846,7 @@ impl ModifierNode for DrawCommandNode {
     }
 }
 
-impl DrawModifierNode for DrawCommandNode {
-    fn draw(&self, _draw_scope: &mut dyn DrawScope) {}
-}
+impl DrawModifierNode for DrawCommandNode {}
 
 fn observe_draw_command(
     command: DrawCommand,

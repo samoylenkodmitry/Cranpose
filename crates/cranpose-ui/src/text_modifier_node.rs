@@ -5,9 +5,9 @@ use std::{
 };
 
 use cranpose_foundation::{
-    Constraints, DelegatableNode, DrawModifierNode, DrawScope, InvalidationKind,
-    LayoutModifierNode, Measurable, ModifierNode, ModifierNodeContext, ModifierNodeElement,
-    NodeCapabilities, NodeState, SemanticsConfiguration, SemanticsNode, Size,
+    Constraints, DelegatableNode, DrawModifierNode, InvalidationKind, LayoutModifierNode,
+    Measurable, ModifierNode, ModifierNodeContext, ModifierNodeElement, NodeCapabilities,
+    NodeState, SemanticsConfiguration, SemanticsNode, Size,
 };
 
 use crate::text::{AnnotatedString, TextLayoutOptions, TextStyle};
@@ -302,9 +302,7 @@ impl LayoutModifierNode for TextModifierNode {
     }
 }
 
-impl DrawModifierNode for TextModifierNode {
-    fn draw(&self, _draw_scope: &mut dyn DrawScope) {}
-}
+impl DrawModifierNode for TextModifierNode {}
 
 impl SemanticsNode for TextModifierNode {
     fn merge_semantics(&self, config: &mut SemanticsConfiguration) {

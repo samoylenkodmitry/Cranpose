@@ -385,7 +385,7 @@ Verdict key: **Implemented** (equivalent name and semantics) ·
 | `CompositionLocalProvider(...)` | `cranpose_core::CompositionLocalProvider` | Implemented | |
 | `rememberCoroutineScope()` | `cranpose_core::concurrency::rememberCoroutineScope` | Implemented | |
 | `key(vararg keys) { ... }` | `cranpose_core::key(keys, content)` | Renamed/reshaped | Owned-value keys -- a tuple for multiple -- rather than a vararg, which Rust has no equivalent of. Seeds the composition group through the same `with_key` machinery that already existed internally but was unreachable from the facade. |
-| `Modifier.Node` / `LayoutModifierNode` / `DrawModifierNode` / `PointerInputNode` (Compose 1.4+ node-based modifiers) | `cranpose_foundation::modifier::{ModifierNode, LayoutModifierNode, DrawModifierNode, PointerInputNode}` | Implemented | Same names, same architecture (Compose's newer node-based modifier system, not the older factory-based one). |
+| `Modifier.Node` / `LayoutModifierNode` / `DrawModifierNode` / `PointerInputNode` (Compose 1.4+ node-based modifiers) | `cranpose_foundation::modifier::{ModifierNode, LayoutModifierNode, DrawModifierNode, PointerInputNode}` | Implemented | Same names, same architecture (Compose's newer node-based modifier system, not the older factory-based one). A `DrawModifierNode` draws through deferred closures (`create_draw_closure`, `create_behind_draw_closure`) that the renderer runs at the node's size, not an immediate `ContentDrawScope.draw()`. |
 
 ### Modifier & layout
 
