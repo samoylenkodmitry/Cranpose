@@ -221,9 +221,11 @@ fn update_graph_from_applier_report_into_inner(
                 };
             }
             let inherited = graph.root.translated_content_context;
+            let root_children = AbsOrigin::ROOT.children_of(&graph.root);
             let walked = replace_dirty_layers_from_applier(
                 applier,
                 &mut graph.root,
+                root_children,
                 &mut remaining_dirty_nodes,
                 inherited,
                 false,
@@ -252,9 +254,11 @@ fn update_graph_from_applier_report_into_inner(
     }
 
     let inherited_translated_content_context = graph.root.translated_content_context;
+    let root_children = AbsOrigin::ROOT.children_of(&graph.root);
     let Some(report) = replace_dirty_layers_from_applier(
         applier,
         &mut graph.root,
+        root_children,
         &mut remaining_dirty_nodes,
         inherited_translated_content_context,
         false,
@@ -299,6 +303,7 @@ struct ReplaceDirtyLayersReport {
 fn replace_dirty_layers_from_applier(
     applier: &mut MemoryApplier,
     parent: &mut LayerNode,
+    parent_children: AbsOrigin,
     dirty_nodes: &mut HashSet<NodeId>,
     inherited_translated_content_context: bool,
     ancestor_hashed: bool,
@@ -331,17 +336,16 @@ fn replace_dirty_layers_from_applier(
                     inherited_translated_content_context:
                         child_inherited_translated_content_context,
                     parent_content_offset: parent.content_offset,
-                    parent_abs: AbsOrigin {
-                        content_origin: parent.scene_children_origin,
-                        layer_translation: parent.scene_children_layer_translation,
-                    },
+                    parent_abs: parent_children,
                 },
             ) {
                 report.hit_graph_dirty = true;
                 report.updated = true;
+                let child_children = parent_children.children_of(child_layer);
                 let child_report = replace_dirty_layers_from_applier(
                     applier,
                     child_layer,
+                    child_children,
                     dirty_nodes,
                     child_inherited_translated_content_context,
                     child_ancestor_hashed,
@@ -355,10 +359,7 @@ fn replace_dirty_layers_from_applier(
                 layer_identity(child_layer).expect("dirty layer must have a node id"),
                 parent.motion_context_animated,
                 child_inherited_translated_content_context,
-                Some(AbsOrigin {
-                    content_origin: parent.scene_children_origin,
-                    layer_translation: parent.scene_children_layer_translation,
-                }),
+                Some(parent_children),
             )?;
             if parent.content_offset != Point::default() {
                 replacement.transform_to_parent =
@@ -382,9 +383,11 @@ fn replace_dirty_layers_from_applier(
             continue;
         }
 
+        let child_children = parent_children.children_of(child_layer);
         let child_report = replace_dirty_layers_from_applier(
             applier,
             child_layer,
+            child_children,
             dirty_nodes,
             child_inherited_translated_content_context,
             child_ancestor_hashed,
@@ -672,12 +675,10 @@ struct TranslateGeometry {
     layer_translation: Point,
     window_origin: Point,
     child_origin: Point,
-    translation_delta: Point,
 }
 
 impl TranslateGeometry {
     fn new(
-        container: &LayerNode,
         layout_state: &cranpose_ui::widgets::LayoutState,
         graphics_layer: &GraphicsLayer,
         parent_abs: AbsOrigin,
@@ -701,10 +702,6 @@ impl TranslateGeometry {
             child_origin: Point {
                 x: top_left.x + content_offset.x,
                 y: top_left.y + content_offset.y,
-            },
-            translation_delta: Point {
-                x: layer_translation.x - container.scene_children_layer_translation.x,
-                y: layer_translation.y - container.scene_children_layer_translation.y,
             },
         }
     }
@@ -793,8 +790,7 @@ fn apply_translated_container_state(
             height: layout_state.size().height,
         });
     }
-    container.scene_children_origin = geometry.child_origin;
-    container.scene_children_layer_translation = geometry.layer_translation;
+    container.origin_in_parent = layout_state.position();
 }
 
 fn reconcile_translated_children(
@@ -812,13 +808,7 @@ fn reconcile_translated_children(
                 unreachable!("retained child identities were checked");
             };
             if !dirty_nodes.contains(child_id) {
-                translate_retained_child(
-                    layer,
-                    state,
-                    geometry.content_offset,
-                    geometry.child_origin,
-                    geometry.translation_delta,
-                );
+                translate_retained_child(layer, state, geometry.content_offset);
                 changed_nodes.push(*child_id);
             }
         }
@@ -842,13 +832,7 @@ fn reconcile_translated_children(
     for (child_id, state) in placed_fresh {
         if let Some(mut layer) = old_by_id.remove(child_id) {
             if !dirty_nodes.contains(child_id) {
-                translate_retained_child(
-                    &mut layer,
-                    state,
-                    geometry.content_offset,
-                    geometry.child_origin,
-                    geometry.translation_delta,
-                );
+                translate_retained_child(&mut layer, state, geometry.content_offset);
                 changed_nodes.push(*child_id);
             }
             new_children.push(RenderNode::Layer(layer));
@@ -915,7 +899,7 @@ fn translate_layer_from_data(
         old_index_by_id,
     } = child_plan;
 
-    let geometry = TranslateGeometry::new(container, &layout_state, &graphics_layer, parent_abs);
+    let geometry = TranslateGeometry::new(&layout_state, &graphics_layer, parent_abs);
     let child_inherited_translated_content_context =
         inherited_translated_content_context || container.translated_content_context;
     let children_ancestor_hashed =
@@ -977,8 +961,6 @@ fn translate_retained_child(
     layer: &mut LayerNode,
     state: &cranpose_ui::widgets::LayoutState,
     content_offset: Point,
-    child_origin: Point,
-    translation_delta: Point,
 ) {
     let mut child_transform =
         layer_transform_to_parent(layer.local_bounds, state.position(), &layer.graphics_layer);
@@ -989,27 +971,7 @@ fn translate_retained_child(
         ));
     }
     layer.transform_to_parent = child_transform;
-    let new_children_origin = Point {
-        x: child_origin.x + state.position().x + layer.content_offset.x,
-        y: child_origin.y + state.position().y + layer.content_offset.y,
-    };
-    let origin_delta = Point {
-        x: new_children_origin.x - layer.scene_children_origin.x,
-        y: new_children_origin.y - layer.scene_children_origin.y,
-    };
-    offset_scene_origins(layer, origin_delta, translation_delta);
-}
-
-fn offset_scene_origins(layer: &mut LayerNode, origin_delta: Point, translation_delta: Point) {
-    layer.scene_children_origin.x += origin_delta.x;
-    layer.scene_children_origin.y += origin_delta.y;
-    layer.scene_children_layer_translation.x += translation_delta.x;
-    layer.scene_children_layer_translation.y += translation_delta.y;
-    for child in &mut layer.children {
-        if let RenderNode::Layer(child_layer) = child {
-            offset_scene_origins(child_layer, origin_delta, translation_delta);
-        }
-    }
+    layer.origin_in_parent = state.position();
 }
 
 fn layer_hit_graph_state_dirty(previous: &LayerNode, replacement: &LayerNode) -> bool {
@@ -1186,8 +1148,7 @@ fn build_layer_node_internal(
         } else {
             Point::default()
         },
-        scene_children_origin: Point::default(),
-        scene_children_layer_translation: Point::default(),
+        origin_in_parent: placement,
         graphics_layer,
         clip_to_bounds,
         shadow_clip,
@@ -1214,6 +1175,19 @@ impl AbsOrigin {
         content_origin: Point { x: 0.0, y: 0.0 },
         layer_translation: Point { x: 0.0, y: 0.0 },
     };
+
+    fn children_of(self, layer: &LayerNode) -> AbsOrigin {
+        AbsOrigin {
+            content_origin: Point {
+                x: self.content_origin.x + layer.origin_in_parent.x + layer.content_offset.x,
+                y: self.content_origin.y + layer.origin_in_parent.y + layer.content_offset.y,
+            },
+            layer_translation: Point {
+                x: self.layer_translation.x + layer.graphics_layer.translation_x,
+                y: self.layer_translation.y + layer.graphics_layer.translation_y,
+            },
+        }
+    }
 }
 
 fn build_layer_node_from_applier(
@@ -1500,10 +1474,7 @@ fn build_layer_node_from_data(
         } else {
             Point::default()
         },
-        scene_children_origin: child_abs.map(|c| c.content_origin).unwrap_or_default(),
-        scene_children_layer_translation: child_abs
-            .map(|c| c.layer_translation)
-            .unwrap_or_default(),
+        origin_in_parent: layout_state.position(),
         graphics_layer,
         clip_to_bounds,
         shadow_clip,
@@ -1733,6 +1704,7 @@ fn wrap_layer_with_outer_draws(
     let local_bounds = layer.local_bounds;
     layer.transform_to_parent =
         layer_transform_to_parent(local_bounds, Point::default(), &layer.graphics_layer);
+    layer.origin_in_parent = Point::default();
     let wrapper = LayerNode {
         wraps: layer.node_id,
         local_bounds,
@@ -1741,14 +1713,7 @@ fn wrap_layer_with_outer_draws(
             placement,
             &GraphicsLayer::default(),
         ),
-        scene_children_origin: Point {
-            x: layer.scene_children_origin.x - layer.content_offset.x,
-            y: layer.scene_children_origin.y - layer.content_offset.y,
-        },
-        scene_children_layer_translation: Point {
-            x: layer.scene_children_layer_translation.x - layer.graphics_layer.translation_x,
-            y: layer.scene_children_layer_translation.y - layer.graphics_layer.translation_y,
-        },
+        origin_in_parent: placement,
         motion_context_animated: layer.motion_context_animated,
         has_hit_targets: layer.has_hit_targets,
         has_origin_sinks: layer.has_origin_sinks,
