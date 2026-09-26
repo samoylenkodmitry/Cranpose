@@ -57,3 +57,41 @@ fn subcompose_missing_policy_cell_measures_empty_layout() {
     assert_eq!(result.size.height, 8.0);
     assert!(result.placements.is_empty());
 }
+
+fn groups_composed_by(content: impl FnMut() + 'static) -> usize {
+    let _app_context = crate::render_state::app_context_test_scope();
+    crate::run_test_composition(content)
+        .composition
+        .debug_slot_table_stats()
+        .group_count
+}
+
+#[test]
+fn a_widget_that_is_one_layout_composes_as_few_groups_as_a_bare_layout() {
+    use crate::{
+        layout::policies::EmptyMeasurePolicy,
+        widgets::{Box, BoxSpec, Column, ColumnSpec, Row, RowSpec, Spacer},
+    };
+    let layout = groups_composed_by(|| {
+        Layout(Modifier::empty(), EmptyMeasurePolicy, || {});
+    });
+    let widgets = [
+        groups_composed_by(|| {
+            Row(Modifier::empty(), RowSpec::default(), || {});
+        }),
+        groups_composed_by(|| {
+            Column(Modifier::empty(), ColumnSpec::default(), || {});
+        }),
+        groups_composed_by(|| {
+            Box(Modifier::empty(), BoxSpec::default(), || {});
+        }),
+        groups_composed_by(|| {
+            Spacer(crate::modifier::Size::default());
+        }),
+    ];
+    assert_eq!(
+        widgets, [layout; 4],
+        "a widget composing through `Layout` pays for a second group, its read \
+         observation and its snapshot on every recomposition"
+    );
+}

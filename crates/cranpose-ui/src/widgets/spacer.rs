@@ -6,7 +6,7 @@ use crate::{
     composable,
     layout::policies::LeafMeasurePolicy,
     modifier::{Modifier, Size},
-    widgets::Layout,
+    widgets::layout::compose_layout,
 };
 
 /// A component that represents an empty space.
@@ -30,5 +30,5 @@ use crate::{
 /// ```
 #[composable]
 pub fn Spacer(size: Size) -> NodeId {
-    Layout(Modifier::empty(), LeafMeasurePolicy::new(size), || {})
+    compose_layout(Modifier::empty(), LeafMeasurePolicy::new(size), || {})
 }
