@@ -49,7 +49,7 @@ fn effect(size: Size, touch: (f32, f32), global: f32, local: f32) -> Option<Rend
 #[composable]
 pub(super) fn TabLighting(
     size: Size,
-    transform: GraphicsLayer,
+    transform: impl Fn() -> GraphicsLayer + 'static,
     touch: cranpose_core::MutableState<(f32, f32)>,
     glow: cranpose_core::State<f32>,
     local_glow_factor: cranpose_core::State<f32>,
@@ -64,7 +64,7 @@ pub(super) fn TabLighting(
                     glow.get(),
                     glow.get() * local_glow_factor.get(),
                 ),
-                ..transform.clone()
+                ..transform()
             }),
         BoxSpec::default(),
         || {},

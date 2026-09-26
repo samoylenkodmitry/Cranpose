@@ -127,6 +127,7 @@ runners! {
     robot_liquid_round_glass_edge_refraction,
     robot_liquid_scroll_exact_external_contract,
     robot_liquid_segmented_cheatsheet,
+    robot_liquid_segmented_glide_budget,
     robot_liquid_tab_bar_pill_containment,
     robot_liquid_tab_content_anchor,
     robot_liquid_tab_flight_dark_scheme_ink_recolor,

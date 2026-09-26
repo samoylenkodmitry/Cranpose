@@ -298,27 +298,51 @@ pub fn rememberMutableStateOfNeverEqual<T: Clone + 'static>(
     })
 }
 
+/// A state computed from other states, as in Kotlin.
+///
+/// `compute` runs in a scope of its own: the states it reads subscribe that
+/// scope, not the composable reading the result, and a change to them runs
+/// `compute` again without recomposing anyone. The readers recompose only
+/// when the result differs from the last one. A composable that reads
+/// `derivedStateOf(|| index_under(offset.get()))` as an offset animates
+/// recomposes once per new index rather than once per frame.
 #[expect(non_snake_case)]
 #[track_caller]
-pub fn derivedStateOf<T: 'static + Clone>(compute: impl Fn() -> T + 'static) -> State<T> {
+pub fn derivedStateOf<T: 'static + Clone + PartialEq>(
+    compute: impl Fn() -> T + 'static,
+) -> State<T> {
     let source = crate::caller_location_key();
+    let compute: Rc<dyn Fn() -> T> = Rc::new(compute);
     composer_context::with_composer(|composer| {
         composer.with_group(source, |composer| {
-            let should_recompute = composer
-                .current_recompose_scope()
-                .is_none_or(|scope| scope.should_recompose());
+            if let Some(scope) = composer.current_recompose_scope() {
+                scope.mark_derivation();
+            }
+            composer.set_recompose_callback(move |composer| {
+                composer
+                    .remember_at(source, || None::<DerivedState<T>>)
+                    .update(|slot| {
+                        if let Some(derived) = slot {
+                            derived.recompute();
+                        }
+                    });
+            });
             let runtime = composer.runtime_handle();
-            let compute_rc: Rc<dyn Fn() -> T> = Rc::new(compute);
-            let derived = composer.remember_at(source, || {
-                DerivedState::new(runtime.clone(), compute_rc.clone())
-            });
-            derived.update(|derived| {
-                derived.set_compute(compute_rc.clone());
-                if should_recompute {
-                    derived.recompute();
-                }
-            });
-            derived.with(|derived| derived.state.as_state())
+            composer
+                .remember_at(source, || None::<DerivedState<T>>)
+                .update(|slot| {
+                    let derived = match slot.take() {
+                        Some(mut derived) => {
+                            derived.set_compute(compute);
+                            derived.recompute();
+                            derived
+                        }
+                        None => DerivedState::new(runtime, compute),
+                    };
+                    let state = derived.state.as_state();
+                    *slot = Some(derived);
+                    state
+                })
         })
     })
 }

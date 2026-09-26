@@ -746,6 +746,27 @@ fn composable_skips_when_inputs_unchanged() {
 }
 
 #[test]
+fn composable_takes_a_closure_that_returns_a_value() {
+    thread_local! {
+        static READ: Cell<i32> = const { Cell::new(0) };
+    }
+
+    #[composable]
+    fn value_reader(value: impl Fn() -> i32 + 'static) {
+        READ.with(|read| read.set(value()));
+    }
+
+    let mut composition = test_composition();
+    let key = location_key(file!(), line!(), column!());
+    for expected in [3, 7] {
+        composition
+            .render(key, move || value_reader(move || expected))
+            .expect("render succeeds");
+        READ.with(|read| assert_eq!(read.get(), expected));
+    }
+}
+
+#[test]
 fn unit_return_composable_skips_without_return_value_slot() {
     thread_local! {
         static UNIT_INVOCATIONS: Cell<usize> = const { Cell::new(0) };

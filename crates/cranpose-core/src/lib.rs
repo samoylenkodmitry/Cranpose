@@ -560,6 +560,7 @@ pub(crate) struct RecomposeScopeInner {
     pending_recompose: Cell<bool>,
     force_reuse: Cell<bool>,
     force_recompose: Cell<bool>,
+    derivation: Cell<bool>,
     retention_mode: Cell<RetentionMode>,
     parent_hint: Cell<Option<NodeId>>,
     recompose: RefCell<Option<RecomposeCallback>>,
@@ -585,6 +586,7 @@ impl RecomposeScopeInner {
             pending_recompose: Cell::new(false),
             force_reuse: Cell::new(false),
             force_recompose: Cell::new(false),
+            derivation: Cell::new(false),
             retention_mode: Cell::new(RetentionMode::DisposeWhenInactive),
             parent_hint: Cell::new(None),
             recompose: RefCell::new(None),
@@ -652,6 +654,17 @@ impl Hash for RecomposeScope {
 }
 
 impl RecomposeScope {
+    /// Marks this scope as one that only recomputes a derived state: running
+    /// it changes nothing a composition shows unless the value it writes
+    /// invalidates the scopes that read it.
+    pub(crate) fn mark_derivation(&self) {
+        self.inner.derivation.set(true);
+    }
+
+    pub(crate) fn is_derivation(&self) -> bool {
+        self.inner.derivation.get()
+    }
+
     fn new(runtime: RuntimeHandle) -> Self {
         Self {
             inner: Rc::new(RecomposeScopeInner::new(runtime)),

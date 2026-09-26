@@ -108,7 +108,13 @@ fn is_zero_arg_fn_impl_trait(ty: &Type) -> bool {
                 if (ident_str == "Fn" || ident_str == "FnMut")
                     && let syn::PathArguments::Parenthesized(args) = &segment.arguments
                 {
-                    return args.inputs.is_empty();
+                    let returns_unit = match &args.output {
+                        ReturnType::Default => true,
+                        ReturnType::Type(_, ty) => {
+                            matches!(&**ty, Type::Tuple(tuple) if tuple.elems.is_empty())
+                        }
+                    };
+                    return args.inputs.is_empty() && returns_unit;
                 }
             }
             false
