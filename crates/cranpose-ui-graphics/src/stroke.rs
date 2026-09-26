@@ -15,7 +15,10 @@
 //! grows. This is exactly the convention already baked into the sweep-gradient
 //! branch of `shape.wgsl`, which derives its parameter from `atan2(dy, dx)`.
 
-use crate::{Point, Rect};
+use crate::{
+    Point, Rect,
+    float::{all_finite, at_least, within},
+};
 
 /// Shape of the two ends of an open stroked path (an arc, today).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -84,7 +87,7 @@ impl Stroke {
     /// This is the amount the stroke bleeds outside (and inside) the geometry.
     pub fn half_width(&self) -> f32 {
         if self.width.is_finite() {
-            (self.width * 0.5).max(0.0)
+            at_least(self.width * 0.5, 0.0)
         } else {
             0.0
         }
@@ -92,7 +95,11 @@ impl Stroke {
 
     /// A stroke is renderable only when it has a strictly positive, finite width.
     pub fn is_visible(&self) -> bool {
-        self.width.is_finite() && self.width > 0.0
+        // The positive finite floats are the bit patterns 1 through the
+        // largest finite one; zero, the negatives, infinity and NaN fall
+        // outside. One integer compare instead of two float compares, each
+        // an FPSCR transfer on armv7, for every stroked primitive recorded.
+        self.width.to_bits().wrapping_sub(1) < f32::MAX.to_bits()
     }
 
     /// Scales the stroke width (used when a layer transform scales the shape).
@@ -215,18 +222,19 @@ impl ArcGeometry {
         sweep_angle: f32,
         cap: StrokeCap,
     ) -> Self {
-        let finite = center.x.is_finite()
-            && center.y.is_finite()
-            && inner_radius.is_finite()
-            && outer_radius.is_finite()
-            && start_angle.is_finite()
-            && sweep_angle.is_finite();
-        if !finite {
+        if !all_finite([
+            center.x,
+            center.y,
+            inner_radius,
+            outer_radius,
+            start_angle,
+            sweep_angle,
+        ]) {
             return Self::DEGENERATE;
         }
 
-        let outer = outer_radius.max(0.0);
-        let inner = inner_radius.clamp(0.0, outer);
+        let outer = at_least(outer_radius, 0.0);
+        let inner = within(inner_radius, 0.0, outer);
 
         let (mut start, mut sweep) = if sweep_angle < 0.0 {
             (start_angle + sweep_angle, -sweep_angle)
@@ -419,15 +427,15 @@ pub fn arc_band(radius: f32, inner_radius: f32, stroke: Option<Stroke>) -> (f32,
                 return (0.0, 0.0, stroke.cap);
             }
             let half = stroke.half_width();
-            let radius = radius.max(0.0);
-            ((radius - half).max(0.0), radius + half, stroke.cap)
+            let radius = at_least(radius, 0.0);
+            (at_least(radius - half, 0.0), radius + half, stroke.cap)
         }
         None => {
             if !radius.is_finite() || !inner_radius.is_finite() {
                 return (0.0, 0.0, StrokeCap::Butt);
             }
-            let outer = radius.max(0.0);
-            let inner = inner_radius.clamp(0.0, outer);
+            let outer = at_least(radius, 0.0);
+            let inner = within(inner_radius, 0.0, outer);
             (inner, outer, StrokeCap::Butt)
         }
     }

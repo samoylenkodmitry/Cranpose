@@ -83,6 +83,11 @@ fn stroke_rejects_non_positive_and_non_finite_widths() {
     assert!(!Stroke::new(-3.0).is_visible());
     assert!(!Stroke::new(f32::NAN).is_visible());
     assert!(!Stroke::new(f32::INFINITY).is_visible());
+    assert!(!Stroke::new(-0.0).is_visible());
+    assert!(!Stroke::new(f32::NEG_INFINITY).is_visible());
+    assert!(!Stroke::new(-f32::NAN).is_visible());
+    assert!(Stroke::new(f32::from_bits(1)).is_visible());
+    assert!(Stroke::new(f32::MAX).is_visible());
     assert_eq!(Stroke::new(f32::NAN).half_width(), 0.0);
     assert_eq!(Stroke::new(-3.0).half_width(), 0.0);
 }

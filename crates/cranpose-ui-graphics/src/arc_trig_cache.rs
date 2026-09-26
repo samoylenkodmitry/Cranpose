@@ -1,4 +1,7 @@
-use crate::{ArcGeometry, TAU};
+use crate::{
+    ArcGeometry, TAU,
+    float::{at_least, within},
+};
 
 #[derive(Clone, Debug)]
 struct AngleTrig<const N: usize> {
@@ -45,10 +48,10 @@ impl ArcTrigCache {
         if geometry.sweep_angle >= TAU && geometry.start_angle == 0.0 {
             return [0.0, -1.0, 0.0, -1.0];
         }
-        let half_sweep = geometry.sweep_angle.clamp(0.0, TAU) * 0.5;
+        let half_sweep = within(geometry.sweep_angle, 0.0, TAU) * 0.5;
         let (mid_sin, mid_cos) = self.mid.resolve(geometry.start_angle + half_sweep);
         let (half_sin, half_cos) = self.half.resolve(half_sweep);
-        [mid_sin, mid_cos, half_sin.max(0.0), half_cos]
+        [mid_sin, mid_cos, at_least(half_sin, 0.0), half_cos]
     }
 }
 
