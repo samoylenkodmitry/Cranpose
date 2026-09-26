@@ -2020,6 +2020,46 @@ enum EllipsisPlacement {
 }
 
 impl EllipsisPlacement {
+    /// How many of `kept_chars` stay before the ellipsis and how many after.
+    fn split(self, kept_chars: usize) -> (usize, usize) {
+        match self {
+            Self::End => (kept_chars, 0),
+            Self::Start => (0, kept_chars),
+            Self::Middle => (kept_chars.div_ceil(2), kept_chars / 2),
+        }
+    }
+
+    /// The most characters an elided line can keep within `width_limit`,
+    /// estimated from the line's prefix widths and the ellipsis's width
+    /// without measuring any elided string. Shaping across the cut can move
+    /// the real width a little either way, so callers confirm it.
+    fn estimated_kept_chars(
+        self,
+        prefix_widths: &TextLinePrefixWidths,
+        ellipsis_width: f32,
+        width_limit: f32,
+    ) -> Option<usize> {
+        let char_count = prefix_widths.char_count();
+        let width = |kept_chars: usize| {
+            let (head_chars, tail_chars) = self.split(kept_chars);
+            Some(
+                prefix_widths.width_for_char_range(0, head_chars)?
+                    + ellipsis_width
+                    + prefix_widths.width_for_char_range(char_count - tail_chars, char_count)?,
+            )
+        };
+        let (mut fitting, mut overflowing) = (0usize, char_count + 1);
+        while fitting + 1 < overflowing {
+            let kept_chars = fitting + (overflowing - fitting) / 2;
+            if width(kept_chars)? <= width_limit + WRAP_EPSILON {
+                fitting = kept_chars;
+            } else {
+                overflowing = kept_chars;
+            }
+        }
+        Some(fitting)
+    }
+
     fn for_options(options: TextLayoutOptions) -> Option<Self> {
         let single_line = options.max_lines == 1;
         match options.overflow {
@@ -2042,11 +2082,7 @@ impl EllipsisPlacement {
         kept_chars: usize,
     ) -> crate::text::AnnotatedString {
         let char_count = boundaries.len() - 1;
-        let (head_chars, tail_chars) = match self {
-            Self::End => (kept_chars, 0),
-            Self::Start => (0, kept_chars),
-            Self::Middle => (kept_chars.div_ceil(2), kept_chars / 2),
-        };
+        let (head_chars, tail_chars) = self.split(kept_chars);
         let head_end = source_range.start + boundaries[head_chars];
         let tail_start = source_range.start + boundaries[char_count - tail_chars];
         crate::text::AnnotatedString::builder()
@@ -2102,6 +2138,29 @@ fn fit_ellipsis<M: TextMeasurer + ?Sized>(
 
     let mut fitting = 0usize;
     let mut overflowing = boundaries.len();
+    // The line's prefix widths place the cut without measuring an elided
+    // string per guess; measuring the guess and the one past it confirms it,
+    // and the search below only runs when shaping across the cut moved it.
+    let guess = best.measured_width.and_then(|ellipsis_width| {
+        measurer
+            .measure_line_prefix_widths(source, source_range.clone(), style)
+            .filter(|widths| widths.char_count() + 1 == boundaries.len())
+            .and_then(|widths| placement.estimated_kept_chars(&widths, ellipsis_width, width_limit))
+    });
+    if let Some(guess) = guess.filter(|guess| *guess > 0) {
+        for kept_chars in [guess, guess + 1] {
+            if kept_chars <= fitting || kept_chars >= overflowing {
+                break;
+            }
+            match elided_line(kept_chars) {
+                Some(line) => {
+                    fitting = kept_chars;
+                    best = line;
+                }
+                None => overflowing = kept_chars,
+            }
+        }
+    }
     while fitting + 1 < overflowing {
         let kept_chars = fitting + (overflowing - fitting) / 2;
         match elided_line(kept_chars) {

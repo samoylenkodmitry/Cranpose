@@ -1502,3 +1502,122 @@ fn a_measurer_without_font_metrics_has_no_line_box() {
     let _app_context = crate::render_state::app_context_test_scope();
     assert_eq!(text_line_box(&TextStyle::default()), None);
 }
+
+/// Monospaced widths that count the elided strings measured. An elided
+/// string measures `cut_penalty` wider than the line's prefix widths say, as
+/// shaping across the cut can make it.
+struct EllipsisProbeMeasurer {
+    elided_measures: Rc<Cell<usize>>,
+    cut_penalty: f32,
+}
+
+impl TextMeasurer for EllipsisProbeMeasurer {
+    fn measure(&self, text: &crate::text::AnnotatedString, style: &TextStyle) -> TextMetrics {
+        let mut metrics = monospaced_measure(text, style);
+        if text.text.contains(ELLIPSIS) {
+            self.elided_measures.set(self.elided_measures.get() + 1);
+            metrics.width += self.cut_penalty;
+        }
+        metrics
+    }
+
+    fn measure_line_prefix_widths(
+        &self,
+        text: &crate::text::AnnotatedString,
+        line_range: Range<usize>,
+        style: &TextStyle,
+    ) -> Option<TextLinePrefixWidths> {
+        MonospacedTextMeasurer.measure_line_prefix_widths(text, line_range, style)
+    }
+
+    fn get_offset_for_position(
+        &self,
+        text: &crate::text::AnnotatedString,
+        style: &TextStyle,
+        x: f32,
+        y: f32,
+    ) -> usize {
+        monospaced_offset_for_position(text, style, x, y)
+    }
+
+    fn get_cursor_x_for_offset(
+        &self,
+        text: &crate::text::AnnotatedString,
+        style: &TextStyle,
+        offset: usize,
+    ) -> f32 {
+        monospaced_cursor_x_for_offset(text, style, offset)
+    }
+
+    fn layout(&self, text: &crate::text::AnnotatedString, style: &TextStyle) -> TextLayoutResult {
+        monospaced_layout(text, style)
+    }
+}
+
+/// The most characters `placement` can keep within `max_width`, found by
+/// measuring every elided candidate.
+fn widest_fitting_elision(
+    measurer: &EllipsisProbeMeasurer,
+    source: &crate::text::AnnotatedString,
+    style: &TextStyle,
+    max_width: f32,
+    placement: EllipsisPlacement,
+) -> String {
+    let boundaries = char_boundaries(&source.text);
+    (0..boundaries.len())
+        .rev()
+        .map(|kept| placement.elide(source, 0..source.text.len(), &boundaries, kept))
+        .find(|elided| measurer.measure(elided, style).width <= max_width + WRAP_EPSILON)
+        .map(|elided| elided.text)
+        .unwrap_or_default()
+}
+
+fn elided_text(line: DisplayLine) -> String {
+    match line.text {
+        DisplayLineText::Ellipsized(text) => text.text,
+        DisplayLineText::Source => String::from("<source>"),
+    }
+}
+
+#[test]
+fn fit_ellipsis_places_the_cut_from_prefix_widths() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let style = TextStyle::default();
+    let source = crate::text::AnnotatedString::from("abcdefghij".repeat(30).as_str());
+    let max_width = 173.0;
+    for placement in [
+        EllipsisPlacement::End,
+        EllipsisPlacement::Start,
+        EllipsisPlacement::Middle,
+    ] {
+        for cut_penalty in [0.0, 25.0] {
+            let elided_measures = Rc::new(Cell::new(0));
+            let measurer = EllipsisProbeMeasurer {
+                elided_measures: Rc::clone(&elided_measures),
+                cut_penalty,
+            };
+            let line = fit_ellipsis(
+                &measurer,
+                None,
+                &source,
+                0..source.text.len(),
+                &style,
+                Some(max_width),
+                placement,
+            );
+            let probes = elided_measures.get();
+            let expected = widest_fitting_elision(&measurer, &source, &style, max_width, placement);
+            assert_eq!(
+                elided_text(line),
+                expected,
+                "{placement:?} with a {cut_penalty} px cut keeps the most that fits"
+            );
+            if cut_penalty == 0.0 {
+                assert!(
+                    probes <= 3,
+                    "{placement:?}: exact prefix widths confirm the cut in {probes} elided measures, not a search"
+                );
+            }
+        }
+    }
+}
