@@ -119,8 +119,8 @@ fn exhaustion_preserves_the_published_snapshot_and_rejects_id_reuse() {
         .expect("last available ID");
     assert_eq!(snapshot.ids, vec![i32::MAX]);
     assert_eq!(
-        snapshot.update(vec![element_with(8, None)]),
-        Err(AccessibilityIdentityError::Exhausted)
+        snapshot.update(vec![element_with(8, None)]).err(),
+        Some(AccessibilityIdentityError::Exhausted)
     );
     assert_eq!(snapshot.identity(i32::MAX), Some((7, None)));
     snapshot
@@ -136,8 +136,10 @@ fn duplicate_identities_are_rejected_without_changing_the_published_tree() {
         .expect("unique identity");
     let id = snapshot.ids[0];
     assert_eq!(
-        snapshot.update(vec![element_with(8, Some(3)), element_with(8, Some(3))]),
-        Err(AccessibilityIdentityError::Duplicate(8, Some(3)))
+        snapshot
+            .update(vec![element_with(8, Some(3)), element_with(8, Some(3))])
+            .err(),
+        Some(AccessibilityIdentityError::Duplicate(8, Some(3)))
     );
     assert_eq!(snapshot.identity(id), Some((7, None)));
     assert_eq!(snapshot.last_id, id);
@@ -162,4 +164,19 @@ fn snapshot_identity_is_independent_of_state_and_reading_order() {
             .element(ids[1])
             .is_some_and(|element| element.focused && element.label == "Updated")
     );
+}
+
+#[test]
+fn an_update_hands_back_the_snapshot_it_replaced() {
+    let mut snapshot = AccessibilitySnapshot::default();
+    snapshot
+        .update(vec![element_with(7, None)])
+        .expect("unique identity");
+    let first = snapshot.ids.clone();
+    let (elements, ids) = snapshot
+        .update(vec![element_with(8, None)])
+        .expect("unique identity");
+    assert_eq!(ids, first);
+    assert_eq!(elements, vec![element_with(7, None)]);
+    assert_ne!(snapshot.ids, first);
 }

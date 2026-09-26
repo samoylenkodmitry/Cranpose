@@ -126,9 +126,10 @@ public final class CranposeAccessibilityParserTest {
         assertFalse(provider.performAction(22, AccessibilityNodeInfo.ACTION_LONG_CLICK, null));
         assertFalse(provider.performAction(22, AccessibilityNodeInfo.ACTION_SET_TEXT, null));
         assertFalse(provider.performAction(22, AccessibilityNodeInfo.ACTION_DISMISS, null));
-        assertEquals(1, node.getActionList().size());
+        assertEquals(2, node.getActionList().size());
         assertFalse(node.isClickable());
         assertFalse(node.isLongClickable());
+        assertTrue(node.getActionList().contains(AccessibilityNodeInfo.AccessibilityAction.ACTION_SHOW_ON_SCREEN));
         assertTrue(node.getActionList().contains(AccessibilityNodeInfo.AccessibilityAction.ACTION_ACCESSIBILITY_FOCUS));
     }
 
@@ -147,5 +148,43 @@ public final class CranposeAccessibilityParserTest {
                 .get(0).getContentDescription());
         assertTrue(provider.findAccessibilityNodeInfosByText("notes", 99).isEmpty());
         assertTrue(provider.findAccessibilityNodeInfosByText("absent", -1).isEmpty());
+    }
+
+    private static boolean update(AccessibilityNodeProvider provider, int[] order, String records,
+            int[] moves) throws Exception {
+        Method method = provider.getClass().getDeclaredMethod(
+                "update", int[].class, List.class, int[].class);
+        method.setAccessible(true);
+        return (Boolean) method.invoke(provider, order, parse(records), moves);
+    }
+
+    private static Rect bounds(AccessibilityNodeProvider provider, int id) {
+        Rect rect = new Rect();
+        provider.createAccessibilityNodeInfo(id).getBoundsInParent(rect);
+        return rect;
+    }
+
+    @Test
+    public void updatesKeepUnsentControlsResendChangedOnesAndMoveBounds() throws Exception {
+        AccessibilityNodeProvider provider = provider("");
+        assertTrue(update(provider, new int[]{41, 42, 43},
+                record("41", "One", "") + "\n" + record("42", "Two", "") + "\n"
+                        + record("43", "Three", ""), new int[0]));
+
+        assertTrue(update(provider, new int[]{43, 41}, record("43", "Renamed", ""),
+                new int[]{41, 5, 6, 7, 8}));
+
+        assertEquals("Renamed", provider.createAccessibilityNodeInfo(43).getContentDescription());
+        assertEquals("One", provider.createAccessibilityNodeInfo(41).getContentDescription());
+        assertEquals(new Rect(5, 6, 7, 8), bounds(provider, 41));
+        assertEquals(new Rect(2, 4, 62, 84), bounds(provider, 43));
+        assertEquals(null, provider.createAccessibilityNodeInfo(42));
+    }
+
+    @Test
+    public void anUpdateNamingAnUnknownControlAsksForEveryRecord() throws Exception {
+        AccessibilityNodeProvider provider = provider(record("51", "Kept", ""));
+        assertFalse(update(provider, new int[]{51, 52}, "", new int[0]));
+        assertEquals("Kept", provider.createAccessibilityNodeInfo(51).getContentDescription());
     }
 }
