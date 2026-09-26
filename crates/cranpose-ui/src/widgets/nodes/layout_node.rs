@@ -383,6 +383,16 @@ impl LayoutNode {
     }
 
     pub fn set_modifier(&mut self, modifier: Modifier) {
+        // An equal modifier leaves every element's node as it was. Only a
+        // chain reading modifier locals resyncs, since its parent may now
+        // provide others.
+        if self.modifier == modifier
+            && !self
+                .modifier_capabilities
+                .contains(NodeCapabilities::MODIFIER_LOCALS)
+        {
+            return;
+        }
         let modifier_changed = !self.modifier.structural_eq(&modifier);
         self.modifier = modifier;
         self.sync_modifier_chain();
