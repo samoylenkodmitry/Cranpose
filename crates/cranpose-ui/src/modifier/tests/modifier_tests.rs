@@ -2154,3 +2154,27 @@ fn height_in_and_size_in_set_the_bounds_they_are_given_and_leave_the_rest_open()
     assert_eq!(props.min_width(), None);
     assert_eq!(props.max_width(), Some(120.0));
 }
+
+#[test]
+fn modifiers_without_inspector_metadata_carry_no_inspector_list() {
+    let first = Modifier::with_element(TestDelegatingElement);
+    let joined = first.then(Modifier::with_element(TestDelegatingElement));
+    for modifier in [&first, &joined] {
+        assert!(
+            matches!(
+                modifier.kind,
+                super::ModifierKind::Single {
+                    inspector: None,
+                    ..
+                }
+            ),
+            "an empty inspector list costs an allocation on every modifier"
+        );
+    }
+    let recorded = joined.with_inspector_metadata(inspector_metadata("test", |info| {
+        info.add_property("value", "1");
+    }));
+    assert_eq!(recorded.iter_inspector_metadata().count(), 1);
+    let rejoined = Modifier::with_element(TestDelegatingElement).then(recorded);
+    assert_eq!(rejoined.iter_inspector_metadata().count(), 1);
+}

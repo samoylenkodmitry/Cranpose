@@ -188,6 +188,25 @@ fn describe_dimension(constraint: DimensionConstraint) -> String {
     }
 }
 
+fn inspector_slice(inspector: &Option<Rc<Vec<InspectorMetadata>>>) -> &[InspectorMetadata] {
+    inspector.as_deref().map_or(&[], Vec::as_slice)
+}
+
+/// The inspector metadata of two modifiers joined, first `first`'s, or
+/// `None` when neither has any.
+fn merged_inspector(
+    first: &[InspectorMetadata],
+    second: &[InspectorMetadata],
+) -> Option<Rc<Vec<InspectorMetadata>>> {
+    if first.is_empty() && second.is_empty() {
+        return None;
+    }
+    let mut merged = Vec::with_capacity(first.len() + second.len());
+    merged.extend_from_slice(first);
+    merged.extend_from_slice(second);
+    Some(Rc::new(merged))
+}
+
 pub(crate) fn inspector_metadata<F>(name: &'static str, recorder: F) -> InspectorMetadata
 where
     F: FnOnce(&mut InspectorInfo),
@@ -218,7 +237,9 @@ enum ModifierKind {
     Empty,
     Single {
         elements: Rc<Vec<DynModifierElement>>,
-        inspector: Rc<Vec<InspectorMetadata>>,
+        /// `None` when no element records inspector metadata, which is
+        /// always outside tests and modifier debugging: no allocation.
+        inspector: Option<Rc<Vec<InspectorMetadata>>>,
     },
 }
 
@@ -887,9 +908,7 @@ impl Modifier {
         merged_elements.extend_from_slice(self_elements);
         merged_elements.extend_from_slice(next_elements);
 
-        let mut merged_inspector = Vec::with_capacity(self_inspector.len() + next_inspector.len());
-        merged_inspector.extend_from_slice(self_inspector);
-        merged_inspector.extend_from_slice(next_inspector);
+        let merged_inspector = merged_inspector(self_inspector, next_inspector);
 
         let fingerprints = append_fingerprints(
             ModifierFingerprints {
@@ -901,7 +920,7 @@ impl Modifier {
         Modifier {
             kind: ModifierKind::Single {
                 elements: Rc::new(merged_elements),
-                inspector: Rc::new(merged_inspector),
+                inspector: merged_inspector,
             },
             strict_fingerprint: fingerprints.strict,
             structural_fingerprint: fingerprints.structural,
@@ -933,7 +952,7 @@ impl Modifier {
         match &self.kind {
             ModifierKind::Empty => ModifierInspectorIterator { inner: [].iter() },
             ModifierKind::Single { inspector, .. } => ModifierInspectorIterator {
-                inner: inspector.iter(),
+                inner: inspector_slice(inspector).iter(),
             },
         }
     }
@@ -949,7 +968,9 @@ impl Modifier {
     pub(crate) fn inspector_metadata(&self) -> Vec<InspectorMetadata> {
         match &self.kind {
             ModifierKind::Empty => Vec::new(),
-            ModifierKind::Single { inspector, .. } => inspector.as_ref().clone(),
+            ModifierKind::Single { inspector, .. } => {
+                inspector.as_deref().cloned().unwrap_or_default()
+            }
         }
     }
 
@@ -962,7 +983,9 @@ impl Modifier {
             } => Self {
                 kind: ModifierKind::Single {
                     elements: Rc::new(elements.iter().cloned().collect()),
-                    inspector: Rc::new(inspector.as_ref().clone()),
+                    inspector: inspector
+                        .as_ref()
+                        .map(|inspector| Rc::new(inspector.as_ref().clone())),
                 },
                 strict_fingerprint: self.strict_fingerprint,
                 structural_fingerprint: self.structural_fingerprint,
@@ -1055,7 +1078,7 @@ impl Modifier {
             Self {
                 kind: ModifierKind::Single {
                     elements: Rc::new(elements),
-                    inspector: Rc::new(Vec::new()),
+                    inspector: None,
                 },
                 strict_fingerprint: fingerprints.strict,
                 structural_fingerprint: fingerprints.structural,
@@ -1075,7 +1098,7 @@ impl Modifier {
             ModifierKind::Single {
                 elements,
                 inspector,
-            } => Some((elements.as_slice(), inspector.as_slice())),
+            } => Some((elements.as_slice(), inspector_slice(inspector))),
         }
     }
 
@@ -1089,12 +1112,12 @@ impl Modifier {
                 elements,
                 inspector,
             } => {
-                let mut new_inspector = inspector.as_ref().clone();
+                let mut new_inspector = inspector.as_deref().cloned().unwrap_or_default();
                 new_inspector.push(metadata);
                 Self {
                     kind: ModifierKind::Single {
                         elements,
-                        inspector: Rc::new(new_inspector),
+                        inspector: Some(Rc::new(new_inspector)),
                     },
                     strict_fingerprint: self.strict_fingerprint,
                     structural_fingerprint: self.structural_fingerprint,
