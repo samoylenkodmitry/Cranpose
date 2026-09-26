@@ -25,7 +25,6 @@ struct VertexOutput {
     @location(12) @interpolate(flat) stop_color1: vec4<f32>,
     @location(13) @interpolate(flat) stop_color2: vec4<f32>,
     @location(14) @interpolate(flat) stop_color3: vec4<f32>,
-    @location(1) @interpolate(flat) interior: vec4<f32>,
 }
 
 // What a solid batch's fragments need: `VertexOutput` without the brush
@@ -41,7 +40,6 @@ struct SolidOutput {
     @location(5) @interpolate(flat) clip_rect: vec4<f32>,
     @location(6) @interpolate(flat) stroke_params: vec4<f32>,
     @location(7) @interpolate(flat) arc_params: vec4<f32>,
-    @location(8) @interpolate(flat) interior: vec4<f32>,
 }
 
 fn solid_output(full: VertexOutput) -> SolidOutput {
@@ -54,7 +52,6 @@ fn solid_output(full: VertexOutput) -> SolidOutput {
     output.clip_rect = full.clip_rect;
     output.stroke_params = full.stroke_params;
     output.arc_params = full.arc_params;
-    output.interior = full.interior;
     return output;
 }
 
@@ -75,7 +72,6 @@ fn full_output(solid: SolidOutput) -> VertexOutput {
     output.stop_color1 = vec4<f32>(0.0);
     output.stop_color2 = vec4<f32>(0.0);
     output.stop_color3 = vec4<f32>(0.0);
-    output.interior = solid.interior;
     return output;
 }
 
@@ -92,7 +88,6 @@ struct GradientFillOutput {
     @location(8) @interpolate(flat) stop_color1: vec4<f32>,
     @location(9) @interpolate(flat) stop_color2: vec4<f32>,
     @location(10) @interpolate(flat) stop_color3: vec4<f32>,
-    @location(11) @interpolate(flat) interior: vec4<f32>,
 }
 
 fn gradient_fill_output(full: VertexOutput) -> GradientFillOutput {
@@ -109,7 +104,6 @@ fn gradient_fill_output(full: VertexOutput) -> GradientFillOutput {
     output.stop_color1 = full.stop_color1;
     output.stop_color2 = full.stop_color2;
     output.stop_color3 = full.stop_color3;
-    output.interior = full.interior;
     return output;
 }
 
@@ -123,14 +117,13 @@ fn full_from_gradient_fill(fill: GradientFillOutput) -> VertexOutput {
     output.gradient_params = fill.gradient_params;
     output.clip_rect = fill.clip_rect;
     output.stroke_params = vec4<f32>(0.0);
-    output.arc_params = vec4<f32>(0.0);
+    output.arc_params = select(vec4<f32>(0.0), fill_interior(fill.rect, fill.radii), SHAPE_INTERIOR);
     output.brush = fill.brush;
     output.stop_offsets = fill.stop_offsets;
     output.stop_color0 = fill.stop_color0;
     output.stop_color1 = fill.stop_color1;
     output.stop_color2 = fill.stop_color2;
     output.stop_color3 = fill.stop_color3;
-    output.interior = fill.interior;
     return output;
 }
 
@@ -334,6 +327,16 @@ fn resolved_radii(record: ShapeRecord, scale: f32) -> vec4<f32> {
     return clamp(stored, vec4<f32>(0.0), vec4<f32>(limit)) * scale;
 }
 
+// The part of a fill where coverage is exactly 1: its rect inset by its
+// largest corner radius and half a pixel. A fill carries it in `arc_params`,
+// which only arcs use, so it costs no varying vector of its own; on a tiling
+// GPU every vector is written and read back per vertex, and a scene of many
+// small shapes pays for it whether or not any pixel lies inside.
+fn fill_interior(rect: vec4<f32>, radii: vec4<f32>) -> vec4<f32> {
+    let inset = max(max(radii.x, radii.y), max(radii.z, radii.w)) + 0.5;
+    return vec4<f32>(rect.x + inset, rect.y + inset, rect.x + rect.z - inset, rect.y + rect.w - inset);
+}
+
 fn shape_output(
     record: ShapeRecord,
     placement: Placement,
@@ -343,7 +346,6 @@ fn shape_output(
     var output: VertexOutput;
     output.clip_position = clip_position(position);
     output.color = paint(record.color, placement);
-    output.interior = vec4<f32>(1.0, 1.0, 0.0, 0.0);
     output.world_pos = vec4<f32>(position, position - placement.dither_origin);
     output.rect = geometry.rect;
     let scale = geometry.scale;
@@ -383,17 +385,10 @@ fn shape_output(
         } else {
             output.stroke_params = vec4<f32>(0.0);
         }
-        output.arc_params = vec4<f32>(0.0);
-        if (!stroked) {
-            let corner = max(max(output.radii.x, output.radii.y), max(output.radii.z, output.radii.w));
-            let inset = corner + 0.5;
-            let rect = geometry.rect;
-            output.interior = vec4<f32>(
-                rect.x + inset,
-                rect.y + inset,
-                rect.x + rect.z - inset,
-                rect.y + rect.w - inset,
-            );
+        if (SHAPE_INTERIOR && !stroked) {
+            output.arc_params = fill_interior(geometry.rect, output.radii);
+        } else {
+            output.arc_params = vec4<f32>(0.0);
         }
     }
 
@@ -598,6 +593,9 @@ const SHAPE_KIND_ARC: u32 = 2u;
 // so the general program and every specialised one shade one record alike.
 override SHAPE_KIND_FIXED: i32 = -1;
 override SHAPE_SOLID: bool = false;
+// Whether a fill's interior is shaded apart, off for a batch none of whose
+// rounded fills has an interior big enough to repay the test.
+override SHAPE_INTERIOR: bool = true;
 override SHAPE_CLIPPED: bool = true;
 override SHAPE_FLAT: bool = false;
 override SHAPE_DISCARD: bool = false;
@@ -930,8 +928,17 @@ fn shape_coverage_alpha(input: VertexOutput) -> f32 {
     if (SHAPE_FLAT) {
         return 1.0;
     }
-    if (rect_pos.x >= input.interior.x && rect_pos.x <= input.interior.z &&
-        rect_pos.y >= input.interior.y && rect_pos.y <= input.interior.w) {
+    // Packed stroke/arc flags (see the ShapeData comment). Fills leave
+    // stroke_params zeroed, so kind 0 keeps the original code path byte for
+    // byte — and, crucially, stroked and arc shapes stay on this same pipeline
+    // and blend state, so they batch together with fills instead of splitting
+    // the batch.
+    let flags = u32(max(input.stroke_params.y, 0.0));
+    let shape_kind = select(flags & 3u, u32(max(SHAPE_KIND_FIXED, 0)), SHAPE_KIND_FIXED >= 0);
+    let interior = input.arc_params;
+    if (SHAPE_INTERIOR && shape_kind == SHAPE_KIND_FILL &&
+        rect_pos.x >= interior.x && rect_pos.x <= interior.z &&
+        rect_pos.y >= interior.y && rect_pos.y <= interior.w) {
         return 1.0;
     }
 
@@ -946,13 +953,6 @@ fn shape_coverage_alpha(input: VertexOutput) -> f32 {
     let half_size = input.rect.zw * 0.5;
     let local_pos = rect_pos - rect_center;
 
-    // Packed stroke/arc flags (see the ShapeData comment). Fills leave
-    // stroke_params zeroed, so kind 0 keeps the original code path byte for
-    // byte — and, crucially, stroked and arc shapes stay on this same pipeline
-    // and blend state, so they batch together with fills instead of splitting
-    // the batch.
-    let flags = u32(max(input.stroke_params.y, 0.0));
-    let shape_kind = select(flags & 3u, u32(max(SHAPE_KIND_FIXED, 0)), SHAPE_KIND_FIXED >= 0);
     let stroke_cap = (flags >> 2u) & 3u;
     let stroke_join = (flags >> 4u) & 3u;
 
