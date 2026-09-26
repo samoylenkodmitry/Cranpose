@@ -653,6 +653,7 @@ impl AndroidFrameDriver {
     fn pace_displayed_frames(&self, pacer: &mut FramePacer) {
         for frame in self.displayed_rx.try_iter() {
             pacer.record_shown(frame.shown_ns, frame.queued_behind, vsync_period_ns());
+            pacer.record_latency(frame.queued_ns, frame.shown_ns);
         }
     }
 
@@ -1386,6 +1387,19 @@ fn vsync_period_ns() -> i64 {
     }
 }
 
+/// How long a paced loop that leads its slots waits before starting the next
+/// frame; `None` when the vsync callback is the wake.
+fn lead_wake_timeout(pacer: &FramePacer) -> Option<Duration> {
+    let now_ns = crate::android_frame_telemetry::monotonic_nanos();
+    pacer
+        .lead_wake_ns(
+            now_ns,
+            crate::android_vsync::last_vsync_ns(),
+            vsync_period_ns(),
+        )
+        .map(|wake_ns| Duration::from_nanos(u64::try_from(wake_ns - now_ns).unwrap_or(0)))
+}
+
 fn android_frame_latency(requested: Option<&str>) -> u32 {
     requested
         .and_then(|value| value.trim().parse::<u32>().ok())
@@ -1864,7 +1878,7 @@ pub fn run(
             if late_frame_can_start {
                 Some(Duration::ZERO)
             } else if crate::android_vsync::request_wake_at_next_vsync() {
-                idle_timeout
+                lead_wake_timeout(&frame_pacer).or(idle_timeout)
             } else {
                 Some(Duration::ZERO)
             }

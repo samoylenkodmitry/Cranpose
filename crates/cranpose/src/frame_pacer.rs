@@ -29,8 +29,15 @@
 //! while the loop tries the level below again, and waits four times as long
 //! before the next try when that try fails soon.
 //!
+//! A paced frame starts on its slot's vsync, or a share of a period before
+//! it when that brings frames to the screen sooner ([`FrameLead`]): the
+//! compositor takes a frame for the earliest refresh only when it is ready
+//! in time, and a frame just too long for that waits a whole refresh more.
+//!
 //! Until the display has reported a frame, and on a swapchain that never
 //! does, frames start as soon as the renderer takes them.
+
+use crate::frame_lead::FrameLead;
 
 /// Frames whose queue depths are compared before draining a paced queue.
 const HISTORY: usize = 3;
@@ -101,14 +108,15 @@ impl PresentLog {
         self.presents.push_back((id, presented_ns));
     }
 
-    /// How many later presents were queued when present `id` was shown at
-    /// `shown_ns`, or `None` once `id` is forgotten. The display reports
-    /// frames in order, so `id` and every present before it are dropped.
-    pub(crate) fn queued_behind(&mut self, id: u32, shown_ns: i64) -> Option<u32> {
+    /// What present `id`, shown at `shown_ns`, says about the queue, or
+    /// `None` once `id` is forgotten. The display reports frames in order,
+    /// so `id` and every present before it are dropped.
+    pub(crate) fn shown(&mut self, id: u32, shown_ns: i64) -> Option<ShownPresent> {
         let position = self
             .presents
             .iter()
             .position(|(present, _)| *present == id)?;
+        let presented_ns = self.presents[position].1;
         let behind = self
             .presents
             .iter()
@@ -116,8 +124,19 @@ impl PresentLog {
             .filter(|(_, presented)| *presented < shown_ns)
             .count();
         self.presents.drain(..=position);
-        u32::try_from(behind).ok()
+        Some(ShownPresent {
+            queued_behind: u32::try_from(behind).ok()?,
+            presented_ns,
+        })
     }
+}
+
+/// A shown present: how many later presents were queued behind it then, and
+/// when it returned.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ShownPresent {
+    pub(crate) queued_behind: u32,
+    pub(crate) presented_ns: i64,
 }
 
 /// How far ahead of the display frames run.
@@ -201,6 +220,7 @@ pub(crate) struct FramePacer {
     stage: Option<Stage>,
     holds_ns: [i64; 2],
     failed: [bool; 2],
+    lead: FrameLead,
 }
 
 impl Default for FramePacer {
@@ -215,6 +235,7 @@ impl Default for FramePacer {
             stage: None,
             holds_ns: [FIRST_HOLD_NS; 2],
             failed: [false; 2],
+            lead: FrameLead::default(),
         }
     }
 }
@@ -290,6 +311,36 @@ impl FramePacer {
             until_ns,
         });
         self.misses.clear();
+        self.lead.reset();
+    }
+
+    /// Records that a frame queued at `queued_ns` was shown at `shown_ns`,
+    /// so a paced loop learns how far ahead of its slots to start frames.
+    pub(crate) fn record_latency(&mut self, queued_ns: i64, shown_ns: i64) {
+        if self
+            .stage
+            .is_some_and(|stage| stage.level.depth().is_some())
+        {
+            self.lead.record(shown_ns - queued_ns, shown_ns);
+        }
+    }
+
+    /// When a paced loop that leads its slots should wake to start the next
+    /// frame: the next slot's vsync less the lead. `None` without a lead,
+    /// when the vsync callback itself is the wake, or without a vsync.
+    pub(crate) fn lead_wake_ns(
+        &self,
+        now_ns: i64,
+        vsync_ns: i64,
+        vsync_period_ns: i64,
+    ) -> Option<i64> {
+        let lead_ns = self.lead.lead_ns(vsync_period_ns);
+        if lead_ns == 0 || vsync_ns <= 0 || vsync_period_ns <= 0 || now_ns < vsync_ns {
+            return None;
+        }
+        let next_slot_ns =
+            vsync_ns + ((now_ns + lead_ns - vsync_ns) / vsync_period_ns + 1) * vsync_period_ns;
+        Some(next_slot_ns - lead_ns)
     }
 
     /// The level frames run at now, trying the level below once the hold
@@ -366,7 +417,8 @@ impl FramePacer {
         if vsync_ns <= 0 || vsync_period_ns <= 0 {
             return None;
         }
-        let elapsed = (now_ns + SLOT_TOLERANCE_NS - vsync_ns).max(0);
+        let lead_ns = self.lead.lead_ns(vsync_period_ns);
+        let elapsed = (now_ns + SLOT_TOLERANCE_NS + lead_ns - vsync_ns).max(0);
         let slot_ns = vsync_ns + elapsed / vsync_period_ns * vsync_period_ns;
         let taken = self
             .started_slot_ns

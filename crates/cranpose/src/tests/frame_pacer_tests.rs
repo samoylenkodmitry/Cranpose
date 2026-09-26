@@ -361,16 +361,21 @@ fn a_shown_frame_counts_the_presents_queued_behind_it() {
         log.record(id, i64::from(id) * VSYNC);
     }
     assert_eq!(
-        log.queued_behind(0, VSYNC * 5 / 2),
-        Some(2),
+        log.shown(0, VSYNC * 5 / 2),
+        Some(ShownPresent {
+            queued_behind: 2,
+            presented_ns: 0
+        }),
         "presents 1 and 2 had returned by then; 3 had not"
     );
+    assert_eq!(log.shown(0, 0), None, "a reported frame is forgotten");
     assert_eq!(
-        log.queued_behind(0, 0),
-        None,
-        "a reported frame is forgotten"
+        log.shown(3, 4 * VSYNC),
+        Some(ShownPresent {
+            queued_behind: 0,
+            presented_ns: 3 * VSYNC
+        })
     );
-    assert_eq!(log.queued_behind(3, 4 * VSYNC), Some(0));
 }
 
 #[test]
@@ -380,6 +385,54 @@ fn a_present_log_forgets_the_oldest_beyond_its_capacity() {
     for id in 0..=capacity {
         log.record(id, i64::from(id));
     }
-    assert_eq!(log.queued_behind(0, i64::MAX), None);
-    assert_eq!(log.queued_behind(1, 1), Some(0));
+    assert_eq!(log.shown(0, i64::MAX), None);
+    assert_eq!(log.shown(1, 1).map(|shown| shown.queued_behind), Some(0));
+}
+
+/// Records `frames` shown frames each `latency` after being queued, one
+/// vsync apart from `start`, and returns the vsync after the last.
+fn latency_run(pacer: &mut FramePacer, start: i64, frames: i64, latency: i64) -> i64 {
+    for frame in 0..frames {
+        let shown = start + frame * VSYNC;
+        pacer.record_latency(shown - latency, shown);
+    }
+    start + frames * VSYNC
+}
+
+#[test]
+fn a_paced_loop_leads_its_slots_once_leading_shows_frames_sooner() {
+    let mut pacer = shallow();
+    let lead = VSYNC * 3 / 10;
+    let mut shown = SETTLED;
+    assert_eq!(pacer.lead_wake_ns(shown + VSYNC / 2, shown, VSYNC), None);
+    while pacer
+        .lead_wake_ns(shown + VSYNC / 2, shown, VSYNC)
+        .is_none()
+    {
+        assert!(shown < SETTLED + 1000 * VSYNC, "no trial of a lead began");
+        shown = latency_run(&mut pacer, shown, 1, 2 * VSYNC);
+    }
+    assert_eq!(
+        pacer.lead_wake_ns(shown + VSYNC / 2, shown, VSYNC),
+        Some(shown + VSYNC - lead),
+        "the loop wakes the lead ahead of the next slot"
+    );
+    let led = latency_run(&mut pacer, shown, 400, VSYNC);
+    assert_eq!(
+        pacer.lead_wake_ns(led + VSYNC / 2, led, VSYNC),
+        Some(led + VSYNC - lead),
+        "a lead whose frames reached the screen a vsync sooner is kept"
+    );
+    assert!(
+        pacer.begin_frame(led + VSYNC - lead, led, VSYNC),
+        "a frame starts its slot the lead ahead of the vsync"
+    );
+}
+
+#[test]
+fn an_unpaced_loop_learns_no_lead() {
+    let mut pacer = FramePacer::default();
+    shown_run(&mut pacer, 0, 4, 3);
+    let end = latency_run(&mut pacer, 0, 400, 2 * VSYNC);
+    assert_eq!(pacer.lead_wake_ns(end + VSYNC / 2, end, VSYNC), None);
 }
