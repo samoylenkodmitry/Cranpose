@@ -464,18 +464,29 @@ impl AndroidFrameTelemetry {
                 .filter(|sample| sample.pacing == pacing)
                 .count()
         };
-        let leading = self
-            .samples
+        let mut leads: Vec<(i32, usize)> = Vec::new();
+        for sample in &self.samples {
+            // Whole milliseconds: the observed vsync period, and the lead
+            // taken from it, move by a few tenths of one.
+            let lead_ms = (sample.lead_us + 500) / 1000;
+            match leads.iter_mut().find(|(lead, _)| *lead == lead_ms) {
+                Some((_, frames)) => *frames += 1,
+                None => leads.push((lead_ms, 1)),
+            }
+        }
+        leads.sort_unstable();
+        let leads = leads
             .iter()
-            .filter(|sample| sample.lead_us > 0)
-            .count();
+            .map(|(lead, frames)| format!("{lead}ms:{frames}"))
+            .collect::<Vec<_>>()
+            .join(" ");
         log::warn!(
-            "[android-frame]   pacing shallow={} buffered={} unpaced={} unreported={} leading={}",
+            "[android-frame]   pacing shallow={} buffered={} unpaced={} unreported={} leads {}",
             count(FramePacing::Shallow),
             count(FramePacing::Buffered),
             count(FramePacing::Unpaced),
             count(FramePacing::Unreported),
-            leading,
+            leads,
         );
         if !self.shown_latencies_us.is_empty() {
             self.shown_latencies_us.sort_unstable();

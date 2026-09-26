@@ -301,6 +301,7 @@ impl FramePacer {
             *hold = (*hold * 4).min(LONGEST_HOLD_NS);
         }
         let until_ns = now_ns + *hold;
+        self.lead.fall_back();
         self.enter(above, now_ns, Some(until_ns));
     }
 
