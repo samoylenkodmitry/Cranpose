@@ -197,6 +197,8 @@ pub(crate) struct ShellApp {
     pub(crate) text_input_routes: Rc<RefCell<TextInputRoutes>>,
     pub(crate) text_input_router_installed: bool,
     pub(crate) window_roots_seen: Option<u64>,
+    /// Frames with a rebuilt scene since draw observations were last pruned.
+    pub(crate) rebuilt_frames_since_observation_prune: u32,
 }
 
 /// The application: one runtime, one composition, and a surface per window
@@ -630,6 +632,7 @@ where
             text_input_routes: Rc::new(RefCell::new(TextInputRoutes::default())),
             text_input_router_installed: false,
             window_roots_seen: None,
+            rebuilt_frames_since_observation_prune: 0,
         };
         let mut shell = Self {
             app,

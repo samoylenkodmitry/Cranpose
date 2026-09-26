@@ -4064,6 +4064,59 @@ fn draw_state_reads_schedule_draw_repass_without_composition_read() {
 }
 
 #[test]
+fn stale_draw_observations_are_pruned_once_per_interval() {
+    let _guard = test_guard();
+    let root_key = location_key(file!(), line!(), column!());
+    let state_holder: Rc<RefCell<Option<cranpose_core::MutableState<f32>>>> =
+        Rc::new(RefCell::new(None));
+    let state_holder_for_app = Rc::clone(&state_holder);
+    let mut shell = AppShell::new(
+        ScopedUpdateCountingRenderer::with_visual_updates(
+            Rc::new(Cell::new(0)),
+            Rc::new(Cell::new(0)),
+            Rc::new(Cell::new(0)),
+            Rc::new(RefCell::new(Vec::new())),
+        ),
+        root_key,
+        move || {
+            let width_state = rememberMutableStateOf(|| 24.0f32);
+            *state_holder_for_app.borrow_mut() = Some(width_state);
+            draw_observed_width_app(width_state);
+        },
+    );
+    shell.update();
+    let width_state = state_holder
+        .borrow()
+        .as_ref()
+        .copied()
+        .expect("width state should be captured");
+
+    shell.app.rebuilt_frames_since_observation_prune = 0;
+    shell.surfaces[0].retained_visual_nodes.insert(usize::MAX);
+    width_state.set(60.0);
+    shell.update();
+    assert!(
+        shell.surfaces[0]
+            .retained_visual_nodes
+            .contains(&usize::MAX),
+        "a redrawn frame before the interval does not walk the graph"
+    );
+
+    shell.app.rebuilt_frames_since_observation_prune =
+        crate::shell_frame::OBSERVATION_PRUNE_INTERVAL - 1;
+    width_state.set(120.0);
+    shell.update();
+    assert!(
+        !shell.surfaces[0]
+            .retained_visual_nodes
+            .contains(&usize::MAX),
+        "the frame that reaches the interval collects the graph's nodes again"
+    );
+    assert!(!shell.surfaces[0].retained_visual_nodes.is_empty());
+    assert_eq!(shell.app.rebuilt_frames_since_observation_prune, 0);
+}
+
+#[test]
 fn draw_only_repass_uses_scoped_renderer_update() {
     let _guard = test_guard();
     let root_key = location_key(file!(), line!(), column!());
@@ -4101,17 +4154,9 @@ fn draw_only_repass_uses_scoped_renderer_update() {
         .as_ref()
         .copied()
         .expect("width state should be captured");
-    assert!(!shell.surfaces[0].retained_visual_nodes.is_empty());
-    shell.surfaces[0].retained_visual_nodes.insert(usize::MAX);
     width_state.set(120.0);
 
     shell.update();
-    assert!(
-        !shell.surfaces[0]
-            .retained_visual_nodes
-            .contains(&usize::MAX)
-    );
-    assert!(!shell.surfaces[0].retained_visual_nodes.is_empty());
 
     assert_eq!(
         updates.get(),
