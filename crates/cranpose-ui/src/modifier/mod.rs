@@ -80,9 +80,10 @@ pub use semantics::{
     SemanticsRequester, SemanticsRequesterElement, collect_semantics_from_chain,
     collect_semantics_from_modifier, semantics_reach_of_chain,
 };
+pub(crate) use slices::collect_modifier_slices_into_shared;
 pub use slices::{
     ModifierNodeSlices, ModifierNodeSlicesDebugStats, collect_modifier_slices,
-    collect_modifier_slices_into, collect_slices_from_modifier,
+    collect_slices_from_modifier,
 };
 pub use window_root::{
     WindowRootDescriptor, WindowRootElement, WindowRootEntry, WindowRootNode, WindowRootRegistry,

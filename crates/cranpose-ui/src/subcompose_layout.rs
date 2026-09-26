@@ -16,10 +16,7 @@ use web_time::Instant;
 
 use crate::{
     layout::MeasuredNode,
-    modifier::{
-        Modifier, ModifierChainHandle, ModifierNodeSlices, Point, ResolvedModifiers, Size,
-        collect_modifier_slices_into,
-    },
+    modifier::{Modifier, ModifierChainHandle, ModifierNodeSlices, Point, ResolvedModifiers, Size},
     widgets::nodes::{
         LayoutNode, LayoutNodeCacheHandles, LayoutState, allocate_virtual_node_id, is_virtual_node,
         register_layout_node,
@@ -806,7 +803,6 @@ impl SubcomposeLayoutNode {
         };
         let (invalidations, _) = node.inner.borrow_mut().set_modifier_collect(modifier);
         node.dispatch_modifier_invalidations(&invalidations, NodeCapabilities::empty());
-        node.update_modifier_slices_cache();
         node.note_host_to_the_composition_that_made_it();
         node
     }
@@ -845,7 +841,6 @@ impl SubcomposeLayoutNode {
         };
         let (invalidations, _) = node.inner.borrow_mut().set_modifier_collect(modifier);
         node.dispatch_modifier_invalidations(&invalidations, NodeCapabilities::empty());
-        node.update_modifier_slices_cache();
         node.note_host_to_the_composition_that_made_it();
         node
     }
@@ -916,7 +911,7 @@ impl SubcomposeLayoutNode {
             inner.set_modifier_collect(modifier)
         };
         self.dispatch_modifier_invalidations(&invalidations, prev_caps);
-        self.update_modifier_slices_cache();
+        self.modifier_slices_dirty.set(true);
         if modifier_changed {
             self.request_semantics_update();
         }
@@ -925,7 +920,10 @@ impl SubcomposeLayoutNode {
     fn update_modifier_slices_cache(&self) {
         let inner = self.inner.borrow();
         let mut snapshot = self.modifier_slices_snapshot.borrow_mut();
-        collect_modifier_slices_into(inner.modifier_chain.chain(), Rc::make_mut(&mut snapshot));
+        crate::modifier::collect_modifier_slices_into_shared(
+            inner.modifier_chain.chain(),
+            &mut snapshot,
+        );
         self.modifier_slices_dirty.set(false);
     }
 
@@ -1274,7 +1272,8 @@ impl cranpose_core::Node for SubcomposeLayoutNode {
             inner.node_id = Some(id);
             inner.modifier_chain.set_node_id(Some(id));
         }
-        self.update_modifier_slices_cache();
+        // The slices carry the node's id; they are collected again when next read.
+        self.modifier_slices_dirty.set(true);
     }
 
     fn on_attached_to_parent(&mut self, parent: NodeId) {
