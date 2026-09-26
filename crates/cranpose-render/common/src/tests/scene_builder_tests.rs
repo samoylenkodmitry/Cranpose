@@ -1704,6 +1704,16 @@ fn a_sliding_lazy_window_lowers_only_the_entering_rows() {
     assert_dirty_hash_road_matches_full_walk(&graph);
 }
 
+fn collect_layer_origins(layer: &LayerNode) -> Vec<(Option<NodeId>, Option<NodeId>, Point)> {
+    let mut origins = vec![(layer.node_id, layer.wraps, layer.origin_in_parent)];
+    for child in &layer.children {
+        if let RenderNode::Layer(child) = child {
+            origins.extend(collect_layer_origins(child));
+        }
+    }
+    origins
+}
+
 fn collect_text_tops(layer: &LayerNode) -> std::collections::BTreeMap<String, i64> {
     fn walk(
         layer: &LayerNode,
@@ -1810,13 +1820,6 @@ fn a_lazy_jump_of_any_distance_patches_to_what_a_fresh_build_shows() {
         reset_lowered_layer_count();
         let report = update_graph_from_applier_report(&mut applier, &mut graph, &dirty_nodes, 1.0);
         assert!(report.applied(), "delta {delta}: boundary frame must apply");
-        assert_eq!(
-            find_layer_by_node_id(&graph.root, root)
-                .expect("list layer")
-                .scene_children_layer_translation,
-            Point { x: 7.0, y: 11.0 },
-            "patched child origins must retain the container's layer translation"
-        );
         if delta == -30.0 {
             assert_eq!(
                 lowered_layer_count(),
@@ -1835,6 +1838,11 @@ fn a_lazy_jump_of_any_distance_patches_to_what_a_fresh_build_shows() {
             patched_texts, fresh_texts,
             "delta {delta}: the patched scene must show exactly what a \
              fresh build shows (dirty={dirty_nodes:?})"
+        );
+        assert_eq!(
+            collect_layer_origins(&graph.root),
+            collect_layer_origins(&fresh.root),
+            "delta {delta}: patched layers must sit where a fresh build places them"
         );
     }
 }
@@ -3703,4 +3711,106 @@ fn initial_scrolled_graph(composition: &mut cranpose_ui::TestComposition) -> (No
     graph.root.recompute_raster_cache_hashes();
     applier.clear_runtime_handle();
     (root, graph)
+}
+
+fn field_window_origin(applier: &mut MemoryApplier, field: NodeId) -> Point {
+    applier
+        .with_node::<LayoutNode, _>(field, |node| {
+            node.modifier_slices_snapshot()
+                .text_window_origin()
+                .expect("a text field publishes its window origin")
+        })
+        .expect("the field is a layout node")
+        .get()
+}
+
+#[test]
+fn a_field_rebuilt_under_a_scrolled_translated_column_publishes_its_window_origin() {
+    let scroll_holder: Rc<RefCell<Option<ScrollState>>> = Rc::new(RefCell::new(None));
+    let field_holder: Rc<RefCell<Option<NodeId>>> = Rc::new(RefCell::new(None));
+    let scroll_for_comp = scroll_holder.clone();
+    let field_for_comp = field_holder.clone();
+    let mut composition = cranpose_ui::run_test_composition(move || {
+        let scroll_state = cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| *state);
+        *scroll_for_comp.borrow_mut() = Some(scroll_state);
+        let field_for_content = field_for_comp.clone();
+        Column(
+            Modifier::empty()
+                .size_points(260.0, 90.0)
+                .graphics_layer(|| GraphicsLayer {
+                    translation_x: 7.0,
+                    translation_y: 11.0,
+                    ..Default::default()
+                })
+                .vertical_scroll(scroll_state, false),
+            ColumnSpec::default(),
+            move || {
+                Spacer(Size {
+                    width: 0.0,
+                    height: 24.0,
+                });
+                let field = cranpose_ui::BasicTextField(
+                    cranpose_foundation::text::TextFieldState::new("field"),
+                    Modifier::empty(),
+                    TextStyle::default(),
+                );
+                *field_for_content.borrow_mut() = Some(field);
+                Spacer(Size {
+                    width: 0.0,
+                    height: 220.0,
+                });
+            },
+        );
+    });
+    let root = composition.root().expect("composition root");
+    let viewport = Size {
+        width: 260.0,
+        height: 90.0,
+    };
+    let handle = composition.runtime_handle();
+    let mut applier = composition.applier_mut();
+    applier.set_runtime_handle(handle);
+    applier.compute_layout(root, viewport).expect("layout");
+    let mut graph = build_graph_from_applier(&mut applier, root, 1.0).expect("graph");
+    applier.clear_runtime_handle();
+    drop(applier);
+
+    let scroll_state = scroll_holder.borrow().expect("scroll state");
+    assert!(scroll_state.dispatch_raw_delta(36.0) > 0.0);
+    let field = field_holder.borrow().expect("field id");
+    let mut dirty_nodes = cranpose_ui::pending_layout_repass_nodes_snapshot();
+    dirty_nodes.extend(cranpose_ui::pending_measure_repass_nodes_snapshot());
+    dirty_nodes.push(field);
+
+    let handle = composition.runtime_handle();
+    let mut applier = composition.applier_mut();
+    applier.set_runtime_handle(handle);
+    applier
+        .compute_layout(root, viewport)
+        .expect("scrolled layout");
+    let stale = Point {
+        x: -500.0,
+        y: -500.0,
+    };
+    applier
+        .with_node::<LayoutNode, _>(field, |node| {
+            if let Some(sink) = node.modifier_slices_snapshot().text_window_origin() {
+                sink.set(stale);
+            }
+        })
+        .expect("the field is a layout node");
+    let report = update_graph_from_applier_report(&mut applier, &mut graph, &dirty_nodes, 1.0);
+    assert!(report.applied(), "the scroll patches the graph");
+    let patched = field_window_origin(&mut applier, field);
+    assert_eq!(
+        patched,
+        Point {
+            x: 7.0,
+            y: 11.0 + 24.0 - 36.0
+        },
+        "the rebuilt field adds up its ancestors' origins, scroll and translation"
+    );
+    build_graph_from_applier(&mut applier, root, 1.0).expect("fresh graph");
+    assert_eq!(field_window_origin(&mut applier, field), patched);
+    applier.clear_runtime_handle();
 }
