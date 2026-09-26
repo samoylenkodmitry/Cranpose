@@ -32,6 +32,10 @@ pub mod style_shared;
 pub mod text_hyphenation;
 pub mod text_measure;
 
+#[cfg(test)]
+#[path = "tests/pointer_slices.rs"]
+mod pointer_slices;
+
 use cranpose_core::{MemoryApplier, collections::map::HashSet};
 use cranpose_foundation::nodes::input::PointerEvent;
 use cranpose_ui::LayoutTree;

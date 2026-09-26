@@ -92,7 +92,7 @@ use render::GpuRenderer;
 pub use render::{
     frame_clear_color, frames_presented, pipelines_created, pipelines_created_off_frame,
 };
-pub use scene::{ClickAction, HitRegion, Scene};
+pub use scene::{HitRegion, Scene};
 
 /// The optional device features the renderer exploits when the adapter
 /// offers them: pipeline caching (see `pipeline_disk_cache`) and the

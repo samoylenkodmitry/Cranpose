@@ -1,5 +1,7 @@
 use std::rc::Rc;
 
+use cranpose_ui::{Modifier, ModifierNodeSlices, collect_slices_from_modifier};
+
 use super::*;
 use crate::graph::HitTestNode;
 
@@ -36,6 +38,22 @@ impl HitGraphSink for TestSink {
     }
 }
 
+fn handlers(modifier: Modifier) -> Rc<ModifierNodeSlices> {
+    let app_context = cranpose_ui::AppContext::new();
+    Rc::new(app_context.enter(|| collect_slices_from_modifier(&modifier)))
+}
+
+fn clickable() -> Modifier {
+    Modifier::empty().clickable(|_point| {})
+}
+
+/// Gives the layer a pointer input besides its click handler, which makes it
+/// capture the pointer for its descendants.
+fn capture_pointer(layer: &mut LayerNode) {
+    layer.hit_test.as_mut().expect("hit test").handlers =
+        handlers(clickable().pointer_input((), |_scope| async {}));
+}
+
 fn test_layer(node_id: NodeId, transform_to_parent: ProjectiveTransform) -> LayerNode {
     LayerNode {
         node_id: Some(node_id),
@@ -49,9 +67,7 @@ fn test_layer(node_id: NodeId, transform_to_parent: ProjectiveTransform) -> Laye
         clip_to_bounds: true,
         hit_test: Some(HitTestNode {
             shape: None,
-            click_actions: vec![Rc::new(|_point| {})],
-            pointer_inputs: vec![],
-            pointer_icon: None,
+            handlers: handlers(clickable()),
             clip: None,
         }),
         has_hit_targets: true,
@@ -110,7 +126,7 @@ fn a_child_clipped_away_by_its_parent_takes_no_hits() {
 fn collect_hits_composes_nested_graph_transforms() {
     let child = test_layer(9, ProjectiveTransform::translation(4.0, 3.0));
     let mut parent = test_layer(7, ProjectiveTransform::translation(10.0, 6.0));
-    parent.hit_test.as_mut().expect("hit test").pointer_inputs = vec![Rc::new(|_event| {})];
+    capture_pointer(&mut parent);
     parent.children.push(RenderNode::Layer(Box::new(child)));
     let mut sink = TestSink::default();
 
@@ -151,7 +167,7 @@ fn capture_paths_do_not_leak_between_siblings_or_traversals() {
     let mut root = test_layer(12, identity);
     for node_id in (1..12).rev() {
         let mut parent = test_layer(node_id, identity);
-        parent.hit_test.as_mut().unwrap().pointer_inputs = vec![Rc::new(|_| {})];
+        capture_pointer(&mut parent);
         parent.children.push(RenderNode::Layer(Box::new(root)));
         root = parent;
     }

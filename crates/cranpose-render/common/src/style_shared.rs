@@ -1,43 +1,12 @@
-use std::{ops::Range, rc::Rc};
+use std::ops::Range;
 
-use cranpose_foundation::PointerEvent;
-use cranpose_ui::{Brush, DrawCommand, DrawCommandFn, LayoutNodeData, ModifierNodeSlices};
+use cranpose_ui::{Brush, DrawCommand, DrawCommandFn};
 use cranpose_ui_graphics::{
     BlendMode, Color, ColorFilter, CommandRecording, CompositingStrategy, CornerRadii,
-    DrawPrimitive, GraphicsLayer, Point, RoundedCornerShape, Size,
+    DrawPrimitive, GraphicsLayer, Size,
 };
 
 use crate::layer_transform::{layer_scale_x, layer_scale_y, layer_uniform_scale};
-
-pub struct NodeStyle {
-    pub padding: cranpose_ui_graphics::EdgeInsets,
-    pub background: Option<Color>,
-    pub click_actions: Vec<Rc<dyn Fn(Point)>>,
-    pub shape: Option<RoundedCornerShape>,
-    pub pointer_inputs: Vec<Rc<dyn Fn(PointerEvent)>>,
-    pub draw_commands: Vec<DrawCommand>,
-    pub graphics_layer: Option<GraphicsLayer>,
-    pub clip_to_bounds: bool,
-}
-
-impl NodeStyle {
-    pub fn from_layout_node(data: &LayoutNodeData) -> Self {
-        let resolved = data.resolved_modifiers;
-        let slices: &ModifierNodeSlices = data.modifier_slices();
-        let pointer_inputs = slices.pointer_inputs().to_vec();
-
-        Self {
-            padding: resolved.padding(),
-            background: None,
-            click_actions: slices.click_handlers().to_vec(),
-            shape: None,
-            pointer_inputs,
-            draw_commands: slices.draw_commands().to_vec(),
-            graphics_layer: slices.graphics_layer(),
-            clip_to_bounds: slices.clip_to_bounds(),
-        }
-    }
-}
 
 pub fn combine_layers(
     current: GraphicsLayer,

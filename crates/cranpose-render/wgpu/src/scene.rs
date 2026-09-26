@@ -4,7 +4,7 @@ use std::{ops::Range, rc::Rc, sync::Arc};
 
 use cranpose_core::NodeId;
 use cranpose_render_common::graph::DrawCommandId;
-pub use cranpose_render_common::graph_scene::{ClickAction, HitRegion, Scene};
+pub use cranpose_render_common::graph_scene::{HitRegion, Scene};
 use cranpose_ui::{TextLayoutOptions, TextStyle};
 use cranpose_ui_graphics::{
     BlendMode, Color, ColorFilter, CommandRecording, DrawPrimitive, GraphicsLayer, ImageBitmap,

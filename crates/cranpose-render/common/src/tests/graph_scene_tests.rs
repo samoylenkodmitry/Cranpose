@@ -1,6 +1,7 @@
 use std::cell::Cell;
 
 use super::*;
+use crate::pointer_slices::pointer_slices;
 
 fn rect_to_quad(rect: Rect) -> [[f32; 2]; 4] {
     [
@@ -53,10 +54,8 @@ fn rebuilding_hits_reuses_buffers_releases_handlers_and_preserves_captured_targe
     let mut scene = Scene::new();
     let first_count = Rc::new(Cell::new(0));
     let second_count = Rc::new(Cell::new(0));
-    let first = make_handler(Rc::clone(&first_count), false);
-    let second = make_handler(Rc::clone(&second_count), false);
-    let first_click: Rc<dyn Fn(Point)> = Rc::new(|_| {});
-    let second_click: Rc<dyn Fn(Point)> = Rc::new(|_| {});
+    let first = pointer_slices(&[make_handler(Rc::clone(&first_count), false)]);
+    let second = pointer_slices(&[make_handler(Rc::clone(&second_count), false)]);
     let rect = Rect {
         x: 0.0,
         y: 0.0,
@@ -69,45 +68,42 @@ fn rebuilding_hits_reuses_buffers_releases_handlers_and_preserves_captured_targe
         hit_geometry_for_rect(rect),
         HitTargetSpec {
             shape: None,
-            click_actions: [ClickAction::WithPoint(Rc::clone(&first_click))],
-            pointer_inputs: &[Rc::clone(&first)],
-            pointer_icon: None,
+            handlers: &first,
         },
     );
-    let captured = scene.find_target(1).unwrap();
+    let captured = scene.find_target(1).expect("the first target");
     let path_storage = scene.hits[0].capture_path.as_ptr();
-    let input_storage = scene.hits[0].pointer_inputs.as_ptr();
     scene.clear_hits();
     assert!(scene.hits.is_empty());
     assert!(scene.find_target(1).is_none());
     assert_eq!(scene.next_hit_z, 0);
-    assert_eq!(Rc::strong_count(&first), 2);
-    assert_eq!(Rc::strong_count(&first_click), 2);
+    assert_eq!(
+        Rc::strong_count(&first),
+        2,
+        "after a clear only the captured target still shares the first slices"
+    );
     scene.push_hit(
         2,
         &[2],
         hit_geometry_for_rect(rect),
         HitTargetSpec {
             shape: None,
-            click_actions: [ClickAction::WithPoint(Rc::clone(&second_click))],
-            pointer_inputs: &[Rc::clone(&second)],
-            pointer_icon: None,
+            handlers: &second,
         },
     );
     assert_eq!(scene.hits[0].capture_path.as_ptr(), path_storage);
-    assert_eq!(scene.hits[0].pointer_inputs.as_ptr(), input_storage);
     assert_eq!(scene.hits[0].capture_path, [2]);
     assert_eq!(scene.hits[0].z_index, 0);
-    assert_eq!(scene.hits[0].click_actions.len(), 1);
-    assert!(
-        matches!(&scene.hits[0].click_actions[0], ClickAction::WithPoint(handler) if Rc::ptr_eq(handler, &second_click))
-    );
+    assert!(Rc::ptr_eq(&scene.hits[0].handlers, &second));
     let event = PointerEvent::new(
         PointerEventKind::Down,
         Point::new(5.0, 5.0),
         Point::new(5.0, 5.0),
     );
-    scene.find_target(2).unwrap().dispatch(event.clone());
+    scene
+        .find_target(2)
+        .expect("the second target")
+        .dispatch(event.clone());
     assert_eq!(first_count.get(), 0);
     assert_eq!(second_count.get(), 1);
     captured.dispatch(event);
@@ -115,16 +111,13 @@ fn rebuilding_hits_reuses_buffers_releases_handlers_and_preserves_captured_targe
     assert_eq!(first_count.get(), 1);
     scene.clear_hits();
     assert_eq!(Rc::strong_count(&second), 1);
-    assert_eq!(Rc::strong_count(&second_click), 1);
     scene.push_hit(
         3,
         &[3],
         hit_geometry_for_rect(rect),
         HitTargetSpec {
             shape: None,
-            click_actions: [],
-            pointer_inputs: &[],
-            pointer_icon: None,
+            handlers: &pointer_slices(&[]),
         },
     );
     assert!(scene.hits.is_empty());
@@ -174,9 +167,7 @@ fn rebuilding_clip_buffers_replaces_clips_without_changing_captured_targets() {
             },
             HitTargetSpec {
                 shape: None,
-                click_actions: [],
-                pointer_inputs: &[Rc::clone(&handler)],
-                pointer_icon: None,
+                handlers: &pointer_slices(&[Rc::clone(&handler)]),
             },
         );
     };
@@ -226,9 +217,7 @@ fn hit_test_respects_hit_clip() {
         },
         HitTargetSpec {
             shape: None,
-            click_actions: Vec::new(),
-            pointer_inputs: &[Rc::new(|_event: PointerEvent| {})],
-            pointer_icon: None,
+            handlers: &pointer_slices(&[Rc::new(|_event: PointerEvent| {})]),
         },
     );
 
@@ -243,9 +232,7 @@ fn push_input_target(scene: &mut Scene, node_id: NodeId, rect: Rect) {
         hit_geometry_for_rect(rect),
         HitTargetSpec {
             shape: None,
-            click_actions: Vec::new(),
-            pointer_inputs: &[Rc::new(|_event: PointerEvent| {})],
-            pointer_icon: None,
+            handlers: &pointer_slices(&[Rc::new(|_event: PointerEvent| {})]),
         },
     );
 }
@@ -321,9 +308,7 @@ fn hit_test_sorts_by_z_without_duplicating_hit_storage() {
         hit_geometry_for_rect(rect),
         HitTargetSpec {
             shape: None,
-            click_actions: Vec::new(),
-            pointer_inputs: &[Rc::new(|_event: PointerEvent| {})],
-            pointer_icon: None,
+            handlers: &pointer_slices(&[Rc::new(|_event: PointerEvent| {})]),
         },
     );
     scene.push_hit(
@@ -332,9 +317,7 @@ fn hit_test_sorts_by_z_without_duplicating_hit_storage() {
         hit_geometry_for_rect(rect),
         HitTargetSpec {
             shape: None,
-            click_actions: Vec::new(),
-            pointer_inputs: &[Rc::new(|_event: PointerEvent| {})],
-            pointer_icon: None,
+            handlers: &pointer_slices(&[Rc::new(|_event: PointerEvent| {})]),
         },
     );
 
@@ -365,9 +348,7 @@ fn hit_test_rejects_points_in_rounded_corner_cutout() {
         hit_geometry_for_rect(rect),
         HitTargetSpec {
             shape: Some(RoundedCornerShape::uniform(20.0)),
-            click_actions: Vec::new(),
-            pointer_inputs: &[Rc::new(|_event: PointerEvent| {})],
-            pointer_icon: None,
+            handlers: &pointer_slices(&[Rc::new(|_event: PointerEvent| {})]),
         },
     );
 
@@ -398,10 +379,10 @@ fn dispatch_stops_after_event_consumed() {
             width: 50.0,
             height: 50.0,
         }),
-        pointer_inputs: vec![
+        handlers: pointer_slices(&[
             make_handler(count_first.clone(), true),
             make_handler(count_second.clone(), false),
-        ],
+        ]),
         ..Default::default()
     });
 
@@ -430,10 +411,10 @@ fn dispatch_delivers_terminal_events_after_consumption_for_cleanup() {
             width: 50.0,
             height: 50.0,
         }),
-        pointer_inputs: vec![
+        handlers: pointer_slices(&[
             make_handler(count_first.clone(), true),
             make_handler(count_second.clone(), false),
-        ],
+        ]),
         ..Default::default()
     });
 
@@ -460,7 +441,7 @@ fn dispatch_delivers_terminal_events_to_later_captured_targets_after_consumption
             width: 20.0,
             height: 20.0,
         }),
-        pointer_inputs: vec![make_handler(child_count.clone(), true)],
+        handlers: pointer_slices(&[make_handler(child_count.clone(), true)]),
         z_index: 1,
         ..Default::default()
     });
@@ -473,7 +454,7 @@ fn dispatch_delivers_terminal_events_to_later_captured_targets_after_consumption
             width: 50.0,
             height: 50.0,
         }),
-        pointer_inputs: vec![make_handler(parent_count.clone(), false)],
+        handlers: pointer_slices(&[make_handler(parent_count.clone(), false)]),
         ..Default::default()
     });
 
@@ -490,47 +471,14 @@ fn dispatch_delivers_terminal_events_to_later_captured_targets_after_consumption
 }
 
 #[test]
-fn dispatch_triggers_click_action_on_down() {
-    let click_count = Rc::new(Cell::new(0));
-    let click_count_for_handler = Rc::clone(&click_count);
-    let click_action = ClickAction::Simple(Rc::new(RefCell::new(move || {
-        click_count_for_handler.set(click_count_for_handler.get() + 1);
-    })));
-
-    let hit = HitRegion::with_diagnostics(HitRegionInit {
-        node_id: 1,
-        capture_path: vec![1],
-        geometry: hit_geometry_for_rect(Rect {
-            x: 0.0,
-            y: 0.0,
-            width: 50.0,
-            height: 50.0,
-        }),
-        click_actions: vec![click_action],
-        ..Default::default()
-    });
-
-    hit.dispatch(PointerEvent::new(
-        PointerEventKind::Down,
-        Point { x: 10.0, y: 10.0 },
-        Point { x: 10.0, y: 10.0 },
-    ));
-    hit.dispatch(PointerEvent::new(
-        PointerEventKind::Move,
-        Point { x: 10.0, y: 10.0 },
-        Point { x: 12.0, y: 12.0 },
-    ));
-
-    assert_eq!(click_count.get(), 1);
-}
-
-#[test]
-fn dispatch_passes_local_position_to_click_action() {
+fn dispatch_passes_local_position_to_pointer_inputs() {
     let local_positions = Rc::new(RefCell::new(Vec::new()));
     let local_positions_for_handler = Rc::clone(&local_positions);
-    let click_action = ClickAction::WithPoint(Rc::new(move |point| {
-        local_positions_for_handler.borrow_mut().push(point);
-    }));
+    let handler: Rc<dyn Fn(PointerEvent)> = Rc::new(move |event: PointerEvent| {
+        local_positions_for_handler
+            .borrow_mut()
+            .push(event.position);
+    });
 
     let hit = HitRegion::with_diagnostics(HitRegionInit {
         node_id: 1,
@@ -541,7 +489,7 @@ fn dispatch_passes_local_position_to_click_action() {
             width: 50.0,
             height: 50.0,
         }),
-        click_actions: vec![click_action],
+        handlers: pointer_slices(&[handler]),
         ..Default::default()
     });
 
@@ -552,37 +500,6 @@ fn dispatch_passes_local_position_to_click_action() {
     ));
 
     assert_eq!(*local_positions.borrow(), vec![Point { x: 5.0, y: 5.0 }]);
-}
-
-#[test]
-fn dispatch_does_not_trigger_click_action_when_consumed() {
-    let click_count = Rc::new(Cell::new(0));
-    let click_count_for_handler = Rc::clone(&click_count);
-    let click_action = ClickAction::Simple(Rc::new(RefCell::new(move || {
-        click_count_for_handler.set(click_count_for_handler.get() + 1);
-    })));
-
-    let hit = HitRegion::with_diagnostics(HitRegionInit {
-        node_id: 1,
-        capture_path: vec![1],
-        geometry: hit_geometry_for_rect(Rect {
-            x: 0.0,
-            y: 0.0,
-            width: 50.0,
-            height: 50.0,
-        }),
-        click_actions: vec![click_action],
-        pointer_inputs: vec![Rc::new(|event: PointerEvent| event.consume())],
-        ..Default::default()
-    });
-
-    hit.dispatch(PointerEvent::new(
-        PointerEventKind::Down,
-        Point { x: 10.0, y: 10.0 },
-        Point { x: 10.0, y: 10.0 },
-    ));
-
-    assert_eq!(click_count.get(), 0);
 }
 
 #[test]
@@ -616,9 +533,7 @@ fn hit_test_uses_exact_quad_for_transformed_region() {
         },
         HitTargetSpec {
             shape: None,
-            click_actions: Vec::new(),
-            pointer_inputs: &[Rc::new(|_event: PointerEvent| {})],
-            pointer_icon: None,
+            handlers: &pointer_slices(&[Rc::new(|_event: PointerEvent| {})]),
         },
     );
 
@@ -633,9 +548,11 @@ fn hit_test_uses_exact_quad_for_transformed_region() {
 fn dispatch_uses_inverse_transform_for_local_position() {
     let local_positions = Rc::new(RefCell::new(Vec::new()));
     let local_positions_for_handler = Rc::clone(&local_positions);
-    let click_action = ClickAction::WithPoint(Rc::new(move |point| {
-        local_positions_for_handler.borrow_mut().push(point);
-    }));
+    let handler: Rc<dyn Fn(PointerEvent)> = Rc::new(move |event: PointerEvent| {
+        local_positions_for_handler
+            .borrow_mut()
+            .push(event.position);
+    });
     let local_bounds = Rect {
         x: 0.0,
         y: 0.0,
@@ -662,7 +579,7 @@ fn dispatch_uses_inverse_transform_for_local_position() {
             hit_clip_bounds: None,
             hit_clips: &[],
         },
-        click_actions: vec![click_action],
+        handlers: pointer_slices(&[handler]),
         ..Default::default()
     });
 
@@ -689,9 +606,9 @@ fn dispatch_with_applier_counts_live_modifier_slice_lookup_misses() {
             width: 50.0,
             height: 50.0,
         }),
-        pointer_inputs: vec![Rc::new(move |_event: PointerEvent| {
+        handlers: pointer_slices(&[Rc::new(move |_event: PointerEvent| {
             handler_calls_for_handler.set(handler_calls_for_handler.get() + 1);
-        })],
+        })]),
         diagnostics: Rc::clone(&diagnostics),
         ..Default::default()
     });

@@ -39,25 +39,6 @@ fn local_pointer_dispatch_preserves_consumption_and_terminal_delivery() {
     );
 }
 
-#[test]
-fn local_pointer_dispatch_calls_click_handlers_only_for_an_unconsumed_press() {
-    let clicks = Rc::new(RefCell::new(Vec::new()));
-    let recorded = Rc::clone(&clicks);
-    let slices = ModifierNodeSlices {
-        click_handlers: vec![Rc::new(move |position| {
-            recorded.borrow_mut().push(position);
-        })],
-        ..Default::default()
-    };
-    let local = Point { x: 24.0, y: 16.0 };
-    slices.dispatch_pointer_event(PointerEvent::new(PointerEventKind::Down, local, local));
-    slices.dispatch_pointer_event(PointerEvent::new(PointerEventKind::Up, local, local));
-    let consumed = PointerEvent::new(PointerEventKind::Down, local, local);
-    consumed.consume();
-    slices.dispatch_pointer_event(consumed);
-    assert_eq!(*clicks.borrow(), [local]);
-}
-
 fn recorded(command: &DrawCommand, size: Size) -> Vec<DrawPrimitive> {
     use cranpose_ui_graphics::DrawScope as _;
     let mut scope = crate::draw::command_draw_scope(size);

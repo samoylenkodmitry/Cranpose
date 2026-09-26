@@ -1,14 +1,12 @@
 use std::{mem::size_of, ops::Range, rc::Rc};
 
 use cranpose_core::{NodeId, collections::map::HashSet};
-use cranpose_foundation::PointerEvent;
 use cranpose_ui::{
-    GraphicsLayer, Point, Rect, RenderEffect, RoundedCornerShape, TextLayoutOptions, TextStyle,
-    text::AnnotatedString,
+    GraphicsLayer, ModifierNodeSlices, Point, Rect, RenderEffect, RoundedCornerShape,
+    TextLayoutOptions, TextStyle, text::AnnotatedString,
 };
 use cranpose_ui_graphics::{
-    BlendMode, ColorFilter, CommandRecording, DrawPrimitive, PointerIcon, RecordingSummary,
-    ShadowPrimitive,
+    BlendMode, ColorFilter, CommandRecording, DrawPrimitive, RecordingSummary, ShadowPrimitive,
 };
 
 use crate::{raster_cache::LayerRasterCacheHashes, style_shared::DrawPlacement};
@@ -235,12 +233,11 @@ pub enum CachePolicy {
 #[derive(Clone)]
 pub struct HitTestNode {
     pub shape: Option<RoundedCornerShape>,
-    pub click_actions: Vec<Rc<dyn Fn(Point)>>,
-    pub pointer_inputs: Vec<Rc<dyn Fn(PointerEvent)>>,
-    /// The pointer's appearance while it hovers this target. A region that only
-    /// names an icon still becomes a hit target, which is how a decorative
-    /// panel carries a cursor without handling clicks.
-    pub pointer_icon: Option<PointerIcon>,
+    /// The node's modifier slices, shared rather than copied: they hold its
+    /// pointer inputs and the pointer icon it asks for while hovered. A node
+    /// that only names an icon is still a hit target, which is how a
+    /// decorative panel carries a cursor without handling clicks.
+    pub handlers: Rc<ModifierNodeSlices>,
     pub clip: Option<Rect>,
 }
 
@@ -560,8 +557,7 @@ impl RenderGraph {
 }
 
 fn layer_heap_bytes(layer: &LayerNode) -> usize {
-    layer.hit_test.as_ref().map_or(0, hit_test_heap_bytes)
-        + size_of::<RenderNode>() * layer.children.capacity()
+    size_of::<RenderNode>() * layer.children.capacity()
         + layer
             .children
             .iter()
@@ -652,11 +648,6 @@ fn annotated_string_heap_bytes(text: &AnnotatedString) -> usize {
                 cranpose_ui::text::LinkAnnotation::Clickable { tag, .. } => tag.capacity(),
             })
             .sum::<usize>()
-}
-
-fn hit_test_heap_bytes(hit_test: &HitTestNode) -> usize {
-    hit_test.click_actions.capacity() * size_of::<Rc<dyn Fn(Point)>>()
-        + hit_test.pointer_inputs.capacity() * size_of::<Rc<dyn Fn(PointerEvent)>>()
 }
 
 pub fn quad_bounds(quad: [[f32; 2]; 4]) -> Rect {
