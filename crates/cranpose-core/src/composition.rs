@@ -408,7 +408,7 @@ impl<A: Applier + 'static> Composition<A> {
             if scopes.is_empty() {
                 continue;
             }
-            did_recompose |= scopes.iter().any(|scope| !scope.is_derivation());
+            did_recompose |= recomposes_content(&scopes);
             let runtime_clone = runtime_handle.clone();
             let root_host = self.slots_host();
             let mut scope_groups: Vec<(Rc<SlotsHost>, Vec<RecomposeScope>)> = Vec::new();
@@ -555,6 +555,13 @@ impl<A: Applier + 'static> Composition<A> {
         })?;
         self.apply_commands_and_updates_for_host(&host, &runtime_handle, commands)
     }
+}
+
+/// Whether running these scopes can change what the composition shows: a pass
+/// that only recomputes derived states changes nothing unless a derived value
+/// moved, and then its readers run in a pass of their own.
+fn recomposes_content(scopes: &[RecomposeScope]) -> bool {
+    scopes.iter().any(|scope| !scope.is_derivation())
 }
 
 fn live_invalidated_scopes(runtime_handle: &RuntimeHandle) -> Option<Vec<RecomposeScope>> {
