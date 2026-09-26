@@ -1522,6 +1522,10 @@ impl EffectRenderer {
         self.offscreen_pool.release(target);
     }
 
+    pub(crate) fn end_offscreen_frame(&mut self) {
+        self.offscreen_pool.end_frame();
+    }
+
     pub(crate) fn retained_offscreen_count(&self) -> usize {
         self.offscreen_pool.pool_size()
     }

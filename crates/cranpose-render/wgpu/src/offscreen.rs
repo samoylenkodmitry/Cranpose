@@ -5,7 +5,7 @@ use std::{
     task::{Context, Poll, Waker},
 };
 
-use crate::gpu_stats::FrameStats;
+use crate::{gpu_stats::FrameStats, idle_pool::IdlePool};
 
 /// Set once a device turns out unable to draw into the float format, which
 /// then no renderer in the process composites in.
@@ -210,7 +210,7 @@ pub fn composition_bytes_per_pixel() -> u64 {
 }
 
 pub(crate) struct OffscreenPool {
-    available: Vec<OffscreenTarget>,
+    available: IdlePool<OffscreenTarget>,
     format: wgpu::TextureFormat,
     max_texture_dim: u32,
 }
@@ -226,7 +226,7 @@ fn target_bytes(width: u32, height: u32, bytes_per_pixel: u64) -> u64 {
 impl OffscreenPool {
     pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
         Self {
-            available: Vec::new(),
+            available: IdlePool::default(),
             format,
             max_texture_dim: device.limits().max_texture_dimension_2d,
         }
@@ -235,7 +235,7 @@ impl OffscreenPool {
     #[cfg(test)]
     fn new_with_limit(format: wgpu::TextureFormat, max_texture_dim: u32) -> Self {
         Self {
-            available: Vec::new(),
+            available: IdlePool::default(),
             format,
             max_texture_dim,
         }
@@ -269,15 +269,11 @@ impl OffscreenPool {
     ) -> OffscreenTarget {
         let width = width.min(self.max_texture_dim).max(1);
         let height = height.min(self.max_texture_dim).max(1);
-        if let Some(idx) = self
-            .available
-            .iter()
-            .position(|t| t.matches_size(width, height))
-        {
+        if let Some(target) = self.available.take(|t| t.matches_size(width, height)) {
             if let Some(s) = stats {
                 s.record_offscreen_acquire(width, height, self.format, false);
             }
-            self.available.swap_remove(idx)
+            target
         } else {
             if let Some(s) = stats {
                 s.record_offscreen_acquire(width, height, self.format, true);
@@ -287,19 +283,17 @@ impl OffscreenPool {
     }
 
     pub fn release(&mut self, target: OffscreenTarget) {
-        self.available.push(target);
-        while self.available.len() > MAX_POOLED_TARGETS
-            || self.pooled_bytes() > MAX_POOLED_BYTES && self.available.len() > 1
-        {
-            self.available.remove(0);
-        }
+        let bytes_per_pixel = self.bytes_per_pixel();
+        self.available
+            .put(target, MAX_POOLED_TARGETS, MAX_POOLED_BYTES, |t| {
+                target_bytes(t.width, t.height, bytes_per_pixel)
+            });
     }
 
-    fn pooled_bytes(&self) -> u64 {
-        self.available
-            .iter()
-            .map(|t| target_bytes(t.width, t.height, self.bytes_per_pixel()))
-            .sum()
+    /// Ends a frame, dropping the targets no frame has reused for
+    /// [`crate::idle_pool::IDLE_FRAMES`].
+    pub fn end_frame(&mut self) {
+        self.available.end_frame();
     }
 
     fn bytes_per_pixel(&self) -> u64 {

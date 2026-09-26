@@ -2531,6 +2531,8 @@ impl GpuRenderer {
                 None => self.effect_renderer.release_offscreen(target),
             }
         }
+        self.effect_renderer.end_offscreen_frame();
+        self.frame_graph_executor.end_transient_frame();
     }
 
     fn insert_cached_shadow_surface(
