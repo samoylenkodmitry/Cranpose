@@ -725,8 +725,11 @@ fn a_selection_handle_composes_at_a_text_endpoint() {
 fn a_caret_action_menu_composes_its_available_actions() {
     composed_in_popup_host(|| {
         cranpose_ui::widgets::text_selection_menu::CaretActionMenu(
-            100.0,
-            40.0,
+            cranpose_ui::widgets::MenuAnchor {
+                center_x: 100.0,
+                line_top: 40.0,
+                line_bottom: 60.0,
+            },
             true,
             true,
             true,
@@ -743,8 +746,11 @@ fn a_caret_action_menu_composes_its_available_actions() {
 fn a_text_selection_menu_composes_copy_cut_and_paste() {
     composed_in_popup_host(|| {
         cranpose_ui::widgets::text_selection_menu::TextSelectionMenu(
-            100.0,
-            40.0,
+            cranpose_ui::widgets::MenuAnchor {
+                center_x: 100.0,
+                line_top: 40.0,
+                line_bottom: 60.0,
+            },
             true,
             None,
             true,
@@ -760,8 +766,11 @@ fn a_text_selection_menu_composes_copy_cut_and_paste() {
 fn a_liquid_text_menu_composes_the_items_it_is_given() {
     composed_in_popup_host(|| {
         cranpose_ui::widgets::text_selection_menu::LiquidTextMenu(
-            100.0,
-            40.0,
+            cranpose_ui::widgets::MenuAnchor {
+                center_x: 100.0,
+                line_top: 40.0,
+                line_bottom: 60.0,
+            },
             true,
             None,
             vec![TextMenuItem::new("Copy", || {})],
