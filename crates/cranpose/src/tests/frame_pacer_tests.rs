@@ -436,3 +436,34 @@ fn an_unpaced_loop_learns_no_lead() {
     let end = latency_run(&mut pacer, 0, 400, 2 * VSYNC);
     assert_eq!(pacer.lead_wake_ns(end + VSYNC / 2, end, VSYNC), None);
 }
+
+#[test]
+fn the_current_level_reports_the_level_without_stepping_it() {
+    let mut pacer = FramePacer::default();
+    assert_eq!(
+        pacer.current_level(),
+        None,
+        "no level before a frame is shown"
+    );
+
+    pacer.record_shown(0, 3, VSYNC);
+    assert_eq!(pacer.current_level(), Some(Level::Unpaced));
+
+    let mut pacer = buffered();
+    assert_eq!(pacer.current_level(), Some(Level::Buffered));
+    assert_eq!(
+        pacer.current_level(),
+        Some(Level::Buffered),
+        "reading the level does not start the try one level down"
+    );
+    assert_eq!(
+        level(&mut pacer, STUFFED + FIRST_HOLD_NS),
+        Some(Level::Shallow)
+    );
+    assert_eq!(pacer.current_level(), Some(Level::Shallow));
+    assert_eq!(
+        pacer.current_lead_ns(VSYNC),
+        0,
+        "frames start on their slot until a lead proves itself"
+    );
+}

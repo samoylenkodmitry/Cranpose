@@ -650,10 +650,15 @@ impl AndroidFrameDriver {
 
     /// Hands every frame the display has reported since the last call to
     /// `pacer`.
-    fn pace_displayed_frames(&self, pacer: &mut FramePacer) {
+    fn pace_displayed_frames(
+        &self,
+        pacer: &mut FramePacer,
+        telemetry: &mut crate::android_frame_telemetry::AndroidFrameTelemetry,
+    ) {
         for frame in self.displayed_rx.try_iter() {
             pacer.record_shown(frame.shown_ns, frame.queued_behind, vsync_period_ns());
             pacer.record_latency(frame.queued_ns, frame.shown_ns);
+            telemetry.note_shown_latency(frame.shown_ns - frame.queued_ns);
         }
     }
 
@@ -1379,6 +1384,19 @@ fn create_android_gpu_resources_for_existing_device(
 
 /// The display's refresh period: what the display reports, else what the
 /// vsync callbacks have measured, else 60 Hz.
+/// The telemetry's name for the level `pacer` runs frames at.
+fn frame_pacing(
+    level: Option<crate::frame_pacer::Level>,
+) -> crate::android_frame_telemetry::FramePacing {
+    use crate::android_frame_telemetry::FramePacing;
+    match level {
+        None => FramePacing::Unreported,
+        Some(crate::frame_pacer::Level::Shallow) => FramePacing::Shallow,
+        Some(crate::frame_pacer::Level::Buffered) => FramePacing::Buffered,
+        Some(crate::frame_pacer::Level::Unpaced) => FramePacing::Unpaced,
+    }
+}
+
 fn vsync_period_ns() -> i64 {
     match crate::android_frame_telemetry::vsync_period_ns() {
         reported if reported > 0 => reported,
@@ -1806,7 +1824,7 @@ pub fn run(
             ),
             None => None,
         };
-        android_frame_driver.pace_displayed_frames(&mut frame_pacer);
+        android_frame_driver.pace_displayed_frames(&mut frame_pacer, &mut frame_telemetry);
 
         let pending_confirmation_timeout = pending_host_window_confirmation.map(|pending| {
             android_host_window::HOST_WINDOW_CONFIRMATION_TIMEOUT
@@ -2445,6 +2463,8 @@ pub fn run(
                 );
             frame_waits_for_vsync = frame_due && !frame_starts;
             if frame_starts {
+                frame_timings.pacing = frame_pacing(frame_pacer.current_level());
+                frame_timings.lead_ns = frame_pacer.current_lead_ns(vsync_period_ns());
                 frame_started_at = Some(web_time::Instant::now());
                 frame_timings.work_start_ns = crate::android_frame_telemetry::monotonic_nanos();
                 let update_result = android_host_window::with_android_host_window_registry(
