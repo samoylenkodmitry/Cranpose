@@ -110,6 +110,29 @@ fn is_generic_fn_like(ty: &Type, generics: &syn::Generics) -> bool {
     false
 }
 
+/// The call that records a parameter's new value in its `ParamState` and
+/// says whether it changed: `update_shared` for an `Rc` or `Arc`, whose
+/// unchanged allocation needs no comparison of its contents.
+fn param_state_update(ident: &Ident, ty: &Type) -> TokenStream2 {
+    if is_shared_pointer(ty) {
+        quote! { state.update_shared(&#ident) }
+    } else {
+        quote! { state.update(&#ident) }
+    }
+}
+
+/// Whether a parameter type is an `Rc<..>` or `Arc<..>`.
+fn is_shared_pointer(ty: &Type) -> bool {
+    match ty {
+        Type::Path(path) if path.qself.is_none() => path
+            .path
+            .segments
+            .last()
+            .is_some_and(|segment| segment.ident == "Rc" || segment.ident == "Arc"),
+        _ => false,
+    }
+}
+
 fn is_fn_param(ty: &Type, generics: &syn::Generics) -> bool {
     is_fn_like_type(ty) || is_generic_fn_like(ty, generics)
 }
@@ -528,12 +551,13 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                 } else {
                     let ident = &info.ident;
                     let ty = &info.ty;
+                    let update = param_state_update(ident, ty);
                     quote! {
                         let #slot_ident = #composer_ident
                             .__use_param_slot(|| #core_path::ParamState::<#ty>::default());
                         if #composer_ident.with_slot_value_mut::<#core_path::ParamState<#ty>, _>(
                             #slot_ident,
-                            |state| state.update(&#ident),
+                            |state| #update,
                         )
                         {
                             __changed = true;

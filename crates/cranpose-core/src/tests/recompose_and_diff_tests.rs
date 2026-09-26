@@ -746,6 +746,45 @@ fn composable_skips_when_inputs_unchanged() {
 }
 
 #[test]
+fn a_shared_parameter_at_the_same_allocation_skips_without_comparing() {
+    thread_local! {
+        static COMPARISONS: Cell<usize> = const { Cell::new(0) };
+        static RUNS: Cell<usize> = const { Cell::new(0) };
+    }
+
+    struct Posts(Vec<u32>);
+
+    impl PartialEq for Posts {
+        fn eq(&self, other: &Self) -> bool {
+            COMPARISONS.with(|count| count.set(count.get() + 1));
+            self.0 == other.0
+        }
+    }
+
+    #[composable]
+    fn feed(posts: Rc<Posts>) {
+        let _ = &posts;
+        RUNS.with(|runs| runs.set(runs.get() + 1));
+    }
+
+    let shared = Rc::new(Posts(vec![1, 2, 3]));
+    let mut composition = test_composition();
+    let key = location_key(file!(), line!(), column!());
+    for (posts, runs, comparisons) in [
+        (Rc::clone(&shared), 1, 0),
+        (Rc::clone(&shared), 1, 0),
+        (Rc::new(Posts(vec![1, 2, 3])), 1, 1),
+        (Rc::new(Posts(vec![4])), 2, 2),
+    ] {
+        composition
+            .render(key, move || feed(Rc::clone(&posts)))
+            .expect("render succeeds");
+        RUNS.with(|count| assert_eq!(count.get(), runs));
+        COMPARISONS.with(|count| assert_eq!(count.get(), comparisons));
+    }
+}
+
+#[test]
 fn composable_takes_a_closure_that_returns_a_value() {
     thread_local! {
         static READ: Cell<i32> = const { Cell::new(0) };

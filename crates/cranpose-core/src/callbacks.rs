@@ -6,13 +6,50 @@ pub struct ParamState<T> {
     pub(crate) value: Option<T>,
 }
 
+/// A parameter that points at a shared allocation: two that point at the
+/// same one are equal without comparing what it holds.
+pub trait SharedParam {
+    /// Whether `self` and `other` point at the same allocation.
+    fn same_allocation(&self, other: &Self) -> bool;
+}
+
+impl<T: ?Sized> SharedParam for Rc<T> {
+    fn same_allocation(&self, other: &Self) -> bool {
+        Rc::ptr_eq(self, other)
+    }
+}
+
+impl<T: ?Sized> SharedParam for std::sync::Arc<T> {
+    fn same_allocation(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(self, other)
+    }
+}
+
 impl<T> ParamState<T> {
     pub fn update(&mut self, new_value: &T) -> bool
     where
         T: PartialEq + Clone,
     {
+        self.update_unless(new_value, |old, new| old == new)
+    }
+
+    /// [`update`](Self::update) for an `Rc` or `Arc` parameter: the same
+    /// allocation is unchanged without comparing its contents, which
+    /// `PartialEq` on a pointer to a type that is not `Eq` otherwise walks
+    /// in full on every recomposition.
+    pub fn update_shared(&mut self, new_value: &T) -> bool
+    where
+        T: SharedParam + PartialEq + Clone,
+    {
+        self.update_unless(new_value, |old, new| old.same_allocation(new) || old == new)
+    }
+
+    fn update_unless(&mut self, new_value: &T, unchanged: impl FnOnce(&T, &T) -> bool) -> bool
+    where
+        T: Clone,
+    {
         match self.value.as_mut() {
-            Some(old) if old == new_value => false,
+            Some(old) if unchanged(old, new_value) => false,
             Some(old) => {
                 old.clone_from(new_value);
                 true
@@ -237,3 +274,7 @@ impl<T> Default for ReturnSlot<T> {
 #[cfg(test)]
 #[path = "tests/callbacks_callback_holder_tests.rs"]
 mod callback_holder_tests;
+
+#[cfg(test)]
+#[path = "tests/callbacks_param_state_tests.rs"]
+mod param_state_tests;
