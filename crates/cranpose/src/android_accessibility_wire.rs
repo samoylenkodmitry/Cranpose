@@ -152,8 +152,8 @@ fn encode_record(
     record.number(top);
     record.number(right);
     record.number(bottom);
-    record.number(center_x);
-    record.number(center_y);
+    record.float(center_x);
+    record.float(center_y);
     record.number(i32::from(element.clickable));
     record.text(&element.label);
     record.text(element.value.as_deref().unwrap_or(""));
@@ -166,9 +166,9 @@ fn encode_record(
     record.number(i32::from(element.focusable));
     record.number(i32::from(element.focused));
     record.number(i32::from(element.adjustable));
-    record.number(progress.map_or(0.0, |p| p.current));
-    record.number(progress.map_or(0.0, |p| p.start));
-    record.number(progress.map_or(0.0, |p| p.end));
+    record.float(progress.map_or(0.0, |p| p.current));
+    record.float(progress.map_or(0.0, |p| p.start));
+    record.float(progress.map_or(0.0, |p| p.end));
     record.number(i32::from(scroll.is_some()));
     record.number(i32::from(
         scroll.is_some_and(|range| range.can_scroll_forward()),
@@ -177,11 +177,15 @@ fn encode_record(
         scroll.is_some_and(|range| range.can_scroll_backward()),
     ));
     record.number(parent);
-    record.number(element.collection.map_or(0, |collection| collection.rows));
     record.number(
         element
             .collection
-            .map_or(0, |collection| collection.columns),
+            .map_or(0, |collection| count(collection.rows)),
+    );
+    record.number(
+        element
+            .collection
+            .map_or(0, |collection| count(collection.columns)),
     );
     record.number(i32::from(changed));
     record.number(element.collection_item.map_or(-1, item_row));
@@ -197,19 +201,53 @@ fn encode_record(
     record.last_number(selection_end);
 }
 
+/// Appends `value` in decimal, as `Display` writes it, without the formatter.
+fn push_decimal(out: &mut String, value: i32) {
+    let mut digits = [0u8; 10];
+    let mut magnitude = value.unsigned_abs();
+    let mut start = digits.len();
+    loop {
+        start -= 1;
+        digits[start] = b'0' + (magnitude % 10) as u8;
+        magnitude /= 10;
+        if magnitude == 0 {
+            break;
+        }
+    }
+    if value < 0 {
+        out.push('-');
+    }
+    out.extend(digits[start..].iter().map(|&digit| char::from(digit)));
+}
+
 /// Writes a record's fields straight into the update, each followed by a
 /// tab but the last: no field is built as a string of its own.
 struct RecordWriter<'a>(&'a mut String);
 
 impl RecordWriter<'_> {
-    fn number(&mut self, value: impl std::fmt::Display) {
+    fn number(&mut self, value: i32) {
         self.last_number(value);
         self.0.push('\t');
     }
 
-    fn last_number(&mut self, value: impl std::fmt::Display) {
-        // Writing to a String cannot fail.
-        let _ = write!(self.0, "{value}");
+    fn last_number(&mut self, value: i32) {
+        push_decimal(self.0, value);
+    }
+
+    /// `value` as `Display` writes it: a whole number without a fraction
+    /// through the integer writer, any other through the formatter.
+    fn float(&mut self, value: f32) {
+        const EXACT_INTEGERS: f32 = 16_777_216.0;
+        if value.fract() == 0.0
+            && value.abs() < EXACT_INTEGERS
+            && !(value == 0.0 && value.is_sign_negative())
+        {
+            push_decimal(self.0, value as i32);
+        } else {
+            // Writing to a String cannot fail.
+            let _ = write!(self.0, "{value}");
+        }
+        self.0.push('\t');
     }
 
     fn text(&mut self, value: &str) {
@@ -264,6 +302,11 @@ fn scroll_parent_ids(elements: &[AccessibilityElement], ids: &[i32]) -> Vec<i32>
 
 /// The row a control takes inside its group, counted from zero, for the
 /// host's collection item info: a group that runs left to right is one row.
+/// A collection's size as the host's `int` holds it.
+fn count(value: usize) -> i32 {
+    i32::try_from(value).unwrap_or(i32::MAX)
+}
+
 fn item_row(item: CollectionItem) -> i32 {
     if item.horizontal {
         0
