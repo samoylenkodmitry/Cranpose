@@ -539,7 +539,7 @@ fn loaded_typeface_families_register_their_single_file() {
 }
 
 #[test]
-fn a_font_file_is_read_once_until_it_changes() {
+fn reads_of_an_unchanged_font_file_share_its_bytes() {
     let directory = ScratchDir::new("read-once");
     let path = directory.write("Face.ttf", REGULAR);
     let first = read_font_file(&path).expect("the face reads");

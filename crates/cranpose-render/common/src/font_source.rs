@@ -5,8 +5,8 @@
 //! files and hand the bytes to the rasterizer. That is this module: it parses
 //! each face exactly once, at registration, and produces an immutable
 //! [`SoftwareTextFontSet`] that measurement and rasterization then share.
-//! A font file is read once per process, while it is unchanged, and every
-//! face instanced from it reads those bytes in place.
+//! The process keeps one copy of each font file's contents, shared by every
+//! face instanced from it and by later reads that find the file unchanged.
 //!
 //! Nothing here runs per frame or per string. A registry is built at startup,
 //! consumed into a font set, and the font set is cloned (it is `Arc`-backed)
@@ -23,7 +23,6 @@ use std::{
     io::Read,
     path::{Path, PathBuf},
     sync::{Mutex, PoisonError},
-    time::SystemTime,
 };
 
 use cranpose_ui::text::{FontFamily, FontFile, FontStyle, FontWeight};
@@ -345,34 +344,28 @@ impl SoftwareTextFontRegistry {
 
 struct ReadFontFile {
     path: PathBuf,
-    len: u64,
-    modified: Option<SystemTime>,
     bytes: &'static [u8],
 }
 
 static READ_FONT_FILES: Mutex<Vec<ReadFontFile>> = Mutex::new(Vec::new());
 
 fn read_font_file(path: &Path) -> Result<&'static [u8], FontLoadError> {
-    let read_error = |source| FontLoadError::Read {
+    let read = std::fs::read(path).map_err(|source| FontLoadError::Read {
         path: path.to_path_buf(),
         source,
-    };
-    let metadata = std::fs::metadata(path).map_err(read_error)?;
-    let (len, modified) = (metadata.len(), metadata.modified().ok());
+    })?;
     let mut files = READ_FONT_FILES
         .lock()
         .unwrap_or_else(PoisonError::into_inner);
     if let Some(file) = files
         .iter()
-        .find(|file| file.path == path && file.len == len && file.modified == modified)
+        .find(|file| file.path == path && file.bytes == read.as_slice())
     {
         return Ok(file.bytes);
     }
-    let bytes: &'static [u8] = Box::leak(std::fs::read(path).map_err(read_error)?.into());
+    let bytes: &'static [u8] = Box::leak(read.into_boxed_slice());
     files.push(ReadFontFile {
         path: path.to_path_buf(),
-        len,
-        modified,
         bytes,
     });
     Ok(bytes)
