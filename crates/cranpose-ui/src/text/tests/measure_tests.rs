@@ -1496,3 +1496,9 @@ fn a_held_width_prepares_the_layout_the_held_one_is() {
         );
     }
 }
+
+#[test]
+fn a_measurer_without_font_metrics_has_no_line_box() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    assert_eq!(text_line_box(&TextStyle::default()), None);
+}

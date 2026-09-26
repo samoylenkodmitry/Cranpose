@@ -675,8 +675,9 @@ fn software_text_metrics_keep_requested_font_size_for_default_font() {
 
     let metrics = measure_text_with_font("Counter App", &style, 14.0, &font);
     assert!(
-        (metrics.width - 83.16).abs() < 0.05 && (metrics.height - 19.6).abs() < 0.05,
-        "14sp demo text must use font em metrics, not ab_glyph height units: {metrics:?}"
+        (metrics.width - 83.16).abs() < 0.05 && (metrics.height - 19.0).abs() < 0.05,
+        "14sp demo text must use font em metrics, not ab_glyph height units, and a line \
+         with no line height is the font's own 15px ascent and 4px descent: {metrics:?}"
     );
 }
 

@@ -121,16 +121,13 @@ pub enum LineHeightMode {
     Tight,
 }
 
-/// How a line of text sits inside the height it was given.
+/// How a line of text sits inside the height it was given, and what a
+/// paragraph gives back at its edges.
 ///
-/// A style that names one is laid out by AOSP's `StaticLayout` rule — whole-pixel
-/// metrics, a font that a short line height cannot shrink, and the odd pixel of
-/// leading below the baseline. A style that names none keeps the framework's
-/// plain arithmetic: the box is exactly the requested height with the leading
-/// split evenly. The two disagree by a device pixel on most faces, so a screen
-/// that draws through a [`crate::DrawScope`] and composes `Text` in the same
-/// frame has to state the same policy on both or the two sets of rows will not
-/// line up.
+/// Text is laid out by AOSP's `StaticLayout` rule, as Jetpack Compose lays it
+/// out: whole-pixel metrics, the leading placed by `alignment`, and the
+/// leading above the first line and below the last given back by `trim`. The
+/// [`Default`] is Compose's own, which is what a style that names none gets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct LineHeightStyle {
     pub alignment: LineHeightAlignment,
@@ -171,9 +168,8 @@ pub struct DrawTextStyle {
     /// Distance between consecutive baselines. `None` uses the font's natural
     /// line height.
     pub line_height: Option<f32>,
-    /// How the line sits inside that height. `None` takes the framework's plain
-    /// split; naming one asks for the platform rule, and is what makes a drawn
-    /// run land on the same rows as a composed `Text` of the same style.
+    /// How the line sits inside that height. `None` takes
+    /// [`LineHeightStyle::default`], as a composed `Text` does.
     pub line_height_style: Option<LineHeightStyle>,
     pub align: TextAlign,
     pub vertical_align: TextVerticalAlign,
@@ -222,8 +218,7 @@ impl DrawTextStyle {
         self
     }
 
-    /// Asks for a line-height policy, which is what makes this run resolve its
-    /// line box by the same rule a `Text` composable of the same style does.
+    /// Asks for a line-height policy other than the default one.
     pub fn with_line_height_style(mut self, line_height_style: LineHeightStyle) -> Self {
         self.line_height_style = Some(line_height_style);
         self
@@ -332,9 +327,12 @@ pub trait DrawTextMeasurer {
 /// Font-free estimate used when no [`DrawTextMeasurer`] is installed.
 ///
 /// Assumes a 0.6 em advance per character and the 0.8/-0.2 em ascent/descent
-/// split typical of a UI sans face, so the shape of the result (and the
-/// baseline formula) matches what a real font measurer returns even though the
-/// numbers do not.
+/// split typical of a UI sans face, laid out by the default
+/// [`LineHeightStyle`]: a line without a requested height is the face's own
+/// 1 em, and the leading a requested one adds is split in the face's
+/// proportions and given back above the first line and below the last. So the
+/// shape of the result matches what a real font measurer returns even though
+/// the numbers do not.
 pub fn estimate_text_measurement(text: &str, style: &DrawTextStyle) -> TextMeasurement {
     const CHAR_WIDTH_RATIO: f32 = 0.6;
     const ASCENT_RATIO: f32 = 0.8;
@@ -343,8 +341,9 @@ pub fn estimate_text_measurement(text: &str, style: &DrawTextStyle) -> TextMeasu
     let font_size = style.resolved_font_size();
     let letter_spacing = style.resolved_letter_spacing().max(0.0);
     let natural_line_height = font_size * NATURAL_LINE_HEIGHT_RATIO;
-    let line_height = style.resolved_line_height(font_size * 1.4);
-    let first_baseline = font_size * ASCENT_RATIO + (line_height - natural_line_height) * 0.5;
+    let line_height = style.resolved_line_height(natural_line_height);
+    let leading = line_height - natural_line_height;
+    let first_baseline = font_size * ASCENT_RATIO;
 
     if text.is_empty() {
         return TextMeasurement::empty(line_height, first_baseline);
@@ -360,7 +359,7 @@ pub fn estimate_text_measurement(text: &str, style: &DrawTextStyle) -> TextMeasu
     }
 
     TextMeasurement {
-        size: Size::new(width, line_count as f32 * line_height),
+        size: Size::new(width, line_count as f32 * line_height - leading),
         line_height,
         first_baseline,
         line_count,

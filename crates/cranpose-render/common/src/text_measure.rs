@@ -177,6 +177,26 @@ fn resolve_font_size(style: &cranpose_ui::text::TextStyle) -> f32 {
 }
 
 impl TextMeasurer for CachedFontTextMeasurer {
+    fn glyph_line_box(&self, style: &cranpose_ui::text::TextStyle) -> Option<(f32, f32)> {
+        let font = self.text_resources.fonts().resolve(style)?;
+        Some(crate::software_text_raster::font_glyph_line_box(
+            style, font,
+        ))
+    }
+
+    fn first_baseline(&self, style: &cranpose_ui::text::TextStyle) -> Option<f32> {
+        Some(self.line_box(style)?.baseline)
+    }
+
+    fn line_box(&self, style: &cranpose_ui::text::TextStyle) -> Option<cranpose_ui::text::LineBox> {
+        let font = self.text_resources.fonts().resolve(style)?;
+        Some(crate::software_text_raster::font_line_box(
+            style,
+            font,
+            resolve_font_size(style),
+        ))
+    }
+
     fn measure(
         &self,
         text: &cranpose_ui::text::AnnotatedString,

@@ -210,19 +210,15 @@ pub trait TextMeasurer: 'static {
         None
     }
 
-    /// One line's whole box for a style: its height and its baseline, with no
-    /// string to measure.
+    /// One line's whole box for a style: its advance, its baseline and what a
+    /// paragraph of it gives back at its edges, with no string to measure.
     ///
     /// A layout that stacks rows of a known style needs the row pitch before it
-    /// has any text to put in them, and taking the height from one call and the
-    /// baseline from another lets the two come from different rules. `None` when
-    /// the measurer has no font metrics, same as [`Self::first_baseline`].
+    /// has any text to put in them, and a paragraph's height and first baseline
+    /// both depend on the edges. `None` when the measurer has no font metrics.
     fn line_box(&self, style: &TextStyle) -> Option<crate::text::LineBox> {
-        let baseline = self.first_baseline(style)?;
-        Some(crate::text::LineBox {
-            height: self.line_height(&crate::text::AnnotatedString::default(), style),
-            baseline,
-        })
+        let _ = style;
+        None
     }
 
     fn line_height_for_node(
@@ -729,6 +725,14 @@ pub fn glyph_line_box(style: &TextStyle, line_height: f32) -> (f32, f32) {
     })
 }
 
+/// The paragraph line box of `style` (see [`TextMeasurer::line_box`]): its
+/// advance, its baseline and what a paragraph gives back at its edges. `None`
+/// when the active measurer carries no font metrics.
+pub fn text_line_box(style: &TextStyle) -> Option<crate::text::LineBox> {
+    let style = scale_text_style_font_sizes(style, crate::current_font_scale_curve());
+    crate::render_state::with_text_service(|service| service.with_measurer(|m| m.line_box(&style)))
+}
+
 /// Distance from the top of a `style` line slot down to its baseline (see
 /// [`TextMeasurer::first_baseline`]). `None` when the active measurer carries
 /// no font metrics.
@@ -1053,12 +1057,16 @@ pub fn prepare_text_layout_with_measurer_for_node<M: TextMeasurer + ?Sized>(
         measured_width
     };
 
+    let edges = measurer
+        .line_box(style)
+        .unwrap_or_else(|| crate::text::LineBox::untrimmed(line_height, 0.0));
     let prepared = PreparedTextLayout {
         text: Rc::new(display_annotated),
         visual_style: style.clone(),
         metrics: TextMetrics {
             width,
-            height: layout_line_count as f32 * line_height,
+            height: (layout_line_count as f32 * line_height - edges.trim_top - edges.trim_bottom)
+                .max(0.0),
             line_height,
             line_count: layout_line_count,
         },

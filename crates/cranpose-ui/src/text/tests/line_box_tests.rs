@@ -28,12 +28,60 @@ fn wear() -> LineHeightStyle {
 }
 
 #[test]
-fn a_style_that_asks_for_nothing_gets_exactly_what_it_got_before() {
+fn a_style_that_names_no_line_height_style_gets_composes_default() {
     let extent = roboto_16sp();
     let plain = line_box(&styled(36.0, None), extent, 36.0, 1.0);
-    assert_eq!(plain.height, 36.0);
-    let natural = extent.natural().ceil();
-    assert_eq!(plain.baseline, extent.ascent + (36.0 - natural) * 0.5);
+    let default = line_box(
+        &styled(36.0, Some(LineHeightStyle::default())),
+        extent,
+        36.0,
+        1.0,
+    );
+    assert_eq!(plain, default);
+    assert_eq!(plain.height, 36.0, "every line keeps the asked advance");
+    assert_eq!(
+        plain.first_baseline(),
+        extent.ascent.round(),
+        "the first line gives its leading back, so its glyphs start at the paragraph's top"
+    );
+    assert_eq!(
+        plain.block_height(1),
+        (extent.ascent.round() + extent.descent.round()),
+        "a single line of it is exactly as tall as its font"
+    );
+}
+
+#[test]
+fn a_style_that_asks_for_no_line_height_gets_the_fonts_own_extent() {
+    let extent = roboto_16sp();
+    let unspecified = line_box(&TextStyle::default(), extent, 51.2, 1.0);
+    assert_eq!(
+        unspecified.height,
+        extent.ascent.round() + extent.descent.round(),
+        "whatever height the caller falls back to, the font's own extent wins"
+    );
+    assert_eq!(unspecified.trim_top, 0.0);
+    assert_eq!(unspecified.trim_bottom, 0.0);
+}
+
+#[test]
+fn font_padding_trims_nothing() {
+    let extent = FontExtent::new(20.0, 10.0, 4.0);
+    let padded = TextStyle {
+        paragraph_style: ParagraphStyle {
+            line_height: TextUnit::Sp(40.0),
+            platform_style: Some(PlatformParagraphStyle {
+                include_font_padding: Some(true),
+                shaping: None,
+            }),
+            ..ParagraphStyle::default()
+        },
+        ..TextStyle::default()
+    };
+    let resolved = line_box(&padded, extent, 40.0, 1.0);
+    assert_eq!(resolved.trim_top, 0.0);
+    assert_eq!(resolved.trim_bottom, 0.0);
+    assert_eq!(resolved.block_height(2), 80.0);
 }
 
 #[test]
@@ -253,8 +301,15 @@ fn trimming_removes_the_leading_on_the_edge_it_names() {
         40.0,
         1.0,
     );
-    assert_eq!(both.height, 30.0);
-    assert_eq!(both.baseline, 20.0);
+    assert_eq!(both.height, 40.0, "every line keeps the asked advance");
+    assert_eq!(both.baseline, 25.0);
+    assert_eq!(both.first_baseline(), 20.0);
+    assert_eq!(both.block_height(1), 30.0);
+    assert_eq!(
+        both.block_height(3),
+        110.0,
+        "only the first line's top and the last line's bottom are given back"
+    );
 
     let top_only = line_box(
         &styled(
@@ -268,8 +323,9 @@ fn trimming_removes_the_leading_on_the_edge_it_names() {
         40.0,
         1.0,
     );
-    assert_eq!(top_only.height, 35.0);
-    assert_eq!(top_only.baseline, 20.0);
+    assert_eq!(top_only.block_height(1), 35.0);
+    assert_eq!(top_only.first_baseline(), 20.0);
+    assert_eq!(top_only.block_height(2), 75.0);
 }
 
 #[test]
