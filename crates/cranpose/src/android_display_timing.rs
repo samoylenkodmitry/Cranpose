@@ -21,11 +21,13 @@ use wgpu::hal::{Surface as _, api::Vulkan};
 
 use crate::frame_pacer::PresentLog;
 
-/// When one frame reached the screen, in nanoseconds on the monotonic
-/// clock, and how many later frames were queued behind it then.
+/// When one frame reached the screen and when its present returned, in
+/// nanoseconds on the monotonic clock, and how many later frames were
+/// queued behind it then.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct DisplayedFrame {
     pub(crate) shown_ns: i64,
+    pub(crate) queued_ns: i64,
     pub(crate) queued_behind: u32,
 }
 
@@ -120,11 +122,12 @@ impl cranpose_render_wgpu::PresentObserver for DisplayTimingObserver {
         };
         for record in records {
             let shown_ns = record.actual_present_time as i64;
-            let queued_behind = self.presents.queued_behind(record.present_id, shown_ns);
-            if let (true, Some(queued_behind)) = (shown_ns > 0, queued_behind) {
+            let shown = self.presents.shown(record.present_id, shown_ns);
+            if let (true, Some(shown)) = (shown_ns > 0, shown) {
                 let _ = self.frames.send(DisplayedFrame {
                     shown_ns,
-                    queued_behind,
+                    queued_ns: shown.presented_ns,
+                    queued_behind: shown.queued_behind,
                 });
             }
         }

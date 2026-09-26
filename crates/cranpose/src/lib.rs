@@ -444,6 +444,11 @@ pub mod android;
     test,
     all(feature = "android", feature = "renderer-wgpu", target_os = "android")
 ))]
+mod frame_lead;
+#[cfg(any(
+    test,
+    all(feature = "android", feature = "renderer-wgpu", target_os = "android")
+))]
 mod frame_pacer;
 #[cfg(feature = "renderer-wgpu")]
 #[cfg_attr(
