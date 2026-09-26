@@ -352,6 +352,10 @@ impl AndroidOverlayWindowOptions {
 ))]
 #[derive(Debug, Error)]
 pub enum LaunchError {
+    /// Connecting to or rendering inside an embedding host failed.
+    #[cfg(feature = "embed")]
+    #[error("embedded launch failed: {0}")]
+    Embedded(#[from] crate::embed::EmbedError),
     /// Creating the desktop event loop failed.
     #[error("failed to create desktop event loop: {0}")]
     EventLoopCreate(#[source] winit::error::EventLoopError),
@@ -1177,6 +1181,12 @@ impl<Fonts: LauncherFonts> AppLauncher<Fonts> {
     /// This method blocks the current thread and starts the platform event loop.
     /// It should be the last call in your `main` function.
     ///
+    /// With the `embed` feature enabled, an IDE can set the endpoint environment
+    /// variables `CRANPOSE_EMBED_ADDRESS` and `CRANPOSE_EMBED_TOKEN` to run this same
+    /// application inside its preview panel. Without an endpoint it opens a
+    /// desktop window as usual. Embedded failures are returned as
+    /// `LaunchError::Embedded`.
+    ///
     /// # Arguments
     ///
     /// * `content` - The root composable function of your application.
@@ -1186,6 +1196,10 @@ impl<Fonts: LauncherFonts> AppLauncher<Fonts> {
         not(target_os = "android")
     ))]
     pub fn try_run(self, content: impl FnMut() + 'static) -> Result<(), LaunchError> {
+        #[cfg(feature = "embed")]
+        if let Some(endpoint) = crate::embed::EmbedEndpoint::from_env() {
+            return self.try_run_embedded(endpoint, content).map_err(Into::into);
+        }
         crate::desktop::try_run(self.into_settings(), content)
     }
 
