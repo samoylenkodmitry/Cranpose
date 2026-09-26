@@ -391,15 +391,6 @@ impl DeviceErrorSentry {
     }
 }
 
-/// The blend modes a shape pipeline is built for.
-///
-/// `supported_blend_mode` folds every other mode onto `SrcOver`, so these
-/// three over the two run tiers are the whole general pipeline space, and
-/// `ShapePipelines` builds all six when the renderer starts rather than
-/// inside the first frame that needs one.
-pub(crate) const SUPPORTED_BLEND_MODES: [BlendMode; 3] =
-    [BlendMode::Src, BlendMode::SrcOver, BlendMode::DstOut];
-
 fn is_blend_mode_supported(mode: BlendMode) -> bool {
     matches!(
         mode,
@@ -1039,6 +1030,7 @@ pub(crate) struct ShapePipelineKey {
 }
 
 impl ShapePipelineKey {
+    #[cfg(test)]
     pub(crate) fn general_for(blend_mode: BlendMode, tier: RunTier) -> Self {
         Self {
             blend_mode,
@@ -1932,7 +1924,6 @@ pub struct GpuRenderer {
     screenshot_converter: OutputConverter,
     adapter_backend: wgpu::Backend,
     pipeline_cache: Option<wgpu::PipelineCache>,
-    pipeline_compiler: PipelineCompiler,
     shape_pipelines: ShapePipelines,
     image_pipeline: LazyGpuResource<wgpu::RenderPipeline>,
     image_pipeline_dst_out: LazyGpuResource<wgpu::RenderPipeline>,
@@ -1979,6 +1970,8 @@ pub struct GpuRenderer {
     last_frame_stats: Option<gpu_stats::FrameStatsSnapshot>,
     pending_frame_warmup_frames: u8,
     frame_count: u64,
+    /// How many requested shader warm-ups this renderer has queued.
+    shader_warm_ups_queued: usize,
 }
 
 /// What a frame clears to before it draws: nothing for a transparent
@@ -2155,7 +2148,6 @@ impl GpuRenderer {
             screenshot_converter,
             adapter_backend,
             pipeline_cache,
-            pipeline_compiler,
             shape_pipelines,
             image_pipeline: LazyGpuResource::new("image/src-over"),
             image_pipeline_dst_out: LazyGpuResource::new("image/dst-out"),
@@ -2214,8 +2206,9 @@ impl GpuRenderer {
             last_frame_stats: None,
             pending_frame_warmup_frames: 0,
             frame_count: 0,
+            shader_warm_ups_queued: 0,
         };
-        renderer.warm_pipelines();
+        renderer.warm_requested_shaders();
         log::info!(
             "[gpu-init] {:?} renderer ready in {:.1} ms (effects {:.1} ms)",
             adapter_backend,
@@ -2229,31 +2222,15 @@ impl GpuRenderer {
         self.shape_pipelines.ensure(key);
     }
 
-    /// Queues every pipeline a page can reach on the background compiler,
-    /// so a page's first glass, image or text draw finds it compiled.
-    fn warm_pipelines(&mut self) {
-        let backend = self.adapter_backend;
-        self.glyph_atlas_pipeline.warm(
-            &self.pipeline_compiler,
-            backend,
-            self.glyph_atlas_pipeline_job(),
-        );
-        for blend_mode in [BlendMode::SrcOver, BlendMode::DstOut] {
-            self.image_pipeline_resource(blend_mode).warm(
-                &self.pipeline_compiler,
-                backend,
-                self.image_pipeline_job(blend_mode),
-            );
+    /// Queues the shader warm-ups requested since the last call, each at the
+    /// target it draws to (`cranpose_ui_graphics::request_shader_warm_ups`).
+    fn warm_requested_shaders(&mut self) {
+        let requested = cranpose_ui_graphics::shader_warm_ups_after(self.shader_warm_ups_queued);
+        if requested.is_empty() {
+            return;
         }
-        self.output_converter
-            .warm(&self.device, &self.pipeline_compiler, backend);
-        self.effect_renderer.warm_pipelines(&self.device);
-    }
-
-    /// Queues an app's own runtime shaders behind the framework's, each at
-    /// the target it draws to.
-    pub(crate) fn warm_shaders(&mut self, warm_ups: &[cranpose_ui_graphics::ShaderWarmUp]) {
-        self.effect_renderer.warm_shaders(warm_ups);
+        self.shader_warm_ups_queued += requested.len();
+        self.effect_renderer.warm_shaders(&requested);
     }
 
     fn image_pipeline_resource(
@@ -2630,6 +2607,7 @@ impl GpuRenderer {
         }
         returns.frame_id = packet.frame_id;
         let render_start = Instant::now();
+        self.warm_requested_shaders();
         self.shape_pipelines.begin_frame();
         self.viewport_uniforms.begin_frame();
         self.run_store.begin_frame(gpu_stats_enabled());

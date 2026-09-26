@@ -233,27 +233,28 @@ composites the resolved textures.
 - **Pipeline compilation** (`pipeline_compiler.rs`, `lazy_resource.rs`,
   `shader_cache.rs`): the driver compiles a glass pipeline in ~100 ms and a
   fixed effect pipeline in ~70 ms (Metal, no disk cache), so no frame waits
-  for one it can avoid. One background thread compiles in queue order; a
+  for one it can avoid. Two background threads compile, each in queue
+  order: one for pipelines a frame is drawing without (a stand-in draws
+  until they land), one for warm-ups, so a demanded pipeline never waits
+  behind a warm-up that takes seconds on a watch's driver. A
   `LazyGpuResource` is one shared cell, so a frame arriving mid-compile
-  waits for that compile instead of starting another. `GpuRenderer::new`
-  queues what the first frame draws first (glyph, image, output and the
-  fixed effect pipelines) and the general pipelines of the shipped runtime
-  shaders last, since one liquid glass compile is a second on Mali and
-  nothing draws it before the first glass screen. The six general shape
-  pipelines stay synchronous in `ShapePipelines::new`: the creating thread
-  is idle until the first frame, so building them there overlaps the
-  compiler's work, where queuing them ahead on the one compiler thread put
-  the Mate 20 X's cold first frame at 286-755 ms against 245-294 ms.
-  Specialized shape pipelines (Vulkan only) queue on the compiler thread
-  behind at most two pending keys, the general shape pipeline drawing until
-  each lands. Shaders a widget crate assembles at runtime reach the queue
-  through `WgpuRenderer::warm_shaders`, each `ShaderWarmUp` naming its
-  `ShaderTarget` (`Page` composites with premultiplied source-over, `Layer`
-  renders into the layer with replace) and keeping its overrides, so a mask
-  pass warms the pipeline it draws with; every platform registers
-  `cranpose_liquid::shader_warm_ups()` (tab lighting, the two vibrancy
-  passes) before `init_gpu`, and the list applies again at every later
-  `init_gpu` (`shader_warm_ups.rs`). A runtime shader that
+  waits for that compile instead of starting another. Nothing is warmed
+  on speculation: a pipeline compiles where it is first needed unless
+  something asked for it ahead. The six general shape pipelines are built
+  synchronously in `ShapePipelines::new`, since the first frame needs a
+  shape pipeline and the creating thread is idle until then. Specialized
+  shape pipelines (Vulkan only) queue on the demanded thread behind at most
+  two pending keys, the general shape pipeline drawing until each lands.
+  Code that builds an effect asks for its shaders ahead through
+  `cranpose_ui_graphics::request_shader_warm_ups`, each `ShaderWarmUp`
+  naming its `ShaderTarget` (`Page` composites with premultiplied
+  source-over, `Layer` renders into the layer with replace) and keeping
+  its overrides, so a mask pass warms the pipeline it draws with. The
+  liquid tab bar asks for its lighting and both vibrancy passes when it is
+  first composed, before its first press. The requests are process-wide:
+  each frame queues the new ones, and a renderer created later, as after
+  an Android surface loss, queues them all (`shader_warm_ups.rs`). A
+  runtime shader that
   declares its specialization exact (`set_specialization_exact`; liquid
   glass does) has its specializations (override set, interior and rim)
   compiled in the background while its general pipeline draws in their
@@ -266,13 +267,13 @@ composites the resolved textures.
   inside the frame that first draws it, once per install. Per-material folds are on for Android only
   (`glass_material_folds_enabled`), so on Android the compiler keeps one
   pipeline pair per material off the present thread, while the desktop
-  pays only the fixed set and the general glass pipelines.
+  compiles only the general glass pipelines.
   `shader_pipeline_fallback_draws` counts such draws; captures that
   assert per-draw statistics settle on zero first (`settled_capture`).
   `CRANPOSE_BACKGROUND_PIPELINES=0` compiles everything at first use.
   Across launches a shader compiles once per install and once more when
-  its source changes; every launch still creates the pipeline objects from
-  a cache, off the render thread. Android keeps the driver's compiled
+  its source changes; every later launch creates the pipeline objects from
+  a cache. Android keeps the driver's compiled
   pipelines in the `pipeline_disk_cache` blob (Pixel Watch 3: ~20 ms per
   glass pipeline from the blob, 650-990 ms cold). Mesa on Linux serializes
   nothing into that blob (Intel ANV 26.2: a 96 B header, the same from

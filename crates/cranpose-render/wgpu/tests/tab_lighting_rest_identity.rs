@@ -1,19 +1,20 @@
 use cranpose_render_common::graph::{ProjectiveTransform, RenderNode};
-use cranpose_ui_graphics::{GraphicsLayer, RenderEffect, RuntimeShader};
+use cranpose_ui_graphics::{
+    GraphicsLayer, RUNTIME_SHADER_PRELUDE_WGSL, RenderEffect, RuntimeShader,
+};
 
 use crate::{
     shared_test_support, support,
     support::bar_scene::{BAR, HEIGHT, WIDTH},
 };
 
-/// The liquid tab bar's lighting shader, the way the bar registers it for
-/// warm-up: the source with no uniform set.
+/// The liquid tab bar's lighting shader, assembled the way the bar builds
+/// it: the source with no uniform set.
 fn lighting_shader() -> RuntimeShader {
-    cranpose_liquid::shader_warm_ups()
-        .into_iter()
-        .map(|warm_up| warm_up.shader)
-        .find(|shader| shader.source().contains("blurred_disk"))
-        .expect("the tab lighting shader is registered for warm-up")
+    RuntimeShader::new(&format!(
+        "{RUNTIME_SHADER_PRELUDE_WGSL}\n{}",
+        include_str!("../../../cranpose-liquid/src/widgets/tab_lighting.wgsl")
+    ))
 }
 
 /// The lighting composited over a page at zero glow must leave every byte

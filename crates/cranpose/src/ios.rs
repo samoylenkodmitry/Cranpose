@@ -358,7 +358,6 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
 
         let fonts = self.settings.resolve_font_set();
         let mut renderer = WgpuRenderer::with_font_set(fonts);
-        renderer.warm_shaders(cranpose_liquid::shader_warm_ups());
         renderer.init_gpu(
             Arc::clone(&device),
             Arc::clone(&queue),

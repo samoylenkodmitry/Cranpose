@@ -1,22 +1,36 @@
-use super::shader_warm_ups;
+use cranpose_ui::Modifier;
+use cranpose_ui_graphics::shader_warm_ups_after;
+
+use super::{tab_lighting, vibrancy};
+use crate::prelude::*;
 
 #[test]
-fn every_widget_shader_is_listed_once() {
-    let warm_ups = shader_warm_ups();
-    let identities: Vec<_> = warm_ups
-        .iter()
-        .map(|warm_up| {
-            (
-                warm_up.shader.source_hash(),
-                warm_up.shader.overrides_hash(),
-            )
-        })
-        .collect();
-    assert_eq!(identities.len(), 3);
-    for (index, identity) in identities.iter().enumerate() {
+fn composing_a_tab_bar_requests_its_lighting_and_ink_shaders() {
+    let mut rule = cranpose_testing::ComposeTestRule::new();
+    rule.set_content(|| {
+        LiquidTheme(LiquidThemeSpec::default(), || {
+            LiquidTabBar(
+                Modifier::empty(),
+                LiquidTabBarSpec::default(),
+                0,
+                |_| {},
+                |tabs| {
+                    tabs.tab(crate::icons::STAR, "Discover");
+                    tabs.tab(crate::icons::BOOKMARK, "Saved");
+                },
+            );
+        });
+    })
+    .expect("compose tabs");
+
+    let requested = shader_warm_ups_after(0);
+    for warm_up in tab_lighting::shader_warm_ups()
+        .into_iter()
+        .chain(vibrancy::shader_warm_ups())
+    {
         assert!(
-            !identities[..index].contains(identity),
-            "a shader listed twice would compile twice"
+            requested.contains(&warm_up),
+            "a composed tab bar must ask for the pipelines its press and ink draw with"
         );
     }
 }

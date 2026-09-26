@@ -2,12 +2,12 @@ use std::sync::{Arc, OnceLock};
 
 use web_time::Instant;
 
-use crate::pipeline_compiler::{CompilerSend, CompilerSync, PipelineCompiler};
+use crate::pipeline_compiler::{CompileLane, CompilerSend, CompilerSync, PipelineCompiler};
 
-/// A GPU resource created once, by whichever thread asks first: a warm-up
+/// A GPU resource created once, by whichever thread asks first: a job
 /// queued on the background compiler, or the frame that needs it. A frame
-/// arriving while the warm-up is under way waits for that one creation
-/// rather than starting a second.
+/// arriving while that job is under way waits for that one creation rather
+/// than starting a second.
 pub(crate) struct LazyGpuResource<T> {
     label: &'static str,
     value: Arc<OnceLock<T>>,
@@ -50,14 +50,16 @@ impl<T> LazyGpuResource<T> {
 }
 
 impl<T: CompilerSend + CompilerSync + 'static> LazyGpuResource<T> {
-    pub(crate) fn warm(
+    /// Queues the creation on `lane` of the background compiler.
+    pub(crate) fn queue(
         &self,
         compiler: &PipelineCompiler,
+        lane: CompileLane,
         backend: wgpu::Backend,
         create: impl FnOnce() -> T + CompilerSend + 'static,
     ) {
         let resource = self.clone();
-        compiler.enqueue(move || {
+        compiler.enqueue(lane, move || {
             resource.get_or_init(backend, create);
         });
     }

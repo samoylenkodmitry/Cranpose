@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     hash::{Hash, Hasher},
     sync::Arc,
 };
@@ -8,7 +8,9 @@ use cranpose_ui_graphics::{FxBuildHasher, RuntimeShader, ShaderTarget};
 use naga::ShaderStage;
 
 use crate::{
-    debug_toggles::DebugToggle, lazy_resource::LazyGpuResource, pipeline_compiler::PipelineCompiler,
+    debug_toggles::DebugToggle,
+    lazy_resource::LazyGpuResource,
+    pipeline_compiler::{CompileLane, PipelineCompiler},
 };
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -192,6 +194,9 @@ pub(crate) struct ShaderPipelineCache {
     compiler: PipelineCompiler,
     sources: HashMap<u64, ShaderSource, FxBuildHasher>,
     pipelines: HashMap<PipelineKey, LazyGpuResource<Option<wgpu::RenderPipeline>>, FxBuildHasher>,
+    /// Pipelines a frame has asked for, queued on the demanded lane even
+    /// when a warm-up of theirs already waits on the other.
+    demanded: HashSet<PipelineKey, FxBuildHasher>,
     forced: Vec<&'static str>,
     forced_hash: u64,
 }
@@ -227,6 +232,7 @@ impl ShaderPipelineCache {
             compiler,
             sources: HashMap::default(),
             pipelines: HashMap::default(),
+            demanded: HashSet::default(),
             forced: Vec::new(),
             forced_hash: 0,
         }
@@ -332,13 +338,15 @@ impl ShaderPipelineCache {
             .is_some_and(|slot| slot.get().is_some())
     }
 
-    fn request(&mut self, shader: &RuntimeShader, key: PipelineKey) {
-        if self.pipelines.contains_key(&key) {
+    fn request(&mut self, shader: &RuntimeShader, key: PipelineKey, lane: CompileLane) {
+        let queued = self.pipelines.contains_key(&key);
+        let first_demand = lane == CompileLane::Demanded && self.demanded.insert(key);
+        if queued && !first_demand {
             return;
         }
         let job = self.job(shader, key);
         self.slot(key)
-            .warm(&self.compiler, self.factory.backend, || job.build());
+            .queue(&self.compiler, lane, self.factory.backend, || job.build());
     }
 
     /// Queues the pipeline drawing `shader` whole for `mode` on the
@@ -349,7 +357,7 @@ impl ShaderPipelineCache {
             return;
         }
         let key = self.key(shader, mode, ShaderDrawVariant::Whole);
-        self.request(shader, key);
+        self.request(shader, key, CompileLane::WarmUp);
     }
 
     /// The pipeline drawing `shader` as `variant`, or `None` when the shader
@@ -375,7 +383,7 @@ impl ShaderPipelineCache {
             };
             (key, fit)
         } else {
-            self.request(shader, key);
+            self.request(shader, key, CompileLane::Demanded);
             (general, ShaderPipelineFit::Fallback)
         };
         if self.ready(build) {

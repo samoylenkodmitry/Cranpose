@@ -1,4 +1,4 @@
-use std::sync::OnceLock;
+use std::sync::{Once, OnceLock};
 
 use cranpose_macros::composable;
 use cranpose_ui::{
@@ -54,6 +54,8 @@ pub(super) fn TabLighting(
     glow: cranpose_core::State<f32>,
     local_glow_factor: cranpose_core::State<f32>,
 ) {
+    static WARM_UP: Once = Once::new();
+    WARM_UP.call_once(|| cranpose_ui_graphics::request_shader_warm_ups(shader_warm_ups()));
     Box(
         Modifier::empty()
             .size(size)

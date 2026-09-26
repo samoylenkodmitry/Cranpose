@@ -34,7 +34,6 @@ pub(crate) struct RendererFrontend {
     pub(crate) layer_motion: LayerMotion,
     pub(crate) frame_sequence: u64,
     pub(crate) changed_nodes: Vec<cranpose_core::NodeId>,
-    pub(crate) shader_warm_ups: Vec<cranpose_ui_graphics::ShaderWarmUp>,
     pub(crate) transparent_background: bool,
 }
 
@@ -75,7 +74,6 @@ impl RendererFrontend {
             layer_motion: LayerMotion::default(),
             frame_sequence: 0,
             changed_nodes: Vec::new(),
-            shader_warm_ups: Vec::new(),
             transparent_background: false,
         }
     }

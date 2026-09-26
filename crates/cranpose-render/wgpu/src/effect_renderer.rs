@@ -5,9 +5,7 @@ use cranpose_render_common::{
     geometry::{BLUR_TAP_PAIRS, BlurKernel, blur_scratch_block},
 };
 use cranpose_ui_graphics::{
-    BlendMode, GRADIENT_BLUR_WGSL, GRADIENT_CUT_MASK_WGSL, GRADIENT_FADE_DST_OUT_WGSL,
-    LIQUID_GLASS_WGSL, MAX_SUBSTRATES, ROUNDED_ALPHA_MASK_WGSL, RenderEffect, RuntimeShader,
-    SubstrateSpec, TileMode,
+    BlendMode, MAX_SUBSTRATES, RenderEffect, RuntimeShader, SubstrateSpec, TileMode,
 };
 use smallvec::SmallVec;
 
@@ -20,7 +18,6 @@ use crate::{
     gpu_stats::FrameStats,
     lazy_resource::LazyGpuResource,
     offscreen::{OffscreenPool, OffscreenTarget},
-    pipeline::GPU_TEXT_BRUSH_EFFECT_SHADER,
     pipeline_compiler::PipelineCompiler,
     shader_cache::{
         RuntimeShaderPipelineMode, ShaderDrawVariant, ShaderPipelineCache, ShaderPipelineFit,
@@ -97,7 +94,6 @@ pub(crate) struct EffectRenderer {
     offscreen_pool: OffscreenPool,
     pub shader_cache: ShaderPipelineCache,
     pipeline_cache: Option<wgpu::PipelineCache>,
-    compiler: PipelineCompiler,
 
     blur_shader: wgpu::ShaderModule,
     blur_pipeline_layout: wgpu::PipelineLayout,
@@ -970,30 +966,6 @@ fn projective_pipeline_job(
     })
 }
 
-/// The runtime shaders the framework ships and the mode each draws in, so
-/// their general pipelines are compiled before a page first uses them.
-const BUILTIN_RUNTIME_SHADERS: [(&str, RuntimeShaderPipelineMode); 7] = [
-    (
-        LIQUID_GLASS_WGSL,
-        RuntimeShaderPipelineMode::PremultipliedSrcOver,
-    ),
-    (LIQUID_GLASS_WGSL, RuntimeShaderPipelineMode::Replace),
-    (
-        GRADIENT_BLUR_WGSL,
-        RuntimeShaderPipelineMode::PremultipliedSrcOver,
-    ),
-    (GRADIENT_CUT_MASK_WGSL, RuntimeShaderPipelineMode::Replace),
-    (ROUNDED_ALPHA_MASK_WGSL, RuntimeShaderPipelineMode::Replace),
-    (
-        GRADIENT_FADE_DST_OUT_WGSL,
-        RuntimeShaderPipelineMode::Replace,
-    ),
-    (
-        GPU_TEXT_BRUSH_EFFECT_SHADER,
-        RuntimeShaderPipelineMode::Replace,
-    ),
-];
-
 impl EffectRenderer {
     pub fn new(
         device: &wgpu::Device,
@@ -1151,7 +1123,7 @@ impl EffectRenderer {
             offscreen_pool: OffscreenPool::new(device, surface_format),
             shader_cache: ShaderPipelineCache::new(
                 device,
-                compiler.clone(),
+                compiler,
                 pipeline_cache.clone(),
                 adapter_backend,
                 surface_format,
@@ -1159,7 +1131,6 @@ impl EffectRenderer {
                 &effect_uniform_bind_group_layout,
             ),
             pipeline_cache,
-            compiler,
             blur_shader,
             blur_pipeline_layout,
             blur_pipelines,
@@ -1200,55 +1171,6 @@ impl EffectRenderer {
             debug_blur_pixels: Cell::new(0),
             debug_shader_fallback_draws: Cell::new(0),
             debug_shader_specialized_draws: Cell::new(0),
-        }
-    }
-
-    /// Queues every pipeline a page can reach on the background compiler:
-    /// the general pipelines of the framework's runtime shaders, then the
-    /// fixed effect pipelines. A frame needing one earlier waits for the
-    /// compile under way or builds it itself, as before.
-    pub(crate) fn warm_pipelines(&mut self, device: &wgpu::Device) {
-        let backend = self.adapter_backend;
-        for blend_mode in [BlendMode::SrcOver, BlendMode::Src, BlendMode::DstOut] {
-            for unmasked_nearest in [false, true] {
-                let (resource, _, _) = self.blit_pipeline_target(blend_mode, unmasked_nearest);
-                resource.warm(
-                    &self.compiler,
-                    backend,
-                    self.blit_pipeline_job(device, blend_mode, unmasked_nearest),
-                );
-            }
-        }
-        for tile_mode in 0..BLUR_TILE_MODES.len() {
-            self.blur_pipelines[tile_mode].warm(
-                &self.compiler,
-                backend,
-                self.blur_pipeline_job(device, tile_mode),
-            );
-            for (index, block) in BLUR_DOWNSAMPLE_BLOCKS.into_iter().enumerate() {
-                self.blur_downsample_pipelines[tile_mode][index].warm(
-                    &self.compiler,
-                    backend,
-                    self.blur_downsample_pipeline_job(device, block, tile_mode),
-                );
-            }
-        }
-        for blend_mode in [BlendMode::SrcOver, BlendMode::Src, BlendMode::DstOut] {
-            for texels in [false, true] {
-                let (resource, _, _) = self.projective_pipeline_target(blend_mode, texels);
-                resource.warm(
-                    &self.compiler,
-                    backend,
-                    self.projective_pipeline_job(device, blend_mode, texels),
-                );
-            }
-        }
-        self.offset_pipeline
-            .warm(&self.compiler, backend, self.offset_pipeline_job(device));
-        self.blur_mean_pipeline
-            .warm(&self.compiler, backend, self.mean_pipeline_job(device));
-        for (source, mode) in BUILTIN_RUNTIME_SHADERS {
-            self.shader_cache.warm(&RuntimeShader::new(source), mode);
         }
     }
 

@@ -232,7 +232,6 @@ fn renderer_for(
     transparent: bool,
 ) -> WgpuRenderer {
     let mut renderer = WgpuRenderer::with_text_system(text_system.clone());
-    renderer.warm_shaders(cranpose_liquid::shader_warm_ups());
     renderer.set_root_scale(scale);
     renderer.set_transparent_background(transparent);
     renderer.init_gpu(

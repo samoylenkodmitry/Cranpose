@@ -1,4 +1,8 @@
-use std::{cell::RefCell, rc::Rc, sync::OnceLock};
+use std::{
+    cell::RefCell,
+    rc::Rc,
+    sync::{Once, OnceLock},
+};
 
 use cranpose_macros::composable;
 use cranpose_ui::{
@@ -115,6 +119,8 @@ pub(super) fn VibrantContent(
     ink: impl Fn() -> (InkSelection, InkGrid) + 'static,
     content: impl FnMut() + 'static,
 ) {
+    static WARM_UP: Once = Once::new();
+    WARM_UP.call_once(|| cranpose_ui_graphics::request_shader_warm_ups(shader_warm_ups()));
     let ink: Rc<dyn Fn() -> (InkSelection, InkGrid)> = Rc::new(ink);
     let modifier = modifier.size(size);
     let dark = foreground.r() + foreground.g() + foreground.b() > 1.5;

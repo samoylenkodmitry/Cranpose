@@ -39,7 +39,6 @@ pub(crate) struct PresentRuntimeInit {
     pub(crate) renderer_epoch: u64,
     pub(crate) clock: Option<PresentClock>,
     pub(crate) observer: Option<BoxedPresentObserver>,
-    pub(crate) shader_warm_ups: Vec<cranpose_ui_graphics::ShaderWarmUp>,
 }
 
 pub(crate) enum PresentControl {
@@ -130,9 +129,8 @@ impl PresentState {
             renderer_epoch,
             clock,
             observer,
-            shader_warm_ups,
         } = init;
-        let mut gpu_renderer = GpuRenderer::new(
+        let gpu_renderer = GpuRenderer::new(
             device.clone(),
             queue,
             surface_format,
@@ -141,7 +139,6 @@ impl PresentState {
             text_fonts,
             renderer_epoch,
         );
-        gpu_renderer.warm_shaders(&shader_warm_ups);
         Self {
             gpu_renderer,
             device,

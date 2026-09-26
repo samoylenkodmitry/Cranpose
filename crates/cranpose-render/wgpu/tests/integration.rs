@@ -46,6 +46,7 @@ mod queued_surface_frames;
 mod raster_cache;
 mod record_path_goldens;
 mod render_contract;
+mod renderer_startup;
 mod rotate_scale_pixels;
 mod rotated_grid_relayout;
 mod rotating_record_upload;
