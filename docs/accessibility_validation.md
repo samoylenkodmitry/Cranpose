@@ -114,13 +114,10 @@ launched and uses Invoke, Value, and RangeValue patterns.
 `cargo-xwin`; install that tool before running the recipe. Native builds use the
 normal Windows Rust toolchain.
 
-The AccessKit family is upgraded together using published packages. The Linux
-recipe explicitly passes `--allow-linux-disabled-state-bug`; the robot still
-requires the `Disabled` description and rejected activation. If the native bit is
-wrong, its report uses `passed_with_known_limitations` and links the upstream fix.
-The standalone robot defaults to strict state checking, and this exception never
-applies to macOS or Windows. Once upstream ships the fix, remove the exception
-from the recipe. Native editable-text checks remain required.
+The AccessKit family is upgraded together using published packages. Every
+desktop platform checks disabled state strictly: a disabled control must report
+disabled natively, stay discoverable and reject activation. Native editable-text
+checks remain required.
 
 ## Web
 
