@@ -292,14 +292,11 @@ pub struct LayerNode {
     pub motion_context_animated: bool,
     pub translated_content_context: bool,
     pub translated_content_offset: Point,
-    /// Window-space origin this layer's children are placed from, and the
-    /// accumulated ancestor graphics-layer translation, captured during the
-    /// full per-frame scene build. Read back when a dirty subtree is rebuilt in
-    /// isolation (`update_scene_from_applier`) so a scrolling field's window
-    /// origin stays live during a fling even though the ancestor chain is not
-    /// re-walked from the root. Defaults to the identity origin.
-    pub scene_children_origin: Point,
-    pub scene_children_layer_translation: Point,
+    /// Where layout placed this layer within its parent's content, before the
+    /// parent's content offset. Scene updates add these up from the root, with
+    /// each layer's content offset and graphics-layer translation, to find the
+    /// window origin of a subtree they rebuild.
+    pub origin_in_parent: Point,
     pub graphics_layer: GraphicsLayer,
     pub clip_to_bounds: bool,
     pub shadow_clip: Option<Rect>,
@@ -333,8 +330,7 @@ impl Default for LayerNode {
             motion_context_animated: false,
             translated_content_context: false,
             translated_content_offset: Point::default(),
-            scene_children_origin: Point::default(),
-            scene_children_layer_translation: Point::default(),
+            origin_in_parent: Point::default(),
             graphics_layer: GraphicsLayer::default(),
             clip_to_bounds: false,
             shadow_clip: None,
