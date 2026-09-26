@@ -1,3 +1,5 @@
+use std::fmt::Write;
+
 use cranpose_core::collections::map::HashMap;
 
 use crate::{
@@ -5,7 +7,7 @@ use crate::{
         AccessibilityElement, AccessibilityIdentityError, AccessibilityRect, AccessibilitySnapshot,
         CollectionItem, checked_state, utf16_offset,
     },
-    android_wire_escape::escape_wire_field,
+    android_wire_escape::push_escaped_wire_field,
 };
 
 const ACTION_SEPARATOR: char = '\u{1f}';
@@ -64,7 +66,7 @@ impl AccessibilityWire {
                 .collect(),
             false => HashMap::default(),
         };
-        let mut records = Vec::new();
+        let mut records = String::new();
         let mut moves = Vec::new();
         for (index, ((element, id), parent)) in snapshot
             .elements
@@ -90,7 +92,12 @@ impl AccessibilityWire {
                         moves.extend(bounds);
                     }
                 }
-                None => records.push(encode_record(element, *id, *parent, spoken_change, density)),
+                None => {
+                    if !records.is_empty() {
+                        records.push('\n');
+                    }
+                    encode_record(&mut records, element, *id, *parent, spoken_change, density);
+                }
             }
         }
         let reordered = !known || snapshot.ids != previous_ids;
@@ -98,7 +105,7 @@ impl AccessibilityWire {
         self.parents = parents;
         Ok(AccessibilityUpdate {
             order: snapshot.ids.clone(),
-            records: records.join("\n"),
+            records,
             moves,
             reordered,
         })
@@ -123,71 +130,104 @@ fn pixel_bounds(bounds: AccessibilityRect, density: f32) -> [i32; 4] {
     ]
 }
 
+/// Appends one control's record to `out`: its fields in the order Java
+/// parses them, tab-separated, the strings escaped.
 fn encode_record(
+    out: &mut String,
     element: &AccessibilityElement,
     id: i32,
     parent: i32,
     changed: bool,
     density: f32,
-) -> String {
-    let role = element.role.android_code();
+) {
     let [left, top, right, bottom] = pixel_bounds(element.bounds, density);
     let (center_x, center_y) = element.bounds.center();
-    let actions = element
-        .custom_actions
-        .iter()
-        .map(|label| escape(label))
-        .collect::<Vec<_>>()
-        .join(&ACTION_SEPARATOR.to_string());
     let progress = element.progress;
     let scroll = element.vertical_scroll.or(element.horizontal_scroll);
     let (selection_start, selection_end) = selection_in_utf16(element);
-    format!(
-        "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-        id,
-        role,
-        left,
-        top,
-        right,
-        bottom,
-        center_x,
-        center_y,
-        i32::from(element.clickable),
-        escape(&element.label),
-        escape(element.value.as_deref().unwrap_or("")),
-        escape(element.state_description.as_deref().unwrap_or("")),
-        escape(element.click_label.as_deref().unwrap_or("")),
-        tristate(element.selected),
-        tristate(checked_state(element)),
-        i32::from(element.enabled),
-        actions,
-        i32::from(element.focusable),
-        i32::from(element.focused),
-        i32::from(element.adjustable),
-        progress.map_or(0.0, |p| p.current),
-        progress.map_or(0.0, |p| p.start),
-        progress.map_or(0.0, |p| p.end),
-        i32::from(scroll.is_some()),
-        i32::from(scroll.is_some_and(|range| range.can_scroll_forward())),
-        i32::from(scroll.is_some_and(|range| range.can_scroll_backward())),
-        parent,
-        element.collection.map_or(0, |collection| collection.rows),
+    let mut record = RecordWriter(out);
+    record.number(id);
+    record.number(element.role.android_code());
+    record.number(left);
+    record.number(top);
+    record.number(right);
+    record.number(bottom);
+    record.number(center_x);
+    record.number(center_y);
+    record.number(i32::from(element.clickable));
+    record.text(&element.label);
+    record.text(element.value.as_deref().unwrap_or(""));
+    record.text(element.state_description.as_deref().unwrap_or(""));
+    record.text(element.click_label.as_deref().unwrap_or(""));
+    record.number(tristate(element.selected));
+    record.number(tristate(checked_state(element)));
+    record.number(i32::from(element.enabled));
+    record.actions(&element.custom_actions);
+    record.number(i32::from(element.focusable));
+    record.number(i32::from(element.focused));
+    record.number(i32::from(element.adjustable));
+    record.number(progress.map_or(0.0, |p| p.current));
+    record.number(progress.map_or(0.0, |p| p.start));
+    record.number(progress.map_or(0.0, |p| p.end));
+    record.number(i32::from(scroll.is_some()));
+    record.number(i32::from(
+        scroll.is_some_and(|range| range.can_scroll_forward()),
+    ));
+    record.number(i32::from(
+        scroll.is_some_and(|range| range.can_scroll_backward()),
+    ));
+    record.number(parent);
+    record.number(element.collection.map_or(0, |collection| collection.rows));
+    record.number(
         element
             .collection
             .map_or(0, |collection| collection.columns),
-        i32::from(changed),
-        element.collection_item.map_or(-1, item_row),
-        element.collection_item.map_or(-1, item_column),
-        escape(element.pane_title.as_deref().unwrap_or("")),
-        escape(element.error.as_deref().unwrap_or("")),
-        i32::from(element.password),
-        tristate(element.expanded),
-        escape(element.long_click_label.as_deref().unwrap_or("")),
-        i32::from(element.dismissable),
-        i32::from(element.scroll_to_index),
-        selection_start,
-        selection_end,
-    )
+    );
+    record.number(i32::from(changed));
+    record.number(element.collection_item.map_or(-1, item_row));
+    record.number(element.collection_item.map_or(-1, item_column));
+    record.text(element.pane_title.as_deref().unwrap_or(""));
+    record.text(element.error.as_deref().unwrap_or(""));
+    record.number(i32::from(element.password));
+    record.number(tristate(element.expanded));
+    record.text(element.long_click_label.as_deref().unwrap_or(""));
+    record.number(i32::from(element.dismissable));
+    record.number(i32::from(element.scroll_to_index));
+    record.number(selection_start);
+    record.last_number(selection_end);
+}
+
+/// Writes a record's fields straight into the update, each followed by a
+/// tab but the last: no field is built as a string of its own.
+struct RecordWriter<'a>(&'a mut String);
+
+impl RecordWriter<'_> {
+    fn number(&mut self, value: impl std::fmt::Display) {
+        self.last_number(value);
+        self.0.push('\t');
+    }
+
+    fn last_number(&mut self, value: impl std::fmt::Display) {
+        // Writing to a String cannot fail.
+        let _ = write!(self.0, "{value}");
+    }
+
+    fn text(&mut self, value: &str) {
+        push_escaped_wire_field(self.0, value, ACTION_SEPARATOR);
+        self.0.push('\t');
+    }
+
+    /// The custom actions' labels, escaped and joined by the action
+    /// separator.
+    fn actions(&mut self, labels: &[String]) {
+        for (index, label) in labels.iter().enumerate() {
+            if index > 0 {
+                self.0.push(ACTION_SEPARATOR);
+            }
+            push_escaped_wire_field(self.0, label, ACTION_SEPARATOR);
+        }
+        self.0.push('\t');
+    }
 }
 
 /// The two ends of a field's selection as Android counts text, in UTF-16
@@ -247,10 +287,6 @@ fn tristate(value: Option<bool>) -> i32 {
         Some(false) => 0,
         Some(true) => 1,
     }
-}
-
-fn escape(value: &str) -> String {
-    escape_wire_field(value).replace(ACTION_SEPARATOR, "%1F")
 }
 
 #[cfg(test)]
