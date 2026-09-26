@@ -467,3 +467,28 @@ fn the_current_level_reports_the_level_without_stepping_it() {
         "frames start on their slot until a lead proves itself"
     );
 }
+
+#[test]
+fn rising_a_level_drops_the_lead() {
+    use crate::frame_lead::{SETTLE, WINDOW};
+
+    let mut pacer = shallow();
+    for frame in 0..WINDOW {
+        pacer.record_latency(SETTLED + frame, SETTLED + frame + 20_000_000);
+    }
+    for frame in 0..WINDOW + i64::from(SETTLE) {
+        pacer.record_latency(SETTLED + frame, SETTLED + frame + 12_000_000);
+    }
+    assert!(
+        pacer.current_lead_ns(VSYNC) > 0,
+        "frames that reached the screen sooner kept the lead"
+    );
+
+    missed_run(&mut pacer, SETTLED + VSYNC, SHALLOW_MISSES);
+    assert_eq!(pacer.current_level(), Some(Level::Buffered));
+    assert_eq!(
+        pacer.current_lead_ns(VSYNC),
+        0,
+        "the missed vsyncs that made the pacer rise drop the lead"
+    );
+}
