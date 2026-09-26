@@ -570,6 +570,8 @@ pub(crate) struct RecomposeScopeInner {
     parent_scope: RefCell<Option<Weak<RecomposeScopeInner>>>,
     lifetime_owner_scope: RefCell<Option<Weak<RecomposeScopeInner>>>,
     local_stack: RefCell<LocalStackSnapshot>,
+    #[cfg(feature = "inspection")]
+    source_trace: RefCell<Rc<[source_trace::SourceLocation]>>,
     slots_storage_key: Cell<usize>,
     slots_runtime_state: RefCell<Option<std::rc::Weak<crate::composer::ComposerRuntimeState>>>,
     state_subscriptions: RefCell<HashSet<StateId>>,
@@ -596,6 +598,8 @@ impl RecomposeScopeInner {
             parent_scope: RefCell::new(None),
             lifetime_owner_scope: RefCell::new(None),
             local_stack: RefCell::new(empty_local_stack()),
+            #[cfg(feature = "inspection")]
+            source_trace: RefCell::new(Rc::from([])),
             slots_storage_key: Cell::new(0),
             slots_runtime_state: RefCell::new(None),
             state_subscriptions: RefCell::new(HashSet::default()),
@@ -792,6 +796,10 @@ impl RecomposeScope {
     }
 
     fn set_recompose_fn(&self, callback: fn(&Composer)) {
+        #[cfg(feature = "inspection")]
+        self.inner
+            .source_trace
+            .replace(source_trace::current_source_trace());
         *self.inner.recompose.borrow_mut() = Some(RecomposeCallback::Static(callback));
     }
 
@@ -800,10 +808,16 @@ impl RecomposeScope {
         observer: SnapshotStateObserver,
         body: Box<dyn FnMut(&Composer) + 'static>,
     ) {
+        #[cfg(feature = "inspection")]
+        self.inner
+            .source_trace
+            .replace(source_trace::current_source_trace());
         *self.inner.recompose.borrow_mut() = Some(RecomposeCallback::Observed { observer, body });
     }
 
     fn run_recompose(&self, composer: &Composer) -> bool {
+        #[cfg(feature = "inspection")]
+        let _source_context = source_trace::restore_source_trace(&self.inner.source_trace.borrow());
         let callback = self.inner.recompose.borrow_mut().take();
         if let Some(callback) = callback {
             let callback = match callback {

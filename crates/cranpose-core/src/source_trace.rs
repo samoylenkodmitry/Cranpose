@@ -72,6 +72,21 @@ pub fn current_source_trace() -> std::rc::Rc<[SourceLocation]> {
     STACK.with(|stack| std::rc::Rc::from(stack.borrow().as_slice()))
 }
 
+#[cfg(feature = "inspection")]
+pub(crate) struct SourceContext(Vec<SourceLocation>);
+
+#[cfg(feature = "inspection")]
+impl Drop for SourceContext {
+    fn drop(&mut self) {
+        STACK.with(|stack| *stack.borrow_mut() = std::mem::take(&mut self.0));
+    }
+}
+
+#[cfg(feature = "inspection")]
+pub(crate) fn restore_source_trace(trace: &[SourceLocation]) -> SourceContext {
+    SourceContext(STACK.with(|stack| stack.replace(trace.to_vec())))
+}
+
 #[cfg(all(test, feature = "inspection"))]
 #[path = "tests/source_trace_tests.rs"]
 mod tests;

@@ -260,6 +260,7 @@ test: _disk-guard
 # default features is one of them.
 test-ide:
     cargo test --profile ci -p cranpose-core --features inspection source_trace::
+    cargo test --profile ci -p cranpose-core --features inspection source_origins_survive_independent_child_recomposition
     cargo test --profile ci -p cranpose-macros preview_tests::
     cargo test --profile ci -p cranpose --no-default-features --features desktop,preview embed::tests::
     cargo test --profile ci -p cranpose --no-default-features --features desktop,preview inspection::tests::
