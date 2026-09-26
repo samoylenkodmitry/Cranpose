@@ -641,6 +641,54 @@ fn isolated_child(
     }
 }
 
+/// Splits a layer that rotates, skews or projects and reads its backdrop the
+/// way a tilted parent over a glass child is split: the layer's backdrop,
+/// effect and shape run in its own space as an inner child, which reads the
+/// parent's page projected into that space, and the outer layer projects the
+/// result with the layer's alpha and blend. Resolved flat beside the
+/// projected surface, the backdrop would neither follow the projection nor
+/// keep to the layer's shape.
+fn with_backdrop_in_own_space(child: ChildLayer) -> ChildLayer {
+    if child.backdrop.is_none() || uniform_scale_translation(child.transform).is_some() {
+        return child;
+    }
+    let mut content = LayerScene {
+        scene: CompositorScene::new(),
+        children: Vec::new(),
+    };
+    let inner_z = content.scene.next_z();
+    content.scene.next_z += 1;
+    let mut outer = ChildLayer {
+        z_index: child.z_index,
+        node_id: child.node_id,
+        local_bounds: child.local_bounds,
+        transform: child.transform,
+        clip: child.clip,
+        rounded_clip: None,
+        alpha: child.alpha,
+        blend_mode: child.blend_mode,
+        effect: None,
+        backdrop: None,
+        snap_anchor: child.snap_anchor,
+        surface_scale: child.surface_scale,
+        content_hash: child.content_hash,
+        cache_policy: child.cache_policy,
+        in_place: false,
+        content,
+    };
+    outer.content.children.push(ChildLayer {
+        z_index: inner_z,
+        transform: ProjectiveTransform::identity(),
+        clip: None,
+        alpha: 1.0,
+        blend_mode: BlendMode::SrcOver,
+        snap_anchor: None,
+        in_place: false,
+        ..child
+    });
+    outer
+}
+
 fn collect_into(
     layer: &LayerNode,
     text_layout: &mut impl TextLayoutResolver,
@@ -827,7 +875,13 @@ fn collect_child(
                 child_bounds,
                 shadow_clip,
             );
-            let isolated = isolated_child(child, text_layout, motion, context, &mut out.scene);
+            let isolated = with_backdrop_in_own_space(isolated_child(
+                child,
+                text_layout,
+                motion,
+                context,
+                &mut out.scene,
+            ));
             assign_shadow_anchor(&mut out.scene, shadows_before, isolated.snap_anchor);
             out.children.push(isolated);
             out.scene.next_z += 1;
