@@ -1,7 +1,7 @@
 use std::fmt::Debug;
 
 use cranpose_app_shell::AppShell;
-use cranpose_core::{NodeId, collections::map::HashMap};
+use cranpose_core::NodeId;
 use cranpose_render_common::Renderer;
 use cranpose_ui::{
     Announcement, CollectionInfo, LiveRegionMode, ProgressBarRangeInfo, ScrollAxisRange,
@@ -1674,7 +1674,8 @@ pub(crate) fn spoken_changes(
     previous: &[AccessibilityElement],
     current: &[AccessibilityElement],
 ) -> Vec<bool> {
-    let mut published: HashMap<_, &AccessibilityElement> = HashMap::default();
+    let mut published: cranpose_core::collections::map::HashMap<_, &AccessibilityElement> =
+        Default::default();
     for element in previous {
         published.entry(element.identity_key()).or_insert(element);
     }

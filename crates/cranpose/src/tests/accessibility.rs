@@ -3,7 +3,7 @@ use std::{
     rc::Rc,
 };
 
-use cranpose_core::NodeId;
+use cranpose_core::{NodeId, collections::map::HashMap};
 use cranpose_ui::{
     CanvasSemanticsNode, SemanticsAction, SemanticsCallback, SemanticsCustomAction, SemanticsNode,
     SemanticsRole, SemanticsWidgetRole,
