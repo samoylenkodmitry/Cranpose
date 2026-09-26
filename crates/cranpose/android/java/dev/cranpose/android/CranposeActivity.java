@@ -2666,26 +2666,33 @@ public class CranposeActivity extends NativeActivity {
         nativeOnLaunchArguments(cranposeEncodeLaunchArguments());
     }
 
+    /**
+     * Publishes the files a share sent to the application, and the file it was
+     * asked to open ("Open with", ACTION_VIEW), as incoming content.
+     */
     private void dispatchIncomingShares(Intent intent) {
-        if (intent == null || (!Intent.ACTION_SEND.equals(intent.getAction())
-                && !Intent.ACTION_SEND_MULTIPLE.equals(intent.getAction()))) {
+        String action = intent == null ? null : intent.getAction();
+        if (!Intent.ACTION_SEND.equals(action) && !Intent.ACTION_SEND_MULTIPLE.equals(action)
+                && !Intent.ACTION_VIEW.equals(action)) {
             return;
         }
         ArrayList<Uri> uris = new ArrayList<>();
-        if (Intent.ACTION_SEND.equals(intent.getAction())) {
+        if (Intent.ACTION_SEND.equals(action)) {
             Uri uri = incomingStream(intent);
             if (uri != null) {
                 uris.add(uri);
             }
-        } else {
+        } else if (Intent.ACTION_SEND_MULTIPLE.equals(action)) {
             ArrayList<Uri> shared = incomingStreams(intent);
             if (shared != null) {
                 uris.addAll(shared);
             }
+        } else if (intent.getData() != null) {
+            uris.add(intent.getData());
         }
-        String mimeType = intent.getType() == null ? "" : intent.getType();
+        String declaredType = intent.getType() == null ? "" : intent.getType();
         android.util.Log.i("cranpose", "incoming share: " + uris.size()
-                + " uri(s), type " + mimeType);
+                + " uri(s), type " + declaredType);
         // The URI is published, not the bytes: the framework opens it through the
         // content resolver when the application actually reads it, so sharing a
         // multi-gigabyte video costs nothing until it is used.
@@ -2705,6 +2712,11 @@ public class CranposeActivity extends NativeActivity {
                         continue;
                     }
                     android.util.Log.i("cranpose", "incoming share: to native, " + uri);
+                    String mimeType = declaredType;
+                    if (mimeType.isEmpty()) {
+                        String resolved = getContentResolver().getType(uri);
+                        mimeType = resolved == null ? "" : resolved;
+                    }
                     nativeOnIncomingContent(
                             sanitize(displayName(uri, "shared")), mimeType, uri.toString());
                 } catch (Exception error) {
