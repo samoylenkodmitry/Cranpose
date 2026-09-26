@@ -1384,6 +1384,19 @@ fn create_android_gpu_resources_for_existing_device(
 
 /// The display's refresh period: what the display reports, else what the
 /// vsync callbacks have measured, else 60 Hz.
+/// The telemetry's name for the level `pacer` runs frames at.
+fn frame_pacing(
+    level: Option<crate::frame_pacer::Level>,
+) -> crate::android_frame_telemetry::FramePacing {
+    use crate::android_frame_telemetry::FramePacing;
+    match level {
+        None => FramePacing::Unreported,
+        Some(crate::frame_pacer::Level::Shallow) => FramePacing::Shallow,
+        Some(crate::frame_pacer::Level::Buffered) => FramePacing::Buffered,
+        Some(crate::frame_pacer::Level::Unpaced) => FramePacing::Unpaced,
+    }
+}
+
 fn vsync_period_ns() -> i64 {
     match crate::android_frame_telemetry::vsync_period_ns() {
         reported if reported > 0 => reported,
@@ -2450,7 +2463,7 @@ pub fn run(
                 );
             frame_waits_for_vsync = frame_due && !frame_starts;
             if frame_starts {
-                frame_timings.pacing = frame_pacer.current_level();
+                frame_timings.pacing = frame_pacing(frame_pacer.current_level());
                 frame_timings.lead_ns = frame_pacer.current_lead_ns(vsync_period_ns());
                 frame_started_at = Some(web_time::Instant::now());
                 frame_timings.work_start_ns = crate::android_frame_telemetry::monotonic_nanos();

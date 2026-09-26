@@ -297,6 +297,20 @@ fn post_vsync_callback() {
 /// start, its hand-off, the acquire and the present are stamped whether or
 /// not telemetry is on, since the scheduler's hints need them; the other
 /// stages read `0` without telemetry.
+/// How far ahead of the display a frame started, as the pacer chose it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum FramePacing {
+    /// Before the display reported a frame.
+    #[default]
+    Unreported,
+    /// One frame queued behind the shown one.
+    Shallow,
+    /// Two frames queued.
+    Buffered,
+    /// As many as the swapchain holds.
+    Unpaced,
+}
+
 #[derive(Clone, Copy, Default)]
 pub(crate) struct FrameTimings {
     pub(crate) iteration_start_ns: i64,
@@ -309,7 +323,7 @@ pub(crate) struct FrameTimings {
     pub(crate) after_render_ns: i64,
     pub(crate) after_present_ns: i64,
     /// The pacing level the frame started at.
-    pub(crate) pacing: Option<crate::frame_pacer::Level>,
+    pub(crate) pacing: FramePacing,
     /// How far ahead of its vsync slot the frame was allowed to start.
     pub(crate) lead_ns: i64,
 }
@@ -336,7 +350,7 @@ struct Sample {
     render_us: i32,
     present_us: i32,
     vsync_offset_us: i32,
-    pacing: Option<crate::frame_pacer::Level>,
+    pacing: FramePacing,
     lead_us: i32,
 }
 
@@ -444,10 +458,10 @@ impl AndroidFrameTelemetry {
     }
 
     fn report_pacing(&mut self) {
-        let count = |level: Option<crate::frame_pacer::Level>| {
+        let count = |pacing: FramePacing| {
             self.samples
                 .iter()
-                .filter(|sample| sample.pacing == level)
+                .filter(|sample| sample.pacing == pacing)
                 .count()
         };
         let leading = self
@@ -457,10 +471,10 @@ impl AndroidFrameTelemetry {
             .count();
         log::warn!(
             "[android-frame]   pacing shallow={} buffered={} unpaced={} unreported={} leading={}",
-            count(Some(crate::frame_pacer::Level::Shallow)),
-            count(Some(crate::frame_pacer::Level::Buffered)),
-            count(Some(crate::frame_pacer::Level::Unpaced)),
-            count(None),
+            count(FramePacing::Shallow),
+            count(FramePacing::Buffered),
+            count(FramePacing::Unpaced),
+            count(FramePacing::Unreported),
             leading,
         );
         if !self.shown_latencies_us.is_empty() {
