@@ -736,6 +736,8 @@ public class CranposeActivity extends NativeActivity {
     private static native void nativeOnAccessibilityDismiss(int virtualViewId);
     private static native void nativeOnAccessibilityScroll(int virtualViewId, boolean forward);
     private static native void nativeOnAccessibilityScrollToIndex(int virtualViewId, int index);
+    /** Asks the app for every record again: an update named a control this host never received. */
+    private static native void nativeOnAccessibilityTreeLost();
 
     private static native void nativeOnAccessibilityStateChanged(boolean enabled);
     private static native void nativeOnScreenReaderStateChanged(boolean running);
@@ -797,13 +799,19 @@ public class CranposeActivity extends NativeActivity {
         runOnUiThread(() -> getWindow().getDecorView().announceForAccessibility(text));
     }
 
-    /** Publishes Cranpose's semantic tree through Android's native virtual-view API. */
-    public void cranposeSetAccessibilityElements(String payload) {
+    /**
+     * Publishes Cranpose's semantic tree through Android's native virtual-view
+     * API. {@code order} lists every virtual id in tree order, {@code records}
+     * carries only the controls that are new or say something else, and
+     * {@code moves} holds {@code id, left, top, right, bottom} runs for
+     * controls that only moved; every other control keeps what it had.
+     */
+    public void cranposeUpdateAccessibilityElements(int[] order, String records, int[] moves) {
         // Parsed inside the posted task: the caller is the native frame loop,
         // whose budget the parse must not consume; the UI thread is idle in
         // this architecture.
         runOnUiThread(() -> {
-            final List<CranposeAccessibilityElement> elements = parseAccessibilityElements(payload);
+            final List<CranposeAccessibilityElement> updated = parseAccessibilityElements(records);
             View host = getWindow().getDecorView();
             if (cranposeAccessibilityProvider == null) {
                 cranposeAccessibilityProvider = new CranposeAccessibilityProvider(host);
@@ -816,7 +824,9 @@ public class CranposeActivity extends NativeActivity {
                     }
                 });
             }
-            cranposeAccessibilityProvider.setElements(elements);
+            if (!cranposeAccessibilityProvider.update(order, updated, moves)) {
+                nativeOnAccessibilityTreeLost();
+            }
         });
     }
 
@@ -891,6 +901,7 @@ public class CranposeActivity extends NativeActivity {
     private static final class CranposeAccessibilityElement {
         final int id;
         final int role;
+        /** Moved in place when the app reports that only the bounds changed. */
         final Rect bounds;
         final float centerX;
         final float centerY;
@@ -919,7 +930,8 @@ public class CranposeActivity extends NativeActivity {
         final int scrollParent;
         final int collectionRows;
         final int collectionColumns;
-        final boolean changed;
+        /** Whether the update that delivered this record says it now reads differently. */
+        boolean changed;
         final int itemRow;
         final int itemColumn;
         final String paneTitle;
@@ -1078,6 +1090,39 @@ public class CranposeActivity extends NativeActivity {
 
         CranposeAccessibilityProvider(View host) {
             this.host = host;
+        }
+
+        /**
+         * Rebuilds the tree from the ids in {@code order}, taking each control
+         * from {@code records} when the app resent it and keeping it otherwise,
+         * after moving the bounds {@code moves} names. Returns false when an id
+         * has no control here, so the app sends every record again.
+         */
+        boolean update(int[] order, List<CranposeAccessibilityElement> records, int[] moves) {
+            HashMap<Integer, CranposeAccessibilityElement> known = new HashMap<>(elements.size() * 2);
+            for (CranposeAccessibilityElement element : elements) {
+                element.changed = false;
+                known.put(element.id, element);
+            }
+            for (int index = 0; index + 4 < moves.length; index += 5) {
+                CranposeAccessibilityElement element = known.get(moves[index]);
+                if (element != null) {
+                    element.bounds.set(moves[index + 1], moves[index + 2], moves[index + 3], moves[index + 4]);
+                }
+            }
+            for (CranposeAccessibilityElement record : records) known.put(record.id, record);
+            ArrayList<CranposeAccessibilityElement> next = new ArrayList<>(order.length);
+            boolean complete = true;
+            for (int id : order) {
+                CranposeAccessibilityElement element = known.get(id);
+                if (element == null) {
+                    complete = false;
+                } else {
+                    next.add(element);
+                }
+            }
+            setElements(next);
+            return complete;
         }
 
         void setElements(List<CranposeAccessibilityElement> elements) {

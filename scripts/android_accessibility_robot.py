@@ -50,7 +50,7 @@ def main():
                 'com.compose_rs.demo.robot.test/androidx.test.runner.AndroidJUnitRunner', timeout=120)
             (args.output / 'instrumentation.log').write_text(output)
             report['tests_passed'] = completed_tests(output)
-            expected = 9 if args.connected_only else 10
+            expected = 11 if args.connected_only else 12
             if report['tests_passed'] != expected:
                 raise RuntimeError(f"Expected {expected} Android tests, got {report['tests_passed']}")
             report['reconnect'] = 'not_requested' if args.connected_only else 'included'
