@@ -1131,6 +1131,7 @@ impl CachedAtlasGlyphMetrics {
 
 pub struct SoftwareGlyphRasterCache {
     masks: BoundedLruCache<GlyphMaskCacheKey, CachedGlyphMask>,
+    kerns: DirectMappedCache<KernMetricsKey, f32>,
     hits: u64,
     misses: u64,
 }
@@ -1139,9 +1140,33 @@ impl SoftwareGlyphRasterCache {
     pub fn with_capacity_at_least_one(capacity: usize) -> Self {
         Self {
             masks: BoundedLruCache::with_capacity_at_least_one(capacity),
+            kerns: DirectMappedCache::with_slots_log2(SOFTWARE_TEXT_KERN_METRICS_SLOTS_LOG2),
             hits: 0,
             misses: 0,
         }
+    }
+
+    /// The kerning between two glyphs of the font hashed `font_hash`, in
+    /// font units. A GPOS lookup is a binary search per pair, and the runs a
+    /// frame lays out repeat the same pairs.
+    fn kern_unscaled(
+        &mut self,
+        font_hash: u64,
+        font: &impl Font,
+        previous: GlyphId,
+        glyph: GlyphId,
+    ) -> f32 {
+        let key = KernMetricsKey {
+            font_hash,
+            previous_id: previous.0.into(),
+            glyph_id: glyph.0.into(),
+        };
+        if let Some(kern) = self.kerns.get(&key) {
+            return kern;
+        }
+        let kern = font.kern_unscaled(previous, glyph);
+        self.kerns.insert(key, kern);
+        kern
     }
 
     pub fn stats(&self) -> SoftwareGlyphRasterCacheStats {
@@ -3461,6 +3486,24 @@ fn line_offset(offsets: &Option<Vec<f32>>, line_idx: usize) -> f32 {
         .unwrap_or(0.0)
 }
 
+/// `scaled_font`'s kerning between two glyphs, through `glyph_cache` when a
+/// caller has one.
+fn cached_kern<F: Font, S: ScaleFont<F>>(
+    glyph_cache: Option<&mut SoftwareGlyphRasterCache>,
+    font_hash: u64,
+    scaled_font: &S,
+    previous: GlyphId,
+    glyph: GlyphId,
+) -> f32 {
+    match glyph_cache {
+        Some(cache) => {
+            cache.kern_unscaled(font_hash, scaled_font.font(), previous, glyph)
+                * scaled_font.h_scale_factor()
+        }
+        None => scaled_font.kern(previous, glyph),
+    }
+}
+
 #[expect(clippy::too_many_arguments)]
 fn visit_text_glyph_masks(
     text: &str,
@@ -3492,7 +3535,13 @@ fn visit_text_glyph_masks(
         for ch in line.chars() {
             let glyph_id = scaled_font.glyph_id(ch);
             if let Some(previous_id) = previous {
-                caret_x += scaled_font.kern(previous_id, glyph_id) + letter_spacing;
+                caret_x += cached_kern(
+                    glyph_cache.as_deref_mut(),
+                    font_hash,
+                    &scaled_font,
+                    previous_id,
+                    glyph_id,
+                ) + letter_spacing;
             }
             let glyph = glyph_id.with_scale_and_position(scale, point(caret_x, baseline_y));
             caret_x += scaled_font.h_advance(glyph_id);
@@ -3566,7 +3615,13 @@ fn visit_text_glyph_masks_with_key(
         for ch in line.chars() {
             let glyph_id = scaled_font.glyph_id(ch);
             if let Some(previous_id) = previous {
-                caret_x += scaled_font.kern(previous_id, glyph_id) + letter_spacing;
+                caret_x += cached_kern(
+                    glyph_cache.as_deref_mut(),
+                    font_hash,
+                    &scaled_font,
+                    previous_id,
+                    glyph_id,
+                ) + letter_spacing;
             }
             let glyph = glyph_id.with_scale_and_position(scale, point(caret_x, baseline_y));
             caret_x += scaled_font.h_advance(glyph_id);
@@ -3625,7 +3680,13 @@ fn visit_cached_text_glyph_atlas_placements(
         for ch in line.chars() {
             let glyph_id = scaled_font.glyph_id(ch);
             if let Some(previous_id) = previous {
-                caret_x += scaled_font.kern(previous_id, glyph_id) + letter_spacing;
+                caret_x += cached_kern(
+                    Some(&mut *glyph_cache),
+                    font_hash,
+                    &scaled_font,
+                    previous_id,
+                    glyph_id,
+                ) + letter_spacing;
             }
             let glyph = glyph_id.with_scale_and_position(scale, point(caret_x, baseline_y));
             caret_x += scaled_font.h_advance(glyph_id);
@@ -3691,7 +3752,13 @@ fn visit_text_glyph_atlas_run(
         for ch in line.chars() {
             let glyph_id = scaled_font.glyph_id(ch);
             if let Some(previous_id) = previous {
-                caret_x += scaled_font.kern(previous_id, glyph_id) + letter_spacing;
+                caret_x += cached_kern(
+                    Some(&mut *glyph_cache),
+                    font_hash,
+                    &scaled_font,
+                    previous_id,
+                    glyph_id,
+                ) + letter_spacing;
             }
             let glyph = glyph_id.with_scale_and_position(scale, point(caret_x, baseline_y));
             caret_x += scaled_font.h_advance(glyph_id);
