@@ -19,10 +19,12 @@ pub(crate) struct AccessibilitySnapshot {
 }
 
 impl AccessibilitySnapshot {
+    /// Moves on to `elements`, keeping the ids of controls it already held,
+    /// and hands back the elements and ids it replaced.
     pub(crate) fn update(
         &mut self,
         elements: Vec<AccessibilityElement>,
-    ) -> Result<(), AccessibilityIdentityError> {
+    ) -> Result<(Vec<AccessibilityElement>, Vec<i32>), AccessibilityIdentityError> {
         let mut previous: HashMap<_, _> = self
             .elements
             .iter()
@@ -52,11 +54,12 @@ impl AccessibilitySnapshot {
             ids.push(id);
             indices.insert(id, index);
         }
-        self.elements = elements;
-        self.ids = ids;
         self.indices = indices;
         self.last_id = last_id;
-        Ok(())
+        Ok((
+            std::mem::replace(&mut self.elements, elements),
+            std::mem::replace(&mut self.ids, ids),
+        ))
     }
 
     pub(crate) fn element(&self, id: i32) -> Option<&AccessibilityElement> {
