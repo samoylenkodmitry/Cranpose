@@ -1599,6 +1599,80 @@ impl Hash for WindowRectReporterElement {
 
 impl_sink_reporter_element!(WindowRectReporterElement, WindowRectReporterNode);
 
+/// Tells a selectable text's geometry where its content sits: slice
+/// collection hands it the padding in front of the text and layout the
+/// node's window origin, which is what a container needs to find the text
+/// under a pointer.
+pub(crate) struct SelectableTextNode {
+    sink: Rc<crate::selection_container::SelectableGeometry>,
+    state: NodeState,
+}
+
+impl SelectableTextNode {
+    pub(crate) fn new(sink: Rc<crate::selection_container::SelectableGeometry>) -> Self {
+        Self {
+            sink,
+            state: NodeState::new(),
+        }
+    }
+
+    pub(crate) fn geometry(&self) -> &crate::selection_container::SelectableGeometry {
+        &self.sink
+    }
+}
+
+impl DelegatableNode for SelectableTextNode {
+    fn node_state(&self) -> &NodeState {
+        &self.state
+    }
+}
+
+impl_layout_modifier_node!(SelectableTextNode);
+
+impl LayoutModifierNode for SelectableTextNode {
+    fn measure(
+        &self,
+        _context: &mut dyn ModifierNodeContext,
+        measurable: &dyn Measurable,
+        constraints: Constraints,
+    ) -> cranpose_ui_layout::LayoutModifierMeasureResult {
+        measure_pass_through(measurable, constraints, |_| (0.0, 0.0))
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct SelectableTextElement {
+    sink: Rc<crate::selection_container::SelectableGeometry>,
+}
+
+impl SelectableTextElement {
+    pub(crate) fn new(sink: Rc<crate::selection_container::SelectableGeometry>) -> Self {
+        Self { sink }
+    }
+}
+
+impl std::fmt::Debug for SelectableTextElement {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SelectableTextElement").finish()
+    }
+}
+
+impl PartialEq for SelectableTextElement {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.sink, &other.sink)
+    }
+}
+
+impl Eq for SelectableTextElement {}
+
+impl Hash for SelectableTextElement {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        std::ptr::hash(Rc::as_ptr(&self.sink), state);
+    }
+}
+
+impl_sink_reporter_element!(SelectableTextElement, SelectableTextNode);
+
 pub trait SizeSink {
     fn set(&self, size: Size);
 }

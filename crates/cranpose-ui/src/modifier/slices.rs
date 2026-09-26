@@ -15,7 +15,7 @@ use crate::{
     },
     modifier_nodes::{
         BackgroundNode, ClipToBoundsNode, CornerShapeNode, DrawCommandNode, GraphicsLayerNode,
-        PaddingNode, PointerIconNode, WindowRectReporterNode,
+        PaddingNode, PointerIconNode, SelectableTextNode, WindowRectReporterNode,
     },
     text::{TextLayoutOptions, TextStyle},
     text_field_modifier_node::{TextFieldLayoutHandle, TextFieldModifierNode, TextPanResolver},
@@ -41,7 +41,7 @@ pub struct ModifierNodeSlices {
     text_layout_options: Option<TextLayoutOptions>,
     prepared_text_layout: Option<MeasuredTextLayoutSource>,
     text_pan: Option<TextPanResolver>,
-    text_field_window_origin: Option<Rc<std::cell::Cell<Point>>>,
+    text_window_origin: Option<Rc<std::cell::Cell<Point>>>,
     viewport_window_rect: Option<Rc<dyn crate::modifier_nodes::WindowRectSink>>,
     graphics_layer: Option<GraphicsLayer>,
     graphics_layer_resolver: Option<Rc<dyn Fn() -> GraphicsLayer>>,
@@ -95,7 +95,7 @@ impl Clone for ModifierNodeSlices {
             text_layout_options: self.text_layout_options,
             prepared_text_layout: self.prepared_text_layout.clone(),
             text_pan: self.text_pan.clone(),
-            text_field_window_origin: self.text_field_window_origin.clone(),
+            text_window_origin: self.text_window_origin.clone(),
             viewport_window_rect: self.viewport_window_rect.clone(),
             graphics_layer: self.graphics_layer.clone(),
             graphics_layer_resolver: self.graphics_layer_resolver.clone(),
@@ -305,12 +305,13 @@ impl ModifierNodeSlices {
         self.text_pan.clone()
     }
 
-    /// The write target for a text field's composited window origin, if this
-    /// node is a `BasicTextField`. The layout pass writes the field's true
-    /// on-screen top-left here so its finger selection handles track the field
-    /// across scroll. See [`ModifierNodeSlices::text_field_window_origin`].
-    pub fn text_field_window_origin(&self) -> Option<Rc<std::cell::Cell<Point>>> {
-        self.text_field_window_origin.clone()
+    /// The write target for the composited window origin of the text this
+    /// node shows, if it is a `BasicTextField` or a `Text` inside a
+    /// `SelectionContainer`. The layout pass writes the node's true on-screen
+    /// top-left here so selection handles and pointers find the text across
+    /// scroll.
+    pub fn text_window_origin(&self) -> Option<Rc<std::cell::Cell<Point>>> {
+        self.text_window_origin.clone()
     }
 
     /// The write target for a scroll container's composited window rect, if this
@@ -538,9 +539,7 @@ pub fn collect_modifier_slices_into(chain: &ModifierNodeChain, slices: &mut Modi
                     slices.motion_context_animated = motion_context_node.is_active();
                 }
 
-                if let Some(reporter) = any.downcast_ref::<WindowRectReporterNode>() {
-                    slices.viewport_window_rect = Some(reporter.window_rect_sink());
-                }
+                collect_window_geometry_sink(any, padding, slices);
 
                 if let Some(translated_content_node) =
                     any.downcast_ref::<TranslatedContentContextNode>()
@@ -570,7 +569,7 @@ pub fn collect_modifier_slices_into(chain: &ModifierNodeChain, slices: &mut Modi
                         text_field_node.layout_handle(),
                     ));
                     slices.text_pan = text_field_node.text_pan_resolver();
-                    slices.text_field_window_origin = Some(text_field_node.window_origin_sink());
+                    slices.text_window_origin = Some(text_field_node.window_origin_sink());
 
                     text_field_node.set_content_offset(padding.left);
                     text_field_node.set_content_y_offset(padding.top);
@@ -625,6 +624,25 @@ impl BackgroundSlot {
 
 /// Collects what a draw-capable node contributes, drawn inside `padding`, the
 /// layout padding declared before it.
+/// Where layout reports a node's window geometry: a scroll viewport's rect,
+/// or the origin of a selectable text, whose content starts after `padding`.
+fn collect_window_geometry_sink(
+    any: &dyn std::any::Any,
+    padding: EdgeInsets,
+    slices: &mut ModifierNodeSlices,
+) {
+    if let Some(reporter) = any.downcast_ref::<WindowRectReporterNode>() {
+        slices.viewport_window_rect = Some(reporter.window_rect_sink());
+    }
+    if let Some(selectable) = any.downcast_ref::<SelectableTextNode>() {
+        slices.text_window_origin = Some(selectable.geometry().node_origin_sink());
+        selectable.geometry().set_content_offset(Point {
+            x: padding.left,
+            y: padding.top,
+        });
+    }
+}
+
 fn collect_draw_node(
     node: &dyn cranpose_foundation::ModifierNode,
     padding: EdgeInsets,

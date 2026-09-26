@@ -155,7 +155,7 @@ impl Default for TextFieldHandleController {
 
 const DEFAULT_CURSOR_COLOR: Color = Color(1.0, 1.0, 1.0, 1.0);
 
-const DEFAULT_SELECTION_COLOR: Color = Color(0.0, 0.5, 1.0, 0.3);
+pub(crate) const DEFAULT_SELECTION_COLOR: Color = Color(0.0, 0.5, 1.0, 0.3);
 
 const DEFAULT_LINE_HEIGHT: f32 = 20.0;
 

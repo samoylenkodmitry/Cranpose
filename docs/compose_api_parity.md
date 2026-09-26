@@ -485,6 +485,7 @@ by symbol, per the Scope decision above.
 |---|---|---|
 | `TextStyle`, `AnnotatedString` | `cranpose-ui::text::style::TextStyle` (authored style, Compose-parity) and `cranpose-ui-graphics::typography::DrawTextStyle` (resolved draw primitive) | Implemented | The two types are a real architectural split, not drift -- see Findings. The graphics one was renamed to `DrawTextStyle` so they no longer share a name. |
 | `BasicTextField`, `TextFieldState` | Same names | Implemented |
+| `SelectionContainer`, `DisableSelection` | Same names | Implemented | Mouse drag, double and triple click, a finger's long press then drag, Ctrl/Cmd+C, Ctrl/Cmd+A and Escape; a finger's selection opens a Copy / Select all menu. No selection handles yet: a finger grows the selection by dragging on from the long press. |
 
 ### Testing
 
