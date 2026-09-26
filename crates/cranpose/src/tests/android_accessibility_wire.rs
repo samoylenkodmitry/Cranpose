@@ -203,9 +203,47 @@ use crate::accessibility::{AccessibilityRect, AccessibilityRole, element_with};
 
 #[test]
 fn android_accessibility_wire_values_escape_record_delimiters() {
+    let mut out = String::from("kept|");
+    push_escaped_wire_field(
+        &mut out,
+        &format!("A%\tB\nC\r{ACTION_SEPARATOR}é"),
+        ACTION_SEPARATOR,
+    );
+    assert_eq!(out, "kept|A%25%09B%0AC%0D%1Fé");
+}
+
+/// The records byte for byte as the encoder before direct writing produced
+/// them, escapes, fractions and the action separator included: Java parses
+/// this exact layout.
+#[test]
+fn records_keep_the_layout_java_parses_byte_for_byte() {
+    let elements = vec![
+        AccessibilityElement {
+            node_id: 4,
+            label: "Tab\tand%".into(),
+            value: Some("line\nnext\r".into()),
+            state_description: Some("On".into()),
+            click_label: Some("Toggle".into()),
+            bounds: AccessibilityRect::new(1.25, 2.5, 30.0, 40.75),
+            role: AccessibilityRole::Switch,
+            clickable: true,
+            toggled: Some(true),
+            custom_actions: vec!["Pause".into(), format!("Re{ACTION_SEPARATOR}sume")],
+            pane_title: Some("Pane".into()),
+            error: Some("Bad%".into()),
+            long_click_label: Some("Hold".into()),
+            expanded: Some(false),
+            ..AccessibilityElement::default()
+        },
+        element_with(5, Some(1)),
+    ];
     assert_eq!(
-        escape(&format!("A%\tB\nC\r{ACTION_SEPARATOR}")),
-        "A%25%09B%0AC%0D%1F"
+        encode_elements(&elements, &[true, false], 1.5),
+        "1\t5\t2\t4\t47\t65\t16.25\t22.875\t1\tTab%09and%25\tline%0Anext%0D\tOn\tToggle\t-1\t1\t1\t\
+         Pause\u{1f}Re%1Fsume\t0\t0\t0\t0\t0\t0\t0\t0\t0\t-1\t0\t0\t1\t-1\t-1\tPane\tBad%25\t0\t0\t\
+         Hold\t0\t0\t-1\t-1\n\
+         2\t2\t0\t0\t15\t15\t5\t5\t0\tRow\t\t\t\t-1\t-1\t1\t\t0\t0\t0\t0\t0\t0\t0\t0\t0\t-1\t0\t0\t0\t\
+         -1\t-1\t\t\t0\t-1\t\t0\t0\t-1\t-1"
     );
 }
 
