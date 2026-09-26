@@ -20,6 +20,7 @@ pub struct Composition<A: Applier + 'static> {
     pub(crate) root_key: Option<Key>,
     pub(crate) root_render_requested: bool,
     pub(crate) last_pass_stats: CompositionPassDebugStats,
+    teardown: Option<runtime::StateTeardownScope>,
 }
 
 /// Upper bound on chained root-render replays and scope-recomposition rounds.
@@ -70,6 +71,7 @@ impl<A: Applier + 'static> Composition<A> {
             root_key: None,
             root_render_requested: false,
             last_pass_stats: CompositionPassDebugStats::default(),
+            teardown: None,
         }
     }
 
@@ -585,5 +587,6 @@ impl<A: Applier + 'static> Composition<A> {
 impl<A: Applier + 'static> Drop for Composition<A> {
     fn drop(&mut self) {
         self.observer.stop();
+        self.teardown = Some(runtime::enter_state_teardown_scope());
     }
 }
