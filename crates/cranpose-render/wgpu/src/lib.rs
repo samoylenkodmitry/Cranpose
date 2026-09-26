@@ -165,6 +165,7 @@ pub struct DebugCpuAllocationStats {
     pub scratch_image_vertices_cap: usize,
     pub scratch_image_indices_cap: usize,
     pub scratch_image_cmds_cap: usize,
+    pub scratch_glyph_instances_cap: usize,
     pub layer_cache_len: usize,
     pub layer_cache_bytes: u64,
 }
