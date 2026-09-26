@@ -635,6 +635,38 @@ fn hash_paragraph_style<H: Hasher>(paragraph: &ParagraphStyle, state: &mut H) {
     paragraph.text_motion.hash(state);
 }
 
+/// How much of the slack a `TextAlign` puts *before* the text: 0 at the start
+/// edge, 0.5 centred, 1 at the end edge.
+///
+/// Split out because the same fraction has to be applied twice and by two
+/// different pieces of code. Compose aligns a paragraph **line by line** —
+/// `TextAlign.Center` centres each line in the paragraph's width, it does not
+/// centre the paragraph's box in its parent — so the block offset computed
+/// here and the per-line offset the rasteriser applies inside the block are
+/// two halves of one rule. They telescope: block at `(box - block) * f`, line
+/// at `(block - line) * f`, which sums to `(box - line) * f`, exactly the
+/// offset Compose gives that line. Getting one without the other leaves every
+/// wrapped continuation line start-aligned under a centred first line.
+pub fn text_align_fraction(text_style: &TextStyle, text: &str) -> f32 {
+    let paragraph_style = &text_style.paragraph_style;
+    let direction = super::resolve_text_direction(text, Some(paragraph_style.text_direction));
+    let rtl = direction == super::ResolvedTextDirection::Rtl;
+    match paragraph_style.text_align {
+        super::TextAlign::Center => 0.5,
+        super::TextAlign::End | super::TextAlign::Right => 1.0,
+        super::TextAlign::Start
+        | super::TextAlign::Left
+        | super::TextAlign::Justify
+        | super::TextAlign::Unspecified => {
+            if rtl {
+                1.0
+            } else {
+                0.0
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 #[path = "tests/style_tests.rs"]
 mod tests;
