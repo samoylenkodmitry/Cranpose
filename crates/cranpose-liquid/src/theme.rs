@@ -289,7 +289,9 @@ pub fn liquid_typography() -> LiquidTypography {
 
 /// Provides the Liquid design system (colors, typography) to `content`.
 ///
-/// `SchemeMode::Auto` follows the OS light/dark appearance live.
+/// `SchemeMode::Auto` follows the OS light/dark appearance live. The scheme
+/// also sets [`cranpose_ui::local_on_light_surface`], so the text selection
+/// menu over a light scheme draws dark labels.
 #[composable]
 pub fn LiquidTheme(spec: LiquidThemeSpec, content: impl FnOnce()) {
     let options = cranpose_services::local_accessibility_options().current();
@@ -318,6 +320,7 @@ pub fn LiquidTheme(spec: LiquidThemeSpec, content: impl FnOnce()) {
             local_liquid_colors().provides(colors),
             local_liquid_typography().provides(typography),
             local_liquid_glass_tint_amount().provides(spec.glass_tint_amount),
+            cranpose_ui::local_on_light_surface().provides(!dark),
         ],
         move || {
             content();
