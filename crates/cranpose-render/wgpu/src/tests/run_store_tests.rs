@@ -13,6 +13,7 @@ fn shared_pipelines_preserve_each_draws_strip_index_count() {
         brushes: 1,
         kinds: 4,
         band_class: 0,
+        interiors: false,
     };
     let key = crate::render::ShapePipelineKey {
         blend_mode: segment.blend,
