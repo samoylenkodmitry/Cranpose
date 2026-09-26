@@ -10,7 +10,7 @@ use bytemuck::{Pod, Zeroable};
 use crate::{
     ArcGeometry, BlendMode, Brush, Color, CornerRadii, DrawPrimitive, FxHasher, Point, Rect,
     RenderHash, ShapeRecordBody, ShapeRecordCurve, ShapeRecords, Stroke, StrokeCap, StrokeJoin,
-    TAU, TileMode, arc_band, arc_trig_cache::ArcTrigCache,
+    TAU, TileMode, arc_band, arc_trig_cache::ArcTrigCache, float::at_least,
 };
 
 /// The kind bits of [`ShapeRecord::flags`]: a plain rect.
@@ -148,7 +148,7 @@ impl BandRing {
 
     fn new(inner: f32, outer: f32, start: f32, sweep: f32) -> Self {
         let mid = (outer + inner) * 0.5;
-        let ring_half = ((outer - inner) * 0.5).max(0.0) + BAND_MARGIN;
+        let ring_half = at_least((outer - inner) * 0.5, 0.0) + BAND_MARGIN;
         let (range_start, range) = Self::padded_range(mid, ring_half, start, sweep);
         Self {
             mid,
@@ -415,14 +415,17 @@ impl ShapeRecord {
 /// Whether a record is a rounded fill whose interior -- its rect inset by
 /// its largest corner radius -- covers at least half of the rect.
 fn interior_repays(body: &ShapeRecordBody, curve: &ShapeRecordCurve) -> bool {
-    let corner = curve.radii.iter().copied().fold(0.0, f32::max);
+    if fragment_kind(body.flags) != FRAGMENT_KIND_FILL {
+        return false;
+    }
+    let corner = curve
+        .radii
+        .iter()
+        .fold(0.0, |corner, &radius| at_least(radius, corner));
     let [_, _, width, height] = body.rect;
     let area = width * height;
-    let interior = (width - 2.0 * corner).max(0.0) * (height - 2.0 * corner).max(0.0);
-    fragment_kind(body.flags) == FRAGMENT_KIND_FILL
-        && corner > 0.0
-        && area > 0.0
-        && interior * 2.0 >= area
+    let interior = at_least(width - 2.0 * corner, 0.0) * at_least(height - 2.0 * corner, 0.0);
+    corner > 0.0 && area > 0.0 && interior * 2.0 >= area
 }
 
 fn fragment_kind(flags: u32) -> u32 {

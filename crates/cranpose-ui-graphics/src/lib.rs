@@ -7,6 +7,7 @@ pub mod alpha_mask;
 mod arc_trig_cache;
 mod brush;
 mod color;
+mod float;
 pub mod framework_shaders;
 mod fx_hash;
 mod geometry;
