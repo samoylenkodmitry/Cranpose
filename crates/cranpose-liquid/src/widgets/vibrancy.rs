@@ -112,10 +112,10 @@ pub(super) fn VibrantContent(
     modifier: Modifier,
     size: Size,
     foreground: Color,
-    selection: InkSelection,
-    grid: InkGrid,
+    ink: impl Fn() -> (InkSelection, InkGrid) + 'static,
     content: impl FnMut() + 'static,
 ) {
+    let ink: Rc<dyn Fn() -> (InkSelection, InkGrid)> = Rc::new(ink);
     let modifier = modifier.size(size);
     let dark = foreground.r() + foreground.g() + foreground.b() > 1.5;
     let content = Rc::new(RefCell::new(content));
@@ -126,25 +126,29 @@ pub(super) fn VibrantContent(
         }),
         BoxSpec::default(),
         move || {
+            let color_ink = Rc::clone(&ink);
+            let mask_ink = Rc::clone(&ink);
             Box(
-                Modifier::empty()
-                    .fill_max_size()
-                    .graphics_layer(move || GraphicsLayer {
+                Modifier::empty().fill_max_size().graphics_layer(move || {
+                    let (selection, grid) = color_ink();
+                    GraphicsLayer {
                         backdrop_effect: Some(effect(InkPass::Color, size, selection, grid, dark)),
                         ..Default::default()
-                    }),
+                    }
+                }),
                 BoxSpec::default(),
                 || {},
             );
             let content = Rc::clone(&content);
             Box(
-                Modifier::empty()
-                    .fill_max_size()
-                    .graphics_layer(move || GraphicsLayer {
+                Modifier::empty().fill_max_size().graphics_layer(move || {
+                    let (selection, grid) = mask_ink();
+                    GraphicsLayer {
                         render_effect: Some(effect(InkPass::Mask, size, selection, grid, dark)),
                         blend_mode: BlendMode::DstOut,
                         ..Default::default()
-                    }),
+                    }
+                }),
                 BoxSpec::default(),
                 move || (content.borrow_mut())(),
             );

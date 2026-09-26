@@ -452,3 +452,77 @@ fn produced_state_starts_at_its_initial_value_and_takes_what_the_producer_publis
         seen.borrow()
     );
 }
+
+/// What a composable that reads a derived state does, spelled out the way
+/// `#[composable]` expands it: a group whose recompose callback runs the body
+/// again.
+fn derived_reader(
+    source: cranpose_core::MutableState<u32>,
+    reads: Rc<Cell<u32>>,
+    seen: Rc<RefCell<Vec<bool>>>,
+) {
+    fn body(
+        source: cranpose_core::MutableState<u32>,
+        reads: &Rc<Cell<u32>>,
+        seen: &Rc<RefCell<Vec<bool>>>,
+    ) {
+        let big = derivedStateOf(move || source.get() >= 10);
+        reads.set(reads.get() + 1);
+        seen.borrow_mut().push(big.get());
+    }
+    let key = location_key(file!(), line!(), column!());
+    cranpose_core::with_current_composer(|composer| {
+        composer.with_group(key, |composer| {
+            let (again_reads, again_seen) = (Rc::clone(&reads), Rc::clone(&seen));
+            composer.set_recompose_callback(move |_| body(source, &again_reads, &again_seen));
+            body(source, &reads, &seen);
+        });
+    });
+}
+
+#[test]
+fn a_derived_state_recomposes_its_readers_only_when_its_value_changes() {
+    let mut composition = composition();
+    let key = location_key(file!(), line!(), column!());
+    let source = mutableStateOf(1u32);
+    let reads = Rc::new(Cell::new(0u32));
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    {
+        let reads = Rc::clone(&reads);
+        let seen = Rc::clone(&seen);
+        composition
+            .render(key, move || {
+                derived_reader(source, Rc::clone(&reads), Rc::clone(&seen));
+            })
+            .expect("render succeeds");
+    }
+    assert_eq!(reads.get(), 1);
+
+    for value in [2, 3, 4, 5] {
+        source.set(value);
+        let changed = composition
+            .process_invalid_scopes()
+            .expect("recomposition succeeds");
+        assert!(
+            !changed,
+            "recomputing an unchanged derived value changes nothing"
+        );
+    }
+    assert_eq!(
+        reads.get(),
+        1,
+        "a source change that leaves the derived value alone must not recompose its reader"
+    );
+
+    source.set(12);
+    let changed = composition
+        .process_invalid_scopes()
+        .expect("recomposition succeeds");
+    assert!(changed, "a changed derived value recomposes");
+    assert_eq!(
+        reads.get(),
+        2,
+        "a changed derived value recomposes its reader"
+    );
+    assert_eq!(*seen.borrow(), vec![false, true]);
+}

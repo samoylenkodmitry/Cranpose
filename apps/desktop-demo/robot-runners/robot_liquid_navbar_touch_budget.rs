@@ -34,6 +34,14 @@ const FROZEN_FRAME_MS: f32 = 120.0;
 /// and 408 ms for the next. `glass_material_folds_enabled` is the switch.
 const PIPELINES_ALLOWED_ON_TOUCH: u64 = 0;
 
+/// Recompositions one touch may cost across [`FRAMES_PER_TOUCH`] frames.
+///
+/// The lens glides by drawing: a frame moves it without recomposing, and the
+/// bar recomposes only for the selection and for each tab the lens crosses.
+/// Reading the lens in composition recomposed the bar once a frame, 13 times
+/// for 12 frames.
+const RECOMPOSITIONS_ALLOWED_ON_TOUCH: u64 = 8;
+
 static FAILED: AtomicBool = AtomicBool::new(false);
 
 const TABS: [(&str, &str); TAB_COUNT] = [
@@ -79,6 +87,7 @@ pub(crate) fn main() -> ExitCode {
             let mut worst_ms = 0.0_f32;
             let mut worst_label = String::new();
             let mut compiled_on_touch = 0;
+            let mut most_recompositions = (0, String::new());
             for (index, cell) in [0usize, TAB_COUNT - 1, 1].into_iter().enumerate() {
                 robot.reset_fps_stats().expect("reset fps stats");
                 let started = std::time::Instant::now();
@@ -99,6 +108,9 @@ pub(crate) fn main() -> ExitCode {
                 report(&label, &stats, wall_ms, now_built);
                 compiled_on_touch += now_built.saturating_sub(built);
                 built = now_built;
+                if stats.recompositions > most_recompositions.0 {
+                    most_recompositions = (stats.recompositions, label.clone());
+                }
                 let stall_ms = stats.work_max_ms.max(stats.max_ms);
                 if stall_ms > worst_ms {
                     worst_ms = stall_ms;
@@ -123,6 +135,19 @@ pub(crate) fn main() -> ExitCode {
                          compiler inside the frame that drew the touch, and a person waits \
                          through all of them. Read the [pipeline-create] lines: a run of them \
                          differing only in `overrides=` is one pipeline per material."
+                    ),
+                );
+            }
+
+            if most_recompositions.0 > RECOMPOSITIONS_ALLOWED_ON_TOUCH {
+                robot_exit::fail_and_await_shutdown(
+                    &robot,
+                    &FAILED,
+                    &format!(
+                        "{} recomposed {} times over {FRAMES_PER_TOUCH} frames, past the \
+                         {RECOMPOSITIONS_ALLOWED_ON_TOUCH} a touch may: something reads the \
+                         gliding lens in composition instead of where it is drawn.",
+                        most_recompositions.1, most_recompositions.0
                     ),
                 );
             }
@@ -166,7 +191,7 @@ pub(crate) fn main() -> ExitCode {
 fn report(label: &str, stats: &cranpose::FpsStats, wall_ms: f32, pipelines: u64) {
     println!(
         "[navbar] {label}: wall={wall_ms:.1}ms fps={:.1} present(avg={:.2} max={:.2} p99={:.2}) \
-         work(avg={:.2} max={:.2} p95={:.2}) stalled50ms={} frames={} \
+         work(avg={:.2} max={:.2} p95={:.2}) stalled50ms={} frames={} recompositions={} \
          pipelines(in-frame={pipelines} off-frame={})",
         stats.fps,
         stats.avg_ms,
@@ -177,6 +202,7 @@ fn report(label: &str, stats: &cranpose::FpsStats, wall_ms: f32, pipelines: u64)
         stats.work_p95_ms,
         stats.work_stalled_50ms_frames,
         stats.interval_count,
+        stats.recompositions,
         cranpose::pipelines_created_off_frame(),
     );
 }

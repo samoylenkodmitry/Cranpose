@@ -185,21 +185,27 @@ pub fn LiquidSegmentedControl(
             if !pressed.get() {
                 lens_axis.settle_to(selected_x, LiquidMotion::glide());
             }
-            let lens_x = lens_axis.value();
-            let visual_index = crate::motion::liquid_visual_index(
-                selected,
-                lens_x,
-                segment_width,
-                count,
-                crate::motion::liquid_axis_owns_visual_selection(
-                    pressed.get(),
-                    lens_x,
-                    selected_x,
-                    segment_width,
-                ),
-            );
-
-            let lens_settling = !lens_axis.is_dragging() && (lens_x - selected_x).abs() > 1.0;
+            let (visual_index, lens_settling) = {
+                let lens_axis = Rc::clone(&lens_axis);
+                cranpose_core::derivedStateOf(move || {
+                    let lens_x = lens_axis.value();
+                    let visual_index = crate::motion::liquid_visual_index(
+                        selected,
+                        lens_x,
+                        segment_width,
+                        count,
+                        crate::motion::liquid_axis_owns_visual_selection(
+                            pressed.get(),
+                            lens_x,
+                            selected_x,
+                            segment_width,
+                        ),
+                    );
+                    let settling = !lens_axis.is_dragging() && (lens_x - selected_x).abs() > 1.0;
+                    (visual_index, settling)
+                })
+                .get()
+            };
             let lens_target = if pressed.get() || lens_settling {
                 1.0
             } else {
@@ -284,6 +290,7 @@ pub fn LiquidSegmentedControl(
                 + crate::dynamics::BULGE_MAX
                 + LENS_PAD * 2.0;
             let lens_for_layer = lens_progress;
+            let layer_axis = Rc::clone(&lens_axis);
             let physics_axis = Rc::clone(&lens_axis);
             let lens = Modifier::empty()
                 .required_size(Size::new(node_w, node_h))
@@ -292,7 +299,7 @@ pub fn LiquidSegmentedControl(
                     (SEGMENT_HEIGHT - node_h) * 0.5,
                 )
                 .graphics_layer(move || GraphicsLayer {
-                    translation_x: lens_x,
+                    translation_x: layer_axis.value(),
                     alpha: 1.0,
                     ..Default::default()
                 })

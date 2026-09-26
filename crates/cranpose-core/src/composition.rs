@@ -408,7 +408,7 @@ impl<A: Applier + 'static> Composition<A> {
             if scopes.is_empty() {
                 continue;
             }
-            did_recompose = true;
+            did_recompose |= scopes.iter().any(|scope| !scope.is_derivation());
             let runtime_clone = runtime_handle.clone();
             let root_host = self.slots_host();
             let mut scope_groups: Vec<(Rc<SlotsHost>, Vec<RecomposeScope>)> = Vec::new();
