@@ -1873,6 +1873,7 @@ fn padded_dimension(value: u32, limit: u32) -> u32 {
 /// neighbour's texels are never read and an atlas needs no clearing.
 struct AtlasPacker {
     limit: u32,
+    shelf_width: u32,
     atlases: Vec<Atlas>,
 }
 
@@ -1880,7 +1881,17 @@ impl AtlasPacker {
     fn new(limit: u32) -> Self {
         Self {
             limit,
+            shelf_width: limit,
             atlases: Vec::new(),
+        }
+    }
+
+    /// A packer whose shelves end at `width`, or at the limit when that is
+    /// narrower, so its atlases grow down rather than out to the limit.
+    fn with_shelf_width(self, width: u32) -> Self {
+        Self {
+            shelf_width: width.clamp(1, self.limit),
+            ..self
         }
     }
 
@@ -1890,7 +1901,7 @@ impl AtlasPacker {
         }
         for (atlas_index, atlas) in self.atlases.iter_mut().enumerate() {
             for shelf in &mut atlas.shelves {
-                if shelf.height >= height && shelf.x + width <= self.limit {
+                if shelf.height >= height && shelf.x + width <= self.shelf_width.max(width) {
                     let placement = AtlasPlacement {
                         atlas: atlas_index,
                         x: shelf.x,
@@ -4303,11 +4314,21 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         surfaces: &mut Vec<(usize, SurfaceRender)>,
     ) -> Result<(), String> {
         let limit = self.renderer.max_texture_dim();
-        let mut packer = AtlasPacker::new(limit);
-        let placements: Vec<Option<AtlasPlacement>> = group
+        let area: u64 = group
             .iter()
-            .map(|member| packer.place(member.plan.width, member.plan.height))
-            .collect();
+            .map(|member| u64::from(member.plan.width) * u64::from(member.plan.height))
+            .sum();
+        let mut packer =
+            AtlasPacker::new(limit).with_shelf_width(u32::try_from(area.isqrt()).unwrap_or(limit));
+        // Each surface is copied out of the atlas, so where it lands costs
+        // nothing later: the tallest go first, into an atlas near square.
+        let mut tallest_first: Vec<usize> = (0..group.len()).collect();
+        tallest_first.sort_by_key(|&index| std::cmp::Reverse(group[index].plan.height));
+        let mut placements: Vec<Option<AtlasPlacement>> = vec![None; group.len()];
+        for index in tallest_first {
+            let plan = &group[index].plan;
+            placements[index] = packer.place(plan.width, plan.height);
+        }
         let sizes: Vec<(u32, u32)> = packer
             .atlases
             .iter()
