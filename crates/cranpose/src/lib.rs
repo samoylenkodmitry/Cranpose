@@ -111,6 +111,12 @@ mod android_wire_escape;
 #[cfg(all(feature = "android", target_os = "android"))]
 mod android_writable_folder;
 mod app_launcher;
+#[cfg(feature = "preview")]
+pub mod preview;
+#[cfg(feature = "preview")]
+pub use cranpose_macros::preview;
+#[cfg(feature = "embed")]
+pub mod inspection;
 #[cfg(feature = "renderer-wgpu")]
 pub use cranpose_app_shell::inspector::{
     InspectorAction, InspectorControl, InspectorMode, InspectorNode, InspectorState,
@@ -232,6 +238,8 @@ pub use cranpose_liquid as liquid;
 /// [`cranpose_services::MediaItem`] takes from a path.
 #[cfg(feature = "media")]
 pub use cranpose_media::{SoftwareMediaPlayer, path_from_uri, uri_for_path};
+/// Whether the host's current application theme is dark.
+pub use cranpose_services::isSystemInDarkTheme;
 /// Re-export framework services (HTTP, URI, etc.) from the dedicated services crate.
 pub use cranpose_services::*;
 /// Re-export the UI crate so applications can depend on a single crate.
@@ -357,8 +365,8 @@ pub fn FrameEffect<K: PartialEq + 'static>(
 
 #[doc(hidden)]
 pub use cranpose_core::{
-    __branch_group_scope_deferred, CallbackHolder, Composer, Key, ParamState, ReturnSlot,
-    ValueSlotHandle, branch_location_key, cached_branch_location_key,
+    __branch_group_scope_deferred, __source_scope, CallbackHolder, Composer, Key, ParamState,
+    ReturnSlot, ValueSlotHandle, branch_location_key, cached_branch_location_key,
     cached_composable_definition_key, caller_location_key, composable_definition_key,
     composable_identity_key, debug_label_current_scope, location_key, with_current_composer,
 };

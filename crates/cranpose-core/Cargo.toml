@@ -31,6 +31,7 @@ web-time = { workspace = true }
 default = []
 std-hash = []
 internal = []
+inspection = []
 # The workspace's one answer to where a test writes real files.
 test-helpers = []
 

@@ -812,3 +812,46 @@ fn unit_return_composable_skips_without_return_value_slot() {
 
     UNIT_INVOCATIONS.with(|calls| assert_eq!(calls.get(), 1));
 }
+
+#[cfg(feature = "inspection")]
+#[test]
+fn source_origins_survive_independent_child_recomposition() {
+    thread_local! {
+        static ORIGINS: RefCell<Vec<Vec<&'static str>>> = const { RefCell::new(Vec::new()) };
+    }
+    #[composable]
+    fn traced_child(state: MutableState<i32>) {
+        let _ = state.value();
+        ORIGINS.with(|origins| {
+            origins.borrow_mut().push(
+                crate::source_trace::current_source_trace()
+                    .iter()
+                    .map(|origin| origin.name)
+                    .collect(),
+            )
+        });
+    }
+    #[composable]
+    fn traced_parent(state: MutableState<i32>) {
+        traced_child(state);
+    }
+    let mut composition = test_composition();
+    let state = MutableState::with_runtime(0, composition.runtime_handle());
+    composition
+        .render(9031, &mut || traced_parent(state))
+        .expect("initial render");
+    state.set_value(1);
+    assert!(
+        composition
+            .process_invalid_scopes()
+            .expect("child recomposition")
+    );
+    ORIGINS.with(|origins| {
+        let origins = origins.borrow();
+        assert!(origins.len() >= 2);
+        for origin in origins.iter() {
+            assert_eq!(origin, &["traced_parent", "traced_child"]);
+        }
+    });
+    assert!(crate::source_trace::current_source_trace().is_empty());
+}
