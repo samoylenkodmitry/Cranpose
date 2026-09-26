@@ -43,6 +43,39 @@ fn settle_animation_springs_to_target_and_ends() {
 }
 
 #[test]
+fn settle_animation_ends_on_a_target_two_million_pixels_down() {
+    let runtime = Runtime::new(Arc::new(DefaultScheduler));
+    let handle = runtime.handle();
+    let settle = SettleAnimation::new(handle.clone(), SpringParams::SETTLE_POLICY);
+    let travelled = Rc::new(Cell::new(0.0f64));
+    let ended = Rc::new(Cell::new(false));
+    let travelled_for_scroll = Rc::clone(&travelled);
+    let ended_for_end = Rc::clone(&ended);
+    settle.start_settle(
+        1_999_000.0,
+        0.0,
+        2_000_000.0,
+        move |delta| {
+            travelled_for_scroll.set(travelled_for_scroll.get() + f64::from(delta));
+            delta
+        },
+        move |_| ended_for_end.set(true),
+    );
+    for frame in 1..=240u64 {
+        handle.drain_frame_callbacks(frame * 16_000_000);
+        if ended.get() {
+            break;
+        }
+    }
+    assert!(ended.get(), "a settle far down a list must finish");
+    assert!(
+        (travelled.get() - 1_000.0).abs() < 0.2,
+        "the settle must scroll the thousand pixels to its target, scrolled {}",
+        travelled.get()
+    );
+}
+
+#[test]
 fn settle_reports_reduced_velocity_when_crossing_boundary() {
     let runtime = Runtime::new(Arc::new(DefaultScheduler));
     let handle = runtime.handle();

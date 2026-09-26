@@ -233,7 +233,7 @@ pub fn fling_rest_position(initial_value: f32, velocity: f32) -> f32 {
     spec.get_target_value(initial_value, velocity)
 }
 
-/// Damped-spring parameters for a [`SettleAnimation`]. `advance_spring`
+/// Damped-spring parameters for a [`SettleAnimation`]. `advance_spring_displacement`
 /// already generalizes over damping ratio, so the two settle use cases in
 /// this crate share one scheduler and differ only in these two numbers.
 #[derive(Debug, Clone, Copy)]
@@ -271,9 +271,10 @@ const SETTLE_REST_DISTANCE: f32 = 0.1;
 const SETTLE_REST_VELOCITY: f32 = 4.0;
 
 struct SettleAnimationState {
-    value: Cell<f32>,
+    /// The distance left to the target, held apart from the scroll offset so
+    /// a settle far down a list keeps the fractions the offset cannot.
+    displacement: Cell<f32>,
     velocity: Cell<f32>,
-    target: f32,
     params: SpringParams,
     last_frame_time_nanos: Cell<Option<u64>>,
     registration: Option<FrameCallbackRegistration>,
@@ -317,9 +318,8 @@ impl SettleAnimation {
     {
         self.cancel();
         *self.state.borrow_mut() = Some(SettleAnimationState {
-            value: Cell::new(initial_value),
+            displacement: Cell::new(initial_value - target),
             velocity: Cell::new(initial_velocity),
-            target,
             params: self.params,
             last_frame_time_nanos: Cell::new(None),
             registration: None,
@@ -388,24 +388,25 @@ fn schedule_next_settle_frame<F, G>(
             };
             anim_state.last_frame_time_nanos.set(Some(frame_time_nanos));
 
-            let (mut next_value, next_velocity) = cranpose_animation::advance_spring(
-                anim_state.value.get(),
-                anim_state.velocity.get(),
-                anim_state.target,
-                anim_state.params.damping_ratio,
-                anim_state.params.stiffness,
-                dt.max(0.0),
-            );
+            let displacement = anim_state.displacement.get();
+            let (mut next_displacement, next_velocity) =
+                cranpose_animation::advance_spring_displacement(
+                    displacement,
+                    anim_state.velocity.get(),
+                    anim_state.params.damping_ratio,
+                    anim_state.params.stiffness,
+                    dt.max(0.0),
+                );
 
-            let is_finished = (next_value - anim_state.target).abs() < SETTLE_REST_DISTANCE
+            let is_finished = next_displacement.abs() < SETTLE_REST_DISTANCE
                 && next_velocity.abs() < SETTLE_REST_VELOCITY;
             if is_finished {
-                next_value = anim_state.target;
+                next_displacement = 0.0;
                 anim_state.is_running.set(false);
             }
 
-            let delta = next_value - anim_state.value.get();
-            anim_state.value.set(next_value);
+            let delta = next_displacement - displacement;
+            anim_state.displacement.set(next_displacement);
             anim_state.velocity.set(next_velocity);
 
             let consumed = if delta.abs() > 0.0001 {

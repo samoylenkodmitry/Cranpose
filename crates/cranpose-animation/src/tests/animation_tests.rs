@@ -616,6 +616,87 @@ fn spring_integrates_per_frame_delta_not_total_elapsed() {
 }
 
 #[test]
+fn a_spring_step_taken_in_displacement_matches_the_step_taken_in_value() {
+    for (damping, stiffness) in [(1.0, 500.0), (0.43, 164.8), (1.6, 300.0)] {
+        let (value, value_velocity) = advance_spring(20.0, 3.0, 50.0, damping, stiffness, 0.016);
+        let (displacement, velocity) =
+            advance_spring_displacement(-30.0, 3.0, damping, stiffness, 0.016);
+        assert!(
+            (value - (50.0 + displacement)).abs() < 1e-4,
+            "damping {damping}: value {value} against displacement {displacement}"
+        );
+        assert_eq!(value_velocity, velocity, "damping {damping}");
+    }
+}
+
+#[test]
+fn a_spring_displacement_keeps_a_move_finer_than_a_large_value_holds() {
+    let frame = 1.0 / 60.0;
+    let target = 1_000_000.0f32;
+    let resolution = 0.0625;
+    let (value, _) = advance_spring(target + resolution, -0.6, target, 1.0, 500.0, frame);
+    let (displacement, _) = advance_spring_displacement(resolution, -0.6, 1.0, 500.0, frame);
+
+    assert_eq!(
+        value,
+        target + resolution,
+        "a million cannot hold this frame's move"
+    );
+    assert!(
+        displacement < 0.06,
+        "the displacement must keep the move toward rest, got {displacement}"
+    );
+}
+
+fn frames_until_rest(
+    animatable: &Animatable<f32>,
+    composition: &Composition<MemoryApplier>,
+    frame_nanos: u64,
+    frames: usize,
+) -> Option<usize> {
+    let runtime = composition.runtime_handle();
+    (1..=frames).find(|&frame| {
+        runtime.drain_frame_callbacks(frame as u64 * frame_nanos);
+        !animatable.is_running()
+    })
+}
+
+#[test]
+fn a_spring_comes_to_rest_beside_a_large_target_at_display_rate() {
+    let composition: Composition<MemoryApplier> = Composition::new(MemoryApplier::new());
+    let mut animatable = Animatable::new(999_000.0f32, composition.runtime_handle());
+    animatable.animateTo(
+        1_000_000.0,
+        AnimationType::Spring(SpringSpec::new(1.0, 500.0)),
+    );
+
+    let rest = frames_until_rest(&animatable, &composition, 16_666_667, 300);
+
+    assert!(
+        rest.is_some(),
+        "a spring a million pixels out must still come to rest, stuck at {}",
+        animatable.state().get()
+    );
+    assert_eq!(animatable.state().get(), 1_000_000.0);
+}
+
+#[test]
+fn a_spring_comes_to_rest_when_frames_arrive_microseconds_apart() {
+    let composition: Composition<MemoryApplier> = Composition::new(MemoryApplier::new());
+    let mut animatable = Animatable::new(0.0f32, composition.runtime_handle());
+    animatable.animateTo(285.5, AnimationType::Spring(SpringSpec::new(1.0, 500.0)));
+
+    let rest = frames_until_rest(&animatable, &composition, 50_000, 40_000);
+
+    assert!(
+        rest.is_some(),
+        "two seconds of 50us frames must bring the spring to rest, stuck at {}",
+        animatable.state().get()
+    );
+    assert_eq!(animatable.state().get(), 285.5);
+}
+
+#[test]
 fn spring_retarget_preserves_value_space_velocity() {
     let soft = SpringSpec::new(1.0, 50.0);
     let composition: Composition<MemoryApplier> = Composition::new(MemoryApplier::new());
