@@ -669,24 +669,20 @@ impl RuntimeInner {
                 }
             }
 
-            loop {
-                let task = {
-                    let mut local = self.local_tasks.borrow_mut();
-                    local.pop_front()
-                };
-
-                match task {
-                    Some(task) => {
-                        executed = true;
-                        task();
-                    }
-                    None => break,
-                }
+            if self.run_local_tasks() {
+                executed = true;
             }
 
             if self.poll_async_tasks() {
                 executed = true;
             }
+            // The tasks just polled may have queued work of their own, such
+            // as a state observer's change notice for a state they wrote. It
+            // belongs to this drain, or a frame that resumed an animation
+            // would draw the value it wrote only on the next frame. It does
+            // not count as progress: a task writing state on every poll must
+            // not keep the drain polling it.
+            self.run_local_tasks();
 
             if !executed {
                 break;
@@ -694,6 +690,18 @@ impl RuntimeInner {
         }
 
         self.clear_needs_frame_if_idle();
+    }
+
+    fn run_local_tasks(&self) -> bool {
+        let mut ran = false;
+        loop {
+            let task = self.local_tasks.borrow_mut().pop_front();
+            let Some(task) = task else {
+                return ran;
+            };
+            ran = true;
+            task();
+        }
     }
 
     fn has_pending_ui(&self) -> bool {
