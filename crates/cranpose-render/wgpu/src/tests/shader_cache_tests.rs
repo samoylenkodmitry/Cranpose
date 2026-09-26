@@ -11,8 +11,9 @@ use super::{
     validate_runtime_shader_source,
 };
 use crate::{
-    effect_renderer::EffectRenderer, pipeline::GPU_TEXT_BRUSH_EFFECT_SHADER,
-    pipeline_compiler::PipelineCompiler,
+    effect_renderer::EffectRenderer,
+    pipeline::GPU_TEXT_BRUSH_EFFECT_SHADER,
+    pipeline_compiler::{CompileLane, PipelineCompiler},
 };
 
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -185,6 +186,46 @@ fn a_warmed_general_pipeline_is_ready_before_its_first_draw() {
         builds(&cache),
         (1, 1),
         "the draw found the warm-up's pipeline"
+    );
+}
+
+#[test]
+fn a_drawn_specialization_does_not_wait_for_its_queued_warm_up() {
+    let (_lock, device, _queue) = crate::frame_graph::upload_test_device();
+    let compiler = PipelineCompiler::spawn();
+    let (release, blocked) = std::sync::mpsc::channel::<()>();
+    compiler.enqueue(CompileLane::WarmUp, move || {
+        let _ = blocked.recv();
+    });
+    let mut cache = cache(&device, compiler.clone());
+    let shader = split_shader();
+    let mode = RuntimeShaderPipelineMode::Replace;
+    cache.warm(&shader, mode);
+    let (_, fit) = cache
+        .get_or_create(&shader, mode, ShaderDrawVariant::Whole)
+        .expect("valid shader");
+    assert_eq!(fit, ShaderPipelineFit::Fallback);
+    let key = cache.key(&shader, mode, ShaderDrawVariant::Whole);
+    let deadline = Instant::now() + SETTLE;
+    while !cache.ready(key) {
+        assert!(
+            Instant::now() < deadline,
+            "the drawn specialization waited behind the warm-up lane"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    release.send(()).expect("the blocking warm-up is waiting");
+    let (drained, warm_ups_done) = std::sync::mpsc::channel();
+    compiler.enqueue(CompileLane::WarmUp, move || {
+        let _ = drained.send(());
+    });
+    warm_ups_done
+        .recv_timeout(SETTLE)
+        .expect("the warm-up lane drains");
+    assert_eq!(
+        builds(&cache),
+        (1, 2),
+        "the general stand-in and the specialization, each built once"
     );
 }
 

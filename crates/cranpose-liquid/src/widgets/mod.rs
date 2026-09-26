@@ -41,16 +41,6 @@ pub use tab_bar::{
 };
 pub use toggle::LiquidToggle;
 
-/// Every runtime shader the liquid widgets build at runtime, at the target
-/// it draws to, for a renderer's shader warm-up: the ones the renderer
-/// cannot name itself because their sources are assembled in the widgets.
-pub fn shader_warm_ups() -> Vec<cranpose_ui_graphics::ShaderWarmUp> {
-    tab_lighting::shader_warm_ups()
-        .into_iter()
-        .chain(vibrancy::shader_warm_ups())
-        .collect()
-}
-
 #[cfg(test)]
 #[path = "tests/widgets_warm_up_tests.rs"]
 mod warm_up_tests;

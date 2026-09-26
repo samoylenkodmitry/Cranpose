@@ -1,7 +1,6 @@
 use crate::{
-    frame_graph::FrameCommandRecorder,
-    lazy_resource::LazyGpuResource,
-    pipeline_compiler::{CompilerSend, PipelineCompiler},
+    frame_graph::FrameCommandRecorder, lazy_resource::LazyGpuResource,
+    pipeline_compiler::CompilerSend,
 };
 
 const OUTPUT_CONVERSION_SHADER: &str = r"
@@ -120,16 +119,6 @@ impl OutputConverter {
     fn pipeline(&self, device: &wgpu::Device, backend: wgpu::Backend) -> &wgpu::RenderPipeline {
         self.pipeline
             .get_or_init(backend, || self.pipeline_job(device)())
-    }
-
-    pub(crate) fn warm(
-        &self,
-        device: &wgpu::Device,
-        compiler: &PipelineCompiler,
-        backend: wgpu::Backend,
-    ) {
-        self.pipeline
-            .warm(compiler, backend, self.pipeline_job(device));
     }
 
     pub(crate) fn bind_group(

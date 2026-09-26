@@ -31,11 +31,16 @@ fn a_request_during_the_warm_up_waits_for_it_instead_of_creating_twice() {
     let resource = LazyGpuResource::new("warmed");
     let (started, observed) = mpsc::channel();
     let (release, blocked) = mpsc::channel::<()>();
-    resource.warm(&compiler, wgpu::Backend::Gl, move || {
-        started.send(()).unwrap();
-        blocked.recv().unwrap();
-        7
-    });
+    resource.queue(
+        &compiler,
+        CompileLane::WarmUp,
+        wgpu::Backend::Gl,
+        move || {
+            started.send(()).unwrap();
+            blocked.recv().unwrap();
+            7
+        },
+    );
     observed.recv_timeout(Duration::from_secs(5)).unwrap();
     assert!(resource.get().is_none(), "the warm-up is still running");
     let waiter = {
@@ -60,7 +65,7 @@ fn a_request_during_the_warm_up_waits_for_it_instead_of_creating_twice() {
 fn an_inactive_compiler_leaves_the_resource_to_its_first_use() {
     let compiler = PipelineCompiler::inactive();
     let resource = LazyGpuResource::new("lazy");
-    resource.warm(&compiler, wgpu::Backend::Gl, || 3);
+    resource.queue(&compiler, CompileLane::WarmUp, wgpu::Backend::Gl, || 3);
     assert!(resource.get().is_none());
     assert_eq!(*resource.get_or_init(wgpu::Backend::Gl, || 4), 4);
 }

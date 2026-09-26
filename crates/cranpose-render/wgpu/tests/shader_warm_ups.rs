@@ -2,7 +2,7 @@ use cranpose_render_common::graph::{ProjectiveTransform, RenderGraph, RenderNode
 use cranpose_render_wgpu::pipelines_created;
 use cranpose_ui_graphics::{
     BlendMode, Color, GraphicsLayer, RUNTIME_SHADER_PRELUDE_WGSL, Rect, RenderEffect,
-    RuntimeShader, ShaderTarget, ShaderWarmUp,
+    RuntimeShader, ShaderTarget, ShaderWarmUp, request_shader_warm_ups,
 };
 
 use crate::{shared_test_support, support};
@@ -84,19 +84,16 @@ fn layer_draw(shader: RuntimeShader) -> RenderGraph {
     )
 }
 
-/// Draws a plain page once, so the pipelines a first capture itself needs
-/// (the screenshot converter among them) are built before any count starts.
+/// Draws an unrelated shader on each target once, so the pipelines a
+/// shader draw needs besides its own (the screenshot converter and the
+/// composite blits among them) are built before any count starts.
 fn prime(renderer: &mut support::LockedRenderer) {
-    let _ = support::capture_graph(
-        renderer,
-        support::page_graph(
-            WIDTH,
-            HEIGHT,
-            vec![support::solid_rect(BOUNDS, Color::WHITE)],
-        ),
-        WIDTH,
-        HEIGHT,
-    );
+    for graph in [
+        page_draw(probe("prime page")),
+        layer_draw(probe("prime layer")),
+    ] {
+        let _ = support::capture_graph(renderer, graph, WIDTH, HEIGHT);
+    }
     support::wait_for_background_compiler_idle();
 }
 
@@ -118,13 +115,13 @@ fn frame_thread_compiles_for(renderer: &mut support::LockedRenderer, graph: Rend
 }
 
 #[test]
-fn warmed_shaders_draw_without_a_frame_thread_compile() {
+fn requested_shaders_draw_without_a_frame_thread_compile() {
     let mut renderer = support::headless_renderer().expect("GPU required for shader warm-up");
     cranpose_render_wgpu::set_debug_toggle("CRANPOSE_SHAPE_VARIANTS", Some("0"));
     let page = probe("page target");
     let layer = probe("layer target");
     let masked = override_probe("override target");
-    renderer.warm_shaders([
+    request_shader_warm_ups([
         ShaderWarmUp {
             shader: page.clone(),
             target: ShaderTarget::Page,
@@ -133,12 +130,13 @@ fn warmed_shaders_draw_without_a_frame_thread_compile() {
             shader: layer.clone(),
             target: ShaderTarget::Layer,
         },
-        ShaderWarmUp {
-            shader: masked.clone(),
-            target: ShaderTarget::Page,
-        },
     ]);
-    support::reinit_gpu(&mut renderer).expect("GPU re-init applies the warm-ups");
+    support::reinit_gpu(&mut renderer)
+        .expect("a renderer created later compiles the requests made before it");
+    request_shader_warm_ups([ShaderWarmUp {
+        shader: masked.clone(),
+        target: ShaderTarget::Page,
+    }]);
     prime(&mut renderer);
     assert_eq!(
         frame_thread_compiles_for(&mut renderer, page_draw(page)),
@@ -154,7 +152,7 @@ fn warmed_shaders_draw_without_a_frame_thread_compile() {
     );
     assert_eq!(
         masked_compiles, 0,
-        "a warm-up carries the shader's overrides: the pipeline the draw needs, not the general one"
+        "a request made while the renderer runs is queued by its next frame, overrides kept"
     );
 }
 

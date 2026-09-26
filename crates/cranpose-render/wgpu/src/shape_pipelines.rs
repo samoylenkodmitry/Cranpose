@@ -54,30 +54,12 @@ impl ShapePipelines {
                 })
                 .flatten()
         };
-        let mut pipelines = Self {
+        Self {
             factory,
             ready: HashMap::new(),
             #[cfg(not(target_arch = "wasm32"))]
             compiler,
-        };
-        if pipelines.asynchronous() {
-            pipelines.prewarm_general();
         }
-        pipelines
-    }
-
-    fn prewarm_general(&mut self) {
-        let started = web_time::Instant::now();
-        for blend_mode in crate::render::SUPPORTED_BLEND_MODES {
-            for tier in [crate::render::RunTier::Store, crate::render::RunTier::Arena] {
-                self.ensure_general(ShapePipelineKey::general_for(blend_mode, tier));
-            }
-        }
-        log::info!(
-            "[gpu-init] {} general shape pipelines ready in {:.1} ms",
-            self.ready.len(),
-            crate::render::instant_ms(started, web_time::Instant::now()),
-        );
     }
 
     fn asynchronous(&self) -> bool {
@@ -143,7 +125,10 @@ mod background {
 
     use smallvec::SmallVec;
 
-    use crate::{pipeline_compiler::PipelineCompiler, render::ShapePipelineKey};
+    use crate::{
+        pipeline_compiler::{CompileLane, PipelineCompiler},
+        render::ShapePipelineKey,
+    };
 
     pub(super) struct Compiler<T> {
         compiler: PipelineCompiler,
@@ -180,7 +165,7 @@ mod background {
             let create = Arc::clone(&self.create);
             let finished = self.finished.clone();
             let stopped = Arc::clone(&self.stopped);
-            self.compiler.enqueue(move || {
+            self.compiler.enqueue(CompileLane::Demanded, move || {
                 if stopped.load(Ordering::Acquire) {
                     return;
                 }
@@ -208,5 +193,5 @@ mod background {
 }
 
 #[cfg(test)]
-#[path = "tests/shape_pipelines_prewarm_tests.rs"]
-mod prewarm_tests;
+#[path = "tests/shape_pipelines_tests.rs"]
+mod tests;
