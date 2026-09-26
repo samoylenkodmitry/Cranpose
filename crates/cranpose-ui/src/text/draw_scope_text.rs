@@ -117,16 +117,21 @@ impl DrawTextMeasurer for AppContextTextMeasurer {
         } else {
             estimate_text_measurement(text, style).line_height
         };
-        let first_baseline = super::measure::resolved_first_baseline(&text_style)
-            .unwrap_or_else(|| estimate_text_measurement(text, style).first_baseline);
+        let edges = super::measure::resolved_line_box(&text_style).unwrap_or_else(|| {
+            let baseline = super::measure::resolved_first_baseline(&text_style)
+                .unwrap_or_else(|| estimate_text_measurement(text, style).first_baseline);
+            LineBox::untrimmed(line_height, baseline)
+        });
+        let first_baseline = edges.first_baseline();
 
         if text.is_empty() {
             return TextMeasurement::empty(line_height, first_baseline);
         }
 
         let line_count = metrics.line_count.max(1);
+        let height = line_count as f32 * line_height - edges.trim_top - edges.trim_bottom;
         TextMeasurement {
-            size: Size::new(metrics.width.max(0.0), line_count as f32 * line_height),
+            size: Size::new(metrics.width.max(0.0), height.max(0.0)),
             line_height,
             first_baseline,
             line_count,
