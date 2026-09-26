@@ -268,7 +268,7 @@ pub enum PrimitivePhase {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum PrimitiveNode {
-    Draw(DrawPrimitiveNode),
+    Draw(Box<DrawPrimitiveNode>),
     Text(Box<TextPrimitiveNode>),
 }
 
@@ -580,7 +580,9 @@ fn render_node_heap_bytes(node: &RenderNode) -> usize {
 
 fn primitive_entry_heap_bytes(entry: &PrimitiveEntry) -> usize {
     match &entry.node {
-        PrimitiveNode::Draw(draw) => draw_primitive_heap_bytes(&draw.primitive),
+        PrimitiveNode::Draw(draw) => {
+            size_of::<DrawPrimitiveNode>() + draw_primitive_heap_bytes(&draw.primitive)
+        }
         PrimitiveNode::Text(text) => {
             size_of::<TextPrimitiveNode>() + annotated_string_heap_bytes(&text.text)
         }

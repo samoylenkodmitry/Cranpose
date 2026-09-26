@@ -731,7 +731,7 @@ fn replace_pane_input(renderer: &mut cranpose_render_wgpu::WgpuRenderer, backdro
     };
     let primitive = RenderNode::Primitive(PrimitiveEntry {
         phase: PrimitivePhase::BeforeChildren,
-        node: PrimitiveNode::Draw(DrawPrimitiveNode {
+        node: PrimitiveNode::Draw(Box::new(DrawPrimitiveNode {
             primitive: DrawPrimitive::Image {
                 rect: Rect {
                     height: 113.0,
@@ -744,7 +744,7 @@ fn replace_pane_input(renderer: &mut cranpose_render_wgpu::WgpuRenderer, backdro
                 src_rect: None,
             },
             clip: None,
-        }),
+        })),
     });
     let lens = extract_lens(
         &renderer.scene_mut().graph.as_ref().unwrap().root,

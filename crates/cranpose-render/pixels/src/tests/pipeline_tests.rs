@@ -73,7 +73,7 @@ fn snapped_text_leaf_root(animated: bool, translated_content_context: bool) -> R
         children: vec![
             RenderNode::Primitive(PrimitiveEntry {
                 phase: PrimitivePhase::BeforeChildren,
-                node: PrimitiveNode::Draw(DrawPrimitiveNode {
+                node: PrimitiveNode::Draw(Box::new(DrawPrimitiveNode {
                     primitive: DrawPrimitive::RoundRect {
                         rect: Rect {
                             x: 0.0,
@@ -86,11 +86,11 @@ fn snapped_text_leaf_root(animated: bool, translated_content_context: bool) -> R
                         stroke: None,
                     },
                     clip: None,
-                }),
+                })),
             }),
             RenderNode::Primitive(PrimitiveEntry {
                 phase: PrimitivePhase::BeforeChildren,
-                node: PrimitiveNode::Draw(DrawPrimitiveNode {
+                node: PrimitiveNode::Draw(Box::new(DrawPrimitiveNode {
                     primitive: DrawPrimitive::Image {
                         rect: Rect {
                             x: 2.0,
@@ -112,7 +112,7 @@ fn snapped_text_leaf_root(animated: bool, translated_content_context: bool) -> R
                         src_rect: None,
                     },
                     clip: None,
-                }),
+                })),
             }),
             RenderNode::Primitive(PrimitiveEntry {
                 phase: PrimitivePhase::BeforeChildren,
@@ -316,7 +316,7 @@ fn build_raster_scene_uses_graph_transform_to_parent() {
             cache_hashes_valid: false,
             children: vec![RenderNode::Primitive(PrimitiveEntry {
                 phase: PrimitivePhase::BeforeChildren,
-                node: PrimitiveNode::Draw(DrawPrimitiveNode {
+                node: PrimitiveNode::Draw(Box::new(DrawPrimitiveNode {
                     primitive: DrawPrimitive::Rect {
                         rect: Rect {
                             x: 4.0,
@@ -328,7 +328,7 @@ fn build_raster_scene_uses_graph_transform_to_parent() {
                         stroke: None,
                     },
                     clip: None,
-                }),
+                })),
             })],
         }))],
     });
@@ -423,7 +423,7 @@ fn clipped_layer(placement: Point, children: Vec<RenderNode>) -> LayerNode {
 fn red_fill() -> RenderNode {
     RenderNode::Primitive(PrimitiveEntry {
         phase: PrimitivePhase::BeforeChildren,
-        node: PrimitiveNode::Draw(DrawPrimitiveNode {
+        node: PrimitiveNode::Draw(Box::new(DrawPrimitiveNode {
             primitive: DrawPrimitive::Rect {
                 rect: Rect {
                     x: 0.0,
@@ -435,7 +435,7 @@ fn red_fill() -> RenderNode {
                 stroke: None,
             },
             clip: None,
-        }),
+        })),
     })
 }
 

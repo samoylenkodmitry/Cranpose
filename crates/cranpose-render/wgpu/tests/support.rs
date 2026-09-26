@@ -902,16 +902,21 @@ pub fn solid_rect(rect: Rect, color: Color) -> RenderNode {
 }
 
 pub fn brush_rect(rect: Rect, brush: Brush) -> RenderNode {
+    draw_node(
+        DrawPrimitive::Rect {
+            rect,
+            brush,
+            stroke: None,
+        },
+        None,
+    )
+}
+
+/// `primitive` drawn before the children, within `clip` if there is one.
+pub fn draw_node(primitive: DrawPrimitive, clip: Option<Rect>) -> RenderNode {
     RenderNode::Primitive(PrimitiveEntry {
         phase: PrimitivePhase::BeforeChildren,
-        node: PrimitiveNode::Draw(DrawPrimitiveNode {
-            primitive: DrawPrimitive::Rect {
-                rect,
-                brush,
-                stroke: None,
-            },
-            clip: None,
-        }),
+        node: PrimitiveNode::Draw(Box::new(DrawPrimitiveNode { primitive, clip })),
     })
 }
 
@@ -1173,21 +1178,6 @@ pub fn contract_layer(
         cache_hashes_valid: false,
         children,
     }
-}
-
-/// A solid rect primitive node.
-pub fn rect_primitive(rect: Rect, color: Color) -> RenderNode {
-    RenderNode::Primitive(PrimitiveEntry {
-        phase: PrimitivePhase::BeforeChildren,
-        node: PrimitiveNode::Draw(DrawPrimitiveNode {
-            primitive: DrawPrimitive::Rect {
-                rect,
-                brush: Brush::solid(color),
-                stroke: None,
-            },
-            clip: None,
-        }),
-    })
 }
 
 /// The node id of the one command of [`stored_run_graph`].

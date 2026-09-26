@@ -132,7 +132,7 @@ fn retained_visual_observation_nodes_collect_layers_and_command_owners() {
 fn render_graph_new_recomputes_manual_layer_hashes() {
     let primitive = PrimitiveEntry {
         phase: PrimitivePhase::BeforeChildren,
-        node: PrimitiveNode::Draw(DrawPrimitiveNode {
+        node: PrimitiveNode::Draw(Box::new(DrawPrimitiveNode {
             primitive: DrawPrimitive::Rect {
                 rect: Rect {
                     x: 1.0,
@@ -144,7 +144,7 @@ fn render_graph_new_recomputes_manual_layer_hashes() {
                 stroke: None,
             },
             clip: None,
-        }),
+        })),
     };
     let mut root = test_layer(
         Rect {
@@ -171,7 +171,7 @@ fn render_graph_new_recomputes_manual_layer_hashes() {
 fn motion_source_content_hash_ignores_translated_content_offset() {
     let primitive = PrimitiveEntry {
         phase: PrimitivePhase::BeforeChildren,
-        node: PrimitiveNode::Draw(DrawPrimitiveNode {
+        node: PrimitiveNode::Draw(Box::new(DrawPrimitiveNode {
             primitive: DrawPrimitive::Rect {
                 rect: Rect {
                     x: 1.0,
@@ -183,7 +183,7 @@ fn motion_source_content_hash_ignores_translated_content_offset() {
                 stroke: None,
             },
             clip: None,
-        }),
+        })),
     };
     let mut base = test_layer(
         Rect {
@@ -206,5 +206,14 @@ fn motion_source_content_hash_ignores_translated_content_offset() {
     assert_eq!(
         base.motion_source_content_hash(),
         moved.motion_source_content_hash()
+    );
+}
+
+#[test]
+fn render_nodes_stay_small_enough_to_walk_densely() {
+    assert!(
+        std::mem::size_of::<RenderNode>() <= 48,
+        "a layer's children are walked every frame; keep large payloads boxed, got {} bytes",
+        std::mem::size_of::<RenderNode>()
     );
 }
