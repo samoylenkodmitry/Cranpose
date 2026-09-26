@@ -109,9 +109,7 @@ fn variable_height_item(index: usize, stats: MutableState<LifecycleStats>) {
         println!("  [EFFECT] Item {index} effect started");
 
         DisposableEffectResult::new(move || {
-            if stats.is_alive() {
-                stats.update(|s| s.total_disposes += 1);
-            }
+            stats.update(|s| s.total_disposes += 1);
             println!("  [DISPOSE] Item {index} disposed");
         })
     });
