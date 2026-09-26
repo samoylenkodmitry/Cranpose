@@ -9,6 +9,43 @@ use cranpose_services::rememberHostMessages;
 use cranpose_ui::{Box, BoxSpec, Color, Modifier, Point, composable};
 
 use super::*;
+
+#[test]
+fn inspection_request_returns_the_primary_surface_report() {
+    let _lock = gpu_lock();
+    let mut host = new_host(320, 240, || color_probe("inspector-test"));
+    host.update();
+    let report = host.shell.debug_info_report();
+    assert!(!report.is_empty());
+    let mut expected = Vec::new();
+    write_app_event(
+        &mut expected,
+        &AppEvent::Message {
+            channel: INSPECT_SNAPSHOT_CHANNEL,
+            payload: &report,
+        },
+    )
+    .expect("encode report");
+    let mut output = Vec::new();
+    assert!(
+        apply_batch(
+            &mut host,
+            &mut output,
+            vec![LoopEvent::Host(HostEvent::Message {
+                channel: INSPECT_REQUEST_CHANNEL.into(),
+                payload: String::new(),
+            })]
+        )
+        .expect("inspect")
+    );
+    assert_eq!(output, expected);
+    output.clear();
+    assert!(apply_batch(&mut host, &mut output, vec![LoopEvent::Wake]).expect("idle wake"));
+    assert!(
+        output.is_empty(),
+        "reports must be requested, not emitted on every wake"
+    );
+}
 use crate::{
     WindowConfig, WindowModifierExt,
     embed_protocol::{PixelRect, WINDOW_DECORATED, WINDOW_TRANSPARENT, WindowSpec},

@@ -1,5 +1,8 @@
 # Cranpose
 
+[IntelliJ IDEA and RustRover support](docs/intellij.md): Cargo target controls,
+composable navigation, interactive previews and on-demand layout inspection.
+
 <img width="1536" height="1024" alt="Cranpose" src="https://github.com/user-attachments/assets/2ce48dfe-a048-4b9d-8812-a0e4534691f8" />
 
 Cranpose is a declarative UI framework for Rust, modelled on Jetpack Compose:
