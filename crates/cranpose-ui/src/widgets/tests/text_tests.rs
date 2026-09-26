@@ -80,3 +80,51 @@ fn basic_text_recomposes_when_dynamic_source_changes() {
 
     assert_eq!(resolutions.get(), 2);
 }
+
+fn groups_composed_by(content: impl FnMut() + 'static) -> usize {
+    let _app_context = crate::render_state::app_context_test_scope();
+    run_test_composition(content)
+        .composition
+        .debug_slot_table_stats()
+        .group_count
+}
+
+#[test]
+fn every_text_entry_point_composes_as_few_groups_as_the_basic_one() {
+    let basic = groups_composed_by(|| {
+        BasicTextWithOptions(
+            "Hello",
+            Modifier::empty(),
+            TextStyle::default(),
+            TextLayoutOptions::default(),
+        );
+    });
+    let text = groups_composed_by(|| {
+        Text("Hello", Modifier::empty(), TextStyle::default());
+    });
+    let with_options = groups_composed_by(|| {
+        TextWithOptions(
+            "Hello",
+            Modifier::empty(),
+            TextStyle::default(),
+            TextOptions::default(),
+        );
+    });
+    let basic_text = groups_composed_by(|| {
+        BasicText(
+            "Hello",
+            Modifier::empty(),
+            TextStyle::default(),
+            TextOverflow::default(),
+            true,
+            usize::MAX,
+            1,
+        );
+    });
+    assert_eq!(
+        (text, with_options, basic_text),
+        (basic, basic, basic),
+        "a wrapper composing through another text composable pays for its group, \
+         its read observation and its snapshot on every recomposition"
+    );
+}

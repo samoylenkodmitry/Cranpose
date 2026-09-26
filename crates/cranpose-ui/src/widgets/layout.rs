@@ -22,7 +22,17 @@ struct RetainedMeasurePolicy<P> {
 }
 
 #[composable]
-pub fn Layout<F, P>(modifier: Modifier, measure_policy: P, mut content: F) -> NodeId
+pub fn Layout<F, P>(modifier: Modifier, measure_policy: P, content: F) -> NodeId
+where
+    F: FnMut() + 'static,
+    P: MeasurePolicy + Clone + PartialEq + 'static,
+{
+    compose_layout(modifier, measure_policy, content)
+}
+
+/// Emits a layout node in the calling composable's group, so a widget that
+/// is one layout composes in one group rather than its own and `Layout`'s.
+pub(crate) fn compose_layout<F, P>(modifier: Modifier, measure_policy: P, mut content: F) -> NodeId
 where
     F: FnMut() + 'static,
     P: MeasurePolicy + Clone + PartialEq + 'static,
@@ -36,7 +46,7 @@ where
             }))
         }
     })
-    .with(|holder| holder.clone());
+    .with(Rc::clone);
     let policy = {
         let mut holder = policy_holder.borrow_mut();
         if holder.value != measure_policy {

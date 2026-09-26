@@ -16,7 +16,7 @@ use crate::{
     modifier::Modifier,
     text::{TextLayoutOptions, TextOptions, TextOverflow, TextStyle},
     text_modifier_node::TextModifierElement,
-    widgets::Layout,
+    widgets::layout::compose_layout,
 };
 
 #[derive(Clone)]
@@ -130,23 +130,6 @@ impl IntoTextSource for DynamicTextSource {
     }
 }
 
-/// High-level element that displays text.
-///
-/// # When to use
-/// Use this widget to display read-only text on the screen. For editable text,
-/// use [`BasicTextField`](crate::widgets::BasicTextField).
-///
-/// # Arguments
-///
-/// * `value` - The string to display. Can be a `&str`, `String`, or `State<String>`.
-/// * `modifier` - Modifiers to apply (e.g., padding, background, layout instructions).
-/// * `style` - Text styling (color, font size).
-///
-/// # Example
-///
-/// ```rust,ignore
-/// Text("Hello World", Modifier::padding(16.0), TextStyle::default());
-/// ```
 fn compose_basic_text_group(
     text: TextSource,
     modifier: Modifier,
@@ -161,7 +144,7 @@ fn compose_basic_text_group(
     let final_modifier = Modifier::from_parts(vec![text_element]);
     let combined_modifier = modifier.then(final_modifier);
 
-    Layout(combined_modifier, EmptyMeasurePolicy, || {})
+    compose_layout(combined_modifier, EmptyMeasurePolicy, || {})
 }
 
 #[composable]
@@ -190,8 +173,8 @@ pub fn BasicText<S>(
 where
     S: IntoTextSource + Clone + PartialEq + 'static,
 {
-    BasicTextWithOptions(
-        text,
+    compose_basic_text_group(
+        text.into_text_source(),
         modifier,
         style,
         TextLayoutOptions {
@@ -213,15 +196,42 @@ pub fn TextWithOptions<S>(
 where
     S: IntoTextSource + Clone + PartialEq + 'static,
 {
-    BasicTextWithOptions(value, modifier, style, TextLayoutOptions::from(options))
+    compose_basic_text_group(
+        value.into_text_source(),
+        modifier,
+        style,
+        TextLayoutOptions::from(options),
+    )
 }
 
+/// High-level element that displays text.
+///
+/// # When to use
+/// Use this widget to display read-only text on the screen. For editable text,
+/// use [`BasicTextField`](crate::widgets::BasicTextField).
+///
+/// # Arguments
+///
+/// * `value` - The string to display. Can be a `&str`, `String`, or `State<String>`.
+/// * `modifier` - Modifiers to apply (e.g., padding, background, layout instructions).
+/// * `style` - Text styling (color, font size).
+///
+/// # Example
+///
+/// ```rust,ignore
+/// Text("Hello World", Modifier::padding(16.0), TextStyle::default());
+/// ```
 #[composable]
 pub fn Text<S>(value: S, modifier: Modifier, style: TextStyle) -> NodeId
 where
     S: IntoTextSource + Clone + PartialEq + 'static,
 {
-    TextWithOptions(value, modifier, style, TextOptions::default())
+    compose_basic_text_group(
+        value.into_text_source(),
+        modifier,
+        style,
+        TextLayoutOptions::from(TextOptions::default()),
+    )
 }
 
 #[cfg(test)]
