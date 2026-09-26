@@ -1,5 +1,15 @@
+/// Device memory blocks the GPU allocator carves allocations from on mobile.
+/// A fixed size keeps the reserve close to what is allocated: the
+/// `MemoryUsage` preset doubles each new block up to 64 MB of device and
+/// 32 MB of host memory, so a frame that briefly needs one more buffer
+/// reserves a block twice the last for good. Host blocks are half of this,
+/// the allocator's 4 MB floor.
+const MOBILE_MEMORY_BLOCK_BYTES: u64 = 8 * 1024 * 1024;
+
 pub(crate) fn mobile_memory_hints() -> wgpu::MemoryHints {
-    wgpu::MemoryHints::MemoryUsage
+    wgpu::MemoryHints::Manual {
+        suballocated_device_memory_block_size: MOBILE_MEMORY_BLOCK_BYTES..MOBILE_MEMORY_BLOCK_BYTES,
+    }
 }
 
 pub(crate) fn mobile_device_limits(adapter_limits: wgpu::Limits) -> wgpu::Limits {

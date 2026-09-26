@@ -1,4 +1,4 @@
-use super::mobile_device_limits;
+use super::{MOBILE_MEMORY_BLOCK_BYTES, mobile_device_limits, mobile_memory_hints};
 
 #[test]
 fn uniform_binding_size_follows_adapter_up_to_desktop_default() {
@@ -51,4 +51,19 @@ fn storage_limits_never_exceed_adapter() {
     assert_eq!(limits.max_storage_buffers_per_shader_stage, 0);
     assert_eq!(limits.max_storage_textures_per_shader_stage, 0);
     assert_eq!(limits.max_dynamic_storage_buffers_per_pipeline_layout, 0);
+}
+
+#[test]
+fn mobile_gpu_memory_comes_in_fixed_size_blocks() {
+    let wgpu::MemoryHints::Manual {
+        suballocated_device_memory_block_size,
+    } = mobile_memory_hints()
+    else {
+        panic!("mobile hints fix the block size");
+    };
+    assert_eq!(
+        suballocated_device_memory_block_size,
+        MOBILE_MEMORY_BLOCK_BYTES..MOBILE_MEMORY_BLOCK_BYTES,
+        "blocks do not grow past the first"
+    );
 }
