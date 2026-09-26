@@ -1765,3 +1765,35 @@ fn static_text_motion_aligns_glyph_positions_to_pixel_grid() {
         "animated text should preserve fractional glyph position"
     );
 }
+
+#[test]
+fn raster_kerning_is_cached_and_matches_the_font() {
+    let font = default_software_text_font().expect("bundled default font");
+    let kerned = &font.font;
+    let pairs: Vec<(GlyphId, GlyphId)> = ["AV", "To", "Wa", "ab", "  "]
+        .iter()
+        .map(|pair| {
+            let mut chars = pair.chars().map(|ch| kerned.glyph_id(ch));
+            (
+                chars.next().expect("first glyph"),
+                chars.next().expect("second glyph"),
+            )
+        })
+        .collect();
+    let mut cache = SoftwareGlyphRasterCache::with_capacity_at_least_one(8);
+    for _ in 0..2 {
+        for &(previous, glyph) in &pairs {
+            assert_eq!(
+                cache.kern_unscaled(font.content_hash(), kerned, previous, glyph),
+                kerned.kern_unscaled(previous, glyph),
+                "the cached kerning is the font's, first and second time"
+            );
+        }
+    }
+    assert!(
+        pairs
+            .iter()
+            .any(|&(previous, glyph)| kerned.kern_unscaled(previous, glyph) != 0.0),
+        "the bundled font kerns at least one of the pairs, so the check means something"
+    );
+}
