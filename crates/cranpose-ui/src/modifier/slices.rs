@@ -114,8 +114,8 @@ fn merge_graphics_layers(base: GraphicsLayer, overlay: GraphicsLayer) -> Graphic
         rotation_x: base.rotation_x + overlay.rotation_x,
         rotation_y: base.rotation_y + overlay.rotation_y,
         rotation_z: base.rotation_z + overlay.rotation_z,
-        camera_distance: overlay.camera_distance,
-        transform_origin: overlay.transform_origin,
+        camera_distance: transform_frame(&base, &overlay).camera_distance,
+        transform_origin: transform_frame(&base, &overlay).transform_origin,
         translation_x: base.translation_x + overlay.translation_x,
         translation_y: base.translation_y + overlay.translation_y,
         shadow_elevation: overlay.shadow_elevation,
@@ -128,6 +128,27 @@ fn merge_graphics_layers(base: GraphicsLayer, overlay: GraphicsLayer) -> Graphic
         color_filter: compose_color_filters(base.color_filter, overlay.color_filter),
         render_effect: compose_render_effects(base.render_effect, overlay.render_effect),
         backdrop_effect: overlay.backdrop_effect.or(base.backdrop_effect),
+    }
+}
+
+/// Which of two stacked layers merged into one frames the merged transform:
+/// the later layer when it rotates or scales itself, else the earlier one. A
+/// layer that neither rotates nor scales, such as a glass surface under a
+/// tilt, leaves its camera and pivot at their defaults, and those would
+/// replace the tilt's own.
+fn transform_frame<'a>(base: &'a GraphicsLayer, overlay: &'a GraphicsLayer) -> &'a GraphicsLayer {
+    let transforms = |layer: &GraphicsLayer| {
+        layer.rotation_x != 0.0
+            || layer.rotation_y != 0.0
+            || layer.rotation_z != 0.0
+            || layer.scale != 1.0
+            || layer.scale_x != 1.0
+            || layer.scale_y != 1.0
+    };
+    if transforms(overlay) || !transforms(base) {
+        overlay
+    } else {
+        base
     }
 }
 

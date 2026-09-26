@@ -1,5 +1,41 @@
 use super::*;
 
+#[cfg(all(
+    feature = "embed",
+    feature = "desktop-shell",
+    not(target_os = "android")
+))]
+#[test]
+fn desktop_launcher_uses_embed_endpoint_before_event_loop() {
+    const CHILD: &str = "CRANPOSE_IDE_LAUNCH_TEST";
+    if std::env::var_os(CHILD).is_some() {
+        let result =
+            AppLauncher::new().try_run(|| panic!("content must not run before connecting"));
+        assert!(matches!(
+            result,
+            Err(LaunchError::Embedded(
+                crate::embed::EmbedError::Connect { .. }
+            ))
+        ));
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
+        .arg("--exact")
+        .arg("app_launcher::tests::desktop_launcher_uses_embed_endpoint_before_event_loop")
+        .arg("--nocapture")
+        .env(CHILD, "1")
+        .env(crate::embed::EmbedEndpoint::ADDRESS_VARIABLE, "127.0.0.1:0")
+        .env(crate::embed::EmbedEndpoint::TOKEN_VARIABLE, "test")
+        .output()
+        .expect("launch child test");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+}
+
 #[test]
 fn android_backend_selection_preserves_the_app_choice_without_a_valid_override() {
     assert_eq!(
