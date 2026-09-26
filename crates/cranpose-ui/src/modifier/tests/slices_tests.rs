@@ -177,3 +177,32 @@ fn a_draw_with_content_after_padding_keeps_its_content_marker() {
         }
     ));
 }
+
+#[test]
+fn a_tilt_merged_with_a_surface_keeps_its_camera_and_pivot() {
+    let tilt = GraphicsLayer {
+        rotation_y: 12.0,
+        camera_distance: 12.0,
+        transform_origin: cranpose_ui_graphics::TransformOrigin::new(0.0, 1.0),
+        ..Default::default()
+    };
+    let surface = GraphicsLayer {
+        clip: true,
+        ..Default::default()
+    };
+
+    let merged = merge_graphics_layers(tilt.clone(), surface);
+    assert_eq!(merged.camera_distance, 12.0);
+    assert_eq!(merged.transform_origin, tilt.transform_origin);
+
+    let turn = GraphicsLayer {
+        rotation_z: 30.0,
+        camera_distance: 20.0,
+        ..Default::default()
+    };
+    let over_a_turn = merge_graphics_layers(tilt, turn);
+    assert_eq!(
+        over_a_turn.camera_distance, 20.0,
+        "a later layer that turns frames the merged transform"
+    );
+}

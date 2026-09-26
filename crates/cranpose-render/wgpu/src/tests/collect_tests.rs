@@ -351,3 +351,50 @@ fn a_turned_layer_with_an_image_keeps_its_surface() {
         "an image drawn turned in place would have hard edges its filtered surface does not"
     );
 }
+
+fn glass_layer(transform: ProjectiveTransform) -> LayerNode {
+    turned_layer(
+        transform,
+        GraphicsLayer {
+            alpha: 0.5,
+            backdrop_effect: Some(RenderEffect::blur(4.0)),
+            clip: true,
+            shape: LayerShape::Rounded(RoundedCornerShape::uniform(8.0)),
+            ..Default::default()
+        },
+        Vec::new(),
+    )
+}
+
+#[test]
+fn a_turned_layer_reads_its_backdrop_in_its_own_space_under_its_turn() {
+    let outer = collected(glass_layer(turn(20.0)));
+
+    assert!(
+        outer.backdrop.is_none(),
+        "the turn carries no backdrop of its own"
+    );
+    assert!(outer.effect.is_none());
+    assert!(outer.rounded_clip.is_none());
+    assert_eq!(outer.alpha, GraphicsLayer::composite_alpha_8bit(0.5));
+    let [inner] = outer.content.children.as_slice() else {
+        panic!("the backdrop runs in one child in the layer's own space");
+    };
+    assert!(inner.backdrop.is_some());
+    assert!(inner.rounded_clip.is_some());
+    assert_eq!(inner.alpha, 1.0);
+    assert_eq!(
+        uniform_scale_translation(inner.transform),
+        Some((1.0, Point::default())),
+        "the inner child sits in the turned layer's own space"
+    );
+}
+
+#[test]
+fn a_moved_layer_resolves_its_backdrop_beside_its_surface() {
+    let child = collected(glass_layer(ProjectiveTransform::translation(10.0, 20.0)));
+
+    assert!(child.backdrop.is_some());
+    assert!(child.rounded_clip.is_some());
+    assert!(child.content.children.is_empty());
+}
