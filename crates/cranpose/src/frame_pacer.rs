@@ -391,6 +391,11 @@ impl FramePacer {
         self.stage.map(|stage| stage.level)
     }
 
+    /// How far ahead of its vsync slot a paced frame starts now.
+    pub(crate) fn current_lead_ns(&self, vsync_period_ns: i64) -> i64 {
+        self.lead.lead_ns(vsync_period_ns)
+    }
+
     pub(crate) fn begin_frame(&mut self, now_ns: i64, vsync_ns: i64, vsync_period_ns: i64) -> bool {
         let depth = self.level(now_ns).and_then(Level::depth);
         let slot_ns = self.open_slot(now_ns, vsync_ns, vsync_period_ns);

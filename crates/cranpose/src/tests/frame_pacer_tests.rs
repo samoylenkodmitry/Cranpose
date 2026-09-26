@@ -461,4 +461,9 @@ fn the_current_level_reports_the_level_without_stepping_it() {
         Some(Level::Shallow)
     );
     assert_eq!(pacer.current_level(), Some(Level::Shallow));
+    assert_eq!(
+        pacer.current_lead_ns(VSYNC),
+        0,
+        "frames start on their slot until a lead proves itself"
+    );
 }

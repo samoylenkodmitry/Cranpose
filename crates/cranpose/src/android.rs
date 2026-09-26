@@ -650,10 +650,15 @@ impl AndroidFrameDriver {
 
     /// Hands every frame the display has reported since the last call to
     /// `pacer`.
-    fn pace_displayed_frames(&self, pacer: &mut FramePacer) {
+    fn pace_displayed_frames(
+        &self,
+        pacer: &mut FramePacer,
+        telemetry: &mut crate::android_frame_telemetry::AndroidFrameTelemetry,
+    ) {
         for frame in self.displayed_rx.try_iter() {
             pacer.record_shown(frame.shown_ns, frame.queued_behind, vsync_period_ns());
             pacer.record_latency(frame.queued_ns, frame.shown_ns);
+            telemetry.note_shown_latency(frame.shown_ns - frame.queued_ns);
         }
     }
 
@@ -1806,7 +1811,7 @@ pub fn run(
             ),
             None => None,
         };
-        android_frame_driver.pace_displayed_frames(&mut frame_pacer);
+        android_frame_driver.pace_displayed_frames(&mut frame_pacer, &mut frame_telemetry);
 
         let pending_confirmation_timeout = pending_host_window_confirmation.map(|pending| {
             android_host_window::HOST_WINDOW_CONFIRMATION_TIMEOUT
@@ -2446,6 +2451,7 @@ pub fn run(
             frame_waits_for_vsync = frame_due && !frame_starts;
             if frame_starts {
                 frame_timings.pacing = frame_pacer.current_level();
+                frame_timings.lead_ns = frame_pacer.current_lead_ns(vsync_period_ns());
                 frame_started_at = Some(web_time::Instant::now());
                 frame_timings.work_start_ns = crate::android_frame_telemetry::monotonic_nanos();
                 let update_result = android_host_window::with_android_host_window_registry(

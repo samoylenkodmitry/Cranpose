@@ -310,6 +310,8 @@ pub(crate) struct FrameTimings {
     pub(crate) after_present_ns: i64,
     /// The pacing level the frame started at.
     pub(crate) pacing: Option<crate::frame_pacer::Level>,
+    /// How far ahead of its vsync slot the frame was allowed to start.
+    pub(crate) lead_ns: i64,
 }
 
 impl FrameTimings {
@@ -335,12 +337,14 @@ struct Sample {
     present_us: i32,
     vsync_offset_us: i32,
     pacing: Option<crate::frame_pacer::Level>,
+    lead_us: i32,
 }
 
 pub(crate) struct AndroidFrameTelemetry {
     enabled: bool,
     window_frames: usize,
     samples: Vec<Sample>,
+    shown_latencies_us: Vec<i32>,
     last_present_ns: i64,
     idle_iterations: u32,
     window_start_ns: i64,
@@ -364,6 +368,7 @@ impl AndroidFrameTelemetry {
             enabled,
             window_frames,
             samples: Vec::with_capacity(window_frames),
+            shown_latencies_us: Vec::with_capacity(window_frames),
             last_present_ns: 0,
             idle_iterations: 0,
             window_start_ns: 0,
@@ -403,6 +408,7 @@ impl AndroidFrameTelemetry {
             present_us: us(timings.after_present_ns - timings.after_render_ns),
             vsync_offset_us: vsync_offset_ns(timings.iteration_start_ns).map_or(-1, us),
             pacing: timings.pacing,
+            lead_us: us(timings.lead_ns),
         });
         if self.samples.len() >= self.window_frames {
             self.flush();
@@ -437,20 +443,44 @@ impl AndroidFrameTelemetry {
         self.reset();
     }
 
-    fn report_pacing(&self) {
+    fn report_pacing(&mut self) {
         let count = |level: Option<crate::frame_pacer::Level>| {
             self.samples
                 .iter()
                 .filter(|sample| sample.pacing == level)
                 .count()
         };
+        let leading = self
+            .samples
+            .iter()
+            .filter(|sample| sample.lead_us > 0)
+            .count();
         log::warn!(
-            "[android-frame]   pacing shallow={} buffered={} unpaced={} unreported={}",
+            "[android-frame]   pacing shallow={} buffered={} unpaced={} unreported={} leading={}",
             count(Some(crate::frame_pacer::Level::Shallow)),
             count(Some(crate::frame_pacer::Level::Buffered)),
             count(Some(crate::frame_pacer::Level::Unpaced)),
             count(None),
+            leading,
         );
+        if !self.shown_latencies_us.is_empty() {
+            self.shown_latencies_us.sort_unstable();
+            let latencies = &self.shown_latencies_us;
+            log::warn!(
+                "[android-frame]   queue_to_screen n={} p10={:.2} p50={:.2} p90={:.2}",
+                latencies.len(),
+                ms(percentile(latencies, 0.10)),
+                ms(percentile(latencies, 0.50)),
+                ms(percentile(latencies, 0.90)),
+            );
+        }
+    }
+
+    /// Notes how long a frame the display showed waited from being queued.
+    pub(crate) fn note_shown_latency(&mut self, latency_ns: i64) {
+        if self.enabled {
+            self.shown_latencies_us.push(us(latency_ns));
+        }
     }
 
     fn report_vsync_phase(&self) {
@@ -509,6 +539,7 @@ impl AndroidFrameTelemetry {
 
     fn reset(&mut self) {
         self.samples.clear();
+        self.shown_latencies_us.clear();
         self.idle_iterations = 0;
         self.window_start_ns = 0;
     }
