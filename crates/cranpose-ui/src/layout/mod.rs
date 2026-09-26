@@ -652,6 +652,9 @@ impl LayoutBox {
 /// Snapshot of the data required to render a layout node.
 #[derive(Debug, Clone)]
 pub struct LayoutNodeData {
+    /// Composable origins retained by an inspection-enabled layout node.
+    #[cfg(feature = "inspection")]
+    pub source_trace: Rc<[cranpose_core::source_trace::SourceLocation]>,
     pub modifier: Modifier,
     pub resolved_modifiers: ResolvedModifiers,
     pub modifier_slices: Rc<ModifierNodeSlices>,
@@ -668,6 +671,8 @@ impl LayoutNodeData {
         kind: LayoutNodeKind,
     ) -> Self {
         Self {
+            #[cfg(feature = "inspection")]
+            source_trace: Rc::default(),
             modifier,
             resolved_modifiers,
             modifier_slices,
@@ -877,6 +882,14 @@ fn snapshot_node_data(
         semantics,
         kind,
     );
+    #[cfg(feature = "inspection")]
+    let data = {
+        let mut data = data;
+        data.source_trace = applier
+            .with_node::<LayoutNode, _>(node_id, |node| node.source_trace.clone())
+            .unwrap_or_default();
+        data
+    };
     Ok((data, layer_translation))
 }
 

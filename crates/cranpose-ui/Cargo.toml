@@ -37,6 +37,7 @@ thiserror = "2.0.20"
 [features]
 default = []
 svg = ["dep:tiny-skia"]
+inspection = ["cranpose-core/inspection"]
 # Enable test helpers like last_fling_velocity() for robot test verification.
 # This adds global state for cross-thread test access, so only enable in test builds.
 test-helpers = []

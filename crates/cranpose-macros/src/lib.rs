@@ -5,6 +5,22 @@ use quote::quote;
 use syn::{FnArg, Ident, ItemFn, Pat, PatType, ReturnType, Type, parse_macro_input};
 
 mod branch_groups;
+mod preview;
+#[cfg(test)]
+#[path = "tests/preview_tests.rs"]
+mod preview_tests;
+
+/// Registers a parameterless component fixture for IDE previews.
+///
+/// Enable Cranpose's `preview` feature. Options are `name`, `group`, `width`,
+/// `height`, and `dark`. Combine this attribute with `#[composable]`.
+#[proc_macro_attribute]
+pub fn preview(args: TokenStream, item: TokenStream) -> TokenStream {
+    let function = parse_macro_input!(item as ItemFn);
+    preview::expand(args.into(), function)
+        .unwrap_or_else(|error| error.to_compile_error())
+        .into()
+}
 
 fn is_fn_like_type(ty: &Type) -> bool {
     match ty {
@@ -757,6 +773,9 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                 #(, #body_inputs)*
             ) -> #return_ty #where_clause {
                 #(#callback_rebinds)*
+                let _cranpose_source_scope = #core_path::__source_scope(
+                    stringify!(#scope_label_ident), file!(), line!(), env!("CARGO_MANIFEST_DIR"),
+                );
                 #original_block
             }
         };
@@ -799,6 +818,9 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                 #outer_composer_ident.with_group(#key_expr, |#composer_ident: &#core_path::Composer| {
                     #core_path::debug_label_current_scope(stringify!(#scope_label_ident));
                     #(#rebinds_for_no_skip)*
+                    let _cranpose_source_scope = #core_path::__source_scope(
+                        stringify!(#scope_label_ident), file!(), line!(), env!("CARGO_MANIFEST_DIR"),
+                    );
                     #original_block
                 })
             })

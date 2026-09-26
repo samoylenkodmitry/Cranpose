@@ -264,6 +264,9 @@ impl LayoutNodeCacheHandles {
 }
 
 pub struct LayoutNode {
+    /// Composable definitions responsible for this node, captured only for inspection builds.
+    #[cfg(feature = "inspection")]
+    pub source_trace: Rc<[cranpose_core::source_trace::SourceLocation]>,
     pub modifier: Modifier,
     modifier_chain: ModifierChainHandle,
     resolved_modifiers: ResolvedModifiers,
@@ -350,6 +353,8 @@ impl LayoutNode {
         is_virtual: bool,
     ) -> Self {
         let mut node = Self {
+            #[cfg(feature = "inspection")]
+            source_trace: cranpose_core::source_trace::current_source_trace(),
             modifier,
             modifier_chain: ModifierChainHandle::new(),
             resolved_modifiers: ResolvedModifiers::default(),
@@ -383,6 +388,13 @@ impl LayoutNode {
     }
 
     pub fn set_modifier(&mut self, modifier: Modifier) {
+        #[cfg(feature = "inspection")]
+        {
+            let trace = cranpose_core::source_trace::current_source_trace();
+            if !trace.is_empty() {
+                self.source_trace = trace;
+            }
+        }
         // An equal modifier leaves every element's node as it was. Only a
         // chain reading modifier locals resyncs, since its parent may now
         // provide others.
@@ -861,6 +873,8 @@ impl LayoutNode {
 impl Clone for LayoutNode {
     fn clone(&self) -> Self {
         let mut node = Self {
+            #[cfg(feature = "inspection")]
+            source_trace: self.source_trace.clone(),
             modifier: self.modifier.clone(),
             modifier_chain: ModifierChainHandle::new(),
             resolved_modifiers: ResolvedModifiers::default(),
@@ -1050,6 +1064,10 @@ impl Node for LayoutNode {
 
         let mut compact = Self::new_with_virtual(modifier, measure_policy, previous.is_virtual);
         compact.children = children;
+        #[cfg(feature = "inspection")]
+        {
+            compact.source_trace = previous.source_trace.clone();
+        }
         compact.parent.set(parent);
         compact.folded_parent.set(folded_parent);
         compact.id.set(node_id);
