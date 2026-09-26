@@ -56,9 +56,9 @@ const MENU_FONT_SP: f32 = 15.0;
 /// CompositionLocal marking the surface the floating glass sits over as
 /// LIGHT. Liquid glass is transparent, so its labels and hairlines must
 /// flip to dark ink over a light backdrop to stay readable — the same
-/// content over a dark app keeps its near-white ink. Defaults to `false`
-/// (dark surface), preserving the existing look; a light-themed screen
-/// provides `true`.
+/// content over a dark app keeps its near-white ink. `LiquidTheme` provides
+/// it from its scheme; without a theme it is `false` (a dark surface), and a
+/// light screen provides `true`.
 pub fn local_on_light_surface() -> cranpose_core::CompositionLocal<bool> {
     use std::cell::RefCell;
     thread_local! {
