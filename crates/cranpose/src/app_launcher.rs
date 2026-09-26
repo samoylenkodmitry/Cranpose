@@ -9,7 +9,9 @@ use cranpose_render_common::{
         ANDROID_SYSTEM_FONT_DIR, DEFAULT_SYSTEM_FAMILY_WEIGHTS, FontLoadError,
         SoftwareTextFontRegistry,
     },
-    software_text_raster::{SoftwareTextFont, SoftwareTextFontSet, default_software_text_font},
+    software_text_raster::{
+        FontBytes, SoftwareTextFont, SoftwareTextFontSet, default_software_text_font,
+    },
 };
 use cranpose_ui::{
     ImageBitmap,
@@ -741,7 +743,7 @@ impl<Fonts: LauncherFonts> AppLauncher<Fonts> {
         family: &FontFamily,
         weight: FontWeight,
         style: FontStyle,
-        bytes: impl Into<Vec<u8>>,
+        bytes: impl Into<FontBytes>,
     ) -> AppLauncher<AppFonts> {
         let mut launcher = self.supplying_fonts();
         if let Err(error) = launcher

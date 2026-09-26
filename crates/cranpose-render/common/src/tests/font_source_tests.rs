@@ -537,3 +537,22 @@ fn loaded_typeface_families_register_their_single_file() {
             .is_some_and(|font| font.registered_family().is_some())
     );
 }
+
+#[test]
+fn reads_of_an_unchanged_font_file_share_its_bytes() {
+    let directory = ScratchDir::new("read-once");
+    let path = directory.write("Face.ttf", REGULAR);
+    let first = read_font_file(&path).expect("the face reads");
+    let again = read_font_file(&path).expect("the face reads again");
+    assert_eq!(first, REGULAR);
+    assert_eq!(
+        first.as_ptr(),
+        again.as_ptr(),
+        "every face of one file shares its bytes"
+    );
+    let rewritten = directory.write("Face.ttf", BOLD);
+    assert_eq!(
+        read_font_file(&rewritten).expect("the new face reads"),
+        BOLD
+    );
+}

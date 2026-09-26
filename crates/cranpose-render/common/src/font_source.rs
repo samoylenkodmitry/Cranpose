@@ -5,6 +5,8 @@
 //! files and hand the bytes to the rasterizer. That is this module: it parses
 //! each face exactly once, at registration, and produces an immutable
 //! [`SoftwareTextFontSet`] that measurement and rasterization then share.
+//! The process keeps one copy of each font file's contents, shared by every
+//! face instanced from it and by later reads that find the file unchanged.
 //!
 //! Nothing here runs per frame or per string. A registry is built at startup,
 //! consumed into a font set, and the font set is cloned (it is `Arc`-backed)
@@ -20,13 +22,13 @@
 use std::{
     io::Read,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Mutex, PoisonError},
 };
 
 use cranpose_ui::text::{FontFamily, FontFile, FontStyle, FontWeight};
 
 use crate::software_text_raster::{
-    FontFamilyKey, SoftwareTextFont, SoftwareTextFontError, SoftwareTextFontSet,
+    FontBytes, FontFamilyKey, SoftwareTextFont, SoftwareTextFontError, SoftwareTextFontSet,
 };
 
 /// Directory Android keeps its system font files in.
@@ -122,11 +124,9 @@ impl SoftwareTextFontRegistry {
             return Err(FontLoadError::EmptyFamily);
         }
 
-        let mut reads = FontFileReads::default();
         let mut load = TolerantLoad::default();
         for file in &files {
             load.record(self.register_read_face(
-                &mut reads,
                 family,
                 file.weight,
                 file.style,
@@ -139,20 +139,15 @@ impl SoftwareTextFontRegistry {
 
     fn register_read_face(
         &mut self,
-        reads: &mut FontFileReads,
         family: &FontFamily,
         weight: FontWeight,
         style: FontStyle,
         path: &Path,
         variations: &[([u8; 4], f32)],
     ) -> Result<(), FontLoadError> {
-        let bytes = reads.read(path)?;
+        let bytes = read_font_file(path)?;
         let face = SoftwareTextFont::from_registered_bytes_with_variations(
-            family,
-            weight,
-            style,
-            bytes.to_vec(),
-            variations,
+            family, weight, style, bytes, variations,
         )
         .map_err(|source| FontLoadError::Parse {
             path: path.to_path_buf(),
@@ -191,7 +186,7 @@ impl SoftwareTextFontRegistry {
         family: &FontFamily,
         weight: FontWeight,
         style: FontStyle,
-        bytes: impl Into<Vec<u8>>,
+        bytes: impl Into<FontBytes>,
     ) -> Result<(), FontLoadError> {
         self.register_face_bytes_with_variations(family, weight, style, bytes, &[])
     }
@@ -203,7 +198,7 @@ impl SoftwareTextFontRegistry {
         family: &FontFamily,
         weight: FontWeight,
         style: FontStyle,
-        bytes: impl Into<Vec<u8>>,
+        bytes: impl Into<FontBytes>,
         variations: &[([u8; 4], f32)],
     ) -> Result<(), FontLoadError> {
         let face = SoftwareTextFont::from_registered_bytes_with_variations(
@@ -220,7 +215,7 @@ impl SoftwareTextFontRegistry {
     /// family, and for a `Named` request their own `name` table decides.
     pub fn register_fallback_bytes(
         &mut self,
-        bytes: impl Into<Vec<u8>>,
+        bytes: impl Into<FontBytes>,
     ) -> Result<(), FontLoadError> {
         let face = SoftwareTextFont::from_bytes(bytes)
             .map_err(|source| FontLoadError::ParseBytes { source })?;
@@ -242,8 +237,7 @@ impl SoftwareTextFontRegistry {
     /// than a `wght` position Android cannot reach. Faces are registered in
     /// `FontStyle::Normal`; an app that
     /// wants a real italic rather than a synthesized slant should call
-    /// [`SoftwareTextFontRegistry::register_system_face`] for it, because each
-    /// extra face is another copy of the file's bytes.
+    /// [`SoftwareTextFontRegistry::register_system_face`] for it.
     pub fn register_system_family(
         &mut self,
         directory: impl AsRef<Path>,
@@ -251,11 +245,9 @@ impl SoftwareTextFontRegistry {
         weights: &[FontWeight],
     ) -> Result<(), FontLoadError> {
         let directory = directory.as_ref();
-        let mut reads = FontFileReads::default();
         let mut load = TolerantLoad::default();
         for weight in weights {
             load.record(self.register_read_system_face(
-                &mut reads,
                 directory,
                 family,
                 *weight,
@@ -294,19 +286,11 @@ impl SoftwareTextFontRegistry {
         style: FontStyle,
         variations: &[([u8; 4], f32)],
     ) -> Result<(), FontLoadError> {
-        self.register_read_system_face(
-            &mut FontFileReads::default(),
-            directory.as_ref(),
-            family,
-            weight,
-            style,
-            variations,
-        )
+        self.register_read_system_face(directory.as_ref(), family, weight, style, variations)
     }
 
     fn register_read_system_face(
         &mut self,
-        reads: &mut FontFileReads,
         directory: &Path,
         family: &FontFamily,
         weight: FontWeight,
@@ -322,7 +306,7 @@ impl SoftwareTextFontRegistry {
                 directory: directory.to_path_buf(),
             }
         })?;
-        self.register_read_face(reads, family, weight, style, &path, variations)?;
+        self.register_read_face(family, weight, style, &path, variations)?;
         self.system_faces
             .push((FontFamilyKey::of(family), weight, style));
         Ok(())
@@ -350,33 +334,41 @@ impl SoftwareTextFontRegistry {
     /// as bytes. The set holds only what the app supplied; whether the
     /// embedded face serves an app that supplied nothing is the launcher's
     /// decision, made where the binary can leave the face out.
-    pub fn into_font_set(mut self, fonts: &[&[u8]]) -> SoftwareTextFontSet {
+    pub fn into_font_set(mut self, fonts: &[&'static [u8]]) -> SoftwareTextFontSet {
         for bytes in fonts {
-            let _ = self.register_fallback_bytes((*bytes).to_vec());
+            let _ = self.register_fallback_bytes(*bytes);
         }
         SoftwareTextFontSet::from_faces(self.faces)
     }
 }
 
-#[derive(Default)]
-struct FontFileReads {
-    entries: Vec<(PathBuf, Arc<[u8]>)>,
+struct ReadFontFile {
+    path: PathBuf,
+    bytes: &'static [u8],
 }
 
-impl FontFileReads {
-    fn read(&mut self, path: &Path) -> Result<Arc<[u8]>, FontLoadError> {
-        if let Some((_, bytes)) = self.entries.iter().find(|(read, _)| read == path) {
-            return Ok(Arc::clone(bytes));
-        }
-        let bytes: Arc<[u8]> = std::fs::read(path)
-            .map_err(|source| FontLoadError::Read {
-                path: path.to_path_buf(),
-                source,
-            })?
-            .into();
-        self.entries.push((path.to_path_buf(), Arc::clone(&bytes)));
-        Ok(bytes)
+static READ_FONT_FILES: Mutex<Vec<ReadFontFile>> = Mutex::new(Vec::new());
+
+fn read_font_file(path: &Path) -> Result<&'static [u8], FontLoadError> {
+    let read = std::fs::read(path).map_err(|source| FontLoadError::Read {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let mut files = READ_FONT_FILES
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    if let Some(file) = files
+        .iter()
+        .find(|file| file.path == path && file.bytes == read.as_slice())
+    {
+        return Ok(file.bytes);
     }
+    let bytes: &'static [u8] = Box::leak(read.into_boxed_slice());
+    files.push(ReadFontFile {
+        path: path.to_path_buf(),
+        bytes,
+    });
+    Ok(bytes)
 }
 
 /// The weight a platform's own matcher resolves `weight` to for a generic
