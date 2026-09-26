@@ -17,7 +17,7 @@ use crate::{
         LiquidModifierExt, neutral_surface_tint,
     },
     motion::LiquidMotion,
-    theme::{LiquidTypography, liquid_colors, liquid_typography},
+    theme::{LiquidColors, LiquidTypography, liquid_colors, liquid_typography},
     widgets::content_scope::ScopeContent,
 };
 
@@ -835,10 +835,8 @@ fn LiquidTabBarLayout(
             let on_select = Rc::clone(&on_select);
             let accessory = Rc::clone(&accessory);
 
-            let tab_width = cranpose_core::remember(|| cranpose_core::mutableStateOf(0.0f32))
-                .with(|state| *state);
-            let lens_pressed = cranpose_core::remember(|| cranpose_core::mutableStateOf(false))
-                .with(|state| *state);
+            let tab_width = cranpose_core::rememberMutableStateOf(|| 0.0f32);
+            let lens_pressed = cranpose_core::rememberMutableStateOf(|| false);
             let bar_touch = remember_tab_bar_touch();
             let contact_motion = super::tab_motion::remember_tab_contact_motion();
             let bar_press = contact_motion.bar_state();
@@ -849,31 +847,13 @@ fn LiquidTabBarLayout(
                 cranpose_animation::spring(0.85, 650.0),
                 "tabbar-travel",
             );
-            let motion = TabBarMotion {
-                axis: cranpose_core::remember(|| Rc::new(RefCell::new(None))).with(Rc::clone),
-                lens_shape: super::tab_motion::remember_tab_lens_shape(),
-                bar_press,
-                travel,
-                lens_activity: contact_motion.lens_state(),
-            };
+            let motion = remember_tab_bar_motion(bar_press, travel, contact_motion.lens_state());
             let cells = TabGeometry::new(tab_width.get(), count);
             let resting_lens_x = tab_lens_resting_left(selected, cells.pitch, count);
             let visual_index = {
                 let motion = motion.clone();
                 cranpose_core::derivedStateOf(move || {
-                    let lens_x = motion.lens_x(resting_lens_x);
-                    crate::motion::liquid_visual_index(
-                        selected,
-                        lens_x,
-                        cells.pitch,
-                        count,
-                        crate::motion::liquid_axis_owns_visual_selection(
-                            lens_pressed.get(),
-                            lens_x,
-                            resting_lens_x,
-                            cells.pitch,
-                        ),
-                    )
+                    motion.visual_index(selected, cells, count, lens_pressed.get())
                 })
                 .get()
             };
@@ -902,9 +882,7 @@ fn LiquidTabBarLayout(
                             let on_select = Rc::clone(&on_select);
                             let measured_width =
                                 spec.cell_width(scope.constraints().max_width, count);
-                            if tab_width.get_non_reactive() != measured_width {
-                                tab_width.set(measured_width);
-                            }
+                            tab_width.set(measured_width);
 
                             let geometry = TabGeometry::new(measured_width, count);
                             Box(
@@ -929,13 +907,7 @@ fn LiquidTabBarLayout(
                             if !lens_pressed.get() {
                                 lens_axis.settle_to(resting_lens_x, LiquidMotion::glide());
                             }
-                            let published = published_axis
-                                .borrow()
-                                .as_ref()
-                                .is_some_and(|held| Rc::ptr_eq(held, &lens_axis));
-                            if !published {
-                                *published_axis.borrow_mut() = Some(Rc::clone(&lens_axis));
-                            }
+                            *published_axis.borrow_mut() = Some(Rc::clone(&lens_axis));
                             let row_width = geometry.width;
                             let gesture = Modifier::empty()
                                 .offset(BLOB_MARGIN, BLOB_MARGIN)
@@ -1002,99 +974,23 @@ fn LiquidTabBarLayout(
                         });
                     });
 
-                    let (lens_w, lens_h) = tab_lens_base_size(cells.cell_width, 1.0);
-                    let deformation_headroom =
-                        crate::dynamics::STRETCH_MAX.max(1.0 / crate::dynamics::STRETCH_MIN);
-                    let node_w = lens_w * deformation_headroom + crate::dynamics::BULGE_MAX + 20.0;
-                    let node_h = lens_h * deformation_headroom + crate::dynamics::BULGE_MAX + 16.0;
-                    let node_top = tab_lens_node_top(node_h);
-                    let node_size = Size::new(node_w, node_h);
-                    let lens = TabLensPlacement {
-                        cells,
-                        resting_lens_x,
-                        pill_w,
-                        node_size,
-                        node_top,
-                        resting_tint: colors.fill,
-                        accessory_center: has_accessory.then_some((
-                            pill_w + tab_bar_accessory_gap(true) + BAR_HEIGHT * 0.5,
-                            BAR_HEIGHT * 0.5,
-                        )),
-                    };
-                    let transform: Rc<dyn Fn() -> cranpose_ui_graphics::GraphicsLayer> = {
-                        let motion = motion.clone();
-                        Rc::new(move || {
-                            tab_bar_transform(pill_w, motion.bar_press.get(), motion.travel.get())
-                        })
-                    };
-                    let lens_node_modifier = Modifier::empty()
-                        .required_size(node_size)
-                        .offset(0.0, node_top)
-                        .graphics_layer({
-                            let motion = motion.clone();
-                            move || lens.layer(&motion)
-                        });
-                    let material_layers: Rc<RefCell<Option<HeldTabLensLayers>>> =
-                        cranpose_core::remember(|| Rc::new(RefCell::new(None))).with(Rc::clone);
-                    let lens_layers = {
-                        let motion = motion.clone();
-                        move |layer: usize| {
-                            let frame = motion.frame(lens.cells, lens.resting_lens_x);
-                            let key = frame.activity.to_bits();
-                            let layers = {
-                                let mut held = material_layers.borrow_mut();
-                                match &*held {
-                                    Some((held_key, layers)) if *held_key == key => {
-                                        Rc::clone(layers)
-                                    }
-                                    _ => {
-                                        let layers: Rc<TabLensLayers> =
-                                            Rc::new(crate::material::cached_glass_content_layers(
-                                                tab_flight_lens_material(
-                                                    colors.label,
-                                                    frame.activity,
-                                                )
-                                                .resolve(&colors),
-                                            ));
-                                        *held = Some((key, Rc::clone(&layers)));
-                                        layers
-                                    }
-                                }
-                            };
-                            layers(
-                                cranpose_ui::current_density(),
-                                tab_flight_dynamics(lens.geometry(frame), lens.node(frame)),
-                            )[layer]
-                                .clone()
-                        }
-                    };
-                    let background_layers = lens_layers.clone();
-                    let lens_background = lens_node_modifier
-                        .clone()
-                        .graphics_layer(move || background_layers(0));
-                    let lighting_transform = Rc::clone(&transform);
+                    let drawing = Rc::new(TabLensDrawing {
+                        lens: TabLensPlacement::new(cells, resting_lens_x, colors, has_accessory),
+                        motion: motion.clone(),
+                        colors,
+                        held_layers: cranpose_core::remember(|| Rc::new(RefCell::new(None)))
+                            .with(Rc::clone),
+                    });
+                    let lighting = Rc::clone(&drawing);
                     super::tab_lighting::TabLighting(
                         Size::new(pill_w, BAR_HEIGHT),
-                        move || lighting_transform(),
+                        move || lighting.transform(),
                         bar_touch.position,
                         glow,
                         local_glow_factor,
                     );
-                    Box(lens_background, BoxSpec::default(), || {});
-                    let selection_color = tab_selection_content_color(colors);
-                    let selection: Rc<dyn Fn() -> super::vibrancy::InkSelection> = {
-                        let motion = motion.clone();
-                        Rc::new(move || {
-                            let frame = motion.frame(cells, resting_lens_x);
-                            tab_ink_selection(
-                                cells,
-                                frame.lens_x,
-                                frame.activity,
-                                frame.strain,
-                                selection_color,
-                            )
-                        })
-                    };
+                    Box(drawing.glass_modifier(0), BoxSpec::default(), || {});
+                    let (ink, lift) = (Rc::clone(&drawing), Rc::clone(&drawing));
                     TabCells(
                         Modifier::empty(),
                         Rc::clone(&tabs),
@@ -1105,15 +1001,11 @@ fn LiquidTabBarLayout(
                             selected: visual_index,
                             committed_selection: selected,
                         },
-                        move || selection(),
-                        move || transform(),
+                        move || ink.selection(),
+                        move || lift.transform(),
                         move |index| semantic_selection(index),
                     );
-                    Box(
-                        lens_node_modifier.graphics_layer(move || lens_layers(1)),
-                        BoxSpec::default(),
-                        || {},
-                    );
+                    Box(drawing.glass_modifier(1), BoxSpec::default(), || {});
                 },
             );
 
@@ -1148,6 +1040,23 @@ struct TabBarMotion {
     lens_activity: cranpose_core::State<f32>,
 }
 
+/// Gathers the states the bar moves with, and remembers the lens's shape and
+/// the slot its axis is published to.
+#[composable]
+fn remember_tab_bar_motion(
+    bar_press: cranpose_core::State<f32>,
+    travel: cranpose_core::State<f32>,
+    lens_activity: cranpose_core::State<f32>,
+) -> TabBarMotion {
+    TabBarMotion {
+        axis: cranpose_core::remember(|| Rc::new(RefCell::new(None))).with(Rc::clone),
+        lens_shape: super::tab_motion::remember_tab_lens_shape(),
+        bar_press,
+        travel,
+        lens_activity,
+    }
+}
+
 /// What the lens looks like this frame.
 #[derive(Clone, Copy)]
 struct TabLensFrame {
@@ -1165,6 +1074,31 @@ impl TabBarMotion {
             .borrow()
             .as_ref()
             .map_or(resting_lens_x, |axis| axis.value())
+    }
+
+    /// The tab the lens is over, which the bar shows as selected while the lens
+    /// owns the selection.
+    fn visual_index(
+        &self,
+        selected: usize,
+        cells: TabGeometry,
+        count: usize,
+        pressed: bool,
+    ) -> usize {
+        let resting_lens_x = tab_lens_resting_left(selected, cells.pitch, count);
+        let lens_x = self.lens_x(resting_lens_x);
+        crate::motion::liquid_visual_index(
+            selected,
+            lens_x,
+            cells.pitch,
+            count,
+            crate::motion::liquid_axis_owns_visual_selection(
+                pressed,
+                lens_x,
+                resting_lens_x,
+                cells.pitch,
+            ),
+        )
     }
 
     /// Reads every moving part, so the caller redraws when any of them moves.
@@ -1202,6 +1136,32 @@ struct TabLensPlacement {
 }
 
 impl TabLensPlacement {
+    fn new(
+        cells: TabGeometry,
+        resting_lens_x: f32,
+        colors: LiquidColors,
+        has_accessory: bool,
+    ) -> Self {
+        let (lens_w, lens_h) = tab_lens_base_size(cells.cell_width, 1.0);
+        let deformation_headroom =
+            crate::dynamics::STRETCH_MAX.max(1.0 / crate::dynamics::STRETCH_MIN);
+        let node_w = lens_w * deformation_headroom + crate::dynamics::BULGE_MAX + 20.0;
+        let node_h = lens_h * deformation_headroom + crate::dynamics::BULGE_MAX + 16.0;
+        let pill_w = cells.width + 2.0 * BLOB_MARGIN;
+        Self {
+            cells,
+            resting_lens_x,
+            pill_w,
+            node_size: Size::new(node_w, node_h),
+            node_top: tab_lens_node_top(node_h),
+            resting_tint: colors.fill,
+            accessory_center: has_accessory.then_some((
+                pill_w + tab_bar_accessory_gap(true) + BAR_HEIGHT * 0.5,
+                BAR_HEIGHT * 0.5,
+            )),
+        }
+    }
+
     fn center_x(self, frame: TabLensFrame) -> f32 {
         BLOB_MARGIN + frame.lens_x + self.cells.cell_width * 0.5
     }
@@ -1238,6 +1198,75 @@ impl TabLensPlacement {
         layer.translation_x +=
             (center_x - self.pill_w * 0.5) * (layer.scale_x - 1.0) + self.node(frame).origin.0;
         layer
+    }
+}
+
+/// Draws the flying lens and the ink under it from the bar's moving parts,
+/// each frame, without recomposing the bar.
+struct TabLensDrawing {
+    lens: TabLensPlacement,
+    motion: TabBarMotion,
+    colors: LiquidColors,
+    held_layers: Rc<RefCell<Option<HeldTabLensLayers>>>,
+}
+
+impl TabLensDrawing {
+    /// The bar's lift this frame.
+    fn transform(&self) -> cranpose_ui_graphics::GraphicsLayer {
+        tab_bar_transform(
+            self.lens.pill_w,
+            self.motion.bar_press.get(),
+            self.motion.travel.get(),
+        )
+    }
+
+    /// Where the lens's ink falls on the cells this frame.
+    fn selection(&self) -> super::vibrancy::InkSelection {
+        let frame = self.motion.frame(self.lens.cells, self.lens.resting_lens_x);
+        tab_ink_selection(
+            self.lens.cells,
+            frame.lens_x,
+            frame.activity,
+            frame.strain,
+            tab_selection_content_color(self.colors),
+        )
+    }
+
+    /// The glass layers for the lens's activity, built again only when the
+    /// activity picks another material.
+    fn layers(&self, activity: f32) -> Rc<TabLensLayers> {
+        let key = activity.to_bits();
+        let mut held = self.held_layers.borrow_mut();
+        if let Some((held_key, layers)) = &*held
+            && *held_key == key
+        {
+            return Rc::clone(layers);
+        }
+        let layers: Rc<TabLensLayers> = Rc::new(crate::material::cached_glass_content_layers(
+            tab_flight_lens_material(self.colors.label, activity).resolve(&self.colors),
+        ));
+        *held = Some((key, Rc::clone(&layers)));
+        layers
+    }
+
+    /// One of the lens's two glass layers this frame: 0 under the cells, 1 over them.
+    fn glass_layer(&self, layer: usize) -> cranpose_ui_graphics::GraphicsLayer {
+        let frame = self.motion.frame(self.lens.cells, self.lens.resting_lens_x);
+        self.layers(frame.activity)(
+            cranpose_ui::current_density(),
+            tab_flight_dynamics(self.lens.geometry(frame), self.lens.node(frame)),
+        )[layer]
+            .clone()
+    }
+
+    /// The lens node carried across the bar, drawing one of its glass layers.
+    fn glass_modifier(self: &Rc<Self>, layer: usize) -> Modifier {
+        let (node, glass) = (Rc::clone(self), Rc::clone(self));
+        Modifier::empty()
+            .required_size(self.lens.node_size)
+            .offset(0.0, self.lens.node_top)
+            .graphics_layer(move || node.lens.layer(&node.motion))
+            .graphics_layer(move || glass.glass_layer(layer))
     }
 }
 
