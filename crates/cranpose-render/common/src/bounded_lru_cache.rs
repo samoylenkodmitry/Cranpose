@@ -1,4 +1,4 @@
-use std::{hash::Hash, num::NonZeroUsize};
+use std::{borrow::Borrow, hash::Hash, num::NonZeroUsize};
 
 use cranpose_core::collections::map::HashMap;
 
@@ -71,22 +71,40 @@ where
         self.cap
     }
 
-    pub fn contains(&self, key: &K) -> bool {
+    /// The lookups take any form of the key the stored key borrows as, so a
+    /// caller can probe with a borrowed view instead of building an owned key.
+    pub fn contains<Q>(&self, key: &Q) -> bool
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
         self.index.contains_key(key)
     }
 
-    pub fn get(&mut self, key: &K) -> Option<&V> {
+    pub fn get<Q>(&mut self, key: &Q) -> Option<&V>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
         let slot = *self.index.get(key)?;
         self.promote(slot);
         Some(&self.slot(slot).value)
     }
 
-    pub fn peek(&self, key: &K) -> Option<&V> {
+    pub fn peek<Q>(&self, key: &Q) -> Option<&V>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
         let slot = *self.index.get(key)?;
         Some(&self.slot(slot).value)
     }
 
-    pub fn get_mut(&mut self, key: &K) -> Option<&mut V> {
+    pub fn get_mut<Q>(&mut self, key: &Q) -> Option<&mut V>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
         let slot = *self.index.get(key)?;
         self.promote(slot);
         Some(&mut self.slot_mut(slot).value)
