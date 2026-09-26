@@ -16,7 +16,7 @@ use jni::{
 use crate::{
     accessibility::{self, AccessibilitySnapshot},
     accessibility_publish_policy::AccessibilityPublishPolicy,
-    android_accessibility_wire::encode_elements,
+    android_accessibility_wire::{AccessibilityUpdate, AccessibilityWire},
     android_jni::{clear_pending_android_jni_exception, with_android_activity_env},
 };
 
@@ -33,6 +33,7 @@ static DISMISS_REQUESTS: OnceLock<Mutex<Vec<i32>>> = OnceLock::new();
 static JUMP_REQUESTS: OnceLock<Mutex<Vec<(i32, usize)>>> = OnceLock::new();
 static LOOP_WAKER: Mutex<Option<android_activity::AndroidAppWaker>> = Mutex::new(None);
 static PLATFORM_ACCESSIBILITY_ENABLED: AtomicBool = AtomicBool::new(false);
+static HOST_TREE_LOST: AtomicBool = AtomicBool::new(false);
 static PLATFORM_SCREEN_READER_ON: AtomicBool = AtomicBool::new(false);
 static OPTION_BITS: AtomicU8 = AtomicU8::new(0);
 const REDUCE_MOTION_BIT: u8 = 1;
@@ -265,10 +266,15 @@ pub(crate) fn sync(
     shell: &mut AppShell<WgpuRenderer>,
     density: f32,
     previous: &mut AccessibilitySnapshot,
+    wire: &mut AccessibilityWire,
     seen_revision: &mut Option<u64>,
     policy: &mut AccessibilityPublishPolicy,
 ) -> Result<(), String> {
-    if policy.update_enabled(accessibility_bridge_enabled()) {
+    let host_lost_tree = HOST_TREE_LOST.swap(false, Ordering::Relaxed);
+    if host_lost_tree {
+        wire.forget();
+    }
+    if policy.update_enabled(accessibility_bridge_enabled()) || host_lost_tree {
         *seen_revision = None;
     }
     let reader_on = cranpose_services::AccessibilityState {
@@ -285,7 +291,7 @@ pub(crate) fn sync(
     } else {
         None
     };
-    let elements = elements.filter(|elements| *elements != previous.elements);
+    let elements = elements.filter(|elements| host_lost_tree || *elements != previous.elements);
     if let Some(elements) = &elements {
         announcements.extend(accessibility::live_region_announcements(
             &previous.elements,
@@ -301,28 +307,71 @@ pub(crate) fn sync(
         return Ok(());
     };
     let changed = accessibility::spoken_changes(&previous.elements, &elements);
-    previous
-        .update(elements)
+    let update = wire
+        .publish(previous, elements, &changed, density)
         .map_err(|error| error.to_string())?;
-    let payload = encode_elements(previous, &changed, density);
+    if update.is_empty() {
+        return Ok(());
+    }
+    publish(app, &update)
+}
+
+/// Hands the host the virtual ids in order, the records of the controls it
+/// does not hold as they are now, and the new bounds of those that moved.
+fn publish(app: &android_activity::AndroidApp, update: &AccessibilityUpdate) -> Result<(), String> {
     with_android_activity_env(app, |env, activity| {
-        let payload = env.new_string(payload).map_err(|error| {
+        let order = int_array(env, &update.order)?;
+        let moves = int_array(env, &update.moves)?;
+        let records = env.new_string(&update.records).map_err(|error| {
             clear_pending_android_jni_exception(env);
-            format!("failed to encode Android accessibility tree: {error}")
+            format!("failed to encode Android accessibility records: {error}")
         })?;
-        let payload = JObject::from(payload);
+        let records = JObject::from(records);
+        let order: &JObject = order.as_ref();
+        let moves: &JObject = moves.as_ref();
         env.call_method(
             &activity,
-            jni_str!("cranposeSetAccessibilityElements"),
-            jni_sig!("(Ljava/lang/String;)V"),
-            &[JValue::Object(&payload)],
+            jni_str!("cranposeUpdateAccessibilityElements"),
+            jni_sig!("([ILjava/lang/String;[I)V"),
+            &[
+                JValue::Object(order),
+                JValue::Object(&records),
+                JValue::Object(moves),
+            ],
         )
         .map_err(|error| {
             clear_pending_android_jni_exception(env);
-            format!("failed to publish Android accessibility tree: {error}")
+            format!("failed to publish Android accessibility update: {error}")
         })?;
         Ok(())
     })
+}
+
+fn int_array<'local>(
+    env: &mut jni::Env<'local>,
+    values: &[i32],
+) -> Result<jni::objects::JIntArray<'local>, String> {
+    let array = env.new_int_array(values.len()).map_err(|error| {
+        clear_pending_android_jni_exception(env);
+        format!("failed to allocate an Android accessibility array: {error}")
+    })?;
+    array.set_region(env, 0, values).map_err(|error| {
+        clear_pending_android_jni_exception(env);
+        format!("failed to fill an Android accessibility array: {error}")
+    })?;
+    Ok(array)
+}
+
+/// The host met a control it holds no record of, so it asks for every
+/// record again.
+#[doc(hidden)]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccessibilityTreeLost(
+    _env: EnvUnowned<'_>,
+    _class: JClass<'_>,
+) {
+    HOST_TREE_LOST.store(true, Ordering::Relaxed);
+    wake_loop();
 }
 
 #[doc(hidden)]

@@ -2,10 +2,201 @@ use super::*;
 
 fn encode_elements(elements: &[AccessibilityElement], changed: &[bool], density: f32) -> String {
     let mut snapshot = AccessibilitySnapshot::default();
-    snapshot
-        .update(elements.to_vec())
+    AccessibilityWire::default()
+        .publish(&mut snapshot, elements.to_vec(), changed, density)
+        .expect("unique identities")
+        .records
+}
+
+/// A wire and snapshot that already published `elements` at density 2.
+fn published(elements: &[AccessibilityElement]) -> (AccessibilityWire, AccessibilitySnapshot) {
+    let mut wire = AccessibilityWire::default();
+    let mut snapshot = AccessibilitySnapshot::default();
+    wire.publish(&mut snapshot, elements.to_vec(), &[], 2.0)
         .expect("unique identities");
-    super::encode_elements(&snapshot, changed, density)
+    (wire, snapshot)
+}
+
+fn record_ids(update: &AccessibilityUpdate) -> Vec<i32> {
+    update
+        .records
+        .split('\n')
+        .filter(|record| !record.is_empty())
+        .map(|record| {
+            record
+                .split('\t')
+                .next()
+                .and_then(|id| id.parse().ok())
+                .expect("a record starts with its id")
+        })
+        .collect()
+}
+
+fn labelled(node_id: cranpose_core::NodeId, label: &str, y: f32) -> AccessibilityElement {
+    AccessibilityElement {
+        node_id,
+        label: label.into(),
+        bounds: AccessibilityRect::new(0.0, y, 100.0, 20.0),
+        role: AccessibilityRole::Button,
+        clickable: true,
+        ..AccessibilityElement::default()
+    }
+}
+
+#[test]
+fn the_first_update_sends_every_control_in_order() {
+    let elements = [labelled(1, "One", 0.0), labelled(2, "Two", 30.0)];
+    let mut snapshot = AccessibilitySnapshot::default();
+    let update = AccessibilityWire::default()
+        .publish(&mut snapshot, elements.to_vec(), &[], 2.0)
+        .expect("unique identities");
+    assert_eq!(update.order, snapshot.ids);
+    assert_eq!(record_ids(&update), snapshot.ids);
+    assert!(update.moves.is_empty());
+    assert!(!update.is_empty());
+}
+
+#[test]
+fn an_unchanged_snapshot_leaves_the_host_alone() {
+    let elements = [labelled(1, "One", 0.0), labelled(2, "Two", 30.0)];
+    let (mut wire, mut snapshot) = published(&elements);
+    let update = wire
+        .publish(&mut snapshot, elements.to_vec(), &[], 2.0)
+        .expect("unique identities");
+    assert!(update.is_empty(), "{update:?}");
+}
+
+#[test]
+fn a_control_that_only_moved_is_sent_as_its_new_bounds() {
+    let (mut wire, mut snapshot) = published(&[labelled(1, "One", 0.0), labelled(2, "Two", 30.0)]);
+    let ids = snapshot.ids.clone();
+    let update = wire
+        .publish(
+            &mut snapshot,
+            vec![labelled(1, "One", 0.0), labelled(2, "Two", 40.0)],
+            &[],
+            2.0,
+        )
+        .expect("unique identities");
+    assert!(update.records.is_empty(), "a move resends no record");
+    assert_eq!(update.moves, vec![ids[1], 0, 80, 200, 120]);
+    assert_eq!(update.order, ids);
+    assert!(!update.is_empty());
+}
+
+#[test]
+fn a_move_smaller_than_a_pixel_leaves_the_host_alone() {
+    let (mut wire, mut snapshot) = published(&[labelled(1, "One", 0.0)]);
+    let update = wire
+        .publish(&mut snapshot, vec![labelled(1, "One", 0.1)], &[], 2.0)
+        .expect("unique identities");
+    assert!(update.is_empty(), "{update:?}");
+}
+
+#[test]
+fn a_control_that_says_something_else_is_resent_in_full() {
+    let (mut wire, mut snapshot) = published(&[labelled(1, "One", 0.0), labelled(2, "Two", 30.0)]);
+    let ids = snapshot.ids.clone();
+    let update = wire
+        .publish(
+            &mut snapshot,
+            vec![labelled(1, "One", 0.0), labelled(2, "Three", 40.0)],
+            &[],
+            2.0,
+        )
+        .expect("unique identities");
+    assert_eq!(record_ids(&update), vec![ids[1]]);
+    assert!(update.records.contains("Three"));
+    assert!(
+        update.moves.is_empty(),
+        "the record carries the new bounds itself"
+    );
+}
+
+#[test]
+fn a_spoken_change_is_resent_with_its_flag() {
+    let elements = [labelled(1, "One", 0.0), labelled(2, "Two", 30.0)];
+    let (mut wire, mut snapshot) = published(&elements);
+    let ids = snapshot.ids.clone();
+    let update = wire
+        .publish(&mut snapshot, elements.to_vec(), &[false, true], 2.0)
+        .expect("unique identities");
+    assert_eq!(record_ids(&update), vec![ids[1]]);
+    assert_eq!(update.records.split('\t').nth(29), Some("1"));
+}
+
+#[test]
+fn a_new_control_is_sent_and_the_order_names_it() {
+    let (mut wire, mut snapshot) = published(&[labelled(1, "One", 0.0)]);
+    let update = wire
+        .publish(
+            &mut snapshot,
+            vec![labelled(3, "New", 0.0), labelled(1, "One", 30.0)],
+            &[],
+            2.0,
+        )
+        .expect("unique identities");
+    assert_eq!(update.order, snapshot.ids);
+    assert_eq!(record_ids(&update), vec![snapshot.ids[0]]);
+    assert_eq!(update.moves, vec![snapshot.ids[1], 0, 60, 200, 100]);
+}
+
+#[test]
+fn a_removed_control_leaves_the_order() {
+    let (mut wire, mut snapshot) = published(&[labelled(1, "One", 0.0), labelled(2, "Two", 30.0)]);
+    let kept = snapshot.ids[0];
+    let update = wire
+        .publish(&mut snapshot, vec![labelled(1, "One", 0.0)], &[], 2.0)
+        .expect("unique identities");
+    assert_eq!(update.order, vec![kept]);
+    assert!(update.records.is_empty());
+    assert!(!update.is_empty(), "the host must drop the removed control");
+}
+
+#[test]
+fn a_row_whose_list_was_replaced_is_resent() {
+    let list = |generation| AccessibilityElement {
+        node_id: 6,
+        node_generation: generation,
+        bounds: AccessibilityRect::new(0.0, 0.0, 400.0, 600.0),
+        vertical_scroll: Some(cranpose_ui::ScrollAxisRange::new(0.0, 900.0, false)),
+        ..AccessibilityElement::default()
+    };
+    let row = AccessibilityElement {
+        scroll_parent: Some(6),
+        ..labelled(9, "Milk", 10.0)
+    };
+    let (mut wire, mut snapshot) = published(&[list(0), row.clone()]);
+    let update = wire
+        .publish(&mut snapshot, vec![list(1), row], &[], 2.0)
+        .expect("unique identities");
+    assert_eq!(
+        record_ids(&update),
+        snapshot.ids,
+        "the row names its new list's id, so both are resent"
+    );
+}
+
+#[test]
+fn a_new_density_resends_every_control() {
+    let elements = [labelled(1, "One", 0.0), labelled(2, "Two", 30.0)];
+    let (mut wire, mut snapshot) = published(&elements);
+    let update = wire
+        .publish(&mut snapshot, elements.to_vec(), &[], 3.0)
+        .expect("unique identities");
+    assert_eq!(record_ids(&update), snapshot.ids);
+}
+
+#[test]
+fn a_forgotten_host_is_sent_every_control() {
+    let elements = [labelled(1, "One", 0.0), labelled(2, "Two", 30.0)];
+    let (mut wire, mut snapshot) = published(&elements);
+    wire.forget();
+    let update = wire
+        .publish(&mut snapshot, elements.to_vec(), &[], 2.0)
+        .expect("unique identities");
+    assert_eq!(record_ids(&update), snapshot.ids);
+    assert_eq!(update.order, snapshot.ids);
 }
 
 use crate::accessibility::{AccessibilityRect, AccessibilityRole, element_with};
