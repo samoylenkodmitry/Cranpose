@@ -4,7 +4,7 @@ use std::fmt::Debug;
 
 use cranpose_core::NodeId;
 use cranpose_render_common::Renderer;
-use cranpose_ui::{KeyCode, KeyEvent, KeyEventType, LayoutTree, SemanticsTree};
+use cranpose_ui::{KeyCode, KeyEvent, KeyEventType, SemanticsTree};
 use cranpose_ui_graphics::{Point, Rect, Size};
 
 use crate::{AppShell, RootSurface, ShellApp, SurfaceMut};
@@ -102,8 +102,8 @@ pub struct InspectorState {
     pub panel_position: Option<Point>,
 }
 
-/// Projects a surface's trees using the same policy as its platform bridge.
-pub type InspectorProjector = fn(&LayoutTree, &SemanticsTree) -> Vec<InspectorNode>;
+/// Projects a surface's semantics tree using the same policy as its platform bridge.
+pub type InspectorProjector = fn(&SemanticsTree) -> Vec<InspectorNode>;
 
 #[derive(Default)]
 pub(crate) struct DeveloperInspector {
@@ -435,12 +435,11 @@ pub(crate) fn refresh<R: Renderer>(
         surface.inspector.dirty = true;
     }
     if surface.inspector.state.open && surface.inspector.revision != Some(revision) {
-        surface.layout_tree_in_context(app);
         surface.semantics_tree_in_context(app);
-        let nodes = match (&surface.layout_tree, &surface.semantics_tree) {
-            (Some(layout), Some(semantics)) => projector(layout, semantics),
-            _ => Vec::new(),
-        };
+        let nodes = surface
+            .semantics_tree
+            .as_ref()
+            .map_or_else(Vec::new, projector);
         surface.inspector.replace_nodes(nodes);
         surface.inspector.revision = Some(revision);
     }

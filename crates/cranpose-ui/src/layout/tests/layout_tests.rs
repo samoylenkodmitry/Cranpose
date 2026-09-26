@@ -3203,3 +3203,76 @@ fn window_root_subtree_is_left_out_of_the_parent_semantics_tree() -> Result<(), 
     );
     Ok(())
 }
+
+#[test]
+fn semantics_bounds_are_the_layout_rects_on_every_path() -> Result<(), NodeError> {
+    let _app_context = crate::render_state::app_context_test_scope();
+    fn rects(layout_box: &LayoutBox, out: &mut Vec<(NodeId, GeometryRect)>) {
+        out.push((layout_box.node_id, layout_box.rect));
+        for child in &layout_box.children {
+            rects(child, out);
+        }
+    }
+    fn bounds(node: &SemanticsNode, out: &mut Vec<(NodeId, GeometryRect)>) {
+        out.push((node.node_id, node.bounds));
+        for child in &node.children {
+            bounds(child, out);
+        }
+    }
+    let mut applier = MemoryApplier::new();
+    let leaf = |width| {
+        LayoutNode::new(
+            Modifier::empty().content_description("leaf"),
+            Rc::new(LeafMeasurePolicy::new(Size {
+                width,
+                height: 10.0,
+            })),
+        )
+    };
+    let first = applier.create(Box::new(leaf(10.0)));
+    let second = applier.create(Box::new(leaf(20.0)));
+    let mut column = LayoutNode::new(Modifier::empty().padding(2.0), Rc::new(VerticalStackPolicy));
+    column.children.extend([first, second]);
+    let column = applier.create(Box::new(column));
+    let mut root = LayoutNode::new(Modifier::empty().padding(4.0), Rc::new(VerticalStackPolicy));
+    root.children.push(column);
+    let root = applier.create(Box::new(root));
+
+    let measurements = super::measure_layout_with_options(
+        &mut applier,
+        root,
+        Size::new(100.0, 100.0),
+        MeasureLayoutOptions {
+            collect_semantics: true,
+            build_layout_tree: false,
+        },
+    )?;
+    let live = measurements
+        .semantics_tree()
+        .expect("semantics from the measured nodes")
+        .clone();
+    let layout = build_layout_tree_from_applier(&mut applier, root)?.expect("layout");
+    let retained =
+        build_semantics_tree_from_applier(&mut applier, root)?.expect("semantics from the applier");
+    let from_layout = build_semantics_tree_from_layout_tree(&layout);
+
+    let mut expected = Vec::new();
+    rects(layout.root(), &mut expected);
+    assert!(
+        expected.contains(&(
+            second,
+            GeometryRect::from_origin_size(Point { x: 6.0, y: 16.0 }, Size::new(20.0, 10.0),)
+        )),
+        "the second leaf sits below the first, inside both paddings: {expected:?}"
+    );
+    for (path, tree) in [
+        ("measured nodes", &live),
+        ("applier", &retained),
+        ("layout tree", &from_layout),
+    ] {
+        let mut got = Vec::new();
+        bounds(tree.root(), &mut got);
+        assert_eq!(got, expected, "semantics bounds built from the {path}");
+    }
+    Ok(())
+}

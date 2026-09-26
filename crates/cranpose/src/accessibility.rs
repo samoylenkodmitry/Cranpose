@@ -4,7 +4,7 @@ use cranpose_app_shell::AppShell;
 use cranpose_core::{NodeId, collections::map::HashMap};
 use cranpose_render_common::Renderer;
 use cranpose_ui::{
-    Announcement, CollectionInfo, LayoutBox, LiveRegionMode, ProgressBarRangeInfo, ScrollAxisRange,
+    Announcement, CollectionInfo, LiveRegionMode, ProgressBarRangeInfo, ScrollAxisRange,
     SemanticsAction, SemanticsNode, SemanticsRole, SemanticsWidgetRole,
 };
 
@@ -464,40 +464,15 @@ where
     if !shell.semantics_active() {
         return Vec::new();
     }
-    let mut bounds = HashMap::default();
-    let has_layout = shell.with_layout_tree(|layout_tree| match layout_tree {
-        Some(layout_tree) => {
-            collect_bounds(layout_tree.root(), &mut bounds);
-            true
-        }
-        None => false,
-    });
-    if !has_layout {
-        return Vec::new();
-    }
     let Some(semantics_tree) = shell.semantics_tree() else {
         return Vec::new();
     };
-    project_semantics(semantics_tree.root(), &bounds)
+    project_semantics(semantics_tree.root())
 }
 
-#[cfg_attr(test, allow(dead_code))]
-fn collect_bounds(root: &LayoutBox, bounds: &mut HashMap<NodeId, AccessibilityRect>) {
-    bounds.insert(
-        root.node_id,
-        AccessibilityRect::new(root.rect.x, root.rect.y, root.rect.width, root.rect.height),
-    );
-    for child in &root.children {
-        collect_bounds(child, bounds);
-    }
-}
-
-fn project_semantics(
-    root: &SemanticsNode,
-    bounds: &HashMap<NodeId, AccessibilityRect>,
-) -> Vec<AccessibilityElement> {
+fn project_semantics(root: &SemanticsNode) -> Vec<AccessibilityElement> {
     let mut elements = Vec::new();
-    project_node(root, bounds, false, None, None, &mut elements);
+    project_node(root, false, None, None, &mut elements);
     elements
 }
 
@@ -515,12 +490,9 @@ where
 
 #[cfg_attr(test, allow(dead_code))]
 fn inspector_nodes(
-    layout: &cranpose_ui::LayoutTree,
     semantics: &cranpose_ui::SemanticsTree,
 ) -> Vec<cranpose_app_shell::inspector::InspectorNode> {
-    let mut bounds = HashMap::default();
-    collect_bounds(layout.root(), &mut bounds);
-    project_semantics(semantics.root(), &bounds)
+    project_semantics(semantics.root())
         .into_iter()
         .map(inspector_node)
         .collect()
@@ -588,7 +560,6 @@ fn inspector_node(element: AccessibilityElement) -> cranpose_app_shell::inspecto
 
 fn project_node(
     node: &SemanticsNode,
-    bounds: &HashMap<NodeId, AccessibilityRect>,
     suppress_static_text: bool,
     inherited_live_region: Option<LiveRegionMode>,
     inherited_scroll: Option<NodeId>,
@@ -607,7 +578,12 @@ fn project_node(
     let merges = node.merges_accessibility_descendants();
     let boundary = node.is_accessibility_boundary();
     let label = node.accessibility_label();
-    let rect = bounds.get(&node.node_id).copied().unwrap_or_default();
+    let rect = AccessibilityRect::new(
+        node.bounds.x,
+        node.bounds.y,
+        node.bounds.width,
+        node.bounds.height,
+    );
 
     let container = is_container(node);
     if let Some(label) = label
@@ -647,7 +623,6 @@ fn project_node(
     };
     project_children(
         node,
-        bounds,
         suppress_children,
         live_region,
         scroll_for_children,
@@ -681,7 +656,6 @@ pub(crate) fn checked_state(element: &AccessibilityElement) -> Option<bool> {
 /// of a group so a reader hears which of how many each one is.
 fn project_children(
     node: &SemanticsNode,
-    bounds: &HashMap<NodeId, AccessibilityRect>,
     suppress_static_text: bool,
     live_region: Option<LiveRegionMode>,
     scroll_for_children: Option<NodeId>,
@@ -691,7 +665,6 @@ fn project_children(
     for child in node.accessibility_children() {
         project_node(
             child,
-            bounds,
             suppress_static_text,
             live_region,
             scroll_for_children,
