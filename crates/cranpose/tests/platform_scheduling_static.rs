@@ -4423,3 +4423,27 @@ fn every_platform_reports_the_display_options_and_the_framework_acts_on_them() {
         "animations, glass and the theme follow the options"
     );
 }
+
+#[test]
+fn android_frames_reach_the_present_thread_before_accessibility_syncs() {
+    let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let source = std::fs::read_to_string(crate_dir.join("src/android.rs"))
+        .expect("android source should be readable");
+    let publish = source
+        .find("shell.renderer().publish_frame(width, height)")
+        .expect("the loop publishes frames");
+    let sync = source
+        .find("crate::android_accessibility::sync(")
+        .expect("the loop syncs accessibility");
+    assert_eq!(
+        source
+            .matches("crate::android_accessibility::sync(")
+            .count(),
+        1,
+        "one accessibility sync serves frames and idle turns alike"
+    );
+    assert!(
+        publish < sync,
+        "a frame is handed off before the accessibility snapshot, which is not part of it"
+    );
+}
