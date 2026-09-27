@@ -68,14 +68,19 @@ pub fn ComposeTwinScreen() {
 /// where the reference has no edge, since only edges may differ by
 /// antialiasing. `None` when the frames differ in size.
 pub fn twin_stray_pixels(reference: &[u8], actual: &[u8], width: usize) -> Option<usize> {
-    if reference.len() != actual.len() || width == 0 || reference.len() % (width * 4) != 0 {
+    let (reference, reference_rest) = reference.as_chunks::<4>();
+    let (actual, actual_rest) = actual.as_chunks::<4>();
+    if reference.len() != actual.len()
+        || !reference_rest.is_empty()
+        || !actual_rest.is_empty()
+        || width == 0
+        || !reference.len().is_multiple_of(width)
+    {
         return None;
     }
     let luma: Vec<i32> = reference
-        .chunks_exact(4)
-        .map(|pixel| {
-            (i32::from(pixel[0]) * 54 + i32::from(pixel[1]) * 183 + i32::from(pixel[2]) * 19) >> 8
-        })
+        .iter()
+        .map(|&[r, g, b, _]| (i32::from(r) * 54 + i32::from(g) * 183 + i32::from(b) * 19) >> 8)
         .collect();
     let height = luma.len() / width;
     let is_edge = |x: usize, y: usize| {
@@ -88,8 +93,8 @@ pub fn twin_stray_pixels(reference: &[u8], actual: &[u8], width: usize) -> Optio
             || (y + 1 < height && differs(x, y + 1))
     };
     let stray = reference
-        .chunks_exact(4)
-        .zip(actual.chunks_exact(4))
+        .iter()
+        .zip(actual)
         .enumerate()
         .filter(|(index, (expected, got))| {
             let delta = expected[..3]

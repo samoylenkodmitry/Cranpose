@@ -760,7 +760,7 @@ fn recursive_layout_nodes_preserve_extent() {
     let key = location_key(file!(), line!(), column!());
     composition
         .render(key, &mut || {
-            alternating_recursive_node(Modifier::empty(), 4, true, 0)
+            alternating_recursive_node(Modifier::empty(), 4, true, 0);
         })
         .expect("initial render");
 
