@@ -717,6 +717,25 @@ impl PlatformFrameDriver for AndroidFrameDriver {
 }
 
 const OFFSCREEN_UPDATE_PERIOD: Duration = Duration::from_millis(16);
+const IDLE_PREFETCH_MARGIN: Duration = Duration::from_millis(1);
+
+/// Composes lazy list items ahead in the wait before a requested frame, and
+/// returns what is left of the wait.
+fn prefetch_while_waiting(
+    shell: Option<&mut AppShell<WgpuRenderer>>,
+    (frame_driver, no_surface): (&AndroidFrameDriver, bool),
+    wait: Option<Duration>,
+) -> Option<Duration> {
+    let (Some(shell), Some(wait)) = (shell, wait) else {
+        return wait;
+    };
+    if no_surface || wait <= IDLE_PREFETCH_MARGIN || !frame_driver.frame_requested() {
+        return Some(wait);
+    }
+    let wake_at = Instant::now() + wait;
+    shell.run_idle_prefetch(wake_at - IDLE_PREFETCH_MARGIN);
+    Some(wake_at.saturating_duration_since(Instant::now()))
+}
 
 fn duration_until_frame_deadline(deadline: web_time::Instant) -> Duration {
     deadline
@@ -1903,6 +1922,12 @@ pub fn run(
         } else {
             idle_timeout
         };
+
+        let poll_duration = prefetch_while_waiting(
+            app_shell.as_mut(),
+            (&android_frame_driver, no_surface),
+            poll_duration,
+        );
 
         app.poll_events(crate::android_poll::poll_timeout(poll_duration), |event| {
             if let PollEvent::Main(main_event) = event {

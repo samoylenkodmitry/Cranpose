@@ -50,7 +50,6 @@ mod lazy_list_measured_item;
 mod lazy_list_scope;
 mod lazy_list_state;
 mod nearest_range;
-mod prefetch;
 mod scroll_position_resolver;
 mod viewport;
 
@@ -60,4 +59,3 @@ pub use lazy_list_measured_item::*;
 pub use lazy_list_scope::*;
 pub use lazy_list_state::*;
 pub use nearest_range::*;
-pub use prefetch::*;

@@ -227,3 +227,40 @@ fn measured_item_cache_keeps_only_items_whose_slots_are_retained() {
     kept.sort_unstable();
     assert_eq!(kept, [2, 4, 6], "disposed items' measurements are dropped");
 }
+
+#[test]
+fn a_frame_leaves_the_next_new_item_for_an_idle_pass_once_enough_are_ready() {
+    let mut frame = BeyondBoundsComposition::new(false);
+    for _ in 0..IDLE_PREFETCH_READY_BEYOND_BOUNDS_ITEMS {
+        assert!(frame.should_measure(true));
+    }
+    assert!(!frame.wants_prefetch);
+    assert!(!frame.should_measure(false));
+    assert!(frame.wants_prefetch);
+}
+
+#[test]
+fn a_frame_composes_new_items_up_to_its_frontier_while_too_few_are_ready() {
+    let mut frame = BeyondBoundsComposition::new(false);
+    assert!(frame.should_measure(true));
+    for _ in 0..ACTIVE_SCROLL_UNCACHED_BEYOND_BOUNDS_FRONTIER {
+        assert!(frame.should_measure(false));
+    }
+    assert!(!frame.should_measure(false));
+    assert!(
+        frame.wants_prefetch,
+        "what the frontier left waits for a pass"
+    );
+}
+
+#[test]
+fn an_idle_pass_composes_one_new_item_and_asks_for_the_next() {
+    let mut idle = BeyondBoundsComposition::new(true);
+    for _ in 0..3 {
+        assert!(idle.should_measure(true));
+    }
+    assert!(idle.should_measure(false));
+    assert!(!idle.wants_prefetch);
+    assert!(!idle.should_measure(false));
+    assert!(idle.wants_prefetch);
+}
