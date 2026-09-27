@@ -7,7 +7,7 @@ use web_time::Instant;
 
 use crate::{
     debug_toggles::DebugToggle,
-    idle_pool::IdlePool,
+    idle_pool::{IDLE_FRAMES, IdlePool},
     offscreen::OffscreenTarget,
     pass_timing::{GpuPassTimingReport, PassTimer},
 };
@@ -313,13 +313,31 @@ pub(crate) struct TextureResource {
     label: &'static str,
 }
 
+/// How the users of a transient texture address it, which decides the
+/// pooled textures that can stand in for it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TextureReuse {
+    /// Its whole extent is its content: only a texture of exactly its size
+    /// serves.
+    Exact,
+    /// Every pass that reads or writes it names the texel region it uses,
+    /// so any texture at least as large serves.
+    Regions,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct FrameTextureDescriptor {
     pub(crate) label: &'static str,
     pub(crate) width: u32,
     pub(crate) height: u32,
     pub(crate) format: wgpu::TextureFormat,
+    pub(crate) reuse: TextureReuse,
 }
+
+/// How many times its own area a pooled texture may cover and still serve a
+/// region-addressed request: past that, the request takes a texture of its
+/// own and the large one stays free for a frame that needs it.
+const MAX_REGION_REUSE_AREA_RATIO: u64 = 4;
 
 impl FrameTextureDescriptor {
     pub(crate) fn render_attachment(
@@ -333,6 +351,52 @@ impl FrameTextureDescriptor {
             width: width.max(1),
             height: height.max(1),
             format,
+            reuse: TextureReuse::Exact,
+        }
+    }
+
+    /// A render attachment that every pass addresses through texel regions:
+    /// a capture atlas, or the side texture its blurs and substrates run
+    /// in, whose packed size changes as its members scroll and clip.
+    pub(crate) fn region_attachment(
+        label: &'static str,
+        width: u32,
+        height: u32,
+        format: wgpu::TextureFormat,
+    ) -> Self {
+        Self {
+            reuse: TextureReuse::Regions,
+            ..Self::render_attachment(label, width, height, format)
+        }
+    }
+
+    /// This descriptor at the size of `target`, which may exceed the size
+    /// requested.
+    fn sized_as(self, target: &OffscreenTarget) -> Self {
+        Self {
+            width: target.width,
+            height: target.height,
+            ..self
+        }
+    }
+
+    fn texels(self) -> u64 {
+        u64::from(self.width) * u64::from(self.height)
+    }
+
+    /// Whether the pooled texture `pooled` describes can stand in for this
+    /// request.
+    fn served_by(self, pooled: Self) -> bool {
+        if pooled.format != self.format {
+            return false;
+        }
+        match self.reuse {
+            TextureReuse::Exact => pooled.width == self.width && pooled.height == self.height,
+            TextureReuse::Regions => {
+                pooled.width >= self.width
+                    && pooled.height >= self.height
+                    && pooled.texels() <= self.texels().saturating_mul(MAX_REGION_REUSE_AREA_RATIO)
+            }
         }
     }
 
@@ -341,15 +405,44 @@ impl FrameTextureDescriptor {
             .saturating_mul(self.height as u64)
             .saturating_mul(texture_format_bytes_per_pixel(self.format))
     }
+}
 
-    fn is_pool_compatible_with(self, other: Self) -> bool {
-        self.width == other.width && self.height == other.height && self.format == other.format
+/// The bytes of transient textures the busiest recent frame used. The pool
+/// keeps that much between frames: the frame allocates it anyway, so keeping
+/// it adds nothing to the peak and spares recreating every texture each
+/// frame once a scene outgrows a fixed budget.
+#[derive(Default)]
+struct WorkingSet {
+    frame_bytes: u64,
+    peak_bytes: u64,
+    frames_since_peak: u64,
+}
+
+impl WorkingSet {
+    fn note(&mut self, bytes: u64) {
+        self.frame_bytes = self.frame_bytes.saturating_add(bytes);
+    }
+
+    fn bytes(&self) -> u64 {
+        self.peak_bytes.max(self.frame_bytes)
+    }
+
+    /// Ends a frame. The peak holds for [`IDLE_FRAMES`], as long as the pool
+    /// keeps an unused texture, then follows the frames that came since.
+    fn end_frame(&mut self) {
+        self.frames_since_peak = self.frames_since_peak.saturating_add(1);
+        if self.frame_bytes >= self.peak_bytes || self.frames_since_peak > IDLE_FRAMES {
+            self.peak_bytes = self.frame_bytes;
+            self.frames_since_peak = 0;
+        }
+        self.frame_bytes = 0;
     }
 }
 
 #[derive(Default)]
 pub(crate) struct TransientTexturePool {
     available: IdlePool<PooledTransientTexture>,
+    working_set: WorkingSet,
     acquires: u32,
     news: u32,
 }
@@ -361,7 +454,11 @@ struct PooledTransientTexture {
 
 const MAX_RETAINED_TRANSIENT_TEXTURES: usize = 64;
 
-const MAX_RETAINED_TRANSIENT_BYTES: u64 = 32 * 1024 * 1024;
+/// The bytes the pool may keep however small the working set.
+const MIN_RETAINED_TRANSIENT_BYTES: u64 = 32 * 1024 * 1024;
+
+/// The bytes the pool keeps at most, whatever a frame used.
+const MAX_RETAINED_TRANSIENT_BYTES: u64 = 256 * 1024 * 1024;
 
 impl TransientTexturePool {
     fn acquire(
@@ -370,14 +467,16 @@ impl TransientTexturePool {
         descriptor: FrameTextureDescriptor,
     ) -> OffscreenTarget {
         self.acquires = self.acquires.saturating_add(1);
-        if let Some(entry) = self
-            .available
-            .take(|entry| entry.descriptor.is_pool_compatible_with(descriptor))
-        {
+        if let Some(entry) = self.available.take_min_by_key(
+            |entry| descriptor.served_by(entry.descriptor),
+            |entry| entry.descriptor.texels(),
+        ) {
+            self.working_set.note(entry.descriptor.estimated_bytes());
             return entry.target;
         }
 
         self.news = self.news.saturating_add(1);
+        self.working_set.note(descriptor.estimated_bytes());
         OffscreenTarget::new_labeled(
             device,
             descriptor.format,
@@ -387,13 +486,33 @@ impl TransientTexturePool {
         )
     }
 
+    /// Takes `target` back. The request that acquired it may have been
+    /// smaller, so the pool records the texture's own size.
     fn release(&mut self, descriptor: FrameTextureDescriptor, target: OffscreenTarget) {
+        let descriptor = descriptor.sized_as(&target);
+        let budget = self
+            .working_set
+            .bytes()
+            .clamp(MIN_RETAINED_TRANSIENT_BYTES, MAX_RETAINED_TRANSIENT_BYTES);
         self.available.put(
             PooledTransientTexture { descriptor, target },
             MAX_RETAINED_TRANSIENT_TEXTURES,
-            MAX_RETAINED_TRANSIENT_BYTES,
+            budget,
             |entry| entry.descriptor.estimated_bytes(),
         );
+    }
+
+    /// Takes back a texture that stayed in use through this frame outside
+    /// the pool, counting it toward the frame's working set.
+    fn return_held(&mut self, descriptor: FrameTextureDescriptor, target: OffscreenTarget) {
+        self.working_set
+            .note(descriptor.sized_as(&target).estimated_bytes());
+        self.release(descriptor, target);
+    }
+
+    fn end_frame(&mut self) {
+        self.available.end_frame();
+        self.working_set.end_frame();
     }
 
     fn take_counts(&mut self) -> (u32, u32) {
@@ -533,15 +652,19 @@ impl WgpuFrameGraphExecutor {
     /// Ends a frame, dropping the transient textures no frame has reused for
     /// [`crate::idle_pool::IDLE_FRAMES`].
     pub(crate) fn end_transient_frame(&mut self) {
-        self.transient_textures.available.end_frame();
+        self.transient_textures.end_frame();
     }
 
-    pub(crate) fn release_transient(
+    /// Takes back a transient a cache kept past the frame that acquired it.
+    /// It was in use this frame, so it counts toward the working set the
+    /// pool keeps: the frame after a cache replaced it needs a texture its
+    /// size again.
+    pub(crate) fn return_cached_transient(
         &mut self,
         descriptor: FrameTextureDescriptor,
         target: OffscreenTarget,
     ) {
-        self.transient_textures.release(descriptor, target);
+        self.transient_textures.return_held(descriptor, target);
     }
 
     pub(crate) fn retained_texture_bytes(&self) -> u64 {

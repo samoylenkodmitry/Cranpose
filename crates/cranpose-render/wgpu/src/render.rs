@@ -2698,7 +2698,7 @@ impl GpuRenderer {
             match transient {
                 Some(descriptor) => self
                     .frame_graph_executor
-                    .release_transient(descriptor, target),
+                    .return_cached_transient(descriptor, target),
                 None => self.effect_renderer.release_offscreen(target),
             }
         }
