@@ -101,6 +101,28 @@ fn blur_shader_validates_for_webgpu() {
 }
 
 #[test]
+fn blur_shader_writes_one_guarded_call_per_kernel_pair() {
+    let shader = super::blur_shader();
+    assert!(
+        !shader.contains(super::BLUR_KERNEL_PAIRS_MARKER),
+        "the marker must be replaced"
+    );
+    for pair in 0..cranpose_render_common::geometry::BLUR_TAP_PAIRS {
+        let call = format!(
+            "if (pair_count > {pair}) {{ color = color + kernel_pair(frame, axis, blur.pairs[{pair}], {}.0); }}",
+            2 * pair + 1
+        );
+        assert_eq!(shader.matches(&call).count(), 1, "pair {pair}");
+    }
+    assert_eq!(
+        shader
+            .matches("kernel_pair(frame, axis, blur.pairs[")
+            .count(),
+        cranpose_render_common::geometry::BLUR_TAP_PAIRS
+    );
+}
+
+#[test]
 fn blur_shader_validates_for_webgl() {
     let shader = super::blur_shader();
     assert!(validate_glsl_portability(&shader, "fullscreen_vs", ShaderStage::Vertex).is_ok());

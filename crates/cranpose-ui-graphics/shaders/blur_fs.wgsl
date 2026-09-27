@@ -86,24 +86,62 @@ fn region_local(input: VertexOutput) -> vec2<f32> {
     return input.uv;
 }
 
+// Where a fragment's taps land: its region-local coordinate and one source
+// texel along each axis there, and, for the modes that hold taps to the
+// region's edge, the same fragment in texture coordinates with the texel
+// centres at the region's edges. Holding a tap commutes with the region's
+// affine map onto the texture, so those modes offset and clamp a texture
+// coordinate per tap instead of mapping each tap onto the texture.
+struct KernelFrame {
+    local: vec2<f32>,
+    step: vec2<f32>,
+    center: vec2<f32>,
+    texel: vec2<f32>,
+    low: vec2<f32>,
+    high: vec2<f32>,
+}
+
+fn kernel_frame(input: VertexOutput) -> KernelFrame {
+    let local = region_local(input);
+    let region = source_region();
+    let texture_size = max(blur.texture_size_and_tile_mode.xy, vec2<f32>(1.0, 1.0));
+    let source_size = max(region.zw, vec2<f32>(1.0, 1.0));
+    let half_texel = 0.5 / source_size;
+    return KernelFrame(
+        local,
+        1.0 / source_size,
+        (region.xy + local * region.zw) / texture_size,
+        region.zw / (source_size * texture_size),
+        (region.xy + half_texel * region.zw) / texture_size,
+        (region.xy + (vec2<f32>(1.0, 1.0) - half_texel) * region.zw) / texture_size,
+    );
+}
+
+// The texture `offset` source texels from the fragment, under the tile mode.
+fn kernel_tap(frame: KernelFrame, offset: vec2<f32>) -> vec4<f32> {
+    if (BLUR_TILE_MODE == 0u || BLUR_TILE_MODE == 3u) {
+        let uv = clamp(frame.center + frame.texel * offset, frame.low, frame.high);
+        return textureSampleLevel(input_texture, input_sampler, uv, 0.0);
+    }
+    return tiled_sample(frame.local + frame.step * offset);
+}
+
 // The downsample: each destination pixel is the average of the block of
 // source texels it stands for. The pixel's centre is the block's centre, a
 // texel corner for an even block, so the fetches at every other corner
 // across the block read each of its texels once through the bilinear
-// filter.
+// filter: one fetch for a block of two, four for a block of four.
 @fragment
 fn blur_downsample_fs(input: VertexOutput) -> @location(0) vec4<f32> {
-    let local = region_local(input);
-    let texel = 1.0 / max(source_region().zw, vec2<f32>(1.0, 1.0));
-    let fetches = max(BLUR_BLOCK / 2, 1);
-    var sum = vec4<f32>(0.0);
-    for (var y: i32 = 0; y < fetches; y = y + 1) {
-        for (var x: i32 = 0; x < fetches; x = x + 1) {
-            let corner = vec2<f32>(f32(2 * x + 1 - fetches), f32(2 * y + 1 - fetches));
-            sum = sum + tiled_sample(local + corner * texel);
-        }
+    let frame = kernel_frame(input);
+    if (BLUR_BLOCK < 4) {
+        return kernel_tap(frame, vec2<f32>(0.0, 0.0));
     }
-    return sum / f32(fetches * fetches);
+    let sum = kernel_tap(frame, vec2<f32>(-1.0, -1.0))
+        + kernel_tap(frame, vec2<f32>(1.0, -1.0))
+        + kernel_tap(frame, vec2<f32>(-1.0, 1.0))
+        + kernel_tap(frame, vec2<f32>(1.0, 1.0));
+    return sum / 4.0;
 }
 
 @fragment
@@ -121,54 +159,48 @@ fn blur_mean_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     return sum / f32(max(count, 1));
 }
 
+// One side of one pair of kernel taps along the pass's axis: the bilinear
+// fetch standing for both taps, or under decal the fetch for the taps the
+// region keeps, weighted by what they keep. A tap the decal mode drops
+// leaves the fetch on its partner alone and keeps its weight in the total,
+// as the transparent texel it reads would: the kernel fades out past the
+// region instead of renormalising to what is left.
+fn kernel_side(frame: KernelFrame, axis: vec2<f32>, pair: vec4<f32>, inner: f32) -> vec4<f32> {
+    if (BLUR_TILE_MODE != 3u) {
+        return kernel_tap(frame, axis * pair.z) * pair.w;
+    }
+    let outer = inner + 1.0;
+    let e1 = tap_weight(frame.local + frame.step * axis * inner, pair.x);
+    let e2 = tap_weight(frame.local + frame.step * axis * outer, pair.y);
+    let e = e1 + e2;
+    if (e <= 0.0) {
+        return vec4<f32>(0.0);
+    }
+    return kernel_tap(frame, axis * ((inner * e1 + outer * e2) / e)) * e;
+}
+
+// Both sides of pair `inner` (the pair's inner tap, in taps from the
+// fragment).
+fn kernel_pair(frame: KernelFrame, axis: vec2<f32>, pair: vec4<f32>, inner: f32) -> vec4<f32> {
+    return kernel_side(frame, -axis, pair, inner) + kernel_side(frame, axis, pair, inner);
+}
+
 // One axis of the separable kernel over a source whose texels are the
 // destination's pixels, or coarser: a step is one source texel, so a pass
 // reading the downscaled scratch back up to full size steps by the scratch
-// texel, and the radius counts those texels.
-// One axis of the separable kernel over a source whose texels are the
-// destination's pixels, or coarser: a step is one source texel, so a pass
-// reading the downscaled scratch back up to full size steps by the scratch
-// texel, and the radius counts those texels.
+// texel, and the radius counts those texels. The taps at i and i + 1 on one
+// side become one bilinear fetch between them, placed where the filter
+// hands each its Gaussian weight, so the kernel keeps every weight and
+// costs half the fetches. The renderer writes one guarded call per pair of
+// the uniform table in place of the marker below: indexed by a constant,
+// the table stays in uniform registers, where a loop over it would load
+// each pair from memory, and the guards shrink the work with the radius.
 @fragment
 fn blur_fs(input: VertexOutput) -> @location(0) vec4<f32> {
-    let local = region_local(input);
-    let source_size = max(source_region().zw, vec2<f32>(1.0, 1.0));
-    let step = blur.direction_and_radius.xy / source_size;
+    let frame = kernel_frame(input);
+    let axis = blur.direction_and_radius.xy;
     let pair_count = i32(blur.kernel.x);
-
-    var color = tiled_sample(local) * tap_weight(local, 1.0);
-    if (pair_count <= 0) {
-        return color;
-    }
-
-    // The taps at i and i + 1 on one side become one bilinear fetch between
-    // them, placed where the filter hands each its Gaussian weight, so the
-    // kernel keeps every weight and costs half the fetches. A tap the decal
-    // mode drops leaves the fetch on its partner alone and keeps its weight
-    // in the total, as the transparent texel it reads would: the kernel
-    // fades out past the region instead of renormalising to what is left.
-    // The trip count comes off the uniform buffer, so control flow stays
-    // uniform and the loop shrinks with the radius. Sampling is explicit-LOD
-    // (the sources are mipless offscreens), which frees the taps from
-    // derivative uniformity.
-    for (var k: i32 = 0; k < pair_count; k = k + 1) {
-        let pair = blur.pairs[k];
-        let fi = f32(2 * k + 1);
-        let fj = fi + 1.0;
-        for (var side: f32 = -1.0; side <= 1.0; side = side + 2.0) {
-            var offset = pair.z;
-            var e = pair.w;
-            if (BLUR_TILE_MODE == 3u) {
-                let e1 = tap_weight(local + step * (fi * side), pair.x);
-                let e2 = tap_weight(local + step * (fj * side), pair.y);
-                e = e1 + e2;
-                offset = select(0.0, (fi * e1 + fj * e2) / e, e > 0.0);
-            }
-            if (e > 0.0) {
-                color = color + tiled_sample(local + step * (offset * side)) * e;
-            }
-        }
-    }
-
+    var color = kernel_tap(frame, vec2<f32>(0.0, 0.0)) * tap_weight(frame.local, 1.0);
+    // BLUR_KERNEL_PAIRS
     return color / max(blur.kernel.y, 0.00001);
 }
