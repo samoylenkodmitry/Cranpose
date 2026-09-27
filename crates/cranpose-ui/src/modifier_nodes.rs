@@ -2205,17 +2205,18 @@ impl_layout_modifier_node!(FillNode, invalidate = InvalidationKind::Layout);
 impl LayoutModifierNode for FillNode {
     fn measure(
         &self,
-        _context: &mut dyn ModifierNodeContext,
+        context: &mut dyn ModifierNodeContext,
         measurable: &dyn Measurable,
         constraints: Constraints,
     ) -> cranpose_ui_layout::LayoutModifierMeasureResult {
+        let density = context.density();
         let (fill_width, child_min_width, child_max_width) = if self.direction
             != FillDirection::Vertical
             && constraints.max_width != f32::INFINITY
         {
-            let width = (constraints.max_width * self.fraction)
-                .round()
-                .clamp(constraints.min_width, constraints.max_width);
+            let width =
+                cranpose_ui_layout::round_to_px(constraints.max_width * self.fraction, density)
+                    .clamp(constraints.min_width, constraints.max_width);
             (width, width, width)
         } else {
             (
@@ -2229,9 +2230,9 @@ impl LayoutModifierNode for FillNode {
             != FillDirection::Horizontal
             && constraints.max_height != f32::INFINITY
         {
-            let height = (constraints.max_height * self.fraction)
-                .round()
-                .clamp(constraints.min_height, constraints.max_height);
+            let height =
+                cranpose_ui_layout::round_to_px(constraints.max_height * self.fraction, density)
+                    .clamp(constraints.min_height, constraints.max_height);
             (height, height, height)
         } else {
             (

@@ -66,6 +66,10 @@ pub fn Column<F>(modifier: Modifier, spec: ColumnSpec, content: F) -> NodeId
 where
     F: FnMut() + 'static,
 {
-    let policy = FlexMeasurePolicy::column(spec.vertical_arrangement, spec.horizontal_alignment);
+    let policy = FlexMeasurePolicy::column(
+        spec.vertical_arrangement,
+        spec.horizontal_alignment,
+        crate::density::density().density(),
+    );
     compose_layout(modifier, policy, content)
 }

@@ -18,7 +18,7 @@ use cranpose_foundation::lazy::{
     measure_lazy_list_with_beyond_bounds_policy,
 };
 pub use cranpose_foundation::lazy::{LazyListItemInfo, LazyListLayoutInfo};
-use cranpose_ui_layout::{Constraints, LinearArrangement, MeasureResult};
+use cranpose_ui_layout::{Constraints, LinearArrangement, MeasureResult, MeasureScope as _};
 use smallvec::SmallVec;
 use web_time::Instant;
 
@@ -552,9 +552,11 @@ fn measure_lazy_list_internal(
         cross_axis_size
     };
 
+    let density = scope.density();
     scope.layout_with_placement_builder(width, height, |placements| {
         push_lazy_list_placements(
             placements,
+            density,
             &result.visible_items,
             items_count,
             is_vertical,
@@ -725,13 +727,6 @@ fn place_focused_lazy_item(
             distance
         };
     result.visible_items.insert(position, item);
-}
-
-fn get_spacing(arrangement: LinearArrangement) -> f32 {
-    match arrangement {
-        LinearArrangement::SpacedBy(spacing) => spacing,
-        _ => 0.0,
-    }
 }
 
 fn bind_layout_invalidation_callback(
@@ -1032,6 +1027,7 @@ fn normalized_axis_bits(size: f32) -> u32 {
 /// - Using sequential positioning during scrolling
 fn push_lazy_list_placements(
     placements: &mut Vec<Placement>,
+    density: f32,
     visible_items: &[LazyListMeasuredItem],
     items_count: usize,
     is_vertical: bool,
@@ -1053,7 +1049,7 @@ fn push_lazy_list_placements(
             .unwrap_or(LinearArrangement::Start)
     };
 
-    let spacing = get_spacing(arrangement);
+    let spacing = config.spacing;
     let total_item_size: f32 = visible_items.iter().map(|i| i.main_axis_size).sum::<f32>()
         + (items_count.saturating_sub(1) as f32) * spacing;
     let available_main_axis =
@@ -1071,7 +1067,7 @@ fn push_lazy_list_placements(
 
         let sizes: SmallVec<[f32; 32]> = visible_items.iter().map(|i| i.main_axis_size).collect();
         let mut positions: SmallVec<[f32; 32]> = SmallVec::from_elem(0.0, sizes.len());
-        arrangement.arrange(available_main_axis, &sizes, &mut positions);
+        arrangement.arrange(density, available_main_axis, &sizes, &mut positions);
 
         for (item, &pos) in visible_items.iter().zip(positions.iter()) {
             for (&nid, &child_offset) in item.node_ids.iter().zip(item.child_offsets.iter()) {
@@ -1158,12 +1154,15 @@ fn LazyColumnImpl(
     }
     let caller_modifier_changed = super::layout::caller_modifier_changed(&modifier);
 
+    let composed_density = crate::density::density();
     let config = LazyListMeasureConfig {
         is_vertical: true,
         reverse_layout: spec.reverse_layout,
         before_content_padding: spec.content_padding_top,
         after_content_padding: spec.content_padding_bottom,
-        spacing: get_spacing(spec.vertical_arrangement),
+        spacing: spec
+            .vertical_arrangement
+            .spacing(composed_density.density()),
         beyond_bounds_item_count: spec.beyond_bounds_item_count,
         vertical_arrangement: Some(spec.vertical_arrangement),
         horizontal_arrangement: None,
@@ -1236,7 +1235,6 @@ fn LazyColumnImpl(
     });
     let captured_context =
         cranpose_core::with_current_composer(cranpose_core::Composer::capture_composition_context);
-    let composed_density = crate::density::density();
     if let Err(err) = cranpose_core::with_node_mut(node_id, |node: &mut SubcomposeLayoutNode| {
         let inputs_changed =
             refresh_content || config_changed || !node.modifier().structural_eq(&scroll_modifier);
@@ -1279,12 +1277,15 @@ fn LazyRowImpl(
     }
     let caller_modifier_changed = super::layout::caller_modifier_changed(&modifier);
 
+    let composed_density = crate::density::density();
     let config = LazyListMeasureConfig {
         is_vertical: false,
         reverse_layout: spec.reverse_layout,
         before_content_padding: spec.content_padding_start,
         after_content_padding: spec.content_padding_end,
-        spacing: get_spacing(spec.horizontal_arrangement),
+        spacing: spec
+            .horizontal_arrangement
+            .spacing(composed_density.density()),
         beyond_bounds_item_count: spec.beyond_bounds_item_count,
         vertical_arrangement: None,
         horizontal_arrangement: Some(spec.horizontal_arrangement),
@@ -1359,7 +1360,6 @@ fn LazyRowImpl(
     });
     let captured_context =
         cranpose_core::with_current_composer(cranpose_core::Composer::capture_composition_context);
-    let composed_density = crate::density::density();
     if let Err(err) = cranpose_core::with_node_mut(node_id, |node: &mut SubcomposeLayoutNode| {
         let inputs_changed =
             refresh_content || config_changed || !node.modifier().structural_eq(&scroll_modifier);

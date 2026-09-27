@@ -295,15 +295,6 @@ fn a_scroll_past_either_end_clamps_instead_of_running_off() {
 }
 
 #[test]
-fn rounding_a_length_to_a_pixel_sends_an_exact_half_up_the_way_kotlin_does() {
-    assert_eq!(round_to_px(0.25, 2.0), 0.5);
-    assert_eq!(round_to_px(-0.25, 2.0), 0.0);
-    assert_eq!((-0.5f32).round(), -1.0);
-    assert_eq!(round_to_px(0.3, 0.0), 0.3);
-    assert!(round_to_px(f32::NAN, 2.0).is_nan());
-}
-
-#[test]
 fn the_shift_and_the_two_spacers_are_the_same_arithmetic_seen_from_two_sides() {
     let viewport_px = 454.0;
     let mut slots = Vec::new();

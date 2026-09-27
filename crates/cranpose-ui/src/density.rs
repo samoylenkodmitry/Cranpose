@@ -19,11 +19,11 @@
 //! the pixel side, which is the only side where rounding means anything.
 
 use cranpose_core::{CompositionLocal, CompositionLocalProvider, compositionLocalOf};
+use cranpose_ui_layout::round_to_px;
 
 use crate::{
     font_scale::FontScaleCurve,
     render_state::{current_density, current_font_scale_curve},
-    round_scaling_list::round_to_px,
 };
 
 /// The device pixel grid a layout measures against: how many device pixels

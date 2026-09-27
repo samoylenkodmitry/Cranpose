@@ -51,6 +51,14 @@ pub trait ModifierNodeContext {
 
     /// Signals that the most recent node interaction has completed.
     fn pop_active_capabilities(&mut self) {}
+
+    /// The device pixels per layout point of the grid a layout modifier
+    /// measures on, Compose's `MeasureScope` density: lengths it places land
+    /// on whole device pixels of it. A context outside a layout pass answers
+    /// a unit grid.
+    fn density(&self) -> f32 {
+        1.0
+    }
 }
 
 /// Lightweight [`ModifierNodeContext`] implementation that records

@@ -597,65 +597,32 @@ impl MeasurePolicy for ImageMeasurePolicy {
     }
 }
 
+/// Where the painter draws in the container, as Compose's painter modifier
+/// places it: scaled, then aligned on sizes rounded to whole device pixels
+/// of `density`, overflowing the container where the scale makes it larger.
 fn destination_rect(
     src_size: Size,
     dst_size: Size,
     alignment: Alignment,
     content_scale: ContentScale,
+    density: f32,
 ) -> Rect {
+    use cranpose_ui_layout::round_to_px;
+
     let draw_size = content_scale.scaled_size(src_size, dst_size);
-    let allows_overflow = content_scale == ContentScale::Crop;
-    let offset_x = aligned_x_offset(
-        alignment.horizontal,
-        dst_size.width,
-        draw_size.width,
-        allows_overflow,
-    );
-    let offset_y = aligned_y_offset(
-        alignment.vertical,
-        dst_size.height,
-        draw_size.height,
-        allows_overflow,
-    );
     Rect {
-        x: offset_x,
-        y: offset_y,
+        x: alignment.horizontal.align(
+            round_to_px(dst_size.width, density),
+            round_to_px(draw_size.width, density),
+            density,
+        ),
+        y: alignment.vertical.align(
+            round_to_px(dst_size.height, density),
+            round_to_px(draw_size.height, density),
+            density,
+        ),
         width: draw_size.width,
         height: draw_size.height,
-    }
-}
-
-fn aligned_x_offset(
-    alignment: cranpose_ui_layout::HorizontalAlignment,
-    available: f32,
-    child: f32,
-    allows_overflow: bool,
-) -> f32 {
-    if !allows_overflow {
-        return alignment.align(available, child);
-    }
-
-    match alignment {
-        cranpose_ui_layout::HorizontalAlignment::Start => 0.0,
-        cranpose_ui_layout::HorizontalAlignment::CenterHorizontally => (available - child) / 2.0,
-        cranpose_ui_layout::HorizontalAlignment::End => available - child,
-    }
-}
-
-fn aligned_y_offset(
-    alignment: cranpose_ui_layout::VerticalAlignment,
-    available: f32,
-    child: f32,
-    allows_overflow: bool,
-) -> f32 {
-    if !allows_overflow {
-        return alignment.align(available, child);
-    }
-
-    match alignment {
-        cranpose_ui_layout::VerticalAlignment::Top => 0.0,
-        cranpose_ui_layout::VerticalAlignment::CenterVertically => (available - child) / 2.0,
-        cranpose_ui_layout::VerticalAlignment::Bottom => available - child,
     }
 }
 
@@ -713,8 +680,9 @@ fn image_destination_clip(
     container_size: Size,
     alignment: Alignment,
     content_scale: ContentScale,
+    density: f32,
 ) -> Option<(Rect, Rect)> {
-    let dst_rect = destination_rect(src_size, container_size, alignment, content_scale);
+    let dst_rect = destination_rect(src_size, container_size, alignment, content_scale, density);
     if dst_rect.width <= 0.0 || dst_rect.height <= 0.0 {
         return None;
     }
@@ -734,9 +702,13 @@ fn draw_bitmap_painter(
     color_filter: Option<ColorFilter>,
 ) {
     let container_size = scope.size();
-    let Some((dst_rect, clipped_dst_rect)) =
-        image_destination_clip(intrinsic_size, container_size, alignment, content_scale)
-    else {
+    let Some((dst_rect, clipped_dst_rect)) = image_destination_clip(
+        intrinsic_size,
+        container_size,
+        alignment,
+        content_scale,
+        crate::render_state::current_density(),
+    ) else {
         return;
     };
     let full_src_rect = Rect::from_size(Size::new(bitmap.width() as f32, bitmap.height() as f32));
@@ -766,9 +738,13 @@ fn draw_bitmap_region_painter(
     sampling: ImageSampling,
 ) {
     let source_size = Size::new(source.width.max(0.0), source.height.max(0.0));
-    let Some((dst_rect, clipped_dst_rect)) =
-        image_destination_clip(source_size, scope.size(), alignment, content_scale)
-    else {
+    let Some((dst_rect, clipped_dst_rect)) = image_destination_clip(
+        source_size,
+        scope.size(),
+        alignment,
+        content_scale,
+        crate::render_state::current_density(),
+    ) else {
         return;
     };
     let Some(clipped_source) = map_destination_clip_to_source(source, dst_rect, clipped_dst_rect)
@@ -898,9 +874,13 @@ fn draw_svg_painter(
     color_filter: Option<ColorFilter>,
 ) {
     let container_size = scope.size();
-    let Some((dst_rect, clipped_dst_rect)) =
-        image_destination_clip(intrinsic_size, container_size, alignment, content_scale)
-    else {
+    let Some((dst_rect, clipped_dst_rect)) = image_destination_clip(
+        intrinsic_size,
+        container_size,
+        alignment,
+        content_scale,
+        crate::render_state::current_density(),
+    ) else {
         return;
     };
     let density = crate::render_state::current_density();

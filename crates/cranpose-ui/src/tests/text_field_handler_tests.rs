@@ -28,8 +28,7 @@ fn focused_state(
         line_limits,
         CaretGeometryRefs {
             node_origin: Rc::new(Cell::new(Point { x: 0.0, y: 0.0 })),
-            content_offset: Rc::new(Cell::new(0.0)),
-            content_y_offset: Rc::new(Cell::new(0.0)),
+            content_origin: Rc::default(),
             scroll_offset: Rc::new(Cell::new(0.0)),
             style: TextStyle::default(),
         },

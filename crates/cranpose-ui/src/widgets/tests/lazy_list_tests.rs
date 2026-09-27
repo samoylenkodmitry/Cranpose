@@ -27,12 +27,6 @@ fn test_lazy_row_spec_default() {
 }
 
 #[test]
-fn test_get_spacing() {
-    assert_eq!(get_spacing(LinearArrangement::Start), 0.0);
-    assert_eq!(get_spacing(LinearArrangement::SpacedBy(12.0)), 12.0);
-}
-
-#[test]
 fn test_content_padding_all() {
     let spec = LazyColumnSpec::new().content_padding_all(24.0);
     assert_eq!(spec.content_padding_top, 24.0);
@@ -60,7 +54,7 @@ fn lazy_list_placements_reuse_output_storage() {
     let mut placements = Vec::with_capacity(8);
     let original_capacity = placements.capacity();
 
-    push_lazy_list_placements(&mut placements, &[item], 1, true, 100.0, &config);
+    push_lazy_list_placements(&mut placements, 1.0, &[item], 1, true, 100.0, &config);
 
     assert_eq!(placements.len(), 2);
     assert_eq!(placements[0].node_id, 101);
@@ -96,6 +90,7 @@ fn lazy_list_placements_retain_offscreen_measured_items_for_renderer_prewarm() {
 
     push_lazy_list_placements(
         &mut placements,
+        1.0,
         &[hidden, partial],
         100,
         true,
@@ -141,6 +136,7 @@ fn lazy_list_placements_retain_after_viewport_prefetch_items_for_renderer_prewar
 
     push_lazy_list_placements(
         &mut placements,
+        1.0,
         &[visible, warm, far],
         100,
         true,
@@ -163,7 +159,7 @@ fn lazy_measure_policy_does_not_schedule_speculative_prefetch_frames() {
         .find("fn measure_lazy_list_internal")
         .expect("measure function exists");
     let end = source[start..]
-        .find("fn get_spacing")
+        .find("fn bind_layout_invalidation_callback")
         .map(|offset| start + offset)
         .expect("measure function boundary exists");
     let body = &source[start..end];

@@ -18,6 +18,7 @@ mod background;
 mod blur;
 mod chain;
 mod clickable;
+mod coordinator_geometry;
 mod drag_and_drop;
 mod draw_cache;
 mod fill;
@@ -42,6 +43,7 @@ mod weight;
 mod window_root;
 
 pub use chain::{ModifierChainHandle, ModifierChainInspectorNode, ModifierLocalsHandle};
+pub(crate) use coordinator_geometry::{CoordinatorGeometry, CoordinatorRect};
 pub use cranpose_foundation::{
     AnyModifierElement, DynModifierElement, FocusState, PointerEvent, PointerEventKind,
     PointerSource, RotaryScrollEvent, SemanticsConfiguration, modifier_element,

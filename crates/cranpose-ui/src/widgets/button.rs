@@ -76,6 +76,7 @@ where
         FlexMeasurePolicy::column(
             LinearArrangement::Center,
             HorizontalAlignment::CenterHorizontally,
+            crate::density::density().density(),
         ),
         content,
     )

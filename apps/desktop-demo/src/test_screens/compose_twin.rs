@@ -1,11 +1,15 @@
-//! Desktop-demo scenes rendered alone on a fixed frame, for a pixel
-//! comparison with their Compose Desktop twins in `tools/compose-twin`
-//! (issue #905). A scene's name is its screenshot's on both sides.
+//! Desktop-demo scenes, and chains the demos alone do not cover, rendered on
+//! a fixed frame for a pixel comparison with their Compose Desktop twins in
+//! `tools/compose-twin` (issue #905). A scene's name is its screenshot's on
+//! both sides.
 
 use std::cell::RefCell;
 
 use cranpose_core::{rememberMutableStateOf, MutableState};
-use cranpose_ui::{composable, BoxSpec, Color, Modifier};
+use cranpose_ui::{
+    composable, BoxSpec, Color, Column, ColumnSpec, LinearArrangement, Modifier, Row, RowSpec,
+    Text, TextStyle, VerticalAlignment,
+};
 
 use crate::app::{
     complex_chain_showcase, item_list_showcase, positioned_boxes_showcase, simple_card_showcase,
@@ -20,11 +24,12 @@ pub const TWIN_FRAME_HEIGHT: u32 = 420;
 const TWIN_FRAME_COLOR: Color = Color(0.07, 0.07, 0.09, 1.0);
 
 /// Every twin scene, by name, in the Compose twin's `SCENES` order.
-pub const TWIN_SCENES: [(&str, fn()); 4] = [
+pub const TWIN_SCENES: [(&str, fn()); 5] = [
     ("simple-card", simple_card_showcase),
     ("positioned-boxes", positioned_boxes_showcase),
     ("item-list", item_list_showcase),
     ("complex-chain", complex_chain_showcase),
+    ("modifier-order", modifier_order_probes),
 ];
 
 /// A pixel strays when its largest channel differs from the Compose frame's
@@ -105,4 +110,68 @@ pub fn twin_stray_pixels(reference: &[u8], actual: &[u8], width: usize) -> Optio
         })
         .count();
     Some(stray)
+}
+
+/// Chains whose draws and text sit where the layout modifiers before them
+/// put their content, not only inside their padding: a link widened to the
+/// minimum touch target next to its label, a background before and after an
+/// offset, and one after a modifier that centres the content.
+#[composable]
+pub fn modifier_order_probes() {
+    Column(
+        Modifier::empty().padding(16.0),
+        ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(12.0)),
+        || {
+            Row(
+                Modifier::empty().fill_max_width().padding(4.0),
+                RowSpec::new()
+                    .horizontal_arrangement(LinearArrangement::SpacedBy(8.0))
+                    .vertical_alignment(VerticalAlignment::CenterVertically),
+                || {
+                    Text(
+                        "API Endpoint:",
+                        Modifier::empty().padding(2.0),
+                        TextStyle::default(),
+                    );
+                    Text(
+                        "https://api.ipify.org",
+                        Modifier::empty()
+                            .padding(2.0)
+                            .minimum_interactive_component_size(),
+                        TextStyle::default(),
+                    );
+                },
+            );
+            cranpose_ui::Box(
+                Modifier::empty()
+                    .background(Color(0.8, 0.3, 0.3, 0.9))
+                    .offset(12.0, 6.0)
+                    .size_points(80.0, 40.0),
+                BoxSpec::default(),
+                || {},
+            );
+            cranpose_ui::Box(
+                Modifier::empty()
+                    .offset(12.0, 6.0)
+                    .background(Color(0.3, 0.6, 0.9, 0.9))
+                    .size_points(80.0, 40.0),
+                BoxSpec::default(),
+                || {},
+            );
+            cranpose_ui::Box(
+                Modifier::empty()
+                    .padding(6.0)
+                    .minimum_interactive_component_size()
+                    .background(Color(0.3, 0.8, 0.4, 0.9)),
+                BoxSpec::default(),
+                || {
+                    cranpose_ui::Box(
+                        Modifier::empty().size_points(16.0, 16.0),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                },
+            );
+        },
+    );
 }

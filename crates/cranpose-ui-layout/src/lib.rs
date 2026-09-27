@@ -6,6 +6,7 @@ mod axis;
 mod constraints;
 mod core;
 mod intrinsics;
+mod pixels;
 
 pub use core::*;
 
@@ -14,6 +15,7 @@ pub use arrangement::*;
 pub use axis::*;
 pub use constraints::*;
 pub use intrinsics::*;
+pub use pixels::*;
 
 pub mod prelude {
     pub use crate::{

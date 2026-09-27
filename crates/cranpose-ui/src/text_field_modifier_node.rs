@@ -321,8 +321,7 @@ fn build_focus_handler(
         line_limits,
         crate::text_field_handler::CaretGeometryRefs {
             node_origin: refs.node_origin.clone(),
-            content_offset: refs.content_offset.clone(),
-            content_y_offset: refs.content_y_offset.clone(),
+            content_origin: refs.content_origin.clone(),
             scroll_offset: refs.scroll_offset.clone(),
             style: style.clone(),
         },
@@ -375,8 +374,9 @@ impl crate::focus_dispatch::FocusTargetHandle for TextFieldFocusBridge {
 #[derive(Clone)]
 pub(crate) struct TextFieldRefs {
     pub is_focused: Rc<RefCell<bool>>,
-    pub content_offset: Rc<Cell<f32>>,
-    pub content_y_offset: Rc<Cell<f32>>,
+    /// Where the field's content sits in its node: the rect its layout
+    /// placed the field at, after every layout modifier before it.
+    pub content_origin: Rc<RefCell<crate::modifier::CoordinatorRect>>,
     pub drag_anchor: Rc<Cell<Option<crate::text_selection::SelectionAnchor>>>,
     pub last_click_time: Rc<Cell<Option<web_time::Instant>>>,
     pub last_click_pos: Rc<Cell<Option<(f32, f32)>>>,
@@ -402,8 +402,7 @@ impl TextFieldRefs {
     pub fn new() -> Self {
         Self {
             is_focused: Rc::new(RefCell::new(false)),
-            content_offset: Rc::new(Cell::new(0.0_f32)),
-            content_y_offset: Rc::new(Cell::new(0.0_f32)),
+            content_origin: Rc::default(),
             drag_anchor: Rc::new(Cell::new(None)),
             last_click_time: Rc::new(Cell::new(None::<web_time::Instant>)),
             last_click_pos: Rc::new(Cell::new(None::<(f32, f32)>)),
@@ -591,9 +590,9 @@ impl TextFieldModifierNode {
                 y: event.global_position.y - event.position.y,
             });
 
-            let click_x =
-                (event.position.x - refs.content_offset.get() + refs.scroll_offset.get()).max(0.0);
-            let click_y = (event.position.y - refs.content_y_offset.get()).max(0.0);
+            let content = refs.content_origin.borrow().origin();
+            let click_x = (event.position.x - content.x + refs.scroll_offset.get()).max(0.0);
+            let click_y = (event.position.y - content.y).max(0.0);
 
             match event.kind {
                 PointerEventKind::Down => {
@@ -811,16 +810,10 @@ impl TextFieldModifierNode {
         text
     }
 
-    /// Updates the content offset (padding.left) for accurate click-to-position cursor placement.
-    /// Called from slices collection where padding is known.
-    pub fn set_content_offset(&self, offset: f32) {
-        self.refs.content_offset.set(offset);
-    }
-
-    /// Updates the content Y offset (padding.top) for cursor Y positioning.
-    /// Called from slices collection where padding is known.
-    pub fn set_content_y_offset(&self, offset: f32) {
-        self.refs.content_y_offset.set(offset);
+    /// Where the field's content sits in its node, set by slice collection
+    /// and placed by layout; clicks, the caret and the handles map through it.
+    pub(crate) fn set_content_origin(&self, origin: crate::modifier::CoordinatorRect) {
+        *self.refs.content_origin.borrow_mut() = origin;
     }
 
     fn wrap_width(&self, available_width: f32) -> Option<f32> {
@@ -1013,8 +1006,7 @@ impl DrawModifierNode for TextFieldModifierNode {
 
         let is_focused = self.refs.is_focused.clone();
         let state = self.state;
-        let content_offset = self.refs.content_offset.clone();
-        let content_y_offset = self.refs.content_y_offset.clone();
+        let content_origin = self.refs.content_origin.clone();
         let cursor_brush = self.cursor_brush.clone();
         let style = self.style.clone();
         let cached_line_height = self.measured_line_height.clone();
@@ -1063,8 +1055,8 @@ impl DrawModifierNode for TextFieldModifierNode {
                     focused: true,
                     direct_manipulation: direct_manipulation.get(),
                     node_origin: node_origin.get(),
-                    padding_left: content_offset.get(),
-                    padding_top: content_y_offset.get(),
+                    padding_left: content_origin.borrow().origin().x,
+                    padding_top: content_origin.borrow().origin().y,
                     scroll_offset: pan,
                     line_height,
                     glyph_box: crate::text::glyph_line_box(&style, line_height),

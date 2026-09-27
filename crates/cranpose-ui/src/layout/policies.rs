@@ -1,5 +1,6 @@
 use cranpose_ui_layout::{
     Axis, Constraints, MeasurePolicy, MeasureResult, MeasureScope, ParentData, Placement,
+    bias_offset,
 };
 use smallvec::SmallVec;
 
@@ -37,7 +38,7 @@ impl MeasurePolicy for BoxMeasurePolicy {
 
     fn measure_into(
         &self,
-        _scope: &dyn MeasureScope,
+        scope: &dyn MeasureScope,
         measurables: &[Box<dyn Measurable>],
         constraints: Constraints,
         placements: &mut Vec<Placement>,
@@ -78,17 +79,12 @@ impl MeasurePolicy for BoxMeasurePolicy {
             let child_width = placeable.width();
             let child_height = placeable.height();
 
-            let x = match alignment.horizontal {
-                HorizontalAlignment::Start => 0.0,
-                HorizontalAlignment::CenterHorizontally => ((width - child_width) / 2.0).max(0.0),
-                HorizontalAlignment::End => (width - child_width).max(0.0),
-            };
-
-            let y = match alignment.vertical {
-                VerticalAlignment::Top => 0.0,
-                VerticalAlignment::CenterVertically => ((height - child_height) / 2.0).max(0.0),
-                VerticalAlignment::Bottom => (height - child_height).max(0.0),
-            };
+            let x = alignment
+                .horizontal
+                .align(width, child_width, scope.density());
+            let y = alignment
+                .vertical
+                .align(height, child_height, scope.density());
 
             placeable.place(x, y);
             placements.push(Placement::new(placeable.node_id(), x, y, 0));
@@ -171,6 +167,9 @@ pub struct FlexMeasurePolicy {
     pub main_axis_arrangement: LinearArrangement,
     /// Alignment along the cross axis (used as default for children without explicit alignment)
     pub cross_axis_alignment: CrossAxisAlignment,
+    /// The device pixel grid children are spaced and placed on, the
+    /// composition's density.
+    pub density: f32,
 }
 
 /// Cross-axis alignment for flex layouts.
@@ -186,12 +185,14 @@ pub enum CrossAxisAlignment {
 }
 
 impl CrossAxisAlignment {
-    fn align(&self, available: f32, child: f32) -> f32 {
-        match self {
-            CrossAxisAlignment::Start => 0.0,
-            CrossAxisAlignment::Center => ((available - child) / 2.0).max(0.0),
-            CrossAxisAlignment::End => (available - child).max(0.0),
-        }
+    /// Where a child sits in `available` space: see [`bias_offset`].
+    fn align(&self, available: f32, child: f32, density: f32) -> f32 {
+        let bias = match self {
+            CrossAxisAlignment::Start => -1.0,
+            CrossAxisAlignment::Center => 0.0,
+            CrossAxisAlignment::End => 1.0,
+        };
+        bias_offset(bias, available, child, density)
     }
 }
 
@@ -216,15 +217,18 @@ impl From<VerticalAlignment> for CrossAxisAlignment {
 }
 
 impl FlexMeasurePolicy {
+    /// A flex layout along `axis` on the device pixel grid of `density`.
     pub fn new(
         axis: Axis,
         main_axis_arrangement: LinearArrangement,
         cross_axis_alignment: CrossAxisAlignment,
+        density: f32,
     ) -> Self {
         Self {
             axis,
             main_axis_arrangement,
             cross_axis_alignment,
+            density,
         }
     }
 
@@ -232,11 +236,13 @@ impl FlexMeasurePolicy {
     pub fn row(
         horizontal_arrangement: LinearArrangement,
         vertical_alignment: VerticalAlignment,
+        density: f32,
     ) -> Self {
         Self::new(
             Axis::Horizontal,
             horizontal_arrangement,
             vertical_alignment.into(),
+            density,
         )
     }
 
@@ -244,11 +250,13 @@ impl FlexMeasurePolicy {
     pub fn column(
         vertical_arrangement: LinearArrangement,
         horizontal_alignment: HorizontalAlignment,
+        density: f32,
     ) -> Self {
         Self::new(
             Axis::Vertical,
             vertical_arrangement,
             horizontal_alignment.into(),
+            density,
         )
     }
 
@@ -349,10 +357,7 @@ impl FlexMeasurePolicy {
     }
 
     fn get_spacing(&self) -> f32 {
-        match self.main_axis_arrangement {
-            LinearArrangement::SpacedBy(value) => value.max(0.0),
-            _ => 0.0,
-        }
+        self.main_axis_arrangement.spacing(self.density)
     }
 }
 
@@ -491,7 +496,12 @@ impl MeasurePolicy for FlexMeasurePolicy {
         } else {
             self.main_axis_arrangement
         };
-        arrangement.arrange(container_main, &child_main_sizes, &mut main_positions);
+        arrangement.arrange(
+            self.density,
+            container_main,
+            &child_main_sizes,
+            &mut main_positions,
+        );
 
         placements.reserve(placeables.len());
         for (idx, (placeable, main_pos)) in placeables.into_iter().zip(main_positions).enumerate() {
@@ -504,7 +514,7 @@ impl MeasurePolicy for FlexMeasurePolicy {
                     .column_alignment
                     .map_or(self.cross_axis_alignment, Into::into),
             };
-            let cross_pos = cross_axis_alignment.align(container_cross, child_cross);
+            let cross_pos = cross_axis_alignment.align(container_cross, child_cross, self.density);
 
             let (x, y) = match self.axis {
                 Axis::Horizontal => (main_pos, cross_pos),
