@@ -57,6 +57,8 @@
 //! This is pure geometry: it answers where a row goes and takes no view of how
 //! it is drawn.
 
+use cranpose_ui_layout::round_to_px;
+
 /// How far a row at the very edge is shrunk and faded.
 pub const EDGE_SCALE: f32 = 0.7;
 pub const EDGE_ALPHA: f32 = 0.5;
@@ -393,20 +395,6 @@ impl Default for CentreAnchor {
             offset: 0.0,
         }
     }
-}
-
-/// A length moved onto the whole device pixel Compose would give it.
-///
-/// Compose's layout is integral — `Dp.roundToPx()` runs before anything is
-/// measured and children are placed at an `IntOffset` — and Kotlin's
-/// `roundToInt` sends an exact half **up**, not away from zero. Rust's
-/// `f32::round` disagrees on exactly the negative halves, which is the case a
-/// scroll offset reaches.
-pub fn round_to_px(value: f32, density: f32) -> f32 {
-    if density <= 0.0 || !density.is_finite() || !value.is_finite() {
-        return value;
-    }
-    (value * density + 0.5).floor() / density
 }
 
 /// How far the whole column must move so the anchored item sits on the centre

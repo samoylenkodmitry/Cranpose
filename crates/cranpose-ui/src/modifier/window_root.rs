@@ -275,19 +275,39 @@ impl LayoutModifierNode for WindowRootNode {
         LayoutModifierMeasureResult::with_size(size)
     }
 
-    fn min_intrinsic_width(&self, _measurable: &dyn Measurable, _height: f32) -> f32 {
+    fn min_intrinsic_width(
+        &self,
+        _measurable: &dyn Measurable,
+        _height: f32,
+        _density: f32,
+    ) -> f32 {
         0.0
     }
 
-    fn max_intrinsic_width(&self, _measurable: &dyn Measurable, _height: f32) -> f32 {
+    fn max_intrinsic_width(
+        &self,
+        _measurable: &dyn Measurable,
+        _height: f32,
+        _density: f32,
+    ) -> f32 {
         0.0
     }
 
-    fn min_intrinsic_height(&self, _measurable: &dyn Measurable, _width: f32) -> f32 {
+    fn min_intrinsic_height(
+        &self,
+        _measurable: &dyn Measurable,
+        _width: f32,
+        _density: f32,
+    ) -> f32 {
         0.0
     }
 
-    fn max_intrinsic_height(&self, _measurable: &dyn Measurable, _width: f32) -> f32 {
+    fn max_intrinsic_height(
+        &self,
+        _measurable: &dyn Measurable,
+        _width: f32,
+        _density: f32,
+    ) -> f32 {
         0.0
     }
 }

@@ -1,5 +1,6 @@
 use cranpose_ui_layout::{
     Axis, Constraints, MeasurePolicy, MeasureResult, MeasureScope, ParentData, Placement,
+    bias_offset,
 };
 use smallvec::SmallVec;
 
@@ -37,7 +38,7 @@ impl MeasurePolicy for BoxMeasurePolicy {
 
     fn measure_into(
         &self,
-        _scope: &dyn MeasureScope,
+        scope: &dyn MeasureScope,
         measurables: &[Box<dyn Measurable>],
         constraints: Constraints,
         placements: &mut Vec<Placement>,
@@ -78,17 +79,12 @@ impl MeasurePolicy for BoxMeasurePolicy {
             let child_width = placeable.width();
             let child_height = placeable.height();
 
-            let x = match alignment.horizontal {
-                HorizontalAlignment::Start => 0.0,
-                HorizontalAlignment::CenterHorizontally => ((width - child_width) / 2.0).max(0.0),
-                HorizontalAlignment::End => (width - child_width).max(0.0),
-            };
-
-            let y = match alignment.vertical {
-                VerticalAlignment::Top => 0.0,
-                VerticalAlignment::CenterVertically => ((height - child_height) / 2.0).max(0.0),
-                VerticalAlignment::Bottom => (height - child_height).max(0.0),
-            };
+            let x = alignment
+                .horizontal
+                .align(width, child_width, scope.density());
+            let y = alignment
+                .vertical
+                .align(height, child_height, scope.density());
 
             placeable.place(x, y);
             placements.push(Placement::new(placeable.node_id(), x, y, 0));
@@ -171,6 +167,58 @@ pub struct FlexMeasurePolicy {
     pub main_axis_arrangement: LinearArrangement,
     /// Alignment along the cross axis (used as default for children without explicit alignment)
     pub cross_axis_alignment: CrossAxisAlignment,
+    /// The device pixel grid children are spaced and placed on, the
+    /// composition's density.
+    pub density: f32,
+}
+
+/// Compose's weight distribution in whole device pixels: each weighted
+/// child's share of the remaining space rounded half up, and the pixels
+/// that rounding gained or lost handed back one per child from the first.
+pub(crate) struct WeightShares {
+    density: f32,
+    unit_px: f32,
+    remainder_px: f32,
+}
+
+impl WeightShares {
+    pub(crate) fn new(
+        remaining: f32,
+        weights: impl Iterator<Item = f32> + Clone,
+        density: f32,
+    ) -> Self {
+        let density = if density > 0.0 && density.is_finite() {
+            density
+        } else {
+            1.0
+        };
+        let total_weight: f32 = weights.clone().sum();
+        let remaining_px = (remaining * density).round();
+        let unit_px = if total_weight > 0.0 {
+            remaining_px / total_weight
+        } else {
+            0.0
+        };
+        let rounded_px: f32 = weights.map(|weight| (unit_px * weight + 0.5).floor()).sum();
+        Self {
+            density,
+            unit_px,
+            remainder_px: remaining_px - rounded_px,
+        }
+    }
+
+    /// The main-axis size of the next weighted child, which weighs `weight`.
+    pub(crate) fn next_share(&mut self, weight: f32) -> f32 {
+        let step = if self.remainder_px > 0.0 {
+            1.0
+        } else if self.remainder_px < 0.0 {
+            -1.0
+        } else {
+            0.0
+        };
+        self.remainder_px -= step;
+        ((self.unit_px * weight + 0.5).floor() + step).max(0.0) / self.density
+    }
 }
 
 /// Cross-axis alignment for flex layouts.
@@ -186,12 +234,14 @@ pub enum CrossAxisAlignment {
 }
 
 impl CrossAxisAlignment {
-    fn align(&self, available: f32, child: f32) -> f32 {
-        match self {
-            CrossAxisAlignment::Start => 0.0,
-            CrossAxisAlignment::Center => ((available - child) / 2.0).max(0.0),
-            CrossAxisAlignment::End => (available - child).max(0.0),
-        }
+    /// Where a child sits in `available` space: see [`bias_offset`].
+    fn align(&self, available: f32, child: f32, density: f32) -> f32 {
+        let bias = match self {
+            CrossAxisAlignment::Start => -1.0,
+            CrossAxisAlignment::Center => 0.0,
+            CrossAxisAlignment::End => 1.0,
+        };
+        bias_offset(bias, available, child, density)
     }
 }
 
@@ -216,15 +266,18 @@ impl From<VerticalAlignment> for CrossAxisAlignment {
 }
 
 impl FlexMeasurePolicy {
+    /// A flex layout along `axis` on the device pixel grid of `density`.
     pub fn new(
         axis: Axis,
         main_axis_arrangement: LinearArrangement,
         cross_axis_alignment: CrossAxisAlignment,
+        density: f32,
     ) -> Self {
         Self {
             axis,
             main_axis_arrangement,
             cross_axis_alignment,
+            density,
         }
     }
 
@@ -232,11 +285,13 @@ impl FlexMeasurePolicy {
     pub fn row(
         horizontal_arrangement: LinearArrangement,
         vertical_alignment: VerticalAlignment,
+        density: f32,
     ) -> Self {
         Self::new(
             Axis::Horizontal,
             horizontal_arrangement,
             vertical_alignment.into(),
+            density,
         )
     }
 
@@ -244,11 +299,13 @@ impl FlexMeasurePolicy {
     pub fn column(
         vertical_arrangement: LinearArrangement,
         horizontal_alignment: HorizontalAlignment,
+        density: f32,
     ) -> Self {
         Self::new(
             Axis::Vertical,
             vertical_arrangement,
             horizontal_alignment.into(),
+            density,
         )
     }
 
@@ -349,10 +406,7 @@ impl FlexMeasurePolicy {
     }
 
     fn get_spacing(&self) -> f32 {
-        match self.main_axis_arrangement {
-            LinearArrangement::SpacedBy(value) => value.max(0.0),
-            _ => 0.0,
-        }
+        self.main_axis_arrangement.spacing(self.density)
     }
 }
 
@@ -424,15 +478,15 @@ impl MeasurePolicy for FlexMeasurePolicy {
                 let weighted_spacing = spacing * (weighted_children.len() - 1) as f32;
                 let remaining_main = (max_main - fixed_space - weighted_spacing).max(0.0);
 
-                let total_weight: f32 = weighted_children.iter().map(|(_, data)| data.weight).sum();
+                let mut shares = WeightShares::new(
+                    remaining_main,
+                    weighted_children.iter().map(|(_, data)| data.weight),
+                    self.density,
+                );
 
                 for &(idx, parent_data) in &weighted_children {
                     let measurable = &measurables[idx];
-                    let allocated = if total_weight > 0.0 {
-                        remaining_main * (parent_data.weight / total_weight)
-                    } else {
-                        0.0
-                    };
+                    let allocated = shares.next_share(parent_data.weight);
 
                     let weighted_constraints = if parent_data.fill {
                         self.make_constraints(allocated, allocated, 0.0, max_cross)
@@ -491,7 +545,12 @@ impl MeasurePolicy for FlexMeasurePolicy {
         } else {
             self.main_axis_arrangement
         };
-        arrangement.arrange(container_main, &child_main_sizes, &mut main_positions);
+        arrangement.arrange(
+            self.density,
+            container_main,
+            &child_main_sizes,
+            &mut main_positions,
+        );
 
         placements.reserve(placeables.len());
         for (idx, (placeable, main_pos)) in placeables.into_iter().zip(main_positions).enumerate() {
@@ -504,7 +563,7 @@ impl MeasurePolicy for FlexMeasurePolicy {
                     .column_alignment
                     .map_or(self.cross_axis_alignment, Into::into),
             };
-            let cross_pos = cross_axis_alignment.align(container_cross, child_cross);
+            let cross_pos = cross_axis_alignment.align(container_cross, child_cross, self.density);
 
             let (x, y) = match self.axis {
                 Axis::Horizontal => (main_pos, cross_pos),

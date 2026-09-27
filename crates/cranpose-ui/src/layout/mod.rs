@@ -41,11 +41,15 @@ pub(crate) struct LayoutNodeContext {
     invalidations: Vec<InvalidationKind>,
     update_requested: bool,
     active_capabilities: Vec<NodeCapabilities>,
+    density: f32,
 }
 
 impl LayoutNodeContext {
-    pub(crate) fn new() -> Self {
-        Self::default()
+    pub(crate) fn new(density: f32) -> Self {
+        Self {
+            density,
+            ..Self::default()
+        }
     }
 
     pub(crate) fn take_invalidations(&mut self) -> Vec<InvalidationKind> {
@@ -70,6 +74,10 @@ impl ModifierNodeContext for LayoutNodeContext {
 
     fn pop_active_capabilities(&mut self) {
         self.active_capabilities.pop();
+    }
+
+    fn density(&self) -> f32 {
+        self.density
     }
 }
 
@@ -1677,7 +1685,9 @@ impl LayoutBuilderState {
                 any.downcast_mut::<crate::subcompose_layout::SubcomposeLayoutNode>()
             {
                 let handle = subcompose.handle();
-                let resolved_modifiers = handle.resolved_modifiers();
+                let resolved_modifiers = handle
+                    .resolved_modifiers()
+                    .on_device_grid(subcompose.density().density());
                 (handle, resolved_modifiers)
             } else {
                 return Ok(None);
@@ -1924,6 +1934,7 @@ impl LayoutBuilderState {
         let mut offset = Point::default();
         let mut density = crate::density::Density::default();
         let mut window_root = false;
+        let mut geometry = None;
 
         {
             let state = state_rc.borrow();
@@ -1932,6 +1943,7 @@ impl LayoutBuilderState {
             let _ = applier.with_node::<LayoutNode, _>(node_id, |layout_node| {
                 density = layout_node.density();
                 window_root = layout_node.is_window_root();
+                geometry = Some(layout_node.coordinator_geometry());
                 let chain_handle = layout_node.modifier_chain();
 
                 if !chain_handle.has_layout_nodes() {
@@ -1951,7 +1963,7 @@ impl LayoutBuilderState {
                                     node.as_any()
                                         .downcast_ref::<crate::modifier_nodes::OffsetNode>()
                                 {
-                                    let delta = offset_node.offset();
+                                    let delta = offset_node.device_offset(density.density());
                                     offset.x += delta.x;
                                     offset.y += delta.y;
                                 }
@@ -1971,6 +1983,14 @@ impl LayoutBuilderState {
                 constraints,
                 placements,
             );
+            if let Some(geometry) = geometry {
+                geometry.replace([GeometryRect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: final_size.width,
+                    height: final_size.height,
+                }]);
+            }
 
             return ModifierChainMeasurement {
                 size: final_size,
@@ -1995,6 +2015,12 @@ impl LayoutBuilderState {
             width: placeable.width(),
             height: placeable.height(),
         };
+
+        if let Some(geometry) = geometry {
+            runtime_state
+                .coordinator_chain()
+                .write_geometry(&geometry, offset);
+        }
 
         let content_offset = placeable.content_offset();
         let all_placement_offset = Point {
@@ -2500,7 +2526,7 @@ impl<'a> CoordinatorFrame<'a> {
             scope,
             measurables,
             placements: RefCell::new(placements),
-            context: RefCell::new(LayoutNodeContext::new()),
+            context: RefCell::new(LayoutNodeContext::new(scope.density())),
         }
     }
 
@@ -2578,6 +2604,8 @@ impl CoordinatorNode {
 #[derive(Default)]
 struct CoordinatorChain {
     nodes: Vec<CoordinatorNode>,
+    /// The size the node's own measure policy measured its content at.
+    inner_size: Cell<Size>,
 }
 
 impl CoordinatorChain {
@@ -2625,6 +2653,7 @@ impl CoordinatorChain {
                 constraints,
                 &mut placements,
             );
+            self.inner_size.set(size);
             return Placeable::value(size.width, size.height, NodeId::default());
         };
 
@@ -2637,6 +2666,10 @@ impl CoordinatorChain {
 
         let Some(layout_node) = node_borrow.as_layout_node() else {
             let placeable = wrapped.measure(constraints);
+            node.measured_size.set(Size {
+                width: placeable.width(),
+                height: placeable.height(),
+            });
             let child_accumulated = self.total_content_offset_from(index + 1);
             node.accumulated_offset.set(child_accumulated);
             return Placeable::value_with_offset(
@@ -2650,7 +2683,7 @@ impl CoordinatorChain {
         let result = match frame.context.try_borrow_mut() {
             Ok(mut context) => layout_node.measure(&mut *context, &wrapped, constraints),
             Err(_) => {
-                let mut temp = LayoutNodeContext::new();
+                let mut temp = LayoutNodeContext::new(frame.scope.density());
                 let result = layout_node.measure(&mut temp, &wrapped, constraints);
                 if let Ok(mut context) = frame.context.try_borrow_mut() {
                     for kind in temp.take_invalidations() {
@@ -2700,7 +2733,7 @@ impl CoordinatorChain {
         let node_borrow = node.node.borrow();
         node_borrow.as_layout_node().map_or_else(
             || wrapped.min_intrinsic_width(height),
-            |layout_node| layout_node.min_intrinsic_width(&wrapped, height),
+            |layout_node| layout_node.min_intrinsic_width(&wrapped, height, frame.scope.density()),
         )
     }
 
@@ -2723,7 +2756,7 @@ impl CoordinatorChain {
         let node_borrow = node.node.borrow();
         node_borrow.as_layout_node().map_or_else(
             || wrapped.max_intrinsic_width(height),
-            |layout_node| layout_node.max_intrinsic_width(&wrapped, height),
+            |layout_node| layout_node.max_intrinsic_width(&wrapped, height, frame.scope.density()),
         )
     }
 
@@ -2746,7 +2779,7 @@ impl CoordinatorChain {
         let node_borrow = node.node.borrow();
         node_borrow.as_layout_node().map_or_else(
             || wrapped.min_intrinsic_height(width),
-            |layout_node| layout_node.min_intrinsic_height(&wrapped, width),
+            |layout_node| layout_node.min_intrinsic_height(&wrapped, width, frame.scope.density()),
         )
     }
 
@@ -2769,8 +2802,29 @@ impl CoordinatorChain {
         let node_borrow = node.node.borrow();
         node_borrow.as_layout_node().map_or_else(
             || wrapped.max_intrinsic_height(width),
-            |layout_node| layout_node.max_intrinsic_height(&wrapped, width),
+            |layout_node| layout_node.max_intrinsic_height(&wrapped, width, frame.scope.density()),
         )
+    }
+
+    /// Writes where each coordinator and the node's content ended up in the
+    /// last measure, relative to the node drawn at its `node_offset`.
+    fn write_geometry(&self, geometry: &crate::modifier::CoordinatorGeometry, node_offset: Point) {
+        let content = self.total_content_offset_from(0);
+        let placed = |inner_offset: Point, size: Size| GeometryRect {
+            x: content.x - inner_offset.x - node_offset.x,
+            y: content.y - inner_offset.y - node_offset.y,
+            width: size.width,
+            height: size.height,
+        };
+        geometry.replace(
+            self.nodes
+                .iter()
+                .map(|node| placed(node.accumulated_offset.get(), node.measured_size.get()))
+                .chain(std::iter::once(placed(
+                    Point::default(),
+                    self.inner_size.get(),
+                ))),
+        );
     }
 
     fn total_content_offset_from(&self, index: usize) -> Point {
@@ -3730,24 +3784,6 @@ fn subtract_padding(constraints: Constraints, padding: EdgeInsets) -> Constraint
     })
 }
 
-#[cfg(test)]
-pub(crate) fn align_horizontal(alignment: HorizontalAlignment, available: f32, child: f32) -> f32 {
-    match alignment {
-        HorizontalAlignment::Start => 0.0,
-        HorizontalAlignment::CenterHorizontally => ((available - child) / 2.0).max(0.0),
-        HorizontalAlignment::End => (available - child).max(0.0),
-    }
-}
-
-#[cfg(test)]
-pub(crate) fn align_vertical(alignment: VerticalAlignment, available: f32, child: f32) -> f32 {
-    match alignment {
-        VerticalAlignment::Top => 0.0,
-        VerticalAlignment::CenterVertically => ((available - child) / 2.0).max(0.0),
-        VerticalAlignment::Bottom => (available - child).max(0.0),
-    }
-}
-
 fn resolve_dimension(
     base: f32,
     explicit: DimensionConstraint,
@@ -3816,3 +3852,7 @@ fn normalize_constraints(mut constraints: Constraints) -> Constraints {
 #[cfg(test)]
 #[path = "tests/layout_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/coordinator_geometry_tests.rs"]
+mod coordinator_geometry_tests;

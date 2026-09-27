@@ -2,9 +2,8 @@ use std::{cell::Cell, rc::Rc};
 
 use cranpose_core::{MemoryApplier, Node, NodeId, collections::map::HashSet};
 use cranpose_ui::{
-    DrawCommand, LayoutBox, LayoutNode, ModifierNodeSlices, Point, PreparedTextLayout, Rect,
-    ResolvedModifiers, Size, SubcomposeLayoutNode, TextLayoutOptions, TextOverflow,
-    TextPanResolver, text::TextStyle,
+    DrawCommand, LayoutBox, LayoutNode, ModifierNodeSlices, Point, PreparedTextLayout, Rect, Size,
+    SubcomposeLayoutNode, TextLayoutOptions, TextOverflow, TextPanResolver, text::TextStyle,
 };
 use cranpose_ui_graphics::{
     CommandRecording, CompositingStrategy, GraphicsLayer, LayerShape, RoundedCornerShape,
@@ -32,7 +31,6 @@ struct BuildNodeSnapshot {
     placement: Point,
     size: Size,
     content_offset: Point,
-    resolved_modifiers: ResolvedModifiers,
     /// The node's modifier slices, shared: its draw commands, handlers and
     /// text are read from them rather than copied out.
     slices: Rc<ModifierNodeSlices>,
@@ -43,7 +41,6 @@ struct BuildNodeSnapshot {
 struct SnapshotNodeData {
     layout_state: cranpose_ui::widgets::LayoutState,
     modifier_slices: Rc<ModifierNodeSlices>,
-    resolved_modifiers: ResolvedModifiers,
     children: SmallVec<[NodeId; 8]>,
     window_root: bool,
 }
@@ -866,7 +863,6 @@ fn translate_layer_from_data(
     let SnapshotNodeData {
         layout_state,
         modifier_slices,
-        resolved_modifiers: _,
         children: fresh_children,
         window_root,
     } = data;
@@ -1033,7 +1029,6 @@ fn build_layer_node_internal(
         placement,
         size,
         content_offset,
-        resolved_modifiers,
         slices,
         graphics_layer,
         children: child_snapshots,
@@ -1087,8 +1082,7 @@ fn build_layer_node_internal(
     );
     if let Some(text) = text_node_from_parts(TextNodeParts {
         node_id,
-        local_bounds,
-        resolved_modifiers: &resolved_modifiers,
+        text_rect: slices.text_content_rect(size),
         text_style,
         text_layout_options,
         text_pan,
@@ -1222,7 +1216,6 @@ fn snapshot_node_data(applier: &mut MemoryApplier, node_id: NodeId) -> Option<Sn
         SnapshotNodeData {
             layout_state: state,
             modifier_slices,
-            resolved_modifiers: node.resolved_modifiers(),
             children,
             window_root: node.is_window_root(),
         }
@@ -1239,7 +1232,6 @@ fn snapshot_node_data(applier: &mut MemoryApplier, node_id: NodeId) -> Option<Sn
             SnapshotNodeData {
                 layout_state: state,
                 modifier_slices,
-                resolved_modifiers: node.resolved_modifiers(),
                 children,
                 window_root: false,
             }
@@ -1298,7 +1290,6 @@ fn build_layer_node_from_data(
     let SnapshotNodeData {
         layout_state,
         modifier_slices,
-        resolved_modifiers,
         children,
         window_root: _,
     } = data;
@@ -1410,8 +1401,7 @@ fn build_layer_node_from_data(
     );
     if let Some(text) = text_node_from_parts(TextNodeParts {
         node_id,
-        local_bounds,
-        resolved_modifiers: &resolved_modifiers,
+        text_rect: modifier_slices.text_content_rect(layout_state.size()),
         text_style: modifier_slices.text_style(),
         text_layout_options: modifier_slices.text_layout_options(),
         text_pan: modifier_slices.text_pan_resolver(),
@@ -1741,8 +1731,8 @@ fn layer_identity(layer: &LayerNode) -> Option<NodeId> {
 
 struct TextNodeParts<'a> {
     node_id: NodeId,
-    local_bounds: Rect,
-    resolved_modifiers: &'a ResolvedModifiers,
+    /// Where the text node was placed in its layout node.
+    text_rect: Rect,
     text_style: Option<&'a TextStyle>,
     text_layout_options: Option<TextLayoutOptions>,
     text_pan: Option<TextPanResolver>,
@@ -1752,8 +1742,7 @@ struct TextNodeParts<'a> {
 fn text_node_from_parts(parts: TextNodeParts<'_>) -> Option<TextPrimitiveNode> {
     let TextNodeParts {
         node_id,
-        local_bounds,
-        resolved_modifiers,
+        text_rect,
         text_style,
         text_layout_options,
         text_pan,
@@ -1763,8 +1752,7 @@ fn text_node_from_parts(parts: TextNodeParts<'_>) -> Option<TextPrimitiveNode> {
     let default_text_style = TextStyle::default();
     let text_style = text_style.cloned().unwrap_or(default_text_style);
     let options = text_layout_options.unwrap_or_default().normalized();
-    let padding = resolved_modifiers.padding();
-    let content_width = (local_bounds.width - padding.left - padding.right).max(0.0);
+    let content_width = text_rect.width.max(0.0);
     if content_width <= 0.0 {
         return None;
     }
@@ -1788,16 +1776,15 @@ fn text_node_from_parts(parts: TextNodeParts<'_>) -> Option<TextPrimitiveNode> {
         prepared.metrics.width,
     );
     let rect = Rect {
-        x: padding.left + alignment_offset - pan_offset,
-        y: padding.top,
+        x: text_rect.x + alignment_offset - pan_offset,
+        y: text_rect.y,
         width: draw_width,
         height: prepared.metrics.height,
     };
     let text_bounds = Rect {
-        x: padding.left,
-        y: padding.top,
         width: content_width,
-        height: (local_bounds.height - padding.top - padding.bottom).max(0.0),
+        height: text_rect.height.max(0.0),
+        ..text_rect
     };
     let font_size = visual_style.resolve_font_size(14.0);
     let expanded_bounds =
@@ -1854,7 +1841,6 @@ fn layout_box_to_snapshot(node: &LayoutBox, parent: Option<&LayoutBox>) -> Build
             height: node.rect.height,
         },
         content_offset: node.content_offset,
-        resolved_modifiers: node.node_data.resolved_modifiers,
         slices: Rc::clone(&node.node_data.modifier_slices),
         graphics_layer: has_graphics_layer.then_some(graphics_layer),
         children,

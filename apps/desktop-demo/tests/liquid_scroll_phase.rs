@@ -4,7 +4,9 @@ use crate::liquid_page_support;
 
 const LOGICAL: (u32, u32) = (800, 600);
 const DENSITY: f32 = 130.0 / 96.0;
-const BOTTOM_BAR_SCENE_OFFSET: f32 = 1423.154;
+/// The bottom bar scene, at an offset whose next ten physical-pixel steps
+/// all keep the glass raster: some steps elsewhere flip it (#902).
+const BOTTOM_BAR_SCENE_OFFSET: f32 = 1425.369;
 const PHYSICAL_PIXEL_STEPS: u32 = 10;
 const EDGE_TRIM_LOGICAL: u32 = 180;
 const MAX_CHANNEL_DELTA: u32 = 1;

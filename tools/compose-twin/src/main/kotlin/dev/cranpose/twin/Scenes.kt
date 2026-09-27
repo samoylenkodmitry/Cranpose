@@ -7,12 +7,15 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
@@ -35,6 +38,7 @@ val SCENES: List<Pair<String, @Composable () -> Unit>> = listOf(
     "positioned-boxes" to { PositionedBoxesShowcase() },
     "item-list" to { ItemListShowcase() },
     "complex-chain" to { ComplexChainShowcase() },
+    "modifier-order" to { ModifierOrderProbes() },
 )
 
 /** The demo's fonts, loaded from the files Cranpose embeds. */
@@ -198,6 +202,26 @@ fun ComplexChainShowcase() {
             Box(Modifier.background(Color(0.5f, 0.3f, 0.7f, 0.9f), RoundedCornerShape(6.dp)).padding(8.dp)) {
                 Text("Offset + Sized", Modifier)
             }
+        }
+    }
+}
+
+/** `modifier_order_probes` in `test_screens/compose_twin.rs`. */
+@Composable
+fun ModifierOrderProbes() {
+    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(
+            Modifier.fillMaxWidth().padding(4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("API Endpoint:", Modifier.padding(2.dp))
+            Text("https://api.ipify.org", Modifier.padding(2.dp).minimumInteractiveComponentSize())
+        }
+        Box(Modifier.background(Color(0.8f, 0.3f, 0.3f, 0.9f)).offset(12.dp, 6.dp).size(80.dp, 40.dp))
+        Box(Modifier.offset(12.dp, 6.dp).background(Color(0.3f, 0.6f, 0.9f, 0.9f)).size(80.dp, 40.dp))
+        Box(Modifier.padding(6.dp).minimumInteractiveComponentSize().background(Color(0.3f, 0.8f, 0.4f, 0.9f))) {
+            Box(Modifier.size(16.dp, 16.dp))
         }
     }
 }

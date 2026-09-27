@@ -153,10 +153,10 @@ fn fractional_offset_node_passes_intrinsics_through() {
         intrinsic_height: 32.0,
     };
 
-    assert_eq!(node.min_intrinsic_width(&measurable, 32.0), 64.0);
-    assert_eq!(node.max_intrinsic_width(&measurable, 32.0), 64.0);
-    assert_eq!(node.min_intrinsic_height(&measurable, 64.0), 32.0);
-    assert_eq!(node.max_intrinsic_height(&measurable, 64.0), 32.0);
+    assert_eq!(node.min_intrinsic_width(&measurable, 32.0, 1.0), 64.0);
+    assert_eq!(node.max_intrinsic_width(&measurable, 32.0, 1.0), 64.0);
+    assert_eq!(node.min_intrinsic_height(&measurable, 64.0, 1.0), 32.0);
+    assert_eq!(node.max_intrinsic_height(&measurable, 64.0, 1.0), 32.0);
 }
 
 #[test]
@@ -169,11 +169,11 @@ fn padding_node_respects_intrinsics() {
         intrinsic_height: 30.0,
     };
 
-    assert_eq!(node.min_intrinsic_width(&measurable, 100.0), 70.0);
-    assert_eq!(node.max_intrinsic_width(&measurable, 100.0), 70.0);
+    assert_eq!(node.min_intrinsic_width(&measurable, 100.0, 1.0), 70.0);
+    assert_eq!(node.max_intrinsic_width(&measurable, 100.0, 1.0), 70.0);
 
-    assert_eq!(node.min_intrinsic_height(&measurable, 100.0), 50.0);
-    assert_eq!(node.max_intrinsic_height(&measurable, 100.0), 50.0);
+    assert_eq!(node.min_intrinsic_height(&measurable, 100.0, 1.0), 50.0);
+    assert_eq!(node.max_intrinsic_height(&measurable, 100.0, 1.0), 50.0);
 }
 
 #[test]
@@ -1069,20 +1069,22 @@ fn custom_layout_modifier_works_through_retained_chain() {
             })
         }
 
-        fn min_intrinsic_width(&self, measurable: &dyn Measurable, height: f32) -> f32 {
+        fn min_intrinsic_width(
+            &self,
+            measurable: &dyn Measurable,
+            height: f32,
+            _density: f32,
+        ) -> f32 {
             measurable.min_intrinsic_width(height) + self.extra_width
         }
 
-        fn max_intrinsic_width(&self, measurable: &dyn Measurable, height: f32) -> f32 {
+        fn max_intrinsic_width(
+            &self,
+            measurable: &dyn Measurable,
+            height: f32,
+            _density: f32,
+        ) -> f32 {
             measurable.max_intrinsic_width(height) + self.extra_width
-        }
-
-        fn min_intrinsic_height(&self, measurable: &dyn Measurable, width: f32) -> f32 {
-            measurable.min_intrinsic_height(width)
-        }
-
-        fn max_intrinsic_height(&self, measurable: &dyn Measurable, width: f32) -> f32 {
-            measurable.max_intrinsic_height(width)
         }
     }
 
@@ -1140,7 +1142,7 @@ fn custom_layout_modifier_works_through_retained_chain() {
     assert_eq!(result.size.width, 120.0);
     assert_eq!(result.size.height, 50.0);
 
-    let intrinsic_width = node.min_intrinsic_width(&measurable, 100.0);
+    let intrinsic_width = node.min_intrinsic_width(&measurable, 100.0, 1.0);
     assert_eq!(intrinsic_width, 120.0);
 }
 

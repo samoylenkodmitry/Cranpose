@@ -428,7 +428,7 @@ fn crop_fills_bounds() {
 fn destination_rect_aligns_center() {
     let src = Size::new(200.0, 100.0);
     let dst = Size::new(300.0, 300.0);
-    let rect = destination_rect(src, dst, Alignment::CENTER, ContentScale::Fit);
+    let rect = destination_rect(src, dst, Alignment::CENTER, ContentScale::Fit, 1.0);
     assert_eq!(
         rect,
         Rect {
@@ -445,7 +445,7 @@ fn crop_destination_clip_maps_centered_wide_source() {
     let src = Size::new(200.0, 100.0);
     let dst = Size::new(100.0, 100.0);
     let (dst_rect, clipped_dst_rect) =
-        image_destination_clip(src, dst, Alignment::CENTER, ContentScale::Crop)
+        image_destination_clip(src, dst, Alignment::CENTER, ContentScale::Crop, 1.0)
             .expect("destination clip");
     let rect = map_destination_clip_to_source(Rect::from_size(src), dst_rect, clipped_dst_rect)
         .expect("source clip");
@@ -465,7 +465,7 @@ fn crop_destination_clip_honors_start_alignment() {
     let src = Size::new(200.0, 100.0);
     let dst = Size::new(100.0, 100.0);
     let (dst_rect, clipped_dst_rect) =
-        image_destination_clip(src, dst, Alignment::TOP_START, ContentScale::Crop)
+        image_destination_clip(src, dst, Alignment::TOP_START, ContentScale::Crop, 1.0)
             .expect("destination clip");
     let rect = map_destination_clip_to_source(Rect::from_size(src), dst_rect, clipped_dst_rect)
         .expect("source clip");

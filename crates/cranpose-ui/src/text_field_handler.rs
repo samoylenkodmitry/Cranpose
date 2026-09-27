@@ -1,4 +1,7 @@
-use std::{cell::Cell, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
 
 use cranpose_foundation::text::{TextFieldLineLimits, TextFieldState};
 use cranpose_ui_graphics::Point;
@@ -12,8 +15,7 @@ use crate::{
 #[derive(Clone)]
 pub(crate) struct CaretGeometryRefs {
     pub node_origin: Rc<Cell<Point>>,
-    pub content_offset: Rc<Cell<f32>>,
-    pub content_y_offset: Rc<Cell<f32>>,
+    pub content_origin: Rc<RefCell<crate::modifier::CoordinatorRect>>,
     pub scroll_offset: Rc<Cell<f32>>,
     pub style: TextStyle,
 }
@@ -212,8 +214,9 @@ impl crate::text_field_focus::FocusedTextFieldHandler for TextFieldHandler {
         }
         let g = &self.geometry;
         let origin = g.node_origin.get();
-        let base_x = origin.x + g.content_offset.get() - g.scroll_offset.get();
-        let top = origin.y + g.content_y_offset.get();
+        let content = g.content_origin.borrow().origin();
+        let base_x = origin.x + content.x - g.scroll_offset.get();
+        let top = origin.y + content.y;
         let line_height = measure_text(&AnnotatedString::from("Ag"), &g.style).line_height;
 
         let mut caret_xs = Vec::with_capacity(text.len() + 1);

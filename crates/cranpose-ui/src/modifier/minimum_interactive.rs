@@ -5,7 +5,9 @@ use cranpose_foundation::{
     Constraints, DelegatableNode, InvalidationKind, LayoutModifierNode, Measurable, ModifierNode,
     ModifierNodeContext, ModifierNodeElement, NodeCapabilities, NodeState, Size,
 };
-use cranpose_ui_layout::LayoutModifierMeasureResult;
+use cranpose_ui_layout::{
+    HorizontalAlignment, LayoutModifierMeasureResult, VerticalAlignment, round_to_px,
+};
 
 use super::Modifier;
 
@@ -15,25 +17,27 @@ pub const MINIMUM_INTERACTIVE_SIZE: f32 = 48.0;
 
 /// The size a control takes and where its content sits inside it: at least
 /// the minimum on each side, as far as the incoming constraints allow, with
-/// the content in the middle.
+/// the content in the middle on the device pixel grid of `density`.
 pub fn minimum_interactive_placement(
     constraints: Constraints,
     content: Size,
+    density: f32,
 ) -> LayoutModifierMeasureResult {
+    let minimum = round_to_px(MINIMUM_INTERACTIVE_SIZE, density);
     let width = content.width.max(
-        MINIMUM_INTERACTIVE_SIZE
+        minimum
             .max(constraints.min_width)
             .min(constraints.max_width),
     );
     let height = content.height.max(
-        MINIMUM_INTERACTIVE_SIZE
+        minimum
             .max(constraints.min_height)
             .min(constraints.max_height),
     );
     LayoutModifierMeasureResult::new(
         Size { width, height },
-        ((width - content.width) / 2.0).round(),
-        ((height - content.height) / 2.0).round(),
+        HorizontalAlignment::CenterHorizontally.align(width, content.width, density),
+        VerticalAlignment::CenterVertically.align(height, content.height, density),
     )
 }
 
@@ -60,7 +64,7 @@ crate::modifier_nodes::impl_layout_modifier_node!(
 impl LayoutModifierNode for MinimumInteractiveNode {
     fn measure(
         &self,
-        _context: &mut dyn ModifierNodeContext,
+        context: &mut dyn ModifierNodeContext,
         measurable: &dyn Measurable,
         constraints: Constraints,
     ) -> LayoutModifierMeasureResult {
@@ -71,31 +75,32 @@ impl LayoutModifierNode for MinimumInteractiveNode {
                 width: placeable.width(),
                 height: placeable.height(),
             },
+            context.density(),
         )
     }
 
-    fn min_intrinsic_width(&self, measurable: &dyn Measurable, height: f32) -> f32 {
+    fn min_intrinsic_width(&self, measurable: &dyn Measurable, height: f32, density: f32) -> f32 {
         measurable
             .min_intrinsic_width(height)
-            .max(MINIMUM_INTERACTIVE_SIZE)
+            .max(round_to_px(MINIMUM_INTERACTIVE_SIZE, density))
     }
 
-    fn max_intrinsic_width(&self, measurable: &dyn Measurable, height: f32) -> f32 {
+    fn max_intrinsic_width(&self, measurable: &dyn Measurable, height: f32, density: f32) -> f32 {
         measurable
             .max_intrinsic_width(height)
-            .max(MINIMUM_INTERACTIVE_SIZE)
+            .max(round_to_px(MINIMUM_INTERACTIVE_SIZE, density))
     }
 
-    fn min_intrinsic_height(&self, measurable: &dyn Measurable, width: f32) -> f32 {
+    fn min_intrinsic_height(&self, measurable: &dyn Measurable, width: f32, density: f32) -> f32 {
         measurable
             .min_intrinsic_height(width)
-            .max(MINIMUM_INTERACTIVE_SIZE)
+            .max(round_to_px(MINIMUM_INTERACTIVE_SIZE, density))
     }
 
-    fn max_intrinsic_height(&self, measurable: &dyn Measurable, width: f32) -> f32 {
+    fn max_intrinsic_height(&self, measurable: &dyn Measurable, width: f32, density: f32) -> f32 {
         measurable
             .max_intrinsic_height(width)
-            .max(MINIMUM_INTERACTIVE_SIZE)
+            .max(round_to_px(MINIMUM_INTERACTIVE_SIZE, density))
     }
 }
 

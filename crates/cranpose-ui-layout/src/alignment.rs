@@ -1,5 +1,15 @@
 //! Alignment utilities for positioning content
 
+use crate::round_to_px;
+
+/// Compose's `BiasAlignment`: the offset that puts `child` at `bias` of
+/// `available` (-1 the start, 0 the middle, 1 the end), on a whole device
+/// pixel of `density` as Kotlin's `roundToInt` rounds it, and before the
+/// start when the child is the larger.
+pub fn bias_offset(bias: f32, available: f32, child: f32, density: f32) -> f32 {
+    round_to_px((available - child) / 2.0 * (1.0 + bias), density)
+}
+
 /// Alignment across both axes used for positioning content within a box.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Alignment {
@@ -43,13 +53,19 @@ pub enum HorizontalAlignment {
 }
 
 impl HorizontalAlignment {
-    /// Computes the horizontal offset for alignment.
-    pub fn align(&self, available: f32, child: f32) -> f32 {
+    /// Compose's bias for this alignment: -1 the start, 0 the middle, 1 the end.
+    pub fn bias(&self) -> f32 {
         match self {
-            HorizontalAlignment::Start => 0.0,
-            HorizontalAlignment::CenterHorizontally => ((available - child) / 2.0).max(0.0),
-            HorizontalAlignment::End => (available - child).max(0.0),
+            HorizontalAlignment::Start => -1.0,
+            HorizontalAlignment::CenterHorizontally => 0.0,
+            HorizontalAlignment::End => 1.0,
         }
+    }
+
+    /// The offset of a `child` wide in `available` width, on the device
+    /// pixel grid of `density`: see [`bias_offset`].
+    pub fn align(&self, available: f32, child: f32, density: f32) -> f32 {
+        bias_offset(self.bias(), available, child, density)
     }
 }
 
@@ -65,12 +81,22 @@ pub enum VerticalAlignment {
 }
 
 impl VerticalAlignment {
-    /// Computes the vertical offset for alignment.
-    pub fn align(&self, available: f32, child: f32) -> f32 {
+    /// Compose's bias for this alignment: -1 the top, 0 the middle, 1 the bottom.
+    pub fn bias(&self) -> f32 {
         match self {
-            VerticalAlignment::Top => 0.0,
-            VerticalAlignment::CenterVertically => ((available - child) / 2.0).max(0.0),
-            VerticalAlignment::Bottom => (available - child).max(0.0),
+            VerticalAlignment::Top => -1.0,
+            VerticalAlignment::CenterVertically => 0.0,
+            VerticalAlignment::Bottom => 1.0,
         }
     }
+
+    /// The offset of a `child` tall in `available` height, on the device
+    /// pixel grid of `density`: see [`bias_offset`].
+    pub fn align(&self, available: f32, child: f32, density: f32) -> f32 {
+        bias_offset(self.bias(), available, child, density)
+    }
 }
+
+#[cfg(test)]
+#[path = "tests/alignment_tests.rs"]
+mod tests;

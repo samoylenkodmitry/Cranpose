@@ -2,11 +2,15 @@ use std::{fmt, mem::size_of, rc::Rc};
 
 use cranpose_foundation::{ModifierNodeChain, NodeCapabilities, PointerEvent, PointerEventKind};
 use cranpose_ui_graphics::{
-    ColorFilter, EdgeInsets, GraphicsLayer, LayerShape, PointerIcon, RenderEffect,
-    RoundedCornerShape,
+    ColorFilter, EdgeInsets, GraphicsLayer, LayerShape, PointerIcon, Rect, RenderEffect,
+    RoundedCornerShape, Size,
 };
+use smallvec::SmallVec;
 
-use super::{ModifierChainHandle, Point};
+use super::{
+    ModifierChainHandle, Point,
+    coordinator_geometry::{CoordinatorGeometry, CoordinatorRect},
+};
 use crate::{
     draw::DrawCommand,
     modifier::{
@@ -36,6 +40,7 @@ pub struct ModifierNodeSlices {
     translated_content_context_identity: Option<usize>,
     translated_content_offset_reader: Option<Rc<dyn Fn() -> Point>>,
     text_content: Option<Rc<crate::text::AnnotatedString>>,
+    text_coordinator: Option<CoordinatorRect>,
     text_style: Option<TextStyle>,
     text_layout_options: Option<TextLayoutOptions>,
     prepared_text_layout: Option<MeasuredTextLayoutSource>,
@@ -87,6 +92,7 @@ impl Clone for ModifierNodeSlices {
             translated_content_context_identity: self.translated_content_context_identity,
             translated_content_offset_reader: self.translated_content_offset_reader.clone(),
             text_content: self.text_content.clone(),
+            text_coordinator: self.text_coordinator.clone(),
             text_style: self.text_style.clone(),
             text_layout_options: self.text_layout_options,
             prepared_text_layout: self.prepared_text_layout.clone(),
@@ -199,11 +205,11 @@ impl ModifierNodeSlices {
 
     fn insert_background_draw(
         &mut self,
-        insert_index: Option<usize>,
+        insert_index: usize,
         precedes_layer: bool,
         command: DrawCommand,
     ) {
-        let insert_index = insert_index.unwrap_or(0).min(self.draw_commands.len());
+        let insert_index = insert_index.min(self.draw_commands.len());
         self.draw_commands.insert(insert_index, command);
         if let Some(boundary) = self.layer_draw_boundary.as_mut()
             && precedes_layer
@@ -293,6 +299,20 @@ impl ModifierNodeSlices {
 
     pub fn annotated_text(&self) -> Option<&Rc<crate::text::AnnotatedString>> {
         self.text_content.as_ref()
+    }
+
+    /// Where the text draws in a node of `node_size`: the rect its layout put
+    /// the text in, after every layout modifier before it.
+    pub fn text_content_rect(&self, node_size: Size) -> Rect {
+        self.text_coordinator.as_ref().map_or(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: node_size.width,
+                height: node_size.height,
+            },
+            |coordinator| coordinator.rect(node_size),
+        )
     }
 
     pub fn text_style(&self) -> Option<&TextStyle> {
@@ -424,6 +444,7 @@ impl ModifierNodeSlices {
         self.translated_content_context_identity = None;
         self.translated_content_offset_reader = None;
         self.text_content = None;
+        self.text_coordinator = None;
         self.text_style = None;
         self.text_layout_options = None;
         self.prepared_text_layout = None;
@@ -480,10 +501,11 @@ fn collect_pointer_icon(node: &dyn std::any::Any, slices: &mut ModifierNodeSlice
     }
 }
 
-/// Collects modifier node slices directly from a reconciled [`ModifierNodeChain`].
+/// Collects modifier node slices directly from a reconciled [`ModifierNodeChain`]
+/// that no layout places: its draws sit inside the padding before them.
 pub fn collect_modifier_slices(chain: &ModifierNodeChain) -> ModifierNodeSlices {
     let mut slices = ModifierNodeSlices::default();
-    collect_modifier_slices_into(chain, &mut slices);
+    collect_modifier_slices_into(chain, &mut slices, &Rc::default(), 1.0);
     slices
 }
 
@@ -494,19 +516,29 @@ pub fn collect_modifier_slices(chain: &ModifierNodeChain) -> ModifierNodeSlices 
 /// Collects `chain`'s slices into the node's shared snapshot. The snapshot's
 /// storage is reused when nothing else holds it; one the render graph still
 /// shares is left to the graph and replaced, not cloned only to be cleared.
+/// Its draws and text read their place from `geometry`, which the node's
+/// layout writes, and until then sit inside the padding before them on the
+/// device pixel grid of `density`.
 pub(crate) fn collect_modifier_slices_into_shared(
     chain: &ModifierNodeChain,
     slices: &mut Rc<ModifierNodeSlices>,
+    geometry: &Rc<CoordinatorGeometry>,
+    density: f32,
 ) {
     if Rc::get_mut(slices).is_none() {
         *slices = Rc::default();
     }
     if let Some(slices) = Rc::get_mut(slices) {
-        collect_modifier_slices_into(chain, slices);
+        collect_modifier_slices_into(chain, slices, geometry, density);
     }
 }
 
-fn collect_modifier_slices_into(chain: &ModifierNodeChain, slices: &mut ModifierNodeSlices) {
+fn collect_modifier_slices_into(
+    chain: &ModifierNodeChain,
+    slices: &mut ModifierNodeSlices,
+    geometry: &Rc<CoordinatorGeometry>,
+    density: f32,
+) {
     slices.clear();
 
     let caps = chain.capabilities();
@@ -518,8 +550,12 @@ fn collect_modifier_slices_into(chain: &ModifierNodeChain, slices: &mut Modifier
         return;
     }
 
-    let mut background = BackgroundSlot::default();
+    let mut backgrounds = Backgrounds::default();
     let mut padding = EdgeInsets::default();
+    // The layout nodes walked so far: the index of the coordinator the next
+    // draw belongs to, which is the next layout node's (or a layout node's
+    // own) or, past the last one, the node's content.
+    let mut layout_ordinal = 0_usize;
 
     for node_ref in chain.head_to_tail() {
         let node_caps = node_ref.kind_set();
@@ -541,23 +577,29 @@ fn collect_modifier_slices_into(chain: &ModifierNodeChain, slices: &mut Modifier
             }
 
             if has_draw && node_caps.intersects(NodeCapabilities::DRAW) {
-                collect_draw_node(node, padding, slices, &mut background);
+                let draw = DrawSite {
+                    coordinator: CoordinatorRect::new(geometry, layout_ordinal, padding),
+                    displaceable: has_layout,
+                };
+                collect_draw_node(node, &draw, slices, &mut backgrounds);
             }
 
             if has_layout && node_caps.intersects(NodeCapabilities::LAYOUT) {
                 if let Some(padding_node) = any.downcast_ref::<PaddingNode>() {
-                    let p = padding_node.padding();
-                    padding.left += p.left;
-                    padding.top += p.top;
-                    padding.right += p.right;
-                    padding.bottom += p.bottom;
+                    padding +=
+                        crate::modifier_nodes::device_padding(padding_node.padding(), density);
                 }
 
                 if let Some(motion_context_node) = any.downcast_ref::<MotionContextAnimatedNode>() {
                     slices.motion_context_animated = motion_context_node.is_active();
                 }
 
-                collect_window_geometry_sink(any, padding, slices);
+                collect_window_geometry_sink(
+                    any,
+                    // The text a selectable wraps is the layout node after it.
+                    CoordinatorRect::new(geometry, layout_ordinal + 1, padding),
+                    slices,
+                );
 
                 if let Some(translated_content_node) =
                     any.downcast_ref::<TranslatedContentContextNode>()
@@ -571,6 +613,8 @@ fn collect_modifier_slices_into(chain: &ModifierNodeChain, slices: &mut Modifier
 
                 if let Some(text_node) = any.downcast_ref::<TextModifierNode>() {
                     slices.text_content = Some(text_node.annotated_text());
+                    slices.text_coordinator =
+                        Some(CoordinatorRect::new(geometry, layout_ordinal, padding));
                     slices.text_style = Some(text_node.style().clone());
                     slices.text_layout_options = Some(text_node.options());
                     slices.prepared_text_layout = Some(MeasuredTextLayoutSource::Text(
@@ -589,64 +633,113 @@ fn collect_modifier_slices_into(chain: &ModifierNodeChain, slices: &mut Modifier
                     slices.text_pan = text_field_node.text_pan_resolver();
                     slices.text_window_origin = Some(text_field_node.window_origin_sink());
 
-                    text_field_node.set_content_offset(padding.left);
-                    text_field_node.set_content_y_offset(padding.top);
+                    let coordinator = CoordinatorRect::new(geometry, layout_ordinal, padding);
+                    text_field_node.set_content_origin(coordinator.clone());
+                    slices.text_coordinator = Some(coordinator);
                 }
+                layout_ordinal += 1;
             }
         });
     }
 
-    background.insert_into(slices);
+    backgrounds.insert_into(slices);
 }
 
-/// The chain's background as the walk finds it: the last background wins,
-/// drawn at its place in the draw order, inside the padding declared before
-/// it, in the latest corner shape.
+/// Where a draw modifier draws: in its coordinator's rect, which only moves
+/// off the node's own rect when the chain has layout modifiers.
+struct DrawSite {
+    coordinator: CoordinatorRect,
+    displaceable: bool,
+}
+
+/// The chain's backgrounds as the walk finds them. Each draws at its place in
+/// the draw order, in its coordinator's rect, as Compose draws every
+/// background of a chain; a corner shape shapes the nearest background
+/// before it, or the next one when none comes before.
 #[derive(Default)]
+struct Backgrounds {
+    slots: SmallVec<[BackgroundSlot; 2]>,
+    pending_shape: Option<RoundedCornerShape>,
+    last_shape: Option<RoundedCornerShape>,
+}
+
 struct BackgroundSlot {
-    color: Option<crate::modifier::Color>,
-    inset: EdgeInsets,
-    insert_index: Option<usize>,
+    color: crate::modifier::Color,
+    coordinator: CoordinatorRect,
+    insert_index: usize,
     precedes_layer: bool,
     corner_shape: Option<RoundedCornerShape>,
 }
 
-impl BackgroundSlot {
-    fn insert_into(self, slices: &mut ModifierNodeSlices) {
-        slices.corner_shape = self.corner_shape;
-        let Some(color) = self.color else {
-            return;
-        };
-        let (inset, corner_shape) = (self.inset, self.corner_shape);
-        let draw_cmd = Rc::new(move |scope: &mut cranpose_ui_graphics::DrawScopeDefault| {
-            use cranpose_ui_graphics::{CornerRadii, DrawScope as _};
-
-            use crate::modifier::Brush;
-
-            let rect = inset.inset_rect(scope.size());
-            let brush = Brush::solid(color);
-            if let Some(shape) = corner_shape {
-                let radii: CornerRadii = shape.resolve(rect.width, rect.height);
-                scope.draw_round_rect_at(rect, brush, radii);
-            } else {
-                scope.draw_rect_at(rect, brush);
-            }
+impl Backgrounds {
+    fn push(
+        &mut self,
+        color: crate::modifier::Color,
+        shape: Option<RoundedCornerShape>,
+        site: &DrawSite,
+        slices: &ModifierNodeSlices,
+    ) {
+        let corner_shape = shape.or_else(|| self.pending_shape.take());
+        if shape.is_some() {
+            self.last_shape = shape;
+        }
+        self.slots.push(BackgroundSlot {
+            color,
+            coordinator: site.coordinator.clone(),
+            insert_index: slices.draw_commands.len(),
+            precedes_layer: slices.layer_draw_boundary.is_none(),
+            corner_shape,
         });
-        slices.insert_background_draw(
-            self.insert_index,
-            self.precedes_layer,
-            DrawCommand::Behind(draw_cmd),
-        );
+    }
+
+    fn shape(&mut self, shape: RoundedCornerShape) {
+        self.last_shape = Some(shape);
+        match self.slots.last_mut() {
+            Some(slot) => slot.corner_shape = Some(shape),
+            None => self.pending_shape = Some(shape),
+        }
+    }
+
+    /// Inserts every background at its place, the last first so the places
+    /// of those before it still hold.
+    fn insert_into(self, slices: &mut ModifierNodeSlices) {
+        slices.corner_shape = self.last_shape;
+        for slot in self.slots.into_iter().rev() {
+            let BackgroundSlot {
+                color,
+                coordinator,
+                insert_index,
+                precedes_layer,
+                corner_shape,
+            } = slot;
+            let draw_cmd = Rc::new(move |scope: &mut cranpose_ui_graphics::DrawScopeDefault| {
+                use cranpose_ui_graphics::{CornerRadii, DrawScope as _};
+
+                use crate::modifier::Brush;
+
+                let rect = coordinator.rect(scope.size());
+                let brush = Brush::solid(color);
+                if let Some(shape) = corner_shape {
+                    let radii: CornerRadii = shape.resolve(rect.width, rect.height);
+                    scope.draw_round_rect_at(rect, brush, radii);
+                } else {
+                    scope.draw_rect_at(rect, brush);
+                }
+            });
+            slices.insert_background_draw(
+                insert_index,
+                precedes_layer,
+                DrawCommand::Behind(draw_cmd),
+            );
+        }
     }
 }
 
-/// Collects what a draw-capable node contributes, drawn inside `padding`, the
-/// layout padding declared before it.
 /// Where layout reports a node's window geometry: a scroll viewport's rect,
-/// or the origin of a selectable text, whose content starts after `padding`.
+/// or the origin of a selectable text, whose content is `text`'s rect.
 fn collect_window_geometry_sink(
     any: &dyn std::any::Any,
-    padding: EdgeInsets,
+    text: CoordinatorRect,
     slices: &mut ModifierNodeSlices,
 ) {
     if let Some(reporter) = any.downcast_ref::<WindowRectReporterNode>() {
@@ -654,32 +747,24 @@ fn collect_window_geometry_sink(
     }
     if let Some(selectable) = any.downcast_ref::<SelectableTextNode>() {
         slices.text_window_origin = Some(selectable.geometry().node_origin_sink());
-        selectable.geometry().set_content_offset(Point {
-            x: padding.left,
-            y: padding.top,
-        });
+        selectable.geometry().set_content_origin(text);
     }
 }
 
+/// Collects what a draw-capable node contributes, drawn at `site`.
 fn collect_draw_node(
     node: &dyn cranpose_foundation::ModifierNode,
-    padding: EdgeInsets,
+    site: &DrawSite,
     slices: &mut ModifierNodeSlices,
-    background: &mut BackgroundSlot,
+    backgrounds: &mut Backgrounds,
 ) {
     let any = node.as_any();
     if let Some(bg_node) = any.downcast_ref::<BackgroundNode>() {
-        background.color = Some(bg_node.color());
-        background.inset = padding;
-        background.insert_index = Some(slices.draw_commands.len());
-        background.precedes_layer = slices.layer_draw_boundary.is_none();
-        if bg_node.shape().is_some() {
-            background.corner_shape = bg_node.shape();
-        }
+        backgrounds.push(bg_node.color(), bg_node.shape(), site, slices);
     }
 
     if let Some(shape_node) = any.downcast_ref::<CornerShapeNode>() {
-        background.corner_shape = Some(shape_node.shape());
+        backgrounds.shape(shape_node.shape());
     }
 
     if let Some(commands) = any.downcast_ref::<DrawCommandNode>() {
@@ -687,12 +772,12 @@ fn collect_draw_node(
             commands
                 .observed_commands()
                 .into_iter()
-                .map(|command| inset_draw_command(command, padding)),
+                .map(|command| placed_draw_command(command, site)),
         );
     }
 
     if let Some(draw_node) = node.as_draw_node() {
-        collect_draw_closures(draw_node, padding, slices);
+        collect_draw_closures(draw_node, site, slices);
     }
 
     if let Some(layer_node) = any.downcast_ref::<GraphicsLayerNode>() {
@@ -710,36 +795,44 @@ fn collect_draw_node(
 /// when it has no overlay closure.
 fn collect_draw_closures(
     draw_node: &dyn cranpose_foundation::DrawModifierNode,
-    padding: EdgeInsets,
+    site: &DrawSite,
     slices: &mut ModifierNodeSlices,
 ) {
     if let Some(closure) = draw_node.create_behind_draw_closure() {
         slices
             .draw_commands
-            .push(inset_draw_command(DrawCommand::Behind(closure), padding));
+            .push(placed_draw_command(DrawCommand::Behind(closure), site));
     }
     if let Some(closure) = draw_node.create_draw_closure() {
         slices
             .draw_commands
-            .push(inset_draw_command(DrawCommand::Overlay(closure), padding));
+            .push(placed_draw_command(DrawCommand::Overlay(closure), site));
     }
 }
 
-/// `command` drawn where a draw modifier after `padding` draws: in the node's
-/// rect shrunk by that padding, as Compose places it.
-fn inset_draw_command(command: DrawCommand, padding: EdgeInsets) -> DrawCommand {
-    if padding.is_zero() {
+/// `command` drawn where Compose draws a draw modifier: in its coordinator's
+/// rect, sized to it, with what it records moved to that rect.
+fn placed_draw_command(command: DrawCommand, site: &DrawSite) -> DrawCommand {
+    if !site.displaceable {
         return command;
     }
-    let inset = |draw: crate::draw::DrawCommandFn| -> crate::draw::DrawCommandFn {
+    let place = |draw: crate::draw::DrawCommandFn| -> crate::draw::DrawCommandFn {
+        let coordinator = site.coordinator.clone();
         Rc::new(move |scope: &mut cranpose_ui_graphics::DrawScopeDefault| {
-            scope.inset(padding, |inner| draw(inner));
+            use cranpose_ui_graphics::DrawScope as _;
+
+            let insets = coordinator.insets(scope.size());
+            if insets.is_zero() {
+                draw(scope);
+            } else {
+                scope.inset(insets, |inner| draw(inner));
+            }
         })
     };
     match command {
-        DrawCommand::Behind(draw) => DrawCommand::Behind(inset(draw)),
-        DrawCommand::WithContent(draw) => DrawCommand::WithContent(inset(draw)),
-        DrawCommand::Overlay(draw) => DrawCommand::Overlay(inset(draw)),
+        DrawCommand::Behind(draw) => DrawCommand::Behind(place(draw)),
+        DrawCommand::WithContent(draw) => DrawCommand::WithContent(place(draw)),
+        DrawCommand::Overlay(draw) => DrawCommand::Overlay(place(draw)),
     }
 }
 

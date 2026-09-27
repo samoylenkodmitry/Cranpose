@@ -14,6 +14,7 @@ kotlin {
 dependencies {
     implementation(compose.desktop.currentOs)
     implementation(compose.foundation)
+    implementation(compose.material3)
 }
 
 tasks.register<JavaExec>("renderScenes") {

@@ -1260,12 +1260,19 @@ impl TabLensDrawing {
     }
 
     /// The lens node carried across the bar, drawing one of its glass layers.
+    /// It is lowered to its top by translation, not by a layout offset,
+    /// which would land it on a whole device pixel: the native lens sits
+    /// between pixels.
     fn glass_modifier(self: &Rc<Self>, layer: usize) -> Modifier {
         let (node, glass) = (Rc::clone(self), Rc::clone(self));
+        let node_top = self.lens.node_top;
         Modifier::empty()
             .required_size(self.lens.node_size)
-            .offset(0.0, self.lens.node_top)
-            .graphics_layer(move || node.lens.layer(&node.motion))
+            .graphics_layer(move || {
+                let mut layer = node.lens.layer(&node.motion);
+                layer.translation_y += node_top;
+                layer
+            })
             .graphics_layer(move || glass.glass_layer(layer))
     }
 }

@@ -54,12 +54,12 @@ pub struct TextSelection {
 }
 
 /// Where a registered text's content sits in the window: layout writes the
-/// node's origin, slice collection the padding in front of the text, and the
-/// text's highlight the size its content draws in.
+/// node's origin and places the text in it, and the text's highlight the
+/// size its content draws in.
 #[derive(Default)]
 pub(crate) struct SelectableGeometry {
     node_origin: Rc<Cell<Point>>,
-    content_offset: Cell<Point>,
+    content_origin: RefCell<crate::modifier::CoordinatorRect>,
     content_size: Cell<Size>,
 }
 
@@ -68,8 +68,8 @@ impl SelectableGeometry {
         Rc::clone(&self.node_origin)
     }
 
-    pub(crate) fn set_content_offset(&self, offset: Point) {
-        self.content_offset.set(offset);
+    pub(crate) fn set_content_origin(&self, origin: crate::modifier::CoordinatorRect) {
+        *self.content_origin.borrow_mut() = origin;
     }
 
     pub(crate) fn set_content_size(&self, size: Size) {
@@ -78,7 +78,7 @@ impl SelectableGeometry {
 
     fn rect(&self) -> Rect {
         let origin = self.node_origin.get();
-        let offset = self.content_offset.get();
+        let offset = self.content_origin.borrow().origin();
         let size = self.content_size.get();
         Rect {
             x: origin.x + offset.x,

@@ -29,8 +29,10 @@ impl MockMeasurable {
 }
 
 impl Measurable for MockMeasurable {
-    fn measure(&self, _constraints: Constraints) -> Placeable {
-        Placeable::value(self.width, self.height, self.node_id)
+    /// Its size coerced into `constraints`, as every Compose placeable is.
+    fn measure(&self, constraints: Constraints) -> Placeable {
+        let (width, height) = constraints.constrain(self.width, self.height);
+        Placeable::value(width, height, self.node_id)
     }
 
     fn min_intrinsic_width(&self, _height: f32) -> f32 {
@@ -91,7 +93,7 @@ impl Measurable for FillWidthMeasurable {
 /// row 100 wide.
 fn width_offered_after(spacing: LinearArrangement, fixed_width: f32) -> f32 {
     let offered = std::rc::Rc::new(std::cell::Cell::new(f32::NAN));
-    let policy = FlexMeasurePolicy::row(spacing, VerticalAlignment::Top);
+    let policy = FlexMeasurePolicy::row(spacing, VerticalAlignment::Top, 1.0);
     let measurables: Vec<Box<dyn Measurable>> = vec![
         Box::new(MockMeasurable::new(fixed_width, 20.0, 1)),
         Box::new(FillWidthMeasurable {
@@ -174,7 +176,7 @@ fn box_child_alignment_overrides_content_alignment() {
 
 #[test]
 fn row_child_alignment_overrides_vertical_alignment() {
-    let policy = FlexMeasurePolicy::row(LinearArrangement::Start, VerticalAlignment::Top);
+    let policy = FlexMeasurePolicy::row(LinearArrangement::Start, VerticalAlignment::Top, 1.0);
     let measurables: Vec<Box<dyn Measurable>> = vec![Box::new(
         MockMeasurable::new(20.0, 10.0, 1).with_parent_data(cranpose_ui_layout::ParentData {
             row_alignment: Some(VerticalAlignment::Bottom),
@@ -193,7 +195,8 @@ fn row_child_alignment_overrides_vertical_alignment() {
 
 #[test]
 fn column_child_alignment_overrides_horizontal_alignment() {
-    let policy = FlexMeasurePolicy::column(LinearArrangement::Start, HorizontalAlignment::Start);
+    let policy =
+        FlexMeasurePolicy::column(LinearArrangement::Start, HorizontalAlignment::Start, 1.0);
     let measurables: Vec<Box<dyn Measurable>> = vec![Box::new(
         MockMeasurable::new(20.0, 10.0, 1).with_parent_data(cranpose_ui_layout::ParentData {
             column_alignment: Some(HorizontalAlignment::End),
@@ -212,7 +215,8 @@ fn column_child_alignment_overrides_horizontal_alignment() {
 
 #[test]
 fn column_measure_policy_sums_heights() {
-    let policy = FlexMeasurePolicy::column(LinearArrangement::Start, HorizontalAlignment::Start);
+    let policy =
+        FlexMeasurePolicy::column(LinearArrangement::Start, HorizontalAlignment::Start, 1.0);
     let measurables: Vec<Box<dyn Measurable>> = vec![
         Box::new(MockMeasurable::new(40.0, 20.0, 1)),
         Box::new(MockMeasurable::new(60.0, 30.0, 2)),
@@ -241,6 +245,7 @@ fn column_spaced_by_preserves_spacing_when_content_overflows() {
     let policy = FlexMeasurePolicy::column(
         LinearArrangement::SpacedBy(12.0),
         HorizontalAlignment::Start,
+        1.0,
     );
     let measurables: Vec<Box<dyn Measurable>> = vec![
         Box::new(MockMeasurable::new(80.0, 48.0, 1)),
@@ -272,6 +277,7 @@ fn row_measure_policy_sums_widths() {
     let policy = FlexMeasurePolicy::row(
         LinearArrangement::Start,
         VerticalAlignment::CenterVertically,
+        1.0,
     );
     let measurables: Vec<Box<dyn Measurable>> = vec![
         Box::new(MockMeasurable::new(40.0, 20.0, 1)),
@@ -312,7 +318,8 @@ fn built_in_policies_measure_into_reuses_caller_placements() {
     placements.push(Placement::new(999, 1.0, 1.0, 0));
     let original_capacity = placements.capacity();
 
-    let policy = FlexMeasurePolicy::column(LinearArrangement::Start, HorizontalAlignment::Start);
+    let policy =
+        FlexMeasurePolicy::column(LinearArrangement::Start, HorizontalAlignment::Start, 1.0);
     let size = policy.measure_into(&test_scope(), &measurables, constraints, &mut placements);
 
     assert_eq!(size.width, 60.0);
@@ -509,4 +516,36 @@ fn flow_row_intrinsics_follow_the_wrap() {
     assert_eq!(policy.max_intrinsic_width(&measurables, 100.0), 110.0);
     assert_eq!(policy.max_intrinsic_height(&measurables, 100.0), 50.0);
     assert_eq!(policy.max_intrinsic_height(&measurables, 110.0), 25.0);
+}
+
+#[test]
+fn weighted_shares_hand_the_rounding_back_one_pixel_per_child() {
+    let mut shares = WeightShares::new(100.0, [1.0, 1.0, 1.0].into_iter(), 1.0);
+    assert_eq!(
+        [
+            shares.next_share(1.0),
+            shares.next_share(1.0),
+            shares.next_share(1.0)
+        ],
+        [34.0, 33.0, 33.0]
+    );
+
+    // Two halves of 101 round up to 51 each, a pixel too many, which the
+    // first child gives back.
+    let mut halves = WeightShares::new(101.0, [1.0, 1.0].into_iter(), 1.0);
+    assert_eq!(
+        [halves.next_share(1.0), halves.next_share(1.0)],
+        [50.0, 51.0]
+    );
+}
+
+#[test]
+fn weighted_shares_are_whole_device_pixels() {
+    let density = 2.0;
+    let mut shares = WeightShares::new(10.5, [1.0, 2.0].into_iter(), density);
+    let first = shares.next_share(1.0);
+    let second = shares.next_share(2.0);
+    assert_eq!(first + second, 10.5);
+    assert_eq!((first * density).fract(), 0.0);
+    assert_eq!((second * density).fract(), 0.0);
 }

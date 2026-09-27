@@ -107,7 +107,7 @@ use cranpose_foundation::{
 };
 use cranpose_ui_graphics::{CompositingStrategy, Point, Rect, Size};
 use cranpose_ui_layout::{
-    Constraints, Measurable, MeasurePolicy, MeasureResult, MeasureScope, Placement,
+    Constraints, Measurable, MeasurePolicy, MeasureResult, MeasureScope, Placement, round_to_px,
 };
 
 use crate::{
@@ -117,7 +117,7 @@ use crate::{
     modifier::{GraphicsLayer, Modifier, PointerEventKind, PointerInputScope, TransformOrigin},
     round_scaling_list::{
         CentreAnchor, PlacedRow, ScaleAlpha, ScalingParams, leading_auto_centring_spacer,
-        place_row_with, round_to_px, trailing_auto_centring_spacer,
+        place_row_with, trailing_auto_centring_spacer,
     },
     round_scroll_indicator::{IndicatorItem, ScalingList, ThumbLength, scaling_list_items_with},
     subcompose_layout::{

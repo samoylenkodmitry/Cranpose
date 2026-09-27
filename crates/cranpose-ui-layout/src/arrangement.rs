@@ -1,9 +1,13 @@
 //! Arrangement strategies for distributing children along an axis
 
+use crate::round_to_px;
+
 /// Trait implemented by arrangement strategies that distribute children on an axis.
 pub trait Arrangement {
-    /// Computes the position for each child given the available space and their sizes.
-    fn arrange(&self, total_size: f32, sizes: &[f32], out_positions: &mut [f32]);
+    /// Computes the position for each child given the available space and
+    /// their sizes, on the device pixel grid of `density`, where Compose
+    /// places children.
+    fn arrange(&self, density: f32, total_size: f32, sizes: &[f32], out_positions: &mut [f32]);
 }
 
 /// Arrangement strategy matching Jetpack Compose's linear arrangements.
@@ -31,63 +35,80 @@ impl LinearArrangement {
         Self::SpacedBy(spacing)
     }
 
-    fn total_children_size(sizes: &[f32]) -> f32 {
-        sizes.iter().copied().sum()
+    /// The space `SpacedBy` puts between children, on the device pixel grid
+    /// of `density` as Compose's `roundToPx` puts it; none for the others.
+    pub fn spacing(&self, density: f32) -> f32 {
+        match *self {
+            Self::SpacedBy(spacing) => round_to_px(spacing.max(0.0), density),
+            _ => 0.0,
+        }
     }
 
-    fn fill_positions(start: f32, gap: f32, sizes: &[f32], out_positions: &mut [f32]) {
+    /// Compose's `placeLeftOrTop` and its `placeCenter`, `placeSpace*` and
+    /// `placeRightOrBottom` kin: each child `gap` after the one before, the
+    /// first at `start`, every position rounded to a device pixel.
+    fn fill_positions(
+        density: f32,
+        start: f32,
+        gap: f32,
+        sizes: &[f32],
+        out_positions: &mut [f32],
+    ) {
         debug_assert_eq!(sizes.len(), out_positions.len());
         let mut cursor = start;
-        for (index, (size, position)) in sizes.iter().zip(out_positions.iter_mut()).enumerate() {
-            *position = cursor;
-            cursor += size;
-            if index + 1 < sizes.len() {
-                cursor += gap;
-            }
+        for (size, position) in sizes.iter().zip(out_positions.iter_mut()) {
+            *position = round_to_px(cursor, density);
+            cursor += size + gap;
+        }
+    }
+
+    /// Compose's `SpacedAligned` without an alignment: each child after the
+    /// one before and `spacing` more, but never past the end of
+    /// `total_size`, and the spacing after it only as wide as what is left.
+    fn spaced_positions(spacing: f32, total_size: f32, sizes: &[f32], out_positions: &mut [f32]) {
+        let mut occupied = 0.0_f32;
+        for (&size, position) in sizes.iter().zip(out_positions.iter_mut()) {
+            *position = occupied.min(total_size - size);
+            let space_after = spacing.min(total_size - *position - size);
+            occupied = *position + size + space_after;
         }
     }
 }
 
 impl Arrangement for LinearArrangement {
-    fn arrange(&self, total_size: f32, sizes: &[f32], out_positions: &mut [f32]) {
+    fn arrange(&self, density: f32, total_size: f32, sizes: &[f32], out_positions: &mut [f32]) {
         debug_assert_eq!(sizes.len(), out_positions.len());
         if sizes.is_empty() {
             return;
         }
 
-        let children_total = Self::total_children_size(sizes);
-        let remaining = total_size - children_total;
+        let remaining = total_size - sizes.iter().sum::<f32>();
+        let count = sizes.len() as f32;
 
         match *self {
-            LinearArrangement::Start => Self::fill_positions(0.0, 0.0, sizes, out_positions),
+            LinearArrangement::Start => {
+                Self::fill_positions(density, 0.0, 0.0, sizes, out_positions);
+            }
             LinearArrangement::End => {
-                let start = remaining;
-                Self::fill_positions(start, 0.0, sizes, out_positions);
+                Self::fill_positions(density, remaining, 0.0, sizes, out_positions);
             }
             LinearArrangement::Center => {
-                let start = remaining / 2.0;
-                Self::fill_positions(start, 0.0, sizes, out_positions);
+                Self::fill_positions(density, remaining / 2.0, 0.0, sizes, out_positions);
             }
             LinearArrangement::SpaceBetween => {
-                let gap = if sizes.len() <= 1 {
-                    0.0
-                } else {
-                    remaining / (sizes.len() as f32 - 1.0)
-                };
-                Self::fill_positions(0.0, gap, sizes, out_positions);
+                let gap = remaining / (count - 1.0).max(1.0);
+                Self::fill_positions(density, 0.0, gap, sizes, out_positions);
             }
             LinearArrangement::SpaceAround => {
-                let gap = remaining / sizes.len() as f32;
-                let start = gap / 2.0;
-                Self::fill_positions(start, gap, sizes, out_positions);
+                let gap = remaining / count;
+                Self::fill_positions(density, gap / 2.0, gap, sizes, out_positions);
             }
             LinearArrangement::SpaceEvenly => {
-                let gap = remaining / (sizes.len() as f32 + 1.0);
-                let start = gap;
-                Self::fill_positions(start, gap, sizes, out_positions);
+                let gap = remaining / (count + 1.0);
+                Self::fill_positions(density, gap, gap, sizes, out_positions);
             }
-            LinearArrangement::SpacedBy(spacing) => {
-                Self::fill_positions(0.0, spacing, sizes, out_positions);
+            LinearArrangement::SpacedBy(_) => {
+                Self::spaced_positions(self.spacing(density), total_size, sizes, out_positions);
             }
         }
     }

@@ -788,6 +788,10 @@ pub struct SubcomposeLayoutNode {
     layout_state: RefCell<LayoutState>,
     cache_handles: LayoutNodeCacheHandles,
     modifier_slices_snapshot: RefCell<Rc<ModifierNodeSlices>>,
+    /// Never written: this node lays its chain out from padding, size and
+    /// offset without coordinators, so its draws sit inside the padding
+    /// before them.
+    coordinator_geometry: Rc<crate::modifier::CoordinatorGeometry>,
     modifier_slices_dirty: Cell<bool>,
 }
 
@@ -808,6 +812,7 @@ impl SubcomposeLayoutNode {
             layout_state: RefCell::new(LayoutState::default()),
             cache_handles: LayoutNodeCacheHandles::default(),
             modifier_slices_snapshot: RefCell::new(Rc::default()),
+            coordinator_geometry: Rc::default(),
             modifier_slices_dirty: Cell::new(true),
         };
         let (invalidations, _) = node.inner.borrow_mut().set_modifier_collect(modifier);
@@ -846,6 +851,7 @@ impl SubcomposeLayoutNode {
             layout_state: RefCell::new(LayoutState::default()),
             cache_handles: LayoutNodeCacheHandles::default(),
             modifier_slices_snapshot: RefCell::new(Rc::default()),
+            coordinator_geometry: Rc::default(),
             modifier_slices_dirty: Cell::new(true),
         };
         let (invalidations, _) = node.inner.borrow_mut().set_modifier_collect(modifier);
@@ -909,8 +915,14 @@ impl SubcomposeLayoutNode {
         if inner.density != density {
             inner.density = density;
             drop(inner);
+            self.modifier_slices_dirty.set(true);
             self.mark_needs_measure();
         }
+    }
+
+    /// The grid the composition provided, which the chain's lengths land on.
+    pub(crate) fn density(&self) -> crate::density::Density {
+        self.inner.borrow().density
     }
 
     pub fn set_modifier(&mut self, modifier: Modifier) {
@@ -932,6 +944,8 @@ impl SubcomposeLayoutNode {
         crate::modifier::collect_modifier_slices_into_shared(
             inner.modifier_chain.chain(),
             &mut snapshot,
+            &self.coordinator_geometry,
+            inner.density.density(),
         );
         self.modifier_slices_dirty.set(false);
     }

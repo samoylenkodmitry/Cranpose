@@ -300,6 +300,9 @@ pub struct LayoutNode {
 
     layout_state: Rc<RefCell<LayoutState>>,
     layout_runtime_state: Rc<RefCell<LayoutRuntimeState>>,
+    /// Where the chain's layout modifiers put their content, written by
+    /// layout and read by the draws and text the slices collect.
+    coordinator_geometry: Rc<crate::modifier::CoordinatorGeometry>,
 }
 
 pub(crate) const RECYCLED_LAYOUT_NODE_POOL_LIMIT: usize = 128;
@@ -344,6 +347,7 @@ impl LayoutNode {
         shell.modifier_slices_dirty = Cell::new(true);
         shell.layout_state = Rc::new(RefCell::new(LayoutState::default()));
         shell.layout_runtime_state = Rc::new(RefCell::new(LayoutRuntimeState::default()));
+        shell.coordinator_geometry = Rc::default();
         shell
     }
 
@@ -382,6 +386,7 @@ impl LayoutNode {
             modifier_slices_dirty: Cell::new(true),
             layout_state: Rc::new(RefCell::new(LayoutState::default())),
             layout_runtime_state: Rc::new(RefCell::new(LayoutRuntimeState::default())),
+            coordinator_geometry: Rc::default(),
         };
         node.sync_modifier_chain();
         node
@@ -443,6 +448,8 @@ impl LayoutNode {
         crate::modifier::collect_modifier_slices_into_shared(
             self.modifier_chain.chain(),
             &mut snapshot,
+            &self.coordinator_geometry,
+            self.density.density(),
         );
         self.modifier_slices_dirty.set(false);
     }
@@ -531,6 +538,7 @@ impl LayoutNode {
         if self.density != density {
             self.density = density;
             self.cache.clear();
+            self.modifier_slices_dirty.set(true);
             self.mark_needs_measure();
         }
     }
@@ -862,6 +870,10 @@ impl LayoutNode {
         self.layout_state.clone()
     }
 
+    pub(crate) fn coordinator_geometry(&self) -> Rc<crate::modifier::CoordinatorGeometry> {
+        Rc::clone(&self.coordinator_geometry)
+    }
+
     pub(crate) fn layout_runtime_state_handle(&self) -> Rc<RefCell<LayoutRuntimeState>> {
         self.layout_runtime_state.clone()
     }
@@ -903,6 +915,7 @@ impl Clone for LayoutNode {
             modifier_slices_dirty: Cell::new(true),
             layout_state: self.layout_state.clone(),
             layout_runtime_state: self.layout_runtime_state.clone(),
+            coordinator_geometry: Rc::clone(&self.coordinator_geometry),
         };
         node.sync_modifier_chain();
         node
@@ -1056,6 +1069,7 @@ impl Node for LayoutNode {
         let measure_policy = previous.measure_policy.clone();
         let layout_state = previous.layout_state.clone();
         let layout_runtime_state = previous.layout_runtime_state.clone();
+        let coordinator_geometry = Rc::clone(&previous.coordinator_geometry);
 
         previous.modifier_chain.chain_mut().detach_nodes();
 
@@ -1078,6 +1092,7 @@ impl Node for LayoutNode {
         compact.virtual_children_count.set(virtual_children_count);
         compact.layout_state = layout_state;
         compact.layout_runtime_state = layout_runtime_state;
+        compact.coordinator_geometry = coordinator_geometry;
         compact.sync_modifier_chain();
         if let Some(id) = node_id {
             let owner_context_id = register_layout_node(id, &compact);

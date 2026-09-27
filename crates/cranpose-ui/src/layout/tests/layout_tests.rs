@@ -511,16 +511,6 @@ fn resolve_dimension_applies_explicit_points() {
 }
 
 #[test]
-fn align_helpers_respect_available_space() {
-    let _app_context = crate::render_state::app_context_test_scope();
-    assert_eq!(
-        align_horizontal(HorizontalAlignment::CenterHorizontally, 100.0, 40.0),
-        30.0
-    );
-    assert_eq!(align_vertical(VerticalAlignment::Bottom, 50.0, 10.0), 40.0);
-}
-
-#[test]
 fn new_layout_node_starts_dirty() {
     let _app_context = crate::render_state::app_context_test_scope();
     let node = LayoutNode::new(Modifier::empty(), Rc::new(MaxSizePolicy));
