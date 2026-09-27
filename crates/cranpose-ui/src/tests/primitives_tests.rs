@@ -633,8 +633,9 @@ fn layout_column_produces_expected_measurements() {
         &crate::text::AnnotatedString::from("Hello"),
         &TextStyle::default(),
     );
-    let expected_root_width = text_metrics.width + 20.0;
-    let expected_root_height = text_metrics.height + 30.0 + 20.0;
+    // A text node takes whole pixels, its measured size rounded up.
+    let expected_root_width = text_metrics.width.ceil() + 20.0;
+    let expected_root_height = text_metrics.height.ceil() + 30.0 + 20.0;
     assert!((root_layout.rect.width - expected_root_width).abs() < 1e-3);
     assert!((root_layout.rect.height - expected_root_height).abs() < 1e-3);
     assert_eq!(root_layout.children.len(), 2);
@@ -646,8 +647,8 @@ fn layout_column_produces_expected_measurements() {
     );
     assert!((text_layout.rect.x - 10.0).abs() < 1e-3);
     assert!((text_layout.rect.y - 10.0).abs() < 1e-3);
-    assert!((text_layout.rect.width - text_metrics.width).abs() < 1e-3);
-    assert!((text_layout.rect.height - text_metrics.height).abs() < 1e-3);
+    assert!((text_layout.rect.width - text_metrics.width.ceil()).abs() < 1e-3);
+    assert!((text_layout.rect.height - text_metrics.height.ceil()).abs() < 1e-3);
 }
 
 #[test]

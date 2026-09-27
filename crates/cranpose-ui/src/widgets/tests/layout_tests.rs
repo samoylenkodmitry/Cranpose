@@ -131,3 +131,17 @@ fn a_caller_modifier_changes_only_when_it_is_not_strictly_equal() {
         "a rebuilt equal modifier is unchanged; a new closure is a change"
     );
 }
+
+#[test]
+fn rows_and_columns_default_to_compose_alignments() {
+    use cranpose_ui_layout::{HorizontalAlignment, LinearArrangement, VerticalAlignment};
+
+    use crate::widgets::{ColumnSpec, RowSpec};
+
+    let row = RowSpec::default();
+    assert_eq!(row.horizontal_arrangement, LinearArrangement::Start);
+    assert_eq!(row.vertical_alignment, VerticalAlignment::Top);
+    let column = ColumnSpec::default();
+    assert_eq!(column.vertical_arrangement, LinearArrangement::Start);
+    assert_eq!(column.horizontal_alignment, HorizontalAlignment::Start);
+}

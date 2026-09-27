@@ -810,18 +810,18 @@ fn a_wear_text_style_asks_for_the_line_box_rule_that_gives_a_38_pixel_header() {
 
 #[test]
 fn wear_tracking_widens_a_string_by_one_letter_space_per_character() {
+    let _app_context = crate::render_state::app_context_test_scope();
     const HEADER: &str = "SETTINGS";
+    // The paragraph's own width: a text node rounds its layout size up to
+    // whole pixels, which would hide a fraction of the tracking.
     let width = |tracking_sp: f32| {
         let mut style = WearTextStyle::TITLE_MEDIUM;
         style.tracking_sp = tracking_sp;
-        let mut composition = compose_widget(move || {
-            Text(
-                HEADER.to_string(),
-                Modifier::empty(),
-                style.resolve(measured_colors().on_background),
-            );
-        });
-        root_size(&mut composition).width
+        crate::text::measure_text(
+            &crate::text::AnnotatedString::from(HEADER),
+            &style.resolve(measured_colors().on_background),
+        )
+        .width
     };
 
     let chars = HEADER.chars().count() as f32;

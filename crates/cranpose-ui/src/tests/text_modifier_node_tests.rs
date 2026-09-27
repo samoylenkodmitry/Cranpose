@@ -216,6 +216,7 @@ fn hash_changes_when_style_changes() {
         text.clone(),
         TextStyle::default(),
         TextLayoutOptions::default(),
+        crate::density::Density::new(1.0, 1.0),
     );
     let style_b = TextStyle {
         span_style: crate::text::SpanStyle {
@@ -224,7 +225,12 @@ fn hash_changes_when_style_changes() {
         },
         ..Default::default()
     };
-    let element_b = TextModifierElement::new(text, style_b, TextLayoutOptions::default());
+    let element_b = TextModifierElement::new(
+        text,
+        style_b,
+        TextLayoutOptions::default(),
+        crate::density::Density::new(1.0, 1.0),
+    );
 
     assert_ne!(element_a, element_b);
     assert_ne!(hash_of(&element_a), hash_of(&element_b));
@@ -242,8 +248,14 @@ fn hash_matches_for_equal_elements() {
     };
     let options = TextLayoutOptions::default();
     let text = Rc::new(AnnotatedString::from("Hash me"));
-    let element_a = TextModifierElement::new(text.clone(), style.clone(), options);
-    let element_b = TextModifierElement::new(text, style, options);
+    let element_a = TextModifierElement::new(
+        text.clone(),
+        style.clone(),
+        options,
+        crate::density::Density::new(1.0, 1.0),
+    );
+    let element_b =
+        TextModifierElement::new(text, style, options, crate::density::Density::new(1.0, 1.0));
 
     assert_eq!(element_a, element_b);
     assert_eq!(hash_of(&element_a), hash_of(&element_b));
@@ -265,6 +277,7 @@ fn measure_uses_attached_node_identity() {
                 Rc::new(AnnotatedString::from("identity")),
                 TextStyle::default(),
                 TextLayoutOptions::default(),
+                crate::density::Density::new(1.0, 1.0),
             );
             let mut context = BasicModifierNodeContext::new();
             context.set_node_id(Some(77));
@@ -298,6 +311,7 @@ fn prepared_layout_cache_reuses_node_snapshot() {
                 Rc::new(AnnotatedString::from("reuse")),
                 TextStyle::default(),
                 TextLayoutOptions::default(),
+                crate::density::Density::new(1.0, 1.0),
             );
             let mut context = BasicModifierNodeContext::new();
             context.set_node_id(Some(88));
@@ -342,6 +356,7 @@ fn prepared_layout_cache_refreshes_when_text_service_changes() {
                 Rc::new(AnnotatedString::from("a\nb\nc")),
                 TextStyle::default(),
                 TextLayoutOptions::default(),
+                crate::density::Density::new(1.0, 1.0),
             );
 
             let first = node.measure_text_content(Some(160.0));
@@ -381,6 +396,7 @@ fn prepared_layout_cache_refreshes_when_system_font_scale_changes() {
                     ..Default::default()
                 },
                 TextLayoutOptions::default(),
+                crate::density::Density::new(1.0, 1.0),
             );
 
             let first = node.measure_text_content(None);
@@ -410,6 +426,7 @@ fn semantics_uses_source_text_for_scaled_overflow() {
             max_lines: 1,
             min_lines: 1,
         },
+        crate::density::Density::new(1.0, 1.0),
     );
     let mut config = SemanticsConfiguration::default();
 
@@ -436,6 +453,7 @@ fn a_text_that_wraps_nothing_keeps_its_layout_while_its_width_grows() {
                 Rc::new(AnnotatedString::from("label")),
                 TextStyle::default(),
                 TextLayoutOptions::default(),
+                crate::density::Density::new(1.0, 1.0),
             );
             let mut prepares = Vec::new();
             for width in [Some(120.0), Some(200.0), None, Some(12.0), Some(10.0)] {
@@ -461,6 +479,7 @@ fn a_text_node_never_makes_its_subtree_modal_or_hidden() {
         Rc::new(AnnotatedString::from("Label")),
         TextStyle::default(),
         TextLayoutOptions::default(),
+        crate::density::Density::new(1.0, 1.0),
     );
     assert_eq!(node.reach(), cranpose_foundation::SemanticsReach::default());
 }

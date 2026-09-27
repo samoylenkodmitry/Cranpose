@@ -33,7 +33,7 @@ impl Default for RowSpec {
     fn default() -> Self {
         Self {
             horizontal_arrangement: LinearArrangement::Start,
-            vertical_alignment: VerticalAlignment::CenterVertically,
+            vertical_alignment: VerticalAlignment::Top,
         }
     }
 }

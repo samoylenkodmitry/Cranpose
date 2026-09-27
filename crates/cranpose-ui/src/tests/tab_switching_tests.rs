@@ -610,54 +610,62 @@ fn tab_switching_layout_pass_handles_conditional_nodes() {
 }
 
 #[composable]
-fn alternating_recursive_node(depth: usize, horizontal: bool, index: usize) {
+fn alternating_recursive_node(modifier: Modifier, depth: usize, horizontal: bool, index: usize) {
     let label = format!("Node {index} depth {depth}");
-    Column(
-        Modifier::empty().padding(6.0),
-        ColumnSpec::default(),
-        move || {
-            Text(
-                label.clone(),
-                Modifier::empty().padding(2.0),
-                TextStyle::default(),
-            );
-            if depth > 1 {
-                if horizontal {
-                    Row(
-                        Modifier::empty().fill_max_width(),
-                        RowSpec::default(),
-                        move || {
-                            for child_idx in 0..2 {
-                                let child_index = index * 2 + child_idx + 1;
-                                cranpose_core::with_key(&(depth, index, child_idx), || {
-                                    alternating_recursive_node(depth - 1, false, child_index);
-                                });
-                            }
-                        },
-                    );
-                } else {
-                    Column(
-                        Modifier::empty().fill_max_width(),
-                        ColumnSpec::default(),
-                        move || {
-                            for child_idx in 0..2 {
-                                let child_index = index * 2 + child_idx + 1;
-                                cranpose_core::with_key(&(depth, index, child_idx), || {
-                                    alternating_recursive_node(depth - 1, true, child_index);
-                                });
-                            }
-                        },
-                    );
-                }
+    Column(modifier.padding(6.0), ColumnSpec::default(), move || {
+        Text(
+            label.clone(),
+            Modifier::empty().padding(2.0),
+            TextStyle::default(),
+        );
+        if depth > 1 {
+            if horizontal {
+                Row(
+                    Modifier::empty().fill_max_width(),
+                    RowSpec::default(),
+                    move || {
+                        for child_idx in 0..2 {
+                            let child_index = index * 2 + child_idx + 1;
+                            // Weighted, as Compose code shares a Row between
+                            // children that fill their width.
+                            cranpose_core::with_key(&(depth, index, child_idx), || {
+                                alternating_recursive_node(
+                                    Modifier::empty().rowWeight(1.0, true),
+                                    depth - 1,
+                                    false,
+                                    child_index,
+                                );
+                            });
+                        }
+                    },
+                );
+            } else {
+                Column(
+                    Modifier::empty().fill_max_width(),
+                    ColumnSpec::default(),
+                    move || {
+                        for child_idx in 0..2 {
+                            let child_index = index * 2 + child_idx + 1;
+                            cranpose_core::with_key(&(depth, index, child_idx), || {
+                                alternating_recursive_node(
+                                    Modifier::empty(),
+                                    depth - 1,
+                                    true,
+                                    child_index,
+                                );
+                            });
+                        }
+                    },
+                );
             }
-        },
-    );
+        }
+    });
 }
 
 #[composable]
 fn recursive_layout_root(depth_state: MutableState<usize>) {
     let depth = depth_state.get();
-    alternating_recursive_node(depth, true, 0);
+    alternating_recursive_node(Modifier::empty(), depth, true, 0);
 }
 
 fn layout_two_child_stats(composition: &mut Composition<MemoryApplier>) -> (usize, usize) {
@@ -751,7 +759,9 @@ fn recursive_layout_nodes_preserve_extent() {
     let mut composition = Composition::new(MemoryApplier::new());
     let key = location_key(file!(), line!(), column!());
     composition
-        .render(key, &mut || alternating_recursive_node(4, true, 0))
+        .render(key, &mut || {
+            alternating_recursive_node(Modifier::empty(), 4, true, 0)
+        })
         .expect("initial render");
 
     let root = composition
@@ -761,9 +771,12 @@ fn recursive_layout_nodes_preserve_extent() {
     let layout = applier
         .compute_layout(
             root,
+            // Room for the whole depth-4 tree: a Column offers each child
+            // only the height the ones before it leave, so a smaller window
+            // would squeeze the deepest rows to nothing, as Compose would.
             crate::modifier::Size {
-                width: 800.0,
-                height: 600.0,
+                width: 2400.0,
+                height: 2400.0,
             },
         )
         .expect("layout should succeed");

@@ -10,7 +10,10 @@ use cranpose_foundation::{
     NodeState, SemanticsConfiguration, SemanticsNode, Size,
 };
 
-use crate::text::{AnnotatedString, TextLayoutOptions, TextStyle};
+use crate::{
+    density::Density,
+    text::{AnnotatedString, TextLayoutOptions, TextStyle},
+};
 
 /// Node that stores text content and handles measurement, drawing, and semantics.
 ///
@@ -24,6 +27,7 @@ use crate::text::{AnnotatedString, TextLayoutOptions, TextStyle};
 #[derive(Debug)]
 pub struct TextModifierNode {
     layout: Rc<TextPreparedLayoutOwner>,
+    density: Density,
     state: NodeState,
 }
 
@@ -179,12 +183,29 @@ impl TextPreparedLayoutHandle {
 }
 
 impl TextModifierNode {
-    pub fn new(text: Rc<AnnotatedString>, style: TextStyle, options: TextLayoutOptions) -> Self {
+    /// A text node sized on `density`'s device pixel grid.
+    pub fn new(
+        text: Rc<AnnotatedString>,
+        style: TextStyle,
+        options: TextLayoutOptions,
+        density: Density,
+    ) -> Self {
         Self {
             layout: Rc::new(TextPreparedLayoutOwner::new(
                 text, style, options, None, None,
             )),
+            density,
             state: NodeState::new(),
+        }
+    }
+
+    /// The text's size rounded up to whole device pixels, as Compose sizes a
+    /// text node (`TextLayoutResult.size` is the paragraph's size, `ceil`ed),
+    /// so whatever follows it starts on the pixel grid.
+    fn pixel_size(&self, size: Size) -> Size {
+        Size {
+            width: self.density.ceil(size.width),
+            height: self.density.ceil(size.height),
         }
     }
 
@@ -271,7 +292,7 @@ impl LayoutModifierNode for TextModifierNode {
             .max_width
             .is_finite()
             .then_some(constraints.max_width);
-        let text_size = self.layout.measure_layout(max_width);
+        let text_size = self.pixel_size(self.layout.measure_layout(max_width));
 
         let width = text_size
             .width
@@ -284,21 +305,25 @@ impl LayoutModifierNode for TextModifierNode {
     }
 
     fn min_intrinsic_width(&self, _measurable: &dyn Measurable, _height: f32) -> f32 {
-        self.measure_text_content(None).width
+        self.pixel_size(self.measure_text_content(None)).width
     }
 
     fn max_intrinsic_width(&self, _measurable: &dyn Measurable, _height: f32) -> f32 {
-        self.measure_text_content(None).width
+        self.pixel_size(self.measure_text_content(None)).width
     }
 
-    fn min_intrinsic_height(&self, _measurable: &dyn Measurable, _width: f32) -> f32 {
-        self.measure_text_content(Some(_width).filter(|w| w.is_finite() && *w > 0.0))
-            .height
+    fn min_intrinsic_height(&self, _measurable: &dyn Measurable, width: f32) -> f32 {
+        self.pixel_size(
+            self.measure_text_content(Some(width).filter(|w| w.is_finite() && *w > 0.0)),
+        )
+        .height
     }
 
-    fn max_intrinsic_height(&self, _measurable: &dyn Measurable, _width: f32) -> f32 {
-        self.measure_text_content(Some(_width).filter(|w| w.is_finite() && *w > 0.0))
-            .height
+    fn max_intrinsic_height(&self, _measurable: &dyn Measurable, width: f32) -> f32 {
+        self.pixel_size(
+            self.measure_text_content(Some(width).filter(|w| w.is_finite() && *w > 0.0)),
+        )
+        .height
     }
 }
 
@@ -327,14 +352,23 @@ pub struct TextModifierElement {
     text: Rc<AnnotatedString>,
     style: TextStyle,
     options: TextLayoutOptions,
+    density: Density,
 }
 
 impl TextModifierElement {
-    pub fn new(text: Rc<AnnotatedString>, style: TextStyle, options: TextLayoutOptions) -> Self {
+    /// A text laid out on `density`'s device pixel grid, the composition's
+    /// [`crate::density::density`] where a `Text` is composed.
+    pub fn new(
+        text: Rc<AnnotatedString>,
+        style: TextStyle,
+        options: TextLayoutOptions,
+        density: Density,
+    ) -> Self {
         Self {
             text,
             style,
             options: options.normalized(),
+            density,
         }
     }
 }
@@ -344,6 +378,7 @@ impl Hash for TextModifierElement {
         self.text.render_hash().hash(state);
         self.style.render_hash().hash(state);
         self.options.hash(state);
+        self.density.density().to_bits().hash(state);
     }
 }
 
@@ -351,10 +386,16 @@ impl ModifierNodeElement for TextModifierElement {
     type Node = TextModifierNode;
 
     fn create(&self) -> Self::Node {
-        TextModifierNode::new(self.text.clone(), self.style.clone(), self.options)
+        TextModifierNode::new(
+            self.text.clone(),
+            self.style.clone(),
+            self.options,
+            self.density,
+        )
     }
 
     fn update(&self, node: &mut Self::Node) {
+        node.density = self.density;
         let current = node.layout.as_ref();
         if current.text != self.text
             || current.style != self.style
