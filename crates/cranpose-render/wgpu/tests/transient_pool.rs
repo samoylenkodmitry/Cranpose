@@ -32,9 +32,13 @@ fn rect(x: f32, y: f32, width: f32, height: f32) -> Rect {
 }
 
 fn glass_layer(index: usize) -> RenderNode {
+    glass_layer_at(index, GLASS_TOP)
+}
+
+fn glass_layer_at(index: usize, top: f32) -> RenderNode {
     RenderNode::Layer(Box::new(shared_test_support::layer_node(
         rect(0.0, 0.0, GLASS_WIDTH, GLASS_HEIGHT),
-        ProjectiveTransform::translation(GLASS_LEFT + index as f32 * GLASS_PITCH, GLASS_TOP),
+        ProjectiveTransform::translation(GLASS_LEFT + index as f32 * GLASS_PITCH, top),
         GraphicsLayer {
             backdrop_effect: Some(RenderEffect::blur(BLUR_RADIUS).then(glass_shader())),
             clip: true,
@@ -103,6 +107,18 @@ fn glass_page() -> RenderGraph {
     glass_page_over(None)
 }
 
+/// The glasses scrolled up by `offset`, so the frame's top edge clips their
+/// captures more the further they go.
+fn scrolled_glass_page(offset: f32) -> RenderGraph {
+    let mut children = support::striped_page(FRAME_WIDTH, FRAME_HEIGHT);
+    for index in 0..3 {
+        children.push(glass_layer_at(index, GLASS_TOP - offset));
+    }
+    support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children)
+}
+
+const SCROLL_OFFSETS: [f32; 8] = [0.0, 7.0, 14.0, 21.0, 28.0, 35.0, 42.0, 49.0];
+
 #[test]
 fn a_repeated_frame_of_glasses_creates_no_transient_textures() {
     let Ok(mut renderer) = support::headless_renderer() else {
@@ -163,6 +179,79 @@ fn a_frame_through_reused_transients_matches_a_renderer_that_never_pooled() {
         .expect("capture should succeed");
     support::assert_same_bytes(
         "glasses resolved through reused transients",
+        FRAME_WIDTH,
+        &reused.pixels,
+        &reference.pixels,
+    );
+}
+
+#[test]
+fn glasses_scrolling_back_and_forth_under_the_top_edge_create_no_textures() {
+    let Ok(mut renderer) = support::headless_renderer() else {
+        eprintln!("skipping (headless WGPU init failed)");
+        return;
+    };
+    renderer.scene_mut().graph = Some(stale_page());
+    renderer
+        .render_current_scene_to_texture(FRAME_WIDTH, FRAME_HEIGHT)
+        .expect("render should succeed");
+    let mut render = |offset: f32| {
+        renderer.scene_mut().graph = Some(scrolled_glass_page(offset));
+        renderer
+            .render_current_scene_to_texture(FRAME_WIDTH, FRAME_HEIGHT)
+            .expect("render should succeed")
+    };
+    let first_sweep: u32 = SCROLL_OFFSETS
+        .iter()
+        .map(|offset| render(*offset).offscreen_news)
+        .sum();
+    assert!(
+        first_sweep <= 6,
+        "the first sweep made {first_sweep} textures: a size class per fourfold shrink of \
+         the atlas and its side texture, not one per frame"
+    );
+    for offset in SCROLL_OFFSETS.iter().rev().chain(SCROLL_OFFSETS.iter()) {
+        let stats = render(*offset);
+        assert_eq!(
+            stats.offscreen_news, 0,
+            "scrolled {offset} px after a sweep, the captures created {} textures (acquired {}) \
+             instead of reusing the sweep's",
+            stats.offscreen_news, stats.offscreen_acquires
+        );
+    }
+}
+
+#[test]
+fn a_scrolled_frame_through_larger_pooled_textures_matches_a_fresh_renderer() {
+    let Ok(mut renderer) = support::headless_renderer() else {
+        eprintln!("skipping (headless WGPU init failed)");
+        return;
+    };
+    support::capture_graph(
+        &mut renderer,
+        scrolled_glass_page(0.0),
+        FRAME_WIDTH,
+        FRAME_HEIGHT,
+    );
+    let offset = SCROLL_OFFSETS[5];
+    let reused = support::capture_graph(
+        &mut renderer,
+        scrolled_glass_page(offset),
+        FRAME_WIDTH,
+        FRAME_HEIGHT,
+    );
+    let stats = renderer.last_frame_stats().expect("stats");
+    assert_eq!(
+        stats.offscreen_news, 0,
+        "the scrolled frame must resolve through the unclipped frame's textures: {stats:?}"
+    );
+    let mut fresh = support::headless_renderer_beside_locked().expect("second headless renderer");
+    fresh.scene_mut().graph = Some(scrolled_glass_page(offset));
+    let reference = fresh
+        .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
+        .expect("capture should succeed");
+    support::assert_same_bytes(
+        "scrolled glasses resolved through larger pooled textures",
         FRAME_WIDTH,
         &reused.pixels,
         &reference.pixels,
