@@ -467,6 +467,13 @@ impl TransientTexturePool {
 
         self.news = self.news.saturating_add(1);
         self.working_set.note(descriptor.estimated_bytes());
+        let big: Vec<String> = self
+            .available
+            .iter()
+            .filter(|e| e.descriptor.estimated_bytes() >= 2_000_000)
+            .map(|e| format!("{}x{}", e.descriptor.width, e.descriptor.height))
+            .collect();
+        log::warn!("[new-texture-big] {big:?}");
         log::warn!(
             "[new-texture] transient {} {}x{} {:?} pool={} held={}",
             descriptor.label,
@@ -497,12 +504,30 @@ impl TransientTexturePool {
             .working_set
             .bytes()
             .clamp(MIN_RETAINED_TRANSIENT_BYTES, MAX_RETAINED_TRANSIENT_BYTES);
+        let bytes = descriptor.estimated_bytes();
         self.available.put(
             PooledTransientTexture { descriptor, target },
             MAX_RETAINED_TRANSIENT_TEXTURES,
             budget,
             |entry| entry.descriptor.estimated_bytes(),
         );
+        if bytes >= 2_000_000 {
+            let sizes: Vec<String> = self
+                .available
+                .iter()
+                .filter(|e| e.descriptor.estimated_bytes() >= 2_000_000)
+                .map(|e| format!("{}x{}", e.descriptor.width, e.descriptor.height))
+                .collect();
+            log::warn!(
+                "[pool-put] {} {}x{} budget={}MB held={}MB big={:?}",
+                descriptor.label,
+                descriptor.width,
+                descriptor.height,
+                budget / 1_000_000,
+                self.available.iter().map(|e| e.descriptor.estimated_bytes()).sum::<u64>() / 1_000_000,
+                sizes
+            );
+        }
     }
 
     fn end_frame(&mut self) {
