@@ -775,6 +775,7 @@ impl PendingBackdrop<'_> {
 static STAGE_DIAG: DebugToggle = DebugToggle::new("CRANPOSE_GPU_STAGE_DIAG");
 static NO_EFFECT_DOMAINS: DebugToggle = DebugToggle::new("CRANPOSE_NO_EFFECT_DOMAINS");
 static NO_FILL_CACHE: DebugToggle = DebugToggle::new("CRANPOSE_NO_FILL_CACHE");
+static EXP_NO_COPY: DebugToggle = DebugToggle::new("CRANPOSE_EXP_NO_COPY");
 const ABLATION_LOG_PERIOD: u32 = 600;
 static NO_BACKDROP_CACHE: DebugToggle = DebugToggle::new("CRANPOSE_NO_BACKDROP_CACHE");
 static PROBE_PASSES: DebugToggle = DebugToggle::new("CRANPOSE_PROBE_PASSES");
@@ -3711,7 +3712,10 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         regions: &[CaptureRegion],
         texture: &OffscreenTarget,
     ) -> bool {
-        if pass.beneath.page.is_some() || !copy_compatible(&pass.page.texture, texture) {
+        if EXP_NO_COPY.flag()
+            || pass.beneath.page.is_some()
+            || !copy_compatible(&pass.page.texture, texture)
+        {
             return false;
         }
         let copies: Option<Vec<TextureRegionCopy<'_>>> = regions

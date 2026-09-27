@@ -87,6 +87,7 @@ const PROPERTY_BACKED_ENV_VARS: &[(&str, &str)] = &[
         "debug.cranpose.scene_update_diag",
         "CRANPOSE_SCENE_UPDATE_DIAG",
     ),
+    ("debug.cranpose.exp_no_copy", "CRANPOSE_EXP_NO_COPY"),
     (
         "debug.cranpose.render_stage_ms",
         "CRANPOSE_WGPU_RENDER_STAGE_TELEMETRY_MS",
