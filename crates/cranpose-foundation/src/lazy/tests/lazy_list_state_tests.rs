@@ -565,13 +565,26 @@ fn dispatch_scroll_delta_clears_stale_pending_at_forward_edge() {
 }
 
 #[test]
-fn negative_scroll_delta_prefetches_forward_items() {
+fn a_held_window_is_sized_by_the_last_scroll_for_one_pass() {
     with_test_runtime(|| {
         let state = new_lazy_list_state();
-        state.dispatch_scroll_delta(-24.0);
-        state.record_scroll_direction(state.peek_scroll_delta());
-        state.update_prefetch_queue(10, 15, 100);
-
-        assert_eq!(state.take_prefetch_indices(), vec![16, 17]);
+        assert!(state.dispatch_scroll_delta(-24.0) < 0.0);
+        let scrolled = state.begin_measure_pass();
+        assert_eq!(scrolled.pending_scroll_delta, -24.0);
+        assert_eq!(scrolled.window_scroll_delta, -24.0);
+        assert_eq!(
+            state.begin_measure_pass().window_scroll_delta,
+            0.0,
+            "a pass without a scroll measures a still window"
+        );
+        state.hold_scroll_window();
+        let held = state.begin_measure_pass();
+        assert_eq!(held.pending_scroll_delta, 0.0);
+        assert_eq!(held.window_scroll_delta, -24.0);
+        assert_eq!(
+            state.begin_measure_pass().window_scroll_delta,
+            0.0,
+            "a hold lasts one pass"
+        );
     });
 }

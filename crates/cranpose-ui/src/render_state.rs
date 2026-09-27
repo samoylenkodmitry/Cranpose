@@ -43,6 +43,7 @@ pub struct AppContext {
     layout_cache_floor: AtomicU64,
     last_fling_velocity_bits: AtomicU32,
     scroll_motion_contexts: crate::scroll::ScrollMotionContextStore,
+    lazy_prefetch: crate::lazy_prefetch::LazyPrefetchState,
     layout_node_registry: crate::widgets::nodes::layout_node::LayoutNodeRegistryState,
     pointer_dispatch: crate::pointer_dispatch::PointerDispatchState,
     focus_dispatch: crate::focus_dispatch::FocusInvalidationState,
@@ -213,6 +214,7 @@ impl AppContext {
             layout_cache_floor: AtomicU64::new(0),
             last_fling_velocity_bits: AtomicU32::new(0.0f32.to_bits()),
             scroll_motion_contexts: crate::scroll::ScrollMotionContextStore::new(),
+            lazy_prefetch: crate::lazy_prefetch::LazyPrefetchState::new(),
             layout_node_registry: crate::widgets::nodes::layout_node::LayoutNodeRegistryState::new(
             ),
             pointer_dispatch: crate::pointer_dispatch::PointerDispatchState::new(),
@@ -361,7 +363,7 @@ pub fn has_current_app_context() -> bool {
     current_app_context().is_some()
 }
 
-fn require_current_app_context(operation: &str) -> Rc<AppContext> {
+pub(crate) fn require_current_app_context(operation: &str) -> Rc<AppContext> {
     if let Some(context) = current_app_context() {
         return context;
     }
@@ -489,6 +491,12 @@ pub fn debug_reset_last_fling_velocity() {
     context
         .last_fling_velocity_bits
         .store(0.0f32.to_bits(), Ordering::Relaxed);
+}
+
+impl AppContext {
+    pub(crate) fn lazy_prefetch(&self) -> &crate::lazy_prefetch::LazyPrefetchState {
+        &self.lazy_prefetch
+    }
 }
 
 pub(crate) fn with_scroll_motion_context_store<R>(

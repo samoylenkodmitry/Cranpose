@@ -16,7 +16,7 @@ Virtualized lazy layouts for Cranpose with 1:1 API and architecture parity with 
 | LazyListIntervalContent | OK | Matches JC interval model. |
 | SlotReusePool | OK | Removed; SubcomposeState is single source of truth. |
 | Lifecycle (compose/dispose) | OK | Dispose non-retained slots immediately. `dispose_or_reuse_starting_from_index` matches JC. |
-| PrefetchScheduler | OK | Queue selection is unit-tested in `prefetch.rs`; `LazyColumn`/`LazyRow` synchronously precompose queued items during measure. Cranpose does not currently have a separate idle prefetch executor. |
+| Prefetch | OK | While a list scrolls with at least two composed items ready beyond its viewport, a frame leaves the next new item uncomposed and asks for idle prefetch. `AppShell::run_idle_prefetch` composes it in a layout pass run while the wait before the next frame still fits the recent cost of one item. The Android loop calls it before polling. Without such a wait, a frame composes new beyond items up to its frontier as before. |
 | Scrollable constraints | OK | LazyList asserts on infinite constraints (JC parity). |
 | measure_lazy_list | OK | JC scroll/backfill flow + visible/beyond-bounds separation. Logic verified against `LazyListMeasure.kt`. |
 | canScrollForward/Backward | OK | Parity. |
@@ -35,7 +35,7 @@ Virtualized lazy layouts for Cranpose with 1:1 API and architecture parity with 
 | `cranpose-foundation/src/lazy/lazy_list_state.rs` | Scroll state + stats. Implements `LazyListState` with `Rc<RefCell<Inner>>` and reactive `stats`. |
 | `cranpose-foundation/src/lazy/lazy_list_scope.rs` | DSL + IntervalContent |
 | `cranpose-foundation/src/lazy/lazy_list_measure.rs` | Measurement algorithm. `measure_lazy_list` function. |
-| `cranpose-foundation/src/lazy/prefetch.rs` | Prefetch scheduler |
+| `cranpose-ui/src/lazy_prefetch.rs` | Idle prefetch requests, pass flag and item cost |
 | `cranpose-ui/src/widgets/lazy_list.rs` | LazyColumn/LazyRow widgets |
 | `cranpose-ui/src/subcompose_layout.rs` | SubcomposeLayoutNode implementation. Uses `SubcomposeMeasureScopeImpl`. |
 | `cranpose-ui/src/modifier/scroll.rs` | Scroll gestures |
@@ -73,7 +73,7 @@ Virtualized lazy layouts for Cranpose with 1:1 API and architecture parity with 
 
 4.  **Performance & Correctness**:
     *   **Subcompose Slot Management**: Strong alignment with JC. `SlotId` (u64) adaptation is valid.
-    *   **Prefetch Execution**: Prefetch is a synchronous precompose step inside lazy-list measurement, so it is covered by normal lazy layout and robot passes. A separate frame-budgeted idle prefetch executor would be a new architecture change, not the current behavior.
+    *   **Prefetch Execution**: An idle prefetch pass is an ordinary layout pass of the list, with its beyond-bounds window held at the size the last scroll gave it (`LazyListState::hold_scroll_window`). It composes one new item per pass, so it is covered by the normal lazy layout paths, and it never schedules a frame of its own.
     *   **Infinite Constraint Handling**: Correctly handles infinite constraints (horizontal/vertical separation) similar to JC.
 
 ---
