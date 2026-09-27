@@ -235,8 +235,13 @@ pub fn band_class_segments(class: u8) -> u32 {
 /// plus what their vertices cost a tiling GPU. `None` when the quad is
 /// cheaper.
 #[inline]
-fn band_bucket_for(geometry: &ArcGeometry, ring: &BandRing, rect: Rect) -> Option<usize> {
-    if geometry.is_degenerate()
+fn band_bucket_for(
+    geometry: &ArcGeometry,
+    degenerate: bool,
+    ring: &BandRing,
+    rect: Rect,
+) -> Option<usize> {
+    if degenerate
         || geometry.outer_radius < ARC_BAND_MIN_RADIUS
         || geometry.inner_radius <= ARC_BAND_MIN_INNER_RADIUS
     {
@@ -250,7 +255,13 @@ fn band_bucket_for(geometry: &ArcGeometry, ring: &BandRing, rect: Rect) -> Optio
 /// Whether an arc's band strip costs less than `rect`, the quad it would
 /// otherwise draw; see [`ShapeRecord::is_banded`].
 pub fn band_pays(geometry: &ArcGeometry, rect: Rect) -> bool {
-    band_bucket_for(geometry, &BandRing::of_geometry(geometry), rect).is_some()
+    band_bucket_for(
+        geometry,
+        geometry.is_degenerate(),
+        &BandRing::of_geometry(geometry),
+        rect,
+    )
+    .is_some()
 }
 
 /// The fragment program's shape kinds: a filled rect or round rect, a
@@ -943,8 +954,12 @@ impl ShapeRecorder {
         let mut bucket = None;
         if let Some(ring) = stroked_circle_ring(rect, radii, stroke)
             && let band = BandRing::of_geometry(&ring)
-            && let Some(ring_bucket) =
-                band_bucket_for(&ring, &band, expand_rect(rect, ring.half_thickness()))
+            && let Some(ring_bucket) = band_bucket_for(
+                &ring,
+                ring.is_degenerate(),
+                &band,
+                expand_rect(rect, ring.half_thickness()),
+            )
         {
             flags |= ARC_BANDED_BIT;
             arc_geometry = [
@@ -986,15 +1001,22 @@ impl ShapeRecorder {
     /// carries.
     pub fn push_arc(&mut self, rect: Rect, args: &ArcRecordArgs<'_>) -> Rect {
         let geometry = normalized_band(args);
-        self.push_arc_band(args, &geometry, Some(rect))
+        self.push_arc_band(args, &geometry, Some(rect), geometry.is_degenerate())
     }
 
     /// Records an arc the draw scope drew, whose band the scope already
     /// normalised: the record keeps the disc around the band as its rect
     /// and derives the primitive's tight bounds only when asked.
+    ///
+    /// The scope records only bands that enclose area, so the band is known
+    /// not to be degenerate.
     #[inline]
     pub fn push_scope_arc(&mut self, args: &ArcRecordArgs<'_>, geometry: &ArcGeometry) -> Rect {
-        self.push_arc_band(args, geometry, None)
+        debug_assert!(
+            !geometry.is_degenerate(),
+            "the scope skips degenerate bands"
+        );
+        self.push_arc_band(args, geometry, None, false)
     }
 
     #[inline]
@@ -1003,10 +1025,11 @@ impl ShapeRecorder {
         args: &ArcRecordArgs<'_>,
         geometry: &ArcGeometry,
         rect: Option<Rect>,
+        degenerate: bool,
     ) -> Rect {
         let (handle, color) = self.intern_brush(args.brush);
         let mut flags = pack_flags(RECORD_KIND_ARC, args.stroke, args.blend_mode, geometry.cap);
-        if geometry.is_degenerate() {
+        if degenerate {
             flags |= ARC_DEGENERATE_BIT;
         }
         let rect = rect.unwrap_or_else(|| {
@@ -1014,7 +1037,7 @@ impl ShapeRecorder {
             band_disc(geometry)
         });
         let ring = BandRing::of_geometry(geometry);
-        let bucket = band_bucket_for(geometry, &ring, rect);
+        let bucket = band_bucket_for(geometry, degenerate, &ring, rect);
         if bucket.is_some() {
             flags |= ARC_BANDED_BIT;
         }
@@ -1891,14 +1914,11 @@ fn row_rect(row: [f32; 4]) -> Rect {
 /// fragment stage draws it.
 #[inline(always)]
 pub fn normalized_band(args: &ArcRecordArgs<'_>) -> ArcGeometry {
-    let (band_inner, band_outer, cap) = arc_band(args.radius, args.inner_radius, args.stroke);
-    ArcGeometry::new(
+    ArcGeometry::of_band(
         args.center,
-        band_inner,
-        band_outer,
+        arc_band(args.radius, args.inner_radius, args.stroke),
         args.start_angle,
         args.sweep_angle,
-        cap,
     )
 }
 
