@@ -11,7 +11,10 @@ use cranpose_ui::{
 use crate::support;
 
 const FRAME_WIDTH: u32 = 360;
-const FRAME_HEIGHT: u32 = 1200;
+// Tall enough for all forty-one levels at every width the frames sweep: a
+// Column offers each child only the height the ones before it leave, so the
+// levels past a shorter frame would squeeze to nothing and cut their text.
+const FRAME_HEIGHT: u32 = 1600;
 const CHIPS: usize = 6;
 const DEPTH_PAST_LIMIT: usize = 132;
 const IN_PLACE_MAX_PASSES: u32 = 3;

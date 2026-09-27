@@ -205,7 +205,10 @@ fn test_row_with_offset_children() {
     assert_eq!(child1.width, 40.0);
     assert_eq!(child1.height, 30.0);
     assert_eq!(child1.x, 0.0, "First child at start");
-    assert_eq!(child1.y, 2.5, "First child vertically centered: (35-30)/2");
+    assert_eq!(
+        child1.y, 0.0,
+        "First child at the top, Compose's default Row alignment"
+    );
 
     let child2 = &layout.root().children[1].rect;
     assert_eq!(child2.width, 50.0);
@@ -223,5 +226,5 @@ fn test_row_with_offset_children() {
         child3.x, 90.0,
         "Third child x = first (40) + second (50) + offset (0)"
     );
-    assert_eq!(child3.y, 0.0, "Third child y = center (5) + offset (-5)");
+    assert_eq!(child3.y, -5.0, "Third child y = top (0) + offset (-5)");
 }

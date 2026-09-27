@@ -42,9 +42,9 @@ pub(crate) fn HomeScreen(palette: Palette) {
                 move || {
                     Button(
                         Modifier::empty()
-                            .padding(12.0)
                             .background(palette.primary)
-                            .rounded_corners(8.0),
+                            .rounded_corners(8.0)
+                            .padding(12.0),
                         ButtonSpec::default(),
                         move || counter.set(counter.value() + 1),
                         move || {
@@ -58,9 +58,9 @@ pub(crate) fn HomeScreen(palette: Palette) {
 
                     Button(
                         Modifier::empty()
-                            .padding(12.0)
                             .background(palette.surface)
-                            .rounded_corners(8.0),
+                            .rounded_corners(8.0)
+                            .padding(12.0),
                         ButtonSpec::default(),
                         move || celebrating.set(!celebrating.value()),
                         move || {

@@ -81,9 +81,9 @@ pub(crate) fn web_fetch_example() {
                 Text(
                     "Fetch data from the web",
                     Modifier::empty()
-                        .padding(12.0)
                         .background(Color(1.0, 1.0, 1.0, 0.08))
-                        .rounded_corners(16.0),
+                        .rounded_corners(16.0)
+                        .padding(12.0),
                     TextStyle::default(),
                 );
 
@@ -99,9 +99,9 @@ pub(crate) fn web_fetch_example() {
                         "the UI when the response arrives.",
                     ),
                     Modifier::empty()
-                        .padding(12.0)
                         .background(Color(0.12, 0.16, 0.28, 0.7))
-                        .rounded_corners(14.0),
+                        .rounded_corners(14.0)
+                        .padding(12.0),
                     TextStyle::default(),
                 );
 
@@ -187,9 +187,9 @@ pub(crate) fn web_fetch_example() {
                                     Text(
                                         "Fetch motto",
                                         Modifier::empty()
-                                            .padding(6.0)
                                             .background(Color(1.0, 1.0, 1.0, 0.05))
-                                            .rounded_corners(10.0),
+                                            .rounded_corners(10.0)
+                                            .padding(6.0),
                                         TextStyle::default(),
                                     );
                                 },
@@ -221,9 +221,9 @@ pub(crate) fn web_fetch_example() {
                 Text(
                     status_label,
                     Modifier::empty()
-                        .padding(10.0)
                         .background(banner_color)
-                        .rounded_corners(12.0),
+                        .rounded_corners(12.0)
+                        .padding(10.0),
                     TextStyle::default(),
                 );
 
@@ -237,9 +237,9 @@ pub(crate) fn web_fetch_example() {
                         Text(
                             "No request has been made yet.",
                             Modifier::empty()
-                                .padding(10.0)
                                 .background(Color(0.10, 0.16, 0.28, 0.7))
-                                .rounded_corners(12.0),
+                                .rounded_corners(12.0)
+                                .padding(10.0),
                             TextStyle::default(),
                         );
                     }
@@ -247,9 +247,9 @@ pub(crate) fn web_fetch_example() {
                         Text(
                             "Hang tight while the response arrives...",
                             Modifier::empty()
-                                .padding(10.0)
                                 .background(Color(0.12, 0.18, 0.32, 0.9))
-                                .rounded_corners(12.0),
+                                .rounded_corners(12.0)
+                                .padding(10.0),
                             TextStyle::default(),
                         );
                     }
@@ -257,9 +257,9 @@ pub(crate) fn web_fetch_example() {
                         Text(
                             format!("\"{message}\""),
                             Modifier::empty()
-                                .padding(12.0)
                                 .background(Color(0.14, 0.34, 0.26, 0.9))
-                                .rounded_corners(14.0),
+                                .rounded_corners(14.0)
+                                .padding(12.0),
                             TextStyle::default(),
                         );
                     }
@@ -267,9 +267,9 @@ pub(crate) fn web_fetch_example() {
                         Text(
                             format!("Error: {error}"),
                             Modifier::empty()
-                                .padding(12.0)
                                 .background(Color(0.40, 0.18, 0.18, 0.9))
-                                .rounded_corners(14.0),
+                                .rounded_corners(14.0)
+                                .padding(12.0),
                             TextStyle::default(),
                         );
                     }

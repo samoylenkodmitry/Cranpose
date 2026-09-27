@@ -37,6 +37,7 @@ use crate::{
     gpos_kerning::KernedFont,
     text_cache_key::{TextCacheKey, TextKey, TextProbe},
     text_hyphenation::HyphenationDictionaryStore,
+    text_mask_gamma::TextLuminance,
 };
 
 const COMPOSE_STROKE_MITER_LIMIT: f32 = 4.0;
@@ -3997,6 +3998,7 @@ fn draw_mask_glyph(
     brush_alpha_multiplier: f32,
     brush_rect: Rect,
 ) {
+    let correction = TextLuminance::of_brush(brush).correction();
     for y in 0..mask.height {
         let py = mask.origin_y + y as i32;
         if py < 0 || py >= height as i32 {
@@ -4009,7 +4011,7 @@ fn draw_mask_glyph(
                 continue;
             }
 
-            let coverage = mask.alpha[y * mask.width + x];
+            let coverage = correction.apply_unit(mask.alpha[y * mask.width + x]);
             if coverage <= 0.0 {
                 continue;
             }
@@ -4079,6 +4081,7 @@ fn draw_mask_glyph_solid_u8(
     if alpha_scale <= 0.0 {
         return;
     }
+    let correction = TextLuminance::of_color(Color(color[0], color[1], color[2], 1.0)).correction();
 
     for y in 0..mask.height {
         let py = mask.origin_y + y as i32;
@@ -4092,7 +4095,7 @@ fn draw_mask_glyph_solid_u8(
                 continue;
             }
 
-            let coverage = mask.alpha[y * mask.width + x];
+            let coverage = correction.apply_unit(mask.alpha[y * mask.width + x]);
             if coverage <= 0.0 {
                 continue;
             }
@@ -4143,11 +4146,21 @@ fn draw_shadow_mask(
     let padded_height = mask.height + (blur_margin as usize) * 2;
     let mut padded_mask = vec![0.0f32; padded_width * padded_height];
 
+    // An unblurred shadow is text in the shadow color and gets its mask
+    // gamma; Skia never corrects a mask a blur filters.
+    let correction = (sigma <= 0.0).then(|| TextLuminance::of_color(shadow.color).correction());
     for y in 0..mask.height {
         let src_offset = y * mask.width;
         let dst_offset = (y + blur_margin as usize) * padded_width + blur_margin as usize;
-        padded_mask[dst_offset..dst_offset + mask.width]
-            .copy_from_slice(&mask.alpha[src_offset..src_offset + mask.width]);
+        let source = &mask.alpha[src_offset..src_offset + mask.width];
+        let target = &mut padded_mask[dst_offset..dst_offset + mask.width];
+        match correction {
+            Some(correction) => target
+                .iter_mut()
+                .zip(source)
+                .for_each(|(target, &coverage)| *target = correction.apply_unit(coverage)),
+            None => target.copy_from_slice(source),
+        }
     }
 
     let blurred = if sigma > 0.0 {

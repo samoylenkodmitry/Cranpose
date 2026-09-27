@@ -306,6 +306,48 @@ impl FlexMeasurePolicy {
         }
     }
 
+    /// Measures the unweighted children in order and returns Compose's
+    /// `fixedSpace` with the largest cross size. Each child is offered only
+    /// the main-axis space the ones before it leave, as
+    /// `RowColumnMeasurementHelper` offers it, and the spacing after a child
+    /// never runs past the main axis.
+    fn measure_fixed_children(
+        &self,
+        measurables: &[Box<dyn Measurable>],
+        fixed_children: &[usize],
+        (max_main, max_cross): (f32, f32),
+        spacing: f32,
+        placeables: &mut [Option<cranpose_ui_layout::Placeable>],
+    ) -> (f32, f32) {
+        let main_axis_bounded = max_main.is_finite();
+        let mut fixed_space = 0.0_f32;
+        let mut max_cross_size = 0.0_f32;
+        for &idx in fixed_children {
+            let available_main = if main_axis_bounded {
+                (max_main - fixed_space).max(0.0)
+            } else {
+                max_main
+            };
+            let placeable = measurables[idx].measure(self.make_constraints(
+                0.0,
+                available_main,
+                0.0,
+                max_cross,
+            ));
+            let main_size = self.get_main_axis_size(placeable.width(), placeable.height());
+            let spacing_after = if main_axis_bounded {
+                spacing.min(available_main - main_size).max(0.0)
+            } else {
+                spacing
+            };
+            fixed_space += main_size + spacing_after;
+            max_cross_size =
+                max_cross_size.max(self.get_cross_axis_size(placeable.width(), placeable.height()));
+            placeables[idx] = Some(placeable);
+        }
+        (fixed_space, max_cross_size)
+    }
+
     fn get_spacing(&self) -> f32 {
         match self.main_axis_arrangement {
             LinearArrangement::SpacedBy(value) => value.max(0.0),
@@ -362,19 +404,13 @@ impl MeasurePolicy for FlexMeasurePolicy {
 
         let mut placeables: SmallVec<[Option<cranpose_ui_layout::Placeable>; 8]> = SmallVec::new();
         placeables.resize_with(measurables.len(), || None);
-        let mut fixed_main_size = 0.0_f32;
-        let mut max_cross_size = 0.0_f32;
-
-        for &idx in &fixed_children {
-            let measurable = &measurables[idx];
-            let placeable = measurable.measure(child_constraints);
-            let main_size = self.get_main_axis_size(placeable.width(), placeable.height());
-            let cross_size = self.get_cross_axis_size(placeable.width(), placeable.height());
-
-            fixed_main_size += main_size;
-            max_cross_size = max_cross_size.max(cross_size);
-            placeables[idx] = Some(placeable);
-        }
+        let (fixed_space, mut max_cross_size) = self.measure_fixed_children(
+            measurables,
+            &fixed_children,
+            (max_main, max_cross),
+            spacing,
+            &mut placeables,
+        );
 
         let num_children = measurables.len();
         let total_spacing = if num_children > 1 {
@@ -385,8 +421,8 @@ impl MeasurePolicy for FlexMeasurePolicy {
 
         if !weighted_children.is_empty() {
             if main_axis_bounded {
-                let used_main = fixed_main_size + total_spacing;
-                let remaining_main = (max_main - used_main).max(0.0);
+                let weighted_spacing = spacing * (weighted_children.len() - 1) as f32;
+                let remaining_main = (max_main - fixed_space - weighted_spacing).max(0.0);
 
                 let total_weight: f32 = weighted_children.iter().map(|(_, data)| data.weight).sum();
 

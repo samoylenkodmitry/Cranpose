@@ -71,25 +71,8 @@ fn long_list(item_count: usize) {
                     }),
                     RowSpec::default(),
                     move || {
-                        let text = if i < 10 {
-                            match i {
-                                0 => "Item 0",
-                                1 => "Item 1",
-                                2 => "Item 2",
-                                3 => "Item 3",
-                                4 => "Item 4",
-                                5 => "Item 5",
-                                6 => "Item 6",
-                                7 => "Item 7",
-                                8 => "Item 8",
-                                9 => "Item 9",
-                                _ => "Item",
-                            }
-                        } else {
-                            "Item 10+"
-                        };
                         Text(
-                            text,
+                            format!("Item {i}"),
                             Modifier::empty().padding_horizontal(12.0),
                             TextStyle::default(),
                         );

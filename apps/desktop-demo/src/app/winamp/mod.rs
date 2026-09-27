@@ -435,9 +435,9 @@ pub(crate) fn WinampTab(tab_state: WinampTabState) {
     Column(
         Modifier::empty()
             .fill_max_size()
-            .padding(10.0)
             .background(Color(0.05, 0.06, 0.08, 1.0))
-            .rounded_corners(12.0),
+            .rounded_corners(12.0)
+            .padding(10.0),
         ColumnSpec::default(),
         move || {
             Text(

@@ -76,8 +76,8 @@ fn TopBar(palette: Palette, active_label: &'static str) {
     Row(
         Modifier::empty()
             .fill_max_width()
-            .padding(16.0)
-            .background(palette.surface),
+            .background(palette.surface)
+            .padding(16.0),
         RowSpec::default().vertical_alignment(VerticalAlignment::CenterVertically),
         move || {
             Text(TITLE, Modifier::empty(), heading_text_style(palette.text));
@@ -99,8 +99,8 @@ fn BottomNav(palette: Palette, nav: NavController<Screen>, current: Screen) {
     Row(
         Modifier::empty()
             .fill_max_width()
-            .padding(12.0)
-            .background(palette.surface),
+            .background(palette.surface)
+            .padding(12.0),
         RowSpec::default().horizontal_arrangement(LinearArrangement::SpaceEvenly),
         move || {
             for candidate in Screen::ALL {
@@ -133,9 +133,9 @@ fn NavButton(palette: Palette, candidate: Screen, active: bool, on_click: impl F
 
     Button(
         Modifier::empty()
-            .padding(10.0)
             .background(background)
-            .rounded_corners(8.0),
+            .rounded_corners(8.0)
+            .padding(10.0),
         ButtonSpec::default(),
         on_click,
         move || {

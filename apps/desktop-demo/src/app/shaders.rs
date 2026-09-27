@@ -304,23 +304,27 @@ pub(crate) fn ShadersTab(initial_section: Option<ShaderSection>) {
         move || {
             Text(
                 "Shaders & Effects",
-                Modifier::empty().padding(10.0).draw_behind(|scope| {
-                    scope.draw_round_rect(
-                        Brush::solid(Color(1.0, 1.0, 1.0, 0.08)),
-                        CornerRadii::uniform(14.0),
-                    );
-                }),
+                Modifier::empty()
+                    .draw_behind(|scope| {
+                        scope.draw_round_rect(
+                            Brush::solid(Color(1.0, 1.0, 1.0, 0.08)),
+                            CornerRadii::uniform(14.0),
+                        );
+                    })
+                    .padding(10.0),
                 TextStyle::default(),
             );
             if let Some(section) = initial_section {
                 Text(
                     format!("Focused Section: {}", section.label()),
-                    Modifier::empty().padding(8.0).draw_behind(|scope| {
-                        scope.draw_round_rect(
-                            Brush::solid(Color(0.18, 0.24, 0.38, 0.85)),
-                            CornerRadii::uniform(12.0),
-                        );
-                    }),
+                    Modifier::empty()
+                        .draw_behind(|scope| {
+                            scope.draw_round_rect(
+                                Brush::solid(Color(0.18, 0.24, 0.38, 0.85)),
+                                CornerRadii::uniform(12.0),
+                            );
+                        })
+                        .padding(8.0),
                     TextStyle::default(),
                 );
                 RenderShaderSection(section);
@@ -343,12 +347,14 @@ fn SweepGradientDemo() {
         || {
             Text(
                 "Sweep Gradient",
-                Modifier::empty().padding(8.0).draw_behind(|scope| {
-                    scope.draw_round_rect(
-                        Brush::solid(Color(0.14, 0.18, 0.30, 0.8)),
-                        CornerRadii::uniform(12.0),
-                    );
-                }),
+                Modifier::empty()
+                    .draw_behind(|scope| {
+                        scope.draw_round_rect(
+                            Brush::solid(Color(0.14, 0.18, 0.30, 0.8)),
+                            CornerRadii::uniform(12.0),
+                        );
+                    })
+                    .padding(8.0),
                 TextStyle::default(),
             );
 
@@ -399,12 +405,14 @@ fn InteractiveEffectsDemo() {
         move || {
             Text(
                 "Interactive Effects (drag the rects!)",
-                Modifier::empty().padding(8.0).draw_behind(|scope| {
-                    scope.draw_round_rect(
-                        Brush::solid(Color(0.14, 0.18, 0.30, 0.8)),
-                        CornerRadii::uniform(12.0),
-                    );
-                }),
+                Modifier::empty()
+                    .draw_behind(|scope| {
+                        scope.draw_round_rect(
+                            Brush::solid(Color(0.14, 0.18, 0.30, 0.8)),
+                            CornerRadii::uniform(12.0),
+                        );
+                    })
+                    .padding(8.0),
                 TextStyle::default(),
             );
 
@@ -449,19 +457,21 @@ fn InteractiveEffectsDemo() {
                                         ] {
                                             Text(
                                                 text,
-                                                Modifier::empty().padding(4.0).draw_behind({
-                                                    move |scope| {
-                                                        scope.draw_round_rect(
-                                                            Brush::solid(Color(
-                                                                color.0 * 0.3,
-                                                                color.1 * 0.3,
-                                                                color.2 * 0.3,
-                                                                0.8,
-                                                            )),
-                                                            CornerRadii::uniform(6.0),
-                                                        );
-                                                    }
-                                                }),
+                                                Modifier::empty()
+                                                    .draw_behind({
+                                                        move |scope| {
+                                                            scope.draw_round_rect(
+                                                                Brush::solid(Color(
+                                                                    color.0 * 0.3,
+                                                                    color.1 * 0.3,
+                                                                    color.2 * 0.3,
+                                                                    0.8,
+                                                                )),
+                                                                CornerRadii::uniform(6.0),
+                                                            );
+                                                        }
+                                                    })
+                                                    .padding(4.0),
                                                 TextStyle {
                                                     span_style: SpanStyle {
                                                         color: Some(color),
@@ -504,12 +514,14 @@ fn InteractiveEffectsDemo() {
 
             Text(
                 "Drag the rects to see backdrop blur and glass refraction",
-                Modifier::empty().padding(6.0).draw_behind(|scope| {
-                    scope.draw_round_rect(
-                        Brush::solid(Color(1.0, 1.0, 1.0, 0.05)),
-                        CornerRadii::uniform(8.0),
-                    );
-                }),
+                Modifier::empty()
+                    .draw_behind(|scope| {
+                        scope.draw_round_rect(
+                            Brush::solid(Color(1.0, 1.0, 1.0, 0.05)),
+                            CornerRadii::uniform(8.0),
+                        );
+                    })
+                    .padding(6.0),
                 TextStyle::default(),
             );
         },
@@ -535,12 +547,14 @@ fn EffectSemanticsDemo() {
         move || {
             Text(
                 "Effect Semantics Checks",
-                Modifier::empty().padding(8.0).draw_behind(|scope| {
-                    scope.draw_round_rect(
-                        Brush::solid(Color(0.14, 0.18, 0.30, 0.8)),
-                        CornerRadii::uniform(12.0),
-                    );
-                }),
+                Modifier::empty()
+                    .draw_behind(|scope| {
+                        scope.draw_round_rect(
+                            Brush::solid(Color(0.14, 0.18, 0.30, 0.8)),
+                            CornerRadii::uniform(12.0),
+                        );
+                    })
+                    .padding(8.0),
                 TextStyle::default(),
             );
 
@@ -609,12 +623,12 @@ fn EffectSemanticsDemo() {
 
             Text(
                 "Smooth blur now uses framework blur + rounded alpha mask, and cut-mask demos show dev-facing graphics APIs.",
-                Modifier::empty().padding(6.0).draw_behind(|scope| {
+                Modifier::empty().draw_behind(|scope| {
                     scope.draw_round_rect(
                         Brush::solid(Color(1.0, 1.0, 1.0, 0.05)),
                         CornerRadii::uniform(8.0),
                     );
-                }),
+                }).padding(6.0),
                 TextStyle { span_style: SpanStyle { color: Some(Color(0.9, 0.9, 1.0, 0.75)), ..Default::default() }, ..Default::default() },
             );
         },
@@ -634,12 +648,14 @@ fn GraphicsLayerFieldsDemo() {
         move || {
             Text(
                 "GraphicsLayer Fields",
-                Modifier::empty().padding(8.0).draw_behind(|scope| {
-                    scope.draw_round_rect(
-                        Brush::solid(Color(0.14, 0.18, 0.30, 0.8)),
-                        CornerRadii::uniform(12.0),
-                    );
-                }),
+                Modifier::empty()
+                    .draw_behind(|scope| {
+                        scope.draw_round_rect(
+                            Brush::solid(Color(0.14, 0.18, 0.30, 0.8)),
+                            CornerRadii::uniform(12.0),
+                        );
+                    })
+                    .padding(8.0),
                 TextStyle::default(),
             );
 
@@ -1651,12 +1667,14 @@ fn MaskApiDemo() {
         move || {
             Text(
                 "Cut / Opacity Mask APIs",
-                Modifier::empty().padding(8.0).draw_behind(|scope| {
-                    scope.draw_round_rect(
-                        Brush::solid(Color(0.14, 0.18, 0.30, 0.8)),
-                        CornerRadii::uniform(12.0),
-                    );
-                }),
+                Modifier::empty()
+                    .draw_behind(|scope| {
+                        scope.draw_round_rect(
+                            Brush::solid(Color(0.14, 0.18, 0.30, 0.8)),
+                            CornerRadii::uniform(12.0),
+                        );
+                    })
+                    .padding(8.0),
                 TextStyle::default(),
             );
 
@@ -2284,13 +2302,13 @@ fn DraggableOverlay(
             .draw_behind(move |scope| {
                 scope.draw_round_rect(Brush::solid(border_color), CornerRadii::uniform(corner));
             })
-            .padding(2.0)
             .draw_behind(move |scope| {
                 scope.draw_round_rect(
                     Brush::solid(Color(0.0, 0.0, 0.0, 0.0)),
                     CornerRadii::uniform(corner - 2.0),
                 );
             })
+            .padding(2.0)
             .pointer_input((), {
                 move |scope: PointerInputScope| async move {
                     scope
@@ -2344,12 +2362,14 @@ fn DraggableOverlay(
         move || {
             Text(
                 label,
-                Modifier::empty().padding(8.0).draw_behind(move |scope| {
-                    scope.draw_round_rect(
-                        Brush::solid(Color(0.0, 0.0, 0.0, 0.5)),
-                        CornerRadii::uniform(8.0),
-                    );
-                }),
+                Modifier::empty()
+                    .draw_behind(move |scope| {
+                        scope.draw_round_rect(
+                            Brush::solid(Color(0.0, 0.0, 0.0, 0.5)),
+                            CornerRadii::uniform(8.0),
+                        );
+                    })
+                    .padding(8.0),
                 TextStyle {
                     span_style: SpanStyle {
                         color: Some(Color(1.0, 1.0, 1.0, 0.9)),

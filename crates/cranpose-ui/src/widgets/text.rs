@@ -149,7 +149,12 @@ fn compose_basic_text_group(
         )),
         None => modifier,
     };
-    let text_element = modifier_element(TextModifierElement::new(current, style, options));
+    let text_element = modifier_element(TextModifierElement::new(
+        current,
+        style,
+        options,
+        crate::density::density(),
+    ));
     let final_modifier = Modifier::from_parts(vec![text_element]);
     let combined_modifier = modifier.then(final_modifier);
 

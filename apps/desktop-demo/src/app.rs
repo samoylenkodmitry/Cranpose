@@ -1154,9 +1154,9 @@ fn text_input_example() {
             Text(
                 "Text Input Demo",
                 Modifier::empty()
-                    .padding(12.0)
                     .background(Color(1.0, 1.0, 1.0, 0.08))
-                    .rounded_corners(16.0),
+                    .rounded_corners(16.0)
+                    .padding(12.0),
                 TextStyle::default(),
             );
 
@@ -1180,9 +1180,9 @@ fn text_input_example() {
                 text_state1,
                 Modifier::empty()
                     .fill_max_width()
-                    .padding(12.0)
                     .background(Color(0.15, 0.18, 0.25, 1.0))
                     .rounded_corners(8.0)
+                    .padding(12.0)
                     .content_description("Basic text field"),
                 TextStyle::default(),
             );
@@ -1197,9 +1197,9 @@ fn text_input_example() {
                 Text(
                     format!("Current value: \"{current_text}\""),
                     Modifier::empty()
-                        .padding(8.0)
                         .background(Color(0.12, 0.16, 0.28, 0.8))
-                        .rounded_corners(8.0),
+                        .rounded_corners(8.0)
+                        .padding(8.0),
                     TextStyle::default(),
                 );
             }
@@ -1224,9 +1224,9 @@ fn text_input_example() {
                 text_state2,
                 Modifier::empty()
                     .fill_max_width()
-                    .padding(12.0)
                     .background(Color(0.18, 0.15, 0.22, 1.0))
                     .rounded_corners(8.0)
+                    .padding(12.0)
                     .focus_requester(&field2_focus)
                     .content_description("Empty text field"),
                 TextStyle::default(),
@@ -1237,9 +1237,9 @@ fn text_input_example() {
                 Text(
                     format!("Field 2 value: \"{field2_text}\""),
                     Modifier::empty()
-                        .padding(8.0)
                         .background(Color(0.12, 0.16, 0.28, 0.8))
-                        .rounded_corners(8.0),
+                        .rounded_corners(8.0)
+                        .padding(8.0),
                     TextStyle::default(),
                 );
             }
@@ -1399,9 +1399,9 @@ fn text_input_example() {
                     state,
                     Modifier::empty()
                         .fill_max_width()
-                        .padding(14.0)
                         .background(Color(0.149, 0.129, 0.125, 1.0))
                         .rounded_corners(10.0)
+                        .padding(14.0)
                         .content_description("Wrapped text field"),
                     BasicTextFieldOptions {
                         text_style: style,
@@ -1444,9 +1444,9 @@ fn text_input_example() {
                         state,
                         Modifier::empty()
                             .fill_max_width()
-                            .padding(14.0)
                             .background(Color(1.0, 1.0, 1.0, 1.0))
                             .rounded_corners(10.0)
+                            .padding(14.0)
                             .content_description("Wrapped text field on a light surface"),
                         BasicTextFieldOptions {
                             text_style: style,
@@ -1483,9 +1483,9 @@ fn recursive_layout_example() {
             Text(
                 cached_recursive_static_text("Recursive Layout Playground"),
                 Modifier::empty()
-                    .padding(12.0)
                     .background(Color(1.0, 1.0, 1.0, 0.08))
-                    .rounded_corners(16.0),
+                    .rounded_corners(16.0)
+                    .padding(12.0),
                 TextStyle::default(),
             );
 
@@ -1551,9 +1551,9 @@ fn recursive_layout_example() {
                         Text(
                             cached_current_depth_text(depth.max(1)),
                             Modifier::empty()
-                                .padding(8.0)
                                 .background(Color(0.12, 0.16, 0.28, 0.8))
-                                .rounded_corners(12.0),
+                                .rounded_corners(12.0)
+                                .padding(8.0),
                             TextStyle::default(),
                         );
                     }
@@ -1604,9 +1604,9 @@ fn recursive_layout_node(modifier: Modifier, depth: usize, horizontal: bool, ind
             Text(
                 cached_depth_text(depth),
                 Modifier::empty()
-                    .padding(6.0)
                     .background(Color(0.0, 0.0, 0.0, 0.25))
-                    .rounded_corners(10.0),
+                    .rounded_corners(10.0)
+                    .padding(6.0),
                 TextStyle::default(),
             );
 
@@ -1614,9 +1614,9 @@ fn recursive_layout_node(modifier: Modifier, depth: usize, horizontal: bool, ind
                 Text(
                     cached_recursive_static_text("Leaf node"),
                     Modifier::empty()
-                        .padding(6.0)
                         .background(Color(1.0, 1.0, 1.0, 0.12))
-                        .rounded_corners(10.0),
+                        .rounded_corners(10.0)
+                        .padding(6.0),
                     TextStyle::default(),
                 );
             } else if horizontal {
@@ -1673,9 +1673,9 @@ pub fn composition_local_example() {
             Text(
                 "CompositionLocal Subscription Test",
                 Modifier::empty()
-                    .padding(12.0)
                     .background(Color(1.0, 1.0, 1.0, 0.1))
-                    .rounded_corners(16.0),
+                    .rounded_corners(16.0)
+                    .padding(12.0),
                 TextStyle::default(),
             );
 
@@ -1687,9 +1687,9 @@ pub fn composition_local_example() {
             Text(
                 format!("Counter: {}", counter.get()),
                 Modifier::empty()
-                    .padding(8.0)
                     .background(Color(0.2, 0.3, 0.4, 0.7))
-                    .rounded_corners(12.0),
+                    .rounded_corners(12.0)
+                    .padding(8.0),
                 TextStyle::default(),
             );
 
@@ -1744,9 +1744,9 @@ fn composition_local_content() {
     Text(
         format!("Outside provider (NOT reading): rand={}", random()),
         Modifier::empty()
-            .padding(8.0)
             .background(Color(0.3, 0.3, 0.3, 0.5))
-            .rounded_corners(12.0),
+            .rounded_corners(12.0)
+            .padding(8.0),
         TextStyle::default(),
     );
 
@@ -1765,9 +1765,9 @@ fn composition_local_content() {
     Text(
         format!("NOT reading local: rand={}", random()),
         Modifier::empty()
-            .padding(8.0)
             .background(Color(0.9, 0.6, 0.4, 0.5))
-            .rounded_corners(12.0),
+            .rounded_corners(12.0)
+            .padding(8.0),
         TextStyle::default(),
     );
 }
@@ -1779,9 +1779,9 @@ fn composition_local_content_inner() {
     Text(
         format!("READING local: count={}, rand={}", holder.count, random()),
         Modifier::empty()
-            .padding(8.0)
             .background(Color(0.6, 0.9, 0.4, 0.7))
-            .rounded_corners(12.0),
+            .rounded_corners(12.0)
+            .padding(8.0),
         TextStyle::default(),
     );
 }
@@ -1809,9 +1809,9 @@ pub fn AsyncRuntimeTabContent(
                 Text(
                     "Async Runtime Demo",
                     Modifier::empty()
-                        .padding(12.0)
                         .background(Color(1.0, 1.0, 1.0, 0.08))
-                        .rounded_corners(16.0),
+                        .rounded_corners(16.0)
+                        .padding(12.0),
                     TextStyle::default(),
                 );
 
@@ -1907,9 +1907,9 @@ pub fn AsyncRuntimeTabContent(
                         }
                     ),
                     Modifier::empty()
-                        .padding(8.0)
                         .background(Color(0.18, 0.22, 0.36, 0.6))
-                        .rounded_corners(14.0),
+                        .rounded_corners(14.0)
+                        .padding(8.0),
                     TextStyle::default(),
                 );
 
@@ -2121,36 +2121,28 @@ fn counter_app() {
                 Text(
                     "if counter % 2 == 0",
                     Modifier::empty()
-                        .padding(12.0)
-                        .then(
-                            Modifier::empty().rounded_corner_shape(RoundedCornerShape::new(
-                                16.0, 24.0, 16.0, 24.0,
-                            )),
-                        )
+                        .rounded_corner_shape(RoundedCornerShape::new(16.0, 24.0, 16.0, 24.0))
                         .draw_with_content(|scope| {
                             scope.draw_round_rect(
                                 Brush::solid(Color(1.0, 1.0, 1.0, 0.1)),
                                 CornerRadii::uniform(20.0),
                             );
-                        }),
+                        })
+                        .padding(12.0),
                     TextStyle::default(),
                 );
             } else {
                 Text(
                     "if counter % 2 != 0",
                     Modifier::empty()
-                        .padding(12.0)
-                        .then(
-                            Modifier::empty().rounded_corner_shape(RoundedCornerShape::new(
-                                16.0, 24.0, 16.0, 24.0,
-                            )),
-                        )
+                        .rounded_corner_shape(RoundedCornerShape::new(16.0, 24.0, 16.0, 24.0))
                         .draw_with_content(|scope| {
                             scope.draw_round_rect(
                                 Brush::solid(Color(1.0, 1.0, 1.0, 0.5)),
                                 CornerRadii::uniform(20.0),
                             );
-                        }),
+                        })
+                        .padding(12.0),
                     TextStyle::default(),
                 );
             }
@@ -2178,18 +2170,14 @@ fn counter_app() {
                 Text(
                     "Cranpose Playground",
                     Modifier::empty()
-                        .padding(12.0)
-                        .then(
-                            Modifier::empty().rounded_corner_shape(RoundedCornerShape::new(
-                                16.0, 24.0, 16.0, 24.0,
-                            )),
-                        )
+                        .rounded_corner_shape(RoundedCornerShape::new(16.0, 24.0, 16.0, 24.0))
                         .draw_with_content(|scope| {
                             scope.draw_round_rect(
                                 Brush::solid(Color(1.0, 1.0, 1.0, 0.1)),
                                 CornerRadii::uniform(20.0),
                             );
-                        }),
+                        })
+                        .padding(12.0),
                     TextStyle::default(),
                 );
 
@@ -2207,17 +2195,17 @@ fn counter_app() {
                         Text(
                             format!("Counter: {}", counter.get()),
                             Modifier::empty()
-                                .padding(8.0)
-                                .then(Modifier::empty().background(Color(0.0, 0.0, 0.0, 0.35)))
-                                .rounded_corners(12.0),
+                                .background(Color(0.0, 0.0, 0.0, 0.35))
+                                .rounded_corners(12.0)
+                                .padding(8.0),
                             TextStyle::default(),
                         );
                         Text(
                             "Wave layer-only animation",
                             Modifier::empty()
-                                .padding(8.0)
-                                .then(Modifier::empty().background(Color(0.35, 0.55, 0.9, 0.5)))
+                                .background(Color(0.35, 0.55, 0.9, 0.5))
                                 .rounded_corners(12.0)
+                                .padding(8.0)
                                 .graphics_layer(move || {
                                     let wave_value = wave_state.value();
                                     GraphicsLayer {
@@ -2462,9 +2450,9 @@ fn counter_app() {
                         Text(
                             async_message.get(),
                             Modifier::empty()
-                                .padding(10.0)
                                 .background(Color(0.1, 0.18, 0.32, 0.6))
-                                .rounded_corners(14.0),
+                                .rounded_corners(14.0)
+                                .padding(10.0),
                             TextStyle::default(),
                         );
 
@@ -2556,17 +2544,17 @@ fn modifier_showcase_tab() {
             Column(
                 Modifier::empty()
                     .width(180.0)
-                    .padding(16.0)
                     .background(Color(0.08, 0.10, 0.18, 1.0))
-                    .rounded_corners(20.0),
+                    .rounded_corners(20.0)
+                    .padding(16.0),
                 ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(8.0)),
                 move || {
                     Text(
                         "Select Showcase",
                         Modifier::empty()
-                            .padding(8.0)
                             .background(Color(1.0, 1.0, 1.0, 0.08))
-                            .rounded_corners(12.0),
+                            .rounded_corners(12.0)
+                            .padding(8.0),
                         TextStyle::default(),
                     );
 
@@ -2654,9 +2642,9 @@ pub fn simple_card_showcase() {
         Text(
             "=== Simple Card Pattern ===",
             Modifier::empty()
-                .padding(12.0)
                 .background(Color(1.0, 1.0, 1.0, 0.1))
-                .rounded_corners(14.0),
+                .rounded_corners(14.0)
+                .padding(12.0),
             TextStyle::default(),
         );
 
@@ -2667,20 +2655,17 @@ pub fn simple_card_showcase() {
 
         cranpose_ui::Box(
             Modifier::empty()
-                .padding(3.0)
                 .background(Color(0.4, 0.6, 0.9, 0.8))
-                .rounded_corners(18.0),
+                .rounded_corners(18.0)
+                .padding(3.0),
             BoxSpec::default(),
             || {
                 cranpose_ui::Box(
                     Modifier::empty()
-                        .padding(16.0)
-                        .size(Size {
-                            width: 300.0,
-                            height: 200.0,
-                        })
                         .background(Color(0.15, 0.18, 0.25, 0.95))
-                        .rounded_corners(16.0),
+                        .rounded_corners(16.0)
+                        .padding(16.0)
+                        .size_points(300.0, 200.0),
                     BoxSpec::default(),
                     || {
                         Column(
@@ -2690,9 +2675,9 @@ pub fn simple_card_showcase() {
                                 Text(
                                     "Card Title",
                                     Modifier::empty()
-                                        .padding(8.0)
                                         .background(Color(0.3, 0.5, 0.8, 0.6))
-                                        .rounded_corners(8.0),
+                                        .rounded_corners(8.0)
+                                        .padding(8.0),
                                     TextStyle::default(),
                                 );
 
@@ -2716,9 +2701,9 @@ pub fn simple_card_showcase() {
                                     Text(
                                         "Action 1",
                                         Modifier::empty()
-                                            .padding(8.0)
                                             .background(Color(0.2, 0.7, 0.4, 0.7))
-                                            .rounded_corners(6.0),
+                                            .rounded_corners(6.0)
+                                            .padding(8.0),
                                         TextStyle::default(),
                                     );
 
@@ -2730,9 +2715,9 @@ pub fn simple_card_showcase() {
                                     Text(
                                         "Action 2",
                                         Modifier::empty()
-                                            .padding(8.0)
                                             .background(Color(0.8, 0.3, 0.3, 0.7))
-                                            .rounded_corners(6.0),
+                                            .rounded_corners(6.0)
+                                            .padding(8.0),
                                         TextStyle::default(),
                                     );
                                 });
@@ -2751,9 +2736,9 @@ pub fn positioned_boxes_showcase() {
         Text(
             "=== Positioned Boxes ===",
             Modifier::empty()
-                .padding(12.0)
                 .background(Color(1.0, 1.0, 1.0, 0.1))
-                .rounded_corners(14.0),
+                .rounded_corners(14.0)
+                .padding(12.0),
             TextStyle::default(),
         );
 
@@ -2773,9 +2758,9 @@ pub fn positioned_boxes_showcase() {
                     Modifier::empty()
                         .size_points(100.0, 100.0)
                         .offset(20.0, 20.0)
-                        .padding(8.0)
                         .background(Color(0.6, 0.2, 0.7, 0.85))
-                        .rounded_corners(12.0),
+                        .rounded_corners(12.0)
+                        .padding(8.0),
                     BoxSpec::default(),
                     || {
                         Text(
@@ -2790,9 +2775,9 @@ pub fn positioned_boxes_showcase() {
                     Modifier::empty()
                         .size_points(100.0, 100.0)
                         .offset(220.0, 160.0)
-                        .padding(8.0)
                         .background(Color(0.2, 0.7, 0.4, 0.85))
-                        .rounded_corners(12.0),
+                        .rounded_corners(12.0)
+                        .padding(8.0),
                     BoxSpec::default(),
                     || {
                         Text(
@@ -2807,9 +2792,9 @@ pub fn positioned_boxes_showcase() {
                     Modifier::empty()
                         .size_points(80.0, 60.0)
                         .offset(140.0, 30.0)
-                        .padding(6.0)
                         .background(Color(0.9, 0.5, 0.2, 0.85))
-                        .rounded_corners(10.0),
+                        .rounded_corners(10.0)
+                        .padding(6.0),
                     BoxSpec::default(),
                     || {
                         Text("C", Modifier::empty().padding(4.0), TextStyle::default());
@@ -2820,9 +2805,9 @@ pub fn positioned_boxes_showcase() {
                     Modifier::empty()
                         .size_points(120.0, 80.0)
                         .offset(40.0, 140.0)
-                        .padding(8.0)
                         .background(Color(0.2, 0.5, 0.9, 0.85))
-                        .rounded_corners(14.0),
+                        .rounded_corners(14.0)
+                        .padding(8.0),
                     BoxSpec::default(),
                     || {
                         Text(
@@ -2843,9 +2828,9 @@ pub fn item_list_showcase() {
         Text(
             "=== Item List (5 items) ===",
             Modifier::empty()
-                .padding(12.0)
                 .background(Color(1.0, 1.0, 1.0, 0.1))
-                .rounded_corners(14.0),
+                .rounded_corners(14.0)
+                .padding(12.0),
             TextStyle::default(),
         );
 
@@ -2867,17 +2852,17 @@ pub fn item_list_showcase() {
 
                     cranpose_ui::Box(
                         Modifier::empty()
-                            .padding(2.0)
                             .background(border_color)
-                            .rounded_corners(12.0),
+                            .rounded_corners(12.0)
+                            .padding(2.0),
                         BoxSpec::default(),
                         move || {
                             Row(
                                 Modifier::empty()
-                                    .padding(8.0)
-                                    .size_points(400.0, 50.0)
                                     .background(bg_color)
-                                    .rounded_corners(10.0),
+                                    .rounded_corners(10.0)
+                                    .padding(8.0)
+                                    .size_points(400.0, 50.0),
                                 RowSpec::default(),
                                 move || {
                                     let text = match i {
@@ -2931,9 +2916,9 @@ pub fn complex_chain_showcase() {
         Text(
             "=== Complex Modifier Chain ===",
             Modifier::empty()
-                .padding(12.0)
                 .background(Color(1.0, 1.0, 1.0, 0.1))
-                .rounded_corners(14.0),
+                .rounded_corners(14.0)
+                .padding(12.0),
             TextStyle::default(),
         );
 
@@ -2955,23 +2940,23 @@ pub fn complex_chain_showcase() {
 
         cranpose_ui::Box(
             Modifier::empty()
-                .padding(8.0)
                 .background(Color(0.8, 0.2, 0.2, 0.9))
-                .rounded_corners(16.0),
+                .rounded_corners(16.0)
+                .padding(8.0),
             BoxSpec::default(),
             || {
                 cranpose_ui::Box(
                     Modifier::empty()
-                        .padding(6.0)
                         .background(Color(0.2, 0.7, 0.3, 0.9))
-                        .rounded_corners(12.0),
+                        .rounded_corners(12.0)
+                        .padding(6.0),
                     BoxSpec::default(),
                     || {
                         cranpose_ui::Box(
                             Modifier::empty()
-                                .padding(12.0)
                                 .background(Color(0.3, 0.5, 0.9, 0.9))
-                                .rounded_corners(8.0),
+                                .rounded_corners(8.0)
+                                .padding(12.0),
                             BoxSpec::default(),
                             || {
                                 Text("Nested!", Modifier::empty(), TextStyle::default());
@@ -3002,16 +2987,16 @@ pub fn complex_chain_showcase() {
             Modifier::empty()
                 .offset(20.0, 0.0)
                 .size_points(180.0, 80.0)
-                .padding(6.0)
                 .background(Color(0.9, 0.6, 0.2, 0.9))
-                .rounded_corners(10.0),
+                .rounded_corners(10.0)
+                .padding(6.0),
             BoxSpec::default(),
             || {
                 cranpose_ui::Box(
                     Modifier::empty()
-                        .padding(8.0)
                         .background(Color(0.5, 0.3, 0.7, 0.9))
-                        .rounded_corners(6.0),
+                        .rounded_corners(6.0)
+                        .padding(8.0),
                     BoxSpec::default(),
                     || {
                         Text("Offset + Sized", Modifier::empty(), TextStyle::default());
@@ -3030,9 +3015,9 @@ pub fn dynamic_modifiers_showcase() {
         Text(
             "=== Dynamic Modifiers ===",
             Modifier::empty()
-                .padding(12.0)
                 .background(Color(1.0, 1.0, 1.0, 0.1))
-                .rounded_corners(14.0),
+                .rounded_corners(14.0)
+                .padding(12.0),
             TextStyle::default(),
         );
 
@@ -3059,9 +3044,9 @@ pub fn dynamic_modifiers_showcase() {
                             height: 50.0,
                         })
                         .offset(x, y)
-                        .padding(6.0)
                         .background(Color(0.3, 0.6, 0.9, 0.9))
-                        .rounded_corners(10.0),
+                        .rounded_corners(10.0)
+                        .padding(6.0),
                     BoxSpec::default(),
                     || {
                         Text("Move", Modifier::empty(), TextStyle::default());
@@ -3078,9 +3063,9 @@ pub fn dynamic_modifiers_showcase() {
         Text(
             format!("Frame: {current_frame}, X: {x:.1}"),
             Modifier::empty()
-                .padding(8.0)
                 .background(Color(0.2, 0.2, 0.3, 0.6))
-                .rounded_corners(10.0),
+                .rounded_corners(10.0)
+                .padding(8.0),
             TextStyle::default(),
         );
 
@@ -3120,9 +3105,9 @@ pub fn long_list_showcase() {
         Text(
             "=== Long List (50 items) ===",
             Modifier::empty()
-                .padding(12.0)
                 .background(Color(1.0, 1.0, 1.0, 0.1))
-                .rounded_corners(14.0),
+                .rounded_corners(14.0)
+                .padding(12.0),
             TextStyle::default(),
         );
 
@@ -3136,40 +3121,15 @@ pub fn long_list_showcase() {
             ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(6.0)),
             || {
                 for i in 0..50 {
-                    Row(
+                    Text(
+                        format!("Item {i}"),
                         Modifier::empty()
-                            .padding_symmetric(8.0, 4.0)
-                            .size(Size {
-                                width: 400.0,
-                                height: 40.0,
-                            })
                             .background(Color(0.12 + (i as f32 * 0.005), 0.15, 0.25, 0.7))
-                            .rounded_corners(8.0),
-                        RowSpec::default(),
-                        move || {
-                            let text = if i < 10 {
-                                match i {
-                                    0 => "Item 0",
-                                    1 => "Item 1",
-                                    2 => "Item 2",
-                                    3 => "Item 3",
-                                    4 => "Item 4",
-                                    5 => "Item 5",
-                                    6 => "Item 6",
-                                    7 => "Item 7",
-                                    8 => "Item 8",
-                                    9 => "Item 9",
-                                    _ => "Item",
-                                }
-                            } else {
-                                "Item 10+"
-                            };
-                            Text(
-                                text,
-                                Modifier::empty().padding_horizontal(12.0),
-                                TextStyle::default(),
-                            );
-                        },
+                            .rounded_corners(8.0)
+                            .padding_symmetric(8.0, 4.0)
+                            .size_points(400.0, 40.0)
+                            .padding_horizontal(12.0),
+                        TextStyle::default(),
                     );
                 }
             },

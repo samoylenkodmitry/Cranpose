@@ -43,18 +43,18 @@ pub(crate) fn images_tab() {
             Text(
                 "Chessboard Image Demo",
                 Modifier::empty()
-                    .padding(10.0)
                     .background(Color(1.0, 1.0, 1.0, 0.08))
-                    .rounded_corners(14.0),
+                    .rounded_corners(14.0)
+                    .padding(10.0),
                 TextStyle::default(),
             );
 
             Text(
                 "Generated RGBA bitmap rendered via Image composable.",
                 Modifier::empty()
-                    .padding(8.0)
                     .background(Color(0.14, 0.18, 0.30, 0.8))
-                    .rounded_corners(12.0),
+                    .rounded_corners(12.0)
+                    .padding(8.0),
                 TextStyle::default(),
             );
 

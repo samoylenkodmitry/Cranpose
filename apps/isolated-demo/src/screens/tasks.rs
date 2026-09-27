@@ -72,9 +72,9 @@ fn NewTaskField(palette: Palette, input: TextFieldState, tasks: Handle<TasksView
             Box(
                 Modifier::empty()
                     .weight(1.0)
-                    .padding(10.0)
                     .background(palette.surface)
-                    .rounded_corners(8.0),
+                    .rounded_corners(8.0)
+                    .padding(10.0),
                 BoxSpec::default(),
                 move || {
                     if input.text().is_empty() {
@@ -94,9 +94,9 @@ fn NewTaskField(palette: Palette, input: TextFieldState, tasks: Handle<TasksView
 
             Button(
                 Modifier::empty()
-                    .padding(12.0)
                     .background(palette.primary)
-                    .rounded_corners(8.0),
+                    .rounded_corners(8.0)
+                    .padding(12.0),
                 ButtonSpec::default(),
                 move || {
                     if tasks.get().on_add(&input.text()) {
@@ -129,9 +129,9 @@ fn TaskRow(palette: Palette, task: Task, tasks: Handle<TasksViewModel>) {
     Row(
         Modifier::empty()
             .fill_max_width()
-            .padding(10.0)
             .background(palette.surface)
-            .rounded_corners(8.0),
+            .rounded_corners(8.0)
+            .padding(10.0),
         RowSpec::default()
             .horizontal_arrangement(LinearArrangement::SpaceBetween)
             .vertical_alignment(VerticalAlignment::CenterVertically),

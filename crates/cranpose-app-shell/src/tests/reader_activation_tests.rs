@@ -808,11 +808,14 @@ fn reader_reveal_stops_when_a_scroll_action_reports_no_geometric_progress() {
                     }),
                 ColumnSpec::default(),
                 || {
-                    Spacer(Size::new(1.0, 240.0));
+                    // Below the 120-pixel viewport: a Column offers each child
+                    // only the height the ones before it leave, so the target
+                    // is moved past the edge rather than pushed by a spacer.
                     Text(
                         "Target",
                         Modifier::empty()
                             .size(Size::new(100.0, 48.0))
+                            .offset(0.0, 240.0)
                             .clickable(|_| {}),
                         TextStyle::default(),
                     );

@@ -54,6 +54,80 @@ impl Measurable for MockMeasurable {
     }
 }
 
+/// A child as wide as the row lets it be, like `fill_max_width` content,
+/// recording the width it was offered.
+struct FillWidthMeasurable {
+    offered: std::rc::Rc<std::cell::Cell<f32>>,
+}
+
+impl Measurable for FillWidthMeasurable {
+    fn measure(&self, constraints: Constraints) -> Placeable {
+        self.offered.set(constraints.max_width);
+        Placeable::value(constraints.max_width, 10.0, 2)
+    }
+
+    fn min_intrinsic_width(&self, _height: f32) -> f32 {
+        0.0
+    }
+
+    fn max_intrinsic_width(&self, _height: f32) -> f32 {
+        0.0
+    }
+
+    fn min_intrinsic_height(&self, _width: f32) -> f32 {
+        10.0
+    }
+
+    fn max_intrinsic_height(&self, _width: f32) -> f32 {
+        10.0
+    }
+
+    fn parent_data(&self) -> cranpose_ui_layout::ParentData {
+        cranpose_ui_layout::ParentData::default()
+    }
+}
+
+/// The width a filling child after one `fixed_width` wide is offered by a
+/// row 100 wide.
+fn width_offered_after(spacing: LinearArrangement, fixed_width: f32) -> f32 {
+    let offered = std::rc::Rc::new(std::cell::Cell::new(f32::NAN));
+    let policy = FlexMeasurePolicy::row(spacing, VerticalAlignment::Top);
+    let measurables: Vec<Box<dyn Measurable>> = vec![
+        Box::new(MockMeasurable::new(fixed_width, 20.0, 1)),
+        Box::new(FillWidthMeasurable {
+            offered: std::rc::Rc::clone(&offered),
+        }),
+    ];
+    policy.measure(
+        &test_scope(),
+        &measurables,
+        Constraints {
+            min_width: 0.0,
+            max_width: 100.0,
+            min_height: 0.0,
+            max_height: 100.0,
+        },
+    );
+    offered.get()
+}
+
+#[test]
+fn a_row_child_is_offered_only_the_width_the_children_before_it_leave() {
+    assert_eq!(width_offered_after(LinearArrangement::Start, 60.0), 40.0);
+}
+
+#[test]
+fn row_spacing_after_a_child_shrinks_to_the_width_left() {
+    assert_eq!(
+        width_offered_after(LinearArrangement::SpacedBy(12.0), 60.0),
+        28.0
+    );
+    assert_eq!(
+        width_offered_after(LinearArrangement::SpacedBy(12.0), 95.0),
+        0.0
+    );
+}
+
 #[test]
 fn box_measure_policy_takes_max_size() {
     let policy = BoxMeasurePolicy::new(Alignment::TOP_START, false);
