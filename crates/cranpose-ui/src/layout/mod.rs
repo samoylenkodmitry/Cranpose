@@ -1685,7 +1685,9 @@ impl LayoutBuilderState {
                 any.downcast_mut::<crate::subcompose_layout::SubcomposeLayoutNode>()
             {
                 let handle = subcompose.handle();
-                let resolved_modifiers = handle.resolved_modifiers();
+                let resolved_modifiers = handle
+                    .resolved_modifiers()
+                    .on_device_grid(subcompose.density().density());
                 (handle, resolved_modifiers)
             } else {
                 return Ok(None);
@@ -1961,7 +1963,7 @@ impl LayoutBuilderState {
                                     node.as_any()
                                         .downcast_ref::<crate::modifier_nodes::OffsetNode>()
                                 {
-                                    let delta = offset_node.offset();
+                                    let delta = offset_node.device_offset(density.density());
                                     offset.x += delta.x;
                                     offset.y += delta.y;
                                 }
@@ -2731,7 +2733,7 @@ impl CoordinatorChain {
         let node_borrow = node.node.borrow();
         node_borrow.as_layout_node().map_or_else(
             || wrapped.min_intrinsic_width(height),
-            |layout_node| layout_node.min_intrinsic_width(&wrapped, height),
+            |layout_node| layout_node.min_intrinsic_width(&wrapped, height, frame.scope.density()),
         )
     }
 
@@ -2754,7 +2756,7 @@ impl CoordinatorChain {
         let node_borrow = node.node.borrow();
         node_borrow.as_layout_node().map_or_else(
             || wrapped.max_intrinsic_width(height),
-            |layout_node| layout_node.max_intrinsic_width(&wrapped, height),
+            |layout_node| layout_node.max_intrinsic_width(&wrapped, height, frame.scope.density()),
         )
     }
 
@@ -2777,7 +2779,7 @@ impl CoordinatorChain {
         let node_borrow = node.node.borrow();
         node_borrow.as_layout_node().map_or_else(
             || wrapped.min_intrinsic_height(width),
-            |layout_node| layout_node.min_intrinsic_height(&wrapped, width),
+            |layout_node| layout_node.min_intrinsic_height(&wrapped, width, frame.scope.density()),
         )
     }
 
@@ -2800,7 +2802,7 @@ impl CoordinatorChain {
         let node_borrow = node.node.borrow();
         node_borrow.as_layout_node().map_or_else(
             || wrapped.max_intrinsic_height(width),
-            |layout_node| layout_node.max_intrinsic_height(&wrapped, width),
+            |layout_node| layout_node.max_intrinsic_height(&wrapped, width, frame.scope.density()),
         )
     }
 

@@ -504,7 +504,7 @@ fn collect_pointer_icon(node: &dyn std::any::Any, slices: &mut ModifierNodeSlice
 /// that no layout places: its draws sit inside the padding before them.
 pub fn collect_modifier_slices(chain: &ModifierNodeChain) -> ModifierNodeSlices {
     let mut slices = ModifierNodeSlices::default();
-    collect_modifier_slices_into(chain, &mut slices, &Rc::default());
+    collect_modifier_slices_into(chain, &mut slices, &Rc::default(), 1.0);
     slices
 }
 
@@ -516,17 +516,19 @@ pub fn collect_modifier_slices(chain: &ModifierNodeChain) -> ModifierNodeSlices 
 /// storage is reused when nothing else holds it; one the render graph still
 /// shares is left to the graph and replaced, not cloned only to be cleared.
 /// Its draws and text read their place from `geometry`, which the node's
-/// layout writes.
+/// layout writes, and until then sit inside the padding before them on the
+/// device pixel grid of `density`.
 pub(crate) fn collect_modifier_slices_into_shared(
     chain: &ModifierNodeChain,
     slices: &mut Rc<ModifierNodeSlices>,
     geometry: &Rc<CoordinatorGeometry>,
+    density: f32,
 ) {
     if Rc::get_mut(slices).is_none() {
         *slices = Rc::default();
     }
     if let Some(slices) = Rc::get_mut(slices) {
-        collect_modifier_slices_into(chain, slices, geometry);
+        collect_modifier_slices_into(chain, slices, geometry, density);
     }
 }
 
@@ -534,6 +536,7 @@ fn collect_modifier_slices_into(
     chain: &ModifierNodeChain,
     slices: &mut ModifierNodeSlices,
     geometry: &Rc<CoordinatorGeometry>,
+    density: f32,
 ) {
     slices.clear();
 
@@ -582,11 +585,8 @@ fn collect_modifier_slices_into(
 
             if has_layout && node_caps.intersects(NodeCapabilities::LAYOUT) {
                 if let Some(padding_node) = any.downcast_ref::<PaddingNode>() {
-                    let p = padding_node.padding();
-                    padding.left += p.left;
-                    padding.top += p.top;
-                    padding.right += p.right;
-                    padding.bottom += p.bottom;
+                    padding +=
+                        crate::modifier_nodes::device_padding(padding_node.padding(), density);
                 }
 
                 if let Some(motion_context_node) = any.downcast_ref::<MotionContextAnimatedNode>() {

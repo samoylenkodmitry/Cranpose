@@ -517,3 +517,35 @@ fn flow_row_intrinsics_follow_the_wrap() {
     assert_eq!(policy.max_intrinsic_height(&measurables, 100.0), 50.0);
     assert_eq!(policy.max_intrinsic_height(&measurables, 110.0), 25.0);
 }
+
+#[test]
+fn weighted_shares_hand_the_rounding_back_one_pixel_per_child() {
+    let mut shares = WeightShares::new(100.0, [1.0, 1.0, 1.0].into_iter(), 1.0);
+    assert_eq!(
+        [
+            shares.next_share(1.0),
+            shares.next_share(1.0),
+            shares.next_share(1.0)
+        ],
+        [34.0, 33.0, 33.0]
+    );
+
+    // Two halves of 101 round up to 51 each, a pixel too many, which the
+    // first child gives back.
+    let mut halves = WeightShares::new(101.0, [1.0, 1.0].into_iter(), 1.0);
+    assert_eq!(
+        [halves.next_share(1.0), halves.next_share(1.0)],
+        [50.0, 51.0]
+    );
+}
+
+#[test]
+fn weighted_shares_are_whole_device_pixels() {
+    let density = 2.0;
+    let mut shares = WeightShares::new(10.5, [1.0, 2.0].into_iter(), density);
+    let first = shares.next_share(1.0);
+    let second = shares.next_share(2.0);
+    assert_eq!(first + second, 10.5);
+    assert_eq!((first * density).fract(), 0.0);
+    assert_eq!((second * density).fract(), 0.0);
+}

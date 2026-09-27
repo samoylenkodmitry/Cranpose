@@ -700,6 +700,7 @@ fn draw_bitmap_painter(
     content_scale: ContentScale,
     alpha: f32,
     color_filter: Option<ColorFilter>,
+    density: f32,
 ) {
     let container_size = scope.size();
     let Some((dst_rect, clipped_dst_rect)) = image_destination_clip(
@@ -707,7 +708,7 @@ fn draw_bitmap_painter(
         container_size,
         alignment,
         content_scale,
-        crate::render_state::current_density(),
+        density,
     ) else {
         return;
     };
@@ -736,15 +737,12 @@ fn draw_bitmap_region_painter(
     alpha: f32,
     color_filter: Option<ColorFilter>,
     sampling: ImageSampling,
+    density: f32,
 ) {
     let source_size = Size::new(source.width.max(0.0), source.height.max(0.0));
-    let Some((dst_rect, clipped_dst_rect)) = image_destination_clip(
-        source_size,
-        scope.size(),
-        alignment,
-        content_scale,
-        crate::render_state::current_density(),
-    ) else {
+    let Some((dst_rect, clipped_dst_rect)) =
+        image_destination_clip(source_size, scope.size(), alignment, content_scale, density)
+    else {
         return;
     };
     let Some(clipped_source) = map_destination_clip_to_source(source, dst_rect, clipped_dst_rect)
@@ -872,6 +870,7 @@ fn draw_svg_painter(
     content_scale: ContentScale,
     alpha: f32,
     color_filter: Option<ColorFilter>,
+    density: f32,
 ) {
     let container_size = scope.size();
     let Some((dst_rect, clipped_dst_rect)) = image_destination_clip(
@@ -879,11 +878,10 @@ fn draw_svg_painter(
         container_size,
         alignment,
         content_scale,
-        crate::render_state::current_density(),
+        density,
     ) else {
         return;
     };
-    let density = crate::render_state::current_density();
     let pixel_size = Size::new(dst_rect.width * density, dst_rect.height * density);
     let bitmap = match svg.rasterize(pixel_size) {
         Ok(bitmap) => bitmap,
@@ -957,6 +955,8 @@ where
         config.content_description.clone_from(&content_description);
     });
 
+    // The grid the image is aligned on: the composition's, as Text keeps it.
+    let density = crate::density::density().density();
     let image_modifier = semantics_modifier
         .then(modifier)
         .semantics(|config| {
@@ -986,6 +986,7 @@ where
                     content_scale,
                     draw_alpha,
                     color_filter,
+                    density,
                 ),
                 PainterKind::BitmapRegion {
                     bitmap,
@@ -1000,6 +1001,7 @@ where
                     draw_alpha,
                     color_filter,
                     *sampling,
+                    density,
                 ),
                 PainterKind::BitmapTiled {
                     bitmap,
@@ -1039,6 +1041,7 @@ where
                     content_scale,
                     draw_alpha,
                     color_filter,
+                    density,
                 ),
             }
         });

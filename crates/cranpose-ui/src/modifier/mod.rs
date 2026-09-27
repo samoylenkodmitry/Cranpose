@@ -1298,6 +1298,37 @@ impl ResolvedModifiers {
     pub(crate) fn set_offset(&mut self, offset: Point) {
         self.offset = offset;
     }
+
+    /// These modifiers with every length on a whole device pixel of
+    /// `density`, as Compose's `roundToPx` puts padding, sizes and offsets.
+    pub(crate) fn on_device_grid(&self, density: f32) -> Self {
+        use cranpose_ui_layout::round_to_px;
+
+        let round = |value: Option<f32>| value.map(|value| round_to_px(value, density));
+        let dimension = |dimension: DimensionConstraint| match dimension {
+            DimensionConstraint::Points(value) => {
+                DimensionConstraint::Points(round_to_px(value, density))
+            }
+            other => other,
+        };
+        Self {
+            padding: crate::modifier_nodes::device_padding(self.padding, density),
+            layout: LayoutProperties {
+                padding: crate::modifier_nodes::device_padding(self.layout.padding, density),
+                width: dimension(self.layout.width),
+                height: dimension(self.layout.height),
+                min_width: round(self.layout.min_width),
+                min_height: round(self.layout.min_height),
+                max_width: round(self.layout.max_width),
+                max_height: round(self.layout.max_height),
+                ..self.layout
+            },
+            offset: Point {
+                x: round_to_px(self.offset.x, density),
+                y: round_to_px(self.offset.y, density),
+            },
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]

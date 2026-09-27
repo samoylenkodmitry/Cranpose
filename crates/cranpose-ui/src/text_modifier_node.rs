@@ -304,22 +304,32 @@ impl LayoutModifierNode for TextModifierNode {
         cranpose_ui_layout::LayoutModifierMeasureResult::with_size(Size { width, height })
     }
 
-    fn min_intrinsic_width(&self, _measurable: &dyn Measurable, _height: f32) -> f32 {
+    fn min_intrinsic_width(
+        &self,
+        _measurable: &dyn Measurable,
+        _height: f32,
+        _density: f32,
+    ) -> f32 {
         self.pixel_size(self.measure_text_content(None)).width
     }
 
-    fn max_intrinsic_width(&self, _measurable: &dyn Measurable, _height: f32) -> f32 {
+    fn max_intrinsic_width(
+        &self,
+        _measurable: &dyn Measurable,
+        _height: f32,
+        _density: f32,
+    ) -> f32 {
         self.pixel_size(self.measure_text_content(None)).width
     }
 
-    fn min_intrinsic_height(&self, _measurable: &dyn Measurable, width: f32) -> f32 {
+    fn min_intrinsic_height(&self, _measurable: &dyn Measurable, width: f32, _density: f32) -> f32 {
         self.pixel_size(
             self.measure_text_content(Some(width).filter(|w| w.is_finite() && *w > 0.0)),
         )
         .height
     }
 
-    fn max_intrinsic_height(&self, _measurable: &dyn Measurable, width: f32) -> f32 {
+    fn max_intrinsic_height(&self, _measurable: &dyn Measurable, width: f32, _density: f32) -> f32 {
         self.pixel_size(
             self.measure_text_content(Some(width).filter(|w| w.is_finite() && *w > 0.0)),
         )

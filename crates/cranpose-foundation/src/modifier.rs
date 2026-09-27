@@ -486,22 +486,42 @@ pub trait LayoutModifierNode: ModifierNode {
     }
 
     /// Returns the minimum intrinsic width of this modifier node.
-    fn min_intrinsic_width(&self, _measurable: &dyn Measurable, _height: f32) -> f32 {
+    fn min_intrinsic_width(
+        &self,
+        _measurable: &dyn Measurable,
+        _height: f32,
+        _density: f32,
+    ) -> f32 {
         0.0
     }
 
     /// Returns the maximum intrinsic width of this modifier node.
-    fn max_intrinsic_width(&self, _measurable: &dyn Measurable, _height: f32) -> f32 {
+    fn max_intrinsic_width(
+        &self,
+        _measurable: &dyn Measurable,
+        _height: f32,
+        _density: f32,
+    ) -> f32 {
         0.0
     }
 
     /// Returns the minimum intrinsic height of this modifier node.
-    fn min_intrinsic_height(&self, _measurable: &dyn Measurable, _width: f32) -> f32 {
+    fn min_intrinsic_height(
+        &self,
+        _measurable: &dyn Measurable,
+        _width: f32,
+        _density: f32,
+    ) -> f32 {
         0.0
     }
 
     /// Returns the maximum intrinsic height of this modifier node.
-    fn max_intrinsic_height(&self, _measurable: &dyn Measurable, _width: f32) -> f32 {
+    fn max_intrinsic_height(
+        &self,
+        _measurable: &dyn Measurable,
+        _width: f32,
+        _density: f32,
+    ) -> f32 {
         0.0
     }
 }

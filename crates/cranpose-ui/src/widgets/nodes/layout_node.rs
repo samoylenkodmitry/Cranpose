@@ -449,6 +449,7 @@ impl LayoutNode {
             self.modifier_chain.chain(),
             &mut snapshot,
             &self.coordinator_geometry,
+            self.density.density(),
         );
         self.modifier_slices_dirty.set(false);
     }
@@ -537,6 +538,7 @@ impl LayoutNode {
         if self.density != density {
             self.density = density;
             self.cache.clear();
+            self.modifier_slices_dirty.set(true);
             self.mark_needs_measure();
         }
     }

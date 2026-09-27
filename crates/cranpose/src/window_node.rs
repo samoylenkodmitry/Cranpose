@@ -135,19 +135,19 @@ impl LayoutModifierNode for NativeWindowNode {
         self.root.measure(context, measurable, constraints)
     }
 
-    fn min_intrinsic_width(&self, measurable: &dyn Measurable, height: f32) -> f32 {
-        self.root.min_intrinsic_width(measurable, height)
+    fn min_intrinsic_width(&self, measurable: &dyn Measurable, height: f32, density: f32) -> f32 {
+        self.root.min_intrinsic_width(measurable, height, density)
     }
 
-    fn max_intrinsic_width(&self, measurable: &dyn Measurable, height: f32) -> f32 {
-        self.root.max_intrinsic_width(measurable, height)
+    fn max_intrinsic_width(&self, measurable: &dyn Measurable, height: f32, density: f32) -> f32 {
+        self.root.max_intrinsic_width(measurable, height, density)
     }
 
-    fn min_intrinsic_height(&self, measurable: &dyn Measurable, width: f32) -> f32 {
-        self.root.min_intrinsic_height(measurable, width)
+    fn min_intrinsic_height(&self, measurable: &dyn Measurable, width: f32, density: f32) -> f32 {
+        self.root.min_intrinsic_height(measurable, width, density)
     }
 
-    fn max_intrinsic_height(&self, measurable: &dyn Measurable, width: f32) -> f32 {
-        self.root.max_intrinsic_height(measurable, width)
+    fn max_intrinsic_height(&self, measurable: &dyn Measurable, width: f32, density: f32) -> f32 {
+        self.root.max_intrinsic_height(measurable, width, density)
     }
 }

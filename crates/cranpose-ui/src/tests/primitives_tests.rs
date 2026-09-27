@@ -697,7 +697,8 @@ fn modifier_offset_translates_layout() {
         text_id.borrow().as_ref().copied().expect("text node id")
     );
     assert!((text_layout.rect.x - 15.0).abs() < 1e-3);
-    assert!((text_layout.rect.y - 17.5).abs() < 1e-3);
+    // Compose places an offset on whole pixels: 7.5 rounds up to 8.
+    assert!((text_layout.rect.y - 18.0).abs() < 1e-3);
 }
 
 #[test]

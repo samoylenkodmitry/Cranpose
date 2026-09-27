@@ -211,19 +211,39 @@ macro_rules! impl_draw_modifier_node {
 
 macro_rules! forward_intrinsics_to_child {
     () => {
-        fn min_intrinsic_width(&self, measurable: &dyn Measurable, height: f32) -> f32 {
+        fn min_intrinsic_width(
+            &self,
+            measurable: &dyn Measurable,
+            height: f32,
+            _density: f32,
+        ) -> f32 {
             measurable.min_intrinsic_width(height)
         }
 
-        fn max_intrinsic_width(&self, measurable: &dyn Measurable, height: f32) -> f32 {
+        fn max_intrinsic_width(
+            &self,
+            measurable: &dyn Measurable,
+            height: f32,
+            _density: f32,
+        ) -> f32 {
             measurable.max_intrinsic_width(height)
         }
 
-        fn min_intrinsic_height(&self, measurable: &dyn Measurable, width: f32) -> f32 {
+        fn min_intrinsic_height(
+            &self,
+            measurable: &dyn Measurable,
+            width: f32,
+            _density: f32,
+        ) -> f32 {
             measurable.min_intrinsic_height(width)
         }
 
-        fn max_intrinsic_height(&self, measurable: &dyn Measurable, width: f32) -> f32 {
+        fn max_intrinsic_height(
+            &self,
+            measurable: &dyn Measurable,
+            width: f32,
+            _density: f32,
+        ) -> f32 {
             measurable.max_intrinsic_height(width)
         }
     };
@@ -346,12 +366,13 @@ impl_layout_modifier_node!(PaddingNode, invalidate = InvalidationKind::Layout);
 impl LayoutModifierNode for PaddingNode {
     fn measure(
         &self,
-        _context: &mut dyn ModifierNodeContext,
+        context: &mut dyn ModifierNodeContext,
         measurable: &dyn Measurable,
         constraints: Constraints,
     ) -> cranpose_ui_layout::LayoutModifierMeasureResult {
-        let horizontal_padding = self.padding.horizontal_sum();
-        let vertical_padding = self.padding.vertical_sum();
+        let padding = device_padding(self.padding, context.density());
+        let horizontal_padding = padding.horizontal_sum();
+        let vertical_padding = padding.vertical_sum();
 
         let inner_constraints = Constraints {
             min_width: (constraints.min_width - horizontal_padding).max(0.0),
@@ -371,37 +392,45 @@ impl LayoutModifierNode for PaddingNode {
 
         cranpose_ui_layout::LayoutModifierMeasureResult::new(
             Size { width, height },
-            self.padding.left,
-            self.padding.top,
+            padding.left,
+            padding.top,
         )
     }
 
-    fn min_intrinsic_width(&self, measurable: &dyn Measurable, height: f32) -> f32 {
-        let vertical_padding = self.padding.vertical_sum();
-        let inner_height = (height - vertical_padding).max(0.0);
-        let inner_width = measurable.min_intrinsic_width(inner_height);
-        inner_width + self.padding.horizontal_sum()
+    fn min_intrinsic_width(&self, measurable: &dyn Measurable, height: f32, density: f32) -> f32 {
+        let padding = device_padding(self.padding, density);
+        let inner_height = (height - padding.vertical_sum()).max(0.0);
+        measurable.min_intrinsic_width(inner_height) + padding.horizontal_sum()
     }
 
-    fn max_intrinsic_width(&self, measurable: &dyn Measurable, height: f32) -> f32 {
-        let vertical_padding = self.padding.vertical_sum();
-        let inner_height = (height - vertical_padding).max(0.0);
-        let inner_width = measurable.max_intrinsic_width(inner_height);
-        inner_width + self.padding.horizontal_sum()
+    fn max_intrinsic_width(&self, measurable: &dyn Measurable, height: f32, density: f32) -> f32 {
+        let padding = device_padding(self.padding, density);
+        let inner_height = (height - padding.vertical_sum()).max(0.0);
+        measurable.max_intrinsic_width(inner_height) + padding.horizontal_sum()
     }
 
-    fn min_intrinsic_height(&self, measurable: &dyn Measurable, width: f32) -> f32 {
-        let horizontal_padding = self.padding.horizontal_sum();
-        let inner_width = (width - horizontal_padding).max(0.0);
-        let inner_height = measurable.min_intrinsic_height(inner_width);
-        inner_height + self.padding.vertical_sum()
+    fn min_intrinsic_height(&self, measurable: &dyn Measurable, width: f32, density: f32) -> f32 {
+        let padding = device_padding(self.padding, density);
+        let inner_width = (width - padding.horizontal_sum()).max(0.0);
+        measurable.min_intrinsic_height(inner_width) + padding.vertical_sum()
     }
 
-    fn max_intrinsic_height(&self, measurable: &dyn Measurable, width: f32) -> f32 {
-        let horizontal_padding = self.padding.horizontal_sum();
-        let inner_width = (width - horizontal_padding).max(0.0);
-        let inner_height = measurable.max_intrinsic_height(inner_width);
-        inner_height + self.padding.vertical_sum()
+    fn max_intrinsic_height(&self, measurable: &dyn Measurable, width: f32, density: f32) -> f32 {
+        let padding = device_padding(self.padding, density);
+        let inner_width = (width - padding.horizontal_sum()).max(0.0);
+        measurable.max_intrinsic_height(inner_width) + padding.vertical_sum()
+    }
+}
+
+/// `padding` with each side on a whole device pixel of `density`, as
+/// Compose's `roundToPx` puts every padding side.
+pub(crate) fn device_padding(padding: EdgeInsets, density: f32) -> EdgeInsets {
+    use cranpose_ui_layout::round_to_px;
+    EdgeInsets {
+        left: round_to_px(padding.left, density),
+        top: round_to_px(padding.top, density),
+        right: round_to_px(padding.right, density),
+        bottom: round_to_px(padding.bottom, density),
     }
 }
 
@@ -807,12 +836,20 @@ impl SizeNode {
         }
     }
 
-    fn target_constraints(&self) -> Constraints {
-        let max_width = self.max_width.map_or(f32::INFINITY, |v| v.max(0.0));
-        let max_height = self.max_height.map_or(f32::INFINITY, |v| v.max(0.0));
+    /// The constraints the sizes ask for, each on a whole device pixel of
+    /// `density` as Compose's `SizeNode` rounds them.
+    fn target_constraints(&self, density: f32) -> Constraints {
+        use cranpose_ui_layout::round_to_px;
+
+        let max_width = self
+            .max_width
+            .map_or(f32::INFINITY, |v| round_to_px(v, density).max(0.0));
+        let max_height = self
+            .max_height
+            .map_or(f32::INFINITY, |v| round_to_px(v, density).max(0.0));
 
         let min_width = self.min_width.map_or(0.0, |v| {
-            let clamped = v.clamp(0.0, max_width);
+            let clamped = round_to_px(v, density).clamp(0.0, max_width);
             if clamped == f32::INFINITY {
                 0.0
             } else {
@@ -821,7 +858,7 @@ impl SizeNode {
         });
 
         let min_height = self.min_height.map_or(0.0, |v| {
-            let clamped = v.clamp(0.0, max_height);
+            let clamped = round_to_px(v, density).clamp(0.0, max_height);
             if clamped == f32::INFINITY {
                 0.0
             } else {
@@ -869,11 +906,11 @@ impl_layout_modifier_node!(SizeNode, invalidate = InvalidationKind::Layout);
 impl LayoutModifierNode for SizeNode {
     fn measure(
         &self,
-        _context: &mut dyn ModifierNodeContext,
+        context: &mut dyn ModifierNodeContext,
         measurable: &dyn Measurable,
         constraints: Constraints,
     ) -> cranpose_ui_layout::LayoutModifierMeasureResult {
-        let target = self.target_constraints();
+        let target = self.target_constraints(context.density());
 
         let wrapped_constraints = if self.enforce_incoming {
             Constraints {
@@ -956,9 +993,9 @@ impl LayoutModifierNode for SizeNode {
         })
     }
 
-    fn min_intrinsic_width(&self, measurable: &dyn Measurable, height: f32) -> f32 {
+    fn min_intrinsic_width(&self, measurable: &dyn Measurable, height: f32, density: f32) -> f32 {
         size_intrinsic(
-            self.target_constraints(),
+            self.target_constraints(density),
             SizeAxis::Width,
             self.enforce_incoming,
             height,
@@ -966,9 +1003,9 @@ impl LayoutModifierNode for SizeNode {
         )
     }
 
-    fn max_intrinsic_width(&self, measurable: &dyn Measurable, height: f32) -> f32 {
+    fn max_intrinsic_width(&self, measurable: &dyn Measurable, height: f32, density: f32) -> f32 {
         size_intrinsic(
-            self.target_constraints(),
+            self.target_constraints(density),
             SizeAxis::Width,
             self.enforce_incoming,
             height,
@@ -976,9 +1013,9 @@ impl LayoutModifierNode for SizeNode {
         )
     }
 
-    fn min_intrinsic_height(&self, measurable: &dyn Measurable, width: f32) -> f32 {
+    fn min_intrinsic_height(&self, measurable: &dyn Measurable, width: f32, density: f32) -> f32 {
         size_intrinsic(
-            self.target_constraints(),
+            self.target_constraints(density),
             SizeAxis::Height,
             self.enforce_incoming,
             width,
@@ -986,9 +1023,9 @@ impl LayoutModifierNode for SizeNode {
         )
     }
 
-    fn max_intrinsic_height(&self, measurable: &dyn Measurable, width: f32) -> f32 {
+    fn max_intrinsic_height(&self, measurable: &dyn Measurable, width: f32, density: f32) -> f32 {
         size_intrinsic(
-            self.target_constraints(),
+            self.target_constraints(density),
             SizeAxis::Height,
             self.enforce_incoming,
             width,
@@ -1983,6 +2020,16 @@ impl OffsetNode {
         }
     }
 
+    /// The offset on a whole device pixel of `density`, where Compose's
+    /// `OffsetNode` places its content.
+    pub fn device_offset(&self, density: f32) -> Point {
+        use cranpose_ui_layout::round_to_px;
+        Point {
+            x: round_to_px(self.x, density),
+            y: round_to_px(self.y, density),
+        }
+    }
+
     pub fn rtl_aware(&self) -> bool {
         self.rtl_aware
     }
@@ -1999,11 +2046,12 @@ impl_layout_modifier_node!(OffsetNode, invalidate = InvalidationKind::Layout);
 impl LayoutModifierNode for OffsetNode {
     fn measure(
         &self,
-        _context: &mut dyn ModifierNodeContext,
+        context: &mut dyn ModifierNodeContext,
         measurable: &dyn Measurable,
         constraints: Constraints,
     ) -> cranpose_ui_layout::LayoutModifierMeasureResult {
-        measure_pass_through(measurable, constraints, |_| (self.x, self.y))
+        let offset = self.device_offset(context.density());
+        measure_pass_through(measurable, constraints, |_| (offset.x, offset.y))
     }
 
     forward_intrinsics_to_child!();

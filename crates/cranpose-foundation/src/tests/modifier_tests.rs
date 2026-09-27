@@ -812,7 +812,12 @@ impl LayoutModifierNode for TestLayoutNode {
         })
     }
 
-    fn min_intrinsic_width(&self, _measurable: &dyn Measurable, _height: f32) -> f32 {
+    fn min_intrinsic_width(
+        &self,
+        _measurable: &dyn Measurable,
+        _height: f32,
+        _density: f32,
+    ) -> f32 {
         50.0
     }
 }

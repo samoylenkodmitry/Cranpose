@@ -114,6 +114,13 @@ fn width_fraction(frame: usize) -> f32 {
 }
 
 const WARMUP_FRAMES: usize = 3;
+
+/// A grid width that grows by more than a pixel per column every frame, so
+/// every cell's whole-pixel width changes: the animated width moves under
+/// two pixels a frame, which resizes only the columns those pixels land in.
+fn growing_width_fraction(frame: usize) -> f32 {
+    0.7 + 0.03 * frame as f32
+}
 const MEASURED_FRAMES: usize = 6;
 const MAX_PASSES: u32 = 6;
 const IN_PLACE_MAX_PASSES: u32 = 3;
@@ -149,10 +156,10 @@ fn a_relayout_under_offscreen_rotated_cells_draws_them_in_a_few_passes() {
         return;
     };
     for frame in 0..WARMUP_FRAMES {
-        harness.frame(width_fraction(frame));
+        harness.frame(growing_width_fraction(frame));
     }
     for frame in WARMUP_FRAMES..WARMUP_FRAMES + MEASURED_FRAMES {
-        let (stats, _) = harness.frame(width_fraction(frame));
+        let (stats, _) = harness.frame(growing_width_fraction(frame));
         assert!(
             stats.isolated_layer_renders > CELLS / 2,
             "every frame resizes the cells, so they must be drawn again: {stats:?}"

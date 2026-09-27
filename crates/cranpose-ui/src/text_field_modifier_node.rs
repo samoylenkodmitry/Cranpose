@@ -957,21 +957,31 @@ impl LayoutModifierNode for TextFieldModifierNode {
         cranpose_ui_layout::LayoutModifierMeasureResult::with_size(size)
     }
 
-    fn min_intrinsic_width(&self, _measurable: &dyn Measurable, _height: f32) -> f32 {
+    fn min_intrinsic_width(
+        &self,
+        _measurable: &dyn Measurable,
+        _height: f32,
+        _density: f32,
+    ) -> f32 {
         self.measure_text_content(None).width
     }
 
-    fn max_intrinsic_width(&self, _measurable: &dyn Measurable, _height: f32) -> f32 {
+    fn max_intrinsic_width(
+        &self,
+        _measurable: &dyn Measurable,
+        _height: f32,
+        _density: f32,
+    ) -> f32 {
         self.measure_text_content(None).width
     }
 
-    fn min_intrinsic_height(&self, _measurable: &dyn Measurable, width: f32) -> f32 {
+    fn min_intrinsic_height(&self, _measurable: &dyn Measurable, width: f32, _density: f32) -> f32 {
         self.measure_text_content(self.wrap_width(width))
             .height
             .max(DEFAULT_LINE_HEIGHT)
     }
 
-    fn max_intrinsic_height(&self, _measurable: &dyn Measurable, width: f32) -> f32 {
+    fn max_intrinsic_height(&self, _measurable: &dyn Measurable, width: f32, _density: f32) -> f32 {
         self.measure_text_content(self.wrap_width(width))
             .height
             .max(DEFAULT_LINE_HEIGHT)

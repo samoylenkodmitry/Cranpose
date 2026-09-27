@@ -5,7 +5,9 @@ use cranpose_foundation::{
     Constraints, DelegatableNode, InvalidationKind, LayoutModifierNode, Measurable, ModifierNode,
     ModifierNodeContext, ModifierNodeElement, NodeCapabilities, NodeState, Size,
 };
-use cranpose_ui_layout::{HorizontalAlignment, LayoutModifierMeasureResult, VerticalAlignment};
+use cranpose_ui_layout::{
+    HorizontalAlignment, LayoutModifierMeasureResult, VerticalAlignment, round_to_px,
+};
 
 use super::Modifier;
 
@@ -21,13 +23,14 @@ pub fn minimum_interactive_placement(
     content: Size,
     density: f32,
 ) -> LayoutModifierMeasureResult {
+    let minimum = round_to_px(MINIMUM_INTERACTIVE_SIZE, density);
     let width = content.width.max(
-        MINIMUM_INTERACTIVE_SIZE
+        minimum
             .max(constraints.min_width)
             .min(constraints.max_width),
     );
     let height = content.height.max(
-        MINIMUM_INTERACTIVE_SIZE
+        minimum
             .max(constraints.min_height)
             .min(constraints.max_height),
     );
@@ -76,28 +79,28 @@ impl LayoutModifierNode for MinimumInteractiveNode {
         )
     }
 
-    fn min_intrinsic_width(&self, measurable: &dyn Measurable, height: f32) -> f32 {
+    fn min_intrinsic_width(&self, measurable: &dyn Measurable, height: f32, density: f32) -> f32 {
         measurable
             .min_intrinsic_width(height)
-            .max(MINIMUM_INTERACTIVE_SIZE)
+            .max(round_to_px(MINIMUM_INTERACTIVE_SIZE, density))
     }
 
-    fn max_intrinsic_width(&self, measurable: &dyn Measurable, height: f32) -> f32 {
+    fn max_intrinsic_width(&self, measurable: &dyn Measurable, height: f32, density: f32) -> f32 {
         measurable
             .max_intrinsic_width(height)
-            .max(MINIMUM_INTERACTIVE_SIZE)
+            .max(round_to_px(MINIMUM_INTERACTIVE_SIZE, density))
     }
 
-    fn min_intrinsic_height(&self, measurable: &dyn Measurable, width: f32) -> f32 {
+    fn min_intrinsic_height(&self, measurable: &dyn Measurable, width: f32, density: f32) -> f32 {
         measurable
             .min_intrinsic_height(width)
-            .max(MINIMUM_INTERACTIVE_SIZE)
+            .max(round_to_px(MINIMUM_INTERACTIVE_SIZE, density))
     }
 
-    fn max_intrinsic_height(&self, measurable: &dyn Measurable, width: f32) -> f32 {
+    fn max_intrinsic_height(&self, measurable: &dyn Measurable, width: f32, density: f32) -> f32 {
         measurable
             .max_intrinsic_height(width)
-            .max(MINIMUM_INTERACTIVE_SIZE)
+            .max(round_to_px(MINIMUM_INTERACTIVE_SIZE, density))
     }
 }
 

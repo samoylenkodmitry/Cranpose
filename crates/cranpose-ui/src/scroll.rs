@@ -848,19 +848,19 @@ impl LayoutModifierNode for ScrollNode {
         LayoutModifierMeasureResult::new(Size { width, height }, x_offset, y_offset)
     }
 
-    fn min_intrinsic_width(&self, measurable: &dyn Measurable, height: f32) -> f32 {
+    fn min_intrinsic_width(&self, measurable: &dyn Measurable, height: f32, _density: f32) -> f32 {
         measurable.min_intrinsic_width(height)
     }
 
-    fn max_intrinsic_width(&self, measurable: &dyn Measurable, height: f32) -> f32 {
+    fn max_intrinsic_width(&self, measurable: &dyn Measurable, height: f32, _density: f32) -> f32 {
         measurable.max_intrinsic_width(height)
     }
 
-    fn min_intrinsic_height(&self, measurable: &dyn Measurable, width: f32) -> f32 {
+    fn min_intrinsic_height(&self, measurable: &dyn Measurable, width: f32, _density: f32) -> f32 {
         measurable.min_intrinsic_height(width)
     }
 
-    fn max_intrinsic_height(&self, measurable: &dyn Measurable, width: f32) -> f32 {
+    fn max_intrinsic_height(&self, measurable: &dyn Measurable, width: f32, _density: f32) -> f32 {
         measurable.max_intrinsic_height(width)
     }
 }

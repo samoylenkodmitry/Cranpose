@@ -915,8 +915,14 @@ impl SubcomposeLayoutNode {
         if inner.density != density {
             inner.density = density;
             drop(inner);
+            self.modifier_slices_dirty.set(true);
             self.mark_needs_measure();
         }
+    }
+
+    /// The grid the composition provided, which the chain's lengths land on.
+    pub(crate) fn density(&self) -> crate::density::Density {
+        self.inner.borrow().density
     }
 
     pub fn set_modifier(&mut self, modifier: Modifier) {
@@ -939,6 +945,7 @@ impl SubcomposeLayoutNode {
             inner.modifier_chain.chain(),
             &mut snapshot,
             &self.coordinator_geometry,
+            inner.density.density(),
         );
         self.modifier_slices_dirty.set(false);
     }
