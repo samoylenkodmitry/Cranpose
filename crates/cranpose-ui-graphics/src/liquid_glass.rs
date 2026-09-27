@@ -195,6 +195,16 @@ pub const LIQUID_GLASS_SPECIALIZATIONS: &[LiquidGlassSpecialization] = &[
         inactive: |u| slot(u, GLASS_FACE_RESPONSE_UNIFORM) == 0.0,
     },
     LiquidGlassSpecialization {
+        flag: "GLASS_PARTIAL_ACTIVITY_OFF",
+        slots: &[GLASS_ACTIVITY_UNIFORM],
+        inactive: |u| slot(u, GLASS_ACTIVITY_UNIFORM) >= 1.0,
+    },
+    LiquidGlassSpecialization {
+        flag: "GLASS_CAPSULE_SMOOTHING_OFF",
+        slots: &[GLASS_CAPSULE_SMOOTHING_UNIFORM],
+        inactive: |u| slot(u, GLASS_CAPSULE_SMOOTHING_UNIFORM) == 0.0,
+    },
+    LiquidGlassSpecialization {
         flag: "GLASS_INTERIOR_GUARD",
         slots: &[],
         inactive: |_| true,
