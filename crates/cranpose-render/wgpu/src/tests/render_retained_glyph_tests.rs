@@ -467,7 +467,7 @@ fn push_label(scene: &mut CompositorScene, x: f32, color: Color) {
             width: 30.0,
             height: 24.0,
         },
-        Rc::new(cranpose_ui::text::AnnotatedString::from("MM")),
+        cranpose_ui::text::shared_plain_render_string("MM"),
         color,
         style,
         18.0,

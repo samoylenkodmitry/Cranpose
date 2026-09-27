@@ -253,6 +253,28 @@ pub struct RangeStyle<T> {
 /// content on hit, so a hash collision costs a fresh copy, never wrong text.
 /// The pool clears itself when full; a live scene re-warms within one frame.
 pub fn shared_plain_annotated_string(text: &str) -> Rc<AnnotatedString> {
+    with_shared_plain_text(text, |shared| Rc::clone(&shared.annotated))
+}
+
+/// The [`RenderString`] of [`shared_plain_annotated_string`]'s string for
+/// `text`, converted once while the pool holds it, so a canvas redrawing the
+/// same characters hands the renderer the same allocation every frame.
+pub fn shared_plain_render_string(text: &str) -> std::sync::Arc<RenderString> {
+    with_shared_plain_text(text, |shared| {
+        std::sync::Arc::clone(
+            shared
+                .render
+                .get_or_init(|| std::sync::Arc::new(shared.annotated.render_string())),
+        )
+    })
+}
+
+struct SharedPlainText {
+    annotated: Rc<AnnotatedString>,
+    render: std::cell::OnceCell<std::sync::Arc<RenderString>>,
+}
+
+fn with_shared_plain_text<R>(text: &str, read: impl FnOnce(&SharedPlainText) -> R) -> R {
     use std::{
         cell::RefCell,
         collections::HashMap,
@@ -261,8 +283,7 @@ pub fn shared_plain_annotated_string(text: &str) -> Rc<AnnotatedString> {
 
     const POOL_CAPACITY: usize = 256;
     thread_local! {
-        static POOL: RefCell<HashMap<u64, Rc<AnnotatedString>>> =
-            RefCell::new(HashMap::new());
+        static POOL: RefCell<HashMap<u64, SharedPlainText>> = RefCell::new(HashMap::new());
     }
 
     let mut hasher = cranpose_ui_graphics::FxHasher::default();
@@ -272,16 +293,18 @@ pub fn shared_plain_annotated_string(text: &str) -> Rc<AnnotatedString> {
     POOL.with(|pool| {
         let mut pool = pool.borrow_mut();
         if let Some(shared) = pool.get(&key)
-            && shared.text == text
+            && shared.annotated.text == text
         {
-            return Rc::clone(shared);
+            return read(shared);
         }
-        let shared = Rc::new(AnnotatedString::new(text.to_owned()));
         if pool.len() >= POOL_CAPACITY {
             pool.clear();
         }
-        pool.insert(key, Rc::clone(&shared));
-        shared
+        let shared = pool.entry(key).insert_entry(SharedPlainText {
+            annotated: Rc::new(AnnotatedString::new(text.to_owned())),
+            render: std::cell::OnceCell::new(),
+        });
+        read(shared.get())
     })
 }
 

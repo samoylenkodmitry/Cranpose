@@ -1383,6 +1383,7 @@ fn prepared_as(display: &str, width: f32, did_overflow: bool) -> PreparedTextLay
             line_count: display.split('\n').count(),
         },
         did_overflow,
+        render_text: Default::default(),
     }
 }
 
@@ -1620,4 +1621,28 @@ fn fit_ellipsis_places_the_cut_from_prefix_widths() {
             }
         }
     }
+}
+
+#[test]
+fn a_prepared_layout_converts_its_render_text_once() {
+    let layout = PreparedTextLayout {
+        text: Rc::new(crate::text::AnnotatedString::from("shown")),
+        visual_style: TextStyle::default(),
+        metrics: TextMetrics {
+            width: 10.0,
+            height: 10.0,
+            line_height: 10.0,
+            line_count: 1,
+        },
+        did_overflow: false,
+        render_text: Default::default(),
+    };
+    let untouched = layout.clone();
+    let first = layout.render_text();
+    assert_eq!(first.text, "shown");
+    assert!(std::sync::Arc::ptr_eq(&first, &layout.render_text()));
+    assert_eq!(
+        layout, untouched,
+        "the converted copy does not change what the layout is"
+    );
 }

@@ -53,6 +53,7 @@ impl TextMeasurer for CountingPreparedTextMeasurer {
             visual_style: style.clone(),
             metrics: self.measure(text, style),
             did_overflow: false,
+            render_text: Default::default(),
         }
     }
 
@@ -109,6 +110,7 @@ impl TextMeasurer for TallMultilineTextMeasurer {
             visual_style: style.clone(),
             metrics: self.measure(text, style),
             did_overflow: false,
+            render_text: Default::default(),
         }
     }
 

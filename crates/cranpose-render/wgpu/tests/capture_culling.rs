@@ -8,7 +8,7 @@ use cranpose_render_common::{
 use cranpose_render_wgpu::CapturedFrame;
 use cranpose_ui::{
     TextLayoutOptions,
-    text::{AnnotatedString, SpanStyle, TextStyle, TextUnit},
+    text::{SpanStyle, TextStyle, TextUnit},
 };
 use cranpose_ui_graphics::{
     BlendMode, Brush, Color, CompositingStrategy, DrawPrimitive, GraphicsLayer, ImageBitmap,
@@ -81,7 +81,8 @@ fn straddling_page() -> Vec<RenderNode> {
             node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
                 node_id: 7,
                 rect: rect(GLASS.x - 40.0, GLASS.y + 20.0, 90.0, 24.0),
-                text: std::rc::Rc::new(AnnotatedString::from("Straddle")),
+                text: cranpose_ui::text::shared_plain_annotated_string("Straddle"),
+                render_text: cranpose_ui::text::shared_plain_render_string("Straddle"),
                 text_style,
                 font_size: 18.0,
                 layout_options: TextLayoutOptions::default(),

@@ -108,6 +108,7 @@ fn push_text_style_draws_for_test(
 ) {
     with_test_app_context(|| {
         let mut text_layout = UiTextLayoutResolver;
+        let render_text = std::sync::Arc::new(text.render_string());
         let text = Rc::new(text.clone());
         push_text_style_draws(
             scene,
@@ -116,7 +117,7 @@ fn push_text_style_draws_for_test(
             rect,
             text_rect,
             content_layer,
-            &text,
+            (&text, &render_text),
             text_style,
             font_size,
             options,
