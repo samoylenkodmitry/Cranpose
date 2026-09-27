@@ -28,18 +28,7 @@ fn selection_rects_follow_wrapped_visual_lines() {
     let style = TextStyle::default();
     let line_height = 10.0_f32;
 
-    let rects = range_visual_line_rects(
-        text,
-        &style,
-        None,
-        Some(30.0),
-        0.0,
-        0.0,
-        0.0,
-        line_height,
-        6,
-        8,
-    );
+    let rects = range_visual_line_rects(text, &style, None, Some(30.0), 0.0, line_height, 6, 8);
     assert_eq!(rects.len(), 1, "one visual line touched, got {rects:?}");
     assert_eq!(
         rects[0].y,
@@ -48,18 +37,7 @@ fn selection_rects_follow_wrapped_visual_lines() {
     );
     assert!(rects[0].width > 0.0);
 
-    let spanning = range_visual_line_rects(
-        text,
-        &style,
-        None,
-        Some(30.0),
-        0.0,
-        0.0,
-        0.0,
-        line_height,
-        0,
-        5,
-    );
+    let spanning = range_visual_line_rects(text, &style, None, Some(30.0), 0.0, line_height, 0, 5);
     assert_eq!(spanning.len(), 2, "wrapped line spans two visual rows");
     assert_eq!(spanning[0].y, 0.0);
     assert_eq!(spanning[1].y, line_height);
@@ -732,5 +710,76 @@ fn a_mouse_double_click_keeps_the_word_through_its_release_and_a_jitter() {
         );
 
         crate::text_field_focus::clear_focus();
+    });
+}
+
+/// The rects a focused field after `padding(12.0)` draws for its selection
+/// `0..5` or its caret at 5, drawn as the node's draw commands draw them.
+fn padded_field_rects(selection: TextRange) -> Vec<cranpose_ui_graphics::Rect> {
+    use cranpose_ui_graphics::{DrawPrimitive, DrawScope as _};
+
+    let state = TextFieldState::new("hello world");
+    state.set_selection(selection);
+    let modifier = crate::modifier::Modifier::empty().padding(12.0).then(
+        crate::modifier::Modifier::with_element(TextFieldElement::new(state, TextStyle::default())),
+    );
+    let mut handle = crate::modifier::ModifierChainHandle::new();
+    let _ = handle.update(&modifier);
+    for node_ref in handle.chain().head_to_tail() {
+        node_ref.with_node(|node| {
+            if let Some(field) = node.as_any().downcast_ref::<TextFieldModifierNode>() {
+                *field.refs.is_focused.borrow_mut() = true;
+            }
+        });
+    }
+    let slices = crate::modifier::collect_modifier_slices(handle.chain());
+    let size = Size {
+        width: 240.0,
+        height: 48.0,
+    };
+    slices
+        .draw_commands()
+        .iter()
+        .flat_map(|command| {
+            let mut scope = crate::draw::command_draw_scope(size);
+            match command {
+                crate::draw::DrawCommand::Behind(draw)
+                | crate::draw::DrawCommand::WithContent(draw)
+                | crate::draw::DrawCommand::Overlay(draw) => draw(&mut scope),
+            }
+            scope.into_primitives()
+        })
+        .filter_map(|primitive| match primitive {
+            DrawPrimitive::Rect { rect, .. } => Some(rect),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_padded_field_draws_its_selection_and_caret_once_inside_the_padding() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    with_test_runtime(|| {
+        crate::cursor_animation::reset_cursor_blink();
+        let selection = padded_field_rects(TextRange::new(0, 5));
+        assert_eq!(selection.len(), 1, "one line of selection: {selection:?}");
+        assert_eq!(
+            (selection[0].x, selection[0].y.floor()),
+            (12.0, 12.0),
+            "the highlight starts where the text does, inside the padding once"
+        );
+
+        let caret = padded_field_rects(TextRange::new(5, 5));
+        assert_eq!(caret.len(), 1, "one caret: {caret:?}");
+        let hello = crate::text::measure_text(
+            &crate::text::AnnotatedString::from("hello"),
+            &TextStyle::default(),
+        )
+        .width;
+        assert_eq!(
+            (caret[0].x, caret[0].y.floor()),
+            (12.0 + hello, 12.0),
+            "the caret sits after `hello`, inside the padding once"
+        );
     });
 }
