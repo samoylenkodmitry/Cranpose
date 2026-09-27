@@ -35,7 +35,7 @@ use crate::{
     },
     font_tracking::FontTracking,
     gpos_kerning::KernedFont,
-    text_cache_key::{TextCacheKey, TextProbe},
+    text_cache_key::{TextCacheKey, TextKey, TextProbe},
     text_hyphenation::HyphenationDictionaryStore,
 };
 
@@ -49,6 +49,7 @@ const SOFTWARE_TEXT_GLYPH_METRICS_SLOTS_LOG2: u32 = 11;
 /// Slots of the per-pair kerning cache, as a power of two.
 const SOFTWARE_TEXT_KERN_METRICS_SLOTS_LOG2: u32 = 13;
 const SOFTWARE_TEXT_PREFIX_WIDTH_CACHE_CAPACITY: usize = 512;
+const SOFTWARE_TEXT_PREFIX_WIDTH_CHAR_BUDGET: usize = 1 << 18;
 #[cfg(feature = "embedded-default-font")]
 #[doc(hidden)]
 pub const DEFAULT_SOFTWARE_TEXT_FONT_BYTES: &[u8] = include_bytes!("../assets/NotoSansMerged.ttf");
@@ -654,17 +655,57 @@ type LinePrefixWidthsParams = (usize, usize, u64, u64);
 
 struct SoftwareTextMetricsCache {
     map: BoundedLruCache<TextCacheKey<TextMetricsParams>, TextMetrics>,
-    line_prefix_widths:
-        BoundedLruCache<TextCacheKey<LinePrefixWidthsParams>, Rc<TextLinePrefixWidths>>,
+    line_prefix_widths: LinePrefixWidthsCache,
     glyph_metrics: SoftwareTextGlyphMetricsCache,
+}
+
+/// Measured lines' prefix widths, least recently used out first once they
+/// hold more characters than a budget: a paragraph's widths take eight bytes
+/// a character, so a list scrolling through long texts would otherwise keep
+/// every paragraph it ever measured up to the entry count.
+struct LinePrefixWidthsCache {
+    entries: BoundedLruCache<TextCacheKey<LinePrefixWidthsParams>, Rc<TextLinePrefixWidths>>,
+    chars: usize,
+    char_budget: usize,
+}
+
+impl LinePrefixWidthsCache {
+    fn new(capacity: usize, char_budget: usize) -> Self {
+        Self {
+            entries: BoundedLruCache::with_capacity_at_least_one(capacity),
+            chars: 0,
+            char_budget,
+        }
+    }
+
+    fn get(
+        &mut self,
+        key: &(dyn TextKey<LinePrefixWidthsParams> + '_),
+    ) -> Option<&Rc<TextLinePrefixWidths>> {
+        self.entries.get(key)
+    }
+
+    fn put(&mut self, key: TextCacheKey<LinePrefixWidthsParams>, widths: Rc<TextLinePrefixWidths>) {
+        self.chars += widths.char_count();
+        if let Some((_, dropped)) = self.entries.push(key, widths) {
+            self.chars -= dropped.char_count();
+        }
+        while self.chars > self.char_budget && self.entries.len() > 1 {
+            let Some((_, dropped)) = self.entries.pop_lru() else {
+                break;
+            };
+            self.chars -= dropped.char_count();
+        }
+    }
 }
 
 impl SoftwareTextMetricsCache {
     fn new(capacity: usize) -> Self {
         Self {
             map: BoundedLruCache::with_capacity_at_least_one(capacity),
-            line_prefix_widths: BoundedLruCache::with_capacity_at_least_one(
+            line_prefix_widths: LinePrefixWidthsCache::new(
                 capacity.max(SOFTWARE_TEXT_PREFIX_WIDTH_CACHE_CAPACITY),
+                SOFTWARE_TEXT_PREFIX_WIDTH_CHAR_BUDGET,
             ),
             glyph_metrics: SoftwareTextGlyphMetricsCache::new(),
         }
