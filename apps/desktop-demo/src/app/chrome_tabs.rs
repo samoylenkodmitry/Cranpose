@@ -510,8 +510,8 @@ fn PageBody(page: Page) {
             Text(
                 "press me, then drag this tab out of the strip or onto another window's strip",
                 Modifier::empty()
-                    .padding(12.0)
                     .background(ACTIVE_TAB)
+                    .padding(12.0)
                     .clickable(move |_| clicks.set(clicks.get_non_reactive() + 1)),
                 label_style(14.0, INK),
             );

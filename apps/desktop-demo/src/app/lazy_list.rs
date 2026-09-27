@@ -61,9 +61,9 @@ fn LifecycleStatsDisplay(stats: MutableState<LifecycleStats>) {
             current.total_composes, current.total_effects, current.total_disposes
         ),
         Modifier::empty()
-            .padding(8.0)
             .background(Color(0.0, 0.4, 0.2, 0.8))
-            .rounded_corners(8.0),
+            .rounded_corners(8.0)
+            .padding(8.0),
         TextStyle::default(),
     );
 }
@@ -81,17 +81,17 @@ fn LazyListStatsDisplay(list_state: cranpose_foundation::lazy::LazyListState) {
             Text(
                 format!("Visible: {visible}"),
                 Modifier::empty()
-                    .padding(8.0)
                     .background(Color(0.2, 0.5, 0.3, 0.8))
-                    .rounded_corners(8.0),
+                    .rounded_corners(8.0)
+                    .padding(8.0),
                 TextStyle::default(),
             );
             Text(
                 format!("Cached: {cached}"),
                 Modifier::empty()
-                    .padding(8.0)
                     .background(Color(0.5, 0.4, 0.2, 0.8))
-                    .rounded_corners(8.0),
+                    .rounded_corners(8.0)
+                    .padding(8.0),
                 TextStyle::default(),
             );
         },
@@ -104,9 +104,9 @@ fn FirstVisibleIndexDisplay(list_state: cranpose_foundation::lazy::LazyListState
     Text(
         format!("FirstIndex: {first_index}"),
         Modifier::empty()
-            .padding(8.0)
             .background(Color(0.4, 0.3, 0.5, 0.8))
-            .rounded_corners(8.0),
+            .rounded_corners(8.0)
+            .padding(8.0),
         TextStyle::default(),
     );
 }
@@ -155,9 +155,9 @@ fn LifecycleListItem(index: usize, stats: MutableState<LifecycleStats>) {
             })
             .fill_max_width()
             .height(item_height)
-            .padding(12.0)
             .background(bg_color)
-            .rounded_corners(8.0),
+            .rounded_corners(8.0)
+            .padding(12.0),
         RowSpec::new()
             .horizontal_arrangement(LinearArrangement::SpaceBetween)
             .vertical_alignment(VerticalAlignment::CenterVertically),
@@ -201,9 +201,9 @@ fn LifecycleListItem(index: usize, stats: MutableState<LifecycleStats>) {
             Text(
                 format!("h: {item_height:.0}px"),
                 Modifier::empty()
-                    .padding(6.0)
                     .background(Color(0.3, 0.3, 0.5, 0.5))
-                    .rounded_corners(6.0),
+                    .rounded_corners(6.0)
+                    .padding(6.0),
                 TextStyle::default(),
             );
         },
@@ -232,9 +232,9 @@ pub fn lazy_list_example() {
             Text(
                 "Lazy List Demo",
                 Modifier::empty()
-                    .padding(12.0)
                     .background(Color(1.0, 1.0, 1.0, 0.08))
-                    .rounded_corners(16.0),
+                    .rounded_corners(16.0)
+                    .padding(12.0),
                 TextStyle::default(),
             );
 
@@ -257,9 +257,9 @@ pub fn lazy_list_example() {
                             Text(
                                 format!("Virtualized list with {count} items"),
                                 Modifier::empty()
-                                    .padding(8.0)
                                     .background(Color(0.2, 0.3, 0.4, 0.7))
-                                    .rounded_corners(12.0),
+                                    .rounded_corners(12.0)
+                                    .padding(8.0),
                                 TextStyle::default(),
                             );
 
@@ -389,9 +389,9 @@ pub fn lazy_list_example() {
                                     Text(
                                         format!("Hello #{index}"),
                                         Modifier::empty()
-                                            .padding(8.0)
                                             .background(Color(0.3, 0.3, 0.4, 0.4))
-                                            .rounded_corners(8.0),
+                                            .rounded_corners(8.0)
+                                            .padding(8.0),
                                         TextStyle::default(),
                                     );
                                 },

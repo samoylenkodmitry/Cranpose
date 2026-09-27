@@ -69,8 +69,8 @@ pub fn TextWrapReproScreen() {
     Column(
         Modifier::empty()
             .fill_max_size()
-            .padding(24.0)
-            .background(Color(0.98, 0.98, 0.97, 1.0)),
+            .background(Color(0.98, 0.98, 0.97, 1.0))
+            .padding(24.0),
         ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(20.0)),
         move || {
             Text(

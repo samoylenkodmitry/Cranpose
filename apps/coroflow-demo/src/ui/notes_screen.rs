@@ -81,9 +81,9 @@ fn TextInput(field: TextFieldState, placeholder: &'static str) {
     Box(
         Modifier::empty()
             .fill_max_width()
-            .padding(10.0)
             .background(PALETTE.raised)
-            .rounded_corners(8.0),
+            .rounded_corners(8.0)
+            .padding(10.0),
         BoxSpec::default(),
         move || {
             if field.text().is_empty() {
@@ -103,9 +103,9 @@ fn CatalogPanel(catalog: CatalogResults) {
     Column(
         Modifier::empty()
             .fill_max_width()
-            .padding(12.0)
             .background(PALETTE.surface)
-            .rounded_corners(8.0),
+            .rounded_corners(8.0)
+            .padding(12.0),
         ColumnSpec::default().vertical_arrangement(LinearArrangement::spaced_by(4.0)),
         move || {
             Text("Remote catalog", Modifier::empty(), caption(PALETTE.muted));
@@ -235,9 +235,9 @@ fn NoteRow(
     Row(
         Modifier::empty()
             .fill_max_width()
-            .padding(10.0)
             .background(PALETTE.surface)
-            .rounded_corners(8.0),
+            .rounded_corners(8.0)
+            .padding(10.0),
         RowSpec::default()
             .horizontal_arrangement(LinearArrangement::spaced_by(8.0))
             .vertical_alignment(VerticalAlignment::CenterVertically),
@@ -282,9 +282,9 @@ fn SyncBar(sync: SyncStatus, visible: usize, total: usize) {
     Row(
         Modifier::empty()
             .fill_max_width()
-            .padding(10.0)
             .background(PALETTE.surface)
-            .rounded_corners(8.0),
+            .rounded_corners(8.0)
+            .padding(10.0),
         RowSpec::default().horizontal_arrangement(LinearArrangement::SpaceBetween),
         move || {
             Text(label.clone(), Modifier::empty(), caption(color));
@@ -302,9 +302,9 @@ fn Snackbar(message: String) {
     Box(
         Modifier::empty()
             .fill_max_width()
-            .padding(12.0)
             .background(PALETTE.raised)
-            .rounded_corners(8.0),
+            .rounded_corners(8.0)
+            .padding(12.0),
         BoxSpec::default(),
         move || {
             Text(message.clone(), Modifier::empty(), body(PALETTE.text));
@@ -322,9 +322,9 @@ pub fn ActionButton(label: &'static str, color: Color, on_click: impl Fn() + 'st
     };
     Button(
         Modifier::empty()
-            .padding(8.0)
             .background(color)
-            .rounded_corners(6.0),
+            .rounded_corners(6.0)
+            .padding(8.0),
         ButtonSpec::default(),
         on_click,
         move || {

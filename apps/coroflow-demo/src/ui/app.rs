@@ -74,8 +74,8 @@ fn TopBar() {
     Column(
         Modifier::empty()
             .fill_max_width()
-            .padding(16.0)
-            .background(PALETTE.surface),
+            .background(PALETTE.surface)
+            .padding(16.0),
         ColumnSpec::default(),
         || {
             Text(TITLE, Modifier::empty(), heading(PALETTE.text));
@@ -94,8 +94,8 @@ fn TabBar(nav: NavController<Screen>) {
     Row(
         Modifier::empty()
             .fill_max_width()
-            .padding(12.0)
-            .background(PALETTE.surface),
+            .background(PALETTE.surface)
+            .padding(12.0),
         RowSpec::default().horizontal_arrangement(LinearArrangement::SpaceEvenly),
         move || {
             for (tab, label) in TABS {

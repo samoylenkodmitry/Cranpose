@@ -1068,7 +1068,6 @@ fn SortFilterStage(suggestion_offset: f32) {
                                                 Box(
                                                     Modifier::empty()
                                                         .fill_max_size()
-                                                        .padding(1.5)
                                                         .draw_behind(move |scope| {
                                                             let press = pill_press_fill
                                                                 .get()
@@ -1082,7 +1081,8 @@ fn SortFilterStage(suggestion_offset: f32) {
                                                                 ),
                                                                 CornerRadii::uniform(18.5),
                                                             );
-                                                        }),
+                                                        })
+                                                        .padding(1.5),
                                                     BoxSpec::default()
                                                         .content_alignment(Alignment::CENTER),
                                                     || {

@@ -35,9 +35,9 @@ pub fn DiagnosticsScreen(container: Handle<AppContainer>) {
             Row(
                 Modifier::empty()
                     .fill_max_width()
-                    .padding(12.0)
                     .background(PALETTE.surface)
-                    .rounded_corners(8.0),
+                    .rounded_corners(8.0)
+                    .padding(12.0),
                 RowSpec::default().horizontal_arrangement(LinearArrangement::SpaceBetween),
                 move || {
                     Text("Catalog requests", Modifier::empty(), body(PALETTE.text));
@@ -69,9 +69,9 @@ fn StatusRow(label: &'static str, running: bool, detail: String) {
     Row(
         Modifier::empty()
             .fill_max_width()
-            .padding(12.0)
             .background(PALETTE.surface)
-            .rounded_corners(8.0),
+            .rounded_corners(8.0)
+            .padding(12.0),
         RowSpec::default()
             .horizontal_arrangement(LinearArrangement::SpaceBetween)
             .vertical_alignment(VerticalAlignment::CenterVertically),

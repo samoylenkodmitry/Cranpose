@@ -55,12 +55,14 @@ pub fn PressedStateReproScreen() {
         move || {
             Text(
                 "Pressed State Repro",
-                Modifier::empty().padding(8.0).draw_behind(|scope| {
-                    scope.draw_round_rect(
-                        Brush::solid(Color(0.2, 0.2, 0.3, 1.0)),
-                        CornerRadii::uniform(8.0),
-                    );
-                }),
+                Modifier::empty()
+                    .draw_behind(|scope| {
+                        scope.draw_round_rect(
+                            Brush::solid(Color(0.2, 0.2, 0.3, 1.0)),
+                            CornerRadii::uniform(8.0),
+                        );
+                    })
+                    .padding(8.0),
                 TextStyle::default(),
             );
 

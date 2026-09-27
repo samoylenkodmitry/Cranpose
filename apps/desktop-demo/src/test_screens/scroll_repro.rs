@@ -14,8 +14,8 @@ pub fn ScrollReproScreen() {
     Column(
         Modifier::empty()
             .fill_max_size()
-            .padding(16.0)
-            .background(Color(0.96, 0.96, 0.94, 1.0)),
+            .background(Color(0.96, 0.96, 0.94, 1.0))
+            .padding(16.0),
         ColumnSpec::default(),
         move || {
             Row(

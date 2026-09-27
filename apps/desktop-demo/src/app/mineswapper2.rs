@@ -255,9 +255,9 @@ pub fn mineswapper2_tab() {
                     Text(
                         "Mineswapper 2",
                         Modifier::empty()
-                            .padding(10.0)
                             .background(Color(1.0, 1.0, 1.0, 0.08))
-                            .rounded_corners(14.0),
+                            .rounded_corners(14.0)
+                            .padding(10.0),
                         TextStyle::default(),
                     );
 
@@ -396,9 +396,9 @@ pub fn mineswapper2_tab() {
                     game.seed % 100000
                 ),
                 Modifier::empty()
-                    .padding(8.0)
                     .background(Color(0.15, 0.22, 0.34, 0.7))
-                    .rounded_corners(12.0),
+                    .rounded_corners(12.0)
+                    .padding(8.0),
                 TextStyle::default(),
             );
 
@@ -410,9 +410,9 @@ pub fn mineswapper2_tab() {
             Text(
                 status_text,
                 Modifier::empty()
-                    .padding(8.0)
                     .background(Color(0.12, 0.16, 0.28, 0.6))
-                    .rounded_corners(12.0),
+                    .rounded_corners(12.0)
+                    .padding(8.0),
                 TextStyle::default(),
             );
 

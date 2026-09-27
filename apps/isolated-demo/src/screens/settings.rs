@@ -25,9 +25,9 @@ pub(crate) fn SettingsScreen(palette: Palette, dark_mode: MutableState<bool>) {
             Row(
                 Modifier::empty()
                     .fill_max_width()
-                    .padding(12.0)
                     .background(palette.surface)
-                    .rounded_corners(8.0),
+                    .rounded_corners(8.0)
+                    .padding(12.0),
                 RowSpec::default()
                     .horizontal_arrangement(LinearArrangement::SpaceBetween)
                     .vertical_alignment(VerticalAlignment::CenterVertically),
@@ -39,9 +39,9 @@ pub(crate) fn SettingsScreen(palette: Palette, dark_mode: MutableState<bool>) {
                     );
                     Button(
                         Modifier::empty()
-                            .padding(10.0)
                             .background(palette.primary)
-                            .rounded_corners(8.0),
+                            .rounded_corners(8.0)
+                            .padding(10.0),
                         ButtonSpec::default(),
                         move || dark_mode.set(!dark_mode.value()),
                         move || {

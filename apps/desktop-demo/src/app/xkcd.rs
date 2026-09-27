@@ -107,18 +107,18 @@ pub(crate) fn xkcd_tab() {
             Text(
                 "XKCD Random Comic",
                 Modifier::empty()
-                    .padding(10.0)
                     .background(Color(1.0, 1.0, 1.0, 0.08))
-                    .rounded_corners(14.0),
+                    .rounded_corners(14.0)
+                    .padding(10.0),
                 TextStyle::default(),
             );
 
             Text(
                 "Downloads a random comic metadata + image from xkcd.com.",
                 Modifier::empty()
-                    .padding(8.0)
                     .background(Color(0.14, 0.18, 0.30, 0.8))
-                    .rounded_corners(12.0),
+                    .rounded_corners(12.0)
+                    .padding(8.0),
                 TextStyle::default(),
             );
             Row(
@@ -129,9 +129,9 @@ pub(crate) fn xkcd_tab() {
                 move || {
                     cranpose_ui::Button(
                         Modifier::empty()
-                            .padding(10.0)
                             .background(Color(0.21, 0.44, 0.83, 1.0))
-                            .rounded_corners(12.0),
+                            .rounded_corners(12.0)
+                            .padding(10.0),
                         ButtonSpec::default(),
                         {
                             move || {
@@ -154,9 +154,9 @@ pub(crate) fn xkcd_tab() {
                     Text(
                         "Loading comic...",
                         Modifier::empty()
-                            .padding(10.0)
                             .background(Color(0.12, 0.18, 0.30, 0.9))
-                            .rounded_corners(12.0),
+                            .rounded_corners(12.0)
+                            .padding(10.0),
                         TextStyle::default(),
                     );
                 }
@@ -164,9 +164,9 @@ pub(crate) fn xkcd_tab() {
                     Text(
                         format!("Error: {err}"),
                         Modifier::empty()
-                            .padding(10.0)
                             .background(Color(0.45, 0.18, 0.18, 0.9))
-                            .rounded_corners(12.0),
+                            .rounded_corners(12.0)
+                            .padding(10.0),
                         TextStyle::default(),
                     );
                 }
@@ -174,9 +174,9 @@ pub(crate) fn xkcd_tab() {
                     Text(
                         format!("#{} - {}", loaded.comic.num, loaded.comic.title),
                         Modifier::empty()
-                            .padding(10.0)
                             .background(Color(0.16, 0.28, 0.18, 0.85))
-                            .rounded_corners(12.0),
+                            .rounded_corners(12.0)
+                            .padding(10.0),
                         TextStyle::default(),
                     );
 
@@ -186,9 +186,9 @@ pub(crate) fn xkcd_tab() {
                         Text(
                             url.clone(),
                             Modifier::empty()
-                                .padding(8.0)
                                 .background(Color(0.14, 0.18, 0.30, 0.8))
                                 .rounded_corners(10.0)
+                                .padding(8.0)
                                 .clickable(move |_| {
                                     if let Err(err) = uri_handler.open_uri(&url) {
                                         log::error!("Failed to open xkcd link {url}: {err:#}");
@@ -234,9 +234,9 @@ pub(crate) fn xkcd_tab() {
                     Text(
                         loaded.comic.alt,
                         Modifier::empty()
-                            .padding(8.0)
                             .background(Color(0.10, 0.12, 0.18, 0.85))
-                            .rounded_corners(10.0),
+                            .rounded_corners(10.0)
+                            .padding(8.0),
                         TextStyle::default(),
                     );
                 }

@@ -523,9 +523,9 @@ pub fn markdown_viewer_tab() {
                                 url_state,
                                 Modifier::empty()
                                     .weight(1.0)
-                                    .padding(10.0)
                                     .background(Color(0.12, 0.14, 0.22, 1.0))
-                                    .rounded_corners(10.0),
+                                    .rounded_corners(10.0)
+                                    .padding(10.0),
                                 TextStyle {
                                     span_style: SpanStyle {
                                         color: Some(Color(0.82, 0.86, 0.95, 1.0)),
@@ -574,9 +574,9 @@ pub fn markdown_viewer_tab() {
                         Text(
                             "Enter a URL pointing to a raw Markdown file and press Fetch.",
                             Modifier::empty()
-                                .padding(12.0)
                                 .background(Color(0.10, 0.14, 0.24, 0.8))
-                                .rounded_corners(12.0),
+                                .rounded_corners(12.0)
+                                .padding(12.0),
                             TextStyle {
                                 span_style: SpanStyle {
                                     color: Some(Color(0.65, 0.70, 0.85, 1.0)),
@@ -590,9 +590,9 @@ pub fn markdown_viewer_tab() {
                         Text(
                             "Fetching…",
                             Modifier::empty()
-                                .padding(12.0)
                                 .background(Color(0.14, 0.20, 0.38, 0.9))
-                                .rounded_corners(12.0),
+                                .rounded_corners(12.0)
+                                .padding(12.0),
                             TextStyle {
                                 span_style: SpanStyle {
                                     color: Some(Color(0.75, 0.82, 1.0, 1.0)),
@@ -606,9 +606,9 @@ pub fn markdown_viewer_tab() {
                         Text(
                             format!("Error: {msg}"),
                             Modifier::empty()
-                                .padding(12.0)
                                 .background(Color(0.40, 0.12, 0.12, 0.9))
-                                .rounded_corners(12.0),
+                                .rounded_corners(12.0)
+                                .padding(12.0),
                             TextStyle {
                                 span_style: SpanStyle {
                                     color: Some(Color(1.0, 0.65, 0.65, 1.0)),

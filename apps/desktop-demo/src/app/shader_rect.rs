@@ -491,8 +491,8 @@ pub(crate) const FIRE_NEON_THIN: FireStyle = FireStyle {
 pub(crate) fn ShaderRectTab() {
     Column(
         Modifier::empty()
-            .padding(32.0)
             .background(Color(0.06, 0.07, 0.12, 1.0))
+            .padding(32.0)
             .fill_max_width(),
         ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(20.0)),
         move || {
