@@ -24,6 +24,10 @@ them.
 
 ## Showcase Cranpose
 
+
+https://github.com/user-attachments/assets/aa9a47cf-0870-454d-8d91-43fcc7c2897c
+
+
 [Showcase Cranpose](https://github.com/samoylenkodmitry/cranpose-showcase) is a polished,
 cross-platform app built with Cranpose. Its live [web demo](https://samoylenkodmitry.github.io/cranpose-showcase/)
 demonstrates liquid-glass surfaces, adaptive layouts, animation, and native Android and iOS builds.
