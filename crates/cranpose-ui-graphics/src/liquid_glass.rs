@@ -162,11 +162,6 @@ pub const LIQUID_GLASS_SPECIALIZATIONS: &[LiquidGlassSpecialization] = &[
         inactive: |u| slot(u, GLASS_KEY_FILL_UNIFORM) <= 0.0,
     },
     LiquidGlassSpecialization {
-        flag: "GLASS_OPTICAL_STAGE_OFF",
-        slots: &[GLASS_OPTICAL_STAGE_UNIFORM],
-        inactive: |u| slot(u, GLASS_OPTICAL_STAGE_UNIFORM) == 0.0,
-    },
-    LiquidGlassSpecialization {
         flag: "GLASS_SEPARATE_CONTENT_OFF",
         slots: &[GLASS_FOREGROUND_CONTENT_UNIFORM],
         inactive: |u| slot(u, GLASS_FOREGROUND_CONTENT_UNIFORM) <= 0.5,
@@ -326,6 +321,11 @@ pub fn specialize_liquid_glass_with_folds(shader: &mut RuntimeShader, folds: boo
                     }
                 }
                 shader.set_draw_split((folds && !projected).then_some(GLASS_RIM_DRAW_OVERRIDE));
+                if folds {
+                    shader.set_override(GLASS_OPTICAL_STAGE_OVERRIDE, f64::from(stage));
+                } else {
+                    shader.clear_override(GLASS_OPTICAL_STAGE_OVERRIDE);
+                }
                 shader.set_specialization_exact(true);
                 let substrate = radius.map(|radius| SubstrateSpec::Blur {
                     radius_px: f32::from_bits(radius),
@@ -356,6 +356,10 @@ pub fn specialize_liquid_glass_with_folds(shader: &mut RuntimeShader, folds: boo
 /// draw the glass as its interior and its rim, each without the other's
 /// fetches.
 pub const GLASS_RIM_DRAW_OVERRIDE: &str = "GLASS_RIM_DRAW";
+/// The `i32` override pinning the optical stage a folded material draws
+/// (uniform [`GLASS_OPTICAL_STAGE_UNIFORM`]): each stage of an edge lens
+/// compiles only its own path. Unset, the shader reads the uniform.
+pub const GLASS_OPTICAL_STAGE_OVERRIDE: &str = "GLASS_OPTICAL_STAGE";
 
 /// The fold raised when a material's dispersion is zero.
 pub const GLASS_DISPERSION_OFF_FLAG: &str = "GLASS_DISPERSION_OFF";
