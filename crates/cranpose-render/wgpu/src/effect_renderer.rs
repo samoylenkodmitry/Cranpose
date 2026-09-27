@@ -18,7 +18,7 @@ use crate::{
     gpu_stats::FrameStats,
     lazy_resource::LazyGpuResource,
     offscreen::{OffscreenPool, OffscreenTarget},
-    pipeline_compiler::PipelineCompiler,
+    pipeline_compiler::{CompileLane, PipelineCompiler},
     shader_cache::{
         RuntimeShaderPipelineMode, ShaderDrawVariant, ShaderPipelineCache, ShaderPipelineFit,
         shader_specialization_enabled,
@@ -101,6 +101,9 @@ pub(crate) struct EffectRenderer {
     blur_downsample_pipelines: [[LazyGpuResource<wgpu::RenderPipeline>;
         BLUR_DOWNSAMPLE_BLOCKS.len()]; BLUR_TILE_MODES.len()],
     blur_mean_pipeline: LazyGpuResource<wgpu::RenderPipeline>,
+    /// One bit per tile mode whose blur family is queued for warm-up.
+    blur_families_queued: Cell<u8>,
+    compiler: PipelineCompiler,
     blur_uniform_bind_group_layout: wgpu::BindGroupLayout,
     blur_uniform_uploads: Vec<UniformUpload>,
     blur_kernels: RefCell<BoundedLruCache<u32, BlurKernel>>,
@@ -373,6 +376,26 @@ enum BlurPipeline {
     Mean,
     Downsample { block: u32, tile_mode: usize },
     Kernel { tile_mode: usize },
+}
+
+impl BlurPipeline {
+    /// The tile mode whose blur family this pipeline belongs to: its
+    /// kernel and its downsample of each block. The mean has none.
+    fn family(self) -> Option<usize> {
+        match self {
+            Self::Mean => None,
+            Self::Downsample { tile_mode, .. } | Self::Kernel { tile_mode } => Some(tile_mode),
+        }
+    }
+}
+
+/// The pipelines of the blur family of `tile_mode`.
+fn blur_family(tile_mode: usize) -> impl Iterator<Item = BlurPipeline> {
+    std::iter::once(BlurPipeline::Kernel { tile_mode }).chain(
+        BLUR_DOWNSAMPLE_BLOCKS
+            .into_iter()
+            .map(move |block| BlurPipeline::Downsample { block, tile_mode }),
+    )
 }
 
 impl BlurDraw<'_> {
@@ -1123,7 +1146,7 @@ impl EffectRenderer {
             offscreen_pool: OffscreenPool::new(device, surface_format),
             shader_cache: ShaderPipelineCache::new(
                 device,
-                compiler,
+                compiler.clone(),
                 pipeline_cache.clone(),
                 adapter_backend,
                 surface_format,
@@ -1136,6 +1159,8 @@ impl EffectRenderer {
             blur_pipelines,
             blur_downsample_pipelines,
             blur_mean_pipeline: LazyGpuResource::new("effect/mean"),
+            blur_families_queued: Cell::new(0),
+            compiler,
             blur_uniform_bind_group_layout,
             blur_uniform_uploads: Vec::new(),
             blur_kernels: RefCell::new(BoundedLruCache::with_capacity_at_least_one(
@@ -1197,29 +1222,62 @@ impl EffectRenderer {
         )
     }
 
-    fn blur_pipeline(&self, device: &wgpu::Device, tile_mode: usize) -> &wgpu::RenderPipeline {
-        self.blur_pipelines[tile_mode].get_or_init(self.adapter_backend, || {
-            self.blur_pipeline_job(device, tile_mode)()
-        })
+    fn blur_resource(&self, pipeline: BlurPipeline) -> &LazyGpuResource<wgpu::RenderPipeline> {
+        match pipeline {
+            BlurPipeline::Mean => &self.blur_mean_pipeline,
+            BlurPipeline::Kernel { tile_mode } => &self.blur_pipelines[tile_mode],
+            BlurPipeline::Downsample { block, tile_mode } => {
+                let index = BLUR_DOWNSAMPLE_BLOCKS
+                    .iter()
+                    .position(|candidate| *candidate == block)
+                    .unwrap_or_else(|| {
+                        panic!("a blur downsample block of {block}; the scratch is 2 or 4 to 1")
+                    });
+                &self.blur_downsample_pipelines[tile_mode][index]
+            }
+        }
     }
 
-    /// The downsample pipeline averaging `block` source texels per axis into
-    /// one pixel of a blur's scratch.
-    fn blur_downsample_pipeline(
+    fn blur_job(&self, device: &wgpu::Device, pipeline: BlurPipeline) -> FixedPipelineJob {
+        match pipeline {
+            BlurPipeline::Mean => self.mean_pipeline_job(device),
+            BlurPipeline::Kernel { tile_mode } => self.blur_pipeline_job(device, tile_mode),
+            BlurPipeline::Downsample { block, tile_mode } => {
+                self.blur_downsample_pipeline_job(device, block, tile_mode)
+            }
+        }
+    }
+
+    /// The pipeline of a blur draw, built here if nothing has built it yet.
+    /// The first draw of a tile mode's blur family queues the rest of the
+    /// family for warm-up: the downsample block follows the radius, so an
+    /// effect that blurs asks for the other block once its radius crosses
+    /// a threshold, often mid-scroll.
+    fn blur_draw_pipeline(
         &self,
         device: &wgpu::Device,
-        block: u32,
-        tile_mode: usize,
+        pipeline: BlurPipeline,
     ) -> &wgpu::RenderPipeline {
-        let index = BLUR_DOWNSAMPLE_BLOCKS
-            .iter()
-            .position(|candidate| *candidate == block)
-            .unwrap_or_else(|| {
-                panic!("a blur downsample block of {block}; the scratch is 2 or 4 to 1")
-            });
-        self.blur_downsample_pipelines[tile_mode][index].get_or_init(self.adapter_backend, || {
-            self.blur_downsample_pipeline_job(device, block, tile_mode)()
-        })
+        if let Some(tile_mode) = pipeline.family() {
+            let bit = 1u8 << tile_mode;
+            let queued = self.blur_families_queued.get();
+            if queued & bit == 0 {
+                self.blur_families_queued.set(queued | bit);
+                for sibling in blur_family(tile_mode).filter(|sibling| *sibling != pipeline) {
+                    let resource = self.blur_resource(sibling);
+                    if resource.get().is_none() {
+                        resource.queue(
+                            &self.compiler,
+                            CompileLane::WarmUp,
+                            self.adapter_backend,
+                            self.blur_job(device, sibling),
+                        );
+                    }
+                }
+            }
+        }
+        self.blur_resource(pipeline)
+            .get_or_init(self.adapter_backend, || self.blur_job(device, pipeline)())
     }
 
     fn mean_pipeline_job(&self, device: &wgpu::Device) -> FixedPipelineJob {
@@ -1234,11 +1292,6 @@ impl EffectRenderer {
             self.surface_format,
             wgpu::BlendState::REPLACE,
         )
-    }
-
-    fn mean_pipeline(&self, device: &wgpu::Device) -> &wgpu::RenderPipeline {
-        self.blur_mean_pipeline
-            .get_or_init(self.adapter_backend, || self.mean_pipeline_job(device)())
     }
 
     fn blur_downsample_pipeline_job(
@@ -1578,13 +1631,7 @@ impl EffectRenderer {
         for (draw, uniform) in draws.iter().zip(uniforms.drain(..)) {
             let pipeline = draw.pipeline();
             if bound != Some(pipeline) {
-                pass.set_pipeline(match pipeline {
-                    BlurPipeline::Mean => self.mean_pipeline(device),
-                    BlurPipeline::Downsample { block, tile_mode } => {
-                        self.blur_downsample_pipeline(device, block, tile_mode)
-                    }
-                    BlurPipeline::Kernel { tile_mode } => self.blur_pipeline(device, tile_mode),
-                });
+                pass.set_pipeline(self.blur_draw_pipeline(device, pipeline));
                 bound = Some(pipeline);
             }
             let source_bind_group = draw.source.get_or_create_bind_group(

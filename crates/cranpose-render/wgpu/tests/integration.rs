@@ -11,6 +11,7 @@ mod backdrop_atlas_parity;
 mod backdrop_pass_batching;
 mod backdrop_reach;
 mod band_fill;
+mod blur_family_warm_up;
 mod blur_reference;
 mod cancellation_contract;
 mod capture_culling;
