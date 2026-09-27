@@ -408,6 +408,17 @@ impl AndroidFrameTelemetry {
         if !self.enabled {
             return;
         }
+        log::warn!(
+            "[frame-ts] iter={} poll={} update={} sync={} handoff={} acquire={} render={} present={}",
+            timings.iteration_start_ns,
+            timings.after_poll_ns,
+            timings.after_update_ns,
+            timings.after_sync_ns,
+            timings.handed_off_ns,
+            timings.after_acquire_ns,
+            timings.after_render_ns,
+            timings.after_present_ns,
+        );
         let period_us = if self.last_present_ns > 0 {
             us(timings.after_present_ns - self.last_present_ns)
         } else {
