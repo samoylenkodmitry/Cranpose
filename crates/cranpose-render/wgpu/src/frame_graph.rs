@@ -467,6 +467,15 @@ impl TransientTexturePool {
 
         self.news = self.news.saturating_add(1);
         self.working_set.note(descriptor.estimated_bytes());
+        log::warn!(
+            "[new-texture] transient {} {}x{} {:?} pool={} held={}",
+            descriptor.label,
+            descriptor.width,
+            descriptor.height,
+            descriptor.reuse,
+            self.available.len(),
+            self.available.iter().map(|e| e.descriptor.estimated_bytes()).sum::<u64>() / 1_000_000,
+        );
         OffscreenTarget::new_labeled(
             device,
             descriptor.format,

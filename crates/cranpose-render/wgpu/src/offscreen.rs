@@ -278,6 +278,7 @@ impl OffscreenPool {
             if let Some(s) = stats {
                 s.record_offscreen_acquire(width, height, self.format, true);
             }
+            log::warn!("[new-texture] offscreen {width}x{height}");
             OffscreenTarget::new(device, self.format, width, height)
         }
     }
