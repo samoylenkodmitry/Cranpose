@@ -2066,7 +2066,7 @@ pub(crate) mod fence_profile {
         PROFILE.with(|profile| {
             let mut profile = profile.borrow_mut();
             let mut pending = std::mem::take(&mut profile.pending);
-            if profile.frames == 0 {
+            {
                 let order: Vec<&str> = pending
                     .iter()
                     .map(|(label, _)| label.as_deref().unwrap_or("-"))
@@ -2074,6 +2074,7 @@ pub(crate) mod fence_profile {
                 eprintln!("[gpu-fence-order] {}", order.join(" | "));
             }
             for (label, commands) in pending.drain(..) {
+                std::thread::sleep(std::time::Duration::from_millis(2));
                 let recorded = submit_and_wait(device, queue, commands);
                 let empty = submit_and_wait(device, queue, new_encoder(device).finish());
                 let elapsed = (recorded - empty).max(0.0);
