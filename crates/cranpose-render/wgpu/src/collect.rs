@@ -1005,7 +1005,7 @@ fn push_primitive(
                 layer_bounds,
                 text_rect,
                 local_layer,
-                &text.text,
+                (&text.text, &text.render_text),
                 &text.text_style,
                 text.font_size,
                 text.layout_options,

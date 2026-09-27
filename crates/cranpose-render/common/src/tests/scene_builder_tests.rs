@@ -3814,3 +3814,49 @@ fn a_field_rebuilt_under_a_scrolled_translated_column_publishes_its_window_origi
     assert_eq!(field_window_origin(&mut applier, field), patched);
     applier.clear_runtime_handle();
 }
+
+fn collect_render_texts(
+    layer: &LayerNode,
+    texts: &mut Vec<std::sync::Arc<cranpose_ui::text::RenderString>>,
+) {
+    for child in &layer.children {
+        match child {
+            RenderNode::Primitive(primitive) => {
+                if let PrimitiveNode::Text(text) = &primitive.node {
+                    texts.push(std::sync::Arc::clone(&text.render_text));
+                }
+            }
+            RenderNode::Layer(child_layer) => collect_render_texts(child_layer, texts),
+            RenderNode::DrawRun(_) => {}
+        }
+    }
+}
+
+#[test]
+fn rebuilt_text_nodes_share_their_layouts_render_text() {
+    let mut composition = cranpose_ui::run_test_composition(|| {
+        Text("shared once", Modifier::empty(), TextStyle::default());
+    });
+    let root = composition.root().expect("composition root");
+    let viewport = Size {
+        width: 200.0,
+        height: 50.0,
+    };
+    let handle = composition.runtime_handle();
+    let mut applier = composition.applier_mut();
+    applier.set_runtime_handle(handle);
+    applier.compute_layout(root, viewport).expect("layout");
+    let first = build_graph_from_applier(&mut applier, root, 1.0).expect("graph");
+    let second = build_graph_from_applier(&mut applier, root, 1.0).expect("rebuilt graph");
+    applier.clear_runtime_handle();
+
+    let (mut before, mut after) = (Vec::new(), Vec::new());
+    collect_render_texts(&first.root, &mut before);
+    collect_render_texts(&second.root, &mut after);
+    assert_eq!(before.len(), 1);
+    assert_eq!(before[0].text, "shared once");
+    assert!(
+        std::sync::Arc::ptr_eq(&before[0], &after[0]),
+        "a rebuild hands over the prepared layout's copy, not a new one"
+    );
+}

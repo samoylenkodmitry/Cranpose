@@ -1,17 +1,14 @@
-//! The GPU home of retained text glyph runs: each run's quads take a span of
-//! a shared vertex chunk and draw through one quad index pattern, so a run
-//! scrolling into view costs a staged copy instead of buffers of its own,
-//! and a frame's new runs reach the GPU in as few writes as their spans.
+//! The GPU home of retained text glyph runs: each run's glyph instances take
+//! a span of a shared instance chunk, so a run scrolling into view costs a
+//! staged copy instead of a buffer of its own, and a frame's new runs reach
+//! the GPU in as few writes as their spans.
 
 use std::{cell::Cell, ops::Range, rc::Rc};
 
 use crate::{
     frame_graph::{FrameCommandStats, write_buffer},
-    render::Vertex,
+    render::GlyphInstance,
 };
-
-const VERTICES_PER_QUAD: usize = 4;
-const INDICES_PER_QUAD: u32 = 6;
 /// The first chunk's quads; each later chunk doubles up to the largest,
 /// and a run too large for that gets a chunk of its own size.
 const MIN_CHUNK_QUADS: u32 = 1024;
@@ -120,14 +117,14 @@ pub(crate) struct GlyphRunSpan {
 }
 
 impl GlyphRunSpan {
-    /// The chunk holding the run's vertices.
-    pub(crate) fn vertex_buffer(&self) -> &wgpu::Buffer {
+    /// The chunk holding the run's glyph instances.
+    pub(crate) fn instance_buffer(&self) -> &wgpu::Buffer {
         &self.buffer
     }
 
-    /// The run's indices in the arena's quad index buffer.
-    pub(crate) fn indices(&self) -> Range<u32> {
-        self.quads.start * INDICES_PER_QUAD..self.quads.end * INDICES_PER_QUAD
+    /// The run's instances in its chunk.
+    pub(crate) fn instances(&self) -> Range<u32> {
+        self.quads.clone()
     }
 }
 
@@ -146,22 +143,19 @@ struct Chunk {
     spans: SpanAllocator,
 }
 
-/// A span's vertices waiting in the arena's staging for the frame's flush.
+/// A span's instances waiting in the arena's staging for the frame's flush.
 struct StagedSpan {
     chunk: u64,
     first_quad: u32,
-    vertices: Range<usize>,
+    instances: Range<usize>,
 }
 
-/// Retained glyph runs in shared vertex chunks, with the index pattern
-/// every run draws its quads through.
+/// Retained glyph runs in shared instance chunks.
 #[derive(Default)]
 pub(crate) struct GlyphRunArena {
     chunks: Vec<Chunk>,
     next_chunk: u64,
-    indices: Option<wgpu::Buffer>,
-    index_quads: u32,
-    staged_vertices: Vec<Vertex>,
+    staged_instances: Vec<GlyphInstance>,
     staged: Vec<StagedSpan>,
     retired: Rc<RetiredSpans>,
 }
@@ -171,18 +165,16 @@ impl GlyphRunArena {
     /// `None` when there are no quads or more than any text run holds.
     pub(crate) fn insert<I>(&mut self, device: &wgpu::Device, quads: I) -> Option<GlyphRunSpan>
     where
-        I: IntoIterator<Item = [Vertex; VERTICES_PER_QUAD]>,
+        I: IntoIterator<Item = GlyphInstance>,
     {
-        let start = self.staged_vertices.len();
-        for quad in quads {
-            self.staged_vertices.extend_from_slice(&quad);
-        }
-        let count = (self.staged_vertices.len() - start) / VERTICES_PER_QUAD;
+        let start = self.staged_instances.len();
+        self.staged_instances.extend(quads);
+        let count = self.staged_instances.len() - start;
         let Some(count) = u32::try_from(count)
             .ok()
             .filter(|count| (1..=MAX_RUN_QUADS).contains(count))
         else {
-            self.staged_vertices.truncate(start);
+            self.staged_instances.truncate(start);
             return None;
         };
         let (chunk, first_quad) = match self.allocate(count) {
@@ -192,7 +184,7 @@ impl GlyphRunArena {
         self.staged.push(StagedSpan {
             chunk: self.chunks[chunk].id,
             first_quad,
-            vertices: start..self.staged_vertices.len(),
+            instances: start..self.staged_instances.len(),
         });
         Some(GlyphRunSpan {
             buffer: self.chunks[chunk].buffer.clone(),
@@ -200,11 +192,6 @@ impl GlyphRunArena {
             quads: first_quad..first_quad + count,
             retired: Rc::clone(&self.retired),
         })
-    }
-
-    /// The quad index pattern every span's `indices` range reads.
-    pub(crate) fn index_buffer(&self) -> Option<&wgpu::Buffer> {
-        self.indices.as_ref()
     }
 
     /// Opens a frame: spans dropped by now are free again, and chunks left
@@ -234,31 +221,31 @@ impl GlyphRunArena {
         while index < self.staged.len() {
             let first = &self.staged[index];
             let mut end_quad = first.first_quad + span_quads(first);
-            let mut vertices = first.vertices.clone();
+            let mut instances = first.instances.clone();
             let mut next = index + 1;
             while let Some(span) = self.staged.get(next) {
                 if span.chunk != first.chunk
                     || span.first_quad != end_quad
-                    || span.vertices.start != vertices.end
+                    || span.instances.start != instances.end
                 {
                     break;
                 }
                 end_quad += span_quads(span);
-                vertices.end = span.vertices.end;
+                instances.end = span.instances.end;
                 next += 1;
             }
             if let Some(chunk) = self.chunks.iter().find(|chunk| chunk.id == first.chunk) {
                 stats += write_buffer(
                     queue,
                     &chunk.buffer,
-                    vertex_offset(first.first_quad),
-                    bytemuck::cast_slice(&self.staged_vertices[vertices]),
+                    instance_offset(first.first_quad),
+                    bytemuck::cast_slice(&self.staged_instances[instances]),
                 );
             }
             index = next;
         }
         self.staged.clear();
-        self.staged_vertices.clear();
+        self.staged_instances.clear();
         stats
     }
 
@@ -281,14 +268,13 @@ impl GlyphRunArena {
                 largest.saturating_mul(2).min(MAX_CHUNK_QUADS)
             })
             .max(quads);
-        self.ensure_indices(device, capacity);
         let mut spans = SpanAllocator::new(capacity);
         let first_quad = spans.allocate(quads).unwrap_or_default();
         self.chunks.push(Chunk {
             id: self.next_chunk,
             buffer: device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("Retained Text Glyph Vertices"),
-                size: vertex_offset(capacity),
+                label: Some("Retained Text Glyph Instances"),
+                size: instance_offset(capacity),
                 usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             }),
@@ -297,37 +283,14 @@ impl GlyphRunArena {
         self.next_chunk += 1;
         (self.chunks.len() - 1, first_quad)
     }
-
-    fn ensure_indices(&mut self, device: &wgpu::Device, quads: u32) {
-        if self.indices.is_some() && self.index_quads >= quads {
-            return;
-        }
-        let pattern: Vec<u32> = (0..quads).flat_map(quad_indices).collect();
-        self.indices = Some(wgpu::util::DeviceExt::create_buffer_init(
-            device,
-            &wgpu::util::BufferInitDescriptor {
-                label: Some("Retained Text Glyph Quad Indices"),
-                contents: bytemuck::cast_slice(&pattern),
-                usage: wgpu::BufferUsages::INDEX,
-            },
-        ));
-        self.index_quads = quads;
-    }
-}
-
-/// The two triangles of quad `quad`: corners top-left, top-right,
-/// bottom-left, bottom-right.
-pub(crate) fn quad_indices(quad: u32) -> [u32; INDICES_PER_QUAD as usize] {
-    let base = quad * VERTICES_PER_QUAD as u32;
-    [base, base + 1, base + 2, base + 2, base + 1, base + 3]
 }
 
 fn span_quads(span: &StagedSpan) -> u32 {
-    ((span.vertices.end - span.vertices.start) / VERTICES_PER_QUAD) as u32
+    (span.instances.end - span.instances.start) as u32
 }
 
-fn vertex_offset(quads: u32) -> u64 {
-    u64::from(quads) * (VERTICES_PER_QUAD * std::mem::size_of::<Vertex>()) as u64
+fn instance_offset(quads: u32) -> u64 {
+    u64::from(quads) * std::mem::size_of::<GlyphInstance>() as u64
 }
 
 #[cfg(test)]

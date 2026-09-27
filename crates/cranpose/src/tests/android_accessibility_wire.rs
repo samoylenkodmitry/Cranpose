@@ -653,3 +653,30 @@ fn the_record_says_whether_a_list_takes_a_row_number() {
         "a plain button takes no row number"
     );
 }
+
+#[test]
+fn numbers_are_written_as_display_writes_them() {
+    for value in [0, 7, -7, 10, 1_234_567, i32::MAX, i32::MIN] {
+        let mut out = String::new();
+        push_decimal(&mut out, value);
+        assert_eq!(out, value.to_string());
+    }
+    for value in [
+        0.0f32,
+        -0.0,
+        3.0,
+        -12.0,
+        12.5,
+        0.1,
+        16_777_216.0,
+        1e30,
+        f32::NAN,
+        f32::INFINITY,
+    ] {
+        let mut out = String::new();
+        RecordWriter(&mut out).float(value);
+        assert_eq!(out, format!("{value}\t"));
+    }
+    assert_eq!(count(usize::MAX), i32::MAX);
+    assert_eq!(count(12), 12);
+}

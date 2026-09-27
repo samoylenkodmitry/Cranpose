@@ -2498,17 +2498,6 @@ pub fn run(
                 );
                 frame_rate_boost.note_frame(update_result, Instant::now());
                 frame_timings.after_update_ns = frame_telemetry.now();
-                if let Err(error) = crate::android_accessibility::sync(
-                    &app,
-                    shell,
-                    android_platform.scale_factor(),
-                    &mut accessibility_elements,
-                    &mut accessibility_wire,
-                    &mut accessibility_revision,
-                    &mut accessibility_policy,
-                ) {
-                    log::warn!("{error}");
-                }
                 dispatch_registered_android_surface_size_request(
                     &app,
                     &host_window_registry,
@@ -2550,17 +2539,17 @@ pub fn run(
                 }
             } else {
                 frame_telemetry.note_idle_iteration();
-                if let Err(error) = crate::android_accessibility::sync(
-                    &app,
-                    shell,
-                    android_platform.scale_factor(),
-                    &mut accessibility_elements,
-                    &mut accessibility_wire,
-                    &mut accessibility_revision,
-                    &mut accessibility_policy,
-                ) {
-                    log::warn!("{error}");
-                }
+            }
+            if let Err(error) = crate::android_accessibility::sync(
+                &app,
+                shell,
+                android_platform.scale_factor(),
+                &mut accessibility_elements,
+                &mut accessibility_wire,
+                &mut accessibility_revision,
+                &mut accessibility_policy,
+            ) {
+                log::warn!("{error}");
             }
         } else {
             frame_telemetry.note_idle_iteration();

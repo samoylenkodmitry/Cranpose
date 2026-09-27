@@ -94,6 +94,8 @@ pub struct TextDrawParams {
     /// draw scope already resolved alignment into it.
     pub rect: Rect,
     pub text: Rc<AnnotatedString>,
+    /// `text` as a renderer's draws carry it across threads.
+    pub render_text: std::sync::Arc<cranpose_ui::text::RenderString>,
     pub color: Color,
     pub text_style: TextStyle,
     pub font_size: f32,
@@ -474,6 +476,7 @@ fn text_draw_params(
     Some(TextDrawParams {
         rect,
         text: cranpose_ui::text::shared_plain_annotated_string(text.text.as_ref()),
+        render_text: cranpose_ui::text::shared_plain_render_string(text.text.as_ref()),
         color,
         text_style: text_style_for_draw_style(&text.style),
         font_size: text.style.resolved_font_size(),

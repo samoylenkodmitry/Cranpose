@@ -1,9 +1,8 @@
-
-struct VertexInput {
-    @location(0) position: vec2<f32>,
-    @location(1) color: vec4<f32>,
-    @location(2) uv: vec2<f32>,
-    @location(3) uv_bounds: vec4<f32>,
+struct GlyphInstance {
+    @location(0) rect: vec4<f32>,
+    @location(1) uv: vec4<f32>,
+    @location(2) uv_bounds: vec4<f32>,
+    @location(3) color: vec4<f32>,
 }
 
 struct VertexOutput {
@@ -36,10 +35,22 @@ var glyph_texture: texture_2d<f32>;
 @group(1) @binding(1)
 var glyph_sampler: sampler;
 
+// Each instance is one glyph quad drawn as a four-corner triangle strip:
+// corner 0 top-left, 1 top-right, 2 bottom-left, 3 bottom-right. `select`
+// picks each corner's coordinates exactly, as the quad's vertices held them.
 @vertex
-fn glyph_atlas_vs_main(input: VertexInput) -> VertexOutput {
+fn glyph_atlas_vs_main(
+    @builtin(vertex_index) corner: u32,
+    glyph: GlyphInstance,
+) -> VertexOutput {
     var output: VertexOutput;
-    let position = input.position + uniforms.origin;
+    let right = (corner & 1u) != 0u;
+    let bottom = corner >= 2u;
+    let corner_position = vec2<f32>(
+        select(glyph.rect.x, glyph.rect.z, right),
+        select(glyph.rect.y, glyph.rect.w, bottom),
+    );
+    let position = corner_position + uniforms.origin;
     let placed = vec2<f32>(
         uniforms.transform.x * position.x + uniforms.transform.y * position.y,
         uniforms.transform.z * position.x + uniforms.transform.w * position.y,
@@ -47,9 +58,12 @@ fn glyph_atlas_vs_main(input: VertexInput) -> VertexOutput {
     let x = ((placed.x - uniforms.viewport_offset.x) / uniforms.viewport.x) * 2.0 - 1.0;
     let y = 1.0 - ((placed.y - uniforms.viewport_offset.y) / uniforms.viewport.y) * 2.0;
     output.clip_position = vec4<f32>(x, y, 0.0, 1.0);
-    output.color = input.color;
-    output.uv = input.uv;
-    output.uv_bounds = input.uv_bounds;
+    output.color = glyph.color;
+    output.uv = vec2<f32>(
+        select(glyph.uv.x, glyph.uv.z, right),
+        select(glyph.uv.y, glyph.uv.w, bottom),
+    );
+    output.uv_bounds = glyph.uv_bounds;
     return output;
 }
 

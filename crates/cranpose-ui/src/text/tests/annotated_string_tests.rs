@@ -186,3 +186,16 @@ fn render_hash_changes_for_visual_style_ranges() {
 
     assert_ne!(plain.render_hash(), styled.render_hash());
 }
+
+#[test]
+fn a_redrawn_string_reuses_the_render_copy_from_last_frame() {
+    let first = shared_plain_render_string("SCORE 341");
+    let second = shared_plain_render_string("SCORE 341");
+    assert!(std::sync::Arc::ptr_eq(&first, &second));
+    assert_eq!(second.text, "SCORE 341");
+    assert_eq!(
+        second.text,
+        shared_plain_annotated_string("SCORE 341").text,
+        "both copies hold the same characters"
+    );
+}
