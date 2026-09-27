@@ -3854,7 +3854,7 @@ fn rebuilt_text_nodes_share_their_layouts_render_text() {
     collect_render_texts(&first.root, &mut before);
     collect_render_texts(&second.root, &mut after);
     assert_eq!(before.len(), 1);
-    assert_eq!(before[0].text, "shared once");
+    assert_eq!(before[0].text(), "shared once");
     assert!(
         std::sync::Arc::ptr_eq(&before[0], &after[0]),
         "a rebuild hands over the prepared layout's copy, not a new one"
