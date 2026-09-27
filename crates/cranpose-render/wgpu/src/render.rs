@@ -79,11 +79,13 @@ const MAX_TEXT_GLYPH_MASK_CACHE_ITEMS: usize = 8192;
 const MAX_TEXT_GLYPH_ATLAS_ITEMS: usize = 8192;
 const MAX_TEXT_GLYPH_RUN_CACHE_ITEMS: usize = 1024;
 const MAX_TEXT_GLYPH_GPU_RUN_CACHE_ITEMS: usize = 1024;
-/// Frames a retained text run may go undrawn before its quads are freed.
-/// Shorter than the shape store's span: a glyph quad holds 192 bytes, and a
-/// list scrolling at speed leaves several screens of text behind each second,
-/// which at 120 frames held 12 to 19 MB of quads on a scrolling feed.
-const RETAINED_TEXT_GLYPH_RUN_IDLE_FRAMES: u64 = 30;
+/// Frames a text run may go undrawn before its glyphs and quads are freed,
+/// on the CPU and in retained GPU buffers alike. Shorter than the shape
+/// store's span: a list scrolling at speed leaves several screens of text
+/// behind each second, which at 120 frames held 12 to 19 MB of GPU quads on
+/// a scrolling feed, and the CPU runs, bounded only by their count, held
+/// another 4.6 MB of placements and quads.
+const TEXT_GLYPH_RUN_IDLE_FRAMES: u64 = 30;
 /// Text runs with at least this many glyphs keep their quads in retained GPU
 /// buffers and draw on their own; shorter ones are written into the frame's
 /// shared quads each frame, where consecutive runs share a draw.
@@ -310,13 +312,15 @@ struct CachedTextGlyphRun {
     glyphs: Rc<[SoftwareGlyphAtlasPlacement]>,
     quads: Option<Rc<[CachedTextGlyphQuad]>>,
     atlas_generation: u64,
+    /// The frame the run last drew in; see [`TEXT_GLYPH_RUN_IDLE_FRAMES`].
+    last_frame: Cell<u64>,
 }
 
 struct CachedGpuTextGlyphRun {
     span: GlyphRunSpan,
     atlas_generation: u64,
     /// The frame the run last drew in; a run idle for
-    /// [`RETAINED_TEXT_GLYPH_RUN_IDLE_FRAMES`] gives its quads back.
+    /// [`TEXT_GLYPH_RUN_IDLE_FRAMES`] gives its quads back.
     last_frame: Cell<u64>,
 }
 
@@ -4283,21 +4287,18 @@ impl GpuRenderer {
             .cloned()
     }
 
-    /// Opens a frame for retained text runs: runs no frame drew for
-    /// [`RETAINED_TEXT_GLYPH_RUN_IDLE_FRAMES`] leave the cache, and the
-    /// arena takes back the quads dropped runs held.
+    /// Opens a frame for text runs: runs no frame drew for
+    /// [`TEXT_GLYPH_RUN_IDLE_FRAMES`] leave both caches, and the arena takes
+    /// back the quads dropped retained runs held.
     fn begin_text_glyph_run_frame(&mut self) {
         self.text_glyph_run_frame += 1;
         let frame = self.text_glyph_run_frame;
-        while self
-            .text_glyph_gpu_run_cache
-            .peek_lru()
-            .is_some_and(|(_, run)| {
-                frame - run.last_frame.get() > RETAINED_TEXT_GLYPH_RUN_IDLE_FRAMES
-            })
-        {
-            self.text_glyph_gpu_run_cache.pop_lru();
-        }
+        evict_idle(&mut self.text_glyph_gpu_run_cache, frame, |run| {
+            run.last_frame.get()
+        });
+        evict_idle(&mut self.text_glyph_run_cache, frame, |run| {
+            run.last_frame.get()
+        });
         self.text_glyph_run_arena.begin_frame();
     }
 
@@ -4424,7 +4425,9 @@ impl GpuRenderer {
             );
             let atlas_generation = self.text_glyph_atlas.generation();
             let mut cached_quad_run = None;
+            let frame = self.text_glyph_run_frame;
             let cached_glyph_run = if let Some(cached) = self.text_glyph_run_cache.get(&run_key) {
+                cached.last_frame.set(frame);
                 run_hits = run_hits.saturating_add(1);
                 if cached.atlas_generation == atlas_generation {
                     cached_quad_run = cached.quads.as_ref().map(Rc::clone);
@@ -4471,6 +4474,7 @@ impl GpuRenderer {
                         glyphs,
                         quads: None,
                         atlas_generation: 0,
+                        last_frame: Cell::new(frame),
                     },
                 );
                 None
@@ -5570,6 +5574,21 @@ pub(crate) fn interior_run_draws(draws: &[RunDrawCall]) -> SmallVec<[PlannedRunD
     }
     planned.extend(stretch.and_then(|open| open.span));
     planned
+}
+
+/// Drops the entries of `cache` no frame drew for more than
+/// [`TEXT_GLYPH_RUN_IDLE_FRAMES`] before `frame`: the least recently used
+/// first, which is the order they were last drawn in.
+fn evict_idle<K: Clone + Eq + std::hash::Hash, V>(
+    cache: &mut BoundedLruCache<K, V>,
+    frame: u64,
+    last_frame: impl Fn(&V) -> u64,
+) {
+    while cache.peek_lru().is_some_and(|(_, value)| {
+        frame.saturating_sub(last_frame(value)) > TEXT_GLYPH_RUN_IDLE_FRAMES
+    }) {
+        cache.pop_lru();
+    }
 }
 
 fn window_draws(draws: &mut SmallVec<[RunDrawCall; 8]>, window: &std::ops::Range<u32>) {
