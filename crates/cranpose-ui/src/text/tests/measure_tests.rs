@@ -1646,3 +1646,58 @@ fn a_prepared_layout_converts_its_render_text_once() {
         "the converted copy does not change what the layout is"
     );
 }
+
+#[test]
+fn wrapped_lines_append_after_what_the_caller_holds() {
+    let text = crate::text::AnnotatedString::from("alpha beta gamma delta epsilon");
+    let style = TextStyle::default();
+    let whole = 0..text.text.len();
+    let held = DisplayLine::from_source_range(0..0);
+    let mut lines = vec![held.clone()];
+    wrap_line_to_width(
+        &MonospacedTextMeasurer,
+        &text,
+        whole.clone(),
+        &style,
+        f32::MAX,
+        LineBreak::Simple,
+        Hyphens::None,
+        &mut lines,
+    );
+    assert_eq!(lines.len(), 2, "a line that fits takes one display line");
+    assert_eq!(lines[0].source_range, held.source_range);
+    assert_eq!(lines[1].source_range, whole);
+    wrap_line_to_width(
+        &MonospacedTextMeasurer,
+        &text,
+        whole,
+        &style,
+        60.0,
+        LineBreak::Simple,
+        Hyphens::None,
+        &mut lines,
+    );
+    assert!(
+        lines.len() > 3,
+        "a narrow width wraps into several lines: {}",
+        lines.len()
+    );
+    assert_eq!(lines[0].source_range, held.source_range);
+}
+
+#[test]
+fn a_line_that_cannot_balance_leaves_the_lines_as_they_were() {
+    let text = crate::text::AnnotatedString::from("unbreakable");
+    let mut lines = vec![DisplayLine::from_source_range(0..0)];
+    let balanced = wrap_line_with_word_balance(
+        &MonospacedTextMeasurer,
+        &text,
+        0..text.text.len(),
+        &TextStyle::default(),
+        10.0,
+        LineBreak::Paragraph,
+        &mut lines,
+    );
+    assert!(!balanced, "one word has no breakpoints to balance");
+    assert_eq!(lines.len(), 1);
+}
