@@ -14,6 +14,15 @@ pub fn round_to_px(value: f32, density: f32) -> f32 {
     (value * density + 0.5).floor() / density
 }
 
+/// A length moved up onto the next whole device pixel, as Compose sizes
+/// text: a layout's size is its paragraph's, `ceil`ed, so it never clips.
+pub fn ceil_to_px(value: f32, density: f32) -> f32 {
+    if density <= 0.0 || !density.is_finite() || !value.is_finite() {
+        return value;
+    }
+    (value * density).ceil() / density
+}
+
 #[cfg(test)]
 #[path = "tests/pixels_tests.rs"]
 mod tests;

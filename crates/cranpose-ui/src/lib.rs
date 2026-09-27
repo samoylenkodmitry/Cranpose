@@ -47,6 +47,7 @@ pub mod selection_container;
 mod semantics_dispatch;
 mod subcompose_layout;
 pub mod text;
+mod text_field_decorator_node;
 pub mod text_field_focus;
 mod text_field_handler;
 mod text_field_input;

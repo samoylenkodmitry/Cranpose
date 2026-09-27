@@ -19,7 +19,7 @@
 //! the pixel side, which is the only side where rounding means anything.
 
 use cranpose_core::{CompositionLocal, CompositionLocalProvider, compositionLocalOf};
-use cranpose_ui_layout::round_to_px;
+use cranpose_ui_layout::{ceil_to_px, round_to_px};
 
 use crate::{
     font_scale::FontScaleCurve,
@@ -129,11 +129,7 @@ impl Density {
     /// This is what a line box does with its own height, and what a container
     /// does with a content size it must not clip.
     pub fn ceil(self, value: f32) -> f32 {
-        if value.is_finite() {
-            (value * self.density).ceil() / self.density
-        } else {
-            value
-        }
+        ceil_to_px(value, self.density)
     }
 
     /// Points to device pixels.

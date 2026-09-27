@@ -19,13 +19,17 @@ use crate::{
     bring_into_view::local_bring_into_view_responder,
     clipboard_session::{clipboard_can_paste, clipboard_paste_into_focus, clipboard_write_text},
     composable,
-    layout::policies::EmptyMeasurePolicy,
+    layout::{
+        core::Alignment,
+        policies::{BoxMeasurePolicy, EmptyMeasurePolicy},
+    },
     modifier::Modifier,
     safe_area::local_ime_insets,
     text::{AnnotatedString, TextStyle, measure_text},
+    text_field_decorator_node::TextFieldDecoratorElement,
     text_field_focus::{dispatch_copy, dispatch_cut, dispatch_select_all},
     text_field_modifier_node::{
-        TextFieldElement, TextFieldHandleController, TextFieldHandleMetrics,
+        TextFieldElement, TextFieldHandleController, TextFieldHandleMetrics, TextFieldRefs,
     },
     text_selection::{
         HANDLE_RADIUS, HandleGrabOffset, HandleKind, LineAffinity, selection_after_handle_drag,
@@ -253,6 +257,12 @@ impl PartialEq for BasicTextFieldDecorationScope {
 
 /// Creates an editable field and lets `decoration_box` place composable labels,
 /// placeholders, icons, buttons, prefixes, or suffixes around it.
+///
+/// As in Compose, the decoration box is the field: `modifier` applies to it,
+/// and it takes the field's pointer input, focus and semantics, so a press
+/// anywhere in it edits the text. The inner field only lays out and draws
+/// the text, as wide as the text unless the decoration stretches it (a
+/// `Box` that propagates its minimum constraints, for one).
 #[composable(no_skip)]
 pub fn BasicTextFieldDecorated<D>(
     state: TextFieldState,
@@ -261,17 +271,31 @@ pub fn BasicTextFieldDecorated<D>(
     decoration_box: D,
 ) -> NodeId
 where
-    D: Fn(BasicTextFieldDecorationScope) -> NodeId + 'static,
+    D: Fn(BasicTextFieldDecorationScope) + 'static,
 {
-    let inner_state = state;
-    let inner_modifier = modifier;
-    let inner_options = options;
+    let refs = remember(TextFieldRefs::new).with(TextFieldRefs::clone);
+    let decorator = TextFieldDecoratorElement::new(
+        state,
+        refs.clone(),
+        options.text_style.clone(),
+        options.line_limits,
+        crate::modal::local_modal_depth().current(),
+    );
     let scope = BasicTextFieldDecorationScope {
         inner: Rc::new(move || {
-            BasicTextFieldWithOptions(inner_state, inner_modifier.clone(), inner_options.clone())
+            TextFieldNode(
+                state,
+                Modifier::empty(),
+                options.clone(),
+                Some(refs.clone()),
+            )
         }),
     };
-    decoration_box(scope)
+    Layout(
+        modifier.then(Modifier::from_parts(vec![modifier_element(decorator)])),
+        BoxMeasurePolicy::new(Alignment::TOP_START, true),
+        move || decoration_box(scope.clone()),
+    )
 }
 
 /// Creates an editable text field with custom options.
@@ -283,6 +307,19 @@ pub fn BasicTextFieldWithOptions(
     modifier: Modifier,
     options: BasicTextFieldOptions,
 ) -> NodeId {
+    TextFieldNode(state, modifier, options, None)
+}
+
+/// The field's node, and the handles and caret tracking around it. With
+/// `decorator`, the decoration box sharing those refs takes the field's
+/// input, focus and semantics.
+#[composable]
+fn TextFieldNode(
+    state: TextFieldState,
+    modifier: Modifier,
+    options: BasicTextFieldOptions,
+    decorator: Option<TextFieldRefs>,
+) -> NodeId {
     let _text = state.text();
     let _selection = state.selection();
 
@@ -290,11 +327,14 @@ pub fn BasicTextFieldWithOptions(
         remember(TextFieldHandleController::new).with(TextFieldHandleController::clone);
 
     let modal_depth = crate::modal::local_modal_depth().current();
-    let text_field_element = TextFieldElement::new(state, options.text_style.clone())
+    let mut text_field_element = TextFieldElement::new(state, options.text_style.clone())
         .with_cursor_color(options.cursor_color)
         .with_line_limits(options.line_limits)
         .with_handle_controller(controller.clone())
         .with_modal_depth(modal_depth);
+    if let Some(refs) = decorator {
+        text_field_element = text_field_element.decorated_by(refs);
+    }
 
     let text_field_modifier = modifier_element(text_field_element);
     let final_modifier = Modifier::from_parts(vec![text_field_modifier]);

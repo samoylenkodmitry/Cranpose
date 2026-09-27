@@ -13,6 +13,7 @@ use cranpose_foundation::{
     text::{TextFieldLineLimits, TextFieldState, TextRange},
 };
 use cranpose_ui_graphics::{Brush, Color, Point};
+use cranpose_ui_layout::ceil_to_px;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct TextFieldHandleMetrics {
@@ -158,6 +159,10 @@ const DEFAULT_CURSOR_COLOR: Color = Color(1.0, 1.0, 1.0, 1.0);
 pub(crate) const DEFAULT_SELECTION_COLOR: Color = Color(0.0, 0.5, 1.0, 0.3);
 
 const DEFAULT_LINE_HEIGHT: f32 = 20.0;
+
+/// What Compose's `textFieldMinSize` lays out to find a field's smallest
+/// box: one line of ten 'H's.
+const MIN_SIZE_TEXT: &str = "HHHHHHHHHH";
 
 const CURSOR_WIDTH: f32 = 2.0;
 
@@ -318,6 +323,7 @@ fn build_focus_handler(
     crate::text_field_handler::TextFieldHandler::new(
         state,
         refs.node_id.get(),
+        refs.focus_node.get(),
         line_limits,
         crate::text_field_handler::CaretGeometryRefs {
             node_origin: refs.node_origin.clone(),
@@ -337,7 +343,7 @@ fn request_pointer_focus(
 ) {
     if modal_depth < crate::modal::current_modal_depth()
         || refs
-            .node_id
+            .focus_node
             .get()
             .is_some_and(crate::focus_dispatch::request_focus_in_context)
     {
@@ -350,11 +356,28 @@ fn request_pointer_focus(
     );
 }
 
-struct TextFieldFocusBridge {
+pub(crate) struct TextFieldFocusBridge {
     state: TextFieldState,
     refs: TextFieldRefs,
     style: TextStyle,
     line_limits: TextFieldLineLimits,
+}
+
+impl TextFieldFocusBridge {
+    /// The focus target of the field with these refs.
+    pub(crate) fn handle(
+        state: TextFieldState,
+        refs: TextFieldRefs,
+        style: TextStyle,
+        line_limits: TextFieldLineLimits,
+    ) -> Rc<dyn crate::focus_dispatch::FocusTargetHandle> {
+        Rc::new(Self {
+            state,
+            refs,
+            style,
+            line_limits,
+        })
+    }
 }
 
 impl crate::focus_dispatch::FocusTargetHandle for TextFieldFocusBridge {
@@ -382,6 +405,9 @@ pub(crate) struct TextFieldRefs {
     pub last_click_pos: Rc<Cell<Option<(f32, f32)>>>,
     pub click_count: Rc<Cell<u8>>,
     pub node_id: Rc<Cell<Option<cranpose_core::NodeId>>>,
+    /// The node focus and semantics know the field by: the decoration box
+    /// around a decorated field, else the field's own node.
+    pub focus_node: Rc<Cell<Option<cranpose_core::NodeId>>>,
     pub scroll_offset: Rc<Cell<f32>>,
     pub direct_manipulation: Rc<Cell<bool>>,
     pub node_origin: Rc<Cell<Point>>,
@@ -408,6 +434,7 @@ impl TextFieldRefs {
             last_click_pos: Rc::new(Cell::new(None::<(f32, f32)>)),
             click_count: Rc::new(Cell::new(0_u8)),
             node_id: Rc::new(Cell::new(None::<cranpose_core::NodeId>)),
+            focus_node: Rc::new(Cell::new(None::<cranpose_core::NodeId>)),
             scroll_offset: Rc::new(Cell::new(0.0_f32)),
             direct_manipulation: Rc::new(Cell::new(false)),
             node_origin: Rc::new(Cell::new(Point { x: 0.0, y: 0.0 })),
@@ -417,6 +444,18 @@ impl TextFieldRefs {
             gesture_claimed: Rc::new(Cell::new(false)),
             modal_depth: Rc::new(Cell::new(0)),
         }
+    }
+
+    /// Tells these refs from any others, so the nodes sharing them can be
+    /// keyed by them.
+    pub(crate) fn key(&self) -> u64 {
+        Rc::as_ptr(&self.is_focused) as usize as u64
+    }
+}
+
+impl PartialEq for TextFieldRefs {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.is_focused, &other.is_focused)
     }
 }
 
@@ -433,6 +472,8 @@ pub struct TextFieldModifierNode {
     cached_selection: TextRange,
     node_state: NodeState,
     measured_size: Rc<Cell<Size>>,
+    /// [`Self::min_size`] and the density it was taken at.
+    min_size: Cell<Option<(f32, Size)>>,
     measured_line_height: Rc<Cell<f32>>,
     measured_wrap_width: Rc<Cell<Option<f32>>>,
     cached_handler: Rc<dyn Fn(PointerEvent)>,
@@ -440,6 +481,9 @@ pub struct TextFieldModifierNode {
     handle_controller: Option<TextFieldHandleController>,
     modal_depth: usize,
     focus_bridge: Option<Rc<dyn crate::focus_dispatch::FocusTargetHandle>>,
+    /// A decoration box around the field takes its input, focus and
+    /// semantics, sharing its refs; the field only lays out and draws.
+    decorated: bool,
 }
 
 impl std::fmt::Debug for TextFieldModifierNode {
@@ -455,8 +499,16 @@ impl std::fmt::Debug for TextFieldModifierNode {
 impl TextFieldModifierNode {
     /// Creates a new text field modifier node.
     pub fn new(state: TextFieldState, style: TextStyle) -> Self {
+        Self::with_refs(state, style, TextFieldRefs::new(), false)
+    }
+
+    fn with_refs(
+        state: TextFieldState,
+        style: TextStyle,
+        refs: TextFieldRefs,
+        decorated: bool,
+    ) -> Self {
         let value = state.value();
-        let refs = TextFieldRefs::new();
         let refs_line_height = refs.line_height.clone();
         let refs_wrap_width = refs.wrap_width.clone();
         let line_limits = TextFieldLineLimits::default();
@@ -479,6 +531,7 @@ impl TextFieldModifierNode {
                 width: 0.0,
                 height: 0.0,
             })),
+            min_size: Cell::new(None),
             measured_line_height: refs_line_height,
             measured_wrap_width: refs_wrap_width,
             cached_handler,
@@ -486,6 +539,7 @@ impl TextFieldModifierNode {
             handle_controller: None,
             modal_depth: 0,
             focus_bridge: None,
+            decorated,
         }
     }
 
@@ -572,7 +626,7 @@ impl TextFieldModifierNode {
         self.line_limits
     }
 
-    fn create_handler(
+    pub(crate) fn create_handler(
         state: TextFieldState,
         refs: TextFieldRefs,
         line_limits: TextFieldLineLimits,
@@ -842,6 +896,37 @@ impl TextFieldModifierNode {
         }
     }
 
+    /// The text's size on `density`'s grid: Compose sizes a field's layout
+    /// as its paragraph's size, `ceil`ed to whole pixels.
+    fn text_size(&self, wrap_width: Option<f32>, density: f32) -> Size {
+        let size = self.measure_text_content(wrap_width);
+        Size {
+            width: ceil_to_px(size.width, density),
+            height: ceil_to_px(size.height, density),
+        }
+    }
+
+    /// The smallest box the field takes, as Compose's `textFieldMinSize`
+    /// gives it: one line of ten 'H's in its style, so an empty field is as
+    /// tall as a line and wide enough to type into.
+    fn min_size(&self, density: f32) -> Size {
+        if let Some((taken_at, size)) = self.min_size.get()
+            && taken_at == density
+        {
+            return size;
+        }
+        let metrics = crate::text::measure_text(
+            &crate::text::AnnotatedString::from(MIN_SIZE_TEXT),
+            &self.style,
+        );
+        let size = Size {
+            width: ceil_to_px(metrics.width, density),
+            height: ceil_to_px(metrics.height, density),
+        };
+        self.min_size.set(Some((density, size)));
+        size
+    }
+
     fn update_cached_state(&mut self) -> bool {
         let value = self.state.value();
         let text_changed = value.text != self.cached_text;
@@ -870,16 +955,19 @@ impl ModifierNode for TextFieldModifierNode {
 
         context.invalidate(InvalidationKind::Layout);
         context.invalidate(InvalidationKind::Draw);
+        if self.decorated {
+            return;
+        }
         context.invalidate(InvalidationKind::Semantics);
+        self.refs.focus_node.set(context.node_id());
 
         if let Some(node_id) = context.node_id() {
-            let bridge: Rc<dyn crate::focus_dispatch::FocusTargetHandle> =
-                Rc::new(TextFieldFocusBridge {
-                    state: self.state,
-                    refs: self.refs.clone(),
-                    style: self.style.clone(),
-                    line_limits: self.line_limits,
-                });
+            let bridge = TextFieldFocusBridge::handle(
+                self.state,
+                self.refs.clone(),
+                self.style.clone(),
+                self.line_limits,
+            );
             self.focus_bridge = Some(Rc::clone(&bridge));
             crate::focus_dispatch::register_focus_target(node_id, bridge);
         }
@@ -908,48 +996,52 @@ impl ModifierNode for TextFieldModifierNode {
     }
 
     fn as_semantics_node(&self) -> Option<&dyn SemanticsNode> {
-        Some(self)
+        (!self.decorated).then_some(self)
     }
 
     fn as_semantics_node_mut(&mut self) -> Option<&mut dyn SemanticsNode> {
-        Some(self)
+        if self.decorated { None } else { Some(self) }
     }
 
     fn as_pointer_input_node(&self) -> Option<&dyn PointerInputNode> {
-        Some(self)
+        (!self.decorated).then_some(self)
     }
 
     fn as_pointer_input_node_mut(&mut self) -> Option<&mut dyn PointerInputNode> {
-        Some(self)
+        if self.decorated { None } else { Some(self) }
     }
 }
 
 impl LayoutModifierNode for TextFieldModifierNode {
     fn measure(
         &self,
-        _context: &mut dyn ModifierNodeContext,
+        context: &mut dyn ModifierNodeContext,
         _measurable: &dyn Measurable,
         constraints: Constraints,
     ) -> cranpose_ui_layout::LayoutModifierMeasureResult {
+        let density = context.density();
         let wrap_width = self.wrap_width(constraints.max_width);
         self.measured_wrap_width.set(wrap_width);
-        let text_size = self.measure_text_content(wrap_width);
-
-        let min_height = if text_size.height < 1.0 {
-            DEFAULT_LINE_HEIGHT
-        } else {
-            text_size.height
+        let text = self.text_size(wrap_width, density);
+        let min = self.min_size(density);
+        // The minimum joins the constraints' own, as a floor they bound.
+        let fit = |length: f32, min: f32, low: f32, high: f32| {
+            length.max(min.max(low).min(high)).min(high)
         };
-
-        let width = text_size
-            .width
-            .max(constraints.min_width)
-            .min(constraints.max_width);
-        let height = min_height
-            .max(constraints.min_height)
-            .min(constraints.max_height);
-
-        let size = Size { width, height };
+        let size = Size {
+            width: fit(
+                text.width,
+                min.width,
+                constraints.min_width,
+                constraints.max_width,
+            ),
+            height: fit(
+                text.height,
+                min.height,
+                constraints.min_height,
+                constraints.max_height,
+            ),
+        };
         self.measured_size.set(size);
 
         let _ = (self.cached_pan_resolver)(size.width);
@@ -957,34 +1049,30 @@ impl LayoutModifierNode for TextFieldModifierNode {
         cranpose_ui_layout::LayoutModifierMeasureResult::with_size(size)
     }
 
-    fn min_intrinsic_width(
-        &self,
-        _measurable: &dyn Measurable,
-        _height: f32,
-        _density: f32,
-    ) -> f32 {
-        self.measure_text_content(None).width
+    // Compose's minimum size is a plain layout modifier, which leaves the
+    // intrinsics to the text; an empty text is still a line tall.
+    fn min_intrinsic_width(&self, _measurable: &dyn Measurable, _height: f32, density: f32) -> f32 {
+        self.text_size(None, density).width
     }
 
-    fn max_intrinsic_width(
-        &self,
-        _measurable: &dyn Measurable,
-        _height: f32,
-        _density: f32,
-    ) -> f32 {
-        self.measure_text_content(None).width
+    fn max_intrinsic_width(&self, _measurable: &dyn Measurable, _height: f32, density: f32) -> f32 {
+        self.text_size(None, density).width
     }
 
-    fn min_intrinsic_height(&self, _measurable: &dyn Measurable, width: f32, _density: f32) -> f32 {
-        self.measure_text_content(self.wrap_width(width))
+    fn min_intrinsic_height(&self, _measurable: &dyn Measurable, width: f32, density: f32) -> f32 {
+        self.intrinsic_height(width, density)
+    }
+
+    fn max_intrinsic_height(&self, _measurable: &dyn Measurable, width: f32, density: f32) -> f32 {
+        self.intrinsic_height(width, density)
+    }
+}
+
+impl TextFieldModifierNode {
+    fn intrinsic_height(&self, width: f32, density: f32) -> f32 {
+        self.text_size(self.wrap_width(width), density)
             .height
-            .max(DEFAULT_LINE_HEIGHT)
-    }
-
-    fn max_intrinsic_height(&self, _measurable: &dyn Measurable, width: f32, _density: f32) -> f32 {
-        self.measure_text_content(self.wrap_width(width))
-            .height
-            .max(DEFAULT_LINE_HEIGHT)
+            .max(self.min_size(density).height)
     }
 }
 
@@ -1223,35 +1311,44 @@ impl DrawModifierNode for TextFieldModifierNode {
 
 impl SemanticsNode for TextFieldModifierNode {
     fn merge_semantics(&self, config: &mut SemanticsConfiguration) {
-        let text = self.state.text();
-        if config.content_description.is_none() {
-            config.content_description = Some(text.clone());
-        }
-        config.text = Some(text);
-        config.is_editable_text = true;
-        config.is_clickable = true;
-        config.multiline = !matches!(self.line_limits, TextFieldLineLimits::SingleLine);
-        let state = self.state;
-        config.set_text = Some(cranpose_foundation::SemanticsSetText::new(move |text| {
-            state.set_text(text)
-        }));
-        config.set_selection = Some(cranpose_foundation::SemanticsSetSelection::new(
-            move |anchor, focus| {
-                let text = state.text();
-                let anchor = floor_char_boundary(&text, anchor);
-                let focus = floor_char_boundary(&text, focus);
-                state.set_selection(TextRange::new(anchor, focus));
-                crate::cursor_animation::reset_cursor_blink();
-                crate::request_render_invalidation();
-                true
-            },
-        ));
-        config.text_selection = Some(self.state.selection());
+        merge_text_field_semantics(self.state, self.line_limits, config);
     }
 
     fn reach(&self) -> cranpose_foundation::SemanticsReach {
         cranpose_foundation::SemanticsReach::default()
     }
+}
+
+/// What an editable field tells accessibility, from the node that takes its
+/// input.
+pub(crate) fn merge_text_field_semantics(
+    state: TextFieldState,
+    line_limits: TextFieldLineLimits,
+    config: &mut SemanticsConfiguration,
+) {
+    let text = state.text();
+    if config.content_description.is_none() {
+        config.content_description = Some(text.clone());
+    }
+    config.text = Some(text);
+    config.is_editable_text = true;
+    config.is_clickable = true;
+    config.multiline = !matches!(line_limits, TextFieldLineLimits::SingleLine);
+    config.set_text = Some(cranpose_foundation::SemanticsSetText::new(move |text| {
+        state.set_text(text)
+    }));
+    config.set_selection = Some(cranpose_foundation::SemanticsSetSelection::new(
+        move |anchor, focus| {
+            let text = state.text();
+            let anchor = floor_char_boundary(&text, anchor);
+            let focus = floor_char_boundary(&text, focus);
+            state.set_selection(TextRange::new(anchor, focus));
+            crate::cursor_animation::reset_cursor_blink();
+            crate::request_render_invalidation();
+            true
+        },
+    ));
+    config.text_selection = Some(state.selection());
 }
 
 fn floor_char_boundary(text: &str, index: usize) -> usize {
@@ -1295,6 +1392,7 @@ pub struct TextFieldElement {
     line_limits: TextFieldLineLimits,
     handle_controller: Option<TextFieldHandleController>,
     modal_depth: usize,
+    decorator: Option<TextFieldRefs>,
 }
 
 impl TextFieldElement {
@@ -1307,7 +1405,15 @@ impl TextFieldElement {
             line_limits: TextFieldLineLimits::default(),
             handle_controller: None,
             modal_depth: 0,
+            decorator: None,
         }
+    }
+
+    /// Hands the field's input, focus and semantics to the decoration box
+    /// that shares `refs`.
+    pub(crate) fn decorated_by(mut self, refs: TextFieldRefs) -> Self {
+        self.decorator = Some(refs);
+        self
     }
 
     /// Creates an element with custom cursor color.
@@ -1356,6 +1462,7 @@ impl Hash for TextFieldElement {
         self.style.render_hash().hash(state);
         self.line_limits.hash(state);
         self.modal_depth.hash(state);
+        self.decorator.as_ref().map(TextFieldRefs::key).hash(state);
     }
 }
 
@@ -1366,6 +1473,7 @@ impl PartialEq for TextFieldElement {
             && self.cursor_color == other.cursor_color
             && self.line_limits == other.line_limits
             && self.modal_depth == other.modal_depth
+            && self.decorator == other.decorator
     }
 }
 
@@ -1375,9 +1483,12 @@ impl ModifierNodeElement for TextFieldElement {
     type Node = TextFieldModifierNode;
 
     fn create(&self) -> Self::Node {
-        let mut node = TextFieldModifierNode::new(self.state, self.style.clone())
-            .with_cursor_color(self.cursor_color)
-            .with_line_limits(self.line_limits);
+        let refs = self.decorator.clone().unwrap_or_else(TextFieldRefs::new);
+        let decorated = self.decorator.is_some();
+        let mut node =
+            TextFieldModifierNode::with_refs(self.state, self.style.clone(), refs, decorated)
+                .with_cursor_color(self.cursor_color)
+                .with_line_limits(self.line_limits);
         node.modal_depth = self.modal_depth;
         node.refs.modal_depth.set(self.modal_depth);
         if let Some(controller) = self.handle_controller.clone() {
@@ -1389,7 +1500,10 @@ impl ModifierNodeElement for TextFieldElement {
 
     fn update(&self, node: &mut Self::Node) {
         node.state = self.state;
-        node.style = self.style.clone();
+        if node.style != self.style {
+            node.min_size.set(None);
+            node.style = self.style.clone();
+        }
         node.cursor_brush = Brush::solid(self.cursor_color);
         node.line_limits = self.line_limits;
         node.handle_controller.clone_from(&self.handle_controller);
@@ -1400,11 +1514,19 @@ impl ModifierNodeElement for TextFieldElement {
         if node.update_cached_state() {}
     }
 
+    /// A decorated field's node shares its decoration's refs, so it is
+    /// never handed to a field decorated by another.
+    fn key(&self) -> Option<u64> {
+        self.decorator.as_ref().map(TextFieldRefs::key)
+    }
+
     fn capabilities(&self) -> NodeCapabilities {
-        NodeCapabilities::LAYOUT
-            | NodeCapabilities::DRAW
-            | NodeCapabilities::SEMANTICS
-            | NodeCapabilities::POINTER_INPUT
+        let drawn = NodeCapabilities::LAYOUT | NodeCapabilities::DRAW;
+        if self.decorator.is_some() {
+            drawn
+        } else {
+            drawn | NodeCapabilities::SEMANTICS | NodeCapabilities::POINTER_INPUT
+        }
     }
 
     fn always_update(&self) -> bool {

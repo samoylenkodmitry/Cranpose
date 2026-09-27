@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -39,6 +40,7 @@ val SCENES: List<Pair<String, @Composable () -> Unit>> = listOf(
     "item-list" to { ItemListShowcase() },
     "complex-chain" to { ComplexChainShowcase() },
     "modifier-order" to { ModifierOrderProbes() },
+    "text-fields" to { TextFieldProbes() },
 )
 
 /** The demo's fonts, loaded from the files Cranpose embeds. */
@@ -225,3 +227,33 @@ fun ModifierOrderProbes() {
         }
     }
 }
+
+/** The fill behind each probe field. */
+val FieldFill = Color(0.25f, 0.27f, 0.33f, 1f)
+
+@Composable
+fun TextFieldProbes() {
+    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        BasicTextField("", {}, Modifier.background(FieldFill), textStyle = defaultTextStyle())
+        BasicTextField("Hi", {}, Modifier.background(FieldFill).padding(4.dp), textStyle = defaultTextStyle())
+        BasicTextField(
+            "A field as wide as its text",
+            {},
+            Modifier.background(FieldFill),
+            textStyle = defaultTextStyle(),
+        )
+        BasicTextField(
+            "",
+            {},
+            Modifier.background(Color(0.2f, 0.35f, 0.6f, 1f)).padding(9.dp),
+            textStyle = defaultTextStyle(),
+            decorationBox = { inner ->
+                Box {
+                    BasicText("Search", style = defaultTextStyle().copy(color = Color(1f, 1f, 1f, 0.5f)))
+                    inner()
+                }
+            },
+        )
+    }
+}
+

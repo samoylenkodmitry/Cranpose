@@ -66,7 +66,7 @@ is ticked when the code, its tests and its docs are on the branch.
 
 - [x] `width_in`, `height_in` and `size_in`: a small field gets its 24 points without growing to 48
 - [x] rows of one list with one name are apart in the audit, because a reader speaks their place
-- [x] the target of a decorated field is the field, not its decoration box: the guide says to put the padding on the field's modifier, as the liquid search field does
+- [x] the target of a decorated field is its whole decoration box, as in Compose: the box takes the field's modifier, semantics, focus and pointer input
 - [x] the iOS bridge comes up at the first frame when the root view controller was not there at startup: on the simulator the reader got no tree at all
 - [x] the Liquid slider speaks its value and takes a swipe, segments and chips speak their selected state; the demo names its sliders and lets its switches keep the switch role
 - [x] the iOS demo logs the spoken tree under `cranpose::spoken_tree` when built with `EXTRA_FEATURES=logging`, so a check needs no VoiceOver on the simulator

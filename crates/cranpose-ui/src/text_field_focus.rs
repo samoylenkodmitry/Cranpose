@@ -60,6 +60,11 @@ pub trait FocusedTextFieldHandler {
     fn node_id(&self) -> Option<cranpose_core::NodeId> {
         None
     }
+    /// The node focus and semantics know the field by: the decoration box
+    /// around a decorated field, else [`Self::node_id`].
+    fn target_node(&self) -> Option<cranpose_core::NodeId> {
+        self.node_id()
+    }
     /// Handle a key event. Returns true if consumed.
     fn handle_key(&self, event: &KeyEvent) -> bool;
     /// Insert pasted text.
@@ -344,11 +349,13 @@ pub(crate) fn clear_focus_for_closed_modal(depth: usize) {
 /// Clears focus from the currently focused text field.
 pub fn clear_focus() {
     let previous = focused_field_node();
+    let previous_target = focused_field_target();
     if let Some(node_id) = previous {
         crate::schedule_draw_repass(node_id);
     }
     crate::render_state::with_text_field_focus(TextFieldFocusState::clear_focus);
-    if previous.is_some() && crate::focus_dispatch::active_focus_target() == previous {
+    if previous_target.is_some() && crate::focus_dispatch::active_focus_target() == previous_target
+    {
         crate::focus_dispatch::clear_active_focus();
     }
 
@@ -366,6 +373,16 @@ pub fn focused_field_node() -> Option<cranpose_core::NodeId> {
         state
             .focused_handler()
             .and_then(|handler| handler.node_id())
+    })
+}
+
+/// Returns the node focus and semantics know the focused text field by (see
+/// [`FocusedTextFieldHandler::target_node`]), if a field is focused.
+pub fn focused_field_target() -> Option<cranpose_core::NodeId> {
+    crate::render_state::with_text_field_focus(|state| {
+        state
+            .focused_handler()
+            .and_then(|handler| handler.target_node())
     })
 }
 
