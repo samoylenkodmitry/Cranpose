@@ -1052,7 +1052,9 @@ impl FrameCommandRecorder for PassContext<'_> {
     }
 
     fn copy_texture_region(&mut self, copy: TextureRegionCopy<'_>) {
-        encode_texture_region_copy(self.encoder, copy);
+        if std::env::var_os("CRANPOSE_EXP_SKIP_COPIES").is_none() {
+            encode_texture_region_copy(self.encoder, copy);
+        }
         self.copies.note(copy.size);
     }
 

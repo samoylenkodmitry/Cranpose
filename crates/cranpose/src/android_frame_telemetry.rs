@@ -54,6 +54,7 @@ const PROPERTY_BACKED_ENV_VARS: &[(&str, &str)] = &[
     ("debug.cranpose.no_fill_cache", "CRANPOSE_NO_FILL_CACHE"),
     ("debug.cranpose.ablate", "CRANPOSE_ABLATE"),
     ("debug.cranpose.exp_deferred", "CRANPOSE_EXP_DEFERRED_PRESENT"),
+    ("debug.cranpose.exp_skip_copies", "CRANPOSE_EXP_SKIP_COPIES"),
     (
         "debug.cranpose.shadow_cache_diag",
         "CRANPOSE_GPU_SHADOW_CACHE_DIAG",
