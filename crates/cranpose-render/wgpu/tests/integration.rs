@@ -37,6 +37,7 @@ mod initial_present_contract;
 mod layer_effect_cache;
 mod nested_composite_order;
 mod nested_rotated_relayout;
+mod opaque_interiors;
 mod opaque_prefix_cache;
 mod pass_timing_report;
 mod present_runtime_contract;

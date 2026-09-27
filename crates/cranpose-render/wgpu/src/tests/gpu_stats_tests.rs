@@ -31,6 +31,7 @@ fn layer_cache_counters_accumulate_and_reset() {
     stats.bump_shapes();
     stats.shape_pipeline_fallback_draws.set(3);
     stats.shape_specialized_draws.set(5);
+    stats.shape_interior_draws.set(6);
     stats.shader_pipeline_fallback_draws.set(2);
     stats.shader_specialized_draws.set(4);
     stats.blur_passes.set(1);
@@ -70,6 +71,7 @@ fn layer_cache_counters_accumulate_and_reset() {
 
     assert_eq!(snapshot.shape_pipeline_fallback_draws, 3);
     assert_eq!(snapshot.shape_specialized_draws, 5);
+    assert_eq!(snapshot.shape_interior_draws, 6);
     assert_eq!(snapshot.shader_pipeline_fallback_draws, 2);
     assert_eq!(snapshot.shader_specialized_draws, 4);
     assert_eq!(snapshot.isolated_layer_renders, 1);
@@ -102,6 +104,7 @@ fn layer_cache_counters_accumulate_and_reset() {
 
     assert_eq!(stats.snapshot().shape_pipeline_fallback_draws, 0);
     assert_eq!(stats.snapshot().shape_specialized_draws, 0);
+    assert_eq!(stats.snapshot().shape_interior_draws, 0);
     assert_eq!(stats.snapshot().shader_pipeline_fallback_draws, 0);
     assert_eq!(stats.snapshot().shader_specialized_draws, 0);
     assert_eq!(stats.layer_cache_hits.get(), 0);

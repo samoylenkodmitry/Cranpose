@@ -443,6 +443,9 @@ pub(crate) struct RunDrawCall {
     /// The records whose own key did not test interiors, when the draw's
     /// key does.
     plain: u32,
+    /// Whether one of the draw's records is an opaque fill with an
+    /// interior worth laying down ahead of the paint.
+    pub(crate) occluders: bool,
 }
 
 impl RunDrawCall {
@@ -450,12 +453,24 @@ impl RunDrawCall {
         key: crate::render::ShapePipelineKey,
         band_class: u8,
         records: std::ops::Range<u32>,
+        occluders: bool,
     ) -> Self {
         Self {
             key,
             band_class,
             records,
             plain: 0,
+            occluders,
+        }
+    }
+
+    /// The pipeline that lays this draw's opaque interiors down ahead of
+    /// the paint, when it has any.
+    pub(crate) fn interior_key(&self) -> Option<crate::render::ShapePipelineKey> {
+        if self.occluders {
+            self.key.interior()
+        } else {
+            None
         }
     }
 
@@ -468,6 +483,7 @@ impl RunDrawCall {
         key: crate::render::ShapePipelineKey,
         band_class: u8,
         records: std::ops::Range<u32>,
+        occluders: bool,
     ) -> bool {
         if self.band_class != band_class || self.records.end != records.start {
             return false;
@@ -490,6 +506,7 @@ impl RunDrawCall {
         }
         self.plain = plain;
         self.records.end = records.end;
+        self.occluders |= occluders;
         true
     }
 
@@ -571,16 +588,23 @@ impl ArenaStaging {
 
     /// Records `record` under `key`, extending the last draw when it
     /// continues it.
-    fn push_draw(&mut self, key: crate::render::ShapePipelineKey, band_class: u8, record: u32) {
+    fn push_draw(
+        &mut self,
+        key: crate::render::ShapePipelineKey,
+        band_class: u8,
+        record: u32,
+        occluders: bool,
+    ) {
         let records = record..record + 1;
         if self
             .draws
             .last_mut()
-            .is_some_and(|last| last.absorb(key, band_class, records.clone()))
+            .is_some_and(|last| last.absorb(key, band_class, records.clone(), occluders))
         {
             return;
         }
-        self.draws.push(RunDrawCall::new(key, band_class, records));
+        self.draws
+            .push(RunDrawCall::new(key, band_class, records, occluders));
     }
 }
 
@@ -877,11 +901,12 @@ impl RunStore {
                 0
             };
             let records = segment.start..segment.start + segment.count;
+            let occluders = segment.occluders;
             if !out
                 .last_mut()
-                .is_some_and(|last| last.absorb(key, band_class, records.clone()))
+                .is_some_and(|last| last.absorb(key, band_class, records.clone(), occluders))
             {
-                out.push(RunDrawCall::new(key, band_class, records));
+                out.push(RunDrawCall::new(key, band_class, records, occluders));
             }
         }
         self.ensure_strip_indices(device, out);
@@ -1120,6 +1145,11 @@ impl RunStore {
         chunk
     }
 
+    /// The records the open chunk holds, the instance index of its next.
+    pub(crate) fn open_arena_records(&self) -> u32 {
+        self.arena.staging.bodies.len() as u32
+    }
+
     /// Whether `run`'s next part fits the open chunk; a uniform chunk that
     /// cannot take another record closes and the pass opens the next.
     pub(crate) fn arena_accepts(&self, chunk: usize, run: &RunDraw) -> bool {
@@ -1222,7 +1252,7 @@ impl RunStore {
                 let record_index = staging.bodies.len() as u32;
                 staging.bodies.push(body);
                 staging.curves.push(tables.shapes.curves()[index]);
-                staging.push_draw(key, band_class, record_index);
+                staging.push_draw(key, band_class, record_index, segment.occluders);
                 if fill_stats {
                     staging.fill.add_record(
                         &tables.shapes.get(index).expect("recorded shape index"),

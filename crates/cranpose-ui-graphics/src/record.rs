@@ -428,6 +428,25 @@ fn interior_repays(body: &ShapeRecordBody, curve: &ShapeRecordCurve) -> bool {
     corner > 0.0 && area > 0.0 && interior * 2.0 >= area
 }
 
+/// The least interior, in square logical pixels, that a solid fill lays
+/// down ahead of the paint: a card or a background, not a chip, a glyph-
+/// sized dot or a circle, whose interior is empty.
+pub const OCCLUDER_MIN_AREA: f32 = 1024.0;
+
+/// Whether `body` is a solid, opaque fill whose interior, where its
+/// coverage is 1, spans at least [`OCCLUDER_MIN_AREA`].
+fn interior_occludes(body: &ShapeRecordBody, curve: &ShapeRecordCurve) -> bool {
+    if fragment_kind(body.flags) != FRAGMENT_KIND_FILL || body.brush != 0 || body.color[3] < 1.0 {
+        return false;
+    }
+    let corner = curve
+        .radii
+        .iter()
+        .fold(0.0, |corner, &radius| at_least(radius, corner));
+    let [_, _, width, height] = body.rect;
+    at_least(width - 2.0 * corner, 0.0) * at_least(height - 2.0 * corner, 0.0) >= OCCLUDER_MIN_AREA
+}
+
 fn fragment_kind(flags: u32) -> u32 {
     if (flags >> KIND_SHIFT) & TWO_BITS == RECORD_KIND_ARC {
         FRAGMENT_KIND_ARC
@@ -525,6 +544,10 @@ pub struct RecordSegment {
     /// is 1 without its distance field, covering at least half of its rect:
     /// the only records that repay shading their interior apart.
     pub interiors: bool,
+    /// Whether a solid fill in the segment has an interior of at least
+    /// [`OCCLUDER_MIN_AREA`]: one a pass lays down ahead of its paint, so
+    /// what it hides is never shaded.
+    pub occluders: bool,
 }
 
 impl RecordSegment {
@@ -744,6 +767,7 @@ fn extend_segment_in(tables: &mut RecordTables, extend: bool, opened: RecordSegm
         last.kinds |= opened.kinds;
         last.band_class = last.band_class.max(opened.band_class);
         last.interiors |= opened.interiors;
+        last.occluders |= opened.occluders;
         return;
     }
     tables.segments.push(opened);
@@ -870,6 +894,7 @@ impl ShapeRecorder {
             kinds: 0,
             band_class: 0,
             interiors: false,
+            occluders: false,
         });
     }
 
@@ -1054,6 +1079,7 @@ impl ShapeRecorder {
             };
         let kind_bit = 1u8 << fragment_kind(body.flags);
         let interiors = interior_repays(&body, &curve);
+        let occluders = interior_occludes(&body, &curve);
         let band_class = band_bucket.unwrap_or(0) as u8;
         body.flags |= u32::from(band_class) << BAND_CLASS_SHIFT;
         let extend = self.note_segment_key(RecordLane::Shapes, blend, gradient)
@@ -1076,6 +1102,7 @@ impl ShapeRecorder {
                 kinds: kind_bit,
                 band_class,
                 interiors,
+                occluders,
             },
         );
         coverage
@@ -1106,6 +1133,7 @@ impl ShapeRecorder {
                 kinds: kind_bit,
                 band_class: 0,
                 interiors: false,
+                occluders: false,
             },
         );
     }

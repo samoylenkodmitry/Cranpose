@@ -14,16 +14,18 @@ fn shared_pipelines_preserve_each_draws_strip_index_count() {
         kinds: 4,
         band_class: 0,
         interiors: false,
+        occluders: false,
     };
     let key = crate::render::ShapePipelineKey {
         blend_mode: segment.blend,
         tier: crate::render::RunTier::Arena,
         variant: crate::render::ShapeVariant::of_segment(&segment, false, Default::default()),
         transformed: false,
+        depth: crate::render::ShapeDepth::Off,
     };
     let mut staging = ArenaStaging::default();
     for (record, class) in [0, 0, 3, 3, 0].into_iter().enumerate() {
-        staging.push_draw(key, class, record as u32);
+        staging.push_draw(key, class, record as u32, false);
     }
     let draws: Vec<_> = staging
         .draws
@@ -44,12 +46,14 @@ fn fill_key(interiors: bool, blend: BlendMode) -> crate::render::ShapePipelineKe
         kinds: 1,
         band_class: 0,
         interiors,
+        occluders: false,
     };
     crate::render::ShapePipelineKey {
         blend_mode: segment.blend,
         tier: crate::render::RunTier::Arena,
         variant: crate::render::ShapeVariant::of_segment(&segment, false, Default::default()),
         transformed: false,
+        depth: crate::render::ShapeDepth::Off,
     }
 }
 
@@ -58,7 +62,7 @@ fn staged_draws(
 ) -> Vec<(std::ops::Range<u32>, crate::render::ShapePipelineKey)> {
     let mut staging = ArenaStaging::default();
     for (record, key) in keys.into_iter().enumerate() {
-        staging.push_draw(key, 0, record as u32);
+        staging.push_draw(key, 0, record as u32, false);
     }
     staging
         .draws
@@ -109,6 +113,77 @@ fn draws_keyed_apart_by_more_than_the_interior_test_stay_apart() {
     let multiply = fill_key(false, BlendMode::Multiply);
     let draws = staged_draws([over, multiply]);
     assert_eq!(draws, [(0..1, over), (1..2, multiply)]);
+}
+
+#[test]
+fn only_plain_source_over_draws_in_a_depth_pass_lay_interiors_down() {
+    let tested = crate::render::ShapePipelineKey {
+        depth: crate::render::ShapeDepth::Tested,
+        ..fill_key(false, BlendMode::SrcOver)
+    };
+    let interior = tested.interior().expect("a source-over fill has interiors");
+    assert_eq!(interior.depth, crate::render::ShapeDepth::Interior);
+    assert!(
+        interior.is_general(),
+        "one interior pipeline serves every variant"
+    );
+    assert_eq!(interior.interior(), None);
+    assert_eq!(fill_key(false, BlendMode::SrcOver).interior(), None);
+    let multiply = crate::render::ShapePipelineKey {
+        depth: crate::render::ShapeDepth::Tested,
+        ..fill_key(false, BlendMode::Multiply)
+    };
+    assert_eq!(multiply.interior(), None);
+    let turned = crate::render::ShapePipelineKey {
+        transformed: true,
+        ..tested
+    };
+    assert_eq!(turned.interior(), None);
+}
+
+#[test]
+fn interiors_go_down_last_first_in_as_few_draws_as_their_pipeline_allows() {
+    use crate::render::{ShapeDepth, ShapePipelineKey, interior_run_draws};
+    let tested = |key: ShapePipelineKey| ShapePipelineKey {
+        depth: ShapeDepth::Tested,
+        ..key
+    };
+    let card = tested(fill_key(true, BlendMode::SrcOver));
+    let chip = tested(fill_key(false, BlendMode::SrcOver));
+    let multiply = tested(fill_key(false, BlendMode::Multiply));
+    let interior = card.interior().expect("a source-over fill has interiors");
+    let draws = [
+        RunDrawCall::new(card, 0, 0..2, true),
+        RunDrawCall::new(chip, 3, 2..5, true),
+        RunDrawCall::new(multiply, 0, 5..6, true),
+        RunDrawCall::new(card, 0, 6..9, true),
+        RunDrawCall::new(chip, 0, 9..12, false),
+    ];
+    let planned: Vec<_> = interior_run_draws(&draws)
+        .into_iter()
+        .map(|draw| (draw.key, draw.records, draw.indices))
+        .collect();
+    assert_eq!(
+        planned,
+        [(interior, 6..9, 0..6), (interior, 0..5, 0..6)],
+        "the multiply draw parts the interiors around it, and a draw of small \
+         shapes lays nothing down"
+    );
+}
+
+#[test]
+fn a_draw_holds_occluders_once_any_record_it_takes_does() {
+    let key = crate::render::ShapePipelineKey {
+        depth: crate::render::ShapeDepth::Tested,
+        ..fill_key(true, BlendMode::SrcOver)
+    };
+    let mut staging = ArenaStaging::default();
+    staging.push_draw(key, 0, 0, false);
+    assert_eq!(staging.draws[0].interior_key(), None);
+    staging.push_draw(key, 0, 1, true);
+    staging.push_draw(key, 0, 2, false);
+    assert_eq!(staging.draws.len(), 1);
+    assert_eq!(staging.draws[0].interior_key(), key.interior());
 }
 
 #[test]

@@ -29,6 +29,15 @@ struct Uniforms {
 @group(0) @binding(0)
 var<uniform> uniforms: Uniforms;
 
+// The batch's depth in a pass that lays opaque interiors down first: its
+// place in the pass's order from `uniforms.reserved.x`, on the step the
+// shape stage's records use (`record_depth`), so later interiors hide it.
+const DEPTH_STEP: f32 = 1.0 / 1048576.0;
+
+fn batch_depth() -> f32 {
+    return max(1.0 - (uniforms.reserved.x + 1.0) * DEPTH_STEP, 0.0);
+}
+
 @group(1) @binding(0)
 var glyph_texture: texture_2d<f32>;
 
@@ -57,7 +66,7 @@ fn glyph_atlas_vs_main(
     ) + uniforms.translation;
     let x = ((placed.x - uniforms.viewport_offset.x) / uniforms.viewport.x) * 2.0 - 1.0;
     let y = 1.0 - ((placed.y - uniforms.viewport_offset.y) / uniforms.viewport.y) * 2.0;
-    output.clip_position = vec4<f32>(x, y, 0.0, 1.0);
+    output.clip_position = vec4<f32>(x, y, batch_depth(), 1.0);
     output.color = glyph.color;
     output.uv = vec2<f32>(
         select(glyph.uv.x, glyph.uv.z, right),
