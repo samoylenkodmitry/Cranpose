@@ -433,6 +433,15 @@ impl PresentState {
             &mut returns,
         );
         let after_render_ns = self.now();
+        returns.timings = PresentTimings {
+            after_acquire_ns,
+            after_render_ns,
+            after_present_ns: self.now(),
+        };
+        if let Err(error) = result {
+            log::error!("[present-runtime] render error: {error}");
+        }
+        self.finish_returns(returns);
         self.exp_flush_pending();
         if let Some(frame) = self.acquire_with_one_retry() {
             let mut encoder = self
@@ -457,15 +466,6 @@ impl PresentState {
                 .on_submitted_work_done(move || signal.store(true, Ordering::Release));
             self.exp_pending = Some((frame, done));
         }
-        returns.timings = PresentTimings {
-            after_acquire_ns,
-            after_render_ns,
-            after_present_ns: self.now(),
-        };
-        if let Err(error) = result {
-            log::error!("[present-runtime] render error: {error}");
-        }
-        self.finish_returns(returns);
     }
 
     fn present_placeholder_frame(&mut self) {
