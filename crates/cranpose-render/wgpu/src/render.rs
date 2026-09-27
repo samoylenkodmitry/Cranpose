@@ -21,9 +21,10 @@ use cranpose_render_common::{
         rasterize_annotated_text_to_image_with_glyph_cache,
         rasterize_text_to_image_with_glyph_cache,
     },
+    text_mask_gamma::TextLuminance,
 };
 use cranpose_ui_graphics::{
-    BlendMode, ColorFilter, FRAGMENT_KIND_FILL, FxHasher, ImageBitmap, ImageSampling, Point,
+    BlendMode, Color, ColorFilter, FRAGMENT_KIND_FILL, FxHasher, ImageBitmap, ImageSampling, Point,
     RecordSegment, Rect, RenderHash, TileMode,
 };
 use smallvec::SmallVec;
@@ -1469,12 +1470,29 @@ struct GlyphSamplers<'a> {
     linear: &'a wgpu::Sampler,
 }
 
+/// A glyph's atlas slot: its mask corrected for the luminance class of the
+/// text it is drawn in, so one glyph in light and dark text takes two slots.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct GlyphAtlasSlotKey {
+    glyph: SoftwareGlyphAtlasKey,
+    luminance: TextLuminance,
+}
+
+impl GlyphAtlasSlotKey {
+    fn new(glyph: SoftwareGlyphAtlasKey, color: Color) -> Self {
+        Self {
+            glyph,
+            luminance: TextLuminance::of_color(color),
+        }
+    }
+}
+
 struct TextGlyphAtlas {
     texture: wgpu::Texture,
     _view: wgpu::TextureView,
     texel_bind_group: Rc<wgpu::BindGroup>,
     filtered_bind_group: Rc<wgpu::BindGroup>,
-    entries: BoundedLruCache<SoftwareGlyphAtlasKey, GlyphAtlasEntry>,
+    entries: BoundedLruCache<GlyphAtlasSlotKey, GlyphAtlasEntry>,
     generation: u64,
     size: u32,
     max_size: u32,
@@ -1578,7 +1596,7 @@ impl TextGlyphAtlas {
         self.size
     }
 
-    fn entry(&mut self, key: &SoftwareGlyphAtlasKey) -> Option<GlyphAtlasEntry> {
+    fn entry(&mut self, key: &GlyphAtlasSlotKey) -> Option<GlyphAtlasEntry> {
         self.entries.get(key).copied()
     }
 
@@ -1619,12 +1637,12 @@ impl TextGlyphAtlas {
 
     fn upload_glyph(
         &mut self,
-        key: SoftwareGlyphAtlasKey,
         glyph: &SoftwareGlyphAtlasGlyph,
         queue: &wgpu::Queue,
         executor: &mut WgpuFrameGraphExecutor,
         frame_stats: &mut gpu_stats::FrameStats,
     ) -> Option<GlyphAtlasEntry> {
+        let key = GlyphAtlasSlotKey::new(glyph.key, glyph.color);
         if let Some(entry) = self.entry(&key) {
             frame_stats.record_text_glyph_atlas_hits(1);
             return Some(entry);
@@ -1641,12 +1659,13 @@ impl TextGlyphAtlas {
                 .len()
                 .saturating_sub(self.upload_scratch.capacity()),
         );
+        let correction = key.luminance.correction();
         self.upload_scratch.extend(
             glyph
                 .mask
                 .alpha
                 .iter()
-                .map(|alpha| (alpha.clamp(0.0, 1.0) * 255.0).round() as u8),
+                .map(|&coverage| correction.apply(coverage)),
         );
 
         let upload_stats = executor.upload_texture(
@@ -4125,7 +4144,6 @@ impl GpuRenderer {
         glyph: &SoftwareGlyphAtlasGlyph,
     ) -> Result<GlyphAtlasEntry, String> {
         if let Some(entry) = self.text_glyph_atlas.upload_glyph(
-            glyph.key,
             glyph,
             &self.queue,
             &mut self.frame_graph_executor,
@@ -4149,7 +4167,9 @@ impl GpuRenderer {
         &mut self,
         glyph: &SoftwareGlyphAtlasPlacement,
     ) -> Option<GlyphAtlasEntry> {
-        let entry = self.text_glyph_atlas.entry(&glyph.key)?;
+        let entry = self
+            .text_glyph_atlas
+            .entry(&GlyphAtlasSlotKey::new(glyph.key, glyph.color))?;
         self.frame_stats.record_text_glyph_atlas_hits(1);
         Some(entry)
     }

@@ -32,6 +32,7 @@ pub mod software_text_raster;
 pub mod style_shared;
 mod text_cache_key;
 pub mod text_hyphenation;
+pub mod text_mask_gamma;
 pub mod text_measure;
 
 #[cfg(test)]
