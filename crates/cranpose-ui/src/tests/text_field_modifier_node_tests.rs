@@ -783,3 +783,105 @@ fn a_padded_field_draws_its_selection_and_caret_once_inside_the_padding() {
         );
     });
 }
+
+/// Content a field's layout never looks at: it measures its own text.
+struct NoContent;
+
+impl Measurable for NoContent {
+    fn measure(&self, _constraints: Constraints) -> cranpose_ui_layout::Placeable {
+        cranpose_ui_layout::Placeable::value(0.0, 0.0, 0)
+    }
+
+    fn min_intrinsic_width(&self, _height: f32) -> f32 {
+        0.0
+    }
+
+    fn max_intrinsic_width(&self, _height: f32) -> f32 {
+        0.0
+    }
+
+    fn min_intrinsic_height(&self, _width: f32) -> f32 {
+        0.0
+    }
+
+    fn max_intrinsic_height(&self, _width: f32) -> f32 {
+        0.0
+    }
+}
+
+fn measured(text: &str, density: f32, constraints: Constraints) -> Size {
+    let node = TextFieldModifierNode::new(TextFieldState::new(text), TextStyle::default());
+    let mut context = crate::layout::LayoutNodeContext::new(density);
+    node.measure(&mut context, &NoContent, constraints).size
+}
+
+fn ten_hs() -> Size {
+    let metrics = crate::text::measure_text(
+        &crate::text::AnnotatedString::from("HHHHHHHHHH"),
+        &TextStyle::default(),
+    );
+    Size {
+        width: metrics.width.ceil(),
+        height: metrics.height.ceil(),
+    }
+}
+
+#[test]
+fn an_empty_field_is_a_line_of_ten_hs_as_in_compose() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    with_test_runtime(|| {
+        let loose = Constraints::loose(400.0, 400.0);
+        let min = ten_hs();
+        assert!(min.width > 0.0 && min.height > 0.0);
+        assert_eq!(measured("", 1.0, loose), min);
+        assert_eq!(measured("H", 1.0, loose), min);
+        assert!(measured("HHHHHHHHHHHHHHHHHHHH", 1.0, loose).width > min.width);
+        assert_eq!(
+            measured("", 1.0, Constraints::loose(20.0, 400.0)).width,
+            20.0,
+            "a slot narrower than the minimum bounds it"
+        );
+        assert_eq!(
+            measured("", 1.0, Constraints::tight(300.0, 50.0)),
+            Size {
+                width: 300.0,
+                height: 50.0,
+            }
+        );
+    });
+}
+
+#[test]
+fn a_field_takes_whole_device_pixels() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    with_test_runtime(|| {
+        let density = 2.625;
+        let size = measured(
+            "HHHHHHHHHHHHHHHHHHHHHHHHH",
+            density,
+            Constraints::loose(1000.0, 400.0),
+        );
+        for length in [size.width, size.height] {
+            let pixels = length * density;
+            assert!((pixels - pixels.round()).abs() < 1e-3, "{length}");
+        }
+    });
+}
+
+#[test]
+fn a_fields_intrinsics_are_its_text_and_an_empty_one_is_a_line_tall() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    with_test_runtime(|| {
+        let node = TextFieldModifierNode::new(TextFieldState::new(""), TextStyle::default());
+        assert_eq!(node.min_intrinsic_width(&NoContent, 100.0, 1.0), 0.0);
+        assert_eq!(node.max_intrinsic_width(&NoContent, 100.0, 1.0), 0.0);
+        assert_eq!(
+            node.min_intrinsic_height(&NoContent, 100.0, 1.0),
+            ten_hs().height
+        );
+        assert_eq!(
+            node.max_intrinsic_height(&NoContent, 100.0, 1.0),
+            ten_hs().height
+        );
+    });
+}
