@@ -35,7 +35,7 @@ fn get_vec2(index: u32) -> vec2<f32> {
 // exactly as a dedicated texture's clamp-to-edge would.
 fn region_extent() -> vec4<f32> {
     let region = get_vec4(236u);
-    let dims = vec2<f32>(textureDimensions(input_texture));
+    let dims = vec2<f32>(get_float(255u), get_float(255u));
     if region.z > 0.5 && region.w > 0.5 {
         return region;
     }
@@ -69,7 +69,7 @@ struct RegionMap {
 
 fn region_map() -> RegionMap {
     let region = region_extent();
-    let dims = max(vec2<f32>(textureDimensions(input_texture)), vec2<f32>(1.0));
+    let dims = max(vec2<f32>(get_float(255u), get_float(255u)), vec2<f32>(1.0));
     return RegionMap(region.xy / dims, region.zw / dims, 0.5 / max(region.zw, vec2<f32>(1.0)), vec2<f32>(1.0), vec2<f32>(0.0));
 }
 
@@ -89,7 +89,7 @@ fn get_vec4(index: u32) -> vec4<f32> {
 // none. Read through its own map, held to its texel centers.
 fn substrate_map() -> RegionMap {
     let region = get_vec4(232u);
-    let dims = max(vec2<f32>(textureDimensions(input_texture)), vec2<f32>(1.0));
+    let dims = max(vec2<f32>(get_float(255u), get_float(255u)), vec2<f32>(1.0));
     return RegionMap(region.xy / dims, region.zw / dims, 0.5 / max(region.zw, vec2<f32>(1.0)), vec2<f32>(1.0), vec2<f32>(0.0));
 }
 
