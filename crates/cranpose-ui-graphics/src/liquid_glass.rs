@@ -199,9 +199,6 @@ pub const LIQUID_GLASS_SPECIALIZATIONS: &[LiquidGlassSpecialization] = &[
         slots: &[GLASS_CAPSULE_SMOOTHING_UNIFORM],
         inactive: |u| slot(u, GLASS_CAPSULE_SMOOTHING_UNIFORM) == 0.0,
     },
-    LiquidGlassSpecialization { flag: "EXP_FROST_NO_TONE", slots: &[], inactive: |_| false },
-    LiquidGlassSpecialization { flag: "EXP_FROST_NO_TINT", slots: &[], inactive: |_| false },
-    LiquidGlassSpecialization { flag: "EXP_FROST_TAP_ONLY", slots: &[], inactive: |_| false },
     LiquidGlassSpecialization {
         flag: "GLASS_INTERIOR_GUARD",
         slots: &[],

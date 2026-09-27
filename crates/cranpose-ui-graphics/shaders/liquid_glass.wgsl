@@ -135,9 +135,6 @@ override GLASS_TONE_CURVE_OFF: bool = false;
 override GLASS_PANE_OFF: bool = false;
 override GLASS_INSET_SHADOW_OFF: bool = false;
 override GLASS_HOLDING_OFF: bool = false;
-override EXP_FROST_NO_TONE: bool = false;
-override EXP_FROST_NO_TINT: bool = false;
-override EXP_FROST_TAP_ONLY: bool = false;
 // A fully active material (uniform 111 at one or above) clamps to exactly
 // one, so the raised flag drops the resting, drained and partial-coverage
 // paths. They are dead there, but a runtime activity keeps their registers:
@@ -1713,30 +1710,22 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
             achromatic_displacement + base_displacement,
             16.0 * optical_scale,
         );
-        var adaptive_rgb = adaptive_sample.rgb;
-        if !EXP_FROST_NO_TONE {
-            adaptive_rgb = apply_tone_and_lift(
-                adaptive_sample.rgb,
-                saturation,
-                contrast,
-                face_lift,
-            );
-        }
+        var adaptive_rgb = apply_tone_and_lift(
+            adaptive_sample.rgb,
+            saturation,
+            contrast,
+            face_lift,
+        );
         if adaptive_tone() {
             adaptive_rgb = apply_backdrop_tone(adaptive_sample.rgb, adaptive_curve);
         }
-        if !EXP_FROST_NO_TINT {
-            adaptive_rgb = mix(adaptive_rgb, tint_color.rgb, optical_tint_alpha);
-        }
+        adaptive_rgb = mix(adaptive_rgb, tint_color.rgb, optical_tint_alpha);
         let adaptive_luma = dot(adaptive_rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
         let separation = abs(adaptive_luma - foreground_luma);
         let contrast_need = 1.0 - smoothstep(0.38, 0.58, separation);
         let foreground_is_light = smoothstep(0.35, 0.65, foreground_luma);
         let target_luma = mix(0.82, 0.18, foreground_is_light);
-        var correction = (target_luma - adaptive_luma) * adaptive_frost * contrast_need;
-        if EXP_FROST_TAP_ONLY {
-            correction = adaptive_sample.g * adaptive_frost;
-        }
+        let correction = (target_luma - adaptive_luma) * adaptive_frost * contrast_need;
         rgb = clamp(rgb + vec3<f32>(correction), vec3<f32>(0.0), vec3<f32>(1.0));
     }
 
