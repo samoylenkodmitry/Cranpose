@@ -519,13 +519,35 @@ impl PresentState {
     /// Presents `frame` on the current surface, with the platform's
     /// observer on either side of it.
     fn present(&mut self, frame: wgpu::SurfaceTexture) {
+        static SPLIT: std::sync::Mutex<(u32, f64, f64, f64)> = std::sync::Mutex::new((0, 0.0, 0.0, 0.0));
+        let t0 = std::time::Instant::now();
         let observed = self.observer.as_mut().zip(self.surface.as_ref());
-        if let Some((observer, surface)) = observed {
+        let (t1, t2) = if let Some((observer, surface)) = observed {
             observer.before_present(surface);
+            let t1 = std::time::Instant::now();
             self.gpu_renderer.queue.present(frame);
+            let t2 = std::time::Instant::now();
             observer.after_present(surface);
+            (t1, t2)
         } else {
+            let t1 = std::time::Instant::now();
             self.gpu_renderer.queue.present(frame);
+            (t1, std::time::Instant::now())
+        };
+        let t3 = std::time::Instant::now();
+        let mut split = SPLIT.lock().unwrap_or_else(PoisonError::into_inner);
+        split.0 += 1;
+        split.1 += (t1 - t0).as_secs_f64() * 1e3;
+        split.2 += (t2 - t1).as_secs_f64() * 1e3;
+        split.3 += (t3 - t2).as_secs_f64() * 1e3;
+        if split.0 == 60 {
+            log::warn!(
+                "[present-split] before={:.2} queue_present={:.2} after={:.2} ms/frame",
+                split.1 / 60.0,
+                split.2 / 60.0,
+                split.3 / 60.0
+            );
+            *split = (0, 0.0, 0.0, 0.0);
         }
     }
 
