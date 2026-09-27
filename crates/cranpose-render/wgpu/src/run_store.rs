@@ -464,16 +464,6 @@ impl RunDrawCall {
         }
     }
 
-    /// The pipeline that lays this draw's opaque interiors down ahead of
-    /// the paint, when it has any.
-    pub(crate) fn interior_key(&self) -> Option<crate::render::ShapePipelineKey> {
-        if self.occluders {
-            self.key.interior()
-        } else {
-            None
-        }
-    }
-
     /// Extends the draw by `records`, keyed `key`, when they follow it and
     /// one pipeline draws both: the same one, or the one testing interiors
     /// when that is all the keys differ in and the records it takes on

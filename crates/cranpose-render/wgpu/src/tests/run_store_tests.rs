@@ -172,6 +172,34 @@ fn interiors_go_down_last_first_in_as_few_draws_as_their_pipeline_allows() {
 }
 
 #[test]
+fn a_card_s_plain_draws_ride_along_with_the_interiors_around_them() {
+    use crate::render::{ShapeDepth, ShapePipelineKey, interior_run_draws};
+    let tested = |key: ShapePipelineKey| ShapePipelineKey {
+        depth: ShapeDepth::Tested,
+        ..key
+    };
+    let card = tested(fill_key(true, BlendMode::SrcOver));
+    let bars = tested(fill_key(false, BlendMode::SrcOver));
+    let interior = card.interior().expect("a source-over fill has interiors");
+    let draws = [
+        RunDrawCall::new(bars, 0, 0..4, false),
+        RunDrawCall::new(card, 0, 4..5, true),
+        RunDrawCall::new(bars, 3, 5..9, false),
+        RunDrawCall::new(card, 0, 9..10, true),
+        RunDrawCall::new(bars, 0, 10..14, false),
+    ];
+    let planned: Vec<_> = interior_run_draws(&draws)
+        .into_iter()
+        .map(|draw| (draw.key, draw.records))
+        .collect();
+    assert_eq!(
+        planned,
+        [(interior, 4..10)],
+        "one call from the first card to the last, the plain draws past them left out"
+    );
+}
+
+#[test]
 fn a_draw_holds_occluders_once_any_record_it_takes_does() {
     let key = crate::render::ShapePipelineKey {
         depth: crate::render::ShapeDepth::Tested,
@@ -179,11 +207,11 @@ fn a_draw_holds_occluders_once_any_record_it_takes_does() {
     };
     let mut staging = ArenaStaging::default();
     staging.push_draw(key, 0, 0, false);
-    assert_eq!(staging.draws[0].interior_key(), None);
+    assert!(!staging.draws[0].occluders);
     staging.push_draw(key, 0, 1, true);
     staging.push_draw(key, 0, 2, false);
     assert_eq!(staging.draws.len(), 1);
-    assert_eq!(staging.draws[0].interior_key(), key.interior());
+    assert!(staging.draws[0].occluders);
 }
 
 #[test]
