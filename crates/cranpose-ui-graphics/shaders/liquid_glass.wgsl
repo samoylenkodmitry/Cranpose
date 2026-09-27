@@ -982,6 +982,7 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
     let saturation = get_float(18u);
     let lift = get_float(20u);
     let dither_amount = get_float(21u);
+    let dither = (hash12(coord) - 0.5) * (dither_amount / 255.0);
     var contrast = get_float(24u);
     if contrast <= 0.0 {
         contrast = 1.0;
@@ -1316,6 +1317,46 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
     if edge_lens {
         base_displacement = edge_face_displacement(transmission_field, sampling_position);
     }
+    let face_lift = select(
+        mix(lift, lift * mix(0.18, 1.0, interior), rim_style),
+        lift * smoothstep(0.35, 1.0, interior),
+        edge_lens,
+    );
+    var adaptive_curve = vec4<f32>(1.0, 0.0, 1.0, 0.0);
+    if adaptive_tone() {
+        adaptive_curve = adaptive_backdrop_tone_curve();
+    }
+    let optical_tint_alpha = tint_color.a * select(mix(1.0, interior, rim_style), 1.0, edge_lens);
+    let adaptive_frost = clamp(fixed_or(get_float(91u), 0.0, GLASS_ADAPTIVE_FROST_OFF), 0.0, 1.0);
+    var frost_correction = 0.0;
+    if adaptive_frost > 0.0 {
+        let foreground_luma = clamp(get_float(97u), 0.0, 1.0);
+        let adaptive_sample = sample_adaptive_neighborhood(
+            map,
+            uv,
+            tex_size,
+            achromatic_displacement + base_displacement,
+            16.0 * optical_scale,
+        );
+        var adaptive_rgb = apply_tone_and_lift(
+            adaptive_sample.rgb,
+            saturation,
+            contrast,
+            face_lift,
+        );
+        if adaptive_tone() {
+            adaptive_rgb = apply_backdrop_tone(adaptive_sample.rgb, adaptive_curve);
+        }
+        adaptive_rgb = mix(adaptive_rgb, tint_color.rgb, optical_tint_alpha);
+        let adaptive_luma = dot(adaptive_rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+        let separation = abs(adaptive_luma - foreground_luma);
+        let contrast_need = 1.0 - smoothstep(0.38, 0.58, separation);
+        let foreground_is_light = smoothstep(0.35, 0.65, foreground_luma);
+        let target_luma = mix(0.82, 0.18, foreground_is_light);
+        let correction = (target_luma - adaptive_luma) * adaptive_frost * contrast_need;
+        frost_correction = correction;
+    }
+
     let spectrum = edge_spectrum(lens_refraction, 13.132 * dispersion_strength * optical_scale, optical_scale);
     let spectral_opacity = spectral_presence(spectrum, d);
     let transmitted_path = sample_wcksrd_path(
@@ -1653,22 +1694,12 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
     // Interactive lenses frost their face without bleaching the meniscus:
     // the target toggle keeps saturated green/cyan at the outer rise while
     // its recessed chamber approaches white. Surface glass uses uniform lift.
-    let face_lift = select(
-        mix(lift, lift * mix(0.18, 1.0, interior), rim_style),
-        lift * smoothstep(0.35, 1.0, interior),
-        edge_lens,
-    );
-    var adaptive_curve = vec4<f32>(1.0, 0.0, 1.0, 0.0);
-    if adaptive_tone() {
-        adaptive_curve = adaptive_backdrop_tone_curve();
-    }
     if !separate_content {
         rgb = transmission_tone(rgb, saturation, contrast, face_lift, adaptive_curve);
     }
 
     // The wcKSRD interior ramp keeps an interactive lens clearer at its edge;
     // surface glass retains a uniform tint across its body.
-    let optical_tint_alpha = tint_color.a * select(mix(1.0, interior, rim_style), 1.0, edge_lens);
     if !separate_content {
         rgb = mix(rgb, tint_color.rgb, optical_tint_alpha);
     }
@@ -1700,33 +1731,8 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
     // background and its detail. A per-fragment decision classifies thin
     // light/dark backdrop glyphs as a new background polarity and inverts
     // them, even though the surrounding card already has safe contrast.
-    let adaptive_frost = clamp(fixed_or(get_float(91u), 0.0, GLASS_ADAPTIVE_FROST_OFF), 0.0, 1.0);
     if adaptive_frost > 0.0 {
-        let foreground_luma = clamp(get_float(97u), 0.0, 1.0);
-        let adaptive_sample = sample_adaptive_neighborhood(
-            map,
-            uv,
-            tex_size,
-            achromatic_displacement + base_displacement,
-            16.0 * optical_scale,
-        );
-        var adaptive_rgb = apply_tone_and_lift(
-            adaptive_sample.rgb,
-            saturation,
-            contrast,
-            face_lift,
-        );
-        if adaptive_tone() {
-            adaptive_rgb = apply_backdrop_tone(adaptive_sample.rgb, adaptive_curve);
-        }
-        adaptive_rgb = mix(adaptive_rgb, tint_color.rgb, optical_tint_alpha);
-        let adaptive_luma = dot(adaptive_rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
-        let separation = abs(adaptive_luma - foreground_luma);
-        let contrast_need = 1.0 - smoothstep(0.38, 0.58, separation);
-        let foreground_is_light = smoothstep(0.35, 0.65, foreground_luma);
-        let target_luma = mix(0.82, 0.18, foreground_is_light);
-        let correction = (target_luma - adaptive_luma) * adaptive_frost * contrast_need;
-        rgb = clamp(rgb + vec3<f32>(correction), vec3<f32>(0.0), vec3<f32>(1.0));
+        rgb = clamp(rgb + vec3<f32>(frost_correction), vec3<f32>(0.0), vec3<f32>(1.0));
     }
 
     if optical_stage != 3.0 {
@@ -1754,7 +1760,6 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
 
     // Ordered-noise dither hides banding in the blurred gradients behind the
     // glass (±0.5/255 at dither_amount = 1).
-    let dither = (hash12(coord) - 0.5) * (dither_amount / 255.0);
     rgb = rgb + vec3<f32>(dither);
     key_fill_output += vec4<f32>(vec3<f32>(dither) * key_fill_output.a, 0.0);
 
