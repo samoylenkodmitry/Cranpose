@@ -1023,6 +1023,17 @@ impl ShapePipelineKey {
     pub(crate) fn is_general(self) -> bool {
         self.variant == self.variant.general()
     }
+
+    /// The key with the fill interior test on or off.
+    pub(crate) fn with_interior(self, interior: bool) -> Self {
+        Self {
+            variant: ShapeVariant {
+                interior,
+                ..self.variant
+            },
+            ..self
+        }
+    }
 }
 
 pub(crate) fn create_shape_pipeline(

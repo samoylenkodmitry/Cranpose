@@ -430,14 +430,69 @@ pub(crate) struct StoredRun {
     last_used_frame: u64,
 }
 
+/// Most records a draw that tests fill interiors takes on without needing
+/// the test: a card's chips join its background's draw, while a field of
+/// small shapes keeps the pipeline without it.
+const JOINED_PLAIN_RECORDS: u32 = 16;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RunDrawCall {
     pub(crate) key: crate::render::ShapePipelineKey,
     pub(crate) band_class: u8,
     pub(crate) records: std::ops::Range<u32>,
+    /// The records whose own key did not test interiors, when the draw's
+    /// key does.
+    plain: u32,
 }
 
 impl RunDrawCall {
+    fn new(
+        key: crate::render::ShapePipelineKey,
+        band_class: u8,
+        records: std::ops::Range<u32>,
+    ) -> Self {
+        Self {
+            key,
+            band_class,
+            records,
+            plain: 0,
+        }
+    }
+
+    /// Extends the draw by `records`, keyed `key`, when they follow it and
+    /// one pipeline draws both: the same one, or the one testing interiors
+    /// when that is all the keys differ in and the records it takes on
+    /// without needing the test stay within [`JOINED_PLAIN_RECORDS`].
+    fn absorb(
+        &mut self,
+        key: crate::render::ShapePipelineKey,
+        band_class: u8,
+        records: std::ops::Range<u32>,
+    ) -> bool {
+        if self.band_class != band_class || self.records.end != records.start {
+            return false;
+        }
+        let joined = self.key.with_interior(true);
+        let plain = if key == self.key {
+            self.plain
+        } else if key.with_interior(true) != joined {
+            return false;
+        } else if self.key == joined {
+            self.plain + (records.end - records.start)
+        } else {
+            self.records.end - self.records.start
+        };
+        if plain > JOINED_PLAIN_RECORDS {
+            return false;
+        }
+        if key != self.key {
+            self.key = joined;
+        }
+        self.plain = plain;
+        self.records.end = records.end;
+        true
+    }
+
     /// The indices each record of the draw is instanced over.
     pub(crate) fn indices(&self) -> std::ops::Range<u32> {
         0..strip_indices(band_class_segments(self.band_class))
@@ -517,19 +572,15 @@ impl ArenaStaging {
     /// Records `record` under `key`, extending the last draw when it
     /// continues it.
     fn push_draw(&mut self, key: crate::render::ShapePipelineKey, band_class: u8, record: u32) {
-        if let Some(last) = self.draws.last_mut()
-            && last.key == key
-            && last.band_class == band_class
-            && last.records.end == record
+        let records = record..record + 1;
+        if self
+            .draws
+            .last_mut()
+            .is_some_and(|last| last.absorb(key, band_class, records.clone()))
         {
-            last.records.end = record + 1;
             return;
         }
-        self.draws.push(RunDrawCall {
-            key,
-            band_class,
-            records: record..record + 1,
-        });
+        self.draws.push(RunDrawCall::new(key, band_class, records));
     }
 }
 
@@ -809,8 +860,8 @@ impl RunStore {
         }
     }
 
-    /// The draws one stored run takes for one segment range: one per
-    /// segment, its records in order.
+    /// The draws one stored run takes: its segments in record order, one
+    /// draw for each run of them a single pipeline draws.
     pub(crate) fn stored_run_draws(
         &mut self,
         device: &wgpu::Device,
@@ -819,15 +870,19 @@ impl RunStore {
         out: &mut SmallVec<[RunDrawCall; 8]>,
     ) {
         for segment in run.segment_records() {
-            out.push(RunDrawCall {
-                key: key_for(segment),
-                band_class: if self.mode.storage {
-                    segment.band_class
-                } else {
-                    0
-                },
-                records: segment.start..segment.start + segment.count,
-            });
+            let key = key_for(segment);
+            let band_class = if self.mode.storage {
+                segment.band_class
+            } else {
+                0
+            };
+            let records = segment.start..segment.start + segment.count;
+            if !out
+                .last_mut()
+                .is_some_and(|last| last.absorb(key, band_class, records.clone()))
+            {
+                out.push(RunDrawCall::new(key, band_class, records));
+            }
         }
         self.ensure_strip_indices(device, out);
     }
