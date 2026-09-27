@@ -370,6 +370,16 @@ impl FrameTextureDescriptor {
         }
     }
 
+    /// This descriptor at the size of `target`, which may exceed the size
+    /// requested.
+    fn sized_as(self, target: &OffscreenTarget) -> Self {
+        Self {
+            width: target.width,
+            height: target.height,
+            ..self
+        }
+    }
+
     fn texels(self) -> u64 {
         u64::from(self.width) * u64::from(self.height)
     }
@@ -495,11 +505,7 @@ impl TransientTexturePool {
     /// Takes `target` back. The request that acquired it may have been
     /// smaller, so the pool records the texture's own size.
     fn release(&mut self, descriptor: FrameTextureDescriptor, target: OffscreenTarget) {
-        let descriptor = FrameTextureDescriptor {
-            width: target.width,
-            height: target.height,
-            ..descriptor
-        };
+        let descriptor = descriptor.sized_as(&target);
         let budget = self
             .working_set
             .bytes()
@@ -528,6 +534,14 @@ impl TransientTexturePool {
                 sizes
             );
         }
+    }
+
+    /// Takes back a texture that stayed in use through this frame outside
+    /// the pool, counting it toward the frame's working set.
+    fn return_held(&mut self, descriptor: FrameTextureDescriptor, target: OffscreenTarget) {
+        self.working_set
+            .note(descriptor.sized_as(&target).estimated_bytes());
+        self.release(descriptor, target);
     }
 
     fn end_frame(&mut self) {
@@ -675,12 +689,16 @@ impl WgpuFrameGraphExecutor {
         self.transient_textures.end_frame();
     }
 
-    pub(crate) fn release_transient(
+    /// Takes back a transient a cache kept past the frame that acquired it.
+    /// It was in use this frame, so it counts toward the working set the
+    /// pool keeps: the frame after a cache replaced it needs a texture its
+    /// size again.
+    pub(crate) fn return_cached_transient(
         &mut self,
         descriptor: FrameTextureDescriptor,
         target: OffscreenTarget,
     ) {
-        self.transient_textures.release(descriptor, target);
+        self.transient_textures.return_held(descriptor, target);
     }
 
     pub(crate) fn retained_texture_bytes(&self) -> u64 {

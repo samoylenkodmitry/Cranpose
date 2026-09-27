@@ -10,7 +10,7 @@ fn a_transient_texture_no_frame_reuses_is_dropped_after_the_idle_frames() {
     let format = wgpu::TextureFormat::Rgba8Unorm;
     let descriptor = FrameTextureDescriptor::render_attachment("idle test", 8, 8, format);
     let mut executor = WgpuFrameGraphExecutor::default();
-    executor.release_transient(descriptor, OffscreenTarget::new(&device, format, 8, 8));
+    executor.return_cached_transient(descriptor, OffscreenTarget::new(&device, format, 8, 8));
     for _ in 0..IDLE_FRAMES {
         executor.end_transient_frame();
     }
@@ -46,11 +46,11 @@ fn acquire(
 fn a_region_request_takes_the_smallest_pooled_texture_that_holds_it() {
     let (_lock, device, _queue) = super::upload_test_device();
     let mut executor = WgpuFrameGraphExecutor::default();
-    executor.release_transient(
+    executor.return_cached_transient(
         region(96, 64),
         OffscreenTarget::new(&device, FORMAT, 96, 64),
     );
-    executor.release_transient(
+    executor.return_cached_transient(
         region(64, 40),
         OffscreenTarget::new(&device, FORMAT, 64, 40),
     );
@@ -66,7 +66,7 @@ fn a_region_request_takes_the_smallest_pooled_texture_that_holds_it() {
 fn an_exact_request_takes_only_its_own_size() {
     let (_lock, device, _queue) = super::upload_test_device();
     let mut executor = WgpuFrameGraphExecutor::default();
-    executor.release_transient(exact(64, 40), OffscreenTarget::new(&device, FORMAT, 64, 40));
+    executor.return_cached_transient(exact(64, 40), OffscreenTarget::new(&device, FORMAT, 64, 40));
     let (target, created) = acquire(&mut executor, &device, exact(60, 36));
     assert!(
         created,
@@ -81,7 +81,7 @@ fn an_exact_request_takes_only_its_own_size() {
 fn a_region_request_leaves_a_texture_many_times_its_area() {
     let (_lock, device, _queue) = super::upload_test_device();
     let mut executor = WgpuFrameGraphExecutor::default();
-    executor.release_transient(
+    executor.return_cached_transient(
         region(128, 128),
         OffscreenTarget::new(&device, FORMAT, 128, 128),
     );
@@ -98,12 +98,12 @@ fn a_region_request_leaves_a_texture_many_times_its_area() {
 fn a_texture_goes_back_to_the_pool_at_its_own_size() {
     let (_lock, device, _queue) = super::upload_test_device();
     let mut executor = WgpuFrameGraphExecutor::default();
-    executor.release_transient(
+    executor.return_cached_transient(
         region(96, 64),
         OffscreenTarget::new(&device, FORMAT, 96, 64),
     );
     let (target, _) = acquire(&mut executor, &device, region(80, 50));
-    executor.release_transient(region(80, 50), target);
+    executor.return_cached_transient(region(80, 50), target);
     let (target, created) = acquire(&mut executor, &device, exact(96, 64));
     assert!(
         !created,
@@ -127,7 +127,7 @@ fn the_pool_keeps_a_frame_s_textures_past_the_floor() {
         .map(|descriptor| acquire(&mut executor, &device, *descriptor).0)
         .collect();
     for (descriptor, target) in descriptors.iter().zip(first) {
-        executor.release_transient(*descriptor, target);
+        executor.return_cached_transient(*descriptor, target);
     }
     executor.end_transient_frame();
     assert!(executor.retained_texture_bytes() > MIN_RETAINED_TRANSIENT_BYTES);
@@ -136,6 +136,38 @@ fn the_pool_keeps_a_frame_s_textures_past_the_floor() {
         assert!(
             !created,
             "the second frame reuses every texture the first frame used"
+        );
+    }
+}
+
+#[test]
+fn a_texture_a_cache_returns_counts_toward_the_frame_s_working_set() {
+    let (_lock, device, _queue) = super::upload_test_device();
+    let mut executor = WgpuFrameGraphExecutor::default();
+    let side = 2048;
+    let texture_bytes = u64::from(side) * u64::from(side) * 4;
+    let frame_count = MIN_RETAINED_TRANSIENT_BYTES / texture_bytes;
+    let frame: Vec<_> = (0..frame_count)
+        .map(|index| exact(side, side - index as u32))
+        .collect();
+    let cached = exact(side, side - frame_count as u32);
+    let acquired: Vec<_> = frame
+        .iter()
+        .map(|descriptor| acquire(&mut executor, &device, *descriptor).0)
+        .collect();
+    for (descriptor, target) in frame.iter().zip(acquired) {
+        executor.transient_textures.release(*descriptor, target);
+    }
+    executor.return_cached_transient(
+        cached,
+        OffscreenTarget::new(&device, FORMAT, cached.width, cached.height),
+    );
+    executor.end_transient_frame();
+    for descriptor in frame.iter().chain(std::iter::once(&cached)) {
+        let (_, created) = acquire(&mut executor, &device, *descriptor);
+        assert!(
+            !created,
+            "the frame used its own textures and the one its cache held; the pool keeps all"
         );
     }
 }
