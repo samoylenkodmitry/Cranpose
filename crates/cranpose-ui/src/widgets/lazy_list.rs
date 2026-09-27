@@ -35,6 +35,8 @@ use crate::{
 
 const EXPENSIVE_RETAINED_REUSABLE_SLOTS: usize = 128;
 const ACTIVE_SCROLL_UNCACHED_BEYOND_BOUNDS_FRONTIER: usize = 4;
+const IDLE_PREFETCH_READY_BEYOND_BOUNDS_ITEMS: usize = 2;
+const IDLE_PREFETCH_ITEMS_PER_PASS: usize = 1;
 
 #[derive(Clone, Copy)]
 struct LazyItemMeasureContext {
@@ -270,12 +272,14 @@ fn measure_lazy_list_item(
         inputs.measured_item_cache.borrow_mut().remove(index);
     }
 
-    measure_lazy_list_children(
+    let item = measure_lazy_list_children(
         scope,
         root_children,
         inputs.measured_item_cache,
         item_context,
-    )
+    );
+    crate::lazy_prefetch::record_lazy_item_cost(measure_start.elapsed());
+    item
 }
 
 fn lazy_list_child_constraints(is_vertical: bool, cross_axis_size: f32) -> Constraints {
@@ -459,6 +463,7 @@ fn measure_lazy_list_internal(
 
     let focused_item =
         measure_focused_lazy_item(scope, &item_measure_inputs, &mut retained_measurement_batch);
+    let node_id = scope.root_id();
 
     let measure_item = |index: usize| -> LazyListMeasuredItem {
         if !skipped_slots_recycled.get()
@@ -484,7 +489,7 @@ fn measure_lazy_list_internal(
         &item_measure_inputs,
         config,
         raw_viewport_size,
-        scroll_delta_for_direction.abs() > 0.001,
+        (node_id, scroll_delta_for_direction.abs() > 0.001),
         &mut measure_item,
     );
     if let Some(item) = focused_item {
@@ -519,10 +524,6 @@ fn measure_lazy_list_internal(
         .count();
     let in_pool = scope.reusable_slots_count();
     state.update_stats(truly_visible_count, in_pool);
-
-    if !result.visible_items.is_empty() {
-        state.record_scroll_direction(scroll_delta_for_direction);
-    }
 
     let resolve_main_axis = |content_size: f32, min: f32, max: f32| {
         if max.is_finite() {
@@ -571,15 +572,19 @@ fn measure_lazy_list_internal(
     })
 }
 
+/// Measures the list's viewport. While it scrolls, and in an idle prefetch
+/// pass, the items beyond it compose as [`BeyondBoundsComposition`] decides,
+/// and an item left for later asks for a pass for the list `node_id`.
 fn measure_lazy_viewport(
     inputs: &LazyListItemMeasureInputs<'_>,
     config: &LazyListMeasureConfig,
     viewport_size: f32,
-    active_scroll: bool,
+    (node_id, active_scroll): (NodeId, bool),
     measure_item: &mut impl FnMut(usize) -> LazyListMeasuredItem,
 ) -> LazyListMeasureResult {
     let items_count = inputs.content.item_count();
-    if !active_scroll {
+    let idle_pass = crate::lazy_prefetch::in_lazy_prefetch_pass();
+    if !active_scroll && !idle_pass {
         return measure_lazy_list(
             items_count,
             inputs.state,
@@ -589,8 +594,11 @@ fn measure_lazy_viewport(
             measure_item,
         );
     }
-    let uncached_beyond_frontier = Cell::new(ACTIVE_SCROLL_UNCACHED_BEYOND_BOUNDS_FRONTIER);
-    measure_lazy_list_with_beyond_bounds_policy(
+    if idle_pass {
+        inputs.state.hold_scroll_window();
+    }
+    let mut policy = BeyondBoundsComposition::new(idle_pass);
+    let result = measure_lazy_list_with_beyond_bounds_policy(
         items_count,
         inputs.state,
         viewport_size,
@@ -600,21 +608,58 @@ fn measure_lazy_viewport(
         |index| {
             let key_slot_id = inputs.content.get_key(index).to_slot_id();
             let content_type = inputs.content.get_content_type(index);
-            if inputs
-                .measured_item_cache
-                .borrow()
-                .has_candidate(index, key_slot_id, content_type)
-            {
-                return true;
-            }
-            let remaining = uncached_beyond_frontier.get();
-            if remaining == 0 {
-                return false;
-            }
-            uncached_beyond_frontier.set(remaining - 1);
-            true
+            let cached =
+                inputs
+                    .measured_item_cache
+                    .borrow()
+                    .has_candidate(index, key_slot_id, content_type);
+            policy.should_measure(cached)
         },
-    )
+    );
+    if policy.wants_prefetch {
+        crate::lazy_prefetch::request_lazy_prefetch(node_id);
+    }
+    result
+}
+
+/// Which items beyond the viewport a scrolling list composes, in order away
+/// from it. Composed items always measure. A frame composes new ones only
+/// while too few composed items lie ahead, up to a frontier; with enough
+/// ahead, the next is left for an idle prefetch pass, which composes one.
+struct BeyondBoundsComposition {
+    idle_pass: bool,
+    ready: usize,
+    frontier: usize,
+    wants_prefetch: bool,
+}
+
+impl BeyondBoundsComposition {
+    fn new(idle_pass: bool) -> Self {
+        Self {
+            idle_pass,
+            ready: 0,
+            frontier: if idle_pass {
+                IDLE_PREFETCH_ITEMS_PER_PASS
+            } else {
+                ACTIVE_SCROLL_UNCACHED_BEYOND_BOUNDS_FRONTIER
+            },
+            wants_prefetch: false,
+        }
+    }
+
+    fn should_measure(&mut self, cached: bool) -> bool {
+        if cached {
+            self.ready += 1;
+            return true;
+        }
+        let deferred = !self.idle_pass && self.ready >= IDLE_PREFETCH_READY_BEYOND_BOUNDS_ITEMS;
+        if deferred || self.frontier == 0 {
+            self.wants_prefetch = true;
+            return false;
+        }
+        self.frontier -= 1;
+        true
+    }
 }
 
 fn measure_focused_lazy_item(

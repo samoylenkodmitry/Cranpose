@@ -7,18 +7,14 @@
 //!   - `first_visible_item_index`, `first_visible_item_scroll_offset`
 //!   - `can_scroll_forward`, `can_scroll_backward`
 //!   - `stats` (items_in_use, items_in_pool)
-//! - Non-reactive internals (caches, callbacks, prefetch, diagnostic counters) are in inner state
+//! - Non-reactive internals (caches, callbacks, scroll window, diagnostic counters) are in inner state
 
 use std::{cell::RefCell, cmp::Reverse, collections::BinaryHeap, rc::Rc};
 
 use cranpose_core::{MutableState, NodeId, StateId};
 use cranpose_macros::composable;
 
-use super::{
-    diagnostics,
-    nearest_range::NearestRangeState,
-    prefetch::{PrefetchScheduler, PrefetchStrategy},
-};
+use super::{diagnostics, nearest_range::NearestRangeState};
 
 const MAX_PENDING_SCROLL_DELTA: f32 = 2000.0;
 const ITEM_SIZE_CACHE_CAPACITY: usize = 8192;
@@ -28,6 +24,7 @@ pub(crate) struct LazyListMeasureStateSnapshot {
     pub(crate) first_visible_item_index: usize,
     pub(crate) first_visible_item_scroll_offset: f32,
     pub(crate) pending_scroll_delta: f32,
+    pub(crate) window_scroll_delta: f32,
     pub(crate) pending_scroll_to: Option<(usize, f32)>,
     pub(crate) average_item_size: f32,
 }
@@ -278,11 +275,9 @@ struct LazyListStateInner {
     next_measure_cycle_id: u64,
     next_item_measure_pass_id: u64,
 
-    prefetch_scheduler: PrefetchScheduler,
+    last_scroll_delta: f32,
 
-    prefetch_strategy: PrefetchStrategy,
-
-    last_scroll_direction: f32,
+    hold_scroll_window: bool,
 }
 
 /// Creates a remembered [`LazyListState`] with default initial position.
@@ -372,9 +367,8 @@ impl LazyListState {
                     total_measured_items: 0,
                     next_measure_cycle_id: 1,
                     next_item_measure_pass_id: 1,
-                    prefetch_scheduler: PrefetchScheduler::new(),
-                    prefetch_strategy: PrefetchStrategy::default(),
-                    last_scroll_direction: 0.0,
+                    last_scroll_delta: 0.0,
+                    hold_scroll_window: false,
                 },
             ))),
         }
@@ -514,60 +508,15 @@ impl LazyListState {
         });
     }
 
-    /// Records the raw scroll delta for prefetch calculations.
-    ///
-    /// Cranpose lazy lists use gesture-style deltas:
-    /// - Negative delta = scrolling forward (content moves up)
-    /// - Positive delta = scrolling backward (content moves down)
-    pub fn record_scroll_direction(&self, delta: f32) {
-        if delta.abs() > 0.001 {
-            if !self.inner.is_alive() {
-                return;
-            }
-            self.inner.with(|rc| {
-                rc.borrow_mut().last_scroll_direction = -delta.signum();
-            });
-        }
-    }
-
-    /// Updates the prefetch queue based on current visible items.
-    /// Should be called after measurement to queue items for pre-composition.
-    pub fn update_prefetch_queue(
-        &self,
-        first_visible_index: usize,
-        last_visible_index: usize,
-        total_items: usize,
-    ) {
+    /// Makes the next measure pass size its beyond-bounds window by the last
+    /// scroll delta a pass consumed when it has none of its own, so a pass
+    /// between frames keeps the window the scroll gave the frame before it.
+    pub fn hold_scroll_window(&self) {
         if !self.inner.is_alive() {
             return;
         }
-        self.inner.with(|rc| {
-            let mut inner = rc.borrow_mut();
-            let direction = inner.last_scroll_direction;
-            let strategy = inner.prefetch_strategy.clone();
-            inner.prefetch_scheduler.update(
-                first_visible_index,
-                last_visible_index,
-                total_items,
-                direction,
-                &strategy,
-            );
-        });
-    }
-
-    /// Returns the indices that should be prefetched.
-    /// Consumes the prefetch queue.
-    pub fn take_prefetch_indices(&self) -> Vec<usize> {
         self.inner
-            .try_with(|rc| {
-                let mut inner = rc.borrow_mut();
-                let mut indices = Vec::new();
-                while let Some(idx) = inner.prefetch_scheduler.next_prefetch() {
-                    indices.push(idx);
-                }
-                indices
-            })
-            .unwrap_or_default()
+            .with(|rc| rc.borrow_mut().hold_scroll_window = true);
     }
 
     /// Scrolls to the specified item index.
@@ -694,25 +643,36 @@ impl LazyListState {
     }
 
     pub(crate) fn begin_measure_pass(&self) -> LazyListMeasureStateSnapshot {
-        let (pending_scroll_delta, pending_scroll_to, average_item_size) = self
-            .inner
-            .try_with(|rc| {
-                let mut inner = rc.borrow_mut();
-                let pending_scroll_to = inner.pending_scroll_to_index.take();
-                let pending_scroll_delta = inner.scroll_to_be_consumed;
-                inner.scroll_to_be_consumed = 0.0;
-                (
-                    pending_scroll_delta,
-                    pending_scroll_to,
-                    inner.average_item_size,
-                )
-            })
-            .unwrap_or((0.0, None, super::DEFAULT_ITEM_SIZE_ESTIMATE));
+        let (pending_scroll_delta, window_scroll_delta, pending_scroll_to, average_item_size) =
+            self.inner
+                .try_with(|rc| {
+                    let mut inner = rc.borrow_mut();
+                    let pending_scroll_to = inner.pending_scroll_to_index.take();
+                    let pending_scroll_delta = inner.scroll_to_be_consumed;
+                    inner.scroll_to_be_consumed = 0.0;
+                    let held = std::mem::take(&mut inner.hold_scroll_window);
+                    let window_scroll_delta = if pending_scroll_delta.abs() > 0.001 {
+                        inner.last_scroll_delta = pending_scroll_delta;
+                        pending_scroll_delta
+                    } else if held {
+                        inner.last_scroll_delta
+                    } else {
+                        0.0
+                    };
+                    (
+                        pending_scroll_delta,
+                        window_scroll_delta,
+                        pending_scroll_to,
+                        inner.average_item_size,
+                    )
+                })
+                .unwrap_or((0.0, 0.0, None, super::DEFAULT_ITEM_SIZE_ESTIMATE));
 
         LazyListMeasureStateSnapshot {
             first_visible_item_index: self.scroll_position.current_index(),
             first_visible_item_scroll_offset: self.scroll_position.current_scroll_offset(),
             pending_scroll_delta,
+            window_scroll_delta,
             pending_scroll_to,
             average_item_size,
         }

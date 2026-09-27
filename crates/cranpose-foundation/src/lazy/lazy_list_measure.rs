@@ -189,6 +189,7 @@ where
     let is_infinite_viewport = viewport.is_infinite();
 
     let pending_scroll_delta = measure_state.pending_scroll_delta;
+    let window_scroll_delta = measure_state.window_scroll_delta;
     let resolver = ScrollPositionResolver::new(
         state,
         measure_state,
@@ -252,7 +253,7 @@ where
     let telemetry_enabled = diagnostics::telemetry_enabled();
     let adaptive_beyond_bounds = adaptive_scroll_beyond_bounds_item_count(
         config,
-        pending_scroll_delta,
+        window_scroll_delta,
         measure_state.average_item_size,
     );
     let guaranteed_beyond_bounds = adaptive_beyond_bounds;
@@ -266,7 +267,7 @@ where
     )
     .with_beyond_bounds_item_count(adaptive_beyond_bounds)
     .with_guaranteed_after_beyond_bounds_item_count(guaranteed_beyond_bounds)
-    .with_include_before_beyond_bounds(pending_scroll_delta >= -0.001)
+    .with_include_before_beyond_bounds(window_scroll_delta >= -0.001)
     .with_beyond_bounds_measure_policy(beyond_bounds_policy)
     .with_telemetry_pass_id(telemetry_enabled.then(|| state.next_item_measure_pass_id()));
     let measurement_pass = measurer.measure_all(first_index, first_offset);

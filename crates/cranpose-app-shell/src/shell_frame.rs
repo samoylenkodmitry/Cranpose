@@ -262,6 +262,8 @@ fn mark_root_for_layout(applier: &mut MemoryApplier, root: NodeId) {
     }
 }
 
+pub(crate) const IDLE_PREFETCH_MAX_PASSES: usize = 4;
+
 impl<R> AppShell<R>
 where
     R: Renderer,
@@ -335,6 +337,28 @@ where
             after_render,
         );
         result
+    }
+
+    /// Composes lazy list items that frames left beyond their viewports for
+    /// later, in layout passes run while `deadline` still leaves room for the
+    /// recent cost of one item, at most four of them.
+    /// Call it while waiting for the next frame. Returns whether a pass ran.
+    pub fn run_idle_prefetch(&mut self, deadline: Instant) -> bool {
+        let app_context = Rc::clone(&self.app.app_context);
+        app_context.enter(|| {
+            let mut passes = 0;
+            while passes < IDLE_PREFETCH_MAX_PASSES
+                && cranpose_ui::has_lazy_prefetch_requests()
+                && Instant::now() + cranpose_ui::lazy_prefetch_item_cost() <= deadline
+            {
+                for node in cranpose_ui::take_lazy_prefetch_requests() {
+                    cranpose_ui::schedule_measure_repass(node);
+                }
+                cranpose_ui::with_lazy_prefetch_pass(|| self.run_layout_phase_in_context());
+                passes += 1;
+            }
+            passes > 0
+        })
     }
 
     #[cfg(test)]
