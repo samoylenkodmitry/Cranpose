@@ -110,6 +110,8 @@ pub(crate) struct PresentState {
     waker: PresentWaker,
     clock: Option<PresentClock>,
     observer: Option<BoxedPresentObserver>,
+    exp_target: Option<(wgpu::Texture, u32, u32)>,
+    exp_pending: Option<(wgpu::SurfaceTexture, Arc<AtomicBool>)>,
 }
 
 impl PresentState {
@@ -153,6 +155,25 @@ impl PresentState {
             waker,
             clock,
             observer,
+            exp_target: None,
+            exp_pending: None,
+        }
+    }
+
+    fn exp_flush_pending(&mut self) {
+        if let Some((frame, _)) = self.exp_pending.take() {
+            self.present(frame);
+        }
+    }
+
+    fn exp_poll_pending(&mut self) {
+        let _ = self.device.poll(wgpu::PollType::Poll);
+        if self
+            .exp_pending
+            .as_ref()
+            .is_some_and(|(_, done)| done.load(Ordering::Acquire))
+        {
+            self.exp_flush_pending();
         }
     }
 
@@ -163,6 +184,15 @@ impl PresentState {
                     Ok(msg) => Some(msg),
                     Err(TryRecvError::Empty) => None,
                     Err(TryRecvError::Disconnected) => break,
+                }
+            } else if self.exp_pending.is_some() {
+                match rx.recv_timeout(Duration::from_millis(1)) {
+                    Ok(msg) => Some(msg),
+                    Err(RecvTimeoutError::Timeout) => {
+                        self.exp_poll_pending();
+                        continue;
+                    }
+                    Err(RecvTimeoutError::Disconnected) => break,
                 }
             } else {
                 match rx.recv() {
@@ -205,6 +235,8 @@ impl PresentState {
     }
 
     fn handle_control(&mut self, control: PresentControl) -> bool {
+        self.exp_flush_pending();
+        self.exp_target = None;
         match control {
             PresentControl::ReplaceSurface {
                 surface,
@@ -312,6 +344,10 @@ impl PresentState {
     }
 
     fn render_to_surface(&mut self, packet: FramePacket, width: u32, height: u32) {
+        if std::env::var_os("CRANPOSE_EXP_DEFERRED_PRESENT").is_some() {
+            self.render_deferred(packet, width, height);
+            return;
+        }
         let Some(frame) = self.acquire_with_one_retry() else {
             self.cancel_packet(packet, CancelReason::SurfaceUnavailable);
             return;
@@ -346,6 +382,88 @@ impl PresentState {
             self.status
                 .last_error_frame
                 .store(returns.frame_id.max(1), Ordering::Relaxed);
+        }
+        self.finish_returns(returns);
+    }
+
+    fn render_deferred(&mut self, packet: FramePacket, width: u32, height: u32) {
+        self.exp_poll_pending();
+        let Some(config) = self.config.clone() else {
+            self.cancel_packet(packet, CancelReason::SurfaceUnavailable);
+            return;
+        };
+        if self
+            .exp_target
+            .as_ref()
+            .is_none_or(|(_, w, h)| (*w, *h) != (width, height))
+        {
+            let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("Deferred Present Frame Target"),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: config.format,
+                usage: config.usage | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &config.view_formats,
+            });
+            self.exp_target = Some((texture, width, height));
+        }
+        let Some((target, _, _)) = self.exp_target.as_ref() else {
+            return;
+        };
+        let target = target.clone();
+        let view = target.create_view(&wgpu::TextureViewDescriptor {
+            format: Some(self.gpu_renderer.surface_format().remove_srgb_suffix()),
+            ..Default::default()
+        });
+        let after_acquire_ns = self.now();
+        let mut returns = RenderReturns::default();
+        let result = self.gpu_renderer.render(
+            &target,
+            &view,
+            width,
+            height,
+            packet,
+            self.surface_epoch,
+            &mut returns,
+        );
+        let after_render_ns = self.now();
+        self.exp_flush_pending();
+        if let Some(frame) = self.acquire_with_one_retry() {
+            let mut encoder = self
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("Deferred Present Copy"),
+                });
+            encoder.copy_texture_to_texture(
+                target.as_image_copy(),
+                frame.texture.as_image_copy(),
+                wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+            );
+            self.gpu_renderer.queue.submit(std::iter::once(encoder.finish()));
+            let done = Arc::new(AtomicBool::new(false));
+            let signal = Arc::clone(&done);
+            self.gpu_renderer
+                .queue
+                .on_submitted_work_done(move || signal.store(true, Ordering::Release));
+            self.exp_pending = Some((frame, done));
+        }
+        returns.timings = PresentTimings {
+            after_acquire_ns,
+            after_render_ns,
+            after_present_ns: self.now(),
+        };
+        if let Err(error) = result {
+            log::error!("[present-runtime] render error: {error}");
         }
         self.finish_returns(returns);
     }
