@@ -341,9 +341,10 @@ where
 
     /// Composes lazy list items that frames left beyond their viewports for
     /// later, in layout passes run while `deadline` still leaves room for the
-    /// recent cost of one item, at most four of them, then brings the scene
-    /// up to date with what they placed, so the next frame draws those items
-    /// without building their layers. It publishes nothing: the next frame
+    /// recent cost of one item, at most four of them, then, while room for
+    /// another item's cost is left, brings the scene up to date with what they
+    /// placed, so the next frame draws those items without building their
+    /// layers. It publishes nothing: the next frame
     /// presents the result. Call it while waiting for the next frame. Returns
     /// whether a pass ran.
     pub fn run_idle_prefetch(&mut self, deadline: Instant) -> bool {
@@ -360,7 +361,7 @@ where
                 cranpose_ui::with_lazy_prefetch_pass(|| self.run_layout_phase_in_context());
                 passes += 1;
             }
-            if passes > 0 {
+            if passes > 0 && Instant::now() + cranpose_ui::lazy_prefetch_item_cost() <= deadline {
                 self.run_render_phase_in_context(false);
             }
             passes > 0
