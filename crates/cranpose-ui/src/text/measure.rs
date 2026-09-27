@@ -958,9 +958,9 @@ fn wrapped_line_ranges_with_measurer<M: TextMeasurer + ?Sized>(
     let Some(width_limit) = wrap_width else {
         return line_ranges;
     };
-    let mut ranges = Vec::with_capacity(line_ranges.len());
+    let mut lines = Vec::with_capacity(line_ranges.len());
     for line_range in line_ranges {
-        for display_line in wrap_line_to_width(
+        wrap_line_to_width(
             measurer,
             text,
             line_range,
@@ -968,11 +968,10 @@ fn wrapped_line_ranges_with_measurer<M: TextMeasurer + ?Sized>(
             width_limit,
             line_break_mode,
             hyphens_mode,
-        ) {
-            ranges.push(display_line.source_range.clone());
-        }
+            &mut lines,
+        );
     }
-    ranges
+    lines.into_iter().map(|line| line.source_range).collect()
 }
 
 fn prepare_text_layout_fallback<M: TextMeasurer + ?Sized>(
@@ -1025,7 +1024,7 @@ pub fn prepare_text_layout_with_measurer_for_node<M: TextMeasurer + ?Sized>(
     if let Some(width_limit) = wrap_width {
         visible_lines = Vec::with_capacity(line_ranges.len());
         for line_range in line_ranges {
-            let wrapped_lines = wrap_line_to_width(
+            wrap_line_to_width(
                 measurer,
                 text,
                 line_range,
@@ -1033,8 +1032,8 @@ pub fn prepare_text_layout_with_measurer_for_node<M: TextMeasurer + ?Sized>(
                 width_limit,
                 line_break_mode,
                 hyphens_mode,
+                &mut visible_lines,
             );
-            visible_lines.extend(wrapped_lines);
         }
     } else {
         visible_lines = line_ranges
@@ -1633,6 +1632,9 @@ impl<'a, M: TextMeasurer + ?Sized> LineMeasureContext<'a, M> {
     }
 }
 
+/// Appends the display lines `line_range` wraps into at `max_width` to
+/// `out`: most lines fit whole, and take no allocation of their own.
+#[expect(clippy::too_many_arguments)]
 fn wrap_line_to_width<M: TextMeasurer + ?Sized>(
     measurer: &M,
     text: &crate::text::AnnotatedString,
@@ -1641,42 +1643,47 @@ fn wrap_line_to_width<M: TextMeasurer + ?Sized>(
     max_width: f32,
     line_break: LineBreak,
     hyphens: Hyphens,
-) -> Vec<DisplayLine> {
+    out: &mut Vec<DisplayLine>,
+) {
     let line_text = &text.text[line_range.clone()];
     if line_text.is_empty() {
-        return vec![DisplayLine::from_source_range(
+        out.push(DisplayLine::from_source_range(
             line_range.start..line_range.start,
-        )];
+        ));
+        return;
     }
 
     if let Some(measured_width) = measurer.measure_line_width(text, line_range.clone(), style)
         && measured_width <= max_width + WRAP_EPSILON
     {
-        return vec![DisplayLine::from_measured_source_range(
+        out.push(DisplayLine::from_measured_source_range(
             line_range,
             measured_width,
-        )];
+        ));
+        return;
     }
 
     if matches!(line_break, LineBreak::Heading | LineBreak::Paragraph)
         && line_text.chars().any(char::is_whitespace)
-        && let Some(balanced) = wrap_line_with_word_balance(
+        && wrap_line_with_word_balance(
             measurer,
             text,
             line_range.clone(),
             style,
             max_width,
             line_break,
+            out,
         )
     {
-        return balanced;
+        return;
     }
 
     wrap_line_greedy(
-        measurer, text, line_range, style, max_width, line_break, hyphens,
-    )
+        measurer, text, line_range, style, max_width, line_break, hyphens, out,
+    );
 }
 
+#[expect(clippy::too_many_arguments)]
 fn wrap_line_greedy<M: TextMeasurer + ?Sized>(
     measurer: &M,
     text: &crate::text::AnnotatedString,
@@ -1685,7 +1692,8 @@ fn wrap_line_greedy<M: TextMeasurer + ?Sized>(
     max_width: f32,
     line_break: LineBreak,
     hyphens: Hyphens,
-) -> Vec<DisplayLine> {
+    out: &mut Vec<DisplayLine>,
+) {
     let line_text = &text.text[line_range.clone()];
     let boundaries = char_boundaries(line_text);
     let measure_context =
@@ -1694,12 +1702,13 @@ fn wrap_line_greedy<M: TextMeasurer + ?Sized>(
         measure_context.prefix_width_for_char_range(0, boundaries.len() - 1)
         && measured_width <= max_width + WRAP_EPSILON
     {
-        return vec![DisplayLine::from_measured_source_range(
+        out.push(DisplayLine::from_measured_source_range(
             line_range,
             measured_width,
-        )];
+        ));
+        return;
     }
-    let mut wrapped = Vec::new();
+    let first = out.len();
     let mut start_idx = 0usize;
 
     while start_idx < boundaries.len() - 1 {
@@ -1748,7 +1757,7 @@ fn wrap_line_greedy<M: TextMeasurer + ?Sized>(
             segment_end = trim_segment_end_whitespace(line_text, segment_start, segment_end);
         }
         let segment_end_idx = boundary_index_for_byte(&boundaries, segment_end);
-        wrapped.push(measure_context.display_line_for_char_range(
+        out.push(measure_context.display_line_for_char_range(
             &boundaries,
             start_idx,
             segment_end_idx,
@@ -1761,15 +1770,15 @@ fn wrap_line_greedy<M: TextMeasurer + ?Sized>(
         };
     }
 
-    if wrapped.is_empty() {
-        wrapped.push(DisplayLine::from_source_range(
+    if out.len() == first {
+        out.push(DisplayLine::from_source_range(
             line_range.start..line_range.start,
         ));
     }
-
-    wrapped
 }
 
+/// Appends the word-balanced lines of `line_range` to `out` and returns
+/// whether it could balance them; when it cannot, `out` is left as it was.
 fn wrap_line_with_word_balance<M: TextMeasurer + ?Sized>(
     measurer: &M,
     text: &crate::text::AnnotatedString,
@@ -1777,7 +1786,8 @@ fn wrap_line_with_word_balance<M: TextMeasurer + ?Sized>(
     style: &TextStyle,
     max_width: f32,
     line_break: LineBreak,
-) -> Option<Vec<DisplayLine>> {
+    out: &mut Vec<DisplayLine>,
+) -> bool {
     let line_text = &text.text[line_range.clone()];
     let boundaries = char_boundaries(line_text);
     let measure_context =
@@ -1786,14 +1796,15 @@ fn wrap_line_with_word_balance<M: TextMeasurer + ?Sized>(
         measure_context.prefix_width_for_char_range(0, boundaries.len() - 1)
         && measured_width <= max_width + WRAP_EPSILON
     {
-        return Some(vec![DisplayLine::from_measured_source_range(
+        out.push(DisplayLine::from_measured_source_range(
             line_range,
             measured_width,
-        )]);
+        ));
+        return true;
     }
     let breakpoints = collect_word_breakpoints(line_text, &boundaries);
     if breakpoints.len() <= 2 {
-        return None;
+        return false;
     }
 
     let node_count = breakpoints.len();
@@ -1840,31 +1851,30 @@ fn wrap_line_with_word_balance<M: TextMeasurer + ?Sized>(
         }
     }
 
-    let mut wrapped = Vec::new();
+    let first = out.len();
     let mut current = 0usize;
     while current < node_count - 1 {
-        let next = next_index[current]?;
+        let Some(next) = next_index[current] else {
+            out.truncate(first);
+            return false;
+        };
         let start_byte = boundaries[breakpoints[current]];
         let end_byte = boundaries[breakpoints[next]];
         let trimmed_end = trim_segment_end_whitespace(line_text, start_byte, end_byte);
         if trimmed_end <= start_byte {
-            return None;
+            out.truncate(first);
+            return false;
         }
         let segment_start_idx = breakpoints[current];
         let segment_end_idx = boundary_index_for_byte(&boundaries, trimmed_end);
-        wrapped.push(measure_context.display_line_for_char_range(
+        out.push(measure_context.display_line_for_char_range(
             &boundaries,
             segment_start_idx,
             segment_end_idx,
         ));
         current = next;
     }
-
-    if wrapped.is_empty() {
-        return None;
-    }
-
-    Some(wrapped)
+    out.len() > first
 }
 
 fn collect_word_breakpoints(line: &str, boundaries: &[usize]) -> Vec<usize> {
