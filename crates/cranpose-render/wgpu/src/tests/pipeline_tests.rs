@@ -118,7 +118,7 @@ fn push_text_style_draws_for_test(
             text_rect,
             content_layer,
             (&text, &render_text),
-            text_style,
+            &std::sync::Arc::new(text_style.clone()),
             font_size,
             options,
             text_clip,

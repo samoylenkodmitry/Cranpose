@@ -82,7 +82,7 @@ pub fn build_dev_overlay_graph(
                     },
                     text: cranpose_ui::text::shared_plain_annotated_string(text),
                     render_text: cranpose_ui::text::shared_plain_render_string(text),
-                    text_style: cranpose_ui::TextStyle::default(),
+                    text_style: Default::default(),
                     font_size,
                     layout_options: cranpose_ui::TextLayoutOptions::default(),
                     clip: None,

@@ -540,7 +540,7 @@ fn text_node_with_style(
             rect,
             text: cranpose_ui::text::shared_plain_annotated_string(text),
             render_text: cranpose_ui::text::shared_plain_render_string(text),
-            text_style,
+            text_style: std::sync::Arc::new(text_style),
             font_size: 14.0,
             layout_options: TextLayoutOptions::default(),
             clip,

@@ -258,7 +258,9 @@ pub struct TextPrimitiveNode {
     /// `text` as the renderer's draws carry it across threads, shared with
     /// the prepared layout it came from so no frame converts it again.
     pub render_text: std::sync::Arc<RenderString>,
-    pub text_style: TextStyle,
+    /// Shared so every frame's draws of this text hand over the same style
+    /// instead of copying it.
+    pub text_style: std::sync::Arc<TextStyle>,
     pub font_size: f32,
     pub layout_options: TextLayoutOptions,
     pub clip: Option<Rect>,

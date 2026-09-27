@@ -127,7 +127,7 @@ fn snapped_text_leaf_root(animated: bool, translated_content_context: bool) -> R
                     },
                     text: cranpose_ui::text::shared_plain_annotated_string("48 px"),
                     render_text: cranpose_ui::text::shared_plain_render_string("48 px"),
-                    text_style: TextStyle::default(),
+                    text_style: Default::default(),
                     font_size: 14.0,
                     layout_options: TextLayoutOptions::default(),
                     clip: None,
