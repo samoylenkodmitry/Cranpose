@@ -11278,3 +11278,54 @@ fn a_fast_lazy_scroll_composes_ahead_between_frames() {
         "the wait before the next frame composes the items the frame left"
     );
 }
+
+#[test]
+fn an_idle_prefetch_builds_the_scene_for_what_it_placed_and_owes_a_frame() {
+    let _guard = test_guard();
+    APP_SHELL_LAZY_LIST_STATE.with(|slot| slot.borrow_mut().take());
+    let root_key = location_key(file!(), line!(), column!());
+    let rebuilds = Rc::new(Cell::new(0));
+    let updates = Rc::new(Cell::new(0));
+    let mut shell = AppShell::new(
+        ScopedUpdateCountingRenderer::with_visual_updates(
+            Rc::clone(&rebuilds),
+            Rc::clone(&updates),
+            Rc::new(Cell::new(0)),
+            Rc::new(RefCell::new(Vec::new())),
+        ),
+        root_key,
+        AppShellScrollIndicatorLazyList,
+    );
+    shell.set_buffer_size(320, 240);
+    shell.set_viewport(320.0, 240.0);
+    shell.update();
+    let list_state = APP_SHELL_LAZY_LIST_STATE
+        .with(|slot| *slot.borrow())
+        .expect("the lazy list exposes its state");
+    let app_context = Rc::clone(&shell.app.app_context);
+    let mut deferred = false;
+    for _ in 0..6 {
+        assert!(list_state.dispatch_scroll_delta(-112.0) < 0.0);
+        shell.update();
+        deferred = app_context.enter(cranpose_ui::has_lazy_prefetch_requests);
+        if deferred {
+            break;
+        }
+    }
+    assert!(deferred, "a fast scroll leaves an item for an idle pass");
+    shell.take_frame_owed();
+    rebuilds.set(0);
+    updates.set(0);
+
+    assert!(shell.run_idle_prefetch(Instant::now() + Duration::from_secs(5)));
+    assert_eq!(rebuilds.get(), 0, "the idle pass never rebuilds the scene");
+    assert_eq!(
+        updates.get(),
+        1,
+        "the idle pass updates the scene with the items it placed"
+    );
+    assert!(
+        shell.frame_owed(),
+        "the next frame presents what the idle pass built"
+    );
+}
