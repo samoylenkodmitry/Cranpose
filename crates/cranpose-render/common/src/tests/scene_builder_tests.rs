@@ -3860,3 +3860,78 @@ fn rebuilt_text_nodes_share_their_layouts_render_text() {
         "a rebuild hands over the prepared layout's copy, not a new one"
     );
 }
+
+#[test]
+fn built_layers_know_whether_their_content_stays_inside() {
+    let inside_holder: Rc<RefCell<Option<NodeId>>> = Rc::new(RefCell::new(None));
+    let outside_holder: Rc<RefCell<Option<NodeId>>> = Rc::new(RefCell::new(None));
+    let inside_for_comp = inside_holder.clone();
+    let outside_for_comp = outside_holder.clone();
+    let mut composition = cranpose_ui::run_test_composition(move || {
+        let inside_for_content = inside_for_comp.clone();
+        let outside_for_content = outside_for_comp.clone();
+        Column(
+            Modifier::empty().size_points(200.0, 100.0),
+            ColumnSpec::default(),
+            move || {
+                let inside = inside_for_content.clone();
+                let column = Column(
+                    Modifier::empty()
+                        .size_points(120.0, 40.0)
+                        .background(Color(0.9, 0.9, 0.9, 1.0)),
+                    ColumnSpec::default(),
+                    move || {
+                        Text("inside", Modifier::empty(), TextStyle::default());
+                    },
+                );
+                *inside.borrow_mut() = Some(column);
+                let outside = outside_for_content.clone();
+                let spilling = Column(
+                    Modifier::empty().size_points(50.0, 20.0),
+                    ColumnSpec::default(),
+                    move || {
+                        cranpose_ui::Box(
+                            Modifier::empty()
+                                .offset(40.0, 0.0)
+                                .size_points(30.0, 20.0)
+                                .background(Color(0.2, 0.2, 0.2, 1.0)),
+                            cranpose_ui::BoxSpec::default(),
+                            || {},
+                        );
+                    },
+                );
+                *outside.borrow_mut() = Some(spilling);
+            },
+        );
+    });
+    let root = composition.root().expect("composition root");
+    let handle = composition.runtime_handle();
+    let mut applier = composition.applier_mut();
+    applier.set_runtime_handle(handle);
+    applier
+        .compute_layout(
+            root,
+            Size {
+                width: 200.0,
+                height: 100.0,
+            },
+        )
+        .expect("layout");
+    let graph = build_graph_from_applier(&mut applier, root, 1.0).expect("graph");
+    applier.clear_runtime_handle();
+
+    let inside = inside_holder.borrow().expect("inside column");
+    let spilling = outside_holder.borrow().expect("spilling column");
+    assert!(
+        find_layer_by_node_id(&graph.root, inside)
+            .expect("inside layer")
+            .draws_within_bounds,
+        "a background and a text inside the column stay inside it"
+    );
+    assert!(
+        !find_layer_by_node_id(&graph.root, spilling)
+            .expect("spilling layer")
+            .draws_within_bounds,
+        "a child offset past the column's edge draws past it"
+    );
+}

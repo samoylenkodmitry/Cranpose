@@ -820,6 +820,9 @@ fn collect_child(
                 context.offset.y + translation.y,
             );
             let child_bounds = child.local_bounds.translate(child_offset.x, child_offset.y);
+            if clipped_away(child, child_bounds, context.visual_clip) {
+                return;
+            }
             let child_local_layer = local_content_layer_for(&child.graphics_layer);
             let child_anchor = context.snap_anchor.or_else(|| {
                 context
@@ -887,6 +890,26 @@ fn collect_child(
             out.scene.next_z += 1;
         }
     }
+}
+
+/// Whether nothing `child`, placed at `bounds`, draws can show inside
+/// `clip`: its subtree draws within its bounds, it casts no shadow, and those
+/// bounds miss the clip.
+fn clipped_away(child: &LayerNode, bounds: Rect, clip: Option<Rect>) -> bool {
+    let Some(clip) = clip else {
+        return false;
+    };
+    let slack = cranpose_render_common::graph::CONTAINED_DRAW_SLACK;
+    child.draws_within_bounds
+        && child.graphics_layer.shadow_elevation <= 0.0
+        && Rect {
+            x: bounds.x - slack,
+            y: bounds.y - slack,
+            width: bounds.width + slack * 2.0,
+            height: bounds.height + slack * 2.0,
+        }
+        .intersect(clip)
+        .is_none()
 }
 
 fn assign_shadow_anchor(
