@@ -13,6 +13,7 @@ pub(crate) struct ShapeAblation {
 pub(crate) struct GlassAblation {
     pub(crate) dispersion: bool,
     pub(crate) refraction: bool,
+    pub(crate) extra: u32,
 }
 
 impl GlassAblation {
@@ -23,6 +24,13 @@ impl GlassAblation {
         ]
         .into_iter()
         .filter_map(|(on, flag)| on.then_some(flag))
+        .chain(
+            cranpose_ui_graphics::LIQUID_GLASS_SPECIALIZATIONS
+                .iter()
+                .enumerate()
+                .filter(move |(index, _)| self.extra & (1 << index) != 0)
+                .map(|(_, specialization)| specialization.flag),
+        )
     }
 }
 
@@ -55,7 +63,15 @@ impl Ablation {
                 "shape_fill" => ablation.shape.fill = true,
                 "glass_dispersion" => ablation.glass_flags.dispersion = true,
                 "glass_refraction" => ablation.glass_flags.refraction = true,
-                _ => {}
+                other => {
+                    if let Some(flag) = other.strip_prefix("glass_off:")
+                        && let Some(index) = cranpose_ui_graphics::LIQUID_GLASS_SPECIALIZATIONS
+                            .iter()
+                            .position(|specialization| specialization.flag == flag)
+                    {
+                        ablation.glass_flags.extra |= 1 << index;
+                    }
+                }
             }
         }
         ablation
