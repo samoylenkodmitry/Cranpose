@@ -278,6 +278,7 @@ fn draw_scene_renders_graph_backed_scene_without_flat_primitives() {
         hit_test: None,
         has_hit_targets: false,
         has_origin_sinks: false,
+        draws_within_bounds: false,
         isolation: IsolationReasons::default(),
         cache_policy: CachePolicy::None,
         cache_hashes: LayerRasterCacheHashes::default(),

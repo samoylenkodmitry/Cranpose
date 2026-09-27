@@ -317,6 +317,7 @@ fn collect_hits_from_graph_only_populates_hit_regions() {
         }),
         has_hit_targets: true,
         has_origin_sinks: false,
+        draws_within_bounds: false,
         isolation: cranpose_render_common::graph::IsolationReasons::default(),
         cache_policy: cranpose_render_common::graph::CachePolicy::None,
         cache_hashes: LayerRasterCacheHashes::default(),

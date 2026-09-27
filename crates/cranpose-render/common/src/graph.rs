@@ -3,7 +3,7 @@ use std::{mem::size_of, ops::Range, rc::Rc};
 use cranpose_core::{NodeId, collections::map::HashSet};
 use cranpose_ui::{
     GraphicsLayer, ModifierNodeSlices, Point, Rect, RenderEffect, RoundedCornerShape,
-    TextLayoutOptions, TextStyle,
+    TextLayoutOptions, TextOverflow, TextStyle,
     text::{AnnotatedString, RenderString},
 };
 use cranpose_ui_graphics::{
@@ -264,6 +264,21 @@ pub struct TextPrimitiveNode {
     pub clip: Option<Rect>,
 }
 
+impl TextPrimitiveNode {
+    /// Whether the text's glyphs stay inside `bounds`: nothing casts a shadow
+    /// past them and the layout does not let the text overflow its rect.
+    fn draws_within(&self, bounds: Rect) -> bool {
+        self.text_style.span_style.shadow.is_none()
+            && self
+                .text
+                .span_styles
+                .iter()
+                .all(|span| span.item.shadow.is_none())
+            && !matches!(self.layout_options.overflow, TextOverflow::Visible)
+            && rect_within(self.rect, bounds)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PrimitivePhase {
     BeforeChildren,
@@ -311,6 +326,11 @@ pub struct LayerNode {
     /// written during a full lowering, so the scroll fast path may translate
     /// a retained subtree in place only when this is false.
     pub has_origin_sinks: bool,
+    /// Whether everything this layer and its subtree draw lies within its
+    /// `local_bounds`, give or take [`CONTAINED_DRAW_SLACK`], so a renderer
+    /// may skip the whole subtree where those bounds are clipped away. Scene
+    /// building keeps it current; `false` promises nothing.
+    pub draws_within_bounds: bool,
     pub isolation: IsolationReasons,
     pub cache_policy: CachePolicy,
     pub cache_hashes: LayerRasterCacheHashes,
@@ -341,6 +361,7 @@ impl Default for LayerNode {
             hit_test: None,
             has_hit_targets: false,
             has_origin_sinks: false,
+            draws_within_bounds: false,
             isolation: IsolationReasons::default(),
             cache_policy: CachePolicy::None,
             cache_hashes: LayerRasterCacheHashes::default(),
@@ -350,7 +371,46 @@ impl Default for LayerNode {
     }
 }
 
+/// How far past its bounds a layer that draws within them may still put
+/// pixels: glyph and edge antialiasing.
+pub const CONTAINED_DRAW_SLACK: f32 = 1.0;
+
 impl LayerNode {
+    /// Whether this layer's content, as [`LayerNode::draws_within_bounds`]
+    /// describes it, stays within its bounds: it clips to them, or its draws,
+    /// its texts and its children placed where they are all fit inside.
+    pub fn content_draws_within_bounds(&self) -> bool {
+        if self.clip_rect().is_some() {
+            return true;
+        }
+        let bounds = inflate_rect(self.local_bounds, CONTAINED_DRAW_SLACK);
+        self.children.iter().all(|child| match child {
+            RenderNode::DrawRun(run) => run
+                .recording
+                .bounds()
+                .is_none_or(|drawn| rect_within(drawn, bounds)),
+            RenderNode::Primitive(entry) => match &entry.node {
+                PrimitiveNode::Text(text) => text.draws_within(bounds),
+                PrimitiveNode::Draw(_) => false,
+            },
+            RenderNode::Layer(layer) => layer.draws_within_parent(bounds),
+        })
+    }
+
+    /// Whether this layer, drawn as a child, puts nothing outside `bounds`:
+    /// it draws within its own bounds, casts no shadow, applies no effect,
+    /// and its bounds placed in its parent lie inside.
+    fn draws_within_parent(&self, bounds: Rect) -> bool {
+        self.draws_within_bounds
+            && self.graphics_layer.shadow_elevation <= 0.0
+            && self.effect().is_none()
+            && self.backdrop().is_none()
+            && rect_within(
+                quad_bounds(self.transform_to_parent.map_rect(self.local_bounds)),
+                bounds,
+            )
+    }
+
     pub fn clip_rect(&self) -> Option<Rect> {
         (self.clip_to_bounds || self.graphics_layer.clip).then_some(self.local_bounds)
     }
@@ -746,6 +806,22 @@ fn solve_homography(source: [[f32; 2]; 4], target: [[f32; 2]; 4]) -> Option<[f32
         solution[index] = matrix[index][8];
     }
     Some(solution)
+}
+
+fn inflate_rect(rect: Rect, by: f32) -> Rect {
+    Rect {
+        x: rect.x - by,
+        y: rect.y - by,
+        width: rect.width + by * 2.0,
+        height: rect.height + by * 2.0,
+    }
+}
+
+fn rect_within(inner: Rect, outer: Rect) -> bool {
+    inner.x >= outer.x
+        && inner.y >= outer.y
+        && inner.x + inner.width <= outer.x + outer.width
+        && inner.y + inner.height <= outer.y + outer.height
 }
 
 #[cfg(test)]

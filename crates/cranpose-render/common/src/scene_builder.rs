@@ -398,6 +398,7 @@ fn replace_dirty_layers_from_applier(
     }
 
     if report.updated {
+        parent.draws_within_bounds = parent.content_draws_within_bounds();
         parent.has_hit_targets = parent.hit_test.is_some()
             || parent.children.iter().any(|child| match child {
                 RenderNode::Layer(child_layer) => child_layer.has_hit_targets,
@@ -952,6 +953,7 @@ fn translate_layer_from_data(
             RenderNode::Primitive(_) | RenderNode::DrawRun(_) => false,
         });
 
+    container.draws_within_bounds = container.content_draws_within_bounds();
     crate::graph_hash::refresh_layer_own_raster_cache_hashes(container, container_ancestor_hashed);
     changed_nodes.push(node_id);
     true
@@ -1155,6 +1157,7 @@ fn build_layer_node_internal(
         hit_test,
         has_hit_targets,
         has_origin_sinks,
+        draws_within_bounds: false,
         isolation,
         cache_policy,
         cache_hashes: LayerRasterCacheHashes::default(),
@@ -1481,6 +1484,7 @@ fn build_layer_node_from_data(
         hit_test,
         has_hit_targets,
         has_origin_sinks,
+        draws_within_bounds: false,
         isolation,
         cache_policy,
         cache_hashes: LayerRasterCacheHashes::default(),
@@ -1689,7 +1693,8 @@ fn outer_draws(
     })
 }
 
-fn finish_layer(layer: LayerNode, placement: Point, outer: Option<OuterDraws>) -> LayerNode {
+fn finish_layer(mut layer: LayerNode, placement: Point, outer: Option<OuterDraws>) -> LayerNode {
+    layer.draws_within_bounds = layer.content_draws_within_bounds();
     match outer {
         Some(outer) => wrap_layer_with_outer_draws(layer, placement, outer),
         None => layer,
@@ -1722,10 +1727,12 @@ fn wrap_layer_with_outer_draws(
     let mut children = outer.behind;
     children.push(RenderNode::Layer(Box::new(layer)));
     children.extend(outer.overlay);
-    LayerNode {
+    let mut wrapper = LayerNode {
         children,
         ..wrapper
-    }
+    };
+    wrapper.draws_within_bounds = wrapper.content_draws_within_bounds();
+    wrapper
 }
 
 fn layer_identity(layer: &LayerNode) -> Option<NodeId> {

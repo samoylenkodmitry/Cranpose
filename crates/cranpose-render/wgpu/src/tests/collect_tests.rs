@@ -398,3 +398,57 @@ fn a_moved_layer_resolves_its_backdrop_beside_its_surface() {
     assert!(child.rounded_clip.is_some());
     assert!(child.content.children.is_empty());
 }
+
+/// The draw ops a root clipped to 100×100 collects around `child`.
+fn draw_ops_under_clip(child: LayerNode) -> usize {
+    let root = LayerNode {
+        local_bounds: rect(0.0, 0.0, 100.0, 100.0),
+        clip_to_bounds: true,
+        children: vec![RenderNode::Layer(Box::new(child))],
+        ..Default::default()
+    };
+    collect_root(
+        &root,
+        &mut crate::pipeline::UiTextLayoutResolver,
+        &mut LayerMotion::default(),
+        SceneCapacityHint::default(),
+    )
+    .scene
+    .draw_ops
+    .len()
+}
+
+fn row_at(y: f32, draws_within_bounds: bool, shadow_elevation: f32) -> LayerNode {
+    LayerNode {
+        local_bounds: rect(0.0, 0.0, 100.0, 40.0),
+        transform_to_parent: ProjectiveTransform::translation(0.0, y),
+        graphics_layer: GraphicsLayer {
+            shadow_elevation,
+            ..Default::default()
+        },
+        draws_within_bounds,
+        children: vec![run(vec![solid(rect(0.0, 0.0, 100.0, 40.0))])],
+        ..Default::default()
+    }
+}
+
+#[test]
+fn a_contained_row_the_clip_leaves_out_is_not_collected() {
+    assert!(
+        draw_ops_under_clip(row_at(30.0, true, 0.0)) > 0,
+        "a visible row draws"
+    );
+    assert_eq!(draw_ops_under_clip(row_at(300.0, true, 0.0)), 0);
+}
+
+#[test]
+fn a_row_that_may_draw_past_its_bounds_is_collected_offscreen() {
+    assert!(
+        draw_ops_under_clip(row_at(300.0, false, 0.0)) > 0,
+        "without the promise its draws may reach the clip"
+    );
+    assert!(
+        draw_ops_under_clip(row_at(101.5, true, 4.0)) > 0,
+        "a shadow reaches past the row's bounds"
+    );
+}
