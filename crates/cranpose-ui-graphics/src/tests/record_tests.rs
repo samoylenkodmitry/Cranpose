@@ -317,13 +317,12 @@ fn the_arc_record_carries_the_normalised_band_the_fragment_stage_reads() {
     );
     assert_eq!(geometry, expected);
     assert_eq!(
-        record.radii,
-        arc_trig(&expected),
-        "the trig row the fragment stage reads is computed once, when recorded"
+        record.radii, [0.0; 4],
+        "an arc records no trig: the vertex stage derives it from its angles"
     );
     assert_eq!(
-        record.radii[1],
-        (expected.start_angle + expected.sweep_angle * 0.5).cos()
+        record.arc_normalized[..2],
+        [expected.start_angle, expected.sweep_angle]
     );
     let ring = BandRing::of_geometry(&expected);
     assert_eq!(
@@ -886,4 +885,31 @@ fn one_large_interior_marks_the_segment_the_small_shapes_share() {
             BlendMode::SrcOver,
         );
     }));
+}
+
+#[test]
+fn arc_trig_is_the_mid_and_half_sweep_trig_with_the_full_circle_sentinel() {
+    for (start, sweep) in [
+        (0.3, 0.1),
+        (0.4, 0.2),
+        (1.0, 2.0),
+        (5.9, 3.0),
+        (0.0, -0.0),
+        (0.2, TAU),
+        (0.0, 7.0),
+    ] {
+        let expected = if sweep >= TAU && start == 0.0 {
+            [0.0, -1.0, 0.0, -1.0]
+        } else {
+            let half = sweep.clamp(0.0, TAU) * 0.5;
+            let (mid_sin, mid_cos) = (start + half).sin_cos();
+            let (half_sin, half_cos) = half.sin_cos();
+            [mid_sin, mid_cos, half_sin.max(0.0), half_cos]
+        };
+        assert_eq!(
+            arc_trig(start, sweep).map(f32::to_bits),
+            expected.map(f32::to_bits),
+            "start={start} sweep={sweep}"
+        );
+    }
 }

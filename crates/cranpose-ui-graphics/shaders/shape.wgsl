@@ -353,7 +353,7 @@ fn shape_output(
     let stroked = (record.flags & RECORD_STROKED) != 0u;
 
     if (kind == RECORD_KIND_ARC) {
-        output.radii = record.radii;
+        output.radii = arc_trig(record.arc_normalized.x, record.arc_normalized.y);
         let cap = (record.flags >> RECORD_BAND_CAP_SHIFT) & 3u;
         output.stroke_params = vec4<f32>(
             0.0,
@@ -610,6 +610,19 @@ fn fs_interior(input: InteriorOutput) -> @location(0) vec4<f32> {
     return input.color;
 }
 
+// A band's trig from its normalized start and sweep: the mid-angle sine and
+// cosine and the half-sweep sine and cosine, with the full circle's
+// sentinel. Derived here, per vertex, rather than recorded per arc on the
+// CPU; `cranpose_ui_graphics::arc_trig` mirrors it.
+fn arc_trig(start: f32, sweep: f32) -> vec4<f32> {
+    if (sweep >= TAU && start == 0.0) {
+        return vec4<f32>(0.0, -1.0, 0.0, -1.0);
+    }
+    let half = clamp(sweep, 0.0, TAU) * 0.5;
+    let mid = start + half;
+    return vec4<f32>(sin(mid), cos(mid), max(sin(half), 0.0), cos(half));
+}
+
 fn band_position(
     record: ShapeRecord,
     placement: Placement,
@@ -625,14 +638,15 @@ fn band_position(
     let margin = select(BAND_MARGIN, BAND_QUAD_MARGIN, segments == 1u);
     let ring_half = max((outer - inner) * 0.5, 0.0) + margin;
     if (segments == 1u) {
-        let half_width = mid * record.radii.z + ring_half;
+        let trig = arc_trig(record.arc_normalized.x, record.arc_normalized.y);
+        let half_width = mid * trig.z + ring_half;
         let cap = (record.flags >> RECORD_BAND_CAP_SHIFT) & 3u;
-        let cap_width = (mid + ring_half) * record.radii.z + margin * record.radii.w;
+        let cap_width = (mid + ring_half) * trig.z + margin * trig.w;
         let width = select(half_width, min(half_width, cap_width), cap == STROKE_CAP_BUTT);
         let x = select(-width, width, boundary == 1u);
-        let y = select(mid * record.radii.w - ring_half, mid + ring_half, side == 1u);
-        let sin_mid = record.radii.x;
-        let cos_mid = record.radii.y;
+        let y = select(mid * trig.w - ring_half, mid + ring_half, side == 1u);
+        let sin_mid = trig.x;
+        let cos_mid = trig.y;
         return center + vec2<f32>(
             -sin_mid * x + cos_mid * y,
             cos_mid * x + sin_mid * y,

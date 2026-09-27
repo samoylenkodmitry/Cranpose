@@ -4,7 +4,6 @@
 //! and unit types that are used throughout the Cranpose framework.
 
 pub mod alpha_mask;
-mod arc_trig_cache;
 mod brush;
 mod color;
 mod float;
