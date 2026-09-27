@@ -250,18 +250,19 @@ fn cached_glass_specialization_tracks_flags_and_substrate_radius() {
     );
 }
 
-/// A material that animates must not change which pipeline draws it.
+/// A material that animates keeps one pipeline while it moves.
 ///
-/// A specialization folding on a value an animation *ends* on gives the
-/// end of every press its own `override` set, and a set nothing has
-/// compiled is a backend shader compile inside the frame that reaches
-/// it. `GLASS_FULL_ACTIVITY` and `GLASS_FULL_TRANSMISSION` were exactly
-/// that: touching a liquid tab built four pipelines and took half a
-/// second on a backend with no pipeline cache to fall back on. A fold
-/// that saves ALU only in the frame a person is waiting in is not worth
-/// having, so these two values carry no fold at all.
+/// A fold on a value an animation passes through would give every frame
+/// of a press its own `override` set, each a backend compile.
+/// `GLASS_FULL_TRANSMISSION` was that, and touching a liquid tab built
+/// four pipelines in half a second, so transmission carries no fold. Full
+/// activity is where a press ends and where a still material rests: its
+/// set is the second and last one a press asks for. It compiles on the
+/// background compiler while the byte-identical general pipeline draws,
+/// and it saves the fully active glass 21 of its 53 registers on
+/// Mali-G76, the occupancy that glass is bound by.
 #[test]
-fn animating_a_material_end_to_end_asks_for_one_pipeline() {
+fn animating_a_material_asks_for_its_partial_and_its_full_activity_sets_only() {
     let mut shader = RuntimeShader::new(LIQUID_GLASS_WGSL);
     let mut sets: Vec<Vec<(&'static str, f64)>> = Vec::new();
     for step in 0..=40u16 {
@@ -270,15 +271,17 @@ fn animating_a_material_end_to_end_asks_for_one_pipeline() {
         shader.set_float(GLASS_TRANSMISSION_REFRACTION_UNIFORM, value);
         specialize_liquid_glass_with_folds(&mut shader, true);
         let set = shader.overrides().to_vec();
+        let full = set.contains(&("GLASS_PARTIAL_ACTIVITY_OFF", 1.0));
+        assert_eq!(full, step == 40, "activity {value} folded as full: {full}");
         if !sets.contains(&set) {
             sets.push(set);
         }
     }
     assert_eq!(
         sets.len(),
-        1,
-        "one press walks through {} override sets, and every one of them is a pipeline \
-         the backend compiles inside the frame that first needs it: {sets:?}",
+        2,
+        "one press walks through {} override sets, each a pipeline the backend compiles: \
+         {sets:?}",
         sets.len()
     );
 }

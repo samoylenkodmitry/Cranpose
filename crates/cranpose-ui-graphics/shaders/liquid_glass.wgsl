@@ -136,6 +136,12 @@ override GLASS_TONE_CURVE_OFF: bool = false;
 override GLASS_PANE_OFF: bool = false;
 override GLASS_INSET_SHADOW_OFF: bool = false;
 override GLASS_HOLDING_OFF: bool = false;
+// A fully active material (uniform 111 at one or above) clamps to exactly
+// one, so the raised flag drops the resting, drained and partial-coverage
+// paths. They are dead there, but a runtime activity keeps their registers:
+// on Mali-G76 the card interior needs 53 with them and 32 without.
+override GLASS_PARTIAL_ACTIVITY_OFF: bool = false;
+override GLASS_CAPSULE_SMOOTHING_OFF: bool = false;
 // The interior guard: every rim term (meniscus, bevel, border line,
 // specular, the opposite-wall reflection) is a product with a band weight
 // that is exactly zero deeper inside the shape than `rim_reach`, so a
@@ -761,7 +767,7 @@ fn scene_sdf(scene: GlassScene, p_a: vec2<f32>) -> f32 {
         p_a,
         half_a,
         r_a,
-        get_float(146u) * s,
+        fixed_or(get_float(146u), 0.0, GLASS_CAPSULE_SMOOTHING_OFF) * s,
         strain_axis,
         strain_along,
         strain_across,
@@ -910,7 +916,7 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
     var uv = input.uv;
     var map = region_map();
     let tex_size = logical_extent();
-    let material_activity = clamp(get_float(111u), 0.0, 1.0);
+    let material_activity = select(clamp(get_float(111u), 0.0, 1.0), 1.0, GLASS_PARTIAL_ACTIVITY_OFF);
     let optical_stage = fixed_or(get_float(147u), 0.0, GLASS_OPTICAL_STAGE_OFF);
     let intermediate_stage = optical_stage == 1.0 || optical_stage == 2.0;
     let separate_content = fixed_or(get_float(174u), 0.0, GLASS_SEPARATE_CONTENT_OFF) > 0.5;
