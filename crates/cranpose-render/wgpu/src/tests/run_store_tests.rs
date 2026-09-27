@@ -33,6 +33,84 @@ fn shared_pipelines_preserve_each_draws_strip_index_count() {
     assert_eq!(draws, [(0..2, 0..6), (2..4, 0..48), (4..5, 0..6)]);
 }
 
+fn fill_key(interiors: bool, blend: BlendMode) -> crate::render::ShapePipelineKey {
+    let segment = RecordSegment {
+        lane: RecordLane::Shapes,
+        start: 0,
+        count: 1,
+        blend,
+        gradient: false,
+        brushes: 1,
+        kinds: 1,
+        band_class: 0,
+        interiors,
+    };
+    crate::render::ShapePipelineKey {
+        blend_mode: segment.blend,
+        tier: crate::render::RunTier::Arena,
+        variant: crate::render::ShapeVariant::of_segment(&segment, false, Default::default()),
+        transformed: false,
+    }
+}
+
+fn staged_draws(
+    keys: impl IntoIterator<Item = crate::render::ShapePipelineKey>,
+) -> Vec<(std::ops::Range<u32>, crate::render::ShapePipelineKey)> {
+    let mut staging = ArenaStaging::default();
+    for (record, key) in keys.into_iter().enumerate() {
+        staging.push_draw(key, 0, record as u32);
+    }
+    staging
+        .draws
+        .iter()
+        .map(|draw| (draw.records.clone(), draw.key))
+        .collect()
+}
+
+#[test]
+fn backgrounds_and_their_small_chips_share_one_draw_testing_interiors() {
+    let background = fill_key(true, BlendMode::SrcOver);
+    let chip = fill_key(false, BlendMode::SrcOver);
+    let level = [background, chip, chip, chip, chip, chip, chip];
+    let draws = staged_draws(level.iter().chain(&level).copied());
+    assert_eq!(draws, [(0..14, background)]);
+    let draws = staged_draws([chip, chip, background, chip]);
+    assert_eq!(draws, [(0..4, background)]);
+}
+
+#[test]
+fn a_run_of_shapes_without_interiors_keeps_its_own_draw() {
+    let background = fill_key(true, BlendMode::SrcOver);
+    let particle = fill_key(false, BlendMode::SrcOver);
+    let many = JOINED_PLAIN_RECORDS as usize + 1;
+    let draws =
+        staged_draws(std::iter::once(background).chain(std::iter::repeat_n(particle, many + 3)));
+    assert_eq!(
+        draws,
+        [
+            (0..many as u32, background),
+            (many as u32..many as u32 + 4, particle),
+        ]
+    );
+    let draws =
+        staged_draws(std::iter::repeat_n(particle, many).chain(std::iter::once(background)));
+    assert_eq!(
+        draws,
+        [
+            (0..many as u32, particle),
+            (many as u32..many as u32 + 1, background),
+        ]
+    );
+}
+
+#[test]
+fn draws_keyed_apart_by_more_than_the_interior_test_stay_apart() {
+    let over = fill_key(true, BlendMode::SrcOver);
+    let multiply = fill_key(false, BlendMode::Multiply);
+    let draws = staged_draws([over, multiply]);
+    assert_eq!(draws, [(0..1, over), (1..2, multiply)]);
+}
+
 #[test]
 fn a_placement_folds_its_snap_delta_clip_and_filter_into_the_uniform() {
     let placement = Placement {
