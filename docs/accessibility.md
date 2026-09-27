@@ -421,13 +421,13 @@ hidden from accessibility while focused. Multiline capability chooses the
 control type independently of its current value, and rendering preserves a
 new browser selection while its selection notification is pending.
 
-**The target of a decorated field.** A decorated field's semantics and its
-touch target sit on the field itself, not on the box the decoration draws
-around it. A field whose padding lives on the decoration box measures as
-tall as its one line of text, 18 points, and fails the 24 point rule of the
-audit. Put the padding on the field's modifier instead, the way the liquid
-search field does with `Modifier::empty().padding_symmetric(0.0, 9.0)`, so
-the padded box is what a reader and a finger get.
+**The target of a decorated field.** As in Compose, the decoration box of a
+`BasicTextFieldDecorated` is the field: the field's modifier applies to it,
+and it carries the field's semantics, focus and touch target, while the
+inner field only lays out and draws the text. A press anywhere in the box,
+its padding and icons included, edits the field, and the audit measures
+the whole box, so a field with one line of text and its padding in the
+decoration meets the 24 point rule.
 
 ## 4k. Roles a reader names
 

@@ -922,7 +922,7 @@ struct WebTextInput {
 
 impl cranpose_app_shell::PlatformTextInputHandler for WebTextInput {
     fn show_keyboard(&self) {
-        let Some(node_id) = cranpose_ui::text_field_focus::focused_field_node() else {
+        let Some(node_id) = cranpose_ui::text_field_focus::focused_field_target() else {
             return;
         };
         let Some(node) = self.fields.borrow().get(&node_id).cloned() else {

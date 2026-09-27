@@ -25,6 +25,7 @@ fn focused_state(
     let handler = TextFieldHandler::new(
         state,
         None,
+        None,
         line_limits,
         CaretGeometryRefs {
             node_origin: Rc::new(Cell::new(Point { x: 0.0, y: 0.0 })),

@@ -590,7 +590,7 @@ fn a_decorated_text_field_composes_its_inner_field_exactly_once() {
             cranpose_ui::widgets::basic_text_field::BasicTextFieldOptions::default(),
             move |scope: cranpose_ui::widgets::basic_text_field::BasicTextFieldDecorationScope| {
                 counter.set(counter.get() + 1);
-                scope.inner_text_field()
+                scope.inner_text_field();
             },
         );
     });

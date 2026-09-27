@@ -67,79 +67,62 @@ pub fn LiquidSearchField(modifier: Modifier, state: TextFieldState, spec: Liquid
             })
     };
 
+    let body = typography.body;
+    let field_style = TextStyle {
+        span_style: SpanStyle {
+            color: Some(foreground),
+            ..body.span_style.clone()
+        },
+        ..body.clone()
+    };
+    let placeholder_style = TextStyle {
+        span_style: SpanStyle {
+            color: Some(secondary_foreground),
+            ..body.span_style.clone()
+        },
+        ..body
+    };
     let placeholder = spec.placeholder;
-    Box(
-        base.then(modifier).padding_symmetric(14.0, 0.0),
-        BoxSpec::default().content_alignment(Alignment::new(
-            cranpose_ui_layout::HorizontalAlignment::Start,
-            cranpose_ui_layout::VerticalAlignment::CenterVertically,
-        )),
-        move || {
+    BasicTextFieldDecorated(
+        state,
+        base.then(modifier)
+            .padding_symmetric(14.0, 0.0)
+            .role(cranpose_ui::SemanticsWidgetRole::SearchField)
+            .content_description(placeholder.clone()),
+        BasicTextFieldOptions {
+            text_style: field_style,
+            ..BasicTextFieldOptions::default()
+        },
+        move |inner| {
             let placeholder = placeholder.clone();
-            let body = typography.body.clone();
+            let placeholder_style = placeholder_style.clone();
             Row(
                 Modifier::empty().fill_max_width(),
                 RowSpec::default().vertical_alignment(VerticalAlignment::CenterVertically),
                 move || {
                     crate::icons::Icon(crate::icons::SEARCH, None, 18.0, secondary_foreground);
                     Box(Modifier::empty().width(8.0), BoxSpec::default(), || {});
-
-                    let field_style = TextStyle {
-                        span_style: SpanStyle {
-                            color: Some(foreground),
-                            ..body.span_style.clone()
-                        },
-                        ..body.clone()
-                    };
-                    let placeholder_style = TextStyle {
-                        span_style: SpanStyle {
-                            color: Some(secondary_foreground),
-                            ..body.span_style.clone()
-                        },
-                        ..body.clone()
-                    };
                     let placeholder = placeholder.clone();
+                    let placeholder_style = placeholder_style.clone();
+                    let inner = inner.clone();
                     Box(
-                        Modifier::empty().weight(1.0),
-                        BoxSpec::default(),
+                        Modifier::empty().weight(1.0).padding_symmetric(0.0, 9.0),
+                        BoxSpec {
+                            content_alignment: Alignment::new(
+                                cranpose_ui_layout::HorizontalAlignment::Start,
+                                cranpose_ui_layout::VerticalAlignment::CenterVertically,
+                            ),
+                            propagate_min_constraints: true,
+                        },
                         move || {
-                            let placeholder = placeholder.clone();
-                            let placeholder_style = placeholder_style.clone();
-                            let field_name = placeholder.clone();
-                            BasicTextFieldDecorated(
-                                state,
-                                Modifier::empty()
-                                    .fill_max_width()
-                                    .padding_symmetric(0.0, 9.0)
-                                    .role(cranpose_ui::SemanticsWidgetRole::SearchField)
-                                    .content_description(field_name),
-                                BasicTextFieldOptions {
-                                    text_style: field_style.clone(),
-                                    ..BasicTextFieldOptions::default()
-                                },
-                                move |inner| {
-                                    let empty = state.text().is_empty();
-                                    let placeholder = placeholder.clone();
-                                    let placeholder_style = placeholder_style.clone();
-                                    Box(
-                                        Modifier::empty().fill_max_width(),
-                                        BoxSpec::default().content_alignment(Alignment::new(
-                                            cranpose_ui_layout::HorizontalAlignment::Start,
-                                            cranpose_ui_layout::VerticalAlignment::CenterVertically,
-                                        )),
-                                        move || {
-                                            if empty {
-                                                Text(
-                                                    placeholder.clone(),
-                                                    Modifier::empty().hide_from_accessibility(),
-                                                    placeholder_style.clone(),
-                                                );
-                                            }
-                                            inner.inner_text_field();
-                                        },
-                                    )
-                                },
-                            );
+                            if state.text().is_empty() {
+                                Text(
+                                    placeholder.clone(),
+                                    Modifier::empty().hide_from_accessibility(),
+                                    placeholder_style.clone(),
+                                );
+                            }
+                            inner.inner_text_field();
                         },
                     );
                 },

@@ -318,6 +318,7 @@ fn build_focus_handler(
     crate::text_field_handler::TextFieldHandler::new(
         state,
         refs.node_id.get(),
+        refs.focus_node.get(),
         line_limits,
         crate::text_field_handler::CaretGeometryRefs {
             node_origin: refs.node_origin.clone(),
@@ -337,7 +338,7 @@ fn request_pointer_focus(
 ) {
     if modal_depth < crate::modal::current_modal_depth()
         || refs
-            .node_id
+            .focus_node
             .get()
             .is_some_and(crate::focus_dispatch::request_focus_in_context)
     {
@@ -350,11 +351,28 @@ fn request_pointer_focus(
     );
 }
 
-struct TextFieldFocusBridge {
+pub(crate) struct TextFieldFocusBridge {
     state: TextFieldState,
     refs: TextFieldRefs,
     style: TextStyle,
     line_limits: TextFieldLineLimits,
+}
+
+impl TextFieldFocusBridge {
+    /// The focus target of the field with these refs.
+    pub(crate) fn handle(
+        state: TextFieldState,
+        refs: TextFieldRefs,
+        style: TextStyle,
+        line_limits: TextFieldLineLimits,
+    ) -> Rc<dyn crate::focus_dispatch::FocusTargetHandle> {
+        Rc::new(Self {
+            state,
+            refs,
+            style,
+            line_limits,
+        })
+    }
 }
 
 impl crate::focus_dispatch::FocusTargetHandle for TextFieldFocusBridge {
@@ -382,6 +400,9 @@ pub(crate) struct TextFieldRefs {
     pub last_click_pos: Rc<Cell<Option<(f32, f32)>>>,
     pub click_count: Rc<Cell<u8>>,
     pub node_id: Rc<Cell<Option<cranpose_core::NodeId>>>,
+    /// The node focus and semantics know the field by: the decoration box
+    /// around a decorated field, else the field's own node.
+    pub focus_node: Rc<Cell<Option<cranpose_core::NodeId>>>,
     pub scroll_offset: Rc<Cell<f32>>,
     pub direct_manipulation: Rc<Cell<bool>>,
     pub node_origin: Rc<Cell<Point>>,
@@ -408,6 +429,7 @@ impl TextFieldRefs {
             last_click_pos: Rc::new(Cell::new(None::<(f32, f32)>)),
             click_count: Rc::new(Cell::new(0_u8)),
             node_id: Rc::new(Cell::new(None::<cranpose_core::NodeId>)),
+            focus_node: Rc::new(Cell::new(None::<cranpose_core::NodeId>)),
             scroll_offset: Rc::new(Cell::new(0.0_f32)),
             direct_manipulation: Rc::new(Cell::new(false)),
             node_origin: Rc::new(Cell::new(Point { x: 0.0, y: 0.0 })),
@@ -417,6 +439,18 @@ impl TextFieldRefs {
             gesture_claimed: Rc::new(Cell::new(false)),
             modal_depth: Rc::new(Cell::new(0)),
         }
+    }
+
+    /// Tells these refs from any others, so the nodes sharing them can be
+    /// keyed by them.
+    pub(crate) fn key(&self) -> u64 {
+        Rc::as_ptr(&self.is_focused) as usize as u64
+    }
+}
+
+impl PartialEq for TextFieldRefs {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.is_focused, &other.is_focused)
     }
 }
 
@@ -440,6 +474,9 @@ pub struct TextFieldModifierNode {
     handle_controller: Option<TextFieldHandleController>,
     modal_depth: usize,
     focus_bridge: Option<Rc<dyn crate::focus_dispatch::FocusTargetHandle>>,
+    /// A decoration box around the field takes its input, focus and
+    /// semantics, sharing its refs; the field only lays out and draws.
+    decorated: bool,
 }
 
 impl std::fmt::Debug for TextFieldModifierNode {
@@ -455,8 +492,16 @@ impl std::fmt::Debug for TextFieldModifierNode {
 impl TextFieldModifierNode {
     /// Creates a new text field modifier node.
     pub fn new(state: TextFieldState, style: TextStyle) -> Self {
+        Self::with_refs(state, style, TextFieldRefs::new(), false)
+    }
+
+    fn with_refs(
+        state: TextFieldState,
+        style: TextStyle,
+        refs: TextFieldRefs,
+        decorated: bool,
+    ) -> Self {
         let value = state.value();
-        let refs = TextFieldRefs::new();
         let refs_line_height = refs.line_height.clone();
         let refs_wrap_width = refs.wrap_width.clone();
         let line_limits = TextFieldLineLimits::default();
@@ -486,6 +531,7 @@ impl TextFieldModifierNode {
             handle_controller: None,
             modal_depth: 0,
             focus_bridge: None,
+            decorated,
         }
     }
 
@@ -572,7 +618,7 @@ impl TextFieldModifierNode {
         self.line_limits
     }
 
-    fn create_handler(
+    pub(crate) fn create_handler(
         state: TextFieldState,
         refs: TextFieldRefs,
         line_limits: TextFieldLineLimits,
@@ -870,16 +916,19 @@ impl ModifierNode for TextFieldModifierNode {
 
         context.invalidate(InvalidationKind::Layout);
         context.invalidate(InvalidationKind::Draw);
+        if self.decorated {
+            return;
+        }
         context.invalidate(InvalidationKind::Semantics);
+        self.refs.focus_node.set(context.node_id());
 
         if let Some(node_id) = context.node_id() {
-            let bridge: Rc<dyn crate::focus_dispatch::FocusTargetHandle> =
-                Rc::new(TextFieldFocusBridge {
-                    state: self.state,
-                    refs: self.refs.clone(),
-                    style: self.style.clone(),
-                    line_limits: self.line_limits,
-                });
+            let bridge = TextFieldFocusBridge::handle(
+                self.state,
+                self.refs.clone(),
+                self.style.clone(),
+                self.line_limits,
+            );
             self.focus_bridge = Some(Rc::clone(&bridge));
             crate::focus_dispatch::register_focus_target(node_id, bridge);
         }
@@ -908,19 +957,19 @@ impl ModifierNode for TextFieldModifierNode {
     }
 
     fn as_semantics_node(&self) -> Option<&dyn SemanticsNode> {
-        Some(self)
+        (!self.decorated).then_some(self)
     }
 
     fn as_semantics_node_mut(&mut self) -> Option<&mut dyn SemanticsNode> {
-        Some(self)
+        if self.decorated { None } else { Some(self) }
     }
 
     fn as_pointer_input_node(&self) -> Option<&dyn PointerInputNode> {
-        Some(self)
+        (!self.decorated).then_some(self)
     }
 
     fn as_pointer_input_node_mut(&mut self) -> Option<&mut dyn PointerInputNode> {
-        Some(self)
+        if self.decorated { None } else { Some(self) }
     }
 }
 
@@ -1223,35 +1272,44 @@ impl DrawModifierNode for TextFieldModifierNode {
 
 impl SemanticsNode for TextFieldModifierNode {
     fn merge_semantics(&self, config: &mut SemanticsConfiguration) {
-        let text = self.state.text();
-        if config.content_description.is_none() {
-            config.content_description = Some(text.clone());
-        }
-        config.text = Some(text);
-        config.is_editable_text = true;
-        config.is_clickable = true;
-        config.multiline = !matches!(self.line_limits, TextFieldLineLimits::SingleLine);
-        let state = self.state;
-        config.set_text = Some(cranpose_foundation::SemanticsSetText::new(move |text| {
-            state.set_text(text)
-        }));
-        config.set_selection = Some(cranpose_foundation::SemanticsSetSelection::new(
-            move |anchor, focus| {
-                let text = state.text();
-                let anchor = floor_char_boundary(&text, anchor);
-                let focus = floor_char_boundary(&text, focus);
-                state.set_selection(TextRange::new(anchor, focus));
-                crate::cursor_animation::reset_cursor_blink();
-                crate::request_render_invalidation();
-                true
-            },
-        ));
-        config.text_selection = Some(self.state.selection());
+        merge_text_field_semantics(self.state, self.line_limits, config);
     }
 
     fn reach(&self) -> cranpose_foundation::SemanticsReach {
         cranpose_foundation::SemanticsReach::default()
     }
+}
+
+/// What an editable field tells accessibility, from the node that takes its
+/// input.
+pub(crate) fn merge_text_field_semantics(
+    state: TextFieldState,
+    line_limits: TextFieldLineLimits,
+    config: &mut SemanticsConfiguration,
+) {
+    let text = state.text();
+    if config.content_description.is_none() {
+        config.content_description = Some(text.clone());
+    }
+    config.text = Some(text);
+    config.is_editable_text = true;
+    config.is_clickable = true;
+    config.multiline = !matches!(line_limits, TextFieldLineLimits::SingleLine);
+    config.set_text = Some(cranpose_foundation::SemanticsSetText::new(move |text| {
+        state.set_text(text)
+    }));
+    config.set_selection = Some(cranpose_foundation::SemanticsSetSelection::new(
+        move |anchor, focus| {
+            let text = state.text();
+            let anchor = floor_char_boundary(&text, anchor);
+            let focus = floor_char_boundary(&text, focus);
+            state.set_selection(TextRange::new(anchor, focus));
+            crate::cursor_animation::reset_cursor_blink();
+            crate::request_render_invalidation();
+            true
+        },
+    ));
+    config.text_selection = Some(state.selection());
 }
 
 fn floor_char_boundary(text: &str, index: usize) -> usize {
@@ -1295,6 +1353,7 @@ pub struct TextFieldElement {
     line_limits: TextFieldLineLimits,
     handle_controller: Option<TextFieldHandleController>,
     modal_depth: usize,
+    decorator: Option<TextFieldRefs>,
 }
 
 impl TextFieldElement {
@@ -1307,7 +1366,15 @@ impl TextFieldElement {
             line_limits: TextFieldLineLimits::default(),
             handle_controller: None,
             modal_depth: 0,
+            decorator: None,
         }
+    }
+
+    /// Hands the field's input, focus and semantics to the decoration box
+    /// that shares `refs`.
+    pub(crate) fn decorated_by(mut self, refs: TextFieldRefs) -> Self {
+        self.decorator = Some(refs);
+        self
     }
 
     /// Creates an element with custom cursor color.
@@ -1356,6 +1423,7 @@ impl Hash for TextFieldElement {
         self.style.render_hash().hash(state);
         self.line_limits.hash(state);
         self.modal_depth.hash(state);
+        self.decorator.as_ref().map(TextFieldRefs::key).hash(state);
     }
 }
 
@@ -1366,6 +1434,7 @@ impl PartialEq for TextFieldElement {
             && self.cursor_color == other.cursor_color
             && self.line_limits == other.line_limits
             && self.modal_depth == other.modal_depth
+            && self.decorator == other.decorator
     }
 }
 
@@ -1375,9 +1444,12 @@ impl ModifierNodeElement for TextFieldElement {
     type Node = TextFieldModifierNode;
 
     fn create(&self) -> Self::Node {
-        let mut node = TextFieldModifierNode::new(self.state, self.style.clone())
-            .with_cursor_color(self.cursor_color)
-            .with_line_limits(self.line_limits);
+        let refs = self.decorator.clone().unwrap_or_else(TextFieldRefs::new);
+        let decorated = self.decorator.is_some();
+        let mut node =
+            TextFieldModifierNode::with_refs(self.state, self.style.clone(), refs, decorated)
+                .with_cursor_color(self.cursor_color)
+                .with_line_limits(self.line_limits);
         node.modal_depth = self.modal_depth;
         node.refs.modal_depth.set(self.modal_depth);
         if let Some(controller) = self.handle_controller.clone() {
@@ -1400,11 +1472,19 @@ impl ModifierNodeElement for TextFieldElement {
         if node.update_cached_state() {}
     }
 
+    /// A decorated field's node shares its decoration's refs, so it is
+    /// never handed to a field decorated by another.
+    fn key(&self) -> Option<u64> {
+        self.decorator.as_ref().map(TextFieldRefs::key)
+    }
+
     fn capabilities(&self) -> NodeCapabilities {
-        NodeCapabilities::LAYOUT
-            | NodeCapabilities::DRAW
-            | NodeCapabilities::SEMANTICS
-            | NodeCapabilities::POINTER_INPUT
+        let drawn = NodeCapabilities::LAYOUT | NodeCapabilities::DRAW;
+        if self.decorator.is_some() {
+            drawn
+        } else {
+            drawn | NodeCapabilities::SEMANTICS | NodeCapabilities::POINTER_INPUT
+        }
     }
 
     fn always_update(&self) -> bool {
