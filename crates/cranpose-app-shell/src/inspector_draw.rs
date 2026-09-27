@@ -87,7 +87,7 @@ impl Canvas {
                 rect,
                 text: cranpose_ui::text::shared_plain_annotated_string(text),
                 render_text: cranpose_ui::text::shared_plain_render_string(text),
-                text_style: style,
+                text_style: std::sync::Arc::new(style),
                 font_size,
                 layout_options: TextLayoutOptions::default(),
                 clip: Some(rect),

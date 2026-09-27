@@ -83,7 +83,7 @@ fn straddling_page() -> Vec<RenderNode> {
                 rect: rect(GLASS.x - 40.0, GLASS.y + 20.0, 90.0, 24.0),
                 text: cranpose_ui::text::shared_plain_annotated_string("Straddle"),
                 render_text: cranpose_ui::text::shared_plain_render_string("Straddle"),
-                text_style,
+                text_style: std::sync::Arc::new(text_style),
                 font_size: 18.0,
                 layout_options: TextLayoutOptions::default(),
                 clip: None,

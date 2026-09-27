@@ -1916,11 +1916,11 @@ fn gradient_dstout_alpha_fixture() -> RenderGraph {
                     },
                     text: cranpose_ui::text::shared_plain_annotated_string("TOP"),
                     render_text: cranpose_ui::text::shared_plain_render_string("TOP"),
-                    text_style: TextStyle::from_span_style(SpanStyle {
+                    text_style: std::sync::Arc::new(TextStyle::from_span_style(SpanStyle {
                         color: Some(Color::WHITE),
                         font_size: TextUnit::Sp(14.0),
                         ..Default::default()
-                    }),
+                    })),
                     font_size: 14.0,
                     layout_options: TextLayoutOptions::default(),
                     clip: None,
@@ -2780,10 +2780,10 @@ fn translation_only_wrapper_with_plain_text_only_fixture(
                 },
                 text: cranpose_ui::text::shared_plain_annotated_string("Label"),
                 render_text: cranpose_ui::text::shared_plain_render_string("Label"),
-                text_style: TextStyle::from_span_style(SpanStyle {
+                text_style: std::sync::Arc::new(TextStyle::from_span_style(SpanStyle {
                     color: Some(Color::WHITE),
                     ..Default::default()
-                }),
+                })),
                 font_size: 16.0,
                 layout_options: TextLayoutOptions::default(),
                 clip: None,
@@ -3071,7 +3071,7 @@ fn translation_only_wrapper_with_text_style_fixture(
                     },
                     text: cranpose_ui::text::shared_plain_annotated_string("Text"),
                     render_text: cranpose_ui::text::shared_plain_render_string("Text"),
-                    text_style,
+                    text_style: std::sync::Arc::new(text_style),
                     font_size: 14.0,
                     layout_options: TextLayoutOptions::default(),
                     clip: None,
@@ -3142,7 +3142,7 @@ fn translation_only_wrapper_with_multispan_showcase_text_fixture(
                 },
                 text: std::rc::Rc::new(showcase_multispan_text()),
                 render_text: std::sync::Arc::new(showcase_multispan_text().render_string()),
-                text_style: TextStyle::from_span_style(SpanStyle::default()),
+                text_style: std::sync::Arc::new(TextStyle::from_span_style(SpanStyle::default())),
                 font_size: 16.0,
                 layout_options: TextLayoutOptions::default(),
                 clip: None,
@@ -3218,7 +3218,9 @@ fn showcase_card_wrapper(wrapper_translation: Point) -> cranpose_render_common::
                     },
                     text: std::rc::Rc::new(showcase_multispan_text()),
                     render_text: std::sync::Arc::new(showcase_multispan_text().render_string()),
-                    text_style: TextStyle::from_span_style(SpanStyle::default()),
+                    text_style: std::sync::Arc::new(TextStyle::from_span_style(
+                        SpanStyle::default(),
+                    )),
                     font_size: 16.0,
                     layout_options: TextLayoutOptions::default(),
                     clip: None,
@@ -3283,7 +3285,7 @@ fn translation_only_wrapper_with_padded_multispan_showcase_text_fixture(
                 },
                 text: std::rc::Rc::new(showcase_multispan_text()),
                 render_text: std::sync::Arc::new(showcase_multispan_text().render_string()),
-                text_style: TextStyle::from_span_style(SpanStyle::default()),
+                text_style: std::sync::Arc::new(TextStyle::from_span_style(SpanStyle::default())),
                 font_size: 16.0,
                 layout_options: TextLayoutOptions::default(),
                 clip: None,
@@ -3341,7 +3343,7 @@ fn gradient_stroke_text_fixture() -> RenderGraph {
                 },
                 text: cranpose_ui::text::shared_plain_annotated_string("Gradient"),
                 render_text: cranpose_ui::text::shared_plain_render_string("Gradient"),
-                text_style: TextStyle::from_span_style(SpanStyle {
+                text_style: std::sync::Arc::new(TextStyle::from_span_style(SpanStyle {
                     brush: Some(Brush::linear_gradient(vec![
                         Color(0.42, 0.94, 1.0, 1.0),
                         Color(0.75, 0.84, 1.0, 1.0),
@@ -3351,7 +3353,7 @@ fn gradient_stroke_text_fixture() -> RenderGraph {
                     font_size: TextUnit::Sp(20.0),
                     draw_style: Some(TextDrawStyle::Stroke { width: 3.8 }),
                     ..Default::default()
-                }),
+                })),
                 font_size: 20.0,
                 layout_options: TextLayoutOptions::default(),
                 clip: None,
@@ -3441,7 +3443,7 @@ fn alpha_icon_text_surface_fixture(translation: Point) -> RenderGraph {
                 },
                 text: cranpose_ui::text::shared_plain_annotated_string("Meta"),
                 render_text: cranpose_ui::text::shared_plain_render_string("Meta"),
-                text_style,
+                text_style: std::sync::Arc::new(text_style),
                 font_size: 15.0,
                 layout_options: TextLayoutOptions::default(),
                 clip: None,

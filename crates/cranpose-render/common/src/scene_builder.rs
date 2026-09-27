@@ -1813,7 +1813,7 @@ fn text_node_from_parts(parts: TextNodeParts<'_>) -> Option<TextPrimitiveNode> {
         rect,
         text: Rc::clone(&prepared.text),
         render_text: prepared.render_text(),
-        text_style: visual_style,
+        text_style: std::sync::Arc::new(visual_style),
         font_size,
         layout_options: options,
         clip,

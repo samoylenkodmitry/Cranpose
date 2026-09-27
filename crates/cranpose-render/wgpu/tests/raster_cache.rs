@@ -122,10 +122,10 @@ fn text_layer(node_id: NodeId, x: f32, y: f32, text_value: &str) -> LayerNode {
             rect: local_bounds,
             text: cranpose_ui::text::shared_plain_annotated_string(text_value),
             render_text: cranpose_ui::text::shared_plain_render_string(text_value),
-            text_style: TextStyle::from_span_style(SpanStyle {
+            text_style: std::sync::Arc::new(TextStyle::from_span_style(SpanStyle {
                 color: Some(Color(0.88, 0.90, 0.96, 1.0)),
                 ..Default::default()
-            }),
+            })),
             font_size: 14.0,
             layout_options: TextLayoutOptions::default(),
             clip: None,
