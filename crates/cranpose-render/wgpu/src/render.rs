@@ -2867,6 +2867,13 @@ impl GpuRenderer {
         }
         self.last_frame_stats = Some(snapshot);
         PRESENTED_FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        {
+            let frame = PRESENTED_FRAMES.load(std::sync::atomic::Ordering::Relaxed);
+            if frame % 120 == 0 {
+                let d = crate::run_store::EXP_DIFF.with(|d| d.replace([0; 3]));
+                log::warn!("[exp-diff] f{frame} compared={} equal={} writes={}", d[0] / 120, d[1] / 120, d[2] / 120);
+            }
+        }
         update_frame_warmup_budget(&mut self.pending_frame_warmup_frames, &snapshot);
         let gpu_stats_on = gpu_stats_enabled();
         self.frame_stats

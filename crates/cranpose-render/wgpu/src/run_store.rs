@@ -249,6 +249,9 @@ pub(crate) struct RunBuffers {
 /// Every element size divides it or is divided by it, so a chunk edge is
 /// an element edge and a copy-aligned offset.
 const UPLOAD_CHUNK_BYTES: usize = 4096;
+std::thread_local! {
+    pub(crate) static EXP_DIFF: std::cell::Cell<[u64; 3]> = const { std::cell::Cell::new([0; 3]) };
+}
 
 const ELEMENT_SIZES: [usize; BUFFER_COUNT] = [
     std::mem::size_of::<ShapeRecordBody>(),
@@ -376,6 +379,18 @@ impl RunBuffers {
         }
         let previous = bytemuck::cast_slice::<T, u8>(previous);
         let shared = previous.len().min(bytes.len());
+        let equal_chunks = bytes[..shared]
+            .chunks(UPLOAD_CHUNK_BYTES)
+            .zip(previous[..shared].chunks(UPLOAD_CHUNK_BYTES))
+            .filter(|(a, b)| a == b)
+            .count();
+        EXP_DIFF.with(|d| {
+            let mut d = d.get();
+            d[0] += shared as u64;
+            d[1] += (equal_chunks * UPLOAD_CHUNK_BYTES) as u64;
+            d[2] += 1;
+            EXP_DIFF.with(|c| c.set(d));
+        });
         let mut stats = FrameCommandStats::default();
         let mut pending = None;
         let mut offset = 0;
