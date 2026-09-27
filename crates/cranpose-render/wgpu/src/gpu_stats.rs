@@ -256,7 +256,7 @@ impl FrameStatsSnapshot {
              isolated_layers={} area={:.2}MP top={} | \
              layer_cache: hit={} miss={} {:.1}% hit_px={:.2}MP miss_px={:.2}MP size={}({:.1}MB) hit_by_kind={} miss_px_by_kind={} | \
              shadow_cache: shape_hit={} shape_miss={} hit_px={:.2}MP miss_px={:.2}MP text_blur_fallback={} | \
-             stages={} admit={} blur={} substrate={} composite={} effect={} shader_px={:.2}MP glass_raster_px={:.2}MP blur_px={:.2}MP | shape={} shape_fill_px={:.2}MP{} shape_verts={} interiors={} image={} text={} draws={} | \
+             stages={} admit={} blur={} substrate={} composite={} effect={} shader_fit={}/{} shader_px={:.2}MP glass_raster_px={:.2}MP blur_px={:.2}MP | shape={} shape_fill_px={:.2}MP{} shape_verts={} interiors={} image={} text={} draws={} | \
              text_img_cache: hit={} miss={} hit_px={:.2}MP miss_px={:.2}MP raster={:.2}MB | \
              text_glyph_atlas: hit={} miss={} miss_px={:.2}MP | \
              caches: text_pool={} img={} txt={}",
@@ -298,6 +298,8 @@ impl FrameStatsSnapshot {
             self.substrates,
             self.composite_passes,
             self.effect_applies,
+            self.shader_specialized_draws,
+            self.shader_pipeline_fallback_draws,
             self.shader_pixels as f64 / 1_000_000.0,
             self.glass_rasterized_pixels as f64 / 1_000_000.0,
             self.blur_pixels as f64 / 1_000_000.0,
