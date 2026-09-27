@@ -1,4 +1,7 @@
-use std::cell::{Cell, RefCell};
+use std::{
+    cell::{Cell, RefCell},
+    ops::Range,
+};
 
 use cranpose_render_common::{
     bounded_lru_cache::BoundedLruCache,
@@ -276,15 +279,46 @@ fn acquire_recorded_effect_scratch_textures_into<C: FrameCommandRecorder>(
     }
 }
 
+/// What the instances of one blur draw share: the pass's axis, the sampled
+/// texture's size and tile mode, and the kernel's pair table.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+struct BlurKernelUniforms {
+    direction_and_radius: [f32; 4],
+    texture_size_and_tile_mode: [f32; 4],
+    pairs: [[f32; 4]; BLUR_TAP_PAIRS],
+    kernel: [f32; 4],
+}
+
+/// One region an instance of a blur draw covers: the texels it reads, the
+/// pixels it maps them onto and the pixel rectangle its quad covers.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default, bytemuck::Pod, bytemuck::Zeroable)]
+struct BlurRegionUniforms {
+    source_region: [f32; 4],
+    dest_region: [f32; 4],
+    quad: [f32; 4],
+}
+
+/// The regions one blur draw covers at most, one instance each.
+const BLUR_REGIONS_PER_DRAW: usize = 16;
+
+/// The uniforms of one instanced blur draw.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct BlurUniforms {
-    direction_and_radius: [f32; 4],
-    texture_size_and_tile_mode: [f32; 4],
+    kernel: BlurKernelUniforms,
+    target_size: [f32; 4],
+    regions: [BlurRegionUniforms; BLUR_REGIONS_PER_DRAW],
+}
+
+/// One region's blur: the kernel it shares with the regions it may be
+/// drawn with, and the texels it reads and the pixels it writes.
+#[derive(Clone, Copy)]
+struct BlurDrawUniforms {
+    kernel: BlurKernelUniforms,
     source_region: [f32; 4],
     dest_region: [f32; 4],
-    pairs: [[f32; 4]; BLUR_TAP_PAIRS],
-    kernel: [f32; 4],
 }
 
 #[repr(C)]
@@ -359,7 +393,7 @@ fn blur_uniform_spec(pass: UploadAllocatorId) -> UploadAllocatorSpec {
 
 struct BlurDraw<'a> {
     source: &'a OffscreenTarget,
-    uniforms: BlurUniforms,
+    uniforms: BlurDrawUniforms,
     filter: BlurFilter,
     scissor: Option<(u32, u32, u32, u32)>,
 }
@@ -400,13 +434,40 @@ fn blur_family(tile_mode: usize) -> impl Iterator<Item = BlurPipeline> {
 
 impl BlurDraw<'_> {
     fn pipeline(&self) -> BlurPipeline {
-        let tile_mode = self.uniforms.texture_size_and_tile_mode[2] as usize;
+        let tile_mode = self.uniforms.kernel.texture_size_and_tile_mode[2] as usize;
         match self.filter {
             BlurFilter::Downsample(block) => BlurPipeline::Downsample { block, tile_mode },
             BlurFilter::Kernel => BlurPipeline::Kernel { tile_mode },
             BlurFilter::Mean => BlurPipeline::Mean,
         }
     }
+}
+
+impl BlurDraw<'_> {
+    /// Whether one instanced draw can cover this region and `other`'s: the
+    /// same pipeline over the same texture with the same kernel.
+    fn joins(&self, other: &BlurDraw<'_>) -> bool {
+        self.pipeline() == other.pipeline()
+            && std::ptr::eq(self.source, other.source)
+            && self.uniforms.kernel == other.uniforms.kernel
+    }
+}
+
+/// Splits `draws` into the runs one instanced draw covers each: consecutive
+/// draws that join the run's first, at most `BLUR_REGIONS_PER_DRAW` long.
+fn blur_draw_groups(draws: &[BlurDraw<'_>]) -> SmallVec<[Range<usize>; 8]> {
+    let mut groups = SmallVec::new();
+    let mut start = 0;
+    for index in 1..=draws.len() {
+        if index == draws.len()
+            || index - start == BLUR_REGIONS_PER_DRAW
+            || !draws[index].joins(&draws[start])
+        {
+            groups.push(start..index);
+            start = index;
+        }
+    }
+    groups
 }
 
 fn offset_uniform_spec() -> UploadAllocatorSpec {
@@ -890,7 +951,7 @@ fn fullscreen_pipeline_job(
     label: &'static str,
     layout: &wgpu::PipelineLayout,
     shader: &wgpu::ShaderModule,
-    fragment_entry: &'static str,
+    (vertex_entry, fragment_entry): (&'static str, &'static str),
     constants: &[(&'static str, f64)],
     surface_format: wgpu::TextureFormat,
     blend: wgpu::BlendState,
@@ -908,7 +969,7 @@ fn fullscreen_pipeline_job(
             label,
             &layout,
             &shader,
-            fragment_entry,
+            (vertex_entry, fragment_entry),
             &constants,
             wgpu::ColorTargetState {
                 format: surface_format,
@@ -1005,7 +1066,7 @@ impl EffectRenderer {
                 label: Some("Blur Uniform Bind Group Layout"),
                 entries: &[wgpu::BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: true,
@@ -1215,7 +1276,7 @@ impl EffectRenderer {
             "Blur Pipeline",
             &self.blur_pipeline_layout,
             &self.blur_shader,
-            "blur_fs",
+            ("blur_vs", "blur_fs"),
             &[("BLUR_TILE_MODE", tile_mode as f64)],
             self.surface_format,
             wgpu::BlendState::REPLACE,
@@ -1287,7 +1348,7 @@ impl EffectRenderer {
             "Mean Pipeline",
             &self.blur_pipeline_layout,
             &self.blur_shader,
-            "blur_mean_fs",
+            ("blur_vs", "blur_mean_fs"),
             &[],
             self.surface_format,
             wgpu::BlendState::REPLACE,
@@ -1306,7 +1367,7 @@ impl EffectRenderer {
             "Blur Downsample Pipeline",
             &self.blur_pipeline_layout,
             &self.blur_shader,
-            "blur_downsample_fs",
+            ("blur_vs", "blur_downsample_fs"),
             &[
                 ("BLUR_BLOCK", f64::from(block)),
                 ("BLUR_TILE_MODE", tile_mode as f64),
@@ -1323,7 +1384,7 @@ impl EffectRenderer {
             "Offset Pipeline",
             &self.offset_pipeline_layout,
             &self.offset_shader,
-            "offset_fs",
+            ("fullscreen_vs", "offset_fs"),
             &[],
             self.surface_format,
             wgpu::BlendState::REPLACE,
@@ -1376,7 +1437,7 @@ impl EffectRenderer {
             label,
             &self.blit_pipeline_layout,
             &self.blit_shader,
-            "blit_fs",
+            ("fullscreen_vs", "blit_fs"),
             &[(
                 "BLIT_UNMASKED_NEAREST",
                 if unmasked_nearest { 1.0 } else { 0.0 },
@@ -1617,34 +1678,51 @@ impl EffectRenderer {
         self.debug_blur_pixels
             .set(self.debug_blur_pixels.get() + written);
         let mut uniforms = std::mem::take(&mut self.blur_uniform_uploads);
-        uniforms.extend(draws.iter().map(|draw| {
+        let groups = blur_draw_groups(draws);
+        uniforms.extend(groups.iter().map(|group| {
+            let mut block = BlurUniforms {
+                kernel: draws[group.start].uniforms.kernel,
+                target_size: [dest_size.0 as f32, dest_size.1 as f32, 0.0, 0.0],
+                regions: [BlurRegionUniforms::default(); BLUR_REGIONS_PER_DRAW],
+            };
+            for (region, draw) in block.regions.iter_mut().zip(&draws[group.clone()]) {
+                let (x, y, width, height) =
+                    draw.scissor.unwrap_or((0, 0, dest_size.0, dest_size.1));
+                *region = BlurRegionUniforms {
+                    source_region: draw.uniforms.source_region,
+                    dest_region: draw.uniforms.dest_region,
+                    quad: [x as f32, y as f32, width as f32, height as f32],
+                };
+            }
             recorder.upload_uniform(
                 pass_id,
                 blur_uniform_spec(pass_id),
                 device,
                 &self.blur_uniform_bind_group_layout,
-                bytemuck::bytes_of(&draw.uniforms),
+                bytemuck::bytes_of(&block),
             )
         }));
         let mut pass = recorder.begin_color_pass(label, dest_view, load_op);
-        let mut bound = None;
-        for (draw, uniform) in draws.iter().zip(uniforms.drain(..)) {
-            let pipeline = draw.pipeline();
-            if bound != Some(pipeline) {
+        let mut bound_pipeline = None;
+        let mut bound_source: Option<&OffscreenTarget> = None;
+        for (group, uniform) in groups.iter().zip(uniforms.drain(..)) {
+            let first = &draws[group.start];
+            let pipeline = first.pipeline();
+            if bound_pipeline != Some(pipeline) {
                 pass.set_pipeline(self.blur_draw_pipeline(device, pipeline));
-                bound = Some(pipeline);
+                bound_pipeline = Some(pipeline);
             }
-            let source_bind_group = draw.source.get_or_create_bind_group(
-                device,
-                &self.effect_texture_bind_group_layout,
-                &self.effect_linear_sampler,
-            );
-            pass.set_bind_group(0, source_bind_group, &[]);
+            if !bound_source.is_some_and(|source| std::ptr::eq(source, first.source)) {
+                let source_bind_group = first.source.get_or_create_bind_group(
+                    device,
+                    &self.effect_texture_bind_group_layout,
+                    &self.effect_linear_sampler,
+                );
+                pass.set_bind_group(0, source_bind_group, &[]);
+                bound_source = Some(first.source);
+            }
             pass.set_bind_group(1, &uniform.bind_group, &[uniform.offset]);
-            if let Some((x, y, width, height)) = draw.scissor {
-                pass.set_scissor_rect(x, y, width, height);
-            }
-            pass.draw(0..4, 0..1);
+            pass.draw(0..4, 0..group.len() as u32);
         }
         drop(pass);
         self.blur_uniform_uploads = uniforms;
@@ -1662,7 +1740,7 @@ impl EffectRenderer {
         dest: (u32, u32, u32, u32),
         radius: (f32, f32),
         tile_mode: TileMode,
-    ) -> BlurUniforms {
+    ) -> BlurDrawUniforms {
         let direction = if horizontal { [1.0, 0.0] } else { [0.0, 1.0] };
         let kernel_radius = if horizontal { radius.0 } else { radius.1 };
         let key = kernel_radius.to_bits();
@@ -1676,20 +1754,22 @@ impl EffectRenderer {
                 kernel
             }
         };
-        BlurUniforms {
-            direction_and_radius: [direction[0], direction[1], radius.0, radius.1],
-            texture_size_and_tile_mode: [
-                sampled.0 as f32,
-                sampled.1 as f32,
-                tile_mode_uniform_value(tile_mode),
-                0.0,
-            ],
+        BlurDrawUniforms {
+            kernel: BlurKernelUniforms {
+                direction_and_radius: [direction[0], direction[1], radius.0, radius.1],
+                texture_size_and_tile_mode: [
+                    sampled.0 as f32,
+                    sampled.1 as f32,
+                    tile_mode_uniform_value(tile_mode),
+                    0.0,
+                ],
+                pairs: kernel
+                    .pairs
+                    .map(|pair| [pair.inner, pair.outer, pair.offset, pair.weight]),
+                kernel: [kernel.pair_count as f32, kernel.total_weight, 0.0, 0.0],
+            },
             source_region: region_uniform(source),
             dest_region: region_uniform(dest),
-            pairs: kernel
-                .pairs
-                .map(|pair| [pair.inner, pair.outer, pair.offset, pair.weight]),
-            kernel: [kernel.pair_count as f32, kernel.total_weight, 0.0, 0.0],
         }
     }
 

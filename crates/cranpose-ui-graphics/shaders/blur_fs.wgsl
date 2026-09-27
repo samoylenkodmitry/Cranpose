@@ -1,11 +1,20 @@
+// One region a blur draw instance covers: the texels it reads (zero: the
+// whole texture), the pixels it maps them onto (zero: the whole target) and
+// the pixel rectangle its quad covers.
+struct BlurRegion {
+    source_region: vec4<f32>,
+    dest_region: vec4<f32>,
+    quad: vec4<f32>,
+}
 
+// What the instances of one draw share, then each instance's region.
 struct BlurUniforms {
     direction_and_radius: vec4<f32>,      // direction.xy, radius.xy in source texels
     texture_size_and_tile_mode: vec4<f32>,// sampled texture size.xy, tile_mode, unused
-    source_region: vec4<f32>,             // x, y, width, height in source texels; zero = whole
-    dest_region: vec4<f32>,               // x, y, width, height in destination pixels; zero = whole
     pairs: array<vec4<f32>, 16>,
     kernel: vec4<f32>,
+    target_size: vec4<f32>,               // target size.xy, unused
+    regions: array<BlurRegion, 16>,
 }
 
 @group(0) @binding(0) var input_texture: texture_2d<f32>;
@@ -13,43 +22,87 @@ struct BlurUniforms {
 @group(1) @binding(0) var<uniform> blur: BlurUniforms;
 
 // The source texels one destination pixel of the downsample stands for on
-// each axis. A pipeline constant, so the block's fetch loops unroll.
+// each axis: two or four.
 override BLUR_BLOCK: i32 = 2;
 
 override BLUR_TILE_MODE: u32 = 0u;
+
+// A fragment of one instance, with its region's maps resolved once per
+// vertex so the fragment derives its taps with one multiply-add per axis:
+// `local` maps the pixel to its region-local coordinate in [0, 1] (one unit
+// spans one source region), `center` maps it to the texture coordinate of
+// that point, `bounds` holds the texel centres at the source region's edges,
+// `steps` is one source texel as a texture offset and as a local offset,
+// and `source` is the source region in texels.
+struct BlurVertex {
+    @builtin(position) position: vec4<f32>,
+    @location(0) @interpolate(flat) local: vec4<f32>,
+    @location(1) @interpolate(flat) center: vec4<f32>,
+    @location(2) @interpolate(flat) bounds: vec4<f32>,
+    @location(3) @interpolate(flat) steps: vec4<f32>,
+    @location(4) @interpolate(flat) source: vec4<f32>,
+}
+
+@vertex
+fn blur_vs(
+    @builtin(vertex_index) vertex_index: u32,
+    @builtin(instance_index) instance_index: u32,
+) -> BlurVertex {
+    let region = blur.regions[instance_index];
+    let target_size = max(blur.target_size.xy, vec2<f32>(1.0, 1.0));
+    let texture_size = max(blur.texture_size_and_tile_mode.xy, vec2<f32>(1.0, 1.0));
+    let corner = vec2<f32>(f32(vertex_index & 1u), f32(vertex_index >> 1u));
+    let pixel = region.quad.xy + corner * region.quad.zw;
+    var source = region.source_region;
+    if (source.z <= 0.5 || source.w <= 0.5) {
+        source = vec4<f32>(0.0, 0.0, blur.texture_size_and_tile_mode.xy);
+    }
+    var dest = region.dest_region;
+    if (dest.z <= 0.5 || dest.w <= 0.5) {
+        dest = vec4<f32>(0.0, 0.0, target_size);
+    }
+    let source_size = max(source.zw, vec2<f32>(1.0, 1.0));
+    let half_texel = 0.5 / source_size;
+    let local_scale = 1.0 / dest.zw;
+    let center_scale = local_scale * source.zw / texture_size;
+    var out: BlurVertex;
+    out.position = vec4<f32>(
+        pixel.x / target_size.x * 2.0 - 1.0,
+        1.0 - pixel.y / target_size.y * 2.0,
+        0.0,
+        1.0,
+    );
+    out.local = vec4<f32>(-dest.xy * local_scale, local_scale);
+    out.center = vec4<f32>(source.xy / texture_size - dest.xy * center_scale, center_scale);
+    out.bounds = vec4<f32>(
+        (source.xy + half_texel * source.zw) / texture_size,
+        (source.xy + (vec2<f32>(1.0, 1.0) - half_texel) * source.zw) / texture_size,
+    );
+    out.steps = vec4<f32>(source.zw / (source_size * texture_size), 1.0 / source_size);
+    out.source = source;
+    return out;
+}
 
 fn inside_unit_bounds(uv: vec2<f32>) -> f32 {
     let inside = uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0;
     return select(0.0, 1.0, inside);
 }
 
-// The source region in texels: the whole texture unless the uniform names
-// a packed region of it.
-fn source_region() -> vec4<f32> {
-    let region = blur.source_region;
-    if (region.z > 0.5 && region.w > 0.5) {
-        return region;
-    }
-    return vec4<f32>(0.0, 0.0, blur.texture_size_and_tile_mode.xy);
-}
-
 // A region-local coordinate in [0, 1] mapped onto the texture, held to the
 // region's texel centers so a bilinear tap never reads beside the region:
 // regions are packed edge to edge, and the edge reads as a dedicated
 // texture's clamp-to-edge would.
-fn region_texture_uv(local: vec2<f32>) -> vec2<f32> {
-    let region = source_region();
+fn region_texture_uv(region: vec4<f32>, local: vec2<f32>) -> vec2<f32> {
     let texture_size = max(blur.texture_size_and_tile_mode.xy, vec2<f32>(1.0, 1.0));
     let half_texel = 0.5 / max(region.zw, vec2<f32>(1.0, 1.0));
     let held = clamp(local, half_texel, vec2<f32>(1.0, 1.0) - half_texel);
     return (region.xy + held * region.zw) / texture_size;
 }
 
-// The texture value at a region-local coordinate under the tile mode:
-// mirrored or repeated into [0, 1], or held to the region's edge.
-fn tiled_sample(uv: vec2<f32>) -> vec4<f32> {
-    let tile_mode = f32(BLUR_TILE_MODE);
-    if (tile_mode >= 1.5 && tile_mode < 2.5) {
+// The texture value at a region-local coordinate under the mirror or repeat
+// tile mode, wrapped into [0, 1].
+fn tiled_sample(region: vec4<f32>, uv: vec2<f32>) -> vec4<f32> {
+    if (BLUR_TILE_MODE == 2u) {
         // Mirror: ... 0->1, 1->0, repeat.
         let wrap_x = uv.x - floor(uv.x / 2.0) * 2.0;
         let wrap_y = uv.y - floor(uv.y / 2.0) * 2.0;
@@ -57,33 +110,16 @@ fn tiled_sample(uv: vec2<f32>) -> vec4<f32> {
             select(wrap_x, 2.0 - wrap_x, wrap_x > 1.0),
             select(wrap_y, 2.0 - wrap_y, wrap_y > 1.0),
         );
-        return textureSampleLevel(input_texture, input_sampler, region_texture_uv(mirrored_uv), 0.0);
+        return textureSampleLevel(input_texture, input_sampler, region_texture_uv(region, mirrored_uv), 0.0);
     }
-    if (tile_mode >= 0.5 && tile_mode < 1.5) {
-        // Repeated: wrap to [0,1).
-        let repeated_uv = vec2<f32>(uv.x - floor(uv.x), uv.y - floor(uv.y));
-        return textureSampleLevel(input_texture, input_sampler, region_texture_uv(repeated_uv), 0.0);
-    }
-    // Clamp and decal: hold to the region's edge; decal drops the taps
-    // outside through their weights.
-    let clamped_uv = clamp(uv, vec2<f32>(0.0), vec2<f32>(1.0));
-    return textureSampleLevel(input_texture, input_sampler, region_texture_uv(clamped_uv), 0.0);
+    // Repeated: wrap to [0,1).
+    let repeated_uv = vec2<f32>(uv.x - floor(uv.x), uv.y - floor(uv.y));
+    return textureSampleLevel(input_texture, input_sampler, region_texture_uv(region, repeated_uv), 0.0);
 }
 
 // A tap's weight under the tile mode: zero outside the region for decal.
 fn tap_weight(uv: vec2<f32>, weight: f32) -> f32 {
     return select(weight, weight * inside_unit_bounds(uv), BLUR_TILE_MODE == 3u);
-}
-
-// The fragment's place in its destination region, in [0, 1]: the whole
-// target unless the uniform names a region of it. One region-local unit
-// spans one source region.
-fn region_local(input: VertexOutput) -> vec2<f32> {
-    let dest = blur.dest_region;
-    if (dest.z > 0.5 && dest.w > 0.5) {
-        return (input.position.xy - dest.xy) / dest.zw;
-    }
-    return input.uv;
 }
 
 // Where a fragment's taps land: its region-local coordinate and one source
@@ -99,21 +135,19 @@ struct KernelFrame {
     texel: vec2<f32>,
     low: vec2<f32>,
     high: vec2<f32>,
+    source: vec4<f32>,
 }
 
-fn kernel_frame(input: VertexOutput) -> KernelFrame {
-    let local = region_local(input);
-    let region = source_region();
-    let texture_size = max(blur.texture_size_and_tile_mode.xy, vec2<f32>(1.0, 1.0));
-    let source_size = max(region.zw, vec2<f32>(1.0, 1.0));
-    let half_texel = 0.5 / source_size;
+fn kernel_frame(input: BlurVertex) -> KernelFrame {
+    let pixel = input.position.xy;
     return KernelFrame(
-        local,
-        1.0 / source_size,
-        (region.xy + local * region.zw) / texture_size,
-        region.zw / (source_size * texture_size),
-        (region.xy + half_texel * region.zw) / texture_size,
-        (region.xy + (vec2<f32>(1.0, 1.0) - half_texel) * region.zw) / texture_size,
+        input.local.xy + pixel * input.local.zw,
+        input.steps.zw,
+        input.center.xy + pixel * input.center.zw,
+        input.steps.xy,
+        input.bounds.xy,
+        input.bounds.zw,
+        input.source,
     );
 }
 
@@ -123,7 +157,7 @@ fn kernel_tap(frame: KernelFrame, offset: vec2<f32>) -> vec4<f32> {
         let uv = clamp(frame.center + frame.texel * offset, frame.low, frame.high);
         return textureSampleLevel(input_texture, input_sampler, uv, 0.0);
     }
-    return tiled_sample(frame.local + frame.step * offset);
+    return tiled_sample(frame.source, frame.local + frame.step * offset);
 }
 
 // The downsample: each destination pixel is the average of the block of
@@ -132,7 +166,7 @@ fn kernel_tap(frame: KernelFrame, offset: vec2<f32>) -> vec4<f32> {
 // across the block read each of its texels once through the bilinear
 // filter: one fetch for a block of two, four for a block of four.
 @fragment
-fn blur_downsample_fs(input: VertexOutput) -> @location(0) vec4<f32> {
+fn blur_downsample_fs(input: BlurVertex) -> @location(0) vec4<f32> {
     let frame = kernel_frame(input);
     if (BLUR_BLOCK < 4) {
         return kernel_tap(frame, vec2<f32>(0.0, 0.0));
@@ -145,10 +179,10 @@ fn blur_downsample_fs(input: VertexOutput) -> @location(0) vec4<f32> {
 }
 
 @fragment
-fn blur_mean_fs(input: VertexOutput) -> @location(0) vec4<f32> {
-    let source = source_region();
+fn blur_mean_fs(input: BlurVertex) -> @location(0) vec4<f32> {
+    let source = input.source;
     let horizontal = blur.direction_and_radius.x > 0.5;
-    let local = region_local(input);
+    let local = kernel_frame(input).local;
     let count = i32(select(source.w, source.z, horizontal));
     let row = min(i32(local.y * source.w), i32(source.w) - 1);
     var sum = vec4<f32>(0.0);
@@ -196,7 +230,7 @@ fn kernel_pair(frame: KernelFrame, axis: vec2<f32>, pair: vec4<f32>, inner: f32)
 // the table stays in uniform registers, where a loop over it would load
 // each pair from memory, and the guards shrink the work with the radius.
 @fragment
-fn blur_fs(input: VertexOutput) -> @location(0) vec4<f32> {
+fn blur_fs(input: BlurVertex) -> @location(0) vec4<f32> {
     let frame = kernel_frame(input);
     let axis = blur.direction_and_radius.xy;
     let pair_count = i32(blur.kernel.x);

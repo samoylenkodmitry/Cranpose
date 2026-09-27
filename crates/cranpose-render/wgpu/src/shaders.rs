@@ -64,10 +64,7 @@ pub fn blur_shader() -> String {
             2 * pair + 1
         );
     }
-    format!(
-        "{FULLSCREEN_QUAD_VS}{}",
-        source.replace(BLUR_KERNEL_PAIRS_MARKER, &pairs)
-    )
+    source.replace(BLUR_KERNEL_PAIRS_MARKER, &pairs)
 }
 
 pub fn offset_shader() -> String {

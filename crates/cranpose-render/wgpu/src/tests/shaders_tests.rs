@@ -125,7 +125,7 @@ fn blur_shader_writes_one_guarded_call_per_kernel_pair() {
 #[test]
 fn blur_shader_validates_for_webgl() {
     let shader = super::blur_shader();
-    assert!(validate_glsl_portability(&shader, "fullscreen_vs", ShaderStage::Vertex).is_ok());
+    assert!(validate_glsl_portability(&shader, "blur_vs", ShaderStage::Vertex).is_ok());
     for tile_mode in 0..4 {
         for block in [2, 4] {
             let constants = naga::back::PipelineConstants::from_iter([

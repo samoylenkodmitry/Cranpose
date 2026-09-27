@@ -172,7 +172,7 @@ impl PipelineJob {
             "RuntimeShader Effect Pipeline",
             &factory.layout,
             module,
-            "effect_fs",
+            ("fullscreen_vs", "effect_fs"),
             &constants,
             wgpu::ColorTargetState {
                 format: factory.format,

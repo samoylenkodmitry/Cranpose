@@ -816,7 +816,7 @@ pub(crate) fn create_fullscreen_strip_pipeline(
     label: &'static str,
     layout: &wgpu::PipelineLayout,
     module: &wgpu::ShaderModule,
-    fragment_entry: &'static str,
+    (vertex_entry, fragment_entry): (&'static str, &'static str),
     constants: &[(&str, f64)],
     target: wgpu::ColorTargetState,
 ) -> wgpu::RenderPipeline {
@@ -829,7 +829,7 @@ pub(crate) fn create_fullscreen_strip_pipeline(
             layout: Some(layout),
             vertex: wgpu::VertexState {
                 module,
-                entry_point: Some("fullscreen_vs"),
+                entry_point: Some(vertex_entry),
                 buffers: &[],
                 compilation_options: wgpu::PipelineCompilationOptions {
                     constants,

@@ -112,11 +112,7 @@ fn patterned_source(device: &wgpu::Device, queue: &wgpu::Queue) -> OffscreenTarg
 fn mixed_blur_tile_modes_preserve_dynamic_shader_pixels() {
     let (_lock, device, queue) = crate::frame_graph::upload_test_device();
     let source = patterned_source(&device, &queue);
-    let dynamic = format!(
-        "{}{}",
-        shaders::FULLSCREEN_QUAD_VS,
-        include_str!("../tests/fixtures/blur_tile_reference.wgsl"),
-    );
+    let dynamic = include_str!("../tests/fixtures/blur_tile_reference.wgsl");
     for format in [
         wgpu::TextureFormat::Rgba8Unorm,
         wgpu::TextureFormat::Rgba16Float,
@@ -132,7 +128,7 @@ fn mixed_blur_tile_modes_preserve_dynamic_shader_pixels() {
             if reference {
                 renderer.blur_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                     label: Some("Dynamic Blur Tile Reference"),
-                    source: wgpu::ShaderSource::Wgsl(dynamic.clone().into()),
+                    source: wgpu::ShaderSource::Wgsl(dynamic.into()),
                 });
             }
             renderer
@@ -309,14 +305,14 @@ fn cached_blur_kernels_preserve_fractional_radii_axes_and_eviction() {
             );
             let expected = BlurKernel::of_radius(if horizontal { radius.0 } else { radius.1 });
             assert_eq!(
-                uniforms.pairs,
+                uniforms.kernel.pairs,
                 expected
                     .pairs
                     .map(|pair| [pair.inner, pair.outer, pair.offset, pair.weight]),
                 "radius={radius:?}, horizontal={horizontal}"
             );
             assert_eq!(
-                uniforms.kernel,
+                uniforms.kernel.kernel,
                 [expected.pair_count as f32, expected.total_weight, 0.0, 0.0]
             );
             assert!(
