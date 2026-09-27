@@ -350,11 +350,58 @@ fn a_transformed_shape_pipeline_falls_back_to_a_transformed_general_one() {
 }
 
 #[test]
+fn a_glyph_run_no_frame_draws_leaves_the_cpu_cache() {
+    let (_lock, mut renderer) = test_renderer();
+    let run = |renderer: &GpuRenderer| CachedTextGlyphRun {
+        glyphs: Rc::from(Vec::new()),
+        quads: None,
+        atlas_generation: 0,
+        last_frame: Cell::new(renderer.text_glyph_run_frame),
+    };
+    let idle = run(&renderer);
+    renderer
+        .text_glyph_run_cache
+        .put(TextGlyphRunCacheKey(1), idle);
+    let drawn = run(&renderer);
+    renderer
+        .text_glyph_run_cache
+        .put(TextGlyphRunCacheKey(2), drawn);
+    for _ in 0..TEXT_GLYPH_RUN_IDLE_FRAMES {
+        renderer.begin_text_glyph_run_frame();
+        let frame = renderer.text_glyph_run_frame;
+        if let Some(drawn) = renderer.text_glyph_run_cache.get(&TextGlyphRunCacheKey(2)) {
+            drawn.last_frame.set(frame);
+        }
+    }
+    assert!(
+        renderer
+            .text_glyph_run_cache
+            .peek(&TextGlyphRunCacheKey(1))
+            .is_some()
+    );
+    renderer.begin_text_glyph_run_frame();
+    assert!(
+        renderer
+            .text_glyph_run_cache
+            .peek(&TextGlyphRunCacheKey(1))
+            .is_none(),
+        "a run no frame drew leaves after its idle frames"
+    );
+    assert!(
+        renderer
+            .text_glyph_run_cache
+            .peek(&TextGlyphRunCacheKey(2))
+            .is_some(),
+        "a run drawn every frame stays"
+    );
+}
+
+#[test]
 fn a_retained_run_no_frame_draws_gives_its_quads_back() {
     let (_lock, mut renderer) = test_renderer();
     assert!(renderer.ensure_retained_text_glyph_run(TextGlyphRunCacheKey(1), &test_quads()));
     assert!(renderer.ensure_retained_text_glyph_run(TextGlyphRunCacheKey(2), &test_quads()));
-    for _ in 0..RETAINED_TEXT_GLYPH_RUN_IDLE_FRAMES {
+    for _ in 0..TEXT_GLYPH_RUN_IDLE_FRAMES {
         renderer.begin_text_glyph_run_frame();
         assert!(
             renderer
