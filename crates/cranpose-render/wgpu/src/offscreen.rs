@@ -278,6 +278,9 @@ impl OffscreenPool {
             if let Some(s) = stats {
                 s.record_offscreen_acquire(width, height, self.format, true);
             }
+            if std::env::var_os("CRANPOSE_EXP_LOG_NEW_TEXTURES").is_some() {
+                log::warn!("[new-texture] offscreen {width}x{height}");
+            }
             OffscreenTarget::new(device, self.format, width, height)
         }
     }

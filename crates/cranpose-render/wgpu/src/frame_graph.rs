@@ -378,6 +378,14 @@ impl TransientTexturePool {
         }
 
         self.news = self.news.saturating_add(1);
+        if std::env::var_os("CRANPOSE_EXP_LOG_NEW_TEXTURES").is_some() {
+            log::warn!(
+                "[new-texture] transient {} {}x{}",
+                descriptor.label,
+                descriptor.width,
+                descriptor.height
+            );
+        }
         OffscreenTarget::new_labeled(
             device,
             descriptor.format,
