@@ -5,6 +5,7 @@ use cranpose_ui_graphics::{
     ColorFilter, EdgeInsets, GraphicsLayer, LayerShape, PointerIcon, Rect, RenderEffect,
     RoundedCornerShape, Size,
 };
+use smallvec::SmallVec;
 
 use super::{
     ModifierChainHandle, Point,
@@ -204,11 +205,11 @@ impl ModifierNodeSlices {
 
     fn insert_background_draw(
         &mut self,
-        insert_index: Option<usize>,
+        insert_index: usize,
         precedes_layer: bool,
         command: DrawCommand,
     ) {
-        let insert_index = insert_index.unwrap_or(0).min(self.draw_commands.len());
+        let insert_index = insert_index.min(self.draw_commands.len());
         self.draw_commands.insert(insert_index, command);
         if let Some(boundary) = self.layer_draw_boundary.as_mut()
             && precedes_layer
@@ -549,7 +550,7 @@ fn collect_modifier_slices_into(
         return;
     }
 
-    let mut background = BackgroundSlot::default();
+    let mut backgrounds = Backgrounds::default();
     let mut padding = EdgeInsets::default();
     // The layout nodes walked so far: the index of the coordinator the next
     // draw belongs to, which is the next layout node's (or a layout node's
@@ -580,7 +581,7 @@ fn collect_modifier_slices_into(
                     coordinator: CoordinatorRect::new(geometry, layout_ordinal, padding),
                     displaceable: has_layout,
                 };
-                collect_draw_node(node, &draw, slices, &mut background);
+                collect_draw_node(node, &draw, slices, &mut backgrounds);
             }
 
             if has_layout && node_caps.intersects(NodeCapabilities::LAYOUT) {
@@ -641,7 +642,7 @@ fn collect_modifier_slices_into(
         });
     }
 
-    background.insert_into(slices);
+    backgrounds.insert_into(slices);
 }
 
 /// Where a draw modifier draws: in its coordinator's rect, which only moves
@@ -651,44 +652,86 @@ struct DrawSite {
     displaceable: bool,
 }
 
-/// The chain's background as the walk finds it: the last background wins,
-/// drawn at its place in the draw order, in its coordinator's rect, in the
-/// latest corner shape.
+/// The chain's backgrounds as the walk finds them. Each draws at its place in
+/// the draw order, in its coordinator's rect, as Compose draws every
+/// background of a chain; a corner shape shapes the nearest background
+/// before it, or the next one when none comes before.
 #[derive(Default)]
+struct Backgrounds {
+    slots: SmallVec<[BackgroundSlot; 2]>,
+    pending_shape: Option<RoundedCornerShape>,
+    last_shape: Option<RoundedCornerShape>,
+}
+
 struct BackgroundSlot {
-    color: Option<crate::modifier::Color>,
+    color: crate::modifier::Color,
     coordinator: CoordinatorRect,
-    insert_index: Option<usize>,
+    insert_index: usize,
     precedes_layer: bool,
     corner_shape: Option<RoundedCornerShape>,
 }
 
-impl BackgroundSlot {
-    fn insert_into(self, slices: &mut ModifierNodeSlices) {
-        slices.corner_shape = self.corner_shape;
-        let Some(color) = self.color else {
-            return;
-        };
-        let (coordinator, corner_shape) = (self.coordinator, self.corner_shape);
-        let draw_cmd = Rc::new(move |scope: &mut cranpose_ui_graphics::DrawScopeDefault| {
-            use cranpose_ui_graphics::{CornerRadii, DrawScope as _};
-
-            use crate::modifier::Brush;
-
-            let rect = coordinator.rect(scope.size());
-            let brush = Brush::solid(color);
-            if let Some(shape) = corner_shape {
-                let radii: CornerRadii = shape.resolve(rect.width, rect.height);
-                scope.draw_round_rect_at(rect, brush, radii);
-            } else {
-                scope.draw_rect_at(rect, brush);
-            }
+impl Backgrounds {
+    fn push(
+        &mut self,
+        color: crate::modifier::Color,
+        shape: Option<RoundedCornerShape>,
+        site: &DrawSite,
+        slices: &ModifierNodeSlices,
+    ) {
+        let corner_shape = shape.or_else(|| self.pending_shape.take());
+        if shape.is_some() {
+            self.last_shape = shape;
+        }
+        self.slots.push(BackgroundSlot {
+            color,
+            coordinator: site.coordinator.clone(),
+            insert_index: slices.draw_commands.len(),
+            precedes_layer: slices.layer_draw_boundary.is_none(),
+            corner_shape,
         });
-        slices.insert_background_draw(
-            self.insert_index,
-            self.precedes_layer,
-            DrawCommand::Behind(draw_cmd),
-        );
+    }
+
+    fn shape(&mut self, shape: RoundedCornerShape) {
+        self.last_shape = Some(shape);
+        match self.slots.last_mut() {
+            Some(slot) => slot.corner_shape = Some(shape),
+            None => self.pending_shape = Some(shape),
+        }
+    }
+
+    /// Inserts every background at its place, the last first so the places
+    /// of those before it still hold.
+    fn insert_into(self, slices: &mut ModifierNodeSlices) {
+        slices.corner_shape = self.last_shape;
+        for slot in self.slots.into_iter().rev() {
+            let BackgroundSlot {
+                color,
+                coordinator,
+                insert_index,
+                precedes_layer,
+                corner_shape,
+            } = slot;
+            let draw_cmd = Rc::new(move |scope: &mut cranpose_ui_graphics::DrawScopeDefault| {
+                use cranpose_ui_graphics::{CornerRadii, DrawScope as _};
+
+                use crate::modifier::Brush;
+
+                let rect = coordinator.rect(scope.size());
+                let brush = Brush::solid(color);
+                if let Some(shape) = corner_shape {
+                    let radii: CornerRadii = shape.resolve(rect.width, rect.height);
+                    scope.draw_round_rect_at(rect, brush, radii);
+                } else {
+                    scope.draw_rect_at(rect, brush);
+                }
+            });
+            slices.insert_background_draw(
+                insert_index,
+                precedes_layer,
+                DrawCommand::Behind(draw_cmd),
+            );
+        }
     }
 }
 
@@ -713,21 +756,15 @@ fn collect_draw_node(
     node: &dyn cranpose_foundation::ModifierNode,
     site: &DrawSite,
     slices: &mut ModifierNodeSlices,
-    background: &mut BackgroundSlot,
+    backgrounds: &mut Backgrounds,
 ) {
     let any = node.as_any();
     if let Some(bg_node) = any.downcast_ref::<BackgroundNode>() {
-        background.color = Some(bg_node.color());
-        background.coordinator = site.coordinator.clone();
-        background.insert_index = Some(slices.draw_commands.len());
-        background.precedes_layer = slices.layer_draw_boundary.is_none();
-        if bg_node.shape().is_some() {
-            background.corner_shape = bg_node.shape();
-        }
+        backgrounds.push(bg_node.color(), bg_node.shape(), site, slices);
     }
 
     if let Some(shape_node) = any.downcast_ref::<CornerShapeNode>() {
-        background.corner_shape = Some(shape_node.shape());
+        backgrounds.shape(shape_node.shape());
     }
 
     if let Some(commands) = any.downcast_ref::<DrawCommandNode>() {

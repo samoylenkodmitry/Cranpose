@@ -99,6 +99,85 @@ fn a_background_before_padding_fills_the_node() {
     );
 }
 
+/// Whether each background the chain draws is rounded, in draw order.
+fn rounded_backgrounds(modifier: Modifier) -> Vec<bool> {
+    let size = Size {
+        width: 20.0,
+        height: 10.0,
+    };
+    collect_slices_from_modifier(&modifier)
+        .draw_commands()
+        .iter()
+        .flat_map(|command| recorded(command, size))
+        .filter_map(|primitive| match primitive {
+            DrawPrimitive::Rect { .. } => Some(false),
+            DrawPrimitive::RoundRect { .. } => Some(true),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn every_background_of_a_chain_draws_in_its_own_rect() {
+    let rects = drawn_rects(
+        Modifier::empty()
+            .background(Color::WHITE)
+            .padding(2.0)
+            .background(Color::BLACK),
+    );
+    assert_eq!(
+        rects,
+        [
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 20.0,
+                height: 10.0,
+            },
+            Rect {
+                x: 2.0,
+                y: 2.0,
+                width: 16.0,
+                height: 6.0,
+            },
+        ]
+    );
+}
+
+#[test]
+fn a_corner_shape_rounds_the_background_before_it_or_else_the_next() {
+    assert_eq!(
+        rounded_backgrounds(
+            Modifier::empty()
+                .background(Color::WHITE)
+                .rounded_corners(3.0)
+                .padding(1.0)
+                .background(Color::BLACK),
+        ),
+        [true, false]
+    );
+    assert_eq!(
+        rounded_backgrounds(
+            Modifier::empty()
+                .rounded_corners(3.0)
+                .background(Color::WHITE)
+                .padding(1.0)
+                .background(Color::BLACK),
+        ),
+        [true, false]
+    );
+    assert_eq!(
+        rounded_backgrounds(
+            Modifier::empty()
+                .background(Color::WHITE)
+                .padding(1.0)
+                .background(Color::BLACK)
+                .rounded_corners(3.0),
+        ),
+        [false, true]
+    );
+}
+
 #[test]
 fn a_draw_after_padding_sees_and_fills_the_padded_rect() {
     let seen = Rc::new(RefCell::new(Vec::new()));
