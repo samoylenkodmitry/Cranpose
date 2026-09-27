@@ -47,6 +47,7 @@ runners! {
     robot_async_tab_bug,
     robot_click_drag,
     robot_color_fidelity,
+    robot_compose_twin_scenes,
     robot_composition_local_disappear,
     robot_conditional_infinite_transition_busy,
     robot_content_type_reuse,
