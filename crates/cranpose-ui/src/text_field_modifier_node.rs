@@ -259,8 +259,6 @@ pub(crate) fn range_visual_line_rects(
     style: &TextStyle,
     node_id: Option<cranpose_core::NodeId>,
     wrap_width: Option<f32>,
-    padding_left: f32,
-    padding_top: f32,
     pan: f32,
     line_height: f32,
     start: usize,
@@ -291,20 +289,18 @@ pub(crate) fn range_visual_line_rects(
             style,
         )
         .width
-            + padding_left
             - pan;
         let x1 = crate::text::measure_text(
             &crate::text::AnnotatedString::from(&text[line_start..seg_end]),
             style,
         )
         .width
-            + padding_left
             - pan;
         let width = x1 - x0;
         if width > 0.0 {
             rects.push(cranpose_ui_graphics::Rect {
                 x: x0,
-                y: padding_top + line_idx as f32 * line_height,
+                y: line_idx as f32 * line_height,
                 width,
                 height: line_height,
             });
@@ -989,21 +985,22 @@ impl LayoutModifierNode for TextFieldModifierNode {
     }
 }
 
+/// The field's content viewport: its measured text area, or the draw
+/// scope's size before the first measure. The draw scope is the field's
+/// content rect, already inside the padding declared before the field.
 fn content_viewport(
     measured: cranpose_ui_graphics::Size,
     size: cranpose_foundation::Size,
-    padding_left: f32,
-    padding_top: f32,
 ) -> (f32, f32) {
     let width = if measured.width > 0.0 {
         measured.width
     } else {
-        (size.width - padding_left).max(0.0)
+        size.width
     };
     let height = if measured.height > 0.0 {
         measured.height
     } else {
-        (size.height - padding_top).max(0.0)
+        size.height
     };
     (width, height)
 }
@@ -1054,12 +1051,9 @@ impl DrawModifierNode for TextFieldModifierNode {
 
             let text = state.text();
             let selection = state.selection();
-            let padding_left = content_offset.get();
-            let padding_top = content_y_offset.get();
             let line_height = cached_line_height.get();
 
-            let (viewport_width, viewport_height) =
-                content_viewport(measured_size.get(), size, padding_left, padding_top);
+            let (viewport_width, viewport_height) = content_viewport(measured_size.get(), size);
             let pan = pan_resolver(viewport_width);
 
             if let Some(controller) = &handle_controller {
@@ -1069,8 +1063,8 @@ impl DrawModifierNode for TextFieldModifierNode {
                     focused: true,
                     direct_manipulation: direct_manipulation.get(),
                     node_origin: node_origin.get(),
-                    padding_left,
-                    padding_top,
+                    padding_left: content_offset.get(),
+                    padding_top: content_y_offset.get(),
                     scroll_offset: pan,
                     line_height,
                     glyph_box: crate::text::glyph_line_box(&style, line_height),
@@ -1078,8 +1072,8 @@ impl DrawModifierNode for TextFieldModifierNode {
                 });
             }
             let clip_bounds = cranpose_ui_graphics::Rect {
-                x: padding_left,
-                y: padding_top,
+                x: 0.0,
+                y: 0.0,
                 width: viewport_width,
                 height: viewport_height,
             };
@@ -1099,8 +1093,6 @@ impl DrawModifierNode for TextFieldModifierNode {
                         &style,
                         node_id.get(),
                         measured_wrap_width.get(),
-                        padding_left,
-                        padding_top,
                         pan,
                         line_height,
                         comp_start,
@@ -1138,10 +1130,9 @@ impl DrawModifierNode for TextFieldModifierNode {
                     &style,
                 )
                 .width
-                    + padding_left
                     - pan;
                 let (box_off, box_h) = crate::text::glyph_line_box(&style, line_height);
-                let cursor_y = padding_top + line_index as f32 * line_height + box_off;
+                let cursor_y = line_index as f32 * line_height + box_off;
 
                 let cursor_rect = cranpose_ui_graphics::Rect {
                     x: cursor_x,
@@ -1170,8 +1161,6 @@ impl DrawModifierNode for TextFieldModifierNode {
 
         let is_focused = self.refs.is_focused.clone();
         let state = self.state;
-        let content_offset = self.refs.content_offset.clone();
-        let content_y_offset = self.refs.content_y_offset.clone();
         let selection_brush = self.selection_brush.clone();
         let style = self.style.clone();
         let cached_line_height = self.measured_line_height.clone();
@@ -1190,15 +1179,12 @@ impl DrawModifierNode for TextFieldModifierNode {
                 return;
             }
             let text = state.text();
-            let padding_left = content_offset.get();
-            let padding_top = content_y_offset.get();
             let line_height = cached_line_height.get();
-            let (viewport_width, viewport_height) =
-                content_viewport(measured_size.get(), size, padding_left, padding_top);
+            let (viewport_width, viewport_height) = content_viewport(measured_size.get(), size);
             let pan = pan_resolver(viewport_width);
             let clip_bounds = cranpose_ui_graphics::Rect {
-                x: padding_left,
-                y: padding_top,
+                x: 0.0,
+                y: 0.0,
                 width: viewport_width,
                 height: viewport_height,
             };
@@ -1210,8 +1196,6 @@ impl DrawModifierNode for TextFieldModifierNode {
                 &style,
                 node_id.get(),
                 measured_wrap_width.get(),
-                padding_left,
-                padding_top,
                 pan,
                 line_height,
                 selection.min(),
