@@ -1949,6 +1949,7 @@ pub(crate) struct FrameExecutor<'r, 'c, C: FrameCommandRecorder> {
     renderer: &'r mut GpuRenderer,
     recorder: &'c mut C,
     transients: Vec<(FrameTextureDescriptor, Rc<OffscreenTarget>)>,
+    early_submitted: bool,
     empty_scene: CompositorScene,
     depth: usize,
     admitted_pixels: u64,
@@ -2477,6 +2478,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             renderer,
             recorder,
             transients: Vec::new(),
+            early_submitted: false,
             empty_scene: CompositorScene::new(),
             depth: 0,
             admitted_pixels: 0,
@@ -2799,7 +2801,8 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             first_run_window,
         };
         self.encode_flush(pass, flush, load_op.unwrap_or(wgpu::LoadOp::Load))?;
-        if std::env::var_os("CRANPOSE_EXP_EARLY_SUBMIT").is_some() {
+        if !self.early_submitted && std::env::var_os("CRANPOSE_EXP_EARLY_SUBMIT").is_some() {
+            self.early_submitted = true;
             self.renderer.flush_frame_uploads();
             self.recorder.submit_recorded();
         }
