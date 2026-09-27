@@ -44,6 +44,7 @@ fn queue_glyph(renderer: &mut GpuRenderer, key: u64, x: f32, commands: &mut Vec<
             offset: [0.0, 0.0],
             transform: SegmentTransform::IDENTITY,
             origin: [0.0; 2],
+            depth_base: 0.0,
         },
         Rect {
             x,
@@ -74,7 +75,17 @@ fn draw_queued(renderer: &mut GpuRenderer, commands: &[GlyphDrawCmd]) -> wgpu::T
             &view,
             wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
         );
-        renderer.draw_glyph_cmds(&mut pass, None, 0, commands, None, (8, 8))
+        renderer.draw_glyph_cmds(
+            &mut pass,
+            None,
+            0,
+            commands,
+            None,
+            crate::render::PassFrame {
+                size: (8, 8),
+                depth: false,
+            },
+        )
     });
     WgpuFrameGraphExecutor::new()
         .execute_recorded_graph(&renderer.device, &renderer.queue, graph)
@@ -220,6 +231,7 @@ fn viewport(transform: SegmentTransform) -> ViewportUniformParams {
         offset: [10.0, 20.0],
         transform,
         origin: [0.0; 2],
+        depth_base: 0.0,
     }
 }
 
@@ -562,8 +574,8 @@ fn labels_between_shapes_they_do_not_touch_draw_in_one_batch() {
         "the second label shows over its card"
     );
     assert_eq!(
-        draws, 3,
-        "one shape draw and one glyph draw for both cards, plus the clear"
+        draws, 4,
+        "one interior pre-pass draw, one shape draw and one glyph draw for both cards, plus the clear"
     );
 }
 

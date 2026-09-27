@@ -917,6 +917,38 @@ pub(crate) trait FrameCommandRecorder {
             ..Default::default()
         })
     }
+
+    /// A color pass like [`Self::begin_color_pass`] with a transient depth
+    /// buffer that starts at the far plane and is discarded after.
+    fn begin_depth_pass<'p>(
+        &'p mut self,
+        label: &'static str,
+        view: &wgpu::TextureView,
+        load_op: wgpu::LoadOp<wgpu::Color>,
+        depth: &wgpu::TextureView,
+    ) -> wgpu::RenderPass<'p> {
+        self.begin_timed_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some(label),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: load_op,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: depth,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(1.0),
+                    store: wgpu::StoreOp::Discard,
+                }),
+                stencil_ops: None,
+            }),
+            ..Default::default()
+        })
+    }
     fn upload_uniform(
         &mut self,
         id: UploadAllocatorId,

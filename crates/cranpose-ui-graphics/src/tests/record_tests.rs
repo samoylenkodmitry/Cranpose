@@ -711,6 +711,96 @@ fn the_record_is_seven_rows() {
     assert_eq!(std::mem::size_of::<GradientStopRecord>(), 32);
 }
 
+fn only_segment_occluders(record: impl FnOnce(&mut ShapeRecorder)) -> bool {
+    let mut recorder = ShapeRecorder::default();
+    record(&mut recorder);
+    let segments = &recorder.tables().segments;
+    assert_eq!(segments.len(), 1, "one segment: {segments:?}");
+    segments[0].occluders
+}
+
+fn opaque() -> Brush {
+    Brush::Solid(Color(0.1, 0.2, 0.3, 1.0))
+}
+
+#[test]
+fn opaque_backgrounds_and_cards_mark_their_segment_as_occluding() {
+    assert!(only_segment_occluders(|recorder| {
+        recorder.push_rect(
+            rect(0.0, 0.0, 300.0, 200.0),
+            &opaque(),
+            None,
+            BlendMode::SrcOver,
+        );
+    }));
+    assert!(only_segment_occluders(|recorder| {
+        recorder.push_round_rect(
+            rect(0.0, 0.0, 120.0, 80.0),
+            &opaque(),
+            CornerRadii::uniform(12.0),
+            None,
+            BlendMode::SrcOver,
+        );
+    }));
+}
+
+type Recording = Box<dyn FnOnce(&mut ShapeRecorder)>;
+
+#[test]
+fn circles_chips_translucent_gradient_and_stroked_fills_occlude_nothing() {
+    let unmarked: [Recording; 5] = [
+        Box::new(|recorder| {
+            recorder.push_round_rect(
+                rect(0.0, 0.0, 200.0, 200.0),
+                &opaque(),
+                CornerRadii::uniform(100.0),
+                None,
+                BlendMode::SrcOver,
+            );
+        }),
+        Box::new(|recorder| {
+            recorder.push_round_rect(
+                rect(0.0, 0.0, 50.0, 20.0),
+                &opaque(),
+                CornerRadii::uniform(2.0),
+                None,
+                BlendMode::SrcOver,
+            );
+        }),
+        Box::new(|recorder| {
+            recorder.push_rect(
+                rect(0.0, 0.0, 300.0, 200.0),
+                &solid(),
+                None,
+                BlendMode::SrcOver,
+            );
+        }),
+        Box::new(|recorder| {
+            recorder.push_rect(
+                rect(0.0, 0.0, 300.0, 200.0),
+                &linear_explicit(),
+                None,
+                BlendMode::SrcOver,
+            );
+        }),
+        Box::new(|recorder| {
+            recorder.push_rect(
+                rect(0.0, 0.0, 300.0, 200.0),
+                &opaque(),
+                Some(Stroke {
+                    width: 4.0,
+                    cap: StrokeCap::Butt,
+                    join: StrokeJoin::Miter,
+                }),
+                BlendMode::SrcOver,
+            );
+        }),
+    ];
+    for record in unmarked {
+        assert!(!only_segment_occluders(record));
+    }
+}
+
 fn only_segment_interiors(record: impl FnOnce(&mut ShapeRecorder)) -> bool {
     let mut recorder = ShapeRecorder::default();
     record(&mut recorder);

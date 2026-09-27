@@ -4448,14 +4448,28 @@ fn android_frames_reach_the_present_thread_before_accessibility_syncs() {
     );
 }
 
-#[test]
-fn android_gpu_pass_timing_is_reachable_from_a_system_property() {
+/// Asserts that the Android system property `property` seeds the renderer
+/// toggle `variable`, so a device switches it without a rebuilt APK.
+fn assert_property_backed(property: &str, variable: &str) {
     let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let source = std::fs::read_to_string(crate_dir.join("src/android_frame_telemetry.rs"))
         .expect("read Android frame telemetry source");
-
+    let compact: String = source.split_whitespace().collect();
     assert!(
-        source.contains("(\"debug.cranpose.gpu_pass_timing\", \"CRANPOSE_GPU_PASS_TIMING\")"),
-        "per-pass GPU timing must be switchable on a device without a rebuilt APK"
+        compact.contains(&format!("(\"{property}\",\"{variable}\"")),
+        "{variable} must be switchable on a device through {property}"
+    );
+}
+
+#[test]
+fn android_gpu_pass_timing_is_reachable_from_a_system_property() {
+    assert_property_backed("debug.cranpose.gpu_pass_timing", "CRANPOSE_GPU_PASS_TIMING");
+}
+
+#[test]
+fn android_opaque_interior_pre_pass_is_switchable_from_a_system_property() {
+    assert_property_backed(
+        "debug.cranpose.no_interiors_first",
+        "CRANPOSE_NO_INTERIORS_FIRST",
     );
 }

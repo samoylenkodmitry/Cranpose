@@ -304,3 +304,18 @@ fn the_uniform_chunk_sizes_in_the_shader_match_the_run_store() {
     assert!(super::SHADER.contains(&format!("array<GradientStop, {STOP_CHUNK}>")));
     assert!(super::SHADER.contains(&format!("array<Placement, {PLACEMENT_CHUNK}>")));
 }
+
+#[test]
+fn shapes_glyphs_and_images_share_one_depth_step() {
+    let step = "const DEPTH_STEP: f32 = 1.0 / 1048576.0;";
+    for (name, source) in [
+        ("shape", SHADER),
+        ("glyph", GLYPH_ATLAS_SHADER),
+        ("image", IMAGE_SHADER),
+    ] {
+        assert!(
+            source.contains(step),
+            "the {name} shader must order its draws on the shapes' depth step"
+        );
+    }
+}

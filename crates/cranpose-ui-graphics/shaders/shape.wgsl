@@ -508,28 +508,106 @@ fn pinned(position: vec2<f32>) -> VertexOutput {
     return output;
 }
 
+// Depth steps one record apart: 2^-20, a whole number of ulps below 1, so
+// every record's depth is exact and interpolation cannot reorder two.
+const DEPTH_STEP: f32 = 1.0 / 1048576.0;
+
+// The depth of the record at `instance`: its place in the pass's draw
+// order, counted from the batch's first record in `uniforms.reserved.x`,
+// nearer for later records and a step nearer than the cleared far plane.
+// Records past the 2^20 the range holds sit on the near plane: they pass
+// every test, so they paint in order, and never occlude.
+fn record_depth(instance: u32) -> f32 {
+    return max(1.0 - (uniforms.reserved.x + f32(instance) + 1.0) * DEPTH_STEP, 0.0);
+}
+
+fn placed_record_vertex(record: ShapeRecord, local: u32, instance: u32) -> VertexOutput {
+    var output = record_vertex(record, local);
+    output.clip_position.z = record_depth(instance);
+    return output;
+}
+
 @vertex
 fn vs_record(
     @builtin(vertex_index) vertex_idx: u32,
+    @builtin(instance_index) instance: u32,
     record: ShapeRecord,
 ) -> VertexOutput {
-    return record_vertex(record, vertex_idx);
+    return placed_record_vertex(record, vertex_idx, instance);
 }
 
 @vertex
 fn vs_record_solid(
     @builtin(vertex_index) vertex_idx: u32,
+    @builtin(instance_index) instance: u32,
     record: ShapeRecord,
 ) -> SolidOutput {
-    return solid_output(record_vertex(record, vertex_idx));
+    return solid_output(placed_record_vertex(record, vertex_idx, instance));
 }
 
 @vertex
 fn vs_record_gradient_fill(
     @builtin(vertex_index) vertex_idx: u32,
+    @builtin(instance_index) instance: u32,
     record: ShapeRecord,
 ) -> GradientFillOutput {
-    return gradient_fill_output(record_vertex(record, vertex_idx));
+    return gradient_fill_output(placed_record_vertex(record, vertex_idx, instance));
+}
+
+// The part of a solid, opaque fill every pixel of which the paint pass
+// covers with exactly its colour: the fill's interior within its clip. A
+// depth pre-pass draws it front to back, so what later records hide is
+// never shaded.
+struct InteriorOutput {
+    @builtin(position) clip_position: vec4<f32>,
+    @location(0) @interpolate(flat) color: vec4<f32>,
+}
+
+@vertex
+fn vs_record_interior(
+    @builtin(vertex_index) vertex_idx: u32,
+    @builtin(instance_index) instance: u32,
+    record: ShapeRecord,
+) -> InteriorOutput {
+    // A record with no opaque interior puts every vertex on one point, and
+    // the vertices a banded draw instances past a quad's four sit on its
+    // last corner, so neither rasterizes anything.
+    var output: InteriorOutput;
+    output.clip_position = vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    let kind = record.flags & 3u;
+    if (kind == RECORD_KIND_ARC || (record.flags & RECORD_STROKED) != 0u || record.brush != 0u) {
+        return output;
+    }
+    let depth = record_depth(instance);
+    let placement = record_placement(record);
+    let color = paint(record.color, placement);
+    if (color.a < 1.0 || depth <= 0.0) {
+        return output;
+    }
+    let geometry = record_geometry(record, placement);
+    let radii = select(vec4<f32>(0.0), resolved_radii(record, geometry.scale), kind == RECORD_KIND_ROUND_RECT);
+    var interior = fill_interior(geometry.rect, radii);
+    if ((placement.flags & PLACEMENT_CLIPPED) != 0u) {
+        let clip = placement.clip;
+        interior = vec4<f32>(
+            max(interior.xy, clip.xy),
+            min(interior.zw, clip.xy + clip.zw),
+        );
+    }
+    if (interior.z <= interior.x || interior.w <= interior.y) {
+        return output;
+    }
+    let local = min(vertex_idx, 3u);
+    let corner = vec2<f32>(f32(local >> 1u), f32(local & 1u));
+    output.clip_position = clip_position(mix(interior.xy, interior.zw, corner));
+    output.clip_position.z = depth;
+    output.color = color;
+    return output;
+}
+
+@fragment
+fn fs_interior(input: InteriorOutput) -> @location(0) vec4<f32> {
+    return input.color;
 }
 
 fn band_position(

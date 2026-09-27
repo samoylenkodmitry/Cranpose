@@ -180,9 +180,31 @@ composites the resolved textures.
   the Mali cut deep's GPU clock by a fifth. Only a batch with a rounded
   fill whose interior covers half its rect runs that test
   (`SHAPE_INTERIOR`); a batch of small circles and plain rects folds it
-  out, since there it only costs, as it did the watch's Megaboss. Contract
-  `shape_variant_parity.rs` (zero bytes; a wrong varying or fixed brush
-  fails by 10^5 bytes).
+  out, since there it only costs, as it did the watch's Megaboss. A draw
+  takes the next records whose key differs only in that test, up to 16
+  that did not ask for it, so a card's chips share its background's draw.
+  Contract `shape_variant_parity.rs` (zero bytes; a wrong varying or fixed
+  brush fails by 10^5 bytes).
+- **Opaque interiors first**: a pass without composites that draws an
+  occluder (a solid opaque fill whose interior spans `OCCLUDER_MIN_AREA`,
+  1024 logical px², marked per segment at record time) gets a transient
+  `Depth32Float` buffer; only draws holding one lay interiors down, so a
+  field of circles or arcs pays nothing. Each shape record's depth is its place in the
+  pass's order, 2^-20 apart, from a per-batch base in the viewport
+  uniform plus its instance index. Before the paint, the solid source-over
+  fills' interiors (inside their clip, alpha exactly 1) go down front to
+  back with depth writes (`vs_record_interior`), neighbouring draws that
+  share that pipeline as one call over their records and each record's
+  first quad (`planned_run_draws`); the paint then keeps its
+  order and tests `Less`, so what a later interior hides is never shaded
+  and the interior itself is not shaded twice. Glyph and image batches
+  take their own place in that order and test the same way: a flushed
+  glyph batch the next index, a retained glyph run the index where its
+  text was held. Nested backgrounds (deep) took the Mali from ~277 MHz to
+  its 139 MHz floor. Contract
+  `opaque_interiors.rs` (pixels equal with and without;
+  `CRANPOSE_NO_INTERIORS_FIRST=1`, `debug.cranpose.no_interiors_first`,
+  turns it off).
 - **Caches** (`LayerCache`, 96 MB LRU, bytes per texture through an
   `AllocationLedger`; the byte budget bounds it, the 4096-entry cap only
   guards the index): retained child layers (`raster_cache.rs`), blurred

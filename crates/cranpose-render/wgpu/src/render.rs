@@ -991,15 +991,80 @@ fn shape_variants_enabled() -> bool {
     !SHAPE_VARIANTS.equals("0")
 }
 
-/// A shape pipeline: its blend, tier and variant, and whether it draws a
-/// segment under a transform. Falling back to the general variant keeps the
-/// blend, tier and transform.
+/// What every draw of one pass shares: its target's size and whether the
+/// pass has a depth buffer its opaque interiors fill first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PassFrame {
+    pub(crate) size: (u32, u32),
+    pub(crate) depth: bool,
+}
+
+impl PassFrame {
+    /// The scissor a draw bounded by `scissor`, or by nothing, sets.
+    pub(crate) fn scissor(self, scissor: Option<(u32, u32, u32, u32)>) -> (u32, u32, u32, u32) {
+        scissor.unwrap_or((0, 0, self.size.0, self.size.1))
+    }
+}
+
+/// Which of a pass's two stages a shape draw records: the front-to-back
+/// opaque interiors, or the paint in draw order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RunStage {
+    Interiors,
+    Paint,
+}
+
+/// The depth buffer of a pass that lays opaque interiors down first.
+pub(crate) const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+
+/// How a pipeline meets its pass's depth buffer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum ShapeDepth {
+    /// The pass has no depth buffer.
+    Off,
+    /// Paints what the opaque interiors of later records leave visible.
+    Tested,
+    /// Lays down opaque interiors, front to back, ahead of the paint.
+    Interior,
+}
+
+impl ShapeDepth {
+    fn stencil_state(self) -> Option<wgpu::DepthStencilState> {
+        let (depth_write_enabled, depth_compare) = match self {
+            Self::Off => return None,
+            Self::Tested => (false, wgpu::CompareFunction::Less),
+            Self::Interior => (true, wgpu::CompareFunction::Less),
+        };
+        Some(wgpu::DepthStencilState {
+            format: DEPTH_FORMAT,
+            depth_write_enabled: Some(depth_write_enabled),
+            depth_compare: Some(depth_compare),
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        })
+    }
+}
+
+/// The depth state of a glyph or image pipeline: in a pass with a depth
+/// buffer it paints what later opaque interiors leave visible, as shapes do.
+fn overlay_depth_state(depth: bool) -> Option<wgpu::DepthStencilState> {
+    if depth {
+        ShapeDepth::Tested.stencil_state()
+    } else {
+        None
+    }
+}
+
+/// A shape pipeline: its blend, tier and variant, whether it draws a
+/// segment under a transform, and its depth use. Falling back to the
+/// general variant keeps the blend, tier, transform and depth.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct ShapePipelineKey {
     pub(crate) blend_mode: BlendMode,
     pub(crate) tier: RunTier,
     pub(crate) variant: ShapeVariant,
     pub(crate) transformed: bool,
+    pub(crate) depth: ShapeDepth,
 }
 
 impl ShapePipelineKey {
@@ -1010,7 +1075,23 @@ impl ShapePipelineKey {
             tier,
             variant: ShapeVariant::GENERAL,
             transformed: false,
+            depth: ShapeDepth::Off,
         }
+    }
+
+    /// The pipeline that lays down the opaque interiors of this key's
+    /// draws, if they have any: plain source-over draws off any transform.
+    pub(crate) fn interior(self) -> Option<Self> {
+        (self.depth == ShapeDepth::Tested
+            && self.blend_mode == BlendMode::SrcOver
+            && !self.transformed
+            && !self.variant.ablation.material
+            && !self.variant.ablation.fill)
+            .then_some(Self {
+                variant: self.variant.general(),
+                depth: ShapeDepth::Interior,
+                ..self
+            })
     }
 
     pub(crate) fn general(self) -> Self {
@@ -1050,6 +1131,7 @@ pub(crate) fn create_shape_pipeline(
         tier,
         variant,
         transformed,
+        depth,
     } = key;
     let constants = [
         ("SHAPE_KIND_FIXED", variant.kind.map_or(-1.0, f64::from)),
@@ -1063,7 +1145,12 @@ pub(crate) fn create_shape_pipeline(
         ("SHAPE_DISCARD", f64::from(u8::from(variant.ablation.fill))),
         ("SHAPE_TRANSFORMED", f64::from(u8::from(transformed))),
     ];
-    let (vertex_entry, fragment_entry) = variant.entries();
+    let (vertex_entry, fragment_entry) = if depth == ShapeDepth::Interior {
+        ("vs_record_interior", "fs_interior")
+    } else {
+        variant.entries()
+    };
+    let blend = (depth != ShapeDepth::Interior).then(|| blend_state_for_mode(blend_mode));
     let instance_layout = record_vertex_layouts().map(Some);
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("Shape Shader"),
@@ -1080,7 +1167,7 @@ pub(crate) fn create_shape_pipeline(
         device,
         cache,
         &format!(
-            "shape blend={blend_mode:?} tier={tier:?} variant={variant:?} transformed={transformed}"
+            "shape blend={blend_mode:?} tier={tier:?} variant={variant:?} transformed={transformed} depth={depth:?}"
         ),
         wgpu::RenderPipelineDescriptor {
             label: Some("Shape Pipeline"),
@@ -1103,7 +1190,7 @@ pub(crate) fn create_shape_pipeline(
                 },
                 targets: &[Some(wgpu::ColorTargetState {
                     format: surface_format,
-                    blend: Some(blend_state_for_mode(blend_mode)),
+                    blend,
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),
@@ -1116,7 +1203,7 @@ pub(crate) fn create_shape_pipeline(
                 polygon_mode: wgpu::PolygonMode::Fill,
                 conservative: false,
             },
-            depth_stencil: None,
+            depth_stencil: depth.stencil_state(),
             multisample: wgpu::MultisampleState::default(),
             multiview_mask: None,
             cache: None,
@@ -1130,6 +1217,7 @@ fn create_image_pipeline(
     uniform_layout: &wgpu::BindGroupLayout,
     image_layout: &wgpu::BindGroupLayout,
     blend_mode: BlendMode,
+    depth: bool,
 ) -> wgpu::RenderPipeline {
     let image_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("Image Shader"),
@@ -1145,7 +1233,7 @@ fn create_image_pipeline(
     create_render_pipeline_logged(
         device,
         cache,
-        &format!("image blend={blend_mode:?}"),
+        &format!("image blend={blend_mode:?} depth={depth}"),
         wgpu::RenderPipelineDescriptor {
             label: Some("Image Pipeline"),
             layout: Some(&image_pipeline_layout),
@@ -1174,7 +1262,7 @@ fn create_image_pipeline(
                 polygon_mode: wgpu::PolygonMode::Fill,
                 conservative: false,
             },
-            depth_stencil: None,
+            depth_stencil: overlay_depth_state(depth),
             multisample: wgpu::MultisampleState::default(),
             multiview_mask: None,
             cache: None,
@@ -1188,6 +1276,7 @@ fn create_glyph_atlas_pipeline(
     surface_format: wgpu::TextureFormat,
     uniform_layout: &wgpu::BindGroupLayout,
     image_layout: &wgpu::BindGroupLayout,
+    depth: bool,
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("Glyph Atlas Shader"),
@@ -1203,7 +1292,11 @@ fn create_glyph_atlas_pipeline(
     create_render_pipeline_logged(
         device,
         cache,
-        "glyph-atlas",
+        if depth {
+            "glyph-atlas depth"
+        } else {
+            "glyph-atlas"
+        },
         wgpu::RenderPipelineDescriptor {
             label: Some("Glyph Atlas Pipeline"),
             layout: Some(&pipeline_layout),
@@ -1232,7 +1325,7 @@ fn create_glyph_atlas_pipeline(
                 polygon_mode: wgpu::PolygonMode::Fill,
                 conservative: false,
             },
-            depth_stencil: None,
+            depth_stencil: overlay_depth_state(depth),
             multisample: wgpu::MultisampleState::default(),
             multiview_mask: None,
             cache: None,
@@ -1320,7 +1413,7 @@ impl Uniforms {
             viewport_offset: params.offset,
             transform,
             translation,
-            reserved: [0.0; 2],
+            reserved: [params.depth_base, 0.0],
             inverse,
             origin: params.origin,
             origin_reserved: [0.0; 2],
@@ -1811,6 +1904,9 @@ pub(crate) struct ViewportUniformParams {
     /// drawn under a transform, whose vertices sit at its raster origin. The
     /// sum is the one the shared path writes, so both draw the same pixels.
     pub(crate) origin: [f32; 2],
+    /// The pass-order index of the batch's first shape record, from which
+    /// each record's depth counts.
+    pub(crate) depth_base: f32,
 }
 
 impl ViewportUniformParams {
@@ -1950,9 +2046,13 @@ pub struct GpuRenderer {
     adapter_backend: wgpu::Backend,
     pipeline_cache: Option<wgpu::PipelineCache>,
     shape_pipelines: ShapePipelines,
-    image_pipeline: LazyGpuResource<wgpu::RenderPipeline>,
-    image_pipeline_dst_out: LazyGpuResource<wgpu::RenderPipeline>,
-    glyph_atlas_pipeline: LazyGpuResource<wgpu::RenderPipeline>,
+    /// Image and glyph pipelines for passes without and with a depth buffer.
+    image_pipeline: [LazyGpuResource<wgpu::RenderPipeline>; 2],
+    image_pipeline_dst_out: [LazyGpuResource<wgpu::RenderPipeline>; 2],
+    glyph_atlas_pipeline: [LazyGpuResource<wgpu::RenderPipeline>; 2],
+    /// Transient depth buffers by target size, for passes that lay opaque
+    /// interiors down first.
+    depth_targets: Vec<((u32, u32), wgpu::TextureView)>,
     uniform_bind_group_layout: wgpu::BindGroupLayout,
     image_bind_group_layout: wgpu::BindGroupLayout,
     image_nearest_sampler: wgpu::Sampler,
@@ -2174,9 +2274,19 @@ impl GpuRenderer {
             adapter_backend,
             pipeline_cache,
             shape_pipelines,
-            image_pipeline: LazyGpuResource::new("image/src-over"),
-            image_pipeline_dst_out: LazyGpuResource::new("image/dst-out"),
-            glyph_atlas_pipeline: LazyGpuResource::new("glyph/atlas"),
+            image_pipeline: [
+                LazyGpuResource::new("image/src-over"),
+                LazyGpuResource::new("image/src-over/depth"),
+            ],
+            image_pipeline_dst_out: [
+                LazyGpuResource::new("image/dst-out"),
+                LazyGpuResource::new("image/dst-out/depth"),
+            ],
+            glyph_atlas_pipeline: [
+                LazyGpuResource::new("glyph/atlas"),
+                LazyGpuResource::new("glyph/atlas/depth"),
+            ],
+            depth_targets: Vec::new(),
             uniform_bind_group_layout,
             image_bind_group_layout,
             image_nearest_sampler,
@@ -2261,16 +2371,19 @@ impl GpuRenderer {
     fn image_pipeline_resource(
         &self,
         blend_mode: BlendMode,
+        depth: bool,
     ) -> &LazyGpuResource<wgpu::RenderPipeline> {
-        match blend_mode {
+        let pipelines = match blend_mode {
             BlendMode::DstOut => &self.image_pipeline_dst_out,
             _ => &self.image_pipeline,
-        }
+        };
+        &pipelines[usize::from(depth)]
     }
 
     fn image_pipeline_job(
         &self,
         blend_mode: BlendMode,
+        depth: bool,
     ) -> impl FnOnce() -> wgpu::RenderPipeline + CompilerSend + 'static {
         let device = Arc::clone(&self.device);
         let cache = self.pipeline_cache.clone();
@@ -2285,19 +2398,25 @@ impl GpuRenderer {
                 &uniform_layout,
                 &image_layout,
                 blend_mode,
+                depth,
             )
         }
     }
 
-    fn image_pipeline(&self, blend_mode: BlendMode) -> &wgpu::RenderPipeline {
-        self.image_pipeline_resource(blend_mode)
+    pub(crate) fn image_pipeline(
+        &self,
+        blend_mode: BlendMode,
+        depth: bool,
+    ) -> &wgpu::RenderPipeline {
+        self.image_pipeline_resource(blend_mode, depth)
             .get_or_init(self.adapter_backend, || {
-                self.image_pipeline_job(blend_mode)()
+                self.image_pipeline_job(blend_mode, depth)()
             })
     }
 
     fn glyph_atlas_pipeline_job(
         &self,
+        depth: bool,
     ) -> impl FnOnce() -> wgpu::RenderPipeline + CompilerSend + 'static {
         let device = Arc::clone(&self.device);
         let cache = self.pipeline_cache.clone();
@@ -2311,13 +2430,55 @@ impl GpuRenderer {
                 format,
                 &uniform_layout,
                 &image_layout,
+                depth,
             )
         }
     }
 
-    fn glyph_atlas_pipeline(&self) -> &wgpu::RenderPipeline {
-        self.glyph_atlas_pipeline
-            .get_or_init(self.adapter_backend, || self.glyph_atlas_pipeline_job()())
+    fn glyph_atlas_pipeline(&self, depth: bool) -> &wgpu::RenderPipeline {
+        self.glyph_atlas_pipeline[usize::from(depth)].get_or_init(self.adapter_backend, || {
+            self.glyph_atlas_pipeline_job(depth)()
+        })
+    }
+
+    /// The transient depth buffer for a target of `size`, created on first
+    /// use; a few sizes are kept, the most recent first.
+    pub(crate) fn depth_target(&mut self, size: (u32, u32)) -> wgpu::TextureView {
+        const KEPT_DEPTH_TARGETS: usize = 4;
+        if let Some(index) = self
+            .depth_targets
+            .iter()
+            .position(|(kept, _)| *kept == size)
+        {
+            let entry = self.depth_targets.remove(index);
+            let view = entry.1.clone();
+            self.depth_targets.insert(0, entry);
+            return view;
+        }
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Opaque interior depth"),
+            size: wgpu::Extent3d {
+                width: size.0,
+                height: size.1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: DEPTH_FORMAT,
+            // A browser's WebGPU may not know the transient usage; every
+            // other backend takes it and ignores it where it saves nothing.
+            usage: if self.adapter_backend == wgpu::Backend::BrowserWebGpu {
+                wgpu::TextureUsages::RENDER_ATTACHMENT
+            } else {
+                wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TRANSIENT_ATTACHMENT
+            },
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        self.depth_targets.insert(0, (size, view.clone()));
+        self.depth_targets.truncate(KEPT_DEPTH_TARGETS);
+        view
     }
 
     fn ensure_image_cached(&mut self, image: &ImageBitmap) -> Result<(), String> {
@@ -3422,12 +3583,27 @@ impl GpuRenderer {
         tier: RunTier,
         ablation: ShapeAblation,
         transformed: bool,
+        depth: bool,
     ) -> ShapePipelineKey {
         ShapePipelineKey {
             blend_mode: supported_blend_mode(segment.blend),
             tier,
             variant: ShapeVariant::of_segment(segment, clipped, ablation),
             transformed,
+            depth: if depth {
+                ShapeDepth::Tested
+            } else {
+                ShapeDepth::Off
+            },
+        }
+    }
+
+    /// Prepares `key`'s pipeline and, in a pass with a depth buffer, the
+    /// one laying down its opaque interiors.
+    fn ensure_run_pipelines(&mut self, key: ShapePipelineKey) {
+        self.ensure_shape_pipeline(key);
+        if let Some(interior) = key.interior() {
+            self.ensure_shape_pipeline(interior);
         }
     }
 
@@ -3440,6 +3616,7 @@ impl GpuRenderer {
         viewport: ViewportUniformParams,
         root_scale: f32,
         window: &std::ops::Range<u32>,
+        depth: bool,
     ) -> StoreRunBatch {
         let command = run.command.expect("a stored run has a command");
         let clipped = run.placement.clip.is_some();
@@ -3450,7 +3627,14 @@ impl GpuRenderer {
             &self.device,
             run,
             &mut |segment| {
-                Self::run_pipeline_key(segment, clipped, RunTier::Store, ablation, transformed)
+                Self::run_pipeline_key(
+                    segment,
+                    clipped,
+                    RunTier::Store,
+                    ablation,
+                    transformed,
+                    depth,
+                )
             },
             &mut draws,
         );
@@ -3475,7 +3659,7 @@ impl GpuRenderer {
             self.viewport_uniforms
                 .claim(&self.device, &self.uniform_bind_group_layout, &uniforms);
         for draw in &draws {
-            self.ensure_shape_pipeline(draw.key);
+            self.ensure_run_pipelines(draw.key);
         }
         StoreRunBatch {
             command,
@@ -3486,6 +3670,11 @@ impl GpuRenderer {
 
     pub(crate) fn open_arena(&mut self) -> usize {
         self.run_store.open_arena()
+    }
+
+    /// The records the open arena chunk holds so far.
+    pub(crate) fn open_arena_records(&self) -> u32 {
+        self.run_store.open_arena_records()
     }
 
     pub(crate) fn arena_accepts(&self, chunk: usize, run: &RunDraw) -> bool {
@@ -3501,6 +3690,7 @@ impl GpuRenderer {
         window: std::ops::Range<u32>,
         root_scale: f32,
         transformed: bool,
+        depth: bool,
     ) -> u32 {
         let clipped = run.placement.clip.is_some();
         let ablation = self.ablation.shape;
@@ -3508,15 +3698,21 @@ impl GpuRenderer {
         let taken = self
             .run_store
             .append_arena(chunk, run, window, root_scale, &mut |segment| {
-                let key =
-                    Self::run_pipeline_key(segment, clipped, RunTier::Arena, ablation, transformed);
+                let key = Self::run_pipeline_key(
+                    segment,
+                    clipped,
+                    RunTier::Arena,
+                    ablation,
+                    transformed,
+                    depth,
+                );
                 if !keys.contains(&key) {
                     keys.push(key);
                 }
                 key
             });
         for key in keys {
-            self.ensure_shape_pipeline(key);
+            self.ensure_run_pipelines(key);
         }
         taken
     }
@@ -3536,15 +3732,47 @@ impl GpuRenderer {
         tables: ArenaBinding<'_>,
         uniform_slot: usize,
         draws: &[RunDrawCall],
-        target_size: (u32, u32),
-        scissor: Option<(u32, u32, u32, u32)>,
+        scissor: (u32, u32, u32, u32),
+        stage: RunStage,
     ) -> Result<(), String> {
-        if draws.is_empty() {
-            return Ok(());
+        match stage {
+            RunStage::Paint => {
+                if draws.is_empty() {
+                    return Ok(());
+                }
+                self.frame_stats.bump_shapes();
+                self.record_run_draws(
+                    pass,
+                    tables,
+                    uniform_slot,
+                    scissor,
+                    draws.iter().map(PlannedRunDraw::paint),
+                )
+            }
+            RunStage::Interiors => {
+                let planned = interior_run_draws(draws);
+                if planned.is_empty() {
+                    return Ok(());
+                }
+                self.frame_stats
+                    .shape_interior_draws
+                    .set(self.frame_stats.shape_interior_draws.get() + planned.len() as u32);
+                self.record_run_draws(pass, tables, uniform_slot, scissor, planned.into_iter())
+            }
         }
-        self.frame_stats.bump_shapes();
-        self.frame_stats.add_draw_calls(draws.len() as u32);
-        let (x, y, width, height) = scissor.unwrap_or((0, 0, target_size.0, target_size.1));
+    }
+
+    /// Records `planned` against one batch's tables, uniform and scissor.
+    fn record_run_draws(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        tables: ArenaBinding<'_>,
+        uniform_slot: usize,
+        scissor: (u32, u32, u32, u32),
+        planned: impl ExactSizeIterator<Item = PlannedRunDraw>,
+    ) -> Result<(), String> {
+        self.frame_stats.add_draw_calls(planned.len() as u32);
+        let (x, y, width, height) = scissor;
         pass.set_scissor_rect(x, y, width, height);
         self.viewport_uniforms.bind(pass, uniform_slot)?;
         pass.set_bind_group(1, tables.bind_group, &tables.offsets[2..]);
@@ -3552,16 +3780,17 @@ impl GpuRenderer {
             pass.set_vertex_buffer(slot as u32, buffer.slice(u64::from(tables.offsets[slot])..));
         }
         let mut bound_class = None;
-        for draw in draws {
+        for draw in planned {
+            let key = draw.key;
             let (pipeline, fallback) = self
                 .shape_pipelines
-                .get(draw.key)
-                .ok_or_else(|| format!("shape pipeline {:?} was not prepared", draw.key))?;
+                .get(key)
+                .ok_or_else(|| format!("shape pipeline {key:?} was not prepared"))?;
             if fallback {
                 self.frame_stats
                     .shape_pipeline_fallback_draws
                     .set(self.frame_stats.shape_pipeline_fallback_draws.get() + 1);
-            } else if !draw.key.is_general() {
+            } else if !key.is_general() {
                 self.frame_stats
                     .shape_specialized_draws
                     .set(self.frame_stats.shape_specialized_draws.get() + 1);
@@ -3574,7 +3803,7 @@ impl GpuRenderer {
                 bound_class = Some(draw.band_class);
             }
             pass.set_pipeline(pipeline);
-            pass.draw_indexed(draw.indices(), 0, draw.records.clone());
+            pass.draw_indexed(draw.indices, 0, draw.records);
         }
         Ok(())
     }
@@ -3583,8 +3812,8 @@ impl GpuRenderer {
         &self,
         pass: &mut wgpu::RenderPass<'_>,
         batch: &StoreRunBatch,
-        target_size: (u32, u32),
-        scissor: Option<(u32, u32, u32, u32)>,
+        scissor: (u32, u32, u32, u32),
+        stage: RunStage,
     ) -> Result<(), String> {
         let stored = self
             .run_store
@@ -3595,8 +3824,8 @@ impl GpuRenderer {
             stored.buffers.binding(),
             batch.uniform_slot,
             &batch.draws,
-            target_size,
             scissor,
+            stage,
         )
     }
 
@@ -3606,16 +3835,16 @@ impl GpuRenderer {
         chunk: usize,
         uniform_slot: usize,
         draws: &[RunDrawCall],
-        target_size: (u32, u32),
-        scissor: Option<(u32, u32, u32, u32)>,
+        scissor: (u32, u32, u32, u32),
+        stage: RunStage,
     ) -> Result<(), String> {
         self.draw_run_calls(
             pass,
             self.run_store.arena_binding(chunk),
             uniform_slot,
             draws,
-            target_size,
             scissor,
+            stage,
         )
     }
     #[cfg(not(target_arch = "wasm32"))]
@@ -3655,7 +3884,7 @@ impl GpuRenderer {
         image_slot: &ImageSlot,
         uniform_slot: usize,
         cmds: &[ImageDrawCmd],
-        blend_mode: BlendMode,
+        pipeline: &wgpu::RenderPipeline,
         bound: Option<(u32, u32, u32, u32)>,
     ) -> Result<(), String> {
         if cmds.is_empty() {
@@ -3663,7 +3892,7 @@ impl GpuRenderer {
         }
         self.frame_stats.bump_images();
         self.frame_stats.add_draw_calls(cmds.len() as u32);
-        pass.set_pipeline(self.image_pipeline(blend_mode));
+        pass.set_pipeline(pipeline);
         self.viewport_uniforms.bind(pass, uniform_slot)?;
         pass.set_index_buffer(image_slot.indices.slice(), wgpu::IndexFormat::Uint32);
         pass.set_vertex_buffer(0, image_slot.vertices.slice());
@@ -3689,14 +3918,14 @@ impl GpuRenderer {
         uniform_slot: usize,
         cmds: &[GlyphDrawCmd],
         bound: Option<(u32, u32, u32, u32)>,
-        target_size: (u32, u32),
+        frame: PassFrame,
     ) -> Result<(), String> {
         if cmds.is_empty() {
             return Ok(());
         }
-        let whole_target = bound.unwrap_or((0, 0, target_size.0, target_size.1));
+        let whole_target = frame.scissor(bound);
         self.frame_stats.bump_text();
-        pass.set_pipeline(self.glyph_atlas_pipeline());
+        pass.set_pipeline(self.glyph_atlas_pipeline(frame.depth));
         let mut bound_atlas = None;
         let mut shared_bound = false;
         let mut bound_run_instances: Option<&wgpu::Buffer> = None;
@@ -5268,6 +5497,56 @@ fn inner_shadow_composite_mask(
         )),
         radii,
     })
+}
+
+/// One draw call of a run batch's stage: its pipeline, the strip index
+/// buffer it binds and the indices and records it instances.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PlannedRunDraw {
+    pub(crate) key: ShapePipelineKey,
+    pub(crate) band_class: u8,
+    pub(crate) indices: std::ops::Range<u32>,
+    pub(crate) records: std::ops::Range<u32>,
+}
+
+impl PlannedRunDraw {
+    /// A draw of the paint, as it was recorded.
+    fn paint(draw: &RunDrawCall) -> Self {
+        Self {
+            key: draw.key,
+            band_class: draw.band_class,
+            indices: draw.indices(),
+            records: draw.records.clone(),
+        }
+    }
+}
+
+/// The draw calls laying a batch's opaque interiors down: the draws that
+/// have them, last first so they go down front to back, neighbours sharing
+/// the interior pipeline joined into one call over their records. That
+/// pipeline shades only a record's quad, the first two triangles of every
+/// band class's pattern.
+pub(crate) fn interior_run_draws(draws: &[RunDrawCall]) -> SmallVec<[PlannedRunDraw; 4]> {
+    let mut planned: SmallVec<[PlannedRunDraw; 4]> = SmallVec::new();
+    for draw in draws.iter().rev() {
+        let Some(key) = draw.interior_key() else {
+            continue;
+        };
+        if let Some(last) = planned.last_mut()
+            && last.key == key
+            && last.records.start == draw.records.end
+        {
+            last.records.start = draw.records.start;
+            continue;
+        }
+        planned.push(PlannedRunDraw {
+            key,
+            band_class: draw.band_class,
+            indices: 0..cranpose_ui_graphics::strip_indices(1),
+            records: draw.records.clone(),
+        });
+    }
+    planned
 }
 
 fn window_draws(draws: &mut SmallVec<[RunDrawCall; 8]>, window: &std::ops::Range<u32>) {
