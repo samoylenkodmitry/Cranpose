@@ -1639,7 +1639,7 @@ fn a_prepared_layout_converts_its_render_text_once() {
     };
     let untouched = layout.clone();
     let first = layout.render_text();
-    assert_eq!(first.text, "shown");
+    assert_eq!(first.text(), "shown");
     assert!(std::sync::Arc::ptr_eq(&first, &layout.render_text()));
     assert_eq!(
         layout, untouched,
