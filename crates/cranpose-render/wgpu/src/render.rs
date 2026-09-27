@@ -2867,6 +2867,7 @@ impl GpuRenderer {
         }
         self.last_frame_stats = Some(snapshot);
         PRESENTED_FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        crate::effect_renderer::EXP_BLUR_FRAME.with(|f| f.set(f.get() + 1));
         update_frame_warmup_budget(&mut self.pending_frame_warmup_frames, &snapshot);
         let gpu_stats_on = gpu_stats_enabled();
         self.frame_stats

@@ -83,6 +83,11 @@ fn scaled_scissor(
 }
 
 const MAX_BLUR_KERNEL_CACHE_ITEMS: usize = 32;
+static EXP_BLUR_LOG: crate::debug_toggles::DebugToggle =
+    crate::debug_toggles::DebugToggle::new("CRANPOSE_EXP_BLUR_LOG");
+std::thread_local! {
+    pub(crate) static EXP_BLUR_FRAME: Cell<u64> = const { Cell::new(0) };
+}
 const BLUR_TILE_MODES: [TileMode; 4] = [
     TileMode::Clamp,
     TileMode::Repeated,
@@ -1573,6 +1578,23 @@ impl EffectRenderer {
                 bytemuck::bytes_of(&draw.uniforms),
             )
         }));
+        if EXP_BLUR_LOG.flag() {
+            let frame = EXP_BLUR_FRAME.with(|f| f.get());
+            if frame % 120 == 0 {
+                let mut text = String::new();
+                for draw in draws {
+                    let (_, _, w, h) = draw.scissor.unwrap_or((0, 0, dest_size.0, dest_size.1));
+                    let kind = match draw.filter {
+                        BlurFilter::Kernel => format!("K{}", draw.uniforms.kernel[0]),
+                        BlurFilter::Downsample(b) => format!("D{b}"),
+                        BlurFilter::Mean => "M".to_owned(),
+                    };
+                    let src = draw.uniforms.source_region;
+                    text.push_str(&format!(" {kind}:{w}x{h}<-{}x{}", src[2], src[3]));
+                }
+                log::warn!("[exp-blur] f{frame} {label} {}x{}{text}", dest_size.0, dest_size.1);
+            }
+        }
         let mut pass = recorder.begin_color_pass(label, dest_view, load_op);
         let mut bound = None;
         for (draw, uniform) in draws.iter().zip(uniforms.drain(..)) {
