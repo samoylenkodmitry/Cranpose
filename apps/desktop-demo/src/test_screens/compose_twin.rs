@@ -6,9 +6,11 @@
 use std::cell::RefCell;
 
 use cranpose_core::{rememberMutableStateOf, MutableState};
+use cranpose_foundation::text::TextFieldState;
 use cranpose_ui::{
-    composable, BoxSpec, Color, Column, ColumnSpec, LinearArrangement, Modifier, Row, RowSpec,
-    Text, TextStyle, VerticalAlignment,
+    composable, text::SpanStyle, BasicTextField, BasicTextFieldDecorated, BasicTextFieldOptions,
+    BoxSpec, Color, Column, ColumnSpec, LinearArrangement, Modifier, Row, RowSpec, Text, TextStyle,
+    VerticalAlignment,
 };
 
 use crate::app::{
@@ -24,12 +26,13 @@ pub const TWIN_FRAME_HEIGHT: u32 = 420;
 const TWIN_FRAME_COLOR: Color = Color(0.07, 0.07, 0.09, 1.0);
 
 /// Every twin scene, by name, in the Compose twin's `SCENES` order.
-pub const TWIN_SCENES: [(&str, fn()); 5] = [
+pub const TWIN_SCENES: [(&str, fn()); 6] = [
     ("simple-card", simple_card_showcase),
     ("positioned-boxes", positioned_boxes_showcase),
     ("item-list", item_list_showcase),
     ("complex-chain", complex_chain_showcase),
     ("modifier-order", modifier_order_probes),
+    ("text-fields", text_field_probes),
 ];
 
 /// A pixel strays when its largest channel differs from the Compose frame's
@@ -170,6 +173,65 @@ pub fn modifier_order_probes() {
                         BoxSpec::default(),
                         || {},
                     );
+                },
+            );
+        },
+    );
+}
+
+/// The fill behind each probe field.
+const FIELD_FILL: Color = Color(0.25, 0.27, 0.33, 1.0);
+
+/// Fields sized as Compose sizes them: an empty one and a short one a line
+/// of ten 'H's, a long one its text, and a decorated one whose padding and
+/// hint sit in its decoration box.
+#[composable]
+pub fn text_field_probes() {
+    let empty = cranpose_core::remember(|| TextFieldState::new("")).with(|state| *state);
+    let short = cranpose_core::remember(|| TextFieldState::new("Hi")).with(|state| *state);
+    let long = cranpose_core::remember(|| TextFieldState::new("A field as wide as its text"))
+        .with(|state| *state);
+    let search = cranpose_core::remember(|| TextFieldState::new("")).with(|state| *state);
+    Column(
+        Modifier::empty().padding(16.0),
+        ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(12.0)),
+        move || {
+            BasicTextField(
+                empty,
+                Modifier::empty().background(FIELD_FILL),
+                TextStyle::default(),
+            );
+            BasicTextField(
+                short,
+                Modifier::empty().background(FIELD_FILL).padding(4.0),
+                TextStyle::default(),
+            );
+            BasicTextField(
+                long,
+                Modifier::empty().background(FIELD_FILL),
+                TextStyle::default(),
+            );
+            BasicTextFieldDecorated(
+                search,
+                Modifier::empty()
+                    .background(Color(0.2, 0.35, 0.6, 1.0))
+                    .padding(9.0),
+                BasicTextFieldOptions::default(),
+                |inner| {
+                    cranpose_ui::Box(Modifier::empty(), BoxSpec::default(), move || {
+                        Text(
+                            "Search",
+                            Modifier::empty(),
+                            TextStyle {
+                                span_style: SpanStyle {
+                                    color: Some(Color(1.0, 1.0, 1.0, 0.5)),
+                                    ..Default::default()
+                                },
+                                ..Default::default()
+                            },
+                        );
+                        inner.inner_text_field();
+                    });
                 },
             );
         },
