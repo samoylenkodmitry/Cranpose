@@ -109,6 +109,7 @@ const PROPERTY_BACKED_ENV_VARS: &[(&str, &str)] = &[
         "debug.cranpose.survive_gpu_errors",
         "CRANPOSE_SURVIVE_GPU_ERRORS",
     ),
+    ("debug.cranpose.gpu_pass_timing", "CRANPOSE_GPU_PASS_TIMING"),
 ];
 
 pub(crate) fn seed_env_from_system_properties() {
