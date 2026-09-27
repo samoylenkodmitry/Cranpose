@@ -83,6 +83,8 @@ fn scaled_scissor(
 }
 
 const MAX_BLUR_KERNEL_CACHE_ITEMS: usize = 32;
+static EXP_ONE_TAP: crate::debug_toggles::DebugToggle =
+    crate::debug_toggles::DebugToggle::new("CRANPOSE_EXP_ONE_TAP");
 static EXP_BLUR_LOG: crate::debug_toggles::DebugToggle =
     crate::debug_toggles::DebugToggle::new("CRANPOSE_EXP_BLUR_LOG");
 std::thread_local! {
@@ -1664,7 +1666,11 @@ impl EffectRenderer {
             pairs: kernel
                 .pairs
                 .map(|pair| [pair.inner, pair.outer, pair.offset, pair.weight]),
-            kernel: [kernel.pair_count as f32, kernel.total_weight, 0.0, 0.0],
+            kernel: if EXP_ONE_TAP.flag() {
+                [0.0, 1.0, 0.0, 0.0]
+            } else {
+                [kernel.pair_count as f32, kernel.total_weight, 0.0, 0.0]
+            },
         }
     }
 

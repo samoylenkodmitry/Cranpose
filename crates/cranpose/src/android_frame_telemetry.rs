@@ -88,6 +88,10 @@ const PROPERTY_BACKED_ENV_VARS: &[(&str, &str)] = &[
         "CRANPOSE_SCENE_UPDATE_DIAG",
     ),
     (
+        "debug.cranpose.exp_one_tap",
+        "CRANPOSE_EXP_ONE_TAP",
+    ),
+    (
         "debug.cranpose.exp_blur_log",
         "CRANPOSE_EXP_BLUR_LOG",
     ),
