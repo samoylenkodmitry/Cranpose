@@ -1310,6 +1310,7 @@ fn create_android_gpu_resources(
 
     let adapter_info = adapter.get_info();
     log::info!("Found adapter: {:?}", adapter_info.backend);
+    log::warn!("[adapter-features] {:?} f16={} driver={} {}", adapter.features(), adapter.features().contains(wgpu::Features::SHADER_F16), adapter_info.driver, adapter_info.driver_info);
     let adapter = Arc::new(adapter);
 
     if cranpose_render_wgpu::debug_toggle_os("CRANPOSE_PIPELINE_CACHE_FILE").is_none()
