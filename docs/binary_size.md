@@ -101,6 +101,26 @@ callback holder already performed.
 - App-side guidance (README "Binary Size") + tightened CI gate: isolated-demo
   release-small budget 28 MiB → 12.5 MiB.
 
+## Size-optimizing the crates off the frame path (Android, 2026-09-27)
+
+An app that keeps `opt-level = 3` for speed can still build the crates that
+never run per frame for size: naga translates shaders at pipeline creation,
+and codespan-reporting and gimli only format errors and backtraces.
+
+```toml
+[profile.release.package.naga]
+opt-level = "s"
+[profile.release.package.codespan-reporting]
+opt-level = "z"
+[profile.release.package.gimli]
+opt-level = "z"
+```
+
+On the compose-vs-cranpose bench (arm64, fat LTO, stripped), this took the
+library from 9.28 MB to 9.09 MB (−182 KB). Cold start to the first frame on
+the Mate 20 X was unchanged: a median of ~178 ms with it, ~185 ms without, 8
+runs each. The bench's release profile carries it.
+
 ## Dead end, measured: build-time SPIR-V cannot drop naga's WGSL frontend
 
 wgpu 29 and 30 hardwire `wgpu-core/wgsl` (and `renderdoc`) in their own dependency
