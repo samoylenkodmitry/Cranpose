@@ -151,6 +151,6 @@ impl OutputConverter {
         );
         pass.set_pipeline(self.pipeline(device, backend));
         pass.set_bind_group(0, bind_group, &[]);
-        pass.draw(0..3, 0..1);
+        crate::exp_census(7); pass.draw(0..3, 0..1);
     }
 }

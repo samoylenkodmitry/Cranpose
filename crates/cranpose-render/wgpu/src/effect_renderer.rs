@@ -1644,7 +1644,7 @@ impl EffectRenderer {
             if let Some((x, y, width, height)) = draw.scissor {
                 pass.set_scissor_rect(x, y, width, height);
             }
-            pass.draw(0..4, 0..1);
+            crate::exp_census(0); pass.draw(0..4, 0..1);
         }
         drop(pass);
         self.blur_uniform_uploads = uniforms;
@@ -2174,7 +2174,7 @@ impl EffectRenderer {
         pass.set_pipeline(self.offset_pipeline(device));
         pass.set_bind_group(0, texture_bind_group, &[]);
         pass.set_bind_group(1, &uniform.bind_group, &[uniform.offset]);
-        pass.draw(0..4, 0..1);
+        crate::exp_census(1); pass.draw(0..4, 0..1);
     }
 
     #[expect(clippy::too_many_arguments)]
@@ -2332,7 +2332,7 @@ impl EffectRenderer {
                     self.debug_glass_rasterized_pixels.get()
                         + shaded_pixels((x, y, width, height), region),
                 );
-                pass.draw(0..4, 0..1);
+                crate::exp_census(2); pass.draw(0..4, 0..1);
             }
         }
         pass.set_viewport(0.0, 0.0, viewport.0 as f32, viewport.1 as f32, 0.0, 1.0);
@@ -2395,7 +2395,7 @@ impl EffectRenderer {
         if let Some((x, y, width, height)) = options.scissor {
             pass.set_scissor_rect(x, y, width, height);
         }
-        pass.draw(0..4, 0..1);
+        crate::exp_census(3); pass.draw(0..4, 0..1);
         true
     }
 
@@ -2718,7 +2718,7 @@ impl EffectRenderer {
         if let Some((x, y, w, h)) = options.scissor {
             pass.set_scissor_rect(x, y, w, h);
         }
-        pass.draw(0..4, 0..1);
+        crate::exp_census(4); pass.draw(0..4, 0..1);
     }
 
     pub(crate) fn prepare_composite_draw<'a, C: FrameCommandRecorder>(
@@ -2777,7 +2777,7 @@ impl EffectRenderer {
         } else {
             pass.set_scissor_rect(0, 0, viewport.0, viewport.1);
         }
-        pass.draw(0..4, 0..1);
+        crate::exp_census(5); pass.draw(0..4, 0..1);
     }
 
     pub(crate) fn prepare_projective_composite_draw<'a, C: FrameCommandRecorder>(
@@ -2877,7 +2877,7 @@ impl EffectRenderer {
         } else {
             pass.set_scissor_rect(0, 0, viewport.0, viewport.1);
         }
-        pass.draw(0..4, 0..1);
+        crate::exp_census(6); pass.draw(0..4, 0..1);
     }
 }
 

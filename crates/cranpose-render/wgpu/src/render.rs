@@ -2867,6 +2867,7 @@ impl GpuRenderer {
         }
         self.last_frame_stats = Some(snapshot);
         PRESENTED_FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        crate::exp_census_frame(PRESENTED_FRAMES.load(std::sync::atomic::Ordering::Relaxed));
         update_frame_warmup_budget(&mut self.pending_frame_warmup_frames, &snapshot);
         let gpu_stats_on = gpu_stats_enabled();
         self.frame_stats
@@ -3807,7 +3808,7 @@ impl GpuRenderer {
                 bound_class = Some(draw.band_class);
             }
             pass.set_pipeline(pipeline);
-            pass.draw_indexed(draw.indices, 0, draw.records);
+            crate::exp_census(8); pass.draw_indexed(draw.indices, 0, draw.records);
         }
         Ok(())
     }
@@ -3910,7 +3911,7 @@ impl GpuRenderer {
                 .peek(&cmd.image_id)
                 .ok_or_else(|| "image texture missing from cache".to_string())?;
             pass.set_bind_group(1, cached.bind_group(cmd.sampling), &[]);
-            pass.draw_indexed(cmd.index_start..(cmd.index_start + 6), 0, 0..1);
+            crate::exp_census(9); pass.draw_indexed(cmd.index_start..(cmd.index_start + 6), 0, 0..1);
         }
         Ok(())
     }
@@ -3959,7 +3960,7 @@ impl GpuRenderer {
                         shared_bound = true;
                         bound_run_instances = None;
                     }
-                    pass.draw(0..GLYPH_QUAD_CORNERS, instances);
+                    crate::exp_census(10); pass.draw(0..GLYPH_QUAD_CORNERS, instances);
                 }
                 GlyphDrawStep::Retained {
                     run,
@@ -3972,7 +3973,7 @@ impl GpuRenderer {
                         pass.set_vertex_buffer(0, instances.slice(..));
                         bound_run_instances = Some(instances);
                     }
-                    pass.draw(0..GLYPH_QUAD_CORNERS, run.span.instances());
+                    crate::exp_census(11); pass.draw(0..GLYPH_QUAD_CORNERS, run.span.instances());
                 }
             }
         }

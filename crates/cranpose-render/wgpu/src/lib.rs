@@ -1144,3 +1144,21 @@ impl Renderer for WgpuRenderer {
 #[cfg(test)]
 #[path = "tests/wgpu_tests.rs"]
 mod tests;
+
+std::thread_local! {
+    static EXP_CENSUS: std::cell::RefCell<[u32; 12]> = const { std::cell::RefCell::new([0; 12]) };
+}
+const EXP_CENSUS_NAMES: [&str; 12] = ["effect0", "effect1", "effect2", "effect3", "effect4", "effect5", "effect6", "convert", "shape", "image", "glyph", "glyphrun"];
+pub(crate) fn exp_census(site: usize) {
+    EXP_CENSUS.with(|c| c.borrow_mut()[site] += 1);
+}
+pub(crate) fn exp_census_frame(frame: u64) {
+    EXP_CENSUS.with(|c| {
+        let mut c = c.borrow_mut();
+        if frame % 120 == 0 {
+            let text: String = EXP_CENSUS_NAMES.iter().zip(c.iter()).map(|(n, v)| format!(" {n}={v}")).collect();
+            log::warn!("[exp-census] f{frame}{text}");
+        }
+        *c = [0; 12];
+    });
+}
