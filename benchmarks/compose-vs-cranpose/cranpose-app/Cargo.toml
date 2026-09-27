@@ -40,3 +40,12 @@ codegen-units = 1
 panic = "abort"
 strip = true
 debug = 0
+
+# Crates that run off the frame path: the shader translator at pipeline
+# creation and the error reporting only a failure reaches.
+[profile.release.package.naga]
+opt-level = "s"
+[profile.release.package.codespan-reporting]
+opt-level = "z"
+[profile.release.package.gimli]
+opt-level = "z"
