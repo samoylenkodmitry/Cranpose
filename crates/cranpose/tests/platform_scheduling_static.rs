@@ -4447,3 +4447,15 @@ fn android_frames_reach_the_present_thread_before_accessibility_syncs() {
         "a frame is handed off before the accessibility snapshot, which is not part of it"
     );
 }
+
+#[test]
+fn android_gpu_pass_timing_is_reachable_from_a_system_property() {
+    let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let source = std::fs::read_to_string(crate_dir.join("src/android_frame_telemetry.rs"))
+        .expect("read Android frame telemetry source");
+
+    assert!(
+        source.contains("(\"debug.cranpose.gpu_pass_timing\", \"CRANPOSE_GPU_PASS_TIMING\")"),
+        "per-pass GPU timing must be switchable on a device without a rebuilt APK"
+    );
+}
