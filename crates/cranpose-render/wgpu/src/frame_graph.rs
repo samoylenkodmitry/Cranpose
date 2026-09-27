@@ -2066,6 +2066,13 @@ pub(crate) mod fence_profile {
         PROFILE.with(|profile| {
             let mut profile = profile.borrow_mut();
             let mut pending = std::mem::take(&mut profile.pending);
+            if profile.frames == 0 {
+                let order: Vec<&str> = pending
+                    .iter()
+                    .map(|(label, _)| label.as_deref().unwrap_or("-"))
+                    .collect();
+                eprintln!("[gpu-fence-order] {}", order.join(" | "));
+            }
             for (label, commands) in pending.drain(..) {
                 let recorded = submit_and_wait(device, queue, commands);
                 let empty = submit_and_wait(device, queue, new_encoder(device).finish());
