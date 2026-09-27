@@ -217,3 +217,88 @@ fn render_nodes_stay_small_enough_to_walk_densely() {
         std::mem::size_of::<RenderNode>()
     );
 }
+
+fn contained_run(rect: Rect) -> RenderNode {
+    RenderNode::DrawRun(DrawRunNode::new(
+        PrimitivePhase::BeforeChildren,
+        vec![DrawPrimitive::Rect {
+            rect,
+            brush: Brush::solid(Color::WHITE),
+            stroke: None,
+        }],
+    ))
+}
+
+fn bounded(width: f32, height: f32, children: Vec<RenderNode>) -> LayerNode {
+    LayerNode {
+        local_bounds: Rect {
+            x: 0.0,
+            y: 0.0,
+            width,
+            height,
+        },
+        children,
+        ..Default::default()
+    }
+}
+
+fn inner(x: f32, y: f32, draws_within_bounds: bool) -> RenderNode {
+    RenderNode::Layer(Box::new(LayerNode {
+        transform_to_parent: ProjectiveTransform::translation(x, y),
+        draws_within_bounds,
+        ..bounded(20.0, 20.0, Vec::new())
+    }))
+}
+
+#[test]
+fn content_inside_the_bounds_draws_within_them() {
+    let rect = |x, y, width, height| Rect {
+        x,
+        y,
+        width,
+        height,
+    };
+    assert!(
+        bounded(50.0, 50.0, vec![contained_run(rect(0.0, 0.0, 50.0, 50.0))])
+            .content_draws_within_bounds()
+    );
+    assert!(
+        bounded(50.0, 50.0, vec![contained_run(rect(-0.5, 0.0, 50.0, 50.5))])
+            .content_draws_within_bounds(),
+        "antialiasing slack"
+    );
+    assert!(
+        !bounded(50.0, 50.0, vec![contained_run(rect(0.0, 0.0, 60.0, 50.0))])
+            .content_draws_within_bounds()
+    );
+    assert!(bounded(50.0, 50.0, vec![inner(10.0, 10.0, true)]).content_draws_within_bounds());
+    assert!(
+        !bounded(50.0, 50.0, vec![inner(40.0, 10.0, true)]).content_draws_within_bounds(),
+        "a child placed partly outside"
+    );
+    assert!(
+        !bounded(50.0, 50.0, vec![inner(10.0, 10.0, false)]).content_draws_within_bounds(),
+        "a child that may draw anywhere"
+    );
+}
+
+#[test]
+fn a_clip_or_a_shadow_decides_containment_whatever_the_content() {
+    let overflowing = inner(40.0, 40.0, false);
+    assert!(
+        LayerNode {
+            clip_to_bounds: true,
+            ..bounded(50.0, 50.0, vec![overflowing])
+        }
+        .content_draws_within_bounds()
+    );
+    let shadowed = RenderNode::Layer(Box::new(LayerNode {
+        graphics_layer: GraphicsLayer {
+            shadow_elevation: 6.0,
+            ..Default::default()
+        },
+        draws_within_bounds: true,
+        ..bounded(20.0, 20.0, Vec::new())
+    }));
+    assert!(!bounded(50.0, 50.0, vec![shadowed]).content_draws_within_bounds());
+}
