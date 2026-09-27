@@ -343,7 +343,7 @@ impl TextLineIndexCache {
     fn line_starts(&mut self, text: &Arc<cranpose_ui::text::RenderString>) -> Rc<[usize]> {
         let key = TextLineIndexCacheKey(Arc::as_ptr(text) as usize);
         if let Some(cached) = self.entries.get(&key)
-            && cached.len == text.text.len()
+            && cached.len == text.text().len()
             && cached
                 .text
                 .upgrade()
@@ -352,12 +352,12 @@ impl TextLineIndexCache {
             return cached.starts.clone();
         }
 
-        let starts = Rc::<[usize]>::from(line_start_offsets(text.text.as_str()));
+        let starts = Rc::<[usize]>::from(line_start_offsets(text.text()));
         self.entries.put(
             key,
             CachedTextLineIndex {
                 text: Arc::downgrade(text),
-                len: text.text.len(),
+                len: text.text().len(),
                 starts: starts.clone(),
             },
         );
@@ -4206,13 +4206,13 @@ impl GpuRenderer {
                 );
                 if collected.is_none() {
                     if text_atlas_fallback_diag_enabled() {
-                        let preview: String = source_draw.text.text.chars().take(96).collect();
+                        let preview: String = source_draw.text.text().chars().take(96).collect();
                         log::warn!(
                             "[text-atlas-fallback] node={:?} spans={} links={} text_len={} preview={:?} span_style={:?} paragraph_style={:?}",
                             source_draw.node_id,
-                            source_draw.text.span_styles.len(),
-                            source_draw.text.links.len(),
-                            source_draw.text.text.len(),
+                            source_draw.text.span_styles().len(),
+                            source_draw.text.links().len(),
+                            source_draw.text.text().len(),
                             preview,
                             source_draw.text_style.span_style,
                             source_draw.text_style.paragraph_style,
@@ -4547,7 +4547,7 @@ impl GpuRenderer {
                 raster_rect,
             };
         };
-        if !static_text_motion || text_draw.text.text.as_str().find('\n').is_none() {
+        if !static_text_motion || text_draw.text.text().find('\n').is_none() {
             return TextRasterSource {
                 draw: Cow::Borrowed(text_draw),
                 raster_rect,
@@ -4607,10 +4607,10 @@ impl GpuRenderer {
         raster_rect: Rect,
         text_scale: f32,
     ) -> Option<ImageBitmap> {
-        if text_draw.text.span_styles.is_empty() {
+        if text_draw.text.span_styles().is_empty() {
             let font = self.text_fonts.resolve(&text_draw.text_style)?;
             return rasterize_text_to_image_with_glyph_cache(
-                text_draw.text.text.as_str(),
+                text_draw.text.text(),
                 raster_rect,
                 &text_draw.text_style,
                 text_draw.color,
@@ -4670,9 +4670,9 @@ fn rasterize_spanned_text_to_image(
             continue;
         }
 
-        let chunk = &text_draw.text.text[start..end];
+        let chunk = &text_draw.text.text()[start..end];
         let mut merged_span = text_draw.text_style.span_style.clone();
-        for span in &text_draw.text.span_styles {
+        for span in text_draw.text.span_styles() {
             if span.range.start <= start && span.range.end >= end {
                 merged_span = merged_span.merge(&span.item);
             }
@@ -4792,7 +4792,7 @@ fn clipped_text_raster_source_with_line_starts<'a>(
     }
 
     let byte_start = line_starts[start_line];
-    let byte_end = line_end_offset(text_draw.text.text.as_str(), line_starts, end_line - 1);
+    let byte_end = line_end_offset(text_draw.text.text(), line_starts, end_line - 1);
     if byte_start >= byte_end {
         return TextRasterSource {
             draw: Cow::Borrowed(text_draw),

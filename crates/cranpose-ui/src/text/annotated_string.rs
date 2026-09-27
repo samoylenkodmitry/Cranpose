@@ -89,15 +89,29 @@ pub enum LinkKey {
 ///
 /// Unlike `AnnotatedString` this is plain owned data (`Send + Sync`), so a
 /// lowered scene that carries it can cross threads.
-#[derive(Debug, Clone, PartialEq, Default)]
+///
+/// Built once and never changed, it hashes itself when built: renderers key
+/// caches by [`RenderString::render_hash`] every frame.
+#[derive(Debug, Clone, PartialEq)]
 pub struct RenderString {
-    pub text: String,
-    pub span_styles: Vec<RangeStyle<SpanStyle>>,
-    pub paragraph_styles: Vec<RangeStyle<ParagraphStyle>>,
-    pub string_annotations: Vec<RangeStyle<StringAnnotation>>,
-    /// Link ranges by identity (tag/url) — enough to hash and to key caches,
-    /// never enough to invoke a link.
-    pub links: Vec<RangeStyle<LinkKey>>,
+    text: String,
+    span_styles: Vec<RangeStyle<SpanStyle>>,
+    paragraph_styles: Vec<RangeStyle<ParagraphStyle>>,
+    string_annotations: Vec<RangeStyle<StringAnnotation>>,
+    links: Vec<RangeStyle<LinkKey>>,
+    hash: u64,
+}
+
+impl Default for RenderString {
+    fn default() -> Self {
+        Self::from_parts(
+            String::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )
+    }
 }
 
 const _: () = {
@@ -109,6 +123,47 @@ const _: () = {
 };
 
 impl RenderString {
+    fn from_parts(
+        text: String,
+        span_styles: Vec<RangeStyle<SpanStyle>>,
+        paragraph_styles: Vec<RangeStyle<ParagraphStyle>>,
+        string_annotations: Vec<RangeStyle<StringAnnotation>>,
+        links: Vec<RangeStyle<LinkKey>>,
+    ) -> Self {
+        let hash = render_hash_impl(&text, &span_styles, &paragraph_styles);
+        Self {
+            text,
+            span_styles,
+            paragraph_styles,
+            string_annotations,
+            links,
+            hash,
+        }
+    }
+
+    /// The characters.
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    pub fn span_styles(&self) -> &[RangeStyle<SpanStyle>] {
+        &self.span_styles
+    }
+
+    pub fn paragraph_styles(&self) -> &[RangeStyle<ParagraphStyle>] {
+        &self.paragraph_styles
+    }
+
+    pub fn string_annotations(&self) -> &[RangeStyle<StringAnnotation>] {
+        &self.string_annotations
+    }
+
+    /// Link ranges by identity (tag/url): enough to hash and to key caches,
+    /// never enough to invoke a link.
+    pub fn links(&self) -> &[RangeStyle<LinkKey>] {
+        &self.links
+    }
+
     pub fn len(&self) -> usize {
         self.text.len()
     }
@@ -128,37 +183,26 @@ impl RenderString {
     /// with the exact same formula, so a cache keyed by either stays keyed by
     /// the same distinctions.
     pub fn render_hash(&self) -> u64 {
-        render_hash_impl(&self.text, &self.span_styles, &self.paragraph_styles)
+        self.hash
     }
 
     /// Returns a new `RenderString` containing a substring of the original
     /// text and any styles that overlap with the new range, with indices
     /// adjusted. Mirrors [`AnnotatedString::subsequence`].
     pub fn subsequence(&self, range: std::ops::Range<usize>) -> Self {
-        if range.is_empty() {
-            return Self {
-                text: String::new(),
-                ..Default::default()
-            };
-        }
-
         let start = range.start.min(self.text.len());
         let end = range.end.max(start).min(self.text.len());
-
         if start == end {
-            return Self {
-                text: String::new(),
-                ..Default::default()
-            };
+            return Self::default();
         }
 
-        Self {
-            text: self.text[start..end].to_string(),
-            span_styles: clip_range_styles(&self.span_styles, start, end),
-            paragraph_styles: clip_range_styles(&self.paragraph_styles, start, end),
-            string_annotations: clip_range_styles(&self.string_annotations, start, end),
-            links: clip_range_styles(&self.links, start, end),
-        }
+        Self::from_parts(
+            self.text[start..end].to_string(),
+            clip_range_styles(&self.span_styles, start, end),
+            clip_range_styles(&self.paragraph_styles, start, end),
+            clip_range_styles(&self.string_annotations, start, end),
+            clip_range_styles(&self.links, start, end),
+        )
     }
 }
 
@@ -341,13 +385,12 @@ impl AnnotatedString {
     /// (link handlers). A clone-conversion — memoize at the call site when
     /// the same `AnnotatedString` lowers every frame.
     pub fn render_string(&self) -> RenderString {
-        RenderString {
-            text: self.text.clone(),
-            span_styles: self.span_styles.clone(),
-            paragraph_styles: self.paragraph_styles.clone(),
-            string_annotations: self.string_annotations.clone(),
-            links: self
-                .link_annotations
+        RenderString::from_parts(
+            self.text.clone(),
+            self.span_styles.clone(),
+            self.paragraph_styles.clone(),
+            self.string_annotations.clone(),
+            self.link_annotations
                 .iter()
                 .map(|link| RangeStyle {
                     item: match &link.item {
@@ -357,7 +400,7 @@ impl AnnotatedString {
                     range: link.range.clone(),
                 })
                 .collect(),
-        }
+        )
     }
 
     /// Computes a hash representing the contents of the span styles, suitable for cache invalidation.

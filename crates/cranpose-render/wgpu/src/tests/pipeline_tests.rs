@@ -1629,7 +1629,7 @@ fn push_text_style_draws_span_gradient_without_paint_override_uses_gpu_shader_ma
     let mask_text = &scene.texts[0].text;
     assert!(
         mask_text
-            .span_styles
+            .span_styles()
             .iter()
             .all(|span| span.item.color.is_none()
                 && span.item.brush.is_none()
@@ -1639,7 +1639,7 @@ fn push_text_style_draws_span_gradient_without_paint_override_uses_gpu_shader_ma
     );
     assert!(
         mask_text
-            .span_styles
+            .span_styles()
             .iter()
             .any(|span| span.item.font_weight == Some(cranpose_ui::text::FontWeight::BOLD)),
         "mask text should preserve non-paint span styling"
@@ -1729,7 +1729,7 @@ fn push_text_style_draws_span_gradient_with_paint_override_uses_gpu_shader_mask_
     assert!(
         scene.texts.iter().all(|draw| draw
             .text
-            .span_styles
+            .span_styles()
             .iter()
             .any(|span| span.item.color == Some(Color::WHITE))),
         "each batch should include explicit visible-range white mask spans"
@@ -1737,7 +1737,7 @@ fn push_text_style_draws_span_gradient_with_paint_override_uses_gpu_shader_mask_
     assert!(
         scene.texts.iter().all(|draw| draw
             .text
-            .span_styles
+            .span_styles()
             .iter()
             .any(|span| span.item.font_weight == Some(cranpose_ui::text::FontWeight::BOLD))),
         "mask text should preserve non-paint span styling"
@@ -1745,7 +1745,7 @@ fn push_text_style_draws_span_gradient_with_paint_override_uses_gpu_shader_mask_
     assert!(
         scene.texts.iter().all(|draw| draw
             .text
-            .span_styles
+            .span_styles()
             .iter()
             .all(|span| span.item.color != Some(Color::RED))),
         "original span paint overrides should not leak directly into mask attrs"
@@ -1813,7 +1813,7 @@ fn push_text_style_draws_adjacent_span_color_overrides_use_direct_path() {
     assert!(
         scene.texts[0]
             .text
-            .span_styles
+            .span_styles()
             .iter()
             .filter(|span| span.item.color == Some(Color::RED))
             .count()
@@ -1864,7 +1864,7 @@ fn push_text_style_draws_span_color_override_uses_direct_per_glyph_color() {
     assert!(
         scene.texts[0]
             .text
-            .span_styles
+            .span_styles()
             .iter()
             .any(|span| span.item.color == Some(Color::RED)),
         "span color should be preserved in the text for software text raster rendering"
@@ -1974,7 +1974,7 @@ fn push_text_style_draws_wrap_newline_gap_color_spans_use_direct_path() {
     );
     let red_ranges: Vec<_> = scene.texts[0]
         .text
-        .span_styles
+        .span_styles()
         .iter()
         .filter(|span| span.item.color == Some(Color::RED))
         .map(|span| span.range.clone())
@@ -2040,7 +2040,7 @@ fn push_text_style_draws_mixed_bidi_wrapped_color_spans_use_direct_path() {
     assert!(
         scene.texts[0]
             .text
-            .span_styles
+            .span_styles()
             .iter()
             .any(|span| span.item.color == Some(Color::RED)),
         "span color should be preserved for software text raster rendering"
@@ -2292,7 +2292,7 @@ fn a_text_draw_primitive_joins_the_scene_text_list_the_text_nodes_use() {
         "text must not be lowered into a shape or a rasterized image"
     );
     let text = &scene.texts[0];
-    assert_eq!(text.text.text, "SCORE");
+    assert_eq!(text.text.text(), "SCORE");
     assert_eq!(text.rect.x, 14.0);
     assert_eq!(text.rect.y, 25.0);
     assert_eq!(text.color, cranpose_ui_graphics::Color::WHITE);

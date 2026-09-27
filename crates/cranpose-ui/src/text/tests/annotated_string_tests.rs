@@ -199,3 +199,32 @@ fn a_redrawn_string_reuses_the_render_copy_from_last_frame() {
         "both copies hold the same characters"
     );
 }
+
+#[test]
+fn a_render_string_keeps_the_hash_its_content_has() {
+    let annotated = AnnotatedString::builder()
+        .append("plain ")
+        .push_style(SpanStyle {
+            color: Some(cranpose_ui_graphics::Color::RED),
+            ..Default::default()
+        })
+        .append("red")
+        .pop()
+        .to_annotated_string();
+    let render = annotated.render_string();
+    assert_eq!(render.render_hash(), annotated.render_hash());
+    assert_eq!(render.text(), "plain red");
+    assert_eq!(render.span_styles(), annotated.span_styles.as_slice());
+    let tail = render.subsequence(6..9);
+    assert_eq!(tail.text(), "red");
+    assert_eq!(
+        tail.render_hash(),
+        annotated.subsequence(6..9).render_hash(),
+        "a subsequence hashes as a string built with that content"
+    );
+    assert_eq!(
+        RenderString::default().render_hash(),
+        AnnotatedString::from("").render_hash()
+    );
+    assert_eq!(render.subsequence(3..3), RenderString::default());
+}

@@ -1525,8 +1525,8 @@ impl<'a> From<&'a AnnotatedString> for StyledTextRef<'a> {
 impl<'a> From<&'a RenderString> for StyledTextRef<'a> {
     fn from(text: &'a RenderString) -> Self {
         Self {
-            text: text.text.as_str(),
-            span_styles: &text.span_styles,
+            text: text.text(),
+            span_styles: text.span_styles(),
         }
     }
 }
