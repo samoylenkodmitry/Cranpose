@@ -549,6 +549,7 @@ impl ResourceGraph {
 
 pub(crate) struct PassContext<'pass> {
     device: &'pass wgpu::Device,
+    queue: &'pass wgpu::Queue,
     pub(crate) encoder: &'pass mut wgpu::CommandEncoder,
     uploads: &'pass mut FrameUploadAllocators,
     transient_textures: &'pass mut TransientTexturePool,
@@ -734,6 +735,7 @@ impl WgpuFrameGraphExecutor {
                 .expect("single-pass graph should contain one pass");
             match self.encode_pass_node(
                 device,
+                queue,
                 &mut encoder,
                 &mut pending_transient_releases,
                 &mut transient_texture_bytes,
@@ -761,6 +763,7 @@ impl WgpuFrameGraphExecutor {
                 };
                 match self.encode_pass_node(
                     device,
+                    queue,
                     &mut encoder,
                     &mut pending_transient_releases,
                     &mut transient_texture_bytes,
@@ -818,6 +821,7 @@ impl WgpuFrameGraphExecutor {
     fn encode_pass_node(
         &mut self,
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         pending_transient_releases: &mut Vec<(FrameTextureDescriptor, OffscreenTarget)>,
         transient_texture_bytes: &mut u64,
@@ -829,6 +833,7 @@ impl WgpuFrameGraphExecutor {
         let pass_start = Instant::now();
         let mut context = PassContext {
             device,
+            queue,
             encoder,
             uploads: &mut self.upload_allocators,
             transient_textures: &mut self.transient_textures,
@@ -1100,6 +1105,10 @@ pub(crate) trait FrameCommandRecorder {
     fn copy_texture_region(&mut self, copy: TextureRegionCopy<'_>);
     fn record_passes(&mut self, count: u32);
 
+    /// Submits what the frame has recorded so far, so the GPU starts on it
+    /// while the rest is encoded.
+    fn submit_recorded(&mut self) {}
+
     fn record_pass(&mut self) {
         self.record_passes(1);
     }
@@ -1108,6 +1117,20 @@ pub(crate) trait FrameCommandRecorder {
 }
 
 impl FrameCommandRecorder for PassContext<'_> {
+    fn submit_recorded(&mut self) {
+        if std::env::var_os("CRANPOSE_EXP_EARLY_SUBMIT").is_none() || fence_profile::enabled() {
+            return;
+        }
+        let finished = std::mem::replace(
+            self.encoder,
+            WgpuFrameGraphExecutor::create_command_encoder(self.device, Some("Early Submit")),
+        );
+        self.uploads.buffers.finish();
+        self.uploads.flush_pending(self.queue);
+        self.queue.submit(std::iter::once(finished.finish()));
+        self.uploads.buffers.recall();
+    }
+
     fn stage_buffer_copy(
         &mut self,
         device: &wgpu::Device,
@@ -1607,6 +1630,7 @@ struct UploadGeneration {
     buffer: wgpu::Buffer,
     capacity: u64,
     bytes: Vec<u8>,
+    flushed: usize,
     bind_groups: [Option<wgpu::BindGroup>; UploadAllocatorId::COUNT],
 }
 
@@ -1653,6 +1677,7 @@ impl UploadRing {
                     }),
                     capacity,
                     bytes: Vec::with_capacity(capacity as usize),
+                    flushed: 0,
                     bind_groups: Default::default(),
                 });
                 0
@@ -1666,13 +1691,26 @@ impl UploadRing {
     }
 
     fn flush(&mut self, queue: &wgpu::Queue) -> FrameCommandStats {
+        let stats = self.flush_pending(queue);
+        self.reset();
+        stats
+    }
+
+    fn flush_pending(&mut self, queue: &wgpu::Queue) -> FrameCommandStats {
         let mut stats = FrameCommandStats::default();
         for generation in &mut self.generations {
             let padded = align_u64_to(generation.bytes.len() as u64, wgpu::COPY_BUFFER_ALIGNMENT);
             generation.bytes.resize(padded as usize, 0);
-            stats += write_buffer(queue, &generation.buffer, 0, &generation.bytes);
+            if generation.bytes.len() > generation.flushed {
+                stats += write_buffer(
+                    queue,
+                    &generation.buffer,
+                    generation.flushed as u64,
+                    &generation.bytes[generation.flushed..],
+                );
+                generation.flushed = generation.bytes.len();
+            }
         }
-        self.reset();
         stats
     }
 
@@ -1691,6 +1729,7 @@ impl UploadRing {
         }
         for generation in &mut self.generations {
             generation.bytes.clear();
+            generation.flushed = 0;
         }
     }
 }
@@ -1805,6 +1844,12 @@ impl FrameUploadAllocators {
             stats += ring.flush(queue);
         }
         stats
+    }
+
+    fn flush_pending(&mut self, queue: &wgpu::Queue) {
+        for ring in &mut self.rings {
+            ring.flush_pending(queue);
+        }
     }
 
     pub(crate) fn reset(&mut self) {

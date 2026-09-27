@@ -2799,6 +2799,10 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             first_run_window,
         };
         self.encode_flush(pass, flush, load_op.unwrap_or(wgpu::LoadOp::Load))?;
+        if std::env::var_os("CRANPOSE_EXP_EARLY_SUBMIT").is_some() {
+            self.renderer.flush_frame_uploads();
+            self.recorder.submit_recorded();
+        }
         pass.drawn.extend(composites);
         ensure_sorted_by_key(&mut pass.drawn, |composite| composite.z_index);
         pass.drawn_z = pass.drawn_z.max(z);
