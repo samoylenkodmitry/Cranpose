@@ -1172,6 +1172,7 @@ pub fn contract_layer(
         hit_test: None,
         has_hit_targets: false,
         has_origin_sinks: false,
+        draws_within_bounds: false,
         isolation: cranpose_render_common::graph::IsolationReasons::default(),
         cache_policy,
         cache_hashes: cranpose_render_common::raster_cache::LayerRasterCacheHashes::default(),
