@@ -26,7 +26,8 @@ pub struct ShapeRecordBody {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
 pub struct ShapeRecordCurve {
-    /// Corner radii for rectangles, arc trigonometry for bands.
+    /// Corner radii for rectangles; zero for bands, whose trig the vertex
+    /// stage derives from `arc_normalized`.
     pub radii: [f32; 4],
     /// Normalised arc start and sweep, then strip start and padded sweep.
     pub arc_normalized: [f32; 4],

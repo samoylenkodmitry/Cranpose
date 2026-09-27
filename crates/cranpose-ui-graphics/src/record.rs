@@ -10,7 +10,8 @@ use bytemuck::{Pod, Zeroable};
 use crate::{
     ArcGeometry, BlendMode, Brush, Color, CornerRadii, DrawPrimitive, FxHasher, Point, Rect,
     RenderHash, ShapeRecordBody, ShapeRecordCurve, ShapeRecords, Stroke, StrokeCap, StrokeJoin,
-    TAU, TileMode, arc_band, arc_trig_cache::ArcTrigCache, float::at_least,
+    TAU, TileMode, arc_band,
+    float::{at_least, within},
 };
 
 /// The kind bits of [`ShapeRecord::flags`]: a plain rect.
@@ -280,7 +281,8 @@ pub struct ShapeRecord {
     /// band that the tight bounds are derived from on demand.
     pub rect: [f32; 4],
     /// Rects: the corner radii, top-left, top-right, bottom-right,
-    /// bottom-left. Arcs: the band's trig, see [`arc_trig`].
+    /// bottom-left. Arcs: zero; the vertex stage derives the band's trig
+    /// from [`Self::arc_normalized`], see [`arc_trig`].
     pub radii: [f32; 4],
     /// The solid colour, or the first stop of a gradient brush.
     pub color: [f32; 4],
@@ -724,7 +726,6 @@ pub fn primitive_coverage_rect(primitive: &DrawPrimitive) -> Option<Rect> {
 #[derive(Clone, Debug)]
 pub struct ShapeRecorder {
     tables: RecordTables,
-    arc_trig: ArcTrigCache,
     last_segment_key: u32,
     segment_waste: u32,
     min: [f32; 2],
@@ -735,7 +736,6 @@ impl Default for ShapeRecorder {
     fn default() -> Self {
         Self {
             tables: RecordTables::default(),
-            arc_trig: ArcTrigCache::default(),
             last_segment_key: NO_SEGMENT_KEY,
             segment_waste: 0,
             min: [f32::INFINITY; 2],
@@ -1018,7 +1018,6 @@ impl ShapeRecorder {
         if bucket.is_some() {
             flags |= ARC_BANDED_BIT;
         }
-        let radii = self.arc_trig.resolve(geometry);
         self.push_shape(
             ShapeRecordBody {
                 rect: rect_row(rect),
@@ -1035,7 +1034,7 @@ impl ShapeRecorder {
                 ],
             },
             ShapeRecordCurve {
-                radii,
+                radii: [0.0; 4],
                 arc_normalized: [
                     geometry.start_angle,
                     geometry.sweep_angle,
@@ -1915,10 +1914,18 @@ fn band_disc(geometry: &ArcGeometry) -> Rect {
     }
 }
 
-/// The arc row the fragment stage reads: the mid-angle sine and cosine and
-/// the half-sweep sine and cosine, with the full circle's sentinel.
-pub fn arc_trig(geometry: &ArcGeometry) -> [f32; 4] {
-    ArcTrigCache::default().resolve(geometry)
+/// The trig the vertex stage derives for a band from its normalized start
+/// and sweep: the mid-angle sine and cosine and the half-sweep sine and
+/// cosine, with the full circle's sentinel. Arc records leave their `radii`
+/// zero; the renderer's CPU mirrors of the band geometry call this.
+pub fn arc_trig(start_angle: f32, sweep_angle: f32) -> [f32; 4] {
+    if sweep_angle >= TAU && start_angle == 0.0 {
+        return [0.0, -1.0, 0.0, -1.0];
+    }
+    let half_sweep = within(sweep_angle, 0.0, TAU) * 0.5;
+    let (mid_sin, mid_cos) = (start_angle + half_sweep).sin_cos();
+    let (half_sin, half_cos) = half_sweep.sin_cos();
+    [mid_sin, mid_cos, at_least(half_sin, 0.0), half_cos]
 }
 
 #[cfg(test)]

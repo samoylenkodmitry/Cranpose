@@ -1,6 +1,6 @@
 use cranpose_ui_graphics::{
     BAND_MARGIN, BAND_QUAD_MARGIN, FRAGMENT_KIND_ARC, Point, QUAD_VERTICES, RecordTables,
-    ShapeRecord, StrokeCap, strip_vertices,
+    ShapeRecord, StrokeCap, arc_trig, strip_vertices,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -35,7 +35,8 @@ impl BandStrip {
         let range = record.arc_normalized[3];
         let step = range / segments as f32;
         let quad = (segments == 1).then(|| {
-            let [sin_mid, cos_mid, sin_half, cos_half] = record.radii;
+            let [sin_mid, cos_mid, sin_half, cos_half] =
+                arc_trig(record.arc_normalized[0], record.arc_normalized[1]);
             let half_width = mid * sin_half + ring_half;
             let half_width = if record.band_cap() == StrokeCap::Butt {
                 half_width.min((mid + ring_half) * sin_half + margin * cos_half)
