@@ -1389,7 +1389,7 @@ fn software_text_line_width_and_prefix_width_share_cached_plan() {
         .expect("software text should expose a line width");
     let stats_after_width = {
         let cache = measurer.lock_cache();
-        assert_eq!(cache.line_prefix_widths.len(), 1);
+        assert_eq!(cache.line_prefix_widths.entries.len(), 1);
         cache.glyph_metrics.stats()
     };
 
@@ -1831,4 +1831,44 @@ fn font_bytes_keep_the_bytes_they_were_given() {
     let owned = FontBytes::from(vec![1, 2, 3]);
     assert!(matches!(owned, FontBytes::Owned(_)));
     assert_eq!(owned.as_slice(), &[1, 2, 3]);
+}
+
+fn prefix_widths_of(chars: usize) -> Rc<TextLinePrefixWidths> {
+    Rc::new(
+        TextLinePrefixWidths::from_parts(
+            (0..=chars).map(|index| index as f32).collect(),
+            vec![0.0; chars],
+            0.0,
+        )
+        .expect("monotonic prefix widths"),
+    )
+}
+
+fn prefix_key(text: &str) -> TextCacheKey<LinePrefixWidthsParams> {
+    TextCacheKey::new(text, (0, text.len(), 1, 2))
+}
+
+#[test]
+fn prefix_widths_past_their_character_budget_leave_least_recent_first() {
+    let mut cache = LinePrefixWidthsCache::new(64, 10);
+    cache.put(prefix_key("a"), prefix_widths_of(4));
+    cache.put(prefix_key("b"), prefix_widths_of(4));
+    assert_eq!(cache.chars, 8);
+    assert!(cache.get(TextProbe::new("a", (0, 1, 1, 2)).key()).is_some());
+    cache.put(prefix_key("c"), prefix_widths_of(4));
+    assert_eq!(
+        cache.chars, 8,
+        "the least recent line left to fit the budget"
+    );
+    assert!(cache.get(TextProbe::new("b", (0, 1, 1, 2)).key()).is_none());
+    assert!(cache.get(TextProbe::new("a", (0, 1, 1, 2)).key()).is_some());
+    cache.put(prefix_key("a"), prefix_widths_of(2));
+    assert_eq!(cache.chars, 6, "a replaced line gives its characters back");
+    cache.put(prefix_key("d"), prefix_widths_of(30));
+    assert_eq!(
+        cache.entries.len(),
+        1,
+        "a line longer than the budget stays alone rather than not at all"
+    );
+    assert_eq!(cache.chars, 30);
 }
