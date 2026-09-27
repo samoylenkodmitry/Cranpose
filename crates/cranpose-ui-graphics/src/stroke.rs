@@ -232,10 +232,66 @@ impl ArcGeometry {
         ]) {
             return Self::DEGENERATE;
         }
-
         let outer = at_least(outer_radius, 0.0);
         let inner = within(inner_radius, 0.0, outer);
+        Self::with_angles(center, inner, outer, start_angle, sweep_angle, cap)
+    }
 
+    /// [`Self::new`] for the radii [`arc_band`] returns, which already hold
+    /// `0 <= inner <= outer`: the same geometry without clamping them again.
+    #[inline]
+    pub(crate) fn of_band(
+        center: Point,
+        (inner, outer, cap): (f32, f32, StrokeCap),
+        start_angle: f32,
+        sweep_angle: f32,
+    ) -> Self {
+        if !all_finite([center.x, center.y, inner, outer, start_angle, sweep_angle]) {
+            return Self::DEGENERATE;
+        }
+        Self::with_angles(center, inner, outer, start_angle, sweep_angle, cap)
+    }
+
+    /// The geometry of normalized radii with its sweep made positive and at
+    /// most a full turn, and its start wrapped into `[0, TAU)`.
+    #[inline(always)]
+    fn with_angles(
+        center: Point,
+        inner: f32,
+        outer: f32,
+        start_angle: f32,
+        sweep_angle: f32,
+        cap: StrokeCap,
+    ) -> Self {
+        // A sweep in (0, TAU) from a start in [0, TAU) is already normal:
+        // told apart by the bits alone, with no float compare, each an
+        // FPSCR transfer on armv7 (a positive finite float's bits order as
+        // its value; zero, negatives, infinity and NaN fall outside).
+        if sweep_angle.to_bits().wrapping_sub(1) < TAU.to_bits() - 1
+            && start_angle.to_bits() < TAU.to_bits()
+        {
+            return Self {
+                center,
+                inner_radius: inner,
+                outer_radius: outer,
+                start_angle,
+                sweep_angle,
+                cap,
+            };
+        }
+        Self::normalizing_angles(center, inner, outer, start_angle, sweep_angle, cap)
+    }
+
+    /// [`Self::with_angles`] by comparing the angles as floats.
+    #[inline]
+    fn normalizing_angles(
+        center: Point,
+        inner: f32,
+        outer: f32,
+        start_angle: f32,
+        sweep_angle: f32,
+        cap: StrokeCap,
+    ) -> Self {
         let (mut start, mut sweep) = if sweep_angle < 0.0 {
             (start_angle + sweep_angle, -sweep_angle)
         } else {

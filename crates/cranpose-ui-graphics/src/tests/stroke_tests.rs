@@ -411,3 +411,102 @@ fn inflate_rect_ignores_non_positive_amounts() {
         }
     );
 }
+
+/// The angles and radii the bands of a frame reach `of_band` with, and
+/// those at its edges: signed zeros, full and over-full turns, negative
+/// sweeps, starts past a turn, and non-finite values.
+fn band_inputs() -> Vec<(f32, f32, f32, f32)> {
+    let angles = [
+        0.0,
+        -0.0,
+        1e-7,
+        0.021,
+        1.0,
+        PI,
+        TAU - 1e-6,
+        TAU,
+        TAU + 0.5,
+        -0.3,
+        -TAU,
+        13.0,
+        f32::INFINITY,
+        f32::NAN,
+    ];
+    let radii = [
+        (0.0, 0.0),
+        (-0.0, 3.0),
+        (2.0, 3.0),
+        (0.0, 5.5),
+        (4.0, f32::INFINITY),
+    ];
+    let mut inputs = Vec::new();
+    for start in angles {
+        for sweep in angles {
+            for (inner, outer) in radii {
+                inputs.push((inner, outer, start, sweep));
+            }
+        }
+    }
+    let mut seed: u32 = 0x2545_F491;
+    for _ in 0..4096 {
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            seed as f32 / u32::MAX as f32
+        };
+        let outer = next() * 300.0;
+        inputs.push((
+            outer * next(),
+            outer,
+            next() * 20.0 - 10.0,
+            next() * 16.0 - 8.0,
+        ));
+    }
+    inputs
+}
+
+#[test]
+fn a_band_geometry_matches_the_normalizing_constructor_bit_for_bit() {
+    let bits = |geometry: ArcGeometry| {
+        [
+            geometry.center.x,
+            geometry.center.y,
+            geometry.inner_radius,
+            geometry.outer_radius,
+            geometry.start_angle,
+            geometry.sweep_angle,
+        ]
+        .map(f32::to_bits)
+    };
+    let center = Point::new(3.5, -2.0);
+    for (inner, outer, start, sweep) in band_inputs() {
+        for cap in [StrokeCap::Butt, StrokeCap::Round, StrokeCap::Square] {
+            let band = arc_band(outer, inner, None);
+            let expected = ArcGeometry::new(center, band.0, band.1, start, sweep, cap);
+            let actual = ArcGeometry::of_band(center, (band.0, band.1, cap), start, sweep);
+            assert_eq!(
+                bits(actual),
+                bits(expected),
+                "{inner} {outer} {start} {sweep}"
+            );
+            assert_eq!(actual.cap, expected.cap);
+        }
+    }
+}
+
+#[test]
+fn angles_told_normal_by_their_bits_come_out_as_the_float_compares_leave_them() {
+    let center = Point::new(1.0, 2.0);
+    for (inner, outer, start, sweep) in band_inputs() {
+        let fast = ArcGeometry::with_angles(center, inner, outer, start, sweep, StrokeCap::Butt);
+        let compared =
+            ArcGeometry::normalizing_angles(center, inner, outer, start, sweep, StrokeCap::Butt);
+        assert_eq!(
+            [fast.start_angle, fast.sweep_angle].map(f32::to_bits),
+            [compared.start_angle, compared.sweep_angle].map(f32::to_bits),
+            "start={start} sweep={sweep}"
+        );
+        assert_eq!(fast.cap, compared.cap);
+    }
+}
