@@ -95,7 +95,39 @@ fn raised_flags(effect: &RenderEffect) -> Vec<&'static str> {
     };
     let mut shader = (**shader).clone();
     specialize_liquid_glass_with_folds(&mut shader, true);
-    shader.overrides().iter().map(|(flag, _)| *flag).collect()
+    shader
+        .overrides()
+        .iter()
+        .map(|(flag, _)| *flag)
+        .filter(|flag| {
+            LIQUID_GLASS_SPECIALIZATIONS
+                .iter()
+                .any(|specialization| specialization.flag == *flag)
+        })
+        .collect()
+}
+
+#[test]
+fn a_folded_material_pins_its_optical_stage_and_an_unfolded_one_reads_it() {
+    let mut shader = RuntimeShader::new(LIQUID_GLASS_WGSL);
+    for stage in 0..=3u8 {
+        shader.set_float(GLASS_OPTICAL_STAGE_UNIFORM, f32::from(stage));
+        specialize_liquid_glass_with_folds(&mut shader, true);
+        assert!(
+            shader
+                .overrides()
+                .contains(&(GLASS_OPTICAL_STAGE_OVERRIDE, f64::from(stage))),
+            "stage {stage}: {:?}",
+            shader.overrides()
+        );
+        specialize_liquid_glass_with_folds(&mut shader, false);
+        assert!(
+            !shader
+                .overrides()
+                .iter()
+                .any(|(name, _)| *name == GLASS_OPTICAL_STAGE_OVERRIDE)
+        );
+    }
 }
 
 #[test]

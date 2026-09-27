@@ -130,7 +130,6 @@ override GLASS_ADAPTIVE_FROST_OFF: bool = false;
 override GLASS_INK_OFF: bool = false;
 override GLASS_RIM_STYLE_OFF: bool = false;
 override GLASS_KEY_FILL_OFF: bool = false;
-override GLASS_OPTICAL_STAGE_OFF: bool = false;
 override GLASS_SEPARATE_CONTENT_OFF: bool = false;
 override GLASS_TONE_CURVE_OFF: bool = false;
 override GLASS_PANE_OFF: bool = false;
@@ -154,6 +153,9 @@ override GLASS_INTERIOR_GUARD: bool = false;
 // 2 for the rim, each pipeline compiled without the other's work and
 // discarding the other's fragments before any fetch; 0 draws it whole.
 override GLASS_RIM_DRAW: i32 = 0;
+// The optical stage the material draws (uniform 147), pinned by the
+// renderer so each stage compiles only its own path; -1 reads the uniform.
+override GLASS_OPTICAL_STAGE: i32 = -1;
 
 fn fixed_or(value: f32, fixed: f32, is_fixed: bool) -> f32 {
     return select(value, fixed, is_fixed);
@@ -917,7 +919,7 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
     var map = region_map();
     let tex_size = logical_extent();
     let material_activity = select(clamp(get_float(111u), 0.0, 1.0), 1.0, GLASS_PARTIAL_ACTIVITY_OFF);
-    let optical_stage = fixed_or(get_float(147u), 0.0, GLASS_OPTICAL_STAGE_OFF);
+    let optical_stage = select(get_float(147u), f32(GLASS_OPTICAL_STAGE), GLASS_OPTICAL_STAGE >= 0);
     let intermediate_stage = optical_stage == 1.0 || optical_stage == 2.0;
     let separate_content = fixed_or(get_float(174u), 0.0, GLASS_SEPARATE_CONTENT_OFF) > 0.5;
 
