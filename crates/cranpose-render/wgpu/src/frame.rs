@@ -775,6 +775,7 @@ impl PendingBackdrop<'_> {
 static STAGE_DIAG: DebugToggle = DebugToggle::new("CRANPOSE_GPU_STAGE_DIAG");
 static NO_EFFECT_DOMAINS: DebugToggle = DebugToggle::new("CRANPOSE_NO_EFFECT_DOMAINS");
 static NO_FILL_CACHE: DebugToggle = DebugToggle::new("CRANPOSE_NO_FILL_CACHE");
+static EXP_EXTRA_PASSES: DebugToggle = DebugToggle::new("CRANPOSE_EXP_EXTRA_PASSES");
 const ABLATION_LOG_PERIOD: u32 = 600;
 static NO_BACKDROP_CACHE: DebugToggle = DebugToggle::new("CRANPOSE_NO_BACKDROP_CACHE");
 static PROBE_PASSES: DebugToggle = DebugToggle::new("CRANPOSE_PROBE_PASSES");
@@ -2834,9 +2835,19 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         let segments = flush_segments(&pass.layer.scene, &parts, &flush, place.offset, pass.scale);
         let label = LAYER_PASS_LABELS[pass.segments.min(LAYER_PASS_LABELS.len() - 1)];
         pass.segments += 1;
-        self.renderer
-            .encode_pass(self.recorder, target, &segments, load_op, label)
-            .map(drop)
+        let encoded = self
+            .renderer
+            .encode_pass(self.recorder, target, &segments, load_op, label)?;
+        if encoded && pass.page.offset == [0.0, 0.0] && target.width >= 1000 {
+            let extra = EXP_EXTRA_PASSES.parse::<u32>().unwrap_or(0);
+            for _ in 0..extra {
+                let empty =
+                    self.recorder
+                        .begin_color_pass("Exp Extra Pass", target.view, wgpu::LoadOp::Load);
+                drop(empty);
+            }
+        }
+        Ok(())
     }
 
     /// Clears the pass to the flush's first op when it is a solid fill of
