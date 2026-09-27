@@ -4678,7 +4678,7 @@ fn rasterize_spanned_text_to_image(
             }
         }
 
-        let mut chunk_style = text_draw.text_style.clone();
+        let mut chunk_style = cranpose_ui::TextStyle::clone(&text_draw.text_style);
         chunk_style.span_style = merged_span;
 
         for part in chunk.split_inclusive('\n') {

@@ -469,7 +469,7 @@ fn push_label(scene: &mut CompositorScene, x: f32, color: Color) {
         },
         cranpose_ui::text::shared_plain_render_string("MM"),
         color,
-        style,
+        std::sync::Arc::new(style),
         18.0,
         1.0,
         TextLayoutOptions::default(),
