@@ -157,11 +157,52 @@ pub const LIQUID_GLASS_SPECIALIZATIONS: &[LiquidGlassSpecialization] = &[
         inactive: |u| slot(u, GLASS_RIM_STYLE_UNIFORM) <= 0.0,
     },
     LiquidGlassSpecialization {
+        flag: "GLASS_KEY_FILL_OFF",
+        slots: &[GLASS_KEY_FILL_UNIFORM],
+        inactive: |u| slot(u, GLASS_KEY_FILL_UNIFORM) <= 0.0,
+    },
+    LiquidGlassSpecialization {
+        flag: "GLASS_OPTICAL_STAGE_OFF",
+        slots: &[GLASS_OPTICAL_STAGE_UNIFORM],
+        inactive: |u| slot(u, GLASS_OPTICAL_STAGE_UNIFORM) == 0.0,
+    },
+    LiquidGlassSpecialization {
+        flag: "GLASS_SEPARATE_CONTENT_OFF",
+        slots: &[GLASS_FOREGROUND_CONTENT_UNIFORM],
+        inactive: |u| slot(u, GLASS_FOREGROUND_CONTENT_UNIFORM) <= 0.5,
+    },
+    LiquidGlassSpecialization {
+        flag: "GLASS_TONE_CURVE_OFF",
+        slots: &[GLASS_ADAPTIVE_TONE_UNIFORM],
+        inactive: |u| slot(u, GLASS_ADAPTIVE_TONE_UNIFORM) <= 0.5,
+    },
+    LiquidGlassSpecialization {
+        flag: "GLASS_PANE_OFF",
+        slots: &[GLASS_PANE_BLEND_UNIFORM],
+        inactive: |u| slot(u, GLASS_PANE_BLEND_UNIFORM) <= 0.0,
+    },
+    LiquidGlassSpecialization {
+        flag: "GLASS_INSET_SHADOW_OFF",
+        slots: &[GLASS_INNER_SHADOW_PRESENCE_UNIFORM],
+        inactive: |u| {
+            slot(u, GLASS_INNER_SHADOW_PRESENCE_UNIFORM) <= 0.0
+                || slot(u, GLASS_INNER_SHADOW_UNIFORM + 3) <= 0.0
+        },
+    },
+    LiquidGlassSpecialization {
+        flag: "GLASS_HOLDING_OFF",
+        slots: &[GLASS_FACE_RESPONSE_UNIFORM],
+        inactive: |u| slot(u, GLASS_FACE_RESPONSE_UNIFORM) == 0.0,
+    },
+    LiquidGlassSpecialization {
         flag: "GLASS_INTERIOR_GUARD",
         slots: &[],
         inactive: |_| true,
     },
 ];
+
+/// The inset shadow's presence, the last of its eight slots.
+const GLASS_INNER_SHADOW_PRESENCE_UNIFORM: usize = GLASS_INNER_SHADOW_UNIFORM + 7;
 
 /// Whether liquid glass compiles a pipeline per material.
 ///
