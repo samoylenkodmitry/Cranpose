@@ -360,9 +360,7 @@ where
                 })
                 && !frame_can_start(self.renderer())
             {
-                for node in cranpose_ui::take_lazy_prefetch_requests() {
-                    cranpose_ui::schedule_measure_repass(node);
-                }
+                cranpose_ui::drain_lazy_prefetch_requests(cranpose_ui::schedule_measure_repass);
                 cranpose_ui::with_lazy_prefetch_pass(|| self.run_layout_phase_in_context());
                 passes += 1;
             }

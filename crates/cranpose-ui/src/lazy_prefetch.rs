@@ -51,11 +51,11 @@ pub(crate) fn record_lazy_item_cost(cost: Duration) {
     });
 }
 
-/// Lazy lists that left an item beyond their viewport uncomposed during a
-/// frame, for [`with_lazy_prefetch_pass`] to compose before the next frame.
-/// Taking them clears the requests.
-pub fn take_lazy_prefetch_requests() -> Vec<NodeId> {
-    with_state(|state| std::mem::take(&mut *state.requests.borrow_mut()))
+/// Hands `schedule` each lazy list that left an item beyond its viewport
+/// uncomposed during a frame, for [`with_lazy_prefetch_pass`] to compose
+/// before the next frame, and clears the requests.
+pub fn drain_lazy_prefetch_requests(schedule: impl FnMut(NodeId)) {
+    with_state(|state| state.requests.borrow_mut().drain(..).for_each(schedule));
 }
 
 /// Whether any lazy list waits for an idle prefetch pass.
