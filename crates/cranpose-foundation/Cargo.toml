@@ -34,3 +34,10 @@ default = []
 [[test]]
 name = "integration"
 path = "tests/integration.rs"
+
+[[test]]
+name = "allocations"
+path = "tests/allocations/main.rs"
+
+[dev-dependencies]
+stats_alloc = "0.1.10"

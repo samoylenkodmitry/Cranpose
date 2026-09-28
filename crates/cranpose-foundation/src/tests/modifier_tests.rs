@@ -334,8 +334,11 @@ fn element_equality_controls_node_reuse() {
     assert_eq!(chain.node::<EqualityNode>(0).unwrap().value, 2);
 }
 
+/// Compose's `NodeChain.updateFrom`: an element of the same type as the one
+/// before it in that place updates that node, even when an equal element sits
+/// elsewhere in the old chain. Only a change of type rebuilds the chain.
 #[test]
-fn equality_matching_prefers_identical_elements_over_type_matches() {
+fn an_element_of_the_same_type_updates_the_node_in_its_place() {
     let mut chain = ModifierNodeChain::new();
     let mut context = TestContext::default();
 
@@ -351,9 +354,13 @@ fn equality_matching_prefers_identical_elements_over_type_matches() {
         }),
     ];
     chain.update_from_slice(&initial, &mut context);
+    let nodes_before = [0, 1].map(|index| {
+        let node = chain.node::<EqualityNode>(index).unwrap();
+        &*node as *const EqualityNode
+    });
     updates.set(0);
 
-    let reordered = vec![
+    let shifted = vec![
         modifier_element(EqualityElement {
             value: 2,
             updates: updates.clone(),
@@ -363,15 +370,16 @@ fn equality_matching_prefers_identical_elements_over_type_matches() {
             updates: updates.clone(),
         }),
     ];
-    chain.update_from_slice(&reordered, &mut context);
+    chain.update_from_slice(&shifted, &mut context);
 
-    assert_eq!(
-        updates.get(),
-        1,
-        "update is called only when elements differ"
-    );
+    assert_eq!(updates.get(), 2, "each differing element updates its node");
     assert_eq!(chain.node::<EqualityNode>(0).unwrap().value, 2);
     assert_eq!(chain.node::<EqualityNode>(1).unwrap().value, 3);
+    let nodes_after = [0, 1].map(|index| {
+        let node = chain.node::<EqualityNode>(index).unwrap();
+        &*node as *const EqualityNode
+    });
+    assert_eq!(nodes_before, nodes_after, "the nodes stay where they were");
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

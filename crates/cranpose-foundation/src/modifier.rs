@@ -2601,13 +2601,12 @@ impl ModifierNodeChain {
 
             if fast_path_failed_at.is_none() && idx < old_len {
                 let entry = &mut self.entries[idx];
+                // An element of the node's type and key updates the node where
+                // it is, whatever its content, as Compose does.
                 let same_type = entry.element_type == element.element_type();
                 let same_node_type = entry.node_type == element.node_type();
                 let same_key = entry.key == element.key();
-                let same_hash = entry.hash_code == element.hash_code();
-
-                let positional_update = element.requires_update();
-                if same_type && same_node_type && same_key && (same_hash || positional_update) {
+                if same_type && same_node_type && same_key {
                     let can_update_node = {
                         let node_borrow = entry.node.borrow();
                         element.can_update_node(&**node_borrow)
