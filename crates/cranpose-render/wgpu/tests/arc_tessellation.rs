@@ -113,9 +113,8 @@ struct ArcRaster {
 
 impl ArcRaster {
     fn new(recording: &CommandRecording) -> Self {
-        let instance = wgpu::Instance::default();
-        let adapter = pollster::block_on(instance.request_adapter(&Default::default()))
-            .expect("headless adapter");
+        let adapter =
+            support::device::headless_adapter(wgpu::Backends::all()).expect("headless adapter");
         let (device, queue) = pollster::block_on(adapter.request_device(&Default::default()))
             .expect("headless device");
         let buffer = |bytes: &[u8], usage| {
