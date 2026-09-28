@@ -153,16 +153,69 @@ check "nested target capacity is counted once" \
 touch "$cross/nested-cache/ci/.fingerprint"
 listing="$(gc --root "$nested" --min-free-gb 999999 --busy-minutes 15 2>&1)"
 check "recent nested writes protect their entire parent cache" \
-    "$(printf '%s\n' "$listing" | grep '^nested ' | grep -c 'protected: live build')" "1"
+    "$(printf '%s\n' "$listing" | grep '^nested/target ' | grep -c 'protected: live build')" "1"
 listing="$(gc --root "$root/nested" --min-free-gb 999999 --busy-minutes 15 2>&1)"
 check "activity below candidate discovery depth protects the parent cache" \
-    "$(printf '%s\n' "$listing" | grep '^nested ' | grep -c 'protected: live build')" "1"
+    "$(printf '%s\n' "$listing" | grep '^nested/target ' | grep -c 'protected: live build')" "1"
 
 listing="$(gc --root "$nested" --apply --min-free-gb 999999 --busy-minutes 0 2>&1)"
 check "reclaiming a parent never retries its removed descendants" \
     "$(printf '%s\n' "$listing" | grep -c 'FAILED to reclaim' || true)" "0"
 check "nested target root is reclaimed" \
     "$([ -d "$nested" ] && echo present || echo gone)" "gone"
+
+echo
+# Build output beyond `target/`: a second cargo cache, and Gradle's build
+# directories -- but only a `build` beside a Gradle script that git ignores.
+make_target "$root/new/target-android" 202608050000
+mkdir -p "$root/old/android/build/outputs" "$root/old/src/build" "$root/old/lib/build"
+touch "$root/old/android/build.gradle.kts" "$root/old/lib/build.gradle"
+printf 'android/build/\n' > "$root/old/.gitignore"
+for dir in android/build/outputs src/build lib/build; do
+    dd if=/dev/zero of="$root/old/$dir/blob" bs=1048576 count=120 2>/dev/null
+done
+touch -t 202608030000 "$root/old/android/build/outputs" "$root/old/android/build" \
+    "$root/old/src/build" "$root/old/lib/build"
+listing="$(gc --min-free-gb 999999 --busy-minutes 0 2>&1)"
+check "a second cargo cache in a worktree is a candidate" \
+    "$(printf '%s\n' "$listing" | grep -c '^new/target-android .*would reclaim')" "1"
+check "a gradle build dir beside its script and ignored is a candidate" \
+    "$(printf '%s\n' "$listing" | grep -c '^android/build .*would reclaim')" "1"
+check "a build dir without a gradle script is no candidate" \
+    "$(printf '%s\n' "$listing" | grep -c '^src/build ')" "0"
+check "a build dir git does not ignore is no candidate" \
+    "$(printf '%s\n' "$listing" | grep -c '^lib/build ')" "0"
+gc --apply --min-free-gb 999999 --busy-minutes 0 >/dev/null 2>&1
+check "the gradle build dir is reclaimed" \
+    "$([ -d "$root/old/android/build" ] && echo present || echo gone)" "gone"
+check "the gradle script beside it survives" \
+    "$([ -f "$root/old/android/build.gradle.kts" ] && echo present || echo gone)" "present"
+check "a build dir without a gradle script survives" \
+    "$([ -d "$root/old/src/build" ] && echo present || echo gone)" "present"
+check "an unignored build dir survives" \
+    "$([ -d "$root/old/lib/build" ] && echo present || echo gone)" "present"
+
+# A sibling repository swept by --root keeps its primary checkout protected,
+# as this repository's is.
+sibling="$root/sibling"
+mkdir -p "$sibling"
+git -C "$sibling" init -q
+make_target "$sibling/target" 202608010000
+listing="$(gc --root "$sibling" --min-free-gb 999999 --busy-minutes 0 2>&1)"
+check "a sibling repository's primary checkout is protected" \
+    "$(printf '%s\n' "$listing" | grep '^sibling/target ' | grep -c 'protected: primary checkout')" "1"
+
+# A worktree whose directory is gone leaves a registration that the sweep
+# prunes; a live worktree's registration stays.
+git -C "$main_wt" worktree add -q -b wt-gone "$root/gone"
+# Git records a worktree by its resolved path (on macOS /var is /private/var).
+resolved="$(cd "$root" && pwd -P)"
+rm -rf "$root/gone"
+listing="$(gc --apply --min-free-gb 0 2>&1)"
+check "a vanished worktree's registration is pruned" \
+    "$(git -C "$main_wt" worktree list --porcelain | grep -c "^worktree $resolved/gone\$" || true)" "0"
+check "a live worktree's registration stays" \
+    "$(git -C "$main_wt" worktree list --porcelain | grep -c "^worktree $resolved/new\$" || true)" "1"
 
 echo "$passed passed, $failed failed"
 [ "$failed" -eq 0 ]

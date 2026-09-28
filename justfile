@@ -305,6 +305,7 @@ test-shell-helpers: _benchmark-python ci-contract-gates
     bash scripts/ci/sccache_lifetime_test.sh
     scripts/wait_until_quiet_test.sh
     scripts/dev/target_gc_test.sh
+    scripts/dev/worktree_done_test.sh
     python3 scripts/dev/move_inline_tests_test.py
     scripts/ci/commit_msg_hook_test.sh
     {{benchmark_python}} scripts/android_benchmark_test.py
@@ -749,17 +750,34 @@ perf-heap *args:
 # recipes so exhaustion arrives as a refusal with a number rather than as
 # `No space left on device (os error 28)` from inside a link step.
 
+# The directory holding this repository's primary checkout, where the sibling
+# apps and their worktrees live too: the sweep covers their build output as
+# well, their primary checkouts protected like this one's.
+projects_dir := `cd "$(git rev-parse --path-format=absolute --git-common-dir)/../.." && pwd -P`
+gc_roots := "--root " + quote(projects_dir) + " --root \"${XDG_CACHE_HOME:-$HOME/.cache}/cranpose/benchmarks\""
+
+# The sweep covers cargo target dirs and Gradle build dirs of the worktrees
+# here and beside this checkout.
 # Report what the sweep would reclaim. Removes nothing.
 gc:
-    scripts/dev/target_gc.sh --root "${XDG_CACHE_HOME:-$HOME/.cache}/cranpose/benchmarks"
+    scripts/dev/target_gc.sh {{gc_roots}}
 
-# Reclaim least-recently-built worktree target dirs to the free-space target.
+# It also drops the registrations of worktrees whose directories are gone.
+# Reclaim least-recently-built build output to the free-space target.
 gc-apply:
-    scripts/dev/target_gc.sh --apply --root "${XDG_CACHE_HOME:-$HOME/.cache}/cranpose/benchmarks"
+    scripts/dev/target_gc.sh --apply {{gc_roots}}
 
-# Current free space and the per-worktree target dirs behind it.
+# Current free space and the build output behind it.
 disk:
-    @scripts/dev/target_gc.sh --min-free-gb 0 --root "${XDG_CACHE_HOME:-$HOME/.cache}/cranpose/benchmarks"
+    @scripts/dev/target_gc.sh --min-free-gb 0 {{gc_roots}}
+
+# Refuses, and says why, while anything would be lost. Takes any repository's
+# worktree, relative to where it is run: `just -f <this checkout>/justfile
+# worktree-done <path>`. Never remove a worktree with rm.
+# Remove a finished worktree and its branch once its work is on a remote.
+[no-cd]
+worktree-done path="." *flags:
+    {{quote(justfile_directory() / "scripts/dev/worktree_done.sh")}} {{flags}} {{quote(path)}}
 
 # Refuse to start a heavy recipe the disk cannot finish. Sweeps first.
 _disk-guard:

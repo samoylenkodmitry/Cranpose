@@ -7,6 +7,7 @@
 - For implementation, read [Rust/API conventions](docs/agent-workflows.md#rust-and-api-conventions) and the [performance coding guide](docs/performance_coding_guide.md). Test every public function/method; all test bodies belong under `/test*/`, never beside implementation. Document public APIs only.
 - Use RustRover MCP for code search, understanding, analysis, refactoring and edits; pass `projectPath`. Prefer IDE tools over Bash/grep/rg for code discovery. Run build/test/git and other shell commands directly through the shell tool; RustRover's MCP terminal is not required. Read [code tools](docs/agent-workflows.md#code-tools).
 - Check branch/status at start and completion and after relevant git operations; isolate concurrent work. Never use `git reset`. Preserve unrelated and uncommitted work.
+- When done with a worktree (any repository's), push its work and run `just worktree-done <path>`, from another repository `just -f <Cranpose checkout>/justfile worktree-done <path>`; it removes the worktree and its branch or says what would be lost. Reclaim disk with `just gc-apply`. Never `rm` a worktree, `target/` or `build/`.
 
 - Keep tool results near 2,000 tokens by default; return relevant excerpts, failures and changed results. Save full logs to files and expand only when needed. Discover only needed tool schemas; reuse unchanged instructions and evidence.
 - Batch independent reads/checks. Wait 30–60 seconds for long jobs when supported; report progress between waits. Avoid tight polling, repeated status checks and unchanged log dumps.
