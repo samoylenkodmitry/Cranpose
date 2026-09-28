@@ -66,14 +66,36 @@ internal val FEATURES_BEHIND_PERMISSIONS: Map<String, List<String>> = mapOf(
 internal data class FeatureLine(val name: String, val required: Boolean)
 
 /**
- * What an application's build script declared in Rust: the permissions its
- * services need, and the hardware it cannot run without.
+ * What an application's build script declared in Rust: its services, the
+ * permissions they need, and the hardware it cannot run without.
  */
 internal data class RustDeclaration(
+    val services: List<String>,
     val permissions: List<String>,
     val demands: List<String>,
     val opens: List<String>,
 )
+
+/**
+ * What the application declared in Rust, or nothing when it has not.
+ */
+internal fun readRustDeclaration(declaration: ConfigurableFileCollection): RustDeclaration {
+    val file = declaration.files.firstOrNull { candidate -> candidate.isFile }
+        ?: return RustDeclaration(emptyList(), emptyList(), emptyList(), emptyList())
+    val parsed = JsonSlurper().parse(file) as? Map<*, *>
+        ?: throw GradleException("${file.path} is not the declaration cranpose wrote")
+    return RustDeclaration(
+        services = (parsed["services"] as? List<*>).orEmpty().mapNotNull { entry ->
+            (entry as? Map<*, *>)?.get("name")?.toString()
+        },
+        permissions = names(parsed["permissions"]),
+        demands = names(parsed["demands"]),
+        opens = names(parsed["opens"]),
+    )
+}
+
+private fun names(value: Any?): List<String> =
+    (value as? List<*>).orEmpty().map { entry -> entry.toString() }
 
 /** The activity every Cranpose application runs in, as the base manifest declares it. */
 private const val CRANPOSE_ACTIVITY = "dev.cranpose.android.CranposeActivity"
@@ -222,21 +244,6 @@ abstract class CranposeManifestCheck : DefaultTask() {
             }
 
     /**
-     * What the application declared in Rust, or nothing when it has not.
-     */
-    private fun rustDeclaration(): RustDeclaration {
-        val file = declaration.files.firstOrNull { candidate -> candidate.isFile }
-            ?: return RustDeclaration(emptyList(), emptyList(), emptyList())
-        val parsed = JsonSlurper().parse(file) as? Map<*, *>
-            ?: throw GradleException("${file.path} is not the declaration cranpose wrote")
-        return RustDeclaration(
-            permissions = names(parsed["permissions"]),
-            demands = names(parsed["demands"]),
-            opens = names(parsed["opens"]),
-        )
-    }
-
-    /**
      * Offers the application for the files it opens: one filter for a share
      * sent to it and one for "Open with", each naming every declared type,
      * so the platform lists the application for those files and the activity
@@ -280,8 +287,28 @@ abstract class CranposeManifestCheck : DefaultTask() {
         )
     }
 
-    private fun names(value: Any?): List<String> =
-        (value as? List<*>).orEmpty().map { entry -> entry.toString() }
+    private fun declareReceivers(document: org.w3c.dom.Document, services: List<String>) {
+        val receivers = services.flatMap { service ->
+            DECLARED_SERVICES[service]?.receivers.orEmpty()
+        }
+        if (receivers.isEmpty()) {
+            return
+        }
+        val application = document.getElementsByTagName("application").item(0) as? Element
+            ?: throw GradleException(
+                "the merged manifest has no application to declare ${receivers.joinToString()} in"
+            )
+        for (name in receivers) {
+            application.appendChild(document.createElement("receiver").apply {
+                setAttributeNS(ANDROID_NAMESPACE, "android:name", name)
+                setAttributeNS(ANDROID_NAMESPACE, "android:exported", "false")
+            })
+        }
+        logger.lifecycle(
+            "cranpose: ${receivers.joinToString(", ")} declared, not exported, from this " +
+                "application's own declaration"
+        )
+    }
 
     @TaskAction
     fun run() {
@@ -291,7 +318,7 @@ abstract class CranposeManifestCheck : DefaultTask() {
         val document = builder.parse(mergedManifest.get().asFile)
         val manifest = document.documentElement
 
-        val rust = rustDeclaration()
+        val rust = readRustDeclaration(declaration)
         val already = namedPermissions(document)
         val added = rust.permissions.filterNot(already::contains)
         for (permission in added) {
@@ -347,6 +374,7 @@ abstract class CranposeManifestCheck : DefaultTask() {
         }
 
         offerOpening(document, rust.opens)
+        declareReceivers(document, rust.services)
 
         val writer = TransformerFactory.newInstance().newTransformer()
         writer.setOutputProperty(OutputKeys.INDENT, "yes")

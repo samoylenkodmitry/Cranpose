@@ -4,15 +4,12 @@ import android.app.NativeActivity;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
-import android.content.pm.PackageInstaller;
 import android.app.PendingIntent;
-import android.content.BroadcastReceiver;
 import android.graphics.Rect;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
-import android.content.IntentFilter;
 import android.net.ConnectivityManager;
 import android.net.Network;
 import android.net.NetworkCapabilities;
@@ -44,19 +41,12 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.net.HttpURLConnection;
-import java.net.URL;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.text.BreakIterator;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
-
-import org.json.JSONArray;
-import org.json.JSONObject;
 
 /**
  * A {@link NativeActivity} that exposes the Storage Access Framework to
@@ -86,8 +76,6 @@ public class CranposeActivity extends NativeActivity {
     private static native boolean nativeOnBackInvoked();
     private static native void nativeOnIncomingContent(String name, String mimeType, String uri);
     private static native void nativeOnTrimMemory(int level);
-    private static native void nativeOnAppUpdateStatus(int kind, String version,
-            String downloadUrl, long downloaded, long total, String message, String digest);
     private static native void nativeOnCameraFrame(byte[] nv12, int width, int height,
             int rotationDegrees, long sequence);
     private static native void nativeOnCameraFrameDropped();
@@ -220,295 +208,6 @@ public class CranposeActivity extends NativeActivity {
         } catch (IOException error) {
             return null;
         }
-    }
-
-    private static final int UPDATE_CHECKING = 1;
-    private static final int UPDATE_CURRENT = 2;
-    private static final int UPDATE_AVAILABLE = 3;
-    private static final int UPDATE_DOWNLOADING = 4;
-    private static final int UPDATE_CONFIRMATION = 5;
-    private static final int UPDATE_INSTALLING = 6;
-    private static final int UPDATE_ERROR = 7;
-    private static final int UPDATE_VERIFYING = 8;
-
-    private String cranposeUpdateInstallAction() {
-        return getPackageName() + ".CRANPOSE_UPDATE_INSTALL_RESULT";
-    }
-
-    private final BroadcastReceiver cranposeUpdateInstallReceiver = new BroadcastReceiver() {
-        @Override
-        public void onReceive(Context context, Intent intent) {
-            int status = intent.getIntExtra(
-                    PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE);
-            if (status == PackageInstaller.STATUS_PENDING_USER_ACTION) {
-                nativeOnAppUpdateStatus(UPDATE_CONFIRMATION, "", "", 0, 0, "", "");
-                Intent confirmation;
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    confirmation = intent.getParcelableExtra(Intent.EXTRA_INTENT, Intent.class);
-                } else {
-                    @SuppressWarnings("deprecation")
-                    Intent value = intent.getParcelableExtra(Intent.EXTRA_INTENT);
-                    confirmation = value;
-                }
-                if (confirmation != null) {
-                    confirmation.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                    try {
-                        startActivity(confirmation);
-                    } catch (Exception error) {
-                        cranposeUpdateError(error);
-                    }
-                }
-            } else if (status == PackageInstaller.STATUS_SUCCESS) {
-                nativeOnAppUpdateStatus(UPDATE_INSTALLING, "", "", 0, 0, "", "");
-            } else {
-                String message = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE);
-                nativeOnAppUpdateStatus(UPDATE_ERROR, "", "", 0, 0,
-                        message == null ? "installation failed" : message, "");
-            }
-        }
-    };
-
-    /** Queries a GitHub repository's latest release and selects one package asset. */
-    public void cranposeCheckGitHubUpdate(
-            String repository, String currentVersion, String assetSuffix) {
-        final String repo = repository == null ? "" : repository.trim();
-        final String current = currentVersion == null ? "" : currentVersion.trim();
-        final String suffix = assetSuffix == null ? "" : assetSuffix.trim();
-        new Thread(() -> {
-            try {
-                if (!repo.matches("[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")) {
-                    throw new IllegalArgumentException("invalid GitHub repository");
-                }
-                nativeOnAppUpdateStatus(UPDATE_CHECKING, "", "", 0, 0, "", "");
-                URL url = new URL("https://api.github.com/repos/" + repo + "/releases/latest");
-                HttpURLConnection connection = (HttpURLConnection) url.openConnection();
-                connection.setRequestProperty("User-Agent", getPackageName());
-                connection.setRequestProperty("Accept", "application/vnd.github+json");
-                connection.setConnectTimeout(15000);
-                connection.setReadTimeout(15000);
-                int code = connection.getResponseCode();
-                if (code != HttpURLConnection.HTTP_OK) {
-                    throw new IOException("GitHub returned HTTP " + code);
-                }
-                JSONObject release = new JSONObject(cranposeReadText(connection.getInputStream()));
-                String tag = release.optString("tag_name", "");
-                String latest = tag.startsWith("v") ? tag.substring(1) : tag;
-                String packageUrl = "";
-                long packageSize = 0;
-                // GitHub publishes an asset's digest as `sha256:<hex>`, which is
-                // the form the framework parses. An asset without one is still
-                // offered, and refused at install time if it cannot be checked.
-                String packageDigest = "";
-                JSONArray assets = release.optJSONArray("assets");
-                if (assets != null) {
-                    for (int index = 0; index < assets.length(); index++) {
-                        JSONObject asset = assets.getJSONObject(index);
-                        if (asset.optString("name", "").endsWith(suffix)) {
-                            packageUrl = asset.optString("browser_download_url", "");
-                            packageSize = asset.optLong("size", 0);
-                            packageDigest = asset.optString("digest", "");
-                            break;
-                        }
-                    }
-                }
-                if (latest.isEmpty() || packageUrl.isEmpty()) {
-                    throw new IOException("latest release has no matching package");
-                }
-                if (cranposeIsNewerVersion(latest, current)) {
-                    nativeOnAppUpdateStatus(
-                            UPDATE_AVAILABLE, latest, packageUrl, 0, packageSize, "",
-                            packageDigest);
-                } else {
-                    nativeOnAppUpdateStatus(UPDATE_CURRENT, "", "", 0, 0, "", "");
-                }
-            } catch (Exception error) {
-                cranposeUpdateError(error);
-            }
-        }, "cranpose-update-check").start();
-    }
-
-    /**
-     * Downloads a package, checks it against the digest the release feed
-     * published, and hands it to Android's platform installer.
-     *
-     * <p>The digest is checked <em>before</em> the session is committed, and the
-     * session is abandoned when it does not match, so a package that arrived
-     * corrupted or was swapped in transit never reaches the installer. Android's
-     * own signature check still applies afterwards and catches a package signed
-     * by someone else; it does not catch one that arrived damaged.
-     *
-     * @param downloadUrl where the package is fetched from
-     * @param digestSpec  {@code sha256:<hex>}; the framework refuses a package
-     *                    without one before this is called
-     * @param expectedSize the size the feed published, or {@code 0}
-     */
-    public void cranposeInstallUpdate(String downloadUrl, String digestSpec, long expectedSize) {
-        final String source = downloadUrl == null ? "" : downloadUrl.trim();
-        final String digestRequest = digestSpec == null ? "" : digestSpec.trim();
-        final long announcedSize = Math.max(expectedSize, 0);
-        new Thread(() -> {
-            PackageInstaller.Session session = null;
-            try {
-                MessageDigest digest = cranposeUpdateDigest(digestRequest);
-                HttpURLConnection connection = (HttpURLConnection) new URL(source).openConnection();
-                connection.setRequestProperty("User-Agent", getPackageName());
-                connection.setInstanceFollowRedirects(true);
-                connection.setConnectTimeout(15000);
-                connection.setReadTimeout(30000);
-                int code = connection.getResponseCode();
-                if (code != HttpURLConnection.HTTP_OK) {
-                    throw new IOException("package download returned HTTP " + code);
-                }
-                long declared = connection.getContentLengthLong();
-                long total = declared > 0 ? declared : announcedSize;
-                nativeOnAppUpdateStatus(UPDATE_DOWNLOADING, "", "", 0, total, "", "");
-
-                PackageInstaller installer = getPackageManager().getPackageInstaller();
-                PackageInstaller.SessionParams params = new PackageInstaller.SessionParams(
-                        PackageInstaller.SessionParams.MODE_FULL_INSTALL);
-                if (total > 0) {
-                    params.setSize(total);
-                }
-                int sessionId = installer.createSession(params);
-                session = installer.openSession(sessionId);
-                long written = 0;
-                try (InputStream input = connection.getInputStream();
-                        OutputStream output = session.openWrite("cranpose-update", 0, total)) {
-                    byte[] buffer = new byte[65536];
-                    int read;
-                    while ((read = input.read(buffer)) >= 0) {
-                        output.write(buffer, 0, read);
-                        digest.update(buffer, 0, read);
-                        written += read;
-                        nativeOnAppUpdateStatus(
-                                UPDATE_DOWNLOADING, "", "", written, total, "", "");
-                    }
-                    session.fsync(output);
-                }
-
-                nativeOnAppUpdateStatus(UPDATE_VERIFYING, "", "", written, total, "", "");
-                String actual = cranposeHex(digest.digest());
-                String expected = cranposeDigestValue(digestRequest);
-                if (!actual.equals(expected)) {
-                    throw new IOException(
-                            "the downloaded package does not match its digest (expected "
-                                    + expected + ", got " + actual + ")");
-                }
-                if (announcedSize > 0 && written != announcedSize) {
-                    throw new IOException("the downloaded package is " + written
-                            + " bytes, and the release feed said " + announcedSize);
-                }
-
-                Intent result = new Intent(cranposeUpdateInstallAction()).setPackage(getPackageName());
-                int flags = PendingIntent.FLAG_UPDATE_CURRENT;
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    flags |= PendingIntent.FLAG_MUTABLE;
-                }
-                PendingIntent pending = PendingIntent.getBroadcast(this, sessionId, result, flags);
-                session.commit(pending.getIntentSender());
-                session.close();
-                session = null;
-                nativeOnAppUpdateStatus(UPDATE_INSTALLING, "", "", 0, total, "", "");
-            } catch (Exception error) {
-                if (session != null) {
-                    session.abandon();
-                    session.close();
-                }
-                cranposeUpdateError(error);
-            }
-        }, "cranpose-update-install").start();
-    }
-
-    /**
-     * The digest engine for a {@code sha256:<hex>} request.
-     *
-     * <p>A missing digest, or one in a form this platform cannot compute, is a
-     * failure rather than a skip: a check nobody performs reads as a package
-     * that was verified. The framework refuses a package without a digest
-     * before the download starts, so reaching here without one is a bug rather
-     * than a release feed's omission.
-     */
-    private static MessageDigest cranposeUpdateDigest(String digestSpec) throws IOException {
-        if (digestSpec.isEmpty()) {
-            throw new IOException("the package carries no digest, so it cannot be checked");
-        }
-        int separator = digestSpec.indexOf(':');
-        if (separator <= 0) {
-            throw new IOException("unreadable package digest: " + digestSpec);
-        }
-        String algorithm = digestSpec.substring(0, separator).trim().toLowerCase(Locale.ROOT);
-        if (!algorithm.equals("sha256") && !algorithm.equals("sha-256")) {
-            throw new IOException("unsupported package digest algorithm: " + algorithm);
-        }
-        if (cranposeDigestValue(digestSpec).isEmpty()) {
-            throw new IOException("empty package digest: " + digestSpec);
-        }
-        try {
-            return MessageDigest.getInstance("SHA-256");
-        } catch (NoSuchAlgorithmException error) {
-            throw new IOException("this device cannot compute SHA-256", error);
-        }
-    }
-
-    /** The hexadecimal half of a {@code sha256:<hex>} request, lower-cased. */
-    private static String cranposeDigestValue(String digestSpec) {
-        int separator = digestSpec.indexOf(':');
-        if (separator < 0) {
-            return "";
-        }
-        return digestSpec.substring(separator + 1).trim().toLowerCase(Locale.ROOT);
-    }
-
-    private static String cranposeHex(byte[] bytes) {
-        StringBuilder out = new StringBuilder(bytes.length * 2);
-        for (byte value : bytes) {
-            out.append(Character.forDigit((value >> 4) & 0x0f, 16));
-            out.append(Character.forDigit(value & 0x0f, 16));
-        }
-        return out.toString();
-    }
-
-    private static String cranposeReadText(InputStream input) throws IOException {
-        try (InputStream stream = input; ByteArrayOutputStream output = new ByteArrayOutputStream()) {
-            byte[] buffer = new byte[8192];
-            int read;
-            while ((read = stream.read(buffer)) >= 0) {
-                output.write(buffer, 0, read);
-            }
-            return output.toString("UTF-8");
-        }
-    }
-
-    private static boolean cranposeIsNewerVersion(String latest, String current) {
-        int[] remote = cranposeParseVersion(latest);
-        int[] running = cranposeParseVersion(current);
-        for (int index = 0; index < remote.length; index++) {
-            if (remote[index] != running[index]) {
-                return remote[index] > running[index];
-            }
-        }
-        return false;
-    }
-
-    private static int[] cranposeParseVersion(String version) {
-        int[] parts = new int[] {0, 0, 0};
-        String[] values = version.trim().split("\\.");
-        for (int index = 0; index < parts.length && index < values.length; index++) {
-            String digits = values[index].replaceAll("[^0-9].*$", "");
-            if (!digits.isEmpty()) {
-                try {
-                    parts[index] = Integer.parseInt(digits);
-                } catch (NumberFormatException ignored) {
-                }
-            }
-        }
-        return parts;
-    }
-
-    private static void cranposeUpdateError(Throwable error) {
-        String message = error.getMessage();
-        nativeOnAppUpdateStatus(UPDATE_ERROR, "", "", 0, 0,
-                message == null ? error.getClass().getSimpleName() : message.replace('\n', ' '), "");
     }
 
     /** Manifest meta-data key {@link NativeActivity} uses to name the native library. */
@@ -2625,13 +2324,6 @@ public class CranposeActivity extends NativeActivity {
         dispatchDeeplink(getIntent());
         dispatchIncomingShares(getIntent());
         registerBackCallback();
-        IntentFilter updateFilter = new IntentFilter(cranposeUpdateInstallAction());
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(
-                    cranposeUpdateInstallReceiver, updateFilter, Context.RECEIVER_NOT_EXPORTED);
-        } else {
-            registerReceiver(cranposeUpdateInstallReceiver, updateFilter);
-        }
     }
 
     private void registerBackCallback() {
@@ -2810,10 +2502,6 @@ public class CranposeActivity extends NativeActivity {
             }
             cranposeAccessibilityStateListener = null;
             cranposeScreenReaderListener = null;
-        }
-        try {
-            unregisterReceiver(cranposeUpdateInstallReceiver);
-        } catch (IllegalArgumentException ignored) {
         }
         if (cranposeCamera != null) {
             cranposeCamera.stop();

@@ -1722,7 +1722,7 @@ pub fn run(
 
     crate::android_file_picker::register(app.clone());
     crate::android_writable_folder::register(app.clone());
-    crate::android_services::register(app.clone());
+    crate::android_services::register(app.clone(), &settings.capabilities);
     crate::android_host::install(app.clone());
     crate::process_info::install();
 

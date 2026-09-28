@@ -30,6 +30,13 @@ fn strip_xml_comments(source: &str) -> String {
 
 const CRANPOSE_GRADLE_PLUGIN: &str = "crates/cranpose/android/cranpose-gradle-plugin/src/main/kotlin/dev/cranpose/gradle/CranposeAndroidPlugin.kt";
 
+const CRANPOSE_DECLARED_SOURCES: &str = "crates/cranpose/android/cranpose-gradle-plugin/src/main/kotlin/dev/cranpose/gradle/CranposeDeclaredSources.kt";
+
+const CRANPOSE_MANIFEST_CHECK: &str = "crates/cranpose/android/cranpose-gradle-plugin/src/main/kotlin/dev/cranpose/gradle/CranposeManifestCheck.kt";
+
+const CRANPOSE_APP_UPDATE_JAVA: &str =
+    "crates/cranpose/android/java-update/dev/cranpose/android/CranposeAppUpdate.java";
+
 const CRANPOSE_CAPABILITIES: &str = "crates/cranpose-capabilities/src/lib.rs";
 
 fn cranpose_manifest(service: &str) -> String {
@@ -1902,6 +1909,7 @@ fn unsafe_code_stays_in_reviewed_platform_boundary_modules() {
         "android_surface.rs",
         "android_file_picker.rs",
         "android_purchases.rs",
+        "android_app_update.rs",
         "android_text_input.rs",
         "android_vsync.rs",
         "android_writable_folder.rs",
@@ -2099,6 +2107,7 @@ fn workspace_ffi_boundaries_are_explicit() {
         "crates/cranpose/src/android_surface.rs",
         "crates/cranpose/src/android_file_picker.rs",
         "crates/cranpose/src/android_purchases.rs",
+        "crates/cranpose/src/android_app_update.rs",
         "crates/cranpose/src/android_text_input.rs",
         "crates/cranpose-macros/src/branch_groups.rs",
         "crates/cranpose-macros/src/tests/branch_groups_tests.rs",
@@ -2754,7 +2763,7 @@ fn collect_text_sources(dir: &Path, out: &mut Vec<PathBuf>) {
 
 fn rust_sources(root: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
-    collect_rust_sources(root, &mut out);
+    collect_sources(root, "rs", &mut out);
     out
 }
 
@@ -2903,12 +2912,12 @@ fn the_browser_host_installs_a_platform_clipboard() {
     );
 }
 
-fn collect_rust_sources(dir: &Path, out: &mut Vec<PathBuf>) {
+fn collect_sources(dir: &Path, extension: &str, out: &mut Vec<PathBuf>) {
     for entry in std::fs::read_dir(dir).expect("failed to read cranpose source directory") {
         let path = entry.expect("failed to read source directory entry").path();
         if path.is_dir() {
-            collect_rust_sources(&path, out);
-        } else if path.extension().and_then(|extension| extension.to_str()) == Some("rs") {
+            collect_sources(&path, extension, out);
+        } else if path.extension().and_then(|found| found.to_str()) == Some(extension) {
             out.push(path);
         }
     }
@@ -2970,7 +2979,7 @@ fn applications_declare_their_android_entry_through_the_macro() {
     let mut declarations = 0usize;
     for root in ["apps"] {
         let mut sources = Vec::new();
-        collect_rust_sources(&workspace.join(root), &mut sources);
+        collect_sources(&workspace.join(root), "rs", &mut sources);
         for path in sources {
             let source = std::fs::read_to_string(&path).expect("failed to read application source");
             let relative = path
@@ -3001,11 +3010,10 @@ fn applications_declare_their_android_entry_through_the_macro() {
 
 #[test]
 fn the_android_installer_verifies_a_package_before_committing_it() {
-    let java =
-        workspace_source("crates/cranpose/android/java/dev/cranpose/android/CranposeActivity.java");
+    let java = workspace_source(CRANPOSE_APP_UPDATE_JAVA);
 
     let install = java
-        .split("public void cranposeInstallUpdate(")
+        .split("public static void cranposeInstallUpdate(")
         .nth(1)
         .expect("the Android installer entry point");
     let commit = install
@@ -3524,28 +3532,119 @@ fn the_framework_declares_the_provider_its_own_sharing_needs() {
 }
 
 #[test]
-fn installing_an_update_asks_for_its_permission_through_a_service() {
-    let plugin = workspace_source(CRANPOSE_GRADLE_PLUGIN);
-    assert!(
-        plugin.contains("\"update\" to listOf(\"android.permission.REQUEST_INSTALL_PACKAGES\")"),
-        "the plugin must know the permission PackageInstaller requires of the update service"
-    );
+fn installing_an_update_comes_only_from_the_rust_declaration() {
     let capabilities = workspace_source(CRANPOSE_CAPABILITIES);
     assert!(
-        capabilities.contains("android.permission.REQUEST_INSTALL_PACKAGES"),
+        capabilities
+            .contains("Service::Update => &[\"android.permission.REQUEST_INSTALL_PACKAGES\"]"),
         "an application declaring the update service must get that permission written for it"
     );
+    let plugin = workspace_source(CRANPOSE_GRADLE_PLUGIN);
+    assert!(
+        !plugin.contains("\"update\""),
+        "the Gradle `services` block must not offer the update service: `Use::update()` in \
+         the build script is its one declaration"
+    );
+    let declared = workspace_source(CRANPOSE_DECLARED_SOURCES);
+    assert!(
+        declared.contains("\"update\" to DeclaredService(")
+            && declared.contains("javaSource = \"java-update\"")
+            && declared.contains("receivers = listOf(\"dev.cranpose.android.CranposeAppUpdate\")"),
+        "the plugin must add the installer's Java and its receiver for an application that \
+         declares the update service, and for no other"
+    );
+    let services = crate_source("src/android_services.rs");
+    assert!(
+        services.contains("if capabilities.has(cranpose_capabilities::Service::Update) {"),
+        "the Android updater must be registered only for an application that declares it"
+    );
+    let base = workspace_path("crates/cranpose/android/java");
+    let mut java = Vec::new();
+    collect_sources(&base, "java", &mut java);
+    for path in java {
+        let source = std::fs::read_to_string(&path).expect("failed to read framework Java");
+        assert!(
+            !source.contains("PackageInstaller"),
+            "{} is compiled into every application; the installer belongs in java-update",
+            path.display()
+        );
+    }
     let library = workspace_source(&cranpose_manifest("base"));
     assert!(
         !library.contains("REQUEST_INSTALL_PACKAGES"),
-        "every Cranpose application would ask to install packages; keep it in the update module"
+        "every Cranpose application would ask to install packages; `Use::update()` writes it"
     );
     for relative in ANDROID_APPLICATION_MANIFESTS {
         let manifest = strip_xml_comments(&workspace_source(relative));
         assert!(
             !manifest.contains("REQUEST_INSTALL_PACKAGES"),
-            "{relative} declares REQUEST_INSTALL_PACKAGES; add the `update` service instead"
+            "{relative} declares REQUEST_INSTALL_PACKAGES; declare `Use::update()` instead"
         );
+    }
+}
+
+#[test]
+fn no_framework_receiver_takes_intents_from_other_applications() {
+    let android = workspace_path("crates/cranpose/android");
+    let mut java = Vec::new();
+    collect_sources(&android, "java", &mut java);
+    assert!(
+        java.len() >= 5,
+        "expected the framework's Android sources under {}, found {java:?}",
+        android.display()
+    );
+    for path in &java {
+        let source = std::fs::read_to_string(path).expect("failed to read framework Java");
+        let relative = path
+            .strip_prefix(&android)
+            .expect("framework Java lives under the android directory")
+            .display()
+            .to_string();
+        for (at, call) in source.match_indices("registerReceiver(") {
+            assert!(
+                source[at + call.len()..].trim_start().starts_with("null"),
+                "{relative} registers a receiver at run time, and before Android 13 any \
+                 application can send to it; declare the receiver in the manifest with \
+                 android:exported=\"false\" and address it by class"
+            );
+        }
+        assert!(
+            !source.contains("Intent.EXTRA_INTENT") || relative.ends_with("CranposeAppUpdate.java"),
+            "{relative} launches an intent it took out of another intent; only a receiver the \
+             manifest declares unexported may do that"
+        );
+    }
+
+    let update = workspace_source(CRANPOSE_APP_UPDATE_JAVA);
+    assert!(
+        update.contains("new Intent(app, CranposeAppUpdate.class)"),
+        "the installer must report to its receiver by class, never by an action another \
+         application can broadcast"
+    );
+    assert!(
+        update.contains("session != committedSession"),
+        "the receiver must act only on the session this process committed"
+    );
+    let check = workspace_source(CRANPOSE_MANIFEST_CHECK);
+    assert!(
+        check.contains("setAttributeNS(ANDROID_NAMESPACE, \"android:exported\", \"false\")"),
+        "a receiver the build declares for a service must not be exported"
+    );
+
+    let mut manifests = Vec::new();
+    collect_sources(&android.join("manifests"), "xml", &mut manifests);
+    for path in manifests {
+        let manifest = strip_xml_comments(
+            &std::fs::read_to_string(&path).expect("failed to read a framework manifest"),
+        );
+        for (at, _) in manifest.match_indices("<receiver") {
+            let element = manifest[at..].split('>').next().unwrap_or_default();
+            assert!(
+                element.contains("android:exported=\"false\""),
+                "{} declares a receiver other applications can reach",
+                path.display()
+            );
+        }
     }
 }
 
