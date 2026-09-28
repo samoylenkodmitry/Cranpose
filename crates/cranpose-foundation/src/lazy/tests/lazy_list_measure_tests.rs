@@ -26,8 +26,9 @@ fn active_scroll_guarantees_forward_warm_rows_for_single_wheel_ticks() {
 
     assert_eq!(
         adaptive_scroll_beyond_bounds_item_count(&config, -40.0, 48.0),
-        2,
-        "single wheel ticks should not force the full fast-scroll warm window"
+        3,
+        "a single wheel tick keeps two rows warm and one more for the rows it \
+         brings into view, not the full fast-scroll window"
     );
 }
 
@@ -41,8 +42,24 @@ fn default_single_wheel_scroll_uses_configured_markdown_warm_window() {
 
     assert_eq!(
         adaptive_scroll_beyond_bounds_item_count(&config, -40.0, 120.0),
-        2,
+        3,
         "small Markdown wheel ticks must not measure eight cached text rows every frame"
+    );
+}
+
+#[test]
+fn a_scroll_window_reaches_past_the_ready_rows_by_the_rows_each_frame_brings() {
+    let config = LazyListMeasureConfig {
+        beyond_bounds_item_count: 2,
+        spacing: 12.0,
+        ..Default::default()
+    };
+
+    assert_eq!(
+        adaptive_scroll_beyond_bounds_item_count(&config, -1.4 * 100.0, 88.0),
+        4,
+        "a frame bringing 1.4 rows into view keeps two ready and room for two \
+         more, which a pass between frames composes"
     );
 }
 

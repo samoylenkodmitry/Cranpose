@@ -670,6 +670,19 @@ impl WgpuRenderer {
         }
     }
 
+    /// Threaded mode: whether the present thread has handed back a frame
+    /// that [`drain_present_returns`][Self::drain_present_returns] has not
+    /// folded back yet, so draining it would free a publish credit. A loop
+    /// out of credit can work on other things until this turns true.
+    /// Always `false` outside threaded mode.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn frame_credit_returned(&self) -> bool {
+        match &self.backend {
+            PresentBackend::Threaded(handle) => handle.has_undrained_return(),
+            PresentBackend::Sync(_) | PresentBackend::None => false,
+        }
+    }
+
     /// Threaded mode: lower the current scene into a packet and hand it to
     /// the present runtime. Credit is checked FIRST — a `NoCredit` return
     /// means no packet was built at all (`frame_sequence` does not

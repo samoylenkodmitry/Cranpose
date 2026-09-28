@@ -236,17 +236,28 @@ fn a_frame_leaves_the_next_new_item_for_an_idle_pass_once_enough_are_ready() {
 }
 
 #[test]
-fn a_frame_composes_new_items_up_to_its_frontier_while_too_few_are_ready() {
+fn a_frame_composes_new_items_only_until_enough_are_ready() {
     let mut frame = BeyondBoundsComposition::new(false);
     assert!(frame.should_measure(true));
-    for _ in 0..ACTIVE_SCROLL_UNCACHED_BEYOND_BOUNDS_FRONTIER {
+    for _ in 1..IDLE_PREFETCH_READY_BEYOND_BOUNDS_ITEMS {
+        assert!(frame.should_measure(false));
+    }
+    assert!(
+        !frame.should_measure(false),
+        "the items a frame composes count as ready: a wider window gives it \
+         no more to compose"
+    );
+    assert!(frame.wants_prefetch, "what the frame left waits for a pass");
+}
+
+#[test]
+fn a_frame_with_none_ready_composes_as_many_as_it_keeps_ready() {
+    let mut frame = BeyondBoundsComposition::new(false);
+    for _ in 0..IDLE_PREFETCH_READY_BEYOND_BOUNDS_ITEMS {
         assert!(frame.should_measure(false));
     }
     assert!(!frame.should_measure(false));
-    assert!(
-        frame.wants_prefetch,
-        "what the frontier left waits for a pass"
-    );
+    assert!(frame.wants_prefetch);
 }
 
 #[test]

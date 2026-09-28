@@ -340,20 +340,27 @@ where
     }
 
     /// Composes lazy list items that frames left beyond their viewports for
-    /// later, in layout passes run while `deadline` still leaves room for the
-    /// recent cost of one item, at most four of them.
+    /// later, in layout passes, at most four of them. A pass runs while
+    /// `deadline`, if any, still leaves room for the recent cost of one item
+    /// and `frame_can_start`, asked before each pass, says the next frame
+    /// cannot start yet.
     /// Call it while waiting for the next frame. Returns whether a pass ran.
-    pub fn run_idle_prefetch(&mut self, deadline: Instant) -> bool {
+    pub fn run_idle_prefetch(
+        &mut self,
+        deadline: Option<Instant>,
+        mut frame_can_start: impl FnMut(&mut R) -> bool,
+    ) -> bool {
         let app_context = Rc::clone(&self.app.app_context);
         app_context.enter(|| {
             let mut passes = 0;
             while passes < IDLE_PREFETCH_MAX_PASSES
                 && cranpose_ui::has_lazy_prefetch_requests()
-                && Instant::now() + cranpose_ui::lazy_prefetch_item_cost() <= deadline
+                && deadline.is_none_or(|deadline| {
+                    Instant::now() + cranpose_ui::lazy_prefetch_item_cost() <= deadline
+                })
+                && !frame_can_start(self.renderer())
             {
-                for node in cranpose_ui::take_lazy_prefetch_requests() {
-                    cranpose_ui::schedule_measure_repass(node);
-                }
+                cranpose_ui::drain_lazy_prefetch_requests(cranpose_ui::schedule_measure_repass);
                 cranpose_ui::with_lazy_prefetch_pass(|| self.run_layout_phase_in_context());
                 passes += 1;
             }

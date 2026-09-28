@@ -34,7 +34,6 @@ use crate::{
 };
 
 const EXPENSIVE_RETAINED_REUSABLE_SLOTS: usize = 128;
-const ACTIVE_SCROLL_UNCACHED_BEYOND_BOUNDS_FRONTIER: usize = 4;
 const IDLE_PREFETCH_READY_BEYOND_BOUNDS_ITEMS: usize = 2;
 const IDLE_PREFETCH_ITEMS_PER_PASS: usize = 1;
 
@@ -625,9 +624,9 @@ fn measure_lazy_viewport(
 }
 
 /// Which items beyond the viewport a scrolling list composes, in order away
-/// from it. Composed items always measure. A frame composes new ones only
-/// while too few composed items lie ahead, up to a frontier; with enough
-/// ahead, the next is left for an idle prefetch pass, which composes one.
+/// from it. Composed items always measure. A frame composes new ones until
+/// enough composed items lie ahead, counting its own; the next is left for
+/// an idle prefetch pass, which composes one.
 struct BeyondBoundsComposition {
     idle_pass: bool,
     ready: usize,
@@ -643,7 +642,7 @@ impl BeyondBoundsComposition {
             frontier: if idle_pass {
                 IDLE_PREFETCH_ITEMS_PER_PASS
             } else {
-                ACTIVE_SCROLL_UNCACHED_BEYOND_BOUNDS_FRONTIER
+                IDLE_PREFETCH_READY_BEYOND_BOUNDS_ITEMS
             },
             wants_prefetch: false,
         }
@@ -660,6 +659,7 @@ impl BeyondBoundsComposition {
             return false;
         }
         self.frontier -= 1;
+        self.ready += 1;
         true
     }
 }

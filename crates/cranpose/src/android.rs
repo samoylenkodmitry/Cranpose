@@ -719,22 +719,64 @@ impl PlatformFrameDriver for AndroidFrameDriver {
 const OFFSCREEN_UPDATE_PERIOD: Duration = Duration::from_millis(16);
 const IDLE_PREFETCH_MARGIN: Duration = Duration::from_millis(1);
 
-/// Composes lazy list items ahead in the wait before a requested frame, and
-/// returns what is left of the wait.
-fn prefetch_while_waiting(
-    shell: Option<&mut AppShell<WgpuRenderer>>,
-    (frame_driver, no_surface): (&AndroidFrameDriver, bool),
-    wait: Option<Duration>,
+/// How long the loop waits before starting a pending frame: not at all when
+/// the frame can start now, else until the paced lead wake, `idle_timeout`
+/// or the vsync callback it asks for, less the lazy items it prefetches
+/// meanwhile.
+fn wait_for_pending_frame(
+    pacer: &FramePacer,
+    mut shell: Option<&mut AppShell<WgpuRenderer>>,
+    idle_timeout: Option<Duration>,
 ) -> Option<Duration> {
-    let (Some(shell), Some(wait)) = (shell, wait) else {
+    let slot_open = pacer.slot_open(
+        crate::android_frame_telemetry::monotonic_nanos(),
+        crate::android_vsync::last_vsync_ns(),
+        vsync_period_ns(),
+    );
+    let starts_now = slot_open
+        && shell
+            .as_mut()
+            .is_some_and(|shell| shell.renderer().has_frame_credit());
+    if starts_now || !crate::android_vsync::request_wake_at_next_vsync() {
+        return Some(Duration::ZERO);
+    }
+    let wait = lead_wake_timeout(pacer).or(idle_timeout);
+    match shell {
+        Some(shell) => prefetch_while_waiting(shell, wait, slot_open),
+        None => wait,
+    }
+}
+
+/// Composes lazy list items ahead while a pending frame waits, and returns
+/// what is left of the wait. A frame held by its slot starts at the wait's
+/// end or the next vsync, so the prefetch stops short of both. One held
+/// only by its present credit starts when the present thread returns one,
+/// which comes after the next vsync once the queue is full, so the prefetch
+/// runs until the credit is back, at most until the vsync after next.
+fn prefetch_while_waiting(
+    shell: &mut AppShell<WgpuRenderer>,
+    wait: Option<Duration>,
+    slot_open: bool,
+) -> Option<Duration> {
+    let now_ns = crate::android_frame_telemetry::monotonic_nanos();
+    let period_ns = vsync_period_ns();
+    let frame_bound = crate::vsync_period::next_vsync_ns(
+        now_ns,
+        crate::android_vsync::last_vsync_ns(),
+        period_ns,
+    )
+    .map(|vsync_ns| duration_until_ns(now_ns, vsync_ns + i64::from(slot_open) * period_ns));
+    let Some(idle) = earliest_android_poll_timeout(wait, frame_bound) else {
         return wait;
     };
-    if no_surface || wait <= IDLE_PREFETCH_MARGIN || !frame_driver.frame_requested() {
-        return Some(wait);
+    if idle <= IDLE_PREFETCH_MARGIN {
+        return wait;
     }
-    let wake_at = Instant::now() + wait;
-    shell.run_idle_prefetch(wake_at - IDLE_PREFETCH_MARGIN);
-    Some(wake_at.saturating_duration_since(Instant::now()))
+    let now = Instant::now();
+    shell.run_idle_prefetch(Some(now + idle - IDLE_PREFETCH_MARGIN), |renderer| {
+        slot_open && renderer.frame_credit_returned()
+    });
+    wait.map(|wait| (now + wait).saturating_duration_since(Instant::now()))
 }
 
 fn duration_until_frame_deadline(deadline: web_time::Instant) -> Duration {
@@ -1433,7 +1475,11 @@ fn lead_wake_timeout(pacer: &FramePacer) -> Option<Duration> {
             crate::android_vsync::last_vsync_ns(),
             vsync_period_ns(),
         )
-        .map(|wake_ns| Duration::from_nanos(u64::try_from(wake_ns - now_ns).unwrap_or(0)))
+        .map(|wake_ns| duration_until_ns(now_ns, wake_ns))
+}
+
+fn duration_until_ns(now_ns: i64, at_ns: i64) -> Duration {
+    Duration::from_nanos(u64::try_from(at_ns - now_ns).unwrap_or(0))
 }
 
 fn android_frame_latency(requested: Option<&str>) -> u32 {
@@ -1905,29 +1951,10 @@ pub fn run(
                 false => idle_timeout,
             }
         } else if android_frame_driver.frame_requested() || frame_waits_for_vsync {
-            let late_frame_can_start = frame_pacer.slot_open(
-                crate::android_frame_telemetry::monotonic_nanos(),
-                crate::android_vsync::last_vsync_ns(),
-                vsync_period_ns(),
-            ) && app_shell
-                .as_mut()
-                .is_some_and(|shell| shell.renderer().has_frame_credit());
-            if late_frame_can_start {
-                Some(Duration::ZERO)
-            } else if crate::android_vsync::request_wake_at_next_vsync() {
-                lead_wake_timeout(&frame_pacer).or(idle_timeout)
-            } else {
-                Some(Duration::ZERO)
-            }
+            wait_for_pending_frame(&frame_pacer, app_shell.as_mut(), idle_timeout)
         } else {
             idle_timeout
         };
-
-        let poll_duration = prefetch_while_waiting(
-            app_shell.as_mut(),
-            (&android_frame_driver, no_surface),
-            poll_duration,
-        );
 
         app.poll_events(crate::android_poll::poll_timeout(poll_duration), |event| {
             if let PollEvent::Main(main_event) = event {

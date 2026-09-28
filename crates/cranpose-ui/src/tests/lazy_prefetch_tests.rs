@@ -1,16 +1,22 @@
 use super::*;
 use crate::render_state::app_context_test_scope;
 
+fn drained_requests() -> Vec<NodeId> {
+    let mut drained = Vec::new();
+    drain_lazy_prefetch_requests(|node| drained.push(node));
+    drained
+}
+
 #[test]
-fn a_request_is_taken_once_and_names_each_list_once() {
+fn a_request_is_drained_once_and_names_each_list_once() {
     let _scope = app_context_test_scope();
     assert!(!has_lazy_prefetch_requests());
     request_lazy_prefetch(3);
     request_lazy_prefetch(3);
     request_lazy_prefetch(5);
     assert!(has_lazy_prefetch_requests());
-    assert_eq!(take_lazy_prefetch_requests(), vec![3, 5]);
-    assert!(take_lazy_prefetch_requests().is_empty());
+    assert_eq!(drained_requests(), vec![3, 5]);
+    assert!(drained_requests().is_empty());
     assert!(!has_lazy_prefetch_requests());
 }
 

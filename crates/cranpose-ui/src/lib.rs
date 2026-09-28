@@ -135,7 +135,7 @@ pub use layout_direction::{
 };
 pub use lazy_item::{ProvideLazyItemKey, lazy_item_key, local_lazy_item_key};
 pub use lazy_prefetch::{
-    has_lazy_prefetch_requests, lazy_prefetch_item_cost, take_lazy_prefetch_requests,
+    drain_lazy_prefetch_requests, has_lazy_prefetch_requests, lazy_prefetch_item_cost,
     with_lazy_prefetch_pass,
 };
 pub use modal::{

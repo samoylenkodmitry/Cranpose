@@ -68,6 +68,8 @@ pub(crate) struct PresentStatus {
     pub(crate) last_frame_stats: Mutex<Option<crate::gpu_stats::FrameStatsSnapshot>>,
     pub(crate) needs_frame_warmup: AtomicBool,
     pub(crate) presented_frames: AtomicU64,
+    /// Frames handed back to the producer, whatever their outcome.
+    pub(crate) returned_frames: AtomicU64,
     pub(crate) placeholder_frames: AtomicU64,
     pub(crate) last_present_outcome: AtomicU64,
     pub(crate) last_error_frame: AtomicU64,
@@ -475,7 +477,9 @@ impl PresentState {
             Ordering::Relaxed,
         );
         match self.returns_tx.try_send(returns) {
-            Ok(()) => {}
+            Ok(()) => {
+                self.status.returned_frames.fetch_add(1, Ordering::Release);
+            }
             Err(TrySendError::Full(_)) => {
                 log::error!("[present-runtime] returns channel full; depth-one credit violated");
             }
@@ -526,6 +530,7 @@ pub(crate) struct PresentHandle {
     status: Arc<PresentStatus>,
     thread: Option<std::thread::JoinHandle<()>>,
     outstanding: u32,
+    drained: u64,
 }
 
 const PRESENT_THREAD_STACK_BYTES: usize = 8 * 1024 * 1024;
@@ -553,6 +558,7 @@ impl PresentHandle {
             status,
             thread: Some(thread),
             outstanding: 0,
+            drained: 0,
         })
     }
 
@@ -571,6 +577,7 @@ impl PresentHandle {
                 status,
                 thread: None,
                 outstanding: 0,
+                drained: 0,
             },
             state,
             msg_rx,
@@ -583,6 +590,12 @@ impl PresentHandle {
 
     pub(crate) fn has_credit(&self) -> bool {
         self.outstanding < 2
+    }
+
+    /// Whether the present thread has handed back a frame that
+    /// [`Self::try_drain`] has not taken yet, which frees a credit.
+    pub(crate) fn has_undrained_return(&self) -> bool {
+        self.status.returned_frames.load(Ordering::Acquire) > self.drained
     }
 
     pub(crate) fn publish(&mut self, packet: FramePacket) -> Result<(), Box<FramePacket>> {
@@ -605,6 +618,7 @@ impl PresentHandle {
         match self.returns_rx.try_recv() {
             Ok(returns) => {
                 self.outstanding = self.outstanding.saturating_sub(1);
+                self.drained += 1;
                 Some(returns)
             }
             Err(_) => None,

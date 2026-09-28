@@ -547,7 +547,11 @@ fn adaptive_scroll_beyond_bounds_item_count(
     let item_extent = item_extent.max(1.0);
     let delta_items = pending_scroll_delta.abs() / item_extent;
     if delta_items < MIN_ADAPTIVE_SCROLL_DELTA_ITEMS {
-        return base_count.max(MIN_ACTIVE_SCROLL_WHEEL_BEYOND_BOUNDS_ITEMS);
+        // Past the items a frame keeps ready, the window holds as many as the
+        // scroll brings into view per frame, so a frame that finds enough
+        // ready leaves the next ones to a pass between frames.
+        return base_count.max(MIN_ACTIVE_SCROLL_WHEEL_BEYOND_BOUNDS_ITEMS)
+            + delta_items.ceil() as usize;
     }
 
     let adaptive_count = delta_items.ceil() as usize;

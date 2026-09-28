@@ -93,6 +93,11 @@ impl WindowRootRegistry {
         self.revision.set(self.revision.get().wrapping_add(1));
     }
 
+    /// Whether no window root is attached.
+    pub fn is_empty(&self) -> bool {
+        self.entries.borrow().is_empty()
+    }
+
     /// Every attached window root.
     pub fn entries(&self) -> Vec<WindowRootEntry> {
         self.entries.borrow().clone()
@@ -137,8 +142,12 @@ pub fn nearest_window_root(applier: &mut MemoryApplier, node: NodeId) -> Option<
 }
 
 /// [`nearest_window_root`] for each of `nodes`, in order, with every
-/// ancestor looked up at most once.
+/// ancestor looked up at most once. In an app context with no window root
+/// attached, every node belongs to the primary root and none is looked up.
 pub fn nearest_window_roots(applier: &mut MemoryApplier, nodes: &[NodeId]) -> Vec<Option<NodeId>> {
+    if current_app_context().is_some_and(|context| context.window_roots().is_empty()) {
+        return vec![None; nodes.len()];
+    }
     let mut owners: HashMap<NodeId, Option<NodeId>> = HashMap::new();
     let mut path = Vec::new();
     nodes
