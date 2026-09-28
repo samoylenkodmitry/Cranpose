@@ -54,3 +54,17 @@ fn the_bound_still_pushes_out_the_least_recently_used() {
     assert_eq!(cache.pop_lru(), Some((1, "one")));
     assert_eq!(cache.len(), 1);
 }
+
+#[test]
+fn clear_drops_every_entry() {
+    let mut cache = PassAgedCache::with_capacity_at_least_one(4);
+    cache.push(1, "one");
+    cache.push(2, "two");
+
+    assert!(!cache.is_empty());
+    cache.clear();
+
+    assert!(cache.is_empty());
+    assert!(cache.get(&1).is_none());
+    assert!(passes(&mut cache, IDLE_PASSES + 1).is_empty());
+}

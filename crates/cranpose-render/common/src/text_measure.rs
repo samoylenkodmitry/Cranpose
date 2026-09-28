@@ -6,10 +6,10 @@
 
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
+use cranpose_core::collections::pass_aged::PassAgedCache;
 use cranpose_ui::{TextMeasurer, TextMetrics, text_layout_result::TextLayoutResult};
 
 use crate::{
-    pass_aged_cache::PassAgedCache,
     software_text_raster::{
         SoftwareTextFont, SoftwareTextFontSet, cursor_x_for_offset_with_font,
         layout_text_with_font, measure_text_with_font, text_offset_for_position_with_font,

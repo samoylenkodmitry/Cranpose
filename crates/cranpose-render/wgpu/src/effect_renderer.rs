@@ -1,9 +1,7 @@
 use std::cell::{Cell, RefCell};
 
-use cranpose_render_common::{
-    bounded_lru_cache::BoundedLruCache,
-    geometry::{BLUR_TAP_PAIRS, BlurKernel, blur_scratch_block},
-};
+use cranpose_core::collections::bounded_lru::BoundedLruCache;
+use cranpose_render_common::geometry::{BLUR_TAP_PAIRS, BlurKernel, blur_scratch_block};
 use cranpose_ui_graphics::{
     BlendMode, MAX_SUBSTRATES, RenderEffect, RuntimeShader, SubstrateSpec, TileMode,
 };

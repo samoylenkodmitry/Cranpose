@@ -117,7 +117,7 @@ fn a_platform_curve_resolves_an_sp_where_the_platform_does_and_not_where_a_multi
 
 #[test]
 fn text_service_cache_retains_large_lazy_text_working_set() {
-    let mut cache = BoundedTextCache::new(TEXT_SERVICE_CACHE_CAPACITY);
+    let mut cache = PassAgedCache::with_capacity_at_least_one(TEXT_SERVICE_CACHE_CAPACITY);
     let metrics = TextMetrics {
         width: 1.0,
         height: 1.0,
@@ -126,7 +126,7 @@ fn text_service_cache_retains_large_lazy_text_working_set() {
     };
 
     for index in 0..4096u64 {
-        cache.insert(
+        cache.push(
             TextBaseCacheKey {
                 text_hash: index,
                 style_hash: 7,
@@ -1700,4 +1700,62 @@ fn a_line_that_cannot_balance_leaves_the_lines_as_they_were() {
     );
     assert!(!balanced, "one word has no breakpoints to balance");
     assert_eq!(lines.len(), 1);
+}
+
+/// Counts the measurements it is asked for.
+struct CountingMeasurer(Rc<Cell<usize>>);
+
+impl TextMeasurer for CountingMeasurer {
+    fn measure(&self, text: &crate::text::AnnotatedString, style: &TextStyle) -> TextMetrics {
+        self.0.set(self.0.get() + 1);
+        MonospacedTextMeasurer.measure(text, style)
+    }
+
+    fn get_offset_for_position(
+        &self,
+        text: &crate::text::AnnotatedString,
+        style: &TextStyle,
+        x: f32,
+        y: f32,
+    ) -> usize {
+        MonospacedTextMeasurer.get_offset_for_position(text, style, x, y)
+    }
+
+    fn get_cursor_x_for_offset(
+        &self,
+        text: &crate::text::AnnotatedString,
+        style: &TextStyle,
+        offset: usize,
+    ) -> f32 {
+        MonospacedTextMeasurer.get_cursor_x_for_offset(text, style, offset)
+    }
+
+    fn layout(&self, text: &crate::text::AnnotatedString, style: &TextStyle) -> TextLayoutResult {
+        MonospacedTextMeasurer.layout(text, style)
+    }
+}
+
+#[test]
+fn the_text_service_drops_what_layout_passes_stopped_measuring() {
+    let measured = Rc::new(Cell::new(0));
+    let service = TextService::from_measurer(Rc::new(CountingMeasurer(Rc::clone(&measured))));
+    let style = TextStyle::default();
+    let shown = crate::text::AnnotatedString::from("shown");
+    let gone = crate::text::AnnotatedString::from("scrolled away");
+    service.measure(None, &shown, &style);
+    service.measure(None, &gone, &style);
+    assert_eq!(measured.get(), 2);
+
+    for _ in 0..=cranpose_core::collections::pass_aged::IDLE_PASSES {
+        service.begin_layout_pass();
+        service.measure(None, &shown, &style);
+    }
+    assert_eq!(measured.get(), 2, "a text measured every pass stays cached");
+
+    service.measure(None, &gone, &style);
+    assert_eq!(
+        measured.get(),
+        3,
+        "a text no pass measured is measured anew"
+    );
 }

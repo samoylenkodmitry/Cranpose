@@ -1,13 +1,12 @@
 use std::{
     borrow::Cow,
     cell::{Cell, RefCell},
-    collections::{VecDeque, hash_map::Entry},
     hash::Hash,
     ops::Range,
     rc::Rc,
 };
 
-use cranpose_core::NodeId;
+use cranpose_core::{NodeId, collections::pass_aged::PassAgedCache};
 use web_time::Instant;
 
 use super::{
@@ -516,61 +515,13 @@ struct TextPreparedCacheKey {
     visual_hash: u64,
 }
 
-struct BoundedTextCache<K, V> {
-    capacity: usize,
-    entries: cranpose_core::collections::map::HashMap<K, V>,
-    order: VecDeque<K>,
-}
-
-impl<K, V> BoundedTextCache<K, V>
-where
-    K: Clone + Eq + Hash,
-    V: Clone,
-{
-    fn new(capacity: usize) -> Self {
-        Self {
-            capacity,
-            entries: cranpose_core::collections::map::HashMap::default(),
-            order: VecDeque::new(),
-        }
-    }
-
-    fn clear(&mut self) {
-        self.entries.clear();
-        self.order.clear();
-    }
-
-    fn get(&self, key: &K) -> Option<V> {
-        self.entries.get(key).cloned()
-    }
-
-    fn insert(&mut self, key: K, value: V) {
-        match self.entries.entry(key.clone()) {
-            Entry::Occupied(mut entry) => {
-                entry.insert(value);
-                return;
-            }
-            Entry::Vacant(_) => {}
-        }
-        if self.entries.len() == self.capacity {
-            while let Some(evicted) = self.order.pop_front() {
-                if self.entries.remove(&evicted).is_some() {
-                    break;
-                }
-            }
-        }
-        self.order.push_back(key.clone());
-        self.entries.insert(key, value);
-    }
-}
-
 pub(crate) struct TextService {
     generation: Cell<u64>,
     measurer: RefCell<Rc<dyn TextMeasurer>>,
-    metrics_cache: RefCell<BoundedTextCache<TextBaseCacheKey, TextMetrics>>,
-    options_metrics_cache: RefCell<BoundedTextCache<TextOptionsCacheKey, TextMetrics>>,
-    prepared_cache: RefCell<BoundedTextCache<TextPreparedCacheKey, Rc<PreparedTextLayout>>>,
-    layout_cache: RefCell<BoundedTextCache<TextBaseCacheKey, TextLayoutResult>>,
+    metrics_cache: RefCell<PassAgedCache<TextBaseCacheKey, TextMetrics>>,
+    options_metrics_cache: RefCell<PassAgedCache<TextOptionsCacheKey, TextMetrics>>,
+    prepared_cache: RefCell<PassAgedCache<TextPreparedCacheKey, Rc<PreparedTextLayout>>>,
+    layout_cache: RefCell<PassAgedCache<TextBaseCacheKey, TextLayoutResult>>,
 }
 
 impl TextService {
@@ -582,10 +533,18 @@ impl TextService {
         Self {
             generation: Cell::new(1),
             measurer: RefCell::new(measurer),
-            metrics_cache: RefCell::new(BoundedTextCache::new(TEXT_SERVICE_CACHE_CAPACITY)),
-            options_metrics_cache: RefCell::new(BoundedTextCache::new(TEXT_SERVICE_CACHE_CAPACITY)),
-            prepared_cache: RefCell::new(BoundedTextCache::new(TEXT_PREPARED_CACHE_CAPACITY)),
-            layout_cache: RefCell::new(BoundedTextCache::new(TEXT_SERVICE_CACHE_CAPACITY)),
+            metrics_cache: RefCell::new(PassAgedCache::with_capacity_at_least_one(
+                TEXT_SERVICE_CACHE_CAPACITY,
+            )),
+            options_metrics_cache: RefCell::new(PassAgedCache::with_capacity_at_least_one(
+                TEXT_SERVICE_CACHE_CAPACITY,
+            )),
+            prepared_cache: RefCell::new(PassAgedCache::with_capacity_at_least_one(
+                TEXT_PREPARED_CACHE_CAPACITY,
+            )),
+            layout_cache: RefCell::new(PassAgedCache::with_capacity_at_least_one(
+                TEXT_SERVICE_CACHE_CAPACITY,
+            )),
         }
     }
 
@@ -614,11 +573,11 @@ impl TextService {
         style: &TextStyle,
     ) -> TextMetrics {
         let key = text_base_cache_key(text, style);
-        if let Some(metrics) = self.metrics_cache.borrow().get(&key) {
+        if let Some(metrics) = self.metrics_cache.borrow_mut().get(&key).copied() {
             return metrics;
         }
         let metrics = self.with_measurer(|m| m.measure_for_node(node_id, text, style));
-        self.metrics_cache.borrow_mut().insert(key, metrics);
+        self.metrics_cache.borrow_mut().push(key, metrics);
         metrics
     }
 
@@ -631,13 +590,13 @@ impl TextService {
         max_width: Option<f32>,
     ) -> TextMetrics {
         let key = text_options_cache_key(text, style, options.normalized(), max_width);
-        if let Some(metrics) = self.options_metrics_cache.borrow().get(&key) {
+        if let Some(metrics) = self.options_metrics_cache.borrow_mut().get(&key).copied() {
             return metrics;
         }
         let metrics = self.with_measurer(|m| {
             m.measure_with_options_for_node(node_id, text, style, options.normalized(), max_width)
         });
-        self.options_metrics_cache.borrow_mut().insert(key, metrics);
+        self.options_metrics_cache.borrow_mut().push(key, metrics);
         metrics
     }
 
@@ -657,7 +616,7 @@ impl TextService {
             base: metrics_key,
             visual_hash: style.render_hash(),
         };
-        if let Some(prepared) = self.prepared_cache.borrow().get(&key) {
+        if let Some(prepared) = self.prepared_cache.borrow_mut().get(&key).map(Rc::clone) {
             return prepared;
         }
         let prepared = Rc::new(self.with_measurer(|m| {
@@ -665,10 +624,10 @@ impl TextService {
         }));
         self.prepared_cache
             .borrow_mut()
-            .insert(key, Rc::clone(&prepared));
+            .push(key, Rc::clone(&prepared));
         self.options_metrics_cache
             .borrow_mut()
-            .insert(metrics_key, prepared.metrics);
+            .push(metrics_key, prepared.metrics);
         prepared
     }
 
@@ -678,12 +637,22 @@ impl TextService {
         style: &TextStyle,
     ) -> TextLayoutResult {
         let key = text_base_cache_key(text, style);
-        if let Some(layout) = self.layout_cache.borrow().get(&key) {
+        if let Some(layout) = self.layout_cache.borrow_mut().get(&key).cloned() {
             return layout;
         }
         let layout = self.with_measurer(|m| m.layout(text, style));
-        self.layout_cache.borrow_mut().insert(key, layout.clone());
+        self.layout_cache.borrow_mut().push(key, layout.clone());
         layout
+    }
+
+    /// Starts a layout pass: the measurer and these caches drop what recent
+    /// passes did not use.
+    pub(crate) fn begin_layout_pass(&self) {
+        self.with_measurer(TextMeasurer::begin_layout_pass);
+        self.metrics_cache.borrow_mut().begin_pass(drop);
+        self.options_metrics_cache.borrow_mut().begin_pass(drop);
+        self.prepared_cache.borrow_mut().begin_pass(drop);
+        self.layout_cache.borrow_mut().begin_pass(drop);
     }
 
     fn clear_caches(&self) {

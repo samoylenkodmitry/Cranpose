@@ -1,8 +1,7 @@
 use std::{collections::HashMap, rc::Rc};
 
-use cranpose_render_common::{
-    bounded_lru_cache::BoundedLruCache, raster_cache::LayerRasterCacheKey,
-};
+use cranpose_core::collections::bounded_lru::BoundedLruCache;
+use cranpose_render_common::raster_cache::LayerRasterCacheKey;
 
 use crate::{
     draw_pass::ResolvedCompositeKind, frame_graph::FrameTextureDescriptor,

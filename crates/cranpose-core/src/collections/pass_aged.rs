@@ -2,12 +2,12 @@
 
 use std::{borrow::Borrow, hash::Hash};
 
-use crate::bounded_lru_cache::BoundedLruCache;
+use super::bounded_lru::BoundedLruCache;
 
 /// Layout passes an entry may go without a lookup before it leaves. Text on
 /// screen is measured again only when its layout changes, so this is how long
 /// a list may keep an item scrolled out before measuring it anew costs a miss.
-pub(crate) const IDLE_PASSES: u64 = 120;
+pub const IDLE_PASSES: u64 = 120;
 
 /// A value and the layout pass that last looked it up.
 struct Used<V> {
@@ -19,7 +19,7 @@ struct Used<V> {
 /// passes go by without a lookup of them. A scrolling list then keeps the
 /// measurements of the texts it shows, not of every text it has shown up to
 /// the bound.
-pub(crate) struct PassAgedCache<K, V> {
+pub struct PassAgedCache<K, V> {
     entries: BoundedLruCache<K, Used<V>>,
     pass: u64,
 }
@@ -28,19 +28,28 @@ impl<K, V> PassAgedCache<K, V>
 where
     K: Clone + Eq + Hash,
 {
-    pub(crate) fn with_capacity_at_least_one(capacity: usize) -> Self {
+    pub fn with_capacity_at_least_one(capacity: usize) -> Self {
         Self {
             entries: BoundedLruCache::with_capacity_at_least_one(capacity),
             pass: 0,
         }
     }
 
-    pub(crate) fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.entries.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// Drops every entry and gives back the storage they took.
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
+
     /// The value under `key`, marked used in the current pass.
-    pub(crate) fn get<Q>(&mut self, key: &Q) -> Option<&V>
+    pub fn get<Q>(&mut self, key: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
@@ -53,14 +62,14 @@ where
 
     /// Stores `value` under `key`, returning the entry it replaced or the
     /// least recently used one it pushed out.
-    pub(crate) fn push(&mut self, key: K, value: V) -> Option<(K, V)> {
+    pub fn push(&mut self, key: K, value: V) -> Option<(K, V)> {
         let pass = self.pass;
         self.entries
             .push(key, Used { value, pass })
             .map(|(key, used)| (key, used.value))
     }
 
-    pub(crate) fn pop_lru(&mut self) -> Option<(K, V)> {
+    pub fn pop_lru(&mut self) -> Option<(K, V)> {
         self.entries.pop_lru().map(|(key, used)| (key, used.value))
     }
 
@@ -68,7 +77,7 @@ where
     /// last [`IDLE_PASSES`] passes, least recently used first, handing each
     /// dropped value to `dropped`. It stops at the first entry still in use,
     /// so it costs one comparison when nothing has gone idle.
-    pub(crate) fn begin_pass(&mut self, mut dropped: impl FnMut(V)) {
+    pub fn begin_pass(&mut self, mut dropped: impl FnMut(V)) {
         self.pass += 1;
         let pass = self.pass;
         while self
@@ -85,5 +94,5 @@ where
 }
 
 #[cfg(test)]
-#[path = "tests/pass_aged_cache_tests.rs"]
+#[path = "tests/pass_aged_tests.rs"]
 mod tests;

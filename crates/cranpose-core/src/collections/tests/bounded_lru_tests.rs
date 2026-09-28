@@ -166,3 +166,19 @@ fn peek_lru_reads_the_oldest_entry_without_refreshing_it() {
         None
     );
 }
+
+#[test]
+fn clear_drops_every_entry_and_keeps_the_bound() {
+    let mut lru = cache::<u32, &str>(2);
+    lru.put(1, "one");
+    lru.put(2, "two");
+
+    lru.clear();
+
+    assert!(lru.is_empty());
+    assert!(lru.get(&1).is_none());
+    assert_eq!(lru.cap().get(), 2);
+    lru.put(3, "three");
+    lru.put(4, "four");
+    assert_eq!(lru.push(5, "five"), Some((3, "three")));
+}

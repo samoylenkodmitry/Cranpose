@@ -9,9 +9,10 @@ use std::{
 };
 
 use bytemuck::{Pod, Zeroable};
-use cranpose_core::{NodeId, hash::default as default_hash};
+use cranpose_core::{
+    NodeId, collections::bounded_lru::BoundedLruCache, hash::default as default_hash,
+};
 use cranpose_render_common::{
-    bounded_lru_cache::BoundedLruCache,
     geometry::blur_reach,
     graph::{DrawCommandId, quad_bounds},
     software_text_raster::{
