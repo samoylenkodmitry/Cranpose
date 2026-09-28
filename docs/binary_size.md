@@ -105,16 +105,22 @@ callback holder already performed.
 
 An app that keeps `opt-level = 3` for speed can still build the crates that
 never run per frame for size: naga translates shaders at pipeline creation,
-and codespan-reporting and gimli only format errors and backtraces.
+and codespan-reporting only formats shader errors.
 
 ```toml
 [profile.release.package.naga]
 opt-level = "s"
 [profile.release.package.codespan-reporting]
 opt-level = "z"
-[profile.release.package.gimli]
-opt-level = "z"
 ```
+
+codespan-reporting stays linked under `panic = "abort"`: it is a required
+naga dependency, and naga's `ShaderError` formats through it on wgpu's
+error path. The ~29 KB of `gimli` symbols in the library are not a crate in
+the graph. They are std's own copy, which symbolizes backtraces for the
+default panic hook and runs before the abort. std ships prebuilt, so a
+profile override does not reach it; only a nightly `-Zbuild-std` build
+could.
 
 On the compose-vs-cranpose bench (arm64, fat LTO, stripped), this took the
 library from 9.28 MB to 9.09 MB (−182 KB). Cold start to the first frame on
