@@ -127,6 +127,15 @@ library from 9.28 MB to 9.09 MB (−182 KB). Cold start to the first frame on
 the Mate 20 X was unchanged: a median of ~178 ms with it, ~185 ms without, 8
 runs each. The bench's release profile carries it.
 
+## The Android library by crate, nightly
+
+The nightly board's `android-size` job builds the demo's arm64 library as
+`just android` does, keeps its symbols, and writes `just android-size-report`
+to the run's summary. The report gives the stripped size the APK carries,
+section by section, then the named code and data by crate. Much of `.rodata`
+(literals, embedded fonts and images) has no symbol, so the crate table sums
+to less than the file.
+
 ## Dead end, measured: build-time SPIR-V cannot drop naga's WGSL frontend
 
 wgpu 29 and 30 hardwire `wgpu-core/wgsl` (and `renderdoc`) in their own dependency

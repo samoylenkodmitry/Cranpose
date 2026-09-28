@@ -125,3 +125,38 @@ jobs:
       - name: sccache stats
         if: always()
         run: '"$RUSTC_WRAPPER" --show-stats || true'
+
+  # What the Android library is made of, crate by crate (#796). A second
+  # link of the whole program with its symbols kept: too slow for a push,
+  # and the answer moves with dependencies, not with each commit. Read it in
+  # the run's summary.
+  android-size:
+    name: Android library size by crate (macOS)
+    needs: decide
+    if: needs.decide.outputs.run == 'true'
+    runs-on: [self-hosted, macOS, ARM64]
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Configure machine-local SDK and cache paths
+        env:
+          RUNNER_NAME: ${{ runner.name }}
+          RUNNER_OS: ${{ runner.os }}
+        run: scripts/ci/android_env.sh
+
+      - name: Provision toolchains and start sccache
+        id: provision
+        run: |
+          scripts/ci/provision_toolchain.sh
+          rustup target add aarch64-linux-android
+          command -v cargo-ndk >/dev/null || cargo install cargo-ndk --locked
+          test -f "$ANDROID_NDK_HOME/source.properties"
+
+      - name: Report the library's size by crate
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
+        run: just android-size-report >> "$GITHUB_STEP_SUMMARY"
+
+      - name: sccache stats
+        if: always()
+        run: '"$RUSTC_WRAPPER" --show-stats || true'

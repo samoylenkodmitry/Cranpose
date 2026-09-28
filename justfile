@@ -237,6 +237,7 @@ ci-contract-gates:
     scripts/ci/cancel_pr_runs_test.sh
     scripts/ci/nightly_should_run_test.sh
     scripts/ci/tree_memo_test.sh
+    scripts/ci/so_crate_sizes_test.sh
 
 # Point git at the repository's hooks. Once per clone.
 hooks:
@@ -512,6 +513,17 @@ android-plugin-check:
 android: _disk-guard
     cd apps/android-demo/android && ../../../scripts/ci/with_host_lock.sh --shared \
       ./gradlew --no-daemon :app:assembleRelease
+
+# Per-crate size of the demo's arm64 library, as Markdown: the same build
+# `android` runs, with its symbols kept for the report to read. The report
+# strips a copy to give the size the APK carries. Only the report goes to
+# stdout, so a caller can append it to a Markdown summary.
+android-size-report: _disk-guard
+    CARGO_PROFILE_RELEASE_STRIP=false scripts/ci/with_host_lock.sh --shared \
+      cargo ndk -t arm64-v8a build --release -p desktop-app-platform --lib --features android,renderer-wgpu >&2
+    python3 scripts/ci/so_crate_sizes.py \
+      "${CARGO_TARGET_DIR:-target}/aarch64-linux-android/release/libdesktop_app.so" \
+      --llvm-bin "$(echo "$ANDROID_NDK_HOME"/toolchains/llvm/prebuilt/*/bin)"
 
 # Build the coroflow demo for Android through the same Gradle project.
 android-coroflow: _disk-guard
