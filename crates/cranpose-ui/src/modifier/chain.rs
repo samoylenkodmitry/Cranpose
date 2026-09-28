@@ -6,7 +6,7 @@ use cranpose_core::NodeId;
 #[expect(unused_imports)]
 use cranpose_foundation::InvalidationKind;
 use cranpose_foundation::{
-    BasicModifierNodeContext, ModifierInvalidation, ModifierNodeChain, ModifierNodeContext,
+    BasicModifierNodeContext, ModifierInvalidations, ModifierNodeChain, ModifierNodeContext,
     NodeCapabilities,
 };
 
@@ -72,7 +72,7 @@ impl ModifierChainHandle {
     }
 
     /// Reconciles the underlying [`ModifierNodeChain`] with the elements stored in `modifier`.
-    pub fn update(&mut self, modifier: &Modifier) -> Vec<ModifierInvalidation> {
+    pub fn update(&mut self, modifier: &Modifier) -> ModifierInvalidations {
         let mut resolver = |_: &ModifierLocalToken| None;
         self.update_with_resolver(modifier, &mut resolver)
     }
@@ -81,7 +81,7 @@ impl ModifierChainHandle {
         &mut self,
         modifier: &Modifier,
         resolver: &mut ModifierLocalAncestorResolver<'_>,
-    ) -> Vec<ModifierInvalidation> {
+    ) -> ModifierInvalidations {
         self.chain
             .update_from_ref_iter(modifier.iter_elements(), &mut *self.context.borrow_mut());
         self.capabilities = self.chain.capabilities();
@@ -168,7 +168,7 @@ impl ModifierChainHandle {
     }
 
     /// Drains invalidations requested during the last update cycle.
-    pub fn take_invalidations(&self) -> Vec<ModifierInvalidation> {
+    pub fn take_invalidations(&self) -> ModifierInvalidations {
         self.context.borrow_mut().take_invalidations()
     }
 

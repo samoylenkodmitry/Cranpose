@@ -7,8 +7,8 @@ use std::{
 };
 
 use cranpose_foundation::{
-    DelegatableNode, InvalidationKind, ModifierInvalidation, ModifierNode, ModifierNodeChain,
-    ModifierNodeElement, NodeCapabilities, NodeState,
+    DelegatableNode, InvalidationKind, ModifierInvalidation, ModifierInvalidations, ModifierNode,
+    ModifierNodeChain, ModifierNodeElement, NodeCapabilities, NodeState,
 };
 
 #[derive(Clone)]
@@ -543,16 +543,16 @@ impl ModifierLocalManager {
         &mut self,
         chain: &ModifierNodeChain,
         ancestor_lookup: &mut ModifierLocalAncestorResolver<'_>,
-    ) -> Vec<ModifierInvalidation> {
+    ) -> ModifierInvalidations {
         if !chain.has_capability(NodeCapabilities::MODIFIER_LOCALS) {
             self.providers.clear();
             self.consumers.clear();
-            return Vec::new();
+            return ModifierInvalidations::new();
         }
 
         let mut providers: HashMap<ModifierLocalId, ProviderRecord> = HashMap::new();
         let mut seen_consumers = HashSet::new();
-        let mut invalidations = Vec::new();
+        let mut invalidations = ModifierInvalidations::new();
 
         chain.for_each_node_with_capability(NodeCapabilities::MODIFIER_LOCALS, |_ref, node| {
             if let Some(provider) = node.as_any().downcast_ref::<ModifierLocalProviderNode>() {

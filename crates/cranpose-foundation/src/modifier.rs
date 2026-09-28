@@ -71,7 +71,7 @@ pub trait ModifierNodeContext {
 /// after driving a [`ModifierNodeChain`] reconciliation pass.
 #[derive(Default, Debug, Clone)]
 pub struct BasicModifierNodeContext {
-    invalidations: Vec<ModifierInvalidation>,
+    invalidations: ModifierInvalidations,
     update_requested: bool,
     active_capabilities: Vec<NodeCapabilities>,
     node_id: Option<cranpose_core::NodeId>,
@@ -96,7 +96,7 @@ impl BasicModifierNodeContext {
     }
 
     /// Drains the recorded invalidations and returns them to the caller.
-    pub fn take_invalidations(&mut self) -> Vec<ModifierInvalidation> {
+    pub fn take_invalidations(&mut self) -> ModifierInvalidations {
         std::mem::take(&mut self.invalidations)
     }
 
@@ -1975,6 +1975,10 @@ impl BitOrAssign for NodeCapabilities {
         self.0 |= rhs.0;
     }
 }
+
+/// The invalidations a node's modifier update requested: at most one per
+/// [`InvalidationKind`], held inline so handing them over allocates nothing.
+pub type ModifierInvalidations = smallvec::SmallVec<[ModifierInvalidation; 5]>;
 
 /// Records an invalidation request together with the capability mask that triggered it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

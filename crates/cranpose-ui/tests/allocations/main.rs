@@ -53,7 +53,6 @@ fn remeasure_allocations(rows: usize) -> usize {
 
 /// Measuring a node again allocates its new measurement and nothing that
 /// could be kept from the last pass.
-#[test]
 fn remeasuring_a_row_allocates_only_its_measurement() {
     let few = remeasure_allocations(10);
     let many = remeasure_allocations(110);
@@ -64,7 +63,6 @@ fn remeasuring_a_row_allocates_only_its_measurement() {
 
 /// A modifier chain built link by link keeps its elements in one shared
 /// allocation it extends in place, so each link costs its element alone.
-#[test]
 fn a_modifier_chain_allocates_its_elements_and_one_shared_box() {
     drop(Modifier::empty().padding(1.0).background(Color::RED));
     let region = Region::new(GLOBAL);
@@ -75,4 +73,12 @@ fn a_modifier_chain_allocates_its_elements_and_one_shared_box() {
     let change = region.change();
     drop(modifier);
     assert_eq!(change.allocations, 4, "{change:?}");
+}
+
+/// One test, so no other test's allocations land in these regions: the
+/// counting allocator counts every thread.
+#[test]
+fn layout_and_modifiers_stay_within_their_allocation_budgets() {
+    remeasuring_a_row_allocates_only_its_measurement();
+    a_modifier_chain_allocates_its_elements_and_one_shared_box();
 }

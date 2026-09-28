@@ -747,8 +747,8 @@ fn basic_context_records_invalidations_and_updates() {
 
     let drained = context.take_invalidations();
     assert_eq!(
-        drained,
-        vec![
+        drained.as_slice(),
+        [
             ModifierInvalidation::new(InvalidationKind::Layout, NodeCapabilities::LAYOUT),
             ModifierInvalidation::new(InvalidationKind::Draw, NodeCapabilities::DRAW)
         ]

@@ -13,8 +13,8 @@ fn attaches_padding_node_and_invalidates_layout() {
 
     let invalidations = handle.take_invalidations();
     assert_eq!(
-        invalidations,
-        vec![ModifierInvalidation::new(
+        invalidations.as_slice(),
+        [ModifierInvalidation::new(
             InvalidationKind::Layout,
             NodeCapabilities::LAYOUT
         )]
