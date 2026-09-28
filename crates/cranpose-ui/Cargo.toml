@@ -44,6 +44,7 @@ test-helpers = []
 
 [dev-dependencies]
 criterion = "0.8"
+stats_alloc = "0.1.10"
 
 [[bench]]
 name = "pipeline"
@@ -60,3 +61,7 @@ harness = false
 [[test]]
 name = "integration"
 path = "tests/integration.rs"
+
+[[test]]
+name = "allocations"
+path = "tests/allocations/main.rs"

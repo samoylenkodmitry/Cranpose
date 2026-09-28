@@ -101,7 +101,19 @@ pub struct Placeable {
     node_id: NodeId,
     content_offset_x: f32,
     content_offset_y: f32,
-    place_fn: Option<Rc<dyn Fn(f32, f32)>>,
+    place_target: Option<Rc<dyn PlaceTarget>>,
+}
+
+/// What a node-backed [`Placeable`] tells when its parent places it.
+pub trait PlaceTarget {
+    /// Places the node at `(x, y)` in its parent.
+    fn place(&self, x: f32, y: f32);
+}
+
+impl<F: Fn(f32, f32)> PlaceTarget for F {
+    fn place(&self, x: f32, y: f32) {
+        self(x, y);
+    }
 }
 
 impl Placeable {
@@ -113,7 +125,7 @@ impl Placeable {
             node_id,
             content_offset_x: 0.0,
             content_offset_y: 0.0,
-            place_fn: None,
+            place_target: None,
         }
     }
 
@@ -130,16 +142,18 @@ impl Placeable {
             node_id,
             content_offset_x: content_offset.0,
             content_offset_y: content_offset.1,
-            place_fn: None,
+            place_target: None,
         }
     }
 
-    /// Creates a node-backed placeable whose `place()` triggers a side effect.
-    pub fn with_place_fn(
+    /// Creates a node-backed placeable whose `place()` tells `target`. The
+    /// target is shared, so a node's own measure state can be it without an
+    /// allocation per measure.
+    pub fn with_place_target(
         width: f32,
         height: f32,
         node_id: NodeId,
-        place_fn: Rc<dyn Fn(f32, f32)>,
+        target: Rc<dyn PlaceTarget>,
     ) -> Self {
         Self {
             width,
@@ -147,14 +161,14 @@ impl Placeable {
             node_id,
             content_offset_x: 0.0,
             content_offset_y: 0.0,
-            place_fn: Some(place_fn),
+            place_target: Some(target),
         }
     }
 
     /// Places the child at the provided coordinates relative to its parent.
     pub fn place(&self, x: f32, y: f32) {
-        if let Some(f) = &self.place_fn {
-            f(x, y);
+        if let Some(target) = &self.place_target {
+            target.place(x, y);
         }
     }
 
@@ -303,3 +317,7 @@ impl LayoutModifierMeasureResult {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "tests/core_tests.rs"]
+mod tests;
