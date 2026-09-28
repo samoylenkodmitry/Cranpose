@@ -365,7 +365,7 @@ fn cached_visible_text_glyph_runs_promote_large_runs_to_retained_buffers() {
         "the visible cached glyph path should use retained-buffer promotion"
     );
     let cached_branch_start = render_source
-        .find("if let Some(quad_run) = cached_quad_run.as_ref()")
+        .find("if let Some(entries) = cached_entries.as_ref()")
         .expect("cached visible glyph branch exists");
     let cached_branch_end = render_source[cached_branch_start..]
         .find("let instance_start = glyph_instances.len();")
@@ -377,7 +377,7 @@ fn cached_visible_text_glyph_runs_promote_large_runs_to_retained_buffers() {
         "cached visible glyph runs should use retained-buffer promotion"
     );
     let miss_branch_start = render_source
-        .find("let Ok(quad_run) = self.prepare_text_glyph_quads(")
+        .find("let Ok(entries) = self.prepare_text_glyph_entries(")
         .expect("visible miss glyph preparation branch exists");
     let miss_branch_end = render_source[miss_branch_start..]
         .find("if glyph_instances.len() > instance_start {")
