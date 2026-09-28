@@ -129,3 +129,77 @@ fn a_layer_bounded_away_from_the_node_origin_pivots_on_its_own_centre() {
         "{turned:?}"
     );
 }
+
+/// A grid cell near the bottom of a phone screen, turned a few degrees: its
+/// transform only turns and moves it, so the renderer draws it in place.
+#[test]
+fn a_turned_layer_far_from_the_origin_keeps_an_exact_rotation() {
+    let local_bounds = Rect {
+        x: 1.142_857_2,
+        y: 1.142_857_2,
+        width: 75.428_57,
+        height: 71.238_1,
+    };
+    let placement = Point {
+        x: 696.18,
+        y: 2129.6,
+    };
+    let layer = GraphicsLayer {
+        rotation_z: -6.0,
+        ..Default::default()
+    };
+    let [[a, b, _], [c, d, _], perspective] =
+        layer_transform_to_parent(local_bounds, placement, &layer).matrix();
+    let (sin, cos) = (-6.0f32).to_radians().sin_cos();
+    let expected = [cos, -sin, sin, cos, 0.0, 0.0, 1.0];
+    let actual = [a, b, c, d, perspective[0], perspective[1], perspective[2]];
+    for (value, want) in actual.into_iter().zip(expected) {
+        assert!(
+            (value - want).abs() <= 4.0 * f32::EPSILON,
+            "the linear part is the rotation, whatever the placement: {actual:?} vs {expected:?}"
+        );
+    }
+}
+
+/// The transform takes every corner of the layer where the layer's own
+/// scale, turn, tilt and translation put it.
+#[test]
+fn a_layer_transform_puts_each_corner_where_the_layer_puts_it() {
+    let local_bounds = Rect {
+        x: -4.0,
+        y: 3.0,
+        width: 120.0,
+        height: 80.0,
+    };
+    let placement = Point {
+        x: 310.0,
+        y: 1460.0,
+    };
+    let layer = GraphicsLayer {
+        scale_x: 1.2,
+        scale_y: 0.9,
+        rotation_x: 25.0,
+        rotation_y: -15.0,
+        rotation_z: 10.0,
+        translation_x: 6.0,
+        translation_y: -3.0,
+        transform_origin: TransformOrigin {
+            pivot_fraction_x: 0.25,
+            pivot_fraction_y: 0.75,
+        },
+        ..Default::default()
+    };
+    let transform = layer_transform_to_parent(local_bounds, placement, &layer);
+    let placed = Rect {
+        x: placement.x + local_bounds.x,
+        y: placement.y + local_bounds.y,
+        ..local_bounds
+    };
+    let expected = apply_layer_to_quad(placed, placed, &layer);
+    for (corner, want) in transform.map_rect(local_bounds).into_iter().zip(expected) {
+        assert!(
+            (corner[0] - want[0]).abs() < 1e-3 && (corner[1] - want[1]).abs() < 1e-3,
+            "{corner:?} vs {want:?}"
+        );
+    }
+}

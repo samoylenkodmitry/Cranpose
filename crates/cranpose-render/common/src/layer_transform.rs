@@ -73,6 +73,28 @@ fn layer_has_rotation(layer: &GraphicsLayer) -> bool {
         || layer.rotation_z.abs() > f32::EPSILON
 }
 
+/// Where the layer's turns -- about x, then y, then z -- take the x and y
+/// axes of its plane, in three dimensions.
+fn rotation_axes(layer: &GraphicsLayer) -> [[f32; 3]; 2] {
+    let (sin_x, cos_x) = layer.rotation_x.to_radians().sin_cos();
+    let (sin_y, cos_y) = layer.rotation_y.to_radians().sin_cos();
+    let (sin_z, cos_z) = layer.rotation_z.to_radians().sin_cos();
+    [
+        [cos_z * cos_y, sin_z * cos_y, -sin_y],
+        [
+            cos_z * sin_x * sin_y - sin_z * cos_x,
+            sin_z * sin_x * sin_y + cos_z * cos_x,
+            sin_x * cos_y,
+        ],
+    ]
+}
+
+/// How far the camera a tilted layer is seen from stands before its plane.
+fn camera_distance(layer: &GraphicsLayer) -> f32 {
+    const CAMERA_DISTANCE_SCALE: f32 = 72.0;
+    (layer.camera_distance * CAMERA_DISTANCE_SCALE).max(1.0)
+}
+
 fn apply_rotation_and_perspective(
     point: [f32; 2],
     pivot: (f32, f32),
@@ -81,36 +103,15 @@ fn apply_rotation_and_perspective(
     if !layer_has_rotation(layer) {
         return point;
     }
-
-    let mut x = point[0] - pivot.0;
-    let mut y = point[1] - pivot.1;
-    let mut z = 0.0f32;
-
-    let (sin_x, cos_x) = layer.rotation_x.to_radians().sin_cos();
-    let (sin_y, cos_y) = layer.rotation_y.to_radians().sin_cos();
-    let (sin_z, cos_z) = layer.rotation_z.to_radians().sin_cos();
-
-    let y_rot_x = y * cos_x - z * sin_x;
-    let z_rot_x = y * sin_x + z * cos_x;
-    y = y_rot_x;
-    z = z_rot_x;
-
-    let x_rot_y = x * cos_y + z * sin_y;
-    let z_rot_y = -x * sin_y + z * cos_y;
-    x = x_rot_y;
-    z = z_rot_y;
-
-    let x_rot_z = x * cos_z - y * sin_z;
-    let y_rot_z = x * sin_z + y * cos_z;
-    x = x_rot_z;
-    y = y_rot_z;
-
-    const CAMERA_DISTANCE_SCALE: f32 = 72.0;
-    let camera_distance = (layer.camera_distance * CAMERA_DISTANCE_SCALE).max(1.0);
-    let denom = (camera_distance - z).max(1.0);
-    let perspective = camera_distance / denom;
-
-    [pivot.0 + x * perspective, pivot.1 + y * perspective]
+    let (x, y) = (point[0] - pivot.0, point[1] - pivot.1);
+    let [x_axis, y_axis] = rotation_axes(layer);
+    let [turned_x, turned_y, turned_z] = [0, 1, 2].map(|axis| x * x_axis[axis] + y * y_axis[axis]);
+    let camera_distance = camera_distance(layer);
+    let perspective = camera_distance / (camera_distance - turned_z).max(1.0);
+    [
+        pivot.0 + turned_x * perspective,
+        pivot.1 + turned_y * perspective,
+    ]
 }
 
 fn apply_layer_to_point(point: [f32; 2], pivot: (f32, f32), layer: &GraphicsLayer) -> [f32; 2] {
@@ -151,16 +152,32 @@ pub fn layer_transform_to_parent(
     // Local space keeps the node's origin at `placement`, wherever the
     // layer's bounds sit in it, so a layer bounded at a coordinator away
     // from the node's origin clips and pivots there without moving content.
-    let placement_rect = Rect {
-        x: placement.x + local_bounds.x,
-        y: placement.y + local_bounds.y,
-        width: local_bounds.width,
-        height: local_bounds.height,
-    };
-    ProjectiveTransform::from_rect_to_quad(
-        local_bounds,
-        apply_layer_to_quad(placement_rect, placement_rect, layer),
-    )
+    //
+    // The matrix is the layer's own scale, turn and camera, not a fit to
+    // where they take its corners: a fit's rounding grows with the distance
+    // from the origin, and a turned cell far down a screen came out skewed
+    // by it, too skewed to draw in place.
+    let (pivot_x, pivot_y) = layer_rotation_pivot(local_bounds, layer);
+    let [x_axis, y_axis] = rotation_axes(layer);
+    let (scale_x, scale_y) = (layer_scale_x(layer), layer_scale_y(layer));
+    let camera_distance = camera_distance(layer);
+    let turn = ProjectiveTransform::from_homogeneous([
+        [x_axis[0] * scale_x, y_axis[0] * scale_y, 0.0],
+        [x_axis[1] * scale_x, y_axis[1] * scale_y, 0.0],
+        [
+            -x_axis[2] * scale_x / camera_distance,
+            -y_axis[2] * scale_y / camera_distance,
+            1.0,
+        ],
+    ]);
+    let placed = ProjectiveTransform::translation(-pivot_x, -pivot_y)
+        .then(turn)
+        .then(ProjectiveTransform::translation(pivot_x, pivot_y))
+        .then(ProjectiveTransform::translation(
+            placement.x + layer.translation_x,
+            placement.y + layer.translation_y,
+        ));
+    ProjectiveTransform::from_homogeneous(placed.matrix())
 }
 
 #[cfg(test)]

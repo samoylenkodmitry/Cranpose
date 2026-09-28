@@ -1959,10 +1959,21 @@ const MAX_ADMISSION_PATIENCE: u32 = 16;
 /// The frames a layer that can draw in place holds its content still before
 /// its surface is kept.
 const IN_PLACE_PATIENCE: u32 = MAX_ADMISSION_PATIENCE;
+/// The longest that wait grows after surfaces kept for such a layer went
+/// unread: about four seconds at 60 Hz.
+const IN_PLACE_MAX_PATIENCE: u32 = 16 * IN_PLACE_PATIENCE;
 
 enum AdmissionCost {
     Pin,
-    Copy { patience: u32, floor: u32 },
+    /// A kept surface costs a copy. `patience` is the frames the content
+    /// holds still before its surface is kept: it doubles, up to `ceiling`,
+    /// whenever a kept surface went unread, and falls back to `floor` when
+    /// one is read.
+    Copy {
+        patience: u32,
+        floor: u32,
+        ceiling: u32,
+    },
 }
 
 pub(crate) struct AdmissionGate {
@@ -1985,6 +1996,7 @@ impl AdmissionGate {
             AdmissionCost::Copy {
                 patience: 1,
                 floor: 1,
+                ceiling: MAX_ADMISSION_PATIENCE,
             },
         )
     }
@@ -1995,6 +2007,7 @@ impl AdmissionGate {
             AdmissionCost::Copy {
                 patience: 0,
                 floor: 0,
+                ceiling: MAX_ADMISSION_PATIENCE,
             },
         )
     }
@@ -2004,12 +2017,16 @@ impl AdmissionGate {
     /// `IN_PLACE_PATIENCE` frames. Drawing in place meanwhile costs nothing
     /// a surface would save, and a shorter hold -- a relayout pausing at the
     /// turn of its motion -- would keep surfaces read for a frame or two.
+    /// A pause longer than that at every turn keeps surfaces nothing reads,
+    /// so each one that goes unread doubles the wait, up to
+    /// `IN_PLACE_MAX_PATIENCE`.
     fn drawn_in_place(key: LayerRasterCacheKey) -> Self {
         Self::with_cost(
             key,
             AdmissionCost::Copy {
                 patience: IN_PLACE_PATIENCE,
                 floor: IN_PLACE_PATIENCE,
+                ceiling: IN_PLACE_MAX_PATIENCE,
             },
         )
     }
@@ -2031,8 +2048,14 @@ impl AdmissionGate {
             self.run = self.run.saturating_add(1);
             return None;
         }
-        if let (true, AdmissionCost::Copy { patience, .. }) = (self.unread, &mut self.cost) {
-            *patience = (*patience * 2).clamp(1, MAX_ADMISSION_PATIENCE);
+        if let (
+            true,
+            AdmissionCost::Copy {
+                patience, ceiling, ..
+            },
+        ) = (self.unread, &mut self.cost)
+        {
+            *patience = (*patience * 2).clamp(1, *ceiling);
         }
         let dead = self.dead_entry();
         self.admitted = false;
@@ -2064,7 +2087,10 @@ impl AdmissionGate {
 
     fn hit(&mut self, key: LayerRasterCacheKey) {
         self.observe(key);
-        if let AdmissionCost::Copy { patience, floor } = &mut self.cost {
+        if let AdmissionCost::Copy {
+            patience, floor, ..
+        } = &mut self.cost
+        {
             *patience = *floor;
         }
         self.unread = false;
