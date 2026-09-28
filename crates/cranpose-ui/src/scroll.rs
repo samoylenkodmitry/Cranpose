@@ -795,15 +795,17 @@ impl LayoutModifierNode for ScrollNode {
         measurable: &dyn Measurable,
         constraints: Constraints,
     ) -> LayoutModifierMeasureResult {
+        // The content keeps the incoming minimum and loses only the maximum
+        // along the scroll, as Compose's `ScrollingLayoutNode` measures it
+        // with `constraints.copy(maxHeight = Infinity)`: under
+        // `fill_max_size()` it is at least as tall as the viewport.
         let scroll_constraints = if self.is_vertical {
             Constraints {
-                min_height: 0.0,
                 max_height: f32::INFINITY,
                 ..constraints
             }
         } else {
             Constraints {
-                min_width: 0.0,
                 max_width: f32::INFINITY,
                 ..constraints
             }

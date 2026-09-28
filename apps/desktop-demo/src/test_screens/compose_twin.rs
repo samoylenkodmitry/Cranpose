@@ -9,8 +9,9 @@ use cranpose_core::{rememberMutableStateOf, MutableState};
 use cranpose_foundation::text::{TextFieldState, TextRange};
 use cranpose_ui::{
     composable, text::SpanStyle, BasicTextField, BasicTextFieldDecorated, BasicTextFieldOptions,
-    BasicTextFieldWithOptions, BoxSpec, Color, Column, ColumnSpec, FocusRequester,
-    LinearArrangement, Modifier, Row, RowSpec, Text, TextStyle, VerticalAlignment,
+    BasicTextFieldWithOptions, Box, BoxSpec, Color, Column, ColumnSpec, FocusRequester,
+    HorizontalAlignment, LinearArrangement, Modifier, Row, RowSpec, ScrollState, Text, TextStyle,
+    VerticalAlignment,
 };
 
 pub use super::compose_twin_matrix::{MATRIX_FRAMES, MATRIX_GRID};
@@ -74,7 +75,7 @@ impl TwinGrid {
 }
 
 /// The hand-written scenes, in the Compose twin's `SCENES` order.
-pub const TWIN_SCENES: [TwinScene; 7] = [
+pub const TWIN_SCENES: [TwinScene; 8] = [
     whole("simple-card", simple_card_showcase),
     whole("positioned-boxes", positioned_boxes_showcase),
     whole("item-list", item_list_showcase),
@@ -82,6 +83,7 @@ pub const TWIN_SCENES: [TwinScene; 7] = [
     whole("modifier-order", modifier_order_probes),
     whole("text-fields", text_field_probes),
     whole("text-selection", text_selection_probe),
+    whole("scroll-minimum", scroll_minimum_probe),
 ];
 
 const fn whole(name: &'static str, content: fn()) -> TwinScene {
@@ -367,6 +369,34 @@ pub fn text_selection_probe() {
                     cursor_color: FIELD_ACCENT,
                     ..BasicTextFieldOptions::default()
                 },
+            );
+        },
+    );
+}
+
+/// A column with less content than the frame, under
+/// `fill_max_size().vertical_scroll()`: the scroll keeps the frame's height
+/// as its content's minimum, so the column fills the frame, its background
+/// with it, and centers its box.
+#[composable]
+pub fn scroll_minimum_probe() {
+    let scroll = cranpose_core::remember(|| ScrollState::new(0.0)).with(|scroll| *scroll);
+    Column(
+        Modifier::empty()
+            .fill_max_size()
+            .vertical_scroll(scroll, false)
+            .background(Color(0.12, 0.16, 0.28, 1.0)),
+        ColumnSpec::new()
+            .vertical_arrangement(LinearArrangement::Center)
+            .horizontal_alignment(HorizontalAlignment::CenterHorizontally),
+        || {
+            Box(
+                Modifier::empty()
+                    .size_points(120.0, 60.0)
+                    .background(Color(0.9, 0.5, 0.2, 1.0))
+                    .rounded_corners(8.0),
+                BoxSpec::default(),
+                || {},
             );
         },
     );
