@@ -47,5 +47,3 @@ debug = 0
 opt-level = "s"
 [profile.release.package.codespan-reporting]
 opt-level = "z"
-[profile.release.package.gimli]
-opt-level = "z"
