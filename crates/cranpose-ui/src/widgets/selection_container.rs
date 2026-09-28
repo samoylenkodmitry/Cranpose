@@ -168,7 +168,7 @@ pub(crate) fn selectable_text(
             scope.on_dispose(move || registrar.unsubscribe(key))
         });
     }
-    let reporter = Modifier::from_parts(vec![modifier_element(SelectableTextElement::new(
+    let reporter = Modifier::from_parts(&[modifier_element(SelectableTextElement::new(
         Rc::clone(&geometry),
     ))]);
     reporter.draw_behind(move |scope| {

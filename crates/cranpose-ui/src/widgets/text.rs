@@ -155,7 +155,7 @@ fn compose_basic_text_group(
         options,
         crate::density::density(),
     ));
-    let final_modifier = Modifier::from_parts(vec![text_element]);
+    let final_modifier = Modifier::from_parts(&[text_element]);
     let combined_modifier = modifier.then(final_modifier);
 
     compose_layout(combined_modifier, EmptyMeasurePolicy, || {})

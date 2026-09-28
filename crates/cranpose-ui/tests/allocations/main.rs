@@ -7,7 +7,7 @@ use cranpose_ui::{
         column::{Column, ColumnSpec},
     },
 };
-use cranpose_ui_graphics::Size;
+use cranpose_ui_graphics::{Color, Size};
 use stats_alloc::{INSTRUMENTED_SYSTEM, Region, StatsAlloc};
 
 #[global_allocator]
@@ -60,4 +60,19 @@ fn remeasuring_a_row_allocates_only_its_measurement() {
     let per_row = (many - few) as f64 / 100.0;
     println!("allocations per remeasured row: {per_row}");
     assert!(per_row <= 1.0, "{per_row} allocations per remeasured row");
+}
+
+/// A modifier chain built link by link keeps its elements in one shared
+/// allocation it extends in place, so each link costs its element alone.
+#[test]
+fn a_modifier_chain_allocates_its_elements_and_one_shared_box() {
+    drop(Modifier::empty().padding(1.0).background(Color::RED));
+    let region = Region::new(GLOBAL);
+    let modifier = Modifier::empty()
+        .padding(1.0)
+        .background(Color::RED)
+        .rounded_corners(3.0);
+    let change = region.change();
+    drop(modifier);
+    assert_eq!(change.allocations, 4, "{change:?}");
 }

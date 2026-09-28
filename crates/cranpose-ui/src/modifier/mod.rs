@@ -12,6 +12,7 @@ use std::{
 };
 
 use cranpose_core::{ProvidedValue, hash::default};
+use smallvec::SmallVec;
 
 mod alignment;
 mod background;
@@ -191,8 +192,8 @@ fn describe_dimension(constraint: DimensionConstraint) -> String {
     }
 }
 
-fn inspector_slice(inspector: &Option<Rc<Vec<InspectorMetadata>>>) -> &[InspectorMetadata] {
-    inspector.as_deref().map_or(&[], Vec::as_slice)
+fn inspector_slice(inspector: &Option<Rc<[InspectorMetadata]>>) -> &[InspectorMetadata] {
+    inspector.as_deref().unwrap_or(&[])
 }
 
 /// The inspector metadata of two modifiers joined, first `first`'s, or
@@ -200,14 +201,11 @@ fn inspector_slice(inspector: &Option<Rc<Vec<InspectorMetadata>>>) -> &[Inspecto
 fn merged_inspector(
     first: &[InspectorMetadata],
     second: &[InspectorMetadata],
-) -> Option<Rc<Vec<InspectorMetadata>>> {
+) -> Option<Rc<[InspectorMetadata]>> {
     if first.is_empty() && second.is_empty() {
         return None;
     }
-    let mut merged = Vec::with_capacity(first.len() + second.len());
-    merged.extend_from_slice(first);
-    merged.extend_from_slice(second);
-    Some(Rc::new(merged))
+    Some(first.iter().chain(second).cloned().collect())
 }
 
 pub(crate) fn inspector_metadata<F>(name: &'static str, recorder: F) -> InspectorMetadata
@@ -235,14 +233,71 @@ fn inspector_metadata_enabled() -> bool {
     cfg!(any(test, feature = "inspection")) || modifier_debug_enabled()
 }
 
+/// A modifier's elements: a chain of up to four lives inline in its one
+/// shared allocation.
+type ModifierElements = SmallVec<[DynModifierElement; 4]>;
+
+/// The elements of a non-empty modifier. A lone element, as each link of a
+/// builder chain starts out, is held as it is; joining it to more moves the
+/// chain into one shared allocation, which the chain's later links extend
+/// in place while it is the only owner.
+#[derive(Clone)]
+enum Elements {
+    One(DynModifierElement),
+    Many(Rc<ModifierElements>),
+}
+
+impl Elements {
+    fn from_slice(elements: &[DynModifierElement]) -> Self {
+        match elements {
+            [element] => Self::One(element.clone()),
+            _ => Self::Many(Rc::new(elements.iter().cloned().collect())),
+        }
+    }
+
+    fn extend_from(&mut self, more: &[DynModifierElement]) {
+        match self {
+            Self::Many(shared) => match Rc::get_mut(shared) {
+                Some(owned) => owned.extend(more.iter().cloned()),
+                None => *shared = Rc::new(shared.iter().chain(more).cloned().collect()),
+            },
+            Self::One(first) => {
+                *self = Self::Many(Rc::new(
+                    std::iter::once(&*first).chain(more).cloned().collect(),
+                ));
+            }
+        }
+    }
+
+    /// Whether both are the same storage, so equal without comparing.
+    fn shares_storage(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::One(a), Self::One(b)) => Rc::ptr_eq(a, b),
+            (Self::Many(a), Self::Many(b)) => Rc::ptr_eq(a, b),
+            _ => false,
+        }
+    }
+}
+
+impl std::ops::Deref for Elements {
+    type Target = [DynModifierElement];
+
+    fn deref(&self) -> &[DynModifierElement] {
+        match self {
+            Self::One(element) => std::slice::from_ref(element),
+            Self::Many(elements) => elements.as_slice(),
+        }
+    }
+}
+
 #[derive(Clone)]
 enum ModifierKind {
     Empty,
     Single {
-        elements: Rc<Vec<DynModifierElement>>,
+        elements: Elements,
         /// `None` when no element records inspector metadata, which is
         /// always outside tests and modifier debugging: no allocation.
-        inspector: Option<Rc<Vec<InspectorMetadata>>>,
+        inspector: Option<Rc<[InspectorMetadata]>>,
     },
 }
 
@@ -461,7 +516,7 @@ impl Modifier {
         F: Fn() -> T + 'static,
     {
         let element = ModifierLocalProviderElement::new(key, value);
-        let modifier = Modifier::from_parts(vec![modifier_element(element)]);
+        let modifier = Modifier::from_parts(&[modifier_element(element)]);
         self.then(modifier)
     }
 
@@ -470,7 +525,7 @@ impl Modifier {
         F: for<'scope> Fn(&mut ModifierLocalReadScope<'scope>) + 'static,
     {
         let element = ModifierLocalConsumerElement::new(consumer);
-        let modifier = Modifier::from_parts(vec![modifier_element(element)]);
+        let modifier = Modifier::from_parts(&[modifier_element(element)]);
         self.then(modifier)
     }
 
@@ -522,7 +577,7 @@ impl Modifier {
         };
         let element = SemanticsElement::new(recorder);
         let modifier =
-            Modifier::from_parts(vec![modifier_element(element)]).with_inspector_metadata(metadata);
+            Modifier::from_parts(&[modifier_element(element)]).with_inspector_metadata(metadata);
         self.then(modifier)
     }
 
@@ -741,7 +796,7 @@ impl Modifier {
     /// can be focused programmatically.
     pub fn focus_target(self) -> Self {
         let element = FocusTargetElement::new();
-        let modifier = Modifier::from_parts(vec![modifier_element(element)]);
+        let modifier = Modifier::from_parts(&[modifier_element(element)]);
         self.then(modifier)
     }
 
@@ -754,7 +809,7 @@ impl Modifier {
         F: Fn(FocusState) + 'static,
     {
         let element = FocusTargetElement::with_callback(callback);
-        let modifier = Modifier::from_parts(vec![modifier_element(element)]);
+        let modifier = Modifier::from_parts(&[modifier_element(element)]);
         self.then(modifier)
     }
 
@@ -766,7 +821,7 @@ impl Modifier {
     /// `request_focus` moves whichever focus targets are attached there.
     pub fn focus_requester(self, requester: &FocusRequester) -> Self {
         let element = FocusRequesterElement::new(requester.clone());
-        let modifier = Modifier::from_parts(vec![modifier_element(element)]);
+        let modifier = Modifier::from_parts(&[modifier_element(element)]);
         self.then(modifier)
     }
 
@@ -779,7 +834,7 @@ impl Modifier {
     /// signal for itself.
     pub fn semantics_requester(self, requester: &SemanticsRequester) -> Self {
         let element = SemanticsRequesterElement::new(requester.clone());
-        let modifier = Modifier::from_parts(vec![modifier_element(element)]);
+        let modifier = Modifier::from_parts(&[modifier_element(element)]);
         self.then(modifier)
     }
 
@@ -881,54 +936,72 @@ impl Modifier {
         }
 
         let element = DebugChainElement { tag };
-        let modifier = Modifier::from_parts(vec![modifier_element(element)]);
+        let modifier = Modifier::from_parts(&[modifier_element(element)]);
         self.then(modifier)
             .with_inspector_metadata(inspector_metadata("debugChain", move |info| {
                 info.add_property("tag", tag);
             }))
     }
 
-    /// Concatenates this modifier with another.
+    /// This modifier followed by `next`.
     ///
-    /// Eagerly concatenates both element vectors into a single flat `Single`
-    /// variant, avoiding recursive Rc tree overhead on drop and comparison.
-    pub fn then(&self, next: Modifier) -> Modifier {
-        if self.is_trivially_empty() {
-            return next;
-        }
-        if next.is_trivially_empty() {
-            return self.clone();
-        }
-
-        let Some((self_elements, self_inspector)) = self.single_parts() else {
+    /// It takes `self`: a modifier built link by link owns its elements
+    /// alone, so each link joins them in place instead of copying the chain.
+    /// Clone a modifier first to keep using it; the join then copies it.
+    pub fn then(self, next: Modifier) -> Modifier {
+        let Modifier {
+            kind,
+            strict_fingerprint,
+            structural_fingerprint,
+            element_count,
+            provides_composition_locals,
+        } = self;
+        let ModifierKind::Single {
+            mut elements,
+            inspector,
+        } = kind
+        else {
             return next;
         };
-        let Some((next_elements, next_inspector)) = next.single_parts() else {
-            return self.clone();
+        let ModifierKind::Single {
+            elements: next_elements,
+            inspector: next_inspector,
+        } = &next.kind
+        else {
+            return Modifier {
+                kind: ModifierKind::Single {
+                    elements,
+                    inspector,
+                },
+                strict_fingerprint,
+                structural_fingerprint,
+                element_count,
+                provides_composition_locals,
+            };
         };
-
-        let mut merged_elements = Vec::with_capacity(self_elements.len() + next_elements.len());
-        merged_elements.extend_from_slice(self_elements);
-        merged_elements.extend_from_slice(next_elements);
-
-        let merged_inspector = merged_inspector(self_inspector, next_inspector);
 
         let fingerprints = append_fingerprints(
             ModifierFingerprints {
-                strict: self.strict_fingerprint,
-                structural: self.structural_fingerprint,
+                strict: strict_fingerprint,
+                structural: structural_fingerprint,
             },
             next_elements,
         );
+        elements.extend_from(next_elements);
+        let inspector = if next_inspector.is_none() {
+            inspector
+        } else {
+            merged_inspector(inspector_slice(&inspector), inspector_slice(next_inspector))
+        };
         Modifier {
             kind: ModifierKind::Single {
-                elements: Rc::new(merged_elements),
-                inspector: merged_inspector,
+                elements,
+                inspector,
             },
             strict_fingerprint: fingerprints.strict,
             structural_fingerprint: fingerprints.structural,
-            element_count: self.element_count + next.element_count,
-            provides_composition_locals: self.provides_composition_locals
+            element_count: element_count + next.element_count,
+            provides_composition_locals: provides_composition_locals
                 || next.provides_composition_locals,
         }
     }
@@ -964,7 +1037,7 @@ impl Modifier {
     pub(crate) fn elements(&self) -> Vec<DynModifierElement> {
         match &self.kind {
             ModifierKind::Empty => Vec::new(),
-            ModifierKind::Single { elements, .. } => elements.as_ref().clone(),
+            ModifierKind::Single { elements, .. } => elements.to_vec(),
         }
     }
 
@@ -972,7 +1045,7 @@ impl Modifier {
         match &self.kind {
             ModifierKind::Empty => Vec::new(),
             ModifierKind::Single { inspector, .. } => {
-                inspector.as_deref().cloned().unwrap_or_default()
+                inspector.as_deref().map(<[_]>::to_vec).unwrap_or_default()
             }
         }
     }
@@ -985,10 +1058,10 @@ impl Modifier {
                 inspector,
             } => Self {
                 kind: ModifierKind::Single {
-                    elements: Rc::new(elements.iter().cloned().collect()),
+                    elements: Elements::from_slice(elements),
                     inspector: inspector
                         .as_ref()
-                        .map(|inspector| Rc::new(inspector.as_ref().clone())),
+                        .map(|inspector| inspector.iter().cloned().collect()),
                 },
                 strict_fingerprint: self.strict_fingerprint,
                 structural_fingerprint: self.structural_fingerprint,
@@ -1065,11 +1138,11 @@ impl Modifier {
     where
         E: ModifierNodeElement,
     {
-        let dyn_element = modifier_element(element);
-        Self::from_parts(vec![dyn_element])
+        Self::from_parts(&[modifier_element(element)])
     }
 
-    pub(crate) fn from_parts(elements: Vec<DynModifierElement>) -> Self {
+    /// A modifier of `elements`, held in one shared allocation.
+    pub(crate) fn from_parts(elements: &[DynModifierElement]) -> Self {
         if elements.is_empty() {
             Self::default()
         } else {
@@ -1077,10 +1150,10 @@ impl Modifier {
             let provides_composition_locals = elements
                 .iter()
                 .any(|element| element.provides_composition_locals());
-            let fingerprints = single_fingerprints(elements.as_slice());
+            let fingerprints = single_fingerprints(elements);
             Self {
                 kind: ModifierKind::Single {
-                    elements: Rc::new(elements),
+                    elements: Elements::from_slice(elements),
                     inspector: None,
                 },
                 strict_fingerprint: fingerprints.strict,
@@ -1088,20 +1161,6 @@ impl Modifier {
                 element_count,
                 provides_composition_locals,
             }
-        }
-    }
-
-    fn is_trivially_empty(&self) -> bool {
-        matches!(self.kind, ModifierKind::Empty)
-    }
-
-    fn single_parts(&self) -> Option<(&[DynModifierElement], &[InspectorMetadata])> {
-        match &self.kind {
-            ModifierKind::Empty => None,
-            ModifierKind::Single {
-                elements,
-                inspector,
-            } => Some((elements.as_slice(), inspector_slice(inspector))),
         }
     }
 
@@ -1115,12 +1174,15 @@ impl Modifier {
                 elements,
                 inspector,
             } => {
-                let mut new_inspector = inspector.as_deref().cloned().unwrap_or_default();
-                new_inspector.push(metadata);
+                let new_inspector = inspector_slice(&inspector)
+                    .iter()
+                    .cloned()
+                    .chain(std::iter::once(metadata))
+                    .collect();
                 Self {
                     kind: ModifierKind::Single {
                         elements,
-                        inspector: Some(Rc::new(new_inspector)),
+                        inspector: Some(new_inspector),
                     },
                     strict_fingerprint: self.strict_fingerprint,
                     structural_fingerprint: self.structural_fingerprint,
@@ -1163,7 +1225,7 @@ impl Modifier {
                     inspector: _,
                 },
             ) => {
-                if Rc::ptr_eq(e1, e2) {
+                if e1.shares_storage(e2) {
                     return true;
                 }
 
