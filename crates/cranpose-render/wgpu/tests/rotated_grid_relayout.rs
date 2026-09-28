@@ -373,3 +373,38 @@ fn rotated_cells_kept_once_they_hold_still_render_their_surfaces_together() {
         "the kept surfaces serve the next frame: {still:?}"
     );
 }
+
+/// Two turns of the width's motion at 60 Hz.
+const FULL_PERIOD: usize = 190;
+/// How often a cell may be copied into the cache over that period: once per
+/// pause of the motion and a few times while its gate learns the churn.
+const COPIES_PER_CELL: u32 = 5;
+
+/// Offscreen cells render together into atlases, so keeping one means
+/// copying it out. On a phone a pixel-at-a-time relayout holds a cell's size
+/// two or three frames: a copy read once and then replaced cost a copy and
+/// a texture for nothing, and on the device that churn held 30 MB more GPU
+/// memory than drawing every cell every frame did (#920).
+#[test]
+fn offscreen_rotated_cells_resized_a_pixel_at_a_time_are_not_copied_every_hold() {
+    let Some((_lock, mut harness)) = harness_on(true, PHONE) else {
+        return;
+    };
+    let cells = (PHONE.columns * PHONE.rows) as u32;
+    let (mut copies, mut new_textures) = (0, 0);
+    for frame in 0..FULL_PERIOD {
+        let (stats, _) = harness.frame(width_fraction(frame));
+        if frame >= WARMUP_FRAMES {
+            copies += stats.copy_count;
+            new_textures += stats.offscreen_news;
+        }
+    }
+    assert!(
+        copies <= COPIES_PER_CELL * cells,
+        "{copies} copies of {cells} cells over {FULL_PERIOD} frames"
+    );
+    assert!(
+        new_textures <= COPIES_PER_CELL * cells,
+        "{new_textures} new textures for {cells} cells over {FULL_PERIOD} frames"
+    );
+}

@@ -1963,12 +1963,19 @@ const IN_PLACE_PATIENCE: u32 = MAX_ADMISSION_PATIENCE;
 /// unread: about four seconds at 60 Hz.
 const IN_PLACE_MAX_PATIENCE: u32 = 16 * IN_PLACE_PATIENCE;
 
+/// The reads a kept surface needs to pay for itself. Keeping it costs a
+/// copy or a draw into a surface of its own, and the texture it holds; read
+/// once and then replaced -- a cell whose size holds two or three frames of
+/// a relayout -- it cost about what drawing it again would have, and its
+/// texture churned the pool.
+const READS_TO_PAY: u32 = 2;
+
 enum AdmissionCost {
     Pin,
     /// A kept surface costs a copy. `patience` is the frames the content
     /// holds still before its surface is kept: it doubles, up to `ceiling`,
-    /// whenever a kept surface went unread, and falls back to `floor` when
-    /// one is read.
+    /// whenever a kept surface was replaced before it was read
+    /// [`READS_TO_PAY`] times, and halves, down to `floor`, when one was.
     Copy {
         patience: u32,
         floor: u32,
@@ -1981,7 +1988,8 @@ pub(crate) struct AdmissionGate {
     run: u32,
     cost: AdmissionCost,
     admitted: bool,
-    unread: bool,
+    /// Frames the kept surface of the current key has been read.
+    reads: u32,
     seen: bool,
 }
 
@@ -1990,6 +1998,8 @@ impl AdmissionGate {
         Self::with_cost(key, AdmissionCost::Pin)
     }
 
+    /// A gate for a surface kept by copying it out of the pass it was drawn
+    /// in: kept once its content has held still for a second frame.
     fn copied(key: LayerRasterCacheKey) -> Self {
         Self::with_cost(
             key,
@@ -2001,6 +2011,8 @@ impl AdmissionGate {
         )
     }
 
+    /// A gate for a surface rendered into a texture of its own, kept from
+    /// its first sight: still content reads it back the next frame.
     fn rendered(key: LayerRasterCacheKey) -> Self {
         Self::with_cost(
             key,
@@ -2037,7 +2049,7 @@ impl AdmissionGate {
             run: 1,
             cost,
             admitted: false,
-            unread: false,
+            reads: 0,
             seen: true,
         }
     }
@@ -2048,18 +2060,17 @@ impl AdmissionGate {
             self.run = self.run.saturating_add(1);
             return None;
         }
-        if let (
-            true,
-            AdmissionCost::Copy {
-                patience, ceiling, ..
-            },
-        ) = (self.unread, &mut self.cost)
+        if let AdmissionCost::Copy {
+            patience, ceiling, ..
+        } = &mut self.cost
+            && self.admitted
+            && self.reads < READS_TO_PAY
         {
             *patience = (*patience * 2).clamp(1, *ceiling);
         }
         let dead = self.dead_entry();
         self.admitted = false;
-        self.unread = false;
+        self.reads = 0;
         self.key = key;
         self.run = 1;
         dead
@@ -2068,7 +2079,7 @@ impl AdmissionGate {
     pub(crate) fn dead_entry(&self) -> Option<LayerRasterCacheKey> {
         let dead = match self.cost {
             AdmissionCost::Pin => self.admitted,
-            AdmissionCost::Copy { .. } => self.unread,
+            AdmissionCost::Copy { .. } => self.admitted && self.reads == 0,
         };
         dead.then_some(self.key)
     }
@@ -2082,18 +2093,22 @@ impl AdmissionGate {
 
     fn admitted(&mut self) {
         self.admitted = true;
-        self.unread = true;
+        self.reads = 0;
     }
 
     fn hit(&mut self, key: LayerRasterCacheKey) {
         self.observe(key);
+        self.reads = self.reads.saturating_add(1);
+        // A kept surface that paid for itself halves the wait, once: content
+        // that holds still at the turns of a motion and churns between them
+        // keeps a wait the churn does not get past.
         if let AdmissionCost::Copy {
             patience, floor, ..
         } = &mut self.cost
+            && self.reads == READS_TO_PAY
         {
-            *patience = *floor;
+            *patience = (*patience / 2).max(*floor);
         }
-        self.unread = false;
     }
 
     fn run(&self) -> u32 {
@@ -4300,6 +4315,8 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 });
                 continue;
             };
+            // A member rendered with the others lands in a shared atlas, so
+            // keeping its surface means copying it out.
             let gate = if in_place {
                 AdmissionGate::drawn_in_place
             } else {

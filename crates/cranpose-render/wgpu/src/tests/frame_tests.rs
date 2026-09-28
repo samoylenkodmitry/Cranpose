@@ -301,8 +301,10 @@ fn a_cached_key_between_misses_breaks_the_other_keys_consecutive_run() {
         "the other key has held for only one frame since the cache hit"
     );
 }
+/// One frame of a node's surface: read from the cache while its kept copy
+/// is current, otherwise offered to the gate.
 fn gate_frame(gate: &mut AdmissionGate, key: LayerRasterCacheKey) -> bool {
-    if gate.unread && gate.key == key {
+    if gate.admitted && gate.key == key {
         gate.hit(key);
         return false;
     }
@@ -335,14 +337,39 @@ fn a_gate_waits_twice_as_long_after_an_admission_nothing_read_back() {
     assert_eq!(patience(&gate), 2);
     let mut gate = AdmissionGate::copied(gate_key(0));
     assert_eq!(
-        admissions_over(&mut gate, std::iter::repeat_n(3, 12)),
+        admissions_over(&mut gate, std::iter::repeat_n(4, 12)),
         12,
-        "a key that holds a third frame is read back once per admission"
+        "a key that holds a fourth frame is read back twice per admission"
     );
     assert_eq!(
         patience(&gate),
         1,
-        "an admission read back does not double the patience"
+        "an admission read back twice does not double the patience"
+    );
+}
+
+/// A grid resizing a pixel at a time holds each cell's size two or three
+/// frames. A copy kept on its second frame is read once on its third and
+/// replaced: it costs a copy and a texture for one read, so the gate waits
+/// longer instead of keeping the next one.
+#[test]
+fn a_copied_gate_stops_keeping_what_is_read_only_once() {
+    let mut gate = AdmissionGate::copied(gate_key(0));
+    assert_eq!(
+        admissions_over(&mut gate, std::iter::repeat_n(3, 40)),
+        2,
+        "a key held three frames is kept until reading it once proves too little"
+    );
+    assert_eq!(patience(&gate), 4);
+    assert_eq!(
+        admissions_over(&mut gate, [40]),
+        1,
+        "content that holds still is still kept"
+    );
+    assert_eq!(
+        patience(&gate),
+        2,
+        "a copy read back twice halves the wait, so the churn after a pause stays out"
     );
 }
 
@@ -445,14 +472,14 @@ fn a_rendered_gate_admits_a_first_sight_and_waits_after_an_unread_admission() {
     );
     assert_eq!(patience(&gate), 1);
     assert_eq!(
-        admissions_over(&mut gate, [3]),
+        admissions_over(&mut gate, [4]),
         1,
         "a surface that settles is kept on its second frame"
     );
     assert_eq!(
         patience(&gate),
         0,
-        "a kept surface read back restores first-sight admission"
+        "a kept surface read back twice restores first-sight admission"
     );
     assert!(gate_frame(&mut gate, gate_key(100)));
 }
@@ -478,7 +505,8 @@ fn an_in_place_gate_waits_longer_after_the_surface_it_kept_went_unread() {
          its surface once, and not again after nothing read it"
     );
     assert!(patience(&gate) > IN_PLACE_PATIENCE);
-    let settles = patience(&gate) + 2;
+    // Held one frame past the patience to be kept, then read twice.
+    let settles = patience(&gate) + 3;
     assert_eq!(
         admissions_over(&mut gate, [settles]),
         1,
@@ -487,7 +515,7 @@ fn an_in_place_gate_waits_longer_after_the_surface_it_kept_went_unread() {
     assert_eq!(
         patience(&gate),
         IN_PLACE_PATIENCE,
-        "a kept surface read back restores the patience"
+        "a kept surface read back twice restores the patience"
     );
 }
 
