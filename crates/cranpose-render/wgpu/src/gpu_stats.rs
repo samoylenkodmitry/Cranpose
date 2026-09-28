@@ -8,6 +8,17 @@ use cranpose_ui_graphics::Rect;
 
 use crate::{debug_toggles::DebugToggle, frame_graph::FrameCommandStats, run_geometry::ShapeFill};
 
+/// A diagnostics line: logcat on Android, where nothing reads stderr, and
+/// stderr elsewhere.
+macro_rules! stats_line {
+    ($($arg:tt)*) => {{
+        #[cfg(target_os = "android")]
+        log::info!($($arg)*);
+        #[cfg(not(target_os = "android"))]
+        eprintln!($($arg)*);
+    }};
+}
+
 const TOP_ISOLATED_LAYER_LIMIT: usize = 8;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -250,7 +261,7 @@ impl FrameStatsSnapshot {
         let shadow_cache_miss_mpx = self.shadow_shape_cache_miss_pixels as f64 / 1_000_000.0;
         let layer_cache_mb = self.layer_cache_bytes as f64 / (1024.0 * 1024.0);
         let isolated_layer_mpx = self.isolated_layer_pixels as f64 / 1_000_000.0;
-        eprintln!(
+        stats_line!(
             "[GPU f#{}] encoders={} submits={} passes={} pass_px={:.2}MP copies={} copy_px={:.2}MP | offscreen: acq={} new={} {:.1}MB pool={}({:.1}MB) retained={:.1}MB | \
              uploads={:.2}MB writes={} | \
              isolated_layers={} area={:.2}MP top={} | \
@@ -322,7 +333,7 @@ impl FrameStatsSnapshot {
             self.text_cache_size,
         );
         for (index, layer) in self.top_isolated_layers().enumerate() {
-            eprintln!(
+            stats_line!(
                 "  [isolated #{index}] node={:?} rect=({:.1},{:.1},{:.1},{:.1}) target={}x{}",
                 layer.node_id,
                 layer.logical_rect.x,
@@ -623,7 +634,7 @@ impl FrameStats {
                 )
             },
         );
-        eprintln!(
+        stats_line!(
             "[shadow-cache-miss #{count}] size={}x{} content_hash={content_hash} blur={:.2} viewport_offset=({:.1},{:.1}) shapes={} clip={}",
             width,
             height,
@@ -935,7 +946,7 @@ pub(crate) fn print_gpu_memory_report(device: &wgpu::Device, frame_count: u64) {
         blocks.push_str(&format!("{:.1}", block.size as f64 / MB));
     }
 
-    eprintln!(
+    stats_line!(
         "[GPU-MEM f#{}] reserved={:.1}MB allocated={:.1}MB blocks={}[{}MB] allocations={} | largest={:.6?}",
         frame_count,
         report.total_reserved_bytes as f64 / MB,
