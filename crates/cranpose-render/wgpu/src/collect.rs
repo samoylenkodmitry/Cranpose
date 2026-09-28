@@ -454,8 +454,9 @@ fn can_draw_in_place(
 /// or shadow that resolves into a texture, nothing that blends other than
 /// source-over (it would reach the pixels beneath the layer), no image (its
 /// quad's edges are not anti-aliased, where a turned surface filters them),
-/// texts their clips leave whole (a clip turned off the pixel grid is no
-/// scissor), and children that draw in place unclipped.
+/// shadow texts their clips leave whole (a clip turned off the pixel grid is
+/// no scissor; a text's own glyphs are cut to its clip before the turn), and
+/// children that draw in place unclipped.
 fn content_draws_in_place(content: &LayerScene) -> bool {
     let scene = &content.scene;
     let whole =
@@ -471,7 +472,6 @@ fn content_draws_in_place(content: &LayerScene) -> bool {
             !shadow.requires_surface()
                 && shadow.texts.iter().all(|text| whole(text.rect, text.clip))
         })
-        && scene.texts.iter().all(|text| whole(text.rect, text.clip))
         && scene.images.is_empty()
         && content
             .children
