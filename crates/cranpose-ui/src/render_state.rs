@@ -48,6 +48,7 @@ pub struct AppContext {
     pointer_dispatch: crate::pointer_dispatch::PointerDispatchState,
     focus_dispatch: crate::focus_dispatch::FocusInvalidationState,
     modal: crate::modal::ModalState,
+    modal_nodes: crate::modal_nodes::ModalNodes,
     hosted_popups: crate::widgets::popup::HostedPopupRegistries,
     semantics_dispatch: crate::semantics_dispatch::SemanticsInvalidationState,
     cursor_animation: crate::cursor_animation::CursorAnimationState,
@@ -220,6 +221,7 @@ impl AppContext {
             pointer_dispatch: crate::pointer_dispatch::PointerDispatchState::new(),
             focus_dispatch: crate::focus_dispatch::FocusInvalidationState::new(),
             modal: crate::modal::ModalState::new(),
+            modal_nodes: crate::modal_nodes::ModalNodes::default(),
             hosted_popups: crate::widgets::popup::HostedPopupRegistries::default(),
             semantics_dispatch: crate::semantics_dispatch::SemanticsInvalidationState::new(),
             cursor_animation: crate::cursor_animation::CursorAnimationState::new(),
@@ -555,6 +557,12 @@ pub(crate) fn with_focus_dispatch_by_app_context<R>(
 pub(crate) fn with_modal_state<R>(f: impl FnOnce(&crate::modal::ModalState) -> R) -> R {
     let context = require_current_app_context("modal state access");
     f(&context.modal)
+}
+
+pub(crate) fn with_current_modal_nodes<R>(
+    f: impl FnOnce(&crate::modal_nodes::ModalNodes) -> R,
+) -> Option<R> {
+    current_app_context().map(|context| f(&context.modal_nodes))
 }
 
 pub(crate) fn with_hosted_popup_registries<R>(

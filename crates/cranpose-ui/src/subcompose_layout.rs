@@ -934,6 +934,7 @@ impl SubcomposeLayoutNode {
         };
         self.dispatch_modifier_invalidations(&invalidations, prev_caps);
         self.modifier_slices_dirty.set(true);
+        crate::modal_nodes::reach_changed(self.id.get());
         if modifier_changed {
             self.request_semantics_update();
         }
@@ -1077,6 +1078,12 @@ impl SubcomposeLayoutNode {
     /// Mark this node as needing semantics recomputation.
     pub fn mark_needs_semantics(&self) {
         self.needs_semantics.set(true);
+        crate::modal_nodes::reach_changed(self.id.get());
+    }
+
+    /// The id this node was inserted under, once it is.
+    pub(crate) fn id(&self) -> Option<NodeId> {
+        self.id.get()
     }
 
     pub(crate) fn clear_needs_semantics(&self) {
@@ -1225,6 +1232,7 @@ impl cranpose_core::Node for SubcomposeLayoutNode {
         let (chain, mut context) = inner.modifier_chain.chain_and_context_mut();
         chain.repair_chain();
         chain.attach_nodes(&mut *context);
+        crate::modal_nodes::reach_changed(self.id.get());
     }
 
     fn unmount(&mut self) {
@@ -1332,6 +1340,7 @@ impl cranpose_core::Node for SubcomposeLayoutNode {
 
     fn mark_needs_semantics(&self) {
         self.needs_semantics.set(true);
+        crate::modal_nodes::reach_changed(self.id.get());
     }
 
     fn needs_semantics(&self) -> bool {
