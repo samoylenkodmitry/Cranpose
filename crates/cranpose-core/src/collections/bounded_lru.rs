@@ -1,6 +1,6 @@
 use std::{borrow::Borrow, hash::Hash, num::NonZeroUsize};
 
-use cranpose_core::collections::map::HashMap;
+use crate::collections::map::HashMap;
 
 struct CacheSlot<K, V> {
     key: K,
@@ -9,7 +9,7 @@ struct CacheSlot<K, V> {
     older: Option<usize>,
 }
 
-/// Small bounded LRU cache used by renderer hot-path caches.
+/// A small bounded LRU cache for hot-path caches.
 ///
 /// Hits update recency in place, so the common path is a single hash lookup.
 /// Eviction unlinks the oldest entry, which costs the same whether the cache
@@ -69,6 +69,11 @@ where
 
     pub fn cap(&self) -> NonZeroUsize {
         self.cap
+    }
+
+    /// Drops every entry and gives back the storage they took.
+    pub fn clear(&mut self) {
+        *self = Self::new(self.cap);
     }
 
     /// The lookups take any form of the key the stored key borrows as, so a
@@ -243,5 +248,5 @@ where
 }
 
 #[cfg(test)]
-#[path = "tests/bounded_lru_cache_tests.rs"]
+#[path = "tests/bounded_lru_tests.rs"]
 mod tests;

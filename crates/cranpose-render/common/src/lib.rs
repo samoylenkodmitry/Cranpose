@@ -1,6 +1,5 @@
 //! Common rendering contracts shared between renderer backends.
 
-pub mod bounded_lru_cache;
 pub mod debug_toggles;
 pub mod dev_overlay;
 mod direct_mapped_cache;
@@ -23,7 +22,6 @@ pub mod image_compare;
 pub mod layer_composition;
 pub mod layer_shadow;
 pub mod layer_transform;
-mod pass_aged_cache;
 pub mod primitive_emit;
 pub mod raster_cache;
 pub mod render_contract;

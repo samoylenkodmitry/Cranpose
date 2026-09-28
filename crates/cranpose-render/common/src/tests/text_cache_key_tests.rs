@@ -1,7 +1,8 @@
 use std::hash::{BuildHasher, DefaultHasher};
 
+use cranpose_core::collections::bounded_lru::BoundedLruCache;
+
 use super::*;
-use crate::bounded_lru_cache::BoundedLruCache;
 
 fn hash_of<T: Hash + ?Sized>(value: &T) -> u64 {
     std::hash::BuildHasherDefault::<DefaultHasher>::default().hash_one(value)

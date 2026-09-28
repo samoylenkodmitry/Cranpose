@@ -8,7 +8,10 @@ use ab_glyph::{
     Font, FontArc, FontRef, FontVec, Glyph, GlyphId, InvalidFont, OutlinedGlyph, PxScale,
     ScaleFont, VariableFont, point,
 };
-use cranpose_core::hash::default as default_hash;
+use cranpose_core::{
+    collections::{bounded_lru::BoundedLruCache, pass_aged::PassAgedCache},
+    hash::default as default_hash,
+};
 use cranpose_ui::{
     TextLinePrefixWidths, TextMeasurer, TextMetrics,
     text::{
@@ -26,7 +29,6 @@ use crate::font_layout::layout_line_glyphs;
 use crate::text_hyphenation::HyphenationDictionaryError;
 use crate::{
     Brush,
-    bounded_lru_cache::BoundedLruCache,
     brush_sampling::{color_to_rgba, sample_brush_rgba},
     direct_mapped_cache::DirectMappedCache,
     font_layout::{
@@ -35,7 +37,6 @@ use crate::{
     },
     font_tracking::FontTracking,
     gpos_kerning::KernedFont,
-    pass_aged_cache::PassAgedCache,
     text_cache_key::{TextCacheKey, TextKey, TextProbe},
     text_hyphenation::HyphenationDictionaryStore,
     text_mask_gamma::TextLuminance,
