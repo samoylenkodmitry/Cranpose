@@ -31,6 +31,15 @@ pub fn headless_adapter(backends: wgpu::Backends) -> Result<wgpu::Adapter, Strin
     .map_err(|err| format!("adapter request failed: {err:?}"))
 }
 
+/// Where a test renderer compiles its pipelines.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Pipelines {
+    /// On the background compiler, as an app does.
+    Background,
+    /// Where each is first needed.
+    Inline,
+}
+
 pub struct HeadlessDevice {
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,
@@ -62,25 +71,30 @@ impl HeadlessDevice {
         })
     }
 
-    /// [`attach`][Self::attach], compiling every pipeline where it is first
-    /// needed: a reference renderer's frames never draw with a stand-in.
-    pub fn attach_compiling_inline(self, renderer: &mut WgpuRenderer, format: wgpu::TextureFormat) {
-        renderer.init_gpu_compiling_inline_for_tests(
-            self.device,
-            self.queue,
-            format,
-            self.backend,
-            self.downlevel,
-        );
-    }
-
-    pub fn attach(self, renderer: &mut WgpuRenderer, format: wgpu::TextureFormat) {
-        renderer.init_gpu(
-            self.device,
-            self.queue,
-            format,
-            self.backend,
-            self.downlevel,
-        );
+    /// Gives `renderer` this device. With [`Pipelines::Inline`] it compiles
+    /// every pipeline where first needed, so its frames never draw with a
+    /// stand-in: what a reference renderer needs.
+    pub fn attach(
+        self,
+        renderer: &mut WgpuRenderer,
+        format: wgpu::TextureFormat,
+        pipelines: Pipelines,
+    ) {
+        match pipelines {
+            Pipelines::Background => renderer.init_gpu(
+                self.device,
+                self.queue,
+                format,
+                self.backend,
+                self.downlevel,
+            ),
+            Pipelines::Inline => renderer.init_gpu_compiling_inline_for_tests(
+                self.device,
+                self.queue,
+                format,
+                self.backend,
+                self.downlevel,
+            ),
+        }
     }
 }

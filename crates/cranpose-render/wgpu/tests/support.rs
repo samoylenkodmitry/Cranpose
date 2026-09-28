@@ -239,7 +239,11 @@ pub fn reinit_gpu(renderer: &mut LockedRenderer) -> Result<(), String> {
         wgpu::Limits::default(),
         "Replacement Contract Test Device",
     )?
-    .attach(renderer, wgpu::TextureFormat::Bgra8UnormSrgb);
+    .attach(
+        renderer,
+        wgpu::TextureFormat::Bgra8UnormSrgb,
+        device::Pipelines::Background,
+    );
     Ok(())
 }
 
@@ -259,7 +263,11 @@ pub fn headless_renderer_beside_locked() -> Result<WgpuRenderer, String> {
         "Reference Render Contract Test Device",
     )?;
     let mut renderer = WgpuRenderer::new(&[TEST_FONT]);
-    device.attach_compiling_inline(&mut renderer, wgpu::TextureFormat::Bgra8UnormSrgb);
+    device.attach(
+        &mut renderer,
+        wgpu::TextureFormat::Bgra8UnormSrgb,
+        device::Pipelines::Inline,
+    );
     Ok(renderer)
 }
 
@@ -288,7 +296,7 @@ fn create_headless_renderer_configured(
     let device =
         device::HeadlessDevice::request(backends, limits, "Shared Render Contract Test Device")?;
     let mut renderer = WgpuRenderer::new(&[TEST_FONT]);
-    device.attach(&mut renderer, surface_format);
+    device.attach(&mut renderer, surface_format, device::Pipelines::Background);
     Ok(renderer)
 }
 
