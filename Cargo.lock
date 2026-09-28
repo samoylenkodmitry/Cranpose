@@ -1325,6 +1325,7 @@ dependencies = [
  "futures-task",
  "log",
  "smallvec",
+ "stats_alloc",
  "thiserror 2.0.20",
  "tiny-skia",
  "web-time",

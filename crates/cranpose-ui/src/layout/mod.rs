@@ -21,7 +21,7 @@ use cranpose_foundation::{
     SemanticsMagicTap, SemanticsScrollBy, SemanticsScrollToIndex, SemanticsSetProgress,
     SemanticsSetSelection, SemanticsSetText, SemanticsWidgetRole, text::TextRange,
 };
-use cranpose_ui_layout::{Constraints, MeasurePolicy, Placement};
+use cranpose_ui_layout::{Constraints, MeasurePolicy, PlaceTarget, Placement};
 use web_time::Instant;
 
 #[cfg(test)]
@@ -2128,7 +2128,8 @@ impl LayoutBuilderState {
         };
 
         let measure_handle = LayoutMeasureHandle::new(Rc::clone(&state_rc));
-        let error = Rc::new(RefCell::new(None));
+        let error = Rc::clone(&layout_runtime_state.borrow().error);
+        error.borrow_mut().take();
         let mut pools = VecPools::acquire(Rc::clone(&state_rc));
         let (records, child_ids, layout_node_data, placements) = pools.parts();
 
@@ -2846,6 +2847,9 @@ pub(crate) struct LayoutRuntimeState {
     child_states: Vec<Rc<LayoutChildMeasureState>>,
     child_measurables: Vec<Box<dyn Measurable>>,
     coordinator_chain: CoordinatorChain,
+    /// Where the node's children report an error while it measures them,
+    /// kept with the node rather than made for every measure.
+    error: Rc<RefCell<Option<NodeError>>>,
 }
 
 impl LayoutRuntimeState {
@@ -3142,6 +3146,21 @@ impl LayoutChildMeasurable {
     }
 }
 
+impl PlaceTarget for LayoutChildMeasureState {
+    fn place(&self, x: f32, y: f32) {
+        let internal_offset = self
+            .measured
+            .borrow()
+            .as_ref()
+            .map(|measured| measured.offset)
+            .unwrap_or_default();
+        self.place_retained(Point {
+            x: x + internal_offset.x,
+            y: y + internal_offset.y,
+        });
+    }
+}
+
 impl Measurable for LayoutChildMeasurable {
     fn measure(&self, constraints: Constraints) -> Placeable {
         let state = &self.state;
@@ -3205,33 +3224,17 @@ impl Measurable for LayoutChildMeasurable {
             });
         }
 
-        let state = Rc::clone(&self.state);
-        let node_id = state.node_id();
         let size_for_parent = state
             .measured
             .borrow()
             .as_ref()
             .map_or(measured_size, |measured| measured.size_for_parent());
 
-        let place_fn = Rc::new(move |x: f32, y: f32| {
-            let internal_offset = state
-                .measured
-                .borrow()
-                .as_ref()
-                .map(|m| m.offset)
-                .unwrap_or_default();
-
-            state.place_retained(Point {
-                x: x + internal_offset.x,
-                y: y + internal_offset.y,
-            });
-        });
-
-        Placeable::with_place_fn(
+        Placeable::with_place_target(
             size_for_parent.width,
             size_for_parent.height,
-            node_id,
-            place_fn,
+            state.node_id(),
+            Rc::clone(&self.state) as Rc<dyn PlaceTarget>,
         )
     }
 
