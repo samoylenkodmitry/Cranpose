@@ -34,7 +34,7 @@ demonstrates liquid-glass surfaces, adaptive layouts, animation, and native Andr
 Start from [Showcase Cranpose](https://github.com/samoylenkodmitry/cranpose-showcase),
 the ready-to-run project template with desktop, Android, iOS, and web shells.
 Create a repository from its GitHub template, or clone it locally and replace
-the demo screens with your app.
+the demo screens with your app. Install a [plugin](https://plugins.jetbrains.com/plugin/34594-cranpose) to RustRover or IntellijIdea.
 
 ```bash
 git clone https://github.com/samoylenkodmitry/cranpose-showcase.git my-cranpose-app
@@ -309,9 +309,7 @@ toward smaller binaries live in [`docs/binary_size.md`](docs/binary_size.md).
 
 Unit and integration tests run with `cargo test`. On top of them the repo drives
 **real windows**: the robot harness in `cranpose-testing` launches an app, finds
-elements through the semantics tree, sends input, and captures presented frames
-— so scrolling, gestures, glass rendering and frame pacing are tested as the
-compositor actually presents them, not as the scene graph describes them.
+elements through the semantics tree, sends input, and captures presented frames.
 
 ```bash
 just robot         # the end-to-end suite
@@ -330,12 +328,10 @@ just ci
 That is formatting, spell check, version alignment, the test suite, clippy,
 rustdoc, and the architecture budgets: featureless and all-features builds, the
 per-backend winit checks, the duplicate-dependency budgets and the desktop
-binary-size ceiling. CI runs the same recipes, so a gate cannot mean one thing
-here and another thing in a pull request. `just` on its own lists every recipe.
+binary-size ceiling.
 
-Zero warnings is the standard, not a target. Contributor conventions live in
-[`AGENTS.md`](AGENTS.md); the starter project's own checks are in
-[`apps/isolated-demo/README.md`](apps/isolated-demo/README.md).
+Zero warnings is the standard Contributor conventions live in
+[`AGENTS.md`](AGENTS.md).
 
 ## License
 
