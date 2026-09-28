@@ -74,6 +74,19 @@ impl ProjectiveTransform {
         }
     }
 
+    /// The transform a homogeneous matrix describes, scaled so its last entry
+    /// is one wherever that entry is not zero: its other entries then read as
+    /// the scale, turn, translation and perspective they are.
+    pub(crate) fn from_homogeneous(matrix: [[f32; 3]; 3]) -> Self {
+        let w = matrix[2][2];
+        if w == 1.0 || w.abs() <= f32::EPSILON {
+            return Self { matrix };
+        }
+        Self {
+            matrix: matrix.map(|row| row.map(|value| value / w)),
+        }
+    }
+
     /// Returns the composed transform that applies `self` first and `next` second.
     pub fn then(self, next: Self) -> Self {
         Self {

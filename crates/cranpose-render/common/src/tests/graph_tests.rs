@@ -347,3 +347,18 @@ fn a_node_rect_is_its_own_rect_or_else_its_layer_bounds() {
     };
     assert_eq!(split.node_rect(), node);
 }
+
+#[test]
+fn a_homogeneous_matrix_is_scaled_to_a_last_entry_of_one() {
+    let doubled = [[2.0, 0.0, 4.0], [0.0, 2.0, 6.0], [0.0, 0.0, 2.0]];
+    assert_eq!(
+        ProjectiveTransform::from_homogeneous(doubled),
+        ProjectiveTransform::translation(2.0, 3.0)
+    );
+    let vanishing = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]];
+    assert_eq!(
+        ProjectiveTransform::from_homogeneous(vanishing).matrix(),
+        vanishing,
+        "a matrix whose last entry is zero has no such scale and is kept"
+    );
+}

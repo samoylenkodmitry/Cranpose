@@ -16,6 +16,31 @@ const COLUMNS: usize = 6;
 const ROWS: usize = 10;
 const CELLS: u32 = (COLUMNS * ROWS) as u32;
 
+/// The screen a grid fills and how many cells it holds.
+#[derive(Clone, Copy, PartialEq)]
+struct Screen {
+    size: (u32, u32),
+    density: f32,
+    columns: usize,
+    rows: usize,
+}
+
+const SMALL: Screen = Screen {
+    size: (FRAME_WIDTH, FRAME_HEIGHT),
+    density: 1.0,
+    columns: COLUMNS,
+    rows: ROWS,
+};
+
+/// The benchmark's grid_layer on a phone: its last rows of cells sit two
+/// thousand pixels down.
+const PHONE: Screen = Screen {
+    size: (1080, 2200),
+    density: 2.625,
+    columns: 12,
+    rows: 30,
+};
+
 const PALETTE: [Color; 3] = [
     Color(0.85, 0.25, 0.30, 1.0),
     Color(0.20, 0.55, 0.85, 1.0),
@@ -54,20 +79,20 @@ fn Cell(index: usize, offscreen: bool) {
 }
 
 #[composable]
-fn Grid(width: MutableState<f32>, offscreen: bool) {
+fn Grid(width: MutableState<f32>, offscreen: bool, screen: Screen) {
     Column(
         Modifier::empty()
             .fill_max_width_fraction(width.get())
             .fill_max_height(),
         ColumnSpec::default(),
         move || {
-            for row in 0..ROWS {
+            for row in 0..screen.rows {
                 Row(
                     Modifier::empty().fill_max_width().weight(1.0),
                     RowSpec::default(),
                     move || {
-                        for column in 0..COLUMNS {
-                            Cell(row * COLUMNS + column, offscreen);
+                        for column in 0..screen.columns {
+                            Cell(row * screen.columns + column, offscreen);
                         }
                     },
                 );
@@ -79,22 +104,33 @@ fn Grid(width: MutableState<f32>, offscreen: bool) {
 struct GridHarness {
     shell: AppShell<WgpuRenderer>,
     width: Rc<RefCell<Option<MutableState<f32>>>>,
+    size: (u32, u32),
 }
 
 impl GridHarness {
     fn new(renderer: WgpuRenderer, offscreen: bool) -> Self {
+        Self::on(renderer, offscreen, SMALL)
+    }
+
+    fn on(renderer: WgpuRenderer, offscreen: bool, screen: Screen) -> Self {
         let root_key = location_key(file!(), line!(), column!());
         let width: Rc<RefCell<Option<MutableState<f32>>>> = Rc::new(RefCell::new(None));
         let width_for_app = Rc::clone(&width);
         let mut shell = AppShell::new(renderer, root_key, move || {
             let state = cranpose_core::rememberMutableStateOf(|| 1.0f32);
             *width_for_app.borrow_mut() = Some(state);
-            Grid(state, offscreen);
+            Grid(state, offscreen, screen);
         });
-        shell.set_viewport(FRAME_WIDTH as f32, FRAME_HEIGHT as f32);
-        shell.set_buffer_size(FRAME_WIDTH, FRAME_HEIGHT);
+        let (width_px, height_px) = screen.size;
+        shell.set_density(screen.density);
+        shell.set_viewport(width_px as f32, height_px as f32);
+        shell.set_buffer_size(width_px, height_px);
         shell.update();
-        Self { shell, width }
+        Self {
+            shell,
+            width,
+            size: screen.size,
+        }
     }
 
     fn frame(&mut self, fraction: f32) -> (RenderStatsSnapshot, CapturedFrame) {
@@ -105,7 +141,7 @@ impl GridHarness {
             .copied()
             .expect("state captured");
         self.shell.debug_enter_app_context(|| state.set(fraction));
-        support::update_and_capture(&mut self.shell, FRAME_WIDTH, FRAME_HEIGHT)
+        support::update_and_capture(&mut self.shell, self.size.0, self.size.1)
     }
 }
 
@@ -130,8 +166,15 @@ const IN_PLACE_PATIENCE: usize = 16;
 const EXTREMUM_SPAN: usize = 100;
 
 fn harness(offscreen: bool) -> Option<(std::sync::MutexGuard<'static, ()>, GridHarness)> {
+    harness_on(offscreen, SMALL)
+}
+
+fn harness_on(
+    offscreen: bool,
+    screen: Screen,
+) -> Option<(std::sync::MutexGuard<'static, ()>, GridHarness)> {
     match support::headless_renderer_parts() {
-        Ok((lock, renderer)) => Some((lock, GridHarness::new(renderer, offscreen))),
+        Ok((lock, renderer)) => Some((lock, GridHarness::on(renderer, offscreen, screen))),
         Err(err) => {
             eprintln!("skipping (headless WGPU init failed): {err}");
             None
@@ -252,6 +295,21 @@ fn a_relayout_under_rotated_cells_draws_them_in_place_without_surfaces() {
             stats.pass_count <= IN_PLACE_MAX_PASSES,
             "frame {frame} drew the grid in {} passes: {stats:?}",
             stats.pass_count
+        );
+    }
+}
+
+#[test]
+fn rotated_cells_far_down_a_phone_screen_draw_in_place() {
+    let Some((_lock, mut harness)) = harness_on(false, PHONE) else {
+        return;
+    };
+    for frame in 0..WARMUP_FRAMES + MEASURED_FRAMES {
+        let (stats, _) = harness.frame(width_fraction(frame));
+        assert_eq!(
+            stats.isolated_layer_renders, 0,
+            "frame {frame}: a turned cell draws straight into the page however far from the \
+             origin it sits: {stats:?}"
         );
     }
 }
