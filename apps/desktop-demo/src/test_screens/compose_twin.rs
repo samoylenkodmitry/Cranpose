@@ -13,6 +13,7 @@ use cranpose_ui::{
     VerticalAlignment,
 };
 
+pub use super::compose_twin_matrix::{MATRIX_FRAMES, MATRIX_GRID};
 use crate::app::{
     complex_chain_showcase, item_list_showcase, positioned_boxes_showcase, simple_card_showcase,
 };
@@ -25,19 +26,80 @@ pub const TWIN_FRAME_HEIGHT: u32 = 420;
 /// The frame's color, the Compose twin's `SceneFrame` background.
 const TWIN_FRAME_COLOR: Color = Color(0.07, 0.07, 0.09, 1.0);
 
-/// Every twin scene, by name, in the Compose twin's `SCENES` order.
-pub const TWIN_SCENES: [(&str, fn()); 6] = [
-    ("simple-card", simple_card_showcase),
-    ("positioned-boxes", positioned_boxes_showcase),
-    ("item-list", item_list_showcase),
-    ("complex-chain", complex_chain_showcase),
-    ("modifier-order", modifier_order_probes),
-    ("text-fields", text_field_probes),
+/// A scene both frameworks draw, whose screenshot is named after it on both
+/// sides.
+pub struct TwinScene {
+    pub name: &'static str,
+    pub content: fn(),
+    /// The cells of a modifier-matrix frame, in [`MATRIX_GRID`] order, each
+    /// compared on its own; empty for a scene compared whole.
+    pub cells: &'static [&'static str],
+    pub tolerance: TwinTolerance,
+}
+
+/// How much of a capture may differ from its Compose frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TwinTolerance {
+    /// Solid shapes on whole pixels, which leave nothing to antialiasing:
+    /// every pixel must match.
+    Exact,
+    /// Glyphs and curves: pixels on the Compose frame's edges may differ.
+    Edges,
+}
+
+/// Where a modifier-matrix frame lays its cells, in frame pixels.
+pub struct TwinGrid {
+    pub origin: u32,
+    pub columns: u32,
+    pub cell_width: u32,
+    pub cell_height: u32,
+}
+
+impl TwinGrid {
+    /// Cell `index`'s left, top, width and height.
+    pub fn cell(&self, index: usize) -> (u32, u32, u32, u32) {
+        let index = u32::try_from(index).unwrap_or(u32::MAX);
+        (
+            self.origin + index % self.columns * self.cell_width,
+            self.origin + index / self.columns * self.cell_height,
+            self.cell_width,
+            self.cell_height,
+        )
+    }
+}
+
+/// The hand-written scenes, in the Compose twin's `SCENES` order.
+pub const TWIN_SCENES: [TwinScene; 6] = [
+    whole("simple-card", simple_card_showcase),
+    whole("positioned-boxes", positioned_boxes_showcase),
+    whole("item-list", item_list_showcase),
+    whole("complex-chain", complex_chain_showcase),
+    whole("modifier-order", modifier_order_probes),
+    whole("text-fields", text_field_probes),
 ];
+
+const fn whole(name: &'static str, content: fn()) -> TwinScene {
+    TwinScene {
+        name,
+        content,
+        cells: &[],
+        tolerance: TwinTolerance::Edges,
+    }
+}
+
+/// Every scene the twin compares: the hand-written ones, then the modifier
+/// matrix's frames.
+pub fn twin_scenes() -> impl Iterator<Item = &'static TwinScene> {
+    TWIN_SCENES.iter().chain(MATRIX_FRAMES.iter())
+}
 
 /// A pixel strays when its largest channel differs from the Compose frame's
 /// by more than this.
 pub const TWIN_STRAY_DELTA: u8 = 32;
+
+/// The stray pixels a cell of a modifier-matrix frame compared by its edges
+/// may have: a line of text, where a scene holds several.
+pub const TWIN_CELL_STRAY_LIMIT: usize = 8;
 
 /// The stray pixels a scene may have. Glyph and corner antialiasing differ
 /// between the frameworks only on edges, which leaves a scene that matches
@@ -54,28 +116,40 @@ thread_local! {
     pub static TWIN_SCENE_STATE: RefCell<Option<MutableState<usize>>> = const { RefCell::new(None) };
 }
 
-/// Shows the scene [`TWIN_SCENE_STATE`] names at the top left of the frame.
+/// Shows the scene [`TWIN_SCENE_STATE`] names at the top left of the frame,
+/// laid out at density 1 as the Compose twin renders it, whatever the
+/// display's scale, so a half-pixel placement rounds the same on both sides.
 #[composable]
 pub fn ComposeTwinScreen() {
     let scene = rememberMutableStateOf(|| 0usize);
     TWIN_SCENE_STATE.with(|cell| *cell.borrow_mut() = Some(scene));
-    cranpose_ui::Box(
-        Modifier::empty()
-            .fill_max_size()
-            .background(TWIN_FRAME_COLOR),
-        BoxSpec::default(),
-        move || {
-            let index = scene.get();
-            cranpose_core::with_key(&index, || (TWIN_SCENES[index].1)());
-        },
-    );
+    cranpose_ui::density::ProvideDensity(cranpose_ui::Density::new(1.0, 1.0), || {
+        cranpose_ui::Box(
+            Modifier::empty()
+                .fill_max_size()
+                .background(TWIN_FRAME_COLOR),
+            BoxSpec::default(),
+            move || {
+                let index = scene.get();
+                if let Some(twin) = twin_scenes().nth(index) {
+                    cranpose_core::with_key(&index, || (twin.content)());
+                }
+            },
+        );
+    });
 }
 
 /// The pixels of `actual` that stray from `reference`, both RGBA frames
-/// `width` pixels wide: those differing by more than [`TWIN_STRAY_DELTA`]
-/// where the reference has no edge, since only edges may differ by
-/// antialiasing. `None` when the frames differ in size.
-pub fn twin_stray_pixels(reference: &[u8], actual: &[u8], width: usize) -> Option<usize> {
+/// `width` pixels wide: those differing by more than [`TWIN_STRAY_DELTA`],
+/// except, with [`TwinTolerance::Edges`], where the reference has an edge,
+/// since only edges may differ by antialiasing. `None` when the frames
+/// differ in size.
+pub fn twin_stray_pixels(
+    reference: &[u8],
+    actual: &[u8],
+    width: usize,
+    tolerance: TwinTolerance,
+) -> Option<usize> {
     let (reference, reference_rest) = reference.as_chunks::<4>();
     let (actual, actual_rest) = actual.as_chunks::<4>();
     if reference.len() != actual.len()
@@ -86,12 +160,40 @@ pub fn twin_stray_pixels(reference: &[u8], actual: &[u8], width: usize) -> Optio
     {
         return None;
     }
-    let luma: Vec<i32> = reference
+    let strays = reference.iter().zip(actual).enumerate();
+    Some(match tolerance {
+        TwinTolerance::Exact => strays
+            .filter(|(_, (expected, got))| strays_from(expected, got))
+            .count(),
+        TwinTolerance::Edges => {
+            let is_edge = edge_finder(reference, width);
+            strays
+                .filter(|(index, (expected, got))| {
+                    strays_from(expected, got) && !is_edge(index % width, index / width)
+                })
+                .count()
+        }
+    })
+}
+
+/// Whether a pixel differs from the Compose frame's by more than
+/// [`TWIN_STRAY_DELTA`] in any channel.
+fn strays_from(expected: &[u8; 4], got: &[u8; 4]) -> bool {
+    expected[..3]
+        .iter()
+        .zip(&got[..3])
+        .any(|(a, b)| a.abs_diff(*b) > TWIN_STRAY_DELTA)
+}
+
+/// Whether the pixel at `(x, y)` of a frame `width` wide lies on an edge:
+/// its luma differs from a neighbour's by more than [`TWIN_EDGE_CONTRAST`].
+fn edge_finder(frame: &[[u8; 4]], width: usize) -> impl Fn(usize, usize) -> bool {
+    let luma: Vec<i32> = frame
         .iter()
         .map(|&[r, g, b, _]| (i32::from(r) * 54 + i32::from(g) * 183 + i32::from(b) * 19) >> 8)
         .collect();
     let height = luma.len() / width;
-    let is_edge = |x: usize, y: usize| {
+    move |x: usize, y: usize| {
         let at = luma[y * width + x];
         let differs =
             |nx: usize, ny: usize| (luma[ny * width + nx] - at).abs() > TWIN_EDGE_CONTRAST;
@@ -99,20 +201,7 @@ pub fn twin_stray_pixels(reference: &[u8], actual: &[u8], width: usize) -> Optio
             || (x + 1 < width && differs(x + 1, y))
             || (y > 0 && differs(x, y - 1))
             || (y + 1 < height && differs(x, y + 1))
-    };
-    let stray = reference
-        .iter()
-        .zip(actual)
-        .enumerate()
-        .filter(|(index, (expected, got))| {
-            let delta = expected[..3]
-                .iter()
-                .zip(&got[..3])
-                .fold(0, |max, (a, b)| max.max(a.abs_diff(*b)));
-            delta > TWIN_STRAY_DELTA && !is_edge(index % width, index / width)
-        })
-        .count();
-    Some(stray)
+    }
 }
 
 /// Chains whose draws and text sit where the layout modifiers before them

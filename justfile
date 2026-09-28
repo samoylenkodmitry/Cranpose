@@ -213,9 +213,15 @@ wrapper-gate base="origin/main":
 state-holder-gate:
     python3 scripts/ci/state_holder_gate.py
 
+# The modifier matrix's Cranpose and Compose halves are generated from one
+# description (tools/compose-twin/matrix.toml); a hand edit to either, or a
+# description changed without generating, fails here.
+twin-matrix-check:
+    python3 tools/compose-twin/generate_matrix.py --check
+
 # The gates fast enough to run before every commit: what `.githooks/pre-commit`
 # runs. Everything here finishes in seconds against a warm xtask build.
-precommit: fmt-check typos complexity-gate duplication-gate wrapper-gate state-holder-gate ci-contract-gates
+precommit: fmt-check typos complexity-gate duplication-gate wrapper-gate state-holder-gate twin-matrix-check ci-contract-gates
 
 # The gates that describe CI to itself: which scheduling class each robot
 # example is in, what a parallel worker can reach, and the twenty-minute cap
