@@ -7,12 +7,17 @@
 # its own. After editing, run `python3 tools/compose-twin/generate_matrix.py`
 # and render the Compose frames again (see README.md).
 
+# The densities every frame is laid out and captured at: 1, where a point
+# is a pixel, and 2.625, a common phone's, where every length rounds to
+# whole device pixels as Compose rounds it. A family may name its own.
+densities = [1.0, 2.625]
+
 [grid]
 origin = 4
 columns = 4
 rows = 4
 cell_width = 128
-cell_height = 104
+cell_height = 102
 
 # name = [red, green, blue, alpha]
 [colors]
@@ -49,12 +54,14 @@ length = 3
 ops = ["pad", "bg", "bg2", "size", "fill", "offset", "clip"]
 
 # The same chains around a line of text instead of the block. Glyph edges
-# may differ by antialiasing, so these cells skip the reference's edges.
+# may differ by antialiasing, so these cells skip the reference's edges;
+# at density 1 only, where a glyph's edge is a pixel or two.
 [[chains]]
 name = "text2"
 length = 2
 ops = ["pad", "edge", "bg", "size", "width", "fill", "offset"]
 text = "Ag Text"
+densities = [1.0]
 
 # Rows and columns of three blocks, each arrangement against each
 # cross-axis alignment, in a dim 121 by 65 (row) or 89 by 97 (column) box:

@@ -34,6 +34,9 @@ import java.io.File
  * constants. Cranpose's `background(c).rounded_corners(r)` is Compose's
  * `background(c, RoundedCornerShape(r))`.
  */
+/** A frame both frameworks draw: its name, its density, what it shows. */
+class TwinFrame(val name: String, val density: Float, val content: @Composable () -> Unit)
+
 val SCENES: List<Pair<String, @Composable () -> Unit>> = listOf(
     "simple-card" to { SimpleCardShowcase() },
     "positioned-boxes" to { PositionedBoxesShowcase() },
