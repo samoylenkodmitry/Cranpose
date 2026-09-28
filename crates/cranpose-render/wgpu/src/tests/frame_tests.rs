@@ -468,6 +468,41 @@ fn a_gate_never_waits_longer_than_the_cap() {
     assert_eq!(patience(&gate), MAX_ADMISSION_PATIENCE);
 }
 
+#[test]
+fn an_in_place_gate_waits_longer_after_the_surface_it_kept_went_unread() {
+    let mut gate = AdmissionGate::drawn_in_place(gate_key(0));
+    assert_eq!(
+        admissions_over(&mut gate, std::iter::repeat_n(IN_PLACE_PATIENCE + 1, 6)),
+        1,
+        "a relayout pausing one frame past the patience at every turn of its motion keeps \
+         its surface once, and not again after nothing read it"
+    );
+    assert!(patience(&gate) > IN_PLACE_PATIENCE);
+    let settles = patience(&gate) + 2;
+    assert_eq!(
+        admissions_over(&mut gate, [settles]),
+        1,
+        "content that settles is still kept"
+    );
+    assert_eq!(
+        patience(&gate),
+        IN_PLACE_PATIENCE,
+        "a kept surface read back restores the patience"
+    );
+}
+
+#[test]
+fn an_in_place_gate_never_waits_longer_than_its_cap() {
+    let mut gate = AdmissionGate::drawn_in_place(gate_key(0));
+    let holds = [17, 33, 65, 129, 257, 257, 257];
+    assert_eq!(
+        admissions_over(&mut gate, holds),
+        7,
+        "each hold one frame past the patience is admitted on its last frame"
+    );
+    assert_eq!(patience(&gate), IN_PLACE_MAX_PATIENCE);
+}
+
 fn gate_key(content: u64) -> LayerRasterCacheKey {
     LayerRasterCacheKey::backdrop_effect(
         None,
