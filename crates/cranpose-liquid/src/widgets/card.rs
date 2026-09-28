@@ -22,11 +22,9 @@ const CARD_RADIUS: f32 = 20.0;
 pub fn Surface(modifier: Modifier, content: impl FnMut() + 'static) {
     let color = liquid_colors().surface;
     Box(
-        Modifier::empty()
-            .draw_behind(move |scope| {
-                scope.draw_round_rect(Brush::solid(color), CornerRadii::uniform(12.0));
-            })
-            .then(modifier),
+        modifier.draw_behind(move |scope| {
+            scope.draw_round_rect(Brush::solid(color), CornerRadii::uniform(12.0));
+        }),
         BoxSpec::default(),
         content,
     );
@@ -52,7 +50,7 @@ pub fn LiquidCard(modifier: Modifier, content: impl FnMut() + 'static) {
             ..Default::default()
         },
     );
-    Box(base.then(modifier), BoxSpec::default(), content);
+    Box(modifier.then(base), BoxSpec::default(), content);
 }
 
 /// A titled group of rows on one card (iOS grouped list section).
@@ -157,7 +155,7 @@ pub fn LiquidListRow(
         })
         .padding_symmetric(16.0, 12.0);
 
-    Box(base.then(modifier), BoxSpec::default(), content);
+    Box(modifier.then(base), BoxSpec::default(), content);
 }
 
 #[cfg(test)]

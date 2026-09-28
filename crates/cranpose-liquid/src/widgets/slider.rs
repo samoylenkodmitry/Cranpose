@@ -46,10 +46,9 @@ pub fn LiquidSlider(modifier: Modifier, value: f32, on_change: impl Fn(f32) + 's
     );
 
     Box(
-        Modifier::empty()
+        modifier
             .height(SLIDER_HEIGHT)
-            .semantics(slider_semantics(value, Rc::clone(&on_change)))
-            .then(modifier),
+            .semantics(slider_semantics(value, Rc::clone(&on_change))),
         BoxSpec::default(),
         move || {
             let on_change = Rc::clone(&on_change);

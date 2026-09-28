@@ -92,7 +92,7 @@ fn ChipPane(
         })
         .padding_symmetric(14.0, 7.0);
 
-    let chip = base.then(modifier);
+    let chip = modifier.then(base);
     Box(pressed_modifier, BoxSpec::default(), move || {
         let label = label.clone();
         let typography = typography.clone();

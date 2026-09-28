@@ -298,7 +298,7 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
             );
         });
 
-    Box(track.then(modifier), BoxSpec::default(), move || {
+    Box(modifier.then(track), BoxSpec::default(), move || {
         let thumb_x_for_layer = thumb_x;
         let lens_for_thumb = lens_progress;
         let thumb = Modifier::empty()

@@ -19,10 +19,17 @@ pub(crate) struct CoordinatorGeometry {
 
 impl CoordinatorGeometry {
     /// Replaces the rects with those of a new measure, outermost first.
-    pub(crate) fn replace(&self, rects: impl IntoIterator<Item = Rect>) {
+    /// Stores where each coordinator ended up, and says whether that moved
+    /// any of them: a layer bounded by an inner coordinator changes when that
+    /// coordinator does, though the node's own size may not.
+    pub(crate) fn replace(&self, rects: impl IntoIterator<Item = Rect>) -> bool {
+        let rects: SmallVec<[Rect; 4]> = rects.into_iter().collect();
         let mut stored = self.rects.borrow_mut();
-        stored.clear();
-        stored.extend(rects);
+        if *stored == rects {
+            return false;
+        }
+        *stored = rects;
+        true
     }
 
     fn rect(&self, ordinal: usize) -> Option<Rect> {
