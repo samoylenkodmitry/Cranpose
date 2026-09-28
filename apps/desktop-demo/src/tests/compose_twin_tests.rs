@@ -87,20 +87,32 @@ fn a_box_moved_by_one_pixel_strays_only_in_an_exact_comparison() {
 
 #[test]
 fn matrix_cells_tile_the_frame_from_its_origin() {
-    let (x, y, width, height) = MATRIX_GRID.cell(0);
+    let (x, y, width, height) = MATRIX_GRID.cell(0, 1.0);
     assert_eq!((x, y), (MATRIX_GRID.origin, MATRIX_GRID.origin));
-    assert_eq!(MATRIX_GRID.cell(1), (x + width, y, width, height));
+    assert_eq!(MATRIX_GRID.cell(1, 1.0), (x + width, y, width, height));
     let columns = MATRIX_GRID.columns as usize;
-    assert_eq!(MATRIX_GRID.cell(columns), (x, y + height, width, height));
+    assert_eq!(
+        MATRIX_GRID.cell(columns, 1.0),
+        (x, y + height, width, height)
+    );
+}
+
+#[test]
+fn matrix_cells_round_to_device_pixels_as_layout_does() {
+    // At 2.625 the 4 point origin is 10.5 pixels, which rounds up to 11,
+    // and a 128 point cell is exactly 336.
+    let (x, y, width, _) = MATRIX_GRID.cell(1, 2.625);
+    assert_eq!((x, y, width), (11 + 336, 11, 336));
 }
 
 #[test]
 fn every_matrix_cell_lies_inside_the_frame() {
     for frame in &MATRIX_FRAMES {
         assert!(!frame.cells.is_empty(), "{} has no cells", frame.name);
-        let (x, y, width, height) = MATRIX_GRID.cell(frame.cells.len() - 1);
+        let (x, y, width, height) = MATRIX_GRID.cell(frame.cells.len() - 1, frame.density);
+        let bound = |points: u32| (points as f32 * frame.density) as u32;
         assert!(
-            x + width <= TWIN_FRAME_WIDTH && y + height <= TWIN_FRAME_HEIGHT,
+            x + width <= bound(TWIN_FRAME_WIDTH) && y + height <= bound(TWIN_FRAME_HEIGHT),
             "{} lays a cell outside the frame",
             frame.name
         );

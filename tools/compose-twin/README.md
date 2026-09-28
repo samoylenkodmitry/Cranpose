@@ -38,6 +38,11 @@ into the same scenes on both sides, `compose_twin_matrix.rs` and
 `Matrix.kt`; never edit those by hand. `just twin-matrix-check` fails when
 they are stale.
 
+Every frame is laid out and captured at each density the description
+names, 1 and 2.625, so lengths that round to device pixels (a 4 point
+padding is 10.5 pixels at 2.625) are held to Compose's rounding; a frame
+beyond density 1 is named `<frame>@<density>`. Text stays at density 1.
+
 Each matrix frame is a grid of cells compared one by one. Solid shapes on
 whole pixels must match exactly; text cells skip the Compose frame's edges
 and may stray by `TWIN_CELL_STRAY_LIMIT`. Cells known to differ are listed

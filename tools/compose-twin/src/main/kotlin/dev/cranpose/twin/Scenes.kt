@@ -14,6 +14,16 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.selection.LocalTextSelectionColors
+import androidx.compose.foundation.text.selection.TextSelectionColors
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -34,6 +44,9 @@ import java.io.File
  * constants. Cranpose's `background(c).rounded_corners(r)` is Compose's
  * `background(c, RoundedCornerShape(r))`.
  */
+/** A frame both frameworks draw: its name, its density, what it shows. */
+class TwinFrame(val name: String, val density: Float, val content: @Composable () -> Unit)
+
 val SCENES: List<Pair<String, @Composable () -> Unit>> = listOf(
     "simple-card" to { SimpleCardShowcase() },
     "positioned-boxes" to { PositionedBoxesShowcase() },
@@ -41,6 +54,7 @@ val SCENES: List<Pair<String, @Composable () -> Unit>> = listOf(
     "complex-chain" to { ComplexChainShowcase() },
     "modifier-order" to { ModifierOrderProbes() },
     "text-fields" to { TextFieldProbes() },
+    "text-selection" to { TextSelectionProbe() },
 )
 
 /** The demo's fonts, loaded from the files Cranpose embeds. */
@@ -255,5 +269,32 @@ fun TextFieldProbes() {
             },
         )
     }
+}
+
+/** The accent a focused field tints its caret and selection with. */
+val FieldAccent = Color(0.30f, 0.55f, 0.90f, 1f)
+
+@Composable
+fun TextSelectionProbe() {
+    val requester = remember { FocusRequester() }
+    CompositionLocalProvider(
+        LocalTextSelectionColors provides TextSelectionColors(
+            handleColor = FieldAccent,
+            backgroundColor = FieldAccent.copy(alpha = 0.32f),
+        ),
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            BasicTextField(
+                TextFieldValue("Select some text", selection = TextRange(0, 6)),
+                {},
+                Modifier.focusRequester(requester)
+                    .background(FieldFill)
+                    .padding(start = 10.dp, top = 4.dp, end = 6.dp, bottom = 8.dp),
+                textStyle = defaultTextStyle(),
+                cursorBrush = SolidColor(FieldAccent),
+            )
+        }
+    }
+    LaunchedEffect(Unit) { requester.requestFocus() }
 }
 

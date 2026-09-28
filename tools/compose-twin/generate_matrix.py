@@ -41,11 +41,12 @@ class Cell:
 
 @dataclass(frozen=True)
 class Family:
-    """Cells compared the same way, paged into frames."""
+    """Cells compared the same way, paged into frames, at `densities`."""
 
     name: str
     exact: bool
     cells: list[Cell]
+    densities: tuple[float, ...] = ()
 
 
 def rust_float(value: float) -> str:
@@ -78,7 +79,7 @@ def chain_family(spec: dict, ops: dict) -> Family:
             rust = f'Text("{text}", Modifier::empty(){rust_chain}, TextStyle::default())'
             kotlin = f'Text("{text}", Modifier{kotlin_chain})'
         cells.append(Cell(" ".join(chain), rust, kotlin))
-    return Family(spec["name"], text is None, cells)
+    return Family(spec["name"], text is None, cells, tuple(spec.get("densities", ())))
 
 
 def line_family(description: dict, axis: str) -> Family:
@@ -136,12 +137,16 @@ def weight_family(description: dict) -> Family:
 
 def families(description: dict) -> list[Family]:
     ops = description["ops"]
+    default = tuple(description["densities"])
     return [
-        *(chain_family(spec, ops) for spec in description["chains"]),
-        line_family(description, "row"),
-        line_family(description, "column"),
-        box_family(description),
-        weight_family(description),
+        family if family.densities else Family(family.name, family.exact, family.cells, default)
+        for family in [
+            *(chain_family(spec, ops) for spec in description["chains"]),
+            line_family(description, "row"),
+            line_family(description, "column"),
+            box_family(description),
+            weight_family(description),
+        ]
     ]
 
 
@@ -151,23 +156,37 @@ class Frame:
     function: str
     exact: bool
     cells: list[Cell]
+    density: float
 
 
 def frames(description: dict) -> list[Frame]:
+    """Every frame at every density of its family; a page's frames at
+    several densities share its function."""
     grid = description["grid"]
     per_frame = grid["columns"] * grid["rows"]
     result = []
     for family in families(description):
         for page, start in enumerate(range(0, len(family.cells), per_frame)):
-            result.append(
-                Frame(
-                    name=f"matrix-{family.name}-{page:02}",
-                    function=f"{family.name}_{page:02}",
-                    exact=family.exact,
-                    cells=family.cells[start : start + per_frame],
+            for density in family.densities:
+                suffix = "" if density == 1.0 else f"@{density:g}"
+                result.append(
+                    Frame(
+                        name=f"matrix-{family.name}-{page:02}{suffix}",
+                        function=f"{family.name}_{page:02}",
+                        exact=family.exact,
+                        cells=family.cells[start : start + per_frame],
+                        density=density,
+                    )
                 )
-            )
     return result
+
+
+def pages(all_frames: list[Frame]) -> list[Frame]:
+    """One frame per function, for the code that draws it."""
+    seen = {}
+    for frame in all_frames:
+        seen.setdefault(frame.function, frame)
+    return list(seen.values())
 
 
 HEADER = (
@@ -224,17 +243,20 @@ def rust_source(description: dict, all_frames: list[Frame]) -> str:
         f"pub const MATRIX_FRAMES: [TwinScene; {len(all_frames)}] = [",
     ]
     for frame in all_frames:
-        names = ", ".join(f'"{cell.name}"' for cell in frame.cells)
         out += [
             "    TwinScene {",
             f'        name: "{frame.name}",',
             f"        content: {frame.function},",
-            f"        cells: &[{names}],",
+            f"        cells: {frame.function.upper()}_CELLS,",
             f"        tolerance: TwinTolerance::{'Exact' if frame.exact else 'Edges'},",
+            f"        density: {rust_float(frame.density)},",
             "    },",
         ]
+    out.append("];")
+    for frame in pages(all_frames):
+        names = ", ".join(f'"{cell.name}"' for cell in frame.cells)
+        out += ["", f"const {frame.function.upper()}_CELLS: &[&str] = &[{names}];"]
     out += [
-        "];",
         "",
         "/// The block every chain probe wraps.",
         "#[composable]",
@@ -348,7 +370,7 @@ def rust_source(description: dict, all_frames: list[Frame]) -> str:
         "    });",
         "}",
     ]
-    for frame in all_frames:
+    for frame in pages(all_frames):
         names = [f"{frame.function}_{index:02}" for index in range(len(frame.cells))]
         out += [
             "",
@@ -398,10 +420,13 @@ def kotlin_source(description: dict, all_frames: list[Frame]) -> str:
         )
     out += [
         "",
-        "/** Every matrix frame, by name, in the order Cranpose captures them. */",
-        "val MATRIX_FRAMES: List<Pair<String, @Composable () -> Unit>> = listOf(",
+        "/** Every matrix frame, in the order Cranpose captures them. */",
+        "val MATRIX_FRAMES: List<TwinFrame> = listOf(",
     ]
-    out += [f'    "{frame.name}" to {{ {frame.function}() }},' for frame in all_frames]
+    out += [
+        f'    TwinFrame("{frame.name}", {kotlin_float(frame.density)}) {{ {frame.function}() }},'
+        for frame in all_frames
+    ]
     out += [
         ")",
         "",
@@ -452,7 +477,7 @@ def kotlin_source(description: dict, all_frames: list[Frame]) -> str:
         "    }",
         "}",
     ]
-    for frame in all_frames:
+    for frame in pages(all_frames):
         out += [
             "",
             "@Composable",
