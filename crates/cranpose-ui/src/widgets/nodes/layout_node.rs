@@ -280,9 +280,9 @@ pub struct LayoutNode {
     needs_measure: Cell<bool>,
     needs_layout: Cell<bool>,
     needs_semantics: Cell<bool>,
-    /// The chain's modal and hidden flags, read every frame by the modal
-    /// walk: dropped whenever the chain syncs or semantics are invalidated,
-    /// the two ways its semantics change.
+    /// The chain's modal and hidden flags, read by the modal count and the
+    /// modal walk: dropped whenever the chain syncs or semantics are
+    /// invalidated, the two ways its semantics change.
     semantics_reach: Cell<Option<cranpose_foundation::SemanticsReach>>,
     needs_redraw: Cell<bool>,
     needs_pointer_pass: Cell<bool>,
@@ -434,7 +434,7 @@ impl LayoutNode {
         self.resolved_modifiers = self.modifier_chain.resolved_modifiers();
         self.modifier_capabilities = self.modifier_chain.capabilities();
         self.modifier_child_capabilities = self.modifier_chain.aggregate_child_capabilities();
-        self.semantics_reach.set(None);
+        self.forget_semantics_reach();
         self.modifier_slices_dirty.set(true);
 
         let mut invalidations = self.modifier_chain.take_invalidations();
@@ -587,7 +587,7 @@ impl LayoutNode {
     /// Mark this node as needing semantics recomputation.
     pub fn mark_needs_semantics(&self) {
         self.needs_semantics.set(true);
-        self.semantics_reach.set(None);
+        self.forget_semantics_reach();
     }
 
     pub(crate) fn clear_needs_semantics(&self) {
@@ -839,6 +839,12 @@ impl LayoutNode {
         crate::modifier::collect_semantics_from_chain(self.modifier_chain.chain())
     }
 
+    /// Drops the cached reach and queues the node for the modal count.
+    fn forget_semantics_reach(&self) {
+        self.semantics_reach.set(None);
+        crate::modal_nodes::reach_changed(self.id.get());
+    }
+
     /// Whether this node's modifiers make it modal or hidden.
     pub fn semantics_reach(&self) -> cranpose_foundation::SemanticsReach {
         if let Some(reach) = self.semantics_reach.get() {
@@ -927,6 +933,7 @@ impl Node for LayoutNode {
         let (chain, mut context) = self.modifier_chain.chain_and_context_mut();
         chain.repair_chain();
         chain.attach_nodes(&mut *context);
+        crate::modal_nodes::reach_changed(self.id.get());
     }
 
     fn unmount(&mut self) {
@@ -1022,7 +1029,7 @@ impl Node for LayoutNode {
 
     fn mark_needs_semantics(&self) {
         self.needs_semantics.set(true);
-        self.semantics_reach.set(None);
+        self.forget_semantics_reach();
     }
 
     fn needs_semantics(&self) -> bool {

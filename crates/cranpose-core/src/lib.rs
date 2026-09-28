@@ -3433,6 +3433,16 @@ impl MemoryApplier {
         self.len() == 0
     }
 
+    /// Calls `visit` with every live node, dense and high-id alike.
+    pub fn for_each_node_mut(&mut self, mut visit: impl FnMut(&mut dyn Node)) {
+        for node in self.nodes.iter_mut().flatten() {
+            visit(node.as_mut());
+        }
+        for node in self.high_id_nodes.values_mut() {
+            visit(node.as_mut());
+        }
+    }
+
     pub fn debug_live_node_heap_bytes(&self) -> usize {
         let dense_nodes = self
             .nodes

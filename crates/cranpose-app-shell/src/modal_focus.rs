@@ -8,6 +8,12 @@ where
     R::Error: std::fmt::Debug,
 {
     pub(crate) fn update_modal_focus(&mut self) {
+        // Counted while semantics are on, the only time the walk runs every
+        // frame; otherwise it runs only for an open popup.
+        let modal_may_be_live = cranpose_ui::modal_node_may_be_live(
+            &mut self.app.composition.applier_mut(),
+            self.app.semantics_enabled,
+        );
         if !self.app.semantics_enabled
             && self
                 .surfaces
@@ -18,7 +24,11 @@ where
             return;
         }
         for surface in &mut self.surfaces {
-            let modal = surface.top_modal(&mut self.app);
+            let modal = if modal_may_be_live {
+                surface.top_modal(&mut self.app)
+            } else {
+                None
+            };
             if modal == surface.modal_focus.last().map(|entry| entry.0) {
                 continue;
             }

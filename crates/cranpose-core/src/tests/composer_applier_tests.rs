@@ -354,6 +354,27 @@ fn memory_applier_dump_tree_reports_stale_physical_mapping() {
 }
 
 #[test]
+fn memory_applier_visits_every_live_dense_and_high_id_node() {
+    struct Counted;
+    impl Node for Counted {}
+
+    let mut applier = MemoryApplier::new();
+    let first = applier.create(Box::new(Counted));
+    let removed = applier.create(Box::new(Counted));
+    applier.next_stable_id = MemoryApplier::HIGH_ID_THRESHOLD;
+    let high = applier.create(Box::new(Counted));
+    applier.remove(removed).expect("remove");
+
+    let mut visited = 0;
+    applier.for_each_node_mut(|node| {
+        assert!(node.as_any_mut().is::<Counted>());
+        visited += 1;
+    });
+
+    assert_eq!(visited, 2, "{first} and {high} are live; {removed} is not");
+}
+
+#[test]
 fn memory_applier_create_routes_generated_high_ids_to_sparse_storage() {
     struct HighIdNode;
     impl Node for HighIdNode {}
