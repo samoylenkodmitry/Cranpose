@@ -675,6 +675,7 @@ impl WgpuRenderer {
     /// folded back yet, so draining it would free a publish credit. A loop
     /// out of credit can work on other things until this turns true.
     /// Always `false` outside threaded mode.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn frame_credit_returned(&self) -> bool {
         match &self.backend {
             PresentBackend::Threaded(handle) => handle.has_undrained_return(),
