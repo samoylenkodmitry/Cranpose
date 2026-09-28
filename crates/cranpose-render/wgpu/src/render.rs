@@ -3871,10 +3871,12 @@ impl GpuRenderer {
         draws
     }
 
-    pub(crate) fn draw_run_calls(
-        &self,
+    #[expect(clippy::too_many_arguments)]
+    pub(crate) fn draw_run_calls<'s>(
+        &'s self,
         pass: &mut wgpu::RenderPass<'_>,
-        tables: ArenaBinding<'_>,
+        bound: &mut ShapeBindings<'s>,
+        tables: ArenaBinding<'s>,
         uniform_slot: usize,
         draws: &[RunDrawCall],
         scissor: (u32, u32, u32, u32),
@@ -3888,9 +3890,8 @@ impl GpuRenderer {
                 self.frame_stats.bump_shapes();
                 self.record_run_draws(
                     pass,
-                    tables,
-                    uniform_slot,
-                    scissor,
+                    bound,
+                    (tables, uniform_slot, scissor),
                     draws.iter().map(PlannedRunDraw::paint),
                 )
             }
@@ -3902,29 +3903,45 @@ impl GpuRenderer {
                 self.frame_stats
                     .shape_interior_draws
                     .set(self.frame_stats.shape_interior_draws.get() + planned.len() as u32);
-                self.record_run_draws(pass, tables, uniform_slot, scissor, planned.into_iter())
+                self.record_run_draws(
+                    pass,
+                    bound,
+                    (tables, uniform_slot, scissor),
+                    planned.into_iter(),
+                )
             }
         }
     }
 
-    /// Records `planned` against one batch's tables, uniform and scissor.
-    fn record_run_draws(
-        &self,
+    /// Records `planned` against one batch's tables, uniform and scissor,
+    /// binding only what the pass does not hold bound already.
+    fn record_run_draws<'s>(
+        &'s self,
         pass: &mut wgpu::RenderPass<'_>,
-        tables: ArenaBinding<'_>,
-        uniform_slot: usize,
-        scissor: (u32, u32, u32, u32),
+        bound: &mut ShapeBindings<'s>,
+        (tables, uniform_slot, scissor): (ArenaBinding<'s>, usize, (u32, u32, u32, u32)),
         planned: impl ExactSizeIterator<Item = PlannedRunDraw>,
     ) -> Result<(), String> {
         self.frame_stats.add_draw_calls(planned.len() as u32);
-        let (x, y, width, height) = scissor;
-        pass.set_scissor_rect(x, y, width, height);
-        self.viewport_uniforms.bind(pass, uniform_slot)?;
-        pass.set_bind_group(1, tables.bind_group, &tables.offsets[2..]);
-        for (slot, buffer) in tables.records.into_iter().enumerate() {
-            pass.set_vertex_buffer(slot as u32, buffer.slice(u64::from(tables.offsets[slot])..));
+        if bound.scissor != Some(scissor) {
+            let (x, y, width, height) = scissor;
+            pass.set_scissor_rect(x, y, width, height);
+            bound.scissor = Some(scissor);
         }
-        let mut bound_class = None;
+        if bound.uniform_slot != Some(uniform_slot) {
+            self.viewport_uniforms.bind(pass, uniform_slot)?;
+            bound.uniform_slot = Some(uniform_slot);
+        }
+        if !bound.tables.is_some_and(|held| held.same_as(&tables)) {
+            pass.set_bind_group(1, tables.bind_group, &tables.offsets[2..]);
+            for (slot, buffer) in tables.records.into_iter().enumerate() {
+                pass.set_vertex_buffer(
+                    slot as u32,
+                    buffer.slice(u64::from(tables.offsets[slot])..),
+                );
+            }
+            bound.tables = Some(tables);
+        }
         for draw in planned {
             let key = draw.key;
             let (pipeline, fallback) = self
@@ -3940,22 +3957,29 @@ impl GpuRenderer {
                     .shape_specialized_draws
                     .set(self.frame_stats.shape_specialized_draws.get() + 1);
             }
-            if bound_class != Some(draw.band_class) {
+            if bound.band_class != Some(draw.band_class) {
                 pass.set_index_buffer(
                     self.run_store.strip_index_buffer(draw.band_class).slice(..),
                     wgpu::IndexFormat::Uint32,
                 );
-                bound_class = Some(draw.band_class);
+                bound.band_class = Some(draw.band_class);
             }
-            pass.set_pipeline(pipeline);
+            if !bound
+                .pipeline
+                .is_some_and(|held| std::ptr::eq(held, pipeline))
+            {
+                pass.set_pipeline(pipeline);
+                bound.pipeline = Some(pipeline);
+            }
             pass.draw_indexed(draw.indices, 0, draw.records);
         }
         Ok(())
     }
 
-    pub(crate) fn draw_store_run(
-        &self,
+    pub(crate) fn draw_store_run<'s>(
+        &'s self,
         pass: &mut wgpu::RenderPass<'_>,
+        bound: &mut ShapeBindings<'s>,
         batch: &StoreRunBatch,
         scissor: (u32, u32, u32, u32),
         stage: RunStage,
@@ -3966,6 +3990,7 @@ impl GpuRenderer {
             .ok_or_else(|| "a stored run left the store before its draw".to_string())?;
         self.draw_run_calls(
             pass,
+            bound,
             stored.buffers.binding(),
             batch.uniform_slot,
             &batch.draws,
@@ -3974,9 +3999,11 @@ impl GpuRenderer {
         )
     }
 
-    pub(crate) fn draw_arena(
-        &self,
+    #[expect(clippy::too_many_arguments)]
+    pub(crate) fn draw_arena<'s>(
+        &'s self,
         pass: &mut wgpu::RenderPass<'_>,
+        bound: &mut ShapeBindings<'s>,
         chunk: usize,
         uniform_slot: usize,
         draws: &[RunDrawCall],
@@ -3985,6 +4012,7 @@ impl GpuRenderer {
     ) -> Result<(), String> {
         self.draw_run_calls(
             pass,
+            bound,
             self.run_store.arena_binding(chunk),
             uniform_slot,
             draws,
@@ -5687,6 +5715,19 @@ impl PlannedRunDraw {
 /// the pipeline lays any record's exact interior down and skips the rest, so
 /// taking them costs a few vertices rather than a call, and it shades only a
 /// record's quad, the first two triangles of every band class's pattern.
+/// What a pass holds bound for shape draws: consecutive shape batches that
+/// share a scissor, uniform slot, tables, index buffer or pipeline skip
+/// binding them again. Each stretch of shape batches starts one afresh, since
+/// the pass's other draws bind the same slots.
+#[derive(Default)]
+pub(crate) struct ShapeBindings<'s> {
+    scissor: Option<(u32, u32, u32, u32)>,
+    uniform_slot: Option<usize>,
+    tables: Option<ArenaBinding<'s>>,
+    band_class: Option<u8>,
+    pipeline: Option<&'s wgpu::RenderPipeline>,
+}
+
 pub(crate) fn interior_run_draws(draws: &[RunDrawCall]) -> SmallVec<[PlannedRunDraw; 4]> {
     struct Stretch {
         key: ShapePipelineKey,

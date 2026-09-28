@@ -12,9 +12,10 @@ use crate::{
     geometry::SegmentTransform,
     offscreen::OffscreenTarget,
     render::{
-        GpuRenderer, PassFrame, RunStage, StoreRunBatch, TargetRect, ViewportUniformParams,
-        image_draw_bounds, run_draw_bounds, run_draw_is_visible_in_rect, scissor_rect_for_rect,
-        segment_scene_rect, supported_blend_mode, text_draw_bounds, text_draw_is_visible_in_rect,
+        GpuRenderer, PassFrame, RunStage, ShapeBindings, StoreRunBatch, TargetRect,
+        ViewportUniformParams, image_draw_bounds, run_draw_bounds, run_draw_is_visible_in_rect,
+        scissor_rect_for_rect, segment_scene_rect, supported_blend_mode, text_draw_bounds,
+        text_draw_is_visible_in_rect,
     },
     run_store::{RunDrawCall, run_has_shapes},
     scene::{CompositorScene, DrawOp, DrawOpKind, RunDraw, TextDraw},
@@ -153,6 +154,13 @@ enum Batch<'a> {
     Composite(PreparedCompositeDraw<'a>),
     Shader(PreparedShaderDraw<'a>),
     Projective(PreparedProjectiveComposite<'a>),
+}
+
+impl Batch<'_> {
+    /// Whether the batch draws shape runs.
+    fn is_shape(&self) -> bool {
+        matches!(self, Batch::StoreRun { .. } | Batch::Arena { .. })
+    }
 }
 
 pub(crate) fn scissor_in_target(
@@ -364,15 +372,22 @@ impl GpuRenderer {
     ) -> Result<(), String> {
         let target_size = frame.size;
         if frame.depth {
-            for batch in batches.iter().rev() {
-                self.draw_shape_batch(pass, batch, frame, RunStage::Interiors)?;
-            }
+            self.draw_shape_batches(pass, batches.iter().rev(), frame, RunStage::Interiors)?;
         }
-        for batch in batches {
-            match batch {
-                Batch::StoreRun { .. } | Batch::Arena { .. } => {
-                    self.draw_shape_batch(pass, batch, frame, RunStage::Paint)?;
-                }
+        let mut rest = batches;
+        while let Some(first) = rest.first() {
+            let shapes = rest
+                .iter()
+                .position(|batch| !batch.is_shape())
+                .unwrap_or(rest.len());
+            if shapes > 0 {
+                self.draw_shape_batches(pass, rest[..shapes].iter(), frame, RunStage::Paint)?;
+                rest = &rest[shapes..];
+                continue;
+            }
+            rest = &rest[1..];
+            match first {
+                Batch::StoreRun { .. } | Batch::Arena { .. } => {}
                 Batch::Images {
                     cmds,
                     blend_mode,
@@ -428,33 +443,40 @@ impl GpuRenderer {
 }
 
 impl GpuRenderer {
-    /// Records one shape batch's stage; other batches draw nothing here.
-    fn draw_shape_batch(
+    /// Records the stage of each shape batch in `batches`, in order, binding
+    /// only what the batch before it left unbound; other batches draw
+    /// nothing here.
+    fn draw_shape_batches<'b>(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
-        batch: &Batch<'_>,
+        batches: impl Iterator<Item = &'b Batch<'b>>,
         frame: PassFrame,
         stage: RunStage,
     ) -> Result<(), String> {
-        match batch {
-            Batch::StoreRun { batch, scissor } => {
-                self.draw_store_run(pass, batch, frame.scissor(*scissor), stage)
+        let mut bound = ShapeBindings::default();
+        for batch in batches {
+            match batch {
+                Batch::StoreRun { batch, scissor } => {
+                    self.draw_store_run(pass, &mut bound, batch, frame.scissor(*scissor), stage)?;
+                }
+                Batch::Arena {
+                    chunk,
+                    uniform_slot,
+                    draws,
+                    scissor,
+                } => self.draw_arena(
+                    pass,
+                    &mut bound,
+                    *chunk,
+                    *uniform_slot,
+                    draws,
+                    frame.scissor(*scissor),
+                    stage,
+                )?,
+                _ => {}
             }
-            Batch::Arena {
-                chunk,
-                uniform_slot,
-                draws,
-                scissor,
-            } => self.draw_arena(
-                pass,
-                *chunk,
-                *uniform_slot,
-                draws,
-                frame.scissor(*scissor),
-                stage,
-            ),
-            _ => Ok(()),
         }
+        Ok(())
     }
 }
 

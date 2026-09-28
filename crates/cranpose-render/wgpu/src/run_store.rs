@@ -607,10 +607,25 @@ struct ArenaChunk {
 }
 
 /// The tables a chunk's draws bind.
+#[derive(Clone, Copy)]
 pub(crate) struct ArenaBinding<'a> {
     pub(crate) records: [&'a wgpu::Buffer; 2],
     pub(crate) bind_group: &'a wgpu::BindGroup,
     pub(crate) offsets: [u32; BUFFER_COUNT],
+}
+
+impl ArenaBinding<'_> {
+    /// Whether binding `other` binds exactly these buffers and bind group at
+    /// these offsets.
+    pub(crate) fn same_as(&self, other: &ArenaBinding<'_>) -> bool {
+        std::ptr::eq(self.bind_group, other.bind_group)
+            && self.offsets == other.offsets
+            && self
+                .records
+                .iter()
+                .zip(&other.records)
+                .all(|(a, b)| std::ptr::eq(*a, *b))
+    }
 }
 
 /// One buffer per table with every chunk of the frame laid in it at an
