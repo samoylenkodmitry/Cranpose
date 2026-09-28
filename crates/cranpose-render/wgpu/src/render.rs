@@ -1118,11 +1118,12 @@ impl ShapePipelineKey {
     }
 
     /// The pipeline that lays down the opaque interiors of this key's
-    /// draws, if they have any: plain source-over draws off any transform.
+    /// draws, if they have any: plain source-over draws. A transformed
+    /// draw's layer draws in place only under a rigid transform, which keeps
+    /// the interior's half-pixel inset from the fill's edge exact.
     pub(crate) fn interior(self) -> Option<Self> {
         (self.depth == ShapeDepth::Tested
             && self.blend_mode == BlendMode::SrcOver
-            && !self.transformed
             && !self.variant.ablation.material
             && !self.variant.ablation.fill)
             .then_some(Self {

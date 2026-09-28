@@ -268,3 +268,69 @@ fn a_pass_of_small_shapes_alone_lays_no_interiors_down() {
     );
     assert_same_pixels(&with.pixels, &without.pixels);
 }
+
+/// A transform turning `area` by `degrees` about its centre.
+fn turned_about_centre(area: Rect, degrees: f32) -> ProjectiveTransform {
+    let (sin, cos) = degrees.to_radians().sin_cos();
+    let (cx, cy) = (area.x + area.width / 2.0, area.y + area.height / 2.0);
+    let turn = |x: f32, y: f32| {
+        let (dx, dy) = (x - cx, y - cy);
+        [cx + dx * cos - dy * sin, cy + dx * sin + dy * cos]
+    };
+    ProjectiveTransform::from_rect_to_quad(
+        area,
+        [
+            turn(area.x, area.y),
+            turn(area.x + area.width, area.y),
+            turn(area.x, area.y + area.height),
+            turn(area.x + area.width, area.y + area.height),
+        ],
+    )
+}
+
+/// Levels nested like replies in a thread, each turned a little against the
+/// one around it, so every level draws in place under a transform.
+fn turned_levels(level: usize) -> RenderNode {
+    let palette = [
+        Color::from_rgb_u8(230, 80, 60),
+        Color::from_rgb_u8(60, 170, 90),
+        Color::from_rgb_u8(70, 110, 230),
+    ];
+    let frame = rect(0.0, 0.0, FRAME as f32, FRAME as f32);
+    let inset = 5.0 * level as f32 + 10.25;
+    let mut children = vec![fill(
+        rect(
+            inset,
+            inset,
+            FRAME as f32 - 2.0 * inset,
+            FRAME as f32 - 2.0 * inset,
+        ),
+        palette[level % palette.len()],
+        4.0,
+        None,
+    )];
+    if level < 12 {
+        children.push(turned_levels(level + 1));
+    }
+    let degrees = if level.is_multiple_of(2) { 2.5 } else { -1.5 };
+    RenderNode::Layer(Box::new(shared_test_support::layer_node(
+        frame,
+        turned_about_centre(frame, degrees),
+        GraphicsLayer::default(),
+        children,
+    )))
+}
+
+#[test]
+fn turned_opaque_fills_lay_their_interiors_down_and_draw_the_same_pixels() {
+    let Some((with, without)) = capture_both_ways(|| frame_of(vec![turned_levels(0)])) else {
+        return;
+    };
+    assert!(
+        with.interior_draws > 12,
+        "each turned level lays its interior down: {}",
+        with.interior_draws
+    );
+    assert_eq!(without.interior_draws, 0);
+    assert_same_pixels(&with.pixels, &without.pixels);
+}
