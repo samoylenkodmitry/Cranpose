@@ -7,15 +7,16 @@ use crate::offscreen::composition_format;
 fn test_renderer() -> (std::sync::MutexGuard<'static, ()>, GpuRenderer) {
     let (lock, device, queue) = crate::frame_graph::upload_test_device();
     let backend = device.adapter_info().backend;
-    let renderer = GpuRenderer::new(
-        Arc::new(device),
-        Arc::new(queue),
-        composition_format(),
-        backend,
-        wgpu::DownlevelFlags::empty(),
-        SoftwareTextFontSet::empty(),
-        0,
-    );
+    let renderer = GpuRenderer::new(GpuRendererInit {
+        device: Arc::new(device),
+        queue: Arc::new(queue),
+        surface_format: composition_format(),
+        adapter_backend: backend,
+        adapter_downlevel: wgpu::DownlevelFlags::empty(),
+        text_fonts: SoftwareTextFontSet::empty(),
+        renderer_epoch: 0,
+        pipeline_compilation: PipelineCompilation::Background,
+    });
     (lock, renderer)
 }
 
@@ -522,15 +523,16 @@ fn fonted_renderer() -> (std::sync::MutexGuard<'static, ()>, GpuRenderer) {
     let backend = device.adapter_info().backend;
     let font = cranpose_render_common::software_text_raster::default_software_text_font()
         .expect("the embedded default font");
-    let renderer = GpuRenderer::new(
-        Arc::new(device),
-        Arc::new(queue),
-        composition_format(),
-        backend,
-        wgpu::DownlevelFlags::empty(),
-        SoftwareTextFontSet::from_font(font),
-        0,
-    );
+    let renderer = GpuRenderer::new(GpuRendererInit {
+        device: Arc::new(device),
+        queue: Arc::new(queue),
+        surface_format: composition_format(),
+        adapter_backend: backend,
+        adapter_downlevel: wgpu::DownlevelFlags::empty(),
+        text_fonts: SoftwareTextFontSet::from_font(font),
+        renderer_epoch: 0,
+        pipeline_compilation: PipelineCompilation::Background,
+    });
     (lock, renderer)
 }
 

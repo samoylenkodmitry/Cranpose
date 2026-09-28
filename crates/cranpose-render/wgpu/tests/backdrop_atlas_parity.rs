@@ -623,7 +623,10 @@ fn blur_substrates_preserve_captures_and_match_mixed_atlases_across_frames() {
             }
             support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children)
         };
-        let direct = capture(&mut renderer, scene(false));
+        // Both sides draw their specialized pipelines: a stand-in rounds a
+        // step differently on NVIDIA's Vulkan driver (#859).
+        let direct =
+            support::capture_graph_settled(&mut renderer, scene(false), FRAME_WIDTH, FRAME_HEIGHT);
         let reference = capture(
             &mut support::LockedRenderer::beside_locked().expect("reference renderer"),
             scene(false),

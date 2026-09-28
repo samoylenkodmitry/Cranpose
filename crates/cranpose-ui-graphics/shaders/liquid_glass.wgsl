@@ -873,8 +873,16 @@ fn inset_shadow(scene: GlassScene, position: vec2<f32>, scale: f32, color: vec3<
     return mix(color, get_vec4(156u).rgb, alpha);
 }
 
+// `x` in [0, 1] rounded to the nearest half-precision value, as the native
+// material samples luminance: exact integer arithmetic on its bits, dropping
+// the 13 mantissa bits half precision lacks. `pack2x16float` would leave the
+// rounding direction to the driver, and NVIDIA's rounds toward zero.
+fn round_to_half(x: f32) -> f32 {
+    return bitcast<f32>((bitcast<u32>(x) + 0x1000u) & 0xffffe000u);
+}
+
 fn backdrop_tone_curve(brightness: f32, foreground: f32) -> vec4<f32> {
-    let half_brightness = unpack2x16float(pack2x16float(vec2<f32>(clamp(brightness, 0.0, 1.0), 0.0))).x;
+    let half_brightness = round_to_half(clamp(brightness, 0.0, 1.0));
     let t = min(floor(32.0 * half_brightness + 0.25), 31.0) / 31.0;
     let dark = (foreground > 0.5 && t < 0.9) || t < 0.25;
     let black = max(0.1, t - 0.15);

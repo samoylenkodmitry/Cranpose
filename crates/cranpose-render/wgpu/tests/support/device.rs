@@ -62,6 +62,18 @@ impl HeadlessDevice {
         })
     }
 
+    /// [`attach`][Self::attach], compiling every pipeline where it is first
+    /// needed: a reference renderer's frames never draw with a stand-in.
+    pub fn attach_compiling_inline(self, renderer: &mut WgpuRenderer, format: wgpu::TextureFormat) {
+        renderer.init_gpu_compiling_inline_for_tests(
+            self.device,
+            self.queue,
+            format,
+            self.backend,
+            self.downlevel,
+        );
+    }
+
     pub fn attach(self, renderer: &mut WgpuRenderer, format: wgpu::TextureFormat) {
         renderer.init_gpu(
             self.device,

@@ -85,7 +85,24 @@ fn spawn_lane(name: &str, stopped: &Arc<AtomicBool>) -> std::io::Result<Sender<J
     Ok(jobs)
 }
 
+/// Where a renderer compiles its pipelines.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PipelineCompilation {
+    /// On background threads, a general pipeline standing in until the
+    /// specialized one is ready.
+    Background,
+    /// Where each is first needed, so no draw uses a stand-in.
+    Inline,
+}
+
 impl PipelineCompiler {
+    pub(crate) fn for_compilation(compilation: PipelineCompilation) -> Self {
+        match compilation {
+            PipelineCompilation::Background => Self::spawn(),
+            PipelineCompilation::Inline => Self::inactive(),
+        }
+    }
+
     /// A compiler that runs nothing: every resource compiles where it is
     /// first needed.
     pub(crate) fn inactive() -> Self {

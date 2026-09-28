@@ -10,15 +10,13 @@ use std::{
     time::Duration,
 };
 
-use cranpose_render_common::software_text_raster::SoftwareTextFontSet;
-
 use crate::debug_toggles::DebugToggle;
 
 static ENCODE_DELAY_MS: DebugToggle = DebugToggle::new("CRANPOSE_ENCODE_DELAY_MS");
 
 use crate::{
     frame_packet::{CancelReason, FramePacket, PresentOutcome, PresentTimings, RenderReturns},
-    render::GpuRenderer,
+    render::{GpuRenderer, GpuRendererInit},
 };
 
 pub(crate) type PresentWaker = Arc<dyn Fn() + Send + Sync>;
@@ -30,13 +28,7 @@ pub(crate) type BoxedPresentObserver = Box<dyn crate::PresentObserver>;
 pub(crate) const CONTROL_ACK_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(crate) struct PresentRuntimeInit {
-    pub(crate) device: Arc<wgpu::Device>,
-    pub(crate) queue: Arc<wgpu::Queue>,
-    pub(crate) surface_format: wgpu::TextureFormat,
-    pub(crate) adapter_backend: wgpu::Backend,
-    pub(crate) adapter_downlevel: wgpu::DownlevelFlags,
-    pub(crate) text_fonts: SoftwareTextFontSet,
-    pub(crate) renderer_epoch: u64,
+    pub(crate) gpu: GpuRendererInit,
     pub(crate) clock: Option<PresentClock>,
     pub(crate) observer: Option<BoxedPresentObserver>,
 }
@@ -120,25 +112,13 @@ impl PresentState {
         waker: PresentWaker,
     ) -> Self {
         let PresentRuntimeInit {
-            device,
-            queue,
-            surface_format,
-            adapter_backend,
-            adapter_downlevel,
-            text_fonts,
-            renderer_epoch,
+            gpu,
             clock,
             observer,
         } = init;
-        let gpu_renderer = GpuRenderer::new(
-            device.clone(),
-            queue,
-            surface_format,
-            adapter_backend,
-            adapter_downlevel,
-            text_fonts,
-            renderer_epoch,
-        );
+        let device = Arc::clone(&gpu.device);
+        let renderer_epoch = gpu.renderer_epoch;
+        let gpu_renderer = GpuRenderer::new(gpu);
         Self {
             gpu_renderer,
             device,

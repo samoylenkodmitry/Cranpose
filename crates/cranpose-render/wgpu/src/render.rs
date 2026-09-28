@@ -57,7 +57,7 @@ use crate::{
     lazy_resource::LazyGpuResource,
     offscreen::{OffscreenTarget, composition_bytes_per_pixel},
     output_conversion::OutputConverter,
-    pipeline_compiler::{CompilerSend, PipelineCompiler},
+    pipeline_compiler::{CompilerSend, PipelineCompilation, PipelineCompiler},
     record_columns::record_vertex_layouts,
     rect_to_quad,
     run_store::{ArenaBinding, PlacementData, RunBufferMode, RunDrawCall, RunStore},
@@ -2185,16 +2185,31 @@ fn image_sampler_descriptor(sampling: ImageSampling) -> wgpu::SamplerDescriptor<
     }
 }
 
+/// What a [`GpuRenderer`] is built from. It crosses to the present thread
+/// whole, so it holds only owned, `Send` parts.
+pub(crate) struct GpuRendererInit {
+    pub(crate) device: Arc<wgpu::Device>,
+    pub(crate) queue: Arc<wgpu::Queue>,
+    pub(crate) surface_format: wgpu::TextureFormat,
+    pub(crate) adapter_backend: wgpu::Backend,
+    pub(crate) adapter_downlevel: wgpu::DownlevelFlags,
+    pub(crate) text_fonts: SoftwareTextFontSet,
+    pub(crate) renderer_epoch: u64,
+    pub(crate) pipeline_compilation: PipelineCompilation,
+}
+
 impl GpuRenderer {
-    pub fn new(
-        device: Arc<wgpu::Device>,
-        queue: Arc<wgpu::Queue>,
-        surface_format: wgpu::TextureFormat,
-        adapter_backend: wgpu::Backend,
-        adapter_downlevel: wgpu::DownlevelFlags,
-        text_fonts: SoftwareTextFontSet,
-        renderer_epoch: u64,
-    ) -> Self {
+    pub fn new(init: GpuRendererInit) -> Self {
+        let GpuRendererInit {
+            device,
+            queue,
+            surface_format,
+            adapter_backend,
+            adapter_downlevel,
+            text_fonts,
+            renderer_epoch,
+            pipeline_compilation,
+        } = init;
         let display_format = surface_format;
         let construction_started = Instant::now();
         let device_errors = Arc::new(DeviceErrorSentry::default());
@@ -2290,7 +2305,7 @@ impl GpuRenderer {
         }
 
         let effects_started = Instant::now();
-        let pipeline_compiler = PipelineCompiler::spawn();
+        let pipeline_compiler = PipelineCompiler::for_compilation(pipeline_compilation);
         let effect_renderer = EffectRenderer::new(
             &device,
             pipeline_compiler.clone(),
