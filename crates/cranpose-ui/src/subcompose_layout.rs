@@ -8,7 +8,8 @@ use cranpose_core::{
     Composer, NodeError, NodeId, Phase, SlotId, SlotTable, SlotsHost, SubcomposeState,
 };
 use cranpose_foundation::{
-    InvalidationKind, ModifierInvalidation, NodeCapabilities, SemanticsConfiguration,
+    InvalidationKind, ModifierInvalidation, ModifierInvalidations, NodeCapabilities,
+    SemanticsConfiguration,
 };
 pub use cranpose_ui_layout::{Constraints, MeasureResult, Placement};
 use smallvec::SmallVec;
@@ -1645,7 +1646,7 @@ impl SubcomposeLayoutNodeInner {
         }
     }
 
-    fn set_modifier_collect(&mut self, modifier: Modifier) -> (Vec<ModifierInvalidation>, bool) {
+    fn set_modifier_collect(&mut self, modifier: Modifier) -> (ModifierInvalidations, bool) {
         let modifier_changed = !self.modifier.structural_eq(&modifier);
         self.modifier = modifier;
         self.modifier_chain.set_debug_logging(self.debug_modifiers);
