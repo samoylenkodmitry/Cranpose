@@ -509,13 +509,24 @@ pub fn warm_app_frame(
 
 /// The pixels of two RGBA8 frames of `width` that differ: `(x, y, a, b)`.
 pub fn differing_pixels(width: u32, a: &[u8], b: &[u8]) -> Vec<(usize, usize, [u8; 4], [u8; 4])> {
+    pixels_differing_beyond(width, a, b, 0)
+}
+
+/// The pixels of two RGBA8 frames of `width` with a channel that differs by
+/// more than `tolerance`: `(x, y, a, b)`.
+pub fn pixels_differing_beyond(
+    width: u32,
+    a: &[u8],
+    b: &[u8],
+    tolerance: u8,
+) -> Vec<(usize, usize, [u8; 4], [u8; 4])> {
     assert_eq!(a.len(), b.len(), "frames of different sizes");
     a.as_chunks::<4>()
         .0
         .iter()
         .zip(b.as_chunks::<4>().0)
         .enumerate()
-        .filter(|(_, (a, b))| a != b)
+        .filter(|(_, (a, b))| a.iter().zip(*b).any(|(a, b)| a.abs_diff(*b) > tolerance))
         .map(|(index, (a, b))| (index % width as usize, index / width as usize, *a, *b))
         .collect()
 }

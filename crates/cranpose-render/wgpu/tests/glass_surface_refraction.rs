@@ -598,7 +598,15 @@ fn surface_refraction_specialization_preserves_pixels() {
     let specialized = renderer
         .capture_frame(160, 96)
         .expect("specialized surface capture");
-    assert_eq!(general.pixels, specialized.pixels);
+    // The specialized pipeline folds constants the general one reads, so a
+    // driver may round a step differently (Intel and NVIDIA Vulkan do, #859).
+    support::assert_bytes_within(
+        "surface refraction specialization",
+        160,
+        &general.pixels,
+        &specialized.pixels,
+        1,
+    );
 }
 
 fn configure_glass_folds(effect: &mut RenderEffect, enabled: bool) {

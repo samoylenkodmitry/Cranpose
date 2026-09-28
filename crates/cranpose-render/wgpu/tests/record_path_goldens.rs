@@ -13,7 +13,10 @@ use support::{SIZE, record_mixed_scene, record_solid_scene};
 use crate::{shared_test_support, support};
 
 const WRITE_ENV: &str = "CRANPOSE_WRITE_GOLDENS";
-const MAX_SMALL_DIFF_FRACTION: f64 = 0.005;
+/// The goldens are captured on Metal; other GPUs round anti-aliased edges a
+/// step differently. At a fractional root scale the arena run differs in 0.50%
+/// of its bytes on both Intel and NVIDIA Vulkan, each by one step (#859).
+const MAX_SMALL_DIFF_FRACTION: f64 = 0.01;
 const SMALL_DIFF: u8 = 2;
 
 fn fixture_path(name: &str) -> PathBuf {
