@@ -213,7 +213,7 @@ fn then_short_circuits_empty_modifiers() {
     assert_eq!(Modifier::empty().then(padding.clone()), padding);
 
     let background = Modifier::empty().background(Color::rgba(0.2, 0.4, 0.6, 1.0));
-    assert_eq!(background.then(Modifier::empty()), background);
+    assert_eq!(background.clone().then(Modifier::empty()), background);
 }
 
 #[test]
@@ -261,10 +261,10 @@ fn modifiers_built_incrementally_match_from_parts() {
         test_fingerprint_element(12, NodeCapabilities::SEMANTICS, false),
     ];
 
-    let flat = Modifier::from_parts(elements.clone());
-    let incremental = Modifier::from_parts(vec![elements[0].clone()])
-        .then(Modifier::from_parts(vec![elements[1].clone()]))
-        .then(Modifier::from_parts(vec![elements[2].clone()]));
+    let flat = Modifier::from_parts(&elements);
+    let incremental = Modifier::from_parts(&[elements[0].clone()])
+        .then(Modifier::from_parts(&[elements[1].clone()]))
+        .then(Modifier::from_parts(&[elements[2].clone()]));
 
     assert_eq!(incremental, flat);
     assert!(incremental.structural_eq(&flat));
@@ -2158,7 +2158,9 @@ fn height_in_and_size_in_set_the_bounds_they_are_given_and_leave_the_rest_open()
 #[test]
 fn modifiers_without_inspector_metadata_carry_no_inspector_list() {
     let first = Modifier::with_element(TestDelegatingElement);
-    let joined = first.then(Modifier::with_element(TestDelegatingElement));
+    let joined = first
+        .clone()
+        .then(Modifier::with_element(TestDelegatingElement));
     for modifier in [&first, &joined] {
         assert!(
             matches!(

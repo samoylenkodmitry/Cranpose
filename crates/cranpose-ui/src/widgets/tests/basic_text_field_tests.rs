@@ -362,7 +362,7 @@ fn field_window_origin_follows_vertical_scroll() {
                         });
                         let element = TextFieldElement::new(state, TextStyle::default())
                             .with_handle_controller(controller.clone());
-                        let field_modifier = Modifier::from_parts(vec![modifier_element(element)]);
+                        let field_modifier = Modifier::from_parts(&[modifier_element(element)]);
                         Layout(field_modifier, EmptyMeasurePolicy, || {});
                         Spacer(Size {
                             width: 300.0,
