@@ -167,6 +167,25 @@ class CranposeAndroidPlugin : Plugin<Project> {
                 variant.sources.java?.addStaticSourceDirectory(File(root, dir).absolutePath)
             }
         }
+
+        val name = variant.name.replaceFirstChar { first -> first.uppercase() }
+        val declared = project.tasks.register(
+            "cranpose${name}DeclaredSources",
+            CranposeDeclaredSources::class.java,
+        ) {
+            description = "Copies the framework Java for the services ${variant.name} declares"
+            declaration.from(declarationFile(project, cranpose))
+            serviceSources.set(
+                DECLARED_SERVICES.mapValues { (_, service) ->
+                    File(root, service.javaSource).absolutePath
+                }
+            )
+            sources.from(DECLARED_SERVICES.values.map { service -> File(root, service.javaSource) })
+        }
+        variant.sources.java?.addGeneratedSourceDirectory(
+            declared,
+            CranposeDeclaredSources::outputDir,
+        )
     }
 
     /**
@@ -202,15 +221,11 @@ class CranposeAndroidPlugin : Plugin<Project> {
         val needed = requireKnownServices(cranpose).flatMap { service ->
             SERVICE_PERMISSIONS[service].orEmpty().map { permission -> permission to service }
         }.toMap()
-        val declared = File(
-            declarationDir(requireWorkspace(project, cranpose)),
-            "${requireCargoPackage(cranpose)}-capabilities.json",
-        )
         task.configure {
             description = "Checks ${variant.name}'s permissions and the features they carry"
             requiredFeatures.set(cranpose.requiredFeatures)
             servicePermissions.set(needed)
-            declaration.from(declared)
+            declaration.from(declarationFile(project, cranpose))
         }
         variant.artifacts
             .use(task)
@@ -369,13 +384,15 @@ class CranposeAndroidPlugin : Plugin<Project> {
         }
 
         // The capabilities an application declares in Rust are written by its
-        // build script, so the manifest check reads them only after Cargo has
-        // run. Packaging waits for that build anyway; this moves the manifest
-        // step behind it as well.
-        project.tasks.withType(CranposeManifestCheck::class.java).configureEach {
-            when {
-                name.contains("Debug", ignoreCase = true) -> dependsOn(debug)
-                name.contains("Release", ignoreCase = true) -> dependsOn(release)
+        // build script, so the manifest check and the declared services' Java
+        // read them only after Cargo has run. Packaging waits for that build
+        // anyway; this moves both steps behind it as well.
+        for (type in listOf(CranposeManifestCheck::class.java, CranposeDeclaredSources::class.java)) {
+            project.tasks.withType(type).configureEach {
+                when {
+                    name.contains("Debug", ignoreCase = true) -> dependsOn(debug)
+                    name.contains("Release", ignoreCase = true) -> dependsOn(release)
+                }
             }
         }
     }
@@ -457,6 +474,12 @@ class CranposeAndroidPlugin : Plugin<Project> {
 
     /** Where a build script writes what the application declared. */
     private fun declarationDir(workspace: File): File = File(workspace, "target/cranpose")
+
+    private fun declarationFile(project: Project, cranpose: CranposeExtension): File =
+        File(
+            declarationDir(requireWorkspace(project, cranpose)),
+            "${requireCargoPackage(cranpose)}-capabilities.json",
+        )
 
     private fun registerNativeBuild(
         project: Project,
@@ -571,7 +594,6 @@ class CranposeAndroidPlugin : Plugin<Project> {
             "network",
             "notifications",
             "overlay",
-            "update",
         )
 
         /**
@@ -618,7 +640,6 @@ class CranposeAndroidPlugin : Plugin<Project> {
             ),
             "notifications" to listOf("android.permission.POST_NOTIFICATIONS"),
             "overlay" to listOf("android.permission.SYSTEM_ALERT_WINDOW"),
-            "update" to listOf("android.permission.REQUEST_INSTALL_PACKAGES"),
         )
 
         /** Written by this plugin's build, relative to this class's package. */

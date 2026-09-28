@@ -108,7 +108,6 @@ its own manifest:
 | `network` | `cranpose_services::http` and the online / metered state the activity reports. | `INTERNET`, `ACCESS_NETWORK_STATE` |
 | `notifications` | Notification posting. | `POST_NOTIFICATIONS` |
 | `overlay` | Windows drawn above other applications. | `SYSTEM_ALERT_WINDOW` |
-| `update` | Handing a downloaded package to `PackageInstaller`. | `REQUEST_INSTALL_PACKAGES` |
 
 ### One declaration, in Rust, for every platform
 
@@ -148,6 +147,15 @@ The Android build takes the permissions from there. An application that has
 not declared anything in Rust keeps working: the build then reads
 `cranpose { services }` as before, and refuses a service whose permission the
 application's own manifest does not hold.
+
+Installing an update has no entry in `cranpose { services }`: `Use::update()`
+is its one declaration. From it the Android build writes
+`REQUEST_INSTALL_PACKAGES`, compiles `CranposeAppUpdate` from
+`android/java-update`, and declares that class as a receiver with
+`android:exported="false"`; the framework registers the Android updater only
+when the `CAPABILITIES` the launcher receives hold the service. An application
+that does not declare it carries none of this code, and no other application
+can send an intent to the installer's receiver.
 
 One permission still arrives on its own: `androidx.core`, inside the
 `appcompat` dependency, declares
